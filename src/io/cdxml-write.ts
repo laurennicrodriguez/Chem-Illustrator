@@ -8,7 +8,7 @@
 
 import { Doc, Atom, Bond, Caption, Arrow, Shape, TextRun, Entity, Kind } from '../model';
 import { SYMBOLS } from '../chem/elements';
-import { labelSpec, layoutLabel, labelDir, labelGraph, tokenize, GENERIC, Measure, MiniGraph } from '../chem/labels';
+import { labelSpec, layoutLabel, labelDir, labelGraph, tokenize, GENERIC, Measure, MiniGraph, kekulize } from '../chem/labels';
 import { Vec, DEG, arcCenter, norm, sub, Rect } from '../geom';
 import { kids, descendants } from './xml';
 import { arialWidth } from '../text-metrics';
@@ -539,7 +539,7 @@ class CdxmlWriter {
       ext.push(id);
       f.appendChild(this.el('n', { id, p: pt(neighbors[k] ?? a), NodeType: 'ExternalConnectionPoint', ExternalConnectionNum: count > 1 ? k + 1 : null }));
     }
-    for (const b of g.bonds) f.appendChild(this.el('b', { id: this.id(), B: ids[b.a], E: ids[b.b], Order: orderAttr(b.order) }));
+    for (const b of kekulize(g)) f.appendChild(this.el('b', { id: this.id(), B: ids[b.a], E: ids[b.b], Order: orderAttr(b.order) }));
     for (const x of ext) f.appendChild(this.el('b', { id: this.id(), B: x, E: ids[0] }));
     return f;
   }
@@ -768,7 +768,9 @@ class CdxmlWriter {
         break;
       case 'rect':
         set('GraphicType', 'Rectangle');
-        set('BoundingBox', box(s));
+        // ChemDraw puts a box's shadow toward the first corner it stores, and stores the
+        // bottom-right corner first
+        set('BoundingBox', s.shadow ? box({ x1: Math.max(s.x1, s.x2), y1: Math.max(s.y1, s.y2), x2: Math.min(s.x1, s.x2), y2: Math.min(s.y1, s.y2) }) : box(s));
         set('RectangleType', [s.rounded && 'RoundEdge', s.shadow && 'Shadow', s.filled && 'Filled', s.dashed && 'Dashed', s.bold && 'Bold'].filter(Boolean).join(' ') || 'Plain');
         // in hundredths of the line width, as ChemDraw stores them
         set('CornerRadius', s.rounded ? String(Math.round(((s.radius ?? 6 * this.doc.style.lineWidth) / this.doc.style.lineWidth) * 100)) : null);

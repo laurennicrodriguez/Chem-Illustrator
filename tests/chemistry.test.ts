@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { implicitHydrogens, valenceExceeded, elementNumber } from '../src/chem/elements';
-import { tokenize, labelGraph, labelSpec, layoutLabel } from '../src/chem/labels';
+import { tokenize, labelGraph, labelSpec, layoutLabel, kekulize, parseSmiles } from '../src/chem/labels';
 import { formulaFromJson } from '../src/chem/formula';
 import { Doc } from '../src/model';
 import { toMolfile } from '../src/chem/molfile';
@@ -135,5 +135,35 @@ describe('CDXML helpers', () => {
     expect(isAutoLabel(8, 'HO', 1)).toBe(true);
     expect(isAutoLabel(7, 'H2N', 2)).toBe(true);
     expect(isAutoLabel(7, 'NHBoc', 1)).toBe(false);
+  });
+});
+
+describe('alternating double bonds for aromatic rings', () => {
+  const doubles = (smi: string) => {
+    const g = parseSmiles(smi);
+    const bonds = kekulize(g);
+    const count = new Map<number, number>();
+    for (const b of bonds) if (b.order === 2) for (const x of [b.a, b.b]) count.set(x, (count.get(x) ?? 0) + 1);
+    return { bonds, count, g };
+  };
+
+  it('gives each ring carbon of a phenyl one double bond', () => {
+    const { bonds, count } = doubles('*c1ccccc1');
+    expect(bonds.filter((b) => b.order === 2).length).toBe(3);
+    expect(bonds.some((b) => b.order === 1.5)).toBe(false);
+    for (let i = 1; i <= 6; i++) expect(count.get(i)).toBe(1);
+  });
+
+  it('handles pyridine, furan and naphthalene', () => {
+    expect(doubles('*c1ccncc1').bonds.filter((b) => b.order === 2).length).toBe(3);
+    const fur = doubles('*c1ccco1');
+    expect(fur.bonds.filter((b) => b.order === 2).length).toBe(2);
+    expect(fur.count.get(5)).toBeUndefined(); // the oxygen keeps single bonds
+    expect(doubles('*c1ccc2ccccc2c1').bonds.filter((b) => b.order === 2).length).toBe(5);
+  });
+
+  it('leaves bonds alone when there is nothing to change', () => {
+    const g = parseSmiles('*CC(=O)O');
+    expect(kekulize(g)).toBe(g.bonds);
   });
 });

@@ -289,6 +289,22 @@ describe('saving a new drawing', () => {
     // corner radius and shadow in hundredths of the line width (0.6 here)
     expect(out).toMatch(/RectangleType="RoundEdge" CornerRadius="600"/);
     expect(out).toMatch(/RectangleType="RoundEdge Shadow" CornerRadius="300" ShadowSize="400"/);
+    // the shadow falls toward the corner stored first, so the bottom-right corner goes first
+    expect(out).toMatch(/BoundingBox="90.00 230.00 60.00 200.00" RectangleType="RoundEdge Shadow"/);
+  });
+
+  it('writes the rings in abbreviations with alternating double bonds', () => {
+    // ChemDraw ranks groups for R/S from these; 1.5 bonds in a phenyl can flip a label
+    const doc = new Doc();
+    doc.bulk(() => {
+      const c = doc.addAtom(100, 100), ph = doc.addAtom(114.4, 100, 6, { label: 'Ph' });
+      doc.addBond(c.id, ph.id);
+    });
+    const root = new DOMParser().parseFromString(writeCdxml(doc).replace(/<!DOCTYPE[^>]*>/, ''), 'application/xml').documentElement;
+    const inner = [...root.getElementsByTagName('n')].find((n) => n.getAttribute('NodeType') === 'Nickname')!.getElementsByTagName('fragment')[0];
+    const orders = [...inner.getElementsByTagName('b')].map((b) => b.getAttribute('Order') ?? '1');
+    expect(orders.filter((o) => o === '2').length).toBe(3);
+    expect(orders).not.toContain('1.5');
   });
 
   it('places labels where ChemDraw would', () => {

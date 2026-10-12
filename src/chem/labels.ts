@@ -327,6 +327,43 @@ export function parseSmiles(smi: string): MiniGraph {
   return { atoms, bonds };
 }
 
+/**
+ * The bonds of a small graph with aromatic (1.5) bonds written as alternating single and
+ * double bonds, as ChemDraw draws them. ChemDraw ranks groups for R/S with these, so a phenyl
+ * written with 1.5 bonds can flip a stereo label. Aromatic bonds stay 1.5 if no alternating
+ * pattern fits.
+ */
+export function kekulize(g: MiniGraph): MiniBond[] {
+  const arom = g.bonds.map((b, i) => (b.order === 1.5 ? i : -1)).filter((i) => i >= 0);
+  if (!arom.length) return g.bonds;
+  // atoms that need one double bond: aromatic carbons, and nitrogens without H as in pyridine
+  const needs = (i: number) => {
+    const a = g.atoms[i];
+    return a.z === 6 || a.z === 5 || ((a.z === 7 || a.z === 15) && !a.hCount && a.charge >= 0);
+  };
+  const atoms = [...new Set(arom.flatMap((i) => [g.bonds[i].a, g.bonds[i].b]))].filter(needs);
+  const mate = new Map<number, number>(); // atom → bond index of its double bond
+  const solve = (k: number): boolean => {
+    if (k === atoms.length) return true;
+    const x = atoms[k];
+    if (mate.has(x)) return solve(k + 1);
+    for (const bi of arom) {
+      const b = g.bonds[bi];
+      const y = b.a === x ? b.b : b.b === x ? b.a : -1;
+      if (y < 0 || mate.has(y) || !atoms.includes(y)) continue;
+      mate.set(x, bi);
+      mate.set(y, bi);
+      if (solve(k + 1)) return true;
+      mate.delete(x);
+      mate.delete(y);
+    }
+    return false;
+  };
+  if (!solve(0)) return g.bonds;
+  const doubles = new Set(mate.values());
+  return g.bonds.map((b, i) => (b.order === 1.5 ? { ...b, order: doubles.has(i) ? 2 : 1 } : b));
+}
+
 const nickCache = new Map<string, MiniGraph>();
 function nickGraph(name: string): MiniGraph {
   let g = nickCache.get(name);

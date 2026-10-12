@@ -23,7 +23,9 @@ export function summarize(doc: Doc): Summary {
     })),
     shapes: [...doc.shapes.values()].filter((s) => !s.picture).map((s) => ({
       key: `${s.kind} ${s.symbol ?? ''}${s.bracket ?? ''}${s.pair ? 'P' : ''} ${!!s.dashed}${!!s.filled}${!!s.rounded}${!!s.shadow}${!!s.bold}`,
-      nums: [s.x1, s.y1, s.x2, s.y2, s.rounded ? s.radius ?? 6 * lw : 0, s.shadow ? s.shadowSize ?? 4 * lw : 0],
+      // which corner of a box or oval comes first is only a detail of how it is stored
+      nums: [...(s.kind === 'rect' || s.kind === 'oval' ? [Math.min(s.x1, s.x2), Math.min(s.y1, s.y2), Math.max(s.x1, s.x2), Math.max(s.y1, s.y2)] : [s.x1, s.y1, s.x2, s.y2]),
+        s.rounded ? s.radius ?? 6 * lw : 0, s.shadow ? s.shadowSize ?? 4 * lw : 0],
     })),
   };
 }
