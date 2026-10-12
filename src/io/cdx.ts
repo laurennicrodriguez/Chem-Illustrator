@@ -531,7 +531,8 @@ function decodeValue(p: Prop, d: Uint8Array): string | null {
   const i32 = (k: number) => v.getInt32(k * 4, true) / 65536;
   switch (p.kind) {
     case 'i8': case 'i16': case 'i32': {
-      const x = int(true);
+      // ChemDraw 8 saved charges in four bytes, with the charge in the top byte
+      const x = p.tag === 0x0421 && len === 4 ? v.getInt32(0, true) >> 24 : int(true);
       return x === null ? null : name(x) ?? String(x);
     }
     case 'u8': case 'u16': case 'u32': {

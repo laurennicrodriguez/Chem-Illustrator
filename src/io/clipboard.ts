@@ -3,6 +3,7 @@
 // A copy puts the selection on the clipboard in several forms, the most detailed first, so
 // each program takes the best one it understands:
 //   - our own CDXML text, so pasting back into Chem Illustrator keeps everything;
+//   - the same drawing as CDX, ChemDraw's format, for pasting into ChemDraw;
 //   - an EMF picture, which Word and PowerPoint paste as a sharp, scalable picture;
 //   - a bitmap, for programs that take neither (Paint, chat programs).
 // Web pages can only put PNG pictures and text on the clipboard, so on Windows the desktop app
@@ -15,6 +16,7 @@ import type { Vec } from '../geom';
 import type { Selection } from '../editor/editor';
 import { readCdxml } from './cdxml';
 import { writeCdxml } from './cdxml-write';
+import { cdxmlToCdx, cdxToCdxml } from './cdx';
 import { recordPicture, pictureEmf, pictureCanvas, canvasPng, canvasDib } from '../render/picture';
 
 /** Our own clipboard format: the drawing as CDXML text. */
@@ -176,6 +178,7 @@ export async function copyDrawing(doc: Doc, sel: Selection | null): Promise<stri
     const { canvas, dpi } = pictureCanvas(part, pic);
     const block = packFormats([
       [OWN_FORMAT, new TextEncoder().encode(cdxml)],
+      [CDX_FORMAT, cdxmlToCdx(cdxml)],
       ['CF_ENHMETAFILE', pictureEmf(pic)],
       ['CF_DIB', canvasDib(canvas, dpi)],
     ]);
@@ -197,7 +200,6 @@ export async function copyDrawing(doc: Doc, sel: Selection | null): Promise<stri
 export type Pasted =
   | { kind: 'drawing'; doc: Doc }
   | { kind: 'text'; text: string }
-  | { kind: 'chemdraw'; data: Uint8Array }
   | { kind: 'nothing' };
 
 function looksLikeCdxml(text: string): boolean {
@@ -215,7 +217,7 @@ export async function readNativeClipboard(): Promise<Pasted> {
   const [item] = unpackFormats(new Uint8Array(res));
   if (!item) return { kind: 'nothing' };
   const [name, data] = item;
-  if (name === CDX_FORMAT) return { kind: 'chemdraw', data };
+  if (name === CDX_FORMAT) return { kind: 'drawing', doc: readCdxml(cdxToCdxml(data)).doc };
   const text = new TextDecoder().decode(data);
   if (name === OWN_FORMAT) return { kind: 'drawing', doc: readCdxml(text).doc };
   return text.trim() ? fromText(text) : { kind: 'nothing' };

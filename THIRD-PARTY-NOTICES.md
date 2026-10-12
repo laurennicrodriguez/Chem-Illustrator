@@ -17,7 +17,7 @@ Used only to build and test, not shipped: TypeScript (Apache-2.0), Vite (MIT), V
 
 Copied pictures are written as Enhanced Metafiles (EMF) and Windows bitmaps from Microsoft's published format specifications ([MS-EMF], BMP); no Microsoft code is included.
 
-The CDXML file format is read and written from CambridgeSoft's published CDX/CDXML format documentation and from example files; no ChemDraw code or documentation is included.
+The CDXML and CDX formats are read and written from CambridgeSoft's published CDX/CDXML format documentation and from example files; no ChemDraw code or documentation is included.
 
 ## RDKit licence
 

@@ -182,7 +182,6 @@ async function pasteFrom(read: () => Pasted | Promise<Pasted>): Promise<void> {
     editor.sel = insertDrawing(doc, got.doc, renderer.toDoc(renderer.width / 2, renderer.height / 2));
     editor.changed();
   } else if (got.kind === 'text') await pasteChemistry(got.text);
-  else if (got.kind === 'chemdraw') flash('Pasting drawings from ChemDraw is not ready yet.');
   else flash('There is nothing to paste.');
 }
 

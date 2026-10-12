@@ -38,7 +38,7 @@ npm run desktop:build    # makes the installers in src-tauri/target/release/bund
 
 - Point at an atom or bond and press a hotkey, as in ChemDraw: `1 1 1` grows a chain, `6` adds cyclohexane, `a` on a bond fuses benzene, `o` makes an O, `Shift+O` makes OMe. The Help button lists them all.
 - **File ▸ Open** (Ctrl+O) a ChemDraw `.cdxml` file, or drop one onto the drawing. Edit it and **Save** (Ctrl+S): only what you changed is rewritten, so everything else in the file stays exactly as ChemDraw wrote it. **Save As** (Ctrl+Shift+S) saves a copy; new drawings are saved as `.cdxml` too.
-- **Edit ▸ Copy** (Ctrl+C) copies the selection, or the whole drawing when nothing is selected. In the Windows app, paste it into Word or PowerPoint for a sharp picture that stays crisp when enlarged; in a browser it is copied as a high-resolution picture. **Cut** (Ctrl+X) and **Paste** (Ctrl+V) work within the app, between drawings too.
+- **Edit ▸ Copy** (Ctrl+C) copies the selection, or the whole drawing when nothing is selected. In the Windows app, paste it into ChemDraw as structures, or into Word or PowerPoint as a sharp picture that stays crisp when enlarged; in a browser it is copied as a high-resolution picture. **Paste** (Ctrl+V) takes drawings copied here or in ChemDraw (Windows app), or a SMILES string or molfile. **Cut** is Ctrl+X.
 - **File ▸ Export Molfile** saves the selected structures (or all of them) as a `.mol` file; **Edit ▸ Copy as SMILES** (Ctrl+Alt+C) copies them as SMILES text.
 - Select a structure to see its formula, exact mass, MW, [M+H]+ and [M+Na]+. Tick **Show R/S** for stereo labels.
 - Paste a SMILES string or a molfile with Ctrl+V to draw it.
@@ -64,6 +64,7 @@ The `bench/` scripts drive the app in a headless browser to measure speed. Start
 | `src/editor/` | Mouse tools and hotkeys |
 | `src/chem/` | Elements, labels, ring and chain geometry, molfile, formula |
 | `src/io/cdxml.ts`, `cdxml-write.ts` | Reading and saving ChemDraw `.cdxml` files |
+| `src/io/cdx.ts` | ChemDraw's binary CDX format (used on the clipboard), converted to and from CDXML |
 | `src/io/files.ts`, `document-file.ts` | Open and Save dialogs, unsaved-changes prompts |
 | `src/io/clipboard.ts`, `src-tauri/src/clipboard.rs` | Cut, copy and paste; the Windows clipboard |
 | `src/worker/` | The RDKit chemistry engine, running in the background |
