@@ -2,6 +2,8 @@
 // this opens the window, reads and writes the files the user picks, and runs a
 // self-test used by the automatic Windows build.
 
+mod clipboard;
+
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -62,7 +64,15 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![selftest_requested, selftest_report, read_text_file, write_text_file])
+        .invoke_handler(tauri::generate_handler![
+            selftest_requested,
+            selftest_report,
+            read_text_file,
+            write_text_file,
+            clipboard::clipboard_write,
+            clipboard::clipboard_read,
+            clipboard::clipboard_formats
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Chem Illustrator");
 }

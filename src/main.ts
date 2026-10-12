@@ -10,6 +10,7 @@ import { toMolfile, addMolfile } from './chem/molfile';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { DocumentFile } from './io/document-file';
+import { copyDrawing, insertDrawing, isEmpty, nativeClipboard, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, Pasted } from './io/clipboard';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { ICONS } from './icons';
 
@@ -104,8 +105,8 @@ editor.setTool('bond-single');
 
 // ---------------------------------------------------------------- top bar actions
 
-$('#btn-undo').addEventListener('click', () => { if (doc.undo()) editor.changed(); });
-$('#btn-redo').addEventListener('click', () => { if (doc.redo()) editor.changed(); });
+$('#btn-undo').addEventListener('click', () => editor.undo());
+$('#btn-redo').addEventListener('click', () => editor.redo());
 $('#btn-fit').addEventListener('click', () => editor.fit());
 $('#btn-stress').addEventListener('click', () => stressTest(Number($<HTMLSelectElement>('#stress-n').value)));
 $('#btn-help').addEventListener('click', () => $<HTMLDialogElement>('#help').showModal());
@@ -122,16 +123,70 @@ host.addEventListener('drop', (e) => {
   if (f) openFile(f);
 });
 
-// Paste a SMILES string (or a molfile) from the clipboard to get a structure.
-window.addEventListener('paste', async (e) => {
-  const t = e.target as HTMLElement;
-  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
-  const text = e.clipboardData?.getData('text/plain')?.trim();
-  if (!text) return;
+// ---------------------------------------------------------------- cut, copy and paste
+
+/** True when keys go into a text box rather than to the drawing. */
+function isTyping(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null;
+  if (!el || !el.tagName) return false;
+  if (el.isContentEditable || el.tagName === 'TEXTAREA') return true;
+  return el.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'range', 'color', 'file'].includes((el as HTMLInputElement).type);
+}
+
+/** True when some text on the page (not the drawing) is selected, so Ctrl+C should copy that. */
+function textSelected(): boolean {
+  const s = document.getSelection();
+  return !!s && !s.isCollapsed && s.toString().trim() !== '';
+}
+
+/** Copy the selection, or the whole drawing when nothing is selected. */
+function copy(): Promise<void> {
+  return copyDrawing(doc, editor.hasSelection() ? editor.sel : null).then(flash, (err) => flash('Could not copy: ' + String(err)));
+}
+
+async function cut(): Promise<void> {
+  if (!editor.hasSelection()) { flash('Select something to cut.'); return; }
+  let msg: string;
+  try {
+    msg = await copyDrawing(doc, editor.sel);
+  } catch (err) {
+    flash('Could not copy: ' + String(err));
+    return;
+  }
+  editor.deleteSelection();
+  flash(msg.replace(/^Copied/, 'Cut'));
+}
+
+function paste(): void {
+  void pasteFrom(nativeClipboard ? readNativeClipboard : readWebClipboard);
+}
+
+// In a browser, Ctrl+V arrives as a paste event, which carries the clipboard's text.
+window.addEventListener('paste', (e) => {
+  if (isTyping(e.target)) return;
   e.preventDefault();
-  await pasteChemistry(text);
+  if (nativeClipboard) paste();
+  else void pasteFrom(() => readPasteEvent(e));
 });
 
+async function pasteFrom(read: () => Pasted | Promise<Pasted>): Promise<void> {
+  let got: Pasted;
+  try {
+    got = await read();
+  } catch (err) {
+    flash('Could not paste: ' + String(err));
+    return;
+  }
+  if (got.kind === 'drawing') {
+    if (isEmpty(got.doc)) { flash('There is nothing to paste.'); return; }
+    editor.sel = insertDrawing(doc, got.doc, renderer.toDoc(renderer.width / 2, renderer.height / 2));
+    editor.changed();
+  } else if (got.kind === 'text') await pasteChemistry(got.text);
+  else if (got.kind === 'chemdraw') flash('Pasting drawings from ChemDraw is not ready yet.');
+  else flash('There is nothing to paste.');
+}
+
+/** Paste a SMILES string or a molfile as a structure. */
 async function pasteChemistry(text: string): Promise<void> {
   if (!chem.ready) { flash('The chemistry engine is still loading.'); return; }
   const c = renderer.toDoc(renderer.width / 2, renderer.height / 2);
@@ -149,14 +204,6 @@ async function pasteChemistry(text: string): Promise<void> {
   }
 }
 
-window.addEventListener('copy', async (e) => {
-  const t = e.target as HTMLElement;
-  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
-  if (!editor.hasSelection()) return;
-  e.preventDefault();
-  await copySmiles();
-});
-
 /** Copy the selected structures (or everything) as SMILES text. */
 async function copySmiles(): Promise<void> {
   if (!chem.ready) { flash('The chemistry engine is still loading.'); return; }
@@ -168,12 +215,12 @@ async function copySmiles(): Promise<void> {
 }
 
 let flashTimer = 0;
-function flash(msg: string): void {
+function flash(msg: string, ms = 3500): void {
   const el = $('#flash');
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(flashTimer);
-  flashTimer = window.setTimeout(() => el.classList.remove('show'), 3500);
+  flashTimer = window.setTimeout(() => el.classList.remove('show'), ms);
 }
 
 // ---------------------------------------------------------------- opening files
@@ -214,41 +261,74 @@ const COMMANDS: Record<string, () => unknown> = {
   save: () => file.save(),
   'save-as': () => file.saveAs(),
   'export-mol': () => file.exportMolfile(editor.sel.atoms.size ? editor.sel.atoms : doc.atoms.keys()),
+  undo: () => editor.undo(),
+  redo: () => editor.redo(),
+  cut: () => cut(),
+  copy: () => copy(),
+  paste: () => paste(),
   'copy-smiles': () => copySmiles(),
+  'select-all': () => editor.selectAll(),
+  'clipboard-formats': async () => {
+    const names = await clipboardFormats().catch((err) => [String(err)]);
+    flash(names.length ? 'On the clipboard: ' + names.join(', ') : 'The clipboard is empty.', 15000);
+  },
 };
 
-const fileBtn = $<HTMLButtonElement>('#btn-file');
-const fileMenu = $<HTMLDivElement>('#file-menu');
-function showMenu(open: boolean): void {
-  fileMenu.hidden = !open;
-  fileBtn.setAttribute('aria-expanded', String(open));
-  if (open) fileMenu.querySelector<HTMLButtonElement>('button')?.focus();
+// The menus: click a name to open its menu; with one open, pointing at another name opens that.
+const menus = [...document.querySelectorAll<HTMLDivElement>('.menu-wrap')].map((w) => ({
+  btn: w.querySelector<HTMLButtonElement>(':scope > button')!,
+  list: w.querySelector<HTMLDivElement>('.menu')!,
+}));
+type Menu = (typeof menus)[number];
+let openMenu: Menu | null = null;
+function showMenu(m: Menu | null, focus = true): void {
+  openMenu = m;
+  for (const x of menus) {
+    x.list.hidden = x !== m;
+    x.btn.setAttribute('aria-expanded', String(x === m));
+  }
+  if (m && focus) m.list.querySelector<HTMLButtonElement>('button:not([hidden])')?.focus();
 }
-fileBtn.addEventListener('click', () => showMenu(fileMenu.hidden));
-fileMenu.addEventListener('click', (e) => {
-  const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button')?.dataset.cmd;
-  if (!cmd) return;
-  showMenu(false);
-  COMMANDS[cmd]?.();
-});
-fileMenu.addEventListener('keydown', (e) => {
-  const items = [...fileMenu.querySelectorAll<HTMLButtonElement>('button')];
-  const i = items.indexOf(document.activeElement as HTMLButtonElement);
-  if (e.key === 'Escape') { showMenu(false); fileBtn.focus(); }
-  else if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus(); }
-  else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
-});
+for (const m of menus) {
+  m.btn.addEventListener('click', () => showMenu(openMenu === m ? null : m));
+  m.btn.addEventListener('pointerenter', () => { if (openMenu && openMenu !== m) showMenu(m, false); });
+  m.list.addEventListener('click', (e) => {
+    const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button')?.dataset.cmd;
+    if (!cmd) return;
+    showMenu(null);
+    COMMANDS[cmd]?.();
+  });
+  m.list.addEventListener('keydown', (e) => {
+    const items = [...m.list.querySelectorAll<HTMLButtonElement>('button:not([hidden])')];
+    const i = items.indexOf(document.activeElement as HTMLButtonElement);
+    const j = menus.indexOf(m);
+    if (e.key === 'Escape') { showMenu(null); m.btn.focus(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+    else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      e.preventDefault();
+      showMenu(menus[(j + (e.key === 'ArrowRight' ? 1 : -1) + menus.length) % menus.length]);
+    }
+  });
+}
 document.addEventListener('pointerdown', (e) => {
-  if (!fileMenu.hidden && !(e.target as HTMLElement).closest('.menu-wrap')) showMenu(false);
+  if (openMenu && !(e.target as HTMLElement).closest('.menu-wrap')) showMenu(null);
 });
+// listing the clipboard's formats needs the Windows app
+for (const b of document.querySelectorAll<HTMLButtonElement>('[data-cmd="clipboard-formats"]')) b.hidden = !nativeClipboard;
 
-// File shortcuts, ahead of the drawing tools' own keys.
+// File and clipboard shortcuts, ahead of the drawing tools' own keys.
 window.addEventListener('keydown', (e) => {
-  if (!(e.ctrlKey || e.metaKey)) return;
-  const t = e.target as HTMLElement;
-  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+  if (!(e.ctrlKey || e.metaKey) || isTyping(e.target)) return;
   const k = e.key.toLowerCase();
-  const cmd = k === 'n' ? 'new' : k === 'o' ? 'open' : k === 's' ? (e.shiftKey ? 'save-as' : 'save') : k === 'c' && e.altKey ? 'copy-smiles' : null;
+  let cmd: string | null = null;
+  if (k === 'n') cmd = 'new';
+  else if (k === 'o') cmd = 'open';
+  else if (k === 's') cmd = e.shiftKey ? 'save-as' : 'save';
+  else if (k === 'c') cmd = e.altKey ? 'copy-smiles' : textSelected() ? null : 'copy';
+  else if (k === 'x' && !e.altKey) cmd = textSelected() ? null : 'cut';
+  // in a browser, Ctrl+V goes on to the paste event, which can read the clipboard
+  else if (k === 'v' && !e.altKey && nativeClipboard) cmd = 'paste';
   if (!cmd) return;
   e.preventDefault();
   e.stopPropagation();

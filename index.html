@@ -18,7 +18,21 @@
         <button role="menuitem" data-cmd="save-as">Save As…<kbd>Ctrl+Shift+S</kbd></button>
         <hr />
         <button role="menuitem" data-cmd="export-mol">Export Molfile…</button>
+      </div>
+    </div>
+    <div class="menu-wrap">
+      <button id="btn-edit" aria-haspopup="menu" aria-expanded="false" aria-controls="edit-menu">Edit</button>
+      <div id="edit-menu" class="menu" role="menu" hidden>
+        <button role="menuitem" data-cmd="undo">Undo<kbd>Ctrl+Z</kbd></button>
+        <button role="menuitem" data-cmd="redo">Redo<kbd>Ctrl+Y</kbd></button>
+        <hr />
+        <button role="menuitem" data-cmd="cut">Cut<kbd>Ctrl+X</kbd></button>
+        <button role="menuitem" data-cmd="copy">Copy<kbd>Ctrl+C</kbd></button>
+        <button role="menuitem" data-cmd="paste">Paste<kbd>Ctrl+V</kbd></button>
         <button role="menuitem" data-cmd="copy-smiles">Copy as SMILES<kbd>Ctrl+Alt+C</kbd></button>
+        <hr />
+        <button role="menuitem" data-cmd="select-all">Select All<kbd>Ctrl+A</kbd></button>
+        <button role="menuitem" data-cmd="clipboard-formats" hidden>Show Clipboard Formats</button>
       </div>
     </div>
     <span class="sep"></span>
@@ -91,12 +105,13 @@
         <ul>
           <li><kbd>Ctrl+Z</kbd> undo, <kbd>Ctrl+Y</kbd> redo, <kbd>Ctrl+A</kbd> select all, <kbd>Delete</kbd> delete selection</li>
           <li>Mouse wheel scrolls, <kbd>Ctrl</kbd>+wheel zooms, middle or right drag pans, <kbd>Ctrl+0</kbd> fits the drawing</li>
-          <li>Paste a SMILES string (<kbd>Ctrl+V</kbd>) to draw it; <kbd>Ctrl+C</kbd> copies the selection as SMILES</li>
-          <li>Open a .cdxml file with Open, or drop it on the drawing</li>
+          <li><kbd>Ctrl+C</kbd> copies the selection (or the whole drawing) as a picture for Word and PowerPoint; <kbd>Ctrl+X</kbd> cuts; <kbd>Ctrl+V</kbd> pastes it back here</li>
+          <li>Paste a SMILES string or a molfile (<kbd>Ctrl+V</kbd>) to draw it; <kbd>Ctrl+Alt+C</kbd> copies the selection as SMILES</li>
+          <li>File menu: New, Open, Save and Save As (.cdxml), Export Molfile. You can also drop a .cdxml file on the drawing</li>
         </ul>
         <h3>Not in this prototype yet</h3>
         <ul>
-          <li>Saving, Clean Up, rich-text captions, templates, curved-arrow editing, pictures</li>
+          <li>Copy and paste with ChemDraw, Clean Up, rich-text captions, templates, curved-arrow editing, pictures</li>
         </ul>
       </div>
     </div>

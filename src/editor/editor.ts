@@ -694,8 +694,8 @@ export class Editor {
     const doc = this.doc;
     if (ctrl) {
       const k = e.key.toLowerCase();
-      if (k === 'z' && !e.shiftKey) { e.preventDefault(); if (doc.undo()) this.afterUndo(); return; }
-      if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); if (doc.redo()) this.afterUndo(); return; }
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); this.undo(); return; }
+      if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); this.redo(); return; }
       if (k === 'a') { e.preventDefault(); this.selectAll(); return; }
       if (k === '0') { e.preventDefault(); this.fit(); return; }
       if (k === '=' || k === '+') { e.preventDefault(); this.zoomAt(this.r.width / 2, this.r.height / 2, 1.25); this.requestScene(); return; }
@@ -729,6 +729,14 @@ export class Editor {
     }
     const tool = TOOL_KEYS[e.key];
     if (tool) { e.preventDefault(); this.setTool(tool); }
+  }
+
+  undo(): void {
+    if (this.doc.undo()) this.afterUndo();
+  }
+
+  redo(): void {
+    if (this.doc.redo()) this.afterUndo();
   }
 
   private afterUndo(): void {

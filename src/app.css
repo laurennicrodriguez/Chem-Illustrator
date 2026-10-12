@@ -104,6 +104,7 @@ button:hover { border-color: var(--accent); }
   text-align: left;
   background: transparent;
 }
+.menu button[hidden] { display: none; }
 .menu button:hover, .menu button:focus-visible { background: var(--accent-soft); outline: none; }
 .menu kbd { font: 11px var(--mono-font); color: var(--muted); }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; width: auto; }
