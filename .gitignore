@@ -1,0 +1,13 @@
+node_modules/
+dist/
+test-results/
+*.log
+
+# Copied from node_modules by scripts/copy-rdkit.mjs
+public/RDKit_minimal.js
+public/RDKit_minimal.wasm
+
+# Never commit drawings or reference documents; keep them outside the repo
+*.cdxml
+*.cdx
+*.pdf
