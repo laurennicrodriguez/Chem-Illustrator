@@ -2,14 +2,14 @@
 // objects and properties as CDXML, so this converts between the two: copying writes our CDXML
 // as CDX, and pasting turns ChemDraw's CDX into CDXML for the CDXML reader.
 //
-// Written from CambridgeSoft's published CDX format documentation. A CDX file is a 28-byte
-// header, then a tree of objects, each a 2-byte tag (top bit set), a 4-byte id, its properties
-// and child objects, and two zero bytes. A property is a 2-byte tag, a 2-byte length and the
-// data. Numbers are little-endian; coordinates are 1/65536 of a point.
+// Written from CambridgeSoft's published CDX format documentation, and checked against CDX
+// files saved by ChemDraw 25; where the two disagree, this follows ChemDraw's files. A CDX file
+// is a 28-byte header, then a tree of objects, each a 2-byte tag (top bit set), a 4-byte id, its
+// properties and child objects, and two zero bytes. A property is a 2-byte tag, a 2-byte length
+// and the data. Numbers are little-endian; coordinates are 1/65536 of a point.
 //
-// CDXML attributes the documentation gives no CDX property for (ChemDraw's AtomID, NeedsClean,
-// chemical-property captions and so on) are left out of CDX; nothing that changes how the
-// drawing looks depends on them.
+// CDXML attributes with no known CDX property (chemical-property captions, sequence settings
+// and so on) are left out of CDX; nothing that changes how the drawing looks depends on them.
 
 // ---------------------------------------------------------------- objects
 
@@ -18,9 +18,11 @@ const OBJECTS: Record<string, number> = {
   curve: 0x8008, embeddedobject: 0x8009, altgroup: 0x800a, templategrid: 0x800b, regnum: 0x800c,
   scheme: 0x800d, step: 0x800e, spectrum: 0x8010, objecttag: 0x8011, sequence: 0x8013,
   crossreference: 0x8014, splitter: 0x8015, table: 0x8016, bracketedgroup: 0x8017,
-  bracketattachment: 0x8018, crossingbond: 0x8019, border: 0x8020, geometry: 0x8021,
-  constraint: 0x8022, tlcplate: 0x8023, tlclane: 0x8024, tlcspot: 0x8025, chemicalproperty: 0x8026,
-  arrow: 0x8027,
+  bracketattachment: 0x8018, crossingbond: 0x8019,
+  // The documentation numbers the rest from 0x8020, skipping 0x801A to 0x801F, but ChemDraw's
+  // numbers carry on without the gap: its CDX files store arrows as 0x8021, not 0x8027.
+  border: 0x801a, geometry: 0x801b, constraint: 0x801c, tlcplate: 0x801d, tlclane: 0x801e,
+  tlcspot: 0x801f, chemicalproperty: 0x8020, arrow: 0x8021,
 };
 const OBJECT_NAMES = new Map(Object.entries(OBJECTS).map(([k, v]) => [v, k]));
 
@@ -31,7 +33,8 @@ type Kind =
   | 'coord' | 'pt2' | 'pt3' | 'rect' | 'str' | 'id' | 'ids' | 'idsCounted' | 'i16list'
   | 'bool' | 'implied' | 'hex'
   | 'x10' | 'deg65536' // INT16 stored ×10 (bond spacing, arc angles); INT32 angle × 65536
-  | 'enum8' | 'enum16' | 'bits16';
+  | 'enum8' | 'enum16' | 'bits16'
+  | 'side'; // the side of a double bond's second line (see DoublePosition below)
 
 interface Prop { tag: number; kind: Kind; values?: Record<string, number> }
 
@@ -48,9 +51,14 @@ const ORDER = {
   '1': 0x1, '2': 0x2, '3': 0x4, '4': 0x8, '5': 0x10, '6': 0x20, '0.5': 0x40, '1.5': 0x80, '2.5': 0x100, '3.5': 0x200,
   '4.5': 0x400, '5.5': 0x800, dative: 0x1000, ionic: 0x2000, hydrogen: 0x4000, threecenter: 0x8000,
 };
+// The side of a double bond's second line: 0 centre, 1 right, 2 left, plus 0x100 when the user
+// chose the side. ChemDraw writes the side it picked itself too, but leaves those out of CDXML,
+// so only sides the user chose are carried over.
+const SIDES = ['Center', 'Right', 'Left'];
+const USER_SIDE = 0x100;
 // Arrowheads of `arrow` objects. The documentation names these properties but its pages for
-// their values are missing; these are checked against a CDX file saved by ChemDraw (see
-// tests/cdx.test.ts).
+// their values are missing. CDX files saved by ChemDraw 25 confirm Full = 2, Solid = 1 and
+// fill None = 1; the other values are a best guess from the order of the names.
 const HEAD = list('Unspecified', 'None', 'Full', 'HalfLeft', 'HalfRight');
 const HEAD_TYPE = list('Unspecified', 'Solid', 'Hollow', 'Angle');
 const FILL = list('Unspecified', 'None', 'Solid', 'Shaded', 'Gradient', 'Pattern');
@@ -70,7 +78,8 @@ const P: Record<string, Prop> = {
   IgnoreWarnings: { tag: 0x000f, kind: 'implied' },
   Warning: { tag: 0x0010, kind: 'str' },
   Visible: { tag: 0x0011, kind: 'bool' },
-  SupersededBy: { tag: 0x0012, kind: 'id' },
+  // the documentation says 0x0012; ChemDraw's files use 0x0013
+  SupersededBy: { tag: 0x0013, kind: 'id' },
   // positions
   p: { tag: 0x0200, kind: 'pt2' },
   xyz: { tag: 0x0201, kind: 'pt3' },
@@ -90,12 +99,14 @@ const P: Record<string, Prop> = {
   // colours
   color: { tag: 0x0301, kind: 'u16' },
   bgcolor: { tag: 0x0302, kind: 'i16' },
+  FadePercent: { tag: 0x0303, kind: 'i16' }, // how faint an orbital is drawn (from ChemDraw's files)
   // atoms
   NodeType: { tag: 0x0400, kind: 'enum16', values: NODE_TYPE },
   LabelDisplay: { tag: 0x0401, kind: 'enum8', values: list('Auto', 'Left', 'Center', 'Right', 'Above', 'Below', 'BestInitial') },
   Element: { tag: 0x0402, kind: 'i16' },
   Isotope: { tag: 0x0420, kind: 'i16' },
   Charge: { tag: 0x0421, kind: 'i8' },
+  Radical: { tag: 0x0422, kind: 'enum8', values: { None: 0, Singlet: 1, Doublet: 2, Triplet: 3 } }, // Singlet seen in ChemDraw's files
   FreeSites: { tag: 0x0423, kind: 'u8' },
   ImplicitHydrogens: { tag: 0x0424, kind: 'implied' },
   RingBondCount: { tag: 0x0425, kind: 'i8' },
@@ -105,6 +116,7 @@ const P: Record<string, Prop> = {
   NumHydrogens: { tag: 0x042b, kind: 'u16' },
   HDot: { tag: 0x042e, kind: 'implied' },
   HDash: { tag: 0x042f, kind: 'implied' },
+  Geometry: { tag: 0x0430, kind: 'enum8', values: { Tetrahedral: 7 } }, // the one value seen in ChemDraw's files
   BondOrdering: { tag: 0x0431, kind: 'ids' },
   Attachments: { tag: 0x0432, kind: 'idsCounted' },
   GenericNickname: { tag: 0x0433, kind: 'str' },
@@ -119,12 +131,16 @@ const P: Record<string, Prop> = {
   LinkCountLow: { tag: 0x043d, kind: 'i16' },
   LinkCountHigh: { tag: 0x043e, kind: 'i16' },
   ExternalConnectionType: { tag: 0x0440, kind: 'enum8', values: list('Unspecified', 'Diamond', 'Star', 'PolymerBead', 'Wavy') },
-  ShowTerminalCarbonLabels: { tag: 0x0442, kind: 'implied' },
-  ShowNonTerminalCarbonLabels: { tag: 0x0443, kind: 'implied' },
-  HideImplicitHydrogens: { tag: 0x0444, kind: 'implied' },
+  // documented as present-means-yes, but ChemDraw 25 writes these with a yes/no byte
+  ShowTerminalCarbonLabels: { tag: 0x0442, kind: 'bool' },
+  ShowNonTerminalCarbonLabels: { tag: 0x0443, kind: 'bool' },
+  HideImplicitHydrogens: { tag: 0x0444, kind: 'bool' },
   ShowAtomEnhancedStereo: { tag: 0x0445, kind: 'bool' },
   EnhancedStereoType: { tag: 0x0446, kind: 'u8' },
   EnhancedStereoGroupNum: { tag: 0x0447, kind: 'u16' },
+  // not in the documentation; matched to CDXML in ChemDraw's files
+  NeedsClean: { tag: 0x0448, kind: 'implied' },
+  AtomID: { tag: 0x044d, kind: 'i32' },
   // fragments
   Racemic: { tag: 0x0500, kind: 'bool' },
   Absolute: { tag: 0x0501, kind: 'bool' },
@@ -135,7 +151,7 @@ const P: Record<string, Prop> = {
   Order: { tag: 0x0600, kind: 'bits16', values: ORDER },
   Display: { tag: 0x0601, kind: 'enum16', values: DISPLAY },
   Display2: { tag: 0x0602, kind: 'enum16', values: DISPLAY },
-  DoublePosition: { tag: 0x0603, kind: 'enum16', values: { Center: 0, Right: 1, Left: 2 } },
+  DoublePosition: { tag: 0x0603, kind: 'side' },
   B: { tag: 0x0604, kind: 'id' },
   E: { tag: 0x0605, kind: 'id' },
   BeginAttach: { tag: 0x0608, kind: 'u8' },
@@ -154,7 +170,7 @@ const P: Record<string, Prop> = {
   LabelAlignment: { tag: 0x0705, kind: 'enum8', values: ALIGN },
   LabelLineHeight: { tag: 0x0706, kind: 'i16', values: { variable: 0, auto: 1 } },
   CaptionLineHeight: { tag: 0x0707, kind: 'i16', values: { variable: 0, auto: 1 } },
-  InterpretChemically: { tag: 0x0708, kind: 'implied' },
+  InterpretChemically: { tag: 0x0708, kind: 'bool' }, // a yes/no byte in ChemDraw 25's files
   // document and drawing settings
   PrintMargins: { tag: 0x0802, kind: 'rect' },
   ChainAngle: { tag: 0x0803, kind: 'deg65536' },
@@ -165,7 +181,7 @@ const P: Record<string, Prop> = {
   MarginWidth: { tag: 0x0808, kind: 'coord' },
   HashSpacing: { tag: 0x0809, kind: 'coord' },
   CaptionJustification: { tag: 0x080c, kind: 'enum8', values: JUSTIFY },
-  FractionalWidths: { tag: 0x080d, kind: 'implied' },
+  FractionalWidths: { tag: 0x080d, kind: 'bool' }, // a yes/no byte in ChemDraw 25's files
   Magnification: { tag: 0x080e, kind: 'i16' },
   WidthPages: { tag: 0x080f, kind: 'i16' },
   HeightPages: { tag: 0x0810, kind: 'i16' },
@@ -193,6 +209,7 @@ const P: Record<string, Prop> = {
   OvalType: { tag: 0x0a04, kind: 'bits16', values: { Plain: 0, Circle: 1, Shaded: 2, Filled: 4, Dashed: 8, Bold: 16, Shadowed: 32 } },
   BracketType: { tag: 0x0a06, kind: 'enum16', values: list('RoundPair', 'SquarePair', 'CurlyPair', 'Square', 'Curly', 'Round') },
   SymbolType: { tag: 0x0a07, kind: 'enum16', values: list('LonePair', 'Electron', 'RadicalCation', 'RadicalAnion', 'CirclePlus', 'CircleMinus', 'Dagger', 'DoubleDagger', 'Plus', 'Minus', 'Racemic', 'Absolute', 'Relative') },
+  OrbitalType: { tag: 0x0a05, kind: 'enum16', values: { s: 0 } }, // only "s" (0) is confirmed
   CurveType: { tag: 0x0a08, kind: 'i16' },
   HeadSize: { tag: 0x0a20, kind: 'i16' },
   AngularSize: { tag: 0x0a21, kind: 'x10' },
@@ -226,7 +243,9 @@ const P: Record<string, Prop> = {
   ReactionStepObjectsBelowArrow: { tag: 0x0c06, kind: 'ids' },
   ReactionStepAtomMapManual: { tag: 0x0c07, kind: 'ids' },
   ReactionStepAtomMapAuto: { tag: 0x0c08, kind: 'ids' },
-  // object tags (stereo labels)
+  // object tags (stereo labels); the values are from ChemDraw's files
+  TagType: { tag: 0x0d00, kind: 'enum16', values: { Unknown: 0 } },
+  PositioningType: { tag: 0x0d06, kind: 'enum8', values: { offset: 2 } },
   PositioningOffset: { tag: 0x0d08, kind: 'pt2' },
   // pictures (kept so a picture's frame survives; the picture data itself is not converted)
   BasisObjects: { tag: 0x0b82, kind: 'ids' },
@@ -236,12 +255,17 @@ const P: Record<string, Prop> = {
 const BY_TAG = new Map(Object.entries(P).map(([name, p]) => [p.tag, [name, p] as const]));
 
 const TAG_TEXT = 0x0700;
+// The same text in UTF-8, which ChemDraw 25 writes after the single-byte text (not in the
+// documentation). Its style runs start at byte offsets, and LineStarts count its bytes.
+const TAG_UTF8_TEXT = 0x0709;
 const TAG_FONTTABLE = 0x0100;
 const TAG_COLORTABLE = 0x0300;
 const TAG_REPRESENT = 0x000e;
 const TAG_LABELSTYLE = 0x080a;
 const TAG_CAPTIONSTYLE = 0x080b;
-const HEADER = [0x56, 0x6a, 0x43, 0x44, 0x30, 0x31, 0x30, 0x30, 0x04, 0x03, 0x02, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+// The header as ChemDraw writes it: "VjCD0100", 04 03 02 01, ten zero bytes, and the document
+// object's tag (0x8000) and id (0), which the documentation counts as reserved bytes.
+const HEADER = [0x56, 0x6a, 0x43, 0x44, 0x30, 0x31, 0x30, 0x30, 0x04, 0x03, 0x02, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x80, 0, 0, 0, 0];
 
 // Font character sets: Windows code page ↔ CDXML name.
 const CHARSETS: Record<string, number> = {
@@ -276,20 +300,7 @@ function decode1252(bytes: Uint8Array): string {
   return s;
 }
 
-/** UTF-8 byte offsets (as CDXML's LineStarts uses) → character offsets, and back. */
-function utf8ToChars(text: string, offsets: number[]): number[] {
-  const at = new Map<number, number>();
-  let bytes = 0, chars = 0;
-  at.set(0, 0);
-  for (const ch of text) {
-    const cp = ch.codePointAt(0)!;
-    bytes += cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
-    chars++;
-    at.set(bytes, chars);
-  }
-  return offsets.map((o) => at.get(o) ?? Math.min(o, chars));
-}
-
+/** Character offsets (as older CDX counts LineStarts) → UTF-8 byte offsets (as CDXML does). */
 function charsToUtf8(text: string, offsets: number[]): number[] {
   const ends: number[] = [0];
   let bytes = 0;
@@ -354,7 +365,8 @@ function encodeValue(p: Prop, v: string): Uint8Array | null {
     case 'deg65536': if (!Number.isFinite(n[0])) return null; b.i32(fix(n[0])); break;
     case 'coord': if (!Number.isFinite(n[0])) return null; b.i32(fix(n[0])); break;
     case 'pt2': if (n.length < 2) return null; b.i32(fix(n[1])); b.i32(fix(n[0])); break;
-    case 'pt3': if (n.length < 2) return null; b.i32(fix(n[2] ?? 0)); b.i32(fix(n[1])); b.i32(fix(n[0])); break;
+    // unlike 2D points, ChemDraw stores 3D points x first (the documentation says z first)
+    case 'pt3': if (n.length < 2) return null; b.i32(fix(n[0])); b.i32(fix(n[1])); b.i32(fix(n[2] ?? 0)); break;
     case 'rect': if (n.length < 4) return null; b.i32(fix(n[1])); b.i32(fix(n[0])); b.i32(fix(n[3])); b.i32(fix(n[2])); break;
     case 'str': b.u16(0); b.bytes(encode1252(v)); break;
     case 'id': if (!Number.isFinite(n[0])) return null; b.u32(n[0]); break;
@@ -366,6 +378,12 @@ function encodeValue(p: Prop, v: string): Uint8Array | null {
     case 'hex': for (let i = 0; i + 1 < v.length; i += 2) b.u8(parseInt(v.slice(i, i + 2), 16)); break;
     case 'enum8': if (named === undefined) return null; b.u8(named); break;
     case 'enum16': if (named === undefined) return null; b.u16(named); break;
+    case 'side': {
+      const i = SIDES.indexOf(v);
+      if (i < 0) return null;
+      b.u16(USER_SIDE | i);
+      break;
+    }
     case 'bits16': {
       let bits = 0;
       for (const word of v.split(/\s+/)) {
@@ -413,27 +431,37 @@ function writeAttributes(out: Bytes, e: Element, skip: Set<string> = new Set()):
     let v = a.value;
     if (a.name === 'LineStarts') continue; // written with the text, in CDX's character offsets
     if (a.name === 'Charge' && !Number.isFinite(Number(v))) continue;
-    const data = encodeValue(p, v);
+    // ChemDraw stores an object tag's name as plain text, without the style-run count
+    const data = p.kind === 'str' && e.nodeName === 'objecttag' ? encode1252(v) : encodeValue(p, v);
     if (data) writeProp(out, p.tag, data);
   }
 }
 
+const utf8 = new TextEncoder();
+
+/** A text's runs and characters, as single-byte text and again as UTF-8, as ChemDraw 25 does. */
 function writeText(out: Bytes, t: Element): void {
   const runs = kids(t).filter((s) => s.nodeName === 's');
-  let text = '';
-  const b = new Bytes();
-  b.u16(runs.length);
-  for (const s of runs) {
-    b.u16([...text].length);
-    b.bytes(fontStyle(s.getAttribute('font'), s.getAttribute('face') ?? '0', s.getAttribute('size'), s.getAttribute('color')));
-    text += s.textContent ?? '';
+  const styles = runs.map((s) => fontStyle(s.getAttribute('font'), s.getAttribute('face') ?? '0', s.getAttribute('size'), s.getAttribute('color')));
+  const parts = runs.map((s) => s.textContent ?? '');
+  const text = parts.join('');
+  for (const wide of [false, true]) {
+    const b = new Bytes();
+    b.u16(runs.length);
+    let at = 0;
+    parts.forEach((part, i) => {
+      b.u16(at);
+      b.bytes(styles[i]);
+      at += wide ? utf8.encode(part).length : [...part].length;
+    });
+    b.bytes(wide ? utf8.encode(text.replace(/\n/g, '\r')) : encode1252(text));
+    writeProp(out, wide ? TAG_UTF8_TEXT : TAG_TEXT, b.done());
   }
-  b.bytes(encode1252(text));
-  writeProp(out, TAG_TEXT, b.done());
+  // LineStarts count UTF-8 bytes, as in CDXML
   const ls = t.getAttribute('LineStarts');
   if (ls) {
     const l = new Bytes();
-    const ends = utf8ToChars(text, nums(ls));
+    const ends = nums(ls);
     l.u16(ends.length);
     for (const x of ends) l.u16(x);
     writeProp(out, P.LineStarts.tag, l.done());
@@ -443,8 +471,6 @@ function writeText(out: Bytes, t: Element): void {
 function writeObject(out: Bytes, e: Element): void {
   const tag = OBJECTS[e.nodeName];
   if (tag === undefined) return; // not part of the drawing's objects (or unknown to CDX)
-  // stereo labels: ChemDraw works these out again when it reads the drawing
-  if (e.nodeName === 'objecttag') return;
   out.u16(tag);
   out.u32(Number(e.getAttribute('id')) || 0);
   writeAttributes(out, e);
@@ -485,7 +511,7 @@ export function cdxmlToCdx(xml: string): Uint8Array {
     } else if (c.nodeName === 'fonttable') {
       const fonts = kids(c).filter((k) => k.nodeName === 'font');
       const b = new Bytes();
-      b.u16(1); // fonts named as on Windows
+      b.u16(0); // as ChemDraw for Windows writes it
       b.u16(fonts.length);
       for (const f of fonts) {
         const name = encode1252(f.getAttribute('name') ?? '');
@@ -543,12 +569,13 @@ function decodeValue(p: Prop, d: Uint8Array): string | null {
     case 'x10': { const x = int(true); return x === null ? null : fmt(x / 10); }
     case 'deg65536': case 'coord': return len >= 4 ? fmt(i32(0)) : null;
     case 'pt2': return len >= 8 ? `${fmt(i32(1))} ${fmt(i32(0))}` : null;
-    case 'pt3': return len >= 12 ? `${fmt(i32(2))} ${fmt(i32(1))} ${fmt(i32(0))}` : null;
+    case 'pt3': return len >= 12 ? `${fmt(i32(0))} ${fmt(i32(1))} ${fmt(i32(2))}` : null;
     case 'rect': return len >= 16 ? `${fmt(i32(1))} ${fmt(i32(0))} ${fmt(i32(3))} ${fmt(i32(2))}` : null;
     case 'str': {
-      if (len < 2) return null;
-      const runs = v.getUint16(0, true);
-      return decode1252(d.subarray(Math.min(len, 2 + runs * 10)));
+      const runs = len >= 2 ? v.getUint16(0, true) : 0;
+      // an object tag's name has no style-run count in front (as ChemDraw writes it)
+      if (len < 2 || 2 + runs * 10 > len) return decode1252(d);
+      return decode1252(d.subarray(2 + runs * 10));
     }
     case 'id': return len >= 4 ? String(v.getUint32(0, true)) : null;
     case 'ids': return Array.from({ length: len >> 2 }, (_, i) => v.getUint32(i * 4, true)).join(' ');
@@ -563,9 +590,14 @@ function decodeValue(p: Prop, d: Uint8Array): string | null {
       return Array.from({ length: n }, (_, i) => v.getUint16(2 + i * 2, true)).join(' ');
     }
     case 'bool': return len ? (d[0] ? 'yes' : 'no') : null;
-    case 'implied': return 'yes';
+    // present means yes, unless ChemDraw wrote a yes/no byte
+    case 'implied': return len && !d[0] ? 'no' : 'yes';
     case 'hex': return Array.from(d, (x) => x.toString(16).padStart(2, '0').toUpperCase()).join('');
     case 'enum8': case 'enum16': return name(int(true));
+    case 'side': {
+      const x = int(false);
+      return x !== null && x & USER_SIDE ? SIDES[x & 0xff] ?? null : null;
+    }
     case 'bits16': {
       const x = int(false);
       if (x === null || x === 0xffff) return null;
@@ -586,6 +618,7 @@ function readFontStyle(d: Uint8Array): { font: number; face: number; size: numbe
 function readObject(r: Reader, name: string, id: number): Node {
   const node: Node = { name, attrs: id ? [['id', String(id)]] : [], children: [] };
   let lineStarts: number[] | null = null;
+  let single: Uint8Array | null = null, wide: Uint8Array | null = null;
   for (;;) {
     const tag = r.u16();
     if (tag === 0) break;
@@ -598,27 +631,8 @@ function readObject(r: Reader, name: string, id: number): Node {
     let len = r.u16();
     if (len === 0xffff) len = r.u32();
     const d = r.take(len);
-    if (tag === TAG_TEXT && len >= 2) {
-      // the text and its style runs become <s> children
-      const v = new DataView(d.buffer, d.byteOffset, d.byteLength);
-      const n = Math.min(v.getUint16(0, true), Math.floor((len - 2) / 10));
-      const text = decode1252(d.subarray(2 + n * 10));
-      const chars = [...text];
-      const runs = Array.from({ length: n }, (_, i) => ({ start: v.getUint16(2 + i * 10, true), style: readFontStyle(d.subarray(4 + i * 10, 12 + i * 10))! }));
-      if (!runs.length) runs.push({ start: 0, style: { font: 0xffff, face: 0, size: 0xffff, color: 0xffff } });
-      runs.forEach((run, i) => {
-        const s = run.style;
-        const attrs: [string, string][] = [];
-        if (s.font !== 0xffff) attrs.push(['font', String(s.font)]);
-        if (s.size !== 0xffff) attrs.push(['size', fmt(s.size / 20)]);
-        if (s.color !== 0xffff) attrs.push(['color', String(s.color)]);
-        if (s.face !== 0xffff) attrs.push(['face', String(s.face)]);
-        const part = chars.slice(run.start, i + 1 < runs.length ? runs[i + 1].start : chars.length).join('');
-        node.children.push({ name: 's', attrs, children: [], text: part });
-      });
-      node.text = text;
-      continue;
-    }
+    if (tag === TAG_TEXT && len >= 2) { single = d; continue; }
+    if (tag === TAG_UTF8_TEXT && len >= 2) { wide = d; continue; }
     if (tag === P.LineStarts.tag) {
       const v = new DataView(d.buffer, d.byteOffset, d.byteLength);
       const n = len >= 2 ? Math.min(v.getUint16(0, true), (len - 2) >> 1) : 0;
@@ -670,7 +684,31 @@ function readObject(r: Reader, name: string, id: number): Node {
     const value = decodeValue(known[1], d);
     if (value !== null) node.attrs.push([known[0], value]);
   }
-  if (lineStarts && node.text !== undefined) node.attrs.push(['LineStarts', charsToUtf8(node.text, lineStarts).join(' ')]);
+  // the text and its style runs become <s> children; the UTF-8 copy keeps every character
+  const d = wide ?? single;
+  if (d) {
+    const v = new DataView(d.buffer, d.byteOffset, d.byteLength);
+    const n = Math.min(v.getUint16(0, true), Math.floor((d.length - 2) / 10));
+    const body = d.subarray(2 + n * 10);
+    const runs = Array.from({ length: n }, (_, i) => ({ start: v.getUint16(2 + i * 10, true), style: readFontStyle(d.subarray(4 + i * 10, 12 + i * 10))! }));
+    if (!runs.length) runs.push({ start: 0, style: { font: 0xffff, face: 0, size: 0xffff, color: 0xffff } });
+    // single-byte runs start at character offsets (one byte each), UTF-8 runs at byte offsets
+    const piece = (a: number, b: number) => (wide ? new TextDecoder().decode(body.subarray(a, b)).replace(/\r/g, '\n') : decode1252(body.subarray(a, b)));
+    let text = '';
+    runs.forEach((run, i) => {
+      const s = run.style;
+      const attrs: [string, string][] = [];
+      if (s.font !== 0xffff) attrs.push(['font', String(s.font)]);
+      if (s.size !== 0xffff) attrs.push(['size', fmt(s.size / 20)]);
+      if (s.color !== 0xffff) attrs.push(['color', String(s.color)]);
+      if (s.face !== 0xffff) attrs.push(['face', String(s.face)]);
+      const part = piece(Math.min(run.start, body.length), i + 1 < runs.length ? Math.min(runs[i + 1].start, body.length) : body.length);
+      node.children.push({ name: 's', attrs, children: [], text: part });
+      text += part;
+    });
+    // LineStarts count UTF-8 bytes in CDXML; older CDX without the UTF-8 copy counts characters
+    if (lineStarts) node.attrs.push(['LineStarts', (wide ? lineStarts : charsToUtf8(text, lineStarts)).join(' ')]);
+  }
   return node;
 }
 
