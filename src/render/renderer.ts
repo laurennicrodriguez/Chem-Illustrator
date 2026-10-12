@@ -1,0 +1,926 @@
+// Canvas renderer in ChemDraw's ACS 1996 style.
+//
+// Two stacked canvases: the scene (the document) and an overlay (hover, selection, the
+// bond or ring being drawn). Hovering and drawing only repaint the overlay, so they stay
+// fast however big the document is. Label layouts and bond geometry are cached per atom
+// and bond and only recomputed near what changed.
+
+import { Doc, Atom, Bond, Arrow, Caption, Shape, TextRun } from '../model';
+import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf } from '../geom';
+import { doubleBondGap, wedgeWidth } from '../style';
+import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
+import { valenceExceeded } from '../chem/elements';
+import { GENERIC } from '../chem/labels';
+
+export const FONT_STACK = "Arial, 'Liberation Sans', Helvetica, sans-serif";
+
+export interface View {
+  /** Screen pixels per point. */
+  scale: number;
+  /** Screen position (CSS px) of document point (0,0). */
+  ox: number;
+  oy: number;
+}
+
+interface AtomCache {
+  layout: LabelLayout | null;
+  /** Knock-out boxes in document coordinates, already grown by the margin. */
+  boxes: Rect[];
+  warn: boolean;
+}
+
+interface BondCache {
+  /** Side for the second line of a double bond: +1 / −1 along the left normal, 0 = centred. */
+  side: number;
+  /** Interior angles at each end on the double-bond side (for trimming the inner line). */
+  trim1: number;
+  trim2: number;
+}
+
+const measureCanvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(8, 8) : null;
+const mctx = (measureCanvas?.getContext('2d') ?? document.createElement('canvas').getContext('2d')) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+const widthCache = new Map<string, number>();
+
+/** Width in points of `text` at `size` points (measured once at 100 px for precision). */
+export function measureText(text: string, size: number, font = FONT_STACK, style = ''): number {
+  const key = style + '|' + font + '|' + text;
+  let w = widthCache.get(key);
+  if (w === undefined) {
+    mctx.font = `${style} 100px ${font}`;
+    w = mctx.measureText(text).width / 100;
+    widthCache.set(key, w);
+  }
+  return w * size;
+}
+
+export class Renderer {
+  view: View = { scale: 2, ox: 40, oy: 40 };
+  dpr = 1;
+  width = 0;
+  height = 0;
+  showWarnings = true;
+  /** Last scene paint time in ms (for the speed readout). */
+  lastSceneMs = 0;
+
+  private sctx: CanvasRenderingContext2D;
+  private octx: CanvasRenderingContext2D;
+  /** Extra text shown beside atoms, e.g. stereo descriptors from the chemistry engine. */
+  annotations = new Map<number, string>();
+  private atomCache = new Map<number, AtomCache>();
+  private capBoxes = new WeakMap<Caption, Rect>();
+  private tiles = new Map<string, Tile>();
+  private stale: { tiles: Map<string, Tile>; scale: number } | null = null;
+  private tileScale = 0;
+  private tileDpr = 0;
+  private tileBg = '';
+  private freeCanvases: (OffscreenCanvas | HTMLCanvasElement)[] = [];
+  private shapeList: Shape[] | null = null;
+  private shapeVersion = -1;
+  /** True when some tiles still need painting (the caller should ask for another frame). */
+  incomplete = false;
+  private bondCache = new Map<number, BondCache>();
+
+  constructor(public scene: HTMLCanvasElement, public overlay: HTMLCanvasElement) {
+    this.sctx = scene.getContext('2d', { alpha: false })!;
+    this.octx = overlay.getContext('2d')!;
+  }
+
+  resize(w: number, h: number, dpr: number): void {
+    this.width = w; this.height = h; this.dpr = dpr;
+    for (const c of [this.scene, this.overlay]) {
+      c.width = Math.round(w * dpr);
+      c.height = Math.round(h * dpr);
+      c.style.width = w + 'px';
+      c.style.height = h + 'px';
+    }
+  }
+
+  toDoc(sx: number, sy: number): Vec {
+    return { x: (sx - this.view.ox) / this.view.scale, y: (sy - this.view.oy) / this.view.scale };
+  }
+
+  toScreen(p: Vec): Vec {
+    return { x: p.x * this.view.scale + this.view.ox, y: p.y * this.view.scale + this.view.oy };
+  }
+
+  visibleRect(pad = 20): Rect {
+    const a = this.toDoc(0, 0), b = this.toDoc(this.width, this.height);
+    return { x1: a.x - pad, y1: a.y - pad, x2: b.x + pad, y2: b.y + pad };
+  }
+
+  // ------------------------------------------------------------------ caches
+
+  /** Drop cached layout and painted tiles near anything that changed since the last paint. */
+  private invalidate(doc: Doc): void {
+    if (doc.allDirty || doc.dirtyRects.length > 20000) {
+      this.atomCache.clear();
+      this.bondCache.clear();
+      this.dropAllTiles();
+      doc.allDirty = false;
+      doc.dirtyAtoms.clear();
+      doc.dirtyBonds.clear();
+      doc.dirtyRects.length = 0;
+      doc.dirtyCaptions.length = 0;
+      return;
+    }
+    const rects: Rect[] = doc.dirtyRects.splice(0);
+    for (const c of doc.dirtyCaptions.splice(0)) rects.push(this.captionBox(c));
+    if (doc.dirtyAtoms.size || doc.dirtyBonds.size) {
+      // Labels depend on neighbours; double-bond sides depend on rings up to 8 atoms,
+      // so clear everything within 4 bonds of a change.
+      let frontier = [...doc.dirtyAtoms];
+      const seen = new Set(frontier);
+      for (let d = 0; d < 4 && frontier.length; d++) {
+        const next: number[] = [];
+        for (const id of frontier) {
+          for (const bid of doc.adj.get(id) ?? []) {
+            this.bondCache.delete(bid);
+            const b = doc.bonds.get(bid);
+            if (!b) continue;
+            const o = b.a1 === id ? b.a2 : b.a1;
+            if (!seen.has(o)) { seen.add(o); next.push(o); }
+          }
+        }
+        frontier = next;
+      }
+      for (const id of seen) {
+        this.atomCache.delete(id);
+        const a = doc.atoms.get(id);
+        if (a) rects.push({ x1: a.x, y1: a.y, x2: a.x, y2: a.y });
+      }
+      for (const id of doc.dirtyBonds) this.bondCache.delete(id);
+      doc.dirtyAtoms.clear();
+      doc.dirtyBonds.clear();
+    }
+    if (rects.length) this.dropTiles(doc, rects);
+  }
+
+  atomInfo(doc: Doc, a: Atom): AtomCache {
+    let c = this.atomCache.get(a.id);
+    if (c) return c;
+    const deg = doc.degree(a.id);
+    const bos = doc.bondOrderSum(a.id);
+    const spec = labelSpec(a.z, a.label, a.charge, a.isotope, bos, deg, !a.hideCharge);
+    let layout: LabelLayout | null = null;
+    const boxes: Rect[] = [];
+    const k = a.s ?? 1;
+    const size = doc.style.labelSize * k;
+    if (spec) {
+      if (a.supDigits) spec.supDigits = true;
+      const dirs = doc.neighbors(a.id).map((n) => norm(sub(n, a)));
+      layout = layoutLabel(spec, dirs, size, (t, s) => measureText(t, s), a.just);
+      const m = doc.style.marginWidth * k;
+      for (const b of layout.boxes) boxes.push({ x1: a.x + b.x1 - m, y1: a.y + b.y1 - m, x2: a.x + b.x2 + m, y2: a.y + b.y2 + m });
+    }
+    const warn = !a.label && valenceExceeded(a.z, bos, a.charge);
+    c = { layout, boxes, warn };
+    this.atomCache.set(a.id, c);
+    return c;
+  }
+
+  private bondInfo(doc: Doc, b: Bond): BondCache {
+    let c = this.bondCache.get(b.id);
+    if (c) return c;
+    c = { side: 0, trim1: 0, trim2: 0 };
+    if (b.order === 2 || b.order === 1.5) {
+      const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
+      const dir = norm(sub(q, p));
+      const nrm = perp(dir);
+      let side = 0;
+      // perp() points to the right of a1→a2 on screen (y runs down)
+      if (b.dpos === 'right') side = 1;
+      else if (b.dpos === 'left') side = -1;
+      else if (b.dpos === 'center') side = 0;
+      else {
+        const ring = doc.ringThroughBond(b.id);
+        if (ring) {
+          let cx = 0, cy = 0;
+          for (const id of ring) { const a = doc.atoms.get(id)!; cx += a.x; cy += a.y; }
+          const cen = { x: cx / ring.length, y: cy / ring.length };
+          side = dot(sub(cen, p), nrm) >= 0 ? 1 : -1;
+        } else {
+          // Outside rings: centred if an end is terminal (C=O, C=CH2), otherwise on the
+          // side with more substituents.
+          const n1 = doc.neighbors(p.id).filter((x) => x.id !== q.id);
+          const n2 = doc.neighbors(q.id).filter((x) => x.id !== p.id);
+          if (n1.length === 0 || n2.length === 0) {
+            const lab1 = this.atomInfo(doc, p).layout, lab2 = this.atomInfo(doc, q).layout;
+            const others = [...n1, ...n2];
+            if ((lab1 || lab2 || others.length !== 1) && !(n1.length === 0 && n2.length === 0 && false)) side = 0;
+            else {
+              // e.g. vinyl CH=CH2 with no labels: offset toward the substituent
+              let s = 0;
+              for (const o of others) s += Math.sign(dot(sub(o, p), nrm));
+              side = s >= 0 ? 1 : -1;
+            }
+            if (others.length === 0) side = 0;
+          } else {
+            let s = 0;
+            for (const o of [...n1, ...n2]) s += Math.sign(dot(sub(o, p), nrm));
+            side = s === 0 ? 1 : Math.sign(s);
+          }
+        }
+      }
+      c.side = side;
+      if (side !== 0) {
+        c.trim1 = this.trimAt(doc, p, q, side);
+        c.trim2 = this.trimAt(doc, q, p, -side);
+      }
+    }
+    this.bondCache.set(b.id, c);
+    return c;
+  }
+
+  /** How far to pull back the inner line of a double bond at atom `at` (fraction of the gap). */
+  private trimAt(doc: Doc, at: Atom, other: Atom, side: number): number {
+    const dir = norm(sub(other, at));
+    const nrm = mul(perp(dir), side);
+    let best = 0;
+    for (const n of doc.neighbors(at.id)) {
+      if (n.id === other.id) continue;
+      const d = norm(sub(n, at));
+      if (dot(d, nrm) <= 0) continue;
+      // interior angle between the bond and this neighbour
+      const ang = Math.acos(Math.max(-1, Math.min(1, dot(d, dir))));
+      const t = 1 / Math.tan(ang / 2);
+      if (t > best) best = t;
+    }
+    return best;
+  }
+
+  // ------------------------------------------------------------------ scene
+
+  /**
+   * Paint the document. The page is cut into tiles that are painted once and then reused
+   * while scrolling; an edit repaints only the tiles it touches. After a zoom, the old tiles
+   * are shown stretched until new ones are ready, painting as many per frame as fit in
+   * `budgetMs` (the rest follow on the next frames; `incomplete` says so).
+   */
+  renderScene(doc: Doc, budgetMs = Infinity): void {
+    const t0 = performance.now();
+    this.invalidate(doc);
+    const ctx = this.sctx;
+    const { scale } = this.view;
+    const dpr = this.dpr;
+    // Keep tiles on whole device pixels so they line up without blurring.
+    this.view.ox = Math.round(this.view.ox * dpr) / dpr;
+    this.view.oy = Math.round(this.view.oy * dpr) / dpr;
+    const { ox, oy } = this.view;
+    if (scale !== this.tileScale || dpr !== this.tileDpr || doc.background !== this.tileBg) {
+      if (this.tiles.size && dpr === this.tileDpr && doc.background === this.tileBg) {
+        // keep the old tiles as stretched placeholders while new ones are painted
+        if (!this.stale || this.tiles.size >= this.stale.tiles.size / 2) this.stale = { tiles: this.tiles, scale: this.tileScale };
+      } else this.stale = null;
+      this.tiles = new Map();
+      this.tileScale = scale;
+      this.tileDpr = dpr;
+      this.tileBg = doc.background;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = doc.background;
+    ctx.fillRect(0, 0, this.width, this.height);
+    const T = TILE;
+    const tx0 = Math.floor(-ox / T), tx1 = Math.floor((this.width - ox) / T);
+    const ty0 = Math.floor(-oy / T), ty1 = Math.floor((this.height - oy) / T);
+    // stale placeholders first
+    let missing = false;
+    const need: [number, number][] = [];
+    for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) if (!this.tiles.has(tx + ',' + ty)) need.push([tx, ty]);
+    if (need.length && this.stale && budgetMs !== Infinity) {
+      const k = scale / this.stale.scale;
+      ctx.imageSmoothingEnabled = true;
+      for (const t of this.stale.tiles.values()) {
+        const x = t.tx * T * k + ox, y = t.ty * T * k + oy, w = T * k;
+        if (x + w < 0 || y + w < 0 || x > this.width || y > this.height) continue;
+        ctx.drawImage(t.canvas, x, y, w, w);
+      }
+    }
+    // paint missing tiles, nearest the middle first
+    const cx = (tx0 + tx1) / 2, cy = (ty0 + ty1) / 2;
+    need.sort((a, b) => Math.hypot(a[0] - cx, a[1] - cy) - Math.hypot(b[0] - cx, b[1] - cy));
+    for (const [tx, ty] of need) {
+      if (performance.now() - t0 > budgetMs) { missing = true; break; }
+      this.tiles.set(tx + ',' + ty, this.paintTile(doc, tx, ty));
+    }
+    for (let ty = ty0; ty <= ty1; ty++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
+        const t = this.tiles.get(tx + ',' + ty);
+        if (t) ctx.drawImage(t.canvas, tx * T + ox, ty * T + oy, T, T);
+      }
+    }
+    if (!missing) this.stale = null;
+    this.incomplete = missing;
+    this.pruneTiles(tx0, tx1, ty0, ty1);
+    this.lastSceneMs = performance.now() - t0;
+  }
+
+  private paintTile(doc: Doc, tx: number, ty: number): Tile {
+    const T = TILE, dpr = this.dpr, scale = this.view.scale;
+    const px = Math.round(T * dpr);
+    const canvas = this.freeCanvases.pop() ?? (typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(px, px) : Object.assign(document.createElement('canvas'), { width: px, height: px }));
+    if (canvas.width !== px) { canvas.width = px; canvas.height = px; }
+    const ctx = canvas.getContext('2d', { alpha: false }) as CanvasRenderingContext2D;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = doc.background;
+    ctx.fillRect(0, 0, px, px);
+    ctx.setTransform(dpr * scale, 0, 0, dpr * scale, -tx * T * dpr, -ty * T * dpr);
+    const x1 = (tx * T) / scale, y1 = (ty * T) / scale;
+    const pad = this.pad(doc);
+    this.drawContent(ctx, doc, { x1: x1 - pad, y1: y1 - pad, x2: x1 + T / scale + pad, y2: y1 + T / scale + pad });
+    return { canvas, tx, ty };
+  }
+
+  /** How far outside a tile an object can sit and still reach into it. */
+  private pad(doc: Doc): number {
+    const st = doc.style;
+    return Math.max(doc.maxBondLength, 2 * st.bondLength, 8 * st.labelSize) + 4;
+  }
+
+  private dropTiles(doc: Doc, rects: Rect[]): void {
+    this.stale = null;
+    if (!this.tiles.size) return;
+    const T = TILE, s = this.tileScale;
+    const pad = this.pad(doc);
+    for (const r of rects) {
+      const tx0 = Math.floor(((r.x1 - pad) * s) / T), tx1 = Math.floor(((r.x2 + pad) * s) / T);
+      const ty0 = Math.floor(((r.y1 - pad) * s) / T), ty1 = Math.floor(((r.y2 + pad) * s) / T);
+      for (let ty = ty0; ty <= ty1; ty++) {
+        for (let tx = tx0; tx <= tx1; tx++) {
+          const key = tx + ',' + ty;
+          const t = this.tiles.get(key);
+          if (t) { this.freeCanvases.push(t.canvas); this.tiles.delete(key); }
+        }
+      }
+    }
+  }
+
+  private dropAllTiles(): void {
+    for (const t of this.tiles.values()) this.freeCanvases.push(t.canvas);
+    this.tiles.clear();
+    this.stale = null;
+    if (this.freeCanvases.length > 64) this.freeCanvases.length = 64;
+  }
+
+  /** Keep the tile cache to a sensible size by forgetting tiles far off screen. */
+  private pruneTiles(tx0: number, tx1: number, ty0: number, ty1: number): void {
+    if (this.tiles.size <= MAX_TILES) return;
+    const m = 4;
+    for (const [key, t] of this.tiles) {
+      if (t.tx < tx0 - m || t.tx > tx1 + m || t.ty < ty0 - m || t.ty > ty1 + m) {
+        this.tiles.delete(key);
+        if (this.freeCanvases.length < 64) this.freeCanvases.push(t.canvas);
+      }
+    }
+  }
+
+  /** Forget all painted tiles (after changing how things are drawn, e.g. warnings on/off). */
+  repaintAll(): void {
+    this.dropAllTiles();
+  }
+
+  /** Change the stereo labels shown beside atoms, repainting only around them. */
+  setAnnotations(doc: Doc, next: Map<number, string>): void {
+    const rects: Rect[] = [];
+    for (const id of new Set([...this.annotations.keys(), ...next.keys()])) {
+      if (this.annotations.get(id) === next.get(id)) continue;
+      const a = doc.atoms.get(id);
+      if (a) rects.push({ x1: a.x, y1: a.y, x2: a.x, y2: a.y });
+    }
+    this.annotations = next;
+    if (rects.length) this.dropTiles(doc, rects);
+  }
+
+  private sortedShapes(doc: Doc): Shape[] {
+    if (this.shapeVersion !== doc.version || !this.shapeList) {
+      this.shapeList = [...doc.shapes.values()].sort((a, b) => (b.filled ? 1 : 0) - (a.filled ? 1 : 0) || (a.z ?? 0) - (b.z ?? 0));
+      this.shapeVersion = doc.version;
+    }
+    return this.shapeList;
+  }
+
+  /** Draw everything that falls inside `vis` (document coordinates) with the current transform. */
+  private drawContent(ctx: CanvasRenderingContext2D, doc: Doc, vis: Rect): void {
+    const st = doc.style;
+
+    // Shapes behind the structures (filled boxes first).
+    for (const s of this.sortedShapes(doc)) {
+      if (Math.max(s.x1, s.x2) < vis.x1 || Math.min(s.x1, s.x2) > vis.x2 || Math.max(s.y1, s.y2) < vis.y1 || Math.min(s.y1, s.y2) > vis.y2) continue;
+      this.drawShape(ctx, s, st.lineWidth);
+    }
+
+    // Only atoms near this area, and their bonds (found through the spatial index).
+    const atoms = doc.atomsIn(vis);
+    const bondSet = new Set<Bond>();
+    for (const a of atoms) for (const bid of doc.adj.get(a.id) ?? []) bondSet.add(doc.bonds.get(bid)!);
+
+    // Bonds, batched by how they are stroked (and by size, for resized structures).
+    const batches = new Map<number, BondBatch>();
+    const colored: Bond[] = [];
+    for (const b of bondSet) {
+      const p = doc.atoms.get(b.a1), q = doc.atoms.get(b.a2);
+      if (!p || !q) continue;
+      if ((p.x < vis.x1 && q.x < vis.x1) || (p.x > vis.x2 && q.x > vis.x2) || (p.y < vis.y1 && q.y < vis.y1) || (p.y > vis.y2 && q.y > vis.y2)) continue;
+      if (b.color) { colored.push(b); continue; }
+      const k = b.s ?? 1;
+      let bb = batches.get(k);
+      if (!bb) { bb = newBatch(); batches.set(k, bb); }
+      this.bondPaths(doc, b, p, q, bb);
+    }
+    for (const [k, bb] of batches) this.strokeBatch(ctx, bb, k, st.lineWidth, st.boldWidth, '#000');
+    for (const b of colored) {
+      const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
+      const bb = newBatch();
+      this.bondPaths(doc, b, p, q, bb);
+      this.strokeBatch(ctx, bb, b.s ?? 1, st.lineWidth, st.boldWidth, b.color!);
+    }
+    ctx.strokeStyle = ctx.fillStyle = '#000';
+
+    // Atom labels and warnings.
+    const warns: Rect[] = [];
+    let curFont = '';
+    ctx.textBaseline = 'alphabetic';
+    for (const a of atoms) {
+      const info = this.atomInfo(doc, a);
+      if (info.layout) {
+        ctx.fillStyle = a.color ?? '#000';
+        for (const r of info.layout.runs) {
+          const f = `${r.size}px ${FONT_STACK}`;
+          if (f !== curFont) { ctx.font = f; curFont = f; }
+          ctx.fillText(r.text, a.x + r.dx, a.y + r.dy);
+        }
+      } else if (a.charge && a.z === 6 && !a.hideCharge) {
+        this.drawCarbonCharge(ctx, doc, a);
+      }
+      if (info.warn) warns.push(info.boxes[0] ?? { x1: a.x - 3, y1: a.y - 3, x2: a.x + 3, y2: a.y + 3 });
+    }
+    ctx.fillStyle = '#000';
+
+    if (this.annotations.size) {
+      ctx.fillStyle = '#b4232a';
+      for (const [id, text] of this.annotations) {
+        const a = doc.atoms.get(id);
+        if (!a || a.x < vis.x1 || a.x > vis.x2 || a.y < vis.y1 || a.y > vis.y2) continue;
+        const size = st.labelSize * 0.75 * (a.s ?? 1);
+        let sx = 0, sy = 0;
+        for (const n of doc.neighbors(a.id)) { const d = norm(sub(n, a)); sx += d.x; sy += d.y; }
+        const away = len({ x: sx, y: sy }) > 0.1 ? norm({ x: -sx, y: -sy }) : { x: 0, y: -1 };
+        ctx.font = `italic ${size}px ${FONT_STACK}`;
+        const w = measureText(text, size, FONT_STACK, 'italic');
+        const r = st.bondLength * 0.45 * (a.s ?? 1);
+        ctx.fillText(text, a.x + away.x * r - w / 2, a.y + away.y * r + size * 0.35);
+      }
+      ctx.fillStyle = '#000';
+      curFont = '';
+    }
+
+    for (const r of doc.arrows.values()) {
+      const lo = Math.min(r.tail.x, r.head.x), hi = Math.max(r.tail.x, r.head.x);
+      const top = Math.min(r.tail.y, r.head.y), bot = Math.max(r.tail.y, r.head.y);
+      const pad = r.sweep ? Math.hypot(hi - lo, bot - top) : 10;
+      if (hi + pad < vis.x1 || lo - pad > vis.x2 || bot + pad < vis.y1 || top - pad > vis.y2) continue;
+      this.drawArrow(ctx, r, r.lineWidth ?? st.lineWidth);
+    }
+    for (const c of doc.captions.values()) {
+      const r = this.captionBox(c);
+      if (r.x1 > vis.x2 || r.x2 < vis.x1 || r.y1 > vis.y2 || r.y2 < vis.y1) continue;
+      this.drawCaption(ctx, c, st.captionSize);
+    }
+
+    if (this.showWarnings && warns.length) {
+      ctx.strokeStyle = '#e0141e';
+      ctx.lineWidth = 0.5;
+      ctx.setLineDash([1, 1]);
+      for (const w of warns) ctx.strokeRect(w.x1 - 0.5, w.y1 - 0.5, w.x2 - w.x1 + 1, w.y2 - w.y1 + 1);
+      ctx.setLineDash([]);
+    }
+  }
+
+  private strokeBatch(ctx: CanvasRenderingContext2D, bb: BondBatch, k: number, lw: number, bw: number, color: string): void {
+    ctx.strokeStyle = ctx.fillStyle = color;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = lw * k;
+    ctx.stroke(bb.thin);
+    ctx.fill(bb.fills);
+    ctx.lineCap = 'butt';
+    ctx.lineWidth = bw * k;
+    ctx.stroke(bb.bold);
+    ctx.lineWidth = lw * k;
+    ctx.setLineDash([lw * k * 2.2, lw * k * 2.2]);
+    ctx.stroke(bb.dashed);
+    ctx.setLineDash([]);
+  }
+
+  /** Bond end points after stopping at atom labels. */
+  bondEnds(doc: Doc, p: Atom, q: Atom): [Vec, Vec] {
+    const ip = this.atomInfo(doc, p), iq = this.atomInfo(doc, q);
+    let t1 = 0, t2 = 0;
+    for (const r of ip.boxes) t1 = Math.max(t1, exitParam(p, q, r));
+    for (const r of iq.boxes) t2 = Math.max(t2, exitParam(q, p, r));
+    if (t1 + t2 >= 0.95) { t1 = Math.min(t1, 0.45); t2 = Math.min(t2, 0.45); }
+    const d = sub(q, p);
+    return [add(p, mul(d, t1)), sub(q, mul(d, t2))];
+  }
+
+  private bondPaths(doc: Doc, b: Bond, p: Atom, q: Atom, bb: BondBatch): void {
+    const { thin, bold, dashed, fills } = bb;
+    const k = b.s ?? 1;
+    const ds = doc.style;
+    const st = { ...ds, lineWidth: ds.lineWidth * k, boldWidth: ds.boldWidth * k, hashSpacing: ds.hashSpacing * k, bondLength: ds.bondLength * k };
+    const [s, e] = this.bondEnds(doc, p, q);
+    const d = sub(e, s);
+    const l = len(d);
+    if (l < 0.01) return;
+    const dir = mul(d, 1 / l);
+    const nrm = perp(dir);
+    const gap = doubleBondGap(st);
+    const line = (path: Path2D, a: Vec, c: Vec) => { path.moveTo(a.x, a.y); path.lineTo(c.x, c.y); };
+
+    if (b.order === 1 || b.order === 4) {
+      switch (b.display) {
+        case 'solid': line(thin, s, e); break;
+        case 'bold': line(bold, s, e); break;
+        case 'dash': line(dashed, s, e); break;
+        case 'wedge': {
+          // narrow at a1, wide at a2
+          const w = wedgeWidth(st) / 2;
+          const ww = st.lineWidth / 2;
+          fills.moveTo(s.x + nrm.x * ww, s.y + nrm.y * ww);
+          fills.lineTo(e.x + nrm.x * w, e.y + nrm.y * w);
+          fills.lineTo(e.x - nrm.x * w, e.y - nrm.y * w);
+          fills.lineTo(s.x - nrm.x * ww, s.y - nrm.y * ww);
+          fills.closePath();
+          break;
+        }
+        case 'hashWedge': {
+          const w = wedgeWidth(st) / 2;
+          const n = Math.max(2, Math.floor(l / st.hashSpacing));
+          for (let i = 0; i <= n; i++) {
+            const t = i / n;
+            const c = add(s, mul(d, t));
+            const hw = st.lineWidth / 2 + (w - st.lineWidth / 2) * t;
+            line(thin, add(c, mul(nrm, hw)), sub(c, mul(nrm, hw)));
+          }
+          break;
+        }
+        case 'hash': {
+          const w = st.boldWidth / 2;
+          const n = Math.max(2, Math.floor(l / st.hashSpacing));
+          for (let i = 0; i <= n; i++) {
+            const c = add(s, mul(d, i / n));
+            line(thin, add(c, mul(nrm, w)), sub(c, mul(nrm, w)));
+          }
+          break;
+        }
+        case 'wavy': {
+          const waves = Math.max(2, Math.round(l / (st.bondLength * 0.17)));
+          const step = l / waves;
+          const amp = st.bondLength * 0.09;
+          thin.moveTo(s.x, s.y);
+          for (let i = 0; i < waves; i++) {
+            const a = add(s, mul(dir, step * i));
+            const c = add(s, mul(dir, step * (i + 1)));
+            const m = add(add(a, mul(dir, step / 2)), mul(nrm, (i % 2 ? -1 : 1) * amp * 2));
+            thin.quadraticCurveTo(m.x, m.y, c.x, c.y);
+          }
+          break;
+        }
+      }
+      return;
+    }
+
+    if (b.order === 3) {
+      line(thin, s, e);
+      line(thin, add(s, mul(nrm, gap)), add(e, mul(nrm, gap)));
+      line(thin, sub(s, mul(nrm, gap)), sub(e, mul(nrm, gap)));
+      return;
+    }
+
+    // double or aromatic
+    const info = this.bondInfo(doc, b);
+    const second = b.order === 1.5 ? dashed : thin;
+    const main = b.display === 'bold' ? bold : b.display === 'dash' ? dashed : thin;
+    if (info.side === 0) {
+      const h = gap / 2;
+      line(main, add(s, mul(nrm, h)), add(e, mul(nrm, h)));
+      line(second, sub(s, mul(nrm, h)), sub(e, mul(nrm, h)));
+      return;
+    }
+    // The main line runs atom to atom; the second line is inset on the chosen side.
+    const off = mul(nrm, gap * info.side);
+    const pLabelled = this.atomInfo(doc, p).boxes.length > 0;
+    const qLabelled = this.atomInfo(doc, q).boxes.length > 0;
+    const t1 = pLabelled ? 0 : Math.min(gap * info.trim1 + gap * 0.15, l * 0.3);
+    const t2 = qLabelled ? 0 : Math.min(gap * info.trim2 + gap * 0.15, l * 0.3);
+    line(main, s, e);
+    line(second, add(add(s, off), mul(dir, t1)), sub(add(e, off), mul(dir, t2)));
+  }
+
+  private drawCarbonCharge(ctx: CanvasRenderingContext2D, doc: Doc, a: Atom): void {
+    let sx = 0, sy = 0;
+    for (const n of doc.neighbors(a.id)) { const d = norm(sub(n, a)); sx += d.x; sy += d.y; }
+    const away = len({ x: sx, y: sy }) > 0.1 ? norm({ x: -sx, y: -sy }) : { x: 0.7, y: -0.7 };
+    const size = doc.style.labelSize * 0.8;
+    const t = (Math.abs(a.charge) > 1 ? String(Math.abs(a.charge)) : '') + (a.charge > 0 ? '+' : '−');
+    ctx.font = `${size}px ${FONT_STACK}`;
+    const w = measureText(t, size);
+    ctx.fillText(t, a.x + away.x * size * 0.8 - w / 2, a.y + away.y * size * 0.8 + size * 0.35);
+  }
+
+  private drawShape(ctx: CanvasRenderingContext2D, s: Shape, lw: number): void {
+    const x = Math.min(s.x1, s.x2), y = Math.min(s.y1, s.y2);
+    const w = Math.abs(s.x2 - s.x1), h = Math.abs(s.y2 - s.y1);
+    ctx.lineWidth = s.bold ? lw * 2.5 : lw;
+    ctx.strokeStyle = s.color ?? '#000';
+    ctx.fillStyle = s.color ?? '#000';
+    ctx.setLineDash(s.dashed ? [lw * 3, lw * 3] : []);
+    ctx.beginPath();
+    switch (s.kind) {
+      case 'line': ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); ctx.stroke(); break;
+      case 'rect':
+        if (s.rounded) ctx.roundRect(x, y, w, h, Math.min(w, h) * 0.15);
+        else ctx.rect(x, y, w, h);
+        if (s.shadow && !s.filled) { ctx.save(); ctx.fillStyle = '#00000040'; ctx.fillRect(x + 2, y + 2, w, h); ctx.restore(); ctx.fillStyle = '#fff'; ctx.fill(); }
+        if (s.filled) ctx.fill(); else ctx.stroke();
+        if (s.picture) {
+          ctx.fillStyle = '#eef1f5';
+          ctx.fillRect(x, y, w, h);
+          ctx.fillStyle = '#7d8794';
+          ctx.font = `${Math.min(10, h * 0.3)}px ${FONT_STACK}`;
+          ctx.fillText('picture', x + 2, y + Math.min(10, h * 0.3) + 1);
+        }
+        break;
+      case 'oval':
+        ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+        if (s.filled) ctx.fill(); else ctx.stroke();
+        break;
+      case 'symbol': {
+        const cx = (s.x1 + s.x2) / 2, cy = (s.y1 + s.y2) / 2, r = Math.max(1.6, Math.min(w, h) / 2);
+        if (s.symbol === 'CirclePlus' || s.symbol === 'CircleMinus') {
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.moveTo(cx - r * 0.6, cy); ctx.lineTo(cx + r * 0.6, cy);
+          if (s.symbol === 'CirclePlus') { ctx.moveTo(cx, cy - r * 0.6); ctx.lineTo(cx, cy + r * 0.6); }
+          ctx.stroke();
+        } else if (s.symbol === 'Plus' || s.symbol === 'Minus') {
+          ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy);
+          if (s.symbol === 'Plus') { ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy + r); }
+          ctx.stroke();
+        } else if (s.symbol === 'LonePair') {
+          // the two dots sit at the two ends
+          ctx.arc(s.x1, s.y1, 0.55, 0, Math.PI * 2); ctx.moveTo(s.x2 + 0.55, s.y2); ctx.arc(s.x2, s.y2, 0.55, 0, Math.PI * 2); ctx.fill();
+        } else if (s.symbol === 'Electron') {
+          ctx.arc(s.x1, s.y1, 0.6, 0, Math.PI * 2); ctx.fill();
+        } else {
+          ctx.arc(cx, cy, 0.6, 0, Math.PI * 2); ctx.fill();
+        }
+        break;
+      }
+      case 'bracket': {
+        // A bracket runs from (x1,y1) to (x2,y2) with its lips on the right of that direction.
+        const p = { x: s.x1, y: s.y1 }, q = { x: s.x2, y: s.y2 };
+        const l = Math.hypot(q.x - p.x, q.y - p.y);
+        if (l < 0.1) break;
+        const one = (p: Vec, q: Vec) => {
+          const d = norm(sub(q, p));
+          const n = perp(d);
+          const lip = Math.max(1.5, Math.min(l * 0.12, 4));
+          if (s.bracket === 'round') {
+            const m = add(mul(add(p, q), 0.5), mul(n, -lip * 0.8));
+            ctx.moveTo(p.x + n.x * lip * 0.4, p.y + n.y * lip * 0.4);
+            ctx.quadraticCurveTo(m.x, m.y, q.x + n.x * lip * 0.4, q.y + n.y * lip * 0.4);
+          } else if (s.bracket === 'curly') {
+            const m = mul(add(p, q), 0.5);
+            const pm = add(p, mul(d, l * 0.25)), qm = add(p, mul(d, l * 0.75));
+            ctx.moveTo(p.x + n.x * lip, p.y + n.y * lip);
+            ctx.quadraticCurveTo(p.x, p.y, pm.x, pm.y);
+            ctx.quadraticCurveTo(m.x, m.y, m.x - n.x * lip, m.y - n.y * lip);
+            ctx.quadraticCurveTo(m.x, m.y, qm.x, qm.y);
+            ctx.quadraticCurveTo(q.x, q.y, q.x + n.x * lip, q.y + n.y * lip);
+          } else {
+            ctx.moveTo(p.x + n.x * lip, p.y + n.y * lip);
+            ctx.lineTo(p.x, p.y);
+            ctx.lineTo(q.x, q.y);
+            ctx.lineTo(q.x + n.x * lip, q.y + n.y * lip);
+          }
+        };
+        one(p, q);
+        if (s.pair) {
+          // the other half mirrors this one, a short distance away
+          const n = perp(norm(sub(q, p)));
+          const gap = l * 0.6;
+          one(add(q, mul(n, gap)), add(p, mul(n, gap)));
+        }
+        ctx.stroke();
+        break;
+      }
+    }
+    ctx.setLineDash([]);
+  }
+
+  drawArrow(ctx: CanvasRenderingContext2D, r: Arrow, lw: number): void {
+    ctx.strokeStyle = ctx.fillStyle = r.color ?? '#000';
+    ctx.lineWidth = r.line === 'bold' ? lw * 2.5 : lw;
+    ctx.lineCap = 'butt';
+    const shaft = (tail: Vec, head: Vec, headStyle: Arrow['headStyle'], tailStyle: Arrow['headStyle']) => {
+      const d = sub(head, tail);
+      const l = len(d);
+      if (l < 0.1) return;
+      if (r.sweep) { this.arcArrow(ctx, r, tail, head); return; }
+      const dir = mul(d, 1 / l);
+      const hl = Math.min(r.headLength, l * 0.6);
+      const back = headStyle === 'none' ? 0 : hl * 0.7;
+      const tback = tailStyle === 'none' ? 0 : hl * 0.7;
+      ctx.setLineDash(r.line === 'dashed' ? [lw * 4, lw * 3] : []);
+      ctx.beginPath();
+      const s = add(tail, mul(dir, tback)), e = sub(head, mul(dir, back));
+      ctx.moveTo(s.x, s.y); ctx.lineTo(e.x, e.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      this.arrowHead(ctx, head, dir, headStyle, r);
+      this.arrowHead(ctx, tail, mul(dir, -1), tailStyle, r);
+    };
+    if (r.equilibrium) {
+      const d = norm(sub(r.head, r.tail));
+      const off = mul(perp(d), -1.5);
+      shaft(add(r.tail, off), add(r.head, off), 'halfLeft', 'none');
+      shaft(sub(r.head, off), sub(r.tail, off), 'halfLeft', 'none');
+    } else {
+      shaft(r.tail, r.head, r.headStyle, r.tailStyle);
+    }
+    if (r.noGo) {
+      const m = mul(add(r.tail, r.head), 0.5);
+      const k = 3;
+      ctx.beginPath();
+      ctx.moveTo(m.x - k, m.y - k); ctx.lineTo(m.x + k, m.y + k);
+      ctx.moveTo(m.x + k, m.y - k); ctx.lineTo(m.x - k, m.y + k);
+      ctx.stroke();
+    }
+  }
+
+  private arcArrow(ctx: CanvasRenderingContext2D, r: Arrow, tail: Vec, head: Vec): void {
+    // Circle through tail and head with the given sweep.
+    const chord = sub(head, tail);
+    const c = len(chord);
+    const sweep = r.sweep;
+    const radius = c / (2 * Math.sin(Math.abs(sweep) / 2));
+    const mid = mul(add(tail, head), 0.5);
+    const h = Math.sqrt(Math.max(0, radius * radius - (c / 2) * (c / 2)));
+    const n = norm(perp(chord));
+    const center = add(mid, mul(n, (sweep > 0 ? 1 : -1) * (Math.abs(sweep) > Math.PI ? -h : h)));
+    const a0 = angleOf(sub(tail, center));
+    const a1 = angleOf(sub(head, center));
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, radius, a0, a1, sweep < 0);
+    ctx.stroke();
+    // head tangent
+    const rad = norm(sub(head, center));
+    const tangent = sweep < 0 ? { x: rad.y, y: -rad.x } : { x: -rad.y, y: rad.x };
+    this.arrowHead(ctx, head, tangent, r.headStyle, r);
+  }
+
+  private arrowHead(ctx: CanvasRenderingContext2D, tip: Vec, dir: Vec, style: Arrow['headStyle'], r: Arrow): void {
+    if (style === 'none') return;
+    const hl = r.headLength, hw = r.headWidth;
+    const n = perp(dir);
+    const base = sub(tip, mul(dir, hl));
+    const inner = sub(tip, mul(dir, hl * 0.75));
+    const left = add(base, mul(n, -hw)), right = add(base, mul(n, hw));
+    ctx.beginPath();
+    ctx.moveTo(tip.x, tip.y);
+    if (style === 'full' || style === 'halfLeft') ctx.lineTo(left.x, left.y);
+    if (r.headType !== 'angle') ctx.lineTo(inner.x, inner.y);
+    if (style === 'full' || style === 'halfRight') ctx.lineTo(right.x, right.y);
+    if (r.headType === 'angle') {
+      ctx.stroke();
+      return;
+    }
+    if (style !== 'full') ctx.lineTo(sub(tip, mul(dir, hl * 0.75)).x, sub(tip, mul(dir, hl * 0.75)).y);
+    ctx.closePath();
+    if (r.headType === 'hollow') ctx.stroke(); else ctx.fill();
+  }
+
+  drawCaption(ctx: CanvasRenderingContext2D, c: Caption, defaultSize: number): void {
+    // Split runs into lines.
+    const lines: TextRun[][] = [[]];
+    for (const run of c.runs) {
+      const parts = run.text.split('\n');
+      parts.forEach((t, i) => {
+        if (i > 0) lines.push([]);
+        if (t) lines[lines.length - 1].push({ ...run, text: t });
+      });
+    }
+    let y = c.y;
+    for (const line of lines) {
+      const pieces = expandRuns(line, defaultSize);
+      let w = 0;
+      for (const p of pieces) w += p.w;
+      let x = c.x;
+      if (c.justify === 'center') x = c.x + ((c.width ?? w) - w) / 2;
+      else if (c.justify === 'right') x = c.x + (c.width ?? w) - w;
+      let maxSize = defaultSize;
+      for (const p of pieces) {
+        ctx.font = p.font;
+        ctx.fillStyle = p.color ?? '#000';
+        ctx.fillText(p.text, x, y + p.dy);
+        if (p.underline) { ctx.fillRect(x, y + 1, p.w, 0.5); }
+        x += p.w;
+        maxSize = Math.max(maxSize, p.size);
+      }
+      y += c.lineHeight ?? maxSize * 1.15;
+    }
+    ctx.fillStyle = '#000';
+  }
+
+  /** Bounding box of a caption in document coordinates (cached per caption version). */
+  captionBox(c: Caption): Rect {
+    let r = this.capBoxes.get(c);
+    if (r) return r;
+    const def = 10;
+    const lines: TextRun[][] = [[]];
+    for (const run of c.runs) {
+      run.text.split('\n').forEach((t, i) => {
+        if (i > 0) lines.push([]);
+        if (t) lines[lines.length - 1].push({ ...run, text: t });
+      });
+    }
+    let w = 0, y = c.y, first = 0, last = 0;
+    lines.forEach((line, i) => {
+      const pieces = expandRuns(line, def);
+      let lw = 0, ms = def;
+      for (const p of pieces) { lw += p.w; ms = Math.max(ms, p.size); }
+      w = Math.max(w, lw);
+      if (i === 0) first = ms;
+      last = ms;
+      if (i < lines.length - 1) y += c.lineHeight ?? ms * 1.15;
+    });
+    const width = c.width ?? w;
+    const x1 = c.justify === 'center' ? c.x + (width - w) / 2 : c.justify === 'right' ? c.x + width - w : c.x;
+    r = { x1, y1: c.y - first * 0.8, x2: x1 + w, y2: y + last * 0.25 };
+    this.capBoxes.set(c, r);
+    return r;
+  }
+
+  // ------------------------------------------------------------------ overlay
+
+  clearOverlay(): CanvasRenderingContext2D {
+    const ctx = this.octx;
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.clearRect(0, 0, this.width, this.height);
+    const { scale, ox, oy } = this.view;
+    ctx.setTransform(this.dpr * scale, 0, 0, this.dpr * scale, this.dpr * ox, this.dpr * oy);
+    return ctx;
+  }
+
+  get overlayCtx(): CanvasRenderingContext2D { return this.octx; }
+  get sceneCtx(): CanvasRenderingContext2D { return this.sctx; }
+
+  /** Is this atom shown with a text label? */
+  hasLabel(doc: Doc, a: Atom): boolean {
+    return this.atomInfo(doc, a).boxes.length > 0;
+  }
+
+  isGeneric(a: Atom): boolean {
+    return a.label !== null && GENERIC.has(a.label);
+  }
+
+}
+
+/** Tile size in CSS pixels. */
+const TILE = 256;
+const MAX_TILES = 600;
+
+interface Tile { canvas: OffscreenCanvas | HTMLCanvasElement; tx: number; ty: number }
+
+interface BondBatch { thin: Path2D; bold: Path2D; dashed: Path2D; fills: Path2D }
+function newBatch(): BondBatch {
+  return { thin: new Path2D(), bold: new Path2D(), dashed: new Path2D(), fills: new Path2D() };
+}
+
+interface Piece { text: string; w: number; dy: number; font: string; size: number; color?: string; underline?: boolean }
+
+/** Turn styled runs into drawable pieces, applying formula style (digits subscript). */
+export function expandRuns(runs: TextRun[], defaultSize: number): Piece[] {
+  const out: Piece[] = [];
+  for (const r of runs) {
+    const size = r.size ?? defaultSize;
+    const style = `${r.italic ? 'italic ' : ''}${r.bold ? 'bold ' : ''}`;
+    const font = r.font ? `${r.font}, ${FONT_STACK}` : FONT_STACK;
+    const push = (text: string, sub: boolean, sup: boolean) => {
+      if (!text) return;
+      const s = sub || sup ? size * 0.75 : size;
+      const dy = sub ? size * 0.22 : sup ? -size * 0.42 : 0;
+      out.push({ text, w: measureText(text, s, font, style), dy, font: `${style}${s}px ${font}`, size: s, color: r.color, underline: r.underline });
+    };
+    if (r.formula && !r.sub && !r.sup) {
+      // digits after letters or ")" become subscripts; trailing charges superscripts
+      const re = /(\d+(?=[+\-−]?$)[+\-−]$)|((?<=[A-Za-z)\]])\d+)|([^0-9]+|\d+)/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(r.text))) {
+        if (m[1]) push(m[1], false, true);
+        else if (m[2]) push(m[2], true, false);
+        else push(m[3], false, false);
+      }
+    } else push(r.text, !!r.sub, !!r.sup);
+  }
+  return out;
+}
