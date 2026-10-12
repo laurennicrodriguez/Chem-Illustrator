@@ -1,0 +1,16 @@
+import { launch } from './browser.mjs';
+import fs from 'fs';
+const out = process.argv[2] || 'test-results';
+fs.mkdirSync(out, { recursive: true });
+const browser = await launch();
+const page = await browser.newPage({ viewport: { width: 1400, height: 860 }, deviceScaleFactor: 1 });
+const logs = [];
+page.on('console', (m) => logs.push(m.type() + ': ' + m.text()));
+page.on('pageerror', (e) => logs.push('PAGEERROR: ' + e.message));
+await page.goto(process.env.APP_URL || 'http://localhost:4173/');
+await page.waitForFunction(() => window.__app && window.__app.chem.ready || window.__app?.chem.error, null, { timeout: 20000 }).catch(() => logs.push('chem not ready in 20s'));
+await page.waitForTimeout(300);
+console.log(await page.evaluate(() => ({ chemReady: window.__chemReadyMs, firstPaint: window.__firstPaintMs, err: window.__app.chem.error, atoms: window.__app.doc.atoms.size })));
+await page.screenshot({ path: out + '/smoke.png' });
+console.log(logs.join('\n'));
+await browser.close();

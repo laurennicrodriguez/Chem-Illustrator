@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Cpath d=%22M16 3l11.3 6.5v13L16 29 4.7 22.5v-13z%22 fill=%22none%22 stroke=%22%232f6fdf%22 stroke-width=%222.6%22 stroke-linejoin=%22round%22/%3E%3Cpath d=%22M16 8.5l6.5 3.75M9.5 20l6.5 3.75%22 stroke=%22%232f6fdf%22 stroke-width=%222.2%22 stroke-linecap=%22round%22/%3E%3C/svg%3E" />
+  <title>Chem Illustrator Prototype</title>
+</head>
+<body>
+  <header>
+    <h1>Chem Illustrator <span class="muted" style="font-weight:400">prototype</span></h1>
+    <button id="btn-new" title="Start an empty drawing">New</button>
+    <button id="btn-open" title="Open a ChemDraw .cdxml file (or drop one on the page)">Open CDXML…</button>
+    <input id="file" type="file" accept=".cdxml,.xml" hidden />
+    <span class="sep"></span>
+    <button id="btn-undo" title="Undo (Ctrl+Z)">Undo</button>
+    <button id="btn-redo" title="Redo (Ctrl+Y)">Redo</button>
+    <button id="btn-fit" title="Fit drawing to window (Ctrl+0)">Fit</button>
+    <span class="sep"></span>
+    <label class="check" title="Show R/S and E/Z labels from the chemistry engine"><input id="show-stereo" type="checkbox" /> Show R/S</label>
+    <span class="sep"></span>
+    <select id="stress-n" title="How many drug-sized molecules to draw">
+      <option value="100">100 molecules</option>
+      <option value="500">500 molecules</option>
+      <option value="2000" selected>2,000 molecules</option>
+      <option value="5000">5,000 molecules</option>
+    </select>
+    <button id="btn-stress" title="Draw many molecules to test speed">Stress test</button>
+    <span class="sep"></span>
+    <button id="btn-help" title="Hotkeys and how to use the prototype">Help</button>
+  </header>
+
+  <nav id="tools" aria-label="Drawing tools"></nav>
+
+  <div id="canvas-host">
+    <canvas id="scene"></canvas>
+    <canvas id="overlay" tabindex="0"></canvas>
+  </div>
+
+  <aside>
+    <section>
+      <h2>Analysis</h2>
+      <div id="analysis-body"><p class="muted">Loading the chemistry engine…</p></div>
+    </section>
+    <section>
+      <h2>Speed</h2>
+      <div id="speed-body"></div>
+    </section>
+  </aside>
+
+  <footer id="hint"></footer>
+  <div id="flash" role="status" aria-live="polite"></div>
+
+  <dialog id="help">
+    <h2>Using the prototype</h2>
+    <p class="muted">Hotkeys work like ChemDraw: point at an atom or bond (it highlights blue) and press a key. Pressing a key that grows something moves the highlight to the new atom, so pressing 1 1 1 draws a chain.</p>
+    <div class="cols">
+      <div>
+        <h3>Pointing at an atom</h3>
+        <ul>
+          <li><kbd>o</kbd> O, <kbd>n</kbd> N, <kbd>s</kbd> S, <kbd>f</kbd> F, <kbd>l</kbd> Cl, <kbd>b</kbd> Br, <kbd>i</kbd> I, <kbd>p</kbd> P, <kbd>h</kbd> H, <kbd>c</kbd> C</li>
+          <li><kbd>m</kbd> Me, <kbd>e</kbd> Et, <kbd>Shift+P</kbd> Ph, <kbd>Shift+A</kbd> Ac, <kbd>Shift+O</kbd> OMe, <kbd>Shift+E</kbd> CO2Me, <kbd>Shift+Y</kbd> Boc, <kbd>Shift+H</kbd> Cbz, <kbd>Shift+F</kbd> CF3, <kbd>Shift+N</kbd> NO2</li>
+          <li><kbd>1</kbd> grow a bond, <kbd>2</kbd> C=O or acetyl, <kbd>3</kbd>/<kbd>a</kbd> phenyl, <kbd>4</kbd> wedge, <kbd>5</kbd> hashed wedge</li>
+          <li><kbd>6</kbd> cyclohexane, <kbd>7</kbd> cyclopentane, <kbd>u</kbd> cyclobutane, <kbd>v</kbd> cyclopropane, <kbd>8</kbd> =CH2, <kbd>9</kbd> two methyls, <kbd>z</kbd> alkyne, <kbd>Shift+K</kbd> t-Bu</li>
+          <li><kbd>+</kbd>/<kbd>-</kbd> charge, <kbd>Enter</kbd> type a label, <kbd>Delete</kbd> remove label or atom</li>
+        </ul>
+        <h3>Pointing at a bond</h3>
+        <ul>
+          <li><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> single, double, triple</li>
+          <li><kbd>w</kbd> wedge, <kbd>h</kbd> hashed wedge (press again to reverse), <kbd>Shift+H</kbd> hashed, <kbd>b</kbd> bold, <kbd>d</kbd> dashed, <kbd>y</kbd> wavy</li>
+          <li><kbd>l</kbd> <kbd>c</kbd> <kbd>r</kbd> move the second line of a double bond</li>
+          <li><kbd>a</kbd> fuse benzene, <kbd>z</kbd> fuse cyclopentadiene, <kbd>4</kbd>–<kbd>8</kbd> fuse a ring of that size</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Pointing at empty space</h3>
+        <ul>
+          <li><kbd>Space</kbd> select tool, <kbd>x</kbd> bond, <kbd>Shift+X</kbd> chain, <kbd>j</kbd> benzene, <kbd>Shift+J</kbd> cyclopentadiene, <kbd>t</kbd> text, <kbd>e</kbd> arrow</li>
+          <li>Extra (not in ChemDraw): <kbd>w</kbd> wedge tool, <kbd>h</kbd> hashed wedge tool, <kbd>2</kbd> double bond tool, <kbd>3</kbd>–<kbd>8</kbd> ring tools</li>
+        </ul>
+        <h3>Everywhere</h3>
+        <ul>
+          <li><kbd>Ctrl+Z</kbd> undo, <kbd>Ctrl+Y</kbd> redo, <kbd>Ctrl+A</kbd> select all, <kbd>Delete</kbd> delete selection</li>
+          <li>Mouse wheel scrolls, <kbd>Ctrl</kbd>+wheel zooms, middle or right drag pans, <kbd>Ctrl+0</kbd> fits the drawing</li>
+          <li>Paste a SMILES string (<kbd>Ctrl+V</kbd>) to draw it; <kbd>Ctrl+C</kbd> copies the selection as SMILES</li>
+          <li>Open a .cdxml file with Open, or drop it on the drawing</li>
+        </ul>
+        <h3>Not in this prototype yet</h3>
+        <ul>
+          <li>Saving, Clean Up, rich-text captions, templates, curved-arrow editing, pictures</li>
+        </ul>
+      </div>
+    </div>
+    <p style="text-align:right;margin:12px 0 0"><button id="help-close">Close</button></p>
+  </dialog>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
