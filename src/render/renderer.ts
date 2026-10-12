@@ -452,6 +452,14 @@ export class Renderer {
         this.drawCarbonCharge(ctx, doc, a);
       }
       if (info.warn) warns.push(info.boxes[0] ?? { x1: a.x - 3, y1: a.y - 3, x2: a.x + 3, y2: a.y + 3 });
+      if (a.stereoLabel) {
+        const l = a.stereoLabel;
+        const f = `${l.italic ? 'italic ' : ''}${l.size}px ${FONT_STACK}`;
+        if (f !== curFont) { ctx.font = f; curFont = f; }
+        ctx.fillStyle = '#000';
+        // with "Show stereo" on, the freshly worked-out label replaces the saved one (it may be out of date)
+        ctx.fillText(this.annotations.get(a.id) ?? l.text, a.x + l.dx, a.y + l.dy);
+      }
     }
     ctx.fillStyle = '#000';
 
@@ -459,7 +467,8 @@ export class Renderer {
       ctx.fillStyle = '#b4232a';
       for (const [id, text] of this.annotations) {
         const a = doc.atoms.get(id);
-        if (!a || a.x < vis.x1 || a.x > vis.x2 || a.y < vis.y1 || a.y > vis.y2) continue;
+        // atoms with a stereo label of their own already show one
+        if (!a || a.stereoLabel || a.x < vis.x1 || a.x > vis.x2 || a.y < vis.y1 || a.y > vis.y2) continue;
         const size = st.labelSize * 0.75 * (a.s ?? 1);
         let sx = 0, sy = 0;
         for (const n of doc.neighbors(a.id)) { const d = norm(sub(n, a)); sx += d.x; sy += d.y; }
@@ -637,11 +646,22 @@ export class Renderer {
     ctx.beginPath();
     switch (s.kind) {
       case 'line': ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); ctx.stroke(); break;
-      case 'rect':
-        if (s.rounded) ctx.roundRect(x, y, w, h, Math.min(w, h) * 0.15);
-        else ctx.rect(x, y, w, h);
-        if (s.shadow && !s.filled) { ctx.save(); ctx.fillStyle = '#00000040'; ctx.fillRect(x + 2, y + 2, w, h); ctx.restore(); ctx.fillStyle = '#fff'; ctx.fill(); }
-        if (s.filled) ctx.fill(); else ctx.stroke();
+      case 'rect': {
+        // ChemDraw's defaults: corners of six line widths, a light grey shadow of four
+        const r = s.rounded ? Math.min(s.radius ?? 6 * lw, w / 2, h / 2) : 0;
+        if (s.shadow) {
+          const d = s.shadowSize ?? 4 * lw;
+          ctx.save();
+          ctx.fillStyle = '#c0c0c0';
+          ctx.beginPath();
+          ctx.roundRect(x + d, y + d, w, h, r);
+          ctx.fill();
+          ctx.restore();
+          ctx.beginPath();
+        }
+        ctx.roundRect(x, y, w, h, r);
+        if (s.shadow && !s.filled) { ctx.fillStyle = '#fff'; ctx.fill(); }
+        if (s.filled) { ctx.fillStyle = s.color ?? '#000'; ctx.fill(); } else ctx.stroke();
         if (s.picture) {
           ctx.fillStyle = '#eef1f5';
           ctx.fillRect(x, y, w, h);
@@ -650,6 +670,7 @@ export class Renderer {
           ctx.fillText('picture', x + 2, y + Math.min(10, h * 0.3) + 1);
         }
         break;
+      }
       case 'oval':
         ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
         if (s.filled) ctx.fill(); else ctx.stroke();

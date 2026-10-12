@@ -62,6 +62,21 @@ describe('labels', () => {
     expect(left.runs.map((r) => r.text).join('')).toBe('HO');
     expect(left.runs.find((r) => r.text === 'H')!.dx).toBeLessThan(0);
   });
+  it('keeps labels that are not formulas in reading order', () => {
+    const measure = (t: string, s: number) => t.length * s * 0.6;
+    // "(3,4)" digits are not counts, and the hyphen is not a charge
+    expect(tokenize('(3,4)-MDP').every((t) => t.count === 1 && !t.charge)).toBe(true);
+    expect(tokenize('N+')[0].charge).toBe('+');
+    expect(tokenize('(CH2)3').pop()).toMatchObject({ text: ')', count: 3 });
+    // bond to the right: the text keeps its order and ends with its last letter on the atom
+    const mdp = layoutLabel(labelSpec(6, '(3,4)-MDP', 0, 0, 1, 1)!, [{ x: 1, y: 0 }], 10, measure);
+    expect(mdp.runs.map((r) => r.text).join('')).toBe('(3,4)-MDP');
+    expect(Math.max(...mdp.boxes.map((b) => b.x2))).toBeCloseTo(3);
+    expect(mdp.runs.every((r) => r.size === 10)).toBe(true);
+    // formulas are still reversed
+    const oet = layoutLabel(labelSpec(6, 'OEt', 0, 0, 1, 1)!, [{ x: 1, y: 0 }], 10, measure);
+    expect(oet.runs.map((r) => r.text).join('')).toBe('EtO');
+  });
   it('shows no label for plain carbon in a chain', () => {
     expect(labelSpec(6, null, 0, 0, 2, 2)).toBeNull();
   });

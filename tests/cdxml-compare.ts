@@ -9,17 +9,21 @@ export type Summary = Record<'atoms' | 'bonds' | 'captions' | 'arrows' | 'shapes
 
 export function summarize(doc: Doc): Summary {
   const at = (id: number) => { const a = doc.atoms.get(id)!; return [a.x, a.y]; };
+  const lw = doc.style.lineWidth;
   return {
-    atoms: [...doc.atoms.values()].map((a) => ({ key: `z${a.z} ${a.label ?? ''} q${a.charge}${a.hideCharge ? 'h' : ''} i${a.isotope} ${a.color ?? ''}`, nums: [a.x, a.y] })),
+    atoms: [...doc.atoms.values()].map((a) => ({
+      key: `z${a.z} ${a.label ?? ''} q${a.charge}${a.hideCharge ? 'h' : ''} i${a.isotope} ${a.color ?? ''} ${a.stereoLabel?.text ?? ''}`,
+      nums: a.stereoLabel ? [a.x, a.y, a.x + a.stereoLabel.dx, a.y + a.stereoLabel.dy] : [a.x, a.y],
+    })),
     bonds: [...doc.bonds.values()].map((b) => ({ key: `o${b.order} ${b.display} ${b.dpos} ${b.color ?? ''}`, nums: [...at(b.a1), ...at(b.a2)] })),
-    captions: [...doc.captions.values()].map((c) => ({ key: `${c.justify} ${c.runs.map((x) => x.text).join('')}`, nums: [] })),
+    captions: [...doc.captions.values()].map((c) => ({ key: `${c.justify} ${c.runs.map((x) => x.text).join('')}`, nums: [c.x, c.y] })),
     arrows: [...doc.arrows.values()].map((a) => ({
       key: `${a.headStyle}/${a.tailStyle} ${a.headType} ${a.line} ${a.noGo} ${a.equilibrium}`,
       nums: [a.tail.x, a.tail.y, a.head.x, a.head.y, a.sweep * 10],
     })),
     shapes: [...doc.shapes.values()].filter((s) => !s.picture).map((s) => ({
       key: `${s.kind} ${s.symbol ?? ''}${s.bracket ?? ''}${s.pair ? 'P' : ''} ${!!s.dashed}${!!s.filled}${!!s.rounded}${!!s.shadow}${!!s.bold}`,
-      nums: [s.x1, s.y1, s.x2, s.y2],
+      nums: [s.x1, s.y1, s.x2, s.y2, s.rounded ? s.radius ?? 6 * lw : 0, s.shadow ? s.shadowSize ?? 4 * lw : 0],
     })),
   };
 }

@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { Doc } from '../src/model';
 import { readCdxml } from '../src/io/cdxml';
-import { writeCdxml } from '../src/io/cdxml-write';
+import { writeCdxml, lineEnds } from '../src/io/cdxml-write';
 import { summarize, differences, duplicateIds } from './cdxml-compare';
 
 // A small file in the shape ChemDraw writes: ethanol (with an O label), a caption, an arrow
@@ -187,6 +187,18 @@ describe('saving a file that was opened', () => {
     expect(differences(summarize(back), summarize(doc))).toEqual([]);
   });
 
+  it('keeps a stereo label with its atom', () => {
+    // ChemDraw's "(S)" beside atom 12
+    const text = FILE.replace(/(id="12"\n p="112.47 102.80"\n AS="N"\n)\/>/, '$1 ShowAtomStereo="yes"\n><objecttag\n TagType="Unknown"\n Name="stereo"\n><t\n p="114.47 98.80"\n BoundingBox="114.47 95.58 120.47 99.70"\n CaptionLineHeight="variable"\n><s font="3" size="4.5" color="0" face="2">(S)</s></t></objecttag></n>');
+    expect(text).not.toBe(FILE);
+    const doc = open(text);
+    expect(doc.atoms.get(12)!.stereoLabel).toEqual({ text: '(S)', dx: 2, dy: -4, size: 4.5, italic: true });
+    doc.edit('move', () => doc.moveAtoms([11, 12, 13], 10, -5));
+    const out = writeCdxml(doc);
+    expect(out).toContain('p="124.47 93.80"');
+    expect(open(out).atoms.get(12)!.stereoLabel).toEqual({ text: '(S)', dx: 2, dy: -4, size: 4.5, italic: true });
+  });
+
   it('adds new objects with fresh ids', () => {
     const doc = open();
     doc.edit('add', () => {
@@ -232,7 +244,10 @@ describe('saving a new drawing', () => {
       doc.addCaption({ x: 100, y: 150, runs: [{ text: 'Yield ' }, { text: '92%', bold: true }], justify: 'left' });
       doc.addArrow({ tail: { x: 140, y: 100 }, head: { x: 180, y: 100 }, headStyle: 'full', tailStyle: 'none', headType: 'solid', line: 'solid', noGo: false, equilibrium: false, sweep: 0, headLength: 6, headWidth: 1.5 });
       doc.addArrow({ tail: { x: 140, y: 120 }, head: { x: 160, y: 120 }, headStyle: 'full', tailStyle: 'none', headType: 'solid', line: 'solid', noGo: false, equilibrium: false, sweep: Math.PI / 2, headLength: 6, headWidth: 1.5 });
+      doc.addCaption({ x: 100, y: 190, runs: [{ text: 'THF, 0 °C\n\nthen H' }, { text: '2', sub: true }, { text: 'O' }], justify: 'left' });
+      doc.updateAtom(m.id, { stereoLabel: { text: '(R)', dx: 2, dy: -4, size: 7.5, italic: true } });
       doc.addShape({ kind: 'rect', x1: 60, y1: 60, x2: 240, y2: 170, rounded: true });
+      doc.addShape({ kind: 'rect', x1: 60, y1: 200, x2: 90, y2: 230, rounded: true, radius: 1.8, shadow: true });
       doc.addShape({ kind: 'oval', x1: 190, y1: 90, x2: 196, y2: 96 });
       doc.addShape({ kind: 'bracket', bracket: 'square', x1: 70, y1: 80, x2: 75, y2: 120 });
     });
@@ -257,6 +272,23 @@ describe('saving a new drawing', () => {
     expect(out).toMatch(/Display="WedgeBegin"/);
     expect(out).toMatch(/<font id="3" charset="iso-8859-1" name="Arial"\/>/);
     expect(out).toMatch(/<page id="\d+" BoundingBox="0 0 540.00 720.00"/);
+  });
+
+  it('lists line ends so ChemDraw keeps blank lines', () => {
+    expect(lineEnds('ab\n\nc°')).toEqual([3, 4, 7]);
+    expect(lineEnds('one line')).toEqual([8]);
+    const out = writeCdxml(sample());
+    // "THF, 0 °C" is 10 bytes (° takes two), then the blank line, then "then H2O"
+    expect(out).toMatch(/LineHeight="auto" LineStarts="11 12 20"><s [^>]*>THF, 0 °C/);
+    expect(out).not.toMatch(/LineStarts="[^"]*"><s [^>]*>Yield/);
+  });
+
+  it('writes stereo labels and box styles as ChemDraw does', () => {
+    const out = writeCdxml(sample());
+    expect(out).toMatch(/ShowAtomStereo="yes" AS="R"><objecttag TagType="Unknown" PositioningType="offset" PositioningOffset="2.00 -4.00" Name="stereo"><t [^>]*><s [^>]*face="2">\(R\)<\/s>/);
+    // corner radius and shadow in hundredths of the line width (0.6 here)
+    expect(out).toMatch(/RectangleType="RoundEdge" CornerRadius="600"/);
+    expect(out).toMatch(/RectangleType="RoundEdge Shadow" CornerRadius="300" ShadowSize="400"/);
   });
 
   it('places labels where ChemDraw would', () => {

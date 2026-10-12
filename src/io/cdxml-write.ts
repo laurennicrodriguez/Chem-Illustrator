@@ -391,6 +391,7 @@ class CdxmlWriter {
     const n = this.el('n', { id: a.id, p: pt(a) });
     this.nodeCore(n, a);
     this.nodeLabel(n, a, true);
+    if (a.stereoLabel) this.stereoLabel(n, a);
     return n;
   }
 
@@ -400,6 +401,7 @@ class CdxmlWriter {
     for (const c of kids(n)) if (c.nodeName !== 't' && c.nodeName !== 'fragment') shift(c, dx, dy);
     n.removeAttribute('AS'); // stereo descriptor; ChemDraw works it out again
     this.nodeCore(n, a);
+    if (!deepEqual(a.stereoLabel, o.stereoLabel)) this.stereoLabel(n, a);
     const sameLabel = a.label === o.label && a.z === o.z && a.charge === o.charge && a.isotope === o.isotope && !!a.hideCharge === !!o.hideCharge;
     const t = this.child(n, 't');
     if (sameLabel && a.label !== null) {
@@ -415,6 +417,24 @@ class CdxmlWriter {
       return;
     }
     this.nodeLabel(n, a, !sameLabel || a.label === null);
+  }
+
+  /** ChemDraw's (R)/(S) label beside an atom: a tag holding the text, and the descriptor on the node. */
+  private stereoLabel(n: Element, a: Atom): void {
+    for (const c of kids(n)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === 'stereo') n.removeChild(c);
+    const l = a.stereoLabel;
+    const cip = l ? /^\(?([RSrs])\)?$/.exec(l.text.trim()) : null;
+    this.set(n, 'ShowAtomStereo', l ? 'yes' : null);
+    this.set(n, 'AS', cip ? cip[1] : null);
+    if (!l) return;
+    const tag = this.el('objecttag', { TagType: 'Unknown', PositioningType: 'offset', PositioningOffset: `${f2(l.dx)} ${f2(l.dy)}`, Name: 'stereo' });
+    const x = a.x + l.dx, y = a.y + l.dy;
+    const t = this.el('t', { p: pt({ x, y }), BoundingBox: box({ x1: x, y1: y - CAP * l.size, x2: x + this.measure(l.text, l.size), y2: y + 0.2 * l.size }), CaptionLineHeight: 'variable' });
+    const s = this.el('s', { font: this.fontId(), size: f2(l.size).replace(/\.00$/, ''), color: '0', face: l.italic ? 2 : 0 });
+    s.textContent = l.text;
+    t.appendChild(s);
+    tag.appendChild(t);
+    n.appendChild(tag);
   }
 
   /** Text of an atom's label as ChemDraw stores it ("OH", "NH3+", "OMe"), and its hydrogen count. */
@@ -621,8 +641,11 @@ class CdxmlWriter {
     t.setAttribute('BoundingBox', box({ x1: c.x, y1: c.y - maxSize * CAP, x2: c.x + width, y2: c.y + (lines.length - 1) * lh + maxSize * 0.2 }));
     this.set(t, 'Justification', c.justify === 'left' ? null : c.justify === 'center' ? 'Center' : 'Right');
     this.set(t, 'CaptionJustification', null);
-    this.set(t, 'LineHeight', c.lineHeight ? f2(c.lineHeight) : null);
-    for (const k of ['LineStarts', 'WordWrapWidth']) t.removeAttribute(k);
+    // ChemDraw lists where each line ends; without the list it drops blank lines.
+    const ends = lineEnds(c.runs.map((r) => r.text).join(''));
+    this.set(t, 'LineHeight', c.lineHeight ? f2(c.lineHeight) : ends.length > 1 ? 'auto' : null);
+    this.set(t, 'LineStarts', ends.length > 1 ? ends.join(' ') : null);
+    t.removeAttribute('WordWrapWidth');
   }
 
   private writeArrow(r: Arrow): void {
@@ -733,7 +756,7 @@ class CdxmlWriter {
   }
 
   private fillShape(g: Element, s: Shape): void {
-    for (const k of ['GraphicType', 'LineType', 'RectangleType', 'OvalType', 'SymbolType', 'BracketType', 'Center3D', 'MajorAxisEnd3D', 'MinorAxisEnd3D', 'ArrowType']) g.removeAttribute(k);
+    for (const k of ['GraphicType', 'LineType', 'RectangleType', 'OvalType', 'SymbolType', 'BracketType', 'Center3D', 'MajorAxisEnd3D', 'MinorAxisEnd3D', 'ArrowType', 'CornerRadius', 'ShadowSize']) g.removeAttribute(k);
     const style = [s.dashed && 'Dashed', s.bold && 'Bold'].filter(Boolean).join(' ') || null;
     const set = (k: string, v: string | null) => this.set(g, k, v);
     set('color', this.colorAttr(s.color));
@@ -747,6 +770,9 @@ class CdxmlWriter {
         set('GraphicType', 'Rectangle');
         set('BoundingBox', box(s));
         set('RectangleType', [s.rounded && 'RoundEdge', s.shadow && 'Shadow', s.filled && 'Filled', s.dashed && 'Dashed', s.bold && 'Bold'].filter(Boolean).join(' ') || 'Plain');
+        // in hundredths of the line width, as ChemDraw stores them
+        set('CornerRadius', s.rounded ? String(Math.round(((s.radius ?? 6 * this.doc.style.lineWidth) / this.doc.style.lineWidth) * 100)) : null);
+        set('ShadowSize', s.shadow ? String(Math.round(((s.shadowSize ?? 4 * this.doc.style.lineWidth) / this.doc.style.lineWidth) * 100)) : null);
         break;
       case 'oval': {
         const c = { x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 };
@@ -810,6 +836,19 @@ class CdxmlWriter {
 const DISPLAY: Partial<Record<Bond['display'], string>> = {
   wedge: 'WedgeBegin', hashWedge: 'WedgedHashBegin', hash: 'Hash', bold: 'Bold', dash: 'Dash', wavy: 'Wavy',
 };
+
+/** UTF-8 byte offset of the end of each line (after its line break), as CDXML LineStarts. */
+export function lineEnds(text: string): number[] {
+  const out: number[] = [];
+  let bytes = 0;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0)!;
+    bytes += cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    if (ch === '\n') out.push(bytes);
+  }
+  if (!out.length || out[out.length - 1] !== bytes) out.push(bytes);
+  return out;
+}
 
 function orderAttr(order: number): string | null {
   return order === 1 ? null : String(order);

@@ -145,7 +145,20 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       const ls = n.getAttribute('LabelSize');
       if (ls !== null) extra.s = Number(ls) / st.labelSize;
       let t: Element | null = null;
-      for (const ch of kids(n)) if (ch.nodeName === 't') t = ch;
+      for (const ch of kids(n)) {
+        if (ch.nodeName === 't') t = ch;
+        else if (ch.nodeName === 'objecttag' && ch.getAttribute('Name') === 'stereo') {
+          // ChemDraw's (R)/(S) label beside the atom
+          const st = kids(ch).find((k) => k.nodeName === 't');
+          const runs = st ? runsOf(st) : [];
+          const [sx, sy] = pts(st?.getAttribute('p') ?? null);
+          const text = runs.map((r) => r.text).join('');
+          if (text && Number.isFinite(sx) && Number.isFinite(sy) && st!.getAttribute('Visible') !== 'no') {
+            extra.stereoLabel = { text, dx: sx - x, dy: sy - y, size: runs[0].size ?? 4.5 };
+            if (runs[0].italic) extra.stereoLabel.italic = true;
+          }
+        }
+      }
       const atom = doc.addAtom(x, y, z, extra);
       from('a', id, n);
       nodeIds.set(n.getAttribute('id') ?? '', id);
@@ -300,10 +313,16 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       case 'Rectangle': {
         if (bb.length < 4) return;
         const rt = g.getAttribute('RectangleType') ?? '';
-        add({
+        const rect: Omit<Shape, 'id'> & { id: number } = {
           ...base, kind: 'rect', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], rounded: rt.includes('RoundEdge'), shadow: rt.includes('Shadow'),
           filled: rt.includes('Filled'), dashed: rt.includes('Dashed'), bold: rt.includes('Bold'),
-        });
+        };
+        // corner radius and shadow size are stored in hundredths of the line width
+        const lw = num(g, 'LineWidth', st.lineWidth);
+        const cr = g.getAttribute('CornerRadius'), ss = g.getAttribute('ShadowSize');
+        if (rect.rounded && cr !== null && Number.isFinite(Number(cr))) rect.radius = (Number(cr) / 100) * lw;
+        if (rect.shadow && ss !== null && Number.isFinite(Number(ss))) rect.shadowSize = (Number(ss) / 100) * lw;
+        add(rect);
         return;
       }
       case 'Oval':

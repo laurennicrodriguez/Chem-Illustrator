@@ -29,6 +29,17 @@ export interface Atom {
   hideCharge?: boolean;
   /** Numbers after R groups are superscripts (R¹ rather than R₁). */
   supDigits?: boolean;
+  /** A stereo label kept with the drawing, such as ChemDraw's "(S)", placed relative to the atom. */
+  stereoLabel?: StereoLabel;
+}
+
+export interface StereoLabel {
+  text: string;
+  /** Start of the text's baseline, relative to the atom. */
+  dx: number;
+  dy: number;
+  size: number;
+  italic?: boolean;
 }
 
 export interface Bond {
@@ -103,7 +114,11 @@ export interface Shape {
   dashed?: boolean;
   filled?: boolean;
   rounded?: boolean;
+  /** Corner radius of a rounded box, in points (ChemDraw's default is six line widths). */
+  radius?: number;
   shadow?: boolean;
+  /** How far a box's shadow sticks out, in points (ChemDraw's default is four line widths). */
+  shadowSize?: number;
   bold?: boolean;
   symbol?: string;
   bracket?: 'square' | 'round' | 'curly';

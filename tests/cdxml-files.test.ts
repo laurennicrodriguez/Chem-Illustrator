@@ -46,6 +46,15 @@ describe.skipIf(!files.length)('saving real ChemDraw files', { timeout: 120000 }
       expect(close / Math.max(1, total)).toBeGreaterThan(0.9);
     });
 
+    it(`${f}: a rebuilt file lists the same lines in each caption`, () => {
+      // ChemDraw drops blank lines unless the file lists where each line ends
+      const { doc } = readCdxml(text);
+      doc.source = null;
+      const was = captionLines(text), now = captionLines(writeCdxml(doc));
+      const diff = [...was].filter(([id, n]) => now.has(id) && now.get(id) !== n).map(([id, n]) => `caption ${id}: ${n} lines, now ${now.get(id)}`);
+      expect(diff.slice(0, 10)).toEqual([]);
+    });
+
     it(`${f}: edited save keeps the edits and everything else`, () => {
       const { doc } = readCdxml(text);
       const frags = doc.fragments().sort((a, b) => b.size - a.size);
@@ -89,6 +98,21 @@ function labelBoxes(text: string): Map<string, number[]> {
         const bb = t?.getAttribute('BoundingBox');
         if (bb) out.set(c.getAttribute('id')!, bb.trim().split(/\s+/).map(Number));
       } else visit(c);
+    }
+  };
+  visit(root);
+  return out;
+}
+
+/** Number of lines ChemDraw will show for each caption, by id (1 when no line ends are listed). */
+function captionLines(text: string): Map<string, number> {
+  const root = new DOMParser().parseFromString(text.replace(/<!DOCTYPE[^>]*>/i, ''), 'application/xml').documentElement;
+  const out = new Map<string, number>();
+  const visit = (e: Element) => {
+    for (let c = e.firstElementChild; c; c = c.nextElementSibling) {
+      if (c.nodeName === 'n') continue;
+      if (c.nodeName === 't' && c.getAttribute('id')) out.set(c.getAttribute('id')!, (c.getAttribute('LineStarts') ?? '0').trim().split(/\s+/).length);
+      else visit(c);
     }
   };
   visit(root);

@@ -77,13 +77,15 @@ export function tokenize(label: string): Token[] {
     } else {
       // stray characters (parentheses, lowercase, punctuation) are kept as text
       const prev = out[out.length - 1];
-      if (prev && /[+\-−]/.test(label[i])) {
+      // a sign is a charge only at the end of the label ("N+", "CO2−"), not a hyphen ("(3,4)-MDP")
+      if (prev && /[+\-−]/.test(label[i]) && /^[+\-−]*$/.test(label.slice(i + 1))) {
         let m = label[i];
         i++;
         prev.charge += m;
         continue;
       }
-      if (prev && /\d/.test(label[i])) {
+      // digits count the group before them (CH3, (CH2)3), but not after other punctuation ("(3,4)")
+      if (prev && /\d/.test(label[i]) && (prev.kind !== 'other' || /^[)\]]$/.test(prev.text))) {
         let j = i;
         while (j < label.length && /\d/.test(label[j])) j++;
         if (/[+\-−]/.test(label[j] ?? '') && (j + 1 === label.length)) {
@@ -223,6 +225,19 @@ export function layoutLabel(spec: LabelSpec, bondDirs: { x: number; y: number }[
       for (let i = start; i < runs.length; i++) runs[i].dy += yOff;
       for (let i = start; i < boxes.length; i++) { boxes[i].y1 += yOff; boxes[i].y2 += yOff; }
     }
+  } else if (spec.tokens.some((t) => t.kind === 'other')) {
+    // Text that is not a formula ("(3,4)-MDP", "Aryl") is never reversed: ChemDraw keeps its
+    // reading order and puts the last letter or digit on the atom.
+    const pieces: Piece[] = [];
+    for (const t of spec.tokens) pieces.push(...tokenPieces(t, sd));
+    let x = 0, anchor = 0;
+    for (const p of pieces) {
+      const i = p.sub || p.sup ? -1 : p.text.search(/[A-Za-z0-9](?![\s\S]*[A-Za-z0-9])/);
+      if (i >= 0) anchor = x + measure(p.text.slice(0, i), size) + measure(p.text[i], size) / 2;
+      x += pieceWidth(p);
+    }
+    const end = pushPieces(pieces, -anchor);
+    if (chargeText) pushPieces([{ text: chargeText, sup: true }], end);
   } else {
     // Reversed: rest of the label to the left, abbreviations kept whole (THPO, not PHTO).
     const leftTokens: Token[] = [...tail].reverse();
