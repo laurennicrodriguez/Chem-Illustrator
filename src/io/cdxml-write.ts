@@ -702,11 +702,28 @@ class CdxmlWriter {
       if (s.picture) return; // a copied picture placeholder has no picture to write
       const g = this.el('graphic', { id: s.id });
       this.fillShape(g, s);
-      // circled charges and lone pairs belong with their structure
-      const host = s.kind === 'symbol' ? this.nearestFragment(s) : null;
+      // circled charges and lone pairs belong with their structure; a circled charge also
+      // names the atom whose charge it shows, so ChemDraw leaves the charge off that label
+      const owner = s.kind === 'symbol' ? this.chargeOwner(s) : null;
+      if (owner) g.appendChild(this.el('represent', { attribute: 'Charge', object: this.nodeId(owner.id) }));
+      const host = owner ? this.fragOfAtom.get(owner.id) ?? null : s.kind === 'symbol' ? this.nearestFragment(s) : null;
       (host ?? this.page).appendChild(g);
     }
     this.changed = true;
+  }
+
+  /** The atom whose charge a circled ⊕/⊖ shows: the nearest atom with a hidden charge of that sign. */
+  private chargeOwner(s: Shape): Atom | null {
+    const sign = s.symbol === 'CirclePlus' || s.symbol === 'Plus' ? 1 : s.symbol === 'CircleMinus' || s.symbol === 'Minus' ? -1 : 0;
+    if (!sign) return null;
+    const c = { x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 };
+    let best: Atom | null = null, bestD = Infinity;
+    for (const a of this.doc.atomsNear(c, this.doc.style.bondLength * 1.5)) {
+      if (!a.hideCharge || Math.sign(a.charge) !== sign) continue;
+      const d = Math.hypot(a.x - c.x, a.y - c.y);
+      if (d < bestD) { best = a; bestD = d; }
+    }
+    return best;
   }
 
   private nearestFragment(s: Shape): Element | null {

@@ -10,7 +10,7 @@ export type Summary = Record<'atoms' | 'bonds' | 'captions' | 'arrows' | 'shapes
 export function summarize(doc: Doc): Summary {
   const at = (id: number) => { const a = doc.atoms.get(id)!; return [a.x, a.y]; };
   return {
-    atoms: [...doc.atoms.values()].map((a) => ({ key: `z${a.z} ${a.label ?? ''} q${a.charge} i${a.isotope} ${a.color ?? ''}`, nums: [a.x, a.y] })),
+    atoms: [...doc.atoms.values()].map((a) => ({ key: `z${a.z} ${a.label ?? ''} q${a.charge}${a.hideCharge ? 'h' : ''} i${a.isotope} ${a.color ?? ''}`, nums: [a.x, a.y] })),
     bonds: [...doc.bonds.values()].map((b) => ({ key: `o${b.order} ${b.display} ${b.dpos} ${b.color ?? ''}`, nums: [...at(b.a1), ...at(b.a2)] })),
     captions: [...doc.captions.values()].map((c) => ({ key: `${c.justify} ${c.runs.map((x) => x.text).join('')}`, nums: [] })),
     arrows: [...doc.arrows.values()].map((a) => ({
