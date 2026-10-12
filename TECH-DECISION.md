@@ -7,12 +7,12 @@
 | Part | Choice | Why |
 |---|---|---|
 | Drawing engine | TypeScript, drawing on an HTML canvas | Full control over every line and letter (ChemDraw's ACS 1996 look), and the same code runs on the desktop and in a browser. |
-| Desktop app | Tauri (a small Rust shell around the system's web view) | On Windows the web view is Microsoft WebView2, which is the same engine as Chrome, so the speeds below carry over. Installers are small (a few MB plus the 7 MB chemistry engine), unlike Electron, which ships a whole browser (100+ MB). |
+| Desktop app | Tauri (a small Rust shell around the system's web view) | On Windows the web view is Microsoft WebView2, which is the same engine as Chrome, so the speeds below carry over. The Windows installer is under 4 MB with the chemistry engine included, unlike Electron, which ships a whole browser (100+ MB). |
 | Chemistry | RDKit (free, BSD licence) compiled to WebAssembly, running in a background worker | Formula, masses, R/S and E/Z, SMILES in and out. Running it off the drawing thread means drawing never waits for chemistry. |
 | Files | CDXML read directly (ChemDraw's XML format) | Your existing files open as they are. |
 | Web version | Same code, published as a web page | Comes almost free; nothing in the desktop app is slowed down to allow it. |
 
-Licences of everything used so far: TypeScript (Apache-2.0), Vite (MIT), Vitest (MIT), Playwright (Apache-2.0, testing only), RDKit (BSD-3-Clause), Tauri (MIT/Apache-2.0, next step). All free and open source.
+Licences of everything used so far: TypeScript (Apache-2.0), Vite (MIT), Vitest (MIT), Playwright (Apache-2.0, testing only), RDKit (BSD-3-Clause), Tauri (MIT/Apache-2.0). All free and open source.
 
 ## Measured speed
 
@@ -27,6 +27,8 @@ Measured in Chromium (the engine inside WebView2) on this cloud machine, at norm
 | Editing inside a big drawing | Moving a structure or pressing a hotkey with the whole poster on screen: 4–8 ms median; occasional frames of 20–30 ms on a 2× screen. On the 40,000-atom stress test: 8–15 ms median. | Met at normal zoom; close at whole-poster zoom |
 | Start-up under 2 s | Drawing on screen about 0.1 s after the page loads; chemistry engine ready 0.2–0.9 s later (first load compiles 7 MB of WebAssembly) | Met |
 | Chemistry under 50 ms, in the background | About 2 ms per structure after the first call (the first one takes about 80 ms while RDKit warms up) | Met |
+
+**Windows check.** Every build on GitHub also starts the real Windows desktop app (WebView2, Edge 153) on a build machine with no graphics card. The drawing is on screen 45 ms after start, the chemistry engine is ready in 0.7 s, and a 40,000-atom drawing is built and drawn in 0.6 s.
 
 How it stays fast:
 
@@ -53,7 +55,8 @@ The one known weak spot is dragging a structure while zoomed out on a very large
 
 ## Next (step 3: ChemDraw parity)
 
-1. Desktop build with a Windows installer, built automatically on GitHub.
-2. Save and copy as CDXML, so drawings paste into ChemDraw and Office.
-3. Clean Up structure, templates, more arrow and bracket tools, and rich-text captions.
-4. Remaining hotkeys and the chemistry warnings from the feature map.
+The Windows desktop app and its automatic installer build are done (see the README).
+
+1. Save and copy as CDXML, so drawings paste into ChemDraw and Office.
+2. Clean Up structure, templates, more arrow and bracket tools, and rich-text captions.
+3. Remaining hotkeys and the chemistry warnings from the feature map.
