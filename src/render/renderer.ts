@@ -6,7 +6,7 @@
 // and bond and only recomputed near what changed.
 
 import { Doc, Atom, Bond, Arrow, Caption, Shape, TextRun } from '../model';
-import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf } from '../geom';
+import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
 import { valenceExceeded } from '../chem/elements';
@@ -759,14 +759,8 @@ export class Renderer {
 
   private arcArrow(ctx: CanvasRenderingContext2D, r: Arrow, tail: Vec, head: Vec): void {
     // Circle through tail and head with the given sweep.
-    const chord = sub(head, tail);
-    const c = len(chord);
     const sweep = r.sweep;
-    const radius = c / (2 * Math.sin(Math.abs(sweep) / 2));
-    const mid = mul(add(tail, head), 0.5);
-    const h = Math.sqrt(Math.max(0, radius * radius - (c / 2) * (c / 2)));
-    const n = norm(perp(chord));
-    const center = add(mid, mul(n, (sweep > 0 ? 1 : -1) * (Math.abs(sweep) > Math.PI ? -h : h)));
+    const { center, radius } = arcCenter(tail, head, sweep);
     const a0 = angleOf(sub(tail, center));
     const a1 = angleOf(sub(head, center));
     ctx.beginPath();

@@ -158,27 +158,32 @@ const SUB_SCALE = 0.75;
 const CAP = 0.716; // Arial cap height as a fraction of the font size
 
 /**
+ * Which way a label runs from its atom: to the right (OH), to the left (HO), or with the
+ * H stacked above or below (the NH of a ring).
+ */
+export function labelDir(spec: LabelSpec, bondDirs: { x: number; y: number }[], just: 'auto' | 'left' | 'right' = 'auto'): 'right' | 'left' | 'up' | 'down' {
+  let sx = 0, sy = 0;
+  for (const d of bondDirs) { sx += d.x; sy += d.y; }
+  const hasRight = bondDirs.some((d) => d.x > 0.3);
+  const hasLeft = bondDirs.some((d) => d.x < -0.3);
+  if (just === 'left') return 'left';
+  if (just === 'right') return 'right';
+  if (hasLeft && hasRight && spec.tokens.length === 1 && spec.hCount > 0) return sy > 0 ? 'up' : 'down';
+  if (sx > 0.25 || (hasRight && !hasLeft && sx > 0)) return 'left';
+  return 'right';
+}
+
+/**
  * Lay out a label. `bondDirs` are unit vectors from the atom to its neighbours.
  * Follows ChemDraw's automatic justification: the bonded atom sits on the atom
  * position, and the rest of the label runs away from the bonds (p. 46).
  */
 export function layoutLabel(spec: LabelSpec, bondDirs: { x: number; y: number }[], size: number, measure: Measure, just: 'auto' | 'left' | 'right' = 'auto'): LabelLayout {
-  let sx = 0, sy = 0;
-  for (const d of bondDirs) { sx += d.x; sy += d.y; }
-  const hasRight = bondDirs.some((d) => d.x > 0.3);
-  const hasLeft = bondDirs.some((d) => d.x < -0.3);
-
   const head = spec.tokens[0];
   const tail = spec.tokens.slice(1);
   const hTok: Token | null = spec.hCount > 0 ? { kind: 'el', text: 'H', count: spec.hCount, charge: '' } : null;
   const chargeText = spec.charge ? (Math.abs(spec.charge) > 1 ? String(Math.abs(spec.charge)) : '') + (spec.charge > 0 ? '+' : '−') : '';
-
-  let dir: 'right' | 'left' | 'up' | 'down';
-  if (just === 'left') dir = 'left';
-  else if (just === 'right') dir = 'right';
-  else if (hasLeft && hasRight && tail.length === 0 && hTok) dir = sy > 0 ? 'up' : 'down';
-  else if (sx > 0.25 || (hasRight && !hasLeft && sx > 0)) dir = 'left';
-  else dir = 'right';
+  const dir = labelDir(spec, bondDirs, just);
 
   const runs: GlyphRun[] = [];
   const boxes: LabelLayout['boxes'] = [];
@@ -227,8 +232,8 @@ export function layoutLabel(spec: LabelSpec, bondDirs: { x: number; y: number }[
     let w = 0;
     for (const p of leftPieces) w += pieceWidth(p);
     let headStart = headX;
-    if (head.kind !== 'el' && head.text.length > 1) {
-      // A right-justified abbreviation ("Ph", "Boc") meets the bond at its last letter.
+    if (head.text.length > 1) {
+      // A right-justified label ("Ph", "Boc", "Cl") meets the bond at its last letter, as in ChemDraw.
       let hw = 0;
       for (const p of headPieces) hw += pieceWidth(p);
       headStart = measure(head.text[head.text.length - 1], size) / 2 - hw;

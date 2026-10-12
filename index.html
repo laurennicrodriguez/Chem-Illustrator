@@ -4,14 +4,23 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Cpath d=%22M16 3l11.3 6.5v13L16 29 4.7 22.5v-13z%22 fill=%22none%22 stroke=%22%232f6fdf%22 stroke-width=%222.6%22 stroke-linejoin=%22round%22/%3E%3Cpath d=%22M16 8.5l6.5 3.75M9.5 20l6.5 3.75%22 stroke=%22%232f6fdf%22 stroke-width=%222.2%22 stroke-linecap=%22round%22/%3E%3C/svg%3E" />
-  <title>Chem Illustrator Prototype</title>
+  <title>Chem Illustrator</title>
 </head>
 <body>
   <header>
     <h1>Chem Illustrator <span class="muted" style="font-weight:400">prototype</span></h1>
-    <button id="btn-new" title="Start an empty drawing">New</button>
-    <button id="btn-open" title="Open a ChemDraw .cdxml file (or drop one on the page)">Open CDXML…</button>
-    <input id="file" type="file" accept=".cdxml,.xml" hidden />
+    <div class="menu-wrap">
+      <button id="btn-file" aria-haspopup="menu" aria-expanded="false" aria-controls="file-menu">File</button>
+      <div id="file-menu" class="menu" role="menu" hidden>
+        <button role="menuitem" data-cmd="new">New<kbd>Ctrl+N</kbd></button>
+        <button role="menuitem" data-cmd="open">Open…<kbd>Ctrl+O</kbd></button>
+        <button role="menuitem" data-cmd="save">Save<kbd>Ctrl+S</kbd></button>
+        <button role="menuitem" data-cmd="save-as">Save As…<kbd>Ctrl+Shift+S</kbd></button>
+        <hr />
+        <button role="menuitem" data-cmd="export-mol">Export Molfile…</button>
+        <button role="menuitem" data-cmd="copy-smiles">Copy as SMILES<kbd>Ctrl+Alt+C</kbd></button>
+      </div>
+    </div>
     <span class="sep"></span>
     <button id="btn-undo" title="Undo (Ctrl+Z)">Undo</button>
     <button id="btn-redo" title="Redo (Ctrl+Y)">Redo</button>

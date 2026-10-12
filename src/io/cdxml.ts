@@ -2,10 +2,11 @@
 // their formatting, arrows, and the common graphics (lines, boxes, circles, brackets,
 // charge symbols). Anything not understood yet is counted and skipped, never fatal.
 
-import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape } from '../model';
+import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind } from '../model';
 import { DocStyle } from '../style';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { DEG } from '../geom';
+import { kids, descendants } from './xml';
 
 export interface ReadStats {
   atoms: number;
@@ -35,6 +36,18 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   const root = xml.documentElement;
   if (!root || root.nodeName !== 'CDXML') throw new Error('This does not look like a CDXML file.');
   const doc = new Doc();
+  // Remember where each object came from, so saving can rewrite only what changed.
+  const all = descendants(root);
+  const ordOf = new Map<Element, number>();
+  let maxId = 0;
+  for (let i = 0; i < all.length; i++) {
+    const el = all[i];
+    ordOf.set(el, i);
+    const v = Number(el.getAttribute('id'));
+    if (v > maxId) maxId = v;
+  }
+  const ord = new Map<string, number>();
+  const from = (kind: Kind, id: number, el: Element) => ord.set(kind + id, ordOf.get(el)!);
   const stats: ReadStats = { atoms: 0, bonds: 0, captions: 0, arrows: 0, shapes: 0, skipped: {}, parseMs: t1 - t0, buildMs: 0 };
   const skip = (what: string) => { stats.skipped[what] = (stats.skipped[what] ?? 0) + 1; };
 
@@ -53,9 +66,10 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
 
   // Colours: index 0 is black and 1 white; the colour table starts at index 2.
   const colors: string[] = ['#000000', '#ffffff'];
-  const ct = root.getElementsByTagName('colortable')[0];
+  const ct = all.find((e) => e.nodeName === 'colortable');
   if (ct) {
-    for (const c of Array.from(ct.getElementsByTagName('color'))) {
+    for (const c of kids(ct)) {
+      if (c.nodeName !== 'color') continue;
       const h = (x: number) => Math.round(Math.max(0, Math.min(1, x)) * 255).toString(16).padStart(2, '0');
       colors.push('#' + h(num(c, 'r')) + h(num(c, 'g')) + h(num(c, 'b')));
     }
@@ -70,18 +84,18 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   if (bg !== null && colors[Number(bg)]) doc.background = colors[Number(bg)];
 
   const fonts = new Map<string, string>();
-  const ft = root.getElementsByTagName('fonttable')[0];
-  if (ft) for (const f of Array.from(ft.getElementsByTagName('font'))) fonts.set(f.getAttribute('id') ?? '', f.getAttribute('name') ?? 'Arial');
+  const ft = all.find((e) => e.nodeName === 'fonttable');
+  if (ft) for (const f of kids(ft)) if (f.nodeName === 'font') fonts.set(f.getAttribute('id') ?? '', f.getAttribute('name') ?? 'Arial');
 
   // Charges drawn by a separate circled-charge graphic are not drawn again on the atom.
   const chargeShown = new Set<string>();
-  for (const r of Array.from(root.getElementsByTagName('represent'))) {
-    if (r.getAttribute('attribute') === 'Charge') chargeShown.add(r.getAttribute('object') ?? '');
+  for (const r of all) {
+    if (r.nodeName === 'represent' && r.getAttribute('attribute') === 'Charge') chargeShown.add(r.getAttribute('object') ?? '');
   }
 
   const runsOf = (t: Element): TextRun[] => {
     const out: TextRun[] = [];
-    for (const s of Array.from(t.children)) {
+    for (const s of kids(t)) {
       if (s.nodeName !== 's') continue;
       const face = num(s, 'face', 0);
       const fontName = fonts.get(s.getAttribute('font') ?? '');
@@ -116,7 +130,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
 
   const readFragment = (frag: Element) => {
     const nodeIds = new Map<string, number>();
-    for (const n of Array.from(frag.children)) {
+    for (const n of kids(frag)) {
       if (n.nodeName !== 'n') continue;
       const type = n.getAttribute('NodeType');
       if (type === 'ExternalConnectionPoint') continue;
@@ -131,14 +145,19 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       const ls = n.getAttribute('LabelSize');
       if (ls !== null) extra.s = Number(ls) / st.labelSize;
       let t: Element | null = null;
-      for (const ch of Array.from(n.children)) if (ch.nodeName === 't') t = ch;
+      for (const ch of kids(n)) if (ch.nodeName === 't') t = ch;
       const atom = doc.addAtom(x, y, z, extra);
+      from('a', id, n);
       nodeIds.set(n.getAttribute('id') ?? '', id);
       stats.atoms++;
       if (t) {
         const runs = runsOf(t);
         let txt = runs.map((r) => r.text).join('');
-        if (atom.charge) txt = txt.replace(/\d*[+\-−]+$/, '');
+        if (atom.charge) {
+          // the charge is part of the label text ("N+", "O2−"); it is drawn from the charge instead
+          const n = Math.abs(atom.charge);
+          txt = txt.replace(new RegExp(`${n > 1 ? n : ''}[${atom.charge > 0 ? '+' : '\\-−'}]$`), '');
+        }
         if (runs.some((r) => r.sup && /^\d+$/.test(r.text))) atom.supDigits = true;
         const size = runs[0]?.size;
         if (size && ls === null) atom.s = size / st.labelSize;
@@ -152,7 +171,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         pendingLabels.push({ atom, text: txt, hShown: isPlain && nh !== null ? Number(nh) : isPlain ? null : -1 });
       }
     }
-    for (const b of Array.from(frag.children)) {
+    for (const b of kids(frag)) {
+      if (b.nodeName === 'graphic') readGraphic(b); // circled charges and lone pairs sit with their structure
       if (b.nodeName !== 'b') continue;
       let a1 = nodeIds.get(b.getAttribute('B') ?? '');
       let a2 = nodeIds.get(b.getAttribute('E') ?? '');
@@ -188,7 +208,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       if (lw !== null) extra.s = Number(lw) / st.lineWidth;
       const c = color(b);
       if (c) extra.color = c;
-      doc.addBond(a1, a2, order, display, extra);
+      const bond = doc.addBond(a1, a2, order, display, extra);
+      from('b', bond.id, b);
       stats.bonds++;
     }
   };
@@ -211,7 +232,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     if (ls) applyLineEnds(runs, ls.trim().split(/\s+/).map(Number).slice(0, -1));
     const lh = t.getAttribute('LineHeight') ?? t.getAttribute('CaptionLineHeight');
     const lineHeight = lh && /^[\d.]+$/.test(lh) ? Number(lh) : undefined;
-    doc.addCaption({ id: idFor(t), x, y: py, runs, justify, width, lineHeight });
+    const cap = doc.addCaption({ id: idFor(t), x, y: py, runs, justify, width, lineHeight });
+    from('c', cap.id, t);
     stats.captions++;
   };
 
@@ -256,6 +278,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     };
     if (lw !== st.lineWidth) arrow.lineWidth = lw;
     doc.addArrow(arrow);
+    from('r', arrow.id, a);
     stats.arrows++;
   };
 
@@ -266,7 +289,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     const c = color(g);
     const z = num(g, 'Z', 0);
     const base = { id: idFor(g), color: c, z };
-    const add = (s: Omit<Shape, 'id'> & { id: number }) => { doc.addShape(s); stats.shapes++; };
+    const add = (s: Omit<Shape, 'id'> & { id: number }) => { doc.addShape(s); from('s', s.id, g); stats.shapes++; };
     switch (type) {
       case 'Line': {
         if (bb.length < 4) return;
@@ -319,7 +342,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   };
 
   const walk = (el: Element) => {
-    for (const ch of Array.from(el.children)) {
+    for (const ch of kids(el)) {
       switch (ch.nodeName) {
         case 'page': case 'group': case 'altgroup': walk(ch); break;
         case 'fragment': readFragment(ch); break;
@@ -329,7 +352,11 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         case 'embeddedobject': {
           // pasted pictures: show where they sit until images are supported
           const bb = pts(ch.getAttribute('BoundingBox'));
-          if (bb.length === 4) { doc.addShape({ id: idFor(ch), kind: 'rect', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], dashed: true, color: '#9aa4b2', picture: true }); stats.shapes++; }
+          if (bb.length === 4) {
+            const sh = doc.addShape({ id: idFor(ch), kind: 'rect', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], dashed: true, color: '#9aa4b2', picture: true });
+            from('s', sh.id, ch);
+            stats.shapes++;
+          }
           skip('picture');
           break;
         }
@@ -357,6 +384,11 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       }
     }
   });
+  doc.reserveIds(maxId);
+  const orig = new Map<string, Entity>();
+  const keep = (kind: Kind, m: Map<number, Entity>) => { for (const e of m.values()) if (ord.has(kind + e.id)) orig.set(kind + e.id, structuredClone(e)); };
+  keep('a', doc.atoms); keep('b', doc.bonds); keep('c', doc.captions); keep('r', doc.arrows); keep('s', doc.shapes);
+  doc.source = { text, ord, orig, maxId };
   doc.allDirty = true;
   stats.buildMs = performance.now() - t1;
   return { doc, stats };

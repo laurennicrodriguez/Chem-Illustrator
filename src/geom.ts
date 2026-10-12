@@ -63,3 +63,15 @@ export function exitParam(a: Vec, b: Vec, r: Rect): number {
   else if (d.y < 0) t = Math.min(t, (r.y1 - a.y) / d.y);
   return Math.max(0, t);
 }
+
+/** Centre and radius of the circular arc from `tail` to `head` that turns through `sweep` radians. */
+export function arcCenter(tail: Vec, head: Vec, sweep: number): { center: Vec; radius: number } {
+  const chord = sub(head, tail);
+  const c = len(chord);
+  const radius = c / (2 * Math.sin(Math.abs(sweep) / 2));
+  const mid = mul(add(tail, head), 0.5);
+  const h = Math.sqrt(Math.max(0, radius * radius - (c / 2) * (c / 2)));
+  const n = norm(perp(chord));
+  const center = add(mid, mul(n, (sweep > 0 ? 1 : -1) * (Math.abs(sweep) > Math.PI ? -h : h)));
+  return { center, radius };
+}

@@ -1,0 +1,296 @@
+// @vitest-environment jsdom
+//
+// Saving CDXML: new drawings are written in ChemDraw's form, and drawings opened from a file
+// are saved by changing only what was edited.
+
+import { describe, it, expect } from 'vitest';
+import { Doc } from '../src/model';
+import { readCdxml } from '../src/io/cdxml';
+import { writeCdxml } from '../src/io/cdxml-write';
+import { summarize, differences, duplicateIds } from './cdxml-compare';
+
+// A small file in the shape ChemDraw writes: ethanol (with an O label), a caption, an arrow
+// with ChemDraw's older copy of it, a reaction step, and parts this program does not read.
+const FILE = `<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE CDXML SYSTEM "http://www.cambridgesoft.com/xml/cdxml.dtd" >
+<CDXML
+ CreationProgram="ChemDraw 25.5.0.5789"
+ Name="test.cdxml"
+ BoundingBox="100 100 220 130"
+ LabelFont="3"
+ LabelSize="10"
+ LabelFace="96"
+ CaptionFont="3"
+ CaptionSize="10"
+ LineWidth="0.60"
+ BoldWidth="2"
+ BondLength="14.40"
+ BondSpacing="18"
+ color="0"
+ bgcolor="1"
+><colortable>
+<color r="1" g="1" b="1"/>
+<color r="0" g="0" b="0"/>
+<color r="1" g="0" b="0"/>
+</colortable><fonttable>
+<font id="3" charset="iso-8859-1" name="Arial"/>
+</fonttable><page
+ id="1"
+ BoundingBox="0 0 540 720"
+><fragment
+ id="10"
+ BoundingBox="100 100 130 110"
+><n
+ id="11"
+ p="100 110"
+ AS="N"
+/><n
+ id="12"
+ p="112.47 102.80"
+ AS="N"
+/><n
+ id="13"
+ p="124.94 110"
+ Element="8"
+ NumHydrogens="1"
+ NeedsClean="yes"
+ AS="N"
+><t
+ p="121.33 113.90"
+ BoundingBox="121.33 105.55 136.20 113.90"
+ LabelJustification="Left"
+ LabelAlignment="Left"
+><s font="3" size="10" color="0" face="96">OH</s></t></n><b
+ id="14"
+ B="11"
+ E="12"
+ BS="N"
+/><b
+ id="15"
+ B="12"
+ E="13"
+ BS="N"
+/></fragment><t
+ id="20"
+ p="150 120"
+ BoundingBox="150 113 190 122"
+ LineHeight="auto"
+><s font="3" size="10" color="4" face="1">heat</s></t><graphic
+ id="30"
+ SupersededBy="31"
+ BoundingBox="200 105 160 105"
+ GraphicType="Line"
+ ArrowType="FullHead"
+ HeadSize="1000"
+/><arrow
+ id="31"
+ BoundingBox="160 103.50 200 106.50"
+ FillType="None"
+ ArrowheadHead="Full"
+ ArrowheadType="Solid"
+ HeadSize="1000"
+ ArrowheadCenterSize="875"
+ ArrowheadWidth="250"
+ Head3D="200 105 0"
+ Tail3D="160 105 0"
+ Center3D="180 105 0"
+ MajorAxisEnd3D="220 105 0"
+ MinorAxisEnd3D="180 145 0"
+/><chemicalproperty
+ id="40"
+ ChemicalPropertyDisplayID="20"
+ ChemicalPropertyIsActive="yes"
+ BasisObjects="10"
+/><scheme
+ id="50"
+><step
+ id="51"
+ ReactionStepReactants="10"
+ ReactionStepArrows="30"
+ ReactionStepObjectsBelowArrow="20"
+/></scheme></page></CDXML>
+`;
+
+function open(text = FILE) {
+  return readCdxml(text).doc;
+}
+
+function attr(xml: string, tag: string, id: string, name: string): string | null {
+  const root = new DOMParser().parseFromString(xml.replace(/<!DOCTYPE[^>]*>/i, ''), 'application/xml').documentElement;
+  for (const e of Array.from(root.getElementsByTagName(tag))) if (e.getAttribute('id') === id) return e.getAttribute(name);
+  return null;
+}
+
+function has(xml: string, tag: string, id: string): boolean {
+  return new RegExp(`<${tag}\\s+id="${id}"`).test(xml);
+}
+
+describe('saving a file that was opened', () => {
+  it('gives back the same bytes when nothing changed', () => {
+    expect(writeCdxml(open())).toBe(FILE);
+  });
+
+  it('gives back the same bytes after an edit is undone', () => {
+    const doc = open();
+    doc.edit('move', () => doc.moveAtoms([11, 12, 13], 5, 5));
+    doc.undo();
+    expect(writeCdxml(doc)).toBe(FILE);
+  });
+
+  it('moves a structure and its label, keeping everything else', () => {
+    const doc = open();
+    doc.edit('move', () => doc.moveAtoms([11, 12, 13], 10, -5));
+    const out = writeCdxml(doc);
+    expect(attr(out, 'n', '11', 'p')).toBe('110.00 105.00');
+    expect(attr(out, 'n', '13', 'p')).toBe('134.94 105.00');
+    // the label moves with its atom and is otherwise untouched
+    const t = /<t\s+p="([\d. ]+)"\s+BoundingBox="([\d. ]+)"/.exec(out)!;
+    expect(t[1]).toBe('131.33 108.90');
+    expect(t[2]).toBe('131.33 100.55 146.20 108.90');
+    // ChemDraw's own details stay
+    expect(attr(out, 'n', '13', 'AS')).toBe('N');
+    expect(attr(out, 'b', '14', 'BS')).toBe('N');
+    expect(has(out, 'chemicalproperty', '40')).toBe(true);
+    expect(attr(out, 'step', '51', 'ReactionStepArrows')).toBe('30');
+    expect(out.startsWith('<?xml version="1.0" encoding="UTF-8" ?>\n<!DOCTYPE CDXML SYSTEM')).toBe(true);
+  });
+
+  it('keeps the older copy of an arrow in step with the arrow', () => {
+    const doc = open();
+    doc.edit('stretch', () => doc.updateArrow(31, { head: { x: 210, y: 105 } }));
+    const out = writeCdxml(doc);
+    expect(attr(out, 'arrow', '31', 'Head3D')).toBe('210.00 105.00 0');
+    expect(attr(out, 'graphic', '30', 'BoundingBox')).toBe('210.00 105.00 160.00 105.00');
+    expect(attr(out, 'step', '51', 'ReactionStepArrows')).toBe('30');
+  });
+
+  it('removes deleted objects and references to them', () => {
+    const doc = open();
+    doc.edit('delete', () => { doc.removeArrow(31); doc.removeCaption(20); });
+    const out = writeCdxml(doc);
+    expect(has(out, 'arrow', '31')).toBe(false);
+    expect(has(out, 'graphic', '30')).toBe(false);
+    expect(has(out, 't', '20')).toBe(false);
+    expect(attr(out, 'step', '51', 'ReactionStepArrows')).toBe(null);
+    expect(attr(out, 'step', '51', 'ReactionStepReactants')).toBe('10');
+  });
+
+  it('rewrites a changed atom label and drops stale stereo marks', () => {
+    const doc = open();
+    doc.edit('to N', () => doc.updateAtom(13, { z: 7 }));
+    const out = writeCdxml(doc);
+    expect(attr(out, 'n', '13', 'Element')).toBe('7');
+    expect(attr(out, 'n', '13', 'NumHydrogens')).toBe('2');
+    expect(attr(out, 'n', '13', 'AS')).toBe(null);
+    expect(out).toContain('face="96">NH2</s>');
+    const back = open(out);
+    expect(differences(summarize(back), summarize(doc))).toEqual([]);
+  });
+
+  it('adds new objects with fresh ids', () => {
+    const doc = open();
+    doc.edit('add', () => {
+      const a = doc.addAtom(124.94, 124.4);
+      doc.addBond(13, a.id, 1);
+      const b = doc.addAtom(300, 300, 17);
+      doc.addCaption({ x: 300, y: 330, runs: [{ text: 'new' }], justify: 'left' });
+      void b;
+    });
+    const out = writeCdxml(doc);
+    expect(duplicateIds(out)).toEqual([]);
+    const back = open(out);
+    expect(differences(summarize(back), summarize(doc))).toEqual([]);
+    // the new bond joins the existing structure; the lone Cl gets its own
+    expect(out.match(/<fragment/g)!.length).toBe(2);
+  });
+
+  it('writes colours through the file colour table', () => {
+    const doc = open();
+    expect(doc.captions.get(20)!.runs[0].color).toBe('#ff0000');
+    doc.edit('colour', () => doc.updateAtom(11, { color: '#0000ff' }));
+    const out = writeCdxml(doc);
+    expect(out).toContain('<color r="0.0000" g="0.0000" b="1.0000"/>');
+    expect(attr(out, 'n', '11', 'color')).toBe('5');
+    expect(open(out).atoms.get(11)!.color).toBe('#0000ff');
+  });
+});
+
+describe('saving a new drawing', () => {
+  function sample(): Doc {
+    const doc = new Doc();
+    doc.bulk(() => {
+      // phenol, an ester label, a charge, a caption, arrows and shapes
+      const ring = [0, 1, 2, 3, 4, 5].map((i) => doc.addAtom(100 + 14.4 * Math.cos((Math.PI / 3) * i), 100 + 14.4 * Math.sin((Math.PI / 3) * i)));
+      ring.forEach((a, i) => doc.addBond(a.id, ring[(i + 1) % 6].id, i % 2 ? 2 : 1));
+      const o = doc.addAtom(128.8, 100, 8);
+      doc.addBond(ring[0].id, o.id);
+      const est = doc.addAtom(78.4, 87.5, 6, { label: 'CO2Et' });
+      doc.addBond(ring[3].id, est.id);
+      const n = doc.addAtom(200, 100, 7, { charge: 1 });
+      const m = doc.addAtom(214.4, 100);
+      doc.addBond(n.id, m.id, 1, 'wedge');
+      doc.addCaption({ x: 100, y: 150, runs: [{ text: 'Yield ' }, { text: '92%', bold: true }], justify: 'left' });
+      doc.addArrow({ tail: { x: 140, y: 100 }, head: { x: 180, y: 100 }, headStyle: 'full', tailStyle: 'none', headType: 'solid', line: 'solid', noGo: false, equilibrium: false, sweep: 0, headLength: 6, headWidth: 1.5 });
+      doc.addArrow({ tail: { x: 140, y: 120 }, head: { x: 160, y: 120 }, headStyle: 'full', tailStyle: 'none', headType: 'solid', line: 'solid', noGo: false, equilibrium: false, sweep: Math.PI / 2, headLength: 6, headWidth: 1.5 });
+      doc.addShape({ kind: 'rect', x1: 60, y1: 60, x2: 240, y2: 170, rounded: true });
+      doc.addShape({ kind: 'oval', x1: 190, y1: 90, x2: 196, y2: 96 });
+      doc.addShape({ kind: 'bracket', bracket: 'square', x1: 70, y1: 80, x2: 75, y2: 120 });
+    });
+    return doc;
+  }
+
+  it('reads back the same drawing', () => {
+    const doc = sample();
+    const out = writeCdxml(doc, { name: 'new.cdxml' });
+    expect(out.startsWith('<?xml version="1.0" encoding="UTF-8" ?>\n<!DOCTYPE CDXML SYSTEM "http://www.cambridgesoft.com/xml/cdxml.dtd" >\n<CDXML ')).toBe(true);
+    expect(differences(summarize(open(out)), summarize(doc))).toEqual([]);
+    expect(duplicateIds(out)).toEqual([]);
+  });
+
+  it('writes structures the way ChemDraw does', () => {
+    const out = writeCdxml(sample());
+    // automatic labels carry the element and hydrogen count; abbreviations their meaning
+    expect(out).toMatch(/<n id="\d+" p="128\.80 100\.00" Element="8" NumHydrogens="1" NeedsClean="yes"><t [^>]*><s font="3" size="10" color="0" face="96">OH<\/s><\/t><\/n>/);
+    expect(out).toMatch(/NodeType="Fragment"/);
+    expect(out).toContain('face="96">CO2Et</s>');
+    expect(out).toMatch(/Charge="1" NumHydrogens="3"[^>]*><t [^>]*><s [^>]*>NH3\+<\/s>/);
+    expect(out).toMatch(/Display="WedgeBegin"/);
+    expect(out).toMatch(/<font id="3" charset="iso-8859-1" name="Arial"\/>/);
+    expect(out).toMatch(/<page id="\d+" BoundingBox="0 0 540.00 720.00"/);
+  });
+
+  it('places labels where ChemDraw would', () => {
+    const out = writeCdxml(sample());
+    // OH to the right of its bond: left-justified, baseline 0.39 × size below the atom
+    const m = /p="128\.80 100\.00"[^>]*><t p="([\d.]+) ([\d.]+)"[^>]*LabelJustification="Left"/.exec(out)!;
+    expect(Number(m[2])).toBeCloseTo(103.9, 1);
+    expect(Number(m[1])).toBeLessThan(128.8);
+  });
+
+  it('a curved arrow keeps its bend', () => {
+    const doc = sample();
+    const back = open(writeCdxml(doc));
+    const curved = [...back.arrows.values()].find((a) => a.sweep)!;
+    expect(curved.sweep).toBeCloseTo(Math.PI / 2, 3);
+  });
+});
+
+describe('saving again after a save', () => {
+  it('writes the same bytes, and later edits get fresh ids', async () => {
+    const { adoptSaved } = await import('../src/io/document-file');
+    const doc = new Doc();
+    doc.bulk(() => {
+      const a = doc.addAtom(100, 100), b = doc.addAtom(114.4, 100, 6, { label: 'OMe' });
+      doc.addBond(a.id, b.id);
+    });
+    const first = writeCdxml(doc, { name: 'a.cdxml' });
+    adoptSaved(doc, first);
+    expect(doc.source).not.toBeNull();
+    expect(writeCdxml(doc, { name: 'a.cdxml' })).toBe(first);
+    // the OMe abbreviation's own atoms used ids; a new atom must not reuse them
+    doc.edit('add', () => { const c = doc.addAtom(90, 110); doc.addBond(1, c.id); });
+    const second = writeCdxml(doc, { name: 'a.cdxml' });
+    expect(duplicateIds(second)).toEqual([]);
+    expect(differences(summarize(open(second)), summarize(doc))).toEqual([]);
+  });
+});

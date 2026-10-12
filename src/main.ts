@@ -1,4 +1,4 @@
-// The prototype's window: toolbar, drawing area, analysis and speed panels, file opening.
+// The app window: File menu, toolbar, drawing area, analysis and speed panels.
 
 import './app.css';
 import { Doc } from './model';
@@ -8,6 +8,8 @@ import { readCdxml, ReadStats } from './io/cdxml';
 import { ChemClient } from './chem/client';
 import { toMolfile, addMolfile } from './chem/molfile';
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { DocumentFile } from './io/document-file';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { ICONS } from './icons';
 
@@ -105,20 +107,7 @@ editor.setTool('bond-single');
 $('#btn-undo').addEventListener('click', () => { if (doc.undo()) editor.changed(); });
 $('#btn-redo').addEventListener('click', () => { if (doc.redo()) editor.changed(); });
 $('#btn-fit').addEventListener('click', () => editor.fit());
-$('#btn-open').addEventListener('click', () => $<HTMLInputElement>('#file').click());
-$<HTMLInputElement>('#file').addEventListener('change', async (e) => {
-  const f = (e.target as HTMLInputElement).files?.[0];
-  if (f) openFile(f);
-  (e.target as HTMLInputElement).value = '';
-});
 $('#btn-stress').addEventListener('click', () => stressTest(Number($<HTMLSelectElement>('#stress-n').value)));
-$('#btn-new').addEventListener('click', () => {
-  doc.loadFrom(new Doc());
-  editor.clearSelection();
-  renderer.view = { scale: 2, ox: 40, oy: 40 };
-  lastOpen = '';
-  editor.changed();
-});
 $('#btn-help').addEventListener('click', () => $<HTMLDialogElement>('#help').showModal());
 $('#help-close').addEventListener('click', () => $<HTMLDialogElement>('#help').close());
 const stereoBox = $<HTMLInputElement>('#show-stereo');
@@ -163,13 +152,20 @@ async function pasteChemistry(text: string): Promise<void> {
 window.addEventListener('copy', async (e) => {
   const t = e.target as HTMLElement;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
-  if (!editor.hasSelection() || !chem.ready) return;
+  if (!editor.hasSelection()) return;
   e.preventDefault();
-  const { molblock } = toMolfile(doc, editor.sel.atoms);
-  const smiles = await chem.molToSmiles(molblock);
-  // Copy the SMILES as text (a molfile would paste as a wall of numbers in most apps).
-  if (smiles) { await navigator.clipboard.writeText(smiles).catch(() => {}); flash('Copied SMILES: ' + smiles); }
+  await copySmiles();
 });
+
+/** Copy the selected structures (or everything) as SMILES text. */
+async function copySmiles(): Promise<void> {
+  if (!chem.ready) { flash('The chemistry engine is still loading.'); return; }
+  const atoms = editor.sel.atoms.size ? editor.sel.atoms : doc.atoms.keys();
+  const { molblock } = toMolfile(doc, atoms);
+  const smiles = await chem.molToSmiles(molblock);
+  if (!smiles) { flash('There is no structure to copy.'); return; }
+  await navigator.clipboard.writeText(smiles).then(() => flash('Copied SMILES: ' + smiles), () => flash('Could not use the clipboard.'));
+}
 
 let flashTimer = 0;
 function flash(msg: string): void {
@@ -187,7 +183,85 @@ let lastStats: ReadStats | null = null;
 
 async function openFile(f: File): Promise<void> {
   const text = await f.text();
-  openText(text, f.name);
+  await file.openText(text, f.name);
+}
+
+function clearDrawing(): void {
+  doc.loadFrom(new Doc());
+  editor.clearSelection();
+  renderer.annotations = new Map();
+  editor.lastEdited = null;
+  renderer.view = { scale: 2, ox: 40, oy: 40 };
+  lastOpen = '';
+  editor.changed();
+}
+
+// ---------------------------------------------------------------- the drawing's file
+
+const file = new DocumentFile(doc, {
+  load: (text, name) => openText(text, name) !== null,
+  reset: clearDrawing,
+  flash,
+  title: (t) => {
+    document.title = t;
+    if (isTauri()) getCurrentWindow().setTitle(t).catch(() => {});
+  },
+});
+
+const COMMANDS: Record<string, () => unknown> = {
+  new: () => file.newDrawing(),
+  open: () => file.open(),
+  save: () => file.save(),
+  'save-as': () => file.saveAs(),
+  'export-mol': () => file.exportMolfile(editor.sel.atoms.size ? editor.sel.atoms : doc.atoms.keys()),
+  'copy-smiles': () => copySmiles(),
+};
+
+const fileBtn = $<HTMLButtonElement>('#btn-file');
+const fileMenu = $<HTMLDivElement>('#file-menu');
+function showMenu(open: boolean): void {
+  fileMenu.hidden = !open;
+  fileBtn.setAttribute('aria-expanded', String(open));
+  if (open) fileMenu.querySelector<HTMLButtonElement>('button')?.focus();
+}
+fileBtn.addEventListener('click', () => showMenu(fileMenu.hidden));
+fileMenu.addEventListener('click', (e) => {
+  const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button')?.dataset.cmd;
+  if (!cmd) return;
+  showMenu(false);
+  COMMANDS[cmd]?.();
+});
+fileMenu.addEventListener('keydown', (e) => {
+  const items = [...fileMenu.querySelectorAll<HTMLButtonElement>('button')];
+  const i = items.indexOf(document.activeElement as HTMLButtonElement);
+  if (e.key === 'Escape') { showMenu(false); fileBtn.focus(); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+});
+document.addEventListener('pointerdown', (e) => {
+  if (!fileMenu.hidden && !(e.target as HTMLElement).closest('.menu-wrap')) showMenu(false);
+});
+
+// File shortcuts, ahead of the drawing tools' own keys.
+window.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const t = e.target as HTMLElement;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+  const k = e.key.toLowerCase();
+  const cmd = k === 'n' ? 'new' : k === 'o' ? 'open' : k === 's' ? (e.shiftKey ? 'save-as' : 'save') : k === 'c' && e.altKey ? 'copy-smiles' : null;
+  if (!cmd) return;
+  e.preventDefault();
+  e.stopPropagation();
+  COMMANDS[cmd]();
+}, true);
+
+// Unsaved work: ask before the window closes.
+if (isTauri()) {
+  getCurrentWindow().onCloseRequested(async (e) => {
+    if (!(await file.confirmClose())) e.preventDefault();
+  }).catch(() => {});
+} else {
+  window.addEventListener('beforeunload', (e) => { if (file.dirty) e.preventDefault(); });
 }
 
 function openText(text: string, name: string): ReadStats | null {
@@ -358,32 +432,37 @@ function updatePanels(): void {
 }
 
 editor.onFrame = () => updatePanels();
-editor.onChange = () => { scheduleAnalysis(); updatePanels(); };
+editor.onChange = () => { scheduleAnalysis(); updatePanels(); file.updateTitle(); };
 chem.onReady = () => {
   (window as any).__chemReadyMs = performance.now() - startMs;
   updatePanels();
   scheduleAnalysis(true);
 };
 
-// A starting molecule so there is something to play with.
-doc.bulk(() => {
-  const L = doc.style.bondLength;
-  const ring = placeRing(doc, freeRing({ x: 120, y: 90 }, 6, L), { aromatic: true });
-  const a = doc.atoms.get(ring[1])!;
-  const c = sprout(doc, a.id);
-  const ch = sprout(doc, c.id, 1, 'hashWedge');
-  doc.updateAtom(ch.id, { label: null });
-  const n = sprout(doc, c.id);
-  doc.updateAtom(n.id, { z: 7 });
-  const co = sprout(doc, n.id);
-  sprout(doc, co.id, 2, 'solid', 8);
-  const o = sprout(doc, co.id, 1, 'solid', 8);
-  doc.updateAtom(o.id, { label: null });
-  const tb = sprout(doc, o.id);
-  doc.updateAtom(tb.id, { label: 'tBu' });
-  editor.lastEdited = ring[0];
-});
-doc.allDirty = true;
+/** A sample molecule, for the self-test and the speed tests. */
+function sampleMolecule(): void {
+  doc.bulk(() => {
+    const L = doc.style.bondLength;
+    const ring = placeRing(doc, freeRing({ x: 120, y: 90 }, 6, L), { aromatic: true });
+    const a = doc.atoms.get(ring[1])!;
+    const c = sprout(doc, a.id);
+    const ch = sprout(doc, c.id, 1, 'hashWedge');
+    doc.updateAtom(ch.id, { label: null });
+    const n = sprout(doc, c.id);
+    doc.updateAtom(n.id, { z: 7 });
+    const co = sprout(doc, n.id);
+    sprout(doc, co.id, 2, 'solid', 8);
+    const o = sprout(doc, co.id, 1, 'solid', 8);
+    doc.updateAtom(o.id, { label: null });
+    const tb = sprout(doc, o.id);
+    doc.updateAtom(tb.id, { label: 'tBu' });
+    editor.lastEdited = ring[0];
+  });
+  doc.allDirty = true;
+  editor.fit();
+  editor.changed();
+}
+
 resize();
 requestAnimationFrame(() => {
   editor.fit();
@@ -394,7 +473,7 @@ requestAnimationFrame(() => {
 });
 
 // Hooks for the automated speed tests.
-(window as any).__app = { doc, editor, renderer, chem, openText, stressTest, pasteChemistry, Doc };
+(window as any).__app = { doc, editor, renderer, chem, openText, stressTest, pasteChemistry, sample: sampleMolecule, file, Doc };
 
 // ---------------------------------------------------------------- desktop self-test
 
@@ -409,6 +488,7 @@ async function desktopSelfTest(): Promise<void> {
   const report: Record<string, unknown> = { userAgent: navigator.userAgent };
   let ok = false;
   try {
+    sampleMolecule();
     const t0 = performance.now();
     while (!chem.ready && !chem.error && performance.now() - t0 < 60000) await new Promise((r) => setTimeout(r, 50));
     await new Promise((r) => requestAnimationFrame(r));
