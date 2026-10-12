@@ -5,8 +5,11 @@ Chem Illustrator ships the following open-source software.
 | Package | Used for | Licence |
 |---|---|---|
 | [RDKit](https://www.rdkit.org) (`@rdkit/rdkit`, MinimalLib WebAssembly build) | Chemistry: formula, masses, stereo, SMILES | BSD-3-Clause (full text below) |
+| [Tauri](https://tauri.app) (`tauri` crate, `@tauri-apps/api`) | Desktop app shell | MIT or Apache-2.0 |
+| About 260 Rust crates that Tauri uses (listed in `src-tauri/Cargo.lock`) | Desktop app shell | Mostly MIT or Apache-2.0; a few are Unicode-3.0, BSD-3-Clause, Zlib or MPL-2.0. All are free and open source; MPL-2.0 only asks that changes to those crates' own files be shared. |
+| Microsoft Edge WebView2 (part of Windows, not bundled) | Shows the app's window contents on Windows | Microsoft software licence, free to use |
 
-Used only to build and test, not shipped: TypeScript (Apache-2.0), Vite (MIT), Vitest (MIT), Playwright (Apache-2.0).
+Used only to build and test, not shipped: TypeScript (Apache-2.0), Vite (MIT), Vitest (MIT), Playwright (Apache-2.0), Tauri CLI (MIT or Apache-2.0).
 
 ## RDKit licence
 

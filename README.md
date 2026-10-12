@@ -2,7 +2,7 @@
 
 A fast chemical structure drawing program for the lab, built to work like ChemDraw: the same hotkeys, the same ACS Document 1996 look, and it opens your existing ChemDraw `.cdxml` files.
 
-This is the step 2 speed prototype. It runs in a web browser today; the Windows desktop app (Tauri) comes next. See [TECH-DECISION.md](TECH-DECISION.md) for why it is built this way and how fast it is.
+This is the step 2 speed prototype. It runs as a Windows desktop app and in a web browser. See [TECH-DECISION.md](TECH-DECISION.md) for why it is built this way and how fast it is.
 
 ## Run it on your computer
 
@@ -23,6 +23,16 @@ You need Node.js once. Everything else is installed into this folder.
    npm run dev
    ```
    Then open the address it prints, usually <http://localhost:5173>, in Chrome or Edge. Press Ctrl+C in the terminal to stop it.
+
+## Desktop app (Windows)
+
+Every change pushed to GitHub builds a Windows installer automatically. Open the repository's **Actions** tab, click the latest **Desktop app** run, and download **chem-illustrator-windows-installer** at the bottom of the page. Unzip it and run the file whose name ends in `setup.exe`. The installer is not signed yet, so Windows will say "Windows protected your PC"; click **More info**, then **Run anyway**.
+
+To build it on your own computer you also need Rust (from [rustup.rs](https://rustup.rs)) and the Microsoft C++ Build Tools that the Rust installer offers. Then:
+```
+npm run desktop          # opens the desktop app; it reloads as the code changes
+npm run desktop:build    # makes the installers in src-tauri/target/release/bundle/
+```
 
 ## What to try
 
@@ -51,11 +61,12 @@ The `bench/` scripts drive the app in a headless browser to measure speed. Start
 | `src/chem/` | Elements, labels, ring and chain geometry, molfile, formula |
 | `src/io/cdxml.ts` | Reading ChemDraw `.cdxml` files |
 | `src/worker/` | The RDKit chemistry engine, running in the background |
+| `src-tauri/` | The desktop app shell (Tauri), its settings and icons |
 | `tests/` | Unit tests |
 | `bench/` | Speed measurements |
 
 ## Licences
 
-Everything used is free and open source. RDKit (BSD-3-Clause) is shipped with the app; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Chem Illustrator itself has no licence chosen yet, so by default all rights are reserved.
+Everything used is free and open source. RDKit (BSD-3-Clause) and Tauri (MIT or Apache-2.0) are shipped with the app; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Chem Illustrator itself has no licence chosen yet, so by default all rights are reserved.
 
 Keep ChemDraw files, manuals and other reference documents out of this repository. The `.gitignore` already refuses `.cdxml`, `.cdx` and `.pdf` files.

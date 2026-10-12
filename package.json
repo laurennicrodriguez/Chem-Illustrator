@@ -10,19 +10,24 @@
     "build": "tsc --noEmit -p . && vite build",
     "preview": "vite preview --port 4173",
     "test": "vitest run",
-    "bench": "node bench/perf.mjs stress"
+    "bench": "node bench/perf.mjs stress",
+    "tauri": "tauri",
+    "desktop": "tauri dev",
+    "desktop:build": "tauri build"
   },
   "keywords": [],
   "author": "",
   "license": "UNLICENSED",
   "devDependencies": {
     "@playwright/test": "^1.56.1",
+    "@tauri-apps/cli": "~2.12.1",
     "typescript": "^5.9.3",
     "vite": "^7.1.12",
     "vitest": "^4.1.11"
   },
   "dependencies": {
-    "@rdkit/rdkit": "^2026.3.6"
+    "@rdkit/rdkit": "^2026.9.1",
+    "@tauri-apps/api": "~2.12.1"
   },
   "private": true,
   "type": "module",

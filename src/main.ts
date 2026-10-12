@@ -7,6 +7,7 @@ import { Editor, TOOLS } from './editor/editor';
 import { readCdxml, ReadStats } from './io/cdxml';
 import { ChemClient } from './chem/client';
 import { toMolfile, addMolfile } from './chem/molfile';
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { ICONS } from './icons';
 
@@ -295,7 +296,7 @@ async function runAnalysis(force: boolean): Promise<void> {
   if (chemTimes.length > 50) chemTimes.shift();
   const H = 1.00727646688, NA = 22.98922070;
   panel.innerHTML = res.results.map((r, i) => {
-    if (r.error) return `<div class="frag"><p class="warn">${r.error}</p></div>`;
+    if (r.error) return `<div class="frag"><p class="warn">${escapeHtml(r.error)}</p></div>`;
     const unk = exports[i].unknownLabels;
     return `<div class="frag">
       <div class="formula">${formatFormula(r.formula)}</div>
@@ -394,3 +395,48 @@ requestAnimationFrame(() => {
 
 // Hooks for the automated speed tests.
 (window as any).__app = { doc, editor, renderer, chem, openText, stressTest, pasteChemistry, Doc };
+
+// ---------------------------------------------------------------- desktop self-test
+
+// Inside the desktop app, started with CHEM_ILLUSTRATOR_SELFTEST set (see src-tauri/src/lib.rs):
+// check that the drawing and the chemistry engine work in this web view, time a few redraws,
+// report, and close. The automatic Windows build runs this on the app it has just built.
+if (isTauri()) {
+  invoke<boolean>('selftest_requested').then((yes) => { if (yes) desktopSelfTest(); }).catch(() => {});
+}
+
+async function desktopSelfTest(): Promise<void> {
+  const report: Record<string, unknown> = { userAgent: navigator.userAgent };
+  let ok = false;
+  try {
+    const t0 = performance.now();
+    while (!chem.ready && !chem.error && performance.now() - t0 < 60000) await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => requestAnimationFrame(r));
+    Object.assign(report, {
+      atoms: doc.atoms.size,
+      firstPaintMs: (window as any).__firstPaintMs,
+      chemReadyMs: (window as any).__chemReadyMs,
+      rdkit: chem.version,
+      chemError: chem.error,
+    });
+    if (chem.ready) {
+      const { molblock, map } = toMolfile(doc, doc.atoms.keys());
+      const res = await chem.analyze([{ molblock, map }]);
+      report.formula = res.results[0]?.formula;
+      report.exactMass = res.results[0]?.exact;
+      ok = !!report.formula && !res.results[0]?.error;
+    }
+    // Redraw speed on a large drawing, in this web view.
+    const s0 = performance.now();
+    stressTest(2000);
+    report.stress2000 = { atoms: doc.atoms.size, buildAndFirstPaintMs: performance.now() - s0 };
+    const times: number[] = [];
+    renderer.renderScene(doc);
+    for (let i = 0; i < 40; i++) { renderer.view.ox += i % 2 ? 3 : -3; renderer.renderScene(doc); times.push(renderer.lastSceneMs); }
+    (report.stress2000 as Record<string, unknown>).panMedianMs = stat(times).med;
+  } catch (e) {
+    report.exception = String(e);
+    ok = false;
+  }
+  await invoke('selftest_report', { report: JSON.stringify(report, null, 2), ok });
+}
