@@ -60,6 +60,7 @@
       <button id="btn-structure" aria-haspopup="menu" aria-expanded="false" aria-controls="structure-menu">Structure</button>
       <div id="structure-menu" class="menu" role="menu" hidden>
         <button role="menuitem" data-cmd="clean-up">Clean Up Structure<kbd>Ctrl+Shift+K</kbd></button>
+        <button role="menuitem" data-cmd="check-structure">Check Structure (next warning)</button>
       </div>
     </div>
     <span class="sep"></span>
@@ -85,12 +86,18 @@
   <div id="canvas-host">
     <canvas id="scene"></canvas>
     <canvas id="overlay" tabindex="0"></canvas>
+    <div id="warn-tip" role="tooltip" hidden></div>
   </div>
 
   <aside>
     <section id="style-section" hidden>
       <h2>Style</h2>
       <div id="style-body"></div>
+    </section>
+    <section id="warnings-section">
+      <h2>Warnings <span id="warnings-count" class="count"></span>
+        <label class="check small" title="Red boxes around problems on the drawing (never printed, saved or copied)"><input id="show-warnings" type="checkbox" checked /> Show on drawing</label></h2>
+      <div id="warnings-body"><p class="muted">No problems found.</p></div>
     </section>
     <section>
       <h2>Analysis</h2>

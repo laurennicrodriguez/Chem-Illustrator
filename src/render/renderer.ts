@@ -9,7 +9,7 @@ import { Doc, Atom, Bond, Arrow, Caption, Shape, TextRun } from '../model';
 import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
-import { valenceExceeded } from '../chem/elements';
+import type { StructureChecks } from '../chem/warnings';
 import { GENERIC } from '../chem/labels';
 import { bracketPath, shaftOffset, type PathStep } from '../objects';
 import { formulaParts } from '../richtext';
@@ -28,7 +28,6 @@ interface AtomCache {
   layout: LabelLayout | null;
   /** Knock-out boxes in document coordinates, already grown by the margin. */
   boxes: Rect[];
-  warn: boolean;
 }
 
 interface BondCache {
@@ -76,6 +75,8 @@ export class Renderer {
   width = 0;
   height = 0;
   showWarnings = true;
+  /** The drawing's chemistry warnings, drawn as red boxes when `showWarnings` is on. */
+  checks: StructureChecks | null = null;
   /** Makes the paths bonds are collected in (pictures record them instead of drawing). */
   makePath: () => Path2D = () => new Path2D();
   /** Last scene paint time in ms (for the speed readout). */
@@ -135,6 +136,16 @@ export class Renderer {
 
   /** Drop cached layout and painted tiles near anything that changed since the last paint. */
   private invalidate(doc: Doc): void {
+    const warned = this.checks?.update();
+    if (warned?.length && this.showWarnings && !doc.allDirty) {
+      // warnings that came or went (including on atoms the edit itself didn't touch)
+      for (const id of warned) {
+        const a = doc.atoms.get(id);
+        if (!a) continue;
+        doc.dirtyRects.push({ x1: a.x, y1: a.y, x2: a.x, y2: a.y });
+        for (const n of doc.neighbors(id)) doc.dirtyRects.push({ x1: Math.min(a.x, n.x), y1: Math.min(a.y, n.y), x2: Math.max(a.x, n.x), y2: Math.max(a.y, n.y) });
+      }
+    }
     if (doc.allDirty || doc.dirtyRects.length > 20000) {
       this.atomCache.clear();
       this.bondCache.clear();
@@ -182,8 +193,8 @@ export class Renderer {
     let c = this.atomCache.get(a.id);
     if (c) return c;
     const deg = doc.degree(a.id);
-    const bos = doc.bondOrderSum(a.id);
-    const spec = labelSpec(a.z, a.label, a.charge, a.isotope, bos, deg, !a.hideCharge);
+    const bos = doc.valenceSum(a.id);
+    const spec = a.attach ? null : labelSpec(a.z, a.label, a.charge, a.isotope, bos, deg, !a.hideCharge);
     let layout: LabelLayout | null = null;
     const boxes: Rect[] = [];
     const k = a.s ?? 1;
@@ -195,8 +206,7 @@ export class Renderer {
       const m = doc.style.marginWidth * k;
       for (const b of layout.boxes) boxes.push({ x1: a.x + b.x1 - m, y1: a.y + b.y1 - m, x2: a.x + b.x2 + m, y2: a.y + b.y2 + m });
     }
-    const warn = !a.label && valenceExceeded(a.z, bos, a.charge);
-    c = { layout, boxes, warn };
+    c = { layout, boxes };
     this.atomCache.set(a.id, c);
     return c;
   }
@@ -470,6 +480,15 @@ export class Renderer {
 
     // Atom labels and warnings.
     const warns: Rect[] = [];
+    const checks = this.showWarnings ? this.checks : null;
+    if (checks) {
+      for (const b of bondSet) {
+        if (!checks.forBond(b)) continue;
+        const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
+        const m = 2;
+        warns.push({ x1: Math.min(p.x, q.x) - m, y1: Math.min(p.y, q.y) - m, x2: Math.max(p.x, q.x) + m, y2: Math.max(p.y, q.y) + m });
+      }
+    }
     let curFont = '';
     ctx.textBaseline = 'alphabetic';
     for (const a of atoms) {
@@ -484,7 +503,7 @@ export class Renderer {
       } else if (a.charge && a.z === 6 && !a.hideCharge) {
         this.drawCarbonCharge(ctx, doc, a);
       }
-      if (info.warn) warns.push(info.boxes[0] ?? { x1: a.x - 3, y1: a.y - 3, x2: a.x + 3, y2: a.y + 3 });
+      if (checks?.forAtom(a)) warns.push(this.warningBox(doc, a, info));
       if (a.stereoLabel) {
         const l = a.stereoLabel;
         const f = `${l.italic ? 'italic ' : ''}${l.size}px ${FONT_STACK}`;
@@ -529,13 +548,22 @@ export class Renderer {
       this.drawCaption(ctx, c, st.captionSize);
     }
 
-    if (this.showWarnings && warns.length) {
-      ctx.strokeStyle = '#e0141e';
+    if (warns.length) {
+      ctx.strokeStyle = WARN_COLOR;
       ctx.lineWidth = 0.5;
-      ctx.setLineDash([1, 1]);
-      for (const w of warns) ctx.strokeRect(w.x1 - 0.5, w.y1 - 0.5, w.x2 - w.x1 + 1, w.y2 - w.y1 + 1);
-      ctx.setLineDash([]);
+      for (const w of warns) ctx.strokeRect(w.x1, w.y1, w.x2 - w.x1, w.y2 - w.y1);
     }
+  }
+
+  /** The red box around an atom with a warning: around its whole label, or a small square on a bare carbon. */
+  warningBox(doc: Doc, a: Atom, info = this.atomInfo(doc, a)): Rect {
+    if (!info.boxes.length) {
+      const h = doc.style.labelSize * (a.s ?? 1) * 0.45;
+      return { x1: a.x - h, y1: a.y - h, x2: a.x + h, y2: a.y + h };
+    }
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for (const b of info.boxes) { x1 = Math.min(x1, b.x1); y1 = Math.min(y1, b.y1); x2 = Math.max(x2, b.x2); y2 = Math.max(y2, b.y2); }
+    return { x1, y1, x2, y2 };
   }
 
   private strokeBatch(ctx: CanvasRenderingContext2D, bb: BondBatch, k: number, lw: number, bw: number, color: string): void {
@@ -578,6 +606,9 @@ export class Renderer {
     const nrm = perp(dir);
     const gap = doubleBondGap(st);
     const line = (path: Path2D, a: Vec, c: Vec) => { path.moveTo(a.x, a.y); path.lineTo(c.x, c.y); };
+    // a point of attachment: a wavy line across the end of the bond
+    if (p.attach === 'Wavy') attachWave(thin, p, nrm, st.bondLength);
+    if (q.attach === 'Wavy') attachWave(thin, q, nrm, st.bondLength);
 
     if (b.order === 1 || b.order === 4) {
       switch (b.display) {
@@ -1033,3 +1064,26 @@ export function expandRuns(runs: TextRun[], defaultSize: number): Piece[] {
   }
   return out;
 }
+
+/** The wavy line marking a point of attachment, centred on `at` and running along `across`. */
+export function attachWave(path: Path2D, at: Vec, across: Vec, bondLength: number): void {
+  const half = bondLength * ATTACH_HALF;
+  const waves = 4;
+  const step = (2 * half) / waves;
+  const amp = bondLength * ATTACH_AMP;
+  const dir = { x: -across.y, y: across.x };
+  const s = { x: at.x - across.x * half, y: at.y - across.y * half };
+  path.moveTo(s.x, s.y);
+  for (let i = 0; i < waves; i++) {
+    const c = { x: s.x + across.x * step * (i + 1), y: s.y + across.y * step * (i + 1) };
+    const sgn = i % 2 ? -1 : 1;
+    const m = { x: s.x + across.x * step * (i + 0.5) + dir.x * amp * 2 * sgn, y: s.y + across.y * step * (i + 0.5) + dir.y * amp * 2 * sgn };
+    path.quadraticCurveTo(m.x, m.y, c.x, c.y);
+  }
+}
+
+const WARN_COLOR = '#e0141e';
+
+/** Half the length and the height of the attachment wave, as fractions of the bond length. */
+const ATTACH_HALF = 0.35;
+const ATTACH_AMP = 0.08;

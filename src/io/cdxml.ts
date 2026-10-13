@@ -132,12 +132,21 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     for (const n of kids(frag)) {
       if (n.nodeName !== 'n') continue;
       const type = n.getAttribute('NodeType');
-      if (type === 'ExternalConnectionPoint') continue;
       const [x, y] = pts(n.getAttribute('p'));
       if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
       const id = idFor(n);
+      if (type === 'ExternalConnectionPoint') {
+        // a point of attachment drawn on its own (the wavy line ending a substituent)
+        const a = doc.addAtom(x, y, 0, { id, attach: n.getAttribute('ExternalConnectionType') ?? 'Unspecified' });
+        from('a', a.id, n);
+        nodeIds.set(n.getAttribute('id') ?? '', id);
+        continue;
+      }
       const z = num(n, 'Element', 6);
       const extra: Partial<Atom> = { id, charge: num(n, 'Charge', 0), isotope: num(n, 'Isotope', 0) };
+      if (n.getAttribute('IgnoreWarnings') === 'yes') extra.ignoreWarnings = true;
+      const rad = n.getAttribute('Radical');
+      if (rad === 'Singlet' || rad === 'Doublet' || rad === 'Triplet') extra.radical = rad.toLowerCase() as Atom['radical'];
       const c = color(n);
       if (c) extra.color = c;
       if (chargeShown.has(n.getAttribute('id') ?? '')) extra.hideCharge = true;
@@ -216,6 +225,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         if (dpos === 'left') dpos = 'right'; else if (dpos === 'right') dpos = 'left';
       }
       const extra: Partial<Bond> = { id: idFor(b), dpos };
+      if (b.getAttribute('IgnoreWarnings') === 'yes') extra.ignoreWarnings = true;
       const lw = b.getAttribute('LineWidth');
       if (lw !== null) extra.s = Number(lw) / st.lineWidth;
       const c = color(b);
@@ -395,7 +405,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     // when the structure changes); anything else is kept exactly as written.
     for (const { atom, text, hShown } of pendingLabels) {
       const auto = hShown !== null && hShown >= 0 && isAutoLabel(atom.z, text, hShown);
-      const bos = doc.bondOrderSum(atom.id);
+      const bos = doc.valenceSum(atom.id);
       const implicitOk = auto && (!hasImplicitH(atom.z) || implicitHydrogens(atom.z, bos, atom.charge) === hShown);
       if (!implicitOk) {
         atom.label = text;

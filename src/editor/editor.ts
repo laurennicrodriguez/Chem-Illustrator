@@ -895,6 +895,36 @@ export class Editor {
     this.onChange();
   }
 
+  /** Select one atom or bond and bring it into view (from the list of warnings). */
+  reveal(kind: 'atom' | 'bond', id: number): void {
+    const doc = this.doc;
+    let p: Vec;
+    if (kind === 'atom') {
+      const a = doc.atoms.get(id);
+      if (!a) return;
+      p = a;
+    } else {
+      const b = doc.bonds.get(id);
+      if (!b) return;
+      const x = doc.atoms.get(b.a1)!, y = doc.atoms.get(b.a2)!;
+      p = { x: (x.x + y.x) / 2, y: (x.y + y.y) / 2 };
+    }
+    this.sel = emptySel();
+    this.addToSel({ kind, id });
+    const v = this.r.view;
+    const s = this.r.toScreen(p);
+    const m = 60;
+    // zoom in to at least 150% so the problem can be seen, and centre it if it's off screen
+    const zoom = v.scale < 2;
+    if (zoom) v.scale = 2;
+    if (zoom || s.x < m || s.y < m || s.x > this.r.width - m || s.y > this.r.height - m) {
+      v.ox = this.r.width / 2 - p.x * v.scale;
+      v.oy = this.r.height / 2 - p.y * v.scale;
+    }
+    this.requestScene();
+    this.onChange();
+  }
+
   clearSelection(): void {
     this.sel = emptySel();
     this.requestOverlay();
@@ -1291,7 +1321,7 @@ export class Editor {
       const heavy = toks.find((k) => k.text !== 'H');
       if (hTok && heavy) {
         const hz = elementNumber(heavy.text)!;
-        const bos = doc.bondOrderSum(id);
+        const bos = doc.valenceSum(id);
         const a = doc.atoms.get(id)!;
         if (hasImplicitH(hz) && implicitHydrogens(hz, bos, a.charge) === hTok.count) {
           doc.updateAtom(id, { label: null, z: hz, fileLabel: false });

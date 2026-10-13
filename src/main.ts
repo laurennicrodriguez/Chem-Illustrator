@@ -17,6 +17,7 @@ import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
 import { StylePanel } from './ui/style-panel';
 import { TEMPLATES, Template, templateById } from './chem/templates';
 import { templateIcon } from './ui/template-icons';
+import { StructureChecks } from './chem/warnings';
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -27,6 +28,8 @@ const overlay = $<HTMLCanvasElement>('#overlay');
 const renderer = new Renderer(scene, overlay);
 const editor = new Editor(doc, renderer, host);
 const chem = new ChemClient(document.baseURI);
+const checks = new StructureChecks(doc);
+renderer.checks = checks;
 const startMs = performance.now();
 
 // ---------------------------------------------------------------- layout
@@ -341,6 +344,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'rotate-ccw': () => editor.rotateBy(-90) || flash('Select something to rotate.'),
   'rotate-180': () => editor.rotateBy(180) || flash('Select something to rotate.'),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
+  'check-structure': () => checkStructure(),
   'clipboard-formats': async () => {
     const names = await clipboardFormats().catch((err) => [String(err)]);
     flash(names.length ? 'On the clipboard: ' + names.join(', ') : 'The clipboard is empty.', 15000);
@@ -555,6 +559,93 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 }
 
+// ---------------------------------------------------------------- chemistry warnings
+
+const warnBox = $<HTMLInputElement>('#show-warnings');
+warnBox.addEventListener('change', () => {
+  renderer.showWarnings = warnBox.checked;
+  renderer.repaintAll();
+  editor.requestScene();
+});
+const warnTip = $<HTMLDivElement>('#warn-tip');
+let warnKey = '';
+
+/** The Warnings panel and the tip shown when pointing at a problem. Runs after each paint. */
+function updateWarnings(): void {
+  // tip for the atom or bond under the pointer
+  const h = editor.hover;
+  let tip: string[] | undefined;
+  let at: { x: number; y: number } | null = null;
+  if (h?.kind === 'atom') {
+    const a = doc.atoms.get(h.id);
+    if (a) { tip = checks.forAtom(a); at = a; }
+  } else if (h?.kind === 'bond') {
+    const b = doc.bonds.get(h.id);
+    if (b) {
+      tip = checks.forBond(b);
+      const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
+      at = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
+    }
+  }
+  if (tip && at && renderer.showWarnings) {
+    const s = renderer.toScreen(at);
+    warnTip.textContent = tip.join(' ');
+    warnTip.hidden = false;
+    const w = warnTip.offsetWidth, ht = warnTip.offsetHeight;
+    warnTip.style.left = `${Math.max(4, Math.min(renderer.width - w - 4, s.x + 14))}px`;
+    warnTip.style.top = `${s.y + 16 + ht > renderer.height ? s.y - 16 - ht : s.y + 16}px`;
+  } else warnTip.hidden = true;
+
+  // the list, redone only when the warnings or the drawing changed
+  const key = checks.version + ':' + doc.version;
+  if (key === warnKey) return;
+  warnKey = key;
+  const list = checks.list();
+  const ignored = checks.ignoredCount();
+  $('#warnings-count').textContent = list.length ? String(list.length) : '';
+  const MAX = 100;
+  const rows = list.slice(0, MAX).map((w, i) =>
+    `<li><button class="w-text" data-i="${i}" title="Show it on the drawing">${escapeHtml(w.text.join(' '))}</button>` +
+    `<button class="w-ignore" data-i="${i}" title="Stop flagging this one (saved with the file)">Ignore</button></li>`).join('');
+  $('#warnings-body').innerHTML =
+    (list.length ? `<ul class="warn-list">${rows}</ul>${list.length > MAX ? `<p class="muted small">and ${list.length - MAX} more</p>` : ''}` : '<p class="muted">No problems found.</p>') +
+    (ignored ? `<p class="muted small">${ignored} ignored. <button id="w-unignore">Show them again</button></p>` : '');
+  const items = list.slice(0, MAX);
+  for (const b of document.querySelectorAll<HTMLButtonElement>('#warnings-body .w-text')) {
+    b.addEventListener('click', () => { const w = items[Number(b.dataset.i)]; editor.reveal(w.kind, w.id); });
+  }
+  for (const b of document.querySelectorAll<HTMLButtonElement>('#warnings-body .w-ignore')) {
+    b.addEventListener('click', () => {
+      const w = items[Number(b.dataset.i)];
+      doc.edit('Ignore warning', () => {
+        if (w.kind === 'atom') doc.updateAtom(w.id, { ignoreWarnings: true });
+        else doc.updateBond(w.id, { ignoreWarnings: true });
+      });
+      editor.changed();
+    });
+  }
+  $('#w-unignore')?.addEventListener('click', () => {
+    doc.edit('Show ignored warnings', () => {
+      for (const id of checks.atoms.keys()) if (doc.atoms.get(id)?.ignoreWarnings) doc.updateAtom(id, { ignoreWarnings: false });
+      for (const id of checks.bonds.keys()) if (doc.bonds.get(id)?.ignoreWarnings) doc.updateBond(id, { ignoreWarnings: false });
+    });
+    editor.changed();
+  });
+}
+
+/** Structure > Check Structure: go to the next problem after the one selected. */
+function checkStructure(): void {
+  const list = checks.list();
+  if (!list.length) {
+    flash(checks.ignoredCount() ? 'No problems found (apart from the ones you chose to ignore).' : 'No problems found.');
+    return;
+  }
+  const cur = list.findIndex((w) => (w.kind === 'atom' ? editor.sel.atoms : editor.sel.bonds).has(w.id));
+  const w = list[(cur + 1) % list.length];
+  editor.reveal(w.kind, w.id);
+  flash(`${(cur + 1) % list.length + 1} of ${list.length}: ${w.text.join(' ')}`);
+}
+
 // ---------------------------------------------------------------- speed panel
 
 const chemTimes: number[] = [];
@@ -589,7 +680,7 @@ function updatePanels(): void {
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 
-editor.onFrame = () => updatePanels();
+editor.onFrame = () => { updatePanels(); updateWarnings(); };
 editor.onChange = () => { scheduleAnalysis(); updatePanels(); file.updateTitle(); stylePanel.refresh(); };
 chem.onReady = () => {
   (window as any).__chemReadyMs = performance.now() - startMs;

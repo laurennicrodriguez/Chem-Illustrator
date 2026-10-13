@@ -389,6 +389,7 @@ class CdxmlWriter {
   }
 
   private buildNode(a: Atom): Element {
+    if (a.attach) return this.el('n', { id: a.id, p: pt(a), NodeType: 'ExternalConnectionPoint', ExternalConnectionType: a.attach === 'Unspecified' ? null : a.attach });
     const n = this.el('n', { id: a.id, p: pt(a) });
     this.nodeCore(n, a);
     this.nodeLabel(n, a, true);
@@ -399,6 +400,10 @@ class CdxmlWriter {
   private patchNode(n: Element, a: Atom, o: Atom): void {
     const dx = a.x - o.x, dy = a.y - o.y;
     n.setAttribute('p', pt(a));
+    if (a.attach) {
+      this.set(n, 'ExternalConnectionType', a.attach === 'Unspecified' ? null : a.attach);
+      return;
+    }
     for (const c of kids(n)) if (c.nodeName !== 't' && c.nodeName !== 'fragment') shift(c, dx, dy);
     n.removeAttribute('AS'); // stereo descriptor; ChemDraw works it out again
     this.nodeCore(n, a);
@@ -441,7 +446,7 @@ class CdxmlWriter {
   /** Text of an atom's label as ChemDraw stores it ("OH", "NH3+", "OMe"), and its hydrogen count. */
   private autoText(a: Atom): { text: string; hCount: number } {
     const doc = this.doc;
-    const spec = labelSpec(a.z, a.label, a.charge, a.isotope, doc.bondOrderSum(a.id), doc.degree(a.id), !a.hideCharge);
+    const spec = labelSpec(a.z, a.label, a.charge, a.isotope, doc.valenceSum(a.id), doc.degree(a.id), !a.hideCharge);
     if (!spec) return { text: '', hCount: 0 };
     const chargeText = !a.hideCharge && a.charge ? (Math.abs(a.charge) > 1 ? String(Math.abs(a.charge)) : '') + (a.charge > 0 ? '+' : '-') : '';
     if (a.label !== null) return { text: a.label + (chargeText && !/[+\-−]$/.test(a.label) ? chargeText : ''), hCount: 0 };
@@ -457,6 +462,8 @@ class CdxmlWriter {
     this.set(n, 'Isotope', a.isotope || null);
     this.set(n, 'color', this.colorAttr(a.color));
     this.set(n, 'LabelSize', a.s && a.s !== 1 ? f2(a.s * this.doc.style.labelSize) : null);
+    this.set(n, 'IgnoreWarnings', a.ignoreWarnings ? 'yes' : null);
+    this.set(n, 'Radical', a.radical ? a.radical[0].toUpperCase() + a.radical.slice(1) : null);
   }
 
   /** The node's label text and what it stands for (element + H count, abbreviation, R group). */
@@ -467,7 +474,7 @@ class CdxmlWriter {
     const keepBits = Number(oldS?.getAttribute('face') ?? 0) & 7;
     for (const c of kids(n)) if (c.nodeName === 't' || (rebuildInner && c.nodeName === 'fragment')) n.removeChild(c);
     if (rebuildInner) for (const k of ['NodeType', 'GenericNickname', 'Warning', 'NumHydrogens', 'NeedsClean']) n.removeAttribute(k);
-    if (!labelSpec(a.z, a.label, a.charge, a.isotope, this.doc.bondOrderSum(a.id), this.doc.degree(a.id), !a.hideCharge)) return;
+    if (!labelSpec(a.z, a.label, a.charge, a.isotope, this.doc.valenceSum(a.id), this.doc.degree(a.id), !a.hideCharge)) return;
     const { text, hCount } = this.autoText(a);
     if (a.label === null) n.setAttribute('NumHydrogens', String(hCount));
     else if (rebuildInner) this.labelChemistry(n, a);
@@ -548,7 +555,7 @@ class CdxmlWriter {
   /** Position, box and justification of an atom label, from the same layout used on screen. */
   private placeLabel(t: Element, a: Atom): void {
     const doc = this.doc;
-    const spec = labelSpec(a.z, a.label, a.charge, a.isotope, doc.bondOrderSum(a.id), doc.degree(a.id), !a.hideCharge);
+    const spec = labelSpec(a.z, a.label, a.charge, a.isotope, doc.valenceSum(a.id), doc.degree(a.id), !a.hideCharge);
     if (!spec) return;
     if (a.supDigits) spec.supDigits = true;
     const dirs = doc.neighbors(a.id).map((nb) => norm(sub(nb, a)));
@@ -596,6 +603,7 @@ class CdxmlWriter {
     this.set(e, 'DoublePosition', dp);
     this.set(e, 'color', this.colorAttr(b.color));
     this.set(e, 'LineWidth', b.s && b.s !== 1 ? f2(b.s * this.doc.style.lineWidth) : null);
+    this.set(e, 'IgnoreWarnings', b.ignoreWarnings ? 'yes' : null);
     e.removeAttribute('BS');
     e.removeAttribute('BondCircularOrdering');
   }

@@ -253,6 +253,31 @@ aside td { padding: 2px 0; font-variant-numeric: tabular-nums; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
 .warn { color: var(--warn); }
+
+/* chemistry warnings: the panel list and the hover tip */
+aside h2 .count { display: inline-block; min-width: 16px; padding: 0 5px; margin-left: 2px; border-radius: 8px; background: #e0141e; color: #fff; text-align: center; letter-spacing: 0; }
+aside h2 .count:empty { display: none; }
+aside h2 label.check { float: right; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.warn-list { list-style: none; margin: 0; padding: 0; }
+.warn-list li { display: grid; grid-template-columns: 1fr auto; gap: 2px 6px; align-items: start; padding: 4px 0; }
+.warn-list li + li { border-top: 1px dashed var(--line); }
+.warn-list .w-text { text-align: left; background: none; border: 0; padding: 0; color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.warn-list .w-text:hover { color: var(--accent); }
+.warn-list .w-ignore { font-size: 11px; padding: 0 6px; }
+#warn-tip {
+  position: absolute;
+  z-index: 6;
+  max-width: 280px;
+  padding: 4px 8px;
+  border: 1px solid #e0141e;
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+  pointer-events: none;
+  box-shadow: var(--page-shadow);
+}
 .ok { color: var(--ok); font-weight: 600; }
 .slow { color: var(--slow); font-weight: 600; }
 

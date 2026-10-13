@@ -3,7 +3,7 @@
 // formula, mass and stereo come out right; "R"-type labels become dummy atoms.
 
 import { Doc, Atom } from '../model';
-import { SYMBOLS, elementNumber } from './elements';
+import { SYMBOLS, elementNumber, valenceOfBonds } from './elements';
 import { labelGraph, MiniGraph } from './labels';
 
 export interface MolExport {
@@ -14,7 +14,7 @@ export interface MolExport {
   unknownLabels: string[];
 }
 
-interface MAtom { sym: string; x: number; y: number; charge: number; iso: number }
+interface MAtom { sym: string; x: number; y: number; charge: number; iso: number; rad?: number }
 interface MBond { a: number; b: number; order: number; stereo: number }
 
 const f = (v: number, w: number, d = 4) => v.toFixed(d).padStart(w);
@@ -35,12 +35,13 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = ''): MolEx
     const x = a.x / L, y = -a.y / L;
     let g: MiniGraph | null = null;
     if (a.label) {
-      g = labelGraph(a.label);
+      g = labelGraph(a.label, valenceOfBonds((doc.adj.get(id) ?? []).map((bid) => doc.bonds.get(bid)!.order)));
       if (!g) unknown.push(a.label);
     }
     if (!g || g.atoms.length === 0) {
       attach.set(id, atoms.length);
-      atoms.push({ sym: a.label && !g ? '*' : SYMBOLS[a.z] || '*', x, y, charge: a.charge, iso: a.isotope });
+      const rad = a.radical === 'singlet' ? 1 : a.radical === 'doublet' ? 2 : a.radical === 'triplet' ? 3 : 0;
+      atoms.push({ sym: a.label && !g ? '*' : SYMBOLS[a.z] || '*', x, y, charge: a.charge, iso: a.isotope, rad });
       map.push(id);
       continue;
     }
@@ -50,7 +51,7 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = ''): MolEx
       // spread expanded atoms a little so no two share a position
       const ang = (k * 2.4);
       const r = k === 0 ? 0 : 0.35 + 0.05 * k;
-      atoms.push({ sym: ga.dummy ? '*' : SYMBOLS[ga.z] || '*', x: x + r * Math.cos(ang), y: y + r * Math.sin(ang), charge: ga.charge + (k === 0 ? a.charge : 0), iso: 0 });
+      atoms.push({ sym: ga.dummy ? '*' : SYMBOLS[ga.z] || '*', x: x + r * Math.cos(ang), y: y + r * Math.sin(ang), charge: ga.charge + (k === 0 ? a.charge : 0), iso: ga.iso ?? 0 });
       map.push(k === 0 ? id : -1);
     });
     for (const gb of g.bonds) bonds.push({ a: base + gb.a, b: base + gb.b, order: gb.order === 1.5 ? 4 : gb.order, stereo: 0 });
@@ -83,6 +84,11 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = ''): MolEx
   for (let k = 0; k < iso.length; k += 8) {
     const part = iso.slice(k, k + 8);
     lines.push(`M  ISO${i3(part.length)}` + part.map(([i, m]) => ` ${i3(i + 1)} ${i3(m)}`).join(''));
+  }
+  const rad = atoms.map((a, i) => [i, a.rad ?? 0] as const).filter(([, r]) => r > 0);
+  for (let k = 0; k < rad.length; k += 8) {
+    const part = rad.slice(k, k + 8);
+    lines.push(`M  RAD${i3(part.length)}` + part.map(([i, r]) => ` ${i3(i + 1)} ${i3(r)}`).join(''));
   }
   lines.push('M  END');
   return { molblock: lines.join('\n') + '\n', map, unknownLabels: unknown };

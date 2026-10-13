@@ -1,7 +1,7 @@
 // Atom labels: reading label text ("OMe", "CO2Et", "NHBoc"), choosing which way it runs
 // (OH vs HO, CH3 vs H3C), and turning it into atoms for the chemistry engine.
 
-import { SYMBOLS, elementNumber, hasImplicitH, implicitHydrogens } from './elements';
+import { SYMBOLS, elementNumber, hasImplicitH, implicitHydrogens, maxValence, valenceOfBonds } from './elements';
 
 /**
  * Abbreviations, each written as SMILES whose first atom is the one bonded to the structure.
@@ -22,6 +22,8 @@ export const NICKNAMES: Record<string, string> = {
   CO2H: 'C(=O)O', COOH: 'C(=O)O', CO2Me: 'C(=O)OC', CO2Et: 'C(=O)OCC', CO2tBu: 'C(=O)OC(C)(C)C', CO2Bn: 'C(=O)OCc1ccccc1',
   CO2R: 'C(=O)O*', CHO: 'C=O', COMe: 'C(C)=O', OAc: 'OC(C)=O', OTf: 'OS(=O)(=O)C(F)(F)F', SO2Ph: 'S(=O)(=O)c1ccccc1',
   SO2Me: 'S(=O)(=O)C', Bpin: 'B1OC(C)(C)C(C)(C)O1', BPin: 'B1OC(C)(C)C(C)(C)O1', Cp: 'C1C=CC=C1',
+  // solvents and ligands, bonded through the atom a metal would hold
+  THF: 'O1CCCC1', DMF: 'O=CN(C)C', DMSO: 'O=S(C)C',
 };
 
 /** Labels that stand for "any group" and are left out of formula and mass. */
@@ -88,7 +90,8 @@ export function tokenize(label: string): Token[] {
       if (prev && /\d/.test(label[i]) && (prev.kind !== 'other' || /^[)\]]$/.test(prev.text))) {
         let j = i;
         while (j < label.length && /\d/.test(label[j])) j++;
-        if (/[+\-−]/.test(label[j] ?? '') && (j + 1 === label.length)) {
+        if (/[+\-−]/.test(label[j] ?? '') && (j + 1 === label.length) && out.length === 1 && prev.kind === 'el' && i === prev.text.length) {
+          // a lone element: Fe3+ is iron(III); otherwise digits count atoms, as in NH3+ and SO3−
           prev.charge = label.slice(i, j + 1);
           i = j + 1;
           continue;
@@ -274,7 +277,16 @@ export function layoutLabel(spec: LabelSpec, bondDirs: { x: number; y: number }[
 
 // ------------------------------------------------------------------ chemistry of labels
 
-export interface MiniAtom { z: number; charge: number; aromatic: boolean; dummy: boolean; hCount?: number }
+export interface MiniAtom {
+  z: number;
+  charge: number;
+  aromatic: boolean;
+  dummy: boolean;
+  /** Hydrogens written in the label (NH2 → 2); undefined = worked out by the chemistry engine. */
+  hCount?: number;
+  /** Mass number (2 for D, 3 for T); 0 or undefined = natural. */
+  iso?: number;
+}
 export interface MiniBond { a: number; b: number; order: number }
 export interface MiniGraph { atoms: MiniAtom[]; bonds: MiniBond[] }
 
@@ -383,43 +395,339 @@ function nickGraph(name: string): MiniGraph {
   return g;
 }
 
+/** An atom of a label with too many bonds: its index in the label's graph, and the counts. */
+export interface OverValent { atom: number; z: number; used: number; max: number; h: number }
+
+/** A label read as a list: tokens, and bracketed groups with how many times they repeat. */
+type Item = { tok: Token } | GroupItem;
+interface GroupItem { group: Item[]; count: number; charge: string }
+
+const isH = (it: Item) => 'tok' in it && it.tok.kind === 'el' && it.tok.text === 'H';
+
+function groupItems(toks: Token[]): Item[] | null {
+  const root: Item[] = [];
+  const stack: { items: Item[]; g?: GroupItem }[] = [{ items: root }];
+  for (const t of toks) {
+    if (t.kind === 'other' && t.text === '(') {
+      const g: GroupItem = { group: [], count: 1, charge: '' };
+      stack[stack.length - 1].items.push(g);
+      stack.push({ items: g.group, g });
+    } else if (t.kind === 'other' && t.text === ')') {
+      const top = stack.pop()!;
+      if (!top.g || !top.g.group.length) return null;
+      top.g.count = t.explicit ? t.count : 1;
+      top.g.charge = t.charge;
+    } else if (t.kind === 'other') return null;
+    else stack[stack.length - 1].items.push({ tok: t });
+  }
+  return stack.length === 1 && root.length ? root : null;
+}
+
+/** True if a label's brackets ( ) [ ] { } don't pair up. */
+export function bracketsUnbalanced(label: string): boolean {
+  const open: string[] = [];
+  const pair: Record<string, string> = { ')': '(', ']': '[', '}': '{' };
+  for (const c of label) {
+    if (c === '(' || c === '[' || c === '{') open.push(c);
+    else if (pair[c] && open.pop() !== pair[c]) return true;
+  }
+  return open.length > 0;
+}
+
+const signedCharge = (text: string) => {
+  const n = Number(text.replace(/[^0-9]/g, '') || '1');
+  return /[-−]/.test(text) ? -n : n;
+};
+
+/** Builds the atoms of a label, reading it the way a chemist writes a condensed formula. */
+class LabelBuilder {
+  g: MiniGraph = { atoms: [], bonds: [] };
+  /** The atom the next part of the label bonds to. */
+  backbone = -1;
+  private pendingH = 0;
+  /** Atoms inside abbreviations: their bonds are complete. */
+  private body = new Set<number>();
+  /** First atom of each abbreviation or R group (they bond once to the rest). */
+  private heads = new Set<number>();
+
+  constructor(private ext: number) {}
+
+  private add(z: number, extra: Partial<MiniAtom> = {}): number {
+    const i = this.g.atoms.length;
+    this.g.atoms.push({ z, charge: 0, aromatic: false, dummy: false, ...extra });
+    if (this.pendingH && !extra.dummy) { this.g.atoms[i].hCount = this.pendingH; this.pendingH = 0; }
+    return i;
+  }
+
+  private bond(a: number, b: number, order = 1): void {
+    if (a >= 0 && b >= 0) this.g.bonds.push({ a, b, order });
+  }
+
+  private addSub(sub: MiniGraph): number {
+    const off = this.g.atoms.length;
+    this.g.atoms.push(...sub.atoms.map((a) => ({ ...a })));
+    this.g.bonds.push(...sub.bonds.map((b) => ({ a: b.a + off, b: b.b + off, order: b.order })));
+    for (let i = off + 1; i < this.g.atoms.length; i++) this.body.add(i);
+    this.heads.add(off);
+    return off;
+  }
+
+  /** Bonds an atom makes, counting written hydrogens and, for the first atom, the structure's bonds. */
+  used(i: number): number {
+    const orders: number[] = [];
+    for (const b of this.g.bonds) if (b.a === i || b.b === i) orders.push(b.order);
+    return valenceOfBonds(orders, this.g.atoms[i].z) + (this.g.atoms[i].hCount ?? 0) + (i === 0 ? this.ext : 0);
+  }
+
+  /** Free valence left on an atom (abbreviations have none, except one bond on their first atom). */
+  open(i: number): number {
+    if (this.body.has(i)) return 0;
+    const a = this.g.atoms[i];
+    if (this.heads.has(i) || a.dummy) {
+      let extra = i === 0 ? this.ext : 0;
+      for (const b of this.g.bonds) {
+        const o = b.a === i ? b.b : b.b === i ? b.a : -1;
+        if (o >= 0 && !this.body.has(o)) extra++;
+      }
+      return Math.max(0, 1 - extra);
+    }
+    const max = maxValence(a.z, a.charge);
+    return max === undefined ? 1 : Math.max(0, max - this.used(i));
+  }
+
+  /** Atoms with more bonds than their element allows (counting written hydrogens). */
+  overValent(charge0 = 0): OverValent[] {
+    const out: OverValent[] = [];
+    this.g.atoms.forEach((a, i) => {
+      if (a.dummy || this.body.has(i)) return;
+      const max = maxValence(a.z, a.charge + (i === 0 ? charge0 : 0));
+      const used = this.used(i);
+      if (max !== undefined && used > max) out.push({ atom: i, z: a.z, used, max, h: a.hCount ?? 0 });
+    });
+    return out;
+  }
+
+  private setCharge(i: number, text: string): void {
+    if (i >= 0 && text) this.g.atoms[i].charge = signedCharge(text);
+  }
+
+  seq(items: Item[]): void {
+    let run: number[] = [];
+    items.forEach((it, k) => {
+      const more = k < items.length - 1;
+      if ('group' in it) { this.group(it); run = []; return; }
+      const t = it.tok;
+      if (t.kind === 'el' && t.text === 'H') {
+        if (this.backbone < 0) { this.pendingH += t.count; return; }
+        if (run.length > 1) {
+          // C2H5: share the hydrogens out along the chain, ends first
+          let left = t.count;
+          for (let r = run.length - 1; r >= 0 && left > 0; r--) {
+            const room = Math.max(0, (maxValence(this.g.atoms[run[r]].z) ?? 4) - this.used(run[r]) - (r === run.length - 1 && more ? 1 : 0));
+            const h = Math.min(room, left);
+            this.g.atoms[run[r]].hCount = (this.g.atoms[run[r]].hCount ?? 0) + h;
+            left -= h;
+          }
+          if (left) this.g.atoms[this.backbone].hCount = (this.g.atoms[this.backbone].hCount ?? 0) + left;
+        } else {
+          const a = this.g.atoms[this.backbone];
+          a.hCount = (a.hCount ?? 0) + t.count;
+        }
+        this.setCharge(this.backbone, t.charge);
+        run = [];
+        return;
+      }
+      run = [];
+      let n = Math.max(1, t.count);
+      const prev = items[k - 1];
+      if (t.kind === 'generic' && /^R\d$/.test(t.text) && prev && 'tok' in prev && prev.tok.kind === 'el') {
+        // NR2, SiR3: R groups counted, not the R2 of a numbered set (which stands alone)
+        n = Number(t.text[1]);
+      }
+      if (t.kind === 'nick' || t.kind === 'generic') {
+        let head = -1;
+        for (let r = 0; r < n; r++) {
+          head = t.kind === 'nick' ? this.addSub(nickGraph(t.text)) : this.add(0, { dummy: true });
+          if (t.kind === 'generic') this.heads.add(head);
+          // abbreviations end a branch, so what follows bonds to the same atom (NMeBn, PPh2Cl)
+          if (this.backbone >= 0) this.bond(this.backbone, head);
+          else this.backbone = head;
+        }
+        this.setCharge(head, t.charge);
+        return;
+      }
+      const z = t.text === 'D' || t.text === 'T' ? 1 : elementNumber(t.text) ?? 0;
+      const iso = t.text === 'D' ? 2 : t.text === 'T' ? 3 : undefined;
+      const extra: Partial<MiniAtom> = iso ? { iso } : {};
+      const b = this.backbone;
+      let last = -1;
+      if ((z === 8 || z === 16) && b >= 0 && !this.heads.has(b) && !this.g.atoms[b].dummy && this.g.atoms[b].z !== 1) {
+        // C=O and S(=O)2 written as CO, SO2: as many double-bonded O as the atom has room for,
+        // keeping one bond free when more of the label follows (CONH2, SO3H, CO2Me)
+        const room = (maxValence(this.g.atoms[b].z, this.g.atoms[b].charge) ?? 4) - this.used(b);
+        const oxo = Math.max(0, Math.min(n, Math.floor((room - (more ? 1 : 0)) / 2)));
+        for (let r = 0; r < oxo; r++) { last = this.add(z, { ...extra }); this.bond(b, last, 2); }
+        for (let r = oxo; r < n; r++) { last = this.add(z, { ...extra }); this.bond(this.backbone, last); this.backbone = last; }
+      } else if ((maxValence(z) ?? 2) <= 1 && n > 1) {
+        // CF3, CCl3, CD3: each on the atom before (D5 on its own: just the atoms)
+        for (let r = 0; r < n; r++) {
+          last = this.add(z, { ...extra });
+          if (b >= 0) this.bond(b, last);
+          else if (r === 0) this.backbone = last;
+        }
+      } else {
+        for (let r = 0; r < n; r++) {
+          last = this.add(z, { ...extra });
+          this.bond(this.backbone, last);
+          this.backbone = last;
+          run.push(last);
+        }
+      }
+      this.setCharge(last, t.charge);
+    });
+  }
+
+  private group(it: GroupItem): void {
+    const sub = new LabelBuilder(0);
+    sub.seq(it.group);
+    const n = sub.g.atoms.length;
+    if (!n) return;
+    let open = 0, tail = 0;
+    for (let i = 0; i < n; i++) { const o = sub.open(i); open += o; if (o > 0) tail = i; }
+    // (CH2)3 and (CH2CH2O)n are links in a chain; (OH)2, (CH3)2 and (Ph)3 hang off the atom before
+    const chain = open >= 2 || this.backbone < 0;
+    for (let r = 0; r < it.count; r++) {
+      const off = this.g.atoms.length;
+      this.g.atoms.push(...sub.g.atoms.map((a) => ({ ...a })));
+      this.g.bonds.push(...sub.g.bonds.map((b) => ({ a: b.a + off, b: b.b + off, order: b.order })));
+      for (const i of sub.body) this.body.add(i + off);
+      for (const i of sub.heads) this.heads.add(i + off);
+      if (this.backbone >= 0) this.bond(this.backbone, off);
+      if (chain) this.backbone = off + tail;
+    }
+    this.setCharge(this.backbone, it.charge);
+  }
+
+  finish(): MiniGraph | null {
+    if (!this.g.atoms.length && this.pendingH) {
+      // "H" (or "H2") on its own is a hydrogen atom
+      this.pendingH = 0;
+      this.add(1);
+    }
+    return this.g.atoms.length ? this.g : null;
+  }
+}
+
+/** A terminal piece of a label: an abbreviation, R group or one-bond element (F, Cl). */
+function terminal(it: Item): boolean {
+  if (!('tok' in it)) {
+    // (HO)2B, (MeO)3Si: groups that hang off the atom after them
+    const b = new LabelBuilder(0);
+    b.seq(it.group);
+    let open = 0;
+    for (let i = 0; i < b.g.atoms.length; i++) open += b.open(i);
+    return open <= 1;
+  }
+  const t = it.tok;
+  if (t.kind === 'nick' || t.kind === 'generic') return true;
+  return t.kind === 'el' && t.text !== 'H' && (maxValence(elementNumber(t.text) ?? 0) ?? 2) <= 1;
+}
+
+const itemText = (it: Item): string => 'tok' in it
+  ? it.tok.text + (it.tok.count > 1 || it.tok.explicit ? it.tok.count : '') + it.tok.charge
+  : '(' + it.group.map(itemText).join('') + ')' + (it.count > 1 ? it.count : '') + it.charge;
+
+/**
+ * A label written backwards, as on the left of a structure (MeO, BocHN, F3C, O2N, HO2C):
+ * the items in bonding order, or null if it reads forwards. Hydrogens written before an
+ * atom (the H of BocHN) belong to that atom.
+ */
+function reversedItems(items: Item[]): Item[] | null {
+  const units: Item[][] = [];
+  let hs: Item[] = [];
+  for (const it of items) {
+    if (isH(it)) { hs.push(it); continue; }
+    units.push([it, ...hs]);
+    hs = [];
+  }
+  if (hs.length || units.length < 2) return null;
+  const rev = units.reverse().flat();
+  const text = rev.map(itemText).join('');
+  if (NICKNAMES[text] || terminal(units[units.length - 1][0])) return rev;
+  return null;
+}
+
+const graphCache = new Map<string, { g: MiniGraph | null; over: OverValent[] }>();
+
+/** An element list such as [Cl, Br, I] (or [Rh]): any one of these, left out of the formula. */
+export function isElementList(label: string): boolean {
+  const m = /^\[(.*)\]$/.exec(label.trim());
+  return !!m && m[1].split(/\s*,\s*/).every((x) => elementNumber(x) !== undefined);
+}
+
+const ALKALI = new Set(['Li', 'Na', 'K', 'Rb', 'Cs']);
+
+function buildLabel(label: string, ext: number, charge = 0): { g: MiniGraph | null; over: OverValent[] } {
+  const key = ext + '|' + charge + '|' + label;
+  let r = graphCache.get(key);
+  if (r) return r;
+  r = { g: null, over: [] };
+  let items: Item[] | null = null;
+  let nick: string | null = NICKNAMES[label] ? label : null;
+  if (!nick && (GENERIC.has(label) || isElementList(label))) r.g = { atoms: [{ z: 0, charge: 0, aromatic: false, dummy: true }], bonds: [] };
+  else if (!nick && ext === 0 && (items = groupItems(tokenize(label))) && items.length > 1 && 'tok' in items[0] && ALKALI.has(items[0].tok.text) && items[0].tok.count <= 1 && !items[0].tok.charge && !items.slice(1).every(isH)) {
+    // a salt written as one label (NaBH4, KOtBu, LiAlH4): the metal cation and the anion, not bonded
+    const cation = new LabelBuilder(0);
+    cation.seq([items[0]]);
+    const anion = new LabelBuilder(0);
+    anion.seq(items.slice(1));
+    const ga = anion.finish();
+    if (ga) {
+      cation.g.atoms[0].charge = 1;
+      if (!items.slice(1).some((it) => ('tok' in it ? it.tok.charge : it.charge))) ga.atoms[0].charge -= 1;
+      const off = cation.g.atoms.length;
+      r.g = { atoms: [...cation.g.atoms, ...ga.atoms], bonds: ga.bonds.map((b) => ({ ...b, a: b.a + off, b: b.b + off })) };
+      r.over = anion.overValent().map((o) => ({ ...o, atom: o.atom + off }));
+    }
+    items = null;
+  } else if (!nick) {
+    items = groupItems(tokenize(label));
+    const rev = items && ext > 0 ? reversedItems(items) : null;
+    if (rev) {
+      const t = rev.map(itemText).join('');
+      if (NICKNAMES[t]) nick = t;
+      else items = rev;
+    }
+  }
+  // an abbreviation is read as one token, so a second bond to it shows up as too many bonds
+  if (nick) items = [{ tok: { kind: 'nick', text: nick, count: 1, charge: '' } }];
+  if (items) {
+    const b = new LabelBuilder(ext);
+    b.seq(items);
+    r.g = b.finish();
+    if (r.g) r.over = b.overValent(charge);
+  }
+  if (graphCache.size > 2000) graphCache.clear();
+  graphCache.set(key, r);
+  return r;
+}
+
 /**
  * Atoms and bonds that a text label stands for, with index 0 bonded to the structure.
- * Whole-label abbreviations (CO2Me, NO2) are looked up first; otherwise tokens are joined
- * in a chain (OMe → O–CH3, NHBoc → N–Boc, CH2OH → C–O); "H" tokens become implicit H.
+ * Whole-label abbreviations (CO2Me, NO2) are looked up first; otherwise the label is read as
+ * a condensed formula: OMe → O–CH3, NHBoc → N–Boc, CH2OH → C–O, CONH2 → C(=O)–N,
+ * B(OH)2 → B with two OH, (CH2)3OH → a three-carbon chain, MeO and F3C read from the right.
+ * `ext` is how many bonds the label makes to the structure. Null if it can't be read.
  */
-export function labelGraph(label: string): MiniGraph | null {
-  if (NICKNAMES[label]) return nickGraph(label);
-  if (GENERIC.has(label)) return { atoms: [{ z: 0, charge: 0, aromatic: false, dummy: true }], bonds: [] };
-  const toks = tokenize(label);
-  if (toks.some((t) => t.kind === 'other')) return null;
-  const g: MiniGraph = { atoms: [], bonds: [] };
-  let backbone = -1;
-  const append = (sub: MiniGraph) => {
-    const off = g.atoms.length;
-    g.atoms.push(...sub.atoms.map((a) => ({ ...a })));
-    g.bonds.push(...sub.bonds.map((b) => ({ a: b.a + off, b: b.b + off, order: b.order })));
-    if (backbone >= 0) g.bonds.push({ a: backbone, b: off, order: 1 });
-    return off;
-  };
-  for (const t of toks) {
-    if (t.kind === 'el' && t.text === 'H') continue; // implicit hydrogens
-    const reps = Math.max(1, t.count);
-    let last = backbone;
-    const anchor = backbone;
-    for (let k = 0; k < reps; k++) {
-      let sub: MiniGraph;
-      if (t.kind === 'nick') sub = nickGraph(t.text);
-      else if (t.kind === 'generic') sub = { atoms: [{ z: 0, charge: 0, aromatic: false, dummy: true }], bonds: [] };
-      else sub = { atoms: [{ z: elementNumber(t.text) ?? 0, charge: 0, aromatic: false, dummy: false }], bonds: [] };
-      backbone = anchor;
-      last = append(sub);
-    }
-    if (t.charge) {
-      const n = Number(t.charge.replace(/[^0-9]/g, '') || '1');
-      g.atoms[last].charge = /[-−]/.test(t.charge) ? -n : n;
-    }
-    backbone = last;
-  }
-  return g.atoms.length ? g : null;
+export function labelGraph(label: string, ext = 1): MiniGraph | null {
+  return buildLabel(label, ext).g;
+}
+
+/**
+ * Atoms of a label with more bonds than their element allows, counting the hydrogens written in
+ * the label and the `ext` bonds to the structure. `charge` is the atom's own charge (a node's
+ * charge that is not written in the label text).
+ */
+export function labelOverValent(label: string, ext = 1, charge = 0): OverValent[] {
+  return buildLabel(label, ext, charge).over;
 }

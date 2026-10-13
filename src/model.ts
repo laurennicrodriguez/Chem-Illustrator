@@ -32,6 +32,20 @@ export interface Atom {
   supDigits?: boolean;
   /** A stereo label kept with the drawing, such as ChemDraw's "(S)", placed relative to the atom. */
   stereoLabel?: StereoLabel;
+  /** The person chose to ignore this atom's chemistry warnings (ChemDraw's IgnoreWarnings). */
+  ignoreWarnings?: boolean;
+  /** Unpaired electrons: a doublet radical uses one bond's worth of valence, a carbene two. */
+  radical?: 'singlet' | 'doublet' | 'triplet';
+  /**
+   * A point of attachment, where this structure joins something not drawn: no atom, just the
+   * end of the bond, marked with a wavy line ('Wavy', ChemDraw's ExternalConnectionType).
+   */
+  attach?: string;
+}
+
+/** Valence an atom's radical takes up (no hydrogens fill it). */
+export function radicalElectrons(a: Atom): number {
+  return a.radical === 'doublet' ? 1 : a.radical ? 2 : 0;
 }
 
 export interface StereoLabel {
@@ -54,6 +68,8 @@ export interface Bond {
   color?: string;
   /** Line widths relative to the document style. */
   s?: number;
+  /** The person chose to ignore this bond's chemistry warnings. */
+  ignoreWarnings?: boolean;
 }
 
 export interface TextRun {
@@ -151,6 +167,12 @@ export interface CdxmlSource {
   maxId: number;
 }
 
+/**
+ * Atoms changed since a watcher last looked (for work kept per atom outside the renderer, such
+ * as the chemistry warnings). `all` means start again from scratch.
+ */
+export interface AtomWatch { ids: Set<number>; all: boolean }
+
 interface UndoEntry {
   label: string;
   before: Map<string, Entity | null>;
@@ -192,6 +214,7 @@ export class Doc {
   dirtyCaptions: Caption[] = [];
 
   private nextId = 1;
+  private watches: AtomWatch[] = [];
   private grid = new Map<number, number[]>();
   private atomCell = new Map<number, number>();
   private maxBondLen = 0;
@@ -200,6 +223,17 @@ export class Doc {
   private tx: UndoEntry | null = null;
   private undoStack: UndoEntry[] = [];
   private redoStack: UndoEntry[] = [];
+
+  /** Start collecting the ids of atoms that change (an atom's bonds changing counts too). */
+  watchAtoms(): AtomWatch {
+    const w: AtomWatch = { ids: new Set(), all: true };
+    this.watches.push(w);
+    return w;
+  }
+
+  private noteAtom(id: number): void {
+    for (const w of this.watches) if (!w.all) w.ids.add(id);
+  }
 
   newId(): number {
     return this.nextId++;
@@ -326,6 +360,7 @@ export class Doc {
     }
     if (kind === 'a') {
       this.dirtyAtoms.add(id);
+      this.noteAtom(id);
       if (e) {
         this.atoms.set(id, e as Atom);
         if (!this.adj.has(id)) this.adj.set(id, []);
@@ -343,11 +378,15 @@ export class Doc {
         this.detach(old.a2, id);
         this.dirtyAtoms.add(old.a1);
         this.dirtyAtoms.add(old.a2);
+        this.noteAtom(old.a1);
+        this.noteAtom(old.a2);
       }
       if (e) {
         const b = e as Bond;
         this.dirtyAtoms.add(b.a1);
         this.dirtyAtoms.add(b.a2);
+        this.noteAtom(b.a1);
+        this.noteAtom(b.a2);
         this.bonds.set(id, b);
         this.attach(b.a1, id);
         this.attach(b.a2, id);
@@ -602,6 +641,7 @@ export class Doc {
     this.undoStack.length = 0;
     this.redoStack.length = 0;
     this.allDirty = true;
+    for (const w of this.watches) { w.all = true; w.ids.clear(); }
     this.version++;
   }
 
@@ -636,6 +676,12 @@ export class Doc {
 
   degree(atomId: number): number {
     return this.adj.get(atomId)?.length ?? 0;
+  }
+
+  /** Bond orders plus any radical electrons: what an atom's hydrogens are worked out from. */
+  valenceSum(atomId: number): number {
+    const a = this.atoms.get(atomId);
+    return this.bondOrderSum(atomId) + (a ? radicalElectrons(a) : 0);
   }
 
   bondOrderSum(atomId: number): number {
