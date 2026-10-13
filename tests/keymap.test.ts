@@ -199,8 +199,14 @@ describe('the settings file', () => {
     expect(parseSettings(JSON.stringify({ hotkeys: [1, 2] })).hotkeys).toEqual({});
   });
 
+  it('keeps the developer tools hidden unless they were switched on', () => {
+    expect(DEFAULT_SETTINGS.devTools).toBe(false);
+    expect(parseSettings(JSON.stringify({ devTools: true })).devTools).toBe(true);
+    expect(parseSettings(JSON.stringify({ devTools: 'yes' })).devTools).toBe(false);
+  });
+
   it('reads back what it writes', () => {
-    const s = { hotkeys: { command: { 'Ctrl+M': 'command zoom-in' } }, keepHotspotOnBond: false, fixedLength: true, fixedAngles: false };
+    const s = { hotkeys: { command: { 'Ctrl+M': 'command zoom-in' } }, keepHotspotOnBond: false, fixedLength: true, fixedAngles: false, devTools: true };
     const text = settingsText(s);
     expect(text).toContain('"app": "Chem Illustrator"');
     expect(parseSettings(text)).toEqual(s);

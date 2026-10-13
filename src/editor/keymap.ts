@@ -165,6 +165,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   'name-to-structure': 'Name to Structure…',
   'zoom-in': 'Zoom in', 'zoom-out': 'Zoom out', 'zoom-fit': 'Fit the drawing in the window', 'zoom-actual': 'Actual size',
   hotkeys: 'Hotkeys…',
+  'dev-tools': 'Developer tools on or off (speed panel, stress test)',
 };
 
 const TEXT_ACTIONS: Record<string, string> = {

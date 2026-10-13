@@ -1,4 +1,4 @@
-// The app window: File menu, toolbar, drawing area, analysis and speed panels.
+// The app window: File menu, toolbar, drawing area, analysis and (View > Developer Tools) speed panels.
 
 import './app.css';
 import { Doc, Atom, Caption } from './model';
@@ -120,12 +120,13 @@ const BRACKETS: PaletteDef = {
 };
 
 // Template palettes, one per kind of structure
-const templatePalette = (group: Template['group'], palette: string, title: string, columns: number): PaletteDef => ({
+const templatePalette = (group: Template['group'], palette: string, title: string, columns: number, iconSize?: number): PaletteDef => ({
   palette,
   title,
   items: TEMPLATES.filter((t) => t.group === group).map((t) => ({ name: `tpl-${t.id}`, title: t.name })),
   columns,
   large: true,
+  iconSize,
   icon: (name, size) => templateIcon(templateById(name.slice(4))!, size),
 });
 
@@ -159,8 +160,8 @@ const TOOL_GROUPS: ToolbarItem[][] = [
   [
     templatePalette('rings', 'tpl-rings', 'Ring systems', 5),
     templatePalette('heterocycles', 'tpl-heterocycles', 'Heterocycles', 7),
-    templatePalette('amino', 'tpl-amino', 'Amino acids', 5),
-    templatePalette('sugars', 'tpl-sugars', 'Sugars and chair', 4),
+    templatePalette('amino', 'tpl-amino', 'Amino acids', 5, 64),
+    templatePalette('sugars', 'tpl-sugars', 'Sugars and chair', 4, 64),
   ],
   [
     { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption' },
@@ -488,6 +489,15 @@ function toggleOption(key: 'fixedLength' | 'fixedAngles'): void {
   storeSettings();
 }
 
+/** View > Developer Tools: the Speed panel and the stress test, hidden unless switched on. */
+let devTools = false;
+function showDevTools(on: boolean): void {
+  devTools = on;
+  for (const el of document.querySelectorAll<HTMLElement>('.dev-only')) el.hidden = !on;
+  $('[data-cmd="dev-tools"]')?.setAttribute('aria-checked', String(on));
+  if (on) updatePanels();
+}
+
 function align(how: Align): void {
   if (!editor.align(how)) flash('Select two or more structures, captions, arrows or shapes to line them up.');
 }
@@ -586,6 +596,7 @@ const COMMANDS: Record<string, () => unknown> = {
   join: () => editor.join() || flash('Select two atoms, or two bonds, to join them into one.'),
   'fixed-length': () => toggleOption('fixedLength'),
   'fixed-angles': () => toggleOption('fixedAngles'),
+  'dev-tools': () => { showDevTools(!devTools); storeSettings(); },
   'zoom-in': () => editor.zoomBy(1.25),
   'zoom-out': () => editor.zoomBy(0.8),
   'zoom-fit': () => editor.fit(),
@@ -668,6 +679,7 @@ function storeSettings(): void {
     keepHotspotOnBond: editor.options.keepHotspotOnBond,
     fixedLength: editor.options.fixedLength,
     fixedAngles: editor.options.fixedAngles,
+    devTools,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -730,6 +742,7 @@ void loadSettings().then((s) => {
   editor.options.keepHotspotOnBond = s.keepHotspotOnBond;
   editor.options.fixedLength = s.fixedLength;
   editor.options.fixedAngles = s.fixedAngles;
+  showDevTools(s.devTools);
   keymap.setOverrides(s.hotkeys);
   settingsLoaded = true;
   refreshKeys();
@@ -1059,7 +1072,7 @@ function stat(xs: number[]): { last: number; med: number; p95: number } {
 
 let panelQueued = false;
 function updatePanels(): void {
-  if (panelQueued) return;
+  if (panelQueued || !devTools) return;
   panelQueued = true;
   requestAnimationFrame(() => {
     panelQueued = false;

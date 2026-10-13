@@ -68,6 +68,7 @@ header {
 }
 header h1 { font-size: 14px; margin: 0 10px 0 2px; font-weight: 650; letter-spacing: 0.01em; }
 header .sep { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+.dev-only[hidden] { display: none !important; }
 button, select {
   font: inherit;
   color: var(--text);

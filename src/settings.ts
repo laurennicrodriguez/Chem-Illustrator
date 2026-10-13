@@ -19,9 +19,11 @@ export interface Settings {
   fixedLength: boolean;
   /** New bonds point in 15° steps unless Alt is held (Structure > Fixed Angles, Ctrl+E). */
   fixedAngles: boolean;
+  /** View > Developer Tools: the Speed panel and the stress test. Off unless switched on. */
+  devTools: boolean;
 }
 
-export const DEFAULT_SETTINGS: Settings = { hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true };
+export const DEFAULT_SETTINGS: Settings = { hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false };
 
 const STORAGE_KEY = 'chem-illustrator.settings';
 
@@ -34,7 +36,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (!raw || typeof raw !== 'object') return s;
   const r = raw as Record<string, unknown>;
   if (r.hotkeys && typeof r.hotkeys === 'object' && !Array.isArray(r.hotkeys)) s.hotkeys = r.hotkeys as KeyOverrides;
-  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
+  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
   return s;
 }
 

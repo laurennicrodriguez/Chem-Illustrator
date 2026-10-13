@@ -47,7 +47,7 @@ npm run desktop:build    # makes the installers in src-tauri/target/release/bund
 - **Structure ▸ Clean Up Structure** (Ctrl+Shift+K): evens out bond lengths and angles of the selected structures (or all of them) while keeping their shape, stereocentres and cis/trans double bonds. Undo puts it back.
 - Select a structure to see its formula, exact mass, MW, [M+H]+ and [M+Na]+. Tick **Show R/S** for stereo labels.
 - Paste a SMILES string or a molfile with Ctrl+V to draw it.
-- **Stress test** draws thousands of molecules; the Speed panel shows how long each redraw takes.
+- **View ▸ Developer Tools** shows the Speed panel (how long each redraw takes) and a **Stress test** that draws thousands of molecules. Hidden unless switched on; the choice is kept in `settings.json`.
 
 ## Checks
 
