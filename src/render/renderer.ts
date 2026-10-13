@@ -11,6 +11,8 @@ import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
 import { valenceExceeded } from '../chem/elements';
 import { GENERIC } from '../chem/labels';
+import { bracketPath, shaftOffset, type PathStep } from '../objects';
+import { formulaParts } from '../richtext';
 
 export const FONT_STACK = "Arial, 'Liberation Sans', Helvetica, sans-serif";
 
@@ -85,6 +87,10 @@ export class Renderer {
   annotations = new Map<number, string>();
   private atomCache = new Map<number, AtomCache>();
   private capBoxes = new WeakMap<Caption, Rect>();
+  /** Text size for caption runs that don't give one (the document's caption size). */
+  private captionSize = 10;
+  /** A caption being typed into: the text box shows it, so the page doesn't. */
+  hiddenCaption: number | null = null;
   private tiles = new Map<string, Tile>();
   private stale: { tiles: Map<string, Tile>; scale: number } | null = null;
   private tileScale = 0;
@@ -275,6 +281,7 @@ export class Renderer {
    */
   renderScene(doc: Doc, budgetMs = Infinity): void {
     const t0 = performance.now();
+    this.useStyle(doc);
     this.invalidate(doc);
     const ctx = this.sctx;
     const { scale } = this.view;
@@ -425,6 +432,7 @@ export class Renderer {
 
   /** Draw everything that falls inside `vis` (document coordinates) with the current transform. */
   private drawContent(ctx: CanvasRenderingContext2D, doc: Doc, vis: Rect): void {
+    this.useStyle(doc);
     const st = doc.style;
 
     // Shapes behind the structures (filled boxes first).
@@ -515,6 +523,7 @@ export class Renderer {
       this.drawArrow(ctx, r, r.lineWidth ?? st.lineWidth);
     }
     for (const c of doc.captions.values()) {
+      if (c.id === this.hiddenCaption) continue;
       const r = this.captionBox(c);
       if (r.x1 > vis.x2 || r.x2 < vis.x1 || r.y1 > vis.y2 || r.y2 < vis.y1) continue;
       this.drawCaption(ctx, c, st.captionSize);
@@ -722,39 +731,24 @@ export class Renderer {
         break;
       }
       case 'bracket': {
-        // A bracket runs from (x1,y1) to (x2,y2) with its lips on the right of that direction.
+        // A bracket runs from (x1,y1) to (x2,y2) and opens to the right of that direction.
         const p = { x: s.x1, y: s.y1 }, q = { x: s.x2, y: s.y2 };
         const l = Math.hypot(q.x - p.x, q.y - p.y);
         if (l < 0.1) break;
-        const one = (p: Vec, q: Vec) => {
-          const d = norm(sub(q, p));
-          const n = perp(d);
-          const lip = Math.max(1.5, Math.min(l * 0.12, 4));
-          if (s.bracket === 'round') {
-            const m = add(mul(add(p, q), 0.5), mul(n, -lip * 0.8));
-            ctx.moveTo(p.x + n.x * lip * 0.4, p.y + n.y * lip * 0.4);
-            ctx.quadraticCurveTo(m.x, m.y, q.x + n.x * lip * 0.4, q.y + n.y * lip * 0.4);
-          } else if (s.bracket === 'curly') {
-            const m = mul(add(p, q), 0.5);
-            const pm = add(p, mul(d, l * 0.25)), qm = add(p, mul(d, l * 0.75));
-            ctx.moveTo(p.x + n.x * lip, p.y + n.y * lip);
-            ctx.quadraticCurveTo(p.x, p.y, pm.x, pm.y);
-            ctx.quadraticCurveTo(m.x, m.y, m.x - n.x * lip, m.y - n.y * lip);
-            ctx.quadraticCurveTo(m.x, m.y, qm.x, qm.y);
-            ctx.quadraticCurveTo(q.x, q.y, q.x + n.x * lip, q.y + n.y * lip);
-          } else {
-            ctx.moveTo(p.x + n.x * lip, p.y + n.y * lip);
-            ctx.lineTo(p.x, p.y);
-            ctx.lineTo(q.x, q.y);
-            ctx.lineTo(q.x + n.x * lip, q.y + n.y * lip);
+        const trace = (steps: PathStep[]) => {
+          for (const st of steps) {
+            if (st[0] === 'M') ctx.moveTo(st[1].x, st[1].y);
+            else if (st[0] === 'L') ctx.lineTo(st[1].x, st[1].y);
+            else if (st[0] === 'Q') ctx.quadraticCurveTo(st[1].x, st[1].y, st[2].x, st[2].y);
+            else ctx.arc(st[1].x, st[1].y, st[2], st[3], st[4], st[5]);
           }
         };
-        one(p, q);
+        trace(bracketPath(p, q, s.bracket));
         if (s.pair) {
           // the other half mirrors this one, a short distance away
           const n = perp(norm(sub(q, p)));
           const gap = l * 0.6;
-          one(add(q, mul(n, gap)), add(p, mul(n, gap)));
+          trace(bracketPath(add(q, mul(n, gap)), add(p, mul(n, gap)), s.bracket));
         }
         ctx.stroke();
         break;
@@ -787,9 +781,11 @@ export class Renderer {
     };
     if (r.equilibrium) {
       const d = norm(sub(r.head, r.tail));
-      const off = mul(perp(d), -1.5);
+      const off = mul(perp(d), -shaftOffset(r));
       shaft(add(r.tail, off), add(r.head, off), 'halfLeft', 'none');
       shaft(sub(r.head, off), sub(r.tail, off), 'halfLeft', 'none');
+    } else if (r.shaftSpacing && !r.sweep) {
+      this.retroArrow(ctx, r, lw);
     } else {
       shaft(r.tail, r.head, r.headStyle, r.tailStyle);
     }
@@ -803,6 +799,35 @@ export class Renderer {
     }
   }
 
+  /** Two shafts ending in an open head (⇒), as used for retrosynthetic steps. */
+  private retroArrow(ctx: CanvasRenderingContext2D, r: Arrow, lw: number): void {
+    const d = sub(r.head, r.tail);
+    const l = len(d);
+    if (l < 0.1) return;
+    const dir = mul(d, 1 / l);
+    const n = perp(dir);
+    const h = shaftOffset(r);
+    const hl = Math.min(r.headLength, l * 0.6);
+    // the head's arms reach past the shafts by the head width
+    const hw = h + r.headWidth;
+    const stop = sub(r.head, mul(dir, (hl * h) / hw));
+    const base = sub(r.head, mul(dir, hl));
+    ctx.setLineDash(r.line === 'dashed' ? [lw * 4, lw * 3] : []);
+    ctx.beginPath();
+    for (const k of [h, -h]) {
+      ctx.moveTo(r.tail.x + n.x * k, r.tail.y + n.y * k);
+      ctx.lineTo(stop.x + n.x * k, stop.y + n.y * k);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.lineJoin = 'miter';
+    ctx.beginPath();
+    ctx.moveTo(base.x + n.x * hw, base.y + n.y * hw);
+    ctx.lineTo(r.head.x, r.head.y);
+    ctx.lineTo(base.x - n.x * hw, base.y - n.y * hw);
+    ctx.stroke();
+  }
+
   private arcArrow(ctx: CanvasRenderingContext2D, r: Arrow, tail: Vec, head: Vec): void {
     // Circle through tail and head with the given sweep.
     const sweep = r.sweep;
@@ -812,10 +837,10 @@ export class Renderer {
     ctx.beginPath();
     ctx.arc(center.x, center.y, radius, a0, a1, sweep < 0);
     ctx.stroke();
-    // head tangent
-    const rad = norm(sub(head, center));
-    const tangent = sweep < 0 ? { x: rad.y, y: -rad.x } : { x: -rad.y, y: rad.x };
-    this.arrowHead(ctx, head, tangent, r.headStyle, r);
+    // heads point along the arc
+    const along = (p: Vec) => { const rad = norm(sub(p, center)); return sweep < 0 ? { x: rad.y, y: -rad.x } : { x: -rad.y, y: rad.x }; };
+    this.arrowHead(ctx, head, along(head), r.headStyle, r);
+    this.arrowHead(ctx, tail, mul(along(tail), -1), r.tailStyle, r);
   }
 
   private arrowHead(ctx: CanvasRenderingContext2D, tip: Vec, dir: Vec, style: Arrow['headStyle'], r: Arrow): void {
@@ -825,16 +850,19 @@ export class Renderer {
     const base = sub(tip, mul(dir, hl));
     const inner = sub(tip, mul(dir, hl * 0.75));
     const left = add(base, mul(n, -hw)), right = add(base, mul(n, hw));
+    const toLeft = style === 'full' || style === 'halfLeft', toRight = style === 'full' || style === 'halfRight';
     ctx.beginPath();
-    ctx.moveTo(tip.x, tip.y);
-    if (style === 'full' || style === 'halfLeft') ctx.lineTo(left.x, left.y);
-    if (r.headType !== 'angle') ctx.lineTo(inner.x, inner.y);
-    if (style === 'full' || style === 'halfRight') ctx.lineTo(right.x, right.y);
     if (r.headType === 'angle') {
+      // an open head: just the barbs
+      if (toLeft) { ctx.moveTo(left.x, left.y); ctx.lineTo(tip.x, tip.y); } else ctx.moveTo(tip.x, tip.y);
+      if (toRight) ctx.lineTo(right.x, right.y);
       ctx.stroke();
       return;
     }
-    if (style !== 'full') ctx.lineTo(sub(tip, mul(dir, hl * 0.75)).x, sub(tip, mul(dir, hl * 0.75)).y);
+    ctx.moveTo(tip.x, tip.y);
+    if (toLeft) ctx.lineTo(left.x, left.y);
+    ctx.lineTo(inner.x, inner.y);
+    if (toRight) ctx.lineTo(right.x, right.y);
     ctx.closePath();
     if (r.headType === 'hollow') ctx.stroke(); else ctx.fill();
   }
@@ -850,13 +878,18 @@ export class Renderer {
       });
     }
     let y = c.y;
-    for (const line of lines) {
+    const laid = lines.map((line) => {
       const pieces = expandRuns(line, defaultSize);
       let w = 0;
       for (const p of pieces) w += p.w;
+      return { pieces, w };
+    });
+    // lines are centred (or right-aligned) within the text box, which is as wide as the longest line
+    const width = c.width ?? Math.max(0, ...laid.map((l) => l.w));
+    for (const { pieces, w } of laid) {
       let x = c.x;
-      if (c.justify === 'center') x = c.x + ((c.width ?? w) - w) / 2;
-      else if (c.justify === 'right') x = c.x + (c.width ?? w) - w;
+      if (c.justify === 'center') x = c.x + (width - w) / 2;
+      else if (c.justify === 'right') x = c.x + width - w;
       let maxSize = defaultSize;
       for (const p of pieces) {
         ctx.font = p.font;
@@ -871,11 +904,16 @@ export class Renderer {
     ctx.fillStyle = '#000';
   }
 
+  /** Take the caption size from the document being drawn. */
+  useStyle(doc: Doc): void {
+    if (doc.style.captionSize !== this.captionSize) { this.captionSize = doc.style.captionSize; this.capBoxes = new WeakMap(); }
+  }
+
   /** Bounding box of a caption in document coordinates (cached per caption version). */
   captionBox(c: Caption): Rect {
     let r = this.capBoxes.get(c);
     if (r) return r;
-    const def = 10;
+    const def = this.captionSize;
     const lines: TextRun[][] = [[]];
     for (const run of c.runs) {
       run.text.split('\n').forEach((t, i) => {
@@ -990,14 +1028,7 @@ export function expandRuns(runs: TextRun[], defaultSize: number): Piece[] {
       out.push({ text, w: measureText(text, s, font, style), dy, font: `${style}${s}px ${font}`, size: s, color: r.color, underline: r.underline });
     };
     if (r.formula && !r.sub && !r.sup) {
-      // digits after letters or ")" become subscripts; trailing charges superscripts
-      const re = /(\d+(?=[+\-−]?$)[+\-−]$)|((?<=[A-Za-z)\]])\d+)|([^0-9]+|\d+)/g;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(r.text))) {
-        if (m[1]) push(m[1], false, true);
-        else if (m[2]) push(m[2], true, false);
-        else push(m[3], false, false);
-      }
+      for (const p of formulaParts(r.text)) push(p.text, p.pos === 'sub', p.pos === 'sup');
     } else push(r.text, !!r.sub, !!r.sup);
   }
   return out;

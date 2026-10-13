@@ -35,6 +35,33 @@
         <button role="menuitem" data-cmd="clipboard-formats" hidden>Show Clipboard Formats</button>
       </div>
     </div>
+    <div class="menu-wrap">
+      <button id="btn-object" aria-haspopup="menu" aria-expanded="false" aria-controls="object-menu">Object</button>
+      <div id="object-menu" class="menu" role="menu" hidden>
+        <button role="menuitem" data-cmd="align-left">Align Left Edges</button>
+        <button role="menuitem" data-cmd="align-hcenter">Align Centres Across</button>
+        <button role="menuitem" data-cmd="align-right">Align Right Edges</button>
+        <hr />
+        <button role="menuitem" data-cmd="align-top">Align Top Edges</button>
+        <button role="menuitem" data-cmd="align-vcenter">Align Middles Down</button>
+        <button role="menuitem" data-cmd="align-bottom">Align Bottom Edges</button>
+        <hr />
+        <button role="menuitem" data-cmd="distribute-h">Space Evenly Across</button>
+        <button role="menuitem" data-cmd="distribute-v">Space Evenly Down</button>
+        <hr />
+        <button role="menuitem" data-cmd="flip-h">Flip Left to Right<kbd>Ctrl+Shift+H</kbd></button>
+        <button role="menuitem" data-cmd="flip-v">Flip Top to Bottom<kbd>Ctrl+Shift+V</kbd></button>
+        <button role="menuitem" data-cmd="rotate-cw">Rotate 90° Clockwise</button>
+        <button role="menuitem" data-cmd="rotate-ccw">Rotate 90° Anticlockwise</button>
+        <button role="menuitem" data-cmd="rotate-180">Rotate 180°</button>
+      </div>
+    </div>
+    <div class="menu-wrap">
+      <button id="btn-structure" aria-haspopup="menu" aria-expanded="false" aria-controls="structure-menu">Structure</button>
+      <div id="structure-menu" class="menu" role="menu" hidden>
+        <button role="menuitem" data-cmd="clean-up">Clean Up Structure<kbd>Ctrl+Shift+K</kbd></button>
+      </div>
+    </div>
     <span class="sep"></span>
     <button id="btn-undo" title="Undo (Ctrl+Z)">Undo</button>
     <button id="btn-redo" title="Redo (Ctrl+Y)">Redo</button>
@@ -61,6 +88,10 @@
   </div>
 
   <aside>
+    <section id="style-section" hidden>
+      <h2>Style</h2>
+      <div id="style-body"></div>
+    </section>
     <section>
       <h2>Analysis</h2>
       <div id="analysis-body"><p class="muted">Loading the chemistry engine…</p></div>
@@ -94,6 +125,14 @@
           <li><kbd>l</kbd> <kbd>c</kbd> <kbd>r</kbd> move the second line of a double bond</li>
           <li><kbd>a</kbd> fuse benzene, <kbd>z</kbd> fuse cyclopentadiene, <kbd>4</kbd>–<kbd>8</kbd> fuse a ring of that size</li>
         </ul>
+        <h3>Drawing tools</h3>
+        <ul>
+          <li>Text tool (<kbd>t</kbd>): click to type a caption. <kbd>Ctrl+B</kbd> bold, <kbd>Ctrl+I</kbd> italic, <kbd>Ctrl+U</kbd> underline, <kbd>Ctrl+=</kbd> subscript, <kbd>Ctrl+Shift+=</kbd> superscript; the bar above the text has Greek letters and symbols. <kbd>Esc</kbd> finishes</li>
+          <li>Arrows, shapes and brackets are in the tool bar; drag their handles to change them, and use the Style panel for line width and colour</li>
+          <li>Templates (rings, heterocycles, amino acids, sugars): click empty space to place one, a bond to fuse it on, an atom to join it there</li>
+          <li>Object menu: align, space evenly, flip (<kbd>Ctrl+Shift+H</kbd>, <kbd>Ctrl+Shift+V</kbd>) and rotate; or drag the round handle above a selection to turn it</li>
+          <li>Structure menu: Clean Up Structure (<kbd>Ctrl+Shift+K</kbd>) evens out the bonds and angles of the selected structures, or all of them; stereocentres and cis/trans double bonds keep their meaning</li>
+        </ul>
       </div>
       <div>
         <h3>Pointing at empty space</h3>
@@ -111,7 +150,7 @@
         </ul>
         <h3>Not in this prototype yet</h3>
         <ul>
-          <li>Clean Up, rich-text captions, templates, curved-arrow editing, pictures</li>
+          <li>Valence warnings, name to structure, pictures</li>
         </ul>
       </div>
     </div>

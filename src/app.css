@@ -102,6 +102,7 @@ button:hover { border-color: var(--accent); }
   border-radius: 5px;
   padding: 5px 8px;
   text-align: left;
+  white-space: nowrap;
   background: transparent;
 }
 .menu button[hidden] { display: none; }
@@ -127,12 +128,49 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
 .tool { width: 34px; height: 32px; padding: 0; display: grid; place-items: center; border-color: transparent; background: transparent; }
 .tool:hover { background: var(--accent-soft); border-color: transparent; }
 .tool.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.tool.large { width: 52px; height: 52px; }
+/* palette buttons: the small corner arrow opens the whole set */
+.palette-wrap { position: relative; }
+.palette-wrap .more {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  border: 0;
+  border-radius: 0 0 6px 0;
+  background: transparent;
+  color: var(--muted);
+}
+.palette-wrap .more::after {
+  content: '';
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  border-left: 5px solid transparent;
+  border-bottom: 5px solid currentColor;
+}
+.palette-wrap .more:hover { color: var(--accent); }
+.flyout {
+  position: fixed;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  z-index: 40;
+  display: grid;
+  gap: 3px;
+  padding: 5px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
 
 #canvas-host { grid-area: canvas; position: relative; overflow: hidden; background: #fff; }
 #canvas-host.drop { outline: 3px dashed var(--accent); outline-offset: -6px; }
 #canvas-host canvas { position: absolute; left: 0; top: 0; display: block; }
 #overlay { cursor: crosshair; touch-action: none; }
-.label-input, .caption-input {
+.label-input {
   position: absolute;
   z-index: 5;
   font-family: Arial, 'Liberation Sans', Helvetica, sans-serif;
@@ -143,7 +181,53 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
   color: #000;
 }
 .label-input { width: 7em; }
-.caption-input { min-width: 12em; min-height: 2.2em; resize: both; }
+/* typing a caption: the text shows at its real size over the drawing (the page is always white) */
+.caption-editor {
+  position: absolute;
+  z-index: 5;
+  min-width: 4px;
+  padding: 0;
+  border: 0;
+  outline: 1px dashed var(--accent);
+  outline-offset: 2px;
+  background: transparent;
+  color: #000;
+  caret-color: #000;
+  white-space: pre;
+  line-height: 1.15;
+  font-family: Arial, 'Liberation Sans', Helvetica, sans-serif;
+  cursor: text;
+}
+.caption-bar {
+  position: absolute;
+  z-index: 7;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 8px);
+  padding: 4px 6px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+  font: 12px var(--ui-font);
+}
+.cb-group { display: inline-flex; align-items: center; gap: 2px; }
+.cb-group + .cb-group { padding-left: 6px; border-left: 1px solid var(--line); }
+.cb-btn { min-width: 26px; height: 24px; padding: 0 5px; border-color: transparent; background: transparent; font: 13px var(--ui-font); line-height: 1; }
+.cb-btn:hover { background: var(--accent-soft); border-color: transparent; }
+.cb-btn.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.cb-btn sub, .cb-btn sup { font-size: 9px; }
+.cb-size { width: 52px; padding: 2px 4px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; }
+.cb-color { width: 30px; height: 22px; padding: 0 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+.cb-hint { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.caption-symbols { flex-basis: 100%; display: flex; flex-direction: column; gap: 2px; padding-top: 4px; border-top: 1px solid var(--line); }
+.caption-symbols[hidden] { display: none; }
+.cs-row { display: flex; flex-wrap: wrap; gap: 1px; }
+.cs-row button { min-width: 22px; height: 22px; padding: 0 3px; border-color: transparent; background: transparent; font: 13px Arial, 'Liberation Sans', sans-serif; }
+.cs-row button:hover { background: var(--accent-soft); border-color: transparent; }
 
 aside {
   grid-area: side;
@@ -154,6 +238,12 @@ aside {
 }
 aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 6px 0 6px; font-weight: 600; }
 aside section + section { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 8px; }
+aside section[hidden] + section { margin-top: 0; border-top: 0; padding-top: 0; }
+aside h3 { font-size: 12px; font-weight: 600; margin: 2px 0 4px; }
+.style-row { display: grid; grid-template-columns: 1fr 138px; align-items: center; gap: 8px; margin: 3px 0; }
+label.style-row.check { display: flex; gap: 6px; }
+.style-row select, .style-row input[type='number'] { width: 100%; padding: 2px 4px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; }
+.style-row input[type='color'] { width: 44px; height: 22px; padding: 0 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
 aside table { border-collapse: collapse; width: 100%; }
 aside th { text-align: left; font-weight: 500; color: var(--muted); padding: 2px 8px 2px 0; white-space: nowrap; vertical-align: top; }
 aside td { padding: 2px 0; font-variant-numeric: tabular-nums; }

@@ -162,17 +162,29 @@ const CAP = 0.716; // Arial cap height as a fraction of the font size
 /**
  * Which way a label runs from its atom: to the right (OH), to the left (HO), or with the
  * H stacked above or below (the NH of a ring).
+ *
+ * This follows what ChemDraw 25 showed for NH and OH at many bond angles. Add up the
+ * directions of the bonds. When that sum points within 22.5° of straight up or down and the
+ * atom has two or more bonds, the H is stacked on the opposite side (pyrrole's NH below).
+ * Otherwise the label runs right, or left when the sum leans right at all (HO with a bond 5°
+ * right of vertical). When the bonds cancel out (a straight line through the atom), the H
+ * goes on the first free side of right, left, above, below.
  */
 export function labelDir(spec: LabelSpec, bondDirs: { x: number; y: number }[], just: 'auto' | 'left' | 'right' = 'auto'): 'right' | 'left' | 'up' | 'down' {
-  let sx = 0, sy = 0;
-  for (const d of bondDirs) { sx += d.x; sy += d.y; }
-  const hasRight = bondDirs.some((d) => d.x > 0.3);
-  const hasLeft = bondDirs.some((d) => d.x < -0.3);
   if (just === 'left') return 'left';
   if (just === 'right') return 'right';
-  if (hasLeft && hasRight && spec.tokens.length === 1 && spec.hCount > 0) return sy > 0 ? 'up' : 'down';
-  if (sx > 0.25 || (hasRight && !hasLeft && sx > 0)) return 'left';
-  return 'right';
+  let sx = 0, sy = 0;
+  for (const d of bondDirs) { sx += d.x; sy += d.y; }
+  const EPS = 1e-3; // saved coordinates are rounded, so smaller differences mean nothing
+  const stack = bondDirs.length >= 2 && spec.tokens.length === 1 && spec.hCount > 0;
+  if (Math.hypot(sx, sy) < EPS) {
+    if (!bondDirs.some((d) => d.x > 0.7)) return 'right';
+    if (!bondDirs.some((d) => d.x < -0.7)) return 'left';
+    if (!stack) return 'right';
+    return bondDirs.some((d) => d.y < -0.7) ? 'down' : 'up';
+  }
+  if (stack && Math.abs(sx) < Math.tan(Math.PI / 8) * Math.abs(sy) - EPS) return sy > 0 ? 'up' : 'down';
+  return sx > EPS ? 'left' : 'right';
 }
 
 /**

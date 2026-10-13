@@ -2,16 +2,25 @@
 // pan. The editor changes the document and asks for a repaint; hover and drawing previews
 // only repaint the overlay layer.
 
-import { Doc, Atom, Bond, BondDisplay } from '../model';
+import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption } from '../model';
+import { CaptionEditor } from '../ui/caption-editor';
+import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
+import { styleFromFace, plainText } from '../richtext';
+import { cleanUpMoves } from '../chem/cleanup';
 import { Renderer } from '../render/renderer';
-import { Vec, Rect, add, sub, mul, norm, dist, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG } from '../geom';
+import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG } from '../geom';
 import {
   sproutDir, sproutPair, sprout, bondTo, bondLength, atomAt, freeRing, fusedRing, fuseSide, ringOnAtom,
   placeRing, chainPoints, MERGE_FRACTION,
 } from '../chem/chemgeom';
 import { ATOM_LABEL_KEYS, ATOM_ACTION_KEYS, BOND_KEYS, TOOL_KEYS, AtomAction } from './hotkeys';
+import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, rotation, mirrorX, mirrorY } from './arrange';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { tokenize } from '../chem/labels';
+import {
+  Handle, arrowHit, shapeHit, arrowHandles, shapeHandles, dragArrowHandle, dragShapeHandle, shapeBox,
+  arrowPoints, bracketsAround, bracketLip, unionRect,
+} from '../objects';
 
 export type Tool =
   | { kind: 'select' }
@@ -20,7 +29,19 @@ export type Tool =
   | { kind: 'chain' }
   | { kind: 'ring'; size: number; aromatic: boolean }
   | { kind: 'text' }
-  | { kind: 'arrow' };
+  | { kind: 'arrow'; style: ArrowStyle }
+  | { kind: 'shape'; shape: ShapeStyle; from: 'corner' | 'center' }
+  | { kind: 'bracket'; bracket: NonNullable<Shape['bracket']> }
+  | { kind: 'template'; id: string };
+
+/** How a new arrow looks (everything else is the document's default). */
+export type ArrowStyle = Partial<Pick<Arrow, 'headStyle' | 'tailStyle' | 'headType' | 'line' | 'noGo' | 'equilibrium' | 'sweep'>> & {
+  /** Two shafts and an open head (⇒). */
+  retro?: boolean;
+};
+
+/** How a new shape looks. */
+export type ShapeStyle = Partial<Omit<Shape, 'id' | 'kind' | 'x1' | 'y1' | 'x2' | 'y2'>> & { kind: 'line' | 'rect' | 'oval' };
 
 export const TOOLS: Record<string, Tool> = {
   select: { kind: 'select' },
@@ -44,8 +65,31 @@ export const TOOLS: Record<string, Tool> = {
   'ring-benzene': { kind: 'ring', size: 6, aromatic: true },
   'ring-cp': { kind: 'ring', size: 5, aromatic: true },
   text: { kind: 'text' },
-  arrow: { kind: 'arrow' },
+  arrow: { kind: 'arrow', style: {} },
+  'arrow-dashed': { kind: 'arrow', style: { line: 'dashed' } },
+  'arrow-hollow': { kind: 'arrow', style: { headType: 'hollow' } },
+  'arrow-double': { kind: 'arrow', style: { tailStyle: 'full' } },
+  'arrow-equilibrium': { kind: 'arrow', style: { headStyle: 'halfLeft', tailStyle: 'halfLeft', equilibrium: true } },
+  'arrow-retro': { kind: 'arrow', style: { headType: 'angle', retro: true } },
+  'arrow-nogo': { kind: 'arrow', style: { noGo: true } },
+  'arrow-curved': { kind: 'arrow', style: { sweep: 120 * DEG } },
+  'arrow-fishhook': { kind: 'arrow', style: { sweep: 120 * DEG, headStyle: 'halfLeft' } },
+  'shape-rect': { kind: 'shape', shape: { kind: 'rect' }, from: 'corner' },
+  'shape-rect-rounded': { kind: 'shape', shape: { kind: 'rect', rounded: true }, from: 'corner' },
+  'shape-rect-shadow': { kind: 'shape', shape: { kind: 'rect', shadow: true }, from: 'corner' },
+  'shape-rect-rounded-shadow': { kind: 'shape', shape: { kind: 'rect', rounded: true, shadow: true }, from: 'corner' },
+  'shape-rect-dashed': { kind: 'shape', shape: { kind: 'rect', dashed: true }, from: 'corner' },
+  'shape-circle': { kind: 'shape', shape: { kind: 'oval' }, from: 'center' },
+  'shape-circle-filled': { kind: 'shape', shape: { kind: 'oval', filled: true }, from: 'center' },
+  'shape-oval': { kind: 'shape', shape: { kind: 'oval' }, from: 'corner' },
+  'shape-line': { kind: 'shape', shape: { kind: 'line' }, from: 'corner' },
+  'shape-line-dashed': { kind: 'shape', shape: { kind: 'line', dashed: true }, from: 'corner' },
+  'shape-line-bold': { kind: 'shape', shape: { kind: 'line', bold: true }, from: 'corner' },
+  'bracket-square': { kind: 'bracket', bracket: 'square' },
+  'bracket-round': { kind: 'bracket', bracket: 'round' },
+  'bracket-curly': { kind: 'bracket', bracket: 'curly' },
 };
+for (const t of TEMPLATES) TOOLS[`tpl-${t.id}`] = { kind: 'template', id: t.id };
 
 export type Hit =
   | { kind: 'atom'; id: number }
@@ -74,9 +118,15 @@ interface Drag {
   shift: boolean;
   alt: boolean;
   ctrl: boolean;
-  mode: 'none' | 'pan' | 'move' | 'marquee' | 'draw';
+  mode: 'none' | 'pan' | 'move' | 'marquee' | 'draw' | 'handle' | 'rotate';
   last: Vec;
   panOrigin?: { ox: number; oy: number };
+  /** The arrow or shape handle being dragged. */
+  handle?: Handle;
+  /** Where the pointer has been (which way a curved arrow is drawn bending). */
+  path?: Vec[];
+  /** Rotating the selection: what it looked like before, the centre, and the angle so far. */
+  rot?: { snap: Snapshot; center: Vec; from: number; angle: number };
 }
 
 const HILITE = 'rgba(40, 120, 255, 0.28)';
@@ -213,12 +263,36 @@ export class Editor {
     }
     const at = this.tol(5);
     for (const r of doc.arrows.values()) {
-      if (distToSegment(p, r.tail, r.head) < at) return { kind: 'arrow', id: r.id };
+      if (arrowHit(r, p, at)) return { kind: 'arrow', id: r.id };
     }
-    for (const s of doc.shapes.values()) {
-      if (s.kind === 'line' && distToSegment(p, { x: s.x1, y: s.y1 }, { x: s.x2, y: s.y2 }) < at) return { kind: 'shape', id: s.id };
+    // the shape drawn last is on top
+    let shape: Shape | null = null;
+    for (const s of doc.shapes.values()) if (shapeHit(s, p, at) && (!shape || (s.z ?? 0) >= (shape.z ?? 0))) shape = s;
+    return shape ? { kind: 'shape', id: shape.id } : null;
+  }
+
+  /**
+   * Handles shown on selected arrows and shapes: ends and middle of an arrow, corners of a box.
+   * Shown when only a few arrows or shapes (and no structures) are selected.
+   */
+  handles(): Handle[] {
+    const s = this.sel;
+    const n = s.arrows.size + s.shapes.size;
+    if (!n || n > 4 || s.atoms.size || s.bonds.size) return [];
+    const out: Handle[] = [];
+    for (const id of s.arrows) { const r = this.doc.arrows.get(id); if (r) out.push(...arrowHandles(r)); }
+    for (const id of s.shapes) { const sh = this.doc.shapes.get(id); if (sh) out.push(...shapeHandles(sh)); }
+    return out;
+  }
+
+  private handleAt(p: Vec): Handle | null {
+    const tol = this.tol(6);
+    let best: Handle | null = null, bd = tol;
+    for (const h of this.handles()) {
+      const d = dist(h.at, p);
+      if (d <= bd) { bd = d; best = h; }
     }
-    return null;
+    return best;
   }
 
   /** The atom or bond hotkeys apply to: the one under the pointer, or the last sprouted atom. */
@@ -229,6 +303,13 @@ export class Editor {
 
   // ------------------------------------------------------------------ pointer
 
+  /** A drawing point as a position in the browser window. */
+  private clientPoint(p: Vec): Vec {
+    const rect = this.r.overlay.getBoundingClientRect();
+    const s = this.r.toScreen(p);
+    return { x: rect.left + s.x, y: rect.top + s.y };
+  }
+
   private docPoint(e: PointerEvent | MouseEvent | WheelEvent): Vec {
     const rect = this.r.overlay.getBoundingClientRect();
     return this.r.toDoc(e.clientX - rect.left, e.clientY - rect.top);
@@ -236,14 +317,24 @@ export class Editor {
 
   private onDown(e: PointerEvent): void {
     this.commitLabel();
+    this.closeCaption();
     this.r.overlay.setPointerCapture(e.pointerId);
     const p = this.docPoint(e);
     const rect = this.r.overlay.getBoundingClientRect();
-    const hit = this.hitTest(p);
+    const rh = e.button === 0 ? this.rotateHandle() : null;
+    const rotating = !!rh && dist(rh, p) <= this.tol(7);
+    const handle = e.button === 0 && !rotating ? this.handleAt(p) : null;
+    const hit = handle || rotating ? null : this.hitTest(p);
     this.drag = {
       start: p, startScreen: { x: e.clientX - rect.left, y: e.clientY - rect.top }, hit, button: e.button, moved: false,
-      shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey, mode: 'none', last: p,
+      shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey, mode: handle ? 'handle' : rotating ? 'rotate' : 'none', last: p, path: [p],
     };
+    if (handle) this.drag.handle = handle;
+    if (rotating) {
+      const b = this.selBox()!;
+      const center = { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 };
+      this.drag.rot = { snap: snapshot(this.doc, this.sel, this.measure()), center, from: angleOf(sub(p, center)), angle: 0 };
+    }
     if (e.button === 1 || e.button === 2) {
       this.drag.mode = 'pan';
       this.drag.panOrigin = { ox: this.r.view.ox, oy: this.r.view.oy };
@@ -257,8 +348,12 @@ export class Editor {
     const d = this.drag;
     if (this.hotAnchor && dist(this.hotAnchor, p) > this.tol(3)) { this.hotAtom = null; this.hotAnchor = null; }
     if (!d) {
-      const h = this.hitTest(p);
+      const rh = this.rotateHandle();
+      const onRotate = !!rh && dist(rh, p) <= this.tol(7);
+      const handle = onRotate ? null : this.handleAt(p);
+      const h = handle || onRotate ? null : this.hitTest(p);
       if (!sameHit(h, this.hover)) { this.hover = h; }
+      this.r.overlay.style.cursor = onRotate ? 'grab' : handle ? (handle.which === 'mid' ? 'grab' : 'crosshair') : '';
       this.requestOverlay(e.timeStamp);
       return;
     }
@@ -267,6 +362,8 @@ export class Editor {
     if (!d.moved && Math.hypot(sp.x - d.startScreen.x, sp.y - d.startScreen.y) > 3) {
       d.moved = true;
       if (d.mode === 'none') d.mode = this.dragModeFor(d);
+      if (d.mode === 'handle') this.doc.begin(d.handle!.which === 'mid' ? 'Bend arrow' : 'Resize');
+      if (d.mode === 'rotate') this.doc.begin('Rotate');
       if (d.mode === 'move') {
         this.doc.begin('Move');
         if (d.hit && !this.isSelected(d.hit)) {
@@ -290,7 +387,33 @@ export class Editor {
       this.requestScene(e.timeStamp);
       return;
     }
+    if (d.mode === 'rotate') {
+      const r = d.rot!;
+      let ang = angleOf(sub(p, r.center)) - r.from;
+      ang = Math.atan2(Math.sin(ang), Math.cos(ang));
+      // Shift turns in 15° steps
+      ang = e.shiftKey ? snapAngle(ang) : Math.round(ang / DEG) * DEG;
+      r.angle = ang;
+      transform(this.doc, r.snap, rotation(r.center, ang), false);
+      d.last = p;
+      this.requestScene(e.timeStamp);
+      return;
+    }
+    if (d.mode === 'handle') {
+      const h = d.handle!;
+      if (h.kind === 'arrow') {
+        const r = this.doc.arrows.get(h.id);
+        if (r) this.doc.updateArrow(h.id, dragArrowHandle(r, h.which, p, e.altKey));
+      } else {
+        const sh = this.doc.shapes.get(h.id);
+        if (sh) this.doc.updateShape(h.id, dragShapeHandle(sh, h.which, p, e.altKey));
+      }
+      d.last = p;
+      this.requestScene(e.timeStamp);
+      return;
+    }
     d.last = p;
+    d.path?.push(p);
     this.hover = this.hitTest(p);
     this.requestOverlay(e.timeStamp);
   }
@@ -305,6 +428,9 @@ export class Editor {
       case 'chain':
       case 'ring':
       case 'arrow':
+      case 'shape':
+      case 'bracket':
+      case 'template':
         return 'draw';
       case 'text':
         return d.hit && d.hit.kind === 'caption' ? 'move' : 'none';
@@ -317,6 +443,10 @@ export class Editor {
     if (!d) return;
     const p = this.docPoint(e);
     if (d.mode === 'pan') { this.requestScene(e.timeStamp); return; }
+    if (d.mode === 'handle' || d.mode === 'rotate') {
+      if (d.moved) { this.doc.commit(); this.changed(); }
+      return;
+    }
     if (d.mode === 'move') {
       this.doc.commit();
       this.changed();
@@ -343,7 +473,7 @@ export class Editor {
     } else if (h && h.kind === 'atom' && this.tool.kind !== 'text') {
       this.editLabel(h.id);
     } else if (h && h.kind === 'caption') {
-      this.editCaption(h.id);
+      this.editCaption(h.id, { x: e.clientX, y: e.clientY });
     }
   }
 
@@ -402,19 +532,42 @@ export class Editor {
         this.changed();
         return;
       }
-      case 'text': {
-        if (h && h.kind === 'atom') this.editLabel(h.id);
-        else if (h && h.kind === 'caption') this.editCaption(h.id);
-        else this.newCaption(p);
-        return;
-      }
-      case 'arrow': {
-        const L = doc.style.bondLength;
-        doc.edit('Arrow', () => this.addArrow(p, add(p, { x: L * 3, y: 0 })));
+      case 'template': {
+        doc.edit('Template', () => this.placeTemplateAt(t.id, h, p, null, d.alt));
         this.changed();
         return;
       }
+      case 'text': {
+        if (h && h.kind === 'atom') this.editLabel(h.id);
+        else if (h && h.kind === 'caption') this.editCaption(h.id, this.clientPoint(p));
+        else this.newCaption(p);
+        return;
+      }
+      case 'arrow':
+      case 'shape':
+      case 'bracket': {
+        // clicking an arrow or shape picks it up, so its handles can be dragged
+        if (h && (h.kind === 'arrow' || h.kind === 'shape')) { this.selectOnly(h); return; }
+        if (t.kind === 'bracket') {
+          // brackets round the structure that was clicked
+          if (h && (h.kind === 'atom' || h.kind === 'bond')) {
+            const atom = h.kind === 'atom' ? h.id : doc.bonds.get(h.id)!.a1;
+            const L = doc.style.bondLength;
+            const box = this.structureBox(doc.fragmentOf(atom));
+            const r = { x1: box.x1 - L * 0.45, y1: box.y1 - L * 0.3, x2: box.x2 + L * 0.45, y2: box.y2 + L * 0.3 };
+            this.addBrackets(r, t.bracket);
+          }
+          return;
+        }
+        if (t.kind === 'arrow') {
+          const L = doc.style.bondLength;
+          doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(p, add(p, { x: L * (t.style.sweep ? 2 : 3), y: 0 }), t.style).id }));
+          this.changed();
+        }
+        return;
+      }
       case 'bond': {
+        if (!this.sel.atoms.size) this.sel = emptySel();
         doc.edit('Bond', () => {
           if (h && h.kind === 'atom') {
             const n = sprout(doc, h.id, t.order, t.display);
@@ -432,6 +585,7 @@ export class Editor {
         return;
       }
       case 'chain': {
+        if (!this.sel.atoms.size) this.sel = emptySel();
         doc.edit('Chain', () => {
           if (h && h.kind === 'atom') this.lastEdited = sprout(doc, h.id).id;
           else {
@@ -443,6 +597,7 @@ export class Editor {
         return;
       }
       case 'ring': {
+        if (!this.sel.atoms.size) this.sel = emptySel();
         doc.edit('Ring', () => this.ringClick(h, p, t.size, t.aromatic, d.alt, d.shift));
         this.changed();
         return;
@@ -501,6 +656,65 @@ export class Editor {
     this.lastEdited = ids[0];
   }
 
+  /**
+   * Where a template goes. On a bond: fused along it, on its emptier side. On an atom: sharing
+   * it (rings, sugars) or joined to it by a new bond (amino acids; Alt swaps the two), lying
+   * away from the rest of the structure, or towards the pointer when dragged. Elsewhere: centred
+   * where clicked, turned towards the pointer when dragged (15° steps; Alt: any angle).
+   */
+  private templatePlacement(t: Template, h: Hit, start: Vec, cursor: Vec | null, alt: boolean):
+    { pl: Placement; existing: Map<number, number>; bondFrom?: number; scale?: number } | null {
+    const doc = this.doc;
+    const best = (cands: Placement[], ignore: Set<number>, prefer?: (pl: Placement) => number) => {
+      let pick: Placement | null = null, score = Infinity;
+      for (const pl of cands) {
+        const sc = crowdingOf(doc, t, pl, ignore) + (prefer?.(pl) ?? 0) + (pl.mirror ? 0.001 : 0);
+        if (sc < score - 1e-9) { score = sc; pick = pl; }
+      }
+      return pick;
+    };
+    const nearest = (pl: Placement, i: number, ids: number[]) => {
+      const q = templatePoints(t, pl)[i];
+      return ids.reduce((m, id) => (dist(doc.atoms.get(id)!, q) < dist(doc.atoms.get(m)!, q) ? id : m));
+    };
+    if (h && h.kind === 'bond' && t.fuse) {
+      const b = doc.bonds.get(h.id)!;
+      const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
+      const n = perp(sub(q, p)), mid = mul(add(p, q), 0.5);
+      const towards = cursor ?? start;
+      // on a tie, the side the pointer is on
+      const side = (pl: Placement) => {
+        const c = placePoint(pl, 0, 0);
+        return Math.sign(dot(sub(c, mid), n)) === Math.sign(dot(sub(towards, mid), n)) ? 0 : 0.01;
+      };
+      const pl = best(fusePlacements(t, p, q), new Set([p.id, q.id]), side);
+      if (!pl) return null;
+      return { pl, existing: new Map([[t.fuse[0], nearest(pl, t.fuse[0], [p.id, q.id])], [t.fuse[1], nearest(pl, t.fuse[1], [p.id, q.id])]]), scale: b.s };
+    }
+    if (h && h.kind === 'atom') {
+      const a = doc.atoms.get(h.id)!;
+      const L = bondLength(doc, a);
+      let byBond = (t.join === 'bond') !== alt;
+      if (!byBond && doc.degree(a.id) >= 3) byBond = true;
+      const dir = cursor && dist(cursor, a) > L * 0.3 ? norm(fromAngle(snapAngle(angleOf(sub(cursor, a))))) : sproutDir(doc, a.id);
+      const pl = best(atomPlacements(t, a, dir, L, byBond), new Set([a.id]));
+      if (!pl) return null;
+      return byBond ? { pl, existing: new Map(), bondFrom: a.id, scale: a.s } : { pl, existing: new Map([[t.attach, a.id]]), scale: a.s };
+    }
+    const L = doc.style.bondLength;
+    let angle = 0;
+    if (cursor && dist(cursor, start) > L * 0.3) angle = alt ? angleOf(sub(cursor, start)) : snap15(angleOf(sub(cursor, start)));
+    return { pl: freePlacement(start, L, angle), existing: new Map() };
+  }
+
+  private placeTemplateAt(id: string, h: Hit, start: Vec, cursor: Vec | null, alt: boolean): void {
+    const t = templateById(id);
+    const place = t && this.templatePlacement(t, h, start, cursor, alt);
+    if (!t || !place) return;
+    const ids = placeTemplate(this.doc, t, place.pl, { existing: place.existing, bondFrom: place.bondFrom, scale: place.scale });
+    this.lastEdited = ids[t.attach];
+  }
+
   // ------------------------------------------------------------------ drags that draw
 
   private snapEnd(from: Vec, p: Vec, L: number, fromId?: number): { pt: Vec; atom?: Atom } {
@@ -547,12 +761,77 @@ export class Editor {
         } else this.ringClick(null, d.start, t.size, t.aromatic, false, d.shift, p);
       });
     } else if (t.kind === 'arrow') {
-      const L = doc.style.bondLength;
-      const ang = snapAngle(angleOf(sub(p, d.start)));
-      const l = Math.max(L, dist(p, d.start));
-      doc.edit('Arrow', () => this.addArrow(d.start, add(d.start, fromAngle(ang, l))));
+      const end = this.arrowEnd(d.start, p, d.alt);
+      doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(d.start, end, t.style, this.bendSide(d, end)).id }));
+    } else if (t.kind === 'shape') {
+      const g = this.shapeGeometry(t, d.start, p, d.shift, d.alt);
+      if (g) doc.edit('Shape', () => this.selectOnly({ kind: 'shape', id: doc.addShape({ ...t.shape, ...g }).id }));
+    } else if (t.kind === 'bracket') {
+      const r = { x1: Math.min(d.start.x, p.x), y1: Math.min(d.start.y, p.y), x2: Math.max(d.start.x, p.x), y2: Math.max(d.start.y, p.y) };
+      if (r.y2 - r.y1 >= 4) this.addBrackets(r, t.bracket);
+    } else if (t.kind === 'template') {
+      doc.edit('Template', () => this.placeTemplateAt(t.id, h, d.start, p, d.alt));
     }
     this.changed();
+  }
+
+  /** Where a dragged arrow ends: snapped to 15° steps (Alt: anywhere), and at least a bond long. */
+  private arrowEnd(start: Vec, p: Vec, free: boolean): Vec {
+    const L = this.doc.style.bondLength;
+    const l = Math.max(L, dist(p, start));
+    return add(start, fromAngle(free ? angleOf(sub(p, start)) : snapAngle(angleOf(sub(p, start))), l));
+  }
+
+  /** Which way a curved arrow bends: towards the side the pointer swung out to, else to the left. */
+  private bendSide(d: Drag, end: Vec): number {
+    const n = perp(norm(sub(end, d.start)));
+    let most = 0;
+    for (const q of d.path ?? []) { const o = dot(sub(q, d.start), n); if (Math.abs(o) > Math.abs(most)) most = o; }
+    return Math.abs(most) > this.tol(4) && most > 0 ? -1 : 1;
+  }
+
+  /** The box, circle or line a shape tool draws for a drag from a to b (Shift: square or circle). */
+  private shapeGeometry(t: Extract<Tool, { kind: 'shape' }>, a: Vec, b: Vec, shift: boolean, alt: boolean): Pick<Shape, 'x1' | 'y1' | 'x2' | 'y2'> | null {
+    if (t.shape.kind === 'line') {
+      const e = alt ? b : add(a, fromAngle(snapAngle(angleOf(sub(b, a))), dist(a, b)));
+      return dist(a, e) < 2 ? null : { x1: a.x, y1: a.y, x2: e.x, y2: e.y };
+    }
+    if (t.from === 'center') {
+      const r = dist(a, b);
+      return r < 1 ? null : { x1: a.x - r, y1: a.y - r, x2: a.x + r, y2: a.y + r };
+    }
+    let w = b.x - a.x, h = b.y - a.y;
+    if (shift) { const m = Math.max(Math.abs(w), Math.abs(h)); w = Math.sign(w || 1) * m; h = Math.sign(h || 1) * m; }
+    if (Math.abs(w) < 2 && Math.abs(h) < 2) return null;
+    return { x1: Math.min(a.x, a.x + w), y1: Math.min(a.y, a.y + h), x2: Math.max(a.x, a.x + w), y2: Math.max(a.y, a.y + h) };
+  }
+
+  private addBrackets(r: Rect, bracket: NonNullable<Shape['bracket']>): void {
+    this.doc.edit('Brackets', () => {
+      this.sel = emptySel();
+      for (const b of bracketsAround(r, bracket)) this.sel.shapes.add(this.doc.addShape(b).id);
+    });
+    this.changed();
+  }
+
+  /** Box round some atoms and their labels. */
+  structureBox(atomIds: Iterable<number>): Rect {
+    let r: Rect | null = null;
+    for (const id of atomIds) {
+      const a = this.doc.atoms.get(id);
+      if (!a) continue;
+      r = unionRect(r, { x1: a.x, y1: a.y, x2: a.x, y2: a.y });
+      for (const b of this.r.atomInfo(this.doc, a).boxes) r = unionRect(r, b);
+    }
+    return r ?? { x1: 0, y1: 0, x2: 0, y2: 0 };
+  }
+
+  /** Select just this one thing. */
+  private selectOnly(h: NonNullable<Hit>): void {
+    this.sel = emptySel();
+    this.addToSel(h);
+    this.requestOverlay();
+    this.onChange();
   }
 
   private chainFirstUp(a: Vec & { id?: number }, p: Vec): boolean {
@@ -563,12 +842,24 @@ export class Editor {
     return off <= 0;
   }
 
-  private addArrow(tail: Vec, head: Vec): void {
+  /** Add an arrow from tail to head in the given style; `side` −1 bends a curved arrow the other way. */
+  private addArrow(tail: Vec, head: Vec, style: ArrowStyle = {}, side = 1): Arrow {
     const lw = this.doc.style.lineWidth;
-    this.doc.addArrow({
+    const { retro, ...rest } = style;
+    // ChemDraw's defaults: heads ten line widths long and 2.5 wide
+    const a: Omit<Arrow, 'id'> = {
       tail, head, headStyle: 'full', tailStyle: 'none', headType: 'solid', line: 'solid', noGo: false,
-      equilibrium: false, sweep: 0, headLength: lw * 10, headWidth: lw * 2.5,
-    });
+      equilibrium: false, sweep: 0, headLength: lw * 10, headWidth: lw * 2.5, ...rest,
+    };
+    if (a.sweep && side < 0) {
+      a.sweep = -a.sweep;
+      const swap = (x: Arrow['headStyle']) => (x === 'halfLeft' ? 'halfRight' : x === 'halfRight' ? 'halfLeft' : x);
+      a.headStyle = swap(a.headStyle);
+      a.tailStyle = swap(a.tailStyle);
+    }
+    // a retrosynthetic arrow, with the sizes ChemDraw gives one
+    if (retro) Object.assign(a, { shaftSpacing: lw * 6, headLength: lw * 6, headWidth: lw * 1.5 });
+    return this.doc.addArrow(a);
   }
 
   // ------------------------------------------------------------------ selection
@@ -638,8 +929,9 @@ export class Editor {
     }
     const inside = (x: number, y: number) => x >= r.x1 && x <= r.x2 && y >= r.y1 && y <= r.y2;
     for (const c of doc.captions.values()) { const bx = this.r.captionBox(c); if (inside(bx.x1, bx.y1) && inside(bx.x2, bx.y2)) this.sel.captions.add(c.id); }
-    for (const ar of doc.arrows.values()) if (inside(ar.tail.x, ar.tail.y) && inside(ar.head.x, ar.head.y)) this.sel.arrows.add(ar.id);
-    for (const s of doc.shapes.values()) if (inside(s.x1, s.y1) && inside(s.x2, s.y2)) this.sel.shapes.add(s.id);
+    const within = (b: Rect) => inside(b.x1, b.y1) && inside(b.x2, b.y2);
+    for (const ar of doc.arrows.values()) if (arrowPoints(ar).every((q) => inside(q.x, q.y))) this.sel.arrows.add(ar.id);
+    for (const s of doc.shapes.values()) if (within(s.kind === 'bracket' ? { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) } : shapeBox(s))) this.sel.shapes.add(s.id);
   }
 
   private moveSelection(dx: number, dy: number): void {
@@ -685,11 +977,96 @@ export class Editor {
     }
   }
 
+  // ------------------------------------------------------------------ arranging
+
+  /** Sizes of labels and captions, for lining things up. Very large selections go by atom positions. */
+  measure(): Measure {
+    if (this.sel.atoms.size > 5000) return { ...POINTS, captionBox: (c) => this.r.captionBox(c) };
+    return { atomBoxes: (a) => this.r.atomInfo(this.doc, a).boxes, captionBox: (c) => this.r.captionBox(c) };
+  }
+
+  private selBoxCache: { key: string; box: Rect | null } = { key: '', box: null };
+
+  /** Box round the selection (remembered until the drawing or the selection changes). */
+  selBox(): Rect | null {
+    const s = this.sel;
+    const sum = (x: Set<number>) => { let t = 0; for (const id of x) t += id; return `${x.size}:${t}`; };
+    const key = `${this.doc.version}|${sum(s.atoms)}|${sum(s.captions)}|${sum(s.arrows)}|${sum(s.shapes)}`;
+    if (key !== this.selBoxCache.key) this.selBoxCache = { key, box: selectionBox(this.doc, s, this.measure()) };
+    return this.selBoxCache.box;
+  }
+
+  /** The round handle above the selection that turns it (select tool only). */
+  private rotateHandle(): Vec | null {
+    const s = this.sel;
+    if (this.tool.kind !== 'select' || (!s.atoms.size && !s.arrows.size && !s.shapes.size)) return null;
+    const b = this.selBox();
+    return b ? { x: (b.x1 + b.x2) / 2, y: b.y1 - this.tol(24) } : null;
+  }
+
+  /** Line up the selected objects. Returns false when fewer than two are selected. */
+  align(how: Align): boolean {
+    const us = units(this.doc, this.sel, this.measure());
+    if (us.length < 2) return false;
+    const off = alignOffsets(us, how);
+    this.doc.edit('Align', () => us.forEach((u, i) => moveUnit(this.doc, u, off[i])));
+    this.changed();
+    return true;
+  }
+
+  /** Space the selected objects evenly. Returns false when fewer than three are selected. */
+  distribute(axis: 'h' | 'v'): boolean {
+    const us = units(this.doc, this.sel, this.measure());
+    if (us.length < 3) return false;
+    const off = distributeOffsets(us, axis);
+    this.doc.edit('Distribute', () => us.forEach((u, i) => moveUnit(this.doc, u, off[i])));
+    this.changed();
+    return true;
+  }
+
+  /** Mirror the selection left-to-right ('h') or top-to-bottom ('v'). This turns stereocentres over, as in ChemDraw. */
+  flip(axis: 'h' | 'v'): boolean {
+    const b = this.selBox();
+    if (!b || !this.hasSelection()) return false;
+    const snap = snapshot(this.doc, this.sel, this.measure());
+    const f = axis === 'h' ? mirrorX((b.x1 + b.x2) / 2) : mirrorY((b.y1 + b.y2) / 2);
+    this.doc.edit(axis === 'h' ? 'Flip horizontal' : 'Flip vertical', () => transform(this.doc, snap, f, true));
+    this.changed();
+    return true;
+  }
+
+  /** Turn the selection about its centre; positive is clockwise. */
+  rotateBy(deg: number): boolean {
+    const b = this.selBox();
+    if (!b || !this.hasSelection()) return false;
+    const snap = snapshot(this.doc, this.sel, this.measure());
+    const c = { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 };
+    this.doc.edit('Rotate', () => transform(this.doc, snap, rotation(c, deg * DEG), false));
+    this.changed();
+    return true;
+  }
+
+  /**
+   * Redraw structures with even bonds and angles: the selected ones, or all of them when no atom
+   * is selected. Returns false when there was nothing to change.
+   */
+  cleanUp(): boolean {
+    const doc = this.doc;
+    const frags = this.sel.atoms.size
+      ? doc.fragments().filter((f) => [...f].some((id) => this.sel.atoms.has(id)))
+      : doc.fragments();
+    const moves = cleanUpMoves(doc, frags);
+    if (!moves.length) return false;
+    doc.edit('Clean Up Structure', () => { for (const [id, p] of moves) doc.updateAtom(id, { x: p.x, y: p.y }); });
+    this.changed();
+    return true;
+  }
+
   // ------------------------------------------------------------------ keyboard
 
   private onKey(e: KeyboardEvent): void {
     const target = e.target as HTMLElement;
-    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
     const ctrl = e.ctrlKey || e.metaKey;
     const doc = this.doc;
     if (ctrl) {
@@ -700,6 +1077,13 @@ export class Editor {
       if (k === '0') { e.preventDefault(); this.fit(); return; }
       if (k === '=' || k === '+') { e.preventDefault(); this.zoomAt(this.r.width / 2, this.r.height / 2, 1.25); this.requestScene(); return; }
       if (k === '-') { e.preventDefault(); this.zoomAt(this.r.width / 2, this.r.height / 2, 0.8); this.requestScene(); return; }
+      return;
+    }
+    if (e.altKey && e.key.startsWith('Arrow') && this.hasSelection()) {
+      // Alt+←/→ turn the selection 1°, Alt+↑/↓ 15°
+      e.preventDefault();
+      const deg = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : e.key === 'ArrowUp' ? -15 : 15;
+      this.rotateBy(deg);
       return;
     }
     if (e.altKey) return;
@@ -961,57 +1345,64 @@ export class Editor {
     if (this.labelInput) this.labelInput.blur();
   }
 
+  private captionEd: CaptionEditor | null = null;
+
+  /** Finish typing in a caption, if one is open. */
+  closeCaption(): void {
+    this.captionEd?.finish();
+  }
+
   private newCaption(p: Vec): void {
-    this.textBox(p, '', (text) => {
-      if (!text.trim()) return;
-      this.doc.edit('Caption', () => this.doc.addCaption({ x: p.x, y: p.y, runs: [{ text, formula: true }], justify: 'left' }));
-      this.changed();
-    });
+    this.openCaption(null, p);
   }
 
-  private editCaption(id: number): void {
+  private editCaption(id: number, client?: { x: number; y: number }): void {
     const c = this.doc.captions.get(id);
-    if (!c) return;
-    const text = c.runs.map((r) => r.text).join('');
-    this.textBox({ x: c.x, y: c.y }, text, (t) => {
-      this.doc.edit('Caption', () => {
-        if (!t.trim()) this.doc.removeCaption(id);
-        // plain-text editing for now: keeps the first run's style
-        else this.doc.updateCaption(id, { runs: [{ ...c.runs[0], text: t }] });
-      });
-      this.changed();
-    });
+    if (c) this.openCaption(c, { x: c.x, y: c.y }, client);
   }
 
-  private textBox(p: Vec, initial: string, done: (text: string) => void): void {
-    const ta = document.createElement('textarea');
-    ta.className = 'caption-input';
-    const sp = this.r.toScreen(p);
-    const size = this.doc.style.captionSize * this.r.view.scale;
-    ta.style.left = `${sp.x}px`;
-    ta.style.top = `${sp.y - size}px`;
-    ta.style.fontSize = `${Math.max(11, size)}px`;
-    ta.value = initial;
-    this.host.appendChild(ta);
-    ta.focus();
-    let closed = false;
-    const finish = (ok: boolean) => {
-      if (closed) return;
-      closed = true;
-      ta.remove();
-      if (ok) done(ta.value);
+  /**
+   * Type into a new caption at a point, or into an existing one. New text takes the document's
+   * caption style; everything can be restyled in the bar above the text.
+   */
+  private openCaption(c: Caption | null, at: Vec, client?: { x: number; y: number }): void {
+    this.closeCaption();
+    this.commitLabel();
+    const doc = this.doc;
+    const st = doc.style;
+    const defaults = { ...styleFromFace(st.captionFace), size: st.captionSize };
+    const hide = (id: number | null) => {
+      const shown = this.r.hiddenCaption !== null ? doc.captions.get(this.r.hiddenCaption) : null;
+      if (shown) doc.dirtyRects.push(this.r.captionBox(shown));
+      this.r.hiddenCaption = id;
+      if (c) doc.dirtyRects.push(this.r.captionBox(c));
+      this.requestScene();
     };
-    ta.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); finish(false); }
-      else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finish(true); }
-      e.stopPropagation();
+    if (c) hide(c.id);
+    const id = c?.id ?? null;
+    const ed = new CaptionEditor(this.host, this.r, { at, width: c?.width }, { runs: c?.runs ?? [], justify: c?.justify ?? 'left' }, defaults, (res) => {
+      if (this.captionEd === ed) this.captionEd = null;
+      if (id !== null) hide(null);
+      const empty = !plainText(res.runs).trim();
+      const cur = id !== null ? doc.captions.get(id) : null;
+      if (cur) {
+        if (empty) doc.edit('Delete caption', () => doc.removeCaption(cur.id));
+        else if (JSON.stringify(cur.runs) !== JSON.stringify(res.runs) || cur.justify !== res.justify) {
+          doc.edit('Edit caption', () => doc.updateCaption(cur.id, { runs: res.runs, justify: res.justify }));
+        }
+      } else if (!empty) {
+        doc.edit('Caption', () => doc.addCaption({ x: at.x, y: at.y, runs: res.runs, justify: res.justify }));
+      }
+      this.changed();
     });
-    ta.addEventListener('blur', () => finish(true));
+    this.captionEd = ed;
+    if (client) ed.caretAt(client.x, client.y);
   }
 
   // ------------------------------------------------------------------ overlay
 
   private drawOverlay(): void {
+    this.captionEd?.place();
     const ctx = this.r.clearOverlay();
     const doc = this.doc;
     const scale = this.r.view.scale;
@@ -1044,11 +1435,11 @@ export class Editor {
       ctx.lineWidth = px;
       for (const id of s.captions) { const c = doc.captions.get(id); if (c) { const r = this.r.captionBox(c); ctx.fillRect(r.x1, r.y1, r.x2 - r.x1, r.y2 - r.y1); } }
       ctx.lineWidth = L * 0.15;
-      for (const id of s.arrows) { const r = doc.arrows.get(id); if (r) { ctx.beginPath(); ctx.moveTo(r.tail.x, r.tail.y); ctx.lineTo(r.head.x, r.head.y); ctx.stroke(); } }
-      for (const id of s.shapes) { const sh = doc.shapes.get(id); if (sh) ctx.fillRect(Math.min(sh.x1, sh.x2), Math.min(sh.y1, sh.y2), Math.abs(sh.x2 - sh.x1), Math.abs(sh.y2 - sh.y1)); }
+      for (const id of s.arrows) { const r = doc.arrows.get(id); if (r) strokeAlong(ctx, arrowPoints(r)); }
+      for (const id of s.shapes) { const sh = doc.shapes.get(id); if (sh) outlineShape(ctx, sh); }
     }
     // hotspot
-    const h = this.drag?.mode === 'move' ? null : this.hotspot();
+    const h = this.drag?.mode === 'move' || this.drag?.mode === 'rotate' ? null : this.hotspot();
     if (h) {
       ctx.fillStyle = HILITE;
       ctx.strokeStyle = HILITE;
@@ -1086,7 +1477,61 @@ export class Editor {
         if (c) { const r = this.r.captionBox(c); ctx.lineWidth = px; ctx.strokeStyle = 'rgba(40,120,255,0.7)'; ctx.strokeRect(r.x1 - 1, r.y1 - 1, r.x2 - r.x1 + 2, r.y2 - r.y1 + 2); }
       } else if (h.kind === 'arrow') {
         const r = doc.arrows.get(h.id);
-        if (r) { ctx.lineWidth = doc.style.bondLength * 0.2; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(r.tail.x, r.tail.y); ctx.lineTo(r.head.x, r.head.y); ctx.stroke(); }
+        if (r) { ctx.lineWidth = doc.style.bondLength * 0.2; ctx.lineCap = 'round'; strokeAlong(ctx, arrowPoints(r)); }
+      } else if (h.kind === 'shape') {
+        const sh = doc.shapes.get(h.id);
+        if (sh) { ctx.lineWidth = doc.style.bondLength * 0.15; ctx.lineCap = 'round'; outlineShape(ctx, sh); }
+      }
+    }
+    // handles on selected arrows and shapes
+    const handles = this.drag?.mode === 'move' ? [] : this.handles();
+    if (handles.length) {
+      const k = 3.5 * px;
+      ctx.lineWidth = px;
+      ctx.strokeStyle = PREVIEW;
+      ctx.fillStyle = '#fff';
+      for (const hd of handles) {
+        ctx.beginPath();
+        if (hd.which === 'mid') ctx.arc(hd.at.x, hd.at.y, k * 1.1, 0, Math.PI * 2);
+        else ctx.rect(hd.at.x - k, hd.at.y - k, 2 * k, 2 * k);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+    // the selection's box and the handle that turns it
+    const rh = this.drag && this.drag.mode !== 'rotate' ? null : this.rotateHandle();
+    if (rh) {
+      const b = this.selBox()!;
+      ctx.lineWidth = px;
+      ctx.strokeStyle = 'rgba(47, 111, 223, 0.55)';
+      ctx.setLineDash([3 * px, 3 * px]);
+      ctx.strokeRect(b.x1 - 2 * px, b.y1 - 2 * px, b.x2 - b.x1 + 4 * px, b.y2 - b.y1 + 4 * px);
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(rh.x, b.y1 - 2 * px);
+      ctx.lineTo(rh.x, rh.y + 4.5 * px);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(rh.x, rh.y, 4.5 * px, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      ctx.strokeStyle = PREVIEW;
+      ctx.stroke();
+      const r = this.drag?.rot;
+      if (r && this.drag!.moved) {
+        ctx.font = `${12 * px}px system-ui, sans-serif`;
+        ctx.fillStyle = PREVIEW;
+        ctx.fillText(`${Math.round(r.angle / DEG)}°`, this.pointer.x + 10 * px, this.pointer.y - 10 * px);
+      }
+    }
+    // how far an arrow is bent, while bending it
+    const dh = this.drag?.mode === 'handle' && this.drag.moved ? this.drag.handle : undefined;
+    if (dh && dh.kind === 'arrow' && dh.which === 'mid') {
+      const r = doc.arrows.get(dh.id);
+      if (r) {
+        ctx.font = `${12 * px}px ${'system-ui, sans-serif'}`;
+        ctx.fillStyle = PREVIEW;
+        ctx.fillText(r.sweep ? `${Math.round(Math.abs(r.sweep) / DEG)}°` : 'straight', this.pointer.x + 10 * px, this.pointer.y - 10 * px);
       }
     }
     // previews of what a drag will draw
@@ -1140,11 +1585,52 @@ export class Editor {
       } else pts = freeRing(d.start, t.size, L, d.last);
       poly(pts, true);
     } else if (t.kind === 'arrow') {
-      const ang = snapAngle(angleOf(sub(d.last, d.start)));
-      const l = Math.max(L, dist(d.last, d.start));
-      poly([d.start, add(d.start, fromAngle(ang, l))], false);
+      const end = this.arrowEnd(d.start, d.last, d.alt);
+      const sweep = (t.style.sweep ?? 0) * this.bendSide(d, end);
+      poly(arrowPoints({ tail: d.start, head: end, sweep }), false);
+    } else if (t.kind === 'shape') {
+      const g = this.shapeGeometry(t, d.start, d.last, d.shift, d.alt);
+      if (g) outlineShape(ctx, { id: 0, ...t.shape, ...g });
+    } else if (t.kind === 'bracket') {
+      const r = { x1: Math.min(d.start.x, d.last.x), y1: Math.min(d.start.y, d.last.y), x2: Math.max(d.start.x, d.last.x), y2: Math.max(d.start.y, d.last.y) };
+      for (const b of bracketsAround(r, t.bracket)) outlineShape(ctx, { id: 0, ...b });    } else if (t.kind === 'template') {
+      const tp = templateById(t.id);
+      const place = tp && this.templatePlacement(tp, h, d.start, d.last, d.alt);
+      if (tp && place) {
+        const pts = templatePoints(tp, place.pl);
+        ctx.beginPath();
+        for (const [a, b] of tp.bonds) { ctx.moveTo(pts[a].x, pts[a].y); ctx.lineTo(pts[b].x, pts[b].y); }
+        if (place.bondFrom !== undefined) { const f = doc.atoms.get(place.bondFrom)!; ctx.moveTo(f.x, f.y); ctx.lineTo(pts[tp.attach].x, pts[tp.attach].y); }
+        ctx.stroke();
+      }
     }
   }
+}
+
+function strokeAlong(ctx: CanvasRenderingContext2D, pts: Vec[]): void {
+  ctx.beginPath();
+  pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+  ctx.stroke();
+}
+
+/** Trace a shape's outline (or fill it, when the shape is filled) with the current style. */
+function outlineShape(ctx: CanvasRenderingContext2D, s: Shape): void {
+  const x = Math.min(s.x1, s.x2), y = Math.min(s.y1, s.y2), w = Math.abs(s.x2 - s.x1), h = Math.abs(s.y2 - s.y1);
+  ctx.beginPath();
+  switch (s.kind) {
+    case 'line': ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); ctx.stroke(); return;
+    case 'bracket': {
+      // spine plus lips, on the right of the spine's direction
+      const d = norm({ x: s.x2 - s.x1, y: s.y2 - s.y1 }), n = perp(d), lip = bracketLip(Math.hypot(w, h));
+      ctx.moveTo(s.x1 + n.x * lip, s.y1 + n.y * lip); ctx.lineTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); ctx.lineTo(s.x2 + n.x * lip, s.y2 + n.y * lip);
+      ctx.stroke();
+      return;
+    }
+    case 'rect': ctx.rect(x, y, w, h); break;
+    case 'oval': ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2); break;
+    default: ctx.rect(x, y, w, h); ctx.fill(); return;
+  }
+  if (s.filled) ctx.fill(); else ctx.stroke();
 }
 
 function sameHit(a: Hit, b: Hit): boolean {

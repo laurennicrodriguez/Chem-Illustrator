@@ -7,6 +7,7 @@ import { DocStyle } from '../style';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { DEG } from '../geom';
 import { kids, descendants } from './xml';
+import { styleFromFace, isSymbolFont, fromSymbolFont } from '../richtext';
 
 export interface ReadStats {
   atoms: number;
@@ -62,6 +63,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   st.chainAngle = num(root, 'ChainAngle', 120);
   st.labelSize = num(root, 'LabelSize', 10);
   st.captionSize = num(root, 'CaptionSize', 12);
+  st.captionFace = num(root, 'CaptionFace', 0);
   doc.style = st;
 
   // Colours: index 0 is black and 1 white; the colour table starts at index 2.
@@ -93,22 +95,19 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     if (r.nodeName === 'represent' && r.getAttribute('attribute') === 'Charge') chargeShown.add(r.getAttribute('object') ?? '');
   }
 
-  const runsOf = (t: Element): TextRun[] => {
+  /** The text pieces of a <t>. Symbol-font text becomes the characters it shows, unless `raw`. */
+  const runsOf = (t: Element, raw = false): TextRun[] => {
     const out: TextRun[] = [];
     for (const s of kids(t)) {
       if (s.nodeName !== 's') continue;
       const face = num(s, 'face', 0);
       const fontName = fonts.get(s.getAttribute('font') ?? '');
-      const run: TextRun = { text: s.textContent ?? '' };
-      if (face & 1) run.bold = true;
-      if (face & 2) run.italic = true;
-      if (face & 4) run.underline = true;
-      if ((face & 96) === 96) run.formula = true;
-      else if (face & 32) run.sub = true;
-      else if (face & 64) run.sup = true;
+      const run: TextRun = { text: s.textContent ?? '', ...styleFromFace(face) };
       const size = s.getAttribute('size');
       if (size !== null) run.size = Number(size);
-      if (fontName && !/^arial$/i.test(fontName)) run.font = fontName;
+      // Greek letters and signs written in the Symbol font become the characters they show
+      if (isSymbolFont(fontName) && !raw) run.text = fromSymbolFont(run.text);
+      else if (fontName && !/^arial$/i.test(fontName)) run.font = fontName;
       const c = color(s);
       if (c) run.color = c;
       out.push(run);
@@ -228,7 +227,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   };
 
   const readCaption = (t: Element) => {
-    const runs = runsOf(t);
+    const runs = runsOf(t, true);
     if (!runs.length || t.getAttribute('Visible') === 'no') return;
     const [px, py] = pts(t.getAttribute('p'));
     const bb = pts(t.getAttribute('BoundingBox'));
@@ -243,6 +242,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     // ChemDraw stores where each wrapped line ends (as UTF-8 byte offsets); break lines there.
     const ls = t.getAttribute('LineStarts');
     if (ls) applyLineEnds(runs, ls.trim().split(/\s+/).map(Number).slice(0, -1));
+    // (the line ends count the text as stored, so Symbol-font text is turned into Greek letters afterwards)
+    for (const r of runs) if (isSymbolFont(r.font)) { r.text = fromSymbolFont(r.text); delete r.font; }
     const lh = t.getAttribute('LineHeight') ?? t.getAttribute('CaptionLineHeight');
     const lineHeight = lh && /^[\d.]+$/.test(lh) ? Number(lh) : undefined;
     const cap = doc.addCaption({ id: idFor(t), x, y: py, runs, justify, width, lineHeight });
@@ -290,6 +291,9 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       color: color(a),
     };
     if (lw !== st.lineWidth) arrow.lineWidth = lw;
+    // two shafts with a full head: a retrosynthetic arrow (spacing in hundredths of the line width)
+    const spacing = a.getAttribute('ArrowShaftSpacing');
+    if (spacing !== null && !arrow.equilibrium && Number(spacing) > 0) arrow.shaftSpacing = (Number(spacing) / 100) * lw;
     doc.addArrow(arrow);
     from('r', arrow.id, a);
     stats.arrows++;
