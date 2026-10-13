@@ -4,6 +4,7 @@ import './app.css';
 import { Doc } from './model';
 import { Renderer } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
+import type { Align } from './editor/arrange';
 import { readCdxml, ReadStats } from './io/cdxml';
 import { ChemClient } from './chem/client';
 import { toMolfile, addMolfile } from './chem/molfile';
@@ -249,6 +250,10 @@ async function copySmiles(): Promise<void> {
   await navigator.clipboard.writeText(smiles).then(() => flash('Copied SMILES: ' + smiles), () => flash('Could not use the clipboard.'));
 }
 
+function align(how: Align): void {
+  if (!editor.align(how)) flash('Select two or more structures, captions, arrows or shapes to line them up.');
+}
+
 let flashTimer = 0;
 function flash(msg: string, ms = 3500): void {
   const el = $('#flash');
@@ -303,6 +308,19 @@ const COMMANDS: Record<string, () => unknown> = {
   paste: () => paste(),
   'copy-smiles': () => copySmiles(),
   'select-all': () => editor.selectAll(),
+  'align-left': () => align('left'),
+  'align-hcenter': () => align('hcenter'),
+  'align-right': () => align('right'),
+  'align-top': () => align('top'),
+  'align-vcenter': () => align('vcenter'),
+  'align-bottom': () => align('bottom'),
+  'distribute-h': () => editor.distribute('h') || flash('Select three or more structures, captions, arrows or shapes to space them evenly.'),
+  'distribute-v': () => editor.distribute('v') || flash('Select three or more structures, captions, arrows or shapes to space them evenly.'),
+  'flip-h': () => editor.flip('h') || flash('Select something to flip.'),
+  'flip-v': () => editor.flip('v') || flash('Select something to flip.'),
+  'rotate-cw': () => editor.rotateBy(90) || flash('Select something to rotate.'),
+  'rotate-ccw': () => editor.rotateBy(-90) || flash('Select something to rotate.'),
+  'rotate-180': () => editor.rotateBy(180) || flash('Select something to rotate.'),
   'clipboard-formats': async () => {
     const names = await clipboardFormats().catch((err) => [String(err)]);
     flash(names.length ? 'On the clipboard: ' + names.join(', ') : 'The clipboard is empty.', 15000);
@@ -360,6 +378,8 @@ window.addEventListener('keydown', (e) => {
   if (k === 'n') cmd = 'new';
   else if (k === 'o') cmd = 'open';
   else if (k === 's') cmd = e.shiftKey ? 'save-as' : 'save';
+  else if (k === 'h' && e.shiftKey) cmd = 'flip-h';
+  else if (k === 'v' && e.shiftKey && !e.altKey) cmd = 'flip-v';
   else if (k === 'c') cmd = e.altKey ? 'copy-smiles' : textSelected() ? null : 'copy';
   else if (k === 'x' && !e.altKey) cmd = textSelected() ? null : 'cut';
   // in a browser, Ctrl+V goes on to the paste event, which can read the clipboard

@@ -102,6 +102,7 @@ button:hover { border-color: var(--accent); }
   border-radius: 5px;
   padding: 5px 8px;
   text-align: left;
+  white-space: nowrap;
   background: transparent;
 }
 .menu button[hidden] { display: none; }

@@ -10,6 +10,7 @@ import {
   placeRing, chainPoints, MERGE_FRACTION,
 } from '../chem/chemgeom';
 import { ATOM_LABEL_KEYS, ATOM_ACTION_KEYS, BOND_KEYS, TOOL_KEYS, AtomAction } from './hotkeys';
+import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, rotation, mirrorX, mirrorY } from './arrange';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { tokenize } from '../chem/labels';
 import {
@@ -111,13 +112,15 @@ interface Drag {
   shift: boolean;
   alt: boolean;
   ctrl: boolean;
-  mode: 'none' | 'pan' | 'move' | 'marquee' | 'draw' | 'handle';
+  mode: 'none' | 'pan' | 'move' | 'marquee' | 'draw' | 'handle' | 'rotate';
   last: Vec;
   panOrigin?: { ox: number; oy: number };
   /** The arrow or shape handle being dragged. */
   handle?: Handle;
   /** Where the pointer has been (which way a curved arrow is drawn bending). */
   path?: Vec[];
+  /** Rotating the selection: what it looked like before, the centre, and the angle so far. */
+  rot?: { snap: Snapshot; center: Vec; from: number; angle: number };
 }
 
 const HILITE = 'rgba(40, 120, 255, 0.28)';
@@ -304,13 +307,20 @@ export class Editor {
     this.r.overlay.setPointerCapture(e.pointerId);
     const p = this.docPoint(e);
     const rect = this.r.overlay.getBoundingClientRect();
-    const handle = e.button === 0 ? this.handleAt(p) : null;
-    const hit = handle ? null : this.hitTest(p);
+    const rh = e.button === 0 ? this.rotateHandle() : null;
+    const rotating = !!rh && dist(rh, p) <= this.tol(7);
+    const handle = e.button === 0 && !rotating ? this.handleAt(p) : null;
+    const hit = handle || rotating ? null : this.hitTest(p);
     this.drag = {
       start: p, startScreen: { x: e.clientX - rect.left, y: e.clientY - rect.top }, hit, button: e.button, moved: false,
-      shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey, mode: handle ? 'handle' : 'none', last: p, path: [p],
+      shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey, mode: handle ? 'handle' : rotating ? 'rotate' : 'none', last: p, path: [p],
     };
     if (handle) this.drag.handle = handle;
+    if (rotating) {
+      const b = this.selBox()!;
+      const center = { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 };
+      this.drag.rot = { snap: snapshot(this.doc, this.sel, this.measure()), center, from: angleOf(sub(p, center)), angle: 0 };
+    }
     if (e.button === 1 || e.button === 2) {
       this.drag.mode = 'pan';
       this.drag.panOrigin = { ox: this.r.view.ox, oy: this.r.view.oy };
@@ -324,10 +334,12 @@ export class Editor {
     const d = this.drag;
     if (this.hotAnchor && dist(this.hotAnchor, p) > this.tol(3)) { this.hotAtom = null; this.hotAnchor = null; }
     if (!d) {
-      const handle = this.handleAt(p);
-      const h = handle ? null : this.hitTest(p);
+      const rh = this.rotateHandle();
+      const onRotate = !!rh && dist(rh, p) <= this.tol(7);
+      const handle = onRotate ? null : this.handleAt(p);
+      const h = handle || onRotate ? null : this.hitTest(p);
       if (!sameHit(h, this.hover)) { this.hover = h; }
-      this.r.overlay.style.cursor = handle ? (handle.which === 'mid' ? 'grab' : 'crosshair') : '';
+      this.r.overlay.style.cursor = onRotate ? 'grab' : handle ? (handle.which === 'mid' ? 'grab' : 'crosshair') : '';
       this.requestOverlay(e.timeStamp);
       return;
     }
@@ -337,6 +349,7 @@ export class Editor {
       d.moved = true;
       if (d.mode === 'none') d.mode = this.dragModeFor(d);
       if (d.mode === 'handle') this.doc.begin(d.handle!.which === 'mid' ? 'Bend arrow' : 'Resize');
+      if (d.mode === 'rotate') this.doc.begin('Rotate');
       if (d.mode === 'move') {
         this.doc.begin('Move');
         if (d.hit && !this.isSelected(d.hit)) {
@@ -356,6 +369,18 @@ export class Editor {
     if (d.mode === 'move') {
       const dx = p.x - d.last.x, dy = p.y - d.last.y;
       this.moveSelection(dx, dy);
+      d.last = p;
+      this.requestScene(e.timeStamp);
+      return;
+    }
+    if (d.mode === 'rotate') {
+      const r = d.rot!;
+      let ang = angleOf(sub(p, r.center)) - r.from;
+      ang = Math.atan2(Math.sin(ang), Math.cos(ang));
+      // Shift turns in 15° steps
+      ang = e.shiftKey ? snapAngle(ang) : Math.round(ang / DEG) * DEG;
+      r.angle = ang;
+      transform(this.doc, r.snap, rotation(r.center, ang), false);
       d.last = p;
       this.requestScene(e.timeStamp);
       return;
@@ -403,7 +428,7 @@ export class Editor {
     if (!d) return;
     const p = this.docPoint(e);
     if (d.mode === 'pan') { this.requestScene(e.timeStamp); return; }
-    if (d.mode === 'handle') {
+    if (d.mode === 'handle' || d.mode === 'rotate') {
       if (d.moved) { this.doc.commit(); this.changed(); }
       return;
     }
@@ -871,6 +896,75 @@ export class Editor {
     }
   }
 
+  // ------------------------------------------------------------------ arranging
+
+  /** Sizes of labels and captions, for lining things up. Very large selections go by atom positions. */
+  measure(): Measure {
+    if (this.sel.atoms.size > 5000) return { ...POINTS, captionBox: (c) => this.r.captionBox(c) };
+    return { atomBoxes: (a) => this.r.atomInfo(this.doc, a).boxes, captionBox: (c) => this.r.captionBox(c) };
+  }
+
+  private selBoxCache: { key: string; box: Rect | null } = { key: '', box: null };
+
+  /** Box round the selection (remembered until the drawing or the selection changes). */
+  selBox(): Rect | null {
+    const s = this.sel;
+    const sum = (x: Set<number>) => { let t = 0; for (const id of x) t += id; return `${x.size}:${t}`; };
+    const key = `${this.doc.version}|${sum(s.atoms)}|${sum(s.captions)}|${sum(s.arrows)}|${sum(s.shapes)}`;
+    if (key !== this.selBoxCache.key) this.selBoxCache = { key, box: selectionBox(this.doc, s, this.measure()) };
+    return this.selBoxCache.box;
+  }
+
+  /** The round handle above the selection that turns it (select tool only). */
+  private rotateHandle(): Vec | null {
+    const s = this.sel;
+    if (this.tool.kind !== 'select' || (!s.atoms.size && !s.arrows.size && !s.shapes.size)) return null;
+    const b = this.selBox();
+    return b ? { x: (b.x1 + b.x2) / 2, y: b.y1 - this.tol(24) } : null;
+  }
+
+  /** Line up the selected objects. Returns false when fewer than two are selected. */
+  align(how: Align): boolean {
+    const us = units(this.doc, this.sel, this.measure());
+    if (us.length < 2) return false;
+    const off = alignOffsets(us, how);
+    this.doc.edit('Align', () => us.forEach((u, i) => moveUnit(this.doc, u, off[i])));
+    this.changed();
+    return true;
+  }
+
+  /** Space the selected objects evenly. Returns false when fewer than three are selected. */
+  distribute(axis: 'h' | 'v'): boolean {
+    const us = units(this.doc, this.sel, this.measure());
+    if (us.length < 3) return false;
+    const off = distributeOffsets(us, axis);
+    this.doc.edit('Distribute', () => us.forEach((u, i) => moveUnit(this.doc, u, off[i])));
+    this.changed();
+    return true;
+  }
+
+  /** Mirror the selection left-to-right ('h') or top-to-bottom ('v'). This turns stereocentres over, as in ChemDraw. */
+  flip(axis: 'h' | 'v'): boolean {
+    const b = this.selBox();
+    if (!b || !this.hasSelection()) return false;
+    const snap = snapshot(this.doc, this.sel, this.measure());
+    const f = axis === 'h' ? mirrorX((b.x1 + b.x2) / 2) : mirrorY((b.y1 + b.y2) / 2);
+    this.doc.edit(axis === 'h' ? 'Flip horizontal' : 'Flip vertical', () => transform(this.doc, snap, f, true));
+    this.changed();
+    return true;
+  }
+
+  /** Turn the selection about its centre; positive is clockwise. */
+  rotateBy(deg: number): boolean {
+    const b = this.selBox();
+    if (!b || !this.hasSelection()) return false;
+    const snap = snapshot(this.doc, this.sel, this.measure());
+    const c = { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 };
+    this.doc.edit('Rotate', () => transform(this.doc, snap, rotation(c, deg * DEG), false));
+    this.changed();
+    return true;
+  }
+
   // ------------------------------------------------------------------ keyboard
 
   private onKey(e: KeyboardEvent): void {
@@ -886,6 +980,13 @@ export class Editor {
       if (k === '0') { e.preventDefault(); this.fit(); return; }
       if (k === '=' || k === '+') { e.preventDefault(); this.zoomAt(this.r.width / 2, this.r.height / 2, 1.25); this.requestScene(); return; }
       if (k === '-') { e.preventDefault(); this.zoomAt(this.r.width / 2, this.r.height / 2, 0.8); this.requestScene(); return; }
+      return;
+    }
+    if (e.altKey && e.key.startsWith('Arrow') && this.hasSelection()) {
+      // Alt+←/→ turn the selection 1°, Alt+↑/↓ 15°
+      e.preventDefault();
+      const deg = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : e.key === 'ArrowUp' ? -15 : 15;
+      this.rotateBy(deg);
       return;
     }
     if (e.altKey) return;
@@ -1234,7 +1335,7 @@ export class Editor {
       for (const id of s.shapes) { const sh = doc.shapes.get(id); if (sh) outlineShape(ctx, sh); }
     }
     // hotspot
-    const h = this.drag?.mode === 'move' ? null : this.hotspot();
+    const h = this.drag?.mode === 'move' || this.drag?.mode === 'rotate' ? null : this.hotspot();
     if (h) {
       ctx.fillStyle = HILITE;
       ctx.strokeStyle = HILITE;
@@ -1291,6 +1392,32 @@ export class Editor {
         else ctx.rect(hd.at.x - k, hd.at.y - k, 2 * k, 2 * k);
         ctx.fill();
         ctx.stroke();
+      }
+    }
+    // the selection's box and the handle that turns it
+    const rh = this.drag && this.drag.mode !== 'rotate' ? null : this.rotateHandle();
+    if (rh) {
+      const b = this.selBox()!;
+      ctx.lineWidth = px;
+      ctx.strokeStyle = 'rgba(47, 111, 223, 0.55)';
+      ctx.setLineDash([3 * px, 3 * px]);
+      ctx.strokeRect(b.x1 - 2 * px, b.y1 - 2 * px, b.x2 - b.x1 + 4 * px, b.y2 - b.y1 + 4 * px);
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(rh.x, b.y1 - 2 * px);
+      ctx.lineTo(rh.x, rh.y + 4.5 * px);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(rh.x, rh.y, 4.5 * px, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      ctx.strokeStyle = PREVIEW;
+      ctx.stroke();
+      const r = this.drag?.rot;
+      if (r && this.drag!.moved) {
+        ctx.font = `${12 * px}px system-ui, sans-serif`;
+        ctx.fillStyle = PREVIEW;
+        ctx.fillText(`${Math.round(r.angle / DEG)}°`, this.pointer.x + 10 * px, this.pointer.y - 10 * px);
       }
     }
     // how far an arrow is bent, while bending it

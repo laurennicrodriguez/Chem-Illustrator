@@ -35,6 +35,27 @@
         <button role="menuitem" data-cmd="clipboard-formats" hidden>Show Clipboard Formats</button>
       </div>
     </div>
+    <div class="menu-wrap">
+      <button id="btn-object" aria-haspopup="menu" aria-expanded="false" aria-controls="object-menu">Object</button>
+      <div id="object-menu" class="menu" role="menu" hidden>
+        <button role="menuitem" data-cmd="align-left">Align Left Edges</button>
+        <button role="menuitem" data-cmd="align-hcenter">Align Centres Across</button>
+        <button role="menuitem" data-cmd="align-right">Align Right Edges</button>
+        <hr />
+        <button role="menuitem" data-cmd="align-top">Align Top Edges</button>
+        <button role="menuitem" data-cmd="align-vcenter">Align Middles Down</button>
+        <button role="menuitem" data-cmd="align-bottom">Align Bottom Edges</button>
+        <hr />
+        <button role="menuitem" data-cmd="distribute-h">Space Evenly Across</button>
+        <button role="menuitem" data-cmd="distribute-v">Space Evenly Down</button>
+        <hr />
+        <button role="menuitem" data-cmd="flip-h">Flip Left to Right<kbd>Ctrl+Shift+H</kbd></button>
+        <button role="menuitem" data-cmd="flip-v">Flip Top to Bottom<kbd>Ctrl+Shift+V</kbd></button>
+        <button role="menuitem" data-cmd="rotate-cw">Rotate 90° Clockwise</button>
+        <button role="menuitem" data-cmd="rotate-ccw">Rotate 90° Anticlockwise</button>
+        <button role="menuitem" data-cmd="rotate-180">Rotate 180°</button>
+      </div>
+    </div>
     <span class="sep"></span>
     <button id="btn-undo" title="Undo (Ctrl+Z)">Undo</button>
     <button id="btn-redo" title="Redo (Ctrl+Y)">Redo</button>
