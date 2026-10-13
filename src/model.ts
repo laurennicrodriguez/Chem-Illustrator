@@ -43,6 +43,14 @@ export interface Atom {
    * end of the bond, marked with a wavy line ('Wavy', ChemDraw's ExternalConnectionType).
    */
   attach?: string;
+  /** The number in a numbered point of attachment, drawn in a black diamond (ExternalConnectionNum). */
+  attachNum?: number;
+  /** The atom's number (ChemDraw's AtomNumber), kept as the text the file has. */
+  atomNumber?: string;
+  /** Show the atom number beside the atom (the ' key; ChemDraw's ShowAtomNumber). */
+  showNumber?: boolean;
+  /** Where the shown number sits, relative to the atom, when the file says or it was moved. */
+  numberLabel?: { dx: number; dy: number; size: number };
 }
 
 /** Valence an atom's radical takes up (no hydrogens fill it). */

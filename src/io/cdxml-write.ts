@@ -14,6 +14,7 @@ import { kids, descendants } from './xml';
 import { arialWidth } from '../text-metrics';
 import { toSymbolPieces, isSymbolFont, faceFromStyle } from '../richtext';
 import { atomStereoText, bondStereoText, atomStereoPlace, bondStereoPlace, PlacedLabel } from '../chem/stereo';
+import { numberPlace } from '../render/atom-marks';
 
 export interface WriteOptions {
   /** Text width in points; by default Arial's own widths, as ChemDraw uses. */
@@ -393,21 +394,52 @@ class CdxmlWriter {
   }
 
   private buildNode(a: Atom): Element {
-    if (a.attach) return this.el('n', { id: a.id, p: pt(a), NodeType: 'ExternalConnectionPoint', ExternalConnectionType: a.attach === 'Unspecified' ? null : a.attach });
+    if (a.attach) return this.el('n', { id: a.id, p: pt(a), NodeType: 'ExternalConnectionPoint', ExternalConnectionType: a.attach === 'Unspecified' ? null : a.attach, ExternalConnectionNum: a.attachNum ?? null });
     const n = this.el('n', { id: a.id, p: pt(a) });
     this.nodeCore(n, a);
     this.nodeLabel(n, a, true);
     this.atomStereo(n, a, true);
+    this.atomNumber(n, a);
     return n;
+  }
+
+  /** The atom number (the ' key): ChemDraw's AtomNumber, ShowAtomNumber and a tag with the text. */
+  private atomNumber(n: Element, a: Atom): void {
+    this.set(n, 'ShowAtomNumber', a.showNumber ? 'yes' : null);
+    this.set(n, 'AtomNumber', a.atomNumber ?? null);
+    const old = kids(n).find((c) => c.nodeName === 'objecttag' && c.getAttribute('Name') === 'number');
+    if (old) n.removeChild(old);
+    if (!a.showNumber || !a.atomNumber) return;
+    const bb = nums(this.child(n, 't')?.getAttribute('BoundingBox') ?? null);
+    const label = bb.length === 4 ? { x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3] } : null;
+    const p = numberPlace(a, this.doc.style.labelSize * (a.s ?? 1), label);
+    const tag = this.el('objecttag', { TagType: 'Unknown', Name: 'number' });
+    const t = this.el('t', { p: pt(p), BoundingBox: box({ x1: p.x, y1: p.y - CAP * p.size, x2: p.x + this.measure(a.atomNumber, p.size), y2: p.y }), CaptionLineHeight: 'variable' });
+    const s = this.el('s', { font: this.fontId(), size: f2(p.size).replace(/\.00$/, ''), color: '0' });
+    s.textContent = a.atomNumber;
+    t.appendChild(s);
+    tag.appendChild(t);
+    n.appendChild(tag);
   }
 
   private patchNode(n: Element, a: Atom, o: Atom): void {
     const dx = a.x - o.x, dy = a.y - o.y;
     n.setAttribute('p', pt(a));
     if (a.attach) {
+      this.set(n, 'NodeType', 'ExternalConnectionPoint');
       this.set(n, 'ExternalConnectionType', a.attach === 'Unspecified' ? null : a.attach);
+      this.set(n, 'ExternalConnectionNum', a.attachNum ?? null);
+      // an atom turned into a point of attachment loses its label and element
+      for (const c of kids(n)) if (c.nodeName === 't' || c.nodeName === 'fragment' || c.nodeName === 'objecttag') n.removeChild(c);
+      for (const k of ['Element', 'NumHydrogens', 'NeedsClean', 'GenericNickname', 'Charge', 'Isotope', 'ShowAtomNumber', 'AtomNumber']) n.removeAttribute(k);
       return;
     }
+    if (o.attach) for (const k of ['NodeType', 'ExternalConnectionType', 'ExternalConnectionNum']) n.removeAttribute(k);
+    this.patchNodeBody(n, a, o, dx, dy);
+    this.atomNumber(n, a);
+  }
+
+  private patchNodeBody(n: Element, a: Atom, o: Atom, dx: number, dy: number): void {
     for (const c of kids(n)) if (c.nodeName !== 't' && c.nodeName !== 'fragment') shift(c, dx, dy);
     this.nodeCore(n, a);
     this.atomStereo(n, a, true);

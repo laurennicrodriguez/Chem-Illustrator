@@ -1,5 +1,6 @@
-// The Style panel: shows how the selected arrows, shapes and captions look, and changes them,
-// and the stereo labels of selected stereocentres and double bonds.
+// The Style panel: shows how the selected arrows, shapes and captions look, and changes them;
+// the stereo labels of selected stereocentres and double bonds; and a single selected atom or
+// bond (label, charge, atom number; order and style).
 // Anything the drawing tools set automatically can be changed here by hand.
 
 import { Doc, Arrow, Shape, Caption, Atom, Bond } from '../model';
@@ -8,6 +9,7 @@ import { arialWidth } from '../text-metrics';
 import { Selection } from '../editor/editor';
 import { DEG } from '../geom';
 import { isCircle } from '../objects';
+import { nextNumber } from '../chem/sprouts';
 
 type Opt<T> = [T, string];
 
@@ -18,10 +20,17 @@ const SHAFTS: Opt<string>[] = [['one', 'One line'], ['equilibrium', 'Equilibrium
 const BRACKETS: Opt<NonNullable<Shape['bracket']>>[] = [['square', 'Square [ ]'], ['round', 'Round ( )'], ['curly', 'Curly { }']];
 const JUSTIFY: Opt<Caption['justify']>[] = [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']];
 
+const BOND_ORDERS: Opt<string>[] = [['1', 'Single'], ['2', 'Double'], ['3', 'Triple'], ['1.5', 'Aromatic'], ['4', 'Quadruple']];
+const BOND_STYLES: Opt<Bond['display']>[] = [['solid', 'Plain'], ['wedge', 'Wedge'], ['hashWedge', 'Hashed wedge'], ['hash', 'Hashed'], ['bold', 'Bold'], ['dash', 'Dashed'], ['wavy', 'Wavy']];
+const DOUBLE_POS: Opt<Bond['dpos']>[] = [['auto', 'Automatic'], ['left', 'Left'], ['center', 'Centred'], ['right', 'Right']];
+
 const round = (x: number, k = 100) => Math.round(x * k) / k;
 
 export class StylePanel {
   private key = '';
+
+  /** Turns typed label text into a label (the editor's rules: "OH" is an O with its H, and so on). */
+  applyLabel: (atomId: number, text: string) => void = () => {};
 
   constructor(private section: HTMLElement, private body: HTMLElement, private doc: Doc, private sel: () => Selection, private changed: () => void) {}
 
@@ -40,7 +49,12 @@ export class StylePanel {
     const info = this.doc.stereo;
     const centres = [...s.atoms].map((id) => this.doc.atoms.get(id)).filter((a): a is Atom => !!a && (!!info?.atom(a.id) || !!info?.undecided?.('a', a.id) || !!a.stereoLabel));
     const dbls = [...s.bonds].map((id) => this.doc.bonds.get(id)).filter((b): b is Bond => !!b && (!!info?.bond(b.id) || !!info?.undecided?.('b', b.id) || !!b.stereoLabel));
-    this.section.hidden = !arrows.length && !shapes.length && !caps.length && !centres.length && !dbls.length;
+    // one atom or one bond on its own (as after / or ? over it)
+    const atom = s.atoms.size === 1 && !s.bonds.size ? this.doc.atoms.get([...s.atoms][0]) : undefined;
+    const bond = s.bonds.size === 1 && s.atoms.size <= 2 ? this.doc.bonds.get([...s.bonds][0]) : undefined;
+    this.section.hidden = !arrows.length && !shapes.length && !caps.length && !centres.length && !dbls.length && !atom && !bond;
+    if (atom) this.atomControls(atom);
+    if (bond) this.bondControls(bond);
     if (arrows.length) this.arrowControls(arrows);
     if (shapes.length) this.shapeControls(shapes);
     if (caps.length) this.captionControls(caps);
@@ -132,6 +146,36 @@ export class StylePanel {
   }
 
   // ------------------------------------------------------------------ building blocks
+
+  // ------------------------------------------------------------------ one atom, one bond
+
+  private atomControls(a: Atom): void {
+    const set = (label: string, patch: Partial<Atom>) => this.edit(label, () => this.doc.updateAtom(a.id, patch));
+    if (a.attach) {
+      this.heading('Point of attachment');
+      this.number('Number', a.attachNum ?? 0, 1, 0, 99, (v) => set('Attachment number', { attachNum: v || undefined }),
+        'The number in the black diamond; 0 for none.');
+      return;
+    }
+    this.heading('Atom');
+    this.text('Label', a.label ?? '', a.z === 6 ? 'carbon (no label)' : 'automatic', (v) => this.edit('Label', () => this.applyLabel(a.id, v)),
+      'Type a label (O, NH2, OTBS, CO2Et…); leave empty for a plain carbon.');
+    this.number('Charge', a.charge, 1, -8, 8, (v) => set('Charge', { charge: v }));
+    this.check('Show atom number', !!a.showNumber, (v) => set(v ? 'Show atom number' : 'Hide atom number',
+      v ? { showNumber: true, atomNumber: a.atomNumber || String(nextNumber(this.doc, a.id, (x) => x.atomNumber)) } : { showNumber: false }));
+    if (a.showNumber || a.atomNumber) {
+      this.text('Atom number', a.atomNumber ?? '', 'number', (v) => set('Atom number', { atomNumber: v.trim() || undefined, showNumber: !!v.trim() && a.showNumber }),
+        'Any text: 1, 2a, C-7…');
+    }
+  }
+
+  private bondControls(b: Bond): void {
+    const set = (label: string, patch: Partial<Bond>) => this.edit(label, () => this.doc.updateBond(b.id, patch));
+    this.heading('Bond');
+    this.select('Order', BOND_ORDERS, String(b.order), (v) => set('Bond order', { order: Number(v) }));
+    this.select('Style', BOND_STYLES, b.display, (v) => set('Bond style', { display: v }));
+    if (b.order === 2) this.select('Second line', DOUBLE_POS, b.dpos, (v) => set('Double bond position', { dpos: v }));
+  }
 
   // ------------------------------------------------------------------ stereo labels
 

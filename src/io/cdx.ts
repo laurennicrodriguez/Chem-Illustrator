@@ -131,6 +131,8 @@ const P: Record<string, Prop> = {
   LinkCountLow: { tag: 0x043d, kind: 'i16' },
   LinkCountHigh: { tag: 0x043e, kind: 'i16' },
   ExternalConnectionType: { tag: 0x0440, kind: 'enum8', values: list('Unspecified', 'Diamond', 'Star', 'PolymerBead', 'Wavy') },
+  // not in the documentation; matched to CDXML in ChemDraw's files (one byte)
+  ExternalConnectionNum: { tag: 0x044b, kind: 'u8' },
   // documented as present-means-yes, but ChemDraw 25 writes these with a yes/no byte
   ShowTerminalCarbonLabels: { tag: 0x0442, kind: 'bool' },
   ShowNonTerminalCarbonLabels: { tag: 0x0443, kind: 'bool' },

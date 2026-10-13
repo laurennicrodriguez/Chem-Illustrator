@@ -236,6 +236,18 @@ describe('a drawing through CDX', () => {
     expect(back.style).toEqual(readCdxml(writeCdxml(doc)).doc.style);
   });
 
+  it('keeps atom numbers and numbered points of attachment', () => {
+    const doc = new Doc();
+    doc.bulk(() => {
+      const a = doc.addAtom(100, 100, 6, { showNumber: true, atomNumber: '3' }), b = doc.addAtom(114.4, 100, 0, { attach: 'Unspecified', attachNum: 2 });
+      doc.addBond(a.id, b.id);
+    });
+    const back = readCdxml(cdxToCdxml(cdxmlToCdx(writeCdxml(doc)))).doc;
+    const atoms = [...back.atoms.values()];
+    expect(atoms.find((x) => x.atomNumber)).toMatchObject({ showNumber: true, atomNumber: '3' });
+    expect(atoms.find((x) => x.attach)).toMatchObject({ attachNum: 2 });
+  });
+
   const dir = process.env.CHEM_TEST_FILES ?? '';
   const files = dir && existsSync(dir) ? readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.cdxml')) : [];
   for (const f of files) {

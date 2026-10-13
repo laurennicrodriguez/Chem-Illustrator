@@ -18,6 +18,7 @@ export interface FileType {
 
 export const CDXML: FileType = { description: 'ChemDraw XML drawing', extension: 'cdxml', mime: 'chemical/x-cdxml' };
 export const MOL: FileType = { description: 'MDL molfile', extension: 'mol', mime: 'chemical/x-mdl-molfile' };
+export const KEYMAP_FILE: FileType = { description: 'Chem Illustrator hotkeys', extension: 'json', mime: 'application/json' };
 
 // The parts of the File System Access API used here (Chrome and Edge only).
 interface FileHandle {

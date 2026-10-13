@@ -15,6 +15,7 @@ import { bracketPath, shaftOffset, type PathStep } from '../objects';
 import { formulaParts } from '../richtext';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
+import { numberPlace, attachDiamondSize, hasAttachDiamond } from './atom-marks';
 
 /** Colour of the stereo labels previewed with "Show R/S" (not part of the drawing). */
 const PREVIEW_COLOR = '#b4232a';
@@ -455,6 +456,44 @@ export class Renderer {
     return curFont;
   }
 
+  /** The atom number shown with the ' key, at the label's upper right. */
+  private drawAtomNumber(ctx: CanvasRenderingContext2D, doc: Doc, a: Atom, info: AtomCache, curFont: string): string {
+    const L = doc.style.labelSize * (a.s ?? 1);
+    let box: Rect | null = null;
+    for (const b of info.layout?.boxes ?? []) {
+      const r = { x1: a.x + b.x1, y1: a.y + b.y1, x2: a.x + b.x2, y2: a.y + b.y2 };
+      box = box ? { x1: Math.min(box.x1, r.x1), y1: Math.min(box.y1, r.y1), x2: Math.max(box.x2, r.x2), y2: Math.max(box.y2, r.y2) } : r;
+    }
+    const p = numberPlace(a, L, box);
+    const f = `${p.size}px ${FONT_STACK}`;
+    if (f !== curFont) { ctx.font = f; curFont = f; }
+    ctx.fillStyle = a.color ?? '#000';
+    ctx.fillText(a.atomNumber!, p.x, p.y);
+    return curFont;
+  }
+
+  /** A numbered point of attachment: a black diamond with the number in white. */
+  private drawAttachDiamond(ctx: CanvasRenderingContext2D, doc: Doc, a: Atom, curFont: string): string {
+    const L = doc.style.labelSize * (a.s ?? 1);
+    const h = attachDiamondSize(L);
+    ctx.fillStyle = a.color ?? '#000';
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y - h);
+    ctx.lineTo(a.x + h, a.y);
+    ctx.lineTo(a.x, a.y + h);
+    ctx.lineTo(a.x - h, a.y);
+    ctx.closePath();
+    ctx.fill();
+    const text = String(a.attachNum);
+    const size = 0.75 * L;
+    const f = `${size}px ${FONT_STACK}`;
+    if (f !== curFont) { ctx.font = f; curFont = f; }
+    ctx.fillStyle = '#fff';
+    ctx.fillText(text, a.x - measureText(text, size) / 2, a.y + 0.716 * size / 2);
+    ctx.fillStyle = '#000';
+    return curFont;
+  }
+
   /**
    * Spots for stereo labels, kept until the drawing or its labels change. They are worked out
    * with Arial's published widths, as when saving, so a label sits in the file where it was seen.
@@ -548,6 +587,8 @@ export class Renderer {
       } else if (a.charge && a.z === 6 && !a.hideCharge) {
         this.drawCarbonCharge(ctx, doc, a);
       }
+      if (a.showNumber && a.atomNumber) curFont = this.drawAtomNumber(ctx, doc, a, info, curFont);
+      if (hasAttachDiamond(a)) curFont = this.drawAttachDiamond(ctx, doc, a, curFont);
       if (checks?.forAtom(a)) warns.push(this.warningBox(doc, a, info));
     }
     curFont = this.drawStereoLabels(ctx, doc, atoms, bondSet, curFont);

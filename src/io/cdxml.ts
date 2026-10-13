@@ -150,6 +150,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       if (type === 'ExternalConnectionPoint') {
         // a point of attachment drawn on its own (the wavy line ending a substituent)
         const a = doc.addAtom(x, y, 0, { id, attach: n.getAttribute('ExternalConnectionType') ?? 'Unspecified' });
+        const num = Number(n.getAttribute('ExternalConnectionNum'));
+        if (Number.isInteger(num) && num > 0) a.attachNum = num;
         from('a', a.id, n);
         nodeIds.set(n.getAttribute('id') ?? '', id);
         continue;
@@ -171,9 +173,16 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
           // ChemDraw's (R)/(S) label beside the atom
           const l = stereoTag(ch, x, y);
           if (l) extra.stereoLabel = l;
+        } else if (ch.nodeName === 'objecttag' && ch.getAttribute('Name') === 'number') {
+          // where the atom number sits (the ' key)
+          const l = stereoTag(ch, x, y);
+          if (l) extra.numberLabel = { dx: l.dx, dy: l.dy, size: l.size };
         }
       }
       if (n.getAttribute('ShowAtomStereo') === 'yes') extra.showStereo = true;
+      const atomNumber = n.getAttribute('AtomNumber');
+      if (atomNumber) extra.atomNumber = atomNumber;
+      if (n.getAttribute('ShowAtomNumber') === 'yes') extra.showNumber = true;
       const atom = doc.addAtom(x, y, z, extra);
       from('a', id, n);
       nodeIds.set(n.getAttribute('id') ?? '', id);
