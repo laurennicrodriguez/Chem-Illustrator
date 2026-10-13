@@ -149,9 +149,9 @@ export type Part = { text: string; pos: 'base' | 'sub' | 'sup' };
 
 /**
  * How formula style shows a piece of text, as ChemDraw does: numbers straight after a letter or
- * a closing bracket are subscripts (CH3, Pd(PPh3)4, [Fe(CN)6]3), and a + or − ending a word
- * there is a superscript charge (NH4+, PhSO3−, Cl−). A charge with a number (Fe³⁺, ]³⁻) needs
- * the number superscripted by hand.
+ * a closing bracket are subscripts (CH3, Pd(PPh3)4, [Fe(CN)6]3), and a + ending a word there is
+ * a superscript charge (NH4+, K+). A - stays a plain hyphen, as in ChemDraw, since it is also
+ * used in names (n-BuLi); superscript a minus charge, or a charge's number (Fe³⁺), by hand.
  */
 export function formulaParts(text: string): Part[] {
   const out: Part[] = [];
@@ -160,7 +160,7 @@ export function formulaParts(text: string): Part[] {
     if (last && last.pos === pos) last.text += t;
     else out.push({ text: t, pos });
   };
-  const wordEnd = /^[+\-−](?=$|[\s,;:)\]])/;
+  const wordEnd = /^\+(?=$|[\s,;:)\]])/;
   let i = 0;
   while (i < text.length) {
     const rest = text.slice(i);
@@ -224,24 +224,11 @@ export const savableChar = (ch: string): boolean => plainFontChar(ch) || TO_SYMB
 
 /**
  * Split text for saving: characters an ordinary font can't hold but the Symbol font can
- * (Greek letters, arrows, ≤ and so on) come out as Symbol-font pieces. In formula style a minus
- * charge (PhSO3−) is saved as a plain hyphen, which ChemDraw reads as a charge; a Symbol minus
- * there it drops to subscript. Other minus signs, such as (−)-sparteine, stay in Symbol.
+ * (Greek letters, arrows, ≤ and so on) come out as Symbol-font pieces.
  */
-export function toSymbolPieces(text: string, formula = false): { text: string; symbol: boolean }[] {
+export function toSymbolPieces(text: string): { text: string; symbol: boolean }[] {
   const out: { text: string; symbol: boolean }[] = [];
-  const charge = new Set<number>();
-  if (formula) {
-    let k = 0;
-    for (const part of formulaParts(text)) {
-      if (part.pos === 'sup') for (let j = 0; j < part.text.length; j++) charge.add(k + j);
-      k += part.text.length;
-    }
-  }
-  let k = -1;
-  for (let ch of text) {
-    k += ch.length;
-    if (ch === '−' && charge.has(k)) ch = '-';
+  for (const ch of text) {
     const sym = !plainFontChar(ch) && TO_SYMBOL.has(ch);
     const t = sym ? TO_SYMBOL.get(ch)! : ch;
     const last = out[out.length - 1];
