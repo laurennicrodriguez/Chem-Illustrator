@@ -78,7 +78,7 @@ check('pasting SMILES text draws it', (await count()).atoms === 10, JSON.stringi
 await page.click('#btn-edit');
 await page.screenshot({ path: path.join(out, 'edit-menu.png'), clip: { x: 0, y: 0, width: 560, height: 330 } });
 const shown = await page.evaluate(() => [...document.querySelectorAll('#edit-menu button')].filter((b) => b.offsetParent).map((b) => b.dataset.cmd));
-check('Edit menu items', shown.join(',') === 'undo,redo,cut,copy,paste,copy-smiles,select-all', shown.join(','));
+check('Edit menu items', shown.join(',') === 'undo,redo,cut,copy,paste,copy-smiles,copy-mol,copy-cdxml,paste-smiles,select-all,hotkeys', shown.join(','));
 await page.keyboard.press('ArrowLeft');
 check('left arrow opens the File menu', await page.evaluate(() => !document.querySelector('#file-menu').hidden && document.querySelector('#edit-menu').hidden));
 await page.keyboard.press('Escape');

@@ -1,7 +1,7 @@
 // The app window: File menu, toolbar, drawing area, analysis and speed panels.
 
 import './app.css';
-import { Doc, Atom } from './model';
+import { Doc, Atom, Caption } from './model';
 import { Renderer } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
 import type { Align } from './editor/arrange';
@@ -27,6 +27,8 @@ import { loadSettings, saveSettings, settingsLocation, Settings } from './settin
 import { HotkeysDialog } from './ui/hotkeys-dialog';
 import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
+import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
+import { NameDialog } from './ui/name-dialog';
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -308,12 +310,94 @@ async function pasteChemistry(text: string): Promise<void> {
   try {
     let ids: number[] = [];
     doc.edit('Paste', () => { ids = addMolfile(doc, mb!, c.x, c.y); });
-    editor.sel = { atoms: new Set(ids), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set() };
-    for (const id of ids) for (const b of doc.adj.get(id) ?? []) editor.sel.bonds.add(b);
-    editor.changed();
+    selectNewAtoms(ids);
   } catch (err) {
     flash(String(err));
   }
+}
+
+/** Select just these (new) atoms and their bonds. */
+function selectNewAtoms(ids: number[]): void {
+  editor.sel = { atoms: new Set(ids), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set() };
+  for (const id of ids) for (const b of doc.adj.get(id) ?? []) editor.sel.bonds.add(b);
+  editor.changed();
+}
+
+// ------------------------------------------------------------------ name to structure
+
+const names = new NameReader(new URL('opsin/opsin-data.dat', document.baseURI).href);
+let namesReady = false;
+
+/** A name as a laid-out molfile, or why not. */
+async function nameToMolfile(name: string): Promise<{ mb: string; attach: number[]; warnings: string[] } | { error: string }> {
+  const r = await names.read(name);
+  namesReady = true;
+  if (!r.ok) return { error: r.message };
+  if (!chem.ready) return { error: 'The chemistry engine is still loading; try again in a moment.' };
+  const mb = await chem.smilesToMol(r.smiles).catch(() => null);
+  if (!mb) return { error: 'The name was read, but the structure could not be drawn (' + r.smiles + ').' };
+  return { mb, attach: attachmentAtoms(r.smiles), warnings: [...r.warnings, ...cxNotes(r.smiles)] };
+}
+
+/** Adds a named structure centred at (x, y), its attachment points drawn as wavy lines. Use inside doc.edit. */
+function addNamed(got: { mb: string; attach: number[] }, x: number, y: number): number[] {
+  const ids = addMolfile(doc, got.mb, x, y);
+  for (const i of got.attach) {
+    if (ids[i] !== undefined) doc.updateAtom(ids[i], { attach: 'Wavy', attachNum: undefined, z: 0, label: null, charge: 0 });
+  }
+  return ids;
+}
+
+const nameDialog = new NameDialog(async (name) => {
+  const got = await nameToMolfile(name);
+  if ('error' in got) return got.error;
+  const c = renderer.toDoc(renderer.width / 2, renderer.height / 2);
+  try {
+    let ids: number[] = [];
+    doc.edit('Name to Structure', () => { ids = addNamed(got, c.x, c.y); });
+    selectNewAtoms(ids);
+  } catch (err) {
+    return String(err);
+  }
+  if (got.warnings.length) flash('Note from the name reader: ' + got.warnings.join(' '), 9000);
+  return null;
+}, () => !namesReady);
+
+/**
+ * Structure > Name to Structure. Selected captions are read as names and replaced by their
+ * structures (Undo puts them back); with no caption selected, a window asks for a name.
+ */
+async function nameToStructure(): Promise<void> {
+  const caps = [...editor.sel.captions].map((id) => doc.captions.get(id)).filter((c): c is Caption => !!c);
+  if (!caps.length) { nameDialog.open(); return; }
+  if (!namesReady) flash('Starting the name reader (only the first time)…');
+  const found: { cap: Caption; mb: string; attach: number[] }[] = [];
+  const problems: { name: string; why: string }[] = [], notes: string[] = [];
+  for (const cap of caps) {
+    const name = captionName(cap.runs.map((r) => r.text).join(''));
+    const got = await nameToMolfile(name);
+    if ('error' in got) problems.push({ name, why: got.error });
+    else { found.push({ cap, mb: got.mb, attach: got.attach }); notes.push(...got.warnings); }
+  }
+  if (found.length) {
+    let ids: number[] = [];
+    try {
+      doc.edit('Name to Structure', () => {
+        for (const f of found) {
+          const box = renderer.captionBox(f.cap);
+          ids = ids.concat(addNamed(f, (box.x1 + box.x2) / 2, (box.y1 + box.y2) / 2));
+          doc.removeCaption(f.cap.id);
+        }
+      });
+    } catch (err) {
+      flash(String(err));
+      return;
+    }
+    selectNewAtoms(ids);
+  }
+  if (problems.length === 1 && !found.length) flash(problems[0].why, 9000);
+  else if (problems.length) flash(`Not read as ${problems.length === 1 ? 'a name' : 'names'} (select one on its own to see why): ${problems.map((p) => `"${p.name}"`).join(', ')}`, 9000);
+  else if (notes.length) flash('Note from the name reader: ' + notes.join(' '), 9000);
 }
 
 /** Copy the selected structures (or everything) as SMILES text. */
@@ -511,6 +595,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
   'check-structure': () => checkStructure(),
   'stereo-labels': () => toggleStereoLabels(),
+  'name-to-structure': () => nameToStructure(),
   'clipboard-formats': async () => {
     const names = await clipboardFormats().catch((err) => [String(err)]);
     flash(names.length ? 'On the clipboard: ' + names.join(', ') : 'The clipboard is empty.', 15000);
@@ -1045,12 +1130,12 @@ requestAnimationFrame(() => {
 });
 
 // Hooks for the automated speed tests.
-(window as any).__app = { doc, editor, renderer, chem, live, openText, stressTest, pasteChemistry, sample: sampleMolecule, file, Doc, keymap };
+(window as any).__app = { doc, editor, renderer, chem, live, openText, stressTest, pasteChemistry, sample: sampleMolecule, file, Doc, keymap, names };
 
 // ---------------------------------------------------------------- desktop self-test
 
 // Inside the desktop app, started with CHEM_ILLUSTRATOR_SELFTEST set (see src-tauri/src/lib.rs):
-// check that the drawing and the chemistry engine work in this web view, time a few redraws,
+// check that the drawing, the chemistry engine and the name reader work in this web view, time a few redraws,
 // report, and close. The automatic Windows build runs this on the app it has just built.
 if (isTauri()) {
   invoke<boolean>('selftest_requested').then((yes) => { if (yes) desktopSelfTest(); }).catch(() => {});
@@ -1078,6 +1163,11 @@ async function desktopSelfTest(): Promise<void> {
       report.exactMass = res.results[0]?.exact;
       ok = !!report.formula && !res.results[0]?.error;
     }
+    // Name to structure (OPSIN in its worker) in this web view, under the app's security rules.
+    const n0 = performance.now();
+    const nr = await names.read('(2R)-butan-2-ol');
+    report.nameToStructure = { ok: nr.ok, smiles: nr.smiles, message: nr.message, ms: Math.round(performance.now() - n0) };
+    ok = ok && nr.ok && nr.smiles === 'C[C@H](CC)O';
     // Redraw speed on a large drawing, in this web view.
     const s0 = performance.now();
     stressTest(2000);

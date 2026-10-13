@@ -356,6 +356,11 @@ dialog.ask { min-width: min(92vw, 340px); }
 .ask-row { display: grid; grid-template-columns: 9em 1fr auto; align-items: center; gap: 8px; margin: 8px 0; }
 .ask-row input, .ask-row select { min-width: 0; font: inherit; padding: 3px 6px; }
 .ask-buttons { display: flex; justify-content: flex-end; gap: 8px; margin: 14px 0 0; }
+dialog.name-dialog { width: min(92vw, 520px); }
+dialog.name-dialog .muted { margin: 4px 0 10px; max-width: 60ch; }
+.name-input { width: 100%; box-sizing: border-box; font: inherit; padding: 5px 8px; }
+.name-status { min-height: 1.4em; margin: 8px 0 0; color: var(--muted); overflow-wrap: anywhere; }
+.name-status.error { color: var(--slow); }
 
 /* the nickname list (=) */
 dialog.nicknames { width: min(92vw, 420px); }

@@ -162,6 +162,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   'fixed-length': 'Fixed bond lengths on or off', 'fixed-angles': 'Fixed angles on or off',
   join: 'Join two selected atoms or bonds',
   'clean-up': 'Clean Up Structure', 'check-structure': 'Check Structure (next warning)', 'stereo-labels': 'Show stereo labels',
+  'name-to-structure': 'Name to Structure…',
   'zoom-in': 'Zoom in', 'zoom-out': 'Zoom out', 'zoom-fit': 'Fit the drawing in the window', 'zoom-actual': 'Actual size',
   hotkeys: 'Hotkeys…',
 };
@@ -277,7 +278,7 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
     'Ctrl+R': 'rotate-dialog', 'Ctrl+K': 'scale',
     'Ctrl+ArrowRight': 'reaction-right', 'Ctrl+ArrowLeft': 'reaction-left', 'Ctrl+ArrowDown': 'reaction-down', 'Ctrl+ArrowUp': 'reaction-up',
     'Ctrl+L': 'fixed-length', 'Ctrl+E': 'fixed-angles', 'Ctrl+J': 'join',
-    'Ctrl+Shift+K': 'clean-up',
+    'Ctrl+Shift+K': 'clean-up', 'Ctrl+Shift+N': 'name-to-structure',
     'Ctrl+0': 'zoom-fit', 'Ctrl+=': 'zoom-in', 'Ctrl+Shift+=': 'zoom-in', 'Ctrl++': 'zoom-in', 'Ctrl+-': 'zoom-out',
     F5: 'zoom-actual', F6: 'zoom-fit', F7: 'zoom-in', F8: 'zoom-out',
   }),
