@@ -113,6 +113,12 @@ export class StylePanel {
     const size = c.runs[0]?.size ?? def;
     this.number('Text size (pt)', round(size, 10), 1, 1, 200, (v) => set('Text size', (x) => ({ runs: x.runs.map((r) => ({ ...r, size: v })) })),
       'Changes the whole caption; double-click a caption to change part of it.');
+    const all = (k: 'bold' | 'italic' | 'formula') => caps.every((x) => x.runs.every((r) => r[k] || !r.text.trim()));
+    const whole = (label: string, k: 'bold' | 'italic' | 'formula') =>
+      this.check(label, all(k), (v) => set(label, (x) => ({ runs: x.runs.map((r) => ({ ...r, [k]: v || undefined, ...(k === 'formula' && v ? { sub: undefined, sup: undefined } : {}) })) })));
+    whole('Bold', 'bold');
+    whole('Italic', 'italic');
+    whole('Formula style (CH₃, Fe³⁺)', 'formula');
     this.select('Line up', JUSTIFY, c.justify, (v) => set('Justification', () => ({ justify: v })));
     this.color('Colour', c.runs[0]?.color, (v) => set('Text colour', (x) => ({ runs: x.runs.map((r) => ({ ...r, color: v })) })));
   }

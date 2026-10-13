@@ -12,6 +12,7 @@ import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
 import { valenceExceeded } from '../chem/elements';
 import { GENERIC } from '../chem/labels';
 import { bracketLip, shaftOffset } from '../objects';
+import { formulaParts } from '../richtext';
 
 export const FONT_STACK = "Arial, 'Liberation Sans', Helvetica, sans-serif";
 
@@ -86,6 +87,10 @@ export class Renderer {
   annotations = new Map<number, string>();
   private atomCache = new Map<number, AtomCache>();
   private capBoxes = new WeakMap<Caption, Rect>();
+  /** Text size for caption runs that don't give one (the document's caption size). */
+  private captionSize = 10;
+  /** A caption being typed into: the text box shows it, so the page doesn't. */
+  hiddenCaption: number | null = null;
   private tiles = new Map<string, Tile>();
   private stale: { tiles: Map<string, Tile>; scale: number } | null = null;
   private tileScale = 0;
@@ -276,6 +281,7 @@ export class Renderer {
    */
   renderScene(doc: Doc, budgetMs = Infinity): void {
     const t0 = performance.now();
+    this.useStyle(doc);
     this.invalidate(doc);
     const ctx = this.sctx;
     const { scale } = this.view;
@@ -426,6 +432,7 @@ export class Renderer {
 
   /** Draw everything that falls inside `vis` (document coordinates) with the current transform. */
   private drawContent(ctx: CanvasRenderingContext2D, doc: Doc, vis: Rect): void {
+    this.useStyle(doc);
     const st = doc.style;
 
     // Shapes behind the structures (filled boxes first).
@@ -516,6 +523,7 @@ export class Renderer {
       this.drawArrow(ctx, r, r.lineWidth ?? st.lineWidth);
     }
     for (const c of doc.captions.values()) {
+      if (c.id === this.hiddenCaption) continue;
       const r = this.captionBox(c);
       if (r.x1 > vis.x2 || r.x2 < vis.x1 || r.y1 > vis.y2 || r.y2 < vis.y1) continue;
       this.drawCaption(ctx, c, st.captionSize);
@@ -885,13 +893,18 @@ export class Renderer {
       });
     }
     let y = c.y;
-    for (const line of lines) {
+    const laid = lines.map((line) => {
       const pieces = expandRuns(line, defaultSize);
       let w = 0;
       for (const p of pieces) w += p.w;
+      return { pieces, w };
+    });
+    // lines are centred (or right-aligned) within the text box, which is as wide as the longest line
+    const width = c.width ?? Math.max(0, ...laid.map((l) => l.w));
+    for (const { pieces, w } of laid) {
       let x = c.x;
-      if (c.justify === 'center') x = c.x + ((c.width ?? w) - w) / 2;
-      else if (c.justify === 'right') x = c.x + (c.width ?? w) - w;
+      if (c.justify === 'center') x = c.x + (width - w) / 2;
+      else if (c.justify === 'right') x = c.x + width - w;
       let maxSize = defaultSize;
       for (const p of pieces) {
         ctx.font = p.font;
@@ -906,11 +919,16 @@ export class Renderer {
     ctx.fillStyle = '#000';
   }
 
+  /** Take the caption size from the document being drawn. */
+  useStyle(doc: Doc): void {
+    if (doc.style.captionSize !== this.captionSize) { this.captionSize = doc.style.captionSize; this.capBoxes = new WeakMap(); }
+  }
+
   /** Bounding box of a caption in document coordinates (cached per caption version). */
   captionBox(c: Caption): Rect {
     let r = this.capBoxes.get(c);
     if (r) return r;
-    const def = 10;
+    const def = this.captionSize;
     const lines: TextRun[][] = [[]];
     for (const run of c.runs) {
       run.text.split('\n').forEach((t, i) => {
@@ -1025,14 +1043,7 @@ export function expandRuns(runs: TextRun[], defaultSize: number): Piece[] {
       out.push({ text, w: measureText(text, s, font, style), dy, font: `${style}${s}px ${font}`, size: s, color: r.color, underline: r.underline });
     };
     if (r.formula && !r.sub && !r.sup) {
-      // digits after letters or ")" become subscripts; trailing charges superscripts
-      const re = /(\d+(?=[+\-−]?$)[+\-−]$)|((?<=[A-Za-z)\]])\d+)|([^0-9]+|\d+)/g;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(r.text))) {
-        if (m[1]) push(m[1], false, true);
-        else if (m[2]) push(m[2], true, false);
-        else push(m[3], false, false);
-      }
+      for (const p of formulaParts(r.text)) push(p.text, p.pos === 'sub', p.pos === 'sup');
     } else push(r.text, !!r.sub, !!r.sup);
   }
   return out;

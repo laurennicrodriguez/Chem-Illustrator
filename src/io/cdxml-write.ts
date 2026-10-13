@@ -12,6 +12,7 @@ import { labelSpec, layoutLabel, labelDir, labelGraph, tokenize, GENERIC, Measur
 import { Vec, DEG, arcCenter, norm, sub, Rect } from '../geom';
 import { kids, descendants } from './xml';
 import { arialWidth } from '../text-metrics';
+import { toSymbolPieces, isSymbolFont, faceFromStyle } from '../richtext';
 
 export interface WriteOptions {
   /** Text width in points; by default Arial's own widths, as ChemDraw uses. */
@@ -125,7 +126,7 @@ class CdxmlWriter {
       CreationProgram: 'Chem Illustrator',
       Name: this.opts.name ?? '',
       LabelFont: '3', LabelSize: String(st.labelSize), LabelFace: '96',
-      CaptionFont: '3', CaptionSize: String(st.captionSize),
+      CaptionFont: '3', CaptionSize: String(st.captionSize), CaptionFace: String(st.captionFace),
       HashSpacing: f2(st.hashSpacing), MarginWidth: f2(st.marginWidth), LineWidth: f2(st.lineWidth),
       BoldWidth: f2(st.boldWidth), BondLength: f2(st.bondLength), BondSpacing: String(st.bondSpacing),
       ChainAngle: String(st.chainAngle), LabelJustification: 'Auto', CaptionJustification: 'Left',
@@ -199,7 +200,7 @@ class CdxmlWriter {
     let max = 2;
     for (const v of this.fontIds.values()) max = Math.max(max, Number(v) || 0);
     id = String(max + 1);
-    this.fonttable.appendChild(this.el('font', { id, charset: 'iso-8859-1', name }));
+    this.fonttable.appendChild(this.el('font', { id, charset: isSymbolFont(name) ? 'Unknown' : 'iso-8859-1', name }));
     this.fontIds.set(key, id);
     return id;
   }
@@ -630,9 +631,12 @@ class CdxmlWriter {
         if (i > 0) lines.push(0);
         lines[lines.length - 1] += this.measure(part, r.sub || r.sup ? size * 0.75 : size);
       });
-      const s = this.el('s', { font: this.fontId(r.font ?? 'Arial'), size: f2(size).replace(/\.00$/, ''), color: this.colorAttr(r.color) ?? '0', face: faceOf(r) });
-      s.textContent = r.text;
-      t.appendChild(s);
+      // Greek letters and signs that an ordinary font can't hold go in the Symbol font, as ChemDraw does
+      for (const piece of toSymbolPieces(r.text)) {
+        const s = this.el('s', { font: this.fontId(piece.symbol ? 'Symbol' : r.font ?? 'Arial'), size: f2(size).replace(/\.00$/, ''), color: this.colorAttr(r.color) ?? '0', face: faceOf(r) });
+        s.textContent = piece.text;
+        t.appendChild(s);
+      }
     }
     const width = c.width ?? Math.max(...lines);
     const lh = c.lineHeight ?? maxSize * 1.15;
@@ -641,8 +645,8 @@ class CdxmlWriter {
     t.setAttribute('BoundingBox', box({ x1: c.x, y1: c.y - maxSize * CAP, x2: c.x + width, y2: c.y + (lines.length - 1) * lh + maxSize * 0.2 }));
     this.set(t, 'Justification', c.justify === 'left' ? null : c.justify === 'center' ? 'Center' : 'Right');
     this.set(t, 'CaptionJustification', null);
-    // ChemDraw lists where each line ends; without the list it drops blank lines.
-    const ends = lineEnds(c.runs.map((r) => r.text).join(''));
+    // ChemDraw lists where each line ends (in the text as stored); without the list it drops blank lines.
+    const ends = lineEnds(kids(t).filter((k) => k.nodeName === 's').map((k) => k.textContent ?? '').join(''));
     this.set(t, 'LineHeight', c.lineHeight ? f2(c.lineHeight) : ends.length > 1 ? 'auto' : null);
     this.set(t, 'LineStarts', ends.length > 1 ? ends.join(' ') : null);
     t.removeAttribute('WordWrapWidth');
@@ -857,8 +861,7 @@ function orderAttr(order: number): string | null {
 }
 
 function faceOf(r: TextRun): number | null {
-  const f = (r.bold ? 1 : 0) | (r.italic ? 2 : 0) | (r.underline ? 4 : 0) | (r.formula ? 96 : r.sub ? 32 : r.sup ? 64 : 0);
-  return f;
+  return faceFromStyle(r);
 }
 
 function nums(v: string | null): number[] {

@@ -16,6 +16,8 @@ export interface DocStyle {
   labelSize: number;
   captionFont: string;
   captionSize: number;
+  /** How new captions look, as ChemDraw's face bits (1 bold, 2 italic, 4 underline, 96 formula). */
+  captionFace: number;
 }
 
 export const ACS_1996: DocStyle = {
@@ -31,6 +33,7 @@ export const ACS_1996: DocStyle = {
   labelSize: 10,
   captionFont: 'Arial',
   captionSize: 10,
+  captionFace: 96,
 };
 
 export function doubleBondGap(s: DocStyle): number {

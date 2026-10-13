@@ -2,7 +2,9 @@
 // pan. The editor changes the document and asks for a repaint; hover and drawing previews
 // only repaint the overlay layer.
 
-import { Doc, Atom, Bond, BondDisplay, Arrow, Shape } from '../model';
+import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption } from '../model';
+import { CaptionEditor } from '../ui/caption-editor';
+import { styleFromFace, plainText } from '../richtext';
 import { Renderer } from '../render/renderer';
 import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG } from '../geom';
 import {
@@ -297,6 +299,13 @@ export class Editor {
 
   // ------------------------------------------------------------------ pointer
 
+  /** A drawing point as a position in the browser window. */
+  private clientPoint(p: Vec): Vec {
+    const rect = this.r.overlay.getBoundingClientRect();
+    const s = this.r.toScreen(p);
+    return { x: rect.left + s.x, y: rect.top + s.y };
+  }
+
   private docPoint(e: PointerEvent | MouseEvent | WheelEvent): Vec {
     const rect = this.r.overlay.getBoundingClientRect();
     return this.r.toDoc(e.clientX - rect.left, e.clientY - rect.top);
@@ -304,6 +313,7 @@ export class Editor {
 
   private onDown(e: PointerEvent): void {
     this.commitLabel();
+    this.closeCaption();
     this.r.overlay.setPointerCapture(e.pointerId);
     const p = this.docPoint(e);
     const rect = this.r.overlay.getBoundingClientRect();
@@ -458,7 +468,7 @@ export class Editor {
     } else if (h && h.kind === 'atom' && this.tool.kind !== 'text') {
       this.editLabel(h.id);
     } else if (h && h.kind === 'caption') {
-      this.editCaption(h.id);
+      this.editCaption(h.id, { x: e.clientX, y: e.clientY });
     }
   }
 
@@ -519,7 +529,7 @@ export class Editor {
       }
       case 'text': {
         if (h && h.kind === 'atom') this.editLabel(h.id);
-        else if (h && h.kind === 'caption') this.editCaption(h.id);
+        else if (h && h.kind === 'caption') this.editCaption(h.id, this.clientPoint(p));
         else this.newCaption(p);
         return;
       }
@@ -1248,57 +1258,64 @@ export class Editor {
     if (this.labelInput) this.labelInput.blur();
   }
 
+  private captionEd: CaptionEditor | null = null;
+
+  /** Finish typing in a caption, if one is open. */
+  closeCaption(): void {
+    this.captionEd?.finish();
+  }
+
   private newCaption(p: Vec): void {
-    this.textBox(p, '', (text) => {
-      if (!text.trim()) return;
-      this.doc.edit('Caption', () => this.doc.addCaption({ x: p.x, y: p.y, runs: [{ text, formula: true }], justify: 'left' }));
-      this.changed();
-    });
+    this.openCaption(null, p);
   }
 
-  private editCaption(id: number): void {
+  private editCaption(id: number, client?: { x: number; y: number }): void {
     const c = this.doc.captions.get(id);
-    if (!c) return;
-    const text = c.runs.map((r) => r.text).join('');
-    this.textBox({ x: c.x, y: c.y }, text, (t) => {
-      this.doc.edit('Caption', () => {
-        if (!t.trim()) this.doc.removeCaption(id);
-        // plain-text editing for now: keeps the first run's style
-        else this.doc.updateCaption(id, { runs: [{ ...c.runs[0], text: t }] });
-      });
-      this.changed();
-    });
+    if (c) this.openCaption(c, { x: c.x, y: c.y }, client);
   }
 
-  private textBox(p: Vec, initial: string, done: (text: string) => void): void {
-    const ta = document.createElement('textarea');
-    ta.className = 'caption-input';
-    const sp = this.r.toScreen(p);
-    const size = this.doc.style.captionSize * this.r.view.scale;
-    ta.style.left = `${sp.x}px`;
-    ta.style.top = `${sp.y - size}px`;
-    ta.style.fontSize = `${Math.max(11, size)}px`;
-    ta.value = initial;
-    this.host.appendChild(ta);
-    ta.focus();
-    let closed = false;
-    const finish = (ok: boolean) => {
-      if (closed) return;
-      closed = true;
-      ta.remove();
-      if (ok) done(ta.value);
+  /**
+   * Type into a new caption at a point, or into an existing one. New text takes the document's
+   * caption style; everything can be restyled in the bar above the text.
+   */
+  private openCaption(c: Caption | null, at: Vec, client?: { x: number; y: number }): void {
+    this.closeCaption();
+    this.commitLabel();
+    const doc = this.doc;
+    const st = doc.style;
+    const defaults = { ...styleFromFace(st.captionFace), size: st.captionSize };
+    const hide = (id: number | null) => {
+      const shown = this.r.hiddenCaption !== null ? doc.captions.get(this.r.hiddenCaption) : null;
+      if (shown) doc.dirtyRects.push(this.r.captionBox(shown));
+      this.r.hiddenCaption = id;
+      if (c) doc.dirtyRects.push(this.r.captionBox(c));
+      this.requestScene();
     };
-    ta.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); finish(false); }
-      else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finish(true); }
-      e.stopPropagation();
+    if (c) hide(c.id);
+    const id = c?.id ?? null;
+    const ed = new CaptionEditor(this.host, this.r, { at, width: c?.width }, { runs: c?.runs ?? [], justify: c?.justify ?? 'left' }, defaults, (res) => {
+      if (this.captionEd === ed) this.captionEd = null;
+      if (id !== null) hide(null);
+      const empty = !plainText(res.runs).trim();
+      const cur = id !== null ? doc.captions.get(id) : null;
+      if (cur) {
+        if (empty) doc.edit('Delete caption', () => doc.removeCaption(cur.id));
+        else if (JSON.stringify(cur.runs) !== JSON.stringify(res.runs) || cur.justify !== res.justify) {
+          doc.edit('Edit caption', () => doc.updateCaption(cur.id, { runs: res.runs, justify: res.justify }));
+        }
+      } else if (!empty) {
+        doc.edit('Caption', () => doc.addCaption({ x: at.x, y: at.y, runs: res.runs, justify: res.justify }));
+      }
+      this.changed();
     });
-    ta.addEventListener('blur', () => finish(true));
+    this.captionEd = ed;
+    if (client) ed.caretAt(client.x, client.y);
   }
 
   // ------------------------------------------------------------------ overlay
 
   private drawOverlay(): void {
+    this.captionEd?.place();
     const ctx = this.r.clearOverlay();
     const doc = this.doc;
     const scale = this.r.view.scale;
