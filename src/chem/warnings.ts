@@ -21,10 +21,46 @@ function chargeText(charge: number): string {
   return (Math.abs(charge) > 1 ? String(Math.abs(charge)) : '') + (charge > 0 ? '+' : '−');
 }
 
+const SUPER: Record<string, string> = { '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹', '+': '⁺', '−': '⁻' };
+
+/** "⁺", "²⁻": a charge as it is written after a symbol. */
+function supCharge(charge: number): string {
+  return [...chargeText(charge)].map((c) => SUPER[c] ?? c).join('');
+}
+
+/** "uncharged O", "O⁺", "N²⁻": an element with its charge, for valence messages. */
+function species(z: number, charge: number): string {
+  const sym = SYMBOLS[z] ?? '?';
+  return charge ? sym + supCharge(charge) : 'uncharged ' + sym;
+}
+
+/** B, C, N and O: where one unit of charge changes the valence in the familiar octet way. */
+const OCTET = new Set([5, 6, 7, 8]);
+
+/**
+ * The valence an atom has with its charge, and, for B, C, N and O, when one unit of charge more
+ * or less (but no more than ±1) would allow `bonds`, that charge: "uncharged O has a valence of
+ * 2. O⁺ can have 3: add a + charge if that is meant." The valences are maxValence's.
+ */
+export function valenceAdvice(z: number, charge: number, bonds: number): string {
+  let s = `${species(z, charge)} has a valence of ${maxValence(z, charge)}.`;
+  if (!OCTET.has(z)) return s;
+  for (const c of [charge + 1, charge - 1]) {
+    const m = maxValence(z, c);
+    if (Math.abs(c) > 1 || m === undefined || m < bonds) continue;
+    const sym = SYMBOLS[z] ?? '?';
+    s += c === 0
+      ? ` Uncharged ${sym} can have ${m}: remove the charge if that is meant.`
+      : ` ${species(z, c)} can have ${m}: add a ${c > charge ? '+' : '−'} charge if that is meant.`;
+    break;
+  }
+  return s;
+}
+
 /** "this carbon", "this N+": how a warning names an atom. */
 function atomName(z: number, charge: number): string {
   if (!charge && NAMES[z]) return `this ${NAMES[z]}`;
-  return `this ${SYMBOLS[z] ?? '?'}${chargeText(charge)}`;
+  return `this ${SYMBOLS[z] ?? '?'}${supCharge(charge)}`;
 }
 
 /** Problems with one atom on its own: too many bonds, an unreadable label, an impossible isotope. */
@@ -43,7 +79,8 @@ export function atomWarnings(doc: Doc, a: Atom): string[] {
       if (over.length) {
         const o = over[0];
         const sym = SYMBOLS[o.z] ?? '?';
-        out.push(`Too many bonds: the ${sym} in “${a.label}” has ${o.used}${o.h ? `, counting its ${o.h} H` : ''} (${sym} makes at most ${o.max}).`);
+        const charge = maxValence(o.z, a.charge) === o.max ? a.charge : 0;
+        out.push(`Too many bonds: the ${sym} in “${a.label}” has ${o.used}${o.h ? `, counting its ${o.h} H` : ''}, but ${valenceAdvice(o.z, charge, o.used)}`);
       } else {
         const few = tooFewBonds(a, orders);
         if (few) out.push(few);
@@ -51,9 +88,10 @@ export function atomWarnings(doc: Doc, a: Atom): string[] {
     }
   } else {
     const max = maxValence(a.z, a.charge);
-    if (max !== undefined && bonds + radicalElectrons(a) > max) {
+    const rad = radicalElectrons(a);
+    if (max !== undefined && bonds + rad > max) {
       const who = atomName(a.z, a.charge);
-      out.push(`Too many bonds: ${who} has ${bonds}; it makes at most ${max}.`);
+      out.push(`Too many bonds: ${who} has ${bonds}${rad ? ` and ${rad === 1 ? 'an unpaired electron' : 'two unpaired electrons'}` : ''}, but ${valenceAdvice(a.z, a.charge, bonds + rad)}`);
     }
   }
   if (a.isotope && !isotopeOk(a.z, a.isotope)) out.push(`There is no isotope ${a.isotope}${SYMBOLS[a.z] ?? ''}.`);
@@ -78,8 +116,7 @@ function tooFewBonds(a: Atom, orders: number[]): string | null {
   // aromatic bonds counted at most (as for pyridine N), so only a real shortfall is reported
   const used = valenceOfBonds(orders, 6) + h + radicalElectrons(a);
   if (min === undefined || used >= min) return null;
-  const sym = toks[0].text;
-  return `Too few bonds: “${label}” shows ${h ? `${h} H` : 'no H'}, so it has ${used} bond${used === 1 ? '' : 's'}; ${sym} normally makes ${min}.`;
+  return `Too few bonds: “${label}” shows ${h ? `${h} H` : 'no H'}, so it has ${used} bond${used === 1 ? '' : 's'}, but ${species(z, charge + signed)} has a valence of ${min}.`;
 }
 
 /**

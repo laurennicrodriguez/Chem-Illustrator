@@ -117,12 +117,25 @@ function star(z: number, n: number, extra: Partial<Atom> = {}): { d: Doc; c: Ato
 describe('warnings', () => {
   it('flags too many bonds, allowing for charge', () => {
     const c5 = star(6, 5);
-    expect(atomWarnings(c5.d, c5.c)[0]).toMatch(/Too many bonds: this carbon has 5; it makes at most 4/);
+    expect(atomWarnings(c5.d, c5.c)[0]).toBe('Too many bonds: this carbon has 5, but uncharged C has a valence of 4.');
     expect(atomWarnings(star(6, 4).d, star(6, 4).c)).toEqual([]);
     const n4 = star(7, 4);
     expect(atomWarnings(n4.d, n4.c)[0]).toMatch(/nitrogen has 4/);
     const n4plus = star(7, 4, { charge: 1 });
     expect(atomWarnings(n4plus.d, n4plus.c)).toEqual([]);
+  });
+  it('words valence with the charge, and says which charge would allow the bonds', () => {
+    const o3 = star(8, 3);
+    expect(atomWarnings(o3.d, o3.c)[0]).toBe('Too many bonds: this oxygen has 3, but uncharged O has a valence of 2. O⁺ can have 3: add a + charge if that is meant.');
+    const o3plus = star(8, 3, { charge: 1 });
+    expect(atomWarnings(o3plus.d, o3plus.c)).toEqual([]);
+    const b4 = star(5, 4);
+    expect(atomWarnings(b4.d, b4.c)[0]).toMatch(/uncharged B has a valence of 3\. B⁻ can have 4: add a − charge/);
+    const om2 = star(8, 2, { charge: -1 });
+    expect(atomWarnings(om2.d, om2.c)[0]).toBe('Too many bonds: this O⁻ has 2, but O⁻ has a valence of 1. Uncharged O can have 2: remove the charge if that is meant.');
+    // no charge hint where hypervalence, not charge, is the question
+    const s7 = star(16, 7);
+    expect(atomWarnings(s7.d, s7.c)[0]).toBe('Too many bonds: this sulfur has 7, but uncharged S has a valence of 6.');
   });
   it('flags labels that cannot be read, or whose atoms have too many or too few bonds', () => {
     expect(atomWarnings(methylWith('Aryl'), methylWith('Aryl').atoms.get(2)!)[0]).toMatch(/can't be read/);
