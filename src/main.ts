@@ -2,7 +2,7 @@
 
 import './app.css';
 import { Doc, Atom, Caption } from './model';
-import { Renderer } from './render/renderer';
+import { Renderer, measureText } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
 import type { Align } from './editor/arrange';
 import { readCdxml, ReadStats } from './io/cdxml';
@@ -25,6 +25,8 @@ import { setStereoShown } from './chem/stereo';
 import { keymap, registerToolNames, displayChord, actionName, KeyContext, KeyOverrides } from './editor/keymap';
 import { loadSettings, saveSettings, settingsLocation, Settings } from './settings';
 import { HotkeysDialog } from './ui/hotkeys-dialog';
+import { TypingDialog } from './ui/typing-dialog';
+import { typingPrefs, setTypingPrefs, onTypingPrefs } from './text/typing';
 import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
@@ -439,7 +441,7 @@ function copyMolfile(): Promise<void> {
 function copyCdxmlText(): Promise<void> | void {
   const part = extractDrawing(doc, editor.hasSelection() ? editor.sel : null);
   if (isEmpty(part)) { flash('There is nothing to copy.'); return; }
-  return copyText(writeCdxml(part, { name: 'Clipboard.cdxml' }), 'Copied as CDXML text.');
+  return copyText(writeCdxml(part, { name: 'Clipboard.cdxml', textMeasure: measureText }), 'Copied as CDXML text.');
 }
 
 let lastTurn = { angle: '90', dir: 'cw' };
@@ -603,6 +605,7 @@ const COMMANDS: Record<string, () => unknown> = {
   // 100%: a point on the page is a point on the screen (96 pixels to the inch)
   'zoom-actual': () => editor.zoomTo(96 / 72),
   hotkeys: () => hotkeysDialog.open(),
+  'typing-spelling': () => typingDialog.open(),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
   'check-structure': () => checkStructure(),
   'stereo-labels': () => toggleStereoLabels(),
@@ -680,6 +683,10 @@ function storeSettings(): void {
     fixedLength: editor.options.fixedLength,
     fixedAngles: editor.options.fixedAngles,
     devTools,
+    chemTyping: typingPrefs.chemistry,
+    spellCheck: typingPrefs.spelling,
+    replacements: typingPrefs.replacements,
+    dictionary: typingPrefs.dictionary,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -707,6 +714,13 @@ function refreshKeys(): void {
 }
 
 keymap.onChange(() => { refreshKeys(); storeSettings(); });
+onTypingPrefs(() => { storeSettings(); editor.requestOverlay(); });
+
+const typingDialog = new TypingDialog({
+  get: () => ({ ...typingPrefs }),
+  set: (v) => setTypingPrefs(v),
+  location: settingsLocation,
+});
 
 const hotkeysDialog = new HotkeysDialog({
   mac: isMac,
@@ -744,6 +758,7 @@ void loadSettings().then((s) => {
   editor.options.fixedAngles = s.fixedAngles;
   showDevTools(s.devTools);
   keymap.setOverrides(s.hotkeys);
+  setTypingPrefs({ chemistry: s.chemTyping, spelling: s.spellCheck, replacements: s.replacements, dictionary: s.dictionary });
   settingsLoaded = true;
   refreshKeys();
 });

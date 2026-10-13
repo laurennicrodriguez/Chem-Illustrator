@@ -4,6 +4,7 @@
 import { Doc, Entity, Kind } from '../model';
 import { readCdxml } from './cdxml';
 import { writeCdxml } from './cdxml-write';
+import { measureText } from '../render/renderer';
 import { toMolfile } from '../chem/molfile';
 import { FileRef, CDXML, MOL, openFileDialog, saveFileDialog, writeFile, canSaveInPlace, askSaveChanges, showError, withExtension } from './files';
 
@@ -101,7 +102,7 @@ export class DocumentFile {
   private async writeTo(ref: FileRef, name: string): Promise<boolean> {
     let text: string;
     try {
-      text = writeCdxml(this.doc, { name });
+      text = writeCdxml(this.doc, { name, textMeasure: measureText });
       await writeFile(ref, name, text, CDXML);
     } catch (e) {
       await showError(`Could not save ${name}: ${String(e)}`);

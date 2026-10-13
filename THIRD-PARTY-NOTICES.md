@@ -13,6 +13,9 @@ Chem Illustrator ships the following open-source software.
 | Tauri dialog plugin (`tauri-plugin-dialog` crate, `@tauri-apps/plugin-dialog`) | The desktop app's Open and Save dialogs | MIT or Apache-2.0 |
 | [windows-sys](https://github.com/microsoft/windows-rs) crate (Windows only) | The desktop app's clipboard on Windows (pictures for Word and PowerPoint) | MIT or Apache-2.0 |
 | About 260 Rust crates that Tauri uses (listed in `src-tauri/Cargo.lock`) | Desktop app shell | Mostly MIT or Apache-2.0; a few are Unicode-3.0, BSD-3-Clause, Zlib or MPL-2.0. All are free and open source; MPL-2.0 only asks that changes to those crates' own files be shared. |
+| English word list from [pyspellchecker](https://github.com/barrust/pyspellchecker) 0.8.1 (`public/dict/english.txt`) | Spell check: ordinary English words, most common first (for suggestions) | MIT (full text below). The list was built by pyspellchecker from word counts in the OpenSubtitles2018 corpus (P. Lison and J. Tiedemann, LREC 2016). |
+| [Open Source Chemistry Dictionary](https://www.sciencebase.com/chem-dic.zip) v3.0 by Adam M. Azman (`public/dict/chemistry.txt`) | Spell check: chemistry words | CC BY 3.0 US. Credits, source and changes in `public/dict/chemistry-LICENSE.txt`. A. M. Azman, *J. Chem. Educ.* 2012, 89, 412–413. |
+| Chemistry word lists from Chem SI Assistant by Nathan O'Hare (`public/dict/lab-words.txt`) | Spell check: lab terms, name reactions and other chemistry words | The project owner's own work |
 | Microsoft Edge WebView2 (part of Windows, not bundled) | Shows the app's window contents on Windows | Microsoft software licence, free to use |
 
 Used only to build and test, not shipped: TypeScript (Apache-2.0), Vite (MIT), Vitest (MIT), jsdom (MIT), Playwright (Apache-2.0), Tauri CLI (MIT or Apache-2.0). Rebuilding the OPSIN files (`opsin-js/`, rarely needed) also uses Java, Maven (Apache-2.0) and the TeaVM compiler (Apache-2.0).
@@ -100,4 +103,30 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+## pyspellchecker licence
+
+```
+MIT License
+
+Copyright (c) 2018-2021 Tyler Barrus
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```

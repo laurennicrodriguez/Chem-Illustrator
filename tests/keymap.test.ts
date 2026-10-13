@@ -205,8 +205,18 @@ describe('the settings file', () => {
     expect(parseSettings(JSON.stringify({ devTools: 'yes' })).devTools).toBe(false);
   });
 
+  it('keeps typing replacements and dictionary words only when they make sense', () => {
+    const s = parseSettings(JSON.stringify({ replacements: [['a', 'b'], ['', 'x'], [1, 2], 'no'], dictionary: ['word', 3, '  '] }));
+    expect(s.replacements).toEqual([['a', 'b']]);
+    expect(s.dictionary).toEqual(['word']);
+    expect(parseSettings(null).replacements.length).toBeGreaterThan(5);
+  });
+
   it('reads back what it writes', () => {
-    const s = { hotkeys: { command: { 'Ctrl+M': 'command zoom-in' } }, keepHotspotOnBond: false, fixedLength: true, fixedAngles: false, devTools: true };
+    const s = {
+      hotkeys: { command: { 'Ctrl+M': 'command zoom-in' } }, keepHotspotOnBond: false, fixedLength: true, fixedAngles: false, devTools: true,
+      chemTyping: false, spellCheck: true, replacements: [['oC', '°C'], ['rxn', 'reaction']] as [string, string][], dictionary: ['Fooxane'],
+    };
     const text = settingsText(s);
     expect(text).toContain('"app": "Chem Illustrator"');
     expect(parseSettings(text)).toEqual(s);

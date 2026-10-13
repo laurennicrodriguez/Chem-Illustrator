@@ -164,7 +164,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   'clean-up': 'Clean Up Structure', 'check-structure': 'Check Structure (next warning)', 'stereo-labels': 'Show stereo labels',
   'name-to-structure': 'Name to Structure…',
   'zoom-in': 'Zoom in', 'zoom-out': 'Zoom out', 'zoom-fit': 'Fit the drawing in the window', 'zoom-actual': 'Actual size',
-  hotkeys: 'Hotkeys…',
+  hotkeys: 'Hotkeys…', 'typing-spelling': 'Typing and Spelling…',
   'dev-tools': 'Developer tools on or off (speed panel, stress test)',
 };
 

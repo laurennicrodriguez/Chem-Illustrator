@@ -255,6 +255,8 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
     else if (align === 'justify' && !l.last && f.wrap !== undefined) spread(l, room, text);
     l.x = l.left + shift;
     for (const g of l.pieces) g.x += l.x;
+    // a bullet or number moves with its centred or right-aligned text, as in Word
+    if (l.marker && shift > 0) l.marker.x += shift;
   }
   // the area covered
   let x1 = Infinity, x2 = -Infinity;

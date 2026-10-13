@@ -17,6 +17,7 @@ import type { Selection } from '../editor/editor';
 import { readCdxml } from './cdxml';
 import { writeCdxml } from './cdxml-write';
 import { cdxmlToCdx, cdxToCdxml } from './cdx';
+import { measureText } from '../render/renderer';
 import { recordPicture, pictureEmf, pictureCanvas, canvasPng, canvasDib } from '../render/picture';
 
 /** Our own clipboard format: the drawing as CDXML text. */
@@ -171,7 +172,7 @@ export async function copyDrawing(doc: Doc, sel: Selection | null): Promise<stri
   const part = extractDrawing(doc, sel);
   const pic = isEmpty(part) ? null : recordPicture(part);
   if (!pic) return 'There is nothing to copy.';
-  const cdxml = writeCdxml(part, { name: 'Clipboard.cdxml' });
+  const cdxml = writeCdxml(part, { name: 'Clipboard.cdxml', textMeasure: measureText });
   lastCopy = cdxml;
   const what = sel ? 'Copied' : 'Copied the whole drawing';
   if (nativeClipboard) {

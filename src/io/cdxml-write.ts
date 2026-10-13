@@ -726,7 +726,7 @@ class CdxmlWriter {
     }
     if (tag) t.appendChild(this.el('objecttag', { TagType: 'String', Name: TEXT_TAG, Value: JSON.stringify(tag), Visible: 'no' }));
     const fixed = c.lineHeight ?? (c.lineSpacing && c.lineSpacing !== 1 ? SINGLE * c.lineSpacing * maxSize : undefined);
-    // the text as ChemDraw will lay it out: as saved, wrapped to the box with Arial's widths
+    // the text as it is drawn: wrapped to the box with the app's text widths (Arial's by default)
     const lay = layoutText({ runs, justify: c.justify, wrap: c.wrap, width: c.width, lineHeight: fixed }, def, this.opts.textMeasure ?? ((text, size, _f, style) => arialWidth(text, size, /bold/.test(style))));
     const width = lay.boxWidth;
     const px = c.justify === 'center' ? c.x + width / 2 : c.justify === 'right' ? c.x + width : c.x;
