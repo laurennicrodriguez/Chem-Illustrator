@@ -321,6 +321,33 @@ describe('saving a new drawing', () => {
     const curved = [...back.arrows.values()].find((a) => a.sweep)!;
     expect(curved.sweep).toBeCloseTo(Math.PI / 2, 3);
   });
+
+  it('keeps the styles of the arrow and shape tools', () => {
+    const doc = new Doc();
+    const base = { headStyle: 'full', tailStyle: 'none', headType: 'solid', line: 'solid', noGo: false, equilibrium: false, sweep: 0, headLength: 6, headWidth: 1.5 } as const;
+    doc.bulk(() => {
+      doc.addArrow({ ...base, tail: { x: 0, y: 0 }, head: { x: 40, y: 0 }, headType: 'angle', shaftSpacing: 3.6, headLength: 3.6, headWidth: 0.9 });
+      doc.addArrow({ ...base, tail: { x: 0, y: 20 }, head: { x: 40, y: 20 }, headStyle: 'halfLeft', tailStyle: 'halfLeft', equilibrium: true });
+      doc.addArrow({ ...base, tail: { x: 0, y: 40 }, head: { x: 40, y: 40 }, headStyle: 'halfRight', sweep: (-120 * Math.PI) / 180 });
+      doc.addArrow({ ...base, tail: { x: 0, y: 60 }, head: { x: 40, y: 60 }, tailStyle: 'full', headType: 'hollow', line: 'dashed', noGo: true });
+      doc.addShape({ kind: 'line', x1: 60, y1: 0, x2: 90, y2: 10, dashed: true, bold: true });
+      doc.addShape({ kind: 'oval', x1: 60, y1: 20, x2: 70, y2: 30, filled: true });
+      doc.addShape({ kind: 'bracket', bracket: 'curly', x1: 60, y1: 80, x2: 60, y2: 40 });
+    });
+    const back = open(writeCdxml(doc));
+    const arrows = [...back.arrows.values()].sort((a, b) => a.tail.y - b.tail.y);
+    expect(arrows[0]).toMatchObject({ headType: 'angle', equilibrium: false });
+    expect(arrows[0].shaftSpacing).toBeCloseTo(3.6, 5);
+    expect(arrows[1]).toMatchObject({ equilibrium: true, headStyle: 'halfLeft', tailStyle: 'halfLeft' });
+    expect(arrows[1].shaftSpacing).toBeUndefined();
+    expect(arrows[2].headStyle).toBe('halfRight');
+    expect(arrows[2].sweep).toBeCloseTo((-120 * Math.PI) / 180, 3);
+    expect(arrows[3]).toMatchObject({ tailStyle: 'full', headType: 'hollow', line: 'dashed', noGo: true });
+    const shapes = [...back.shapes.values()];
+    expect(shapes.find((s) => s.kind === 'line')).toMatchObject({ dashed: true, bold: true });
+    expect(shapes.find((s) => s.kind === 'oval')).toMatchObject({ filled: true, x1: 60, x2: 70 });
+    expect(shapes.find((s) => s.kind === 'bracket')).toMatchObject({ bracket: 'curly', x1: 60, y1: 80, x2: 60, y2: 40 });
+  });
 });
 
 describe('saving again after a save', () => {

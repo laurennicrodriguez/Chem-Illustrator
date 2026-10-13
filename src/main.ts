@@ -12,7 +12,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { DocumentFile } from './io/document-file';
 import { copyDrawing, insertDrawing, isEmpty, nativeClipboard, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, Pasted } from './io/clipboard';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
-import { ICONS } from './icons';
+import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
+import { StylePanel } from './ui/style-panel';
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -36,22 +37,66 @@ new ResizeObserver(resize).observe(host);
 
 // ---------------------------------------------------------------- toolbar
 
-const TOOL_GROUPS: { name: string; title: string; key?: string }[][] = [
+const ARROWS: PaletteDef = {
+  palette: 'arrows',
+  title: 'Arrows',
+  items: [
+    { name: 'arrow', title: 'Reaction arrow (e)' },
+    { name: 'arrow-dashed', title: 'Dashed arrow' },
+    { name: 'arrow-hollow', title: 'Arrow with a hollow head' },
+    { name: 'arrow-double', title: 'Resonance arrow (heads at both ends)' },
+    { name: 'arrow-equilibrium', title: 'Equilibrium arrows' },
+    { name: 'arrow-retro', title: 'Retrosynthetic arrow' },
+    { name: 'arrow-nogo', title: 'Crossed-out arrow (reaction does not go)' },
+    { name: 'arrow-curved', title: 'Curved arrow (electron pair)' },
+    { name: 'arrow-fishhook', title: 'Curved half-headed arrow (one electron)' },
+  ],
+};
+
+const SHAPES: PaletteDef = {
+  palette: 'shapes',
+  title: 'Shapes',
+  items: [
+    { name: 'shape-rect', title: 'Box' },
+    { name: 'shape-rect-rounded', title: 'Box with round corners' },
+    { name: 'shape-rect-shadow', title: 'Box with a shadow' },
+    { name: 'shape-rect-rounded-shadow', title: 'Round-cornered box with a shadow' },
+    { name: 'shape-rect-dashed', title: 'Dashed box' },
+    { name: 'shape-oval', title: 'Oval (Shift: circle)' },
+    { name: 'shape-circle', title: 'Circle, drawn from its centre' },
+    { name: 'shape-circle-filled', title: 'Filled circle, drawn from its centre' },
+    { name: 'shape-line', title: 'Line' },
+    { name: 'shape-line-dashed', title: 'Dashed line' },
+    { name: 'shape-line-bold', title: 'Bold line' },
+  ],
+};
+
+const BRACKETS: PaletteDef = {
+  palette: 'brackets',
+  title: 'Brackets',
+  items: [
+    { name: 'bracket-square', title: 'Square brackets [ ]' },
+    { name: 'bracket-round', title: 'Parentheses ( )' },
+    { name: 'bracket-curly', title: 'Braces { }' },
+  ],
+};
+
+const TOOL_GROUPS: ToolbarItem[][] = [
   [
-    { name: 'select', title: 'Select and move (Space)', key: 'Space' },
+    { name: 'select', title: 'Select and move (Space)' },
     { name: 'eraser', title: 'Eraser' },
   ],
   [
-    { name: 'bond-single', title: 'Single bond (x). Click a bond: single, double, triple', key: 'x' },
+    { name: 'bond-single', title: 'Single bond (x). Click a bond: single, double, triple' },
     { name: 'bond-double', title: 'Double bond. Click again to move the second line' },
     { name: 'bond-triple', title: 'Triple bond' },
-    { name: 'bond-wedge', title: 'Wedge. Click again to reverse', key: 'w' },
-    { name: 'bond-hashWedge', title: 'Hashed wedge. Click again to reverse', key: 'h' },
+    { name: 'bond-wedge', title: 'Wedge. Click again to reverse' },
+    { name: 'bond-hashWedge', title: 'Hashed wedge. Click again to reverse' },
     { name: 'bond-hash', title: 'Hashed bond' },
     { name: 'bond-bold', title: 'Bold bond' },
     { name: 'bond-dash', title: 'Dashed bond' },
     { name: 'bond-wavy', title: 'Wavy bond' },
-    { name: 'chain', title: 'Chain: drag to draw a zig-zag chain (Shift+X)', key: 'X' },
+    { name: 'chain', title: 'Chain: drag to draw a zig-zag chain (Shift+X)' },
   ],
   [
     { name: 'ring-3', title: 'Cyclopropane' },
@@ -60,46 +105,37 @@ const TOOL_GROUPS: { name: string; title: string; key?: string }[][] = [
     { name: 'ring-6', title: 'Cyclohexane' },
     { name: 'ring-7', title: 'Cycloheptane' },
     { name: 'ring-8', title: 'Cyclooctane' },
-    { name: 'ring-benzene', title: 'Benzene (j). Shift+click swaps the double bonds', key: 'j' },
-    { name: 'ring-cp', title: 'Cyclopentadiene (Shift+J)', key: 'J' },
+    { name: 'ring-benzene', title: 'Benzene (j). Shift+click swaps the double bonds' },
+    { name: 'ring-cp', title: 'Cyclopentadiene (Shift+J)' },
   ],
   [
-    { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption (t)', key: 't' },
-    { name: 'arrow', title: 'Reaction arrow (e)', key: 'e' },
+    { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption (t)' },
+    ARROWS,
+    SHAPES,
+    BRACKETS,
   ],
 ];
 
-const toolbar = $<HTMLDivElement>('#tools');
-for (const group of TOOL_GROUPS) {
-  const g = document.createElement('div');
-  g.className = 'tool-group';
-  for (const t of group) {
-    const b = document.createElement('button');
-    b.className = 'tool';
-    b.dataset.tool = t.name;
-    b.title = t.title;
-    b.setAttribute('aria-label', t.title);
-    b.innerHTML = ICONS[t.name] ?? t.name;
-    b.addEventListener('click', () => editor.setTool(t.name));
-    g.appendChild(b);
-  }
-  toolbar.appendChild(g);
-}
+const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => editor.setTool(name));
 
 const HINTS: Record<string, string> = {
   select: 'Click to select, drag to box-select or move. Double-click selects a whole structure. Delete removes.',
-  eraser: 'Click an atom, bond, caption or arrow to remove it.',
+  eraser: 'Click an atom, bond, caption, arrow or shape to remove it.',
   chain: 'Drag from empty space or an atom; the number shows how many bonds.',
   text: 'Click an atom to type a label (OMe, CO2Et, NHBoc…), or click empty space for a caption.',
-  arrow: 'Drag to draw a reaction arrow; click for a standard one.',
 };
+const ARROW_HINT = 'Drag to draw an arrow (Alt: any angle); click for a standard one. Drag the ends to move them, the middle to bend it.';
+const CURVE_HINT = 'Drag from where the electrons start to where they go; swing out to one side to bend that way. Drag the middle dot to change the curve.';
+const SHAPE_HINT = 'Drag to draw. Drag the corner squares to resize; the Style panel changes dashes, fill, corners and shadow.';
+const BRACKET_HINT = 'Drag a box to put brackets round it, or click a structure to bracket it.';
 const BOND_HINT = 'Click empty space or an atom to draw; drag to aim. Point at an atom or bond and press a hotkey (see Help).';
 const RING_HINT = 'Click empty space, an atom (spiro; Alt+click to attach by a bond) or a bond (fused). Drag to orient.';
 
 editor.onToolChange = (name) => {
-  for (const b of toolbar.querySelectorAll<HTMLButtonElement>('.tool')) b.classList.toggle('active', b.dataset.tool === name);
+  toolbar.setActive(name);
   const t = TOOLS[name];
-  $('#hint').textContent = HINTS[name] ?? (t.kind === 'ring' ? RING_HINT : BOND_HINT);
+  $('#hint').textContent = HINTS[name] ?? (t.kind === 'ring' ? RING_HINT : t.kind === 'arrow' ? (t.style.sweep ? CURVE_HINT : ARROW_HINT)
+    : t.kind === 'shape' ? SHAPE_HINT : t.kind === 'bracket' ? BRACKET_HINT : BOND_HINT);
 };
 editor.setTool('bond-single');
 
@@ -510,8 +546,10 @@ function updatePanels(): void {
   });
 }
 
+const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
+
 editor.onFrame = () => updatePanels();
-editor.onChange = () => { scheduleAnalysis(); updatePanels(); file.updateTitle(); };
+editor.onChange = () => { scheduleAnalysis(); updatePanels(); file.updateTitle(); stylePanel.refresh(); };
 chem.onReady = () => {
   (window as any).__chemReadyMs = performance.now() - startMs;
   updatePanels();

@@ -4,6 +4,7 @@
 
 import { Vec, Rect } from './geom';
 import { DocStyle, ACS_1996 } from './style';
+import { arrowPoints } from './objects';
 
 export type BondDisplay = 'solid' | 'wedge' | 'hashWedge' | 'hash' | 'bold' | 'dash' | 'wavy';
 export type DoublePos = 'auto' | 'left' | 'right' | 'center';
@@ -95,6 +96,8 @@ export interface Arrow {
   noGo: boolean;
   /** Equilibrium arrows: two half-headed shafts. */
   equilibrium: boolean;
+  /** Distance between two parallel shafts (a retrosynthetic arrow), in points; absent for one shaft. */
+  shaftSpacing?: number;
   /** For curved arrows: signed sweep of the arc in radians (0 = straight). */
   sweep: number;
   headLength: number;
@@ -705,7 +708,7 @@ export class Doc {
     const grow = (x: number, y: number) => { if (x < x1) x1 = x; if (y < y1) y1 = y; if (x > x2) x2 = x; if (y > y2) y2 = y; };
     for (const a of this.atoms.values()) grow(a.x, a.y);
     for (const c of this.captions.values()) { grow(c.x, c.y - 10); grow(c.x + (c.width ?? 40), c.y + 4); }
-    for (const r of this.arrows.values()) { grow(r.tail.x, r.tail.y); grow(r.head.x, r.head.y); }
+    for (const r of this.arrows.values()) for (const p of arrowPoints(r, 12)) grow(p.x, p.y);
     for (const s of this.shapes.values()) { grow(s.x1, s.y1); grow(s.x2, s.y2); }
     if (x1 === Infinity) return null;
     return { x1, y1, x2, y2 };

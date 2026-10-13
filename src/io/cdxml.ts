@@ -290,6 +290,9 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       color: color(a),
     };
     if (lw !== st.lineWidth) arrow.lineWidth = lw;
+    // two shafts with a full head: a retrosynthetic arrow (spacing in hundredths of the line width)
+    const spacing = a.getAttribute('ArrowShaftSpacing');
+    if (spacing !== null && !arrow.equilibrium && Number(spacing) > 0) arrow.shaftSpacing = (Number(spacing) / 100) * lw;
     doc.addArrow(arrow);
     from('r', arrow.id, a);
     stats.arrows++;

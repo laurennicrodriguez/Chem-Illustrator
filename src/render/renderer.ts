@@ -11,6 +11,7 @@ import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
 import { valenceExceeded } from '../chem/elements';
 import { GENERIC } from '../chem/labels';
+import { bracketLip, shaftOffset } from '../objects';
 
 export const FONT_STACK = "Arial, 'Liberation Sans', Helvetica, sans-serif";
 
@@ -729,7 +730,7 @@ export class Renderer {
         const one = (p: Vec, q: Vec) => {
           const d = norm(sub(q, p));
           const n = perp(d);
-          const lip = Math.max(1.5, Math.min(l * 0.12, 4));
+          const lip = bracketLip(l);
           if (s.bracket === 'round') {
             const m = add(mul(add(p, q), 0.5), mul(n, -lip * 0.8));
             ctx.moveTo(p.x + n.x * lip * 0.4, p.y + n.y * lip * 0.4);
@@ -787,9 +788,11 @@ export class Renderer {
     };
     if (r.equilibrium) {
       const d = norm(sub(r.head, r.tail));
-      const off = mul(perp(d), -1.5);
+      const off = mul(perp(d), -shaftOffset(r));
       shaft(add(r.tail, off), add(r.head, off), 'halfLeft', 'none');
       shaft(sub(r.head, off), sub(r.tail, off), 'halfLeft', 'none');
+    } else if (r.shaftSpacing && !r.sweep) {
+      this.retroArrow(ctx, r, lw);
     } else {
       shaft(r.tail, r.head, r.headStyle, r.tailStyle);
     }
@@ -803,6 +806,35 @@ export class Renderer {
     }
   }
 
+  /** Two shafts ending in an open head (⇒), as used for retrosynthetic steps. */
+  private retroArrow(ctx: CanvasRenderingContext2D, r: Arrow, lw: number): void {
+    const d = sub(r.head, r.tail);
+    const l = len(d);
+    if (l < 0.1) return;
+    const dir = mul(d, 1 / l);
+    const n = perp(dir);
+    const h = shaftOffset(r);
+    const hl = Math.min(r.headLength, l * 0.6);
+    // the head's arms reach past the shafts by the head width
+    const hw = h + r.headWidth;
+    const stop = sub(r.head, mul(dir, (hl * h) / hw));
+    const base = sub(r.head, mul(dir, hl));
+    ctx.setLineDash(r.line === 'dashed' ? [lw * 4, lw * 3] : []);
+    ctx.beginPath();
+    for (const k of [h, -h]) {
+      ctx.moveTo(r.tail.x + n.x * k, r.tail.y + n.y * k);
+      ctx.lineTo(stop.x + n.x * k, stop.y + n.y * k);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.lineJoin = 'miter';
+    ctx.beginPath();
+    ctx.moveTo(base.x + n.x * hw, base.y + n.y * hw);
+    ctx.lineTo(r.head.x, r.head.y);
+    ctx.lineTo(base.x - n.x * hw, base.y - n.y * hw);
+    ctx.stroke();
+  }
+
   private arcArrow(ctx: CanvasRenderingContext2D, r: Arrow, tail: Vec, head: Vec): void {
     // Circle through tail and head with the given sweep.
     const sweep = r.sweep;
@@ -812,10 +844,10 @@ export class Renderer {
     ctx.beginPath();
     ctx.arc(center.x, center.y, radius, a0, a1, sweep < 0);
     ctx.stroke();
-    // head tangent
-    const rad = norm(sub(head, center));
-    const tangent = sweep < 0 ? { x: rad.y, y: -rad.x } : { x: -rad.y, y: rad.x };
-    this.arrowHead(ctx, head, tangent, r.headStyle, r);
+    // heads point along the arc
+    const along = (p: Vec) => { const rad = norm(sub(p, center)); return sweep < 0 ? { x: rad.y, y: -rad.x } : { x: -rad.y, y: rad.x }; };
+    this.arrowHead(ctx, head, along(head), r.headStyle, r);
+    this.arrowHead(ctx, tail, mul(along(tail), -1), r.tailStyle, r);
   }
 
   private arrowHead(ctx: CanvasRenderingContext2D, tip: Vec, dir: Vec, style: Arrow['headStyle'], r: Arrow): void {
@@ -825,16 +857,19 @@ export class Renderer {
     const base = sub(tip, mul(dir, hl));
     const inner = sub(tip, mul(dir, hl * 0.75));
     const left = add(base, mul(n, -hw)), right = add(base, mul(n, hw));
+    const toLeft = style === 'full' || style === 'halfLeft', toRight = style === 'full' || style === 'halfRight';
     ctx.beginPath();
-    ctx.moveTo(tip.x, tip.y);
-    if (style === 'full' || style === 'halfLeft') ctx.lineTo(left.x, left.y);
-    if (r.headType !== 'angle') ctx.lineTo(inner.x, inner.y);
-    if (style === 'full' || style === 'halfRight') ctx.lineTo(right.x, right.y);
     if (r.headType === 'angle') {
+      // an open head: just the barbs
+      if (toLeft) { ctx.moveTo(left.x, left.y); ctx.lineTo(tip.x, tip.y); } else ctx.moveTo(tip.x, tip.y);
+      if (toRight) ctx.lineTo(right.x, right.y);
       ctx.stroke();
       return;
     }
-    if (style !== 'full') ctx.lineTo(sub(tip, mul(dir, hl * 0.75)).x, sub(tip, mul(dir, hl * 0.75)).y);
+    ctx.moveTo(tip.x, tip.y);
+    if (toLeft) ctx.lineTo(left.x, left.y);
+    ctx.lineTo(inner.x, inner.y);
+    if (toRight) ctx.lineTo(right.x, right.y);
     ctx.closePath();
     if (r.headType === 'hollow') ctx.stroke(); else ctx.fill();
   }

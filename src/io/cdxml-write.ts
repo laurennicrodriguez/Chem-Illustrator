@@ -684,7 +684,7 @@ class CdxmlWriter {
       ArrowheadWidth: Math.round((r.headWidth / lw) * 100),
       LineType: r.line === 'dashed' ? 'Dashed' : r.line === 'bold' ? 'Bold' : r.line === 'wavy' ? 'Wavy' : null,
       NoGo: r.noGo ? 'Cross' : null,
-      ArrowShaftSpacing: r.equilibrium ? 300 : null,
+      ArrowShaftSpacing: r.equilibrium ? 300 : r.shaftSpacing ? Math.round((r.shaftSpacing / lw) * 100) : null,
       LineWidth: r.lineWidth !== undefined ? f2(r.lineWidth) : null,
       color: this.colorAttr(r.color),
       Head3D: pt3(r.head),
