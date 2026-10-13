@@ -10,8 +10,10 @@ export interface PaletteDef {
   title: string;
   items: ToolDef[];
   columns?: number;
-  /** Draws an item's picture when it has no icon (templates). */
-  icon?: (name: string) => string;
+  /** Draws an item's picture, at a given size, when it has no icon (templates). */
+  icon?: (name: string, size: number) => string;
+  /** Bigger buttons in the open palette (templates). */
+  large?: boolean;
 }
 export type ToolbarItem = ToolDef | PaletteDef;
 
@@ -36,8 +38,8 @@ export class Toolbar {
     window.addEventListener('resize', () => this.close());
   }
 
-  private icon(def: PaletteDef | null, name: string): string {
-    return ICONS[name] ?? def?.icon?.(name) ?? name;
+  private icon(def: PaletteDef | null, name: string, size = 28): string {
+    return ICONS[name] ?? def?.icon?.(name, size) ?? name;
   }
 
   private toolButton(t: ToolDef): HTMLButtonElement {
@@ -103,11 +105,11 @@ export class Toolbar {
     f.style.gridTemplateColumns = `repeat(${pal.def.columns ?? 3}, auto)`;
     for (const t of pal.def.items) {
       const b = document.createElement('button');
-      b.className = 'tool' + (t.name === pal.current ? ' active' : '');
+      b.className = 'tool' + (pal.def.large ? ' large' : '') + (t.name === pal.current ? ' active' : '');
       b.setAttribute('role', 'menuitem');
       b.title = t.title;
       b.setAttribute('aria-label', t.title);
-      b.innerHTML = this.icon(pal.def, t.name);
+      b.innerHTML = this.icon(pal.def, t.name, pal.def.large ? 46 : 28);
       b.addEventListener('click', () => { this.close(); this.pick(t.name); });
       f.appendChild(b);
     }

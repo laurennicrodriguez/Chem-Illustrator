@@ -128,6 +128,7 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
 .tool { width: 34px; height: 32px; padding: 0; display: grid; place-items: center; border-color: transparent; background: transparent; }
 .tool:hover { background: var(--accent-soft); border-color: transparent; }
 .tool.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.tool.large { width: 52px; height: 52px; }
 /* palette buttons: the small corner arrow opens the whole set */
 .palette-wrap { position: relative; }
 .palette-wrap .more {
@@ -153,6 +154,8 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
 .palette-wrap .more:hover { color: var(--accent); }
 .flyout {
   position: fixed;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   z-index: 40;
   display: grid;
   gap: 3px;

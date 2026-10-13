@@ -15,6 +15,8 @@ import { copyDrawing, insertDrawing, isEmpty, nativeClipboard, readNativeClipboa
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
 import { StylePanel } from './ui/style-panel';
+import { TEMPLATES, Template, templateById } from './chem/templates';
+import { templateIcon } from './ui/template-icons';
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -82,6 +84,16 @@ const BRACKETS: PaletteDef = {
   ],
 };
 
+// Template palettes, one per kind of structure
+const templatePalette = (group: Template['group'], palette: string, title: string, columns: number): PaletteDef => ({
+  palette,
+  title,
+  items: TEMPLATES.filter((t) => t.group === group).map((t) => ({ name: `tpl-${t.id}`, title: t.name })),
+  columns,
+  large: true,
+  icon: (name, size) => templateIcon(templateById(name.slice(4))!, size),
+});
+
 const TOOL_GROUPS: ToolbarItem[][] = [
   [
     { name: 'select', title: 'Select and move (Space)' },
@@ -110,6 +122,12 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     { name: 'ring-cp', title: 'Cyclopentadiene (Shift+J)' },
   ],
   [
+    templatePalette('rings', 'tpl-rings', 'Ring systems', 5),
+    templatePalette('heterocycles', 'tpl-heterocycles', 'Heterocycles', 7),
+    templatePalette('amino', 'tpl-amino', 'Amino acids', 5),
+    templatePalette('sugars', 'tpl-sugars', 'Sugars and chair', 4),
+  ],
+  [
     { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption (t)' },
     ARROWS,
     SHAPES,
@@ -131,12 +149,13 @@ const SHAPE_HINT = 'Drag to draw. Drag the corner squares to resize; the Style p
 const BRACKET_HINT = 'Drag a box to put brackets round it, or click a structure to bracket it.';
 const BOND_HINT = 'Click empty space or an atom to draw; drag to aim. Point at an atom or bond and press a hotkey (see Help).';
 const RING_HINT = 'Click empty space, an atom (spiro; Alt+click to attach by a bond) or a bond (fused). Drag to orient.';
+const TEMPLATE_HINT = 'Click empty space to place it (drag to turn it), a bond to fuse it on, or an atom to join it there (Alt: the other way: by a new bond, or sharing the atom).';
 
 editor.onToolChange = (name) => {
   toolbar.setActive(name);
   const t = TOOLS[name];
   $('#hint').textContent = HINTS[name] ?? (t.kind === 'ring' ? RING_HINT : t.kind === 'arrow' ? (t.style.sweep ? CURVE_HINT : ARROW_HINT)
-    : t.kind === 'shape' ? SHAPE_HINT : t.kind === 'bracket' ? BRACKET_HINT : BOND_HINT);
+    : t.kind === 'shape' ? SHAPE_HINT : t.kind === 'bracket' ? BRACKET_HINT : t.kind === 'template' ? TEMPLATE_HINT : BOND_HINT);
 };
 editor.setTool('bond-single');
 

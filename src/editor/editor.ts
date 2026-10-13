@@ -4,6 +4,7 @@
 
 import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption } from '../model';
 import { CaptionEditor } from '../ui/caption-editor';
+import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
 import { styleFromFace, plainText } from '../richtext';
 import { Renderer } from '../render/renderer';
 import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG } from '../geom';
@@ -29,7 +30,8 @@ export type Tool =
   | { kind: 'text' }
   | { kind: 'arrow'; style: ArrowStyle }
   | { kind: 'shape'; shape: ShapeStyle; from: 'corner' | 'center' }
-  | { kind: 'bracket'; bracket: NonNullable<Shape['bracket']> };
+  | { kind: 'bracket'; bracket: NonNullable<Shape['bracket']> }
+  | { kind: 'template'; id: string };
 
 /** How a new arrow looks (everything else is the document's default). */
 export type ArrowStyle = Partial<Pick<Arrow, 'headStyle' | 'tailStyle' | 'headType' | 'line' | 'noGo' | 'equilibrium' | 'sweep'>> & {
@@ -86,6 +88,7 @@ export const TOOLS: Record<string, Tool> = {
   'bracket-round': { kind: 'bracket', bracket: 'round' },
   'bracket-curly': { kind: 'bracket', bracket: 'curly' },
 };
+for (const t of TEMPLATES) TOOLS[`tpl-${t.id}`] = { kind: 'template', id: t.id };
 
 export type Hit =
   | { kind: 'atom'; id: number }
@@ -426,6 +429,7 @@ export class Editor {
       case 'arrow':
       case 'shape':
       case 'bracket':
+      case 'template':
         return 'draw';
       case 'text':
         return d.hit && d.hit.kind === 'caption' ? 'move' : 'none';
@@ -524,6 +528,11 @@ export class Editor {
       }
       case 'eraser': {
         if (h) doc.edit('Erase', () => this.erase(h));
+        this.changed();
+        return;
+      }
+      case 'template': {
+        doc.edit('Template', () => this.placeTemplateAt(t.id, h, p, null, d.alt));
         this.changed();
         return;
       }
@@ -646,6 +655,65 @@ export class Editor {
     this.lastEdited = ids[0];
   }
 
+  /**
+   * Where a template goes. On a bond: fused along it, on its emptier side. On an atom: sharing
+   * it (rings, sugars) or joined to it by a new bond (amino acids; Alt swaps the two), lying
+   * away from the rest of the structure, or towards the pointer when dragged. Elsewhere: centred
+   * where clicked, turned towards the pointer when dragged (15° steps; Alt: any angle).
+   */
+  private templatePlacement(t: Template, h: Hit, start: Vec, cursor: Vec | null, alt: boolean):
+    { pl: Placement; existing: Map<number, number>; bondFrom?: number; scale?: number } | null {
+    const doc = this.doc;
+    const best = (cands: Placement[], ignore: Set<number>, prefer?: (pl: Placement) => number) => {
+      let pick: Placement | null = null, score = Infinity;
+      for (const pl of cands) {
+        const sc = crowdingOf(doc, t, pl, ignore) + (prefer?.(pl) ?? 0) + (pl.mirror ? 0.001 : 0);
+        if (sc < score - 1e-9) { score = sc; pick = pl; }
+      }
+      return pick;
+    };
+    const nearest = (pl: Placement, i: number, ids: number[]) => {
+      const q = templatePoints(t, pl)[i];
+      return ids.reduce((m, id) => (dist(doc.atoms.get(id)!, q) < dist(doc.atoms.get(m)!, q) ? id : m));
+    };
+    if (h && h.kind === 'bond' && t.fuse) {
+      const b = doc.bonds.get(h.id)!;
+      const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
+      const n = perp(sub(q, p)), mid = mul(add(p, q), 0.5);
+      const towards = cursor ?? start;
+      // on a tie, the side the pointer is on
+      const side = (pl: Placement) => {
+        const c = placePoint(pl, 0, 0);
+        return Math.sign(dot(sub(c, mid), n)) === Math.sign(dot(sub(towards, mid), n)) ? 0 : 0.01;
+      };
+      const pl = best(fusePlacements(t, p, q), new Set([p.id, q.id]), side);
+      if (!pl) return null;
+      return { pl, existing: new Map([[t.fuse[0], nearest(pl, t.fuse[0], [p.id, q.id])], [t.fuse[1], nearest(pl, t.fuse[1], [p.id, q.id])]]), scale: b.s };
+    }
+    if (h && h.kind === 'atom') {
+      const a = doc.atoms.get(h.id)!;
+      const L = bondLength(doc, a);
+      let byBond = (t.join === 'bond') !== alt;
+      if (!byBond && doc.degree(a.id) >= 3) byBond = true;
+      const dir = cursor && dist(cursor, a) > L * 0.3 ? norm(fromAngle(snapAngle(angleOf(sub(cursor, a))))) : sproutDir(doc, a.id);
+      const pl = best(atomPlacements(t, a, dir, L, byBond), new Set([a.id]));
+      if (!pl) return null;
+      return byBond ? { pl, existing: new Map(), bondFrom: a.id, scale: a.s } : { pl, existing: new Map([[t.attach, a.id]]), scale: a.s };
+    }
+    const L = doc.style.bondLength;
+    let angle = 0;
+    if (cursor && dist(cursor, start) > L * 0.3) angle = alt ? angleOf(sub(cursor, start)) : snap15(angleOf(sub(cursor, start)));
+    return { pl: freePlacement(start, L, angle), existing: new Map() };
+  }
+
+  private placeTemplateAt(id: string, h: Hit, start: Vec, cursor: Vec | null, alt: boolean): void {
+    const t = templateById(id);
+    const place = t && this.templatePlacement(t, h, start, cursor, alt);
+    if (!t || !place) return;
+    const ids = placeTemplate(this.doc, t, place.pl, { existing: place.existing, bondFrom: place.bondFrom, scale: place.scale });
+    this.lastEdited = ids[t.attach];
+  }
+
   // ------------------------------------------------------------------ drags that draw
 
   private snapEnd(from: Vec, p: Vec, L: number, fromId?: number): { pt: Vec; atom?: Atom } {
@@ -700,6 +768,8 @@ export class Editor {
     } else if (t.kind === 'bracket') {
       const r = { x1: Math.min(d.start.x, p.x), y1: Math.min(d.start.y, p.y), x2: Math.max(d.start.x, p.x), y2: Math.max(d.start.y, p.y) };
       if (r.y2 - r.y1 >= 4) this.addBrackets(r, t.bracket);
+    } else if (t.kind === 'template') {
+      doc.edit('Template', () => this.placeTemplateAt(t.id, h, d.start, p, d.alt));
     }
     this.changed();
   }
@@ -1506,7 +1576,16 @@ export class Editor {
       if (g) outlineShape(ctx, { id: 0, ...t.shape, ...g });
     } else if (t.kind === 'bracket') {
       const r = { x1: Math.min(d.start.x, d.last.x), y1: Math.min(d.start.y, d.last.y), x2: Math.max(d.start.x, d.last.x), y2: Math.max(d.start.y, d.last.y) };
-      for (const b of bracketsAround(r, t.bracket)) outlineShape(ctx, { id: 0, ...b });
+      for (const b of bracketsAround(r, t.bracket)) outlineShape(ctx, { id: 0, ...b });    } else if (t.kind === 'template') {
+      const tp = templateById(t.id);
+      const place = tp && this.templatePlacement(tp, h, d.start, d.last, d.alt);
+      if (tp && place) {
+        const pts = templatePoints(tp, place.pl);
+        ctx.beginPath();
+        for (const [a, b] of tp.bonds) { ctx.moveTo(pts[a].x, pts[a].y); ctx.lineTo(pts[b].x, pts[b].y); }
+        if (place.bondFrom !== undefined) { const f = doc.atoms.get(place.bondFrom)!; ctx.moveTo(f.x, f.y); ctx.lineTo(pts[tp.attach].x, pts[tp.attach].y); }
+        ctx.stroke();
+      }
     }
   }
 }
