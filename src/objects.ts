@@ -132,6 +132,7 @@ export function shapeHit(s: Shape, p: Vec, tol: number): boolean {
     case 'bracket':
       return distToSegment(p, a, b) <= tol + bracketReach(s) / 2;
     case 'symbol':
+    case 'picture':
       return p.x >= x1 - tol && p.x <= x2 + tol && p.y >= y1 - tol && p.y <= y2 + tol;
     case 'rect': {
       const inside = p.x >= x1 && p.x <= x2 && p.y >= y1 && p.y <= y2;
@@ -178,6 +179,48 @@ export function shapeHandles(s: Shape): Handle[] {
   return isCircle(s) ? corners : [...corners, h('n', mx, y1), h('e', x2, my), h('s', mx, y2), h('w', x1, my)];
 }
 
+const NO_CROP = { l: 0, t: 0, r: 0, b: 0 };
+
+/**
+ * Cropping a picture by dragging a handle to `p`: the edge moves and the part of the picture
+ * beyond it is cut off (or uncovered again), while the rest stays where it was.
+ */
+export function dragCropHandle(s: Shape, which: HandleId, p: Vec): Partial<Shape> {
+  const c = { ...(s.crop ?? NO_CROP) };
+  let x1 = Math.min(s.x1, s.x2), x2 = Math.max(s.x1, s.x2), y1 = Math.min(s.y1, s.y2), y2 = Math.max(s.y1, s.y2);
+  // size of the whole picture, uncropped
+  const W = (x2 - x1) / Math.max(0.01, 1 - c.l - c.r), H = (y2 - y1) / Math.max(0.01, 1 - c.t - c.b);
+  const MIN = 0.02;
+  if (which.includes('w')) { const l = clamp(c.l + (p.x - x1) / W, 0, 1 - c.r - MIN); x1 += (l - c.l) * W; c.l = l; }
+  if (which.includes('e')) { const r = clamp(c.r + (x2 - p.x) / W, 0, 1 - c.l - MIN); x2 -= (r - c.r) * W; c.r = r; }
+  if (which.includes('n')) { const t = clamp(c.t + (p.y - y1) / H, 0, 1 - c.b - MIN); y1 += (t - c.t) * H; c.t = t; }
+  if (which.includes('s')) { const b = clamp(c.b + (y2 - p.y) / H, 0, 1 - c.t - MIN); y2 -= (b - c.b) * H; c.b = b; }
+  return { x1, y1, x2, y2, crop: c.l || c.t || c.r || c.b ? c : undefined };
+}
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+/** A picture resized from a corner keeps its proportions (unless `free`); from an edge it stretches. */
+function dragPictureHandle(s: Shape, which: HandleId, p: Vec, free: boolean): Partial<Shape> {
+  const x1 = Math.min(s.x1, s.x2), x2 = Math.max(s.x1, s.x2), y1 = Math.min(s.y1, s.y2), y2 = Math.max(s.y1, s.y2);
+  if (free || which.length === 1) return stretch(x1, y1, x2, y2, which, p);
+  const ox = which.includes('w') ? x2 : x1, oy = which.includes('n') ? y2 : y1;
+  const w0 = x2 - x1, h0 = y2 - y1;
+  // the larger of the two stretches decides the new size
+  const k = Math.max(0.01, Math.max(Math.abs(p.x - ox) / w0, Math.abs(p.y - oy) / h0));
+  const w = w0 * k, h = h0 * k;
+  const nx1 = which.includes('w') ? ox - w : ox, ny1 = which.includes('n') ? oy - h : oy;
+  return { x1: nx1, y1: ny1, x2: nx1 + w, y2: ny1 + h };
+}
+
+function stretch(x1: number, y1: number, x2: number, y2: number, which: HandleId, p: Vec): Partial<Shape> {
+  if (which.includes('w')) x1 = p.x;
+  if (which.includes('e')) x2 = p.x;
+  if (which.includes('n')) y1 = p.y;
+  if (which.includes('s')) y2 = p.y;
+  return { x1: Math.min(x1, x2), x2: Math.max(x1, x2), y1: Math.min(y1, y2), y2: Math.max(y1, y2) };
+}
+
 /** End point `p` seen from `from`, with the angle snapped to 15° unless `free`. */
 function snapEnd(from: Vec, p: Vec, free: boolean): Vec {
   if (free) return p;
@@ -211,6 +254,7 @@ export function dragArrowHandle(r: Arrow, which: HandleId, p: Vec, free: boolean
 export function dragShapeHandle(s: Shape, which: HandleId, p: Vec, free: boolean): Partial<Shape> {
   if (which === 'p1') { const q = snapEnd({ x: s.x2, y: s.y2 }, p, free); return { x1: q.x, y1: q.y }; }
   if (which === 'p2') { const q = snapEnd({ x: s.x1, y: s.y1 }, p, free); return { x2: q.x, y2: q.y }; }
+  if (s.kind === 'picture') return dragPictureHandle(s, which, p, free);
   let x1 = Math.min(s.x1, s.x2), x2 = Math.max(s.x1, s.x2), y1 = Math.min(s.y1, s.y2), y2 = Math.max(s.y1, s.y2);
   if (isCircle(s)) {
     // resize about the opposite corner, keeping it round

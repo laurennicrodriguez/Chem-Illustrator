@@ -17,6 +17,12 @@ export interface FileType {
 }
 
 export const CDXML: FileType = { description: 'ChemDraw XML drawing', extension: 'cdxml', mime: 'chemical/x-cdxml' };
+export const CDX: FileType = { description: 'ChemDraw drawing', extension: 'cdx', mime: 'chemical/x-cdx' };
+export const PPTX: FileType = { description: 'PowerPoint presentation', extension: 'pptx', mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
+export const PDF: FileType = { description: 'PDF document', extension: 'pdf', mime: 'application/pdf' };
+export const PICTURE: FileType = { description: 'Picture', extension: 'png', mime: 'image/png' };
+/** Picture files that can go on a slide. */
+export const PICTURE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'emf', 'bmp', 'webp'];
 export const MOL: FileType = { description: 'MDL molfile', extension: 'mol', mime: 'chemical/x-mdl-molfile' };
 export const KEYMAP_FILE: FileType = { description: 'Chem Illustrator hotkeys', extension: 'json', mime: 'application/json' };
 
@@ -24,7 +30,7 @@ export const KEYMAP_FILE: FileType = { description: 'Chem Illustrator hotkeys', 
 interface FileHandle {
   name: string;
   getFile(): Promise<File>;
-  createWritable(): Promise<{ write(data: string): Promise<void>; close(): Promise<void> }>;
+  createWritable(): Promise<{ write(data: string | Uint8Array): Promise<void>; close(): Promise<void> }>;
 }
 interface PickerOptions {
   types?: { description: string; accept: Record<string, string[]> }[];
@@ -76,6 +82,41 @@ export async function openFileDialog(types: FileType[]): Promise<{ name: string;
   return file ? { name: file.name, text: await file.text(), ref: { kind: 'none' } } : null;
 }
 
+/** The extension of a file name, in lower case ("" if none). */
+export function extensionOf(name: string): string {
+  const m = /\.([^.\\/]+)$/.exec(name);
+  return m ? m[1].toLowerCase() : '';
+}
+
+/**
+ * Ask for a file and read its bytes. `extensions` lists what may be picked (the first group
+ * named `label` holds them all, for "any file this can open"). Null when the user cancels.
+ */
+export async function openBytesDialog(label: string, types: FileType[], extra: string[] = []): Promise<{ name: string; bytes: Uint8Array; ref: FileRef } | null> {
+  const exts = [...new Set([...types.map((t) => t.extension), ...extra])];
+  if (desktop) {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const filters = [{ name: label, extensions: exts }, ...types.map((t) => ({ name: t.description, extensions: [t.extension] }))];
+    const path = await open({ multiple: false, directory: false, filters });
+    if (typeof path !== 'string') return null;
+    const buf = await invoke<ArrayBuffer>('read_binary_file', { path });
+    return { name: baseName(path), bytes: new Uint8Array(buf), ref: { kind: 'path', path } };
+  }
+  if (pw.showOpenFilePicker) {
+    try {
+      const accept: Record<string, string[]> = { 'application/octet-stream': exts.map((e) => '.' + e) };
+      const [handle] = await pw.showOpenFilePicker({ types: [{ description: label, accept }] });
+      const file = await handle.getFile();
+      return { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()), ref: { kind: 'handle', handle } };
+    } catch (e) {
+      if (isAbort(e)) return null;
+      throw e;
+    }
+  }
+  const file = await uploadBox(exts.map((e) => ({ description: e, extension: e, mime: '' })));
+  return file ? { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()), ref: { kind: 'none' } } : null;
+}
+
 function uploadBox(types: FileType[]): Promise<File | null> {
   return new Promise((resolve) => {
     const input = document.createElement('input');
@@ -88,21 +129,23 @@ function uploadBox(types: FileType[]): Promise<File | null> {
 }
 
 /**
- * Ask where to save. Null when the user cancels. In browsers without a save dialog the
- * answer is a download with the suggested name.
+ * Ask where to save, offering one or more file types (the first is the default). The type
+ * chosen is the extension of the name returned. Null when the user cancels. In browsers
+ * without a save dialog the answer is a download with the suggested name.
  */
-export async function saveFileDialog(suggestedName: string, type: FileType): Promise<{ name: string; ref: FileRef } | null> {
+export async function saveFileDialog(suggestedName: string, type: FileType | FileType[]): Promise<{ name: string; ref: FileRef } | null> {
+  const types = Array.isArray(type) ? type : [type];
   if (desktop) {
     const { save } = await import('@tauri-apps/plugin-dialog');
-    const path = await save({ defaultPath: suggestedName, filters: [{ name: type.description, extensions: [type.extension] }] });
+    const path = await save({ defaultPath: suggestedName, filters: types.map((t) => ({ name: t.description, extensions: [t.extension] })) });
     if (!path) return null;
     // some systems leave off the extension when the user types a bare name
-    const full = /\.[^.\\/]+$/.test(baseName(path)) ? path : path + '.' + type.extension;
+    const full = /\.[^.\\/]+$/.test(baseName(path)) ? path : path + '.' + types[0].extension;
     return { name: baseName(full), ref: { kind: 'path', path: full } };
   }
   if (pw.showSaveFilePicker) {
     try {
-      const handle = await pw.showSaveFilePicker({ suggestedName, types: [{ description: type.description, accept: { [type.mime]: ['.' + type.extension] } }] });
+      const handle = await pw.showSaveFilePicker({ suggestedName, types: types.map((t) => ({ description: t.description, accept: { [t.mime]: ['.' + t.extension] } })) });
       return { name: handle.name, ref: { kind: 'handle', handle } };
     } catch (e) {
       if (isAbort(e)) return null;
@@ -112,16 +155,17 @@ export async function saveFileDialog(suggestedName: string, type: FileType): Pro
   return { name: suggestedName, ref: { kind: 'none' } };
 }
 
-/** Write text to a file chosen earlier (or download it when the browser cannot write files). */
-export async function writeFile(ref: FileRef, name: string, text: string, type: FileType): Promise<void> {
+/** Write text or bytes to a file chosen earlier (or download it when the browser cannot write files). */
+export async function writeFile(ref: FileRef, name: string, data: string | Uint8Array, type: FileType): Promise<void> {
   if (ref.kind === 'path') {
-    await invoke('write_text_file', { path: ref.path, contents: text });
+    if (typeof data === 'string') await invoke('write_text_file', { path: ref.path, contents: data });
+    else await invoke('write_binary_file', data, { headers: { path: encodeURIComponent(ref.path) } });
   } else if (ref.kind === 'handle') {
     const w = await ref.handle.createWritable();
-    await w.write(text);
+    await w.write(data);
     await w.close();
   } else {
-    const url = URL.createObjectURL(new Blob([text], { type: type.mime }));
+    const url = URL.createObjectURL(new Blob([data as BlobPart], { type: type.mime }));
     const a = document.createElement('a');
     a.href = url;
     a.download = name;

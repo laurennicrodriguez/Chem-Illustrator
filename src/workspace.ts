@@ -1,0 +1,320 @@
+// The open files, one tab each: drawings (ChemDraw files) and slide decks (PowerPoint files).
+// The tab showing has its drawing, or its current slide, in the app's one document, so every
+// tool works the same everywhere; the other tabs wait in documents of their own (Doc.swap).
+// New, Open, Save, Save As, Close and the unsaved-changes questions go through here.
+
+import { Doc } from './model';
+import { Deck } from './deck/deck';
+import type { View } from './render/renderer';
+import { readCdxml } from './io/cdxml';
+import { writeCdxml, WriteOptions } from './io/cdxml-write';
+import { cdxToCdxml, cdxmlToCdx, isCdx } from './io/cdx';
+import { readPptx } from './io/pptx-read';
+import { writePptx, PptxOptions } from './io/pptx-write';
+import { adoptSaved } from './io/document-file';
+import {
+  FileRef, FileType, CDXML, CDX, PPTX, openBytesDialog, saveFileDialog, writeFile, canSaveInPlace, askSaveChanges,
+  showError, withExtension, extensionOf,
+} from './io/files';
+
+export type Mode = 'drawing' | 'slides';
+
+export interface Tab {
+  id: number;
+  mode: Mode;
+  /** File name shown on the tab. */
+  name: string;
+  ref: FileRef;
+  /** A drawing's document while another tab is showing. */
+  stash: Doc;
+  deck: Deck | null;
+  /** Zoom and scroll, kept while another tab shows. */
+  view: View | null;
+  dirty: boolean;
+  /** Drawings: the app document's version last seen while this tab showed. */
+  seen: number;
+  /** Slides: the deck's change count when last saved. */
+  savedEdits: number;
+}
+
+export interface WorkspaceHooks {
+  /** Before another tab shows: finish any typing, remember the view. */
+  leave(tab: Tab): void;
+  /** After a tab shows. `opened` is true for a file just opened or a new tab. */
+  enter(tab: Tab, opened: boolean): void;
+  /** Tabs were added, closed, renamed, or their unsaved marks changed. */
+  changed(): void;
+  flash(msg: string, ms?: number): void;
+  /** Pictures of drawings for PowerPoint files (the app draws them). */
+  pptx: Omit<PptxOptions, 'title'>;
+  /** Text widths for saving ChemDraw files. */
+  measure: WriteOptions['textMeasure'];
+}
+
+/** What each kind of tab saves as (the first is the default). */
+const SAVE_TYPES: Record<Mode, FileType[]> = { drawing: [CDXML, CDX], slides: [PPTX] };
+
+export class Workspace {
+  tabs: Tab[] = [];
+  active!: Tab;
+  private nextId = 1;
+
+  constructor(public host: Doc, private hooks: WorkspaceHooks) {
+    const t = this.makeTab('drawing', this.untitled('drawing'));
+    this.tabs.push(t);
+    this.active = t;
+    t.seen = host.version;
+  }
+
+  private makeTab(mode: Mode, name: string, ref: FileRef = { kind: 'none' }): Tab {
+    return { id: this.nextId++, mode, name, ref, stash: new Doc(), deck: null, view: null, dirty: false, seen: 0, savedEdits: 0 };
+  }
+
+  /** "Untitled", "Untitled 2"… with the right extension, not already used by an open tab. */
+  private untitled(mode: Mode): string {
+    const ext = SAVE_TYPES[mode][0].extension;
+    for (let n = 1; ; n++) {
+      const name = `${n === 1 ? 'Untitled' : `Untitled ${n}`}.${ext}`;
+      if (!this.tabs.some((t) => t.name === name)) return name;
+    }
+  }
+
+  // ---------------------------------------------------------------- switching
+
+  /** Show another tab. */
+  activate(tab: Tab, opened = false): void {
+    if (tab === this.active && !opened) return;
+    if (tab !== this.active) {
+      this.putAway(this.active);
+      this.active = tab;
+      if (tab.mode === 'slides') tab.deck!.attach();
+      else this.host.swap(tab.stash);
+      tab.seen = this.host.version;
+    }
+    this.hooks.enter(tab, opened);
+    this.hooks.changed();
+  }
+
+  private putAway(tab: Tab): void {
+    this.hooks.leave(tab);
+    if (tab.mode === 'slides') tab.deck!.detach();
+    else this.host.swap(tab.stash);
+  }
+
+  /** The tab after (or before) the one showing, round the end. */
+  cycle(step: 1 | -1): void {
+    if (this.tabs.length < 2) return;
+    const i = this.tabs.indexOf(this.active);
+    this.activate(this.tabs[(i + step + this.tabs.length) % this.tabs.length]);
+  }
+
+  /** Call after anything changes, to keep the unsaved marks right. */
+  noteChange(): void {
+    const t = this.active;
+    let dirty = t.dirty;
+    if (t.mode === 'slides') dirty = t.deck!.edits !== t.savedEdits;
+    else if (this.host.version !== t.seen) {
+      t.seen = this.host.version;
+      dirty = true;
+    }
+    if (dirty !== t.dirty) {
+      t.dirty = dirty;
+      this.hooks.changed();
+    }
+  }
+
+  // ---------------------------------------------------------------- new and open
+
+  newDrawing(): Tab {
+    const t = this.makeTab('drawing', this.untitled('drawing'));
+    this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
+    this.activate(t, true);
+    t.seen = this.host.version;
+    return t;
+  }
+
+  /** New slides, in place of an untouched new drawing (as when the app has just started). */
+  newSlides(): Tab {
+    const spare = this.spare();
+    const t = this.makeTab('slides', this.untitled('slides'));
+    t.deck = Deck.blank(this.host);
+    this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
+    this.activate(t, true);
+    if (spare) this.drop(spare);
+    return t;
+  }
+
+  /** File > Open: drawings and slide decks. */
+  async open(): Promise<void> {
+    let f;
+    try {
+      f = await openBytesDialog('Drawings and slides', [CDXML, CDX, PPTX]);
+    } catch (e) {
+      await showError('Could not open the file: ' + String(e));
+      return;
+    }
+    if (f) await this.openBytes(f.bytes, f.name, f.ref);
+  }
+
+  /** Open a file's contents (picked, dropped, or given) in a tab of its own. */
+  async openBytes(bytes: Uint8Array, name: string, ref: FileRef = { kind: 'none' }): Promise<boolean> {
+    // the same file again: go to its tab
+    const same = ref.kind === 'path' ? this.tabs.find((t) => t.ref.kind === 'path' && t.ref.path === ref.path) : null;
+    if (same) {
+      this.activate(same);
+      if (same.dirty) this.hooks.flash(`${name} is already open (with changes not saved yet).`);
+      return true;
+    }
+    const ext = extensionOf(name);
+    const zip = bytes[0] === 0x50 && bytes[1] === 0x4b;
+    try {
+      if (ext === 'pptx' || zip) return this.openSlides(bytes, name, ref);
+      const text = isCdx(bytes) ? cdxToCdxml(bytes) : new TextDecoder().decode(bytes);
+      return this.openDrawing(text, name, ref);
+    } catch (e) {
+      await showError(`Could not open ${name}: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
+  }
+
+  /** The tab showing, when it is new and untouched (an opened file takes its place). */
+  private spare(): Tab | null {
+    const t = this.active;
+    if (t.dirty || t.ref.kind !== 'none' || !/^Untitled/.test(t.name)) return null;
+    if (t.mode === 'drawing') return this.host.atoms.size || this.host.captions.size || this.host.arrows.size || this.host.shapes.size ? null : t;
+    return t.deck!.edits === 0 ? t : null;
+  }
+
+  private openDrawing(text: string, name: string, ref: FileRef): boolean {
+    const { doc, stats } = readCdxml(text);
+    const spare = this.spare();
+    const t = this.makeTab('drawing', name, ref);
+    t.stash = doc;
+    this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
+    this.activate(t, true);
+    t.seen = this.host.version;
+    if (spare) this.drop(spare);
+    const sk = Object.entries(stats.skipped).map(([k, v]) => `${v} ${k}`).join(', ');
+    this.hooks.flash(`Opened ${name}: ${stats.atoms} atoms, ${stats.bonds} bonds, ${stats.captions} captions, ${stats.arrows} arrows${sk ? `. Not shown yet: ${sk}` : ''}`);
+    return true;
+  }
+
+  private openSlides(bytes: Uint8Array, name: string, ref: FileRef): boolean {
+    const got = readPptx(bytes);
+    const spare = this.spare();
+    const t = this.makeTab('slides', name, ref);
+    const deck = new Deck(this.host);
+    deck.master = got.master;
+    deck.size = got.size;
+    deck.load(got.slides.map((s) => deck.makeSlide(s.layout, s.contents, s.notes)), got.size, got.master);
+    t.deck = deck;
+    this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
+    this.activate(t, true);
+    if (spare) this.drop(spare);
+    const n = got.slides.length;
+    this.hooks.flash(`Opened ${name}: ${n} slide${n === 1 ? '' : 's'}.${got.warnings.length ? ' ' + got.warnings.join(' ') : ''}`, got.warnings.length ? 12000 : 3500);
+    return true;
+  }
+
+  // ---------------------------------------------------------------- closing
+
+  /** Close a tab, offering to save changes first. False when the user chose to keep it open. */
+  async close(tab: Tab = this.active): Promise<boolean> {
+    if (tab.dirty) {
+      if (tab !== this.active) this.activate(tab);
+      const answer = await askSaveChanges(tab.name);
+      if (answer === 'cancel') return false;
+      if (answer === 'save' && !(await this.save(tab))) return false;
+    }
+    this.drop(tab);
+    return true;
+  }
+
+  /** Take a tab away (without asking). The last tab is replaced by a new drawing. */
+  private drop(tab: Tab): void {
+    const i = this.tabs.indexOf(tab);
+    if (i < 0) return;
+    if (tab === this.active) {
+      const next = this.tabs[i + 1] ?? this.tabs[i - 1];
+      if (next) this.activate(next);
+      else {
+        // the last tab: a fresh drawing takes its place
+        const t = this.makeTab('drawing', 'Untitled.cdxml');
+        this.tabs.push(t);
+        this.activate(t, true);
+      }
+    }
+    this.tabs.splice(this.tabs.indexOf(tab), 1);
+    tab.deck?.detach();
+    this.hooks.changed();
+  }
+
+  /** Before the window closes: offer to save each tab with changes. False to keep the window open. */
+  async closeAll(): Promise<boolean> {
+    for (const t of [...this.tabs]) {
+      if (!t.dirty) continue;
+      this.activate(t);
+      const answer = await askSaveChanges(t.name);
+      if (answer === 'cancel') return false;
+      if (answer === 'save' && !(await this.save(t))) return false;
+    }
+    return true;
+  }
+
+  get anyDirty(): boolean {
+    return this.tabs.some((t) => t.dirty);
+  }
+
+  // ---------------------------------------------------------------- saving
+
+  /** The tab's drawing (its document wherever it is). */
+  docOf(tab: Tab): Doc {
+    return tab === this.active ? this.host : tab.stash;
+  }
+
+  async save(tab: Tab = this.active): Promise<boolean> {
+    const ext = extensionOf(tab.name);
+    // a file of a kind this tab can't write (a drawing opened from an old file) goes through Save As
+    if (!canSaveInPlace(tab.ref) || !SAVE_TYPES[tab.mode].some((t) => t.extension === ext)) return this.saveAs(tab);
+    return this.writeTo(tab, tab.ref, tab.name);
+  }
+
+  async saveAs(tab: Tab = this.active): Promise<boolean> {
+    const types = SAVE_TYPES[tab.mode];
+    const ext = extensionOf(tab.name);
+    const first = types.find((t) => t.extension === ext) ?? types[0];
+    const target = await saveFileDialog(withExtension(tab.name, first.extension), [first, ...types.filter((t) => t !== first)]).catch(async (e) => { await showError(String(e)); return null; });
+    if (!target) return false;
+    return this.writeTo(tab, target.ref, target.name);
+  }
+
+  private async writeTo(tab: Tab, ref: FileRef, name: string): Promise<boolean> {
+    try {
+      if (tab.mode === 'slides') {
+        const deck = tab.deck!;
+        const bytes = await writePptx({
+          size: deck.size, master: deck.master,
+          slides: deck.slides.map((s, i) => ({ layout: s.layout, doc: deck.docOf(i), notes: s.notes })),
+        }, { ...this.hooks.pptx, title: name.replace(/\.[^.]+$/, '') });
+        await writeFile(ref, name, bytes, PPTX);
+        tab.savedEdits = deck.edits;
+      } else {
+        const doc = this.docOf(tab);
+        const text = writeCdxml(doc, { name, textMeasure: this.hooks.measure });
+        if (extensionOf(name) === 'cdx') await writeFile(ref, name, cdxmlToCdx(text), CDX);
+        else await writeFile(ref, name, text, CDXML);
+        adoptSaved(doc, text);
+      }
+    } catch (e) {
+      await showError(`Could not save ${name}: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
+    tab.ref = ref;
+    tab.name = name;
+    tab.dirty = false;
+    if (tab === this.active) tab.seen = this.host.version;
+    this.hooks.changed();
+    this.hooks.flash(ref.kind === 'none' ? `Downloaded ${name}` : `Saved ${name}`);
+    return true;
+  }
+}

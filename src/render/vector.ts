@@ -13,9 +13,19 @@ export type Seg =
 
 export interface StrokeStyle { color: string; width: number; cap: CanvasLineCap; join: CanvasLineJoin }
 
+/** A picture: its image data, where it shows (x, y, w, h), and the part of it cut off on each side. */
+export interface ImageItem {
+  kind: 'image';
+  src: string;
+  x: number; y: number; w: number; h: number;
+  crop?: { l: number; t: number; r: number; b: number };
+  px?: { w: number; h: number };
+}
+
 export type Item =
   | { kind: 'path'; segs: Seg[]; fill?: string; stroke?: StrokeStyle }
-  | { kind: 'text'; text: string; x: number; y: number; size: number; family: string; bold: boolean; italic: boolean; color: string; widths: number[] };
+  | { kind: 'text'; text: string; x: number; y: number; size: number; family: string; bold: boolean; italic: boolean; color: string; widths: number[] }
+  | ImageItem;
 
 /** A path that remembers its segments (stands in for the browser's Path2D). */
 export class VecPath {
@@ -198,7 +208,14 @@ export class VectorContext {
     return { width: arialWidth(text, f.size, f.bold) } as TextMetrics;
   }
 
-  drawImage(): void { throw new Error('Pictures inside drawings cannot be exported yet'); }
+  drawImage(): void { throw new Error('The renderer records pictures with picture()'); }
+
+  /** A picture on the drawing (see Renderer.drawPicture). */
+  picture(s: { src?: string; x1: number; y1: number; x2: number; y2: number; crop?: ImageItem['crop']; px?: ImageItem['px'] }): void {
+    if (!s.src) return;
+    const x = Math.min(s.x1, s.x2), y = Math.min(s.y1, s.y2);
+    this.items.push({ kind: 'image', src: s.src, x, y, w: Math.abs(s.x2 - s.x1), h: Math.abs(s.y2 - s.y1), crop: s.crop, px: s.px });
+  }
 }
 
 /** "italic bold 7.5px Arial, 'Liberation Sans', sans-serif" → its parts. */
@@ -302,6 +319,9 @@ export function itemBounds(items: Item[]): { x1: number; y1: number; x2: number;
       const w = it.widths.reduce((a, b) => a + b, 0);
       grow(it.x, it.y - it.size * 0.8);
       grow(it.x + w, it.y + it.size * 0.25);
+    } else if (it.kind === 'image') {
+      grow(it.x, it.y);
+      grow(it.x + it.w, it.y + it.h);
     } else {
       const pad = it.stroke ? it.stroke.width / 2 : 0;
       for (const s of it.segs) {

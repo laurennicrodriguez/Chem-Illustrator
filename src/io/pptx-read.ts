@@ -1,0 +1,821 @@
+// Opening PowerPoint files (.pptx) as slides, from the published Office Open XML standard
+// (ECMA-376, PresentationML).
+//
+// Files saved here come back exactly: structures from the drawing each picture carries, text
+// from the settings each text box carries (unless it was changed in PowerPoint, when the
+// PowerPoint text is used), and the slide master from its settings. Files from PowerPoint
+// come in as editable text (with its formatting, worked out the way PowerPoint does, through
+// the slide's layout, master and theme), pictures (with their cropping), and boxes, ovals,
+// lines and arrows. What has no place here yet (tables, charts, rotated things) is noted in
+// warnings, never refused.
+
+import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase } from '../model';
+import type { Vec, Rect } from '../geom';
+import { PackageReader, NS, REL, kids, kid, rAttr, fromEmu } from './ooxml';
+import { readCdxml } from './cdxml';
+import { dataUrl, imageSize } from '../render/images';
+import { layoutText, ASCENT } from '../text/layout';
+import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle } from '../deck/deck';
+import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure } from './pptx-write';
+
+export interface PptxSlide { layout: LayoutId; contents: Contents; notes: string }
+export interface PptxRead {
+  size: SlideSize;
+  master: Master;
+  slides: PptxSlide[];
+  /** Things that came in differently or not at all (shown to the person, never blocking). */
+  warnings: string[];
+}
+
+const EXT_MIME: Record<string, string> = Object.fromEntries(Object.entries(MIME_EXT).map(([m, e]) => [e, m]));
+EXT_MIME.jpg = 'image/jpeg';
+EXT_MIME.tif = 'image/tiff';
+
+/** Picture types a web page can show. */
+export { imageSize };
+
+/** Picture types a web page can show. */
+export const SHOWABLE = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/svg+xml', 'image/bmp', 'image/webp']);
+
+// ---------------------------------------------------------------- positions
+
+/** Where a shape's own coordinates land on the slide (groups scale and move what they hold). */
+interface Xf { sx: number; sy: number; tx: number; ty: number }
+const IDENTITY: Xf = { sx: 1, sy: 1, tx: 0, ty: 0 };
+const apply = (t: Xf, x: number, y: number): Vec => ({ x: t.tx + t.sx * x, y: t.ty + t.sy * y });
+
+/** The box of a shape (its a:xfrm or p:xfrm), in points on the slide. */
+function boxOf(xfrmEl: Element | null, t: Xf): (Rect & { rot: number; flipH: boolean; flipV: boolean }) | null {
+  const off = kid(xfrmEl, 'off'), ext = kid(xfrmEl, 'ext');
+  if (!off || !ext) return null;
+  const a = apply(t, fromEmu(off.getAttribute('x')), fromEmu(off.getAttribute('y')));
+  const w = fromEmu(ext.getAttribute('cx')) * t.sx, h = fromEmu(ext.getAttribute('cy')) * t.sy;
+  return {
+    x1: a.x, y1: a.y, x2: a.x + w, y2: a.y + h,
+    rot: Number(xfrmEl!.getAttribute('rot') ?? 0) / 60000,
+    flipH: xfrmEl!.getAttribute('flipH') === '1', flipV: xfrmEl!.getAttribute('flipV') === '1',
+  };
+}
+
+// ---------------------------------------------------------------- colours
+
+interface Theme { colors: Record<string, string>; major: string; minor: string }
+
+const PRESET: Record<string, string> = {
+  black: '000000', white: 'FFFFFF', red: 'FF0000', green: '008000', blue: '0000FF', yellow: 'FFFF00',
+  gray: '808080', grey: '808080', darkGray: 'A9A9A9', lightGray: 'D3D3D3', orange: 'FFA500', purple: '800080',
+};
+
+function hexToRgb(h: string): [number, number, number] {
+  const n = parseInt(h.padStart(6, '0').slice(-6), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+const rgbHex = (r: number, g: number, b: number) => '#' + [r, g, b].map((v) => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, '0')).join('');
+
+function toHsl(r: number, g: number, b: number): [number, number, number] {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2;
+  if (max === min) return [0, 0, l];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  const h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [h / 6, s, l];
+}
+function fromHsl(h: number, s: number, l: number): [number, number, number] {
+  if (!s) return [l * 255, l * 255, l * 255];
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+  const f = (t: number) => {
+    t = (t + 1) % 1;
+    return 255 * (t < 1 / 6 ? p + (q - p) * 6 * t : t < 1 / 2 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p);
+  };
+  return [f(h + 1 / 3), f(h), f(h - 1 / 3)];
+}
+
+/** The colour in a fill or colour element (srgbClr, schemeClr…, with PowerPoint's lighter/darker changes). */
+function colorIn(el: Element | null, theme: Theme, clrMap: Record<string, string>): string | null {
+  if (!el) return null;
+  const c = kids(el).find((k) => /Clr$/.test(k.localName));
+  if (!c) return null;
+  const v = c.getAttribute('val') ?? '';
+  let hex: string | null = null;
+  switch (c.localName) {
+    case 'srgbClr': hex = v; break;
+    case 'schemeClr': hex = theme.colors[clrMap[v] ?? v] ?? null; break;
+    case 'prstClr': hex = PRESET[v] ?? '000000'; break;
+    case 'sysClr': hex = c.getAttribute('lastClr') ?? (v === 'window' ? 'FFFFFF' : '000000'); break;
+    case 'scrgbClr': hex = ['r', 'g', 'b'].map((k) => Math.round(Math.pow(Number(c.getAttribute(k) ?? 0) / 100000, 1 / 2.2) * 255).toString(16).padStart(2, '0')).join(''); break;
+    default: return null;
+  }
+  if (!hex) return null;
+  let [r, g, b] = hexToRgb(hex);
+  for (const m of kids(c)) {
+    const f = Number(m.getAttribute('val') ?? 100000) / 100000;
+    if (m.localName === 'lumMod' || m.localName === 'lumOff') {
+      const [h, s, l] = toHsl(r, g, b);
+      [r, g, b] = fromHsl(h, s, Math.max(0, Math.min(1, m.localName === 'lumMod' ? l * f : l + f)));
+    } else if (m.localName === 'tint') {
+      [r, g, b] = [r, g, b].map((x) => x + (255 - x) * (1 - f)) as [number, number, number];
+    } else if (m.localName === 'shade') {
+      [r, g, b] = [r, g, b].map((x) => x * f) as [number, number, number];
+    }
+  }
+  return rgbHex(r, g, b);
+}
+
+// ---------------------------------------------------------------- text formatting, as PowerPoint inherits it
+
+/** List styles to look through, most specific first (the shape's own, its layout's, its master's, the defaults). */
+type Chain = (Element | null)[];
+
+const lvlOf = (lst: Element | null, lvl: number) => kid(lst, `lvl${lvl + 1}pPr`);
+
+/** The first value an attribute has along the chain (the run or paragraph first, then each level). */
+function inherit(own: Element | null, chain: Chain, lvl: number, get: (el: Element) => string | null, deep = false): string | null {
+  const v = own ? get(own) : null;
+  if (v !== null) return v;
+  for (const lst of chain) {
+    const l = lvlOf(lst, lvl);
+    if (!l) continue;
+    const x = get(deep ? kid(l, 'defRPr') ?? l : l);
+    if (x !== null) return x;
+  }
+  return null;
+}
+
+/** The first element of a kind along the chain (bullet, spacing). */
+function inheritEl(own: Element | null, chain: Chain, lvl: number, names: string[], deep = false): Element | null {
+  const find = (el: Element | null) => kids(el).find((k) => names.includes(k.localName)) ?? null;
+  const v = find(own);
+  if (v) return v;
+  for (const lst of chain) {
+    const l = lvlOf(lst, lvl);
+    if (!l) continue;
+    const x = find(deep ? kid(l, 'defRPr') : l);
+    if (x) return x;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------- the reader
+
+const SKIP_PH = new Set(['dt', 'ftr', 'sldNum', 'hdr', 'sldImg']);
+
+interface PhInfo { type: string; idx: string | null }
+const phOf = (sp: Element): PhInfo | null => {
+  const ph = kid(sp, sp.localName === 'pic' ? 'nvPicPr' : 'nvSpPr', 'nvPr', 'ph');
+  return ph ? { type: ph.getAttribute('type') ?? 'obj', idx: ph.getAttribute('idx') } : null;
+};
+const isTitle = (t: string) => t === 'title' || t === 'ctrTitle';
+const isBody = (t: string) => !isTitle(t) && !SKIP_PH.has(t);
+
+/** Our placeholder kind for PowerPoint's. */
+const phKind = (t: string): Placeholder => (isTitle(t) ? 'title' : t === 'subTitle' ? 'subtitle' : 'body');
+
+interface Part { path: string; doc: Document; tree: Element | null }
+
+class Reader {
+  private r: PackageReader;
+  warnings = new Set<string>();
+  private theme: Theme = { colors: {}, major: 'Arial', minor: 'Arial' };
+  private clrMap: Record<string, string> = { bg1: 'lt1', tx1: 'dk1', bg2: 'lt2', tx2: 'dk2' };
+  private master!: Part;
+  private defaultText: Element | null = null;
+  private ourMaster: Partial<Master> | null = null;
+  private masterOut!: Master;
+  private size: SlideSize = { w: 960, h: 540 };
+
+  constructor(bytes: Uint8Array) {
+    this.r = new PackageReader(bytes);
+  }
+
+  private part(path: string | null): Part | null {
+    if (!path) return null;
+    const doc = this.r.xml(path);
+    if (!doc) return null;
+    const cSld = kids(doc.documentElement).find((k) => k.localName === 'cSld') ?? null;
+    return { path, doc, tree: kid(cSld, 'spTree') };
+  }
+
+  private tagsOf(from: string, holder: Element | null): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const t of kids(kid(holder, 'custDataLst'), 'tags')) {
+      const rel = this.r.rels(from).get(rAttr(t, 'id') ?? '');
+      const doc = rel ? this.r.xml(rel.target) : null;
+      if (!doc) continue;
+      for (const tag of Array.from(doc.getElementsByTagNameNS(NS.p, 'tag'))) out[tag.getAttribute('name') ?? ''] = tag.getAttribute('val') ?? '';
+    }
+    return out;
+  }
+
+  read(): PptxRead {
+    const main = this.r.relOfType('', REL.officeDocument);
+    const pres = main ? this.r.xml(main) : null;
+    if (!main || !pres) throw new Error('This is not a PowerPoint file (it has no presentation in it).');
+    const root = pres.documentElement;
+    const sz = kid(root, 'sldSz');
+    if (sz) this.size = { w: Math.round(fromEmu(sz.getAttribute('cx'))), h: Math.round(fromEmu(sz.getAttribute('cy'))) };
+    this.defaultText = kid(root, 'defaultTextStyle');
+    const ours = this.tagsOf(main, root)[TAG.master];
+    if (ours) {
+      try { this.ourMaster = JSON.parse(ours); } catch { /* use PowerPoint's master */ }
+    }
+    const rels = this.r.rels(main);
+    const slidePaths = kids(kid(root, 'sldIdLst'), 'sldId').map((s) => rels.get(rAttr(s, 'id') ?? '')?.target).filter((p): p is string => !!p && this.r.has(p));
+    // the master of the first slide (PowerPoint files can have several; the first one sets the look)
+    const firstLayout = slidePaths[0] ? this.r.relOfType(slidePaths[0], REL.slideLayout) : null;
+    const masterPath = (firstLayout && this.r.relOfType(firstLayout, REL.slideMaster)) ?? kids(kid(root, 'sldMasterIdLst'), 'sldMasterId').map((m) => rels.get(rAttr(m, 'id') ?? '')?.target)[0] ?? null;
+    const master = this.part(masterPath);
+    if (!master) throw new Error('This PowerPoint file has no slide master.');
+    this.master = master;
+    this.readTheme();
+    this.masterOut = this.readMaster(slidePaths);
+    const slides = slidePaths.map((p) => this.slide(p));
+    return { size: this.size, master: this.masterOut, slides, warnings: [...this.warnings] };
+  }
+
+  private readTheme(): void {
+    const map = kid(this.master.doc.documentElement, 'clrMap');
+    if (map) for (const a of Array.from(map.attributes)) this.clrMap[a.name] = a.value;
+    const themePath = this.r.relOfType(this.master.path, REL.theme);
+    const th = themePath ? this.r.xml(themePath) : null;
+    const el = kid(th?.documentElement, 'themeElements');
+    for (const c of kids(kid(el, 'clrScheme'))) {
+      const v = kids(c)[0];
+      if (!v) continue;
+      this.theme.colors[c.localName] = v.localName === 'sysClr' ? v.getAttribute('lastClr') ?? '000000' : v.getAttribute('val') ?? '000000';
+    }
+    const fonts = kid(el, 'fontScheme');
+    this.theme.major = kid(fonts, 'majorFont', 'latin')?.getAttribute('typeface') || 'Arial';
+    this.theme.minor = kid(fonts, 'minorFont', 'latin')?.getAttribute('typeface') || 'Arial';
+  }
+
+  private color(el: Element | null): string | null {
+    return colorIn(el, this.theme, this.clrMap);
+  }
+
+  /** A typeface, with the theme's title and body fonts filled in. */
+  private font(face: string | null, title: boolean): string {
+    if (!face) return title ? this.theme.major : this.theme.minor;
+    if (face.startsWith('+mj')) return this.theme.major;
+    if (face.startsWith('+mn')) return this.theme.minor;
+    return face;
+  }
+
+  /** The slide master, from our settings when this program saved the file, else from PowerPoint's. */
+  private readMaster(slidePaths: string[]): Master {
+    const m = defaultMaster();
+    const root = this.master.doc.documentElement;
+    const logo = this.masterLogo();
+    if (this.ourMaster) return { ...m, ...this.ourMaster, logo, drawing: { ...m.drawing, ...(this.ourMaster.drawing ?? {}) } };
+    const tx = kid(root, 'txStyles');
+    const title = lvlOf(kid(tx, 'titleStyle'), 0), body = lvlOf(kid(tx, 'bodyStyle'), 0);
+    const tR = kid(title, 'defRPr'), bR = kid(body, 'defRPr');
+    m.titleFont = this.font(kid(tR, 'latin')?.getAttribute('typeface') ?? null, true);
+    m.bodyFont = this.font(kid(bR, 'latin')?.getAttribute('typeface') ?? null, false);
+    if (tR?.getAttribute('sz')) m.titleSize = Number(tR.getAttribute('sz')) / 100;
+    if (bR?.getAttribute('sz')) m.bodySize = Number(bR.getAttribute('sz')) / 100;
+    m.titleBold = tR?.getAttribute('b') === '1';
+    m.titleColor = this.color(kid(tR, 'solidFill')) ?? m.titleColor;
+    m.textColor = this.color(kid(bR, 'solidFill')) ?? m.textColor;
+    m.background = this.background(root) ?? m.background;
+    // numbers and footer: as the slides show them
+    let numbers = false, footer = '';
+    for (const p of slidePaths) {
+      const s = this.part(p);
+      for (const sp of kids(s?.tree, 'sp')) {
+        const ph = phOf(sp);
+        if (ph?.type === 'sldNum') numbers = true;
+        if (ph?.type === 'ftr' && !footer) footer = this.plain(sp);
+      }
+    }
+    m.slideNumbers = numbers;
+    m.footer = footer;
+    m.drawing = slideDrawingStyle();
+    m.logo = logo;
+    return m;
+  }
+
+  /** A slide or master's own background colour. */
+  private background(root: Element): string | null {
+    const bg = kid(root, 'cSld', 'bg');
+    if (!bg) return null;
+    const pr = kid(bg, 'bgPr');
+    if (pr) {
+      const solid = kid(pr, 'solidFill');
+      if (solid) return this.color(solid);
+      this.warnings.add('Slide backgrounds with pictures or shading came in as plain colours.');
+      return null;
+    }
+    const ref = kid(bg, 'bgRef');
+    return ref ? this.color(ref) : null;
+  }
+
+  /** The logo: a picture on the master (the one named Logo in files saved here, else the first). */
+  private masterLogo(): Master['logo'] {
+    const pics = kids(this.master.tree, 'pic');
+    const pic = pics.find((p) => kid(p, 'nvPicPr', 'cNvPr')?.getAttribute('name') === 'Logo') ?? (this.ourMaster ? null : pics[0]);
+    if (!pic) return null;
+    const img = this.image(this.master.path, pic);
+    if (!img) return null;
+    return { src: img.src, px: img.px };
+  }
+
+  /** The text of a shape as plain text (paragraphs on lines of their own). */
+  private plain(sp: Element): string {
+    return kids(kid(sp, 'txBody'), 'p').map((p) => kids(p).filter((k) => k.localName === 'r' || k.localName === 'fld' || k.localName === 'br').map((k) => (k.localName === 'br' ? '\n' : kid(k, 't')?.textContent ?? '')).join('')).join('\n');
+  }
+
+  // ---------------------------------------------------------------- slides
+
+  private slide(path: string): PptxSlide {
+    const s = this.part(path)!;
+    const layoutPath = this.r.relOfType(path, REL.slideLayout);
+    const layout = this.part(layoutPath);
+    const tags = this.tagsOf(path, kid(s.doc.documentElement, 'cSld'));
+    const doc = new Doc();
+    doc.style = { ...this.masterOut.drawing };
+    const bg = this.background(s.doc.documentElement);
+    if (bg && bg.toLowerCase() !== this.masterOut.background.toLowerCase()) this.warnings.add('Slides with a background colour of their own now use the master\'s.');
+    doc.bulk(() => this.tree(s, layout, s.tree, IDENTITY, doc));
+    const id = (tags[TAG.layout] as LayoutId | undefined) ?? this.layoutId(layout, doc);
+    return { layout: ['title', 'title-content', 'two-content', 'title-only', 'blank'].includes(id) ? id : 'title-content', contents: doc.contents(), notes: this.notes(path) };
+  }
+
+  /** Our layout for PowerPoint's, by its type or else by the text boxes on the slide. */
+  private layoutId(layout: Part | null, doc: Doc): LayoutId {
+    const t = layout?.doc.documentElement.getAttribute('type') ?? '';
+    const known: Record<string, LayoutId> = {
+      title: 'title', secHead: 'title', obj: 'title-content', tx: 'title-content', txAndObj: 'two-content', objAndTx: 'two-content',
+      twoObj: 'two-content', twoTxTwoObj: 'two-content', twoColTx: 'two-content', titleOnly: 'title-only', blank: 'blank',
+    };
+    if (known[t]) return known[t];
+    const phs = [...doc.captions.values()].map((c) => c.ph);
+    const bodies = phs.filter((p) => p === 'body').length;
+    if (phs.includes('subtitle')) return 'title';
+    if (bodies >= 2) return 'two-content';
+    if (bodies === 1) return 'title-content';
+    return phs.includes('title') ? 'title-only' : 'blank';
+  }
+
+  private notes(path: string): string {
+    const np = this.r.relOfType(path, REL.notesSlide);
+    const n = this.part(np);
+    if (!n) return '';
+    const body = kids(n.tree, 'sp').find((sp) => phOf(sp)?.type === 'body');
+    return body ? this.plain(body).replace(/\s+$/, '') : '';
+  }
+
+  /** Everything in a shape tree (a slide, or a group). */
+  private tree(s: Part, layout: Part | null, tree: Element | null, t: Xf, doc: Doc): void {
+    for (const el of kids(tree)) this.element(s, layout, el, t, doc);
+  }
+
+  private element(s: Part, layout: Part | null, el: Element, t: Xf, doc: Doc): void {
+    switch (el.localName) {
+      case 'sp': this.shape(s, layout, el, t, doc); break;
+      case 'pic': this.pictureEl(s, el, t, doc); break;
+      case 'cxnSp': this.line(el, kid(el, 'spPr'), t, doc); break;
+      case 'grpSp': {
+        const x = kid(el, 'grpSpPr', 'xfrm');
+        const off = kid(x, 'off'), ext = kid(x, 'ext'), chOff = kid(x, 'chOff'), chExt = kid(x, 'chExt');
+        let inner = t;
+        if (off && ext && chOff && chExt) {
+          const k = (a: Element, b: Element, attr: string) => (Number(b.getAttribute(attr)) ? Number(a.getAttribute(attr)) / Number(b.getAttribute(attr)) : 1);
+          const sx = t.sx * k(ext, chExt, 'cx'), sy = t.sy * k(ext, chExt, 'cy');
+          const o = apply(t, fromEmu(off.getAttribute('x')), fromEmu(off.getAttribute('y')));
+          inner = { sx, sy, tx: o.x - sx * fromEmu(chOff.getAttribute('x')), ty: o.y - sy * fromEmu(chOff.getAttribute('y')) };
+        }
+        if (Number(x?.getAttribute('rot') ?? 0)) this.warnings.add('Rotated groups came in unrotated.');
+        this.tree(s, layout, el, inner, doc);
+        break;
+      }
+      case 'graphicFrame': this.frame(s, el, t, doc); break;
+      case 'AlternateContent': {
+        // the version for programs that don't know the newer form, else the newer one
+        const fb = kids(el, 'Fallback')[0];
+        const branch = fb && kids(fb).length ? fb : kids(el, 'Choice')[0];
+        for (const k of kids(branch)) this.element(s, layout, k, t, doc);
+        break;
+      }
+      default: break;
+    }
+  }
+
+  /** Tables, charts, and objects from other programs (ChemDraw) in PowerPoint. */
+  private frame(s: Part, el: Element, t: Xf, doc: Doc): void {
+    const data = kid(el, 'graphic', 'graphicData');
+    const uri = data?.getAttribute('uri') ?? '';
+    if (/table$/.test(uri)) { this.warnings.add('Tables are not brought in yet; they will come with Sheet mode.'); return; }
+    if (/chart/.test(uri)) { this.warnings.add('Charts are not brought in.'); return; }
+    // an object from another program: PowerPoint keeps a picture of it, which comes in as a picture
+    const find = (e: Element | null): Element | null => {
+      if (!e) return null;
+      if (e.localName === 'pic') return e;
+      for (const k of kids(e)) {
+        const f = find(k);
+        if (f) return f;
+      }
+      return null;
+    };
+    const ole = data ? Array.from(data.getElementsByTagNameNS(NS.p, 'oleObj'))[0] : undefined;
+    const pic = find(data);
+    if (!pic) { this.warnings.add('Some objects from other programs had no picture and were left out.'); return; }
+    const box = boxOf(kid(el, 'xfrm'), t);
+    const img = this.image(s.path, pic);
+    if (!img || !box) return;
+    if (/ChemDraw/i.test(ole?.getAttribute('progId') ?? '')) this.warnings.add('ChemDraw objects came in as pictures.');
+    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}) });
+  }
+
+  /** A picture's image (as a data URL), its size in pixels and its cropping. */
+  private image(from: string, pic: Element): { src: string; px: { w: number; h: number }; crop: Shape['crop'] | null; mime: string } | null {
+    const blip = kid(pic, 'blipFill', 'blip');
+    if (!blip) return null;
+    const rels = this.r.rels(from);
+    // PowerPoint shows the SVG when there is one; so do we
+    const svg = blip.getElementsByTagNameNS('http://schemas.microsoft.com/office/drawing/2016/SVG/main', 'svgBlip')[0];
+    const target = (svg && rels.get(rAttr(svg, 'embed') ?? '')?.target) || rels.get(rAttr(blip, 'embed') ?? '')?.target;
+    if (!target) {
+      if (rAttr(blip, 'link')) this.warnings.add('Pictures linked to files outside the PowerPoint file were left out.');
+      return null;
+    }
+    const bytes = this.r.bytes(target);
+    if (!bytes) return null;
+    const mime = EXT_MIME[target.split('.').pop()!.toLowerCase()] ?? 'application/octet-stream';
+    if (!SHOWABLE.has(mime)) this.warnings.add('Some pictures (Windows EMF or WMF, or TIFF) can\'t be shown here yet; they are kept and saved back as they were.');
+    const src = kid(pic, 'blipFill', 'srcRect');
+    const f = (k: string) => Math.max(0, Number(src?.getAttribute(k) ?? 0) / 100000);
+    const crop = src ? { l: f('l'), t: f('t'), r: f('r'), b: f('b') } : null;
+    return { src: dataUrl(bytes, mime), px: imageSize(bytes, mime) ?? { w: 100, h: 100 }, crop: crop && (crop.l || crop.t || crop.r || crop.b) ? crop : null, mime };
+  }
+
+  private pictureEl(s: Part, el: Element, t: Xf, doc: Doc): void {
+    const box = boxOf(kid(el, 'spPr', 'xfrm'), t);
+    if (!box) return;
+    if (box.rot) this.warnings.add('Rotated pictures and shapes came in unrotated.');
+    const tags = this.tagsOf(s.path, kid(el, 'nvPicPr', 'nvPr'));
+    if (tags[TAG.cdxml] && this.drawing(tags[TAG.cdxml], tags[TAG.box], box, doc)) return;
+    const img = this.image(s.path, el);
+    if (!img) return;
+    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}) });
+  }
+
+  /** A structure or scheme saved here: its drawing, moved and sized as the picture now is. */
+  private drawing(cdxml: string, boxTag: string | undefined, now: Rect, doc: Doc): boolean {
+    let src: Doc;
+    try {
+      src = readCdxml(cdxml).doc;
+    } catch {
+      return false;
+    }
+    const was = (boxTag ?? '').split(' ').map(Number);
+    let map = (p: Vec): Vec => p;
+    if (was.length === 4 && was.every(Number.isFinite)) {
+      const [x1, y1, x2, y2] = was;
+      const sx = (now.x2 - now.x1) / Math.max(1e-6, x2 - x1), sy = (now.y2 - now.y1) / Math.max(1e-6, y2 - y1);
+      // resized in PowerPoint: keep the proportions, centred where the picture is
+      const k = Math.abs(sx - 1) < 0.01 && Math.abs(sy - 1) < 0.01 ? 1 : Math.min(sx, sy);
+      const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, nx = (now.x1 + now.x2) / 2, ny = (now.y1 + now.y2) / 2;
+      map = (p) => ({ x: nx + (p.x - cx) * k, y: ny + (p.y - cy) * k });
+    }
+    mergeDrawing(doc, src, map);
+    return true;
+  }
+
+  // ---------------------------------------------------------------- shapes and text
+
+  /** The layout's and master's matching placeholders, for a placeholder on a slide. */
+  private inherited(layout: Part | null, ph: PhInfo): Element[] {
+    const out: Element[] = [];
+    const match = (tree: Element | null, byIdx: boolean) => kids(tree, 'sp').find((sp) => {
+      const p = phOf(sp);
+      if (!p) return false;
+      if (byIdx && ph.idx !== null && p.idx === ph.idx) return true;
+      return isTitle(ph.type) ? isTitle(p.type) : p.type === ph.type || (ph.type === 'subTitle' && p.type === 'body' && !byIdx) || (isBody(ph.type) && p.type === 'body' && !byIdx);
+    });
+    const l = match(layout?.tree ?? null, true) ?? match(layout?.tree ?? null, false);
+    if (l) out.push(l);
+    const lp = l ? phOf(l)! : ph;
+    const m = kids(this.master.tree, 'sp').find((sp) => {
+      const p = phOf(sp);
+      return !!p && (isTitle(lp.type) ? isTitle(p.type) : SKIP_PH.has(lp.type) ? p.type === lp.type : p.type === 'body');
+    });
+    if (m) out.push(m);
+    return out;
+  }
+
+  private shape(s: Part, layout: Part | null, sp: Element, t: Xf, doc: Doc): void {
+    const ph = phOf(sp);
+    if (ph && SKIP_PH.has(ph.type)) return; // slide numbers, footers and dates come from the master
+    const from = ph ? this.inherited(layout, ph) : [];
+    const spPr = kid(sp, 'spPr');
+    const xfrm = kid(spPr, 'xfrm') ?? from.map((e) => kid(e, 'spPr', 'xfrm')).find((x) => x) ?? null;
+    const box = boxOf(xfrm, xfrm && kid(spPr, 'xfrm') ? t : IDENTITY);
+    if (!box) return;
+    if (box.rot) this.warnings.add('Rotated pictures and shapes came in unrotated.');
+    const prst = kid(spPr, 'prstGeom')?.getAttribute('prst') ?? (kid(spPr, 'custGeom') ? 'cust' : 'rect');
+    if (!ph && /line|Connector/i.test(prst)) { this.line(sp, spPr, t, doc); return; }
+    const hasText = !!this.plain(sp).trim();
+    if (!ph) {
+      const look = this.look(sp, spPr);
+      if (look.fill || look.line) {
+        if (!['rect', 'roundRect', 'ellipse', 'snip1Rect', 'flowChartProcess', 'flowChartAlternateProcess'].includes(prst)) this.warnings.add('Some PowerPoint shapes came in as boxes.');
+        const sh: Omit<Shape, 'id'> = {
+          kind: prst === 'ellipse' ? 'oval' : 'rect', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2,
+          color: look.fill ?? look.line ?? '#000000',
+        };
+        if (look.fill) sh.filled = true;
+        if (look.dashed && !look.fill) sh.dashed = true;
+        if (!look.fill && look.width > 1.75 * doc.style.lineWidth) sh.bold = true;
+        if (prst === 'roundRect') {
+          sh.rounded = true;
+          const adj = kid(spPr, 'prstGeom', 'avLst', 'gd')?.getAttribute('fmla')?.match(/val\s+(-?\d+)/);
+          sh.radius = (Number(adj?.[1] ?? 16667) / 100000) * Math.min(box.x2 - box.x1, box.y2 - box.y1);
+        }
+        doc.addShape(sh);
+      }
+      if (!hasText) return;
+    }
+    const tags = this.tagsOf(s.path, kid(sp, 'nvSpPr', 'nvPr'));
+    const c = this.ourText(tags[TAG.text], sp, box) ?? this.text(sp, box, ph, from);
+    if (c) doc.addCaption(c);
+  }
+
+  /** Text saved here, when PowerPoint has not changed it, moved to where its box now is. */
+  private ourText(tag: string | undefined, sp: Element, box: Rect): Omit<Caption, 'id'> | null {
+    if (!tag) return null;
+    let saved: { c: Caption; plain: string; at?: number[] };
+    try {
+      saved = JSON.parse(tag);
+    } catch {
+      return null;
+    }
+    const now = this.plain(sp);
+    if (now !== saved.plain) return null;
+    const c: Omit<Caption, 'id'> & { id?: number } = { ...saved.c };
+    delete c.id;
+    if (saved.at?.length === 4) {
+      const [x, y, w, h] = saved.at;
+      c.x += box.x1 - x;
+      c.y += box.y1 - y;
+      const nw = box.x2 - box.x1, nh = box.y2 - box.y1;
+      if (c.wrap !== undefined && Math.abs(nw - w) > 0.5) c.wrap = nw;
+      if (c.ph && Math.abs(nh - h) > 0.5) c.boxH = nh;
+    }
+    return c;
+  }
+
+  /** How a shape is filled and outlined (its own settings, else its theme style). */
+  private look(sp: Element, spPr: Element | null): { fill: string | null; line: string | null; width: number; dashed: boolean } {
+    const style = kid(sp, 'style');
+    let fill: string | null = null;
+    if (kid(spPr, 'solidFill')) fill = this.color(kid(spPr, 'solidFill'));
+    else if (kid(spPr, 'gradFill') || kid(spPr, 'pattFill')) {
+      fill = this.color(kid(spPr, 'gradFill', 'gsLst', 'gs'));
+      this.warnings.add('Shaded fills came in as plain colours.');
+    } else if (!kid(spPr, 'noFill') && !kid(spPr, 'blipFill')) {
+      const ref = kid(style, 'fillRef');
+      if (ref && ref.getAttribute('idx') !== '0') fill = this.color(ref);
+    }
+    const ln = kid(spPr, 'ln');
+    let line: string | null = null;
+    if (kid(ln, 'solidFill')) line = this.color(kid(ln, 'solidFill'));
+    else if (!kid(ln, 'noFill')) {
+      const ref = kid(style, 'lnRef');
+      if (ref && ref.getAttribute('idx') !== '0') line = this.color(ref);
+    }
+    const w = ln?.getAttribute('w');
+    const dash = kid(ln, 'prstDash')?.getAttribute('val');
+    return { fill, line, width: w ? fromEmu(w) : 0.75, dashed: !!dash && dash !== 'solid' };
+  }
+
+  /** A line or connector: an arrow when it has a head, else a line. */
+  private line(el: Element, spPr: Element | null, t: Xf, doc: Doc): void {
+    const box = boxOf(kid(spPr, 'xfrm'), t);
+    if (!box) return;
+    const look = this.look(el, spPr);
+    if (!look.line) return;
+    const prst = kid(spPr, 'prstGeom')?.getAttribute('prst') ?? 'line';
+    if (!/^(line|straightConnector1)$/.test(prst)) this.warnings.add('Bent and curved connectors came in straight.');
+    const a = { x: box.flipH ? box.x2 : box.x1, y: box.flipV ? box.y2 : box.y1 };
+    const b = { x: box.flipH ? box.x1 : box.x2, y: box.flipV ? box.y1 : box.y2 };
+    const ln = kid(spPr, 'ln');
+    const end = (n: string) => {
+      const e = kid(ln, n);
+      const type = e?.getAttribute('type');
+      return type && type !== 'none' ? e : null;
+    };
+    // PowerPoint's "head end" is the start of the line and its "tail end" the end
+    const atStart = end('headEnd'), atEnd = end('tailEnd');
+    if (atStart || atEnd) {
+      const lw = look.width;
+      const head = atEnd ?? atStart!;
+      const len = { sm: 0.6, med: 1, lg: 1.5 }[head.getAttribute('len') ?? 'med'] ?? 1;
+      const wid = { sm: 0.6, med: 1, lg: 1.5 }[head.getAttribute('w') ?? 'med'] ?? 1;
+      const [tail, tip] = atEnd ? [a, b] : [b, a];
+      const arrow: Omit<Arrow, 'id'> = {
+        tail, head: tip, headStyle: 'full', tailStyle: atStart && atEnd ? 'full' : 'none',
+        headType: head.getAttribute('type') === 'arrow' ? 'angle' : 'solid',
+        line: look.dashed ? 'dashed' : 'solid', noGo: false, equilibrium: false, sweep: 0,
+        headLength: Math.max(lw, 0.5) * 10 * len, headWidth: Math.max(lw, 0.5) * 2.5 * wid,
+      };
+      if (look.line.toLowerCase() !== '#000000') arrow.color = look.line;
+      if (Math.abs(lw - doc.style.lineWidth) > 0.05) arrow.lineWidth = lw;
+      doc.addArrow(arrow);
+      return;
+    }
+    const sh: Omit<Shape, 'id'> = { kind: 'line', x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+    if (look.line.toLowerCase() !== '#000000') sh.color = look.line;
+    if (look.dashed) sh.dashed = true;
+    if (look.width > 1.75 * doc.style.lineWidth) sh.bold = true;
+    doc.addShape(sh);
+  }
+
+  /** PowerPoint text as a caption, with the formatting PowerPoint would show. */
+  private text(sp: Element, box: Rect, ph: PhInfo | null, from: Element[]): Omit<Caption, 'id'> | null {
+    const body = kid(sp, 'txBody');
+    const title = !!ph && isTitle(ph.type);
+    const txStyles = kid(this.master.doc.documentElement, 'txStyles');
+    const chain: Chain = [kid(body, 'lstStyle'), ...from.map((e) => kid(e, 'txBody', 'lstStyle'))];
+    if (ph) chain.push(kid(txStyles, title ? 'titleStyle' : 'bodyStyle'));
+    else chain.push(this.defaultText, kid(txStyles, 'otherStyle'));
+    const bodyPrs = [kid(body, 'bodyPr'), ...from.map((e) => kid(e, 'txBody', 'bodyPr'))];
+    const bp = (k: string) => bodyPrs.map((b) => b?.getAttribute(k) ?? null).find((v) => v !== null) ?? null;
+    const scale = Number(kid(bodyPrs[0], 'normAutofit')?.getAttribute('fontScale') ?? 100000) / 100000;
+    const kind = ph ? phKind(ph.type) : null;
+    const base = kind ? textStyles(this.masterOut)[kind] : undefined;
+
+    const runs: TextRun[] = [];
+    const paras: ParaStyle[] = [];
+    let lineSpacing: number | undefined, lineHeight: number | undefined;
+    const ps = kids(body, 'p');
+    ps.forEach((p, pi) => {
+      const pPr = kid(p, 'pPr');
+      const lvl = Math.max(0, Math.min(8, Number(pPr?.getAttribute('lvl') ?? 0)));
+      const para: ParaStyle = {};
+      const algn = inherit(pPr, chain, lvl, (e) => e.getAttribute('algn'));
+      const align: Justify = algn === 'ctr' ? 'center' : algn === 'r' ? 'right' : algn === 'just' || algn === 'dist' ? 'justify' : 'left';
+      para.align = align;
+      const bullet = inheritEl(pPr, chain, lvl, ['buNone', 'buChar', 'buAutoNum', 'buBlip']);
+      const list = bullet?.localName === 'buChar' || bullet?.localName === 'buBlip' ? 'bullet' : bullet?.localName === 'buAutoNum' ? 'number' : undefined;
+      if (list) {
+        para.list = list;
+        if (lvl) para.level = lvl;
+      }
+      const pts = (names: string[]) => {
+        const el = inheritEl(pPr, chain, lvl, names);
+        const v = kid(el, 'spcPts')?.getAttribute('val');
+        return v ? Number(v) / 100 : null;
+      };
+      const before = pts(['spcBef']), after = pts(['spcAft']);
+      if (before) para.spaceBefore = before;
+      if (after) para.spaceAfter = after;
+      if (pi === 0) {
+        const ls = inheritEl(pPr, chain, lvl, ['lnSpc']);
+        const pct = kid(ls, 'spcPct')?.getAttribute('val'), fixed = kid(ls, 'spcPts')?.getAttribute('val');
+        if (fixed) lineHeight = Number(fixed) / 100;
+        else if (pct && Number(pct) !== 100000) lineSpacing = Number(pct) / 100000;
+        const red = Number(kid(bodyPrs[0], 'normAutofit')?.getAttribute('lnSpcReduction') ?? 0) / 100000;
+        if (red) lineSpacing = (lineSpacing ?? 1) * (1 - red);
+      }
+      const marL = fromEmu(inherit(pPr, chain, lvl, (e) => e.getAttribute('marL')));
+      const indent = fromEmu(inherit(pPr, chain, lvl, (e) => e.getAttribute('indent')));
+      // our lists put the marker one step in per level; anything further in is extra indent
+      const pieces = kids(p).filter((k) => k.localName === 'r' || k.localName === 'fld' || k.localName === 'br');
+      const firstSize = (() => {
+        const rPr = kid(pieces.find((k) => k.localName !== 'br'), 'rPr');
+        const v = inherit(rPr, chain, lvl, (e) => e.getAttribute('sz'), true) ?? kid(p, 'endParaRPr')?.getAttribute('sz') ?? null;
+        return (v ? Number(v) / 100 : 18) * scale;
+      })();
+      const extra = (list ? marL + indent : marL) - (list ? lvl * 1.6 * firstSize : 0);
+      if (extra > 1) para.indent = +extra.toFixed(2);
+      if (pi > 0) runs.push({ text: '\n' });
+      paras.push(para);
+      for (const k of pieces) {
+        if (k.localName === 'br') {
+          runs.push({ text: '\n' });
+          paras.push(list ? { ...para, cont: true } : { ...para });
+          continue;
+        }
+        const rPr = kid(k, 'rPr');
+        const get = (a: string) => inherit(rPr, chain, lvl, (e) => e.getAttribute(a), true);
+        const r: TextRun = { text: kid(k, 't')?.textContent ?? '' };
+        const sz = get('sz');
+        r.size = (sz ? Number(sz) / 100 : 18) * scale;
+        r.size = Math.round(r.size * 10) / 10;
+        if (get('b') === '1' || get('b') === 'true') r.bold = true;
+        if (get('i') === '1' || get('i') === 'true') r.italic = true;
+        const u = get('u');
+        if (u && u !== 'none') r.underline = true;
+        const bl = Number(get('baseline') ?? 0);
+        if (bl < 0) r.sub = true;
+        else if (bl > 0) r.sup = true;
+        const fillEl = inheritEl(rPr, chain, lvl, ['solidFill'], true);
+        r.color = this.color(fillEl) ?? '#000000';
+        r.font = this.font(inheritEl(rPr, chain, lvl, ['latin'], true)?.getAttribute('typeface') ?? null, title);
+        runs.push(r);
+      }
+    });
+    if (!ph && !runs.some((r) => r.text.trim())) return null;
+    // formatting the master gives is left to the master; plain text keeps what it needs
+    let out = merge(runs);
+    if (base) out = stripBase(out, base);
+    else out = out.map((r) => {
+      const x = { ...r };
+      if (x.color === '#000000') delete x.color;
+      if (x.font === 'Arial') delete x.font;
+      return x;
+    });
+    // the box: inside its margins
+    const ins = (k: string, d: number) => {
+      const v = bp(k);
+      return v === null ? d : fromEmu(v);
+    };
+    const l = ins('lIns', 7.2), tI = ins('tIns', 3.6), rI = ins('rIns', 7.2), bI = ins('bIns', 3.6);
+    const w = box.x2 - box.x1 - l - rI;
+    const justify: Justify = paras[0]?.align ?? 'left';
+    for (const p of paras) if (p.align === justify) delete p.align;
+    const c: Omit<Caption, 'id'> = { x: box.x1 + l, y: 0, runs: out, justify };
+    if (paras.some((p) => Object.keys(p).length)) c.paras = paras;
+    if (lineHeight) c.lineHeight = lineHeight;
+    else if (lineSpacing) c.lineSpacing = +lineSpacing.toFixed(3);
+    const wrapNone = bp('wrap') === 'none';
+    const sizeFor = base?.size ?? this.masterOut.drawing.captionSize;
+    const full = base ? { ...c, runs: out.map((r) => ({ ...base, ...dropUndefined(r) }) as TextRun) } : c;
+    if (!wrapNone || ph) c.wrap = Math.max(1, w);
+    else {
+      const natural = layoutText(full, sizeFor, arialMeasure).boxWidth;
+      if (justify !== 'left' || natural > w) c.wrap = Math.max(w, natural);
+    }
+    if (kind) {
+      c.ph = kind;
+      c.boxH = box.y2 - box.y1;
+      if (!c.runs.some((r) => r.text.trim())) {
+        c.runs = [];
+        c.paras = kind === 'body' ? [{ list: 'bullet' }] : undefined;
+        if (!c.paras) delete c.paras;
+      }
+    }
+    const lay = layoutText({ ...full, wrap: c.wrap }, sizeFor, arialMeasure);
+    const first = lay.lines[0] ? lay.lines[0].ascent / ASCENT : sizeFor;
+    const anchor = bp('anchor') ?? 't';
+    const room = box.y2 - box.y1 - tI - bI;
+    const height = lay.lines.length ? lay.box.y2 - lay.box.y1 : 0;
+    const shift = anchor === 'ctr' ? (room - height) / 2 : anchor === 'b' ? room - height : 0;
+    c.y = box.y1 + tI + shift + PPT_ASCENT * first;
+    return c;
+  }
+}
+
+const dropUndefined = (r: TextRun): Partial<TextRun> => Object.fromEntries(Object.entries(r).filter(([, v]) => v !== undefined));
+
+/** Join neighbouring runs formatted alike (a paragraph break joins the run before it). */
+function merge(runs: TextRun[]): TextRun[] {
+  const same = (a: TextRun, b: TextRun) => {
+    const ka = Object.keys(a).filter((k) => k !== 'text'), kb = Object.keys(b).filter((k) => k !== 'text');
+    return ka.length === kb.length && ka.every((k) => (a as unknown as Record<string, unknown>)[k] === (b as unknown as Record<string, unknown>)[k]);
+  };
+  const out: TextRun[] = [];
+  for (const r of runs) {
+    const last = out[out.length - 1];
+    if (r.text === '\n' && last) last.text += '\n';
+    else if (last && same(last, r)) last.text += r.text;
+    else out.push({ ...r });
+  }
+  return out.filter((r) => r.text !== '');
+}
+
+/** Add a drawing to `doc`, with every position passed through `map`. */
+export function mergeDrawing(doc: Doc, src: Doc, map: (p: Vec) => Vec): void {
+  const ids = new Map<number, number>();
+  for (const a of src.atoms.values()) {
+    const { id, ...rest } = structuredClone(a);
+    const p = map(a);
+    ids.set(id, doc.addAtom(p.x, p.y, a.z, { ...rest, x: p.x, y: p.y }).id);
+  }
+  for (const b of src.bonds.values()) {
+    const a1 = ids.get(b.a1), a2 = ids.get(b.a2);
+    if (a1 === undefined || a2 === undefined) continue;
+    const { id: _id, ...rest } = structuredClone(b);
+    doc.addBond(a1, a2, b.order, b.display, { ...rest, a1, a2 });
+  }
+  for (const c of src.captions.values()) {
+    const { id: _id, ...rest } = structuredClone(c);
+    const p = map(c);
+    doc.addCaption({ ...rest, x: p.x, y: p.y });
+  }
+  for (const r of src.arrows.values()) {
+    const { id: _id, ...rest } = structuredClone(r);
+    doc.addArrow({ ...rest, tail: map(r.tail), head: map(r.head) });
+  }
+  for (const s of src.shapes.values()) {
+    const { id: _id, ...rest } = structuredClone(s);
+    const a = map({ x: s.x1, y: s.y1 }), b = map({ x: s.x2, y: s.y2 });
+    doc.addShape({ ...rest, x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+  }
+}
+
+/** Read a PowerPoint file. Throws only when the file is not a PowerPoint file at all. */
+export function readPptx(bytes: Uint8Array): PptxRead {
+  return new Reader(bytes).read();
+}

@@ -116,6 +116,43 @@ export interface TextRun {
   color?: string;
 }
 
+/**
+ * Formatting a text takes where its runs don't set their own: the placeholders on slides take
+ * the slide master's fonts, sizes and colours this way, so changing the master changes them.
+ */
+export type TextBase = Pick<TextRun, 'size' | 'font' | 'color' | 'bold' | 'italic'>;
+const BASE_KEYS = ['size', 'font', 'color', 'bold', 'italic'] as const;
+
+/** Runs with the base formatting filled in wherever a run doesn't set its own. */
+export function applyBase(runs: TextRun[], base: TextBase | undefined): TextRun[] {
+  if (!base) return runs;
+  return runs.map((r) => {
+    const out = { ...r };
+    for (const k of BASE_KEYS) if (out[k] === undefined && base[k] !== undefined) (out as Record<string, unknown>)[k] = base[k];
+    return out;
+  });
+}
+
+/**
+ * The reverse, for runs that were given the base to edit: formatting that only repeats the base
+ * is left off, so the text keeps following it. Bold or italic in the base that a run no longer
+ * has was switched off on purpose, and is kept off.
+ */
+export function stripBase(runs: TextRun[], base: TextBase | undefined): TextRun[] {
+  if (!base) return runs;
+  return runs.map((r) => {
+    const out = { ...r } as Record<string, unknown>;
+    for (const k of BASE_KEYS) {
+      if (out[k] !== undefined && out[k] === base[k]) delete out[k];
+      else if (out[k] === undefined && base[k] === true) out[k] = false;
+    }
+    return out as unknown as TextRun;
+  });
+}
+
+/** The text boxes a slide layout provides, filled in from the slide master. */
+export type Placeholder = 'title' | 'subtitle' | 'body';
+
 /** How the lines of a text sit in its box ('justify': stretched to both edges, ChemDraw's "Full"). */
 export type Justify = 'left' | 'center' | 'right' | 'justify';
 
@@ -156,6 +193,10 @@ export interface Caption {
   wrap?: number;
   /** Paragraph formatting, one per paragraph in order; missing entries are plain paragraphs. */
   paras?: ParaStyle[];
+  /** A slide's title or text placeholder: formatted from the slide master, and shown with a prompt while empty. */
+  ph?: Placeholder;
+  /** Height of a placeholder's box, in points (its top is the top of the first line). */
+  boxH?: number;
 }
 
 export type ArrowHead = 'none' | 'full' | 'halfLeft' | 'halfRight';
@@ -185,7 +226,7 @@ export interface Arrow {
 
 export interface Shape {
   id: number;
-  kind: 'line' | 'rect' | 'oval' | 'symbol' | 'bracket';
+  kind: 'line' | 'rect' | 'oval' | 'symbol' | 'bracket' | 'picture';
   x1: number;
   y1: number;
   x2: number;
@@ -203,8 +244,14 @@ export interface Shape {
   bracket?: 'square' | 'round' | 'curly';
   /** Brackets: draw both halves of the pair. */
   pair?: boolean;
-  /** Placeholder for a pasted picture. */
+  /** Stands in for a picture in a ChemDraw file, which is kept as it was when saving. */
   picture?: boolean;
+  /** A picture: its image as a data URL (PNG, JPEG, GIF or SVG); x1..y2 is where it shows. */
+  src?: string;
+  /** Picture size in pixels (for the crop and for saving). */
+  px?: { w: number; h: number };
+  /** Parts of a picture cut off, as fractions of its width and height from each side. */
+  crop?: { l: number; t: number; r: number; b: number };
   color?: string;
   z?: number;
 }
@@ -233,6 +280,9 @@ export interface CdxmlSource {
  */
 export interface AtomWatch { ids: Set<number>; all: boolean }
 
+/** Everything in a drawing, as plain lists (see Doc.contents). */
+export interface Contents { atoms: Atom[]; bonds: Bond[]; captions: Caption[]; arrows: Arrow[]; shapes: Shape[] }
+
 interface UndoEntry {
   label: string;
   before: Map<string, Entity | null>;
@@ -257,6 +307,10 @@ export class Doc {
   source: CdxmlSource | null = null;
   /** Live R/S and E/Z labels from the chemistry engine (not saved, not undone). */
   stereo: StereoInfo | null = null;
+  /** Formatting of placeholder text by kind (from a slide master); null outside slides. */
+  textStyles: Partial<Record<Placeholder, TextBase>> | null = null;
+  /** Called each time an undoable change is recorded (a slide deck keeps one history across its slides). */
+  onCommit: (() => void) | null = null;
   atoms = new Map<number, Atom>();
   bonds = new Map<number, Bond>();
   captions = new Map<number, Caption>();
@@ -322,6 +376,7 @@ export class Doc {
     this.undoStack.push(tx);
     if (this.undoStack.length > 500) this.undoStack.shift();
     this.redoStack.length = 0;
+    this.onCommit?.();
   }
 
   /** Run `fn` inside one undoable step. */
@@ -705,6 +760,51 @@ export class Doc {
     this.allDirty = true;
     for (const w of this.watches) { w.all = true; w.ids.clear(); }
     this.version++;
+  }
+
+  /**
+   * Exchange everything drawn, with its style, file and undo history, with another document. A
+   * slide deck keeps each slide in a document of its own and swaps the one being edited into
+   * this one, so the editor, the checks and the chemistry engine always work on this document.
+   * Watchers, live stereo labels and the commit hook stay with this document.
+   */
+  swap(other: Doc): void {
+    if (this.tx || other.tx) throw new Error('Cannot swap documents in the middle of an edit');
+    const fields = ['style', 'background', 'source', 'textStyles', 'atoms', 'bonds', 'captions', 'arrows', 'shapes', 'adj',
+      'grid', 'atomCell', 'maxBondLen', 'undoStack', 'redoStack'] as const;
+    const a = this as unknown as Record<string, unknown>, b = other as unknown as Record<string, unknown>;
+    for (const f of fields) { const t = a[f]; a[f] = b[f]; b[f] = t; }
+    // ids stay unique across both, so things moved between them never clash
+    this.nextId = other.nextId = Math.max(this.nextId, other.nextId);
+    for (const d of [this, other]) {
+      d.allDirty = true;
+      d.dirtyAtoms.clear(); d.dirtyBonds.clear(); d.dirtyRects.length = 0; d.dirtyCaptions.length = 0;
+      for (const w of d.watches) { w.all = true; w.ids.clear(); }
+      d.version++;
+    }
+  }
+
+  /** A copy of everything drawn, to put back later with `restoreContents`. */
+  contents(): Contents {
+    return {
+      atoms: [...this.atoms.values()].map(clone), bonds: [...this.bonds.values()].map(clone), captions: [...this.captions.values()].map(clone),
+      arrows: [...this.arrows.values()].map(clone), shapes: [...this.shapes.values()].map(clone),
+    };
+  }
+
+  /** Put back what `contents` copied, outside the undo history (the slide deck's own history does this). */
+  restoreContents(c: Contents): void {
+    this.bulk(() => {
+      for (const id of [...this.bonds.keys()]) this.rawSet('b', id, null);
+      for (const id of [...this.atoms.keys()]) this.rawSet('a', id, null);
+      for (const k of ['c', 'r', 's'] as const) for (const id of [...this.mapOf(k).keys()]) this.rawSet(k, id, null);
+      for (const a of c.atoms) this.rawSet('a', a.id, clone(a));
+      for (const b of c.bonds) this.rawSet('b', b.id, clone(b));
+      for (const x of c.captions) this.rawSet('c', x.id, clone(x));
+      for (const x of c.arrows) this.rawSet('r', x.id, clone(x));
+      for (const x of c.shapes) this.rawSet('s', x.id, clone(x));
+    });
+    this.allDirty = true;
   }
 
   /** Build without undo tracking (file loading, tests). */

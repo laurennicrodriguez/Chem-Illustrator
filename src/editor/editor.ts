@@ -2,7 +2,7 @@
 // pan. The editor changes the document and asks for a repaint; hover and drawing previews
 // only repaint the overlay layer.
 
-import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption } from '../model';
+import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, applyBase, stripBase } from '../model';
 import { CaptionEditor } from '../ui/caption-editor';
 import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
 import { styleFromFace, plainText } from '../richtext';
@@ -22,9 +22,11 @@ import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffset
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { tokenize } from '../chem/labels';
 import {
-  Handle, arrowHit, shapeHit, arrowHandles, shapeHandles, dragArrowHandle, dragShapeHandle, shapeBox,
+  Handle, arrowHit, shapeHit, arrowHandles, shapeHandles, dragArrowHandle, dragShapeHandle, dragCropHandle, shapeBox,
   arrowPoints, bracketsAround, bracketLip, unionRect,
 } from '../objects';
+import { isEmptyText } from '../deck/deck';
+import { imageFor } from '../render/images';
 
 export type Tool =
   | { kind: 'select' }
@@ -181,6 +183,12 @@ export class Editor {
   private labelInput: HTMLInputElement | null = null;
   /** The mouse is over the drawing, so keys are for the drawing even if a button has the focus. */
   private pointerInside = false;
+  /** Keys don't reach the drawing (while presenting slides). */
+  paused = false;
+  /** Slides are showing: the keys for slides come before the ones for anywhere. */
+  slideKeys = false;
+  /** The picture being cropped: its handles cut the picture instead of resizing it. */
+  cropping: number | null = null;
 
   constructor(public doc: Doc, public r: Renderer, public host: HTMLElement) {
     const el = r.overlay;
@@ -427,7 +435,7 @@ export class Editor {
     if (!d.moved && Math.hypot(sp.x - d.startScreen.x, sp.y - d.startScreen.y) > 3) {
       d.moved = true;
       if (d.mode === 'none') d.mode = this.dragModeFor(d);
-      if (d.mode === 'handle') this.doc.begin(d.handle!.which === 'mid' ? 'Bend arrow' : 'Resize');
+      if (d.mode === 'handle') this.doc.begin(d.handle!.which === 'mid' ? 'Bend arrow' : this.cropping === d.handle!.id ? 'Crop picture' : 'Resize');
       if (d.mode === 'rotate') this.doc.begin('Rotate');
       if (d.mode === 'move') {
         this.doc.begin('Move');
@@ -471,7 +479,7 @@ export class Editor {
         if (r) this.doc.updateArrow(h.id, dragArrowHandle(r, h.which, p, e.altKey));
       } else {
         const sh = this.doc.shapes.get(h.id);
-        if (sh) this.doc.updateShape(h.id, dragShapeHandle(sh, h.which, p, e.altKey));
+        if (sh) this.doc.updateShape(h.id, this.cropping === h.id ? dragCropHandle(sh, h.which, p) : dragShapeHandle(sh, h.which, p, e.altKey));
       }
       d.last = p;
       this.requestScene(e.timeStamp);
@@ -580,9 +588,12 @@ export class Editor {
     this.zoomBy(scale / this.r.view.scale);
   }
 
-  /** Zoom and scroll so the whole drawing fits the window. */
+  /** What Fit shows instead of the whole drawing (the slide, in Slides mode). */
+  fitArea: (() => { x1: number; y1: number; x2: number; y2: number }) | null = null;
+
+  /** Zoom and scroll so the whole drawing (or the slide) fits the window. */
   fit(): void {
-    const b = this.doc.bounds();
+    const b = this.fitArea ? this.fitArea() : this.doc.bounds();
     if (!b) return;
     const w = this.r.width, h = this.r.height;
     const bw = Math.max(20, b.x2 - b.x1), bh = Math.max(20, b.y2 - b.y1);
@@ -601,8 +612,12 @@ export class Editor {
     const t = this.tool;
     switch (t.kind) {
       case 'select': {
+        // an empty title or text placeholder takes typing straight away, as in PowerPoint
+        const c = h?.kind === 'caption' ? doc.captions.get(h.id) : undefined;
+        if (c?.ph && isEmptyText(c) && !d.shift) { this.sel = emptySel(); this.editCaption(c.id); return; }
         if (!d.shift) this.sel = emptySel();
         if (h) this.toggleSel(h);
+        if (this.cropping !== null && !this.sel.shapes.has(this.cropping)) this.cropping = null;
         this.onChange();
         return;
       }
@@ -1308,6 +1323,7 @@ export class Editor {
   // ------------------------------------------------------------------ keyboard
 
   private onKey(e: KeyboardEvent): void {
+    if (this.paused) return;
     const target = e.target as HTMLElement;
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
     if (e.defaultPrevented || target?.closest?.('dialog, .menu, .flyout')) return;
@@ -1316,7 +1332,12 @@ export class Editor {
     // on a focused button or menu, Enter, Space and Tab do their usual jobs (unless the mouse
     // is over the drawing: then they are drawing keys, as in ChemDraw)
     if (!this.pointerInside && target && target !== document.body && target !== this.r.overlay && /^(Shift\+)?(Enter|Space|Tab)$/.test(chord)) return;
-    if (chord === 'Escape') { this.keyHot = null; this.clearSelection(); return; }
+    if (chord === 'Escape') {
+      this.keyHot = null;
+      if (this.cropping !== null) { this.cropping = null; this.requestOverlay(); this.onChange(); return; }
+      this.clearSelection();
+      return;
+    }
     const hs = this.hotspot();
     // Delete with a selection removes the selection, unless pointing at something outside it
     if ((chord === 'Delete' || chord === 'Backspace') && this.hasSelection() && (!hs || this.isSelected(hs))) {
@@ -1325,7 +1346,7 @@ export class Editor {
       return;
     }
     const place: KeyContext = hs?.kind === 'atom' ? 'atom' : hs?.kind === 'bond' ? 'bond' : 'space';
-    for (const ctx of [place, 'command'] as const) {
+    for (const ctx of (this.slideKeys ? [place, 'slides', 'command'] : [place, 'command']) as KeyContext[]) {
       const action = keymap.lookup(ctx, chord);
       if (action && this.runAction(action, hs)) {
         e.preventDefault();
@@ -1358,7 +1379,8 @@ export class Editor {
     if (this.doc.redo()) this.afterUndo();
   }
 
-  private afterUndo(): void {
+  /** After an undo or redo (here or in a slide deck's history): forget things that have gone. */
+  afterUndo(): void {
     // drop selected things that no longer exist
     for (const [set, map] of [[this.sel.atoms, this.doc.atoms], [this.sel.bonds, this.doc.bonds], [this.sel.captions, this.doc.captions], [this.sel.arrows, this.doc.arrows], [this.sel.shapes, this.doc.shapes]] as [Set<number>, Map<number, unknown>][]) {
       for (const id of set) if (!map.has(id)) set.delete(id);
@@ -1627,7 +1649,9 @@ export class Editor {
     this.commitLabel();
     const doc = this.doc;
     const st = doc.style;
-    const defaults = { ...styleFromFace(st.captionFace), size: st.captionSize };
+    // a slide's title and text placeholders take the slide master's formatting
+    const base = c?.ph ? doc.textStyles?.[c.ph] : undefined;
+    const defaults = base ? { ...base } : { ...styleFromFace(st.captionFace), size: st.captionSize };
     const hide = (id: number | null) => {
       const shown = this.r.hiddenCaption !== null ? doc.captions.get(this.r.hiddenCaption) : null;
       if (shown) doc.dirtyRects.push(this.r.captionBox(shown));
@@ -1642,11 +1666,11 @@ export class Editor {
       view: this.r.view,
       toScreen: (p: Vec) => this.r.toScreen(p),
       measure: (t: string, size: number, family: string, style: string) => measureText(t, size, family, style),
-      defaultSize: st.captionSize,
+      defaultSize: base?.size ?? st.captionSize,
       redraw: () => this.requestOverlay(),
     };
     const initial = c
-      ? { runs: c.runs, paras: c.paras, justify: c.justify, wrap: c.wrap, width: c.width, lineHeight: c.lineHeight, lineSpacing: c.lineSpacing }
+      ? { runs: applyBase(c.runs, base), paras: c.paras, justify: c.justify, wrap: c.wrap, width: c.width, lineHeight: c.lineHeight, lineSpacing: c.lineSpacing }
       : { runs: [], justify: 'left' as const, wrap };
     const ed = new CaptionEditor(host, at, initial, defaults, (res) => {
       if (this.captionEd === ed) this.captionEd = null;
@@ -1654,10 +1678,14 @@ export class Editor {
       const empty = !plainText(res.runs).trim();
       const cur = id !== null ? doc.captions.get(id) : null;
       const fields: Partial<Caption> = {
-        x: res.x, y: res.y, runs: res.runs, justify: res.justify, paras: res.paras,
+        x: res.x, y: res.y, runs: stripBase(res.runs, base), justify: res.justify, paras: res.paras,
         wrap: res.wrap, width: res.width, lineHeight: res.lineHeight, lineSpacing: res.lineSpacing,
       };
-      if (cur) {
+      if (cur?.ph && empty) {
+        // an emptied placeholder stays, showing its prompt again
+        const paras = cur.ph === 'body' ? [{ list: 'bullet' as const }] : undefined;
+        if (cur.runs.length || JSON.stringify(cur.paras) !== JSON.stringify(paras)) doc.edit('Edit caption', () => doc.updateCaption(cur.id, { runs: [], paras }));
+      } else if (cur) {
         if (empty) doc.edit('Delete caption', () => doc.removeCaption(cur.id));
         else if ((Object.keys(fields) as (keyof Caption)[]).some((k) => JSON.stringify(cur[k]) !== JSON.stringify(fields[k]))) {
           doc.edit('Edit caption', () => doc.updateCaption(cur.id, fields));
@@ -1757,6 +1785,22 @@ export class Editor {
         if (sh) { ctx.lineWidth = doc.style.bondLength * 0.15; ctx.lineCap = 'round'; outlineShape(ctx, sh); }
       }
     }
+    // a picture being cropped: the part cut off shows faintly around it
+    const crop = this.cropping !== null ? doc.shapes.get(this.cropping) : undefined;
+    if (crop?.src) {
+      const c = crop.crop ?? { l: 0, t: 0, r: 0, b: 0 };
+      const x1 = Math.min(crop.x1, crop.x2), y1 = Math.min(crop.y1, crop.y2), w = Math.abs(crop.x2 - crop.x1), hh = Math.abs(crop.y2 - crop.y1);
+      const W = w / Math.max(0.01, 1 - c.l - c.r), H = hh / Math.max(0.01, 1 - c.t - c.b);
+      const img = imageFor(crop.src);
+      ctx.save();
+      ctx.globalAlpha = 0.35;
+      if (img) ctx.drawImage(img, x1 - c.l * W, y1 - c.t * H, W, H);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = px;
+      ctx.strokeRect(x1 - c.l * W, y1 - c.t * H, W, H);
+      ctx.restore();
+    }
     // handles on selected arrows and shapes
     const handles = this.drag?.mode === 'move' ? [] : this.handles();
     if (handles.length) {
@@ -1766,6 +1810,17 @@ export class Editor {
       ctx.fillStyle = '#fff';
       for (const hd of handles) {
         ctx.beginPath();
+        if (hd.kind === 'shape' && hd.id === this.cropping) {
+          // crop handles: black bars along the edges and corners, as in PowerPoint
+          ctx.fillStyle = '#000';
+          const t = 2.2 * px, l = 9 * px;
+          const sx = hd.which.includes('w') ? 1 : hd.which.includes('e') ? -1 : 0, sy = hd.which.includes('n') ? 1 : hd.which.includes('s') ? -1 : 0;
+          if (sx) ctx.rect(hd.at.x - (sx < 0 ? t : 0), hd.at.y - (sy ? (sy < 0 ? l : 0) : l / 2), t, l);
+          if (sy) ctx.rect(hd.at.x - (sx ? (sx < 0 ? l : 0) : l / 2), hd.at.y - (sy < 0 ? t : 0), l, t);
+          ctx.fill();
+          ctx.fillStyle = '#fff';
+          continue;
+        }
         if (hd.which === 'mid') ctx.arc(hd.at.x, hd.at.y, k * 1.1, 0, Math.PI * 2);
         else ctx.rect(hd.at.x - k, hd.at.y - k, 2 * k, 2 * k);
         ctx.fill();
@@ -1908,6 +1963,7 @@ function outlineShape(ctx: CanvasRenderingContext2D, s: Shape): void {
     }
     case 'rect': ctx.rect(x, y, w, h); break;
     case 'oval': ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2); break;
+    case 'picture': ctx.rect(x, y, w, h); ctx.stroke(); return;
     default: ctx.rect(x, y, w, h); ctx.fill(); return;
   }
   if (s.filled) ctx.fill(); else ctx.stroke();

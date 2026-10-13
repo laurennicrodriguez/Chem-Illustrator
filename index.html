@@ -12,12 +12,16 @@
     <div class="menu-wrap">
       <button id="btn-file" aria-haspopup="menu" aria-expanded="false" aria-controls="file-menu">File</button>
       <div id="file-menu" class="menu" role="menu" hidden>
-        <button role="menuitem" data-cmd="new">New</button>
+        <button role="menuitem" data-cmd="new">New Drawing</button>
+        <button role="menuitem" data-cmd="new-slides">New Slides</button>
         <button role="menuitem" data-cmd="open">Open…</button>
         <button role="menuitem" data-cmd="save">Save</button>
         <button role="menuitem" data-cmd="save-as">Save As…</button>
         <hr />
+        <button role="menuitem" data-cmd="export-pdf">Export PDF…</button>
         <button role="menuitem" data-cmd="export-mol">Export Molfile…</button>
+        <hr />
+        <button role="menuitem" data-cmd="close-tab">Close</button>
       </div>
     </div>
     <div class="menu-wrap">
@@ -51,6 +55,35 @@
         <button role="menuitem" data-cmd="zoom-actual">Actual Size</button>
         <hr />
         <button role="menuitemcheckbox" aria-checked="false" data-cmd="dev-tools" title="Speed readout and a stress test, for checking how fast the app runs"><span>Developer Tools</span></button>
+      </div>
+    </div>
+    <div class="menu-wrap">
+      <button id="btn-insert" aria-haspopup="menu" aria-expanded="false" aria-controls="insert-menu">Insert</button>
+      <div id="insert-menu" class="menu" role="menu" hidden>
+        <button role="menuitem" data-cmd="insert-picture">Picture…</button>
+        <button role="menuitem" data-cmd="crop" title="Cut the edges off the selected picture">Crop Picture</button>
+        <button role="menuitem" data-cmd="text-box">Text Box</button>
+      </div>
+    </div>
+    <div class="menu-wrap slides-only" hidden>
+      <button id="btn-slide" aria-haspopup="menu" aria-expanded="false" aria-controls="slide-menu">Slide</button>
+      <div id="slide-menu" class="menu" role="menu" hidden>
+        <button role="menuitem" data-cmd="new-slide">New Slide</button>
+        <button role="menuitem" data-cmd="duplicate-slide">Duplicate Slide</button>
+        <button role="menuitem" data-cmd="delete-slide">Delete Slide</button>
+        <hr />
+        <button role="menuitemradio" aria-checked="false" data-cmd="layout-title"><span>Title Slide</span></button>
+        <button role="menuitemradio" aria-checked="false" data-cmd="layout-title-content"><span>Title and Content</span></button>
+        <button role="menuitemradio" aria-checked="false" data-cmd="layout-two-content"><span>Two Content</span></button>
+        <button role="menuitemradio" aria-checked="false" data-cmd="layout-title-only"><span>Title Only</span></button>
+        <button role="menuitemradio" aria-checked="false" data-cmd="layout-blank"><span>Blank</span></button>
+        <hr />
+        <button role="menuitemradio" aria-checked="false" data-cmd="size-wide"><span>Widescreen (16:9)</span></button>
+        <button role="menuitemradio" aria-checked="false" data-cmd="size-standard"><span>Standard (4:3)</span></button>
+        <button role="menuitem" data-cmd="slide-master">Slide Master…</button>
+        <hr />
+        <button role="menuitem" data-cmd="present">Present from Beginning</button>
+        <button role="menuitem" data-cmd="present-current">Present from This Slide</button>
       </div>
     </div>
     <div class="menu-wrap">
@@ -108,13 +141,70 @@
     <button id="btn-help" title="Hotkeys and how to use the prototype">Help</button>
   </header>
 
+  <div id="tabs" role="tablist" aria-label="Open files"></div>
+
+  <div id="ribbon" class="slides-only" role="toolbar" aria-label="Slides" hidden>
+    <div class="rb-group">
+      <div class="rb-row">
+        <button class="rb-big" data-cmd="new-slide" title="New slide after this one"><span class="rb-icon">＋</span>New Slide</button>
+        <div class="rb-col">
+          <label class="rb-field">Layout <select id="rb-layout">
+            <option value="title">Title Slide</option>
+            <option value="title-content">Title and Content</option>
+            <option value="two-content">Two Content</option>
+            <option value="title-only">Title Only</option>
+            <option value="blank">Blank</option>
+          </select></label>
+          <div class="rb-pair">
+            <button data-cmd="duplicate-slide" title="Copy the picked slides">Duplicate</button>
+            <button data-cmd="delete-slide" title="Delete the picked slides">Delete</button>
+          </div>
+        </div>
+      </div>
+      <div class="rb-label">Slides</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-row">
+        <button class="rb-big" data-cmd="insert-picture" title="Put a picture on the slide (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
+        <button class="rb-big" data-cmd="text-box" title="Click on the slide to type, or drag to make a text box that wraps"><span class="rb-icon">T</span>Text Box</button>
+        <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
+      </div>
+      <div class="rb-label">Insert</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-row">
+        <div class="rb-col">
+          <label class="rb-field">Size <select id="rb-size">
+            <option value="wide">Widescreen (16:9)</option>
+            <option value="standard">Standard (4:3)</option>
+          </select></label>
+          <button data-cmd="slide-master" title="Fonts, colours, background, logo, slide numbers, footer and structure size for every slide">Slide Master…</button>
+        </div>
+      </div>
+      <div class="rb-label">Design</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-row">
+        <button class="rb-big" data-cmd="present" title="Show the slides full screen from the first"><span class="rb-icon">▶</span>From Beginning</button>
+        <button class="rb-big" data-cmd="present-current" title="Show the slides full screen from this one"><span class="rb-icon">▷</span>From This Slide</button>
+      </div>
+      <div class="rb-label">Present</div>
+    </div>
+  </div>
+
   <nav id="tools" aria-label="Drawing tools"></nav>
 
-  <div id="canvas-host">
-    <canvas id="scene"></canvas>
-    <canvas id="overlay" tabindex="0"></canvas>
-    <div id="warn-tip" role="tooltip" hidden></div>
-  </div>
+  <main id="work">
+    <div id="slide-list" class="slides-only" hidden></div>
+    <div id="canvas-host">
+      <canvas id="scene"></canvas>
+      <canvas id="overlay" tabindex="0"></canvas>
+      <div id="warn-tip" role="tooltip" hidden></div>
+    </div>
+    <div id="notes-pane" class="slides-only" hidden>
+      <textarea id="notes" placeholder="Click to add speaker notes" aria-label="Speaker notes"></textarea>
+    </div>
+  </main>
 
   <aside>
     <section id="style-section" hidden>
@@ -172,11 +262,11 @@
         <ul>
           <li>Mouse wheel scrolls, <kbd>Ctrl</kbd>+wheel zooms, middle or right drag pans; the View menu zooms too</li>
           <li>Copy puts the selection (or the whole drawing) on the clipboard; in the Windows app it pastes into ChemDraw, and into Word and PowerPoint as a picture. Paste takes drawings from ChemDraw, and SMILES or molfile text</li>
-          <li>File menu: New, Open, Save and Save As (.cdxml), Export Molfile. You can also drop a .cdxml file on the drawing</li>
+          <li>File menu: New Drawing, New Slides, Open, Save and Save As (.cdxml, .cdx, .pptx), Export PDF, Export Molfile. Each file has a tab; <kbd>Ctrl</kbd>+<kbd>Tab</kbd> moves between them. You can also drop files on the window</li>
         </ul>
         <h3>Not in this prototype yet</h3>
         <ul>
-          <li>Name to structure, pictures, rings bonded to a metal through all their atoms (ferrocene)</li>
+          <li>Rings bonded to a metal through all their atoms (ferrocene); tables (they come with Sheet mode)</li>
         </ul>
       </div>
     </div>
