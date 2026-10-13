@@ -47,6 +47,8 @@ import { NameDialog } from './ui/name-dialog';
 import { SheetMode, ClipboardCells } from './ui/sheet-mode';
 import { SheetChem } from './sheet/sheet-chem';
 import { structureDoc, structureMolfile } from './sheet/structure-doc';
+import { StructurePictures } from './ui/structure-pictures';
+import { structurePlace } from './sheet/layout';
 import { readSheetFile, writeSheetFile, SheetFileDeps } from './io/sheet-files';
 import { ACS_1996, DocStyle } from './style';
 
@@ -584,16 +586,40 @@ const modeTool: Record<Tab['mode'], string> = { drawing: 'bond-single', slides: 
 // Properties of the structures in sheets (formula, MW, HRMS…), worked out by the chemistry engine
 const sheetChem = new SheetChem(chem, (c) => structureMolfile(c, ws.active.book?.drawingStyle ?? ACS_1996));
 
-/** A structure as a PNG for Excel, sized in points. */
-async function structurePng(contents: Contents, style: DocStyle): Promise<{ png: Uint8Array; w: number; h: number } | null> {
-  const d = structureDoc(contents, style);
-  const pic = recordPicture(d, 2);
-  if (!pic) return null;
-  const png = new Uint8Array(await (await canvasPng(pictureCanvas(d, pic, 200).canvas)).arrayBuffer());
-  return { png, w: pic.box.x2 - pic.box.x1, h: pic.box.y2 - pic.box.y1 };
+// Pictures of structures for Excel files, drawn in the workbook's drawing style
+const filePictures = new WeakMap<DocStyle, StructurePictures>();
+function picturesFor(style: DocStyle): StructurePictures {
+  let p = filePictures.get(style);
+  if (!p) { p = new StructurePictures(() => style); filePictures.set(style, p); }
+  return p;
 }
 
-const sheetFiles: SheetFileDeps = { settled: () => sheetChem.settled(), picture: structurePng };
+/** Twice the screen's pixels, so pictures stay sharp when Excel is zoomed in. */
+const FILE_PICTURE_SCALE = 2;
+
+const sheetFiles: SheetFileDeps = {
+  settled: () => sheetChem.settled(),
+  box: (s, style) => picturesFor(style).box(s),
+  // the picture covers the cell as the grid shows it: its fill, and the structure where it sits
+  picture: async (s, style, cell) => {
+    const pics = picturesFor(style);
+    const S = FILE_PICTURE_SCALE;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(cell.w * S));
+    canvas.height = Math.max(1, Math.round(cell.h * S));
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = cell.fill ?? '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // the picture sits inside the gridlines: place the structure as in the whole cell
+    const p = structurePlace(pics.box(s), { x: -1, y: -1, w: cell.w + 2, h: cell.h + 2 }, cell.align, cell.valign);
+    if (p.k > 0) {
+      const bmp = pics.bitmap(s, p.k * S, true);
+      if (bmp) ctx.drawImage(bmp, p.x * S, p.y * S, p.w * S, p.h * S);
+    }
+    return new Uint8Array(await (await canvasPng(canvas)).arrayBuffer());
+  },
+  rowHeights: (s) => sheetMode.view.autoHeights(s),
+};
 
 const ws: Workspace = new Workspace(doc, {
   leave: (tab) => {

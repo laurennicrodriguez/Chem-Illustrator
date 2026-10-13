@@ -698,6 +698,11 @@ export class Sheet {
     this.applyFilter();
   }
 
+  /** Put back a filter as a file saved it: the rows it hid are hidden already, so nothing is filtered again. */
+  restoreFilter(f: Filter | null): void {
+    this.assign('filter', f);
+  }
+
   /** Change one column's condition (null takes it away) and filter again. */
   setCondition(col: number, cond: Condition | null): void {
     if (!this.filter) return;

@@ -147,6 +147,11 @@ export class PackageReader {
     return path in this.files;
   }
 
+  /** Every part's path. */
+  names(): string[] {
+    return Object.keys(this.files);
+  }
+
   bytes(path: string): Uint8Array | null {
     return this.files[path] ?? null;
   }

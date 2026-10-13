@@ -12,20 +12,15 @@ import { Range, MAX_ROWS, MAX_COLS, colName, rangeName, normRange, inRange, keyO
 import { formatValue, generalFitting } from '../sheet/numfmt';
 import { readTyped, isError, CellError } from '../sheet/values';
 import { chemPieces } from '../sheet/cell-text';
+import { DEFAULT_COL_W, DEFAULT_ROW_H, STRUCTURE_SCALE, STRUCTURE_PAD, MAX_AUTO_ROW, structureHeight, structurePlace } from '../sheet/layout';
 import { formulaRefs, normalizeFormula } from '../sheet/formula';
 
-export const DEFAULT_COL_W = 64;
-export const DEFAULT_ROW_H = 20;
 const HEADER_W = 44;
 const HEADER_H = 22;
 /** Calibri, as Excel uses, with stand-ins that have the same widths elsewhere. */
 export const CELL_FONT = "Calibri, Carlito, 'Segoe UI', Arial, sans-serif";
 export const CELL_SIZE = 11;
-/** Pixels per point for structures in cells at 100% zoom (a little under true size, to fit more). */
-export const STRUCTURE_SCALE = 1;
-const PAD = 4;
-/** Rows never grow taller than this to fit a structure (a taller row can still be set by hand). */
-const MAX_AUTO_ROW = 260;
+const PAD = STRUCTURE_PAD;
 
 export interface Cursor { r: number; c: number }
 
@@ -272,18 +267,15 @@ export class SheetView {
   // ---------------------------------------------------------------- sizes and positions
 
   /** The height a row needs for its structures and wrapped text (null: the standard height). */
-  private autoHeights(s: Sheet): Map<number, number> {
+  autoHeights(s: Sheet): Map<number, number> {
     const out = new Map<number, number>();
     for (const [k, c] of s.cells) {
       const row = rowOf(k), col = colOf(k);
       let h = 0;
       const style = s.styleAt(row, col);
       if (c.structure) {
-        const b = this.host.structureBox(c.structure);
         // a structure in a column narrower than it shrinks, and needs less height
-        const cw = (s.colWidths.get(col) ?? DEFAULT_COL_W) - 2 * PAD;
-        const k = Math.min(1, cw / Math.max(1, b.w * STRUCTURE_SCALE));
-        h = b.h * STRUCTURE_SCALE * k + 2 * PAD;
+        h = structureHeight(this.host.structureBox(c.structure), s.colWidths.get(col) ?? DEFAULT_COL_W);
       } else if (style?.wrap && c.input) {
         const w = (s.colWidths.get(col) ?? DEFAULT_COL_W) - 2 * PAD;
         const lines = this.wrapLines(s.shownText(row, col), this.font(style, 1), w).length;
@@ -652,17 +644,10 @@ export class SheetView {
   }
 
   private drawStructure(st: Structure, x: number, y: number, w: number, h: number, style: CellStyle | undefined, budget: { n: number }): void {
-    const box = this.host.structureBox(st);
-    const pad = PAD * this.zoom;
-    const natW = box.w * STRUCTURE_SCALE * this.zoom, natH = box.h * STRUCTURE_SCALE * this.zoom;
-    const k = Math.min(1, (w - 2 * pad) / Math.max(1, natW), (h - 2 * pad) / Math.max(1, natH));
-    if (k <= 0) return;
-    const dw = natW * k, dh = natH * k;
-    const align = style?.align ?? 'center';
-    const dx = align === 'left' ? x + pad : align === 'right' ? x + w - pad - dw : x + (w - dw) / 2;
-    const valign = style?.valign ?? 'middle';
-    const dy = valign === 'top' ? y + pad : valign === 'bottom' ? y + h - pad - dh : y + (h - dh) / 2;
-    const scale = STRUCTURE_SCALE * this.zoom * k * (window.devicePixelRatio || 1);
+    const p = structurePlace(this.host.structureBox(st), { x, y, w, h }, style?.align, style?.valign, this.zoom);
+    if (p.k <= 0) return;
+    const { x: dx, y: dy, w: dw, h: dh } = p;
+    const scale = p.k * (window.devicePixelRatio || 1);
     let pic = this.host.structureBitmap(st, scale);
     if (!pic && budget.n > 0) {
       budget.n--;
