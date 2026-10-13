@@ -147,9 +147,11 @@ export function faceFromStyle(r: RunStyle): number {
 export type Part = { text: string; pos: 'base' | 'sub' | 'sup' };
 
 /**
- * How formula style shows a piece of text: numbers straight after a letter or a closing
- * bracket are subscripts, and a charge there (2+, 3−, or a lone + or −) ending a word is a
- * superscript.
+ * How formula style shows a piece of text: numbers straight after a letter or a closing bracket
+ * are subscripts (CH3, Pd(PPh3)4), and a + or − ending a word there is a superscript charge
+ * (NH4+, PhSO3−, Cl−). After a square bracket the number goes up with the charge
+ * ([Fe(CN)6]3−). An ion's charge with a number, as in Fe3+, is shown Fe₃⁺; superscript the 3
+ * by hand for Fe³⁺.
  */
 export function formulaParts(text: string): Part[] {
   const out: Part[] = [];
@@ -158,14 +160,24 @@ export function formulaParts(text: string): Part[] {
     if (last && last.pos === pos) last.text += t;
     else out.push({ text: t, pos });
   };
+  const wordEnd = /^[+\-−](?=$|[\s,;:)\]])/;
   let i = 0;
   while (i < text.length) {
     const rest = text.slice(i);
-    if (i > 0 && /[A-Za-z)\]]/.test(text[i - 1])) {
+    const prev = i > 0 ? text[i - 1] : '';
+    if (prev === ']') {
       const charge = /^\d*[+\-−](?=$|[\s,;:)\]])/.exec(rest);
       if (charge) { push(charge[0], 'sup'); i += charge[0].length; continue; }
+    }
+    if (/[A-Za-z)\]]/.test(prev)) {
       const count = /^\d+/.exec(rest);
       if (count) { push(count[0], 'sub'); i += count[0].length; continue; }
+    }
+    // a charge after a letter, a bracket or a subscript number
+    if ((/[A-Za-z)\]]/.test(prev) || out[out.length - 1]?.pos === 'sub') && wordEnd.test(rest)) {
+      push(rest[0], 'sup');
+      i += 1;
+      continue;
     }
     const plain = /^(\d+|[^\d])/.exec(rest)!;
     push(plain[0], 'base');

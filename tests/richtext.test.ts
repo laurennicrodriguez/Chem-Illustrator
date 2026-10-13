@@ -74,10 +74,15 @@ describe('formula style', () => {
     expect(show('THF, -78 °C')).toBe('THF, -78 °C');
     expect(show('4Å MS')).toBe('4Å MS');
   });
-  it('puts charges up', () => {
-    expect(show('Fe3+')).toBe('Fe^3+');
+  it('puts charges up and the atom counts before them down', () => {
     expect(show('Cl-')).toBe('Cl^-');
+    expect(show('NH4+')).toBe('NH_4^+');
+    expect(show('PhSO3-')).toBe('PhSO_3^-');
+    expect(show('B(OR)3-')).toBe('B(OR)_3^-');
+    expect(show('BF4−, PF6−')).toBe('BF_4^−, PF_6^−');
     expect(show('[Fe(CN)6]3-, K+ salt')).toBe('[Fe(CN)_6]^3-, K^+ salt');
+    // an ion's charge number has to be put up by hand
+    expect(show('Fe3+')).toBe('Fe_3^+');
   });
   it('keeps hyphens inside names', () => {
     expect(show('n-BuLi')).toBe('n-BuLi');

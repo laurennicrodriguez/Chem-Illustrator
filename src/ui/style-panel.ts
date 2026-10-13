@@ -118,7 +118,7 @@ export class StylePanel {
       this.check(label, all(k), (v) => set(label, (x) => ({ runs: x.runs.map((r) => ({ ...r, [k]: v || undefined, ...(k === 'formula' && v ? { sub: undefined, sup: undefined } : {}) })) })));
     whole('Bold', 'bold');
     whole('Italic', 'italic');
-    whole('Formula style (CH₃, Fe³⁺)', 'formula');
+    whole('Formula style (CH₃, NH₄⁺)', 'formula');
     this.select('Line up', JUSTIFY, c.justify, (v) => set('Justification', () => ({ justify: v })));
     this.color('Colour', c.runs[0]?.color, (v) => set('Text colour', (x) => ({ runs: x.runs.map((r) => ({ ...r, color: v })) })));
   }
