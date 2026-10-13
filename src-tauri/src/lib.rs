@@ -36,11 +36,57 @@ fn read_text_file(path: String) -> Result<String, String> {
 /// failed save (full disk, lost network drive) never leaves a half-written drawing.
 #[tauri::command]
 fn write_text_file(path: String, contents: String) -> Result<(), String> {
-    let target = PathBuf::from(&path);
+    write_bytes(&path, contents.as_bytes())
+}
+
+/// Read a file the user chose, as bytes (PowerPoint files, CDX drawings, pictures).
+#[tauri::command]
+fn read_binary_file(path: String) -> Result<tauri::ipc::Response, String> {
+    std::fs::read(&path)
+        .map(tauri::ipc::Response::new)
+        .map_err(|e| format!("Could not read {path}: {e}"))
+}
+
+/// Save bytes to a file the user chose. The page sends the bytes as they are, with the path
+/// in a "path" header (percent-encoded, since headers only carry plain ASCII).
+#[tauri::command]
+fn write_binary_file(request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected the file's bytes".into());
+    };
+    let raw = request
+        .headers()
+        .get("path")
+        .and_then(|v| v.to_str().ok())
+        .ok_or("no file name given")?;
+    let path = percent_decode(raw)?;
+    write_bytes(&path, bytes)
+}
+
+fn percent_decode(s: &str) -> Result<String, String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = b.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok()).ok_or("bad file name")?;
+            out.push(u8::from_str_radix(hex, 16).map_err(|_| "bad file name")?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| "bad file name".into())
+}
+
+/// Write through a temporary file next to the target, so a failed save never leaves half a file.
+fn write_bytes(path: &str, bytes: &[u8]) -> Result<(), String> {
+    let target = PathBuf::from(path);
     let mut tmp = target.clone().into_os_string();
     tmp.push(".saving");
     let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, contents.as_bytes())
+    std::fs::write(&tmp, bytes)
         .and_then(|_| std::fs::rename(&tmp, &target))
         .map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
@@ -81,6 +127,18 @@ fn settings_write(app: tauri::AppHandle, contents: String) -> Result<(), String>
     write_text_file(path.to_string_lossy().into_owned(), contents)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::percent_decode;
+
+    #[test]
+    fn decodes_file_names() {
+        assert_eq!(percent_decode("C%3A%5CUsers%5Cn%C3%BC%5CTalk%201.pptx").unwrap(), "C:\\Users\\nü\\Talk 1.pptx");
+        assert_eq!(percent_decode("plain.pptx").unwrap(), "plain.pptx");
+        assert!(percent_decode("bad%zz").is_err());
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -102,6 +160,8 @@ pub fn run() {
             selftest_report,
             read_text_file,
             write_text_file,
+            read_binary_file,
+            write_binary_file,
             settings_path,
             settings_read,
             settings_write,

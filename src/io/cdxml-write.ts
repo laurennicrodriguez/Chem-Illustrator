@@ -16,6 +16,8 @@ import { toSymbolPieces, isSymbolFont, faceFromStyle } from '../richtext';
 import { layoutText, SINGLE } from '../text/layout';
 import { runsForChemDraw, TEXT_TAG } from '../text/chemdraw-text';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
+import { fromDataUrl } from '../render/images';
+import { OWN_PICTURE, OWN_CROP } from './cdxml';
 
 export interface WriteOptions {
   /** Text width in points; by default Arial's own widths, as ChemDraw uses. */
@@ -27,6 +29,11 @@ export interface WriteOptions {
    * computer). By default Arial's widths, whatever the font.
    */
   textMeasure?: (text: string, size: number, family: string, style: string) => number;
+  /**
+   * For this program's own clipboard: also keep what only it reads (pictures in any format,
+   * and how they are cropped). Files keep to what ChemDraw reads.
+   */
+  own?: boolean;
 }
 
 const NEW_PROLOG = '<?xml version="1.0" encoding="UTF-8" ?>\n<!DOCTYPE CDXML SYSTEM "http://www.cambridgesoft.com/xml/cdxml.dtd" >\n';
@@ -819,16 +826,23 @@ class CdxmlWriter {
   }
 
   private writeShape(s: Shape): void {
-    const names = s.picture ? ['embeddedobject'] : ['graphic'];
+    const pic = s.picture || s.kind === 'picture';
+    const names = pic ? ['embeddedobject'] : ['graphic'];
     const e = this.source('s', s.id, names);
     const o = this.orig<Shape>('s', s.id);
     if (e && o) {
       if (sameExcept(s, o, [])) return;
       const dx = s.x1 - o.x1, dy = s.y1 - o.y1;
       if (sameExcept(s, { ...o, x1: o.x1 + dx, y1: o.y1 + dy, x2: o.x2 + dx, y2: o.y2 + dy }, [])) shift(e, dx, dy);
+      else if (s.kind === 'picture') this.fillPicture(e, s, o.src !== s.src);
       else if (!s.picture) this.fillShape(e, s);
+    } else if (pic) {
+      // a copied stand-in for a picture this program can't show has no picture to write
+      if (s.picture || !s.src) return;
+      const g = this.el('embeddedobject', { id: s.id });
+      if (!this.fillPicture(g, s, true)) return;
+      this.page.appendChild(g);
     } else {
-      if (s.picture) return; // a copied picture placeholder has no picture to write
       const g = this.el('graphic', { id: s.id });
       this.fillShape(g, s);
       // circled charges and lone pairs belong with their structure; a circled charge also
@@ -859,6 +873,38 @@ class CdxmlWriter {
     const c = { x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 };
     const near = this.doc.atomsNear(c, this.doc.style.bondLength);
     return near.length ? this.fragOfAtom.get(near[0].id) ?? null : null;
+  }
+
+  /**
+   * A picture as ChemDraw keeps it: its place, and the picture itself (PNG, JPEG, GIF, BMP or a
+   * Windows metafile; when the picture changed, the copies ChemDraw kept beside the old one go).
+   * ChemDraw has no cropping, so files show the whole picture. False when there is nothing
+   * ChemDraw could show.
+   */
+  private fillPicture(e: Element, s: Shape, replace: boolean): boolean {
+    this.set(e, 'BoundingBox', box({ x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) }));
+    let png = false;
+    if (replace && s.src) {
+      for (const k of ['WindowsMetafile', 'EnhancedMetafile', 'PNG', 'GIF', 'JPEG', 'TIFF', 'BMP', 'OLEObject', 'MacPICT', 'CompressedWindowsMetafile', 'CompressedEnhancedMetafile', 'CompressedOLEObject', 'UncompressedWindowsMetafileSize', 'UncompressedEnhancedMetafileSize', 'UncompressedOLEObjectSize', OWN_PICTURE]) e.removeAttribute(k);
+      try {
+        const { mime, bytes } = fromDataUrl(s.src);
+        const attr = ({ 'image/png': 'PNG', 'image/jpeg': 'JPEG', 'image/gif': 'GIF', 'image/bmp': 'BMP', 'image/x-emf': 'EnhancedMetafile' } as Record<string, string>)[mime];
+        if (attr) {
+          const hex: string[] = [];
+          for (const b of bytes) hex.push((b < 16 ? '0' : '') + b.toString(16));
+          this.set(e, attr, hex.join('').toUpperCase());
+          png = true;
+        }
+      } catch {
+        // not a picture this program made; nothing to write
+      }
+    } else png = ['PNG', 'JPEG', 'GIF', 'BMP', 'EnhancedMetafile', 'WindowsMetafile'].some((k) => e.hasAttribute(k));
+    if (this.opts.own) {
+      if (s.src && !png) this.set(e, OWN_PICTURE, s.src);
+      const c = s.crop;
+      this.set(e, OWN_CROP, c && (c.l || c.t || c.r || c.b) ? [c.l, c.t, c.r, c.b].map((v) => +v.toFixed(5)).join(' ') : null);
+    }
+    return png || (!!this.opts.own && !!s.src);
   }
 
   private fillShape(g: Element, s: Shape): void {

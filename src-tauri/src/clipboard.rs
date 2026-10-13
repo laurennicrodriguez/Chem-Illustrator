@@ -49,7 +49,7 @@ mod win {
     use std::ffi::c_void;
     use std::ptr::null_mut;
     use windows_sys::Win32::Foundation::{GlobalFree, HANDLE, HWND};
-    use windows_sys::Win32::Graphics::Gdi::{DeleteEnhMetaFile, SetEnhMetaFileBits};
+    use windows_sys::Win32::Graphics::Gdi::{DeleteEnhMetaFile, GetEnhMetaFileBits, SetEnhMetaFileBits};
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, GetClipboardFormatNameW,
         IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
@@ -149,13 +149,25 @@ mod win {
         let _open = Open::new(owner)?;
         for name in names {
             let id = format_id(name);
-            if id == 0 || id == CF_ENHMETAFILE || unsafe { IsClipboardFormatAvailable(id) } == 0 {
+            if id == 0 || unsafe { IsClipboardFormatAvailable(id) } == 0 {
                 continue;
             }
             unsafe {
                 let h = GetClipboardData(id);
                 if h.is_null() {
                     continue;
+                }
+                if id == CF_ENHMETAFILE {
+                    // a metafile is a handle, not memory: ask for its bytes (an EMF file)
+                    let n = GetEnhMetaFileBits(h, 0, null_mut());
+                    if n == 0 {
+                        continue;
+                    }
+                    let mut bytes = vec![0u8; n as usize];
+                    if GetEnhMetaFileBits(h, n, bytes.as_mut_ptr()) == 0 {
+                        continue;
+                    }
+                    return Ok(Some((name.clone(), bytes)));
                 }
                 let p = GlobalLock(h) as *const u8;
                 if p.is_null() {

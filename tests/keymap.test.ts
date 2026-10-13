@@ -216,6 +216,7 @@ describe('the settings file', () => {
     const s = {
       hotkeys: { command: { 'Ctrl+M': 'command zoom-in' } }, keepHotspotOnBond: false, fixedLength: true, fixedAngles: false, devTools: true,
       chemTyping: false, spellCheck: true, replacements: [['oC', '°C'], ['rxn', 'reaction']] as [string, string][], dictionary: ['Fooxane'],
+      modeColours: { style: 'off' as const, drawing: '#2f6fdf', slides: '#00aa00' },
     };
     const text = settingsText(s);
     expect(text).toContain('"app": "Chem Illustrator"');

@@ -4,12 +4,17 @@
   --text: #1d2330;
   --muted: #677084;
   --line: #d6dae1;
-  --accent: #2f6fdf;
-  --accent-soft: #e3ecfc;
+  /* the accent follows the mode (View > Mode Colours sets --mode-*; see src/ui/mode-colours.ts) */
+  --accent: var(--mode-accent, #2f6fdf);
+  --accent-soft: var(--mode-soft, #e3ecfc);
+  --bar: var(--mode-bar, #2f6fdf);
   --ok: #18794e;
   --slow: #b4232a;
   --warn: #9a5b00;
   --page-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  --tab-drawing: var(--mode-drawing, #2f6fdf);
+  --tab-slides: var(--mode-slides, #c8572a);
+  --surround: #d5d8de;
   --ui-font: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --mono-font: 'IBM Plex Mono', ui-monospace, Consolas, monospace;
   color-scheme: light;
@@ -21,8 +26,9 @@
     --text: #e6e9ef;
     --muted: #9aa3b5;
     --line: #3a414d;
-    --accent: #7aa7ff;
-    --accent-soft: #2c3b57;
+    --accent: var(--mode-accent-dark, #7aa7ff);
+    --accent-soft: var(--mode-soft-dark, #2c3b57);
+    --bar: var(--mode-bar-dark, #264b8b);
     --ok: #5fd39a;
     --slow: #ff7b81;
     --warn: #f0b85a;
@@ -35,8 +41,9 @@
   --text: #e6e9ef;
   --muted: #9aa3b5;
   --line: #3a414d;
-  --accent: #7aa7ff;
-  --accent-soft: #2c3b57;
+  --accent: var(--mode-accent-dark, #7aa7ff);
+  --accent-soft: var(--mode-soft-dark, #2c3b57);
+  --bar: var(--mode-bar-dark, #264b8b);
   --ok: #5fd39a;
   --slow: #ff7b81;
   --warn: #f0b85a;
@@ -50,9 +57,9 @@ body {
   color: var(--text);
   font: 13px/1.4 var(--ui-font);
   display: grid;
-  grid-template-rows: auto 1fr auto;
-  grid-template-columns: auto 1fr 300px;
-  grid-template-areas: 'top top top' 'tools canvas side' 'status status status';
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) 300px;
+  grid-template-areas: 'top top top' 'tabs tabs tabs' 'ribbon ribbon ribbon' 'tools canvas side' 'status status status';
   overflow: hidden;
 }
 
@@ -68,6 +75,23 @@ header {
 }
 header h1 { font-size: 14px; margin: 0 10px 0 2px; font-weight: 650; letter-spacing: 0.01em; }
 header .sep { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+/* View > Mode Colours > The whole window: the menu bar in the mode's colour with white text */
+body.mode-window header { background: var(--bar); border-bottom-color: var(--bar); color: #fff; }
+body.mode-window header > h1 .muted { color: rgba(255, 255, 255, 0.78); }
+body.mode-window header > button,
+body.mode-window header > select,
+body.mode-window header > .menu-wrap > button { background: transparent; color: #fff; border-color: rgba(255, 255, 255, 0.32); }
+body.mode-window header > .menu-wrap > button { border-color: transparent; }
+body.mode-window header > button:hover,
+body.mode-window header > select:hover,
+body.mode-window header > .menu-wrap > button:hover,
+body.mode-window header > .menu-wrap > button[aria-expanded='true'] { background: rgba(255, 255, 255, 0.16); border-color: rgba(255, 255, 255, 0.6); }
+body.mode-window header > select option { color: var(--text); background: var(--panel); }
+body.mode-window header > :focus-visible,
+body.mode-window header > .menu-wrap > button:focus-visible { outline-color: #fff; }
+body.mode-window header .sep { background: rgba(255, 255, 255, 0.35); }
+body.mode-window header > label.check { color: #fff; }
+body.mode-window #tabs { background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
 .dev-only[hidden] { display: none !important; }
 button, select {
   font: inherit;
@@ -167,7 +191,18 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
 }
 
-#canvas-host { grid-area: canvas; position: relative; overflow: hidden; background: #fff; }
+/* the drawing area, with the slide list and speaker notes beside it in Slides mode */
+#work {
+  grid-area: canvas;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas: 'list host' 'list notes';
+  min-width: 0;
+  min-height: 0;
+}
+#canvas-host { grid-area: host; position: relative; overflow: hidden; background: #fff; min-height: 0; }
+body.slides-mode #canvas-host { background: var(--surround); }
 #canvas-host.drop { outline: 3px dashed var(--accent); outline-offset: -6px; }
 #canvas-host canvas { position: absolute; left: 0; top: 0; display: block; }
 #overlay { cursor: crosshair; touch-action: none; }
@@ -249,6 +284,8 @@ aside section[hidden] + section { margin-top: 0; border-top: 0; padding-top: 0; 
 aside h3 { font-size: 12px; font-weight: 600; margin: 2px 0 4px; }
 .style-row { display: grid; grid-template-columns: 1fr 138px; align-items: center; gap: 8px; margin: 3px 0; }
 label.style-row.check { display: flex; gap: 6px; }
+.style-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
+.style-buttons button { padding: 3px 8px; font-size: 12px; }
 .style-row select, .style-row input[type='number'] { width: 100%; padding: 2px 4px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; }
 .style-row input[type='color'] { width: 44px; height: 22px; padding: 0 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
 aside table { border-collapse: collapse; width: 100%; }
@@ -342,10 +379,14 @@ dialog ul { margin: 0; padding-left: 16px; }
 
 @media (max-width: 760px) {
   body {
-    grid-template-columns: auto 1fr;
-    grid-template-rows: auto 1fr auto auto;
-    grid-template-areas: 'top top' 'tools canvas' 'side side' 'status status';
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
+    grid-template-areas: 'top top' 'tabs tabs' 'ribbon ribbon' 'tools canvas' 'side side' 'status status';
   }
+  #work { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; grid-template-areas: 'list' 'host' 'notes'; }
+  #slide-list { width: auto; max-height: 120px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .sl-list { flex-direction: row; overflow-x: auto; overflow-y: hidden; }
+  .sl-add { display: none; }
   aside { border-left: 0; border-top: 1px solid var(--line); max-height: 32vh; }
   .tool-group { grid-template-columns: 34px; }
   dialog .cols { grid-template-columns: 1fr; }
@@ -415,6 +456,12 @@ button.hk-add.recording { color: var(--panel); background: var(--accent); border
 .text-menu hr { border: 0; border-top: 1px solid var(--line); margin: 3px 0; }
 /* Edit > Typing and Spelling */
 dialog.typing-dialog { width: min(94vw, 560px); }
+dialog.mode-dialog { width: min(94vw, 480px); }
+dialog.mode-dialog > p { margin: 2px 0 8px; }
+.mc-styles { margin: 0 0 10px; padding: 6px 10px 4px; border: 1px solid var(--line); border-radius: 8px; }
+.mc-styles legend { padding: 0 4px; color: var(--muted); }
+.mc-colours { display: grid; gap: 2px; }
+.mc-colours .md-row { grid-template-columns: 7em minmax(0, 1fr); }
 dialog.typing-dialog h3 { margin: 14px 0 2px; }
 dialog.typing-dialog p { margin: 2px 0 6px; }
 .ty-table-wrap { max-height: 220px; overflow-y: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
@@ -427,3 +474,153 @@ dialog.typing-dialog p { margin: 2px 0 6px; }
 .ty-words { width: 100%; box-sizing: border-box; font: 12px var(--mono-font); padding: 4px 6px; }
 .help-keys { list-style: none; padding-left: 0 !important; columns: 2; column-gap: 16px; }
 .help-keys li { break-inside: avoid; margin: 1px 0; }
+
+/* ------------------------------------------------------------------ tabs, one per open file */
+#tabs {
+  grid-area: tabs;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+  padding: 4px 8px 0;
+  overflow-x: auto;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  scrollbar-width: thin;
+}
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 220px;
+  min-width: 110px;
+  height: 30px;
+  padding: 0 4px 0 8px;
+  margin-bottom: -1px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+  color: var(--muted);
+  cursor: default;
+  user-select: none;
+}
+.tab:hover { background: color-mix(in srgb, var(--panel) 55%, transparent); color: var(--text); }
+.tab.active { background: var(--panel); border-color: var(--line); color: var(--text); }
+.tab-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 4px;
+  font: 700 10px var(--ui-font);
+  color: #fff;
+  background: var(--tab-drawing);
+}
+.tab-slides .tab-icon { background: var(--tab-slides); }
+.tab-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab.dirty .tab-name::before { content: '• '; color: var(--accent); }
+.tab-close { flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 15px; line-height: 1; }
+.tab-close:hover { background: var(--accent-soft); color: var(--text); }
+.tab-new { flex: none; height: 26px; margin: 0 0 2px 4px; padding: 0 9px; border-color: transparent; background: transparent; color: var(--muted); font-size: 12px; }
+.tab-new:hover { color: var(--text); border-color: var(--line); background: var(--panel); }
+
+/* ------------------------------------------------------------------ the Slides ribbon */
+#ribbon {
+  grid-area: ribbon;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  min-width: 0;
+  padding: 4px 6px 2px;
+  overflow-x: auto;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+#ribbon[hidden] { display: none; }
+.rb-group { display: flex; flex-direction: column; align-items: center; padding: 0 10px; flex: none; }
+.rb-group + .rb-group { border-left: 1px solid var(--line); }
+.rb-row { display: flex; align-items: stretch; gap: 4px; flex: 1 1 auto; }
+.rb-col { display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+.rb-pair { display: flex; gap: 4px; }
+.rb-label { margin-top: 3px; font-size: 11px; color: var(--muted); }
+#ribbon button { padding: 3px 8px; border-color: transparent; background: transparent; font-size: 12px; }
+#ribbon button:hover { border-color: var(--line); background: var(--accent-soft); }
+#ribbon button.rb-big { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 2px; min-width: 62px; padding: 4px 6px; line-height: 1.15; }
+.rb-icon { display: block; font-size: 21px; line-height: 26px; height: 26px; color: var(--accent); }
+.rb-field { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.rb-field select { padding: 2px 4px; font-size: 12px; min-width: 150px; }
+
+/* ------------------------------------------------------------------ the slide list */
+#slide-list {
+  grid-area: list;
+  display: flex;
+  flex-direction: column;
+  width: 212px;
+  min-height: 0;
+  background: var(--bg);
+  border-right: 1px solid var(--line);
+}
+#slide-list[hidden] { display: none; }
+.sl-list {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 8px 10px 4px;
+  overflow-y: auto;
+  min-height: 0;
+  outline: none;
+}
+.sl-item { position: relative; display: flex; align-items: flex-start; gap: 4px; flex: none; }
+.sl-num { width: 22px; flex: none; text-align: right; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 2px; }
+.sl-thumb { display: block; flex: none; background: #fff; border: 1px solid var(--line); border-radius: 2px; box-shadow: var(--page-shadow); }
+.sl-item.picked .sl-thumb { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.sl-item.current .sl-thumb { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.sl-item.current .sl-num { color: var(--accent); font-weight: 600; }
+.sl-list:focus-visible .sl-item.current .sl-thumb { box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px var(--accent-soft); }
+.sl-has-notes { position: absolute; left: 6px; top: 18px; font-size: 11px; color: var(--muted); }
+.sl-drop { position: absolute; left: 26px; right: 8px; height: 3px; margin-top: -2px; border-radius: 2px; background: var(--accent); pointer-events: none; }
+.sl-drop[hidden] { display: none; }
+.sl-add { flex: none; margin: 6px 8px 8px 30px; border-style: dashed; color: var(--muted); }
+.sl-add:hover { color: var(--text); }
+
+/* ------------------------------------------------------------------ speaker notes */
+#notes-pane { grid-area: notes; border-top: 1px solid var(--line); background: var(--panel); }
+#notes-pane[hidden] { display: none; }
+#notes {
+  display: block;
+  width: 100%;
+  height: 84px;
+  min-height: 40px;
+  max-height: 45vh;
+  padding: 8px 12px;
+  border: 0;
+  resize: vertical;
+  background: transparent;
+  color: var(--text);
+  font: 13px/1.45 var(--ui-font);
+  outline: none;
+}
+#notes::placeholder { color: var(--muted); }
+
+/* ------------------------------------------------------------------ the slide show */
+.present { position: fixed; inset: 0; z-index: 100; background: #000; outline: none; }
+.present canvas { display: block; }
+.present.no-cursor { cursor: none; }
+
+/* ------------------------------------------------------------------ Slide > Slide Master */
+dialog.master-dialog { width: min(94vw, 560px); }
+dialog.master-dialog form { margin: 0; }
+dialog.master-dialog > form > .muted { margin: 2px 0 6px; max-width: 60ch; }
+.md-grid { display: grid; grid-template-columns: 1fr; max-height: 60vh; overflow-y: auto; padding-right: 4px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.md-grid h3 { margin: 12px 0 2px; }
+.md-row { display: grid; grid-template-columns: 11em minmax(0, 1fr); align-items: center; gap: 8px; margin: 3px 0; }
+.md-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.md-controls input[type='text'] { flex: 1 1 12em; min-width: 0; font: inherit; padding: 3px 6px; }
+.md-controls select { font: inherit; }
+.md-num { width: 6em; font: inherit; padding: 3px 6px; }
+.md-controls input[type='color'] { width: 44px; height: 26px; padding: 0 2px; }
+.md-logo { max-width: 96px; max-height: 48px; border: 1px solid var(--line); background: #fff; }
+.md-logo[hidden] { display: none; }

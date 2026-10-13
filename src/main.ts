@@ -1,7 +1,8 @@
-// The app window: File menu, toolbar, drawing area, analysis and (View > Developer Tools) speed panels.
+// The app window: menus, a tab for each open file (drawings and slide decks), the toolbar, the
+// drawing area (with the slide list and notes in Slides mode), and the panels on the right.
 
 import './app.css';
-import { Doc, Atom, Caption } from './model';
+import { Doc, Atom, Caption, Shape } from './model';
 import { Renderer, measureText } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
 import type { Align } from './editor/arrange';
@@ -10,10 +11,18 @@ import { ChemClient } from './chem/client';
 import { toMolfile, addMolfile } from './chem/molfile';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { DocumentFile } from './io/document-file';
-import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, Pasted } from './io/clipboard';
+import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, fitPasted, Pasted } from './io/clipboard';
 import { writeCdxml } from './io/cdxml-write';
-import { openFileDialog, saveFileDialog, writeFile, KEYMAP_FILE } from './io/files';
+import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE_EXTENSIONS } from './io/files';
+import { Workspace, Tab } from './workspace';
+import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName } from './deck/deck';
+import { drawSlidePage, recordSlide, SURROUND } from './deck/slide-view';
+import { writePdf, jpegInfo, PdfPage, PdfImage } from './io/pdf';
+import { SlideList } from './ui/slide-list';
+import { Presenter } from './ui/present';
+import { editMaster } from './ui/master-dialog';
+import { recordPicture, pictureSvg, pictureCanvas, canvasPng } from './render/picture';
+import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc } from './render/images';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
 import { StylePanel } from './ui/style-panel';
@@ -26,6 +35,7 @@ import { keymap, registerToolNames, displayChord, actionName, KeyContext, KeyOve
 import { loadSettings, saveSettings, settingsLocation, Settings } from './settings';
 import { HotkeysDialog } from './ui/hotkeys-dialog';
 import { TypingDialog } from './ui/typing-dialog';
+import { ModeColoursDialog, ModeColours, DEFAULT_MODE_COLOURS, applyModeColours } from './ui/mode-colours';
 import { typingPrefs, setTypingPrefs, onTypingPrefs } from './text/typing';
 import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
@@ -218,8 +228,8 @@ editor.setTool('bond-single');
 
 // ---------------------------------------------------------------- top bar actions
 
-$('#btn-undo').addEventListener('click', () => editor.undo());
-$('#btn-redo').addEventListener('click', () => editor.redo());
+$('#btn-undo').addEventListener('click', () => undo());
+$('#btn-redo').addEventListener('click', () => redo());
 $('#btn-fit').addEventListener('click', () => editor.fit());
 $('#btn-stress').addEventListener('click', () => stressTest(Number($<HTMLSelectElement>('#stress-n').value)));
 $('#btn-help').addEventListener('click', () => openHelp());
@@ -232,14 +242,31 @@ stereoBox.addEventListener('change', () => {
   editor.requestScene();
 });
 
-host.addEventListener('dragover', (e) => { e.preventDefault(); host.classList.add('drop'); });
-host.addEventListener('dragleave', () => host.classList.remove('drop'));
-host.addEventListener('drop', (e) => {
+// Files dropped on the window: pictures go on the drawing or slide, other files open in tabs.
+const hasFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files');
+window.addEventListener('dragover', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  host.classList.add('drop');
+});
+window.addEventListener('dragleave', (e) => { if (!e.relatedTarget) host.classList.remove('drop'); });
+window.addEventListener('drop', (e) => {
+  if (!hasFiles(e)) return;
   e.preventDefault();
   host.classList.remove('drop');
-  const f = e.dataTransfer?.files?.[0];
-  if (f) openFile(f);
+  void dropFiles([...(e.dataTransfer?.files ?? [])], { x: e.clientX, y: e.clientY });
 });
+
+async function dropFiles(files: File[], at: { x: number; y: number }): Promise<void> {
+  const r = host.getBoundingClientRect();
+  const inside = at.x >= r.left && at.x <= r.right && at.y >= r.top && at.y <= r.bottom;
+  for (const f of files) {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    const mime = /\.(cdxml|cdx|pptx)$/i.test(f.name) ? null : pictureMime(f.name, bytes);
+    if (mime) placePicture(bytes, mime, inside ? renderer.toDoc(at.x - r.left, at.y - r.top) : null);
+    else await ws.openBytes(bytes, f.name);
+  }
+}
 
 // ---------------------------------------------------------------- cut, copy and paste
 
@@ -297,16 +324,26 @@ async function pasteFrom(read: () => Pasted | Promise<Pasted>): Promise<void> {
   }
   if (got.kind === 'drawing') {
     if (isEmpty(got.doc)) { flash('There is nothing to paste.'); return; }
-    editor.sel = insertDrawing(doc, got.doc, renderer.toDoc(renderer.width / 2, renderer.height / 2));
+    // on slides, structures can take the slide master's bond length; elsewhere they keep their size
+    const deck = deckNow();
+    fitPasted(got.doc, doc.style, deck?.master.fitPasted ? deck.master.drawing.bondLength : undefined);
+    editor.sel = insertDrawing(doc, got.doc, pasteCentre());
     editor.changed();
   } else if (got.kind === 'text') await pasteChemistry(got.text);
+  else if (got.kind === 'picture') placePicture(got.bytes, got.mime, null);
   else flash('There is nothing to paste.');
+}
+
+/** Where pasted things go: the middle of the slide in Slides mode, else the middle of the window. */
+function pasteCentre(): { x: number; y: number } {
+  const deck = deckNow();
+  return deck ? { x: deck.size.w / 2, y: deck.size.h / 2 } : renderer.toDoc(renderer.width / 2, renderer.height / 2);
 }
 
 /** Paste a SMILES string or a molfile as a structure. */
 async function pasteChemistry(text: string): Promise<void> {
   if (!chem.ready) { flash('The chemistry engine is still loading.'); return; }
-  const c = renderer.toDoc(renderer.width / 2, renderer.height / 2);
+  const c = pasteCentre();
   let mb: string | null = text.includes('M  END') ? text : null;
   if (!mb && !/\s/.test(text)) mb = await chem.smilesToMol(text);
   if (!mb) { flash('Paste a SMILES string or a molfile.'); return; }
@@ -513,45 +550,489 @@ function flash(msg: string, ms = 3500): void {
   flashTimer = window.setTimeout(() => el.classList.remove('show'), ms);
 }
 
-// ---------------------------------------------------------------- opening files
+// ---------------------------------------------------------------- tabs: drawings and slide decks
 
 let lastOpen = '';
 let lastStats: ReadStats | null = null;
 
-async function openFile(f: File): Promise<void> {
-  const text = await f.text();
-  await file.openText(text, f.name);
-}
+const tabsEl = $<HTMLDivElement>('#tabs');
+const notesBox = $<HTMLTextAreaElement>('#notes');
+const layoutSel = $<HTMLSelectElement>('#rb-layout');
+const sizeSel = $<HTMLSelectElement>('#rb-size');
+const presenter = new Presenter();
 
-function clearDrawing(): void {
-  doc.loadFrom(new Doc());
-  editor.clearSelection();
-  editor.lastEdited = null;
-  renderer.view = { scale: 2, ox: 40, oy: 40 };
-  lastOpen = '';
-  editor.changed();
-}
+// Each mode keeps its own tool: slides start with Select (click a placeholder to type), drawings with a bond.
+/** View > Mode Colours: blue for drawings, orange for slides, or the person's own colours. */
+let modeColours: ModeColours = { ...DEFAULT_MODE_COLOURS };
+const modeTool: Record<Tab['mode'], string> = { drawing: 'bond-single', slides: 'select' };
 
-// ---------------------------------------------------------------- the drawing's file
-
-const file = new DocumentFile(doc, {
-  load: (text, name) => openText(text, name) !== null,
-  reset: clearDrawing,
-  flash,
-  title: (t) => {
-    document.title = t;
-    if (isTauri()) getCurrentWindow().setTitle(t).catch(() => {});
+const ws: Workspace = new Workspace(doc, {
+  leave: (tab) => {
+    finishTyping();
+    modeTool[tab.mode] = editor.toolName;
+    editor.cropping = null;
+    tab.view = { ...renderer.view };
+    if (tab.deck) { tab.deck.onChange = () => {}; tab.deck.onSwitch = () => {}; }
   },
+  enter: (tab, opened) => enterTab(tab, opened),
+  changed: () => { renderTabs(); updateTitle(); },
+  flash,
+  pptx: {
+    picture: async (d) => {
+      const pic = recordPicture(d, 1);
+      if (!pic) return null;
+      const png = new Uint8Array(await (await canvasPng(pictureCanvas(d, pic).canvas)).arrayBuffer());
+      return { svg: pictureSvg(pic), png, box: pic.box };
+    },
+    svgToPng,
+  },
+  measure: measureText,
 });
 
+/** The slide deck showing (in Slides mode), or null for a drawing. */
+function deckNow(): Deck | null {
+  return ws.active.mode === 'slides' ? ws.active.deck : null;
+}
+
+/** Finish typing in a caption or the notes, before the slide or tab changes. */
+function finishTyping(): void {
+  editor.closeCaption();
+  flushNotes();
+}
+
+/** Set the window up for a tab that has just come to the front. */
+function enterTab(tab: Tab, opened: boolean): void {
+  const deck = tab.deck;
+  const slides = !!deck;
+  document.body.classList.toggle('slides-mode', slides);
+  applyModeColours(tab.mode, modeColours);
+  for (const el of document.querySelectorAll<HTMLElement>('.slides-only')) el.hidden = !slides;
+  renderer.screen = slides;
+  renderer.page = slides ? slidePage : null;
+  editor.slideKeys = slides;
+  editor.cropping = null;
+  editor.lastEdited = null;
+  if (editor.toolName !== modeTool[tab.mode]) editor.setTool(modeTool[tab.mode]);
+  editor.fitArea = deck ? () => ({ x1: 0, y1: 0, x2: deck.size.w, y2: deck.size.h }) : null;
+  if (deck) {
+    deck.onChange = () => deckChanged(deck);
+    deck.onSwitch = () => slideSwitched(deck);
+    listKey = slideListKey(deck);
+    masterSeen = deck.master;
+    slideList.show(deck);
+    notesBox.value = deck.current?.notes ?? '';
+    showSlideState();
+  } else slideList.show(null);
+  // the slide list and notes take room from the drawing area
+  resize();
+  if (tab.view && !opened) renderer.view = { ...tab.view };
+  else editor.fit();
+  renderer.repaintAll();
+  editor.clearSelection();
+  editor.frame(true);
+  refreshKeys();
+  analysisKey = '';
+  scheduleAnalysis(true);
+}
+
+/** The slide's background, logo, number and footer, drawn under its drawing. */
+const slidePage = {
+  draw(ctx: CanvasRenderingContext2D): void {
+    const d = deckNow();
+    if (d?.current) drawSlidePage(ctx, { size: d.size, master: d.master, layout: d.current.layout, index: d.index }, SURROUND);
+  },
+};
+
+// The slide list is rebuilt when slides come, go or move; otherwise only the slide being
+// edited gets a new picture.
+let listKey = '';
+let masterSeen: unknown = null;
+const slideListKey = (d: Deck) => `${d.slides.map((s) => s.id + (s.notes.trim() ? 'n' : '')).join(',')}|${d.index}|${d.size.w}x${d.size.h}`;
+
+function deckChanged(deck: Deck): void {
+  const key = slideListKey(deck);
+  if (key !== listKey || masterSeen !== deck.master) {
+    listKey = key;
+    masterSeen = deck.master;
+    slideList.rebuild();
+  } else slideList.refresh();
+  showSlideState();
+  ws.noteChange();
+}
+
+function slideSwitched(deck: Deck): void {
+  editor.cropping = null;
+  editor.lastEdited = null;
+  notesBox.value = deck.current?.notes ?? '';
+  renderer.repaintAll();
+  editor.requestScene();
+  editor.clearSelection();
+}
+
+/** The layout and size boxes and the Slide menu show the slide being edited. */
+function showSlideState(): void {
+  const deck = deckNow();
+  if (!deck?.current) return;
+  layoutSel.value = deck.current.layout;
+  const named = deck.size.w === WIDE.w && deck.size.h === WIDE.h ? 'wide' : deck.size.w === STANDARD.w && deck.size.h === STANDARD.h ? 'standard' : 'custom';
+  let custom = sizeSel.querySelector<HTMLOptionElement>('option[value="custom"]');
+  if (named === 'custom') {
+    if (!custom) { custom = new Option('', 'custom'); sizeSel.add(custom); }
+    custom.text = sizeName(deck.size);
+  } else custom?.remove();
+  sizeSel.value = named;
+  for (const l of LAYOUTS) $(`[data-cmd="layout-${l.id}"]`)?.setAttribute('aria-checked', String(l.id === deck.current.layout));
+  $('[data-cmd="size-wide"]')?.setAttribute('aria-checked', String(named === 'wide'));
+  $('[data-cmd="size-standard"]')?.setAttribute('aria-checked', String(named === 'standard'));
+}
+
+const slideList = new SlideList($('#slide-list'), {
+  go: (i) => goSlide(i),
+  remove: (ix) => removeSlides(ix),
+  duplicate: (ix) => { const d = deckNow(); if (d) { finishTyping(); d.duplicate(ix); } },
+  add: () => newSlide(),
+});
+
+function goSlide(i: number): void {
+  const d = deckNow();
+  if (!d || i < 0 || i >= d.slides.length) return;
+  finishTyping();
+  d.go(i);
+}
+
+function newSlide(layout?: LayoutId): void {
+  const d = deckNow();
+  if (!d) { flash('Slides are for presentations: use File > New Slides, or open a PowerPoint file.'); return; }
+  finishTyping();
+  d.addSlide(layout);
+}
+
+function removeSlides(ix: number[]): void {
+  const d = deckNow();
+  if (!d) return;
+  finishTyping();
+  if (!d.remove(ix)) flash('A presentation needs at least one slide.');
+}
+
+function setLayout(l: LayoutId): void {
+  const d = deckNow();
+  if (!d) return;
+  finishTyping();
+  d.setLayout(l);
+}
+
+function setSlideSize(size: { w: number; h: number }): void {
+  const d = deckNow();
+  if (!d) return;
+  finishTyping();
+  d.setSize(size);
+  editor.fit();
+}
+
+layoutSel.addEventListener('change', () => { setLayout(layoutSel.value as LayoutId); layoutSel.blur(); });
+sizeSel.addEventListener('change', () => {
+  if (sizeSel.value === 'wide') setSlideSize(WIDE);
+  else if (sizeSel.value === 'standard') setSlideSize(STANDARD);
+  sizeSel.blur();
+});
+
+// Speaker notes are saved with the slide a moment after typing stops (and when the box is left).
+let notesTimer = 0;
+let notesFor: { deck: Deck; slide: unknown } | null = null;
+notesBox.addEventListener('input', () => {
+  const deck = deckNow();
+  if (!deck) return;
+  if (!notesFor) notesFor = { deck, slide: deck.current };
+  clearTimeout(notesTimer);
+  notesTimer = window.setTimeout(flushNotes, 500);
+});
+notesBox.addEventListener('blur', () => flushNotes());
+
+function flushNotes(): void {
+  clearTimeout(notesTimer);
+  const f = notesFor;
+  notesFor = null;
+  if (!f) return;
+  const i = f.deck.slides.indexOf(f.slide as Deck['slides'][number]);
+  if (i >= 0) f.deck.setNotes(notesBox.value, i);
+}
+
+/** Undo and Redo: in Slides mode the deck's history covers every slide and the slide list. */
+function undo(): void {
+  const d = deckNow();
+  if (!d) { editor.undo(); return; }
+  finishTyping();
+  if (d.undo()) editor.afterUndo();
+}
+
+function redo(): void {
+  const d = deckNow();
+  if (!d) { editor.redo(); return; }
+  finishTyping();
+  if (d.redo()) editor.afterUndo();
+}
+
+// ---------------------------------------------------------------- the tab strip
+
+function renderTabs(): void {
+  const items = ws.tabs.map((t) => {
+    const el = document.createElement('div');
+    el.className = `tab tab-${t.mode}${t === ws.active ? ' active' : ''}${t.dirty ? ' dirty' : ''}`;
+    el.setAttribute('role', 'tab');
+    el.setAttribute('aria-selected', String(t === ws.active));
+    el.title = (t.ref.kind === 'path' ? t.ref.path : t.name) + (t.dirty ? ' (not saved)' : '');
+    const icon = document.createElement('span');
+    icon.className = 'tab-icon';
+    icon.textContent = t.mode === 'slides' ? 'P' : 'D';
+    icon.title = t.mode === 'slides' ? 'Slides' : 'Drawing';
+    const name = document.createElement('span');
+    name.className = 'tab-name';
+    name.textContent = t.name;
+    const close = document.createElement('button');
+    close.className = 'tab-close';
+    close.type = 'button';
+    close.title = 'Close';
+    close.setAttribute('aria-label', `Close ${t.name}`);
+    close.textContent = '×';
+    close.addEventListener('click', (e) => { e.stopPropagation(); void ws.close(t); });
+    el.addEventListener('click', () => ws.activate(t));
+    // the middle mouse button closes a tab, as in browsers
+    el.addEventListener('auxclick', (e) => { if (e.button === 1) { e.preventDefault(); void ws.close(t); } });
+    el.append(icon, name, close);
+    return el;
+  });
+  const add = (label: string, title: string, cmd: string) => {
+    const b = document.createElement('button');
+    b.className = 'tab-new';
+    b.type = 'button';
+    b.textContent = label;
+    b.title = title;
+    b.addEventListener('click', () => COMMANDS[cmd]());
+    return b;
+  };
+  tabsEl.replaceChildren(...items, add('+ Drawing', 'New drawing', 'new'), add('+ Slides', 'New slides', 'new-slides'));
+  tabsEl.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+let lastTitle = '';
+function updateTitle(): void {
+  const t = `${ws.active.dirty ? '• ' : ''}${ws.active.name} – Chem Illustrator`;
+  if (t === lastTitle) return;
+  lastTitle = t;
+  document.title = t;
+  if (isTauri()) getCurrentWindow().setTitle(t).catch(() => {});
+}
+
+// ---------------------------------------------------------------- pictures
+
+/** Ask for a picture file. */
+async function pickPicture(): Promise<{ bytes: Uint8Array; mime: string; name: string } | null> {
+  let f;
+  try {
+    f = await openBytesDialog('Pictures', [], PICTURE_EXTENSIONS);
+  } catch (e) {
+    await showError('Could not open the picture: ' + String(e));
+    return null;
+  }
+  if (!f) return null;
+  const mime = pictureMime(f.name, f.bytes);
+  if (!mime) { flash(`${f.name} isn't a picture this can show.`); return null; }
+  return { bytes: f.bytes, mime, name: f.name };
+}
+
+async function insertPicture(): Promise<void> {
+  const p = await pickPicture();
+  if (p) placePicture(p.bytes, p.mime, null);
+}
+
+/**
+ * Put a picture on the drawing or slide, centred at `at` (the middle of the slide or window
+ * when null), at its own size (96 pixels to the inch) or smaller to fit.
+ */
+function placePicture(bytes: Uint8Array, mime: string, at: { x: number; y: number } | null): void {
+  finishTyping();
+  const px = imageSize(bytes, mime) ?? { w: 400, h: 300 };
+  const deck = deckNow();
+  const room = deck ? { w: deck.size.w * 0.8, h: deck.size.h * 0.8 } : { w: (renderer.width * 0.8) / renderer.view.scale, h: (renderer.height * 0.8) / renderer.view.scale };
+  const k = Math.min(0.75, room.w / px.w, room.h / px.h);
+  const w = px.w * k, h = px.h * k;
+  const c = at ?? pasteCentre();
+  let made: Shape | null = null;
+  doc.edit('Insert picture', () => {
+    made = doc.addShape({ kind: 'picture', x1: c.x - w / 2, y1: c.y - h / 2, x2: c.x + w / 2, y2: c.y + h / 2, src: dataUrl(bytes, mime), px });
+  });
+  editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set([made!.id]) };
+  editor.changed();
+  if (mime === 'image/tiff' || mime === 'image/x-wmf' || !showableSrc(made!.src ?? '')) flash('This kind of picture shows as a grey box here for now; it is kept, and saved with the file.', 8000);
+}
+
+/** Insert > Crop Picture: the selected picture's handles cut its edges off until Esc or a click elsewhere. */
+function cropPicture(): void {
+  const pics = [...editor.sel.shapes].filter((id) => doc.shapes.get(id)?.kind === 'picture');
+  if (pics.length !== 1) { flash('Select one picture to crop.'); return; }
+  editor.cropping = editor.cropping === pics[0] ? null : pics[0];
+  editor.requestOverlay();
+  stylePanel.refresh();
+  if (editor.cropping !== null) flash('Drag the black handles to cut the edges off. Press Esc or click elsewhere when you are done.', 6000);
+}
+
+/** A PNG of an SVG picture, for programs that can't show SVG (w × h pixels, kept to a sensible size). */
+async function svgToPng(svg: string, w: number, h: number): Promise<Uint8Array> {
+  const k = Math.min(1, 8000 / w, 8000 / h, Math.sqrt(12e6 / (w * h)));
+  const img = await loadImage('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w * k));
+  c.height = Math.max(1, Math.round(h * k));
+  c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height);
+  return new Uint8Array(await (await canvasPng(c)).arrayBuffer());
+}
+
+// a picture that has just loaded is drawn, on the slide and in the slide list
+onImageReady(() => {
+  renderer.repaintAll();
+  editor.requestScene();
+  slideList.refreshAll();
+});
+
+// ---------------------------------------------------------------- slide master and the slide show
+
+async function slideMaster(): Promise<void> {
+  const d = deckNow();
+  if (!d) return;
+  finishTyping();
+  const m = await editMaster(d.master, {
+    pickPicture: async (): Promise<SlideImage | null> => {
+      const p = await pickPicture();
+      return p ? { src: dataUrl(p.bytes, p.mime), px: imageSize(p.bytes, p.mime) ?? { w: 200, h: 200 } } : null;
+    },
+  });
+  // the deck may have gone (its tab closed) while the window was open
+  if (m && deckNow() === d) d.setMaster(m);
+}
+
+function present(fromHere: boolean): void {
+  const d = deckNow();
+  if (!d) { flash('Present shows slides: use File > New Slides, or open a PowerPoint file.'); return; }
+  finishTyping();
+  editor.paused = true;
+  void presenter.start(d, fromHere ? d.index : 0);
+}
+
+presenter.onEnd = (i) => {
+  editor.paused = false;
+  // carry on editing the slide the show ended on
+  goSlide(i);
+  editor.requestScene();
+};
+
+// ---------------------------------------------------------------- export
+
+async function exportMolfile(): Promise<void> {
+  const ids = [...(editor.sel.atoms.size ? editor.sel.atoms : doc.atoms.keys())];
+  if (!ids.length) { flash('There is no structure to export.'); return; }
+  const { molblock, unknownLabels } = toMolfile(doc, ids);
+  const target = await saveFileDialog(withExtension(ws.active.name, MOL.extension), MOL).catch(async (e) => { await showError(String(e)); return null; });
+  if (!target) return;
+  try {
+    await writeFile(target.ref, target.name, molblock, MOL);
+  } catch (e) {
+    await showError(`Could not save ${target.name}: ${String(e)}`);
+    return;
+  }
+  const left = unknownLabels.length ? ` (left out, not understood: ${unknownLabels.join(', ')})` : '';
+  flash(`Saved ${target.name}${left}`);
+}
+
+/** File > Export PDF: every slide as a page, or the drawing on a page of its own size. */
+async function exportPdf(): Promise<void> {
+  const tab = ws.active, deck = tab.deck;
+  let pages: PdfPage[];
+  if (deck) {
+    pages = deck.slides.map((s, i) => ({
+      w: deck.size.w, h: deck.size.h,
+      items: recordSlide({ size: deck.size, master: deck.master, layout: s.layout, index: i }, deck.docOf(i)),
+    }));
+  } else {
+    const pic = recordPicture(doc, 18);
+    if (!pic) { flash('There is nothing to put in a PDF yet.'); return; }
+    const b = pic.box;
+    pages = [{ w: b.x2 - b.x1, h: b.y2 - b.y1, items: pic.items, origin: { x: b.x1, y: b.y1 } }];
+  }
+  const target = await saveFileDialog(withExtension(tab.name, PDF.extension), PDF).catch(async (e) => { await showError(String(e)); return null; });
+  if (!target) return;
+  try {
+    const bytes = await writePdf(pages, { title: tab.name.replace(/\.[^.]+$/, ''), image: pdfImage });
+    await writeFile(target.ref, target.name, bytes, PDF);
+  } catch (e) {
+    await showError(`Could not save ${target.name}: ${e instanceof Error ? e.message : String(e)}`);
+    return;
+  }
+  flash(`Saved ${target.name}${pages.length > 1 ? ` (${pages.length} pages)` : ''}`);
+}
+
+/** A picture's pixels for a PDF: JPEGs go in as they are; others are read through the browser. */
+async function pdfImage(src: string): Promise<PdfImage | null> {
+  const { mime, bytes } = fromDataUrl(src);
+  if (mime === 'image/jpeg') {
+    const info = jpegInfo(bytes);
+    if (info) return { kind: 'jpeg', bytes, ...info };
+  }
+  if (mime === 'image/x-wmf' || mime === 'image/tiff') return null;
+  let img: HTMLImageElement;
+  try {
+    img = await loadImage(src);
+  } catch {
+    return null;
+  }
+  let w = img.naturalWidth || 300, h = img.naturalHeight || 150;
+  // a drawing in SVG (or a Windows metafile, shown as SVG) has no pixels of its own: make plenty so it prints sharply
+  if (mime === 'image/svg+xml' || mime === 'image/x-emf') { const k = 3000 / Math.max(w, h); w *= k; h *= k; }
+  const k = Math.min(1, Math.sqrt(16e6 / (w * h)));
+  w = Math.max(1, Math.round(w * k));
+  h = Math.max(1, Math.round(h * k));
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const g = c.getContext('2d')!;
+  g.drawImage(img, 0, 0, w, h);
+  const px = g.getImageData(0, 0, w, h).data;
+  const rgb = new Uint8Array(w * h * 3), alpha = new Uint8Array(w * h);
+  let clear = false;
+  for (let i = 0, j = 0; i < w * h; i++, j += 4) {
+    rgb[i * 3] = px[j]; rgb[i * 3 + 1] = px[j + 1]; rgb[i * 3 + 2] = px[j + 2];
+    alpha[i] = px[j + 3];
+    if (px[j + 3] < 255) clear = true;
+  }
+  return { kind: 'raw', w, h, rgb, alpha: clear ? alpha : null };
+}
+
 const COMMANDS: Record<string, () => unknown> = {
-  new: () => file.newDrawing(),
-  open: () => file.open(),
-  save: () => file.save(),
-  'save-as': () => file.saveAs(),
-  'export-mol': () => file.exportMolfile(editor.sel.atoms.size ? editor.sel.atoms : doc.atoms.keys()),
-  undo: () => editor.undo(),
-  redo: () => editor.redo(),
+  new: () => { finishTyping(); ws.newDrawing(); },
+  'new-slides': () => { finishTyping(); ws.newSlides(); },
+  open: () => ws.open(),
+  save: () => { finishTyping(); return ws.save(); },
+  'save-as': () => { finishTyping(); return ws.saveAs(); },
+  'close-tab': () => { finishTyping(); return ws.close(); },
+  'next-tab': () => ws.cycle(1),
+  'prev-tab': () => ws.cycle(-1),
+  'export-mol': () => exportMolfile(),
+  'export-pdf': () => { finishTyping(); return exportPdf(); },
+  undo: () => undo(),
+  redo: () => redo(),
+  'insert-picture': () => insertPicture(),
+  crop: () => cropPicture(),
+  'text-box': () => { editor.setTool('text'); flash('Click to type, or drag across to make a text box that wraps.'); },
+  'new-slide': () => newSlide(),
+  'duplicate-slide': () => { const d = deckNow(); if (d) { finishTyping(); d.duplicate(slideList.pickedList()); } },
+  'delete-slide': () => removeSlides(slideList.pickedList()),
+  'next-slide': () => { const d = deckNow(); if (!d) return false; goSlide(d.index + 1); },
+  'prev-slide': () => { const d = deckNow(); if (!d) return false; goSlide(d.index - 1); },
+  ...Object.fromEntries(LAYOUTS.map((l) => [`layout-${l.id}`, () => setLayout(l.id)])),
+  'size-wide': () => setSlideSize(WIDE),
+  'size-standard': () => setSlideSize(STANDARD),
+  'slide-master': () => slideMaster(),
+  present: () => present(false),
+  'present-current': () => present(true),
   cut: () => cut(),
   copy: () => copy(),
   paste: () => paste(),
@@ -606,6 +1087,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'zoom-actual': () => editor.zoomTo(96 / 72),
   hotkeys: () => hotkeysDialog.open(),
   'typing-spelling': () => typingDialog.open(),
+  'mode-colours': () => modeDialog.open(),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
   'check-structure': () => checkStructure(),
   'stereo-labels': () => toggleStereoLabels(),
@@ -687,14 +1169,29 @@ function storeSettings(): void {
     spellCheck: typingPrefs.spelling,
     replacements: typingPrefs.replacements,
     dictionary: typingPrefs.dictionary,
+    modeColours,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
 
+/** The key for a menu command as things are now (in Slides mode, PowerPoint's keys come first). */
+function commandKey(cmd: string): string | undefined {
+  const own = editor.slideKeys ? keysOf('slides', `command ${cmd}`)[0] : undefined;
+  if (own) return own;
+  // a key the slides use for something else does not do this command while slides show
+  const k = keymap.keysFor('command', `command ${cmd}`).find((c) => !editor.slideKeys || !keymap.lookup('slides', c));
+  return k ? displayChord(k, isMac) : undefined;
+}
+
 /** Show the current keys in the menus and tool tips, and tick the options that are on. */
 function refreshKeys(): void {
-  for (const b of document.querySelectorAll<HTMLButtonElement>('.menu button[data-cmd]')) {
-    const k = keysOf('command', `command ${b.dataset.cmd}`)[0];
+  for (const b of document.querySelectorAll<HTMLButtonElement>('.menu button[data-cmd], #ribbon button[data-cmd]')) {
+    const k = commandKey(b.dataset.cmd!);
+    if (b.closest('#ribbon')) {
+      const base = b.dataset.tip ?? (b.dataset.tip = b.title);
+      b.title = k ? `${base} (${k})` : base;
+      continue;
+    }
     let kbd = b.querySelector('kbd');
     if (!k) { kbd?.remove(); continue; }
     if (!kbd) { kbd = document.createElement('kbd'); b.append(kbd); }
@@ -704,7 +1201,7 @@ function refreshKeys(): void {
     $(`[data-cmd="${cmd}"]`)?.setAttribute('aria-checked', String(on));
   }
   const tip = (id: string, text: string, cmd: string) => {
-    const k = keysOf('command', `command ${cmd}`)[0];
+    const k = commandKey(cmd);
     $(id).title = k ? `${text} (${k})` : text;
   };
   tip('#btn-undo', 'Undo', 'undo');
@@ -715,6 +1212,15 @@ function refreshKeys(): void {
 
 keymap.onChange(() => { refreshKeys(); storeSettings(); });
 onTypingPrefs(() => { storeSettings(); editor.requestOverlay(); });
+
+const modeDialog = new ModeColoursDialog({
+  get: () => modeColours,
+  set(c) {
+    modeColours = c;
+    applyModeColours(ws.active.mode, modeColours);
+    storeSettings();
+  },
+});
 
 const typingDialog = new TypingDialog({
   get: () => ({ ...typingPrefs }),
@@ -757,6 +1263,8 @@ void loadSettings().then((s) => {
   editor.options.fixedLength = s.fixedLength;
   editor.options.fixedAngles = s.fixedAngles;
   showDevTools(s.devTools);
+  modeColours = s.modeColours;
+  applyModeColours(ws.active.mode, modeColours);
   keymap.setOverrides(s.hotkeys);
   setTypingPrefs({ chemistry: s.chemTyping, spelling: s.spellCheck, replacements: s.replacements, dictionary: s.dictionary });
   settingsLoaded = true;
@@ -813,12 +1321,14 @@ editor.onProperties = () => {
 // Unsaved work: ask before the window closes.
 if (isTauri()) {
   getCurrentWindow().onCloseRequested(async (e) => {
-    if (!(await file.confirmClose())) e.preventDefault();
+    finishTyping();
+    if (!(await ws.closeAll())) e.preventDefault();
   }).catch(() => {});
 } else {
-  window.addEventListener('beforeunload', (e) => { if (file.dirty) e.preventDefault(); });
+  window.addEventListener('beforeunload', (e) => { finishTyping(); if (ws.anyDirty) e.preventDefault(); });
 }
 
+/** For the speed tests: a ChemDraw file's text into the drawing showing, timed. */
 function openText(text: string, name: string): ReadStats | null {
   const t0 = performance.now();
   try {
@@ -1109,6 +1619,7 @@ function updatePanels(): void {
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
+stylePanel.cropWithMouse = () => cropPicture();
 
 let stereoSeen = -1;
 editor.onFrame = () => {
@@ -1116,7 +1627,7 @@ editor.onFrame = () => {
   updateWarnings();
   if (doc.version !== stereoSeen) { stereoSeen = doc.version; updateStereo(); }
 };
-editor.onChange = () => { updateStereo(); scheduleAnalysis(); updatePanels(); file.updateTitle(); stylePanel.refresh(); };
+editor.onChange = () => { updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); };
 chem.onReady = () => {
   (window as any).__chemReadyMs = performance.now() - startMs;
   updatePanels();
@@ -1148,6 +1659,14 @@ function sampleMolecule(): void {
   editor.changed();
 }
 
+// the ribbon's buttons run the same commands as the menus
+$('#ribbon').addEventListener('click', (e) => {
+  const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-cmd]')?.dataset.cmd;
+  if (cmd) COMMANDS[cmd]?.();
+});
+renderTabs();
+updateTitle();
+
 resize();
 requestAnimationFrame(() => {
   editor.fit();
@@ -1158,7 +1677,7 @@ requestAnimationFrame(() => {
 });
 
 // Hooks for the automated speed tests.
-(window as any).__app = { doc, editor, renderer, chem, live, openText, stressTest, pasteChemistry, sample: sampleMolecule, file, Doc, keymap, names };
+(window as any).__app = { doc, editor, renderer, chem, live, openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names };
 
 // ---------------------------------------------------------------- desktop self-test
 

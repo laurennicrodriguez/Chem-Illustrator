@@ -5,7 +5,7 @@
 // fast however big the document is. Label layouts and bond geometry are cached per atom
 // and bond and only recomputed near what changed.
 
-import { Doc, Atom, Bond, Arrow, Caption, Shape } from '../model';
+import { Doc, Atom, Bond, Arrow, Caption, Shape, applyBase, type TextBase } from '../model';
 import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
@@ -17,12 +17,25 @@ import { arialWidth } from '../text-metrics';
 import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
 import { layoutText, FONT_STACK, type TextLayout } from '../text/layout';
 import { drawLayout } from '../text/draw';
+import { placeholderRect, isEmptyText } from '../deck/deck';
+import { imageFor } from './images';
 
 export { FONT_STACK };
 
 /** Colour of the stereo labels previewed with "Show R/S" (not part of the drawing). */
 const PREVIEW_COLOR = '#b4232a';
 
+
+/** Something drawn under the drawing in document coordinates, such as a slide and its master. */
+export interface PageDecor {
+  draw(ctx: CanvasRenderingContext2D): void;
+}
+
+/** Words shown in an empty placeholder on screen. */
+const PROMPTS = { title: 'Click to add title', subtitle: 'Click to add subtitle', body: 'Click to add text' };
+
+/** Something that can record a picture instead of drawing it (the vector recorder). */
+interface PictureSink { picture(s: Shape): void }
 
 export interface View {
   /** Screen pixels per point. */
@@ -89,6 +102,12 @@ export class Renderer {
   makePath: () => Path2D = () => new Path2D();
   /** Last scene paint time in ms (for the speed readout). */
   lastSceneMs = 0;
+  /** Drawing on screen for editing: empty placeholders show their prompts. */
+  screen = false;
+  /** Drawn under everything (a slide and its master). */
+  page: PageDecor | null = null;
+  /** Placeholder text formatting of the document being drawn. */
+  private textStyles: Doc['textStyles'] = null;
 
   private sctx: CanvasRenderingContext2D;
   private octx: CanvasRenderingContext2D;
@@ -372,6 +391,7 @@ export class Renderer {
     ctx.setTransform(dpr * scale, 0, 0, dpr * scale, -tx * T * dpr, -ty * T * dpr);
     const x1 = (tx * T) / scale, y1 = (ty * T) / scale;
     const pad = this.pad(doc);
+    this.page?.draw(ctx);
     this.drawContent(ctx, doc, { x1: x1 - pad, y1: y1 - pad, x2: x1 + T / scale + pad, y2: y1 + T / scale + pad });
     return { canvas, tx, ty };
   }
@@ -602,6 +622,7 @@ export class Renderer {
       if (c.id === this.hiddenCaption) continue;
       const r = this.captionBox(c);
       if (r.x1 > vis.x2 || r.x2 < vis.x1 || r.y1 > vis.y2 || r.y2 < vis.y1) continue;
+      if (c.ph && isEmptyText(c)) { if (this.screen) this.drawPrompt(ctx, c); continue; }
       this.drawCaption(ctx, c);
     }
 
@@ -767,6 +788,7 @@ export class Renderer {
     ctx.setLineDash(s.dashed ? [lw * 3, lw * 3] : []);
     ctx.beginPath();
     switch (s.kind) {
+      case 'picture': this.drawPicture(ctx, s, x, y, w, h); break;
       case 'line': ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); ctx.stroke(); break;
       case 'rect': {
         // ChemDraw's defaults: corners of six line widths, a light grey shadow of four
@@ -843,6 +865,22 @@ export class Renderer {
       }
     }
     ctx.setLineDash([]);
+  }
+
+  /** A picture, cropped as set; a grey box until its image has loaded. */
+  private drawPicture(ctx: CanvasRenderingContext2D, s: Shape, x: number, y: number, w: number, h: number): void {
+    if ('picture' in ctx) { (ctx as unknown as PictureSink).picture(s); return; }
+    const img = s.src ? imageFor(s.src) : null;
+    if (!img) {
+      ctx.fillStyle = '#eef1f5';
+      ctx.fillRect(x, y, w, h);
+      return;
+    }
+    const c = s.crop ?? { l: 0, t: 0, r: 0, b: 0 };
+    const iw = img.naturalWidth || s.px?.w || w, ih = img.naturalHeight || s.px?.h || h;
+    const sx = c.l * iw, sy = c.t * ih, sw = Math.max(1e-3, (1 - c.l - c.r) * iw), sh = Math.max(1e-3, (1 - c.t - c.b) * ih);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
   }
 
   drawArrow(ctx: CanvasRenderingContext2D, r: Arrow, lw: number): void {
@@ -963,25 +1001,57 @@ export class Renderer {
   captionLayout(c: Caption): TextLayout {
     let lay = this.capLayouts.get(c);
     if (!lay) {
-      lay = layoutText(c, this.captionSize, (t, s, family, style) => measureText(t, s, family, style));
+      const base = this.baseOf(c);
+      lay = layoutText(base ? { ...c, runs: applyBase(c.runs, base) } : c, base?.size ?? this.captionSize, (t, s, family, style) => measureText(t, s, family, style));
       this.capLayouts.set(c, lay);
     }
     return lay;
   }
 
-  /** Take the caption size from the document being drawn. */
-  useStyle(doc: Doc): void {
-    if (doc.style.captionSize !== this.captionSize) { this.captionSize = doc.style.captionSize; this.capBoxes = new WeakMap(); this.capLayouts = new WeakMap(); }
+  /** The master formatting a placeholder's text takes. */
+  baseOf(c: Caption): TextBase | undefined {
+    return c.ph ? this.textStyles?.[c.ph] : undefined;
   }
 
-  /** Bounding box of a caption in document coordinates (cached per caption version). */
+  /** Take the caption size and placeholder formatting from the document being drawn. */
+  useStyle(doc: Doc): void {
+    if (doc.style.captionSize !== this.captionSize || doc.textStyles !== this.textStyles) {
+      this.captionSize = doc.style.captionSize;
+      this.textStyles = doc.textStyles;
+      this.capBoxes = new WeakMap();
+      this.capLayouts = new WeakMap();
+    }
+  }
+
+  /** Bounding box of a caption in document coordinates (a placeholder's whole box, at least). */
   captionBox(c: Caption): Rect {
     let r = this.capBoxes.get(c);
     if (r) return r;
     const b = this.captionLayout(c).box;
     r = { x1: c.x + b.x1, y1: c.y + b.y1, x2: c.x + b.x2, y2: c.y + b.y2 };
+    if (c.ph && c.boxH) {
+      const f = placeholderRect(c, this.baseOf(c));
+      r = { x1: Math.min(r.x1, f.x1), y1: Math.min(r.y1, f.y1), x2: Math.max(r.x2, f.x2), y2: Math.max(r.y2, f.y2) };
+    }
     this.capBoxes.set(c, r);
     return r;
+  }
+
+  /** An empty placeholder on screen: a dashed box with a prompt in grey. */
+  private drawPrompt(ctx: CanvasRenderingContext2D, c: Caption): void {
+    const base = this.baseOf(c);
+    const f = placeholderRect(c, base);
+    const lw = 1 / this.view.scale;
+    ctx.save();
+    ctx.strokeStyle = '#a3a9b3';
+    ctx.lineWidth = lw;
+    ctx.setLineDash([4 * lw, 3 * lw]);
+    ctx.strokeRect(f.x1, f.y1, f.x2 - f.x1, f.y2 - f.y1);
+    ctx.setLineDash([]);
+    const text = PROMPTS[c.ph!];
+    const lay = layoutText({ runs: applyBase([{ text, color: '#8a909b', bold: false }], base), justify: c.justify, wrap: c.wrap, paras: c.paras }, base?.size ?? this.captionSize, (t, s, family, style) => measureText(t, s, family, style));
+    drawLayout(ctx, lay, c.x, c.y);
+    ctx.restore();
   }
 
   // ------------------------------------------------------------------ overlay

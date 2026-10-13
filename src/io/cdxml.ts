@@ -9,6 +9,8 @@ import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem
 import { DEG } from '../geom';
 import { kids, descendants } from './xml';
 import { styleFromFace, isSymbolFont, fromSymbolFont } from '../richtext';
+import { dataUrl, fromDataUrl, imageSize } from '../render/images';
+import { emfToSvg } from '../render/emf-read';
 
 export interface ReadStats {
   atoms: number;
@@ -422,14 +424,18 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         case 'arrow': readArrow(ch); break;
         case 'graphic': readGraphic(ch); break;
         case 'embeddedobject': {
-          // pasted pictures: show where they sit until images are supported
+          // pictures: ChemDraw keeps a PNG copy of each (with Windows metafiles beside it)
           const bb = pts(ch.getAttribute('BoundingBox'));
           if (bb.length === 4) {
-            const sh = doc.addShape({ id: idFor(ch), kind: 'rect', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], dashed: true, color: '#9aa4b2', picture: true });
+            const pic = pictureOf(ch);
+            const sh = pic
+              ? doc.addShape({ id: idFor(ch), kind: 'picture', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], src: pic.src, px: pic.px, ...(pic.crop ? { crop: pic.crop } : {}) })
+              // only pictures this program can't show: mark where they sit, and keep them as they are
+              : doc.addShape({ id: idFor(ch), kind: 'rect', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], dashed: true, color: '#9aa4b2', picture: true });
             from('s', sh.id, ch);
             stats.shapes++;
+            if (!pic) skip('picture');
           }
-          skip('picture');
           break;
         }
         case 'scheme': case 'step': case 'colortable': case 'fonttable': case 'objecttag': case 'bracketedgroup': case 'chemicalproperty': break;
@@ -495,4 +501,40 @@ export function isAutoLabel(z: number, text: string, h: number): boolean {
   if (!sym) return false;
   const hs = h === 0 ? '' : h === 1 ? 'H' : `H${h}`;
   return text === sym + hs || text === hs + sym || (h === 0 && text === sym);
+}
+
+/** Our own clipboard attributes for pictures (any format, and cropping), which ChemDraw doesn't have. */
+export const OWN_PICTURE = 'ChemIllustratorPicture';
+export const OWN_CROP = 'ChemIllustratorCrop';
+
+/** The picture in a ChemDraw embedded object, when there is one this program can show. */
+function pictureOf(el: Element): { src: string; px: { w: number; h: number }; crop: Shape['crop'] | null } | null {
+  const own = el.getAttribute(OWN_PICTURE);
+  const c = pts(el.getAttribute(OWN_CROP));
+  const crop = c.length === 4 && c.every(Number.isFinite) ? { l: c[0], t: c[1], r: c[2], b: c[3] } : null;
+  if (own?.startsWith('data:image/')) {
+    try {
+      const { mime, bytes } = fromDataUrl(own);
+      return { src: own, px: imageSize(bytes, mime) ?? { w: 100, h: 100 }, crop };
+    } catch {
+      // fall back to the PNG
+    }
+  }
+  const hexBytes = (name: string): Uint8Array | null => {
+    const hex = el.getAttribute(name);
+    if (!hex || hex.length < 48 || !/^[0-9a-f]+$/i.test(hex.slice(0, 64))) return null;
+    const bytes = new Uint8Array(hex.length >> 1);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+    return bytes;
+  };
+  const picture = (bytes: Uint8Array, mime: string) => ({ src: dataUrl(bytes, mime), px: imageSize(bytes, mime) ?? { w: 100, h: 100 }, crop });
+  // a Windows metafile with lines and text (a chart or spectrum) is sharper than ChemDraw's PNG copy of it
+  const emf = hexBytes('EnhancedMetafile');
+  const drawn = emf ? emfToSvg(emf) : null;
+  if (emf && drawn && drawn.vectors > 0) return picture(emf, 'image/x-emf');
+  for (const [name, mime] of [['PNG', 'image/png'], ['JPEG', 'image/jpeg'], ['GIF', 'image/gif'], ['BMP', 'image/bmp']]) {
+    const bytes = hexBytes(name);
+    if (bytes) return picture(bytes, mime);
+  }
+  return emf && drawn ? picture(emf, 'image/x-emf') : null;
 }

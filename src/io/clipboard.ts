@@ -11,7 +11,8 @@
 // page's clipboard gets a PNG, and the drawing itself is kept in memory for pasting here.
 
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import { Doc } from '../model';
+import { Doc, TextRun, applyBase } from '../model';
+import type { DocStyle } from '../style';
 import type { Vec } from '../geom';
 import type { Selection } from '../editor/editor';
 import { readCdxml } from './cdxml';
@@ -19,6 +20,7 @@ import { writeCdxml } from './cdxml-write';
 import { cdxmlToCdx, cdxToCdxml } from './cdx';
 import { measureText } from '../render/renderer';
 import { recordPicture, pictureEmf, pictureCanvas, canvasPng, canvasDib } from '../render/picture';
+import { emfToSvg } from '../render/emf-read';
 
 /** Our own clipboard format: the drawing as CDXML text. */
 export const OWN_FORMAT = 'Chem Illustrator CDXML';
@@ -56,7 +58,16 @@ export function extractDrawing(doc: Doc, sel: Selection | null): Doc {
     }
     for (const id of sel ? sel.captions : doc.captions.keys()) {
       const c = doc.captions.get(id);
-      if (c) { out.addCaption(structuredClone(c)); seen(id); }
+      if (!c) continue;
+      const copy = structuredClone(c);
+      if (copy.ph) {
+        // a slide's title or text becomes plain text, formatted as it looked on the slide
+        copy.runs = applyBase(copy.runs, doc.textStyles?.[copy.ph]);
+        delete copy.ph;
+        delete copy.boxH;
+      }
+      out.addCaption(copy);
+      seen(id);
     }
     for (const id of sel ? sel.arrows : doc.arrows.keys()) {
       const r = doc.arrows.get(id);
@@ -70,6 +81,65 @@ export function extractDrawing(doc: Doc, sel: Selection | null): Doc {
   });
   out.reserveIds(maxId);
   return out;
+}
+
+/** The usual bond length in a drawing (the median), or null when it has no bonds. */
+export function typicalBondLength(doc: Doc): number | null {
+  const ls: number[] = [];
+  for (const b of doc.bonds.values()) {
+    const p = doc.atoms.get(b.a1), q = doc.atoms.get(b.a2);
+    if (p && q) ls.push(Math.hypot(p.x - q.x, p.y - q.y));
+  }
+  if (!ls.length) return null;
+  ls.sort((a, b) => a - b);
+  return ls[ls.length >> 1];
+}
+
+/**
+ * Get a pasted drawing ready for a document drawn in the style `to`. Sizes in a drawing are
+ * relative to its own style, so they are converted: labels, lines and text keep the look they
+ * had where they came from. With `bondLength`, the drawing is first resized so its bonds are
+ * that long (structures pasted on slides take the slide master's bond length); its text and
+ * arrowheads grow or shrink with it. Changes `src`, a drawing just read from the clipboard.
+ */
+export function fitPasted(src: Doc, to: DocStyle, bondLength?: number): void {
+  const from = src.style;
+  const L = typicalBondLength(src);
+  const k = bondLength && L ? bondLength / L : 1;
+  const ka = (k * from.labelSize) / to.labelSize, kb = (k * from.lineWidth) / to.lineWidth;
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-3;
+  if (near(k, 1) && near(ka, 1) && near(kb, 1) && near(from.captionSize, to.captionSize)) return;
+  const at = (p: Vec): Vec => ({ x: p.x * k, y: p.y * k });
+  const rel = (s: number | undefined, f: number) => (near((s ?? 1) * f, 1) ? undefined : (s ?? 1) * f);
+  const run = (r: TextRun): TextRun => {
+    const size = (r.size ?? from.captionSize) * k;
+    const out: TextRun = { ...r, size };
+    if (Math.abs(size - to.captionSize) < 0.01) delete out.size;
+    return out;
+  };
+  const len = (v: number | undefined) => (v === undefined ? undefined : v * k);
+  const line = (w: number) => (Math.abs(w - to.lineWidth) < 1e-3 ? undefined : w);
+  src.bulk(() => {
+    for (const a of [...src.atoms.values()]) src.updateAtom(a.id, { ...at(a), s: rel(a.s, ka) });
+    for (const b of [...src.bonds.values()]) src.updateBond(b.id, { s: rel(b.s, kb) });
+    for (const c of [...src.captions.values()]) {
+      src.updateCaption(c.id, {
+        ...at(c), runs: c.runs.map(run), width: len(c.width), wrap: len(c.wrap), lineHeight: len(c.lineHeight), boxH: len(c.boxH),
+        paras: c.paras?.map((p) => ({ ...p, spaceBefore: len(p.spaceBefore), spaceAfter: len(p.spaceAfter), indent: len(p.indent) })),
+      });
+    }
+    for (const r of [...src.arrows.values()]) {
+      src.updateArrow(r.id, {
+        tail: at(r.tail), head: at(r.head), headLength: r.headLength * k, headWidth: r.headWidth * k,
+        shaftSpacing: len(r.shaftSpacing), lineWidth: line((r.lineWidth ?? from.lineWidth) * k),
+      });
+    }
+    for (const s of [...src.shapes.values()]) {
+      const p1 = at({ x: s.x1, y: s.y1 }), p2 = at({ x: s.x2, y: s.y2 });
+      src.updateShape(s.id, { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, radius: len(s.radius), shadowSize: len(s.shadowSize) });
+    }
+  });
+  src.style = { ...to };
 }
 
 /** True when a drawing has nothing in it. */
@@ -172,13 +242,15 @@ export async function copyDrawing(doc: Doc, sel: Selection | null): Promise<stri
   const part = extractDrawing(doc, sel);
   const pic = isEmpty(part) ? null : recordPicture(part);
   if (!pic) return 'There is nothing to copy.';
-  const cdxml = writeCdxml(part, { name: 'Clipboard.cdxml', textMeasure: measureText });
-  lastCopy = cdxml;
+  // our own copy keeps pictures in any format, and their cropping; ChemDraw's gets what it reads
+  const own = writeCdxml(part, { name: 'Clipboard.cdxml', textMeasure: measureText, own: true });
+  const cdxml = hasPictures(part) ? writeCdxml(part, { name: 'Clipboard.cdxml', textMeasure: measureText }) : own;
+  lastCopy = own;
   const what = sel ? 'Copied' : 'Copied the whole drawing';
   if (nativeClipboard) {
     const { canvas, dpi } = pictureCanvas(part, pic);
     const block = packFormats([
-      [OWN_FORMAT, new TextEncoder().encode(cdxml)],
+      [OWN_FORMAT, new TextEncoder().encode(own)],
       [CDX_FORMAT, cdxmlToCdx(cdxml)],
       ['CF_ENHMETAFILE', pictureEmf(pic)],
       ['CF_DIB', canvasDib(canvas, dpi)],
@@ -197,11 +269,39 @@ export async function copyDrawing(doc: Doc, sel: Selection | null): Promise<stri
   return `${what} as a picture.`;
 }
 
+const hasPictures = (d: Doc) => [...d.shapes.values()].some((s) => s.kind === 'picture');
+
 /** What a paste found on the clipboard. */
 export type Pasted =
   | { kind: 'drawing'; doc: Doc }
   | { kind: 'text'; text: string }
+  | { kind: 'picture'; mime: string; bytes: Uint8Array }
   | { kind: 'nothing' };
+
+/** Text that could be a structure (a molfile, or one word that could be SMILES). */
+export function looksLikeChemistry(text: string): boolean {
+  const t = text.trim();
+  return t.includes('M  END') || (!!t && !/\s/.test(t) && /^[A-Za-z0-9@+\-[\]()=#$%/\\.:*~]+$/.test(t));
+}
+
+/** A Windows bitmap from the clipboard (no file header) as a .bmp file a web page can show. */
+export function dibToBmp(dib: Uint8Array): Uint8Array {
+  const v = new DataView(dib.buffer, dib.byteOffset, dib.byteLength);
+  const headerSize = v.getUint32(0, true);
+  const bits = v.getUint16(14, true);
+  const compression = v.getUint32(16, true);
+  let colors = v.getUint32(32, true);
+  if (!colors && bits <= 8) colors = 1 << bits;
+  // three colour masks follow a plain header when the bits are packed by masks
+  const masks = headerSize === 40 && compression === 3 ? 12 : 0;
+  const out = new Uint8Array(14 + dib.length);
+  const o = new DataView(out.buffer);
+  out[0] = 0x42; out[1] = 0x4d; // "BM"
+  o.setUint32(2, out.length, true);
+  o.setUint32(10, 14 + headerSize + masks + colors * 4, true);
+  out.set(dib, 14);
+  return out;
+}
 
 function looksLikeCdxml(text: string): boolean {
   return /^\s*(<\?xml[^>]*>\s*)?(<!DOCTYPE[^>]*>\s*)?<CDXML[\s>]/i.test(text);
@@ -212,21 +312,50 @@ function fromText(text: string): Pasted {
   return { kind: 'text', text: text.trim() };
 }
 
-/** Read the Windows clipboard through the desktop app. */
+/** The first of these formats on the Windows clipboard. */
+async function nativeFirst(names: string[]): Promise<[string, Uint8Array] | null> {
+  const res = await invoke<ArrayBuffer>('clipboard_read', { names });
+  return unpackFormats(new Uint8Array(res))[0] ?? null;
+}
+
+/**
+ * Read the Windows clipboard through the desktop app: a drawing (ours or ChemDraw's) first,
+ * then text that could be a structure, then a picture (PNG, SVG, a Windows metafile as
+ * MestReNova and Office copy, or a bitmap), then any other text.
+ */
 export async function readNativeClipboard(): Promise<Pasted> {
-  const res = await invoke<ArrayBuffer>('clipboard_read', { names: [OWN_FORMAT, CDX_FORMAT, 'CF_UNICODETEXT'] });
-  const [item] = unpackFormats(new Uint8Array(res));
-  if (!item) return { kind: 'nothing' };
-  const [name, data] = item;
-  if (name === CDX_FORMAT) return { kind: 'drawing', doc: readCdxml(cdxToCdxml(data)).doc };
-  const text = new TextDecoder().decode(data);
-  if (name === OWN_FORMAT) return { kind: 'drawing', doc: readCdxml(text).doc };
+  const drawing = await nativeFirst([OWN_FORMAT, CDX_FORMAT]);
+  if (drawing) {
+    const [name, data] = drawing;
+    return { kind: 'drawing', doc: readCdxml(name === CDX_FORMAT ? cdxToCdxml(data) : new TextDecoder().decode(data)).doc };
+  }
+  const t = await nativeFirst(['CF_UNICODETEXT']);
+  const text = t ? new TextDecoder().decode(t[1]).replace(/\0+$/, '') : '';
+  if (looksLikeChemistry(text)) return fromText(text);
+  // a metafile with lines and text (a spectrum or chart from MestReNova or Excel) stays sharp, so it
+  // beats a PNG of the same thing; a metafile that only wraps a photo, or can't be shown, does not
+  const emf = await nativeFirst(['CF_ENHMETAFILE']);
+  if (emf && (emfToSvg(emf[1])?.vectors ?? 0) > 0) return { kind: 'picture', mime: 'image/x-emf', bytes: emf[1] };
+  const pic = await nativeFirst(['PNG', 'image/svg+xml', 'CF_ENHMETAFILE', 'CF_DIB']);
+  if (pic) {
+    const [name, data] = pic;
+    if (name === 'PNG') return { kind: 'picture', mime: 'image/png', bytes: data };
+    if (name === 'image/svg+xml') return { kind: 'picture', mime: 'image/svg+xml', bytes: data };
+    if (name === 'CF_ENHMETAFILE') return { kind: 'picture', mime: 'image/x-emf', bytes: data };
+    return { kind: 'picture', mime: 'image/bmp', bytes: dibToBmp(data) };
+  }
   return text.trim() ? fromText(text) : { kind: 'nothing' };
 }
 
-/** What a browser paste event holds: text if there is any, else the last drawing copied here. */
-export function readPasteEvent(e: ClipboardEvent): Pasted {
+/**
+ * What a browser paste event holds: a drawing or structure text, else a picture, else other
+ * text, else the last drawing copied here.
+ */
+export async function readPasteEvent(e: ClipboardEvent): Promise<Pasted> {
   const text = e.clipboardData?.getData('text/plain') ?? '';
+  if (looksLikeCdxml(text) || looksLikeChemistry(text)) return fromText(text);
+  const file = [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'));
+  if (file) return { kind: 'picture', mime: file.type, bytes: new Uint8Array(await file.arrayBuffer()) };
   if (text.trim()) return fromText(text);
   return lastCopy ? { kind: 'drawing', doc: readCdxml(lastCopy).doc } : { kind: 'nothing' };
 }
@@ -234,6 +363,13 @@ export function readPasteEvent(e: ClipboardEvent): Pasted {
 /** For the Paste menu item in a browser, which gets no paste event. */
 export async function readWebClipboard(): Promise<Pasted> {
   const text = await navigator.clipboard.readText().catch(() => '');
+  if (looksLikeCdxml(text) || looksLikeChemistry(text)) return fromText(text);
+  // a picture (when the browser lets the page see it)
+  const items = await navigator.clipboard.read?.().catch(() => []) ?? [];
+  for (const it of items) {
+    const type = it.types.find((t) => t.startsWith('image/'));
+    if (type) return { kind: 'picture', mime: type, bytes: new Uint8Array(await (await it.getType(type)).arrayBuffer()) };
+  }
   if (text.trim()) return fromText(text);
   return lastCopy ? { kind: 'drawing', doc: readCdxml(lastCopy).doc } : { kind: 'nothing' };
 }

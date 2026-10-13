@@ -4,13 +4,14 @@
 // person's own changes are kept separately, as a small readable list in the settings file,
 // so new defaults in later versions still reach them.
 
-export type KeyContext = 'atom' | 'bond' | 'space' | 'command' | 'text';
+export type KeyContext = 'atom' | 'bond' | 'space' | 'command' | 'slides' | 'text';
 
 export const CONTEXTS: { id: KeyContext; title: string; note: string }[] = [
   { id: 'atom', title: 'Pointing at an atom', note: 'Point at an atom (it highlights blue) and press the key. Letters are case-sensitive: F and f do different things.' },
   { id: 'bond', title: 'Pointing at a bond', note: 'Point at a bond and press the key.' },
   { id: 'space', title: 'Pointing at empty space', note: 'Switch tools when nothing is highlighted.' },
   { id: 'command', title: 'Anywhere', note: 'Menu commands. Plain keys here only work when nothing is highlighted.' },
+  { id: 'slides', title: 'In slides', note: 'Menu commands for slides. While slides are showing, these keys come before the ones for anywhere.' },
   { id: 'text', title: 'Typing a caption', note: 'Styling while the caption editor is open.' },
 ];
 
@@ -164,7 +165,12 @@ export const COMMAND_NAMES: Record<string, string> = {
   'clean-up': 'Clean Up Structure', 'check-structure': 'Check Structure (next warning)', 'stereo-labels': 'Show stereo labels',
   'name-to-structure': 'Name to Structure…',
   'zoom-in': 'Zoom in', 'zoom-out': 'Zoom out', 'zoom-fit': 'Fit the drawing in the window', 'zoom-actual': 'Actual size',
-  hotkeys: 'Hotkeys…', 'typing-spelling': 'Typing and Spelling…',
+  hotkeys: 'Hotkeys…', 'typing-spelling': 'Typing and Spelling…', 'mode-colours': 'Mode Colours…',
+  'new-slides': 'New slides', 'close-tab': 'Close the file', 'next-tab': 'Next file', 'prev-tab': 'Previous file',
+  'export-pdf': 'Export PDF…', 'insert-picture': 'Insert a picture…', crop: 'Crop the selected picture',
+  'new-slide': 'New slide', 'duplicate-slide': 'Duplicate slide', 'delete-slide': 'Delete slide',
+  'next-slide': 'Next slide', 'prev-slide': 'Previous slide', 'slide-master': 'Slide Master…',
+  present: 'Present from the first slide', 'present-current': 'Present from this slide',
   'dev-tools': 'Developer tools on or off (speed panel, stress test)',
 };
 
@@ -197,7 +203,7 @@ export function actionsFor(ctx: KeyContext): string[] {
     case 'atom': return [...pre('atom', ATOM_ACTIONS), ...pre('hotspot', HOTSPOT_ACTIONS)];
     case 'bond': return [...pre('bond', BOND_ACTIONS), ...pre('fuse', FUSE_ACTIONS), ...pre('hotspot', HOTSPOT_ACTIONS)];
     case 'space': return Object.keys(toolNames).map((t) => `tool ${t}`);
-    case 'command': return pre('command', COMMAND_NAMES);
+    case 'command': case 'slides': return pre('command', COMMAND_NAMES);
     case 'text': return pre('text', TEXT_ACTIONS);
   }
 }
@@ -210,7 +216,7 @@ export function validAction(ctx: KeyContext, action: string): boolean {
     case 'atom': return verb === 'label' || (verb === 'atom' && arg in ATOM_ACTIONS) || (verb === 'hotspot' && arg in HOTSPOT_ACTIONS);
     case 'bond': return (verb === 'bond' && arg in BOND_ACTIONS) || (verb === 'fuse' && arg in FUSE_ACTIONS) || (verb === 'hotspot' && arg in HOTSPOT_ACTIONS);
     case 'space': return verb === 'tool';
-    case 'command': return verb === 'command' && arg in COMMAND_NAMES;
+    case 'command': case 'slides': return verb === 'command' && arg in COMMAND_NAMES;
     case 'text': return verb === 'text' && arg in TEXT_ACTIONS;
   }
 }
@@ -282,6 +288,12 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
     'Ctrl+Shift+K': 'clean-up', 'Ctrl+Shift+N': 'name-to-structure',
     'Ctrl+0': 'zoom-fit', 'Ctrl+=': 'zoom-in', 'Ctrl+Shift+=': 'zoom-in', 'Ctrl++': 'zoom-in', 'Ctrl+-': 'zoom-out',
     F5: 'zoom-actual', F6: 'zoom-fit', F7: 'zoom-in', F8: 'zoom-out',
+    'Ctrl+W': 'close-tab', 'Ctrl+Tab': 'next-tab', 'Ctrl+Shift+Tab': 'prev-tab',
+  }),
+  // PowerPoint's keys
+  slides: verbs('command', {
+    F5: 'present', 'Shift+F5': 'present-current', 'Ctrl+M': 'new-slide', 'Ctrl+N': 'new-slides',
+    PageDown: 'next-slide', PageUp: 'prev-slide',
   }),
   text: verbs('text', {
     'Ctrl+B': 'bold', 'Ctrl+I': 'italic', 'Ctrl+U': 'underline', 'Ctrl+=': 'sub', 'Ctrl+Shift+=': 'sup', 'Ctrl++': 'sup',

@@ -9,6 +9,7 @@ Chem Illustrator ships the following open-source software.
 | [dk.brics.automaton](https://www.brics.dk/automaton/) 1.12-4 (part of the OPSIN build) | OPSIN's name grammar | BSD-3-Clause (full text below) |
 | [TeaVM](https://teavm.org) 0.16.0 runtime and class library (part of the OPSIN build) | Runs OPSIN's Java code as JavaScript | Apache-2.0; includes code from Apache Harmony (Apache-2.0). Notice: "This product includes software developed by Alexey Andreev (http://teavm.org). This product includes software developed by The Apache Software Foundation (http://www.apache.org/)." |
 | StAX API 1.0.1 (`stax:stax-api`, interfaces only, part of the OPSIN build) | Lets OPSIN read its XML word lists | Apache-2.0 |
+| [fflate](https://github.com/101arrowz/fflate) 0.8.2 | Packing and unpacking PowerPoint (.pptx) files, and compressing PDF pages | MIT (full text below) |
 | [Tauri](https://tauri.app) (`tauri` crate, `@tauri-apps/api`) | Desktop app shell | MIT or Apache-2.0 |
 | Tauri dialog plugin (`tauri-plugin-dialog` crate, `@tauri-apps/plugin-dialog`) | The desktop app's Open and Save dialogs | MIT or Apache-2.0 |
 | [windows-sys](https://github.com/microsoft/windows-rs) crate (Windows only) | The desktop app's clipboard on Windows (pictures for Word and PowerPoint) | MIT or Apache-2.0 |
@@ -23,6 +24,8 @@ Used only to build and test, not shipped: TypeScript (Apache-2.0), Vite (MIT), V
 `src/text-metrics.ts` holds the standard character widths of Helvetica/Arial, regular and bold (the widths in Adobe's freely distributed Helvetica font metrics), so saved files and copied pictures place text as ChemDraw does. No font files are included.
 
 Copied pictures are written as Enhanced Metafiles (EMF) and Windows bitmaps from Microsoft's published format specifications ([MS-EMF], BMP); no Microsoft code is included.
+
+PowerPoint files (.pptx) are read and written from the published Office Open XML standard (ECMA-376); PDF files from the published PDF specification (ISO 32000), using only the standard 14 PDF fonts. No Microsoft or Adobe code is included.
 
 The CDXML and CDX formats are read and written from CambridgeSoft's published CDX/CDXML format documentation and from example files; no ChemDraw code or documentation is included.
 
@@ -111,6 +114,32 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 MIT License
 
 Copyright (c) 2018-2021 Tyler Barrus
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## fflate licence
+
+```
+MIT License
+
+Copyright (c) 2023 Arjun Barrett
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

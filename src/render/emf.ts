@@ -139,6 +139,8 @@ export function itemsToEmf(items: Item[], box: EmfBox): Uint8Array {
   const bounds = () => { out.i32(0); out.i32(0); out.i32(Math.round(W * UNIT)); out.i32(Math.round(H * UNIT)); };
 
   for (const it of items) {
+    // pictures go with the PNG copy on the clipboard, not in the EMF
+    if (it.kind === 'image') continue;
     if (it.kind === 'path') {
       if (!it.segs.some((s) => s.k !== 'M')) continue;
       if (it.fill) {
