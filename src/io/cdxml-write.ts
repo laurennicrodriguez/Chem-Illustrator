@@ -8,11 +8,12 @@
 
 import { Doc, Atom, Bond, Caption, Arrow, Shape, TextRun, Entity, Kind } from '../model';
 import { SYMBOLS } from '../chem/elements';
-import { labelSpec, layoutLabel, labelDir, labelGraph, tokenize, GENERIC, Measure, MiniGraph, kekulize } from '../chem/labels';
+import { labelSpec, layoutLabel, labelDir, labelGraph, tokenize, isGenericLabel, Measure, MiniGraph, kekulize } from '../chem/labels';
 import { Vec, DEG, arcCenter, norm, sub, Rect } from '../geom';
 import { kids, descendants } from './xml';
 import { arialWidth } from '../text-metrics';
 import { toSymbolPieces, isSymbolFont, faceFromStyle } from '../richtext';
+import { atomStereoText, bondStereoText, atomStereoPlace, bondStereoPlace, PlacedLabel } from '../chem/stereo';
 
 export interface WriteOptions {
   /** Text width in points; by default Arial's own widths, as ChemDraw uses. */
@@ -339,6 +340,8 @@ class CdxmlWriter {
     const others = !sameExcept(a, o, ['x', 'y']);
     if (!others && !conn && !this.neighborsMovedApart(a)) {
       if (a.x !== o.x || a.y !== o.y) { shift(e, a.x - o.x, a.y - o.y); wrote = true; }
+      // the label of an atom that didn't change can still change with its neighbours
+      if (!a.attach && this.atomStereo(e, a, false)) wrote = true;
     } else {
       this.patchNode(e, a, o);
       wrote = true;
@@ -367,6 +370,7 @@ class CdxmlWriter {
         e.removeAttribute('BondCircularOrdering');
         wrote = true;
       }
+      if (this.bondStereo(e, b, false)) wrote = true;
     }
     if (wrote) this.changed = true;
     return wrote;
@@ -393,7 +397,7 @@ class CdxmlWriter {
     const n = this.el('n', { id: a.id, p: pt(a) });
     this.nodeCore(n, a);
     this.nodeLabel(n, a, true);
-    if (a.stereoLabel) this.stereoLabel(n, a);
+    this.atomStereo(n, a, true);
     return n;
   }
 
@@ -405,9 +409,8 @@ class CdxmlWriter {
       return;
     }
     for (const c of kids(n)) if (c.nodeName !== 't' && c.nodeName !== 'fragment') shift(c, dx, dy);
-    n.removeAttribute('AS'); // stereo descriptor; ChemDraw works it out again
     this.nodeCore(n, a);
-    if (!deepEqual(a.stereoLabel, o.stereoLabel)) this.stereoLabel(n, a);
+    this.atomStereo(n, a, true);
     const sameLabel = a.label === o.label && a.z === o.z && a.charge === o.charge && a.isotope === o.isotope && !!a.hideCharge === !!o.hideCharge;
     const t = this.child(n, 't');
     if (sameLabel && a.label !== null) {
@@ -425,22 +428,56 @@ class CdxmlWriter {
     this.nodeLabel(n, a, !sameLabel || a.label === null);
   }
 
-  /** ChemDraw's (R)/(S) label beside an atom: a tag holding the text, and the descriptor on the node. */
-  private stereoLabel(n: Element, a: Atom): void {
-    for (const c of kids(n)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === 'stereo') n.removeChild(c);
-    const l = a.stereoLabel;
-    const cip = l ? /^\(?([RSrs])\)?$/.exec(l.text.trim()) : null;
-    this.set(n, 'ShowAtomStereo', l ? 'yes' : null);
-    this.set(n, 'AS', cip ? cip[1] : null);
-    if (!l) return;
-    const tag = this.el('objecttag', { TagType: 'Unknown', PositioningType: 'offset', PositioningOffset: `${f2(l.dx)} ${f2(l.dy)}`, Name: 'stereo' });
-    const x = a.x + l.dx, y = a.y + l.dy;
-    const t = this.el('t', { p: pt({ x, y }), BoundingBox: box({ x1: x, y1: y - CAP * l.size, x2: x + this.measure(l.text, l.size), y2: y + 0.2 * l.size }), CaptionLineHeight: 'variable' });
-    const s = this.el('s', { font: this.fontId(), size: f2(l.size).replace(/\.00$/, ''), color: '0', face: l.italic ? 2 : 0 });
-    s.textContent = l.text;
-    t.appendChild(s);
-    tag.appendChild(t);
-    n.appendChild(tag);
+  /** An atom's (R)/(S) label and descriptor. Returns true when the node changed. */
+  private atomStereo(n: Element, a: Atom, patched: boolean): boolean {
+    const info = this.doc.stereo;
+    const text = atomStereoText(a, info);
+    const place = text ? atomStereoPlace(this.doc, a, text, this.measure) : null;
+    return this.syncStereo(n, 'ShowAtomStereo', 'AS', !!a.showStereo, text, place, info?.atom(a.id), patched);
+  }
+
+  private bondStereo(e: Element, b: Bond, patched: boolean): boolean {
+    const info = this.doc.stereo;
+    const text = bondStereoText(b, info);
+    const place = text ? bondStereoPlace(this.doc, b, text, this.measure) : null;
+    return this.syncStereo(e, 'ShowBondStereo', 'BS', !!b.showStereo, text, place, info?.bond(b.id), patched);
+  }
+
+  /**
+   * Make a stereo label in the file say what the drawing shows: ChemDraw's tag holding the text
+   * (at an absolute position), the "show" flag, and the descriptor (AS or BS). An untouched
+   * element is left exactly as it was unless its label's text or place changed.
+   */
+  private syncStereo(e: Element, showAttr: string, descAttr: string, show: boolean, text: string | null, place: PlacedLabel | null, desc: string | null | undefined, patched: boolean): boolean {
+    const old = kids(e).find((c) => c.nodeName === 'objecttag' && c.getAttribute('Name') === 'stereo') ?? null;
+    let same = !old && !text;
+    if (old && text && place) {
+      const t = this.child(old, 't');
+      const [x, y] = nums(t?.getAttribute('p') ?? null);
+      same = (t?.textContent ?? '') === text && Math.abs(x - place.x) < 0.01 && Math.abs(y - place.y) < 0.01;
+    }
+    // ChemDraw shows a label only on atoms and bonds marked to show one
+    show = show || !!text;
+    const showNow = e.getAttribute(showAttr) === 'yes';
+    if (same && !patched && showNow === show) return false;
+    // not worked out (no chemistry engine): the descriptor the label states
+    if (desc === undefined && text) desc = /^\(?([RSrsEZ])\)?$/.exec(text.trim())?.[1];
+    if (!same) {
+      if (old) e.removeChild(old);
+      if (text && place) {
+        const tag = this.el('objecttag', { TagType: 'Unknown', Name: 'stereo' });
+        const t = this.el('t', { p: pt(place), BoundingBox: box({ x1: place.x, y1: place.y - CAP * place.size, x2: place.x + this.measure(text, place.size), y2: place.y + 0.2 * place.size }), CaptionLineHeight: 'variable' });
+        const s = this.el('s', { font: this.fontId(), size: f2(place.size).replace(/\.00$/, ''), color: '0', face: place.italic ? 2 : 0 });
+        s.textContent = text;
+        t.appendChild(s);
+        tag.appendChild(t);
+        e.appendChild(tag);
+      }
+    }
+    this.set(e, showAttr, show ? 'yes' : null);
+    // the descriptor ChemDraw keeps; when we don't know it, ChemDraw works it out again
+    if (patched || !same) this.set(e, descAttr, desc ?? null);
+    return true;
   }
 
   /** Text of an atom's label as ChemDraw stores it ("OH", "NH3+", "OMe"), and its hydrogen count. */
@@ -497,7 +534,7 @@ class CdxmlWriter {
   private labelChemistry(n: Element, a: Atom): void {
     const label = a.label!;
     const toks = tokenize(label);
-    if (GENERIC.has(label) || (toks.length === 1 && toks[0].kind === 'generic')) {
+    if (isGenericLabel(label) || (toks.length === 1 && toks[0].kind === 'generic')) {
       n.setAttribute('NodeType', 'GenericNickname');
       n.setAttribute('GenericNickname', label);
       return;
@@ -604,8 +641,8 @@ class CdxmlWriter {
     this.set(e, 'color', this.colorAttr(b.color));
     this.set(e, 'LineWidth', b.s && b.s !== 1 ? f2(b.s * this.doc.style.lineWidth) : null);
     this.set(e, 'IgnoreWarnings', b.ignoreWarnings ? 'yes' : null);
-    e.removeAttribute('BS');
     e.removeAttribute('BondCircularOrdering');
+    this.bondStereo(e, b, true);
   }
 
   // ------------------------------------------------------------------ captions, arrows, shapes

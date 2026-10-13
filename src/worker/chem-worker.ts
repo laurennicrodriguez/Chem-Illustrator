@@ -4,11 +4,13 @@
 
 /// <reference lib="webworker" />
 import { formulaFromJson } from '../chem/formula';
+import { stereoTags, StereoTags } from '../chem/stereo';
 type InitRDKit = (opts: { locateFile: () => string }) => Promise<any>;
 
 export type ChemRequest =
   | { type: 'init'; js: string; wasm: string }
   | { type: 'analyze'; id: number; mols: { molblock: string; map: number[] }[] }
+  | { type: 'stereo'; id: number; mols: { molblock: string; skip: number[]; generic: [number, string][] }[] }
   | { type: 'smilesToMol'; id: number; smiles: string }
   | { type: 'molToSmiles'; id: number; molblock: string };
 
@@ -18,7 +20,6 @@ export interface FragmentResult {
   mw: number;
   charge: number;
   smiles: string;
-  cip: [number, string][];
   error?: string;
 }
 
@@ -26,33 +27,23 @@ export type ChemResponse =
   | { type: 'ready'; ms: number; version: string }
   | { type: 'error'; id?: number; message: string }
   | { type: 'analyze'; id: number; results: FragmentResult[]; ms: number }
+  | { type: 'stereo'; id: number; results: StereoTags[]; ms: number }
   | { type: 'smilesToMol'; id: number; molblock: string | null }
   | { type: 'molToSmiles'; id: number; smiles: string | null };
 
 let RDKit: any = null;
 const post = (m: ChemResponse) => (self as unknown as DedicatedWorkerGlobalScope).postMessage(m);
 
-function analyzeOne(molblock: string, map: number[]): FragmentResult {
+function analyzeOne(molblock: string): FragmentResult {
   const mol = RDKit.get_mol(molblock);
   if (!mol || !mol.is_valid()) {
     mol?.delete?.();
-    return { formula: '', exact: 0, mw: 0, charge: 0, smiles: '', cip: [], error: 'Could not read this structure (check valences).' };
+    return { formula: '', exact: 0, mw: 0, charge: 0, smiles: '', error: 'Could not read this structure (check valences).' };
   }
   try {
     const { formula, charge } = formulaFromJson(mol.get_json());
     const d = JSON.parse(mol.get_descriptors());
-    const tags = JSON.parse(mol.get_stereo_tags());
-    const cip: [number, string][] = [];
-    for (const [idx, label] of tags.CIP_atoms ?? []) {
-      const id = map[idx];
-      if (id !== undefined && id >= 0) cip.push([id, String(label).replace(/[()]/g, '')]);
-    }
-    for (const [i1, i2, label] of tags.CIP_bonds ?? []) {
-      // put E/Z on the first atom of the double bond
-      const id = map[i1] >= 0 ? map[i1] : map[i2];
-      if (id !== undefined && id >= 0) cip.push([id, String(label).replace(/[()]/g, '')]);
-    }
-    return { formula, exact: d.exactmw, mw: d.amw, charge, smiles: mol.get_smiles(), cip };
+    return { formula, exact: d.exactmw, mw: d.amw, charge, smiles: mol.get_smiles() };
   } finally {
     mol.delete();
   }
@@ -93,8 +84,12 @@ self.onmessage = async (e: MessageEvent<ChemRequest>) => {
     if (!RDKit) { post({ type: 'error', id: 'id' in m ? m.id : undefined, message: 'Chemistry engine not loaded yet' }); return; }
     if (m.type === 'analyze') {
       const t0 = performance.now();
-      const results = m.mols.map((x) => analyzeOne(x.molblock, x.map));
+      const results = m.mols.map((x) => analyzeOne(x.molblock));
       post({ type: 'analyze', id: m.id, results, ms: performance.now() - t0 });
+    } else if (m.type === 'stereo') {
+      const t0 = performance.now();
+      const results = m.mols.map((x) => stereoTags(RDKit, x.molblock, x.skip, undefined, x.generic));
+      post({ type: 'stereo', id: m.id, results, ms: performance.now() - t0 });
     } else if (m.type === 'smilesToMol') {
       const mol = RDKit.get_mol(m.smiles);
       if (!mol || !mol.is_valid()) { post({ type: 'smilesToMol', id: m.id, molblock: null }); return; }

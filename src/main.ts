@@ -18,6 +18,8 @@ import { StylePanel } from './ui/style-panel';
 import { TEMPLATES, Template, templateById } from './chem/templates';
 import { templateIcon } from './ui/template-icons';
 import { StructureChecks } from './chem/warnings';
+import { LiveStereo } from './chem/live-stereo';
+import { setStereoShown } from './chem/stereo';
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -30,6 +32,27 @@ const editor = new Editor(doc, renderer, host);
 const chem = new ChemClient(document.baseURI);
 const checks = new StructureChecks(doc);
 renderer.checks = checks;
+// R/S and E/Z for every structure, worked out in the background after each change
+const live = new LiveStereo(doc, (jobs) => chem.stereo(jobs));
+doc.stereo = live;
+live.onChange = (atoms, bonds) => {
+  const all = renderer.previewStereo;
+  for (const id of atoms) {
+    const a = doc.atoms.get(id);
+    if (a && (all || a.showStereo || a.stereoLabel)) doc.dirtyRects.push({ x1: a.x, y1: a.y, x2: a.x, y2: a.y });
+  }
+  for (const id of bonds) {
+    const b = doc.bonds.get(id);
+    if (!b || !(all || b.showStereo || b.stereoLabel)) continue;
+    const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
+    doc.dirtyRects.push({ x1: Math.min(p.x, q.x), y1: Math.min(p.y, q.y), x2: Math.max(p.x, q.x), y2: Math.max(p.y, q.y) });
+  }
+  editor.requestScene();
+  scheduleAnalysis();
+};
+function updateStereo(): void {
+  if (chem.ready) void live.update();
+}
 const startMs = performance.now();
 
 // ---------------------------------------------------------------- layout
@@ -171,7 +194,11 @@ $('#btn-stress').addEventListener('click', () => stressTest(Number($<HTMLSelectE
 $('#btn-help').addEventListener('click', () => $<HTMLDialogElement>('#help').showModal());
 $('#help-close').addEventListener('click', () => $<HTMLDialogElement>('#help').close());
 const stereoBox = $<HTMLInputElement>('#show-stereo');
-stereoBox.addEventListener('change', () => scheduleAnalysis(true));
+stereoBox.addEventListener('change', () => {
+  renderer.previewStereo = stereoBox.checked;
+  renderer.repaintAll();
+  editor.requestScene();
+});
 
 host.addEventListener('dragover', (e) => { e.preventDefault(); host.classList.add('drop'); });
 host.addEventListener('dragleave', () => host.classList.remove('drop'));
@@ -298,7 +325,6 @@ async function openFile(f: File): Promise<void> {
 function clearDrawing(): void {
   doc.loadFrom(new Doc());
   editor.clearSelection();
-  renderer.annotations = new Map();
   editor.lastEdited = null;
   renderer.view = { scale: 2, ox: 40, oy: 40 };
   lastOpen = '';
@@ -345,6 +371,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'rotate-180': () => editor.rotateBy(180) || flash('Select something to rotate.'),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
   'check-structure': () => checkStructure(),
+  'stereo-labels': () => toggleStereoLabels(),
   'clipboard-formats': async () => {
     const names = await clipboardFormats().catch((err) => [String(err)]);
     flash(names.length ? 'On the clipboard: ' + names.join(', ') : 'The clipboard is empty.', 15000);
@@ -430,7 +457,6 @@ function openText(text: string, name: string): ReadStats | null {
     const { doc: loaded, stats } = readCdxml(text);
     doc.loadFrom(loaded);
     editor.clearSelection();
-    renderer.annotations = new Map();
     editor.lastEdited = null;
     editor.fit();
     editor.frame(true);
@@ -511,13 +537,12 @@ async function runAnalysis(force: boolean): Promise<void> {
     frags.push(editor.sel.atoms.size ? new Set([...f].filter((x) => editor.sel.atoms.has(x))) : f);
     if (frags.length >= 12) break;
   }
-  const key = doc.version + ':' + frags.map((f) => [...f].join(',')).join('|') + stereoBox.checked;
+  const key = doc.version + ':' + live.version + ':' + frags.map((f) => [...f].join(',')).join('|');
   if (!force && key === analysisKey) return;
   analysisKey = key;
   const panel = $('#analysis-body');
   if (!frags.length) {
     panel.innerHTML = '<p class="muted">Select a structure, or draw one, to see its formula and masses.</p>';
-    if (renderer.annotations.size) { renderer.setAnnotations(doc, new Map()); editor.requestScene(); }
     return;
   }
   const seq = ++analysisSeq;
@@ -532,23 +557,58 @@ async function runAnalysis(force: boolean): Promise<void> {
   panel.innerHTML = res.results.map((r, i) => {
     if (r.error) return `<div class="frag"><p class="warn">${escapeHtml(r.error)}</p></div>`;
     const unk = exports[i].unknownLabels;
+    const stereo = stereoSummary(frags[i]);
     return `<div class="frag">
       <div class="formula">${formatFormula(r.formula)}</div>
       <table>
         <tr><th>Exact mass</th><td>${r.exact.toFixed(4)}</td></tr>
         <tr><th>Mol. wt.</th><td>${r.mw.toFixed(2)}</td></tr>
         ${r.charge === 0 ? `<tr><th>[M+H]<sup>+</sup></th><td>${(r.exact + H).toFixed(4)}</td></tr><tr><th>[M+Na]<sup>+</sup></th><td>${(r.exact + NA).toFixed(4)}</td></tr>` : ''}
-        ${r.cip.length ? `<tr><th>Stereo</th><td>${r.cip.map((c) => c[1]).join(', ')}</td></tr>` : ''}
+        ${stereo ? `<tr><th>Stereo</th><td>${escapeHtml(stereo)}</td></tr>` : ''}
       </table>
       <div class="smiles" title="SMILES">${escapeHtml(r.smiles)}</div>
       ${unk.length ? `<p class="warn">Not understood (left out): ${unk.map(escapeHtml).join(', ')}</p>` : ''}
     </div>`;
   }).join('');
-  // stereo labels on the drawing
-  const next = new Map<number, string>();
-  if (stereoBox.checked) for (const r of res.results) for (const [id, l] of r.cip) next.set(id, `(${l})`);
-  if (renderer.annotations.size || next.size) { renderer.setAnnotations(doc, next); editor.requestScene(); }
   updatePanels();
+}
+
+/**
+ * Structure > Show Stereo Labels: shows the R/S and E/Z labels of the selected structures (or of
+ * all of them) as part of the drawing, or hides them when they are all showing already.
+ */
+function toggleStereoLabels(): void {
+  const s = editor.sel;
+  const roots = s.atoms.size || s.bonds.size ? [...s.atoms, ...[...s.bonds].map((id) => doc.bonds.get(id)?.a1 ?? -1)] : [...doc.atoms.keys()];
+  const atoms = new Set<number>();
+  for (const r of roots) if (doc.atoms.has(r) && !atoms.has(r)) for (const id of doc.fragmentOf(r)) atoms.add(id);
+  const bonds = new Set<number>();
+  for (const id of atoms) for (const bid of doc.adj.get(id) ?? []) bonds.add(bid);
+  const labelled = [...atoms].filter((id) => live.atom(id)).map((id) => doc.atoms.get(id)!);
+  const labelledB = [...bonds].filter((id) => live.bond(id)).map((id) => doc.bonds.get(id)!);
+  if (!labelled.length && !labelledB.length) {
+    flash(chem.ready ? 'No stereocentres or E/Z double bonds here.' : 'The chemistry engine is still loading.');
+    return;
+  }
+  const show = ![...labelled, ...labelledB].every((x) => x.showStereo || x.stereoLabel);
+  doc.edit(show ? 'Show stereo labels' : 'Hide stereo labels', () => setStereoShown(doc, atoms, bonds, show));
+  editor.changed();
+  const n = labelled.length + labelledB.length;
+  flash(show ? `Showing ${n} stereo label${n === 1 ? '' : 's'}.` : `Hid ${n} stereo label${n === 1 ? '' : 's'}.`);
+}
+
+/** The R/S and E/Z labels of a structure in reading order, e.g. "R, S; E". */
+function stereoSummary(frag: Set<number>): string {
+  const byPlace = (p: { x: number; y: number }, q: { x: number; y: number }) => p.y - q.y || p.x - q.x;
+  const centres = [...frag].map((id) => doc.atoms.get(id)!).filter((a) => live.atom(a.id)).sort(byPlace).map((a) => live.atom(a.id)!);
+  const dbl: { x: number; y: number; l: string }[] = [];
+  for (const id of frag) for (const bid of doc.adj.get(id) ?? []) {
+    const b = doc.bonds.get(bid)!;
+    const l = b.a1 === id ? live.bond(bid) : null;
+    if (l) { const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!; dbl.push({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2, l }); }
+  }
+  dbl.sort(byPlace);
+  return [centres.join(', '), dbl.map((d) => d.l).join(', ')].filter(Boolean).join('; ');
 }
 
 function formatFormula(f: string): string {
@@ -680,11 +740,17 @@ function updatePanels(): void {
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 
-editor.onFrame = () => { updatePanels(); updateWarnings(); };
-editor.onChange = () => { scheduleAnalysis(); updatePanels(); file.updateTitle(); stylePanel.refresh(); };
+let stereoSeen = -1;
+editor.onFrame = () => {
+  updatePanels();
+  updateWarnings();
+  if (doc.version !== stereoSeen) { stereoSeen = doc.version; updateStereo(); }
+};
+editor.onChange = () => { updateStereo(); scheduleAnalysis(); updatePanels(); file.updateTitle(); stylePanel.refresh(); };
 chem.onReady = () => {
   (window as any).__chemReadyMs = performance.now() - startMs;
   updatePanels();
+  updateStereo();
   scheduleAnalysis(true);
 };
 
@@ -722,7 +788,7 @@ requestAnimationFrame(() => {
 });
 
 // Hooks for the automated speed tests.
-(window as any).__app = { doc, editor, renderer, chem, openText, stressTest, pasteChemistry, sample: sampleMolecule, file, Doc };
+(window as any).__app = { doc, editor, renderer, chem, live, openText, stressTest, pasteChemistry, sample: sampleMolecule, file, Doc };
 
 // ---------------------------------------------------------------- desktop self-test
 

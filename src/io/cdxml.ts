@@ -2,7 +2,7 @@
 // their formatting, arrows, and the common graphics (lines, boxes, circles, brackets,
 // charge symbols). Anything not understood yet is counted and skipped, never fatal.
 
-import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind } from '../model';
+import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel } from '../model';
 import { DocStyle } from '../style';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { DEG } from '../geom';
@@ -124,6 +124,18 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     return n;
   };
 
+  /** A stereo label (ChemDraw's objecttag named "stereo"), placed relative to (ox, oy). */
+  const stereoTag = (tag: Element, ox: number, oy: number): StereoLabel | undefined => {
+    const st = kids(tag).find((k) => k.nodeName === 't');
+    const runs = st ? runsOf(st) : [];
+    const [sx, sy] = pts(st?.getAttribute('p') ?? null);
+    const text = runs.map((r) => r.text).join('');
+    if (!text || !Number.isFinite(sx) || !Number.isFinite(sy) || st!.getAttribute('Visible') === 'no') return undefined;
+    const l: StereoLabel = { text, dx: sx - ox, dy: sy - oy, size: runs[0].size ?? 4.5 };
+    if (runs[0].italic) l.italic = true;
+    return l;
+  };
+
   interface PendingLabel { atom: Atom; text: string; hShown: number | null }
   const pendingLabels: PendingLabel[] = [];
 
@@ -157,16 +169,11 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         if (ch.nodeName === 't') t = ch;
         else if (ch.nodeName === 'objecttag' && ch.getAttribute('Name') === 'stereo') {
           // ChemDraw's (R)/(S) label beside the atom
-          const st = kids(ch).find((k) => k.nodeName === 't');
-          const runs = st ? runsOf(st) : [];
-          const [sx, sy] = pts(st?.getAttribute('p') ?? null);
-          const text = runs.map((r) => r.text).join('');
-          if (text && Number.isFinite(sx) && Number.isFinite(sy) && st!.getAttribute('Visible') !== 'no') {
-            extra.stereoLabel = { text, dx: sx - x, dy: sy - y, size: runs[0].size ?? 4.5 };
-            if (runs[0].italic) extra.stereoLabel.italic = true;
-          }
+          const l = stereoTag(ch, x, y);
+          if (l) extra.stereoLabel = l;
         }
       }
+      if (n.getAttribute('ShowAtomStereo') === 'yes') extra.showStereo = true;
       const atom = doc.addAtom(x, y, z, extra);
       from('a', id, n);
       nodeIds.set(n.getAttribute('id') ?? '', id);
@@ -226,6 +233,14 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       }
       const extra: Partial<Bond> = { id: idFor(b), dpos };
       if (b.getAttribute('IgnoreWarnings') === 'yes') extra.ignoreWarnings = true;
+      if (b.getAttribute('ShowBondStereo') === 'yes') extra.showStereo = true;
+      const tag = kids(b).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === 'stereo');
+      if (tag) {
+        // ChemDraw's (E)/(Z) label by the double bond, kept relative to the bond's middle
+        const p = doc.atoms.get(a1)!, q = doc.atoms.get(a2)!;
+        const l = stereoTag(tag, (p.x + q.x) / 2, (p.y + q.y) / 2);
+        if (l) extra.stereoLabel = l;
+      }
       const lw = b.getAttribute('LineWidth');
       if (lw !== null) extra.s = Number(lw) / st.lineWidth;
       const c = color(b);

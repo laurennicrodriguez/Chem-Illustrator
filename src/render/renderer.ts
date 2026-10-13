@@ -10,9 +10,14 @@ import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arc
 import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
 import type { StructureChecks } from '../chem/warnings';
-import { GENERIC } from '../chem/labels';
+import { isGenericLabel } from '../chem/labels';
 import { bracketPath, shaftOffset, type PathStep } from '../objects';
 import { formulaParts } from '../richtext';
+import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
+import { arialWidth } from '../text-metrics';
+
+/** Colour of the stereo labels previewed with "Show R/S" (not part of the drawing). */
+const PREVIEW_COLOR = '#b4232a';
 
 export const FONT_STACK = "Arial, 'Liberation Sans', Helvetica, sans-serif";
 
@@ -84,8 +89,11 @@ export class Renderer {
 
   private sctx: CanvasRenderingContext2D;
   private octx: CanvasRenderingContext2D;
-  /** Extra text shown beside atoms, e.g. stereo descriptors from the chemistry engine. */
-  annotations = new Map<number, string>();
+  /** Show every R/S and E/Z label the chemistry engine found, in red (a preview; not printed). */
+  previewStereo = false;
+  private placer: StereoPlacer | null = null;
+  private placerDoc: Doc | null = null;
+  private placerKey = '';
   private atomCache = new Map<number, AtomCache>();
   private capBoxes = new WeakMap<Caption, Rect>();
   /** Text size for caption runs that don't give one (the document's caption size). */
@@ -412,16 +420,53 @@ export class Renderer {
     this.dropAllTiles();
   }
 
-  /** Change the stereo labels shown beside atoms, repainting only around them. */
-  setAnnotations(doc: Doc, next: Map<number, string>): void {
-    const rects: Rect[] = [];
-    for (const id of new Set([...this.annotations.keys(), ...next.keys()])) {
-      if (this.annotations.get(id) === next.get(id)) continue;
-      const a = doc.atoms.get(id);
-      if (a) rects.push({ x1: a.x, y1: a.y, x2: a.x, y2: a.y });
+  /**
+   * R/S labels beside atoms and E/Z labels by double bonds: those that are part of the drawing
+   * (shown in black, saved and printed), and with `previewStereo` on, every other one in red
+   * (on screen only).
+   */
+  private drawStereoLabels(ctx: CanvasRenderingContext2D, doc: Doc, atoms: Atom[], bonds: Set<Bond>, curFont: string): string {
+    const info = doc.stereo;
+    const place = this.stereoPlacer(doc);
+    const draw = (text: string, p: PlacedLabel, color: string) => {
+      const f = `${p.italic ? 'italic ' : ''}${p.size}px ${FONT_STACK}`;
+      if (f !== curFont) { ctx.font = f; curFont = f; }
+      ctx.fillStyle = color;
+      ctx.fillText(text, p.x, p.y);
+    };
+    for (const a of atoms) {
+      if (a.attach) continue;
+      const text = atomStereoText(a, info);
+      if (text) draw(text, place.atom(a, text), '#000');
+      else if (this.previewStereo && !a.showStereo && !a.stereoLabel) {
+        const d = info?.atom(a.id);
+        if (d) { const t = `(${d})`; draw(t, place.atom(a, t), PREVIEW_COLOR); }
+      }
     }
-    this.annotations = next;
-    if (rects.length) this.dropTiles(doc, rects);
+    for (const b of bonds) {
+      if (b.order !== 2 && !b.stereoLabel) continue;
+      const text = bondStereoText(b, info);
+      if (text) draw(text, place.bond(b, text), '#000');
+      else if (this.previewStereo && !b.showStereo && !b.stereoLabel) {
+        const d = info?.bond(b.id);
+        if (d) { const t = `(${d})`; draw(t, place.bond(b, t), PREVIEW_COLOR); }
+      }
+    }
+    return curFont;
+  }
+
+  /**
+   * Spots for stereo labels, kept until the drawing or its labels change. They are worked out
+   * with Arial's published widths, as when saving, so a label sits in the file where it was seen.
+   */
+  private stereoPlacer(doc: Doc): StereoPlacer {
+    const key = `${doc.version}|${doc.stereo?.version ?? 0}|${this.previewStereo}`;
+    if (!this.placer || this.placerDoc !== doc || this.placerKey !== key) {
+      this.placer = new StereoPlacer(doc, arialWidth, { preview: this.previewStereo });
+      this.placerDoc = doc;
+      this.placerKey = key;
+    }
+    return this.placer;
   }
 
   private sortedShapes(doc: Doc): Shape[] {
@@ -504,35 +549,9 @@ export class Renderer {
         this.drawCarbonCharge(ctx, doc, a);
       }
       if (checks?.forAtom(a)) warns.push(this.warningBox(doc, a, info));
-      if (a.stereoLabel) {
-        const l = a.stereoLabel;
-        const f = `${l.italic ? 'italic ' : ''}${l.size}px ${FONT_STACK}`;
-        if (f !== curFont) { ctx.font = f; curFont = f; }
-        ctx.fillStyle = '#000';
-        // with "Show stereo" on, the freshly worked-out label replaces the saved one (it may be out of date)
-        ctx.fillText(this.annotations.get(a.id) ?? l.text, a.x + l.dx, a.y + l.dy);
-      }
     }
+    curFont = this.drawStereoLabels(ctx, doc, atoms, bondSet, curFont);
     ctx.fillStyle = '#000';
-
-    if (this.annotations.size) {
-      ctx.fillStyle = '#b4232a';
-      for (const [id, text] of this.annotations) {
-        const a = doc.atoms.get(id);
-        // atoms with a stereo label of their own already show one
-        if (!a || a.stereoLabel || a.x < vis.x1 || a.x > vis.x2 || a.y < vis.y1 || a.y > vis.y2) continue;
-        const size = st.labelSize * 0.75 * (a.s ?? 1);
-        let sx = 0, sy = 0;
-        for (const n of doc.neighbors(a.id)) { const d = norm(sub(n, a)); sx += d.x; sy += d.y; }
-        const away = len({ x: sx, y: sy }) > 0.1 ? norm({ x: -sx, y: -sy }) : { x: 0, y: -1 };
-        ctx.font = `italic ${size}px ${FONT_STACK}`;
-        const w = measureText(text, size, FONT_STACK, 'italic');
-        const r = st.bondLength * 0.45 * (a.s ?? 1);
-        ctx.fillText(text, a.x + away.x * r - w / 2, a.y + away.y * r + size * 0.35);
-      }
-      ctx.fillStyle = '#000';
-      curFont = '';
-    }
 
     for (const r of doc.arrows.values()) {
       const lo = Math.min(r.tail.x, r.head.x), hi = Math.max(r.tail.x, r.head.x);
@@ -989,7 +1008,7 @@ export class Renderer {
   }
 
   isGeneric(a: Atom): boolean {
-    return a.label !== null && GENERIC.has(a.label);
+    return a.label !== null && isGenericLabel(a.label);
   }
 
 }
@@ -1068,7 +1087,7 @@ export function expandRuns(runs: TextRun[], defaultSize: number): Piece[] {
 /** The wavy line marking a point of attachment, centred on `at` and running along `across`. */
 export function attachWave(path: Path2D, at: Vec, across: Vec, bondLength: number): void {
   const half = bondLength * ATTACH_HALF;
-  const waves = 4;
+  const waves = ATTACH_HALF_WAVES;
   const step = (2 * half) / waves;
   const amp = bondLength * ATTACH_AMP;
   const dir = { x: -across.y, y: across.x };
@@ -1084,6 +1103,10 @@ export function attachWave(path: Path2D, at: Vec, across: Vec, bondLength: numbe
 
 const WARN_COLOR = '#e0141e';
 
-/** Half the length and the height of the attachment wave, as fractions of the bond length. */
-const ATTACH_HALF = 0.35;
-const ATTACH_AMP = 0.08;
+/**
+ * Half the length and the height of the attachment wave, as fractions of the bond length, and
+ * its number of half waves (measured in ChemDraw 25: 1.2 bond lengths long, about 12 small waves).
+ */
+const ATTACH_HALF = 0.6;
+const ATTACH_AMP = 0.06;
+const ATTACH_HALF_WAVES = 24;

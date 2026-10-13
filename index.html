@@ -61,6 +61,7 @@
       <div id="structure-menu" class="menu" role="menu" hidden>
         <button role="menuitem" data-cmd="clean-up">Clean Up Structure<kbd>Ctrl+Shift+K</kbd></button>
         <button role="menuitem" data-cmd="check-structure">Check Structure (next warning)</button>
+        <button role="menuitem" data-cmd="stereo-labels">Show Stereo Labels (R/S, E/Z)</button>
       </div>
     </div>
     <span class="sep"></span>
@@ -68,7 +69,7 @@
     <button id="btn-redo" title="Redo (Ctrl+Y)">Redo</button>
     <button id="btn-fit" title="Fit drawing to window (Ctrl+0)">Fit</button>
     <span class="sep"></span>
-    <label class="check" title="Show R/S and E/Z labels from the chemistry engine"><input id="show-stereo" type="checkbox" /> Show R/S</label>
+    <label class="check" title="Preview every R/S and E/Z label in red (on screen only; use Structure &gt; Show Stereo Labels to add them to the drawing)"><input id="show-stereo" type="checkbox" /> Show R/S</label>
     <span class="sep"></span>
     <select id="stress-n" title="How many drug-sized molecules to draw">
       <option value="100">100 molecules</option>
@@ -140,6 +141,12 @@
           <li>Object menu: align, space evenly, flip (<kbd>Ctrl+Shift+H</kbd>, <kbd>Ctrl+Shift+V</kbd>) and rotate; or drag the round handle above a selection to turn it</li>
           <li>Structure menu: Clean Up Structure (<kbd>Ctrl+Shift+K</kbd>) evens out the bonds and angles of the selected structures, or all of them; stereocentres and cis/trans double bonds keep their meaning</li>
         </ul>
+        <h3>Chemistry checks</h3>
+        <ul>
+          <li>Red boxes mark atoms with too many or too few bonds, labels that can't be read, and atoms sitting on top of others. Point at one to see why; the Warnings panel lists them all, with Ignore. Structure &gt; Check Structure goes to the next one. They are never printed, saved or copied</li>
+          <li>R/S and E/Z are worked out for every structure as you draw. Structure &gt; Show Stereo Labels adds them to the selected structures (or all) as part of the drawing; they update by themselves after edits. Select a stereocentre to hide its label or type your own (for example (R*)). The Show R/S box at the top previews every label in red</li>
+          <li>As in ChemDraw, plain bold bonds count as wedges and plain hashed or dashed bonds as hashed wedges; R groups rank above every real atom</li>
+        </ul>
       </div>
       <div>
         <h3>Pointing at empty space</h3>
@@ -157,7 +164,7 @@
         </ul>
         <h3>Not in this prototype yet</h3>
         <ul>
-          <li>Valence warnings, name to structure, pictures</li>
+          <li>Name to structure, pictures</li>
         </ul>
       </div>
     </div>

@@ -2,6 +2,7 @@
 // only the latest analysis (older ones are dropped if the drawing changed meanwhile).
 
 import type { ChemRequest, ChemResponse, FragmentResult } from '../worker/chem-worker';
+import type { StereoTags } from './stereo';
 
 export class ChemClient {
   ready = false;
@@ -63,6 +64,12 @@ export class ChemClient {
 
   analyze(mols: { molblock: string; map: number[] }[]): Promise<{ results: FragmentResult[]; ms: number }> {
     return this.request<Extract<ChemResponse, { type: 'analyze' }>>((id) => ({ type: 'analyze', id, mols }));
+  }
+
+  /** R/S and E/Z labels for some molfiles (see stereoTags). */
+  async stereo(mols: { molblock: string; skip: number[]; generic: [number, string][] }[]): Promise<StereoTags[]> {
+    const r = await this.request<Extract<ChemResponse, { type: 'stereo' }>>((id) => ({ type: 'stereo', id, mols }));
+    return r.results;
   }
 
   async smilesToMol(smiles: string): Promise<string | null> {

@@ -285,7 +285,7 @@ describe('saving a new drawing', () => {
 
   it('writes stereo labels and box styles as ChemDraw does', () => {
     const out = writeCdxml(sample());
-    expect(out).toMatch(/ShowAtomStereo="yes" AS="R"><objecttag TagType="Unknown" PositioningType="offset" PositioningOffset="2.00 -4.00" Name="stereo"><t [^>]*><s [^>]*face="2">\(R\)<\/s>/);
+    expect(out).toMatch(/ShowAtomStereo="yes" AS="R"><objecttag TagType="Unknown" Name="stereo"><t p="([\d.]+) ([\d.]+)"[^>]*><s [^>]*face="2">\(R\)<\/s>/);
     // corner radius and shadow in hundredths of the line width (0.6 here)
     expect(out).toMatch(/RectangleType="RoundEdge" CornerRadius="600"/);
     expect(out).toMatch(/RectangleType="RoundEdge Shadow" CornerRadius="300" ShadowSize="400"/);

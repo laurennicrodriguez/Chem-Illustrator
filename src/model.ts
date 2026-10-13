@@ -30,7 +30,9 @@ export interface Atom {
   hideCharge?: boolean;
   /** Numbers after R groups are superscripts (R¹ rather than R₁). */
   supDigits?: boolean;
-  /** A stereo label kept with the drawing, such as ChemDraw's "(S)", placed relative to the atom. */
+  /** Show this atom's R/S label when it has one (ChemDraw's "Show Stereochemistry"). */
+  showStereo?: boolean;
+  /** Where the stereo label sits (relative to the atom), and its text as saved or typed by hand. */
   stereoLabel?: StereoLabel;
   /** The person chose to ignore this atom's chemistry warnings (ChemDraw's IgnoreWarnings). */
   ignoreWarnings?: boolean;
@@ -49,12 +51,28 @@ export function radicalElectrons(a: Atom): number {
 }
 
 export interface StereoLabel {
+  /** The text saved with the drawing; shown only while the live label isn't known, or when typed by hand. */
   text: string;
-  /** Start of the text's baseline, relative to the atom. */
+  /** Start of the text's baseline, relative to the atom (or to the middle of the bond). */
   dx: number;
   dy: number;
   size: number;
   italic?: boolean;
+  /** Typed by hand: always shows `text` instead of the worked-out label. */
+  manual?: boolean;
+}
+
+/** R/S and E/Z labels worked out for a drawing: a descriptor, null for none, undefined while not known. */
+export interface StereoInfo {
+  atom(id: number): string | null | undefined;
+  bond(id: number): string | null | undefined;
+  /**
+   * True when the rules can't decide an atom's or bond's label because an undefined group (R, Ar,
+   * a label that can't be read) sets the order of its neighbours.
+   */
+  undecided?(kind: 'a' | 'b', id: number): boolean;
+  /** Changes whenever a label does. */
+  readonly version?: number;
 }
 
 export interface Bond {
@@ -70,6 +88,10 @@ export interface Bond {
   s?: number;
   /** The person chose to ignore this bond's chemistry warnings. */
   ignoreWarnings?: boolean;
+  /** Show this double bond's E/Z label when it has one. */
+  showStereo?: boolean;
+  /** Where the E/Z label sits, relative to the middle of the bond. */
+  stereoLabel?: StereoLabel;
 }
 
 export interface TextRun {
@@ -195,6 +217,8 @@ export class Doc {
   background = '#ffffff';
   /** Set when the drawing came from a CDXML file. */
   source: CdxmlSource | null = null;
+  /** Live R/S and E/Z labels from the chemistry engine (not saved, not undone). */
+  stereo: StereoInfo | null = null;
   atoms = new Map<number, Atom>();
   bonds = new Map<number, Bond>();
   captions = new Map<number, Caption>();

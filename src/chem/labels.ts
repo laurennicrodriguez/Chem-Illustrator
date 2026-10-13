@@ -17,6 +17,7 @@ export const NICKNAMES: Record<string, string> = {
   TBS: '[Si](C)(C)C(C)(C)C', TBDMS: '[Si](C)(C)C(C)(C)C', TIPS: '[Si](C(C)C)(C(C)C)C(C)C',
   TBDPS: '[Si](c1ccccc1)(c1ccccc1)C(C)(C)C', PMB: 'Cc1ccc(OC)cc1', MPM: 'Cc1ccc(OC)cc1', MOM: 'COC', MEM: 'COCCOC',
   SEM: 'COCC[Si](C)(C)C', THP: 'C1CCCCO1', Tr: 'C(c1ccccc1)(c1ccccc1)c1ccccc1', Trt: 'C(c1ccccc1)(c1ccccc1)c1ccccc1',
+  MDP: 'c1ccc2OCOc2c1', '3,4-MDP': 'c1ccc2OCOc2c1', '(3,4)-MDP': 'c1ccc2OCOc2c1',
   Cy: 'C1CCCCC1', cHx: 'C1CCCCC1', Mes: 'c1c(C)cc(C)cc1C', Tol: 'c1ccc(C)cc1', 'p-Tol': 'c1ccc(C)cc1', Np: 'c1cccc2ccccc12',
   Ar: '*', Het: '*', CN: 'C#N', NO2: '[N+](=O)[O-]', CF3: 'C(F)(F)F', CCl3: 'C(Cl)(Cl)Cl', N3: 'N=[N+]=[N-]',
   CO2H: 'C(=O)O', COOH: 'C(=O)O', CO2Me: 'C(=O)OC', CO2Et: 'C(=O)OCC', CO2tBu: 'C(=O)OC(C)(C)C', CO2Bn: 'C(=O)OCc1ccccc1',
@@ -28,6 +29,15 @@ export const NICKNAMES: Record<string, string> = {
 
 /** Labels that stand for "any group" and are left out of formula and mass. */
 export const GENERIC = new Set(['R', "R'", "R''", 'R1', 'R2', 'R3', 'R4', 'R5', 'X', 'Z', 'A', 'Q', 'M', 'G', 'E', 'Nu', 'LG', 'PG', 'EWG', 'EDG', 'L', 'Ln']);
+/** Numbered R and Ar groups of any number (R6, R12, Ar1, R1') stand for any group too. */
+const NUMBERED_GENERIC = /^(?:R|Ar)\d+'*/;
+
+/** Does this whole label stand for "any group"? */
+export function isGenericLabel(label: string): boolean {
+  if (GENERIC.has(label)) return true;
+  const m = NUMBERED_GENERIC.exec(label);
+  return !!m && m[0] === label;
+}
 
 // Formula-like entries (CO2Me, NO2, CF3…) are shown as their elements so they can be
 // reversed the ChemDraw way (MeO2C, O2N, F3C); true abbreviations stay whole.
@@ -56,7 +66,9 @@ export function tokenize(label: string): Token[] {
   while (i < label.length) {
     const rest = label.slice(i);
     let tok: Token | null = null;
-    const g = [...GENERIC].filter((x) => rest.startsWith(x) && !/[a-z]/.test(rest[x.length] ?? '')).sort((a, b) => b.length - a.length)[0];
+    let g = [...GENERIC].filter((x) => rest.startsWith(x) && !/[a-z]/.test(rest[x.length] ?? '')).sort((a, b) => b.length - a.length)[0];
+    const num = NUMBERED_GENERIC.exec(rest)?.[0];
+    if (num && !/[a-z]/.test(rest[num.length] ?? '') && (!g || num.length > g.length)) g = num;
     const nick = NICK_NAMES.find((n) => rest.startsWith(n) && !/[a-z]/.test(rest[n.length] ?? ''));
     if (nick && (!g || nick.length >= g.length)) {
       tok = { kind: 'nick', text: nick, count: 1, charge: '' };
@@ -674,7 +686,7 @@ function buildLabel(label: string, ext: number, charge = 0): { g: MiniGraph | nu
   r = { g: null, over: [] };
   let items: Item[] | null = null;
   let nick: string | null = NICKNAMES[label] ? label : null;
-  if (!nick && (GENERIC.has(label) || isElementList(label))) r.g = { atoms: [{ z: 0, charge: 0, aromatic: false, dummy: true }], bonds: [] };
+  if (!nick && (isGenericLabel(label) || isElementList(label))) r.g = { atoms: [{ z: 0, charge: 0, aromatic: false, dummy: true }], bonds: [] };
   else if (!nick && ext === 0 && (items = groupItems(tokenize(label))) && items.length > 1 && 'tok' in items[0] && ALKALI.has(items[0].tok.text) && items[0].tok.count <= 1 && !items[0].tok.charge && !items.slice(1).every(isH)) {
     // a salt written as one label (NaBH4, KOtBu, LiAlH4): the metal cation and the anion, not bonded
     const cation = new LabelBuilder(0);
