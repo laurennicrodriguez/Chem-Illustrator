@@ -114,16 +114,17 @@ export function applyStyle(runs: TextRun[], start: number, end: number, patch: P
 }
 
 /** The change a button makes: off if every character already has it, otherwise on. */
-export function togglePatch(current: RunStyle, key: Toggle): Partial<RunStyle> {
+export function togglePatch(current: RunStyle, key: Toggle, base: RunStyle = {}): Partial<RunStyle> {
   const on = !current[key];
-  if (!on) return { [key]: undefined };
+  // turning a subscript or superscript off goes back to formula style if that is the default
+  if (!on) return key !== 'formula' && POSITION.includes(key) && base.formula ? { [key]: undefined, formula: true } : { [key]: undefined };
   const patch: Partial<RunStyle> = { [key]: true };
   if (POSITION.includes(key)) for (const k of POSITION) if (k !== key) patch[k] = undefined;
   return patch;
 }
 
-export function toggleStyle(runs: TextRun[], start: number, end: number, key: Toggle): TextRun[] {
-  return applyStyle(runs, start, end, togglePatch(commonStyle(runs, start, end), key));
+export function toggleStyle(runs: TextRun[], start: number, end: number, key: Toggle, base: RunStyle = {}): TextRun[] {
+  return applyStyle(runs, start, end, togglePatch(commonStyle(runs, start, end), key, base));
 }
 
 /** A style from ChemDraw's face bits. */

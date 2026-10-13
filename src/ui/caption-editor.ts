@@ -417,11 +417,11 @@ export class CaptionEditor {
     const { start, end } = this.readSelection();
     if (start === end) {
       const cur = { ...rt.typingStyle(this.runs, start, end, this.defaults), ...this.pending };
-      this.pending = { ...this.pending, ...rt.togglePatch(cur, key) };
+      this.pending = { ...this.pending, ...rt.togglePatch(cur, key, this.defaults) };
       this.updateBar();
       return;
     }
-    this.change('style', rt.toggleStyle(this.runs, start, end, key), start, end);
+    this.change('style', rt.toggleStyle(this.runs, start, end, key, this.defaults), start, end);
   }
 
   private setStyle(patch: Partial<rt.RunStyle>): void {

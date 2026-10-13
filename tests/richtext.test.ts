@@ -28,6 +28,11 @@ describe('styled text', () => {
     r = rt.toggleStyle(r, 2, 3, 'sub');
     expect(r).toEqual(runs(['CH', { sup: true }], ['3', { sub: true }]));
   });
+  it('goes back to formula style after a superscript when that is the default', () => {
+    const r = rt.toggleStyle(runs(['Fe3+', { sup: true }]), 0, 4, 'sup', { formula: true });
+    expect(r).toEqual(runs(['Fe3+', { formula: true }]));
+    expect(rt.togglePatch({ sup: true }, 'sup', {})).toEqual({ sup: undefined });
+  });
   it('types in the style of the character before the caret', () => {
     const r = runs(['a', { italic: true }], ['b']);
     expect(rt.typingStyle(r, 1, 1, {})).toEqual({ italic: true });
