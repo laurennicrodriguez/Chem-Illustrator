@@ -9,7 +9,7 @@ page.on('console', (m) => { if (m.type() !== 'log') logs.push(m.type() + ': ' + 
 page.on('pageerror', (e) => logs.push('PAGEERROR: ' + e.message));
 await page.goto(process.env.APP_URL || 'http://localhost:4173/');
 await page.waitForFunction(() => window.__app?.chem.ready, null, { timeout: 20000 });
-await page.click('#btn-new');
+await page.evaluate(() => window.__app.file.newDrawing());
 const box = await page.locator('#overlay').boundingBox();
 const toScreen = (p) => page.evaluate((p) => { const s = window.__app.renderer.toScreen(p); return s; }, p);
 const atomScreen = async (id) => { const s = await page.evaluate((id) => { const a = window.__app.doc.atoms.get(id); return window.__app.renderer.toScreen(a); }, id); return { x: box.x + s.x, y: box.y + s.y }; };

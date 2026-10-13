@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { implicitHydrogens, valenceExceeded, elementNumber } from '../src/chem/elements';
-import { tokenize, labelGraph, labelSpec, layoutLabel } from '../src/chem/labels';
+import { tokenize, labelGraph, labelSpec, layoutLabel, kekulize, parseSmiles } from '../src/chem/labels';
 import { formulaFromJson } from '../src/chem/formula';
 import { Doc } from '../src/model';
 import { toMolfile } from '../src/chem/molfile';
@@ -62,6 +62,21 @@ describe('labels', () => {
     expect(left.runs.map((r) => r.text).join('')).toBe('HO');
     expect(left.runs.find((r) => r.text === 'H')!.dx).toBeLessThan(0);
   });
+  it('keeps labels that are not formulas in reading order', () => {
+    const measure = (t: string, s: number) => t.length * s * 0.6;
+    // "(3,4)" digits are not counts, and the hyphen is not a charge
+    expect(tokenize('(3,4)-MDP').every((t) => t.count === 1 && !t.charge)).toBe(true);
+    expect(tokenize('N+')[0].charge).toBe('+');
+    expect(tokenize('(CH2)3').pop()).toMatchObject({ text: ')', count: 3 });
+    // bond to the right: the text keeps its order and ends with its last letter on the atom
+    const mdp = layoutLabel(labelSpec(6, '(3,4)-MDP', 0, 0, 1, 1)!, [{ x: 1, y: 0 }], 10, measure);
+    expect(mdp.runs.map((r) => r.text).join('')).toBe('(3,4)-MDP');
+    expect(Math.max(...mdp.boxes.map((b) => b.x2))).toBeCloseTo(3);
+    expect(mdp.runs.every((r) => r.size === 10)).toBe(true);
+    // formulas are still reversed
+    const oet = layoutLabel(labelSpec(6, 'OEt', 0, 0, 1, 1)!, [{ x: 1, y: 0 }], 10, measure);
+    expect(oet.runs.map((r) => r.text).join('')).toBe('EtO');
+  });
   it('shows no label for plain carbon in a chain', () => {
     expect(labelSpec(6, null, 0, 0, 2, 2)).toBeNull();
   });
@@ -120,5 +135,35 @@ describe('CDXML helpers', () => {
     expect(isAutoLabel(8, 'HO', 1)).toBe(true);
     expect(isAutoLabel(7, 'H2N', 2)).toBe(true);
     expect(isAutoLabel(7, 'NHBoc', 1)).toBe(false);
+  });
+});
+
+describe('alternating double bonds for aromatic rings', () => {
+  const doubles = (smi: string) => {
+    const g = parseSmiles(smi);
+    const bonds = kekulize(g);
+    const count = new Map<number, number>();
+    for (const b of bonds) if (b.order === 2) for (const x of [b.a, b.b]) count.set(x, (count.get(x) ?? 0) + 1);
+    return { bonds, count, g };
+  };
+
+  it('gives each ring carbon of a phenyl one double bond', () => {
+    const { bonds, count } = doubles('*c1ccccc1');
+    expect(bonds.filter((b) => b.order === 2).length).toBe(3);
+    expect(bonds.some((b) => b.order === 1.5)).toBe(false);
+    for (let i = 1; i <= 6; i++) expect(count.get(i)).toBe(1);
+  });
+
+  it('handles pyridine, furan and naphthalene', () => {
+    expect(doubles('*c1ccncc1').bonds.filter((b) => b.order === 2).length).toBe(3);
+    const fur = doubles('*c1ccco1');
+    expect(fur.bonds.filter((b) => b.order === 2).length).toBe(2);
+    expect(fur.count.get(5)).toBeUndefined(); // the oxygen keeps single bonds
+    expect(doubles('*c1ccc2ccccc2c1').bonds.filter((b) => b.order === 2).length).toBe(5);
+  });
+
+  it('leaves bonds alone when there is nothing to change', () => {
+    const g = parseSmiles('*CC(=O)O');
+    expect(kekulize(g)).toBe(g.bonds);
   });
 });

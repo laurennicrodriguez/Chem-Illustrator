@@ -6,7 +6,7 @@
 // and bond and only recomputed near what changed.
 
 import { Doc, Atom, Bond, Arrow, Caption, Shape, TextRun } from '../model';
-import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf } from '../geom';
+import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
 import { valenceExceeded } from '../chem/elements';
@@ -37,20 +37,35 @@ interface BondCache {
   trim2: number;
 }
 
-const measureCanvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(8, 8) : null;
-const mctx = (measureCanvas?.getContext('2d') ?? document.createElement('canvas').getContext('2d')) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+let mctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
 const widthCache = new Map<string, number>();
 
-/** Width in points of `text` at `size` points (measured once at 100 px for precision). */
-export function measureText(text: string, size: number, font = FONT_STACK, style = ''): number {
+export type TextMeasure = (text: string, size: number, font: string, style: string) => number;
+
+/** Width with the fonts on this computer (measured once at 100 px for precision). */
+const screenMeasure: TextMeasure = (text, size, font, style) => {
   const key = style + '|' + font + '|' + text;
   let w = widthCache.get(key);
   if (w === undefined) {
+    mctx ??= (typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(8, 8).getContext('2d') : document.createElement('canvas').getContext('2d'))!;
     mctx.font = `${style} 100px ${font}`;
     w = mctx.measureText(text).width / 100;
     widthCache.set(key, w);
   }
   return w * size;
+};
+let measureImpl = screenMeasure;
+
+/** Width in points of `text` at `size` points. */
+export function measureText(text: string, size: number, font = FONT_STACK, style = ''): number {
+  return measureImpl(text, size, font, style);
+}
+
+/** Run `fn` with another way of measuring text (pictures use Arial's published widths). */
+export function withMeasure<T>(m: TextMeasure, fn: () => T): T {
+  const old = measureImpl;
+  measureImpl = m;
+  try { return fn(); } finally { measureImpl = old; }
 }
 
 export class Renderer {
@@ -59,6 +74,8 @@ export class Renderer {
   width = 0;
   height = 0;
   showWarnings = true;
+  /** Makes the paths bonds are collected in (pictures record them instead of drawing). */
+  makePath: () => Path2D = () => new Path2D();
   /** Last scene paint time in ms (for the speed readout). */
   lastSceneMs = 0;
 
@@ -398,6 +415,14 @@ export class Renderer {
     return this.shapeList;
   }
 
+  /** Draw the whole drawing into another context (for pictures), in document coordinates. */
+  drawDocument(ctx: CanvasRenderingContext2D, doc: Doc): void {
+    const b = doc.bounds();
+    if (!b) return;
+    const pad = this.pad(doc);
+    this.drawContent(ctx, doc, { x1: b.x1 - pad, y1: b.y1 - pad, x2: b.x2 + pad, y2: b.y2 + pad });
+  }
+
   /** Draw everything that falls inside `vis` (document coordinates) with the current transform. */
   private drawContent(ctx: CanvasRenderingContext2D, doc: Doc, vis: Rect): void {
     const st = doc.style;
@@ -423,13 +448,13 @@ export class Renderer {
       if (b.color) { colored.push(b); continue; }
       const k = b.s ?? 1;
       let bb = batches.get(k);
-      if (!bb) { bb = newBatch(); batches.set(k, bb); }
+      if (!bb) { bb = newBatch(this.makePath); batches.set(k, bb); }
       this.bondPaths(doc, b, p, q, bb);
     }
     for (const [k, bb] of batches) this.strokeBatch(ctx, bb, k, st.lineWidth, st.boldWidth, '#000');
     for (const b of colored) {
       const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
-      const bb = newBatch();
+      const bb = newBatch(this.makePath);
       this.bondPaths(doc, b, p, q, bb);
       this.strokeBatch(ctx, bb, b.s ?? 1, st.lineWidth, st.boldWidth, b.color!);
     }
@@ -452,6 +477,14 @@ export class Renderer {
         this.drawCarbonCharge(ctx, doc, a);
       }
       if (info.warn) warns.push(info.boxes[0] ?? { x1: a.x - 3, y1: a.y - 3, x2: a.x + 3, y2: a.y + 3 });
+      if (a.stereoLabel) {
+        const l = a.stereoLabel;
+        const f = `${l.italic ? 'italic ' : ''}${l.size}px ${FONT_STACK}`;
+        if (f !== curFont) { ctx.font = f; curFont = f; }
+        ctx.fillStyle = '#000';
+        // with "Show stereo" on, the freshly worked-out label replaces the saved one (it may be out of date)
+        ctx.fillText(this.annotations.get(a.id) ?? l.text, a.x + l.dx, a.y + l.dy);
+      }
     }
     ctx.fillStyle = '#000';
 
@@ -459,7 +492,8 @@ export class Renderer {
       ctx.fillStyle = '#b4232a';
       for (const [id, text] of this.annotations) {
         const a = doc.atoms.get(id);
-        if (!a || a.x < vis.x1 || a.x > vis.x2 || a.y < vis.y1 || a.y > vis.y2) continue;
+        // atoms with a stereo label of their own already show one
+        if (!a || a.stereoLabel || a.x < vis.x1 || a.x > vis.x2 || a.y < vis.y1 || a.y > vis.y2) continue;
         const size = st.labelSize * 0.75 * (a.s ?? 1);
         let sx = 0, sy = 0;
         for (const n of doc.neighbors(a.id)) { const d = norm(sub(n, a)); sx += d.x; sy += d.y; }
@@ -637,11 +671,22 @@ export class Renderer {
     ctx.beginPath();
     switch (s.kind) {
       case 'line': ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); ctx.stroke(); break;
-      case 'rect':
-        if (s.rounded) ctx.roundRect(x, y, w, h, Math.min(w, h) * 0.15);
-        else ctx.rect(x, y, w, h);
-        if (s.shadow && !s.filled) { ctx.save(); ctx.fillStyle = '#00000040'; ctx.fillRect(x + 2, y + 2, w, h); ctx.restore(); ctx.fillStyle = '#fff'; ctx.fill(); }
-        if (s.filled) ctx.fill(); else ctx.stroke();
+      case 'rect': {
+        // ChemDraw's defaults: corners of six line widths, a light grey shadow of four
+        const r = s.rounded ? Math.min(s.radius ?? 6 * lw, w / 2, h / 2) : 0;
+        if (s.shadow) {
+          // the shadow shows only where it sticks out, so anything under the box stays visible
+          const d = s.shadowSize ?? 4 * lw;
+          ctx.save();
+          ctx.fillStyle = '#c0c0c0';
+          ctx.beginPath();
+          shadowBand(ctx, x, y, w, h, r, d);
+          ctx.fill();
+          ctx.restore();
+          ctx.beginPath();
+        }
+        ctx.roundRect(x, y, w, h, r);
+        if (s.filled) { ctx.fillStyle = s.color ?? '#000'; ctx.fill(); } else ctx.stroke();
         if (s.picture) {
           ctx.fillStyle = '#eef1f5';
           ctx.fillRect(x, y, w, h);
@@ -650,6 +695,7 @@ export class Renderer {
           ctx.fillText('picture', x + 2, y + Math.min(10, h * 0.3) + 1);
         }
         break;
+      }
       case 'oval':
         ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
         if (s.filled) ctx.fill(); else ctx.stroke();
@@ -759,14 +805,8 @@ export class Renderer {
 
   private arcArrow(ctx: CanvasRenderingContext2D, r: Arrow, tail: Vec, head: Vec): void {
     // Circle through tail and head with the given sweep.
-    const chord = sub(head, tail);
-    const c = len(chord);
     const sweep = r.sweep;
-    const radius = c / (2 * Math.sin(Math.abs(sweep) / 2));
-    const mid = mul(add(tail, head), 0.5);
-    const h = Math.sqrt(Math.max(0, radius * radius - (c / 2) * (c / 2)));
-    const n = norm(perp(chord));
-    const center = add(mid, mul(n, (sweep > 0 ? 1 : -1) * (Math.abs(sweep) > Math.PI ? -h : h)));
+    const { center, radius } = arcCenter(tail, head, sweep);
     const a0 = angleOf(sub(tail, center));
     const a1 = angleOf(sub(head, center));
     ctx.beginPath();
@@ -891,9 +931,47 @@ const MAX_TILES = 600;
 
 interface Tile { canvas: OffscreenCanvas | HTMLCanvasElement; tx: number; ty: number }
 
+/**
+ * The part of a box's shadow that sticks out below and to the right: the box shifted by `d`,
+ * minus the box itself (corners of radius `r`).
+ */
+function shadowBand(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number, d: number): void {
+  const R = x + w, B = y + h;
+  if (r >= d && r > 0) {
+    // the two rounded outlines cross near the top-right and bottom-left corners
+    const t = Math.sqrt(r * r - (d * d) / 2) / Math.SQRT2;
+    const c1 = { x: R - r, y: y + r }, c3 = { x: x + r, y: B - r };
+    const i1 = { x: c1.x + d / 2 + t, y: c1.y + d / 2 - t }, i2 = { x: c3.x + d / 2 - t, y: c3.y + d / 2 + t };
+    const ang = (p: Vec, c: Vec) => Math.atan2(p.y - c.y, p.x - c.x);
+    ctx.moveTo(i1.x, i1.y);
+    ctx.arc(c1.x + d, c1.y + d, r, ang(i1, { x: c1.x + d, y: c1.y + d }), 0);
+    ctx.lineTo(R + d, B - r + d);
+    ctx.arc(R - r + d, B - r + d, r, 0, Math.PI / 2);
+    ctx.lineTo(c3.x + d, B + d);
+    ctx.arc(c3.x + d, c3.y + d, r, Math.PI / 2, ang(i2, { x: c3.x + d, y: c3.y + d }));
+    ctx.arc(c3.x, c3.y, r, ang(i2, c3), Math.PI / 2, true);
+    ctx.lineTo(R - r, B);
+    ctx.arc(R - r, B - r, r, Math.PI / 2, 0, true);
+    ctx.lineTo(R, y + r);
+    ctx.arc(c1.x, c1.y, r, 0, ang(i1, c1), true);
+  } else {
+    ctx.moveTo(R, y + d);
+    ctx.lineTo(R + d - r, y + d);
+    ctx.arc(R + d - r, y + d + r, r, -Math.PI / 2, 0);
+    ctx.lineTo(R + d, B + d - r);
+    ctx.arc(R + d - r, B + d - r, r, 0, Math.PI / 2);
+    ctx.lineTo(x + d + r, B + d);
+    ctx.arc(x + d + r, B + d - r, r, Math.PI / 2, Math.PI);
+    ctx.lineTo(x + d, B);
+    ctx.lineTo(R - r, B);
+    ctx.arc(R - r, B - r, r, Math.PI / 2, 0, true);
+  }
+  ctx.closePath();
+}
+
 interface BondBatch { thin: Path2D; bold: Path2D; dashed: Path2D; fills: Path2D }
-function newBatch(): BondBatch {
-  return { thin: new Path2D(), bold: new Path2D(), dashed: new Path2D(), fills: new Path2D() };
+function newBatch(mk: () => Path2D): BondBatch {
+  return { thin: mk(), bold: mk(), dashed: mk(), fills: mk() };
 }
 
 interface Piece { text: string; w: number; dy: number; font: string; size: number; color?: string; underline?: boolean }

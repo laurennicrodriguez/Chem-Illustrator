@@ -21,13 +21,15 @@
   "devDependencies": {
     "@playwright/test": "^1.56.1",
     "@tauri-apps/cli": "~2.12.1",
+    "jsdom": "^27.4.0",
     "typescript": "^5.9.3",
     "vite": "^7.1.12",
     "vitest": "^4.1.11"
   },
   "dependencies": {
     "@rdkit/rdkit": "^2026.9.1",
-    "@tauri-apps/api": "~2.12.1"
+    "@tauri-apps/api": "~2.12.1",
+    "@tauri-apps/plugin-dialog": "~2.8.2"
   },
   "private": true,
   "type": "module",

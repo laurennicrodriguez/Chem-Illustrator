@@ -29,6 +29,17 @@ export interface Atom {
   hideCharge?: boolean;
   /** Numbers after R groups are superscripts (R¹ rather than R₁). */
   supDigits?: boolean;
+  /** A stereo label kept with the drawing, such as ChemDraw's "(S)", placed relative to the atom. */
+  stereoLabel?: StereoLabel;
+}
+
+export interface StereoLabel {
+  text: string;
+  /** Start of the text's baseline, relative to the atom. */
+  dx: number;
+  dy: number;
+  size: number;
+  italic?: boolean;
 }
 
 export interface Bond {
@@ -103,7 +114,11 @@ export interface Shape {
   dashed?: boolean;
   filled?: boolean;
   rounded?: boolean;
+  /** Corner radius of a rounded box, in points (ChemDraw's default is six line widths). */
+  radius?: number;
   shadow?: boolean;
+  /** How far a box's shadow sticks out, in points (ChemDraw's default is four line widths). */
+  shadowSize?: number;
   bold?: boolean;
   symbol?: string;
   bracket?: 'square' | 'round' | 'curly';
@@ -115,8 +130,23 @@ export interface Shape {
   z?: number;
 }
 
-type Entity = Atom | Bond | Caption | Arrow | Shape;
-type Kind = 'a' | 'b' | 'c' | 'r' | 's';
+export type Entity = Atom | Bond | Caption | Arrow | Shape;
+/** One letter per entity type: atom, bond, caption, arrow (r), shape. */
+export type Kind = 'a' | 'b' | 'c' | 'r' | 's';
+
+/**
+ * The CDXML file a drawing was opened from. Saving rewrites only what changed and keeps
+ * everything else (including objects this program cannot draw yet) exactly as it was.
+ */
+export interface CdxmlSource {
+  text: string;
+  /** Entity key (kind + id) → position of its element among all elements of the file. */
+  ord: Map<string, number>;
+  /** Each entity as it was read, to tell what changed. */
+  orig: Map<string, Entity>;
+  /** Highest object id used anywhere in the file. */
+  maxId: number;
+}
 
 interface UndoEntry {
   label: string;
@@ -138,6 +168,8 @@ export class Doc {
   style: DocStyle = { ...ACS_1996 };
   /** Page colour. */
   background = '#ffffff';
+  /** Set when the drawing came from a CDXML file. */
+  source: CdxmlSource | null = null;
   atoms = new Map<number, Atom>();
   bonds = new Map<number, Bond>();
   captions = new Map<number, Caption>();
@@ -168,6 +200,11 @@ export class Doc {
 
   newId(): number {
     return this.nextId++;
+  }
+
+  /** Make sure new ids are above `id` (ids used by a file for things not in the model). */
+  reserveIds(id: number): void {
+    if (id >= this.nextId) this.nextId = id + 1;
   }
 
   // ---------------------------------------------------------------- transactions
@@ -550,6 +587,8 @@ export class Doc {
   loadFrom(other: Doc): void {
     this.style = { ...other.style };
     this.background = other.background;
+    this.source = other.source;
+    this.nextId = Math.max(this.nextId, other.nextId);
     this.atoms.clear(); this.bonds.clear(); this.captions.clear(); this.arrows.clear(); this.shapes.clear();
     this.adj.clear(); this.grid.clear(); this.atomCell.clear(); this.maxBondLen = 0;
     for (const a of other.atoms.values()) this.rawSet('a', a.id, clone(a));

@@ -78,6 +78,36 @@ button, select {
   cursor: pointer;
 }
 button:hover { border-color: var(--accent); }
+.menu-wrap { position: relative; }
+.menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  min-width: 230px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+.menu[hidden] { display: none; }
+.menu button {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  border: 0;
+  border-radius: 5px;
+  padding: 5px 8px;
+  text-align: left;
+  background: transparent;
+}
+.menu button[hidden] { display: none; }
+.menu button:hover, .menu button:focus-visible { background: var(--accent-soft); outline: none; }
+.menu kbd { font: 11px var(--mono-font); color: var(--muted); }
+.menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; width: auto; }
 button:focus-visible, select:focus-visible, #overlay:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 aside td { font-family: var(--mono-font); font-size: 12px; }
 @media (prefers-reduced-motion: reduce) { #flash { transition: none; } }
