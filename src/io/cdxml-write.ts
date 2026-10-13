@@ -876,9 +876,10 @@ class CdxmlWriter {
   }
 
   /**
-   * A picture as ChemDraw keeps it: its place, and a PNG copy (when the picture changed, the
-   * Windows metafiles ChemDraw kept beside the old one go). ChemDraw has no cropping, so files
-   * show the whole picture. False when there is nothing ChemDraw could show.
+   * A picture as ChemDraw keeps it: its place, and the picture itself (PNG, JPEG, GIF, BMP or a
+   * Windows metafile; when the picture changed, the copies ChemDraw kept beside the old one go).
+   * ChemDraw has no cropping, so files show the whole picture. False when there is nothing
+   * ChemDraw could show.
    */
   private fillPicture(e: Element, s: Shape, replace: boolean): boolean {
     this.set(e, 'BoundingBox', box({ x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) }));
@@ -887,16 +888,17 @@ class CdxmlWriter {
       for (const k of ['WindowsMetafile', 'EnhancedMetafile', 'PNG', 'GIF', 'JPEG', 'TIFF', 'BMP', 'OLEObject', 'MacPICT', 'CompressedWindowsMetafile', 'CompressedEnhancedMetafile', 'CompressedOLEObject', 'UncompressedWindowsMetafileSize', 'UncompressedEnhancedMetafileSize', 'UncompressedOLEObjectSize', OWN_PICTURE]) e.removeAttribute(k);
       try {
         const { mime, bytes } = fromDataUrl(s.src);
-        if (mime === 'image/png') {
-          let hex = '';
-          for (const b of bytes) hex += (b < 16 ? '0' : '') + b.toString(16);
-          this.set(e, 'PNG', hex.toUpperCase());
+        const attr = ({ 'image/png': 'PNG', 'image/jpeg': 'JPEG', 'image/gif': 'GIF', 'image/bmp': 'BMP', 'image/x-emf': 'EnhancedMetafile' } as Record<string, string>)[mime];
+        if (attr) {
+          const hex: string[] = [];
+          for (const b of bytes) hex.push((b < 16 ? '0' : '') + b.toString(16));
+          this.set(e, attr, hex.join('').toUpperCase());
           png = true;
         }
       } catch {
         // not a picture this program made; nothing to write
       }
-    } else png = e.hasAttribute('PNG') || e.hasAttribute('EnhancedMetafile') || e.hasAttribute('WindowsMetafile');
+    } else png = ['PNG', 'JPEG', 'GIF', 'BMP', 'EnhancedMetafile', 'WindowsMetafile'].some((k) => e.hasAttribute(k));
     if (this.opts.own) {
       if (s.src && !png) this.set(e, OWN_PICTURE, s.src);
       const c = s.crop;

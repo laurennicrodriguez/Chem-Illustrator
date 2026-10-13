@@ -10,6 +10,7 @@ import { DEG } from '../geom';
 import { kids, descendants } from './xml';
 import { styleFromFace, isSymbolFont, fromSymbolFont } from '../richtext';
 import { dataUrl, fromDataUrl, imageSize } from '../render/images';
+import { emfToSvg } from '../render/emf-read';
 
 export interface ReadStats {
   atoms: number;
@@ -519,9 +520,21 @@ function pictureOf(el: Element): { src: string; px: { w: number; h: number }; cr
       // fall back to the PNG
     }
   }
-  const hex = el.getAttribute('PNG');
-  if (!hex || hex.length < 48 || !/^[0-9a-f]+$/i.test(hex.slice(0, 64))) return null;
-  const bytes = new Uint8Array(hex.length >> 1);
-  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
-  return { src: dataUrl(bytes, 'image/png'), px: imageSize(bytes, 'image/png') ?? { w: 100, h: 100 }, crop };
+  const hexBytes = (name: string): Uint8Array | null => {
+    const hex = el.getAttribute(name);
+    if (!hex || hex.length < 48 || !/^[0-9a-f]+$/i.test(hex.slice(0, 64))) return null;
+    const bytes = new Uint8Array(hex.length >> 1);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+    return bytes;
+  };
+  const picture = (bytes: Uint8Array, mime: string) => ({ src: dataUrl(bytes, mime), px: imageSize(bytes, mime) ?? { w: 100, h: 100 }, crop });
+  // a Windows metafile with lines and text (a chart or spectrum) is sharper than ChemDraw's PNG copy of it
+  const emf = hexBytes('EnhancedMetafile');
+  const drawn = emf ? emfToSvg(emf) : null;
+  if (emf && drawn && drawn.vectors > 0) return picture(emf, 'image/x-emf');
+  for (const [name, mime] of [['PNG', 'image/png'], ['JPEG', 'image/jpeg'], ['GIF', 'image/gif'], ['BMP', 'image/bmp']]) {
+    const bytes = hexBytes(name);
+    if (bytes) return picture(bytes, mime);
+  }
+  return emf && drawn ? picture(emf, 'image/x-emf') : null;
 }

@@ -35,7 +35,7 @@ EXT_MIME.tif = 'image/tiff';
 export { imageSize };
 
 /** Picture types a web page can show. */
-export const SHOWABLE = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/svg+xml', 'image/bmp', 'image/webp']);
+export const SHOWABLE = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/svg+xml', 'image/bmp', 'image/webp', 'image/x-emf']);
 
 // ---------------------------------------------------------------- positions
 
@@ -442,7 +442,7 @@ class Reader {
     const bytes = this.r.bytes(target);
     if (!bytes) return null;
     const mime = EXT_MIME[target.split('.').pop()!.toLowerCase()] ?? 'application/octet-stream';
-    if (!SHOWABLE.has(mime)) this.warnings.add('Some pictures (Windows EMF or WMF, or TIFF) can\'t be shown here yet; they are kept and saved back as they were.');
+    if (!SHOWABLE.has(mime)) this.warnings.add('Some pictures (old Windows WMF metafiles, or TIFF) can\'t be shown here yet; they are kept and saved back as they were.');
     const src = kid(pic, 'blipFill', 'srcRect');
     const f = (k: string) => Math.max(0, Number(src?.getAttribute(k) ?? 0) / 100000);
     const crop = src ? { l: f('l'), t: f('t'), r: f('r'), b: f('b') } : null;

@@ -2,6 +2,7 @@
 
 import { Item, Seg, ImageItem } from './vector';
 import { EmfBox } from './emf';
+import { showableSrc } from './images';
 
 const n = (v: number): string => String(Math.round(v * 100) / 100);
 
@@ -14,7 +15,9 @@ const esc = (t: string): string => t.replace(/&/g, '&amp;').replace(/</g, '&lt;'
 let clipCount = 0;
 
 /** A picture, cropped by drawing it larger inside a clip (SVG's way of showing part of an image). */
-function svgImage(it: ImageItem): string {
+function svgImage(item: ImageItem): string {
+  // a Windows metafile goes in as its SVG copy (an SVG viewer can't show EMF)
+  const it = { ...item, src: showableSrc(item.src) ?? item.src };
   const c = it.crop;
   if (!c || !(c.l || c.t || c.r || c.b)) {
     return `<image x="${n(it.x)}" y="${n(it.y)}" width="${n(it.w)}" height="${n(it.h)}" preserveAspectRatio="none" href="${esc(it.src)}"/>`;

@@ -20,6 +20,7 @@ import { writeCdxml } from './cdxml-write';
 import { cdxmlToCdx, cdxToCdxml } from './cdx';
 import { measureText } from '../render/renderer';
 import { recordPicture, pictureEmf, pictureCanvas, canvasPng, canvasDib } from '../render/picture';
+import { emfToSvg } from '../render/emf-read';
 
 /** Our own clipboard format: the drawing as CDXML text. */
 export const OWN_FORMAT = 'Chem Illustrator CDXML';
@@ -331,6 +332,10 @@ export async function readNativeClipboard(): Promise<Pasted> {
   const t = await nativeFirst(['CF_UNICODETEXT']);
   const text = t ? new TextDecoder().decode(t[1]).replace(/\0+$/, '') : '';
   if (looksLikeChemistry(text)) return fromText(text);
+  // a metafile with lines and text (a spectrum or chart from MestReNova or Excel) stays sharp, so it
+  // beats a PNG of the same thing; a metafile that only wraps a photo, or can't be shown, does not
+  const emf = await nativeFirst(['CF_ENHMETAFILE']);
+  if (emf && (emfToSvg(emf[1])?.vectors ?? 0) > 0) return { kind: 'picture', mime: 'image/x-emf', bytes: emf[1] };
   const pic = await nativeFirst(['PNG', 'image/svg+xml', 'CF_ENHMETAFILE', 'CF_DIB']);
   if (pic) {
     const [name, data] = pic;

@@ -1,6 +1,9 @@
 // Pictures on the page: each image is decoded once and kept, keyed by its data. Drawing asks
 // for an image and gets it when it is ready; until then the picture shows as a grey box, and
-// a redraw is asked for when it arrives.
+// a redraw is asked for when it arrives. Windows metafiles (EMF, from MestReNova, Excel and
+// Office) are kept as they are, and shown through an SVG copy so they stay sharp.
+
+import { emfToSvg, emfSize } from './emf-read';
 
 interface Entry { img: HTMLImageElement; ready: boolean; failed: boolean }
 
@@ -10,6 +13,24 @@ const listeners: (() => void)[] = [];
 /** Call `fn` whenever a picture finishes loading (to redraw). */
 export function onImageReady(fn: () => void): void {
   listeners.push(fn);
+}
+
+const shown = new Map<string, string | null>();
+
+/** What a browser can show for a picture: EMF pictures become SVG (null when that can't be done). */
+export function showableSrc(src: string): string | null {
+  if (!src.startsWith('data:image/x-emf')) return src;
+  let s = shown.get(src);
+  if (s === undefined) {
+    try {
+      const svg = emfToSvg(fromDataUrl(src).bytes);
+      s = svg ? dataUrl(new TextEncoder().encode(svg.svg), 'image/svg+xml') : null;
+    } catch {
+      s = null;
+    }
+    shown.set(src, s);
+  }
+  return s;
 }
 
 /** The decoded image, or null while it loads (or when it can't be shown). */
@@ -23,7 +44,8 @@ export function imageFor(src: string): HTMLImageElement | null {
     const entry = e;
     img.onload = () => { entry.ready = true; for (const f of listeners) f(); };
     img.onerror = () => { entry.failed = true; };
-    img.src = src;
+    const s = showableSrc(src);
+    if (s) img.src = s; else entry.failed = true;
   }
   return e.ready ? e.img : null;
 }
@@ -42,7 +64,8 @@ export function loadImage(src: string): Promise<HTMLImageElement> {
       resolve(img);
     };
     img.onerror = () => reject(new Error('This picture could not be read'));
-    img.src = src;
+    const s = showableSrc(src);
+    if (s) img.src = s; else reject(new Error('This picture could not be read'));
   });
 }
 
@@ -104,7 +127,10 @@ export function imageSize(b: Uint8Array, mime: string): { w: number; h: number }
         i += 2 + dv.getUint16(i + 2);
       }
     }
-    if (mime === 'image/x-emf' && b.length > 24) {
+    if (mime === 'image/x-emf' && b.length > 40) {
+      // its intended size (the frame, in hundredths of a millimetre), as pixels at 96 per inch
+      const pt = emfSize(b);
+      if (pt) return { w: Math.round(pt.w / 0.75), h: Math.round(pt.h / 0.75) };
       const w = dv.getInt32(16, true) - dv.getInt32(8, true), h = dv.getInt32(20, true) - dv.getInt32(12, true);
       if (w > 0 && h > 0) return { w, h };
     }

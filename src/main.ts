@@ -22,7 +22,7 @@ import { SlideList } from './ui/slide-list';
 import { Presenter } from './ui/present';
 import { editMaster } from './ui/master-dialog';
 import { recordPicture, pictureSvg, pictureCanvas, canvasPng } from './render/picture';
-import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime } from './render/images';
+import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc } from './render/images';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
 import { StylePanel } from './ui/style-panel';
@@ -863,7 +863,7 @@ function placePicture(bytes: Uint8Array, mime: string, at: { x: number; y: numbe
   });
   editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set([made!.id]) };
   editor.changed();
-  if (mime === 'image/x-emf' || mime === 'image/tiff') flash('This kind of picture shows as a grey box here for now; it is kept, and saved with the file.', 8000);
+  if (mime === 'image/tiff' || mime === 'image/x-wmf' || !showableSrc(made!.src ?? '')) flash('This kind of picture shows as a grey box here for now; it is kept, and saved with the file.', 8000);
 }
 
 /** Insert > Crop Picture: the selected picture's handles cut its edges off until Esc or a click elsewhere. */
@@ -977,7 +977,7 @@ async function pdfImage(src: string): Promise<PdfImage | null> {
     const info = jpegInfo(bytes);
     if (info) return { kind: 'jpeg', bytes, ...info };
   }
-  if (mime === 'image/x-emf' || mime === 'image/x-wmf' || mime === 'image/tiff') return null;
+  if (mime === 'image/x-wmf' || mime === 'image/tiff') return null;
   let img: HTMLImageElement;
   try {
     img = await loadImage(src);
@@ -985,8 +985,8 @@ async function pdfImage(src: string): Promise<PdfImage | null> {
     return null;
   }
   let w = img.naturalWidth || 300, h = img.naturalHeight || 150;
-  // a drawing in SVG has no pixels of its own: make plenty so it prints sharply
-  if (mime === 'image/svg+xml') { const k = 3000 / Math.max(w, h); w *= k; h *= k; }
+  // a drawing in SVG (or a Windows metafile, shown as SVG) has no pixels of its own: make plenty so it prints sharply
+  if (mime === 'image/svg+xml' || mime === 'image/x-emf') { const k = 3000 / Math.max(w, h); w *= k; h *= k; }
   const k = Math.min(1, Math.sqrt(16e6 / (w * h)));
   w = Math.max(1, Math.round(w * k));
   h = Math.max(1, Math.round(h * k));

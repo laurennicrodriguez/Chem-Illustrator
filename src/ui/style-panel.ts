@@ -138,7 +138,8 @@ export class StylePanel {
     const set = (label: string, patch: (x: Shape) => Partial<Shape>) => this.edit(label, () => { for (const x of pics) this.doc.updateShape(x.id, patch(x)); });
     const box = (x: Shape) => ({ x1: Math.min(x.x1, x.x2), y1: Math.min(x.y1, x.y2), w: Math.abs(x.x2 - x.x1), h: Math.abs(x.y2 - x.y1) });
     this.heading(pics.length > 1 ? `${pics.length} pictures` : 'Picture');
-    if (pics.length === 1 && p.px) this.note(`${pictureType(p.src)}, ${p.px.w} × ${p.px.h} pixels`);
+    // vector pictures (SVG, Windows metafiles) have no pixels to count
+    if (pics.length === 1 && p.px) this.note(/^data:image\/(svg|x-emf)/.test(p.src ?? '') ? pictureType(p.src) : `${pictureType(p.src)}, ${p.px.w} × ${p.px.h} pixels`);
     // sizes change from the top left corner, as in PowerPoint's size boxes
     const size = (w: number | null, h: number | null) => set('Resize picture', (x) => {
       const b = box(x);
@@ -345,5 +346,5 @@ export class StylePanel {
 function pictureType(src: string | undefined): string {
   const m = /^data:image\/([^;,]+)/.exec(src ?? '');
   const t = m?.[1] ?? '';
-  return ({ png: 'PNG', jpeg: 'JPEG', gif: 'GIF', 'svg+xml': 'SVG (sharp at any size)', bmp: 'Bitmap', 'x-emf': 'Windows metafile', tiff: 'TIFF', webp: 'WebP' } as Record<string, string>)[t] ?? 'Picture';
+  return ({ png: 'PNG', jpeg: 'JPEG', gif: 'GIF', 'svg+xml': 'SVG (sharp at any size)', bmp: 'Bitmap', 'x-emf': 'Windows metafile (sharp at any size)', tiff: 'TIFF', webp: 'WebP' } as Record<string, string>)[t] ?? 'Picture';
 }
