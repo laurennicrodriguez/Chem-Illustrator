@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
 import * as rt from '../src/richtext';
-import { renderRuns, readRuns, offsetOf, pointAt } from '../src/ui/caption-editor';
 import { readCdxml } from '../src/io/cdxml';
 import { writeCdxml } from '../src/io/cdxml-write';
 import { Doc } from '../src/model';
@@ -132,33 +131,5 @@ describe('Symbol font', () => {
     doc.style.captionFace = 1;
     doc.bulk(() => doc.addCaption({ x: 0, y: 0, runs: [{ text: 'x' }], justify: 'left' }));
     expect(readCdxml(writeCdxml(doc)).doc.style.captionFace).toBe(1);
-  });
-});
-
-describe('caption text box', () => {
-  const box = () => document.createElement('div');
-  it('shows runs and reads them back unchanged', () => {
-    const r = runs(['CH3', { formula: true, size: 10 }], [' then\n', {}], ['x', { sup: true, bold: true }], ['\n']);
-    const b = box();
-    renderRuns(b, r, 2, 10);
-    expect(readRuns(b, {})).toEqual(rt.normalizeRuns(r));
-    // the formula's 3 is shown smaller
-    const three = [...b.querySelectorAll('span')].find((s) => s.textContent === '3')!;
-    expect(three.style.fontSize).toBe('15px');
-  });
-  it('counts places in the text the same both ways', () => {
-    const r = runs(['ab', { bold: true }], ['c\nd'], ['\n']);
-    const b = box();
-    renderRuns(b, r, 1, 10);
-    for (let i = 0; i <= 6; i++) {
-      const p = pointAt(b, i);
-      expect(offsetOf(b, p.node, p.offset)).toBe(i);
-    }
-  });
-  it('picks up text the browser typed outside the styled pieces', () => {
-    const b = box();
-    renderRuns(b, runs(['ab', { italic: true }]), 1, 10);
-    b.appendChild(document.createTextNode('c'));
-    expect(readRuns(b, {})).toEqual(runs(['abc', { italic: true }]));
   });
 });

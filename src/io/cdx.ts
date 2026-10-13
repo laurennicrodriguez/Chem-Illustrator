@@ -33,6 +33,7 @@ type Kind =
   | 'coord' | 'pt2' | 'pt3' | 'rect' | 'str' | 'id' | 'ids' | 'idsCounted' | 'i16list'
   | 'bool' | 'implied' | 'hex'
   | 'x10' | 'deg65536' // INT16 stored ×10 (bond spacing, arc angles); INT32 angle × 65536
+  | 'x20' // line heights: UINT16 in 1/20 pt, with 0 and 1 kept for "variable" and "auto"
   | 'enum8' | 'enum16' | 'bits16'
   | 'side'; // the side of a double bond's second line (see DoublePosition below)
 
@@ -166,12 +167,12 @@ const P: Record<string, Prop> = {
   ShowBondRxn: { tag: 0x060f, kind: 'bool' },
   // text
   Justification: { tag: 0x0701, kind: 'enum8', values: JUSTIFY },
-  LineHeight: { tag: 0x0702, kind: 'u16', values: { variable: 0, auto: 1 } },
+  LineHeight: { tag: 0x0702, kind: 'x20', values: { variable: 0, auto: 1 } },
   WordWrapWidth: { tag: 0x0703, kind: 'i16' },
   LineStarts: { tag: 0x0704, kind: 'i16list' },
   LabelAlignment: { tag: 0x0705, kind: 'enum8', values: ALIGN },
-  LabelLineHeight: { tag: 0x0706, kind: 'i16', values: { variable: 0, auto: 1 } },
-  CaptionLineHeight: { tag: 0x0707, kind: 'i16', values: { variable: 0, auto: 1 } },
+  LabelLineHeight: { tag: 0x0706, kind: 'x20', values: { variable: 0, auto: 1 } },
+  CaptionLineHeight: { tag: 0x0707, kind: 'x20', values: { variable: 0, auto: 1 } },
   InterpretChemically: { tag: 0x0708, kind: 'bool' }, // a yes/no byte in ChemDraw 25's files
   // document and drawing settings
   PrintMargins: { tag: 0x0802, kind: 'rect' },
@@ -245,8 +246,11 @@ const P: Record<string, Prop> = {
   ReactionStepObjectsBelowArrow: { tag: 0x0c06, kind: 'ids' },
   ReactionStepAtomMapManual: { tag: 0x0c07, kind: 'ids' },
   ReactionStepAtomMapAuto: { tag: 0x0c08, kind: 'ids' },
-  // object tags (stereo labels); the values are from ChemDraw's files
-  TagType: { tag: 0x0d00, kind: 'enum16', values: { Unknown: 0 } },
+  // object tags (stereo labels, and the paragraph styles Chem Illustrator keeps with a text);
+  // the values are from ChemDraw's files. A String value is stored like any text, a Double as
+  // FLOAT64 and a Long as INT32.
+  TagType: { tag: 0x0d00, kind: 'enum16', values: { Unknown: 0, Double: 1, Long: 2, String: 3 } },
+  Value: { tag: 0x0d05, kind: 'str' },
   PositioningType: { tag: 0x0d06, kind: 'enum8', values: { offset: 2 } },
   PositioningOffset: { tag: 0x0d08, kind: 'pt2' },
   // pictures (kept so a picture's frame survives; the picture data itself is not converted)
@@ -364,6 +368,12 @@ function encodeValue(p: Prop, v: string): Uint8Array | null {
     case 'i32': case 'u32': if (!Number.isFinite(n[0])) return null; b.i32(int(n[0])); break;
     case 'f64': if (!Number.isFinite(n[0])) return null; b.f64(n[0]); break;
     case 'x10': if (!Number.isFinite(n[0])) return null; b.u16(int(n[0] * 10)); break;
+    case 'x20':
+      // ChemDraw 25 saves a 17.25 pt line height as 345
+      if (named !== undefined) b.u16(named);
+      else if (Number.isFinite(n[0])) b.u16(Math.max(2, int(n[0] * 20)));
+      else return null;
+      break;
     case 'deg65536': if (!Number.isFinite(n[0])) return null; b.i32(fix(n[0])); break;
     case 'coord': if (!Number.isFinite(n[0])) return null; b.i32(fix(n[0])); break;
     case 'pt2': if (n.length < 2) return null; b.i32(fix(n[1])); b.i32(fix(n[0])); break;
@@ -434,7 +444,9 @@ function writeAttributes(out: Bytes, e: Element, skip: Set<string> = new Set()):
     if (a.name === 'LineStarts') continue; // written with the text, in CDX's character offsets
     if (a.name === 'Charge' && !Number.isFinite(Number(v))) continue;
     // ChemDraw stores an object tag's name as plain text, without the style-run count
-    const data = p.kind === 'str' && e.nodeName === 'objecttag' ? encode1252(v) : encodeValue(p, v);
+    const tagType = e.nodeName === 'objecttag' && a.name === 'Value' ? e.getAttribute('TagType') : null;
+    const data = tagType === 'Double' || tagType === 'Long' ? encodeValue({ ...p, kind: tagType === 'Double' ? 'f64' : 'i32' }, v)
+      : p.kind === 'str' && e.nodeName === 'objecttag' && a.name !== 'Value' ? encode1252(v) : encodeValue(p, v);
     if (data) writeProp(out, p.tag, data);
   }
 }
@@ -569,6 +581,7 @@ function decodeValue(p: Prop, d: Uint8Array): string | null {
     }
     case 'f64': return len >= 8 ? String(v.getFloat64(0, true)) : null;
     case 'x10': { const x = int(true); return x === null ? null : fmt(x / 10); }
+    case 'x20': { const x = int(false); return x === null ? null : name(x) ?? fmt(x / 20); }
     case 'deg65536': case 'coord': return len >= 4 ? fmt(i32(0)) : null;
     case 'pt2': return len >= 8 ? `${fmt(i32(1))} ${fmt(i32(0))}` : null;
     case 'pt3': return len >= 12 ? `${fmt(i32(0))} ${fmt(i32(1))} ${fmt(i32(2))}` : null;
@@ -683,7 +696,12 @@ function readObject(r: Reader, name: string, id: number): Node {
     }
     const known = BY_TAG.get(tag);
     if (!known) continue;
-    const value = decodeValue(known[1], d);
+    let prop = known[1];
+    if (known[0] === 'Value' && name === 'objecttag') {
+      const type = node.attrs.find(([k]) => k === 'TagType')?.[1];
+      if (type === 'Double' || type === 'Long') prop = { ...prop, kind: type === 'Double' ? 'f64' : 'i32' };
+    }
+    const value = decodeValue(prop, d);
     if (value !== null) node.attrs.push([known[0], value]);
   }
   // the text and its style runs become <s> children; the UTF-8 copy keeps every character

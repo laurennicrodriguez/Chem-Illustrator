@@ -7,7 +7,8 @@ import { CaptionEditor } from '../ui/caption-editor';
 import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
 import { styleFromFace, plainText } from '../richtext';
 import { cleanUpMoves } from '../chem/cleanup';
-import { Renderer } from '../render/renderer';
+import { Renderer, measureText } from '../render/renderer';
+import { ASCENT } from '../text/layout';
 import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG } from '../geom';
 import {
   sproutDir, sprout, bondTo, bondLength, atomAt, freeRing, fusedRing, fuseSide, ringOnAtom,
@@ -121,7 +122,7 @@ interface Drag {
   shift: boolean;
   alt: boolean;
   ctrl: boolean;
-  mode: 'none' | 'pan' | 'move' | 'marquee' | 'draw' | 'handle' | 'rotate';
+  mode: 'none' | 'pan' | 'move' | 'marquee' | 'draw' | 'handle' | 'rotate' | 'text';
   last: Vec;
   panOrigin?: { ox: number; oy: number };
   /** The arrow or shape handle being dragged. */
@@ -184,6 +185,8 @@ export class Editor {
   constructor(public doc: Doc, public r: Renderer, public host: HTMLElement) {
     const el = r.overlay;
     el.addEventListener('pointerdown', (e) => this.onDown(e));
+    // pressing on the text being typed keeps the keys going to it
+    el.addEventListener('mousedown', (e) => { if (this.captionEd?.hit(this.docPoint(e))) e.preventDefault(); });
     el.addEventListener('pointermove', (e) => this.onMove(e));
     el.addEventListener('pointerup', (e) => this.onUp(e));
     el.addEventListener('pointerenter', () => { this.pointerInside = true; });
@@ -351,6 +354,21 @@ export class Editor {
 
   private onDown(e: PointerEvent): void {
     this.commitLabel();
+    // a press on the text being typed (or its width handle) goes to the text
+    const cap = this.captionEd;
+    if (cap && e.button === 2 && cap.hit(this.docPoint(e)) === 'text') {
+      // right-click on the text: spelling suggestions and chemistry fixes
+      cap.contextMenu(this.docPoint(e), e.clientX, e.clientY);
+      return;
+    }
+    if (cap && e.button === 0 && cap.hit(this.docPoint(e))) {
+      const p = this.docPoint(e);
+      const rect = this.r.overlay.getBoundingClientRect();
+      this.r.overlay.setPointerCapture(e.pointerId);
+      this.drag = { start: p, startScreen: { x: e.clientX - rect.left, y: e.clientY - rect.top }, hit: null, button: 0, moved: false, shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey, mode: 'text', last: p };
+      cap.pointerDown(p, e.shiftKey);
+      return;
+    }
     this.closeCaption();
     this.keyHot = null;
     this.r.overlay.setPointerCapture(e.pointerId);
@@ -381,6 +399,14 @@ export class Editor {
     const p = this.docPoint(e);
     this.pointer = p;
     const d = this.drag;
+    if (d?.mode === 'text') {
+      this.captionEd?.pointerMove(p);
+      return;
+    }
+    if (!d && this.captionEd?.hit(p)) {
+      this.r.overlay.style.cursor = this.captionEd.cursor(p);
+      return;
+    }
     if (!d) {
       const rh = this.rotateHandle();
       const onRotate = !!rh && dist(rh, p) <= this.tol(7);
@@ -472,7 +498,8 @@ export class Editor {
       case 'template':
         return 'draw';
       case 'text':
-        return d.hit && d.hit.kind === 'caption' ? 'move' : 'none';
+        // dragging across empty space makes a text box that wide
+        return d.hit && d.hit.kind === 'caption' ? 'move' : d.hit ? 'none' : 'draw';
     }
   }
 
@@ -481,6 +508,7 @@ export class Editor {
     this.drag = null;
     if (!d) return;
     const p = this.docPoint(e);
+    if (d.mode === 'text') { this.captionEd?.pointerUp(); return; }
     if (d.mode === 'pan') { this.requestScene(e.timeStamp); return; }
     if (d.mode === 'handle' || d.mode === 'rotate') {
       if (d.moved) { this.doc.commit(); this.changed(); }
@@ -505,6 +533,8 @@ export class Editor {
 
   private onDoubleClick(e: MouseEvent): void {
     const p = this.docPoint(e);
+    // (in the text being typed, a double-click selects a word: the text sees the clicks itself)
+    if (this.captionEd?.hit(p)) return;
     const h = this.hitTest(p);
     if (this.tool.kind === 'select' && h && (h.kind === 'atom' || h.kind === 'bond')) {
       const atom = h.kind === 'atom' ? h.id : this.doc.bonds.get(h.id)!.a1;
@@ -791,6 +821,12 @@ export class Editor {
     const h = d.hit;
     const startAtom = h && h.kind === 'atom' ? doc.atoms.get(h.id)! : null;
     const start = startAtom ?? d.start;
+    if (t.kind === 'text') {
+      // a text box as wide as the drag, its first line at the top
+      const x1 = Math.min(d.start.x, p.x), x2 = Math.max(d.start.x, p.x), y1 = Math.min(d.start.y, p.y);
+      this.openCaption(null, { x: x1, y: y1 + ASCENT * doc.style.captionSize }, undefined, Math.max(8, x2 - x1));
+      return;
+    }
     if (t.kind === 'bond') {
       doc.edit('Bond', () => {
         const a = startAtom ?? doc.addAtom(start.x, start.y);
@@ -1572,14 +1608,21 @@ export class Editor {
 
   private editCaption(id: number, client?: { x: number; y: number }): void {
     const c = this.doc.captions.get(id);
-    if (c) this.openCaption(c, { x: c.x, y: c.y }, client);
+    if (!c) return;
+    let at: Vec | undefined;
+    if (client) {
+      const rect = this.r.overlay.getBoundingClientRect();
+      at = this.r.toDoc(client.x - rect.left, client.y - rect.top);
+    }
+    this.openCaption(c, { x: c.x, y: c.y }, at);
   }
 
   /**
-   * Type into a new caption at a point, or into an existing one. New text takes the document's
-   * caption style; everything can be restyled in the bar above the text.
+   * Type into a new caption at a point (a text box when `wrap` is given), or into an existing
+   * one, with the caret at `click`. New text takes the document's caption style; everything
+   * can be restyled in the bar above the text.
    */
-  private openCaption(c: Caption | null, at: Vec, client?: { x: number; y: number }): void {
+  private openCaption(c: Caption | null, at: Vec, click?: Vec, wrap?: number): void {
     this.closeCaption();
     this.commitLabel();
     const doc = this.doc;
@@ -1594,23 +1637,38 @@ export class Editor {
     };
     if (c) hide(c.id);
     const id = c?.id ?? null;
-    const ed = new CaptionEditor(this.host, this.r, { at, width: c?.width }, { runs: c?.runs ?? [], justify: c?.justify ?? 'left' }, defaults, (res) => {
+    const host = {
+      host: this.host,
+      view: this.r.view,
+      toScreen: (p: Vec) => this.r.toScreen(p),
+      measure: (t: string, size: number, family: string, style: string) => measureText(t, size, family, style),
+      defaultSize: st.captionSize,
+      redraw: () => this.requestOverlay(),
+    };
+    const initial = c
+      ? { runs: c.runs, paras: c.paras, justify: c.justify, wrap: c.wrap, width: c.width, lineHeight: c.lineHeight, lineSpacing: c.lineSpacing }
+      : { runs: [], justify: 'left' as const, wrap };
+    const ed = new CaptionEditor(host, at, initial, defaults, (res) => {
       if (this.captionEd === ed) this.captionEd = null;
       if (id !== null) hide(null);
       const empty = !plainText(res.runs).trim();
       const cur = id !== null ? doc.captions.get(id) : null;
+      const fields: Partial<Caption> = {
+        x: res.x, y: res.y, runs: res.runs, justify: res.justify, paras: res.paras,
+        wrap: res.wrap, width: res.width, lineHeight: res.lineHeight, lineSpacing: res.lineSpacing,
+      };
       if (cur) {
         if (empty) doc.edit('Delete caption', () => doc.removeCaption(cur.id));
-        else if (JSON.stringify(cur.runs) !== JSON.stringify(res.runs) || cur.justify !== res.justify) {
-          doc.edit('Edit caption', () => doc.updateCaption(cur.id, { runs: res.runs, justify: res.justify }));
+        else if ((Object.keys(fields) as (keyof Caption)[]).some((k) => JSON.stringify(cur[k]) !== JSON.stringify(fields[k]))) {
+          doc.edit('Edit caption', () => doc.updateCaption(cur.id, fields));
         }
       } else if (!empty) {
-        doc.edit('Caption', () => doc.addCaption({ x: at.x, y: at.y, runs: res.runs, justify: res.justify }));
+        doc.edit('Caption', () => doc.addCaption({ ...fields, x: res.x, y: res.y, runs: res.runs, justify: res.justify }));
       }
       this.changed();
     });
     this.captionEd = ed;
-    if (client) ed.caretAt(client.x, client.y);
+    if (click) ed.ed.setCaret(ed.ed.offsetAt(click.x - at.x, click.y - at.y));
   }
 
   // ------------------------------------------------------------------ overlay
@@ -1766,6 +1824,7 @@ export class Editor {
         this.drawPreview(ctx, d);
       }
     }
+    this.captionEd?.draw(ctx);
   }
 
   private drawPreview(ctx: CanvasRenderingContext2D, d: Drag): void {
@@ -1781,7 +1840,12 @@ export class Editor {
       if (close) ctx.closePath();
       ctx.stroke();
     };
-    if (t.kind === 'bond') {
+    if (t.kind === 'text') {
+      ctx.setLineDash([4 / this.r.view.scale, 3 / this.r.view.scale]);
+      ctx.lineWidth = 1 / this.r.view.scale;
+      ctx.strokeRect(Math.min(d.start.x, d.last.x), Math.min(d.start.y, d.last.y), Math.abs(d.last.x - d.start.x), Math.abs(d.last.y - d.start.y));
+      ctx.setLineDash([]);
+    } else if (t.kind === 'bond') {
       const end = this.snapEnd(start, d.last, L, startAtom?.id, d.alt);
       poly([start, end.pt], false);
     } else if (t.kind === 'chain') {

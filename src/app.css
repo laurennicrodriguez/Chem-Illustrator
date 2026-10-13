@@ -182,22 +182,24 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
   color: #000;
 }
 .label-input { width: 7em; }
-/* typing a caption: the text shows at its real size over the drawing (the page is always white) */
-.caption-editor {
+/* typing a caption: the text is drawn on the drawing; keys and input methods go to this hidden field at the caret */
+.text-input {
   position: absolute;
   z-index: 5;
-  min-width: 4px;
+  width: 2px;
+  min-height: 8px;
   padding: 0;
+  margin: 0;
   border: 0;
-  outline: 1px dashed var(--accent);
-  outline-offset: 2px;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  opacity: 0;
   background: transparent;
-  color: #000;
-  caret-color: #000;
+  color: transparent;
+  caret-color: transparent;
   white-space: pre;
-  line-height: 1.15;
-  font-family: Arial, 'Liberation Sans', Helvetica, sans-serif;
-  cursor: text;
+  font-size: 12px;
 }
 .caption-bar {
   position: absolute;
@@ -229,6 +231,10 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
 .cs-row { display: flex; flex-wrap: wrap; gap: 1px; }
 .cs-row button { min-width: 22px; height: 22px; padding: 0 3px; border-color: transparent; background: transparent; font: 13px Arial, 'Liberation Sans', sans-serif; }
 .cs-row button:hover { background: var(--accent-soft); border-color: transparent; }
+.caption-spacing { flex-basis: 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 4px 12px; padding-top: 4px; border-top: 1px solid var(--line); }
+.caption-spacing[hidden] { display: none; }
+.csp-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cb-num { width: 64px; padding: 2px 4px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; }
 
 aside {
   grid-area: side;
@@ -401,5 +407,23 @@ button.hk-add.recording { color: var(--panel); background: var(--accent); border
 .hk-foot code { font: 11px var(--mono-font); word-break: break-all; }
 .hk-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
 .hk-buttons button.confirm { border-color: var(--slow); color: var(--slow); }
+/* right-click menu on text being typed */
+.text-menu { position: absolute; z-index: 9; display: flex; flex-direction: column; min-width: 160px; padding: 4px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); font: 12px var(--ui-font); }
+.text-menu button { text-align: left; border: 0; background: transparent; padding: 4px 10px; border-radius: 5px; font: inherit; color: inherit; }
+.text-menu button:hover:not(:disabled) { background: var(--accent-soft); }
+.text-menu button:disabled { color: var(--muted); }
+.text-menu hr { border: 0; border-top: 1px solid var(--line); margin: 3px 0; }
+/* Edit > Typing and Spelling */
+dialog.typing-dialog { width: min(94vw, 560px); }
+dialog.typing-dialog h3 { margin: 14px 0 2px; }
+dialog.typing-dialog p { margin: 2px 0 6px; }
+.ty-table-wrap { max-height: 220px; overflow-y: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.ty-table { width: 100%; border-collapse: collapse; }
+.ty-table th { text-align: left; font-weight: 600; padding: 2px 4px; }
+.ty-table td { padding: 2px 4px; }
+.ty-table input { width: 100%; box-sizing: border-box; font: inherit; padding: 2px 6px; font-variant-ligatures: none; font-feature-settings: "calt" 0, "liga" 0; }
+.ty-table td:last-child { width: 2em; }
+.ty-row-buttons { display: flex; gap: 6px; margin: 6px 0; flex-wrap: wrap; }
+.ty-words { width: 100%; box-sizing: border-box; font: 12px var(--mono-font); padding: 4px 6px; }
 .help-keys { list-style: none; padding-left: 0 !important; columns: 2; column-gap: 16px; }
 .help-keys li { break-inside: avoid; margin: 1px 0; }

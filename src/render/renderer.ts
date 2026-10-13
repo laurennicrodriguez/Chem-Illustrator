@@ -5,22 +5,24 @@
 // fast however big the document is. Label layouts and bond geometry are cached per atom
 // and bond and only recomputed near what changed.
 
-import { Doc, Atom, Bond, Arrow, Caption, Shape, TextRun } from '../model';
+import { Doc, Atom, Bond, Arrow, Caption, Shape } from '../model';
 import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
 import type { StructureChecks } from '../chem/warnings';
 import { isGenericLabel } from '../chem/labels';
 import { bracketPath, shaftOffset, type PathStep } from '../objects';
-import { formulaParts } from '../richtext';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
 import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
+import { layoutText, FONT_STACK, type TextLayout } from '../text/layout';
+import { drawLayout } from '../text/draw';
+
+export { FONT_STACK };
 
 /** Colour of the stereo labels previewed with "Show R/S" (not part of the drawing). */
 const PREVIEW_COLOR = '#b4232a';
 
-export const FONT_STACK = "Arial, 'Liberation Sans', Helvetica, sans-serif";
 
 export interface View {
   /** Screen pixels per point. */
@@ -97,6 +99,7 @@ export class Renderer {
   private placerKey = '';
   private atomCache = new Map<number, AtomCache>();
   private capBoxes = new WeakMap<Caption, Rect>();
+  private capLayouts = new WeakMap<Caption, TextLayout>();
   /** Text size for caption runs that don't give one (the document's caption size). */
   private captionSize = 10;
   /** A caption being typed into: the text box shows it, so the page doesn't. */
@@ -599,7 +602,7 @@ export class Renderer {
       if (c.id === this.hiddenCaption) continue;
       const r = this.captionBox(c);
       if (r.x1 > vis.x2 || r.x2 < vis.x1 || r.y1 > vis.y2 || r.y2 < vis.y1) continue;
-      this.drawCaption(ctx, c, st.captionSize);
+      this.drawCaption(ctx, c);
     }
 
     if (warns.length) {
@@ -952,73 +955,31 @@ export class Renderer {
     if (r.headType === 'hollow') ctx.stroke(); else ctx.fill();
   }
 
-  drawCaption(ctx: CanvasRenderingContext2D, c: Caption, defaultSize: number): void {
-    // Split runs into lines.
-    const lines: TextRun[][] = [[]];
-    for (const run of c.runs) {
-      const parts = run.text.split('\n');
-      parts.forEach((t, i) => {
-        if (i > 0) lines.push([]);
-        if (t) lines[lines.length - 1].push({ ...run, text: t });
-      });
+  drawCaption(ctx: CanvasRenderingContext2D, c: Caption): void {
+    drawLayout(ctx, this.captionLayout(c), c.x, c.y);
+  }
+
+  /** Where every piece of a caption's text goes (cached per caption version). */
+  captionLayout(c: Caption): TextLayout {
+    let lay = this.capLayouts.get(c);
+    if (!lay) {
+      lay = layoutText(c, this.captionSize, (t, s, family, style) => measureText(t, s, family, style));
+      this.capLayouts.set(c, lay);
     }
-    let y = c.y;
-    const laid = lines.map((line) => {
-      const pieces = expandRuns(line, defaultSize);
-      let w = 0;
-      for (const p of pieces) w += p.w;
-      return { pieces, w };
-    });
-    // lines are centred (or right-aligned) within the text box, which is as wide as the longest line
-    const width = c.width ?? Math.max(0, ...laid.map((l) => l.w));
-    for (const { pieces, w } of laid) {
-      let x = c.x;
-      if (c.justify === 'center') x = c.x + (width - w) / 2;
-      else if (c.justify === 'right') x = c.x + width - w;
-      let maxSize = defaultSize;
-      for (const p of pieces) {
-        ctx.font = p.font;
-        ctx.fillStyle = p.color ?? '#000';
-        ctx.fillText(p.text, x, y + p.dy);
-        if (p.underline) { ctx.fillRect(x, y + 1, p.w, 0.5); }
-        x += p.w;
-        maxSize = Math.max(maxSize, p.size);
-      }
-      y += c.lineHeight ?? maxSize * 1.15;
-    }
-    ctx.fillStyle = '#000';
+    return lay;
   }
 
   /** Take the caption size from the document being drawn. */
   useStyle(doc: Doc): void {
-    if (doc.style.captionSize !== this.captionSize) { this.captionSize = doc.style.captionSize; this.capBoxes = new WeakMap(); }
+    if (doc.style.captionSize !== this.captionSize) { this.captionSize = doc.style.captionSize; this.capBoxes = new WeakMap(); this.capLayouts = new WeakMap(); }
   }
 
   /** Bounding box of a caption in document coordinates (cached per caption version). */
   captionBox(c: Caption): Rect {
     let r = this.capBoxes.get(c);
     if (r) return r;
-    const def = this.captionSize;
-    const lines: TextRun[][] = [[]];
-    for (const run of c.runs) {
-      run.text.split('\n').forEach((t, i) => {
-        if (i > 0) lines.push([]);
-        if (t) lines[lines.length - 1].push({ ...run, text: t });
-      });
-    }
-    let w = 0, y = c.y, first = 0, last = 0;
-    lines.forEach((line, i) => {
-      const pieces = expandRuns(line, def);
-      let lw = 0, ms = def;
-      for (const p of pieces) { lw += p.w; ms = Math.max(ms, p.size); }
-      w = Math.max(w, lw);
-      if (i === 0) first = ms;
-      last = ms;
-      if (i < lines.length - 1) y += c.lineHeight ?? ms * 1.15;
-    });
-    const width = c.width ?? w;
-    const x1 = c.justify === 'center' ? c.x + (width - w) / 2 : c.justify === 'right' ? c.x + width - w : c.x;
-    r = { x1, y1: c.y - first * 0.8, x2: x1 + w, y2: y + last * 0.25 };
+    const b = this.captionLayout(c).box;
+    r = { x1: c.x + b.x1, y1: c.y + b.y1, x2: c.x + b.x2, y2: c.y + b.y2 };
     this.capBoxes.set(c, r);
     return r;
   }
@@ -1095,28 +1056,6 @@ function shadowBand(ctx: CanvasRenderingContext2D, x: number, y: number, w: numb
 interface BondBatch { thin: Path2D; bold: Path2D; dashed: Path2D; fills: Path2D }
 function newBatch(mk: () => Path2D): BondBatch {
   return { thin: mk(), bold: mk(), dashed: mk(), fills: mk() };
-}
-
-interface Piece { text: string; w: number; dy: number; font: string; size: number; color?: string; underline?: boolean }
-
-/** Turn styled runs into drawable pieces, applying formula style (digits subscript). */
-export function expandRuns(runs: TextRun[], defaultSize: number): Piece[] {
-  const out: Piece[] = [];
-  for (const r of runs) {
-    const size = r.size ?? defaultSize;
-    const style = `${r.italic ? 'italic ' : ''}${r.bold ? 'bold ' : ''}`;
-    const font = r.font ? `${r.font}, ${FONT_STACK}` : FONT_STACK;
-    const push = (text: string, sub: boolean, sup: boolean) => {
-      if (!text) return;
-      const s = sub || sup ? size * 0.75 : size;
-      const dy = sub ? size * 0.22 : sup ? -size * 0.42 : 0;
-      out.push({ text, w: measureText(text, s, font, style), dy, font: `${style}${s}px ${font}`, size: s, color: r.color, underline: r.underline });
-    };
-    if (r.formula && !r.sub && !r.sup) {
-      for (const p of formulaParts(r.text)) push(p.text, p.pos === 'sub', p.pos === 'sup');
-    } else push(r.text, !!r.sub, !!r.sup);
-  }
-  return out;
 }
 
 /** The wavy line marking a point of attachment, centred on `at` and running along `across`. */

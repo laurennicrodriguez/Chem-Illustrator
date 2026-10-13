@@ -106,15 +106,19 @@ function labelBoxes(text: string): Map<string, number[]> {
 
 /** Number of lines ChemDraw will show for each caption, by id (1 when no line ends are listed). */
 function captionLines(text: string): Map<string, number> {
+  const fonts = new Map<string, string>();
+  const arialOnly = (t: Element) => [...t.getElementsByTagName('s')].every((s) => /^(arial|symbol)$/i.test(fonts.get(s.getAttribute('font') ?? '') ?? ''));
   const root = new DOMParser().parseFromString(text.replace(/<!DOCTYPE[^>]*>/i, ''), 'application/xml').documentElement;
   const out = new Map<string, number>();
   const visit = (e: Element) => {
     for (let c = e.firstElementChild; c; c = c.nextElementSibling) {
       if (c.nodeName === 'n') continue;
-      if (c.nodeName === 't' && c.getAttribute('id')) out.set(c.getAttribute('id')!, (c.getAttribute('LineStarts') ?? '0').trim().split(/\s+/).length);
+      // (text boxes in fonts other than Arial wrap with that font's widths, which Node doesn't have)
+      if (c.nodeName === 't' && c.getAttribute('id') && !(c.getAttribute('WordWrapWidth') && !arialOnly(c))) out.set(c.getAttribute('id')!, (c.getAttribute('LineStarts') ?? '0').trim().split(/\s+/).length);
       else visit(c);
     }
   };
+  for (const f of root.getElementsByTagName('font')) fonts.set(f.getAttribute('id') ?? '', f.getAttribute('name') ?? '');
   visit(root);
   return out;
 }

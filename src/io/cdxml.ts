@@ -2,7 +2,8 @@
 // their formatting, arrows, and the common graphics (lines, boxes, circles, brackets,
 // charge symbols). Anything not understood yet is counted and skipped, never fatal.
 
-import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel } from '../model';
+import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption } from '../model';
+import { TEXT_TAG, parseTextTag, runsFromChemDraw } from '../text/chemdraw-text';
 import { DocStyle } from '../style';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { DEG } from '../geom';
@@ -266,21 +267,35 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     const [px, py] = pts(t.getAttribute('p'));
     const bb = pts(t.getAttribute('BoundingBox'));
     const j = t.getAttribute('Justification') ?? t.getAttribute('CaptionJustification');
-    const justify = j === 'Center' ? 'center' : j === 'Right' ? 'right' : 'left';
+    const justify = j === 'Center' ? 'center' : j === 'Right' ? 'right' : j === 'Full' ? 'justify' : 'left';
+    const ww = Number(t.getAttribute('WordWrapWidth'));
+    const wrap = ww > 0 ? ww : undefined;
     let x = px, width: number | undefined;
-    if (justify !== 'left' && bb.length === 4) {
+    if (wrap !== undefined) {
+      // a text box: its lines wrap to its width, and p is on the side the lines are lined up on
+      if (justify === 'center') x = px - wrap / 2;
+      else if (justify === 'right') x = px - wrap;
+    } else if (justify !== 'left' && bb.length === 4) {
       x = Math.min(bb[0], bb[2]);
       width = Math.abs(bb[2] - bb[0]);
     }
     for (const r of runs) if (r.size === undefined) r.size = st.captionSize;
-    // ChemDraw stores where each wrapped line ends (as UTF-8 byte offsets); break lines there.
+    // ChemDraw stores where each line starts (as UTF-8 byte offsets). Without a wrap width those
+    // are all line breaks; in a text box the lines wrap by themselves.
     const ls = t.getAttribute('LineStarts');
-    if (ls) applyLineEnds(runs, ls.trim().split(/\s+/).map(Number).slice(0, -1));
+    if (ls && wrap === undefined) applyLineEnds(runs, ls.trim().split(/\s+/).map(Number).slice(0, -1));
     // (the line ends count the text as stored, so Symbol-font text is turned into Greek letters afterwards)
     for (const r of runs) if (isSymbolFont(r.font)) { r.text = fromSymbolFont(r.text); delete r.font; }
     const lh = t.getAttribute('LineHeight') ?? t.getAttribute('CaptionLineHeight');
-    const lineHeight = lh && /^[\d.]+$/.test(lh) ? Number(lh) : undefined;
-    const cap = doc.addCaption({ id: idFor(t), x, y: py, runs, justify, width, lineHeight });
+    let lineHeight = lh && /^[\d.]+$/.test(lh) ? Number(lh) : undefined;
+    // lists and paragraph formatting saved by this program, if the text still matches them
+    const tagEl = kids(t).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === TEXT_TAG);
+    const back = runsFromChemDraw(runs, parseTextTag(tagEl?.getAttribute('Value') ?? null));
+    const extra: Partial<Caption> = {};
+    if (wrap !== undefined) extra.wrap = wrap;
+    if (back.paras) extra.paras = back.paras;
+    if (back.lineSpacing) { extra.lineSpacing = back.lineSpacing; lineHeight = undefined; }
+    const cap = doc.addCaption({ id: idFor(t), x, y: py, runs: back.runs, justify, width, lineHeight, ...extra });
     from('c', cap.id, t);
     stats.captions++;
   };

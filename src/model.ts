@@ -116,16 +116,46 @@ export interface TextRun {
   color?: string;
 }
 
+/** How the lines of a text sit in its box ('justify': stretched to both edges, ChemDraw's "Full"). */
+export type Justify = 'left' | 'center' | 'right' | 'justify';
+
+/**
+ * Formatting of one paragraph (the text between two line breaks). Everything is optional, so a
+ * plain paragraph is {}.
+ */
+export interface ParaStyle {
+  /** A bullet or numbered list item. */
+  list?: 'bullet' | 'number';
+  /** List level: 0 is the outermost, each level is indented one step further. */
+  level?: number;
+  /** Carries on the list item above (Shift+Enter): indented with it, with no bullet of its own. */
+  cont?: boolean;
+  /** This paragraph's own alignment, in place of the text box's. */
+  align?: Justify;
+  /** Extra space above and below the paragraph, in points. */
+  spaceBefore?: number;
+  spaceAfter?: number;
+  /** Extra left indent, in points. */
+  indent?: number;
+}
+
 export interface Caption {
   id: number;
   /** Left end of the first line's baseline (for centred/right text, of the line box). */
   x: number;
   y: number;
   runs: TextRun[];
-  justify: 'left' | 'center' | 'right';
+  justify: Justify;
   /** Width of the text box when known (from a file); used for centring and right alignment. */
   width?: number;
+  /** Fixed distance between lines, in points (ChemDraw's "Fixed" line spacing). */
   lineHeight?: number;
+  /** Line spacing as a multiple of single spacing (1.5, 2…), when there's no fixed lineHeight. */
+  lineSpacing?: number;
+  /** Lines wrap to fit this width, in points (a text box); without it they break only at line breaks. */
+  wrap?: number;
+  /** Paragraph formatting, one per paragraph in order; missing entries are plain paragraphs. */
+  paras?: ParaStyle[];
 }
 
 export type ArrowHead = 'none' | 'full' | 'halfLeft' | 'halfRight';
