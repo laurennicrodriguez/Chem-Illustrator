@@ -175,6 +175,29 @@ describe('what ChemDraw 25 writes, checked against CDX files it saved', () => {
     expect(toHex(cdxmlToCdx(doc))).toBe(HEADER + ' 42 04 01 00 00 08 07 01 00 01 0D 08 01 00 01 00 00');
   });
 
+  it('line heights in twentieths of a point, with 0 and 1 for variable and automatic', () => {
+    // ChemDraw 25 saved a text with 1.5 line spacing (17.25 pt lines) as 345 (59 01)
+    const out = body('<t id="5" LineHeight="17.25" CaptionLineHeight="17.25"/>');
+    expect(out).toContain('02 07 02 00 59 01');
+    expect(out).toContain('07 07 02 00 59 01');
+    expect(xmlOf(out)).toContain('LineHeight="17.25" CaptionLineHeight="17.25"');
+    const auto = body('<t id="6" LineHeight="auto" LabelLineHeight="variable"/>');
+    expect(auto).toContain('02 07 02 00 01 00');
+    expect(auto).toContain('06 07 02 00 00 00');
+    expect(xmlOf(auto)).toContain('LineHeight="auto" LabelLineHeight="variable"');
+  });
+
+  it('the type and value of a text tag (String is 3; the value is stored like a text)', () => {
+    const xml = '<objecttag TagType="String" Visible="no" Name="Chem Illustrator text" Value="{&quot;v&quot;:1}"/>';
+    const out = body(xml);
+    expect(out).toContain('00 0D 02 00 03 00');
+    expect(out).toContain('08 00 15 00 ' + toHex(new TextEncoder().encode('Chem Illustrator text')));
+    expect(out).toContain('05 0D 09 00 00 00 7B 22 76 22 3A 31 7D');
+    expect(xmlOf(out)).toContain(xml);
+    const num = '<objecttag TagType="Double" Name="x" Value="1.5"/>';
+    expect(xmlOf(body(num))).toContain(num);
+  });
+
   it('an orbital (the faint highlight circles) keeps how faint it is', () => {
     const xml = '<graphic id="9" GraphicType="Orbital" OvalType="Circle" OrbitalType="s" FadePercent="300"/>';
     const cdx = '07 80 09 00 00 00 00 0A 02 00 05 00 04 0A 02 00 01 00 05 0A 02 00 00 00 03 03 02 00 2C 01 00 00';

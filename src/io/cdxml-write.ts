@@ -748,6 +748,9 @@ class CdxmlWriter {
     const starts = lay.lines.slice(1).map((l) => utf8Length(stored.slice(0, l.start)));
     starts.push(utf8Length(stored));
     this.set(t, 'LineHeight', fixed ? f2(fixed) : starts.length > 1 ? 'auto' : null);
+    // ChemDraw 25 writes a set line height here too, and its CDX reader spaces lines by this one
+    if (fixed) this.set(t, 'CaptionLineHeight', f2(fixed));
+    else if (Number.isFinite(Number(t.getAttribute('CaptionLineHeight')))) this.set(t, 'CaptionLineHeight', null);
     this.set(t, 'LineStarts', starts.length > 1 ? starts.join(' ') : null);
   }
 
