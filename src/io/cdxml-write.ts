@@ -13,6 +13,8 @@ import { Vec, DEG, arcCenter, norm, sub, Rect } from '../geom';
 import { kids, descendants } from './xml';
 import { arialWidth } from '../text-metrics';
 import { toSymbolPieces, isSymbolFont, faceFromStyle } from '../richtext';
+import { layoutText, SINGLE } from '../text/layout';
+import { runsForChemDraw, TEXT_TAG } from '../text/chemdraw-text';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 
 export interface WriteOptions {
@@ -20,6 +22,11 @@ export interface WriteOptions {
   measure?: Measure;
   /** File name stored in the document. */
   name?: string;
+  /**
+   * Width of text in any font, for wrapping text boxes (the app measures with the fonts on the
+   * computer). By default Arial's widths, whatever the font.
+   */
+  textMeasure?: (text: string, size: number, family: string, style: string) => number;
 }
 
 const NEW_PROLOG = '<?xml version="1.0" encoding="UTF-8" ?>\n<!DOCTYPE CDXML SYSTEM "http://www.cambridgesoft.com/xml/cdxml.dtd" >\n';
@@ -698,38 +705,50 @@ class CdxmlWriter {
   }
 
   private fillCaption(t: Element, c: Caption): void {
-    for (const ch of kids(t)) if (ch.nodeName === 's') t.removeChild(ch);
+    for (const ch of kids(t)) {
+      if (ch.nodeName === 's' || (ch.nodeName === 'objecttag' && ch.getAttribute('Name') === TEXT_TAG)) t.removeChild(ch);
+    }
     const def = this.doc.style.captionSize;
-    // measure each line to place the text box
-    const lines: number[] = [0];
+    // lists and paragraph formatting are written as ChemDraw can show them, with a tag to read them back
+    const { runs, tag } = runsForChemDraw(c);
     let maxSize = 0;
-    for (const r of c.runs) {
+    let stored = '';
+    for (const r of runs) {
       const size = r.size ?? def;
       maxSize = Math.max(maxSize, size);
-      const parts = r.text.split('\n');
-      parts.forEach((part, i) => {
-        if (i > 0) lines.push(0);
-        lines[lines.length - 1] += this.measure(part, r.sub || r.sup ? size * 0.75 : size);
-      });
       // Greek letters and signs that an ordinary font can't hold go in the Symbol font, as ChemDraw does
       for (const piece of toSymbolPieces(r.text)) {
         const s = this.el('s', { font: this.fontId(piece.symbol ? 'Symbol' : r.font ?? 'Arial'), size: f2(size).replace(/\.00$/, ''), color: this.colorAttr(r.color) ?? '0', face: faceOf(r) });
         s.textContent = piece.text;
         t.appendChild(s);
+        stored += piece.text;
       }
     }
-    const width = c.width ?? Math.max(...lines);
-    const lh = c.lineHeight ?? maxSize * 1.15;
+    if (tag) t.appendChild(this.el('objecttag', { TagType: 'String', Name: TEXT_TAG, Value: JSON.stringify(tag), Visible: 'no' }));
+    const fixed = c.lineHeight ?? (c.lineSpacing && c.lineSpacing !== 1 ? SINGLE * c.lineSpacing * maxSize : undefined);
+    // the text as ChemDraw will lay it out: as saved, wrapped to the box with Arial's widths
+    const lay = layoutText({ runs, justify: c.justify, wrap: c.wrap, width: c.width, lineHeight: fixed }, def, this.opts.textMeasure ?? ((text, size, _f, style) => arialWidth(text, size, /bold/.test(style))));
+    const width = lay.boxWidth;
     const px = c.justify === 'center' ? c.x + width / 2 : c.justify === 'right' ? c.x + width : c.x;
     t.setAttribute('p', pt({ x: px, y: c.y }));
-    t.setAttribute('BoundingBox', box({ x1: c.x, y1: c.y - maxSize * CAP, x2: c.x + width, y2: c.y + (lines.length - 1) * lh + maxSize * 0.2 }));
-    this.set(t, 'Justification', c.justify === 'left' ? null : c.justify === 'center' ? 'Center' : 'Right');
+    // the box ChemDraw reads lined-up text from; a text box's lines are placed from p and its width
+    let x1 = 0, x2 = width;
+    if (c.wrap !== undefined) {
+      x1 = Infinity; x2 = -Infinity;
+      for (const l of lay.lines) for (const g of l.pieces) { x1 = Math.min(x1, g.x); x2 = Math.max(x2, g.x + g.w); }
+      if (x1 > x2) x1 = x2 = 0;
+    }
+    const last = lay.lines[lay.lines.length - 1];
+    t.setAttribute('BoundingBox', box({ x1: c.x + x1, y1: c.y - maxSize * CAP, x2: c.x + x2, y2: c.y + last.y + maxSize * 0.2 }));
+    this.set(t, 'Justification', c.justify === 'left' ? null : c.justify === 'center' ? 'Center' : c.justify === 'right' ? 'Right' : 'Full');
     this.set(t, 'CaptionJustification', null);
-    // ChemDraw lists where each line ends (in the text as stored); without the list it drops blank lines.
-    const ends = lineEnds(kids(t).filter((k) => k.nodeName === 's').map((k) => k.textContent ?? '').join(''));
-    this.set(t, 'LineHeight', c.lineHeight ? f2(c.lineHeight) : ends.length > 1 ? 'auto' : null);
-    this.set(t, 'LineStarts', ends.length > 1 ? ends.join(' ') : null);
-    t.removeAttribute('WordWrapWidth');
+    this.set(t, 'WordWrapWidth', c.wrap !== undefined ? f2(c.wrap) : null);
+    // ChemDraw lists where each line starts after the first, then the length (in bytes of the text
+    // as stored); without the list it drops blank lines.
+    const starts = lay.lines.slice(1).map((l) => utf8Length(stored.slice(0, l.start)));
+    starts.push(utf8Length(stored));
+    this.set(t, 'LineHeight', fixed ? f2(fixed) : starts.length > 1 ? 'auto' : null);
+    this.set(t, 'LineStarts', starts.length > 1 ? starts.join(' ') : null);
   }
 
   private writeArrow(r: Arrow): void {
@@ -924,6 +943,16 @@ const DISPLAY: Partial<Record<Bond['display'], string>> = {
 };
 
 /** UTF-8 byte offset of the end of each line (after its line break), as CDXML LineStarts. */
+/** Length of a text in UTF-8 bytes (how CDXML counts line starts). */
+export function utf8Length(text: string): number {
+  let bytes = 0;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0)!;
+    bytes += cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+  }
+  return bytes;
+}
+
 export function lineEnds(text: string): number[] {
   const out: number[] = [];
   let bytes = 0;

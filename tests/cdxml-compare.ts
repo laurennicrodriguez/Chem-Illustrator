@@ -16,7 +16,8 @@ export function summarize(doc: Doc): Summary {
       nums: a.stereoLabel ? [a.x, a.y, a.x + a.stereoLabel.dx, a.y + a.stereoLabel.dy] : [a.x, a.y],
     })),
     bonds: [...doc.bonds.values()].map((b) => ({ key: `o${b.order} ${b.display} ${b.dpos} ${b.color ?? ''}`, nums: [...at(b.a1), ...at(b.a2)] })),
-    captions: [...doc.captions.values()].map((c) => ({ key: `${c.justify} ${c.runs.map((x) => x.text).join('')}`, nums: [c.x, c.y] })),
+    // (a text box by the point its lines line up on, as files store it: CDX keeps only whole points of its width)
+    captions: [...doc.captions.values()].map((c) => ({ key: `${c.justify} ${c.runs.map((x) => x.text).join('')}`, nums: [c.x + (c.wrap === undefined ? 0 : c.justify === 'center' ? c.wrap / 2 : c.justify === 'right' ? c.wrap : 0), c.y] })),
     arrows: [...doc.arrows.values()].map((a) => ({
       key: `${a.headStyle}/${a.tailStyle} ${a.headType} ${a.line} ${a.noGo} ${a.equilibrium}`,
       nums: [a.tail.x, a.tail.y, a.head.x, a.head.y, a.sweep * 10],
