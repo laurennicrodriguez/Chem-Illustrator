@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { Arrow, Shape } from '../src/model';
 import {
   arrowMid, sweepThrough, arrowHit, arrowPoints, arrowBox, shapeHit, shapeBox, dragArrowHandle, dragShapeHandle,
-  shapeHandles, arrowHandles, bracketsAround, bracketLip,
+  shapeHandles, arrowHandles, bracketsAround, bracketLip, bracketPath,
 } from '../src/objects';
 import { arcCenter, dist, DEG } from '../src/geom';
 
@@ -128,5 +128,34 @@ describe('shapes', () => {
     expect([l.x1, l.y1, l.x2, l.y2]).toEqual([0, 30, 0, 0]);
     expect([r.x1, r.y1, r.x2, r.y2]).toEqual([50, 0, 50, 30]);
     expect(shapeBox({ id: 1, ...l }).x1).toBeCloseTo(-bracketLip(30));
+  });
+  it('draws brackets in ChemDraw\'s proportions', () => {
+    // a left bracket 80 pt tall, drawn bottom to top, so it opens to the right (+x)
+    const p = { x: 0, y: 80 }, q = { x: 0, y: 0 };
+    const sq = bracketPath(p, q, 'square');
+    expect(sq.map((st) => st[1])).toEqual([{ x: 5.6, y: 80 }, p, q, { x: 5.6, y: 0 }].map((v) => expect.objectContaining({ x: expect.closeTo(v.x), y: v.y })));
+    // round: a circular arc from end to end, its middle bowed out (to -x) by 0.135 of the length
+    const [[, a], arc] = bracketPath(p, q, 'round') as [['M', { x: number; y: number }], ['A', { x: number; y: number }, number, number, number, boolean]];
+    expect(a).toEqual(p);
+    const [, c, r, a0, a1, ccw] = arc;
+    expect(Math.hypot(p.x - c.x, p.y - c.y)).toBeCloseTo(r);
+    expect(Math.hypot(q.x - c.x, q.y - c.y)).toBeCloseTo(r);
+    expect(c.x - r).toBeCloseTo(-0.135 * 80);
+    expect(c.y).toBeCloseTo(40);
+    // drawn the short way round, through the left-most point (angle π)
+    const sweep = ccw ? -((a0 - a1 + 4 * Math.PI) % (2 * Math.PI)) : (a1 - a0 + 4 * Math.PI) % (2 * Math.PI);
+    expect(Math.abs(sweep)).toBeLessThan(Math.PI);
+    expect(Math.cos(a0 + sweep / 2)).toBeCloseTo(-1);
+    expect(shapeBox({ id: 1, kind: 'bracket', bracket: 'round', x1: 0, y1: 80, x2: 0, y2: 0 }).x1).toBeCloseTo(-0.135 * 80);
+    // curly: hooks reach in by the lip, the point sticks out by 0.08 of the length at mid-height
+    const cu = bracketPath(p, q, 'curly');
+    const pts = cu.map((st) => st[st.length - 1] as { x: number; y: number });
+    expect(pts[0].x).toBeCloseTo(5.6);
+    expect(pts[pts.length - 1].x).toBeCloseTo(5.6);
+    const tip = pts.reduce((m, v) => (v.x < m.x ? v : m));
+    expect(tip.x).toBeCloseTo(-6.4);
+    expect(tip.y).toBeCloseTo(40);
+    // short brackets keep visible lips
+    expect(bracketLip(10)).toBe(1.5);
   });
 });

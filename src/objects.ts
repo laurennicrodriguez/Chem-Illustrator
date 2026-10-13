@@ -62,9 +62,54 @@ export function arrowHit(r: Arrow, p: Vec, tol: number): boolean {
 
 // ------------------------------------------------------------------ shapes
 
+// Bracket proportions, measured from ChemDraw 25 drawing its own square, round and curly
+// brackets at several heights: the lips (and the curly hooks) are 0.07 of the spine, a round
+// bracket is a circular arc that bows out by 0.135 of it, and a curly bracket's point stands out by 0.08 of it.
+const LIP = 0.07, BOW = 0.135, POINT = 0.08;
+
 /** Length of a bracket's lips (the short ends), from the length of its spine. */
 export function bracketLip(spine: number): number {
-  return Math.max(1.5, Math.min(spine * 0.12, 4));
+  return Math.max(1.5, spine * LIP);
+}
+
+/** How far a bracket reaches out sideways from its spine, on either side. */
+export function bracketReach(s: Pick<Shape, 'x1' | 'y1' | 'x2' | 'y2' | 'bracket'>): number {
+  const l = Math.hypot(s.x2 - s.x1, s.y2 - s.y1);
+  if (s.bracket === 'round') return l * BOW;
+  if (s.bracket === 'curly') return Math.max(bracketLip(l), Math.max(2, l * POINT));
+  return bracketLip(l);
+}
+
+/** Path pieces: move, line, quadratic curve, and circular arc (centre, radius, start and end angle, anticlockwise). */
+export type PathStep = ['M', Vec] | ['L', Vec] | ['Q', Vec, Vec] | ['A', Vec, number, number, number, boolean];
+
+/**
+ * Outline of one bracket from p to q, opening to the right of that direction (where a square
+ * bracket's lips point). A round bracket is a shallow arc with its ends on the spine; a curly
+ * one has rounded hooks, straight runs and a point in the middle.
+ */
+export function bracketPath(p: Vec, q: Vec, kind: Shape['bracket']): PathStep[] {
+  const l = dist(p, q);
+  const d = mul(sub(q, p), 1 / (l || 1)), n = perp(d);
+  const at = (o: Vec, along: number, out: number): Vec => add(o, add(mul(d, along), mul(n, -out)));
+  const m = mul(add(p, q), 0.5);
+  if (kind === 'round') {
+    // circular arc through both ends, its middle BOW × l out from the spine
+    const sag = BOW * l, r = (l * l) / 4 / (2 * sag) + sag / 2;
+    const c = at(m, 0, sag - r);
+    const a0 = angleOf(sub(p, c)), a1 = angleOf(sub(q, c));
+    const turn = Math.atan2(Math.sin(a1 - a0), Math.cos(a1 - a0));
+    return [['M', p], ['A', c, r, a0, a1, turn < 0]];
+  }
+  const lip = bracketLip(l);
+  if (kind === 'curly') {
+    const r = Math.min(lip, l / 4), tip = Math.max(2, l * POINT), t = Math.min(0.8 * tip, l / 4);
+    return [
+      ['M', at(p, 0, -r)], ['Q', p, at(p, r, 0)], ['L', at(m, -t, 0)], ['Q', m, at(m, 0, tip)],
+      ['Q', m, at(m, t, 0)], ['L', at(q, -r, 0)], ['Q', q, at(q, 0, -r)],
+    ];
+  }
+  return [['M', at(p, 0, -lip)], ['L', p], ['L', q], ['L', at(q, 0, -lip)]];
 }
 
 /** Is this oval a circle? */
@@ -72,7 +117,7 @@ export const isCircle = (s: Shape): boolean => s.kind === 'oval' && Math.abs(Mat
 
 export function shapeBox(s: Shape): Rect {
   const r = { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
-  if (s.kind === 'bracket') return padRect(r, bracketLip(Math.hypot(s.x2 - s.x1, s.y2 - s.y1)));
+  if (s.kind === 'bracket') return padRect(r, bracketReach(s));
   if (s.kind === 'rect' && s.shadow) return { ...r, x2: r.x2 + (s.shadowSize ?? 2.4), y2: r.y2 + (s.shadowSize ?? 2.4) };
   return r;
 }
@@ -85,7 +130,7 @@ export function shapeHit(s: Shape, p: Vec, tol: number): boolean {
     case 'line':
       return distToSegment(p, a, b) <= tol;
     case 'bracket':
-      return distToSegment(p, a, b) <= tol + bracketLip(dist(a, b)) / 2;
+      return distToSegment(p, a, b) <= tol + bracketReach(s) / 2;
     case 'symbol':
       return p.x >= x1 - tol && p.x <= x2 + tol && p.y >= y1 - tol && p.y <= y2 + tol;
     case 'rect': {

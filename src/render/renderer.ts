@@ -11,7 +11,7 @@ import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
 import { valenceExceeded } from '../chem/elements';
 import { GENERIC } from '../chem/labels';
-import { bracketLip, shaftOffset } from '../objects';
+import { bracketPath, shaftOffset, type PathStep } from '../objects';
 import { formulaParts } from '../richtext';
 
 export const FONT_STACK = "Arial, 'Liberation Sans', Helvetica, sans-serif";
@@ -731,39 +731,24 @@ export class Renderer {
         break;
       }
       case 'bracket': {
-        // A bracket runs from (x1,y1) to (x2,y2) with its lips on the right of that direction.
+        // A bracket runs from (x1,y1) to (x2,y2) and opens to the right of that direction.
         const p = { x: s.x1, y: s.y1 }, q = { x: s.x2, y: s.y2 };
         const l = Math.hypot(q.x - p.x, q.y - p.y);
         if (l < 0.1) break;
-        const one = (p: Vec, q: Vec) => {
-          const d = norm(sub(q, p));
-          const n = perp(d);
-          const lip = bracketLip(l);
-          if (s.bracket === 'round') {
-            const m = add(mul(add(p, q), 0.5), mul(n, -lip * 0.8));
-            ctx.moveTo(p.x + n.x * lip * 0.4, p.y + n.y * lip * 0.4);
-            ctx.quadraticCurveTo(m.x, m.y, q.x + n.x * lip * 0.4, q.y + n.y * lip * 0.4);
-          } else if (s.bracket === 'curly') {
-            const m = mul(add(p, q), 0.5);
-            const pm = add(p, mul(d, l * 0.25)), qm = add(p, mul(d, l * 0.75));
-            ctx.moveTo(p.x + n.x * lip, p.y + n.y * lip);
-            ctx.quadraticCurveTo(p.x, p.y, pm.x, pm.y);
-            ctx.quadraticCurveTo(m.x, m.y, m.x - n.x * lip, m.y - n.y * lip);
-            ctx.quadraticCurveTo(m.x, m.y, qm.x, qm.y);
-            ctx.quadraticCurveTo(q.x, q.y, q.x + n.x * lip, q.y + n.y * lip);
-          } else {
-            ctx.moveTo(p.x + n.x * lip, p.y + n.y * lip);
-            ctx.lineTo(p.x, p.y);
-            ctx.lineTo(q.x, q.y);
-            ctx.lineTo(q.x + n.x * lip, q.y + n.y * lip);
+        const trace = (steps: PathStep[]) => {
+          for (const st of steps) {
+            if (st[0] === 'M') ctx.moveTo(st[1].x, st[1].y);
+            else if (st[0] === 'L') ctx.lineTo(st[1].x, st[1].y);
+            else if (st[0] === 'Q') ctx.quadraticCurveTo(st[1].x, st[1].y, st[2].x, st[2].y);
+            else ctx.arc(st[1].x, st[1].y, st[2], st[3], st[4], st[5]);
           }
         };
-        one(p, q);
+        trace(bracketPath(p, q, s.bracket));
         if (s.pair) {
           // the other half mirrors this one, a short distance away
           const n = perp(norm(sub(q, p)));
           const gap = l * 0.6;
-          one(add(q, mul(n, gap)), add(p, mul(n, gap)));
+          trace(bracketPath(add(q, mul(n, gap)), add(p, mul(n, gap)), s.bracket));
         }
         ctx.stroke();
         break;

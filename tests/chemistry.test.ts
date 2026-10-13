@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { implicitHydrogens, valenceExceeded, elementNumber } from '../src/chem/elements';
-import { tokenize, labelGraph, labelSpec, layoutLabel, kekulize, parseSmiles } from '../src/chem/labels';
+import { tokenize, labelGraph, labelSpec, layoutLabel, labelDir, kekulize, parseSmiles } from '../src/chem/labels';
 import { formulaFromJson } from '../src/chem/formula';
 import { Doc } from '../src/model';
 import { toMolfile } from '../src/chem/molfile';
@@ -76,6 +76,30 @@ describe('labels', () => {
     // formulas are still reversed
     const oet = layoutLabel(labelSpec(6, 'OEt', 0, 0, 1, 1)!, [{ x: 1, y: 0 }], 10, measure);
     expect(oet.runs.map((r) => r.text).join('')).toBe('EtO');
+  });
+  it('puts the H where ChemDraw 25 puts it', () => {
+    // bond directions in degrees, y pointing down; expected results read off ChemDraw
+    const dirs = (angles: number[]) => angles.map((t) => ({ x: Math.cos((t * Math.PI) / 180), y: Math.sin((t * Math.PI) / 180) }));
+    const nh = labelSpec(7, null, 0, 0, 2, 2)!;
+    const oh = labelSpec(8, null, 0, 0, 1, 1)!;
+    const cases: [typeof nh, number[], string][] = [
+      // a bond to the left and one below: H on the right until the sum is within 22.5° of vertical
+      [nh, [180, 90], 'right'], [nh, [180, 48], 'right'], [nh, [180, 45], 'right'], [nh, [180, 44], 'up'], [nh, [180, 30], 'up'],
+      [nh, [180, -45], 'right'], [nh, [180, -44], 'down'], [nh, [180, -30], 'down'],
+      [nh, [160, 68], 'right'], [nh, [160, 64], 'up'], [nh, [-140, -88], 'right'], [nh, [-140, -84], 'down'],
+      // both bonds up (or down), however steep: stacked
+      [nh, [-100, -80], 'down'], [nh, [-170, -10], 'down'], [nh, [100, 80], 'up'], [nh, [170, 10], 'up'],
+      // nearly straight lines through the atom
+      [nh, [85, -85], 'left'], [nh, [90, -90], 'right'], [nh, [95, -95], 'right'], [nh, [0, 180], 'up'],
+      [nh, [100, -60], 'left'], [nh, [80, -120], 'right'], [nh, [-60, 60], 'left'], [nh, [-120, 120], 'right'],
+      // ring NH as the templates draw them: imidazole, carbazole, purine, indole, pyrazole
+      [nh, [72, 180], 'right'], [nh, [-174, -66], 'right'], [nh, [18, 126], 'up'], [nh, [-162, -54], 'down'], [nh, [36, -72], 'left'],
+      // one bond: never stacked; left as soon as the bond leans right
+      [oh, [-90], 'right'], [oh, [90], 'right'], [oh, [95], 'right'], [oh, [85], 'left'], [oh, [-85], 'left'], [oh, [-60], 'left'], [oh, [0], 'left'],
+    ];
+    for (const [spec, angles, want] of cases) expect([angles, labelDir(spec, dirs(angles))]).toEqual([angles, want]);
+    // a justification the user picked always wins
+    expect(labelDir(nh, dirs([-100, -80]), 'right')).toBe('right');
   });
   it('shows no label for plain carbon in a chain', () => {
     expect(labelSpec(6, null, 0, 0, 2, 2)).toBeNull();
