@@ -6,6 +6,7 @@ import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption } from '../model';
 import { CaptionEditor } from '../ui/caption-editor';
 import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
 import { styleFromFace, plainText } from '../richtext';
+import { cleanUpMoves } from '../chem/cleanup';
 import { Renderer } from '../render/renderer';
 import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG } from '../geom';
 import {
@@ -1041,6 +1042,22 @@ export class Editor {
     const snap = snapshot(this.doc, this.sel, this.measure());
     const c = { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 };
     this.doc.edit('Rotate', () => transform(this.doc, snap, rotation(c, deg * DEG), false));
+    this.changed();
+    return true;
+  }
+
+  /**
+   * Redraw structures with even bonds and angles: the selected ones, or all of them when no atom
+   * is selected. Returns false when there was nothing to change.
+   */
+  cleanUp(): boolean {
+    const doc = this.doc;
+    const frags = this.sel.atoms.size
+      ? doc.fragments().filter((f) => [...f].some((id) => this.sel.atoms.has(id)))
+      : doc.fragments();
+    const moves = cleanUpMoves(doc, frags);
+    if (!moves.length) return false;
+    doc.edit('Clean Up Structure', () => { for (const [id, p] of moves) doc.updateAtom(id, { x: p.x, y: p.y }); });
     this.changed();
     return true;
   }

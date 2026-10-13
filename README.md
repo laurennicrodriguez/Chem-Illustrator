@@ -2,7 +2,7 @@
 
 A fast chemical structure drawing program for the lab, built to work like ChemDraw: the same hotkeys, the same ACS Document 1996 look, and it opens your existing ChemDraw `.cdxml` files.
 
-This is the step 2 speed prototype. It runs as a Windows desktop app and in a web browser. See [TECH-DECISION.md](TECH-DECISION.md) for why it is built this way and how fast it is.
+This is a working prototype: it opens, saves and copies ChemDraw files (milestone 1) and has the main drawing tools (milestone 2). It runs as a Windows desktop app and in a web browser. See [TECH-DECISION.md](TECH-DECISION.md) for why it is built this way and how fast it is.
 
 ## Run it on your computer
 
@@ -40,6 +40,11 @@ npm run desktop:build    # makes the installers in src-tauri/target/release/bund
 - **File ▸ Open** (Ctrl+O) a ChemDraw `.cdxml` file, or drop one onto the drawing. Edit it and **Save** (Ctrl+S): only what you changed is rewritten, so everything else in the file stays exactly as ChemDraw wrote it. **Save As** (Ctrl+Shift+S) saves a copy; new drawings are saved as `.cdxml` too.
 - **Edit ▸ Copy** (Ctrl+C) copies the selection, or the whole drawing when nothing is selected. In the Windows app, paste it into ChemDraw as structures, or into Word or PowerPoint as a sharp picture that stays crisp when enlarged; in a browser it is copied as a high-resolution picture. **Paste** (Ctrl+V) takes drawings copied here or in ChemDraw (Windows app), or a SMILES string or molfile. **Cut** is Ctrl+X.
 - **File ▸ Export Molfile** saves the selected structures (or all of them) as a `.mol` file; **Edit ▸ Copy as SMILES** (Ctrl+Alt+C) copies them as SMILES text.
+- **Text tool** (`t`): click and type a caption. Ctrl+B, Ctrl+I and Ctrl+U for bold, italic and underline; Ctrl+= and Ctrl+Shift+= for subscript and superscript; the bar above the text has Greek letters and symbols. Formulas such as CH3CO2H get their subscripts automatically (Style panel: Formula style).
+- **Arrows, shapes and brackets** from the tool bar: reaction, equilibrium, retrosynthetic, crossed-out and curved arrows; boxes, circles and lines; square, round and curly brackets. Drag a handle to change one; the Style panel sets line width and colour.
+- **Templates**: ring systems, heterocycles, amino acids and sugars. Click empty space to place one (drag to turn it), click a bond to fuse it on, or click an atom to join it there.
+- **Object menu**: align, space evenly, flip (Ctrl+Shift+H, Ctrl+Shift+V) and rotate the selection, or drag the round handle above it.
+- **Structure ▸ Clean Up Structure** (Ctrl+Shift+K): evens out bond lengths and angles of the selected structures (or all of them) while keeping their shape, stereocentres and cis/trans double bonds. Undo puts it back.
 - Select a structure to see its formula, exact mass, MW, [M+H]+ and [M+Na]+. Tick **Show R/S** for stereo labels.
 - Paste a SMILES string or a molfile with Ctrl+V to draw it.
 - **Stress test** draws thousands of molecules; the Speed panel shows how long each redraw takes.
@@ -61,8 +66,11 @@ The `bench/` scripts drive the app in a headless browser to measure speed. Start
 |---|---|
 | `src/model.ts` | The drawing: atoms, bonds, text, arrows, shapes, undo and redo |
 | `src/render/` | Drawing to the screen (tiles, bond and label drawing), and pictures for other programs (EMF, SVG, PNG) |
-| `src/editor/` | Mouse tools and hotkeys |
-| `src/chem/` | Elements, labels, ring and chain geometry, molfile, formula |
+| `src/editor/` | Mouse tools and hotkeys; align, flip and rotate |
+| `src/ui/` | Tool bar, Style panel, the caption text box and template pictures |
+| `src/richtext.ts` | Styled caption text (bold, subscripts, Greek letters) |
+| `src/chem/` | Elements, labels, ring and chain geometry, templates, Clean Up Structure, molfile, formula |
+| `scripts/make-templates.mjs` | Makes the template shapes (`src/chem/templates.json`) with RDKit |
 | `src/io/cdxml.ts`, `cdxml-write.ts` | Reading and saving ChemDraw `.cdxml` files |
 | `src/io/cdx.ts` | ChemDraw's binary CDX format (used on the clipboard), converted to and from CDXML |
 | `src/io/files.ts`, `document-file.ts` | Open and Save dialogs, unsaved-changes prompts |

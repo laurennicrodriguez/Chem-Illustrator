@@ -340,6 +340,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'rotate-cw': () => editor.rotateBy(90) || flash('Select something to rotate.'),
   'rotate-ccw': () => editor.rotateBy(-90) || flash('Select something to rotate.'),
   'rotate-180': () => editor.rotateBy(180) || flash('Select something to rotate.'),
+  'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
   'clipboard-formats': async () => {
     const names = await clipboardFormats().catch((err) => [String(err)]);
     flash(names.length ? 'On the clipboard: ' + names.join(', ') : 'The clipboard is empty.', 15000);
@@ -399,6 +400,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 's') cmd = e.shiftKey ? 'save-as' : 'save';
   else if (k === 'h' && e.shiftKey) cmd = 'flip-h';
   else if (k === 'v' && e.shiftKey && !e.altKey) cmd = 'flip-v';
+  else if (k === 'k' && e.shiftKey) cmd = 'clean-up';
   else if (k === 'c') cmd = e.altKey ? 'copy-smiles' : textSelected() ? null : 'copy';
   else if (k === 'x' && !e.altKey) cmd = textSelected() ? null : 'cut';
   // in a browser, Ctrl+V goes on to the paste event, which can read the clipboard
