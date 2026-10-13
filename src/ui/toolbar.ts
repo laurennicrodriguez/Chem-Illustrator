@@ -14,6 +14,8 @@ export interface PaletteDef {
   icon?: (name: string, size: number) => string;
   /** Bigger buttons in the open palette (templates). */
   large?: boolean;
+  /** Picture size in the open palette, in pixels, for large palettes (46 unless set). */
+  iconSize?: number;
 }
 export type ToolbarItem = ToolDef | PaletteDef;
 
@@ -123,7 +125,9 @@ export class Toolbar {
       b.className = 'tool' + (pal.def.large ? ' large' : '') + (t.name === pal.current ? ' active' : '');
       b.setAttribute('role', 'menuitem');
       this.titleTool(b, t);
-      b.innerHTML = this.icon(pal.def, t.name, pal.def.large ? 46 : 28);
+      const px = pal.def.large ? pal.def.iconSize ?? 46 : 28;
+      if (pal.def.large && pal.def.iconSize) b.style.width = b.style.height = `${px + 6}px`;
+      b.innerHTML = this.icon(pal.def, t.name, px);
       b.addEventListener('click', () => { this.close(); this.pick(t.name); });
       f.appendChild(b);
     }
