@@ -10,10 +10,13 @@ import { cleanUpMoves } from '../chem/cleanup';
 import { Renderer } from '../render/renderer';
 import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG } from '../geom';
 import {
-  sproutDir, sproutPair, sprout, bondTo, bondLength, atomAt, freeRing, fusedRing, fuseSide, ringOnAtom,
+  sproutDir, sprout, bondTo, bondLength, atomAt, freeRing, fusedRing, fuseSide, ringOnAtom,
   placeRing, chainPoints, MERGE_FRACTION,
 } from '../chem/chemgeom';
-import { ATOM_LABEL_KEYS, ATOM_ACTION_KEYS, BOND_KEYS, TOOL_KEYS, AtomAction } from './hotkeys';
+import { keymap, chordOf, parseAction, KeyContext } from './keymap';
+import { sproutGroup, fuseChair, SPROUT_KINDS, SproutKind, nextNumber } from '../chem/sprouts';
+import { joinAtoms, joinBonds } from '../chem/join';
+import { extractDrawing, insertDrawing } from '../io/clipboard';
 import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, rotation, mirrorX, mirrorY } from './arrange';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { tokenize } from '../chem/labels';
@@ -139,9 +142,29 @@ export class Editor {
   hover: Hit = null;
   /** Where the pointer is, in document coordinates. */
   pointer: Vec = { x: 0, y: 0 };
-  /** After a hotkey sprouts an atom, the hotspot follows the new atom until the mouse moves. */
-  private hotAtom: number | null = null;
-  private hotAnchor: Vec | null = null;
+  /**
+   * A highlight set by the keyboard or by drawing (a new atom, or one reached with the arrow
+   * keys). It stays when the mouse moves into empty space, as in ChemDraw, and gives way when
+   * the mouse points at something else.
+   */
+  private keyHot: Hit = null;
+  /** What the mouse pointed at when the keyboard highlight was set. */
+  private keyHotHover: Hit = null;
+  /** Preferences from the settings file. */
+  options = {
+    /** After 1 or 0 on the atom under the mouse, the highlight stays there (ChemDraw). */
+    keepHotspotOnBond: true,
+    /** New bonds are one bond length long, unless Alt is held (Ctrl+L). */
+    fixedLength: true,
+    /** New bonds point in 15° steps, unless Alt is held (Ctrl+E). */
+    fixedAngles: true,
+  };
+  /** Run a menu command by name; false when it doesn't apply, so the key does nothing. */
+  runCommand: (name: string) => boolean = () => false;
+  /** The Choose Nickname list, for =. */
+  onNickname: (atomId: number) => void = () => {};
+  /** Show the Style panel for what was just selected, for /. */
+  onProperties: () => void = () => {};
   private drag: Drag | null = null;
   private needScene = true;
   private needOverlay = true;
@@ -155,13 +178,16 @@ export class Editor {
   /** The atom most recently drawn or changed (its structure is analysed when nothing is selected). */
   lastEdited: number | null = null;
   private labelInput: HTMLInputElement | null = null;
+  /** The mouse is over the drawing, so keys are for the drawing even if a button has the focus. */
+  private pointerInside = false;
 
   constructor(public doc: Doc, public r: Renderer, public host: HTMLElement) {
     const el = r.overlay;
     el.addEventListener('pointerdown', (e) => this.onDown(e));
     el.addEventListener('pointermove', (e) => this.onMove(e));
     el.addEventListener('pointerup', (e) => this.onUp(e));
-    el.addEventListener('pointerleave', () => { if (!this.drag) { this.hover = null; this.requestOverlay(); } });
+    el.addEventListener('pointerenter', () => { this.pointerInside = true; });
+    el.addEventListener('pointerleave', () => { this.pointerInside = false; if (!this.drag) { this.hover = null; this.requestOverlay(); } });
     el.addEventListener('dblclick', (e) => this.onDoubleClick(e));
     el.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     el.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -295,10 +321,18 @@ export class Editor {
     return best;
   }
 
-  /** The atom or bond hotkeys apply to: the one under the pointer, or the last sprouted atom. */
-  private hotspot(): Hit {
-    if (this.hotAtom !== null && this.doc.atoms.has(this.hotAtom)) return { kind: 'atom', id: this.hotAtom };
+  /** The atom or bond hotkeys apply to: one set by the keyboard or by drawing, else the one under the pointer. */
+  hotspot(): Hit {
+    const k = this.keyHot;
+    if (k && (k.kind === 'atom' ? this.doc.atoms.has(k.id) : k.kind === 'bond' && this.doc.bonds.has(k.id))) return k;
     return this.hover;
+  }
+
+  /** Put the highlight on an atom or bond from the keyboard (it stays until the mouse points elsewhere). */
+  setKeyHot(h: Hit): void {
+    this.keyHot = h;
+    this.keyHotHover = this.hover;
+    this.requestOverlay();
   }
 
   // ------------------------------------------------------------------ pointer
@@ -318,6 +352,7 @@ export class Editor {
   private onDown(e: PointerEvent): void {
     this.commitLabel();
     this.closeCaption();
+    this.keyHot = null;
     this.r.overlay.setPointerCapture(e.pointerId);
     const p = this.docPoint(e);
     const rect = this.r.overlay.getBoundingClientRect();
@@ -346,13 +381,17 @@ export class Editor {
     const p = this.docPoint(e);
     this.pointer = p;
     const d = this.drag;
-    if (this.hotAnchor && dist(this.hotAnchor, p) > this.tol(3)) { this.hotAtom = null; this.hotAnchor = null; }
     if (!d) {
       const rh = this.rotateHandle();
       const onRotate = !!rh && dist(rh, p) <= this.tol(7);
       const handle = onRotate ? null : this.handleAt(p);
       const h = handle || onRotate ? null : this.hitTest(p);
       if (!sameHit(h, this.hover)) { this.hover = h; }
+      // the keyboard highlight gives way once the mouse points at something new
+      if (this.keyHot) {
+        if (!h) this.keyHotHover = null;
+        else if (!sameHit(h, this.keyHotHover)) this.keyHot = null;
+      }
       this.r.overlay.style.cursor = onRotate ? 'grab' : handle ? (handle.which === 'mid' ? 'grab' : 'crosshair') : '';
       this.requestOverlay(e.timeStamp);
       return;
@@ -501,6 +540,16 @@ export class Editor {
     v.scale = ns;
   }
 
+  /** Zoom about the middle of the window by a factor, or to a scale (screen pixels per point). */
+  zoomBy(f: number): void {
+    this.zoomAt(this.r.width / 2, this.r.height / 2, f);
+    this.requestScene();
+  }
+
+  zoomTo(scale: number): void {
+    this.zoomBy(scale / this.r.view.scale);
+  }
+
   /** Zoom and scroll so the whole drawing fits the window. */
   fit(): void {
     const b = this.doc.bounds();
@@ -581,6 +630,8 @@ export class Editor {
             this.lastEdited = b.id;
           }
         });
+        // as in ChemDraw, the far end of the new bond takes the next hotkey
+        if (!h || h.kind === 'atom') this.setKeyHot({ kind: 'atom', id: this.lastEdited! });
         this.changed();
         return;
       }
@@ -593,6 +644,7 @@ export class Editor {
             this.lastEdited = bondTo(doc, a, add(p, fromAngle(-30 * DEG, doc.style.bondLength))).id;
           }
         });
+        this.setKeyHot({ kind: 'atom', id: this.lastEdited! });
         this.changed();
         return;
       }
@@ -717,14 +769,20 @@ export class Editor {
 
   // ------------------------------------------------------------------ drags that draw
 
-  private snapEnd(from: Vec, p: Vec, L: number, fromId?: number): { pt: Vec; atom?: Atom } {
+  /**
+   * Where a dragged bond ends: on an atom under the pointer, else one bond length away in a
+   * 15° step. Alt, or turning off fixed lengths (Ctrl+L) or angles (Ctrl+E), lets it go free.
+   */
+  private snapEnd(from: Vec, p: Vec, L: number, fromId?: number, alt = false): { pt: Vec; atom?: Atom } {
     const h = this.hitTest(p);
     if (h && h.kind === 'atom' && h.id !== fromId) {
       const a = this.doc.atoms.get(h.id)!;
       return { pt: a, atom: a };
     }
-    const ang = snapAngle(angleOf(sub(p, from)));
-    return { pt: add(from, fromAngle(ang, L)) };
+    const raw = angleOf(sub(p, from));
+    const ang = this.options.fixedAngles && !alt ? snapAngle(raw) : raw;
+    const len = this.options.fixedLength && !alt ? L : Math.max(L * 0.2, dist(p, from));
+    return { pt: add(from, fromAngle(ang, len)) };
   }
 
   private finishDraw(d: Drag, p: Vec): void {
@@ -737,11 +795,12 @@ export class Editor {
       doc.edit('Bond', () => {
         const a = startAtom ?? doc.addAtom(start.x, start.y);
         const L = bondLength(doc, a);
-        const end = this.snapEnd(a, p, L, a.id);
+        const end = this.snapEnd(a, p, L, a.id, d.alt);
         const to = end.atom ?? bondTo(doc, a, end.pt, t.order, t.display);
         if (end.atom && !doc.bondBetween(a.id, end.atom.id)) doc.addBond(a.id, end.atom.id, t.order, t.display);
         this.lastEdited = to.id;
       });
+      this.setKeyHot({ kind: 'atom', id: this.lastEdited! });
     } else if (t.kind === 'chain') {
       doc.edit('Chain', () => {
         const a = startAtom ?? doc.addAtom(start.x, start.y);
@@ -892,6 +951,36 @@ export class Editor {
     const d = this.doc;
     this.sel = { atoms: new Set(d.atoms.keys()), bonds: new Set(d.bonds.keys()), captions: new Set(d.captions.keys()), arrows: new Set(d.arrows.keys()), shapes: new Set(d.shapes.keys()) };
     this.requestOverlay();
+    this.onChange();
+  }
+
+  /** Select one atom or bond and bring it into view (from the list of warnings). */
+  reveal(kind: 'atom' | 'bond', id: number): void {
+    const doc = this.doc;
+    let p: Vec;
+    if (kind === 'atom') {
+      const a = doc.atoms.get(id);
+      if (!a) return;
+      p = a;
+    } else {
+      const b = doc.bonds.get(id);
+      if (!b) return;
+      const x = doc.atoms.get(b.a1)!, y = doc.atoms.get(b.a2)!;
+      p = { x: (x.x + y.x) / 2, y: (x.y + y.y) / 2 };
+    }
+    this.sel = emptySel();
+    this.addToSel({ kind, id });
+    const v = this.r.view;
+    const s = this.r.toScreen(p);
+    const m = 60;
+    // zoom in to at least 150% so the problem can be seen, and centre it if it's off screen
+    const zoom = v.scale < 2;
+    if (zoom) v.scale = 2;
+    if (zoom || s.x < m || s.y < m || s.x > this.r.width - m || s.y > this.r.height - m) {
+      v.ox = this.r.width / 2 - p.x * v.scale;
+      v.oy = this.r.height / 2 - p.y * v.scale;
+    }
+    this.requestScene();
     this.onChange();
   }
 
@@ -1062,57 +1151,167 @@ export class Editor {
     return true;
   }
 
+  /** Move the selection a few points (the arrow keys). False with nothing selected. */
+  nudge(dx: number, dy: number): boolean {
+    if (!this.hasSelection()) return false;
+    this.doc.edit('Nudge', () => this.moveSelection(dx, dy));
+    this.changed();
+    return true;
+  }
+
+  /**
+   * Make the selection bigger or smaller about its middle: positions, bond lengths, labels and
+   * line widths together (captions keep their font size). False with nothing selected.
+   */
+  scaleSelection(f: number): boolean {
+    const b = this.selBox();
+    if (!b || !this.hasSelection() || !(f > 0) || f === 1) return false;
+    const doc = this.doc, s = this.sel;
+    const c = { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 };
+    const at = (p: Vec): Vec => add(c, mul(sub(p, c), f));
+    doc.edit('Scale', () => {
+      for (const id of s.atoms) {
+        const a = doc.atoms.get(id);
+        if (a) doc.updateAtom(id, { ...at(a), s: (a.s ?? 1) * f });
+      }
+      for (const bd of doc.bonds.values()) {
+        if (s.atoms.has(bd.a1) && s.atoms.has(bd.a2)) doc.updateBond(bd.id, { s: (bd.s ?? 1) * f });
+      }
+      for (const id of s.captions) {
+        const cap = doc.captions.get(id);
+        if (cap) doc.updateCaption(id, at(cap));
+      }
+      for (const id of s.arrows) {
+        const r = doc.arrows.get(id);
+        if (r) doc.updateArrow(id, { tail: at(r.tail), head: at(r.head), headLength: r.headLength * f, headWidth: r.headWidth * f });
+      }
+      for (const id of s.shapes) {
+        const sh = doc.shapes.get(id);
+        if (!sh) continue;
+        const p1 = at({ x: sh.x1, y: sh.y1 }), p2 = at({ x: sh.x2, y: sh.y2 });
+        doc.updateShape(id, { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y });
+      }
+    });
+    this.changed();
+    return true;
+  }
+
+  /** The typical bond length in the selection (for the Scale window), in points. */
+  selectionBondLength(): number | null {
+    const ls: number[] = [];
+    for (const b of this.doc.bonds.values()) {
+      if (!this.sel.atoms.has(b.a1) || !this.sel.atoms.has(b.a2)) continue;
+      ls.push(dist(this.doc.atoms.get(b.a1)!, this.doc.atoms.get(b.a2)!));
+      if (ls.length > 2000) break;
+    }
+    if (!ls.length) return null;
+    ls.sort((x, y) => x - y);
+    return ls[ls.length >> 1];
+  }
+
+  /**
+   * ChemDraw's Ctrl+arrow: a reaction arrow 90 pt long beside the selection, then a copy of the
+   * selection past its head, which becomes the selection (so pressing it again carries on).
+   */
+  reactionStep(dir: 'right' | 'left' | 'down' | 'up'): boolean {
+    const b = this.selBox();
+    if (!b || !this.hasSelection()) return false;
+    const GAP = 7.6, LENGTH = 90;
+    const v = { right: { x: 1, y: 0 }, left: { x: -1, y: 0 }, down: { x: 0, y: 1 }, up: { x: 0, y: -1 } }[dir];
+    const c = { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 };
+    const reach = v.x ? (b.x2 - b.x1) / 2 : (b.y2 - b.y1) / 2;
+    const tail = add(c, mul(v, reach + GAP));
+    const head = add(tail, mul(v, LENGTH));
+    const shift = sub(add(head, mul(v, GAP + reach)), c);
+    const part = extractDrawing(this.doc, this.sel);
+    const pb = part.bounds();
+    this.doc.edit('Reaction step', () => {
+      this.addArrow(tail, head);
+      if (pb) this.sel = insertDrawing(this.doc, part, add({ x: (pb.x1 + pb.x2) / 2, y: (pb.y1 + pb.y2) / 2 }, shift));
+    });
+    this.changed();
+    return true;
+  }
+
+  /** Select the next (or previous) structure, in the order they were drawn (Tab, Shift+Tab). */
+  selectNextStructure(step: 1 | -1): boolean {
+    const frags = this.doc.fragments();
+    if (!frags.length) return false;
+    const cur = frags.findIndex((f) => [...this.sel.atoms].some((id) => f.has(id)));
+    const i = cur < 0 ? (step > 0 ? 0 : frags.length - 1) : (cur + step + frags.length) % frags.length;
+    this.selectFragment(frags[i].values().next().value!, false);
+    return true;
+  }
+
+  /**
+   * Ctrl+J: join the two selected atoms, or the two selected bonds, into one (the smaller
+   * structure moves). False when the selection isn't two atoms or two bonds.
+   */
+  join(): boolean {
+    const s = this.sel;
+    const bonds = [...s.bonds];
+    // two bonds: their four atoms are selected too, so look at the bonds first
+    const loose = [...s.atoms].filter((id) => ![...s.bonds].some((bid) => { const b = this.doc.bonds.get(bid); return b && (b.a1 === id || b.a2 === id); }));
+    let ok = false;
+    if (bonds.length === 2 && !loose.length) {
+      this.doc.edit('Join', () => { ok = joinBonds(this.doc, bonds[0], bonds[1]); });
+    } else if (s.atoms.size === 2 && !bonds.length) {
+      const [a, b] = [...s.atoms];
+      this.doc.edit('Join', () => {
+        const kept = joinAtoms(this.doc, a, b);
+        ok = kept !== null;
+        if (kept !== null) this.sel = { ...emptySel(), atoms: new Set([kept]) };
+      });
+    }
+    if (!ok) return false;
+    if (bonds.length === 2) this.sel = emptySel();
+    this.changed();
+    return true;
+  }
+
   // ------------------------------------------------------------------ keyboard
 
   private onKey(e: KeyboardEvent): void {
     const target = e.target as HTMLElement;
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
-    const ctrl = e.ctrlKey || e.metaKey;
-    const doc = this.doc;
-    if (ctrl) {
-      const k = e.key.toLowerCase();
-      if (k === 'z' && !e.shiftKey) { e.preventDefault(); this.undo(); return; }
-      if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); this.redo(); return; }
-      if (k === 'a') { e.preventDefault(); this.selectAll(); return; }
-      if (k === '0') { e.preventDefault(); this.fit(); return; }
-      if (k === '=' || k === '+') { e.preventDefault(); this.zoomAt(this.r.width / 2, this.r.height / 2, 1.25); this.requestScene(); return; }
-      if (k === '-') { e.preventDefault(); this.zoomAt(this.r.width / 2, this.r.height / 2, 0.8); this.requestScene(); return; }
-      return;
-    }
-    if (e.altKey && e.key.startsWith('Arrow') && this.hasSelection()) {
-      // Alt+←/→ turn the selection 1°, Alt+↑/↓ 15°
-      e.preventDefault();
-      const deg = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : e.key === 'ArrowUp' ? -15 : 15;
-      this.rotateBy(deg);
-      return;
-    }
-    if (e.altKey) return;
-    if (e.key === 'Escape') { this.clearSelection(); return; }
+    if (e.defaultPrevented || target?.closest?.('dialog, .menu, .flyout')) return;
+    const chord = chordOf(e);
+    if (!chord) return;
+    // on a focused button or menu, Enter, Space and Tab do their usual jobs (unless the mouse
+    // is over the drawing: then they are drawing keys, as in ChemDraw)
+    if (!this.pointerInside && target && target !== document.body && target !== this.r.overlay && /^(Shift\+)?(Enter|Space|Tab)$/.test(chord)) return;
+    if (chord === 'Escape') { this.keyHot = null; this.clearSelection(); return; }
     const hs = this.hotspot();
-    if ((e.key === 'Delete' || e.key === 'Backspace') && this.hasSelection() && (!hs || this.isSelected(hs))) {
+    // Delete with a selection removes the selection, unless pointing at something outside it
+    if ((chord === 'Delete' || chord === 'Backspace') && this.hasSelection() && (!hs || this.isSelected(hs))) {
       e.preventDefault();
       this.deleteSelection();
       return;
     }
-    if (hs && hs.kind === 'atom') {
-      if (this.atomKey(hs.id, e.key)) { e.preventDefault(); this.inputTs = e.timeStamp; this.changed(); }
-      return;
+    const place: KeyContext = hs?.kind === 'atom' ? 'atom' : hs?.kind === 'bond' ? 'bond' : 'space';
+    for (const ctx of [place, 'command'] as const) {
+      const action = keymap.lookup(ctx, chord);
+      if (action && this.runAction(action, hs)) {
+        e.preventDefault();
+        this.inputTs = e.timeStamp;
+        return;
+      }
     }
-    if (hs && hs.kind === 'bond') {
-      if (this.bondKey(hs.id, e.key)) { e.preventDefault(); this.inputTs = e.timeStamp; this.changed(); }
-      return;
+  }
+
+  /** Do what a key is bound to. False when it doesn't apply here (the key then does nothing). */
+  runAction(action: string, hs: Hit = this.hotspot()): boolean {
+    const { verb, arg } = parseAction(action);
+    switch (verb) {
+      case 'label': return hs?.kind === 'atom' && this.labelKey(hs.id, arg);
+      case 'atom': return hs?.kind === 'atom' && this.atomKey(hs.id, arg);
+      case 'bond': return hs?.kind === 'bond' && this.bondKey(hs.id, arg);
+      case 'fuse': return hs?.kind === 'bond' && this.fuseKey(hs.id, arg);
+      case 'hotspot': return !!hs && (hs.kind === 'atom' || hs.kind === 'bond') && this.moveHotspot(hs, arg);
+      case 'tool': if (!TOOLS[arg]) return false; this.setTool(arg); return true;
+      case 'command': return this.runCommand(arg);
     }
-    if (e.key.startsWith('Arrow') && this.hasSelection()) {
-      e.preventDefault();
-      const step = e.shiftKey ? 10 : 1;
-      const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
-      const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
-      doc.edit('Nudge', () => this.moveSelection(dx, dy));
-      this.changed();
-      return;
-    }
-    const tool = TOOL_KEYS[e.key];
-    if (tool) { e.preventDefault(); this.setTool(tool); }
+    return false;
   }
 
   undo(): void {
@@ -1128,150 +1327,165 @@ export class Editor {
     for (const [set, map] of [[this.sel.atoms, this.doc.atoms], [this.sel.bonds, this.doc.bonds], [this.sel.captions, this.doc.captions], [this.sel.arrows, this.doc.arrows], [this.sel.shapes, this.doc.shapes]] as [Set<number>, Map<number, unknown>][]) {
       for (const id of set) if (!map.has(id)) set.delete(id);
     }
-    this.hotAtom = null;
+    this.keyHot = null;
     this.changed();
   }
 
-  /** Apply an atom hotkey. Returns false if the key does nothing on atoms. */
-  atomKey(id: number, key: string): boolean {
+  /** A label key: the atom pointed at, or every selected atom when it is one of them. */
+  private labelKey(id: number, text: string): boolean {
+    const doc = this.doc;
+    if (!doc.atoms.has(id)) return false;
+    const ids = this.sel.atoms.has(id) && this.sel.atoms.size > 1 ? [...this.sel.atoms] : [id];
+    doc.edit('Label', () => { for (const a of ids) if (doc.atoms.has(a)) this.applyLabel(a, text); });
+    this.lastEdited = id;
+    this.changed();
+    return true;
+  }
+
+  /** An atom key other than a label. Returns false if it does nothing here. */
+  atomKey(id: number, act: string): boolean {
     const doc = this.doc;
     const a = doc.atoms.get(id);
     if (!a) return false;
-    const label = ATOM_LABEL_KEYS[key];
-    if (label) {
-      doc.edit('Label', () => this.applyLabel(id, label));
-      this.lastEdited = id;
+    if ((SPROUT_KINDS as readonly string[]).includes(act)) {
+      const kind = act as SproutKind;
+      const fromMouse = this.keyHot === null;
+      let next: number | null = null;
+      doc.edit('Hotkey', () => { next = sproutGroup(doc, id, kind); });
+      this.lastEdited = next ?? id;
+      // 1 and 0 on the atom under the mouse leave the highlight there (pressing 1 again adds
+      // another branch); other keys, or keys after a keyboard move, follow the new atom
+      const stay = (kind === 'bond' || kind === 'ring-bond') && fromMouse && this.options.keepHotspotOnBond;
+      if (!stay && next !== null && doc.atoms.has(next)) this.setKeyHot({ kind: 'atom', id: next });
+      this.changed();
       return true;
     }
-    const act: AtomAction | undefined = ATOM_ACTION_KEYS[key];
-    if (!act) return false;
-    if (act === 'label') { this.editLabel(id); return false; }
-    if (act === 'select') { this.sel = emptySel(); this.sel.atoms.add(id); this.requestOverlay(); this.onChange(); return false; }
-    let next: number | null = null;
-    doc.edit('Hotkey', () => { next = this.atomAction(a, act); });
-    this.lastEdited = next ?? id;
-    if (next !== null && doc.atoms.has(next)) {
-      this.hotAtom = next;
-      this.hotAnchor = { ...this.pointer };
+    switch (act) {
+      case 'plus':
+      case 'minus':
+        doc.edit('Charge', () => doc.updateAtom(id, { charge: a.charge + (act === 'plus' ? 1 : -1) }));
+        break;
+      case 'number':
+        doc.edit('Atom number', () => doc.updateAtom(id, a.showNumber
+          ? { showNumber: false }
+          : { showNumber: true, atomNumber: a.atomNumber || String(nextNumber(doc, id, (x) => x.atomNumber)) }));
+        break;
+      case 'attach':
+        doc.edit('Attachment point', () => doc.updateAtom(id, a.attach
+          ? { attach: undefined, attachNum: undefined, z: 6 }
+          : { attach: 'Unspecified', attachNum: nextNumber(doc, id, (x) => (x.attach ? x.attachNum : undefined)), z: 0, label: null, charge: 0, fileLabel: false }));
+        break;
+      case 'nickname': this.onNickname(id); return true;
+      case 'properties': this.selectOnly({ kind: 'atom', id }); this.onProperties(); return true;
+      case 'edit-label': this.editLabel(id); return true;
+      case 'select': this.selectOnly({ kind: 'atom', id }); return true;
+      case 'clear':
+        doc.edit('Delete', () => {
+          if (a.label || a.z !== 6 || a.charge || a.attach) doc.updateAtom(id, { label: null, z: 6, charge: 0, fileLabel: false, attach: undefined, attachNum: undefined });
+          else doc.removeAtom(id);
+        });
+        break;
+      default: return false;
     }
+    this.lastEdited = id;
+    this.changed();
     return true;
   }
 
-  private atomAction(a: Atom, act: AtomAction): number | null {
-    const doc = this.doc;
-    const id = a.id;
-    const deg = doc.degree(id);
-    const aromaticOrTertiary = deg >= 3 || this.isAromaticAtom(id);
-    const L = bondLength(doc, a);
-    switch (act) {
-      case 'bond': return sprout(doc, id).id;
-      case 'carbonyl': {
-        if (deg === 2 && !aromaticOrTertiary) { sprout(doc, id, 2, 'solid', 8); return id; }
-        const c = aromaticOrTertiary ? sprout(doc, sprout(doc, id).id) : sprout(doc, id);
-        const [d1, d2] = sproutPair(doc, c.id);
-        bondTo(doc, c, add(c, mul(d1, L)), 2, 'solid', 8);
-        bondTo(doc, c, add(c, mul(d2, L)));
-        return c.id;
-      }
-      case 'phenyl': {
-        const base = deg >= 2 ? sprout(doc, id) : a;
-        const ids = placeRing(doc, ringOnAtom(base, sproutDir(doc, base.id), 6, L), { aromatic: true, existing: [base.id], scale: a.s });
-        return ids[0];
-      }
-      case 'wedge':
-      case 'hashWedge': {
-        const disp: BondDisplay = act;
-        if (deg <= 1 || this.isAromaticAtom(id)) {
-          const c = deg === 0 ? a : sprout(doc, id);
-          return sprout(doc, c.id, 1, disp).id;
-        }
-        return sprout(doc, id, 1, disp).id;
-      }
-      case 'cyclohexane':
-      case 'cyclopentane':
-      case 'cyclopropane':
-      case 'cyclobutane': {
-        const n = act === 'cyclohexane' ? 6 : act === 'cyclopentane' ? 5 : act === 'cyclobutane' ? 4 : 3;
-        const base = aromaticOrTertiary || act === 'cyclopropane' || act === 'cyclobutane' ? sprout(doc, id) : a;
-        const ids = placeRing(doc, ringOnAtom(base, sproutDir(doc, base.id), n, L), { existing: [base.id], scale: a.s });
-        return ids[0];
-      }
-      case 'methylidene': {
-        const base = aromaticOrTertiary ? sprout(doc, id) : a;
-        return sprout(doc, base.id, 2).id;
-      }
-      case 'dimethyl': {
-        const base = deg >= 3 ? sprout(doc, id) : a;
-        const [d1, d2] = sproutPair(doc, base.id);
-        bondTo(doc, base, add(base, mul(d1, L)));
-        bondTo(doc, base, add(base, mul(d2, L)));
-        return base.id;
-      }
-      case 'tBu': {
-        const c = sprout(doc, id);
-        const dir = norm(sub(c, a));
-        for (const ang of [0, 90, -90]) bondTo(doc, c, add(c, mul(fromAngle(angleOf(dir) + ang * DEG), L)));
-        return c.id;
-      }
-      case 'alkyne': {
-        const c1 = sprout(doc, id);
-        const dir = norm(sub(c1, a));
-        const c2 = bondTo(doc, c1, add(c1, mul(dir, L)), 3);
-        return c2.id;
-      }
-      case 'plus': doc.updateAtom(id, { charge: a.charge + 1 }); return null;
-      case 'minus': doc.updateAtom(id, { charge: a.charge - 1 }); return null;
-      case 'clear': {
-        if (a.label || a.z !== 6 || a.charge) doc.updateAtom(id, { label: null, z: 6, charge: 0, fileLabel: false });
-        else doc.removeAtom(id);
-        return null;
-      }
-      default: return null;
-    }
-  }
-
-  private isAromaticAtom(id: number): boolean {
-    const doc = this.doc;
-    let dbl = false, ring = false;
-    for (const bid of doc.adj.get(id) ?? []) {
-      const b = doc.bonds.get(bid)!;
-      if (b.order === 2 || b.order === 1.5) {
-        if (doc.ringThroughBond(bid, 6)?.length === 6) { dbl = true; ring = true; }
-      }
-    }
-    return dbl && ring;
-  }
-
-  /** Apply a bond hotkey. */
-  bondKey(id: number, key: string): boolean {
+  /** A bond key. Returns false if it does nothing here. */
+  bondKey(id: number, act: string): boolean {
     const doc = this.doc;
     const b = doc.bonds.get(id);
     if (!b) return false;
-    const act = BOND_KEYS[key];
-    if (!act) return false;
-    if (act === 'select') { this.sel = emptySel(); this.addToSel({ kind: 'bond', id }); this.requestOverlay(); this.onChange(); return false; }
+    const SET: Record<string, Partial<Bond>> = {
+      single: { order: 1, display: 'solid' }, double: { order: 2, display: 'solid' }, triple: { order: 3, display: 'solid' },
+      dashed: { order: 1, display: 'dash' }, 'dashed-double': { order: 1.5, display: 'solid' }, bold: { order: 1, display: 'bold' },
+      'bold-double': { order: 2, display: 'bold' }, wavy: { order: 1, display: 'wavy' }, hashed: { order: 1, display: 'hash' },
+      left: { dpos: 'left' }, center: { dpos: 'center' }, right: { dpos: 'right' },
+    };
+    if (act === 'select') { this.selectOnly({ kind: 'bond', id }); return true; }
+    if (act === 'properties') { this.selectOnly({ kind: 'bond', id }); this.onProperties(); return true; }
     doc.edit('Bond hotkey', () => {
       if (act === 'delete') { this.removeBondAndOrphans(id); return; }
-      if ('set' in act) {
-        const patch: Partial<Bond> = {};
-        if (act.set.order !== undefined) patch.order = act.set.order;
-        if (act.set.display !== undefined) patch.display = act.set.display as BondDisplay;
-        if (act.set.dpos !== undefined) {
-          patch.dpos = act.set.dpos as Bond['dpos'];
-          if (b.order !== 2) patch.order = 2;
-        }
-        doc.updateBond(id, patch);
-      } else if ('flip' in act) {
-        if (b.display === act.flip) doc.updateBond(id, { a1: b.a2, a2: b.a1 });
-        else doc.updateBond(id, { order: 1, display: act.flip });
-      } else if ('fuse' in act) {
-        const side = fuseSide(doc, b, act.fuse, this.pointer);
-        const pts = fusedRing(doc.atoms.get(b.a1)!, doc.atoms.get(b.a2)!, act.fuse, side);
-        placeRing(doc, pts, { aromatic: act.aromatic, existing: [b.a1, b.a2], scale: b.s });
+      if (act === 'wedge' || act === 'hash-wedge') {
+        const disp: BondDisplay = act === 'wedge' ? 'wedge' : 'hashWedge';
+        // pressing it again turns the wedge round
+        if (b.display === disp) doc.updateBond(id, { a1: b.a2, a2: b.a1 });
+        else doc.updateBond(id, { order: 1, display: disp });
+        return;
       }
+      const patch = { ...SET[act] };
+      if (patch.dpos && b.order !== 2) patch.order = 2;
+      doc.updateBond(id, patch);
+    });
+    if (!(act in SET) && act !== 'delete' && act !== 'wedge' && act !== 'hash-wedge') return false;
+    this.lastEdited = doc.bonds.has(id) ? b.a1 : null;
+    this.changed();
+    return true;
+  }
+
+  /** Fuse a ring onto a bond. */
+  private fuseKey(id: number, act: string): boolean {
+    const doc = this.doc;
+    const b = doc.bonds.get(id);
+    if (!b) return false;
+    const n = act === 'benzene' ? 6 : act === 'cyclopentadiene' ? 5 : Number(act);
+    if (act !== 'chair' && act !== 'chair-2' && !(n >= 3 && n <= 8)) return false;
+    doc.edit('Fuse ring', () => {
+      if (act === 'chair' || act === 'chair-2') { fuseChair(doc, id, act === 'chair-2'); return; }
+      const side = fuseSide(doc, b, n, this.pointer);
+      const pts = fusedRing(doc.atoms.get(b.a1)!, doc.atoms.get(b.a2)!, n, side);
+      placeRing(doc, pts, { aromatic: act === 'benzene' || act === 'cyclopentadiene', existing: [b.a1, b.a2], scale: b.s });
     });
     this.lastEdited = b.a1;
+    this.changed();
     return true;
+  }
+
+  /**
+   * Move the highlight with the arrow keys, atom to bond to atom, towards the arrow's direction
+   * ("far": about three bonds).
+   */
+  private moveHotspot(hs: NonNullable<Hit>, how: string): boolean {
+    const far = how.startsWith('far-');
+    const dirName = far ? how.slice(4) : how;
+    const dir: Vec = { left: { x: -1, y: 0 }, right: { x: 1, y: 0 }, up: { x: 0, y: -1 }, down: { x: 0, y: 1 } }[dirName] ?? { x: 0, y: 0 };
+    let cur: NonNullable<Hit> = hs;
+    for (let i = 0; i < (far ? 6 : 1); i++) {
+      const next = this.hotspotStep(cur, dir);
+      if (!next) break;
+      cur = next;
+    }
+    if (!sameHit(cur, hs)) this.setKeyHot(cur);
+    return true;
+  }
+
+  /** One arrow-key step: from an atom to a bond leaving it, or from a bond to one of its atoms. */
+  private hotspotStep(h: NonNullable<Hit>, dir: Vec): Hit {
+    const doc = this.doc;
+    const here = h.kind === 'atom' ? doc.atoms.get(h.id) : (() => {
+      const b = doc.bonds.get(h.id);
+      return b ? mul(add(doc.atoms.get(b.a1)!, doc.atoms.get(b.a2)!), 0.5) : undefined;
+    })();
+    if (!here) return null;
+    let best: Hit = null, bestScore = 0.35;
+    const consider = (c: NonNullable<Hit>, at: Vec) => {
+      const v = sub(at, here);
+      const l = Math.hypot(v.x, v.y);
+      if (l < 1e-9) return;
+      const score = (v.x * dir.x + v.y * dir.y) / l;
+      if (score > bestScore + 1e-9) { bestScore = score; best = c; }
+    };
+    if (h.kind === 'atom') {
+      for (const bid of doc.adj.get(h.id) ?? []) {
+        const b = doc.bonds.get(bid)!;
+        consider({ kind: 'bond', id: bid }, mul(add(doc.atoms.get(b.a1)!, doc.atoms.get(b.a2)!), 0.5));
+      }
+    } else if (h.kind === 'bond') {
+      const b = doc.bonds.get(h.id)!;
+      for (const aid of [b.a1, b.a2]) consider({ kind: 'atom', id: aid }, doc.atoms.get(aid)!);
+    }
+    return best;
   }
 
   // ------------------------------------------------------------------ labels and text
@@ -1291,7 +1505,7 @@ export class Editor {
       const heavy = toks.find((k) => k.text !== 'H');
       if (hTok && heavy) {
         const hz = elementNumber(heavy.text)!;
-        const bos = doc.bondOrderSum(id);
+        const bos = doc.valenceSum(id);
         const a = doc.atoms.get(id)!;
         if (hasImplicitH(hz) && implicitHydrogens(hz, bos, a.charge) === hTok.count) {
           doc.updateAtom(id, { label: null, z: hz, fileLabel: false });
@@ -1450,9 +1664,11 @@ export class Editor {
           ctx.beginPath();
           ctx.arc(a.x, a.y, r, 0, Math.PI * 2);
           ctx.fill();
+          // a green dot where 1 would grow the next bond, as in ChemDraw
+          const dot = add(a, mul(sproutDir(doc, a.id), bondLength(doc, a) * 0.46));
           ctx.fillStyle = '#19a34a';
           ctx.beginPath();
-          ctx.arc(a.x, a.y, Math.max(0.7, 1.6 * px), 0, Math.PI * 2);
+          ctx.arc(dot.x, dot.y, Math.max(0.9, 2.6 * px), 0, Math.PI * 2);
           ctx.fill();
         }
       } else if (h.kind === 'bond') {
@@ -1566,7 +1782,7 @@ export class Editor {
       ctx.stroke();
     };
     if (t.kind === 'bond') {
-      const end = this.snapEnd(start, d.last, L, startAtom?.id);
+      const end = this.snapEnd(start, d.last, L, startAtom?.id, d.alt);
       poly([start, end.pt], false);
     } else if (t.kind === 'chain') {
       const pts = chainPoints(start, d.last, L, doc.style.chainAngle, this.chainFirstUp(start, d.last));

@@ -54,16 +54,63 @@ export function implicitHydrogens(z: number, bondOrderSum: number, charge: numbe
   return 0;
 }
 
-/** True if the atom carries more bonds than any of its normal valences allows. */
-export function valenceExceeded(z: number, bondOrderSum: number, charge: number): boolean {
-  const vals = VALENCES[z];
-  if (!vals) return false;
+/**
+ * Most bonds an element normally makes, for the valence warning, adjusted for charge the same
+ * way as the hydrogen count (N+ makes 4, C+ and C− make 3, O− makes 1, B− makes 4).
+ * Undefined for elements that are not checked (transition metals, noble gases).
+ */
+export function maxValence(z: number, charge = 0): number | undefined {
+  const max = MAX_VALENCE[z];
+  if (max === undefined) return undefined;
   let adj = 0;
   if (charge !== 0) {
     if (z === 6 || z === 14) adj = -Math.abs(charge);
-    else if (z === 5) adj = -charge;
+    else if (GROUP_13.has(z)) adj = -charge;
     else if (isPnictogenOrChalcogen(z)) adj = charge;
     else adj = -Math.abs(charge);
   }
-  return Math.ceil(bondOrderSum - 1e-6) > vals[vals.length - 1] + adj;
+  return Math.max(0, max + adj);
+}
+
+const GROUP_13 = new Set([5, 13, 31, 49, 81]);
+
+/** Highest normal valence: the hydrogen-taking elements above, plus main-group metals. */
+const MAX_VALENCE: Record<number, number> = {
+  ...Object.fromEntries(Object.entries(VALENCES).map(([z, v]) => [z, v[v.length - 1]])),
+  17: 7, 35: 7, 53: 7, // perchlorate, periodinane
+  3: 1, 11: 1, 19: 1, 37: 1, 55: 1, // alkali metals
+  4: 2, 12: 2, 20: 2, 38: 2, 56: 2, // alkaline earths
+  13: 3, 31: 3, 49: 3, 81: 3, 30: 2, 48: 2, 80: 2, 82: 4,
+};
+
+/**
+ * How many bonds an atom's bonds add up to for valence: single 1, double 2, triple 3. Aromatic
+ * (1.5) bonds count as drawn alternating: a ring carbon gets one double bond among them (benzene
+ * C–R makes 4), while N, O, S, P, Se and B may instead give a lone pair (pyrrole N–R makes 3).
+ */
+export function valenceOfBonds(orders: Iterable<number>, z = 6): number {
+  let sum = 0, arom = 0;
+  for (const o of orders) {
+    if (o === 1.5) arom++;
+    else sum += o;
+  }
+  if (!arom) return sum;
+  return sum + arom + (LONE_PAIR_DONORS.has(z) ? 0 : 1);
+}
+
+const LONE_PAIR_DONORS = new Set([5, 7, 8, 15, 16, 34]);
+
+/** Fewest bonds an element normally makes (with its hydrogens), adjusted for charge; undefined if not checked. */
+export function minValence(z: number, charge = 0): number | undefined {
+  const vals = VALENCES[z];
+  const max = maxValence(z, charge);
+  if (!vals || max === undefined) return undefined;
+  return Math.max(0, vals[0] + (max - MAX_VALENCE[z]));
+}
+
+/** True if the atom carries more bonds than any of its normal valences allows. */
+export function valenceExceeded(z: number, bondOrderSum: number, charge: number): boolean {
+  const max = maxValence(z, charge);
+  if (max === undefined) return false;
+  return Math.ceil(bondOrderSum - 1e-6) > max;
 }

@@ -3,8 +3,9 @@
 // formula, mass and stereo come out right; "R"-type labels become dummy atoms.
 
 import { Doc, Atom } from '../model';
-import { SYMBOLS, elementNumber } from './elements';
+import { SYMBOLS, elementNumber, valenceOfBonds } from './elements';
 import { labelGraph, MiniGraph } from './labels';
+import { stereoAnchor, stereoSense } from './stereo';
 
 export interface MolExport {
   molblock: string;
@@ -12,15 +13,35 @@ export interface MolExport {
   map: number[];
   /** Labels that could not be interpreted (shown as warnings). */
   unknownLabels: string[];
+  /** Molfile atoms that belong to multi-atom labels (positions made up, so no stereo label for them). */
+  inLabel: number[];
+  /**
+   * Molfile atoms that stand for undefined groups (R, Ar, labels that can't be read), each with
+   * the label it comes from: groups with the same label are taken to be the same group.
+   */
+  generic: [number, string][];
 }
 
-interface MAtom { sym: string; x: number; y: number; charge: number; iso: number }
+export interface MolfileOptions {
+  /**
+   * For working out R/S and E/Z: R groups, attachment points and labels that can't be read
+   * become a very heavy stand-in atom (see stereoTags for how it is ranked), and
+   * positions are measured from the first atom so a structure that only moved gives the same
+   * molfile.
+   */
+  stereo?: boolean;
+}
+
+/** Stands in for R groups when working out R/S: oganesson, heavier than any atom in a real drawing. */
+const GENERIC_STAND_IN = 'Og';
+
+interface MAtom { sym: string; x: number; y: number; charge: number; iso: number; rad?: number }
 interface MBond { a: number; b: number; order: number; stereo: number }
 
 const f = (v: number, w: number, d = 4) => v.toFixed(d).padStart(w);
 const i3 = (v: number) => String(v).padStart(3);
 
-export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = ''): MolExport {
+export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = '', opts: MolfileOptions = {}): MolExport {
   const ids = [...atomIds].filter((id) => doc.atoms.has(id));
   const inSet = new Set(ids);
   const L = doc.style.bondLength || 14.4;
@@ -29,18 +50,25 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = ''): MolEx
   const map: number[] = [];
   const attach = new Map<number, number>();
   const unknown: string[] = [];
+  const inLabel: number[] = [];
+  const genericAt: [number, string][] = [];
+  const first = opts.stereo && ids.length ? doc.atoms.get(ids[0])! : { x: 0, y: 0 };
+  const generic = opts.stereo ? GENERIC_STAND_IN : '*';
 
   for (const id of ids) {
     const a = doc.atoms.get(id)!;
-    const x = a.x / L, y = -a.y / L;
+    const x = (a.x - first.x) / L, y = -(a.y - first.y) / L;
     let g: MiniGraph | null = null;
     if (a.label) {
-      g = labelGraph(a.label);
+      g = labelGraph(a.label, valenceOfBonds((doc.adj.get(id) ?? []).map((bid) => doc.bonds.get(bid)!.order)));
       if (!g) unknown.push(a.label);
     }
     if (!g || g.atoms.length === 0) {
       attach.set(id, atoms.length);
-      atoms.push({ sym: a.label && !g ? '*' : SYMBOLS[a.z] || '*', x, y, charge: a.charge, iso: a.isotope });
+      const rad = a.radical === 'singlet' ? 1 : a.radical === 'doublet' ? 2 : a.radical === 'triplet' ? 3 : 0;
+      const sym = a.label && !g ? generic : SYMBOLS[a.z] || generic;
+      if (sym === generic) genericAt.push([atoms.length, a.label ?? '']);
+      atoms.push({ sym, x, y, charge: a.charge, iso: a.isotope, rad });
       map.push(id);
       continue;
     }
@@ -50,8 +78,11 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = ''): MolEx
       // spread expanded atoms a little so no two share a position
       const ang = (k * 2.4);
       const r = k === 0 ? 0 : 0.35 + 0.05 * k;
-      atoms.push({ sym: ga.dummy ? '*' : SYMBOLS[ga.z] || '*', x: x + r * Math.cos(ang), y: y + r * Math.sin(ang), charge: ga.charge + (k === 0 ? a.charge : 0), iso: 0 });
+      const sym = ga.dummy ? generic : SYMBOLS[ga.z] || generic;
+      if (sym === generic) genericAt.push([atoms.length, `${a.label}/${k}`]);
+      atoms.push({ sym, x: x + r * Math.cos(ang), y: y + r * Math.sin(ang), charge: ga.charge + (k === 0 ? a.charge : 0), iso: ga.iso ?? 0 });
       map.push(k === 0 ? id : -1);
+      if (g!.atoms.length > 1) inLabel.push(base + k);
     });
     for (const gb of g.bonds) bonds.push({ a: base + gb.a, b: base + gb.b, order: gb.order === 1.5 ? 4 : gb.order, stereo: 0 });
   }
@@ -63,8 +94,12 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = ''): MolEx
       const b = doc.bonds.get(bid)!;
       if (!inSet.has(b.a1) || !inSet.has(b.a2)) continue;
       const order = b.order === 1.5 ? 4 : b.order === 2 ? 2 : b.order === 3 ? 3 : 1;
-      const stereo = order !== 1 ? 0 : b.display === 'wedge' ? 1 : b.display === 'hashWedge' ? 6 : b.display === 'wavy' ? 4 : 0;
-      bonds.push({ a: attach.get(b.a1)!, b: attach.get(b.a2)!, order, stereo });
+      // a stereo bond is written from the atom it describes
+      const sense = stereoSense(b);
+      const from = sense ? stereoAnchor(doc, b)! : b.a1;
+      const stereo = sense === 'up' ? 1 : sense === 'down' ? 6 : sense === 'either' ? 4 : 0;
+      const to = from === b.a1 ? b.a2 : b.a1;
+      bonds.push({ a: attach.get(from)!, b: attach.get(to)!, order, stereo });
     }
   }
 
@@ -84,8 +119,13 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = ''): MolEx
     const part = iso.slice(k, k + 8);
     lines.push(`M  ISO${i3(part.length)}` + part.map(([i, m]) => ` ${i3(i + 1)} ${i3(m)}`).join(''));
   }
+  const rad = atoms.map((a, i) => [i, a.rad ?? 0] as const).filter(([, r]) => r > 0);
+  for (let k = 0; k < rad.length; k += 8) {
+    const part = rad.slice(k, k + 8);
+    lines.push(`M  RAD${i3(part.length)}` + part.map(([i, r]) => ` ${i3(i + 1)} ${i3(r)}`).join(''));
+  }
   lines.push('M  END');
-  return { molblock: lines.join('\n') + '\n', map, unknownLabels: unknown };
+  return { molblock: lines.join('\n') + '\n', map, unknownLabels: unknown, inLabel, generic: genericAt };
 }
 
 /** Add the atoms and bonds of a molfile to the document, centred at (cx, cy). Returns new atom ids. */

@@ -12,10 +12,10 @@
     <div class="menu-wrap">
       <button id="btn-file" aria-haspopup="menu" aria-expanded="false" aria-controls="file-menu">File</button>
       <div id="file-menu" class="menu" role="menu" hidden>
-        <button role="menuitem" data-cmd="new">New<kbd>Ctrl+N</kbd></button>
-        <button role="menuitem" data-cmd="open">Open…<kbd>Ctrl+O</kbd></button>
-        <button role="menuitem" data-cmd="save">Save<kbd>Ctrl+S</kbd></button>
-        <button role="menuitem" data-cmd="save-as">Save As…<kbd>Ctrl+Shift+S</kbd></button>
+        <button role="menuitem" data-cmd="new">New</button>
+        <button role="menuitem" data-cmd="open">Open…</button>
+        <button role="menuitem" data-cmd="save">Save</button>
+        <button role="menuitem" data-cmd="save-as">Save As…</button>
         <hr />
         <button role="menuitem" data-cmd="export-mol">Export Molfile…</button>
       </div>
@@ -23,16 +23,33 @@
     <div class="menu-wrap">
       <button id="btn-edit" aria-haspopup="menu" aria-expanded="false" aria-controls="edit-menu">Edit</button>
       <div id="edit-menu" class="menu" role="menu" hidden>
-        <button role="menuitem" data-cmd="undo">Undo<kbd>Ctrl+Z</kbd></button>
-        <button role="menuitem" data-cmd="redo">Redo<kbd>Ctrl+Y</kbd></button>
+        <button role="menuitem" data-cmd="undo">Undo</button>
+        <button role="menuitem" data-cmd="redo">Redo</button>
         <hr />
-        <button role="menuitem" data-cmd="cut">Cut<kbd>Ctrl+X</kbd></button>
-        <button role="menuitem" data-cmd="copy">Copy<kbd>Ctrl+C</kbd></button>
-        <button role="menuitem" data-cmd="paste">Paste<kbd>Ctrl+V</kbd></button>
-        <button role="menuitem" data-cmd="copy-smiles">Copy as SMILES<kbd>Ctrl+Alt+C</kbd></button>
+        <button role="menuitem" data-cmd="cut">Cut</button>
+        <button role="menuitem" data-cmd="copy">Copy</button>
+        <button role="menuitem" data-cmd="paste">Paste</button>
         <hr />
-        <button role="menuitem" data-cmd="select-all">Select All<kbd>Ctrl+A</kbd></button>
+        <button role="menuitem" data-cmd="copy-smiles">Copy as SMILES</button>
+        <button role="menuitem" data-cmd="copy-mol">Copy as Molfile Text</button>
+        <button role="menuitem" data-cmd="copy-cdxml">Copy as CDXML Text</button>
+        <button role="menuitem" data-cmd="paste-smiles">Paste SMILES</button>
+        <hr />
+        <button role="menuitem" data-cmd="select-all">Select All</button>
         <button role="menuitem" data-cmd="clipboard-formats" hidden>Show Clipboard Formats</button>
+        <hr />
+        <button role="menuitem" data-cmd="hotkeys">Hotkeys…</button>
+      </div>
+    </div>
+    <div class="menu-wrap">
+      <button id="btn-view" aria-haspopup="menu" aria-expanded="false" aria-controls="view-menu">View</button>
+      <div id="view-menu" class="menu" role="menu" hidden>
+        <button role="menuitem" data-cmd="zoom-in">Zoom In</button>
+        <button role="menuitem" data-cmd="zoom-out">Zoom Out</button>
+        <button role="menuitem" data-cmd="zoom-fit">Fit to Window</button>
+        <button role="menuitem" data-cmd="zoom-actual">Actual Size</button>
+        <hr />
+        <button role="menuitemcheckbox" aria-checked="false" data-cmd="dev-tools" title="Speed readout and a stress test, for checking how fast the app runs"><span>Developer Tools</span></button>
       </div>
     </div>
     <div class="menu-wrap">
@@ -49,33 +66,43 @@
         <button role="menuitem" data-cmd="distribute-h">Space Evenly Across</button>
         <button role="menuitem" data-cmd="distribute-v">Space Evenly Down</button>
         <hr />
-        <button role="menuitem" data-cmd="flip-h">Flip Left to Right<kbd>Ctrl+Shift+H</kbd></button>
-        <button role="menuitem" data-cmd="flip-v">Flip Top to Bottom<kbd>Ctrl+Shift+V</kbd></button>
+        <button role="menuitem" data-cmd="flip-h">Flip Left to Right</button>
+        <button role="menuitem" data-cmd="flip-v">Flip Top to Bottom</button>
         <button role="menuitem" data-cmd="rotate-cw">Rotate 90° Clockwise</button>
         <button role="menuitem" data-cmd="rotate-ccw">Rotate 90° Anticlockwise</button>
         <button role="menuitem" data-cmd="rotate-180">Rotate 180°</button>
+        <button role="menuitem" data-cmd="rotate-dialog">Rotate…</button>
+        <button role="menuitem" data-cmd="scale">Scale…</button>
+        <hr />
+        <button role="menuitem" data-cmd="join">Join</button>
       </div>
     </div>
     <div class="menu-wrap">
       <button id="btn-structure" aria-haspopup="menu" aria-expanded="false" aria-controls="structure-menu">Structure</button>
       <div id="structure-menu" class="menu" role="menu" hidden>
-        <button role="menuitem" data-cmd="clean-up">Clean Up Structure<kbd>Ctrl+Shift+K</kbd></button>
+        <button role="menuitem" data-cmd="clean-up">Clean Up Structure</button>
+        <button role="menuitem" data-cmd="check-structure">Check Structure (next warning)</button>
+        <button role="menuitem" data-cmd="stereo-labels">Show Stereo Labels (R/S, E/Z)</button>
+        <button role="menuitem" data-cmd="name-to-structure">Name to Structure…</button>
+        <hr />
+        <button role="menuitemcheckbox" aria-checked="true" data-cmd="fixed-length"><span>Fixed Bond Lengths</span></button>
+        <button role="menuitemcheckbox" aria-checked="true" data-cmd="fixed-angles"><span>Fixed Angles</span></button>
       </div>
     </div>
     <span class="sep"></span>
-    <button id="btn-undo" title="Undo (Ctrl+Z)">Undo</button>
-    <button id="btn-redo" title="Redo (Ctrl+Y)">Redo</button>
-    <button id="btn-fit" title="Fit drawing to window (Ctrl+0)">Fit</button>
+    <button id="btn-undo" title="Undo">Undo</button>
+    <button id="btn-redo" title="Redo">Redo</button>
+    <button id="btn-fit" title="Fit drawing to window">Fit</button>
     <span class="sep"></span>
-    <label class="check" title="Show R/S and E/Z labels from the chemistry engine"><input id="show-stereo" type="checkbox" /> Show R/S</label>
-    <span class="sep"></span>
-    <select id="stress-n" title="How many drug-sized molecules to draw">
+    <label class="check" title="Preview every R/S and E/Z label in red (on screen only; use Structure &gt; Show Stereo Labels to add them to the drawing)"><input id="show-stereo" type="checkbox" /> Show R/S</label>
+    <span class="sep dev-only" hidden></span>
+    <select id="stress-n" class="dev-only" hidden title="How many drug-sized molecules to draw">
       <option value="100">100 molecules</option>
       <option value="500">500 molecules</option>
       <option value="2000" selected>2,000 molecules</option>
       <option value="5000">5,000 molecules</option>
     </select>
-    <button id="btn-stress" title="Draw many molecules to test speed">Stress test</button>
+    <button id="btn-stress" class="dev-only" hidden title="Draw many molecules to test speed">Stress test</button>
     <span class="sep"></span>
     <button id="btn-help" title="Hotkeys and how to use the prototype">Help</button>
   </header>
@@ -85,6 +112,7 @@
   <div id="canvas-host">
     <canvas id="scene"></canvas>
     <canvas id="overlay" tabindex="0"></canvas>
+    <div id="warn-tip" role="tooltip" hidden></div>
   </div>
 
   <aside>
@@ -92,11 +120,16 @@
       <h2>Style</h2>
       <div id="style-body"></div>
     </section>
+    <section id="warnings-section">
+      <h2>Warnings <span id="warnings-count" class="count"></span>
+        <label class="check small" title="Red boxes around problems on the drawing (never printed, saved or copied)"><input id="show-warnings" type="checkbox" checked /> Show on drawing</label></h2>
+      <div id="warnings-body"><p class="muted">No problems found.</p></div>
+    </section>
     <section>
       <h2>Analysis</h2>
       <div id="analysis-body"><p class="muted">Loading the chemistry engine…</p></div>
     </section>
-    <section>
+    <section id="speed-section" class="dev-only" hidden>
       <h2>Speed</h2>
       <div id="speed-body"></div>
     </section>
@@ -107,50 +140,42 @@
 
   <dialog id="help">
     <h2>Using the prototype</h2>
-    <p class="muted">Hotkeys work like ChemDraw: point at an atom or bond (it highlights blue) and press a key. Pressing a key that grows something moves the highlight to the new atom, so pressing 1 1 1 draws a chain.</p>
+    <p class="muted">Hotkeys work like ChemDraw: point at an atom or bond (it highlights blue) and press a key. A key that grows something moves the highlight to the new atom, so you can carry on typing (<kbd>8</kbd> then <kbd>1</kbd> makes an E double bond). <kbd>1</kbd> and <kbd>0</kbd> keep the highlight under the mouse, so pressing 1 three times adds three bonds; after a click or another key they move it, so 1 1 1 draws a chain. Every key can be changed.</p>
+    <p><button id="help-hotkeys" type="button">Show and change all hotkeys…</button></p>
     <div class="cols">
       <div>
         <h3>Pointing at an atom</h3>
-        <ul>
-          <li><kbd>o</kbd> O, <kbd>n</kbd> N, <kbd>s</kbd> S, <kbd>f</kbd> F, <kbd>l</kbd> Cl, <kbd>b</kbd> Br, <kbd>i</kbd> I, <kbd>p</kbd> P, <kbd>h</kbd> H, <kbd>c</kbd> C</li>
-          <li><kbd>m</kbd> Me, <kbd>e</kbd> Et, <kbd>Shift+P</kbd> Ph, <kbd>Shift+A</kbd> Ac, <kbd>Shift+O</kbd> OMe, <kbd>Shift+E</kbd> CO2Me, <kbd>Shift+Y</kbd> Boc, <kbd>Shift+H</kbd> Cbz, <kbd>Shift+F</kbd> CF3, <kbd>Shift+N</kbd> NO2</li>
-          <li><kbd>1</kbd> grow a bond, <kbd>2</kbd> C=O or acetyl, <kbd>3</kbd>/<kbd>a</kbd> phenyl, <kbd>4</kbd> wedge, <kbd>5</kbd> hashed wedge</li>
-          <li><kbd>6</kbd> cyclohexane, <kbd>7</kbd> cyclopentane, <kbd>u</kbd> cyclobutane, <kbd>v</kbd> cyclopropane, <kbd>8</kbd> =CH2, <kbd>9</kbd> two methyls, <kbd>z</kbd> alkyne, <kbd>Shift+K</kbd> t-Bu</li>
-          <li><kbd>+</kbd>/<kbd>-</kbd> charge, <kbd>Enter</kbd> type a label, <kbd>Delete</kbd> remove label or atom</li>
-        </ul>
+        <ul id="help-atom" class="help-keys"></ul>
         <h3>Pointing at a bond</h3>
-        <ul>
-          <li><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> single, double, triple</li>
-          <li><kbd>w</kbd> wedge, <kbd>h</kbd> hashed wedge (press again to reverse), <kbd>Shift+H</kbd> hashed, <kbd>b</kbd> bold, <kbd>d</kbd> dashed, <kbd>y</kbd> wavy</li>
-          <li><kbd>l</kbd> <kbd>c</kbd> <kbd>r</kbd> move the second line of a double bond</li>
-          <li><kbd>a</kbd> fuse benzene, <kbd>z</kbd> fuse cyclopentadiene, <kbd>4</kbd>–<kbd>8</kbd> fuse a ring of that size</li>
-        </ul>
-        <h3>Drawing tools</h3>
-        <ul>
-          <li>Text tool (<kbd>t</kbd>): click to type a caption. <kbd>Ctrl+B</kbd> bold, <kbd>Ctrl+I</kbd> italic, <kbd>Ctrl+U</kbd> underline, <kbd>Ctrl+=</kbd> subscript, <kbd>Ctrl+Shift+=</kbd> superscript; the bar above the text has Greek letters and symbols. <kbd>Esc</kbd> finishes</li>
-          <li>Arrows, shapes and brackets are in the tool bar; drag their handles to change them, and use the Style panel for line width and colour</li>
-          <li>Templates (rings, heterocycles, amino acids, sugars): click empty space to place one, a bond to fuse it on, an atom to join it there</li>
-          <li>Object menu: align, space evenly, flip (<kbd>Ctrl+Shift+H</kbd>, <kbd>Ctrl+Shift+V</kbd>) and rotate; or drag the round handle above a selection to turn it</li>
-          <li>Structure menu: Clean Up Structure (<kbd>Ctrl+Shift+K</kbd>) evens out the bonds and angles of the selected structures, or all of them; stereocentres and cis/trans double bonds keep their meaning</li>
-        </ul>
+        <ul id="help-bond" class="help-keys"></ul>
+        <h3>Pointing at empty space</h3>
+        <ul id="help-space" class="help-keys"></ul>
       </div>
       <div>
-        <h3>Pointing at empty space</h3>
+        <h3>Drawing tools</h3>
         <ul>
-          <li><kbd>Space</kbd> select tool, <kbd>x</kbd> bond, <kbd>Shift+X</kbd> chain, <kbd>j</kbd> benzene, <kbd>Shift+J</kbd> cyclopentadiene, <kbd>t</kbd> text, <kbd>e</kbd> arrow</li>
-          <li>Extra (not in ChemDraw): <kbd>w</kbd> wedge tool, <kbd>h</kbd> hashed wedge tool, <kbd>2</kbd> double bond tool, <kbd>3</kbd>–<kbd>8</kbd> ring tools</li>
+          <li>Text tool: click to type a caption; the bar above the text has bold, subscript, formula style, Greek letters and symbols. <kbd>Esc</kbd> finishes</li>
+          <li>Arrows, shapes and brackets are in the tool bar; drag their handles to change them, and use the Style panel for line width and colour</li>
+          <li>Templates (rings, heterocycles, amino acids, sugars): click empty space to place one, a bond to fuse it on, an atom to join it there</li>
+          <li>Object menu: align, space evenly, flip, rotate, scale and join; or drag the round handle above a selection to turn it. Arrow keys nudge the selection; <kbd data-cmd-key="reaction-right"></kbd> adds a reaction arrow and a copy of the selection to turn into the product</li>
+          <li>Structure menu: Clean Up Structure evens out bonds and angles while keeping stereochemistry; Fixed Bond Lengths and Fixed Angles can be turned off (or hold <kbd>Alt</kbd> while drawing)</li>
+          <li>Structure &gt; Name to Structure (<kbd data-cmd-key="name-to-structure"></kbd>) draws a structure from its name: systematic (IUPAC) names, CAS-style names and many common names such as caffeine or ethyl acetate; most drug and trade names are not known. Select a caption holding a name first to replace the caption with the structure. Names are read on this computer by OPSIN, so it works offline. Substituent names such as 4-methoxyphenyl get a wavy-line point of attachment</li>
+        </ul>
+        <h3>Chemistry checks</h3>
+        <ul>
+          <li>Red boxes mark atoms with too many or too few bonds, labels that can't be read, and atoms sitting on top of others. Point at one to see why; the Warnings panel lists them all, with Ignore. Structure &gt; Check Structure goes to the next one. They are never printed, saved or copied</li>
+          <li>R/S and E/Z are worked out for every structure as you draw. Structure &gt; Show Stereo Labels adds them to the selected structures (or all) as part of the drawing; they update by themselves after edits. Select a stereocentre to hide its label or type your own (for example (R*)). The Show R/S box at the top previews every label in red</li>
+          <li>As in ChemDraw, plain bold bonds count as wedges and plain hashed or dashed bonds as hashed wedges. Where R or S would depend on what an R or Ar group is, no label is given</li>
         </ul>
         <h3>Everywhere</h3>
         <ul>
-          <li><kbd>Ctrl+Z</kbd> undo, <kbd>Ctrl+Y</kbd> redo, <kbd>Ctrl+A</kbd> select all, <kbd>Delete</kbd> delete selection</li>
-          <li>Mouse wheel scrolls, <kbd>Ctrl</kbd>+wheel zooms, middle or right drag pans, <kbd>Ctrl+0</kbd> fits the drawing</li>
-          <li><kbd>Ctrl+C</kbd> copies the selection (or the whole drawing); in the Windows app it pastes into ChemDraw, and into Word and PowerPoint as a picture. <kbd>Ctrl+X</kbd> cuts; <kbd>Ctrl+V</kbd> pastes, including from ChemDraw</li>
-          <li>Paste a SMILES string or a molfile (<kbd>Ctrl+V</kbd>) to draw it; <kbd>Ctrl+Alt+C</kbd> copies the selection as SMILES</li>
+          <li>Mouse wheel scrolls, <kbd>Ctrl</kbd>+wheel zooms, middle or right drag pans; the View menu zooms too</li>
+          <li>Copy puts the selection (or the whole drawing) on the clipboard; in the Windows app it pastes into ChemDraw, and into Word and PowerPoint as a picture. Paste takes drawings from ChemDraw, and SMILES or molfile text</li>
           <li>File menu: New, Open, Save and Save As (.cdxml), Export Molfile. You can also drop a .cdxml file on the drawing</li>
         </ul>
         <h3>Not in this prototype yet</h3>
         <ul>
-          <li>Valence warnings, name to structure, pictures</li>
+          <li>Name to structure, pictures, rings bonded to a metal through all their atoms (ferrocene)</li>
         </ul>
       </div>
     </div>

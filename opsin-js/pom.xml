@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Builds OPSIN (the chemical-name reader) as JavaScript with TeaVM, so Chem Illustrator can turn
+  names into structures without an internet connection. See README.md for how and why.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>io.github.nathanohare.chemillustrator</groupId>
+  <artifactId>opsin-js</artifactId>
+  <version>2.9.0</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <maven.compiler.release>11</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <opsin.version>2.9.0</opsin.version>
+    <teavm.version>0.16.0</teavm.version>
+    <!-- where the finished files go: the app's source and public folders -->
+    <app.dir>${project.basedir}/..</app.dir>
+  </properties>
+
+  <dependencies>
+    <!-- OPSIN itself. "provided" because its classes are unpacked into target/classes below,
+         minus the two that src/main/java replaces; TeaVM must not see the originals. -->
+    <dependency>
+      <groupId>uk.ac.cam.ch.opsin</groupId>
+      <artifactId>opsin-core</artifactId>
+      <version>${opsin.version}</version>
+      <scope>provided</scope>
+      <exclusions>
+        <!-- replaced: XML is read by SimpleXmlReader, logging goes nowhere (see src/main/java) -->
+        <exclusion><groupId>com.fasterxml.woodstox</groupId><artifactId>woodstox-core</artifactId></exclusion>
+        <exclusion><groupId>commons-io</groupId><artifactId>commons-io</artifactId></exclusion>
+        <exclusion><groupId>org.apache.logging.log4j</groupId><artifactId>log4j-api</artifactId></exclusion>
+      </exclusions>
+    </dependency>
+    <!-- OPSIN's automaton library (BSD) -->
+    <dependency>
+      <groupId>dk.brics</groupId>
+      <artifactId>automaton</artifactId>
+      <version>1.12-4</version>
+    </dependency>
+    <!-- The StAX interfaces (Apache 2.0). Java has them built in, but TeaVM needs them as classes. -->
+    <dependency>
+      <groupId>stax</groupId>
+      <artifactId>stax-api</artifactId>
+      <version>1.0.1</version>
+    </dependency>
+    <dependency>
+      <groupId>org.teavm</groupId>
+      <artifactId>teavm-classlib</artifactId>
+      <version>${teavm.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.teavm</groupId>
+      <artifactId>teavm-jso-apis</artifactId>
+      <version>${teavm.version}</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- 0. OPSIN's classes go into target/classes, except the ones src/main/java replaces;
+              its jar is copied to target/ for PackData to read the data files from -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <version>3.8.1</version>
+        <executions>
+          <execution>
+            <id>opsin-classes</id>
+            <phase>generate-resources</phase>
+            <goals><goal>unpack</goal></goals>
+            <configuration>
+              <artifactItems>
+                <artifactItem>
+                  <groupId>uk.ac.cam.ch.opsin</groupId>
+                  <artifactId>opsin-core</artifactId>
+                  <version>${opsin.version}</version>
+                  <outputDirectory>${project.build.outputDirectory}</outputDirectory>
+                  <excludes>uk/ac/cam/ch/wwmm/opsin/ResourceGetter.class,uk/ac/cam/ch/wwmm/opsin/AutomatonInitialiser.class,uk/ac/cam/ch/wwmm/opsin/resources/**,META-INF/**</excludes>
+                </artifactItem>
+              </artifactItems>
+            </configuration>
+          </execution>
+          <execution>
+            <id>opsin-jar</id>
+            <phase>generate-resources</phase>
+            <goals><goal>copy</goal></goals>
+            <configuration>
+              <artifactItems>
+                <artifactItem>
+                  <groupId>uk.ac.cam.ch.opsin</groupId>
+                  <artifactId>opsin-core</artifactId>
+                  <version>${opsin.version}</version>
+                  <outputDirectory>${project.build.directory}</outputDirectory>
+                  <destFileName>opsin-core.jar</destFileName>
+                </artifactItem>
+              </artifactItems>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- 1. Pack OPSIN's word lists and its ready-made automata into one compressed data file -->
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.5.0</version>
+        <executions>
+          <execution>
+            <id>pack-data</id>
+            <phase>process-classes</phase>
+            <goals><goal>java</goal></goals>
+            <configuration>
+              <mainClass>io.github.nathanohare.chemillustrator.opsin.PackData</mainClass>
+              <arguments>
+                <argument>${project.build.directory}/opsin-core.jar</argument>
+                <argument>${app.dir}/public/opsin/opsin-data.dat</argument>
+                <argument>${app.dir}/tests/opsin-expected.json</argument>
+              </arguments>
+              <classpathScope>compile</classpathScope>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- 2. Compile OPSIN and the small replacement classes to JavaScript -->
+      <plugin>
+        <groupId>org.teavm</groupId>
+        <artifactId>teavm-maven-plugin</artifactId>
+        <version>${teavm.version}</version>
+        <executions>
+          <execution>
+            <phase>process-classes</phase>
+            <goals><goal>compile</goal></goals>
+            <configuration>
+              <targetType>JAVASCRIPT</targetType>
+              <mainClass>io.github.nathanohare.chemillustrator.opsin.OpsinJs</mainClass>
+              <jsModuleType>ES2015</jsModuleType>
+              <!-- not "provided": OPSIN's original jar must stay out (see above) -->
+              <compileScopes>
+                <compileScope>compile</compileScope>
+                <compileScope>runtime</compileScope>
+              </compileScopes>
+              <targetDirectory>${app.dir}/src/vendor/opsin</targetDirectory>
+              <targetFileName>opsin.js</targetFileName>
+              <minifying>true</minifying>
+              <optimizationLevel>ADVANCED</optimizationLevel>
+              <debugInformationGenerated>false</debugInformationGenerated>
+              <sourceMapsGenerated>false</sourceMapsGenerated>
+              <stopOnErrors>true</stopOnErrors>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

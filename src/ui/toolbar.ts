@@ -14,6 +14,8 @@ export interface PaletteDef {
   icon?: (name: string, size: number) => string;
   /** Bigger buttons in the open palette (templates). */
   large?: boolean;
+  /** Picture size in the open palette, in pixels, for large palettes (46 unless set). */
+  iconSize?: number;
 }
 export type ToolbarItem = ToolDef | PaletteDef;
 
@@ -21,11 +23,16 @@ interface Palette { def: PaletteDef; button: HTMLButtonElement; current: string 
 
 export class Toolbar {
   private buttons = new Map<string, HTMLButtonElement>();
+  private defs = new Map<string, ToolDef>();
   private palettes: Palette[] = [];
   private flyout: HTMLDivElement | null = null;
   private flyoutOwner: Palette | null = null;
 
-  constructor(root: HTMLElement, groups: ToolbarItem[][], private pick: (name: string) => void) {
+  /**
+   * `keys` gives the hotkeys of a tool as text for its tool tip (" (x)"); call refreshTitles()
+   * when the key map changes.
+   */
+  constructor(root: HTMLElement, groups: ToolbarItem[][], private pick: (name: string) => void, private keys: (name: string) => string = () => '') {
     for (const group of groups) {
       const g = document.createElement('div');
       g.className = 'tool-group';
@@ -46,12 +53,23 @@ export class Toolbar {
     const b = document.createElement('button');
     b.className = 'tool';
     b.dataset.tool = t.name;
-    b.title = t.title;
-    b.setAttribute('aria-label', t.title);
+    this.titleTool(b, t);
     b.innerHTML = this.icon(null, t.name);
     b.addEventListener('click', () => this.pick(t.name));
     this.buttons.set(t.name, b);
+    this.defs.set(t.name, t);
     return b;
+  }
+
+  private titleTool(b: HTMLButtonElement, t: ToolDef, extra = ''): void {
+    b.title = t.title + this.keys(t.name) + extra;
+    b.setAttribute('aria-label', t.title);
+  }
+
+  /** Show the current hotkeys in the tool tips. */
+  refreshTitles(): void {
+    for (const [name, b] of this.buttons) this.titleTool(b, this.defs.get(name)!);
+    for (const pal of this.palettes) this.show(pal);
   }
 
   private paletteButton(def: PaletteDef): HTMLElement {
@@ -81,8 +99,7 @@ export class Toolbar {
   private show(pal: Palette): void {
     const t = pal.def.items.find((i) => i.name === pal.current)!;
     pal.button.innerHTML = this.icon(pal.def, t.name);
-    pal.button.title = `${t.title} (right-click for all ${pal.def.title.toLowerCase()})`;
-    pal.button.setAttribute('aria-label', t.title);
+    this.titleTool(pal.button, t, `. Right-click for all ${pal.def.title.toLowerCase()}`);
     pal.button.dataset.tool = t.name;
   }
 
@@ -107,9 +124,10 @@ export class Toolbar {
       const b = document.createElement('button');
       b.className = 'tool' + (pal.def.large ? ' large' : '') + (t.name === pal.current ? ' active' : '');
       b.setAttribute('role', 'menuitem');
-      b.title = t.title;
-      b.setAttribute('aria-label', t.title);
-      b.innerHTML = this.icon(pal.def, t.name, pal.def.large ? 46 : 28);
+      this.titleTool(b, t);
+      const px = pal.def.large ? pal.def.iconSize ?? 46 : 28;
+      if (pal.def.large && pal.def.iconSize) b.style.width = b.style.height = `${px + 6}px`;
+      b.innerHTML = this.icon(pal.def, t.name, px);
       b.addEventListener('click', () => { this.close(); this.pick(t.name); });
       f.appendChild(b);
     }

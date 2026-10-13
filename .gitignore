@@ -11,3 +11,6 @@ public/RDKit_minimal.wasm
 *.cdxml
 *.cdx
 *.pdf
+
+# OPSIN build folder (see opsin-js/README.md)
+opsin-js/target/

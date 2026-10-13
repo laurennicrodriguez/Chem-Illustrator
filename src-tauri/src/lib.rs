@@ -48,6 +48,39 @@ fn write_text_file(path: String, contents: String) -> Result<(), String> {
         })
 }
 
+/// The person's settings file (key map and preferences): settings.json in the app's
+/// settings folder, e.g. %APPDATA%\io.github.nathanohare.chemillustrator on Windows.
+fn settings_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    let dir = app.path().app_config_dir().map_err(|e| format!("No settings folder: {e}"))?;
+    Ok(dir.join("settings.json"))
+}
+
+#[tauri::command]
+fn settings_path(app: tauri::AppHandle) -> Result<String, String> {
+    Ok(settings_file(&app)?.to_string_lossy().into_owned())
+}
+
+/// The saved settings, or nothing before the first change.
+#[tauri::command]
+fn settings_read(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let path = settings_file(&app)?;
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("Could not read {}: {e}", path.display())),
+    }
+}
+
+#[tauri::command]
+fn settings_write(app: tauri::AppHandle, contents: String) -> Result<(), String> {
+    let path = settings_file(&app)?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("Could not make {}: {e}", dir.display()))?;
+    }
+    write_text_file(path.to_string_lossy().into_owned(), contents)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -69,6 +102,9 @@ pub fn run() {
             selftest_report,
             read_text_file,
             write_text_file,
+            settings_path,
+            settings_read,
+            settings_write,
             clipboard::clipboard_write,
             clipboard::clipboard_read,
             clipboard::clipboard_formats

@@ -9,10 +9,16 @@ import { Doc, Atom, Bond, Arrow, Caption, Shape, TextRun } from '../model';
 import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
-import { valenceExceeded } from '../chem/elements';
-import { GENERIC } from '../chem/labels';
+import type { StructureChecks } from '../chem/warnings';
+import { isGenericLabel } from '../chem/labels';
 import { bracketPath, shaftOffset, type PathStep } from '../objects';
 import { formulaParts } from '../richtext';
+import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
+import { arialWidth } from '../text-metrics';
+import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
+
+/** Colour of the stereo labels previewed with "Show R/S" (not part of the drawing). */
+const PREVIEW_COLOR = '#b4232a';
 
 export const FONT_STACK = "Arial, 'Liberation Sans', Helvetica, sans-serif";
 
@@ -28,7 +34,6 @@ interface AtomCache {
   layout: LabelLayout | null;
   /** Knock-out boxes in document coordinates, already grown by the margin. */
   boxes: Rect[];
-  warn: boolean;
 }
 
 interface BondCache {
@@ -76,6 +81,8 @@ export class Renderer {
   width = 0;
   height = 0;
   showWarnings = true;
+  /** The drawing's chemistry warnings, drawn as red boxes when `showWarnings` is on. */
+  checks: StructureChecks | null = null;
   /** Makes the paths bonds are collected in (pictures record them instead of drawing). */
   makePath: () => Path2D = () => new Path2D();
   /** Last scene paint time in ms (for the speed readout). */
@@ -83,8 +90,11 @@ export class Renderer {
 
   private sctx: CanvasRenderingContext2D;
   private octx: CanvasRenderingContext2D;
-  /** Extra text shown beside atoms, e.g. stereo descriptors from the chemistry engine. */
-  annotations = new Map<number, string>();
+  /** Show every R/S and E/Z label the chemistry engine found, in red (a preview; not printed). */
+  previewStereo = false;
+  private placer: StereoPlacer | null = null;
+  private placerDoc: Doc | null = null;
+  private placerKey = '';
   private atomCache = new Map<number, AtomCache>();
   private capBoxes = new WeakMap<Caption, Rect>();
   /** Text size for caption runs that don't give one (the document's caption size). */
@@ -135,6 +145,16 @@ export class Renderer {
 
   /** Drop cached layout and painted tiles near anything that changed since the last paint. */
   private invalidate(doc: Doc): void {
+    const warned = this.checks?.update();
+    if (warned?.length && this.showWarnings && !doc.allDirty) {
+      // warnings that came or went (including on atoms the edit itself didn't touch)
+      for (const id of warned) {
+        const a = doc.atoms.get(id);
+        if (!a) continue;
+        doc.dirtyRects.push({ x1: a.x, y1: a.y, x2: a.x, y2: a.y });
+        for (const n of doc.neighbors(id)) doc.dirtyRects.push({ x1: Math.min(a.x, n.x), y1: Math.min(a.y, n.y), x2: Math.max(a.x, n.x), y2: Math.max(a.y, n.y) });
+      }
+    }
     if (doc.allDirty || doc.dirtyRects.length > 20000) {
       this.atomCache.clear();
       this.bondCache.clear();
@@ -182,8 +202,8 @@ export class Renderer {
     let c = this.atomCache.get(a.id);
     if (c) return c;
     const deg = doc.degree(a.id);
-    const bos = doc.bondOrderSum(a.id);
-    const spec = labelSpec(a.z, a.label, a.charge, a.isotope, bos, deg, !a.hideCharge);
+    const bos = doc.valenceSum(a.id);
+    const spec = a.attach ? null : labelSpec(a.z, a.label, a.charge, a.isotope, bos, deg, !a.hideCharge);
     let layout: LabelLayout | null = null;
     const boxes: Rect[] = [];
     const k = a.s ?? 1;
@@ -195,8 +215,7 @@ export class Renderer {
       const m = doc.style.marginWidth * k;
       for (const b of layout.boxes) boxes.push({ x1: a.x + b.x1 - m, y1: a.y + b.y1 - m, x2: a.x + b.x2 + m, y2: a.y + b.y2 + m });
     }
-    const warn = !a.label && valenceExceeded(a.z, bos, a.charge);
-    c = { layout, boxes, warn };
+    c = { layout, boxes };
     this.atomCache.set(a.id, c);
     return c;
   }
@@ -402,16 +421,85 @@ export class Renderer {
     this.dropAllTiles();
   }
 
-  /** Change the stereo labels shown beside atoms, repainting only around them. */
-  setAnnotations(doc: Doc, next: Map<number, string>): void {
-    const rects: Rect[] = [];
-    for (const id of new Set([...this.annotations.keys(), ...next.keys()])) {
-      if (this.annotations.get(id) === next.get(id)) continue;
-      const a = doc.atoms.get(id);
-      if (a) rects.push({ x1: a.x, y1: a.y, x2: a.x, y2: a.y });
+  /**
+   * R/S labels beside atoms and E/Z labels by double bonds: those that are part of the drawing
+   * (shown in black, saved and printed), and with `previewStereo` on, every other one in red
+   * (on screen only).
+   */
+  private drawStereoLabels(ctx: CanvasRenderingContext2D, doc: Doc, atoms: Atom[], bonds: Set<Bond>, curFont: string): string {
+    const info = doc.stereo;
+    const place = this.stereoPlacer(doc);
+    const draw = (text: string, p: PlacedLabel, color: string) => {
+      const f = `${p.italic ? 'italic ' : ''}${p.size}px ${FONT_STACK}`;
+      if (f !== curFont) { ctx.font = f; curFont = f; }
+      ctx.fillStyle = color;
+      ctx.fillText(text, p.x, p.y);
+    };
+    for (const a of atoms) {
+      if (a.attach) continue;
+      const text = atomStereoText(a, info);
+      if (text) draw(text, place.atom(a, text), '#000');
+      else if (this.previewStereo && !a.showStereo && !a.stereoLabel) {
+        const d = info?.atom(a.id);
+        if (d) { const t = `(${d})`; draw(t, place.atom(a, t), PREVIEW_COLOR); }
+      }
     }
-    this.annotations = next;
-    if (rects.length) this.dropTiles(doc, rects);
+    for (const b of bonds) {
+      if (b.order !== 2 && !b.stereoLabel) continue;
+      const text = bondStereoText(b, info);
+      if (text) draw(text, place.bond(b, text), '#000');
+      else if (this.previewStereo && !b.showStereo && !b.stereoLabel) {
+        const d = info?.bond(b.id);
+        if (d) { const t = `(${d})`; draw(t, place.bond(b, t), PREVIEW_COLOR); }
+      }
+    }
+    return curFont;
+  }
+
+  /** The atom number shown with the ' key, on the open side of the atom or its label. */
+  private drawAtomNumber(ctx: CanvasRenderingContext2D, doc: Doc, a: Atom, curFont: string): string {
+    const p = this.stereoPlacer(doc).number(a);
+    const f = `${p.size}px ${FONT_STACK}`;
+    if (f !== curFont) { ctx.font = f; curFont = f; }
+    ctx.fillStyle = a.color ?? '#000';
+    ctx.fillText(a.atomNumber!, p.x, p.y);
+    return curFont;
+  }
+
+  /** A numbered point of attachment: a black diamond with the number in white. */
+  private drawAttachDiamond(ctx: CanvasRenderingContext2D, doc: Doc, a: Atom, curFont: string): string {
+    const L = doc.style.labelSize * (a.s ?? 1);
+    const h = attachDiamondSize(L);
+    ctx.fillStyle = a.color ?? '#000';
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y - h);
+    ctx.lineTo(a.x + h, a.y);
+    ctx.lineTo(a.x, a.y + h);
+    ctx.lineTo(a.x - h, a.y);
+    ctx.closePath();
+    ctx.fill();
+    const text = String(a.attachNum);
+    const size = 0.75 * L;
+    const f = `${size}px ${FONT_STACK}`;
+    if (f !== curFont) { ctx.font = f; curFont = f; }
+    ctx.fillStyle = '#fff';
+    ctx.fillText(text, a.x - measureText(text, size) / 2, a.y + 0.716 * size / 2);
+    ctx.fillStyle = '#000';
+    return curFont;
+  }
+
+  /**
+   * Spots for stereo labels, kept until the drawing or its labels change. They are worked out
+   * with Arial's published widths, as when saving, so a label sits in the file where it was seen.
+   */
+  private stereoPlacer(doc: Doc): StereoPlacer {
+    const key = `${doc.version}|${doc.stereo?.version ?? 0}|${this.previewStereo}`;
+    if (!this.placer || this.placerDoc !== doc || this.placerKey !== key) {
+      this.placer = new StereoPlacer(doc, arialWidth, { preview: this.previewStereo });
+      this.placerDoc = doc;
+      this.placerKey = key;
+    }
+    return this.placer;
   }
 
   private sortedShapes(doc: Doc): Shape[] {
@@ -470,6 +558,15 @@ export class Renderer {
 
     // Atom labels and warnings.
     const warns: Rect[] = [];
+    const checks = this.showWarnings ? this.checks : null;
+    if (checks) {
+      for (const b of bondSet) {
+        if (!checks.forBond(b)) continue;
+        const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
+        const m = 2;
+        warns.push({ x1: Math.min(p.x, q.x) - m, y1: Math.min(p.y, q.y) - m, x2: Math.max(p.x, q.x) + m, y2: Math.max(p.y, q.y) + m });
+      }
+    }
     let curFont = '';
     ctx.textBaseline = 'alphabetic';
     for (const a of atoms) {
@@ -484,36 +581,12 @@ export class Renderer {
       } else if (a.charge && a.z === 6 && !a.hideCharge) {
         this.drawCarbonCharge(ctx, doc, a);
       }
-      if (info.warn) warns.push(info.boxes[0] ?? { x1: a.x - 3, y1: a.y - 3, x2: a.x + 3, y2: a.y + 3 });
-      if (a.stereoLabel) {
-        const l = a.stereoLabel;
-        const f = `${l.italic ? 'italic ' : ''}${l.size}px ${FONT_STACK}`;
-        if (f !== curFont) { ctx.font = f; curFont = f; }
-        ctx.fillStyle = '#000';
-        // with "Show stereo" on, the freshly worked-out label replaces the saved one (it may be out of date)
-        ctx.fillText(this.annotations.get(a.id) ?? l.text, a.x + l.dx, a.y + l.dy);
-      }
+      if (a.showNumber && a.atomNumber) curFont = this.drawAtomNumber(ctx, doc, a, curFont);
+      if (hasAttachDiamond(a)) curFont = this.drawAttachDiamond(ctx, doc, a, curFont);
+      if (checks?.forAtom(a)) warns.push(this.warningBox(doc, a, info));
     }
+    curFont = this.drawStereoLabels(ctx, doc, atoms, bondSet, curFont);
     ctx.fillStyle = '#000';
-
-    if (this.annotations.size) {
-      ctx.fillStyle = '#b4232a';
-      for (const [id, text] of this.annotations) {
-        const a = doc.atoms.get(id);
-        // atoms with a stereo label of their own already show one
-        if (!a || a.stereoLabel || a.x < vis.x1 || a.x > vis.x2 || a.y < vis.y1 || a.y > vis.y2) continue;
-        const size = st.labelSize * 0.75 * (a.s ?? 1);
-        let sx = 0, sy = 0;
-        for (const n of doc.neighbors(a.id)) { const d = norm(sub(n, a)); sx += d.x; sy += d.y; }
-        const away = len({ x: sx, y: sy }) > 0.1 ? norm({ x: -sx, y: -sy }) : { x: 0, y: -1 };
-        ctx.font = `italic ${size}px ${FONT_STACK}`;
-        const w = measureText(text, size, FONT_STACK, 'italic');
-        const r = st.bondLength * 0.45 * (a.s ?? 1);
-        ctx.fillText(text, a.x + away.x * r - w / 2, a.y + away.y * r + size * 0.35);
-      }
-      ctx.fillStyle = '#000';
-      curFont = '';
-    }
 
     for (const r of doc.arrows.values()) {
       const lo = Math.min(r.tail.x, r.head.x), hi = Math.max(r.tail.x, r.head.x);
@@ -529,13 +602,22 @@ export class Renderer {
       this.drawCaption(ctx, c, st.captionSize);
     }
 
-    if (this.showWarnings && warns.length) {
-      ctx.strokeStyle = '#e0141e';
+    if (warns.length) {
+      ctx.strokeStyle = WARN_COLOR;
       ctx.lineWidth = 0.5;
-      ctx.setLineDash([1, 1]);
-      for (const w of warns) ctx.strokeRect(w.x1 - 0.5, w.y1 - 0.5, w.x2 - w.x1 + 1, w.y2 - w.y1 + 1);
-      ctx.setLineDash([]);
+      for (const w of warns) ctx.strokeRect(w.x1, w.y1, w.x2 - w.x1, w.y2 - w.y1);
     }
+  }
+
+  /** The red box around an atom with a warning: around its whole label, or a small square on a bare carbon. */
+  warningBox(doc: Doc, a: Atom, info = this.atomInfo(doc, a)): Rect {
+    if (!info.boxes.length) {
+      const h = doc.style.labelSize * (a.s ?? 1) * 0.45;
+      return { x1: a.x - h, y1: a.y - h, x2: a.x + h, y2: a.y + h };
+    }
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for (const b of info.boxes) { x1 = Math.min(x1, b.x1); y1 = Math.min(y1, b.y1); x2 = Math.max(x2, b.x2); y2 = Math.max(y2, b.y2); }
+    return { x1, y1, x2, y2 };
   }
 
   private strokeBatch(ctx: CanvasRenderingContext2D, bb: BondBatch, k: number, lw: number, bw: number, color: string): void {
@@ -578,6 +660,9 @@ export class Renderer {
     const nrm = perp(dir);
     const gap = doubleBondGap(st);
     const line = (path: Path2D, a: Vec, c: Vec) => { path.moveTo(a.x, a.y); path.lineTo(c.x, c.y); };
+    // a point of attachment: a wavy line across the end of the bond
+    if (p.attach === 'Wavy') attachWave(thin, p, nrm, st.bondLength);
+    if (q.attach === 'Wavy') attachWave(thin, q, nrm, st.bondLength);
 
     if (b.order === 1 || b.order === 4) {
       switch (b.display) {
@@ -958,7 +1043,7 @@ export class Renderer {
   }
 
   isGeneric(a: Atom): boolean {
-    return a.label !== null && GENERIC.has(a.label);
+    return a.label !== null && isGenericLabel(a.label);
   }
 
 }
@@ -1033,3 +1118,30 @@ export function expandRuns(runs: TextRun[], defaultSize: number): Piece[] {
   }
   return out;
 }
+
+/** The wavy line marking a point of attachment, centred on `at` and running along `across`. */
+export function attachWave(path: Path2D, at: Vec, across: Vec, bondLength: number): void {
+  const half = bondLength * ATTACH_HALF;
+  const waves = ATTACH_HALF_WAVES;
+  const step = (2 * half) / waves;
+  const amp = bondLength * ATTACH_AMP;
+  const dir = { x: -across.y, y: across.x };
+  const s = { x: at.x - across.x * half, y: at.y - across.y * half };
+  path.moveTo(s.x, s.y);
+  for (let i = 0; i < waves; i++) {
+    const c = { x: s.x + across.x * step * (i + 1), y: s.y + across.y * step * (i + 1) };
+    const sgn = i % 2 ? -1 : 1;
+    const m = { x: s.x + across.x * step * (i + 0.5) + dir.x * amp * 2 * sgn, y: s.y + across.y * step * (i + 0.5) + dir.y * amp * 2 * sgn };
+    path.quadraticCurveTo(m.x, m.y, c.x, c.y);
+  }
+}
+
+const WARN_COLOR = '#e0141e';
+
+/**
+ * Half the length and the height of the attachment wave, as fractions of the bond length, and
+ * its number of half waves (measured in ChemDraw 25: 1.2 bond lengths long, about 12 small waves).
+ */
+const ATTACH_HALF = 0.6;
+const ATTACH_AMP = 0.06;
+const ATTACH_HALF_WAVES = 24;

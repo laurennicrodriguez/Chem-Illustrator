@@ -68,6 +68,7 @@ header {
 }
 header h1 { font-size: 14px; margin: 0 10px 0 2px; font-weight: 650; letter-spacing: 0.01em; }
 header .sep { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+.dev-only[hidden] { display: none !important; }
 button, select {
   font: inherit;
   color: var(--text);
@@ -253,6 +254,31 @@ aside td { padding: 2px 0; font-variant-numeric: tabular-nums; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
 .warn { color: var(--warn); }
+
+/* chemistry warnings: the panel list and the hover tip */
+aside h2 .count { display: inline-block; min-width: 16px; padding: 0 5px; margin-left: 2px; border-radius: 8px; background: #e0141e; color: #fff; text-align: center; letter-spacing: 0; }
+aside h2 .count:empty { display: none; }
+aside h2 label.check { float: right; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.warn-list { list-style: none; margin: 0; padding: 0; }
+.warn-list li { display: grid; grid-template-columns: 1fr auto; gap: 2px 6px; align-items: start; padding: 4px 0; }
+.warn-list li + li { border-top: 1px dashed var(--line); }
+.warn-list .w-text { text-align: left; background: none; border: 0; padding: 0; color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.warn-list .w-text:hover { color: var(--accent); }
+.warn-list .w-ignore { font-size: 11px; padding: 0 6px; }
+#warn-tip {
+  position: absolute;
+  z-index: 6;
+  max-width: 280px;
+  padding: 4px 8px;
+  border: 1px solid #e0141e;
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+  pointer-events: none;
+  box-shadow: var(--page-shadow);
+}
 .ok { color: var(--ok); font-weight: 600; }
 .slow { color: var(--slow); font-weight: 600; }
 
@@ -318,3 +344,62 @@ dialog ul { margin: 0; padding-left: 16px; }
   .tool-group { grid-template-columns: 34px; }
   dialog .cols { grid-template-columns: 1fr; }
 }
+
+/* menu items that are on or off */
+.menu button[role='menuitemcheckbox'] > span::before { content: ''; display: inline-block; width: 1.2em; }
+.menu button[role='menuitemcheckbox'][aria-checked='true'] > span::before { content: '✓'; }
+
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--panel); }
+button.link { border: 0; background: none; padding: 0 2px; color: var(--accent); text-decoration: underline; cursor: pointer; }
+
+/* small question windows (Rotate…, Scale…) */
+dialog.ask { min-width: min(92vw, 340px); }
+.ask-row { display: grid; grid-template-columns: 9em 1fr auto; align-items: center; gap: 8px; margin: 8px 0; }
+.ask-row input, .ask-row select { min-width: 0; font: inherit; padding: 3px 6px; }
+.ask-buttons { display: flex; justify-content: flex-end; gap: 8px; margin: 14px 0 0; }
+dialog.name-dialog { width: min(92vw, 520px); }
+dialog.name-dialog .muted { margin: 4px 0 10px; max-width: 60ch; }
+.name-input { width: 100%; box-sizing: border-box; font: inherit; padding: 5px 8px; }
+.name-status { min-height: 1.4em; margin: 8px 0 0; color: var(--muted); overflow-wrap: anywhere; }
+.name-status.error { color: var(--slow); }
+
+/* the nickname list (=) */
+dialog.nicknames { width: min(92vw, 420px); }
+dialog.nicknames input[type='search'] { width: 100%; box-sizing: border-box; font: inherit; padding: 4px 8px; }
+.nick-list { margin-top: 8px; max-height: 50vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; }
+.nick { display: flex; justify-content: space-between; gap: 12px; padding: 4px 8px; cursor: pointer; }
+.nick span { font: 11px var(--mono-font); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nick:hover, .nick.current { background: var(--accent-soft); }
+
+/* the Hotkeys window */
+dialog.hotkeys { width: min(94vw, 760px); display: flex; flex-direction: column; }
+dialog.hotkeys:not([open]) { display: none; }
+dialog.hotkeys > p { margin: 4px 0; }
+.hk-head { display: flex; align-items: center; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
+.hk-head h2 { margin: 0; }
+.hk-opt { display: grid; grid-template-columns: auto 1fr; gap: 6px; align-items: start; margin: 4px 0; cursor: pointer; }
+.hk-opt input { margin: 2px 0 0; }
+.hk-head input { flex: 1 1 200px; max-width: 320px; font: inherit; padding: 4px 8px; }
+.hk-status { min-height: 1.4em; color: var(--accent); }
+.hk-body { overflow-y: auto; min-height: 0; flex: 1 1 auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.hk-body h3 { margin: 14px 0 0; }
+.hk-body p.small { margin: 2px 0 6px; }
+.hk-table { width: 100%; border-collapse: collapse; }
+.hk-table td { padding: 2px 4px; border-top: 1px solid var(--line); vertical-align: middle; }
+.hk-name { width: 50%; }
+.hk-keys { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.hk-reset { width: 4.5em; text-align: right; }
+.hk-table tr.changed .hk-name::after { content: ' •'; color: var(--accent); }
+.hk-chip { display: inline-flex; align-items: center; }
+.hk-chip button, button.hk-add { border: 0; background: none; padding: 0 4px; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; }
+.hk-chip button:hover, button.hk-add:hover { color: var(--accent); }
+button.hk-add.recording { color: var(--panel); background: var(--accent); border-radius: 4px; font-size: 12px; padding: 2px 6px; }
+.hk-addlabel { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 6px; }
+.hk-addlabel input { font: inherit; padding: 2px 6px; width: 12em; }
+.hk-addlabel button.hk-add { border: 1px solid var(--line); border-radius: 5px; font-size: 12px; padding: 3px 8px; color: var(--text); }
+.hk-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; }
+.hk-foot code { font: 11px var(--mono-font); word-break: break-all; }
+.hk-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.hk-buttons button.confirm { border-color: var(--slow); color: var(--slow); }
+.help-keys { list-style: none; padding-left: 0 !important; columns: 2; column-gap: 16px; }
+.help-keys li { break-inside: avoid; margin: 1px 0; }

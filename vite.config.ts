@@ -9,5 +9,5 @@ export default defineConfig({
     assetsInlineLimit: 0,
     rollupOptions: { output: { entryFileNames: 'app.js', assetFileNames: '[name][extname]', chunkFileNames: '[name].js' } },
   },
-  worker: { format: 'iife', rollupOptions: { output: { entryFileNames: 'chem-worker.js' } } },
+  worker: { format: 'iife', rollupOptions: { output: { entryFileNames: '[name].js' } } },
 });

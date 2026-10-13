@@ -55,7 +55,7 @@ const res = await page.evaluate(async ([t]) => {
   for (let i = 0; i < 30; i++) {
     const a = atoms[(i * 53) % atoms.length];
     const s0 = performance.now();
-    editor.atomKey(a.id, '1');
+    editor.atomKey(a.id, 'bond');
     r.renderScene(doc);
     hk.push(performance.now() - s0);
   }

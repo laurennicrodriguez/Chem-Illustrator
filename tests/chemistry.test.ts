@@ -41,7 +41,10 @@ describe('labels', () => {
     expect(tokenize('CO2Et')[1].count).toBe(2);
     expect(tokenize('NHBoc').map((t) => t.text)).toEqual(['N', 'H', 'Boc']);
     expect(tokenize('OTBS').map((t) => t.kind)).toEqual(['el', 'nick']);
-    expect(tokenize('Ar1')[0]).toMatchObject({ text: 'Ar', count: 1, explicit: true });
+    expect(tokenize('Ar1')[0]).toMatchObject({ kind: 'generic', text: 'Ar1' });
+    // numbered R groups of any number are one undefined group (not R six times)
+    expect(tokenize('R6')).toEqual([expect.objectContaining({ kind: 'generic', text: 'R6', count: 1 })]);
+    expect(labelGraph('R12')?.atoms.length).toBe(1);
   });
   it('expands labels into atoms for the chemistry', () => {
     expect(labelGraph('OMe')!.atoms.map((a) => a.z)).toEqual([8, 6]);

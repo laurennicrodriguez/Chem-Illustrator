@@ -1,7 +1,7 @@
-// The app window: File menu, toolbar, drawing area, analysis and speed panels.
+// The app window: File menu, toolbar, drawing area, analysis and (View > Developer Tools) speed panels.
 
 import './app.css';
-import { Doc } from './model';
+import { Doc, Atom, Caption } from './model';
 import { Renderer } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
 import type { Align } from './editor/arrange';
@@ -11,12 +11,24 @@ import { toMolfile, addMolfile } from './chem/molfile';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { DocumentFile } from './io/document-file';
-import { copyDrawing, insertDrawing, isEmpty, nativeClipboard, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, Pasted } from './io/clipboard';
+import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, Pasted } from './io/clipboard';
+import { writeCdxml } from './io/cdxml-write';
+import { openFileDialog, saveFileDialog, writeFile, KEYMAP_FILE } from './io/files';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
 import { StylePanel } from './ui/style-panel';
 import { TEMPLATES, Template, templateById } from './chem/templates';
 import { templateIcon } from './ui/template-icons';
+import { StructureChecks } from './chem/warnings';
+import { LiveStereo } from './chem/live-stereo';
+import { setStereoShown } from './chem/stereo';
+import { keymap, registerToolNames, displayChord, actionName, KeyContext, KeyOverrides } from './editor/keymap';
+import { loadSettings, saveSettings, settingsLocation, Settings } from './settings';
+import { HotkeysDialog } from './ui/hotkeys-dialog';
+import { NicknameChooser } from './ui/nickname-chooser';
+import { ask } from './ui/ask';
+import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
+import { NameDialog } from './ui/name-dialog';
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -27,6 +39,29 @@ const overlay = $<HTMLCanvasElement>('#overlay');
 const renderer = new Renderer(scene, overlay);
 const editor = new Editor(doc, renderer, host);
 const chem = new ChemClient(document.baseURI);
+const checks = new StructureChecks(doc);
+renderer.checks = checks;
+// R/S and E/Z for every structure, worked out in the background after each change
+const live = new LiveStereo(doc, (jobs) => chem.stereo(jobs));
+doc.stereo = live;
+live.onChange = (atoms, bonds) => {
+  const all = renderer.previewStereo;
+  for (const id of atoms) {
+    const a = doc.atoms.get(id);
+    if (a && (all || a.showStereo || a.stereoLabel)) doc.dirtyRects.push({ x1: a.x, y1: a.y, x2: a.x, y2: a.y });
+  }
+  for (const id of bonds) {
+    const b = doc.bonds.get(id);
+    if (!b || !(all || b.showStereo || b.stereoLabel)) continue;
+    const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
+    doc.dirtyRects.push({ x1: Math.min(p.x, q.x), y1: Math.min(p.y, q.y), x2: Math.max(p.x, q.x), y2: Math.max(p.y, q.y) });
+  }
+  editor.requestScene();
+  scheduleAnalysis();
+};
+function updateStereo(): void {
+  if (chem.ready) void live.update();
+}
 const startMs = performance.now();
 
 // ---------------------------------------------------------------- layout
@@ -44,7 +79,7 @@ const ARROWS: PaletteDef = {
   palette: 'arrows',
   title: 'Arrows',
   items: [
-    { name: 'arrow', title: 'Reaction arrow (e)' },
+    { name: 'arrow', title: 'Reaction arrow' },
     { name: 'arrow-dashed', title: 'Dashed arrow' },
     { name: 'arrow-hollow', title: 'Arrow with a hollow head' },
     { name: 'arrow-double', title: 'Resonance arrow (heads at both ends)' },
@@ -85,22 +120,23 @@ const BRACKETS: PaletteDef = {
 };
 
 // Template palettes, one per kind of structure
-const templatePalette = (group: Template['group'], palette: string, title: string, columns: number): PaletteDef => ({
+const templatePalette = (group: Template['group'], palette: string, title: string, columns: number, iconSize?: number): PaletteDef => ({
   palette,
   title,
   items: TEMPLATES.filter((t) => t.group === group).map((t) => ({ name: `tpl-${t.id}`, title: t.name })),
   columns,
   large: true,
+  iconSize,
   icon: (name, size) => templateIcon(templateById(name.slice(4))!, size),
 });
 
 const TOOL_GROUPS: ToolbarItem[][] = [
   [
-    { name: 'select', title: 'Select and move (Space)' },
+    { name: 'select', title: 'Select and move' },
     { name: 'eraser', title: 'Eraser' },
   ],
   [
-    { name: 'bond-single', title: 'Single bond (x). Click a bond: single, double, triple' },
+    { name: 'bond-single', title: 'Single bond. Click a bond: single, double, triple' },
     { name: 'bond-double', title: 'Double bond. Click again to move the second line' },
     { name: 'bond-triple', title: 'Triple bond' },
     { name: 'bond-wedge', title: 'Wedge. Click again to reverse' },
@@ -109,7 +145,7 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     { name: 'bond-bold', title: 'Bold bond' },
     { name: 'bond-dash', title: 'Dashed bond' },
     { name: 'bond-wavy', title: 'Wavy bond' },
-    { name: 'chain', title: 'Chain: drag to draw a zig-zag chain (Shift+X)' },
+    { name: 'chain', title: 'Chain: drag to draw a zig-zag chain' },
   ],
   [
     { name: 'ring-3', title: 'Cyclopropane' },
@@ -118,24 +154,43 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     { name: 'ring-6', title: 'Cyclohexane' },
     { name: 'ring-7', title: 'Cycloheptane' },
     { name: 'ring-8', title: 'Cyclooctane' },
-    { name: 'ring-benzene', title: 'Benzene (j). Shift+click swaps the double bonds' },
-    { name: 'ring-cp', title: 'Cyclopentadiene (Shift+J)' },
+    { name: 'ring-benzene', title: 'Benzene. Shift+click swaps the double bonds' },
+    { name: 'ring-cp', title: 'Cyclopentadiene' },
   ],
   [
     templatePalette('rings', 'tpl-rings', 'Ring systems', 5),
     templatePalette('heterocycles', 'tpl-heterocycles', 'Heterocycles', 7),
-    templatePalette('amino', 'tpl-amino', 'Amino acids', 5),
-    templatePalette('sugars', 'tpl-sugars', 'Sugars and chair', 4),
+    templatePalette('amino', 'tpl-amino', 'Amino acids', 5, 64),
+    templatePalette('sugars', 'tpl-sugars', 'Sugars and chair', 4, 64),
   ],
   [
-    { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption (t)' },
+    { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption' },
     ARROWS,
     SHAPES,
     BRACKETS,
   ],
 ];
 
-const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => editor.setTool(name));
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+
+/** The keys that do an action, as people read them. */
+function keysOf(ctx: KeyContext, action: string): string[] {
+  return keymap.keysFor(ctx, action).map((k) => displayChord(k, isMac));
+}
+
+// Tool names for the Hotkeys window: the tool tip up to its first full stop or colon.
+const toolNames: Record<string, string> = {};
+for (const group of TOOL_GROUPS) {
+  for (const item of group) {
+    for (const t of 'palette' in item ? item.items : [item]) toolNames[t.name] = t.title.replace(/\s*\(.*?\)/g, '').split(/[.:] /)[0];
+  }
+}
+registerToolNames(toolNames);
+
+const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => editor.setTool(name), (name) => {
+  const keys = keysOf('space', `tool ${name}`);
+  return keys.length ? ` (${keys.join(', ')})` : '';
+});
 
 const HINTS: Record<string, string> = {
   select: 'Click to select, drag to box-select or move. Double-click selects a whole structure. Delete removes.',
@@ -147,7 +202,7 @@ const ARROW_HINT = 'Drag to draw an arrow (Alt: any angle); click for a standard
 const CURVE_HINT = 'Drag from where the electrons start to where they go; swing out to one side to bend that way. Drag the middle dot to change the curve.';
 const SHAPE_HINT = 'Drag to draw. Drag the corner squares to resize; the Style panel changes dashes, fill, corners and shadow.';
 const BRACKET_HINT = 'Drag a box to put brackets round it, or click a structure to bracket it.';
-const BOND_HINT = 'Click empty space or an atom to draw; drag to aim. Point at an atom or bond and press a hotkey (see Help).';
+const BOND_HINT = 'Click empty space or an atom to draw; drag to aim. Point at an atom or bond and press a hotkey (Edit > Hotkeys lists them).';
 const RING_HINT = 'Click empty space, an atom (spiro; Alt+click to attach by a bond) or a bond (fused). Drag to orient.';
 const TEMPLATE_HINT = 'Click empty space to place it (drag to turn it), a bond to fuse it on, or an atom to join it there (Alt: the other way: by a new bond, or sharing the atom).';
 
@@ -165,10 +220,15 @@ $('#btn-undo').addEventListener('click', () => editor.undo());
 $('#btn-redo').addEventListener('click', () => editor.redo());
 $('#btn-fit').addEventListener('click', () => editor.fit());
 $('#btn-stress').addEventListener('click', () => stressTest(Number($<HTMLSelectElement>('#stress-n').value)));
-$('#btn-help').addEventListener('click', () => $<HTMLDialogElement>('#help').showModal());
+$('#btn-help').addEventListener('click', () => openHelp());
+$('#help-hotkeys').addEventListener('click', () => { $<HTMLDialogElement>('#help').close(); hotkeysDialog.open(); });
 $('#help-close').addEventListener('click', () => $<HTMLDialogElement>('#help').close());
 const stereoBox = $<HTMLInputElement>('#show-stereo');
-stereoBox.addEventListener('change', () => scheduleAnalysis(true));
+stereoBox.addEventListener('change', () => {
+  renderer.previewStereo = stereoBox.checked;
+  renderer.repaintAll();
+  editor.requestScene();
+});
 
 host.addEventListener('dragover', (e) => { e.preventDefault(); host.classList.add('drop'); });
 host.addEventListener('dragleave', () => host.classList.remove('drop'));
@@ -251,12 +311,94 @@ async function pasteChemistry(text: string): Promise<void> {
   try {
     let ids: number[] = [];
     doc.edit('Paste', () => { ids = addMolfile(doc, mb!, c.x, c.y); });
-    editor.sel = { atoms: new Set(ids), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set() };
-    for (const id of ids) for (const b of doc.adj.get(id) ?? []) editor.sel.bonds.add(b);
-    editor.changed();
+    selectNewAtoms(ids);
   } catch (err) {
     flash(String(err));
   }
+}
+
+/** Select just these (new) atoms and their bonds. */
+function selectNewAtoms(ids: number[]): void {
+  editor.sel = { atoms: new Set(ids), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set() };
+  for (const id of ids) for (const b of doc.adj.get(id) ?? []) editor.sel.bonds.add(b);
+  editor.changed();
+}
+
+// ------------------------------------------------------------------ name to structure
+
+const names = new NameReader(new URL('opsin/opsin-data.dat', document.baseURI).href);
+let namesReady = false;
+
+/** A name as a laid-out molfile, or why not. */
+async function nameToMolfile(name: string): Promise<{ mb: string; attach: number[]; warnings: string[] } | { error: string }> {
+  const r = await names.read(name);
+  namesReady = true;
+  if (!r.ok) return { error: r.message };
+  if (!chem.ready) return { error: 'The chemistry engine is still loading; try again in a moment.' };
+  const mb = await chem.smilesToMol(r.smiles).catch(() => null);
+  if (!mb) return { error: 'The name was read, but the structure could not be drawn (' + r.smiles + ').' };
+  return { mb, attach: attachmentAtoms(r.smiles), warnings: [...r.warnings, ...cxNotes(r.smiles)] };
+}
+
+/** Adds a named structure centred at (x, y), its attachment points drawn as wavy lines. Use inside doc.edit. */
+function addNamed(got: { mb: string; attach: number[] }, x: number, y: number): number[] {
+  const ids = addMolfile(doc, got.mb, x, y);
+  for (const i of got.attach) {
+    if (ids[i] !== undefined) doc.updateAtom(ids[i], { attach: 'Wavy', attachNum: undefined, z: 0, label: null, charge: 0 });
+  }
+  return ids;
+}
+
+const nameDialog = new NameDialog(async (name) => {
+  const got = await nameToMolfile(name);
+  if ('error' in got) return got.error;
+  const c = renderer.toDoc(renderer.width / 2, renderer.height / 2);
+  try {
+    let ids: number[] = [];
+    doc.edit('Name to Structure', () => { ids = addNamed(got, c.x, c.y); });
+    selectNewAtoms(ids);
+  } catch (err) {
+    return String(err);
+  }
+  if (got.warnings.length) flash('Note from the name reader: ' + got.warnings.join(' '), 9000);
+  return null;
+}, () => !namesReady);
+
+/**
+ * Structure > Name to Structure. Selected captions are read as names and replaced by their
+ * structures (Undo puts them back); with no caption selected, a window asks for a name.
+ */
+async function nameToStructure(): Promise<void> {
+  const caps = [...editor.sel.captions].map((id) => doc.captions.get(id)).filter((c): c is Caption => !!c);
+  if (!caps.length) { nameDialog.open(); return; }
+  if (!namesReady) flash('Starting the name reader (only the first time)…');
+  const found: { cap: Caption; mb: string; attach: number[] }[] = [];
+  const problems: { name: string; why: string }[] = [], notes: string[] = [];
+  for (const cap of caps) {
+    const name = captionName(cap.runs.map((r) => r.text).join(''));
+    const got = await nameToMolfile(name);
+    if ('error' in got) problems.push({ name, why: got.error });
+    else { found.push({ cap, mb: got.mb, attach: got.attach }); notes.push(...got.warnings); }
+  }
+  if (found.length) {
+    let ids: number[] = [];
+    try {
+      doc.edit('Name to Structure', () => {
+        for (const f of found) {
+          const box = renderer.captionBox(f.cap);
+          ids = ids.concat(addNamed(f, (box.x1 + box.x2) / 2, (box.y1 + box.y2) / 2));
+          doc.removeCaption(f.cap.id);
+        }
+      });
+    } catch (err) {
+      flash(String(err));
+      return;
+    }
+    selectNewAtoms(ids);
+  }
+  if (problems.length === 1 && !found.length) flash(problems[0].why, 9000);
+  else if (problems.length) flash(`Not read as ${problems.length === 1 ? 'a name' : 'names'} (select one on its own to see why): ${problems.map((p) => `"${p.name}"`).join(', ')}`, 9000);
+  else if (notes.length) flash('Note from the name reader: ' + notes.join(' '), 9000);
 }
 
 /** Copy the selected structures (or everything) as SMILES text. */
@@ -267,6 +409,93 @@ async function copySmiles(): Promise<void> {
   const smiles = await chem.molToSmiles(molblock);
   if (!smiles) { flash('There is no structure to copy.'); return; }
   await navigator.clipboard.writeText(smiles).then(() => flash('Copied SMILES: ' + smiles), () => flash('Could not use the clipboard.'));
+}
+
+/** Paste the clipboard's text as SMILES (or a molfile), even when a drawing is on it too. */
+async function pasteSmiles(): Promise<void> {
+  let text = '';
+  try {
+    text = (await readClipboardText()).trim();
+  } catch (err) {
+    flash('Could not read the clipboard: ' + String(err));
+    return;
+  }
+  if (!text) { flash('The clipboard has no text on it.'); return; }
+  await pasteChemistry(text);
+}
+
+function copyText(text: string, done: string): Promise<void> {
+  return navigator.clipboard.writeText(text).then(() => flash(done), () => flash('Could not use the clipboard.'));
+}
+
+/** Copy the selected structures (or all of them) as molfile text. */
+function copyMolfile(): Promise<void> {
+  const atoms = editor.sel.atoms.size ? editor.sel.atoms : doc.atoms.keys();
+  const { molblock } = toMolfile(doc, atoms);
+  return copyText(molblock, 'Copied as molfile text.');
+}
+
+/** Copy the selection (or the whole drawing) as CDXML text, for pasting into a text editor or script. */
+function copyCdxmlText(): Promise<void> | void {
+  const part = extractDrawing(doc, editor.hasSelection() ? editor.sel : null);
+  if (isEmpty(part)) { flash('There is nothing to copy.'); return; }
+  return copyText(writeCdxml(part, { name: 'Clipboard.cdxml' }), 'Copied as CDXML text.');
+}
+
+let lastTurn = { angle: '90', dir: 'cw' };
+async function rotateDialog(): Promise<void> {
+  if (!editor.hasSelection()) { flash('Select something to rotate.'); return; }
+  const r = await ask('Rotate', [
+    { name: 'angle', label: 'Angle', value: lastTurn.angle, unit: 'degrees', type: 'number' },
+    { name: 'dir', label: 'Direction', value: lastTurn.dir, options: [{ value: 'cw', label: 'Clockwise' }, { value: 'ccw', label: 'Anticlockwise' }] },
+  ], { ok: 'Rotate' });
+  if (!r) return;
+  const a = parseFloat(r.angle);
+  if (!Number.isFinite(a)) { flash('Type the angle in degrees.'); return; }
+  lastTurn = { angle: r.angle, dir: r.dir };
+  editor.rotateBy(r.dir === 'ccw' ? -a : a);
+}
+
+async function scaleDialog(): Promise<void> {
+  if (!editor.hasSelection()) { flash('Select something to scale.'); return; }
+  const L = editor.selectionBondLength();
+  const shown = L ? L.toFixed(1) : '';
+  const r = await ask('Scale', [
+    { name: 'pct', label: 'Size', value: '100', unit: '%', type: 'number' },
+    ...(L ? [{ name: 'len', label: 'or bond length', value: shown, unit: 'pt', type: 'number' as const }] : []),
+  ], {
+    ok: 'Scale',
+    note: L ? `The selected bonds are ${shown} pt long; the drawing's standard is ${doc.style.bondLength.toFixed(1)} pt. Change either box.` : undefined,
+  });
+  if (!r) return;
+  let f = parseFloat(r.pct) / 100;
+  if (L && r.len !== undefined && r.len.trim() !== shown) f = parseFloat(r.len) / L;
+  if (!Number.isFinite(f) || f <= 0) { flash('Type a size above zero.'); return; }
+  editor.scaleSelection(f);
+}
+
+function reactionStep(dir: 'right' | 'left' | 'down' | 'up'): void {
+  if (!editor.reactionStep(dir)) flash('Select the starting material first: this adds a reaction arrow and a copy of it to turn into the product.');
+}
+
+const OPTION_TEXT = {
+  fixedLength: ['Fixed bond lengths on: new bonds are the standard length (hold Alt to drag any length).', 'Fixed bond lengths off: new bonds are as long as you drag them.'],
+  fixedAngles: ['Fixed angles on: new bonds point in 15° steps (hold Alt for any angle).', 'Fixed angles off: new bonds point wherever you drag.'],
+};
+function toggleOption(key: 'fixedLength' | 'fixedAngles'): void {
+  editor.options[key] = !editor.options[key];
+  flash(OPTION_TEXT[key][editor.options[key] ? 0 : 1]);
+  refreshKeys();
+  storeSettings();
+}
+
+/** View > Developer Tools: the Speed panel and the stress test, hidden unless switched on. */
+let devTools = false;
+function showDevTools(on: boolean): void {
+  devTools = on;
+  for (const el of document.querySelectorAll<HTMLElement>('.dev-only')) el.hidden = !on;
+  $('[data-cmd="dev-tools"]')?.setAttribute('aria-checked', String(on));
+  if (on) updatePanels();
 }
 
 function align(how: Align): void {
@@ -295,7 +524,6 @@ async function openFile(f: File): Promise<void> {
 function clearDrawing(): void {
   doc.loadFrom(new Doc());
   editor.clearSelection();
-  renderer.annotations = new Map();
   editor.lastEdited = null;
   renderer.view = { scale: 2, ox: 40, oy: 40 };
   lastOpen = '';
@@ -326,7 +554,21 @@ const COMMANDS: Record<string, () => unknown> = {
   copy: () => copy(),
   paste: () => paste(),
   'copy-smiles': () => copySmiles(),
+  'paste-smiles': () => pasteSmiles(),
+  'copy-mol': () => copyMolfile(),
+  'copy-cdxml': () => copyCdxmlText(),
   'select-all': () => editor.selectAll(),
+  'next-structure': () => editor.selectNextStructure(1),
+  'prev-structure': () => editor.selectNextStructure(-1),
+  // arrow keys move the selection; with nothing selected they do nothing here
+  'nudge-left': () => editor.nudge(-1, 0),
+  'nudge-right': () => editor.nudge(1, 0),
+  'nudge-up': () => editor.nudge(0, -1),
+  'nudge-down': () => editor.nudge(0, 1),
+  'nudge-far-left': () => editor.nudge(-10, 0),
+  'nudge-far-right': () => editor.nudge(10, 0),
+  'nudge-far-up': () => editor.nudge(0, -10),
+  'nudge-far-down': () => editor.nudge(0, 10),
   'align-left': () => align('left'),
   'align-hcenter': () => align('hcenter'),
   'align-right': () => align('right'),
@@ -340,7 +582,31 @@ const COMMANDS: Record<string, () => unknown> = {
   'rotate-cw': () => editor.rotateBy(90) || flash('Select something to rotate.'),
   'rotate-ccw': () => editor.rotateBy(-90) || flash('Select something to rotate.'),
   'rotate-180': () => editor.rotateBy(180) || flash('Select something to rotate.'),
+  // Alt+arrows turn the selection (and must never reach the browser, where Alt+← goes back)
+  'turn-ccw-1': () => { editor.rotateBy(-1); },
+  'turn-cw-1': () => { editor.rotateBy(1); },
+  'turn-ccw-15': () => { editor.rotateBy(-15); },
+  'turn-cw-15': () => { editor.rotateBy(15); },
+  'rotate-dialog': () => rotateDialog(),
+  scale: () => scaleDialog(),
+  'reaction-right': () => reactionStep('right'),
+  'reaction-left': () => reactionStep('left'),
+  'reaction-down': () => reactionStep('down'),
+  'reaction-up': () => reactionStep('up'),
+  join: () => editor.join() || flash('Select two atoms, or two bonds, to join them into one.'),
+  'fixed-length': () => toggleOption('fixedLength'),
+  'fixed-angles': () => toggleOption('fixedAngles'),
+  'dev-tools': () => { showDevTools(!devTools); storeSettings(); },
+  'zoom-in': () => editor.zoomBy(1.25),
+  'zoom-out': () => editor.zoomBy(0.8),
+  'zoom-fit': () => editor.fit(),
+  // 100%: a point on the page is a point on the screen (96 pixels to the inch)
+  'zoom-actual': () => editor.zoomTo(96 / 72),
+  hotkeys: () => hotkeysDialog.open(),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
+  'check-structure': () => checkStructure(),
+  'stereo-labels': () => toggleStereoLabels(),
+  'name-to-structure': () => nameToStructure(),
   'clipboard-formats': async () => {
     const names = await clipboardFormats().catch((err) => [String(err)]);
     flash(names.length ? 'On the clipboard: ' + names.join(', ') : 'The clipboard is empty.', 15000);
@@ -390,26 +656,144 @@ document.addEventListener('pointerdown', (e) => {
 // listing the clipboard's formats needs the Windows app
 for (const b of document.querySelectorAll<HTMLButtonElement>('[data-cmd="clipboard-formats"]')) b.hidden = !nativeClipboard;
 
-// File and clipboard shortcuts, ahead of the drawing tools' own keys.
-window.addEventListener('keydown', (e) => {
-  if (!(e.ctrlKey || e.metaKey) || isTyping(e.target)) return;
-  const k = e.key.toLowerCase();
-  let cmd: string | null = null;
-  if (k === 'n') cmd = 'new';
-  else if (k === 'o') cmd = 'open';
-  else if (k === 's') cmd = e.shiftKey ? 'save-as' : 'save';
-  else if (k === 'h' && e.shiftKey) cmd = 'flip-h';
-  else if (k === 'v' && e.shiftKey && !e.altKey) cmd = 'flip-v';
-  else if (k === 'k' && e.shiftKey) cmd = 'clean-up';
-  else if (k === 'c') cmd = e.altKey ? 'copy-smiles' : textSelected() ? null : 'copy';
-  else if (k === 'x' && !e.altKey) cmd = textSelected() ? null : 'cut';
+// Keys for menu commands come through the drawing's key handler (from the key map); these are
+// the special cases where the key should do its usual job instead.
+editor.runCommand = (name) => {
+  // with text on the page selected, Ctrl+C and Ctrl+X copy that text
+  if ((name === 'copy' || name === 'cut') && textSelected()) return false;
   // in a browser, Ctrl+V goes on to the paste event, which can read the clipboard
-  else if (k === 'v' && !e.altKey && nativeClipboard) cmd = 'paste';
-  if (!cmd) return;
-  e.preventDefault();
-  e.stopPropagation();
-  COMMANDS[cmd]();
-}, true);
+  if (name === 'paste' && !nativeClipboard) return false;
+  const run = COMMANDS[name];
+  if (!run) return false;
+  return run() !== false;
+};
+
+// ---------------------------------------------------------------- settings and the Hotkeys window
+
+let settingsLoaded = false;
+/** Save the key map and preferences (after the saved ones have been read, so they aren't lost). */
+function storeSettings(): void {
+  if (!settingsLoaded) return;
+  const s: Settings = {
+    hotkeys: keymap.overrides(),
+    keepHotspotOnBond: editor.options.keepHotspotOnBond,
+    fixedLength: editor.options.fixedLength,
+    fixedAngles: editor.options.fixedAngles,
+    devTools,
+  };
+  saveSettings(s, (msg) => flash(msg, 10000));
+}
+
+/** Show the current keys in the menus and tool tips, and tick the options that are on. */
+function refreshKeys(): void {
+  for (const b of document.querySelectorAll<HTMLButtonElement>('.menu button[data-cmd]')) {
+    const k = keysOf('command', `command ${b.dataset.cmd}`)[0];
+    let kbd = b.querySelector('kbd');
+    if (!k) { kbd?.remove(); continue; }
+    if (!kbd) { kbd = document.createElement('kbd'); b.append(kbd); }
+    kbd.textContent = k;
+  }
+  for (const [cmd, on] of [['fixed-length', editor.options.fixedLength], ['fixed-angles', editor.options.fixedAngles]] as const) {
+    $(`[data-cmd="${cmd}"]`)?.setAttribute('aria-checked', String(on));
+  }
+  const tip = (id: string, text: string, cmd: string) => {
+    const k = keysOf('command', `command ${cmd}`)[0];
+    $(id).title = k ? `${text} (${k})` : text;
+  };
+  tip('#btn-undo', 'Undo', 'undo');
+  tip('#btn-redo', 'Redo', 'redo');
+  tip('#btn-fit', 'Fit drawing to window', 'zoom-fit');
+  toolbar.refreshTitles();
+}
+
+keymap.onChange(() => { refreshKeys(); storeSettings(); });
+
+const hotkeysDialog = new HotkeysDialog({
+  mac: isMac,
+  location: settingsLocation,
+  keepHotspot: {
+    get: () => editor.options.keepHotspotOnBond,
+    set: (v) => { editor.options.keepHotspotOnBond = v; storeSettings(); },
+  },
+  exportKeys: async () => {
+    const target = await saveFileDialog('Chem Illustrator hotkeys.json', KEYMAP_FILE).catch((e) => { hotkeysDialog.say(String(e)); return null; });
+    if (!target) return;
+    const text = JSON.stringify({ app: 'Chem Illustrator', kind: 'hotkeys', version: 1, hotkeys: keymap.overrides() }, null, 2) + '\n';
+    await writeFile(target.ref, target.name, text, KEYMAP_FILE).then(
+      () => hotkeysDialog.say(`Saved your keys in ${target.name}. Import it on another computer to use them there.`),
+      (e) => hotkeysDialog.say(`Could not save the keys: ${e}`),
+    );
+  },
+  importKeys: async () => {
+    const got = await openFileDialog([KEYMAP_FILE]).catch((e) => { hotkeysDialog.say(String(e)); return null; });
+    if (!got) return;
+    let raw: { hotkeys?: KeyOverrides } | null = null;
+    try { raw = JSON.parse(got.text); } catch { /* reported below */ }
+    if (!raw || typeof raw !== 'object' || !raw.hotkeys || typeof raw.hotkeys !== 'object') {
+      hotkeysDialog.say(`${got.name} isn't a hotkeys file (use one saved with Export).`);
+      return;
+    }
+    keymap.setOverrides(raw.hotkeys);
+    hotkeysDialog.say(`Using the keys from ${got.name}.`);
+  },
+});
+
+void loadSettings().then((s) => {
+  editor.options.keepHotspotOnBond = s.keepHotspotOnBond;
+  editor.options.fixedLength = s.fixedLength;
+  editor.options.fixedAngles = s.fixedAngles;
+  showDevTools(s.devTools);
+  keymap.setOverrides(s.hotkeys);
+  settingsLoaded = true;
+  refreshKeys();
+});
+refreshKeys();
+
+// The Help window lists the most used keys as they are now (they can be changed).
+const HELP_KEYS: Record<'atom' | 'bond' | 'space', string[]> = {
+  atom: ['atom bond', 'atom ring-bond', 'atom carbonyl', 'atom phenyl', 'atom wedge', 'atom hash-wedge', 'atom cyclohexyl',
+    'atom cyclopentyl', 'atom methylidene', 'atom dimethyl', 'atom alkyne', 'atom sulfonyl', 'label O', 'label N', 'label S',
+    'label Cl', 'label Me', 'label OMe', 'label Ph', 'label Boc', 'atom plus', 'atom minus', 'atom number', 'atom attach',
+    'atom nickname', 'atom edit-label', 'atom clear'],
+  bond: ['bond single', 'bond double', 'bond triple', 'bond wedge', 'bond hash-wedge', 'bond bold', 'bond dashed', 'bond wavy',
+    'bond left', 'bond center', 'bond right', 'fuse benzene', 'fuse 6', 'fuse 5', 'fuse chair'],
+  space: ['tool select', 'tool bond-single', 'tool chain', 'tool ring-benzene', 'tool text', 'tool arrow'],
+};
+
+function openHelp(): void {
+  for (const ctx of ['atom', 'bond', 'space'] as const) {
+    const ul = $(`#help-${ctx}`);
+    ul.replaceChildren(...HELP_KEYS[ctx].flatMap((action) => {
+      const keys = keysOf(ctx, action);
+      if (!keys.length) return [];
+      const li = document.createElement('li');
+      for (const k of keys.slice(0, 2)) {
+        const kbd = document.createElement('kbd');
+        kbd.textContent = k;
+        li.append(kbd, ' ');
+      }
+      li.append(actionName(action));
+      return [li];
+    }));
+  }
+  for (const el of document.querySelectorAll<HTMLElement>('#help [data-cmd-key]')) {
+    el.textContent = keysOf('command', `command ${el.dataset.cmdKey}`)[0] ?? '(no key)';
+  }
+  $<HTMLDialogElement>('#help').showModal();
+}
+
+const nicknames = new NicknameChooser();
+editor.onNickname = (atomId) => nicknames.open((name) => editor.runAction(`label ${name}`, { kind: 'atom', id: atomId }));
+// / or ? on an atom or bond: select it and show its settings in the Style panel
+editor.onProperties = () => {
+  // after the panel has caught up with the new selection
+  setTimeout(() => {
+    const sec = $('#style-section');
+    if (sec.hidden) return;
+    sec.scrollIntoView({ block: 'nearest' });
+    sec.querySelector<HTMLElement>('input, select, button')?.focus();
+  }, 60);
+};
 
 // Unsaved work: ask before the window closes.
 if (isTauri()) {
@@ -426,7 +810,6 @@ function openText(text: string, name: string): ReadStats | null {
     const { doc: loaded, stats } = readCdxml(text);
     doc.loadFrom(loaded);
     editor.clearSelection();
-    renderer.annotations = new Map();
     editor.lastEdited = null;
     editor.fit();
     editor.frame(true);
@@ -507,13 +890,12 @@ async function runAnalysis(force: boolean): Promise<void> {
     frags.push(editor.sel.atoms.size ? new Set([...f].filter((x) => editor.sel.atoms.has(x))) : f);
     if (frags.length >= 12) break;
   }
-  const key = doc.version + ':' + frags.map((f) => [...f].join(',')).join('|') + stereoBox.checked;
+  const key = doc.version + ':' + live.version + ':' + frags.map((f) => [...f].join(',')).join('|');
   if (!force && key === analysisKey) return;
   analysisKey = key;
   const panel = $('#analysis-body');
   if (!frags.length) {
     panel.innerHTML = '<p class="muted">Select a structure, or draw one, to see its formula and masses.</p>';
-    if (renderer.annotations.size) { renderer.setAnnotations(doc, new Map()); editor.requestScene(); }
     return;
   }
   const seq = ++analysisSeq;
@@ -528,23 +910,59 @@ async function runAnalysis(force: boolean): Promise<void> {
   panel.innerHTML = res.results.map((r, i) => {
     if (r.error) return `<div class="frag"><p class="warn">${escapeHtml(r.error)}</p></div>`;
     const unk = exports[i].unknownLabels;
+    const stereo = stereoSummary(frags[i]);
     return `<div class="frag">
       <div class="formula">${formatFormula(r.formula)}</div>
       <table>
         <tr><th>Exact mass</th><td>${r.exact.toFixed(4)}</td></tr>
         <tr><th>Mol. wt.</th><td>${r.mw.toFixed(2)}</td></tr>
         ${r.charge === 0 ? `<tr><th>[M+H]<sup>+</sup></th><td>${(r.exact + H).toFixed(4)}</td></tr><tr><th>[M+Na]<sup>+</sup></th><td>${(r.exact + NA).toFixed(4)}</td></tr>` : ''}
-        ${r.cip.length ? `<tr><th>Stereo</th><td>${r.cip.map((c) => c[1]).join(', ')}</td></tr>` : ''}
+        ${stereo ? `<tr><th>Stereo</th><td>${escapeHtml(stereo)}</td></tr>` : ''}
       </table>
       <div class="smiles" title="SMILES">${escapeHtml(r.smiles)}</div>
       ${unk.length ? `<p class="warn">Not understood (left out): ${unk.map(escapeHtml).join(', ')}</p>` : ''}
     </div>`;
   }).join('');
-  // stereo labels on the drawing
-  const next = new Map<number, string>();
-  if (stereoBox.checked) for (const r of res.results) for (const [id, l] of r.cip) next.set(id, `(${l})`);
-  if (renderer.annotations.size || next.size) { renderer.setAnnotations(doc, next); editor.requestScene(); }
   updatePanels();
+}
+
+/**
+ * Structure > Show Stereo Labels: shows the R/S and E/Z labels of the selected structures (or of
+ * all of them) as part of the drawing, or hides them when they are all showing already.
+ */
+function toggleStereoLabels(): void {
+  const s = editor.sel;
+  const roots = s.atoms.size || s.bonds.size ? [...s.atoms, ...[...s.bonds].map((id) => doc.bonds.get(id)?.a1 ?? -1)] : [...doc.atoms.keys()];
+  const atoms = new Set<number>();
+  for (const r of roots) if (doc.atoms.has(r) && !atoms.has(r)) for (const id of doc.fragmentOf(r)) atoms.add(id);
+  const bonds = new Set<number>();
+  for (const id of atoms) for (const bid of doc.adj.get(id) ?? []) bonds.add(bid);
+  const labelled = [...atoms].filter((id) => live.atom(id)).map((id) => doc.atoms.get(id)!);
+  const labelledB = [...bonds].filter((id) => live.bond(id)).map((id) => doc.bonds.get(id)!);
+  if (!labelled.length && !labelledB.length) {
+    flash(chem.ready ? 'No stereocentres or E/Z double bonds here.' : 'The chemistry engine is still loading.');
+    return;
+  }
+  const show = ![...labelled, ...labelledB].every((x) => x.showStereo || x.stereoLabel);
+  doc.edit(show ? 'Show stereo labels' : 'Hide stereo labels', () => setStereoShown(doc, atoms, bonds, show));
+  editor.changed();
+  const n = labelled.length + labelledB.length;
+  flash(show ? `Showing ${n} stereo label${n === 1 ? '' : 's'}.` : `Hid ${n} stereo label${n === 1 ? '' : 's'}.`);
+}
+
+/** The R/S and E/Z labels of a structure in reading order, e.g. "R, S; E". */
+function stereoSummary(frag: Set<number>): string {
+  const byPlace = (p: { x: number; y: number }, q: { x: number; y: number }) => p.y - q.y || p.x - q.x;
+  // the drawing may have changed while the analysis ran: skip atoms that have gone
+  const centres = [...frag].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a && !!live.atom(a.id)).sort(byPlace).map((a) => live.atom(a.id)!);
+  const dbl: { x: number; y: number; l: string }[] = [];
+  for (const id of frag) for (const bid of doc.adj.get(id) ?? []) {
+    const b = doc.bonds.get(bid);
+    const l = b && b.a1 === id ? live.bond(bid) : null;
+    if (b && l) { const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!; dbl.push({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2, l }); }
+  }
+  dbl.sort(byPlace);
+  return [centres.join(', '), dbl.map((d) => d.l).join(', ')].filter(Boolean).join('; ');
 }
 
 function formatFormula(f: string): string {
@@ -553,6 +971,93 @@ function formatFormula(f: string): string {
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
+}
+
+// ---------------------------------------------------------------- chemistry warnings
+
+const warnBox = $<HTMLInputElement>('#show-warnings');
+warnBox.addEventListener('change', () => {
+  renderer.showWarnings = warnBox.checked;
+  renderer.repaintAll();
+  editor.requestScene();
+});
+const warnTip = $<HTMLDivElement>('#warn-tip');
+let warnKey = '';
+
+/** The Warnings panel and the tip shown when pointing at a problem. Runs after each paint. */
+function updateWarnings(): void {
+  // tip for the atom or bond under the pointer
+  const h = editor.hover;
+  let tip: string[] | undefined;
+  let at: { x: number; y: number } | null = null;
+  if (h?.kind === 'atom') {
+    const a = doc.atoms.get(h.id);
+    if (a) { tip = checks.forAtom(a); at = a; }
+  } else if (h?.kind === 'bond') {
+    const b = doc.bonds.get(h.id);
+    if (b) {
+      tip = checks.forBond(b);
+      const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
+      at = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
+    }
+  }
+  if (tip && at && renderer.showWarnings) {
+    const s = renderer.toScreen(at);
+    warnTip.textContent = tip.join(' ');
+    warnTip.hidden = false;
+    const w = warnTip.offsetWidth, ht = warnTip.offsetHeight;
+    warnTip.style.left = `${Math.max(4, Math.min(renderer.width - w - 4, s.x + 14))}px`;
+    warnTip.style.top = `${s.y + 16 + ht > renderer.height ? s.y - 16 - ht : s.y + 16}px`;
+  } else warnTip.hidden = true;
+
+  // the list, redone only when the warnings or the drawing changed
+  const key = checks.version + ':' + doc.version;
+  if (key === warnKey) return;
+  warnKey = key;
+  const list = checks.list();
+  const ignored = checks.ignoredCount();
+  $('#warnings-count').textContent = list.length ? String(list.length) : '';
+  const MAX = 100;
+  const rows = list.slice(0, MAX).map((w, i) =>
+    `<li><button class="w-text" data-i="${i}" title="Show it on the drawing">${escapeHtml(w.text.join(' '))}</button>` +
+    `<button class="w-ignore" data-i="${i}" title="Stop flagging this one (saved with the file)">Ignore</button></li>`).join('');
+  $('#warnings-body').innerHTML =
+    (list.length ? `<ul class="warn-list">${rows}</ul>${list.length > MAX ? `<p class="muted small">and ${list.length - MAX} more</p>` : ''}` : '<p class="muted">No problems found.</p>') +
+    (ignored ? `<p class="muted small">${ignored} ignored. <button id="w-unignore">Show them again</button></p>` : '');
+  const items = list.slice(0, MAX);
+  for (const b of document.querySelectorAll<HTMLButtonElement>('#warnings-body .w-text')) {
+    b.addEventListener('click', () => { const w = items[Number(b.dataset.i)]; editor.reveal(w.kind, w.id); });
+  }
+  for (const b of document.querySelectorAll<HTMLButtonElement>('#warnings-body .w-ignore')) {
+    b.addEventListener('click', () => {
+      const w = items[Number(b.dataset.i)];
+      doc.edit('Ignore warning', () => {
+        if (w.kind === 'atom') doc.updateAtom(w.id, { ignoreWarnings: true });
+        else doc.updateBond(w.id, { ignoreWarnings: true });
+      });
+      editor.changed();
+    });
+  }
+  $('#w-unignore')?.addEventListener('click', () => {
+    doc.edit('Show ignored warnings', () => {
+      for (const id of checks.atoms.keys()) if (doc.atoms.get(id)?.ignoreWarnings) doc.updateAtom(id, { ignoreWarnings: false });
+      for (const id of checks.bonds.keys()) if (doc.bonds.get(id)?.ignoreWarnings) doc.updateBond(id, { ignoreWarnings: false });
+    });
+    editor.changed();
+  });
+}
+
+/** Structure > Check Structure: go to the next problem after the one selected. */
+function checkStructure(): void {
+  const list = checks.list();
+  if (!list.length) {
+    flash(checks.ignoredCount() ? 'No problems found (apart from the ones you chose to ignore).' : 'No problems found.');
+    return;
+  }
+  const cur = list.findIndex((w) => (w.kind === 'atom' ? editor.sel.atoms : editor.sel.bonds).has(w.id));
+  const w = list[(cur + 1) % list.length];
+  editor.reveal(w.kind, w.id);
+  flash(`${(cur + 1) % list.length + 1} of ${list.length}: ${w.text.join(' ')}`);
 }
 
 // ---------------------------------------------------------------- speed panel
@@ -567,7 +1072,7 @@ function stat(xs: number[]): { last: number; med: number; p95: number } {
 
 let panelQueued = false;
 function updatePanels(): void {
-  if (panelQueued) return;
+  if (panelQueued || !devTools) return;
   panelQueued = true;
   requestAnimationFrame(() => {
     panelQueued = false;
@@ -588,12 +1093,19 @@ function updatePanels(): void {
 }
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
+stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
 
-editor.onFrame = () => updatePanels();
-editor.onChange = () => { scheduleAnalysis(); updatePanels(); file.updateTitle(); stylePanel.refresh(); };
+let stereoSeen = -1;
+editor.onFrame = () => {
+  updatePanels();
+  updateWarnings();
+  if (doc.version !== stereoSeen) { stereoSeen = doc.version; updateStereo(); }
+};
+editor.onChange = () => { updateStereo(); scheduleAnalysis(); updatePanels(); file.updateTitle(); stylePanel.refresh(); };
 chem.onReady = () => {
   (window as any).__chemReadyMs = performance.now() - startMs;
   updatePanels();
+  updateStereo();
   scheduleAnalysis(true);
 };
 
@@ -631,12 +1143,12 @@ requestAnimationFrame(() => {
 });
 
 // Hooks for the automated speed tests.
-(window as any).__app = { doc, editor, renderer, chem, openText, stressTest, pasteChemistry, sample: sampleMolecule, file, Doc };
+(window as any).__app = { doc, editor, renderer, chem, live, openText, stressTest, pasteChemistry, sample: sampleMolecule, file, Doc, keymap, names };
 
 // ---------------------------------------------------------------- desktop self-test
 
 // Inside the desktop app, started with CHEM_ILLUSTRATOR_SELFTEST set (see src-tauri/src/lib.rs):
-// check that the drawing and the chemistry engine work in this web view, time a few redraws,
+// check that the drawing, the chemistry engine and the name reader work in this web view, time a few redraws,
 // report, and close. The automatic Windows build runs this on the app it has just built.
 if (isTauri()) {
   invoke<boolean>('selftest_requested').then((yes) => { if (yes) desktopSelfTest(); }).catch(() => {});
@@ -664,6 +1176,11 @@ async function desktopSelfTest(): Promise<void> {
       report.exactMass = res.results[0]?.exact;
       ok = !!report.formula && !res.results[0]?.error;
     }
+    // Name to structure (OPSIN in its worker) in this web view, under the app's security rules.
+    const n0 = performance.now();
+    const nr = await names.read('(2R)-butan-2-ol');
+    report.nameToStructure = { ok: nr.ok, smiles: nr.smiles, message: nr.message, ms: Math.round(performance.now() - n0) };
+    ok = ok && nr.ok && nr.smiles === 'C[C@H](CC)O';
     // Redraw speed on a large drawing, in this web view.
     const s0 = performance.now();
     stressTest(2000);

@@ -237,6 +237,16 @@ export async function readWebClipboard(): Promise<Pasted> {
   return lastCopy ? { kind: 'drawing', doc: readCdxml(lastCopy).doc } : { kind: 'nothing' };
 }
 
+/** The clipboard's plain text, ignoring any drawing on it (Paste SMILES). */
+export async function readClipboardText(): Promise<string> {
+  if (nativeClipboard) {
+    const res = await invoke<ArrayBuffer>('clipboard_read', { names: ['CF_UNICODETEXT'] });
+    const [item] = unpackFormats(new Uint8Array(res));
+    return item ? new TextDecoder().decode(item[1]).replace(/\0+$/, '') : '';
+  }
+  return navigator.clipboard.readText();
+}
+
 /** Names of the formats on the Windows clipboard (to see what another program copied). */
 export async function clipboardFormats(): Promise<string[]> {
   return nativeClipboard ? invoke<string[]>('clipboard_formats') : [];

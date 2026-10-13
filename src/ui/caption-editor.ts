@@ -6,6 +6,7 @@
 import type { Caption, TextRun } from '../model';
 import type { Vec } from '../geom';
 import { FONT_STACK } from '../render/renderer';
+import { keymap, chordOf, parseAction } from '../editor/keymap';
 import * as rt from '../richtext';
 
 export interface CaptionText {
@@ -400,15 +401,19 @@ export class CaptionEditor {
     e.stopPropagation();
     const ctrl = e.ctrlKey || e.metaKey;
     if (e.key === 'Escape' || (e.key === 'Enter' && ctrl)) { e.preventDefault(); this.finish(); return; }
+    // styling keys come from the key map (Edit > Hotkeys), so they can be changed
+    const chord = chordOf(e);
+    const action = chord ? keymap.lookup('text', chord) : undefined;
+    if (action) {
+      e.preventDefault();
+      this.toggle(parseAction(action).arg as rt.Toggle);
+      return;
+    }
     if (!ctrl) return;
     const k = e.key.toLowerCase();
     const run = (f: () => void) => { e.preventDefault(); f(); };
     if (k === 'z' && !e.shiftKey) run(() => this.restore(this.undoStack, this.redoStack));
     else if (k === 'y' || (k === 'z' && e.shiftKey)) run(() => this.restore(this.redoStack, this.undoStack));
-    else if (k === 'b') run(() => this.toggle('bold'));
-    else if (k === 'i') run(() => this.toggle('italic'));
-    else if (k === 'u') run(() => this.toggle('underline'));
-    else if (e.code === 'Equal' || k === '=' || k === '+') run(() => this.toggle(e.shiftKey || k === '+' ? 'sup' : 'sub'));
   }
 
   // ------------------------------------------------------------------ styling

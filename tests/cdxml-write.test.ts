@@ -285,7 +285,7 @@ describe('saving a new drawing', () => {
 
   it('writes stereo labels and box styles as ChemDraw does', () => {
     const out = writeCdxml(sample());
-    expect(out).toMatch(/ShowAtomStereo="yes" AS="R"><objecttag TagType="Unknown" PositioningType="offset" PositioningOffset="2.00 -4.00" Name="stereo"><t [^>]*><s [^>]*face="2">\(R\)<\/s>/);
+    expect(out).toMatch(/ShowAtomStereo="yes" AS="R"><objecttag TagType="Unknown" Name="stereo"><t p="([\d.]+) ([\d.]+)"[^>]*><s [^>]*face="2">\(R\)<\/s>/);
     // corner radius and shadow in hundredths of the line width (0.6 here)
     expect(out).toMatch(/RectangleType="RoundEdge" CornerRadius="600"/);
     expect(out).toMatch(/RectangleType="RoundEdge Shadow" CornerRadius="300" ShadowSize="400"/);
@@ -367,5 +367,71 @@ describe('saving again after a save', () => {
     const second = writeCdxml(doc, { name: 'a.cdxml' });
     expect(duplicateIds(second)).toEqual([]);
     expect(differences(summarize(open(second)), summarize(doc))).toEqual([]);
+  });
+});
+
+describe('atom numbers and numbered points of attachment', () => {
+  // as ChemDraw 25 wrote them after the ' and . keys (label size 6)
+  const CHEMDRAW = `<?xml version="1.0" encoding="UTF-8" ?>
+<CDXML LabelSize="6" BondLength="10.80"><page id="1"><fragment id="10"
+><n id="11" p="14.25 252.84"/><n id="12" p="23.60 247.44" ShowAtomNumber="yes" AS="N" AtomNumber="1"
+><objecttag TagType="Unknown" Name="number"><t p="25.05 247.09" BoundingBox="25.05 243.29 27.56 247.09" CaptionLineHeight="variable"
+><s font="3" size="4.5" color="0">1</s></t></objecttag></n
+><b id="13" B="11" E="12"/></fragment><fragment id="20"
+><n id="21" p="57.47 252.84"/><n id="22" p="66.82 247.44" NodeType="ExternalConnectionPoint" ExternalConnectionNum="1"/>
+<b id="23" B="21" E="22"/></fragment></page></CDXML>`;
+
+  it("reads ChemDraw's atom number and attachment number", () => {
+    const doc = readCdxml(CHEMDRAW).doc;
+    const n = doc.atoms.get(12)!;
+    expect(n).toMatchObject({ showNumber: true, atomNumber: '1' });
+    expect(n.numberLabel!.dx).toBeCloseTo(1.45, 2);
+    expect(n.numberLabel!.dy).toBeCloseTo(-0.35, 2);
+    expect(n.numberLabel!.size).toBe(4.5);
+    expect(doc.atoms.get(22)).toMatchObject({ attach: 'Unspecified', attachNum: 1 });
+  });
+
+  it('writes them as ChemDraw does in a new drawing, where ChemDraw puts the number', () => {
+    const doc = new Doc();
+    doc.style = { ...doc.style, labelSize: 6, bondLength: 10.8 };
+    doc.bulk(() => {
+      const a = doc.addAtom(14.25, 252.84), b = doc.addAtom(23.6, 247.44, 6, { showNumber: true, atomNumber: '1' });
+      doc.addBond(a.id, b.id);
+      const c = doc.addAtom(57.47, 252.84), d = doc.addAtom(66.82, 247.44, 0, { attach: 'Unspecified', attachNum: 2 });
+      doc.addBond(c.id, d.id);
+    });
+    const text = writeCdxml(doc);
+    expect(text).toMatch(/ShowAtomNumber="yes"/);
+    expect(text).toMatch(/AtomNumber="1"/);
+    expect(text).toMatch(/NodeType="ExternalConnectionPoint"[^>]*ExternalConnectionNum="2"/);
+    const tag = /<objecttag[^>]*Name="number"[^>]*>\s*<t\s+p="([\d.]+) ([\d.]+)"[\s\S]*?size="([\d.]+)"/.exec(text)!;
+    expect(Number(tag[1])).toBeCloseTo(25.04, 1);
+    expect(Number(tag[2])).toBeCloseTo(247.08, 1);
+    expect(Number(tag[3])).toBe(4.5);
+    const back = readCdxml(text).doc;
+    expect([...back.atoms.values()].find((a) => a.atomNumber)).toMatchObject({ showNumber: true, atomNumber: '1' });
+    expect([...back.atoms.values()].find((a) => a.attach)).toMatchObject({ attachNum: 2 });
+  });
+
+  it('changes them in a file that was opened, and takes them away', () => {
+    const doc = readCdxml(CHEMDRAW).doc;
+    doc.edit('number', () => {
+      doc.updateAtom(12, { atomNumber: '7' });
+      doc.updateAtom(11, { showNumber: true, atomNumber: '2' });
+      doc.updateAtom(22, { attachNum: 3 });
+    });
+    let text = writeCdxml(doc);
+    let back = readCdxml(text).doc;
+    expect(back.atoms.get(12)).toMatchObject({ showNumber: true, atomNumber: '7' });
+    expect(back.atoms.get(11)).toMatchObject({ showNumber: true, atomNumber: '2' });
+    expect(back.atoms.get(22)).toMatchObject({ attachNum: 3 });
+    expect(text.match(/Name="number"/g)).toHaveLength(2);
+    doc.edit('hide', () => { doc.updateAtom(12, { showNumber: false }); doc.updateAtom(22, { attach: undefined, attachNum: undefined, z: 6 }); });
+    text = writeCdxml(doc);
+    back = readCdxml(text).doc;
+    expect(back.atoms.get(12)!.showNumber).toBeUndefined();
+    expect(back.atoms.get(22)).toMatchObject({ z: 6 });
+    expect(back.atoms.get(22)!.attach).toBeUndefined();
+    expect(text.match(/Name="number"/g)).toHaveLength(1);
   });
 });
