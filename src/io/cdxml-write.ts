@@ -13,8 +13,7 @@ import { Vec, DEG, arcCenter, norm, sub, Rect } from '../geom';
 import { kids, descendants } from './xml';
 import { arialWidth } from '../text-metrics';
 import { toSymbolPieces, isSymbolFont, faceFromStyle } from '../richtext';
-import { atomStereoText, bondStereoText, atomStereoPlace, bondStereoPlace, PlacedLabel } from '../chem/stereo';
-import { numberPlace } from '../render/atom-marks';
+import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 
 export interface WriteOptions {
   /** Text width in points; by default Arial's own widths, as ChemDraw uses. */
@@ -50,6 +49,8 @@ class CdxmlWriter {
   private fonttable!: Element;
   private fontIds = new Map<string, string>();
   private measure: Measure;
+  /** Spots for stereo labels and atom numbers (made when first needed). */
+  private placerMade: StereoPlacer | null = null;
   /** Fragment element each atom ends up in. */
   private fragOfAtom = new Map<number, Element>();
   /** Neighbours of each atom as read from the file. */
@@ -403,6 +404,10 @@ class CdxmlWriter {
     return n;
   }
 
+  private get placer(): StereoPlacer {
+    return (this.placerMade ??= new StereoPlacer(this.doc, this.measure));
+  }
+
   /** The atom number (the ' key): ChemDraw's AtomNumber, ShowAtomNumber and a tag with the text. */
   private atomNumber(n: Element, a: Atom): void {
     this.set(n, 'ShowAtomNumber', a.showNumber ? 'yes' : null);
@@ -410,9 +415,7 @@ class CdxmlWriter {
     const old = kids(n).find((c) => c.nodeName === 'objecttag' && c.getAttribute('Name') === 'number');
     if (old) n.removeChild(old);
     if (!a.showNumber || !a.atomNumber) return;
-    const bb = nums(this.child(n, 't')?.getAttribute('BoundingBox') ?? null);
-    const label = bb.length === 4 ? { x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3] } : null;
-    const p = numberPlace(a, this.doc.style.labelSize * (a.s ?? 1), label);
+    const p = this.placer.number(a);
     const tag = this.el('objecttag', { TagType: 'Unknown', Name: 'number' });
     const t = this.el('t', { p: pt(p), BoundingBox: box({ x1: p.x, y1: p.y - CAP * p.size, x2: p.x + this.measure(a.atomNumber, p.size), y2: p.y }), CaptionLineHeight: 'variable' });
     const s = this.el('s', { font: this.fontId(), size: f2(p.size).replace(/\.00$/, ''), color: '0' });
@@ -464,14 +467,14 @@ class CdxmlWriter {
   private atomStereo(n: Element, a: Atom, patched: boolean): boolean {
     const info = this.doc.stereo;
     const text = atomStereoText(a, info);
-    const place = text ? atomStereoPlace(this.doc, a, text, this.measure) : null;
+    const place = text ? this.placer.atom(a, text) : null;
     return this.syncStereo(n, 'ShowAtomStereo', 'AS', !!a.showStereo, text, place, info?.atom(a.id), patched);
   }
 
   private bondStereo(e: Element, b: Bond, patched: boolean): boolean {
     const info = this.doc.stereo;
     const text = bondStereoText(b, info);
-    const place = text ? bondStereoPlace(this.doc, b, text, this.measure) : null;
+    const place = text ? this.placer.bond(b, text) : null;
     return this.syncStereo(e, 'ShowBondStereo', 'BS', !!b.showStereo, text, place, info?.bond(b.id), patched);
   }
 

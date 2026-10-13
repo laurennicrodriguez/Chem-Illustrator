@@ -10,6 +10,7 @@ import { Doc, Bond, Atom, StereoInfo } from '../model';
 import { Vec, Rect, norm, sub, len, lerp, distToSegment } from '../geom';
 import { labelSpec, layoutLabel } from './labels';
 import { doubleBondGap, wedgeWidth } from '../style';
+import { NumberPlace, numberSlots, numberBox, numberSize } from '../render/atom-marks';
 
 export type StereoSense = 'up' | 'down' | 'either';
 
@@ -241,6 +242,8 @@ const OUT = 0.5;
 /** If a label can't be fitted that close without touching something, it moves further out. */
 const RINGS = [OUT, 0.65, 0.8, 1.0, 1.25];
 const STEP = 5 * Math.PI / 180;
+/** How many labels deep the placer looks back (see StereoPlacer.depth). */
+const MAX_DEPTH = 100;
 
 /** Ink box of a stereo label from where its text starts (parentheses reach above the capitals and below the baseline). */
 function labelBox(p: PlacedLabel, w: number): Rect {
@@ -308,8 +311,9 @@ interface Obstacles { segs: { p: Vec; q: Vec; r: number }[]; boxes: Rect[] }
 /**
  * Finds a spot for each stereo label that has no saved spot of its own: about half a bond length
  * out, where it is furthest from bonds, atom labels and the other stereo labels near it, moving
- * further out only when there is no room close in. Labels are placed in a fixed order (E/Z first,
- * then by atom), each keeping clear of the ones placed before it, so the same drawing always gives
+ * further out only when there is no room close in. It also places atom numbers (the ' key). As in
+ * ChemDraw, labels are placed in a fixed order (E/Z first, then atom by atom: the number, then the
+ * R/S label), each keeping clear of the ones placed before it, so the same drawing always gives
  * the same spots on screen and in the saved file.
  */
 export class StereoPlacer {
@@ -318,7 +322,9 @@ export class StereoPlacer {
   private preview: boolean;
   private firstAtom = new Map<number, Rect | null>();
   private firstBond = new Map<number, Rect | null>();
+  private firstNumber = new Map<number, Rect | null>();
   private done = new Map<string, PlacedLabel>();
+  private doneNumber = new Map<string, NumberPlace>();
 
   /**
    * `measure` gives text widths (of stereo labels and atom labels); with `preview`, the labels
@@ -380,6 +386,53 @@ export class StereoPlacer {
     return pl;
   }
 
+  /** Where an atom's number (the ' key) goes: its saved spot, or one worked out. */
+  number(a: Atom): NumberPlace {
+    const l = a.numberLabel;
+    if (l) return { x: a.x + l.dx, y: a.y + l.dy, size: l.size };
+    const key = `${a.id}|${a.atomNumber}`;
+    let p = this.doneNumber.get(key);
+    if (!p) this.doneNumber.set(key, p = this.spotNumber(a, true));
+    return p;
+  }
+
+  /**
+   * ChemDraw's choice of the six places round an atom (numberSlots): the one furthest, in angle,
+   * from the atom's bonds, outside its rings, leaning to above and then to the left of the atom,
+   * that touches no bond, label or stereo label placed before it.
+   */
+  private spotNumber(a: Atom, others: boolean): NumberPlace {
+    const doc = this.doc;
+    const k = a.s ?? 1;
+    const L = doc.style.labelSize * k;
+    const text = a.atomNumber ?? '';
+    const w = this.measure(text, numberSize(L));
+    // the atom's own label, without the clearance kept round it for bonds
+    const m = doc.style.marginWidth * k;
+    let own: Rect | null = null;
+    for (const b of this.boxesOf(a)) {
+      const r = { x1: b.x1 + m, y1: b.y1 + m, x2: b.x2 - m, y2: b.y2 - m };
+      own = own ? { x1: Math.min(own.x1, r.x1), y1: Math.min(own.y1, r.y1), x2: Math.max(own.x2, r.x2), y2: Math.max(own.y2, r.y2) } : r;
+    }
+    const dirs = doc.neighbors(a.id).map((n) => (Math.atan2(a.y - n.y, n.x - a.x) * 180) / Math.PI);
+    const apart = (x: number, y: number) => { const d = Math.abs(((x - y) % 360) + 360) % 360; return Math.min(d, 360 - d); };
+    const obs = this.obstacles([a.id], { kind: 2, id: a.id, preview: false }, others, true);
+    const rings = this.ringsAt(a);
+    let best: { p: NumberPlace; score: number } | null = null, fallback: { p: NumberPlace; room: number } | null = null;
+    for (const slot of numberSlots(a, L, w, own)) {
+      const box = numberBox(slot.p, w);
+      const room = this.room(box, obs);
+      if (!fallback || room > fallback.room + 1e-9) fallback = { p: slot.p, room };
+      if (room < -1e-6) continue;
+      const open = dirs.length ? Math.min(...dirs.map((d) => apart(d, slot.dir))) : 180;
+      const c = { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 };
+      const inRing = rings.some((r) => insidePolygon(c, r.pts));
+      const score = open - (inRing ? 20 : 0) - 0.01 * apart(slot.dir, 120);
+      if (!best || score > best.score) best = { p: slot.p, score };
+    }
+    return (best ?? fallback)!.p;
+  }
+
   private spotAtom(a: Atom, text: string, others: boolean): PlacedLabel {
     const doc = this.doc;
     const k = a.s ?? 1;
@@ -422,6 +475,12 @@ export class StereoPlacer {
     const up = d.x >= 0 ? { x: d.y, y: -d.x } : { x: -d.y, y: d.x }; // the side above the bond
     // only its own bond's neighbours count: it is already set off the bond itself
     const obs = this.obstacles([b.a1, b.a2], { kind: 0, id: b.id, preview: !bondStereoText(b, doc.stereo) }, others);
+    // as ChemDraw does, the label goes on the side with fewer substituents (below a cis pair)
+    let lean = 0;
+    for (const end of [p, q]) for (const n of doc.neighbors(end.id)) {
+      if (n.id === p.id || n.id === q.id) continue;
+      lean += Math.sign((n.x - mid.x) * up.x + (n.y - mid.y) * up.y);
+    }
     return this.best(RINGS, (ring) => {
       const cands = [];
       for (const side of [1, -1]) for (const s of [0, 0.1, -0.1, 0.2, -0.2, 0.3, -0.3]) {
@@ -429,7 +488,7 @@ export class StereoPlacer {
         const pl = centred(c, w, size);
         const room = this.room(labelBox(pl, w), obs, 0.2 * size);
         // with room enough, the middle of the bond and then above it win
-        cands.push({ p: pl, room, score: Math.min(room, 0.15 * L) - 0.1 * L * Math.abs(s) + (side > 0 ? 1e-3 * L : 0) });
+        cands.push({ p: pl, room, score: Math.min(room, 0.15 * L) - 0.1 * L * Math.abs(s) - 0.02 * L * side * Math.sign(lean) + (side > 0 ? 1e-3 * L : 0) });
       }
       return cands;
     });
@@ -489,7 +548,7 @@ export class StereoPlacer {
    * count only for each other, so the drawing's own labels sit the same with or without them.
    * Without `others`, stereo labels are left out.
    */
-  private obstacles(from: number[], self: { kind: 0 | 1; id: number; preview: boolean }, others: boolean): Obstacles {
+  private obstacles(from: number[], self: { kind: 0 | 1 | 2; id: number; preview: boolean }, others: boolean, skipOwnLabel = false): Obstacles {
     const doc = this.doc;
     const near = new Set<number>(from);
     let ring = from;
@@ -518,26 +577,58 @@ export class StereoPlacer {
       const half = b.order >= 2 || b.order === 1.5 ? doubleBondGap(st) : b.display === 'bold' || b.display === 'hash' ? st.boldWidth / 2 : st.lineWidth / 2;
       segs.push({ p, q, r: half + m });
     }
-    for (const id of near) boxes.push(...this.boxesOf(doc.atoms.get(id)!));
+    for (const id of near) if (!(skipOwnLabel && id === self.id)) boxes.push(...this.boxesOf(doc.atoms.get(id)!));
     if (others) {
-      const before = (kind: 0 | 1, id: number) => kind < self.kind || (kind === self.kind && id < self.id);
+      // E/Z labels first, then atom by atom: its number, then its R/S label
+      const order = (kind: 0 | 1 | 2, id: number) => (kind === 0 ? [0, id, 0] : [1, id, kind === 2 ? 0 : 1]);
+      const before = (kind: 0 | 1 | 2, id: number) => {
+        const x = order(kind, id), y = order(self.kind, self.id);
+        return x[0] - y[0] || x[1] - y[1] || x[2] - y[2];
+      };
       for (const id of near) {
-        if (self.kind === 1 && id === self.id) continue;
         const a = doc.atoms.get(id)!;
-        const box = this.labelOf(1, a, before(1, id), self.preview);
-        if (box) boxes.push(box);
+        if (!(self.kind === 1 && id === self.id)) {
+          const box = this.labelOf(1, a, before(1, id) < 0, self.preview);
+          if (box) boxes.push(box);
+        }
+        if (!(self.kind === 2 && id === self.id)) {
+          const box = this.numberOf(a, before(2, id) < 0);
+          if (box) boxes.push(box);
+        }
       }
       for (const bid of bonds) {
         if (self.kind === 0 && bid === self.id) continue;
         const b = doc.bonds.get(bid)!;
-        const box = this.labelOf(0, b, before(0, bid), self.preview);
+        const box = this.labelOf(0, b, before(0, bid) < 0, self.preview);
         if (box) boxes.push(box);
       }
     }
     return { segs, boxes };
   }
 
-  /** The box of another stereo label: its saved spot, or (when `auto`) where it goes by itself. */
+  /**
+   * How deep the placing of labels before labels has gone. Each label waits for the ones before
+   * it near by, which wait for theirs; past this depth a label counts where it would go alone.
+   */
+  private depth = 0;
+
+  private nested<T>(run: () => T): T {
+    this.depth++;
+    try { return run(); } finally { this.depth--; }
+  }
+
+  /** The box of an atom's number: its saved spot, or (when `auto`) where it was put. */
+  private numberOf(a: Atom, auto: boolean): Rect | null {
+    if (!a.showNumber || !a.atomNumber || a.attach) return null;
+    if (!a.numberLabel && !auto) return null;
+    if (!a.numberLabel && this.firstNumber.has(a.id)) return this.firstNumber.get(a.id)!;
+    const p = a.numberLabel || this.depth < MAX_DEPTH ? this.nested(() => this.number(a)) : this.spotNumber(a, false);
+    const box = numberBox(p, this.measure(a.atomNumber, p.size));
+    if (!a.numberLabel) this.firstNumber.set(a.id, box);
+    return box;
+  }
+
+  /** The box of another stereo label: its saved spot, or (when `auto`) where it was put. */
   private labelOf(kind: 0 | 1, x: Atom | Bond, auto: boolean, preview: boolean): Rect | null {
     const info = this.doc.stereo;
     let text = kind === 1 ? atomStereoText(x as Atom, info) : bondStereoText(x as Bond, info);
@@ -551,8 +642,8 @@ export class StereoPlacer {
     const cache = kind === 1 ? this.firstAtom : this.firstBond;
     if (!saved && cache.has(x.id)) return cache.get(x.id)!;
     const size = saved?.size ?? 0.75 * this.doc.style.labelSize * (x.s ?? 1);
-    const p = saved
-      ? (kind === 1 ? this.atom(x as Atom, text) : this.bond(x as Bond, text))
+    const p = saved || this.depth < MAX_DEPTH
+      ? this.nested(() => (kind === 1 ? this.atom(x as Atom, text) : this.bond(x as Bond, text)))
       : (kind === 1 ? this.spotAtom(x as Atom, text, false) : this.spotBond(x as Bond, text, false));
     const box = labelBox(p, this.measure(text, size));
     if (!saved) cache.set(x.id, box);

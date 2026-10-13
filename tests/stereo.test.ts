@@ -389,6 +389,64 @@ describe('where labels go', () => {
     expect(overlap(b1, b2)).toBe(false);
   });
 
+  /** L-threonine as drawn in the round-trip test file, every atom numbered, both centres labelled. */
+  function threonine() {
+    const doc = new Doc();
+    const id: number[] = [];
+    doc.bulk(() => {
+      for (const [x, y, z] of [[106.81, 108.54, 6], [119.30, 115.72, 6], [131.76, 108.49, 8], [119.33, 130.12, 6], [106.87, 137.34, 7], [131.81, 137.29, 6], [144.27, 130.07, 8], [131.84, 151.69, 8]]) {
+        id.push(doc.addAtom(x, y, z, { showNumber: true, atomNumber: String(id.length + 1), showStereo: true }).id);
+      }
+      for (const [a, b, o, d] of [[1, 0, 1, 'wedge'], [1, 2, 1], [1, 3, 1], [3, 4, 1, 'wedge'], [3, 5, 1], [5, 6, 2], [5, 7, 1]] as [number, number, number, BondDisplay?][]) doc.addBond(id[a], id[b], o, d);
+    });
+    doc.stereo = { atom: (x) => (x === id[1] ? 'R' : x === id[3] ? 'S' : null), bond: () => null };
+    return { doc, id };
+  }
+
+  it("puts atom numbers where ChemDraw 25 put them (opened on Nate's computer, 2026-10-13)", () => {
+    const { doc, id } = threonine();
+    const placer = new StereoPlacer(doc, W);
+    // centre of each number relative to its atom, as ChemDraw saved them
+    const chemdraw = [[-3.98, -2.76], [0.02, -5.78], [14.07, -5.25], [-4.02, -2.86], [-17.72, 6.51], [-3.96, 3.21], [7.33, -5.36], [3.63, 10.12]];
+    id.forEach((x, i) => {
+      const a = doc.atoms.get(x)!;
+      const p = placer.number(a);
+      const c = { x: p.x + W(a.atomNumber!, p.size) / 2 - a.x, y: p.y - 0.358 * p.size - a.y };
+      expect(Math.abs(c.x - chemdraw[i][0]), `number ${i + 1} across`).toBeLessThan(0.6);
+      expect(Math.abs(c.y - chemdraw[i][1]), `number ${i + 1} down`).toBeLessThan(0.6);
+    });
+  });
+
+  it('an R/S label keeps clear of the atom numbers placed before it, as in ChemDraw', () => {
+    const { doc, id } = threonine();
+    const placer = new StereoPlacer(doc, W);
+    const c2 = doc.atoms.get(id[1])!;
+    // the number takes the top, so (R) goes below right (where ChemDraw put it)
+    const r = centreOf(placer.atom(c2, '(R)'), '(R)', c2);
+    expect(r.x).toBeGreaterThan(3);
+    expect(r.y).toBeGreaterThan(1);
+    for (const x of id) {
+      const a = doc.atoms.get(x)!;
+      const n = placer.number(a);
+      const nb = { x1: n.x, y1: n.y - 0.716 * n.size, x2: n.x + W(a.atomNumber!, n.size), y2: n.y };
+      for (const [s, t] of [[id[1], '(R)'], [id[3], '(S)']] as const) {
+        expect(overlap(nb, box(placer.atom(doc.atoms.get(s)!, t), t)), `number ${a.atomNumber} and ${t}`).toBe(false);
+      }
+    }
+  });
+
+  it('an E/Z label goes on the side with fewer substituents (below a cis pair, as ChemDraw)', () => {
+    const doc = new Doc();
+    let bond = 0;
+    doc.bulk(() => {
+      const a = doc.addAtom(0, 0), b = doc.addAtom(L, 0);
+      bond = doc.addBond(a.id, b.id, 2).id;
+      doc.addBond(a.id, doc.addAtom(-L / 2, -L * 0.866).id);
+      doc.addBond(b.id, doc.addAtom(1.5 * L, -L * 0.866).id);
+    });
+    expect(bondStereoPlace(doc, doc.bonds.get(bond)!, '(Z)', W).y).toBeGreaterThan(0);
+  });
+
   it('an E/Z label goes to the open side of the double bond', () => {
     const doc = new Doc();
     let bond = 0;

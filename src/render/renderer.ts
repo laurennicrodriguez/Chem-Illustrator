@@ -15,7 +15,7 @@ import { bracketPath, shaftOffset, type PathStep } from '../objects';
 import { formulaParts } from '../richtext';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
-import { numberPlace, attachDiamondSize, hasAttachDiamond } from './atom-marks';
+import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
 
 /** Colour of the stereo labels previewed with "Show R/S" (not part of the drawing). */
 const PREVIEW_COLOR = '#b4232a';
@@ -456,15 +456,9 @@ export class Renderer {
     return curFont;
   }
 
-  /** The atom number shown with the ' key, at the label's upper right. */
-  private drawAtomNumber(ctx: CanvasRenderingContext2D, doc: Doc, a: Atom, info: AtomCache, curFont: string): string {
-    const L = doc.style.labelSize * (a.s ?? 1);
-    let box: Rect | null = null;
-    for (const b of info.layout?.boxes ?? []) {
-      const r = { x1: a.x + b.x1, y1: a.y + b.y1, x2: a.x + b.x2, y2: a.y + b.y2 };
-      box = box ? { x1: Math.min(box.x1, r.x1), y1: Math.min(box.y1, r.y1), x2: Math.max(box.x2, r.x2), y2: Math.max(box.y2, r.y2) } : r;
-    }
-    const p = numberPlace(a, L, box);
+  /** The atom number shown with the ' key, on the open side of the atom or its label. */
+  private drawAtomNumber(ctx: CanvasRenderingContext2D, doc: Doc, a: Atom, curFont: string): string {
+    const p = this.stereoPlacer(doc).number(a);
     const f = `${p.size}px ${FONT_STACK}`;
     if (f !== curFont) { ctx.font = f; curFont = f; }
     ctx.fillStyle = a.color ?? '#000';
@@ -587,7 +581,7 @@ export class Renderer {
       } else if (a.charge && a.z === 6 && !a.hideCharge) {
         this.drawCarbonCharge(ctx, doc, a);
       }
-      if (a.showNumber && a.atomNumber) curFont = this.drawAtomNumber(ctx, doc, a, info, curFont);
+      if (a.showNumber && a.atomNumber) curFont = this.drawAtomNumber(ctx, doc, a, curFont);
       if (hasAttachDiamond(a)) curFont = this.drawAttachDiamond(ctx, doc, a, curFont);
       if (checks?.forAtom(a)) warns.push(this.warningBox(doc, a, info));
     }
