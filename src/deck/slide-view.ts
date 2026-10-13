@@ -3,8 +3,10 @@
 // the slide show and PDF pages, so they all look the same.
 
 import { Doc } from '../model';
-import { Renderer } from '../render/renderer';
+import { Renderer, withMeasure } from '../render/renderer';
 import { imageFor } from '../render/images';
+import { VectorContext, VecPath, Item } from '../render/vector';
+import { arialWidth } from '../text-metrics';
 import { Master, SlideSize, LayoutId, decorFrames, showsNumber } from './deck';
 
 /** Grey around the slide while editing, as in PowerPoint. */
@@ -58,6 +60,23 @@ export function drawSlide(ctx: CanvasRenderingContext2D, p: SlidePage, doc: Doc)
   const r = new Renderer(noCanvas, noCanvas);
   r.showWarnings = false;
   r.drawDocument(ctx, doc);
+}
+
+/**
+ * A whole slide recorded as shapes and text (for PDF pages), in slide points. Text is laid out
+ * with Arial's widths, as in the pictures for PowerPoint, to match the PDF's Helvetica.
+ */
+export function recordSlide(p: SlidePage, doc: Doc): Item[] {
+  const ctx = new VectorContext();
+  const r = new Renderer(noCanvas, noCanvas);
+  r.showWarnings = false;
+  r.makePath = () => new VecPath() as unknown as Path2D;
+  const c = ctx as unknown as CanvasRenderingContext2D;
+  withMeasure((t, s, _font, style) => arialWidth(t, s, /bold/.test(style)), () => {
+    drawSlidePage(c, p);
+    r.drawDocument(c, doc);
+  });
+  return ctx.items;
 }
 
 /**

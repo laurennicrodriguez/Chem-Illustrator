@@ -135,7 +135,7 @@ export class Workspace {
 
   /** New slides, in place of an untouched new drawing (as when the app has just started). */
   newSlides(): Tab {
-    const spare = this.spare();
+    const spare = this.active.mode === 'drawing' ? this.spare() : null;
     const t = this.makeTab('slides', this.untitled('slides'));
     t.deck = Deck.blank(this.host);
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);

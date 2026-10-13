@@ -165,7 +165,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   'clean-up': 'Clean Up Structure', 'check-structure': 'Check Structure (next warning)', 'stereo-labels': 'Show stereo labels',
   'name-to-structure': 'Name to Structure…',
   'zoom-in': 'Zoom in', 'zoom-out': 'Zoom out', 'zoom-fit': 'Fit the drawing in the window', 'zoom-actual': 'Actual size',
-  hotkeys: 'Hotkeys…', 'typing-spelling': 'Typing and Spelling…',
+  hotkeys: 'Hotkeys…', 'typing-spelling': 'Typing and Spelling…', 'mode-colours': 'Mode Colours…',
   'new-slides': 'New slides', 'close-tab': 'Close the file', 'next-tab': 'Next file', 'prev-tab': 'Previous file',
   'export-pdf': 'Export PDF…', 'insert-picture': 'Insert a picture…', crop: 'Crop the selected picture',
   'new-slide': 'New slide', 'duplicate-slide': 'Duplicate slide', 'delete-slide': 'Delete slide',

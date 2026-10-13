@@ -13,15 +13,16 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, fitPasted, Pasted } from './io/clipboard';
 import { writeCdxml } from './io/cdxml-write';
-import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, withExtension, KEYMAP_FILE, MOL, PICTURE_EXTENSIONS } from './io/files';
+import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE_EXTENSIONS } from './io/files';
 import { Workspace, Tab } from './workspace';
 import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName } from './deck/deck';
-import { drawSlidePage, SURROUND } from './deck/slide-view';
+import { drawSlidePage, recordSlide, SURROUND } from './deck/slide-view';
+import { writePdf, jpegInfo, PdfPage, PdfImage } from './io/pdf';
 import { SlideList } from './ui/slide-list';
 import { Presenter } from './ui/present';
 import { editMaster } from './ui/master-dialog';
 import { recordPicture, pictureSvg, pictureCanvas, canvasPng } from './render/picture';
-import { dataUrl, imageSize, loadImage, onImageReady, pictureMime } from './render/images';
+import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime } from './render/images';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
 import { StylePanel } from './ui/style-panel';
@@ -34,6 +35,7 @@ import { keymap, registerToolNames, displayChord, actionName, KeyContext, KeyOve
 import { loadSettings, saveSettings, settingsLocation, Settings } from './settings';
 import { HotkeysDialog } from './ui/hotkeys-dialog';
 import { TypingDialog } from './ui/typing-dialog';
+import { ModeColoursDialog, ModeColours, DEFAULT_MODE_COLOURS, applyModeColours } from './ui/mode-colours';
 import { typingPrefs, setTypingPrefs, onTypingPrefs } from './text/typing';
 import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
@@ -560,6 +562,8 @@ const sizeSel = $<HTMLSelectElement>('#rb-size');
 const presenter = new Presenter();
 
 // Each mode keeps its own tool: slides start with Select (click a placeholder to type), drawings with a bond.
+/** View > Mode Colours: blue for drawings, orange for slides, or the person's own colours. */
+let modeColours: ModeColours = { ...DEFAULT_MODE_COLOURS };
 const modeTool: Record<Tab['mode'], string> = { drawing: 'bond-single', slides: 'select' };
 
 const ws: Workspace = new Workspace(doc, {
@@ -601,6 +605,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   const deck = tab.deck;
   const slides = !!deck;
   document.body.classList.toggle('slides-mode', slides);
+  applyModeColours(tab.mode, modeColours);
   for (const el of document.querySelectorAll<HTMLElement>('.slides-only')) el.hidden = !slides;
   renderer.screen = slides;
   renderer.page = slides ? slidePage : null;
@@ -938,8 +943,67 @@ async function exportMolfile(): Promise<void> {
   flash(`Saved ${target.name}${left}`);
 }
 
+/** File > Export PDF: every slide as a page, or the drawing on a page of its own size. */
 async function exportPdf(): Promise<void> {
-  flash('PDF export is not ready yet.');
+  const tab = ws.active, deck = tab.deck;
+  let pages: PdfPage[];
+  if (deck) {
+    pages = deck.slides.map((s, i) => ({
+      w: deck.size.w, h: deck.size.h,
+      items: recordSlide({ size: deck.size, master: deck.master, layout: s.layout, index: i }, deck.docOf(i)),
+    }));
+  } else {
+    const pic = recordPicture(doc, 18);
+    if (!pic) { flash('There is nothing to put in a PDF yet.'); return; }
+    const b = pic.box;
+    pages = [{ w: b.x2 - b.x1, h: b.y2 - b.y1, items: pic.items, origin: { x: b.x1, y: b.y1 } }];
+  }
+  const target = await saveFileDialog(withExtension(tab.name, PDF.extension), PDF).catch(async (e) => { await showError(String(e)); return null; });
+  if (!target) return;
+  try {
+    const bytes = await writePdf(pages, { title: tab.name.replace(/\.[^.]+$/, ''), image: pdfImage });
+    await writeFile(target.ref, target.name, bytes, PDF);
+  } catch (e) {
+    await showError(`Could not save ${target.name}: ${e instanceof Error ? e.message : String(e)}`);
+    return;
+  }
+  flash(`Saved ${target.name}${pages.length > 1 ? ` (${pages.length} pages)` : ''}`);
+}
+
+/** A picture's pixels for a PDF: JPEGs go in as they are; others are read through the browser. */
+async function pdfImage(src: string): Promise<PdfImage | null> {
+  const { mime, bytes } = fromDataUrl(src);
+  if (mime === 'image/jpeg') {
+    const info = jpegInfo(bytes);
+    if (info) return { kind: 'jpeg', bytes, ...info };
+  }
+  if (mime === 'image/x-emf' || mime === 'image/x-wmf' || mime === 'image/tiff') return null;
+  let img: HTMLImageElement;
+  try {
+    img = await loadImage(src);
+  } catch {
+    return null;
+  }
+  let w = img.naturalWidth || 300, h = img.naturalHeight || 150;
+  // a drawing in SVG has no pixels of its own: make plenty so it prints sharply
+  if (mime === 'image/svg+xml') { const k = 3000 / Math.max(w, h); w *= k; h *= k; }
+  const k = Math.min(1, Math.sqrt(16e6 / (w * h)));
+  w = Math.max(1, Math.round(w * k));
+  h = Math.max(1, Math.round(h * k));
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const g = c.getContext('2d')!;
+  g.drawImage(img, 0, 0, w, h);
+  const px = g.getImageData(0, 0, w, h).data;
+  const rgb = new Uint8Array(w * h * 3), alpha = new Uint8Array(w * h);
+  let clear = false;
+  for (let i = 0, j = 0; i < w * h; i++, j += 4) {
+    rgb[i * 3] = px[j]; rgb[i * 3 + 1] = px[j + 1]; rgb[i * 3 + 2] = px[j + 2];
+    alpha[i] = px[j + 3];
+    if (px[j + 3] < 255) clear = true;
+  }
+  return { kind: 'raw', w, h, rgb, alpha: clear ? alpha : null };
 }
 
 const COMMANDS: Record<string, () => unknown> = {
@@ -1023,6 +1087,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'zoom-actual': () => editor.zoomTo(96 / 72),
   hotkeys: () => hotkeysDialog.open(),
   'typing-spelling': () => typingDialog.open(),
+  'mode-colours': () => modeDialog.open(),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
   'check-structure': () => checkStructure(),
   'stereo-labels': () => toggleStereoLabels(),
@@ -1104,6 +1169,7 @@ function storeSettings(): void {
     spellCheck: typingPrefs.spelling,
     replacements: typingPrefs.replacements,
     dictionary: typingPrefs.dictionary,
+    modeColours,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -1147,6 +1213,15 @@ function refreshKeys(): void {
 keymap.onChange(() => { refreshKeys(); storeSettings(); });
 onTypingPrefs(() => { storeSettings(); editor.requestOverlay(); });
 
+const modeDialog = new ModeColoursDialog({
+  get: () => modeColours,
+  set(c) {
+    modeColours = c;
+    applyModeColours(ws.active.mode, modeColours);
+    storeSettings();
+  },
+});
+
 const typingDialog = new TypingDialog({
   get: () => ({ ...typingPrefs }),
   set: (v) => setTypingPrefs(v),
@@ -1188,6 +1263,8 @@ void loadSettings().then((s) => {
   editor.options.fixedLength = s.fixedLength;
   editor.options.fixedAngles = s.fixedAngles;
   showDevTools(s.devTools);
+  modeColours = s.modeColours;
+  applyModeColours(ws.active.mode, modeColours);
   keymap.setOverrides(s.hotkeys);
   setTypingPrefs({ chemistry: s.chemTyping, spelling: s.spellCheck, replacements: s.replacements, dictionary: s.dictionary });
   settingsLoaded = true;
@@ -1542,6 +1619,7 @@ function updatePanels(): void {
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
+stylePanel.cropWithMouse = () => cropPicture();
 
 let stereoSeen = -1;
 editor.onFrame = () => {

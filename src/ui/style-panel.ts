@@ -8,7 +8,7 @@ import { setStereoShown, setStereoText } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
 import { Selection } from '../editor/editor';
 import { DEG } from '../geom';
-import { isCircle } from '../objects';
+import { isCircle, cropTo } from '../objects';
 import { nextNumber } from '../chem/sprouts';
 
 type Opt<T> = [T, string];
@@ -31,6 +31,10 @@ export class StylePanel {
 
   /** Turns typed label text into a label (the editor's rules: "OH" is an O with its H, and so on). */
   applyLabel: (atomId: number, text: string) => void = () => {};
+  /** Crop a picture with the mouse (its handles cut the edges off), or stop. */
+  cropWithMouse: (shapeId: number) => void = () => {};
+  /** A picture's width and height change together. */
+  private keepProportions = true;
 
   constructor(private section: HTMLElement, private body: HTMLElement, private doc: Doc, private sel: () => Selection, private changed: () => void) {}
 
@@ -43,7 +47,8 @@ export class StylePanel {
     const focused = this.body.contains(document.activeElement) ? document.activeElement!.closest('.style-row')?.textContent : null;
     this.body.textContent = '';
     const arrows = [...s.arrows].map((id) => this.doc.arrows.get(id)).filter((x): x is Arrow => !!x);
-    const shapes = [...s.shapes].map((id) => this.doc.shapes.get(id)).filter((x): x is Shape => !!x && !x.picture);
+    const all = [...s.shapes].map((id) => this.doc.shapes.get(id)).filter((x): x is Shape => !!x && !x.picture);
+    const shapes = all.filter((x) => x.kind !== 'picture'), pictures = all.filter((x) => x.kind === 'picture');
     const caps = [...s.captions].map((id) => this.doc.captions.get(id)).filter((x): x is Caption => !!x);
     // stereocentres and E/Z double bonds among the selected atoms and bonds
     const info = this.doc.stereo;
@@ -52,11 +57,12 @@ export class StylePanel {
     // one atom or one bond on its own (as after / or ? over it)
     const atom = s.atoms.size === 1 && !s.bonds.size ? this.doc.atoms.get([...s.atoms][0]) : undefined;
     const bond = s.bonds.size === 1 && s.atoms.size <= 2 ? this.doc.bonds.get([...s.bonds][0]) : undefined;
-    this.section.hidden = !arrows.length && !shapes.length && !caps.length && !centres.length && !dbls.length && !atom && !bond;
+    this.section.hidden = !arrows.length && !shapes.length && !pictures.length && !caps.length && !centres.length && !dbls.length && !atom && !bond;
     if (atom) this.atomControls(atom);
     if (bond) this.bondControls(bond);
     if (arrows.length) this.arrowControls(arrows);
     if (shapes.length) this.shapeControls(shapes);
+    if (pictures.length) this.pictureControls(pictures);
     if (caps.length) this.captionControls(caps);
     if (centres.length || dbls.length) this.stereoControls(centres, dbls);
     if (focused) [...this.body.querySelectorAll<HTMLElement>('.style-row')].find((r) => r.textContent === focused)?.querySelector<HTMLElement>('select, input')?.focus();
@@ -123,6 +129,52 @@ export class StylePanel {
     const br = any((x) => x.kind === 'bracket');
     if (br) this.select('Bracket', BRACKETS, br.bracket ?? 'square', (v) => set('Bracket shape', (x) => x.kind === 'bracket', () => ({ bracket: v })));
     this.color('Colour', s.color, (v) => set('Colour', () => true, () => ({ color: v })));
+  }
+
+  // ------------------------------------------------------------------ pictures
+
+  private pictureControls(pics: Shape[]): void {
+    const p = pics[0];
+    const set = (label: string, patch: (x: Shape) => Partial<Shape>) => this.edit(label, () => { for (const x of pics) this.doc.updateShape(x.id, patch(x)); });
+    const box = (x: Shape) => ({ x1: Math.min(x.x1, x.x2), y1: Math.min(x.y1, x.y2), w: Math.abs(x.x2 - x.x1), h: Math.abs(x.y2 - x.y1) });
+    this.heading(pics.length > 1 ? `${pics.length} pictures` : 'Picture');
+    if (pics.length === 1 && p.px) this.note(`${pictureType(p.src)}, ${p.px.w} × ${p.px.h} pixels`);
+    // sizes change from the top left corner, as in PowerPoint's size boxes
+    const size = (w: number | null, h: number | null) => set('Resize picture', (x) => {
+      const b = box(x);
+      let nw = w ?? b.w, nh = h ?? b.h;
+      if (this.keepProportions && w !== null && h === null) nh = b.h * (w / b.w);
+      if (this.keepProportions && h !== null && w === null) nw = b.w * (h / b.h);
+      return { x1: b.x1, y1: b.y1, x2: b.x1 + nw, y2: b.y1 + nh };
+    });
+    const b = box(p);
+    this.number('Width (pt)', round(b.w, 10), 1, 1, 20000, (v) => size(v, null));
+    this.number('Height (pt)', round(b.h, 10), 1, 1, 20000, (v) => size(null, v));
+    this.check('Keep proportions', this.keepProportions, (v) => { this.keepProportions = v; });
+    const c = p.crop ?? { l: 0, t: 0, r: 0, b: 0 };
+    const sides: [keyof typeof c, string][] = [['l', 'Crop left (%)'], ['t', 'Crop top (%)'], ['r', 'Crop right (%)'], ['b', 'Crop bottom (%)']];
+    for (const [k, label] of sides) {
+      this.number(label, round(c[k] * 100, 10), 1, 0, 98, (v) => set('Crop picture', (x) => cropTo(x, { ...(x.crop ?? { l: 0, t: 0, r: 0, b: 0 }), [k]: v / 100 })),
+        'How much of the picture is cut off on this side, as a percentage of its full width or height.');
+    }
+    const buttons = document.createElement('div');
+    buttons.className = 'style-buttons';
+    const button = (text: string, title: string, on: () => void) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = text;
+      btn.title = title;
+      btn.addEventListener('click', on);
+      buttons.append(btn);
+    };
+    if (pics.length === 1) button('Crop with mouse', 'Drag the black handles to cut the edges off; Esc when done', () => this.cropWithMouse(p.id));
+    if (pics.some((x) => x.crop)) button('Uncrop', 'Show the whole picture again', () => set('Uncrop picture', (x) => cropTo(x, { l: 0, t: 0, r: 0, b: 0 })));
+    button('Original size', 'Its own size: 96 pixels to the inch, as in PowerPoint', () => set('Picture size', (x) => {
+      const bx = box(x), cc = x.crop ?? { l: 0, t: 0, r: 0, b: 0 };
+      if (!x.px) return {};
+      return { x2: bx.x1 + x.px.w * 0.75 * (1 - cc.l - cc.r), y2: bx.y1 + x.px.h * 0.75 * (1 - cc.t - cc.b) };
+    }));
+    this.body.appendChild(buttons);
   }
 
   // ------------------------------------------------------------------ captions
@@ -287,4 +339,11 @@ export class StylePanel {
     inp.addEventListener('change', () => on(inp.value.toLowerCase() === '#000000' ? undefined : inp.value));
     this.row(label, inp);
   }
+}
+
+/** A picture's kind, from its data, as people know it. */
+function pictureType(src: string | undefined): string {
+  const m = /^data:image\/([^;,]+)/.exec(src ?? '');
+  const t = m?.[1] ?? '';
+  return ({ png: 'PNG', jpeg: 'JPEG', gif: 'GIF', 'svg+xml': 'SVG (sharp at any size)', bmp: 'Bitmap', 'x-emf': 'Windows metafile', tiff: 'TIFF', webp: 'WebP' } as Record<string, string>)[t] ?? 'Picture';
 }

@@ -6,6 +6,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { KeyOverrides } from './editor/keymap';
 import { DEFAULT_TYPING } from './text/typing';
+import { ModeColours, DEFAULT_MODE_COLOURS, parseModeColours } from './ui/mode-colours';
 
 export interface Settings {
   /** Changes to ChemDraw's default keys. */
@@ -30,18 +31,21 @@ export interface Settings {
   replacements: [string, string][];
   /** Words added to the spelling check. */
   dictionary: string[];
+  /** Each mode's colour and how much of the window it colours (View > Mode Colours). */
+  modeColours: ModeColours;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false,
   chemTyping: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
+  modeColours: DEFAULT_MODE_COLOURS,
 };
 
 const STORAGE_KEY = 'chem-illustrator.settings';
 
 /** Read settings saved as text, keeping only what makes sense. */
 export function parseSettings(text: string | null | undefined): Settings {
-  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [] };
+  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS } };
   if (!text) return s;
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { return s; }
@@ -52,6 +56,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (Array.isArray(r.replacements)) {
     s.replacements = r.replacements.filter((x): x is [string, string] => Array.isArray(x) && typeof x[0] === 'string' && typeof x[1] === 'string' && x[0] !== '').map(([a, b]) => [a, b]);
   }
+  s.modeColours = parseModeColours(r.modeColours);
   if (Array.isArray(r.dictionary)) s.dictionary = r.dictionary.filter((w): w is string => typeof w === 'string' && w.trim() !== '').map((w) => w.trim());
   return s;
 }

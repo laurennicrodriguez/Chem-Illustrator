@@ -4,14 +4,16 @@
   --text: #1d2330;
   --muted: #677084;
   --line: #d6dae1;
-  --accent: #2f6fdf;
-  --accent-soft: #e3ecfc;
+  /* the accent follows the mode (View > Mode Colours sets --mode-*; see src/ui/mode-colours.ts) */
+  --accent: var(--mode-accent, #2f6fdf);
+  --accent-soft: var(--mode-soft, #e3ecfc);
+  --bar: var(--mode-bar, #2f6fdf);
   --ok: #18794e;
   --slow: #b4232a;
   --warn: #9a5b00;
   --page-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
-  --tab-drawing: #2f6fdf;
-  --tab-slides: #c8572a;
+  --tab-drawing: var(--mode-drawing, #2f6fdf);
+  --tab-slides: var(--mode-slides, #c8572a);
   --surround: #d5d8de;
   --ui-font: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --mono-font: 'IBM Plex Mono', ui-monospace, Consolas, monospace;
@@ -24,8 +26,9 @@
     --text: #e6e9ef;
     --muted: #9aa3b5;
     --line: #3a414d;
-    --accent: #7aa7ff;
-    --accent-soft: #2c3b57;
+    --accent: var(--mode-accent-dark, #7aa7ff);
+    --accent-soft: var(--mode-soft-dark, #2c3b57);
+    --bar: var(--mode-bar-dark, #264b8b);
     --ok: #5fd39a;
     --slow: #ff7b81;
     --warn: #f0b85a;
@@ -38,8 +41,9 @@
   --text: #e6e9ef;
   --muted: #9aa3b5;
   --line: #3a414d;
-  --accent: #7aa7ff;
-  --accent-soft: #2c3b57;
+  --accent: var(--mode-accent-dark, #7aa7ff);
+  --accent-soft: var(--mode-soft-dark, #2c3b57);
+  --bar: var(--mode-bar-dark, #264b8b);
   --ok: #5fd39a;
   --slow: #ff7b81;
   --warn: #f0b85a;
@@ -71,6 +75,23 @@ header {
 }
 header h1 { font-size: 14px; margin: 0 10px 0 2px; font-weight: 650; letter-spacing: 0.01em; }
 header .sep { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+/* View > Mode Colours > The whole window: the menu bar in the mode's colour with white text */
+body.mode-window header { background: var(--bar); border-bottom-color: var(--bar); color: #fff; }
+body.mode-window header > h1 .muted { color: rgba(255, 255, 255, 0.78); }
+body.mode-window header > button,
+body.mode-window header > select,
+body.mode-window header > .menu-wrap > button { background: transparent; color: #fff; border-color: rgba(255, 255, 255, 0.32); }
+body.mode-window header > .menu-wrap > button { border-color: transparent; }
+body.mode-window header > button:hover,
+body.mode-window header > select:hover,
+body.mode-window header > .menu-wrap > button:hover,
+body.mode-window header > .menu-wrap > button[aria-expanded='true'] { background: rgba(255, 255, 255, 0.16); border-color: rgba(255, 255, 255, 0.6); }
+body.mode-window header > select option { color: var(--text); background: var(--panel); }
+body.mode-window header > :focus-visible,
+body.mode-window header > .menu-wrap > button:focus-visible { outline-color: #fff; }
+body.mode-window header .sep { background: rgba(255, 255, 255, 0.35); }
+body.mode-window header > label.check { color: #fff; }
+body.mode-window #tabs { background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
 .dev-only[hidden] { display: none !important; }
 button, select {
   font: inherit;
@@ -263,6 +284,8 @@ aside section[hidden] + section { margin-top: 0; border-top: 0; padding-top: 0; 
 aside h3 { font-size: 12px; font-weight: 600; margin: 2px 0 4px; }
 .style-row { display: grid; grid-template-columns: 1fr 138px; align-items: center; gap: 8px; margin: 3px 0; }
 label.style-row.check { display: flex; gap: 6px; }
+.style-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
+.style-buttons button { padding: 3px 8px; font-size: 12px; }
 .style-row select, .style-row input[type='number'] { width: 100%; padding: 2px 4px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; }
 .style-row input[type='color'] { width: 44px; height: 22px; padding: 0 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
 aside table { border-collapse: collapse; width: 100%; }
@@ -433,6 +456,12 @@ button.hk-add.recording { color: var(--panel); background: var(--accent); border
 .text-menu hr { border: 0; border-top: 1px solid var(--line); margin: 3px 0; }
 /* Edit > Typing and Spelling */
 dialog.typing-dialog { width: min(94vw, 560px); }
+dialog.mode-dialog { width: min(94vw, 480px); }
+dialog.mode-dialog > p { margin: 2px 0 8px; }
+.mc-styles { margin: 0 0 10px; padding: 6px 10px 4px; border: 1px solid var(--line); border-radius: 8px; }
+.mc-styles legend { padding: 0 4px; color: var(--muted); }
+.mc-colours { display: grid; gap: 2px; }
+.mc-colours .md-row { grid-template-columns: 7em minmax(0, 1fr); }
 dialog.typing-dialog h3 { margin: 14px 0 2px; }
 dialog.typing-dialog p { margin: 2px 0 6px; }
 .ty-table-wrap { max-height: 220px; overflow-y: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
@@ -518,7 +547,7 @@ dialog.typing-dialog p { margin: 2px 0 6px; }
 #ribbon button { padding: 3px 8px; border-color: transparent; background: transparent; font-size: 12px; }
 #ribbon button:hover { border-color: var(--line); background: var(--accent-soft); }
 #ribbon button.rb-big { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 2px; min-width: 62px; padding: 4px 6px; line-height: 1.15; }
-.rb-icon { display: block; font-size: 21px; line-height: 26px; height: 26px; color: var(--tab-slides); }
+.rb-icon { display: block; font-size: 21px; line-height: 26px; height: 26px; color: var(--accent); }
 .rb-field { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .rb-field select { padding: 2px 4px; font-size: 12px; min-width: 150px; }
 

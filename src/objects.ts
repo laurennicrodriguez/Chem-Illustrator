@@ -198,6 +198,24 @@ export function dragCropHandle(s: Shape, which: HandleId, p: Vec): Partial<Shape
   return { x1, y1, x2, y2, crop: c.l || c.t || c.r || c.b ? c : undefined };
 }
 
+/**
+ * A picture with its edges cut to `crop` (fractions of the whole picture from each side): the
+ * part still showing stays where it is, at the same scale. Crops that leave nothing are reduced.
+ */
+export function cropTo(s: Shape, crop: { l: number; t: number; r: number; b: number }): Partial<Shape> {
+  const c = s.crop ?? NO_CROP;
+  let x1 = Math.min(s.x1, s.x2), x2 = Math.max(s.x1, s.x2), y1 = Math.min(s.y1, s.y2), y2 = Math.max(s.y1, s.y2);
+  const W = (x2 - x1) / Math.max(0.01, 1 - c.l - c.r), H = (y2 - y1) / Math.max(0.01, 1 - c.t - c.b);
+  const MIN = 0.02;
+  const l = clamp(crop.l, 0, 1 - MIN), r = clamp(crop.r, 0, 1 - MIN - l);
+  const t = clamp(crop.t, 0, 1 - MIN), b = clamp(crop.b, 0, 1 - MIN - t);
+  x1 += (l - c.l) * W;
+  x2 -= (r - c.r) * W;
+  y1 += (t - c.t) * H;
+  y2 -= (b - c.b) * H;
+  return { x1, y1, x2, y2, crop: l || t || r || b ? { l, t, r, b } : undefined };
+}
+
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 /** A picture resized from a corner keeps its proportions (unless `free`); from an edge it stretches. */
