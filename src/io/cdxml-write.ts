@@ -632,7 +632,7 @@ class CdxmlWriter {
         lines[lines.length - 1] += this.measure(part, r.sub || r.sup ? size * 0.75 : size);
       });
       // Greek letters and signs that an ordinary font can't hold go in the Symbol font, as ChemDraw does
-      for (const piece of toSymbolPieces(r.text)) {
+      for (const piece of toSymbolPieces(r.text, !!r.formula)) {
         const s = this.el('s', { font: this.fontId(piece.symbol ? 'Symbol' : r.font ?? 'Arial'), size: f2(size).replace(/\.00$/, ''), color: this.colorAttr(r.color) ?? '0', face: faceOf(r) });
         s.textContent = piece.text;
         t.appendChild(s);

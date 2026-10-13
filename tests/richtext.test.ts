@@ -85,9 +85,10 @@ describe('formula style', () => {
     expect(show('PhSO3-')).toBe('PhSO_3^-');
     expect(show('B(OR)3-')).toBe('B(OR)_3^-');
     expect(show('BF4−, PF6−')).toBe('BF_4^−, PF_6^−');
-    expect(show('[Fe(CN)6]3-, K+ salt')).toBe('[Fe(CN)_6]^3-, K^+ salt');
-    // an ion's charge number has to be put up by hand
+    expect(show('K+ salt')).toBe('K^+ salt');
+    // as in ChemDraw, a charge's number has to be put up by hand
     expect(show('Fe3+')).toBe('Fe_3^+');
+    expect(show('[Fe(CN)6]3-')).toBe('[Fe(CN)_6]_3^-');
   });
   it('keeps hyphens inside names', () => {
     expect(show('n-BuLi')).toBe('n-BuLi');
@@ -105,6 +106,10 @@ describe('Symbol font', () => {
       { text: 'a', symbol: true }, { text: '-pinene, 25 °C ', symbol: false }, { text: '®', symbol: true }, { text: ' rt', symbol: false },
     ]);
     expect(rt.toSymbolPieces('–—•')).toEqual([{ text: '–—•', symbol: false }]);
+    // ChemDraw reads a minus as a charge in formula style only when it is a plain hyphen
+    expect(rt.toSymbolPieces('PhSO3−', true)).toEqual([{ text: 'PhSO3-', symbol: false }]);
+    expect(rt.toSymbolPieces('(−)-sparteine', true)).toEqual([{ text: '(', symbol: false }, { text: '-', symbol: true }, { text: ')-sparteine', symbol: false }]);
+    expect(rt.toSymbolPieces('−78 °C')).toEqual([{ text: '-', symbol: true }, { text: '78 °C', symbol: false }]);
   });
   it('round-trips a Greek caption through a saved file', () => {
     const doc = new Doc();

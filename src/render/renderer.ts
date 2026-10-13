@@ -1043,7 +1043,8 @@ export function expandRuns(runs: TextRun[], defaultSize: number): Piece[] {
       out.push({ text, w: measureText(text, s, font, style), dy, font: `${style}${s}px ${font}`, size: s, color: r.color, underline: r.underline });
     };
     if (r.formula && !r.sub && !r.sup) {
-      for (const p of formulaParts(r.text)) push(p.text, p.pos === 'sub', p.pos === 'sup');
+      // a charge typed as a hyphen is shown as a minus sign, which is easier to see
+      for (const p of formulaParts(r.text)) push(p.pos === 'sup' ? p.text.replace(/-/g, '−') : p.text, p.pos === 'sub', p.pos === 'sup');
     } else push(r.text, !!r.sub, !!r.sup);
   }
   return out;

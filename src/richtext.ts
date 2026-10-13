@@ -148,11 +148,10 @@ export function faceFromStyle(r: RunStyle): number {
 export type Part = { text: string; pos: 'base' | 'sub' | 'sup' };
 
 /**
- * How formula style shows a piece of text: numbers straight after a letter or a closing bracket
- * are subscripts (CH3, Pd(PPh3)4), and a + or − ending a word there is a superscript charge
- * (NH4+, PhSO3−, Cl−). After a square bracket the number goes up with the charge
- * ([Fe(CN)6]3−). An ion's charge with a number, as in Fe3+, is shown Fe₃⁺; superscript the 3
- * by hand for Fe³⁺.
+ * How formula style shows a piece of text, as ChemDraw does: numbers straight after a letter or
+ * a closing bracket are subscripts (CH3, Pd(PPh3)4, [Fe(CN)6]3), and a + or − ending a word
+ * there is a superscript charge (NH4+, PhSO3−, Cl−). A charge with a number (Fe³⁺, ]³⁻) needs
+ * the number superscripted by hand.
  */
 export function formulaParts(text: string): Part[] {
   const out: Part[] = [];
@@ -166,10 +165,6 @@ export function formulaParts(text: string): Part[] {
   while (i < text.length) {
     const rest = text.slice(i);
     const prev = i > 0 ? text[i - 1] : '';
-    if (prev === ']') {
-      const charge = /^\d*[+\-−](?=$|[\s,;:)\]])/.exec(rest);
-      if (charge) { push(charge[0], 'sup'); i += charge[0].length; continue; }
-    }
     if (/[A-Za-z)\]]/.test(prev)) {
       const count = /^\d+/.exec(rest);
       if (count) { push(count[0], 'sub'); i += count[0].length; continue; }
@@ -229,11 +224,24 @@ export const savableChar = (ch: string): boolean => plainFontChar(ch) || TO_SYMB
 
 /**
  * Split text for saving: characters an ordinary font can't hold but the Symbol font can
- * (Greek letters, arrows, ≤ and so on) come out as Symbol-font pieces.
+ * (Greek letters, arrows, ≤ and so on) come out as Symbol-font pieces. In formula style a minus
+ * charge (PhSO3−) is saved as a plain hyphen, which ChemDraw reads as a charge; a Symbol minus
+ * there it drops to subscript. Other minus signs, such as (−)-sparteine, stay in Symbol.
  */
-export function toSymbolPieces(text: string): { text: string; symbol: boolean }[] {
+export function toSymbolPieces(text: string, formula = false): { text: string; symbol: boolean }[] {
   const out: { text: string; symbol: boolean }[] = [];
-  for (const ch of text) {
+  const charge = new Set<number>();
+  if (formula) {
+    let k = 0;
+    for (const part of formulaParts(text)) {
+      if (part.pos === 'sup') for (let j = 0; j < part.text.length; j++) charge.add(k + j);
+      k += part.text.length;
+    }
+  }
+  let k = -1;
+  for (let ch of text) {
+    k += ch.length;
+    if (ch === '−' && charge.has(k)) ch = '-';
     const sym = !plainFontChar(ch) && TO_SYMBOL.has(ch);
     const t = sym ? TO_SYMBOL.get(ch)! : ch;
     const last = out[out.length - 1];
