@@ -163,10 +163,11 @@ export function formatValue(v: Value, code?: string): Shown {
   const secs = parseSections(fmt);
   let sec: Section;
   let abs = false;
+  // a section left empty shows nothing ("0;;" hides negative numbers and zeros, ";;;" everything)
   if (secs.some((s) => s.condition)) {
     sec = secs.find((s) => s.condition && test(v, s.condition)) ?? secs.find((s) => !s.condition) ?? secs[0];
-  } else if (v < 0 && secs.length >= 2 && secs[1].parts.length) { sec = secs[1]; abs = true; }
-  else if (v === 0 && secs.length >= 3 && secs[2].parts.length) sec = secs[2];
+  } else if (v < 0 && secs.length >= 2) { sec = secs[1]; abs = true; }
+  else if (v === 0 && secs.length >= 3) sec = secs[2];
   else sec = secs[0];
   if (sectionIsDate(sec)) return { text: formatDate(v, sec), color: sec.color, align: 'right' };
   const text = formatNumber(abs ? Math.abs(v) : v, sec);

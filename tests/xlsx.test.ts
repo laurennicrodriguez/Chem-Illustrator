@@ -245,8 +245,9 @@ describe('structures and chemistry in Excel files', () => {
     const bytes = await writeXlsx(wb, pictures);
     const xml = part(bytes, 'xl/worksheets/sheet1.xml');
     const strings = part(bytes, 'xl/sharedStrings.xml');
-    // the structure's SMILES, in the cell under its picture
+    // the structure's SMILES, in the cell under its picture, with a format that hides it
     expect(strings).toContain('<t>CCO</t>');
+    expect(part(bytes, 'xl/styles.xml')).toMatch(/<numFmt numFmtId="\d+" formatCode=";;;"\/>/);
     expect(strings).toContain('<t>CC(C)=O</t>');
     // calculated values and chemistry formulas as numbers; Excel's own formulas as formulas
     expect(xml).toMatch(/<c r="B2" s="\d+"><v>46\.0\d+<\/v><\/c>/);
@@ -279,7 +280,8 @@ describe('structures and chemistry in Excel files', () => {
     const s = book.sheet;
     expect(s.cell(1, 0)?.structure?.contents.atoms).toHaveLength(3);
     expect(s.cell(2, 0)?.structure?.contents.atoms).toHaveLength(4);
-    expect(s.cell(1, 0)?.style?.wrap).toBeUndefined();
+    // the format that hid the SMILES in Excel is not kept
+    expect(s.cell(1, 0)?.style).toBeUndefined();
     expect(s.colDefs.get(1)).toEqual({ formula: '=MW(A2)', firstRow: 1, style: { numFmt: '0.00' } });
     // worked out again, not a value typed in
     expect(s.cell(1, 1)?.input).toBeUndefined();

@@ -2,7 +2,9 @@
 // SpreadsheetML). Excel gets everything it can show for itself: values, its own formulas, number
 // formats, fonts, fills, borders, alignment, merged cells, column widths and row heights, frozen
 // header rows and the filter. Structures go in as pictures over their cells, with the SMILES in
-// the cell; property columns and formulas that use chemistry (MW, HRMS…) go in as their values,
+// the cell (in the formula bar, for formulas and copying; the cell's format hides it, since Excel
+// sizes columns a little differently on each screen and would show it at the picture's edge);
+// property columns and formulas that use chemistry (MW, HRMS…) go in as their values,
 // since Excel can't work those out.
 //
 // What only this program understands (the drawings, property columns, chemistry formulas,
@@ -80,6 +82,9 @@ const pxFromWidth = (w: number) => Math.trunc(((256 * w + Math.trunc(128 / 7)) /
 const ptFromPx = (px: number) => Math.round(px * 0.75 * 100) / 100;
 const pxFromPt = (pt: number) => Math.round((pt * 4) / 3);
 
+/** A number format that shows nothing (empty sections for numbers, negatives, zero and text). */
+const HIDDEN = ';;;';
+
 /** Excel's built-in number formats (ECMA-376 part 1, 18.8.30), by id. */
 const BUILTIN_FORMATS: Record<number, string> = {
   0: 'General', 1: '0', 2: '0.00', 3: '#,##0', 4: '#,##0.00', 9: '0%', 10: '0.00%', 11: '0.00E+00', 12: '# ?/?', 13: '# ??/??',
@@ -106,9 +111,9 @@ interface ModelCell {
   wrote: Wrote;
   /**
    * Formatting Excel can't hold, or was given differently: chemistry text, and for a structure
-   * its own wrapping and vertical alignment (its SMILES is written wrapped, at the top).
+   * its own number format (its SMILES is written with a format that hides it).
    */
-  fix?: { chem?: boolean; wrap?: boolean; valign?: CellStyle['valign'] | null };
+  fix?: { chem?: boolean; numFmt?: string | null };
   structure?: Contents;
   /** A formula using chemistry, saved as its value. */
   formula?: string;
@@ -312,7 +317,7 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
         // what only this program reads, kept for the cell
         let entry: ModelCell | null = null;
         // (unset is written as false or null: the file can't hold "undefined")
-        const fix = cell?.structure ? { chem: !!own?.chem, wrap: !!own?.wrap, valign: own?.valign ?? null } : own?.chem ? { chem: true } : undefined;
+        const fix = cell?.structure ? { chem: !!own?.chem, numFmt: own?.numFmt ?? null } : own?.chem ? { chem: true } : undefined;
         const input = s.effectiveInput(r, c);
         if (cell?.structure) entry = { r, c, wrote: null, fix, structure: cell.structure.contents };
         else if (s.defAt(r, c)) entry = { r, c, wrote: null, fix, computed: true };
@@ -320,8 +325,8 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
         else if (input?.startsWith('=')) formula = input.slice(1);
         if (!entry && fix) entry = { r, c, wrote: null, fix };
         if (entry) ms.cells.push(entry);
-        // a structure's SMILES stays inside its cell, under the picture
-        const xf = styles.xf(cell?.structure ? { ...style, wrap: true, valign: 'top' } : style);
+        // a structure's SMILES is in its cell, hidden under the picture (the format ;;; shows nothing)
+        const xf = styles.xf(cell?.structure ? { ...style, numFmt: HIDDEN } : style);
         const sAttr = xf ? ` s="${xf}"` : '';
         const f = formula !== null ? `<f>${xml(formula)}</f>` : '';
         let body = '';

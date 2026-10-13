@@ -45,6 +45,11 @@ describe('number formats', () => {
     expect(show(0, '0;-0;"–"')).toBe('–');
     expect(formatValue(-3, '0;[Red]-0').color).toBe('#ff0000');
     expect(show('abc', '0.00;-0.00;0;"Note: "@')).toBe('Note: abc');
+    // empty sections show nothing
+    expect(show(-3, '0;;')).toBe('');
+    expect(show(0, '0;;')).toBe('');
+    expect(show(3, '0;;')).toBe('3');
+    for (const v of [3, -3, 0, 'CCO']) expect(show(v, ';;;')).toBe('');
   });
   it('shows dates and times from Excel date numbers', () => {
     expect(show(45000, 'yyyy-mm-dd')).toBe('2023-03-15');
