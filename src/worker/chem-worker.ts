@@ -1,10 +1,12 @@
 // Chemistry engine running off the main thread so drawing never waits for it.
 // Loads RDKit (WebAssembly) and answers requests: formula and masses, R/S and E/Z labels,
-// SMILES in and out.
+// SMILES in and out, and the properties and substructure searches of Sheet mode.
 
 /// <reference lib="webworker" />
 import { formulaFromJson } from '../chem/formula';
 import { stereoTags, StereoTags } from '../chem/stereo';
+import { molProps, substructureMatches } from '../chem/props';
+import type { MolProps } from '../sheet/properties';
 type InitRDKit = (opts: { locateFile: () => string }) => Promise<any>;
 
 export type ChemRequest =
@@ -12,7 +14,11 @@ export type ChemRequest =
   | { type: 'analyze'; id: number; mols: { molblock: string; map: number[] }[] }
   | { type: 'stereo'; id: number; mols: { molblock: string; skip: number[]; generic: [number, string][] }[] }
   | { type: 'smilesToMol'; id: number; smiles: string }
-  | { type: 'molToSmiles'; id: number; molblock: string };
+  | { type: 'molToSmiles'; id: number; molblock: string }
+  /** Sheet properties of molecules, each given as a molfile or a SMILES string. */
+  | { type: 'props'; id: number; mols: string[] }
+  /** Which molecules (molfiles or SMILES) contain the query (a molfile): its atoms and bonds, with anything else attached. */
+  | { type: 'substructure'; id: number; query: string; mols: string[] };
 
 export interface FragmentResult {
   formula: string;
@@ -29,7 +35,9 @@ export type ChemResponse =
   | { type: 'analyze'; id: number; results: FragmentResult[]; ms: number }
   | { type: 'stereo'; id: number; results: StereoTags[]; ms: number }
   | { type: 'smilesToMol'; id: number; molblock: string | null }
-  | { type: 'molToSmiles'; id: number; smiles: string | null };
+  | { type: 'molToSmiles'; id: number; smiles: string | null }
+  | { type: 'props'; id: number; results: (MolProps | { error: string })[] }
+  | { type: 'substructure'; id: number; results: (boolean | null)[]; error?: string };
 
 let RDKit: any = null;
 const post = (m: ChemResponse) => (self as unknown as DedicatedWorkerGlobalScope).postMessage(m);
@@ -102,6 +110,10 @@ self.onmessage = async (e: MessageEvent<ChemRequest>) => {
       const smiles = mol && mol.is_valid() ? mol.get_smiles() : null;
       mol?.delete();
       post({ type: 'molToSmiles', id: m.id, smiles });
+    } else if (m.type === 'props') {
+      post({ type: 'props', id: m.id, results: m.mols.map((x) => molProps(RDKit, x)) });
+    } else if (m.type === 'substructure') {
+      post({ type: 'substructure', id: m.id, ...substructureMatches(RDKit, m.query, m.mols) });
     }
   } catch (err) {
     post({ type: 'error', id: 'id' in m ? (m as { id: number }).id : undefined, message: String(err) });

@@ -326,6 +326,8 @@ export class Sheet {
     const next = isBlankCell(cell) ? undefined : cell;
     if (sameCell(this.cell(row, col), next)) return;
     this.put('cells', this.cells, keyOf(row, col), next);
+    // the used area grows straight away (recalc works it out exactly), so later steps of the same edit reach this cell
+    if (next) { this.lastRow = Math.max(this.lastRow, row); this.lastCol = Math.max(this.lastCol, col); }
   }
 
   /** Type into a cell. The text replaces anything in it (a structure too); formatting stays, and a format suggested by the typing is added. */
@@ -826,6 +828,14 @@ export class Workbook {
       }
     }
     return result!;
+  }
+
+  /** Build without recording (opening a file): afterwards there is nothing to undo and nothing unsaved. */
+  build(fn: () => void): void {
+    this.edit('Open', fn);
+    this.undoList.length = 0;
+    this.redoList.length = 0;
+    this.edits = 0;
   }
 
   /** Record one change (called by the sheets). Changes outside a transaction are a step of their own. */

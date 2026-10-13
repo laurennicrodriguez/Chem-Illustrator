@@ -14,12 +14,13 @@
       <div id="file-menu" class="menu" role="menu" hidden>
         <button role="menuitem" data-cmd="new">New Drawing</button>
         <button role="menuitem" data-cmd="new-slides">New Slides</button>
+        <button role="menuitem" data-cmd="new-sheet">New Sheet</button>
         <button role="menuitem" data-cmd="open">Open…</button>
         <button role="menuitem" data-cmd="save">Save</button>
         <button role="menuitem" data-cmd="save-as">Save As…</button>
-        <hr />
-        <button role="menuitem" data-cmd="export-pdf">Export PDF…</button>
-        <button role="menuitem" data-cmd="export-mol">Export Molfile…</button>
+        <hr class="no-sheet" />
+        <button role="menuitem" class="no-sheet" data-cmd="export-pdf">Export PDF…</button>
+        <button role="menuitem" class="no-sheet" data-cmd="export-mol">Export Molfile…</button>
         <hr />
         <button role="menuitem" data-cmd="close-tab">Close</button>
       </div>
@@ -58,7 +59,7 @@
         <button role="menuitemcheckbox" aria-checked="false" data-cmd="dev-tools" title="Speed readout and a stress test, for checking how fast the app runs"><span>Developer Tools</span></button>
       </div>
     </div>
-    <div class="menu-wrap">
+    <div class="menu-wrap no-sheet">
       <button id="btn-insert" aria-haspopup="menu" aria-expanded="false" aria-controls="insert-menu">Insert</button>
       <div id="insert-menu" class="menu" role="menu" hidden>
         <button role="menuitem" data-cmd="insert-picture">Picture…</button>
@@ -87,7 +88,31 @@
         <button role="menuitem" data-cmd="present-current">Present from This Slide</button>
       </div>
     </div>
-    <div class="menu-wrap">
+    <div id="sheet-menu-wrap" class="menu-wrap sheet-only" hidden>
+      <button id="btn-sheet" aria-haspopup="menu" aria-expanded="false" aria-controls="sheet-menu">Sheet</button>
+      <div id="sheet-menu" class="menu" role="menu" hidden>
+        <button role="menuitem" data-cmd="draw-structure">Draw Structure in Cell</button>
+        <button role="menuitem" data-cmd="structure-from-name">Structure from Name or SMILES…</button>
+        <button role="menuitem" data-cmd="property-column">Insert Property Columns…</button>
+        <button role="menuitem" data-cmd="reset-calculated">Reset to Calculated</button>
+        <hr />
+        <button role="menuitem" data-cmd="sort-up">Sort Smallest to Largest</button>
+        <button role="menuitem" data-cmd="sort-down">Sort Largest to Smallest</button>
+        <button role="menuitem" data-cmd="filter">Filter</button>
+        <button role="menuitem" data-cmd="filter-structure">Filter by Substructure…</button>
+        <button role="menuitem" data-cmd="freeze-header">Freeze Header Row</button>
+        <hr />
+        <button role="menuitem" data-cmd="insert-cells">Insert Rows or Columns</button>
+        <button role="menuitem" data-cmd="delete-cells">Delete Rows or Columns</button>
+        <button role="menuitem" data-cmd="insert-sheet">Insert Worksheet</button>
+        <hr />
+        <button role="menuitem" data-cmd="fill-down">Fill Down</button>
+        <button role="menuitem" data-cmd="fill-right">Fill Right</button>
+        <button role="menuitem" data-cmd="autosum">AutoSum</button>
+        <button role="menuitem" data-cmd="find">Find…</button>
+      </div>
+    </div>
+    <div class="menu-wrap draw-only">
       <button id="btn-object" aria-haspopup="menu" aria-expanded="false" aria-controls="object-menu">Object</button>
       <div id="object-menu" class="menu" role="menu" hidden>
         <button role="menuitem" data-cmd="align-left">Align Left Edges</button>
@@ -112,7 +137,7 @@
         <button role="menuitem" data-cmd="join">Join</button>
       </div>
     </div>
-    <div class="menu-wrap">
+    <div class="menu-wrap draw-only">
       <button id="btn-structure" aria-haspopup="menu" aria-expanded="false" aria-controls="structure-menu">Structure</button>
       <div id="structure-menu" class="menu" role="menu" hidden>
         <button role="menuitem" data-cmd="clean-up">Clean Up Structure</button>
@@ -144,7 +169,117 @@
 
   <div id="tabs" role="tablist" aria-label="Open files"></div>
 
-  <div id="ribbon" class="slides-only" role="toolbar" aria-label="Slides" hidden>
+  <div id="sheet-ribbon" class="ribbon sheet-only" role="toolbar" aria-label="Sheet" hidden>
+    <div class="rb-group">
+      <div class="rb-row">
+        <button class="rb-big" data-sh="paste" title="Paste cells, a structure from ChemDraw, or a table from Excel"><span class="rb-icon">⎘</span>Paste</button>
+        <div class="rb-col">
+          <button data-sh="cut" title="Cut (paste to move the cells)">Cut</button>
+          <button data-sh="copy" title="Copy: one structure goes as a drawing for ChemDraw and Word; cells go as a table for Excel">Copy</button>
+        </div>
+      </div>
+      <div class="rb-label">Clipboard</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-row">
+        <div class="rb-col">
+          <div class="rb-pair">
+            <select id="sh-size" title="Font size" aria-label="Font size">
+              <option>8</option><option>9</option><option>10</option><option>11</option><option>12</option><option>14</option><option>16</option><option>18</option><option>20</option><option>24</option>
+            </select>
+          </div>
+          <div class="rb-pair">
+            <button class="rb-sq" data-sh="cell-bold" aria-pressed="false" title="Bold"><b>B</b></button>
+            <button class="rb-sq" data-sh="cell-italic" aria-pressed="false" title="Italic"><i>I</i></button>
+            <button class="rb-sq" data-sh="cell-underline" aria-pressed="false" title="Underline"><u>U</u></button>
+            <button class="rb-sq" data-sh="borders" title="Borders">▦</button>
+            <button class="rb-sq rb-colour" data-sh="fill-colour" title="Fill colour"><span>▨</span><span class="sw"></span></button>
+            <button class="rb-sq rb-colour" data-sh="text-colour" title="Text colour"><span>A</span><span class="sw"></span></button>
+          </div>
+        </div>
+      </div>
+      <div class="rb-label">Font</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-row">
+        <div class="rb-col">
+          <div class="rb-pair">
+            <button data-sh="valign-top" title="Top">Top</button>
+            <button data-sh="valign-middle" title="Middle">Middle</button>
+            <button data-sh="valign-bottom" title="Bottom">Bottom</button>
+            <button data-sh="wrap" aria-pressed="false" title="Wrap text onto more lines">Wrap</button>
+          </div>
+          <div class="rb-pair">
+            <button data-sh="align-left" aria-pressed="false" title="Align left">Left</button>
+            <button data-sh="align-center" aria-pressed="false" title="Centre">Centre</button>
+            <button data-sh="align-right" aria-pressed="false" title="Align right">Right</button>
+            <button data-sh="merge-cells" aria-pressed="false" title="Merge the selected cells into one and centre (again to split them)">Merge</button>
+          </div>
+        </div>
+      </div>
+      <div class="rb-label">Alignment</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-row">
+        <div class="rb-col">
+          <select id="sh-numfmt" title="Number format" aria-label="Number format">
+            <option value="General">General</option>
+            <option value="0.00">Number (0.00)</option>
+            <option value="0%">Percentage</option>
+            <option value="0.00E+00">Scientific</option>
+            <option value="#,##0">Thousands (1,234)</option>
+            <option value="@">Text</option>
+            <option value="custom">Other…</option>
+          </select>
+          <div class="rb-pair">
+            <button data-sh="decimals-more" title="More decimal places">+.0</button>
+            <button data-sh="decimals-less" title="Fewer decimal places">−.0</button>
+            <button data-sh="format-chem" aria-pressed="false" title="Formula style: numbers in formulas lowered (CH₂Cl₂), charges raised">C₉H₈</button>
+          </div>
+        </div>
+      </div>
+      <div class="rb-label">Number</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-row">
+        <div class="rb-col">
+          <button data-sh="insert" title="Insert rows, columns or a worksheet">Insert ▾</button>
+          <button data-sh="delete" title="Delete rows, columns or a worksheet">Delete ▾</button>
+        </div>
+      </div>
+      <div class="rb-label">Cells</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-row">
+        <button class="rb-big" data-sh="draw-structure" title="Draw a structure in the cell (or double-click a structure to change it)"><span class="rb-icon">⬡</span>Structure</button>
+        <button class="rb-big" data-sh="structure-from-name" title="Draw structures from names or SMILES: in the cell, or for each selected name"><span class="rb-icon">Aa</span>From Name</button>
+        <button class="rb-big" data-sh="property-column" title="Columns that work out formula, MW, exact mass, HRMS m/z, cLogP and more from each structure"><span class="rb-icon">MW</span>Properties</button>
+        <div class="rb-col">
+          <button data-sh="reset-calculated" title="Put back the calculated values where values were typed over">Reset to Calculated</button>
+        </div>
+      </div>
+      <div class="rb-label">Chemistry</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-row">
+        <div class="rb-col">
+          <button data-sh="sort-up" title="Sort the table by this column, smallest first (structures by molecular weight)">Sort ↑</button>
+          <button data-sh="sort-down" title="Sort the table by this column, largest first">Sort ↓</button>
+        </div>
+        <div class="rb-col">
+          <button data-sh="filter" aria-pressed="false" title="Filter buttons on the table's headers">Filter</button>
+          <button data-sh="filter-structure" title="Show only rows whose structure contains a part you draw">By Substructure</button>
+        </div>
+        <div class="rb-col">
+          <button data-sh="freeze-header" aria-pressed="false" title="Keep the header row in view while scrolling">Freeze Header</button>
+          <button data-sh="autosum" title="Add up the numbers above">Σ AutoSum</button>
+        </div>
+      </div>
+      <div class="rb-label">Data</div>
+    </div>
+  </div>
+
+  <div id="ribbon" class="ribbon slides-only" role="toolbar" aria-label="Slides" hidden>
     <div class="rb-group">
       <div class="rb-row">
         <button class="rb-big" data-cmd="new-slide" title="New slide after this one"><span class="rb-icon">＋</span>New Slide</button>
@@ -197,6 +332,20 @@
 
   <main id="work">
     <div id="slide-list" class="slides-only" hidden></div>
+    <div id="sheet-pane" class="sheet-only" hidden>
+      <div id="formula-bar">
+        <input id="sh-name" spellcheck="false" aria-label="Cell name (type a cell such as B5 and press Enter to go there)" title="The selected cell. Type a cell such as B5, a block such as A1:C9, or a sheet name, and press Enter to go there" />
+        <button id="sh-fx" type="button" title="Insert a function (chemistry functions first)">fx</button>
+        <textarea id="sh-formula" rows="1" spellcheck="false" aria-label="Cell contents"></textarea>
+      </div>
+      <div id="sheet-host"></div>
+    </div>
+    <div id="structure-bar" role="toolbar" aria-label="Structure" hidden>
+      <span id="structure-title"></span>
+      <span class="muted">Draw with the tools on the left.</span>
+      <button id="structure-done" type="button" class="primary" title="Put the structure in the cell (Ctrl+Enter)">Done</button>
+      <button id="structure-cancel" type="button" title="Leave the cell as it was">Cancel</button>
+    </div>
     <div id="canvas-host">
       <canvas id="scene"></canvas>
       <canvas id="overlay" tabindex="0"></canvas>
@@ -217,7 +366,11 @@
         <label class="check small" title="Red boxes around problems on the drawing (never printed, saved or copied)"><input id="show-warnings" type="checkbox" checked /> Show on drawing</label></h2>
       <div id="warnings-body"><p class="muted">No problems found.</p></div>
     </section>
-    <section>
+    <section id="cell-section">
+      <h2>Cell <span id="cell-name" class="cell-name"></span></h2>
+      <div id="cell-body"></div>
+    </section>
+    <section id="analysis-section">
       <h2>Analysis</h2>
       <div id="analysis-body"><p class="muted">Loading the chemistry engine…</p></div>
     </section>
@@ -263,11 +416,17 @@
         <ul>
           <li>Mouse wheel scrolls, <kbd>Ctrl</kbd>+wheel zooms, middle or right drag pans; the View menu zooms too</li>
           <li>Copy puts the selection (or the whole drawing) on the clipboard; in the Windows app it pastes into ChemDraw, and into Word and PowerPoint as a picture. Paste takes drawings from ChemDraw, and SMILES or molfile text</li>
-          <li>File menu: New Drawing, New Slides, Open, Save and Save As (.cdxml, .cdx, .pptx), Export PDF, Export Molfile. Each file has a tab; <kbd>Ctrl</kbd>+<kbd>Tab</kbd> moves between them. You can also drop files on the window</li>
+          <li>File menu: New Drawing, New Slides, New Sheet, Open, Save and Save As (.cdxml, .cdx, .pptx, .xlsx, .csv, .sdf), Export PDF, Export Molfile. Each file has a tab; <kbd>Ctrl</kbd>+<kbd>Tab</kbd> moves between them. You can also drop files on the window</li>
+        </ul>
+        <h3>Sheets</h3>
+        <ul>
+          <li>Excel's keys and formulas (SUM, AVERAGE, ROUND, IF…). Chemistry > Structure draws a structure in a cell; paste one from ChemDraw too. Double-click a structure to change it</li>
+          <li>Properties adds columns that work out formula, MW, exact mass, HRMS m/z, cLogP, TPSA and more from each structure; =D2/MW(B2)*1000 gives mmol. Type over any value; Reset to Calculated puts it back</li>
+          <li>Sort and Filter work on any column; By Substructure shows the rows whose structure contains a part you draw</li>
         </ul>
         <h3>Not in this prototype yet</h3>
         <ul>
-          <li>Rings bonded to a metal through all their atoms (ferrocene); tables (they come with Sheet mode)</li>
+          <li>Rings bonded to a metal through all their atoms (ferrocene)</li>
         </ul>
       </div>
     </div>

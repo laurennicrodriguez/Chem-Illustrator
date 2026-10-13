@@ -37,6 +37,38 @@ export function generalNumber(n: number): string {
   return s === '-0' ? '0' : s;
 }
 
+/**
+ * A number in the General format, shortened to fit its column as Excel does: fewer decimals
+ * first, then a power of ten. Null when even that doesn't fit (the cell then shows ###).
+ */
+export function generalFitting(n: number, fits: (text: string) => boolean): string | null {
+  const full = generalNumber(n);
+  if (fits(full)) return full;
+  if (!Number.isFinite(n)) return null;
+  const abs = Math.abs(n);
+  // a small number rounded to one significant figure, kept in case a power of ten doesn't fit either
+  let coarse: string | null = null;
+  if (abs >= 1e-6 && abs < 1e11) {
+    const intDigits = Math.max(1, Math.floor(Math.log10(abs)) + 1);
+    for (let dec = Math.max(0, 10 - intDigits) - 1; dec >= 0; dec--) {
+      let t = roundTo(n, dec).toFixed(dec);
+      if (t.includes('.')) t = t.replace(/\.?0+$/, '');
+      // rounded away to nothing: a power of ten says more
+      if (/^-?0$/.test(t)) break;
+      if (!fits(t)) continue;
+      if (abs < 0.1 && t.replace(/^-?[0.]+/, '').replace('.', '').length < 2 && Number(t) !== n) { coarse = t; break; }
+      return t;
+    }
+  }
+  for (let d = 5; d >= 0; d--) {
+    const [m, e] = n.toExponential(d).split('e');
+    const exp = Number(e);
+    const t = `${m.replace(/\.?0+$/, '')}E${exp < 0 ? '-' : '+'}${String(Math.abs(exp)).padStart(2, '0')}`;
+    if (fits(t)) return t;
+  }
+  return coarse;
+}
+
 interface Section {
   /** Literal text and placeholders, in order. */
   parts: Part[];

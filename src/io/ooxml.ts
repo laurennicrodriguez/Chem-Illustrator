@@ -215,3 +215,17 @@ export function kid(el: Element | null | undefined, ...path: string[]): Element 
 export function rAttr(el: Element | null | undefined, name: string): string | null {
   return el?.getAttributeNS(NS.r, name) ?? null;
 }
+
+/** Does a zip file have an entry with this name (read from its list of contents)? */
+export function zipHas(bytes: Uint8Array, entry: string): boolean {
+  const want = new TextEncoder().encode(entry);
+  outer: for (let i = 0; i + 46 + want.length <= bytes.length; i++) {
+    // central directory headers: PK\x01\x02, name length at +28, name at +46
+    if (bytes[i] !== 0x50 || bytes[i + 1] !== 0x4b || bytes[i + 2] !== 1 || bytes[i + 3] !== 2) continue;
+    const n = bytes[i + 28] | (bytes[i + 29] << 8);
+    if (n !== want.length) continue;
+    for (let j = 0; j < n; j++) if (bytes[i + 46 + j] !== want[j]) continue outer;
+    return true;
+  }
+  return false;
+}

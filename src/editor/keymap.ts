@@ -1,10 +1,11 @@
-// Hotkeys as data. Every key is a binding from a key press to an action, in one of five
-// places: pointing at an atom, at a bond, at empty space, anywhere, or while typing a caption.
+// Hotkeys as data. Every key is a binding from a key press to an action, in one of these
+// places: pointing at an atom, at a bond, at empty space, anywhere, in slides, in sheets, or
+// while typing a caption.
 // The defaults copy ChemDraw (checked in ChemDraw 25, see the notes in DEFAULT_KEYS); the
 // person's own changes are kept separately, as a small readable list in the settings file,
 // so new defaults in later versions still reach them.
 
-export type KeyContext = 'atom' | 'bond' | 'space' | 'command' | 'slides' | 'text';
+export type KeyContext = 'atom' | 'bond' | 'space' | 'command' | 'slides' | 'sheet' | 'text';
 
 export const CONTEXTS: { id: KeyContext; title: string; note: string }[] = [
   { id: 'atom', title: 'Pointing at an atom', note: 'Point at an atom (it highlights blue) and press the key. Letters are case-sensitive: F and f do different things.' },
@@ -12,6 +13,7 @@ export const CONTEXTS: { id: KeyContext; title: string; note: string }[] = [
   { id: 'space', title: 'Pointing at empty space', note: 'Switch tools when nothing is highlighted.' },
   { id: 'command', title: 'Anywhere', note: 'Menu commands. Plain keys here only work when nothing is highlighted.' },
   { id: 'slides', title: 'In slides', note: 'Menu commands for slides. While slides are showing, these keys come before the ones for anywhere.' },
+  { id: 'sheet', title: 'In sheets', note: "Excel's keys for sheets. While a sheet is showing, these keys come before the ones for anywhere." },
   { id: 'text', title: 'Typing a caption', note: 'Styling while the caption editor is open.' },
 ];
 
@@ -172,6 +174,19 @@ export const COMMAND_NAMES: Record<string, string> = {
   'next-slide': 'Next slide', 'prev-slide': 'Previous slide', 'slide-master': 'Slide Master…',
   present: 'Present from the first slide', 'present-current': 'Present from this slide',
   'dev-tools': 'Developer tools on or off (speed panel, stress test)',
+  // sheets
+  'new-sheet': 'New sheet', 'insert-sheet': 'Insert a worksheet',
+  'cell-bold': 'Bold (cells)', 'cell-italic': 'Italic (cells)', 'cell-underline': 'Underline (cells)',
+  'fill-down': 'Fill down', 'fill-right': 'Fill right', autosum: 'AutoSum', find: 'Find…',
+  'format-cells': 'Number format (in the panel)', 'format-general': 'General number format', 'format-number': 'Number with 2 decimal places',
+  'format-percent': 'Percentage', 'format-scientific': 'Scientific notation', 'format-chem': 'Formula style in cells on or off',
+  'insert-cells': 'Insert rows or columns', 'delete-cells': 'Delete rows or columns',
+  'hide-rows': 'Hide rows', 'unhide-rows': 'Show hidden rows', 'hide-cols': 'Hide columns', 'unhide-cols': 'Show hidden columns',
+  'sort-up': 'Sort smallest to largest', 'sort-down': 'Sort largest to smallest', filter: 'Filter on or off',
+  'filter-structure': 'Filter by a substructure…', 'freeze-header': 'Freeze the header row on or off',
+  'property-column': 'Insert property column…', 'structure-from-name': 'Structure from name or SMILES…',
+  'draw-structure': 'Draw a structure in the cell', 'reset-calculated': 'Reset to the calculated value',
+  'merge-cells': 'Merge and centre',
 };
 
 const TEXT_ACTIONS: Record<string, string> = {
@@ -203,7 +218,7 @@ export function actionsFor(ctx: KeyContext): string[] {
     case 'atom': return [...pre('atom', ATOM_ACTIONS), ...pre('hotspot', HOTSPOT_ACTIONS)];
     case 'bond': return [...pre('bond', BOND_ACTIONS), ...pre('fuse', FUSE_ACTIONS), ...pre('hotspot', HOTSPOT_ACTIONS)];
     case 'space': return Object.keys(toolNames).map((t) => `tool ${t}`);
-    case 'command': case 'slides': return pre('command', COMMAND_NAMES);
+    case 'command': case 'slides': case 'sheet': return pre('command', COMMAND_NAMES);
     case 'text': return pre('text', TEXT_ACTIONS);
   }
 }
@@ -216,7 +231,7 @@ export function validAction(ctx: KeyContext, action: string): boolean {
     case 'atom': return verb === 'label' || (verb === 'atom' && arg in ATOM_ACTIONS) || (verb === 'hotspot' && arg in HOTSPOT_ACTIONS);
     case 'bond': return (verb === 'bond' && arg in BOND_ACTIONS) || (verb === 'fuse' && arg in FUSE_ACTIONS) || (verb === 'hotspot' && arg in HOTSPOT_ACTIONS);
     case 'space': return verb === 'tool';
-    case 'command': case 'slides': return verb === 'command' && arg in COMMAND_NAMES;
+    case 'command': case 'slides': case 'sheet': return verb === 'command' && arg in COMMAND_NAMES;
     case 'text': return verb === 'text' && arg in TEXT_ACTIONS;
   }
 }
@@ -294,6 +309,17 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
   slides: verbs('command', {
     F5: 'present', 'Shift+F5': 'present-current', 'Ctrl+M': 'new-slide', 'Ctrl+N': 'new-slides',
     PageDown: 'next-slide', PageUp: 'prev-slide',
+  }),
+  // Excel's keys
+  sheet: verbs('command', {
+    'Ctrl+B': 'cell-bold', 'Ctrl+I': 'cell-italic', 'Ctrl+U': 'cell-underline',
+    'Ctrl+2': 'cell-bold', 'Ctrl+3': 'cell-italic', 'Ctrl+4': 'cell-underline',
+    'Ctrl+D': 'fill-down', 'Ctrl+R': 'fill-right', 'Alt+=': 'autosum', 'Ctrl+F': 'find', 'Ctrl+1': 'format-cells',
+    'Ctrl+Shift+`': 'format-general', 'Ctrl+Shift+1': 'format-number', 'Ctrl+Shift+5': 'format-percent', 'Ctrl+Shift+6': 'format-scientific',
+    'Ctrl+Shift+=': 'insert-cells', 'Ctrl++': 'insert-cells', 'Ctrl+-': 'delete-cells',
+    'Ctrl+9': 'hide-rows', 'Ctrl+Shift+9': 'unhide-rows', 'Ctrl+0': 'hide-cols', 'Ctrl+Shift+0': 'unhide-cols',
+    'Ctrl+Shift+L': 'filter', 'Ctrl+N': 'new-sheet', 'Shift+F11': 'insert-sheet',
+    'Ctrl+Shift+N': 'structure-from-name',
   }),
   text: verbs('text', {
     'Ctrl+B': 'bold', 'Ctrl+I': 'italic', 'Ctrl+U': 'underline', 'Ctrl+=': 'sub', 'Ctrl+Shift+=': 'sup', 'Ctrl++': 'sup',

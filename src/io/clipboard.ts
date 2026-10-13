@@ -303,7 +303,7 @@ export function dibToBmp(dib: Uint8Array): Uint8Array {
   return out;
 }
 
-function looksLikeCdxml(text: string): boolean {
+export function looksLikeCdxml(text: string): boolean {
   return /^\s*(<\?xml[^>]*>\s*)?(<!DOCTYPE[^>]*>\s*)?<CDXML[\s>]/i.test(text);
 }
 
@@ -313,7 +313,7 @@ function fromText(text: string): Pasted {
 }
 
 /** The first of these formats on the Windows clipboard. */
-async function nativeFirst(names: string[]): Promise<[string, Uint8Array] | null> {
+export async function nativeFirst(names: string[]): Promise<[string, Uint8Array] | null> {
   const res = await invoke<ArrayBuffer>('clipboard_read', { names });
   return unpackFormats(new Uint8Array(res))[0] ?? null;
 }
@@ -387,4 +387,39 @@ export async function readClipboardText(): Promise<string> {
 /** Names of the formats on the Windows clipboard (to see what another program copied). */
 export async function clipboardFormats(): Promise<string[]> {
   return nativeClipboard ? invoke<string[]>('clipboard_formats') : [];
+}
+
+/** Put these formats on the Windows clipboard (most detailed first). */
+export async function writeNativeFormats(items: [string, Uint8Array][]): Promise<void> {
+  await invoke('clipboard_write', packFormats(items));
+}
+
+/** Our own copy of sheet cells on the clipboard. */
+export const CELLS_FORMAT = 'Chem Illustrator Cells';
+
+/**
+ * HTML for the Windows clipboard ("HTML Format"): a header giving where the page and the copied
+ * part start and end, counted in bytes of UTF-8, as Word and Excel read it.
+ */
+export function cfHtml(fragment: string): Uint8Array {
+  const enc = new TextEncoder();
+  const pre = '<html><head><meta charset="utf-8"></head><body><!--StartFragment-->';
+  const post = '<!--EndFragment--></body></html>';
+  const head = (a: number, b: number, c: number, d: number) =>
+    `Version:0.9\r\nStartHTML:${pad(a)}\r\nEndHTML:${pad(b)}\r\nStartFragment:${pad(c)}\r\nEndFragment:${pad(d)}\r\n`;
+  const pad = (n: number) => String(n).padStart(10, '0');
+  const h = head(0, 0, 0, 0).length;
+  const startFrag = h + enc.encode(pre).length;
+  const endFrag = startFrag + enc.encode(fragment).length;
+  const end = endFrag + enc.encode(post).length;
+  return enc.encode(head(h, end, startFrag, endFrag) + pre + fragment + post);
+}
+
+/** The HTML inside "HTML Format" clipboard data. */
+export function fromCfHtml(bytes: Uint8Array): string {
+  const text = new TextDecoder().decode(bytes);
+  const m = /StartHTML:(\d+)/.exec(text);
+  const start = m ? Number(m[1]) : -1;
+  if (start > 0) return new TextDecoder().decode(bytes.subarray(start));
+  return text.slice(text.indexOf('<'));
 }
