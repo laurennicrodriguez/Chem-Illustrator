@@ -4,11 +4,16 @@
 // the drawing to dock there. Where each one is, and what is in your own, is kept with the settings.
 
 import { showContextMenu, topMenuEntry, type MenuItem } from './context-menu';
+import { commandIcon } from './command-icons';
 
 export type Dock = 'left' | 'right' | 'top' | 'bottom' | 'float';
 export const DOCKS: Dock[] = ['left', 'right', 'top', 'bottom', 'float'];
 
-export interface BoxPlace { shown: boolean; dock: Dock; x: number; y: number }
+export interface BoxPlace {
+  shown: boolean; dock: Dock; x: number; y: number;
+  /** Folded up to its title bar (the arrow in the title). */
+  collapsed?: boolean;
+}
 
 export interface ToolboxState {
   /** Locked: toolboxes stay where they are (unlock to drag them). */
@@ -16,16 +21,23 @@ export interface ToolboxState {
   places: Record<string, BoxPlace>;
   /** Your own toolbox: "tool:name" and "cmd:name" items, in order. */
   custom: string[];
+  /** The side panel (Style, Warnings, Analysis) folded to a strip at the right. */
+  sideCollapsed: boolean;
 }
 
-/** The toolboxes and where they start: the drawing tools on the left, the rest hidden until wanted. */
-export const TOOLBOX_IDS = ['main', 'structure', 'arrange', 'templates', 'colours', 'custom'] as const;
+/**
+ * The toolboxes and where they start: the drawing tools on the left, the rest hidden until wanted.
+ * "details" is the side panel taken out of its place at the right, to float or dock elsewhere.
+ */
+export const TOOLBOX_IDS = ['main', 'structure', 'arrange', 'templates', 'colours', 'custom', 'details'] as const;
 export type ToolboxId = (typeof TOOLBOX_IDS)[number];
 
 export function defaultToolboxes(): ToolboxState {
   const places: Record<string, BoxPlace> = {};
-  TOOLBOX_IDS.forEach((id, i) => { places[id] = { shown: id === 'main', dock: id === 'main' ? 'left' : 'float', x: 120 + i * 30, y: 160 + i * 30 }; });
-  return { locked: true, places, custom: ['cmd:clean-up', 'cmd:add-frame', 'cmd:fill-rings', 'cmd:highlight', 'cmd:chain-ends'] };
+  TOOLBOX_IDS.forEach((id, i) => { places[id] = { shown: id === 'main', dock: id === 'main' ? 'left' : 'float', x: 110 + i * 24, y: 90 + i * 64 }; });
+  // the side panel, when taken out, starts near where it was
+  places.details = { shown: false, dock: 'right', x: 900, y: 90 };
+  return { locked: true, places, custom: ['cmd:clean-up', 'cmd:add-frame', 'cmd:fill-rings', 'cmd:highlight', 'cmd:chain-ends'], sideCollapsed: false };
 }
 
 /** Toolbox settings read from the settings file, keeping only what makes sense. */
@@ -34,6 +46,7 @@ export function parseToolboxes(raw: unknown): ToolboxState {
   if (!raw || typeof raw !== 'object') return s;
   const r = raw as Record<string, unknown>;
   if (typeof r.locked === 'boolean') s.locked = r.locked;
+  if (typeof r.sideCollapsed === 'boolean') s.sideCollapsed = r.sideCollapsed;
   if (r.places && typeof r.places === 'object') {
     for (const [id, v] of Object.entries(r.places as Record<string, unknown>)) {
       if (!(TOOLBOX_IDS as readonly string[]).includes(id) || !v || typeof v !== 'object') continue;
@@ -43,6 +56,7 @@ export function parseToolboxes(raw: unknown): ToolboxState {
         shown: typeof p.shown === 'boolean' ? p.shown : s.places[id].shown,
         dock: DOCKS.includes(p.dock as Dock) ? (p.dock as Dock) : s.places[id].dock,
         x: num(p.x, s.places[id].x), y: num(p.y, s.places[id].y),
+        ...(p.collapsed === true ? { collapsed: true } : {}),
       };
     }
   }
@@ -102,6 +116,11 @@ export class Toolboxes {
       const vertical = place.dock === 'left' || place.dock === 'right';
       f.classList.toggle('vertical', vertical);
       f.classList.toggle('floating', place.dock === 'float');
+      f.classList.toggle('collapsed', !!place.collapsed);
+      const fold = f.querySelector<HTMLElement>('.tb-fold');
+      if (fold) { fold.textContent = place.collapsed ? '▸' : '▾'; fold.title = place.collapsed ? `Open ${def.title} out` : `Fold ${def.title} up to its title`; }
+      const lock = f.querySelector<HTMLElement>('.tb-lock');
+      if (lock) { lock.innerHTML = lockIcon(st.locked, 14); lock.title = st.locked ? 'Toolboxes are locked: click to unlock them, then drag a toolbox by its title' : 'Toolboxes are unlocked: click to lock them where they are'; lock.setAttribute('aria-pressed', String(st.locked)); }
       f.dataset.dock = place.dock;
       const body = f.querySelector<HTMLElement>('.tb-body')!;
       body.replaceChildren();
@@ -138,6 +157,17 @@ export class Toolboxes {
     this.change({ ...this.hooks.get(), locked });
   }
 
+  /** Fold a toolbox up to its title bar, or open it out again. */
+  fold(id: string, collapsed?: boolean): void {
+    const p = this.hooks.get().places[id];
+    if (p) this.place(id, { collapsed: (collapsed ?? !p.collapsed) || undefined });
+  }
+
+  /** Fold the side panel to a strip at the right, or open it again. */
+  setSideCollapsed(collapsed: boolean): void {
+    this.change({ ...this.hooks.get(), sideCollapsed: collapsed });
+  }
+
   private place(id: string, p: Partial<BoxPlace>): void {
     const st = this.hooks.get();
     this.change({ ...st, places: { ...st.places, [id]: { ...st.places[id], ...p } } });
@@ -169,11 +199,21 @@ export class Toolboxes {
     close.title = `Hide ${def.title} (View > Toolboxes shows it again)`;
     close.setAttribute('aria-label', close.title);
     close.addEventListener('click', () => this.toggle(def.id, false));
-    head.append(grip, name, close);
+    if (def.id === 'details') close.title = 'Put the panel back at the right side';
+    // fold the box up to its title, and lock or unlock every toolbox, from the title bar
+    const fold = document.createElement('button');
+    fold.type = 'button';
+    fold.className = 'tb-fold';
+    fold.addEventListener('click', () => this.fold(def.id));
+    const lock = document.createElement('button');
+    lock.type = 'button';
+    lock.className = 'tb-lock';
+    lock.addEventListener('click', () => this.setLocked(!this.hooks.get().locked));
+    head.append(grip, name, lock, fold, close);
     const body = document.createElement('div');
     body.className = 'tb-body';
     f.append(head, body);
-    head.addEventListener('pointerdown', (e) => { if (e.button === 0 && e.target !== close) this.drag(def.id, f, e); });
+    head.addEventListener('pointerdown', (e) => { if (e.button === 0 && !(e.target as Element).closest('button')) this.drag(def.id, f, e); });
     head.addEventListener('contextmenu', (e) => { e.preventDefault(); this.menu(def, e.clientX, e.clientY); });
     return f;
   }
@@ -184,8 +224,9 @@ export class Toolboxes {
     const items: MenuItem[] = [
       ...DOCKS.map((d) => ({ cmd: `tbx:${d}`, label: DOCK_LABEL[d] })), null,
       { cmd: 'tbx:lock', label: st.locked ? 'Unlock Toolboxes' : 'Lock Toolboxes' },
+      { cmd: 'tbx:fold', label: st.places[def.id]?.collapsed ? 'Open Out' : 'Fold Up' },
       ...(def.id === 'custom' ? [{ cmd: 'tbx:customize', label: 'Choose What Is in It…' }] : []),
-      { cmd: 'tbx:hide', label: `Hide ${def.title}` },
+      { cmd: 'tbx:hide', label: def.id === 'details' ? 'Put Back at the Right Side' : `Hide ${def.title}` },
     ];
     showContextMenu(x, y, items, {
       key: () => undefined,
@@ -193,6 +234,7 @@ export class Toolboxes {
         const what = cmd.slice(4);
         if (what === 'lock') this.setLocked(!st.locked);
         else if (what === 'hide') this.toggle(def.id, false);
+        else if (what === 'fold') this.fold(def.id);
         else if (what === 'customize') this.hooks.customize();
         else if (DOCKS.includes(what as Dock)) {
           const r = this.frames.get(def.id)?.getBoundingClientRect();
@@ -254,6 +296,12 @@ export class Toolboxes {
   }
 }
 
+/** A padlock, shut or open, for the lock buttons (in the text colour). */
+export function lockIcon(locked: boolean, size = 16): string {
+  const shackle = locked ? 'M8 11V8a4 4 0 0 1 8 0v3' : 'M8 11V8a4 4 0 0 1 7.6-1.8';
+  return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="${shackle}"/></svg>`;
+}
+
 // ---------------------------------------------------------------- buttons for commands and tools
 
 /** A button for a menu command, named as in the top menus (with its tick shown as pressed). */
@@ -263,8 +311,11 @@ export function commandButton(cmd: string, run: (cmd: string) => void, label?: s
   b.className = 'tb-cmd';
   b.dataset.cmd = cmd;
   const top = topMenuEntry(cmd);
-  b.textContent = label ?? top?.label ?? cmd;
-  b.title = top?.label ?? cmd;
+  const name = label ?? top?.label ?? cmd;
+  const icon = commandIcon(cmd);
+  // an icon when the command has one (its name shows on hover), else the name
+  if (icon) { b.innerHTML = icon; b.classList.add('tb-icon'); b.setAttribute('aria-label', name); } else b.textContent = name;
+  b.title = top?.label ?? name;
   if (top?.checked != null) b.setAttribute('aria-pressed', String(top.checked));
   b.addEventListener('click', () => {
     run(cmd);

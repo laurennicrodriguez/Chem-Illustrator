@@ -146,3 +146,19 @@ describe('journal text from the Analysis panel', () => {
     expect(text(analysisRuns('ea', r, '[M+H]+'))).toBe('Anal. Calcd for C8H10N4O2: C, 49.48; H, 5.19; N, 28.85. Found: C, 00.00; H, 00.00; N, 00.00.');
   });
 });
+
+describe('descriptor captions (Attach Descriptors)', () => {
+  it('writes one line for each descriptor chosen, in order', async () => {
+    const { descriptorRuns } = await import('../src/ui/analysis-panel');
+    const m = RDKit.get_mol('Cn1c(=O)c2c(ncn2C)n(C)c1=O');
+    const props = panelProps(RDKit, m);
+    const d = JSON.parse(m.get_descriptors());
+    m.delete();
+    const r = { formula: 'C8H10N4O2', exact: d.exactmw, mw: d.amw, charge: 0, smiles: '', props };
+    const text = (runs: { text: string }[]) => runs.map((x) => x.text).join('');
+    expect(text(descriptorRuns(r, ['formula', 'exact', 'mw'], '[M+H]+'))).toBe('C8H10N4O2\nExact Mass: 194.0804\nMol. Wt.: 194.19');
+    expect(text(descriptorRuns(r, ['mw'], '[M+H]+'))).toBe('Mol. Wt.: 194.19');
+    expect(text(descriptorRuns(r, ['mz'], '[M+Na]+'))).toBe('m/z: 217.0696 ([M+Na]+)');
+    expect(text(descriptorRuns(r, [], '[M+H]+'))).toBe('');
+  });
+});

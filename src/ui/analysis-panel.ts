@@ -2,7 +2,7 @@
 // drawing (HRMS and elemental analysis lines, as ACS journals write them).
 
 import type { FragmentResult } from '../worker/chem-worker';
-import type { TextRun } from '../model';
+import type { DescriptorKey, TextRun } from '../model';
 import { parseAdduct, ionMz, type Adduct } from '../chem/hrms';
 import { ionCounts, isotopePattern, elementalAnalysis, type IsotopePeak } from '../chem/analysis';
 import { hillFormula } from '../chem/formula';
@@ -116,7 +116,7 @@ export function analysisHtml(r: FragmentResult, i: number, adductText: string, e
       </table>${jb.missing ? `<p class="muted small">${esc(jb.missing)}</p>` : ''}</details>`;
   }
   const buttons = `<div class="an-buttons">
-      <button type="button" data-insert="formula:${i}" title="Put the formula, exact mass and molecular weight under the structure as a caption you can edit">Add caption</button>
+      <button type="button" data-insert="formula:${i}" title="Attach the formula and masses under the structure: they follow it and update when it changes (choose what is shown in the Style panel)">Attach descriptors</button>
       ${ion ? `<button type="button" data-insert="hrms:${i}" title="Put an HRMS line under the structure (ACS style); type the found value into it">HRMS text</button>` : ''}
       ${ea ? `<button type="button" data-insert="ea:${i}" title="Put an elemental analysis line under the structure (ACS style)">Anal. text</button>` : ''}
     </div>`;
@@ -154,6 +154,44 @@ export function analysisRuns(kind: 'formula' | 'hrms' | 'ea', r: FragmentResult,
   return [
     { text: 'Anal. Calcd for ' }, f(r.formula.replace(/\d*[+−]$/, '')), { text: `: ${rep.map((x) => `${x.el}, ${x.pct.toFixed(2)}`).join('; ')}. Found: ${rep.map((x) => `${x.el}, 00.00`).join('; ')}.` },
   ];
+}
+
+/** What descriptors a structure can show, in the order offered, with their names. */
+export const DESCRIPTORS: { key: DescriptorKey; label: string }[] = [
+  { key: 'formula', label: 'Formula' },
+  { key: 'exact', label: 'Exact mass' },
+  { key: 'mw', label: 'Molecular weight' },
+  { key: 'mz', label: 'm/z of the ion' },
+  { key: 'ea', label: 'Elemental analysis (%)' },
+  { key: 'hrms', label: 'HRMS line' },
+];
+
+/** The descriptors a new descriptor caption shows: as ChemDraw's Analysis window does by default. */
+export const DEFAULT_DESCRIPTORS: DescriptorKey[] = ['formula', 'exact', 'mw'];
+
+/**
+ * A structure's descriptors as caption text, one per line: its formula, exact mass, molecular
+ * weight, m/z of the ion, elemental analysis and an HRMS line, as chosen.
+ */
+export function descriptorRuns(r: FragmentResult, show: DescriptorKey[], adductText: string): TextRun[] {
+  const out: TextRun[] = [];
+  const line = (runs: TextRun[]) => { if (out.length) out.push({ text: '\n' }); out.push(...runs); };
+  for (const k of show) {
+    if (k === 'formula') line([f(r.formula)]);
+    else if (k === 'exact') line([{ text: `Exact Mass: ${r.exact.toFixed(4)}` }]);
+    else if (k === 'mw') line([{ text: `Mol. Wt.: ${r.mw.toFixed(2)}` }]);
+    else if (k === 'mz') {
+      const ion = ionInfo(r, adductText);
+      if (ion) line([{ text: 'm/z', italic: true }, { text: `: ${ion.mz.toFixed(4)} (${ion.adduct.label.replace(/\](\d*)-$/, ']$1−')})` }]);
+    } else if (k === 'ea') {
+      const ea = analysisPercents(r);
+      if (ea) line([{ text: `Elemental Analysis: ${reported(ea).map((x) => `${x.el}, ${x.pct.toFixed(2)}`).join('; ')}` }]);
+    } else if (k === 'hrms') {
+      const runs = analysisRuns('hrms', r, adductText);
+      if (runs) line(runs);
+    }
+  }
+  return out.length ? out : [{ text: '' }];
 }
 
 /** A repeat group's unit, as the chemistry engine weighed it. */

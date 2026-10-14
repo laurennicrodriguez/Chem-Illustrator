@@ -6,9 +6,9 @@ import './app.css';
 import type { MethylStyle } from './chem/hydrogens';
 import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
-import { Toolboxes, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
+import { Toolboxes, lockIcon, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
-import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS } from './model';
+import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS, type Attachment, type HighlightStyle } from './model';
 import { Renderer, measureText } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
 import type { Align } from './editor/arrange';
@@ -16,7 +16,8 @@ import { readCdxml, ReadStats } from './io/cdxml';
 import { ChemClient } from './chem/client';
 import type { FragmentResult } from './worker/chem-worker';
 import { COMMON_ADDUCTS } from './chem/hrms';
-import { analysisHtml, analysisRuns, withRepeats, polymerHtml, type RepeatUnit } from './ui/analysis-panel';
+import { analysisHtml, analysisRuns, withRepeats, polymerHtml, descriptorRuns, DEFAULT_DESCRIPTORS, type RepeatUnit } from './ui/analysis-panel';
+import { attachedAtoms, attachWhereItIs, defaultGap, nearestStructure, placeAttached, structureSig } from './editor/attached';
 import { repeatGroups, lipDirection } from './chem/polymer';
 import { rGroupsOf, substituted, rowNumbers, parseRows, rGroupCells, type RowMass } from './chem/rgroup';
 import type { Vec } from './geom';
@@ -49,12 +50,16 @@ import { itemsToSvg } from './render/svg';
 import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc } from './render/images';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
-import { StylePanel } from './ui/style-panel';
+import { StylePanel, tidyStyle } from './ui/style-panel';
 import { TEMPLATES, Template, templateById, ownTemplates, setOwnTemplates, templateFromAtoms } from './chem/templates';
 import { addNicknames, removeNickname, isBuiltInNickname } from './chem/labels';
 import { selectedGroup } from './chem/group-smiles';
 import { templateIcon } from './ui/template-icons';
 import { StructureChecks } from './chem/warnings';
+import { idText, labelClashes, parseIdStart, type IdStyle } from './chem/compound-numbers';
+import { schemeItems } from './chem/reaction';
+import { labelsOf } from './chem/scheme-layout';
+import { plainText } from './richtext';
 import { LiveStereo } from './chem/live-stereo';
 import { setStereoShown } from './chem/stereo';
 import { keymap, registerToolNames, displayChord, actionName, chordOf, parseAction, KeyContext, KeyOverrides } from './editor/keymap';
@@ -536,19 +541,140 @@ function addNamed(got: { mb: string; attach: number[] }, x: number, y: number, t
   return ids;
 }
 
-/** Scheme > Number Compounds: ask where to start, then number the structures in scheme order. */
+/** How Number Compounds counted last time (offered again). */
+const numbering = { style: 'numbers' as IdStyle, prefix: '', suffix: '', bold: true, same: true };
+
+/**
+ * Each structure's key for "the same structure, the same ID": its canonical SMILES (with
+ * stereo), by atom. Structures the chemistry engine can't read have none.
+ */
+async function structureKeys(): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  if (!chem.ready) return out;
+  const frags = doc.fragments().filter((f) => f.size);
+  const mols = frags.map((f) => { const ex = toMolfile(doc, f); return { molblock: ex.molblock, map: ex.map }; });
+  if (!mols.length) return out;
+  const res = await chem.analyze(mols).catch(() => null);
+  frags.forEach((f, i) => {
+    const r = res?.results[i];
+    if (r && !r.error && r.smiles) for (const a of f) out.set(a, r.smiles);
+  });
+  return out;
+}
+
+/**
+ * Scheme > Number Compounds: ID labels under the selected structures (or all), in scheme order,
+ * counted as chosen; copies of one structure share an ID. Labels are tied to their structures.
+ */
 async function numberCompounds(): Promise<void> {
-  const next = editor.nextCompoundNumber();
+  const next = editor.sel.atoms.size ? editor.nextCompoundNumber() : 1;
+  const startText = idText(numbering.style, next, 0).replace(/^\d+(?=[a-z])/, '');
   const got = await ask('Number Compounds', [
-    { name: 'start', label: 'Start at', value: String(editor.sel.atoms.size ? next : 1), type: 'number' },
-    { name: 'style', label: 'Numbers', value: 'numbers', options: [{ value: 'numbers', label: '1, 2, 3 …' }, { value: 'letters', label: '1a, 1b, 1c …' }] },
-    { name: 'old', label: 'Numbers already there', value: 'renumber', options: [{ value: 'renumber', label: 'Number again' }, { value: 'keep', label: 'Keep' }] },
+    { name: 'style', label: 'Count', value: numbering.style, options: [
+      { value: 'numbers', label: '1, 2, 3 …' }, { value: 'letters', label: '1a, 1b, 1c …' }, { value: 'lower', label: 'a, b, c …' },
+      { value: 'upper', label: 'A, B, C …' }, { value: 'roman', label: 'i, ii, iii …' }, { value: 'ROMAN', label: 'I, II, III …' }] },
+    { name: 'start', label: 'Start at', value: numbering.style === 'letters' ? String(next) : startText, type: 'text', placeholder: '1, c or iii' },
+    { name: 'prefix', label: 'Before each', value: numbering.prefix, type: 'text', placeholder: 'e.g. S for S1, S2' },
+    { name: 'suffix', label: 'After each', value: numbering.suffix, type: 'text', placeholder: 'e.g. ′' },
+    { name: 'bold', label: 'Bold', value: String(numbering.bold), type: 'checkbox' },
+    { name: 'same', label: 'Same structure, same ID', value: String(numbering.same), type: 'checkbox' },
+    { name: 'old', label: 'IDs already there', value: 'renumber', options: [{ value: 'renumber', label: 'Number again' }, { value: 'keep', label: 'Keep' }] },
     { name: 'reagents', label: 'Reagents over arrows', value: 'skip', options: [{ value: 'skip', label: 'Leave unnumbered' }, { value: 'number', label: 'Number them too' }] },
-  ], { ok: 'Number', note: 'Puts a bold number under each selected structure (or every structure), following the arrows of a scheme, else left to right and top to bottom. The numbers are ordinary text you can change.' });
+  ], { ok: 'Number', note: 'Puts an ID under each selected structure (or every structure), following the arrows of a scheme, else left to right and top to bottom. Each is tied to its structure and is ordinary text you can change. For 1a, 1b, “Start at” is the number.' });
   if (!got) return;
-  const start = Math.max(0, Math.round(Number(got.start)) || 1);
-  const n = editor.numberCompounds({ start, letters: got.style === 'letters', keep: got.old === 'keep', reagents: got.reagents === 'number' });
+  const style = got.style as IdStyle;
+  const start = parseIdStart(got.start, style);
+  if (start === null) { flash(`“${got.start}” isn't a place to start counting ${style === 'roman' || style === 'ROMAN' ? 'in roman numerals' : style === 'lower' || style === 'upper' ? 'in letters' : 'from'}.`); return; }
+  Object.assign(numbering, { style, prefix: got.prefix, suffix: got.suffix, bold: got.bold === 'true', same: got.same === 'true' });
+  let keyOf: ((atoms: number[]) => string | undefined) | undefined;
+  if (numbering.same) {
+    const keys = await structureKeys();
+    keyOf = (atoms) => keys.get(atoms[0]);
+  }
+  const n = editor.numberCompounds({ start: Math.max(0, start), style, prefix: got.prefix, suffix: got.suffix, bold: numbering.bold, keep: got.old === 'keep', reagents: got.reagents === 'number', keyOf });
   if (!n) flash('No structures to number.');
+}
+
+/**
+ * Structure > Add ID Label and Add Caption: text centred under each chosen structure, tied to
+ * it, then typing straight away. An ID label is the next compound number (or the ID a copy of
+ * the structure already has).
+ */
+async function addTiedText(role: 'label' | 'caption'): Promise<void> {
+  const frags = chosenStructures();
+  if (!frags.length) { flash('Select a structure first.'); return; }
+  const m = editor.measure();
+  // copies already labelled keep their ID
+  const keys = role === 'label' && numbering.same ? await structureKeys() : new Map<number, string>();
+  const known = new Map<string, string>();
+  if (keys.size) {
+    for (const c of doc.captions.values()) {
+      if (c.attach?.role !== 'label') continue;
+      const k = c.attach.atoms.map((a) => keys.get(a)).find((x) => x);
+      if (k) known.set(k, plainText(c.runs).trim());
+    }
+  }
+  // new IDs count on in the style Number Compounds last used, skipping any already in use
+  const inUse = new Set([...doc.captions.values()].filter((c) => c.attach?.role === 'label').map((c) => plainText(c.runs).trim()));
+  const base = numbering.style === 'numbers' || numbering.style === 'letters' ? editor.nextCompoundNumber() : 1;
+  let k = 0;
+  const freshId = () => {
+    let t: string;
+    do t = idText(numbering.style, base, k++, numbering.prefix, numbering.suffix); while (inUse.has(t));
+    inUse.add(t);
+    return t;
+  };
+  const made: number[] = [];
+  doc.edit(role === 'label' ? 'Add ID label' : 'Add caption', () => {
+    for (const f of frags) {
+      const k = keys.get([...f][0]);
+      const text = role === 'caption' ? '' : (k && known.get(k)) || freshId();
+      if (k && role === 'label' && !known.has(k)) known.set(k, text);
+      const c = doc.addCaption({ x: 0, y: 0, runs: [{ text, bold: role === 'label' && numbering.bold ? true : undefined }], justify: 'center',
+        attach: { atoms: [...f], side: 'below', gap: defaultGap(doc), shift: 0, role } });
+      placeAttached(doc, c, m);
+      made.push(c.id);
+    }
+  });
+  editor.changed();
+  // type into the first (the others are selected, to style together)
+  if (made.length === 1) editor.typeInto(made[0]);
+  else { editor.clearSelection(); for (const id of made) editor.sel.captions.add(id); editor.changed(); }
+}
+
+// ---------------------------------------------------------------- labels that clash
+
+/** Captions whose compound label is also used for a different structure, with the warning to show. */
+let labelWarnings = new Map<number, string>();
+let labelWarnVersion = 0, labelCheckTimer = 0, labelCheckedAt = -1;
+
+/** Look for one ID used under different structures (shortly after each change). */
+function scheduleLabelCheck(): void {
+  if (labelCheckedAt === doc.version) return;
+  clearTimeout(labelCheckTimer);
+  labelCheckTimer = window.setTimeout(() => void checkLabels(), 400);
+}
+
+async function checkLabels(): Promise<void> {
+  const version = doc.version;
+  const items = schemeItems(doc, editor.measure());
+  const labels = labelsOf(items, new Set(), doc, doc.style.bondLength);
+  let found = new Map<number, string>();
+  if (labels.size > 1) {
+    const keys = await structureKeys();
+    if (doc.version !== version) { scheduleLabelCheck(); return; }
+    const list: { caption: number; text: string; key?: string }[] = [];
+    for (const [it, caps] of labels) {
+      for (const c of caps) {
+        const cap = doc.captions.get(c.caption!);
+        if (cap && !cap.ignoreWarnings) list.push({ caption: cap.id, text: plainText(cap.runs), key: keys.get(it.atoms[0]) });
+      }
+    }
+    found = labelClashes(list);
+  }
+  labelCheckedAt = version;
+  const same = found.size === labelWarnings.size && [...found].every(([k, v]) => labelWarnings.get(k) === v);
+  if (!same) { labelWarnings = found; labelWarnVersion++; updateWarnings(); }
 }
 
 editor.askChainLength = async (last) => {
@@ -948,6 +1074,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   for (const el of document.querySelectorAll<HTMLElement>('.design-only')) el.hidden = !design;
   document.body.classList.toggle('sheet-mode', sheet);
   document.body.classList.toggle('doc-mode', words);
+  placeSidePanel();
   applyModeColours(tab.mode, modeColours);
   for (const el of document.querySelectorAll<HTMLElement>('.slides-only')) el.hidden = !slides;
   showSheetParts();
@@ -2052,7 +2179,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['edit-palettes', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-custom', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-custom', 'toolbox-details', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'show-stereo', 'clipboard-formats', 'split-view']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
@@ -2179,22 +2306,28 @@ const COMMANDS: Record<string, () => unknown> = {
   'typing-spelling': () => typingDialog.open(),
   'mode-colours': () => modeDialog.open(),
   'edit-palettes': () => editPalettes(),
+  preferences: () => void openPreferences(),
   'toolbox-main': () => toolboxes.toggle('main'),
   'toolbox-structure': () => toolboxes.toggle('structure'),
   'toolbox-arrange': () => toolboxes.toggle('arrange'),
   'toolbox-templates': () => toolboxes.toggle('templates'),
   'toolbox-colours': () => toolboxes.toggle('colours'),
   'toolbox-custom': () => toolboxes.toggle('custom'),
+  'toolbox-details': () => toolboxes.toggle('details'),
+  'fold-side': () => toolboxes.setSideCollapsed(!toolboxState.sideCollapsed),
   'customize-toolbox': () => openCustomToolbox(),
   'lock-toolboxes': () => { toolboxes.setLocked(!toolboxState.locked); flash(toolboxState.locked ? 'Toolboxes locked.' : 'Toolboxes unlocked: drag one by its title to an edge of the drawing to dock it, or anywhere else to float.', 6000); },
   'add-frame': () => editor.addFrame() || flash('Select what to frame: structures, text, arrows or shapes.'),
   'fill-rings': () => flash(editor.fillRings(), 6000),
-  'highlight': () => editor.highlight(highlightColour) ? flash('Highlighted. Change the colour with Highlight in the Style panel.', 5000) : flash('Select the atoms and bonds to highlight.'),
+  'highlight': () => editor.highlight(highlightColour, highlightStyle) ? flash('Highlighted. Change the colour with Highlight in the Style panel.', 5000) : flash('Select the atoms and bonds to highlight.'),
   'remove-highlight': () => editor.highlight(undefined) || flash('Select the atoms and bonds to take the highlight off.'),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
   'arrange-scheme': () => arrangeDialog.open(),
   'number-compounds': () => void numberCompounds(),
+  'attach-descriptors': () => void attachDescriptors(),
+  'add-id-label': () => void addTiedText('label'),
+  'add-caption': () => void addTiedText('caption'),
   'bring-front': () => editor.setBondLayer(true) || flash('Select the bond to bring to the front (where bonds cross, the one behind has a gap).'),
   'send-back': () => editor.setBondLayer(false) || flash('Select the bond to send to the back (where bonds cross, the one behind has a gap).'),
   'save-template': () => void saveTemplate(),
@@ -2202,7 +2335,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'define-nickname': () => void defineNickname(),
   'delete-nickname': () => void deleteNickname(),
   'contract-label': () => void contractLabel(),
-  'chain-ends': () => flash(editor.toggleChainEnds(), 5000),
+  'chain-ends': () => void toggleTerminalMethyls(),
   'methyls-ch3': () => chooseMethylStyle('CH3'),
   'methyls-me': () => chooseMethylStyle('Me'),
   'explicit-h': () => flash(editor.toggleHydrogens(), 6000),
@@ -2563,6 +2696,8 @@ applySplitWidth();
 
 /** The colour Structure > Highlight uses: the one last chosen in the Style panel (a soft yellow at first). */
 let highlightColour = '#ffe680';
+/** The look new highlights take: the one last chosen in the Style panel. */
+let highlightStyle: HighlightStyle | undefined;
 
 /** Tick the chosen way of writing terminal methyls in the Structure menu. */
 function tickMethylStyle(): void {
@@ -2577,6 +2712,37 @@ function chooseMethylStyle(style: MethylStyle): void {
   storeSettings();
   const how = style === 'Me' ? 'Me' : 'CH₃';
   flash(n ? `${n} terminal methyl${n > 1 ? 's' : ''} now written ${how}.` : `Show Terminal Methyls will write them as ${how}.`, 5000);
+}
+
+/** Ask before a command with nothing selected changes every structure on the page (Edit > Preferences). */
+let askWholeDrawing = true;
+
+/**
+ * Show Terminal Methyls: on the selection, or with nothing selected on every structure, after
+ * asking when there are several (some may be meant one way and some the other).
+ */
+async function toggleTerminalMethyls(): Promise<void> {
+  const doc = editor.doc;
+  if (!editor.sel.atoms.size && askWholeDrawing && doc.fragments().length > 1) {
+    const r = await ask('Every structure on the page?', [
+      { name: 'again', label: 'Don\u2019t ask again (Edit > Preferences)', type: 'checkbox', value: 'false' },
+    ], { ok: 'Change every structure', note: 'Nothing is selected, so this shows or hides the terminal methyls on every structure on the page. To change only some, cancel and select them first.' });
+    if (!r) return;
+    if (r.again === 'true') { askWholeDrawing = false; storeSettings(); }
+  }
+  flash(editor.toggleChainEnds(), 5000);
+}
+
+/** Edit > Preferences: drawing choices that are set once rather than per structure. */
+async function openPreferences(): Promise<void> {
+  const r = await ask('Preferences', [
+    { name: 'methyl', label: 'Terminal methyls written as', value: editor.options.methylStyle, options: [{ value: 'Me', label: 'Me' }, { value: 'CH3', label: 'CH3' }] },
+    { name: 'ask', label: 'Ask before changing every structure on the page when nothing is selected', type: 'checkbox', value: String(askWholeDrawing) },
+  ], { ok: 'Save', note: 'Show Terminal Methyls writes them this way; methyls already written out in the selection (or the whole drawing, with nothing selected) change too.' });
+  if (!r) return;
+  askWholeDrawing = r.ask === 'true';
+  if (r.methyl !== editor.options.methylStyle) chooseMethylStyle(r.methyl as MethylStyle);
+  else storeSettings();
 }
 
 let settingsLoaded = false;
@@ -2606,6 +2772,7 @@ function storeSettings(): void {
     citeStyle: preferredStyle().style,
     citeOptions: preferredStyle().options,
     methylStyle: editor.options.methylStyle,
+    askWholeDrawing,
     palettes: getPalettes(),
     toolboxes: toolboxState,
   };
@@ -2716,10 +2883,12 @@ void loadSettings().then((s) => {
   applySplitWidth();
   setPreferredStyle(s.citeStyle, s.citeOptions);
   editor.options.methylStyle = s.methylStyle;
+  askWholeDrawing = s.askWholeDrawing;
   setPalettes(s.palettes);
   toolboxState = s.toolboxes;
   toolboxes.render();
   tickToolboxes();
+  placeSidePanel();
   tickMethylStyle();
   settingsLoaded = true;
   refreshKeys();
@@ -2896,6 +3065,7 @@ $('#analysis-body').addEventListener('click', (e) => {
   if (!b || !lastAnalysis) return;
   const [kind, n] = b.dataset.insert!.split(':');
   const r = lastAnalysis.results[Number(n)], frag = lastAnalysis.frags[Number(n)];
+  if (kind === 'formula') { if (frag) void attachDescriptors([frag]); return; }
   const runs = r && analysisRuns(kind as 'formula' | 'hrms' | 'ea', r, adductSel.value);
   if (!runs || !frag) return;
   // under the structure, lined up with its left edge
@@ -2912,6 +3082,89 @@ $('#analysis-body').addEventListener('click', (e) => {
 });
 let analysisSeq = 0;
 let analysisKey = '';
+
+// ---------------------------------------------------------------- captions tied to structures
+
+/** The structures to work on: those with atoms selected, else the one last drawn on. */
+function chosenStructures(): Set<number>[] {
+  const roots = editor.sel.atoms.size ? [...editor.sel.atoms] : editor.lastEdited !== null && doc.atoms.has(editor.lastEdited) ? [editor.lastEdited] : [];
+  const out: Set<number>[] = [];
+  const seen = new Set<number>();
+  for (const r of roots) {
+    if (seen.has(r)) continue;
+    const f = doc.fragmentOf(r);
+    for (const x of f) seen.add(x);
+    out.push(f);
+  }
+  return out;
+}
+
+/** A structure's formula and masses from the chemistry engine (null when it can't be worked out). */
+async function weigh(atoms: Set<number>): Promise<FragmentResult | null> {
+  if (!chem.ready || !atoms.size) return null;
+  const ex = toMolfile(doc, atoms);
+  const res = await chem.analyze([{ molblock: ex.molblock, map: ex.map }]).catch(() => null);
+  const r = res?.results[0];
+  return r && !r.error ? r : null;
+}
+
+/**
+ * Structure > Attach Descriptors (and the Analysis panel's button): the formula and masses under
+ * each structure, tied to it. They follow it, and are worked out again when it changes; the Style
+ * panel chooses what they show and where they sit.
+ */
+async function attachDescriptors(frags = chosenStructures()): Promise<void> {
+  if (!frags.length) { flash('Select a structure first.'); return; }
+  if (!chem.ready) { flash('The chemistry engine is still loading. Try again in a moment.'); return; }
+  const made: number[] = [];
+  const weighed = await Promise.all(frags.map((f) => weigh(f)));
+  doc.edit('Attach descriptors', () => {
+    frags.forEach((f, i) => {
+      const r = weighed[i];
+      if (!r) return;
+      const adduct = adductSel.value;
+      const runs = descriptorRuns(r, DEFAULT_DESCRIPTORS, adduct);
+      const attach: Attachment = { atoms: [...f], side: 'below', gap: defaultGap(doc), shift: 0, role: 'descriptors', show: [...DEFAULT_DESCRIPTORS], adduct, sig: structureSig(doc, f) };
+      const c = doc.addCaption({ x: 0, y: 0, runs, justify: 'center', attach });
+      placeAttached(doc, c, editor.measure());
+      made.push(c.id);
+    });
+  });
+  if (!made.length) { flash('Couldn\'t work out the formula of that structure.'); return; }
+  editor.clearSelection();
+  for (const id of made) editor.sel.captions.add(id);
+  editor.changed();
+  flash('Attached the formula and masses. They follow the structure and update when it changes; choose what they show in the Style panel.', 7000);
+}
+
+let descriptorBusy = false, descriptorAgain = false;
+/** Work out tied descriptors again for structures that changed (the new text joins the change that caused it). */
+async function refreshDescriptors(): Promise<void> {
+  if (descriptorBusy) { descriptorAgain = true; return; }
+  descriptorBusy = true;
+  try {
+    do {
+      descriptorAgain = false;
+      for (const c of [...doc.captions.values()]) {
+        const a = c.attach;
+        if (a?.role !== 'descriptors' || a.keepText) continue;
+        const atoms = attachedAtoms(doc, a);
+        const sig = structureSig(doc, atoms);
+        if (!atoms.size || sig === a.sig) continue;
+        const version = doc.version;
+        const r = await weigh(atoms);
+        // something else changed meanwhile: look again from the start
+        if (doc.version !== version) { descriptorAgain = true; break; }
+        const now = doc.captions.get(c.id);
+        if (!r || !now?.attach) continue;
+        doc.amend('Descriptors', () => doc.updateCaption(c.id, { runs: descriptorRuns(r, now.attach!.show ?? DEFAULT_DESCRIPTORS, now.attach!.adduct ?? adductSel.value), attach: { ...now.attach!, sig } }));
+        editor.changed();
+      }
+    } while (descriptorAgain);
+  } finally {
+    descriptorBusy = false;
+  }
+}
 
 function scheduleAnalysis(force = false): void {
   clearTimeout(analysisTimer);
@@ -3201,11 +3454,12 @@ function updateWarnings(): void {
   } else warnTip.hidden = true;
 
   // the list, redone only when the warnings or the drawing changed
-  const key = checks.version + ':' + doc.version;
+  const key = checks.version + ':' + doc.version + ':' + labelWarnVersion;
   if (key === warnKey) return;
   warnKey = key;
-  const list = checks.list();
-  const ignored = checks.ignoredCount();
+  const list: { kind: 'atom' | 'bond' | 'caption'; id: number; text: string[] }[] = checks.list();
+  for (const [id, text] of labelWarnings) if (doc.captions.has(id)) list.push({ kind: 'caption', id, text: [text] });
+  const ignored = checks.ignoredCount() + [...doc.captions.values()].filter((c) => c.ignoreWarnings).length;
   $('#warnings-count').textContent = list.length ? String(list.length) : '';
   const MAX = 100;
   const rows = list.slice(0, MAX).map((w, i) =>
@@ -3223,7 +3477,8 @@ function updateWarnings(): void {
       const w = items[Number(b.dataset.i)];
       doc.edit('Ignore warning', () => {
         if (w.kind === 'atom') doc.updateAtom(w.id, { ignoreWarnings: true });
-        else doc.updateBond(w.id, { ignoreWarnings: true });
+        else if (w.kind === 'bond') doc.updateBond(w.id, { ignoreWarnings: true });
+        else doc.updateCaption(w.id, { ignoreWarnings: true });
       });
       editor.changed();
     });
@@ -3232,6 +3487,7 @@ function updateWarnings(): void {
     doc.edit('Show ignored warnings', () => {
       for (const id of checks.atoms.keys()) if (doc.atoms.get(id)?.ignoreWarnings) doc.updateAtom(id, { ignoreWarnings: false });
       for (const id of checks.bonds.keys()) if (doc.bonds.get(id)?.ignoreWarnings) doc.updateBond(id, { ignoreWarnings: false });
+      for (const c of doc.captions.values()) if (c.ignoreWarnings) doc.updateCaption(c.id, { ignoreWarnings: undefined });
     });
     editor.changed();
   });
@@ -3284,6 +3540,24 @@ function updatePanels(): void {
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
+stylePanel.tie = (ids) => tieCaptions(ids);
+
+/** Tie captions to the structure nearest each, where they sit now (Style panel). */
+function tieCaptions(ids: number[]): void {
+  const m = editor.measure();
+  let n = 0;
+  doc.edit('Tie caption to structure', () => {
+    for (const id of ids) {
+      const c = doc.captions.get(id);
+      if (!c) continue;
+      const f = nearestStructure(doc, m.captionBox(c), m);
+      const a = f && attachWhereItIs(doc, c, f, m, 'caption');
+      if (a) { doc.updateCaption(id, { attach: a }); n++; }
+    }
+  });
+  editor.changed();
+  flash(n ? 'Tied: the caption now follows its structure.' : 'There is no structure to tie it to.');
+}
 // ---------------------------------------------------------------- right-click menu on the drawing
 
 /**
@@ -3325,7 +3599,7 @@ function drawingMenu(): MenuItem[] {
     ...(atoms ? [
       { cmd: 'clean-up' },
       { label: 'Structure', items: [
-        { cmd: 'stereo-labels' }, { cmd: 'aromatic-circles' }, { cmd: 'chain-ends' }, { cmd: 'methyls-ch3' }, { cmd: 'methyls-me' }, { cmd: 'explicit-h' }, null,
+        { cmd: 'stereo-labels' }, { cmd: 'aromatic-circles' }, { cmd: 'chain-ends' }, { cmd: 'explicit-h' }, null,
         { cmd: 'contract-label' }, { cmd: 'join' }, { cmd: 'bring-front' }, { cmd: 'send-back' }, null,
         { cmd: 'enhanced-stereo' }, { cmd: 'chiral-flag' }, { cmd: 'repeat-group' }, { cmd: 'rgroup-table' }, null,
         { cmd: 'check-structure' }, { cmd: 'save-template' }, { cmd: 'define-nickname' },
@@ -3334,6 +3608,8 @@ function drawingMenu(): MenuItem[] {
     ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] }] : []),
     null,
     { cmd: 'add-frame' },
+    ...(atoms ? [{ label: 'Label the Structure', items: [{ cmd: 'add-id-label' }, { cmd: 'add-caption' }, { cmd: 'attach-descriptors' }, null, { cmd: 'number-compounds' }] }] : []),
+    { cmd: 'scale' },
     ...(atoms ? [{ label: 'Highlight and Fill', items: [{ cmd: 'highlight' }, { cmd: 'remove-highlight' }, null, { cmd: 'fill-rings' }] }] : []),
     { label: 'Align', items: arrange },
     { label: 'Rotate or Flip', items: turn },
@@ -3357,6 +3633,7 @@ stylePanel.removeWhite = (ids) => void removeWhite(ids);
 stylePanel.frames = { add: () => void command('add-frame'), fit: (id) => editor.fitFrame(id) };
 stylePanel.ringFill = () => void command('fill-rings');
 stylePanel.highlightUsed = (c) => { highlightColour = c; };
+stylePanel.highlightStyleUsed = (st) => { highlightStyle = tidyStyle(st); };
 
 // ---------------------------------------------------------------- toolboxes (View > Toolboxes)
 
@@ -3401,14 +3678,17 @@ const cmdRow = (body: HTMLElement, cmds: (string | [string, string] | null)[]) =
 /** What the Colours toolbox's swatches do: colour the lines and text, highlight, or fill. */
 let colourMode: 'line' | 'highlight' | 'fill' = 'line';
 
+/** The side panel's contents: in the panel at the right, or in the "details" toolbox when taken out. */
+const sideContent = $('#side-content');
+
 const TOOLBOX_DEFS: ToolboxDef[] = [
   { id: 'main', title: 'Drawing Tools', build: (body) => body.append(toolsNav) },
   {
     id: 'structure', title: 'Structure',
-    build: (body) => cmdRow(body, ['clean-up', 'add-frame', 'fill-rings', 'highlight', 'remove-highlight', null, 'chain-ends', ['methyls-ch3', 'Methyls as CH3'], ['methyls-me', 'Methyls as Me'], 'explicit-h', 'aromatic-circles', 'stereo-labels', null, 'contract-label', 'check-structure', 'name-to-structure', 'periodic-table']),
+    build: (body) => cmdRow(body, ['clean-up', 'add-frame', 'fill-rings', 'highlight', 'remove-highlight', null, 'chain-ends', 'explicit-h', 'aromatic-circles', 'stereo-labels', null, 'add-id-label', 'add-caption', 'attach-descriptors', 'number-compounds', null, 'contract-label', 'name-to-structure']),
   },
   {
-    id: 'arrange', title: 'Arrange',
+    id: 'arrange', title: 'Object',
     build: (body) => cmdRow(body, ['align-left', 'align-hcenter', 'align-right', 'align-top', 'align-vcenter', 'align-bottom', null, 'distribute-h', 'distribute-v', null, 'flip-h', 'flip-v', 'rotate-cw', 'rotate-ccw', null, 'shape-front', 'shape-back']),
   },
   {
@@ -3479,18 +3759,45 @@ const TOOLBOX_DEFS: ToolboxDef[] = [
   },
 ];
 
+TOOLBOX_DEFS.push({ id: 'details', title: 'Side Panel', build: (body) => body.append(sideContent) });
+
 const toolboxes = new Toolboxes(TOOLBOX_DEFS, {
   get: () => toolboxState,
-  set: (st) => { toolboxState = st; tickToolboxes(); storeSettings(); },
+  set: (st) => { toolboxState = st; tickToolboxes(); storeSettings(); placeSidePanel(); },
   work: () => $('#work'),
   customize: () => openCustomToolbox(),
 });
 
-/** Tick the shown toolboxes and the lock in the View menu. */
+/** Tick the shown toolboxes and the lock in the View menu, and show the lock on its button. */
 function tickToolboxes(): void {
-  for (const id of ['main', 'structure', 'arrange', 'templates', 'colours', 'custom'] as ToolboxId[]) $(`[data-cmd="toolbox-${id}"]`)?.setAttribute('aria-checked', String(!!toolboxState.places[id]?.shown));
+  for (const id of ['main', 'structure', 'arrange', 'templates', 'colours', 'custom', 'details'] as ToolboxId[]) $(`[data-cmd="toolbox-${id}"]`)?.setAttribute('aria-checked', String(!!toolboxState.places[id]?.shown));
   $('[data-cmd="lock-toolboxes"]')?.setAttribute('aria-checked', String(toolboxState.locked));
+  $('[data-cmd="fold-side"]')?.setAttribute('aria-checked', String(toolboxState.sideCollapsed));
+  const lock = $('#btn-lock');
+  lock.setAttribute('aria-pressed', String(toolboxState.locked));
+  lock.querySelector('.lock-icon')!.innerHTML = lockIcon(toolboxState.locked);
+  lock.querySelector('.lock-text')!.textContent = toolboxState.locked ? 'Locked' : 'Unlocked';
 }
+
+/**
+ * Put the side panel's contents where they belong: in the "details" toolbox when it is taken out
+ * (drawings, slides and designs), else in the panel at the right, open or folded to a strip.
+ */
+function placeSidePanel(): void {
+  const b = document.body.classList;
+  const out = !!toolboxState.places.details?.shown && !((b.contains('sheet-mode') || b.contains('doc-mode')) && !b.contains('floating-drawing') && !b.contains('split-view'));
+  b.toggle('side-out', out);
+  b.toggle('side-collapsed', toolboxState.sideCollapsed && !out);
+  const aside = $('aside');
+  if (!out && sideContent.parentElement !== aside) aside.append(sideContent);
+  if (out && sideContent.parentElement === aside) toolboxes.render();
+  const fold = $('#side-fold');
+  fold.textContent = toolboxState.sideCollapsed ? '‹' : '›';
+  fold.title = toolboxState.sideCollapsed ? 'Open the side panel (View > Fold Side Panel)' : 'Fold the side panel away (View > Fold Side Panel)';
+  fold.setAttribute('aria-label', fold.title);
+}
+$('#side-fold').addEventListener('click', () => toolboxes.setSideCollapsed(!toolboxState.sideCollapsed));
+$('#btn-lock').addEventListener('click', () => command('lock-toolboxes'));
 
 function openCustomToolbox(): void {
   const tools: Pickable[] = [...ALL_TOOLS].map(([name, t]) => ({ key: `tool:${name}`, label: t.title.split(/[.:] /)[0], icon: t.icon }));
@@ -3505,6 +3812,7 @@ function openCustomToolbox(): void {
 
 toolboxes.render();
 tickToolboxes();
+placeSidePanel();
 // your palettes show in the Colours toolbox as soon as they change
 onPalettes(() => { if (toolboxState.places.colours?.shown) toolboxes.render(); });
 stylePanel.reaction = {
@@ -3544,7 +3852,7 @@ editor.onFrame = () => {
   updateWarnings();
   if (doc.version !== stereoSeen) { stereoSeen = doc.version; updateStereo(); }
 };
-editor.onChange = () => { updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); };
+editor.onChange = () => { updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); void refreshDescriptors(); scheduleLabelCheck(); };
 chem.onReady = () => {
   (window as any).__chemReadyMs = performance.now() - startMs;
   sheetChem.flush();

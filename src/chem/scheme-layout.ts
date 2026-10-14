@@ -49,9 +49,17 @@ function rolesFor(r: Arrow, items: Item[], bond: number): StepRoles {
 export function labelsOf(items: Item[], used: Set<Item>, doc: Doc, bond: number): Map<Item, Item[]> {
   const out = new Map<Item, Item[]>();
   const structures = items.filter((it) => it.atoms.length);
+  const byAtom = new Map<number, Item>();
+  for (const s of structures) for (const a of s.atoms) byAtom.set(a, s);
   for (const it of items) {
     if (it.caption === undefined || used.has(it) || it.plus) continue;
     const c = doc.captions.get(it.caption)!;
+    // an ID label tied to a structure is its label wherever it sits; other tied captions aren't labels
+    if (c.attach) {
+      const s = c.attach.role === 'label' ? c.attach.atoms.map((a) => byAtom.get(a)).find((x) => x) : undefined;
+      if (s) out.set(s, [...(out.get(s) ?? []), it]);
+      continue;
+    }
     const text = plainText(c.runs).trim();
     // compound numbers are short: 1, 2a, (±)-3
     if (text.length > 8 || text.includes('\n')) continue;

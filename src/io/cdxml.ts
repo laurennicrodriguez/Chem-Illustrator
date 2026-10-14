@@ -3,6 +3,8 @@
 // charge symbols). Anything not understood yet is counted and skipped, never fatal.
 
 import { fillFrameMembers, frameFromTag } from '../editor/frames';
+import { ATTACH_TAG, IGNORE_TAG, attachFromTag, fillAttachments } from '../editor/attached';
+import { highlightStyleFromTag } from '../render/highlight';
 import { attachRingFills } from '../chem/ring-fill';
 import { lipDirection } from '../chem/polymer';
 import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, CHIRAL_FLAGS } from '../model';
@@ -205,6 +207,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       if (groupTag) extra.group = groupTag;
       const hlA = kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === HIGHLIGHT_TAG)?.getAttribute('Value');
       if (hlA && /^#[0-9a-f]{6}$/i.test(hlA)) extra.highlight = hlA.toLowerCase();
+      const lookA = highlightStyleFromTag(kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === HIGHLIGHT_LOOK_TAG)?.getAttribute('Value'));
+      if (lookA && extra.highlight) extra.hl = lookA;
       if (n.getAttribute('ShowTerminalCarbonLabels') === 'yes' || n.getAttribute('ShowNonTerminalCarbonLabels') === 'yes') extra.showCarbon = true;
       const atomNumber = n.getAttribute('AtomNumber');
       if (atomNumber) extra.atomNumber = atomNumber;
@@ -285,6 +289,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       if (c) extra.color = c;
       const hlB = kids(b).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === HIGHLIGHT_TAG)?.getAttribute('Value');
       if (hlB && /^#[0-9a-f]{6}$/i.test(hlB)) extra.highlight = hlB.toLowerCase();
+      const lookB = highlightStyleFromTag(kids(b).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === HIGHLIGHT_LOOK_TAG)?.getAttribute('Value'));
+      if (lookB && extra.highlight) extra.hl = lookB;
       const bond = doc.addBond(a1, a2, order, display, extra);
       from('b', bond.id, b);
       stats.bonds++;
@@ -334,6 +340,9 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     if (wrap !== undefined) extra.wrap = wrap;
     if (back.paras) extra.paras = back.paras;
     if (back.lineSpacing) { extra.lineSpacing = back.lineSpacing; lineHeight = undefined; }
+    const attach = attachFromTag(kids(t).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === ATTACH_TAG)?.getAttribute('Value') ?? null);
+    if (attach) extra.attach = attach;
+    if (kids(t).some((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === IGNORE_TAG)) extra.ignoreWarnings = true;
     return { x, y: py, runs: back.runs, justify, width, lineHeight, ...extra };
   };
 
@@ -703,6 +712,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     }
     attachRingFills(doc);
     fillFrameMembers(doc);
+    fillAttachments(doc);
   });
   doc.reserveIds(maxId);
   const orig = new Map<string, Entity>();
@@ -833,11 +843,14 @@ export function fillExtras(v: Partial<Shape>): Partial<Shape> {
   if (typeof v.pattern === 'string' && patterns.includes(v.pattern)) out.pattern = v.pattern;
   if (hex(v.patternColor)) out.patternColor = hex(v.patternColor);
   if (typeof v.patternSize === 'number' && v.patternSize > 0 && v.patternSize < 100) out.patternSize = v.patternSize;
+  if (v.patternClear === true) out.patternClear = true;
   return out;
 }
 
 /** A highlight behind an atom or bond: its colour (ChemDraw has no highlights, so it shows nothing). */
 export const HIGHLIGHT_TAG = 'Chem Illustrator highlight';
+/** How a highlight is drawn (its shape, size, shadow…), when not the usual look. */
+export const HIGHLIGHT_LOOK_TAG = 'Chem Illustrator highlight look';
 /** The tag that keeps a contracted label's group (SMILES), so its chemistry comes back with the file. */
 export const GROUP_TAG = 'Chem Illustrator group';
 /** The tag on the group that draws a design shape in ChemDraw: the shape as it is here. */

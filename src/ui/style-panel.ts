@@ -3,7 +3,10 @@
 // bond (label, charge, atom number; order and style).
 // Anything the drawing tools set automatically can be changed here by hand.
 
-import { Doc, Arrow, Shape, Caption, Atom, Bond, type StepRoles, type Pattern } from '../model';
+import { Doc, Arrow, Shape, Caption, Atom, Bond, type StepRoles, type Pattern, type AttachSide, type Attachment, type DescriptorKey, type HighlightShape, type HighlightStyle } from '../model';
+import { fullStyle } from '../render/highlight';
+import { DESCRIPTORS } from './analysis-panel';
+import { COMMON_ADDUCTS } from '../chem/hrms';
 import { PATTERNS, patternSpacing } from '../render/fills';
 import type { Role } from '../chem/reaction';
 import { setStereoShown, setStereoText } from '../chem/stereo';
@@ -13,6 +16,8 @@ import { DEG } from '../geom';
 import { isCircle, cropTo } from '../objects';
 import { GEOS, geoDef } from '../design/geo';
 import { nextNumber } from '../chem/sprouts';
+import { ringFillsOn } from '../chem/ring-fill';
+import { frameMembers } from '../editor/frames';
 import { methylState, writeTerminalMethyls, type MethylStyle } from '../chem/hydrogens';
 import type { TableData } from '../model';
 import { deleteColumn, deleteRow, fitColumns, insertColumn, insertRow, setColumnAlign, setColumnWidth, setSpan, spanOf, type TablePart } from '../table';
@@ -51,6 +56,8 @@ const LINES: Opt<Arrow['line']>[] = [['solid', 'Solid'], ['dashed', 'Dashed'], [
 const SHAFTS: Opt<string>[] = [['one', 'One line'], ['equilibrium', 'Equilibrium (two half arrows)'], ['retro', 'Retrosynthetic (double line)']];
 const BRACKETS: Opt<NonNullable<Shape['bracket']>>[] = [['square', 'Square [ ]'], ['round', 'Round ( )'], ['curly', 'Curly { }']];
 const VALIGN: Opt<NonNullable<Shape['textValign']>>[] = [['top', 'Top'], ['middle', 'Middle'], ['bottom', 'Bottom']];
+const HL_SHAPES: Opt<HighlightShape>[] = [['round', 'Round (discs and bands)'], ['diamond', 'Diamond'], ['square', 'Square']];
+const SIDES: Opt<AttachSide>[] = [['below', 'Below'], ['above', 'Above'], ['left', 'Left'], ['right', 'Right']];
 const JUSTIFY: Opt<Caption['justify']>[] = [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']];
 const TABLE_LINES: Opt<TableData['lines']>[] = [['acs', 'ACS style (rules above and below the headings, and at the end)'], ['grid', 'Every cell boxed'], ['none', 'None']];
 
@@ -78,6 +85,8 @@ export class StylePanel {
   frames: { add(): void; fit(shapeId: number): void } | null = null;
   /** A highlight colour was chosen (the app remembers it for Structure > Highlight). */
   highlightUsed: (colour: string) => void = () => {};
+  /** The look last chosen for highlights (new highlights take it). */
+  highlightStyleUsed: (style: HighlightStyle) => void = () => {};
   /** Fill the rings in the selection (set up by the app). */
   ringFill: (() => void) | null = null;
   /** Make a picture's white background see-through (set up by the app). */
@@ -88,6 +97,8 @@ export class StylePanel {
   tables: TableHooks | null = null;
   /** Reaction step commands (set up by the app). */
   reaction: ReactionHooks | null = null;
+  /** Tie captions to the structure nearest each (Tie to Structure). */
+  tie: ((captionIds: number[]) => void) | null = null;
 
   constructor(private section: HTMLElement, private body: HTMLElement, private doc: Doc, private sel: () => Selection, private changed: () => void) {}
 
@@ -102,7 +113,13 @@ export class StylePanel {
     this.body.textContent = '';
     const arrows = [...s.arrows].map((id) => this.doc.arrows.get(id)).filter((x): x is Arrow => !!x);
     const all = [...s.shapes].map((id) => this.doc.shapes.get(id)).filter((x): x is Shape => !!x && !x.picture);
-    const shapes = all.filter((x) => x.kind !== 'picture' && x.kind !== 'table'), pictures = all.filter((x) => x.kind === 'picture');
+    const shapes = all.filter((x) => x.kind !== 'picture' && x.kind !== 'table' && x.kind !== 'ring'), pictures = all.filter((x) => x.kind === 'picture');
+    // ring fills get their own section, with those on the selected structures and on the
+    // structures inside selected frames, so they can be changed without picking them out
+    const under = new Set(s.atoms);
+    for (const x of all) if (x.frame) for (const id of frameMembers(this.doc, x.frame).atoms) under.add(id);
+    const ringIds = new Set([...all.filter((x) => x.kind === 'ring').map((x) => x.id), ...ringFillsOn(this.doc, under)]);
+    const rings = [...ringIds].map((id) => this.doc.shapes.get(id)).filter((x): x is Shape => !!x);
     const tables = all.filter((x) => x.kind === 'table' && x.table);
     const caps = [...s.captions].map((id) => this.doc.captions.get(id)).filter((x): x is Caption => !!x);
     // stereocentres and E/Z double bonds among the selected atoms and bonds
@@ -112,7 +129,7 @@ export class StylePanel {
     // one atom or one bond on its own (as after / or ? over it)
     const atom = s.atoms.size === 1 && !s.bonds.size ? this.doc.atoms.get([...s.atoms][0]) : undefined;
     const bond = s.bonds.size === 1 && s.atoms.size <= 2 ? this.doc.bonds.get([...s.bonds][0]) : undefined;
-    this.section.hidden = !arrows.length && !shapes.length && !pictures.length && !tables.length && !caps.length && !centres.length && !dbls.length && !atom && !bond;
+    this.section.hidden = !arrows.length && !shapes.length && !rings.length && !pictures.length && !tables.length && !caps.length && !centres.length && !dbls.length && !atom && !bond;
     const selAtoms = [...s.atoms].map((id) => this.doc.atoms.get(id)).filter((a): a is Atom => !!a);
     const selBonds = [...s.bonds].map((id) => this.doc.bonds.get(id)).filter((b): b is Bond => !!b);
     const several = !atom && !bond && selAtoms.length + selBonds.length > 1;
@@ -122,6 +139,7 @@ export class StylePanel {
     if (several) this.structureControls(selAtoms, selBonds);
     if (arrows.length) this.arrowControls(arrows);
     if (shapes.length) this.shapeControls(shapes);
+    if (rings.length) this.shapeControls(rings, rings.length > 1 ? `${rings.length} ring fills` : 'Ring fill');
     if (pictures.length) this.pictureControls(pictures);
     if (tables.length) this.tableControls(tables[0]);
     if (caps.length) this.captionControls(caps);
@@ -234,14 +252,14 @@ export class StylePanel {
 
   // ------------------------------------------------------------------ shapes
 
-  private shapeControls(shapes: Shape[]): void {
+  private shapeControls(shapes: Shape[], title?: string): void {
     const s = shapes[0];
     const lw = this.doc.style.lineWidth;
     const set = (label: string, ok: (x: Shape) => boolean, patch: (x: Shape) => Partial<Shape>) =>
       this.edit(label, () => { for (const x of shapes) if (ok(x)) this.doc.updateShape(x.id, patch(x)); });
     const any = (f: (x: Shape) => boolean) => shapes.find(f);
     const names: Record<Shape['kind'], string> = { line: 'Line', rect: 'Box', oval: 'Oval', symbol: 'Symbol', bracket: 'Bracket', picture: 'Picture', table: 'Table', geo: 'Shape', ring: 'Ring fill' };
-    this.heading(shapes.length > 1 ? `${shapes.length} shapes` : isCircle(s) ? 'Circle' : s.kind === 'geo' ? geoDef(s.geo).name : names[s.kind]);
+    this.heading(title ?? (shapes.length > 1 ? `${shapes.length} shapes` : isCircle(s) ? 'Circle' : s.kind === 'geo' ? geoDef(s.geo).name : names[s.kind]));
     const geo = any((x) => x.kind === 'geo');
     const isGeo = (x: Shape) => x.kind === 'geo';
     if (geo) {
@@ -272,8 +290,11 @@ export class StylePanel {
       // hatching and stippling, over the fill or on their own
       this.select('Pattern', PATTERN_OPTS, f.pattern ?? 'none', (v) => set('Pattern', fillable, () => ({ pattern: v === 'none' ? undefined : (v as Pattern) })));
       if (f.pattern) {
-        this.color('Pattern colour', f.patternColor, (v) => set('Pattern colour', fillable, () => ({ patternColor: v })), 'Same as the line');
+        this.color('Pattern colour', f.patternColor, (v) => set('Pattern colour', fillable, () => ({ patternColor: v })), f.kind === 'ring' ? 'Light grey' : 'Same as the line');
         this.number('Pattern spacing (pt)', round(patternSpacing(f)), 0.25, 0.5, 40, (v) => set('Pattern spacing', fillable, () => ({ patternSize: v })), 'How far apart the lines or dots are');
+        const ring = any((x) => x.kind === 'ring' && !!x.pattern);
+        if (ring) this.check('Pattern under double bonds', !ring.patternClear, (v) => set('Pattern under double bonds', (x) => x.kind === 'ring', () => ({ patternClear: v ? undefined : true })),
+          'Run the lines or dots up to the bonds and under the double bonds; untick to keep them clear of the bonds and labels');
       }
     }
     if (geo) {
@@ -465,6 +486,62 @@ export class StylePanel {
     whole('Formula style (CH₃, NH₄⁺)', 'formula');
     this.select('Line up', JUSTIFY, c.justify, (v) => set('Justification', () => ({ justify: v })));
     this.color('Colour', c.runs[0]?.color, (v) => set('Text colour', (x) => ({ runs: x.runs.map((r) => ({ ...r, color: v })) })));
+    this.attachControls(caps);
+  }
+
+  /** Where a caption tied to a structure sits, what descriptors it shows; tie or untie it. */
+  private attachControls(caps: Caption[]): void {
+    const tied = caps.filter((x) => x.attach);
+    const loose = caps.filter((x) => !x.attach);
+    let row: HTMLDivElement | null = null;
+    const button = (text: string, help: string, on: () => void) => {
+      if (!row) { row = document.createElement('div'); row.className = 'style-buttons'; }
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = text;
+      b.title = help;
+      b.addEventListener('click', on);
+      row.append(b);
+      this.body.appendChild(row);
+    };
+    if (!tied.length) {
+      if (this.tie) button('Tie to nearest structure', 'Keep this caption beside the structure nearest it: it follows when the structure moves', () => this.tie?.(loose.map((x) => x.id)));
+      return;
+    }
+    const a = tied[0].attach!;
+    const setA = (label: string, patch: (x: Attachment) => Partial<Attachment>) =>
+      this.edit(label, () => { for (const x of tied) this.doc.updateCaption(x.id, { attach: { ...x.attach!, ...patch(x.attach!) } }); });
+    this.heading(a.role === 'descriptors' ? 'Tied descriptors' : a.role === 'label' ? 'Tied ID label' : 'Tied to its structure');
+    // text beside a structure lines up towards it; above and below, centred (Line up changes it back)
+    this.select<AttachSide>('Sits', SIDES, a.side, (v) => this.edit('Caption side', () => {
+      for (const x of tied) this.doc.updateCaption(x.id, { attach: { ...x.attach!, side: v, shift: 0 }, justify: v === 'right' ? 'left' : v === 'left' ? 'right' : 'center' });
+    }));
+    this.number('Gap (pt)', round(a.gap, 10), 0.5, -200, 500, (v) => setA('Caption gap', () => ({ gap: v })),
+      'Space between the structure (with its atom labels) and the caption. You can also drag the caption.');
+    this.number('Shift (pt)', round(a.shift, 10), 0.5, -1000, 1000, (v) => setA('Caption shift', () => ({ shift: v })),
+      'How far off the middle of its side: across for below and above, down for left and right. 0 centres it.');
+    const desc = tied.filter((x) => x.attach!.role === 'descriptors');
+    if (desc.length) {
+      const show = new Set<DescriptorKey>(desc[0].attach!.show ?? []);
+      for (const d of DESCRIPTORS) {
+        this.check(d.label, show.has(d.key), (v) => setA(`Show ${d.label.toLowerCase()}`, (x) => {
+          if (x.role !== 'descriptors') return {};
+          const now = new Set(x.show ?? []);
+          if (v) now.add(d.key); else now.delete(d.key);
+          // keep the usual order; the text is worked out again
+          return { show: DESCRIPTORS.map((y) => y.key).filter((k) => now.has(k)), sig: undefined, keepText: undefined };
+        }));
+      }
+      const ions: Opt<string>[] = COMMON_ADDUCTS.map((x) => [x, x]);
+      const ion = desc[0].attach!.adduct ?? '[M+H]+';
+      if (!COMMON_ADDUCTS.includes(ion)) ions.push([ion, ion]);
+      this.select('Ion (m/z, HRMS)', ions, ion, (v) => setA('Ion', (x) => (x.role === 'descriptors' ? { adduct: v, sig: undefined, keepText: undefined } : {})));
+      this.check('Update when the structure changes', !desc[0].attach!.keepText, (v) => setA(v ? 'Update descriptors' : 'Keep descriptor text', (x) => (x.role === 'descriptors' ? { keepText: v ? undefined : true, sig: v ? undefined : x.sig } : {})),
+        'Turn off to keep the text as it is, for instance after typing over it by hand.');
+    }
+    button('Untie from structure', 'Leave the caption where it is as ordinary text: it no longer follows the structure', () =>
+      this.edit('Untie caption', () => { for (const x of tied) this.doc.updateCaption(x.id, { attach: undefined }); }));
+    if (loose.length && this.tie) button('Tie the others too', 'Tie the selected captions that are loose to the structure nearest each', () => this.tie?.(loose.map((x) => x.id)));
   }
 
   // ------------------------------------------------------------------ building blocks
@@ -485,6 +562,7 @@ export class StylePanel {
     this.number('Charge', a.charge, 1, -8, 8, (v) => set('Charge', { charge: v }));
     this.color('Colour', a.color, (v) => set('Atom colour', { color: v }));
     this.color('Highlight', a.highlight, (v) => { set(v ? 'Highlight' : 'Remove highlight', { highlight: v }); if (v) this.highlightUsed(v); }, 'None');
+    this.highlightControls([a], []);
     if (a.label || a.z !== 6 || a.showCarbon) {
       this.select('Label runs', LABEL_DIRS, a.just, (v) => set('Label direction', { just: v }));
     }
@@ -508,6 +586,28 @@ export class StylePanel {
     if (b.order === 2) this.select('Second line', DOUBLE_POS, b.dpos, (v) => set('Double bond position', { dpos: v }));
     this.color('Colour', b.color, (v) => set('Bond colour', { color: v }));
     this.color('Highlight', b.highlight, (v) => { set(v ? 'Highlight' : 'Remove highlight', { highlight: v }); if (v) this.highlightUsed(v); }, 'None');
+    this.highlightControls([], [b]);
+  }
+
+  /** How the highlight on these atoms and bonds is drawn: shape, size, round labels, shadow, soft edges. */
+  private highlightControls(atoms: Atom[], bonds: Bond[]): void {
+    const lit = [...atoms, ...bonds].filter((x) => x.highlight);
+    if (!lit.length) return;
+    const st = fullStyle(lit[0].hl);
+    const set = (label: string, patch: HighlightStyle) => {
+      this.edit(label, () => {
+        for (const a of atoms) if (a.highlight) this.doc.updateAtom(a.id, { hl: tidyStyle({ ...a.hl, ...patch }) });
+        for (const b of bonds) if (b.highlight) this.doc.updateBond(b.id, { hl: tidyStyle({ ...b.hl, ...patch }) });
+      });
+      this.highlightStyleUsed({ ...st, ...patch });
+    };
+    this.select<HighlightShape>('Highlight shape', HL_SHAPES, st.shape, (v) => set('Highlight shape', { shape: v }));
+    this.number('Highlight size (%)', Math.round(st.size * 100), 10, 20, 400, (v) => set('Highlight size', { size: v / 100 }),
+      '100% is the usual size; larger for a bolder highlight.');
+    this.check('Grow round atom labels', st.fit, (v) => set(v ? 'Highlight round labels' : 'Highlight not round labels', { fit: v }),
+      'Make the highlight under a labelled atom (Me, OTBS, CO2Et) big enough to hold its whole label.');
+    this.check('Shadow', st.shadow, (v) => set(v ? 'Highlight shadow' : 'No highlight shadow', { shadow: v }));
+    this.check('Soft edges', st.soft, (v) => set(v ? 'Soft highlight' : 'Sharp highlight', { soft: v }), 'Fade the highlight out at its edges.');
   }
 
   /** Several atoms and bonds: their colour (labels and lines together). */
@@ -528,6 +628,7 @@ export class StylePanel {
       });
       if (v) this.highlightUsed(v);
     }, 'None');
+    this.highlightControls(atoms, bonds);
     if (bonds.length >= 3 && this.ringFill) {
       const row = document.createElement('div');
       row.className = 'style-buttons';
@@ -628,7 +729,7 @@ export class StylePanel {
     this.row(label, sel);
   }
 
-  private check(label: string, value: boolean, on: (v: boolean) => void): void {
+  private check(label: string, value: boolean, on: (v: boolean) => void, help?: string): void {
     const box = document.createElement('input');
     box.type = 'checkbox';
     box.checked = value;
@@ -638,6 +739,7 @@ export class StylePanel {
     const span = document.createElement('span');
     span.textContent = label;
     l.append(box, span);
+    if (help) l.title = help;
     this.body.appendChild(l);
   }
 
@@ -683,3 +785,11 @@ function resizeTableText(t: TableData, size: number): TableData {
 }
 
 type TextRunList = TableData['rows'][number][number]['runs'];
+
+/** A highlight style with the usual values left out (none at all when it is the usual look). */
+export function tidyStyle(s: HighlightStyle): HighlightStyle | undefined {
+  const d = fullStyle(undefined);
+  const out: HighlightStyle = {};
+  for (const k of Object.keys(s) as (keyof HighlightStyle)[]) if (s[k] !== undefined && s[k] !== d[k]) (out as Record<string, unknown>)[k] = s[k];
+  return Object.keys(out).length ? out : undefined;
+}
