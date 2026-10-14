@@ -7,6 +7,7 @@ import { TEXT_TAG, parseTextTag, runsFromChemDraw } from '../text/chemdraw-text'
 import { DocStyle } from '../style';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { addNicknames } from '../chem/labels';
+import { ringBonds, ringsThroughBond } from '../chem/aromatic';
 import { DEG } from '../geom';
 import { kids, descendants } from './xml';
 import { styleFromFace, isSymbolFont, fromSymbolFont } from '../richtext';
@@ -150,6 +151,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
 
   interface PendingLabel { atom: Atom; text: string; hShown: number | null }
   const pendingLabels: PendingLabel[] = [];
+  /** Circles drawn inside structures: ring circles when they sit in the middle of an aromatic ring. */
+  const pendingCircles: { x: number; y: number; oval: () => void }[] = [];
 
   const readFragment = (frag: Element) => {
     const nodeIds = new Map<string, number>();
@@ -259,7 +262,6 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       const extra: Partial<Bond> = { id: idFor(b), dpos };
       if (b.getAttribute('IgnoreWarnings') === 'yes') extra.ignoreWarnings = true;
       if (b.getAttribute('ShowBondStereo') === 'yes') extra.showStereo = true;
-      if (kids(b).some((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === CIRCLE_TAG)) extra.circle = true;
       // a bond crossing others: the higher Z is in front
       if (b.hasAttribute('CrossingBonds') && b.hasAttribute('Z')) extra.z = num(b, 'Z');
       const tag = kids(b).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === 'stereo');
@@ -535,14 +537,22 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         const rx = Math.hypot(maj[0] - cen[0], maj[1] - cen[1]);
         const ry = min.length >= 2 ? Math.hypot(min[0] - cen[0], min[1] - cen[1]) : rx;
         const ot = g.getAttribute('OvalType') ?? '';
-        add({ ...base, kind: 'oval', x1: cen[0] - rx, y1: cen[1] - ry, x2: cen[0] + rx, y2: cen[1] + ry, filled: ot.includes('Filled') || ot.includes('Shaded'), ...(ot.includes('Shaded') ? { fill: 'shaded' as const } : {}), dashed: ot.includes('Dashed'), bold: ot.includes('Bold'), shadow: ot.includes('Shadow') });
+        const filled = ot.includes('Filled') || ot.includes('Shaded');
+        const oval = () => add({ ...base, kind: 'oval', x1: cen[0] - rx, y1: cen[1] - ry, x2: cen[0] + rx, y2: cen[1] + ry, filled, ...(ot.includes('Shaded') ? { fill: 'shaded' as const } : {}), dashed: ot.includes('Dashed'), bold: ot.includes('Bold'), shadow: ot.includes('Shadow') });
+        // a plain circle kept with a structure may be an aromatic ring's circle (checked once the bonds are in)
+        if (g.parentElement?.nodeName === 'fragment' && ot.includes('Circle') && !filled) pendingCircles.push({ x: cen[0], y: cen[1], oval });
+        else oval();
         return;
       }
       case 'Symbol': {
         if (bb.length < 4) return;
         const sym = g.getAttribute('SymbolType') ?? '';
-        if (sym === 'LonePair' || sym === 'Electron') {
+        if (sym === 'LonePair') {
+          // the two dots
           add({ ...base, kind: 'symbol', symbol: sym, x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3] });
+        } else if (sym === 'Electron') {
+          // the dot, then a point further out that only sets its size
+          add({ ...base, kind: 'symbol', symbol: sym, x1: bb[0], y1: bb[1], x2: bb[0], y2: bb[1] });
         } else {
           // circled charges: the box is the symbol's width, sitting on the baseline y
           const d = Math.abs(bb[0] - bb[2]) || 4;
@@ -602,6 +612,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   doc.bulk(() => {
     walk(root);
     readSteps(all, refOf, doc);
+    for (const c of pendingCircles) if (!ringOfCircle(doc, c)) c.oval();
     // Element labels like "OH", "H2N" or "N" become automatic labels (so they re-justify
     // when the structure changes); anything else is kept exactly as written.
     for (const { atom, text, hShown } of pendingLabels) {
@@ -628,6 +639,30 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   doc.allDirty = true;
   stats.buildMs = performance.now() - t1;
   return { doc, stats };
+}
+
+/**
+ * ChemDraw draws an aromatic ring's circle as a circle kept with the structure, in the middle of
+ * a ring of aromatic bonds. When one is found there, the ring's bonds are marked to draw with a
+ * circle (and the circle is not kept as a separate shape). True when it was a ring circle.
+ */
+export function ringOfCircle(doc: Doc, c: { x: number; y: number }): boolean {
+  const L = doc.style.bondLength || 14.4;
+  for (const a of doc.atomsNear(c, 1.6 * L)) {
+    for (const bid of doc.adj.get(a.id) ?? []) {
+      if (doc.bonds.get(bid)!.order !== 1.5) continue;
+      for (const ring of ringsThroughBond(doc, bid)) {
+        let x = 0, y = 0;
+        for (const id of ring) { const r = doc.atoms.get(id)!; x += r.x; y += r.y; }
+        if (Math.hypot(x / ring.length - c.x, y / ring.length - c.y) > 0.3 * L) continue;
+        const bonds = ringBonds(doc, ring);
+        if (bonds.length !== ring.length || bonds.some((id) => doc.bonds.get(id)!.order !== 1.5)) continue;
+        for (const id of bonds) doc.bonds.get(id)!.circle = true;
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 const STEP_ROLES: [string, keyof StepRoles][] = [
@@ -708,6 +743,7 @@ export function isAutoLabel(z: number, text: string, h: number): boolean {
 
 /** Our own clipboard attributes for pictures (any format, and cropping), which ChemDraw doesn't have. */
 /** The tag that marks a bond as part of an aromatic ring drawn with a circle (ours; ChemDraw has none). */
+/** An older way this program marked ring circles; removed from bonds when saving (the circle itself is what counts). */
 export const CIRCLE_TAG = 'ci-aromatic-circle';
 /** The tag that keeps a filled shape's fill style and outline colour (ChemDraw has one colour). */
 export const FILL_TAG = 'Chem Illustrator fill';

@@ -23,6 +23,10 @@ import { FADE, tint } from '../colours';
 import { layoutTable, cellAlign, isCovered, spanOf, NOTE_SCALE } from '../table';
 import { TABLE_TAG, TABLE_PART_TAG, tableBorders, type TableTag } from './cdxml-table';
 import { bondLayer, crossingBonds } from '../chem/crossing';
+import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
+
+/** Numbers in an attribute such as "12.5 30 0". */
+const pts = (v: string | null): number[] => (v ?? '').trim().split(/\s+/).filter(Boolean).map(Number);
 
 
 export interface WriteOptions {
@@ -111,6 +115,7 @@ class CdxmlWriter {
     for (const c of doc.captions.values()) this.writeCaption(c);
     for (const r of doc.arrows.values()) this.writeArrow(r);
     for (const s of doc.shapes.values()) this.writeShape(s);
+    this.writeRingCircles();
     this.writeSteps();
     if (src) this.cleanUp();
 
@@ -740,6 +745,56 @@ class CdxmlWriter {
     this.changed = true;
   }
 
+  /**
+   * Aromatic rings drawn with a circle. ChemDraw keeps the circle as a circle graphic inside the
+   * structure, in the middle of a ring of aromatic bonds, so that is how they are written; circles
+   * already in the file are kept (moved if the ring moved) and ones whose ring lost its circle go.
+   */
+  private writeRingCircles(): void {
+    const doc = this.doc;
+    const L = doc.style.bondLength || 14.4;
+    const shapeEls = new Set<Element>();
+    for (const [key, o] of doc.source?.ord ?? []) if (key[0] === 's' && this.all[o]) shapeEls.add(this.all[o]);
+    const isRingCircle = (g: Element) => g.nodeName === 'graphic' && !shapeEls.has(g) && !g.hasAttribute('SupersededBy')
+      && ['Oval', 'Orbital'].includes(g.getAttribute('GraphicType') ?? '')
+      && /Circle/.test(g.getAttribute('OvalType') ?? '') && !/Filled|Shaded/.test(g.getAttribute('OvalType') ?? '');
+    const have = new Set<Element>();
+    for (const f of new Set(this.fragOfAtom.values())) for (const g of kids(f)) if (isRingCircle(g)) have.add(g);
+    const seen = new Set<string>();
+    for (const b of doc.bonds.values()) {
+      if (!b.circle || b.order !== 1.5) continue;
+      for (const ring of ringsThroughBond(doc, b.id)) {
+        const key = [...ring].sort((p, q) => p - q).join(',');
+        if (seen.has(key) || !isCircleRing(doc, ring)) continue;
+        seen.add(key);
+        const { center: c, radius: r } = ringCircle(doc, ring);
+        const frag = this.fragOfAtom.get(ring[0]);
+        if (!frag) continue;
+        const old = [...have].find((g) => g.parentNode === frag && (([x, y]) => Math.hypot(x - c.x, y - c.y) < 0.3 * L)(pts(g.getAttribute('Center3D'))));
+        if (old) {
+          have.delete(old);
+          const [x, y] = pts(old.getAttribute('Center3D'));
+          if (Math.abs(x - c.x) < 0.01 && Math.abs(y - c.y) < 0.01) continue;
+          const [mx, my] = pts(old.getAttribute('MajorAxisEnd3D')), [nx, ny] = pts(old.getAttribute('MinorAxisEnd3D'));
+          const dx = c.x - x, dy = c.y - y;
+          old.setAttribute('Center3D', `${f2(c.x)} ${f2(c.y)} 0`);
+          if (Number.isFinite(mx)) old.setAttribute('MajorAxisEnd3D', `${f2(mx + dx)} ${f2(my + dy)} 0`);
+          if (Number.isFinite(nx)) old.setAttribute('MinorAxisEnd3D', `${f2(nx + dx)} ${f2(ny + dy)} 0`);
+          old.setAttribute('BoundingBox', `${f2((Number.isFinite(mx) ? mx : x + r) + dx)} ${f2(c.y)} ${f2(c.x)} ${f2(c.y)}`);
+        } else {
+          // as ChemDraw writes it: an s orbital drawn as a plain circle, its box from the rim to the centre
+          frag.appendChild(this.el('graphic', {
+            id: this.id(), BoundingBox: `${f2(c.x + r)} ${f2(c.y)} ${f2(c.x)} ${f2(c.y)}`, color: this.colorAttr(b.color),
+            GraphicType: 'Orbital', OvalType: 'Circle', OrbitalType: 's',
+            Center3D: `${f2(c.x)} ${f2(c.y)} 0`, MajorAxisEnd3D: `${f2(c.x + r)} ${f2(c.y)} 0`, MinorAxisEnd3D: `${f2(c.x)} ${f2(c.y + r)} 0`,
+          }));
+        }
+        this.changed = true;
+      }
+    }
+    for (const g of have) { g.parentNode?.removeChild(g); this.changed = true; }
+  }
+
   private buildBond(b: Bond): Element {
     const e = this.el('b', { id: b.id });
     this.patchBond(e, b);
@@ -759,9 +814,8 @@ class CdxmlWriter {
     this.set(e, 'IgnoreWarnings', b.ignoreWarnings ? 'yes' : null);
     e.removeAttribute('BondCircularOrdering');
     this.bondStereo(e, b, true);
-    // an aromatic ring drawn with a circle (ChemDraw has no word for it, so it is a tag of ours)
+    // an older mark for ring circles (the circle is now written as ChemDraw draws it, see writeRingCircles)
     for (const c of kids(e)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === CIRCLE_TAG) e.removeChild(c);
-    if (b.circle && b.order === 1.5) e.appendChild(this.el('objecttag', { TagType: 'Unknown', Name: CIRCLE_TAG }));
   }
 
   // ------------------------------------------------------------------ captions, arrows, shapes
@@ -920,7 +974,10 @@ class CdxmlWriter {
       // names the atom whose charge it shows, so ChemDraw leaves the charge off that label
       const owner = s.kind === 'symbol' ? this.chargeOwner(s) : null;
       if (owner) g.appendChild(this.el('represent', { attribute: 'Charge', object: this.nodeId(owner.id) }));
-      const host = owner ? this.fragOfAtom.get(owner.id) ?? null : s.kind === 'symbol' ? this.nearestFragment(s) : null;
+      // a radical's dot names its radical atom, as ChemDraw's does
+      const radical = !owner && s.kind === 'symbol' && s.symbol === 'Electron' ? this.radicalOwner(s) : null;
+      if (radical) g.appendChild(this.el('represent', { attribute: 'Radical', object: this.nodeId(radical.id) }));
+      const host = owner || radical ? this.fragOfAtom.get((owner ?? radical)!.id) ?? null : s.kind === 'symbol' ? this.nearestFragment(s) : null;
       (host ?? this.page).appendChild(g);
     }
     this.changed = true;
@@ -1022,6 +1079,17 @@ class CdxmlWriter {
   }
 
   /** The atom whose charge a circled ⊕/⊖ shows: the nearest atom with a hidden charge of that sign. */
+  /** The radical atom a radical's dot sits beside, if any. */
+  private radicalOwner(s: Shape): Atom | null {
+    const c = { x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 };
+    let best: Atom | null = null, bestD = Infinity;
+    for (const a of this.doc.atomsNear(c, this.doc.style.bondLength)) {
+      const d = Math.hypot(a.x - c.x, a.y - c.y);
+      if (a.radical && d < bestD) { best = a; bestD = d; }
+    }
+    return best;
+  }
+
   private chargeOwner(s: Shape): Atom | null {
     const sign = s.symbol === 'CirclePlus' || s.symbol === 'Plus' ? 1 : s.symbol === 'CircleMinus' || s.symbol === 'Minus' ? -1 : 0;
     if (!sign) return null;
@@ -1117,7 +1185,15 @@ class CdxmlWriter {
         set('GraphicType', 'Symbol');
         set('SymbolType', s.symbol ?? 'CirclePlus');
         // circled charges are stored as their width along the bottom edge
-        set('BoundingBox', s.symbol === 'LonePair' || s.symbol === 'Electron' ? box(s) : `${f2(s.x2)} ${f2(s.y2)} ${f2(s.x1)} ${f2(s.y2)}`);
+        // a lone pair is its two dots; a radical's dot is the dot and a point 4.5 pt further out from
+        // its atom (ChemDraw sizes the dot from that distance); circled charges are stored as their
+        // width along the bottom edge
+        if (s.symbol === 'Electron') {
+          const near = this.radicalOwner(s) ?? this.doc.atomsNear({ x: s.x1, y: s.y1 }, this.doc.style.bondLength)[0];
+          const d = near ? Math.hypot(s.x1 - near.x, s.y1 - near.y) : 0;
+          const u = near && d > 0.01 ? { x: (s.x1 - near.x) / d, y: (s.y1 - near.y) / d } : { x: -1, y: 0 };
+          set('BoundingBox', `${f2(s.x1)} ${f2(s.y1)} ${f2(s.x1 + 4.5 * u.x)} ${f2(s.y1 + 4.5 * u.y)}`);
+        } else set('BoundingBox', s.symbol === 'LonePair' ? box(s) : `${f2(s.x2)} ${f2(s.y2)} ${f2(s.x1)} ${f2(s.y2)}`);
         break;
       }
       case 'bracket': {

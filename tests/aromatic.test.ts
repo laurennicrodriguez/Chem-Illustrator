@@ -85,4 +85,54 @@ describe('aromatic circles', () => {
     expect(bonds).toHaveLength(6);
     expect(bonds.every((b) => b.order === 1.5 && b.circle)).toBe(true);
   });
+
+  it('saves the circle the way ChemDraw draws one: a circle kept with the structure', () => {
+    const doc = new Doc();
+    doc.edit('b', () => ring(doc, [6, 6, 6, 6, 6, 6], [2, 1, 2, 1, 2, 1], 100, 100));
+    doc.edit('c', () => circleRings(doc, []));
+    const xml = writeCdxml(doc);
+    const dom = new DOMParser().parseFromString(xml, 'text/xml');
+    const g = [...dom.getElementsByTagName('graphic')];
+    expect(g).toHaveLength(1);
+    expect(g[0].parentElement!.nodeName).toBe('fragment');
+    expect(g[0].getAttribute('GraphicType')).toBe('Orbital');
+    expect(g[0].getAttribute('OvalType')).toBe('Circle');
+    expect(g[0].getAttribute('Center3D')).toBe('100.00 100.00 0');
+    // no marks of our own on the bonds
+    expect(xml).not.toContain('ci-aromatic-circle');
+  });
+
+  it('reads a ring circle drawn in ChemDraw', () => {
+    // ChemDraw: six aromatic bonds and an s orbital circle in the middle of the ring
+    const n = [0, 1, 2, 3, 4, 5].map((i) => [100 + 10.8 * Math.cos((Math.PI / 3) * i), 100 + 10.8 * Math.sin((Math.PI / 3) * i)]);
+    const xml = `<?xml version="1.0"?><CDXML BondLength="10.8"><page id="1"><fragment id="2">${
+      n.map(([x, y], i) => `<n id="${10 + i}" p="${x} ${y}"/>`).join('')}${
+      n.map((_, i) => `<b id="${20 + i}" B="${10 + i}" E="${10 + ((i + 1) % 6)}" Order="1.5"/>`).join('')
+    }<graphic id="30" BoundingBox="106.48 100 100 100" GraphicType="Orbital" OvalType="Circle" OrbitalType="s" Center3D="100 100 0" MajorAxisEnd3D="106.48 100 0" MinorAxisEnd3D="100 106.48 0"/></fragment>`
+      + `<graphic id="40" BoundingBox="0 0 10 10" GraphicType="Oval" OvalType="Circle" Center3D="300 300 0" MajorAxisEnd3D="310 300 0" MinorAxisEnd3D="300 310 0"/></page></CDXML>`;
+    const doc = readCdxml(xml).doc;
+    expect([...doc.bonds.values()].every((b) => b.circle)).toBe(true);
+    // the ring's circle is not a separate shape; a circle elsewhere still is
+    expect([...doc.shapes.values()].map((s) => s.kind)).toEqual(['oval']);
+    // saved unchanged, the file is left as it was
+    expect(writeCdxml(doc)).toBe(xml);
+    // taking the circle off removes it from the file
+    doc.edit('k', () => kekulize(doc, []));
+    const out = writeCdxml(doc);
+    expect(out).not.toContain('OrbitalType="s"');
+    expect(out).toContain('id="40"');
+    expect(readCdxml(out).doc.shapes.size).toBe(1);
+  });
+
+  it('moves the circle with its ring in a file from ChemDraw', () => {
+    const doc = new Doc();
+    doc.edit('b', () => ring(doc, [6, 6, 6, 6, 6, 6], [2, 1, 2, 1, 2, 1], 100, 100));
+    doc.edit('c', () => circleRings(doc, []));
+    const opened = readCdxml(writeCdxml(doc)).doc;
+    opened.edit('m', () => { for (const a of [...opened.atoms.values()]) opened.updateAtom(a.id, { x: a.x + 50 }); });
+    const dom = new DOMParser().parseFromString(writeCdxml(opened), 'text/xml');
+    const g = [...dom.getElementsByTagName('graphic')];
+    expect(g).toHaveLength(1);
+    expect(g[0].getAttribute('Center3D')).toBe('150.00 100.00 0');
+  });
 });
