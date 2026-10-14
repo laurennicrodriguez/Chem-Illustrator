@@ -18,7 +18,8 @@ import { layoutText, SINGLE } from '../text/layout';
 import { runsForChemDraw, TEXT_TAG } from '../text/chemdraw-text';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { fromDataUrl } from '../render/images';
-import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, GROUP_TAG, GEO_TAG, GEO_BOX_ATTR } from './cdxml';
+import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, GROUP_TAG, GEO_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG } from './cdxml';
+import { frameTag } from '../editor/frames';
 import { geoDef, moveSteps, textArea, type GeoStep } from '../design/geo';
 import { FADE, tint } from '../colours';
 import { layoutTable, cellAlign, isCovered, spanOf, NOTE_SCALE } from '../table';
@@ -541,6 +542,13 @@ class CdxmlWriter {
   private atomGroup(n: Element, a: Atom): void {
     for (const c of kids(n)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === GROUP_TAG) n.removeChild(c);
     if (a.group && a.label) n.appendChild(this.el('objecttag', { TagType: 'String', Name: GROUP_TAG, Value: a.group, Visible: 'no' }));
+    this.highlightTag(n, a.highlight);
+  }
+
+  /** A highlight's colour, in a hidden tag (ChemDraw has no highlights). */
+  private highlightTag(e: Element, colour: string | undefined): void {
+    for (const c of kids(e)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === HIGHLIGHT_TAG) e.removeChild(c);
+    if (colour) e.appendChild(this.el('objecttag', { TagType: 'String', Name: HIGHLIGHT_TAG, Value: colour, Visible: 'no' }));
   }
 
   private patchNodeBody(n: Element, a: Atom, o: Atom, dx: number, dy: number): void {
@@ -914,6 +922,7 @@ class CdxmlWriter {
     this.bondStereo(e, b, true);
     // an older mark for ring circles (the circle is now written as ChemDraw draws it, see writeRingCircles)
     for (const c of kids(e)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === CIRCLE_TAG) e.removeChild(c);
+    this.highlightTag(e, b.highlight);
   }
 
   // ------------------------------------------------------------------ captions, arrows, shapes
@@ -1049,7 +1058,7 @@ class CdxmlWriter {
 
   private writeShape(s: Shape): void {
     if (s.kind === 'table') { this.writeTable(s); return; }
-    if (s.kind === 'geo') { this.writeGeo(s); return; }
+    if (s.kind === 'geo' || s.kind === 'ring') { this.writeGeo(s); return; }
     const pic = s.picture || s.kind === 'picture';
     const names = pic ? ['embeddedobject'] : ['graphic'];
     const e = this.source('s', s.id, names);
@@ -1098,9 +1107,13 @@ class CdxmlWriter {
     for (const c of kids(g)) g.removeChild(c);
     const b = { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
     const def = geoDef(s.geo);
-    const out = def.draw(b.x2 - b.x1, b.y2 - b.y1);
+    // a ring's fill: the ring's corners, filled, with no outline (in ChemDraw a plain fill)
+    const ringPts = s.kind === 'ring' ? (s.ring?.every((id) => this.doc.atoms.has(id)) ? s.ring.map((id) => this.doc.atoms.get(id)!) : s.poly ?? []) : null;
+    const out: { body: GeoStep[]; lines?: GeoStep[] } = ringPts
+      ? { body: [...ringPts.map((p, i): GeoStep => [i ? 'L' : 'M', p.x - b.x1, p.y - b.y1]), ['Z']] }
+      : def.draw(b.x2 - b.x1, b.y2 - b.y1);
     const lw = this.doc.style.lineWidth;
-    const width = s.lineWidth ?? (s.bold ? lw * 2.5 : lw);
+    const width = ringPts ? 0 : s.lineWidth ?? (s.bold ? lw * 2.5 : lw);
     const curves = (steps: GeoStep[], type: string, color: string | undefined) => {
       for (const c of chemDrawCurves(moveSteps(steps, b.x1, b.y1))) {
         const closed = c.closed && type !== 'open';
@@ -1121,7 +1134,7 @@ class CdxmlWriter {
       curves(out.body, 'line', s.color ?? '#000000');
       if (out.lines?.length) curves(out.lines, 'open', s.color ?? '#000000');
     }
-    if (s.text?.runs.some((r) => r.text)) {
+    if (s.kind === 'geo' && s.text?.runs.some((r) => r.text)) {
       const area = textArea(def, b.x1, b.y1, b.x2, b.y2);
       const w = Math.max(4, area.x2 - area.x1);
       const size = this.doc.style.captionSize;
@@ -1135,6 +1148,7 @@ class CdxmlWriter {
       g.appendChild(t);
     }
     const { id: _, ...look } = s;
+    if (ringPts) look.poly = ringPts.map((p) => ({ x: p.x, y: p.y }));
     g.appendChild(this.el('objecttag', { TagType: 'String', Name: GEO_TAG, Value: JSON.stringify(look), Visible: 'no' }));
     this.set(g, 'BoundingBox', box(b));
     this.set(g, GEO_BOX_ATTR, box(b));
@@ -1308,9 +1322,12 @@ class CdxmlWriter {
     const fillTo = s.filled ? s.fillColor ?? s.color : undefined;
     set('color', this.colorAttr(fillTo && s.fill === 'faded' ? tint(fillTo, FADE) : fillTo ?? s.color));
     for (const c of kids(g)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === FILL_TAG) g.removeChild(c);
-    if (s.filled && (s.fill || s.fillColor)) {
-      g.appendChild(this.el('objecttag', { TagType: 'String', Name: FILL_TAG, Value: JSON.stringify({ fill: s.fill, fillColor: s.fillColor, color: s.color }), Visible: 'no' }));
+    if ((s.filled && (s.fill || s.fillColor)) || s.pattern) {
+      const v = { fill: s.fill, fillColor: s.fillColor, color: s.color, fill2: s.fill2, gradAngle: s.gradAngle, gradRadial: s.gradRadial, pattern: s.pattern, patternColor: s.patternColor, patternSize: s.patternSize, ...(s.filled ? {} : { filled: false }) };
+      g.appendChild(this.el('objecttag', { TagType: 'String', Name: FILL_TAG, Value: JSON.stringify(v), Visible: 'no' }));
     }
+    for (const c of kids(g)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === FRAME_TAG) g.removeChild(c);
+    if (s.frame) g.appendChild(this.el('objecttag', { TagType: 'String', Name: FRAME_TAG, Value: frameTag(s.frame), Visible: 'no' }));
     const filled = !s.filled ? null : s.fill === 'shaded' ? 'Shaded' : 'Filled';
     switch (s.kind) {
       case 'line':

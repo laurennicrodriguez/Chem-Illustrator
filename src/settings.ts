@@ -8,6 +8,8 @@ import { KeyOverrides } from './editor/keymap';
 import { DEFAULT_TYPING } from './text/typing';
 import { ModeColours, DEFAULT_MODE_COLOURS, parseModeColours } from './ui/mode-colours';
 import { parseOwnTemplates, type Template } from './chem/templates';
+import { parsePalettes, type Palette } from './palettes';
+import { defaultToolboxes, parseToolboxes, type ToolboxState } from './ui/toolboxes';
 import { CITE_PRESETS, DEFAULT_STYLE, cleanOptions, type CiteFormat } from './document/cite-styles';
 
 export interface Settings {
@@ -49,20 +51,26 @@ export interface Settings {
   citeStyle: string;
   /** That style's details changed. */
   citeOptions: Partial<CiteFormat>;
+  /** Show Terminal Methyls writes them as CH3 or as Me (Structure > Terminal Methyls as …). */
+  methylStyle: 'CH3' | 'Me';
+  /** Your own colour rows, in every colour menu and every mode (Edit > Colour Palettes). */
+  palettes: Palette[];
+  /** Which toolboxes show and where (View > Toolboxes), and what is in your own. */
+  toolboxes: ToolboxState;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false, showRoles: true,
   chemTyping: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
   modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true,
-  citeStyle: DEFAULT_STYLE, citeOptions: {},
+  citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'CH3', palettes: [], toolboxes: defaultToolboxes(),
 };
 
 const STORAGE_KEY = 'chem-illustrator.settings';
 
 /** Read settings saved as text, keeping only what makes sense. */
 export function parseSettings(text: string | null | undefined): Settings {
-  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [] };
+  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes() };
   if (!text) return s;
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { return s; }
@@ -81,6 +89,9 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (typeof r.splitWidth === 'number' && isFinite(r.splitWidth)) s.splitWidth = Math.min(0.8, Math.max(0.2, r.splitWidth));
   if (typeof r.citeStyle === 'string' && r.citeStyle in CITE_PRESETS) s.citeStyle = r.citeStyle;
   s.citeOptions = cleanOptions(r.citeOptions);
+  s.palettes = parsePalettes(r.palettes);
+  s.toolboxes = parseToolboxes(r.toolboxes);
+  if (r.methylStyle === 'Me' || r.methylStyle === 'CH3') s.methylStyle = r.methylStyle;
   if (Array.isArray(r.dictionary)) s.dictionary = r.dictionary.filter((w): w is string => typeof w === 'string' && w.trim() !== '').map((w) => w.trim());
   return s;
 }

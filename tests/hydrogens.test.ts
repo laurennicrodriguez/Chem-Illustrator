@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { Doc } from '../src/model';
-import { addExplicitHydrogens, chainEnds, removableHydrogens, toggleChainEndLabels, toggleExplicitHydrogens } from '../src/chem/hydrogens';
+import { addExplicitHydrogens, chainEnds, methylState, removableHydrogens, setMethylStyle, toggleChainEndLabels, toggleExplicitHydrogens, writeTerminalMethyls } from '../src/chem/hydrogens';
 import { labelSpec } from '../src/chem/labels';
 
 /** Ethanol drawn as C–C–O. */
@@ -46,5 +46,50 @@ describe('H atoms', () => {
     const { doc, c2 } = ethanol();
     doc.edit('w', () => { const h = doc.addAtom(12, -19, 1); doc.addBond(c2, h.id, 1, 'wedge'); });
     expect(removableHydrogens(doc, [])).toEqual([]);
+  });
+});
+
+describe('Terminal methyls as CH3 or Me', () => {
+  it('writes methyl ends as Me, and other chain ends with C and H', () => {
+    const { doc, c1, o } = ethanol();
+    // ethanol's O end is not carbon, so only C1 is a chain end
+    expect(doc.edit('s', () => toggleChainEndLabels(doc, [], 'Me'))).toEqual({ count: 1, shown: true });
+    expect(doc.atoms.get(c1)!.label).toBe('Me');
+    expect(methylState(doc, [])).toBe('Me');
+    expect(doc.atoms.get(o)!.label).toBeNull();
+    // hiding takes Me off too
+    expect(doc.edit('h', () => toggleChainEndLabels(doc, [], 'Me')).shown).toBe(false);
+    expect(doc.atoms.get(c1)!.label).toBeNull();
+    expect(doc.atoms.get(c1)!.z).toBe(6);
+    expect(methylState(doc, [])).toBe('hidden');
+  });
+
+  it('switches shown ends between CH3 and Me and leaves hidden ones alone', () => {
+    const { doc, c1 } = ethanol();
+    doc.edit('s', () => toggleChainEndLabels(doc, [], 'CH3'));
+    expect(doc.edit('m', () => setMethylStyle(doc, [], 'Me'))).toBe(1);
+    expect(doc.atoms.get(c1)!.label).toBe('Me');
+    expect(doc.atoms.get(c1)!.showCarbon).toBeUndefined();
+    expect(doc.edit('c', () => setMethylStyle(doc, [], 'CH3'))).toBe(1);
+    expect(doc.atoms.get(c1)!.label).toBeNull();
+    expect(doc.atoms.get(c1)!.showCarbon).toBe(true);
+    doc.edit('h', () => writeTerminalMethyls(doc, [], 'hidden'));
+    expect(doc.edit('m', () => setMethylStyle(doc, [], 'Me'))).toBe(0);
+    expect(doc.atoms.get(c1)!.label).toBeNull();
+  });
+
+  it('keeps a CH2 end written with C and H in the Me style', () => {
+    const doc = new Doc();
+    let c2 = 0;
+    doc.edit('d', () => {
+      const a = doc.addAtom(0, 0);
+      c2 = doc.addAtom(12, 0).id;
+      doc.addBond(a.id, c2, 2);
+    });
+    doc.edit('s', () => writeTerminalMethyls(doc, [], 'Me'));
+    // ethylene's ends are CH2, not methyls
+    expect(doc.atoms.get(c2)!.label).toBeNull();
+    expect(doc.atoms.get(c2)!.showCarbon).toBe(true);
+    expect(methylState(doc, [])).toBe('CH3');
   });
 });

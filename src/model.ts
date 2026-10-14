@@ -41,6 +41,8 @@ export interface Atom {
   stereoLabel?: StereoLabel;
   /** The person chose to ignore this atom's chemistry warnings (ChemDraw's IgnoreWarnings). */
   ignoreWarnings?: boolean;
+  /** A highlight drawn behind the atom (a disc of this colour), to pick out part of a structure. */
+  highlight?: string;
   /** Unpaired electrons: a doublet radical uses one bond's worth of valence, a carbene two. */
   radical?: 'singlet' | 'doublet' | 'triplet';
   /**
@@ -134,6 +136,8 @@ export interface Bond {
   showStereo?: boolean;
   /** Where the E/Z label sits, relative to the middle of the bond. */
   stereoLabel?: StereoLabel;
+  /** A highlight drawn behind the bond (a broad band of this colour), to pick out part of a structure. */
+  highlight?: string;
 }
 
 export interface TextRun {
@@ -301,9 +305,18 @@ export interface StepRoles {
   manual?: boolean;
 }
 
+/** Lines or dots over a fill (Style panel > Pattern). */
+export type Pattern = 'hatch' | 'backhatch' | 'crosshatch' | 'horizontal' | 'vertical' | 'grid' | 'dots' | 'dense-dots';
+
 export interface Shape {
   id: number;
-  kind: 'line' | 'rect' | 'oval' | 'symbol' | 'bracket' | 'picture' | 'table' | 'geo';
+  kind: 'line' | 'rect' | 'oval' | 'symbol' | 'bracket' | 'picture' | 'table' | 'geo' | 'ring';
+  /**
+   * A ring's fill (Structure > Fill Rings): the ring's atoms in order. The fill follows them, and
+   * goes when one of them goes. `poly` is where their centres were at the last change.
+   */
+  ring?: number[];
+  poly?: { x: number; y: number }[];
   /** A design shape (kind 'geo'): which one, from the shape library (design/geo.ts). */
   geo?: string;
   /** Text inside a design shape: wraps to the shape's text area and moves with it. */
@@ -323,8 +336,20 @@ export interface Shape {
   y2: number;
   dashed?: boolean;
   filled?: boolean;
-  /** How a filled box or oval is filled: evenly (absent), a light tint, or shaded light to dark. */
-  fill?: 'faded' | 'shaded';
+  /**
+   * How a filled shape is filled: evenly (absent), a light tint, shaded light to dark, or a
+   * gradient from the fill colour to `fill2` (across at `gradAngle` degrees, or out from the middle).
+   */
+  fill?: 'faded' | 'shaded' | 'gradient';
+  fill2?: string;
+  /** The gradient's direction in degrees: 0 left to right, 90 top to bottom. */
+  gradAngle?: number;
+  gradRadial?: boolean;
+  /** Lines or dots drawn over the fill (or on their own when there is no fill): hatching, stippling. */
+  pattern?: Pattern;
+  /** The pattern's colour (the outline colour when not given) and its spacing in points. */
+  patternColor?: string;
+  patternSize?: number;
   /** Fill colour, when it differs from the outline colour (the outline is then drawn too). */
   fillColor?: string;
   rounded?: boolean;
@@ -361,6 +386,12 @@ export interface Shape {
   locked?: boolean;
   /** A table: its cells, column widths and rules (see table.ts). */
   table?: TableData;
+  /**
+   * A frame round other things (Structure > Add Frame): what it surrounds (whole structures for
+   * the atoms), the gap it keeps round them in points, and whether it follows them (grows,
+   * shrinks and moves as they change). Moving or resizing the frame by hand stops it following.
+   */
+  frame?: Frame;
 }
 
 /** One cell of a table. */
@@ -422,6 +453,16 @@ export interface AtomWatch { ids: Set<number>; all: boolean }
 /** Everything in a drawing, as plain lists (see Doc.contents). */
 export interface Contents { atoms: Atom[]; bonds: Bond[]; captions: Caption[]; arrows: Arrow[]; shapes: Shape[] }
 
+export interface Frame {
+  atoms: number[];
+  captions: number[];
+  arrows: number[];
+  shapes: number[];
+  padX: number;
+  padY: number;
+  fit: boolean;
+}
+
 interface UndoEntry {
   label: string;
   before: Map<string, Entity | null>;
@@ -450,6 +491,11 @@ export class Doc {
   textStyles: Partial<Record<Placeholder, TextBase>> | null = null;
   /** Called each time an undoable change is recorded (a slide deck keeps one history across its slides). */
   onCommit: (() => void) | null = null;
+  /**
+   * Called as an undoable change finishes, with what it changed (and how those things were
+   * before); changes made here join the same undo step (frames follow what they surround).
+   */
+  beforeCommit: ((before: ReadonlyMap<string, Entity | null>) => void) | null = null;
   atoms = new Map<number, Atom>();
   bonds = new Map<number, Bond>();
   captions = new Map<number, Caption>();
@@ -509,6 +555,7 @@ export class Doc {
   commit(): void {
     const tx = this.tx;
     if (!tx) return;
+    if (tx.before.size && this.beforeCommit) this.beforeCommit(new Map(tx.before));
     this.tx = null;
     if (tx.before.size === 0) return;
     for (const key of tx.before.keys()) tx.after.set(key, this.snapshot(key));

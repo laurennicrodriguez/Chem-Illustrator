@@ -3,6 +3,11 @@
 // mode), and the panels on the right.
 
 import './app.css';
+import type { MethylStyle } from './chem/hydrogens';
+import { STANDARD_COLOURS, usedColours } from './colours';
+import { ICONS } from './icons';
+import { Toolboxes, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
+import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
 import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS } from './model';
 import { Renderer, measureText } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
@@ -38,6 +43,7 @@ import { recordPicture, pictureSvg, pictureCanvas, canvasPng, bitmapScale, EXPOR
 import { pngWithDpi } from './render/emf-read';
 import { whiteToClear } from './render/background';
 import { pickTemplate } from './ui/template-gallery';
+import { showContextMenu, type MenuItem } from './ui/context-menu';
 import { fillTemplate, templateSize } from './design/templates';
 import { itemsToSvg } from './render/svg';
 import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc } from './render/images';
@@ -315,6 +321,7 @@ const GEO_HINT = 'Click on the page to put the shape down, or drag to draw it at
 
 editor.onToolChange = (name) => {
   toolbar.setActive(name);
+  for (const b of document.querySelectorAll<HTMLElement>('.tb-tool')) b.classList.toggle('active', b.dataset.tool === name);
   designLib?.setActive(name);
   if (name.startsWith('geo:')) { $('#hint').textContent = GEO_HINT; return; }
   const t = TOOLS[name];
@@ -2045,7 +2052,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+const ANY_TAB = new Set(['edit-palettes', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-custom', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'show-stereo', 'clipboard-formats', 'split-view']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
@@ -2121,6 +2128,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'copy-mol': () => copyMolfile(),
   'copy-cdxml': () => copyCdxmlText(),
   'select-all': () => editor.selectAll(),
+  delete: () => { finishTyping(); editor.deleteSelection(); },
   'next-structure': () => editor.selectNextStructure(1),
   'prev-structure': () => editor.selectNextStructure(-1),
   // arrow keys move the selection; with nothing selected they do nothing here
@@ -2170,6 +2178,19 @@ const COMMANDS: Record<string, () => unknown> = {
   hotkeys: () => hotkeysDialog.open(),
   'typing-spelling': () => typingDialog.open(),
   'mode-colours': () => modeDialog.open(),
+  'edit-palettes': () => editPalettes(),
+  'toolbox-main': () => toolboxes.toggle('main'),
+  'toolbox-structure': () => toolboxes.toggle('structure'),
+  'toolbox-arrange': () => toolboxes.toggle('arrange'),
+  'toolbox-templates': () => toolboxes.toggle('templates'),
+  'toolbox-colours': () => toolboxes.toggle('colours'),
+  'toolbox-custom': () => toolboxes.toggle('custom'),
+  'customize-toolbox': () => openCustomToolbox(),
+  'lock-toolboxes': () => { toolboxes.setLocked(!toolboxState.locked); flash(toolboxState.locked ? 'Toolboxes locked.' : 'Toolboxes unlocked: drag one by its title to an edge of the drawing to dock it, or anywhere else to float.', 6000); },
+  'add-frame': () => editor.addFrame() || flash('Select what to frame: structures, text, arrows or shapes.'),
+  'fill-rings': () => flash(editor.fillRings(), 6000),
+  'highlight': () => editor.highlight(highlightColour) ? flash('Highlighted. Change the colour with Highlight in the Style panel.', 5000) : flash('Select the atoms and bonds to highlight.'),
+  'remove-highlight': () => editor.highlight(undefined) || flash('Select the atoms and bonds to take the highlight off.'),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
   'arrange-scheme': () => arrangeDialog.open(),
@@ -2182,6 +2203,8 @@ const COMMANDS: Record<string, () => unknown> = {
   'delete-nickname': () => void deleteNickname(),
   'contract-label': () => void contractLabel(),
   'chain-ends': () => flash(editor.toggleChainEnds(), 5000),
+  'methyls-ch3': () => chooseMethylStyle('CH3'),
+  'methyls-me': () => chooseMethylStyle('Me'),
   'explicit-h': () => flash(editor.toggleHydrogens(), 6000),
   'periodic-table': () => { editor.setTool('element'); periodicTable.open(); },
   'aromatic-circles': () => flash(editor.toggleAromaticCircles() ?? 'No aromatic rings here: select a ring with alternating double bonds, or one drawn with a circle.', 5000),
@@ -2538,7 +2561,29 @@ applySplitWidth();
 
 // ---------------------------------------------------------------- settings and the Hotkeys window
 
+/** The colour Structure > Highlight uses: the one last chosen in the Style panel (a soft yellow at first). */
+let highlightColour = '#ffe680';
+
+/** Tick the chosen way of writing terminal methyls in the Structure menu. */
+function tickMethylStyle(): void {
+  $('[data-cmd="methyls-ch3"]')?.setAttribute('aria-checked', String(editor.options.methylStyle === 'CH3'));
+  $('[data-cmd="methyls-me"]')?.setAttribute('aria-checked', String(editor.options.methylStyle === 'Me'));
+}
+
+/** Write terminal methyls as CH3 or Me from now on; the ones already shown in the selection (or the drawing) change too. */
+function chooseMethylStyle(style: MethylStyle): void {
+  const n = editor.setMethylStyle(style);
+  tickMethylStyle();
+  storeSettings();
+  const how = style === 'Me' ? 'Me' : 'CH₃';
+  flash(n ? `${n} terminal methyl${n > 1 ? 's' : ''} now written ${how}.` : `Show Terminal Methyls will write them as ${how}.`, 5000);
+}
+
 let settingsLoaded = false;
+// your palettes show in every colour box, in every mode
+usePaletteMenus();
+useDrawingColours(() => usedColours(editor.doc));
+onPalettes(() => storeSettings());
 /** Save the key map and preferences (after the saved ones have been read, so they aren't lost). */
 function storeSettings(): void {
   if (!settingsLoaded) return;
@@ -2560,6 +2605,9 @@ function storeSettings(): void {
     splitWidth,
     citeStyle: preferredStyle().style,
     citeOptions: preferredStyle().options,
+    methylStyle: editor.options.methylStyle,
+    palettes: getPalettes(),
+    toolboxes: toolboxState,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -2667,6 +2715,12 @@ void loadSettings().then((s) => {
   splitWidth = s.splitWidth;
   applySplitWidth();
   setPreferredStyle(s.citeStyle, s.citeOptions);
+  editor.options.methylStyle = s.methylStyle;
+  setPalettes(s.palettes);
+  toolboxState = s.toolboxes;
+  toolboxes.render();
+  tickToolboxes();
+  tickMethylStyle();
   settingsLoaded = true;
   refreshKeys();
 });
@@ -3230,8 +3284,229 @@ function updatePanels(): void {
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
+// ---------------------------------------------------------------- right-click menu on the drawing
+
+/**
+ * What the right-click menu offers: the usual editing commands, then the top menus' commands
+ * that fit what was clicked (a structure, an arrow, shapes or empty space), grouped as they are
+ * at the top so they are found in the same place.
+ */
+function drawingMenu(): MenuItem[] {
+  const s = editor.sel;
+  const any = s.atoms.size + s.bonds.size + s.captions.size + s.arrows.size + s.shapes.size > 0;
+  const atoms = s.atoms.size > 0;
+  const shapes = [...s.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => !!x);
+  const design = ws.active.mode === 'design';
+  const view: MenuItem = { label: 'View', items: [{ cmd: 'zoom-in' }, { cmd: 'zoom-out' }, { cmd: 'zoom-fit' }, { cmd: 'zoom-actual' }, null, { cmd: 'show-stereo' }, { cmd: 'scroll-bars' }] };
+  if (!any) {
+    return [
+      { cmd: 'paste' }, { cmd: 'paste-smiles' }, { cmd: 'select-all' }, null,
+      { cmd: 'undo' }, { cmd: 'redo' }, null,
+      { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'connector-tool' }] : [])] },
+      { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] },
+      view,
+    ];
+  }
+  const arrange: MenuItem[] = [
+    { cmd: 'align-left' }, { cmd: 'align-hcenter' }, { cmd: 'align-right' }, null,
+    { cmd: 'align-top' }, { cmd: 'align-vcenter' }, { cmd: 'align-bottom' }, null,
+    { cmd: 'distribute-h' }, { cmd: 'distribute-v' },
+  ];
+  const turn: MenuItem[] = [
+    { cmd: 'flip-h' }, { cmd: 'flip-v' }, null,
+    { cmd: 'rotate-cw' }, { cmd: 'rotate-ccw' }, { cmd: 'rotate-180' }, { cmd: 'rotate-dialog' }, null, { cmd: 'scale' },
+  ];
+  const order: MenuItem[] = shapes.length
+    ? [{ cmd: 'shape-front', label: 'Bring to Front' }, { cmd: 'shape-forward', label: 'Bring Forward' }, { cmd: 'shape-backward', label: 'Send Backward' }, { cmd: 'shape-back', label: 'Send to Back' }]
+    : [];
+  return [
+    { cmd: 'cut' }, { cmd: 'copy' }, { cmd: 'paste' }, { cmd: 'delete', label: 'Delete' }, null,
+    ...(atoms ? [{ label: 'Copy As', items: [{ cmd: 'copy-smiles' }, { cmd: 'copy-mol' }, { cmd: 'copy-cdxml' }] }, null] : []),
+    ...(atoms ? [
+      { cmd: 'clean-up' },
+      { label: 'Structure', items: [
+        { cmd: 'stereo-labels' }, { cmd: 'aromatic-circles' }, { cmd: 'chain-ends' }, { cmd: 'methyls-ch3' }, { cmd: 'methyls-me' }, { cmd: 'explicit-h' }, null,
+        { cmd: 'contract-label' }, { cmd: 'join' }, { cmd: 'bring-front' }, { cmd: 'send-back' }, null,
+        { cmd: 'enhanced-stereo' }, { cmd: 'chiral-flag' }, { cmd: 'repeat-group' }, { cmd: 'rgroup-table' }, null,
+        { cmd: 'check-structure' }, { cmd: 'save-template' }, { cmd: 'define-nickname' },
+      ] },
+    ] : []),
+    ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] }] : []),
+    null,
+    { cmd: 'add-frame' },
+    ...(atoms ? [{ label: 'Highlight and Fill', items: [{ cmd: 'highlight' }, { cmd: 'remove-highlight' }, null, { cmd: 'fill-rings' }] }] : []),
+    { label: 'Align', items: arrange },
+    { label: 'Rotate or Flip', items: turn },
+    ...(order.length ? [{ label: 'Order', items: order }] : []),
+    ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }] : []),
+    null,
+    { cmd: 'select-all' },
+    view,
+  ];
+}
+
+editor.onContextMenu = (e) => {
+  if (sheetActive() || docActive()) return;
+  finishTyping();
+  editor.contextPick(e);
+  showContextMenu(e.clientX, e.clientY, drawingMenu(), { run: (cmd) => void command(cmd), key: commandKey });
+};
+
 stylePanel.cropWithMouse = () => cropPicture();
 stylePanel.removeWhite = (ids) => void removeWhite(ids);
+stylePanel.frames = { add: () => void command('add-frame'), fit: (id) => editor.fitFrame(id) };
+stylePanel.ringFill = () => void command('fill-rings');
+stylePanel.highlightUsed = (c) => { highlightColour = c; };
+
+// ---------------------------------------------------------------- toolboxes (View > Toolboxes)
+
+let toolboxState: ToolboxState = defaultToolboxes();
+/** The drawing tools' bar, which the Drawing Tools toolbox holds wherever it is. */
+const toolsNav = $<HTMLElement>('#tools');
+
+/** Every tool on the tool bar (palette items too), by name, for toolboxes. */
+const ALL_TOOLS = new Map<string, { title: string; icon: string }>();
+for (const group of TOOL_GROUPS) {
+  for (const item of group) {
+    const pal = 'palette' in item ? item : null;
+    for (const t of pal ? pal.items : [item as { name: string; title: string }]) {
+      if (t.name === OWN_ADD) continue;
+      ALL_TOOLS.set(t.name, { title: t.title, icon: ICONS[t.name] ?? pal?.icon?.(t.name, 28) ?? t.name });
+    }
+  }
+}
+
+/** A tool's button in a toolbox: picks the tool, and shows when it is the one in use. */
+function toolButton(name: string): HTMLButtonElement | null {
+  const t = ALL_TOOLS.get(name);
+  if (!t) return null;
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'tool tb-tool';
+  b.dataset.tool = name;
+  b.title = t.title;
+  b.setAttribute('aria-label', t.title);
+  b.innerHTML = t.icon;
+  b.classList.toggle('active', editor.toolName === name);
+  b.addEventListener('click', () => { editor.setTool(name); if (name === 'element') periodicTable.open(); });
+  return b;
+}
+
+const runFromToolbox = (cmd: string) => { finishTyping(); command(cmd); };
+const sep = () => { const d = document.createElement('div'); d.className = 'tb-sep'; return d; };
+const cmdRow = (body: HTMLElement, cmds: (string | [string, string] | null)[]) => {
+  for (const c of cmds) body.append(!c ? sep() : typeof c === 'string' ? commandButton(c, runFromToolbox) : commandButton(c[0], runFromToolbox, c[1]));
+};
+
+/** What the Colours toolbox's swatches do: colour the lines and text, highlight, or fill. */
+let colourMode: 'line' | 'highlight' | 'fill' = 'line';
+
+const TOOLBOX_DEFS: ToolboxDef[] = [
+  { id: 'main', title: 'Drawing Tools', build: (body) => body.append(toolsNav) },
+  {
+    id: 'structure', title: 'Structure',
+    build: (body) => cmdRow(body, ['clean-up', 'add-frame', 'fill-rings', 'highlight', 'remove-highlight', null, 'chain-ends', ['methyls-ch3', 'Methyls as CH3'], ['methyls-me', 'Methyls as Me'], 'explicit-h', 'aromatic-circles', 'stereo-labels', null, 'contract-label', 'check-structure', 'name-to-structure', 'periodic-table']),
+  },
+  {
+    id: 'arrange', title: 'Arrange',
+    build: (body) => cmdRow(body, ['align-left', 'align-hcenter', 'align-right', 'align-top', 'align-vcenter', 'align-bottom', null, 'distribute-h', 'distribute-v', null, 'flip-h', 'flip-v', 'rotate-cw', 'rotate-ccw', null, 'shape-front', 'shape-back']),
+  },
+  {
+    id: 'templates', title: 'Templates',
+    build: (body, vertical) => {
+      body.classList.add('tb-grid');
+      body.style.setProperty('--cols', vertical ? '2' : '12');
+      for (const group of TOOL_GROUPS) for (const item of group) {
+        if (!('palette' in item) || !item.palette.startsWith('tpl-') || item.palette === 'tpl-own') continue;
+        for (const t of item.items) { const b = toolButton(t.name); if (b) body.append(b); }
+      }
+    },
+  },
+  {
+    id: 'colours', title: 'Colours',
+    build: (body, vertical) => {
+      const modes = document.createElement('div');
+      modes.className = 'tb-modes';
+      for (const [m, label, title] of [['line', 'Colour', 'Colour the lines and text'], ['highlight', 'Highlight', 'A band of colour behind atoms and bonds'], ['fill', 'Fill', 'Fill shapes and ring fills']] as const) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = label;
+        b.title = title;
+        b.setAttribute('aria-pressed', String(colourMode === m));
+        b.addEventListener('click', () => { colourMode = m; for (const o of modes.children) o.setAttribute('aria-pressed', String(o === b)); });
+        modes.append(b);
+      }
+      const grid = document.createElement('div');
+      grid.className = 'tb-swatches';
+      const swatch = (c: string | undefined) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'tb-swatch';
+        if (c) b.style.background = c; else { b.textContent = '∅'; b.style.fontSize = '11px'; }
+        b.title = c ? c.toUpperCase() : 'None: take the colour, highlight or fill off';
+        b.setAttribute('aria-label', b.title);
+        b.addEventListener('click', () => {
+          if (!editor.colourSelection(c, colourMode)) flash('Select what to colour first.');
+          else if (colourMode === 'highlight' && c) highlightColour = c;
+        });
+        return b;
+      };
+      grid.append(swatch(undefined));
+      for (const c of [...STANDARD_COLOURS, '#ffffff']) grid.append(swatch(c));
+      for (const p of getPalettes()) {
+        if (!p.colors.length) continue;
+        const n = document.createElement('div');
+        n.className = 'tb-swatch-name';
+        n.textContent = p.name;
+        grid.append(n, ...p.colors.map((c) => swatch(c)));
+      }
+      body.append(modes, grid);
+      if (vertical) body.style.maxWidth = '110px';
+    },
+  },
+  {
+    id: 'custom', title: 'My Toolbox',
+    build: (body) => {
+      for (const k of toolboxState.custom) {
+        const [kind, name] = [k.slice(0, k.indexOf(':')), k.slice(k.indexOf(':') + 1)];
+        const b = kind === 'tool' ? toolButton(name) : commandButton(name, runFromToolbox);
+        if (b) body.append(b);
+      }
+      const edit = commandButton('customize-toolbox', runFromToolbox, toolboxState.custom.length ? '…' : 'Choose what goes here…');
+      edit.title = 'Choose What Is in My Toolbox';
+      body.append(edit);
+    },
+  },
+];
+
+const toolboxes = new Toolboxes(TOOLBOX_DEFS, {
+  get: () => toolboxState,
+  set: (st) => { toolboxState = st; tickToolboxes(); storeSettings(); },
+  work: () => $('#work'),
+  customize: () => openCustomToolbox(),
+});
+
+/** Tick the shown toolboxes and the lock in the View menu. */
+function tickToolboxes(): void {
+  for (const id of ['main', 'structure', 'arrange', 'templates', 'colours', 'custom'] as ToolboxId[]) $(`[data-cmd="toolbox-${id}"]`)?.setAttribute('aria-checked', String(!!toolboxState.places[id]?.shown));
+  $('[data-cmd="lock-toolboxes"]')?.setAttribute('aria-checked', String(toolboxState.locked));
+}
+
+function openCustomToolbox(): void {
+  const tools: Pickable[] = [...ALL_TOOLS].map(([name, t]) => ({ key: `tool:${name}`, label: t.title.split(/[.:] /)[0], icon: t.icon }));
+  const groups = [{ name: 'Drawing tools', items: tools }, ...menuCommands().filter((g) => g.items.length).map((g) => ({ name: `${g.menu} menu`, items: g.items.map((c) => ({ key: `cmd:${c.cmd}`, label: c.label })) }))];
+  customizeToolbox(groups, () => toolboxState.custom, (items) => {
+    toolboxState = { ...toolboxState, custom: items, places: { ...toolboxState.places, custom: { ...toolboxState.places.custom, shown: true } } };
+    tickToolboxes();
+    storeSettings();
+    toolboxes.render();
+  });
+}
+
+toolboxes.render();
+tickToolboxes();
+// your palettes show in the Colours toolbox as soon as they change
+onPalettes(() => { if (toolboxState.places.colours?.shown) toolboxes.render(); });
 stylePanel.reaction = {
   roles: (id) => editor.reactionRoles(id),
   others: () => editor.sel.atoms.size + editor.sel.captions.size + editor.sel.shapes.size,

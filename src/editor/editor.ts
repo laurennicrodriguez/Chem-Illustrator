@@ -22,13 +22,15 @@ import { joinAtoms, joinBonds } from '../chem/join';
 import { extractDrawing, insertDrawing } from '../io/clipboard';
 import { isReactionArrow, itemFinder, rolesOf, ROLES, schemeItems, type Item, type Role } from '../chem/reaction';
 import { applySchemePlan, planCleanUp } from '../chem/scheme-layout';
-import { toggleChainEndLabels, toggleExplicitHydrogens } from '../chem/hydrogens';
+import { fillRings, refitRingFills } from '../chem/ring-fill';
+import { setMethylStyle, toggleChainEndLabels, toggleExplicitHydrogens, type MethylStyle } from '../chem/hydrogens';
 import { selectedGroup } from '../chem/group-smiles';
 import { circleRing, circleRings, kekulize } from '../chem/aromatic';
 import { bondLayer, crossingBonds } from '../chem/crossing';
 import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
 import { pushArrow, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
 import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
+import { frameAround, frameBox, frameMembers, refitFrames, defaultPad, thingsInside } from './frames';
 import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, rotation, mirrorX, mirrorY } from './arrange';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { tokenize, addNicknames, isBuiltInNickname } from '../chem/labels';
@@ -206,6 +208,8 @@ export class Editor {
     fixedLength: true,
     /** New bonds point in 15° steps, unless Alt is held (Ctrl+E). */
     fixedAngles: true,
+    /** Show Terminal Methyls writes them as CH3 or as Me (Structure > Terminal Methyls as …). */
+    methylStyle: 'CH3' as MethylStyle,
   };
   /** Run a menu command by name; false when it doesn't apply, so the key does nothing. */
   runCommand: (name: string) => boolean = () => false;
@@ -221,6 +225,10 @@ export class Editor {
   /** Input-to-paint times for the speed readout (ms). */
   latencies: number[] = [];
   onChange: () => void = () => {};
+  /** A right click on the drawing (not a right-button drag, which pans). */
+  onContextMenu: (e: MouseEvent) => void = () => {};
+  private pendingContext: MouseEvent | null = null;
+  private rightDragged = false;
   onFrame: () => void = () => {};
   onToolChange: (name: string) => void = () => {};
   /** The fragmentation tool drew a line from p to q across these bonds (the app works out the masses). */
@@ -248,8 +256,22 @@ export class Editor {
     el.addEventListener('pointerleave', () => { this.pointerInside = false; if (!this.drag) { this.hover = null; this.requestOverlay(); } });
     el.addEventListener('dblclick', (e) => this.onDoubleClick(e));
     el.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
-    el.addEventListener('contextmenu', (e) => e.preventDefault());
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      // a right-button drag pans; the menu only shows for a right click that stayed put.
+      // (Windows sends this after the button comes up, macOS while it is still down.)
+      if (this.drag?.button === 2) this.pendingContext = e;
+      else if (!this.rightDragged) this.onContextMenu(e);
+    });
     window.addEventListener('keydown', (e) => this.onKey(e));
+    // frames that follow what they surround are refitted as each change finishes
+    doc.beforeCommit = (before) => {
+      let frames = false, rings = false;
+      for (const s of this.doc.shapes.values()) { if (s.frame?.fit) frames = true; if (s.kind === 'ring') rings = true; }
+      // ring fills first: a frame round a structure takes in its ring fills' new places
+      if (rings) refitRingFills(this.doc, before);
+      if (frames) refitFrames(this.doc, before, this.measure());
+    };
   }
 
   // ------------------------------------------------------------------ painting
@@ -478,7 +500,9 @@ export class Editor {
         if (!h) this.keyHotHover = null;
         else if (!sameHit(h, this.keyHotHover)) this.keyHot = null;
       }
-      this.r.overlay.style.cursor = onRotate ? 'grab' : handle ? (handle.which === 'mid' ? 'grab' : 'crosshair') : '';
+      // a hand over what is selected: dragging there moves it
+      const movable = !!h && this.tool.kind !== 'eraser' && this.isSelected(h);
+      this.r.overlay.style.cursor = onRotate ? 'grab' : handle ? (handle.which === 'mid' ? 'grab' : 'crosshair') : movable ? 'grab' : '';
       this.requestOverlay(e.timeStamp);
       return;
     }
@@ -490,6 +514,7 @@ export class Editor {
       if (d.mode === 'handle') this.doc.begin(d.handle!.which === 'mid' ? 'Bend arrow' : this.cropping === d.handle!.id ? 'Crop picture' : 'Resize');
       if (d.mode === 'rotate') this.doc.begin('Rotate');
       if (d.mode === 'move') {
+        this.r.overlay.style.cursor = 'grabbing';
         this.doc.begin('Move');
         if (d.hit && !this.isSelected(d.hit)) {
           // dragging an unselected atom or object moves just that
@@ -566,6 +591,8 @@ export class Editor {
   }
 
   private dragModeFor(d: Drag): Drag['mode'] {
+    // with any drawing tool, dragging what is already selected moves it (as in ChemDraw)
+    if (d.hit && this.tool.kind !== 'eraser' && this.isSelected(d.hit)) return 'move';
     switch (this.tool.kind) {
       case 'select':
         return d.hit ? 'move' : 'marquee';
@@ -594,6 +621,12 @@ export class Editor {
     if (!d) return;
     const p = this.docPoint(e);
     if (d.mode === 'text') { this.captionEd?.pointerUp(); return; }
+    if (d.button === 2) {
+      this.rightDragged = d.moved;
+      const ctx = this.pendingContext;
+      this.pendingContext = null;
+      if (ctx && !d.moved) this.onContextMenu(ctx);
+    }
     if (d.mode === 'pan') { this.requestScene(e.timeStamp); return; }
     if (d.mode === 'handle' || d.mode === 'rotate') {
       if (d.moved) { this.doc.commit(); this.changed(); }
@@ -615,6 +648,31 @@ export class Editor {
     else if (d.mode === 'draw') this.finishDraw(d, p);
     this.hover = this.hitTest(p);
     this.requestScene(e.timeStamp);
+  }
+
+  /**
+   * Right-click: what is under the pointer. Something not already selected becomes the
+   * selection first (a whole structure for an atom or bond), as in ChemDraw, so the menu's
+   * commands act on what was clicked. Empty space away from the selection clears it. Null on
+   * empty space.
+   */
+  contextPick(e: MouseEvent): Hit {
+    const p = this.docPoint(e);
+    if (this.captionEd?.hit(p)) return null;
+    const h = this.hitTest(p);
+    // empty space (outside the selection's box): the menu for the page, not the selection
+    if (!h && this.hasSelection()) {
+      const b = this.selBox();
+      if (!b || p.x < b.x1 || p.x > b.x2 || p.y < b.y1 || p.y > b.y2) this.clearSelection();
+    }
+    if (h && !this.isSelected(h)) {
+      if (h.kind === 'atom' || h.kind === 'bond') this.selectFragment(h.kind === 'atom' ? h.id : this.doc.bonds.get(h.id)!.a1, false);
+      else {
+        this.selectOnly(h);
+        this.onChange();
+      }
+    }
+    return h;
   }
 
   private onDoubleClick(e: MouseEvent): void {
@@ -1331,20 +1389,123 @@ export class Editor {
     for (const s of doc.shapes.values()) if (!s.hidden && !s.locked && within(s.kind === 'bracket' ? { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) } : shapeBox(s))) this.sel.shapes.add(s.id);
   }
 
+  /**
+   * Structure > Add Frame: a box round the selection, with a gap, that follows what it surrounds.
+   * False when nothing is selected.
+   */
+  addFrame(): boolean {
+    if (!this.hasSelection()) return false;
+    const doc = this.doc;
+    const f = frameAround(doc, this.sel, this.measure());
+    if (!f) return false;
+    doc.edit('Add frame', () => this.selectOnly({ kind: 'shape', id: doc.addShape({ ...f, lineWidth: doc.style.lineWidth }).id }));
+    this.changed();
+    return true;
+  }
+
+  /** Make a box into a frame round what lies inside it (or fit a frame again), following its contents from now on. */
+  fitFrame(id: number): void {
+    const doc = this.doc;
+    const s = doc.shapes.get(id);
+    if (!s) return;
+    const m = this.measure();
+    doc.edit('Fit frame', () => {
+      const pad = defaultPad(doc);
+      const frame = s.frame ? { ...s.frame, fit: true } : { ...thingsInside(doc, shapeBox(s), m, id), padX: pad, padY: pad, fit: true };
+      doc.updateShape(id, { frame });
+      const b = frameBox(doc, frame, m);
+      if (b) doc.updateShape(id, b);
+    });
+    this.changed();
+  }
+
+  /** Fill the rings in the selection (Structure > Fill Rings), and select the fills so the Style panel shows them. */
+  fillRings(): string {
+    const doc = this.doc;
+    const bonds = new Set(this.sel.bonds);
+    // atoms selected without their bonds (one by one) count as their bonds between them
+    for (const b of doc.bonds.values()) if (this.sel.atoms.has(b.a1) && this.sel.atoms.has(b.a2)) bonds.add(b.id);
+    if (!bonds.size) return 'Select the rings to fill (or the whole structure) first.';
+    let ids: number[] = [];
+    doc.edit('Fill rings', () => { ids = fillRings(doc, bonds); });
+    if (!ids.length) return 'No rings in the selection.';
+    this.sel = emptySel();
+    for (const id of ids) this.sel.shapes.add(id);
+    this.changed();
+    return `${ids.length} ring${ids.length > 1 ? 's' : ''} filled: choose the colour, gradient or pattern in the Style panel.`;
+  }
+
+  /**
+   * Colour what is selected in one go (the Colours toolbox): the lines and text, the highlight
+   * behind atoms and bonds, or the fill of shapes and ring fills. Undefined takes it off.
+   */
+  colourSelection(colour: string | undefined, what: 'line' | 'highlight' | 'fill'): boolean {
+    const doc = this.doc, s = this.sel;
+    if (!this.hasSelection()) return false;
+    const black = colour?.toLowerCase() === '#000000' ? undefined : colour;
+    doc.edit(what === 'highlight' ? 'Highlight' : what === 'fill' ? 'Fill colour' : 'Colour', () => {
+      if (what === 'highlight') {
+        for (const id of s.atoms) doc.updateAtom(id, { highlight: colour });
+        for (const id of s.bonds) doc.updateBond(id, { highlight: colour });
+        return;
+      }
+      if (what === 'fill') {
+        for (const id of s.shapes) {
+          const sh = doc.shapes.get(id);
+          if (sh && (sh.kind === 'rect' || sh.kind === 'oval' || sh.kind === 'geo' || sh.kind === 'ring')) doc.updateShape(id, colour ? { filled: true, fillColor: colour } : { filled: false });
+        }
+        return;
+      }
+      for (const id of s.atoms) doc.updateAtom(id, { color: black });
+      for (const id of s.bonds) doc.updateBond(id, { color: black });
+      for (const id of s.arrows) doc.updateArrow(id, { color: black });
+      for (const id of s.captions) { const c = doc.captions.get(id); if (c) doc.updateCaption(id, { runs: c.runs.map((r) => ({ ...r, color: black })) }); }
+      for (const id of s.shapes) { const sh = doc.shapes.get(id); if (sh && sh.kind !== 'ring' && sh.kind !== 'picture') doc.updateShape(id, { color: black }); }
+    });
+    this.changed();
+    return true;
+  }
+
+  /** Highlight the selected atoms and bonds in a colour (Structure > Highlight), or take it off (undefined). */
+  highlight(colour: string | undefined): boolean {
+    const doc = this.doc;
+    if (!this.sel.atoms.size && !this.sel.bonds.size) return false;
+    doc.edit(colour ? 'Highlight' : 'Remove highlight', () => {
+      for (const id of this.sel.atoms) doc.updateAtom(id, { highlight: colour });
+      for (const id of this.sel.bonds) doc.updateBond(id, { highlight: colour });
+    });
+    this.changed();
+    return true;
+  }
+
   private moveSelection(dx: number, dy: number): void {
     const doc = this.doc;
-    doc.moveAtoms(this.sel.atoms, dx, dy);
-    for (const id of this.sel.captions) { const c = doc.captions.get(id); if (c) doc.updateCaption(id, { x: c.x + dx, y: c.y + dy }); }
-    for (const id of this.sel.arrows) {
+    // a frame that follows its contents takes them with it
+    const sel: Selection = { atoms: new Set(this.sel.atoms), bonds: this.sel.bonds, captions: new Set(this.sel.captions), arrows: new Set(this.sel.arrows), shapes: new Set(this.sel.shapes) };
+    for (const id of this.sel.shapes) {
+      // a ring's fill takes its structure along (it sits on the ring's atoms)
+      const ring = doc.shapes.get(id)?.ring;
+      if (ring?.length && doc.atoms.has(ring[0])) for (const a of doc.fragmentOf(ring[0])) sel.atoms.add(a);
+      const f = doc.shapes.get(id)?.frame;
+      if (!f?.fit) continue;
+      const m = frameMembers(doc, f);
+      for (const k of ['atoms', 'captions', 'arrows', 'shapes'] as const) for (const x of m[k]) sel[k].add(x);
+    }
+    doc.moveAtoms(sel.atoms, dx, dy);
+    for (const id of sel.captions) { const c = doc.captions.get(id); if (c) doc.updateCaption(id, { x: c.x + dx, y: c.y + dy }); }
+    for (const id of sel.arrows) {
       const r = doc.arrows.get(id);
       if (!r) continue;
       const patch: Partial<Arrow> = { tail: { x: r.tail.x + dx, y: r.tail.y + dy }, head: { x: r.head.x + dx, y: r.head.y + dy } };
       // a connector moved away from a shape that stays comes loose from it
-      if (r.from && !this.sel.shapes.has(r.from.shape)) patch.from = undefined;
-      if (r.to && !this.sel.shapes.has(r.to.shape)) patch.to = undefined;
+      if (r.from && !sel.shapes.has(r.from.shape)) patch.from = undefined;
+      if (r.to && !sel.shapes.has(r.to.shape)) patch.to = undefined;
       doc.updateArrow(id, patch);
     }
-    for (const id of this.sel.shapes) { const s = doc.shapes.get(id); if (s) doc.updateShape(id, { x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy }); }
+    for (const id of sel.shapes) {
+      const s = doc.shapes.get(id);
+      if (s) doc.updateShape(id, { x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy, ...(s.poly ? { poly: s.poly.map((p) => ({ x: p.x + dx, y: p.y + dy })) } : {}) });
+    }
   }
 
   deleteSelection(): void {
@@ -1629,13 +1790,23 @@ export class Editor {
     return null;
   }
 
-  /** Show or hide CH3 at the chain ends of the selection (or the whole drawing). */
+  /** Show or hide the terminal methyls (CH3 or Me, as chosen) of the selection, or of the whole drawing. */
   toggleChainEnds(): string {
     let r = { count: 0, shown: false };
-    this.doc.edit('Chain-End Carbons', () => { r = toggleChainEndLabels(this.doc, this.sel.atoms); });
+    this.doc.edit('Terminal Methyls', () => { r = toggleChainEndLabels(this.doc, this.sel.atoms, this.options.methylStyle); });
     if (!r.count) return 'No chain ends here: a chain end is a plain carbon with one bond.';
     this.changed();
-    return r.shown ? `CH₃ written out at ${r.count} chain end${r.count > 1 ? 's' : ''}.` : 'Chain ends back to plain lines.';
+    const how = this.options.methylStyle === 'Me' ? 'Me' : 'CH₃';
+    return r.shown ? `${how} written out at ${r.count} chain end${r.count > 1 ? 's' : ''}.` : 'Chain ends back to plain lines.';
+  }
+
+  /** Write terminal methyls as CH3 or Me from now on, and rewrite the ones already shown in the selection (or the whole drawing). */
+  setMethylStyle(style: MethylStyle, ids: Iterable<number> = this.sel.atoms): number {
+    this.options.methylStyle = style;
+    let n = 0;
+    this.doc.edit(`Terminal Methyls as ${style}`, () => { n = setMethylStyle(this.doc, ids, style); });
+    if (n) this.changed();
+    return n;
   }
 
   /** Hide the H atoms that don't matter, or draw the selected atoms' hydrogens as atoms. */

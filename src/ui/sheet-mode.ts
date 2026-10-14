@@ -4,6 +4,7 @@
 // by a part of a structure drawn as a query. The panel on the right shows what the selected
 // cell holds and how its value was worked out.
 
+import { paletteRows } from './palette-ui';
 import { SheetView, popupMenu, selectionName } from './sheet-view';
 import { Workbook, Sheet, Structure, CellStyle, CellBlock, Cell, Condition, CompareOp, makeStructure, growToMerges } from '../sheet/workbook';
 import { Range, MAX_ROWS, MAX_COLS, colName, cellName, parseRange, keyOf, rowOf, colOf, inRange } from '../sheet/refs';
@@ -446,9 +447,10 @@ export class SheetMode {
     more.className = 'colour-more';
     const input = document.createElement('input');
     input.type = 'color';
+    input.dataset.systemPicker = '';
     input.addEventListener('change', () => pick(input.value));
     more.append('More colours ', input);
-    m.append(grid, none, more);
+    m.append(grid, paletteRows(undefined, pick, () => m.remove()), none, more);
     document.body.append(m);
     m.style.left = `${Math.min(x, innerWidth - m.offsetWidth - 4)}px`;
     m.style.top = `${y}px`;

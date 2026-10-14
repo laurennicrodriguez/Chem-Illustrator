@@ -229,6 +229,9 @@ export function shapeHit(s: Shape, p: Vec, tol: number): boolean {
       if ((s.filled || s.text) && insideOutline(polys, p)) return true;
       return distToOutline(polys, p) <= tol || (!!out.lines && distToOutline(flatten(moveSteps(out.lines, x1, y1)), p) <= tol);
     }
+    case 'ring':
+      // a ring's fill is picked up anywhere inside the ring
+      return !!s.poly && s.poly.length > 2 && insideOutline([s.poly], p);
     case 'oval': {
       const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, rx = Math.max((x2 - x1) / 2, 1e-6), ry = Math.max((y2 - y1) / 2, 1e-6);
       const k = Math.hypot((p.x - cx) / rx, (p.y - cy) / ry);

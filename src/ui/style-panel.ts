@@ -3,7 +3,8 @@
 // bond (label, charge, atom number; order and style).
 // Anything the drawing tools set automatically can be changed here by hand.
 
-import { Doc, Arrow, Shape, Caption, Atom, Bond, type StepRoles } from '../model';
+import { Doc, Arrow, Shape, Caption, Atom, Bond, type StepRoles, type Pattern } from '../model';
+import { PATTERNS, patternSpacing } from '../render/fills';
 import type { Role } from '../chem/reaction';
 import { setStereoShown, setStereoText } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
@@ -12,6 +13,7 @@ import { DEG } from '../geom';
 import { isCircle, cropTo } from '../objects';
 import { GEOS, geoDef } from '../design/geo';
 import { nextNumber } from '../chem/sprouts';
+import { methylState, writeTerminalMethyls, type MethylStyle } from '../chem/hydrogens';
 import type { TableData } from '../model';
 import { deleteColumn, deleteRow, fitColumns, insertColumn, insertRow, setColumnAlign, setColumnWidth, setSpan, spanOf, type TablePart } from '../table';
 import type { Measure } from '../text/layout';
@@ -54,8 +56,10 @@ const TABLE_LINES: Opt<TableData['lines']>[] = [['acs', 'ACS style (rules above 
 
 const LABEL_DIRS: Opt<Atom['just']>[] = [['auto', 'Automatically (away from the bonds)'], ['right', 'To the right (OMe)'], ['left', 'To the left (MeO)']];
 
-type Fill = 'none' | 'solid' | 'faded' | 'shaded';
-const FILLS: Opt<Fill>[] = [['none', 'None'], ['solid', 'Solid colour'], ['faded', 'Faded (light tint)'], ['shaded', 'Shaded (light to dark)']];
+type Fill = 'none' | 'solid' | 'faded' | 'shaded' | 'gradient';
+const FILLS: Opt<Fill>[] = [['none', 'None'], ['solid', 'Solid colour'], ['faded', 'Faded (light tint)'], ['shaded', 'Shaded (light to dark)'], ['gradient', 'Gradient (two colours)']];
+const GRAD_DIRS: Opt<string>[] = [['90', 'Top to bottom'], ['270', 'Bottom to top'], ['0', 'Left to right'], ['180', 'Right to left'], ['45', 'Diagonal, top left to bottom right'], ['-45', 'Diagonal, bottom left to top right'], ['radial', 'Out from the middle']];
+const PATTERN_OPTS: Opt<string>[] = [['none', 'None'], ...PATTERNS];
 
 const BOND_ORDERS: Opt<string>[] = [['1', 'Single'], ['2', 'Double'], ['3', 'Triple'], ['1.5', 'Aromatic'], ['4', 'Quadruple']];
 const BOND_STYLES: Opt<Bond['display']>[] = [['solid', 'Plain'], ['wedge', 'Wedge'], ['hashWedge', 'Hashed wedge'], ['hash', 'Hashed'], ['bold', 'Bold'], ['dash', 'Dashed'], ['wavy', 'Wavy'], ['dative', 'Dative (arrow to the acceptor)']];
@@ -70,6 +74,12 @@ export class StylePanel {
   applyLabel: (atomId: number, text: string) => void = () => {};
   /** Crop a picture with the mouse (its handles cut the edges off), or stop. */
   cropWithMouse: (shapeId: number) => void = () => {};
+  /** Frames (set up by the app): add one round the selection, or fit a box round what is inside it. */
+  frames: { add(): void; fit(shapeId: number): void } | null = null;
+  /** A highlight colour was chosen (the app remembers it for Structure > Highlight). */
+  highlightUsed: (colour: string) => void = () => {};
+  /** Fill the rings in the selection (set up by the app). */
+  ringFill: (() => void) | null = null;
   /** Make a picture's white background see-through (set up by the app). */
   removeWhite: (shapeIds: number[]) => void = () => {};
   /** A picture's width and height change together. */
@@ -116,6 +126,19 @@ export class StylePanel {
     if (tables.length) this.tableControls(tables[0]);
     if (caps.length) this.captionControls(caps);
     if (centres.length || dbls.length) this.stereoControls(centres, dbls);
+    const boxes = shapes.filter((x) => x.kind === 'rect' || x.kind === 'oval' || x.kind === 'geo');
+    if (boxes.length === 1 && all.length === 1 && !caps.length && !arrows.length && !s.atoms.size) this.frameControls(boxes[0]);
+    else if (!this.section.hidden && this.frames) {
+      const row = document.createElement('div');
+      row.className = 'style-buttons';
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = 'Add frame';
+      b.title = 'Draw a box round the selection that grows and moves with it (Structure > Add Frame)';
+      b.addEventListener('click', () => this.frames?.add());
+      row.append(b);
+      this.body.append(row);
+    }
     if (focused) [...this.body.querySelectorAll<HTMLElement>('.style-row')].find((r) => r.textContent === focused)?.querySelector<HTMLElement>('select, input')?.focus();
   }
 
@@ -217,7 +240,7 @@ export class StylePanel {
     const set = (label: string, ok: (x: Shape) => boolean, patch: (x: Shape) => Partial<Shape>) =>
       this.edit(label, () => { for (const x of shapes) if (ok(x)) this.doc.updateShape(x.id, patch(x)); });
     const any = (f: (x: Shape) => boolean) => shapes.find(f);
-    const names: Record<Shape['kind'], string> = { line: 'Line', rect: 'Box', oval: 'Oval', symbol: 'Symbol', bracket: 'Bracket', picture: 'Picture', table: 'Table', geo: 'Shape' };
+    const names: Record<Shape['kind'], string> = { line: 'Line', rect: 'Box', oval: 'Oval', symbol: 'Symbol', bracket: 'Bracket', picture: 'Picture', table: 'Table', geo: 'Shape', ring: 'Ring fill' };
     this.heading(shapes.length > 1 ? `${shapes.length} shapes` : isCircle(s) ? 'Circle' : s.kind === 'geo' ? geoDef(s.geo).name : names[s.kind]);
     const geo = any((x) => x.kind === 'geo');
     const isGeo = (x: Shape) => x.kind === 'geo';
@@ -225,20 +248,32 @@ export class StylePanel {
       // another shape from the library, keeping the size, colours and text
       this.select('Shape', GEOS.map((g): Opt<string> => [g.id, `${g.name} (${g.group.toLowerCase()})`]), geoDef(geo.geo).id, (v) => set('Change shape', isGeo, () => ({ geo: v })));
     }
-    const lined = (x: Shape) => x.kind !== 'symbol';
+    const lined = (x: Shape) => x.kind !== 'symbol' && x.kind !== 'ring';
     const l = any(lined);
     if (l) {
       this.check('Dashed', !!l.dashed, (v) => set('Dashed', lined, () => ({ dashed: v })));
       if (!geo) this.check('Bold', !!l.bold, (v) => set('Bold', lined, () => ({ bold: v })));
     }
-    const fillable = (x: Shape) => x.kind === 'rect' || x.kind === 'oval' || x.kind === 'geo';
+    const fillable = (x: Shape) => x.kind === 'rect' || x.kind === 'oval' || x.kind === 'geo' || x.kind === 'ring';
     const f = any(fillable);
     if (f) {
       const now: Fill = !f.filled ? 'none' : f.fill ?? 'solid';
       this.select('Fill', FILLS, now, (v) => set('Fill', fillable, () => (v === 'none' ? { filled: false } : { filled: true, fill: v === 'solid' ? undefined : v })));
-      if (f.filled) this.color('Fill colour', f.fillColor, (v) => set('Fill colour', fillable, () => ({ fillColor: v })), 'Same as the line');
-      if (f.filled && geo && (geo.fill ?? 'solid') === 'solid') {
-        this.number('See-through (%)', Math.round((geo.transparency ?? 0) * 100), 5, 0, 100, (v) => set('Transparency', isGeo, () => ({ transparency: v ? v / 100 : undefined })), 'How much shows through the fill: 0 is solid');
+      if (f.filled) this.color(f.fill === 'gradient' ? 'From colour' : 'Fill colour', f.fillColor, (v) => set('Fill colour', fillable, () => ({ fillColor: v })), 'Same as the line');
+      if (f.filled && f.fill === 'gradient') {
+        this.color('To colour', f.fill2, (v) => set('Gradient colour', fillable, () => ({ fill2: v })), 'White');
+        this.select('Direction', GRAD_DIRS, f.gradRadial ? 'radial' : String(f.gradAngle ?? 90), (v) => set('Gradient direction', fillable, () => (v === 'radial' ? { gradRadial: true } : { gradRadial: undefined, gradAngle: Number(v) })));
+      }
+      const see = any((x) => x.kind === 'geo' || x.kind === 'ring');
+      if (f.filled && see) {
+        const seeable = (x: Shape) => x.kind === 'geo' || x.kind === 'ring';
+        this.number('See-through (%)', Math.round((see.transparency ?? 0) * 100), 5, 0, 100, (v) => set('Transparency', seeable, () => ({ transparency: v ? v / 100 : undefined })), 'How much shows through the fill: 0 is solid');
+      }
+      // hatching and stippling, over the fill or on their own
+      this.select('Pattern', PATTERN_OPTS, f.pattern ?? 'none', (v) => set('Pattern', fillable, () => ({ pattern: v === 'none' ? undefined : (v as Pattern) })));
+      if (f.pattern) {
+        this.color('Pattern colour', f.patternColor, (v) => set('Pattern colour', fillable, () => ({ patternColor: v })), 'Same as the line');
+        this.number('Pattern spacing (pt)', round(patternSpacing(f)), 0.25, 0.5, 40, (v) => set('Pattern spacing', fillable, () => ({ patternSize: v })), 'How far apart the lines or dots are');
       }
     }
     if (geo) {
@@ -259,6 +294,42 @@ export class StylePanel {
     const br = any((x) => x.kind === 'bracket');
     if (br) this.select('Bracket', BRACKETS, br.bracket ?? 'square', (v) => set('Bracket shape', (x) => x.kind === 'bracket', () => ({ bracket: v })));
     this.color(f?.filled && f.fillColor ? 'Line colour' : 'Colour', s.color, (v) => set('Colour', () => true, () => ({ color: v })));
+  }
+
+  // ------------------------------------------------------------------ frames
+
+  /** A box: as a frame, the gap it keeps round what it surrounds and whether it follows them. */
+  private frameControls(sh: Shape): void {
+    const f = sh.frame;
+    this.heading('Frame');
+    if (!f) {
+      this.note('Make this box a frame: it fits round what lies inside it, with a gap, and follows it from then on.');
+    } else {
+      const set = (label: string, patch: Partial<NonNullable<Shape['frame']>>) => this.edit(label, () => {
+        const now = this.doc.shapes.get(sh.id)?.frame;
+        if (now) this.doc.updateShape(sh.id, { frame: { ...now, ...patch } });
+      });
+      this.check('Fit round its contents', f.fit, (v) => (v ? this.frames?.fit(sh.id) : set('Stop fitting frame', { fit: false })));
+      this.number('Gap across (pt)', round(f.padX, 10), 0.5, 0, 500, (v) => set('Frame gap', { padX: v }),
+        'Space between the frame and what it surrounds, left and right.');
+      this.number('Gap up and down (pt)', round(f.padY, 10), 0.5, 0, 500, (v) => set('Frame gap', { padY: v }),
+        'Space between the frame and what it surrounds, above and below.');
+      // each structure counts once, however many of its atoms were selected
+      const seen = new Set<number>();
+      let n = f.captions.length + f.arrows.length + f.shapes.length;
+      for (const id of f.atoms) if (this.doc.atoms.has(id) && !seen.has(id)) { n++; for (const a of this.doc.fragmentOf(id)) seen.add(a); }
+      this.note(`${f.fit ? 'Follows' : 'Surrounds'} ${n} ${n === 1 ? 'thing' : 'things'} (structures, text, arrows, shapes). Moving or resizing the frame by hand stops it fitting; tick the box to fit it again.`);
+    }
+    if (!f || !f.fit) {
+      const row = document.createElement('div');
+      row.className = 'style-buttons';
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = f ? 'Fit now' : 'Fit round what is inside';
+      b.addEventListener('click', () => this.frames?.fit(sh.id));
+      row.append(b);
+      this.body.append(row);
+    }
   }
 
   // ------------------------------------------------------------------ pictures
@@ -413,10 +484,12 @@ export class StylePanel {
       'Type a label (O, NH2, OTBS, CO2Et…); leave empty for a plain carbon.');
     this.number('Charge', a.charge, 1, -8, 8, (v) => set('Charge', { charge: v }));
     this.color('Colour', a.color, (v) => set('Atom colour', { color: v }));
+    this.color('Highlight', a.highlight, (v) => { set(v ? 'Highlight' : 'Remove highlight', { highlight: v }); if (v) this.highlightUsed(v); }, 'None');
     if (a.label || a.z !== 6 || a.showCarbon) {
       this.select('Label runs', LABEL_DIRS, a.just, (v) => set('Label direction', { just: v }));
     }
-    if (a.z === 6 && !a.label && this.doc.degree(a.id) > 0) {
+    if (methylState(this.doc, [a.id]) !== 'none') this.methylControls([a.id]);
+    else if (a.z === 6 && !a.label && this.doc.degree(a.id) > 0) {
       this.check('Show C and its H', !!a.showCarbon, (v) => set(v ? 'Show carbon' : 'Hide carbon', { showCarbon: v || undefined }));
     }
     this.check('Show atom number', !!a.showNumber, (v) => set(v ? 'Show atom number' : 'Hide atom number',
@@ -434,6 +507,7 @@ export class StylePanel {
     this.select('Style', BOND_STYLES, b.display, (v) => set('Bond style', { display: v }));
     if (b.order === 2) this.select('Second line', DOUBLE_POS, b.dpos, (v) => set('Double bond position', { dpos: v }));
     this.color('Colour', b.color, (v) => set('Bond colour', { color: v }));
+    this.color('Highlight', b.highlight, (v) => { set(v ? 'Highlight' : 'Remove highlight', { highlight: v }); if (v) this.highlightUsed(v); }, 'None');
   }
 
   /** Several atoms and bonds: their colour (labels and lines together). */
@@ -445,6 +519,39 @@ export class StylePanel {
       for (const a of atoms) this.doc.updateAtom(a.id, { color: v });
       for (const b of bonds) this.doc.updateBond(b.id, { color: v });
     }));
+    // a highlight picks out part of a structure: a disc under each atom and a band under each bond
+    const hl = [...atoms, ...bonds].map((x) => x.highlight);
+    this.color('Highlight', hl.every((c) => c === hl[0]) ? hl[0] : undefined, (v) => {
+      this.edit(v ? 'Highlight' : 'Remove highlight', () => {
+        for (const a of atoms) this.doc.updateAtom(a.id, { highlight: v });
+        for (const b of bonds) this.doc.updateBond(b.id, { highlight: v });
+      });
+      if (v) this.highlightUsed(v);
+    }, 'None');
+    if (bonds.length >= 3 && this.ringFill) {
+      const row = document.createElement('div');
+      row.className = 'style-buttons';
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = 'Fill rings';
+      b.title = 'Colour in, shade or hatch the rings in the selection (Structure > Fill Rings)';
+      b.addEventListener('click', () => this.ringFill?.());
+      row.append(b);
+      this.body.append(row);
+    }
+    this.methylControls(atoms.map((a) => a.id));
+  }
+
+  /** Terminal methyls among these atoms: not written out, CH3 or Me (Structure > Show Terminal Methyls). */
+  private methylControls(ids: number[]): void {
+    // (no atoms would mean the whole drawing to the methyl commands)
+    const now = ids.length ? methylState(this.doc, ids) : 'none';
+    if (now === 'none') return;
+    const opts: Opt<string>[] = [['hidden', 'Not written out'], ['CH3', 'CH3'], ['Me', 'Me']];
+    if (now === 'mixed') opts.unshift(['mixed', 'Mixed']);
+    this.select('Terminal methyls', opts, now, (v) => {
+      if (v !== 'mixed') this.edit('Terminal Methyls', () => writeTerminalMethyls(this.doc, ids, v as MethylStyle | 'hidden'));
+    });
   }
 
   // ------------------------------------------------------------------ stereo labels

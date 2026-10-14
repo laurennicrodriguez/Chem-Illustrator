@@ -2,6 +2,8 @@
 // their formatting, arrows, and the common graphics (lines, boxes, circles, brackets,
 // charge symbols). Anything not understood yet is counted and skipped, never fatal.
 
+import { fillFrameMembers, frameFromTag } from '../editor/frames';
+import { attachRingFills } from '../chem/ring-fill';
 import { lipDirection } from '../chem/polymer';
 import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, CHIRAL_FLAGS } from '../model';
 import { TEXT_TAG, parseTextTag, runsFromChemDraw } from '../text/chemdraw-text';
@@ -201,6 +203,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       else if (enh === 'And' || enh === 'Or') extra.enhStereo = { type: enh === 'And' ? 'and' : 'or', group: num(n, 'EnhancedStereoGroupNum', 1) };
       const groupTag = kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === GROUP_TAG)?.getAttribute('Value');
       if (groupTag) extra.group = groupTag;
+      const hlA = kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === HIGHLIGHT_TAG)?.getAttribute('Value');
+      if (hlA && /^#[0-9a-f]{6}$/i.test(hlA)) extra.highlight = hlA.toLowerCase();
       if (n.getAttribute('ShowTerminalCarbonLabels') === 'yes' || n.getAttribute('ShowNonTerminalCarbonLabels') === 'yes') extra.showCarbon = true;
       const atomNumber = n.getAttribute('AtomNumber');
       if (atomNumber) extra.atomNumber = atomNumber;
@@ -279,6 +283,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       if (lw !== null) extra.s = Number(lw) / st.lineWidth;
       const c = color(b);
       if (c) extra.color = c;
+      const hlB = kids(b).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === HIGHLIGHT_TAG)?.getAttribute('Value');
+      if (hlB && /^#[0-9a-f]{6}$/i.test(hlB)) extra.highlight = hlB.toLowerCase();
       const bond = doc.addBond(a1, a2, order, display, extra);
       from('b', bond.id, b);
       stats.bonds++;
@@ -500,15 +506,20 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     const base = { id: idFor(g), color: c, z };
     const add = (s: Omit<Shape, 'id'> & { id: number }) => {
       // our fill style and outline colour, which ChemDraw has no words for
-      const tag = s.filled ? kids(g).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === FILL_TAG) : undefined;
+      const tag = kids(g).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === FILL_TAG);
       if (tag) {
         try {
-          const v = JSON.parse(tag.getAttribute('Value') ?? '{}') as Pick<Shape, 'fill' | 'fillColor' | 'color'>;
-          s.fill = v.fill === 'faded' || v.fill === 'shaded' ? v.fill : undefined;
+          const v = JSON.parse(tag.getAttribute('Value') ?? '{}') as Partial<Shape>;
+          s.fill = v.fill === 'faded' || v.fill === 'shaded' || v.fill === 'gradient' ? v.fill : undefined;
           s.fillColor = typeof v.fillColor === 'string' ? v.fillColor : undefined;
           s.color = typeof v.color === 'string' ? v.color : undefined;
+          Object.assign(s, fillExtras(v));
+          // a pattern with no fill under it
+          if (v.filled === false) s.filled = false;
         } catch { /* a damaged tag: keep what ChemDraw shows */ }
       }
+      const ft = kids(g).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === FRAME_TAG);
+      if (ft) s.frame = frameFromTag(ft.getAttribute('Value'));
       doc.addShape(s); from('s', s.id, g); stats.shapes++;
     };
     switch (type) {
@@ -620,14 +631,15 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
             let saved: Partial<Shape> | null = null;
             try { saved = JSON.parse(geoTag); } catch { saved = null; }
             const bb = pts(ch.getAttribute('BoundingBox'));
-            if (saved && saved.kind === 'geo' && [saved.x1, saved.y1, saved.x2, saved.y2].every((v) => typeof v === 'number')) {
-              const sh = doc.addShape({ ...(saved as Omit<Shape, 'id'>), id: idFor(ch) });
+            if (saved && (saved.kind === 'geo' || (saved.kind === 'ring' && Array.isArray(saved.poly))) && [saved.x1, saved.y1, saved.x2, saved.y2].every((v) => typeof v === 'number')) {
+              // a ring fill finds its ring again by where the atoms are (atom ids change between files)
+              const sh = doc.addShape({ ...(saved as Omit<Shape, 'id'>), ...(saved.kind === 'ring' ? { ring: undefined } : {}), id: idFor(ch) });
               // moved in ChemDraw: the group's box says where it is now
               const was = ch.getAttribute(GEO_BOX_ATTR);
               const wb = pts(was);
               if (bb.length === 4 && wb.length === 4 && (Math.abs(bb[0] - wb[0]) > 0.01 || Math.abs(bb[1] - wb[1]) > 0.01)) {
                 const dx = bb[0] - wb[0], dy = bb[1] - wb[1];
-                doc.updateShape(sh.id, { x1: sh.x1 + dx, y1: sh.y1 + dy, x2: sh.x2 + dx, y2: sh.y2 + dy });
+                doc.updateShape(sh.id, { x1: sh.x1 + dx, y1: sh.y1 + dy, x2: sh.x2 + dx, y2: sh.y2 + dy, ...(sh.poly ? { poly: sh.poly.map((p) => ({ x: p.x + dx, y: p.y + dy })) } : {}) });
               }
               from('s', sh.id, ch);
               stats.shapes++;
@@ -689,6 +701,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         }
       }
     }
+    attachRingFills(doc);
+    fillFrameMembers(doc);
   });
   doc.reserveIds(maxId);
   const orig = new Map<string, Entity>();
@@ -806,6 +820,24 @@ export function isAutoLabel(z: number, text: string, h: number): boolean {
 export const CIRCLE_TAG = 'ci-aromatic-circle';
 /** The tag that keeps a filled shape's fill style and outline colour (ChemDraw has one colour). */
 export const FILL_TAG = 'Chem Illustrator fill';
+/** A frame's gap and whether it follows what it surrounds (editor/frames.ts). */
+export const FRAME_TAG = 'Chem Illustrator frame';
+/** The gradient and pattern settings kept in a fill tag, checked. */
+export function fillExtras(v: Partial<Shape>): Partial<Shape> {
+  const out: Partial<Shape> = {};
+  const hex = (c: unknown) => (typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase() : undefined);
+  if (hex(v.fill2)) out.fill2 = hex(v.fill2);
+  if (typeof v.gradAngle === 'number' && isFinite(v.gradAngle)) out.gradAngle = v.gradAngle;
+  if (v.gradRadial === true) out.gradRadial = true;
+  const patterns = ['hatch', 'backhatch', 'crosshatch', 'horizontal', 'vertical', 'grid', 'dots', 'dense-dots'];
+  if (typeof v.pattern === 'string' && patterns.includes(v.pattern)) out.pattern = v.pattern;
+  if (hex(v.patternColor)) out.patternColor = hex(v.patternColor);
+  if (typeof v.patternSize === 'number' && v.patternSize > 0 && v.patternSize < 100) out.patternSize = v.patternSize;
+  return out;
+}
+
+/** A highlight behind an atom or bond: its colour (ChemDraw has no highlights, so it shows nothing). */
+export const HIGHLIGHT_TAG = 'Chem Illustrator highlight';
 /** The tag that keeps a contracted label's group (SMILES), so its chemistry comes back with the file. */
 export const GROUP_TAG = 'Chem Illustrator group';
 /** The tag on the group that draws a design shape in ChemDraw: the shape as it is here. */

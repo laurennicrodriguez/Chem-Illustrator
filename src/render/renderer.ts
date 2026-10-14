@@ -21,6 +21,7 @@ import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
 import { layoutText, FONT_STACK, type TextLayout } from '../text/layout';
 import { drawLayout } from '../text/draw';
 import { geoDef, moveSteps, textArea, traceSteps } from '../design/geo';
+import { insetPolygon, dotCentres, gradientBands, hatchLines, isDotPattern, patternAngles, patternSpacing, radialBands, shapePolygons } from './fills';
 import { placeholderRect, isEmptyText } from '../deck/deck';
 import { imageFor } from './images';
 import { layoutTable, drawTable, type TableLayout, type TablePart } from '../table';
@@ -564,6 +565,7 @@ export class Renderer {
   private drawContent(ctx: CanvasRenderingContext2D, doc: Doc, vis: Rect): void {
     this.useStyle(doc);
     const st = doc.style;
+    this.ringDoc = doc;
 
     // Shapes behind the structures (filled boxes first).
     for (const s of this.sortedShapes(doc)) {
@@ -576,6 +578,9 @@ export class Renderer {
     const atoms = doc.atomsIn(vis);
     const bondSet = new Set<Bond>();
     for (const a of atoms) for (const bid of doc.adj.get(a.id) ?? []) bondSet.add(doc.bonds.get(bid)!);
+
+    // Highlights behind the structures: broad bands under bonds and discs under atoms
+    this.drawHighlights(ctx, doc, atoms, bondSet);
 
     // Bonds, batched by how they are stroked (and by size, for resized structures).
     const batches = new Map<number, BondBatch>();
@@ -887,7 +892,7 @@ export class Renderer {
           ctx.beginPath();
         }
         ctx.roundRect(x, y, w, h, r);
-        if (s.filled) fillShape(ctx, s, x, y, w, h); else ctx.stroke();
+        this.fillAndOutline(ctx, r ? { ...s, radius: r } : s, x, y, w, h);
         if (s.picture) {
           ctx.fillStyle = '#eef1f5';
           ctx.fillRect(x, y, w, h);
@@ -899,8 +904,20 @@ export class Renderer {
       }
       case 'oval':
         ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
-        if (s.filled) fillShape(ctx, s, x, y, w, h); else ctx.stroke();
+        this.fillAndOutline(ctx, s, x, y, w, h);
         break;
+      case 'ring': {
+        // a ring's fill sits on its atoms, wherever they are now
+        const pts = this.ringPoints(s);
+        if (pts.length < 3) break;
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (const p of pts.slice(1)) ctx.lineTo(p.x, p.y);
+        ctx.closePath();
+        this.paintFill(ctx, { ...s, pattern: undefined }, x, y, w, h, [pts]);
+        // the lines or dots keep clear of the bonds, the inner lines of double bonds and the atom labels
+        if (s.pattern) this.paintFill(ctx, { ...s, filled: false }, x, y, w, h, [insetPolygon(pts, this.ringDoc?.style.bondLength ? this.ringDoc.style.bondLength * 0.26 : 3.8)]);
+        break;
+      }
       case 'symbol': {
         const cx = (s.x1 + s.x2) / 2, cy = (s.y1 + s.y2) / 2, r = Math.max(1.6, Math.min(w, h) / 2);
         const flag = s.symbol ? CHIRAL_FLAGS[s.symbol] : undefined;
@@ -1132,6 +1149,129 @@ export class Renderer {
     return lay;
   }
 
+  /** Highlighted atoms and bonds: discs and broad round-ended bands of their colour, behind everything in the structure. */
+  private drawHighlights(ctx: CanvasRenderingContext2D, doc: Doc, atoms: Iterable<Atom>, bonds: Iterable<Bond>): void {
+    const L = doc.style.bondLength;
+    const byColour = new Map<string, { bands: [Atom, Atom, number][]; discs: [Atom, number][] }>();
+    const of = (c: string) => { let g = byColour.get(c); if (!g) { g = { bands: [], discs: [] }; byColour.set(c, g); } return g; };
+    for (const b of bonds) {
+      if (!b.highlight) continue;
+      const p = doc.atoms.get(b.a1), q = doc.atoms.get(b.a2);
+      if (p && q) of(b.highlight).bands.push([p, q, (b.s ?? 1) * L * 0.42]);
+    }
+    for (const a of atoms) if (a.highlight) of(a.highlight).discs.push([a, (a.s ?? 1) * L * 0.27]);
+    if (!byColour.size) return;
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.lineCap = 'round';
+    for (const [c, g] of byColour) {
+      // one colour at a time, so the bands and discs of one highlight join without darker overlaps
+      ctx.strokeStyle = ctx.fillStyle = c;
+      for (const [p, q, w] of g.bands) {
+        ctx.lineWidth = w;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(q.x, q.y);
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      for (const [a, r] of g.discs) { ctx.moveTo(a.x + r, a.y); ctx.arc(a.x, a.y, r, 0, Math.PI * 2); }
+      if (g.discs.length) ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  /** Where a ring fill's corners are: on its atoms as they are now (as saved, when they are not in this drawing). */
+  ringPoints(s: Shape): Vec[] {
+    const doc = this.ringDoc;
+    if (doc && s.ring?.every((id) => doc.atoms.has(id))) return s.ring.map((id) => { const a = doc.atoms.get(id)!; return { x: a.x, y: a.y }; });
+    return s.poly ?? [];
+  }
+
+  /** The drawing being drawn (ring fills sit on its atoms). */
+  private ringDoc: Doc | null = null;
+
+  /**
+   * Fill the path just traced for a filled box or oval, and draw its outline: a fill colour of
+   * its own gets the outline drawn round it in the line colour, and a pattern with no fill
+   * keeps the outline.
+   */
+  private fillAndOutline(ctx: CanvasRenderingContext2D, s: Shape, x: number, y: number, w: number, h: number): void {
+    if (!s.filled && !s.pattern) { ctx.stroke(); return; }
+    this.paintFill(ctx, s, x, y, w, h);
+    if (!s.filled || (s.fillColor && s.fillColor.toLowerCase() !== (s.color ?? '#000000').toLowerCase())) ctx.stroke();
+  }
+
+  /**
+   * Fill the path just traced (it stays traced, for an outline after): evenly, with a light
+   * tint (faded), shaded light to dark, or a gradient; then its pattern of lines or dots.
+   */
+  private paintFill(ctx: CanvasRenderingContext2D, s: Shape, x: number, y: number, w: number, h: number, polys?: Vec[][]): void {
+    const c = s.fillColor ?? s.color ?? '#000000';
+    const outline = () => (polys ??= shapePolygons(s));
+    if (s.filled) {
+      const clear = Math.max(0, Math.min(1, s.transparency ?? 0));
+      const alpha = (col: string) => (clear ? withAlpha(col, 1 - clear) : col);
+      if (s.fill === 'shaded' || s.fill === 'gradient') {
+        const shaded = s.fill === 'shaded';
+        const from = shaded ? tint(c, 0.85) : c, to = shaded ? c : s.fill2 ?? '#ffffff';
+        const radial = shaded ? s.kind === 'oval' : !!s.gradRadial;
+        const angle = shaded ? 45 : s.gradAngle ?? 90;
+        if (typeof ctx.createLinearGradient === 'function') {
+          let g: CanvasGradient;
+          if (radial && shaded) g = ctx.createRadialGradient(x + w * 0.35, y + h * 0.3, 0, x + w / 2, y + h / 2, Math.max(w, h) * 0.6);
+          else if (radial) g = ctx.createRadialGradient(x + w / 2, y + h / 2, 0, x + w / 2, y + h / 2, Math.hypot(w, h) / 2);
+          else {
+            // across the shape at the angle, from edge to edge
+            const a = (angle * Math.PI) / 180, dx = Math.cos(a), dy = Math.sin(a);
+            const half = (Math.abs(dx) * w + Math.abs(dy) * h) / 2, cx = x + w / 2, cy = y + h / 2;
+            g = ctx.createLinearGradient(cx - dx * half, cy - dy * half, cx + dx * half, cy + dy * half);
+          }
+          g.addColorStop(0, alpha(from));
+          g.addColorStop(1, alpha(to));
+          ctx.fillStyle = g;
+          ctx.fill();
+        } else {
+          // pictures and copies: bands of colour, which every format can hold
+          const bands = radial ? radialBands(outline(), from, to) : gradientBands(outline(), angle, from, to);
+          for (const b of bands) {
+            const p = this.makePath();
+            p.moveTo(b.poly[0].x, b.poly[0].y);
+            for (const v of b.poly.slice(1)) p.lineTo(v.x, v.y);
+            p.closePath();
+            ctx.fillStyle = alpha(b.color);
+            ctx.fill(p);
+          }
+        }
+      } else {
+        ctx.fillStyle = alpha(s.fill === 'faded' ? tint(c, FADE) : c);
+        ctx.fill();
+      }
+    }
+    if (s.pattern) {
+      const gap = patternSpacing(s);
+      const pc = s.patternColor ?? s.color ?? '#000000';
+      const p = this.makePath();
+      if (isDotPattern(s.pattern)) {
+        const r = Math.max(0.25, gap * (s.pattern === 'dense-dots' ? 0.24 : 0.18));
+        for (const d of dotCentres(outline(), gap)) { p.moveTo(d.x + r, d.y); p.arc(d.x, d.y, r, 0, Math.PI * 2); }
+        ctx.save();
+        ctx.fillStyle = pc;
+        ctx.fill(p);
+        ctx.restore();
+      } else {
+        for (const ang of patternAngles(s.pattern)) for (const [a, b] of hatchLines(outline(), ang, gap)) { p.moveTo(a.x, a.y); p.lineTo(b.x, b.y); }
+        ctx.save();
+        ctx.strokeStyle = pc;
+        ctx.lineWidth = Math.max(0.25, Math.min(gap * 0.12, 0.5));
+        ctx.setLineDash([]);
+        ctx.lineCap = 'butt';
+        ctx.stroke(p);
+        ctx.restore();
+      }
+    }
+  }
+
   /** A design shape: its shadow, fill and outline, its details, then its text. */
   private drawGeo(ctx: CanvasRenderingContext2D, s: Shape, x: number, y: number, w: number, h: number, lw: number): void {
     const def = geoDef(s.geo);
@@ -1152,9 +1292,10 @@ export class Renderer {
     if (s.filled) {
       const c = s.fillColor ?? s.color ?? '#000000';
       const clear = Math.max(0, Math.min(1, s.transparency ?? 0));
-      if (s.fill === 'shaded' || s.fill === 'faded') fillShape(ctx, { ...s, fillColor: c, color: c }, x, y, w, h);
+      if (s.fill) this.paintFill(ctx, { ...s, pattern: undefined }, x, y, w, h);
       else { ctx.fillStyle = clear ? withAlpha(c, 1 - clear) : c; ctx.fill(); }
     }
+    if (s.pattern) this.paintFill(ctx, { ...s, filled: false }, x, y, w, h);
     ctx.lineWidth = width;
     if (width > 0) ctx.stroke();
     if (out.lines && width > 0) {
@@ -1362,28 +1503,9 @@ const ATTACH_HALF = 0.6;
 const ATTACH_AMP = 0.06;
 const ATTACH_HALF_WAVES = 24;
 
-/**
- * Fill the path just traced for a filled box or oval: evenly, with a light tint (faded), or
- * shaded from light at the top left to the full colour. A fill colour of its own gets the
- * outline drawn round it in the line colour.
- */
 /** A colour with some see-through: "#rrggbb" and opacity 0–1 as rgba(). */
 function withAlpha(c: string, a: number): string {
   const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c);
   return m ? `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${+a.toFixed(3)})` : c;
 }
 
-function fillShape(ctx: CanvasRenderingContext2D, s: Shape, x: number, y: number, w: number, h: number): void {
-  const c = s.fillColor ?? s.color ?? '#000000';
-  if (s.fill === 'faded') ctx.fillStyle = tint(c, FADE);
-  else if (s.fill === 'shaded') {
-    const g = s.kind === 'oval'
-      ? ctx.createRadialGradient(x + w * 0.35, y + h * 0.3, 0, x + w / 2, y + h / 2, Math.max(w, h) * 0.6)
-      : ctx.createLinearGradient(x, y, x + w, y + h);
-    g.addColorStop(0, tint(c, 0.85));
-    g.addColorStop(1, c);
-    ctx.fillStyle = g;
-  } else ctx.fillStyle = c;
-  ctx.fill();
-  if (s.fillColor && s.fillColor.toLowerCase() !== (s.color ?? '#000000').toLowerCase()) ctx.stroke();
-}
