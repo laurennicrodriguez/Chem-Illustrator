@@ -1141,6 +1141,13 @@ async function pickPicture(): Promise<{ bytes: Uint8Array; mime: string; name: s
   return { bytes: f.bytes, mime, name: f.name };
 }
 
+/** Ask for a BibTeX or RIS file of references, and read its text. */
+async function pickReferenceFile(): Promise<{ name: string; text: string } | null> {
+  const f = await openBytesDialog('BibTeX or RIS references', [], ['bib', 'ris', 'txt']);
+  if (!f) return null;
+  return { name: f.name, text: new TextDecoder().decode(f.bytes).replace(/^\uFEFF/, '') };
+}
+
 async function insertPicture(): Promise<void> {
   const p = await pickPicture();
   if (p) placePicture(p.bytes, p.mime, null);
@@ -1604,6 +1611,7 @@ const docMode = new DocumentMode({
   readPaste: (e) => readDocPaste(e),
   toStructure: (text, style) => textToStructure(text, style),
   pickPicture: () => pickPicture(),
+  pickReferenceFile: () => pickReferenceFile(),
   newTable: (rows, cols, style) => tableDrawing(emptyTable(rows, cols, style.captionSize), style),
   measure: measureText,
 });

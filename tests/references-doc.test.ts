@@ -11,6 +11,7 @@ import { DocLayouter, EMPTY_BIBLIOGRAPHY, bibHang } from '../src/document/doc-la
 import { OBJECT_CHAR, documentPlainText, fieldTexts, newDocument, objectRun, paraFromStyle, runStyleOf, type DocText } from '../src/document/document';
 import { blankRef, bibliography, type Reference } from '../src/document/references';
 import { caretPos, offsetAt } from '../src/text/layout';
+import { TextEditing } from '../src/text/editing';
 import type { TextRun } from '../src/model';
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -101,6 +102,20 @@ describe('citations and the bibliography in a document', () => {
     d.runs = d.runs.filter((r) => r.obj === undefined || r.obj === 4);
     const lay = layouter().layout(d);
     expect(lay.text.lines.filter((l) => l.block === 4).flatMap((l) => l.pieces).map((p) => p.text).join('')).toContain(EMPTY_BIBLIOGRAPHY.slice(0, 20));
+  });
+
+  it('puts a citation in as one step of Undo', () => {
+    const d = newDocument();
+    d.runs = [{ text: 'Shifts' }];
+    d.references = REFS;
+    const ed = new TextEditing(d, {}, measure, 11);
+    ed.setCaret(6);
+    ed.update({ ...ed.t, objects: { 1: { kind: 'cite', refs: ['r-a'] } } } as DocText, 'Insert citation');
+    ed.replace(6, 6, [objectRun(1, { sup: true })], undefined, null);
+    expect(documentPlainText(ed.t as DocText)).toBe('Shifts1');
+    ed.undo();
+    expect(documentPlainText(ed.t as DocText)).toBe('Shifts');
+    expect((ed.t as DocText).objects).toEqual({});
   });
 
   it('hangs every entry\'s number out by the same amount', () => {

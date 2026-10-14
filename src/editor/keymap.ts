@@ -195,6 +195,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   'line-1-5': '1.5 line spacing', 'line-double': 'Double line spacing', 'font-bigger': 'Larger text', 'font-smaller': 'Smaller text',
   'doc-bullets': 'Bullets', 'doc-numbering': 'Numbering', replace: 'Find and replace…', 'insert-structure': 'Insert a structure (draw it)',
   'insert-caption': 'Insert a caption…', 'cross-reference': 'Insert a cross-reference…', 'compound-number': 'Insert a compound number…', 'structure-from-name-doc': 'Insert a structure from a name or SMILES…',
+  'insert-citation': 'Insert a citation…', 'insert-bibliography': 'Insert the bibliography', 'manage-references': 'Manage references…',
 };
 
 const TEXT_ACTIONS: Record<string, string> = {
