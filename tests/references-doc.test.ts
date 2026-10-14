@@ -164,6 +164,14 @@ describe('citations in Word files', () => {
     expect(Object.values(again.objects).filter((o) => o.kind === 'bib')).toHaveLength(1);
   });
 
+  it('opens a citation of a deleted reference again as a citation, showing [?]', async () => {
+    const d = { ...sample(), references: [] };
+    const back = (await readDocx(await writeDocx(d, deps))).doc;
+    expect(back.references).toEqual([]);
+    expect([...fieldTexts(back).values()]).toEqual(['[?]', '[?]', '[?]']);
+    expect(Object.values(back.objects).filter((o) => o.kind === 'bib')).toHaveLength(1);
+  });
+
   it('keeps a bibliography changed in Word as the text typed there', async () => {
     const bytes = await writeDocx(sample(), deps);
     const zip = unzipSync(bytes);

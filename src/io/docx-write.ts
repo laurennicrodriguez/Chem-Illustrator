@@ -69,7 +69,8 @@ class DocxWriter {
       if (o.kind === 'ref' && t.objects[o.target]?.kind === 'seq') this.bookmarks.set(o.target, `_Ref${100000000 + o.target}`);
     }
     this.model = { app: 'Chem Illustrator', version: 1, drawingStyle: t.drawingStyle, drawings: {}, tables: {} };
-    if (t.references?.length) this.model.references = t.references;
+    // (kept even when empty while citations are in the text, so they open again as citations)
+    if (t.references?.length || Object.values(t.objects).some((o) => o.kind === 'cite' || o.kind === 'bib')) this.model.references = t.references ?? [];
     if (t.citeStyle) this.model.citeStyle = t.citeStyle;
     this.textW = Math.max(36, t.page.w - t.page.left - t.page.right);
   }
