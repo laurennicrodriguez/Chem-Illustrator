@@ -67,7 +67,6 @@ const WARN = {
   crop: 'Cropped pictures show uncropped.',
   numbering: 'Some numbered lists use numbering that shows here as 1., a., i.',
   looks: 'Strikethrough, highlighting and small capitals were left out.',
-  toc: 'The table of contents was kept as plain text.',
   citations: 'Citations from a reference manager were kept as plain text.',
   pageText: 'Text after the page number in the header or footer was left out.',
   ole: 'Embedded objects other than ChemDraw drawings came in as pictures.',
@@ -88,7 +87,7 @@ interface WStyle { id: string; type: string; name: string; basedOn?: string; nex
 interface Level { fmt: string; text: string; p: PProps }
 interface Piece { runs: TextRun[]; pageBreak: boolean; soft: boolean; colBreak?: boolean }
 interface Ctx { base: RProps; pieces: Piece[]; cell: boolean }
-interface Field { instr: string; phase: 'instr' | 'result'; swallow: boolean; text: string; props: RProps; done: boolean; ref?: { id: number; mark: string; text: string } }
+interface Field { instr: string; phase: 'instr' | 'result'; swallow: boolean; text: string; props: RProps; done: boolean; ref?: { id: number; mark: string; text: string }; toc?: boolean }
 interface OutPara { ps: ParaStyle; runs: TextRun[]; mark: rt.RunStyle; style: string; contextual: boolean; table?: boolean; bib?: string }
 
 /** Open a Word file. Throws only when the file is not a Word file at all. */
@@ -515,7 +514,10 @@ class DocxReader {
     const ctx: Ctx = { base, pieces: [{ runs: [], pageBreak: false, soft: false }], cell: false };
     const bibBefore = this.bibOpen;
     this.bibMet = null;
+    const inToc = this.fields.some((f) => f.toc);
     this.inline(kids(el), ctx);
+    // the contents' own lines (and the paragraph its field ends in): left out
+    if (inToc && ctx.pieces.every((pc) => !pc.runs.length)) { if (kid(pPr, 'sectPr')) this.breakNext = !/^continuous$/i.test(this.a(kid(kid(pPr, 'sectPr'), 'type')) ?? 'nextPage'); return; }
     const bib = bibBefore ?? this.bibMet ?? undefined;
     const sectionBreak = () => { if (sect) this.breakNext = !/^continuous$/i.test(this.a(kid(sect, 'type')) ?? 'nextPage'); };
     const text = ctx.pieces.map((pc) => rt.plainText(pc.runs)).join('\n');
@@ -786,8 +788,15 @@ class DocxReader {
       if (id !== null) f.swallow = true;
       return;
     }
-    if (/^TOC\b/i.test(ins)) this.warn('toc');
-    else if (/^ADDIN\s+(EN\.CITE|ZOTERO|CSL|Mendeley|RW)/i.test(ins)) this.warn('citations');
+    // a table of contents: ours again, its lines (Word's last update) left out, as they are worked out here
+    const toc = /^TOC\b(.*)$/i.exec(ins);
+    if (toc && !ctx.cell) {
+      const depth = /\\o\s*"?\s*\d+\s*-\s*(\d+)/i.exec(toc[1]);
+      const id = this.emitObject(ctx, { kind: 'toc', levels: Math.max(1, Math.min(3, depth ? Number(depth[1]) : 3)) }, f.props);
+      if (id !== null) { f.swallow = true; f.toc = true; }
+      return;
+    }
+    if (/^ADDIN\s+(EN\.CITE|ZOTERO|CSL|Mendeley|RW)/i.test(ins)) this.warn('citations');
   }
 
   private markStart(el: Element): void {

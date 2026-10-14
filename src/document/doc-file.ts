@@ -27,6 +27,9 @@ export const figures = new FigurePictures();
 /** Indent added by Tab outside a list, as Word's Increase Indent (half an inch). */
 const INDENT = 36;
 
+/** Each paragraph's page number as last laid out, by document (for the contents' page numbers in Word files). */
+export const paragraphPages = new WeakMap<DocText, string[]>();
+
 export class DocFile {
   readonly ed: TextEditing;
   readonly layouter: DocLayouter;
@@ -156,7 +159,11 @@ export class DocFile {
   }
 
   private layoutOf(frame: TextFrame): DocLayout {
-    if (this.memo?.frame !== frame) this.memo = { frame, lay: this.layouter.layout(frame as DocText) };
+    if (this.memo?.frame !== frame) {
+      const lay = this.layouter.layout(frame as DocText);
+      this.memo = { frame, lay };
+      paragraphPages.set(frame as DocText, lay.paraTops.map((pt) => lay.pages[pt.page]?.label || String(pt.page + 1)));
+    }
     return this.memo.lay;
   }
 }

@@ -21,6 +21,7 @@ import { DocView, ACTUAL, type Overlay } from './doc-view';
 import { DocPanel, parseLength, showLength, type DocBoxKey } from './doc-panel';
 import { WORD_HIGHLIGHTS } from '../io/docx';
 import { DocFind } from './doc-find';
+import { tocEntries } from '../document/toc';
 import { ask } from './ask';
 import { ReferencesDialog, chooseReferences } from './references-dialog';
 import { citeSuper, formatOf, type Reference } from '../document/references';
@@ -571,7 +572,7 @@ export class DocumentMode {
     }
     const ed = f.ed;
     const picked = this.pickedObject();
-    const framed = this.pickedField('bib')?.id ?? this.pickedTable();
+    const framed = this.pickedField('bib')?.id ?? this.pickedField('toc')?.id ?? this.pickedTable();
     const showCaret = this.caretOn && (ed.collapsed || ed.composing !== null) && document.activeElement === this.ta;
     const c = showCaret ? ed.caret() : null;
     const squiggles: Overlay['squiggles'] = [];
@@ -591,7 +592,7 @@ export class DocumentMode {
   }
 
   /** A citation or bibliography picked on its own (a selection of just its character). */
-  private pickedField<K extends 'cite' | 'bib'>(kind: K): { id: number; o: Extract<DocObject, { kind: K }> } | null {
+  private pickedField<K extends 'cite' | 'bib' | 'toc'>(kind: K): { id: number; o: Extract<DocObject, { kind: K }> } | null {
     const f = this.file;
     if (!f || f.ed.end - f.ed.start !== 1) return null;
     const id = rt.sliceRuns(f.ed.t.runs, f.ed.start, f.ed.end)[0]?.obj;
@@ -1072,7 +1073,7 @@ export class DocumentMode {
     }
     const b = f.box?.cell ? f.box : null;
     // into a table cell: no tables, text boxes or bibliographies inside it
-    const runs = remap(own.runs).filter((r) => !b || r.obj === undefined || !['table', 'textbox', 'bib'].includes(objects[r.obj]?.kind));
+    const runs = remap(own.runs).filter((r) => !b || r.obj === undefined || !['table', 'textbox', 'bib', 'toc'].includes(objects[r.obj]?.kind));
     // references cited by pasted citations join the list (unless it has them)
     const have = new Set((f.t.references ?? []).map((r) => r.id));
     const adding = (own.references ?? []).filter((r) => !have.has(r.id));
@@ -1104,6 +1105,7 @@ export class DocumentMode {
       if (!f) return;
       const id = this.objectAt(e.clientX, e.clientY);
       if (id !== null && f.t.objects[id]?.kind === 'bib') { e.preventDefault(); void this.manageReferences(); return; }
+      if (id !== null && f.t.objects[id]?.kind === 'toc') { e.preventDefault(); void this.tocOptions(id); return; }
       if (f.box?.cell && id !== null && id !== f.box.id && f.t.objects[id]?.kind === 'drawing') { e.preventDefault(); this.editFigure(id); return; }
       if (f.box) { e.preventDefault(); return; }
       if (id !== null && f.t.objects[id]?.kind === 'textbox') { e.preventDefault(); this.startBox(id, this.view.toDoc(e.clientX, e.clientY)); return; }
@@ -1288,7 +1290,7 @@ export class DocumentMode {
   insertObject(o: DocObject, kind = 'Insert', look: Partial<rt.RunStyle> = {}): number {
     const f = this.file!;
     const b = f.box?.cell ? f.box : null;
-    if (b && (o.kind === 'table' || o.kind === 'textbox' || o.kind === 'bib')) this.stopBox();
+    if (b && (o.kind === 'table' || o.kind === 'textbox' || o.kind === 'bib' || o.kind === 'toc')) this.stopBox();
     else if (b) {
       // into the table cell typed into: the object joins the document, its character the cell's text
       const id = nextObjectId(f.t);
@@ -1558,6 +1560,7 @@ export class DocumentMode {
       case 'compound-number': void this.compoundNumber(); break;
       case 'insert-citation': void this.insertCitation(); break;
       case 'insert-bibliography': this.insertBibliography(); break;
+      case 'insert-toc': void this.insertToc(); break;
       case 'manage-references': void this.manageReferences(); break;
       case 'edit-figure': { const id = this.pickedObject(); if (id === null) { this.host.flash('Click a structure or scheme first, then Edit Drawing (or double-click it).'); break; } this.editFigure(id); break; }
       case 'zoom-in': this.view.setZoom(this.view.zoom * 1.25); this.showZoom(); break;
@@ -1898,6 +1901,56 @@ export class DocumentMode {
     const at = objectOffsets(f.t.runs).get(id);
     if (at !== undefined) ed.setCaret(at + 1);
     if (!(f.t.references ?? []).length) this.host.flash('The bibliography lists the references cited. Add references with References > Manage References, and cite them with Insert Citation.', 8000);
+  }
+
+  /**
+   * References > Table of Contents: the headings and their page numbers, in a paragraph of their
+   * own after the one the caret is in, with a Contents heading (in a style the contents leave
+   * out). It changes by itself as headings are added, renamed or moved to other pages.
+   * Double-click it to choose how many heading levels it shows.
+   */
+  private async insertToc(): Promise<void> {
+    const f = this.file!;
+    const levels = await this.askTocLevels(3, 'Insert');
+    if (!levels) return;
+    const ed = f.ed;
+    const id = nextObjectId(f.t);
+    const kind = 'Insert table of contents';
+    ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'toc', levels } } } as DocText, kind);
+    const text = ed.text;
+    const p = paraAt(text, ed.focus);
+    const r = paraRange(text, p);
+    const head = { ...runStyleOf(f.t.styles.Heading1 ?? styleOf(f.t, undefined)) };
+    const normal = runStyleOf(styleOf(f.t, undefined));
+    const empty = r.start === r.end;
+    const runs: TextRun[] = [...(empty ? [] : [{ ...normal, text: '\n' }]), { ...head, text: 'Contents' }, { ...head, text: '\n' }, objectRun(id, normal)];
+    ed.replace(empty ? r.start : r.end, empty ? r.start : r.end, runs, undefined, null);
+    const h = empty ? p : p + 1;
+    // the Contents heading looks like a heading but is in Normal, so it isn't listed in itself
+    let t = setParaStyle(f.t, h, h + 1, 'Normal');
+    const hr = paraRange(rt.plainText(t.runs), h);
+    t = { ...t, runs: rt.applyStyle(t.runs, hr.start, hr.end, head), paras: t.paras.map((x, i) => (i === h ? { ...x, keepNext: true, spaceBefore: 0, spaceAfter: 8 } : x)) };
+    ed.update(t, null);
+    const at = objectOffsets(f.t.runs).get(id);
+    if (at !== undefined) ed.setCaret(at + 1);
+    if (!tocEntries(f.t, levels).length) this.host.flash('The contents list paragraphs in the Heading 1, 2 and 3 styles (Home > Styles). Give your headings those styles and they appear here with their page numbers.', 9000);
+  }
+
+  private async askTocLevels(now: number, ok: string): Promise<number | null> {
+    const got = await ask('Table of Contents', [
+      { name: 'levels', label: 'Show headings down to', value: String(now), options: [{ value: '1', label: 'Heading 1' }, { value: '2', label: 'Heading 2' }, { value: '3', label: 'Heading 3' }] },
+    ], { ok, note: 'The contents update by themselves as headings change or move to other pages. In Word, right-click them and choose Update Field after editing there.' });
+    return got ? Math.max(1, Math.min(3, Number(got.levels) || 3)) : null;
+  }
+
+  /** Double-click on the contents: how many levels they show. */
+  private async tocOptions(id: number): Promise<void> {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'toc') return;
+    const levels = await this.askTocLevels(o.levels, 'Apply');
+    if (!levels || levels === o.levels) return;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'toc', levels } } } as DocText, 'Table of contents levels');
   }
 
   // ---------------------------------------------------------------- the ribbon

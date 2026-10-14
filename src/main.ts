@@ -18,6 +18,7 @@ import type { FragmentResult } from './worker/chem-worker';
 import { COMMON_ADDUCTS } from './chem/hrms';
 import { pubchemName, pubchemCid, pubchemCompound, compoundPage } from './chem/pubchem';
 import { pubchemHtml, pubchemRuns, type PubChemState } from './ui/pubchem-panel';
+import { paragraphPages } from './document/doc-file';
 import { analysisHtml, analysisRuns, withRepeats, polymerHtml, descriptorRuns, DEFAULT_DESCRIPTORS, type RepeatUnit } from './ui/analysis-panel';
 import { attachedAtoms, attachWhereItIs, defaultGap, nearestStructure, placeAttached, structureSig } from './editor/attached';
 import { repeatGroups, lipDirection } from './chem/polymer';
@@ -1070,6 +1071,7 @@ const sheetFiles: SheetFileDeps = {
 
 /** Pictures of a document's drawings for Word files (300 dots to the inch, as for PowerPoint). */
 const docFiles: DocxDeps = {
+  pages: (t) => paragraphPages.get(t),
   picture: async (contents, style) => {
     const d = structureDoc(contents, style);
     const pic = recordPicture(d, FIGURE_MARGIN);
