@@ -16,6 +16,7 @@ import { guideSnap } from '../src/editor/editor';
 import { layerName, reorderLayers } from '../src/ui/layers-panel';
 import { readCdxml } from '../src/io/cdxml';
 import { DESIGN_TEMPLATES, fillTemplate, templateSize } from '../src/design/templates';
+import { whiteToClear } from '../src/render/background';
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 40, 0, 0, 0, 30]);
 const opts: PptxOptions = { async picture() { return null; }, async svgToPng() { return PNG; } };
@@ -320,5 +321,32 @@ describe('design templates', () => {
     expect(runs[0].bold).toBe(true);
     expect(runs[2].bold).toBeUndefined();
     expect(runs[2].size!).toBeLessThan(runs[0].size!);
+  });
+});
+
+describe('remove white background', () => {
+  // 5 × 5: white all round, a black ring, and white inside the ring
+  const make = () => {
+    const px = new Uint8ClampedArray(5 * 5 * 4).fill(255);
+    for (let y = 1; y < 4; y++) for (let x = 1; x < 4; x++) if (x !== 2 || y !== 2) px.set([0, 0, 0, 255], (y * 5 + x) * 4);
+    return px;
+  };
+  const alpha = (px: Uint8ClampedArray, x: number, y: number) => px[(y * 5 + x) * 4 + 3];
+
+  it('clears the white joined to the edges and keeps the white inside', () => {
+    const px = make();
+    whiteToClear(px, 5, 5, 24, true);
+    expect(alpha(px, 0, 0)).toBe(0);
+    expect(alpha(px, 1, 1)).toBe(255);
+    expect(alpha(px, 2, 2)).toBe(255);
+  });
+
+  it('can clear all white, and fades near-white pixels part way', () => {
+    const px = make();
+    whiteToClear(px, 5, 5, 24, false);
+    expect(alpha(px, 2, 2)).toBe(0);
+    const grey = new Uint8ClampedArray([219, 219, 219, 255]); // 36 from white: halfway through the soft edge
+    whiteToClear(grey, 1, 1, 24, true);
+    expect(grey[3]).toBe(128);
   });
 });

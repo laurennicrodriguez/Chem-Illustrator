@@ -70,6 +70,8 @@ export class StylePanel {
   applyLabel: (atomId: number, text: string) => void = () => {};
   /** Crop a picture with the mouse (its handles cut the edges off), or stop. */
   cropWithMouse: (shapeId: number) => void = () => {};
+  /** Make a picture's white background see-through (set up by the app). */
+  removeWhite: (shapeIds: number[]) => void = () => {};
   /** A picture's width and height change together. */
   private keepProportions = true;
   /** Table commands (set up by the app). */
@@ -298,6 +300,9 @@ export class StylePanel {
     };
     if (pics.length === 1) button('Crop with mouse', 'Drag the black handles to cut the edges off; Esc when done', () => this.cropWithMouse(p.id));
     if (pics.some((x) => x.crop)) button('Uncrop', 'Show the whole picture again', () => set('Uncrop picture', (x) => cropTo(x, { l: 0, t: 0, r: 0, b: 0 })));
+    // only pictures made of pixels have a background to take out
+    const bitmaps = pics.filter((x) => x.src && !/^data:image\/(svg|x-emf|x-wmf)/.test(x.src));
+    if (bitmaps.length) button('Remove white…', 'Make the white background see-through (a logo or a picture of a structure on white)', () => this.removeWhite(bitmaps.map((x) => x.id)));
     button('Original size', 'Its own size: 96 pixels to the inch, as in PowerPoint', () => set('Picture size', (x) => {
       const bx = box(x), cc = x.crop ?? { l: 0, t: 0, r: 0, b: 0 };
       if (!x.px) return {};

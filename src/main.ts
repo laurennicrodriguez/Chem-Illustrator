@@ -36,6 +36,7 @@ import { Presenter } from './ui/present';
 import { editMaster } from './ui/master-dialog';
 import { recordPicture, pictureSvg, pictureCanvas, canvasPng, bitmapScale, EXPORT_MAX_SIDE, EXPORT_MAX_PIXELS } from './render/picture';
 import { pngWithDpi } from './render/emf-read';
+import { whiteToClear } from './render/background';
 import { pickTemplate } from './ui/template-gallery';
 import { fillTemplate, templateSize } from './design/templates';
 import { itemsToSvg } from './render/svg';
@@ -1375,6 +1376,41 @@ function cropPicture(): void {
   editor.requestOverlay();
   stylePanel.refresh();
   if (editor.cropping !== null) flash('Drag the black handles to cut the edges off. Press Esc or click elsewhere when you are done.', 6000);
+}
+
+/** Picture > Remove white: near-white pixels become see-through (the picture becomes a PNG). */
+async function removeWhite(ids: number[]): Promise<void> {
+  const v = await ask('Remove White Background', [
+    { name: 'which', label: 'Remove', value: 'edges', options: [
+      { value: 'edges', label: 'White joined to the edges (keeps white inside the picture)' },
+      { value: 'all', label: 'All white, everywhere' },
+    ] },
+    { name: 'tol', label: 'How near white counts', value: '24', type: 'number', unit: 'of 255' },
+  ], { ok: 'Remove', note: 'Raise the number if a grey haze is left round the picture; lower it if pale parts of the picture disappear. Undo puts it back.' });
+  if (!v) return;
+  const tol = Math.max(0, Math.min(200, Number(v.tol) || 0));
+  const done: { id: number; src: string }[] = [];
+  for (const id of ids) {
+    const s = doc.shapes.get(id);
+    if (!s?.src) continue;
+    try {
+      const img = await loadImage(s.src);
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      const g = c.getContext('2d')!;
+      g.drawImage(img, 0, 0);
+      const data = g.getImageData(0, 0, c.width, c.height);
+      whiteToClear(data.data, c.width, c.height, tol, v.which !== 'all');
+      g.putImageData(data, 0, 0);
+      done.push({ id, src: dataUrl(new Uint8Array(await (await canvasPng(c)).arrayBuffer()), 'image/png') });
+    } catch (e) {
+      await showError(`Could not change the picture: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+  }
+  if (!done.length) return;
+  doc.edit('Remove white', () => { for (const d of done) doc.updateShape(d.id, { src: d.src }); });
+  editor.requestScene();
 }
 
 /** A PNG of an SVG picture, for programs that can't show SVG (w × h pixels, kept to a sensible size). */
@@ -3195,6 +3231,7 @@ function updatePanels(): void {
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
 stylePanel.cropWithMouse = () => cropPicture();
+stylePanel.removeWhite = (ids) => void removeWhite(ids);
 stylePanel.reaction = {
   roles: (id) => editor.reactionRoles(id),
   others: () => editor.sel.atoms.size + editor.sel.captions.size + editor.sel.shapes.size,
