@@ -22,6 +22,8 @@ export interface ArrangeOptions {
   anticlockwise?: boolean;
   /** Cycle: conditions come in (above) and go out (below) on small curved arrows. */
   reagentArrows?: boolean;
+  /** Branching: the arrows from one structure to several fan out from one point (a forked arrow). */
+  forked?: boolean;
 }
 
 /** What is selected: ids of atoms, captions, shapes and arrows (all empty: the whole drawing). */
@@ -192,7 +194,7 @@ export function planArrange(doc: Doc, m: Measure, scope: Scope, opts: ArrangeOpt
     case 'snake': L.rows(Math.max(1, opts.perRow ?? 3), true); break;
     case 'down': L.down(); break;
     case 'cycle': L.cycle(!!opts.anticlockwise, !!opts.reagentArrows); break;
-    case 'tree': L.tree(); break;
+    case 'tree': L.tree(!!opts.forked); break;
   }
   // reagent arrows from an earlier arrangement of these steps go (a new cycle draws its own)
   const mine = new Set(sh.links.map((l) => l.arrow?.id).filter((x) => x !== undefined));
@@ -496,7 +498,7 @@ class Layout {
 
   // ---------------------------------------------------------------- branching tree
 
-  tree(): void {
+  tree(forked = false): void {
     const { nodes, links } = this.sh;
     const g = this.g, bond = this.bond;
     // columns: how many steps lead to each node (the longest way)
@@ -564,7 +566,9 @@ class Layout {
         continue;
       }
       const ca = centre(a), cb = centre(b);
-      const t0 = leave(ca, cb, a, g), t1 = leave(cb, ca, b, g);
+      // a fork: every step out of a structure that leads to several starts at one point beside it
+      const fan = forked && links.filter((x) => x.from === l.from && !back.has(x)).length > 1;
+      const t0 = fan ? { x: a.x2 + g, y: ca.y } : leave(ca, cb, a, g), t1 = leave(cb, fan ? t0 : ca, b, g);
       if (dist(t0, t1) < bond) continue;
       this.straight(l, t0, t1);
     }

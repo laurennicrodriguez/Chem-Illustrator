@@ -111,6 +111,12 @@ describe('arranging a scheme', () => {
     expect(b.x).toBeGreaterThan(a.x);
     expect(c.x).toBeCloseTo(b.x, 0);
     expect(Math.abs(b.y - c.y)).toBeGreaterThan(10);
+    // a forked arrow: both branches leave from one point
+    applyArrange(doc, m, planArrange(doc, m, all(), { kind: 'tree', forked: true })!);
+    const [r1, r2] = [...doc.arrows.values()];
+    expect(r1.tail.x).toBeCloseTo(r2.tail.x, 6);
+    expect(r1.tail.y).toBeCloseTo(r2.tail.y, 6);
+    expect(r1.head.y).not.toBeCloseTo(r2.head.y, 0);
   });
 
   it('takes away the reagent arrows of an earlier cycle when re-arranged', () => {

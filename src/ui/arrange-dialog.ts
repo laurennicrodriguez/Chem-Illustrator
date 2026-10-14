@@ -65,7 +65,11 @@ export class ArrangeDialog {
     const reagents = document.createElement('input');
     reagents.type = 'checkbox';
     const reagentLabel = label('Reagents in and by-products out on small arrows (conditions above go in, below come out)', reagents);
-    opts.append(perLabel, antiLabel, reagentLabel);
+    const fork = document.createElement('input');
+    fork.type = 'checkbox';
+    fork.checked = true;
+    const forkLabel = label('Branches fan out from one point (a forked arrow)', fork);
+    opts.append(perLabel, antiLabel, reagentLabel, forkLabel);
 
     const status = document.createElement('p');
     status.className = 'name-status';
@@ -87,13 +91,14 @@ export class ArrangeDialog {
     const showOpts = () => {
       perLabel.hidden = kind !== 'rows' && kind !== 'snake';
       antiLabel.hidden = reagentLabel.hidden = kind !== 'cycle';
+      forkLabel.hidden = kind !== 'tree';
       for (const [k, b] of tiles) b.setAttribute('aria-checked', String(k === kind));
     };
     const run = () => {
       if (!kind) return;
       if (applied) { this.hooks.undo(); applied = false; }
       const per = Math.max(1, Math.min(12, Math.round(Number(perRow.value)) || 3));
-      applied = this.hooks.apply({ kind, perRow: per, anticlockwise: anti.checked, reagentArrows: reagents.checked });
+      applied = this.hooks.apply({ kind, perRow: per, anticlockwise: anti.checked, reagentArrows: reagents.checked, forked: fork.checked });
       status.classList.toggle('error', !applied);
       status.textContent = applied ? ''
         : kind === 'tree' ? 'Nothing to arrange: select structures, or a scheme with arrows.'
@@ -113,7 +118,7 @@ export class ArrangeDialog {
       tiles.set(l.kind, b);
       grid.append(b);
     }
-    for (const el of [perRow, anti, reagents]) el.addEventListener('change', run);
+    for (const el of [perRow, anti, reagents, fork]) el.addEventListener('change', run);
     showOpts();
 
     form.append(h, note, grid, opts, status, buttons);
