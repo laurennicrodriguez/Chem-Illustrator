@@ -6,6 +6,7 @@
 // and bond and only recomputed near what changed.
 
 import { Doc, Atom, Bond, Arrow, Caption, Shape, applyBase, type TextBase } from '../model';
+import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
 import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter, fromAngle } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
@@ -59,6 +60,8 @@ interface BondCache {
   /** Interior angles at each end on the double-bond side (for trimming the inner line). */
   trim1: number;
   trim2: number;
+  /** An aromatic bond drawn with a circle: the circles of the rings it is in. */
+  circles?: { center: Vec; radius: number }[];
 }
 
 let mctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
@@ -255,7 +258,9 @@ export class Renderer {
     let c = this.bondCache.get(b.id);
     if (c) return c;
     c = { side: 0, trim1: 0, trim2: 0 };
-    if (b.order === 2 || b.order === 1.5) {
+    if (b.order === 1.5 && b.circle) {
+      c.circles = ringsThroughBond(doc, b.id).filter((r) => isCircleRing(doc, r)).map((r) => ringCircle(doc, r));
+    } else if (b.order === 2 || b.order === 1.5) {
       const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
       const dir = norm(sub(q, p));
       const nrm = perp(dir);
@@ -697,6 +702,22 @@ export class Renderer {
     // a point of attachment: a wavy line across the end of the bond
     if (p.attach === 'Wavy') attachWave(thin, p, nrm, st.bondLength);
     if (q.attach === 'Wavy') attachWave(thin, q, nrm, st.bondLength);
+
+    // an aromatic ring drawn with a circle: a plain line, and the stretch of each ring's circle
+    // that faces this bond
+    if (b.order === 1.5 && b.circle) {
+      line(b.display === 'bold' ? bold : thin, s, e);
+      for (const { center, radius } of this.bondInfo(doc, b).circles ?? []) {
+        const a1 = angleOf(sub(p, center)), a2 = angleOf(sub(q, center));
+        let da = a2 - a1;
+        while (da > Math.PI) da -= 2 * Math.PI;
+        while (da < -Math.PI) da += 2 * Math.PI;
+        const from = add(center, { x: Math.cos(a1) * radius, y: Math.sin(a1) * radius });
+        thin.moveTo(from.x, from.y);
+        thin.arc(center.x, center.y, radius, a1, a1 + da, da < 0);
+      }
+      return;
+    }
 
     if (b.order === 1 || b.order === 4) {
       switch (b.display) {

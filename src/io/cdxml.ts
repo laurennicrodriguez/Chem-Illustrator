@@ -254,6 +254,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       const extra: Partial<Bond> = { id: idFor(b), dpos };
       if (b.getAttribute('IgnoreWarnings') === 'yes') extra.ignoreWarnings = true;
       if (b.getAttribute('ShowBondStereo') === 'yes') extra.showStereo = true;
+      if (kids(b).some((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === CIRCLE_TAG)) extra.circle = true;
       const tag = kids(b).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === 'stereo');
       if (tag) {
         // ChemDraw's (E)/(Z) label by the double bond, kept relative to the bond's middle
@@ -684,6 +685,8 @@ export function isAutoLabel(z: number, text: string, h: number): boolean {
 }
 
 /** Our own clipboard attributes for pictures (any format, and cropping), which ChemDraw doesn't have. */
+/** The tag that marks a bond as part of an aromatic ring drawn with a circle (ours; ChemDraw has none). */
+export const CIRCLE_TAG = 'ci-aromatic-circle';
 export const OWN_PICTURE = 'ChemIllustratorPicture';
 export const OWN_CROP = 'ChemIllustratorCrop';
 

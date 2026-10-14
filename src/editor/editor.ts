@@ -21,6 +21,7 @@ import { joinAtoms, joinBonds } from '../chem/join';
 import { extractDrawing, insertDrawing } from '../io/clipboard';
 import { isReactionArrow, itemFinder, rolesOf, ROLES, schemeItems, type Item, type Role } from '../chem/reaction';
 import { applySchemePlan, planCleanUp } from '../chem/scheme-layout';
+import { circleRing, circleRings, kekulize } from '../chem/aromatic';
 import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
 import { pushArrow, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
 import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
@@ -728,7 +729,7 @@ export class Editor {
       }
       case 'ring': {
         if (!this.sel.atoms.size) this.sel = emptySel();
-        doc.edit('Ring', () => this.ringClick(h, p, t.size, t.aromatic, d.alt, d.shift));
+        doc.edit('Ring', () => this.ringClick(h, p, t.size, t.aromatic, d.alt, d.shift, undefined, d.ctrl));
         this.changed();
         return;
       }
@@ -764,7 +765,7 @@ export class Editor {
     }
   }
 
-  private ringClick(h: Hit, p: Vec, n: number, aromatic: boolean, alt: boolean, shift: boolean, towards?: Vec): void {
+  private ringClick(h: Hit, p: Vec, n: number, aromatic: boolean, alt: boolean, shift: boolean, towards?: Vec, circle = false): void {
     const doc = this.doc;
     let ids: number[];
     if (h && h.kind === 'bond') {
@@ -783,6 +784,8 @@ export class Editor {
       const L = doc.style.bondLength;
       ids = placeRing(doc, freeRing(p, n, L, towards), { aromatic, shiftPhase: shift });
     }
+    // Ctrl: an aromatic ring drawn with a circle
+    if (circle && aromatic) circleRing(doc, ids.slice(0, n));
     this.lastEdited = ids[0];
   }
 
@@ -895,13 +898,14 @@ export class Editor {
       });
     } else if (t.kind === 'ring') {
       doc.edit('Ring', () => {
-        if (h && h.kind === 'bond') this.ringClick(h, p, t.size, t.aromatic, d.alt, d.shift);
+        if (h && h.kind === 'bond') this.ringClick(h, p, t.size, t.aromatic, d.alt, d.shift, undefined, d.ctrl);
         else if (h && h.kind === 'atom') {
           const a = doc.atoms.get(h.id)!;
           const dir = norm(fromAngle(snapAngle(angleOf(sub(p, a)))));
           const ids = placeRing(doc, ringOnAtom(a, dir, t.size, bondLength(doc, a)), { aromatic: t.aromatic, shiftPhase: d.shift, existing: [a.id], scale: a.s });
+          if (d.ctrl && t.aromatic) circleRing(doc, ids.slice(0, t.size));
           this.lastEdited = ids[0];
-        } else this.ringClick(null, d.start, t.size, t.aromatic, false, d.shift, p);
+        } else this.ringClick(null, d.start, t.size, t.aromatic, false, d.shift, p, d.ctrl);
       });
     } else if (t.kind === 'arrow') {
       const push = this.pushFor(d, p);
@@ -1440,6 +1444,25 @@ export class Editor {
     });
     this.changed();
     return plan.labels.length;
+  }
+
+  /**
+   * Aromatic rings in the selection (or the whole drawing) drawn with circles, or back as
+   * alternating double bonds when they already have circles. Says what it did, or null.
+   */
+  toggleAromaticCircles(): string | null {
+    const doc = this.doc;
+    const bonds = new Set(this.sel.bonds);
+    for (const id of this.sel.atoms) for (const b of doc.adj.get(id) ?? []) bonds.add(b);
+    let msg: string | null = null;
+    doc.edit('Aromatic Circles', () => {
+      const n = circleRings(doc, bonds);
+      if (n > 0) { msg = n === 1 ? 'Ring drawn with a circle.' : `${n} rings drawn with circles.`; return; }
+      const k = kekulize(doc, bonds);
+      msg = k > 0 ? (k === 1 ? 'Ring drawn with double bonds.' : `${k} rings drawn with double bonds.`) : k < 0 ? 'These rings can\'t be given alternating double bonds.' : null;
+    });
+    if (msg) this.changed();
+    return msg;
   }
 
   /** The next free compound number in this drawing. */

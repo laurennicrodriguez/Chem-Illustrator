@@ -201,8 +201,8 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     { name: 'ring-6', title: 'Cyclohexane' },
     { name: 'ring-7', title: 'Cycloheptane' },
     { name: 'ring-8', title: 'Cyclooctane' },
-    { name: 'ring-benzene', title: 'Benzene. Shift+click swaps the double bonds' },
-    { name: 'ring-cp', title: 'Cyclopentadiene' },
+    { name: 'ring-benzene', title: 'Benzene. Shift+click swaps the double bonds; Ctrl+click draws it with a circle' },
+    { name: 'ring-cp', title: 'Cyclopentadiene. Ctrl+click draws it with a circle' },
   ],
   [
     templatePalette('rings', 'tpl-rings', 'Ring systems', 5),
@@ -1719,6 +1719,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
   'arrange-scheme': () => arrangeDialog.open(),
   'number-compounds': () => void numberCompounds(),
+  'aromatic-circles': () => flash(editor.toggleAromaticCircles() ?? 'No aromatic rings here: select a ring with alternating double bonds, or one drawn with a circle.', 5000),
   'show-roles': () => { editor.showRoles = !editor.showRoles; $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(editor.showRoles)); editor.requestScene(); storeSettings(); },
   'check-structure': () => checkStructure(),
   'stereo-labels': () => toggleStereoLabels(),

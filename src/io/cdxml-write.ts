@@ -18,9 +18,10 @@ import { layoutText, SINGLE } from '../text/layout';
 import { runsForChemDraw, TEXT_TAG } from '../text/chemdraw-text';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { fromDataUrl } from '../render/images';
-import { OWN_PICTURE, OWN_CROP } from './cdxml';
+import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG } from './cdxml';
 import { layoutTable, cellAlign, isCovered, spanOf, NOTE_SCALE } from '../table';
 import { TABLE_TAG, TABLE_PART_TAG, tableBorders, type TableTag } from './cdxml-table';
+
 
 export interface WriteOptions {
   /** Text width in points; by default Arial's own widths, as ChemDraw uses. */
@@ -696,6 +697,9 @@ class CdxmlWriter {
     this.set(e, 'IgnoreWarnings', b.ignoreWarnings ? 'yes' : null);
     e.removeAttribute('BondCircularOrdering');
     this.bondStereo(e, b, true);
+    // an aromatic ring drawn with a circle (ChemDraw has no word for it, so it is a tag of ours)
+    for (const c of kids(e)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === CIRCLE_TAG) e.removeChild(c);
+    if (b.circle && b.order === 1.5) e.appendChild(this.el('objecttag', { TagType: 'Unknown', Name: CIRCLE_TAG }));
   }
 
   // ------------------------------------------------------------------ captions, arrows, shapes

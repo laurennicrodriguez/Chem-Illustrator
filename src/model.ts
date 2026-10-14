@@ -94,6 +94,8 @@ export interface Bond {
   color?: string;
   /** Line widths relative to the document style. */
   s?: number;
+  /** An aromatic bond (order 1.5) in a ring drawn with a circle rather than a dashed second line. */
+  circle?: boolean;
   /** The person chose to ignore this bond's chemistry warnings. */
   ignoreWarnings?: boolean;
   /** Show this double bond's E/Z label when it has one. */
