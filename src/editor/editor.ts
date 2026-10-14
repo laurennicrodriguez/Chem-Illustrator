@@ -221,6 +221,10 @@ export class Editor {
   /** Input-to-paint times for the speed readout (ms). */
   latencies: number[] = [];
   onChange: () => void = () => {};
+  /** A right click on the drawing (not a right-button drag, which pans). */
+  onContextMenu: (e: MouseEvent) => void = () => {};
+  private pendingContext: MouseEvent | null = null;
+  private rightDragged = false;
   onFrame: () => void = () => {};
   onToolChange: (name: string) => void = () => {};
   /** The fragmentation tool drew a line from p to q across these bonds (the app works out the masses). */
@@ -248,7 +252,13 @@ export class Editor {
     el.addEventListener('pointerleave', () => { this.pointerInside = false; if (!this.drag) { this.hover = null; this.requestOverlay(); } });
     el.addEventListener('dblclick', (e) => this.onDoubleClick(e));
     el.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
-    el.addEventListener('contextmenu', (e) => e.preventDefault());
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      // a right-button drag pans; the menu only shows for a right click that stayed put.
+      // (Windows sends this after the button comes up, macOS while it is still down.)
+      if (this.drag?.button === 2) this.pendingContext = e;
+      else if (!this.rightDragged) this.onContextMenu(e);
+    });
     window.addEventListener('keydown', (e) => this.onKey(e));
   }
 
@@ -478,7 +488,9 @@ export class Editor {
         if (!h) this.keyHotHover = null;
         else if (!sameHit(h, this.keyHotHover)) this.keyHot = null;
       }
-      this.r.overlay.style.cursor = onRotate ? 'grab' : handle ? (handle.which === 'mid' ? 'grab' : 'crosshair') : '';
+      // a hand over what is selected: dragging there moves it
+      const movable = !!h && this.tool.kind !== 'eraser' && this.isSelected(h);
+      this.r.overlay.style.cursor = onRotate ? 'grab' : handle ? (handle.which === 'mid' ? 'grab' : 'crosshair') : movable ? 'grab' : '';
       this.requestOverlay(e.timeStamp);
       return;
     }
@@ -490,6 +502,7 @@ export class Editor {
       if (d.mode === 'handle') this.doc.begin(d.handle!.which === 'mid' ? 'Bend arrow' : this.cropping === d.handle!.id ? 'Crop picture' : 'Resize');
       if (d.mode === 'rotate') this.doc.begin('Rotate');
       if (d.mode === 'move') {
+        this.r.overlay.style.cursor = 'grabbing';
         this.doc.begin('Move');
         if (d.hit && !this.isSelected(d.hit)) {
           // dragging an unselected atom or object moves just that
@@ -566,6 +579,8 @@ export class Editor {
   }
 
   private dragModeFor(d: Drag): Drag['mode'] {
+    // with any drawing tool, dragging what is already selected moves it (as in ChemDraw)
+    if (d.hit && this.tool.kind !== 'eraser' && this.isSelected(d.hit)) return 'move';
     switch (this.tool.kind) {
       case 'select':
         return d.hit ? 'move' : 'marquee';
@@ -594,6 +609,12 @@ export class Editor {
     if (!d) return;
     const p = this.docPoint(e);
     if (d.mode === 'text') { this.captionEd?.pointerUp(); return; }
+    if (d.button === 2) {
+      this.rightDragged = d.moved;
+      const ctx = this.pendingContext;
+      this.pendingContext = null;
+      if (ctx && !d.moved) this.onContextMenu(ctx);
+    }
     if (d.mode === 'pan') { this.requestScene(e.timeStamp); return; }
     if (d.mode === 'handle' || d.mode === 'rotate') {
       if (d.moved) { this.doc.commit(); this.changed(); }
@@ -615,6 +636,31 @@ export class Editor {
     else if (d.mode === 'draw') this.finishDraw(d, p);
     this.hover = this.hitTest(p);
     this.requestScene(e.timeStamp);
+  }
+
+  /**
+   * Right-click: what is under the pointer. Something not already selected becomes the
+   * selection first (a whole structure for an atom or bond), as in ChemDraw, so the menu's
+   * commands act on what was clicked. Empty space away from the selection clears it. Null on
+   * empty space.
+   */
+  contextPick(e: MouseEvent): Hit {
+    const p = this.docPoint(e);
+    if (this.captionEd?.hit(p)) return null;
+    const h = this.hitTest(p);
+    // empty space (outside the selection's box): the menu for the page, not the selection
+    if (!h && this.hasSelection()) {
+      const b = this.selBox();
+      if (!b || p.x < b.x1 || p.x > b.x2 || p.y < b.y1 || p.y > b.y2) this.clearSelection();
+    }
+    if (h && !this.isSelected(h)) {
+      if (h.kind === 'atom' || h.kind === 'bond') this.selectFragment(h.kind === 'atom' ? h.id : this.doc.bonds.get(h.id)!.a1, false);
+      else {
+        this.selectOnly(h);
+        this.onChange();
+      }
+    }
+    return h;
   }
 
   private onDoubleClick(e: MouseEvent): void {

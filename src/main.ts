@@ -38,6 +38,7 @@ import { recordPicture, pictureSvg, pictureCanvas, canvasPng, bitmapScale, EXPOR
 import { pngWithDpi } from './render/emf-read';
 import { whiteToClear } from './render/background';
 import { pickTemplate } from './ui/template-gallery';
+import { showContextMenu, type MenuItem } from './ui/context-menu';
 import { fillTemplate, templateSize } from './design/templates';
 import { itemsToSvg } from './render/svg';
 import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc } from './render/images';
@@ -2121,6 +2122,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'copy-mol': () => copyMolfile(),
   'copy-cdxml': () => copyCdxmlText(),
   'select-all': () => editor.selectAll(),
+  delete: () => { finishTyping(); editor.deleteSelection(); },
   'next-structure': () => editor.selectNextStructure(1),
   'prev-structure': () => editor.selectNextStructure(-1),
   // arrow keys move the selection; with nothing selected they do nothing here
@@ -3230,6 +3232,72 @@ function updatePanels(): void {
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
+// ---------------------------------------------------------------- right-click menu on the drawing
+
+/**
+ * What the right-click menu offers: the usual editing commands, then the top menus' commands
+ * that fit what was clicked (a structure, an arrow, shapes or empty space), grouped as they are
+ * at the top so they are found in the same place.
+ */
+function drawingMenu(): MenuItem[] {
+  const s = editor.sel;
+  const any = s.atoms.size + s.bonds.size + s.captions.size + s.arrows.size + s.shapes.size > 0;
+  const atoms = s.atoms.size > 0;
+  const shapes = [...s.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => !!x);
+  const design = ws.active.mode === 'design';
+  const view: MenuItem = { label: 'View', items: [{ cmd: 'zoom-in' }, { cmd: 'zoom-out' }, { cmd: 'zoom-fit' }, { cmd: 'zoom-actual' }, null, { cmd: 'show-stereo' }, { cmd: 'scroll-bars' }] };
+  if (!any) {
+    return [
+      { cmd: 'paste' }, { cmd: 'paste-smiles' }, { cmd: 'select-all' }, null,
+      { cmd: 'undo' }, { cmd: 'redo' }, null,
+      { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'connector-tool' }] : [])] },
+      { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] },
+      view,
+    ];
+  }
+  const arrange: MenuItem[] = [
+    { cmd: 'align-left' }, { cmd: 'align-hcenter' }, { cmd: 'align-right' }, null,
+    { cmd: 'align-top' }, { cmd: 'align-vcenter' }, { cmd: 'align-bottom' }, null,
+    { cmd: 'distribute-h' }, { cmd: 'distribute-v' },
+  ];
+  const turn: MenuItem[] = [
+    { cmd: 'flip-h' }, { cmd: 'flip-v' }, null,
+    { cmd: 'rotate-cw' }, { cmd: 'rotate-ccw' }, { cmd: 'rotate-180' }, { cmd: 'rotate-dialog' }, null, { cmd: 'scale' },
+  ];
+  const order: MenuItem[] = shapes.length
+    ? [{ cmd: 'shape-front', label: 'Bring to Front' }, { cmd: 'shape-forward', label: 'Bring Forward' }, { cmd: 'shape-backward', label: 'Send Backward' }, { cmd: 'shape-back', label: 'Send to Back' }]
+    : [];
+  return [
+    { cmd: 'cut' }, { cmd: 'copy' }, { cmd: 'paste' }, { cmd: 'delete', label: 'Delete' }, null,
+    ...(atoms ? [{ label: 'Copy As', items: [{ cmd: 'copy-smiles' }, { cmd: 'copy-mol' }, { cmd: 'copy-cdxml' }] }, null] : []),
+    ...(atoms ? [
+      { cmd: 'clean-up' },
+      { label: 'Structure', items: [
+        { cmd: 'stereo-labels' }, { cmd: 'aromatic-circles' }, { cmd: 'chain-ends' }, { cmd: 'explicit-h' }, null,
+        { cmd: 'contract-label' }, { cmd: 'join' }, { cmd: 'bring-front' }, { cmd: 'send-back' }, null,
+        { cmd: 'enhanced-stereo' }, { cmd: 'chiral-flag' }, { cmd: 'repeat-group' }, { cmd: 'rgroup-table' }, null,
+        { cmd: 'check-structure' }, { cmd: 'save-template' }, { cmd: 'define-nickname' },
+      ] },
+    ] : []),
+    ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] }] : []),
+    null,
+    { label: 'Align', items: arrange },
+    { label: 'Rotate or Flip', items: turn },
+    ...(order.length ? [{ label: 'Order', items: order }] : []),
+    ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }] : []),
+    null,
+    { cmd: 'select-all' },
+    view,
+  ];
+}
+
+editor.onContextMenu = (e) => {
+  if (sheetActive() || docActive()) return;
+  finishTyping();
+  editor.contextPick(e);
+  showContextMenu(e.clientX, e.clientY, drawingMenu(), { run: (cmd) => void command(cmd), key: commandKey });
+};
+
 stylePanel.cropWithMouse = () => cropPicture();
 stylePanel.removeWhite = (ids) => void removeWhite(ids);
 stylePanel.reaction = {

@@ -1056,3 +1056,10 @@ dialog.template-gallery { width: min(94vw, 760px); }
 .tg-thumb { align-self: center; background: var(--line); border-radius: 3px; margin-bottom: 4px; }
 .tg-blurb { font-size: 12px; line-height: 1.35; }
 .tg-size { font-size: 11px; }
+
+/* right-click menus on the drawing */
+.context-menu { position: fixed; top: 0; left: 0; z-index: 60; min-width: 200px; }
+.context-menu button.has-sub::after { content: '›'; color: var(--muted); }
+.context-menu button[aria-expanded='true'] { background: var(--accent-soft); }
+.context-menu button[role='menuitemcheckbox'] > span::before { content: ''; display: inline-block; width: 1.2em; }
+.context-menu button[role='menuitemcheckbox'][aria-checked='true'] > span::before { content: '✓'; }
