@@ -23,16 +23,23 @@ import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, r
   nativeFirst, writeNativeFormats, looksLikeCdxml, cfHtml, fromCfHtml, CELLS_FORMAT, OWN_FORMAT, CDX_FORMAT } from './io/clipboard';
 import { cdxToCdxml } from './io/cdx';
 import { writeCdxml } from './io/cdxml-write';
-import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE_EXTENSIONS } from './io/files';
+import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, PICTURE_EXTENSIONS } from './io/files';
 import { Workspace, Tab } from './workspace';
-import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName } from './deck/deck';
-import { drawSlidePage, recordSlide, SURROUND } from './deck/slide-view';
+import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize } from './deck/deck';
+import { drawSlidePage, recordSlide, paintSlide, SURROUND } from './deck/slide-view';
 import { writePdf, jpegInfo, PdfPage, PdfImage } from './io/pdf';
 import { SlideList } from './ui/slide-list';
+import { DesignLibrary, GEO_DRAG_TYPE, pickDesignSize, sizeLabel } from './ui/design-panel';
+import { LayersPanel } from './ui/layers-panel';
 import { Scrollbars } from './ui/scrollbars';
 import { Presenter } from './ui/present';
 import { editMaster } from './ui/master-dialog';
-import { recordPicture, pictureSvg, pictureCanvas, canvasPng } from './render/picture';
+import { recordPicture, pictureSvg, pictureCanvas, canvasPng, bitmapScale, EXPORT_MAX_SIDE, EXPORT_MAX_PIXELS } from './render/picture';
+import { pngWithDpi } from './render/emf-read';
+import { whiteToClear } from './render/background';
+import { pickTemplate } from './ui/template-gallery';
+import { fillTemplate, templateSize } from './design/templates';
+import { itemsToSvg } from './render/svg';
 import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc } from './render/images';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
@@ -282,6 +289,8 @@ const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => 
 });
 
 const HINTS: Record<string, string> = {
+  connector: 'Drag from one shape\'s blue dot to another\'s: the connector sticks to both and follows them when they move.',
+  'connector-elbow': 'Drag from one shape\'s blue dot to another\'s: the connector bends square and follows the shapes when they move.',
   select: 'Click to select, drag to box-select or move. Double-click selects a whole structure. Delete removes.',
   eraser: 'Click an atom, bond, caption, arrow or shape to remove it.',
   chain: 'Drag from empty space or an atom; the number shows how many bonds. Click to type how many atoms; Alt+click repeats the last number.',
@@ -297,8 +306,17 @@ const BOND_HINT = 'Click empty space or an atom to draw; drag to aim. Point at a
 const RING_HINT = 'Click empty space, an atom (spiro; Alt+click to attach by a bond) or a bond (fused). Drag to orient.';
 const TEMPLATE_HINT = 'Click empty space to place it (drag to turn it), a bond to fuse it on, or an atom to join it there (Alt: the other way: by a new bond, or sharing the atom).';
 
+// Design mode's shape library (made further down, once the page is ready)
+let designLib: DesignLibrary | null = null;
+let layers: LayersPanel | null = null;
+/** Design > Smart Guides: moved things snap into line with other shapes and the page. */
+let designGuides = true;
+const GEO_HINT = 'Click on the page to put the shape down, or drag to draw it at any size (Shift keeps its shape). Double-click a shape to type in it.';
+
 editor.onToolChange = (name) => {
   toolbar.setActive(name);
+  designLib?.setActive(name);
+  if (name.startsWith('geo:')) { $('#hint').textContent = GEO_HINT; return; }
   const t = TOOLS[name];
   $('#hint').textContent = HINTS[name] ?? (t.kind === 'ring' ? RING_HINT : t.kind === 'arrow' ? (t.style.sweep ? CURVE_HINT : ARROW_HINT)
     : t.kind === 'shape' ? SHAPE_HINT : t.kind === 'bracket' ? BRACKET_HINT : t.kind === 'template' ? TEMPLATE_HINT : BOND_HINT);
@@ -793,7 +811,7 @@ const presenter = new Presenter();
 let modeColours: ModeColours = { ...DEFAULT_MODE_COLOURS };
 // Each mode keeps its own tool: slides start with Select (click a placeholder to type), drawings
 // and structures drawn for sheet cells with a bond.
-const modeTool: Record<Tab['mode'], string> = { drawing: 'bond-single', slides: 'select', sheet: 'bond-single', document: 'bond-single' };
+const modeTool: Record<Tab['mode'], string> = { drawing: 'bond-single', slides: 'select', sheet: 'bond-single', document: 'bond-single', design: 'select' };
 
 // ---------------------------------------------------------------- sheets
 
@@ -896,7 +914,7 @@ const ws: Workspace = new Workspace(doc, {
 
 /** The slide deck showing (in Slides mode), or null for a drawing. */
 function deckNow(): Deck | null {
-  return ws.active.mode === 'slides' ? ws.active.deck : null;
+  return ws.active.deck ?? null;
 }
 
 /** Finish typing in a caption or the notes (and drawing a structure for a cell), before the slide or tab changes. */
@@ -911,10 +929,16 @@ function enterTab(tab: Tab, opened: boolean): void {
   if (slideSplit && tab !== slideSplit.partner) slideSplit = null;
   splitDrawing = false;
   const deck = tab.deck;
-  const slides = !!deck;
+  const design = tab.mode === 'design';
+  const slides = !!deck && !design;
   const sheet = tab.mode === 'sheet';
   const words = tab.mode === 'document';
   document.body.classList.toggle('slides-mode', slides);
+  document.body.classList.toggle('design-mode', design);
+  editor.glueArrows = design;
+  layers?.show(design ? doc : null);
+  editor.smartGuides = design && designGuides;
+  for (const el of document.querySelectorAll<HTMLElement>('.design-only')) el.hidden = !design;
   document.body.classList.toggle('sheet-mode', sheet);
   document.body.classList.toggle('doc-mode', words);
   applyModeColours(tab.mode, modeColours);
@@ -923,8 +947,8 @@ function enterTab(tab: Tab, opened: boolean): void {
   editor.paused = sheet || words;
   sheetMode.show(sheet ? tab : null);
   docMode.show(words ? tab : null);
-  renderer.screen = slides;
-  renderer.page = slides ? slidePage : null;
+  renderer.screen = !!deck;
+  renderer.page = deck ? slidePage : null;
   editor.slideKeys = slides;
   editor.cropping = null;
   editor.lastEdited = null;
@@ -935,7 +959,8 @@ function enterTab(tab: Tab, opened: boolean): void {
     deck.onSwitch = () => slideSwitched(deck);
     listKey = slideListKey(deck);
     masterSeen = deck.master;
-    slideList.show(deck);
+    slideList.show(design ? null : deck);
+    if (design) showDesignState();
     notesBox.value = deck.current?.notes ?? '';
     showSlideState();
   } else slideList.show(null);
@@ -961,7 +986,9 @@ function enterTab(tab: Tab, opened: boolean): void {
 const slidePage = {
   draw(ctx: CanvasRenderingContext2D): void {
     const d = deckNow();
-    if (d?.current) drawSlidePage(ctx, { size: d.size, master: d.master, layout: d.current.layout, index: d.index }, SURROUND);
+    if (!d?.current) return;
+    drawSlidePage(ctx, { size: d.size, master: d.master, layout: d.current.layout, index: d.index }, SURROUND);
+    if (ws.active.mode === 'design' && designGrid.on) drawGrid(ctx, d.size, designGrid.step);
   },
 };
 
@@ -979,6 +1006,7 @@ function deckChanged(deck: Deck): void {
     slideList.rebuild();
   } else slideList.refresh();
   showSlideState();
+  if (ws.active.mode === 'design') showDesignState();
   ws.noteChange();
 }
 
@@ -1007,6 +1035,94 @@ function showSlideState(): void {
   $('[data-cmd="size-wide"]')?.setAttribute('aria-checked', String(named === 'wide'));
   $('[data-cmd="size-standard"]')?.setAttribute('aria-checked', String(named === 'standard'));
 }
+
+// ---------------------------------------------------------------- Design mode
+
+layers = new LayersPanel($('#layers-section'), {
+  select: (ids) => editor.selectShapes(ids),
+  selected: () => editor.selectedShapes(),
+  edit: (label, f) => { finishTyping(); doc.edit(label, f); editor.changed(); },
+});
+const lib = (designLib = new DesignLibrary($('#design-lib'), (id) => { finishTyping(); editor.setTool(`geo:${id}`); }));
+const designGrid = { on: false, step: 18 };
+const dzBg = $<HTMLInputElement>('#dz-bg');
+const dzGrid = $<HTMLInputElement>('#dz-grid');
+const dzStep = $<HTMLSelectElement>('#dz-grid-step');
+dzGrid.addEventListener('change', () => { designGrid.on = dzGrid.checked; renderer.repaintAll(); editor.requestScene(); });
+dzStep.addEventListener('change', () => { designGrid.step = Number(dzStep.value) || 18; dzGrid.checked = designGrid.on = true; renderer.repaintAll(); editor.requestScene(); });
+dzStep.value = String(designGrid.step);
+const dzGuides = $<HTMLInputElement>('#dz-guides');
+dzGuides.checked = designGuides;
+dzGuides.addEventListener('change', () => { designGuides = dzGuides.checked; editor.smartGuides = ws.active.mode === 'design' && designGuides; });
+dzBg.addEventListener('change', () => {
+  const d = deckNow();
+  if (!d || d.master.background.toLowerCase() === dzBg.value.toLowerCase()) return;
+  finishTyping();
+  d.setMaster({ ...d.master, background: dzBg.value });
+});
+
+/** The Design ribbon shows the page's size and background. */
+function showDesignState(): void {
+  const d = deckNow();
+  if (!d) return;
+  $('#dz-size').textContent = sizeLabel(d.size);
+  if (/^#[0-9a-f]{6}$/i.test(d.master.background)) dzBg.value = d.master.background;
+}
+
+/** Light lines across the page to line things up by (on screen only). */
+function drawGrid(ctx: CanvasRenderingContext2D, size: SlideSize, step: number): void {
+  const k = renderer.view.scale;
+  // too close together to see: every second (fourth…) line instead
+  let s = step;
+  while (s * k < 6) s *= 2;
+  ctx.save();
+  ctx.lineWidth = 1 / k;
+  ctx.strokeStyle = 'rgba(80, 110, 170, 0.22)';
+  ctx.beginPath();
+  for (let x = s; x < size.w - 1e-6; x += s) { ctx.moveTo(x, 0); ctx.lineTo(x, size.h); }
+  for (let y = s; y < size.h - 1e-6; y += s) { ctx.moveTo(0, y); ctx.lineTo(size.w, y); }
+  ctx.stroke();
+  ctx.restore();
+}
+
+async function newDesign(): Promise<void> {
+  finishTyping();
+  const t = await pickTemplate();
+  if (t === 'blank') {
+    const size = await pickDesignSize('New Design: page size');
+    if (size) ws.newDesign(size);
+  } else if (t) {
+    ws.newDesign(templateSize(t), (d) => fillTemplate(d, t));
+    editor.fit();
+  }
+}
+
+async function designSize(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'design') { flash('Page Size is for designs: use File > New Design.'); return; }
+  finishTyping();
+  const size = await pickDesignSize('Page size', d.size);
+  if (size && deckNow() === d) {
+    d.setSize(size);
+    editor.fit();
+  }
+}
+
+// a shape dragged from the library onto the page
+host.addEventListener('dragover', (e) => {
+  if (!e.dataTransfer?.types.includes(GEO_DRAG_TYPE)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+});
+host.addEventListener('drop', (e) => {
+  const id = e.dataTransfer?.getData(GEO_DRAG_TYPE);
+  if (!id) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const r = host.getBoundingClientRect();
+  editor.placeGeo(id, renderer.toDoc(e.clientX - r.left, e.clientY - r.top));
+  overlay.focus();
+});
 
 const slideList = new SlideList($('#slide-list'), {
   go: (i) => goSlide(i),
@@ -1100,6 +1216,10 @@ function redo(): void {
 
 // ---------------------------------------------------------------- the tab strip
 
+const TAB_ICONS: Record<Tab['mode'], [string, string]> = {
+  drawing: ['D', 'Drawing'], slides: ['P', 'Slides'], sheet: ['X', 'Sheet'], document: ['W', 'Document'], design: ['G', 'Design'],
+};
+
 function renderTabs(): void {
   const items = ws.tabs.map((t) => {
     const el = document.createElement('div');
@@ -1109,8 +1229,8 @@ function renderTabs(): void {
     el.title = (t.ref.kind === 'path' ? t.ref.path : t.name) + (t.dirty ? ' (not saved)' : '');
     const icon = document.createElement('span');
     icon.className = 'tab-icon';
-    icon.textContent = t.mode === 'slides' ? 'P' : t.mode === 'sheet' ? 'X' : t.mode === 'document' ? 'W' : 'D';
-    icon.title = t.mode === 'slides' ? 'Slides' : t.mode === 'sheet' ? 'Sheet' : t.mode === 'document' ? 'Document' : 'Drawing';
+    icon.textContent = TAB_ICONS[t.mode][0];
+    icon.title = TAB_ICONS[t.mode][1];
     const name = document.createElement('span');
     name.className = 'tab-name';
     name.textContent = t.name;
@@ -1137,7 +1257,7 @@ function renderTabs(): void {
     b.addEventListener('click', () => command(cmd));
     return b;
   };
-  tabsEl.replaceChildren(...items, add('+ Drawing', 'New drawing', 'new'), add('+ Slides', 'New slides', 'new-slides'), add('+ Sheet', 'New sheet', 'new-sheet'), add('+ Document', 'New document', 'new-document'));
+  tabsEl.replaceChildren(...items, add('+ Drawing', 'New drawing', 'new'), add('+ Slides', 'New slides', 'new-slides'), add('+ Sheet', 'New sheet', 'new-sheet'), add('+ Document', 'New document', 'new-document'), add('+ Design', 'New design: a TOC graphic, graphical abstract, poster, flowchart or figure', 'new-design'));
   tabsEl.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
@@ -1258,6 +1378,41 @@ function cropPicture(): void {
   if (editor.cropping !== null) flash('Drag the black handles to cut the edges off. Press Esc or click elsewhere when you are done.', 6000);
 }
 
+/** Picture > Remove white: near-white pixels become see-through (the picture becomes a PNG). */
+async function removeWhite(ids: number[]): Promise<void> {
+  const v = await ask('Remove White Background', [
+    { name: 'which', label: 'Remove', value: 'edges', options: [
+      { value: 'edges', label: 'White joined to the edges (keeps white inside the picture)' },
+      { value: 'all', label: 'All white, everywhere' },
+    ] },
+    { name: 'tol', label: 'How near white counts', value: '24', type: 'number', unit: 'of 255' },
+  ], { ok: 'Remove', note: 'Raise the number if a grey haze is left round the picture; lower it if pale parts of the picture disappear. Undo puts it back.' });
+  if (!v) return;
+  const tol = Math.max(0, Math.min(200, Number(v.tol) || 0));
+  const done: { id: number; src: string }[] = [];
+  for (const id of ids) {
+    const s = doc.shapes.get(id);
+    if (!s?.src) continue;
+    try {
+      const img = await loadImage(s.src);
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      const g = c.getContext('2d')!;
+      g.drawImage(img, 0, 0);
+      const data = g.getImageData(0, 0, c.width, c.height);
+      whiteToClear(data.data, c.width, c.height, tol, v.which !== 'all');
+      g.putImageData(data, 0, 0);
+      done.push({ id, src: dataUrl(new Uint8Array(await (await canvasPng(c)).arrayBuffer()), 'image/png') });
+    } catch (e) {
+      await showError(`Could not change the picture: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+  }
+  if (!done.length) return;
+  doc.edit('Remove white', () => { for (const d of done) doc.updateShape(d.id, { src: d.src }); });
+  editor.requestScene();
+}
+
 /** A PNG of an SVG picture, for programs that can't show SVG (w × h pixels, kept to a sensible size). */
 async function svgToPng(svg: string, w: number, h: number): Promise<Uint8Array> {
   const k = Math.min(1, 8000 / w, 8000 / h, Math.sqrt(12e6 / (w * h)));
@@ -1354,6 +1509,82 @@ async function exportPdf(): Promise<void> {
     return;
   }
   flash(`Saved ${target.name}${pages.length > 1 ? ` (${pages.length} pages)` : ''}`);
+}
+
+/**
+ * File > Export Picture: the page (a design or the current slide) or the drawing as a PNG at
+ * the resolution picked, or as an SVG, on its background colour or see-through.
+ */
+async function exportPicture(): Promise<void> {
+  const tab = ws.active, deck = tab.deck;
+  const what = deck ? (tab.mode === 'design' ? 'the page' : 'this slide') : 'the drawing';
+  const v = await ask('Export Picture', [
+    { name: 'format', label: 'Format', value: 'png', options: [
+      { value: 'png', label: 'PNG (a picture of dots: journals, Word, web)' },
+      { value: 'svg', label: 'SVG (shapes that stay sharp: Illustrator, Inkscape, web)' },
+    ] },
+    { name: 'dpi', label: 'Resolution (PNG)', value: '300', type: 'number', unit: 'dpi' },
+    { name: 'bg', label: 'Background', value: deck ? 'page' : 'clear', options: [
+      { value: deck ? 'page' : 'white', label: deck ? 'The page colour' : 'White' },
+      { value: 'clear', label: 'See-through' },
+    ] },
+  ], { ok: 'Export…', note: `Saves ${what}. Journals usually ask for 300 dpi for colour pictures and 600 to 1200 dpi for line drawings.` });
+  if (!v) return;
+  const dpi = Math.max(30, Math.min(2400, Number(v.dpi) || 300));
+  const clear = v.bg === 'clear';
+  const CLEAR = 'rgba(0,0,0,0)';
+  let w: number, h: number;
+  let svg: () => string;
+  let png: (k: number) => HTMLCanvasElement;
+  if (deck) {
+    const i = deck.index, s = deck.slides[i];
+    const page = { size: deck.size, master: clear ? { ...deck.master, background: CLEAR } : deck.master, layout: s.layout, index: i };
+    ({ w, h } = deck.size);
+    svg = () => itemsToSvg(recordSlide(page, deck.docOf(i)).filter((it) => !(it.kind === 'path' && it.fill === CLEAR)), { x1: 0, y1: 0, x2: w, y2: h });
+    png = (k) => {
+      const c = document.createElement('canvas');
+      paintSlide(c, w, h, k, page, deck.docOf(i));
+      return c;
+    };
+  } else {
+    const pic = recordPicture(doc, 4);
+    if (!pic) { flash('There is nothing to export yet.'); return; }
+    const b = pic.box;
+    w = b.x2 - b.x1; h = b.y2 - b.y1;
+    const back = clear ? [] : [{ kind: 'path' as const, segs: [{ k: 'M' as const, x: b.x1, y: b.y1 }, { k: 'L' as const, x: b.x2, y: b.y1 }, { k: 'L' as const, x: b.x2, y: b.y2 }, { k: 'L' as const, x: b.x1, y: b.y2 }, { k: 'Z' as const }], fill: '#ffffff' }];
+    svg = () => itemsToSvg([...back, ...pic.items], b);
+    png = (k) => {
+      const { canvas } = pictureCanvas(doc, pic, k * 72);
+      if (clear) return canvas;
+      const c = document.createElement('canvas');
+      c.width = canvas.width; c.height = canvas.height;
+      const g = c.getContext('2d')!;
+      g.fillStyle = '#ffffff';
+      g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(canvas, 0, 0);
+      return c;
+    };
+  }
+  const type = v.format === 'svg' ? SVG : PICTURE;
+  const target = await saveFileDialog(withExtension(tab.name, type.extension), type).catch(async (e) => { await showError(String(e)); return null; });
+  if (!target) return;
+  let note = '';
+  try {
+    if (type === SVG) await writeFile(target.ref, target.name, svg(), SVG);
+    else {
+      const k = bitmapScale(w, h, dpi, EXPORT_MAX_SIDE, EXPORT_MAX_PIXELS);
+      const c = png(k);
+      const got = Math.round((c.width / w) * 72);
+      if (got < dpi - 1) note = ` at ${got} dpi (the most for a page this big)`;
+      const bytes = new Uint8Array(await (await canvasPng(c)).arrayBuffer());
+      await writeFile(target.ref, target.name, pngWithDpi(bytes, (c.width / w) * 72), PICTURE);
+      note = `, ${c.width} × ${c.height} pixels` + note;
+    }
+  } catch (e) {
+    await showError(`Could not save ${target.name}: ${e instanceof Error ? e.message : String(e)}`);
+    return;
+  }
+  flash(`Saved ${target.name}${note}`);
 }
 
 /** A picture's pixels for a PDF: JPEGs go in as they are; others are read through the browser. */
@@ -1814,7 +2045,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['new', 'new-slides', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+const ANY_TAB = new Set(['new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'show-stereo', 'clipboard-formats', 'split-view']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
@@ -1831,13 +2062,29 @@ function command(name: string): boolean {
     if (!ANY_TAB.has(name) && docMode.run(name)) return true;
     if (!ANY_TAB.has(name) && !DOC_ANY.has(name)) return false;
   }
+  if (ws.active.mode === 'design' && (SLIDE_ONLY.has(name) || name.startsWith('layout-'))) {
+    flash('A design is one page: use Page Size and Background on the Design ribbon. For several pages, use File > New Slides.');
+    return true;
+  }
   const run = COMMANDS[name];
   return !!run && run() !== false;
 }
 
+/** Slide commands that don't apply to a design's single page. */
+const SLIDE_ONLY = new Set(['new-slide', 'duplicate-slide', 'delete-slide', 'size-wide', 'size-standard', 'slide-master']);
+
 const COMMANDS: Record<string, () => unknown> = {
   new: () => { finishTyping(); ws.newDrawing(); },
   'new-slides': () => { finishTyping(); ws.newSlides(); },
+  'new-design': () => newDesign(),
+  'design-size': () => designSize(),
+  'connector-tool': () => { finishTyping(); editor.setTool('connector'); },
+  'connector-elbow-tool': () => { finishTyping(); editor.setTool('connector-elbow'); },
+  'design-shapes': () => { if (ws.active.mode === 'design') lib.focusSearch(); else flash('Shapes are in Design mode: use File > New Design.'); },
+  'shape-front': () => editor.setShapeLayer('front') || flash('Select the shapes to bring to the front.'),
+  'shape-back': () => editor.setShapeLayer('back') || flash('Select the shapes to send to the back.'),
+  'shape-forward': () => editor.setShapeLayer('forward') || flash('Select the shapes to bring forward.'),
+  'shape-backward': () => editor.setShapeLayer('backward') || flash('Select the shapes to send backward.'),
   'new-sheet': () => { finishTyping(); ws.newSheet(); },
   'new-document': () => { finishTyping(); ws.newDocument(); },
   open: () => ws.open(),
@@ -1848,6 +2095,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'prev-tab': () => ws.cycle(-1),
   'export-mol': () => exportMolfile(),
   'export-pdf': () => { finishTyping(); return exportPdf(); },
+  'export-picture': () => { finishTyping(); return exportPicture(); },
   undo: () => undo(),
   redo: () => redo(),
   'insert-picture': () => insertPicture(),
@@ -2983,6 +3231,7 @@ function updatePanels(): void {
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
 stylePanel.cropWithMouse = () => cropPicture();
+stylePanel.removeWhite = (ids) => void removeWhite(ids);
 stylePanel.reaction = {
   roles: (id) => editor.reactionRoles(id),
   others: () => editor.sel.atoms.size + editor.sel.captions.size + editor.sel.shapes.size,
@@ -3014,6 +3263,7 @@ function showScrollBars(on: boolean): void {
 }
 
 editor.onFrame = () => {
+  layers?.refresh();
   scrollbars.update(doc.version);
   updatePanels();
   updateWarnings();
@@ -3053,10 +3303,12 @@ function sampleMolecule(): void {
 }
 
 // the ribbon's buttons run the same commands as the menus
-$('#ribbon').addEventListener('click', (e) => {
-  const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-cmd]')?.dataset.cmd;
-  if (cmd) command(cmd);
-});
+for (const id of ['#ribbon', '#design-ribbon']) {
+  $(id).addEventListener('click', (e) => {
+    const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-cmd]')?.dataset.cmd;
+    if (cmd) command(cmd);
+  });
+}
 renderTabs();
 updateTitle();
 

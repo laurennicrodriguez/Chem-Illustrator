@@ -614,6 +614,26 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     for (const ch of kids(el)) {
       switch (ch.nodeName) {
         case 'group': {
+          // a design shape saved here: drawn in ChemDraw as curves and text, read back as the shape
+          const geoTag = kids(ch).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === GEO_TAG)?.getAttribute('Value');
+          if (geoTag) {
+            let saved: Partial<Shape> | null = null;
+            try { saved = JSON.parse(geoTag); } catch { saved = null; }
+            const bb = pts(ch.getAttribute('BoundingBox'));
+            if (saved && saved.kind === 'geo' && [saved.x1, saved.y1, saved.x2, saved.y2].every((v) => typeof v === 'number')) {
+              const sh = doc.addShape({ ...(saved as Omit<Shape, 'id'>), id: idFor(ch) });
+              // moved in ChemDraw: the group's box says where it is now
+              const was = ch.getAttribute(GEO_BOX_ATTR);
+              const wb = pts(was);
+              if (bb.length === 4 && wb.length === 4 && (Math.abs(bb[0] - wb[0]) > 0.01 || Math.abs(bb[1] - wb[1]) > 0.01)) {
+                const dx = bb[0] - wb[0], dy = bb[1] - wb[1];
+                doc.updateShape(sh.id, { x1: sh.x1 + dx, y1: sh.y1 + dy, x2: sh.x2 + dx, y2: sh.y2 + dy });
+              }
+              from('s', sh.id, ch);
+              stats.shapes++;
+              break;
+            }
+          }
           const tg = tableGroup(ch);
           if (tg) readTable(tg.table, ch, tg);
           else walk(ch);
@@ -788,6 +808,10 @@ export const CIRCLE_TAG = 'ci-aromatic-circle';
 export const FILL_TAG = 'Chem Illustrator fill';
 /** The tag that keeps a contracted label's group (SMILES), so its chemistry comes back with the file. */
 export const GROUP_TAG = 'Chem Illustrator group';
+/** The tag on the group that draws a design shape in ChemDraw: the shape as it is here. */
+export const GEO_TAG = 'Chem Illustrator shape';
+/** The group's box when saved here (ChemDraw rewrites BoundingBox when the group is moved). */
+export const GEO_BOX_ATTR = 'ChemIllustratorBox';
 export const OWN_PICTURE = 'ChemIllustratorPicture';
 export const OWN_CROP = 'ChemIllustratorCrop';
 

@@ -1,9 +1,9 @@
 // View > Mode Colours…: each kind of file has its own colour (blue for drawings, orange for
-// slides, green for sheets, a deeper blue for documents), so you can tell at a glance which mode you are in. By default only the accent
+// slides, green for sheets, a deeper blue for documents, purple for designs), so you can tell at a glance which mode you are in. By default only the accent
 // colour changes (buttons, highlights, tab icons); "Whole window" also colours the menu bar.
 // Every colour can be changed, and the choice is saved in the settings file.
 
-export type ColourMode = 'drawing' | 'slides' | 'sheet' | 'document';
+export type ColourMode = 'drawing' | 'slides' | 'sheet' | 'document' | 'design';
 export type ModeColourStyle = 'accent' | 'window' | 'off';
 export interface ModeColours {
   /** accent: buttons and highlights only; window: the menu bar too; off: the drawing colour everywhere. */
@@ -12,9 +12,10 @@ export interface ModeColours {
   slides: string;
   sheet: string;
   document: string;
+  design: string;
 }
 
-export const DEFAULT_MODE_COLOURS: ModeColours = { style: 'accent', drawing: '#2f6fdf', slides: '#c8572a', sheet: '#1e8a50', document: '#2647a8' };
+export const DEFAULT_MODE_COLOURS: ModeColours = { style: 'accent', drawing: '#2f6fdf', slides: '#c8572a', sheet: '#1e8a50', document: '#2647a8', design: '#7b3fbf' };
 const STYLES: ModeColourStyle[] = ['accent', 'window', 'off'];
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -24,7 +25,7 @@ export function parseModeColours(raw: unknown): ModeColours {
   if (!raw || typeof raw !== 'object') return c;
   const r = raw as Record<string, unknown>;
   if (STYLES.includes(r.style as ModeColourStyle)) c.style = r.style as ModeColourStyle;
-  for (const k of ['drawing', 'slides', 'sheet', 'document'] as const) if (typeof r[k] === 'string' && HEX.test(r[k] as string)) c[k] = (r[k] as string).toLowerCase();
+  for (const k of ['drawing', 'slides', 'sheet', 'document', 'design'] as const) if (typeof r[k] === 'string' && HEX.test(r[k] as string)) c[k] = (r[k] as string).toLowerCase();
   return c;
 }
 
@@ -120,7 +121,7 @@ export function applyModeColours(mode: ColourMode, c: ModeColours, root: HTMLEle
   const vars: Record<string, string> = {
     '--mode-accent': p.accent, '--mode-soft': p.soft, '--mode-accent-dark': p.accentDark, '--mode-soft-dark': p.softDark,
     '--mode-bar': p.bar, '--mode-bar-dark': p.barDark, '--mode-drawing': c.drawing, '--mode-slides': c.style === 'off' ? c.drawing : c.slides,
-    '--mode-sheet': c.style === 'off' ? c.drawing : c.sheet, '--mode-document': c.style === 'off' ? c.drawing : c.document,
+    '--mode-sheet': c.style === 'off' ? c.drawing : c.sheet, '--mode-document': c.style === 'off' ? c.drawing : c.document, '--mode-design': c.style === 'off' ? c.drawing : c.design,
   };
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
   document.body.classList.toggle('mode-window', c.style === 'window');
@@ -134,7 +135,7 @@ export interface ModeColoursDialogOptions {
   set(c: ModeColours): void;
 }
 
-const NAMES: Record<ColourMode, string> = { drawing: 'Drawings', slides: 'Slides', sheet: 'Sheets', document: 'Documents' };
+const NAMES: Record<ColourMode, string> = { drawing: 'Drawings', slides: 'Slides', sheet: 'Sheets', document: 'Documents', design: 'Designs' };
 
 export class ModeColoursDialog {
   private d: HTMLDialogElement;
@@ -158,7 +159,7 @@ export class ModeColoursDialog {
         <span class="hk-buttons"><button type="button" data-act="close" class="primary">Close</button></span>
       </div>`;
     const box = d.querySelector('.mc-colours')!;
-    for (const mode of ['drawing', 'slides', 'sheet', 'document'] as ColourMode[]) {
+    for (const mode of ['drawing', 'slides', 'sheet', 'document', 'design'] as ColourMode[]) {
       const row = document.createElement('label');
       row.className = 'md-row';
       const name = document.createElement('span');

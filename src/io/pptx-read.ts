@@ -19,6 +19,13 @@ import { dataUrl, imageSize } from '../render/images';
 import { layoutText, ASCENT } from '../text/layout';
 import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle } from '../deck/deck';
 import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure } from './pptx-write';
+import { GEOS } from '../design/geo';
+import { gluePoint } from '../objects';
+
+/** PowerPoint's shapes that are shapes in the library, by PowerPoint's name. */
+const GEO_BY_PRST = new Map(GEOS.filter((g) => g.prst).map((g) => [g.prst!, g.id]));
+/** PowerPoint shapes that come into slides as plain boxes and ovals (with their text beside them as text boxes). */
+const PLAIN_PRST = new Set(['rect', 'roundRect', 'ellipse', 'snip1Rect', 'flowChartProcess', 'flowChartAlternateProcess']);
 
 export interface PptxSlide { layout: LayoutId; contents: Contents; notes: string }
 export interface PptxRead {
@@ -27,6 +34,8 @@ export interface PptxRead {
   slides: PptxSlide[];
   /** Things that came in differently or not at all (shown to the person, never blocking). */
   warnings: string[];
+  /** Saved from Design mode (opens there again). */
+  design: boolean;
 }
 
 const EXT_MIME: Record<string, string> = Object.fromEntries(Object.entries(MIME_EXT).map(([m, e]) => [e, m]));
@@ -183,6 +192,7 @@ class Reader {
   private master!: Part;
   private defaultText: Element | null = null;
   private ourMaster: Partial<Master> | null = null;
+  private design = false;
   private masterOut!: Master;
   private size: SlideSize = { w: 960, h: 540 };
   /** The slide's tables, placed once their titles and footnotes (separate text boxes) are known. */
@@ -220,7 +230,9 @@ class Reader {
     const sz = kid(root, 'sldSz');
     if (sz) this.size = { w: Math.round(fromEmu(sz.getAttribute('cx'))), h: Math.round(fromEmu(sz.getAttribute('cy'))) };
     this.defaultText = kid(root, 'defaultTextStyle');
-    const ours = this.tagsOf(main, root)[TAG.master];
+    const tags = this.tagsOf(main, root);
+    const ours = tags[TAG.master];
+    this.design = tags[TAG.design] === '1';
     if (ours) {
       try { this.ourMaster = JSON.parse(ours); } catch { /* use PowerPoint's master */ }
     }
@@ -235,7 +247,7 @@ class Reader {
     this.readTheme();
     this.masterOut = this.readMaster(slidePaths);
     const slides = slidePaths.map((p) => this.slide(p));
-    return { size: this.size, master: this.masterOut, slides, warnings: [...this.warnings] };
+    return { size: this.size, master: this.masterOut, slides, warnings: [...this.warnings], design: this.design };
   }
 
   private readTheme(): void {
@@ -343,6 +355,7 @@ class Reader {
     if (bg && bg.toLowerCase() !== this.masterOut.background.toLowerCase()) this.warnings.add('Slides with a background colour of their own now use the master\'s.');
     this.tables = [];
     this.tableParts.clear();
+    this.geoIds.clear();
     doc.bulk(() => {
       this.tree(s, layout, s.tree, IDENTITY, doc);
       this.placeTables(doc);
@@ -384,7 +397,7 @@ class Reader {
     switch (el.localName) {
       case 'sp': this.shape(s, layout, el, t, doc); break;
       case 'pic': this.pictureEl(s, el, t, doc); break;
-      case 'cxnSp': this.line(el, kid(el, 'spPr'), t, doc); break;
+      case 'cxnSp': if (!this.ourConnector(s, el, t, doc)) this.line(el, kid(el, 'spPr'), t, doc); break;
       case 'grpSp': {
         const x = kid(el, 'grpSpPr', 'xfrm');
         const off = kid(x, 'off'), ext = kid(x, 'ext'), chOff = kid(x, 'chOff'), chExt = kid(x, 'chExt');
@@ -525,6 +538,13 @@ class Reader {
     if (box.rot) this.warnings.add('Rotated pictures and shapes came in unrotated.');
     const prst = kid(spPr, 'prstGeom')?.getAttribute('prst') ?? (kid(spPr, 'custGeom') ? 'cust' : 'rect');
     if (!ph && /line|Connector/i.test(prst)) { this.line(sp, spPr, t, doc); return; }
+    if (!ph) {
+      // a design shape saved here, or a PowerPoint shape that is one (in designs, boxes and ovals too)
+      const geoTag = this.tagsOf(s.path, kid(sp, 'nvSpPr', 'nvPr'))[TAG.geo];
+      if (geoTag || (GEO_BY_PRST.has(prst) && (this.design || !PLAIN_PRST.has(prst)))) {
+        if (this.geoShape(sp, spPr, prst, box, geoTag, doc)) return;
+      }
+    }
     const hasText = !!this.plain(sp).trim();
     if (!ph) {
       const look = this.look(sp, spPr);
@@ -562,6 +582,88 @@ class Reader {
       return;
     }
     if (c) doc.addCaption(c);
+  }
+
+  /**
+   * A design shape: as saved here (moved and sized as it now is, with PowerPoint's text if that
+   * was changed there), or made from a PowerPoint shape of the same kind.
+   */
+  /** The design shapes read on this slide: their number when saved → their number now (for connectors). */
+  private geoIds = new Map<number, number>();
+
+  /** A connector saved here: the arrow, stuck to the same shapes, where PowerPoint now has it. */
+  private ourConnector(s: Part, el: Element, t: Xf, doc: Doc): boolean {
+    const tag = this.tagsOf(s.path, kid(el, 'nvCxnSpPr', 'nvPr'))[TAG.connector];
+    if (!tag) return false;
+    let saved: { a?: Omit<Arrow, 'id'> } | null;
+    try { saved = JSON.parse(tag); } catch { return false; }
+    const a = saved?.a;
+    if (!a || !a.tail || !a.head) return false;
+    const arrow: Omit<Arrow, 'id'> = { ...a };
+    // a straight one moved in PowerPoint goes where it is now
+    const box = boxOf(kid(kid(el, 'spPr'), 'xfrm'), t);
+    if (box && !a.elbow) {
+      arrow.tail = { x: box.flipH ? box.x2 : box.x1, y: box.flipV ? box.y2 : box.y1 };
+      arrow.head = { x: box.flipH ? box.x1 : box.x2, y: box.flipV ? box.y1 : box.y2 };
+    }
+    const glue = (g: Arrow['from']) => {
+      const id = g ? this.geoIds.get(g.shape) : undefined;
+      return g && id !== undefined ? { shape: id, port: g.port } : undefined;
+    };
+    arrow.from = glue(a.from);
+    arrow.to = glue(a.to);
+    if (!arrow.from) delete arrow.from;
+    if (!arrow.to) delete arrow.to;
+    const r = doc.addArrow(arrow);
+    // stuck ends sit on their shapes' connection points
+    const patch: Partial<Arrow> = {};
+    const at = (g: NonNullable<Arrow['from']>) => { const sh = doc.shapes.get(g.shape); return sh ? gluePoint(sh, g.port) : null; };
+    if (arrow.from) { const p = at(arrow.from); if (p) patch.tail = p; }
+    if (arrow.to) { const p = at(arrow.to); if (p) patch.head = p; }
+    if (patch.tail || patch.head) doc.updateArrow(r.id, patch);
+    return true;
+  }
+
+  private geoShape(sp: Element, spPr: Element | null, prst: string, box: Rect, tag: string | undefined, doc: Doc): boolean {
+    let saved: { s: Partial<Shape>; plain: string } | null = null;
+    try { saved = tag ? JSON.parse(tag) : null; } catch { saved = null; }
+    const where = { x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2 };
+    const now = this.plain(sp);
+    const theirText = () => {
+      if (!now.trim()) return undefined;
+      const c = this.text(sp, box, null, []);
+      return c ? { runs: c.runs, ...(c.paras ? { paras: c.paras } : {}) } : undefined;
+    };
+    if (saved?.s && saved.s.kind === 'geo') {
+      const sh = { ...saved.s, ...where, kind: 'geo' } as Omit<Shape, 'id'>;
+      if (now !== saved.plain) {
+        const t = theirText();
+        if (t) sh.text = t; else delete sh.text;
+      }
+      const made = doc.addShape(sh);
+      const sid = (saved as { sid?: unknown }).sid;
+      if (typeof sid === 'number') this.geoIds.set(sid, made.id);
+      return true;
+    }
+    const geo = GEO_BY_PRST.get(prst);
+    if (!geo) return false;
+    const look = this.look(sp, spPr);
+    const sh: Omit<Shape, 'id'> = { kind: 'geo', geo, ...where, color: look.line ?? look.fill ?? '#000000' };
+    if (look.fill) { sh.filled = true; sh.fillColor = look.fill; }
+    if (look.shaded) sh.fill = 'shaded';
+    sh.lineWidth = look.line ? +look.width.toFixed(2) : 0;
+    if (look.dashed) sh.dashed = true;
+    const t = theirText();
+    if (t) {
+      sh.text = t;
+      const c = this.text(sp, box, null, []);
+      if (c?.justify && c.justify !== 'center') sh.textAlign = c.justify;
+      const anchor = kid(sp, 'txBody', 'bodyPr')?.getAttribute('anchor');
+      if (!anchor || anchor === 't') sh.textValign = 'top';
+      else if (anchor === 'b') sh.textValign = 'bottom';
+    }
+    doc.addShape(sh);
+    return true;
   }
 
   /**

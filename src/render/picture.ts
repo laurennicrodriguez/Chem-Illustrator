@@ -41,6 +41,17 @@ export function pictureSvg(p: Picture): string {
 // Bitmaps are kept below these sizes so a huge drawing does not run the computer out of memory.
 const MAX_SIDE = 8000;
 const MAX_PIXELS = 12e6;
+/** Export Picture allows bigger bitmaps (posters at print resolution), within what browsers can draw. */
+export const EXPORT_MAX_SIDE = 16000;
+export const EXPORT_MAX_PIXELS = 64e6;
+
+/**
+ * Pixels per point for a bitmap of an area `pw` × `ph` points at `dpi`, turned down when the
+ * bitmap would be too big (very large pages at very high dpi).
+ */
+export function bitmapScale(pw: number, ph: number, dpi: number, maxSide = MAX_SIDE, maxPixels = MAX_PIXELS): number {
+  return Math.min(dpi / 72, maxSide / pw, maxSide / ph, Math.sqrt(maxPixels / (pw * ph)));
+}
 
 /**
  * The drawing painted on a canvas at `dpi` dots per inch, or fewer for very large drawings
@@ -48,8 +59,7 @@ const MAX_PIXELS = 12e6;
  */
 export function pictureCanvas(doc: Doc, p: Picture, dpi = 300): { canvas: HTMLCanvasElement; dpi: number } {
   const pw = p.box.x2 - p.box.x1, ph = p.box.y2 - p.box.y1;
-  let k = dpi / 72;
-  k = Math.min(k, MAX_SIDE / pw, MAX_SIDE / ph, Math.sqrt(MAX_PIXELS / (pw * ph)));
+  const k = bitmapScale(pw, ph, dpi);
   const w = Math.max(1, Math.ceil(pw * k)), h = Math.max(1, Math.ceil(ph * k));
   const canvas = document.createElement('canvas');
   canvas.width = w;

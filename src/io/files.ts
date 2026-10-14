@@ -27,6 +27,7 @@ export const SDF: FileType = { description: 'SD file (structures with data)', ex
 export const TABLE_TEXT_EXTENSIONS = ['csv', 'tsv', 'txt'];
 export const PDF: FileType = { description: 'PDF document', extension: 'pdf', mime: 'application/pdf' };
 export const PICTURE: FileType = { description: 'Picture', extension: 'png', mime: 'image/png' };
+export const SVG: FileType = { description: 'SVG picture', extension: 'svg', mime: 'image/svg+xml' };
 /** Picture files that can go on a slide. */
 export const PICTURE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'emf', 'bmp', 'webp'];
 export const MOL: FileType = { description: 'MDL molfile', extension: 'mol', mime: 'chemical/x-mdl-molfile' };

@@ -10,6 +10,7 @@ import { arialWidth } from '../text-metrics';
 import { Selection } from '../editor/editor';
 import { DEG } from '../geom';
 import { isCircle, cropTo } from '../objects';
+import { GEOS, geoDef } from '../design/geo';
 import { nextNumber } from '../chem/sprouts';
 import type { TableData } from '../model';
 import { deleteColumn, deleteRow, fitColumns, insertColumn, insertRow, setColumnAlign, setColumnWidth, setSpan, spanOf, type TablePart } from '../table';
@@ -47,6 +48,7 @@ const HEAD_TYPES: Opt<Arrow['headType']>[] = [['solid', 'Solid'], ['hollow', 'Ho
 const LINES: Opt<Arrow['line']>[] = [['solid', 'Solid'], ['dashed', 'Dashed'], ['bold', 'Bold'], ['wavy', 'Wavy']];
 const SHAFTS: Opt<string>[] = [['one', 'One line'], ['equilibrium', 'Equilibrium (two half arrows)'], ['retro', 'Retrosynthetic (double line)']];
 const BRACKETS: Opt<NonNullable<Shape['bracket']>>[] = [['square', 'Square [ ]'], ['round', 'Round ( )'], ['curly', 'Curly { }']];
+const VALIGN: Opt<NonNullable<Shape['textValign']>>[] = [['top', 'Top'], ['middle', 'Middle'], ['bottom', 'Bottom']];
 const JUSTIFY: Opt<Caption['justify']>[] = [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']];
 const TABLE_LINES: Opt<TableData['lines']>[] = [['acs', 'ACS style (rules above and below the headings, and at the end)'], ['grid', 'Every cell boxed'], ['none', 'None']];
 
@@ -68,6 +70,8 @@ export class StylePanel {
   applyLabel: (atomId: number, text: string) => void = () => {};
   /** Crop a picture with the mouse (its handles cut the edges off), or stop. */
   cropWithMouse: (shapeId: number) => void = () => {};
+  /** Make a picture's white background see-through (set up by the app). */
+  removeWhite: (shapeIds: number[]) => void = () => {};
   /** A picture's width and height change together. */
   private keepProportions = true;
   /** Table commands (set up by the app). */
@@ -137,6 +141,19 @@ export class StylePanel {
     this.select('Line', LINES, r.line, (v) => set('Arrow line', () => ({ line: v })));
     this.check('Crossed out (no reaction)', r.noGo, (v) => set('Crossed-out arrow', () => ({ noGo: v })));
     if (!r.equilibrium && !r.shaftSpacing) {
+      this.check('Square bends (elbow)', !!r.elbow, (v) => set('Elbow connector', () => ({ elbow: v || undefined, sweep: 0 })));
+    }
+    if (r.from || r.to) {
+      const loose = (a: Arrow) => ({ from: undefined, to: undefined } as Partial<Arrow>);
+      this.note('Stuck to shapes: it follows them when they move.');
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = 'Unstick from shapes';
+      b.title = 'Let the ends stay where they are when the shapes move';
+      b.addEventListener('click', () => set('Unstick connector', loose));
+      this.body.append(b);
+    }
+    if (!r.equilibrium && !r.shaftSpacing && !r.elbow) {
       this.number('Curve (°)', round(r.sweep / DEG, 1), 5, -330, 330, (v) => set('Bend arrow', () => ({ sweep: v * DEG })),
         'Positive bends to the left of the arrow’s direction, negative to the right; 0 is straight.');
     }
@@ -200,20 +217,36 @@ export class StylePanel {
     const set = (label: string, ok: (x: Shape) => boolean, patch: (x: Shape) => Partial<Shape>) =>
       this.edit(label, () => { for (const x of shapes) if (ok(x)) this.doc.updateShape(x.id, patch(x)); });
     const any = (f: (x: Shape) => boolean) => shapes.find(f);
-    const names: Record<Shape['kind'], string> = { line: 'Line', rect: 'Box', oval: 'Oval', symbol: 'Symbol', bracket: 'Bracket', picture: 'Picture', table: 'Table' };
-    this.heading(shapes.length > 1 ? `${shapes.length} shapes` : isCircle(s) ? 'Circle' : names[s.kind]);
+    const names: Record<Shape['kind'], string> = { line: 'Line', rect: 'Box', oval: 'Oval', symbol: 'Symbol', bracket: 'Bracket', picture: 'Picture', table: 'Table', geo: 'Shape' };
+    this.heading(shapes.length > 1 ? `${shapes.length} shapes` : isCircle(s) ? 'Circle' : s.kind === 'geo' ? geoDef(s.geo).name : names[s.kind]);
+    const geo = any((x) => x.kind === 'geo');
+    const isGeo = (x: Shape) => x.kind === 'geo';
+    if (geo) {
+      // another shape from the library, keeping the size, colours and text
+      this.select('Shape', GEOS.map((g): Opt<string> => [g.id, `${g.name} (${g.group.toLowerCase()})`]), geoDef(geo.geo).id, (v) => set('Change shape', isGeo, () => ({ geo: v })));
+    }
     const lined = (x: Shape) => x.kind !== 'symbol';
     const l = any(lined);
     if (l) {
       this.check('Dashed', !!l.dashed, (v) => set('Dashed', lined, () => ({ dashed: v })));
-      this.check('Bold', !!l.bold, (v) => set('Bold', lined, () => ({ bold: v })));
+      if (!geo) this.check('Bold', !!l.bold, (v) => set('Bold', lined, () => ({ bold: v })));
     }
-    const fillable = (x: Shape) => x.kind === 'rect' || x.kind === 'oval';
+    const fillable = (x: Shape) => x.kind === 'rect' || x.kind === 'oval' || x.kind === 'geo';
     const f = any(fillable);
     if (f) {
       const now: Fill = !f.filled ? 'none' : f.fill ?? 'solid';
       this.select('Fill', FILLS, now, (v) => set('Fill', fillable, () => (v === 'none' ? { filled: false } : { filled: true, fill: v === 'solid' ? undefined : v })));
       if (f.filled) this.color('Fill colour', f.fillColor, (v) => set('Fill colour', fillable, () => ({ fillColor: v })), 'Same as the line');
+      if (f.filled && geo && (geo.fill ?? 'solid') === 'solid') {
+        this.number('See-through (%)', Math.round((geo.transparency ?? 0) * 100), 5, 0, 100, (v) => set('Transparency', isGeo, () => ({ transparency: v ? v / 100 : undefined })), 'How much shows through the fill: 0 is solid');
+      }
+    }
+    if (geo) {
+      this.number('Outline (pt)', round(geo.lineWidth ?? (geo.bold ? lw * 2.5 : lw)), 0.25, 0, 50, (v) => set('Outline width', isGeo, () => ({ lineWidth: v, bold: undefined })), '0 for no outline');
+      this.check('Shadow', !!geo.shadow, (v) => set('Shadow', isGeo, () => ({ shadow: v || undefined })));
+      this.select('Text across', JUSTIFY, geo.textAlign ?? 'center', (v) => set('Text alignment', isGeo, () => ({ textAlign: v === 'center' ? undefined : v })));
+      this.select('Text up and down', VALIGN, geo.textValign ?? 'middle', (v) => set('Text alignment', isGeo, () => ({ textValign: v === 'middle' ? undefined : v })));
+      this.note('Double-click the shape to type in it.');
     }
     const box = any((x) => x.kind === 'rect');
     if (box) {
@@ -267,6 +300,9 @@ export class StylePanel {
     };
     if (pics.length === 1) button('Crop with mouse', 'Drag the black handles to cut the edges off; Esc when done', () => this.cropWithMouse(p.id));
     if (pics.some((x) => x.crop)) button('Uncrop', 'Show the whole picture again', () => set('Uncrop picture', (x) => cropTo(x, { l: 0, t: 0, r: 0, b: 0 })));
+    // only pictures made of pixels have a background to take out
+    const bitmaps = pics.filter((x) => x.src && !/^data:image\/(svg|x-emf|x-wmf)/.test(x.src));
+    if (bitmaps.length) button('Remove white…', 'Make the white background see-through (a logo or a picture of a structure on white)', () => this.removeWhite(bitmaps.map((x) => x.id)));
     button('Original size', 'Its own size: 96 pixels to the inch, as in PowerPoint', () => set('Picture size', (x) => {
       const bx = box(x), cc = x.crop ?? { l: 0, t: 0, r: 0, b: 0 };
       if (!x.px) return {};

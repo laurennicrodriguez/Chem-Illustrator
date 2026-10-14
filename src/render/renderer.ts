@@ -14,12 +14,13 @@ import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
 import type { StructureChecks } from '../chem/warnings';
 import { isGenericLabel } from '../chem/labels';
-import { bracketPath, shaftOffset, type PathStep } from '../objects';
+import { bracketPath, shaftOffset, shapeOrder, elbowRoute, type PathStep } from '../objects';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
 import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
 import { layoutText, FONT_STACK, type TextLayout } from '../text/layout';
 import { drawLayout } from '../text/draw';
+import { geoDef, moveSteps, textArea, traceSteps } from '../design/geo';
 import { placeholderRect, isEmptyText } from '../deck/deck';
 import { imageFor } from './images';
 import { layoutTable, drawTable, type TableLayout, type TablePart } from '../table';
@@ -545,7 +546,7 @@ export class Renderer {
 
   private sortedShapes(doc: Doc): Shape[] {
     if (this.shapeVersion !== doc.version || !this.shapeList) {
-      this.shapeList = [...doc.shapes.values()].sort((a, b) => (b.filled ? 1 : 0) - (a.filled ? 1 : 0) || (a.z ?? 0) - (b.z ?? 0));
+      this.shapeList = shapeOrder([...doc.shapes.values()].filter((s) => !s.hidden));
       this.shapeVersion = doc.version;
     }
     return this.shapeList;
@@ -870,6 +871,7 @@ export class Renderer {
         break;
       }
       case 'line': ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); ctx.stroke(); break;
+      case 'geo': this.drawGeo(ctx, s, x, y, w, h, lw); break;
       case 'rect': {
         // ChemDraw's defaults: corners of six line widths, a light grey shadow of four
         const r = s.rounded ? Math.min(s.radius ?? 6 * lw, w / 2, h / 2) : 0;
@@ -1000,7 +1002,9 @@ export class Renderer {
       this.arrowHead(ctx, head, dir, headStyle, r);
       this.arrowHead(ctx, tail, mul(dir, -1), tailStyle, r);
     };
-    if (r.equilibrium) {
+    if (r.elbow && !r.equilibrium && !r.shaftSpacing) {
+      this.elbowArrow(ctx, r, lw);
+    } else if (r.equilibrium) {
       const d = norm(sub(r.head, r.tail));
       const off = mul(perp(d), -shaftOffset(r));
       shaft(add(r.tail, off), add(r.head, off), 'halfLeft', 'none');
@@ -1018,6 +1022,28 @@ export class Renderer {
       ctx.moveTo(m.x + k, m.y - k); ctx.lineTo(m.x - k, m.y + k);
       ctx.stroke();
     }
+  }
+
+  /** An elbow connector: square bends, with its heads along its first and last legs. */
+  private elbowArrow(ctx: CanvasRenderingContext2D, r: Arrow, lw: number): void {
+    const pts = elbowRoute(r);
+    if (pts.length < 2) return;
+    const n = pts.length;
+    const dirEnd = norm(sub(pts[n - 1], pts[n - 2])), dirStart = norm(sub(pts[0], pts[1]));
+    const hl = r.headLength;
+    const lastLen = len(sub(pts[n - 1], pts[n - 2])), firstLen = len(sub(pts[1], pts[0]));
+    const e = r.headStyle === 'none' ? pts[n - 1] : sub(pts[n - 1], mul(dirEnd, Math.min(hl * 0.7, lastLen * 0.6)));
+    const s0 = r.tailStyle === 'none' ? pts[0] : sub(pts[0], mul(dirStart, Math.min(hl * 0.7, firstLen * 0.6)));
+    ctx.setLineDash(r.line === 'dashed' ? [lw * 4, lw * 3] : []);
+    ctx.lineJoin = 'miter';
+    ctx.beginPath();
+    ctx.moveTo(s0.x, s0.y);
+    for (let i = 1; i < n - 1; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.lineTo(e.x, e.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    this.arrowHead(ctx, pts[n - 1], dirEnd, r.headStyle, r);
+    this.arrowHead(ctx, pts[0], dirStart, r.tailStyle, r);
   }
 
   /** Two shafts ending in an open head (⇒), as used for retrosynthetic steps. */
@@ -1104,6 +1130,70 @@ export class Renderer {
       this.capLayouts.set(c, lay);
     }
     return lay;
+  }
+
+  /** A design shape: its shadow, fill and outline, its details, then its text. */
+  private drawGeo(ctx: CanvasRenderingContext2D, s: Shape, x: number, y: number, w: number, h: number, lw: number): void {
+    const def = geoDef(s.geo);
+    const out = def.draw(w, h);
+    const body = moveSteps(out.body, x, y);
+    const width = s.lineWidth ?? (s.bold ? lw * 2.5 : lw);
+    if (s.shadow) {
+      const d = s.shadowSize ?? Math.max(2, 0.04 * Math.min(w, h));
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.beginPath();
+      traceSteps(ctx, moveSteps(body, d, d));
+      ctx.fill();
+      ctx.restore();
+      ctx.beginPath();
+    }
+    traceSteps(ctx, body);
+    if (s.filled) {
+      const c = s.fillColor ?? s.color ?? '#000000';
+      const clear = Math.max(0, Math.min(1, s.transparency ?? 0));
+      if (s.fill === 'shaded' || s.fill === 'faded') fillShape(ctx, { ...s, fillColor: c, color: c }, x, y, w, h);
+      else { ctx.fillStyle = clear ? withAlpha(c, 1 - clear) : c; ctx.fill(); }
+    }
+    ctx.lineWidth = width;
+    if (width > 0) ctx.stroke();
+    if (out.lines && width > 0) {
+      ctx.beginPath();
+      traceSteps(ctx, moveSteps(out.lines, x, y));
+      ctx.stroke();
+    }
+    if (s.text && this.geoEdit !== s.id) {
+      const g = this.geoText(s);
+      if (g) drawLayout(ctx, g.lay, g.x, g.y);
+    }
+  }
+
+  /** The shape being typed into (its text is shown by the text editor, not here). */
+  geoEdit: number | null = null;
+  private geoLayouts = new WeakMap<object, { w: number; size: number; justify: string; lay: TextLayout }>();
+
+  /** Where a design shape's text goes: the text laid out in the shape's text area, and its first baseline's start. */
+  geoText(s: Shape, text = s.text): { lay: TextLayout; x: number; y: number; area: Rect } | null {
+    if (!text) return null;
+    const area = textArea(geoDef(s.geo), Math.min(s.x1, s.x2), Math.min(s.y1, s.y2), Math.max(s.x1, s.x2), Math.max(s.y1, s.y2));
+    const w = Math.max(4, area.x2 - area.x1);
+    const size = this.geoTextSize();
+    const justify = s.textAlign ?? 'center';
+    let c = this.geoLayouts.get(text);
+    if (!c || c.w !== w || c.size !== size || c.justify !== justify) {
+      const lay = layoutText({ runs: text.runs, paras: text.paras, justify, wrap: w }, size, (t, sz, family, style) => measureText(t, sz, family, style));
+      c = { w, size, justify, lay };
+      this.geoLayouts.set(text, c);
+    }
+    const th = c.lay.box.y2 - c.lay.box.y1;
+    const v = s.textValign ?? 'middle';
+    const top = v === 'top' ? area.y1 : v === 'bottom' ? area.y2 - th : (area.y1 + area.y2) / 2 - th / 2;
+    return { lay: c.lay, x: area.x1, y: top - c.lay.box.y1, area };
+  }
+
+  /** Size of text in design shapes: the master's body text on slides and designs, else the caption size. */
+  geoTextSize(): number {
+    return this.textStyles?.body?.size ?? this.captionSize;
   }
 
   /** The area a table covers as it is drawn now (while it is typed into, its rows grow with the text). */
@@ -1277,6 +1367,12 @@ const ATTACH_HALF_WAVES = 24;
  * shaded from light at the top left to the full colour. A fill colour of its own gets the
  * outline drawn round it in the line colour.
  */
+/** A colour with some see-through: "#rrggbb" and opacity 0–1 as rgba(). */
+function withAlpha(c: string, a: number): string {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c);
+  return m ? `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${+a.toFixed(3)})` : c;
+}
+
 function fillShape(ctx: CanvasRenderingContext2D, s: Shape, x: number, y: number, w: number, h: number): void {
   const c = s.fillColor ?? s.color ?? '#000000';
   if (s.fill === 'faded') ctx.fillStyle = tint(c, FADE);

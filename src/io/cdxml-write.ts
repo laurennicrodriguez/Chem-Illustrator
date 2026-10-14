@@ -18,7 +18,8 @@ import { layoutText, SINGLE } from '../text/layout';
 import { runsForChemDraw, TEXT_TAG } from '../text/chemdraw-text';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { fromDataUrl } from '../render/images';
-import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, GROUP_TAG } from './cdxml';
+import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, GROUP_TAG, GEO_TAG, GEO_BOX_ATTR } from './cdxml';
+import { geoDef, moveSteps, textArea, type GeoStep } from '../design/geo';
 import { FADE, tint } from '../colours';
 import { layoutTable, cellAlign, isCovered, spanOf, NOTE_SCALE } from '../table';
 import { TABLE_TAG, TABLE_PART_TAG, tableBorders, type TableTag } from './cdxml-table';
@@ -57,6 +58,43 @@ const pt3 = (p: Vec): string => `${f2(p.x)} ${f2(p.y)} 0`;
 const box = (r: Rect): string => `${f2(r.x1)} ${f2(r.y1)} ${f2(r.x2)} ${f2(r.y2)}`;
 
 const POSITION_ATTRS = ['p', 'BoundingBox', 'Head3D', 'Tail3D', 'Center3D', 'MajorAxisEnd3D', 'MinorAxisEnd3D'];
+
+/**
+ * An outline as ChemDraw curves: each point with the Bézier handles either side of it (handle in,
+ * point, handle out), so straight edges have their handles on the points.
+ */
+export function chemDrawCurves(steps: GeoStep[]): { points: Vec[]; closed: boolean }[] {
+  type Knot = { cin: Vec; p: Vec; cout: Vec };
+  const out: { points: Vec[]; closed: boolean }[] = [];
+  let knots: Knot[] = [];
+  const finish = (closed: boolean) => {
+    if (knots.length > 1) {
+      const first = knots[0], last = knots[knots.length - 1];
+      // a closed outline ending where it began: one point there, with both handles
+      if (closed && Math.hypot(first.p.x - last.p.x, first.p.y - last.p.y) < 1e-6) {
+        first.cin = last.cin;
+        knots.pop();
+      }
+      out.push({ points: knots.flatMap((k) => [k.cin, k.p, k.cout]), closed });
+    }
+    knots = [];
+  };
+  for (const st of steps) {
+    if (st[0] === 'M') {
+      finish(false);
+      const p = { x: st[1], y: st[2] };
+      knots.push({ cin: p, p, cout: p });
+    } else if (st[0] === 'L' && knots.length) {
+      const p = { x: st[1], y: st[2] };
+      knots.push({ cin: p, p, cout: p });
+    } else if (st[0] === 'C' && knots.length) {
+      knots[knots.length - 1].cout = { x: st[1], y: st[2] };
+      knots.push({ cin: { x: st[3], y: st[4] }, p: { x: st[5], y: st[6] }, cout: { x: st[5], y: st[6] } });
+    } else if (st[0] === 'Z') finish(true);
+  }
+  finish(false);
+  return out;
+}
 
 export function writeCdxml(doc: Doc, opts: WriteOptions = {}): string {
   return new CdxmlWriter(doc, opts).write();
@@ -1011,6 +1049,7 @@ class CdxmlWriter {
 
   private writeShape(s: Shape): void {
     if (s.kind === 'table') { this.writeTable(s); return; }
+    if (s.kind === 'geo') { this.writeGeo(s); return; }
     const pic = s.picture || s.kind === 'picture';
     const names = pic ? ['embeddedobject'] : ['graphic'];
     const e = this.source('s', s.id, names);
@@ -1040,6 +1079,65 @@ class CdxmlWriter {
       const host = owner || radical ? this.fragOfAtom.get((owner ?? radical)!.id) ?? null : s.kind === 'symbol' ? this.nearestFragment(s) : null;
       (host ?? this.page).appendChild(g);
     }
+    this.changed = true;
+  }
+
+  /**
+   * A design shape: in ChemDraw a group of curves (the fill, the outline and any detail lines)
+   * and its text, tagged with the shape so this program reads it back as the shape.
+   */
+  private writeGeo(s: Shape): void {
+    const e = this.source('s', s.id, ['group']);
+    const o = this.orig<Shape>('s', s.id);
+    if (e && o && sameExcept(s, o, [])) return;
+    let g = e;
+    if (!g) {
+      g = this.el('group', { id: s.id });
+      this.page.appendChild(g);
+    }
+    for (const c of kids(g)) g.removeChild(c);
+    const b = { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
+    const def = geoDef(s.geo);
+    const out = def.draw(b.x2 - b.x1, b.y2 - b.y1);
+    const lw = this.doc.style.lineWidth;
+    const width = s.lineWidth ?? (s.bold ? lw * 2.5 : lw);
+    const curves = (steps: GeoStep[], type: string, color: string | undefined) => {
+      for (const c of chemDrawCurves(moveSteps(steps, b.x1, b.y1))) {
+        const closed = c.closed && type !== 'open';
+        // CurveType's bits (to be checked in ChemDraw): closed 1, dashed 2, bold 4, filled 128
+        const kinds = (closed ? 1 : 0) | (type !== 'fill' && s.dashed ? 2 : 0) | (type !== 'fill' && width > 1.75 * lw ? 4 : 0) | (type === 'fill' ? 128 : 0);
+        const xs = c.points.map((p) => p.x), ys = c.points.map((p) => p.y);
+        g!.appendChild(this.el('curve', {
+          id: this.id(), BoundingBox: box({ x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) }),
+          color: this.colorAttr(color), CurvePoints: c.points.map((p) => `${f2(p.x)} ${f2(p.y)}`).join(' '), CurveType: String(kinds),
+        }));
+      }
+    };
+    if (s.filled) {
+      const fc = s.fillColor ?? s.color ?? '#000000';
+      curves(out.body, 'fill', s.fill === 'faded' ? tint(fc, FADE) : fc);
+    }
+    if (width > 0) {
+      curves(out.body, 'line', s.color ?? '#000000');
+      if (out.lines?.length) curves(out.lines, 'open', s.color ?? '#000000');
+    }
+    if (s.text?.runs.some((r) => r.text)) {
+      const area = textArea(def, b.x1, b.y1, b.x2, b.y2);
+      const w = Math.max(4, area.x2 - area.x1);
+      const size = this.doc.style.captionSize;
+      const justify = s.textAlign ?? 'center';
+      const lay = layoutText({ runs: s.text.runs, paras: s.text.paras, justify, wrap: w }, size, this.opts.textMeasure ?? ((text, sz, _f, style) => arialWidth(text, sz, /bold/.test(style))));
+      const th = lay.box.y2 - lay.box.y1;
+      const v = s.textValign ?? 'middle';
+      const top = v === 'top' ? area.y1 : v === 'bottom' ? area.y2 - th : (area.y1 + area.y2) / 2 - th / 2;
+      const t = this.el('t', { id: this.id() });
+      this.fillCaption(t, { id: 0, x: area.x1, y: top - lay.box.y1, runs: s.text.runs, paras: s.text.paras, justify, wrap: w });
+      g.appendChild(t);
+    }
+    const { id: _, ...look } = s;
+    g.appendChild(this.el('objecttag', { TagType: 'String', Name: GEO_TAG, Value: JSON.stringify(look), Visible: 'no' }));
+    this.set(g, 'BoundingBox', box(b));
+    this.set(g, GEO_BOX_ATTR, box(b));
     this.changed = true;
   }
 

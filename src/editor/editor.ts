@@ -4,6 +4,7 @@
 
 import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, applyBase, stripBase, type StepRoles } from '../model';
 import { CaptionEditor } from '../ui/caption-editor';
+import { GEO_BY_ID, geoDef, moveSteps, traceSteps } from '../design/geo';
 import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
 import { styleFromFace, plainText } from '../richtext';
 import { cleanUpMoves } from '../chem/cleanup';
@@ -34,6 +35,7 @@ import { tokenize, addNicknames, isBuiltInNickname } from '../chem/labels';
 import {
   Handle, arrowHit, shapeHit, arrowHandles, shapeHandles, dragArrowHandle, dragShapeHandle, dragCropHandle, shapeBox,
   arrowPoints, bracketsAround, bracketLip, unionRect,
+  shapeOrder, portNear, shapePorts,
 } from '../objects';
 import { isEmptyText } from '../deck/deck';
 import { crossedBonds, lineAcross } from '../chem/fragments';
@@ -60,13 +62,15 @@ export type Tool =
 export type SymbolKind = 'LonePair' | 'Electron' | 'CirclePlus' | 'CircleMinus' | 'DeltaPlus' | 'DeltaMinus';
 
 /** How a new arrow looks (everything else is the document's default). */
-export type ArrowStyle = Partial<Pick<Arrow, 'headStyle' | 'tailStyle' | 'headType' | 'line' | 'noGo' | 'equilibrium' | 'sweep'>> & {
+export type ArrowStyle = Partial<Pick<Arrow, 'headStyle' | 'tailStyle' | 'headType' | 'line' | 'noGo' | 'equilibrium' | 'sweep' | 'elbow' | 'from' | 'to'>> & {
   /** Two shafts and an open head (⇒). */
   retro?: boolean;
+  /** A connector: its ends stick to shapes' connection points, and it isn't snapped to 15° steps. */
+  connector?: boolean;
 };
 
 /** How a new shape looks. */
-export type ShapeStyle = Partial<Omit<Shape, 'id' | 'kind' | 'x1' | 'y1' | 'x2' | 'y2'>> & { kind: 'line' | 'rect' | 'oval' };
+export type ShapeStyle = Partial<Omit<Shape, 'id' | 'kind' | 'x1' | 'y1' | 'x2' | 'y2'>> & { kind: 'line' | 'rect' | 'oval' | 'geo' };
 
 export const TOOLS: Record<string, Tool> = {
   select: { kind: 'select' },
@@ -103,6 +107,8 @@ export const TOOLS: Record<string, Tool> = {
   'arrow-nogo': { kind: 'arrow', style: { noGo: true } },
   'arrow-curved': { kind: 'arrow', style: { sweep: 120 * DEG } },
   'arrow-fishhook': { kind: 'arrow', style: { sweep: 120 * DEG, headStyle: 'halfLeft' } },
+  connector: { kind: 'arrow', style: { connector: true } },
+  'connector-elbow': { kind: 'arrow', style: { connector: true, elbow: true } },
   'shape-rect': { kind: 'shape', shape: { kind: 'rect' }, from: 'corner' },
   'shape-rect-rounded': { kind: 'shape', shape: { kind: 'rect', rounded: true }, from: 'corner' },
   'shape-rect-shadow': { kind: 'shape', shape: { kind: 'rect', shadow: true }, from: 'corner' },
@@ -167,6 +173,8 @@ interface Drag {
   path?: Vec[];
   /** Rotating the selection: what it looked like before, the centre, and the angle so far. */
   rot?: { snap: Snapshot; center: Vec; from: number; angle: number };
+  /** Moving with smart guides: the selection's box when the move began, and how far it has gone. */
+  guide?: { box: Rect; moved: Vec };
 }
 
 const HILITE = 'rgba(40, 120, 255, 0.28)';
@@ -294,7 +302,7 @@ export class Editor {
   }
 
   setTool(name: string): void {
-    const t = TOOLS[name];
+    const t = TOOLS[name] ?? (name.startsWith('geo:') ? geoTool(name.slice(4), this.geoLook) : undefined);
     if (!t) return;
     this.tool = t;
     this.toolName = name;
@@ -342,9 +350,12 @@ export class Editor {
       if (arrowHit(r, p, at)) return { kind: 'arrow', id: r.id };
     }
     // the shape drawn last is on top
-    let shape: Shape | null = null;
-    for (const s of doc.shapes.values()) if (shapeHit(s, p, at) && (!shape || (s.z ?? 0) >= (shape.z ?? 0))) shape = s;
-    return shape ? { kind: 'shape', id: shape.id } : null;
+    const order = shapeOrder([...doc.shapes.values()]);
+    for (let i = order.length - 1; i >= 0; i--) {
+      const s = order[i];
+      if (!s.hidden && !s.locked && shapeHit(s, p, at)) return { kind: 'shape', id: s.id };
+    }
+    return null;
   }
 
   /**
@@ -494,6 +505,19 @@ export class Editor {
       this.requestScene(e.timeStamp);
       return;
     }
+    if (d.mode === 'move' && this.smartGuides && !e.altKey) {
+      // smart guides: edges and middles snap into line with other shapes and the page
+      if (!d.guide) { const box = this.selBox(); if (box) d.guide = { box, moved: { x: 0, y: 0 } }; }
+      if (d.guide) {
+        const g = guideSnap(d.guide.box, sub(p, d.start), this.guideTargets(), this.tol(6));
+        this.moveSelection(g.offset.x - d.guide.moved.x, g.offset.y - d.guide.moved.y);
+        d.guide.moved = g.offset;
+        this.guideLines = g.lines;
+        d.last = p;
+        this.requestScene(e.timeStamp);
+        return;
+      }
+    }
     if (d.mode === 'move') {
       const dx = p.x - d.last.x, dy = p.y - d.last.y;
       this.moveSelection(dx, dy);
@@ -517,7 +541,16 @@ export class Editor {
       const h = d.handle!;
       if (h.kind === 'arrow') {
         const r = this.doc.arrows.get(h.id);
-        if (r) this.doc.updateArrow(h.id, dragArrowHandle(r, h.which, p, e.altKey));
+        if (r) {
+          let patch = dragArrowHandle(r, h.which, p, e.altKey);
+          // a connector's end sticks to the connection point it is dropped on, and comes loose elsewhere
+          if ((h.which === 'tail' || h.which === 'head') && (this.glueArrows || r.from || r.to || r.elbow)) {
+            const key = h.which === 'tail' ? 'from' : 'to';
+            const port = this.portAt(p);
+            patch = port ? { [h.which]: port.at, [key]: { shape: port.shape, port: port.port } } : { [h.which]: p, [key]: undefined };
+          }
+          this.doc.updateArrow(h.id, patch);
+        }
       } else {
         const sh = this.doc.shapes.get(h.id);
         if (sh) this.doc.updateShape(h.id, this.cropping === h.id ? dragCropHandle(sh, h.which, p) : dragShapeHandle(sh, h.which, p, e.altKey));
@@ -567,6 +600,7 @@ export class Editor {
       return;
     }
     if (d.mode === 'move') {
+      this.guideLines = [];
       this.doc.commit();
       this.changed();
       return;
@@ -597,6 +631,8 @@ export class Editor {
       this.editCaption(h.id, { x: e.clientX, y: e.clientY });
     } else if (h && h.kind === 'shape' && this.doc.shapes.get(h.id)?.kind === 'table') {
       this.editTableAt(h.id, p);
+    } else if (h && h.kind === 'shape' && this.doc.shapes.get(h.id)?.kind === 'geo') {
+      this.editGeoText(h.id, p);
     }
   }
 
@@ -703,6 +739,7 @@ export class Editor {
         if (h && h.kind === 'atom') this.editLabel(h.id);
         else if (h && h.kind === 'caption') this.editCaption(h.id, this.clientPoint(p));
         else if (h && h.kind === 'shape' && doc.shapes.get(h.id)?.kind === 'table') this.editTableAt(h.id, p);
+        else if (h && h.kind === 'shape' && doc.shapes.get(h.id)?.kind === 'geo') this.editGeoText(h.id, p);
         else this.newCaption(p);
         return;
       }
@@ -711,6 +748,14 @@ export class Editor {
       case 'bracket': {
         // clicking an arrow or shape picks it up, so its handles can be dragged
         if (h && (h.kind === 'arrow' || h.kind === 'shape')) { this.selectOnly(h); return; }
+        if (t.kind === 'shape' && t.shape.kind === 'geo') {
+          // a click puts the shape down at its usual size, centred there
+          const [w, hh] = geoDef(t.shape.geo).size;
+          doc.edit('Shape', () => this.selectOnly({ kind: 'shape', id: doc.addShape({ ...t.shape, x1: p.x - w / 2, y1: p.y - hh / 2, x2: p.x + w / 2, y2: p.y + hh / 2 }).id }));
+          this.afterGeo();
+          this.changed();
+          return;
+        }
         if (t.kind === 'bracket') {
           // brackets round the structure that was clicked
           if (h && (h.kind === 'atom' || h.kind === 'bond')) {
@@ -953,12 +998,19 @@ export class Editor {
         doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(push.tail, push.head, { ...t.style, sweep: Math.abs(push.sweep), ...(push.small ? { headLength: lw * SMALL_HEAD.length, headWidth: lw * SMALL_HEAD.width } : {}) }, Math.sign(push.sweep)).id }));
         return;
       }
+      const c = this.connectorEnds(t.style, d.start, p);
+      if (c) {
+        if (dist(c.tail, c.head) < 2) return;
+        doc.edit('Connector', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(c.tail, c.head, { ...t.style, ...c.glue }).id }));
+        return;
+      }
       const start = this.branchStart(d);
       const end = this.arrowEnd(start, p, d.alt);
       doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(start, end, t.style, this.bendSide(d, end)).id }));
     } else if (t.kind === 'shape') {
       const g = this.shapeGeometry(t, d.start, p, d.shift, d.alt);
       if (g) doc.edit('Shape', () => this.selectOnly({ kind: 'shape', id: doc.addShape({ ...t.shape, ...g }).id }));
+      if (g && t.shape.kind === 'geo') this.afterGeo();
     } else if (t.kind === 'bracket') {
       const r = { x1: Math.min(d.start.x, p.x), y1: Math.min(d.start.y, p.y), x2: Math.max(d.start.x, p.x), y2: Math.max(d.start.y, p.y) };
       if (r.y2 - r.y1 >= 4) this.addBrackets(r, t.bracket);
@@ -1160,7 +1212,7 @@ export class Editor {
   /** Add an arrow from tail to head in the given style; `side` −1 bends a curved arrow the other way. */
   private addArrow(tail: Vec, head: Vec, style: ArrowStyle = {}, side = 1): Arrow {
     const lw = this.doc.style.lineWidth;
-    const { retro, ...rest } = style;
+    const { retro, connector: _, ...rest } = style;
     // ChemDraw's defaults: heads ten line widths long and 2.5 wide
     const a: Omit<Arrow, 'id'> = {
       tail, head, headStyle: 'full', tailStyle: 'none', headType: 'solid', line: 'solid', noGo: false,
@@ -1205,7 +1257,7 @@ export class Editor {
 
   selectAll(): void {
     const d = this.doc;
-    this.sel = { atoms: new Set(d.atoms.keys()), bonds: new Set(d.bonds.keys()), captions: new Set(d.captions.keys()), arrows: new Set(d.arrows.keys()), shapes: new Set(d.shapes.keys()) };
+    this.sel = { atoms: new Set(d.atoms.keys()), bonds: new Set(d.bonds.keys()), captions: new Set(d.captions.keys()), arrows: new Set(d.arrows.keys()), shapes: new Set([...d.shapes.values()].filter((s) => !s.hidden && !s.locked).map((s) => s.id)) };
     this.requestOverlay();
     this.onChange();
   }
@@ -1276,14 +1328,22 @@ export class Editor {
     for (const c of doc.captions.values()) { const bx = this.r.captionBox(c); if (inside(bx.x1, bx.y1) && inside(bx.x2, bx.y2)) this.sel.captions.add(c.id); }
     const within = (b: Rect) => inside(b.x1, b.y1) && inside(b.x2, b.y2);
     for (const ar of doc.arrows.values()) if (arrowPoints(ar).every((q) => inside(q.x, q.y))) this.sel.arrows.add(ar.id);
-    for (const s of doc.shapes.values()) if (within(s.kind === 'bracket' ? { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) } : shapeBox(s))) this.sel.shapes.add(s.id);
+    for (const s of doc.shapes.values()) if (!s.hidden && !s.locked && within(s.kind === 'bracket' ? { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) } : shapeBox(s))) this.sel.shapes.add(s.id);
   }
 
   private moveSelection(dx: number, dy: number): void {
     const doc = this.doc;
     doc.moveAtoms(this.sel.atoms, dx, dy);
     for (const id of this.sel.captions) { const c = doc.captions.get(id); if (c) doc.updateCaption(id, { x: c.x + dx, y: c.y + dy }); }
-    for (const id of this.sel.arrows) { const r = doc.arrows.get(id); if (r) doc.updateArrow(id, { tail: { x: r.tail.x + dx, y: r.tail.y + dy }, head: { x: r.head.x + dx, y: r.head.y + dy } }); }
+    for (const id of this.sel.arrows) {
+      const r = doc.arrows.get(id);
+      if (!r) continue;
+      const patch: Partial<Arrow> = { tail: { x: r.tail.x + dx, y: r.tail.y + dy }, head: { x: r.head.x + dx, y: r.head.y + dy } };
+      // a connector moved away from a shape that stays comes loose from it
+      if (r.from && !this.sel.shapes.has(r.from.shape)) patch.from = undefined;
+      if (r.to && !this.sel.shapes.has(r.to.shape)) patch.to = undefined;
+      doc.updateArrow(id, patch);
+    }
     for (const id of this.sel.shapes) { const s = doc.shapes.get(id); if (s) doc.updateShape(id, { x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy }); }
   }
 
@@ -1619,6 +1679,37 @@ export class Editor {
       // the bonds crossing them are redrawn too (their gaps change)
       for (const id of ids) for (const o of crossingBonds(doc, doc.bonds.get(id)!)) doc.updateBond(o.id, {});
     });
+    this.changed();
+    return true;
+  }
+
+  /**
+   * Bring the selected shapes (boxes, design shapes, pictures, tables) in front of the other
+   * shapes, or send them behind, or one step either way. False when no shape is selected.
+   */
+  setShapeLayer(how: 'front' | 'back' | 'forward' | 'backward'): boolean {
+    const doc = this.doc;
+    const picked = new Set(this.sel.shapes);
+    if (!picked.size) return false;
+    const order = shapeOrder([...doc.shapes.values()]);
+    const rest = order.filter((s) => !picked.has(s.id)), mine = order.filter((s) => picked.has(s.id));
+    let next: Shape[];
+    if (how === 'front') next = [...rest, ...mine];
+    else if (how === 'back') next = [...mine, ...rest];
+    else {
+      // one step: past the next shape (not picked) in that direction
+      next = [...order];
+      const step = how === 'forward' ? 1 : -1;
+      const idx = (how === 'forward' ? [...next.keys()].reverse() : [...next.keys()]);
+      for (const i of idx) {
+        if (!picked.has(next[i].id)) continue;
+        const j = i + step;
+        if (j < 0 || j >= next.length || picked.has(next[j].id)) continue;
+        [next[i], next[j]] = [next[j], next[i]];
+      }
+    }
+    const label = { front: 'Bring to Front', back: 'Send to Back', forward: 'Bring Forward', backward: 'Send Backward' }[how];
+    doc.edit(label, () => next.forEach((s, i) => { if ((s.z ?? 0) !== i + 1) doc.updateShape(s.id, { z: i + 1 }); }));
     this.changed();
     return true;
   }
@@ -2174,6 +2265,122 @@ export class Editor {
     if (click) ed.ed.setCaret(ed.ed.offsetAt(click.x - at.x, click.y - at.y));
   }
 
+  // ------------------------------------------------------------------ text in design shapes
+
+  /** Select these shapes (from the Layers panel). */
+  selectShapes(ids: number[]): void {
+    this.closeCaption();
+    this.sel = emptySel();
+    for (const id of ids) if (this.doc.shapes.has(id)) this.sel.shapes.add(id);
+    this.requestOverlay();
+    this.onChange();
+  }
+
+  /** The shapes selected now. */
+  selectedShapes(): number[] {
+    return [...this.sel.shapes];
+  }
+
+  /** Smart guides: things moved snap into line with other shapes and the page (Design mode; Alt turns them off while dragging). */
+  smartGuides = false;
+  /** The guide lines shown while moving. */
+  private guideLines: GuideLine[] = [];
+
+  /** What a moved selection lines up with: the shapes not being moved, and the page. */
+  private guideTargets(): Rect[] {
+    const out: Rect[] = [];
+    for (const s of this.doc.shapes.values()) if (!this.sel.shapes.has(s.id) && s.kind !== 'line' && s.kind !== 'bracket' && s.kind !== 'symbol') out.push(shapeBox(s));
+    if (this.fitArea) out.push(this.fitArea());
+    return out;
+  }
+
+  /** Arrows drawn or dragged onto a shape's connection point stick to it (Design mode). */
+  glueArrows = false;
+
+  /** The connection point under `p`, on the shape in front. */
+  private portAt(p: Vec): ReturnType<typeof portNear> {
+    return portNear(shapeOrder([...this.doc.shapes.values()]).reverse(), p, this.tol(9));
+  }
+
+  /**
+   * Where a connector drawn from `a` to `b` goes: its ends on the connection points there.
+   * Null for an ordinary arrow that touches no connection point.
+   */
+  private connectorEnds(style: ArrowStyle, a: Vec, b: Vec): { tail: Vec; head: Vec; glue: Pick<Arrow, 'from' | 'to'> } | null {
+    if (!style.connector && !this.glueArrows) return null;
+    const pa = this.portAt(a), pb = this.portAt(b);
+    if (!pa && !pb && !style.connector) return null;
+    const glue: Pick<Arrow, 'from' | 'to'> = {};
+    if (pa) glue.from = { shape: pa.shape, port: pa.port };
+    if (pb && pb.shape !== pa?.shape) glue.to = { shape: pb.shape, port: pb.port };
+    return { tail: pa?.at ?? a, head: glue.to ? pb!.at : b, glue };
+  }
+
+  /** How new design shapes look (Design mode sets its own defaults; settable in settings). */
+  geoLook: Partial<Shape> = {};
+
+  /** Shapes put down go back to the Select tool, as in PowerPoint (unless kept with the setting). */
+  keepGeoTool = false;
+  private afterGeo(): void {
+    if (!this.keepGeoTool) this.setTool('select');
+  }
+
+  /** Put a library shape down at its usual size, centred on `p` (a shape dropped from the library). */
+  placeGeo(id: string, p: Vec): void {
+    const t = geoTool(id, this.geoLook);
+    if (!t || t.kind !== 'shape') return;
+    this.closeCaption();
+    this.commitLabel();
+    const doc = this.doc;
+    const [w, h] = geoDef(id).size;
+    doc.edit('Shape', () => this.selectOnly({ kind: 'shape', id: doc.addShape({ ...t.shape, x1: p.x - w / 2, y1: p.y - h / 2, x2: p.x + w / 2, y2: p.y + h / 2 }).id }));
+    this.changed();
+  }
+
+  /** Type into a design shape (its text wraps in the shape's text area and stays with the shape). */
+  editGeoText(id: number, click?: Vec): void {
+    this.closeCaption();
+    this.commitLabel();
+    const doc = this.doc;
+    const s = doc.shapes.get(id);
+    if (!s || s.kind !== 'geo') return;
+    // where the first line starts: from the text there, or from a space while it's empty
+    const g = this.r.geoText(s, s.text?.runs.length ? s.text : { runs: [{ text: ' ' }] })!;
+    const size = this.r.geoTextSize();
+    this.sel = emptySel();
+    this.sel.shapes.add(id);
+    this.r.geoEdit = id;
+    doc.dirtyRects.push(shapeBox(s));
+    this.requestScene();
+    const host = {
+      host: this.host,
+      view: this.r.view,
+      toScreen: (p: Vec) => this.r.toScreen(p),
+      measure: (t: string, sz: number, family: string, style: string) => measureText(t, sz, family, style),
+      defaultSize: size,
+      redraw: () => this.requestOverlay(),
+      hint: 'Enter: new line · Esc: done',
+      around: () => shapeBox(doc.shapes.get(id) ?? s),
+    };
+    const wrap = Math.max(4, g.area.x2 - g.area.x1);
+    const ed = new CaptionEditor(host, { x: g.x, y: g.y }, { runs: s.text?.runs ?? [], paras: s.text?.paras, justify: s.textAlign ?? 'center', wrap }, {}, (res) => {
+      if (this.captionEd === ed) this.captionEd = null;
+      this.r.geoEdit = null;
+      const cur = doc.shapes.get(id);
+      if (cur) {
+        doc.dirtyRects.push(shapeBox(cur));
+        const empty = !plainText(res.runs).trim();
+        const text = empty ? undefined : { runs: res.runs, ...(res.paras?.length ? { paras: res.paras } : {}) };
+        const align = res.justify === 'center' ? undefined : res.justify;
+        if (JSON.stringify(text) !== JSON.stringify(cur.text) || align !== cur.textAlign) doc.edit('Type in shape', () => doc.updateShape(id, { text, textAlign: align }));
+      }
+      this.requestScene();
+      this.changed();
+    });
+    this.captionEd = ed;
+    if (click) ed.ed.setCaret(ed.ed.offsetAt(click.x - g.x, click.y - g.y));
+  }
+
   // ------------------------------------------------------------------ tables
 
   /** The table cell (or title or footnotes) last clicked or typed into, for the Style panel's row and column commands. */
@@ -2479,6 +2686,17 @@ export class Editor {
         ctx.fillText(r.sweep ? `${Math.round(Math.abs(r.sweep) / DEG)}°` : 'straight', this.pointer.x + 10 * px, this.pointer.y - 10 * px);
       }
     }
+    this.drawPorts(ctx, px);
+    if (this.guideLines.length && this.drag?.mode === 'move') {
+      ctx.save();
+      ctx.strokeStyle = '#e8336d';
+      ctx.lineWidth = px;
+      ctx.setLineDash([4 * px, 3 * px]);
+      ctx.beginPath();
+      for (const g of this.guideLines) { ctx.moveTo(g.x1, g.y1); ctx.lineTo(g.x2, g.y2); }
+      ctx.stroke();
+      ctx.restore();
+    }
     // previews of what a drag will draw
     const d = this.drag;
     if (d && d.moved) {
@@ -2496,6 +2714,36 @@ export class Editor {
       }
     }
     this.captionEd?.draw(ctx);
+  }
+
+  /** While drawing a connector (or dragging its end), the connection points of the shape under the pointer. */
+  private drawPorts(ctx: CanvasRenderingContext2D, px: number): void {
+    const dh = this.drag?.mode === 'handle' ? this.drag.handle : undefined;
+    const r = dh?.kind === 'arrow' ? this.doc.arrows.get(dh.id) : undefined;
+    const drawing = this.tool.kind === 'arrow' && (this.tool.style.connector || this.glueArrows);
+    const dragging = !!r && (dh!.which === 'tail' || dh!.which === 'head') && (this.glueArrows || !!r.from || !!r.to || !!r.elbow);
+    if (!drawing && !dragging) return;
+    const p = this.pointer;
+    const near = this.portAt(p);
+    const pad = 14 * px;
+    ctx.save();
+    ctx.lineWidth = 1.2 * px;
+    for (const s of this.doc.shapes.values()) {
+      const ps = shapePorts(s);
+      if (!ps) continue;
+      const b = shapeBox(s);
+      if (p.x < b.x1 - pad || p.x > b.x2 + pad || p.y < b.y1 - pad || p.y > b.y2 + pad) continue;
+      ps.forEach((q, i) => {
+        const hot = near && near.shape === s.id && near.port === i;
+        ctx.beginPath();
+        ctx.arc(q.x, q.y, (hot ? 5 : 3.5) * px, 0, Math.PI * 2);
+        ctx.fillStyle = hot ? '#2f80ed' : '#fff';
+        ctx.strokeStyle = '#2f80ed';
+        ctx.fill();
+        ctx.stroke();
+      });
+    }
+    ctx.restore();
   }
 
   private drawPreview(ctx: CanvasRenderingContext2D, d: Drag): void {
@@ -2538,6 +2786,8 @@ export class Editor {
     } else if (t.kind === 'arrow') {
       const push = this.pushFor(d, d.last);
       if (push) { poly(arrowPoints(push), false); return; }
+      const c = this.connectorEnds(t.style, d.start, d.last);
+      if (c) { poly(arrowPoints({ tail: c.tail, head: c.head, sweep: 0, elbow: t.style.elbow, ...c.glue }), false); return; }
       const start = this.branchStart(d);
       const end = this.arrowEnd(start, d.last, d.alt);
       const sweep = (t.style.sweep ?? 0) * this.bendSide(d, end);
@@ -2595,10 +2845,43 @@ function outlineShape(ctx: CanvasRenderingContext2D, s: Shape): void {
     }
     case 'rect': ctx.rect(x, y, w, h); break;
     case 'oval': ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2); break;
+    case 'geo': traceSteps(ctx, moveSteps(geoDef(s.geo).draw(w, h).body, x, y)); ctx.stroke(); return;
     case 'picture': ctx.rect(x, y, w, h); ctx.stroke(); return;
     default: ctx.rect(x, y, w, h); ctx.fill(); return;
   }
   if (s.filled) ctx.fill(); else ctx.stroke();
+}
+
+/** The tool that draws a shape from the library, looking as `look` says. */
+function geoTool(id: string, look: Partial<Shape>): Tool | undefined {
+  const def = GEO_BY_ID.get(id);
+  if (!def) return undefined;
+  const base: Partial<Shape> = def.outline ? { color: '#000000' } : { filled: true, fillColor: '#dae3f3', color: '#2f5597', ...look };
+  return { kind: 'shape', shape: { ...base, kind: 'geo', geo: id } as ShapeStyle, from: 'corner' };
+}
+
+export interface GuideLine { x1: number; y1: number; x2: number; y2: number }
+
+/**
+ * Smart guides: how far to move a box (`raw` is how far the pointer moved) so its left, middle
+ * or right lines up with one of the targets' (and its top, middle or bottom), when within `tol`;
+ * and the lines that show what it lined up with.
+ */
+export function guideSnap(box: Rect, raw: Vec, targets: Rect[], tol: number): { offset: Vec; lines: GuideLine[] } {
+  const xs = (r: Rect) => [r.x1, (r.x1 + r.x2) / 2, r.x2];
+  const ys = (r: Rect) => [r.y1, (r.y1 + r.y2) / 2, r.y2];
+  let bx: { d: number; at: number; t: Rect } | null = null, by: { d: number; at: number; t: Rect } | null = null;
+  const moved = { x1: box.x1 + raw.x, y1: box.y1 + raw.y, x2: box.x2 + raw.x, y2: box.y2 + raw.y };
+  for (const t of targets) {
+    for (const a of xs(moved)) for (const b of xs(t)) { const d = b - a; if (Math.abs(d) <= tol && (!bx || Math.abs(d) < Math.abs(bx.d))) bx = { d, at: b, t }; }
+    for (const a of ys(moved)) for (const b of ys(t)) { const d = b - a; if (Math.abs(d) <= tol && (!by || Math.abs(d) < Math.abs(by.d))) by = { d, at: b, t }; }
+  }
+  const offset = { x: raw.x + (bx?.d ?? 0), y: raw.y + (by?.d ?? 0) };
+  const end = { x1: box.x1 + offset.x, y1: box.y1 + offset.y, x2: box.x2 + offset.x, y2: box.y2 + offset.y };
+  const lines: GuideLine[] = [];
+  if (bx) lines.push({ x1: bx.at, y1: Math.min(end.y1, bx.t.y1), x2: bx.at, y2: Math.max(end.y2, bx.t.y2) });
+  if (by) lines.push({ x1: Math.min(end.x1, by.t.x1), y1: by.at, x2: Math.max(end.x2, by.t.x2), y2: by.at });
+  return { offset, lines };
 }
 
 function sameHit(a: Hit, b: Hit): boolean {

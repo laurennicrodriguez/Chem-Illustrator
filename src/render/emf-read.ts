@@ -53,10 +53,41 @@ const CRC = (() => {
   return t;
 })();
 
-function crc32(b: Uint8Array): number {
+export function crc32(b: Uint8Array): number {
   let c = 0xffffffff;
   for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 0xff] ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
+}
+
+/**
+ * A PNG file marked with its resolution (dots per inch), so journals' and Word's checks read it
+ * at the size it was made for. The mark goes just after the header, replacing any there.
+ */
+export function pngWithDpi(png: Uint8Array, dpi: number): Uint8Array {
+  if (png.length < 33 || png[1] !== 0x50) return png;
+  const dv0 = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  const parts: Uint8Array[] = [png.subarray(0, 33)];
+  // keep every chunk after IHDR except an old pHYs
+  for (let i = 33; i + 12 <= png.length;) {
+    const len = dv0.getUint32(i);
+    const type = String.fromCharCode(...png.subarray(i + 4, i + 8));
+    if (type !== 'pHYs') parts.push(png.subarray(i, i + 12 + len));
+    i += 12 + len;
+  }
+  const ppm = Math.round(dpi / 0.0254);
+  const phys = new Uint8Array(21);
+  const dv = new DataView(phys.buffer);
+  dv.setUint32(0, 9);
+  phys.set([0x70, 0x48, 0x59, 0x73], 4);
+  dv.setUint32(8, ppm);
+  dv.setUint32(12, ppm);
+  phys[16] = 1; // metres
+  dv.setUint32(17, crc32(phys.subarray(4, 17)));
+  parts.splice(1, 0, phys);
+  const out = new Uint8Array(parts.reduce((s, p) => s + p.length, 0));
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out;
 }
 
 /** RGBA pixels as a PNG file. */
