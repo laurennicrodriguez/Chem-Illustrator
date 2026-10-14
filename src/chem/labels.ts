@@ -589,6 +589,9 @@ class LabelBuilder {
         n = Number(t.text[1]);
       }
       if (t.kind === 'nick' || t.kind === 'generic') {
+        // NMe3+, PPh3+, OTf−: the charge after groups on an atom belongs to that atom
+        const on = this.backbone;
+        const toAtom = !!t.charge && on >= 0 && !this.heads.has(on) && !this.g.atoms[on].dummy && !this.body.has(on);
         let head = -1;
         for (let r = 0; r < n; r++) {
           head = t.kind === 'nick' ? this.addSub(nickGraph(t.text)) : this.add(0, { dummy: true });
@@ -597,7 +600,7 @@ class LabelBuilder {
           if (this.backbone >= 0) this.bond(this.backbone, head);
           else this.backbone = head;
         }
-        this.setCharge(head, t.charge);
+        this.setCharge(toAtom ? on : head, t.charge);
         return;
       }
       const z = t.text === 'D' || t.text === 'T' ? 1 : elementNumber(t.text) ?? 0;
@@ -612,7 +615,7 @@ class LabelBuilder {
         const oxo = Math.max(0, Math.min(n, Math.floor((room - (more ? 1 : 0)) / 2)));
         for (let r = 0; r < oxo; r++) { last = this.add(z, { ...extra }); this.bond(b, last, 2); }
         for (let r = oxo; r < n; r++) { last = this.add(z, { ...extra }); this.bond(this.backbone, last); this.backbone = last; }
-      } else if ((maxValence(z) ?? 2) <= 1 && n > 1) {
+      } else if (oneBond(z) && n > 1) {
         // CF3, CCl3, CD3: each on the atom before (D5 on its own: just the atoms)
         for (let r = 0; r < n; r++) {
           last = this.add(z, { ...extra });
@@ -636,6 +639,18 @@ class LabelBuilder {
     sub.seq(it.group);
     const n = sub.g.atoms.length;
     if (!n) return;
+    // C(O)Me, P(O)Ph2, S(O)Me: a bare O or S in brackets is double bonded to the atom before (an
+    // oxo, as CO and SO2 are), not a link in the chain
+    const b = this.backbone, only = sub.g.atoms[0];
+    if (n === 1 && it.count === 1 && !it.charge && (only.z === 8 || only.z === 16) && !only.charge && !only.hCount && sub.open(0) === 2
+      && b >= 0 && !this.heads.has(b) && !this.g.atoms[b].dummy && this.g.atoms[b].z !== 1) {
+      const room = (maxValence(this.g.atoms[b].z, this.g.atoms[b].charge) ?? 4) - this.used(b);
+      if (room >= 2) {
+        const o = this.add(only.z, only.iso ? { iso: only.iso } : {});
+        this.bond(b, o, 2);
+        return;
+      }
+    }
     let open = 0, tail = 0;
     for (let i = 0; i < n; i++) { const o = sub.open(i); open += o; if (o > 0) tail = i; }
     // (CH2)3 and (CH2CH2O)n are links in a chain; (OH)2, (CH3)2 and (Ph)3 hang off the atom before
@@ -674,7 +689,15 @@ function terminal(it: Item): boolean {
   }
   const t = it.tok;
   if (t.kind === 'nick' || t.kind === 'generic') return true;
-  return t.kind === 'el' && t.text !== 'H' && (maxValence(elementNumber(t.text) ?? 0) ?? 2) <= 1;
+  return t.kind === 'el' && t.text !== 'H' && oneBond(elementNumber(t.text) ?? 0);
+}
+
+/**
+ * Elements that make one bond in a label: H and the halogens (whose highest valence is 7, as in
+ * IF7, though in CCl3 or SiCl3 each makes one), and anything whose highest valence is 1.
+ */
+function oneBond(z: number): boolean {
+  return z === 1 || z === 9 || z === 17 || z === 35 || z === 53 || z === 85 || (maxValence(z) ?? 2) <= 1;
 }
 
 const itemText = (it: Item): string => 'tok' in it

@@ -95,7 +95,11 @@ export function analysisHtml(r: FragmentResult, i: number, adductText: string, e
   if (extras.stereo) rows.push(`<tr><th>Stereo</th><td>${esc(extras.stereo)}</td></tr>`);
   let iso = '';
   if (ion?.pattern && ion.pattern.length) {
-    const top = ion.pattern.slice(0, 6);
+    // the peaks of 0.5 % or more (with any between), so a Br6 or Cl4 cluster shows its tallest peaks
+    const pat = ion.pattern;
+    const big = pat.map((q, i) => (q.rel >= 0.5 ? i : -1)).filter((i) => i >= 0);
+    const first = big[0] ?? 0, last = Math.min(big[big.length - 1] ?? 5, first + 11);
+    const top = pat.slice(first, last + 1);
     iso = `<details class="iso"><summary>Isotope pattern ${adductHtml(ion.adduct.label)}</summary>
       ${patternSvg(top)}
       <table class="iso-table">${top.map((q) => `<tr><td>${q.mz.toFixed(4)}</td><td>${q.rel.toFixed(1)}%</td></tr>`).join('')}</table></details>`;
