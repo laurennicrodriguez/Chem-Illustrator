@@ -50,6 +50,7 @@ import { whiteToClear } from './render/background';
 
 import { pickSlideTemplate } from './ui/slide-templates';
 import { AnimationUI } from './ui/animation-ui';
+import { writePptx, type PptxOptions } from './io/pptx-write';
 import { EFFECTS, animName, newAnim } from './deck/animation';
 import { SLIDE_TEMPLATES, applyTemplate } from './deck/templates';import { pickTemplate } from './ui/template-gallery';
 import { showContextMenu, type MenuItem } from './ui/context-menu';
@@ -1075,16 +1076,7 @@ const ws: Workspace = new Workspace(doc, {
   enter: (tab, opened) => enterTab(tab, opened),
   changed: () => { renderTabs(); updateTitle(); layoutSplit(); },
   flash,
-  pptx: {
-    picture: async (d) => {
-      const pic = recordPicture(d, 1);
-      if (!pic) return null;
-      const png = new Uint8Array(await (await canvasPng(pictureCanvas(d, pic).canvas)).arrayBuffer());
-      return { svg: pictureSvg(pic), png, box: pic.box };
-    },
-    svgToPng,
-    fonts: bundledFaces,
-  },
+  pptx: pptxOptions(),
   measure: measureText,
   sheets: {
     read: (bytes, name) => readSheetFile(bytes, name, sheetFiles),
@@ -1097,6 +1089,20 @@ const ws: Workspace = new Workspace(doc, {
   newStyle: (mode) => { const n = modeStyles[mode]; return n ? styleNamed(n, ownStyles) ?? null : null; },
   newMaster: (m) => { const t = SLIDE_TEMPLATES.find((x) => x.id === slideTemplate); return t && t.id !== 'plain' ? applyTemplate(m, t) : null; },
 });
+
+/** How slides are saved for PowerPoint: structures as pictures (PNG and SVG), the bundled fonts inside. */
+function pptxOptions(): PptxOptions {
+  return {
+    picture: async (d) => {
+      const pic = recordPicture(d, 1);
+      if (!pic) return null;
+      const png = new Uint8Array(await (await canvasPng(pictureCanvas(d, pic).canvas)).arrayBuffer());
+      return { svg: pictureSvg(pic), png, box: pic.box };
+    },
+    svgToPng,
+    fonts: bundledFaces,
+  };
+}
 
 /** The slide deck showing (in Slides mode), or null for a drawing. */
 function deckNow(): Deck | null {
@@ -4242,7 +4248,8 @@ requestAnimationFrame(() => {
 });
 
 // Hooks for the automated speed tests.
-(window as any).__app = { doc, editor, renderer, chem, live, cdxml: (name: string) => writeCdxml(doc, { name, textMeasure: measureText }), openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode, docxBytes: () => writeDocx(docMode.file!.t, docFiles) };
+(window as any).__app = { doc, editor, renderer, chem, live, cdxml: (name: string) => writeCdxml(doc, { name, textMeasure: measureText }), openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode, docxBytes: () => writeDocx(docMode.file!.t, docFiles),
+  pptxBytes: () => { const d = deckNow()!; return writePptx({ size: d.size, master: d.master, slides: d.slides.map((s, i) => ({ layout: s.layout, doc: d.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims })) }, pptxOptions()); } };
 
 // ---------------------------------------------------------------- desktop self-test
 

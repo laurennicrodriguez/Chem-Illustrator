@@ -366,11 +366,14 @@ export function timingXml(anims: Anim[], spidsOf: (a: Anim) => number[]): string
     return `<p:par><p:cTn id="${id++}" fill="hold"><p:stCondLst>${cond}</p:stCondLst><p:childTnLst>${inner}</p:childTnLst></p:cTn></p:par>`;
   }).join('');
   const spids = [...new Set(live.flatMap((a) => spidsOf(a)))];
-  return `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>` +
+  const xml = `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>` +
     `<p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${clicks}</p:childTnLst></p:cTn>` +
     `<p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst>` +
     `<p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq>` +
     `</p:childTnLst></p:cTn></p:par></p:tnLst><p:bldLst>${spids.map((s) => `<p:bldP spid="${s}" grpId="0"/>`).join('')}</p:bldLst></p:timing>`;
+  // number the timing nodes in the order they are written, as PowerPoint does
+  let n = 0;
+  return xml.replace(/<p:cTn id="\d+"/g, () => `<p:cTn id="${++n}"`);
 }
 
 /**
