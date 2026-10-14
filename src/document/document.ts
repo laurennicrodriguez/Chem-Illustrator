@@ -15,6 +15,7 @@ import type { RichText } from '../text/editing';
 import { ACS_1996, type DocStyle } from '../style';
 import * as rt from '../richtext';
 import { cleanPara, fitParas, paraCount, paraRange } from '../text/paragraphs';
+import { citationTexts, type CiteStyle, type Reference } from './references';
 
 /** The character that stands for a figure, table or field in the text (Unicode's object replacement character). */
 export const OBJECT_CHAR = '￼';
@@ -84,7 +85,11 @@ export type DocObject =
   /** A caption's number (Figure 1, Scheme 2): it counts the captions of its name. */
   | { kind: 'seq'; name: string }
   /** A reference to a caption ("see Figure 2"), which follows its number. */
-  | { kind: 'ref'; target: number };
+  | { kind: 'ref'; target: number }
+  /** A citation of references in the document's list (by their ids): numbers in order of first citation. */
+  | { kind: 'cite'; refs: string[] }
+  /** The bibliography: the references cited, in citation order, in the citation style (a block of its own). */
+  | { kind: 'bib' };
 
 export interface DocText extends RichText {
   styles: Record<string, NamedStyle>;
@@ -93,6 +98,10 @@ export interface DocText extends RichText {
   objects: Record<number, DocObject>;
   /** How structures are drawn (bond length, line widths, label fonts). */
   drawingStyle: DocStyle;
+  /** The document's references (References > Manage References), cited or not. */
+  references?: Reference[];
+  /** How citations and the bibliography are printed (ACS when not chosen). */
+  citeStyle?: CiteStyle;
 }
 
 // ---------------------------------------------------------------- defaults
@@ -285,9 +294,10 @@ export const COMPOUND = 'Compound';
  * What each field shows: a caption's number counts the captions of its name before it (the
  * third Figure caption shows 3); a reference shows its caption's label and number, as Word's
  * "label and number" does: the caption's text from its start up to the number ("Figure S3").
- * A reference to a compound shows just its number.
+ * A reference to a compound shows just its number. A citation shows the numbers of the
+ * references it cites (in the order references are first cited).
  */
-export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'>): Map<number, string> {
+export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle'>>): Map<number, string> {
   const shown = new Map<number, string>();
   const counts = new Map<string, number>();
   const order = objectsInText(t.runs);
@@ -311,6 +321,7 @@ export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'>): Map<number, st
       shown.set(id, labelText(text, target, (i) => objectAtChar(t.runs, i), shown).trim());
     }
   }
+  if (order.some((id) => t.objects[id]?.kind === 'cite')) for (const [id, s] of citationTexts(t)) shown.set(id, s);
   return shown;
 }
 
@@ -365,7 +376,7 @@ export function paragraphAt(t: Pick<RichText, 'runs'>, offset: number): { index:
 }
 
 /** Text of a document without objects (for word counts, searching and plain copies). */
-export function documentPlainText(t: Pick<DocText, 'runs' | 'objects'>): string {
+export function documentPlainText(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle'>>): string {
   const shown = fieldTexts(t);
   let out = '';
   for (const r of t.runs) {
