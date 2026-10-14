@@ -3812,11 +3812,18 @@ const labelTips = new LabelTooltip(async (tip) => {
 });
 
 function groupTipTarget(e: PointerEvent) {
-  const h = editor.hover;
-  if (h?.kind !== 'atom' || e.buttons) return null;
+  if (e.buttons) return null;
+  // what is under the pointer now (not the editor's last hover, which can lag a move behind)
+  const rect = renderer.overlay.getBoundingClientRect();
+  const p = renderer.toDoc(e.clientX - rect.left, e.clientY - rect.top);
+  const h = editor.hitTest(p);
+  if (h?.kind !== 'atom') return null;
   const d = editor.doc;
   const a = d.atoms.get(h.id);
   if (!a?.label) return null;
+  // only on the label's letters, so the tooltip goes as soon as the pointer is off them
+  const pad = 2 / Math.max(1e-6, renderer.view.scale);
+  if (!renderer.atomInfo(d, a).boxes.some((b) => p.x >= b.x1 - pad && p.x <= b.x2 + pad && p.y >= b.y1 - pad && p.y <= b.y2 + pad)) return null;
   const ext = (d.adj.get(h.id) ?? []).map((bid) => d.bonds.get(bid)!).filter((b) => b && b.display !== 'dative').map((b) => (b.order === 4 ? 1 : b.order));
   return { label: a.label, ext: ext.length ? ext : [1], x: e.clientX, y: e.clientY };
 }
@@ -3824,6 +3831,10 @@ function groupTipTarget(e: PointerEvent) {
 renderer.overlay.addEventListener('pointermove', (e) => labelTips.over(groupTipTarget(e)));
 for (const ev of ['pointerdown', 'pointerleave', 'wheel'] as const) renderer.overlay.addEventListener(ev, () => labelTips.hide());
 window.addEventListener('keydown', () => labelTips.hide());
+// anywhere off the drawing (a panel, a menu, another window) the tooltip goes too
+window.addEventListener('pointermove', (e) => { if (e.target !== renderer.overlay) labelTips.hide(); }, true);
+window.addEventListener('blur', () => labelTips.hide());
+document.addEventListener('visibilitychange', () => labelTips.hide());
 
 /** Show the page dark (screen only) or as it is, and tick the menu and the eye button. */
 function showDark(on: boolean): void {
