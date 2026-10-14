@@ -17,7 +17,7 @@ import { PackageReader, NS, REL, kids, kid, rAttr, fromEmu } from './ooxml';
 import { readCdxml } from './cdxml';
 import { dataUrl, imageSize } from '../render/images';
 import { layoutText, ASCENT } from '../text/layout';
-import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle } from '../deck/deck';
+import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle, slideColours } from '../deck/deck';
 import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure } from './pptx-write';
 import { GEOS } from '../design/geo';
 import { gluePoint } from '../objects';
@@ -192,6 +192,8 @@ class Reader {
   private master!: Part;
   private defaultText: Element | null = null;
   private ourMaster: Partial<Master> | null = null;
+  /** The layout of the slide being read, when the file says (files saved here). */
+  private curLayout: LayoutId | undefined;
   private design = false;
   private masterOut!: Master;
   private size: SlideSize = { w: 960, h: 540 };
@@ -351,8 +353,11 @@ class Reader {
     const tags = this.tagsOf(path, kid(s.doc.documentElement, 'cSld'));
     const doc = new Doc();
     doc.style = { ...this.masterOut.drawing };
+    // files saved here say which layout each slide has; a title slide can have its own colours
+    this.curLayout = tags[TAG.layout] as LayoutId | undefined;
     const bg = this.background(s.doc.documentElement);
-    if (bg && bg.toLowerCase() !== this.masterOut.background.toLowerCase()) this.warnings.add('Slides with a background colour of their own now use the master\'s.');
+    const ownBg = this.curLayout ? slideColours(this.masterOut, this.curLayout).background : this.masterOut.background;
+    if (bg && bg.toLowerCase() !== ownBg.toLowerCase()) this.warnings.add('Slides with a background colour of their own now use the master\'s.');
     this.tables = [];
     this.tableParts.clear();
     this.geoIds.clear();
@@ -901,7 +906,7 @@ class Reader {
     const bp = (k: string) => bodyPrs.map((b) => b?.getAttribute(k) ?? null).find((v) => v !== null) ?? null;
     const scale = Number(kid(bodyPrs[0], 'normAutofit')?.getAttribute('fontScale') ?? 100000) / 100000;
     const kind = ph ? phKind(ph.type) : null;
-    const base = kind ? textStyles(this.masterOut)[kind] : undefined;
+    const base = kind ? textStyles(this.masterOut, this.curLayout)[kind] : undefined;
 
     const runs: TextRun[] = [];
     const paras: ParaStyle[] = [];

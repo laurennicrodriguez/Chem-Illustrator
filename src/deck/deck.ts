@@ -89,6 +89,88 @@ export interface Master {
   drawing: DocStyle;
   /** Structures pasted onto a slide are resized to the drawing style's bond length. */
   fitPasted: boolean;
+  /** The design template's accent colours (its bars and lines) and the shapes it draws behind every slide. */
+  accent: string;
+  accent2: string;
+  decor: Decor;
+  /** Title slides' own background and text colours (a dark title slide); as other slides when not set. */
+  titleSlide?: { background: string; titleColor: string; textColor: string; footerColor?: string };
+  /** The template's name, when one was used (Design > Templates). */
+  template?: string;
+}
+
+/**
+ * Shapes a design template draws behind every slide, in its accent colours: a bar along the top,
+ * a band behind the title, a strip down the left side, a rule under the title, triangles in a
+ * corner, a band along the bottom, or a frame round the slide.
+ */
+export type Decor = 'none' | 'top-bar' | 'title-band' | 'left-strip' | 'title-rule' | 'corner' | 'footer-band' | 'frame';
+
+export const DECORS: { id: Decor; name: string }[] = [
+  { id: 'none', name: 'None' },
+  { id: 'top-bar', name: 'Bar along the top' },
+  { id: 'title-band', name: 'Band behind the title' },
+  { id: 'left-strip', name: 'Strip down the left side' },
+  { id: 'title-rule', name: 'Rule under the title' },
+  { id: 'corner', name: 'Triangles in the corner' },
+  { id: 'footer-band', name: 'Band along the bottom' },
+  { id: 'frame', name: 'Frame round the slide' },
+];
+
+/** The colours a slide with this layout uses: title slides can have their own. */
+export function slideColours(m: Master, layout: LayoutId): { background: string; titleColor: string; textColor: string; footerColor: string } {
+  const t = layout === 'title' ? m.titleSlide : undefined;
+  return {
+    background: t?.background ?? m.background,
+    titleColor: t?.titleColor ?? m.titleColor,
+    textColor: t?.textColor ?? m.textColor,
+    footerColor: t?.footerColor ?? (t ? t.textColor : m.footerColor),
+  };
+}
+
+/** One of a template's shapes: a box, a line (x1,y1 to x2,y2, `width` points wide), or a filled triangle. */
+export type DecorShape =
+  | { kind: 'rect'; x1: number; y1: number; x2: number; y2: number; color: string }
+  | { kind: 'line'; x1: number; y1: number; x2: number; y2: number; color: string; width: number }
+  | { kind: 'frame'; x1: number; y1: number; x2: number; y2: number; color: string; width: number }
+  | { kind: 'tri'; pts: [number, number][]; color: string };
+
+/** Where a template's shapes go on a slide of this size and layout, in points. */
+export function decorShapes(size: SlideSize, m: Master, layout: LayoutId): DecorShape[] {
+  const { w, h } = size;
+  const title = layout === 'title';
+  const a = m.accent, b = m.accent2;
+  switch (m.decor) {
+    case 'top-bar':
+      return title
+        ? [{ kind: 'rect', x1: 0, y1: 0, x2: w, y2: 0.035 * h, color: a }, { kind: 'rect', x1: 0, y1: h - 0.035 * h, x2: w, y2: h, color: a }]
+        : [{ kind: 'rect', x1: 0, y1: 0, x2: w, y2: 0.022 * h, color: a }];
+    case 'title-band':
+      return title
+        ? [{ kind: 'rect', x1: 0, y1: 0.27 * h, x2: w, y2: 0.515 * h, color: a }]
+        : [{ kind: 'rect', x1: 0, y1: 0, x2: w, y2: 0.2 * h, color: a }];
+    case 'left-strip':
+      return [{ kind: 'rect', x1: 0, y1: 0, x2: (title ? 0.035 : 0.014) * w, y2: h, color: a }];
+    case 'title-rule':
+      return title
+        ? [{ kind: 'line', x1: 0.3 * w, y1: 0.515 * h, x2: 0.7 * w, y2: 0.515 * h, color: a, width: 2 }]
+        : [{ kind: 'line', x1: 0.05 * w, y1: 0.2 * h, x2: 0.95 * w, y2: 0.2 * h, color: a, width: 2 }];
+    case 'corner': {
+      const k = (title ? 0.34 : 0.2) * h;
+      return [
+        { kind: 'tri', pts: [[w, h - 1.6 * k], [w, h], [w - 1.6 * k, h]], color: b },
+        { kind: 'tri', pts: [[w, h - k], [w, h], [w - k, h]], color: a },
+      ];
+    }
+    case 'footer-band':
+      return [{ kind: 'rect', x1: 0, y1: (title ? 0.86 : 0.905) * h, x2: w, y2: h, color: a }];
+    case 'frame': {
+      const d = 0.02 * Math.min(w, h) + 0.012 * w;
+      return [{ kind: 'frame', x1: d, y1: d, x2: w - d, y2: h - d, color: a, width: 1.5 }];
+    }
+    default:
+      return [];
+  }
 }
 
 /** ACS Document 1996 at twice the size: structures that read well on a projector. */
@@ -111,15 +193,22 @@ export function defaultMaster(): Master {
     slideNumbers: true, numberTitleSlides: false, footer: '', footerSize: 12, footerColor: '#7f7f7f',
     drawing: slideDrawingStyle(),
     fitPasted: true,
+    accent: '#2f6fdf', accent2: '#9aa5b1', decor: 'none',
   };
 }
 
-/** The look of each kind of placeholder text, from the master. */
-export function textStyles(m: Master): Record<Placeholder, TextBase> {
+/** A master from a saved file, with the settings newer than the file filled in. */
+export function completeMaster(m: Partial<Master>): Master {
+  return { ...defaultMaster(), ...m };
+}
+
+/** The look of each kind of placeholder text, from the master (on a title slide, in its own colours). */
+export function textStyles(m: Master, layout?: LayoutId): Record<Placeholder, TextBase> {
+  const c = layout ? slideColours(m, layout) : m;
   return {
-    title: { font: m.titleFont, size: m.titleSize, color: m.titleColor, bold: m.titleBold || undefined },
-    subtitle: { font: m.bodyFont, size: m.subtitleSize, color: m.textColor },
-    body: { font: m.bodyFont, size: m.bodySize, color: m.textColor },
+    title: { font: m.titleFont, size: m.titleSize, color: c.titleColor, bold: m.titleBold || undefined },
+    subtitle: { font: m.bodyFont, size: m.subtitleSize, color: c.textColor },
+    body: { font: m.bodyFont, size: m.bodySize, color: c.textColor },
   };
 }
 
@@ -246,19 +335,19 @@ export class Deck {
   /** A new slide's drawing, set up from the master, with the layout's empty placeholders. */
   private newSlideDoc(layout: LayoutId): Doc {
     const d = new Doc();
-    this.styleDoc(d);
-    const styles = textStyles(this.master);
+    this.styleDoc(d, layout);
+    const styles = textStyles(this.master, layout);
     d.bulk(() => {
       for (const f of layoutFrames(layout, this.size)) d.addCaption({ ...frameFields(f, styles), runs: [], paras: emptyParas(f.ph) });
     });
     return d;
   }
 
-  /** Give a slide's drawing the master's drawing style and text styles. */
-  private styleDoc(d: Doc): void {
+  /** Give a slide's drawing the master's drawing style and text styles (a title slide's in its own colours). */
+  private styleDoc(d: Doc, layout: LayoutId): void {
     d.style = { ...this.master.drawing };
-    d.background = this.master.background;
-    d.textStyles = textStyles(this.master);
+    d.background = slideColours(this.master, layout).background;
+    d.textStyles = textStyles(this.master, layout);
     d.allDirty = true;
     d.version++;
   }
@@ -266,7 +355,7 @@ export class Deck {
   /** Make a slide from contents (opening a file, pasting slides). Not undoable on its own. */
   makeSlide(layout: LayoutId, contents?: Contents, notes = ''): Slide {
     const doc = new Doc();
-    this.styleDoc(doc);
+    this.styleDoc(doc, layout);
     if (contents) doc.restoreContents(contents);
     return { id: this.nextSlideId++, layout, doc, notes };
   }
@@ -278,7 +367,7 @@ export class Deck {
     this.master = master;
     this.slides = slides;
     for (const s of slides) {
-      this.styleDoc(s.doc);
+      this.styleDoc(s.doc, s.layout);
       if (s.id >= this.nextSlideId) this.nextSlideId = s.id + 1;
     }
     if (!slides.length) this.slides.push(this.makeSlide('title', this.newSlideDoc('title').contents()));
@@ -301,7 +390,7 @@ export class Deck {
     if (fill) {
       // a template's shapes are where the page starts, not a step to undo
       const tmp = new Doc();
-      d.styleDoc(tmp);
+      d.styleDoc(tmp, 'blank');
       tmp.edit('Template', () => fill(tmp));
       d.slides[0].doc.restoreContents(tmp.contents());
     }
@@ -480,8 +569,9 @@ export class Deck {
     this.contentEdit('Change layout', [i], () => {
       slide.layout = layout;
       const d = this.docOf(i);
+      this.styleDoc(d, layout);
       d.bulk(() => this.fitPlaceholders(d, layout));
-    }, () => { slide.layout = old; }, () => { slide.layout = layout; });
+    }, () => { slide.layout = old; this.styleDoc(this.docOf(this.slides.indexOf(slide)), old); }, () => { slide.layout = layout; this.styleDoc(this.docOf(this.slides.indexOf(slide)), layout); });
   }
 
   /**
@@ -490,7 +580,7 @@ export class Deck {
    * empty and otherwise kept where they are (so no text is lost).
    */
   private fitPlaceholders(d: Doc, layout: LayoutId): void {
-    const styles = textStyles(this.master);
+    const styles = textStyles(this.master, layout);
     const frames = layoutFrames(layout, this.size);
     const have = [...d.captions.values()].filter((c) => c.ph);
     const used = new Set<Caption>();
@@ -533,7 +623,7 @@ export class Deck {
     const before = this.master;
     const apply = (x: Master) => {
       this.master = x;
-      for (let i = 0; i < this.slides.length; i++) this.styleDoc(this.docOf(i));
+      for (let i = 0; i < this.slides.length; i++) this.styleDoc(this.docOf(i), this.slides[i].layout);
       this.onSwitch();
     };
     apply(m);
@@ -548,7 +638,7 @@ export class Deck {
     const before = this.master, after = { ...before, drawing: { ...next } };
     const use = (m: Master) => {
       this.master = m;
-      for (let i = 0; i < this.slides.length; i++) this.styleDoc(this.docOf(i));
+      for (let i = 0; i < this.slides.length; i++) this.styleDoc(this.docOf(i), this.slides[i].layout);
     };
     const all = this.slides.map((_, i) => i);
     this.contentEdit('Change drawing style', all, () => {
@@ -560,10 +650,16 @@ export class Deck {
     }, () => use(before), () => use(after));
   }
 
+  /** Start a new deck with this master (your template for new decks). Not undoable. */
+  useMaster(m: Master): void {
+    this.master = m;
+    for (let i = 0; i < this.slides.length; i++) this.styleDoc(this.docOf(i), this.slides[i].layout);
+  }
+
   /** Start a new deck in a style (your default for new slides or designs). Not undoable. */
   useDrawingStyle(st: DocStyle): void {
     this.master = { ...this.master, drawing: { ...st } };
-    for (let i = 0; i < this.slides.length; i++) this.styleDoc(this.docOf(i));
+    for (let i = 0; i < this.slides.length; i++) this.styleDoc(this.docOf(i), this.slides[i].layout);
   }
 
   /** Change the slide size: everything stays centred, and placeholders move to the layout's places. */

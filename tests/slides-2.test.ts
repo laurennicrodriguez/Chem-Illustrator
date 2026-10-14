@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 //
-// Slides round 2: picture frames, corners and shadows; going to PowerPoint and back.
+// Slides round 2: picture frames, corners and shadows; design templates; going to PowerPoint and back.
 
 import { describe, it, expect } from 'vitest';
 import { unzipSync, strFromU8 } from 'fflate';
 import { Doc, PICTURE_STYLES, pictureRadius, type Shape } from '../src/model';
-import { Deck } from '../src/deck/deck';
+import { Deck, WIDE, defaultMaster, decorShapes, slideColours, textStyles } from '../src/deck/deck';
+import { SLIDE_TEMPLATES, applyTemplate } from '../src/deck/templates';
 import { writePptx, pictureLookXml, type PptxOptions } from '../src/io/pptx-write';
 import { readPptx } from '../src/io/pptx-read';
 import { shapeBox } from '../src/objects';
@@ -59,5 +60,69 @@ describe('picture frames, corners and shadows', () => {
     expect(back.warnings).toEqual([]);
     const pics = back.slides[0].contents.shapes.filter((s) => s.kind === 'picture').sort((a, b) => a.x1 - b.x1);
     expect(pics.map((p) => p.look)).toEqual(styles.map((p) => p.look));
+  });
+});
+
+describe('slide templates', () => {
+  it('has about twenty, with distinct names, all on light content slides', () => {
+    expect(SLIDE_TEMPLATES.length).toBeGreaterThanOrEqual(20);
+    expect(new Set(SLIDE_TEMPLATES.map((t) => t.name)).size).toBe(SLIDE_TEMPLATES.length);
+    // structures are drawn in black: content slides stay light
+    const light = (c: string) => { const n = parseInt(c.slice(1), 16); return 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) > 200; };
+    for (const t of SLIDE_TEMPLATES) expect(light(t.background)).toBe(true);
+  });
+
+  it('changes only the look, keeping the logo, footer, numbers and drawing style', () => {
+    const m = { ...defaultMaster(), footer: 'Group meeting', slideNumbers: false };
+    const t = SLIDE_TEMPLATES.find((x) => x.id === 'midnight')!;
+    const n = applyTemplate(m, t);
+    expect(n.footer).toBe('Group meeting');
+    expect(n.slideNumbers).toBe(false);
+    expect(n.drawing).toEqual(m.drawing);
+    expect(n.titleFont).toBe('Inter');
+    expect(slideColours(n, 'title').background).toBe('#0f1b2d');
+    expect(slideColours(n, 'title-content').background).toBe('#ffffff');
+    expect(textStyles(n, 'title').title.color).toBe('#ffffff');
+    expect(textStyles(n, 'title-content').title.color).toBe('#0f1b2d');
+  });
+
+  it('places each kind of shape inside the slide', () => {
+    for (const decor of ['top-bar', 'title-band', 'left-strip', 'title-rule', 'corner', 'footer-band', 'frame'] as const) {
+      for (const layout of ['title', 'title-content'] as const) {
+        const shapes = decorShapes(WIDE, { ...defaultMaster(), decor }, layout);
+        expect(shapes.length).toBeGreaterThan(0);
+        for (const sh of shapes) {
+          const pts = sh.kind === 'tri' ? sh.pts : [[sh.x1, sh.y1], [sh.x2, sh.y2]];
+          for (const [x, y] of pts) { expect(x).toBeGreaterThanOrEqual(0); expect(x).toBeLessThanOrEqual(WIDE.w); expect(y).toBeGreaterThanOrEqual(0); expect(y).toBeLessThanOrEqual(WIDE.h); }
+        }
+      }
+    }
+    expect(decorShapes(WIDE, defaultMaster(), 'title')).toEqual([]);
+  });
+
+  it('saves the shapes and title slide colours in the layouts, and opens the deck as it was', async () => {
+    const host = new Doc();
+    const d = Deck.blank(host);
+    d.attach();
+    d.setMaster(applyTemplate(d.master, SLIDE_TEMPLATES.find((x) => x.id === 'midnight')!));
+    const title = [...host.captions.values()].find((c) => c.ph === 'title')!;
+    host.edit('Type', () => host.updateCaption(title.id, { runs: [{ text: 'Total synthesis' }] }));
+    d.addSlide('title-content');
+    const bytes = await writePptx({ size: d.size, master: d.master, slides: d.slides.map((s, i) => ({ layout: s.layout, doc: d.docOf(i), notes: s.notes })) }, opts);
+    const files = unzipSync(bytes);
+    const titleLayout = strFromU8(files['ppt/slideLayouts/slideLayout1.xml']);
+    expect(titleLayout).toContain('<p:bg><p:bgPr><a:solidFill><a:srgbClr val="0F1B2D"/>');
+    expect(titleLayout).toContain('name="Rectangle');
+    const contentLayout = strFromU8(files['ppt/slideLayouts/slideLayout2.xml']);
+    expect(contentLayout).not.toContain('<p:bg>');
+    expect(strFromU8(files['ppt/theme/theme1.xml'])).toContain('<a:accent1><a:srgbClr val="4C8BF5"/>');
+    const back = readPptx(bytes);
+    expect(back.warnings).toEqual([]);
+    expect(back.master.template).toBe('Midnight');
+    expect(back.master.titleSlide).toEqual(d.master.titleSlide);
+    expect(back.master.decor).toBe('top-bar');
+    // the title keeps no colour of its own: it takes the title slide's
+    const t = back.slides[0].contents.captions.find((c) => c.ph === 'title')!;
+    expect(t.runs).toEqual([{ text: 'Total synthesis' }]);
   });
 });

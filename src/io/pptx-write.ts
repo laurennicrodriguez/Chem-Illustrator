@@ -29,7 +29,7 @@ import { fromDataUrl } from '../render/images';
 import { patternInk } from '../render/fills';
 import { FADE, tint } from '../colours';
 import {
-  Master, SlideSize, LayoutId, LAYOUTS, layoutFrames, decorFrames, showsNumber, textStyles, isEmptyText,
+  Master, SlideSize, LayoutId, LAYOUTS, layoutFrames, decorFrames, showsNumber, textStyles, isEmptyText, slideColours, decorShapes, type DecorShape,
 } from '../deck/deck';
 
 /** Tag names (PowerPoint keeps tags when it saves). */
@@ -458,18 +458,28 @@ class Writer {
     const m = this.deck.master;
     const frames = layoutFrames(id, size);
     const d = decorFrames(size, m);
-    const shapes = frames.map((f, i) => {
+    const c = slideColours(m, id);
+    // a title slide with its own colours: they go in its layout's text styles and background
+    const own = id === 'title' && !!m.titleSlide;
+    const fill = (col: string) => own ? `<a:solidFill><a:srgbClr val="${hex6(col)}"/></a:solidFill>` : '';
+    // the template's shapes first, behind the placeholders
+    const decor = decorShapes(size, m, id);
+    const first = frames.length + 4;
+    const shapes = decor.map((sh, k) => decorXml(sh, first + k));
+    shapes.push(...frames.map((f, i) => {
       const prompt = f.ph === 'title' ? 'Click to edit Master title style' : f.ph === 'subtitle' ? 'Click to edit Master subtitle style' : 'Click to edit Master text styles';
       const algn = f.justify === 'center' ? 'ctr' : 'l';
       const lst = f.ph === 'subtitle'
-        ? `<a:lvl1pPr marL="0" indent="0" algn="ctr"><a:buNone/><a:defRPr sz="${Math.round(m.subtitleSize * 100)}"/></a:lvl1pPr>`
-        : f.ph === 'title' ? `<a:lvl1pPr algn="${algn}"><a:defRPr/></a:lvl1pPr>` : '';
+        ? `<a:lvl1pPr marL="0" indent="0" algn="ctr"><a:buNone/><a:defRPr sz="${Math.round(m.subtitleSize * 100)}">${fill(c.textColor)}</a:defRPr></a:lvl1pPr>`
+        : f.ph === 'title' ? `<a:lvl1pPr algn="${algn}"><a:defRPr>${fill(c.titleColor)}</a:defRPr></a:lvl1pPr>` : '';
       return phShape(i + 2, `${f.ph === 'title' ? 'Title' : f.ph === 'subtitle' ? 'Subtitle' : 'Content Placeholder'} ${i + 1}`, PH_XML[id][i](i),
         f, prompt, 'anchor="t"', lst);
-    });
-    shapes.push(footerShape(frames.length + 2, `Footer Placeholder ${frames.length + 1}`, '<p:ph type="ftr" sz="quarter" idx="11"/>', d.footer, m, ''));
-    shapes.push(footerShape(frames.length + 3, `Slide Number Placeholder ${frames.length + 2}`, '<p:ph type="sldNum" sz="quarter" idx="12"/>', d.number, m, '‹#›'));
-    return `${HEAD}<p:sldLayout ${XMLNS} type="${LAYOUT_TYPE[id]}" preserve="1"><p:cSld name="${xml(name)}"><p:spTree>${GROUP}${shapes.join('')}</p:spTree></p:cSld>` +
+    }));
+    const fm = { ...m, footerColor: c.footerColor };
+    shapes.push(footerShape(frames.length + 2, `Footer Placeholder ${frames.length + 1}`, '<p:ph type="ftr" sz="quarter" idx="11"/>', d.footer, fm, ''));
+    shapes.push(footerShape(frames.length + 3, `Slide Number Placeholder ${frames.length + 2}`, '<p:ph type="sldNum" sz="quarter" idx="12"/>', d.number, fm, '‹#›'));
+    const bg = c.background !== m.background ? `<p:bg><p:bgPr><a:solidFill><a:srgbClr val="${hex6(c.background)}"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>` : '';
+    return `${HEAD}<p:sldLayout ${XMLNS} type="${LAYOUT_TYPE[id]}" preserve="1"><p:cSld name="${xml(name)}">${bg}<p:spTree>${GROUP}${shapes.join('')}</p:spTree></p:cSld>` +
       `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>`;
   }
 
@@ -481,7 +491,7 @@ class Writer {
     const parts = splitSlide(doc, this.measure);
     const out: string[] = [];
     let id = 2;
-    const styles = textStyles(this.deck.master);
+    const styles = textStyles(this.deck.master, s.layout);
     // pictures and shapes at the back, as on screen
     for (const p of parts.pictures) out.push(await this.picture(path, p.src!, { x1: Math.min(p.x1, p.x2), y1: Math.min(p.y1, p.y2), x2: Math.max(p.x1, p.x2), y2: Math.max(p.y1, p.y2) }, `Picture ${id - 1}`, id++, p.crop ?? null, p.look));
     for (const sh of parts.shapes) out.push(sh.kind === 'geo' ? this.geo(path, sh, id++, doc, styles.body?.size ?? doc.style.captionSize) : shapeXml(sh, id++, doc.style.lineWidth));
@@ -733,6 +743,28 @@ class Writer {
   }
 }
 
+/** One of a design template's shapes, as a plain PowerPoint shape in a slide layout. */
+function decorXml(sh: DecorShape, id: number): string {
+  const nv = (name: string) => `<p:nvSpPr><p:cNvPr id="${id}" name="${name} ${id}"/><p:cNvSpPr/><p:nvPr userDrawn="1"/></p:nvSpPr>`;
+  const solid = (c: string) => `<a:solidFill><a:srgbClr val="${hex6(c)}"/></a:solidFill>`;
+  if (sh.kind === 'tri') {
+    const xs = sh.pts.map((q) => q[0]), ys = sh.pts.map((q) => q[1]);
+    const box = { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
+    const W = box.x2 - box.x1, H = box.y2 - box.y1;
+    const pt = ([x, y]: [number, number]) => `<a:pt x="${emu(x - box.x1)}" y="${emu(y - box.y1)}"/>`;
+    const path = `<a:moveTo>${pt(sh.pts[0])}</a:moveTo>${sh.pts.slice(1).map((q) => `<a:lnTo>${pt(q)}</a:lnTo>`).join('')}<a:close/>`;
+    return `<p:sp>${nv('Triangle')}<p:spPr>${xfrm(box)}<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="r" b="b"/>` +
+      `<a:pathLst><a:path w="${emu(W)}" h="${emu(H)}">${path}</a:path></a:pathLst></a:custGeom>${solid(sh.color)}<a:ln><a:noFill/></a:ln></p:spPr></p:sp>`;
+  }
+  if (sh.kind === 'line') {
+    return `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="${id}" name="Line ${id}"/><p:cNvCxnSpPr/><p:nvPr userDrawn="1"/></p:nvCxnSpPr>` +
+      `<p:spPr>${xfrm({ x1: sh.x1, y1: sh.y1, x2: sh.x2, y2: sh.y2 })}<a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln w="${emu(sh.width)}">${solid(sh.color)}</a:ln></p:spPr></p:cxnSp>`;
+  }
+  const fill = sh.kind === 'rect' ? solid(sh.color) : '<a:noFill/>';
+  const ln = sh.kind === 'rect' ? '<a:ln><a:noFill/></a:ln>' : `<a:ln w="${emu(sh.width)}">${solid(sh.color)}</a:ln>`;
+  return `<p:sp>${nv('Rectangle')}<p:spPr>${xfrm(sh)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${fill}${ln}</p:spPr></p:sp>`;
+}
+
 /** A picture element: PNG (or another bitmap), optionally with an SVG PowerPoint shows instead. */
 function picXml(id: number, name: string, blipId: string, svgId: string | null, box: Rect, crop: Shape['crop'] | null, tagsId: string | null, look?: PictureLook): string {
   const ext = svgId ? `<a:extLst><a:ext uri="${SVG_EXT}"><asvg:svgBlip xmlns:asvg="${NS_SVG}" r:embed="${svgId}"/></a:ext></a:extLst>` : '';
@@ -880,7 +912,8 @@ function defaultLevels(m: Master): string {
 
 /** The theme: colours and the two fonts (titles and body). */
 function theme(m: Master, name: string): string {
-  const accents = ['2F6FDF', 'C0504D', '4F9A55', '8064A2', 'D9822B', '4BACC6'];
+  // the template's two accent colours first, so PowerPoint's own shapes and charts pick them up
+  const accents = [hex6(m.accent), hex6(m.accent2), '4F9A55', '8064A2', 'D9822B', '4BACC6'];
   const fmt = (inner: string) => `<a:solidFill><a:schemeClr val="phClr">${inner}</a:schemeClr></a:solidFill>`;
   const ln = (w: number) => `<a:ln w="${w}" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/><a:miter lim="800000"/></a:ln>`;
   return `${HEAD}<a:theme xmlns:a="${NS.a}" name="${xml(name)}"><a:themeElements>` +

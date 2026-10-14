@@ -47,7 +47,9 @@ import { applyStyle, restyleContents, styleNamed, type StyleMode } from './drawi
 import { recordPicture, pictureSvg, pictureCanvas, canvasPng, bitmapScale, EXPORT_MAX_SIDE, EXPORT_MAX_PIXELS } from './render/picture';
 import { pngWithDpi } from './render/emf-read';
 import { whiteToClear } from './render/background';
-import { pickTemplate } from './ui/template-gallery';
+
+import { pickSlideTemplate } from './ui/slide-templates';
+import { SLIDE_TEMPLATES, applyTemplate } from './deck/templates';import { pickTemplate } from './ui/template-gallery';
 import { showContextMenu, type MenuItem } from './ui/context-menu';
 import { fillTemplate, templateSize } from './design/templates';
 import { itemsToSvg } from './render/svg';
@@ -1090,6 +1092,7 @@ const ws: Workspace = new Workspace(doc, {
     write: (d) => writeDocx(d, docFiles),
   },
   newStyle: (mode) => { const n = modeStyles[mode]; return n ? styleNamed(n, ownStyles) ?? null : null; },
+  newMaster: (m) => { const t = SLIDE_TEMPLATES.find((x) => x.id === slideTemplate); return t && t.id !== 'plain' ? applyTemplate(m, t) : null; },
 });
 
 /** The slide deck showing (in Slides mode), or null for a drawing. */
@@ -1687,6 +1690,22 @@ async function slideMaster(): Promise<void> {
   });
   // the deck may have gone (its tab closed) while the window was open
   if (m && deckNow() === d) d.setMaster(m);
+}
+
+/** Design > Templates: a ready-made look for every slide, and optionally for new decks too. */
+let slideTemplate: string | null = null;
+async function slideTemplates(): Promise<void> {
+  const d = deckNow();
+  if (!d) return;
+  finishTyping();
+  const got = await pickSlideTemplate(d.master, d.size, slideTemplate);
+  if (!got) return;
+  if (deckNow() === d) d.setMaster(applyTemplate(d.master, got.template));
+  if (got.forNew) {
+    slideTemplate = got.template.id;
+    storeSettings();
+    flash(`New slide decks will start with ${got.template.name}. Pick Plain to go back.`);
+  }
 }
 
 function present(fromHere: boolean): void {
@@ -2322,7 +2341,7 @@ function setPictureStyle(look: PictureLook | undefined): boolean {
 }
 
 /** Slide commands that don't apply to a design's single page. */
-const SLIDE_ONLY = new Set(['new-slide', 'duplicate-slide', 'delete-slide', 'size-wide', 'size-standard', 'slide-master']);
+const SLIDE_ONLY = new Set(['new-slide', 'duplicate-slide', 'delete-slide', 'size-wide', 'size-standard', 'slide-master', 'slide-templates']);
 
 const COMMANDS: Record<string, () => unknown> = {
   new: () => { finishTyping(); ws.newDrawing(); },
@@ -2362,6 +2381,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'size-wide': () => setSlideSize(WIDE),
   'size-standard': () => setSlideSize(STANDARD),
   'slide-master': () => slideMaster(),
+  'slide-templates': () => slideTemplates(),
   'drawing-style': () => drawingStyleDialog(),
   present: () => present(false),
   'present-current': () => present(true),
@@ -2917,6 +2937,7 @@ function storeSettings(): void {
     methylStyle: editor.options.methylStyle,
     axialStyle: axialStyle.helicity ? 'PM' : 'RaSa',
     circledCharges: editor.options.circledCharges,
+    slideTemplate,
     askWholeDrawing,
     palettes: getPalettes(),
     toolboxes: toolboxState,
@@ -3038,6 +3059,7 @@ void loadSettings().then((s) => {
   editor.options.methylStyle = s.methylStyle;
   showHelicity(s.axialStyle === 'PM');
   editor.options.circledCharges = s.circledCharges;
+  slideTemplate = s.slideTemplate;
   askWholeDrawing = s.askWholeDrawing;
   setPalettes(s.palettes);
   toolboxState = s.toolboxes;

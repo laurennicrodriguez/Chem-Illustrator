@@ -1174,6 +1174,14 @@ dialog.template-gallery { width: min(94vw, 760px); }
 .tg-thumb { align-self: center; background: var(--line); border-radius: 3px; margin-bottom: 4px; }
 .tg-blurb { font-size: 12px; line-height: 1.35; }
 .tg-size { font-size: 11px; }
+/* Design > Templates in Slides: the groups scroll together, two slides per card */
+dialog.slide-templates { width: min(94vw, 840px); }
+.st-body { max-height: min(64vh, 600px); overflow-y: auto; padding-right: 4px; }
+.st-body h3 { margin: 10px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.st-body .tg-grid { max-height: none; overflow: visible; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+.st-body .tg-thumb { background: transparent; }
+.tg-card.current { border-color: var(--accent); }
+.st-option { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
 
 /* right-click menus on the drawing */
 .context-menu { position: fixed; top: 0; left: 0; z-index: 60; min-width: 200px; }
