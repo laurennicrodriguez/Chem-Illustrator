@@ -29,7 +29,8 @@ import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, r
   nativeFirst, writeNativeFormats, looksLikeCdxml, cfHtml, fromCfHtml, CELLS_FORMAT, OWN_FORMAT, CDX_FORMAT } from './io/clipboard';
 import { cdxToCdxml } from './io/cdx';
 import { writeCdxml } from './io/cdxml-write';
-import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, PICTURE_EXTENSIONS } from './io/files';
+import { WORKSPACE } from './io/workspace-file';
+import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, PICTURE_EXTENSIONS } from './io/files';
 import { Workspace, Tab } from './workspace';
 import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize } from './deck/deck';
 import { drawSlidePage, recordSlide, paintSlide, SURROUND } from './deck/slide-view';
@@ -2397,6 +2398,9 @@ const COMMANDS: Record<string, () => unknown> = {
   open: () => ws.open(),
   save: () => { finishTyping(); return ws.save(focusTab()); },
   'save-as': () => { finishTyping(); return ws.saveAs(focusTab()); },
+  'save-workspace': () => saveWorkspace(false),
+  'save-workspace-as': () => saveWorkspace(true),
+  'open-workspace': () => openWorkspace(),
   'close-tab': () => { finishTyping(); return ws.close(); },
   'next-tab': () => ws.cycle(1),
   'prev-tab': () => ws.cycle(-1),
@@ -2937,6 +2941,36 @@ function showHelicity(on: boolean): void {
   if (axialStyle.helicity === on) return;
   axialStyle.helicity = on;
   editor.requestScene();
+}
+
+// Workspaces (desktop app): every open tab saved together, with a list file to open them all again
+const workspaceChoices = { copyIn: true, saveChanges: true };
+async function saveWorkspace(choosePlace: boolean): Promise<void> {
+  finishTyping();
+  let path = choosePlace ? null : ws.workspacePath;
+  const unsaved = ws.unsavedTabs.map((t) => t.name);
+  const r = await ask(path ? 'Save Workspace' : 'Save Workspace As', [
+    { name: 'copy', label: 'Put copies of files kept in other folders into the workspace folder (their tabs then save to the copies)', type: 'checkbox', value: String(workspaceChoices.copyIn) },
+    { name: 'save', label: 'Save changes to tabs already saved as files', type: 'checkbox', value: String(workspaceChoices.saveChanges) },
+  ], {
+    ok: path ? 'Save' : 'Choose Folder…',
+    note: (path ? `Saves the open tabs as the workspace ${baseName(path)}.` : 'A workspace is a folder with your files and a small .ciworkspace file listing the tabs, their order and split views. Next, pick or make a folder and name the workspace.')
+      + (unsaved.length ? ` These tabs have never been saved and go into the workspace folder: ${unsaved.join(', ')}.` : ''),
+  });
+  if (!r) return;
+  workspaceChoices.copyIn = r.copy === 'true';
+  workspaceChoices.saveChanges = r.save === 'true';
+  if (!path) {
+    const target = await saveFileDialog(ws.workspacePath ? baseName(ws.workspacePath) : `Workspace.${WORKSPACE.extension}`, WORKSPACE).catch(async (e) => { await showError(String(e)); return null; });
+    if (!target || target.ref.kind !== 'path') return;
+    path = target.ref.path;
+  }
+  await ws.saveWorkspace(path, workspaceChoices);
+}
+async function openWorkspace(): Promise<void> {
+  finishTyping();
+  const f = await openBytesDialog('Workspaces', [WORKSPACE]).catch(async (e) => { await showError(String(e)); return null; });
+  if (f && f.ref.kind === 'path') await ws.openWorkspace(new TextDecoder().decode(f.bytes), f.ref.path);
 }
 
 // Newer versions of the desktop app (File > Check for Updates…, Edit > Preferences)

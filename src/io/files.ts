@@ -181,6 +181,16 @@ export async function writeFile(ref: FileRef, name: string, data: string | Uint8
   }
 }
 
+/** Read a file by its path (desktop app only). */
+export async function readPath(path: string): Promise<Uint8Array> {
+  return new Uint8Array(await invoke<ArrayBuffer>('read_binary_file', { path }));
+}
+
+/** Whether a file is there already (desktop app only). */
+export async function pathExists(path: string): Promise<boolean> {
+  return invoke<boolean>('path_exists', { path });
+}
+
 /** Can Save write back to this file without asking? */
 export function canSaveInPlace(ref: FileRef): boolean {
   return ref.kind !== 'none';
