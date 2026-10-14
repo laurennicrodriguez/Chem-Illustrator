@@ -810,3 +810,18 @@ dialog.prop-dialog { width: min(94vw, 520px); }
 .dp-input { width: 100%; padding: 2px 5px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; }
 .dp-input:focus, #doc-section select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .dp-note { margin: 2px 0 6px; }
+
+/* Document mode: Find and Replace, floating over the top right of the pages */
+.doc-find { position: absolute; top: 8px; right: 22px; z-index: 6; width: 330px; max-width: calc(100% - 44px); display: flex; flex-direction: column; gap: 5px;
+  padding: 7px 8px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18); font-size: 12px; }
+.doc-find[hidden], .doc-find [hidden] { display: none; }
+.df-row { display: flex; align-items: center; gap: 4px; }
+.df-replace { display: flex; flex-direction: column; gap: 5px; }
+.doc-find input[type=search], .doc-find input[type=text] { flex: 1 1 auto; min-width: 0; font: inherit; padding: 3px 6px; }
+.doc-find button { padding: 2px 7px; min-width: 24px; }
+.df-toggle { min-width: 18px !important; padding: 2px 3px !important; }
+.df-count { min-width: 56px; text-align: right; font-variant-numeric: tabular-nums; }
+.df-opts { gap: 12px; padding-left: 22px; }
+.df-look { flex-wrap: wrap; padding-left: 22px; }
+.df-look button[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.df-hint { margin: 0; padding-left: 22px; font-size: 11px; }

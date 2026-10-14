@@ -19,6 +19,7 @@ import { loadSpeller, type Speller } from '../text/spelling';
 import { paraAt, paraRange, splitParagraphs } from '../text/paragraphs';
 import { DocView, ACTUAL, type Overlay } from './doc-view';
 import { DocPanel, DOC_FONTS } from './doc-panel';
+import { DocFind } from './doc-find';
 import { ask } from './ask';
 import { dataUrl, imageSize } from '../render/images';
 import type { DocFile } from '../document/doc-file';
@@ -82,7 +83,7 @@ export class DocumentMode {
   private checkCache = new Map<string, { spell: [number, number][]; issues: Issue[] }>();
   private checked: { t: DocText; spell: [number, number][]; issues: Issue[] } | null = null;
   private menu: HTMLDivElement | null = null;
-  private found: [number, number][] = [];
+  private finder: DocFind;
   /** The last copy made here: pasting the same text back brings its figures and fields too. */
   private clip: { text: string; runs: TextRun[]; paras: ParaStyle[]; objects: Record<number, DocObject> } | null = null;
   private readonly closeMenuOutside = (e: Event) => { if (this.menu && !this.menu.contains(e.target as Node)) this.closeMenu(); };
@@ -103,6 +104,12 @@ export class DocumentMode {
     this.ta.setAttribute('autocapitalize', 'off');
     this.ta.wrap = 'off';
     docHost.append(this.ta);
+    this.finder = new DocFind(docHost, {
+      file: () => this.file,
+      focus: () => this.focus(),
+      flash: (msg, ms) => this.host.flash(msg, ms),
+      redraw: () => this.view.redraw(),
+    });
     this.panel = new DocPanel($('#doc-body'), {
       file: () => this.file,
       run: (cmd) => this.run(cmd),
@@ -161,6 +168,7 @@ export class DocumentMode {
     t.sheetState = { zoom: this.view.zoom, top: this.view.scroller.scrollTop, left: this.view.scroller.scrollLeft };
     t.document.listener = () => {};
     this.closeMenu();
+    this.finder.close(false);
   }
 
   focus(): void {
@@ -183,8 +191,8 @@ export class DocumentMode {
     if (kind === 'text') {
       this.view.sizeSpace();
       this.host.changed();
-      this.found = [];
-    }
+      if (this.finder.open) this.finder.refresh();
+    } else if (this.finder.open) this.finder.showCount();
     if (kind === 'text' || !this.ed.composing) this.syncInput();
     this.revealCaret();
     this.placeInput();
@@ -240,7 +248,7 @@ export class DocumentMode {
       caret: c,
       squiggles,
       picked,
-      found: this.found,
+      found: this.finder.open ? this.finder.hits : [],
     };
   }
 
@@ -764,7 +772,7 @@ export class DocumentMode {
       case 'zoom-out': this.view.setZoom(this.view.zoom * 0.8); this.showZoom(); break;
       case 'zoom-fit': this.view.fitWidth(); this.showZoom(); break;
       case 'zoom-actual': this.view.setZoom(ACTUAL); this.showZoom(); break;
-      case 'find': case 'replace': this.find(cmd === 'replace'); break;
+      case 'find': case 'replace': this.find(cmd === 'replace'); return true;
       case 'paste': void this.paste(null); break;
       case 'copy': case 'cut': this.focus(); document.execCommand(cmd); break;
       case 'numbers-s': {
@@ -783,7 +791,7 @@ export class DocumentMode {
 
   /** Find, and Find and Replace (Ctrl+F, Ctrl+H). */
   find(replace: boolean): void {
-    this.host.flash(replace ? 'Replace is being built.' : 'Find is being built.');
+    this.finder.show(replace);
   }
 
   /** A picture dropped on the pages: it goes in the text at the caret. */

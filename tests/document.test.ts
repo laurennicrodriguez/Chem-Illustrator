@@ -14,6 +14,7 @@ import { TextEditing } from '../src/text/editing';
 import { paraFromStyle } from '../src/document/document';
 import type { ParaStyle, TextRun } from '../src/model';
 import { recordPages, placeItems } from '../src/document/doc-paint';
+import { parseLength, showLength } from '../src/ui/doc-panel';
 import type { Item } from '../src/render/vector';
 import type { Picture } from '../src/render/picture';
 
@@ -306,5 +307,31 @@ describe('printing (PDF)', () => {
     expect(line.stroke!.width).toBe(0.5);
     expect(label).toMatchObject({ x: 125, y: 212.5, size: 5 });
     expect(label.widths[0]).toBeCloseTo(3.89, 6);
+  });
+});
+
+describe('lengths typed in the Format panel', () => {
+  it('reads a bare number in the panel\'s unit, or any unit typed after it', () => {
+    expect(parseLength('1', 'in')).toBe(72);
+    expect(parseLength('1.5 in', 'pt')).toBe(108);
+    expect(parseLength('2"', 'pt')).toBe(144);
+    expect(parseLength('2.54 cm', 'in')).toBeCloseTo(72, 6);
+    expect(parseLength('25.4mm', 'in')).toBeCloseTo(72, 6);
+    expect(parseLength('12 pt', 'in')).toBe(12);
+    expect(parseLength('.5', 'in')).toBe(36);
+    expect(parseLength('-0.25', 'in')).toBe(-18);
+  });
+
+  it('refuses what isn\'t a length', () => {
+    expect(parseLength('', 'in')).toBeNull();
+    expect(parseLength('wide', 'in')).toBeNull();
+    expect(parseLength('1 furlong', 'in')).toBeNull();
+  });
+
+  it('shows lengths without needless decimals', () => {
+    expect(showLength(72, 'in')).toBe('1');
+    expect(showLength(90, 'in')).toBe('1.25');
+    expect(showLength(72, 'cm')).toBe('2.54');
+    expect(showLength(10.5, 'pt')).toBe('10.5');
   });
 });
