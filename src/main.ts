@@ -2867,10 +2867,12 @@ async function openPreferences(): Promise<void> {
   const r = await ask('Preferences', [
     { name: 'methyl', label: 'Terminal methyls written as', value: editor.options.methylStyle, options: [{ value: 'Me', label: 'Me' }, { value: 'CH3', label: 'CH3' }] },
     { name: 'axial', label: 'Axial chirality written as', value: axialStyle.helicity ? 'PM' : 'RaSa', options: [{ value: 'RaSa', label: 'Ra / Sa' }, { value: 'PM', label: 'P / M (helicity)' }] },
+    { name: 'charges', label: 'Charges from the + and − keys', value: editor.options.circledCharges ? 'circled' : 'plain', options: [{ value: 'plain', label: 'Plain sign (N+)' }, { value: 'circled', label: 'In a circle (⊕, ⊖)' }] },
     { name: 'ask', label: 'Ask before changing every structure on the page when nothing is selected', type: 'checkbox', value: String(askWholeDrawing) },
-  ], { ok: 'Save', note: 'Show Terminal Methyls writes them this way; methyls already written out in the selection (or the whole drawing, with nothing selected) change too. Axial chirality labels (biaryls, allenes) follow the choice at once; Ra is the same as M, and Sa as P.' });
+  ], { ok: 'Save', note: 'Charges already drawn keep their look; the circle tools on the Object toolbox always draw a circled charge. Show Terminal Methyls writes them this way; methyls already written out in the selection (or the whole drawing, with nothing selected) change too. Axial chirality labels (biaryls, allenes) follow the choice at once; Ra is the same as M, and Sa as P.' });
   if (!r) return;
   askWholeDrawing = r.ask === 'true';
+  editor.options.circledCharges = r.charges === 'circled';
   showHelicity(r.axial === 'PM');
   if (r.methyl !== editor.options.methylStyle) chooseMethylStyle(r.methyl as MethylStyle);
   else storeSettings();
@@ -2905,6 +2907,7 @@ function storeSettings(): void {
     citeOptions: preferredStyle().options,
     methylStyle: editor.options.methylStyle,
     axialStyle: axialStyle.helicity ? 'PM' : 'RaSa',
+    circledCharges: editor.options.circledCharges,
     askWholeDrawing,
     palettes: getPalettes(),
     toolboxes: toolboxState,
@@ -3025,6 +3028,7 @@ void loadSettings().then((s) => {
   setPreferredStyle(s.citeStyle, s.citeOptions);
   editor.options.methylStyle = s.methylStyle;
   showHelicity(s.axialStyle === 'PM');
+  editor.options.circledCharges = s.circledCharges;
   askWholeDrawing = s.askWholeDrawing;
   setPalettes(s.palettes);
   toolboxState = s.toolboxes;

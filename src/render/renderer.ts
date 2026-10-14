@@ -633,7 +633,7 @@ export class Renderer {
           if (f !== curFont) { ctx.font = f; curFont = f; }
           ctx.fillText(r.text, a.x + r.dx, a.y + r.dy);
         }
-      } else if (a.charge && a.z === 6 && !a.hideCharge, !!a.showCarbon) {
+      } else if (a.charge && a.z === 6 && !a.hideCharge) {
         this.drawCarbonCharge(ctx, doc, a);
       }
       if (a.showNumber && a.atomNumber) curFont = this.drawAtomNumber(ctx, doc, a, curFont);
