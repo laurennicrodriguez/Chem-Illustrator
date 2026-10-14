@@ -41,9 +41,41 @@ export function isGenericLabel(label: string): boolean {
 
 // Formula-like entries (CO2Me, NO2, CF3…) are shown as their elements so they can be
 // reversed the ChemDraw way (MeO2C, O2N, F3C); true abbreviations stay whole.
-const NICK_NAMES = Object.keys(NICKNAMES)
+const nickNames = () => Object.keys(NICKNAMES)
   .filter((k) => !/^[CNOSB][A-Z0-9]/.test(k))
   .sort((a, b) => b.length - a.length);
+let NICK_NAMES = nickNames();
+
+/** The built-in nicknames, which one of the person's own can't replace. */
+const BUILT_IN = new Set(Object.keys(NICKNAMES));
+
+/** Is this one of the program's own nicknames (Boc, Ph, TBS…)? */
+export const isBuiltInNickname = (name: string): boolean => BUILT_IN.has(name);
+
+/**
+ * Add nicknames of the person's own (or ones a drawing brings with it): name → SMILES, the
+ * first atom being where it joins. Built-in names are left as they are. Returns the names added.
+ */
+export function addNicknames(more: Record<string, string>): string[] {
+  const added: string[] = [];
+  for (const [name, smi] of Object.entries(more)) {
+    if (!name || BUILT_IN.has(name) || typeof smi !== 'string' || !smi) continue;
+    NICKNAMES[name] = smi;
+    nickCache.delete(name);
+    added.push(name);
+  }
+  if (added.length) { NICK_NAMES = nickNames(); graphCache.clear(); }
+  return added;
+}
+
+/** Take away a nickname of the person's own. */
+export function removeNickname(name: string): void {
+  if (BUILT_IN.has(name) || !(name in NICKNAMES)) return;
+  delete NICKNAMES[name];
+  nickCache.delete(name);
+  NICK_NAMES = nickNames();
+  graphCache.clear();
+}
 
 export interface Token {
   kind: 'el' | 'nick' | 'generic' | 'other';

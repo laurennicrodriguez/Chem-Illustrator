@@ -29,7 +29,9 @@ import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, 
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
 import { StylePanel } from './ui/style-panel';
-import { TEMPLATES, Template, templateById } from './chem/templates';
+import { TEMPLATES, Template, templateById, ownTemplates, setOwnTemplates, templateFromAtoms } from './chem/templates';
+import { addNicknames, removeNickname, isBuiltInNickname } from './chem/labels';
+import { selectedGroup } from './chem/group-smiles';
 import { templateIcon } from './ui/template-icons';
 import { StructureChecks } from './chem/warnings';
 import { LiveStereo } from './chem/live-stereo';
@@ -167,6 +169,17 @@ const SYMBOLS: PaletteDef = {
   ],
 };
 
+// The person's own templates; the first button saves the selected structure as a new one
+const OWN_ADD = 'own-template-add';
+const OWN_PALETTE: PaletteDef = {
+  palette: 'tpl-own',
+  title: 'My templates',
+  items: [{ name: OWN_ADD, title: 'Save the selected structure as a template of your own' }],
+  columns: 4,
+  large: true,
+  icon: (name, size) => { const t = templateById(name.slice(4)); return t ? templateIcon(t, size) : name; },
+};
+
 // Template palettes, one per kind of structure
 const templatePalette = (group: Template['group'], palette: string, title: string, columns: number, iconSize?: number): PaletteDef => ({
   palette,
@@ -212,6 +225,7 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     templatePalette('heterocycles', 'tpl-heterocycles', 'Heterocycles', 7),
     templatePalette('amino', 'tpl-amino', 'Amino acids', 5, 64),
     templatePalette('sugars', 'tpl-sugars', 'Sugars and chair', 4, 64),
+    OWN_PALETTE,
   ],
   [
     { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption' },
@@ -240,7 +254,11 @@ for (const group of TOOL_GROUPS) {
 registerToolNames(toolNames);
 
 const periodicTable = new PeriodicTable((z) => editor.pickElement(z), () => editor.element);
-const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => { editor.setTool(name); if (name === 'element') periodicTable.open(); }, (name) => {
+const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => {
+  if (name === OWN_ADD) { void saveTemplate(); return; }
+  editor.setTool(name);
+  if (name === 'element') periodicTable.open();
+}, (name) => {
   const keys = keysOf('space', `tool ${name}`);
   return keys.length ? ` (${keys.join(', ')})` : '';
 });
@@ -494,6 +512,88 @@ editor.askChainLength = async (last) => {
   const n = got ? Math.round(Number(got.n)) : NaN;
   return n >= 1 ? n : null;
 };
+
+// ---------------------------------------------------------------- your own templates and nicknames
+
+/** Nicknames the person defined (kept in the settings file). */
+let ownNicknames: Record<string, string> = {};
+
+/** Put these templates in the My templates palette. */
+function useOwnTemplates(list: Template[]): void {
+  setOwnTemplates(list);
+  for (const name of Object.keys(TOOLS)) if (name.startsWith('tpl-own-')) delete TOOLS[name];
+  for (const t of ownTemplates()) TOOLS[`tpl-${t.id}`] = { kind: 'template', id: t.id };
+  OWN_PALETTE.items = [OWN_PALETTE.items[0], ...ownTemplates().map((t) => ({ name: `tpl-${t.id}`, title: t.name }))];
+  toolbar.refreshTitles();
+}
+
+/** Structure > Save as Template: the selected structure goes into My templates. */
+async function saveTemplate(): Promise<void> {
+  const ids = [...editor.sel.atoms];
+  if (!ids.length) { flash('Select a structure first, then save it as a template.'); return; }
+  const got = await ask('Save as Template', [{ name: 'name', label: 'Name', value: '' }],
+    { ok: 'Save', note: 'The selected structure goes into My templates on the tool bar (the last template palette). It is kept in your settings file, so it is there every time.' });
+  const name = got?.name.trim();
+  if (!name) return;
+  const t = templateFromAtoms(doc, ids, name, `own-${Date.now().toString(36)}`);
+  if (!t) { flash('Nothing to save: select atoms and bonds.'); return; }
+  useOwnTemplates([...ownTemplates(), t]);
+  storeSettings();
+  editor.setTool(`tpl-${t.id}`);
+  flash(`Saved “${name}” in My templates. Click to place it, a bond to fuse it, or an atom to join it.`, 6000);
+}
+
+/** Structure > Delete Template…: take one of your own templates away. */
+async function deleteTemplate(): Promise<void> {
+  const list = ownTemplates();
+  if (!list.length) { flash('You have no templates of your own yet (Structure > Save as Template).'); return; }
+  const got = await ask('Delete Template', [{ name: 'id', label: 'Template', value: list[list.length - 1].id, options: list.map((t) => ({ value: t.id, label: t.name })) }], { ok: 'Delete' });
+  if (!got) return;
+  useOwnTemplates(list.filter((t) => t.id !== got.id));
+  if (editor.toolName === `tpl-${got.id}`) editor.setTool('bond-single');
+  storeSettings();
+}
+
+/** Structure > Define Nickname…: the selected group gets a name that can be typed as a label. */
+async function defineNickname(): Promise<void> {
+  const g = selectedGroup(doc, editor.sel.atoms);
+  if ('error' in g) { flash(g.error, 6000); return; }
+  const got = await ask('Define Nickname', [{ name: 'name', label: 'Nickname', value: '' }],
+    { ok: 'Define', note: `Select a group that hangs off a structure by one bond. Its nickname can then be typed as an atom label (like Boc or TBS), with the formula and mass worked out. The group is ${g.smiles}.` });
+  const name = got?.name.trim();
+  if (!name) return;
+  if (isBuiltInNickname(name)) { flash(`“${name}” is already a nickname. Choose another name.`, 6000); return; }
+  if (/\s/.test(name)) { flash('A nickname can\'t have spaces in it.'); return; }
+  ownNicknames = { ...ownNicknames, [name]: g.smiles };
+  addNicknames({ [name]: g.smiles });
+  storeSettings();
+  flash(`“${name}” can now be typed as a label.`, 5000);
+}
+
+/** Structure > Delete Nickname…: take one of your own nicknames away. */
+async function deleteNickname(): Promise<void> {
+  const names = Object.keys(ownNicknames);
+  if (!names.length) { flash('You have no nicknames of your own yet (Structure > Define Nickname).'); return; }
+  const got = await ask('Delete Nickname', [{ name: 'name', label: 'Nickname', value: names[0], options: names.map((n) => ({ value: n, label: `${n}  (${ownNicknames[n]})` })) }], { ok: 'Delete' });
+  if (!got) return;
+  const { [got.name]: _, ...rest } = ownNicknames;
+  ownNicknames = rest;
+  removeNickname(got.name);
+  renderer.repaintAll();
+  editor.requestScene();
+  storeSettings();
+}
+
+/** Structure > Contract Label…: fold the selected group into one label (Undo opens it again). */
+async function contractLabel(): Promise<void> {
+  const g = selectedGroup(doc, editor.sel.atoms);
+  if ('error' in g) { flash(g.error, 6000); return; }
+  const got = await ask('Contract Label', [{ name: 'name', label: 'Label', value: '' }],
+    { ok: 'Contract', note: 'The selected group becomes one label with this name. The formula and mass still count the whole group, and ChemDraw sees the group inside the label.' });
+  if (!got) return;
+  const err = editor.contractLabel(got.name);
+  if (err) flash(err, 6000);
+}
 
 const arrangeDialog = new ArrangeDialog({ apply: (o) => editor.arrangeScheme(o), undo: () => editor.undo() });
 const nameDialog = new NameDialog(async (name) => {
@@ -1734,6 +1834,11 @@ const COMMANDS: Record<string, () => unknown> = {
   'number-compounds': () => void numberCompounds(),
   'bring-front': () => editor.setBondLayer(true) || flash('Select the bond to bring to the front (where bonds cross, the one behind has a gap).'),
   'send-back': () => editor.setBondLayer(false) || flash('Select the bond to send to the back (where bonds cross, the one behind has a gap).'),
+  'save-template': () => void saveTemplate(),
+  'delete-template': () => void deleteTemplate(),
+  'define-nickname': () => void defineNickname(),
+  'delete-nickname': () => void deleteNickname(),
+  'contract-label': () => void contractLabel(),
   'chain-ends': () => flash(editor.toggleChainEnds(), 5000),
   'explicit-h': () => flash(editor.toggleHydrogens(), 6000),
   'periodic-table': () => { editor.setTool('element'); periodicTable.open(); },
@@ -1819,6 +1924,8 @@ function storeSettings(): void {
     replacements: typingPrefs.replacements,
     dictionary: typingPrefs.dictionary,
     modeColours,
+    nicknames: ownNicknames,
+    templates: ownTemplates(),
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -1919,6 +2026,9 @@ void loadSettings().then((s) => {
   applyModeColours(ws.active.mode, modeColours);
   keymap.setOverrides(s.hotkeys);
   setTypingPrefs({ chemistry: s.chemTyping, spelling: s.spellCheck, replacements: s.replacements, dictionary: s.dictionary });
+  ownNicknames = s.nicknames;
+  addNicknames(ownNicknames);
+  useOwnTemplates(s.templates);
   settingsLoaded = true;
   refreshKeys();
 });

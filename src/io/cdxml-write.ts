@@ -18,7 +18,7 @@ import { layoutText, SINGLE } from '../text/layout';
 import { runsForChemDraw, TEXT_TAG } from '../text/chemdraw-text';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { fromDataUrl } from '../render/images';
-import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG } from './cdxml';
+import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, GROUP_TAG } from './cdxml';
 import { FADE, tint } from '../colours';
 import { layoutTable, cellAlign, isCovered, spanOf, NOTE_SCALE } from '../table';
 import { TABLE_TAG, TABLE_PART_TAG, tableBorders, type TableTag } from './cdxml-table';
@@ -428,6 +428,7 @@ class CdxmlWriter {
     this.nodeLabel(n, a, true);
     this.atomStereo(n, a, true);
     this.atomNumber(n, a);
+    this.atomGroup(n, a);
     return n;
   }
 
@@ -467,6 +468,13 @@ class CdxmlWriter {
     if (o.attach) for (const k of ['NodeType', 'ExternalConnectionType', 'ExternalConnectionNum']) n.removeAttribute(k);
     this.patchNodeBody(n, a, o, dx, dy);
     this.atomNumber(n, a);
+    this.atomGroup(n, a);
+  }
+
+  /** A contracted label keeps the SMILES of its group in a hidden tag (ChemDraw sees the inner fragment). */
+  private atomGroup(n: Element, a: Atom): void {
+    for (const c of kids(n)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === GROUP_TAG) n.removeChild(c);
+    if (a.group && a.label) n.appendChild(this.el('objecttag', { TagType: 'String', Name: GROUP_TAG, Value: a.group, Visible: 'no' }));
   }
 
   private patchNodeBody(n: Element, a: Atom, o: Atom, dx: number, dy: number): void {

@@ -6,6 +6,7 @@ import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, Ster
 import { TEXT_TAG, parseTextTag, runsFromChemDraw } from '../text/chemdraw-text';
 import { DocStyle } from '../style';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
+import { addNicknames } from '../chem/labels';
 import { DEG } from '../geom';
 import { kids, descendants } from './xml';
 import { styleFromFace, isSymbolFont, fromSymbolFont } from '../richtext';
@@ -191,6 +192,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         }
       }
       if (n.getAttribute('ShowAtomStereo') === 'yes') extra.showStereo = true;
+      const groupTag = kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === GROUP_TAG)?.getAttribute('Value');
+      if (groupTag) extra.group = groupTag;
       if (n.getAttribute('ShowTerminalCarbonLabels') === 'yes' || n.getAttribute('ShowNonTerminalCarbonLabels') === 'yes') extra.showCarbon = true;
       const atomNumber = n.getAttribute('AtomNumber');
       if (atomNumber) extra.atomNumber = atomNumber;
@@ -608,6 +611,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       if (!implicitOk) {
         atom.label = text;
         atom.fileLabel = true;
+        // a contracted label brings its group with it, as a nickname for this session
+        if (atom.group) addNicknames({ [text]: atom.group });
         if (hShown === null && atom.z === 6 && /^[A-Z][a-z]?$/.test(text) && elementNumber(text) !== undefined) {
           atom.z = elementNumber(text)!;
           atom.label = null;
@@ -706,6 +711,8 @@ export function isAutoLabel(z: number, text: string, h: number): boolean {
 export const CIRCLE_TAG = 'ci-aromatic-circle';
 /** The tag that keeps a filled shape's fill style and outline colour (ChemDraw has one colour). */
 export const FILL_TAG = 'Chem Illustrator fill';
+/** The tag that keeps a contracted label's group (SMILES), so its chemistry comes back with the file. */
+export const GROUP_TAG = 'Chem Illustrator group';
 export const OWN_PICTURE = 'ChemIllustratorPicture';
 export const OWN_CROP = 'ChemIllustratorCrop';
 

@@ -22,6 +22,7 @@ import { extractDrawing, insertDrawing } from '../io/clipboard';
 import { isReactionArrow, itemFinder, rolesOf, ROLES, schemeItems, type Item, type Role } from '../chem/reaction';
 import { applySchemePlan, planCleanUp } from '../chem/scheme-layout';
 import { toggleChainEndLabels, toggleExplicitHydrogens } from '../chem/hydrogens';
+import { selectedGroup } from '../chem/group-smiles';
 import { circleRing, circleRings, kekulize } from '../chem/aromatic';
 import { bondLayer, crossingBonds } from '../chem/crossing';
 import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
@@ -29,7 +30,7 @@ import { pushArrow, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from 
 import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
 import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, rotation, mirrorX, mirrorY } from './arrange';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
-import { tokenize } from '../chem/labels';
+import { tokenize, addNicknames, isBuiltInNickname } from '../chem/labels';
 import {
   Handle, arrowHit, shapeHit, arrowHandles, shapeHandles, dragArrowHandle, dragShapeHandle, dragCropHandle, shapeBox,
   arrowPoints, bracketsAround, bracketLip, unionRect,
@@ -1526,6 +1527,31 @@ export class Editor {
    * Aromatic rings in the selection (or the whole drawing) drawn with circles, or back as
    * alternating double bonds when they already have circles. Says what it did, or null.
    */
+  /**
+   * Fold the selected group into one label with this name (it keeps its chemistry: the name
+   * becomes a nickname for the group). Returns a problem to tell the person, or null.
+   */
+  contractLabel(name: string): string | null {
+    const doc = this.doc;
+    const g = selectedGroup(doc, this.sel.atoms);
+    if ('error' in g) return g.error;
+    const label = name.trim();
+    if (!label) return 'Type a name for the label.';
+    if (isBuiltInNickname(label)) return `“${label}” is already a nickname (${label} means something else). Choose another name.`;
+    addNicknames({ [label]: g.smiles });
+    const ids = [...this.sel.atoms].filter((id) => id !== g.start && doc.atoms.has(id));
+    doc.edit('Contract Label', () => {
+      for (const id of ids) doc.removeAtom(id);
+      this.applyLabel(g.start, label);
+      doc.updateAtom(g.start, { group: g.smiles });
+    });
+    this.r.invalidate(doc);
+    this.sel = emptySel();
+    this.sel.atoms.add(g.start);
+    this.changed();
+    return null;
+  }
+
   /** Show or hide CH3 at the chain ends of the selection (or the whole drawing). */
   toggleChainEnds(): string {
     let r = { count: 0, shown: false };

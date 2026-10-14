@@ -27,6 +27,8 @@ export interface Atom {
   color?: string;
   /** Size relative to the document style (structures shrunk or enlarged in ChemDraw keep their own scale). */
   s?: number;
+  /** A contracted label: the group it stands for, as SMILES from the atom where it joins (Structure > Contract Label). */
+  group?: string;
   /** A carbon shown with its letter and hydrogens (CH3 at a chain end; ChemDraw's ShowTerminalCarbonLabels). */
   showCarbon?: boolean;
   /** The charge is drawn by a separate circled-charge symbol, so the label leaves it out. */
