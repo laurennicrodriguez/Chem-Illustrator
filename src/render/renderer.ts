@@ -14,7 +14,7 @@ import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
 import type { StructureChecks } from '../chem/warnings';
 import { isGenericLabel } from '../chem/labels';
-import { bracketPath, shaftOffset, shapeOrder, type PathStep } from '../objects';
+import { bracketPath, shaftOffset, shapeOrder, elbowRoute, type PathStep } from '../objects';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
 import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
@@ -1002,7 +1002,9 @@ export class Renderer {
       this.arrowHead(ctx, head, dir, headStyle, r);
       this.arrowHead(ctx, tail, mul(dir, -1), tailStyle, r);
     };
-    if (r.equilibrium) {
+    if (r.elbow && !r.equilibrium && !r.shaftSpacing) {
+      this.elbowArrow(ctx, r, lw);
+    } else if (r.equilibrium) {
       const d = norm(sub(r.head, r.tail));
       const off = mul(perp(d), -shaftOffset(r));
       shaft(add(r.tail, off), add(r.head, off), 'halfLeft', 'none');
@@ -1020,6 +1022,28 @@ export class Renderer {
       ctx.moveTo(m.x + k, m.y - k); ctx.lineTo(m.x - k, m.y + k);
       ctx.stroke();
     }
+  }
+
+  /** An elbow connector: square bends, with its heads along its first and last legs. */
+  private elbowArrow(ctx: CanvasRenderingContext2D, r: Arrow, lw: number): void {
+    const pts = elbowRoute(r);
+    if (pts.length < 2) return;
+    const n = pts.length;
+    const dirEnd = norm(sub(pts[n - 1], pts[n - 2])), dirStart = norm(sub(pts[0], pts[1]));
+    const hl = r.headLength;
+    const lastLen = len(sub(pts[n - 1], pts[n - 2])), firstLen = len(sub(pts[1], pts[0]));
+    const e = r.headStyle === 'none' ? pts[n - 1] : sub(pts[n - 1], mul(dirEnd, Math.min(hl * 0.7, lastLen * 0.6)));
+    const s0 = r.tailStyle === 'none' ? pts[0] : sub(pts[0], mul(dirStart, Math.min(hl * 0.7, firstLen * 0.6)));
+    ctx.setLineDash(r.line === 'dashed' ? [lw * 4, lw * 3] : []);
+    ctx.lineJoin = 'miter';
+    ctx.beginPath();
+    ctx.moveTo(s0.x, s0.y);
+    for (let i = 1; i < n - 1; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.lineTo(e.x, e.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    this.arrowHead(ctx, pts[n - 1], dirEnd, r.headStyle, r);
+    this.arrowHead(ctx, pts[0], dirStart, r.tailStyle, r);
   }
 
   /** Two shafts ending in an open head (⇒), as used for retrosynthetic steps. */

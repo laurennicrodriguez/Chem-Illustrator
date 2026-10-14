@@ -4,7 +4,7 @@
 
 import { Vec, Rect } from './geom';
 import { DocStyle, ACS_1996 } from './style';
-import { arrowPoints } from './objects';
+import { arrowPoints, gluePoint } from './objects';
 
 /** 'dative' is a coordinate bond, drawn as an arrow from the donor (a1) to the acceptor (a2). */
 export type BondDisplay = 'solid' | 'wedge' | 'hashWedge' | 'hash' | 'bold' | 'dash' | 'wavy' | 'dative';
@@ -275,7 +275,15 @@ export interface Arrow {
   step?: StepRoles;
   /** A small arrow a catalytic cycle drew to bring a reagent into this arrow's step (or take a by-product out). */
   reagentFor?: number;
+  /** A connector's tail and head stuck to shapes' connection points: they follow the shapes. */
+  from?: Glue;
+  to?: Glue;
+  /** Drawn with right-angled bends (an elbow connector). */
+  elbow?: boolean;
 }
+
+/** Where a connector's end is stuck: a shape and its connection point (0 top, 1 right, 2 bottom, 3 left). */
+export interface Glue { shape: number; port: number }
 
 /**
  * The parts of one reaction step, as references: 'a12' the structure holding atom 12, 'c5'
@@ -859,12 +867,26 @@ export class Doc {
     if (!s) return;
     this.touch('s', id);
     this.rawSet('s', id, { ...s, ...patch, id });
+    this.followGlue(id);
   }
 
   removeShape(id: number): void {
     if (!this.shapes.has(id)) return;
     this.touch('s', id);
     this.rawSet('s', id, null);
+    this.followGlue(id);
+  }
+
+  /** Connectors stuck to a shape follow it when it moves or changes size, and come loose when it goes. */
+  private followGlue(id: number): void {
+    const s = this.shapes.get(id);
+    for (const r of this.arrows.values()) {
+      if (r.from?.shape !== id && r.to?.shape !== id) continue;
+      const patch: Partial<Arrow> = {};
+      if (r.from?.shape === id) { if (s) patch.tail = gluePoint(s, r.from.port); else patch.from = undefined; }
+      if (r.to?.shape === id) { if (s) patch.head = gluePoint(s, r.to.port); else patch.to = undefined; }
+      this.updateArrow(r.id, patch);
+    }
   }
 
   /** Replace the whole document (e.g. after opening a file). Clears undo history. */

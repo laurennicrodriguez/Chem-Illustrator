@@ -2,13 +2,78 @@
 // selected arrow or shape shows, and what dragging one of those handles does. Shared by the
 // editor and the renderer.
 
-import type { Arrow, Shape } from './model';
+import type { Arrow, Shape, Glue } from './model';
 import { Vec, Rect, add, sub, mul, perp, dist, dot, len, angleOf, fromAngle, normAngle, snapAngle, distToSegment, arcCenter, DEG } from './geom';
-import { geoDef, flatten, moveSteps, insideOutline, distToOutline } from './design/geo';
+import { geoDef, flatten, moveSteps, insideOutline, distToOutline, ports } from './design/geo';
 
 // ------------------------------------------------------------------ arrows
 
-type Curve = Pick<Arrow, 'tail' | 'head' | 'sweep'>;
+type Curve = Pick<Arrow, 'tail' | 'head' | 'sweep'> & Partial<Pick<Arrow, 'elbow' | 'from' | 'to'>>;
+
+// ------------------------------------------------------------------ connectors
+
+/** Which way out of a shape each connection point faces (top, right, bottom, left). */
+export const PORT_OUT: Vec[] = [{ x: 0, y: -1 }, { x: 1, y: 0 }, { x: 0, y: 1 }, { x: -1, y: 0 }];
+
+/** A shape's connection points (the middles of its sides), or null for lines and brackets. */
+export function shapePorts(s: Shape): Vec[] | null {
+  if (s.kind === 'line' || s.kind === 'bracket' || s.kind === 'symbol') return null;
+  const b = shapeBox(s);
+  return ports(b.x1, b.y1, b.x2, b.y2);
+}
+
+export function gluePoint(s: Shape, port: number): Vec {
+  const p = shapePorts(s);
+  if (!p) return { x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 };
+  return p[Math.max(0, Math.min(p.length - 1, port))];
+}
+
+/** The connection point nearest `p` within `tol`, on any shape that has them (the top one first). */
+export function portNear(shapes: Iterable<Shape>, p: Vec, tol: number, skip?: number): (Glue & { at: Vec }) | null {
+  let best: (Glue & { at: Vec }) | null = null, bd = tol;
+  for (const s of shapes) {
+    if (s.id === skip) continue;
+    const ps = shapePorts(s);
+    if (!ps) continue;
+    ps.forEach((q, i) => {
+      const d = dist(q, p);
+      if (d <= bd) { bd = d; best = { shape: s.id, port: i, at: q }; }
+    });
+  }
+  return best;
+}
+
+/**
+ * An elbow connector's corners, tail to head: out of each shape square to its side (a short
+ * stub), then across and along, as Visio and PowerPoint route them.
+ */
+export function elbowRoute(r: Curve): Vec[] {
+  const stub = 12;
+  const outT = r.from ? PORT_OUT[r.from.port] : null, outH = r.to ? PORT_OUT[r.to.port] : null;
+  const dx = r.head.x - r.tail.x, dy = r.head.y - r.tail.y;
+  const horiz = (v: Vec | null, fallback: boolean) => (v ? v.x !== 0 : fallback);
+  const across = Math.abs(dx) >= Math.abs(dy);
+  const a = outT ? add(r.tail, mul(outT, stub)) : r.tail;
+  const b = outH ? add(r.head, mul(outH, stub)) : r.head;
+  const sh = horiz(outT, across), eh = horiz(outH, across);
+  let mid: Vec[];
+  if (sh && eh) { const mx = (a.x + b.x) / 2; mid = [{ x: mx, y: a.y }, { x: mx, y: b.y }]; }
+  else if (!sh && !eh) { const my = (a.y + b.y) / 2; mid = [{ x: a.x, y: my }, { x: b.x, y: my }]; }
+  else if (sh) mid = [{ x: b.x, y: a.y }];
+  else mid = [{ x: a.x, y: b.y }];
+  const pts = [r.tail, a, ...mid, b, r.head];
+  // drop repeated points and the middle of three in a line
+  const out: Vec[] = [];
+  for (const p of pts) {
+    if (out.length && dist(out[out.length - 1], p) < 0.01) continue;
+    if (out.length >= 2) {
+      const u = out[out.length - 2], v = out[out.length - 1];
+      if (Math.abs((v.x - u.x) * (p.y - v.y) - (v.y - u.y) * (p.x - v.x)) < 0.01 && dot(sub(v, u), sub(p, v)) >= 0) out.pop();
+    }
+    out.push(p);
+  }
+  return out;
+}
 
 /** Point halfway along an arrow (on the arc, for curved arrows). */
 export function arrowMid(r: Curve): Vec {
@@ -33,6 +98,7 @@ export function sweepThrough(tail: Vec, head: Vec, p: Vec): number {
 
 /** Points along an arrow's line (two for a straight arrow), for highlighting and bounds. */
 export function arrowPoints(r: Curve, steps = 24): Vec[] {
+  if (r.elbow) return elbowRoute(r);
   if (!r.sweep) return [r.tail, r.head];
   const { center, radius } = arcCenter(r.tail, r.head, r.sweep);
   const a0 = angleOf(sub(r.tail, center));
@@ -52,6 +118,11 @@ export function arrowBox(r: Arrow): Rect {
 }
 
 export function arrowHit(r: Arrow, p: Vec, tol: number): boolean {
+  if (r.elbow) {
+    const pts = elbowRoute(r);
+    for (let i = 1; i < pts.length; i++) if (distToSegment(p, pts[i - 1], pts[i]) <= tol) return true;
+    return false;
+  }
   if (!r.sweep) return distToSegment(p, r.tail, r.head) <= tol + shaftOffset(r);
   const { center, radius } = arcCenter(r.tail, r.head, r.sweep);
   if (Math.abs(dist(p, center) - radius) > tol) return false;
@@ -182,7 +253,8 @@ export interface Handle {
 
 export function arrowHandles(r: Arrow): Handle[] {
   const h = (which: HandleId, at: Vec): Handle => ({ kind: 'arrow', id: r.id, which, at });
-  return [h('tail', r.tail), h('head', r.head), h('mid', arrowMid(r))];
+  // an elbow connector's bends follow its ends, so it has no middle handle
+  return r.elbow ? [h('tail', r.tail), h('head', r.head)] : [h('tail', r.tail), h('head', r.head), h('mid', arrowMid(r))];
 }
 
 export function shapeHandles(s: Shape): Handle[] {
