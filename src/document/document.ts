@@ -278,10 +278,14 @@ export function objectOffsets(runs: TextRun[]): Map<number, number> {
   return out;
 }
 
+/** What compound numbers count: each new compound gets the next number, in order of first mention. */
+export const COMPOUND = 'Compound';
+
 /**
  * What each field shows: a caption's number counts the captions of its name before it (the
  * third Figure caption shows 3); a reference shows its caption's label and number, as Word's
  * "label and number" does: the caption's text from its start up to the number ("Figure S3").
+ * A reference to a compound shows just its number.
  */
 export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'>): Map<number, string> {
   const shown = new Map<number, string>();
@@ -302,6 +306,8 @@ export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'>): Map<number, st
       if (o?.kind !== 'ref') continue;
       const target = at.get(o.target);
       if (target === undefined || !shown.has(o.target)) { shown.set(id, 'Error! Reference source not found.'); continue; }
+      const seq = t.objects[o.target];
+      if (seq?.kind === 'seq' && seq.name === COMPOUND) { shown.set(id, shown.get(o.target)!); continue; }
       shown.set(id, labelText(text, target, (i) => objectAtChar(t.runs, i), shown).trim());
     }
   }

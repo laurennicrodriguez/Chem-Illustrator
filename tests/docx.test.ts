@@ -14,7 +14,7 @@ import { cfbStreams, isCfb } from '../src/io/cfb';
 import { cdxmlToCdx, cdxToCdxml } from '../src/io/cdx';
 import { readCdxml } from '../src/io/cdxml';
 import {
-  newDocument, runStyleOf, paraFromStyle, captionRuns, objectRun, documentPlainText, fieldTexts, type DocText,
+  COMPOUND, newDocument, runStyleOf, paraFromStyle, captionRuns, objectRun, documentPlainText, fieldTexts, type DocText,
 } from '../src/document/document';
 import * as rt from '../src/richtext';
 import type { Contents, ParaStyle, TableData, TextRun } from '../src/model';
@@ -204,6 +204,26 @@ describe('opening Word files saved here', () => {
     const shown = fieldTexts(doc);
     const ref = Object.entries(doc.objects).find(([, o]) => o.kind === 'ref')!;
     expect(shown.get(Number(ref[0]))).toBe('Scheme S1');
+  });
+
+  it('brings back compound numbers and their mentions, the bookmark round just the number', async () => {
+    const d = newDocument();
+    const n = runStyleOf(d.styles.Normal), b = { ...n, bold: true };
+    const doc: DocText = {
+      ...d, paras: [{}],
+      runs: [{ ...n, text: 'Ester ' }, objectRun(1, b), { ...n, text: ' gave acid ' }, objectRun(2, b), { ...n, text: '; acid ' }, objectRun(3, b), { ...n, text: ' is a solid.' }],
+      objects: { 1: { kind: 'seq', name: COMPOUND }, 2: { kind: 'seq', name: COMPOUND }, 3: { kind: 'ref', target: 2 } },
+    };
+    const bytes = await writeDocx(doc, deps);
+    const body = parts(bytes)['word/document.xml'];
+    // Word shows "Ester 1 gave acid 2; acid 2 is a solid." and updates the mention to the number alone
+    expect(body).toMatch(/<w:bookmarkStart w:id="\d+" w:name="_Ref100000002"\/><w:r><w:rPr><w:b\/><w:bCs\/><\/w:rPr><w:fldChar w:fldCharType="begin"\/>/);
+    expect(body).toMatch(/<w:t xml:space="preserve">2<\/w:t><\/w:r><w:r><w:rPr><w:b\/><w:bCs\/><\/w:rPr><w:fldChar w:fldCharType="end"\/><\/w:r><w:bookmarkEnd/);
+    const back = (await readDocx(bytes)).doc;
+    expect(documentPlainText(back)).toBe('Ester 1 gave acid 2; acid 2 is a solid.');
+    const kinds = Object.values(back.objects).map((o) => o.kind === 'seq' ? `seq:${o.name}` : o.kind);
+    expect(kinds).toEqual(['seq:Compound', 'seq:Compound', 'ref']);
+    expect(back.runs.filter((r) => r.obj !== undefined).every((r) => r.bold)).toBe(true);
   });
 
   it('keeps a structure\'s size when it was made smaller', async () => {

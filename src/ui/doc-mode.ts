@@ -24,7 +24,7 @@ import { ask } from './ask';
 import { dataUrl, imageSize } from '../render/images';
 import type { DocFile } from '../document/doc-file';
 import {
-  A4, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, captionRuns, nextObjectId, objectRun, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets,
+  A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, captionRuns, nextObjectId, objectRun, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets,
   type DocObject, type DocText, type NumberPlace, type PageSetup,
 } from '../document/document';
 
@@ -671,12 +671,12 @@ export class DocumentMode {
   // ---------------------------------------------------------------- figures
 
   /** Put an object into the text at the caret (in place of the selection), and pick it. */
-  insertObject(o: DocObject, kind = 'Insert'): number {
+  insertObject(o: DocObject, kind = 'Insert', look: Partial<rt.RunStyle> = {}): number {
     const f = this.file!;
     const ed = f.ed;
     const id = nextObjectId(f.t);
     ed.update({ ...f.t, objects: { ...f.t.objects, [id]: o } } as DocText, kind);
-    const style = ed.typingStyle();
+    const style = { ...ed.typingStyle(), ...look };
     const at = ed.start;
     ed.replace(ed.start, ed.end, [objectRun(id, style)], undefined, kind);
     // a figure alone in its paragraph is centred, as journals set them
@@ -767,6 +767,7 @@ export class DocumentMode {
       case 'insert-table': void this.insertTable(); break;
       case 'insert-caption': void this.insertCaption(); break;
       case 'cross-reference': void this.crossReference(); break;
+      case 'compound-number': void this.compoundNumber(); break;
       case 'edit-figure': { const id = this.pickedObject(); if (id === null) { this.host.flash('Click a structure or scheme first, then Edit Drawing (or double-click it).'); break; } this.editFigure(id); break; }
       case 'zoom-in': this.view.setZoom(this.view.zoom * 1.25); this.showZoom(); break;
       case 'zoom-out': this.view.setZoom(this.view.zoom * 0.8); this.showZoom(); break;
@@ -922,7 +923,8 @@ export class DocumentMode {
     const shown = fieldTexts(f.t);
     const at = objectOffsets(f.t.runs);
     const text = f.ed.text;
-    const caps = [...at.entries()].filter(([id]) => f.t.objects[id]?.kind === 'seq').sort((a, b) => a[1] - b[1]).map(([id, off]) => {
+    const isCaption = (id: number) => { const o = f.t.objects[id]; return o?.kind === 'seq' && o.name !== COMPOUND; };
+    const caps = [...at.entries()].filter(([id]) => isCaption(id)).sort((a, b) => a[1] - b[1]).map(([id, off]) => {
       const start = text.lastIndexOf('\n', off - 1) + 1;
       const end = text.indexOf('\n', off);
       const words = text.slice(start, end < 0 ? text.length : end).replace(OBJECT_CHAR, shown.get(id) ?? '');
@@ -935,6 +937,47 @@ export class DocumentMode {
     this.focus();
     if (!got || this.file !== f) return;
     this.insertObject({ kind: 'ref', target: Number(got.target) }, 'Insert cross-reference');
+  }
+
+  /**
+   * References > Compound Number: a new compound's number (the next one, in bold), or another
+   * mention of a compound already numbered. Numbers follow the order compounds are first
+   * mentioned in, so they change by themselves when text is added or moved.
+   */
+  private async compoundNumber(): Promise<void> {
+    const f = this.file!;
+    const shown = fieldTexts(f.t);
+    const at = objectOffsets(f.t.runs);
+    const text = f.ed.text;
+    const ed = f.ed;
+    const compounds = [...at.entries()].filter(([id]) => { const o = f.t.objects[id]; return o?.kind === 'seq' && o.name === COMPOUND; })
+      .sort((a, b) => a[1] - b[1]);
+    // where each is first mentioned, to tell them apart: the words before its number, with the numbers in them
+    const idAt = new Map([...at.entries()].map(([id, off]) => [off, id]));
+    const options = compounds.map(([id, off]) => {
+      const start = Math.max(text.lastIndexOf('\n', off - 1) + 1, off - 40);
+      let before = '';
+      for (let i = start; i < off; i++) before += text[i] === OBJECT_CHAR ? shown.get(idAt.get(i) ?? -1) ?? '' : text[i];
+      before = before.trim();
+      return { value: String(id), label: `${shown.get(id)}${before ? `: …${before} ${shown.get(id)}` : ''}` };
+    });
+    // the number the new compound would get: one more than the compounds before the caret
+    const next = compounds.filter(([, off]) => off < ed.start).length + 1;
+    const got = await ask('Compound Number', [{
+      name: 'which', label: 'Compound', value: 'new',
+      options: [{ value: 'new', label: `A new compound (${next})` }, ...options],
+    }], {
+      ok: 'Insert',
+      note: 'Compounds are numbered in the order they are first mentioned, in bold. Choose one already numbered to mention it again: '
+        + 'its number follows if the numbers change. Type a letter after a number for a series (2a, 2b).',
+    });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const before = ed.typingStyle();
+    if (got.which === 'new') this.insertObject({ kind: 'seq', name: COMPOUND }, 'Insert compound number', { bold: true });
+    else this.insertObject({ kind: 'ref', target: Number(got.which) }, 'Insert compound number', { bold: true });
+    // what is typed next looks as it did before the number
+    ed.setStyle({ bold: before.bold });
   }
 
   // ---------------------------------------------------------------- the ribbon

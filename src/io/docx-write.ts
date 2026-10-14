@@ -11,7 +11,7 @@ import * as rt from '../richtext';
 import { Package, REL, NS, xml, hex6, emu } from './ooxml';
 import { fromDataUrl } from '../render/images';
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
-import { OBJECT_CHAR, fieldTexts, pruneObjects, styleOf, type DocObject, type DocText, type NamedStyle } from '../document/document';
+import { COMPOUND, OBJECT_CHAR, fieldTexts, pruneObjects, styleOf, type DocObject, type DocText, type NamedStyle } from '../document/document';
 import { shownSize } from '../document/doc-layout';
 import { PAD_X, PAD_Y, cellAlign, isCovered, spanOf } from '../table';
 import {
@@ -159,8 +159,10 @@ class DocxWriter {
     const align = ps.align ?? 'left';
     if (align !== st.align) pPr.push(`<w:jc w:val="${JC[align]}"/>`);
 
-    // a caption that references point to: a bookmark round its label and number
-    const seqs = runs.filter((r) => r.obj !== undefined && this.bookmarks.has(r.obj)).map((r) => r.obj!);
+    // a caption that references point to: a bookmark round its label and number; a compound
+    // number's bookmark is round just the number
+    const isCompound = (id: number) => { const o = this.t.objects[id]; return o?.kind === 'seq' && o.name === COMPOUND; };
+    const seqs = runs.filter((r) => r.obj !== undefined && this.bookmarks.has(r.obj) && !isCompound(r.obj)).map((r) => r.obj!);
     const out: string[] = [];
     let open: { id: number; seq: number } | null = null;
     if (seqs.length) {
@@ -169,7 +171,10 @@ class DocxWriter {
     }
     for (const r of runs) {
       if (r.obj === undefined) { out.push(this.textRuns(r, st)); continue; }
+      const mark = this.bookmarks.has(r.obj) && isCompound(r.obj) ? this.bookmarkId++ : null;
+      if (mark !== null) out.push(`<w:bookmarkStart w:id="${mark}" w:name="${this.bookmarks.get(r.obj)}"/>`);
       out.push(await this.objectRun(main, r, st));
+      if (mark !== null) out.push(`<w:bookmarkEnd w:id="${mark}"/>`);
       if (open && r.obj === open.seq) { out.push(`<w:bookmarkEnd w:id="${open.id}"/>`); open = null; }
     }
     return `<w:p>${pPr.length ? `<w:pPr>${pPr.join('')}</w:pPr>` : ''}${out.join('')}</w:p>`;

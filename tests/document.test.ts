@@ -3,7 +3,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  newDocument, setParaStyle, modifyStyle, fieldTexts, captionRuns, objectRun, runStyleOf, styleOf, pruneObjects, documentPlainText,
+  COMPOUND, newDocument, setParaStyle, modifyStyle, fieldTexts, captionRuns, objectRun, runStyleOf, styleOf, pruneObjects, documentPlainText,
   type DocText,
 } from '../src/document/document';
 import { DocLayouter, pageLabel, shownSize, PAGE_GAP } from '../src/document/doc-layout';
@@ -157,6 +157,24 @@ describe('caption numbers and references', () => {
     expect(f.get(3)).toBe('1');
     expect(f.get(1)).toBe('2');
     expect(f.get(4)).toBe('Figure S1');
+  });
+  it('numbers compounds in the order they are first mentioned, and a mention shows just the number', () => {
+    const d = newDocument();
+    const n = runStyleOf(d.styles.Normal), b = { ...n, bold: true };
+    const doc: DocText = {
+      ...d, paras: [{}, {}],
+      runs: [{ ...n, text: 'Ester ' }, objectRun(1, b), { ...n, text: ' gave acid ' }, objectRun(2, b), { ...n, text: '.\nAcid ' }, objectRun(3, b), { ...n, text: ' (Scheme ' },
+        objectRun(4, n), { ...n, text: ')' }],
+      objects: { 1: { kind: 'seq', name: COMPOUND }, 2: { kind: 'seq', name: COMPOUND }, 3: { kind: 'ref', target: 2 }, 4: { kind: 'seq', name: 'Scheme' } },
+    };
+    const f = fieldTexts(doc);
+    expect([f.get(1), f.get(2), f.get(3)]).toEqual(['1', '2', '2']);
+    // compounds and captions count on their own
+    expect(f.get(4)).toBe('1');
+    // a new compound mentioned first takes number 1, and the others move up
+    const first = { ...doc, runs: [objectRun(5, b), { ...n, text: ' then ' }, ...doc.runs], objects: { ...doc.objects, 5: { kind: 'seq' as const, name: COMPOUND } } };
+    const g = fieldTexts(first);
+    expect([g.get(5), g.get(1), g.get(2), g.get(3)]).toEqual(['1', '2', '3', '3']);
   });
   it('says so when a reference\'s caption has gone', () => {
     const d = captioned();
