@@ -45,20 +45,21 @@ function rolesFor(r: Arrow, items: Item[], bond: number): StepRoles {
   return r.step;
 }
 
-/** Captions that label a structure (its compound number, say): short text just below or above it. */
-function labelsOf(items: Item[], used: Set<Item>, doc: Doc, bond: number): Map<Item, Item[]> {
+/** Captions that label a structure (its compound number, say): short text just below it. */
+export function labelsOf(items: Item[], used: Set<Item>, doc: Doc, bond: number): Map<Item, Item[]> {
   const out = new Map<Item, Item[]>();
   const structures = items.filter((it) => it.atoms.length);
   for (const it of items) {
     if (it.caption === undefined || used.has(it) || it.plus) continue;
     const c = doc.captions.get(it.caption)!;
     const text = plainText(c.runs).trim();
-    if (text.length > 16 || text.includes('\n')) continue;
+    // compound numbers are short: 1, 2a, (±)-3
+    if (text.length > 8 || text.includes('\n')) continue;
     const cx = (it.box.x1 + it.box.x2) / 2;
     let best: Item | null = null, bestD = 1.4 * bond;
     for (const s of structures) {
       if (cx < s.box.x1 || cx > s.box.x2) continue;
-      const d = it.box.y1 >= s.box.y2 - 2 ? it.box.y1 - s.box.y2 : s.box.y1 >= it.box.y2 - 2 ? s.box.y1 - it.box.y2 : Infinity;
+      const d = it.box.y1 >= s.box.y2 - 2 ? it.box.y1 - s.box.y2 : Infinity;
       if (d < bestD) { best = s; bestD = d; }
     }
     if (best) out.set(best, [...(out.get(best) ?? []), it]);
@@ -91,7 +92,8 @@ export function planCleanUp(doc: Doc, m: Measure, arrowIds?: Iterable<number>): 
   const ids = arrowIds ? new Set(arrowIds) : null;
   const steps: Step[] = [];
   for (const r of doc.arrows.values()) {
-    if ((ids && !ids.has(r.id)) || !isReactionArrow(r)) continue;
+    // (curved arrows, as round a catalytic cycle, are laid out by Scheme > Arrange)
+    if ((ids && !ids.has(r.id)) || !isReactionArrow(r) || r.sweep) continue;
     const roles = rolesFor(r, items, bond);
     if (isStep(roles) || roles.above.length || roles.below.length) steps.push({ arrow: r, roles });
   }

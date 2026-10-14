@@ -239,6 +239,8 @@ export interface Arrow {
    * chosen by hand); without them they are worked out from where things sit (chem/reaction.ts).
    */
   step?: StepRoles;
+  /** A small arrow a catalytic cycle drew to bring a reagent into this arrow's step (or take a by-product out). */
+  reagentFor?: number;
 }
 
 /**

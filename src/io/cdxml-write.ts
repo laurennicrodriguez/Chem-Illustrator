@@ -769,10 +769,10 @@ class CdxmlWriter {
     const e = this.source('r', r.id, ['arrow']);
     const o = this.orig<Arrow>('r', r.id);
     if (e && o) {
-      if (sameExcept(r, o, ['step'])) return;
+      if (sameExcept(r, o, ['step', 'reagentFor'])) return;
       const d = { x: r.tail.x - o.tail.x, y: r.tail.y - o.tail.y };
       const moved = { ...o, tail: r.tail, head: { x: o.head.x + d.x, y: o.head.y + d.y } };
-      if (sameExcept(r, moved, ['step'])) {
+      if (sameExcept(r, moved, ['step', 'reagentFor'])) {
         shift(e, d.x, d.y);
         for (const g of this.legacyOf(e)) shift(g, d.x, d.y);
       } else {

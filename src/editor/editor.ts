@@ -21,6 +21,7 @@ import { joinAtoms, joinBonds } from '../chem/join';
 import { extractDrawing, insertDrawing } from '../io/clipboard';
 import { isReactionArrow, itemFinder, rolesOf, ROLES, schemeItems, type Item, type Role } from '../chem/reaction';
 import { applySchemePlan, planCleanUp } from '../chem/scheme-layout';
+import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
 import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, rotation, mirrorX, mirrorY } from './arrange';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { tokenize } from '../chem/labels';
@@ -1291,6 +1292,22 @@ export class Editor {
     const plan = planCleanUp(this.doc, m, this.selectedSteps());
     if (!plan) return false;
     applySchemePlan(this.doc, m, plan);
+    this.changed();
+    return true;
+  }
+
+  /**
+   * Arrange the selected scheme (or the whole drawing) in one go: in a line, in rows, as a
+   * snake, down the page, round a catalytic cycle, or as a branching tree. Selected structures
+   * that aren't in a step yet are joined on with new arrows. False when it can't be done.
+   */
+  arrangeScheme(opts: ArrangeOptions): boolean {
+    const m = this.fullMeasure();
+    const s = this.sel;
+    const plan = planArrange(this.doc, m, { atoms: s.atoms, captions: s.captions, shapes: s.shapes, arrows: s.arrows }, opts);
+    if (!plan) return false;
+    const made = applyArrange(this.doc, m, plan);
+    for (const id of made) this.sel.arrows.add(id);
     this.changed();
     return true;
   }
