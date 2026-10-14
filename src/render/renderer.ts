@@ -16,7 +16,7 @@ import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
 import type { StructureChecks } from '../chem/warnings';
 import { isGenericLabel } from '../chem/labels';
 import { bracketPath, shaftOffset, shapeOrder, elbowRoute, type PathStep } from '../objects';
-import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
+import { atomStereoText, bondStereoText, shownDescriptor, axialStyle, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
 import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
 import { layoutText, FONT_STACK, type TextLayout } from '../text/layout';
@@ -484,17 +484,18 @@ export class Renderer {
       if (text) draw(text, place.atom(a, text), '#000');
       else if (this.previewStereo && !a.showStereo && !a.stereoLabel) {
         const d = info?.atom(a.id);
-        if (d) { const t = `(${d})`; draw(t, place.atom(a, t), PREVIEW_COLOR); }
+        if (d) { const t = `(${shownDescriptor(d)})`; draw(t, place.atom(a, t), PREVIEW_COLOR); }
       }
       if (a.enhStereo) { const t = enhancedText(a.enhStereo); draw(t, place.enhanced(a, t), a.color ?? '#000'); }
     }
     for (const b of bonds) {
-      if (b.order !== 2 && !b.stereoLabel) continue;
+      // double bonds (E/Z), and single bonds that are a chiral axis (Ra/Sa)
+      if (b.order !== 2 && !b.stereoLabel && !info?.bond(b.id)) continue;
       const text = bondStereoText(b, info);
       if (text) draw(text, place.bond(b, text), '#000');
       else if (this.previewStereo && !b.showStereo && !b.stereoLabel) {
         const d = info?.bond(b.id);
-        if (d) { const t = `(${d})`; draw(t, place.bond(b, t), PREVIEW_COLOR); }
+        if (d) { const t = `(${shownDescriptor(d)})`; draw(t, place.bond(b, t), PREVIEW_COLOR); }
       }
     }
     return curFont;
@@ -537,7 +538,7 @@ export class Renderer {
    * with Arial's published widths, as when saving, so a label sits in the file where it was seen.
    */
   private stereoPlacer(doc: Doc): StereoPlacer {
-    const key = `${doc.version}|${doc.stereo?.version ?? 0}|${this.previewStereo}`;
+    const key = `${doc.version}|${doc.stereo?.version ?? 0}|${this.previewStereo}|${axialStyle.helicity}`;
     if (!this.placer || this.placerDoc !== doc || this.placerKey !== key) {
       this.placer = new StereoPlacer(doc, arialWidth, { preview: this.previewStereo });
       this.placerDoc = doc;

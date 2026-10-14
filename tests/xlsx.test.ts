@@ -372,9 +372,9 @@ describe('opening files made in Excel', () => {
   });
 
   it('says what it could not keep', async () => {
-    const sheet = '<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData><conditionalFormatting sqref="A1"/><hyperlinks/>';
+    const sheet = '<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData><conditionalFormatting sqref="A1"><cfRule type="timePeriod" timePeriod="today" priority="1"/></conditionalFormatting><hyperlinks/>';
     const { warnings } = await readXlsx(excelFile(sheet));
-    expect(warnings).toEqual(['Not shown here, and left out if you save over this file: conditional formatting, links.']);
+    expect(warnings).toEqual(['Not shown here, and left out if you save over this file: some conditional formatting rules, links.']);
   });
 
   it('refuses files that are not workbooks', async () => {

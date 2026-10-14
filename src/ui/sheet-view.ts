@@ -14,6 +14,10 @@ import { readTyped, isError, CellError } from '../sheet/values';
 import { chemPieces } from '../sheet/cell-text';
 import { DEFAULT_COL_W, DEFAULT_ROW_H, STRUCTURE_SCALE, STRUCTURE_PAD, MAX_AUTO_ROW, structureHeight, structurePlace } from '../sheet/layout';
 import { formulaRefs, normalizeFormula } from '../sheet/formula';
+import { Chart, chartData } from '../sheet/chart';
+import { drawChart, ChartHits, Box } from '../render/chart-draw';
+import { DashboardView } from './dashboard-view';
+import { newDashboard, Tile } from '../sheet/dashboard';
 
 const HEADER_W = 44;
 const HEADER_H = 22;
@@ -51,7 +55,11 @@ export interface SheetViewHost {
   /** The selection, the sheet showing or the cell being typed in changed. */
   changed(): void;
   /** A right-click: what was clicked. */
-  contextMenu(x: number, y: number, where: 'cell' | 'row' | 'col'): void;
+  contextMenu(x: number, y: number, where: 'cell' | 'row' | 'col' | 'chart' | 'tile'): void;
+  /** A dashboard tile was double-clicked (open its settings). */
+  openTile?(tile: Tile): void;
+  /** A chart was double-clicked (open its settings). */
+  editChart?(id: number): void;
   /** The filter button on a header was clicked. */
   filterMenu(col: number, at: { x: number; y: number }): void;
   flash(msg: string, ms?: number): void;
@@ -99,7 +107,10 @@ type Drag =
   | { kind: 'resize-col'; col: number; start: number; size: number; orig: number | undefined; pointer: number }
   | { kind: 'resize-row'; row: number; start: number; size: number; orig: number | undefined; pointer: number }
   | { kind: 'fill'; src: Range; to: Range; pointer: number; ctrl: boolean }
-  | { kind: 'point'; pointer: number; start: Cursor };
+  | { kind: 'point'; pointer: number; start: Cursor }
+  | { kind: 'chart'; pointer: number; id: number; how: 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw' | 'label'; series?: number; x0: number; y0: number; orig: Chart; moved: boolean };
+
+const HANDLE = 7;
 
 export class SheetView {
   wb: Workbook | null = null;
@@ -132,6 +143,13 @@ export class SheetView {
   /** Point mode: a reference put in a formula by clicking, replaced as the pointer moves. */
   private pointRef: { start: number; end: number } | null = null;
   private findBar: HTMLDivElement;
+  /** The chart picked (by its id), on the sheet showing. */
+  chartSel: number | null = null;
+  /** A chart being dragged, drawn in place of the saved one until the drag ends. */
+  private chartPreview: Chart | null = null;
+  /** Shows a dashboard sheet in place of the grid. */
+  readonly dash: DashboardView;
+  private chartCache = new Map<number, { key: string; chart: Chart; canvas: HTMLCanvasElement; hits: ChartHits }>();
 
   constructor(root: HTMLElement, private host: SheetViewHost) {
     this.el = root as HTMLDivElement;
@@ -181,6 +199,23 @@ export class SheetView {
     this.input.addEventListener('pointerdown', (e) => e.stopPropagation());
     new ResizeObserver(() => this.render()).observe(this.scroller);
     this.buildFindBar();
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const view = this;
+    this.dash = new DashboardView(root, {
+      get wb() { return view.wb; },
+      get zoom() { return view.zoom; },
+      structureBox: (st) => host.structureBox(st),
+      structureBitmap: (st, scale) => host.structureBitmap(st, scale),
+      setDashboard: (d, label) => {
+        const sh = this.sheet!;
+        this.wb!.edit(label, () => sh.setDashboard(d), this.place());
+      },
+      picked: () => host.changed(),
+      open: (t) => host.openTile?.(t),
+      contextMenu: (x, y) => host.contextMenu(x, y, 'tile'),
+      flash: (m, ms) => host.flash(m, ms),
+      key: (e) => host.key(e),
+    });
   }
 
   // ---------------------------------------------------------------- the workbook shown
@@ -188,6 +223,8 @@ export class SheetView {
   /** Show a workbook (a sheet tab came to the front), with its selection and scroll if kept. */
   show(wb: Workbook | null, state?: ViewState | null): void {
     this.cancelEdit();
+    this.chartSel = null;
+    this.chartCache.clear();
     this.wb = wb;
     this.copied = null;
     if (state) {
@@ -236,6 +273,7 @@ export class SheetView {
     const wb = this.wb;
     if (!wb || i < 0 || i >= wb.sheets.length || i === wb.active) return;
     this.commitEdit();
+    this.chartSel = null;
     this.saveScroll();
     wb.active = i;
     this.copied = null;
@@ -407,6 +445,11 @@ export class SheetView {
   // ---------------------------------------------------------------- drawing
 
   render(): void {
+    // a dashboard sheet shows its tiles in place of the grid
+    const dashSheet = this.sheet?.dashboard ? this.sheet : null;
+    if (this.scroller.hidden !== !!dashSheet) this.scroller.hidden = !!dashSheet;
+    this.dash.show(dashSheet);
+    if (dashSheet) return;
     if (this.queued) return;
     this.queued = true;
     requestAnimationFrame(() => {
@@ -445,6 +488,7 @@ export class SheetView {
       this.drawSelection(g);
       ctx.restore();
     }
+    this.drawCharts(vw, vh);
     this.drawHeaders(regions);
     const { FH, FW } = this.frozen();
     ctx.strokeStyle = '#9aa3b5';
@@ -454,6 +498,222 @@ export class SheetView {
     if (this.editing) this.placeInput();
     if (this.pendingPictures) this.render();
     budget = { n: 0 };
+  }
+
+  // ---------------------------------------------------------------- charts
+
+  /** The charts of the sheet showing, with one being dragged in its new place. */
+  private chartsShown(): Chart[] {
+    const list = this.sheet?.charts ?? [];
+    const p = this.chartPreview;
+    return p ? list.map((c) => (c.id === p.id ? p : c)) : list;
+  }
+
+  /** The chart picked, if it is still there. */
+  get selectedChart(): Chart | null {
+    if (this.chartSel === null) return null;
+    return this.sheet?.charts.find((c) => c.id === this.chartSel) ?? null;
+  }
+
+  /** Pick a chart (null: back to the cells). */
+  pickChart(id: number | null): void {
+    if (id === this.chartSel) return;
+    this.chartSel = id;
+    this.render();
+    this.host.changed();
+  }
+
+  /** Where a chart is on the screen (view coordinates). */
+  chartBox(c: Chart): Box {
+    this.layout();
+    const { fr, fc } = this.frozen();
+    const z = this.zoom;
+    const x = HEADER_W + this.cols.pos(c.at.col) + c.at.dx * z - (c.at.col < fc ? 0 : this.scroller.scrollLeft);
+    const y = HEADER_H + this.rows.pos(c.at.row) + c.at.dy * z - (c.at.row < fr ? 0 : this.scroller.scrollTop);
+    return { x, y, w: c.w * z, h: c.h * z };
+  }
+
+  /** The cell and offset (pixels at 100%) of a point on the sheet, for placing a chart. */
+  private anchorAt(sheetX: number, sheetY: number): Chart['at'] {
+    const col = this.cols.at(Math.max(0, sheetX)), row = this.rows.at(Math.max(0, sheetY));
+    return { row, col, dx: Math.max(0, (sheetX - this.cols.pos(col)) / this.zoom), dy: Math.max(0, (sheetY - this.rows.pos(row)) / this.zoom) };
+  }
+
+  /** A new chart moved down below any chart it would cover. */
+  clearOfCharts(c: Chart): Chart {
+    let cur = c;
+    const overlap = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+    for (let k = 0; k < 50; k++) {
+      const b = this.chartBox(cur);
+      const hit = this.sheet!.charts.find((o) => o.id !== cur.id && overlap(b, this.chartBox(o)));
+      if (!hit) break;
+      const ob = this.chartBox(hit);
+      const sheetX = this.cols.pos(cur.at.col) + cur.at.dx * this.zoom;
+      const sheetY = ob.y + ob.h - b.y + this.rows.pos(cur.at.row) + cur.at.dy * this.zoom + 12 * this.zoom;
+      cur = { ...cur, at: this.anchorAt(sheetX, sheetY) };
+    }
+    return cur;
+  }
+
+  /** A chart drawn at the screen's resolution, kept until its data or settings change. */
+  private chartPicture(c: Chart): { canvas: HTMLCanvasElement; hits: ChartHits } {
+    const s = this.sheet!;
+    const dpr = window.devicePixelRatio || 1;
+    const scale = this.zoom * dpr;
+    const key = `${this.wb!.edits}|${scale}|${this.wb!.sheets.map((x) => x.values.size).join(',')}`;
+    const got = this.chartCache.get(c.id);
+    if (got && got.chart === c && got.key === key && got.hits) return got;
+    const canvas = got?.canvas ?? document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(c.w * scale));
+    canvas.height = Math.max(1, Math.round(c.h * scale));
+    const ctx = canvas.getContext('2d')!;
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    ctx.clearRect(0, 0, c.w, c.h);
+    const hits = drawChart(ctx, c, chartData(this.wb!, s, c), c.w, c.h);
+    const entry = { key, chart: c, canvas, hits };
+    this.chartCache.set(c.id, entry);
+    return entry;
+  }
+
+  /** The fitted lines and plot area of a chart as last drawn (for the side panel). */
+  chartHits(id: number): ChartHits | null {
+    return this.chartCache.get(id)?.hits ?? null;
+  }
+
+  private drawCharts(vw: number, vh: number): void {
+    const charts = this.chartsShown();
+    if (!charts.length) return;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(HEADER_W, HEADER_H, vw - HEADER_W, vh - HEADER_H);
+    ctx.clip();
+    for (const c of charts) {
+      const b = this.chartBox(c);
+      if (b.x > vw || b.y > vh || b.x + b.w < HEADER_W || b.y + b.h < HEADER_H) continue;
+      const pic = this.chartPicture(c);
+      ctx.drawImage(pic.canvas, b.x, b.y, b.w, b.h);
+      if (c.id === this.chartSel) {
+        const acc = this.accent();
+        ctx.strokeStyle = acc;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([]);
+        ctx.strokeRect(Math.round(b.x) + 0.5, Math.round(b.y) + 0.5, Math.round(b.w) - 1, Math.round(b.h) - 1);
+        ctx.fillStyle = '#ffffff';
+        for (const [hx, hy] of this.handlePoints(b)) {
+          ctx.fillRect(hx - HANDLE / 2, hy - HANDLE / 2, HANDLE, HANDLE);
+          ctx.strokeRect(hx - HANDLE / 2 + 0.5, hy - HANDLE / 2 + 0.5, HANDLE - 1, HANDLE - 1);
+        }
+      }
+    }
+    ctx.restore();
+  }
+
+  private handlePoints(b: Box): [number, number, string][] {
+    const { x, y, w, h } = b;
+    return [[x, y, 'nw'], [x + w / 2, y, 'n'], [x + w, y, 'ne'], [x + w, y + h / 2, 'e'], [x + w, y + h, 'se'], [x + w / 2, y + h, 's'], [x, y + h, 'sw'], [x, y + h / 2, 'w']];
+  }
+
+  /** The chart under a point (the top one), and which part of it. */
+  private chartAt(x: number, y: number): { chart: Chart; how: Extract<Drag, { kind: 'chart' }>['how']; series?: number } | null {
+    if (x < HEADER_W || y < HEADER_H) return null;
+    const charts = this.chartsShown();
+    for (let i = charts.length - 1; i >= 0; i--) {
+      const c = charts[i];
+      const b = this.chartBox(c);
+      if (c.id === this.chartSel) {
+        for (const [hx, hy, how] of this.handlePoints(b)) {
+          if (Math.abs(x - hx) <= HANDLE && Math.abs(y - hy) <= HANDLE) return { chart: c, how: how as 'n' };
+        }
+      }
+      if (x < b.x || y < b.y || x > b.x + b.w || y > b.y + b.h) continue;
+      const hits = this.chartCache.get(c.id)?.hits;
+      if (hits && c.id === this.chartSel) {
+        const lx = (x - b.x) / this.zoom, ly = (y - b.y) / this.zoom;
+        for (const l of hits.fitLabels) {
+          if (lx >= l.box.x && lx <= l.box.x + l.box.w && ly >= l.box.y && ly <= l.box.y + l.box.h) return { chart: c, how: 'label', series: l.series };
+        }
+      }
+      return { chart: c, how: 'move' };
+    }
+    return null;
+  }
+
+  private dragChart(d: Extract<Drag, { kind: 'chart' }>, x: number, y: number): void {
+    const z = this.zoom, o = d.orig;
+    const dx = (x - d.x0) / z, dy = (y - d.y0) / z;
+    if (!d.moved && Math.abs(dx) + Math.abs(dy) < 3) return;
+    d.moved = true;
+    const box = this.chartBox(o);
+    const { fr, fc } = this.frozen();
+    const toSheet = (vx: number, vy: number) => ({
+      x: vx - HEADER_W + (o.at.col < fc ? 0 : this.scroller.scrollLeft),
+      y: vy - HEADER_H + (o.at.row < fr ? 0 : this.scroller.scrollTop),
+    });
+    let next: Chart;
+    if (d.how === 'label') {
+      const hits = this.chartCache.get(o.id)?.hits;
+      const lab = hits?.fitLabels.find((l) => l.series === d.series);
+      if (!hits || !lab) return;
+      const s = o.series[d.series!];
+      const fx = (lab.box.x + 2 + dx - hits.plot.x) / hits.plot.w, fy = (lab.box.y + 2 + dy - hits.plot.y) / hits.plot.h;
+      next = { ...o, series: o.series.map((x2, i) => (i === d.series ? { ...s, fit: { ...s.fit!, labelAt: { x: fx, y: fy } } } : x2)) };
+    } else if (d.how === 'move') {
+      const p = toSheet(box.x + dx * z, box.y + dy * z);
+      next = { ...o, at: this.anchorAt(p.x, p.y) };
+    } else {
+      let { x: bx, y: by, w, h } = { x: box.x, y: box.y, w: o.w, h: o.h };
+      const min = 80;
+      if (d.how.includes('e')) w = Math.max(min, o.w + dx);
+      if (d.how.includes('s')) h = Math.max(min, o.h + dy);
+      if (d.how.includes('w')) { const nw = Math.max(min, o.w - dx); bx += (o.w - nw) * z; w = nw; }
+      if (d.how.includes('n')) { const nh = Math.max(min, o.h - dy); by += (o.h - nh) * z; h = nh; }
+      const p = toSheet(bx, by);
+      next = { ...o, at: this.anchorAt(p.x, p.y), w: Math.round(w), h: Math.round(h) };
+      this.host.flash(`${Math.round(w)} × ${Math.round(h)} pixels`, 800);
+    }
+    this.chartPreview = next;
+    this.render();
+  }
+
+  /** Put a changed chart in the sheet (one undo step). */
+  replaceChart(c: Chart, label = 'Change chart'): void {
+    const s = this.sheet!;
+    this.wb!.edit(label, () => s.setCharts(s.charts.map((x) => (x.id === c.id ? c : x))), this.place());
+    this.render();
+  }
+
+  deleteChart(id = this.chartSel): void {
+    const s = this.sheet;
+    if (id === null || !s) return;
+    this.wb!.edit('Delete chart', () => s.setCharts(s.charts.filter((c) => c.id !== id)), this.place());
+    if (this.chartSel === id) this.chartSel = null;
+    this.render();
+    this.host.changed();
+  }
+
+  /** Keys while a chart is picked: Delete removes it, arrows nudge it, Esc goes back to the cells. */
+  private chartKey(e: KeyboardEvent): boolean {
+    const c = this.selectedChart;
+    if (!c) { this.chartSel = null; return false; }
+    const k = e.key;
+    if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); this.deleteChart(); return true; }
+    if (k === 'Escape') { e.preventDefault(); this.pickChart(null); return true; }
+    const arrows: Record<string, [number, number]> = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
+    if (arrows[k]) {
+      e.preventDefault();
+      const step = e.shiftKey ? 10 : 1;
+      const b = this.chartBox(c);
+      const { fr, fc } = this.frozen();
+      const sx = b.x - HEADER_W + (c.at.col < fc ? 0 : this.scroller.scrollLeft) + arrows[k][0] * step * this.zoom;
+      const sy = b.y - HEADER_H + (c.at.row < fr ? 0 : this.scroller.scrollTop) + arrows[k][1] * step * this.zoom;
+      this.replaceChart({ ...c, at: this.anchorAt(sx, sy) }, 'Move chart');
+      return true;
+    }
+    if (k === 'Enter' && this.host.editChart) { e.preventDefault(); this.host.editChart(c.id); return true; }
+    if (this.host.key(e)) { e.preventDefault(); return true; }
+    if (k.length === 1 && !e.ctrlKey && !e.metaKey) e.preventDefault();
+    return true;
   }
 
   private font(style: CellStyle | undefined, z = this.zoom, pos: 'base' | 'sub' | 'sup' = 'base', italic = false): string {
@@ -528,13 +788,17 @@ export class SheetView {
           ctx.fillRect(x, y, w - 1, h - 1);
         }
         const cell = s.cell(rr, cc);
-        const style = s.styleAt(rr, cc);
+        const style = s.shownStyleAt(rr, cc);
+        const look = s.condLook(rr, cc);
         const v = s.values.get(keyOf(rr, cc));
         if (style?.fill) {
           ctx.fillStyle = style.fill;
           ctx.fillRect(x - 1, y - 1, w + 1, h + 1);
         }
+        if (look?.bar) this.drawDataBar(look.bar, x, y, w, h);
+        if (look?.icon) this.drawIcon(look.icon.set, look.icon.level, x + 3 * z, y + h / 2, Math.min(14 * z, h - 4));
         if (cell?.structure) this.drawStructure(cell.structure, x, y, w, h, style, budget);
+        else if (look?.hideValue) { /* only the bar or icon shows */ }
         else if (v !== undefined && v !== null && v !== '' && c > spillUntil) {
           const last = this.drawText(rr, cc, x, y, w, h, style, g, X);
           if (last > c) spillUntil = last;
@@ -572,6 +836,89 @@ export class SheetView {
       ctx.strokeRect(x1 + 0.5, y1 + 0.5, x2 - x1 - 2, y2 - y1 - 2);
       ctx.restore();
     }
+  }
+
+  /** A data bar across a cell (conditional formatting). */
+  private drawDataBar(bar: { from: number; to: number; color: string; gradient: boolean; negative: boolean }, x: number, y: number, w: number, h: number): void {
+    const ctx = this.ctx;
+    const colour = bar.negative ? '#ff0000' : bar.color;
+    const inner = w - 4;
+    const bx = x + 2 + bar.from * inner, bw = Math.max(1, (bar.to - bar.from) * inner);
+    const by = y + 2, bh = Math.max(2, h - 5);
+    if (bar.gradient) {
+      const g = bar.negative ? ctx.createLinearGradient(bx + bw, 0, bx, 0) : ctx.createLinearGradient(bx, 0, bx + bw, 0);
+      g.addColorStop(0, colour);
+      g.addColorStop(1, '#ffffff');
+      ctx.fillStyle = g;
+    } else ctx.fillStyle = colour;
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(Math.round(bx) + 0.5, Math.round(by) + 0.5, Math.max(0, Math.round(bw) - 1), Math.max(0, Math.round(bh) - 1));
+  }
+
+  /** An icon of an icon set at the left of a cell: level 0 the lowest, 2 the highest. */
+  private drawIcon(set: string, level: number, x: number, cy: number, size: number): void {
+    const ctx = this.ctx;
+    const colours = ['#e0453a', '#f2b81b', '#3a9b4a'];
+    const col = colours[level];
+    const s = size, r = s / 2, cx = x + r;
+    ctx.save();
+    ctx.fillStyle = col;
+    ctx.strokeStyle = col;
+    ctx.lineWidth = Math.max(1, s / 7);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    if (set === 'arrows') {
+      const a = level === 2 ? -Math.PI / 2 : level === 1 ? 0 : Math.PI / 2;
+      ctx.translate(cx, cy);
+      ctx.rotate(a);
+      ctx.moveTo(r * 0.9, 0); ctx.lineTo(0, -r * 0.8); ctx.lineTo(0, -r * 0.3); ctx.lineTo(-r * 0.9, -r * 0.3);
+      ctx.lineTo(-r * 0.9, r * 0.3); ctx.lineTo(0, r * 0.3); ctx.lineTo(0, r * 0.8); ctx.closePath();
+      ctx.fill();
+    } else if (set === 'lights') {
+      ctx.arc(cx, cy, r * 0.85, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    } else if (set === 'marks') {
+      ctx.arc(cx, cy, r * 0.9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.beginPath();
+      if (level === 2) { ctx.moveTo(cx - r * 0.45, cy); ctx.lineTo(cx - r * 0.1, cy + r * 0.35); ctx.lineTo(cx + r * 0.45, cy - r * 0.35); }
+      else if (level === 1) { ctx.moveTo(cx, cy - r * 0.45); ctx.lineTo(cx, cy + r * 0.1); ctx.moveTo(cx, cy + r * 0.42); ctx.lineTo(cx, cy + r * 0.44); }
+      else { ctx.moveTo(cx - r * 0.35, cy - r * 0.35); ctx.lineTo(cx + r * 0.35, cy + r * 0.35); ctx.moveTo(cx + r * 0.35, cy - r * 0.35); ctx.lineTo(cx - r * 0.35, cy + r * 0.35); }
+      ctx.stroke();
+    } else if (set === 'flags') {
+      ctx.lineWidth = Math.max(1, s / 10);
+      ctx.strokeStyle = '#555555';
+      ctx.moveTo(x + s * 0.2, cy + r * 0.9); ctx.lineTo(x + s * 0.2, cy - r * 0.9);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x + s * 0.22, cy - r * 0.9); ctx.lineTo(x + s * 0.95, cy - r * 0.5); ctx.lineTo(x + s * 0.22, cy - r * 0.05); ctx.closePath();
+      ctx.fill();
+    } else {
+      // stars: empty, half and full
+      const star = () => {
+        ctx.beginPath();
+        for (let i = 0; i < 10; i++) {
+          const rr = i % 2 ? r * 0.42 : r * 0.95, a = -Math.PI / 2 + (i * Math.PI) / 5;
+          ctx[i ? 'lineTo' : 'moveTo'](cx + rr * Math.cos(a), cy + rr * Math.sin(a));
+        }
+        ctx.closePath();
+      };
+      ctx.fillStyle = '#f2b81b';
+      ctx.strokeStyle = '#c99200';
+      ctx.lineWidth = 1;
+      star();
+      if (level === 2) ctx.fill();
+      else if (level === 1) { ctx.save(); ctx.clip(); ctx.fillRect(cx - r, cy - r, r, s); ctx.restore(); star(); }
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   private accent(): string {
@@ -904,7 +1251,7 @@ export class SheetView {
     const items = wb.sheets.map((s, i) => {
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = `sh-tab${i === wb.active ? ' active' : ''}`;
+      b.className = `sh-tab${i === wb.active ? ' active' : ''}${s.dashboard ? ' dash-tab' : ''}`;
       b.setAttribute('role', 'tab');
       b.setAttribute('aria-selected', String(i === wb.active));
       b.textContent = s.name;
@@ -932,6 +1279,21 @@ export class SheetView {
     if (!wb) return;
     this.commitEdit();
     const s = wb.edit('New sheet', () => wb.addSheet(undefined, wb.active + 1), this.place());
+    this.goSheet(wb.sheets.indexOf(s));
+  }
+
+  /** A new dashboard sheet after the one showing. */
+  addDashboard(): void {
+    const wb = this.wb;
+    if (!wb) return;
+    this.commitEdit();
+    let n = 1;
+    while (wb.sheetNamed(`Dashboard${n === 1 ? '' : n}`)) n++;
+    const s = wb.edit('New dashboard', () => {
+      const sh = wb.addSheet(`Dashboard${n === 1 ? '' : n}`, wb.active + 1);
+      sh.setDashboard(newDashboard());
+      return sh;
+    }, this.place());
     this.goSheet(wb.sheets.indexOf(s));
   }
 
@@ -973,6 +1335,7 @@ export class SheetView {
     const i = wb.active;
     popupMenu(x, y, [
       ['Insert Sheet', () => this.addSheet()],
+      ['Insert Dashboard', () => this.addDashboard()],
       ['Rename…', () => this.renameSheet(i)],
       ['Delete Sheet', () => this.deleteSheet(), wb.sheets.length > 1],
       null,
@@ -1326,6 +1689,7 @@ export class SheetView {
   private onKey(e: KeyboardEvent): void {
     if (!this.wb || e.defaultPrevented) return;
     if (e.target !== this.scroller) return;
+    if (this.chartSel !== null && this.chartKey(e)) return;
     const k = e.key;
     const ctrl = e.ctrlKey || e.metaKey;
     const arrows: Record<string, [number, number]> = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
@@ -1457,6 +1821,16 @@ export class SheetView {
       this.host.filterMenu(fb, { x: b.left + rect.x + rect.w - 16, y: b.top + rect.y + rect.h });
       return;
     }
+    const onChart = this.pointing() ? null : this.chartAt(x, y);
+    if (onChart) {
+      this.commitEdit();
+      this.scroller.focus({ preventScroll: true });
+      this.scroller.setPointerCapture(e.pointerId);
+      this.pickChart(onChart.chart.id);
+      this.drag = { kind: 'chart', pointer: e.pointerId, id: onChart.chart.id, how: onChart.how, series: onChart.series, x0: x, y0: y, orig: onChart.chart, moved: false };
+      return;
+    }
+    if (this.chartSel !== null) this.pickChart(null);
     const border = this.borderAt(x, y);
     if (border) {
       this.commitEdit();
@@ -1515,6 +1889,13 @@ export class SheetView {
     const d = this.drag;
     if (!d) {
       // cursors and tips
+      const ch = this.chartAt(x, y);
+      if (ch) {
+        const cur: Record<string, string> = { move: 'move', label: 'move', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', ne: 'nesw-resize', sw: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize' };
+        this.scroller.style.cursor = this.chartSel === ch.chart.id ? cur[ch.how] : 'pointer';
+        if (this.hoverTip) { this.hoverTip = ''; this.scroller.title = ''; }
+        return;
+      }
       const border = this.borderAt(x, y);
       const h = this.hit(x, y);
       this.scroller.style.cursor = border ? (border.kind === 'col' ? 'col-resize' : 'row-resize')
@@ -1526,6 +1907,7 @@ export class SheetView {
       return;
     }
     if (e.pointerId !== d.pointer) return;
+    if (d.kind === 'chart') { this.dragChart(d, x, y); return; }
     this.autoScroll(x, y);
     const h = this.hit(Math.max(HEADER_W + 1, x), Math.max(HEADER_H + 1, y));
     switch (d.kind) {
@@ -1586,6 +1968,13 @@ export class SheetView {
     if (this.scroller.hasPointerCapture(e.pointerId)) this.scroller.releasePointerCapture(e.pointerId);
     const wb = this.wb!;
     const s = wb.sheet;
+    if (d.kind === 'chart') {
+      const p = this.chartPreview;
+      this.chartPreview = null;
+      if (p && d.moved) this.replaceChart(p, d.how === 'move' ? 'Move chart' : d.how === 'label' ? 'Move equation' : 'Resize chart');
+      this.render();
+      return;
+    }
     if ((d.kind === 'resize-col' || d.kind === 'resize-row') && this.sizePreview) {
       const p = this.sizePreview;
       this.sizePreview = null;
@@ -1632,6 +2021,8 @@ export class SheetView {
   private onDouble(e: MouseEvent): void {
     if (!this.wb) return;
     const { x, y } = this.viewPoint(e);
+    const onChart = this.chartAt(x, y);
+    if (onChart) { this.host.editChart?.(onChart.chart.id); return; }
     const border = this.borderAt(x, y);
     if (border) { this.autoFit(border.kind, border.index); return; }
     const h = this.hit(x, y);
@@ -1698,6 +2089,13 @@ export class SheetView {
     e.preventDefault();
     if (!this.wb) return;
     const { x, y } = this.viewPoint(e);
+    const onChart = this.chartAt(x, y);
+    if (onChart) {
+      this.commitEdit();
+      this.pickChart(onChart.chart.id);
+      this.host.contextMenu(e.clientX, e.clientY, 'chart');
+      return;
+    }
     const h = this.hit(x, y);
     this.commitEdit();
     const R = this.sel.range;
@@ -1735,7 +2133,8 @@ export class SheetView {
   }
 
   focus(): void {
-    if (this.editing) this.input.focus();
+    if (this.sheet?.dashboard) this.dash.el.focus({ preventScroll: true });
+    else if (this.editing) this.input.focus();
     else this.scroller.focus({ preventScroll: true });
   }
 

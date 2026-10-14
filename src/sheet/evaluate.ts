@@ -186,7 +186,49 @@ const text1 = (f: (s: string) => Value): Fn => (args) => {
 
 const is = (test: (v: Value) => boolean): Fn => (args) => test(scalar(args[0]));
 
+/** Pairs of numbers from two blocks the same size (known y's, known x's), skipping pairs where either isn't a number, as Excel does. */
+function pairs(ya: Arg, xa: Arg): { xs: number[]; ys: number[] } | CellError {
+  const flat = (a: Arg): Value[] => (isBlock(a) ? a.block.flat() : [a]);
+  const ys = flat(ya), xs = flat(xa);
+  if (ys.length !== xs.length) return ERR.na('The two ranges are different sizes');
+  const out = { xs: [] as number[], ys: [] as number[] };
+  for (let i = 0; i < ys.length; i++) {
+    if (isError(ys[i])) return ys[i] as CellError;
+    if (isError(xs[i])) return xs[i] as CellError;
+    if (typeof ys[i] === 'number' && typeof xs[i] === 'number') { out.ys.push(ys[i] as number); out.xs.push(xs[i] as number); }
+  }
+  return out;
+}
+
+/** Straight-line statistics of known y's against known x's (SLOPE, INTERCEPT, RSQ, CORREL, STEYX, FORECAST). */
+const lineStat = (f: (p: { xs: number[]; ys: number[]; slope: number; intercept: number; sxx: number; syy: number; sxy: number }) => Value, yArg = 0, xArg = 1): Fn => (args) => {
+  const p = pairs(args[yArg], args[xArg]);
+  if (isError(p)) return p;
+  const n = p.xs.length;
+  if (n < 2) return ERR.div0('Needs at least two pairs of numbers');
+  const mx = p.xs.reduce((s, x) => s + x, 0) / n, my = p.ys.reduce((s, y) => s + y, 0) / n;
+  let sxx = 0, syy = 0, sxy = 0;
+  for (let i = 0; i < n; i++) { sxx += (p.xs[i] - mx) ** 2; syy += (p.ys[i] - my) ** 2; sxy += (p.xs[i] - mx) * (p.ys[i] - my); }
+  if (sxx === 0) return ERR.div0('The x values are all the same');
+  const slope = sxy / sxx;
+  return f({ ...p, slope, intercept: my - slope * mx, sxx, syy, sxy });
+};
+
 const FUNCTIONS: Record<string, FnDef> = {
+  SLOPE: { min: 2, max: 2, fn: lineStat((p) => p.slope) },
+  INTERCEPT: { min: 2, max: 2, fn: lineStat((p) => p.intercept) },
+  RSQ: { min: 2, max: 2, fn: lineStat((p) => (p.syy === 0 ? ERR.div0() : (p.sxy * p.sxy) / (p.sxx * p.syy))) },
+  CORREL: { min: 2, max: 2, fn: lineStat((p) => (p.syy === 0 ? ERR.div0() : p.sxy / Math.sqrt(p.sxx * p.syy))) },
+  STEYX: { min: 2, max: 2, fn: lineStat((p) => (p.xs.length < 3 ? ERR.div0() : Math.sqrt((p.syy - (p.sxy * p.sxy) / p.sxx) / (p.xs.length - 2)))) },
+  // FORECAST(x, known y's, known x's): the line's value at x
+  FORECAST: {
+    min: 3, max: 3,
+    fn: (args, host) => {
+      const x = toNumber(scalar(args[0]));
+      if (isError(x)) return x;
+      return lineStat((p) => p.intercept + p.slope * x)([args[1], args[2]], host);
+    },
+  },
   SUM: { min: 1, max: 255, fn: agg((xs) => xs.reduce((s, x) => s + x, 0)) },
   PRODUCT: { min: 1, max: 255, fn: agg((xs) => (xs.length ? xs.reduce((s, x) => s * x, 1) : 0)) },
   AVERAGE: { min: 1, max: 255, fn: agg((xs) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : ERR.div0())) },
@@ -231,6 +273,16 @@ const FUNCTIONS: Record<string, FnDef> = {
       let n = 0;
       for (const row of a.block) for (const v of row) if (v === null || v === '') n++;
       return n;
+    },
+  },
+  // Excel's SUBTOTAL (as a table's totals row writes it): 1 average, 2 count, 3 count filled, 4 max, 5 min, 6 product, 7 standard deviation, 9 sum (101… the same)
+  SUBTOTAL: {
+    min: 2, max: 255,
+    fn: (args, host) => {
+      const k = toNumber(scalar(args[0]));
+      if (isError(k)) return k;
+      const name = ({ 1: 'AVERAGE', 2: 'COUNT', 3: 'COUNTA', 4: 'MAX', 5: 'MIN', 6: 'PRODUCT', 7: 'STDEV', 9: 'SUM' } as Record<number, string>)[Math.trunc(k) % 100];
+      return name ? FUNCTIONS[name].fn(args.slice(1), host) : ERR.value('SUBTOTAL works out 1 to 7 and 9 (101 to 107 and 109)');
     },
   },
   ROUND: { min: 1, max: 2, fn: roundFn('near') },

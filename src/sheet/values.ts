@@ -10,7 +10,7 @@ export class CellError {
 }
 
 export const ERR = {
-  div0: () => new CellError('#DIV/0!', 'Divided by zero'),
+  div0: (detail = 'Divided by zero') => new CellError('#DIV/0!', detail),
   value: (detail = 'A value of the wrong kind') => new CellError('#VALUE!', detail),
   ref: (detail = 'A cell that no longer exists') => new CellError('#REF!', detail),
   name: (detail = 'A name this program does not know') => new CellError('#NAME?', detail),
