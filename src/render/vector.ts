@@ -20,6 +20,8 @@ export interface ImageItem {
   x: number; y: number; w: number; h: number;
   crop?: { l: number; t: number; r: number; b: number };
   px?: { w: number; h: number };
+  /** Rounded corners: their radius, in points. */
+  radius?: number;
 }
 
 export type Item =
@@ -225,10 +227,10 @@ export class VectorContext {
   drawImage(): void { throw new Error('The renderer records pictures with picture()'); }
 
   /** A picture on the drawing (see Renderer.drawPicture). */
-  picture(s: { src?: string; x1: number; y1: number; x2: number; y2: number; crop?: ImageItem['crop']; px?: ImageItem['px'] }): void {
+  picture(s: { src?: string; x1: number; y1: number; x2: number; y2: number; crop?: ImageItem['crop']; px?: ImageItem['px'] }, radius = 0): void {
     if (!s.src) return;
     const x = Math.min(s.x1, s.x2), y = Math.min(s.y1, s.y2);
-    this.items.push({ kind: 'image', src: s.src, x, y, w: Math.abs(s.x2 - s.x1), h: Math.abs(s.y2 - s.y1), crop: s.crop, px: s.px });
+    this.items.push({ kind: 'image', src: s.src, x, y, w: Math.abs(s.x2 - s.x1), h: Math.abs(s.y2 - s.y1), crop: s.crop, px: s.px, ...(radius > 0 ? { radius } : {}) });
   }
 }
 

@@ -19,13 +19,15 @@ function svgImage(item: ImageItem): string {
   // a Windows metafile goes in as its SVG copy (an SVG viewer can't show EMF)
   const it = { ...item, src: showableSrc(item.src) ?? item.src };
   const c = it.crop;
-  if (!c || !(c.l || c.t || c.r || c.b)) {
+  const rx = it.radius ? ` rx="${n(it.radius)}"` : '';
+  if ((!c || !(c.l || c.t || c.r || c.b)) && !rx) {
     return `<image x="${n(it.x)}" y="${n(it.y)}" width="${n(it.w)}" height="${n(it.h)}" preserveAspectRatio="none" href="${esc(it.src)}"/>`;
   }
-  const W = it.w / Math.max(0.01, 1 - c.l - c.r), H = it.h / Math.max(0.01, 1 - c.t - c.b);
+  const k = c ?? { l: 0, t: 0, r: 0, b: 0 };
+  const W = it.w / Math.max(0.01, 1 - k.l - k.r), H = it.h / Math.max(0.01, 1 - k.t - k.b);
   const id = `crop${++clipCount}`;
-  return `<clipPath id="${id}"><rect x="${n(it.x)}" y="${n(it.y)}" width="${n(it.w)}" height="${n(it.h)}"/></clipPath>` +
-    `<image clip-path="url(#${id})" x="${n(it.x - c.l * W)}" y="${n(it.y - c.t * H)}" width="${n(W)}" height="${n(H)}" preserveAspectRatio="none" href="${esc(it.src)}"/>`;
+  return `<clipPath id="${id}"><rect x="${n(it.x)}" y="${n(it.y)}" width="${n(it.w)}" height="${n(it.h)}"${rx}/></clipPath>` +
+    `<image clip-path="url(#${id})" x="${n(it.x - k.l * W)}" y="${n(it.y - k.t * H)}" width="${n(W)}" height="${n(H)}" preserveAspectRatio="none" href="${esc(it.src)}"/>`;
 }
 
 /** An SVG file showing the items, one point to one SVG unit, sized in points. */

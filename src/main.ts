@@ -8,7 +8,7 @@ import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
 import { Toolboxes, lockIcon, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
-import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS, type Attachment, type HighlightStyle } from './model';
+import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle } from './model';
 import { Renderer, measureText, forgetTextWidths } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
 import type { Align } from './editor/arrange';
@@ -47,7 +47,12 @@ import { applyStyle, restyleContents, styleNamed, type StyleMode } from './drawi
 import { recordPicture, pictureSvg, pictureCanvas, canvasPng, bitmapScale, EXPORT_MAX_SIDE, EXPORT_MAX_PIXELS } from './render/picture';
 import { pngWithDpi } from './render/emf-read';
 import { whiteToClear } from './render/background';
-import { pickTemplate } from './ui/template-gallery';
+
+import { pickSlideTemplate } from './ui/slide-templates';
+import { AnimationUI } from './ui/animation-ui';
+import { writePptx, type PptxOptions } from './io/pptx-write';
+import { EFFECTS, animName, newAnim } from './deck/animation';
+import { SLIDE_TEMPLATES, applyTemplate } from './deck/templates';import { pickTemplate } from './ui/template-gallery';
 import { showContextMenu, type MenuItem } from './ui/context-menu';
 import { fillTemplate, templateSize } from './design/templates';
 import { itemsToSvg } from './render/svg';
@@ -77,6 +82,8 @@ import { ModeColoursDialog, ModeColours, DEFAULT_MODE_COLOURS, applyModeColours 
 import { typingPrefs, setTypingPrefs, onTypingPrefs } from './text/typing';
 import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
+import { UpdateUI } from './ui/update-ui';
+import { canUpdate, appVersion } from './updates';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
 import { NameDialog } from './ui/name-dialog';
 import { ArrangeDialog } from './ui/arrange-dialog';
@@ -335,6 +342,7 @@ const TEMPLATE_HINT = 'Click empty space to place it (drag to turn it), a bond t
 // Design mode's shape library (made further down, once the page is ready)
 let designLib: DesignLibrary | null = null;
 let layers: LayersPanel | null = null;
+let animUi: AnimationUI | null = null;
 /** View > Alignment Guides: moved things snap into line with other things and the page, on or off for each kind of tab. */
 const guidesOn: Record<'drawing' | 'slides' | 'design', boolean> = { drawing: false, slides: true, design: true };
 const guideMode = (): keyof typeof guidesOn | null => {
@@ -1065,21 +1073,12 @@ const ws: Workspace = new Workspace(doc, {
     modeTool[tab.mode] = editor.toolName;
     editor.cropping = null;
     (ws.pane ?? tab).view = { ...renderer.view };
-    if (tab.deck) { tab.deck.onChange = () => {}; tab.deck.onSwitch = () => {}; }
+    if (tab.deck) { tab.deck.onChange = () => {}; tab.deck.onSwitch = () => {}; tab.deck.onMotion = () => {}; }
   },
   enter: (tab, opened) => enterTab(tab, opened),
   changed: () => { renderTabs(); updateTitle(); layoutSplit(); },
   flash,
-  pptx: {
-    picture: async (d) => {
-      const pic = recordPicture(d, 1);
-      if (!pic) return null;
-      const png = new Uint8Array(await (await canvasPng(pictureCanvas(d, pic).canvas)).arrayBuffer());
-      return { svg: pictureSvg(pic), png, box: pic.box };
-    },
-    svgToPng,
-    fonts: bundledFaces,
-  },
+  pptx: pptxOptions(),
   measure: measureText,
   sheets: {
     read: (bytes, name) => readSheetFile(bytes, name, sheetFiles),
@@ -1090,7 +1089,22 @@ const ws: Workspace = new Workspace(doc, {
     write: (d) => writeDocx(d, docFiles),
   },
   newStyle: (mode) => { const n = modeStyles[mode]; return n ? styleNamed(n, ownStyles) ?? null : null; },
+  newMaster: (m) => { const t = SLIDE_TEMPLATES.find((x) => x.id === slideTemplate); return t && t.id !== 'plain' ? applyTemplate(m, t) : null; },
 });
+
+/** How slides are saved for PowerPoint: structures as pictures (PNG and SVG), the bundled fonts inside. */
+function pptxOptions(): PptxOptions {
+  return {
+    picture: async (d) => {
+      const pic = recordPicture(d, 1);
+      if (!pic) return null;
+      const png = new Uint8Array(await (await canvasPng(pictureCanvas(d, pic).canvas)).arrayBuffer());
+      return { svg: pictureSvg(pic), png, box: pic.box };
+    },
+    svgToPng,
+    fonts: bundledFaces,
+  };
+}
 
 /** The slide deck showing (in Slides mode), or null for a drawing. */
 function deckNow(): Deck | null {
@@ -1118,6 +1132,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   editor.glueArrows = design;
   layers?.show(design ? doc : null);
   showGuides();
+  if (deck) deck.onMotion = () => { animUi?.refresh(); ws.noteChange(); renderer.repaintAll(); editor.requestScene(); };
   editor.textFirst = !!deck;
   editor.structuresLocked = slides && structuresLocked;
   for (const el of document.querySelectorAll<HTMLElement>('.design-only')) el.hidden = !design;
@@ -1147,6 +1162,7 @@ function enterTab(tab: Tab, opened: boolean): void {
     notesBox.value = deck.current?.notes ?? '';
     showSlideState();
   } else slideList.show(null);
+  animUi?.update();
   layoutSplit();
   // the slide list and notes take room from the drawing area
   resize();
@@ -1172,6 +1188,7 @@ const slidePage = {
     if (!d?.current) return;
     drawSlidePage(ctx, { size: d.size, master: d.master, layout: d.current.layout, index: d.index }, SURROUND);
     if (ws.active.mode === 'design' && designGrid.on) drawGrid(ctx, d.size, designGrid.step);
+    if (ws.active.mode === 'slides') animUi?.drawMarkers(ctx, renderer.view.scale);
   },
 };
 
@@ -1200,6 +1217,7 @@ function slideSwitched(deck: Deck): void {
   renderer.repaintAll();
   editor.requestScene();
   editor.clearSelection();
+  animUi?.slideChanged();
 }
 
 /** The layout and size boxes and the Slide menu show the slide being edited. */
@@ -1218,6 +1236,22 @@ function showSlideState(): void {
   $('[data-cmd="size-wide"]')?.setAttribute('aria-checked', String(named === 'wide'));
   $('[data-cmd="size-standard"]')?.setAttribute('aria-checked', String(named === 'standard'));
 }
+
+// ---------------------------------------------------------------- transitions and animations (Slides mode)
+
+animUi = new AnimationUI($('#ribbon'), $('#anim-section'), {
+  deck: () => (ws.active.mode === 'slides' ? deckNow() : null),
+  doc: () => doc,
+  selection: () => {
+    const s = editor.sel;
+    const typing = renderer.hiddenCaption;
+    return typing === null ? s : { ...s, captions: new Set([...s.captions, typing]) };
+  },
+  select: (sel) => editor.selectThese(sel),
+  finishTyping,
+  flash,
+  repaint: () => { renderer.repaintAll(); editor.requestScene(); },
+});
 
 // ---------------------------------------------------------------- Design mode
 
@@ -1687,6 +1721,22 @@ async function slideMaster(): Promise<void> {
   });
   // the deck may have gone (its tab closed) while the window was open
   if (m && deckNow() === d) d.setMaster(m);
+}
+
+/** Design > Templates: a ready-made look for every slide, and optionally for new decks too. */
+let slideTemplate: string | null = null;
+async function slideTemplates(): Promise<void> {
+  const d = deckNow();
+  if (!d) return;
+  finishTyping();
+  const got = await pickSlideTemplate(d.master, d.size, slideTemplate);
+  if (!got) return;
+  if (deckNow() === d) d.setMaster(applyTemplate(d.master, got.template));
+  if (got.forNew) {
+    slideTemplate = got.template.id;
+    storeSettings();
+    flash(`New slide decks will start with ${got.template.name}. Pick Plain to go back.`);
+  }
 }
 
 function present(fromHere: boolean): void {
@@ -2313,8 +2363,22 @@ function command(name: string): boolean {
   return !!run && run() !== false;
 }
 
+/** Picture Style (right-click on a picture): a ready-made frame, corners and shadow for the pictures picked. */
+function setPictureStyle(look: PictureLook | undefined): boolean {
+  const pics = [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => x?.kind === 'picture');
+  if (!pics.length) { flash('Select a picture first.'); return false; }
+  doc.edit('Picture style', () => { for (const p of pics) doc.updateShape(p.id, { look: look && { ...look } }); });
+  return true;
+}
+
 /** Slide commands that don't apply to a design's single page. */
-const SLIDE_ONLY = new Set(['new-slide', 'duplicate-slide', 'delete-slide', 'size-wide', 'size-standard', 'slide-master']);
+const SLIDE_ONLY = new Set(['new-slide', 'duplicate-slide', 'delete-slide', 'size-wide', 'size-standard', 'slide-master', 'slide-templates',
+  'slide-transitions', 'slide-animations', 'animation-pane', 'preview-slide', 'remove-animation']);
+
+/** The animation commands: an effect for the selected objects (the right-click menu's Animation). */
+const ANIM_COMMANDS: { cmd: string; label: string }[] = [false, true].flatMap((exit) => EFFECTS.map((e) => ({
+  cmd: `animate-${e.id}${exit ? '-out' : ''}`, label: animName(newAnim({ kind: 'shape', id: 0 }, e.id, exit)),
+})));
 
 const COMMANDS: Record<string, () => unknown> = {
   new: () => { finishTyping(); ws.newDrawing(); },
@@ -2354,6 +2418,12 @@ const COMMANDS: Record<string, () => unknown> = {
   'size-wide': () => setSlideSize(WIDE),
   'size-standard': () => setSlideSize(STANDARD),
   'slide-master': () => slideMaster(),
+  'slide-templates': () => slideTemplates(),
+  'slide-transitions': () => animUi?.showTab('transitions'),
+  'slide-animations': () => animUi?.showTab('animations'),
+  'animation-pane': () => animUi?.showPane(!animUi.paneShown),
+  'preview-slide': () => animUi?.preview(),
+  'remove-animation': () => animUi?.removePicked(),
   'drawing-style': () => drawingStyleDialog(),
   present: () => present(false),
   'present-current': () => present(true),
@@ -2428,6 +2498,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'mode-colours': () => modeDialog.open(),
   'edit-palettes': () => editPalettes(),
   preferences: () => void openPreferences(),
+  'check-updates': () => void updates.check(),
   'toolbox-main': () => toolboxes.toggle('main'),
   'toolbox-structure': () => toolboxes.toggle('structure'),
   'toolbox-arrange': () => toolboxes.toggle('arrange'),
@@ -2477,6 +2548,12 @@ const COMMANDS: Record<string, () => unknown> = {
     flash(names.length ? 'On the clipboard: ' + names.join(', ') : 'The clipboard is empty.', 15000);
   },
 };
+for (const p of PICTURE_STYLES) COMMANDS[`picture-style-${p.id}`] = () => setPictureStyle(p.look);
+for (const [i, a] of ANIM_COMMANDS.entries()) {
+  const e = EFFECTS[i % EFFECTS.length].id, exit = i >= EFFECTS.length;
+  COMMANDS[a.cmd] = () => { if (ws.active.mode !== 'slides') return false; animUi?.applyEffect(e, exit); return true; };
+  SLIDE_ONLY.add(a.cmd);
+}
 
 // The menus: click a name to open its menu; with one open, pointing at another name opens that.
 const menus = [...document.querySelectorAll<HTMLDivElement>('.menu-wrap')].map((w) => ({
@@ -2862,15 +2939,34 @@ function showHelicity(on: boolean): void {
   editor.requestScene();
 }
 
+// Newer versions of the desktop app (File > Check for Updates…, Edit > Preferences)
+let updateCheck = true;
+let skipVersion: string | null = null;
+const updates = new UpdateUI({
+  unsaved: () => ws.tabs.filter((t) => t.dirty).map((t) => t.name),
+  skipped: () => skipVersion,
+  skip: (v) => { skipVersion = v; storeSettings(); },
+});
+for (const el of document.querySelectorAll<HTMLElement>('.desktop-only')) el.hidden = !canUpdate;
+void appVersion().then((v) => { const el = document.querySelector('#app-version'); if (el) el.textContent = canUpdate ? `Version ${v}` : 'Web version'; });
+
 /** Edit > Preferences: drawing choices that are set once rather than per structure. */
 async function openPreferences(): Promise<void> {
   const r = await ask('Preferences', [
     { name: 'methyl', label: 'Terminal methyls written as', value: editor.options.methylStyle, options: [{ value: 'Me', label: 'Me' }, { value: 'CH3', label: 'CH3' }] },
     { name: 'axial', label: 'Axial chirality written as', value: axialStyle.helicity ? 'PM' : 'RaSa', options: [{ value: 'RaSa', label: 'Ra / Sa' }, { value: 'PM', label: 'P / M (helicity)' }] },
+    { name: 'charges', label: 'Charges from the + and − keys', value: editor.options.circledCharges ? 'circled' : 'plain', options: [{ value: 'plain', label: 'Plain sign (N+)' }, { value: 'circled', label: 'In a circle (⊕, ⊖)' }] },
     { name: 'ask', label: 'Ask before changing every structure on the page when nothing is selected', type: 'checkbox', value: String(askWholeDrawing) },
-  ], { ok: 'Save', note: 'Show Terminal Methyls writes them this way; methyls already written out in the selection (or the whole drawing, with nothing selected) change too. Axial chirality labels (biaryls, allenes) follow the choice at once; Ra is the same as M, and Sa as P.' });
+    ...(canUpdate ? [{ name: 'updates', label: 'Check for a newer version when the app starts', type: 'checkbox' as const, value: String(updateCheck) }] : []),
+  ], { ok: 'Save', note: 'Charges already drawn keep their look; the circle tools on the Object toolbox always draw a circled charge. Show Terminal Methyls writes them this way; methyls already written out in the selection (or the whole drawing, with nothing selected) change too. Axial chirality labels (biaryls, allenes) follow the choice at once; Ra is the same as M, and Sa as P.' });
   if (!r) return;
   askWholeDrawing = r.ask === 'true';
+  if (canUpdate) {
+    // turning the check back on also forgets a skipped version
+    if (r.updates === 'true' && !updateCheck) skipVersion = null;
+    updateCheck = r.updates === 'true';
+  }
+  editor.options.circledCharges = r.charges === 'circled';
   showHelicity(r.axial === 'PM');
   if (r.methyl !== editor.options.methylStyle) chooseMethylStyle(r.methyl as MethylStyle);
   else storeSettings();
@@ -2905,6 +3001,8 @@ function storeSettings(): void {
     citeOptions: preferredStyle().options,
     methylStyle: editor.options.methylStyle,
     axialStyle: axialStyle.helicity ? 'PM' : 'RaSa',
+    circledCharges: editor.options.circledCharges,
+    slideTemplate,
     askWholeDrawing,
     palettes: getPalettes(),
     toolboxes: toolboxState,
@@ -2915,6 +3013,8 @@ function storeSettings(): void {
     darkPalettes: dark.own,
     guides: { ...guidesOn },
     docPins: [...docBoxPrefs.pinned],
+    updateCheck,
+    skipVersion,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -3025,7 +3125,11 @@ void loadSettings().then((s) => {
   setPreferredStyle(s.citeStyle, s.citeOptions);
   editor.options.methylStyle = s.methylStyle;
   showHelicity(s.axialStyle === 'PM');
+  editor.options.circledCharges = s.circledCharges;
+  slideTemplate = s.slideTemplate;
   askWholeDrawing = s.askWholeDrawing;
+  updateCheck = s.updateCheck;
+  skipVersion = s.skipVersion;
   setPalettes(s.palettes);
   toolboxState = s.toolboxes;
   ownStyles = s.myStyles;
@@ -3049,6 +3153,8 @@ void loadSettings().then((s) => {
   placeSidePanel();
   tickMethylStyle();
   settingsLoaded = true;
+  // a few seconds after starting, so the check doesn't slow down opening the window
+  if (canUpdate && updateCheck) setTimeout(() => void updates.quietCheck(), 4000);
   refreshKeys();
 });
 refreshKeys();
@@ -3789,7 +3895,11 @@ function drawingMenu(): MenuItem[] {
     { label: 'Align', items: arrange },
     { label: 'Rotate or Flip', items: turn },
     ...(order.length ? [{ label: 'Order', items: order }] : []),
-    ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }] : []),
+    ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }, { label: 'Picture Style', items: PICTURE_STYLES.map((p) => ({ cmd: `picture-style-${p.id}`, label: p.name })) }] : []),
+    ...(ws.active.mode === 'slides' ? [{ label: 'Animation', items: [
+      ...ANIM_COMMANDS.slice(0, EFFECTS.length), null, ...ANIM_COMMANDS.slice(EFFECTS.length), null,
+      { cmd: 'remove-animation', label: 'Remove Animation' }, { cmd: 'animation-pane', label: 'Animation Pane' }, { cmd: 'preview-slide', label: 'Preview Slide' },
+    ] }] : []),
     null,
     { cmd: 'select-all' },
     view,
@@ -4111,7 +4221,7 @@ editor.onFrame = () => {
   updateWarnings();
   if (doc.version !== stereoSeen) { stereoSeen = doc.version; updateStereo(); }
 };
-editor.onChange = () => { updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); void refreshDescriptors(); scheduleLabelCheck(); };
+editor.onChange = () => { animUi?.selectionChanged(); updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); void refreshDescriptors(); scheduleLabelCheck(); };
 chem.onReady = () => {
   (window as any).__chemReadyMs = performance.now() - startMs;
   sheetChem.flush();
@@ -4164,7 +4274,8 @@ requestAnimationFrame(() => {
 });
 
 // Hooks for the automated speed tests.
-(window as any).__app = { doc, editor, renderer, chem, live, cdxml: (name: string) => writeCdxml(doc, { name, textMeasure: measureText }), openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode, docxBytes: () => writeDocx(docMode.file!.t, docFiles) };
+(window as any).__app = { doc, editor, renderer, chem, live, cdxml: (name: string) => writeCdxml(doc, { name, textMeasure: measureText }), openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode, docxBytes: () => writeDocx(docMode.file!.t, docFiles),
+  pptxBytes: () => { const d = deckNow()!; return writePptx({ size: d.size, master: d.master, slides: d.slides.map((s, i) => ({ layout: s.layout, doc: d.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims })) }, pptxOptions()); } };
 
 // ---------------------------------------------------------------- desktop self-test
 

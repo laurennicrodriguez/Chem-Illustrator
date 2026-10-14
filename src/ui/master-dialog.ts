@@ -2,7 +2,7 @@
 // background, a logo, slide numbers, a footer, and how big structures are drawn).
 // Everything here changes every slide at once, and Undo puts it back.
 
-import { Master, Corner, Image } from '../deck/deck';
+import { Master, Corner, Image, DECORS, type Decor } from '../deck/deck';
 import { scaleStyle } from '../drawing-styles';
 import { ACS_1996 } from '../style';
 
@@ -88,6 +88,21 @@ export function editMaster(m: Master, hooks: MasterDialogHooks): Promise<Master 
     section('Background');
     const bg = color(m.background);
     row('Colour', bg);
+    const decor = document.createElement('select');
+    for (const x of DECORS) decor.add(new Option(x.name, x.id, false, x.id === m.decor));
+    row('Template shapes', decor);
+    const accent = color(m.accent), accent2 = color(m.accent2);
+    row('Accent colours', accent, accent2);
+
+    section('Title slides');
+    const ts = m.titleSlide;
+    const ownTitle = check(!!ts);
+    row('Own background and text colours', ownTitle);
+    const tsBg = color(ts?.background ?? '#1d3557'), tsTitle = color(ts?.titleColor ?? '#ffffff'), tsText = color(ts?.textColor ?? '#d9e2ec');
+    const tsRows = [row('Background', tsBg), row('Title colour', tsTitle), row('Text colour', tsText)];
+    const showTs = () => { for (const r of tsRows) r.hidden = !ownTitle.checked; };
+    ownTitle.addEventListener('change', showTs);
+    showTs();
 
     section('Titles');
     const titleFont = text(m.titleFont, true), titleSize = num(m.titleSize, 4, 200), titleColor = color(m.titleColor), titleBold = check(m.titleBold);
@@ -186,6 +201,8 @@ export function editMaster(m: Master, hooks: MasterDialogHooks): Promise<Master 
         slideNumbers: numbers.checked, numberTitleSlides: numberTitle.checked,
         footer: footer.value, footerSize: n(footerSize, m.footerSize), footerColor: footerColor.value,
         drawing, fitPasted: fit.checked,
+        decor: decor.value as Decor, accent: accent.value, accent2: accent2.value,
+        titleSlide: ownTitle.checked ? { background: tsBg.value, titleColor: tsTitle.value, textColor: tsText.value } : undefined,
       });
     });
     cancel.addEventListener('click', () => done(null));

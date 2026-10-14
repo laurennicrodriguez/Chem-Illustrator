@@ -211,6 +211,8 @@ export class Editor {
     fixedAngles: true,
     /** Show Terminal Methyls writes them as CH3 or as Me (Structure > Terminal Methyls as …). */
     methylStyle: 'Me' as MethylStyle,
+    /** + and − on an atom give a charge in a circle (⊕, ⊖) rather than a plain sign in the label (Edit > Preferences). */
+    circledCharges: false,
   };
   /** Run a menu command by name; false when it doesn't apply, so the key does nothing. */
   runCommand: (name: string) => boolean = () => false;
@@ -1170,13 +1172,7 @@ export class Editor {
     const circled = kind === 'CirclePlus' || kind === 'CircleMinus';
     const size = kind === 'LonePair' ? 2.6 : circled ? 4.5 : delta ? 0.9 * L : 1.4;
     let at = p, dir = { x: 0, y: -1 };
-    if (atom) {
-      // what already sits round the atom: other symbols and short captions
-      const taken: Vec[] = [];
-      for (const s of doc.shapes.values()) if (s.kind === 'symbol') { const c = { x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 }; if (dist(c, atom) < 0.8 * L) taken.push(c); }
-      for (const c of doc.captions.values()) { const b = this.r.captionBox(c); const m = { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 }; if (dist(m, atom) < 0.8 * L && plainText(c.runs).length <= 3) taken.push(m); }
-      ({ at, dir } = symbolSpot(doc, this.measure(), atom.id, taken, size));
-    }
+    if (atom) ({ at, dir } = this.openSpot(atom, size));
     doc.edit('Symbol', () => {
       this.sel = emptySel();
       if (delta) {
@@ -1200,6 +1196,25 @@ export class Editor {
       if (atom && circled) doc.updateAtom(atom.id, { charge: atom.charge + (kind === 'CirclePlus' ? 1 : -1), hideCharge: true });
     });
     this.changed();
+  }
+
+  /** The most open place round an atom for a symbol this big, clear of other symbols and short captions near it. */
+  private openSpot(atom: Atom, size: number): { at: Vec; dir: Vec } {
+    const doc = this.doc;
+    const L = doc.style.bondLength;
+    const taken: Vec[] = [];
+    for (const s of doc.shapes.values()) if (s.kind === 'symbol') { const c = { x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 }; if (dist(c, atom) < 0.8 * L) taken.push(c); }
+    for (const c of doc.captions.values()) { const b = this.r.captionBox(c); const m = { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 }; if (dist(m, atom) < 0.8 * L && plainText(c.runs).length <= 3) taken.push(m); }
+    return symbolSpot(doc, this.measure(), atom.id, taken, size);
+  }
+
+  /**
+   * Give an atom a charge (the + and − keys), inside an edit. A charge of one is shown in a
+   * circle when circled charges are chosen (Edit > Preferences) or the atom's charge is already
+   * circled; otherwise, and for larger charges, as a plain sign by the atom.
+   */
+  setCharge(id: number, charge: number): void {
+    applyCharge(this.doc, id, charge, this.options.circledCharges, (a, size) => this.openSpot(a, size).at);
   }
 
   private addBrackets(r: Rect, bracket: NonNullable<Shape['bracket']>): void {
@@ -2180,7 +2195,7 @@ export class Editor {
     switch (act) {
       case 'plus':
       case 'minus':
-        doc.edit('Charge', () => doc.updateAtom(id, { charge: a.charge + (act === 'plus' ? 1 : -1) }));
+        doc.edit('Charge', () => this.setCharge(id, a.charge + (act === 'plus' ? 1 : -1)));
         break;
       case 'number':
         doc.edit('Atom number', () => doc.updateAtom(id, a.showNumber
@@ -2471,6 +2486,15 @@ export class Editor {
     this.closeCaption();
     this.sel = emptySel();
     for (const id of ids) if (this.doc.shapes.has(id)) this.sel.shapes.add(id);
+    this.requestOverlay();
+    this.onChange();
+  }
+
+  /** Select these objects (from the Animation pane). */
+  selectThese(sel: Selection): void {
+    this.closeCaption();
+    this.sel = { atoms: new Set(sel.atoms), bonds: new Set(sel.bonds), captions: new Set(sel.captions), arrows: new Set(sel.arrows), shapes: new Set(sel.shapes) };
+    for (const b of this.doc.bonds.values()) if (this.sel.atoms.has(b.a1) && this.sel.atoms.has(b.a2)) this.sel.bonds.add(b.id);
     this.requestOverlay();
     this.onChange();
   }
@@ -3109,3 +3133,29 @@ function sameHit(a: Hit, b: Hit): boolean {
 }
 
 export { MERGE_FRACTION, atomAt };
+
+/**
+ * Give an atom a charge, inside an edit. A charge of one goes in a circle (a ⊕ or ⊖ symbol at
+ * `spot`, with the label leaving the sign out) when `circled` is chosen or the atom's charge is
+ * circled already; other charges, and every charge otherwise, show as a plain sign.
+ */
+export function applyCharge(doc: Doc, id: number, charge: number, circled: boolean, spot: (a: Atom, size: number) => Vec): void {
+  const a = doc.atoms.get(id);
+  if (!a) return;
+  const near = circledChargesOf(doc, a);
+  const ring = circled || (!!a.hideCharge && near.length > 0);
+  for (const s of near) doc.removeShape(s.id);
+  if (ring && Math.abs(charge) === 1) {
+    const size = 4.5;
+    const at = spot(doc.atoms.get(id)!, size);
+    doc.addShape({ kind: 'symbol', symbol: charge > 0 ? 'CirclePlus' : 'CircleMinus', x1: at.x - size / 2, y1: at.y - size / 2, x2: at.x + size / 2, y2: at.y + size / 2 });
+    doc.updateAtom(id, { charge, hideCharge: true });
+  } else doc.updateAtom(id, { charge, hideCharge: undefined });
+}
+
+/** The circled charges (⊕, ⊖) beside an atom: within most of a bond length of it. */
+export function circledChargesOf(doc: Doc, a: Atom): Shape[] {
+  const L = doc.style.bondLength;
+  return [...doc.shapes.values()].filter((s) => s.kind === 'symbol' && (s.symbol === 'CirclePlus' || s.symbol === 'CircleMinus')
+    && dist({ x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 }, a) < 0.8 * L);
+}

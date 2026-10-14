@@ -143,6 +143,10 @@ mod tests {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Help > Check for Updates: fetches the newest release from GitHub, checks its signature
+        // against the public key in tauri.conf.json, installs it and restarts the app
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // A self-test that never reports (the page failed to load) still ends.
             if let Some(path) = selftest_path() {

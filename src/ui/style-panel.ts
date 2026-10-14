@@ -3,7 +3,7 @@
 // bond (label, charge, atom number; order and style).
 // Anything the drawing tools set automatically can be changed here by hand.
 
-import { Doc, Arrow, Shape, Caption, Atom, Bond, type StepRoles, type Pattern, type AttachSide, type Attachment, type DescriptorKey, type HighlightShape, type HighlightStyle } from '../model';
+import { Doc, Arrow, Shape, Caption, Atom, Bond, PICTURE_STYLES, type PictureLook, type StepRoles, type Pattern, type AttachSide, type Attachment, type DescriptorKey, type HighlightShape, type HighlightStyle } from '../model';
 import { fullStyle } from '../render/highlight';
 import { DESCRIPTORS } from './analysis-panel';
 import { COMMON_ADDUCTS } from '../chem/hrms';
@@ -380,6 +380,7 @@ export class StylePanel {
       this.number(label, round(c[k] * 100, 10), 1, 0, 98, (v) => set('Crop picture', (x) => cropTo(x, { ...(x.crop ?? { l: 0, t: 0, r: 0, b: 0 }), [k]: v / 100 })),
         'How much of the picture is cut off on this side, as a percentage of its full width or height.');
     }
+    this.pictureLook(pics);
     const buttons = document.createElement('div');
     buttons.className = 'style-buttons';
     const button = (text: string, title: string, on: () => void) => {
@@ -401,6 +402,33 @@ export class StylePanel {
       return { x2: bx.x1 + x.px.w * 0.75 * (1 - cc.l - cc.r), y2: bx.y1 + x.px.h * 0.75 * (1 - cc.t - cc.b) };
     }));
     this.body.appendChild(buttons);
+  }
+
+  /** A picture's frame, corners and shadow: a ready-made style, then each part on its own. */
+  private pictureLook(pics: Shape[]): void {
+    const look = pics[0].look ?? {};
+    const setLook = (label: string, patch: (l: PictureLook) => PictureLook | undefined) => this.edit(label, () => {
+      for (const x of pics) {
+        const next = patch({ ...(x.look ?? {}) });
+        const tidy = next && Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined && v !== 0)) as PictureLook;
+        this.doc.updateShape(x.id, { look: tidy && Object.keys(tidy).length ? tidy : undefined });
+      }
+    });
+    const same = (a: PictureLook | undefined, b: PictureLook | undefined) => JSON.stringify(a ?? {}) === JSON.stringify(b ?? {});
+    const preset = PICTURE_STYLES.find((p) => same(p.look, pics[0].look))?.id ?? 'custom';
+    const opts: Opt<string>[] = PICTURE_STYLES.map((p) => [p.id, p.name]);
+    if (preset === 'custom') opts.push(['custom', 'Your own']);
+    this.select('Frame style', opts, preset, (v) => {
+      const p = PICTURE_STYLES.find((x) => x.id === v);
+      if (p) setLook('Picture style', () => p.look && { ...p.look });
+    });
+    this.number('Frame line (pt)', look.line ?? 0, 0.5, 0, 72, (v) => setLook('Picture frame', (l) => ({ ...l, line: v })),
+      'The width of the line round the picture; 0 for none.');
+    if (look.line) this.color('Frame colour', look.lineColor, (v) => setLook('Picture frame colour', (l) => ({ ...l, lineColor: v ?? '#000000' })));
+    this.number('Rounded corners (%)', round((look.round ?? 0) * 100, 10), 1, 0, 50, (v) => setLook('Rounded corners', (l) => ({ ...l, round: v / 100 })),
+      'How round the corners are, as a percentage of the shorter side (50 makes a circle or a pill).');
+    this.select<'none' | 'soft' | 'hard'>('Shadow', [['none', 'None'], ['soft', 'Soft'], ['hard', 'Hard']], look.shadow ?? 'none',
+      (v) => setLook('Picture shadow', (l) => ({ ...l, shadow: v === 'none' ? undefined : v })));
   }
 
   // ------------------------------------------------------------------ tables

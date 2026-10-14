@@ -5,7 +5,7 @@
 // fast however big the document is. Label layouts and bond geometry are cached per atom
 // and bond and only recomputed near what changed.
 
-import { Doc, Atom, Bond, Arrow, Caption, Shape, applyBase, enhancedText, CHIRAL_FLAGS, flagTextSize, type TextBase, type HighlightStyle } from '../model';
+import { Doc, Atom, Bond, Arrow, Caption, Shape, PICTURE_SHADOWS, pictureRadius, applyBase, enhancedText, CHIRAL_FLAGS, flagTextSize, type TextBase, type HighlightStyle } from '../model';
 import { atomPiece, bondPiece, fullStyle, highlightSizes, softRings, tracePieces, type Piece } from './highlight';
 import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
 import { crossingGaps } from '../chem/crossing';
@@ -44,7 +44,7 @@ export interface PageDecor {
 const PROMPTS = { title: 'Click to add title', subtitle: 'Click to add subtitle', body: 'Click to add text' };
 
 /** Something that can record a picture instead of drawing it (the vector recorder). */
-interface PictureSink { picture(s: Shape): void }
+interface PictureSink { picture(s: Shape, radius?: number): void }
 
 export interface View {
   /** Screen pixels per point. */
@@ -633,7 +633,7 @@ export class Renderer {
           if (f !== curFont) { ctx.font = f; curFont = f; }
           ctx.fillText(r.text, a.x + r.dx, a.y + r.dy);
         }
-      } else if (a.charge && a.z === 6 && !a.hideCharge, !!a.showCarbon) {
+      } else if (a.charge && a.z === 6 && !a.hideCharge) {
         this.drawCarbonCharge(ctx, doc, a);
       }
       if (a.showNumber && a.atomNumber) curFont = this.drawAtomNumber(ctx, doc, a, curFont);
@@ -995,20 +995,66 @@ export class Renderer {
     ctx.setLineDash([]);
   }
 
-  /** A picture, cropped as set; a grey box until its image has loaded. */
+  /** A picture, cropped as set, with its frame, corners and shadow; a grey box until its image has loaded. */
   private drawPicture(ctx: CanvasRenderingContext2D, s: Shape, x: number, y: number, w: number, h: number): void {
-    if ('picture' in ctx) { (ctx as unknown as PictureSink).picture(s); return; }
+    const look = s.look;
+    const r = pictureRadius(look, w, h);
+    const edge = () => {
+      if (!look?.line) return;
+      ctx.setLineDash([]);
+      ctx.lineWidth = look.line;
+      ctx.strokeStyle = look.lineColor ?? '#000000';
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, r);
+      ctx.stroke();
+    };
+    if ('picture' in ctx) {
+      // a vector picture has no blur: the shadow is a grey box, lighter when soft
+      if (look?.shadow) {
+        const d = PICTURE_SHADOWS[look.shadow].off;
+        ctx.fillStyle = look.shadow === 'soft' ? '#c9c9c9' : '#8c8c8c';
+        ctx.beginPath();
+        ctx.roundRect(x + d, y + d, w, h, r);
+        ctx.fill();
+      }
+      (ctx as unknown as PictureSink).picture(s, r);
+      edge();
+      return;
+    }
     const img = s.src ? imageFor(s.src) : null;
+    ctx.save();
+    if (look?.shadow) {
+      // canvas shadows ignore the zoom, so they are scaled by it here
+      const sh = PICTURE_SHADOWS[look.shadow], m = ctx.getTransform(), k = Math.hypot(m.a, m.b) || 1;
+      ctx.shadowColor = `rgba(0,0,0,${sh.alpha})`;
+      ctx.shadowBlur = sh.blur * k;
+      ctx.shadowOffsetX = ctx.shadowOffsetY = sh.off * k;
+      if (r || !img) {
+        // rounded corners clip the picture, which would clip its shadow too: the shadow is the box's
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.roundRect(x, y, w, h, r);
+        ctx.fill();
+        ctx.shadowColor = 'transparent';
+      }
+    }
+    if (r) {
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, r);
+      ctx.clip();
+    }
     if (!img) {
       ctx.fillStyle = '#eef1f5';
       ctx.fillRect(x, y, w, h);
-      return;
+    } else {
+      const c = s.crop ?? { l: 0, t: 0, r: 0, b: 0 };
+      const iw = img.naturalWidth || s.px?.w || w, ih = img.naturalHeight || s.px?.h || h;
+      const sx = c.l * iw, sy = c.t * ih, sw = Math.max(1e-3, (1 - c.l - c.r) * iw), sh = Math.max(1e-3, (1 - c.t - c.b) * ih);
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
     }
-    const c = s.crop ?? { l: 0, t: 0, r: 0, b: 0 };
-    const iw = img.naturalWidth || s.px?.w || w, ih = img.naturalHeight || s.px?.h || h;
-    const sx = c.l * iw, sy = c.t * ih, sw = Math.max(1e-3, (1 - c.l - c.r) * iw), sh = Math.max(1e-3, (1 - c.t - c.b) * ih);
-    ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+    ctx.restore();
+    edge();
   }
 
   drawArrow(ctx: CanvasRenderingContext2D, r: Arrow, lw: number): void {

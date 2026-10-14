@@ -11,8 +11,9 @@ const cache = new Map<string, Entry>();
 const listeners: (() => void)[] = [];
 
 /** Call `fn` whenever a picture finishes loading (to redraw). */
-export function onImageReady(fn: () => void): void {
+export function onImageReady(fn: () => void): () => void {
   listeners.push(fn);
+  return () => { const i = listeners.indexOf(fn); if (i >= 0) listeners.splice(i, 1); };
 }
 
 const shown = new Map<string, string | null>();

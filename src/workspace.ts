@@ -5,7 +5,7 @@
 // New, Open, Save, Save As, Close and the unsaved-changes questions go through here.
 
 import { Doc } from './model';
-import { Deck, type SlideSize } from './deck/deck';
+import { Deck, type SlideSize, type Master } from './deck/deck';
 import { Workbook } from './sheet/workbook';
 import { DocFile } from './document/doc-file';
 import { newDocument, type DocText } from './document/document';
@@ -74,6 +74,8 @@ export interface WorkspaceHooks {
   };
   /** The drawing style a new tab of this kind starts with, when you have chosen one (File > Drawing Style). */
   newStyle?(mode: Mode): DocStyle | null;
+  /** The master new slide decks start with (your template), or null for the plain one. */
+  newMaster?(m: Master): Master | null;
 }
 
 /** What each kind of tab saves as (the first is the default). */
@@ -227,6 +229,8 @@ export class Workspace {
     const spare = this.active.mode === 'drawing' ? this.spare() : null;
     const t = this.makeTab('slides', this.untitled('slides'));
     t.deck = Deck.blank(this.host);
+    const m = this.hooks.newMaster?.(t.deck.master);
+    if (m) t.deck.useMaster(m);
     const st = this.hooks.newStyle?.('slides');
     if (st) t.deck.useDrawingStyle(st);
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
@@ -339,7 +343,7 @@ export class Workspace {
     const deck = new Deck(this.host);
     deck.master = got.master;
     deck.size = got.size;
-    deck.load(got.slides.map((s) => deck.makeSlide(s.layout, s.contents, s.notes)), got.size, got.master);
+    deck.load(got.slides.map((s) => deck.makeSlide(s.layout, s.contents, s.notes, s)), got.size, got.master);
     t.deck = deck;
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
@@ -457,7 +461,7 @@ export class Workspace {
         const deck = tab.deck;
         const bytes = await writePptx({
           size: deck.size, master: deck.master, design: tab.mode === 'design',
-          slides: deck.slides.map((s, i) => ({ layout: s.layout, doc: deck.docOf(i), notes: s.notes })),
+          slides: deck.slides.map((s, i) => ({ layout: s.layout, doc: deck.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims })),
         }, { ...this.hooks.pptx, title: name.replace(/\.[^.]+$/, '') });
         await writeFile(ref, name, bytes, PPTX);
         tab.savedEdits = deck.edits;

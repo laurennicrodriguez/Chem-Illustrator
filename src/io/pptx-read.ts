@@ -9,7 +9,7 @@
 // lines, arrows and tables. What has no place here yet (charts, rotated things) is noted in
 // warnings, never refused.
 
-import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData } from '../model';
+import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureLook } from '../model';
 import { layoutTable, NOTE_SCALE } from '../table';
 import { linesFromBorders, type Borders } from './cdxml-table';
 import type { Vec, Rect } from '../geom';
@@ -17,17 +17,18 @@ import { PackageReader, NS, REL, kids, kid, rAttr, fromEmu } from './ooxml';
 import { readCdxml } from './cdxml';
 import { dataUrl, imageSize } from '../render/images';
 import { layoutText, ASCENT } from '../text/layout';
-import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle } from '../deck/deck';
+import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle, slideColours } from '../deck/deck';
 import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure } from './pptx-write';
 import { GEOS } from '../design/geo';
 import { gluePoint } from '../objects';
+import { readTransition, readTiming, type Transition, type Anim, type AnimTarget } from '../deck/animation';
 
 /** PowerPoint's shapes that are shapes in the library, by PowerPoint's name. */
 const GEO_BY_PRST = new Map(GEOS.filter((g) => g.prst).map((g) => [g.prst!, g.id]));
 /** PowerPoint shapes that come into slides as plain boxes and ovals (with their text beside them as text boxes). */
 const PLAIN_PRST = new Set(['rect', 'roundRect', 'ellipse', 'snip1Rect', 'flowChartProcess', 'flowChartAlternateProcess']);
 
-export interface PptxSlide { layout: LayoutId; contents: Contents; notes: string }
+export interface PptxSlide { layout: LayoutId; contents: Contents; notes: string; transition?: Transition; anims?: Anim[] }
 export interface PptxRead {
   size: SlideSize;
   master: Master;
@@ -192,12 +193,18 @@ class Reader {
   private master!: Part;
   private defaultText: Element | null = null;
   private ourMaster: Partial<Master> | null = null;
+  /** The layout of the slide being read, when the file says (files saved here). */
+  private curLayout: LayoutId | undefined;
   private design = false;
   private masterOut!: Master;
   private size: SlideSize = { w: 960, h: 540 };
   /** The slide's tables, placed once their titles and footnotes (separate text boxes) are known. */
   private tables: { key: string | null; table: TableData; frame: Rect; color?: string }[] = [];
   private tableParts = new Map<string, { title?: Omit<Caption, 'id'>; notes?: Omit<Caption, 'id'> }>();
+  /** For a slide with animations: the object made from each PowerPoint shape (by its id). */
+  private spidTargets: Map<number, AnimTarget> | null = null;
+  /** …and the PowerPoint shape each of the slide's tables came from (by the table's place in `tables`). */
+  private tableSpids = new Map<number, number>();
 
   constructor(bytes: Uint8Array) {
     this.r = new PackageReader(bytes);
@@ -351,17 +358,31 @@ class Reader {
     const tags = this.tagsOf(path, kid(s.doc.documentElement, 'cSld'));
     const doc = new Doc();
     doc.style = { ...this.masterOut.drawing };
+    // files saved here say which layout each slide has; a title slide can have its own colours
+    this.curLayout = tags[TAG.layout] as LayoutId | undefined;
     const bg = this.background(s.doc.documentElement);
-    if (bg && bg.toLowerCase() !== this.masterOut.background.toLowerCase()) this.warnings.add('Slides with a background colour of their own now use the master\'s.');
+    const ownBg = this.curLayout ? slideColours(this.masterOut, this.curLayout).background : this.masterOut.background;
+    if (bg && bg.toLowerCase() !== ownBg.toLowerCase()) this.warnings.add('Slides with a background colour of their own now use the master\'s.');
     this.tables = [];
     this.tableParts.clear();
     this.geoIds.clear();
+    const root = s.doc.documentElement;
+    this.spidTargets = kids(root, 'timing').length ? new Map() : null;
+    this.tableSpids.clear();
     doc.bulk(() => {
       this.tree(s, layout, s.tree, IDENTITY, doc);
       this.placeTables(doc);
     });
     const id = (tags[TAG.layout] as LayoutId | undefined) ?? this.layoutId(layout, doc);
-    return { layout: ['title', 'title-content', 'two-content', 'title-only', 'blank'].includes(id) ? id : 'title-content', contents: doc.contents(), notes: this.notes(path) };
+    const warn = (w: string) => this.warnings.add(w);
+    const transition = readTransition(root, warn);
+    const targets = this.spidTargets;
+    const anims = targets ? readTiming(root, (spid) => targets.get(spid) ?? null, warn) : [];
+    this.spidTargets = null;
+    return {
+      layout: ['title', 'title-content', 'two-content', 'title-only', 'blank'].includes(id) ? id : 'title-content', contents: doc.contents(), notes: this.notes(path),
+      ...(transition && (transition.kind !== 'none' || transition.advanceAfter) ? { transition } : {}), ...(anims.length ? { anims } : {}),
+    };
   }
 
   /** Our layout for PowerPoint's, by its type or else by the text boxes on the slide. */
@@ -394,6 +415,23 @@ class Reader {
   }
 
   private element(s: Part, layout: Part | null, el: Element, t: Xf, doc: Doc): void {
+    if (!this.spidTargets || el.localName === 'AlternateContent') { this.elementOnly(s, layout, el, t, doc); return; }
+    // note what each PowerPoint shape became, for the slide's animations
+    const mark = doc.idMark, tables = this.tables.length;
+    this.elementOnly(s, layout, el, t, doc);
+    const spid = Number(el.getElementsByTagNameNS(NS.p, 'cNvPr')[0]?.getAttribute('id'));
+    if (!Number.isFinite(spid)) return;
+    if (this.tables.length > tables) { this.tableSpids.set(tables, spid); return; }
+    let first: AnimTarget | null = null;
+    const look = (kind: AnimTarget['kind'], ids: Iterable<number>) => { for (const id of ids) if (id >= mark && (!first || id < first.id)) first = { kind, id }; };
+    look('atom', doc.atoms.keys());
+    look('caption', doc.captions.keys());
+    look('arrow', doc.arrows.keys());
+    look('shape', doc.shapes.keys());
+    if (first && !this.spidTargets.has(spid)) this.spidTargets.set(spid, first);
+  }
+
+  private elementOnly(s: Part, layout: Part | null, el: Element, t: Xf, doc: Doc): void {
     switch (el.localName) {
       case 'sp': this.shape(s, layout, el, t, doc); break;
       case 'pic': this.pictureEl(s, el, t, doc); break;
@@ -480,7 +518,36 @@ class Reader {
     if (tags[TAG.cdxml] && this.drawing(tags[TAG.cdxml], tags[TAG.box], box, doc)) return;
     const img = this.image(s.path, el);
     if (!img) return;
-    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}) });
+    const look = this.pictureLook(kid(el, 'spPr'));
+    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...(look ? { look } : {}) });
+  }
+
+  /**
+   * A picture's border, rounded corners and shadow. A shadow is read as soft or hard by its blur;
+   * PowerPoint's other picture effects (glow, bevels, reflections) are left off.
+   */
+  private pictureLook(spPr: Element | null): PictureLook | undefined {
+    if (!spPr) return undefined;
+    const look: PictureLook = {};
+    const geom = kid(spPr, 'prstGeom');
+    if (geom?.getAttribute('prst') === 'roundRect') {
+      const gd = kids(kid(geom, 'avLst')).find((g) => g.getAttribute('name') === 'adj');
+      const v = /val\s+(-?\d+)/.exec(gd?.getAttribute('fmla') ?? '');
+      look.round = Math.max(0, Math.min(0.5, (v ? Number(v[1]) : 16667) / 100000));
+    } else if (geom && geom.getAttribute('prst') !== 'rect') this.warnings.add('Pictures cut to shapes other than rectangles came in as rectangles.');
+    const ln = kid(spPr, 'ln');
+    if (ln && !kid(ln, 'noFill')) {
+      const c = this.color(kid(ln, 'solidFill'));
+      if (c) {
+        look.line = +fromEmu(Number(ln.getAttribute('w') ?? 9525)).toFixed(2);
+        look.lineColor = c;
+      }
+    }
+    const fx = kid(spPr, 'effectLst');
+    const sh = kid(fx, 'outerShdw');
+    if (sh) look.shadow = fromEmu(Number(sh.getAttribute('blurRad') ?? 0)) >= 1 ? 'soft' : 'hard';
+    if (fx && kids(fx).some((k) => k.localName !== 'outerShdw')) this.warnings.add('Picture effects other than shadows (glow, soft edges, reflections) were left off.');
+    return Object.keys(look).length ? look : undefined;
   }
 
   /** A structure or scheme saved here: its drawing, moved and sized as the picture now is. */
@@ -758,7 +825,9 @@ class Reader {
       const x1 = tb.frame.x1, y1 = tb.frame.y1 - lay.ys[0];
       const sh: Omit<Shape, 'id'> = { kind: 'table', x1, y1, x2: x1 + lay.width, y2: y1 + lay.height, table };
       if (tb.color && tb.color.toLowerCase() !== '#000000') sh.color = tb.color;
-      doc.addShape(sh);
+      const made = doc.addShape(sh);
+      const spid = this.tableSpids.get(this.tables.indexOf(tb));
+      if (spid !== undefined) this.spidTargets?.set(spid, { kind: 'shape', id: made.id });
     }
     // titles and footnotes whose table was deleted in PowerPoint stay as text
     for (const p of this.tableParts.values()) for (const c of [p.title, p.notes]) if (c) doc.addCaption(c);
@@ -872,7 +941,7 @@ class Reader {
     const bp = (k: string) => bodyPrs.map((b) => b?.getAttribute(k) ?? null).find((v) => v !== null) ?? null;
     const scale = Number(kid(bodyPrs[0], 'normAutofit')?.getAttribute('fontScale') ?? 100000) / 100000;
     const kind = ph ? phKind(ph.type) : null;
-    const base = kind ? textStyles(this.masterOut)[kind] : undefined;
+    const base = kind ? textStyles(this.masterOut, this.curLayout)[kind] : undefined;
 
     const runs: TextRun[] = [];
     const paras: ParaStyle[] = [];

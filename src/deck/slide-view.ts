@@ -7,7 +7,7 @@ import { Renderer, withMeasure } from '../render/renderer';
 import { imageFor } from '../render/images';
 import { VectorContext, VecPath, Item } from '../render/vector';
 import { arialWidth } from '../text-metrics';
-import { Master, SlideSize, LayoutId, decorFrames, showsNumber } from './deck';
+import { Master, SlideSize, LayoutId, decorFrames, showsNumber, slideColours, decorShapes, type DecorShape } from './deck';
 
 /** Grey around the slide while editing, as in PowerPoint. */
 export const SURROUND = '#d5d8de';
@@ -32,8 +32,10 @@ export function drawSlidePage(ctx: CanvasRenderingContext2D, p: SlidePage, surro
     ctx.fillRect(-far, 0, far, size.h); // left
     ctx.fillRect(size.w, 0, far, size.h); // right
   }
-  ctx.fillStyle = m.background;
+  const colours = slideColours(m, p.layout);
+  ctx.fillStyle = colours.background;
   ctx.fillRect(0, 0, size.w, size.h);
+  for (const sh of decorShapes(size, m, p.layout)) drawDecor(ctx, sh);
   const d = decorFrames(size, m);
   if (m.logo && d.logo) {
     const box = { x1: d.logo.x1, y1: d.logo.y1, x2: d.logo.x2, y2: d.logo.y2 };
@@ -45,7 +47,7 @@ export function drawSlidePage(ctx: CanvasRenderingContext2D, p: SlidePage, surro
   }
   const text = (s: string, r: { x1: number; y1: number; x2: number; y2: number }, align: 'right' | 'center') => {
     ctx.font = `${m.footerSize}px ${m.bodyFont}, Arial, sans-serif`;
-    ctx.fillStyle = m.footerColor;
+    ctx.fillStyle = colours.footerColor;
     const w = ctx.measureText(s).width;
     const x = align === 'right' ? r.x2 - w : (r.x1 + r.x2 - w) / 2;
     ctx.fillText(s, x, (r.y1 + r.y2) / 2 + 0.35 * m.footerSize);
@@ -54,9 +56,35 @@ export function drawSlidePage(ctx: CanvasRenderingContext2D, p: SlidePage, surro
   if (m.footer.trim()) text(m.footer, d.footer, 'center');
 }
 
+/** One of a design template's shapes behind the slide. */
+function drawDecor(ctx: CanvasRenderingContext2D, sh: DecorShape): void {
+  ctx.beginPath();
+  if (sh.kind === 'rect') {
+    ctx.fillStyle = sh.color;
+    ctx.rect(sh.x1, sh.y1, sh.x2 - sh.x1, sh.y2 - sh.y1);
+    ctx.fill();
+  } else if (sh.kind === 'tri') {
+    ctx.fillStyle = sh.color;
+    sh.pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    ctx.closePath();
+    ctx.fill();
+  } else {
+    ctx.strokeStyle = sh.color;
+    ctx.lineWidth = sh.width;
+    ctx.setLineDash([]);
+    if (sh.kind === 'line') { ctx.moveTo(sh.x1, sh.y1); ctx.lineTo(sh.x2, sh.y2); } else ctx.rect(sh.x1, sh.y1, sh.x2 - sh.x1, sh.y2 - sh.y1);
+    ctx.stroke();
+  }
+}
+
 /** A whole slide (page and drawing) drawn on `ctx`, which is already scaled to slide points. */
 export function drawSlide(ctx: CanvasRenderingContext2D, p: SlidePage, doc: Doc): void {
   drawSlidePage(ctx, p);
+  drawDrawing(ctx, doc);
+}
+
+/** Just the slide's drawing, without its page (for animated objects, drawn on their own). */
+export function drawDrawing(ctx: CanvasRenderingContext2D, doc: Doc): void {
   const r = new Renderer(noCanvas, noCanvas);
   r.showWarnings = false;
   r.drawDocument(ctx, doc);
@@ -81,9 +109,10 @@ export function recordSlide(p: SlidePage, doc: Doc): Item[] {
 
 /**
  * Paint a slide on a canvas `w` × `h` CSS pixels big, centred with `fill` around it (black
- * for a slide show). Returns where the slide went, in CSS pixels.
+ * for a slide show). Returns where the slide went, in CSS pixels. Without `pageToo`, only the
+ * drawing is painted, on a clear canvas.
  */
-export function paintSlide(canvas: HTMLCanvasElement, w: number, h: number, dpr: number, p: SlidePage, doc: Doc, fill: string | null = null): { x: number; y: number; k: number } {
+export function paintSlide(canvas: HTMLCanvasElement, w: number, h: number, dpr: number, p: SlidePage, doc: Doc, fill: string | null = null, pageToo = true): { x: number; y: number; k: number } {
   const pw = Math.max(1, Math.round(w * dpr)), ph = Math.max(1, Math.round(h * dpr));
   if (canvas.width !== pw) canvas.width = pw;
   if (canvas.height !== ph) canvas.height = ph;
@@ -101,7 +130,8 @@ export function paintSlide(canvas: HTMLCanvasElement, w: number, h: number, dpr:
   ctx.beginPath();
   ctx.rect(0, 0, p.size.w, p.size.h);
   ctx.clip();
-  drawSlide(ctx, p, doc);
+  if (pageToo) drawSlide(ctx, p, doc);
+  else drawDrawing(ctx, doc);
   ctx.restore();
   return { x, y, k };
 }

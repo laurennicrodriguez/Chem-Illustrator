@@ -1174,6 +1174,14 @@ dialog.template-gallery { width: min(94vw, 760px); }
 .tg-thumb { align-self: center; background: var(--line); border-radius: 3px; margin-bottom: 4px; }
 .tg-blurb { font-size: 12px; line-height: 1.35; }
 .tg-size { font-size: 11px; }
+/* Design > Templates in Slides: the groups scroll together, two slides per card */
+dialog.slide-templates { width: min(94vw, 840px); }
+.st-body { max-height: min(64vh, 600px); overflow-y: auto; padding-right: 4px; }
+.st-body h3 { margin: 10px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.st-body .tg-grid { max-height: none; overflow: visible; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+.st-body .tg-thumb { background: transparent; }
+.tg-card.current { border-color: var(--accent); }
+.st-option { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
 
 /* right-click menus on the drawing */
 .context-menu { position: fixed; top: 0; left: 0; z-index: 60; min-width: 200px; }
@@ -1247,6 +1255,7 @@ dialog.toolbox-dialog { width: min(94vw, 720px); }
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
   font: 12px var(--ui-font);
 }
+.label-tip[hidden] { display: none; }
 .label-tip-head { align-self: stretch; text-align: left; }
 .label-tip img { display: block; max-width: 300px; height: auto; }
 .label-tip-formula { color: #677084; font-variant-numeric: tabular-nums; }
@@ -1333,3 +1342,49 @@ dialog.cf-manage { width: min(92vw, 640px); }
 /* short choices in the Layout ribbon need less room */
 #doc-ribbon #doc-orient, #doc-ribbon #doc-columns { min-width: 96px; }
 #doc-ribbon #doc-wrap { min-width: 128px; }
+
+/* ---------------------------------------------------------------- slide transitions and animations */
+#tr-kinds { gap: 2px; }
+.an-gallery { display: grid; grid-template-columns: repeat(4, auto); gap: 1px 2px; align-content: start; }
+.ribbon button.an-effect { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px 1px 4px; white-space: nowrap; }
+.ribbon button.an-effect svg { width: 18px; height: 18px; }
+#anim-section h2 { display: flex; align-items: center; }
+#anim-section .an-close { margin-left: auto; padding: 0 6px; border: 0; background: transparent; font-size: 15px; line-height: 1; color: var(--muted); }
+.an-bar { display: flex; gap: 4px; margin-bottom: 6px; }
+.an-bar button { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; font-size: 12px; }
+.an-bar button:first-child { margin-right: auto; }
+.an-list { display: flex; flex-direction: column; gap: 1px; outline: none; }
+.an-row { display: grid; grid-template-columns: 16px 16px 18px 1fr auto; align-items: center; gap: 3px; padding: 2px 4px; border: 1px solid transparent; border-radius: 3px; cursor: pointer; font-size: 12px; }
+.an-row:hover { background: var(--accent-soft); }
+.an-row.picked { border-color: var(--accent); background: var(--accent-soft); }
+.an-row.gone .an-name { color: var(--muted); text-decoration: line-through; }
+.an-row.dragging { opacity: 0.5; }
+.an-row.drop { border-top: 2px solid var(--accent); }
+.an-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.an-when, .an-icon { display: inline-flex; color: var(--muted); }
+.an-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.an-del { padding: 0 4px; border: 0; background: transparent; color: var(--muted); visibility: hidden; }
+.an-row:hover .an-del, .an-row.picked .an-del { visibility: visible; }
+.an-preview canvas { display: block; margin: 6px 0; border: 1px solid var(--line); }
+
+/* "A newer version is ready" notice (desktop app; src/ui/update-ui.ts) */
+.update-box {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  width: min(360px, calc(100vw - 32px));
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--accent);
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+.update-box p { margin: 0; white-space: pre-line; }
+.update-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.update-progress { font-variant-numeric: tabular-nums; }
+.desktop-only[hidden] { display: none !important; }

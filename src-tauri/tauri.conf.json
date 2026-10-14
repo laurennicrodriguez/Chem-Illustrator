@@ -31,7 +31,9 @@
         "font-src": "'self' data:",
         "connect-src": "'self' ipc: http://ipc.localhost https://api.crossref.org"
       },
-      "dangerousDisableAssetCspModification": ["style-src"]
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ]
     }
   },
   "bundle": {
@@ -44,6 +46,20 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": false,
+    "license": "GPL-3.0-or-later",
+    "licenseFile": "../LICENSE"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNFQkQwODY3OTYxRTlFRjAKUldUd25oNldad2k5UHFxS1B6T3VMbHlmR29MdEhjd2ZOeERiZXlKWU1HOVphbytwbVFuVGVSMXIK",
+      "endpoints": [
+        "https://github.com/nathanohare/Chem-Illustrator/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

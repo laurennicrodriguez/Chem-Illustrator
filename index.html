@@ -27,6 +27,8 @@
         <button role="menuitem" class="no-sheet no-doc" data-cmd="export-mol">Export Molfile…</button>
         <hr />
         <button role="menuitem" data-cmd="close-tab">Close</button>
+        <hr class="desktop-only" hidden />
+        <button role="menuitem" class="desktop-only" data-cmd="check-updates" title="Look on GitHub for a newer version of the app and install it" hidden>Check for Updates…</button>
       </div>
     </div>
     <div class="menu-wrap">
@@ -117,7 +119,13 @@
         <hr />
         <button role="menuitemradio" aria-checked="false" data-cmd="size-wide"><span>Widescreen (16:9)</span></button>
         <button role="menuitemradio" aria-checked="false" data-cmd="size-standard"><span>Standard (4:3)</span></button>
+        <button role="menuitem" data-cmd="slide-templates">Templates…</button>
         <button role="menuitem" data-cmd="slide-master">Slide Master…</button>
+        <hr />
+        <button role="menuitem" data-cmd="slide-transitions">Transitions…</button>
+        <button role="menuitem" data-cmd="slide-animations">Animations…</button>
+        <button role="menuitemcheckbox" aria-checked="false" data-cmd="animation-pane"><span>Animation Pane</span></button>
+        <button role="menuitem" data-cmd="preview-slide">Preview Slide</button>
         <hr />
         <button role="menuitem" data-cmd="present">Present from Beginning</button>
         <button role="menuitem" data-cmd="present-current">Present from This Slide</button>
@@ -814,60 +822,154 @@
     </div>
   </div>
 
-  <div id="ribbon" class="ribbon slides-only" role="toolbar" aria-label="Slides" hidden>
-    <div class="rb-group">
-      <div class="rb-row">
-        <button class="rb-big" data-cmd="new-slide" title="New slide after this one"><span class="rb-icon">＋</span>New Slide</button>
-        <div class="rb-col">
-          <label class="rb-field">Layout <select id="rb-layout">
-            <option value="title">Title Slide</option>
-            <option value="title-content">Title and Content</option>
-            <option value="two-content">Two Content</option>
-            <option value="title-only">Title Only</option>
-            <option value="blank">Blank</option>
-          </select></label>
-          <div class="rb-pair">
-            <button data-cmd="duplicate-slide" title="Copy the picked slides">Duplicate</button>
-            <button data-cmd="delete-slide" title="Delete the picked slides">Delete</button>
+  <div id="ribbon" class="ribbon tabbed slides-only" role="toolbar" aria-label="Slides" hidden>
+    <div class="rb-tabs" role="tablist">
+      <button role="tab" data-sl-tab="home" aria-selected="true">Home</button>
+      <button role="tab" data-sl-tab="transitions" aria-selected="false">Transitions</button>
+      <button role="tab" data-sl-tab="animations" aria-selected="false">Animations</button>
+    </div>
+    <div class="rb-panel" data-sl-panel="home">
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="new-slide" title="New slide after this one"><span class="rb-icon">＋</span>New Slide</button>
+          <div class="rb-col">
+            <label class="rb-field">Layout <select id="rb-layout">
+              <option value="title">Title Slide</option>
+              <option value="title-content">Title and Content</option>
+              <option value="two-content">Two Content</option>
+              <option value="title-only">Title Only</option>
+              <option value="blank">Blank</option>
+            </select></label>
+            <div class="rb-pair">
+              <button data-cmd="duplicate-slide" title="Copy the picked slides">Duplicate</button>
+              <button data-cmd="delete-slide" title="Delete the picked slides">Delete</button>
+            </div>
           </div>
         </div>
+        <div class="rb-label">Slides</div>
       </div>
-      <div class="rb-label">Slides</div>
-    </div>
-    <div class="rb-group">
-      <div class="rb-row">
-        <button class="rb-big" data-cmd="insert-picture" title="Put a picture on the slide (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
-        <button class="rb-big" data-cmd="text-box" title="Click on the slide to type, or drag to make a text box that wraps"><span class="rb-icon">T</span>Text Box</button>
-        <button class="rb-big" data-cmd="insert-table" title="Put a table on the slide (or paste cells from Excel or a sheet)"><span class="rb-icon">▦</span>Table</button>
-        <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
-      </div>
-      <div class="rb-label">Insert</div>
-    </div>
-    <div class="rb-group">
-      <div class="rb-row">
-        <button id="rb-lock-structures" class="rb-big" data-cmd="lock-structures" aria-pressed="false" title="Structures ignore clicks, so text and pictures near them are easy to work on. Click again to edit structures"><span class="rb-icon">⬡</span>Lock Structures</button>
-      </div>
-      <div class="rb-label">Editing</div>
-    </div>
-    <div class="rb-group">
-      <div class="rb-row">
-        <div class="rb-col">
-          <label class="rb-field">Size <select id="rb-size">
-            <option value="wide">Widescreen (16:9)</option>
-            <option value="standard">Standard (4:3)</option>
-          </select></label>
-          <button data-cmd="slide-master" title="Fonts, colours, background, logo, slide numbers, footer and structure size for every slide">Slide Master…</button>
-          <button data-cmd="drawing-style" title="How structures are drawn on every slide: a journal's style or your own">Drawing Style…</button>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="insert-picture" title="Put a picture on the slide (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
+          <button class="rb-big" data-cmd="text-box" title="Click on the slide to type, or drag to make a text box that wraps"><span class="rb-icon">T</span>Text Box</button>
+          <button class="rb-big" data-cmd="insert-table" title="Put a table on the slide (or paste cells from Excel or a sheet)"><span class="rb-icon">▦</span>Table</button>
+          <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
         </div>
+        <div class="rb-label">Insert</div>
       </div>
-      <div class="rb-label">Design</div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button id="rb-lock-structures" class="rb-big" data-cmd="lock-structures" aria-pressed="false" title="Structures ignore clicks, so text and pictures near them are easy to work on. Click again to edit structures"><span class="rb-icon">⬡</span>Lock Structures</button>
+        </div>
+        <div class="rb-label">Editing</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-field">Size <select id="rb-size">
+              <option value="wide">Widescreen (16:9)</option>
+              <option value="standard">Standard (4:3)</option>
+            </select></label>
+            <div class="rb-pair">
+              <button data-cmd="slide-templates" title="Ready-made looks for the whole deck: fonts, colours, background and shapes">Templates…</button>
+              <button data-cmd="slide-master" title="Fonts, colours, background, logo, slide numbers, footer and structure size for every slide">Slide Master…</button>
+              <button data-cmd="drawing-style" title="How structures are drawn on every slide: a journal's style or your own">Drawing Style…</button>
+            </div>
+          </div>
+        </div>
+        <div class="rb-label">Design</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="present" title="Show the slides full screen from the first"><span class="rb-icon">▶</span>From Beginning</button>
+          <button class="rb-big" data-cmd="present-current" title="Show the slides full screen from this one"><span class="rb-icon">▷</span>From This Slide</button>
+        </div>
+        <div class="rb-label">Present</div>
+      </div>
     </div>
-    <div class="rb-group">
-      <div class="rb-row">
-        <button class="rb-big" data-cmd="present" title="Show the slides full screen from the first"><span class="rb-icon">▶</span>From Beginning</button>
-        <button class="rb-big" data-cmd="present-current" title="Show the slides full screen from this one"><span class="rb-icon">▷</span>From This Slide</button>
+    <div class="rb-panel" data-sl-panel="transitions" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-tr="preview" title="Play this slide's transition and animations"><span class="rb-icon" data-icon="preview"></span>Preview</button>
+        </div>
+        <div class="rb-label">Preview</div>
       </div>
-      <div class="rb-label">Present</div>
+      <div class="rb-group">
+        <div class="rb-row" id="tr-kinds"></div>
+        <div class="rb-label">Transition to This Slide</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-field" title="The way the new slide moves in">Effect <select id="tr-dir"></select></label>
+          </div>
+        </div>
+        <div class="rb-label">Effect Options</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-field" title="How long the transition takes">Speed <select id="tr-speed"></select></label>
+            <label class="rb-field" title="How long the transition takes, in seconds (type any length)">Duration <input id="tr-dur" type="number" min="0.1" max="60" step="0.05" style="width: 64px" /> s</label>
+          </div>
+          <div class="rb-col">
+            <label class="rb-field check" title="A click goes on to the next slide (always on, as in PowerPoint)"><input type="checkbox" checked disabled /> Advance on mouse click</label>
+            <label class="rb-field check" title="Go on to the next slide by itself after this long, once the slide's animations have played"><input id="tr-after-on" type="checkbox" /> After <input id="tr-after" type="number" min="0" max="3600" step="0.5" style="width: 56px" /> s</label>
+          </div>
+          <div class="rb-col">
+            <button data-tr="apply-all" title="Give every slide this slide's transition, speed and timing">Apply To All</button>
+          </div>
+        </div>
+        <div class="rb-label">Timing</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-sl-panel="animations" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-an="preview" title="Play this slide's animations"><span class="rb-icon" data-icon="preview"></span>Preview</button>
+        </div>
+        <div class="rb-label">Preview</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row" id="an-effects"></div>
+        <div class="rb-label">Animation (select something on the slide first)</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-field" title="Wipe and Fly: the side it comes in from (or goes out to)">Effect <select id="an-from"></select></label>
+            <button data-an="remove" title="Take the selected animation off">Remove</button>
+          </div>
+        </div>
+        <div class="rb-label">Effect Options</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-an="pane" aria-pressed="false" title="List this slide's animations in the right-hand panel"><span class="rb-icon" data-icon="pane"></span>Animation Pane</button>
+        </div>
+        <div class="rb-label">Advanced Animation</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-field" title="What starts it: a click, the animation before it starting, or the animation before it finishing">Start <select id="an-start">
+              <option value="click">On Click</option>
+              <option value="with">With Previous</option>
+              <option value="after">After Previous</option>
+            </select></label>
+            <label class="rb-field" title="How long it takes">Speed <select id="an-speed"></select></label>
+          </div>
+          <div class="rb-col">
+            <label class="rb-field" title="How long it takes, in seconds (type any length)">Duration <input id="an-dur" type="number" min="0" max="60" step="0.05" style="width: 64px" /> s</label>
+            <label class="rb-field" title="Seconds to wait before it starts">Delay <input id="an-delay" type="number" min="0" max="600" step="0.25" style="width: 64px" /> s</label>
+          </div>
+          <div class="rb-col">
+            <button data-an="earlier" title="Reorder: play the selected animation earlier">▲ Earlier</button>
+            <button data-an="later" title="Reorder: play the selected animation later">▼ Later</button>
+          </div>
+        </div>
+        <div class="rb-label">Timing</div>
+      </div>
     </div>
   </div>
 
@@ -1011,6 +1113,7 @@
   <aside>
     <button id="side-fold" type="button" title="Fold the side panel away (View > Fold Side Panel)" aria-label="Fold the side panel away">›</button>
     <div id="side-content">
+    <section id="anim-section" hidden></section>
     <section id="style-section" hidden>
       <h2>Style</h2>
       <div id="style-body"></div>
@@ -1045,6 +1148,7 @@
 
   <dialog id="help">
     <h2>Using the prototype</h2>
+    <p class="muted"><span id="app-version"></span>. Free software under the GNU General Public License, version 3 or later.</p>
     <p class="muted">Hotkeys work like ChemDraw: point at an atom or bond (it highlights blue) and press a key. A key that grows something moves the highlight to the new atom, so you can carry on typing (<kbd>8</kbd> then <kbd>1</kbd> makes an E double bond). <kbd>1</kbd> and <kbd>0</kbd> keep the highlight under the mouse, so pressing 1 three times adds three bonds; after a click or another key they move it, so 1 1 1 draws a chain. Every key can be changed.</p>
     <p><button id="help-hotkeys" type="button">Show and change all hotkeys…</button></p>
     <div class="cols">

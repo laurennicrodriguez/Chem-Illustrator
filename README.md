@@ -26,7 +26,13 @@ You need Node.js once. Everything else is installed into this folder.
 
 ## Desktop app (Windows)
 
-Every change pushed to GitHub builds a Windows installer automatically. Open the repository's **Actions** tab, click the latest **Desktop app** run, and download **chem-illustrator-windows-installer** at the bottom of the page. Unzip it and run the file whose name ends in `setup.exe`. The installer is not signed yet, so Windows will say "Windows protected your PC"; click **More info**, then **Run anyway**.
+Download the newest installer from the repository's **Releases** (on the right of the repository's GitHub page): the file whose name ends in `setup.exe`. The installer is not signed with a Windows certificate, so Windows will say "Windows protected your PC"; click **More info**, then **Run anyway**.
+
+Once installed, the app looks for a newer version a few seconds after it starts and offers to install it (turn this off in **Edit ▸ Preferences**; **File ▸ Check for Updates…** looks at any time). Updates are checked against a signing key before they install, so only releases built from this repository are accepted.
+
+### How releases are made
+
+Every merge into `main` builds the Windows installer, runs the app's self-test, and publishes the installer as a release numbered 0.1.*build number*, with a `latest.json` file that the app's update check reads (`.github/workflows/desktop.yml`, `scripts/release.mjs`). This needs the update signing key saved as a repository secret named `TAURI_SIGNING_PRIVATE_KEY` (**Settings ▸ Secrets and variables ▸ Actions**). Its public half is in `src-tauri/tauri.conf.json`. Keep a copy of the private key somewhere safe: if it is lost, a new key can be made, but copies installed before the change won't accept updates and need installing once by hand. Without the secret the build still runs, and the installer is kept for a week under the run in the **Actions** tab instead of being published.
 
 To build it on your own computer you also need Rust (from [rustup.rs](https://rustup.rs)) and the Microsoft C++ Build Tools that the Rust installer offers. Then:
 ```
@@ -98,6 +104,10 @@ The `bench/` scripts drive the app in a headless browser to measure speed. Start
 
 ## Licences
 
-Everything used is free and open source. RDKit (BSD-3-Clause), Tauri and windows-sys (MIT or Apache-2.0) are shipped with the app; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Chem Illustrator itself has no licence chosen yet, so by default all rights are reserved.
+Chem Illustrator is free software: you can use, share and change it under the terms of the [GNU General Public License](LICENSE), version 3 or (at your option) any later version. It comes with no warranty. Copyright © 2026 Nathan O'Hare.
+
+Everything it uses is free and open source, and keeps its own licence: RDKit (BSD-3-Clause), OPSIN (MIT), Tauri (MIT or Apache-2.0), the bundled fonts (SIL Open Font License) and others listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). All of them can be shipped with a GPL program.
+
+ChemDraw is a trademark of Revvity, Inc. Chem Illustrator is not made by, connected with or endorsed by Revvity; it reads and writes ChemDraw's published CDXML and CDX file formats so that your files open in both.
 
 Keep ChemDraw files, manuals and other reference documents out of this repository. The `.gitignore` already refuses `.cdxml`, `.cdx` and `.pdf` files.

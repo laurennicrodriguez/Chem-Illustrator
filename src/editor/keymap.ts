@@ -66,6 +66,9 @@ export function chordOf(e: KeyPress): string | null {
     else base = keyName(key);
     return [ctrl && 'Ctrl', alt && 'Alt', shift && 'Shift', base].filter(Boolean).join('+');
   }
+  // the number pad's + and − (and a typed minus sign) work as the main keyboard's
+  if (e.code === 'NumpadSubtract' || key === '−' || key === 'Subtract') return '-';
+  if (e.code === 'NumpadAdd' || key === 'Add') return '+';
   if (printable) return key;
   return (shift ? 'Shift+' : '') + keyName(key);
 }

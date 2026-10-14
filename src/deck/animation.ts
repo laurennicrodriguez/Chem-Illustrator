@@ -1,0 +1,435 @@
+// Slide transitions and animations, as in PowerPoint but only the calm, basic ones:
+// transitions Fade, Push, Wipe and Cover; animations Appear, Fade, Wipe and Fly In (and the same
+// four going out). Each has its own speed (how long it takes) and delay, and an animation starts
+// on a click, with the one before it, or after the one before it.
+//
+// What moves is one of the parts a slide is saved to PowerPoint as (see splitSlide): a title or
+// text box, a picture, a shape, a table, or a structure or scheme with everything round it. So an
+// animation on a reagent written above an arrow moves the whole scheme, in the app and in
+// PowerPoint alike.
+//
+// Both are saved in the PowerPoint file as PowerPoint's own transitions and animations, so they
+// play there too, and they are read back from PowerPoint files (other kinds come in as Fade).
+
+import type { Doc } from '../model';
+import type { Selection } from '../editor/editor';
+import { splitSlide } from '../io/pptx-write';
+import { plainText } from '../richtext';
+
+// ---------------------------------------------------------------- transitions
+
+/** Which way a transition moves: the new slide comes in travelling this way (left: in from the right). */
+export type Dir = 'left' | 'right' | 'up' | 'down';
+
+export type TransitionKind = 'none' | 'fade' | 'push' | 'wipe' | 'cover';
+
+export interface Transition {
+  kind: TransitionKind;
+  /** Push, Wipe and Cover: the way the new slide travels. */
+  dir?: Dir;
+  /** How long it takes, in seconds. */
+  dur: number;
+  /** Go on to the next slide by itself after this many seconds (as well as on a click). */
+  advanceAfter?: number;
+}
+
+export const TRANSITIONS: { id: TransitionKind; name: string; dirs: boolean }[] = [
+  { id: 'none', name: 'None', dirs: false },
+  { id: 'fade', name: 'Fade', dirs: false },
+  { id: 'push', name: 'Push', dirs: true },
+  { id: 'wipe', name: 'Wipe', dirs: true },
+  { id: 'cover', name: 'Cover', dirs: true },
+];
+
+/** The directions, named as PowerPoint's Effect Options name them (by where the new slide comes from). */
+export const DIRS: { id: Dir; name: string }[] = [
+  { id: 'left', name: 'From Right' },
+  { id: 'right', name: 'From Left' },
+  { id: 'up', name: 'From Bottom' },
+  { id: 'down', name: 'From Top' },
+];
+
+/** Speeds offered by name; any other number of seconds can be typed. */
+export const SPEEDS: { name: string; dur: number }[] = [
+  { name: 'Very fast', dur: 0.25 },
+  { name: 'Fast', dur: 0.5 },
+  { name: 'Medium', dur: 1 },
+  { name: 'Slow', dur: 2 },
+  { name: 'Very slow', dur: 3 },
+];
+
+export const DEFAULT_TRANSITION_DUR = 0.7;
+
+// ---------------------------------------------------------------- animations
+
+export type Effect = 'appear' | 'fade' | 'wipe' | 'fly';
+export type Side = 'left' | 'right' | 'top' | 'bottom';
+
+export const EFFECTS: { id: Effect; name: string; sides: boolean }[] = [
+  { id: 'appear', name: 'Appear', sides: false },
+  { id: 'fade', name: 'Fade', sides: false },
+  { id: 'wipe', name: 'Wipe', sides: true },
+  { id: 'fly', name: 'Fly', sides: true },
+];
+
+export const SIDES: { id: Side; name: string }[] = [
+  { id: 'bottom', name: 'From Bottom' },
+  { id: 'left', name: 'From Left' },
+  { id: 'right', name: 'From Right' },
+  { id: 'top', name: 'From Top' },
+];
+
+/** What an animation moves: any object of the part (a structure is named by one of its atoms). */
+export interface AnimTarget { kind: 'caption' | 'shape' | 'atom' | 'arrow'; id: number }
+
+export interface Anim {
+  target: AnimTarget;
+  effect: Effect;
+  /** Going out (the object disappears) rather than coming in. */
+  exit?: boolean;
+  /** Wipe and Fly: the side it comes in from (or goes out to). */
+  from?: Side;
+  /** On a click, with the animation before it, or after the one before it has finished. */
+  start: 'click' | 'with' | 'after';
+  /** How long it takes, in seconds (Appear takes none). */
+  dur: number;
+  /** Seconds to wait before it starts. */
+  delay: number;
+}
+
+export const DEFAULT_ANIM_DUR = 0.5;
+
+/** A new animation on a target: on a click, half a second, as PowerPoint starts one. */
+export function newAnim(target: AnimTarget, effect: Effect, exit = false): Anim {
+  return { target, effect, ...(exit ? { exit } : {}), ...(effect === 'wipe' || effect === 'fly' ? { from: 'bottom' as Side } : {}), start: 'click', dur: effect === 'appear' ? 0 : DEFAULT_ANIM_DUR, delay: 0 };
+}
+
+export function animName(a: Anim): string {
+  const e = EFFECTS.find((x) => x.id === a.effect)!.name;
+  if (a.exit) return a.effect === 'appear' ? 'Disappear' : a.effect === 'fly' ? 'Fly Out' : `${e} Out`;
+  return a.effect === 'fly' ? 'Fly In' : e;
+}
+
+// ---------------------------------------------------------------- what moves
+
+/** One thing on a slide that moves as a whole (and is one shape or picture in PowerPoint). */
+export interface Part {
+  kind: 'text' | 'picture' | 'shape' | 'table' | 'connector' | 'drawing';
+  sel: Selection;
+}
+
+const sel = (p: Partial<Selection>): Selection => ({ atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set(), ...p });
+
+/** A slide's parts, back to front, as they are saved for PowerPoint. */
+export function slideParts(doc: Doc): Part[] {
+  const p = splitSlide(doc);
+  return [
+    ...p.pictures.map((s): Part => ({ kind: 'picture', sel: sel({ shapes: new Set([s.id]) }) })),
+    ...p.shapes.map((s): Part => ({ kind: 'shape', sel: sel({ shapes: new Set([s.id]) }) })),
+    ...p.connectors.map((r): Part => ({ kind: 'connector', sel: sel({ arrows: new Set([r.id]) }) })),
+    ...p.tables.map((s): Part => ({ kind: 'table', sel: sel({ shapes: new Set([s.id]) }) })),
+    ...p.drawings.map((s): Part => ({ kind: 'drawing', sel: s })),
+    ...p.texts.map((c): Part => ({ kind: 'text', sel: sel({ captions: new Set([c.id]) }) })),
+  ];
+}
+
+export function partHolds(part: Part, t: AnimTarget): boolean {
+  const s = part.sel;
+  return t.kind === 'atom' ? s.atoms.has(t.id) : t.kind === 'caption' ? s.captions.has(t.id) : t.kind === 'shape' ? s.shapes.has(t.id) : s.arrows.has(t.id);
+}
+
+/** The part an animation moves (none when its object has been deleted). */
+export function partOf(parts: Part[], t: AnimTarget): Part | undefined {
+  return parts.find((p) => partHolds(p, t));
+}
+
+/** The target that names a part: a structure by its first atom, else its text, shape or arrow. */
+export function targetOf(part: Part): AnimTarget {
+  const first = (s: Set<number>) => Math.min(...s);
+  const s = part.sel;
+  if (s.atoms.size) return { kind: 'atom', id: first(s.atoms) };
+  if (s.captions.size && part.kind === 'text') return { kind: 'caption', id: first(s.captions) };
+  if (s.shapes.size) return { kind: 'shape', id: first(s.shapes) };
+  if (s.arrows.size) return { kind: 'arrow', id: first(s.arrows) };
+  return { kind: 'caption', id: first(s.captions) };
+}
+
+/** The part's name in the Animation pane: "Title: Route to taxol", "Structure", "Picture"… */
+export function partName(doc: Doc, part: Part | undefined): string {
+  if (!part) return '(deleted)';
+  const s = part.sel;
+  switch (part.kind) {
+    case 'text': {
+      const c = doc.captions.get(Math.min(...s.captions));
+      const words = c ? plainText(c.runs).replace(/\s+/g, ' ').trim() : '';
+      const what = c?.ph === 'title' ? 'Title' : c?.ph === 'subtitle' ? 'Subtitle' : c?.ph ? 'Text' : 'Text box';
+      return words ? `${what}: ${words.length > 28 ? words.slice(0, 27) + '…' : words}` : what;
+    }
+    case 'picture': return 'Picture';
+    case 'table': return 'Table';
+    case 'connector': return 'Connector';
+    case 'shape': {
+      const sh = doc.shapes.get(Math.min(...s.shapes));
+      const words = sh?.text ? plainText(sh.text.runs).trim() : '';
+      return words ? `Shape: ${words.length > 24 ? words.slice(0, 23) + '…' : words}` : 'Shape';
+    }
+    case 'drawing': return s.arrows.size ? 'Scheme' : s.atoms.size > 0 && countFragments(doc, s) > 1 ? 'Structures' : s.atoms.size ? 'Structure' : 'Drawing';
+  }
+}
+
+function countFragments(doc: Doc, s: Selection): number {
+  let n = 0;
+  for (const f of doc.fragments()) if ([...f].some((id) => s.atoms.has(id))) n++;
+  return n;
+}
+
+// ---------------------------------------------------------------- timing
+
+/** An animation placed in time within its click: when it starts and ends, in seconds from the click. */
+export interface Timed { anim: Anim; index: number; start: number; end: number; group: number }
+
+/**
+ * The clicks of a slide's animations, in order: each click starts the animations up to the next
+ * one that waits for a click. When the first animation doesn't wait for a click, the first group
+ * plays by itself as the slide comes in (`auto`).
+ */
+export interface Step { items: Timed[]; length: number; auto: boolean }
+
+export function buildSteps(anims: Anim[]): Step[] {
+  const steps: Step[] = [];
+  let cur: Step | null = null;
+  let groupStart = 0, maxEnd = 0, group = 0;
+  anims.forEach((anim, index) => {
+    if (!cur || anim.start === 'click') {
+      cur = { items: [], length: 0, auto: !cur && anim.start !== 'click' };
+      steps.push(cur);
+      groupStart = 0; maxEnd = 0; group = 0;
+    }
+    let start: number;
+    if (!cur.items.length) start = anim.delay;
+    else if (anim.start === 'with') start = groupStart + anim.delay;
+    else if (anim.start === 'after') { groupStart = maxEnd; group++; start = groupStart + anim.delay; }
+    else start = anim.delay;
+    const dur = anim.effect === 'appear' ? 0 : Math.max(0, anim.dur);
+    const end = start + dur;
+    cur.items.push({ anim, index, start, end, group });
+    maxEnd = Math.max(maxEnd, end);
+    cur.length = Math.max(cur.length, end);
+  });
+  return steps;
+}
+
+/**
+ * How far along each animated part is, after `done` whole clicks and `t` seconds into the next
+ * (t < 0: the next click hasn't happened). For each part: visible or not, and, while an effect
+ * is running, which one and how far through (0 to 1).
+ */
+export interface PartState { visible: boolean; running?: { anim: Anim; p: number } }
+
+export function partStates(parts: Part[], anims: Anim[], done: number, t: number): Map<Part, PartState> {
+  const steps = buildSteps(anims);
+  const out = new Map<Part, PartState>();
+  // before anything plays, parts that first come in are hidden
+  const firstOf = new Map<Part, Anim>();
+  for (const a of anims) {
+    const p = partOf(parts, a.target);
+    if (p && !firstOf.has(p)) firstOf.set(p, a);
+  }
+  for (const [p, a] of firstOf) out.set(p, { visible: !!a.exit });
+  const apply = (it: Timed, at: number) => {
+    const p = partOf(parts, it.anim.target);
+    if (!p || at < it.start) return;
+    if (at >= it.end && !(it.end === it.start && at === it.start && it.anim.effect !== 'appear')) {
+      out.set(p, { visible: !it.anim.exit });
+    } else {
+      const span = Math.max(1e-6, it.end - it.start);
+      out.set(p, { visible: true, running: { anim: it.anim, p: Math.max(0, Math.min(1, (at - it.start) / span)) } });
+    }
+  };
+  steps.forEach((st, k) => {
+    if (k < done) for (const it of st.items) apply(it, Infinity);
+    else if (k === done && t >= 0) for (const it of [...st.items].sort((a, b) => a.start - b.start)) apply(it, t);
+  });
+  return out;
+}
+
+/** Number of clicks the slide's animations need (an automatic first group needs none). */
+export function clickCount(anims: Anim[]): number {
+  return buildSteps(anims).filter((s) => !s.auto).length;
+}
+
+// ---------------------------------------------------------------- PowerPoint: transitions
+
+const P_DIR: Record<Dir, string> = { left: 'l', right: 'r', up: 'u', down: 'd' };
+const DIR_P: Record<string, Dir> = { l: 'left', r: 'right', u: 'up', d: 'down' };
+const NS_MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
+const NS_P14 = 'http://schemas.microsoft.com/office/powerpoint/2010/main';
+
+/** A slide's transition as PowerPoint writes it: its own duration for PowerPoint 2010 and later, a named speed for older ones. */
+export function transitionXml(t: Transition | undefined): string {
+  if (!t || (t.kind === 'none' && !t.advanceAfter)) return '';
+  const spd = t.dur <= 0.5 ? 'fast' : t.dur <= 0.75 ? 'med' : 'slow';
+  const body = t.kind === 'none' ? '' : t.kind === 'fade' ? '<p:fade/>' : `<p:${t.kind} dir="${P_DIR[t.dir ?? 'left']}"/>`;
+  const adv = t.advanceAfter ? ` advTm="${Math.round(t.advanceAfter * 1000)}"` : '';
+  return `<mc:AlternateContent xmlns:mc="${NS_MC}"><mc:Choice xmlns:p14="${NS_P14}" Requires="p14">` +
+    `<p:transition spd="${spd}" p14:dur="${Math.round(t.dur * 1000)}"${adv}>${body}</p:transition></mc:Choice>` +
+    `<mc:Fallback><p:transition spd="${spd}"${adv}>${body}</p:transition></mc:Fallback></mc:AlternateContent>`;
+}
+
+/** A slide's transition from a PowerPoint file (other kinds of transition come in as Fade). */
+export function readTransition(sld: Element, warn: (s: string) => void): Transition | undefined {
+  const all = Array.from(sld.getElementsByTagNameNS('http://schemas.openxmlformats.org/presentationml/2006/main', 'transition'));
+  const el = all[0];
+  if (!el) return undefined;
+  const ms = el.getAttributeNS(NS_P14, 'dur') ?? el.getAttribute('p14:dur');
+  const spd = el.getAttribute('spd') ?? 'fast';
+  const dur = ms ? Number(ms) / 1000 : spd === 'slow' ? 1 : spd === 'med' ? 0.75 : 0.5;
+  const adv = el.getAttribute('advTm');
+  const kid = Array.from(el.children).find((k) => k.localName !== 'sndAc' && k.localName !== 'extLst');
+  let kind: TransitionKind = 'none';
+  let dir: Dir | undefined;
+  if (kid) {
+    if (kid.localName === 'fade') kind = 'fade';
+    else if (kid.localName === 'push' || kid.localName === 'wipe' || kid.localName === 'cover') {
+      kind = kid.localName;
+      dir = DIR_P[kid.getAttribute('dir') ?? 'l'] ?? 'left';
+    } else {
+      kind = 'fade';
+      warn('Slide transitions other than Fade, Push, Wipe and Cover came in as Fade.');
+    }
+  }
+  return { kind, ...(dir ? { dir } : {}), dur: +dur.toFixed(3), ...(adv ? { advanceAfter: Number(adv) / 1000 } : {}) };
+}
+
+// ---------------------------------------------------------------- PowerPoint: animations
+
+const PRESET: Record<Effect, number> = { appear: 1, fly: 2, fade: 10, wipe: 22 };
+const SUBTYPE: Record<Side, number> = { top: 1, right: 2, bottom: 4, left: 8 };
+const SUBTYPE_SIDE: Record<number, Side> = { 1: 'top', 2: 'right', 4: 'bottom', 8: 'left' };
+/** Wipe's filter: it reveals moving away from the side it starts at. */
+const WIPE_FILTER: Record<Side, string> = { bottom: 'wipe(up)', left: 'wipe(right)', right: 'wipe(left)', top: 'wipe(down)' };
+
+/**
+ * A slide's animations as PowerPoint's timing tree: a sequence of clicks, each holding groups that
+ * start one after another, each holding effects that start together (with their own delays).
+ * `spidsOf` gives the PowerPoint shapes each animation moves (a table can be three: its title,
+ * the table and its footnotes); animations of objects that weren't saved are left out.
+ */
+export function timingXml(anims: Anim[], spidsOf: (a: Anim) => number[]): string {
+  const live = anims.filter((a) => spidsOf(a).length);
+  if (!live.length) return '';
+  let id = 3;
+  const ms = (s: number) => Math.max(0, Math.round(s * 1000));
+  const steps = buildSteps(live);
+  const target = (spid: number) => `<p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl>`;
+  const visibility = (spid: number, val: 'visible' | 'hidden', at: number) =>
+    `<p:set><p:cBhvr><p:cTn id="${id++}" dur="1" fill="hold"><p:stCondLst><p:cond delay="${at}"/></p:stCondLst></p:cTn>${target(spid)}` +
+    `<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="${val}"/></p:to></p:set>`;
+  const behaviours = (a: Anim, spid: number): string => {
+    const d = ms(a.dur);
+    const out = !!a.exit;
+    const parts: string[] = [];
+    if (!out) parts.push(visibility(spid, 'visible', 0));
+    if (a.effect === 'fade' || a.effect === 'wipe') {
+      const filter = a.effect === 'fade' ? 'fade' : WIPE_FILTER[a.from ?? 'bottom'];
+      parts.push(`<p:animEffect transition="${out ? 'out' : 'in'}" filter="${filter}"><p:cBhvr><p:cTn id="${id++}" dur="${d}"/>${target(spid)}</p:cBhvr></p:animEffect>`);
+    } else if (a.effect === 'fly') {
+      const side = a.from ?? 'bottom';
+      const away = side === 'left' ? ['0-#ppt_w/2', '#ppt_y'] : side === 'right' ? ['1+#ppt_w/2', '#ppt_y'] : side === 'top' ? ['#ppt_x', '0-#ppt_h/2'] : ['#ppt_x', '1+#ppt_h/2'];
+      const home = ['#ppt_x', '#ppt_y'];
+      const [from, to] = out ? [home, away] : [away, home];
+      ['ppt_x', 'ppt_y'].forEach((attr, k) => {
+        parts.push(`<p:anim calcmode="lin" valueType="num"><p:cBhvr additive="base"><p:cTn id="${id++}" dur="${d}" fill="hold"/>${target(spid)}` +
+          `<p:attrNameLst><p:attrName>${attr}</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst>` +
+          `<p:tav tm="0"><p:val><p:strVal val="${from[k]}"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="${to[k]}"/></p:val></p:tav></p:tavLst></p:anim>`);
+      });
+    }
+    if (out) parts.push(visibility(spid, 'hidden', a.effect === 'appear' ? 0 : Math.max(0, d - 1)));
+    return parts.join('');
+  };
+  const clicks = steps.map((st) => {
+    const groups = new Map<number, Timed[]>();
+    for (const it of st.items) groups.set(it.group, [...(groups.get(it.group) ?? []), it]);
+    const cond = st.auto ? `<p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond>` : '<p:cond delay="indefinite"/>';
+    const inner = [...groups.values()].map((items) => {
+      const g0 = Math.min(...items.map((it) => it.start - it.anim.delay));
+      const effects = items.map((it, j) => {
+        const a = it.anim;
+        const first = j === 0 && it.group === 0 ? (st.auto ? (a.start === 'after' ? 'afterEffect' : 'withEffect') : 'clickEffect') : a.start === 'after' ? 'afterEffect' : a.start === 'with' ? 'withEffect' : 'clickEffect';
+        const sub = (a.effect === 'wipe' || a.effect === 'fly') ? SUBTYPE[a.from ?? 'bottom'] : 0;
+        // more shapes than one: the others move with the first
+        return spidsOf(a).map((spid, k) => `<p:par><p:cTn id="${id++}" presetID="${PRESET[a.effect]}" presetClass="${a.exit ? 'exit' : 'entr'}" presetSubtype="${sub}" fill="hold" grpId="0" nodeType="${k ? 'withEffect' : first}">` +
+          `<p:stCondLst><p:cond delay="${ms(it.start - g0)}"/></p:stCondLst><p:childTnLst>${behaviours(a, spid)}</p:childTnLst></p:cTn></p:par>`).join('');
+      }).join('');
+      return `<p:par><p:cTn id="${id++}" fill="hold"><p:stCondLst><p:cond delay="${ms(g0)}"/></p:stCondLst><p:childTnLst>${effects}</p:childTnLst></p:cTn></p:par>`;
+    }).join('');
+    return `<p:par><p:cTn id="${id++}" fill="hold"><p:stCondLst>${cond}</p:stCondLst><p:childTnLst>${inner}</p:childTnLst></p:cTn></p:par>`;
+  }).join('');
+  const spids = [...new Set(live.flatMap((a) => spidsOf(a)))];
+  const xml = `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>` +
+    `<p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${clicks}</p:childTnLst></p:cTn>` +
+    `<p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst>` +
+    `<p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq>` +
+    `</p:childTnLst></p:cTn></p:par></p:tnLst><p:bldLst>${spids.map((s) => `<p:bldP spid="${s}" grpId="0"/>`).join('')}</p:bldLst></p:timing>`;
+  // number the timing nodes in the order they are written, as PowerPoint does
+  let n = 0;
+  return xml.replace(/<p:cTn id="\d+"/g, () => `<p:cTn id="${++n}"`);
+}
+
+/**
+ * A slide's animations from PowerPoint's timing tree. `targetOfSpid` gives the object made from
+ * each PowerPoint shape. Effects other than Appear, Fade, Wipe and Fly come in as Fade, and
+ * animations of single paragraphs move the whole text box.
+ */
+export function readTiming(sld: Element, targetOfSpid: (spid: number) => AnimTarget | null, warn: (s: string) => void): Anim[] {
+  const P = 'http://schemas.openxmlformats.org/presentationml/2006/main';
+  const kidsOf = (el: Element | null | undefined, name: string) => el ? Array.from(el.children).filter((c) => c.localName === name) : [];
+  const kid = (el: Element | null | undefined, ...path: string[]) => {
+    let cur: Element | null | undefined = el;
+    for (const p of path) cur = cur ? kidsOf(cur, p)[0] : undefined;
+    return cur ?? null;
+  };
+  const timing = kidsOf(sld, 'timing')[0];
+  if (!timing) return [];
+  const main = Array.from(timing.getElementsByTagNameNS(P, 'cTn')).find((c) => c.getAttribute('nodeType') === 'mainSeq');
+  if (!main) return [];
+  const out: Anim[] = [];
+  const delayOf = (cTn: Element | null) => {
+    const v = kid(cTn, 'stCondLst', 'cond')?.getAttribute('delay');
+    return v && v !== 'indefinite' ? Number(v) / 1000 : 0;
+  };
+  for (const click of kidsOf(kid(main, 'childTnLst'), 'par')) {
+    const clickTn = kid(click, 'cTn');
+    for (const group of kidsOf(kid(clickTn, 'childTnLst'), 'par')) {
+      const groupTn = kid(group, 'cTn');
+      for (const eff of kidsOf(kid(groupTn, 'childTnLst'), 'par')) {
+        const tn = kid(eff, 'cTn');
+        if (!tn) continue;
+        const cls = tn.getAttribute('presetClass');
+        if (cls !== 'entr' && cls !== 'exit') { warn('Emphasis and motion-path animations were left out.'); continue; }
+        const spTgt = tn.getElementsByTagNameNS(P, 'spTgt')[0];
+        const spid = Number(spTgt?.getAttribute('spid'));
+        const target = Number.isFinite(spid) ? targetOfSpid(spid) : null;
+        if (!target) continue;
+        if (spTgt && spTgt.children.length) warn('Animations of single paragraphs now move the whole text box.');
+        const preset = Number(tn.getAttribute('presetID'));
+        const effect: Effect = preset === 1 ? 'appear' : preset === 2 ? 'fly' : preset === 22 ? 'wipe' : preset === 10 ? 'fade' : 'fade';
+        if (![1, 2, 10, 22].includes(preset)) warn('Animations other than Appear, Fade, Wipe and Fly came in as Fade.');
+        const node = tn.getAttribute('nodeType');
+        const start: Anim['start'] = node === 'withEffect' ? 'with' : node === 'afterEffect' ? 'after' : 'click';
+        // how long: the first behaviour that takes time
+        const durs = Array.from(tn.getElementsByTagNameNS(P, 'cTn')).slice(1).map((c) => Number(c.getAttribute('dur'))).filter((d) => Number.isFinite(d) && d > 1);
+        const sub = Number(tn.getAttribute('presetSubtype'));
+        const prev = out[out.length - 1];
+        const same = prev && start === 'with' && prev.target.kind === target.kind && prev.target.id === target.id && prev.effect === effect && !!prev.exit === (cls === 'exit');
+        if (same) continue; // the same object moving in two PowerPoint shapes (a table and its title)
+        out.push({
+          target, effect, ...(cls === 'exit' ? { exit: true } : {}),
+          ...(effect === 'wipe' || effect === 'fly' ? { from: SUBTYPE_SIDE[sub] ?? 'bottom' } : {}),
+          start, dur: effect === 'appear' ? 0 : (durs[0] ?? 500) / 1000, delay: delayOf(tn),
+        });
+      }
+    }
+  }
+  return out;
+}

@@ -16,7 +16,7 @@ export interface Field {
 }
 
 /** Show the fields; resolves with what was entered, or null if the window was cancelled. */
-export function ask(title: string, fields: Field[], opts: { ok?: string; note?: string } = {}): Promise<Record<string, string> | null> {
+export function ask(title: string, fields: Field[], opts: { ok?: string; note?: string; /** Only an OK button, for a message. */ noCancel?: boolean } = {}): Promise<Record<string, string> | null> {
   return new Promise((resolve) => {
     const d = document.createElement('dialog');
     d.className = 'ask';
@@ -82,7 +82,8 @@ export function ask(title: string, fields: Field[], opts: { ok?: string; note?: 
     ok.type = 'submit';
     ok.className = 'primary';
     ok.textContent = opts.ok ?? 'OK';
-    buttons.append(cancel, ok);
+    if (opts.noCancel) buttons.append(ok);
+    else buttons.append(cancel, ok);
     form.append(buttons);
     d.append(form);
 
