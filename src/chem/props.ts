@@ -130,6 +130,8 @@ export interface MassFragment {
   /** Molfile atoms (0-based) in this piece. */
   atoms: number[];
   formula: string;
+  /** Element counts of the piece. */
+  counts: Record<string, number>;
   exact: number;
   mw: number;
   /** The piece has R groups or other atoms that can't be weighed (left out of the numbers). */
@@ -203,7 +205,7 @@ export function massFragments(RDKit: any, molblock: string, cuts: [number, numbe
       }
       m?.delete?.();
     }
-    out.push({ atoms: piece, formula: hillFormula(counts, charge), exact, mw, partial: partial || undefined });
+    out.push({ atoms: piece, formula: hillFormula(counts, charge), counts, exact, mw, partial: partial || undefined });
   }
   return out;
 }

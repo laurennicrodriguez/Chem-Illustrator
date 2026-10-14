@@ -11,7 +11,8 @@ import { readCdxml, ReadStats } from './io/cdxml';
 import { ChemClient } from './chem/client';
 import type { FragmentResult } from './worker/chem-worker';
 import { COMMON_ADDUCTS } from './chem/hrms';
-import { analysisHtml, analysisRuns } from './ui/analysis-panel';
+import { analysisHtml, analysisRuns, withRepeats, polymerHtml, type RepeatUnit } from './ui/analysis-panel';
+import { repeatGroups, lipDirection } from './chem/polymer';
 import { captionPlaces, fragmentRuns } from './chem/fragments';
 import { toMolfile, addMolfile } from './chem/molfile';
 import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -1862,6 +1863,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'stereo-labels': () => toggleStereoLabels(),
   'enhanced-stereo': () => { void setStereoGroup(); },
   'chiral-flag': () => { void setChiralFlag(); },
+  'repeat-group': () => { void setRepeatGroup(); },
   'name-to-structure': () => nameToStructure(),
   'clipboard-formats': async () => {
     const names = await clipboardFormats().catch((err) => [String(err)]);
@@ -2273,8 +2275,32 @@ async function runAnalysis(force: boolean): Promise<void> {
   const roundTrip = performance.now() - t0;
   chemTimes.push(roundTrip);
   if (chemTimes.length > 50) chemTimes.shift();
-  lastAnalysis = { results: res.results, frags };
-  panel.innerHTML = res.results.map((r, i) => analysisHtml(r, i, adductSel.value, { stereo: r.error ? '' : stereoSummary(frags[i]), unknown: exports[i].unknownLabels })).join('');
+  // repeat groups (polymer brackets): weigh each unit and count it as many times as its label says
+  const groups = repeatGroups(doc);
+  const results: FragmentResult[] = [];
+  const polymers: (ReturnType<typeof withRepeats>['polymer'])[] = [];
+  for (let i = 0; i < res.results.length; i++) {
+    const mine = groups.filter((g) => g.inner.some((id) => frags[i].has(id)));
+    const units: RepeatUnit[] = [];
+    if (mine.length && !res.results[i].error) {
+      const index = new Map<number, number>();
+      exports[i].map.forEach((id, k) => { if (id >= 0) index.set(id, k); });
+      for (const g of mine) {
+        const cuts = g.crossing.map((c) => { const b = doc.bonds.get(c.bond)!; return [index.get(b.a1), index.get(b.a2)] as [number | undefined, number | undefined]; })
+          .filter((c): c is [number, number] => c[0] !== undefined && c[1] !== undefined);
+        const pieces = cuts.length ? await chem.fragments(exports[i].molblock, cuts).catch(() => null) : null;
+        const at = index.get(g.inner[0]);
+        const unit = pieces && !('error' in pieces) ? pieces.find((p) => at !== undefined && p.atoms.includes(at)) : null;
+        if (unit) units.push({ text: g.text, count: g.count, counts: unit.counts, exact: unit.exact, mw: unit.mw });
+      }
+    }
+    const w = withRepeats(res.results[i], units);
+    results.push(w.r);
+    polymers.push(w.polymer);
+  }
+  if (seq !== analysisSeq) return;
+  lastAnalysis = { results, frags };
+  panel.innerHTML = results.map((r, i) => polymers[i] ? polymerHtml(r, polymers[i]!) : analysisHtml(r, i, adductSel.value, { stereo: r.error ? '' : stereoSummary(frags[i]), unknown: exports[i].unknownLabels })).join('');
   updatePanels();
 }
 
@@ -2310,6 +2336,34 @@ async function setStereoGroup(): Promise<void> {
     for (const a of centres) doc.updateAtom(a.id, { enhStereo: type === 'none' ? undefined : type === 'abs' ? { type } : { type, group } });
   });
   editor.changed();
+}
+
+/**
+ * Structure > Polymer or Repeat Brackets: labels the selected brackets n (a polymer's repeat unit)
+ * or a number (a group repeated that many times). The atoms between the brackets are the unit.
+ */
+async function setRepeatGroup(): Promise<void> {
+  const br = [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((s): s is Shape => s?.kind === 'bracket');
+  if (!br.length) { flash('Select the brackets first (draw them round the repeat unit with the bracket tool).'); return; }
+  // the label goes on the closing bracket (lips pointing back to the left), as ChemDraw puts it
+  const closing = br.find((s) => lipDirection(s).x < -0.5) ?? br[br.length - 1];
+  const now = br.find((s) => s.repeat)?.repeat ?? 'n';
+  const got = await ask('Polymer or repeat brackets', [{ name: 'text', label: 'Label', value: now }], {
+    ok: 'Set', note: 'Type n (or another letter) for a polymer\'s repeat unit, or a number for a group repeated that many times. Leave it empty to take the label off. The atoms between the brackets are the unit; the bonds crossing them join it to the rest.',
+  });
+  if (!got) return;
+  const text = got.text.trim();
+  doc.edit('Repeat brackets', () => {
+    for (const s of br) if (s.repeat && s.id !== closing.id) doc.updateShape(s.id, { repeat: undefined });
+    doc.updateShape(closing.id, { repeat: text || undefined });
+  });
+  editor.changed();
+  if (text) {
+    const g = repeatGroups(doc).find((x) => x.label.id === closing.id);
+    if (!g) flash('Couldn\'t find the bracket facing this one. Draw both brackets, facing each other, round the repeat unit.');
+    else if (!g.inner.length) flash('There are no atoms between these brackets.');
+    else flash(`${g.inner.length} atom${g.inner.length === 1 ? '' : 's'} in the repeat unit, joined by ${g.crossing.length} bond${g.crossing.length === 1 ? '' : 's'} crossing the brackets.`);
+  }
 }
 
 /**

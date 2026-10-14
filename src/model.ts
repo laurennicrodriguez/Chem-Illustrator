@@ -318,6 +318,11 @@ export interface Shape {
   bracket?: 'square' | 'round' | 'curly';
   /** Brackets: draw both halves of the pair. */
   pair?: boolean;
+  /**
+   * Brackets: the label of a repeat group, shown by the bracket's lower end: n (or another letter)
+   * for a polymer's repeat unit, or a number for a group repeated that many times (chem/polymer.ts).
+   */
+  repeat?: string;
   /** Stands in for a picture in a ChemDraw file, which is kept as it was when saving. */
   picture?: boolean;
   /** A picture: its image as a data URL (PNG, JPEG, GIF or SVG); x1..y2 is where it shows. */

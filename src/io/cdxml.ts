@@ -2,6 +2,7 @@
 // their formatting, arrows, and the common graphics (lines, boxes, circles, brackets,
 // charge symbols). Anything not understood yet is counted and skipped, never fatal.
 
+import { lipDirection } from '../chem/polymer';
 import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, CHIRAL_FLAGS } from '../model';
 import { TEXT_TAG, parseTextTag, runsFromChemDraw } from '../text/chemdraw-text';
 import { DocStyle } from '../style';
@@ -583,6 +584,32 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     }
   };
 
+  /** Polymer and repeat groups (ChemDraw's bracketedgroup), read once the brackets are in. */
+  const pendingRepeats: Element[] = [];
+  const readRepeats = () => {
+    if (!pendingRepeats.length) return;
+    const byXmlId = new Map<string, Element>();
+    for (const e of all) { const id = e.getAttribute('id'); if (id) byXmlId.set(id, e); }
+    for (const g of pendingRepeats) {
+      const usage = g.getAttribute('BracketUsage');
+      if (usage !== 'SRU' && usage !== 'MultipleGroup') { skip(`bracketedgroup ${usage ?? ''}`.trim()); continue; }
+      const text = usage === 'SRU' ? g.getAttribute('SRULabel') || 'n' : String(Math.round(num(g, 'RepeatCount', 2)));
+      const brackets: { e: Element; sh: Shape }[] = [];
+      for (const k of kids(g)) {
+        if (k.nodeName !== 'bracketattachment') continue;
+        const e = byXmlId.get(k.getAttribute('GraphicID') ?? '');
+        const ref = e ? refOf.get(e) : undefined;
+        const sh = ref && ref[0] === 's' ? doc.shapes.get(Number(ref.slice(1))) : undefined;
+        if (e && sh?.kind === 'bracket') brackets.push({ e, sh });
+      }
+      if (!brackets.length) continue;
+      // the label goes where ChemDraw shows it: on the bracket holding the label text, else the closing one
+      const labelled = (brackets.find((b) => kids(b.e).some((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === 'bracketusage'))
+        ?? brackets.find((b) => lipDirection(b.sh).x < -0.5) ?? brackets[brackets.length - 1]).sh;
+      labelled.repeat = text;
+    }
+  };
+
   const walk = (el: Element) => {
     for (const ch of kids(el)) {
       switch (ch.nodeName) {
@@ -613,7 +640,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
           }
           break;
         }
-        case 'scheme': case 'step': case 'colortable': case 'fonttable': case 'objecttag': case 'bracketedgroup': case 'chemicalproperty': break;
+        case 'bracketedgroup': pendingRepeats.push(ch); break;
+        case 'scheme': case 'step': case 'colortable': case 'fonttable': case 'objecttag': case 'chemicalproperty': break;
         default: skip(ch.nodeName);
       }
     }
@@ -622,6 +650,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   doc.bulk(() => {
     walk(root);
     readSteps(all, refOf, doc);
+    readRepeats();
     for (const c of pendingCircles) if (!ringOfCircle(doc, c)) c.oval();
     // Element labels like "OH", "H2N" or "N" become automatic labels (so they re-justify
     // when the structure changes); anything else is kept exactly as written.

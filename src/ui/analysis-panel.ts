@@ -155,3 +155,59 @@ export function analysisRuns(kind: 'formula' | 'hrms' | 'ea', r: FragmentResult,
     { text: 'Anal. Calcd for ' }, f(r.formula.replace(/\d*[+−]$/, '')), { text: `: ${rep.map((x) => `${x.el}, ${x.pct.toFixed(2)}`).join('; ')}. Found: ${rep.map((x) => `${x.el}, 00.00`).join('; ')}.` },
   ];
 }
+
+/** A repeat group's unit, as the chemistry engine weighed it. */
+export interface RepeatUnit {
+  text: string;
+  count: number | null;
+  counts: Record<string, number>;
+  exact: number;
+  mw: number;
+}
+
+/**
+ * A structure's numbers with its repeat groups counted. A numbered group (×3) is added that many
+ * times in all, so the result is an ordinary molecule. A polymer (n) can't be weighed whole: its
+ * formula is written with the unit in brackets, (C2H4)n, and `polymer` describes the parts.
+ */
+export function withRepeats(r: FragmentResult, units: RepeatUnit[]): { r: FragmentResult; polymer?: { ends: string; units: { text: string; formula: string; exact: number; mw: number }[]; endExact: number; endMw: number } } {
+  if (!units.length || r.error || !r.props) return { r };
+  let counts = { ...r.props.counts };
+  let exact = r.exact, mw = r.mw;
+  const add = (c: Record<string, number>, k: number) => { for (const [el, n] of Object.entries(c)) counts[el] = (counts[el] ?? 0) + k * n; };
+  for (const u of units.filter((x) => x.count !== null)) {
+    add(u.counts, u.count! - 1);
+    exact += (u.count! - 1) * u.exact;
+    mw += (u.count! - 1) * u.mw;
+  }
+  const letters = units.filter((x) => x.count === null);
+  if (!letters.length) {
+    counts = Object.fromEntries(Object.entries(counts).filter(([, n]) => n > 0));
+    const formula = hillFormula(counts, r.charge);
+    return { r: { ...r, formula, exact, mw, props: { ...r.props, counts } } };
+  }
+  // a polymer: the end groups, then each unit in brackets with its letter
+  for (const u of letters) { add(u.counts, -1); exact -= u.exact; mw -= u.mw; }
+  counts = Object.fromEntries(Object.entries(counts).filter(([, n]) => n > 0));
+  const ends = Object.keys(counts).length ? hillFormula(counts, r.charge) : '';
+  const parts = letters.map((u) => ({ text: u.text, formula: hillFormula(u.counts), exact: u.exact, mw: u.mw }));
+  const formula = ends + parts.map((p) => `(${p.formula})${p.text}`).join('');
+  return { r: { ...r, formula, exact, mw, props: undefined }, polymer: { ends, units: parts, endExact: exact, endMw: mw } };
+}
+
+/** A polymer's formula as HTML: (C<sub>2</sub>H<sub>4</sub>)<i>n</i>. */
+export function polymerFormulaHtml(ends: string, units: { text: string; formula: string }[]): string {
+  return formulaHtml(ends) + units.map((u) => `(${formulaHtml(u.formula)})<sub><i>${esc(u.text)}</i></sub>`).join('');
+}
+
+/** The panel for a structure holding a polymer's repeat unit: its formula and the masses of the parts. */
+export function polymerHtml(r: FragmentResult, p: NonNullable<ReturnType<typeof withRepeats>['polymer']>): string {
+  const rows = p.units.map((u) => `<tr><th>Unit (${formulaHtml(u.formula)})<sub><i>${esc(u.text)}</i></sub></th><td>${u.exact.toFixed(4)}<br>${u.mw.toFixed(2)} g/mol</td></tr>`);
+  if (p.ends) rows.push(`<tr><th>End groups ${formulaHtml(p.ends)}</th><td>${p.endExact.toFixed(4)}<br>${p.endMw.toFixed(2)} g/mol</td></tr>`);
+  return `<div class="frag">
+    <div class="formula">${polymerFormulaHtml(p.ends, p.units)}</div>
+    <table>${rows.join('')}</table>
+    <p class="muted small">A polymer: exact mass and molecular weight per repeat unit (and of the end groups). Type a number in place of ${esc(p.units[0].text)} for a molecule of that length.</p>
+    <div class="smiles" title="SMILES (one repeat unit)">${esc(r.smiles)}</div>
+  </div>`;
+}

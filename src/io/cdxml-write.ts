@@ -23,6 +23,7 @@ import { FADE, tint } from '../colours';
 import { layoutTable, cellAlign, isCovered, spanOf, NOTE_SCALE } from '../table';
 import { TABLE_TAG, TABLE_PART_TAG, tableBorders, type TableTag } from './cdxml-table';
 import { bondLayer, crossingBonds } from '../chem/crossing';
+import { repeatGroups, repeatCount, repeatLabelPlace } from '../chem/polymer';
 import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
 
 /** Numbers in an attribute such as "12.5 30 0". */
@@ -116,6 +117,7 @@ class CdxmlWriter {
     for (const r of doc.arrows.values()) this.writeArrow(r);
     for (const s of doc.shapes.values()) this.writeShape(s);
     this.writeRingCircles();
+    this.writeRepeatGroups();
     this.writeSteps();
     if (src) this.cleanUp();
 
@@ -771,6 +773,43 @@ class CdxmlWriter {
    * structure, in the middle of a ring of aromatic bonds, so that is how they are written; circles
    * already in the file are kept (moved if the ring moved) and ones whose ring lost its circle go.
    */
+  /**
+   * Polymer and repeat groups: ChemDraw's bracketedgroup on the page, naming the atoms inside
+   * and, for each bracket, the bonds crossing it. Groups of other kinds (copolymers, mixtures…)
+   * read from a file are left as they were.
+   */
+  private writeRepeatGroups(): void {
+    const ours = (g: Element) => ['SRU', 'MultipleGroup'].includes(g.getAttribute('BracketUsage') ?? '');
+    const old = [...this.page.getElementsByTagName('bracketedgroup')].filter(ours);
+    const elId = (kind: Kind, id: number, names: string[]) => this.source(kind, id, names)?.getAttribute('id') ?? String(id);
+    const made = repeatGroups(this.doc).filter((g) => g.inner.length).map((g) => {
+      const count = g.count;
+      const e = this.el('bracketedgroup', {
+        id: '', BracketedObjectIDs: g.inner.map((id) => this.nodeId(id)).join(' '),
+        BracketUsage: count === null ? 'SRU' : 'MultipleGroup', SRULabel: count === null ? g.text : null, RepeatCount: count,
+      });
+      const shapes = g.other.id === g.label.id ? [g.label] : [g.label, g.other];
+      shapes.forEach((sh) => {
+        const att = this.el('bracketattachment', { id: '', GraphicID: elId('s', sh.id, ['graphic']) });
+        for (const c of g.crossing.filter((x) => x.spine === (sh.id === g.label.id ? 0 : 1) || shapes.length === 1)) {
+          att.appendChild(this.el('crossingbond', { id: '', BondID: elId('b', c.bond, ['b']), InnerAtomID: this.nodeId(c.inner) }));
+        }
+        e.appendChild(att);
+      });
+      return e;
+    });
+    // the same groups as before (ids aside): leave the file as it was
+    const key = (e: Element) => e.outerHTML.replace(/ id="[^"]*"/g, '');
+    if (old.length === made.length && old.every((e, i) => key(e) === key(made[i]))) return;
+    for (const e of old) e.parentNode?.removeChild(e);
+    for (const e of made) {
+      e.setAttribute('id', this.id());
+      for (const c of e.getElementsByTagName('*')) c.setAttribute('id', this.id());
+      this.page.appendChild(e);
+    }
+    this.changed = true;
+  }
+
   private writeRingCircles(): void {
     const doc = this.doc;
     const L = doc.style.bondLength || 14.4;
@@ -1236,6 +1275,21 @@ class CdxmlWriter {
         set('GraphicType', 'Bracket');
         set('BracketType', s.pair ? t + 'Pair' : t);
         set('BoundingBox', box(s));
+        // a repeat group's label: the usage, and the label text as ChemDraw shows it by the bracket
+        set('BracketUsage', s.repeat ? (repeatCount(s.repeat) === null ? 'SRU' : 'MultipleGroup') : null);
+        for (const c of kids(g)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === 'bracketusage') g.removeChild(c);
+        if (s.repeat) {
+          const size = 0.75 * this.doc.style.labelSize;
+          const w = this.measure(s.repeat, size);
+          const p = repeatLabelPlace(s, size, w);
+          const tag = this.el('objecttag', { TagType: 'Unknown', Name: 'bracketusage' });
+          const tt = this.el('t', { p: pt(p), BoundingBox: box({ x1: p.x, y1: p.y - CAP * size, x2: p.x + w, y2: p.y }), CaptionLineHeight: 'variable' });
+          const sp = this.el('s', { font: this.fontId(), size: f2(size).replace(/\.00$/, ''), color: '0', face: repeatCount(s.repeat) === null ? 2 : 0 });
+          sp.textContent = s.repeat;
+          tt.appendChild(sp);
+          tag.appendChild(tt);
+          g.appendChild(tag);
+        }
         break;
       }
     }
