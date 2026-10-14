@@ -24,6 +24,8 @@ import { DEFAULT_COL_W, DEFAULT_ROW_H, MAX_AUTO_ROW, structureHeight } from '../
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
 import { applyTint } from '../colours';
+import { chartXml, chartAnchorXml, readChartXml, CT_CHART, REL_CHART, C_NS } from './xlsx-chart';
+import { Chart, chartData, seenChartId, newChartId, sameChartData } from '../sheet/chart';
 import { condFormatsXml, dxfXml, tableXml, readDxfs, readCondFormats, readTable, sameRules } from './xlsx-format';
 import type { CondFormat, CfLook } from '../sheet/conditional';
 import { seenCondFormatId } from '../sheet/conditional';
@@ -141,6 +143,7 @@ interface ModelSheet {
   /** Conditional formatting and tables as this program holds them (Excel's own copy can't say everything). */
   condFormats?: CondFormat[];
   tables?: TableDef[];
+  charts?: Chart[];
 }
 
 interface Model {
@@ -282,7 +285,7 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
   const model: Model = { app: 'Chem Illustrator', version: 1, drawingStyle: book.drawingStyle, sheets: [] };
   const sheetEntries: string[] = [];
   const filterNames: string[] = [];
-  let imageNo = 0, drawingNo = 0, tableNo = 0;
+  let imageNo = 0, drawingNo = 0, tableNo = 0, chartNo = 0;
   pkg.defaultType('png', 'image/png');
 
   for (let si = 0; si < book.sheets.length; si++) {
@@ -291,6 +294,7 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
     const ms: ModelSheet = { name: s.name, cells: [], defs: [...s.colDefs].map(([col, def]) => ({ col, def })), chemCols: [], filter: s.filter };
     if (s.condFormats.length) ms.condFormats = s.condFormats;
     if (s.tables.length) ms.tables = s.tables;
+    if (s.charts.length) ms.charts = s.charts;
     // a table's header cells hold its column names, as Excel needs them (filled in and all different)
     const headerName = new Map<number, string>();
     const tableNames = new Map<TableDef, string[]>();
@@ -475,6 +479,16 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
     }
     const tableParts = tableIds.length ? `<tableParts count="${tableIds.length}">${tableIds.map((id) => `<tablePart r:id="${id}"/>`).join('')}</tableParts>` : '';
     const merges = s.merges.length ? `<mergeCells count="${s.merges.length}">${s.merges.map((m) => `<mergeCell ref="${cellName(m.r1, m.c1)}:${cellName(m.r2, m.c2)}"/>`).join('')}</mergeCells>` : '';
+    // charts: Excel's own chart parts, anchored at their corner cell
+    for (const ch of s.charts) {
+      chartNo++;
+      const cpath = `xl/charts/chart${chartNo}.xml`;
+      pkg.add(cpath, HEAD + chartXml(ch, chartData(book, s, ch)), CT_CHART);
+      const rid = pkg.relate(drawingPath, REL_CHART, `../charts/chart${chartNo}.xml`);
+      const x = cols.start(ch.at.col) + ch.at.dx, y = rows.start(ch.at.row) + ch.at.dy;
+      const end = cols.at(x + ch.w, ch.at.col), endR = rows.at(y + ch.h, ch.at.row);
+      anchors.push(chartAnchorXml(ch, { col: end.i, colOff: end.off, row: endR.i, rowOff: endR.off }, anchors.length + 2, rid));
+    }
     let drawingXml = '';
     const sheetRels = path;
     if (anchors.length) {
@@ -915,7 +929,39 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
           const name = kid(pic, 'nvPicPr', 'cNvPr')?.getAttribute('name') ?? '';
           if (!(ms && name.startsWith('Structure '))) foreignPictures++;
         }
-        foreignPictures += dr.getElementsByTagNameNS(XDR, 'graphicFrame').length + dr.getElementsByTagNameNS(XDR, 'sp').length;
+        foreignPictures += dr.getElementsByTagNameNS(XDR, 'sp').length;
+        // charts: Excel's, or ours (our own copy where the data it charts is unchanged)
+        const charts: Chart[] = [];
+        const colPx = (c: number) => (s.hiddenCols.has(c) ? 0 : s.colWidths.get(c) ?? DEFAULT_COL_W);
+        const rowPx = (r: number) => (s.hiddenRows.has(r) ? 0 : s.rowHeights.get(r) ?? DEFAULT_ROW_H);
+        for (const gf of Array.from(dr.getElementsByTagNameNS(XDR, 'graphicFrame'))) {
+          const anchor = gf.parentElement;
+          const cref = gf.getElementsByTagNameNS(C_NS, 'chart')[0];
+          const target = cref ? pkg.rels(drawingPath!).get(rAttr(cref, 'id') ?? '')?.target : undefined;
+          const cdoc = target ? pkg.xml(target) : null;
+          const from = kid(anchor, 'from'), to = kid(anchor, 'to');
+          if (!cdoc || !from) { foreignPictures++; continue; }
+          const pos = (el: Element | null) => ({ col: Number(kid(el, 'col')?.textContent ?? 0), colOff: Number(kid(el, 'colOff')?.textContent ?? 0) / 9525, row: Number(kid(el, 'row')?.textContent ?? 0), rowOff: Number(kid(el, 'rowOff')?.textContent ?? 0) / 9525 });
+          const a = pos(from);
+          let w = 480, h = 290;
+          if (to) {
+            const b = pos(to);
+            w = b.colOff - a.colOff; for (let c = a.col; c < b.col; c++) w += colPx(c);
+            h = b.rowOff - a.rowOff; for (let r = a.row; r < b.row; r++) h += rowPx(r);
+          } else {
+            const ext = kid(anchor, 'ext');
+            if (ext) { w = Number(ext.getAttribute('cx') ?? 0) / 9525; h = Number(ext.getAttribute('cy') ?? 0) / 9525; }
+          }
+          const at = { row: a.row, col: a.col, dx: Math.round(a.colOff), dy: Math.round(a.rowOff) };
+          const name = kid(gf, 'nvGraphicFramePr', 'cNvPr')?.getAttribute('name') ?? '';
+          const mine = ms?.charts?.find((c) => name === `Chart ${c.id}`);
+          const got = readChartXml(cdoc, at, w, h, mine?.id ?? newChartId());
+          if (!got) { foreignPictures++; continue; }
+          if (mine && sameChartData(mine, got.chart)) { seenChartId(mine.id); charts.push({ ...mine, at }); continue; }
+          if (got.partial) notKept.add('parts of combined charts');
+          charts.push(got.chart);
+        }
+        if (charts.length) s.setCharts(charts);
       }
       for (const [tag, what] of [['dataValidations', 'data validation lists'], ['hyperlinks', 'links'], ['legacyDrawing', 'comments']] as const) {
         if (kid(ws, tag)) notKept.add(what);

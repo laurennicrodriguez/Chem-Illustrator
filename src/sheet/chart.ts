@@ -118,6 +118,15 @@ let nextChartId = 1;
 export function seenChartId(id: number): void {
   if (id >= nextChartId) nextChartId = id + 1;
 }
+export const newChartId = (): number => nextChartId++;
+
+/** Do two charts chart the same cells the same way (so our own copy of a chart can stand in for Excel's)? */
+export function sameChartData(a: Chart, b: Chart): boolean {
+  const kindOf = (k: ChartKind) => (k === 'bar' ? 'column' : k);
+  if (kindOf(a.kind) !== kindOf(b.kind) || a.series.length !== b.series.length) return false;
+  const norm = (t: string | undefined) => (t ?? '').replace(/^=/, '').replace(/'/g, '').toUpperCase();
+  return a.series.every((s, i) => norm(s.y) === norm(b.series[i].y) && norm(s.x) === norm(b.series[i].x) && !!s.fit === !!b.series[i].fit && (s.fit?.kind ?? '') === (b.series[i].fit?.kind ?? ''));
+}
 
 /** A reference to a block of cells on a sheet, as a chart keeps it ("=Sheet1!$B$2:$B$9"). */
 export function refText(sheet: string, r: Range): string {
