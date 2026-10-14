@@ -120,8 +120,8 @@ const ARROWS: PaletteDef = {
     { name: 'arrow-equilibrium', title: 'Equilibrium arrows' },
     { name: 'arrow-retro', title: 'Retrosynthetic arrow' },
     { name: 'arrow-nogo', title: 'Crossed-out arrow (reaction does not go)' },
-    { name: 'arrow-curved', title: 'Curved arrow (electron pair)' },
-    { name: 'arrow-fishhook', title: 'Curved half-headed arrow (one electron)' },
+    { name: 'arrow-curved', title: 'Curved arrow (electron pair). Drag from an atom or bond to an atom or bond and it snaps like a mechanism arrow; hold Alt to draw freely' },
+    { name: 'arrow-fishhook', title: 'Curved half-headed arrow (one electron). Snaps between atoms and bonds like the curved arrow; hold Alt to draw freely' },
   ],
 };
 

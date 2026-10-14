@@ -21,6 +21,7 @@ import { joinAtoms, joinBonds } from '../chem/join';
 import { extractDrawing, insertDrawing } from '../io/clipboard';
 import { isReactionArrow, itemFinder, rolesOf, ROLES, schemeItems, type Item, type Role } from '../chem/reaction';
 import { applySchemePlan, planCleanUp } from '../chem/scheme-layout';
+import { pushArrow, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
 import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
 import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, rotation, mirrorX, mirrorY } from './arrange';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
@@ -887,6 +888,12 @@ export class Editor {
         } else this.ringClick(null, d.start, t.size, t.aromatic, false, d.shift, p);
       });
     } else if (t.kind === 'arrow') {
+      const push = this.pushFor(d, p);
+      if (push) {
+        const lw = doc.style.lineWidth;
+        doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(push.tail, push.head, { ...t.style, sweep: Math.abs(push.sweep), ...(push.small ? { headLength: lw * SMALL_HEAD.length, headWidth: lw * SMALL_HEAD.width } : {}) }, Math.sign(push.sweep)).id }));
+        return;
+      }
       const end = this.arrowEnd(d.start, p, d.alt);
       doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(d.start, end, t.style, this.bendSide(d, end)).id }));
     } else if (t.kind === 'shape') {
@@ -910,10 +917,33 @@ export class Editor {
 
   /** Which way a curved arrow bends: towards the side the pointer swung out to, else to the left. */
   private bendSide(d: Drag, end: Vec): number {
-    const n = perp(norm(sub(end, d.start)));
+    return this.swing(d, d.start, end) ?? 1;
+  }
+
+  /** The side the pointer swung out to on its way from a to b (+1 left, −1 right), if it clearly did. */
+  private swing(d: Drag, a: Vec, b: Vec): number | undefined {
+    const n = perp(norm(sub(b, a)));
     let most = 0;
-    for (const q of d.path ?? []) { const o = dot(sub(q, d.start), n); if (Math.abs(o) > Math.abs(most)) most = o; }
-    return Math.abs(most) > this.tol(4) && most > 0 ? -1 : 1;
+    for (const q of d.path ?? []) { const o = dot(sub(q, a), n); if (Math.abs(o) > Math.abs(most)) most = o; }
+    return Math.abs(most) > this.tol(4) ? (most > 0 ? -1 : 1) : undefined;
+  }
+
+  /**
+   * A curved arrow dragged from an atom or bond, or onto one, is an electron-pushing arrow: it
+   * snaps from the lone pair or bond to the atom or bond it points at (Alt: draw it freely).
+   */
+  private pushFor(d: Drag, p: Vec): PushArrow | null {
+    const t = this.tool;
+    if (t.kind !== 'arrow' || !t.style.sweep || d.alt) return null;
+    const endOf = (h: Hit, at: Vec): PushEnd => (h && (h.kind === 'atom' || h.kind === 'bond') ? { kind: h.kind, id: h.id } : { kind: 'point', p: at });
+    const from = endOf(d.hit, d.start);
+    let to = endOf(this.hitTest(p), p);
+    if (from.kind === 'point' && to.kind === 'point') return null;
+    if (to.kind !== 'point' && from.kind === to.kind && (from as { id: number }).id === to.id) to = { kind: 'point', p };
+    if (to.kind === 'point' && dist(p, d.start) < this.tol(6)) return null;
+    // a swing of the pointer chooses the bend; otherwise it bends away from the structure
+    const a = from.kind === 'point' ? from.p : d.start;
+    return pushArrow(this.doc, this.measure(), from, to, this.swing(d, a, p));
   }
 
   /** The box, circle or line a shape tool draws for a drag from a to b (Shift: square or circle). */
@@ -2222,6 +2252,8 @@ export class Editor {
       } else pts = freeRing(d.start, t.size, L, d.last);
       poly(pts, true);
     } else if (t.kind === 'arrow') {
+      const push = this.pushFor(d, d.last);
+      if (push) { poly(arrowPoints(push), false); return; }
       const end = this.arrowEnd(d.start, d.last, d.alt);
       const sweep = (t.style.sweep ?? 0) * this.bendSide(d, end);
       poly(arrowPoints({ tail: d.start, head: end, sweep }), false);

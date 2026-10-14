@@ -6,7 +6,7 @@
 // and bond and only recomputed near what changed.
 
 import { Doc, Atom, Bond, Arrow, Caption, Shape, applyBase, type TextBase } from '../model';
-import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter } from '../geom';
+import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter, fromAngle } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
 import type { StructureChecks } from '../chem/warnings';
@@ -979,10 +979,13 @@ export class Renderer {
     ctx.beginPath();
     ctx.arc(center.x, center.y, radius, a0, a1, sweep < 0);
     ctx.stroke();
-    // heads point along the arc
-    const along = (p: Vec) => { const rad = norm(sub(p, center)); return sweep < 0 ? { x: rad.y, y: -rad.x } : { x: -rad.y, y: rad.x }; };
-    this.arrowHead(ctx, head, along(head), r.headStyle, r);
-    this.arrowHead(ctx, tail, mul(along(tail), -1), r.tailStyle, r);
+    // a head points from where its base meets the arc to its tip, so on a tight curl it sits
+    // across the curve instead of sticking out along the last bit of it
+    const s = Math.sign(sweep);
+    const back = Math.min(Math.abs(sweep) / 2, (r.headLength * 0.8) / Math.max(radius, 1e-6));
+    const aim = (tip: Vec, a: number) => norm(sub(tip, add(center, fromAngle(a, radius))));
+    this.arrowHead(ctx, head, aim(head, a1 - s * back), r.headStyle, r);
+    this.arrowHead(ctx, tail, aim(tail, a0 + s * back), r.tailStyle, r);
   }
 
   private arrowHead(ctx: CanvasRenderingContext2D, tip: Vec, dir: Vec, style: Arrow['headStyle'], r: Arrow): void {
