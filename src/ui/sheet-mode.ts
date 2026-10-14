@@ -1113,6 +1113,21 @@ export class SheetMode {
     return lines.join('');
   }
 
+  /** Split view's Insert: a drawing into the selected cell, as pasting one would. */
+  putStructure(contents: Contents): void {
+    const v = this.view;
+    const s = v.sheet;
+    if (!s || !this.book) return;
+    v.commitEdit();
+    if (isBlankDrawing(contents)) { this.host.flash('There is nothing to put in the cell.'); return; }
+    const m = s.mergeAt(v.sel.active.r, v.sel.active.c);
+    const r = m?.r1 ?? v.sel.active.r, c = m?.c1 ?? v.sel.active.c;
+    if (s.colDefs.has(c) && r >= s.colDefs.get(c)!.firstRow) { this.host.flash('This column works out a property: put structures in the column of structures.'); return; }
+    this.edit('Insert structure', (sh) => sh.setStructure(r, c, contents));
+    this.host.flash(`Put the structure in ${cellName(r, c)}. Double-click it to change it.`);
+    this.view.focus();
+  }
+
   /** Paste at the selection: cells copied here, a drawing (into the active cell), or text from Excel and elsewhere. */
   async paste(e: ClipboardEvent | null, what: 'all' | 'values' | 'formats' = 'all'): Promise<void> {
     const v = this.view;

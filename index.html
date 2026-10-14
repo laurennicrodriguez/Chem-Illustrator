@@ -56,6 +56,8 @@
         <button role="menuitem" data-cmd="zoom-fit">Fit to Window</button>
         <button role="menuitem" data-cmd="zoom-actual">Actual Size</button>
         <hr />
+        <button role="menuitemcheckbox" aria-checked="false" data-cmd="split-view" title="A drawing beside the document, sheet or slides, so you can draw and write without switching tabs"><span>Split View: Drawing Beside</span></button>
+        <hr />
         <button role="menuitem" data-cmd="mode-colours" title="Blue for drawings, orange for slides: choose how much of the window is coloured, and the colours">Mode Colours…</button>
         <button role="menuitemcheckbox" aria-checked="false" data-cmd="dev-tools" title="Speed readout and a stress test, for checking how fast the app runs"><span>Developer Tools</span></button>
       </div>
@@ -584,6 +586,21 @@
       <canvas id="scene"></canvas>
       <canvas id="overlay" tabindex="0"></canvas>
       <div id="warn-tip" role="tooltip" hidden></div>
+    </div>
+    <div id="main-snap" hidden title="Click to work on the slide again"><canvas></canvas></div>
+    <div id="split-pane" hidden>
+      <div id="split-handle" title="Drag to change how wide the drawing is"></div>
+      <div id="split-bar">
+        <span class="split-label">Drawing</span>
+        <select id="split-pick" aria-label="Drawing shown beside" title="The drawing shown here: any drawing open in a tab, or a new one"></select>
+        <button id="split-insert" type="button" title="Put the selected structures (or the whole drawing, when nothing is selected) into the document at the caret">Insert into Document</button>
+        <span class="grow"></span>
+        <button id="split-close" type="button" title="Close split view (the drawing stays open in its tab)" aria-label="Close split view">×</button>
+      </div>
+      <div id="split-body">
+        <canvas id="split-snap"></canvas>
+        <p id="split-empty" hidden>Click here to draw</p>
+      </div>
     </div>
     <div id="notes-pane" class="slides-only" hidden>
       <textarea id="notes" placeholder="Click to add speaker notes" aria-label="Speaker notes"></textarea>

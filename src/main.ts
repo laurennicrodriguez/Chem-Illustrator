@@ -106,6 +106,14 @@ function updateStereo(): void {
 }
 const startMs = performance.now();
 
+// Split view (View > Split View): a drawing beside a document, sheet or slides.
+/** The share of the width the drawing takes (settings.json). */
+let splitWidth = 0.38;
+/** Beside slides: the deck whose drawing is being worked on (the drawing's tab shows; the slide is a picture). */
+let slideSplit: Tab | null = null;
+/** Beside a document or sheet: the drawing has the keys and menus (it was clicked last). */
+let splitDrawing = false;
+
 // ---------------------------------------------------------------- layout
 
 function resize(): void {
@@ -857,11 +865,11 @@ const ws: Workspace = new Workspace(doc, {
     if (tab.mode === 'document') docMode.leave();
     modeTool[tab.mode] = editor.toolName;
     editor.cropping = null;
-    tab.view = { ...renderer.view };
+    (ws.pane ?? tab).view = { ...renderer.view };
     if (tab.deck) { tab.deck.onChange = () => {}; tab.deck.onSwitch = () => {}; }
   },
   enter: (tab, opened) => enterTab(tab, opened),
-  changed: () => { renderTabs(); updateTitle(); },
+  changed: () => { renderTabs(); updateTitle(); layoutSplit(); },
   flash,
   pptx: {
     picture: async (d) => {
@@ -897,6 +905,8 @@ function finishTyping(): void {
 
 /** Set the window up for a tab that has just come to the front. */
 function enterTab(tab: Tab, opened: boolean): void {
+  if (slideSplit && tab !== slideSplit.partner) slideSplit = null;
+  splitDrawing = false;
   const deck = tab.deck;
   const slides = !!deck;
   const sheet = tab.mode === 'sheet';
@@ -926,9 +936,12 @@ function enterTab(tab: Tab, opened: boolean): void {
     notesBox.value = deck.current?.notes ?? '';
     showSlideState();
   } else slideList.show(null);
+  layoutSplit();
   // the slide list and notes take room from the drawing area
   resize();
-  if (tab.view && !opened) renderer.view = { ...tab.view };
+  const viewOf = ws.pane ?? tab;
+  if (viewOf.view && (!opened || ws.pane)) renderer.view = { ...viewOf.view };
+  else if (ws.pane || slideSplit) fitSplitDrawing();
   else editor.fit();
   renderer.repaintAll();
   editor.clearSelection();
@@ -936,8 +949,8 @@ function enterTab(tab: Tab, opened: boolean): void {
   refreshKeys();
   analysisKey = '';
   scheduleAnalysis(true);
-  if (sheet) $('#hint').textContent = SHEET_HINT;
-  else if (words) $('#hint').textContent = DOC_HINT;
+  if (sheet && !splitDrawing) $('#hint').textContent = SHEET_HINT;
+  else if (words && !splitDrawing) $('#hint').textContent = DOC_HINT;
   else editor.onToolChange(editor.toolName);
 }
 
@@ -1333,7 +1346,12 @@ const SHEET_HINT = 'Type in a cell, or double-click to change it. Sheet > Draw S
 
 /** True when a sheet is showing (and no structure is being drawn for one of its cells). */
 function sheetActive(): boolean {
-  return ws.active.mode === 'sheet' && !cellEdit;
+  return ws.active.mode === 'sheet' && !drawingOnTop();
+}
+
+/** True when a structure is being drawn for a cell or figure, or the drawing in split view has the keys. */
+function drawingOnTop(): boolean {
+  return !!cellEdit || (splitDrawing && !!ws.pane);
 }
 
 const sheetMode = new SheetMode({
@@ -1360,9 +1378,9 @@ function showSheetParts(): void {
   for (const el of document.querySelectorAll<HTMLElement>('.sheet-only, .no-sheet, .doc-only, .no-doc, .draw-only')) {
     const c = el.classList;
     el.hidden = (c.contains('sheet-only') && !sheet) || (c.contains('no-sheet') && sheet) || (c.contains('doc-only') && !words)
-      || (c.contains('no-doc') && words) || (c.contains('draw-only') && (sheet || words) && !cellEdit);
+      || (c.contains('no-doc') && words) || (c.contains('draw-only') && (sheet || words) && !drawingOnTop());
   }
-  $('#sheet-menu-wrap').hidden = !sheet || !!cellEdit;
+  $('#sheet-menu-wrap').hidden = !sheet || drawingOnTop();
 }
 
 /** A key pressed in a sheet: Excel's keys first, then the menu keys that use Ctrl, Alt or a function key. */
@@ -1476,6 +1494,7 @@ function editCellStructure(contents: Contents | null, title: string, done: (c: C
   doc.swap(drawing);
   cellEdit = { done, saved: drawing };
   document.body.classList.add('floating-drawing');
+  layoutSplit();
   $('#structure-title').textContent = title;
   $('#structure-bar').hidden = false;
   showSheetParts();
@@ -1520,6 +1539,9 @@ function finishCellStructure(keep: boolean): void {
   const sheet = ws.active.mode === 'sheet';
   const words = ws.active.mode === 'document';
   editor.paused = sheet || words;
+  splitDrawing = false;
+  layoutSplit();
+  if (ws.pane) { resize(); renderer.repaintAll(); }
   showSheetParts();
   refreshKeys();
   if (sheet) $('#hint').textContent = SHEET_HINT;
@@ -1604,7 +1626,7 @@ const DOC_HINT = 'Type on the page. Insert > Structure draws a structure in the 
 
 /** True when a document is showing (and no structure is being drawn for it). */
 function docActive(): boolean {
-  return ws.active.mode === 'document' && !cellEdit;
+  return ws.active.mode === 'document' && !drawingOnTop();
 }
 
 /** The style structures in the document showing are drawn in. */
@@ -1740,7 +1762,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['new', 'new-slides', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'clipboard-formats']);
+  'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'clipboard-formats', 'split-view']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
@@ -1766,8 +1788,8 @@ const COMMANDS: Record<string, () => unknown> = {
   'new-sheet': () => { finishTyping(); ws.newSheet(); },
   'new-document': () => { finishTyping(); ws.newDocument(); },
   open: () => ws.open(),
-  save: () => { finishTyping(); return ws.save(); },
-  'save-as': () => { finishTyping(); return ws.saveAs(); },
+  save: () => { finishTyping(); return ws.save(focusTab()); },
+  'save-as': () => { finishTyping(); return ws.saveAs(focusTab()); },
   'close-tab': () => { finishTyping(); return ws.close(); },
   'next-tab': () => ws.cycle(1),
   'prev-tab': () => ws.cycle(-1),
@@ -1866,6 +1888,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'enhanced-stereo': () => { void setStereoGroup(); },
   'chiral-flag': () => { void setChiralFlag(); },
   'rgroup-table': () => { void rGroupTable(); },
+  'split-view': () => toggleSplit(),
   'repeat-group': () => { void setRepeatGroup(); },
   'name-to-structure': () => nameToStructure(),
   'clipboard-formats': async () => {
@@ -1927,6 +1950,289 @@ editor.runCommand = (name) => {
   return command(name);
 };
 
+// ---------------------------------------------------------------- split view
+
+// A drawing beside a document, sheet or slides (View > Split View). Beside a document or sheet
+// both sides are live: the drawing is in the app's document (they don't use it) and whichever
+// side was clicked last has the keys and menus. Slides use the drawing area themselves, so beside
+// slides the side not being worked on shows as a picture, and clicking it swaps the two over.
+
+const splitPane = $<HTMLDivElement>('#split-pane');
+const splitBody = $<HTMLDivElement>('#split-body');
+const splitPick = $<HTMLSelectElement>('#split-pick');
+const splitSnap = $<HTMLCanvasElement>('#split-snap');
+const mainSnap = $<HTMLDivElement>('#main-snap');
+const workEl = $<HTMLElement>('#work');
+
+/** The document, sheet or slides in split view and the drawing beside it; null without a split. */
+function splitState(): { main: Tab; drawing: Tab } | null {
+  if (slideSplit && ws.tabs.includes(slideSplit) && ws.active === slideSplit.partner) return { main: slideSplit, drawing: ws.active };
+  const t = ws.active;
+  return t.mode !== 'drawing' && t.partner && ws.tabs.includes(t.partner) ? { main: t, drawing: t.partner } : null;
+}
+
+/** The tab Save saves: the drawing beside a document or sheet when it has the keys. */
+function focusTab(): Tab {
+  return splitDrawing && ws.pane && !cellEdit ? ws.pane : ws.active;
+}
+
+function applySplitWidth(): void {
+  workEl.style.setProperty('--split-w', `${Math.round(splitWidth * 1000) / 10}vw`);
+}
+
+/** Put the drawing area, the pictures and the marks where the split (or no split) needs them. */
+function layoutSplit(): void {
+  const st = splitState();
+  if (!st) slideSplit = null;
+  const live = !!st && (!!ws.pane || ws.active === st.drawing);
+  const drawingSide = !!st && (ws.active === st.drawing || (!!ws.pane && splitDrawing));
+  splitPane.hidden = !st;
+  document.body.classList.toggle('split-view', !!st);
+  document.body.classList.toggle('split-live', live);
+  document.body.classList.toggle('split-drawing', drawingSide && !cellEdit);
+  // the drawing area sits beside, except while a figure or cell structure is drawn (it floats over the pages then)
+  const want = live && !cellEdit ? splitBody : workEl;
+  if (host.parentElement !== want) {
+    if (want === workEl) workEl.insertBefore(host, mainSnap);
+    else splitBody.prepend(host);
+  }
+  mainSnap.hidden = !st || ws.active !== st.drawing;
+  splitSnap.hidden = live;
+  if (ws.pane) editor.paused = !splitDrawing && !cellEdit;
+  $('[data-cmd="split-view"]')?.setAttribute('aria-checked', String(!!st));
+  if (!st) { $('#split-empty').hidden = true; return; }
+  const opts = ws.tabs.filter((t) => t.mode === 'drawing').map((t) => new Option(t.name.replace(/\.(cdxml|cdx)$/i, ''), String(t.id), false, t === st.drawing));
+  opts.push(new Option('New drawing', 'new'));
+  splitPick.replaceChildren(...opts);
+  $('#split-insert').textContent = st.main.mode === 'document' ? 'Insert into Document' : st.main.mode === 'sheet' ? 'Insert into Cell' : 'Insert into Slide';
+  if (live) $('#split-empty').hidden = true;
+  else drawSplitSnap(st.drawing);
+}
+
+/** Beside slides: the drawing as a picture, fitted to its side, while the slide is worked on. */
+function drawSplitSnap(t: Tab): void {
+  const r = splitBody.getBoundingClientRect();
+  if (r.width < 2 || r.height < 2) return;
+  const dpr = window.devicePixelRatio || 1;
+  splitSnap.width = Math.round(r.width * dpr);
+  splitSnap.height = Math.round(r.height * dpr);
+  splitSnap.style.width = `${r.width}px`;
+  splitSnap.style.height = `${r.height}px`;
+  const ctx = splitSnap.getContext('2d')!;
+  ctx.clearRect(0, 0, splitSnap.width, splitSnap.height);
+  const d = ws.docOf(t);
+  const pic = isEmpty(d) ? null : recordPicture(d, 4);
+  $('#split-empty').hidden = !!pic;
+  if (!pic) return;
+  const pw = pic.box.x2 - pic.box.x1, ph = pic.box.y2 - pic.box.y1;
+  const k = Math.min((r.width * 0.9) / pw, (r.height * 0.9) / ph, 2) * dpr;
+  const src = pictureCanvas(d, pic, Math.min(300, 72 * k)).canvas;
+  const w = pw * k, h = ph * k;
+  ctx.drawImage(src, (splitSnap.width - w) / 2, (splitSnap.height - h) / 2, w, h);
+}
+new ResizeObserver(() => {
+  const st = splitState();
+  if (st && !splitSnap.hidden) drawSplitSnap(st.drawing);
+}).observe(splitBody);
+
+/** After the drawing beside a document or sheet changes: show it, at the zoom it had. */
+function paneEntered(fit = false): void {
+  layoutSplit();
+  showSheetParts();
+  resize();
+  const p = ws.pane;
+  if (p?.view && !fit) renderer.view = { ...p.view };
+  else if (p) fitSplitDrawing();
+  renderer.repaintAll();
+  editor.clearSelection();
+  editor.frame(true);
+  refreshKeys();
+  analysisKey = '';
+  scheduleAnalysis(true);
+}
+
+/** A drawing fitted to its side of a split, but no bigger than twice actual size (a lone ring would fill it). */
+function fitSplitDrawing(): void {
+  editor.fit();
+  const most = 2 * 96 / 72;
+  if (renderer.view.scale > most) editor.zoomTo(most);
+}
+
+/** Beside a document or sheet: give the keys and menus to the drawing (true) or the pages or cells. */
+function setSplitSide(drawing: boolean): void {
+  if (!ws.pane || cellEdit || splitDrawing === drawing) return;
+  if (!drawing) editor.closeCaption();
+  splitDrawing = drawing;
+  layoutSplit();
+  showSheetParts();
+  refreshKeys();
+  analysisKey = '';
+  scheduleAnalysis(true);
+  if (drawing) editor.onToolChange(editor.toolName);
+  else $('#hint').textContent = ws.active.mode === 'sheet' ? SHEET_HINT : DOC_HINT;
+}
+
+/** Beside slides: work on the drawing (true; the slide becomes a picture) or on the slide. */
+function focusSlideDrawing(on: boolean): void {
+  const st = splitState();
+  if (!st || st.main.mode !== 'slides') return;
+  if (on === (ws.active === st.drawing)) return;
+  if (on) {
+    // the slide as it looks now, kept as a picture on its side
+    const c = mainSnap.querySelector('canvas')!;
+    c.width = scene.width;
+    c.height = scene.height;
+    c.style.width = scene.style.width || `${scene.clientWidth}px`;
+    c.style.height = scene.style.height || `${scene.clientHeight}px`;
+    c.getContext('2d')!.drawImage(scene, 0, 0);
+    slideSplit = st.main;
+    ws.activate(st.drawing);
+  } else {
+    slideSplit = null;
+    ws.activate(st.main);
+  }
+}
+
+/** View > Split View: a drawing beside the document, sheet or slides showing, or no split. */
+function toggleSplit(): void {
+  if (splitState()) { closeSplit(); return; }
+  const t = ws.active;
+  if (t.mode === 'drawing') {
+    flash('Split view puts a drawing beside a document, sheet or slides: show one of those (or start one with the + tabs) and choose View > Split View there.', 8000);
+    return;
+  }
+  finishTyping();
+  const drawing = ws.tabs.find((x) => x.mode === 'drawing') ?? ws.addDrawing();
+  // fitted to its side the first time it shows there
+  drawing.view = null;
+  ws.setPartner(drawing);
+  splitDrawing = false;
+  if (ws.pane) paneEntered(true);
+  else layoutSplit();
+  mainResized();
+  flash(`${drawing.name} is beside the ${t.mode === 'document' ? 'document' : t.mode === 'sheet' ? 'sheet' : 'slides'}. Click a side to work on it; the bar above the drawing picks another drawing and puts structures in.`, 7000);
+}
+
+function closeSplit(): void {
+  const st = splitState();
+  if (!st) return;
+  if (ws.active === st.drawing) focusSlideDrawing(false);
+  finishTyping();
+  if (ws.pane) ws.pane.view = { ...renderer.view };
+  editor.clearSelection();
+  ws.setPartner(null);
+  splitDrawing = false;
+  layoutSplit();
+  const sheet = ws.active.mode === 'sheet', words = ws.active.mode === 'document';
+  editor.paused = sheet || words;
+  showSheetParts();
+  refreshKeys();
+  analysisKey = '';
+  scheduleAnalysis(true);
+  if (sheet) { $('#hint').textContent = SHEET_HINT; sheetMode.focus(); }
+  if (words) { $('#hint').textContent = DOC_HINT; docMode.focus(); }
+  resize();
+  renderer.repaintAll();
+  mainResized();
+}
+
+/** The document or slide got narrower or wider: fit the page or slide to its new width. */
+function mainResized(): void {
+  requestAnimationFrame(() => {
+    if (ws.active.mode === 'document') docMode.refit();
+    if (ws.active.mode === 'slides') { resize(); editor.fit(); }
+  });
+}
+
+/** The bar's drawing list: show another open drawing, or a new one. */
+splitPick.addEventListener('change', () => {
+  const st = splitState();
+  if (!st) return;
+  finishTyping();
+  const t = splitPick.value === 'new' ? ws.addDrawing() : ws.tabs.find((x) => String(x.id) === splitPick.value);
+  if (!t || t === st.drawing) return;
+  if (ws.active === st.drawing) {
+    // beside slides, with the drawing being worked on: the other drawing comes up in its place
+    st.main.partner = t;
+    slideSplit = st.main;
+    t.view = null;
+    ws.activate(t);
+    return;
+  }
+  if (ws.pane) ws.pane.view = { ...renderer.view };
+  editor.clearSelection();
+  t.view = null;
+  ws.setPartner(t);
+  if (ws.pane) paneEntered(true);
+  else layoutSplit();
+});
+
+/** The bar's Insert: the selected structures (or the whole drawing) into the document, cell or slide. */
+$('#split-insert').addEventListener('click', () => {
+  const st = splitState();
+  if (!st) return;
+  editor.closeCaption();
+  const live = !!ws.pane || ws.active === st.drawing;
+  const part = extractDrawing(ws.docOf(st.drawing), live && editor.hasSelection() ? editor.sel : null);
+  if (isEmpty(part)) { flash('Draw something first.'); return; }
+  if (st.main.mode === 'document') {
+    setSplitSide(false);
+    docMode.insertDrawing(part.contents());
+  } else if (st.main.mode === 'sheet') {
+    setSplitSide(false);
+    sheetMode.putStructure(part.contents());
+  } else {
+    focusSlideDrawing(false);
+    const deck = deckNow();
+    fitPasted(part, doc.style, deck?.master.fitPasted ? deck.master.drawing.bondLength : undefined);
+    editor.sel = insertDrawing(doc, part, pasteCentre(), 'Insert structure');
+    editor.changed();
+  }
+});
+
+$('#split-close').addEventListener('click', () => closeSplit());
+
+// clicking a side gives it the keys and menus
+splitBody.addEventListener('pointerdown', (e) => {
+  const st = splitState();
+  if (!st) return;
+  if (ws.pane) { setSplitSide(true); return; }
+  if (ws.active !== st.drawing) {
+    e.preventDefault();
+    e.stopPropagation();
+    focusSlideDrawing(true);
+    overlay.focus();
+  }
+}, true);
+for (const sel of ['#doc-pane', '#sheet-pane', '#doc-ribbon', '#sheet-ribbon']) {
+  $(sel).addEventListener('pointerdown', () => { if (ws.pane && splitDrawing) setSplitSide(false); }, true);
+}
+mainSnap.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  focusSlideDrawing(false);
+});
+$('#split-handle').addEventListener('pointerdown', (e) => {
+  const h = e.currentTarget as HTMLElement;
+  h.setPointerCapture(e.pointerId);
+  h.classList.add('dragging');
+  const right = workEl.getBoundingClientRect().right;
+  const move = (ev: PointerEvent) => {
+    splitWidth = Math.min(0.8, Math.max(0.2, (right - ev.clientX) / window.innerWidth));
+    applySplitWidth();
+  };
+  const up = () => {
+    h.classList.remove('dragging');
+    h.removeEventListener('pointermove', move);
+    h.removeEventListener('pointerup', up);
+    storeSettings();
+    mainResized();
+  };
+  h.addEventListener('pointermove', move);
+  h.addEventListener('pointerup', up);
+  e.preventDefault();
+});
+applySplitWidth();
+
 // ---------------------------------------------------------------- settings and the Hotkeys window
 
 let settingsLoaded = false;
@@ -1947,6 +2253,7 @@ function storeSettings(): void {
     modeColours,
     nicknames: ownNicknames,
     templates: ownTemplates(),
+    splitWidth,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -2050,6 +2357,8 @@ void loadSettings().then((s) => {
   ownNicknames = s.nicknames;
   addNicknames(ownNicknames);
   useOwnTemplates(s.templates);
+  splitWidth = s.splitWidth;
+  applySplitWidth();
   settingsLoaded = true;
   refreshKeys();
 });

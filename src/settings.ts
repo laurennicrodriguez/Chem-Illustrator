@@ -40,12 +40,14 @@ export interface Settings {
   nicknames: Record<string, string>;
   /** Drawings saved as templates (Structure > Save as Template), in the "My templates" palette. */
   templates: Template[];
+  /** Split view: the share of the window's width the drawing beside a document, sheet or slides takes (0.2 to 0.8). */
+  splitWidth: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false, showRoles: true,
   chemTyping: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
-  modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [],
+  modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38,
 };
 
 const STORAGE_KEY = 'chem-illustrator.settings';
@@ -68,6 +70,7 @@ export function parseSettings(text: string | null | undefined): Settings {
     for (const [k, v] of Object.entries(r.nicknames as Record<string, unknown>)) if (k.trim() && typeof v === 'string' && v.trim()) s.nicknames[k.trim()] = v.trim();
   }
   s.templates = parseOwnTemplates(r.templates);
+  if (typeof r.splitWidth === 'number' && isFinite(r.splitWidth)) s.splitWidth = Math.min(0.8, Math.max(0.2, r.splitWidth));
   if (Array.isArray(r.dictionary)) s.dictionary = r.dictionary.filter((w): w is string => typeof w === 'string' && w.trim() !== '').map((w) => w.trim());
   return s;
 }

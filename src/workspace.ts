@@ -44,6 +44,8 @@ export interface Tab {
   seen: number;
   /** Slides, sheets and documents: the change count when last saved. */
   savedEdits: number;
+  /** Split view: the drawing shown beside this document, sheet or slide deck. */
+  partner: Tab | null;
 }
 
 export interface WorkspaceHooks {
@@ -76,6 +78,11 @@ const SAVE_TYPES: Record<Mode, FileType[]> = { drawing: [CDXML, CDX], slides: [P
 export class Workspace {
   tabs: Tab[] = [];
   active!: Tab;
+  /**
+   * Split view beside a document or sheet: the drawing tab whose drawing is in the app's document
+   * while the document or sheet shows (they don't use it), so both can be worked on side by side.
+   */
+  pane: Tab | null = null;
   private nextId = 1;
 
   constructor(public host: Doc, private hooks: WorkspaceHooks) {
@@ -86,7 +93,7 @@ export class Workspace {
   }
 
   private makeTab(mode: Mode, name: string, ref: FileRef = { kind: 'none' }): Tab {
-    return { id: this.nextId++, mode, name, ref, stash: new Doc(), deck: null, book: null, document: null, view: null, sheetState: null, dirty: false, seen: 0, savedEdits: 0 };
+    return { id: this.nextId++, mode, name, ref, stash: new Doc(), deck: null, book: null, document: null, view: null, sheetState: null, dirty: false, seen: 0, savedEdits: 0, partner: null };
   }
 
   /** "Untitled", "Untitled 2"… with the right extension, not already used by an open tab. */
@@ -109,6 +116,7 @@ export class Workspace {
       if (tab.mode === 'slides') tab.deck!.attach();
       else this.host.swap(tab.stash);
       tab.seen = this.host.version;
+      this.paneIn();
     }
     this.hooks.enter(tab, opened);
     this.hooks.changed();
@@ -116,8 +124,36 @@ export class Workspace {
 
   private putAway(tab: Tab): void {
     this.hooks.leave(tab);
+    this.paneOut();
     if (tab.mode === 'slides') tab.deck!.detach();
     else this.host.swap(tab.stash);
+  }
+
+  /** A document's or sheet's split-view drawing comes into the app's document. */
+  private paneIn(): void {
+    const t = this.active, p = t.partner;
+    if (this.pane || !p || (t.mode !== 'document' && t.mode !== 'sheet')) return;
+    if (!this.tabs.includes(p)) { t.partner = null; return; }
+    this.host.swap(p.stash);
+    p.seen = this.host.version;
+    this.pane = p;
+  }
+
+  private paneOut(): void {
+    const p = this.pane;
+    if (!p) return;
+    this.pane = null;
+    this.host.swap(p.stash);
+  }
+
+  /** Split view: show this drawing beside the document, sheet or slides showing (null: no split). */
+  setPartner(p: Tab | null): void {
+    const t = this.active;
+    if (t.mode === 'drawing') return;
+    this.paneOut();
+    t.partner = p;
+    this.paneIn();
+    this.hooks.changed();
   }
 
   /** The tab after (or before) the one showing, round the end. */
@@ -142,6 +178,11 @@ export class Workspace {
       t.dirty = dirty;
       this.hooks.changed();
     }
+    const p = this.pane;
+    if (p && this.host.version !== p.seen) {
+      p.seen = this.host.version;
+      if (!p.dirty) { p.dirty = true; this.hooks.changed(); }
+    }
   }
 
   // ---------------------------------------------------------------- new and open
@@ -151,6 +192,14 @@ export class Workspace {
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
     t.seen = this.host.version;
+    return t;
+  }
+
+  /** A new drawing tab beside the one showing, without showing it (for split view). */
+  addDrawing(): Tab {
+    const t = this.makeTab('drawing', this.untitled('drawing'));
+    this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
+    this.hooks.changed();
     return t;
   }
 
@@ -293,7 +342,7 @@ export class Workspace {
   /** Close a tab, offering to save changes first. False when the user chose to keep it open. */
   async close(tab: Tab = this.active): Promise<boolean> {
     if (tab.dirty) {
-      if (tab !== this.active) this.activate(tab);
+      if (tab !== this.active && tab !== this.pane) this.activate(tab);
       const answer = await askSaveChanges(tab.name);
       if (answer === 'cancel') return false;
       if (answer === 'save' && !(await this.save(tab))) return false;
@@ -306,6 +355,9 @@ export class Workspace {
   private drop(tab: Tab): void {
     const i = this.tabs.indexOf(tab);
     if (i < 0) return;
+    // a drawing shown in split view: the split closes
+    if (tab === this.pane) this.paneOut();
+    for (const t of this.tabs) if (t.partner === tab) t.partner = null;
     if (tab === this.active) {
       const next = this.tabs[i + 1] ?? this.tabs[i - 1];
       if (next) this.activate(next);
@@ -341,7 +393,7 @@ export class Workspace {
 
   /** The tab's drawing (its document wherever it is). */
   docOf(tab: Tab): Doc {
-    return tab === this.active ? this.host : tab.stash;
+    return tab === this.active || tab === this.pane ? this.host : tab.stash;
   }
 
   async save(tab: Tab = this.active): Promise<boolean> {
@@ -397,7 +449,7 @@ export class Workspace {
     tab.ref = ref;
     tab.name = name;
     tab.dirty = false;
-    if (tab === this.active) tab.seen = this.host.version;
+    if (tab === this.active || tab === this.pane) tab.seen = this.host.version;
     this.hooks.changed();
     this.hooks.flash((ref.kind === 'none' ? `Downloaded ${name}` : `Saved ${name}`) + note, note ? 8000 : 3500);
     return true;

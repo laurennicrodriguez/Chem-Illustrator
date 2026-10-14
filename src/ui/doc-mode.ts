@@ -732,6 +732,26 @@ export class DocumentMode {
     return id;
   }
 
+  /** Split view's Insert: a drawing as a figure at the caret, with the caret after it so typing carries on. */
+  insertDrawing(contents: Contents): void {
+    if (!this.file) return;
+    this.insertObject({ kind: 'drawing', contents }, 'Insert structure');
+    const ed = this.file.ed;
+    ed.setCaret(ed.end, false);
+    this.focus();
+  }
+
+  /** The window got narrower or wider (split view): fit the page width if the page no longer fits. */
+  refit(): void {
+    const f = this.file;
+    if (!f) return;
+    this.view.resize();
+    const room = this.view.scroller.clientWidth - 48, page = f.layout().pageW;
+    if (room < page * this.view.zoom) this.view.fitWidth();
+    else if (this.view.zoom < ACTUAL) { if (room >= page * ACTUAL) this.view.setZoom(ACTUAL); else this.view.fitWidth(); }
+    else this.view.redraw();
+  }
+
   /** Open a figure in the drawing tools; the document gets the changed drawing on Done. */
   editFigure(id: number): void {
     const f = this.file;
