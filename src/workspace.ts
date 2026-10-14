@@ -196,6 +196,17 @@ export class Workspace {
   }
 
   /** A new drawing tab beside the one showing, without showing it (for split view). */
+  /** Move a tab to another place in the tab strip (dragged there). */
+  moveTab(t: Tab, to: number): void {
+    const from = this.tabs.indexOf(t);
+    if (from < 0) return;
+    to = Math.max(0, Math.min(this.tabs.length - 1, to));
+    if (to === from) return;
+    this.tabs.splice(from, 1);
+    this.tabs.splice(to, 0, t);
+    this.hooks.changed();
+  }
+
   addDrawing(): Tab {
     const t = this.makeTab('drawing', this.untitled('drawing'));
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);

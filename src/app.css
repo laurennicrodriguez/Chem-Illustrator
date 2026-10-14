@@ -207,6 +207,19 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
 body.slides-mode #canvas-host { background: var(--surround); }
 #canvas-host.drop { outline: 3px dashed var(--accent); outline-offset: -6px; }
 #canvas-host canvas { position: absolute; left: 0; top: 0; display: block; }
+.tab { transition: transform 0.12s ease; }
+.tab.tab-dragging { transition: none; position: relative; z-index: 2; opacity: 0.92; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); cursor: grabbing; }
+@media (prefers-reduced-motion: reduce) { .tab { transition: none; } }
+
+/* scroll bars over the drawing's bottom and right edges */
+.scrollbar { position: absolute; z-index: 4; background: rgba(120, 130, 150, 0.08); }
+.scrollbar[hidden] { display: none; }
+.scrollbar-h { left: 0; right: 12px; bottom: 0; height: 12px; border-top: 1px solid rgba(120, 130, 150, 0.18); }
+.scrollbar-v { top: 0; bottom: 12px; right: 0; width: 12px; border-left: 1px solid rgba(120, 130, 150, 0.18); }
+.scroll-thumb { position: absolute; border-radius: 5px; background: rgba(90, 100, 120, 0.38); }
+.scrollbar-h .scroll-thumb { top: 2px; bottom: 2px; left: 0; }
+.scrollbar-v .scroll-thumb { left: 2px; right: 2px; top: 0; }
+.scroll-thumb:hover, .scroll-thumb.dragging { background: rgba(70, 80, 100, 0.6); }
 #overlay { cursor: crosshair; touch-action: none; }
 .label-input {
   position: absolute;
@@ -500,6 +513,7 @@ dialog.typing-dialog p { margin: 2px 0 6px; }
   min-width: 0;
   padding: 4px 8px 0;
   overflow-x: auto;
+  overflow-y: hidden;
   background: var(--bg);
   border-bottom: 1px solid var(--line);
   scrollbar-width: thin;
