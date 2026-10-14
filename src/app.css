@@ -1394,3 +1394,18 @@ dialog.cf-manage { width: min(92vw, 640px); }
 .update-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
 .update-progress { font-variant-numeric: tabular-nums; }
 .desktop-only[hidden] { display: none !important; }
+
+/* Search Commands (Alt+Q) */
+.search-box { display: inline-flex; align-items: center; gap: 6px; min-width: 150px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--muted); }
+.search-box svg { width: 14px; height: 14px; flex: none; }
+.search-box span { flex: 1; text-align: left; }
+.search-box kbd { font: 10px var(--mono-font); }
+dialog.command-search { width: min(94vw, 560px); padding: 10px; margin-top: 10vh; }
+dialog.command-search input { width: 100%; box-sizing: border-box; font: inherit; font-size: 15px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; }
+dialog.command-search ul { list-style: none; margin: 8px 0 0; padding: 0; max-height: min(60vh, 440px); overflow-y: auto; }
+dialog.command-search li { display: flex; align-items: baseline; gap: 10px; padding: 5px 8px; border-radius: 5px; cursor: default; }
+dialog.command-search li[aria-selected='true'] { background: var(--accent-soft); }
+dialog.command-search .cs-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dialog.command-search .cs-place { font-size: 11px; white-space: nowrap; }
+dialog.command-search li.cs-none { display: block; padding: 10px 8px; }
+dialog.command-search .cs-foot { margin: 8px 2px 0; }

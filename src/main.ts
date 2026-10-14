@@ -54,7 +54,8 @@ import { AnimationUI } from './ui/animation-ui';
 import { writePptx, type PptxOptions } from './io/pptx-write';
 import { EFFECTS, animName, newAnim } from './deck/animation';
 import { SLIDE_TEMPLATES, applyTemplate } from './deck/templates';import { pickTemplate } from './ui/template-gallery';
-import { showContextMenu, type MenuItem } from './ui/context-menu';
+import { showContextMenu, topMenuEntry, type MenuItem } from './ui/context-menu';
+import { CommandSearch, uniqueCommands, type CommandItem } from './ui/command-search';
 import { fillTemplate, templateSize } from './design/templates';
 import { itemsToSvg } from './render/svg';
 import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc } from './render/images';
@@ -2342,7 +2343,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-custom', 'toolbox-details', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view']);
+  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
@@ -2505,6 +2506,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'edit-palettes': () => editPalettes(),
   preferences: () => void openPreferences(),
   'check-updates': () => void updates.check(),
+  'command-search': () => commandSearch.open(),
   'toolbox-main': () => toolboxes.toggle('main'),
   'toolbox-structure': () => toolboxes.toggle('structure'),
   'toolbox-arrange': () => toolboxes.toggle('arrange'),
@@ -3140,6 +3142,9 @@ function refreshKeys(): void {
     const k = commandKey(cmd);
     $(id).title = k ? `${text} (${k})` : text;
   };
+  const sk = commandKey('command-search');
+  $('#btn-search kbd').textContent = sk ?? '';
+  $('#btn-search').title = sk ? `Search for a command by name (${sk})` : 'Search for a command by name';
   tip('#btn-undo', 'Undo', 'undo');
   tip('#btn-redo', 'Redo', 'redo');
   tip('#btn-fit', 'Fit drawing to window', 'zoom-fit');
@@ -4273,6 +4278,72 @@ function openCustomToolbox(): void {
 
 toolboxes.render();
 tickToolboxes();
+
+// ---------------------------------------------------------------- Search Commands (Alt+Q)
+
+const onScreen = (el: Element) => el.getClientRects().length > 0;
+
+/** A ribbon button's name: its own words, or its tool tip's first phrase when it only shows a sign. */
+function ribbonLabel(b: HTMLElement): string {
+  const t = b.cloneNode(true) as HTMLElement;
+  t.querySelectorAll('.rb-icon, .sw, svg, kbd').forEach((x) => x.remove());
+  const own = t.textContent!.replace(/\s+/g, ' ').trim();
+  const tip = (b.dataset.tip ?? b.title ?? b.getAttribute('aria-label') ?? '').replace(/\s*\(.*?\)/g, '').split(/[.:;,] /)[0].trim();
+  return own.length > 2 ? own : tip || own;
+}
+
+function commandItems(): CommandItem[] {
+  const out: CommandItem[] = [];
+  const runCmd = (cmd: string, label: string) => () => {
+    finishTyping();
+    if (!command(cmd)) flash(`${label} isn't available here.`);
+  };
+  for (const wrap of document.querySelectorAll<HTMLElement>('header .menu-wrap')) {
+    const menu = wrap.querySelector<HTMLElement>(':scope > button')?.textContent?.trim() ?? '';
+    for (const b of wrap.querySelectorAll<HTMLElement>('[data-cmd]')) {
+      if (b.hidden || getComputedStyle(b).display === 'none') continue;
+      const cmd = b.dataset.cmd!, e = topMenuEntry(cmd);
+      const label = e?.label ?? cmd;
+      out.push({ id: `cmd:${cmd}`, label, place: `${menu} menu`, more: b.title, key: commandKey(cmd), checked: e?.checked, run: runCmd(cmd, label) });
+    }
+  }
+  for (const rib of document.querySelectorAll<HTMLElement>('.ribbon')) {
+    if (rib.hidden || !onScreen(rib)) continue;
+    for (const b of rib.querySelectorAll<HTMLButtonElement>('button')) {
+      if (b.getAttribute('role') === 'tab' || b.hidden || b.disabled || b.closest('[hidden]:not(.rb-panel)')) continue;
+      const panel = b.closest<HTMLElement>('.rb-panel');
+      const tabAttr = panel && [...panel.attributes].find((a) => /^data-.*-panel$/.test(a.name));
+      const tab = tabAttr ? rib.querySelector<HTMLButtonElement>(`[${tabAttr.name.replace(/-panel$/, '-tab')}="${tabAttr.value}"]`) : null;
+      if (tab?.hidden) continue; // a tab shown only now and then (Table Design, Chart)
+      const label = ribbonLabel(b);
+      if (!label) continue;
+      const name = b.dataset.cmd ? `cmd:${b.dataset.cmd}` : b.dataset.sh ? `sh:${b.dataset.sh}` : b.dataset.doc ? `doc:${b.dataset.doc}` : b.id ? `id:${b.id}` : `rb:${rib.id}:${label}`;
+      const code = b.dataset.cmd ?? b.dataset.sh ?? b.dataset.doc;
+      out.push({
+        id: name, label, place: tab ? `${tab.textContent!.trim()} tab` : `${rib.getAttribute('aria-label')} ribbon`, more: b.dataset.tip ?? b.title,
+        key: code ? commandKey(code) : undefined,
+        run: () => {
+          if (tab && tab.getAttribute('aria-selected') !== 'true') tab.click();
+          b.click();
+        },
+      });
+    }
+  }
+  if (onScreen($('#tools'))) {
+    for (const [name] of ALL_TOOLS) {
+      const label = toolNames[name] ?? ALL_TOOLS.get(name)!.title.split(/[.:] /)[0];
+      out.push({ id: `tool:${name}`, label, place: 'Drawing tools', more: ALL_TOOLS.get(name)!.title, key: keysOf('space', `tool ${name}`)[0],
+        run: () => { editor.setTool(name); if (name === 'element') periodicTable.open(); } });
+    }
+  }
+  for (const p of recentFiles) {
+    const { name, folder } = recentLabel(p);
+    out.push({ id: `recent:${p}`, label: `Open ${name}`, place: folder, more: 'recent file', run: () => void openRecent(p) });
+  }
+  return uniqueCommands(out);
+}
+const commandSearch = new CommandSearch(commandItems);
+$('#btn-search').addEventListener('click', () => commandSearch.open());
 placeSidePanel();
 // your palettes show in the Colours toolbox as soon as they change
 onPalettes(() => { if (toolboxState.places.colours?.shown) toolboxes.render(); });
