@@ -29,6 +29,8 @@ export interface Overlay {
   squiggles: { start: number; end: number; color: string }[];
   /** The figure or picture picked on its own (framed, with a handle to resize it). */
   picked: number | null;
+  /** A bibliography picked on its own (framed on every page it is on). */
+  framed: number | null;
   /** Found text to show (find and replace). */
   found: [number, number][];
 }
@@ -43,7 +45,7 @@ export class DocView {
   private h = 0;
   private queued = false;
   file: DocFile | null = null;
-  overlay: () => Overlay = () => ({ selection: null, caret: null, squiggles: [], picked: null, found: [] });
+  overlay: () => Overlay = () => ({ selection: null, caret: null, squiggles: [], picked: null, found: [], framed: null });
   /** Called after the view scrolls or zooms (the hidden text field follows the caret). */
   onMove: () => void = () => {};
 
@@ -230,6 +232,11 @@ export class DocView {
         ctx.fillRect(o.x + o.w - hs / 2, o.y + o.h - hs / 2, hs, hs);
         ctx.strokeRect(o.x + o.w - hs / 2, o.y + o.h - hs / 2, hs, hs);
       }
+    }
+    if (ov.framed !== null) {
+      ctx.strokeStyle = OBJECT_FRAME;
+      ctx.lineWidth = 1.2 / k;
+      for (const o of lay.objects) if (o.id === ov.framed) ctx.strokeRect(o.x - 2, o.y - 1, o.w + 4, o.h + 2);
     }
     if (ov.caret) {
       ctx.fillStyle = '#000';

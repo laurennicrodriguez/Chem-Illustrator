@@ -5,8 +5,9 @@
 // (customXml) keeps each structure's drawing, so it can be edited here again even after the
 // file has been changed in Word.
 
-import type { Contents, TableData } from '../model';
+import type { Contents, ParaStyle, TableData } from '../model';
 import type { DocStyle } from '../style';
+import type { CiteStyle, Reference } from '../document/references';
 
 export const W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 export const WP_NS = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
@@ -55,7 +56,17 @@ export interface DocxModel {
   drawings: Record<number, { contents: Contents; w: number; h: number }>;
   /** Each table by its id, with its text (used when the text is the same in the file). */
   tables: Record<number, { table: TableData; text: string }>;
+  /** The document's references and citation style (citations are ADDIN fields naming them). */
+  references?: Reference[];
+  citeStyle?: CiteStyle;
+  /** Each bibliography by its id: the text written (to tell whether Word changed it) and its paragraph's settings. */
+  bibliographies?: Record<number, { text: string; ps: ParaStyle }>;
 }
+
+/** The field instruction of a citation: Word shows the numbers written as its result and leaves them alone. */
+export const CITE_FIELD = 'ADDIN CHEMILLUSTRATOR_CITE';
+/** Bookmarks round a bibliography's paragraphs (hidden in Word: they start with _). */
+export const BIB_MARK = '_ChemBib';
 
 /** Points to twentieths of a point (twips), Word's measure for page and paragraph settings. */
 export const twips = (pt: number): number => Math.round(pt * 20);

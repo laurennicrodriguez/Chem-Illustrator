@@ -194,8 +194,8 @@ export class TextEditing {
     this.replace(this.start, this.end, runs, paras, kind);
   }
 
-  /** Put runs in place of the text between two places, leaving the caret after them. */
-  replace(start: number, end: number, runs: TextRun[], paras?: ParaStyle[], kind = 'edit'): void {
+  /** Put runs in place of the text between two places, leaving the caret after them (kind null: part of the change before). */
+  replace(start: number, end: number, runs: TextRun[], paras?: ParaStyle[], kind: string | null = 'edit'): void {
     const text = this.text;
     const inserted = rt.plainText(runs);
     const t: RichText = {

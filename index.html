@@ -73,6 +73,8 @@
         <button role="menuitem" class="doc-only" data-cmd="insert-caption" title="A numbered caption: Figure 1, Scheme 2, Table S1…">Caption…</button>
         <button role="menuitem" class="doc-only" data-cmd="cross-reference" title="&quot;Figure 2&quot; in the text, which follows the caption's number">Cross-reference…</button>
         <button role="menuitem" class="doc-only" data-cmd="compound-number" title="A bold compound number that renumbers itself">Compound Number…</button>
+        <button role="menuitem" class="doc-only" data-cmd="insert-citation" title="Cite references: superscript numbers in order of first citation">Citation…</button>
+        <button role="menuitem" class="doc-only" data-cmd="insert-bibliography" title="The references cited, numbered, in the journal style">Bibliography</button>
         <button role="menuitem" class="doc-only" data-cmd="page-break">Page Break</button>
       </div>
     </div>
@@ -486,6 +488,14 @@
         </div>
         <div class="rb-label">Compounds</div>
       </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="insert-citation" title="Cite one or more references: superscript numbers, in order of first citation, that change by themselves when text moves (double-click a citation to change it)"><span class="rb-icon">¹²</span>Insert Citation</button>
+          <button class="rb-big" data-doc="insert-bibliography" title="A References heading and the list of references cited, numbered, in the citation style"><span class="rb-icon">☰</span>Bibliography</button>
+          <button class="rb-big" data-doc="manage-references" title="The document's references: add by DOI, by hand or from BibTeX or RIS; edit, delete; the citation style (ACS, Angewandte, RSC)"><span class="rb-icon">✎</span>Manage References…</button>
+        </div>
+        <div class="rb-label">Citations and Bibliography</div>
+      </div>
     </div>
   </div>
 
@@ -655,6 +665,7 @@
           <li>Pages like Word's (Letter, 1 inch margins, Times New Roman 11 to start): the ribbon has Word's tabs and keys (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>1</kbd> Heading 1, <kbd>Ctrl</kbd>+<kbd>Enter</kbd> a new page, <kbd>Ctrl</kbd>+<kbd>E</kbd> centre…)</li>
           <li>Styles: Normal, Title, Heading 1 to 3 and Caption. Change a style in the panel on the right and every paragraph in it changes, except what was formatted by hand</li>
           <li>Insert &gt; Structure draws a structure in the text; double-click it to change it, drag its corner to size it. Paste from ChemDraw too. Insert &gt; Caption numbers figures, schemes and tables by itself, and Cross-reference puts "Figure 2" in the text, which follows the caption</li>
+          <li>References &gt; Manage References keeps the document's references: add one by DOI (filled in from Crossref), by hand, or from a BibTeX or RIS file, and choose the style (ACS, Angewandte, RSC). Insert Citation puts superscript numbers in the text, given in order of first citation (double-click one to change it); Bibliography lists the references cited. Any value can be changed by hand, and a reference's bibliography text can be typed over</li>
           <li>Layout: paper, margins and page numbers (S1, S2… for Supporting Information); the panel has the header and footer</li>
         </ul>
         <h3>Not in this prototype yet</h3>
