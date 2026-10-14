@@ -487,7 +487,19 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     const c = color(g);
     const z = num(g, 'Z', 0);
     const base = { id: idFor(g), color: c, z };
-    const add = (s: Omit<Shape, 'id'> & { id: number }) => { doc.addShape(s); from('s', s.id, g); stats.shapes++; };
+    const add = (s: Omit<Shape, 'id'> & { id: number }) => {
+      // our fill style and outline colour, which ChemDraw has no words for
+      const tag = s.filled ? kids(g).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === FILL_TAG) : undefined;
+      if (tag) {
+        try {
+          const v = JSON.parse(tag.getAttribute('Value') ?? '{}') as Pick<Shape, 'fill' | 'fillColor' | 'color'>;
+          s.fill = v.fill === 'faded' || v.fill === 'shaded' ? v.fill : undefined;
+          s.fillColor = typeof v.fillColor === 'string' ? v.fillColor : undefined;
+          s.color = typeof v.color === 'string' ? v.color : undefined;
+        } catch { /* a damaged tag: keep what ChemDraw shows */ }
+      }
+      doc.addShape(s); from('s', s.id, g); stats.shapes++;
+    };
     switch (type) {
       case 'Line': {
         if (bb.length < 4) return;
@@ -500,7 +512,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         const rt = g.getAttribute('RectangleType') ?? '';
         const rect: Omit<Shape, 'id'> & { id: number } = {
           ...base, kind: 'rect', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], rounded: rt.includes('RoundEdge'), shadow: rt.includes('Shadow'),
-          filled: rt.includes('Filled'), dashed: rt.includes('Dashed'), bold: rt.includes('Bold'),
+          filled: rt.includes('Filled') || rt.includes('Shaded'), dashed: rt.includes('Dashed'), bold: rt.includes('Bold'),
+          ...(rt.includes('Shaded') ? { fill: 'shaded' as const } : {}),
         };
         // corner radius and shadow size are stored in hundredths of the line width
         const lw = num(g, 'LineWidth', st.lineWidth);
@@ -517,7 +530,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         const rx = Math.hypot(maj[0] - cen[0], maj[1] - cen[1]);
         const ry = min.length >= 2 ? Math.hypot(min[0] - cen[0], min[1] - cen[1]) : rx;
         const ot = g.getAttribute('OvalType') ?? '';
-        add({ ...base, kind: 'oval', x1: cen[0] - rx, y1: cen[1] - ry, x2: cen[0] + rx, y2: cen[1] + ry, filled: ot.includes('Filled'), dashed: ot.includes('Dashed'), bold: ot.includes('Bold'), shadow: ot.includes('Shadow') });
+        add({ ...base, kind: 'oval', x1: cen[0] - rx, y1: cen[1] - ry, x2: cen[0] + rx, y2: cen[1] + ry, filled: ot.includes('Filled') || ot.includes('Shaded'), ...(ot.includes('Shaded') ? { fill: 'shaded' as const } : {}), dashed: ot.includes('Dashed'), bold: ot.includes('Bold'), shadow: ot.includes('Shadow') });
         return;
       }
       case 'Symbol': {
@@ -689,6 +702,8 @@ export function isAutoLabel(z: number, text: string, h: number): boolean {
 /** Our own clipboard attributes for pictures (any format, and cropping), which ChemDraw doesn't have. */
 /** The tag that marks a bond as part of an aromatic ring drawn with a circle (ours; ChemDraw has none). */
 export const CIRCLE_TAG = 'ci-aromatic-circle';
+/** The tag that keeps a filled shape's fill style and outline colour (ChemDraw has one colour). */
+export const FILL_TAG = 'Chem Illustrator fill';
 export const OWN_PICTURE = 'ChemIllustratorPicture';
 export const OWN_CROP = 'ChemIllustratorCrop';
 

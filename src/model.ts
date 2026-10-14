@@ -273,6 +273,10 @@ export interface Shape {
   y2: number;
   dashed?: boolean;
   filled?: boolean;
+  /** How a filled box or oval is filled: evenly (absent), a light tint, or shaded light to dark. */
+  fill?: 'faded' | 'shaded';
+  /** Fill colour, when it differs from the outline colour (the outline is then drawn too). */
+  fillColor?: string;
   rounded?: boolean;
   /** Corner radius of a rounded box, in points (ChemDraw's default is six line widths). */
   radius?: number;

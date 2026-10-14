@@ -535,6 +535,9 @@ class Reader {
           color: look.fill ?? look.line ?? '#000000',
         };
         if (look.fill) sh.filled = true;
+        if (look.fill && look.shaded) sh.fill = 'shaded';
+        // a filled shape with an outline of another colour keeps both
+        if (look.fill && look.line && look.line.toLowerCase() !== look.fill.toLowerCase()) { sh.color = look.line; sh.fillColor = look.fill; }
         if (look.dashed && !look.fill) sh.dashed = true;
         if (!look.fill && look.width > 1.75 * doc.style.lineWidth) sh.bold = true;
         if (prst === 'roundRect') {
@@ -684,13 +687,19 @@ class Reader {
   }
 
   /** How a shape is filled and outlined (its own settings, else its theme style). */
-  private look(sp: Element, spPr: Element | null): { fill: string | null; line: string | null; width: number; dashed: boolean } {
+  private look(sp: Element, spPr: Element | null): { fill: string | null; line: string | null; width: number; dashed: boolean; shaded: boolean } {
     const style = kid(sp, 'style');
     let fill: string | null = null;
+    let shaded = false;
     if (kid(spPr, 'solidFill')) fill = this.color(kid(spPr, 'solidFill'));
-    else if (kid(spPr, 'gradFill') || kid(spPr, 'pattFill')) {
-      fill = this.color(kid(spPr, 'gradFill', 'gsLst', 'gs'));
-      this.warnings.add('Shaded fills came in as plain colours.');
+    else if (kid(spPr, 'gradFill')) {
+      // shaded: light to the full colour (the last stop)
+      const stops = [...(kid(spPr, 'gradFill', 'gsLst')?.children ?? [])];
+      fill = this.color(stops[stops.length - 1] ?? null);
+      shaded = true;
+    } else if (kid(spPr, 'pattFill')) {
+      fill = this.color(kid(spPr, 'pattFill', 'fgClr'));
+      this.warnings.add('Patterned fills came in as plain colours.');
     } else if (!kid(spPr, 'noFill') && !kid(spPr, 'blipFill')) {
       const ref = kid(style, 'fillRef');
       if (ref && ref.getAttribute('idx') !== '0') fill = this.color(ref);
@@ -704,7 +713,7 @@ class Reader {
     }
     const w = ln?.getAttribute('w');
     const dash = kid(ln, 'prstDash')?.getAttribute('val');
-    return { fill, line, width: w ? fromEmu(w) : 0.75, dashed: !!dash && dash !== 'solid' };
+    return { fill, line, width: w ? fromEmu(w) : 0.75, dashed: !!dash && dash !== 'solid', shaded };
   }
 
   /** A line or connector: an arrow when it has a head, else a line. */

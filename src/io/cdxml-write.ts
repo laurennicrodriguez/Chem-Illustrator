@@ -18,7 +18,8 @@ import { layoutText, SINGLE } from '../text/layout';
 import { runsForChemDraw, TEXT_TAG } from '../text/chemdraw-text';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { fromDataUrl } from '../render/images';
-import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG } from './cdxml';
+import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG } from './cdxml';
+import { FADE, tint } from '../colours';
 import { layoutTable, cellAlign, isCovered, spanOf, NOTE_SCALE } from '../table';
 import { TABLE_TAG, TABLE_PART_TAG, tableBorders, type TableTag } from './cdxml-table';
 import { bondLayer, crossingBonds } from '../chem/crossing';
@@ -1067,7 +1068,15 @@ class CdxmlWriter {
     for (const k of ['GraphicType', 'LineType', 'RectangleType', 'OvalType', 'SymbolType', 'BracketType', 'Center3D', 'MajorAxisEnd3D', 'MinorAxisEnd3D', 'ArrowType', 'CornerRadius', 'ShadowSize']) g.removeAttribute(k);
     const style = [s.dashed && 'Dashed', s.bold && 'Bold'].filter(Boolean).join(' ') || null;
     const set = (k: string, v: string | null) => this.set(g, k, v);
-    set('color', this.colorAttr(s.color));
+    // ChemDraw fills with the shape's one colour, so a filled shape is saved in its fill colour
+    // (a faded fill as its light tint); the outline colour and fill style ride along in a tag
+    const fillTo = s.filled ? s.fillColor ?? s.color : undefined;
+    set('color', this.colorAttr(fillTo && s.fill === 'faded' ? tint(fillTo, FADE) : fillTo ?? s.color));
+    for (const c of kids(g)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === FILL_TAG) g.removeChild(c);
+    if (s.filled && (s.fill || s.fillColor)) {
+      g.appendChild(this.el('objecttag', { TagType: 'String', Name: FILL_TAG, Value: JSON.stringify({ fill: s.fill, fillColor: s.fillColor, color: s.color }), Visible: 'no' }));
+    }
+    const filled = !s.filled ? null : s.fill === 'shaded' ? 'Shaded' : 'Filled';
     switch (s.kind) {
       case 'line':
         set('GraphicType', 'Line');
@@ -1079,7 +1088,7 @@ class CdxmlWriter {
         // ChemDraw puts a box's shadow toward the first corner it stores, and stores the
         // bottom-right corner first
         set('BoundingBox', s.shadow ? box({ x1: Math.max(s.x1, s.x2), y1: Math.max(s.y1, s.y2), x2: Math.min(s.x1, s.x2), y2: Math.min(s.y1, s.y2) }) : box(s));
-        set('RectangleType', [s.rounded && 'RoundEdge', s.shadow && 'Shadow', s.filled && 'Filled', s.dashed && 'Dashed', s.bold && 'Bold'].filter(Boolean).join(' ') || 'Plain');
+        set('RectangleType', [s.rounded && 'RoundEdge', s.shadow && 'Shadow', filled, s.dashed && 'Dashed', s.bold && 'Bold'].filter(Boolean).join(' ') || 'Plain');
         // in hundredths of the line width, as ChemDraw stores them
         set('CornerRadius', s.rounded ? String(Math.round(((s.radius ?? 6 * this.doc.style.lineWidth) / this.doc.style.lineWidth) * 100)) : null);
         set('ShadowSize', s.shadow ? String(Math.round(((s.shadowSize ?? 4 * this.doc.style.lineWidth) / this.doc.style.lineWidth) * 100)) : null);
@@ -1092,7 +1101,7 @@ class CdxmlWriter {
         set('Center3D', pt3(c));
         set('MajorAxisEnd3D', pt3({ x: c.x + rx, y: c.y }));
         set('MinorAxisEnd3D', pt3({ x: c.x, y: c.y + ry }));
-        set('OvalType', [Math.abs(rx - ry) < 0.01 && 'Circle', s.filled && 'Filled', s.dashed && 'Dashed', s.bold && 'Bold', s.shadow && 'Shadowed'].filter(Boolean).join(' ') || null);
+        set('OvalType', [Math.abs(rx - ry) < 0.01 && 'Circle', filled, s.dashed && 'Dashed', s.bold && 'Bold', s.shadow && 'Shadowed'].filter(Boolean).join(' ') || null);
         break;
       }
       case 'symbol': {

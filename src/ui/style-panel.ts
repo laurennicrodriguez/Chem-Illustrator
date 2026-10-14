@@ -14,6 +14,7 @@ import { nextNumber } from '../chem/sprouts';
 import type { TableData } from '../model';
 import { deleteColumn, deleteRow, fitColumns, insertColumn, insertRow, setColumnAlign, setColumnWidth, setSpan, spanOf, type TablePart } from '../table';
 import type { Measure } from '../text/layout';
+import { colourButton } from './colour-picker';
 
 /** What the table controls need from the editor. */
 export interface TableHooks {
@@ -48,6 +49,9 @@ const SHAFTS: Opt<string>[] = [['one', 'One line'], ['equilibrium', 'Equilibrium
 const BRACKETS: Opt<NonNullable<Shape['bracket']>>[] = [['square', 'Square [ ]'], ['round', 'Round ( )'], ['curly', 'Curly { }']];
 const JUSTIFY: Opt<Caption['justify']>[] = [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']];
 const TABLE_LINES: Opt<TableData['lines']>[] = [['acs', 'ACS style (rules above and below the headings, and at the end)'], ['grid', 'Every cell boxed'], ['none', 'None']];
+
+type Fill = 'none' | 'solid' | 'faded' | 'shaded';
+const FILLS: Opt<Fill>[] = [['none', 'None'], ['solid', 'Solid colour'], ['faded', 'Faded (light tint)'], ['shaded', 'Shaded (light to dark)']];
 
 const BOND_ORDERS: Opt<string>[] = [['1', 'Single'], ['2', 'Double'], ['3', 'Triple'], ['1.5', 'Aromatic'], ['4', 'Quadruple']];
 const BOND_STYLES: Opt<Bond['display']>[] = [['solid', 'Plain'], ['wedge', 'Wedge'], ['hashWedge', 'Hashed wedge'], ['hash', 'Hashed'], ['bold', 'Bold'], ['dash', 'Dashed'], ['wavy', 'Wavy']];
@@ -93,8 +97,13 @@ export class StylePanel {
     const atom = s.atoms.size === 1 && !s.bonds.size ? this.doc.atoms.get([...s.atoms][0]) : undefined;
     const bond = s.bonds.size === 1 && s.atoms.size <= 2 ? this.doc.bonds.get([...s.bonds][0]) : undefined;
     this.section.hidden = !arrows.length && !shapes.length && !pictures.length && !tables.length && !caps.length && !centres.length && !dbls.length && !atom && !bond;
+    const selAtoms = [...s.atoms].map((id) => this.doc.atoms.get(id)).filter((a): a is Atom => !!a);
+    const selBonds = [...s.bonds].map((id) => this.doc.bonds.get(id)).filter((b): b is Bond => !!b);
+    const several = !atom && !bond && selAtoms.length + selBonds.length > 1;
+    if (several) this.section.hidden = false;
     if (atom) this.atomControls(atom);
     if (bond) this.bondControls(bond);
+    if (several) this.structureControls(selAtoms, selBonds);
     if (arrows.length) this.arrowControls(arrows);
     if (shapes.length) this.shapeControls(shapes);
     if (pictures.length) this.pictureControls(pictures);
@@ -199,7 +208,11 @@ export class StylePanel {
     }
     const fillable = (x: Shape) => x.kind === 'rect' || x.kind === 'oval';
     const f = any(fillable);
-    if (f) this.check('Filled', !!f.filled, (v) => set('Fill', fillable, () => ({ filled: v })));
+    if (f) {
+      const now: Fill = !f.filled ? 'none' : f.fill ?? 'solid';
+      this.select('Fill', FILLS, now, (v) => set('Fill', fillable, () => (v === 'none' ? { filled: false } : { filled: true, fill: v === 'solid' ? undefined : v })));
+      if (f.filled) this.color('Fill colour', f.fillColor, (v) => set('Fill colour', fillable, () => ({ fillColor: v })), 'Same as the line');
+    }
     const box = any((x) => x.kind === 'rect');
     if (box) {
       const isBox = (x: Shape) => x.kind === 'rect';
@@ -210,7 +223,7 @@ export class StylePanel {
     }
     const br = any((x) => x.kind === 'bracket');
     if (br) this.select('Bracket', BRACKETS, br.bracket ?? 'square', (v) => set('Bracket shape', (x) => x.kind === 'bracket', () => ({ bracket: v })));
-    this.color('Colour', s.color, (v) => set('Colour', () => true, () => ({ color: v })));
+    this.color(f?.filled && f.fillColor ? 'Line colour' : 'Colour', s.color, (v) => set('Colour', () => true, () => ({ color: v })));
   }
 
   // ------------------------------------------------------------------ pictures
@@ -361,6 +374,7 @@ export class StylePanel {
     this.text('Label', a.label ?? '', a.z === 6 ? 'carbon (no label)' : 'automatic', (v) => this.edit('Label', () => this.applyLabel(a.id, v)),
       'Type a label (O, NH2, OTBS, CO2Et…); leave empty for a plain carbon.');
     this.number('Charge', a.charge, 1, -8, 8, (v) => set('Charge', { charge: v }));
+    this.color('Colour', a.color, (v) => set('Atom colour', { color: v }));
     this.check('Show atom number', !!a.showNumber, (v) => set(v ? 'Show atom number' : 'Hide atom number',
       v ? { showNumber: true, atomNumber: a.atomNumber || String(nextNumber(this.doc, a.id, (x) => x.atomNumber)) } : { showNumber: false }));
     if (a.showNumber || a.atomNumber) {
@@ -375,6 +389,18 @@ export class StylePanel {
     this.select('Order', BOND_ORDERS, String(b.order), (v) => set('Bond order', { order: Number(v) }));
     this.select('Style', BOND_STYLES, b.display, (v) => set('Bond style', { display: v }));
     if (b.order === 2) this.select('Second line', DOUBLE_POS, b.dpos, (v) => set('Double bond position', { dpos: v }));
+    this.color('Colour', b.color, (v) => set('Bond colour', { color: v }));
+  }
+
+  /** Several atoms and bonds: their colour (labels and lines together). */
+  private structureControls(atoms: Atom[], bonds: Bond[]): void {
+    const parts = [atoms.length && `${atoms.length} atom${atoms.length > 1 ? 's' : ''}`, bonds.length && `${bonds.length} bond${bonds.length > 1 ? 's' : ''}`].filter(Boolean);
+    this.heading(parts.join(', '));
+    const first = atoms[0]?.color ?? bonds[0]?.color;
+    this.color('Colour', first, (v) => this.edit('Colour', () => {
+      for (const a of atoms) this.doc.updateAtom(a.id, { color: v });
+      for (const b of bonds) this.doc.updateBond(b.id, { color: v });
+    }));
   }
 
   // ------------------------------------------------------------------ stereo labels
@@ -480,12 +506,9 @@ export class StylePanel {
     this.row(label, inp, help);
   }
 
-  private color(label: string, value: string | undefined, on: (v: string | undefined) => void): void {
-    const inp = document.createElement('input');
-    inp.type = 'color';
-    inp.value = value ?? '#000000';
-    inp.addEventListener('change', () => on(inp.value.toLowerCase() === '#000000' ? undefined : inp.value));
-    this.row(label, inp);
+  /** A colour row: the drawing's palette, "automatic" (black unless `auto` says otherwise), or any colour. */
+  private color(label: string, value: string | undefined, on: (v: string | undefined) => void, auto?: string): void {
+    this.row(label, colourButton(this.doc, value, (v) => on(v && v.toLowerCase() === '#000000' && !auto ? undefined : v), auto ? { autoLabel: auto } : { autoSwatch: '#000000' }));
   }
 }
 

@@ -8,6 +8,7 @@
 import { Doc, Atom, Bond, Arrow, Caption, Shape, applyBase, type TextBase } from '../model';
 import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
 import { crossingGaps } from '../chem/crossing';
+import { FADE, tint } from '../colours';
 import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter, fromAngle } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
@@ -865,7 +866,7 @@ export class Renderer {
           ctx.beginPath();
         }
         ctx.roundRect(x, y, w, h, r);
-        if (s.filled) { ctx.fillStyle = s.color ?? '#000'; ctx.fill(); } else ctx.stroke();
+        if (s.filled) fillShape(ctx, s, x, y, w, h); else ctx.stroke();
         if (s.picture) {
           ctx.fillStyle = '#eef1f5';
           ctx.fillRect(x, y, w, h);
@@ -877,7 +878,7 @@ export class Renderer {
       }
       case 'oval':
         ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
-        if (s.filled) ctx.fill(); else ctx.stroke();
+        if (s.filled) fillShape(ctx, s, x, y, w, h); else ctx.stroke();
         break;
       case 'symbol': {
         const cx = (s.x1 + s.x2) / 2, cy = (s.y1 + s.y2) / 2, r = Math.max(1.6, Math.min(w, h) / 2);
@@ -1236,3 +1237,23 @@ const WARN_COLOR = '#e0141e';
 const ATTACH_HALF = 0.6;
 const ATTACH_AMP = 0.06;
 const ATTACH_HALF_WAVES = 24;
+
+/**
+ * Fill the path just traced for a filled box or oval: evenly, with a light tint (faded), or
+ * shaded from light at the top left to the full colour. A fill colour of its own gets the
+ * outline drawn round it in the line colour.
+ */
+function fillShape(ctx: CanvasRenderingContext2D, s: Shape, x: number, y: number, w: number, h: number): void {
+  const c = s.fillColor ?? s.color ?? '#000000';
+  if (s.fill === 'faded') ctx.fillStyle = tint(c, FADE);
+  else if (s.fill === 'shaded') {
+    const g = s.kind === 'oval'
+      ? ctx.createRadialGradient(x + w * 0.35, y + h * 0.3, 0, x + w / 2, y + h / 2, Math.max(w, h) * 0.6)
+      : ctx.createLinearGradient(x, y, x + w, y + h);
+    g.addColorStop(0, tint(c, 0.85));
+    g.addColorStop(1, c);
+    ctx.fillStyle = g;
+  } else ctx.fillStyle = c;
+  ctx.fill();
+  if (s.fillColor && s.fillColor.toLowerCase() !== (s.color ?? '#000000').toLowerCase()) ctx.stroke();
+}

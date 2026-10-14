@@ -851,3 +851,18 @@ dialog.arrange-dialog .muted { margin: 2px 0 10px; max-width: 62ch; }
 .arrange-opts { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 0; }
 .arrange-opts label { display: flex; align-items: center; gap: 8px; }
 .arrange-opts input[type='number'] { width: 4.5em; font: inherit; padding: 2px 4px; }
+
+/* colour buttons and their palette */
+.colour-button { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding: 3px 8px 3px 4px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: inherit; font: inherit; cursor: pointer; }
+.colour-button > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.colour-swatch { flex: none; width: 16px; height: 16px; border: 1px solid var(--line); border-radius: 3px; }
+.colour-swatch.none { background: linear-gradient(to top right, transparent calc(50% - 1px), #d33 calc(50% - 1px), #d33 calc(50% + 1px), transparent calc(50% + 1px)), var(--panel); }
+.colour-pop { position: fixed; z-index: 60; display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 6px 20px rgb(0 0 0 / 0.18); }
+.colour-auto { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border: 1px solid transparent; border-radius: 4px; background: none; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.colour-auto:hover, .colour-auto:focus-visible { border-color: var(--accent); }
+.colour-grid { display: grid; grid-template-columns: repeat(5, 22px); gap: 5px; }
+.colour-cell { width: 22px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: 3px; cursor: pointer; }
+.colour-cell:hover, .colour-cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.colour-cell[aria-pressed='true'] { outline: 2px solid var(--text); outline-offset: 1px; }
+.colour-more { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 0.92em; }
+.colour-more input { width: 32px; height: 22px; padding: 0; border: none; background: none; }
