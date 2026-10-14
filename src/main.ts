@@ -6,7 +6,7 @@ import './app.css';
 import type { MethylStyle } from './chem/hydrogens';
 import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
-import { Toolboxes, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
+import { Toolboxes, lockIcon, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
 import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS } from './model';
 import { Renderer, measureText } from './render/renderer';
@@ -948,6 +948,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   for (const el of document.querySelectorAll<HTMLElement>('.design-only')) el.hidden = !design;
   document.body.classList.toggle('sheet-mode', sheet);
   document.body.classList.toggle('doc-mode', words);
+  placeSidePanel();
   applyModeColours(tab.mode, modeColours);
   for (const el of document.querySelectorAll<HTMLElement>('.slides-only')) el.hidden = !slides;
   showSheetParts();
@@ -2052,7 +2053,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-custom', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-custom', 'toolbox-details', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'show-stereo', 'clipboard-formats', 'split-view']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
@@ -2186,6 +2187,8 @@ const COMMANDS: Record<string, () => unknown> = {
   'toolbox-templates': () => toolboxes.toggle('templates'),
   'toolbox-colours': () => toolboxes.toggle('colours'),
   'toolbox-custom': () => toolboxes.toggle('custom'),
+  'toolbox-details': () => toolboxes.toggle('details'),
+  'fold-side': () => toolboxes.setSideCollapsed(!toolboxState.sideCollapsed),
   'customize-toolbox': () => openCustomToolbox(),
   'lock-toolboxes': () => { toolboxes.setLocked(!toolboxState.locked); flash(toolboxState.locked ? 'Toolboxes locked.' : 'Toolboxes unlocked: drag one by its title to an edge of the drawing to dock it, or anywhere else to float.', 6000); },
   'add-frame': () => editor.addFrame() || flash('Select what to frame: structures, text, arrows or shapes.'),
@@ -2754,6 +2757,7 @@ void loadSettings().then((s) => {
   toolboxState = s.toolboxes;
   toolboxes.render();
   tickToolboxes();
+  placeSidePanel();
   tickMethylStyle();
   settingsLoaded = true;
   refreshKeys();
@@ -3435,6 +3439,9 @@ const cmdRow = (body: HTMLElement, cmds: (string | [string, string] | null)[]) =
 /** What the Colours toolbox's swatches do: colour the lines and text, highlight, or fill. */
 let colourMode: 'line' | 'highlight' | 'fill' = 'line';
 
+/** The side panel's contents: in the panel at the right, or in the "details" toolbox when taken out. */
+const sideContent = $('#side-content');
+
 const TOOLBOX_DEFS: ToolboxDef[] = [
   { id: 'main', title: 'Drawing Tools', build: (body) => body.append(toolsNav) },
   {
@@ -3513,18 +3520,45 @@ const TOOLBOX_DEFS: ToolboxDef[] = [
   },
 ];
 
+TOOLBOX_DEFS.push({ id: 'details', title: 'Side Panel', build: (body) => body.append(sideContent) });
+
 const toolboxes = new Toolboxes(TOOLBOX_DEFS, {
   get: () => toolboxState,
-  set: (st) => { toolboxState = st; tickToolboxes(); storeSettings(); },
+  set: (st) => { toolboxState = st; tickToolboxes(); storeSettings(); placeSidePanel(); },
   work: () => $('#work'),
   customize: () => openCustomToolbox(),
 });
 
-/** Tick the shown toolboxes and the lock in the View menu. */
+/** Tick the shown toolboxes and the lock in the View menu, and show the lock on its button. */
 function tickToolboxes(): void {
-  for (const id of ['main', 'structure', 'arrange', 'templates', 'colours', 'custom'] as ToolboxId[]) $(`[data-cmd="toolbox-${id}"]`)?.setAttribute('aria-checked', String(!!toolboxState.places[id]?.shown));
+  for (const id of ['main', 'structure', 'arrange', 'templates', 'colours', 'custom', 'details'] as ToolboxId[]) $(`[data-cmd="toolbox-${id}"]`)?.setAttribute('aria-checked', String(!!toolboxState.places[id]?.shown));
   $('[data-cmd="lock-toolboxes"]')?.setAttribute('aria-checked', String(toolboxState.locked));
+  $('[data-cmd="fold-side"]')?.setAttribute('aria-checked', String(toolboxState.sideCollapsed));
+  const lock = $('#btn-lock');
+  lock.setAttribute('aria-pressed', String(toolboxState.locked));
+  lock.querySelector('.lock-icon')!.innerHTML = lockIcon(toolboxState.locked);
+  lock.querySelector('.lock-text')!.textContent = toolboxState.locked ? 'Locked' : 'Unlocked';
 }
+
+/**
+ * Put the side panel's contents where they belong: in the "details" toolbox when it is taken out
+ * (drawings, slides and designs), else in the panel at the right, open or folded to a strip.
+ */
+function placeSidePanel(): void {
+  const b = document.body.classList;
+  const out = !!toolboxState.places.details?.shown && !((b.contains('sheet-mode') || b.contains('doc-mode')) && !b.contains('floating-drawing') && !b.contains('split-view'));
+  b.toggle('side-out', out);
+  b.toggle('side-collapsed', toolboxState.sideCollapsed && !out);
+  const aside = $('aside');
+  if (!out && sideContent.parentElement !== aside) aside.append(sideContent);
+  if (out && sideContent.parentElement === aside) toolboxes.render();
+  const fold = $('#side-fold');
+  fold.textContent = toolboxState.sideCollapsed ? '‹' : '›';
+  fold.title = toolboxState.sideCollapsed ? 'Open the side panel (View > Fold Side Panel)' : 'Fold the side panel away (View > Fold Side Panel)';
+  fold.setAttribute('aria-label', fold.title);
+}
+$('#side-fold').addEventListener('click', () => toolboxes.setSideCollapsed(!toolboxState.sideCollapsed));
+$('#btn-lock').addEventListener('click', () => command('lock-toolboxes'));
 
 function openCustomToolbox(): void {
   const tools: Pickable[] = [...ALL_TOOLS].map(([name, t]) => ({ key: `tool:${name}`, label: t.title.split(/[.:] /)[0], icon: t.icon }));
@@ -3539,6 +3573,7 @@ function openCustomToolbox(): void {
 
 toolboxes.render();
 tickToolboxes();
+placeSidePanel();
 // your palettes show in the Colours toolbox as soon as they change
 onPalettes(() => { if (toolboxState.places.colours?.shown) toolboxes.render(); });
 stylePanel.reaction = {

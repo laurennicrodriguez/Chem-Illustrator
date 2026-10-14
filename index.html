@@ -71,6 +71,8 @@
         <button role="menuitemcheckbox" aria-checked="false" data-cmd="toolbox-colours" title="One click colours or highlights what is selected, from the standard colours and your palettes"><span>Toolbox: Colours</span></button>
         <button role="menuitemcheckbox" aria-checked="false" data-cmd="toolbox-custom" title="Your own toolbox: any tools and commands you choose"><span>Toolbox: My Toolbox</span></button>
         <button role="menuitem" data-cmd="customize-toolbox" title="Choose the tools and commands in My Toolbox">Choose What Is in My Toolbox…</button>
+        <button role="menuitemcheckbox" aria-checked="false" data-cmd="toolbox-details" title="Take the Style, Warnings and Analysis panel out of the right side, to float it or dock it at another edge"><span>Side Panel as a Toolbox</span></button>
+        <button role="menuitemcheckbox" aria-checked="false" data-cmd="fold-side" title="Fold the side panel to a strip at the right, to give the drawing more room"><span>Fold Side Panel</span></button>
         <button role="menuitemcheckbox" aria-checked="true" data-cmd="lock-toolboxes" title="Unlock to drag toolboxes by their titles: to an edge of the drawing to dock them, anywhere else to float"><span>Lock Toolboxes</span></button>
         <hr />
         <button role="menuitem" data-cmd="mode-colours" title="Blue for drawings, orange for slides: choose how much of the window is coloured, and the colours">Mode Colours…</button>
@@ -211,6 +213,7 @@
     <button id="btn-undo" title="Undo">Undo</button>
     <button id="btn-redo" title="Redo">Redo</button>
     <button id="btn-fit" title="Fit drawing to window">Fit</button>
+    <button id="btn-lock" class="draw-only" type="button" aria-pressed="true" title="Lock or unlock the toolboxes (unlocked, drag one by its title to move it)"><span class="lock-icon"></span><span class="lock-text">Locked</span></button>
     <span class="sep dev-only" hidden></span>
     <select id="stress-n" class="dev-only" hidden title="How many drug-sized molecules to draw">
       <option value="100">100 molecules</option>
@@ -708,6 +711,8 @@
   </main>
 
   <aside>
+    <button id="side-fold" type="button" title="Fold the side panel away (View > Fold Side Panel)" aria-label="Fold the side panel away">›</button>
+    <div id="side-content">
     <section id="style-section" hidden>
       <h2>Style</h2>
       <div id="style-body"></div>
@@ -734,6 +739,7 @@
       <h2>Speed</h2>
       <div id="speed-body"></div>
     </section>
+    </div>
   </aside>
 
   <footer id="hint"></footer>
