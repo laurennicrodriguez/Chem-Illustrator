@@ -19,6 +19,11 @@ export interface FileType {
 export const CDXML: FileType = { description: 'ChemDraw XML drawing', extension: 'cdxml', mime: 'chemical/x-cdxml' };
 export const CDX: FileType = { description: 'ChemDraw drawing', extension: 'cdx', mime: 'chemical/x-cdx' };
 export const PPTX: FileType = { description: 'PowerPoint presentation', extension: 'pptx', mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
+export const XLSX: FileType = { description: 'Excel workbook', extension: 'xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+export const CSV: FileType = { description: 'CSV (comma-separated values)', extension: 'csv', mime: 'text/csv' };
+export const SDF: FileType = { description: 'SD file (structures with data)', extension: 'sdf', mime: 'chemical/x-mdl-sdfile' };
+/** Text tables that open as sheets (tab-separated as well as CSV). */
+export const TABLE_TEXT_EXTENSIONS = ['csv', 'tsv', 'txt'];
 export const PDF: FileType = { description: 'PDF document', extension: 'pdf', mime: 'application/pdf' };
 export const PICTURE: FileType = { description: 'Picture', extension: 'png', mime: 'image/png' };
 /** Picture files that can go on a slide. */

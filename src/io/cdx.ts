@@ -181,6 +181,8 @@ const P: Record<string, Prop> = {
   BondLength: { tag: 0x0805, kind: 'coord' },
   BoldWidth: { tag: 0x0806, kind: 'coord' },
   LineWidth: { tag: 0x0807, kind: 'coord' },
+  // the side of a table cell a border is on; the numbers are from a CDX table saved by ChemDraw 25
+  Side: { tag: 0x0825, kind: 'enum16', values: { top: 1, left: 2, bottom: 3, right: 4 } },
   MarginWidth: { tag: 0x0808, kind: 'coord' },
   HashSpacing: { tag: 0x0809, kind: 'coord' },
   CaptionJustification: { tag: 0x080c, kind: 'enum8', values: JUSTIFY },

@@ -17,6 +17,8 @@ import { fitParas, listMarkers, splitParagraphs } from '../text/paragraphs';
 import { formulaParts } from '../richtext';
 import { arialWidth } from '../text-metrics';
 import { arrowPoints, shapeBox, boxOf } from '../objects';
+import { layoutTable, cellAlign, spanOf, isCovered, tableText, NOTE_SCALE } from '../table';
+import { tableBorders } from './cdxml-table';
 import { writeCdxml } from './cdxml-write';
 import { extractDrawing } from './clipboard';
 import type { Selection } from '../editor/editor';
@@ -33,6 +35,8 @@ export const TAG = {
   text: 'CHEMILLUSTRATOR_TEXT',
   master: 'CHEMILLUSTRATOR_MASTER',
   layout: 'CHEMILLUSTRATOR_LAYOUT',
+  table: 'CHEMILLUSTRATOR_TABLE',
+  tablePart: 'CHEMILLUSTRATOR_TABLE_PART',
 };
 
 /** A picture of part of a slide (structures, schemes): SVG and PNG, and the area it shows, in points. */
@@ -97,6 +101,8 @@ export interface SlideParts {
   pictures: Shape[];
   /** Boxes, ovals and lines away from structures: PowerPoint shapes. */
   shapes: Shape[];
+  /** Tables: PowerPoint tables. */
+  tables: Shape[];
   /** Structures and schemes, each with the captions, arrows and shapes around it: one picture each. */
   drawings: Selection[];
 }
@@ -115,6 +121,7 @@ export function splitSlide(doc: Doc, measure: Measure = arialMeasure): SlidePart
   const items: Item[] = [];
   const texts: Caption[] = [];
   const pictures: Shape[] = [];
+  const tables: Shape[] = [];
   for (const frag of doc.fragments()) {
     const pts = [...frag].map((id) => doc.atoms.get(id)!);
     const b = boxOf(pts);
@@ -133,6 +140,7 @@ export function splitSlide(doc: Doc, measure: Measure = arialMeasure): SlidePart
   for (const sh of doc.shapes.values()) {
     if (sh.picture) continue; // a stand-in for a picture from a ChemDraw file
     if (sh.kind === 'picture') { pictures.push(sh); continue; }
+    if (sh.kind === 'table') { if (sh.table) tables.push(sh); continue; }
     const chem = sh.kind === 'bracket' || sh.kind === 'symbol';
     items.push({ box: shapeBox(sh), chem, add: (s) => s.shapes.add(sh.id), shape: sh });
   }
@@ -172,7 +180,7 @@ export function splitSlide(doc: Doc, measure: Measure = arialMeasure): SlidePart
   // top to bottom, then left to right, as people read (and as PowerPoint tabs through them)
   const top = (s: Selection) => Math.min(...[...s.atoms].map((id) => doc.atoms.get(id)!.y), ...[...s.arrows].map((id) => doc.arrows.get(id)!.tail.y), ...[...s.shapes].map((id) => doc.shapes.get(id)!.y1));
   drawings.sort((a, b) => top(a) - top(b));
-  return { texts, pictures, shapes, drawings };
+  return { texts, pictures, shapes, tables, drawings };
 }
 
 export const arialMeasure: Measure = (t, size, _family, style) => arialWidth(t, size, /bold/.test(style));
@@ -286,6 +294,7 @@ class Writer {
   pkg = new Package();
   private media = 0;
   private tags = 0;
+  private tableKeys = 0;
   private measure: Measure;
 
   constructor(private deck: DeckData, private opts: PptxOptions) {
@@ -437,6 +446,8 @@ class Writer {
     // pictures and shapes at the back, as on screen
     for (const p of parts.pictures) out.push(await this.picture(path, p.src!, { x1: Math.min(p.x1, p.x2), y1: Math.min(p.y1, p.y2), x2: Math.max(p.x1, p.x2), y2: Math.max(p.y1, p.y2) }, `Picture ${id - 1}`, id++, p.crop ?? null));
     for (const sh of parts.shapes) out.push(shapeXml(sh, id++, doc.style.lineWidth));
+    const phCount: Record<string, number> = {};
+    for (const tb of parts.tables) out.push(this.table(path, tb, () => id++, s.layout, styles, phCount, doc));
     // structures and schemes
     for (const sel of parts.drawings) {
       const part = extractDrawing(doc, sel);
@@ -450,7 +461,6 @@ class Writer {
       id++;
     }
     // text on top
-    const phCount: Record<string, number> = {};
     for (const c of parts.texts) {
       out.push(this.text(path, c, id++, s.layout, styles, phCount, doc));
     }
@@ -484,7 +494,7 @@ class Writer {
   }
 
   /** A title, text placeholder or text box. */
-  private text(path: string, c: Caption, id: number, layout: LayoutId, styles: ReturnType<typeof textStyles>, phCount: Record<string, number>, doc: Doc): string {
+  private text(path: string, c: Caption, id: number, layout: LayoutId, styles: ReturnType<typeof textStyles>, phCount: Record<string, number>, doc: Doc, more: Record<string, string> = {}): string {
     const base = c.ph ? styles[c.ph] : undefined;
     const size0 = c.runs[0]?.size ?? base?.size ?? doc.style.captionSize;
     const lay = layoutText(c.ph ? { ...c, runs: applyBase(c.runs, base) } : c, base?.size ?? doc.style.captionSize, this.measure);
@@ -502,7 +512,7 @@ class Writer {
     // the caption's exact settings, used when it comes back unchanged from PowerPoint
     const plain = c.runs.map((r) => r.text).join('');
     const at = [box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1].map((v) => +v.toFixed(2));
-    const tag = this.addTags(path, { [TAG.text]: JSON.stringify({ c: { ...c, id: undefined }, plain, at }) });
+    const tag = this.addTags(path, { [TAG.text]: JSON.stringify({ c: { ...c, id: undefined }, plain, at }), ...more });
     let ph = '';
     if (c.ph) {
       const k = c.ph === 'title' ? 'title' : 'body';
@@ -518,6 +528,73 @@ class Writer {
       : `<p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr txBox="1"/><p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvSpPr>`;
     const geom = ph ? '' : '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/>';
     return `<p:sp>${nvSp}<p:spPr>${xfrm(box)}${geom}</p:spPr><p:txBody>${bodyPr}<a:lstStyle/>${body}</p:txBody></p:sp>`;
+  }
+
+  /**
+   * A table as a PowerPoint table: its cells, joined cells and rules (the same per-cell borders
+   * as a ChemDraw table), with its title and footnotes as text boxes above and below it. A tag
+   * keeps the table as it was, used when PowerPoint has not changed its text.
+   */
+  private table(path: string, s: Shape, next: () => number, layout: LayoutId, styles: ReturnType<typeof textStyles>, phCount: Record<string, number>, doc: Doc): string {
+    const t = s.table!;
+    const lay = layoutTable(t, doc.style.captionSize, this.measure);
+    const size = lay.size;
+    const key = String(++this.tableKeys);
+    const font = doc.style.captionFont || 'Arial';
+    const sized = (runs: TextRun[], sz: number) => runs.map((r) => (r.size === undefined ? { ...r, size: sz } : r));
+    const out: string[] = [];
+    const part = (which: 'title' | 'notes', at: { x: number; y: number }, runs: TextRun[], sz: number) => {
+      const c: Caption = { id: 0, x: s.x1 + at.x, y: s.y1 + at.y, runs: sized(runs, sz), justify: 'left', wrap: lay.width };
+      out.push(this.text(path, c, next(), layout, styles, phCount, doc, { [TAG.tablePart]: JSON.stringify({ key, part: which }) }));
+    };
+    if (lay.title) part('title', lay.title, t.title!, size);
+
+    const n = t.rows.length, m = t.cols.length;
+    const lw = doc.style.lineWidth;
+    const b = tableBorders(t, lw);
+    const color = hex6(s.color ?? '#000000');
+    // PowerPoint puts the first baseline its font's ascent below the cell's top margin
+    const marT = Math.max(0, lay.padY - (PPT_ASCENT - ASCENT) * size), marB = Math.max(0, lay.padY - 0.05 * size);
+    const ln = (side: string, w: number) => w > 0
+      ? `<a:${side} w="${emu(w)}" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:prstDash val="solid"/><a:round/></a:${side}>`
+      : `<a:${side} w="${emu(lw)}" cmpd="sng"><a:noFill/></a:${side}>`;
+    const empty = (algn: string) => `<a:p><a:pPr algn="${algn}"/><a:endParaRPr ${lang} sz="${Math.round(size * 100)}" dirty="0"/></a:p>`;
+    const algnOf = (j: string) => (j === 'center' ? 'ctr' : j === 'right' ? 'r' : j === 'justify' ? 'just' : 'l');
+    const rows: string[] = [];
+    for (let r = 0; r < n; r++) {
+      const tcs: string[] = [];
+      for (let c = 0; c < m; c++) {
+        const x = b[r][c];
+        // a line between two cells shows when either cell has it, so both say so
+        const left = x.left || (c > 0 ? b[r][c - 1].right : 0), right = x.right || (c < m - 1 ? b[r][c + 1].left : 0);
+        const top = x.top || (r > 0 ? b[r - 1][c].bottom : 0), bottom = x.bottom || (r < n - 1 ? b[r + 1][c].top : 0);
+        const tcPr = `<a:tcPr marL="${emu(lay.padX)}" marR="${emu(lay.padX)}" marT="${emu(marT)}" marB="${emu(marB)}" anchor="t">${ln('lnL', left)}${ln('lnR', right)}${ln('lnT', top)}${ln('lnB', bottom)}<a:noFill/></a:tcPr>`;
+        const align = cellAlign(t, r, c);
+        if (isCovered(t, r, c)) {
+          tcs.push(`<a:tc hMerge="1"><a:txBody><a:bodyPr/><a:lstStyle/>${empty(algnOf(align))}</a:txBody>${tcPr}</a:tc>`);
+          continue;
+        }
+        const cell = t.rows[r][c] ?? { runs: [] };
+        const span = spanOf(t, r, c);
+        const body = cell.runs.some((x) => x.text)
+          ? paragraphsXml({ id: 0, x: 0, y: 0, runs: cell.runs, paras: cell.paras, justify: align }, { size, font }, size, this.measure)
+          : empty(algnOf(align));
+        tcs.push(`<a:tc${span > 1 ? ` gridSpan="${span}"` : ''}><a:txBody><a:bodyPr/><a:lstStyle/>${body}</a:txBody>${tcPr}</a:tc>`);
+      }
+      rows.push(`<a:tr h="${emu(lay.ys[r + 1] - lay.ys[r])}">${tcs.join('')}</a:tr>`);
+    }
+    const grid = t.cols.map((w) => `<a:gridCol w="${emu(w)}"/>`).join('');
+    const id = next();
+    const tag = this.addTags(path, { [TAG.table]: JSON.stringify({ v: 1, key, table: t, plain: tableText(t) }) });
+    const frame = { x1: s.x1, y1: s.y1 + lay.ys[0], x2: s.x1 + lay.width, y2: s.y1 + lay.ys[n] };
+    // "No Style, No Grid": the cells show only the rules given here
+    out.push(`<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="Table ${id - 1}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>` +
+      `<p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvGraphicFramePr>` +
+      `<p:xfrm><a:off x="${emu(frame.x1)}" y="${emu(frame.y1)}"/><a:ext cx="${emu(frame.x2 - frame.x1)}" cy="${emu(frame.y2 - frame.y1)}"/></p:xfrm>` +
+      `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr${t.head > 0 ? ' firstRow="1"' : ''}><a:tableStyleId>{2D5ABB26-0587-4C30-8999-92F81FD0307C}</a:tableStyleId></a:tblPr>` +
+      `<a:tblGrid>${grid}</a:tblGrid>${rows.join('')}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>`);
+    if (lay.notes) part('notes', lay.notes, t.notes!, size * NOTE_SCALE);
+    return out.join('');
   }
 
   // ---------------------------------------------------------------- notes

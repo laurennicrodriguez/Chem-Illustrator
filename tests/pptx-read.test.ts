@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // Opening PowerPoint files: our own files come back as they were saved, and files made in
-// PowerPoint come in as editable text, pictures, shapes and arrows, formatted as PowerPoint
+// PowerPoint come in as editable text, pictures, shapes, arrows and tables, formatted as PowerPoint
 // shows them.
 
 import { describe, it, expect } from 'vitest';
@@ -202,7 +202,8 @@ describe('opening files made in PowerPoint', () => {
     expect([pic.x1, pic.y1, pic.x2, pic.y2]).toEqual([610, 110, 650, 140]);
     expect(pic.crop).toEqual({ l: 0.1, t: 0, r: 0, b: 0.05 });
     expect(pic.px).toEqual({ w: 40, h: 30 });
-    expect(back.warnings.some((w) => /Tables/.test(w))).toBe(true);
+    // a table with no columns has nothing to show (tables themselves are tested in pptx-table)
+    expect(shapes.some((s) => s.kind === 'table')).toBe(false);
   });
 });
 

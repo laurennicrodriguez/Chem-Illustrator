@@ -133,6 +133,7 @@ export function shapeHit(s: Shape, p: Vec, tol: number): boolean {
       return distToSegment(p, a, b) <= tol + bracketReach(s) / 2;
     case 'symbol':
     case 'picture':
+    case 'table':
       return p.x >= x1 - tol && p.x <= x2 + tol && p.y >= y1 - tol && p.y <= y2 + tol;
     case 'rect': {
       const inside = p.x >= x1 && p.x <= x2 && p.y >= y1 && p.y <= y2;
@@ -171,7 +172,7 @@ export function arrowHandles(r: Arrow): Handle[] {
 export function shapeHandles(s: Shape): Handle[] {
   const h = (which: HandleId, x: number, y: number): Handle => ({ kind: 'shape', id: s.id, which, at: { x, y } });
   if (s.kind === 'line' || s.kind === 'bracket') return [h('p1', s.x1, s.y1), h('p2', s.x2, s.y2)];
-  if (s.kind === 'symbol' || s.picture) return [];
+  if (s.kind === 'symbol' || s.kind === 'table' || s.picture) return [];
   const x1 = Math.min(s.x1, s.x2), x2 = Math.max(s.x1, s.x2), y1 = Math.min(s.y1, s.y2), y2 = Math.max(s.y1, s.y2);
   const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
   const corners = [h('nw', x1, y1), h('ne', x2, y1), h('se', x2, y2), h('sw', x1, y2)];

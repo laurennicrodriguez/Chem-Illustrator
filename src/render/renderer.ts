@@ -19,6 +19,8 @@ import { layoutText, FONT_STACK, type TextLayout } from '../text/layout';
 import { drawLayout } from '../text/draw';
 import { placeholderRect, isEmptyText } from '../deck/deck';
 import { imageFor } from './images';
+import { layoutTable, drawTable, type TableLayout, type TablePart } from '../table';
+import type { TableData } from '../model';
 
 export { FONT_STACK };
 
@@ -123,6 +125,9 @@ export class Renderer {
   private captionSize = 10;
   /** A caption being typed into: the text box shows it, so the page doesn't. */
   hiddenCaption: number | null = null;
+  /** A table being typed into: drawn as this draft (so rows grow as the text does), without the part the text editor shows. */
+  tableEdit: { id: number; table: TableData; part: TablePart } | null = null;
+  private tableLayouts = new WeakMap<TableData, TableLayout>();
   private tiles = new Map<string, Tile>();
   private stale: { tiles: Map<string, Tile>; scale: number } | null = null;
   private tileScale = 0;
@@ -548,7 +553,8 @@ export class Renderer {
 
     // Shapes behind the structures (filled boxes first).
     for (const s of this.sortedShapes(doc)) {
-      if (Math.max(s.x1, s.x2) < vis.x1 || Math.min(s.x1, s.x2) > vis.x2 || Math.max(s.y1, s.y2) < vis.y1 || Math.min(s.y1, s.y2) > vis.y2) continue;
+      const b = s.kind === 'table' ? this.tableBox(s) : { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
+      if (b.x2 < vis.x1 || b.x1 > vis.x2 || b.y2 < vis.y1 || b.y1 > vis.y2) continue;
       this.drawShape(ctx, s, st.lineWidth);
     }
 
@@ -789,6 +795,12 @@ export class Renderer {
     ctx.beginPath();
     switch (s.kind) {
       case 'picture': this.drawPicture(ctx, s, x, y, w, h); break;
+      case 'table': {
+        const ed = this.tableEdit?.id === s.id ? this.tableEdit : null;
+        const t = ed?.table ?? s.table;
+        if (t) drawTable(ctx, t, this.tableLayout(t), s.x1, s.y1, lw, s.color, ed?.part);
+        break;
+      }
       case 'line': ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); ctx.stroke(); break;
       case 'rect': {
         // ChemDraw's defaults: corners of six line widths, a light grey shadow of four
@@ -1008,6 +1020,24 @@ export class Renderer {
     return lay;
   }
 
+  /** The area a table covers as it is drawn now (while it is typed into, its rows grow with the text). */
+  tableBox(s: Shape): Rect {
+    const t = this.tableEdit?.id === s.id ? this.tableEdit.table : s.table;
+    if (!t) return { x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2 };
+    const lay = this.tableLayout(t);
+    return { x1: s.x1, y1: s.y1, x2: s.x1 + lay.width, y2: s.y1 + lay.height };
+  }
+
+  /** Where everything in a table goes (cached per table version). */
+  tableLayout(t: TableData): TableLayout {
+    let lay = this.tableLayouts.get(t);
+    if (!lay) {
+      lay = layoutTable(t, this.captionSize, (text, size, family, style) => measureText(text, size, family, style));
+      this.tableLayouts.set(t, lay);
+    }
+    return lay;
+  }
+
   /** The master formatting a placeholder's text takes. */
   baseOf(c: Caption): TextBase | undefined {
     return c.ph ? this.textStyles?.[c.ph] : undefined;
@@ -1020,6 +1050,7 @@ export class Renderer {
       this.textStyles = doc.textStyles;
       this.capBoxes = new WeakMap();
       this.capLayouts = new WeakMap();
+      this.tableLayouts = new WeakMap();
     }
   }
 

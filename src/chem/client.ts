@@ -3,6 +3,7 @@
 
 import type { ChemRequest, ChemResponse, FragmentResult } from '../worker/chem-worker';
 import type { StereoTags } from './stereo';
+import type { MolProps } from '../sheet/properties';
 
 export class ChemClient {
   ready = false;
@@ -80,5 +81,17 @@ export class ChemClient {
   async molToSmiles(molblock: string): Promise<string | null> {
     const r = await this.request<Extract<ChemResponse, { type: 'molToSmiles' }>>((id) => ({ type: 'molToSmiles', id, molblock }));
     return r.smiles;
+  }
+
+  /** Sheet properties for molecules given as molfiles or SMILES. */
+  async props(mols: string[]): Promise<(MolProps | { error: string })[]> {
+    const r = await this.request<Extract<ChemResponse, { type: 'props' }>>((id) => ({ type: 'props', id, mols }));
+    return r.results;
+  }
+
+  /** Which molecules contain the query structure (null where a molecule can't be read). */
+  async substructure(query: string, mols: string[]): Promise<{ results: (boolean | null)[]; error?: string }> {
+    const r = await this.request<Extract<ChemResponse, { type: 'substructure' }>>((id) => ({ type: 'substructure', id, query, mols }));
+    return { results: r.results, error: r.error };
   }
 }

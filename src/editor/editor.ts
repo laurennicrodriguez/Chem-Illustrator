@@ -9,6 +9,7 @@ import { styleFromFace, plainText } from '../richtext';
 import { cleanUpMoves } from '../chem/cleanup';
 import { Renderer, measureText } from '../render/renderer';
 import { ASCENT } from '../text/layout';
+import { cellAlign, insertRow, nextCell, partAt, partRuns, setColumnWidth, setPart, spanOf, NOTE_SCALE, type TablePart } from '../table';
 import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG } from '../geom';
 import {
   sproutDir, sprout, bondTo, bondLength, atomAt, freeRing, fusedRing, fuseSide, ringOnAtom,
@@ -551,6 +552,8 @@ export class Editor {
       this.editLabel(h.id);
     } else if (h && h.kind === 'caption') {
       this.editCaption(h.id, { x: e.clientX, y: e.clientY });
+    } else if (h && h.kind === 'shape' && this.doc.shapes.get(h.id)?.kind === 'table') {
+      this.editTableAt(h.id, p);
     }
   }
 
@@ -617,6 +620,7 @@ export class Editor {
         if (c?.ph && isEmptyText(c) && !d.shift) { this.sel = emptySel(); this.editCaption(c.id); return; }
         if (!d.shift) this.sel = emptySel();
         if (h) this.toggleSel(h);
+        if (h?.kind === 'shape') this.noteTablePart(h.id, p);
         if (this.cropping !== null && !this.sel.shapes.has(this.cropping)) this.cropping = null;
         this.onChange();
         return;
@@ -634,6 +638,7 @@ export class Editor {
       case 'text': {
         if (h && h.kind === 'atom') this.editLabel(h.id);
         else if (h && h.kind === 'caption') this.editCaption(h.id, this.clientPoint(p));
+        else if (h && h.kind === 'shape' && doc.shapes.get(h.id)?.kind === 'table') this.editTableAt(h.id, p);
         else this.newCaption(p);
         return;
       }
@@ -1699,6 +1704,140 @@ export class Editor {
     if (click) ed.ed.setCaret(ed.ed.offsetAt(click.x - at.x, click.y - at.y));
   }
 
+  // ------------------------------------------------------------------ tables
+
+  /** The table cell (or title or footnotes) last clicked or typed into, for the Style panel's row and column commands. */
+  tablePart: { id: number; part: TablePart } | null = null;
+
+  /** Remember which part of a table was clicked. */
+  private noteTablePart(id: number, p: Vec): void {
+    const s = this.doc.shapes.get(id);
+    if (!s?.table) return;
+    const part = partAt(s.table, this.r.tableLayout(s.table), { x: p.x - s.x1, y: p.y - s.y1 });
+    if (part) this.tablePart = { id, part };
+  }
+
+  /** Type into the part of a table at a point. */
+  private editTableAt(id: number, p: Vec): void {
+    const s = this.doc.shapes.get(id);
+    if (!s?.table) return;
+    const part = partAt(s.table, this.r.tableLayout(s.table), { x: p.x - s.x1, y: p.y - s.y1 });
+    if (part) this.editTable(id, part, p);
+  }
+
+  /**
+   * Type into a cell of a table (or its title or footnotes), with the caret at `click` or at the
+   * end. The row grows as the text does; Tab and Shift+Tab go on to the next or previous cell
+   * (Tab in the last cell adds a row), and dragging the text box's handle sets the column width.
+   */
+  editTable(id: number, part: TablePart, click?: Vec): void {
+    this.closeCaption();
+    this.commitLabel();
+    const doc = this.doc;
+    const s = doc.shapes.get(id);
+    const t0 = s?.table;
+    if (!s || !t0) return;
+    if (typeof part !== 'string' && (!t0.rows[part.r] || part.c >= t0.cols.length)) return;
+    const lay = this.r.tableLayout(t0);
+    const size = part === 'notes' ? lay.size * NOTE_SCALE : lay.size;
+    // where the text starts, and how wide it may be
+    let at: Vec, wrap: number, justify = cellAlign(t0, 0, 0);
+    if (part === 'title') {
+      at = { x: s.x1, y: s.y1 + (lay.title?.y ?? ASCENT * size) };
+      wrap = lay.width;
+      justify = 'left';
+    } else if (part === 'notes') {
+      at = { x: s.x1, y: s.y1 + (lay.notes?.y ?? lay.height + 0.35 * lay.size + ASCENT * size) };
+      wrap = lay.width;
+      justify = 'left';
+    } else {
+      const cell = lay.cells[part.r][part.c]!;
+      at = { x: s.x1 + cell.x, y: s.y1 + cell.y };
+      wrap = lay.xs[part.c + spanOf(t0, part.r, part.c)] - lay.xs[part.c] - 2 * lay.padX;
+      justify = cellAlign(t0, part.r, part.c);
+    }
+    const shown = partRuns(t0, part);
+    this.tablePart = { id, part };
+    // the table stays selected, so the Style panel shows its commands
+    this.sel = emptySel();
+    this.sel.shapes.add(id);
+    const repaint = (t: typeof t0) => {
+      const box = this.r.tableBox({ ...s, table: t });
+      doc.dirtyRects.push(box);
+      this.requestScene();
+    };
+    this.r.tableEdit = { id, table: t0, part };
+    repaint(t0);
+    const host = {
+      host: this.host,
+      view: this.r.view,
+      toScreen: (p: Vec) => this.r.toScreen(p),
+      measure: (t: string, sz: number, family: string, style: string) => measureText(t, sz, family, style),
+      defaultSize: size,
+      redraw: () => this.requestOverlay(),
+      hint: typeof part === 'string' ? 'Enter: new paragraph · Esc: done' : 'Tab: next cell · Shift+Tab: back · Enter: new line · Esc: done',
+      around: () => { const cur = doc.shapes.get(id); return cur ? this.r.tableBox(cur) : this.r.tableBox(s); },
+      typed: (rich: { runs: Caption['runs']; paras?: Caption['paras'] }) => {
+        const cur = doc.shapes.get(id)?.table;
+        if (!cur || this.r.tableEdit?.id !== id) return;
+        const before = this.r.tableEdit.table;
+        const draft = setPart(cur, part, rich);
+        this.r.tableEdit = { id, table: draft, part };
+        repaint(before);
+        repaint(draft);
+      },
+      keys: (e: KeyboardEvent) => {
+        if (e.key !== 'Tab' || typeof part === 'string' || e.ctrlKey || e.altKey || e.metaKey) return false;
+        const t = doc.shapes.get(id)?.table;
+        if (!t) return false;
+        let next = nextCell(t, part.r, part.c, e.shiftKey);
+        ed.finish();
+        if (!next && !e.shiftKey) {
+          // Tab in the last cell adds a row, as in Word
+          const cur = doc.shapes.get(id)!;
+          doc.edit('Add table row', () => this.updateTable(cur.id, insertRow(cur.table!, cur.table!.rows.length)));
+          this.changed();
+          next = { r: part.r + 1, c: 0 };
+        }
+        if (next) this.editTable(id, next);
+        return true;
+      },
+    };
+    const ed = new CaptionEditor(host, at, { runs: shown.runs, paras: shown.paras, justify, wrap }, {}, (res) => {
+      if (this.captionEd === ed) this.captionEd = null;
+      const cur = doc.shapes.get(id);
+      if (this.r.tableEdit?.id === id) {
+        const before = this.r.tableEdit.table;
+        this.r.tableEdit = null;
+        repaint(before);
+      }
+      if (!cur?.table) { this.changed(); return; }
+      let t = setPart(cur.table, part, { runs: res.runs, paras: res.paras });
+      // the text box's handle sets the width of the cell's column (or of the last column a spanning cell covers)
+      if (typeof part !== 'string' && res.wrap !== undefined && Math.abs(res.wrap - wrap) > 0.01) {
+        const last = part.c + spanOf(t, part.r, part.c) - 1;
+        t = setColumnWidth(t, last, t.cols[last] + res.wrap - wrap);
+      }
+      if (JSON.stringify(t) !== JSON.stringify(cur.table)) doc.edit('Edit table', () => this.updateTable(id, t));
+      repaint(t);
+      this.changed();
+    });
+    this.captionEd = ed;
+    if (click) ed.ed.setCaret(ed.ed.offsetAt(click.x - at.x, click.y - at.y));
+    else ed.ed.selectAll();
+    this.onChange();
+  }
+
+  /** Change a table, keeping its bounds in step with its layout. */
+  updateTable(id: number, table: NonNullable<Shape['table']>): void {
+    const s = this.doc.shapes.get(id);
+    if (!s) return;
+    const lay = this.r.tableLayout(table);
+    this.doc.dirtyRects.push(this.r.tableBox(s));
+    this.doc.updateShape(id, { table, x2: s.x1 + lay.width, y2: s.y1 + lay.height });
+    this.doc.dirtyRects.push({ x1: s.x1, y1: s.y1, x2: s.x1 + lay.width, y2: s.y1 + lay.height });
+  }
+
   // ------------------------------------------------------------------ overlay
 
   private drawOverlay(): void {
@@ -1736,7 +1875,13 @@ export class Editor {
       for (const id of s.captions) { const c = doc.captions.get(id); if (c) { const r = this.r.captionBox(c); ctx.fillRect(r.x1, r.y1, r.x2 - r.x1, r.y2 - r.y1); } }
       ctx.lineWidth = L * 0.15;
       for (const id of s.arrows) { const r = doc.arrows.get(id); if (r) strokeAlong(ctx, arrowPoints(r)); }
-      for (const id of s.shapes) { const sh = doc.shapes.get(id); if (sh) outlineShape(ctx, sh); }
+      for (const id of s.shapes) {
+        const sh = doc.shapes.get(id);
+        // a table being typed into shows only a thin frame, so its text stays easy to read
+        if (sh && id === this.r.tableEdit?.id) { const b = this.r.tableBox(sh); ctx.save(); ctx.lineWidth = px; ctx.strokeRect(b.x1, b.y1, b.x2 - b.x1, b.y2 - b.y1); ctx.restore(); }
+        else if (sh?.kind === 'table') { const b = this.r.tableBox(sh); ctx.fillRect(b.x1, b.y1, b.x2 - b.x1, b.y2 - b.y1); }
+        else if (sh) outlineShape(ctx, sh);
+      }
     }
     // hotspot
     const h = this.drag?.mode === 'move' || this.drag?.mode === 'rotate' ? null : this.hotspot();

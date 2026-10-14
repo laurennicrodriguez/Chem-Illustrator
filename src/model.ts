@@ -226,7 +226,8 @@ export interface Arrow {
 
 export interface Shape {
   id: number;
-  kind: 'line' | 'rect' | 'oval' | 'symbol' | 'bracket' | 'picture';
+  kind: 'line' | 'rect' | 'oval' | 'symbol' | 'bracket' | 'picture' | 'table';
+  /** x1, y1 is the top left corner; for a table x2, y2 follow from its layout and are kept up to date when it changes. */
   x1: number;
   y1: number;
   x2: number;
@@ -254,6 +255,40 @@ export interface Shape {
   crop?: { l: number; t: number; r: number; b: number };
   color?: string;
   z?: number;
+  /** A table: its cells, column widths and rules (see table.ts). */
+  table?: TableData;
+}
+
+/** One cell of a table. */
+export interface TableCell {
+  runs: TextRun[];
+  paras?: ParaStyle[];
+  /** This cell's own alignment, in place of its column's. */
+  align?: Justify;
+  /** Number of columns the cell spans (the cells it covers are left empty). */
+  span?: number;
+}
+
+/**
+ * A table in a drawing or on a slide. It is never changed in place: every edit makes a new one,
+ * so undo and the renderer's cached layouts can rely on it staying as it is.
+ */
+export interface TableData {
+  /** Width of each column, in points. */
+  cols: number[];
+  /** The cells, row by row (every row has one cell per column). */
+  rows: TableCell[][];
+  /** How many rows at the top are headings. */
+  head: number;
+  /** ACS style (rules above and below the headings and under the last row), every cell boxed, or no lines. */
+  lines: 'acs' | 'grid' | 'none';
+  /** How each column lines up (the first is left, the others centred, when not given). */
+  align?: Justify[];
+  /** Text size in points for runs that don't give one (the drawing's caption size when not given). */
+  size?: number;
+  /** The title above the table ("Table 1. Optimization of…") and the footnotes below it. */
+  title?: TextRun[];
+  notes?: TextRun[];
 }
 
 export type Entity = Atom | Bond | Caption | Arrow | Shape;

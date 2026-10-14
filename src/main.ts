@@ -1,8 +1,9 @@
-// The app window: menus, a tab for each open file (drawings and slide decks), the toolbar, the
-// drawing area (with the slide list and notes in Slides mode), and the panels on the right.
+// The app window: menus, a tab for each open file (drawings, slide decks and sheets), the
+// toolbar, the drawing area (with the slide list and notes in Slides mode, or the grid in Sheet
+// mode), and the panels on the right.
 
 import './app.css';
-import { Doc, Atom, Caption, Shape } from './model';
+import { Doc, Atom, Caption, Shape, Contents } from './model';
 import { Renderer, measureText } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
 import type { Align } from './editor/arrange';
@@ -11,7 +12,9 @@ import { ChemClient } from './chem/client';
 import { toMolfile, addMolfile } from './chem/molfile';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, fitPasted, Pasted } from './io/clipboard';
+import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, fitPasted, Pasted,
+  nativeFirst, writeNativeFormats, looksLikeCdxml, cfHtml, CELLS_FORMAT, OWN_FORMAT, CDX_FORMAT } from './io/clipboard';
+import { cdxToCdxml } from './io/cdx';
 import { writeCdxml } from './io/cdxml-write';
 import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE_EXTENSIONS } from './io/files';
 import { Workspace, Tab } from './workspace';
@@ -31,7 +34,7 @@ import { templateIcon } from './ui/template-icons';
 import { StructureChecks } from './chem/warnings';
 import { LiveStereo } from './chem/live-stereo';
 import { setStereoShown } from './chem/stereo';
-import { keymap, registerToolNames, displayChord, actionName, KeyContext, KeyOverrides } from './editor/keymap';
+import { keymap, registerToolNames, displayChord, actionName, chordOf, parseAction, KeyContext, KeyOverrides } from './editor/keymap';
 import { loadSettings, saveSettings, settingsLocation, Settings } from './settings';
 import { HotkeysDialog } from './ui/hotkeys-dialog';
 import { TypingDialog } from './ui/typing-dialog';
@@ -41,6 +44,16 @@ import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
 import { NameDialog } from './ui/name-dialog';
+import { SheetMode, ClipboardCells } from './ui/sheet-mode';
+import { SheetChem } from './sheet/sheet-chem';
+import { structureDoc, structureMolfile } from './sheet/structure-doc';
+import { StructurePictures } from './ui/structure-pictures';
+import { structurePlace } from './sheet/layout';
+import { readSheetFile, writeSheetFile, SheetFileDeps } from './io/sheet-files';
+import { ACS_1996, DocStyle } from './style';
+import { emptyTable, tableFromCells } from './table';
+import type { TableData } from './model';
+import type { PastedRows } from './io/table-clip';
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -80,6 +93,8 @@ const startMs = performance.now();
 
 function resize(): void {
   const r = host.getBoundingClientRect();
+  // hidden (a sheet is showing): keep the last size
+  if (r.width < 1 || r.height < 1) return;
   renderer.resize(r.width, r.height, window.devicePixelRatio || 1);
   editor.requestScene();
 }
@@ -230,7 +245,7 @@ editor.setTool('bond-single');
 
 $('#btn-undo').addEventListener('click', () => undo());
 $('#btn-redo').addEventListener('click', () => redo());
-$('#btn-fit').addEventListener('click', () => editor.fit());
+$('#btn-fit').addEventListener('click', () => command('zoom-fit'));
 $('#btn-stress').addEventListener('click', () => stressTest(Number($<HTMLSelectElement>('#stress-n').value)));
 $('#btn-help').addEventListener('click', () => openHelp());
 $('#help-hotkeys').addEventListener('click', () => { $<HTMLDialogElement>('#help').close(); hotkeysDialog.open(); });
@@ -262,8 +277,9 @@ async function dropFiles(files: File[], at: { x: number; y: number }): Promise<v
   const inside = at.x >= r.left && at.x <= r.right && at.y >= r.top && at.y <= r.bottom;
   for (const f of files) {
     const bytes = new Uint8Array(await f.arrayBuffer());
-    const mime = /\.(cdxml|cdx|pptx)$/i.test(f.name) ? null : pictureMime(f.name, bytes);
-    if (mime) placePicture(bytes, mime, inside ? renderer.toDoc(at.x - r.left, at.y - r.top) : null);
+    const mime = /\.(cdxml|cdx|pptx|xlsx|csv|tsv|txt|sdf?)$/i.test(f.name) ? null : pictureMime(f.name, bytes);
+    if (mime && sheetActive()) flash('Pictures can\'t go in a cell yet. Drop sheet files (.xlsx, .csv, .sdf) to open them.');
+    else if (mime) placePicture(bytes, mime, inside ? renderer.toDoc(at.x - r.left, at.y - r.top) : null);
     else await ws.openBytes(bytes, f.name);
   }
 }
@@ -308,8 +324,9 @@ function paste(): void {
 
 // In a browser, Ctrl+V arrives as a paste event, which carries the clipboard's text.
 window.addEventListener('paste', (e) => {
-  if (isTyping(e.target)) return;
+  if (isTyping(e.target) || (e.target as HTMLElement | null)?.closest?.('dialog')) return;
   e.preventDefault();
+  if (sheetActive()) { void sheetMode.paste(nativeClipboard ? null : e); return; }
   if (nativeClipboard) paste();
   else void pasteFrom(() => readPasteEvent(e));
 });
@@ -331,7 +348,46 @@ async function pasteFrom(read: () => Pasted | Promise<Pasted>): Promise<void> {
     editor.changed();
   } else if (got.kind === 'text') await pasteChemistry(got.text);
   else if (got.kind === 'picture') placePicture(got.bytes, got.mime, null);
+  else if (got.kind === 'table') pasteTable(got.rows);
   else flash('There is nothing to paste.');
+}
+
+/** Cells from Excel, Word or a sheet become a table in the ACS style, with the first row as headings. */
+function pasteTable(rows: PastedRows): void {
+  const t = tableFromCells(rows, textMeasure, doc.style.captionSize);
+  placeTable(t, 'Paste table');
+  flash(`Pasted a table of ${t.rows.length} rows and ${t.cols.length} columns. Double-click a cell to type; the Style panel has its rows, columns and lines.`, 7000);
+}
+
+const textMeasure = (t: string, size: number, family: string, style: string) => measureText(t, size, family, style);
+
+/** Put a table in the middle of the window (or slide), selected. */
+function placeTable(t: TableData, label: string): number {
+  finishTyping();
+  renderer.useStyle(doc);
+  const lay = renderer.tableLayout(t);
+  const c = pasteCentre();
+  const x1 = c.x - lay.width / 2, y1 = c.y - lay.height / 2;
+  let id = 0;
+  doc.edit(label, () => { id = doc.addShape({ kind: 'table', x1, y1, x2: x1 + lay.width, y2: y1 + lay.height, table: t }).id; });
+  editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set([id]) };
+  editor.tablePart = { id, part: { r: 0, c: 0 } };
+  editor.changed();
+  return id;
+}
+
+/** Insert > Table: an empty table of the rows and columns asked for, ready to type into. */
+async function insertTable(): Promise<void> {
+  finishTyping();
+  const got = await ask('Insert Table', [
+    { name: 'rows', label: 'Rows', value: '4', type: 'number' },
+    { name: 'cols', label: 'Columns', value: '3', type: 'number' },
+  ], { ok: 'Insert', note: 'An ACS-style table: a rule above and below the heading row and under the last row. The Style panel changes the lines, headings, rows and columns.' });
+  if (!got) return;
+  const rows = Math.max(1, Math.min(500, Math.round(Number(got.rows) || 4)));
+  const cols = Math.max(1, Math.min(60, Math.round(Number(got.cols) || 3)));
+  const id = placeTable(emptyTable(rows, cols, doc.style.captionSize), 'Insert table');
+  editor.editTable(id, { r: 0, c: 0 });
 }
 
 /** Where pasted things go: the middle of the slide in Slides mode, else the middle of the window. */
@@ -379,11 +435,11 @@ async function nameToMolfile(name: string): Promise<{ mb: string; attach: number
   return { mb, attach: attachmentAtoms(r.smiles), warnings: [...r.warnings, ...cxNotes(r.smiles)] };
 }
 
-/** Adds a named structure centred at (x, y), its attachment points drawn as wavy lines. Use inside doc.edit. */
-function addNamed(got: { mb: string; attach: number[] }, x: number, y: number): number[] {
-  const ids = addMolfile(doc, got.mb, x, y);
+/** Adds a named structure centred at (x, y), its attachment points drawn as wavy lines. Use inside doc.edit (or `to`'s bulk). */
+function addNamed(got: { mb: string; attach: number[] }, x: number, y: number, to: Doc = doc): number[] {
+  const ids = addMolfile(to, got.mb, x, y);
   for (const i of got.attach) {
-    if (ids[i] !== undefined) doc.updateAtom(ids[i], { attach: 'Wavy', attachNum: undefined, z: 0, label: null, charge: 0 });
+    if (ids[i] !== undefined) to.updateAtom(ids[i], { attach: 'Wavy', attachNum: undefined, z: 0, label: null, charge: 0 });
   }
   return ids;
 }
@@ -561,14 +617,56 @@ const layoutSel = $<HTMLSelectElement>('#rb-layout');
 const sizeSel = $<HTMLSelectElement>('#rb-size');
 const presenter = new Presenter();
 
-// Each mode keeps its own tool: slides start with Select (click a placeholder to type), drawings with a bond.
-/** View > Mode Colours: blue for drawings, orange for slides, or the person's own colours. */
+/** View > Mode Colours: blue for drawings, orange for slides, green for sheets, or the person's own colours. */
 let modeColours: ModeColours = { ...DEFAULT_MODE_COLOURS };
-const modeTool: Record<Tab['mode'], string> = { drawing: 'bond-single', slides: 'select' };
+// Each mode keeps its own tool: slides start with Select (click a placeholder to type), drawings
+// and structures drawn for sheet cells with a bond.
+const modeTool: Record<Tab['mode'], string> = { drawing: 'bond-single', slides: 'select', sheet: 'bond-single' };
+
+// ---------------------------------------------------------------- sheets
+
+// Properties of the structures in sheets (formula, MW, HRMS…), worked out by the chemistry engine
+const sheetChem = new SheetChem(chem, (c) => structureMolfile(c, ws.active.book?.drawingStyle ?? ACS_1996));
+
+// Pictures of structures for Excel files, drawn in the workbook's drawing style
+const filePictures = new WeakMap<DocStyle, StructurePictures>();
+function picturesFor(style: DocStyle): StructurePictures {
+  let p = filePictures.get(style);
+  if (!p) { p = new StructurePictures(() => style); filePictures.set(style, p); }
+  return p;
+}
+
+/** Twice the screen's pixels, so pictures stay sharp when Excel is zoomed in. */
+const FILE_PICTURE_SCALE = 2;
+
+const sheetFiles: SheetFileDeps = {
+  settled: () => sheetChem.settled(),
+  box: (s, style) => picturesFor(style).box(s),
+  // the picture covers the cell as the grid shows it: its fill, and the structure where it sits
+  picture: async (s, style, cell) => {
+    const pics = picturesFor(style);
+    const S = FILE_PICTURE_SCALE;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(cell.w * S));
+    canvas.height = Math.max(1, Math.round(cell.h * S));
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = cell.fill ?? '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // the picture sits inside the gridlines: place the structure as in the whole cell
+    const p = structurePlace(pics.box(s), { x: -1, y: -1, w: cell.w + 2, h: cell.h + 2 }, cell.align, cell.valign);
+    if (p.k > 0) {
+      const bmp = pics.bitmap(s, p.k * S, true);
+      if (bmp) ctx.drawImage(bmp, p.x * S, p.y * S, p.w * S, p.h * S);
+    }
+    return new Uint8Array(await (await canvasPng(canvas)).arrayBuffer());
+  },
+  rowHeights: (s) => sheetMode.view.autoHeights(s),
+};
 
 const ws: Workspace = new Workspace(doc, {
   leave: (tab) => {
     finishTyping();
+    if (tab.mode === 'sheet') sheetMode.leave();
     modeTool[tab.mode] = editor.toolName;
     editor.cropping = null;
     tab.view = { ...renderer.view };
@@ -587,6 +685,10 @@ const ws: Workspace = new Workspace(doc, {
     svgToPng,
   },
   measure: measureText,
+  sheets: {
+    read: (bytes, name) => readSheetFile(bytes, name, sheetFiles),
+    write: (book, name) => writeSheetFile(book, name, sheetFiles),
+  },
 });
 
 /** The slide deck showing (in Slides mode), or null for a drawing. */
@@ -594,8 +696,9 @@ function deckNow(): Deck | null {
   return ws.active.mode === 'slides' ? ws.active.deck : null;
 }
 
-/** Finish typing in a caption or the notes, before the slide or tab changes. */
+/** Finish typing in a caption or the notes (and drawing a structure for a cell), before the slide or tab changes. */
 function finishTyping(): void {
+  finishCellStructure(true);
   editor.closeCaption();
   flushNotes();
 }
@@ -604,9 +707,14 @@ function finishTyping(): void {
 function enterTab(tab: Tab, opened: boolean): void {
   const deck = tab.deck;
   const slides = !!deck;
+  const sheet = tab.mode === 'sheet';
   document.body.classList.toggle('slides-mode', slides);
+  document.body.classList.toggle('sheet-mode', sheet);
   applyModeColours(tab.mode, modeColours);
   for (const el of document.querySelectorAll<HTMLElement>('.slides-only')) el.hidden = !slides;
+  showSheetParts();
+  editor.paused = sheet;
+  sheetMode.show(sheet ? tab : null);
   renderer.screen = slides;
   renderer.page = slides ? slidePage : null;
   editor.slideKeys = slides;
@@ -633,6 +741,8 @@ function enterTab(tab: Tab, opened: boolean): void {
   refreshKeys();
   analysisKey = '';
   scheduleAnalysis(true);
+  if (sheet) $('#hint').textContent = SHEET_HINT;
+  else editor.onToolChange(editor.toolName);
 }
 
 /** The slide's background, logo, number and footer, drawn under its drawing. */
@@ -757,8 +867,9 @@ function flushNotes(): void {
   if (i >= 0) f.deck.setNotes(notesBox.value, i);
 }
 
-/** Undo and Redo: in Slides mode the deck's history covers every slide and the slide list. */
+/** Undo and Redo: in Slides mode the deck's history covers every slide and the slide list; a sheet has its own. */
 function undo(): void {
+  if (sheetActive()) { sheetMode.undo(); return; }
   const d = deckNow();
   if (!d) { editor.undo(); return; }
   finishTyping();
@@ -766,6 +877,7 @@ function undo(): void {
 }
 
 function redo(): void {
+  if (sheetActive()) { sheetMode.redo(); return; }
   const d = deckNow();
   if (!d) { editor.redo(); return; }
   finishTyping();
@@ -783,8 +895,8 @@ function renderTabs(): void {
     el.title = (t.ref.kind === 'path' ? t.ref.path : t.name) + (t.dirty ? ' (not saved)' : '');
     const icon = document.createElement('span');
     icon.className = 'tab-icon';
-    icon.textContent = t.mode === 'slides' ? 'P' : 'D';
-    icon.title = t.mode === 'slides' ? 'Slides' : 'Drawing';
+    icon.textContent = t.mode === 'slides' ? 'P' : t.mode === 'sheet' ? 'X' : 'D';
+    icon.title = t.mode === 'slides' ? 'Slides' : t.mode === 'sheet' ? 'Sheet' : 'Drawing';
     const name = document.createElement('span');
     name.className = 'tab-name';
     name.textContent = t.name;
@@ -807,10 +919,10 @@ function renderTabs(): void {
     b.type = 'button';
     b.textContent = label;
     b.title = title;
-    b.addEventListener('click', () => COMMANDS[cmd]());
+    b.addEventListener('click', () => command(cmd));
     return b;
   };
-  tabsEl.replaceChildren(...items, add('+ Drawing', 'New drawing', 'new'), add('+ Slides', 'New slides', 'new-slides'));
+  tabsEl.replaceChildren(...items, add('+ Drawing', 'New drawing', 'new'), add('+ Slides', 'New slides', 'new-slides'), add('+ Sheet', 'New sheet', 'new-sheet'));
   tabsEl.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
@@ -1006,9 +1118,281 @@ async function pdfImage(src: string): Promise<PdfImage | null> {
   return { kind: 'raw', w, h, rgb, alpha: clear ? alpha : null };
 }
 
+// ---------------------------------------------------------------- sheets: the grid, and structures drawn for cells
+
+const SHEET_HINT = 'Type in a cell, or double-click to change it. Sheet > Draw Structure puts a structure in a cell; Insert Property Columns works out formula, MW, HRMS m/z and more.';
+
+/** True when a sheet is showing (and no structure is being drawn for one of its cells). */
+function sheetActive(): boolean {
+  return ws.active.mode === 'sheet' && !cellEdit;
+}
+
+const sheetMode = new SheetMode({
+  flash,
+  editStructure: (contents, title, done) => editCellStructure(contents, title, done),
+  key: (e) => sheetKey(e),
+  changed: () => ws.noteChange(),
+  toStructure: (text, style) => textToStructure(text, style),
+  writeCells: (own, text, html) => writeCells(own, text, html),
+  copyStructure: async (contents, style) => (await copyDrawing(structureDoc(contents, style), null)).replace(/^Copied the whole drawing/, 'Copied the structure'),
+  readCells: (e) => readCells(e),
+}, sheetChem);
+
+/** The style structures in the sheet showing are drawn in. */
+const sheetStyle = (): DocStyle => ws.active.book?.drawingStyle ?? ACS_1996;
+
+/** The sheet's ribbon, menu and grid show with a sheet; the drawing menus only while drawing a structure for a cell. */
+function showSheetParts(): void {
+  const sheet = ws.active.mode === 'sheet';
+  for (const el of document.querySelectorAll<HTMLElement>('.sheet-only')) el.hidden = !sheet;
+  for (const el of document.querySelectorAll<HTMLElement>('.no-sheet')) el.hidden = sheet;
+  for (const el of document.querySelectorAll<HTMLElement>('.draw-only')) el.hidden = sheet && !cellEdit;
+  $('#sheet-menu-wrap').hidden = !sheet || !!cellEdit;
+}
+
+/** A key pressed in a sheet: Excel's keys first, then the menu keys that use Ctrl, Alt or a function key. */
+function sheetKey(e: KeyboardEvent): boolean {
+  const chord = chordOf(e);
+  if (!chord) return false;
+  // Alt+← and Alt+→ would go back and forward in a browser, leaving the page
+  if (chord === 'Alt+ArrowLeft' || chord === 'Alt+ArrowRight') return true;
+  for (const ctx of ['sheet', 'command'] as KeyContext[]) {
+    const action = keymap.lookup(ctx, chord);
+    if (!action) continue;
+    // plain keys type in cells and arrows move between them, so the drawing's plain keys don't apply
+    if (ctx === 'command' && !/^(Ctrl|Alt)\+|^(Shift\+)?F\d+$/.test(chord)) continue;
+    const { verb, arg } = parseAction(action);
+    if (verb !== 'command') continue;
+    if ((arg === 'copy' || arg === 'cut') && textSelected()) return false;
+    // in a browser, Ctrl+V goes on to the paste event, which can read the clipboard
+    if (arg === 'paste' && !nativeClipboard) return false;
+    if (command(arg)) return true;
+  }
+  return false;
+}
+
+/** A SMILES string, molfile or name as a drawing, for a cell. */
+async function textToStructure(text: string, style: DocStyle): Promise<{ contents: Contents; notes: string[] } | { error: string }> {
+  const t = text.trim();
+  if (!t) return { error: 'Type a name or SMILES.' };
+  if (!chem.ready) return { error: 'The chemistry engine is still loading; try again in a moment.' };
+  let got: { mb: string; attach: number[]; warnings: string[] } | null = null;
+  if (t.includes('M  END')) got = { mb: t, attach: [], warnings: [] };
+  else if (!/\s/.test(t)) {
+    const mb = await chem.smilesToMol(t).catch(() => null);
+    if (mb) got = { mb, attach: [], warnings: [] };
+  }
+  if (!got) {
+    const named = await nameToMolfile(t);
+    if ('error' in named) return { error: `"${t}" isn't SMILES, and couldn't be read as a name: ${named.error}` };
+    got = named;
+  }
+  const d = new Doc();
+  d.style = { ...style };
+  try {
+    d.bulk(() => { addNamed(got!, 0, 0, d); });
+  } catch (err) {
+    return { error: String(err) };
+  }
+  return { contents: d.contents(), notes: got.warnings };
+}
+
+/**
+ * Cells to the clipboard: our own copy (formulas, structures and formats), an HTML table (Excel
+ * and Word keep bold, colours and borders) and tab-separated text.
+ */
+async function writeCells(own: string, text: string, html: string): Promise<void> {
+  if (nativeClipboard) {
+    const enc = new TextEncoder();
+    await writeNativeFormats([[CELLS_FORMAT, enc.encode(own)], ['HTML Format', cfHtml(html)], ['CF_UNICODETEXT', enc.encode(text)]]);
+    return;
+  }
+  try {
+    await navigator.clipboard.write([new ClipboardItem({ 'text/plain': new Blob([text], { type: 'text/plain' }), 'text/html': new Blob([html], { type: 'text/html' }) })]);
+  } catch {
+    await navigator.clipboard.writeText(text);
+  }
+}
+
+/** What's on the clipboard for a paste into a sheet. Drawings (from here or ChemDraw) stay structures. */
+async function readCells(e: ClipboardEvent | null): Promise<ClipboardCells> {
+  const dec = (b: Uint8Array) => new TextDecoder().decode(b).replace(/\0+$/, '');
+  const drawingOf = (d: Doc): Contents => { fitPasted(d, sheetStyle()); return d.contents(); };
+  if (nativeClipboard) {
+    const t = await nativeFirst(['CF_UNICODETEXT']);
+    const text = t ? dec(t[1]) : undefined;
+    const own = await nativeFirst([CELLS_FORMAT]);
+    if (own) return { own: dec(own[1]), text };
+    const drawing = await nativeFirst([OWN_FORMAT, CDX_FORMAT]);
+    if (drawing) {
+      const [name, data] = drawing;
+      return { drawing: drawingOf(readCdxml(name === CDX_FORMAT ? cdxToCdxml(data) : dec(data)).doc), text };
+    }
+    if (text && looksLikeCdxml(text)) return { drawing: drawingOf(readCdxml(text).doc) };
+    if (text) return { text };
+    return { picture: !!(await nativeFirst(['PNG', 'CF_ENHMETAFILE', 'CF_DIB'])) };
+  }
+  const text = e ? e.clipboardData?.getData('text/plain') ?? '' : await navigator.clipboard.readText().catch(() => '');
+  if (looksLikeCdxml(text)) return { drawing: drawingOf(readCdxml(text).doc) };
+  if (text) return { text };
+  if (!e) return {};
+  // a drawing copied here goes on the clipboard as a picture; the drawing itself is kept for pasting back
+  const p = await readPasteEvent(e);
+  if (p.kind === 'drawing') return { drawing: drawingOf(p.doc) };
+  return { picture: p.kind === 'picture' };
+}
+
+/** The structure in the selected cell as a drawing (for Copy as Molfile and CDXML text). */
+function activeStructureDoc(): Doc | null {
+  const c = sheetMode.activeStructure();
+  return c ? structureDoc(c, sheetStyle()) : null;
+}
+
+// Drawing a structure for a cell: the drawing area floats over the sheet, with Done and Cancel.
+// The cell's drawing is swapped into the editor's document while it's drawn (the sheet's tab
+// leaves that document empty), so every drawing tool, key and check works on it as usual.
+let cellEdit: { done: (c: Contents | null) => void; saved: Doc } | null = null;
+
+function editCellStructure(contents: Contents | null, title: string, done: (c: Contents | null) => void): void {
+  finishCellStructure(true);
+  const blank: Contents = { atoms: [], bonds: [], captions: [], arrows: [], shapes: [] };
+  const drawing = structureDoc(contents ?? blank, sheetStyle());
+  editor.clearSelection();
+  doc.swap(drawing);
+  cellEdit = { done, saved: drawing };
+  document.body.classList.add('sheet-structure');
+  $('#structure-title').textContent = title;
+  $('#structure-bar').hidden = false;
+  showSheetParts();
+  editor.paused = false;
+  editor.lastEdited = null;
+  editor.cropping = null;
+  if (editor.toolName !== modeTool.sheet) editor.setTool(modeTool.sheet);
+  editor.onToolChange(editor.toolName);
+  resize();
+  // the structure in the middle, at a comfortable size (a new one starts at the middle)
+  const b = doc.bounds();
+  const w = renderer.width, h = renderer.height;
+  const k = b ? Math.min(2.5, 0.8 * Math.min(w / Math.max(20, b.x2 - b.x1), h / Math.max(20, b.y2 - b.y1))) : 2;
+  renderer.view = { ...renderer.view, scale: k, ox: w / 2 - (b ? (b.x1 + b.x2) / 2 : 0) * k, oy: h / 2 - (b ? (b.y1 + b.y2) / 2 : 0) * k };
+  renderer.repaintAll();
+  editor.frame(true);
+  refreshKeys();
+  analysisKey = '';
+  scheduleAnalysis(true);
+  overlay.focus();
+}
+
+/** Done (keep the drawing) or Cancel. The cell only changes when something was drawn. */
+function finishCellStructure(keep: boolean): void {
+  const e = cellEdit;
+  if (!e) return;
+  editor.closeCaption();
+  cellEdit = null;
+  const result = keep && doc.canUndo() ? doc.contents() : null;
+  modeTool.sheet = editor.toolName;
+  editor.clearSelection();
+  editor.lastEdited = null;
+  editor.cropping = null;
+  doc.swap(e.saved);
+  document.body.classList.remove('sheet-structure');
+  $('#structure-bar').hidden = true;
+  const sheet = ws.active.mode === 'sheet';
+  editor.paused = sheet;
+  showSheetParts();
+  refreshKeys();
+  if (sheet) $('#hint').textContent = SHEET_HINT;
+  e.done(result);
+  if (!result && sheet) sheetMode.focus();
+}
+
+$('#structure-done').addEventListener('click', () => finishCellStructure(true));
+$('#structure-cancel').addEventListener('click', () => finishCellStructure(false));
+// clicking the sheet behind the drawing finishes it (as Done)
+$('#sheet-pane').addEventListener('pointerdown', (e) => {
+  if (!cellEdit) return;
+  e.preventDefault();
+  e.stopPropagation();
+  finishCellStructure(true);
+}, true);
+window.addEventListener('keydown', (e) => {
+  // Ctrl+Enter: Done
+  if (cellEdit && e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !isTyping(e.target)) {
+    e.preventDefault();
+    e.stopPropagation();
+    finishCellStructure(true);
+  }
+}, true);
+// keys while a sheet shows but the grid doesn't have the focus (after clicking a tab or a menu)
+window.addEventListener('keydown', (e) => {
+  if (!sheetActive() || e.defaultPrevented) return;
+  const t = e.target as HTMLElement | null;
+  if (isTyping(t) || t?.closest?.('dialog, .menu, .menu-wrap, #sheet-pane, select')) return;
+  if (sheetKey(e)) { e.preventDefault(); return; }
+  if (!t || t === document.body) sheetMode.focus();
+});
+
+/** Menu commands that work differently while a sheet shows. */
+const SHEET_COMMANDS: Record<string, () => unknown> = {
+  cut: () => sheetMode.copy(true),
+  copy: () => sheetMode.copy(),
+  paste: () => sheetMode.paste(null),
+  'select-all': () => sheetMode.selectAll(),
+  'copy-smiles': async () => {
+    if (!chem.ready) { flash('The chemistry engine is still loading.'); return; }
+    const smiles = await sheetMode.copySmiles();
+    if (!smiles) { flash('Select cells with structures in them to copy their SMILES.'); return; }
+    const n = smiles.split('\n').length;
+    await copyText(smiles, n > 1 ? `Copied ${n} SMILES, one per line.` : 'Copied SMILES: ' + smiles);
+  },
+  'paste-smiles': async () => {
+    let text = '';
+    try {
+      text = (await readClipboardText()).trim();
+    } catch (err) {
+      flash('Could not read the clipboard: ' + String(err));
+      return;
+    }
+    if (!text) { flash('The clipboard has no text on it.'); return; }
+    await sheetMode.structureFromText(text);
+  },
+  'copy-mol': () => {
+    const d = activeStructureDoc();
+    if (!d) { flash('Select a cell with a structure in it.'); return; }
+    return copyText(toMolfile(d, d.atoms.keys()).molblock, 'Copied as molfile text.');
+  },
+  'copy-cdxml': () => {
+    const d = activeStructureDoc();
+    if (!d) { flash('Select a cell with a structure in it.'); return; }
+    return copyText(writeCdxml(d, { name: 'Clipboard.cdxml', textMeasure: measureText }), 'Copied as CDXML text.');
+  },
+  'name-to-structure': () => sheetMode.run('structure-from-name'),
+  'zoom-in': () => sheetMode.view.setZoom(sheetMode.view.zoom * 1.25),
+  'zoom-out': () => sheetMode.view.setZoom(sheetMode.view.zoom * 0.8),
+  'zoom-fit': () => sheetMode.view.setZoom(1),
+  'zoom-actual': () => sheetMode.view.setZoom(1),
+};
+
+/** Menu commands that work the same whatever shows. */
+const ANY_TAB = new Set(['new', 'new-slides', 'new-sheet', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+  'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'clipboard-formats']);
+
+/** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
+function command(name: string): boolean {
+  if (sheetActive()) {
+    const own = SHEET_COMMANDS[name];
+    if (own) return own() !== false;
+    if (sheetMode.run(name)) return true;
+    if (!ANY_TAB.has(name)) return false;
+  }
+  const run = COMMANDS[name];
+  return !!run && run() !== false;
+}
+
 const COMMANDS: Record<string, () => unknown> = {
   new: () => { finishTyping(); ws.newDrawing(); },
   'new-slides': () => { finishTyping(); ws.newSlides(); },
+  'new-sheet': () => { finishTyping(); ws.newSheet(); },
   open: () => ws.open(),
   save: () => { finishTyping(); return ws.save(); },
   'save-as': () => { finishTyping(); return ws.saveAs(); },
@@ -1020,6 +1404,7 @@ const COMMANDS: Record<string, () => unknown> = {
   undo: () => undo(),
   redo: () => redo(),
   'insert-picture': () => insertPicture(),
+  'insert-table': () => { void insertTable(); },
   crop: () => cropPicture(),
   'text-box': () => { editor.setTool('text'); flash('Click to type, or drag across to make a text box that wraps.'); },
   'new-slide': () => newSlide(),
@@ -1120,7 +1505,7 @@ for (const m of menus) {
     const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button')?.dataset.cmd;
     if (!cmd) return;
     showMenu(null);
-    COMMANDS[cmd]?.();
+    command(cmd);
   });
   m.list.addEventListener('keydown', (e) => {
     const items = [...m.list.querySelectorAll<HTMLButtonElement>('button:not([hidden])')];
@@ -1148,9 +1533,7 @@ editor.runCommand = (name) => {
   if ((name === 'copy' || name === 'cut') && textSelected()) return false;
   // in a browser, Ctrl+V goes on to the paste event, which can read the clipboard
   if (name === 'paste' && !nativeClipboard) return false;
-  const run = COMMANDS[name];
-  if (!run) return false;
-  return run() !== false;
+  return command(name);
 };
 
 // ---------------------------------------------------------------- settings and the Hotkeys window
@@ -1174,20 +1557,21 @@ function storeSettings(): void {
   saveSettings(s, (msg) => flash(msg, 10000));
 }
 
-/** The key for a menu command as things are now (in Slides mode, PowerPoint's keys come first). */
+/** The key for a menu command as things are now (in Slides mode PowerPoint's keys come first, in sheets Excel's). */
 function commandKey(cmd: string): string | undefined {
-  const own = editor.slideKeys ? keysOf('slides', `command ${cmd}`)[0] : undefined;
+  const first: KeyContext | null = sheetActive() ? 'sheet' : editor.slideKeys ? 'slides' : null;
+  const own = first ? keysOf(first, `command ${cmd}`)[0] : undefined;
   if (own) return own;
-  // a key the slides use for something else does not do this command while slides show
-  const k = keymap.keysFor('command', `command ${cmd}`).find((c) => !editor.slideKeys || !keymap.lookup('slides', c));
+  // a key the slides or sheets use for something else does not do this command while they show
+  const k = keymap.keysFor('command', `command ${cmd}`).find((c) => !first || !keymap.lookup(first, c));
   return k ? displayChord(k, isMac) : undefined;
 }
 
 /** Show the current keys in the menus and tool tips, and tick the options that are on. */
 function refreshKeys(): void {
-  for (const b of document.querySelectorAll<HTMLButtonElement>('.menu button[data-cmd], #ribbon button[data-cmd]')) {
-    const k = commandKey(b.dataset.cmd!);
-    if (b.closest('#ribbon')) {
+  for (const b of document.querySelectorAll<HTMLButtonElement>('.menu button[data-cmd], .ribbon button[data-cmd], .ribbon button[data-sh]')) {
+    const k = commandKey((b.dataset.cmd ?? b.dataset.sh)!);
+    if (b.closest('.ribbon')) {
       const base = b.dataset.tip ?? (b.dataset.tip = b.title);
       b.title = k ? `${base} (${k})` : base;
       continue;
@@ -1620,6 +2004,13 @@ function updatePanels(): void {
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
 stylePanel.cropWithMouse = () => cropPicture();
+stylePanel.tables = {
+  part: () => editor.tablePart,
+  setPart: (p) => { editor.tablePart = p; },
+  update: (id, t) => editor.updateTable(id, t),
+  edit: (id, part) => editor.editTable(id, part),
+  measure: textMeasure,
+};
 
 let stereoSeen = -1;
 editor.onFrame = () => {
@@ -1630,6 +2021,7 @@ editor.onFrame = () => {
 editor.onChange = () => { updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); };
 chem.onReady = () => {
   (window as any).__chemReadyMs = performance.now() - startMs;
+  sheetChem.flush();
   updatePanels();
   updateStereo();
   scheduleAnalysis(true);
@@ -1662,7 +2054,7 @@ function sampleMolecule(): void {
 // the ribbon's buttons run the same commands as the menus
 $('#ribbon').addEventListener('click', (e) => {
   const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-cmd]')?.dataset.cmd;
-  if (cmd) COMMANDS[cmd]?.();
+  if (cmd) command(cmd);
 });
 renderTabs();
 updateTitle();
@@ -1677,7 +2069,7 @@ requestAnimationFrame(() => {
 });
 
 // Hooks for the automated speed tests.
-(window as any).__app = { doc, editor, renderer, chem, live, openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names };
+(window as any).__app = { doc, editor, renderer, chem, live, openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem };
 
 // ---------------------------------------------------------------- desktop self-test
 
