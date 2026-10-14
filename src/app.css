@@ -835,3 +835,19 @@ dialog.prop-dialog { width: min(94vw, 520px); }
 .df-look { flex-wrap: wrap; padding-left: 22px; }
 .df-look button[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .df-hint { margin: 0; padding-left: 22px; font-size: 11px; }
+
+/* Scheme > Arrange: the gallery of layouts */
+dialog.arrange-dialog { width: min(94vw, 500px); margin: 64px 16px auto auto; }
+dialog.arrange-dialog::backdrop { background: transparent; }
+.arrange-opts [hidden] { display: none; }
+dialog.arrange-dialog .muted { margin: 2px 0 10px; max-width: 62ch; }
+.arrange-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.arrange-tile { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 6px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: inherit; font: inherit; cursor: pointer; }
+.arrange-tile:hover { border-color: var(--accent); }
+.arrange-tile[aria-checked='true'] { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.arrange-tile svg { width: 100%; max-width: 120px; height: auto; stroke: currentColor; stroke-width: 1.4; fill: none; }
+.arrange-tile svg marker path { fill: currentColor; stroke: none; }
+.arrange-tile svg text { font: 9px sans-serif; fill: currentColor; stroke: none; }
+.arrange-opts { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 0; }
+.arrange-opts label { display: flex; align-items: center; gap: 8px; }
+.arrange-opts input[type='number'] { width: 4.5em; font: inherit; padding: 2px 4px; }

@@ -36,6 +36,7 @@ export interface ReactionHooks {
   reset(arrowId: number): void;
   select(arrowId: number, role: Role): void;
   cleanUp(): void;
+  arrange(): void;
 }
 
 type Opt<T> = [T, string];
@@ -175,6 +176,7 @@ export class StylePanel {
       buttons.append(btn);
     };
     button('Clean Up Reaction', 'Space this step evenly: starting materials and products in line with the arrow, conditions centred on it (Ctrl+Shift+R)', () => hooks.cleanUp());
+    button('Arrange…', 'Lay the scheme out as a line, rows, a snake, down the page, a catalytic cycle or a branching tree', () => hooks.arrange());
     if (r.step) button('Work out again', 'Forget the kept roles and work them out from where things sit', () => hooks.reset(r.id));
     this.body.appendChild(buttons);
   }

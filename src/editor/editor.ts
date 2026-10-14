@@ -1137,6 +1137,7 @@ export class Editor {
 
   /** Sizes of labels and captions, for lining things up. Very large selections go by atom positions. */
   measure(): Measure {
+    this.r.invalidate(this.doc);
     if (this.sel.atoms.size > 5000) return { ...POINTS, captionBox: (c) => this.r.captionBox(c) };
     return { atomBoxes: (a) => this.r.atomInfo(this.doc, a).boxes, captionBox: (c) => this.r.captionBox(c) };
   }
@@ -1255,6 +1256,7 @@ export class Editor {
 
   /** Label and caption sizes for every atom (schemes need whole structures, however big the selection). */
   private fullMeasure(): Measure {
+    this.r.invalidate(this.doc);
     return { atomBoxes: (a) => this.r.atomInfo(this.doc, a).boxes, captionBox: (c) => this.r.captionBox(c) };
   }
 

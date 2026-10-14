@@ -44,6 +44,7 @@ import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
 import { NameDialog } from './ui/name-dialog';
+import { ArrangeDialog } from './ui/arrange-dialog';
 import { SheetMode, ClipboardCells } from './ui/sheet-mode';
 import { DocumentMode, DocPaste } from './ui/doc-mode';
 import { setScreenMeasure, figures } from './document/doc-file';
@@ -452,6 +453,7 @@ function addNamed(got: { mb: string; attach: number[] }, x: number, y: number, t
   return ids;
 }
 
+const arrangeDialog = new ArrangeDialog({ apply: (o) => editor.arrangeScheme(o), undo: () => editor.undo() });
 const nameDialog = new NameDialog(async (name) => {
   const got = await nameToMolfile(name);
   if ('error' in got) return got.error;
@@ -1686,6 +1688,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'mode-colours': () => modeDialog.open(),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
+  'arrange-scheme': () => arrangeDialog.open(),
   'show-roles': () => { editor.showRoles = !editor.showRoles; $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(editor.showRoles)); editor.requestScene(); storeSettings(); },
   'check-structure': () => checkStructure(),
   'stereo-labels': () => toggleStereoLabels(),
@@ -2227,6 +2230,7 @@ stylePanel.reaction = {
   reset: (id) => editor.resetReactionRoles(id),
   select: (id, role) => editor.selectRole(id, role),
   cleanUp: () => command('clean-up-reaction'),
+  arrange: () => command('arrange-scheme'),
 };
 stylePanel.tables = {
   part: () => editor.tablePart,

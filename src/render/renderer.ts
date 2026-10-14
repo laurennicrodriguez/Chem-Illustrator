@@ -170,8 +170,12 @@ export class Renderer {
 
   // ------------------------------------------------------------------ caches
 
-  /** Drop cached layout and painted tiles near anything that changed since the last paint. */
-  private invalidate(doc: Doc): void {
+  /**
+   * Drop cached layout and painted tiles near anything that changed since the last paint. Also
+   * called before measuring between paints (an undo and a new layout in one go), so label sizes
+   * are never those of where atoms used to be.
+   */
+  invalidate(doc: Doc): void {
     const warned = this.checks?.update();
     if (warned?.length && this.showWarnings && !doc.allDirty) {
       // warnings that came or went (including on atoms the edit itself didn't touch)
