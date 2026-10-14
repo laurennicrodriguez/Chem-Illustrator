@@ -187,6 +187,8 @@ describe('saving to Excel', () => {
         expect(strings).toContain('Showing Catalyst: Pd(OAc)2');
     expect(strings).toContain('Screen of 14 Oct');
     const sheet2 = strFromU8(f['xl/worksheets/sheet2.xml']);
+    // the headline number spans its tile in Excel (no ####)
+    expect(sheet2).toMatch(/<mergeCell ref="A2:[D-F]2"\/>/);
     // the headline number is a number in Excel, with the suffix in its format
     expect(sheet2).toMatch(/<c r="A2" s="\d+"><v>81<\/v><\/c>/);
     expect(strFromU8(f['xl/styles.xml'])).toContain('formatCode="0.0&quot; %&quot;"');

@@ -5,6 +5,7 @@
 // file and comes back whole when the file is opened here.
 
 import { Workbook, Sheet, CellStyle } from '../sheet/workbook';
+import type { Range } from '../sheet/refs';
 import { DEFAULT_COL_W, DEFAULT_ROW_H } from '../sheet/layout';
 import { formatValue } from '../sheet/numfmt';
 import { isError } from '../sheet/values';
@@ -41,6 +42,7 @@ export function dashboardStandIn(book: Workbook, s: Sheet): { sheet: Sheet; data
   const data = new Map<number, SeriesData[]>();
   /** Chart numbers go in last, so cells of other tiles win where they meet. */
   const later: (() => void)[] = [];
+  const merges: Range[] = [];
   const cellAt = (px: number, size: number) => Math.max(0, Math.floor(px / size));
   tmp.build(() => {
     const put = (r: number, c: number, text: string | number, style?: CellStyle) => {
@@ -104,8 +106,12 @@ export function dashboardStandIn(book: Workbook, s: Sheet): { sheet: Sheet; data
           const withSuffix = t.suffix ? `${fmt ?? 'General'}"${t.suffix.replace(/"/g, '')}"` : fmt;
           const style: CellStyle = { bold: true, size: 20, ...(withSuffix ? { numFmt: withSuffix } : {}) };
           if (typeof v === 'number' && t.target !== undefined) style.color = (t.higherIsBetter === false ? v <= t.target : v >= t.target) ? '#18794e' : '#b4232a';
+          // the big number spans the tile's width, so Excel has room for it (no ####)
+          const span = Math.max(1, Math.floor(b.w / DEFAULT_COL_W));
+          if (span > 1) merges.push({ r1: r0 + 1, c1: c0, r2: r0 + 1, c2: c0 + span - 1 });
+          style.align = 'center';
           if (typeof v === 'number') put(r0 + 1, c0, v, style);
-          else if (v !== null) put(r0 + 1, c0, isError(v) ? formatValue(v).text : String(v), { bold: true, size: 20 });
+          else if (v !== null) put(r0 + 1, c0, isError(v) ? formatValue(v).text : String(v), { bold: true, size: 20, align: 'center' });
           break;
         }
         case 'text':
@@ -148,6 +154,10 @@ export function dashboardStandIn(book: Workbook, s: Sheet): { sheet: Sheet; data
     for (const f of later) f();
     if (!d.tiles.length) put(0, 0, 'An empty dashboard (made in Chem Illustrator).');
     out.setCharts(charts);
+    // merged blocks that would overlap an earlier one are left out
+    const kept: Range[] = [];
+    for (const m of merges) if (!kept.some((k) => k.r1 <= m.r2 && m.r1 <= k.r2 && k.c1 <= m.c2 && m.c1 <= k.c2)) kept.push(m);
+    if (kept.length) out.setMerges(kept);
   });
   return { sheet: out, data };
 }
