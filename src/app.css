@@ -1192,3 +1192,16 @@ dialog.toolbox-dialog { width: min(94vw, 720px); }
 .combo-item { padding: 3px 10px; cursor: default; white-space: nowrap; }
 .combo-item:hover, .combo-item.active { background: var(--accent-soft); }
 .combo-item.current { font-weight: 600; }
+
+/* Group tooltips: what OTBS, Boc, CO2Me… stand for. Light like the page, so the drawing reads in either theme. */
+.label-tip {
+  position: fixed; z-index: 2000; pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  max-width: 320px; padding: 8px 10px;
+  background: #fff; color: #1d2330; border: 1px solid #c9ced6; border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  font: 12px var(--ui-font);
+}
+.label-tip-head { align-self: stretch; text-align: left; }
+.label-tip img { display: block; max-width: 300px; height: auto; }
+.label-tip-formula { color: #677084; font-variant-numeric: tabular-nums; }
