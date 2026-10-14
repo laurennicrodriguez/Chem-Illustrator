@@ -96,6 +96,8 @@ export interface Bond {
   s?: number;
   /** An aromatic bond (order 1.5) in a ring drawn with a circle rather than a dashed second line. */
   circle?: boolean;
+  /** Where it sits among bonds that cross it (higher in front; else the order it was drawn in). ChemDraw's Z. */
+  z?: number;
   /** The person chose to ignore this bond's chemistry warnings. */
   ignoreWarnings?: boolean;
   /** Show this double bond's E/Z label when it has one. */

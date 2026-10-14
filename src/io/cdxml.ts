@@ -255,6 +255,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       if (b.getAttribute('IgnoreWarnings') === 'yes') extra.ignoreWarnings = true;
       if (b.getAttribute('ShowBondStereo') === 'yes') extra.showStereo = true;
       if (kids(b).some((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === CIRCLE_TAG)) extra.circle = true;
+      // a bond crossing others: the higher Z is in front
+      if (b.hasAttribute('CrossingBonds') && b.hasAttribute('Z')) extra.z = num(b, 'Z');
       const tag = kids(b).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === 'stereo');
       if (tag) {
         // ChemDraw's (E)/(Z) label by the double bond, kept relative to the bond's middle

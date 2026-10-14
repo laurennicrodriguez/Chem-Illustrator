@@ -21,6 +21,7 @@ import { fromDataUrl } from '../render/images';
 import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG } from './cdxml';
 import { layoutTable, cellAlign, isCovered, spanOf, NOTE_SCALE } from '../table';
 import { TABLE_TAG, TABLE_PART_TAG, tableBorders, type TableTag } from './cdxml-table';
+import { bondLayer, crossingBonds } from '../chem/crossing';
 
 
 export interface WriteOptions {
@@ -71,6 +72,8 @@ class CdxmlWriter {
   private placerMade: StereoPlacer | null = null;
   /** Fragment element each atom ends up in. */
   private fragOfAtom = new Map<number, Element>();
+  /** The element written for each bond. */
+  private bondEls = new Map<number, Element>();
   /** Neighbours of each atom as read from the file. */
   private origNeighbors = new Map<number, Set<number>>();
   private changed = false;
@@ -103,6 +106,7 @@ class CdxmlWriter {
       this.removeDeleted();
     }
     this.writeStructures();
+    this.writeCrossings();
     for (const c of doc.captions.values()) this.writeCaption(c);
     for (const r of doc.arrows.values()) this.writeArrow(r);
     for (const s of doc.shapes.values()) this.writeShape(s);
@@ -376,10 +380,13 @@ class CdxmlWriter {
     const e = this.source('b', b.id, ['b']);
     const o = this.orig<Bond>('b', b.id);
     if (!e || !o) {
-      target.appendChild(this.buildBond(b));
+      const n = this.buildBond(b);
+      this.bondEls.set(b.id, n);
+      target.appendChild(n);
       this.changed = true;
       return true;
     }
+    this.bondEls.set(b.id, e);
     let wrote = false;
     if (e.parentElement !== target) { target.appendChild(e); wrote = true; }
     if (!sameExcept(b, o, [])) {
@@ -676,6 +683,51 @@ class CdxmlWriter {
     t.setAttribute('LabelJustification', right ? 'Right' : 'Left');
     t.setAttribute('LabelAlignment', dir === 'up' ? 'Above' : dir === 'down' ? 'Below' : right ? 'Right' : 'Left');
     t.removeAttribute('Justification');
+  }
+
+  /**
+   * Bonds that cross: ChemDraw lists each one's partners (CrossingBonds) and draws the one with
+   * the higher Z in front, with a gap in the one behind. A file whose crossings still agree with
+   * the drawing is left alone; otherwise the crossing bonds get fresh, distinct Z values in front
+   * of everything (ChemDraw muddles equal ones) in the order they are layered here.
+   */
+  private writeCrossings(): void {
+    const partners = new Map<number, Bond[]>();
+    for (const b of this.doc.bonds.values()) {
+      const cs = crossingBonds(this.doc, b);
+      if (cs.length) partners.set(b.id, cs);
+    }
+    const want = (b: Bond) => (partners.get(b.id) ?? []).map((o) => this.bondEls.get(o.id)?.getAttribute('id') ?? '').filter(Boolean).sort().join(' ');
+    let ok = true;
+    // bonds that no longer cross anything lose their list
+    for (const [id, e] of this.bondEls) {
+      if (partners.has(id) || !e.hasAttribute('CrossingBonds')) continue;
+      e.removeAttribute('CrossingBonds');
+      this.changed = true;
+    }
+    for (const [id, cs] of partners) {
+      const b = this.doc.bonds.get(id)!, e = this.bondEls.get(id);
+      if (!e) continue;
+      const have = (e.getAttribute('CrossingBonds') ?? '').split(/\s+/).filter(Boolean).sort().join(' ');
+      if (have !== want(b) || !e.hasAttribute('Z')) { ok = false; break; }
+      const z = Number(e.getAttribute('Z'));
+      for (const o of cs) {
+        const oz = Number(this.bondEls.get(o.id)?.getAttribute('Z') ?? NaN);
+        if (!(bondLayer(o) > bondLayer(b) ? oz > z : oz < z)) { ok = false; break; }
+      }
+      if (!ok) break;
+    }
+    if (ok) return;
+    let top = 0;
+    for (const e of this.page.querySelectorAll('[Z]')) top = Math.max(top, Number(e.getAttribute('Z')) || 0);
+    const order = [...partners.keys()].map((id) => this.doc.bonds.get(id)!).sort((a, b) => bondLayer(a) - bondLayer(b) || a.id - b.id);
+    order.forEach((b, i) => {
+      const e = this.bondEls.get(b.id);
+      if (!e) return;
+      e.setAttribute('Z', String(top + 1 + i));
+      e.setAttribute('CrossingBonds', want(b));
+    });
+    this.changed = true;
   }
 
   private buildBond(b: Bond): Element {

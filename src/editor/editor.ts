@@ -22,6 +22,7 @@ import { extractDrawing, insertDrawing } from '../io/clipboard';
 import { isReactionArrow, itemFinder, rolesOf, ROLES, schemeItems, type Item, type Role } from '../chem/reaction';
 import { applySchemePlan, planCleanUp } from '../chem/scheme-layout';
 import { circleRing, circleRings, kekulize } from '../chem/aromatic';
+import { bondLayer, crossingBonds } from '../chem/crossing';
 import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
 import { pushArrow, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
 import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
@@ -1479,6 +1480,25 @@ export class Editor {
     });
     if (msg) this.changed();
     return msg;
+  }
+
+  /**
+   * Where crossing bonds are drawn bring the selected bonds in front of (or behind) the bonds they
+   * cross: the bond behind gets a gap. False when no bond is selected.
+   */
+  setBondLayer(front: boolean): boolean {
+    const doc = this.doc;
+    const ids = [...this.sel.bonds];
+    if (!ids.length) return false;
+    let hi = -Infinity, lo = Infinity;
+    for (const b of doc.bonds.values()) { const l = bondLayer(b); hi = Math.max(hi, l); lo = Math.min(lo, l); }
+    doc.edit(front ? 'Bring to Front' : 'Send to Back', () => {
+      ids.forEach((id, i) => doc.updateBond(id, { z: front ? hi + 1 + i : lo - ids.length + i }));
+      // the bonds crossing them are redrawn too (their gaps change)
+      for (const id of ids) for (const o of crossingBonds(doc, doc.bonds.get(id)!)) doc.updateBond(o.id, {});
+    });
+    this.changed();
+    return true;
   }
 
   /** The next free compound number in this drawing. */

@@ -7,6 +7,7 @@
 
 import { Doc, Atom, Bond, Arrow, Caption, Shape, applyBase, type TextBase } from '../model';
 import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
+import { crossingGaps } from '../chem/crossing';
 import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter, fromAngle } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
@@ -698,7 +699,29 @@ export class Renderer {
     const dir = mul(d, 1 / l);
     const nrm = perp(dir);
     const gap = doubleBondGap(st);
-    const line = (path: Path2D, a: Vec, c: Vec) => { path.moveTo(a.x, a.y); path.lineTo(c.x, c.y); };
+    // a bond behind a bond that crosses it has a gap there
+    const gaps = crossingGaps(doc, b, ds.marginWidth * k + ds.lineWidth);
+    const pq = sub(q, p), pq2 = dot(pq, pq) || 1;
+    const along = (x: Vec) => dot(sub(x, p), pq) / pq2;
+    const line = (path: Path2D, a: Vec, c: Vec) => {
+      if (!gaps.length) { path.moveTo(a.x, a.y); path.lineTo(c.x, c.y); return; }
+      const fa = along(a), fc = along(c);
+      if (Math.abs(fc - fa) < 1e-6) {
+        // across the bond (a hash): left out if it falls in a gap
+        if (!gaps.some(([g0, g1]) => fa > g0 && fa < g1)) { path.moveTo(a.x, a.y); path.lineTo(c.x, c.y); }
+        return;
+      }
+      let from = 0;
+      const at = (t: number) => add(a, mul(sub(c, a), t));
+      for (const [g0, g1] of gaps) {
+        let t0 = (g0 - fa) / (fc - fa), t1 = (g1 - fa) / (fc - fa);
+        if (t0 > t1) [t0, t1] = [t1, t0];
+        if (t1 <= from || t0 >= 1) continue;
+        if (t0 > from) { const u = at(from), v = at(t0); path.moveTo(u.x, u.y); path.lineTo(v.x, v.y); }
+        from = Math.max(from, t1);
+      }
+      if (from < 1) { const u = at(from); path.moveTo(u.x, u.y); path.lineTo(c.x, c.y); }
+    };
     // a point of attachment: a wavy line across the end of the bond
     if (p.attach === 'Wavy') attachWave(thin, p, nrm, st.bondLength);
     if (q.attach === 'Wavy') attachWave(thin, q, nrm, st.bondLength);
