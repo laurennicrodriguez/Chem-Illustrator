@@ -5,7 +5,7 @@
 /// <reference lib="webworker" />
 import { formulaFromJson } from '../chem/formula';
 import { stereoTags, StereoTags } from '../chem/stereo';
-import { molProps, substructureMatches } from '../chem/props';
+import { molProps, substructureMatches, panelProps, massFragments, type PanelProps, type MassFragment } from '../chem/props';
 import type { MolProps } from '../sheet/properties';
 type InitRDKit = (opts: { locateFile: () => string }) => Promise<any>;
 
@@ -18,7 +18,9 @@ export type ChemRequest =
   /** Sheet properties of molecules, each given as a molfile or a SMILES string. */
   | { type: 'props'; id: number; mols: string[] }
   /** Which molecules (molfiles or SMILES) contain the query (a molfile): its atoms and bonds, with anything else attached. */
-  | { type: 'substructure'; id: number; query: string; mols: string[] };
+  | { type: 'substructure'; id: number; query: string; mols: string[] }
+  /** The pieces a molfile falls into when bonds (pairs of molfile atoms, 0-based) are broken. */
+  | { type: 'fragments'; id: number; molblock: string; cuts: [number, number][] };
 
 export interface FragmentResult {
   formula: string;
@@ -26,6 +28,8 @@ export interface FragmentResult {
   mw: number;
   charge: number;
   smiles: string;
+  /** Properties, elemental analysis and estimates for the Analysis panel. */
+  props?: PanelProps;
   error?: string;
 }
 
@@ -37,7 +41,8 @@ export type ChemResponse =
   | { type: 'smilesToMol'; id: number; molblock: string | null }
   | { type: 'molToSmiles'; id: number; smiles: string | null }
   | { type: 'props'; id: number; results: (MolProps | { error: string })[] }
-  | { type: 'substructure'; id: number; results: (boolean | null)[]; error?: string };
+  | { type: 'substructure'; id: number; results: (boolean | null)[]; error?: string }
+  | { type: 'fragments'; id: number; results: MassFragment[] | { error: string } };
 
 let RDKit: any = null;
 const post = (m: ChemResponse) => (self as unknown as DedicatedWorkerGlobalScope).postMessage(m);
@@ -51,7 +56,13 @@ function analyzeOne(molblock: string): FragmentResult {
   try {
     const { formula, charge } = formulaFromJson(mol.get_json());
     const d = JSON.parse(mol.get_descriptors());
-    return { formula, exact: d.exactmw, mw: d.amw, charge, smiles: mol.get_smiles() };
+    let props: PanelProps | undefined;
+    try {
+      props = panelProps(RDKit, mol);
+    } catch {
+      props = undefined;
+    }
+    return { formula, exact: d.exactmw, mw: d.amw, charge, smiles: mol.get_smiles(), props };
   } finally {
     mol.delete();
   }
@@ -114,6 +125,8 @@ self.onmessage = async (e: MessageEvent<ChemRequest>) => {
       post({ type: 'props', id: m.id, results: m.mols.map((x) => molProps(RDKit, x)) });
     } else if (m.type === 'substructure') {
       post({ type: 'substructure', id: m.id, ...substructureMatches(RDKit, m.query, m.mols) });
+    } else if (m.type === 'fragments') {
+      post({ type: 'fragments', id: m.id, results: massFragments(RDKit, m.molblock, m.cuts) });
     }
   } catch (err) {
     post({ type: 'error', id: 'id' in m ? (m as { id: number }).id : undefined, message: String(err) });

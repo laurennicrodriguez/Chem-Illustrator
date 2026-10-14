@@ -6,7 +6,9 @@
 // in with their text and its formatting (worked out through the named styles, as Word does),
 // lists, tables, pictures, captions and cross-references, page setup, header, footer and page
 // numbers; ChemDraw objects in them become structures that can be edited here. What has no
-// place here yet is noted in warnings (shown to the person, never refused).
+// place here yet is noted in warnings (shown to the person, never refused). Citations and the
+// bibliography saved here come back live (the references are in our own part); those of
+// other reference managers keep the text Word showed.
 
 import type { Contents, Justify, ParaStyle, TableCell, TableData, TextRun } from '../model';
 import { ACS_1996, type DocStyle } from '../style';
@@ -25,7 +27,8 @@ import { shownSize } from '../document/doc-layout';
 import { layoutTable } from '../table';
 import { cfbStreams, isCfb } from './cfb';
 import { isCdx } from './cdx';
-import { DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
+import { BIB_MARK, CITE_FIELD, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
+import { cleanRef } from '../document/references';
 import { listIndent, tableText } from './docx-write';
 
 export interface DocxReadDeps {
@@ -84,7 +87,7 @@ interface Level { fmt: string; text: string; p: PProps }
 interface Piece { runs: TextRun[]; pageBreak: boolean; soft: boolean }
 interface Ctx { base: RProps; pieces: Piece[]; cell: boolean }
 interface Field { instr: string; phase: 'instr' | 'result'; swallow: boolean; text: string; props: RProps; done: boolean; ref?: { id: number; mark: string; text: string } }
-interface OutPara { ps: ParaStyle; runs: TextRun[]; mark: rt.RunStyle; style: string; contextual: boolean; table?: boolean }
+interface OutPara { ps: ParaStyle; runs: TextRun[]; mark: rt.RunStyle; style: string; contextual: boolean; table?: boolean; bib?: string }
 
 /** Open a Word file. Throws only when the file is not a Word file at all. */
 export async function readDocx(bytes: Uint8Array, deps: DocxReadDeps = {}): Promise<{ doc: DocText; warnings: string[] }> {
@@ -123,6 +126,9 @@ class DocxReader {
   private refs: { id: number; mark: string; text: string }[] = [];
   /** The next paragraph starts a new page (after a section break). */
   private breakNext = false;
+  /** The bibliography bookmark open, and the one met in the paragraph being read. */
+  private bibOpen: string | null = null;
+  private bibMet: string | null = null;
   /** A table's notes, written after it as a paragraph, to leave out when the table comes from our own part. */
   private pendingNotes: string | null = null;
   private measure: Measure = documentMeasure((t, size, _f, style) => arialWidth(t, size, /bold/.test(style)));
@@ -149,6 +155,7 @@ class DocxReader {
     this.readPage(last);
     this.blocks(kids(body));
     this.resolveRefs();
+    this.joinBibliographies();
     const hf = this.readHeaderFooter(last);
     return { doc: this.assemble(hf), warnings: [...this.warnings] };
   }
@@ -429,7 +436,10 @@ class DocxReader {
     // a section ends with this paragraph: the next one starts a new page unless the section break says otherwise
     const sect = kid(pPr, 'sectPr');
     const ctx: Ctx = { base, pieces: [{ runs: [], pageBreak: false, soft: false }], cell: false };
+    const bibBefore = this.bibOpen;
+    this.bibMet = null;
     this.inline(kids(el), ctx);
+    const bib = bibBefore ?? this.bibMet ?? undefined;
     const sectionBreak = () => { if (sect) this.breakNext = !/^continuous$/i.test(this.a(kid(sect, 'type')) ?? 'nextPage'); };
     const text = ctx.pieces.map((pc) => rt.plainText(pc.runs)).join('\n');
     // a table's notes written after it (by this program): the table has them already
@@ -478,7 +488,7 @@ class DocxReader {
         }
       } else if (pc.pageBreak) q.pageBreak = true;
       q = cleanPara(q);
-      this.out.push({ ps: q, runs: pc.runs, mark: markStyle, style: ours, contextual: !!p.contextual });
+      this.out.push({ ps: q, runs: pc.runs, mark: markStyle, style: ours, contextual: !!p.contextual, bib });
     });
     sectionBreak();
   }
@@ -538,12 +548,13 @@ class DocxReader {
     this.piece(ctx).runs.push({ ...this.runStyle(props), text });
   }
 
-  private emitObject(ctx: Ctx, o: DocObject, r: RProps): number | null {
+  private emitObject(ctx: Ctx, o: DocObject, r: RProps, keepPos = false): number | null {
     if (ctx.cell) { if (o.kind !== 'seq' && o.kind !== 'ref') this.warn('cellObjects'); return null; }
     const id = this.nextId++;
     this.objects[id] = o;
-    const { formula: _f, sub: _s, sup: _u, ...style } = this.runStyle(r);
-    this.piece(ctx).runs.push({ ...style, obj: id, text: OBJECT_CHAR });
+    const { formula: _f, sub, sup, ...style } = this.runStyle(r);
+    // a citation keeps its superscript; caption numbers and references take the text's position
+    this.piece(ctx).runs.push({ ...style, ...(keepPos ? rt.cleanStyle({ sub, sup }) : {}), obj: id, text: OBJECT_CHAR });
     return id;
   }
 
@@ -683,6 +694,14 @@ class DocxReader {
       f.swallow = true;
       return;
     }
+    // a citation saved here: live again, citing the references in our part
+    const cite = new RegExp(`^${CITE_FIELD}\\b(.*)$`).exec(ins);
+    if (cite && this.model?.references && !ctx.cell) {
+      const refs = cite[1].trim().split(/\s+/).filter(Boolean);
+      const id = this.emitObject(ctx, { kind: 'cite', refs }, f.props, true);
+      if (id !== null) f.swallow = true;
+      return;
+    }
     if (/^TOC\b/i.test(ins)) this.warn('toc');
     else if (/^ADDIN\s+(EN\.CITE|ZOTERO|CSL|Mendeley|RW)/i.test(ins)) this.warn('citations');
   }
@@ -690,10 +709,39 @@ class DocxReader {
   private markStart(el: Element): void {
     const name = this.a(el, 'name');
     if (name && name !== '_GoBack') this.openMarks.set(this.a(el, 'id') ?? name, name);
+    if (name?.startsWith(BIB_MARK)) this.bibOpen = this.bibMet = name;
   }
 
   private markEnd(el: Element): void {
-    this.openMarks.delete(this.a(el, 'id') ?? '');
+    const id = this.a(el, 'id') ?? '';
+    if (this.openMarks.get(id)?.startsWith(BIB_MARK)) this.bibOpen = null;
+    this.openMarks.delete(id);
+  }
+
+  /**
+   * A bibliography saved here comes back as one: its paragraphs (inside its bookmark) become
+   * the bibliography again, unless their text was changed in Word (then they stay as typed).
+   */
+  private joinBibliographies(): void {
+    const saved = this.model?.bibliographies;
+    if (!saved) return;
+    const out: OutPara[] = [];
+    for (let i = 0; i < this.out.length;) {
+      const p = this.out[i];
+      if (!p.bib) { out.push(p); i++; continue; }
+      let j = i;
+      while (j < this.out.length && this.out[j].bib === p.bib) j++;
+      const group = this.out.slice(i, j);
+      const mine = saved[Number(p.bib.slice(BIB_MARK.length))];
+      const text = group.map((g) => rt.plainText(g.runs)).join('\n');
+      if (mine && text === mine.text) {
+        const id = this.nextId++;
+        this.objects[id] = { kind: 'bib' };
+        out.push({ ...p, ps: cleanPara(mine.ps ?? {}), runs: [{ ...p.mark, obj: id, text: OBJECT_CHAR }], style: mine.ps?.style ?? 'Normal', bib: undefined });
+      } else out.push(...group);
+      i = j;
+    }
+    this.out = out;
   }
 
   /** References point to the caption number inside their bookmark; one pointing elsewhere keeps the text Word showed. */
@@ -1123,6 +1171,7 @@ class DocxReader {
     const used = new Set(runs.filter((r) => r.obj !== undefined).map((r) => r.obj!));
     const objects: Record<number, DocObject> = {};
     for (const [k, v] of Object.entries(this.objects)) if (used.has(Number(k))) objects[Number(k)] = v;
+    const m = this.model;
     return {
       runs: rt.normalizeRuns(runs),
       paras: out.map((p) => cleanPara(p.ps)),
@@ -1132,6 +1181,8 @@ class DocxReader {
       hf,
       objects,
       drawingStyle: this.drawingStyle,
+      ...(Array.isArray(m?.references) ? { references: m.references.map((r) => cleanRef(r)) } : {}),
+      ...(m?.citeStyle === 'acs' || m?.citeStyle === 'angewandte' || m?.citeStyle === 'rsc' ? { citeStyle: m.citeStyle } : {}),
     };
   }
 }

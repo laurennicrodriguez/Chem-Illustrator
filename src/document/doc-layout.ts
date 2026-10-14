@@ -8,12 +8,13 @@
 // points), and the lines of every page together make one text layout, so the text editing's
 // caret, selection and arrow keys run across pages without knowing about them.
 
-import type { Contents, ParaStyle } from '../model';
+import type { Contents, ParaStyle, TextRun } from '../model';
 import type { DocStyle } from '../style';
-import { layoutText, type InlineBox, type LaidLine, type Measure, type TextFrame, type TextLayout } from '../text/layout';
+import { FONT_STACK, layoutText, type Glyphs, type InlineBox, type LaidLine, type Measure, type TextFrame, type TextLayout } from '../text/layout';
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
 import * as rt from '../richtext';
-import { fieldTexts, styleOf, type DocText, type HeaderFooter } from './document';
+import { OBJECT_CHAR, fieldTexts, styleOf, type DocText, type HeaderFooter, type NamedStyle } from './document';
+import { bibliography, type BibEntry } from './references';
 
 /** Space between pages on screen, in points. */
 export const PAGE_GAP = 18;
@@ -35,7 +36,42 @@ export interface PageBox {
   label: string;
 }
 
-/** A figure or picture on a page, in the document's coordinates. */
+/** What the bibliography shows when nothing is cited yet (on screen and in the PDF only). */
+export const EMPTY_BIBLIOGRAPHY = 'Bibliography: no references are cited yet. Cite one with References > Insert Citation.';
+
+/**
+ * How far a bibliography's entries hang their numbers out: the widest number ("(12)") and a
+ * little space, so every entry's text starts at the same place.
+ */
+export function bibHang(labels: string[], size: number, font: string, measure: Measure): number {
+  const family = `${font}, ${FONT_STACK}`;
+  const widest = Math.max(0, ...labels.map((l) => measure(l, size, family, '')));
+  return Math.max(1.5 * size, widest + 0.5 * size);
+}
+
+/**
+ * The bibliography's entries as text: each a paragraph with its number hanging out, the text
+ * in italics and bold as the style prints it. A spacer after the number (an object with a
+ * negative id, `spacer` its width) brings the text to the hanging indent.
+ */
+export function bibFrame(entries: BibEntry[], st: NamedStyle, ps: ParaStyle, measure: Measure): { runs: TextRun[]; paras: ParaStyle[]; spacer: (id: number) => number } {
+  const font = st.font, size = st.size;
+  const base = { font, size };
+  if (!entries.length) return { runs: [{ ...base, italic: true, color: '#8a8f98', text: EMPTY_BIBLIOGRAPHY }], paras: [{ line: ps.line }], spacer: () => 0 };
+  const hang = bibHang(entries.map((e) => e.label), size, font, measure);
+  const family = `${font}, ${FONT_STACK}`;
+  const runs: TextRun[] = [];
+  const widths: number[] = [];
+  entries.forEach((e, i) => {
+    if (i) runs.push({ ...base, text: '\n' });
+    runs.push({ ...base, text: e.label }, { ...base, obj: -(i + 1), text: OBJECT_CHAR });
+    widths.push(Math.max(0.25 * size, hang - measure(e.label, size, family, '')));
+    for (const p of e.pieces) runs.push({ ...rt.cleanStyle({ ...base, italic: p.italic, bold: p.bold }), text: p.text });
+  });
+  const paras = entries.map((): ParaStyle => ({ indent: hang, firstLine: -hang, line: ps.line }));
+  return { runs, paras, spacer: (id) => widths[-id - 1] ?? 0 };
+}
+
 export interface PlacedObject {
   id: number;
   page: number;
@@ -81,6 +117,54 @@ export class DocLayouter {
 
   constructor(private deps: LayoutDeps) {}
 
+  /**
+   * A paragraph holding a bibliography: the text before it and after it laid out as any
+   * paragraph's, and in between the bibliography's entries, each line shown but not part of
+   * the text (the caret passes over the whole bibliography as its one character). The lines
+   * flow onto the next page like any others.
+   */
+  withBlocks(frame: TextFrame, st: NamedStyle, entries: BibEntry[], isBib: (r: TextRun) => boolean): TextLayout {
+    const measure = this.deps.measure;
+    const ps = frame.paras?.[0] ?? {};
+    const lines: LaidLine[] = [];
+    let at = 0;
+    let part: TextRun[] = [];
+    let first = true;
+    const flush = () => {
+      const len = part.reduce((a, r) => a + r.text.length, 0);
+      if (len) {
+        const sub = layoutText({ ...frame, runs: part, paras: [first ? ps : { ...ps, firstLine: undefined }], markers: first ? frame.markers : [null] }, st.size, measure);
+        for (const l of sub.lines) lines.push({ ...shiftLine(l, 0, 0, at - len, 0), last: false });
+        first = false;
+      }
+      part = [];
+    };
+    for (const r of frame.runs) {
+      if (!isBib(r)) { part.push(r); at += r.text.length; continue; }
+      flush();
+      const bf = bibFrame(entries, st, ps, measure);
+      const bl = layoutText({
+        runs: bf.runs, paras: bf.paras, justify: 'left', wrap: frame.wrap, boxes: true,
+        inline: (id) => (id < 0 ? { w: bf.spacer(id), ascent: 0 } : null),
+      }, st.size, measure).lines;
+      const id = r.obj!;
+      bl.forEach((l, i) => {
+        const shown: Glyphs[] = l.pieces.filter((g) => g.obj === undefined).map((g) => ({ ...g, start: at, decor: true }));
+        const pieces: Glyphs[] = [];
+        if (i === 0) pieces.push({ text: OBJECT_CHAR, start: at, x: l.x, w: l.width, dy: 0, size: st.size, family: `${st.font}, ${FONT_STACK}`, style: '', obj: id, shown: '' });
+        pieces.push(...shown);
+        if (i === bl.length - 1 && i > 0) pieces.push({ text: '', start: at + 1, x: l.x + l.width, w: 0, dy: 0, size: st.size, family: `${st.font}, ${FONT_STACK}`, style: '' });
+        lines.push({ ...l, para: 0, block: id, marker: undefined, start: i === 0 ? at : at + 1, end: at + 1, last: false, pieces });
+      });
+      at += 1;
+      first = false;
+    }
+    flush();
+    if (lines.length) lines[lines.length - 1].last = true;
+    const box = { x1: 0, y1: 0, x2: frame.wrap ?? 0, y2: 0 };
+    return { lines, boxWidth: frame.wrap ?? 0, box, length: at, measure };
+  }
+
   /** Forget every paragraph's layout (fonts were loaded, measurements changed). */
   clear(): void {
     this.cache.clear();
@@ -103,6 +187,10 @@ export class DocLayouter {
       if (o.kind === 'drawing') sizes.set(Number(k), shownSize(this.deps.drawingSize(o.contents, t.drawingStyle), o.scale ?? 1, textW));
       else if (o.kind === 'picture') sizes.set(Number(k), shownSize({ w: o.w, h: o.h }, o.scale ?? 1, textW));
     }
+    // the bibliography's entries (worked out once: every bibliography in the text shows them)
+    const hasBib = Object.values(t.objects).some((o) => o.kind === 'bib');
+    const entries = hasBib ? bibliography(t) : [];
+    const isBib = (r: { obj?: number }) => r.obj !== undefined && t.objects[r.obj]?.kind === 'bib';
     const inline = (id: number): InlineBox | null => {
       const f = fields.get(id);
       if (f !== undefined) return { text: f };
@@ -124,13 +212,14 @@ export class DocLayouter {
         const s = sizes.get(r.obj!);
         return f !== undefined ? `${r.obj}=${f}` : s ? `${r.obj}:${s.w.toFixed(3)}x${s.h.toFixed(3)}` : `${r.obj}?`;
       });
-      const key = JSON.stringify([resolved, ps, markers[p], textW, objs, st.size]);
+      const bib = hasBib && runs.some(isBib);
+      const key = JSON.stringify([resolved, ps, markers[p], textW, objs, st.size, bib ? [t.citeStyle, entries.map((e) => [e.label, e.pieces]), st.font] : 0]);
       let lay = this.cache.get(key);
       if (!lay) {
         const frame: TextFrame = {
           runs: resolved, paras: [ps], justify: 'left', wrap: textW, boxes: true, markers: [markers[p]], inline,
         };
-        lay = layoutText(frame, st.size, this.deps.measure);
+        lay = bib ? this.withBlocks(frame, st, entries, isBib) : layoutText(frame, st.size, this.deps.measure);
         this.cache.set(key, lay);
       }
       this.used.add(key);
@@ -209,6 +298,21 @@ export class DocLayouter {
       paraStart += (paraRuns[p] ?? []).reduce((a, r) => a + r.text.length, 0) + 1;
     }
     pages[pageIdx].end = lines.length;
+
+    // a bibliography is picked by clicking anywhere on it: its box on each page it is on
+    const blocks = new Map<string, PlacedObject>();
+    pages.forEach((pg) => {
+      for (let i = pg.first; i < pg.end; i++) {
+        const l = lines[i];
+        if (l.block === undefined) continue;
+        const k = `${l.block}@${pg.index}`;
+        const y1 = l.y - (l.above ?? l.ascent), y2 = l.y + (l.below ?? l.descent);
+        const got = blocks.get(k);
+        if (!got) blocks.set(k, { id: l.block, page: pg.index, x: page.left, y: y1, w: textW, h: y2 - y1, line: i });
+        else got.h = y2 - got.y;
+      }
+    });
+    objects.push(...blocks.values());
 
     const last = pages[pages.length - 1];
     const box = { x1: 0, y1: 0, x2: page.w, y2: last.top + page.h };

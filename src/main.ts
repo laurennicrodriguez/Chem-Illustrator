@@ -3,12 +3,19 @@
 // mode), and the panels on the right.
 
 import './app.css';
-import { Doc, Atom, Caption, Shape, Contents } from './model';
+import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS } from './model';
 import { Renderer, measureText } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
 import type { Align } from './editor/arrange';
 import { readCdxml, ReadStats } from './io/cdxml';
 import { ChemClient } from './chem/client';
+import type { FragmentResult } from './worker/chem-worker';
+import { COMMON_ADDUCTS } from './chem/hrms';
+import { analysisHtml, analysisRuns, withRepeats, polymerHtml, type RepeatUnit } from './ui/analysis-panel';
+import { repeatGroups, lipDirection } from './chem/polymer';
+import { rGroupsOf, substituted, rowNumbers, parseRows, rGroupCells, type RowMass } from './chem/rgroup';
+import type { Vec } from './geom';
+import { captionPlaces, fragmentRuns } from './chem/fragments';
 import { toMolfile, addMolfile } from './chem/molfile';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -98,6 +105,14 @@ function updateStereo(): void {
   if (chem.ready) void live.update();
 }
 const startMs = performance.now();
+
+// Split view (View > Split View): a drawing beside a document, sheet or slides.
+/** The share of the width the drawing takes (settings.json). */
+let splitWidth = 0.38;
+/** Beside slides: the deck whose drawing is being worked on (the drawing's tab shows; the slide is a picture). */
+let slideSplit: Tab | null = null;
+/** Beside a document or sheet: the drawing has the keys and menus (it was clicked last). */
+let splitDrawing = false;
 
 // ---------------------------------------------------------------- layout
 
@@ -230,6 +245,7 @@ const TOOL_GROUPS: ToolbarItem[][] = [
   [
     { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption' },
     { name: 'element', title: 'Periodic table: pick an element, then click atoms to change them' },
+    { name: 'fragment', title: 'Mass fragmentation: drag a line across bonds (or click a bond) to break them and label each piece with its formula and mass' },
     ARROWS,
     SYMBOLS,
     SHAPES,
@@ -269,6 +285,7 @@ const HINTS: Record<string, string> = {
   chain: 'Drag from empty space or an atom; the number shows how many bonds. Click to type how many atoms; Alt+click repeats the last number.',
   text: 'Click an atom to type a label (OMe, CO2Et, NHBoc…), or click empty space for a caption.',
   element: 'Click atoms to make them the element picked in the periodic table, or empty space to add one.',
+  fragment: 'Drag a line across the bonds to break (or click one bond). Each piece gets a caption with its formula and exact mass, which you can edit.',
 };
 const ARROW_HINT = 'Drag to draw an arrow (Alt: any angle); click for a standard one. Drag the ends to move them, the middle to bend it.';
 const CURVE_HINT = 'Drag from where the electrons start to where they go; swing out to one side to bend that way. Drag the middle dot to change the curve.';
@@ -409,12 +426,12 @@ function pasteTable(rows: PastedRows): void {
 const textMeasure = (t: string, size: number, family: string, style: string) => measureText(t, size, family, style);
 
 /** Put a table in the middle of the window (or slide), selected. */
-function placeTable(t: TableData, label: string): number {
+function placeTable(t: TableData, label: string, top?: Vec): number {
   finishTyping();
   renderer.useStyle(doc);
   const lay = renderer.tableLayout(t);
-  const c = pasteCentre();
-  const x1 = c.x - lay.width / 2, y1 = c.y - lay.height / 2;
+  const c = top ?? pasteCentre();
+  const x1 = c.x - lay.width / 2, y1 = top ? top.y : c.y - lay.height / 2;
   let id = 0;
   doc.edit(label, () => { id = doc.addShape({ kind: 'table', x1, y1, x2: x1 + lay.width, y2: y1 + lay.height, table: t }).id; });
   editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set([id]) };
@@ -848,11 +865,11 @@ const ws: Workspace = new Workspace(doc, {
     if (tab.mode === 'document') docMode.leave();
     modeTool[tab.mode] = editor.toolName;
     editor.cropping = null;
-    tab.view = { ...renderer.view };
+    (ws.pane ?? tab).view = { ...renderer.view };
     if (tab.deck) { tab.deck.onChange = () => {}; tab.deck.onSwitch = () => {}; }
   },
   enter: (tab, opened) => enterTab(tab, opened),
-  changed: () => { renderTabs(); updateTitle(); },
+  changed: () => { renderTabs(); updateTitle(); layoutSplit(); },
   flash,
   pptx: {
     picture: async (d) => {
@@ -888,6 +905,8 @@ function finishTyping(): void {
 
 /** Set the window up for a tab that has just come to the front. */
 function enterTab(tab: Tab, opened: boolean): void {
+  if (slideSplit && tab !== slideSplit.partner) slideSplit = null;
+  splitDrawing = false;
   const deck = tab.deck;
   const slides = !!deck;
   const sheet = tab.mode === 'sheet';
@@ -917,9 +936,12 @@ function enterTab(tab: Tab, opened: boolean): void {
     notesBox.value = deck.current?.notes ?? '';
     showSlideState();
   } else slideList.show(null);
+  layoutSplit();
   // the slide list and notes take room from the drawing area
   resize();
-  if (tab.view && !opened) renderer.view = { ...tab.view };
+  const viewOf = ws.pane ?? tab;
+  if (viewOf.view && (!opened || ws.pane)) renderer.view = { ...viewOf.view };
+  else if (ws.pane || slideSplit) fitSplitDrawing();
   else editor.fit();
   renderer.repaintAll();
   editor.clearSelection();
@@ -927,8 +949,8 @@ function enterTab(tab: Tab, opened: boolean): void {
   refreshKeys();
   analysisKey = '';
   scheduleAnalysis(true);
-  if (sheet) $('#hint').textContent = SHEET_HINT;
-  else if (words) $('#hint').textContent = DOC_HINT;
+  if (sheet && !splitDrawing) $('#hint').textContent = SHEET_HINT;
+  else if (words && !splitDrawing) $('#hint').textContent = DOC_HINT;
   else editor.onToolChange(editor.toolName);
 }
 
@@ -1141,6 +1163,13 @@ async function pickPicture(): Promise<{ bytes: Uint8Array; mime: string; name: s
   return { bytes: f.bytes, mime, name: f.name };
 }
 
+/** Ask for a BibTeX or RIS file of references, and read its text. */
+async function pickReferenceFile(): Promise<{ name: string; text: string } | null> {
+  const f = await openBytesDialog('BibTeX or RIS references', [], ['bib', 'ris', 'txt']);
+  if (!f) return null;
+  return { name: f.name, text: new TextDecoder().decode(f.bytes).replace(/^\uFEFF/, '') };
+}
+
 async function insertPicture(): Promise<void> {
   const p = await pickPicture();
   if (p) placePicture(p.bytes, p.mime, null);
@@ -1317,7 +1346,12 @@ const SHEET_HINT = 'Type in a cell, or double-click to change it. Sheet > Draw S
 
 /** True when a sheet is showing (and no structure is being drawn for one of its cells). */
 function sheetActive(): boolean {
-  return ws.active.mode === 'sheet' && !cellEdit;
+  return ws.active.mode === 'sheet' && !drawingOnTop();
+}
+
+/** True when a structure is being drawn for a cell or figure, or the drawing in split view has the keys. */
+function drawingOnTop(): boolean {
+  return !!cellEdit || (splitDrawing && !!ws.pane);
 }
 
 const sheetMode = new SheetMode({
@@ -1344,9 +1378,9 @@ function showSheetParts(): void {
   for (const el of document.querySelectorAll<HTMLElement>('.sheet-only, .no-sheet, .doc-only, .no-doc, .draw-only')) {
     const c = el.classList;
     el.hidden = (c.contains('sheet-only') && !sheet) || (c.contains('no-sheet') && sheet) || (c.contains('doc-only') && !words)
-      || (c.contains('no-doc') && words) || (c.contains('draw-only') && (sheet || words) && !cellEdit);
+      || (c.contains('no-doc') && words) || (c.contains('draw-only') && (sheet || words) && !drawingOnTop());
   }
-  $('#sheet-menu-wrap').hidden = !sheet || !!cellEdit;
+  $('#sheet-menu-wrap').hidden = !sheet || drawingOnTop();
 }
 
 /** A key pressed in a sheet: Excel's keys first, then the menu keys that use Ctrl, Alt or a function key. */
@@ -1460,6 +1494,7 @@ function editCellStructure(contents: Contents | null, title: string, done: (c: C
   doc.swap(drawing);
   cellEdit = { done, saved: drawing };
   document.body.classList.add('floating-drawing');
+  layoutSplit();
   $('#structure-title').textContent = title;
   $('#structure-bar').hidden = false;
   showSheetParts();
@@ -1504,6 +1539,9 @@ function finishCellStructure(keep: boolean): void {
   const sheet = ws.active.mode === 'sheet';
   const words = ws.active.mode === 'document';
   editor.paused = sheet || words;
+  splitDrawing = false;
+  layoutSplit();
+  if (ws.pane) { resize(); renderer.repaintAll(); }
   showSheetParts();
   refreshKeys();
   if (sheet) $('#hint').textContent = SHEET_HINT;
@@ -1588,7 +1626,7 @@ const DOC_HINT = 'Type on the page. Insert > Structure draws a structure in the 
 
 /** True when a document is showing (and no structure is being drawn for it). */
 function docActive(): boolean {
-  return ws.active.mode === 'document' && !cellEdit;
+  return ws.active.mode === 'document' && !drawingOnTop();
 }
 
 /** The style structures in the document showing are drawn in. */
@@ -1604,6 +1642,7 @@ const docMode = new DocumentMode({
   readPaste: (e) => readDocPaste(e),
   toStructure: (text, style) => textToStructure(text, style),
   pickPicture: () => pickPicture(),
+  pickReferenceFile: () => pickReferenceFile(),
   newTable: (rows, cols, style) => tableDrawing(emptyTable(rows, cols, style.captionSize), style),
   measure: measureText,
 });
@@ -1723,7 +1762,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['new', 'new-slides', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'clipboard-formats']);
+  'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'clipboard-formats', 'split-view']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
@@ -1749,8 +1788,8 @@ const COMMANDS: Record<string, () => unknown> = {
   'new-sheet': () => { finishTyping(); ws.newSheet(); },
   'new-document': () => { finishTyping(); ws.newDocument(); },
   open: () => ws.open(),
-  save: () => { finishTyping(); return ws.save(); },
-  'save-as': () => { finishTyping(); return ws.saveAs(); },
+  save: () => { finishTyping(); return ws.save(focusTab()); },
+  'save-as': () => { finishTyping(); return ws.saveAs(focusTab()); },
   'close-tab': () => { finishTyping(); return ws.close(); },
   'next-tab': () => ws.cycle(1),
   'prev-tab': () => ws.cycle(-1),
@@ -1846,6 +1885,11 @@ const COMMANDS: Record<string, () => unknown> = {
   'show-roles': () => { editor.showRoles = !editor.showRoles; $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(editor.showRoles)); editor.requestScene(); storeSettings(); },
   'check-structure': () => checkStructure(),
   'stereo-labels': () => toggleStereoLabels(),
+  'enhanced-stereo': () => { void setStereoGroup(); },
+  'chiral-flag': () => { void setChiralFlag(); },
+  'rgroup-table': () => { void rGroupTable(); },
+  'split-view': () => toggleSplit(),
+  'repeat-group': () => { void setRepeatGroup(); },
   'name-to-structure': () => nameToStructure(),
   'clipboard-formats': async () => {
     const names = await clipboardFormats().catch((err) => [String(err)]);
@@ -1906,6 +1950,289 @@ editor.runCommand = (name) => {
   return command(name);
 };
 
+// ---------------------------------------------------------------- split view
+
+// A drawing beside a document, sheet or slides (View > Split View). Beside a document or sheet
+// both sides are live: the drawing is in the app's document (they don't use it) and whichever
+// side was clicked last has the keys and menus. Slides use the drawing area themselves, so beside
+// slides the side not being worked on shows as a picture, and clicking it swaps the two over.
+
+const splitPane = $<HTMLDivElement>('#split-pane');
+const splitBody = $<HTMLDivElement>('#split-body');
+const splitPick = $<HTMLSelectElement>('#split-pick');
+const splitSnap = $<HTMLCanvasElement>('#split-snap');
+const mainSnap = $<HTMLDivElement>('#main-snap');
+const workEl = $<HTMLElement>('#work');
+
+/** The document, sheet or slides in split view and the drawing beside it; null without a split. */
+function splitState(): { main: Tab; drawing: Tab } | null {
+  if (slideSplit && ws.tabs.includes(slideSplit) && ws.active === slideSplit.partner) return { main: slideSplit, drawing: ws.active };
+  const t = ws.active;
+  return t.mode !== 'drawing' && t.partner && ws.tabs.includes(t.partner) ? { main: t, drawing: t.partner } : null;
+}
+
+/** The tab Save saves: the drawing beside a document or sheet when it has the keys. */
+function focusTab(): Tab {
+  return splitDrawing && ws.pane && !cellEdit ? ws.pane : ws.active;
+}
+
+function applySplitWidth(): void {
+  workEl.style.setProperty('--split-w', `${Math.round(splitWidth * 1000) / 10}vw`);
+}
+
+/** Put the drawing area, the pictures and the marks where the split (or no split) needs them. */
+function layoutSplit(): void {
+  const st = splitState();
+  if (!st) slideSplit = null;
+  const live = !!st && (!!ws.pane || ws.active === st.drawing);
+  const drawingSide = !!st && (ws.active === st.drawing || (!!ws.pane && splitDrawing));
+  splitPane.hidden = !st;
+  document.body.classList.toggle('split-view', !!st);
+  document.body.classList.toggle('split-live', live);
+  document.body.classList.toggle('split-drawing', drawingSide && !cellEdit);
+  // the drawing area sits beside, except while a figure or cell structure is drawn (it floats over the pages then)
+  const want = live && !cellEdit ? splitBody : workEl;
+  if (host.parentElement !== want) {
+    if (want === workEl) workEl.insertBefore(host, mainSnap);
+    else splitBody.prepend(host);
+  }
+  mainSnap.hidden = !st || ws.active !== st.drawing;
+  splitSnap.hidden = live;
+  if (ws.pane) editor.paused = !splitDrawing && !cellEdit;
+  $('[data-cmd="split-view"]')?.setAttribute('aria-checked', String(!!st));
+  if (!st) { $('#split-empty').hidden = true; return; }
+  const opts = ws.tabs.filter((t) => t.mode === 'drawing').map((t) => new Option(t.name.replace(/\.(cdxml|cdx)$/i, ''), String(t.id), false, t === st.drawing));
+  opts.push(new Option('New drawing', 'new'));
+  splitPick.replaceChildren(...opts);
+  $('#split-insert').textContent = st.main.mode === 'document' ? 'Insert into Document' : st.main.mode === 'sheet' ? 'Insert into Cell' : 'Insert into Slide';
+  if (live) $('#split-empty').hidden = true;
+  else drawSplitSnap(st.drawing);
+}
+
+/** Beside slides: the drawing as a picture, fitted to its side, while the slide is worked on. */
+function drawSplitSnap(t: Tab): void {
+  const r = splitBody.getBoundingClientRect();
+  if (r.width < 2 || r.height < 2) return;
+  const dpr = window.devicePixelRatio || 1;
+  splitSnap.width = Math.round(r.width * dpr);
+  splitSnap.height = Math.round(r.height * dpr);
+  splitSnap.style.width = `${r.width}px`;
+  splitSnap.style.height = `${r.height}px`;
+  const ctx = splitSnap.getContext('2d')!;
+  ctx.clearRect(0, 0, splitSnap.width, splitSnap.height);
+  const d = ws.docOf(t);
+  const pic = isEmpty(d) ? null : recordPicture(d, 4);
+  $('#split-empty').hidden = !!pic;
+  if (!pic) return;
+  const pw = pic.box.x2 - pic.box.x1, ph = pic.box.y2 - pic.box.y1;
+  const k = Math.min((r.width * 0.9) / pw, (r.height * 0.9) / ph, 2) * dpr;
+  const src = pictureCanvas(d, pic, Math.min(300, 72 * k)).canvas;
+  const w = pw * k, h = ph * k;
+  ctx.drawImage(src, (splitSnap.width - w) / 2, (splitSnap.height - h) / 2, w, h);
+}
+new ResizeObserver(() => {
+  const st = splitState();
+  if (st && !splitSnap.hidden) drawSplitSnap(st.drawing);
+}).observe(splitBody);
+
+/** After the drawing beside a document or sheet changes: show it, at the zoom it had. */
+function paneEntered(fit = false): void {
+  layoutSplit();
+  showSheetParts();
+  resize();
+  const p = ws.pane;
+  if (p?.view && !fit) renderer.view = { ...p.view };
+  else if (p) fitSplitDrawing();
+  renderer.repaintAll();
+  editor.clearSelection();
+  editor.frame(true);
+  refreshKeys();
+  analysisKey = '';
+  scheduleAnalysis(true);
+}
+
+/** A drawing fitted to its side of a split, but no bigger than twice actual size (a lone ring would fill it). */
+function fitSplitDrawing(): void {
+  editor.fit();
+  const most = 2 * 96 / 72;
+  if (renderer.view.scale > most) editor.zoomTo(most);
+}
+
+/** Beside a document or sheet: give the keys and menus to the drawing (true) or the pages or cells. */
+function setSplitSide(drawing: boolean): void {
+  if (!ws.pane || cellEdit || splitDrawing === drawing) return;
+  if (!drawing) editor.closeCaption();
+  splitDrawing = drawing;
+  layoutSplit();
+  showSheetParts();
+  refreshKeys();
+  analysisKey = '';
+  scheduleAnalysis(true);
+  if (drawing) editor.onToolChange(editor.toolName);
+  else $('#hint').textContent = ws.active.mode === 'sheet' ? SHEET_HINT : DOC_HINT;
+}
+
+/** Beside slides: work on the drawing (true; the slide becomes a picture) or on the slide. */
+function focusSlideDrawing(on: boolean): void {
+  const st = splitState();
+  if (!st || st.main.mode !== 'slides') return;
+  if (on === (ws.active === st.drawing)) return;
+  if (on) {
+    // the slide as it looks now, kept as a picture on its side
+    const c = mainSnap.querySelector('canvas')!;
+    c.width = scene.width;
+    c.height = scene.height;
+    c.style.width = scene.style.width || `${scene.clientWidth}px`;
+    c.style.height = scene.style.height || `${scene.clientHeight}px`;
+    c.getContext('2d')!.drawImage(scene, 0, 0);
+    slideSplit = st.main;
+    ws.activate(st.drawing);
+  } else {
+    slideSplit = null;
+    ws.activate(st.main);
+  }
+}
+
+/** View > Split View: a drawing beside the document, sheet or slides showing, or no split. */
+function toggleSplit(): void {
+  if (splitState()) { closeSplit(); return; }
+  const t = ws.active;
+  if (t.mode === 'drawing') {
+    flash('Split view puts a drawing beside a document, sheet or slides: show one of those (or start one with the + tabs) and choose View > Split View there.', 8000);
+    return;
+  }
+  finishTyping();
+  const drawing = ws.tabs.find((x) => x.mode === 'drawing') ?? ws.addDrawing();
+  // fitted to its side the first time it shows there
+  drawing.view = null;
+  ws.setPartner(drawing);
+  splitDrawing = false;
+  if (ws.pane) paneEntered(true);
+  else layoutSplit();
+  mainResized();
+  flash(`${drawing.name} is beside the ${t.mode === 'document' ? 'document' : t.mode === 'sheet' ? 'sheet' : 'slides'}. Click a side to work on it; the bar above the drawing picks another drawing and puts structures in.`, 7000);
+}
+
+function closeSplit(): void {
+  const st = splitState();
+  if (!st) return;
+  if (ws.active === st.drawing) focusSlideDrawing(false);
+  finishTyping();
+  if (ws.pane) ws.pane.view = { ...renderer.view };
+  editor.clearSelection();
+  ws.setPartner(null);
+  splitDrawing = false;
+  layoutSplit();
+  const sheet = ws.active.mode === 'sheet', words = ws.active.mode === 'document';
+  editor.paused = sheet || words;
+  showSheetParts();
+  refreshKeys();
+  analysisKey = '';
+  scheduleAnalysis(true);
+  if (sheet) { $('#hint').textContent = SHEET_HINT; sheetMode.focus(); }
+  if (words) { $('#hint').textContent = DOC_HINT; docMode.focus(); }
+  resize();
+  renderer.repaintAll();
+  mainResized();
+}
+
+/** The document or slide got narrower or wider: fit the page or slide to its new width. */
+function mainResized(): void {
+  requestAnimationFrame(() => {
+    if (ws.active.mode === 'document') docMode.refit();
+    if (ws.active.mode === 'slides') { resize(); editor.fit(); }
+  });
+}
+
+/** The bar's drawing list: show another open drawing, or a new one. */
+splitPick.addEventListener('change', () => {
+  const st = splitState();
+  if (!st) return;
+  finishTyping();
+  const t = splitPick.value === 'new' ? ws.addDrawing() : ws.tabs.find((x) => String(x.id) === splitPick.value);
+  if (!t || t === st.drawing) return;
+  if (ws.active === st.drawing) {
+    // beside slides, with the drawing being worked on: the other drawing comes up in its place
+    st.main.partner = t;
+    slideSplit = st.main;
+    t.view = null;
+    ws.activate(t);
+    return;
+  }
+  if (ws.pane) ws.pane.view = { ...renderer.view };
+  editor.clearSelection();
+  t.view = null;
+  ws.setPartner(t);
+  if (ws.pane) paneEntered(true);
+  else layoutSplit();
+});
+
+/** The bar's Insert: the selected structures (or the whole drawing) into the document, cell or slide. */
+$('#split-insert').addEventListener('click', () => {
+  const st = splitState();
+  if (!st) return;
+  editor.closeCaption();
+  const live = !!ws.pane || ws.active === st.drawing;
+  const part = extractDrawing(ws.docOf(st.drawing), live && editor.hasSelection() ? editor.sel : null);
+  if (isEmpty(part)) { flash('Draw something first.'); return; }
+  if (st.main.mode === 'document') {
+    setSplitSide(false);
+    docMode.insertDrawing(part.contents());
+  } else if (st.main.mode === 'sheet') {
+    setSplitSide(false);
+    sheetMode.putStructure(part.contents());
+  } else {
+    focusSlideDrawing(false);
+    const deck = deckNow();
+    fitPasted(part, doc.style, deck?.master.fitPasted ? deck.master.drawing.bondLength : undefined);
+    editor.sel = insertDrawing(doc, part, pasteCentre(), 'Insert structure');
+    editor.changed();
+  }
+});
+
+$('#split-close').addEventListener('click', () => closeSplit());
+
+// clicking a side gives it the keys and menus
+splitBody.addEventListener('pointerdown', (e) => {
+  const st = splitState();
+  if (!st) return;
+  if (ws.pane) { setSplitSide(true); return; }
+  if (ws.active !== st.drawing) {
+    e.preventDefault();
+    e.stopPropagation();
+    focusSlideDrawing(true);
+    overlay.focus();
+  }
+}, true);
+for (const sel of ['#doc-pane', '#sheet-pane', '#doc-ribbon', '#sheet-ribbon']) {
+  $(sel).addEventListener('pointerdown', () => { if (ws.pane && splitDrawing) setSplitSide(false); }, true);
+}
+mainSnap.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  focusSlideDrawing(false);
+});
+$('#split-handle').addEventListener('pointerdown', (e) => {
+  const h = e.currentTarget as HTMLElement;
+  h.setPointerCapture(e.pointerId);
+  h.classList.add('dragging');
+  const right = workEl.getBoundingClientRect().right;
+  const move = (ev: PointerEvent) => {
+    splitWidth = Math.min(0.8, Math.max(0.2, (right - ev.clientX) / window.innerWidth));
+    applySplitWidth();
+  };
+  const up = () => {
+    h.classList.remove('dragging');
+    h.removeEventListener('pointermove', move);
+    h.removeEventListener('pointerup', up);
+    storeSettings();
+    mainResized();
+  };
+  h.addEventListener('pointermove', move);
+  h.addEventListener('pointerup', up);
+  e.preventDefault();
+});
+applySplitWidth();
+
 // ---------------------------------------------------------------- settings and the Hotkeys window
 
 let settingsLoaded = false;
@@ -1926,6 +2253,7 @@ function storeSettings(): void {
     modeColours,
     nicknames: ownNicknames,
     templates: ownTemplates(),
+    splitWidth,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -2029,6 +2357,8 @@ void loadSettings().then((s) => {
   ownNicknames = s.nicknames;
   addNicknames(ownNicknames);
   useOwnTemplates(s.templates);
+  splitWidth = s.splitWidth;
+  applySplitWidth();
   settingsLoaded = true;
   refreshKeys();
 });
@@ -2151,9 +2481,73 @@ function stressTest(n: number): void {
   updatePanels();
 }
 
+// ---------------------------------------------------------------- mass fragmentation
+
+editor.onFragment = (p, q, bondIds) => { void fragmentAt(p, q, bondIds); };
+
+/** The fragmentation tool's line: break the bonds it crosses and label each piece with its formula and mass. */
+async function fragmentAt(p: { x: number; y: number }, q: { x: number; y: number }, bondIds: number[]): Promise<void> {
+  if (!bondIds.length) { flash('Draw the line across one or more bonds to break them.'); return; }
+  if (!chem.ready) { flash('The chemistry engine is still loading.'); return; }
+  // one structure at a time: the one the first crossed bond belongs to
+  const first = doc.bonds.get(bondIds[0])!;
+  const frag = doc.fragmentOf(first.a1);
+  const bonds = bondIds.map((id) => doc.bonds.get(id)!).filter((b) => frag.has(b.a1));
+  const ex = toMolfile(doc, frag);
+  const index = new Map<number, number>();
+  ex.map.forEach((id, i) => { if (id >= 0) index.set(id, i); });
+  const cuts = bonds.map((b) => [index.get(b.a1), index.get(b.a2)] as [number | undefined, number | undefined])
+    .filter((c): c is [number, number] => c[0] !== undefined && c[1] !== undefined);
+  const res = await chem.fragments(ex.molblock, cuts).catch((e) => ({ error: String(e) }));
+  if ('error' in res) { flash(res.error); return; }
+  const size = doc.style.captionSize;
+  const font = doc.style.captionFont;
+  const pieces = res.map((r) => {
+    const atoms = r.atoms.map((i) => doc.atoms.get(ex.map[i])).filter((a): a is Atom => !!a);
+    const c = atoms.length ? { x: atoms.reduce((s, a) => s + a.x, 0) / atoms.length, y: atoms.reduce((s, a) => s + a.y, 0) / atoms.length } : p;
+    const runs = fragmentRuns(r.formula, r.exact);
+    const w = Math.max(measureText(r.formula, size, font), measureText(r.exact.toFixed(4), size, font));
+    return { r, c, runs, w };
+  });
+  const all = [...frag].map((id) => doc.atoms.get(id)!);
+  const box = { x1: Math.min(...all.map((a) => a.x)) - size * 0.5, y1: Math.min(...all.map((a) => a.y)) - size * 0.5, x2: Math.max(...all.map((a) => a.x)) + size * 0.5, y2: Math.max(...all.map((a) => a.y)) + size * 0.5 };
+  const places = captionPlaces(p, q, pieces.map((x) => x.c), pieces.map((x) => x.w), size, box);
+  doc.edit('Mass fragmentation', () => {
+    doc.addShape({ kind: 'line', dashed: true, x1: p.x, y1: p.y, x2: q.x, y2: q.y });
+    pieces.forEach((x, i) => doc.addCaption({ x: places[i].x, y: places[i].y, runs: x.runs, justify: 'left' }));
+  });
+  editor.changed();
+  const ring = res.length === 1 ? ' The bonds broken are in a ring, so the structure stays in one piece.' : '';
+  flash(`Broke ${cuts.length} bond${cuts.length === 1 ? '' : 's'}: ${res.map((r) => `${r.formula} ${r.exact.toFixed(4)}`).join(', ')}.${ring}`);
+}
+
 // ---------------------------------------------------------------- analysis (background chemistry)
 
 let analysisTimer = 0;
+/** The structures last analysed, for the panel's buttons. */
+let lastAnalysis: { results: FragmentResult[]; frags: Set<number>[] } | null = null;
+const adductSel = $<HTMLSelectElement>('#analysis-adduct');
+adductSel.innerHTML = COMMON_ADDUCTS.map((a) => `<option>${a}</option>`).join('');
+adductSel.addEventListener('change', () => scheduleAnalysis(true));
+$('#analysis-body').addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-insert]');
+  if (!b || !lastAnalysis) return;
+  const [kind, n] = b.dataset.insert!.split(':');
+  const r = lastAnalysis.results[Number(n)], frag = lastAnalysis.frags[Number(n)];
+  const runs = r && analysisRuns(kind as 'formula' | 'hrms' | 'ea', r, adductSel.value);
+  if (!runs || !frag) return;
+  // under the structure, lined up with its left edge
+  const atoms = [...frag].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a);
+  if (!atoms.length) return;
+  const x = Math.min(...atoms.map((a) => a.x)), y = Math.max(...atoms.map((a) => a.y)) + doc.style.bondLength * 1.2;
+  doc.edit(kind === 'formula' ? 'Analysis caption' : kind === 'hrms' ? 'HRMS text' : 'Elemental analysis text', () => {
+    // long lines wrap to the structure's width (or about 15 bond lengths, if wider)
+    const w = Math.max(Math.max(...atoms.map((a) => a.x)) - x, doc.style.bondLength * 15);
+    doc.addCaption({ x, y, runs, justify: 'left', ...(kind === 'formula' ? {} : { wrap: w }) });
+  });
+  editor.changed();
+  flash(kind === 'formula' ? 'Added the formula and masses as a caption. Double-click it to edit.' : 'Added the text. Double-click it to type the found values.');
+});
 let analysisSeq = 0;
 let analysisKey = '';
 
@@ -2193,24 +2587,175 @@ async function runAnalysis(force: boolean): Promise<void> {
   const roundTrip = performance.now() - t0;
   chemTimes.push(roundTrip);
   if (chemTimes.length > 50) chemTimes.shift();
-  const H = 1.00727646688, NA = 22.98922070;
-  panel.innerHTML = res.results.map((r, i) => {
-    if (r.error) return `<div class="frag"><p class="warn">${escapeHtml(r.error)}</p></div>`;
-    const unk = exports[i].unknownLabels;
-    const stereo = stereoSummary(frags[i]);
-    return `<div class="frag">
-      <div class="formula">${formatFormula(r.formula)}</div>
-      <table>
-        <tr><th>Exact mass</th><td>${r.exact.toFixed(4)}</td></tr>
-        <tr><th>Mol. wt.</th><td>${r.mw.toFixed(2)}</td></tr>
-        ${r.charge === 0 ? `<tr><th>[M+H]<sup>+</sup></th><td>${(r.exact + H).toFixed(4)}</td></tr><tr><th>[M+Na]<sup>+</sup></th><td>${(r.exact + NA).toFixed(4)}</td></tr>` : ''}
-        ${stereo ? `<tr><th>Stereo</th><td>${escapeHtml(stereo)}</td></tr>` : ''}
-      </table>
-      <div class="smiles" title="SMILES">${escapeHtml(r.smiles)}</div>
-      ${unk.length ? `<p class="warn">Not understood (left out): ${unk.map(escapeHtml).join(', ')}</p>` : ''}
-    </div>`;
-  }).join('');
+  // repeat groups (polymer brackets): weigh each unit and count it as many times as its label says
+  const groups = repeatGroups(doc);
+  const results: FragmentResult[] = [];
+  const polymers: (ReturnType<typeof withRepeats>['polymer'])[] = [];
+  for (let i = 0; i < res.results.length; i++) {
+    const mine = groups.filter((g) => g.inner.some((id) => frags[i].has(id)));
+    const units: RepeatUnit[] = [];
+    if (mine.length && !res.results[i].error) {
+      const index = new Map<number, number>();
+      exports[i].map.forEach((id, k) => { if (id >= 0) index.set(id, k); });
+      for (const g of mine) {
+        const cuts = g.crossing.map((c) => { const b = doc.bonds.get(c.bond)!; return [index.get(b.a1), index.get(b.a2)] as [number | undefined, number | undefined]; })
+          .filter((c): c is [number, number] => c[0] !== undefined && c[1] !== undefined);
+        const pieces = cuts.length ? await chem.fragments(exports[i].molblock, cuts).catch(() => null) : null;
+        const at = index.get(g.inner[0]);
+        const unit = pieces && !('error' in pieces) ? pieces.find((p) => at !== undefined && p.atoms.includes(at)) : null;
+        if (unit) units.push({ text: g.text, count: g.count, counts: unit.counts, exact: unit.exact, mw: unit.mw });
+      }
+    }
+    const w = withRepeats(res.results[i], units);
+    results.push(w.r);
+    polymers.push(w.polymer);
+  }
+  if (seq !== analysisSeq) return;
+  lastAnalysis = { results, frags };
+  panel.innerHTML = results.map((r, i) => polymers[i] ? polymerHtml(r, polymers[i]!) : analysisHtml(r, i, adductSel.value, { stereo: r.error ? '' : stereoSummary(frags[i]), unknown: exports[i].unknownLabels })).join('');
   updatePanels();
+}
+
+/**
+ * Structure > Stereo Group: puts the selected stereocentres in an enhanced stereo group (abs, &n
+ * or orn), as in ChemDraw and V3000 molfiles, or takes them out of one.
+ */
+async function setStereoGroup(): Promise<void> {
+  const sel = [...editor.sel.atoms].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a);
+  const centres = sel.filter((a) => live.atom(a.id) || a.enhStereo);
+  if (!centres.length) { flash(sel.length ? 'None of the selected atoms is a stereocentre.' : 'Select the stereocentres to group first.'); return; }
+  // the next free group number in these structures, for each kind
+  const used = { and: new Set<number>(), or: new Set<number>() };
+  for (const a of centres) for (const id of doc.fragmentOf(a.id)) {
+    const e = doc.atoms.get(id)?.enhStereo;
+    if (e && e.type !== 'abs' && !editor.sel.atoms.has(id)) used[e.type].add(e.group ?? 1);
+  }
+  const first = centres[0].enhStereo;
+  const free = (t: 'and' | 'or') => { let n = 1; while (used[t].has(n)) n++; return n; };
+  const got = await ask('Stereo group', [
+    { name: 'type', label: 'Group', value: first?.type ?? 'and', options: [
+      { value: 'abs', label: 'abs: configuration known as drawn' },
+      { value: 'and', label: '& (AND): a mixture of both forms' },
+      { value: 'or', label: 'or (OR): one form, not known which' },
+      { value: 'none', label: 'None' },
+    ] },
+    { name: 'group', label: 'Number', value: String(first && first.type !== 'abs' ? first.group ?? 1 : free(first?.type === 'or' ? 'or' : 'and')), type: 'number' },
+  ], { ok: 'Set', note: `${centres.length} stereocentre${centres.length === 1 ? '' : 's'}. Centres with the same group and number change together: &1 centres are a racemic pair, or1 centres are one unknown enantiomer.` });
+  if (!got) return;
+  const type = got.type as 'abs' | 'and' | 'or' | 'none';
+  const group = Math.max(1, Math.round(Number(got.group) || 1));
+  doc.edit('Stereo group', () => {
+    for (const a of centres) doc.updateAtom(a.id, { enhStereo: type === 'none' ? undefined : type === 'abs' ? { type } : { type, group } });
+  });
+  editor.changed();
+}
+
+/**
+ * Structure > Polymer or Repeat Brackets: labels the selected brackets n (a polymer's repeat unit)
+ * or a number (a group repeated that many times). The atoms between the brackets are the unit.
+ */
+async function setRepeatGroup(): Promise<void> {
+  const br = [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((s): s is Shape => s?.kind === 'bracket');
+  if (!br.length) { flash('Select the brackets first (draw them round the repeat unit with the bracket tool).'); return; }
+  // the label goes on the closing bracket (lips pointing back to the left), as ChemDraw puts it
+  const closing = br.find((s) => lipDirection(s).x < -0.5) ?? br[br.length - 1];
+  const now = br.find((s) => s.repeat)?.repeat ?? 'n';
+  const got = await ask('Polymer or repeat brackets', [{ name: 'text', label: 'Label', value: now }], {
+    ok: 'Set', note: 'Type n (or another letter) for a polymer\'s repeat unit, or a number for a group repeated that many times. Leave it empty to take the label off. The atoms between the brackets are the unit; the bonds crossing them join it to the rest.',
+  });
+  if (!got) return;
+  const text = got.text.trim();
+  doc.edit('Repeat brackets', () => {
+    for (const s of br) if (s.repeat && s.id !== closing.id) doc.updateShape(s.id, { repeat: undefined });
+    doc.updateShape(closing.id, { repeat: text || undefined });
+  });
+  editor.changed();
+  if (text) {
+    const g = repeatGroups(doc).find((x) => x.label.id === closing.id);
+    if (!g) flash('Couldn\'t find the bracket facing this one. Draw both brackets, facing each other, round the repeat unit.');
+    else if (!g.inner.length) flash('There are no atoms between these brackets.');
+    else flash(`${g.inner.length} atom${g.inner.length === 1 ? '' : 's'} in the repeat unit, joined by ${g.crossing.length} bond${g.crossing.length === 1 ? '' : 's'} crossing the brackets.`);
+  }
+}
+
+let rGroupLast = { rows: '', prefix: '', cols: 'formula-mw', extra: 'Yield (%)' };
+
+/**
+ * Structure > R-Group Table: a table under a core structure with R groups (R1, R2…) listing what
+ * each group is in each compound, with each compound's number, formula and mass worked out by
+ * putting its groups in place. The result is an ordinary table, so anything in it can be typed over.
+ */
+async function rGroupTable(): Promise<void> {
+  const root = editor.sel.atoms.size ? [...editor.sel.atoms][0] : editor.lastEdited;
+  if (root === null || !doc.atoms.has(root)) { flash('Select a structure with R groups (R1, R2, X…) first.'); return; }
+  const ids = [...doc.fragmentOf(root)];
+  const groups = rGroupsOf(doc, ids);
+  if (!groups.length) { flash('This structure has no R groups. Type R1, R2… (or R, X, Ar) as atom labels where the groups go.'); return; }
+  const labels = groups.map((g) => g.label);
+  const got = await ask('R-group table', [
+    { name: 'rows', label: `One compound per line: ${labels.join(', ')}`, value: rGroupLast.rows, type: 'textarea', placeholder: labels.map((_, i) => ['Me', 'H', 'Ph', 'OMe'][i % 4]).join(', ') + '\n' + labels.map((_, i) => ['OMe', 'Cl', 'CF3', 'Et'][i % 4]).join(', ') },
+    { name: 'prefix', label: 'Compound number', value: rGroupLast.prefix, placeholder: 'e.g. 2 for 2a, 2b…' },
+    { name: 'cols', label: 'Worked out', value: rGroupLast.cols, options: [
+      { value: 'formula-mw', label: 'Formula and MW' },
+      { value: 'formula-mw-exact', label: 'Formula, MW and exact mass' },
+      { value: 'none', label: 'Nothing' },
+    ] },
+    { name: 'extra', label: 'Columns to fill in', value: rGroupLast.extra, placeholder: 'e.g. Yield (%), ee (%)' },
+  ], { ok: 'Make table', note: 'Type each compound\'s groups the way you would label an atom (Me, Ph, OMe, CO2Et, Cl, H), separated by commas, or paste cells from Excel. Start a line with #number (#12, Me, H) to give that compound its own number.' });
+  if (!got) return;
+  rGroupLast = { rows: got.rows, prefix: got.prefix, cols: got.cols, extra: got.extra };
+  const parsed = parseRows(got.rows, labels);
+  if (!parsed.length) { flash('Type at least one compound\'s groups.'); return; }
+  const numbers = rowNumbers(parsed.length, got.prefix);
+  const rows = parsed.map((r, i) => ({ number: r.number ?? numbers[i], values: r.values }));
+  const cols = { formula: got.cols !== 'none', mw: got.cols !== 'none', exact: got.cols === 'formula-mw-exact', extra: got.extra.split(',').map((e) => e.trim()).filter((e) => e) };
+  let masses: RowMass[] = rows.map(() => null);
+  if (cols.formula) {
+    const mols = rows.map((r) => substituted(doc, ids, Object.fromEntries(labels.map((l, k) => [l, r.values[k]]))));
+    const ok = rows.map((r, i) => r.values.every((v) => v) && !mols[i].unknownLabels.length);
+    const res = await chem.analyze(mols.map((m) => ({ molblock: m.molblock, map: m.map }))).catch(() => null);
+    masses = rows.map((_, i) => {
+      const x = res?.results[i];
+      return ok[i] && x && !x.error ? { formula: x.formula, mw: x.mw, exact: x.exact } : null;
+    });
+  }
+  const t = tableFromCells(rGroupCells(labels, rows, masses, cols), textMeasure, doc.style.captionSize);
+  const atoms = ids.map((id) => doc.atoms.get(id)!);
+  const top = { x: (Math.min(...atoms.map((a) => a.x)) + Math.max(...atoms.map((a) => a.x))) / 2, y: Math.max(...atoms.map((a) => a.y)) + doc.style.bondLength * 1.2 };
+  placeTable(t, 'R-group table', top);
+  const bad = masses.filter((m) => !m).length;
+  flash(cols.formula && bad
+    ? `Made the table. ${bad} compound${bad === 1 ? '\'s' : 's\''} formula couldn't be worked out (a group left empty or not recognised), shown as ?. Double-click a cell to type it in.`
+    : 'Made the table. Double-click any cell to change it; the Style panel has its rows, columns and lines.', 8000);
+}
+
+/**
+ * Structure > Chiral Flag: the boxed Abs, Rel or Rac below the selected structure (or the one
+ * last drawn on), replacing a flag already there.
+ */
+async function setChiralFlag(): Promise<void> {
+  const root = editor.sel.atoms.size ? [...editor.sel.atoms][0] : editor.lastEdited;
+  if (root === null || !doc.atoms.has(root)) { flash('Select a structure first.'); return; }
+  const atoms = [...doc.fragmentOf(root)].map((id) => doc.atoms.get(id)!);
+  const box = { x1: Math.min(...atoms.map((a) => a.x)), y1: Math.min(...atoms.map((a) => a.y)), x2: Math.max(...atoms.map((a) => a.x)), y2: Math.max(...atoms.map((a) => a.y)) };
+  const L = doc.style.bondLength;
+  const near = [...doc.shapes.values()].find((s) => s.kind === 'symbol' && s.symbol && CHIRAL_FLAGS[s.symbol] && s.x1 < box.x2 + L && s.x2 > box.x1 - L && s.y1 < box.y2 + 2 * L && s.y2 > box.y1 - L);
+  const got = await ask('Chiral flag', [{ name: 'flag', label: 'Flag', value: near?.symbol ?? 'Absolute', options: [
+    { value: 'Absolute', label: 'Abs: the structure is one enantiomer, as drawn' },
+    { value: 'Relative', label: 'Rel: relative configuration only' },
+    { value: 'Racemic', label: 'Rac: a racemic mixture' },
+    { value: 'none', label: 'None (remove the flag)' },
+  ] }], { ok: 'Set' });
+  if (!got) return;
+  doc.edit('Chiral flag', () => {
+    if (near) doc.removeShape(near.id);
+    if (got.flag === 'none') return;
+    const size = doc.style.captionSize;
+    const w = measureText(CHIRAL_FLAGS[got.flag], size) + 4, h = size * 1.15 + 4;
+    const x2 = box.x2 + L * 0.3, y1 = box.y2 + L * 0.6;
+    doc.addShape({ kind: 'symbol', symbol: got.flag, x1: x2 - w, y1, x2, y2: y1 + h });
+  });
+  editor.changed();
 }
 
 /**
@@ -2250,10 +2795,6 @@ function stereoSummary(frag: Set<number>): string {
   }
   dbl.sort(byPlace);
   return [centres.join(', '), dbl.map((d) => d.l).join(', ')].filter(Boolean).join('; ');
-}
-
-function formatFormula(f: string): string {
-  return escapeHtml(f).replace(/(\d+)(?=[+−]$)/, '<sup>$1</sup>').replace(/([A-Za-z])(\d+)/g, '$1<sub>$2</sub>').replace(/([+−])$/, '<sup>$1</sup>');
 }
 
 function escapeHtml(s: string): string {
@@ -2456,7 +2997,7 @@ requestAnimationFrame(() => {
 });
 
 // Hooks for the automated speed tests.
-(window as any).__app = { doc, editor, renderer, chem, live, openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode };
+(window as any).__app = { doc, editor, renderer, chem, live, cdxml: (name: string) => writeCdxml(doc, { name, textMeasure: measureText }), openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode };
 
 // ---------------------------------------------------------------- desktop self-test
 

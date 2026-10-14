@@ -4,6 +4,7 @@
 import type { ChemRequest, ChemResponse, FragmentResult } from '../worker/chem-worker';
 import type { StereoTags } from './stereo';
 import type { MolProps } from '../sheet/properties';
+import type { MassFragment } from './props';
 
 export class ChemClient {
   ready = false;
@@ -93,5 +94,11 @@ export class ChemClient {
   async substructure(query: string, mols: string[]): Promise<{ results: (boolean | null)[]; error?: string }> {
     const r = await this.request<Extract<ChemResponse, { type: 'substructure' }>>((id) => ({ type: 'substructure', id, query, mols }));
     return { results: r.results, error: r.error };
+  }
+
+  /** Pieces of a structure (a molfile) when bonds between molfile atoms are broken. */
+  async fragments(molblock: string, cuts: [number, number][]): Promise<MassFragment[] | { error: string }> {
+    const r = await this.request<Extract<ChemResponse, { type: 'fragments' }>>((id) => ({ type: 'fragments', id, molblock, cuts }));
+    return r.results;
   }
 }

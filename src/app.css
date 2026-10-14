@@ -197,9 +197,9 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
 #work {
   grid-area: canvas;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-rows: minmax(0, 1fr) auto;
-  grid-template-areas: 'list host' 'list notes';
+  grid-template-areas: 'list host split' 'list notes split';
   min-width: 0;
   min-height: 0;
 }
@@ -395,7 +395,9 @@ dialog ul { margin: 0; padding-left: 16px; }
     grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
     grid-template-areas: 'top top' 'tabs tabs' 'ribbon ribbon' 'tools canvas' 'side side' 'status status';
   }
-  #work { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; grid-template-areas: 'list' 'host' 'notes'; }
+  #work { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto auto; grid-template-areas: 'list' 'host' 'notes' 'split'; }
+  #split-pane { width: auto; max-width: none; height: 45vh; border-left: 0; border-top: 1px solid var(--line); }
+  #split-handle { display: none; }
   #slide-list { width: auto; max-height: 120px; border-right: 0; border-bottom: 1px solid var(--line); }
   .sl-list { flex-direction: row; overflow-x: auto; overflow-y: hidden; }
   .sl-add { display: none; }
@@ -414,7 +416,9 @@ button.link { border: 0; background: none; padding: 0 2px; color: var(--accent);
 /* small question windows (Rotate…, Scale…) */
 dialog.ask { min-width: min(92vw, 340px); }
 .ask-row { display: grid; grid-template-columns: 9em 1fr auto; align-items: center; gap: 8px; margin: 8px 0; }
-.ask-row input, .ask-row select { min-width: 0; font: inherit; padding: 3px 6px; }
+.ask-row input, .ask-row select, .ask-row textarea { min-width: 0; font: inherit; padding: 3px 6px; }
+.ask-row.ask-wide { grid-template-columns: 1fr; align-items: start; }
+.ask-row textarea { width: 32em; max-width: 70vw; resize: vertical; font-family: ui-monospace, Consolas, monospace; }
 .ask-buttons { display: flex; justify-content: flex-end; gap: 8px; margin: 14px 0 0; }
 dialog.name-dialog { width: min(92vw, 520px); }
 dialog.name-dialog .muted { margin: 4px 0 10px; max-width: 60ch; }
@@ -651,7 +655,7 @@ dialog.master-dialog > form > .muted { margin: 2px 0 6px; max-width: 60ch; }
 #sheet-pane { grid-area: host; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); }
 #sheet-pane[hidden] { display: none; }
 body.sheet-mode #canvas-host, body.doc-mode #canvas-host { display: none; }
-body.sheet-mode:not(.floating-drawing) #tools, body.doc-mode:not(.floating-drawing) #tools { display: none; }
+body.sheet-mode:not(.floating-drawing):not(.split-view) #tools, body.doc-mode:not(.floating-drawing):not(.split-view) #tools { display: none; }
 /* drawing a structure for a cell or a document: the drawing area floats over the sheet or pages */
 body.sheet-mode.floating-drawing #canvas-host, body.doc-mode.floating-drawing #canvas-host {
   display: block;
@@ -749,11 +753,11 @@ button.primary:hover { filter: brightness(1.08); }
 
 /* the side panel in Sheet mode shows the cell, in Document mode the formatting; drawing panels come back while drawing a structure */
 #cell-section, #doc-section { display: none; }
-body.doc-mode:not(.floating-drawing) #doc-section { display: block; }
-body.doc-mode:not(.floating-drawing) #doc-section, body.sheet-mode:not(.floating-drawing) #cell-section { margin-top: 0; border-top: 0; padding-top: 0; }
-body.doc-mode:not(.floating-drawing) aside > section:not(#doc-section) { display: none; }
-body.sheet-mode:not(.floating-drawing) #cell-section { display: block; }
-body.sheet-mode:not(.floating-drawing) aside > section:not(#cell-section) { display: none; }
+body.doc-mode:not(.floating-drawing):not(.split-drawing) #doc-section { display: block; }
+body.doc-mode:not(.floating-drawing):not(.split-drawing) #doc-section, body.sheet-mode:not(.floating-drawing):not(.split-drawing) #cell-section { margin-top: 0; border-top: 0; padding-top: 0; }
+body.doc-mode:not(.floating-drawing):not(.split-drawing) aside > section:not(#doc-section) { display: none; }
+body.sheet-mode:not(.floating-drawing):not(.split-drawing) #cell-section { display: block; }
+body.sheet-mode:not(.floating-drawing):not(.split-drawing) aside > section:not(#cell-section) { display: none; }
 .cell-name { font-family: var(--mono-font); text-transform: none; letter-spacing: 0; color: var(--accent); margin-left: 4px; }
 #cell-body p { margin: 4px 0; }
 #cell-body .small { font-size: 11px; }
@@ -878,3 +882,85 @@ dialog.periodic-table { position: fixed; inset: 64px 16px auto auto; margin: 0; 
 .pt-cell small { position: absolute; top: 1px; left: 2px; font-size: 0.5rem; font-weight: 400; color: var(--muted); }
 .pt-cell:hover, .pt-cell:focus-visible { border-color: var(--accent); }
 .pt-cell[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+
+/* Analysis panel: ion picker, isotope pattern, properties and the text buttons */
+#analysis-adduct { font: inherit; font-size: 11px; padding: 0 2px; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 4px; }
+.frag details { margin-top: 6px; }
+.frag summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.frag summary sup { line-height: 0; }
+.iso-svg { display: block; margin: 4px 0; max-width: 100%; }
+.iso-svg line { stroke: var(--accent); stroke-width: 3; }
+.iso-svg line.axis { stroke: var(--line); stroke-width: 1; }
+.iso-svg text { font-size: 9px; fill: var(--muted); }
+.iso-table td { padding: 1px 10px 1px 0; font-size: 12px; }
+.an-buttons { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.an-buttons button { padding: 2px 8px; font-size: 12px; }
+aside th sup, aside th sub { line-height: 0; }
+
+/* References > Manage References, a reference's details, and Insert Citation's list */
+dialog.refs-dialog { width: min(94vw, 860px); display: flex; flex-direction: column; }
+dialog.refs-dialog:not([open]) { display: none; }
+dialog.refs-dialog > p { margin: 4px 0; max-width: 80ch; }
+.refs-head { display: flex; align-items: center; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
+.refs-head h2 { margin: 0; }
+.refs-head input { flex: 1 1 200px; max-width: 320px; font: inherit; padding: 4px 8px; }
+.refs-style { grid-template-columns: 9em minmax(0, 1fr); max-width: 520px; }
+.refs-warning { min-height: 1.2em; color: var(--slow); }
+.refs-warning:empty { display: none; }
+.refs-table-wrap { overflow: auto; min-height: 120px; max-height: 46vh; border: 1px solid var(--line); border-radius: 6px; }
+.refs-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.refs-table th { position: sticky; top: 0; background: var(--panel); text-align: left; font-weight: 600; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+.refs-table td { padding: 3px 6px; border-top: 1px solid var(--line); vertical-align: top; cursor: default; }
+.refs-table td:nth-child(3) { width: 50%; }
+.refs-table td:nth-child(4) { white-space: nowrap; }
+.refs-table tr.uncited td:nth-child(4) { color: var(--muted); }
+.refs-table tr.picked td { background: var(--accent-soft); }
+.refs-buttons { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; margin-top: 10px; }
+.refs-buttons > span { display: flex; flex-wrap: wrap; gap: 6px; }
+dialog.ref-edit { width: min(94vw, 620px); }
+dialog.ref-edit form { margin: 0; }
+.ref-row { grid-template-columns: 9em minmax(0, 1fr) auto; margin: 5px 0; }
+dialog.ref-edit textarea, dialog.ref-paste textarea { font: inherit; padding: 3px 6px; min-width: 0; resize: vertical; width: 100%; box-sizing: border-box; }
+.ref-status { min-height: 1.2em; margin: 4px 0; }
+.ref-preview { margin: 4px 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font-family: 'Times New Roman', Times, serif; font-size: 14px; }
+.ref-preview.replaced { text-decoration: line-through; color: var(--muted); }
+.ref-own { display: flex; gap: 6px; align-items: start; margin: 6px 0; }
+.ref-reset { display: flex; justify-content: flex-end; margin-top: 4px; }
+dialog.ref-paste { width: min(94vw, 620px); }
+dialog.cite-pick { width: min(94vw, 700px); }
+dialog.cite-pick input[type='search'] { width: 100%; box-sizing: border-box; font: inherit; padding: 4px 8px; }
+.cite-list { margin-top: 8px; max-height: 46vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; }
+.cite-list:empty { display: none; }
+.cite-row { display: grid; grid-template-columns: auto 2.2em minmax(0, 1fr); gap: 6px; align-items: start; padding: 4px 8px; border-top: 1px solid var(--line); cursor: pointer; font-size: 12px; }
+.cite-row:first-child { border-top: 0; }
+.cite-row:hover { background: var(--accent-soft); }
+.cite-num { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+dialog.cite-pick .ask-buttons .spacer { flex: 1; }
+
+/* ------------------------------------------------------------------ Split view: a drawing beside a document, sheet or slides */
+#split-pane {
+  grid-area: split; position: relative; display: flex; flex-direction: column;
+  width: var(--split-w, 45vw); min-width: 220px; max-width: 80vw; min-height: 0;
+  border-left: 1px solid var(--line); background: var(--panel);
+}
+#split-pane[hidden] { display: none; }
+#split-bar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--line); min-width: 0; }
+#split-bar .split-label { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+#split-bar select { min-width: 0; max-width: 14em; font: inherit; }
+#split-bar .grow { flex: 1; }
+#split-close { border: 0; background: none; font-size: 18px; line-height: 1; padding: 0 4px; cursor: pointer; color: var(--muted); }
+#split-close:hover { color: var(--text); }
+#split-body { position: relative; flex: 1; min-height: 0; background: #fff; overflow: hidden; cursor: pointer; }
+body.split-drawing #split-body, body.split-live #split-body { cursor: auto; }
+body.split-view #split-body > #canvas-host { display: block; position: absolute; inset: 0; margin: 0; border: 0; box-shadow: none; }
+#split-snap { position: absolute; left: 0; top: 0; }
+#split-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; margin: 0; color: var(--muted); pointer-events: none; }
+#split-empty[hidden] { display: none; }
+/* the side being worked on has the mode's colour along its top */
+body.split-drawing #split-bar { box-shadow: inset 0 -2px 0 var(--accent); }
+#split-handle { position: absolute; left: -4px; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 4; }
+#split-handle:hover, #split-handle.dragging { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+#main-snap { grid-area: host; position: relative; overflow: hidden; background: var(--surround); cursor: pointer; min-height: 0; }
+#main-snap[hidden] { display: none; }
+#main-snap canvas { position: absolute; left: 0; top: 0; }
+@media (max-width: 900px) { #split-pane { min-width: 160px; } }

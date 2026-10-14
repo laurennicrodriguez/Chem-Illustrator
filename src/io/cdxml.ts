@@ -2,7 +2,8 @@
 // their formatting, arrows, and the common graphics (lines, boxes, circles, brackets,
 // charge symbols). Anything not understood yet is counted and skipped, never fatal.
 
-import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles } from '../model';
+import { lipDirection } from '../chem/polymer';
+import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, CHIRAL_FLAGS } from '../model';
 import { TEXT_TAG, parseTextTag, runsFromChemDraw } from '../text/chemdraw-text';
 import { DocStyle } from '../style';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
@@ -195,6 +196,9 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         }
       }
       if (n.getAttribute('ShowAtomStereo') === 'yes') extra.showStereo = true;
+      const enh = n.getAttribute('EnhancedStereoType');
+      if (enh === 'Absolute') extra.enhStereo = { type: 'abs' };
+      else if (enh === 'And' || enh === 'Or') extra.enhStereo = { type: enh === 'And' ? 'and' : 'or', group: num(n, 'EnhancedStereoGroupNum', 1) };
       const groupTag = kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === GROUP_TAG)?.getAttribute('Value');
       if (groupTag) extra.group = groupTag;
       if (n.getAttribute('ShowTerminalCarbonLabels') === 'yes' || n.getAttribute('ShowNonTerminalCarbonLabels') === 'yes') extra.showCarbon = true;
@@ -547,7 +551,14 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       case 'Symbol': {
         if (bb.length < 4) return;
         const sym = g.getAttribute('SymbolType') ?? '';
-        if (sym === 'LonePair') {
+        if (CHIRAL_FLAGS[sym]) {
+          // a chiral flag: ChemDraw keeps the word as text inside it, and draws the box round that
+          const t = kids(g).find((k) => k.nodeName === 't');
+          const tb = pts(t?.getAttribute('BoundingBox') ?? null);
+          const r = tb.length >= 4 ? { x1: tb[0], y1: tb[1], x2: tb[2], y2: tb[3] } : { x1: Math.min(bb[0], bb[2]), y1: bb[1] - 11, x2: Math.max(bb[0], bb[2]), y2: bb[1] };
+          const pad = 2;
+          add({ ...base, kind: 'symbol', symbol: sym, x1: r.x1 - pad, y1: r.y1 - pad, x2: r.x2 + pad, y2: r.y2 + pad });
+        } else if (sym === 'LonePair') {
           // the two dots
           add({ ...base, kind: 'symbol', symbol: sym, x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3] });
         } else if (sym === 'Electron') {
@@ -570,6 +581,32 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       }
       default:
         skip(`graphic ${type}`);
+    }
+  };
+
+  /** Polymer and repeat groups (ChemDraw's bracketedgroup), read once the brackets are in. */
+  const pendingRepeats: Element[] = [];
+  const readRepeats = () => {
+    if (!pendingRepeats.length) return;
+    const byXmlId = new Map<string, Element>();
+    for (const e of all) { const id = e.getAttribute('id'); if (id) byXmlId.set(id, e); }
+    for (const g of pendingRepeats) {
+      const usage = g.getAttribute('BracketUsage');
+      if (usage !== 'SRU' && usage !== 'MultipleGroup') { skip(`bracketedgroup ${usage ?? ''}`.trim()); continue; }
+      const text = usage === 'SRU' ? g.getAttribute('SRULabel') || 'n' : String(Math.round(num(g, 'RepeatCount', 2)));
+      const brackets: { e: Element; sh: Shape }[] = [];
+      for (const k of kids(g)) {
+        if (k.nodeName !== 'bracketattachment') continue;
+        const e = byXmlId.get(k.getAttribute('GraphicID') ?? '');
+        const ref = e ? refOf.get(e) : undefined;
+        const sh = ref && ref[0] === 's' ? doc.shapes.get(Number(ref.slice(1))) : undefined;
+        if (e && sh?.kind === 'bracket') brackets.push({ e, sh });
+      }
+      if (!brackets.length) continue;
+      // the label goes where ChemDraw shows it: on the bracket holding the label text, else the closing one
+      const labelled = (brackets.find((b) => kids(b.e).some((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === 'bracketusage'))
+        ?? brackets.find((b) => lipDirection(b.sh).x < -0.5) ?? brackets[brackets.length - 1]).sh;
+      labelled.repeat = text;
     }
   };
 
@@ -603,7 +640,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
           }
           break;
         }
-        case 'scheme': case 'step': case 'colortable': case 'fonttable': case 'objecttag': case 'bracketedgroup': case 'chemicalproperty': break;
+        case 'bracketedgroup': pendingRepeats.push(ch); break;
+        case 'scheme': case 'step': case 'colortable': case 'fonttable': case 'objecttag': case 'chemicalproperty': break;
         default: skip(ch.nodeName);
       }
     }
@@ -612,6 +650,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   doc.bulk(() => {
     walk(root);
     readSteps(all, refOf, doc);
+    readRepeats();
     for (const c of pendingCircles) if (!ringOfCircle(doc, c)) c.oval();
     // Element labels like "OH", "H2N" or "N" become automatic labels (so they re-justify
     // when the structure changes); anything else is kept exactly as written.

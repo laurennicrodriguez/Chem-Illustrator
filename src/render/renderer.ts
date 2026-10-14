@@ -5,7 +5,7 @@
 // fast however big the document is. Label layouts and bond geometry are cached per atom
 // and bond and only recomputed near what changed.
 
-import { Doc, Atom, Bond, Arrow, Caption, Shape, applyBase, type TextBase } from '../model';
+import { Doc, Atom, Bond, Arrow, Caption, Shape, applyBase, enhancedText, CHIRAL_FLAGS, flagTextSize, type TextBase } from '../model';
 import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
 import { crossingGaps } from '../chem/crossing';
 import { FADE, tint } from '../colours';
@@ -24,6 +24,7 @@ import { placeholderRect, isEmptyText } from '../deck/deck';
 import { imageFor } from './images';
 import { layoutTable, drawTable, type TableLayout, type TablePart } from '../table';
 import type { TableData } from '../model';
+import { repeatLabelPlace } from '../chem/polymer';
 
 export { FONT_STACK };
 
@@ -482,6 +483,7 @@ export class Renderer {
         const d = info?.atom(a.id);
         if (d) { const t = `(${d})`; draw(t, place.atom(a, t), PREVIEW_COLOR); }
       }
+      if (a.enhStereo) { const t = enhancedText(a.enhStereo); draw(t, place.enhanced(a, t), a.color ?? '#000'); }
     }
     for (const b of bonds) {
       if (b.order !== 2 && !b.stereoLabel) continue;
@@ -566,7 +568,7 @@ export class Renderer {
     for (const s of this.sortedShapes(doc)) {
       const b = s.kind === 'table' ? this.tableBox(s) : { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
       if (b.x2 < vis.x1 || b.x1 > vis.x2 || b.y2 < vis.y1 || b.y1 > vis.y2) continue;
-      this.drawShape(ctx, s, st.lineWidth);
+      this.drawShape(ctx, s, st.lineWidth, st.labelSize);
     }
 
     // Only atoms near this area, and their bonds (found through the spatial index).
@@ -851,7 +853,7 @@ export class Renderer {
     ctx.fillText(t, a.x + away.x * size * 0.8 - w / 2, a.y + away.y * size * 0.8 + size * 0.35);
   }
 
-  private drawShape(ctx: CanvasRenderingContext2D, s: Shape, lw: number): void {
+  private drawShape(ctx: CanvasRenderingContext2D, s: Shape, lw: number, labelSize = 10): void {
     const x = Math.min(s.x1, s.x2), y = Math.min(s.y1, s.y2);
     const w = Math.abs(s.x2 - s.x1), h = Math.abs(s.y2 - s.y1);
     ctx.lineWidth = s.bold ? lw * 2.5 : lw;
@@ -899,7 +901,15 @@ export class Renderer {
         break;
       case 'symbol': {
         const cx = (s.x1 + s.x2) / 2, cy = (s.y1 + s.y2) / 2, r = Math.max(1.6, Math.min(w, h) / 2);
-        if (s.symbol === 'CirclePlus' || s.symbol === 'CircleMinus') {
+        const flag = s.symbol ? CHIRAL_FLAGS[s.symbol] : undefined;
+        if (flag) {
+          // a chiral flag: the word in a rounded box
+          ctx.roundRect(x, y, w, h, Math.min(w, h) * 0.2);
+          ctx.stroke();
+          const size = flagTextSize(s);
+          ctx.font = `${size}px ${FONT_STACK}`;
+          ctx.fillText(flag, cx - measureText(flag, size) / 2, cy + size * 0.32);
+        } else if (s.symbol === 'CirclePlus' || s.symbol === 'CircleMinus') {
           ctx.arc(cx, cy, r, 0, Math.PI * 2);
           ctx.moveTo(cx - r * 0.6, cy); ctx.lineTo(cx + r * 0.6, cy);
           if (s.symbol === 'CirclePlus') { ctx.moveTo(cx, cy - r * 0.6); ctx.lineTo(cx, cy + r * 0.6); }
@@ -939,6 +949,13 @@ export class Renderer {
           trace(bracketPath(add(q, mul(n, gap)), add(p, mul(n, gap)), s.bracket));
         }
         ctx.stroke();
+        if (s.repeat) {
+          // a repeat group's label (n, 3…) by the lower end, as ChemDraw puts it
+          const size = 0.75 * labelSize;
+          const pos = repeatLabelPlace(s, size, measureText(s.repeat, size));
+          ctx.font = `${/^\d+$/.test(s.repeat) ? '' : 'italic '}${size}px ${FONT_STACK}`;
+          ctx.fillText(s.repeat, pos.x, pos.y);
+        }
         break;
       }
     }

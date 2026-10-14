@@ -6,7 +6,7 @@
 // deleted ones are removed and new ones are added. A new drawing is written from scratch in
 // the same form ChemDraw uses, so ChemDraw opens both.
 
-import { Doc, Atom, Bond, Caption, Arrow, Shape, TextRun, Entity, Kind, StepRoles } from '../model';
+import { Doc, Atom, Bond, Caption, Arrow, Shape, TextRun, Entity, Kind, StepRoles, enhancedText, CHIRAL_FLAGS, flagTextSize } from '../model';
 import { interpretArrow, isReactionArrow, isStep, plainMeasure, schemeItems, type Item } from '../chem/reaction';
 import { SYMBOLS } from '../chem/elements';
 import { labelSpec, layoutLabel, labelDir, labelGraph, tokenize, isGenericLabel, Measure, MiniGraph, kekulize } from '../chem/labels';
@@ -23,6 +23,7 @@ import { FADE, tint } from '../colours';
 import { layoutTable, cellAlign, isCovered, spanOf, NOTE_SCALE } from '../table';
 import { TABLE_TAG, TABLE_PART_TAG, tableBorders, type TableTag } from './cdxml-table';
 import { bondLayer, crossingBonds } from '../chem/crossing';
+import { repeatGroups, repeatCount, repeatLabelPlace } from '../chem/polymer';
 import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
 
 /** Numbers in an attribute such as "12.5 30 0". */
@@ -116,6 +117,7 @@ class CdxmlWriter {
     for (const r of doc.arrows.values()) this.writeArrow(r);
     for (const s of doc.shapes.values()) this.writeShape(s);
     this.writeRingCircles();
+    this.writeRepeatGroups();
     this.writeSteps();
     if (src) this.cleanUp();
 
@@ -434,7 +436,27 @@ class CdxmlWriter {
     this.atomStereo(n, a, true);
     this.atomNumber(n, a);
     this.atomGroup(n, a);
+    this.atomEnhanced(n, a);
     return n;
+  }
+
+  /** Enhanced stereo: ChemDraw's EnhancedStereoType and group number, and a tag with the label as shown (abs, &1, or1). */
+  private atomEnhanced(n: Element, a: Atom): void {
+    const e = a.enhStereo;
+    this.set(n, 'EnhancedStereoType', e ? (e.type === 'abs' ? 'Absolute' : e.type === 'and' ? 'And' : 'Or') : null);
+    this.set(n, 'EnhancedStereoGroupNum', e && e.type !== 'abs' ? e.group ?? 1 : null);
+    const old = kids(n).find((c) => c.nodeName === 'objecttag' && c.getAttribute('Name') === 'enhancedstereo');
+    if (old) n.removeChild(old);
+    if (!e) return;
+    const text = enhancedText(e);
+    const p = this.placer.enhanced(a, text);
+    const tag = this.el('objecttag', { TagType: 'Unknown', Name: 'enhancedstereo' });
+    const t = this.el('t', { p: pt(p), BoundingBox: box({ x1: p.x, y1: p.y - CAP * p.size, x2: p.x + this.measure(text, p.size), y2: p.y }), CaptionLineHeight: 'variable' });
+    const sp = this.el('s', { font: this.fontId(), size: f2(p.size).replace(/\.00$/, ''), color: '0' });
+    sp.textContent = text;
+    t.appendChild(sp);
+    tag.appendChild(t);
+    n.appendChild(tag);
   }
 
   private get placer(): StereoPlacer {
@@ -474,6 +496,7 @@ class CdxmlWriter {
     this.patchNodeBody(n, a, o, dx, dy);
     this.atomNumber(n, a);
     this.atomGroup(n, a);
+    this.atomEnhanced(n, a);
   }
 
   /** A contracted label keeps the SMILES of its group in a hidden tag (ChemDraw sees the inner fragment). */
@@ -750,6 +773,43 @@ class CdxmlWriter {
    * structure, in the middle of a ring of aromatic bonds, so that is how they are written; circles
    * already in the file are kept (moved if the ring moved) and ones whose ring lost its circle go.
    */
+  /**
+   * Polymer and repeat groups: ChemDraw's bracketedgroup on the page, naming the atoms inside
+   * and, for each bracket, the bonds crossing it. Groups of other kinds (copolymers, mixtures…)
+   * read from a file are left as they were.
+   */
+  private writeRepeatGroups(): void {
+    const ours = (g: Element) => ['SRU', 'MultipleGroup'].includes(g.getAttribute('BracketUsage') ?? '');
+    const old = [...this.page.getElementsByTagName('bracketedgroup')].filter(ours);
+    const elId = (kind: Kind, id: number, names: string[]) => this.source(kind, id, names)?.getAttribute('id') ?? String(id);
+    const made = repeatGroups(this.doc).filter((g) => g.inner.length).map((g) => {
+      const count = g.count;
+      const e = this.el('bracketedgroup', {
+        id: '', BracketedObjectIDs: g.inner.map((id) => this.nodeId(id)).join(' '),
+        BracketUsage: count === null ? 'SRU' : 'MultipleGroup', SRULabel: count === null ? g.text : null, RepeatCount: count,
+      });
+      const shapes = g.other.id === g.label.id ? [g.label] : [g.label, g.other];
+      shapes.forEach((sh) => {
+        const att = this.el('bracketattachment', { id: '', GraphicID: elId('s', sh.id, ['graphic']) });
+        for (const c of g.crossing.filter((x) => x.spine === (sh.id === g.label.id ? 0 : 1) || shapes.length === 1)) {
+          att.appendChild(this.el('crossingbond', { id: '', BondID: elId('b', c.bond, ['b']), InnerAtomID: this.nodeId(c.inner) }));
+        }
+        e.appendChild(att);
+      });
+      return e;
+    });
+    // the same groups as before (ids aside): leave the file as it was
+    const key = (e: Element) => e.outerHTML.replace(/ id="[^"]*"/g, '');
+    if (old.length === made.length && old.every((e, i) => key(e) === key(made[i]))) return;
+    for (const e of old) e.parentNode?.removeChild(e);
+    for (const e of made) {
+      e.setAttribute('id', this.id());
+      for (const c of e.getElementsByTagName('*')) c.setAttribute('id', this.id());
+      this.page.appendChild(e);
+    }
+    this.changed = true;
+  }
+
   private writeRingCircles(): void {
     const doc = this.doc;
     const L = doc.style.bondLength || 14.4;
@@ -1193,6 +1253,20 @@ class CdxmlWriter {
           const d = near ? Math.hypot(s.x1 - near.x, s.y1 - near.y) : 0;
           const u = near && d > 0.01 ? { x: (s.x1 - near.x) / d, y: (s.y1 - near.y) / d } : { x: -1, y: 0 };
           set('BoundingBox', `${f2(s.x1)} ${f2(s.y1)} ${f2(s.x1 + 4.5 * u.x)} ${f2(s.y1 + 4.5 * u.y)}`);
+        } else if (s.symbol && CHIRAL_FLAGS[s.symbol]) {
+          // a chiral flag: its word as text, which ChemDraw draws the box round
+          for (const c of kids(g)) if (c.nodeName === 't') g.removeChild(c);
+          const word = CHIRAL_FLAGS[s.symbol];
+          const size = flagTextSize(s);
+          const w = this.measure(word, size);
+          // the text box as ChemDraw makes it: 0.895 of the size above the baseline, 0.255 below
+          const cx = (s.x1 + s.x2) / 2, base = (s.y1 + s.y2) / 2 + size * 0.32;
+          set('BoundingBox', `${f2(cx - w / 2)} ${f2(base)} ${f2(cx + w / 2)} ${f2(base)}`);
+          const t = this.el('t', { p: `${f2(cx - w / 2)} ${f2(base)}`, BoundingBox: box({ x1: cx - w / 2, y1: base - 0.895 * size, x2: cx + w / 2, y2: base + 0.255 * size }), LineHeight: 'auto' });
+          const sp = this.el('s', { font: this.fontId(), size: f2(size).replace(/\.00$/, ''), color: '0', face: 96 });
+          sp.textContent = word;
+          t.appendChild(sp);
+          g.appendChild(t);
         } else set('BoundingBox', s.symbol === 'LonePair' ? box(s) : `${f2(s.x2)} ${f2(s.y2)} ${f2(s.x1)} ${f2(s.y2)}`);
         break;
       }
@@ -1201,6 +1275,21 @@ class CdxmlWriter {
         set('GraphicType', 'Bracket');
         set('BracketType', s.pair ? t + 'Pair' : t);
         set('BoundingBox', box(s));
+        // a repeat group's label: the usage, and the label text as ChemDraw shows it by the bracket
+        set('BracketUsage', s.repeat ? (repeatCount(s.repeat) === null ? 'SRU' : 'MultipleGroup') : null);
+        for (const c of kids(g)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === 'bracketusage') g.removeChild(c);
+        if (s.repeat) {
+          const size = 0.75 * this.doc.style.labelSize;
+          const w = this.measure(s.repeat, size);
+          const p = repeatLabelPlace(s, size, w);
+          const tag = this.el('objecttag', { TagType: 'Unknown', Name: 'bracketusage' });
+          const tt = this.el('t', { p: pt(p), BoundingBox: box({ x1: p.x, y1: p.y - CAP * size, x2: p.x + w, y2: p.y }), CaptionLineHeight: 'variable' });
+          const sp = this.el('s', { font: this.fontId(), size: f2(size).replace(/\.00$/, ''), color: '0', face: repeatCount(s.repeat) === null ? 2 : 0 });
+          sp.textContent = s.repeat;
+          tt.appendChild(sp);
+          tag.appendChild(tt);
+          g.appendChild(tag);
+        }
         break;
       }
     }

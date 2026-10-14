@@ -21,10 +21,12 @@ import { DocView, ACTUAL, type Overlay } from './doc-view';
 import { DocPanel, DOC_FONTS } from './doc-panel';
 import { DocFind } from './doc-find';
 import { ask } from './ask';
+import { ReferencesDialog, chooseReferences } from './references-dialog';
+import type { Reference } from '../document/references';
 import { dataUrl, imageSize } from '../render/images';
 import type { DocFile } from '../document/doc-file';
 import {
-  A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, captionRuns, nextObjectId, objectRun, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets,
+  A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, captionRuns, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets,
   type DocObject, type DocText, type NumberPlace, type PageSetup,
 } from '../document/document';
 
@@ -48,6 +50,8 @@ export interface DocModeHost {
   pickPicture(): Promise<{ bytes: Uint8Array; mime: string; name: string } | null>;
   /** An empty ACS-style table as a drawing. */
   newTable(rows: number, cols: number, style: DocStyle): Contents;
+  /** Choose a BibTeX or RIS file and read its text (References > Manage References > Import). */
+  pickReferenceFile(): Promise<{ name: string; text: string } | null>;
   measure: Measure;
 }
 
@@ -84,8 +88,9 @@ export class DocumentMode {
   private checked: { t: DocText; spell: [number, number][]; issues: Issue[] } | null = null;
   private menu: HTMLDivElement | null = null;
   private finder: DocFind;
-  /** The last copy made here: pasting the same text back brings its figures and fields too. */
-  private clip: { text: string; runs: TextRun[]; paras: ParaStyle[]; objects: Record<number, DocObject> } | null = null;
+  /** The last copy made here: pasting the same text back brings its figures and fields too (and the references its citations cite). */
+  private clip: (OwnCopy & { text: string }) | null = null;
+  private refs: ReferencesDialog;
   private readonly closeMenuOutside = (e: Event) => { if (this.menu && !this.menu.contains(e.target as Node)) this.closeMenu(); };
 
   constructor(private host: DocModeHost) {
@@ -117,6 +122,11 @@ export class DocumentMode {
       editFigure: (id) => this.editFigure(id),
       picked: () => this.pickedObject(),
       setScale: (id, k) => this.setScale(id, k),
+    });
+    this.refs = new ReferencesDialog({
+      file: () => this.file,
+      flash: (msg, ms) => this.host.flash(msg, ms),
+      pickFile: () => this.host.pickReferenceFile(),
     });
     this.wireInput();
     this.wirePointer();
@@ -232,9 +242,10 @@ export class DocumentMode {
 
   private overlay(): Overlay {
     const f = this.file;
-    if (!f) return { selection: null, caret: null, squiggles: [], picked: null, found: [] };
+    if (!f) return { selection: null, caret: null, squiggles: [], picked: null, found: [], framed: null };
     const ed = f.ed;
     const picked = this.pickedObject();
+    const framed = this.pickedField('bib')?.id ?? null;
     const showCaret = this.caretOn && (ed.collapsed || ed.composing !== null) && document.activeElement === this.ta;
     const c = showCaret ? ed.caret() : null;
     const squiggles: Overlay['squiggles'] = [];
@@ -244,12 +255,22 @@ export class DocumentMode {
       for (const i of ch.issues) squiggles.push({ start: i.start, end: i.end, color: FORMATTING });
     }
     return {
-      selection: !ed.collapsed && picked === null && !ed.composing ? [ed.start, ed.end] : null,
+      selection: !ed.collapsed && picked === null && framed === null && !ed.composing ? [ed.start, ed.end] : null,
       caret: c,
       squiggles,
       picked,
       found: this.finder.open ? this.finder.hits : [],
+      framed,
     };
+  }
+
+  /** A citation or bibliography picked on its own (a selection of just its character). */
+  private pickedField<K extends 'cite' | 'bib'>(kind: K): { id: number; o: Extract<DocObject, { kind: K }> } | null {
+    const f = this.file;
+    if (!f || f.ed.end - f.ed.start !== 1) return null;
+    const id = rt.sliceRuns(f.ed.t.runs, f.ed.start, f.ed.end)[0]?.obj;
+    const o = id !== undefined ? f.t.objects[id] : undefined;
+    return o?.kind === kind ? { id: id!, o: o as Extract<DocObject, { kind: K }> } : null;
   }
 
   // ---------------------------------------------------------------- spelling and chemistry checks
@@ -511,8 +532,11 @@ export class DocumentMode {
     e.clipboardData.setData('text/html', richToHtml({ runs: plainRuns, paras: sel.paras }, { defaultSize: 11 }));
     const objects: Record<number, DocObject> = {};
     for (const r of sel.runs) if (r.obj !== undefined && f.t.objects[r.obj]) objects[r.obj] = f.t.objects[r.obj];
-    this.clip = { text: plain, runs: sel.runs, paras: sel.paras, objects };
-    try { e.clipboardData.setData('application/x-' + OWN_KIND, JSON.stringify({ runs: sel.runs, paras: sel.paras, objects })); } catch { /* not every browser allows own types */ }
+    // citations bring the references they cite, so they work when pasted into another document
+    const cited = new Set(Object.values(objects).flatMap((o) => (o.kind === 'cite' ? o.refs : [])));
+    const references = (f.t.references ?? []).filter((r) => cited.has(r.id));
+    this.clip = { text: plain, runs: sel.runs, paras: sel.paras, objects, references };
+    try { e.clipboardData.setData('application/x-' + OWN_KIND, JSON.stringify({ runs: sel.runs, paras: sel.paras, objects, references })); } catch { /* not every browser allows own types */ }
     if (cut) ed.replaceSelection([], undefined, 'cut');
   }
 
@@ -525,7 +549,7 @@ export class DocumentMode {
     const plain = this.plainPaste;
     this.plainPaste = false;
     // our own copy (with figures and fields): in the event in a browser, else the last copy made here
-    let own: { runs: TextRun[]; paras: ParaStyle[]; objects: Record<number, DocObject> } | null = null;
+    let own: OwnCopy | null = null;
     try {
       const j = e?.clipboardData?.getData('application/x-' + OWN_KIND);
       if (j) own = JSON.parse(j);
@@ -554,7 +578,7 @@ export class DocumentMode {
   }
 
   /** Paste text copied in a document here, with new ids for its figures and fields. */
-  private pasteOwn(own: { runs: TextRun[]; paras: ParaStyle[]; objects: Record<number, DocObject> }): void {
+  private pasteOwn(own: OwnCopy): void {
     const f = this.file!;
     let next = nextObjectId(f.t);
     const ids = new Map<number, number>();
@@ -570,9 +594,12 @@ export class DocumentMode {
       if (o.kind === 'ref' && ids.has(o.target)) objects[id] = { ...o, target: ids.get(o.target)! };
     }
     const runs = own.runs.map((r) => (r.obj !== undefined ? { ...r, obj: ids.get(r.obj) } : r)).filter((r) => r.obj !== undefined || !r.text.includes(OBJECT_CHAR));
+    // references cited by pasted citations join the list (unless it has them)
+    const have = new Set((f.t.references ?? []).map((r) => r.id));
+    const adding = (own.references ?? []).filter((r) => !have.has(r.id));
     const ed = f.ed;
-    ed.update({ ...f.t, objects } as DocText, 'paste');
-    ed.replaceSelection(runs, own.paras.length > 1 ? own.paras : undefined);
+    ed.update({ ...f.t, objects, ...(adding.length ? { references: [...(f.t.references ?? []), ...adding] } : {}) } as DocText, 'paste');
+    ed.replace(ed.start, ed.end, runs, own.paras.length > 1 ? own.paras : undefined, null);
   }
 
   // ---------------------------------------------------------------- the mouse
@@ -583,8 +610,23 @@ export class DocumentMode {
     s.addEventListener('pointermove', (e) => this.pointerMove(e));
     s.addEventListener('pointerup', (e) => { this.dragging = null; try { s.releasePointerCapture(e.pointerId); } catch { /* not captured */ } });
     s.addEventListener('dblclick', (e) => {
+      const f = this.file;
+      if (!f) return;
       const id = this.objectAt(e.clientX, e.clientY);
-      if (id !== null) { e.preventDefault(); this.editFigure(id); }
+      if (id !== null && f.t.objects[id]?.kind === 'bib') { e.preventDefault(); void this.manageReferences(); return; }
+      if (id !== null) { e.preventDefault(); this.editFigure(id); return; }
+      // a citation: change what it cites
+      const p = this.view.toDoc(e.clientX, e.clientY);
+      const o = offsetAt(f.layout().text, p.x, p.y);
+      for (const at of [o, o - 1]) {
+        const obj = at >= 0 ? rt.sliceRuns(f.t.runs, at, at + 1)[0]?.obj : undefined;
+        if (obj !== undefined && f.t.objects[obj]?.kind === 'cite') {
+          e.preventDefault();
+          f.ed.select(at, at + 1);
+          void this.insertCitation();
+          return;
+        }
+      }
     });
     s.addEventListener('contextmenu', (e) => {
       if (!this.file) return;
@@ -678,7 +720,7 @@ export class DocumentMode {
     ed.update({ ...f.t, objects: { ...f.t.objects, [id]: o } } as DocText, kind);
     const style = { ...ed.typingStyle(), ...look };
     const at = ed.start;
-    ed.replace(ed.start, ed.end, [objectRun(id, style)], undefined, kind);
+    ed.replace(ed.start, ed.end, [objectRun(id, style)], undefined, null);
     // a figure alone in its paragraph is centred, as journals set them
     if (o.kind === 'drawing' || o.kind === 'picture') {
       const text = ed.text;
@@ -688,6 +730,26 @@ export class DocumentMode {
       ed.select(at, at + 1);
     }
     return id;
+  }
+
+  /** Split view's Insert: a drawing as a figure at the caret, with the caret after it so typing carries on. */
+  insertDrawing(contents: Contents): void {
+    if (!this.file) return;
+    this.insertObject({ kind: 'drawing', contents }, 'Insert structure');
+    const ed = this.file.ed;
+    ed.setCaret(ed.end, false);
+    this.focus();
+  }
+
+  /** The window got narrower or wider (split view): fit the page width if the page no longer fits. */
+  refit(): void {
+    const f = this.file;
+    if (!f) return;
+    this.view.resize();
+    const room = this.view.scroller.clientWidth - 48, page = f.layout().pageW;
+    if (room < page * this.view.zoom) this.view.fitWidth();
+    else if (this.view.zoom < ACTUAL) { if (room >= page * ACTUAL) this.view.setZoom(ACTUAL); else this.view.fitWidth(); }
+    else this.view.redraw();
   }
 
   /** Open a figure in the drawing tools; the document gets the changed drawing on Done. */
@@ -768,6 +830,9 @@ export class DocumentMode {
       case 'insert-caption': void this.insertCaption(); break;
       case 'cross-reference': void this.crossReference(); break;
       case 'compound-number': void this.compoundNumber(); break;
+      case 'insert-citation': void this.insertCitation(); break;
+      case 'insert-bibliography': this.insertBibliography(); break;
+      case 'manage-references': void this.manageReferences(); break;
       case 'edit-figure': { const id = this.pickedObject(); if (id === null) { this.host.flash('Click a structure or scheme first, then Edit Drawing (or double-click it).'); break; } this.editFigure(id); break; }
       case 'zoom-in': this.view.setZoom(this.view.zoom * 1.25); this.showZoom(); break;
       case 'zoom-out': this.view.setZoom(this.view.zoom * 0.8); this.showZoom(); break;
@@ -980,6 +1045,71 @@ export class DocumentMode {
     ed.setStyle({ bold: before.bold });
   }
 
+  // ---------------------------------------------------------------- references
+
+  /** References > Manage References: the document's reference list and citation style. */
+  async manageReferences(): Promise<void> {
+    if (!this.file) return;
+    await this.refs.open();
+    this.focus();
+  }
+
+  /**
+   * References > Insert Citation: the numbers of the references chosen, in superscript, which
+   * follow the order references are first cited in. With a citation picked (or double-clicked),
+   * changes what it cites.
+   */
+  private async insertCitation(): Promise<void> {
+    const f = this.file!;
+    const ed = f.ed;
+    const cur = this.pickedField('cite');
+    const refs = await chooseReferences(f.t, cur?.o.refs ?? [], async () => {
+      await this.refs.open();
+      return this.file === f ? f.t : null;
+    });
+    this.focus();
+    if (!refs || this.file !== f) return;
+    if (cur && f.t.objects[cur.id]?.kind === 'cite') {
+      ed.update({ ...f.t, objects: { ...f.t.objects, [cur.id]: { kind: 'cite', refs } } } as DocText, 'Edit citation');
+      ed.setCaret(ed.end);
+      return;
+    }
+    const before = ed.typingStyle();
+    this.insertObject({ kind: 'cite', refs }, 'Insert citation', { sup: true, sub: undefined });
+    // what is typed next looks as it did before the citation
+    ed.setStyle({ sup: before.sup });
+  }
+
+  /**
+   * References > Bibliography: a "References" heading and the bibliography after the paragraph
+   * the caret is in. It lists the references cited, in citation order, in the citation style,
+   * and changes by itself as citations are added, moved or removed.
+   */
+  private insertBibliography(): void {
+    const f = this.file!;
+    const ed = f.ed;
+    const used = new Set(objectsInText(f.t.runs));
+    if (Object.entries(f.t.objects).some(([k, o]) => o.kind === 'bib' && used.has(Number(k)))) {
+      this.host.flash('This document has a bibliography already; this adds another (both show the same list).', 6000);
+    }
+    const id = nextObjectId(f.t);
+    const kind = 'Insert bibliography';
+    ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'bib' } } } as DocText, kind);
+    const text = ed.text;
+    const p = paraAt(text, ed.focus);
+    const r = paraRange(text, p);
+    const head = runStyleOf(f.t.styles.Heading1 ?? styleOf(f.t, undefined));
+    const normal = runStyleOf(styleOf(f.t, undefined));
+    const empty = r.start === r.end;
+    const runs: TextRun[] = [...(empty ? [] : [{ ...normal, text: '\n' }]), { ...head, text: 'References' }, { ...head, text: '\n' }, objectRun(id, normal)];
+    ed.replace(empty ? r.start : r.end, empty ? r.start : r.end, runs, undefined, null);
+    const h = empty ? p : p + 1;
+    ed.update(setParaStyle(setParaStyle(f.t, h, h, f.t.styles.Heading1 ? 'Heading1' : 'Normal'), h + 1, h + 1, 'Normal'), null);
+    const at = objectOffsets(f.t.runs).get(id);
+    if (at !== undefined) ed.setCaret(at + 1);
+    if (!(f.t.references ?? []).length) this.host.flash('The bibliography lists the references cited. Add references with References > Manage References, and cite them with Insert Citation.', 8000);
+  }
+
   // ---------------------------------------------------------------- the ribbon
 
   private wireRibbon(): void {
@@ -1103,6 +1233,9 @@ export class DocumentMode {
     }
   }
 }
+
+/** Our own copy of document text: its runs, paragraphs, figures and fields, and the references its citations cite. */
+interface OwnCopy { runs: TextRun[]; paras: ParaStyle[]; objects: Record<number, DocObject>; references?: Reference[] }
 
 /** How each character of some runs looks (its position, formula style worked out, and italics). */
 function runLooks(runs: TextRun[]): CharLook[] {

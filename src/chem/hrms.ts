@@ -21,7 +21,7 @@ export const MONOISOTOPIC: Record<string, number> = {
 };
 
 /** Common groups written in adducts, as formulas. */
-const ALIASES: Record<string, string> = { HCOO: 'CHO2', CH3COO: 'C2H3O2', OAc: 'C2H3O2', ACN: 'C2H3N', MeCN: 'C2H3N', MeOH: 'CH4O', FA: 'CH2O2', TFA: 'C2HF3O2', DMSO: 'C2H6OS' };
+export const ALIASES: Record<string, string> = { HCOO: 'CHO2', CH3COO: 'C2H3O2', OAc: 'C2H3O2', ACN: 'C2H3N', MeCN: 'C2H3N', MeOH: 'CH4O', FA: 'CH2O2', TFA: 'C2HF3O2', DMSO: 'C2H6OS' };
 
 /** The charge each ion brings when it is added (taking it away brings the opposite). Anything else is neutral. */
 const ION_CHARGE: Record<string, number> = {

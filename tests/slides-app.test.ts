@@ -258,3 +258,54 @@ describe('tabs for open files', () => {
     expect(ws.tabs.map((t) => t.name).sort()).toEqual(['Untitled 2.cdxml', 'Untitled 2.pptx', 'Untitled.cdxml', 'Untitled.pptx']);
   });
 });
+
+describe('split view: a drawing beside a document or sheet', () => {
+  it('keeps the drawing in the app document while the document shows, and puts it back after', () => {
+    const { host, ws } = workspace();
+    host.edit('Draw', () => host.addAtom(0, 0));
+    ws.noteChange();
+    const drawing = ws.active;
+    drawing.dirty = false;
+    const words = ws.newDocument();
+    expect(host.atoms.size).toBe(0);
+    ws.setPartner(drawing);
+    expect(ws.pane).toBe(drawing);
+    expect(host.atoms.size).toBe(1);
+    expect(ws.docOf(drawing)).toBe(host);
+    // drawing beside the document marks the drawing's tab as changed, not the document's
+    host.edit('Draw', () => host.addAtom(20, 0));
+    ws.noteChange();
+    expect(drawing.dirty).toBe(true);
+    expect(words.dirty).toBe(false);
+    // another tab, then back: the split comes back with the document
+    const other = ws.newDrawing();
+    expect(ws.pane).toBe(null);
+    expect(host.atoms.size).toBe(0);
+    expect(drawing.stash.atoms.size).toBe(2);
+    ws.activate(words);
+    expect(ws.pane).toBe(drawing);
+    expect(host.atoms.size).toBe(2);
+    // showing the drawing's own tab takes it out of the split
+    ws.activate(drawing);
+    expect(ws.pane).toBe(null);
+    expect(host.atoms.size).toBe(2);
+    ws.activate(words);
+    ws.setPartner(null);
+    expect(ws.pane).toBe(null);
+    expect(host.atoms.size).toBe(0);
+    expect(drawing.stash.atoms.size).toBe(2);
+    expect(other.mode).toBe('drawing');
+  });
+
+  it('closes the split when its drawing is closed', async () => {
+    const { host, ws } = workspace();
+    host.edit('Draw', () => host.addAtom(0, 0));
+    const drawing = ws.active;
+    ws.newSheet();
+    ws.setPartner(drawing);
+    expect(ws.pane).toBe(drawing);
+    await ws.close(drawing);
+    expect(ws.pane).toBe(null);
+    expect(ws.active.partner).toBe(null);
+  });
+});

@@ -7,7 +7,9 @@ export interface Field {
   value: string;
   /** Text after the box, such as a unit. */
   unit?: string;
-  type?: 'number' | 'text';
+  type?: 'number' | 'text' | 'textarea';
+  /** Grey example text shown in an empty box. */
+  placeholder?: string;
   /** Pick one of these instead of typing. */
   options?: { value: string; label: string }[];
 }
@@ -27,14 +29,22 @@ export function ask(title: string, fields: Field[], opts: { ok?: string; note?: 
       p.textContent = opts.note;
       form.append(p);
     }
-    const inputs = new Map<string, HTMLInputElement | HTMLSelectElement>();
+    const inputs = new Map<string, HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>();
     for (const f of fields) {
       const row = document.createElement('label');
       row.className = 'ask-row';
       const name = document.createElement('span');
       name.textContent = f.label;
-      let input: HTMLInputElement | HTMLSelectElement;
-      if (f.options) {
+      let input: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+      if (f.type === 'textarea') {
+        const ta = document.createElement('textarea');
+        ta.rows = 8;
+        ta.value = f.value;
+        ta.spellcheck = false;
+        if (f.placeholder) ta.placeholder = f.placeholder;
+        input = ta;
+        row.classList.add('ask-wide');
+      } else if (f.options) {
         const sel = document.createElement('select');
         for (const o of f.options) sel.add(new Option(o.label, o.value, false, o.value === f.value));
         input = sel;
@@ -43,6 +53,7 @@ export function ask(title: string, fields: Field[], opts: { ok?: string; note?: 
         inp.type = f.type ?? 'text';
         if (inp.type === 'number') inp.step = 'any';
         inp.value = f.value;
+        if (f.placeholder) inp.placeholder = f.placeholder;
         input = inp;
       }
       inputs.set(f.name, input);
@@ -86,7 +97,7 @@ export function ask(title: string, fields: Field[], opts: { ok?: string; note?: 
     d.addEventListener('close', () => done(null));
     document.body.append(d);
     d.showModal();
-    const first = form.querySelector<HTMLInputElement>('input');
+    const first = form.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea');
     first?.focus();
     first?.select();
   });
