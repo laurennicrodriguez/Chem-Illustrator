@@ -1409,3 +1409,19 @@ dialog.command-search .cs-name { flex: 1; min-width: 0; overflow: hidden; text-o
 dialog.command-search .cs-place { font-size: 11px; white-space: nowrap; }
 dialog.command-search li.cs-none { display: block; padding: 10px 8px; }
 dialog.command-search .cs-foot { margin: 8px 2px 0; }
+
+/* File > Print: the pages are in the window but only shown when printing */
+#print-root { display: none; }
+@media print {
+  html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
+  body.printing > *:not(#print-root) { display: none !important; }
+  body.printing { display: block !important; }
+  #print-root { display: block; }
+  .print-page { break-after: page; overflow: hidden; }
+  .print-page:last-child { break-after: auto; }
+  .print-page > svg { display: block; width: 100%; height: 100%; }
+  .print-table { font: 11pt Calibri, Carlito, Arial, sans-serif; color: #000; }
+  .print-table td { padding: 1pt 4pt; vertical-align: bottom; }
+  .print-table .grid td { border: 0.5pt solid #c8c8c8; }
+  .print-table tr { break-inside: avoid; }
+}

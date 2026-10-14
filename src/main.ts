@@ -58,6 +58,8 @@ import { showContextMenu, topMenuEntry, type MenuItem } from './ui/context-menu'
 import { CommandSearch, uniqueCommands, type CommandItem } from './ui/command-search';
 import { fillTemplate, templateSize } from './design/templates';
 import { itemsToSvg } from './render/svg';
+import { PAPERS, defaultPaper, orient, placeIn, inside, handoutCells, noteLines, placeSvg, pageSvg } from './print-layout';
+import { printPages } from './ui/print';
 import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc } from './render/images';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
@@ -1807,6 +1809,90 @@ async function exportPdf(): Promise<void> {
   flash(`Saved ${target.name}${pages.length > 1 ? ` (${pages.length} pages)` : ''}`);
 }
 
+// ---------------------------------------------------------------- printing
+
+/** The choices made in the Print window, kept while the app is open. */
+const printChoices = { paper: defaultPaper(navigator.language) as string, orient: 'auto', size: 'actual', handout: '1', frame: 'true', sheet: 'all', sheetOrient: 'portrait', grid: 'false' };
+const PAPER_OPTIONS = Object.entries(PAPERS).map(([value, p]) => ({ value, label: p.name }));
+
+const pageSvgOf = (p: PdfPage) => {
+  const x = p.origin?.x ?? 0, y = p.origin?.y ?? 0;
+  return itemsToSvg(p.items, { x1: x, y1: y, x2: x + p.w, y2: y + p.h });
+};
+
+/** File > Print (Ctrl+P): asks how, for drawings, slides and sheets, then opens the system's Print dialog. */
+async function printNow(): Promise<void> {
+  finishTyping();
+  const tab = ws.active, deck = tab.deck;
+  if (sheetActive()) {
+    const v = await ask('Print', [
+      { name: 'sheet', label: 'Print', value: printChoices.sheet, options: [{ value: 'all', label: 'The whole sheet' }, { value: 'sel', label: 'The selected cells' }] },
+      { name: 'sheetOrient', label: 'Orientation', value: printChoices.sheetOrient, options: [{ value: 'portrait', label: 'Portrait' }, { value: 'landscape', label: 'Landscape' }] },
+      { name: 'grid', label: 'Gridlines', value: printChoices.grid, type: 'checkbox' },
+    ], { ok: 'Print…', note: 'The paper size, copies and pages are chosen in the next window.' });
+    if (!v) return;
+    Object.assign(printChoices, v);
+    const html = sheetMode.printTable(v.sheet === 'sel');
+    if (!html) { flash('There is nothing in this sheet to print.'); return; }
+    printPages({ html: `<div class="${v.grid === 'true' ? 'grid' : ''}">${html}</div>`, landscape: v.sheetOrient === 'landscape' });
+    return;
+  }
+  const docFile = docActive() ? tab.document : null;
+  if (docFile) {
+    // the pages as laid out on screen
+    const pages = recordPages(docFile.t, docFile.layout(), (c, style) => figures.record(c, style).pic);
+    if (!pages.length) return;
+    printPages({ pages: pages.map(pageSvgOf), w: pages[0].w, h: pages[0].h });
+    return;
+  }
+  if (deck) {
+    const slide = (i: number) => itemsToSvg(recordSlide({ size: deck.size, master: deck.master, layout: deck.slides[i].layout, index: i }, deck.docOf(i)), { x1: 0, y1: 0, x2: deck.size.w, y2: deck.size.h });
+    if (tab.mode === 'design') { printPages({ pages: [slide(deck.index)], w: deck.size.w, h: deck.size.h }); return; }
+    const v = await ask('Print', [
+      { name: 'handout', label: 'Layout', value: printChoices.handout, options: [
+        { value: '1', label: 'Full page slides' }, { value: '2', label: 'Handouts: 2 slides a page' }, { value: '3', label: 'Handouts: 3 slides a page, with lines for notes' },
+        { value: '4', label: 'Handouts: 4 slides a page' }, { value: '6', label: 'Handouts: 6 slides a page' }, { value: '9', label: 'Handouts: 9 slides a page' },
+      ] },
+      { name: 'paper', label: 'Paper (handouts)', value: printChoices.paper, options: PAPER_OPTIONS },
+      { name: 'frame', label: 'Frame the slides (handouts)', value: printChoices.frame, type: 'checkbox' },
+    ], { ok: 'Print…', note: 'Full page slides print at the slide\'s own shape; the next window fits them to the paper. Copies and which pages are chosen there too.' });
+    if (!v) return;
+    Object.assign(printChoices, v);
+    const n = Number(v.handout);
+    if (n === 1) { printPages({ pages: deck.slides.map((_, i) => slide(i)), w: deck.size.w, h: deck.size.h }); return; }
+    const page = orient(PAPERS[v.paper] ?? PAPERS.letter, 'portrait');
+    const cells = handoutCells(page, n);
+    const pages: string[] = [];
+    for (let first = 0; first < deck.slides.length; first += n) {
+      const parts: string[] = [];
+      cells.forEach((cell, k) => {
+        const i = first + k;
+        if (i >= deck.slides.length) return;
+        const at = placeIn(deck.size.w, deck.size.h, cell, 'fit');
+        parts.push(placeSvg(slide(i), at));
+        if (v.frame === 'true') parts.push(`<rect x="${at.x}" y="${at.y}" width="${at.w}" height="${at.h}" fill="none" stroke="#888" stroke-width="0.5"/>`);
+        if (n === 3) for (const l of noteLines({ ...cell, h: at.h, y: at.y }, page)) parts.push(`<line x1="${l.x1}" x2="${l.x2}" y1="${l.y}" y2="${l.y}" stroke="#bbb" stroke-width="0.5"/>`);
+      });
+      pages.push(pageSvg(page.w, page.h, parts));
+    }
+    printPages({ pages, w: page.w, h: page.h });
+    return;
+  }
+  const pic = recordPicture(doc, 4);
+  if (!pic) { flash('There is nothing to print yet.'); return; }
+  const v = await ask('Print', [
+    { name: 'paper', label: 'Paper', value: printChoices.paper, options: PAPER_OPTIONS },
+    { name: 'orient', label: 'Orientation', value: printChoices.orient, options: [{ value: 'auto', label: 'To suit the drawing' }, { value: 'portrait', label: 'Portrait' }, { value: 'landscape', label: 'Landscape' }] },
+    { name: 'size', label: 'Size', value: printChoices.size, options: [{ value: 'actual', label: 'Actual size (smaller only if it would not fit)' }, { value: 'fit', label: 'As large as fits the page' }] },
+  ], { ok: 'Print…', note: 'The drawing is centred on the page with half-inch margins. Copies and the printer are chosen in the next window.' });
+  if (!v) return;
+  Object.assign(printChoices, v);
+  const b = pic.box, w = b.x2 - b.x1, h = b.y2 - b.y1;
+  const page = orient(PAPERS[v.paper] ?? PAPERS.letter, v.orient as 'auto', w, h);
+  const at = placeIn(w, h, inside(page, 36), v.size as 'actual');
+  printPages({ pages: [pageSvg(page.w, page.h, [placeSvg(itemsToSvg(pic.items, b), at)])], w: page.w, h: page.h });
+}
+
 /**
  * File > Export Picture: the page (a design or the current slide) or the drawing as a PNG at
  * the resolution picked, or as an SVG, on its background colour or see-through.
@@ -2330,7 +2416,7 @@ const DOC_COMMANDS: Record<string, () => unknown> = {
 };
 
 /** Menu commands from the drawing's list that also work while a document shows. */
-const DOC_ANY = new Set(['export-pdf']);
+const DOC_ANY = new Set(['export-pdf', 'print']);
 
 // keys while a document shows but its text doesn't have the focus (after clicking a tab or a menu)
 window.addEventListener('keydown', (e) => {
@@ -2343,7 +2429,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-custom', 'toolbox-details', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search']);
+  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'print']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
@@ -2409,6 +2495,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'prev-tab': () => ws.cycle(-1),
   'export-mol': () => exportMolfile(),
   'export-pdf': () => { finishTyping(); return exportPdf(); },
+  print: () => void printNow(),
   'export-picture': () => { finishTyping(); return exportPicture(); },
   undo: () => undo(),
   redo: () => redo(),
