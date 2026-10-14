@@ -22,6 +22,8 @@ import { StructurePictures } from './structure-pictures';
 import { askProperties, PropertyChoice } from './property-dialog';
 import { ask } from './ask';
 import { SheetFormatting } from './sheet-format-ui';
+import { SheetCharts } from './sheet-chart-ui';
+import type { ChartKind } from '../sheet/chart';
 import type { TableDef } from '../sheet/table-styles';
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
@@ -75,6 +77,10 @@ export class SheetMode {
   private panelQueued = false;
   /** Conditional formatting and tables. */
   readonly formatting: SheetFormatting;
+  /** Charts on the sheets. */
+  readonly charts: SheetCharts;
+  /** The chart the panel and Chart tab showed last (the tab opens when a chart is first picked). */
+  private chartShown: number | null = null;
   /** The last cells copied here: pasting the same text back uses these (formulas, structures and formats kept). */
   private clip: { text: string; block: CellBlock; sheet: Sheet; range: Range; cut: boolean } | null = null;
 
@@ -93,7 +99,8 @@ export class SheetMode {
       editStructure: (r, c) => this.drawStructure(r, c),
       key: (e) => this.host.key(e),
       changed: () => this.selectionChanged(),
-      contextMenu: (x, y, where) => this.contextMenu(x, y, where),
+      contextMenu: (x, y, where) => (where === 'chart' ? this.charts.contextMenu(x, y) : this.contextMenu(x, y, where)),
+      editChart: () => { this.showRibbonTab('chart'); this.renderPanel(); this.charts.focusPanel(); },
       filterMenu: (col, at) => this.filterMenu(col, at),
       flash: (m, ms) => this.host.flash(m, ms),
       typing: (text) => this.typing(text),
@@ -106,6 +113,11 @@ export class SheetMode {
       this.schedulePanel();
     };
     this.formatting = new SheetFormatting({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+    });
+    this.charts = new SheetCharts({
       view: this.view,
       edit: (label, fn) => this.edit(label, fn),
       flash: (m, ms) => this.host.flash(m, ms),
@@ -362,6 +374,11 @@ export class SheetMode {
       case 'delete': this.deleteMenu(b.left, b.bottom + 2); return;
       case 'conditional-formatting': this.formatting.conditionalMenu(b.left, b.bottom + 2); return;
       case 'format-as-table': this.formatting.tableMenu(b.left, b.bottom + 2); return;
+      case 'chart-type': this.charts.typeMenu(b.left, b.bottom + 2); return;
+      case 'chart-fit': this.charts.fitMenu(b.left, b.bottom + 2); return;
+      case 'chart-legend': this.charts.legendMenu(b.left, b.bottom + 2); return;
+      case 'chart-palette': this.charts.paletteMenu(b.left, b.bottom + 2); return;
+      case 'chart-errors': this.charts.errorsMenu(b.left, b.bottom + 2); return;
       case 'table-style': {
         const t = this.tableHere();
         if (t) this.formatting.tableMenu(b.left, b.bottom + 2, (style) => this.formatting.setTable(t, { style }, 'Table style'));
@@ -424,7 +441,17 @@ export class SheetMode {
       case 'insert-table': void this.formatting.formatAsTable(this.tableHere()?.style ?? 'TableStyleMedium2'); break;
       case 'table-convert': { const t = this.tableHere(); if (t) this.formatting.convertToRange(t); break; }
       case 'table-colours-reset': { const t = this.tableHere(); if (t) this.formatting.setTable(t, { custom: undefined }, 'Table colours'); break; }
-      case 'copy': void this.copy(); break;
+      case 'chart-scatter': case 'chart-line': case 'chart-column': case 'chart-bar': case 'chart-area': case 'chart-pie':
+        this.charts.insert(name.slice(6) as ChartKind); break;
+      case 'chart-add-series': void this.charts.addSeries(); break;
+      case 'chart-edit': this.charts.focusPanel(); break;
+      case 'chart-titles': void this.charts.titles(); break;
+      case 'chart-axes': void this.charts.axes(); break;
+      case 'chart-labels': this.charts.toggleLabels(); break;
+      case 'chart-copy': void this.charts.copyPicture(); break;
+      case 'chart-save': void this.charts.savePicture(); break;
+      case 'chart-delete': v.deleteChart(); break;
+      case 'copy': if (v.selectedChart) void this.charts.copyPicture(); else void this.copy(); break;
       case 'cut': void this.copy(true); break;
       case 'paste': void this.paste(null); break;
       case 'clear-contents': v.clearSelection(); break;
@@ -1465,8 +1492,15 @@ export class SheetMode {
     };
     sw('[data-sh=text-colour] .sw', st.color, '#000000');
     sw('[data-sh=fill-colour] .sw', st.fill, 'transparent');
+    // the Chart tab shows while a chart is picked, and comes to the front when one is first picked
+    const chart = this.view.selectedChart;
+    const ctab = this.ribbon.querySelector<HTMLButtonElement>('[data-sh-tab=chart]')!;
+    if (!chart && ctab.getAttribute('aria-selected') === 'true') this.showRibbonTab('insert');
+    ctab.hidden = !chart;
+    if (chart && chart.id !== this.chartShown) this.showRibbonTab('chart');
+    this.chartShown = chart?.id ?? null;
     // Table Design shows while the active cell is in a table
-    const t = s.tableAt(r, c);
+    const t = chart ? undefined : s.tableAt(r, c);
     const tab = this.ribbon.querySelector<HTMLButtonElement>('[data-sh-tab=table]')!;
     if (!t && tab.getAttribute('aria-selected') === 'true') this.showRibbonTab('home');
     tab.hidden = !t;
@@ -1485,6 +1519,17 @@ export class SheetMode {
     const wb = this.book;
     const p = this.panel;
     if (!s || !wb) { p.replaceChildren(); return; }
+    const chart = this.view.selectedChart;
+    if (chart) {
+      // keep the panel while one of its boxes is being typed in
+      if (p.contains(document.activeElement) && p.dataset.chart === String(chart.id) && p.dataset.chartKey === JSON.stringify(chart)) return;
+      this.panelTitle.textContent = 'Chart';
+      p.dataset.chart = String(chart.id);
+      p.dataset.chartKey = JSON.stringify(chart);
+      p.replaceChildren(...this.charts.panel(chart));
+      return;
+    }
+    delete p.dataset.chart;
     const { r, c } = this.view.sel.active;
     this.panelTitle.textContent = cellName(r, c);
     const cell = s.cell(r, c);

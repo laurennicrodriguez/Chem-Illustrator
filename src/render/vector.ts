@@ -24,7 +24,7 @@ export interface ImageItem {
 
 export type Item =
   | { kind: 'path'; segs: Seg[]; fill?: string; stroke?: StrokeStyle }
-  | { kind: 'text'; text: string; x: number; y: number; size: number; family: string; bold: boolean; italic: boolean; color: string; widths: number[] }
+  | { kind: 'text'; text: string; x: number; y: number; size: number; family: string; bold: boolean; italic: boolean; color: string; widths: number[]; /** Turned anticlockwise, in degrees (90: reads upwards). */ angle?: number }
   | ImageItem;
 
 /** A path that remembers its segments (stands in for the browser's Path2D). */
@@ -207,6 +207,13 @@ export class VectorContext {
     const cw = this.charWidth;
     const widths = [...text].map((ch) => (cw ? cw(ch, f.size, f.family, f.bold, f.italic) : arialWidth(ch, f.size, f.bold)));
     this.items.push({ kind: 'text', text, x, y, size: f.size, family: f.family, bold: f.bold, italic: f.italic, color: this.st.fillStyle, widths });
+  }
+
+  /** Text turned about its starting point (degrees anticlockwise), which a canvas does with rotate(). */
+  fillTextTurned(text: string, x: number, y: number, angle: number): void {
+    this.fillText(text, x, y);
+    const it = this.items[this.items.length - 1];
+    if (angle && it.kind === 'text') it.angle = angle;
   }
 
   measureText(text: string): TextMetrics {

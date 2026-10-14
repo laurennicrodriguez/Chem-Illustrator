@@ -173,11 +173,11 @@ export function itemsToEmf(items: Item[], box: EmfBox): Uint8Array {
       const c = colorRef(it.color);
       if (c === null || !it.text) continue;
       const height = Math.round(it.size * UNIT);
-      use('font', `${it.family}/${height}/${it.bold}/${it.italic}`, (slot) => {
+      use('font', `${it.family}/${height}/${it.bold}/${it.italic}/${it.angle ?? 0}`, (slot) => {
         begin(EMR.EXTCREATEFONTINDIRECTW);
         out.u32(slot);
         // LOGFONTW
-        out.i32(-height); out.i32(0); out.i32(0); out.i32(0);
+        out.i32(-height); out.i32(0); out.i32(Math.round((it.angle ?? 0) * 10)); out.i32(Math.round((it.angle ?? 0) * 10)); // height, width, escapement, orientation
         out.i32(it.bold ? 700 : 400);
         out.u8(it.italic ? 1 : 0); out.u8(0); out.u8(0);
         out.u8(1); // DEFAULT_CHARSET

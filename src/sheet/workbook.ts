@@ -10,6 +10,7 @@
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
 import { ACS_1996 } from '../style';
+import { Chart, adjustChart, renameInChart } from './chart';
 import { Node, parseFormula, shiftFormula, adjustFormula, renameSheetInFormula, formulaRefs, SheetChange, normalizeFormula, FormulaSyntaxError } from './formula';
 import { evaluate, EvalHost } from './evaluate';
 import { CellError, ERR, Value, readTyped, compareValues, isError } from './values';
@@ -154,7 +155,7 @@ function patchStyleWith(s: CellStyle | undefined, patch: Partial<CellStyle>): Ce
 // ---------------------------------------------------------------- history
 
 type MapField = 'cells' | 'colWidths' | 'rowHeights' | 'colDefs' | 'colStyles' | 'hiddenRows' | 'hiddenCols';
-type ValueField = 'merges' | 'filter' | 'frozen' | 'name' | 'condFormats' | 'tables';
+type ValueField = 'merges' | 'filter' | 'frozen' | 'name' | 'condFormats' | 'tables' | 'charts';
 
 interface Change {
   sheet: Sheet | null; // null: the workbook's list of sheets
@@ -199,6 +200,8 @@ export class Sheet {
   condFormats: CondFormat[] = [];
   /** Blocks formatted as tables (Excel's Format as Table). */
   tables: TableDef[] = [];
+  /** Charts floating over the cells. */
+  charts: Chart[] = [];
   private looks: { values: Map<number, Value>; rules: CondFormat[]; map: Map<number, CellLook> } | null = null;
 
   /** Worked out by Workbook.recalc: the value of every cell in use. */
@@ -487,6 +490,10 @@ export class Sheet {
     this.assign('tables', list);
   }
 
+  setCharts(list: Chart[]): void {
+    this.assign('charts', list);
+  }
+
   setFrozen(rows: number, cols: number): void {
     this.assign('frozen', { rows: Math.max(0, rows), cols: Math.max(0, cols) });
   }
@@ -505,6 +512,10 @@ export class Sheet {
       for (const [col, d] of [...s.colDefs]) {
         const f = renameSheetInFormula(d.formula, old, name);
         if (f !== d.formula) s.setColDef(col, { ...d, formula: f });
+      }
+      if (s.charts.length) {
+        const cs = s.charts.map((c) => renameInChart(c, old, name));
+        if (JSON.stringify(cs) !== JSON.stringify(s.charts)) s.setCharts(cs);
       }
     }
   }
@@ -681,6 +692,15 @@ export class Sheet {
     if (this.tables.length) {
       const ts = this.tables.map((t) => ({ ...t, range: moveRange(t.range)! })).filter((t) => t.range);
       if (JSON.stringify(ts) !== JSON.stringify(this.tables)) this.setTables(ts);
+    }
+    // charts sit where their corner cell goes (at the edge of a deleted block when it goes)
+    if (this.charts.length) {
+      const cs = this.charts.map((c) => {
+        const i = axis === 'row' ? c.at.row : c.at.col;
+        const n = i < at ? i : count > 0 ? i + count : i >= at - count ? i + count : at;
+        return n === i ? c : { ...c, at: axis === 'row' ? { ...c.at, row: n } : { ...c.at, col: n } };
+      });
+      if (cs.some((c, i) => c !== this.charts[i])) this.setCharts(cs);
     }
     if (this.filter) {
       const range = moveRange(this.filter.range);
@@ -960,7 +980,7 @@ export class Workbook {
       return;
     }
     const s = c.sheet!;
-    if (c.field === 'merges' || c.field === 'filter' || c.field === 'frozen' || c.field === 'name' || c.field === 'condFormats' || c.field === 'tables') {
+    if (c.field === 'merges' || c.field === 'filter' || c.field === 'frozen' || c.field === 'name' || c.field === 'condFormats' || c.field === 'tables' || c.field === 'charts') {
       (s as unknown as Record<string, unknown>)[c.field] = v;
       return;
     }
@@ -1002,6 +1022,10 @@ export class Workbook {
         if (s.name === ch.sheet && ch.axis === 'row') continue; // done with the rows (above)
         const f = adjustFormula(d.formula, s.name, ch);
         if (f !== d.formula) s.setColDef(col, { ...d, formula: f });
+      }
+      if (s.charts.length) {
+        const cs = s.charts.map((c) => adjustChart(c, s.name, ch));
+        if (JSON.stringify(cs) !== JSON.stringify(s.charts)) s.setCharts(cs);
       }
     }
   }
