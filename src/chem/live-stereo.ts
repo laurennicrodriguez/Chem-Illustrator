@@ -173,7 +173,7 @@ export class LiveStereo implements StereoInfo {
           if (lb) this.bondLabels.set(bid, { label: lb, a1: b.a1 }); else this.bondLabels.delete(bid);
           if (und) this.undecidedBonds.add(bid); else this.undecidedBonds.delete(bid);
           bonds.add(bid);
-        } else if (knownChanged && b.order === 2) bonds.add(bid);
+        } else if (knownChanged && (b.order === 2 || this.bondLabels.has(bid))) bonds.add(bid);
       }
     }
   }

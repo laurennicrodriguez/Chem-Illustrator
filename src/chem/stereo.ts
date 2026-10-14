@@ -7,6 +7,7 @@
 // that can't be read rank above every real atom.
 
 import { Doc, Bond, Atom, StereoInfo } from '../model';
+import { axialTags } from './axial';
 import { Vec, Rect, norm, sub, len, lerp, distToSegment } from '../geom';
 import { labelSpec, layoutLabel } from './labels';
 import { doubleBondGap, wedgeWidth } from '../style';
@@ -56,9 +57,9 @@ export function mayHaveStereo(doc: Doc, atoms: Iterable<number>): boolean {
 export interface StereoTags {
   /** False when the chemistry engine could not read the structure. */
   ok: boolean;
-  /** R, S, r or s at an atom. */
+  /** R, S, r or s at an atom (Ra or Sa at the middle atom of an allene). */
   atoms: [number, string][];
-  /** E or Z on the double bond between two atoms. */
+  /** E or Z on the double bond between two atoms; Ra or Sa on a chiral axis. */
   bonds: [number, number, string][];
   /** Atoms (by index) whose label the rules can't decide, because an undefined group sets the order. */
   undecided?: number[];
@@ -199,6 +200,14 @@ function readTags(RDKit: any, molblock: string, skip: readonly number[]): Stereo
       const t = clean(l);
       if (/^[EZ]$/.test(t) && !skipped.has(i) && !skipped.has(j)) bonds.push([i, j, t]);
     }
+    // axial chirality, which the engine doesn't label (biaryls, allenes, alkylidenecycloalkanes)
+    const axial = axialTags(molblock, skip);
+    for (const [i, l] of axial.atoms) {
+      const k = atoms.findIndex(([j]) => j === i);
+      if (k >= 0) atoms.splice(k, 1);
+      atoms.push([i, l]);
+    }
+    for (const b of axial.bonds) bonds.push(b);
     return { ok: true, atoms, bonds };
   } finally {
     mol.delete();
@@ -206,6 +215,15 @@ function readTags(RDKit: any, molblock: string, skip: readonly number[]): Stereo
 }
 
 // ------------------------------------------------------------------ what a label says
+
+/** How axial chirality is written: Ra/Sa, or as helicity P/M (Edit > Preferences). */
+export const axialStyle = { helicity: false };
+
+/** A worked-out descriptor as shown: Ra and Sa become M and P when helicity is chosen (Ra = M, Sa = P). */
+export function shownDescriptor(d: string): string {
+  if (!axialStyle.helicity) return d;
+  return d === 'Ra' ? 'M' : d === 'Sa' ? 'P' : d;
+}
 
 /**
  * Text of an atom's stereo label as drawn, or null for none. A label typed by hand stays as typed;
@@ -218,7 +236,7 @@ export function atomStereoText(a: Atom, info: StereoInfo | null): string | null 
   if (!a.showStereo && !l) return null;
   const d = info?.atom(a.id);
   if (d === undefined) return l?.text ?? null;
-  return d ? `(${d})` : null;
+  return d ? `(${shownDescriptor(d)})` : null;
 }
 
 export function bondStereoText(b: Bond, info: StereoInfo | null): string | null {
@@ -227,7 +245,7 @@ export function bondStereoText(b: Bond, info: StereoInfo | null): string | null 
   if (!b.showStereo && !l) return null;
   const d = info?.bond(b.id);
   if (d === undefined) return l?.text ?? null;
-  return d ? `(${d})` : null;
+  return d ? `(${shownDescriptor(d)})` : null;
 }
 
 // ------------------------------------------------------------------ where a label goes

@@ -53,6 +53,8 @@ export interface Settings {
   citeOptions: Partial<CiteFormat>;
   /** Show Terminal Methyls writes them as CH3 or as Me (Edit > Preferences). */
   methylStyle: 'CH3' | 'Me';
+  /** Axial chirality written as Ra/Sa or as helicity P/M (Edit > Preferences). */
+  axialStyle: 'RaSa' | 'PM';
   /** Ask before a command with nothing selected changes every structure on the page (Edit > Preferences). */
   askWholeDrawing: boolean;
   /** Your own colour rows, in every colour menu and every mode (Edit > Colour Palettes). */
@@ -65,7 +67,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false, showRoles: true,
   chemTyping: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
   modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true,
-  citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(),
+  citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(),
 };
 
 const STORAGE_KEY = 'chem-illustrator.settings';
@@ -94,6 +96,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   s.palettes = parsePalettes(r.palettes);
   s.toolboxes = parseToolboxes(r.toolboxes);
   if (r.methylStyle === 'Me' || r.methylStyle === 'CH3') s.methylStyle = r.methylStyle;
+  if (r.axialStyle === 'RaSa' || r.axialStyle === 'PM') s.axialStyle = r.axialStyle;
   if (Array.isArray(r.dictionary)) s.dictionary = r.dictionary.filter((w): w is string => typeof w === 'string' && w.trim() !== '').map((w) => w.trim());
   return s;
 }

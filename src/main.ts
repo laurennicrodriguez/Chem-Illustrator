@@ -63,7 +63,7 @@ import { schemeItems } from './chem/reaction';
 import { labelsOf } from './chem/scheme-layout';
 import { plainText } from './richtext';
 import { LiveStereo } from './chem/live-stereo';
-import { setStereoShown } from './chem/stereo';
+import { setStereoShown, shownDescriptor, axialStyle } from './chem/stereo';
 import { keymap, registerToolNames, displayChord, actionName, chordOf, parseAction, KeyContext, KeyOverrides } from './editor/keymap';
 import { loadSettings, saveSettings, settingsLocation, Settings } from './settings';
 import { HotkeysDialog } from './ui/hotkeys-dialog';
@@ -2762,14 +2762,23 @@ async function toggleTerminalMethyls(): Promise<void> {
   flash(editor.toggleChainEnds(), 5000);
 }
 
+/** Axial chirality as P/M instead of Ra/Sa: every label shown changes. */
+function showHelicity(on: boolean): void {
+  if (axialStyle.helicity === on) return;
+  axialStyle.helicity = on;
+  editor.requestScene();
+}
+
 /** Edit > Preferences: drawing choices that are set once rather than per structure. */
 async function openPreferences(): Promise<void> {
   const r = await ask('Preferences', [
     { name: 'methyl', label: 'Terminal methyls written as', value: editor.options.methylStyle, options: [{ value: 'Me', label: 'Me' }, { value: 'CH3', label: 'CH3' }] },
+    { name: 'axial', label: 'Axial chirality written as', value: axialStyle.helicity ? 'PM' : 'RaSa', options: [{ value: 'RaSa', label: 'Ra / Sa' }, { value: 'PM', label: 'P / M (helicity)' }] },
     { name: 'ask', label: 'Ask before changing every structure on the page when nothing is selected', type: 'checkbox', value: String(askWholeDrawing) },
-  ], { ok: 'Save', note: 'Show Terminal Methyls writes them this way; methyls already written out in the selection (or the whole drawing, with nothing selected) change too.' });
+  ], { ok: 'Save', note: 'Show Terminal Methyls writes them this way; methyls already written out in the selection (or the whole drawing, with nothing selected) change too. Axial chirality labels (biaryls, allenes) follow the choice at once; Ra is the same as M, and Sa as P.' });
   if (!r) return;
   askWholeDrawing = r.ask === 'true';
+  showHelicity(r.axial === 'PM');
   if (r.methyl !== editor.options.methylStyle) chooseMethylStyle(r.methyl as MethylStyle);
   else storeSettings();
 }
@@ -2801,6 +2810,7 @@ function storeSettings(): void {
     citeStyle: preferredStyle().style,
     citeOptions: preferredStyle().options,
     methylStyle: editor.options.methylStyle,
+    axialStyle: axialStyle.helicity ? 'PM' : 'RaSa',
     askWholeDrawing,
     palettes: getPalettes(),
     toolboxes: toolboxState,
@@ -2912,6 +2922,7 @@ void loadSettings().then((s) => {
   applySplitWidth();
   setPreferredStyle(s.citeStyle, s.citeOptions);
   editor.options.methylStyle = s.methylStyle;
+  showHelicity(s.axialStyle === 'PM');
   askWholeDrawing = s.askWholeDrawing;
   setPalettes(s.palettes);
   toolboxState = s.toolboxes;
@@ -3430,12 +3441,12 @@ function toggleStereoLabels(): void {
 function stereoSummary(frag: Set<number>): string {
   const byPlace = (p: { x: number; y: number }, q: { x: number; y: number }) => p.y - q.y || p.x - q.x;
   // the drawing may have changed while the analysis ran: skip atoms that have gone
-  const centres = [...frag].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a && !!live.atom(a.id)).sort(byPlace).map((a) => live.atom(a.id)!);
+  const centres = [...frag].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a && !!live.atom(a.id)).sort(byPlace).map((a) => shownDescriptor(live.atom(a.id)!));
   const dbl: { x: number; y: number; l: string }[] = [];
   for (const id of frag) for (const bid of doc.adj.get(id) ?? []) {
     const b = doc.bonds.get(bid);
     const l = b && b.a1 === id ? live.bond(bid) : null;
-    if (b && l) { const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!; dbl.push({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2, l }); }
+    if (b && l) { const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!; dbl.push({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2, l: shownDescriptor(l) }); }
   }
   dbl.sort(byPlace);
   return [centres.join(', '), dbl.map((d) => d.l).join(', ')].filter(Boolean).join('; ');
