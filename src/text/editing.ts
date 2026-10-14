@@ -52,6 +52,12 @@ export class TextEditing {
   onTyped: (typed: string) => void = () => {};
   /** The clock, for joining a burst of typing into one undo step (replaceable in tests). */
   now: () => number = () => performance.now();
+  /** Lays the text out in place of layoutText (a document lays it out on pages). */
+  layoutWith: ((frame: TextFrame) => TextLayout) | null = null;
+  /** The look typing takes in an empty paragraph (a document's: that of the paragraph's style). */
+  emptyParaStyle: ((para: number) => rt.RunStyle) | null = null;
+  /** Indent added by Tab outside a list, in points. */
+  indentStep = INDENT_STEP;
 
   private goalX: number | null = null;
   private undoStack: Snap[] = [];
@@ -93,8 +99,13 @@ export class TextEditing {
   }
 
   layout(): TextLayout {
-    this.lay ??= layoutText(this.frame(), this.defaultSize, this.measure);
+    this.lay ??= this.layoutWith ? this.layoutWith(this.frame()) : layoutText(this.frame(), this.defaultSize, this.measure);
     return this.lay;
+  }
+
+  /** Lay the text out again next time (something the layout depends on changed, such as the page size). */
+  relayout(): void {
+    this.lay = null;
   }
 
   /** The caret: x, top and bottom of its line, relative to the text's origin. */
@@ -113,6 +124,12 @@ export class TextEditing {
 
   /** The style new typing takes. */
   typingStyle(): rt.RunStyle {
+    if (this.emptyParaStyle && this.collapsed) {
+      const text = this.text;
+      const p = paraAt(text, this.focus);
+      const r = paraRange(text, p);
+      if (r.start === r.end) return rt.cleanStyle({ ...this.emptyParaStyle(p), ...this.pending });
+    }
     return rt.cleanStyle({ ...rt.typingStyle(this.t.runs, this.start, this.end, this.defaults), ...this.pending });
   }
 
@@ -164,6 +181,12 @@ export class TextEditing {
     this.goalX = null;
     this.lay = null;
     this.onChange('text');
+  }
+
+  /** Put a changed text in place as one undo step (a document's style or a figure changed); kind null adds to the last step. */
+  update(t: RichText, kind: string | null = 'edit', anchor = this.anchor, focus = this.focus): void {
+    const n = rt.plainText(t.runs).length;
+    this.commit(kind, { ...t, paras: fitParas(t.paras, paraCount(rt.plainText(t.runs))) }, Math.min(anchor, n), Math.min(focus, n));
   }
 
   /** Put runs (and their paragraph styles, when they bring their own) in place of the selection. */
@@ -230,12 +253,15 @@ export class TextEditing {
   backspace(word = false): void {
     if (!this.collapsed) { this.replace(this.start, this.end, [], undefined, 'delete'); return; }
     const at = this.focus;
-    if (at === 0 && !this.t.paras[0]?.list && !this.t.paras[0]?.indent) return;
+    const p0 = this.t.paras[0];
+    if (at === 0 && !p0?.list && !p0?.indent && !p0?.firstLine && !p0?.pageBreak) return;
     const text = this.text;
     const p = paraAt(text, at);
     if (paraRange(text, p).start === at) {
       const ps = this.t.paras[p] ?? {};
+      if (ps.pageBreak) { this.setParas(p, p, { pageBreak: undefined }, 'break'); return; }
       if (ps.list) { this.setParas(p, p, { list: undefined, level: undefined, cont: undefined }, 'list'); return; }
+      if (ps.firstLine && ps.firstLine > 0) { this.setParas(p, p, { firstLine: undefined }, 'indent'); return; }
       if (ps.indent) { this.setParas(p, p, { indent: undefined }, 'indent'); return; }
     }
     const from = word ? wordStart(text, at) : at - (isLow(text[at - 1]) ? 2 : 1);
@@ -358,8 +384,14 @@ export class TextEditing {
     this.commit('style', { ...this.t, runs: rt.applyStyle(this.t.runs, this.start, this.end, patch) }, this.anchor, this.focus);
   }
 
+  /** Change the selected paragraphs' formatting (one undo step). */
+  setSelectedParas(patch: Partial<ParaStyle>, kind = 'para'): void {
+    const [a, b] = this.selectedParas();
+    this.setParas(a, b, patch, kind);
+  }
+
   /** Change the paragraphs from `first` to `last`. */
-  private setParas(first: number, last: number, patch: Partial<ParaStyle>, kind: string): void {
+  setParas(first: number, last: number, patch: Partial<ParaStyle>, kind: string): void {
     const paras = fitParas(this.t.paras, paraCount(this.text)).map((p, i) => (i < first || i > last ? p : cleanPara({ ...p, ...patch })));
     this.commit(kind, { ...this.t, paras }, this.anchor, this.focus);
   }
@@ -399,7 +431,7 @@ export class TextEditing {
     const paras = fitParas(this.t.paras, paraCount(this.text)).map((p, i) => {
       if (i < a || i > b) return p;
       if (p.list) return cleanPara({ ...p, level: Math.max(0, Math.min(MAX_LEVEL, (p.level ?? 0) + delta)) });
-      return cleanPara({ ...p, indent: Math.max(0, (p.indent ?? 0) + delta * INDENT_STEP) });
+      return cleanPara({ ...p, indent: Math.max(0, (p.indent ?? 0) + delta * this.indentStep) });
     });
     this.commit('indent', { ...this.t, paras }, this.anchor, this.focus);
   }

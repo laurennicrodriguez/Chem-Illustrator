@@ -1,11 +1,11 @@
 // Hotkeys as data. Every key is a binding from a key press to an action, in one of these
-// places: pointing at an atom, at a bond, at empty space, anywhere, in slides, in sheets, or
-// while typing a caption.
+// places: pointing at an atom, at a bond, at empty space, anywhere, in slides, in sheets, in
+// documents, or while typing a caption.
 // The defaults copy ChemDraw (checked in ChemDraw 25, see the notes in DEFAULT_KEYS); the
 // person's own changes are kept separately, as a small readable list in the settings file,
 // so new defaults in later versions still reach them.
 
-export type KeyContext = 'atom' | 'bond' | 'space' | 'command' | 'slides' | 'sheet' | 'text';
+export type KeyContext = 'atom' | 'bond' | 'space' | 'command' | 'slides' | 'sheet' | 'document' | 'text';
 
 export const CONTEXTS: { id: KeyContext; title: string; note: string }[] = [
   { id: 'atom', title: 'Pointing at an atom', note: 'Point at an atom (it highlights blue) and press the key. Letters are case-sensitive: F and f do different things.' },
@@ -14,7 +14,8 @@ export const CONTEXTS: { id: KeyContext; title: string; note: string }[] = [
   { id: 'command', title: 'Anywhere', note: 'Menu commands. Plain keys here only work when nothing is highlighted.' },
   { id: 'slides', title: 'In slides', note: 'Menu commands for slides. While slides are showing, these keys come before the ones for anywhere.' },
   { id: 'sheet', title: 'In sheets', note: "Excel's keys for sheets. While a sheet is showing, these keys come before the ones for anywhere." },
-  { id: 'text', title: 'Typing a caption', note: 'Styling while the caption editor is open.' },
+  { id: 'document', title: 'In documents', note: "Word's keys for documents. While a document is showing, these come before the ones for typing and for anywhere." },
+  { id: 'text', title: 'Typing text', note: 'Styling while typing a caption, a text box or a document.' },
 ];
 
 /** The parts of a KeyboardEvent a key press is read from (so tests can pass plain objects). */
@@ -187,6 +188,13 @@ export const COMMAND_NAMES: Record<string, string> = {
   'property-column': 'Insert property column…', 'structure-from-name': 'Structure from name or SMILES…',
   'draw-structure': 'Draw a structure in the cell', 'reset-calculated': 'Reset to the calculated value',
   'merge-cells': 'Merge and centre',
+  // documents
+  'new-document': 'New document', 'doc-align-left': 'Align text left', 'doc-align-center': 'Centre text', 'doc-align-right': 'Align text right',
+  'doc-justify': 'Justify text', 'style-normal': 'Normal style', 'style-title': 'Title style', 'style-h1': 'Heading 1 style', 'style-h2': 'Heading 2 style',
+  'style-h3': 'Heading 3 style', 'style-caption': 'Caption style', 'page-break': 'Page break', 'line-single': 'Single line spacing',
+  'line-1-5': '1.5 line spacing', 'line-double': 'Double line spacing', 'font-bigger': 'Larger text', 'font-smaller': 'Smaller text',
+  'doc-bullets': 'Bullets', 'doc-numbering': 'Numbering', replace: 'Find and replace…', 'insert-structure': 'Insert a structure (draw it)',
+  'insert-caption': 'Insert a caption…', 'cross-reference': 'Insert a cross-reference…', 'compound-number': 'Insert a compound number…', 'structure-from-name-doc': 'Insert a structure from a name or SMILES…',
 };
 
 const TEXT_ACTIONS: Record<string, string> = {
@@ -218,7 +226,7 @@ export function actionsFor(ctx: KeyContext): string[] {
     case 'atom': return [...pre('atom', ATOM_ACTIONS), ...pre('hotspot', HOTSPOT_ACTIONS)];
     case 'bond': return [...pre('bond', BOND_ACTIONS), ...pre('fuse', FUSE_ACTIONS), ...pre('hotspot', HOTSPOT_ACTIONS)];
     case 'space': return Object.keys(toolNames).map((t) => `tool ${t}`);
-    case 'command': case 'slides': case 'sheet': return pre('command', COMMAND_NAMES);
+    case 'command': case 'slides': case 'sheet': case 'document': return pre('command', COMMAND_NAMES);
     case 'text': return pre('text', TEXT_ACTIONS);
   }
 }
@@ -231,7 +239,7 @@ export function validAction(ctx: KeyContext, action: string): boolean {
     case 'atom': return verb === 'label' || (verb === 'atom' && arg in ATOM_ACTIONS) || (verb === 'hotspot' && arg in HOTSPOT_ACTIONS);
     case 'bond': return (verb === 'bond' && arg in BOND_ACTIONS) || (verb === 'fuse' && arg in FUSE_ACTIONS) || (verb === 'hotspot' && arg in HOTSPOT_ACTIONS);
     case 'space': return verb === 'tool';
-    case 'command': case 'slides': case 'sheet': return verb === 'command' && arg in COMMAND_NAMES;
+    case 'command': case 'slides': case 'sheet': case 'document': return verb === 'command' && arg in COMMAND_NAMES;
     case 'text': return verb === 'text' && arg in TEXT_ACTIONS;
   }
 }
@@ -320,6 +328,14 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
     'Ctrl+9': 'hide-rows', 'Ctrl+Shift+9': 'unhide-rows', 'Ctrl+0': 'hide-cols', 'Ctrl+Shift+0': 'unhide-cols',
     'Ctrl+Shift+L': 'filter', 'Ctrl+N': 'new-sheet', 'Shift+F11': 'insert-sheet',
     'Ctrl+Shift+N': 'structure-from-name',
+  }),
+  // Word's keys
+  document: verbs('command', {
+    'Ctrl+L': 'doc-align-left', 'Ctrl+E': 'doc-align-center', 'Ctrl+R': 'doc-align-right', 'Ctrl+J': 'doc-justify',
+    'Ctrl+Alt+1': 'style-h1', 'Ctrl+Alt+2': 'style-h2', 'Ctrl+Alt+3': 'style-h3', 'Ctrl+Shift+N': 'style-normal',
+    'Ctrl+Enter': 'page-break', 'Ctrl+1': 'line-single', 'Ctrl+5': 'line-1-5', 'Ctrl+2': 'line-double',
+    'Ctrl+]': 'font-bigger', 'Ctrl+[': 'font-smaller', 'Ctrl+Shift+L': 'doc-bullets',
+    'Ctrl+F': 'find', 'Ctrl+H': 'replace', 'Ctrl+N': 'new-document',
   }),
   text: verbs('text', {
     'Ctrl+B': 'bold', 'Ctrl+I': 'italic', 'Ctrl+U': 'underline', 'Ctrl+=': 'sub', 'Ctrl+Shift+=': 'sup', 'Ctrl++': 'sup',

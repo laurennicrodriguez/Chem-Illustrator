@@ -47,6 +47,7 @@ npm run desktop:build    # makes the installers in src-tauri/target/release/bund
 - **Structure ▸ Clean Up Structure** (Ctrl+Shift+K): evens out bond lengths and angles of the selected structures (or all of them) while keeping their shape, stereocentres and cis/trans double bonds. Undo puts it back.
 - Select a structure to see its formula, exact mass, MW, [M+H]+ and [M+Na]+. Tick **Show R/S** for stereo labels.
 - Paste a SMILES string or a molfile with Ctrl+V to draw it.
+- **+ Document** opens a Word-style document: pages with margins, styles (Normal, Heading 1–3, Caption; change a style in the Format panel and every paragraph in it follows), bullet and numbered lists (Tab and Shift+Tab change the level), structures drawn in the text (Insert ▸ Structure), numbered captions and cross-references that renumber themselves, and page numbers such as S1, S2 (Layout tab). **Find** (Ctrl+F) and **Replace** (Ctrl+H) can also change how the found words look, for example making every CH2Cl2 a formula. Save as a Word file (`.docx`; structures stay editable here and show as pictures in Word), open Word files (embedded ChemDraw drawings come in as structures), or **File ▸ Export PDF**.
 - **View ▸ Developer Tools** shows the Speed panel (how long each redraw takes) and a **Stress test** that draws thousands of molecules. Hidden unless switched on; the choice is kept in `settings.json`.
 
 ## Checks
@@ -75,6 +76,8 @@ The `bench/` scripts drive the app in a headless browser to measure speed. Start
 | `src/io/cdx.ts` | ChemDraw's binary CDX format (used on the clipboard), converted to and from CDXML |
 | `src/io/files.ts`, `document-file.ts` | Open and Save dialogs, unsaved-changes prompts |
 | `src/io/clipboard.ts`, `src-tauri/src/clipboard.rs` | Cut, copy and paste; the Windows clipboard |
+| `src/document/` | Document mode: the document, page layout, captions and fields, find and replace, printing |
+| `src/io/docx-write.ts`, `docx-read.ts`, `cfb.ts` | Saving and opening Word files, and the ChemDraw objects embedded in them |
 | `src/worker/` | The RDKit chemistry engine, running in the background |
 | `src-tauri/` | The desktop app shell (Tauri), its settings and icons |
 | `tests/` | Unit tests |

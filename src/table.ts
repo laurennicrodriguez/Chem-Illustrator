@@ -37,8 +37,8 @@ export interface TableLayout {
 export type TablePart = { r: number; c: number } | 'title' | 'notes';
 
 /** Room round the text of a cell, as fractions of the text size. */
-const PAD_X = 0.4;
-const PAD_Y = 0.25;
+export const PAD_X = 0.4;
+export const PAD_Y = 0.25;
 /** Space between the title or the footnotes and the rules. */
 const GAP = 0.35;
 /** Footnotes are set a little smaller than the table, as journals print them. */

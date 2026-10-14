@@ -7,7 +7,7 @@ import type { TextRun } from './model';
 export type RunStyle = Omit<TextRun, 'text'>;
 export type Toggle = 'bold' | 'italic' | 'underline' | 'sub' | 'sup' | 'formula';
 
-const KEYS = ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'size', 'font', 'color'] as const;
+const KEYS = ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'size', 'font', 'color', 'obj'] as const;
 /** Subscript, superscript and formula style change where characters sit, so only one applies. */
 const POSITION: Toggle[] = ['sub', 'sup', 'formula'];
 
@@ -88,9 +88,14 @@ function charStyle(runs: TextRun[], i: number): RunStyle | null {
  */
 export function typingStyle(runs: TextRun[], start: number, end: number, fallback: RunStyle): RunStyle {
   const text = plainText(runs);
-  if (end > start) return charStyle(runs, start) ?? fallback;
-  if (start > 0 && text[start - 1] !== '\n') return charStyle(runs, start - 1) ?? fallback;
-  return charStyle(runs, start) ?? (start > 0 ? charStyle(runs, start - 1) : null) ?? fallback;
+  let s: RunStyle;
+  if (end > start) s = charStyle(runs, start) ?? fallback;
+  else if (start > 0 && text[start - 1] !== '\n') s = charStyle(runs, start - 1) ?? fallback;
+  else s = charStyle(runs, start) ?? (start > 0 ? charStyle(runs, start - 1) : null) ?? fallback;
+  // typing next to a figure or field types text, not another of them
+  if (s.obj === undefined) return s;
+  const { obj: _, ...rest } = s;
+  return rest;
 }
 
 /** What every character between two offsets has in common (for showing which buttons are on). */

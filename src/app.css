@@ -15,6 +15,7 @@
   --tab-drawing: var(--mode-drawing, #2f6fdf);
   --tab-slides: var(--mode-slides, #c8572a);
   --tab-sheet: var(--mode-sheet, #1e8a50);
+  --tab-document: var(--mode-document, #2647a8);
   --surround: #d5d8de;
   --ui-font: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --mono-font: 'IBM Plex Mono', ui-monospace, Consolas, monospace;
@@ -520,6 +521,7 @@ dialog.typing-dialog p { margin: 2px 0 6px; }
 }
 .tab-slides .tab-icon { background: var(--tab-slides); }
 .tab-sheet .tab-icon { background: var(--tab-sheet); }
+.tab-document .tab-icon { background: var(--tab-document); }
 .tab-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab.dirty .tab-name::before { content: '• '; color: var(--accent); }
 .tab-close { flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 15px; line-height: 1; }
@@ -638,10 +640,10 @@ dialog.master-dialog > form > .muted { margin: 2px 0 6px; max-width: 60ch; }
 /* ------------------------------------------------------------------ Sheet mode */
 #sheet-pane { grid-area: host; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); }
 #sheet-pane[hidden] { display: none; }
-body.sheet-mode #canvas-host { display: none; }
-body.sheet-mode:not(.sheet-structure) #tools { display: none; }
-/* drawing a structure for a cell: the drawing area floats over the sheet */
-body.sheet-mode.sheet-structure #canvas-host {
+body.sheet-mode #canvas-host, body.doc-mode #canvas-host { display: none; }
+body.sheet-mode:not(.floating-drawing) #tools, body.doc-mode:not(.floating-drawing) #tools { display: none; }
+/* drawing a structure for a cell or a document: the drawing area floats over the sheet or pages */
+body.sheet-mode.floating-drawing #canvas-host, body.doc-mode.floating-drawing #canvas-host {
   display: block;
   z-index: 3;
   margin: 56px 28px 22px;
@@ -649,8 +651,8 @@ body.sheet-mode.sheet-structure #canvas-host {
   border-radius: 6px;
   box-shadow: 0 10px 32px rgba(0, 0, 0, 0.28);
 }
-body.sheet-structure #sheet-pane { opacity: 0.55; }
-body.sheet-structure #sheet-ribbon { opacity: 0.55; pointer-events: none; }
+body.floating-drawing #sheet-pane, body.floating-drawing #doc-pane { opacity: 0.55; }
+body.floating-drawing #sheet-ribbon, body.floating-drawing #doc-ribbon { opacity: 0.55; pointer-events: none; }
 #structure-bar {
   grid-area: host;
   align-self: start;
@@ -735,10 +737,13 @@ button.primary:hover { filter: brightness(1.08); }
 .fm-values label { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
 .filter-menu > button.primary { align-self: flex-end; margin: 2px 6px 4px; padding: 3px 14px; justify-content: center; }
 
-/* the side panel in Sheet mode shows the cell; drawing panels come back while drawing a structure */
-#cell-section { display: none; }
-body.sheet-mode:not(.sheet-structure) #cell-section { display: block; }
-body.sheet-mode:not(.sheet-structure) aside > section:not(#cell-section) { display: none; }
+/* the side panel in Sheet mode shows the cell, in Document mode the formatting; drawing panels come back while drawing a structure */
+#cell-section, #doc-section { display: none; }
+body.doc-mode:not(.floating-drawing) #doc-section { display: block; }
+body.doc-mode:not(.floating-drawing) #doc-section, body.sheet-mode:not(.floating-drawing) #cell-section { margin-top: 0; border-top: 0; padding-top: 0; }
+body.doc-mode:not(.floating-drawing) aside > section:not(#doc-section) { display: none; }
+body.sheet-mode:not(.floating-drawing) #cell-section { display: block; }
+body.sheet-mode:not(.floating-drawing) aside > section:not(#cell-section) { display: none; }
 .cell-name { font-family: var(--mono-font); text-transform: none; letter-spacing: 0; color: var(--accent); margin-left: 4px; }
 #cell-body p { margin: 4px 0; }
 #cell-body .small { font-size: 11px; }
@@ -760,3 +765,63 @@ dialog.prop-dialog { width: min(94vw, 520px); }
 .prop-row:hover { background: var(--accent-soft); }
 .prop-row > span { flex: 1 1 auto; min-width: 0; }
 .prop-adduct { width: 104px; font: 12px var(--mono-font); padding: 2px 4px; }
+
+/* ------------------------------------------------------------------ Document mode: pages, Word-style ribbon, Format panel */
+
+#doc-pane { grid-area: host; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surround); }
+#doc-pane[hidden] { display: none; }
+#doc-host { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.doc-canvas { position: absolute; left: 0; top: 0; display: block; pointer-events: none; }
+.doc-scroll { position: absolute; inset: 0; overflow: auto; outline: none; cursor: text; }
+.doc-space { pointer-events: none; }
+#doc-statusbar { flex: none; display: flex; align-items: center; gap: 4px; padding: 2px 10px; font-size: 12px; color: var(--muted); background: var(--panel); border-top: 1px solid var(--line); }
+#doc-statusbar .grow { flex: 1 1 auto; }
+#doc-statusbar button { padding: 0 8px; font-size: 12px; border-color: transparent; background: transparent; color: var(--muted); }
+#doc-statusbar button:hover { color: var(--text); border-color: var(--line); }
+#doc-zoom { min-width: 3.4em; text-align: center; font-variant-numeric: tabular-nums; }
+
+.doc-ribbon { flex-direction: column; padding: 0; overflow: visible; }
+.rb-tabs { display: flex; gap: 2px; padding: 3px 8px 0; background: var(--bar); }
+.rb-tabs button { padding: 3px 14px 4px; border: 0; border-radius: 5px 5px 0 0; background: transparent; color: rgba(255, 255, 255, 0.86); font-size: 12px; }
+.rb-tabs button:hover { background: rgba(255, 255, 255, 0.14); color: #fff; }
+.rb-tabs button[aria-selected='true'] { background: var(--panel); color: var(--accent); font-weight: 600; }
+.rb-panel { display: flex; align-items: stretch; min-width: 0; padding: 4px 6px 2px; overflow-x: auto; }
+.rb-panel[hidden] { display: none; }
+.doc-ribbon .rb-col > button { align-self: flex-start; }
+.ribbon input.rb-text { font: 12px var(--ui-font); padding: 2px 5px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--text); }
+.ribbon input.rb-font { width: 150px; }
+.ribbon input.rb-num { width: 48px; }
+.ribbon label.rb-colour { position: relative; padding: 3px 5px; border: 1px solid transparent; border-radius: 5px; cursor: pointer; font-size: 12px; }
+.ribbon label.rb-colour:hover { border-color: var(--line); background: var(--accent-soft); }
+.ribbon label.rb-colour input { display: block; width: 16px; height: 5px; padding: 0; border: 0; cursor: pointer; }
+.ribbon label.rb-colour input::-webkit-color-swatch-wrapper { padding: 0; }
+.ribbon label.rb-colour input::-webkit-color-swatch { border: 0; }
+.rb-styles { gap: 3px; align-items: center; }
+.ribbon button.rb-style { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; width: 74px; height: 50px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); font-size: 10px; color: var(--muted); overflow: hidden; }
+.rb-style span { font: 13px/1.25 'Times New Roman', 'Liberation Serif', Times, serif; color: var(--text); white-space: nowrap; }
+.rb-style span.s-title { font-size: 16px; font-weight: 700; }
+.rb-style span.s-h1 { font-size: 14px; font-weight: 700; }
+.rb-style span.s-h2 { font-size: 12.5px; font-weight: 700; }
+.rb-style span.s-h3 { font-size: 12px; font-weight: 700; font-style: italic; }
+.rb-style span.s-cap { font-size: 11px; }
+
+.dp-section + .dp-section { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--line); }
+.dp-section[hidden] { display: none; }
+.dp-input { width: 100%; padding: 2px 5px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; }
+.dp-input:focus, #doc-section select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.dp-note { margin: 2px 0 6px; }
+
+/* Document mode: Find and Replace, floating over the top right of the pages */
+.doc-find { position: absolute; top: 8px; right: 22px; z-index: 6; width: 330px; max-width: calc(100% - 44px); display: flex; flex-direction: column; gap: 5px;
+  padding: 7px 8px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18); font-size: 12px; }
+.doc-find[hidden], .doc-find [hidden] { display: none; }
+.df-row { display: flex; align-items: center; gap: 4px; }
+.df-replace { display: flex; flex-direction: column; gap: 5px; }
+.doc-find input[type=search], .doc-find input[type=text] { flex: 1 1 auto; min-width: 0; font: inherit; padding: 3px 6px; }
+.doc-find button { padding: 2px 7px; min-width: 24px; }
+.df-toggle { min-width: 18px !important; padding: 2px 3px !important; }
+.df-count { min-width: 56px; text-align: right; font-variant-numeric: tabular-nums; }
+.df-opts { gap: 12px; padding-left: 22px; }
+.df-look { flex-wrap: wrap; padding-left: 22px; }
+.df-look button[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.df-hint { margin: 0; padding-left: 22px; font-size: 11px; }

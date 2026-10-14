@@ -9,7 +9,7 @@ Chem Illustrator ships the following open-source software.
 | [dk.brics.automaton](https://www.brics.dk/automaton/) 1.12-4 (part of the OPSIN build) | OPSIN's name grammar | BSD-3-Clause (full text below) |
 | [TeaVM](https://teavm.org) 0.16.0 runtime and class library (part of the OPSIN build) | Runs OPSIN's Java code as JavaScript | Apache-2.0; includes code from Apache Harmony (Apache-2.0). Notice: "This product includes software developed by Alexey Andreev (http://teavm.org). This product includes software developed by The Apache Software Foundation (http://www.apache.org/)." |
 | StAX API 1.0.1 (`stax:stax-api`, interfaces only, part of the OPSIN build) | Lets OPSIN read its XML word lists | Apache-2.0 |
-| [fflate](https://github.com/101arrowz/fflate) 0.8.2 | Packing and unpacking PowerPoint (.pptx) files, and compressing PDF pages | MIT (full text below) |
+| [fflate](https://github.com/101arrowz/fflate) 0.8.2 | Packing and unpacking PowerPoint, Excel and Word files (.pptx, .xlsx, .docx), and compressing PDF pages | MIT (full text below) |
 | [Tauri](https://tauri.app) (`tauri` crate, `@tauri-apps/api`) | Desktop app shell | MIT or Apache-2.0 |
 | Tauri dialog plugin (`tauri-plugin-dialog` crate, `@tauri-apps/plugin-dialog`) | The desktop app's Open and Save dialogs | MIT or Apache-2.0 |
 | [windows-sys](https://github.com/microsoft/windows-rs) crate (Windows only) | The desktop app's clipboard on Windows (pictures for Word and PowerPoint) | MIT or Apache-2.0 |
@@ -20,12 +20,15 @@ Chem Illustrator ships the following open-source software.
 | Microsoft Edge WebView2 (part of Windows, not bundled) | Shows the app's window contents on Windows | Microsoft software licence, free to use |
 
 Used only to build and test, not shipped: TypeScript (Apache-2.0), Vite (MIT), Vitest (MIT), jsdom (MIT), Playwright (Apache-2.0), Tauri CLI (MIT or Apache-2.0). Rebuilding the OPSIN files (`opsin-js/`, rarely needed) also uses Java, Maven (Apache-2.0) and the TeaVM compiler (Apache-2.0).
+Remaking the font width tables (`scripts/font-widths.py`, rarely needed) uses Python and fontTools (MIT).
 
 `src/text-metrics.ts` holds the standard character widths of Helvetica/Arial, regular and bold (the widths in Adobe's freely distributed Helvetica font metrics), so saved files and copied pictures place text as ChemDraw does. No font files are included.
 
+`src/text/font-widths.ts` holds the width of every character in the Liberation fonts (Liberation Serif, Sans and Mono 2.x; Digitized data copyright (c) 2010 Google Corporation with Reserved Font Arimo, Tinos and Cousine; copyright (c) 2012 Red Hat, Inc. with Reserved Font Name Liberation), licensed under the [SIL Open Font License 1.1](https://openfontlicense.org). The Liberation fonts have the same widths as Times New Roman, Arial and Courier New, so documents break their lines in the same places on every computer, in PDFs and in Word. Only the widths are used; no font files or glyph outlines are included.
+
 Copied pictures are written as Enhanced Metafiles (EMF) and Windows bitmaps from Microsoft's published format specifications ([MS-EMF], BMP); no Microsoft code is included.
 
-PowerPoint files (.pptx) are read and written from the published Office Open XML standard (ECMA-376); PDF files from the published PDF specification (ISO 32000), using only the standard 14 PDF fonts. No Microsoft or Adobe code is included.
+PowerPoint (.pptx), Excel (.xlsx) and Word (.docx) files are read and written from the published Office Open XML standard (ECMA-376); ChemDraw drawings embedded in Word files are read from the published compound file format ([MS-CFB]) and the CDX format documentation; PDF files from the published PDF specification (ISO 32000), using only the standard 14 PDF fonts. No Microsoft or Adobe code is included.
 
 The CDXML and CDX formats are read and written from CambridgeSoft's published CDX/CDXML format documentation and from example files; no ChemDraw code or documentation is included.
 

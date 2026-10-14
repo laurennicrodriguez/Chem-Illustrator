@@ -40,6 +40,30 @@ export function afterTyping(ed: TextEditing, typed: string, prefs: TypingPrefs =
   }
 }
 
+/**
+ * A word finished without a word-ending key (Tab on to the next table cell, or the text box
+ * closed): make its replacement and chemistry formatting as if a space had been typed.
+ */
+export function finishWord(ed: TextEditing, prefs: TypingPrefs = typingPrefs): void {
+  if (!ed.collapsed || ed.composing !== null) return;
+  const text = ed.text;
+  let end = ed.focus;
+  // only at the end of a word, not in the middle of one or after a space
+  if (end === 0 || /\s/.test(text[end - 1]) || (end < text.length && !/\s/.test(text[end]) && !WORD_ENDS.includes(text[end]))) return;
+  if (prefs.replacements.length) {
+    const r = replacementAt(text, end, prefs.replacements);
+    if (r) {
+      ed.fix([{ start: r[0], end, text: r[1] }], 'replace');
+      end = r[0] + r[1].length;
+    }
+  }
+  if (prefs.chemistry) {
+    const looks = ed.looks();
+    const edits = typingFormats(ed.text, end, (i) => looks[i] ?? { pos: 'base', italic: false });
+    if (edits.length) ed.fix(edits, 'format');
+  }
+}
+
 const listeners = new Set<() => void>();
 
 /** Be told when the preferences change (to save them, or redraw underlines). */
