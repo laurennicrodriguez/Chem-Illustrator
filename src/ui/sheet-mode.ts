@@ -11,6 +11,7 @@ import { fillReagentTable } from '../sheet/reagents';
 import { shiftFormula } from '../sheet/formula';
 import { PROPERTIES, MolProps, propertyValue } from '../sheet/properties';
 import { FORMATS, changeDecimals, describeFormat } from '../sheet/numfmt';
+import { UNITS, unitFormat } from '../sheet/units';
 import { isError, CellError, Value } from '../sheet/values';
 import { FUNCTION_NAMES } from '../sheet/evaluate';
 import { parseDelimited, toDelimited } from '../sheet/csv';
@@ -272,7 +273,13 @@ export class SheetMode {
       if (!btn) return;
       this.ribbonCommand(btn.dataset.sh!, btn);
     });
-    rb.querySelector<HTMLSelectElement>('#sh-numfmt')!.addEventListener('change', (e) => {
+    // units for reaction conditions, before "Other…"
+    const numfmt = rb.querySelector<HTMLSelectElement>('#sh-numfmt')!;
+    const units = document.createElement('optgroup');
+    units.label = 'Units';
+    for (const u of UNITS) units.append(new Option(`${u.name} (${u.unit})`, unitFormat(u)));
+    numfmt.insertBefore(units, numfmt.querySelector('option[value=custom]'));
+    numfmt.addEventListener('change', (e) => {
       const sel = e.target as HTMLSelectElement;
       const v = sel.value;
       if (v === 'custom') { this.focusFormat(); return; }
@@ -1431,7 +1438,7 @@ export class SheetMode {
     fmt.className = 'cp-format';
     fmt.value = st?.numFmt ?? 'General';
     fmt.spellcheck = false;
-    fmt.title = 'An Excel number format: 0.00, 0.0%, 0.00E+00, #,##0, 0.0 "mg"… (General for none)';
+    fmt.title = 'An Excel number format: 0.00, 0.0%, 0.00E+00, #,##0, or a number with a unit such as 0.0" mg/mL" (General for none)';
     fmt.addEventListener('keydown', (e) => {
       e.stopPropagation();
       if (e.key === 'Enter') {

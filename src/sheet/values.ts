@@ -1,6 +1,8 @@
 // What a cell holds once worked out: a number, text, TRUE/FALSE, nothing, or an error such as
 // #DIV/0!. Also how typed text becomes a value (as Excel reads it), and how values compare.
 
+import { readWithUnit } from './units';
+
 /** An error value. The codes are Excel's, plus #CIRC! for a formula that depends on itself. */
 export class CellError {
   constructor(public code: string, public detail = '') {}
@@ -56,6 +58,9 @@ export function readTyped(input: string): Typed {
     const dec = pct[1].includes('.') ? pct[1].split('.')[1].length : 0;
     return { value: Number(pct[1]) / 100, format: dec ? `0.${'0'.repeat(dec)}%` : '0%' };
   }
+  // a number with a unit (-78 °C, 5 mol%): the number, shown with the unit
+  const unit = readWithUnit(s);
+  if (unit) return unit;
   const up = s.toUpperCase();
   if (up === 'TRUE' || up === 'FALSE') return { value: up === 'TRUE' };
   return { value: input };
@@ -70,7 +75,8 @@ export function toNumber(v: Value): number | CellError {
   const t = v.trim();
   if (t === '') return 0;
   const typed = readTyped(t);
-  if (typeof typed.value === 'number' && !typed.formula) return typed.value;
+  // text with a unit stays text in formulas, as in Excel ("5 M"*2 is #VALUE!); typed into a cell it is a number
+  if (typeof typed.value === 'number' && !typed.formula && !readWithUnit(t)) return typed.value;
   return ERR.value(`"${v}" is not a number`);
 }
 

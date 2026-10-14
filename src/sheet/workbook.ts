@@ -174,6 +174,9 @@ interface Entry {
 
 let nextSheetUid = 1;
 
+/** Selections up to this many cells keep formatting in their empty cells too. */
+const SMALL_BLOCK = 10000;
+
 export class Sheet {
   readonly uid = nextSheetUid++;
   cells = new Map<number, Cell>();
@@ -351,13 +354,16 @@ export class Sheet {
   patchStyle(r: Range, patch: Partial<CellStyle>): void {
     const whole = r.r1 === 0 && r.r2 >= MAX_ROWS - 1;
     if (whole) for (let c = r.c1; c <= Math.min(r.c2, MAX_COLS - 1); c++) this.put('colStyles', this.colStyles, c, patchStyleWith(this.colStyles.get(c), patch));
-    const used = this.clip(r);
+    // a block of cells keeps its formatting even where they are empty, so a number typed in later
+    // shows in it (a temperature column formatted before it is filled in); for whole rows and
+    // columns only the cells in use change, and empty ones only for what shows without content
+    const small = !whole && (r.r2 - r.r1 + 1) * (r.c2 - r.c1 + 1) <= SMALL_BLOCK;
+    const used = small ? r : this.clip(r);
     if (!used) return;
     for (let row = used.r1; row <= used.r2; row++) {
       for (let col = used.c1; col <= used.c2; col++) {
         const c = this.cell(row, col);
-        // empty cells are only made for settings that show without content (fill, borders)
-        if (!c && !('fill' in patch || 'borders' in patch) && !this.defAt(row, col)) continue;
+        if (!c && !small && !('fill' in patch || 'borders' in patch) && !this.defAt(row, col)) continue;
         this.setCell(row, col, { ...c, style: patchStyleWith(c?.style, patch) });
       }
     }
