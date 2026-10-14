@@ -53,10 +53,19 @@ export class SheetCharts {
 
   private get view(): SheetView { return this.host.view; }
   private get sheet(): Sheet { return this.view.sheet!; }
-  get chart(): Chart | null { return this.view.selectedChart; }
+  /** A chart kept somewhere other than on a sheet (a dashboard tile), while it is the one being changed. */
+  target: { get(): Chart | null; set(c: Chart, label: string): void; remove(): void } | null = null;
+
+  get chart(): Chart | null { return this.target ? this.target.get() : this.view.selectedChart; }
 
   private change(c: Chart, label = 'Change chart'): void {
-    this.view.replaceChart(c, label);
+    if (this.target) this.target.set(c, label);
+    else this.view.replaceChart(c, label);
+  }
+
+  deleteChart(): void {
+    if (this.target) this.target.remove();
+    else this.view.deleteChart();
   }
 
   /** Change the picked chart. */
@@ -332,10 +341,10 @@ export class SheetCharts {
       ['Copy as Picture', () => void this.copyPicture()],
       ['Save as Picture…', () => void this.savePicture()],
       null,
-      ['Bring to Front', () => this.restack(1), this.sheet.charts.length > 1],
-      ['Send to Back', () => this.restack(-1), this.sheet.charts.length > 1],
+      ['Bring to Front', () => this.restack(1), !this.target && this.sheet.charts.length > 1],
+      ['Send to Back', () => this.restack(-1), !this.target && this.sheet.charts.length > 1],
       ['All Settings…', () => this.focusPanel()],
-      ['Delete Chart', () => this.view.deleteChart()],
+      ['Delete Chart', () => this.deleteChart()],
     ];
   }
 
@@ -449,14 +458,14 @@ export class SheetCharts {
           const btns = document.createElement('div');
           btns.className = 'cp-buttons';
           btns.append(button('Copy equation', () => void navigator.clipboard?.writeText(`${fitEquation(fit, 6)}\n${r2Text(fit, 5)}`).then(() => this.host.flash('Copied the equation.'), () => this.host.flash('This browser would not copy.'))));
-          if (fit.kind === 'linear' && f.intercept === undefined && s.x && c.kind === 'scatter') btns.append(button('Put in cells…', () => void this.fitToCells(i)));
+          if (fit.kind === 'linear' && f.intercept === undefined && s.x && c.kind === 'scatter' && !this.target) btns.append(button('Put in cells…', () => void this.fitToCells(i)));
           box.append(btns);
           out.push(box);
         } else out.push(note('Too few usable points to fit (log and power fits need x > 0; exponential and power fits need y > 0).', 'cp-error'));
       }
       if (c.series.length > 1) out.push(row('', button('Remove this series', () => this.patch((x) => ({ ...x, series: x.series.filter((_, j) => j !== i) }), 'Remove series'))));
     });
-    out.push(rowOf(button('Add series…', () => void this.addSeries()), button('Copy as picture', () => void this.copyPicture()), button('Delete chart', () => this.view.deleteChart())));
+    out.push(rowOf(button('Add series…', () => void this.addSeries()), button('Copy as picture', () => void this.copyPicture()), button('Delete chart', () => this.deleteChart())));
     return out;
   }
 }

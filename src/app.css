@@ -1225,3 +1225,44 @@ dialog.cf-manage { width: min(92vw, 640px); }
 .cp-chart-row button { font-size: 12px; padding: 2px 8px; }
 .cp-fit { margin: 6px 0 2px 88px; padding: 4px 8px; border-left: 2px solid var(--accent); }
 .cp-fit .cp-value { font-family: var(--mono-font); font-size: 11.5px; }
+
+/* ---------------------------------------------------------------- dashboards (a sheet of tiles) */
+/* Like the cells, a dashboard is the user's page, so it keeps its own light colours in dark mode. */
+.dash { flex: 1 1 auto; min-height: 0; overflow: auto; background: #f3f4f6; outline: none; color: #1d2330; }
+.dash-page { position: relative; min-width: 320px; }
+.dash-tile { position: absolute; display: flex; flex-direction: column; box-sizing: border-box; background: #ffffff; border: 1px solid #dfe3e8; border-radius: 6px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06); overflow: hidden; cursor: grab; user-select: none; }
+.dash-tile.dragging { cursor: grabbing; opacity: 0.85; z-index: 2; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18); }
+.dash-tile.picked { outline: 2px solid var(--accent); outline-offset: 1px; }
+.dash-head { flex: none; display: flex; align-items: center; gap: 6px; min-height: 0; padding: 6px 10px 0; font-size: 12px; font-weight: 600; color: #4a5263; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-head:empty { padding: 0; }
+.dash-body { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.dash-tile-chart .dash-body { overflow: hidden; }
+.dash-size { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; background: linear-gradient(135deg, transparent 55%, #9aa3b5 55%, #9aa3b5 62%, transparent 62%, transparent 75%, #9aa3b5 75%, #9aa3b5 82%, transparent 82%); opacity: 0; }
+.dash-tile:hover .dash-size, .dash-tile.picked .dash-size { opacity: 1; }
+.dash-kpi { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; padding: 0 10px; font-size: 34px; font-weight: 600; font-variant-numeric: tabular-nums; color: #1d2330; white-space: nowrap; }
+.dash-kpi.good { color: #18794e; }
+.dash-kpi.bad { color: #b4232a; }
+.dash-sub { flex: none; padding: 0 10px 8px; font-size: 11px; color: #677084; text-align: center; }
+.dash-table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+.dash-table th { position: sticky; top: 0; background: #f6f7f9; padding: 4px 8px; text-align: left; font-weight: 600; border-bottom: 1px solid #dfe3e8; cursor: pointer; white-space: nowrap; }
+.dash-table th:hover { color: var(--accent); }
+.dash-table td { padding: 3px 8px; border-bottom: 1px solid #eef0f3; vertical-align: middle; }
+.dash-table td.num { text-align: right; }
+.dash-table td canvas { display: block; }
+.dash-slicer { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 5px; padding: 8px 10px; }
+.dash-slicer button { padding: 3px 10px; font-size: 12px; border: 1px solid #cfd5dd; border-radius: 4px; background: #ffffff; color: #1d2330; cursor: pointer; }
+.dash-slicer button:hover { border-color: var(--accent); }
+.dash-slicer button[aria-pressed='true'] { background: var(--accent); border-color: var(--accent); color: #ffffff; }
+.dash-clear { margin-left: auto; padding: 0 5px; border: 0; background: transparent; color: #677084; font-size: 12px; cursor: pointer; }
+.dash-clear:hover { color: #b4232a; }
+.dash-gallery { display: grid; gap: 8px; padding: 8px 10px; }
+.dash-card { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px; border: 1px solid #eef0f3; border-radius: 4px; }
+.dash-label { font-size: 11.5px; text-align: center; color: #1d2330; }
+.dash-label:first-of-type { font-weight: 600; }
+.dash-nostruct { color: #9aa3b5; font-size: 12px; padding: 20px 0; }
+.dash-text { padding: 4px 10px; white-space: pre-wrap; color: #1d2330; }
+.dash-empty { position: absolute; left: 50%; top: 80px; transform: translateX(-50%); max-width: 460px; padding: 16px 20px; text-align: center; font-size: 13px; color: #677084; border: 1px dashed #cfd5dd; border-radius: 8px; }
+.dash-missing { margin: 6px 10px; font-size: 11.5px; color: #9a5b00; }
+.sh-tab.dash-tab::before { content: '▦ '; color: var(--accent); }
+#cell-body .cp-textarea { flex: 1 1 auto; min-width: 0; min-height: 54px; font: 12px var(--ui-font); padding: 3px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--text); resize: vertical; }
+#formula-bar[hidden] { display: none; }

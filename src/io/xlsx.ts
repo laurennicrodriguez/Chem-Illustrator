@@ -26,6 +26,8 @@ import type { DocStyle } from '../style';
 import { applyTint } from '../colours';
 import { chartXml, chartAnchorXml, readChartXml, CT_CHART, REL_CHART, C_NS } from './xlsx-chart';
 import { Chart, chartData, seenChartId, newChartId, sameChartData } from '../sheet/chart';
+import { dashboardStandIn } from './xlsx-dashboard';
+import { Dashboard, seenTileId } from '../sheet/dashboard';
 import { condFormatsXml, dxfXml, tableXml, readDxfs, readCondFormats, readTable, sameRules } from './xlsx-format';
 import type { CondFormat, CfLook } from '../sheet/conditional';
 import { seenCondFormatId } from '../sheet/conditional';
@@ -144,6 +146,8 @@ interface ModelSheet {
   condFormats?: CondFormat[];
   tables?: TableDef[];
   charts?: Chart[];
+  /** A dashboard sheet: Excel was given a stand-in (charts and cells), this is the dashboard itself. */
+  dashboard?: Dashboard;
 }
 
 interface Model {
@@ -289,12 +293,16 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
   pkg.defaultType('png', 'image/png');
 
   for (let si = 0; si < book.sheets.length; si++) {
-    const s = book.sheets[si];
+    const own = book.sheets[si];
+    // a dashboard goes to Excel as a stand-in sheet of charts and cells
+    const standIn = own.dashboard ? dashboardStandIn(book, own) : null;
+    const s = standIn?.sheet ?? own;
     const path = `xl/worksheets/sheet${si + 1}.xml`;
     const ms: ModelSheet = { name: s.name, cells: [], defs: [...s.colDefs].map(([col, def]) => ({ col, def })), chemCols: [], filter: s.filter };
     if (s.condFormats.length) ms.condFormats = s.condFormats;
     if (s.tables.length) ms.tables = s.tables;
-    if (s.charts.length) ms.charts = s.charts;
+    if (s.charts.length && !own.dashboard) ms.charts = s.charts;
+    if (own.dashboard) ms.dashboard = own.dashboard;
     // a table's header cells hold its column names, as Excel needs them (filled in and all different)
     const headerName = new Map<number, string>();
     const tableNames = new Map<TableDef, string[]>();
@@ -483,7 +491,7 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
     for (const ch of s.charts) {
       chartNo++;
       const cpath = `xl/charts/chart${chartNo}.xml`;
-      pkg.add(cpath, HEAD + chartXml(ch, chartData(book, s, ch)), CT_CHART);
+      pkg.add(cpath, HEAD + chartXml(ch, standIn?.data.get(ch.id) ?? chartData(book, s, ch)), CT_CHART);
       const rid = pkg.relate(drawingPath, REL_CHART, `../charts/chart${chartNo}.xml`);
       const x = cols.start(ch.at.col) + ch.at.dx, y = rows.start(ch.at.row) + ch.at.dy;
       const end = cols.at(x + ch.w, ch.at.col), endR = rows.at(y + ch.h, ch.at.row);
@@ -962,6 +970,13 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
           charts.push(got.chart);
         }
         if (charts.length) s.setCharts(charts);
+      }
+      // a dashboard: the stand-in Excel was given goes, and the dashboard comes back
+      if (ms?.dashboard) {
+        if (s.lastRow >= 0) s.clear({ r1: 0, c1: 0, r2: Math.max(0, s.lastRow), c2: Math.max(0, s.lastCol) }, 'all');
+        s.setCharts([]);
+        for (const t of ms.dashboard.tiles) { seenTileId(t.id); if (t.kind === 'chart') seenTileId(t.chart.id); }
+        s.setDashboard(ms.dashboard);
       }
       for (const [tag, what] of [['dataValidations', 'data validation lists'], ['hyperlinks', 'links'], ['legacyDrawing', 'comments']] as const) {
         if (kid(ws, tag)) notKept.add(what);

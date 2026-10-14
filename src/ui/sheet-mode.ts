@@ -24,6 +24,8 @@ import { ask } from './ask';
 import { SheetFormatting } from './sheet-format-ui';
 import { SheetCharts } from './sheet-chart-ui';
 import type { ChartKind } from '../sheet/chart';
+import { DashboardUi } from './dashboard-ui';
+import { TILE_NAMES } from '../sheet/dashboard';
 import type { TableDef } from '../sheet/table-styles';
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
@@ -79,8 +81,12 @@ export class SheetMode {
   readonly formatting: SheetFormatting;
   /** Charts on the sheets. */
   readonly charts: SheetCharts;
+  /** Dashboard sheets: adding tiles, their menus and settings. */
+  readonly dashUi: DashboardUi;
   /** The chart the panel and Chart tab showed last (the tab opens when a chart is first picked). */
   private chartShown: number | null = null;
+  /** The dashboard sheet the ribbon was last set up for. */
+  private dashShown: Sheet | null = null;
   /** The last cells copied here: pasting the same text back uses these (formulas, structures and formats kept). */
   private clip: { text: string; block: CellBlock; sheet: Sheet; range: Range; cut: boolean } | null = null;
 
@@ -99,8 +105,13 @@ export class SheetMode {
       editStructure: (r, c) => this.drawStructure(r, c),
       key: (e) => this.host.key(e),
       changed: () => this.selectionChanged(),
-      contextMenu: (x, y, where) => (where === 'chart' ? this.charts.contextMenu(x, y) : this.contextMenu(x, y, where)),
+      contextMenu: (x, y, where) => (where === 'chart' ? this.charts.contextMenu(x, y) : where === 'tile' ? this.dashUi.contextMenu(x, y) : this.contextMenu(x, y, where)),
       editChart: () => { this.showRibbonTab('chart'); this.renderPanel(); this.charts.focusPanel(); },
+      openTile: (t) => {
+        if (t.kind === 'chart') { this.dashUi.bindChart(t.id); this.showRibbonTab('chart'); }
+        this.renderPanel();
+        this.dashUi.focusPanel();
+      },
       filterMenu: (col, at) => this.filterMenu(col, at),
       flash: (m, ms) => this.host.flash(m, ms),
       typing: (text) => this.typing(text),
@@ -122,6 +133,7 @@ export class SheetMode {
       edit: (label, fn) => this.edit(label, fn),
       flash: (m, ms) => this.host.flash(m, ms),
     });
+    this.dashUi = new DashboardUi({ view: this.view, charts: this.charts, flash: (m, ms) => this.host.flash(m, ms) });
     this.wireFormulaBar();
     this.wireRibbon();
   }
@@ -438,11 +450,22 @@ export class SheetMode {
       case 'reset-calculated': this.resetCalculated(); break;
       case 'manage-rules': this.formatting.manage(); break;
       case 'new-rule': void this.formatting.ruleDialog(null); break;
-      case 'insert-table': void this.formatting.formatAsTable(this.tableHere()?.style ?? 'TableStyleMedium2'); break;
+      case 'insert-table': if (v.sheet.dashboard) void this.dashUi.addTile('table'); else void this.formatting.formatAsTable(this.tableHere()?.style ?? 'TableStyleMedium2'); break;
       case 'table-convert': { const t = this.tableHere(); if (t) this.formatting.convertToRange(t); break; }
       case 'table-colours-reset': { const t = this.tableHere(); if (t) this.formatting.setTable(t, { custom: undefined }, 'Table colours'); break; }
       case 'chart-scatter': case 'chart-line': case 'chart-column': case 'chart-bar': case 'chart-area': case 'chart-pie':
-        this.charts.insert(name.slice(6) as ChartKind); break;
+        if (v.sheet.dashboard) void this.dashUi.addTile('chart', name.slice(6) as ChartKind);
+        else this.charts.insert(name.slice(6) as ChartKind);
+        break;
+      case 'dash-add-chart': void this.dashUi.addTile('chart'); break;
+      case 'dash-add-kpi': void this.dashUi.addTile('kpi'); break;
+      case 'dash-add-table': void this.dashUi.addTile('table'); break;
+      case 'dash-add-slicer': void this.dashUi.addTile('slicer'); break;
+      case 'dash-add-gallery': void this.dashUi.addTile('gallery'); break;
+      case 'dash-add-text': void this.dashUi.addTile('text'); break;
+      case 'dash-clear-filters': this.dashUi.clearFilters(); break;
+      case 'dash-settings': v.dash.pick(null); this.renderPanel(); this.dashUi.focusPanel(); break;
+      case 'insert-dashboard': v.addDashboard(); break;
       case 'chart-add-series': void this.charts.addSeries(); break;
       case 'chart-edit': this.charts.focusPanel(); break;
       case 'chart-titles': void this.charts.titles(); break;
@@ -450,8 +473,8 @@ export class SheetMode {
       case 'chart-labels': this.charts.toggleLabels(); break;
       case 'chart-copy': void this.charts.copyPicture(); break;
       case 'chart-save': void this.charts.savePicture(); break;
-      case 'chart-delete': v.deleteChart(); break;
-      case 'copy': if (v.selectedChart) void this.charts.copyPicture(); else void this.copy(); break;
+      case 'chart-delete': this.charts.deleteChart(); break;
+      case 'copy': if (this.charts.chart) void this.charts.copyPicture(); else void this.copy(); break;
       case 'cut': void this.copy(true); break;
       case 'paste': void this.paste(null); break;
       case 'clear-contents': v.clearSelection(); break;
@@ -1456,10 +1479,36 @@ export class SheetMode {
     });
   }
 
+  /** On a dashboard sheet the ribbon shows the Dashboard tab (and Chart while a chart tile is picked)
+   *  instead of the cell tabs, and the formula bar hides. True when the sheet is a dashboard. */
+  private dashRibbon(s: Sheet): boolean {
+    const tab = (n: string) => this.ribbon.querySelector<HTMLButtonElement>(`[data-sh-tab=${n}]`)!;
+    const selected = this.ribbon.querySelector<HTMLButtonElement>('[data-sh-tab][aria-selected=true]')?.dataset.shTab;
+    const on = !!s.dashboard;
+    document.querySelector<HTMLElement>('#formula-bar')!.hidden = on;
+    tab('home').hidden = on;
+    tab('dashboard').hidden = !on;
+    if (!on) {
+      if (selected === 'dashboard') this.showRibbonTab('home');
+      this.dashShown = null;
+      return false;
+    }
+    tab('table').hidden = true;
+    const t = this.view.dash.pickedTile;
+    const chart = t?.kind === 'chart';
+    tab('chart').hidden = !chart;
+    if (this.dashShown !== s || selected === 'home' || selected === 'table' || (selected === 'chart' && !chart)) this.showRibbonTab('dashboard');
+    if (chart && this.chartShown !== t.id) this.showRibbonTab('chart');
+    this.chartShown = chart ? t.id : null;
+    this.dashShown = s;
+    return true;
+  }
+
   /** The ribbon shows the active cell's look (Bold pressed, its number format…). */
   private showRibbonState(): void {
     const s = this.view.sheet;
     if (!s) return;
+    if (this.dashRibbon(s)) return;
     const { r, c } = this.view.sel.active;
     const st = s.styleAt(r, c) ?? {};
     const press = (name: string, on: boolean) => this.ribbon.querySelector(`[data-sh="${name}"]`)?.setAttribute('aria-pressed', String(on));
@@ -1519,6 +1568,20 @@ export class SheetMode {
     const wb = this.book;
     const p = this.panel;
     if (!s || !wb) { p.replaceChildren(); return; }
+    if (s.dashboard) {
+      const t = this.view.dash.pickedTile;
+      if (t?.kind !== 'chart') this.dashUi.bindChart(null);
+      // keep the panel while one of its boxes is being typed in
+      const key = JSON.stringify([t?.id ?? null, s.dashboard]);
+      if (p.contains(document.activeElement) && p.dataset.dash === key) return;
+      delete p.dataset.chart;
+      p.dataset.dash = key;
+      this.panelTitle.textContent = t ? `Dashboard: ${TILE_NAMES[t.kind]}` : 'Dashboard';
+      p.replaceChildren(...this.dashUi.panel());
+      return;
+    }
+    delete p.dataset.dash;
+    this.dashUi.bindChart(null);
     const chart = this.view.selectedChart;
     if (chart) {
       // keep the panel while one of its boxes is being typed in

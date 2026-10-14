@@ -16,6 +16,8 @@ import { DEFAULT_COL_W, DEFAULT_ROW_H, STRUCTURE_SCALE, STRUCTURE_PAD, MAX_AUTO_
 import { formulaRefs, normalizeFormula } from '../sheet/formula';
 import { Chart, chartData } from '../sheet/chart';
 import { drawChart, ChartHits, Box } from '../render/chart-draw';
+import { DashboardView } from './dashboard-view';
+import { newDashboard, Tile } from '../sheet/dashboard';
 
 const HEADER_W = 44;
 const HEADER_H = 22;
@@ -53,7 +55,9 @@ export interface SheetViewHost {
   /** The selection, the sheet showing or the cell being typed in changed. */
   changed(): void;
   /** A right-click: what was clicked. */
-  contextMenu(x: number, y: number, where: 'cell' | 'row' | 'col' | 'chart'): void;
+  contextMenu(x: number, y: number, where: 'cell' | 'row' | 'col' | 'chart' | 'tile'): void;
+  /** A dashboard tile was double-clicked (open its settings). */
+  openTile?(tile: Tile): void;
   /** A chart was double-clicked (open its settings). */
   editChart?(id: number): void;
   /** The filter button on a header was clicked. */
@@ -143,6 +147,8 @@ export class SheetView {
   chartSel: number | null = null;
   /** A chart being dragged, drawn in place of the saved one until the drag ends. */
   private chartPreview: Chart | null = null;
+  /** Shows a dashboard sheet in place of the grid. */
+  readonly dash: DashboardView;
   private chartCache = new Map<number, { key: string; chart: Chart; canvas: HTMLCanvasElement; hits: ChartHits }>();
 
   constructor(root: HTMLElement, private host: SheetViewHost) {
@@ -193,6 +199,23 @@ export class SheetView {
     this.input.addEventListener('pointerdown', (e) => e.stopPropagation());
     new ResizeObserver(() => this.render()).observe(this.scroller);
     this.buildFindBar();
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const view = this;
+    this.dash = new DashboardView(root, {
+      get wb() { return view.wb; },
+      get zoom() { return view.zoom; },
+      structureBox: (st) => host.structureBox(st),
+      structureBitmap: (st, scale) => host.structureBitmap(st, scale),
+      setDashboard: (d, label) => {
+        const sh = this.sheet!;
+        this.wb!.edit(label, () => sh.setDashboard(d), this.place());
+      },
+      picked: () => host.changed(),
+      open: (t) => host.openTile?.(t),
+      contextMenu: (x, y) => host.contextMenu(x, y, 'tile'),
+      flash: (m, ms) => host.flash(m, ms),
+      key: (e) => host.key(e),
+    });
   }
 
   // ---------------------------------------------------------------- the workbook shown
@@ -422,6 +445,11 @@ export class SheetView {
   // ---------------------------------------------------------------- drawing
 
   render(): void {
+    // a dashboard sheet shows its tiles in place of the grid
+    const dashSheet = this.sheet?.dashboard ? this.sheet : null;
+    if (this.scroller.hidden !== !!dashSheet) this.scroller.hidden = !!dashSheet;
+    this.dash.show(dashSheet);
+    if (dashSheet) return;
     if (this.queued) return;
     this.queued = true;
     requestAnimationFrame(() => {
@@ -1223,7 +1251,7 @@ export class SheetView {
     const items = wb.sheets.map((s, i) => {
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = `sh-tab${i === wb.active ? ' active' : ''}`;
+      b.className = `sh-tab${i === wb.active ? ' active' : ''}${s.dashboard ? ' dash-tab' : ''}`;
       b.setAttribute('role', 'tab');
       b.setAttribute('aria-selected', String(i === wb.active));
       b.textContent = s.name;
@@ -1251,6 +1279,21 @@ export class SheetView {
     if (!wb) return;
     this.commitEdit();
     const s = wb.edit('New sheet', () => wb.addSheet(undefined, wb.active + 1), this.place());
+    this.goSheet(wb.sheets.indexOf(s));
+  }
+
+  /** A new dashboard sheet after the one showing. */
+  addDashboard(): void {
+    const wb = this.wb;
+    if (!wb) return;
+    this.commitEdit();
+    let n = 1;
+    while (wb.sheetNamed(`Dashboard${n === 1 ? '' : n}`)) n++;
+    const s = wb.edit('New dashboard', () => {
+      const sh = wb.addSheet(`Dashboard${n === 1 ? '' : n}`, wb.active + 1);
+      sh.setDashboard(newDashboard());
+      return sh;
+    }, this.place());
     this.goSheet(wb.sheets.indexOf(s));
   }
 
@@ -1292,6 +1335,7 @@ export class SheetView {
     const i = wb.active;
     popupMenu(x, y, [
       ['Insert Sheet', () => this.addSheet()],
+      ['Insert Dashboard', () => this.addDashboard()],
       ['Rename…', () => this.renameSheet(i)],
       ['Delete Sheet', () => this.deleteSheet(), wb.sheets.length > 1],
       null,
@@ -2089,7 +2133,8 @@ export class SheetView {
   }
 
   focus(): void {
-    if (this.editing) this.input.focus();
+    if (this.sheet?.dashboard) this.dash.el.focus({ preventScroll: true });
+    else if (this.editing) this.input.focus();
     else this.scroller.focus({ preventScroll: true });
   }
 

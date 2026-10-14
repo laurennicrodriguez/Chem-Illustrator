@@ -11,6 +11,7 @@ import type { Contents } from '../model';
 import type { DocStyle } from '../style';
 import { ACS_1996 } from '../style';
 import { Chart, adjustChart, renameInChart } from './chart';
+import { Dashboard, adjustDashboard, renameInDashboard } from './dashboard';
 import { Node, parseFormula, shiftFormula, adjustFormula, renameSheetInFormula, formulaRefs, SheetChange, normalizeFormula, FormulaSyntaxError } from './formula';
 import { evaluate, EvalHost } from './evaluate';
 import { CellError, ERR, Value, readTyped, compareValues, isError } from './values';
@@ -155,7 +156,7 @@ function patchStyleWith(s: CellStyle | undefined, patch: Partial<CellStyle>): Ce
 // ---------------------------------------------------------------- history
 
 type MapField = 'cells' | 'colWidths' | 'rowHeights' | 'colDefs' | 'colStyles' | 'hiddenRows' | 'hiddenCols';
-type ValueField = 'merges' | 'filter' | 'frozen' | 'name' | 'condFormats' | 'tables' | 'charts';
+type ValueField = 'merges' | 'filter' | 'frozen' | 'name' | 'condFormats' | 'tables' | 'charts' | 'dashboard';
 
 interface Change {
   sheet: Sheet | null; // null: the workbook's list of sheets
@@ -202,6 +203,8 @@ export class Sheet {
   tables: TableDef[] = [];
   /** Charts floating over the cells. */
   charts: Chart[] = [];
+  /** A dashboard sheet's tiles (null: an ordinary sheet of cells). */
+  dashboard: Dashboard | null = null;
   private looks: { values: Map<number, Value>; rules: CondFormat[]; map: Map<number, CellLook> } | null = null;
 
   /** Worked out by Workbook.recalc: the value of every cell in use. */
@@ -494,6 +497,10 @@ export class Sheet {
     this.assign('charts', list);
   }
 
+  setDashboard(d: Dashboard | null): void {
+    this.assign('dashboard', d);
+  }
+
   setFrozen(rows: number, cols: number): void {
     this.assign('frozen', { rows: Math.max(0, rows), cols: Math.max(0, cols) });
   }
@@ -516,6 +523,10 @@ export class Sheet {
       if (s.charts.length) {
         const cs = s.charts.map((c) => renameInChart(c, old, name));
         if (JSON.stringify(cs) !== JSON.stringify(s.charts)) s.setCharts(cs);
+      }
+      if (s.dashboard) {
+        const d = renameInDashboard(s.dashboard, old, name);
+        if (JSON.stringify(d) !== JSON.stringify(s.dashboard)) s.setDashboard(d);
       }
     }
   }
@@ -980,7 +991,7 @@ export class Workbook {
       return;
     }
     const s = c.sheet!;
-    if (c.field === 'merges' || c.field === 'filter' || c.field === 'frozen' || c.field === 'name' || c.field === 'condFormats' || c.field === 'tables' || c.field === 'charts') {
+    if (c.field === 'merges' || c.field === 'filter' || c.field === 'frozen' || c.field === 'name' || c.field === 'condFormats' || c.field === 'tables' || c.field === 'charts' || c.field === 'dashboard') {
       (s as unknown as Record<string, unknown>)[c.field] = v;
       return;
     }
@@ -1026,6 +1037,10 @@ export class Workbook {
       if (s.charts.length) {
         const cs = s.charts.map((c) => adjustChart(c, s.name, ch));
         if (JSON.stringify(cs) !== JSON.stringify(s.charts)) s.setCharts(cs);
+      }
+      if (s.dashboard) {
+        const d = adjustDashboard(s.dashboard, s.name, ch);
+        if (JSON.stringify(d) !== JSON.stringify(s.dashboard)) s.setDashboard(d);
       }
     }
   }

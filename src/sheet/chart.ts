@@ -149,14 +149,16 @@ export function readRef(wb: Workbook, text: string | undefined, home: Sheet): { 
 }
 
 /** The values of a reference in reading order, leaving out hidden rows and columns unless asked. */
-export function refValues(wb: Workbook, text: string | undefined, home: Sheet, showHidden = false): Value[] | null {
+export function refValues(wb: Workbook, text: string | undefined, home: Sheet, showHidden = false, leaveOut?: Map<Sheet, Set<number>>): Value[] | null {
   const got = readRef(wb, text, home);
   if (!got) return null;
   const { sheet: s, range: r } = got;
   const out: Value[] = [];
   const r2 = Math.min(r.r2, Math.max(s.lastRow, r.r1)), c2 = Math.min(r.c2, Math.max(s.lastCol, r.c1));
+  const out2 = leaveOut?.get(s);
   for (let row = r.r1; row <= r2; row++) {
     if (!showHidden && s.hiddenRows.has(row)) continue;
+    if (out2?.has(row)) continue;
     for (let col = r.c1; col <= c2; col++) {
       if (!showHidden && s.hiddenCols.has(col)) continue;
       out.push(s.values.get(keyOf(row, col)) ?? null);
@@ -184,11 +186,11 @@ const toNum = (v: Value): number => (typeof v === 'number' && Number.isFinite(v)
 const toLabel = (v: Value): string => (v === null || isError(v) ? '' : typeof v === 'number' ? String(Number(v.toPrecision(10))) : String(v));
 
 /** The series of a chart with their numbers read from the sheets. */
-export function chartData(wb: Workbook, home: Sheet, chart: Chart): SeriesData[] {
+export function chartData(wb: Workbook, home: Sheet, chart: Chart, leaveOut?: Map<Sheet, Set<number>>): SeriesData[] {
   const palette = (CHART_PALETTES[chart.palette ?? 'office'] ?? CHART_PALETTES.office).colors;
   return chart.series.map((s, i) => {
-    const yv = refValues(wb, s.y, home, chart.showHidden) ?? [];
-    const xv = s.x ? refValues(wb, s.x, home, chart.showHidden) ?? [] : null;
+    const yv = refValues(wb, s.y, home, chart.showHidden, leaveOut) ?? [];
+    const xv = s.x ? refValues(wb, s.x, home, chart.showHidden, leaveOut) ?? [] : null;
     const ys = yv.map(toNum);
     const xs = xv ? xv.map(toNum) : ys.map((_, j) => j + 1);
     const cats = xv ? xv.map(toLabel) : ys.map((_, j) => String(j + 1));
@@ -198,8 +200,8 @@ export function chartData(wb: Workbook, home: Sheet, chart: Chart): SeriesData[]
     const e = s.errors;
     if (e) {
       if (e.kind === 'cells') {
-        const p = (refValues(wb, e.plus, home, chart.showHidden) ?? []).map(toNum);
-        const m = e.minus ? (refValues(wb, e.minus, home, chart.showHidden) ?? []).map(toNum) : p;
+        const p = (refValues(wb, e.plus, home, chart.showHidden, leaveOut) ?? []).map(toNum);
+        const m = e.minus ? (refValues(wb, e.minus, home, chart.showHidden, leaveOut) ?? []).map(toNum) : p;
         d.plus = ys.map((_, j) => p[j] ?? NaN);
         d.minus = ys.map((_, j) => m[j] ?? NaN);
       } else if (e.kind === 'stdev') {
