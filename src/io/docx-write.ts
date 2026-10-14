@@ -4,6 +4,9 @@
 // Word lists, tables Word tables, captions SEQ fields and cross-references REF fields to
 // bookmarks round the caption's label and number, as Word's own Insert Caption and
 // Cross-reference make them. Page numbers are PAGE fields in the footer or header.
+// Citations are ADDIN fields (as reference managers write them) whose result is the numbers
+// in superscript, which Word shows and leaves alone; the bibliography is ordinary paragraphs
+// inside a hidden bookmark. Our own part keeps the references, so they come back here live.
 
 import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
 import type { DocStyle } from '../style';
@@ -11,11 +14,14 @@ import * as rt from '../richtext';
 import { Package, REL, NS, xml, hex6, emu } from './ooxml';
 import { fromDataUrl } from '../render/images';
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
-import { COMPOUND, OBJECT_CHAR, fieldTexts, pruneObjects, styleOf, type DocObject, type DocText, type NamedStyle } from '../document/document';
-import { shownSize } from '../document/doc-layout';
+import { COMPOUND, OBJECT_CHAR, fieldTexts, pruneObjects, styleOf, runStyleOf, type DocObject, type DocText, type NamedStyle } from '../document/document';
+import { bibHang, shownSize } from '../document/doc-layout';
+import { bibliography, piecesText } from '../document/references';
+import { documentMeasure } from '../text/font-measure';
+import { arialWidth } from '../text-metrics';
 import { PAD_X, PAD_Y, cellAlign, isCovered, spanOf } from '../table';
 import {
-  DOCX_CT, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, PIC_NS, TABLE_NAME, W_NS, WP_NS, twips, type DocxModel,
+  BIB_MARK, CITE_FIELD, DOCX_CT, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, PIC_NS, TABLE_NAME, W_NS, WP_NS, twips, type DocxModel,
 } from './docx';
 
 export interface DocxDeps {
@@ -63,6 +69,8 @@ class DocxWriter {
       if (o.kind === 'ref' && t.objects[o.target]?.kind === 'seq') this.bookmarks.set(o.target, `_Ref${100000000 + o.target}`);
     }
     this.model = { app: 'Chem Illustrator', version: 1, drawingStyle: t.drawingStyle, drawings: {}, tables: {} };
+    if (t.references?.length) this.model.references = t.references;
+    if (t.citeStyle) this.model.citeStyle = t.citeStyle;
     this.textW = Math.max(36, t.page.w - t.page.left - t.page.right);
   }
 
@@ -121,7 +129,18 @@ class DocxWriter {
       }
       // numbered lists: a new Word list where our numbers start again
       if (ps.list === 'number' && !ps.cont && markers[p] === '1.' && (ps.level ?? 0) === 0) listNum = ++this.numberedLists + 1;
-      out.push(await this.paragraph(main, ps, runs, listNum));
+      // a bibliography: its entries as paragraphs of their own, with any text round it in paragraphs before and after
+      const isBib = (r: TextRun) => r.obj !== undefined && t.objects[r.obj]?.kind === 'bib';
+      if (runs.some(isBib)) {
+        let part: TextRun[] = [];
+        for (const r of runs) {
+          if (!isBib(r)) { part.push(r); continue; }
+          if (part.some((x) => x.text)) out.push(await this.paragraph(main, ps, part, listNum));
+          part = [];
+          out.push(this.bibliography(r.obj!, ps));
+        }
+        if (part.some((x) => x.text)) out.push(await this.paragraph(main, ps, part, listNum));
+      } else out.push(await this.paragraph(main, ps, runs, listNum));
       lastWasTable = false;
     }
     // Word ends the text with a paragraph
@@ -180,6 +199,31 @@ class DocxWriter {
     return `<w:p>${pPr.length ? `<w:pPr>${pPr.join('')}</w:pPr>` : ''}${out.join('')}</w:p>`;
   }
 
+  /**
+   * A bibliography as Word paragraphs: each entry's number hanging out before a tab, its text
+   * in italics and bold as the style prints it, all inside a hidden bookmark so it is found
+   * again when the file is opened here.
+   */
+  private bibliography(id: number, ps: ParaStyle): string {
+    const t = this.t;
+    const st = styleOf(t, undefined);
+    const entries = bibliography(t);
+    const measure = documentMeasure((s, size, _f, style) => arialWidth(s, size, /bold/.test(style)));
+    const hang = bibHang(entries.map((e) => e.label), st.size, st.font, measure);
+    const base = runStyleOf(st);
+    const mark = this.bookmarkId++;
+    const name = `${BIB_MARK}${id}`;
+    const pPr = `<w:pPr><w:spacing w:before="0" w:after="0"/><w:ind w:left="${twips(hang)}" w:hanging="${twips(hang)}"/><w:jc w:val="left"/></w:pPr>`;
+    const paras = entries.map((e) => run(runProps({ ...base, text: '' }, st, {}), `${e.label}\t`) +
+      e.pieces.map((p) => run(runProps({ ...base, italic: p.italic, bold: p.bold, text: p.text }, st, {}), p.text)).join(''));
+    if (!paras.length) paras.push('');
+    paras[0] = `<w:bookmarkStart w:id="${mark}" w:name="${name}"/>${paras[0]}`;
+    paras[paras.length - 1] += `<w:bookmarkEnd w:id="${mark}"/>`;
+    this.model.bibliographies ??= {};
+    this.model.bibliographies[id] = { text: entries.map((e) => `${e.label}\t${piecesText(e.pieces)}`).join('\n'), ps };
+    return paras.map((x) => `<w:p>${entries.length ? pPr : '<w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>'}${x}</w:p>`).join('');
+  }
+
   /** Runs of text, a formula's parts each with its own position. */
   private textRuns(r: TextRun, st: NamedStyle): string {
     if (!r.text) return '';
@@ -203,6 +247,9 @@ class DocxWriter {
       const bm = this.bookmarks.get(o.target);
       return bm ? field(rPr, ` REF ${bm} \\h \\* CHARFORMAT `, shown) : run(rPr, shown);
     }
+    // a citation: its numbers, which Word shows as they are (an ADDIN field is never worked out again by Word)
+    if (o.kind === 'cite') return field(rPr, ` ${CITE_FIELD} ${o.refs.map(xml).join(' ')} `, shown);
+    if (o.kind === 'bib') return '';
     return this.picture(main, id, o, rPr);
   }
 

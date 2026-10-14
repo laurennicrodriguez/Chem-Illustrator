@@ -63,6 +63,8 @@ export interface Glyphs {
   obj?: number;
   /** What a field shows (a figure number, a page number). */
   shown?: string;
+  /** Text shown that is not in the text (a bibliography's lines): drawn, but the caret passes it by. */
+  decor?: boolean;
 }
 
 export interface LaidLine {
@@ -92,6 +94,8 @@ export interface LaidLine {
   marker?: Glyphs;
   /** The last line of its paragraph. */
   last: boolean;
+  /** A line of a block that a field shows (a bibliography): the field's id. */
+  block?: number;
 }
 
 export interface TextLayout {
@@ -129,10 +133,12 @@ function segments(runs: TextRun[], defaultSize: number, n: number): { segs: Seg[
     const style = `${r.italic ? 'italic ' : ''}${r.bold ? 'bold ' : ''}`;
     const family = r.font ? `${r.font}, ${FONT_STACK}` : FONT_STACK;
     if (r.obj !== undefined) {
-      // each object character is a piece of its own
+      // each object character is a piece of its own (a field in superscript, a citation, shows its text raised)
+      const size = r.sub || r.sup ? base * 0.75 : base;
+      const dy = r.sub ? base * 0.22 : r.sup ? -base * 0.42 : 0;
       for (const ch of r.text) {
         if (ch === '\n') { off++; p++; if (p < n) sizes[p] = base; continue; }
-        if (p < n) segs[p].push({ text: ch, start: off, size: base, base, dy: 0, family, style, color: r.color, underline: r.underline, obj: r.obj });
+        if (p < n) segs[p].push({ text: ch, start: off, size, base, dy, family, style, color: r.color, underline: r.underline, obj: r.obj });
         off += ch.length;
       }
       continue;
@@ -401,13 +407,14 @@ export function lineOf(lay: TextLayout, offset: number): number {
 export function caretPos(lay: TextLayout, offset: number): { x: number; line: number } {
   const li = lineOf(lay, offset);
   const l = lay.lines[li];
-  for (const g of l.pieces) {
+  const pieces = textPieces(l);
+  for (const g of pieces) {
     if (offset >= g.start && offset <= g.start + g.text.length) return { x: g.x + pieceX(lay, g, offset - g.start), line: li };
   }
   // an empty line, or past the end: after the last piece or where the text would start
-  const lastPiece = l.pieces[l.pieces.length - 1];
+  const lastPiece = pieces[pieces.length - 1];
   if (lastPiece && offset > lastPiece.start) return { x: lastPiece.x + lastPiece.w, line: li };
-  return { x: l.pieces[0]?.x ?? l.x, line: li };
+  return { x: pieces[0]?.x ?? l.x, line: li };
 }
 
 /** The place in the text nearest a point (relative to the origin). */
@@ -430,8 +437,9 @@ export function offsetInLine(lay: TextLayout, li: number, x: number): number {
     const d = Math.abs(ox - x);
     if (d < bestD && o <= lastPos) { bestD = d; best = o; }
   };
-  if (!l.pieces.length) return l.start;
-  for (const g of l.pieces) {
+  const pieces = textPieces(l);
+  if (!pieces.length) return l.start;
+  for (const g of pieces) {
     for (let k = 0; k <= g.text.length; k++) consider(g.start + k, g.x + pieceX(lay, g, k));
   }
   return best;
@@ -456,10 +464,15 @@ export function selectionRects(lay: TextLayout, a: number, b: number): Rect[] {
 
 /** x of a place on a given line (the end of a wrapped line stays on that line). */
 function xAt(lay: TextLayout, li: number, offset: number): number {
-  const l = lay.lines[li];
-  for (const g of l.pieces) if (offset >= g.start && offset <= g.start + g.text.length) return g.x + pieceX(lay, g, offset - g.start);
-  const last = l.pieces[l.pieces.length - 1];
-  return last ? last.x + last.w : l.x;
+  const pieces = textPieces(lay.lines[li]);
+  for (const g of pieces) if (offset >= g.start && offset <= g.start + g.text.length) return g.x + pieceX(lay, g, offset - g.start);
+  const last = pieces[pieces.length - 1];
+  return last ? last.x + last.w : lay.lines[li].x;
+}
+
+/** A line's pieces that hold its text (not the ones only shown, as a bibliography's). */
+function textPieces(l: LaidLine): Glyphs[] {
+  return l.pieces.some((g) => g.decor) ? l.pieces.filter((g) => !g.decor) : l.pieces;
 }
 
 /** Start and end of the word around a place (for double-click). */
