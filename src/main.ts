@@ -3,6 +3,7 @@
 // mode), and the panels on the right.
 
 import './app.css';
+import type { MethylStyle } from './chem/hydrogens';
 import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS } from './model';
 import { Renderer, measureText } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
@@ -2185,6 +2186,8 @@ const COMMANDS: Record<string, () => unknown> = {
   'delete-nickname': () => void deleteNickname(),
   'contract-label': () => void contractLabel(),
   'chain-ends': () => flash(editor.toggleChainEnds(), 5000),
+  'methyls-ch3': () => chooseMethylStyle('CH3'),
+  'methyls-me': () => chooseMethylStyle('Me'),
   'explicit-h': () => flash(editor.toggleHydrogens(), 6000),
   'periodic-table': () => { editor.setTool('element'); periodicTable.open(); },
   'aromatic-circles': () => flash(editor.toggleAromaticCircles() ?? 'No aromatic rings here: select a ring with alternating double bonds, or one drawn with a circle.', 5000),
@@ -2541,6 +2544,21 @@ applySplitWidth();
 
 // ---------------------------------------------------------------- settings and the Hotkeys window
 
+/** Tick the chosen way of writing terminal methyls in the Structure menu. */
+function tickMethylStyle(): void {
+  $('[data-cmd="methyls-ch3"]')?.setAttribute('aria-checked', String(editor.options.methylStyle === 'CH3'));
+  $('[data-cmd="methyls-me"]')?.setAttribute('aria-checked', String(editor.options.methylStyle === 'Me'));
+}
+
+/** Write terminal methyls as CH3 or Me from now on; the ones already shown in the selection (or the drawing) change too. */
+function chooseMethylStyle(style: MethylStyle): void {
+  const n = editor.setMethylStyle(style);
+  tickMethylStyle();
+  storeSettings();
+  const how = style === 'Me' ? 'Me' : 'CH₃';
+  flash(n ? `${n} terminal methyl${n > 1 ? 's' : ''} now written ${how}.` : `Show Terminal Methyls will write them as ${how}.`, 5000);
+}
+
 let settingsLoaded = false;
 /** Save the key map and preferences (after the saved ones have been read, so they aren't lost). */
 function storeSettings(): void {
@@ -2563,6 +2581,7 @@ function storeSettings(): void {
     splitWidth,
     citeStyle: preferredStyle().style,
     citeOptions: preferredStyle().options,
+    methylStyle: editor.options.methylStyle,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -2670,6 +2689,8 @@ void loadSettings().then((s) => {
   splitWidth = s.splitWidth;
   applySplitWidth();
   setPreferredStyle(s.citeStyle, s.citeOptions);
+  editor.options.methylStyle = s.methylStyle;
+  tickMethylStyle();
   settingsLoaded = true;
   refreshKeys();
 });
@@ -3274,7 +3295,7 @@ function drawingMenu(): MenuItem[] {
     ...(atoms ? [
       { cmd: 'clean-up' },
       { label: 'Structure', items: [
-        { cmd: 'stereo-labels' }, { cmd: 'aromatic-circles' }, { cmd: 'chain-ends' }, { cmd: 'explicit-h' }, null,
+        { cmd: 'stereo-labels' }, { cmd: 'aromatic-circles' }, { cmd: 'chain-ends' }, { cmd: 'methyls-ch3' }, { cmd: 'methyls-me' }, { cmd: 'explicit-h' }, null,
         { cmd: 'contract-label' }, { cmd: 'join' }, { cmd: 'bring-front' }, { cmd: 'send-back' }, null,
         { cmd: 'enhanced-stereo' }, { cmd: 'chiral-flag' }, { cmd: 'repeat-group' }, { cmd: 'rgroup-table' }, null,
         { cmd: 'check-structure' }, { cmd: 'save-template' }, { cmd: 'define-nickname' },

@@ -22,7 +22,7 @@ import { joinAtoms, joinBonds } from '../chem/join';
 import { extractDrawing, insertDrawing } from '../io/clipboard';
 import { isReactionArrow, itemFinder, rolesOf, ROLES, schemeItems, type Item, type Role } from '../chem/reaction';
 import { applySchemePlan, planCleanUp } from '../chem/scheme-layout';
-import { toggleChainEndLabels, toggleExplicitHydrogens } from '../chem/hydrogens';
+import { setMethylStyle, toggleChainEndLabels, toggleExplicitHydrogens, type MethylStyle } from '../chem/hydrogens';
 import { selectedGroup } from '../chem/group-smiles';
 import { circleRing, circleRings, kekulize } from '../chem/aromatic';
 import { bondLayer, crossingBonds } from '../chem/crossing';
@@ -207,6 +207,8 @@ export class Editor {
     fixedLength: true,
     /** New bonds point in 15° steps, unless Alt is held (Ctrl+E). */
     fixedAngles: true,
+    /** Show Terminal Methyls writes them as CH3 or as Me (Structure > Terminal Methyls as …). */
+    methylStyle: 'CH3' as MethylStyle,
   };
   /** Run a menu command by name; false when it doesn't apply, so the key does nothing. */
   runCommand: (name: string) => boolean = () => false;
@@ -1718,13 +1720,23 @@ export class Editor {
     return null;
   }
 
-  /** Show or hide CH3 at the chain ends of the selection (or the whole drawing). */
+  /** Show or hide the terminal methyls (CH3 or Me, as chosen) of the selection, or of the whole drawing. */
   toggleChainEnds(): string {
     let r = { count: 0, shown: false };
-    this.doc.edit('Chain-End Carbons', () => { r = toggleChainEndLabels(this.doc, this.sel.atoms); });
+    this.doc.edit('Terminal Methyls', () => { r = toggleChainEndLabels(this.doc, this.sel.atoms, this.options.methylStyle); });
     if (!r.count) return 'No chain ends here: a chain end is a plain carbon with one bond.';
     this.changed();
-    return r.shown ? `CH₃ written out at ${r.count} chain end${r.count > 1 ? 's' : ''}.` : 'Chain ends back to plain lines.';
+    const how = this.options.methylStyle === 'Me' ? 'Me' : 'CH₃';
+    return r.shown ? `${how} written out at ${r.count} chain end${r.count > 1 ? 's' : ''}.` : 'Chain ends back to plain lines.';
+  }
+
+  /** Write terminal methyls as CH3 or Me from now on, and rewrite the ones already shown in the selection (or the whole drawing). */
+  setMethylStyle(style: MethylStyle, ids: Iterable<number> = this.sel.atoms): number {
+    this.options.methylStyle = style;
+    let n = 0;
+    this.doc.edit(`Terminal Methyls as ${style}`, () => { n = setMethylStyle(this.doc, ids, style); });
+    if (n) this.changed();
+    return n;
   }
 
   /** Hide the H atoms that don't matter, or draw the selected atoms' hydrogens as atoms. */

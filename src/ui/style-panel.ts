@@ -12,6 +12,7 @@ import { DEG } from '../geom';
 import { isCircle, cropTo } from '../objects';
 import { GEOS, geoDef } from '../design/geo';
 import { nextNumber } from '../chem/sprouts';
+import { methylState, writeTerminalMethyls, type MethylStyle } from '../chem/hydrogens';
 import type { TableData } from '../model';
 import { deleteColumn, deleteRow, fitColumns, insertColumn, insertRow, setColumnAlign, setColumnWidth, setSpan, spanOf, type TablePart } from '../table';
 import type { Measure } from '../text/layout';
@@ -467,7 +468,8 @@ export class StylePanel {
     if (a.label || a.z !== 6 || a.showCarbon) {
       this.select('Label runs', LABEL_DIRS, a.just, (v) => set('Label direction', { just: v }));
     }
-    if (a.z === 6 && !a.label && this.doc.degree(a.id) > 0) {
+    if (methylState(this.doc, [a.id]) !== 'none') this.methylControls([a.id]);
+    else if (a.z === 6 && !a.label && this.doc.degree(a.id) > 0) {
       this.check('Show C and its H', !!a.showCarbon, (v) => set(v ? 'Show carbon' : 'Hide carbon', { showCarbon: v || undefined }));
     }
     this.check('Show atom number', !!a.showNumber, (v) => set(v ? 'Show atom number' : 'Hide atom number',
@@ -496,6 +498,19 @@ export class StylePanel {
       for (const a of atoms) this.doc.updateAtom(a.id, { color: v });
       for (const b of bonds) this.doc.updateBond(b.id, { color: v });
     }));
+    this.methylControls(atoms.map((a) => a.id));
+  }
+
+  /** Terminal methyls among these atoms: not written out, CH3 or Me (Structure > Show Terminal Methyls). */
+  private methylControls(ids: number[]): void {
+    // (no atoms would mean the whole drawing to the methyl commands)
+    const now = ids.length ? methylState(this.doc, ids) : 'none';
+    if (now === 'none') return;
+    const opts: Opt<string>[] = [['hidden', 'Not written out'], ['CH3', 'CH3'], ['Me', 'Me']];
+    if (now === 'mixed') opts.unshift(['mixed', 'Mixed']);
+    this.select('Terminal methyls', opts, now, (v) => {
+      if (v !== 'mixed') this.edit('Terminal Methyls', () => writeTerminalMethyls(this.doc, ids, v as MethylStyle | 'hidden'));
+    });
   }
 
   // ------------------------------------------------------------------ stereo labels
