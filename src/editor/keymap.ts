@@ -168,7 +168,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   'reaction-down': 'Reaction: arrow and copy below', 'reaction-up': 'Reaction: arrow and copy above',
   'fixed-length': 'Fixed bond lengths on or off', 'fixed-angles': 'Fixed angles on or off',
   join: 'Join two selected atoms or bonds',
-  'clean-up': 'Clean Up Structure', 'aromatic-circles': 'Aromatic rings: circle or double bonds', 'periodic-table': 'Periodic Table…', 'chain-ends': 'Show terminal methyls (or hide)', 'methyls-ch3': 'Terminal methyls as CH3', 'methyls-me': 'Terminal methyls as Me', highlight: 'Highlight', 'remove-highlight': 'Remove Highlight', 'fill-rings': 'Fill Rings', 'contract-label': 'Contract Label…', 'define-nickname': 'Define Nickname…', 'delete-nickname': 'Delete Nickname…', 'save-template': 'Save as Template…', 'delete-template': 'Delete Template…', 'explicit-h': 'H atoms: hide or draw', 'clean-up-reaction': 'Clean Up Reaction', 'arrange-scheme': 'Arrange Scheme…', 'number-compounds': 'Number Compounds…', 'add-id-label': 'Add ID Label', 'lock-structures': 'Lock structures (Slides)', 'add-caption': 'Add Caption', 'bring-front': 'Bring Bond to Front', 'send-back': 'Send Bond to Back', 'show-roles': 'Show reaction roles on or off', 'check-structure': 'Check Structure (next warning)', 'stereo-labels': 'Show stereo labels',
+  'clean-up': 'Clean Up Structure', 'aromatic-circles': 'Aromatic rings: circle or double bonds', 'periodic-table': 'Periodic Table…', 'chain-ends': 'Show terminal methyls (or hide)', 'methyls-ch3': 'Terminal methyls as CH3', 'methyls-me': 'Terminal methyls as Me', highlight: 'Highlight', 'remove-highlight': 'Remove Highlight', 'fill-rings': 'Fill Rings', 'contract-label': 'Contract Label…', 'define-nickname': 'Define Nickname…', 'delete-nickname': 'Delete Nickname…', 'save-template': 'Save as Template…', 'delete-template': 'Delete Template…', 'explicit-h': 'H atoms: hide or draw', 'clean-up-reaction': 'Clean Up Reaction', 'command-search': 'Search Commands…', print: 'Print…', 'arrange-scheme': 'Arrange Scheme…', 'number-compounds': 'Number Compounds…', 'add-id-label': 'Add ID Label', 'lock-structures': 'Lock structures (Slides)', 'add-caption': 'Add Caption', 'bring-front': 'Bring Bond to Front', 'send-back': 'Send Bond to Back', 'show-roles': 'Show reaction roles on or off', 'check-structure': 'Check Structure (next warning)', 'stereo-labels': 'Show stereo labels',
   'name-to-structure': 'Name to Structure…',
   'zoom-in': 'Zoom in', 'zoom-out': 'Zoom out', 'zoom-fit': 'Fit the drawing in the window', 'zoom-actual': 'Actual size',
   hotkeys: 'Hotkeys…', 'typing-spelling': 'Typing and Spelling…', 'mode-colours': 'Mode Colours…', 'edit-palettes': 'Colour Palettes…', preferences: 'Preferences…',
@@ -176,7 +176,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   'export-pdf': 'Export PDF…', 'insert-picture': 'Insert a picture…', crop: 'Crop the selected picture',
   'new-slide': 'New slide', 'duplicate-slide': 'Duplicate slide', 'delete-slide': 'Delete slide',
   'next-slide': 'Next slide', 'prev-slide': 'Previous slide', 'slide-master': 'Slide Master…',
-  present: 'Present from the first slide', 'present-current': 'Present from this slide',
+  present: 'Present from the first slide', 'present-current': 'Present from this slide', 'presenter-view': 'Presenter View (notes, next slide and timer)',
   'dev-tools': 'Developer tools on or off (speed panel, stress test)',
   // sheets
   'new-sheet': 'New sheet', 'insert-sheet': 'Insert a worksheet',
@@ -315,11 +315,11 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
     'Ctrl+Shift+K': 'clean-up', 'Alt+K': 'aromatic-circles', 'Ctrl+Shift+R': 'clean-up-reaction', 'Ctrl+Shift+N': 'name-to-structure',
     'Ctrl+0': 'zoom-fit', 'Ctrl+=': 'zoom-in', 'Ctrl+Shift+=': 'zoom-in', 'Ctrl++': 'zoom-in', 'Ctrl+-': 'zoom-out',
     F5: 'zoom-actual', F6: 'zoom-fit', F7: 'zoom-in', F8: 'zoom-out',
-    'Ctrl+W': 'close-tab', 'Ctrl+Tab': 'next-tab', 'Ctrl+Shift+Tab': 'prev-tab',
+    'Ctrl+W': 'close-tab', 'Ctrl+Tab': 'next-tab', 'Ctrl+Shift+Tab': 'prev-tab', 'Alt+Q': 'command-search', 'Ctrl+P': 'print',
   }),
   // PowerPoint's keys
   slides: verbs('command', {
-    F5: 'present', 'Shift+F5': 'present-current', 'Ctrl+M': 'new-slide', 'Ctrl+N': 'new-slides',
+    F5: 'present', 'Shift+F5': 'present-current', 'Alt+F5': 'presenter-view', 'Ctrl+M': 'new-slide', 'Ctrl+N': 'new-slides',
     PageDown: 'next-slide', PageUp: 'prev-slide',
   }),
   // Excel's keys

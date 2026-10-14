@@ -49,7 +49,16 @@
     ],
     "createUpdaterArtifacts": false,
     "license": "GPL-3.0-or-later",
-    "licenseFile": "../LICENSE"
+    "licenseFile": "../LICENSE",
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "11.0"
+    },
+    "linux": {
+      "deb": {
+        "section": "science"
+      }
+    }
   },
   "plugins": {
     "updater": {

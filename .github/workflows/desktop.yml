@@ -1,29 +1,62 @@
 name: Desktop app
 
-# Builds the Windows installer when something is merged into main, or on request (Actions >
-# Desktop app > Run workflow, which can build any branch). Not on every pull request: Windows
-# build time counts double against the free allowance, and the Checks workflow already tests
-# every pull request.
+# Builds the installers for Windows, macOS and Linux when something is merged into main, or on
+# request (Actions > Desktop app > Run workflow, which can build any branch). Not on every pull
+# request: the Checks workflow already tests every pull request.
 #
 # Each build of main is published as a release (Releases on the repository's page) with a
-# latest.json file, which is what the app's File > Check for Updates reads. The installer is
+# latest.json file, which is what the app's File > Check for Updates reads. The installers are
 # signed for the updater with the TAURI_SIGNING_PRIVATE_KEY secret (Settings > Secrets and
-# variables > Actions); without that secret the build still runs but nothing is published.
+# variables > Actions); without that secret the builds still run but nothing is published.
+#
+# While the repository is public the builds cost nothing. If it is ever made private again, only
+# Windows is built (macOS minutes count ten times against the free allowance), unless a run is
+# started by hand with "All platforms" ticked.
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      all:
+        description: All platforms (Windows, macOS and Linux)
+        type: boolean
+        default: true
 
 permissions:
   contents: write # to publish releases
 
 jobs:
-  windows:
-    runs-on: windows-latest
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+      release: ${{ steps.pick.outputs.release }}
+    steps:
+      - id: pick
+        env:
+          PRIVATE: ${{ github.event.repository.private }}
+          ALL: ${{ inputs.all }}
+          SIGNED: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          win='{"platform":"windows","os":"windows-latest","args":""}'
+          mac='{"platform":"macos","os":"macos-latest","args":"--target universal-apple-darwin"}'
+          lin='{"platform":"linux","os":"ubuntu-22.04","args":""}'
+          if [ "$PRIVATE" = "true" ] && [ "$ALL" != "true" ]; then list="[$win]"; else list="[$win,$mac,$lin]"; fi
+          echo "matrix={\"include\":$list}" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF" = "refs/heads/main" ] && [ "$SIGNED" = "true" ]; then echo "release=true" >> "$GITHUB_OUTPUT"; else echo "release=false" >> "$GITHUB_OUTPUT"; fi
+
+  build:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
     env:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
-      RELEASE: ${{ github.ref == 'refs/heads/main' && secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+      RELEASE: ${{ needs.plan.outputs.release }}
+      # 0.1.<build number>: each build of main is newer than the one before
+      VERSION: 0.1.${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,21 +64,25 @@ jobs:
           node-version: 24
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.platform }}
+      - name: Install what Linux builds need
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - run: npm ci
       - name: Number this version
-        shell: pwsh
-        run: |
-          # 0.1.<build number>: each build of main is newer than the one before
-          $base = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version -replace '\.\d+$', ''
-          $version = "$base.${{ github.run_number }}"
-          "VERSION=$version" >> $env:GITHUB_ENV
-          node scripts/release.mjs prepare $version $env:RELEASE
+        shell: bash
+        run: node scripts/release.mjs prepare "$VERSION" "$RELEASE"
       - name: Build the app and its installers
-        run: npm run desktop:build
+        run: npm run desktop:build -- ${{ matrix.args }}
       - name: Start the app and run its self-test
+        if: matrix.platform == 'windows'
         shell: pwsh
         run: |
           $report = Join-Path $env:RUNNER_TEMP 'selftest.json'
@@ -55,25 +92,35 @@ jobs:
           if (-not $p.WaitForExit(150000)) { $p.Kill(); throw 'The app did not finish its self-test within 150 s' }
           if (Test-Path $report) { Get-Content $report } else { Write-Host 'No report was written' }
           if ($p.ExitCode -ne 0) { throw "Self-test failed (exit code $($p.ExitCode))" }
+      - name: Gather the installers
+        shell: bash
+        run: node scripts/release.mjs collect "$VERSION" ${{ matrix.platform }} out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chem-illustrator-${{ matrix.platform }}
+          path: out/*
+          if-no-files-found: error
+          # installers are 10 to 30 MB each; keep them a week so they stay under the free storage
+          retention-days: 7
+
+  publish:
+    needs: [plan, build]
+    if: needs.plan.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: 0.1.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
       - name: Publish the release
-        if: env.RELEASE == 'true'
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           NOTES: ${{ github.event.head_commit.message }}
         run: |
-          $notes = Join-Path $env:RUNNER_TEMP 'notes.txt'
-          Set-Content -Path $notes -Value $env:NOTES -Encoding utf8
-          $out = Join-Path $env:RUNNER_TEMP 'release'
-          node scripts/release.mjs manifest $env:VERSION $notes $out
-          gh release create "v$env:VERSION" (Get-ChildItem $out).FullName --title "Chem Illustrator $env:VERSION" --notes-file $notes --target $env:GITHUB_SHA
-      - uses: actions/upload-artifact@v4
-        if: env.RELEASE != 'true'
-        with:
-          name: chem-illustrator-windows-installer
-          path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/msi/*.msi
-          if-no-files-found: error
-          # installers are 20 MB each; keep them a week so they stay under the free storage
-          retention-days: 7
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.txt"
+          node scripts/release.mjs manifest "$VERSION" "$RUNNER_TEMP/notes.txt" out
+          # the signatures are inside latest.json; the release lists the installers
+          gh release create "v$VERSION" $(ls out/* | grep -v '\.sig$') --title "Chem Illustrator $VERSION" --notes-file "$RUNNER_TEMP/notes.txt" --target "$GITHUB_SHA"

@@ -1200,8 +1200,23 @@ export class SheetMode {
   }
 
   /** The cells as an HTML table, so Word and Excel keep bold, colours and alignment. */
-  private htmlTable(s: Sheet, R: Range): string {
+  /** File > Print: the sheet's cells (or just those selected) as a table, structures as pictures. Null when there is nothing. */
+  printTable(selected: boolean): string | null {
+    const v = this.view, s = v.sheet;
+    if (!s) return null;
+    v.commitEdit();
+    const R = selected ? s.clip(growToMerges(s, v.sel.range)) : s.usedRange();
+    return R ? this.htmlTable(s, R, true) : null;
+  }
+
+  private htmlTable(s: Sheet, R: Range, pictures = false): string {
     const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const picture = (r: number, c: number): string | null => {
+      const st = pictures ? s.cell(r, c)?.structure : undefined;
+      if (!st) return null;
+      const b = this.pictures.box(st), bmp = this.pictures.bitmap(st, 4, true);
+      return bmp ? `<img src="${bmp.toDataURL('image/png')}" style="width:${b.w}pt;height:${b.h}pt" alt="">` : null;
+    };
     const lines: string[] = ['<table border="0" cellspacing="0" cellpadding="0" style="border-collapse:collapse">'];
     for (let r = R.r1; r <= R.r2; r++) {
       if (s.hiddenRows.has(r)) continue;
@@ -1224,9 +1239,11 @@ export class SheetMode {
         }
         const v = s.values.get(keyOf(r, c));
         const num = typeof v === 'number';
+        // numbers sit on the right unless set otherwise, as on screen
+        if (num && !st?.align) css.push('text-align:right');
         const span = m ? `${m.c2 > m.c1 ? ` colspan="${m.c2 - m.c1 + 1}"` : ''}${m.r2 > m.r1 ? ` rowspan="${m.r2 - m.r1 + 1}"` : ''}` : '';
         // Excel reads a number with x:num and keeps its full value
-        tds.push(`<td${span}${num ? ` x:num="${v}"` : ''}${css.length ? ` style="${css.join(';')}"` : ''}>${esc(this.cellText(s, r, c)).replace(/\n/g, '<br>')}</td>`);
+        tds.push(`<td${span}${num ? ` x:num="${v}"` : ''}${css.length ? ` style="${css.join(';')}"` : ''}>${picture(r, c) ?? esc(this.cellText(s, r, c)).replace(/\n/g, '<br>')}</td>`);
       }
       lines.push(`<tr>${tds.join('')}</tr>`);
     }

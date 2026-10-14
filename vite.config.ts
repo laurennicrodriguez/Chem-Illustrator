@@ -7,7 +7,11 @@ export default defineConfig({
   build: {
     target: 'es2022',
     assetsInlineLimit: 0,
-    rollupOptions: { output: { entryFileNames: 'app.js', assetFileNames: '[name][extname]', chunkFileNames: '[name].js' } },
+    rollupOptions: {
+      // the app, and the audience's window for presenter view
+      input: { app: 'index.html', audience: 'audience.html' },
+      output: { entryFileNames: '[name].js', assetFileNames: '[name][extname]', chunkFileNames: '[name].js' },
+    },
   },
   worker: { format: 'iife', rollupOptions: { output: { entryFileNames: '[name].js' } } },
 });

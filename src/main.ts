@@ -30,7 +30,7 @@ import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, r
 import { cdxToCdxml } from './io/cdx';
 import { writeCdxml } from './io/cdxml-write';
 import { WORKSPACE } from './io/workspace-file';
-import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, PICTURE_EXTENSIONS } from './io/files';
+import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, PICTURE_EXTENSIONS } from './io/files';
 import { Workspace, Tab } from './workspace';
 import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize } from './deck/deck';
 import { drawSlidePage, recordSlide, paintSlide, SURROUND } from './deck/slide-view';
@@ -40,6 +40,7 @@ import { DesignLibrary, GEO_DRAG_TYPE, pickDesignSize, sizeLabel } from './ui/de
 import { LayersPanel } from './ui/layers-panel';
 import { Scrollbars } from './ui/scrollbars';
 import { Presenter } from './ui/present';
+import { PresenterView } from './ui/presenter-view';
 import { editMaster } from './ui/master-dialog';
 import { editDrawingStyle } from './ui/style-dialog';
 import type { DocText } from './document/document';
@@ -54,9 +55,12 @@ import { AnimationUI } from './ui/animation-ui';
 import { writePptx, type PptxOptions } from './io/pptx-write';
 import { EFFECTS, animName, newAnim } from './deck/animation';
 import { SLIDE_TEMPLATES, applyTemplate } from './deck/templates';import { pickTemplate } from './ui/template-gallery';
-import { showContextMenu, type MenuItem } from './ui/context-menu';
+import { showContextMenu, topMenuEntry, type MenuItem } from './ui/context-menu';
+import { CommandSearch, uniqueCommands, type CommandItem } from './ui/command-search';
 import { fillTemplate, templateSize } from './design/templates';
 import { itemsToSvg } from './render/svg';
+import { PAPERS, defaultPaper, orient, placeIn, inside, handoutCells, noteLines, placeSvg, pageSvg } from './print-layout';
+import { printPages } from './ui/print';
 import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc } from './render/images';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
@@ -85,6 +89,7 @@ import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
 import { UpdateUI } from './ui/update-ui';
 import { canUpdate, appVersion } from './updates';
+import { addRecent, removeRecent, recentLabel } from './recent';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
 import { NameDialog } from './ui/name-dialog';
 import { ArrangeDialog } from './ui/arrange-dialog';
@@ -992,6 +997,7 @@ const notesBox = $<HTMLTextAreaElement>('#notes');
 const layoutSel = $<HTMLSelectElement>('#rb-layout');
 const sizeSel = $<HTMLSelectElement>('#rb-size');
 const presenter = new Presenter();
+const presenterView = new PresenterView();
 
 /** View > Mode Colours: blue for drawings, orange for slides, green for sheets, or the person's own colours. */
 let modeColours: ModeColours = { ...DEFAULT_MODE_COLOURS };
@@ -1067,6 +1073,7 @@ const docRead: DocxReadDeps = {
 };
 
 const ws: Workspace = new Workspace(doc, {
+  remember: (path) => rememberFile(path),
   leave: (tab) => {
     finishTyping();
     if (tab.mode === 'sheet') sheetMode.leave();
@@ -1740,15 +1747,16 @@ async function slideTemplates(): Promise<void> {
   }
 }
 
-function present(fromHere: boolean): void {
+function present(fromHere: boolean, notes = false): void {
   const d = deckNow();
   if (!d) { flash('Present shows slides: use File > New Slides, or open a PowerPoint file.'); return; }
+  if (presenter.running || presenterView.running) return;
   finishTyping();
   editor.paused = true;
-  void presenter.start(d, fromHere ? d.index : 0);
+  void (notes ? presenterView : presenter).start(d, fromHere ? d.index : 0);
 }
 
-presenter.onEnd = (i) => {
+presenter.onEnd = presenterView.onEnd = (i) => {
   editor.paused = false;
   // carry on editing the slide the show ended on
   goSlide(i);
@@ -1802,6 +1810,90 @@ async function exportPdf(): Promise<void> {
     return;
   }
   flash(`Saved ${target.name}${pages.length > 1 ? ` (${pages.length} pages)` : ''}`);
+}
+
+// ---------------------------------------------------------------- printing
+
+/** The choices made in the Print window, kept while the app is open. */
+const printChoices = { paper: defaultPaper(navigator.language) as string, orient: 'auto', size: 'actual', handout: '1', frame: 'true', sheet: 'all', sheetOrient: 'portrait', grid: 'false' };
+const PAPER_OPTIONS = Object.entries(PAPERS).map(([value, p]) => ({ value, label: p.name }));
+
+const pageSvgOf = (p: PdfPage) => {
+  const x = p.origin?.x ?? 0, y = p.origin?.y ?? 0;
+  return itemsToSvg(p.items, { x1: x, y1: y, x2: x + p.w, y2: y + p.h });
+};
+
+/** File > Print (Ctrl+P): asks how, for drawings, slides and sheets, then opens the system's Print dialog. */
+async function printNow(): Promise<void> {
+  finishTyping();
+  const tab = ws.active, deck = tab.deck;
+  if (sheetActive()) {
+    const v = await ask('Print', [
+      { name: 'sheet', label: 'Print', value: printChoices.sheet, options: [{ value: 'all', label: 'The whole sheet' }, { value: 'sel', label: 'The selected cells' }] },
+      { name: 'sheetOrient', label: 'Orientation', value: printChoices.sheetOrient, options: [{ value: 'portrait', label: 'Portrait' }, { value: 'landscape', label: 'Landscape' }] },
+      { name: 'grid', label: 'Gridlines', value: printChoices.grid, type: 'checkbox' },
+    ], { ok: 'Print…', note: 'The paper size, copies and pages are chosen in the next window.' });
+    if (!v) return;
+    Object.assign(printChoices, v);
+    const html = sheetMode.printTable(v.sheet === 'sel');
+    if (!html) { flash('There is nothing in this sheet to print.'); return; }
+    printPages({ html: `<div class="${v.grid === 'true' ? 'grid' : ''}">${html}</div>`, landscape: v.sheetOrient === 'landscape' });
+    return;
+  }
+  const docFile = docActive() ? tab.document : null;
+  if (docFile) {
+    // the pages as laid out on screen
+    const pages = recordPages(docFile.t, docFile.layout(), (c, style) => figures.record(c, style).pic);
+    if (!pages.length) return;
+    printPages({ pages: pages.map(pageSvgOf), w: pages[0].w, h: pages[0].h });
+    return;
+  }
+  if (deck) {
+    const slide = (i: number) => itemsToSvg(recordSlide({ size: deck.size, master: deck.master, layout: deck.slides[i].layout, index: i }, deck.docOf(i)), { x1: 0, y1: 0, x2: deck.size.w, y2: deck.size.h });
+    if (tab.mode === 'design') { printPages({ pages: [slide(deck.index)], w: deck.size.w, h: deck.size.h }); return; }
+    const v = await ask('Print', [
+      { name: 'handout', label: 'Layout', value: printChoices.handout, options: [
+        { value: '1', label: 'Full page slides' }, { value: '2', label: 'Handouts: 2 slides a page' }, { value: '3', label: 'Handouts: 3 slides a page, with lines for notes' },
+        { value: '4', label: 'Handouts: 4 slides a page' }, { value: '6', label: 'Handouts: 6 slides a page' }, { value: '9', label: 'Handouts: 9 slides a page' },
+      ] },
+      { name: 'paper', label: 'Paper (handouts)', value: printChoices.paper, options: PAPER_OPTIONS },
+      { name: 'frame', label: 'Frame the slides (handouts)', value: printChoices.frame, type: 'checkbox' },
+    ], { ok: 'Print…', note: 'Full page slides print at the slide\'s own shape; the next window fits them to the paper. Copies and which pages are chosen there too.' });
+    if (!v) return;
+    Object.assign(printChoices, v);
+    const n = Number(v.handout);
+    if (n === 1) { printPages({ pages: deck.slides.map((_, i) => slide(i)), w: deck.size.w, h: deck.size.h }); return; }
+    const page = orient(PAPERS[v.paper] ?? PAPERS.letter, 'portrait');
+    const cells = handoutCells(page, n);
+    const pages: string[] = [];
+    for (let first = 0; first < deck.slides.length; first += n) {
+      const parts: string[] = [];
+      cells.forEach((cell, k) => {
+        const i = first + k;
+        if (i >= deck.slides.length) return;
+        const at = placeIn(deck.size.w, deck.size.h, cell, 'fit');
+        parts.push(placeSvg(slide(i), at));
+        if (v.frame === 'true') parts.push(`<rect x="${at.x}" y="${at.y}" width="${at.w}" height="${at.h}" fill="none" stroke="#888" stroke-width="0.5"/>`);
+        if (n === 3) for (const l of noteLines({ ...cell, h: at.h, y: at.y }, page)) parts.push(`<line x1="${l.x1}" x2="${l.x2}" y1="${l.y}" y2="${l.y}" stroke="#bbb" stroke-width="0.5"/>`);
+      });
+      pages.push(pageSvg(page.w, page.h, parts));
+    }
+    printPages({ pages, w: page.w, h: page.h });
+    return;
+  }
+  const pic = recordPicture(doc, 4);
+  if (!pic) { flash('There is nothing to print yet.'); return; }
+  const v = await ask('Print', [
+    { name: 'paper', label: 'Paper', value: printChoices.paper, options: PAPER_OPTIONS },
+    { name: 'orient', label: 'Orientation', value: printChoices.orient, options: [{ value: 'auto', label: 'To suit the drawing' }, { value: 'portrait', label: 'Portrait' }, { value: 'landscape', label: 'Landscape' }] },
+    { name: 'size', label: 'Size', value: printChoices.size, options: [{ value: 'actual', label: 'Actual size (smaller only if it would not fit)' }, { value: 'fit', label: 'As large as fits the page' }] },
+  ], { ok: 'Print…', note: 'The drawing is centred on the page with half-inch margins. Copies and the printer are chosen in the next window.' });
+  if (!v) return;
+  Object.assign(printChoices, v);
+  const b = pic.box, w = b.x2 - b.x1, h = b.y2 - b.y1;
+  const page = orient(PAPERS[v.paper] ?? PAPERS.letter, v.orient as 'auto', w, h);
+  const at = placeIn(w, h, inside(page, 36), v.size as 'actual');
+  printPages({ pages: [pageSvg(page.w, page.h, [placeSvg(itemsToSvg(pic.items, b), at)])], w: page.w, h: page.h });
 }
 
 /**
@@ -2327,7 +2419,7 @@ const DOC_COMMANDS: Record<string, () => unknown> = {
 };
 
 /** Menu commands from the drawing's list that also work while a document shows. */
-const DOC_ANY = new Set(['export-pdf']);
+const DOC_ANY = new Set(['export-pdf', 'print']);
 
 // keys while a document shows but its text doesn't have the focus (after clicking a tab or a menu)
 window.addEventListener('keydown', (e) => {
@@ -2340,7 +2432,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-custom', 'toolbox-details', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view']);
+  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'print']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
@@ -2406,6 +2498,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'prev-tab': () => ws.cycle(-1),
   'export-mol': () => exportMolfile(),
   'export-pdf': () => { finishTyping(); return exportPdf(); },
+  print: () => void printNow(),
   'export-picture': () => { finishTyping(); return exportPicture(); },
   undo: () => undo(),
   redo: () => redo(),
@@ -2431,6 +2524,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'drawing-style': () => drawingStyleDialog(),
   present: () => present(false),
   'present-current': () => present(true),
+  'presenter-view': () => present(false, true),
   cut: () => cut(),
   copy: () => copy(),
   paste: () => paste(),
@@ -2503,6 +2597,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'edit-palettes': () => editPalettes(),
   preferences: () => void openPreferences(),
   'check-updates': () => void updates.check(),
+  'command-search': () => commandSearch.open(),
   'toolbox-main': () => toolboxes.toggle('main'),
   'toolbox-structure': () => toolboxes.toggle('structure'),
   'toolbox-arrange': () => toolboxes.toggle('arrange'),
@@ -2578,6 +2673,8 @@ for (const m of menus) {
   m.btn.addEventListener('click', () => showMenu(openMenu === m ? null : m));
   m.btn.addEventListener('pointerenter', () => { if (openMenu && openMenu !== m) showMenu(m, false); });
   m.list.addEventListener('click', (e) => {
+    const recent = (e.target as HTMLElement).closest<HTMLButtonElement>('button')?.dataset.recent;
+    if (recent !== undefined) { showMenu(null); void openRecent(recent); return; }
     const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button')?.dataset.cmd;
     if (!cmd) return;
     showMenu(null);
@@ -2943,6 +3040,57 @@ function showHelicity(on: boolean): void {
   editor.requestScene();
 }
 
+// File > Recent (desktop app): files and workspaces opened or saved lately
+let recentFiles: string[] = [];
+function rememberFile(path: string): void {
+  recentFiles = addRecent(recentFiles, path);
+  renderRecent();
+  storeSettings();
+}
+function renderRecent(): void {
+  const box = document.querySelector<HTMLElement>('#recent-files');
+  if (!box) return;
+  const items = recentFiles.map((p) => {
+    const b = document.createElement('button');
+    b.setAttribute('role', 'menuitem');
+    b.dataset.recent = p;
+    b.title = p;
+    const { name, folder } = recentLabel(p);
+    const n = document.createElement('span');
+    n.textContent = name;
+    const f = document.createElement('small');
+    f.className = 'muted';
+    f.textContent = folder;
+    b.append(n, f);
+    return b;
+  });
+  const head = document.createElement('div');
+  head.className = 'menu-head';
+  head.textContent = 'Recent';
+  const clear = document.createElement('button');
+  clear.setAttribute('role', 'menuitem');
+  clear.dataset.recent = '';
+  clear.textContent = 'Clear Recent Files';
+  box.replaceChildren(...(items.length ? [head, ...items, clear] : []));
+  box.hidden = !canUpdate || !items.length;
+}
+async function openRecent(path: string): Promise<void> {
+  finishTyping();
+  if (!path) { recentFiles = []; renderRecent(); storeSettings(); return; }
+  let bytes: Uint8Array;
+  try {
+    bytes = await readPath(path);
+  } catch {
+    // moved, renamed or deleted: said, and taken off the list
+    recentFiles = removeRecent(recentFiles, path);
+    renderRecent();
+    storeSettings();
+    flash(`${baseName(path)} isn't there any more (moved, renamed or deleted?), so it has come off the recent list.`, 8000);
+    return;
+  }
+  await ws.openBytes(bytes, baseName(path), { kind: 'path', path });
+}
+
 // Workspaces (desktop app): every open tab saved together, with a list file to open them all again
 const workspaceChoices = { copyIn: true, saveChanges: true };
 async function saveWorkspace(choosePlace: boolean): Promise<void> {
@@ -3049,6 +3197,7 @@ function storeSettings(): void {
     docPins: [...docBoxPrefs.pinned],
     updateCheck,
     skipVersion,
+    recentFiles,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -3084,6 +3233,9 @@ function refreshKeys(): void {
     const k = commandKey(cmd);
     $(id).title = k ? `${text} (${k})` : text;
   };
+  const sk = commandKey('command-search');
+  $('#btn-search kbd').textContent = sk ?? '';
+  $('#btn-search').title = sk ? `Search for a command by name (${sk})` : 'Search for a command by name';
   tip('#btn-undo', 'Undo', 'undo');
   tip('#btn-redo', 'Redo', 'redo');
   tip('#btn-fit', 'Fit drawing to window', 'zoom-fit');
@@ -3164,6 +3316,8 @@ void loadSettings().then((s) => {
   askWholeDrawing = s.askWholeDrawing;
   updateCheck = s.updateCheck;
   skipVersion = s.skipVersion;
+  recentFiles = s.recentFiles;
+  renderRecent();
   setPalettes(s.palettes);
   toolboxState = s.toolboxes;
   ownStyles = s.myStyles;
@@ -4215,6 +4369,72 @@ function openCustomToolbox(): void {
 
 toolboxes.render();
 tickToolboxes();
+
+// ---------------------------------------------------------------- Search Commands (Alt+Q)
+
+const onScreen = (el: Element) => el.getClientRects().length > 0;
+
+/** A ribbon button's name: its own words, or its tool tip's first phrase when it only shows a sign. */
+function ribbonLabel(b: HTMLElement): string {
+  const t = b.cloneNode(true) as HTMLElement;
+  t.querySelectorAll('.rb-icon, .sw, svg, kbd').forEach((x) => x.remove());
+  const own = t.textContent!.replace(/\s+/g, ' ').trim();
+  const tip = (b.dataset.tip ?? b.title ?? b.getAttribute('aria-label') ?? '').replace(/\s*\(.*?\)/g, '').split(/[.:;,] /)[0].trim();
+  return own.length > 2 ? own : tip || own;
+}
+
+function commandItems(): CommandItem[] {
+  const out: CommandItem[] = [];
+  const runCmd = (cmd: string, label: string) => () => {
+    finishTyping();
+    if (!command(cmd)) flash(`${label} isn't available here.`);
+  };
+  for (const wrap of document.querySelectorAll<HTMLElement>('header .menu-wrap')) {
+    const menu = wrap.querySelector<HTMLElement>(':scope > button')?.textContent?.trim() ?? '';
+    for (const b of wrap.querySelectorAll<HTMLElement>('[data-cmd]')) {
+      if (b.hidden || getComputedStyle(b).display === 'none') continue;
+      const cmd = b.dataset.cmd!, e = topMenuEntry(cmd);
+      const label = e?.label ?? cmd;
+      out.push({ id: `cmd:${cmd}`, label, place: `${menu} menu`, more: b.title, key: commandKey(cmd), checked: e?.checked, run: runCmd(cmd, label) });
+    }
+  }
+  for (const rib of document.querySelectorAll<HTMLElement>('.ribbon')) {
+    if (rib.hidden || !onScreen(rib)) continue;
+    for (const b of rib.querySelectorAll<HTMLButtonElement>('button')) {
+      if (b.getAttribute('role') === 'tab' || b.hidden || b.disabled || b.closest('[hidden]:not(.rb-panel)')) continue;
+      const panel = b.closest<HTMLElement>('.rb-panel');
+      const tabAttr = panel && [...panel.attributes].find((a) => /^data-.*-panel$/.test(a.name));
+      const tab = tabAttr ? rib.querySelector<HTMLButtonElement>(`[${tabAttr.name.replace(/-panel$/, '-tab')}="${tabAttr.value}"]`) : null;
+      if (tab?.hidden) continue; // a tab shown only now and then (Table Design, Chart)
+      const label = ribbonLabel(b);
+      if (!label) continue;
+      const name = b.dataset.cmd ? `cmd:${b.dataset.cmd}` : b.dataset.sh ? `sh:${b.dataset.sh}` : b.dataset.doc ? `doc:${b.dataset.doc}` : b.id ? `id:${b.id}` : `rb:${rib.id}:${label}`;
+      const code = b.dataset.cmd ?? b.dataset.sh ?? b.dataset.doc;
+      out.push({
+        id: name, label, place: tab ? `${tab.textContent!.trim()} tab` : `${rib.getAttribute('aria-label')} ribbon`, more: b.dataset.tip ?? b.title,
+        key: code ? commandKey(code) : undefined,
+        run: () => {
+          if (tab && tab.getAttribute('aria-selected') !== 'true') tab.click();
+          b.click();
+        },
+      });
+    }
+  }
+  if (onScreen($('#tools'))) {
+    for (const [name] of ALL_TOOLS) {
+      const label = toolNames[name] ?? ALL_TOOLS.get(name)!.title.split(/[.:] /)[0];
+      out.push({ id: `tool:${name}`, label, place: 'Drawing tools', more: ALL_TOOLS.get(name)!.title, key: keysOf('space', `tool ${name}`)[0],
+        run: () => { editor.setTool(name); if (name === 'element') periodicTable.open(); } });
+    }
+  }
+  for (const p of recentFiles) {
+    const { name, folder } = recentLabel(p);
+    out.push({ id: `recent:${p}`, label: `Open ${name}`, place: folder, more: 'recent file', run: () => void openRecent(p) });
+  }
+  return uniqueCommands(out);
+}
+const commandSearch = new CommandSearch(commandItems);
+$('#btn-search').addEventListener('click', () => commandSearch.open());
 placeSidePanel();
 // your palettes show in the Colours toolbox as soon as they change
 onPalettes(() => { if (toolboxState.places.colours?.shown) toolboxes.render(); });

@@ -142,6 +142,12 @@ button:hover { border-color: var(--accent); }
 .menu button:hover, .menu button:focus-visible { background: var(--accent-soft); outline: none; }
 .menu kbd { font: 11px var(--mono-font); color: var(--muted); }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; width: auto; }
+.recent-files { display: grid; }
+.recent-files[hidden] { display: none; }
+.menu-head { padding: 4px 8px 2px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.recent-files button { max-width: 360px; }
+.recent-files button > span { overflow: hidden; text-overflow: ellipsis; }
+.recent-files small.muted { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
 button:focus-visible, select:focus-visible, #overlay:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 #side-content td { font-family: var(--mono-font); font-size: 12px; }
 @media (prefers-reduced-motion: reduce) { #flash { transition: none; } }
@@ -1388,3 +1394,63 @@ dialog.cf-manage { width: min(92vw, 640px); }
 .update-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
 .update-progress { font-variant-numeric: tabular-nums; }
 .desktop-only[hidden] { display: none !important; }
+
+/* Search Commands (Alt+Q) */
+.search-box { display: inline-flex; align-items: center; gap: 6px; min-width: 150px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--muted); }
+.search-box svg { width: 14px; height: 14px; flex: none; }
+.search-box span { flex: 1; text-align: left; }
+.search-box kbd { font: 10px var(--mono-font); }
+dialog.command-search { width: min(94vw, 560px); padding: 10px; margin-top: 10vh; }
+dialog.command-search input { width: 100%; box-sizing: border-box; font: inherit; font-size: 15px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; }
+dialog.command-search ul { list-style: none; margin: 8px 0 0; padding: 0; max-height: min(60vh, 440px); overflow-y: auto; }
+dialog.command-search li { display: flex; align-items: baseline; gap: 10px; padding: 5px 8px; border-radius: 5px; cursor: default; }
+dialog.command-search li[aria-selected='true'] { background: var(--accent-soft); }
+dialog.command-search .cs-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dialog.command-search .cs-place { font-size: 11px; white-space: nowrap; }
+dialog.command-search li.cs-none { display: block; padding: 10px 8px; }
+dialog.command-search .cs-foot { margin: 8px 2px 0; }
+
+/* File > Print: the pages are in the window but only shown when printing */
+#print-root { display: none; }
+@media print {
+  html, body { height: auto !important; overflow: visible !important; background: #fff !important; }
+  body.printing > *:not(#print-root) { display: none !important; }
+  body.printing { display: block !important; }
+  #print-root { display: block; }
+  .print-page { break-after: page; overflow: hidden; }
+  .print-page:last-child { break-after: auto; }
+  .print-page > svg { display: block; width: 100%; height: 100%; }
+  .print-table { font: 11pt Calibri, Carlito, Arial, sans-serif; color: #000; }
+  .print-table td { padding: 1pt 4pt; vertical-align: bottom; }
+  .print-table .grid td { border: 0.5pt solid #c8c8c8; }
+  .print-table tr { break-inside: avoid; }
+}
+
+/* Presenter view (Alt+F5) */
+.presenter-view { display: grid; grid-template-rows: auto 1fr auto; gap: 10px; padding: 12px; box-sizing: border-box; background: #111317; color: #e6e8ec; font: 14px var(--ui-font, system-ui), sans-serif; cursor: default; }
+.presenter-view button { background: #262a31; color: #e6e8ec; border: 1px solid #3a404a; border-radius: 6px; padding: 5px 12px; font: inherit; cursor: pointer; }
+.presenter-view button:hover { background: #313641; }
+.pv-top, .pv-bottom, .pv-label { display: flex; align-items: center; gap: 10px; }
+.pv-gap { flex: 1; }
+.pv-timer { font: 600 26px var(--mono-font, monospace); min-width: 4.5em; font-variant-numeric: tabular-nums; }
+.pv-timer.paused { color: #e0b252; }
+.pv-clock { color: #9aa3b5; font-variant-numeric: tabular-nums; }
+.pv-where { color: #9aa3b5; font-size: 12px; }
+.pv-body { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 14px; min-height: 0; }
+.pv-cur { position: relative; min-height: 0; overflow: hidden; }
+.pv-cur canvas { display: block; }
+.pv-blank { position: absolute; inset: 0; display: grid; place-items: center; background: #000; color: #9aa3b5; font-size: 16px; }
+.pv-blank.white { background: #fff; color: #555; }
+.pv-blank[hidden] { display: none; }
+.pv-side { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); gap: 8px; min-height: 0; }
+.pv-label { color: #9aa3b5; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+.pv-label button { padding: 2px 8px; text-transform: none; letter-spacing: 0; }
+.pv-next { height: 30vh; }
+.pv-next canvas { display: block; }
+.pv-notes { overflow-y: auto; white-space: pre-wrap; line-height: 1.45; padding: 4px 2px; }
+.pv-notes.muted { color: #6f7787; }
+.pv-bottom { justify-content: center; }
+.pv-count { min-width: 16em; text-align: center; color: #c6cbd4; font-variant-numeric: tabular-nums; }
+/* narrow windows: the search box gives up its key, then the app's name goes, before anything wraps */
+@media (max-width: 1240px) { .search-box { min-width: 0; } .search-box kbd { display: none; } }
+@media (max-width: 1100px) { header h1.app-name { display: none; } }
