@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { findIssues, isFormula, formulaDigits, typingFormats, replacementAt, DEFAULT_REPLACEMENTS, type CharLook } from '../src/text/chemtext';
 import { TextEditing } from '../src/text/editing';
-import { afterTyping, DEFAULT_TYPING } from '../src/text/typing';
+import { afterTyping, finishWord, DEFAULT_TYPING } from '../src/text/typing';
 import { arialWidth } from '../src/text-metrics';
 
 const plain = (): CharLook => ({ pos: 'base', italic: false });
@@ -121,6 +121,23 @@ describe('formatting chemistry as you type', () => {
     ed.undo(); // the subscripts, keeping the space typed
     expect(ed.text).toBe('in CH2Cl2 ');
     expect(ed.t.runs.filter((r) => r.sub).length).toBe(0);
+  });
+  it('formats the last word when the text is finished without a space (Tab to the next table cell)', () => {
+    const ed = new TextEditing({ runs: [], justify: 'left' }, { size: 10 }, (t, s) => arialWidth(t, s, false), 10);
+    ed.onTyped = (t) => afterTyping(ed, t, DEFAULT_TYPING);
+    for (const ch of 'CH2Cl2') ed.type(ch);
+    expect(ed.t.runs.filter((r) => r.sub).length).toBe(0);
+    finishWord(ed, DEFAULT_TYPING);
+    expect(ed.t.runs.filter((r) => r.sub).map((r) => r.text)).toEqual(['2', '2']);
+    // nothing to do after a space, or in the middle of a word
+    const mid = new TextEditing({ runs: [{ text: 'CH2Cl2 and THF' }], justify: 'left' }, { size: 10 }, (t, s) => arialWidth(t, s, false), 10);
+    mid.setCaret(3);
+    finishWord(mid, DEFAULT_TYPING);
+    expect(mid.t.runs).toEqual([{ text: 'CH2Cl2 and THF' }]);
+    const temp = new TextEditing({ runs: [{ text: '-78 oC' }], justify: 'left' }, { size: 10 }, (t, s) => arialWidth(t, s, false), 10);
+    temp.setCaret(6);
+    finishWord(temp, DEFAULT_TYPING);
+    expect(temp.text).toBe('-78 °C');
   });
   it('leaves formula-style text alone (it already shows subscripts)', () => {
     const ed = new TextEditing({ runs: [], justify: 'left' }, { size: 10, formula: true }, (t, s) => arialWidth(t, s, false), 10);

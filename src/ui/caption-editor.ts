@@ -12,7 +12,7 @@ import { TextEditing, type Move, type RichText } from '../text/editing';
 import { drawLayout } from '../text/draw';
 import { layoutText, selectionRects, type Measure } from '../text/layout';
 import { htmlToRich, richToHtml, richToPlain } from '../text/html';
-import { afterTyping, setTypingPrefs, typingPrefs } from '../text/typing';
+import { afterTyping, finishWord, setTypingPrefs, typingPrefs } from '../text/typing';
 import { findIssues, type Issue } from '../text/chemtext';
 import { loadSpeller, type Speller } from '../text/spelling';
 
@@ -366,6 +366,8 @@ export class CaptionEditor {
   /** Stop editing and hand back the text. */
   finish(): void {
     if (this.closed) return;
+    // the last word gets its chemistry formatting (CH2Cl2 typed in a table cell, then Tab)
+    finishWord(this.ed);
     this.closed = true;
     this.closeMenu();
     if (this.blink) clearInterval(this.blink);
