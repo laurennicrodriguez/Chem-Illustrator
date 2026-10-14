@@ -62,6 +62,7 @@ import { setScreenMeasure, figures } from './document/doc-file';
 import { readDocx, writeDocx, type DocxDeps, type DocxReadDeps } from './io/docx';
 import { FIGURE_MARGIN } from './document/figures';
 import { recordPages } from './document/doc-paint';
+import { preferredStyle, setPreferredStyle } from './document/cite-styles';
 import { layoutTable } from './table';
 import { SheetChem } from './sheet/sheet-chem';
 import { structureDoc, structureMolfile } from './sheet/structure-doc';
@@ -1735,6 +1736,7 @@ const docMode = new DocumentMode({
   toStructure: (text, style) => textToStructure(text, style),
   pickPicture: () => pickPicture(),
   pickReferenceFile: () => pickReferenceFile(),
+  preferredChanged: () => storeSettings(),
   newTable: (rows, cols, style) => tableDrawing(emptyTable(rows, cols, style.captionSize), style),
   measure: measureText,
 });
@@ -2360,6 +2362,8 @@ function storeSettings(): void {
     nicknames: ownNicknames,
     templates: ownTemplates(),
     splitWidth,
+    citeStyle: preferredStyle().style,
+    citeOptions: preferredStyle().options,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -2465,6 +2469,7 @@ void loadSettings().then((s) => {
   useOwnTemplates(s.templates);
   splitWidth = s.splitWidth;
   applySplitWidth();
+  setPreferredStyle(s.citeStyle, s.citeOptions);
   settingsLoaded = true;
   refreshKeys();
 });

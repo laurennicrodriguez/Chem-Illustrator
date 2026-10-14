@@ -8,6 +8,7 @@ import { KeyOverrides } from './editor/keymap';
 import { DEFAULT_TYPING } from './text/typing';
 import { ModeColours, DEFAULT_MODE_COLOURS, parseModeColours } from './ui/mode-colours';
 import { parseOwnTemplates, type Template } from './chem/templates';
+import { CITE_PRESETS, DEFAULT_STYLE, cleanOptions, type CiteFormat } from './document/cite-styles';
 
 export interface Settings {
   /** Changes to ChemDraw's default keys. */
@@ -42,12 +43,17 @@ export interface Settings {
   templates: Template[];
   /** Split view: the share of the window's width the drawing beside a document, sheet or slides takes (0.2 to 0.8). */
   splitWidth: number;
+  /** The reference style new documents use (References > Manage References > Style options > Use for new documents). */
+  citeStyle: string;
+  /** That style's details changed. */
+  citeOptions: Partial<CiteFormat>;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false, showRoles: true,
   chemTyping: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
   modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38,
+  citeStyle: DEFAULT_STYLE, citeOptions: {},
 };
 
 const STORAGE_KEY = 'chem-illustrator.settings';
@@ -71,6 +77,8 @@ export function parseSettings(text: string | null | undefined): Settings {
   }
   s.templates = parseOwnTemplates(r.templates);
   if (typeof r.splitWidth === 'number' && isFinite(r.splitWidth)) s.splitWidth = Math.min(0.8, Math.max(0.2, r.splitWidth));
+  if (typeof r.citeStyle === 'string' && r.citeStyle in CITE_PRESETS) s.citeStyle = r.citeStyle;
+  s.citeOptions = cleanOptions(r.citeOptions);
   if (Array.isArray(r.dictionary)) s.dictionary = r.dictionary.filter((w): w is string => typeof w === 'string' && w.trim() !== '').map((w) => w.trim());
   return s;
 }

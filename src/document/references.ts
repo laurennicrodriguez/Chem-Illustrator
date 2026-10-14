@@ -2,13 +2,15 @@
 // each reference is plain data kept in the document itself (and in its Word file), added by
 // DOI (filled in from Crossref), by hand, or from a BibTeX or RIS file. Citations in the text
 // are fields that show numbers, given in order of first citation; the bibliography lists only
-// the references cited, in that order, in the chosen journal style (ACS, Angewandte or RSC).
+// the references cited, in that order, in the chosen journal style (cite-styles.ts), with any
+// of its details changed.
 // A citation of a reference that was deleted shows [?] and is left out, never refused.
 //
 // Every value filled in here can be changed by hand: each field of a reference, and the
 // bibliography's text for a reference (typed over, with a way back to the automatic text).
 
 import type { TextRun } from '../model';
+import { DEFAULT_STYLE, citeFormat, type CiteFormat } from './cite-styles';
 
 export type RefType = 'article' | 'book' | 'chapter' | 'thesis' | 'web' | 'misc';
 
@@ -40,14 +42,8 @@ export interface Reference {
   typed?: string;
 }
 
-/** The journal styles references are printed in. */
-export type CiteStyle = 'acs' | 'angewandte' | 'rsc';
-
-export const CITE_STYLES: Record<CiteStyle, string> = {
-  acs: 'ACS (J. Org. Chem., Org. Lett., JACS)',
-  angewandte: 'Angewandte (Wiley: Angew. Chem., Chem. Eur. J.)',
-  rsc: 'RSC (Chem. Sci., Chem. Commun., OBC)',
-};
+/** A journal style's id (a key of CITE_PRESETS: 'acs', 'rsc'…). */
+export type CiteStyle = string;
 
 const TEXT_FIELDS = ['title', 'journal', 'year', 'volume', 'issue', 'pages', 'doi', 'url', 'publisher', 'note'] as const;
 
@@ -383,7 +379,13 @@ export interface Citing {
   objects: Record<number, { kind: string; refs?: string[] }>;
   references?: Reference[];
   citeStyle?: CiteStyle;
+  /** The style's details changed for this document. */
+  citeOptions?: Partial<CiteFormat>;
 }
+
+/** The format a text's citations and bibliography use. */
+export const formatOf = (t: Pick<Citing, 'citeStyle' | 'citeOptions'>): CiteFormat => citeFormat(t.citeStyle, t.citeOptions);
+const asFormat = (style: CiteStyle | CiteFormat | undefined): CiteFormat => (typeof style === 'object' ? style : citeFormat(style ?? DEFAULT_STYLE));
 
 /** The ids of the fields in the text, in order. */
 function fieldOrder(runs: TextRun[]): number[] {
@@ -419,9 +421,10 @@ export function citeCounts(t: Citing): Map<string, number> {
   return out;
 }
 
-/** Numbers as a citation shows them: in order, with three or more in a row as a range (1–3,5). */
-export function compressNumbers(nums: number[]): string {
+/** Numbers as a citation shows them: in order, with three or more in a row as a range (1–3,5) unless `ranges` is off. */
+export function compressNumbers(nums: number[], ranges = true): string {
   const ns = [...new Set(nums)].sort((a, b) => a - b);
+  if (!ranges) return ns.join(',');
   const parts: string[] = [];
   for (let i = 0; i < ns.length;) {
     let j = i;
@@ -434,24 +437,29 @@ export function compressNumbers(nums: number[]): string {
 }
 
 /**
- * What a citation shows, in the text's superscript: ACS and RSC the numbers (1,3–5), Angewandte
- * the numbers in square brackets ([1,3–5]). References that were deleted are left out; a
- * citation with none left shows [?].
+ * What a citation shows: the numbers (1,3–5), in square brackets ([1,3–5]) or round ones
+ * ((1,3–5)), as the style has it. Whether they are raised is the citation's own superscript
+ * (citeSuper). References that were deleted are left out; a citation with none left shows [?].
  */
-export function citeText(nums: number[], style: CiteStyle = 'acs'): string {
+export function citeText(nums: number[], style?: CiteStyle | CiteFormat): string {
   if (!nums.length) return '[?]';
-  const s = compressNumbers(nums);
-  return style === 'angewandte' ? `[${s}]` : s;
+  const f = asFormat(style);
+  const s = compressNumbers(nums, f.ranges);
+  return f.cite === 'super' ? s : f.cite === 'round' ? `(${s})` : `[${s}]`;
 }
+
+/** Whether a style's citations are superscript. */
+export const citeSuper = (f: CiteFormat): boolean => f.cite === 'super' || f.cite === 'super-square';
 
 /** What every citation in the text shows, by its field's id. */
 export function citationTexts(t: Citing): Map<number, string> {
   const numbers = citationNumbers(t);
+  const f = formatOf(t);
   const out = new Map<number, string>();
   for (const [k, o] of Object.entries(t.objects)) {
     if (o.kind !== 'cite') continue;
     const nums = (o.refs ?? []).map((r) => numbers.get(r)).filter((n): n is number => n !== undefined);
-    out.set(Number(k), citeText(nums, t.citeStyle));
+    out.set(Number(k), citeText(nums, f));
   }
   return out;
 }
@@ -480,7 +488,7 @@ export interface Piece { text: string; italic?: boolean; bold?: boolean }
 export interface BibEntry {
   n: number;
   ref: Reference;
-  /** "(1)" for ACS, "[1]" for Angewandte, "1" for RSC. */
+  /** "(1)", "[1]", "1." or "1", as the style has it. */
   label: string;
   /** The entry's text: the typed-over text, or the automatic one. */
   pieces: Piece[];
@@ -489,13 +497,14 @@ export interface BibEntry {
 }
 
 /** An entry's number as the style shows it. */
-export function bibLabel(n: number, style: CiteStyle = 'acs'): string {
-  return style === 'acs' ? `(${n})` : style === 'angewandte' ? `[${n}]` : String(n);
+export function bibLabel(n: number, style?: CiteStyle | CiteFormat): string {
+  const l = asFormat(style).label;
+  return l === '(n)' ? `(${n})` : l === '[n]' ? `[${n}]` : l === 'n.' ? `${n}.` : String(n);
 }
 
 /** The references cited, in citation order, each as the style prints it. */
 export function bibliography(t: Citing): BibEntry[] {
-  const style = t.citeStyle ?? 'acs';
+  const style = formatOf(t);
   const numbers = citationNumbers(t);
   const byId = new Map((t.references ?? []).map((r) => [r.id, r]));
   return [...numbers.entries()].sort((a, b) => a[1] - b[1]).map(([id, n]) => {
@@ -533,13 +542,28 @@ export function initials(given: string): string {
   return out.join(' ');
 }
 
-/** ACS: "Fulmer, G. R."; Angewandte and RSC: "G. R. Fulmer". */
-function nameAs(a: string, familyFirst: boolean): string {
+/** "Fulmer, G. R." or "G. R. Fulmer", with initials as the style writes them. */
+function nameAs(a: string, f: CiteFormat): string {
   const n = parseName(a);
   if (n.literal) return n.family;
-  const ini = initials(n.given);
-  if (familyFirst) return [n.family, ini, n.suffix].filter(Boolean).join(', ');
+  let ini = initials(n.given);
+  if (f.initials === 'G.R.') ini = ini.replace(/\.\s+(?=\p{Lu})/gu, '.');
+  else if (f.initials === 'GR') ini = ini.replace(/\./g, '').replace(/(?<=\p{Lu})\s+(?=\p{Lu})/gu, '');
+  if (f.familyFirst) return [n.family, ini, n.suffix].filter(Boolean).join(f.initials === 'GR' ? ' ' : ', ');
   return [ini, n.family, n.suffix].filter(Boolean).join(' ');
+}
+
+/** The authors as the style lists them: separated by "; " or ", ", "and" or "&" before the last, or the first few and "et al.". */
+export function authorList(authors: string[], style?: CiteStyle | CiteFormat): string {
+  const f = asFormat(style);
+  const names = authors.map((a) => nameAs(a, f));
+  if (!names.length) return '';
+  if (f.etAlOver > 0 && names.length > f.etAlOver) {
+    const shown = names.slice(0, Math.max(1, Math.min(f.etAlShow, f.etAlOver)));
+    return shown.join(f.authorSep) + (f.authorSep === '; ' ? '; ' : shown.length > 1 ? ', ' : ' ') + 'et al.';
+  }
+  if (names.length === 1 || f.lastAuthor === 'none') return names.join(f.authorSep);
+  return `${names.slice(0, -1).join(f.authorSep)} ${f.lastAuthor} ${names[names.length - 1]}`;
 }
 
 const noStop = (s: string) => s.trim().replace(/[.\s]+$/, '');
@@ -549,142 +573,95 @@ function finish(ps: Piece[]): Piece[] {
   const out = ps.filter((p) => p.text);
   if (!out.length) return out;
   const last = out[out.length - 1];
-  if (!/[.?!]$/.test(last.text.trim())) out.push({ text: '.' });
+  // a full stop, unless it already ends with one or with a link (which a stop would seem part of)
+  if (!/[.?!]$/.test(last.text.trim()) && !/https?:\/\/\S+$/.test(last.text.trim())) out.push({ text: '.' });
   return out;
 }
 
-/** A reference as a journal style prints it. */
-export function formatReference(r: Reference, style: CiteStyle = 'acs'): Piece[] {
-  return style === 'acs' ? formatAcs(r) : style === 'angewandte' ? formatAngewandte(r) : formatRsc(r);
-}
+/** The DOI as the style writes it. */
+const doiAs = (doi: string, f: CiteFormat) => (f.doiForm === 'https://doi.org/' ? `https://doi.org/${doi}` : f.doiForm + doi);
 
 /**
- * ACS style, from The ACS Guide to Scholarly Communication (2020), "References" (and The ACS
- * Style Guide, 3rd ed., ch. 14): authors last name first with initials, separated by
- * semicolons; the article's title; the abbreviated journal in italics, the year in bold, the
- * volume in italics, then the pages:
+ * A reference as a journal style prints it. Every style is built from the same pieces (see
+ * CiteFormat), so any of its details can be changed. ACS, for example (The ACS Guide to
+ * Scholarly Communication, 2020, "References"):
  *   Fulmer, G. R.; Miller, A. J. M. NMR Chemical Shifts… Organometallics 2010, 29, 2176–2179.
- * Books: Author. Title (italic); Publisher, Year. Chapters: Author. Chapter. In Book (italic);
- * Publisher, Year; pp pages. Theses: Author. Title. Ph.D. Thesis, University, Year.
- * An article without pages (just published online) gives its DOI instead.
+ * and Angewandte (Wiley, Notes for Authors): G. R. Fulmer, A. J. M. Miller, Organometallics 2010, 29, 2176–2179.
+ * Books: Author. Title (italic); Publisher, Year (or ", Publisher, Year"). Chapters: Author.
+ * Chapter. In Book (italic); Publisher, Year; pp pages. Theses: Author. Title. Ph.D. Thesis,
+ * University, Year. An article without pages (just published online), or with an article
+ * number the style leaves out, gives its DOI instead.
  */
-function formatAcs(r: Reference): Piece[] {
+export function formatReference(r: Reference, style?: CiteStyle | CiteFormat): Piece[] {
+  const f = asFormat(style);
+  const dot = f.afterAuthors === '. ';
+  const sep = dot ? '. ' : ', ';
   const out: Piece[] = [];
-  const names = r.authors.map((a) => nameAs(a, true));
-  if (names.length) {
-    const who = names.join('; ');
-    out.push({ text: who + (who.endsWith('.') ? ' ' : '. ') });
-  }
+  /** Add text, never two separators running into each other (", , "). */
+  const put = (text: string, look: Omit<Piece, 'text'> = {}) => {
+    if (!text) return;
+    const last = out[out.length - 1];
+    if (last && /[,;]\s*$/.test(last.text) && /^[,;]\s/.test(text)) text = text.slice(2);
+    if (text) out.push({ text, ...look });
+  };
+  const who = authorList(r.authors, f);
+  if (who) put(who + (dot ? (who.endsWith('.') ? ' ' : '. ') : ', '));
   const title = noStop(r.title);
-  const doi = r.doi ? `DOI: ${r.doi}` : '';
+  const pub = [r.publisher, r.year].filter(Boolean).join(', ');
+  const pubText = !pub ? '' : f.yearAt === 'end' ? ` (${pub})` : dot ? `; ${pub}` : `, ${pub}`;
   switch (r.type) {
     case 'book':
-      if (title) out.push({ text: title, italic: true });
-      out.push({ text: [r.publisher, r.year].filter(Boolean).length ? `; ${[r.publisher, r.year].filter(Boolean).join(', ')}` : '' });
+      if (title) put(title, { italic: true });
+      put(pubText);
       break;
     case 'chapter':
-      if (title) out.push({ text: `${title}. ` });
-      if (r.journal) { out.push({ text: 'In ' }, { text: noStop(r.journal), italic: true }); }
-      out.push({ text: [r.publisher, r.year].filter(Boolean).length ? `; ${[r.publisher, r.year].filter(Boolean).join(', ')}` : '' });
-      if (r.pages) out.push({ text: `; pp ${r.pages}` });
+      if (f.title && title) put(title + sep);
+      if (r.journal) { put(dot ? 'In ' : 'in '); put(noStop(r.journal), { italic: true }); }
+      put(pubText);
+      if (r.pages) put(dot ? `; pp ${r.pages}` : `, pp. ${r.pages}`);
       break;
     case 'thesis':
-      if (title) out.push({ text: `${title}. ` });
-      out.push({ text: ['Ph.D. Thesis', r.publisher, r.year].filter(Boolean).join(', ') });
+      if (f.title && title) put(title + sep);
+      put([f.thesisWord, r.publisher, f.thesisYearBrackets ? '' : r.year].filter(Boolean).join(', ') + (f.thesisYearBrackets && r.year ? ` (${r.year})` : ''));
       break;
     case 'web':
-      if (title) out.push({ text: `${title}. ` });
-      if (r.url) out.push({ text: r.url });
+      if (title) put(title);
+      if (r.url) put(`${title ? sep : ''}${r.url}`);
       break;
     default: {
-      if (title) out.push({ text: `${title}. ` });
-      if (r.journal) out.push({ text: r.journal.trim(), italic: true });
-      if (r.year) out.push({ text: r.journal ? ' ' : '' }, { text: r.year, bold: true });
-      if (r.volume) out.push({ text: ', ' }, { text: r.volume, italic: true });
-      if (r.pages) out.push({ text: `, ${r.pages}` });
-      else if (doi) out.push({ text: `${r.journal || r.year || r.volume ? '. ' : ''}${doi}` });
+      if (f.title && title) put(f.titleQuotes ? `“${title}${f.afterTitle.trim()}” ` : title + f.afterTitle);
+      if (r.journal) put(r.journal.trim(), f.journalItalic ? { italic: true } : {});
+      else if (!f.title && title) put(title);
+      const head = !!(r.journal || title);
+      let pages = r.pages;
+      const articleNo = !!pages && !pages.includes('–');
+      if (articleNo && !f.articleNumber) pages = '';
+      if (pages && f.firstPageOnly) pages = pages.split('–')[0];
+      const year = (before: string) => { if (r.year) { put(before); put(r.year, f.yearBold ? { bold: true } : {}); } };
+      const volume = (before: string) => {
+        if (!r.volume) return;
+        put(before);
+        put(r.volume, f.volume === 'italic' ? { italic: true } : f.volume === 'bold' ? { bold: true } : {});
+        if (f.issue && r.issue) put(` (${r.issue})`);
+      };
+      const after = (head ? (f.journalComma ? ', ' : ' ') : '');
+      if (f.yearAt === 'journal') {
+        year(after);
+        volume(', ');
+        if (pages) put(`, ${pages}`);
+      } else if (f.yearAt === 'volume') {
+        volume(after);
+        year(r.volume ? ' (' : after);
+        if (r.year && r.volume) put(')');
+        if (pages) put(`${r.volume || r.year ? ' ' : ''}${pages}`);
+      } else {
+        volume(after);
+        if (pages) put(`, ${pages}`);
+        year(' (');
+        if (r.year) put(')');
+      }
+      if (r.doi && (f.doi === 'always' || (f.doi === 'no-pages' && !pages))) put(`${r.journal || r.year || r.volume ? f.doiSep : ''}${doiAs(r.doi, f)}`);
     }
-  }
-  return finishNote(out, r);
-}
-
-/**
- * Angewandte Chemie (Wiley), from its Notes for Authors, "References": initials then last
- * name, separated by commas (no "and"); no article title; the abbreviated journal in italics,
- * the year in bold, the volume in italics, then the pages:
- *   G. R. Fulmer, A. J. M. Miller, …, Organometallics 2010, 29, 2176–2179.
- * Books: A. Author, Title (italic), Publisher, Year. Theses: A. Author, PhD thesis, University (Year).
- */
-function formatAngewandte(r: Reference): Piece[] {
-  const out: Piece[] = [];
-  const names = r.authors.map((a) => nameAs(a, false));
-  if (names.length) out.push({ text: names.join(', ') + ', ' });
-  const title = noStop(r.title);
-  switch (r.type) {
-    case 'book':
-      if (title) out.push({ text: title, italic: true });
-      out.push({ text: [r.publisher, r.year].filter(Boolean).map((x) => `, ${x}`).join('') });
-      break;
-    case 'chapter':
-      if (r.journal) out.push({ text: 'in ' }, { text: noStop(r.journal), italic: true });
-      out.push({ text: [r.publisher, r.year].filter(Boolean).map((x) => `, ${x}`).join('') });
-      if (r.pages) out.push({ text: `, pp. ${r.pages}` });
-      break;
-    case 'thesis':
-      out.push({ text: ['PhD thesis', r.publisher].filter(Boolean).join(', ') + (r.year ? ` (${r.year})` : '') });
-      break;
-    case 'web':
-      if (title) out.push({ text: title });
-      if (r.url) out.push({ text: `${title ? ', ' : ''}${r.url}` });
-      break;
-    default:
-      if (r.journal) out.push({ text: r.journal.trim(), italic: true });
-      else if (title) out.push({ text: title });
-      if (r.year) out.push({ text: r.journal || title ? ' ' : '' }, { text: r.year, bold: true });
-      if (r.volume) out.push({ text: ', ' }, { text: r.volume, italic: true });
-      if (r.pages) out.push({ text: `, ${r.pages}` });
-      else if (r.doi) out.push({ text: `, DOI ${r.doi}` });
-  }
-  return finishNote(trimComma(out), r);
-}
-
-/**
- * RSC, from the Royal Society of Chemistry's author guidelines, "References": initials then
- * last name, separated by commas with "and" before the last; no article title; the
- * abbreviated journal in italics, then the year, the volume in bold and the pages, all
- * separated by commas:
- *   G. R. Fulmer, A. J. M. Miller, … and K. I. Goldberg, Organometallics, 2010, 29, 2176–2179.
- * Books: A. Author, Title (italic), Publisher, City, Year. Theses: A. Author, PhD thesis, University, Year.
- */
-function formatRsc(r: Reference): Piece[] {
-  const out: Piece[] = [];
-  const names = r.authors.map((a) => nameAs(a, false));
-  if (names.length) out.push({ text: (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]) + ', ' });
-  const title = noStop(r.title);
-  switch (r.type) {
-    case 'book':
-      if (title) out.push({ text: title, italic: true });
-      out.push({ text: [r.publisher, r.year].filter(Boolean).map((x) => `, ${x}`).join('') });
-      break;
-    case 'chapter':
-      if (r.journal) out.push({ text: 'in ' }, { text: noStop(r.journal), italic: true });
-      out.push({ text: [r.publisher, r.year].filter(Boolean).map((x) => `, ${x}`).join('') });
-      if (r.pages) out.push({ text: `, pp. ${r.pages}` });
-      break;
-    case 'thesis':
-      out.push({ text: ['PhD thesis', r.publisher, r.year].filter(Boolean).join(', ') });
-      break;
-    case 'web':
-      if (title) out.push({ text: title });
-      if (r.url) out.push({ text: `${title ? ', ' : ''}${r.url}` });
-      break;
-    default:
-      if (r.journal) out.push({ text: r.journal.trim(), italic: true });
-      else if (title) out.push({ text: title });
-      if (r.year) out.push({ text: `${r.journal || title ? ', ' : ''}${r.year}` });
-      if (r.volume) out.push({ text: ', ' }, { text: r.volume, bold: true });
-      if (r.pages) out.push({ text: `, ${r.pages}` });
-      else if (r.doi) out.push({ text: `, DOI: ${r.doi}` });
   }
   return finishNote(trimComma(out), r);
 }

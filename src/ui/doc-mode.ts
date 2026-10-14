@@ -22,7 +22,7 @@ import { DocPanel, DOC_FONTS } from './doc-panel';
 import { DocFind } from './doc-find';
 import { ask } from './ask';
 import { ReferencesDialog, chooseReferences } from './references-dialog';
-import type { Reference } from '../document/references';
+import { citeSuper, formatOf, type Reference } from '../document/references';
 import { dataUrl, imageSize } from '../render/images';
 import type { DocFile } from '../document/doc-file';
 import {
@@ -52,6 +52,8 @@ export interface DocModeHost {
   newTable(rows: number, cols: number, style: DocStyle): Contents;
   /** Choose a BibTeX or RIS file and read its text (References > Manage References > Import). */
   pickReferenceFile(): Promise<{ name: string; text: string } | null>;
+  /** The person chose a reference style for new documents (save settings). */
+  preferredChanged?(): void;
   measure: Measure;
 }
 
@@ -127,6 +129,7 @@ export class DocumentMode {
       file: () => this.file,
       flash: (msg, ms) => this.host.flash(msg, ms),
       pickFile: () => this.host.pickReferenceFile(),
+      preferredChanged: () => this.host.preferredChanged?.(),
     });
     this.wireInput();
     this.wirePointer();
@@ -1075,7 +1078,7 @@ export class DocumentMode {
       return;
     }
     const before = ed.typingStyle();
-    this.insertObject({ kind: 'cite', refs }, 'Insert citation', { sup: true, sub: undefined });
+    this.insertObject({ kind: 'cite', refs }, 'Insert citation', { sup: citeSuper(formatOf(f.t)) || undefined, sub: undefined });
     // what is typed next looks as it did before the citation
     ed.setStyle({ sup: before.sup });
   }

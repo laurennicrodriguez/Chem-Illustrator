@@ -1,7 +1,7 @@
 // References > Manage References: the document's reference list (as SI Assistant's References
 // page): add by DOI (filled in from Crossref), by hand, or from a BibTeX or RIS file or pasted
 // text; edit, delete, and how many times each is cited. The citation style (ACS, Angewandte,
-// RSC) is chosen here too. Every change is one step of Undo in the document.
+// RSC and the other common chemistry styles), and any of its details, are chosen here too. Every change is one step of Undo in the document.
 //
 // Also here: the window that edits one reference (every value can be changed, and the
 // bibliography's text for it typed over, with Reset to go back to the automatic text), and
@@ -9,8 +9,9 @@
 
 import type { DocFile } from '../document/doc-file';
 import type { DocText } from '../document/document';
+import { CITE_PRESETS, changedOptions, citeFormat, preferredStyle, setPreferredStyle, type CiteFormat } from '../document/cite-styles';
 import {
-  CITE_STYLES, REF_TYPES, blankRef, citationNumbers, citationWarning, citeCounts, cleanRef, describe, fetchDoi, findDuplicate,
+  REF_TYPES, bibLabel, citeSuper, citeText, formatOf, blankRef, citationNumbers, citationWarning, citeCounts, cleanRef, describe, fetchDoi, findDuplicate,
   formatReference, newRefId, newReferences, normaliseDoi, parseReferenceText, piecesText, shortLabel,
   type CiteStyle, type Piece, type Reference,
 } from '../document/references';
@@ -23,6 +24,8 @@ export interface ReferencesHost {
   pickFile(): Promise<{ name: string; text: string } | null>;
   /** Look a DOI up (Crossref); throws with a message to show. */
   lookup?(doi: string): Promise<Reference>;
+  /** The person chose a style for new documents (settings.json). */
+  preferredChanged?(): void;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> = {}, ...kids: (Node | string)[]): HTMLElementTagNameMap[K] => {
@@ -80,7 +83,7 @@ function modal<T>(cls: string, build: (d: HTMLDialogElement, done: (v: T | null)
  * Edit one reference (or check one filled in from Crossref). Every value can be changed; the
  * bibliography's text can be typed over, and Reset puts the automatic text back.
  */
-export function editReference(start: Reference, title: string, style: CiteStyle, lookup: (doi: string) => Promise<Reference>): Promise<Reference | null> {
+export function editReference(start: Reference, title: string, style: CiteStyle | CiteFormat, lookup: (doi: string) => Promise<Reference>): Promise<Reference | null> {
   return modal<Reference>('ref-edit', (d, done) => {
     const form = el('form');
     form.append(el('h2', { textContent: title }));
@@ -226,6 +229,139 @@ export function chooseReferences(t: DocText, chosen: string[], manage: () => Pro
   });
 }
 
+// ---------------------------------------------------------------- the style and its details
+
+type Control = { key: keyof CiteFormat; label: string; title?: string } & (
+  | { kind: 'check' }
+  | { kind: 'count' }
+  | { kind: 'select'; options: [string, string][] });
+
+/** Every detail of a style, in groups, as the Style options window shows them. */
+const STYLE_GROUPS: [string, Control[]][] = [
+  ['In the text', [
+    { key: 'cite', label: 'Citation numbers', kind: 'select', options: [['super', 'Superscript ¹⁻³'], ['super-square', 'Superscript in brackets ^[1–3]'], ['square', '[1–3] on the line'], ['round', '(1–3) on the line']] },
+    { key: 'ranges', label: 'Runs as ranges (1–3, not 1,2,3)', kind: 'check' },
+  ]],
+  ['The list', [
+    { key: 'label', label: 'Number before each entry', kind: 'select', options: [['(n)', '(1)'], ['[n]', '[1]'], ['n.', '1.'], ['n', '1']] },
+  ]],
+  ['Authors', [
+    { key: 'familyFirst', label: 'Order', kind: 'select', options: [['true', 'Fulmer, G. R.'], ['false', 'G. R. Fulmer']] },
+    { key: 'initials', label: 'Initials', kind: 'select', options: [['G. R.', 'G. R.'], ['G.R.', 'G.R.'], ['GR', 'GR']] },
+    { key: 'authorSep', label: 'Between authors', kind: 'select', options: [['; ', 'Semicolon ( ; )'], [', ', 'Comma ( , )']] },
+    { key: 'lastAuthor', label: 'Before the last author', kind: 'select', options: [['none', 'Nothing'], ['and', '"and"'], ['&', '"&"']] },
+    { key: 'etAlOver', label: 'Use "et al." above (0: never)', kind: 'count', title: 'With more authors than this, only the first few are listed, then "et al."' },
+    { key: 'etAlShow', label: 'Authors listed before "et al."', kind: 'count' },
+    { key: 'afterAuthors', label: 'After the authors', kind: 'select', options: [['. ', 'Full stop'], [', ', 'Comma']] },
+  ]],
+  ['Journal articles', [
+    { key: 'title', label: 'Article title', kind: 'check' },
+    { key: 'titleQuotes', label: 'Title in quotation marks', kind: 'check' },
+    { key: 'afterTitle', label: 'After the title', kind: 'select', options: [['. ', 'Full stop'], [', ', 'Comma']] },
+    { key: 'journalItalic', label: 'Journal in italics', kind: 'check' },
+    { key: 'yearAt', label: 'Year', kind: 'select', options: [['journal', 'After the journal: Org. Lett. 2024, 26'], ['volume', 'After the volume: Org. Lett. 26 (2024)'], ['end', 'At the end: … 1234–1240 (2024)']] },
+    { key: 'yearBold', label: 'Year in bold', kind: 'check' },
+    { key: 'journalComma', label: 'Comma after the journal', kind: 'check' },
+    { key: 'volume', label: 'Volume', kind: 'select', options: [['italic', 'Italic'], ['bold', 'Bold'], ['plain', 'Plain']] },
+    { key: 'issue', label: 'Issue number', kind: 'check' },
+    { key: 'firstPageOnly', label: 'First page only', kind: 'check' },
+    { key: 'articleNumber', label: 'Article numbers', kind: 'check', title: 'Print an article number (pages without a range, such as e202301234). Off: the DOI is given instead.' },
+    { key: 'doi', label: 'DOI', kind: 'select', options: [['no-pages', 'Only without pages'], ['always', 'Always'], ['never', 'Never']] },
+    { key: 'doiSep', label: 'Before the DOI', kind: 'select', options: [['. ', 'Full stop'], [', ', 'Comma']] },
+    { key: 'doiForm', label: 'DOI written as', kind: 'select', options: [['DOI: ', 'DOI: 10.…'], ['DOI ', 'DOI 10.…'], ['doi:', 'doi:10.…'], ['https://doi.org/', 'https://doi.org/10.…']] },
+  ]],
+  ['Theses', [
+    { key: 'thesisWord', label: 'Called', kind: 'select', options: [['Ph.D. Thesis', 'Ph.D. Thesis'], ['PhD thesis', 'PhD thesis']] },
+    { key: 'thesisYearBrackets', label: 'Year in brackets', kind: 'check' },
+  ]],
+];
+
+/** Real references the preview shows each style with. */
+const SAMPLES: Reference[] = [
+  { ...blankRef('article', 's1'), authors: ['Fulmer, Gregory R.', 'Miller, Alexander J. M.', 'Sherden, Nathaniel H.', 'Gottlieb, Hugo E.', 'Nudelman, Abraham', 'Stoltz, Brian M.', 'Bercaw, John E.', 'Goldberg, Karen I.'], title: 'NMR Chemical Shifts of Trace Impurities: Common Laboratory Solvents, Organics, and Gases in Deuterated Solvents Relevant to the Organometallic Chemist', journal: 'Organometallics', year: '2010', volume: '29', issue: '9', pages: '2176–2179', doi: '10.1021/om100106e' },
+  { ...blankRef('article', 's2'), authors: ['Gottlieb, Hugo E.', 'Kotlyar, Vadim', 'Nudelman, Abraham'], title: 'NMR Chemical Shifts of Common Laboratory Solvents as Trace Impurities', journal: 'J. Org. Chem.', year: '1997', volume: '62', issue: '21', pages: '7512–7515', doi: '10.1021/jo971176v' },
+  { ...blankRef('book', 's3'), authors: ['Clayden, Jonathan', 'Greeves, Nick', 'Warren, Stuart'], title: 'Organic Chemistry', year: '2012', publisher: 'Oxford University Press' },
+];
+
+export interface StyleChoice { style: string; options: Partial<CiteFormat>; forNew: boolean }
+
+/**
+ * References > Manage References > Style options: a style from the list, and any of its
+ * details changed, with a preview of real references as they will print.
+ */
+export function editCiteStyle(style: string, options: Partial<CiteFormat>): Promise<StyleChoice | null> {
+  return modal<StyleChoice>('cite-style-dialog', (d, done) => {
+    let cur = style in CITE_PRESETS ? style : Object.keys(CITE_PRESETS)[0];
+    let f: CiteFormat = citeFormat(cur, options);
+    const pick = el('select');
+    for (const [k, p] of Object.entries(CITE_PRESETS)) pick.add(new Option(`${p.name} (${p.journals})`, k));
+    pick.value = cur;
+    const source = el('p', { className: 'muted cite-source' });
+    const preview = el('div', { className: 'cite-preview' });
+    const inputs = new Map<keyof CiteFormat, HTMLInputElement | HTMLSelectElement>();
+    const groups = STYLE_GROUPS.map(([name, ctls]) => el('fieldset', {}, el('legend', { textContent: name }), ...ctls.map((c) => {
+      let input: HTMLInputElement | HTMLSelectElement;
+      if (c.kind === 'check') input = el('input', { type: 'checkbox' });
+      else if (c.kind === 'count') input = el('input', { type: 'number', min: '0', max: '100', step: '1' });
+      else {
+        input = el('select');
+        for (const [v, l] of c.options) input.add(new Option(l, v));
+      }
+      inputs.set(c.key, input);
+      input.addEventListener(c.kind === 'count' ? 'input' : 'change', () => {
+        const v = c.kind === 'check' ? (input as HTMLInputElement).checked
+          : c.kind === 'count' ? Math.max(0, Math.min(100, Math.round(Number(input.value) || 0)))
+            : input.value === 'true' ? true : input.value === 'false' ? false : input.value;
+        f = { ...f, [c.key]: v };
+        show(false);
+      });
+      const row = el('label', { className: c.kind === 'check' ? 'cite-check' : 'cite-row', title: c.title ?? '' });
+      if (c.kind === 'check') row.append(input, el('span', { textContent: c.label }));
+      else row.append(el('span', { textContent: c.label }), input);
+      return row;
+    })));
+    const show = (setInputs = true) => {
+      const base = citeFormat(cur);
+      for (const [k, input] of inputs) {
+        if (setInputs) {
+          if (input instanceof HTMLInputElement && input.type === 'checkbox') input.checked = !!f[k];
+          else input.value = String(f[k]);
+        }
+        // a detail changed from the style's own is marked, so it's clear what Reset puts back
+        input.closest('label')?.classList.toggle('changed', f[k] !== base[k]);
+      }
+      const p = CITE_PRESETS[cur];
+      source.textContent = `Follows ${p.source}.`;
+      const cite = el('p', {}, 'In the text: …as reported before', citeSuper(f) ? el('sup', { textContent: citeText([1, 2, 3], f) }) : ` ${citeText([1, 2, 3], f)}`, '.');
+      preview.replaceChildren(cite, ...SAMPLES.map((r, i) => {
+        const line = el('p', { className: 'cite-entry' });
+        showPieces(line, formatReference(r, f));
+        line.prepend(el('span', { className: 'cite-label', textContent: bibLabel(i + 1, f) }));
+        return line;
+      }));
+      reset.disabled = !Object.keys(changedOptions(cur, f)).length;
+      reset.textContent = `Reset to ${p.name}`;
+    };
+    pick.addEventListener('change', () => { cur = pick.value; f = citeFormat(cur, {}); show(); });
+    const reset = button('Reset', 'Put every detail back as the style has it', () => { f = citeFormat(cur, {}); show(); });
+    const forNew = el('input', { type: 'checkbox' });
+    d.append(
+      el('h2', { textContent: 'Reference style' }),
+      el('label', { className: 'ask-row refs-style' }, el('span', { textContent: 'Style' }), pick),
+      source,
+      el('p', { className: 'muted', textContent: 'Change any detail below; the preview shows real references as they will print. Choosing another style starts from that style\'s own details.' }),
+      el('div', { className: 'cite-groups' }, ...groups),
+      el('h3', { textContent: 'Preview' }),
+      preview,
+      el('div', { className: 'refs-buttons' },
+        el('span', {}, reset, el('label', { className: 'cite-check', title: 'Kept in settings.json. Documents that already have a style keep theirs.' }, forNew, el('span', { textContent: 'Use for new documents' }))),
+        el('span', {}, button('Cancel', '', () => done(null)), button('OK', '', () => done({ style: cur, options: changedOptions(cur, f), forNew: forNew.checked }), true))),
+    );
+    pick.autofocus = true;
+    show();
+  });
+}
+
 // ---------------------------------------------------------------- the list
 
 export class ReferencesDialog {
@@ -233,6 +369,7 @@ export class ReferencesDialog {
   private body!: HTMLTableSectionElement;
   private warning!: HTMLElement;
   private styleSel!: HTMLSelectElement;
+  private styleNote!: HTMLElement;
   private search!: HTMLInputElement;
   private selected: string | null = null;
   private closed: (() => void) | null = null;
@@ -270,9 +407,10 @@ export class ReferencesDialog {
       if (e.key === 'Enter' && this.selected) { e.preventDefault(); void this.edit(); }
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); this.step(e.key === 'ArrowDown' ? 1 : -1); }
     });
-    this.styleSel = el('select');
-    for (const [k, v] of Object.entries(CITE_STYLES)) this.styleSel.add(new Option(v, k));
-    this.styleSel.addEventListener('change', () => this.change('Citation style', (t) => ({ ...t, citeStyle: this.styleSel.value as CiteStyle })));
+    this.styleSel = el('select', { id: 'refs-style' });
+    for (const [k, p] of Object.entries(CITE_PRESETS)) this.styleSel.add(new Option(`${p.name} (${p.journals})`, k));
+    this.styleSel.addEventListener('change', () => this.setStyle(this.styleSel.value, {}));
+    this.styleNote = el('span', { className: 'muted' });
     this.search = el('input', { type: 'search', placeholder: 'Find a reference' });
     this.search.setAttribute('aria-label', 'Find a reference');
     this.search.addEventListener('input', () => this.fill());
@@ -291,7 +429,9 @@ export class ReferencesDialog {
     d.append(
       el('div', { className: 'refs-head' }, el('h2', { textContent: 'References' }), this.search),
       el('p', { className: 'muted', textContent: 'The references of this document, kept in it (and in its Word file). Cite them with References > Insert Citation. Only cited references are printed in the bibliography, numbered in order of first citation, in the style chosen here.' }),
-      el('label', { className: 'ask-row refs-style' }, el('span', { textContent: 'Citation style' }), this.styleSel),
+      el('div', { className: 'ask-row refs-style' }, el('label', { htmlFor: 'refs-style', textContent: 'Citation style' }), this.styleSel,
+        button('Style Options…', 'Change any detail of the style: authors, "and", et al., title, year, volume, issue, article numbers, DOI…', () => void this.styleOptions())),
+      el('p', { className: 'refs-style-note' }, this.styleNote),
       this.warning,
       el('div', { className: 'refs-table-wrap' }, table),
       el('div', { className: 'refs-buttons' },
@@ -317,7 +457,10 @@ export class ReferencesDialog {
   private fill(): void {
     const t = this.t;
     if (!this.d || !t) return;
-    this.styleSel.value = t.citeStyle ?? 'acs';
+    const style = this.style();
+    this.styleSel.value = style;
+    const changed = Object.keys(changedOptions(style, this.format())).length;
+    this.styleNote.textContent = changed ? `${changed} detail${changed === 1 ? '' : 's'} changed from ${CITE_PRESETS[style].name} (Style Options… to see or reset them).` : '';
     const counts = citeCounts(t);
     const q = this.search.value.trim().toLowerCase();
     const refs = (t.references ?? []).filter((r) => !q || `${describe(r)} ${r.authors.join(' ')} ${r.doi}`.toLowerCase().includes(q));
@@ -377,8 +520,36 @@ export class ReferencesDialog {
     this.setRefs(`Add reference ${shortLabel(ref)}`, [...list, ref]);
   }
 
+  /** The document's style (or, until it has one, the person's own). */
   private style(): CiteStyle {
-    return this.t?.citeStyle ?? 'acs';
+    const s = this.t?.citeStyle;
+    return s && s in CITE_PRESETS ? s : preferredStyle().style;
+  }
+
+  private format(): CiteFormat {
+    return this.t ? formatOf(this.t) : citeFormat(undefined);
+  }
+
+  /** Use a style with some of its details changed; citations go up into superscript or down onto the line as it has them. One undo step. */
+  private setStyle(style: string, options: Partial<CiteFormat>): void {
+    this.change('Citation style', (t) => {
+      const sup = citeSuper(citeFormat(style, options));
+      const runs = t.runs.map((r) => (r.obj !== undefined && t.objects[r.obj]?.kind === 'cite' && !!r.sup !== sup ? { ...r, sup: sup || undefined, sub: undefined } : r));
+      return { ...t, runs, citeStyle: style, citeOptions: Object.keys(options).length ? options : undefined };
+    });
+  }
+
+  private async styleOptions(): Promise<void> {
+    const t = this.t;
+    if (!t) return;
+    const got = await editCiteStyle(this.style(), t.citeStyle ? t.citeOptions ?? {} : preferredStyle().options);
+    if (!got) return;
+    this.setStyle(got.style, got.options);
+    if (got.forNew) {
+      setPreferredStyle(got.style, got.options);
+      this.host.preferredChanged?.();
+      this.host.flash(`New documents will use ${CITE_PRESETS[got.style].name} style${Object.keys(got.options).length ? ' with your changes' : ''}.`, 4000);
+    }
   }
 
   private async addByDoi(): Promise<void> {
@@ -399,12 +570,12 @@ export class ReferencesDialog {
     }
     const dup = findDuplicate(this.t?.references ?? [], found);
     if (dup) { this.add(found); return; }
-    const r = await editReference(found, 'Check the Reference', this.style(), this.lookup);
+    const r = await editReference(found, 'Check the Reference', this.format(), this.lookup);
     if (r) this.add(r);
   }
 
   private async addByHand(start: Reference = blankRef()): Promise<void> {
-    const r = await editReference(start, 'New Reference', this.style(), this.lookup);
+    const r = await editReference(start, 'New Reference', this.format(), this.lookup);
     if (r) this.add(r);
   }
 
@@ -453,7 +624,7 @@ export class ReferencesDialog {
   private async edit(): Promise<void> {
     const cur = this.current();
     if (!cur) { this.host.flash('Click a reference in the list first.'); return; }
-    const r = await editReference(cur, 'Edit Reference', this.style(), this.lookup);
+    const r = await editReference(cur, 'Edit Reference', this.format(), this.lookup);
     const t = this.t;
     if (!r || !t) return;
     this.setRefs(`Edit reference ${shortLabel(r)}`, (t.references ?? []).map((x) => (x.id === cur.id ? { ...r, id: cur.id } : x)));
