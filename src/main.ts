@@ -51,6 +51,9 @@ import { StructurePictures } from './ui/structure-pictures';
 import { structurePlace } from './sheet/layout';
 import { readSheetFile, writeSheetFile, SheetFileDeps } from './io/sheet-files';
 import { ACS_1996, DocStyle } from './style';
+import { emptyTable, tableFromCells } from './table';
+import type { TableData } from './model';
+import type { PastedRows } from './io/table-clip';
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -345,7 +348,46 @@ async function pasteFrom(read: () => Pasted | Promise<Pasted>): Promise<void> {
     editor.changed();
   } else if (got.kind === 'text') await pasteChemistry(got.text);
   else if (got.kind === 'picture') placePicture(got.bytes, got.mime, null);
+  else if (got.kind === 'table') pasteTable(got.rows);
   else flash('There is nothing to paste.');
+}
+
+/** Cells from Excel, Word or a sheet become a table in the ACS style, with the first row as headings. */
+function pasteTable(rows: PastedRows): void {
+  const t = tableFromCells(rows, textMeasure, doc.style.captionSize);
+  placeTable(t, 'Paste table');
+  flash(`Pasted a table of ${t.rows.length} rows and ${t.cols.length} columns. Double-click a cell to type; the Style panel has its rows, columns and lines.`, 7000);
+}
+
+const textMeasure = (t: string, size: number, family: string, style: string) => measureText(t, size, family, style);
+
+/** Put a table in the middle of the window (or slide), selected. */
+function placeTable(t: TableData, label: string): number {
+  finishTyping();
+  renderer.useStyle(doc);
+  const lay = renderer.tableLayout(t);
+  const c = pasteCentre();
+  const x1 = c.x - lay.width / 2, y1 = c.y - lay.height / 2;
+  let id = 0;
+  doc.edit(label, () => { id = doc.addShape({ kind: 'table', x1, y1, x2: x1 + lay.width, y2: y1 + lay.height, table: t }).id; });
+  editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set([id]) };
+  editor.tablePart = { id, part: { r: 0, c: 0 } };
+  editor.changed();
+  return id;
+}
+
+/** Insert > Table: an empty table of the rows and columns asked for, ready to type into. */
+async function insertTable(): Promise<void> {
+  finishTyping();
+  const got = await ask('Insert Table', [
+    { name: 'rows', label: 'Rows', value: '4', type: 'number' },
+    { name: 'cols', label: 'Columns', value: '3', type: 'number' },
+  ], { ok: 'Insert', note: 'An ACS-style table: a rule above and below the heading row and under the last row. The Style panel changes the lines, headings, rows and columns.' });
+  if (!got) return;
+  const rows = Math.max(1, Math.min(500, Math.round(Number(got.rows) || 4)));
+  const cols = Math.max(1, Math.min(60, Math.round(Number(got.cols) || 3)));
+  const id = placeTable(emptyTable(rows, cols, doc.style.captionSize), 'Insert table');
+  editor.editTable(id, { r: 0, c: 0 });
 }
 
 /** Where pasted things go: the middle of the slide in Slides mode, else the middle of the window. */
@@ -1362,6 +1404,7 @@ const COMMANDS: Record<string, () => unknown> = {
   undo: () => undo(),
   redo: () => redo(),
   'insert-picture': () => insertPicture(),
+  'insert-table': () => { void insertTable(); },
   crop: () => cropPicture(),
   'text-box': () => { editor.setTool('text'); flash('Click to type, or drag across to make a text box that wraps.'); },
   'new-slide': () => newSlide(),
@@ -1961,6 +2004,13 @@ function updatePanels(): void {
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
 stylePanel.cropWithMouse = () => cropPicture();
+stylePanel.tables = {
+  part: () => editor.tablePart,
+  setPart: (p) => { editor.tablePart = p; },
+  update: (id, t) => editor.updateTable(id, t),
+  edit: (id, part) => editor.editTable(id, part),
+  measure: textMeasure,
+};
 
 let stereoSeen = -1;
 editor.onFrame = () => {

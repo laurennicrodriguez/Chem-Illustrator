@@ -18,6 +18,8 @@ import { runsForChemDraw, TEXT_TAG } from '../text/chemdraw-text';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { fromDataUrl } from '../render/images';
 import { OWN_PICTURE, OWN_CROP } from './cdxml';
+import { layoutTable, cellAlign, isCovered, spanOf, NOTE_SCALE } from '../table';
+import { TABLE_TAG, TABLE_PART_TAG, tableBorders, type TableTag } from './cdxml-table';
 
 export interface WriteOptions {
   /** Text width in points; by default Arial's own widths, as ChemDraw uses. */
@@ -826,6 +828,7 @@ class CdxmlWriter {
   }
 
   private writeShape(s: Shape): void {
+    if (s.kind === 'table') { this.writeTable(s); return; }
     const pic = s.picture || s.kind === 'picture';
     const names = pic ? ['embeddedobject'] : ['graphic'];
     const e = this.source('s', s.id, names);
@@ -853,6 +856,101 @@ class CdxmlWriter {
       (host ?? this.page).appendChild(g);
     }
     this.changed = true;
+  }
+
+  /**
+   * A table as ChemDraw keeps one: a page for each cell (row by row), holding the cell's text
+   * and its four borders, so the rules show in ChemDraw as drawn here. Its title and footnotes
+   * are captions grouped with it. What ChemDraw has no place for (heading rows, column
+   * alignment, joined cells) goes in a tag so this program reads the table back as it was.
+   */
+  private writeTable(s: Shape): void {
+    const t = s.table;
+    if (!t) return;
+    const e = this.source('s', s.id, ['table', 'group']);
+    const o = this.orig<Shape>('s', s.id);
+    if (e && o && sameExcept(s, o, [])) return;
+    const el = this.tableElement(s, t, e?.getAttribute('id') ?? String(s.id));
+    if (e?.parentNode) e.parentNode.replaceChild(el, e);
+    else this.page.appendChild(el);
+    this.changed = true;
+  }
+
+  private tableElement(s: Shape, t: NonNullable<Shape['table']>, outerId: string): Element {
+    const def = this.doc.style.captionSize;
+    const measure = this.opts.textMeasure ?? ((text: string, size: number, _f: string, style: string) => arialWidth(text, size, /bold/.test(style)));
+    const lay = layoutTable(t, def, measure);
+    const lw = this.doc.style.lineWidth;
+    const sized = (runs: TextRun[], size: number) => runs.map((r) => (r.size === undefined ? { ...r, size } : r));
+    // ChemDraw keeps a cell's text inside the cell, so the text of a cell joined over several
+    // columns goes beside the table as a caption of its own, tagged with its cell
+    const spanText: { r: number; c: number }[] = [];
+    t.rows.forEach((row, r) => row.forEach((cell, c) => {
+      if (spanOf(t, r, c) > 1 && !isCovered(t, r, c) && lay.cells[r][c] && cell.runs.some((x) => x.text)) spanText.push({ r, c });
+    }));
+    const hasParts = !!(lay.title || lay.notes || spanText.length);
+    // ChemDraw draws a table over the captions grouped with it unless each has its own place in
+    // the drawing order, above everything else
+    let z = s.z;
+    if (spanText.length) {
+      let top = 0;
+      for (const e of this.page.querySelectorAll('[Z]')) top = Math.max(top, Number(e.getAttribute('Z')) || 0);
+      z = top + 1;
+    }
+    let zNext = z ?? 0;
+    const table = this.el('table', { id: hasParts ? this.id() : outerId, BoundingBox: box({ x1: s.x1, y1: s.y1 + lay.ys[0], x2: s.x1 + lay.width, y2: s.y1 + lay.ys[lay.ys.length - 1] }), Z: z });
+    const borders = tableBorders(t, lw);
+    const color = this.colorAttr(s.color) ?? '0';
+    t.rows.forEach((row, r) => {
+      for (let c = 0; c < t.cols.length; c++) {
+        const x1 = s.x1 + lay.xs[c], y1 = s.y1 + lay.ys[r];
+        const bounds = box({ x1, y1, x2: s.x1 + lay.xs[c + 1], y2: s.y1 + lay.ys[r + 1] });
+        const page = this.el('page', { id: this.id(), BoundingBox: bounds, BoundsInParent: bounds });
+        const placed = lay.cells[r][c];
+        const cell = row[c];
+        if (placed && cell?.runs.some((x) => x.text) && !isCovered(t, r, c) && spanOf(t, r, c) < 2) {
+          const wrap = lay.xs[c + spanOf(t, r, c)] - lay.xs[c] - 2 * lay.padX;
+          const text = this.el('t', { id: this.id() });
+          // the text's place is measured from the cell's top left corner, as ChemDraw keeps it
+          this.fillCaption(text, { id: 0, x: placed.x - lay.xs[c], y: placed.y - lay.ys[r], runs: sized(cell.runs, lay.size), paras: cell.paras, justify: cellAlign(t, r, c), wrap });
+          page.appendChild(text);
+        }
+        // ChemDraw's order: left, top, bottom, right
+        const b = borders[r][c];
+        for (const side of ['left', 'top', 'bottom', 'right'] as const) page.appendChild(this.el('border', { id: this.id(), LineWidth: f2(b[side]).replace(/\.00$/, ''), color, Side: side }));
+        table.appendChild(page);
+      }
+    });
+    const tag: TableTag = { v: 1, head: t.head, lines: t.lines };
+    if (t.align) tag.align = t.align;
+    if (t.size !== undefined) tag.size = t.size;
+    const spans: [number, number, number][] = [];
+    const aligns: [number, number, string][] = [];
+    t.rows.forEach((row, r) => row.forEach((cell, c) => {
+      if ((cell.span ?? 1) > 1) spans.push([r, c, cell.span!]);
+      if (cell.align) aligns.push([r, c, cell.align]);
+    }));
+    if (spans.length) tag.spans = spans;
+    if (aligns.length) tag.cellAlign = aligns;
+    table.appendChild(this.el('objecttag', { TagType: 'String', Name: TABLE_TAG, Value: JSON.stringify(tag), Visible: 'no' }));
+    if (!hasParts) return table;
+    // the title and footnotes go with the table in a group, so they move together in ChemDraw too
+    const group = this.el('group', { id: outerId });
+    const part = (which: string, p: { x: number; y: number }, runs: TextRun[], size: number, more: Partial<Caption> = {}) => {
+      const text = this.el('t', { id: this.id(), Z: z === undefined ? undefined : ++zNext });
+      this.fillCaption(text, { id: 0, x: s.x1 + p.x, y: s.y1 + p.y, runs: sized(runs, size), justify: 'left', wrap: lay.width, ...more });
+      text.appendChild(this.el('objecttag', { TagType: 'String', Name: TABLE_PART_TAG, Value: which, Visible: 'no' }));
+      group.appendChild(text);
+    };
+    if (lay.title) part('title', lay.title, t.title!, lay.size);
+    group.appendChild(table);
+    for (const { r, c } of spanText) {
+      const cell = t.rows[r][c];
+      const wrap = lay.xs[c + spanOf(t, r, c)] - lay.xs[c] - 2 * lay.padX;
+      part(`cell ${r} ${c}`, lay.cells[r][c]!, cell.runs, lay.size, { paras: cell.paras, justify: cellAlign(t, r, c), wrap });
+    }
+    if (lay.notes) part('notes', lay.notes, t.notes!, lay.size * NOTE_SCALE);
+    return group;
   }
 
   /** The atom whose charge a circled ⊕/⊖ shows: the nearest atom with a hidden charge of that sign. */

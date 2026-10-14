@@ -10,6 +10,7 @@
 // hands the data to its own clipboard commands (src-tauri/src/clipboard.rs). Elsewhere the
 // page's clipboard gets a PNG, and the drawing itself is kept in memory for pasting here.
 
+import { pastedTable, type PastedRows } from './table-clip';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { Doc, TextRun, applyBase } from '../model';
 import type { DocStyle } from '../style';
@@ -276,6 +277,7 @@ export type Pasted =
   | { kind: 'drawing'; doc: Doc }
   | { kind: 'text'; text: string }
   | { kind: 'picture'; mime: string; bytes: Uint8Array }
+  | { kind: 'table'; rows: PastedRows }
   | { kind: 'nothing' };
 
 /** Text that could be a structure (a molfile, or one word that could be SMILES). */
@@ -332,6 +334,10 @@ export async function readNativeClipboard(): Promise<Pasted> {
   const t = await nativeFirst(['CF_UNICODETEXT']);
   const text = t ? new TextDecoder().decode(t[1]).replace(/\0+$/, '') : '';
   if (looksLikeChemistry(text)) return fromText(text);
+  // cells from Excel, Word or a sheet here make a table (Excel also puts a picture of them on the clipboard)
+  const html = await nativeFirst(['HTML Format']);
+  const table = pastedTable(html ? fromCfHtml(html[1]) : null, text);
+  if (table) return { kind: 'table', rows: table };
   // a metafile with lines and text (a spectrum or chart from MestReNova or Excel) stays sharp, so it
   // beats a PNG of the same thing; a metafile that only wraps a photo, or can't be shown, does not
   const emf = await nativeFirst(['CF_ENHMETAFILE']);
@@ -354,6 +360,8 @@ export async function readNativeClipboard(): Promise<Pasted> {
 export async function readPasteEvent(e: ClipboardEvent): Promise<Pasted> {
   const text = e.clipboardData?.getData('text/plain') ?? '';
   if (looksLikeCdxml(text) || looksLikeChemistry(text)) return fromText(text);
+  const table = pastedTable(e.clipboardData?.getData('text/html'), text);
+  if (table) return { kind: 'table', rows: table };
   const file = [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'));
   if (file) return { kind: 'picture', mime: file.type, bytes: new Uint8Array(await file.arrayBuffer()) };
   if (text.trim()) return fromText(text);
@@ -366,6 +374,10 @@ export async function readWebClipboard(): Promise<Pasted> {
   if (looksLikeCdxml(text) || looksLikeChemistry(text)) return fromText(text);
   // a picture (when the browser lets the page see it)
   const items = await navigator.clipboard.read?.().catch(() => []) ?? [];
+  const htmlItem = items.find((it) => it.types.includes('text/html'));
+  const html = htmlItem ? await (await htmlItem.getType('text/html')).text() : null;
+  const table = pastedTable(html, text);
+  if (table) return { kind: 'table', rows: table };
   for (const it of items) {
     const type = it.types.find((t) => t.startsWith('image/'));
     if (type) return { kind: 'picture', mime: type, bytes: new Uint8Array(await (await it.getType(type)).arrayBuffer()) };

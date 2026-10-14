@@ -11,6 +11,9 @@ import { kids, descendants } from './xml';
 import { styleFromFace, isSymbolFont, fromSymbolFont } from '../richtext';
 import { dataUrl, fromDataUrl, imageSize } from '../render/images';
 import { emfToSvg } from '../render/emf-read';
+import { TABLE_TAG, TABLE_PART_TAG, applyTableTag, gridOf, linesFromBorders, parseTableTag, type ReadCell } from './cdxml-table';
+import { layoutTable, NOTE_SCALE } from '../table';
+import { arialWidth } from '../text-metrics';
 
 export interface ReadStats {
   atoms: number;
@@ -22,6 +25,9 @@ export interface ReadStats {
   parseMs: number;
   buildMs: number;
 }
+
+/** The captions grouped with a table: its title, footnotes, and the text of joined cells by "row column". */
+interface TableParts { title?: Element; notes?: Element; cells?: [string, Element][] }
 
 const num = (el: Element, name: string, def = 0): number => {
   const v = el.getAttribute(name);
@@ -264,8 +270,17 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   };
 
   const readCaption = (t: Element) => {
+    const c = captionOf(t);
+    if (!c) return;
+    const cap = doc.addCaption({ id: idFor(t), ...c });
+    from('c', cap.id, t);
+    stats.captions++;
+  };
+
+  /** A caption's text and layout as read from its element (null for an empty or hidden one). */
+  const captionOf = (t: Element): Omit<Caption, 'id'> | null => {
     const runs = runsOf(t, true);
-    if (!runs.length || t.getAttribute('Visible') === 'no') return;
+    if (!runs.length || t.getAttribute('Visible') === 'no') return null;
     const [px, py] = pts(t.getAttribute('p'));
     const bb = pts(t.getAttribute('BoundingBox'));
     const j = t.getAttribute('Justification') ?? t.getAttribute('CaptionJustification');
@@ -297,9 +312,119 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     if (wrap !== undefined) extra.wrap = wrap;
     if (back.paras) extra.paras = back.paras;
     if (back.lineSpacing) { extra.lineSpacing = back.lineSpacing; lineHeight = undefined; }
-    const cap = doc.addCaption({ id: idFor(t), x, y: py, runs: back.runs, justify, width, lineHeight, ...extra });
-    from('c', cap.id, t);
-    stats.captions++;
+    return { x, y: py, runs: back.runs, justify, width, lineHeight, ...extra };
+  };
+
+  /**
+   * A ChemDraw table: its cells' text, column widths and rules, with what this program tagged
+   * on it (heading rows, alignment, joined cells), and its title and footnotes when they are
+   * grouped with it. `outer` is the group holding them, which stands for the table when saving.
+   */
+  const readTable = (tbl: Element, outer: Element | null, parts: TableParts) => {
+    const read: ReadCell[] = [];
+    /** Add a text's runs to a cell (after any it has, on a new line). */
+    const addText = (cell: ReadCell['cell'], t: Element) => {
+      const c = captionOf(t);
+      if (!c) return;
+      if (cell.runs.length) cell.runs.push({ text: '\n' });
+      cell.runs.push(...c.runs);
+      if (c.paras) cell.paras = c.paras;
+      // text lined up on purpose keeps it; ChemDraw's own text sits where it was clicked, so
+      // it takes its column's alignment here
+      if (t.getAttribute('Justification')) cell.align = c.justify;
+    };
+    for (const pg of kids(tbl)) {
+      if (pg.nodeName !== 'page') continue;
+      const bb = pts(pg.getAttribute('BoundingBox') ?? pg.getAttribute('BoundsInParent'));
+      if (bb.length < 4) continue;
+      const [x1, y1, x2, y2] = [Math.min(bb[0], bb[2]), Math.min(bb[1], bb[3]), Math.max(bb[0], bb[2]), Math.max(bb[1], bb[3])];
+      // ChemDraw leaves out a border as wide as the drawing's lines (and keeps the ones it hides, at 0)
+      const borders = { left: st.lineWidth, top: st.lineWidth, bottom: st.lineWidth, right: st.lineWidth };
+      const cell: ReadCell['cell'] = { runs: [] };
+      for (const ch of kids(pg)) {
+        if (ch.nodeName === 'border') {
+          const side = ch.getAttribute('Side') as keyof typeof borders | null;
+          if (side && side in borders) borders[side] = num(ch, 'LineWidth', st.lineWidth);
+        } else if (ch.nodeName === 't') addText(cell, ch);
+        else if (ch.nodeName === 'fragment') {
+          // ChemDraw turns text it can read as chemistry (Pd(OAc)2, THF) into a label; its text stays
+          const label = labelText(ch);
+          if (label) addText(cell, label);
+          else skip('structure in a table cell');
+        } else if (ch.nodeName !== 'objecttag') skip(`${ch.nodeName} in a table cell`);
+      }
+      read.push({ x1, y1, x2, y2, cell, borders });
+    }
+    const grid = gridOf(read);
+    if (!grid) { skip('empty table'); return; }
+    // the text of joined cells, kept beside the table
+    for (const [key, t] of parts.cells ?? []) {
+      const [r, c] = key.split(' ').map(Number);
+      const at = grid.rows[r]?.[c];
+      if (at) addText(at.cell, t);
+    }
+    // the size most of the text is set in becomes the table's own; runs keep any other size
+    const sizes = new Map<number, number>();
+    for (const row of grid.rows) for (const c of row) for (const r of c.cell.runs) if (r.size !== undefined && r.text.trim()) sizes.set(r.size, (sizes.get(r.size) ?? 0) + r.text.length);
+    const common = [...sizes].sort((a, b) => b[1] - a[1])[0]?.[0] ?? st.captionSize;
+    const plain = (runs: TextRun[], size: number) => runs.map((r) => { if (r.size !== size) return r; const { size: _, ...rest } = r; return rest; });
+    let table: NonNullable<Shape['table']> = {
+      cols: grid.cols,
+      rows: grid.rows.map((row) => row.map((c) => {
+        const cell = { ...c.cell, runs: plain(c.cell.runs, common) };
+        if (!cell.paras) delete cell.paras;
+        return cell;
+      })),
+      head: 0,
+      lines: 'acs',
+    };
+    if (common !== st.captionSize) table.size = common;
+    const tagEl = kids(tbl).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === TABLE_TAG);
+    const tag = parseTableTag(tagEl?.getAttribute('Value') ?? null);
+    table = applyTableTag(table, tag, linesFromBorders(grid.rows.map((row) => row.map((c) => c.borders))));
+    // with the tag, cells line up as their columns do unless they were set on their own
+    if (tag) table.rows = table.rows.map((row, r) => row.map((cell, c) => {
+      const own = tag.cellAlign?.some(([rr, cc]) => rr === r && cc === c);
+      if (own || !cell.align) return cell;
+      const { align: _, ...rest } = cell;
+      return rest;
+    }));
+    const partRuns = (el: Element | undefined, size: number) => {
+      const c = el ? captionOf(el) : null;
+      return c ? plain(c.runs, size) : undefined;
+    };
+    const title = partRuns(parts.title, table.size ?? st.captionSize);
+    const notes = partRuns(parts.notes, (table.size ?? st.captionSize) * NOTE_SCALE);
+    if (title?.length) table.title = title;
+    if (notes?.length) table.notes = notes;
+    // the table's corner: its first cell, less the room its title takes
+    const lay = layoutTable(table, st.captionSize, (t, size, _f, style) => arialWidth(t, size, /bold/.test(style)));
+    const x1 = grid.rows[0][0].x1, y1 = grid.rows[0][0].y1 - lay.ys[0];
+    const sh = doc.addShape({ id: idFor(outer ?? tbl), kind: 'table', x1, y1, x2: x1 + lay.width, y2: y1 + lay.height, table, z: tbl.hasAttribute('Z') ? num(tbl, 'Z') : undefined });
+    from('s', sh.id, outer ?? tbl);
+    stats.shapes++;
+  };
+
+  /** A group made of a table and its tagged title, footnotes and joined cells' text. */
+  const tableGroup = (g: Element): ({ table: Element } & TableParts) | null => {
+    let table: Element | null = null;
+    const parts: TableParts = {};
+    for (const ch of kids(g)) {
+      if (ch.nodeName === 'table' && !table) { table = ch; continue; }
+      const part = ch.nodeName === 't' ? kids(ch).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === TABLE_PART_TAG)?.getAttribute('Value') : null;
+      if (part === 'title' || part === 'notes') { parts[part] = ch; continue; }
+      const cell = part ? /^cell (\d+) (\d+)$/.exec(part) : null;
+      if (cell) { (parts.cells ??= []).push([`${cell[1]} ${cell[2]}`, ch]); continue; }
+      if (ch.nodeName !== 'objecttag') return null;
+    }
+    return table ? { table, ...parts } : null;
+  };
+
+  /** The text of a label ChemDraw made from a cell's text: a fragment of one labelled node. */
+  const labelText = (frag: Element): Element | null => {
+    const nodes = kids(frag).filter((k) => k.nodeName === 'n');
+    if (nodes.length !== 1 || kids(frag).some((k) => k.nodeName === 'b')) return null;
+    return kids(nodes[0]).find((k) => k.nodeName === 't') ?? null;
   };
 
   const headOf = (v: string | null): Arrow['headStyle'] => (v === 'Full' ? 'full' : v === 'HalfLeft' ? 'halfLeft' : v === 'HalfRight' ? 'halfRight' : 'none');
@@ -418,7 +543,14 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   const walk = (el: Element) => {
     for (const ch of kids(el)) {
       switch (ch.nodeName) {
-        case 'page': case 'group': case 'altgroup': walk(ch); break;
+        case 'group': {
+          const tg = tableGroup(ch);
+          if (tg) readTable(tg.table, ch, tg);
+          else walk(ch);
+          break;
+        }
+        case 'table': readTable(ch, null, {}); break;
+        case 'page': case 'altgroup': walk(ch); break;
         case 'fragment': readFragment(ch); break;
         case 't': readCaption(ch); break;
         case 'arrow': readArrow(ch); break;

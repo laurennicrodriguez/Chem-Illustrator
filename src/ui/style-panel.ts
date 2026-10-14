@@ -10,6 +10,21 @@ import { Selection } from '../editor/editor';
 import { DEG } from '../geom';
 import { isCircle, cropTo } from '../objects';
 import { nextNumber } from '../chem/sprouts';
+import type { TableData } from '../model';
+import { deleteColumn, deleteRow, fitColumns, insertColumn, insertRow, setColumnAlign, setColumnWidth, setSpan, spanOf, type TablePart } from '../table';
+import type { Measure } from '../text/layout';
+
+/** What the table controls need from the editor. */
+export interface TableHooks {
+  /** The cell (or title or footnotes) last clicked or typed into. */
+  part(): { id: number; part: TablePart } | null;
+  setPart(p: { id: number; part: TablePart } | null): void;
+  /** Change a table, keeping its size in step with its text. */
+  update(id: number, t: TableData): void;
+  /** Start typing into a part of a table. */
+  edit(id: number, part: TablePart): void;
+  measure: Measure;
+}
 
 type Opt<T> = [T, string];
 
@@ -19,6 +34,7 @@ const LINES: Opt<Arrow['line']>[] = [['solid', 'Solid'], ['dashed', 'Dashed'], [
 const SHAFTS: Opt<string>[] = [['one', 'One line'], ['equilibrium', 'Equilibrium (two half arrows)'], ['retro', 'Retrosynthetic (double line)']];
 const BRACKETS: Opt<NonNullable<Shape['bracket']>>[] = [['square', 'Square [ ]'], ['round', 'Round ( )'], ['curly', 'Curly { }']];
 const JUSTIFY: Opt<Caption['justify']>[] = [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']];
+const TABLE_LINES: Opt<TableData['lines']>[] = [['acs', 'ACS style (rules above and below the headings, and at the end)'], ['grid', 'Every cell boxed'], ['none', 'None']];
 
 const BOND_ORDERS: Opt<string>[] = [['1', 'Single'], ['2', 'Double'], ['3', 'Triple'], ['1.5', 'Aromatic'], ['4', 'Quadruple']];
 const BOND_STYLES: Opt<Bond['display']>[] = [['solid', 'Plain'], ['wedge', 'Wedge'], ['hashWedge', 'Hashed wedge'], ['hash', 'Hashed'], ['bold', 'Bold'], ['dash', 'Dashed'], ['wavy', 'Wavy']];
@@ -35,20 +51,24 @@ export class StylePanel {
   cropWithMouse: (shapeId: number) => void = () => {};
   /** A picture's width and height change together. */
   private keepProportions = true;
+  /** Table commands (set up by the app). */
+  tables: TableHooks | null = null;
 
   constructor(private section: HTMLElement, private body: HTMLElement, private doc: Doc, private sel: () => Selection, private changed: () => void) {}
 
   /** Redraw the panel for the current selection, keeping the focus on the same control. */
   refresh(): void {
     const s = this.sel();
-    const key = `${this.doc.version}|${this.doc.stereo?.version}|${[...s.arrows].join(',')}|${[...s.shapes].join(',')}|${[...s.captions].join(',')}|${[...s.atoms].join(',')}|${[...s.bonds].join(',')}`;
+    const tp = this.tables?.part();
+    const key = `${this.doc.version}|${this.doc.stereo?.version}|${tp ? JSON.stringify(tp) : ''}|${[...s.arrows].join(',')}|${[...s.shapes].join(',')}|${[...s.captions].join(',')}|${[...s.atoms].join(',')}|${[...s.bonds].join(',')}`;
     if (key === this.key) return;
     this.key = key;
     const focused = this.body.contains(document.activeElement) ? document.activeElement!.closest('.style-row')?.textContent : null;
     this.body.textContent = '';
     const arrows = [...s.arrows].map((id) => this.doc.arrows.get(id)).filter((x): x is Arrow => !!x);
     const all = [...s.shapes].map((id) => this.doc.shapes.get(id)).filter((x): x is Shape => !!x && !x.picture);
-    const shapes = all.filter((x) => x.kind !== 'picture'), pictures = all.filter((x) => x.kind === 'picture');
+    const shapes = all.filter((x) => x.kind !== 'picture' && x.kind !== 'table'), pictures = all.filter((x) => x.kind === 'picture');
+    const tables = all.filter((x) => x.kind === 'table' && x.table);
     const caps = [...s.captions].map((id) => this.doc.captions.get(id)).filter((x): x is Caption => !!x);
     // stereocentres and E/Z double bonds among the selected atoms and bonds
     const info = this.doc.stereo;
@@ -57,12 +77,13 @@ export class StylePanel {
     // one atom or one bond on its own (as after / or ? over it)
     const atom = s.atoms.size === 1 && !s.bonds.size ? this.doc.atoms.get([...s.atoms][0]) : undefined;
     const bond = s.bonds.size === 1 && s.atoms.size <= 2 ? this.doc.bonds.get([...s.bonds][0]) : undefined;
-    this.section.hidden = !arrows.length && !shapes.length && !pictures.length && !caps.length && !centres.length && !dbls.length && !atom && !bond;
+    this.section.hidden = !arrows.length && !shapes.length && !pictures.length && !tables.length && !caps.length && !centres.length && !dbls.length && !atom && !bond;
     if (atom) this.atomControls(atom);
     if (bond) this.bondControls(bond);
     if (arrows.length) this.arrowControls(arrows);
     if (shapes.length) this.shapeControls(shapes);
     if (pictures.length) this.pictureControls(pictures);
+    if (tables.length) this.tableControls(tables[0]);
     if (caps.length) this.captionControls(caps);
     if (centres.length || dbls.length) this.stereoControls(centres, dbls);
     if (focused) [...this.body.querySelectorAll<HTMLElement>('.style-row')].find((r) => r.textContent === focused)?.querySelector<HTMLElement>('select, input')?.focus();
@@ -107,7 +128,7 @@ export class StylePanel {
     const set = (label: string, ok: (x: Shape) => boolean, patch: (x: Shape) => Partial<Shape>) =>
       this.edit(label, () => { for (const x of shapes) if (ok(x)) this.doc.updateShape(x.id, patch(x)); });
     const any = (f: (x: Shape) => boolean) => shapes.find(f);
-    const names: Record<Shape['kind'], string> = { line: 'Line', rect: 'Box', oval: 'Oval', symbol: 'Symbol', bracket: 'Bracket', picture: 'Picture' };
+    const names: Record<Shape['kind'], string> = { line: 'Line', rect: 'Box', oval: 'Oval', symbol: 'Symbol', bracket: 'Bracket', picture: 'Picture', table: 'Table' };
     this.heading(shapes.length > 1 ? `${shapes.length} shapes` : isCircle(s) ? 'Circle' : names[s.kind]);
     const lined = (x: Shape) => x.kind !== 'symbol';
     const l = any(lined);
@@ -176,6 +197,71 @@ export class StylePanel {
       return { x2: bx.x1 + x.px.w * 0.75 * (1 - cc.l - cc.r), y2: bx.y1 + x.px.h * 0.75 * (1 - cc.t - cc.b) };
     }));
     this.body.appendChild(buttons);
+  }
+
+  // ------------------------------------------------------------------ tables
+
+  private tableControls(s: Shape): void {
+    const hooks = this.tables;
+    const t = s.table!;
+    if (!hooks) return;
+    const set = (label: string, next: TableData, part?: TablePart | null) => this.edit(label, () => {
+      hooks.update(s.id, next);
+      if (part !== undefined) hooks.setPart(part ? { id: s.id, part } : null);
+    });
+    const cur = hooks.part();
+    const part = cur?.id === s.id ? cur.part : null;
+    const cell = part && typeof part !== 'string' && t.rows[part.r] && part.c < t.cols.length ? part : null;
+    this.heading('Table');
+    this.note(cell ? `Row ${cell.r + 1}, column ${cell.c + 1}${cell.r < t.head ? ' (a heading)' : ''}. Double-click a cell to type; Tab goes on to the next one.`
+      : 'Click a cell to choose its row and column; double-click it to type.');
+    const buttons = (list: [string, string, (() => void) | null][]) => {
+      const box = document.createElement('div');
+      box.className = 'style-buttons';
+      for (const [text, title, on] of list) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = text;
+        btn.title = title;
+        btn.disabled = !on;
+        if (on) btn.addEventListener('click', on);
+        box.append(btn);
+      }
+      this.body.appendChild(box);
+    };
+    const r = cell?.r ?? t.rows.length - 1, c = cell?.c ?? t.cols.length - 1;
+    buttons([
+      ['Row above', 'Put a new row above this one', cell ? () => set('Add table row', insertRow(t, r), { r: r + 1, c }) : null],
+      ['Row below', 'Put a new row below this one', () => set('Add table row', insertRow(t, r + 1), { r: r + 1, c })],
+      ['Delete row', 'Take this row out', cell && t.rows.length > 1 ? () => set('Delete table row', deleteRow(t, r), { r: Math.min(r, t.rows.length - 2), c }) : null],
+    ]);
+    buttons([
+      ['Column left', 'Put a new column to the left of this one', cell ? () => set('Add table column', insertColumn(t, c), { r, c: c + 1 }) : null],
+      ['Column right', 'Put a new column to the right of this one', () => set('Add table column', insertColumn(t, c + 1), { r, c: c + 1 })],
+      ['Delete column', 'Take this column out', cell && t.cols.length > 1 ? () => set('Delete table column', deleteColumn(t, c), { r, c: Math.min(c, t.cols.length - 2) }) : null],
+    ]);
+    this.number('Heading rows', t.head, 1, 0, t.rows.length, (v) => set('Table headings', { ...t, head: Math.round(v) }),
+      'How many rows at the top are headings; in the ACS style a rule goes under them.');
+    this.select('Lines', TABLE_LINES, t.lines, (v) => set('Table lines', { ...t, lines: v }));
+    if (cell) {
+      const colAlign = t.align?.[cell.c] ?? (cell.c === 0 ? 'left' : 'center');
+      this.select('Column lines up', JUSTIFY, colAlign === 'justify' ? 'left' : colAlign, (v) => set('Column alignment', setColumnAlign(t, cell.c, v)));
+      this.number('Column width (pt)', round(t.cols[cell.c], 10), 1, 4, 2000, (v) => set('Column width', setColumnWidth(t, cell.c, v)),
+        'You can also drag the handle at the right of the text box while typing in a cell.');
+      this.number('Cell spans (columns)', spanOf(t, cell.r, cell.c), 1, 1, t.cols.length - cell.c, (v) => set('Join table cells', setSpan(t, cell.r, cell.c, v)),
+        'Join this cell with the ones to its right, for a heading over several columns.');
+    }
+    const size = t.size ?? this.doc.style.captionSize;
+    this.number('Text size (pt)', round(size, 10), 0.5, 1, 200, (v) => set('Table text size', resizeTableText(t, v)),
+      'Changes all the table’s text; the footnotes are set a little smaller. Double-click a cell to change part of it.');
+    this.color('Line colour', s.color, (v) => this.edit('Table line colour', () => this.doc.updateShape(s.id, { color: v })));
+    buttons([
+      [t.title ? 'Edit title' : 'Add title', 'The title above the table, such as “Table 1. Optimization of the Reaction Conditions”', () => hooks.edit(s.id, 'title')],
+      [t.notes ? 'Edit footnotes' : 'Add footnotes', 'Notes under the table, such as “a Isolated yield.”', () => hooks.edit(s.id, 'notes')],
+    ]);
+    buttons([
+      ['Fit columns to text', 'Make each column as wide as its longest line', () => set('Fit table columns', fitColumns(t, hooks.measure, this.doc.style.captionSize))],
+    ]);
   }
 
   // ------------------------------------------------------------------ captions
@@ -348,3 +434,17 @@ function pictureType(src: string | undefined): string {
   const t = m?.[1] ?? '';
   return ({ png: 'PNG', jpeg: 'JPEG', gif: 'GIF', 'svg+xml': 'SVG (sharp at any size)', bmp: 'Bitmap', 'x-emf': 'Windows metafile (sharp at any size)', tiff: 'TIFF', webp: 'WebP' } as Record<string, string>)[t] ?? 'Picture';
 }
+
+/** A table with all its text at one size (runs that set their own size take the new one too). */
+function resizeTableText(t: TableData, size: number): TableData {
+  const plain = (runs: TextRunList) => runs.map((r) => { if (r.size === undefined) return r; const { size: _, ...rest } = r; return rest; });
+  return {
+    ...t,
+    size,
+    rows: t.rows.map((row) => row.map((cell) => ({ ...cell, runs: plain(cell.runs) }))),
+    title: t.title && plain(t.title),
+    notes: t.notes && plain(t.notes),
+  };
+}
+
+type TextRunList = TableData['rows'][number][number]['runs'];

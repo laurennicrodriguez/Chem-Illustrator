@@ -27,6 +27,14 @@ export interface EditorHost {
   defaultSize: number;
   /** Ask for the top layer to be drawn again. */
   redraw(): void;
+  /** Keys the place being typed into handles itself (Tab moves between table cells); true when it did. */
+  keys?(e: KeyboardEvent): boolean;
+  /** The text has changed (a table's row grows with the text typed into a cell). */
+  typed?(t: RichText): void;
+  /** What the keys do, shown at the end of the bar (Tab moves between table cells). */
+  hint?: string;
+  /** An area the bar keeps clear of, besides the text (the whole table, for a cell). */
+  around?(): Rect;
 }
 
 /** A finished caption: the text and where it now starts. */
@@ -336,7 +344,9 @@ export class CaptionEditor {
   /** Keep the bar and the hidden text field by the text when the drawing is scrolled or zoomed. */
   place(): void {
     if (this.closed) return;
-    const b = this.box();
+    let b = this.box();
+    const a = this.h.around?.();
+    if (a) b = { x1: Math.min(b.x1, a.x1), y1: Math.min(b.y1, a.y1), x2: Math.max(b.x2, a.x2), y2: Math.max(b.y2, a.y2) };
     const tl = this.h.toScreen({ x: b.x1, y: b.y1 }), br = this.h.toScreen({ x: b.x2, y: b.y2 });
     // the hidden field sits at the caret, so an input method's word list shows there
     const c = this.ed.caret();
@@ -381,6 +391,7 @@ export class CaptionEditor {
     if (this.closed) return;
     this.caretOn = true;
     if (kind === 'text' || !this.ed.composing) this.syncInput();
+    if (kind === 'text') this.h.typed?.(this.ed.t);
     this.updateBar();
     this.place();
     this.h.redraw();
@@ -402,6 +413,7 @@ export class CaptionEditor {
     if (e.isComposing || e.keyCode === 229) return;
     if (this.menu && e.key === 'Escape') { e.preventDefault(); this.closeMenu(); return; }
     this.closeMenu();
+    if (this.h.keys?.(e)) { e.preventDefault(); return; }
     const ed = this.ed;
     const ctrl = isMac ? e.metaKey : e.ctrlKey;
     const run = (f: () => void) => { e.preventDefault(); f(); };
@@ -626,7 +638,7 @@ export class CaptionEditor {
 
     const hint = d.createElement('span');
     hint.className = 'cb-hint';
-    hint.textContent = 'Enter: new paragraph · Tab: indent · Esc: done';
+    hint.textContent = this.h.hint ?? 'Enter: new paragraph · Tab: indent · Esc: done';
     this.bar.appendChild(hint);
   }
 
