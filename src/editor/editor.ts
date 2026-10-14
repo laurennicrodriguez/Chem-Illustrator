@@ -36,6 +36,7 @@ import {
   arrowPoints, bracketsAround, bracketLip, unionRect,
 } from '../objects';
 import { isEmptyText } from '../deck/deck';
+import { crossedBonds, lineAcross } from '../chem/fragments';
 import { imageFor } from '../render/images';
 
 export type Tool =
@@ -51,7 +52,9 @@ export type Tool =
   | { kind: 'template'; id: string }
   | { kind: 'symbol'; symbol: SymbolKind }
   /** Puts the element picked in the periodic table on atoms (or new atoms in empty space). */
-  | { kind: 'element' };
+  | { kind: 'element' }
+  /** Mass fragmentation: a line dragged across bonds (or a click on one) breaks them, and each piece gets its formula and mass. */
+  | { kind: 'fragment' };
 
 /** Marks put on atoms for mechanisms: a lone pair, a radical's dot, a circled charge, or δ+ / δ−. */
 export type SymbolKind = 'LonePair' | 'Electron' | 'CirclePlus' | 'CircleMinus' | 'DeltaPlus' | 'DeltaMinus';
@@ -69,6 +72,7 @@ export const TOOLS: Record<string, Tool> = {
   select: { kind: 'select' },
   eraser: { kind: 'eraser' },
   element: { kind: 'element' },
+  fragment: { kind: 'fragment' },
   'bond-single': { kind: 'bond', order: 1, display: 'solid' },
   'bond-double': { kind: 'bond', order: 2, display: 'solid' },
   'bond-triple': { kind: 'bond', order: 3, display: 'solid' },
@@ -211,6 +215,8 @@ export class Editor {
   onChange: () => void = () => {};
   onFrame: () => void = () => {};
   onToolChange: (name: string) => void = () => {};
+  /** The fragmentation tool drew a line from p to q across these bonds (the app works out the masses). */
+  onFragment: (p: Vec, q: Vec, bonds: number[]) => void = () => {};
   /** The atom most recently drawn or changed (its structure is analysed when nothing is selected). */
   lastEdited: number | null = null;
   private labelInput: HTMLInputElement | null = null;
@@ -541,6 +547,7 @@ export class Editor {
       case 'shape':
       case 'bracket':
       case 'template':
+      case 'fragment':
         return 'draw';
       case 'text':
         // dragging across empty space makes a text box that wide
@@ -684,6 +691,12 @@ export class Editor {
       case 'template': {
         doc.edit('Template', () => this.placeTemplateAt(t.id, h, p, null, d.alt));
         this.changed();
+        return;
+      }
+      case 'fragment': {
+        // clicking a bond breaks just that one
+        const line = h?.kind === 'bond' ? lineAcross(doc, h.id) : null;
+        if (line) this.onFragment(line.p, line.q, [h!.id]);
         return;
       }
       case 'text': {
@@ -951,6 +964,10 @@ export class Editor {
       if (r.y2 - r.y1 >= 4) this.addBrackets(r, t.bracket);
     } else if (t.kind === 'template') {
       doc.edit('Template', () => this.placeTemplateAt(t.id, h, d.start, p, d.alt));
+    } else if (t.kind === 'fragment') {
+      this.onFragment(d.start, p, crossedBonds(doc, d.start, p));
+      this.requestScene();
+      return;
     }
     this.changed();
   }
@@ -2528,6 +2545,19 @@ export class Editor {
     } else if (t.kind === 'shape') {
       const g = this.shapeGeometry(t, d.start, d.last, d.shift, d.alt);
       if (g) outlineShape(ctx, { id: 0, ...t.shape, ...g });
+    } else if (t.kind === 'fragment') {
+      outlineShape(ctx, { id: 0, kind: 'line', dashed: true, x1: d.start.x, y1: d.start.y, x2: d.last.x, y2: d.last.y });
+      // the bonds that will break
+      ctx.save();
+      ctx.lineWidth = Math.max(ctx.lineWidth, 3 / this.r.view.scale);
+      ctx.strokeStyle = '#e0141e';
+      ctx.beginPath();
+      for (const id of crossedBonds(doc, d.start, d.last)) {
+        const b = doc.bonds.get(id)!, a1 = doc.atoms.get(b.a1)!, a2 = doc.atoms.get(b.a2)!;
+        ctx.moveTo(a1.x, a1.y); ctx.lineTo(a2.x, a2.y);
+      }
+      ctx.stroke();
+      ctx.restore();
     } else if (t.kind === 'bracket') {
       const r = { x1: Math.min(d.start.x, d.last.x), y1: Math.min(d.start.y, d.last.y), x2: Math.max(d.start.x, d.last.x), y2: Math.max(d.start.y, d.last.y) };
       for (const b of bracketsAround(r, t.bracket)) outlineShape(ctx, { id: 0, ...b });    } else if (t.kind === 'template') {

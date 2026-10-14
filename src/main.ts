@@ -12,6 +12,7 @@ import { ChemClient } from './chem/client';
 import type { FragmentResult } from './worker/chem-worker';
 import { COMMON_ADDUCTS } from './chem/hrms';
 import { analysisHtml, analysisRuns } from './ui/analysis-panel';
+import { captionPlaces, fragmentRuns } from './chem/fragments';
 import { toMolfile, addMolfile } from './chem/molfile';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -233,6 +234,7 @@ const TOOL_GROUPS: ToolbarItem[][] = [
   [
     { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption' },
     { name: 'element', title: 'Periodic table: pick an element, then click atoms to change them' },
+    { name: 'fragment', title: 'Mass fragmentation: drag a line across bonds (or click a bond) to break them and label each piece with its formula and mass' },
     ARROWS,
     SYMBOLS,
     SHAPES,
@@ -272,6 +274,7 @@ const HINTS: Record<string, string> = {
   chain: 'Drag from empty space or an atom; the number shows how many bonds. Click to type how many atoms; Alt+click repeats the last number.',
   text: 'Click an atom to type a label (OMe, CO2Et, NHBoc…), or click empty space for a caption.',
   element: 'Click atoms to make them the element picked in the periodic table, or empty space to add one.',
+  fragment: 'Drag a line across the bonds to break (or click one bond). Each piece gets a caption with its formula and exact mass, which you can edit.',
 };
 const ARROW_HINT = 'Drag to draw an arrow (Alt: any angle); click for a standard one. Drag the ends to move them, the middle to bend it.';
 const CURVE_HINT = 'Drag from where the electrons start to where they go; swing out to one side to bend that way. Drag the middle dot to change the curve.';
@@ -2152,6 +2155,46 @@ function stressTest(n: number): void {
   editor.frame(true);
   lastOpen = `Stress test: built ${n} molecules (${doc.atoms.size} atoms) in ${built.toFixed(0)} ms, first paint ${renderer.lastSceneMs.toFixed(0)} ms`;
   updatePanels();
+}
+
+// ---------------------------------------------------------------- mass fragmentation
+
+editor.onFragment = (p, q, bondIds) => { void fragmentAt(p, q, bondIds); };
+
+/** The fragmentation tool's line: break the bonds it crosses and label each piece with its formula and mass. */
+async function fragmentAt(p: { x: number; y: number }, q: { x: number; y: number }, bondIds: number[]): Promise<void> {
+  if (!bondIds.length) { flash('Draw the line across one or more bonds to break them.'); return; }
+  if (!chem.ready) { flash('The chemistry engine is still loading.'); return; }
+  // one structure at a time: the one the first crossed bond belongs to
+  const first = doc.bonds.get(bondIds[0])!;
+  const frag = doc.fragmentOf(first.a1);
+  const bonds = bondIds.map((id) => doc.bonds.get(id)!).filter((b) => frag.has(b.a1));
+  const ex = toMolfile(doc, frag);
+  const index = new Map<number, number>();
+  ex.map.forEach((id, i) => { if (id >= 0) index.set(id, i); });
+  const cuts = bonds.map((b) => [index.get(b.a1), index.get(b.a2)] as [number | undefined, number | undefined])
+    .filter((c): c is [number, number] => c[0] !== undefined && c[1] !== undefined);
+  const res = await chem.fragments(ex.molblock, cuts).catch((e) => ({ error: String(e) }));
+  if ('error' in res) { flash(res.error); return; }
+  const size = doc.style.captionSize;
+  const font = doc.style.captionFont;
+  const pieces = res.map((r) => {
+    const atoms = r.atoms.map((i) => doc.atoms.get(ex.map[i])).filter((a): a is Atom => !!a);
+    const c = atoms.length ? { x: atoms.reduce((s, a) => s + a.x, 0) / atoms.length, y: atoms.reduce((s, a) => s + a.y, 0) / atoms.length } : p;
+    const runs = fragmentRuns(r.formula, r.exact);
+    const w = Math.max(measureText(r.formula, size, font), measureText(r.exact.toFixed(4), size, font));
+    return { r, c, runs, w };
+  });
+  const all = [...frag].map((id) => doc.atoms.get(id)!);
+  const box = { x1: Math.min(...all.map((a) => a.x)) - size * 0.5, y1: Math.min(...all.map((a) => a.y)) - size * 0.5, x2: Math.max(...all.map((a) => a.x)) + size * 0.5, y2: Math.max(...all.map((a) => a.y)) + size * 0.5 };
+  const places = captionPlaces(p, q, pieces.map((x) => x.c), pieces.map((x) => x.w), size, box);
+  doc.edit('Mass fragmentation', () => {
+    doc.addShape({ kind: 'line', dashed: true, x1: p.x, y1: p.y, x2: q.x, y2: q.y });
+    pieces.forEach((x, i) => doc.addCaption({ x: places[i].x, y: places[i].y, runs: x.runs, justify: 'left' }));
+  });
+  editor.changed();
+  const ring = res.length === 1 ? ' The bonds broken are in a ring, so the structure stays in one piece.' : '';
+  flash(`Broke ${cuts.length} bond${cuts.length === 1 ? '' : 's'}: ${res.map((r) => `${r.formula} ${r.exact.toFixed(4)}`).join(', ')}.${ring}`);
 }
 
 // ---------------------------------------------------------------- analysis (background chemistry)
