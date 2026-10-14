@@ -142,6 +142,12 @@ button:hover { border-color: var(--accent); }
 .menu button:hover, .menu button:focus-visible { background: var(--accent-soft); outline: none; }
 .menu kbd { font: 11px var(--mono-font); color: var(--muted); }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; width: auto; }
+.recent-files { display: grid; }
+.recent-files[hidden] { display: none; }
+.menu-head { padding: 4px 8px 2px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.recent-files button { max-width: 360px; }
+.recent-files button > span { overflow: hidden; text-overflow: ellipsis; }
+.recent-files small.muted { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
 button:focus-visible, select:focus-visible, #overlay:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 #side-content td { font-family: var(--mono-font); font-size: 12px; }
 @media (prefers-reduced-motion: reduce) { #flash { transition: none; } }

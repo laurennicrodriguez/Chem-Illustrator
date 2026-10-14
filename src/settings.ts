@@ -88,6 +88,8 @@ export interface Settings {
   updateCheck: boolean;
   /** A version the user chose Skip This Version for, so starting the app doesn't offer it again. */
   skipVersion: string | null;
+  /** Files and workspaces opened or saved lately, newest first (File menu, desktop app). */
+  recentFiles: string[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -98,14 +100,14 @@ export const DEFAULT_SETTINGS: Settings = {
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
   guides: { drawing: false, slides: true, design: true },
   docPins: [],
-  updateCheck: true, skipVersion: null,
+  updateCheck: true, skipVersion: null, recentFiles: [],
 };
 
 const STORAGE_KEY = 'chem-illustrator.settings';
 
 /** Read settings saved as text, keeping only what makes sense. */
 export function parseSettings(text: string | null | undefined): Settings {
-  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), myStyles: [], modeStyles: {}, darkPalettes: [], guides: { ...DEFAULT_SETTINGS.guides }, docPins: [] };
+  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), myStyles: [], modeStyles: {}, darkPalettes: [], guides: { ...DEFAULT_SETTINGS.guides }, docPins: [], recentFiles: [] };
   if (!text) return s;
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { return s; }
@@ -138,6 +140,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (r.methylStyle === 'Me' || r.methylStyle === 'CH3') s.methylStyle = r.methylStyle;
   if (r.axialStyle === 'RaSa' || r.axialStyle === 'PM') s.axialStyle = r.axialStyle;
   if (typeof r.slideTemplate === 'string' || r.slideTemplate === null) s.slideTemplate = r.slideTemplate as string | null;
+  if (Array.isArray(r.recentFiles)) s.recentFiles = r.recentFiles.filter((p): p is string => typeof p === 'string' && p.trim() !== '').slice(0, 10);
   if (typeof r.skipVersion === 'string' || r.skipVersion === null) s.skipVersion = r.skipVersion as string | null;
   if (Array.isArray(r.dictionary)) s.dictionary = r.dictionary.filter((w): w is string => typeof w === 'string' && w.trim() !== '').map((w) => w.trim());
   return s;

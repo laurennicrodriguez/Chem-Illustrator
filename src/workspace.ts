@@ -75,6 +75,8 @@ export interface WorkspaceHooks {
   };
   /** The drawing style a new tab of this kind starts with, when you have chosen one (File > Drawing Style). */
   newStyle?(mode: Mode): DocStyle | null;
+  /** A file or workspace was opened from or saved to this path (File > Recent). */
+  remember?(path: string): void;
   /** The master new slide decks start with (your template), or null for the plain one. */
   newMaster?(m: Master): Master | null;
 }
@@ -92,6 +94,8 @@ export class Workspace {
   pane: Tab | null = null;
   /** The workspace file last saved or opened, so File > Save Workspace saves there again. */
   workspacePath: string | null = null;
+  /** While a workspace saves or opens: its files don't each go on the recent list (the workspace does). */
+  private quiet = false;
   private nextId = 1;
 
   constructor(public host: Doc, private hooks: WorkspaceHooks) {
@@ -310,11 +314,13 @@ export class Workspace {
     }
     const zip = bytes[0] === 0x50 && bytes[1] === 0x4b;
     try {
-      if (ext === 'xlsx' || (zip && zipHas(bytes, 'xl/workbook.xml')) || ext === 'sdf' || ext === 'sd' || TABLE_TEXT_EXTENSIONS.includes(ext)) return await this.openSheet(bytes, name, ref);
-      if (ext === 'docx' || (zip && zipHas(bytes, 'word/document.xml'))) return await this.openDocument(bytes, name, ref);
-      if (ext === 'pptx' || zip) return this.openSlides(bytes, name, ref);
-      const text = isCdx(bytes) ? cdxToCdxml(bytes) : new TextDecoder().decode(bytes);
-      return this.openDrawing(text, name, ref);
+      let ok: boolean;
+      if (ext === 'xlsx' || (zip && zipHas(bytes, 'xl/workbook.xml')) || ext === 'sdf' || ext === 'sd' || TABLE_TEXT_EXTENSIONS.includes(ext)) ok = await this.openSheet(bytes, name, ref);
+      else if (ext === 'docx' || (zip && zipHas(bytes, 'word/document.xml'))) ok = await this.openDocument(bytes, name, ref);
+      else if (ext === 'pptx' || zip) ok = this.openSlides(bytes, name, ref);
+      else ok = this.openDrawing(isCdx(bytes) ? cdxToCdxml(bytes) : new TextDecoder().decode(bytes), name, ref);
+      if (ok && ref.kind === 'path' && !this.quiet) this.hooks.remember?.(ref.path);
+      return ok;
     } catch (e) {
       await showError(`Could not open ${name}: ${e instanceof Error ? e.message : String(e)}`);
       return false;
@@ -500,6 +506,7 @@ export class Workspace {
     tab.ref = ref;
     tab.name = name;
     tab.dirty = false;
+    if (ref.kind === 'path' && !this.quiet) this.hooks.remember?.(ref.path);
     if (tab === this.active || tab === this.pane) tab.seen = this.host.version;
     this.hooks.changed();
     this.hooks.flash((ref.kind === 'none' ? `Downloaded ${name}` : `Saved ${name}`) + note, note ? 8000 : 3500);
@@ -520,6 +527,11 @@ export class Workspace {
    * disk are saved too. False if a file couldn't be written (the error has been shown).
    */
   async saveWorkspace(path: string, opts: { copyIn: boolean; saveChanges: boolean }): Promise<boolean> {
+    this.quiet = true;
+    try { return await this.saveWorkspaceFiles(path, opts); } finally { this.quiet = false; }
+  }
+
+  private async saveWorkspaceFiles(path: string, opts: { copyIn: boolean; saveChanges: boolean }): Promise<boolean> {
     const folder = folderOf(path);
     this.noteChange();
     const taken = new Set<string>();
@@ -553,6 +565,7 @@ export class Workspace {
       return false;
     }
     this.workspacePath = path;
+    this.hooks.remember?.(path);
     this.hooks.flash(`Saved workspace ${baseName(path)} with ${tabs.length} tab${tabs.length === 1 ? '' : 's'}.`);
     return true;
   }
@@ -562,6 +575,11 @@ export class Workspace {
    * open (a file already open just goes to its tab). Files that can't be found are named, not stopped for.
    */
   async openWorkspace(text: string, path: string): Promise<void> {
+    this.quiet = true;
+    try { await this.openWorkspaceFiles(text, path); } finally { this.quiet = false; }
+  }
+
+  private async openWorkspaceFiles(text: string, path: string): Promise<void> {
     let list;
     try {
       list = parseWorkspace(text);
@@ -599,6 +617,7 @@ export class Workspace {
       } else this.activate(show);
     }
     this.workspacePath = path;
+    this.hooks.remember?.(path);
     const n = opened.filter((t) => t).length;
     this.hooks.flash(`Opened workspace ${baseName(path)}: ${n} file${n === 1 ? '' : 's'}.` + (missing.length ? ` Not found: ${missing.join(', ')}.` : ''), missing.length ? 15000 : 4000);
   }

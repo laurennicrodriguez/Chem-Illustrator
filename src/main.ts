@@ -30,7 +30,7 @@ import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, r
 import { cdxToCdxml } from './io/cdx';
 import { writeCdxml } from './io/cdxml-write';
 import { WORKSPACE } from './io/workspace-file';
-import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, PICTURE_EXTENSIONS } from './io/files';
+import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, PICTURE_EXTENSIONS } from './io/files';
 import { Workspace, Tab } from './workspace';
 import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize } from './deck/deck';
 import { drawSlidePage, recordSlide, paintSlide, SURROUND } from './deck/slide-view';
@@ -85,6 +85,7 @@ import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
 import { UpdateUI } from './ui/update-ui';
 import { canUpdate, appVersion } from './updates';
+import { addRecent, removeRecent, recentLabel } from './recent';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
 import { NameDialog } from './ui/name-dialog';
 import { ArrangeDialog } from './ui/arrange-dialog';
@@ -1067,6 +1068,7 @@ const docRead: DocxReadDeps = {
 };
 
 const ws: Workspace = new Workspace(doc, {
+  remember: (path) => rememberFile(path),
   leave: (tab) => {
     finishTyping();
     if (tab.mode === 'sheet') sheetMode.leave();
@@ -2578,6 +2580,8 @@ for (const m of menus) {
   m.btn.addEventListener('click', () => showMenu(openMenu === m ? null : m));
   m.btn.addEventListener('pointerenter', () => { if (openMenu && openMenu !== m) showMenu(m, false); });
   m.list.addEventListener('click', (e) => {
+    const recent = (e.target as HTMLElement).closest<HTMLButtonElement>('button')?.dataset.recent;
+    if (recent !== undefined) { showMenu(null); void openRecent(recent); return; }
     const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button')?.dataset.cmd;
     if (!cmd) return;
     showMenu(null);
@@ -2943,6 +2947,57 @@ function showHelicity(on: boolean): void {
   editor.requestScene();
 }
 
+// File > Recent (desktop app): files and workspaces opened or saved lately
+let recentFiles: string[] = [];
+function rememberFile(path: string): void {
+  recentFiles = addRecent(recentFiles, path);
+  renderRecent();
+  storeSettings();
+}
+function renderRecent(): void {
+  const box = document.querySelector<HTMLElement>('#recent-files');
+  if (!box) return;
+  const items = recentFiles.map((p) => {
+    const b = document.createElement('button');
+    b.setAttribute('role', 'menuitem');
+    b.dataset.recent = p;
+    b.title = p;
+    const { name, folder } = recentLabel(p);
+    const n = document.createElement('span');
+    n.textContent = name;
+    const f = document.createElement('small');
+    f.className = 'muted';
+    f.textContent = folder;
+    b.append(n, f);
+    return b;
+  });
+  const head = document.createElement('div');
+  head.className = 'menu-head';
+  head.textContent = 'Recent';
+  const clear = document.createElement('button');
+  clear.setAttribute('role', 'menuitem');
+  clear.dataset.recent = '';
+  clear.textContent = 'Clear Recent Files';
+  box.replaceChildren(...(items.length ? [head, ...items, clear] : []));
+  box.hidden = !canUpdate || !items.length;
+}
+async function openRecent(path: string): Promise<void> {
+  finishTyping();
+  if (!path) { recentFiles = []; renderRecent(); storeSettings(); return; }
+  let bytes: Uint8Array;
+  try {
+    bytes = await readPath(path);
+  } catch {
+    // moved, renamed or deleted: said, and taken off the list
+    recentFiles = removeRecent(recentFiles, path);
+    renderRecent();
+    storeSettings();
+    flash(`${baseName(path)} isn't there any more (moved, renamed or deleted?), so it has come off the recent list.`, 8000);
+    return;
+  }
+  await ws.openBytes(bytes, baseName(path), { kind: 'path', path });
+}
+
 // Workspaces (desktop app): every open tab saved together, with a list file to open them all again
 const workspaceChoices = { copyIn: true, saveChanges: true };
 async function saveWorkspace(choosePlace: boolean): Promise<void> {
@@ -3049,6 +3104,7 @@ function storeSettings(): void {
     docPins: [...docBoxPrefs.pinned],
     updateCheck,
     skipVersion,
+    recentFiles,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -3164,6 +3220,8 @@ void loadSettings().then((s) => {
   askWholeDrawing = s.askWholeDrawing;
   updateCheck = s.updateCheck;
   skipVersion = s.skipVersion;
+  recentFiles = s.recentFiles;
+  renderRecent();
   setPalettes(s.palettes);
   toolboxState = s.toolboxes;
   ownStyles = s.myStyles;
