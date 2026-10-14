@@ -188,7 +188,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   'hide-rows': 'Hide rows', 'unhide-rows': 'Show hidden rows', 'hide-cols': 'Hide columns', 'unhide-cols': 'Show hidden columns',
   'sort-up': 'Sort smallest to largest', 'sort-down': 'Sort largest to smallest', filter: 'Filter on or off',
   'filter-structure': 'Filter by a substructure…', 'freeze-header': 'Freeze the header row on or off',
-  'property-column': 'Insert property column…', 'structure-from-name': 'Structure from name or SMILES…',
+  'property-column': 'Insert property column…', 'isotope-pattern': 'Isotope pattern…', 'structure-from-name': 'Structure from name or SMILES…',
   'draw-structure': 'Draw a structure in the cell', 'reset-calculated': 'Reset to the calculated value',
   'merge-cells': 'Merge and centre',
   // documents

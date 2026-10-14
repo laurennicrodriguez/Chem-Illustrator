@@ -19,6 +19,7 @@ import { keyOf, rowOf, colOf, colName, cellName, parseRange, quoteSheet, Range, 
 import { normalizeFormula, shiftFormula } from '../sheet/formula';
 import { readTyped, isError, CellError, Value, EXCEL_ERRORS } from '../sheet/values';
 import { PROPERTIES } from '../sheet/properties';
+import { ISOTOPE_FUNCTIONS } from '../sheet/isotopes';
 import { chemPieces } from '../sheet/cell-text';
 import { DEFAULT_COL_W, DEFAULT_ROW_H, MAX_AUTO_ROW, structureHeight } from '../sheet/layout';
 import type { Contents } from '../model';
@@ -105,7 +106,7 @@ const BUILTIN_FORMATS: Record<number, string> = {
   45: 'mm:ss', 46: '[h]:mm:ss', 47: 'mmss.0', 48: '##0.0E+0', 49: '@',
 };
 
-const CHEM_FUNCTION = new RegExp(`\\b(${Object.keys(PROPERTIES).join('|')})\\s*\\(`, 'i');
+const CHEM_FUNCTION = new RegExp(`\\b(${[...Object.keys(PROPERTIES), ...Object.keys(ISOTOPE_FUNCTIONS)].join('|')})\\s*\\(`, 'i');
 /** Does a formula use a chemistry function (which Excel can't work out)? */
 export function usesChemistry(formula: string): boolean {
   return CHEM_FUNCTION.test(formula.replace(/"(?:[^"]|"")*"/g, '""'));

@@ -7,7 +7,7 @@
 import { paletteRows } from './palette-ui';
 import { SheetView, popupMenu, selectionName } from './sheet-view';
 import { Workbook, Sheet, Structure, CellStyle, CellBlock, Cell, Condition, CompareOp, makeStructure, growToMerges } from '../sheet/workbook';
-import { Range, MAX_ROWS, MAX_COLS, colName, cellName, parseRange, keyOf, rowOf, colOf, inRange } from '../sheet/refs';
+import { Range, MAX_ROWS, MAX_COLS, colName, colIndex, cellName, parseRange, keyOf, rowOf, colOf, inRange } from '../sheet/refs';
 import { fillReagentTable } from '../sheet/reagents';
 import { shiftFormula } from '../sheet/formula';
 import { PROPERTIES, MolProps, propertyValue } from '../sheet/properties';
@@ -15,6 +15,9 @@ import { FORMATS, changeDecimals, describeFormat } from '../sheet/numfmt';
 import { UNITS, unitFormat } from '../sheet/units';
 import { isError, CellError, Value } from '../sheet/values';
 import { FUNCTION_NAMES } from '../sheet/evaluate';
+import { ISOTOPE_FUNCTIONS, listedPeaks, readsAsFormula, type IsotopeSource } from '../sheet/isotopes';
+import { isotopeTable, ISOTOPE_CHARTS, type IsotopeChartKind } from '../sheet/isotope-table';
+import { COMMON_ADDUCTS } from '../chem/hrms';
 import { parseDelimited, toDelimited } from '../sheet/csv';
 import { SheetChem } from '../sheet/sheet-chem';
 import { isBlankDrawing } from '../sheet/structure-doc';
@@ -281,7 +284,8 @@ export class SheetMode {
   /** fx: a list of the functions, chemistry first; picking one starts it in the cell. */
   private functionMenu(e: MouseEvent): void {
     const chemNames = Object.keys(PROPERTIES);
-    const rest = FUNCTION_NAMES.filter((n) => !chemNames.includes(n));
+    const isoNames = Object.keys(ISOTOPE_FUNCTIONS);
+    const rest = FUNCTION_NAMES.filter((n) => !chemNames.includes(n) && !isoNames.includes(n));
     const put = (name: string) => {
       const s = this.view.sheet;
       if (!s) return;
@@ -296,6 +300,7 @@ export class SheetMode {
     };
     const items: ([string, () => void] | null)[] = [
       ...chemNames.map((n) => [`${n} — ${PROPERTIES[n].label}`, () => put(n)] as [string, () => void]),
+      ...isoNames.map((n) => [`${n} — ${ISOTOPE_FUNCTIONS[n].label}`, () => put(n)] as [string, () => void]),
       null,
       ...rest.map((n) => [n, () => put(n)] as [string, () => void]),
     ];
@@ -450,6 +455,7 @@ export class SheetMode {
       case 'filter-structure': this.filterByStructure(v.sel.active.c); break;
       case 'freeze-header': this.freezeHeader(); break;
       case 'property-column': void this.propertyColumns(); break;
+      case 'isotope-pattern': void this.isotopePattern(); break;
       case 'reagent-table': this.reagentTable(); break;
       case 'structure-from-name': void this.structureFromName(); break;
       case 'draw-structure': this.drawStructure(v.sel.active.r, v.sel.active.c); break;
@@ -1037,6 +1043,80 @@ export class SheetMode {
     return s.cell(m?.r1 ?? r, m?.c1 ?? c)?.structure?.contents ?? null;
   }
 
+  /**
+   * Sheet > Isotope Pattern…: a table of an ion's isotope peaks (calculated, with columns for the
+   * peaks found and their error in ppm) and a chart of them as a mass spectrum.
+   */
+  private async isotopePattern(): Promise<void> {
+    const v = this.view;
+    const s = v.sheet;
+    if (!s) return;
+    const { r, c } = v.sel.active;
+    const here = s.cell(r, c)?.structure || (typeof s.value(r, c) === 'string' && s.value(r, c) !== '') ? cellName(r, c) : '';
+    const got = await ask('Isotope pattern', [
+      { name: 'source', label: 'Compound', value: here, placeholder: 'B2, or a formula such as C10H12N2O' },
+      { name: 'ion', label: 'Ion', value: '[M+H]+', suggestions: COMMON_ADDUCTS },
+      { name: 'min', label: 'List peaks down to', value: '0.5', type: 'number', unit: '% of the tallest' },
+      { name: 'found', label: 'Columns for the peaks found, with the error in ppm', value: 'true', type: 'checkbox' },
+      { name: 'chart', label: 'Chart', value: 'mirror', options: ISOTOPE_CHARTS },
+    ], { ok: 'Insert', note: 'The compound is a cell with a structure, SMILES or formula, or a formula typed here. The table works itself out (ISOMZ and ISOABUND), so it follows the structure, and the ion can be changed in its cell. Type the peaks you measured into the Found columns.' });
+    if (!got) return;
+    const text = got.source.trim();
+    if (!text) { this.host.flash('Give the compound: a cell such as B2, or a formula such as C10H12N2O.', 6000); return; }
+    const cellRef = /^\$?([A-Za-z]{1,3})\$?(\d+)$/.exec(text);
+    let source: string, compound: string, iso: IsotopeSource | null = null;
+    if (cellRef) {
+      const ref = `$${cellRef[1].toUpperCase()}$${cellRef[2]}`;
+      const rr = Number(cellRef[2]) - 1, cc = colIndex(cellRef[1].toUpperCase());
+      const val = s.value(rr, cc);
+      source = ref;
+      if (typeof val === 'string' && readsAsFormula(val)) { compound = `=${ref}`; iso = { formula: val }; }
+      else {
+        compound = `=FORMULA(${ref})`;
+        // the structure's formula, to know how many peaks to list
+        const cell = s.cell(rr, cc);
+        const ask1 = () => (cell?.structure ? this.chem.structure(cell.structure) : typeof val === 'string' && val ? this.chem.smiles(val) : null);
+        let m = ask1();
+        if (m && isError(m) && m.code === '#BUSY!') { await this.chem.settled(); m = ask1(); }
+        if (!m || isError(m)) { this.host.flash(`${text} has no structure, SMILES or formula the isotope pattern can read.`, 6000); return; }
+        iso = { mol: m };
+      }
+    } else if (readsAsFormula(text)) {
+      source = `"${text.replace(/"/g, '')}"`;
+      compound = text;
+      iso = { formula: text };
+    } else {
+      this.host.flash(`"${text}" is not a cell or a formula. Write a cell such as B2, or a formula such as C10H12N2O (each element once).`, 8000);
+      return;
+    }
+    const ion = got.ion.trim() || '[M+H]+';
+    const min = Number(got.min);
+    const peaks = listedPeaks(iso, ion, Number.isFinite(min) && min >= 0 ? min : 0.5);
+    if (isError(peaks)) { this.host.flash(peaks.detail || 'The isotope pattern could not be worked out.', 8000); return; }
+    // to the right of the table the active cell is in, where the cells are empty
+    const region = s.currentRegion(r, c);
+    const found = got.found === 'true';
+    const width = 3 + (found ? 3 : 0) + (found && got.chart === 'mirror' ? 1 : 0), height = 4 + peaks.length;
+    let col = region.c2 + 2;
+    const free = (c0: number) => {
+      for (let rr = region.r1; rr < region.r1 + height; rr++) for (let cc = c0; cc < c0 + width; cc++) if (s.cell(rr, cc)?.input || s.cell(rr, cc)?.structure) return false;
+      return true;
+    };
+    while (!free(col) && col < MAX_COLS - width) col++;
+    const t = isotopeTable({ sheet: s.name, at: { row: region.r1, col }, source, compound, ion, peaks, found, chart: got.chart as IsotopeChartKind });
+    const chart = t.chart ? v.clearOfCharts(t.chart) : null;
+    this.edit('Insert isotope pattern', (sh) => {
+      for (const x of t.cells) {
+        if (x.input) sh.setInput(x.row, x.col, x.input);
+        if (x.style) sh.patchStyle({ r1: x.row, c1: x.col, r2: x.row, c2: x.col }, x.style);
+      }
+      for (const [cc, w] of t.widths) sh.setColWidth(cc, w);
+      if (chart) sh.setCharts([...sh.charts, chart]);
+    }, () => ({ r1: region.r1, c1: col, r2: region.r1 + t.rows - 1, c2: col + t.cols - 1 }));
+    if (chart) v.pickChart(chart.id);
+    this.host.flash(found ? 'Type the m/z and heights you measured into the Found columns; the chart and the ppm errors follow.' : 'The ion can be changed in its cell; the peaks follow.', 8000);
+  }
+
   /** Columns holding structures or SMILES in the table around the active cell (for the property window). */
   private structureColumns(s: Sheet, R: Range): { col: number; label: string }[] {
     const out: { col: number; label: string }[] = [];
@@ -1422,6 +1502,7 @@ export class SheetMode {
       [structure ? 'Change structure…' : 'Draw structure…', () => this.drawStructure(v.sel.active.r, v.sel.active.c)],
       ['Structure from name or SMILES…', () => void this.structureFromName()],
       ['Insert property columns…', () => void this.propertyColumns()],
+      ['Isotope pattern…', () => void this.isotopePattern()],
       ['Reset to calculated', () => this.resetCalculated(), overrides],
       null,
       ['Conditional Formatting ▸', () => this.formatting.conditionalMenu(x, y)],

@@ -7,6 +7,7 @@ import type { Node, RefToken } from './formula';
 import { cellName, type Range } from './refs';
 import { CellError, ERR, Value, compareValues, isError, toBool, toNumber, toText } from './values';
 import { MolProps, PROPERTIES, propertyValue } from './properties';
+import { ISOTOPE_FUNCTIONS, isotopeValue, readsAsFormula, type IsotopeSource } from './isotopes';
 
 /** Where a formula reads its cells and structures from. */
 export interface EvalHost {
@@ -366,7 +367,7 @@ const FUNCTIONS: Record<string, FnDef> = {
 const LAZY = new Set(['IF', 'IFERROR']);
 
 /** Every function name, for the formula bar's suggestions. */
-export const FUNCTION_NAMES = [...Object.keys(FUNCTIONS), ...LAZY, ...Object.keys(PROPERTIES)].sort();
+export const FUNCTION_NAMES = [...Object.keys(FUNCTIONS), ...LAZY, ...Object.keys(PROPERTIES), ...Object.keys(ISOTOPE_FUNCTIONS)].sort();
 
 function call(name: string, argNodes: Node[], host: EvalHost): Arg {
   if (name === 'IF') {
@@ -382,6 +383,7 @@ function call(name: string, argNodes: Node[], host: EvalHost): Arg {
     return isError(v) && v.code !== '#BUSY!' ? evalNode(argNodes[1], host) : v;
   }
   if (name === 'DUPLICATE') return duplicate(argNodes, host);
+  if (ISOTOPE_FUNCTIONS[name]) return isotope(name, argNodes, host);
   const prop = PROPERTIES[name];
   if (prop) return chemistry(name, argNodes, host);
   const def = FUNCTIONS[name];
@@ -415,6 +417,36 @@ function chemistry(name: string, argNodes: Node[], host: EvalHost): Value {
   if (isError(mol)) return mol;
   const extra: Value[] = argNodes.slice(1).map((a) => scalar(evalNode(a, host)));
   return propertyValue(name, mol, extra);
+}
+
+/**
+ * ISOMZ(B2,"[M+H]+",2) and ISOABUND(B2,"[M+H]+",2): a peak of the isotope pattern of an ion. B2
+ * can hold a structure, SMILES or a formula (C10H12N2O); text can be given in place of B2.
+ */
+function isotope(name: string, argNodes: Node[], host: EvalHost): Value {
+  if (argNodes.length < 1 || argNodes.length > 3) return ERR.value(`${name} needs a structure, then the ion and the peak: ${name}(B2,"[M+H]+",2)`);
+  const first = argNodes[0];
+  const v = scalar(evalNode(first, host));
+  if (isError(v)) return v;
+  if (v === null || v === '') return '';
+  let src: IsotopeSource;
+  if (typeof v === 'string' && readsAsFormula(v)) src = { formula: v };
+  else {
+    let mol: MolProps | CellError | null;
+    if (first.t === 'ref' && first.v.kind === 'cell' && !first.v.broken) mol = host.molecule({ sheet: first.v.sheet, row: first.v.a.row, col: first.v.a.col });
+    else if (typeof v === 'string') mol = host.molecule({ smiles: v });
+    else return ERR.value(`${name} needs a structure, SMILES or formula, not a number`);
+    if (mol === null) return '';
+    if (isError(mol)) return mol;
+    src = { mol };
+  }
+  const ion = argNodes[1] ? scalar(evalNode(argNodes[1], host)) : '';
+  if (isError(ion)) return ion;
+  const k = argNodes[2] ? scalar(evalNode(argNodes[2], host)) : 0;
+  if (isError(k)) return k;
+  const n = k === null || k === '' ? 0 : toNumber(k);
+  if (isError(n)) return n;
+  return isotopeValue(name, src, ion === null ? '' : String(ion), n);
 }
 
 /**
