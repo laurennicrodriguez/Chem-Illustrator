@@ -6,10 +6,12 @@
 // PowerPoint text is used), and the slide master from its settings. Files from PowerPoint
 // come in as editable text (with its formatting, worked out the way PowerPoint does, through
 // the slide's layout, master and theme), pictures (with their cropping), and boxes, ovals,
-// lines and arrows. What has no place here yet (tables, charts, rotated things) is noted in
+// lines, arrows and tables. What has no place here yet (charts, rotated things) is noted in
 // warnings, never refused.
 
-import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase } from '../model';
+import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData } from '../model';
+import { layoutTable, NOTE_SCALE } from '../table';
+import { linesFromBorders, type Borders } from './cdxml-table';
 import type { Vec, Rect } from '../geom';
 import { PackageReader, NS, REL, kids, kid, rAttr, fromEmu } from './ooxml';
 import { readCdxml } from './cdxml';
@@ -183,6 +185,9 @@ class Reader {
   private ourMaster: Partial<Master> | null = null;
   private masterOut!: Master;
   private size: SlideSize = { w: 960, h: 540 };
+  /** The slide's tables, placed once their titles and footnotes (separate text boxes) are known. */
+  private tables: { key: string | null; table: TableData; frame: Rect; color?: string }[] = [];
+  private tableParts = new Map<string, { title?: Omit<Caption, 'id'>; notes?: Omit<Caption, 'id'> }>();
 
   constructor(bytes: Uint8Array) {
     this.r = new PackageReader(bytes);
@@ -336,7 +341,12 @@ class Reader {
     doc.style = { ...this.masterOut.drawing };
     const bg = this.background(s.doc.documentElement);
     if (bg && bg.toLowerCase() !== this.masterOut.background.toLowerCase()) this.warnings.add('Slides with a background colour of their own now use the master\'s.');
-    doc.bulk(() => this.tree(s, layout, s.tree, IDENTITY, doc));
+    this.tables = [];
+    this.tableParts.clear();
+    doc.bulk(() => {
+      this.tree(s, layout, s.tree, IDENTITY, doc);
+      this.placeTables(doc);
+    });
     const id = (tags[TAG.layout] as LayoutId | undefined) ?? this.layoutId(layout, doc);
     return { layout: ['title', 'title-content', 'two-content', 'title-only', 'blank'].includes(id) ? id : 'title-content', contents: doc.contents(), notes: this.notes(path) };
   }
@@ -405,7 +415,7 @@ class Reader {
   private frame(s: Part, el: Element, t: Xf, doc: Doc): void {
     const data = kid(el, 'graphic', 'graphicData');
     const uri = data?.getAttribute('uri') ?? '';
-    if (/table$/.test(uri)) { this.warnings.add('Tables are not brought in yet; they will come with Sheet mode.'); return; }
+    if (/table$/.test(uri)) { this.table(s, el, t); return; }
     if (/chart/.test(uri)) { this.warnings.add('Charts are not brought in.'); return; }
     // an object from another program: PowerPoint keeps a picture of it, which comes in as a picture
     const find = (e: Element | null): Element | null => {
@@ -538,7 +548,115 @@ class Reader {
     }
     const tags = this.tagsOf(s.path, kid(sp, 'nvSpPr', 'nvPr'));
     const c = this.ourText(tags[TAG.text], sp, box) ?? this.text(sp, box, ph, from);
+    // a table's title or footnotes, saved here as a text box beside it
+    const part = (() => {
+      try { return tags[TAG.tablePart] ? JSON.parse(tags[TAG.tablePart]) as { key: string; part: 'title' | 'notes' } : null; } catch { return null; }
+    })();
+    if (c && part && (part.part === 'title' || part.part === 'notes')) {
+      const got = this.tableParts.get(String(part.key)) ?? {};
+      got[part.part] = c;
+      this.tableParts.set(String(part.key), got);
+      return;
+    }
     if (c) doc.addCaption(c);
+  }
+
+  /**
+   * A PowerPoint table: its cells (with their text, joined cells and rules) and column widths.
+   * A table saved here comes back as it was when PowerPoint has not changed its text.
+   */
+  private table(s: Part, el: Element, t: Xf): void {
+    const frame = boxOf(kid(el, 'xfrm'), t);
+    const tbl = kid(el, 'graphic', 'graphicData', 'tbl');
+    if (!frame || !tbl) return;
+    const cols = kids(kid(tbl, 'tblGrid'), 'gridCol').map((g) => fromEmu(g.getAttribute('w')) * t.sx);
+    const m = cols.length;
+    if (!m) return;
+    const rows: TableCell[][] = [];
+    const borders: Borders[][] = [];
+    let lines = false, down = false;
+    let color: string | undefined;
+    const width = (tcPr: Element | null, side: string): number => {
+      const e = kid(tcPr, side);
+      if (!e || kid(e, 'noFill')) return 0;
+      const fill = kid(e, 'solidFill');
+      if (!fill) return 0;
+      lines = true;
+      color ??= this.color(fill) ?? undefined;
+      return fromEmu(e.getAttribute('w') ?? 12700);
+    };
+    for (const tr of kids(tbl, 'tr')) {
+      const tcs = kids(tr, 'tc');
+      const row: TableCell[] = [];
+      const bs: Borders[] = [];
+      for (let c = 0; c < m; c++) {
+        const tc = tcs[c];
+        const tcPr = kid(tc ?? null, 'tcPr');
+        bs.push({ left: width(tcPr, 'lnL'), top: width(tcPr, 'lnT'), bottom: width(tcPr, 'lnB'), right: width(tcPr, 'lnR') });
+        if (!tc || tc.getAttribute('hMerge') === '1' || tc.getAttribute('vMerge') === '1') { row.push({ runs: [] }); continue; }
+        if (Number(tc.getAttribute('rowSpan') ?? 1) > 1) down = true;
+        const cap = this.text(tc, { x1: 0, y1: 0, x2: cols[c], y2: 100 }, null, []);
+        const cell: TableCell = { runs: cap?.runs ?? [] };
+        if (cap?.paras) cell.paras = cap.paras;
+        if (cap && kid(kid(tc, 'txBody'), 'p', 'pPr')?.getAttribute('algn')) cell.align = cap.justify;
+        const span = Number(tc.getAttribute('gridSpan') ?? 1);
+        if (span > 1) cell.span = Math.min(span, m - c);
+        row.push(cell);
+      }
+      rows.push(row);
+      borders.push(bs);
+    }
+    if (!rows.length) return;
+    if (down) this.warnings.add('Table cells joined down several rows came in as separate cells.');
+    // the size most of the text is in becomes the table's
+    const sizes = new Map<number, number>();
+    for (const row of rows) for (const c of row) for (const r of c.runs) if (r.size !== undefined && r.text.trim()) sizes.set(r.size, (sizes.get(r.size) ?? 0) + r.text.length);
+    const size = [...sizes].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const plainRows = rows.map((row) => row.map((c) => ({ ...c, runs: c.runs.map((r) => { if (r.size !== size) return r; const { size: _, ...rest } = r; return rest; }) })));
+    const style = kid(tbl, 'tblPr', 'tableStyleId')?.textContent?.trim() ?? '';
+    const head = kid(tbl, 'tblPr')?.getAttribute('firstRow') === '1' ? 1 : 0;
+    let read: TableData = { cols, rows: plainRows, head, lines: 'acs' };
+    if (size !== undefined) read.size = size;
+    if (lines) read = { ...read, ...linesFromBorders(borders) };
+    else if (style === '{5940675A-B579-460E-94D1-54222C63F5DA}') read.lines = 'grid';
+    else if (style && style !== '{2D5ABB26-0587-4C30-8999-92F81FD0307C}') this.warnings.add('PowerPoint\'s table colours were left out; tables use the ACS style (change it in the Style panel).');
+    // what was saved here, when the table still has its rows and columns (and its text, for its formatting)
+    const tags = this.tagsOf(s.path, kid(el, 'nvGraphicFramePr', 'nvPr'));
+    let saved: { key: string; table: TableData; plain: string[][] } | null = null;
+    try { saved = tags[TAG.table] ? JSON.parse(tags[TAG.table]) : null; } catch { saved = null; }
+    if (saved?.table && saved.table.rows.length === rows.length && saved.table.cols.length === m) {
+      const same = JSON.stringify(rows.map((row) => row.map((c) => c.runs.map((r) => r.text).join('')))) === JSON.stringify(saved.plain);
+      // columns PowerPoint has resized keep their new widths
+      const widths = saved.table.cols.map((w, k) => (Math.abs(w - cols[k]) > 0.5 ? cols[k] : w));
+      const own = same ? saved.table.rows : rows.map((row) => row.map((c) => ({ ...c, runs: c.runs.map((r) => { if (r.size !== (saved!.table.size ?? undefined)) return r; const { size: _, ...rest } = r; return rest; }) })));
+      const { title: _t, notes: _n, ...rest } = saved.table;
+      this.tables.push({ key: String(saved.key), table: { ...rest, cols: widths, rows: own }, frame, color });
+      return;
+    }
+    this.tables.push({ key: saved ? String(saved.key) : null, table: read, frame, color });
+  }
+
+  /** Put the slide's tables on it, with the titles and footnotes saved beside them. */
+  private placeTables(doc: Doc): void {
+    const near = (a: number, b: number) => Math.abs(a - b) < 0.05;
+    const runsOf = (c: Omit<Caption, 'id'> | undefined, size: number) =>
+      c?.runs.filter((r) => r.text).map((r) => { if (r.size === undefined || !near(r.size, size)) return r; const { size: _, ...rest } = r; return rest; });
+    for (const tb of this.tables) {
+      const table = { ...tb.table };
+      const parts = tb.key !== null ? this.tableParts.get(tb.key) : undefined;
+      if (tb.key !== null) this.tableParts.delete(tb.key);
+      const size = table.size ?? doc.style.captionSize;
+      const title = runsOf(parts?.title, size), notes = runsOf(parts?.notes, size * NOTE_SCALE);
+      if (title?.length) table.title = title;
+      if (notes?.length) table.notes = notes;
+      const lay = layoutTable(table, doc.style.captionSize, arialMeasure);
+      const x1 = tb.frame.x1, y1 = tb.frame.y1 - lay.ys[0];
+      const sh: Omit<Shape, 'id'> = { kind: 'table', x1, y1, x2: x1 + lay.width, y2: y1 + lay.height, table };
+      if (tb.color && tb.color.toLowerCase() !== '#000000') sh.color = tb.color;
+      doc.addShape(sh);
+    }
+    // titles and footnotes whose table was deleted in PowerPoint stay as text
+    for (const p of this.tableParts.values()) for (const c of [p.title, p.notes]) if (c) doc.addCaption(c);
   }
 
   /** Text saved here, when PowerPoint has not changed it, moved to where its box now is. */

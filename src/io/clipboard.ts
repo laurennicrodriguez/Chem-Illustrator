@@ -10,9 +10,9 @@
 // hands the data to its own clipboard commands (src-tauri/src/clipboard.rs). Elsewhere the
 // page's clipboard gets a PNG, and the drawing itself is kept in memory for pasting here.
 
-import { pastedTable, type PastedRows } from './table-clip';
+import { pastedTable, tableHtml, tableTsv, type PastedRows } from './table-clip';
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import { Doc, TextRun, applyBase } from '../model';
+import { Doc, TextRun, applyBase, type TableData } from '../model';
 import type { DocStyle } from '../style';
 import type { Vec } from '../geom';
 import type { Selection } from '../editor/editor';
@@ -148,6 +148,13 @@ export function isEmpty(doc: Doc): boolean {
   return !doc.atoms.size && !doc.captions.size && !doc.arrows.size && !doc.shapes.size;
 }
 
+/** The table, when a drawing is one table and nothing else. */
+export function soleTable(doc: Doc): TableData | null {
+  if (doc.atoms.size || doc.captions.size || doc.arrows.size || doc.shapes.size !== 1) return null;
+  const s = doc.shapes.values().next().value!;
+  return s.kind === 'table' && s.table ? s.table : null;
+}
+
 /**
  * Add everything in `src` to `doc` as one undoable step, centred on `center`, and return the
  * new things (to select them).
@@ -233,6 +240,8 @@ export function unpackFormats(block: Uint8Array): [string, Uint8Array][] {
 
 /** The last drawing copied, for pasting back where the clipboard cannot hold it (web pages). */
 let lastCopy: string | null = null;
+/** A table copied here as tab-separated text, to know it again when it is pasted back (web pages). */
+let lastTableText: string | null = null;
 
 /**
  * Put the selection (everything when nothing is selected) on the clipboard. Returns a short
@@ -248,27 +257,42 @@ export async function copyDrawing(doc: Doc, sel: Selection | null): Promise<stri
   const cdxml = hasPictures(part) ? writeCdxml(part, { name: 'Clipboard.cdxml', textMeasure: measureText }) : own;
   lastCopy = own;
   const what = sel ? 'Copied' : 'Copied the whole drawing';
+  // a table on its own also goes out as cells, so Word and Excel paste a table they can edit
+  // (Paste Special still offers the picture)
+  const table = soleTable(part);
+  const tsv = table ? tableTsv(table) : null;
+  lastTableText = tsv;
   if (nativeClipboard) {
     const { canvas, dpi } = pictureCanvas(part, pic);
+    const enc = new TextEncoder();
     const block = packFormats([
-      [OWN_FORMAT, new TextEncoder().encode(own)],
+      [OWN_FORMAT, enc.encode(own)],
       [CDX_FORMAT, cdxmlToCdx(cdxml)],
+      ...(table ? [['HTML Format', cfHtml(tableHtml(table))], ['CF_UNICODETEXT', enc.encode(tsv!)]] as [string, Uint8Array][] : []),
       ['CF_ENHMETAFILE', pictureEmf(pic)],
       ['CF_DIB', canvasDib(canvas, dpi)],
     ]);
     await invoke('clipboard_write', block);
-    return `${what}. Paste into Word or PowerPoint for a picture.`;
+    return table ? `${what}. Paste into Word or Excel for a table, or into PowerPoint for a picture.` : `${what}. Paste into Word or PowerPoint for a picture.`;
   }
   // The PNG goes in as a promise so the clipboard is asked straight away, while the key press
   // still counts (Safari insists on this).
   const png = canvasPng(pictureCanvas(part, pic).canvas);
   try {
-    await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+    const formats: Record<string, Blob | Promise<Blob>> = { 'image/png': png };
+    if (table) {
+      formats['text/html'] = new Blob([tableHtml(table)], { type: 'text/html' });
+      formats['text/plain'] = new Blob([tsv!], { type: 'text/plain' });
+    }
+    await navigator.clipboard.write([new ClipboardItem(formats)]);
   } catch {
     return `${what} for pasting here. This browser would not take the picture.`;
   }
-  return `${what} as a picture.`;
+  return table ? `${what} as a table and a picture.` : `${what} as a picture.`;
 }
+
+/** Is this the table last copied here (so the copy with its title and column widths can be pasted)? */
+const ownTable = (text: string) => !!lastCopy && lastTableText !== null && text.replace(/\r\n/g, '\n').trim() === lastTableText.replace(/\r\n/g, '\n').trim();
 
 const hasPictures = (d: Doc) => [...d.shapes.values()].some((s) => s.kind === 'picture');
 
@@ -360,6 +384,7 @@ export async function readNativeClipboard(): Promise<Pasted> {
 export async function readPasteEvent(e: ClipboardEvent): Promise<Pasted> {
   const text = e.clipboardData?.getData('text/plain') ?? '';
   if (looksLikeCdxml(text) || looksLikeChemistry(text)) return fromText(text);
+  if (ownTable(text)) return { kind: 'drawing', doc: readCdxml(lastCopy!).doc };
   const table = pastedTable(e.clipboardData?.getData('text/html'), text);
   if (table) return { kind: 'table', rows: table };
   const file = [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'));
@@ -372,6 +397,7 @@ export async function readPasteEvent(e: ClipboardEvent): Promise<Pasted> {
 export async function readWebClipboard(): Promise<Pasted> {
   const text = await navigator.clipboard.readText().catch(() => '');
   if (looksLikeCdxml(text) || looksLikeChemistry(text)) return fromText(text);
+  if (ownTable(text)) return { kind: 'drawing', doc: readCdxml(lastCopy!).doc };
   // a picture (when the browser lets the page see it)
   const items = await navigator.clipboard.read?.().catch(() => []) ?? [];
   const htmlItem = items.find((it) => it.types.includes('text/html'));
