@@ -15,12 +15,13 @@
         <button role="menuitem" data-cmd="new">New Drawing</button>
         <button role="menuitem" data-cmd="new-slides">New Slides</button>
         <button role="menuitem" data-cmd="new-sheet">New Sheet</button>
+        <button role="menuitem" data-cmd="new-document">New Document</button>
         <button role="menuitem" data-cmd="open">Open…</button>
         <button role="menuitem" data-cmd="save">Save</button>
         <button role="menuitem" data-cmd="save-as">Save As…</button>
         <hr class="no-sheet" />
         <button role="menuitem" class="no-sheet" data-cmd="export-pdf">Export PDF…</button>
-        <button role="menuitem" class="no-sheet" data-cmd="export-mol">Export Molfile…</button>
+        <button role="menuitem" class="no-sheet no-doc" data-cmd="export-mol">Export Molfile…</button>
         <hr />
         <button role="menuitem" data-cmd="close-tab">Close</button>
       </div>
@@ -62,10 +63,16 @@
     <div class="menu-wrap no-sheet">
       <button id="btn-insert" aria-haspopup="menu" aria-expanded="false" aria-controls="insert-menu">Insert</button>
       <div id="insert-menu" class="menu" role="menu" hidden>
+        <button role="menuitem" class="doc-only" data-cmd="insert-structure" title="Draw a structure or scheme to put in the text at the caret">Structure</button>
+        <button role="menuitem" class="doc-only" data-cmd="structure-from-name-doc" title="A structure from its name or SMILES, in the text at the caret">Structure from Name…</button>
         <button role="menuitem" data-cmd="insert-picture">Picture…</button>
-        <button role="menuitem" data-cmd="crop" title="Cut the edges off the selected picture">Crop Picture</button>
-        <button role="menuitem" data-cmd="text-box">Text Box</button>
+        <button role="menuitem" class="no-doc" data-cmd="crop" title="Cut the edges off the selected picture">Crop Picture</button>
+        <button role="menuitem" class="no-doc" data-cmd="text-box">Text Box</button>
         <button role="menuitem" data-cmd="insert-table" title="A table in the ACS style; or paste cells from Excel or a sheet">Table…</button>
+        <hr class="doc-only" />
+        <button role="menuitem" class="doc-only" data-cmd="insert-caption" title="A numbered caption: Figure 1, Scheme 2, Table S1…">Caption…</button>
+        <button role="menuitem" class="doc-only" data-cmd="cross-reference" title="&quot;Figure 2&quot; in the text, which follows the caption's number">Cross-reference…</button>
+        <button role="menuitem" class="doc-only" data-cmd="page-break">Page Break</button>
       </div>
     </div>
     <div class="menu-wrap slides-only" hidden>
@@ -282,6 +289,176 @@
     </div>
   </div>
 
+  <div id="doc-ribbon" class="ribbon doc-ribbon doc-only" role="toolbar" aria-label="Document" hidden>
+    <div class="rb-tabs" role="tablist">
+      <button role="tab" data-doc-tab="home" aria-selected="true">Home</button>
+      <button role="tab" data-doc-tab="insert" aria-selected="false">Insert</button>
+      <button role="tab" data-doc-tab="layout" aria-selected="false">Layout</button>
+      <button role="tab" data-doc-tab="references" aria-selected="false">References</button>
+    </div>
+    <div class="rb-panel" data-doc-panel="home">
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="paste" title="Paste text, a structure from ChemDraw, or a picture"><span class="rb-icon">⎘</span>Paste</button>
+          <div class="rb-col">
+            <button data-doc="cut" title="Cut">Cut</button>
+            <button data-doc="copy" title="Copy: a structure picked on its own goes as a drawing, for ChemDraw">Copy</button>
+          </div>
+        </div>
+        <div class="rb-label">Clipboard</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <div class="rb-pair">
+              <input id="doc-font" class="rb-text rb-font" list="doc-font-list" spellcheck="false" aria-label="Font" title="Font (type any installed font)" />
+              <datalist id="doc-font-list"></datalist>
+              <input id="doc-size" class="rb-text rb-num" list="doc-size-list" spellcheck="false" aria-label="Font size" title="Font size in points" />
+              <datalist id="doc-size-list"><option>8</option><option>9</option><option>10</option><option>10.5</option><option>11</option><option>12</option><option>14</option><option>16</option><option>18</option><option>20</option><option>24</option><option>28</option><option>36</option><option>48</option><option>72</option></datalist>
+              <button class="rb-sq" data-doc="font-bigger" title="Bigger text">A<sup>+</sup></button>
+              <button class="rb-sq" data-doc="font-smaller" title="Smaller text">A<sup>−</sup></button>
+            </div>
+            <div class="rb-pair">
+              <button class="rb-sq" data-doc="doc-bold" aria-pressed="false" title="Bold"><b>B</b></button>
+              <button class="rb-sq" data-doc="doc-italic" aria-pressed="false" title="Italic"><i>I</i></button>
+              <button class="rb-sq" data-doc="doc-underline" aria-pressed="false" title="Underline"><u>U</u></button>
+              <button class="rb-sq" data-doc="doc-sub" aria-pressed="false" title="Subscript">x<sub>2</sub></button>
+              <button class="rb-sq" data-doc="doc-sup" aria-pressed="false" title="Superscript">x<sup>2</sup></button>
+              <button class="rb-sq" data-doc="doc-formula" aria-pressed="false" title="Formula style: numbers lowered (CH₂Cl₂), charges raised">C₉H₈</button>
+              <label class="rb-sq rb-colour" title="Text colour"><span>A</span><input id="doc-colour" type="color" aria-label="Text colour" /></label>
+            </div>
+          </div>
+        </div>
+        <div class="rb-label">Font</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <div class="rb-pair">
+              <button class="rb-sq" data-doc="doc-bullets" aria-pressed="false" title="Bullets">• ≡</button>
+              <button class="rb-sq" data-doc="doc-numbering" aria-pressed="false" title="Numbering">1. ≡</button>
+              <button class="rb-sq" data-doc="doc-outdent" title="Less indent (Shift+Tab)">⇤</button>
+              <button class="rb-sq" data-doc="doc-indent" title="More indent (Tab)">⇥</button>
+              <select id="doc-line" title="Line spacing" aria-label="Line spacing">
+                <option value="1">Single</option><option value="1.15">1.15</option><option value="1.5">1.5</option><option value="2">Double</option><option value="" hidden>Other</option>
+              </select>
+            </div>
+            <div class="rb-pair">
+              <button class="rb-sq" data-doc="doc-align-left" aria-pressed="false" title="Align left">Left</button>
+              <button class="rb-sq" data-doc="doc-align-center" aria-pressed="false" title="Centre">Centre</button>
+              <button class="rb-sq" data-doc="doc-align-right" aria-pressed="false" title="Align right">Right</button>
+              <button class="rb-sq" data-doc="doc-justify" aria-pressed="false" title="Justify (both edges straight)">Justify</button>
+            </div>
+          </div>
+        </div>
+        <div class="rb-label">Paragraph</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row rb-styles">
+          <button class="rb-style" data-doc="style-normal" aria-pressed="false" title="Normal text"><span>AaBbCc</span>Normal</button>
+          <button class="rb-style" data-doc="style-title" aria-pressed="false" title="Title"><span class="s-title">AaB</span>Title</button>
+          <button class="rb-style" data-doc="style-h1" aria-pressed="false" title="Heading 1"><span class="s-h1">AaBbC</span>Heading 1</button>
+          <button class="rb-style" data-doc="style-h2" aria-pressed="false" title="Heading 2"><span class="s-h2">AaBbCc</span>Heading 2</button>
+          <button class="rb-style" data-doc="style-h3" aria-pressed="false" title="Heading 3"><span class="s-h3">AaBbCc</span>Heading 3</button>
+          <button class="rb-style" data-doc="style-caption" aria-pressed="false" title="Caption"><span class="s-cap">AaBbCcDd</span>Caption</button>
+        </div>
+        <div class="rb-label">Styles (change them in the panel on the right)</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <button data-doc="find" title="Find words in the document">Find</button>
+            <button data-doc="replace" title="Replace words, or change how they look (make every CH2Cl2 a formula)">Replace</button>
+          </div>
+        </div>
+        <div class="rb-label">Editing</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-doc-panel="insert" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="page-break" title="Start a new page here"><span class="rb-icon">⤓</span>Page Break</button>
+        </div>
+        <div class="rb-label">Pages</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="insert-structure" title="Draw a structure or scheme with the drawing tools; it goes in the text at the caret"><span class="rb-icon">⬡</span>Structure</button>
+          <button class="rb-big" data-doc="structure-from-name-doc" title="A structure from its name or SMILES"><span class="rb-icon">Aa</span>From Name</button>
+          <button class="rb-big" data-doc="edit-figure" title="Change the picked structure or scheme with the drawing tools (or double-click it)"><span class="rb-icon">✎</span>Edit Drawing</button>
+        </div>
+        <div class="rb-label">Chemistry</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="insert-table" title="An ACS-style table"><span class="rb-icon">▦</span>Table</button>
+          <button class="rb-big" data-doc="insert-picture" title="A picture from a file (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
+        </div>
+        <div class="rb-label">Tables and pictures</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="insert-caption" title="A numbered caption: Figure 1, Scheme 2, Table S1…"><span class="rb-icon">¶</span>Caption</button>
+        </div>
+        <div class="rb-label">Captions</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-doc-panel="layout" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-field">Margins <select id="doc-margins" data-doc-prefix="margins">
+              <option value="normal">Normal (1 in)</option>
+              <option value="narrow">Narrow (0.5 in)</option>
+              <option value="moderate">Moderate (1 in, 0.75 in sides)</option>
+              <option value="wide">Wide (1 in, 2 in sides)</option>
+              <option value="other" hidden>Other (set in the panel)</option>
+            </select></label>
+            <label class="rb-field">Paper <select id="doc-paper" data-doc-prefix="paper">
+              <option value="letter">Letter (8.5 × 11 in)</option>
+              <option value="a4">A4 (21 × 29.7 cm)</option>
+              <option value="other" hidden>Other (set in the panel)</option>
+            </select></label>
+          </div>
+          <div class="rb-col">
+            <label class="rb-field">Orientation <select id="doc-orient" data-doc-prefix="orient">
+              <option value="portrait">Portrait</option>
+              <option value="landscape">Landscape</option>
+            </select></label>
+            <button data-doc="page-break" title="Start a new page here">Page Break</button>
+          </div>
+        </div>
+        <div class="rb-label">Page Setup</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-field">Page numbers <select id="doc-numbers" data-doc-prefix="numbers">
+              <option value="none">None</option>
+              <option value="footer-center">Bottom, centre</option>
+              <option value="footer-right">Bottom, right</option>
+              <option value="footer-left">Bottom, left</option>
+              <option value="header-right">Top, right</option>
+              <option value="header-center">Top, centre</option>
+              <option value="header-left">Top, left</option>
+            </select></label>
+            <button data-doc="numbers-s" aria-pressed="false" title="Number pages S1, S2… as Supporting Information is">S1, S2… numbering</button>
+          </div>
+        </div>
+        <div class="rb-label">Header and Footer (more in the panel)</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-doc-panel="references" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="insert-caption" title="A numbered caption: Figure 1, Scheme 2, Table S1…"><span class="rb-icon">¶</span>Insert Caption</button>
+          <button class="rb-big" data-doc="cross-reference" title="&quot;Figure 2&quot; in the text: it follows the caption's number when captions are added or moved"><span class="rb-icon">↪</span>Cross-reference</button>
+        </div>
+        <div class="rb-label">Captions</div>
+      </div>
+    </div>
+  </div>
+
   <div id="ribbon" class="ribbon slides-only" role="toolbar" aria-label="Slides" hidden>
     <div class="rb-group">
       <div class="rb-row">
@@ -344,11 +521,22 @@
       </div>
       <div id="sheet-host"></div>
     </div>
+    <div id="doc-pane" class="doc-only" hidden>
+      <div id="doc-host"></div>
+      <div id="doc-statusbar">
+        <span id="doc-status"></span>
+        <span class="grow"></span>
+        <button type="button" data-doc="zoom-out" title="Zoom out">−</button>
+        <span id="doc-zoom">100%</span>
+        <button type="button" data-doc="zoom-in" title="Zoom in">+</button>
+        <button type="button" data-doc="zoom-fit" title="Fit the page width in the window">Page Width</button>
+      </div>
+    </div>
     <div id="structure-bar" role="toolbar" aria-label="Structure" hidden>
       <span id="structure-title"></span>
       <span class="muted">Draw with the tools on the left.</span>
-      <button id="structure-done" type="button" class="primary" title="Put the structure in the cell (Ctrl+Enter)">Done</button>
-      <button id="structure-cancel" type="button" title="Leave the cell as it was">Cancel</button>
+      <button id="structure-done" type="button" class="primary" title="Put the structure in place (Ctrl+Enter)">Done</button>
+      <button id="structure-cancel" type="button" title="Leave it as it was">Cancel</button>
     </div>
     <div id="canvas-host">
       <canvas id="scene"></canvas>
@@ -369,6 +557,10 @@
       <h2>Warnings <span id="warnings-count" class="count"></span>
         <label class="check small" title="Red boxes around problems on the drawing (never printed, saved or copied)"><input id="show-warnings" type="checkbox" checked /> Show on drawing</label></h2>
       <div id="warnings-body"><p class="muted">No problems found.</p></div>
+    </section>
+    <section id="doc-section">
+      <h2>Format</h2>
+      <div id="doc-body"></div>
     </section>
     <section id="cell-section">
       <h2>Cell <span id="cell-name" class="cell-name"></span></h2>
@@ -427,6 +619,13 @@
           <li>Excel's keys and formulas (SUM, AVERAGE, ROUND, IF…). Chemistry > Structure draws a structure in a cell; paste one from ChemDraw too. Double-click a structure to change it</li>
           <li>Properties adds columns that work out formula, MW, exact mass, HRMS m/z, cLogP, TPSA and more from each structure; =D2/MW(B2)*1000 gives mmol. Type over any value; Reset to Calculated puts it back</li>
           <li>Sort and Filter work on any column; By Substructure shows the rows whose structure contains a part you draw</li>
+        </ul>
+        <h3>Documents</h3>
+        <ul>
+          <li>Pages like Word's (Letter, 1 inch margins, Times New Roman 11 to start): the ribbon has Word's tabs and keys (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>1</kbd> Heading 1, <kbd>Ctrl</kbd>+<kbd>Enter</kbd> a new page, <kbd>Ctrl</kbd>+<kbd>E</kbd> centre…)</li>
+          <li>Styles: Normal, Title, Heading 1 to 3 and Caption. Change a style in the panel on the right and every paragraph in it changes, except what was formatted by hand</li>
+          <li>Insert &gt; Structure draws a structure in the text; double-click it to change it, drag its corner to size it. Paste from ChemDraw too. Insert &gt; Caption numbers figures, schemes and tables by itself, and Cross-reference puts "Figure 2" in the text, which follows the caption</li>
+          <li>Layout: paper, margins and page numbers (S1, S2… for Supporting Information); the panel has the header and footer</li>
         </ul>
         <h3>Not in this prototype yet</h3>
         <ul>

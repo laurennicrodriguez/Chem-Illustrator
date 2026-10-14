@@ -114,6 +114,8 @@ export interface TextRun {
   size?: number;
   font?: string;
   color?: string;
+  /** A document's figure, table or field sitting in the text: its one character (U+FFFC) stands for the object with this id. */
+  obj?: number;
 }
 
 /**
@@ -174,6 +176,16 @@ export interface ParaStyle {
   spaceAfter?: number;
   /** Extra left indent, in points. */
   indent?: number;
+  /** Documents: the named style (Normal when left out), for Heading 1 and the rest. */
+  style?: string;
+  /** Documents: starts a new page. */
+  pageBreak?: boolean;
+  /** Documents: the first line's indent from the rest, in points (less than 0 hangs it out). */
+  firstLine?: number;
+  /** Documents: line spacing as a multiple of single spacing (single when left out). */
+  line?: number;
+  /** Documents: kept on the same page as the paragraph after it (headings). */
+  keepNext?: boolean;
 }
 
 export interface Caption {

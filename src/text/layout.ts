@@ -26,7 +26,19 @@ export interface TextFrame {
   width?: number;
   lineHeight?: number;
   lineSpacing?: number;
+  /** Bullets and numbers worked out elsewhere (a document lays out one paragraph at a time). */
+  markers?: (string | null)[];
+  /**
+   * Lines stack as boxes of single spacing (times the line spacing), as in Word. Without it a
+   * line steps down by the size of the line above, as ChemDraw's captions do.
+   */
+  boxes?: boolean;
+  /** How big a figure is, or what a field shows, given the room the line has (documents). */
+  inline?: (id: number, room: number) => InlineBox | null;
 }
+
+/** A figure in a line (sitting on the baseline), or a field's text. */
+export type InlineBox = { w: number; ascent: number; descent?: number } | { text: string };
 
 /** A piece of a line in one style. */
 export interface Glyphs {
@@ -47,6 +59,10 @@ export interface Glyphs {
   underline?: boolean;
   /** Extra width each space gets in a justified line. */
   spread?: number;
+  /** A figure, table or field (documents): its id. Its one character isn't drawn. */
+  obj?: number;
+  /** What a field shows (a figure number, a page number). */
+  shown?: string;
 }
 
 export interface LaidLine {
@@ -59,6 +75,11 @@ export interface LaidLine {
   y: number;
   ascent: number;
   descent: number;
+  /** The size of the largest text on the line (not counting sub- and superscripts' smaller size). */
+  size: number;
+  /** Documents: the line's box above and below the baseline (with the line spacing). */
+  above?: number;
+  below?: number;
   /** Where the text of the line starts (after its indent) and the room it has. */
   left: number;
   room: number;
@@ -90,7 +111,11 @@ export const DESCENT = 0.25;
 /** Single line spacing as a multiple of the text size. */
 export const SINGLE = 1.15;
 
-interface Seg { text: string; start: number; size: number; base: number; dy: number; family: string; style: string; color?: string; underline?: boolean }
+interface Seg {
+  text: string; start: number; size: number; base: number; dy: number; family: string; style: string; color?: string; underline?: boolean;
+  /** A figure, table or field (documents): its id, and once laid out its width, what it shows and its height. */
+  obj?: number; w?: number; shown?: string; objAscent?: number; objDescent?: number;
+}
 
 /** Cut runs into pieces of one look, with formula style worked out, paragraph by paragraph. */
 function segments(runs: TextRun[], defaultSize: number, n: number): { segs: Seg[][]; sizes: number[] } {
@@ -103,6 +128,15 @@ function segments(runs: TextRun[], defaultSize: number, n: number): { segs: Seg[
     const base = r.size ?? defaultSize;
     const style = `${r.italic ? 'italic ' : ''}${r.bold ? 'bold ' : ''}`;
     const family = r.font ? `${r.font}, ${FONT_STACK}` : FONT_STACK;
+    if (r.obj !== undefined) {
+      // each object character is a piece of its own
+      for (const ch of r.text) {
+        if (ch === '\n') { off++; p++; if (p < n) sizes[p] = base; continue; }
+        if (p < n) segs[p].push({ text: ch, start: off, size: base, base, dy: 0, family, style, color: r.color, underline: r.underline, obj: r.obj });
+        off += ch.length;
+      }
+      continue;
+    }
     const parts = r.formula && !r.sub && !r.sup ? formulaParts(r.text) : [{ text: r.text, pos: r.sub ? 'sub' : r.sup ? 'sup' : 'base' }];
     for (const part of parts) {
       const small = part.pos !== 'base';
@@ -124,12 +158,16 @@ function segments(runs: TextRun[], defaultSize: number, n: number): { segs: Seg[
   return { segs, sizes };
 }
 
-/** Places a line may break before (offsets into the paragraph): after spaces, and after a hyphen or slash inside a word, as ChemDraw breaks lines. */
-function breakPoints(text: string): number[] {
+/**
+ * Places a line may break before (offsets into the paragraph): after spaces, and after a hyphen
+ * or slash inside a word, as ChemDraw breaks lines; and either side of a figure (`around`).
+ */
+function breakPoints(text: string, around: ReadonlySet<number> = new Set()): number[] {
   const out: number[] = [];
   for (let i = 1; i < text.length; i++) {
     const prev = text[i - 1], ch = text[i];
     if (prev === ' ' && ch !== ' ') out.push(i);
+    else if ((around.has(i) || around.has(i - 1)) && ch !== ' ') out.push(i);
     else if ((prev === '-' || prev === '–' || prev === '—' || prev === '/') && ch !== ' ' && i >= 2 && /[\p{L}\p{N})\]]/u.test(text[i - 2])) out.push(i);
     // ChemDraw also breaks between a degree sign and a letter ("−78 °" | "C")
     else if (prev === '°' && /\p{L}/u.test(ch)) out.push(i);
@@ -144,7 +182,7 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
   const text = f.runs.map((r) => r.text).join('');
   const n = paraCount(text);
   const paras = fitParas(f.paras, n);
-  const markers = listMarkers(paras);
+  const markers = f.markers ?? listMarkers(paras);
   const { segs, sizes } = segments(f.runs, defaultSize, n);
   const spacing = f.lineSpacing && f.lineSpacing > 0 ? f.lineSpacing : 1;
   const lines: LaidLine[] = [];
@@ -156,8 +194,10 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
     const pText = pSegs.map((s) => s.text).join('');
     const pLen = pText.length;
     const em = pSegs.length ? pSegs[0].base : sizes[p] || defaultSize;
+    const pSpacing = ps.line && ps.line > 0 ? ps.line : spacing;
     // indents: list items hang their bullet or number in front of the text
     let left = ps.indent ?? 0;
+    let firstLine = 0;
     let marker: Glyphs | undefined;
     if (ps.list) {
       const level = Math.max(0, Math.min(8, ps.level ?? 0));
@@ -172,8 +212,26 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
         marker = { text: m, start: paraStart, x: markLeft, w: measure(m, em, family, ''), dy: 0, size: em, family, style: '', color: first?.color };
         left = Math.max(left, markLeft + marker.w + 0.3 * em);
       }
-    }
+    } else firstLine = ps.firstLine ?? 0;
     const room = f.wrap !== undefined ? Math.max(1, f.wrap - left) : Infinity;
+
+    // figures and fields: their size, and what a field shows
+    const around = new Set<number>();
+    for (const s of pSegs) {
+      if (s.obj === undefined) continue;
+      const box = f.inline?.(s.obj, room) ?? null;
+      if (box && 'text' in box) {
+        s.shown = box.text;
+        s.w = measure(box.text, s.size, s.family, s.style);
+      } else {
+        s.w = box?.w ?? 0;
+        s.objAscent = box?.ascent ?? 0;
+        s.objDescent = box?.descent ?? 0;
+        around.add(s.start - paraStart);
+      }
+    }
+    const segWidth = (s: Seg, a: number, b: number): number =>
+      s.obj !== undefined ? (b > a ? s.w ?? 0 : 0) : measure(s.text.slice(a, b), s.size, s.family, s.style);
 
     // the width of part of the paragraph (offsets within it), piece by piece
     const widthOf = (a: number, b: number): number => {
@@ -181,14 +239,14 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
       for (const s of pSegs) {
         const s0 = s.start - paraStart, s1 = s0 + s.text.length;
         const x0 = Math.max(a, s0), x1 = Math.min(b, s1);
-        if (x1 > x0) w += measure(s.text.slice(x0 - s0, x1 - s0), s.size, s.family, s.style);
+        if (x1 > x0) w += segWidth(s, x0 - s0, x1 - s0);
       }
       return w;
     };
     // words: from one break point to the next, with the spaces after them
     const words: Word[] = [];
     let ws = 0;
-    for (const bp of breakPoints(pText)) {
+    for (const bp of breakPoints(pText, around)) {
       let be = bp;
       while (be > ws && pText[be - 1] === ' ') be--;
       words.push({ start: ws, end: bp, body: widthOf(ws, be), spaces: widthOf(be, bp) });
@@ -196,13 +254,14 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
     }
     if (!words.length) words.push({ start: 0, end: 0, body: 0, spaces: 0 });
 
-    // fill lines word by word
+    // fill lines word by word (the first line has the first-line indent taken off its room)
     const pLines: { start: number; end: number; width: number }[] = [];
     let cur: { start: number; end: number; width: number; full: number } | null = null;
     const emit = () => { if (cur) pLines.push({ start: cur.start, end: cur.end, width: cur.width }); cur = null; };
     for (const w of words) {
+      const lineRoom = pLines.length ? room : room - firstLine;
       // a word fits when it and the space after it do (ChemDraw counts that space too)
-      if (cur && cur.full + w.body + w.spaces > room + 1e-6) emit();
+      if (cur && cur.full + w.body + w.spaces > lineRoom + 1e-6) emit();
       if (!cur) cur = { start: w.start, end: w.end, width: w.body, full: w.body + w.spaces };
       else { cur.end = w.end; cur.width = cur.full + w.body; cur.full += w.body + w.spaces; }
     }
@@ -214,22 +273,37 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
       const pieces: Glyphs[] = [];
       let x = 0;
       let size = 0;
+      let objUp = 0, objDown = 0;
       for (const s of pSegs) {
         const s0 = s.start - paraStart, s1 = s0 + s.text.length;
         const a = Math.max(pl.start, s0), b = Math.min(pl.end, s1);
         if (b <= a) continue;
         const t = s.text.slice(a - s0, b - s0);
-        const w = measure(t, s.size, s.family, s.style);
-        pieces.push({ text: t, start: paraStart + a, x, w, dy: s.dy, size: s.size, family: s.family, style: s.style, color: s.color, underline: s.underline });
+        const w = segWidth(s, a - s0, b - s0);
+        const g: Glyphs = { text: t, start: paraStart + a, x, w, dy: s.dy, size: s.size, family: s.family, style: s.style, color: s.color, underline: s.underline };
+        if (s.obj !== undefined) {
+          g.obj = s.obj;
+          if (s.shown !== undefined) g.shown = s.shown;
+          objUp = Math.max(objUp, s.objAscent ?? 0);
+          objDown = Math.max(objDown, s.objDescent ?? 0);
+        }
+        pieces.push(g);
         x += w;
         size = Math.max(size, s.base);
       }
       if (!size) size = em;
       const last = li === pLines.length - 1;
-      lines.push({
-        para: p, start: paraStart + pl.start, end: paraStart + pl.end, y: 0, ascent: ASCENT * size, descent: DESCENT * size,
-        left, room, x: left, width: pl.width, pieces, marker: li === 0 ? marker : undefined, last,
-      });
+      const lineLeft = li === 0 ? left + firstLine : left;
+      const l: LaidLine = {
+        para: p, start: paraStart + pl.start, end: paraStart + pl.end, y: 0, ascent: Math.max(ASCENT * size, objUp), descent: Math.max(DESCENT * size, objDown),
+        size, left: lineLeft, room: li === 0 ? room - firstLine : room, x: lineLeft, width: pl.width, pieces, marker: li === 0 ? marker : undefined, last,
+      };
+      if (f.boxes) {
+        // a document's line: the height of single spacing (times the line spacing), or of its tallest figure
+        l.above = Math.max((SINGLE * pSpacing - DESCENT) * size, objUp);
+        l.below = l.descent;
+      }
+      lines.push(l);
     });
     paraStart += pLen + 1;
   }
@@ -241,8 +315,11 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
   let prev: LaidLine | null = null;
   for (const l of lines) {
     if (prev) {
-      const size = prev.ascent / ASCENT;
-      y += f.lineHeight ?? SINGLE * spacing * size;
+      if (f.boxes) y += prev.below! + l.above!;
+      else {
+        const sp = paras[prev.para].line && paras[prev.para].line! > 0 ? paras[prev.para].line! : spacing;
+        y += f.lineHeight ?? SINGLE * sp * prev.size;
+      }
       if (prev.para !== l.para) y += (paras[prev.para].spaceAfter ?? 0) + (paras[l.para].spaceBefore ?? 0);
     }
     l.y = y;
@@ -267,7 +344,7 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
   if (x1 > x2) { x1 = x2 = 0; }
   if (f.wrap !== undefined) { x1 = Math.min(x1, 0); x2 = Math.max(x2, f.wrap); }
   const first = lines[0], lastLine = lines[lines.length - 1];
-  const box = { x1, y1: first.y - first.ascent, x2, y2: lastLine.y + lastLine.descent };
+  const box = { x1, y1: first.y - (first.above ?? first.ascent), x2, y2: lastLine.y + (lastLine.below ?? lastLine.descent) };
   return { lines, boxWidth, box, length: text.length, measure };
 }
 

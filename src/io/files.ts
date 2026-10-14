@@ -21,6 +21,7 @@ export const CDX: FileType = { description: 'ChemDraw drawing', extension: 'cdx'
 export const PPTX: FileType = { description: 'PowerPoint presentation', extension: 'pptx', mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
 export const XLSX: FileType = { description: 'Excel workbook', extension: 'xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
 export const CSV: FileType = { description: 'CSV (comma-separated values)', extension: 'csv', mime: 'text/csv' };
+export const DOCX: FileType = { description: 'Word document', extension: 'docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
 export const SDF: FileType = { description: 'SD file (structures with data)', extension: 'sdf', mime: 'chemical/x-mdl-sdfile' };
 /** Text tables that open as sheets (tab-separated as well as CSV). */
 export const TABLE_TEXT_EXTENSIONS = ['csv', 'tsv', 'txt'];

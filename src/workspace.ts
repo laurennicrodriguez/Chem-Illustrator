@@ -1,5 +1,5 @@
-// The open files, one tab each: drawings (ChemDraw files), slide decks (PowerPoint files) and
-// sheets (Excel workbooks, CSV and SD files).
+// The open files, one tab each: drawings (ChemDraw files), slide decks (PowerPoint files),
+// sheets (Excel workbooks, CSV and SD files) and documents (Word files).
 // The tab showing has its drawing, or its current slide, in the app's one document, so every
 // tool works the same everywhere; the other tabs wait in documents of their own (Doc.swap).
 // New, Open, Save, Save As, Close and the unsaved-changes questions go through here.
@@ -7,6 +7,8 @@
 import { Doc } from './model';
 import { Deck } from './deck/deck';
 import { Workbook } from './sheet/workbook';
+import { DocFile } from './document/doc-file';
+import type { DocText } from './document/document';
 import type { View } from './render/renderer';
 import { readCdxml } from './io/cdxml';
 import { writeCdxml, WriteOptions } from './io/cdxml-write';
@@ -16,11 +18,11 @@ import { writePptx, PptxOptions } from './io/pptx-write';
 import { zipHas } from './io/ooxml';
 import { adoptSaved } from './io/document-file';
 import {
-  FileRef, FileType, CDXML, CDX, PPTX, XLSX, CSV, SDF, TABLE_TEXT_EXTENSIONS, openBytesDialog, saveFileDialog, writeFile, canSaveInPlace, askSaveChanges,
+  FileRef, FileType, CDXML, CDX, PPTX, XLSX, CSV, SDF, DOCX, TABLE_TEXT_EXTENSIONS, openBytesDialog, saveFileDialog, writeFile, canSaveInPlace, askSaveChanges,
   showError, withExtension, extensionOf,
 } from './io/files';
 
-export type Mode = 'drawing' | 'slides' | 'sheet';
+export type Mode = 'drawing' | 'slides' | 'sheet' | 'document';
 
 export interface Tab {
   id: number;
@@ -32,14 +34,15 @@ export interface Tab {
   stash: Doc;
   deck: Deck | null;
   book: Workbook | null;
+  document: DocFile | null;
   /** Zoom and scroll, kept while another tab shows. */
   view: View | null;
-  /** Sheets: each sheet's selection and scroll, kept while another tab shows. */
+  /** Sheets and documents: the selection and scroll, kept while another tab shows. */
   sheetState: unknown;
   dirty: boolean;
   /** Drawings: the app document's version last seen while this tab showed. */
   seen: number;
-  /** Slides and sheets: the deck's or workbook's change count when last saved. */
+  /** Slides, sheets and documents: the change count when last saved. */
   savedEdits: number;
 }
 
@@ -60,10 +63,15 @@ export interface WorkspaceHooks {
     read(bytes: Uint8Array, name: string): Promise<{ book: Workbook; warnings: string[] }>;
     write(book: Workbook, name: string): Promise<Uint8Array | string>;
   };
+  /** Reading and writing Word files. */
+  documents: {
+    read(bytes: Uint8Array, name: string): Promise<{ doc: DocText; warnings: string[] }>;
+    write(doc: DocText, name: string): Promise<Uint8Array>;
+  };
 }
 
 /** What each kind of tab saves as (the first is the default). */
-const SAVE_TYPES: Record<Mode, FileType[]> = { drawing: [CDXML, CDX], slides: [PPTX], sheet: [XLSX, CSV, SDF] };
+const SAVE_TYPES: Record<Mode, FileType[]> = { drawing: [CDXML, CDX], slides: [PPTX], sheet: [XLSX, CSV, SDF], document: [DOCX] };
 
 export class Workspace {
   tabs: Tab[] = [];
@@ -78,7 +86,7 @@ export class Workspace {
   }
 
   private makeTab(mode: Mode, name: string, ref: FileRef = { kind: 'none' }): Tab {
-    return { id: this.nextId++, mode, name, ref, stash: new Doc(), deck: null, book: null, view: null, sheetState: null, dirty: false, seen: 0, savedEdits: 0 };
+    return { id: this.nextId++, mode, name, ref, stash: new Doc(), deck: null, book: null, document: null, view: null, sheetState: null, dirty: false, seen: 0, savedEdits: 0 };
   }
 
   /** "Untitled", "Untitled 2"… with the right extension, not already used by an open tab. */
@@ -125,6 +133,7 @@ export class Workspace {
     let dirty = t.dirty;
     if (t.mode === 'slides') dirty = t.deck!.edits !== t.savedEdits;
     else if (t.mode === 'sheet') dirty = t.book!.edits !== t.savedEdits;
+    else if (t.mode === 'document') dirty = t.document!.edits !== t.savedEdits;
     else if (this.host.version !== t.seen) {
       t.seen = this.host.version;
       dirty = true;
@@ -167,11 +176,22 @@ export class Workspace {
     return t;
   }
 
-  /** File > Open: drawings, slide decks and sheets. */
+  /** New document, in place of an untouched new drawing. */
+  newDocument(): Tab {
+    const spare = this.active.mode === 'drawing' ? this.spare() : null;
+    const t = this.makeTab('document', this.untitled('document'));
+    t.document = new DocFile();
+    this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
+    this.activate(t, true);
+    if (spare) this.drop(spare);
+    return t;
+  }
+
+  /** File > Open: drawings, slide decks, sheets and documents. */
   async open(): Promise<void> {
     let f;
     try {
-      f = await openBytesDialog('Drawings, slides and sheets', [CDXML, CDX, PPTX, XLSX, CSV, SDF], ['sd', ...TABLE_TEXT_EXTENSIONS]);
+      f = await openBytesDialog('Drawings, slides, sheets and documents', [CDXML, CDX, PPTX, XLSX, DOCX, CSV, SDF], ['sd', ...TABLE_TEXT_EXTENSIONS]);
     } catch (e) {
       await showError('Could not open the file: ' + String(e));
       return;
@@ -192,6 +212,7 @@ export class Workspace {
     const zip = bytes[0] === 0x50 && bytes[1] === 0x4b;
     try {
       if (ext === 'xlsx' || (zip && zipHas(bytes, 'xl/workbook.xml')) || ext === 'sdf' || ext === 'sd' || TABLE_TEXT_EXTENSIONS.includes(ext)) return await this.openSheet(bytes, name, ref);
+      if (ext === 'docx' || (zip && zipHas(bytes, 'word/document.xml'))) return await this.openDocument(bytes, name, ref);
       if (ext === 'pptx' || zip) return this.openSlides(bytes, name, ref);
       const text = isCdx(bytes) ? cdxToCdxml(bytes) : new TextDecoder().decode(bytes);
       return this.openDrawing(text, name, ref);
@@ -207,6 +228,7 @@ export class Workspace {
     if (t.dirty || t.ref.kind !== 'none' || !/^Untitled/.test(t.name)) return null;
     if (t.mode === 'drawing') return this.host.atoms.size || this.host.captions.size || this.host.arrows.size || this.host.shapes.size ? null : t;
     if (t.mode === 'sheet') return t.book!.edits === 0 ? t : null;
+    if (t.mode === 'document') return t.document!.edits === 0 ? t : null;
     return t.deck!.edits === 0 ? t : null;
   }
 
@@ -251,6 +273,18 @@ export class Workspace {
     if (spare) this.drop(spare);
     const n = book.sheets.length;
     this.hooks.flash(`Opened ${name}${n > 1 ? `: ${n} sheets` : ''}.${warnings.length ? ' ' + warnings.join(' ') : ''}`, warnings.length ? 12000 : 3500);
+    return true;
+  }
+
+  private async openDocument(bytes: Uint8Array, name: string, ref: FileRef): Promise<boolean> {
+    const { doc, warnings } = await this.hooks.documents.read(bytes, name);
+    const spare = this.spare();
+    const t = this.makeTab('document', name, ref);
+    t.document = new DocFile(doc);
+    this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
+    this.activate(t, true);
+    if (spare) this.drop(spare);
+    this.hooks.flash(`Opened ${name}.${warnings.length ? ' ' + warnings.join(' ') : ''}`, warnings.length ? 12000 : 3500);
     return true;
   }
 
@@ -345,6 +379,10 @@ export class Workspace {
         // CSV and SD files keep only the values of the sheet showing: said, not stopped (as Excel does)
         if (ext !== 'xlsx') note = ` (${book.sheets.length > 1 ? `only the sheet "${book.sheet.name}", ` : ''}values only: save as .xlsx to keep formulas and formatting)`;
         tab.savedEdits = book.edits;
+      } else if (tab.mode === 'document') {
+        const f = tab.document!;
+        await writeFile(ref, name, await this.hooks.documents.write(f.t, name), DOCX);
+        tab.savedEdits = f.edits;
       } else {
         const doc = this.docOf(tab);
         const text = writeCdxml(doc, { name, textMeasure: this.hooks.measure });
