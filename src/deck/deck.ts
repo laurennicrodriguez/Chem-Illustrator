@@ -10,6 +10,7 @@
 
 import { Doc, Caption, Placeholder, TextBase, ParaStyle, Contents } from '../model';
 import { DocStyle, ACS_1996 } from '../style';
+import { applyStyle, type RestyleHow } from '../drawing-styles';
 import type { Rect } from '../geom';
 import { ASCENT } from '../text/layout';
 
@@ -537,6 +538,32 @@ export class Deck {
     };
     apply(m);
     this.record('Change slide master', () => apply(before), () => apply(m));
+  }
+
+  /**
+   * Draw structures on every slide in another style (File > Drawing Style). 'restyle' redraws
+   * what is there in it; 'new-only' keeps what is there looking as it does. One undo step.
+   */
+  setDrawingStyle(next: DocStyle, how: RestyleHow): void {
+    const before = this.master, after = { ...before, drawing: { ...next } };
+    const use = (m: Master) => {
+      this.master = m;
+      for (let i = 0; i < this.slides.length; i++) this.styleDoc(this.docOf(i));
+    };
+    const all = this.slides.map((_, i) => i);
+    this.contentEdit('Change drawing style', all, () => {
+      for (const i of all) {
+        const d = this.docOf(i);
+        d.bulk(() => applyStyle(d, next, how));
+      }
+      use(after);
+    }, () => use(before), () => use(after));
+  }
+
+  /** Start a new deck in a style (your default for new slides or designs). Not undoable. */
+  useDrawingStyle(st: DocStyle): void {
+    this.master = { ...this.master, drawing: { ...st } };
+    for (let i = 0; i < this.slides.length; i++) this.styleDoc(this.docOf(i));
   }
 
   /** Change the slide size: everything stays centred, and placeholders move to the layout's places. */

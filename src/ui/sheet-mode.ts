@@ -165,6 +165,12 @@ export class SheetMode {
     }
   }
 
+  /** The workbook's drawing style changed: draw its structures again. */
+  styleChanged(): void {
+    this.pictures.clear();
+    this.view.refresh();
+  }
+
   /** Before another tab shows: finish typing and keep the selection and scroll. */
   leave(): void {
     const t = this.tab;

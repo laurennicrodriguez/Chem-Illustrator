@@ -8,7 +8,8 @@ import { Doc } from './model';
 import { Deck, type SlideSize } from './deck/deck';
 import { Workbook } from './sheet/workbook';
 import { DocFile } from './document/doc-file';
-import type { DocText } from './document/document';
+import { newDocument, type DocText } from './document/document';
+import type { DocStyle } from './style';
 import type { View } from './render/renderer';
 import { readCdxml } from './io/cdxml';
 import { writeCdxml, WriteOptions } from './io/cdxml-write';
@@ -71,6 +72,8 @@ export interface WorkspaceHooks {
     read(bytes: Uint8Array, name: string): Promise<{ doc: DocText; warnings: string[] }>;
     write(doc: DocText, name: string): Promise<Uint8Array>;
   };
+  /** The drawing style a new tab of this kind starts with, when you have chosen one (File > Drawing Style). */
+  newStyle?(mode: Mode): DocStyle | null;
 }
 
 /** What each kind of tab saves as (the first is the default). */
@@ -190,6 +193,8 @@ export class Workspace {
 
   newDrawing(): Tab {
     const t = this.makeTab('drawing', this.untitled('drawing'));
+    const st = this.hooks.newStyle?.('drawing');
+    if (st) t.stash.style = { ...st };
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
     t.seen = this.host.version;
@@ -210,6 +215,8 @@ export class Workspace {
 
   addDrawing(): Tab {
     const t = this.makeTab('drawing', this.untitled('drawing'));
+    const st = this.hooks.newStyle?.('drawing');
+    if (st) t.stash.style = { ...st };
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.hooks.changed();
     return t;
@@ -220,6 +227,8 @@ export class Workspace {
     const spare = this.active.mode === 'drawing' ? this.spare() : null;
     const t = this.makeTab('slides', this.untitled('slides'));
     t.deck = Deck.blank(this.host);
+    const st = this.hooks.newStyle?.('slides');
+    if (st) t.deck.useDrawingStyle(st);
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
     if (spare) this.drop(spare);
@@ -231,6 +240,8 @@ export class Workspace {
     const spare = this.active.mode === 'drawing' ? this.spare() : null;
     const t = this.makeTab('design', this.untitled('design'));
     t.deck = Deck.design(this.host, size, fill);
+    const st = this.hooks.newStyle?.('design');
+    if (st) t.deck.useDrawingStyle(st);
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
     if (spare) this.drop(spare);
@@ -242,6 +253,8 @@ export class Workspace {
     const spare = this.active.mode === 'drawing' ? this.spare() : null;
     const t = this.makeTab('sheet', this.untitled('sheet'));
     t.book = new Workbook();
+    const st = this.hooks.newStyle?.('sheet');
+    if (st) t.book.drawingStyle = { ...st };
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
     if (spare) this.drop(spare);
@@ -252,7 +265,8 @@ export class Workspace {
   newDocument(): Tab {
     const spare = this.active.mode === 'drawing' ? this.spare() : null;
     const t = this.makeTab('document', this.untitled('document'));
-    t.document = new DocFile();
+    const st = this.hooks.newStyle?.('document');
+    t.document = new DocFile(st ? { ...newDocument(), drawingStyle: { ...st } } : undefined);
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
     if (spare) this.drop(spare);

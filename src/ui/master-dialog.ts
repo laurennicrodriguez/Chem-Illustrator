@@ -2,7 +2,8 @@
 // background, a logo, slide numbers, a footer, and how big structures are drawn).
 // Everything here changes every slide at once, and Undo puts it back.
 
-import { Master, Corner, Image, slideDrawingStyle } from '../deck/deck';
+import { Master, Corner, Image } from '../deck/deck';
+import { scaleStyle } from '../drawing-styles';
 import { ACS_1996 } from '../style';
 
 const FONTS = ['Arial', 'Aptos', 'Calibri', 'Calibri Light', 'Cambria', 'Georgia', 'Helvetica', 'Segoe UI', 'Times New Roman', 'Verdana'];
@@ -179,8 +180,8 @@ export function editMaster(m: Master, hooks: MasterDialogHooks): Promise<Master 
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       const len = n(bond, m.drawing.bondLength);
-      // the drawing style scales as a whole with the bond length, so structures keep ACS proportions
-      const drawing = Math.abs(len - m.drawing.bondLength) < 1e-6 ? m.drawing : slideDrawingStyle(len / ACS_1996.bondLength);
+      // the drawing style scales as a whole with the bond length, so structures keep their proportions
+      const drawing = Math.abs(len - m.drawing.bondLength) < 1e-6 ? m.drawing : scaleStyle(m.drawing, len / m.drawing.bondLength);
       done({
         ...m,
         background: bg.value,

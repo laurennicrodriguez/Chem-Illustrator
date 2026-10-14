@@ -19,6 +19,8 @@
         <button role="menuitem" data-cmd="open">Open…</button>
         <button role="menuitem" data-cmd="save">Save</button>
         <button role="menuitem" data-cmd="save-as">Save As…</button>
+        <hr />
+        <button role="menuitem" data-cmd="drawing-style" title="How structures are drawn: a journal's style (ACS, RSC, Nature…) or your own, with every number changeable">Drawing Style…</button>
         <hr class="no-sheet" />
         <button role="menuitem" class="no-sheet" data-cmd="export-pdf">Export PDF…</button>
         <button role="menuitem" class="no-sheet no-doc" data-cmd="export-picture">Export Picture…</button>
@@ -60,6 +62,8 @@
         <button role="menuitem" data-cmd="zoom-actual">Actual Size</button>
         <hr />
         <button role="menuitemcheckbox" aria-checked="false" data-cmd="show-stereo" title="Preview every R/S and E/Z label in red (on screen only; use Structure &gt; Show Stereo Labels to add them to the drawing)"><span>Show R/S Preview</span></button>
+        <button role="menuitemcheckbox" aria-checked="false" data-cmd="dark-page" title="Show the page dark on screen only: files, printing, copying and exports are not changed"><span>Dark Page</span></button>
+        <button role="menuitem" data-cmd="dark-colours" title="Choose the dark page's colours (Graphite, Slate, Warm dark) or make your own">Dark Page Colours…</button>
         <button role="menuitemcheckbox" aria-checked="true" data-cmd="group-tips" title="Rest the mouse on an abbreviation such as OTBS, Boc or CO2Me to see the group written out, with its name and formula"><span>Group Tooltips</span></button>
         <button role="menuitemcheckbox" aria-checked="true" data-cmd="scroll-bars" title="Scroll bars along the bottom and right of the drawing, showing where you are"><span>Scroll Bars</span></button>
         <button role="menuitemcheckbox" aria-checked="false" data-cmd="split-view" title="A drawing beside the document, sheet or slides, so you can draw and write without switching tabs"><span>Split View: Drawing Beside</span></button>
@@ -233,6 +237,7 @@
     </select>
     <button id="btn-stress" class="dev-only" hidden title="Draw many molecules to test speed">Stress test</button>
     <span class="sep"></span>
+    <button id="btn-dark" type="button" aria-pressed="false" data-cmd="dark-page" title="Dark page: show the page dark on screen only (files, printing and copies are not changed)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12S5.5 4.5 12 4.5 22.5 12 22.5 12 18.5 19.5 12 19.5 1.5 12 1.5 12Z"/><circle cx="12" cy="12" r="3.5"/></svg></button>
     <button id="btn-help" title="Hotkeys and how to use the program">Help</button>
     <h1 class="app-name">Chem Illustrator</h1>
   </header>
@@ -718,6 +723,7 @@
             <option value="standard">Standard (4:3)</option>
           </select></label>
           <button data-cmd="slide-master" title="Fonts, colours, background, logo, slide numbers, footer and structure size for every slide">Slide Master…</button>
+          <button data-cmd="drawing-style" title="How structures are drawn on every slide: a journal's style or your own">Drawing Style…</button>
         </div>
       </div>
       <div class="rb-label">Design</div>
@@ -925,6 +931,13 @@
           <li>Object menu: align, space evenly, flip, rotate, scale and join; or drag the round handle above a selection to turn it. Arrow keys nudge the selection; <kbd data-cmd-key="reaction-right"></kbd> adds a reaction arrow and a copy of the selection to turn into the product</li>
           <li>Structure menu: Clean Up Structure evens out bonds and angles while keeping stereochemistry; Fixed Bond Lengths and Fixed Angles can be turned off (or hold <kbd>Alt</kbd> while drawing)</li>
           <li>Structure &gt; Name to Structure (<kbd data-cmd-key="name-to-structure"></kbd>) draws a structure from its name: systematic (IUPAC) names, CAS-style names and many common names such as caffeine or ethyl acetate; most drug and trade names are not known. Select a caption holding a name first to replace the caption with the structure. Names are read on this computer by OPSIN, so it works offline. Substituent names such as 4-methoxyphenyl get a wavy-line point of attachment</li>
+        </ul>
+        <h3>Drawing styles</h3>
+        <ul>
+          <li>File &gt; Drawing Style… sets how structures are drawn in the tab showing: bond length, line widths, double-bond spacing and label fonts. Built in are ACS 1996 (every ACS journal), RSC, Nature journals and a larger Slides style, with the source of each set of numbers shown. Every number can be changed</li>
+          <li>Save as My Style keeps your changes under a name, in every mode. Tick Use this style for new … to make new drawings, slides, designs, documents or sheets start in it</li>
+          <li>View &gt; Dark Page (or the eye button at the top) shows the page dark: black ink as light grey, white paper as dark grey, colours dimmed. It changes the screen only; files, printing, copies and exports stay as they are. View &gt; Dark Page Colours… picks Graphite, Slate or Warm dark, or your own paper and ink colours</li>
+          <li>When there are structures already, choose Redraw (they take the new bond length and widths) or Keep their look (only new structures use the new style). One Undo puts it all back</li>
         </ul>
         <h3>Chemistry checks</h3>
         <ul>

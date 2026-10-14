@@ -485,7 +485,8 @@ export interface TableData {
 
 export type Entity = Atom | Bond | Caption | Arrow | Shape;
 /** One letter per entity type: atom, bond, caption, arrow (r), shape. */
-export type Kind = 'a' | 'b' | 'c' | 'r' | 's';
+/** What an undo step can hold: atoms, bonds, captions, arrows, shapes, and 'y' the drawing style. */
+export type Kind = 'a' | 'b' | 'c' | 'r' | 's' | 'y';
 
 /**
  * The CDXML file a drawing was opened from. Saving rewrites only what changed and keeps
@@ -693,13 +694,14 @@ export class Doc {
     this.version++;
     function order(k: string): number {
       // atoms before bonds when restoring
-      return k[0] === 'a' ? 0 : k[0] === 'b' ? 1 : 2;
+      return k[0] === 'y' ? -1 : k[0] === 'a' ? 0 : k[0] === 'b' ? 1 : 2;
     }
   }
 
   private snapshot(key: string): Entity | null {
     const kind = key[0] as Kind;
     const id = Number(key.slice(1));
+    if (kind === 'y') return clone(this.style) as unknown as Entity;
     const e = this.mapOf(kind).get(id);
     return e ? clone(e) : null;
   }
@@ -711,8 +713,16 @@ export class Doc {
     this.version++;
   }
 
+  /** Change the drawing style (bond length, line widths, fonts), as part of the edit going on. */
+  setStyle(st: DocStyle): void {
+    this.touch('y', 0);
+    this.style = { ...st };
+    this.allDirty = true;
+  }
+
   private mapOf(kind: Kind): Map<number, Entity> {
     switch (kind) {
+      case 'y': return new Map();
       case 'a': return this.atoms as Map<number, Entity>;
       case 'b': return this.bonds as Map<number, Entity>;
       case 'c': return this.captions as Map<number, Entity>;
@@ -743,6 +753,11 @@ export class Doc {
   }
 
   private rawSet(kind: Kind, id: number, e: Entity | null): void {
+    if (kind === 'y') {
+      if (e) this.style = { ...(e as unknown as DocStyle) };
+      this.allDirty = true;
+      return;
+    }
     if (!this.allDirty) {
       this.markDirty(kind, this.mapOf(kind).get(id));
       this.markDirty(kind, e);

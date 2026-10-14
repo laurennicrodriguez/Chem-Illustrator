@@ -40,6 +40,10 @@ import { LayersPanel } from './ui/layers-panel';
 import { Scrollbars } from './ui/scrollbars';
 import { Presenter } from './ui/present';
 import { editMaster } from './ui/master-dialog';
+import { editDrawingStyle } from './ui/style-dialog';
+import type { DocText } from './document/document';
+import { DARK_PALETTES, darkPaletteNamed, showDarkPage, type DarkPalette } from './dark-page';
+import { applyStyle, restyleContents, styleNamed, type StyleMode } from './drawing-styles';
 import { recordPicture, pictureSvg, pictureCanvas, canvasPng, bitmapScale, EXPORT_MAX_SIDE, EXPORT_MAX_PIXELS } from './render/picture';
 import { pngWithDpi } from './render/emf-read';
 import { whiteToClear } from './render/background';
@@ -133,6 +137,11 @@ const startMs = performance.now();
 // Split view (View > Split View): a drawing beside a document, sheet or slides.
 /** The share of the width the drawing takes (settings.json). */
 let splitWidth = 0.38;
+/** Your own drawing styles, and the style each kind of new tab starts with (settings.json). */
+let ownStyles: DocStyle[] = [];
+let modeStyles: Partial<Record<StyleMode, string>> = {};
+/** View > Dark Page: on or off, which palette, and your own palettes. */
+const dark = { on: false, palette: 'Graphite', own: [] as DarkPalette[] };
 /** Beside slides: the deck whose drawing is being worked on (the drawing's tab shows; the slide is a picture). */
 let slideSplit: Tab | null = null;
 /** Beside a document or sheet: the drawing has the keys and menus (it was clicked last). */
@@ -346,6 +355,7 @@ $('#btn-redo').addEventListener('click', () => redo());
 $('#btn-fit').addEventListener('click', () => command('zoom-fit'));
 $('#btn-stress').addEventListener('click', () => stressTest(Number($<HTMLSelectElement>('#stress-n').value)));
 $('#btn-help').addEventListener('click', () => openHelp());
+$('#btn-dark').addEventListener('click', () => command('dark-page'));
 $('#help-hotkeys').addEventListener('click', () => { $<HTMLDialogElement>('#help').close(); hotkeysDialog.open(); });
 $('#help-close').addEventListener('click', () => $<HTMLDialogElement>('#help').close());
 /** View > Show R/S Preview: every R/S and E/Z label in red, on screen only. */
@@ -1064,6 +1074,7 @@ const ws: Workspace = new Workspace(doc, {
     read: (bytes) => readDocx(bytes, docRead),
     write: (d) => writeDocx(d, docFiles),
   },
+  newStyle: (mode) => { const n = modeStyles[mode]; return n ? styleNamed(n, ownStyles) ?? null : null; },
 });
 
 /** The slide deck showing (in Slides mode), or null for a drawing. */
@@ -1596,6 +1607,58 @@ onImageReady(() => {
 });
 
 // ---------------------------------------------------------------- slide master and the slide show
+
+// ---------------------------------------------------------------- File > Drawing Style
+
+const STYLE_KINDS: Record<StyleMode, { plural: string; where: string }> = {
+  drawing: { plural: 'drawings', where: 'this drawing' },
+  slides: { plural: 'slide decks', where: 'every slide of this deck' },
+  design: { plural: 'designs', where: 'this design' },
+  document: { plural: 'documents', where: 'this document' },
+  sheet: { plural: 'sheets', where: 'this workbook\'s structure cells' },
+};
+
+/** Pick or change how structures are drawn in the tab showing (a journal's style, or your own). */
+async function drawingStyleDialog(): Promise<void> {
+  const tab = ws.active, mode = tab.mode as StyleMode;
+  finishTyping();
+  const deck = tab.deck, book = tab.book, file = tab.document;
+  const current = deck ? deck.master.drawing : book ? book.drawingStyle : file ? file.t.drawingStyle : doc.style;
+  const hasStructures = deck ? deck.slides.some((_, i) => deck.docOf(i).atoms.size > 0)
+    : file ? Object.values(file.t.objects).some((o) => o.kind === 'drawing' && o.contents.atoms.length > 0)
+    : book ? false : doc.atoms.size > 0 || doc.captions.size > 0;
+  const got = await editDrawingStyle({
+    current, own: ownStyles, kindPlural: STYLE_KINDS[mode].plural, where: STYLE_KINDS[mode].where,
+    isDefault: modeStyles[mode] !== undefined && modeStyles[mode] === current.name, hasStructures,
+  });
+  if (!got || ws.active !== tab) return;
+  ownStyles = got.own;
+  if (got.forNew) modeStyles[mode] = got.style.name;
+  else if (modeStyles[mode] === current.name || modeStyles[mode] === got.style.name) delete modeStyles[mode];
+  if (modeStyles[mode] && !styleNamed(modeStyles[mode]!, ownStyles)) {
+    // a default that isn't a built-in style is kept as one of your own, so new tabs can find it
+    ownStyles = [...ownStyles, { ...got.style }];
+  }
+  storeSettings();
+  const next = got.style;
+  if (deck) deck.setDrawingStyle(next, got.how);
+  else if (book) {
+    book.drawingStyle = { ...next };
+    book.edits++;
+    sheetMode.styleChanged();
+  } else if (file) {
+    const t = file.t, old = t.drawingStyle;
+    const objects = { ...t.objects };
+    for (const [k, o] of Object.entries(objects)) if (o.kind === 'drawing') objects[Number(k)] = { ...o, contents: restyleContents(o.contents, old, next, got.how) };
+    const changed: DocText = { ...t, objects, drawingStyle: { ...next } };
+    file.ed.update(changed, 'Drawing style');
+    docMode.fontsChanged();
+  } else {
+    doc.edit(`Drawing style: ${next.name}`, () => applyStyle(doc, next, got.how));
+    editor.changed();
+  }
+  flash(`Structures are now drawn in ${next.name}${got.forNew ? `, and new ${STYLE_KINDS[mode].plural} will start in it` : ''}.`, 4000);
+}
 
 async function slideMaster(): Promise<void> {
   const d = deckNow();
@@ -2210,7 +2273,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-custom', 'toolbox-details', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view']);
+  'drawing-style', 'dark-page', 'dark-colours', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
@@ -2275,6 +2338,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'size-wide': () => setSlideSize(WIDE),
   'size-standard': () => setSlideSize(STANDARD),
   'slide-master': () => slideMaster(),
+  'drawing-style': () => drawingStyleDialog(),
   present: () => present(false),
   'present-current': () => present(true),
   cut: () => cut(),
@@ -2328,6 +2392,8 @@ const COMMANDS: Record<string, () => unknown> = {
   'show-stereo': () => previewStereo(!renderer.previewStereo),
   'scroll-bars': () => { showScrollBars(!scrollbars.shown); storeSettings(); },
   'group-tips': () => { showGroupTips(!labelTips.enabled); storeSettings(); },
+  'dark-page': () => { showDark(!dark.on); storeSettings(); },
+  'dark-colours': () => darkColours(),
   'zoom-in': () => editor.zoomBy(1.25),
   'zoom-out': () => editor.zoomBy(0.8),
   'zoom-fit': () => editor.fit(),
@@ -2818,6 +2884,11 @@ function storeSettings(): void {
     askWholeDrawing,
     palettes: getPalettes(),
     toolboxes: toolboxState,
+    myStyles: ownStyles,
+    modeStyles,
+    darkPage: dark.on,
+    darkPalette: dark.palette,
+    darkPalettes: dark.own,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -2931,6 +3002,18 @@ void loadSettings().then((s) => {
   askWholeDrawing = s.askWholeDrawing;
   setPalettes(s.palettes);
   toolboxState = s.toolboxes;
+  ownStyles = s.myStyles;
+  modeStyles = s.modeStyles;
+  dark.palette = s.darkPalette;
+  dark.own = s.darkPalettes;
+  showDark(s.darkPage);
+  // the drawing the app opened with takes your default style, if nothing has been drawn yet
+  const first = modeStyles.drawing ? styleNamed(modeStyles.drawing, ownStyles) : undefined;
+  if (first && ws.tabs.length === 1 && ws.active.mode === 'drawing' && ws.active.ref.kind === 'none' && doc.atoms.size === 0 && !doc.canUndo()) {
+    doc.style = first;
+    doc.allDirty = true;
+    editor.changed();
+  }
   toolboxes.render();
   tickToolboxes();
   placeSidePanel();
@@ -3620,13 +3703,14 @@ function drawingMenu(): MenuItem[] {
   const atoms = s.atoms.size > 0;
   const shapes = [...s.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => !!x);
   const design = ws.active.mode === 'design';
-  const view: MenuItem = { label: 'View', items: [{ cmd: 'zoom-in' }, { cmd: 'zoom-out' }, { cmd: 'zoom-fit' }, { cmd: 'zoom-actual' }, null, { cmd: 'show-stereo' }, { cmd: 'group-tips' }, { cmd: 'scroll-bars' }] };
+  const view: MenuItem = { label: 'View', items: [{ cmd: 'zoom-in' }, { cmd: 'zoom-out' }, { cmd: 'zoom-fit' }, { cmd: 'zoom-actual' }, null, { cmd: 'show-stereo' }, { cmd: 'group-tips' }, { cmd: 'scroll-bars' }, null, { cmd: 'dark-page' }, { cmd: 'dark-colours' }] };
   if (!any) {
     return [
       { cmd: 'paste' }, { cmd: 'paste-smiles' }, { cmd: 'select-all' }, null,
       { cmd: 'undo' }, { cmd: 'redo' }, null,
       { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'connector-tool' }] : [])] },
       { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] },
+      { cmd: 'drawing-style' },
       view,
     ];
   }
@@ -3703,6 +3787,39 @@ function groupTipTarget(e: PointerEvent) {
 renderer.overlay.addEventListener('pointermove', (e) => labelTips.over(groupTipTarget(e)));
 for (const ev of ['pointerdown', 'pointerleave', 'wheel'] as const) renderer.overlay.addEventListener(ev, () => labelTips.hide());
 window.addEventListener('keydown', () => labelTips.hide());
+
+/** Show the page dark (screen only) or as it is, and tick the menu and the eye button. */
+function showDark(on: boolean): void {
+  dark.on = on;
+  showDarkPage(on ? darkPaletteNamed(dark.palette, dark.own) : null);
+  $('[data-cmd="dark-page"][role="menuitemcheckbox"]')?.setAttribute('aria-checked', String(on));
+  $('#btn-dark').setAttribute('aria-pressed', String(on));
+}
+
+/** View > Dark Page Colours…: pick a palette, change its paper and ink, or keep your own. */
+async function darkColours(): Promise<void> {
+  const all = (): DarkPalette[] => [...DARK_PALETTES, ...dark.own];
+  const cur = darkPaletteNamed(dark.palette, dark.own);
+  const got = await ask('Dark page colours', [
+    { name: 'palette', label: 'Palette', value: cur.name, options: [...all().map((p) => ({ value: p.name, label: dark.own.includes(p) ? `${p.name} (yours)` : p.name }))] },
+    { name: 'paper', label: 'Paper shows as', value: cur.paper, type: 'color' },
+    { name: 'ink', label: 'Black ink shows as', value: cur.ink, type: 'color' },
+    { name: 'name', label: 'Save as your own, named', value: '', placeholder: 'leave empty to use the palette as it is' },
+  ], { ok: 'Use', note: 'Only the screen changes: files, printing, copying and exports keep their white paper and black ink. The colours shown are the palette in use now: pick another palette and leave them alone to use it as it is, or change them (and give a name) to keep your own.' });
+  if (!got) return;
+  const base = darkPaletteNamed(got.palette, dark.own);
+  // colours left as they were mean "this palette as it is"
+  const untouched = got.paper === cur.paper && got.ink === cur.ink;
+  const changed = !untouched && (got.paper !== base.paper || got.ink !== base.ink);
+  const name = got.name.trim();
+  if (changed || name) {
+    const p: DarkPalette = { name: name || `${base.name} (changed)`, paper: got.paper || base.paper, ink: got.ink || base.ink };
+    dark.own = [...dark.own.filter((o) => o.name !== p.name), p];
+    dark.palette = p.name;
+  } else dark.palette = base.name;
+  showDark(true);
+  storeSettings();
+}
 
 function showGroupTips(on: boolean): void {
   labelTips.enabled = on;
