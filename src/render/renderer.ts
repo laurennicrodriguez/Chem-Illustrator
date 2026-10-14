@@ -239,7 +239,7 @@ export class Renderer {
     if (c) return c;
     const deg = doc.degree(a.id);
     const bos = doc.valenceSum(a.id);
-    const spec = a.attach ? null : labelSpec(a.z, a.label, a.charge, a.isotope, bos, deg, !a.hideCharge);
+    const spec = a.attach ? null : labelSpec(a.z, a.label, a.charge, a.isotope, bos, deg, !a.hideCharge, !!a.showCarbon);
     let layout: LabelLayout | null = null;
     const boxes: Rect[] = [];
     const k = a.s ?? 1;
@@ -618,7 +618,7 @@ export class Renderer {
           if (f !== curFont) { ctx.font = f; curFont = f; }
           ctx.fillText(r.text, a.x + r.dx, a.y + r.dy);
         }
-      } else if (a.charge && a.z === 6 && !a.hideCharge) {
+      } else if (a.charge && a.z === 6 && !a.hideCharge, !!a.showCarbon) {
         this.drawCarbonCharge(ctx, doc, a);
       }
       if (a.showNumber && a.atomNumber) curFont = this.drawAtomNumber(ctx, doc, a, curFont);

@@ -50,6 +50,8 @@ const BRACKETS: Opt<NonNullable<Shape['bracket']>>[] = [['square', 'Square [ ]']
 const JUSTIFY: Opt<Caption['justify']>[] = [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']];
 const TABLE_LINES: Opt<TableData['lines']>[] = [['acs', 'ACS style (rules above and below the headings, and at the end)'], ['grid', 'Every cell boxed'], ['none', 'None']];
 
+const LABEL_DIRS: Opt<Atom['just']>[] = [['auto', 'Automatically (away from the bonds)'], ['right', 'To the right (OMe)'], ['left', 'To the left (MeO)']];
+
 type Fill = 'none' | 'solid' | 'faded' | 'shaded';
 const FILLS: Opt<Fill>[] = [['none', 'None'], ['solid', 'Solid colour'], ['faded', 'Faded (light tint)'], ['shaded', 'Shaded (light to dark)']];
 
@@ -375,6 +377,12 @@ export class StylePanel {
       'Type a label (O, NH2, OTBS, CO2Et…); leave empty for a plain carbon.');
     this.number('Charge', a.charge, 1, -8, 8, (v) => set('Charge', { charge: v }));
     this.color('Colour', a.color, (v) => set('Atom colour', { color: v }));
+    if (a.label || a.z !== 6 || a.showCarbon) {
+      this.select('Label runs', LABEL_DIRS, a.just, (v) => set('Label direction', { just: v }));
+    }
+    if (a.z === 6 && !a.label && this.doc.degree(a.id) > 0) {
+      this.check('Show C and its H', !!a.showCarbon, (v) => set(v ? 'Show carbon' : 'Hide carbon', { showCarbon: v || undefined }));
+    }
     this.check('Show atom number', !!a.showNumber, (v) => set(v ? 'Show atom number' : 'Hide atom number',
       v ? { showNumber: true, atomNumber: a.atomNumber || String(nextNumber(this.doc, a.id, (x) => x.atomNumber)) } : { showNumber: false }));
     if (a.showNumber || a.atomNumber) {

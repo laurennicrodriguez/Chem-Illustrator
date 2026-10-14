@@ -191,7 +191,7 @@ export function reactionSteps(doc: Doc, items: Item[]): { arrow: Arrow; roles: S
 export function plainMeasure(doc: Doc): Measure {
   return {
     atomBoxes(a: Atom): Rect[] {
-      const spec = a.attach ? null : labelSpec(a.z, a.label, a.charge, a.isotope, doc.valenceSum(a.id), doc.degree(a.id), !a.hideCharge);
+      const spec = a.attach ? null : labelSpec(a.z, a.label, a.charge, a.isotope, doc.valenceSum(a.id), doc.degree(a.id), !a.hideCharge, !!a.showCarbon);
       if (!spec) return [];
       const k = a.s ?? 1;
       const dirs = doc.neighbors(a.id).map((n) => norm(sub(n, a)));

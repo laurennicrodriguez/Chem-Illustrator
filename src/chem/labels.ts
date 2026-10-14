@@ -145,10 +145,10 @@ export interface LabelSpec {
 }
 
 /** Tokens to show for an atom: its custom label, or element + hydrogens. Null = no label (plain carbon). */
-export function labelSpec(z: number, label: string | null, charge: number, isotope: number, bondOrderSum: number, degree: number, showCharge = true): LabelSpec | null {
+export function labelSpec(z: number, label: string | null, charge: number, isotope: number, bondOrderSum: number, degree: number, showCharge = true, showCarbon = false): LabelSpec | null {
   const shown = showCharge ? charge : 0;
   if (label) return { tokens: tokenize(label), hCount: 0, charge: shown };
-  if (z === 6 && degree > 0 && isotope === 0) return null;
+  if (z === 6 && degree > 0 && isotope === 0 && !showCarbon) return null;
   const h = hasImplicitH(z) ? implicitHydrogens(z, bondOrderSum, charge) : 0;
   const sym = isotope && z === 1 && isotope === 2 ? 'D' : SYMBOLS[z] ?? '?';
   return { tokens: [{ kind: 'el', text: sym, count: 1, charge: '' }], hCount: h, charge: shown };

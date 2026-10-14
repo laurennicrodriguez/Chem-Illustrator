@@ -191,6 +191,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         }
       }
       if (n.getAttribute('ShowAtomStereo') === 'yes') extra.showStereo = true;
+      if (n.getAttribute('ShowTerminalCarbonLabels') === 'yes' || n.getAttribute('ShowNonTerminalCarbonLabels') === 'yes') extra.showCarbon = true;
       const atomNumber = n.getAttribute('AtomNumber');
       if (atomNumber) extra.atomNumber = atomNumber;
       if (n.getAttribute('ShowAtomNumber') === 'yes') extra.showNumber = true;

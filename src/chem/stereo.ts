@@ -295,7 +295,7 @@ function boxDistance(a: Rect, b: Rect): number {
 function labelBoxesOf(doc: Doc, measure: Measure): (a: Atom) => Rect[] {
   return (a) => {
     if (a.attach) return [];
-    const spec = labelSpec(a.z, a.label, a.charge, a.isotope, doc.valenceSum(a.id), doc.degree(a.id), !a.hideCharge);
+    const spec = labelSpec(a.z, a.label, a.charge, a.isotope, doc.valenceSum(a.id), doc.degree(a.id), !a.hideCharge, !!a.showCarbon);
     if (!spec) return [];
     if (a.supDigits) spec.supDigits = true;
     const k = a.s ?? 1;

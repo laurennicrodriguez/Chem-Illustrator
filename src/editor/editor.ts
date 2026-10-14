@@ -21,6 +21,7 @@ import { joinAtoms, joinBonds } from '../chem/join';
 import { extractDrawing, insertDrawing } from '../io/clipboard';
 import { isReactionArrow, itemFinder, rolesOf, ROLES, schemeItems, type Item, type Role } from '../chem/reaction';
 import { applySchemePlan, planCleanUp } from '../chem/scheme-layout';
+import { toggleChainEndLabels, toggleExplicitHydrogens } from '../chem/hydrogens';
 import { circleRing, circleRings, kekulize } from '../chem/aromatic';
 import { bondLayer, crossingBonds } from '../chem/crossing';
 import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
@@ -1525,6 +1526,26 @@ export class Editor {
    * Aromatic rings in the selection (or the whole drawing) drawn with circles, or back as
    * alternating double bonds when they already have circles. Says what it did, or null.
    */
+  /** Show or hide CH3 at the chain ends of the selection (or the whole drawing). */
+  toggleChainEnds(): string {
+    let r = { count: 0, shown: false };
+    this.doc.edit('Chain-End Carbons', () => { r = toggleChainEndLabels(this.doc, this.sel.atoms); });
+    if (!r.count) return 'No chain ends here: a chain end is a plain carbon with one bond.';
+    this.changed();
+    return r.shown ? `CH₃ written out at ${r.count} chain end${r.count > 1 ? 's' : ''}.` : 'Chain ends back to plain lines.';
+  }
+
+  /** Hide the H atoms that don't matter, or draw the selected atoms' hydrogens as atoms. */
+  toggleHydrogens(): string {
+    const ids = [...this.sel.atoms];
+    let r = { removed: 0, added: 0 };
+    this.doc.edit('Explicit Hydrogens', () => { r = toggleExplicitHydrogens(this.doc, ids); });
+    if (!r.removed && !r.added) return ids.length ? 'These atoms have no hydrogens to draw.' : 'No H atoms to hide. Select atoms to draw their hydrogens as atoms.';
+    this.sel = emptySel();
+    this.changed();
+    return r.removed ? `${r.removed} H atom${r.removed > 1 ? 's' : ''} hidden (those on wedges, charged or on heteroatoms are kept).` : r.added > 1 ? `${r.added} hydrogens drawn as atoms.` : '1 hydrogen drawn as an atom.';
+  }
+
   toggleAromaticCircles(): string | null {
     const doc = this.doc;
     const bonds = new Set(this.sel.bonds);
