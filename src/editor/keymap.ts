@@ -176,7 +176,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   'export-pdf': 'Export PDF…', 'insert-picture': 'Insert a picture…', crop: 'Crop the selected picture',
   'new-slide': 'New slide', 'duplicate-slide': 'Duplicate slide', 'delete-slide': 'Delete slide',
   'next-slide': 'Next slide', 'prev-slide': 'Previous slide', 'slide-master': 'Slide Master…',
-  present: 'Present from the first slide', 'present-current': 'Present from this slide',
+  present: 'Present from the first slide', 'present-current': 'Present from this slide', 'presenter-view': 'Presenter View (notes, next slide and timer)',
   'dev-tools': 'Developer tools on or off (speed panel, stress test)',
   // sheets
   'new-sheet': 'New sheet', 'insert-sheet': 'Insert a worksheet',
@@ -319,7 +319,7 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
   }),
   // PowerPoint's keys
   slides: verbs('command', {
-    F5: 'present', 'Shift+F5': 'present-current', 'Ctrl+M': 'new-slide', 'Ctrl+N': 'new-slides',
+    F5: 'present', 'Shift+F5': 'present-current', 'Alt+F5': 'presenter-view', 'Ctrl+M': 'new-slide', 'Ctrl+N': 'new-slides',
     PageDown: 'next-slide', PageUp: 'prev-slide',
   }),
   // Excel's keys

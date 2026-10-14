@@ -40,6 +40,7 @@ import { DesignLibrary, GEO_DRAG_TYPE, pickDesignSize, sizeLabel } from './ui/de
 import { LayersPanel } from './ui/layers-panel';
 import { Scrollbars } from './ui/scrollbars';
 import { Presenter } from './ui/present';
+import { PresenterView } from './ui/presenter-view';
 import { editMaster } from './ui/master-dialog';
 import { editDrawingStyle } from './ui/style-dialog';
 import type { DocText } from './document/document';
@@ -996,6 +997,7 @@ const notesBox = $<HTMLTextAreaElement>('#notes');
 const layoutSel = $<HTMLSelectElement>('#rb-layout');
 const sizeSel = $<HTMLSelectElement>('#rb-size');
 const presenter = new Presenter();
+const presenterView = new PresenterView();
 
 /** View > Mode Colours: blue for drawings, orange for slides, green for sheets, or the person's own colours. */
 let modeColours: ModeColours = { ...DEFAULT_MODE_COLOURS };
@@ -1745,15 +1747,16 @@ async function slideTemplates(): Promise<void> {
   }
 }
 
-function present(fromHere: boolean): void {
+function present(fromHere: boolean, notes = false): void {
   const d = deckNow();
   if (!d) { flash('Present shows slides: use File > New Slides, or open a PowerPoint file.'); return; }
+  if (presenter.running || presenterView.running) return;
   finishTyping();
   editor.paused = true;
-  void presenter.start(d, fromHere ? d.index : 0);
+  void (notes ? presenterView : presenter).start(d, fromHere ? d.index : 0);
 }
 
-presenter.onEnd = (i) => {
+presenter.onEnd = presenterView.onEnd = (i) => {
   editor.paused = false;
   // carry on editing the slide the show ended on
   goSlide(i);
@@ -2521,6 +2524,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'drawing-style': () => drawingStyleDialog(),
   present: () => present(false),
   'present-current': () => present(true),
+  'presenter-view': () => present(false, true),
   cut: () => cut(),
   copy: () => copy(),
   paste: () => paste(),
