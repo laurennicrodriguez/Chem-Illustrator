@@ -21,6 +21,12 @@ import { isBlankDrawing } from '../sheet/structure-doc';
 import { StructurePictures } from './structure-pictures';
 import { askProperties, PropertyChoice } from './property-dialog';
 import { ask } from './ask';
+import { SheetFormatting } from './sheet-format-ui';
+import { SheetCharts } from './sheet-chart-ui';
+import type { ChartKind } from '../sheet/chart';
+import { DashboardUi } from './dashboard-ui';
+import { TILE_NAMES } from '../sheet/dashboard';
+import type { TableDef } from '../sheet/table-styles';
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
 import type { Tab } from '../workspace';
@@ -71,6 +77,16 @@ export class SheetMode {
   private panelTitle: HTMLElement;
   private ribbon: HTMLElement;
   private panelQueued = false;
+  /** Conditional formatting and tables. */
+  readonly formatting: SheetFormatting;
+  /** Charts on the sheets. */
+  readonly charts: SheetCharts;
+  /** Dashboard sheets: adding tiles, their menus and settings. */
+  readonly dashUi: DashboardUi;
+  /** The chart the panel and Chart tab showed last (the tab opens when a chart is first picked). */
+  private chartShown: number | null = null;
+  /** The dashboard sheet the ribbon was last set up for. */
+  private dashShown: Sheet | null = null;
   /** The last cells copied here: pasting the same text back uses these (formulas, structures and formats kept). */
   private clip: { text: string; block: CellBlock; sheet: Sheet; range: Range; cut: boolean } | null = null;
 
@@ -89,7 +105,13 @@ export class SheetMode {
       editStructure: (r, c) => this.drawStructure(r, c),
       key: (e) => this.host.key(e),
       changed: () => this.selectionChanged(),
-      contextMenu: (x, y, where) => this.contextMenu(x, y, where),
+      contextMenu: (x, y, where) => (where === 'chart' ? this.charts.contextMenu(x, y) : where === 'tile' ? this.dashUi.contextMenu(x, y) : this.contextMenu(x, y, where)),
+      editChart: () => { this.showRibbonTab('chart'); this.renderPanel(); this.charts.focusPanel(); },
+      openTile: (t) => {
+        if (t.kind === 'chart') { this.dashUi.bindChart(t.id); this.showRibbonTab('chart'); }
+        this.renderPanel();
+        this.dashUi.focusPanel();
+      },
       filterMenu: (col, at) => this.filterMenu(col, at),
       flash: (m, ms) => this.host.flash(m, ms),
       typing: (text) => this.typing(text),
@@ -101,6 +123,17 @@ export class SheetMode {
       this.view.refresh();
       this.schedulePanel();
     };
+    this.formatting = new SheetFormatting({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+    });
+    this.charts = new SheetCharts({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+    });
+    this.dashUi = new DashboardUi({ view: this.view, charts: this.charts, flash: (m, ms) => this.host.flash(m, ms) });
     this.wireFormulaBar();
     this.wireRibbon();
   }
@@ -299,6 +332,48 @@ export class SheetMode {
     rb.addEventListener('pointerdown', (e) => {
       if ((e.target as HTMLElement).closest('button')) e.preventDefault();
     });
+    // ribbon tabs
+    for (const b of rb.querySelectorAll<HTMLButtonElement>('[data-sh-tab]')) b.addEventListener('click', () => this.showRibbonTab(b.dataset.shTab!));
+    // Table Design
+    const table = () => this.tableHere();
+    for (const box of rb.querySelectorAll<HTMLInputElement>('[data-table-opt]')) {
+      box.addEventListener('change', () => {
+        const t = table();
+        if (!t) return;
+        const opt = box.dataset.tableOpt as keyof TableDef;
+        if (opt === 'totals') this.formatting.toggleTotals(t);
+        else if (opt === 'header' && !box.checked) { box.checked = true; this.host.flash('A table keeps its header row here (Excel needs one to save it as a table). Use Convert to Range for plain cells.'); }
+        else this.formatting.setTable(t, { [opt]: box.checked || undefined } as Partial<TableDef>, 'Table options');
+        this.view.focus();
+      });
+    }
+    const name = rb.querySelector<HTMLInputElement>('#sh-table-name')!;
+    name.addEventListener('change', () => {
+      const t = table();
+      const v = name.value.trim().replace(/\s+/g, '_');
+      if (!t || !v) return;
+      if (!/^[A-Za-z_\\][A-Za-z0-9_.]*$/.test(v)) { this.host.flash('A table name starts with a letter and has no spaces (Excel\'s rule).'); name.value = t.name; return; }
+      this.formatting.setTable(t, { name: v }, 'Rename table');
+    });
+    for (const [id, key] of [['#sh-table-header', 'header'], ['#sh-table-band', 'band']] as const) {
+      rb.querySelector<HTMLInputElement>(id)!.addEventListener('change', (e) => {
+        const t = table();
+        if (!t) return;
+        this.formatting.setTable(t, { custom: { ...t.custom, [key]: (e.target as HTMLInputElement).value } }, 'Table colours');
+      });
+    }
+  }
+
+  /** Show one of the ribbon's tabs. */
+  private showRibbonTab(name: string): void {
+    for (const x of this.ribbon.querySelectorAll<HTMLButtonElement>('[data-sh-tab]')) x.setAttribute('aria-selected', String(x.dataset.shTab === name));
+    for (const p of this.ribbon.querySelectorAll<HTMLElement>('[data-sh-panel]')) p.hidden = p.dataset.shPanel !== name;
+  }
+
+  /** The table the active cell is in. */
+  private tableHere(): TableDef | undefined {
+    const s = this.view.sheet;
+    return s?.tableAt(this.view.sel.active.r, this.view.sel.active.c);
   }
 
   private ribbonCommand(name: string, btn: HTMLElement): void {
@@ -309,6 +384,18 @@ export class SheetMode {
       case 'borders': this.bordersMenu(b.left, b.bottom + 2); return;
       case 'insert': this.insertMenu(b.left, b.bottom + 2); return;
       case 'delete': this.deleteMenu(b.left, b.bottom + 2); return;
+      case 'conditional-formatting': this.formatting.conditionalMenu(b.left, b.bottom + 2); return;
+      case 'format-as-table': this.formatting.tableMenu(b.left, b.bottom + 2); return;
+      case 'chart-type': this.charts.typeMenu(b.left, b.bottom + 2); return;
+      case 'chart-fit': this.charts.fitMenu(b.left, b.bottom + 2); return;
+      case 'chart-legend': this.charts.legendMenu(b.left, b.bottom + 2); return;
+      case 'chart-palette': this.charts.paletteMenu(b.left, b.bottom + 2); return;
+      case 'chart-errors': this.charts.errorsMenu(b.left, b.bottom + 2); return;
+      case 'table-style': {
+        const t = this.tableHere();
+        if (t) this.formatting.tableMenu(b.left, b.bottom + 2, (style) => this.formatting.setTable(t, { style }, 'Table style'));
+        return;
+      }
     }
     this.run(name);
   }
@@ -361,7 +448,33 @@ export class SheetMode {
       case 'structure-from-name': void this.structureFromName(); break;
       case 'draw-structure': this.drawStructure(v.sel.active.r, v.sel.active.c); break;
       case 'reset-calculated': this.resetCalculated(); break;
-      case 'copy': void this.copy(); break;
+      case 'manage-rules': this.formatting.manage(); break;
+      case 'new-rule': void this.formatting.ruleDialog(null); break;
+      case 'insert-table': if (v.sheet.dashboard) void this.dashUi.addTile('table'); else void this.formatting.formatAsTable(this.tableHere()?.style ?? 'TableStyleMedium2'); break;
+      case 'table-convert': { const t = this.tableHere(); if (t) this.formatting.convertToRange(t); break; }
+      case 'table-colours-reset': { const t = this.tableHere(); if (t) this.formatting.setTable(t, { custom: undefined }, 'Table colours'); break; }
+      case 'chart-scatter': case 'chart-line': case 'chart-column': case 'chart-bar': case 'chart-area': case 'chart-pie':
+        if (v.sheet.dashboard) void this.dashUi.addTile('chart', name.slice(6) as ChartKind);
+        else this.charts.insert(name.slice(6) as ChartKind);
+        break;
+      case 'dash-add-chart': void this.dashUi.addTile('chart'); break;
+      case 'dash-add-kpi': void this.dashUi.addTile('kpi'); break;
+      case 'dash-add-table': void this.dashUi.addTile('table'); break;
+      case 'dash-add-slicer': void this.dashUi.addTile('slicer'); break;
+      case 'dash-add-gallery': void this.dashUi.addTile('gallery'); break;
+      case 'dash-add-text': void this.dashUi.addTile('text'); break;
+      case 'dash-clear-filters': this.dashUi.clearFilters(); break;
+      case 'dash-settings': v.dash.pick(null); this.renderPanel(); this.dashUi.focusPanel(); break;
+      case 'insert-dashboard': v.addDashboard(); break;
+      case 'chart-add-series': void this.charts.addSeries(); break;
+      case 'chart-edit': this.charts.focusPanel(); break;
+      case 'chart-titles': void this.charts.titles(); break;
+      case 'chart-axes': void this.charts.axes(); break;
+      case 'chart-labels': this.charts.toggleLabels(); break;
+      case 'chart-copy': void this.charts.copyPicture(); break;
+      case 'chart-save': void this.charts.savePicture(); break;
+      case 'chart-delete': this.charts.deleteChart(); break;
+      case 'copy': if (this.charts.chart) void this.charts.copyPicture(); else void this.copy(); break;
       case 'cut': void this.copy(true); break;
       case 'paste': void this.paste(null); break;
       case 'clear-contents': v.clearSelection(); break;
@@ -1287,7 +1400,17 @@ export class SheetMode {
       ['Structure from name or SMILES…', () => void this.structureFromName()],
       ['Insert property columns…', () => void this.propertyColumns()],
       ['Reset to calculated', () => this.resetCalculated(), overrides],
+      null,
+      ['Conditional Formatting ▸', () => this.formatting.conditionalMenu(x, y)],
     );
+    const table = this.tableHere();
+    if (table) {
+      items.push(
+        ['Table Style ▸', () => this.formatting.tableMenu(x, y, (style) => this.formatting.setTable(table, { style }, 'Table style'))],
+        [table.totals ? 'Remove the totals row' : 'Add a totals row', () => this.formatting.toggleTotals(table)],
+        ['Convert table to range', () => this.formatting.convertToRange(table)],
+      );
+    } else items.push(['Format as Table ▸', () => this.formatting.tableMenu(x, y)]);
     popupMenu(x, y, items);
   }
 
@@ -1356,10 +1479,36 @@ export class SheetMode {
     });
   }
 
+  /** On a dashboard sheet the ribbon shows the Dashboard tab (and Chart while a chart tile is picked)
+   *  instead of the cell tabs, and the formula bar hides. True when the sheet is a dashboard. */
+  private dashRibbon(s: Sheet): boolean {
+    const tab = (n: string) => this.ribbon.querySelector<HTMLButtonElement>(`[data-sh-tab=${n}]`)!;
+    const selected = this.ribbon.querySelector<HTMLButtonElement>('[data-sh-tab][aria-selected=true]')?.dataset.shTab;
+    const on = !!s.dashboard;
+    document.querySelector<HTMLElement>('#formula-bar')!.hidden = on;
+    tab('home').hidden = on;
+    tab('dashboard').hidden = !on;
+    if (!on) {
+      if (selected === 'dashboard') this.showRibbonTab('home');
+      this.dashShown = null;
+      return false;
+    }
+    tab('table').hidden = true;
+    const t = this.view.dash.pickedTile;
+    const chart = t?.kind === 'chart';
+    tab('chart').hidden = !chart;
+    if (this.dashShown !== s || selected === 'home' || selected === 'table' || (selected === 'chart' && !chart)) this.showRibbonTab('dashboard');
+    if (chart && this.chartShown !== t.id) this.showRibbonTab('chart');
+    this.chartShown = chart ? t.id : null;
+    this.dashShown = s;
+    return true;
+  }
+
   /** The ribbon shows the active cell's look (Bold pressed, its number format…). */
   private showRibbonState(): void {
     const s = this.view.sheet;
     if (!s) return;
+    if (this.dashRibbon(s)) return;
     const { r, c } = this.view.sel.active;
     const st = s.styleAt(r, c) ?? {};
     const press = (name: string, on: boolean) => this.ribbon.querySelector(`[data-sh="${name}"]`)?.setAttribute('aria-pressed', String(on));
@@ -1392,6 +1541,25 @@ export class SheetMode {
     };
     sw('[data-sh=text-colour] .sw', st.color, '#000000');
     sw('[data-sh=fill-colour] .sw', st.fill, 'transparent');
+    // the Chart tab shows while a chart is picked, and comes to the front when one is first picked
+    const chart = this.view.selectedChart;
+    const ctab = this.ribbon.querySelector<HTMLButtonElement>('[data-sh-tab=chart]')!;
+    if (!chart && ctab.getAttribute('aria-selected') === 'true') this.showRibbonTab('insert');
+    ctab.hidden = !chart;
+    if (chart && chart.id !== this.chartShown) this.showRibbonTab('chart');
+    this.chartShown = chart?.id ?? null;
+    // Table Design shows while the active cell is in a table
+    const t = chart ? undefined : s.tableAt(r, c);
+    const tab = this.ribbon.querySelector<HTMLButtonElement>('[data-sh-tab=table]')!;
+    if (!t && tab.getAttribute('aria-selected') === 'true') this.showRibbonTab('home');
+    tab.hidden = !t;
+    if (t) {
+      for (const box of this.ribbon.querySelectorAll<HTMLInputElement>('[data-table-opt]')) box.checked = !!t[box.dataset.tableOpt as keyof TableDef];
+      const name = this.ribbon.querySelector<HTMLInputElement>('#sh-table-name')!;
+      if (document.activeElement !== name) name.value = t.name;
+      this.ribbon.querySelector<HTMLInputElement>('#sh-table-header')!.value = t.custom?.header ?? '#4472c4';
+      this.ribbon.querySelector<HTMLInputElement>('#sh-table-band')!.value = t.custom?.band ?? '#d9e1f2';
+    }
   }
 
   /** The panel on the right: what the active cell holds, how its value is worked out, and its format. */
@@ -1400,6 +1568,31 @@ export class SheetMode {
     const wb = this.book;
     const p = this.panel;
     if (!s || !wb) { p.replaceChildren(); return; }
+    if (s.dashboard) {
+      const t = this.view.dash.pickedTile;
+      if (t?.kind !== 'chart') this.dashUi.bindChart(null);
+      // keep the panel while one of its boxes is being typed in
+      const key = JSON.stringify([t?.id ?? null, s.dashboard]);
+      if (p.contains(document.activeElement) && p.dataset.dash === key) return;
+      delete p.dataset.chart;
+      p.dataset.dash = key;
+      this.panelTitle.textContent = t ? `Dashboard: ${TILE_NAMES[t.kind]}` : 'Dashboard';
+      p.replaceChildren(...this.dashUi.panel());
+      return;
+    }
+    delete p.dataset.dash;
+    this.dashUi.bindChart(null);
+    const chart = this.view.selectedChart;
+    if (chart) {
+      // keep the panel while one of its boxes is being typed in
+      if (p.contains(document.activeElement) && p.dataset.chart === String(chart.id) && p.dataset.chartKey === JSON.stringify(chart)) return;
+      this.panelTitle.textContent = 'Chart';
+      p.dataset.chart = String(chart.id);
+      p.dataset.chartKey = JSON.stringify(chart);
+      p.replaceChildren(...this.charts.panel(chart));
+      return;
+    }
+    delete p.dataset.chart;
     const { r, c } = this.view.sel.active;
     this.panelTitle.textContent = cellName(r, c);
     const cell = s.cell(r, c);

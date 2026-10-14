@@ -22,6 +22,8 @@ import { cdxmlToCdx, cdxToCdxml } from './cdx';
 import { measureText } from '../render/renderer';
 import { recordPicture, pictureEmf, pictureCanvas, canvasPng, canvasDib } from '../render/picture';
 import { emfToSvg } from '../render/emf-read';
+import type { Item } from '../render/vector';
+import { itemsToEmf, type EmfBox } from '../render/emf';
 
 /** Our own clipboard format: the drawing as CDXML text. */
 export const OWN_FORMAT = 'Chem Illustrator CDXML';
@@ -289,6 +291,25 @@ export async function copyDrawing(doc: Doc, sel: Selection | null): Promise<stri
     return `${what} for pasting here. This browser would not take the picture.`;
   }
   return table ? `${what} as a table and a picture.` : `${what} as a picture.`;
+}
+
+/**
+ * Copy a picture made of recorded shapes (a chart, say): on Windows as a metafile and a bitmap,
+ * so Word and PowerPoint paste it sharp at any size; elsewhere as a PNG.
+ */
+export async function copyPictureItems(items: Item[], box: EmfBox, canvas: HTMLCanvasElement, dpi: number): Promise<string> {
+  lastCopy = null;
+  lastTableText = null;
+  if (nativeClipboard) {
+    await invoke('clipboard_write', packFormats([['CF_ENHMETAFILE', itemsToEmf(items, box)], ['CF_DIB', canvasDib(canvas, dpi)]]));
+    return 'Copied as a picture. Paste into Word, PowerPoint or a slide here.';
+  }
+  try {
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': canvasPng(canvas) })]);
+  } catch {
+    return 'This browser would not take the picture. Use Save as Picture instead.';
+  }
+  return 'Copied as a picture.';
 }
 
 /** Is this the table last copied here (so the copy with its title and column widths can be pasted)? */
