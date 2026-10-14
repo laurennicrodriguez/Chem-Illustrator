@@ -1084,6 +1084,19 @@ dialog.periodic-table { position: fixed; inset: 64px 16px auto auto; margin: 0; 
 .an-buttons { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .an-buttons button { padding: 2px 8px; font-size: 12px; }
 #side-content th sup, #side-content th sub { line-height: 0; }
+/* the Analysis panel's PubChem section */
+.pubchem { margin-top: 6px; }
+.pubchem .pc-name { overflow-wrap: anywhere; font-family: var(--ui-font); }
+.pubchem a { color: var(--accent); }
+.pc-signal { font-weight: 600; }
+.pc-danger { color: var(--slow); }
+.pc-warning { color: var(--warn); }
+.pc-pictos { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 4px 0; font-size: 12px; }
+.pc-picto { display: inline-flex; align-items: center; gap: 4px; }
+/* a plain red-edged diamond stands for the pictogram; its name says which */
+.pc-diamond { width: 8px; height: 8px; border: 1.5px solid var(--slow); transform: rotate(45deg); }
+.pc-h { margin: 4px 0; padding-left: 0; list-style: none; font-size: 12px; }
+.pc-h li { margin: 2px 0; }
 
 /* References > Manage References, a reference's details, and Insert Citation's list */
 dialog.refs-dialog { width: min(94vw, 860px); display: flex; flex-direction: column; }
