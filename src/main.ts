@@ -113,7 +113,7 @@ const ARROWS: PaletteDef = {
   palette: 'arrows',
   title: 'Arrows',
   items: [
-    { name: 'arrow', title: 'Reaction arrow' },
+    { name: 'arrow', title: 'Reaction arrow. Shift+drag from an arrow\'s end or middle to branch a new arrow off it' },
     { name: 'arrow-dashed', title: 'Dashed arrow' },
     { name: 'arrow-hollow', title: 'Arrow with a hollow head' },
     { name: 'arrow-double', title: 'Resonance arrow (heads at both ends)' },

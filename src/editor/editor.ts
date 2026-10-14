@@ -409,7 +409,9 @@ export class Editor {
     const rect = this.r.overlay.getBoundingClientRect();
     const rh = e.button === 0 ? this.rotateHandle() : null;
     const rotating = !!rh && dist(rh, p) <= this.tol(7);
-    const handle = e.button === 0 && !rotating ? this.handleAt(p) : null;
+    // Shift+drag from an arrow with an arrow tool branches a new arrow off it (not its handles)
+    const branching = e.shiftKey && this.tool.kind === 'arrow';
+    const handle = e.button === 0 && !rotating && !branching ? this.handleAt(p) : null;
     const hit = handle || rotating ? null : this.hitTest(p);
     this.drag = {
       start: p, startScreen: { x: e.clientX - rect.left, y: e.clientY - rect.top }, hit, button: e.button, moved: false,
@@ -914,8 +916,9 @@ export class Editor {
         doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(push.tail, push.head, { ...t.style, sweep: Math.abs(push.sweep), ...(push.small ? { headLength: lw * SMALL_HEAD.length, headWidth: lw * SMALL_HEAD.width } : {}) }, Math.sign(push.sweep)).id }));
         return;
       }
-      const end = this.arrowEnd(d.start, p, d.alt);
-      doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(d.start, end, t.style, this.bendSide(d, end)).id }));
+      const start = this.branchStart(d);
+      const end = this.arrowEnd(start, p, d.alt);
+      doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(start, end, t.style, this.bendSide(d, end)).id }));
     } else if (t.kind === 'shape') {
       const g = this.shapeGeometry(t, d.start, p, d.shift, d.alt);
       if (g) doc.edit('Shape', () => this.selectOnly({ kind: 'shape', id: doc.addShape({ ...t.shape, ...g }).id }));
@@ -933,6 +936,19 @@ export class Editor {
     const L = this.doc.style.bondLength;
     const l = Math.max(L, dist(p, start));
     return add(start, fromAngle(free ? angleOf(sub(p, start)) : snapAngle(angleOf(sub(p, start))), l));
+  }
+
+  /**
+   * A new arrow Shift+dragged from an existing one branches from it: it starts exactly at that arrow's
+   * head, tail or middle, whichever is nearest (to split a scheme into two paths).
+   */
+  private branchStart(d: Drag): Vec {
+    if (d.hit?.kind !== 'arrow' || !d.shift) return d.start;
+    const r = this.doc.arrows.get(d.hit.id);
+    if (!r) return d.start;
+    const mid = r.sweep ? arrowPoints(r)[12] : { x: (r.tail.x + r.head.x) / 2, y: (r.tail.y + r.head.y) / 2 };
+    const spots = [r.tail, r.head, mid];
+    return spots.reduce((a, b) => (dist(b, d.start) < dist(a, d.start) ? b : a));
   }
 
   /** Which way a curved arrow bends: towards the side the pointer swung out to, else to the left. */
@@ -2380,9 +2396,10 @@ export class Editor {
     } else if (t.kind === 'arrow') {
       const push = this.pushFor(d, d.last);
       if (push) { poly(arrowPoints(push), false); return; }
-      const end = this.arrowEnd(d.start, d.last, d.alt);
+      const start = this.branchStart(d);
+      const end = this.arrowEnd(start, d.last, d.alt);
       const sweep = (t.style.sweep ?? 0) * this.bendSide(d, end);
-      poly(arrowPoints({ tail: d.start, head: end, sweep }), false);
+      poly(arrowPoints({ tail: start, head: end, sweep }), false);
     } else if (t.kind === 'shape') {
       const g = this.shapeGeometry(t, d.start, d.last, d.shift, d.alt);
       if (g) outlineShape(ctx, { id: 0, ...t.shape, ...g });
