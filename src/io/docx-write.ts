@@ -72,6 +72,7 @@ class DocxWriter {
     // (kept even when empty while citations are in the text, so they open again as citations)
     if (t.references?.length || Object.values(t.objects).some((o) => o.kind === 'cite' || o.kind === 'bib')) this.model.references = t.references ?? [];
     if (t.citeStyle) this.model.citeStyle = t.citeStyle;
+    if (t.citeOptions && Object.keys(t.citeOptions).length) this.model.citeOptions = t.citeOptions;
     this.textW = Math.max(36, t.page.w - t.page.left - t.page.right);
   }
 

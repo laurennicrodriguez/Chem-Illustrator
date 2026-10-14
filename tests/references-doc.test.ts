@@ -145,10 +145,11 @@ describe('citations in Word files', () => {
   });
 
   it('opens again with live citations, the bibliography, the references and the style', async () => {
-    const d = { ...sample(), citeStyle: 'rsc' as const };
+    const d = { ...sample(), citeStyle: 'rsc', citeOptions: { lastAuthor: 'none' as const, issue: true } };
     d.references = d.references!.map((r) => (r.id === 'r-c' ? { ...r, typed: 'Typed by hand.' } : r));
     const back = (await readDocx(await writeDocx(d, deps))).doc;
     expect(back.citeStyle).toBe('rsc');
+    expect(back.citeOptions).toEqual({ lastAuthor: 'none', issue: true });
     expect(back.references?.map((r) => r.id)).toEqual(['r-a', 'r-b', 'r-c', 'r-d']);
     expect(back.references?.find((r) => r.id === 'r-c')?.typed).toBe('Typed by hand.');
     const kinds = Object.values(back.objects).map((o) => o.kind).sort();

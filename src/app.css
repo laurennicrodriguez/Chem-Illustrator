@@ -904,7 +904,6 @@ dialog.refs-dialog > p { margin: 4px 0; max-width: 80ch; }
 .refs-head { display: flex; align-items: center; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
 .refs-head h2 { margin: 0; }
 .refs-head input { flex: 1 1 200px; max-width: 320px; font: inherit; padding: 4px 8px; }
-.refs-style { grid-template-columns: 9em minmax(0, 1fr); max-width: 520px; }
 .refs-warning { min-height: 1.2em; color: var(--slow); }
 .refs-warning:empty { display: none; }
 .refs-table-wrap { overflow: auto; min-height: 120px; max-height: 46vh; border: 1px solid var(--line); border-radius: 6px; }
@@ -964,3 +963,23 @@ body.split-drawing #split-bar { box-shadow: inset 0 -2px 0 var(--accent); }
 #main-snap[hidden] { display: none; }
 #main-snap canvas { position: absolute; left: 0; top: 0; }
 @media (max-width: 900px) { #split-pane { min-width: 160px; } }
+
+/* References > Manage References > Style Options */
+dialog.cite-style-dialog { width: min(94vw, 900px); }
+dialog.cite-style-dialog h2 { margin: 0 0 6px; }
+dialog.cite-style-dialog h3 { margin: 10px 0 4px; font-size: 13px; }
+.refs-style-note { margin: 0 0 4px; min-height: 0; }
+.refs-style { grid-template-columns: 9em minmax(0, 1fr) auto; max-width: 760px; }
+.cite-source { margin: 0 0 4px; }
+.cite-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 8px; max-height: 42vh; overflow: auto; }
+.cite-groups fieldset { border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px 6px; margin: 0; min-width: 0; }
+.cite-groups legend { font-weight: 600; padding: 0 4px; }
+.cite-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); align-items: center; gap: 6px; margin: 3px 0; }
+.cite-row select, .cite-row input { min-width: 0; font: inherit; padding: 2px 4px; }
+.cite-check { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+.cite-groups label.changed > span { color: var(--accent); font-weight: 600; }
+.cite-groups label.changed > span::after { content: ' •'; }
+.cite-preview { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; max-height: 26vh; overflow: auto; font-family: 'Times New Roman', Times, serif; font-size: 13px; background: var(--paper, #fff); color: #000; }
+.cite-preview p { margin: 4px 0; }
+.cite-entry { padding-left: 2.6em; text-indent: -2.6em; }
+.cite-label { display: inline-block; min-width: 2.6em; text-indent: 0; }

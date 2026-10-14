@@ -29,6 +29,7 @@ import { cfbStreams, isCfb } from './cfb';
 import { isCdx } from './cdx';
 import { BIB_MARK, CITE_FIELD, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
 import { cleanRef } from '../document/references';
+import { CITE_PRESETS, cleanOptions } from '../document/cite-styles';
 import { listIndent, tableText } from './docx-write';
 
 export interface DocxReadDeps {
@@ -1182,7 +1183,8 @@ class DocxReader {
       objects,
       drawingStyle: this.drawingStyle,
       ...(Array.isArray(m?.references) ? { references: m.references.map((r) => cleanRef(r)) } : {}),
-      ...(m?.citeStyle === 'acs' || m?.citeStyle === 'angewandte' || m?.citeStyle === 'rsc' ? { citeStyle: m.citeStyle } : {}),
+      ...(typeof m?.citeStyle === 'string' && m.citeStyle in CITE_PRESETS ? { citeStyle: m.citeStyle } : {}),
+      ...(m?.citeOptions && Object.keys(cleanOptions(m.citeOptions)).length ? { citeOptions: cleanOptions(m.citeOptions) } : {}),
     };
   }
 }

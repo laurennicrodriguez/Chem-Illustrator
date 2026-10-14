@@ -8,6 +8,7 @@
 import type { Contents, ParaStyle, TableData } from '../model';
 import type { DocStyle } from '../style';
 import type { CiteStyle, Reference } from '../document/references';
+import type { CiteFormat } from '../document/cite-styles';
 
 export const W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 export const WP_NS = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
@@ -59,6 +60,7 @@ export interface DocxModel {
   /** The document's references and citation style (citations are ADDIN fields naming them). */
   references?: Reference[];
   citeStyle?: CiteStyle;
+  citeOptions?: Partial<CiteFormat>;
   /** Each bibliography by its id: the text written (to tell whether Word changed it) and its paragraph's settings. */
   bibliographies?: Record<number, { text: string; ps: ParaStyle }>;
 }

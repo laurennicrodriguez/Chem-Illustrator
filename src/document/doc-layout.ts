@@ -213,7 +213,7 @@ export class DocLayouter {
         return f !== undefined ? `${r.obj}=${f}` : s ? `${r.obj}:${s.w.toFixed(3)}x${s.h.toFixed(3)}` : `${r.obj}?`;
       });
       const bib = hasBib && runs.some(isBib);
-      const key = JSON.stringify([resolved, ps, markers[p], textW, objs, st.size, bib ? [t.citeStyle, entries.map((e) => [e.label, e.pieces]), st.font] : 0]);
+      const key = JSON.stringify([resolved, ps, markers[p], textW, objs, st.size, bib ? [t.citeStyle, t.citeOptions, entries.map((e) => [e.label, e.pieces]), st.font] : 0]);
       let lay = this.cache.get(key);
       if (!lay) {
         const frame: TextFrame = {
