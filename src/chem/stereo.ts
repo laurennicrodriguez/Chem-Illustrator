@@ -375,6 +375,22 @@ export class StereoPlacer {
     return p;
   }
 
+  /**
+   * Where an atom's enhanced stereo label (abs, &1, or1) goes: under its R/S label when that is
+   * shown, or else where an R/S label would go.
+   */
+  enhanced(a: Atom, text: string): PlacedLabel {
+    const rs = atomStereoText(a, this.doc.stereo);
+    if (rs) {
+      const p = this.atom(a, rs);
+      return { x: p.x, y: p.y + p.size * 1.05, size: p.size, italic: false };
+    }
+    const key = `e${a.id}|${text}`;
+    let p = this.done.get(key);
+    if (!p) this.done.set(key, p = { ...this.spotAtom(a, text, true), italic: false });
+    return p;
+  }
+
   /** Where a double bond's E/Z label goes: its saved spot, or one worked out. */
   bond(b: Bond, text: string): PlacedLabel {
     const p = this.doc.atoms.get(b.a1)!, q = this.doc.atoms.get(b.a2)!;

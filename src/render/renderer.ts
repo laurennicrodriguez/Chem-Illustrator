@@ -5,7 +5,7 @@
 // fast however big the document is. Label layouts and bond geometry are cached per atom
 // and bond and only recomputed near what changed.
 
-import { Doc, Atom, Bond, Arrow, Caption, Shape, applyBase, type TextBase } from '../model';
+import { Doc, Atom, Bond, Arrow, Caption, Shape, applyBase, enhancedText, CHIRAL_FLAGS, flagTextSize, type TextBase } from '../model';
 import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
 import { crossingGaps } from '../chem/crossing';
 import { FADE, tint } from '../colours';
@@ -482,6 +482,7 @@ export class Renderer {
         const d = info?.atom(a.id);
         if (d) { const t = `(${d})`; draw(t, place.atom(a, t), PREVIEW_COLOR); }
       }
+      if (a.enhStereo) { const t = enhancedText(a.enhStereo); draw(t, place.enhanced(a, t), a.color ?? '#000'); }
     }
     for (const b of bonds) {
       if (b.order !== 2 && !b.stereoLabel) continue;
@@ -899,7 +900,15 @@ export class Renderer {
         break;
       case 'symbol': {
         const cx = (s.x1 + s.x2) / 2, cy = (s.y1 + s.y2) / 2, r = Math.max(1.6, Math.min(w, h) / 2);
-        if (s.symbol === 'CirclePlus' || s.symbol === 'CircleMinus') {
+        const flag = s.symbol ? CHIRAL_FLAGS[s.symbol] : undefined;
+        if (flag) {
+          // a chiral flag: the word in a rounded box
+          ctx.roundRect(x, y, w, h, Math.min(w, h) * 0.2);
+          ctx.stroke();
+          const size = flagTextSize(s);
+          ctx.font = `${size}px ${FONT_STACK}`;
+          ctx.fillText(flag, cx - measureText(flag, size) / 2, cy + size * 0.36);
+        } else if (s.symbol === 'CirclePlus' || s.symbol === 'CircleMinus') {
           ctx.arc(cx, cy, r, 0, Math.PI * 2);
           ctx.moveTo(cx - r * 0.6, cy); ctx.lineTo(cx + r * 0.6, cy);
           if (s.symbol === 'CirclePlus') { ctx.moveTo(cx, cy - r * 0.6); ctx.lineTo(cx, cy + r * 0.6); }

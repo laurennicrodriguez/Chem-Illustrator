@@ -2,7 +2,7 @@
 // their formatting, arrows, and the common graphics (lines, boxes, circles, brackets,
 // charge symbols). Anything not understood yet is counted and skipped, never fatal.
 
-import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles } from '../model';
+import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, CHIRAL_FLAGS } from '../model';
 import { TEXT_TAG, parseTextTag, runsFromChemDraw } from '../text/chemdraw-text';
 import { DocStyle } from '../style';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
@@ -195,6 +195,9 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         }
       }
       if (n.getAttribute('ShowAtomStereo') === 'yes') extra.showStereo = true;
+      const enh = n.getAttribute('EnhancedStereoType');
+      if (enh === 'Absolute') extra.enhStereo = { type: 'abs' };
+      else if (enh === 'And' || enh === 'Or') extra.enhStereo = { type: enh === 'And' ? 'and' : 'or', group: num(n, 'EnhancedStereoGroupNum', 1) };
       const groupTag = kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === GROUP_TAG)?.getAttribute('Value');
       if (groupTag) extra.group = groupTag;
       if (n.getAttribute('ShowTerminalCarbonLabels') === 'yes' || n.getAttribute('ShowNonTerminalCarbonLabels') === 'yes') extra.showCarbon = true;
@@ -547,7 +550,14 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       case 'Symbol': {
         if (bb.length < 4) return;
         const sym = g.getAttribute('SymbolType') ?? '';
-        if (sym === 'LonePair') {
+        if (CHIRAL_FLAGS[sym]) {
+          // a chiral flag: ChemDraw keeps the word as text inside it, and draws the box round that
+          const t = kids(g).find((k) => k.nodeName === 't');
+          const tb = pts(t?.getAttribute('BoundingBox') ?? null);
+          const r = tb.length >= 4 ? { x1: tb[0], y1: tb[1], x2: tb[2], y2: tb[3] } : { x1: Math.min(bb[0], bb[2]), y1: bb[1] - 11, x2: Math.max(bb[0], bb[2]), y2: bb[1] };
+          const pad = 2;
+          add({ ...base, kind: 'symbol', symbol: sym, x1: r.x1 - pad, y1: r.y1 - pad, x2: r.x2 + pad, y2: r.y2 + pad });
+        } else if (sym === 'LonePair') {
           // the two dots
           add({ ...base, kind: 'symbol', symbol: sym, x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3] });
         } else if (sym === 'Electron') {

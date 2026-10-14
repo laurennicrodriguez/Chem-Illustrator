@@ -6,7 +6,7 @@
 // deleted ones are removed and new ones are added. A new drawing is written from scratch in
 // the same form ChemDraw uses, so ChemDraw opens both.
 
-import { Doc, Atom, Bond, Caption, Arrow, Shape, TextRun, Entity, Kind, StepRoles } from '../model';
+import { Doc, Atom, Bond, Caption, Arrow, Shape, TextRun, Entity, Kind, StepRoles, enhancedText, CHIRAL_FLAGS, flagTextSize } from '../model';
 import { interpretArrow, isReactionArrow, isStep, plainMeasure, schemeItems, type Item } from '../chem/reaction';
 import { SYMBOLS } from '../chem/elements';
 import { labelSpec, layoutLabel, labelDir, labelGraph, tokenize, isGenericLabel, Measure, MiniGraph, kekulize } from '../chem/labels';
@@ -434,7 +434,27 @@ class CdxmlWriter {
     this.atomStereo(n, a, true);
     this.atomNumber(n, a);
     this.atomGroup(n, a);
+    this.atomEnhanced(n, a);
     return n;
+  }
+
+  /** Enhanced stereo: ChemDraw's EnhancedStereoType and group number, and a tag with the label as shown (abs, &1, or1). */
+  private atomEnhanced(n: Element, a: Atom): void {
+    const e = a.enhStereo;
+    this.set(n, 'EnhancedStereoType', e ? (e.type === 'abs' ? 'Absolute' : e.type === 'and' ? 'And' : 'Or') : null);
+    this.set(n, 'EnhancedStereoGroupNum', e && e.type !== 'abs' ? e.group ?? 1 : null);
+    const old = kids(n).find((c) => c.nodeName === 'objecttag' && c.getAttribute('Name') === 'enhancedstereo');
+    if (old) n.removeChild(old);
+    if (!e) return;
+    const text = enhancedText(e);
+    const p = this.placer.enhanced(a, text);
+    const tag = this.el('objecttag', { TagType: 'Unknown', Name: 'enhancedstereo' });
+    const t = this.el('t', { p: pt(p), BoundingBox: box({ x1: p.x, y1: p.y - CAP * p.size, x2: p.x + this.measure(text, p.size), y2: p.y }), CaptionLineHeight: 'variable' });
+    const sp = this.el('s', { font: this.fontId(), size: f2(p.size).replace(/\.00$/, ''), color: '0' });
+    sp.textContent = text;
+    t.appendChild(sp);
+    tag.appendChild(t);
+    n.appendChild(tag);
   }
 
   private get placer(): StereoPlacer {
@@ -474,6 +494,7 @@ class CdxmlWriter {
     this.patchNodeBody(n, a, o, dx, dy);
     this.atomNumber(n, a);
     this.atomGroup(n, a);
+    this.atomEnhanced(n, a);
   }
 
   /** A contracted label keeps the SMILES of its group in a hidden tag (ChemDraw sees the inner fragment). */
@@ -1193,6 +1214,19 @@ class CdxmlWriter {
           const d = near ? Math.hypot(s.x1 - near.x, s.y1 - near.y) : 0;
           const u = near && d > 0.01 ? { x: (s.x1 - near.x) / d, y: (s.y1 - near.y) / d } : { x: -1, y: 0 };
           set('BoundingBox', `${f2(s.x1)} ${f2(s.y1)} ${f2(s.x1 + 4.5 * u.x)} ${f2(s.y1 + 4.5 * u.y)}`);
+        } else if (s.symbol && CHIRAL_FLAGS[s.symbol]) {
+          // a chiral flag: its word as text, which ChemDraw draws the box round
+          for (const c of kids(g)) if (c.nodeName === 't') g.removeChild(c);
+          const word = CHIRAL_FLAGS[s.symbol];
+          const size = flagTextSize(s);
+          const w = this.measure(word, size);
+          const cx = (s.x1 + s.x2) / 2, base = (s.y1 + s.y2) / 2 + size * 0.36;
+          set('BoundingBox', `${f2(cx - w / 2)} ${f2(base)} ${f2(cx + w / 2)} ${f2(base)}`);
+          const t = this.el('t', { p: `${f2(cx - w / 2)} ${f2(base)}`, BoundingBox: box({ x1: cx - w / 2, y1: base - CAP * size, x2: cx + w / 2, y2: base }), LineHeight: 'auto' });
+          const sp = this.el('s', { font: this.fontId(), size: f2(size).replace(/\.00$/, ''), color: '0', face: 96 });
+          sp.textContent = word;
+          t.appendChild(sp);
+          g.appendChild(t);
         } else set('BoundingBox', s.symbol === 'LonePair' ? box(s) : `${f2(s.x2)} ${f2(s.y2)} ${f2(s.x1)} ${f2(s.y2)}`);
         break;
       }

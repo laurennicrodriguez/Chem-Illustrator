@@ -3,7 +3,7 @@
 // mode), and the panels on the right.
 
 import './app.css';
-import { Doc, Atom, Caption, Shape, Contents } from './model';
+import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS } from './model';
 import { Renderer, measureText } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
 import type { Align } from './editor/arrange';
@@ -1852,6 +1852,8 @@ const COMMANDS: Record<string, () => unknown> = {
   'show-roles': () => { editor.showRoles = !editor.showRoles; $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(editor.showRoles)); editor.requestScene(); storeSettings(); },
   'check-structure': () => checkStructure(),
   'stereo-labels': () => toggleStereoLabels(),
+  'enhanced-stereo': () => { void setStereoGroup(); },
+  'chiral-flag': () => { void setChiralFlag(); },
   'name-to-structure': () => nameToStructure(),
   'clipboard-formats': async () => {
     const names = await clipboardFormats().catch((err) => [String(err)]);
@@ -2266,6 +2268,69 @@ async function runAnalysis(force: boolean): Promise<void> {
   lastAnalysis = { results: res.results, frags };
   panel.innerHTML = res.results.map((r, i) => analysisHtml(r, i, adductSel.value, { stereo: r.error ? '' : stereoSummary(frags[i]), unknown: exports[i].unknownLabels })).join('');
   updatePanels();
+}
+
+/**
+ * Structure > Stereo Group: puts the selected stereocentres in an enhanced stereo group (abs, &n
+ * or orn), as in ChemDraw and V3000 molfiles, or takes them out of one.
+ */
+async function setStereoGroup(): Promise<void> {
+  const sel = [...editor.sel.atoms].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a);
+  const centres = sel.filter((a) => live.atom(a.id) || a.enhStereo);
+  if (!centres.length) { flash(sel.length ? 'None of the selected atoms is a stereocentre.' : 'Select the stereocentres to group first.'); return; }
+  // the next free group number in these structures, for each kind
+  const used = { and: new Set<number>(), or: new Set<number>() };
+  for (const a of centres) for (const id of doc.fragmentOf(a.id)) {
+    const e = doc.atoms.get(id)?.enhStereo;
+    if (e && e.type !== 'abs' && !editor.sel.atoms.has(id)) used[e.type].add(e.group ?? 1);
+  }
+  const first = centres[0].enhStereo;
+  const free = (t: 'and' | 'or') => { let n = 1; while (used[t].has(n)) n++; return n; };
+  const got = await ask('Stereo group', [
+    { name: 'type', label: 'Group', value: first?.type ?? 'and', options: [
+      { value: 'abs', label: 'abs: configuration known as drawn' },
+      { value: 'and', label: '& (AND): a mixture of both forms' },
+      { value: 'or', label: 'or (OR): one form, not known which' },
+      { value: 'none', label: 'None' },
+    ] },
+    { name: 'group', label: 'Number', value: String(first && first.type !== 'abs' ? first.group ?? 1 : free(first?.type === 'or' ? 'or' : 'and')), type: 'number' },
+  ], { ok: 'Set', note: `${centres.length} stereocentre${centres.length === 1 ? '' : 's'}. Centres with the same group and number change together: &1 centres are a racemic pair, or1 centres are one unknown enantiomer.` });
+  if (!got) return;
+  const type = got.type as 'abs' | 'and' | 'or' | 'none';
+  const group = Math.max(1, Math.round(Number(got.group) || 1));
+  doc.edit('Stereo group', () => {
+    for (const a of centres) doc.updateAtom(a.id, { enhStereo: type === 'none' ? undefined : type === 'abs' ? { type } : { type, group } });
+  });
+  editor.changed();
+}
+
+/**
+ * Structure > Chiral Flag: the boxed Abs, Rel or Rac below the selected structure (or the one
+ * last drawn on), replacing a flag already there.
+ */
+async function setChiralFlag(): Promise<void> {
+  const root = editor.sel.atoms.size ? [...editor.sel.atoms][0] : editor.lastEdited;
+  if (root === null || !doc.atoms.has(root)) { flash('Select a structure first.'); return; }
+  const atoms = [...doc.fragmentOf(root)].map((id) => doc.atoms.get(id)!);
+  const box = { x1: Math.min(...atoms.map((a) => a.x)), y1: Math.min(...atoms.map((a) => a.y)), x2: Math.max(...atoms.map((a) => a.x)), y2: Math.max(...atoms.map((a) => a.y)) };
+  const L = doc.style.bondLength;
+  const near = [...doc.shapes.values()].find((s) => s.kind === 'symbol' && s.symbol && CHIRAL_FLAGS[s.symbol] && s.x1 < box.x2 + L && s.x2 > box.x1 - L && s.y1 < box.y2 + 2 * L && s.y2 > box.y1 - L);
+  const got = await ask('Chiral flag', [{ name: 'flag', label: 'Flag', value: near?.symbol ?? 'Absolute', options: [
+    { value: 'Absolute', label: 'Abs: the structure is one enantiomer, as drawn' },
+    { value: 'Relative', label: 'Rel: relative configuration only' },
+    { value: 'Racemic', label: 'Rac: a racemic mixture' },
+    { value: 'none', label: 'None (remove the flag)' },
+  ] }], { ok: 'Set' });
+  if (!got) return;
+  doc.edit('Chiral flag', () => {
+    if (near) doc.removeShape(near.id);
+    if (got.flag === 'none') return;
+    const size = doc.style.captionSize;
+    const w = measureText(CHIRAL_FLAGS[got.flag], size) + 4, h = size * 1.15 + 4;
+    const x2 = box.x2 + L * 0.3, y1 = box.y2 + L * 0.6;
+    doc.addShape({ kind: 'symbol', symbol: got.flag, x1: x2 - w, y1, x2, y2: y1 + h });
+  });
+  editor.changed();
 }
 
 /**

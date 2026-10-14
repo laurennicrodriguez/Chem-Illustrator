@@ -56,6 +56,31 @@ export interface Atom {
   showNumber?: boolean;
   /** Where the shown number sits, relative to the atom, when the file says or it was moved. */
   numberLabel?: { dx: number; dy: number; size: number };
+  /**
+   * Enhanced stereo (ChemDraw's EnhancedStereoType): this stereocentre's configuration is known
+   * as drawn ('abs'), or belongs to a group whose centres are a mixture of both forms ('and',
+   * labelled &1) or are one form that isn't known ('or', labelled or1).
+   */
+  enhStereo?: EnhancedStereo;
+}
+
+export interface EnhancedStereo {
+  type: 'abs' | 'and' | 'or';
+  /** Group number for 'and' and 'or' (1, 2…). */
+  group?: number;
+}
+
+/** An enhanced stereo label as drawn: abs, &1, or1. */
+export function enhancedText(e: EnhancedStereo): string {
+  return e.type === 'abs' ? 'abs' : e.type === 'and' ? `&${e.group ?? 1}` : `or${e.group ?? 1}`;
+}
+
+/** The chiral flags a structure can carry (ChemDraw's symbols, drawn as a boxed word). */
+export const CHIRAL_FLAGS: Record<string, string> = { Absolute: 'Abs', Relative: 'Rel', Racemic: 'Rac' };
+
+/** Size of a chiral flag's word, from its box (ChemDraw's box is 2 pt clear of the text all round). */
+export function flagTextSize(s: { y1: number; y2: number }): number {
+  return Math.max(3, (Math.abs(s.y2 - s.y1) - 4) / 1.15);
 }
 
 /** Valence an atom's radical takes up (no hydrogens fill it). */
