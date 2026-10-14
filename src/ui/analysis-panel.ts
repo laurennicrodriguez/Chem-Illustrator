@@ -1,0 +1,157 @@
+// The Analysis panel's contents for one structure, and the journal-style text it can put in the
+// drawing (HRMS and elemental analysis lines, as ACS journals write them).
+
+import type { FragmentResult } from '../worker/chem-worker';
+import type { TextRun } from '../model';
+import { parseAdduct, ionMz, type Adduct } from '../chem/hrms';
+import { ionCounts, isotopePattern, elementalAnalysis, type IsotopePeak } from '../chem/analysis';
+import { hillFormula } from '../chem/formula';
+
+const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
+
+/** A formula with subscript counts and a superscript charge, as HTML. */
+export function formulaHtml(f: string): string {
+  return esc(f).replace(/(\d+)(?=[+−]$)/, '<sup>$1</sup>').replace(/([A-Za-z])(\d+)/g, '$1<sub>$2</sub>').replace(/([+−])$/, '<sup>$1</sup>');
+}
+
+/** An adduct label with its charge raised: [M+H]<sup>+</sup>. */
+function adductHtml(label: string): string {
+  return esc(label).replace(/\](\d*[+-])$/, (_, c) => `]<sup>${c.replace('-', '−')}</sup>`);
+}
+
+export interface IonInfo {
+  adduct: Adduct;
+  /** Formula of the ion, without its charge (as journals write it after "calcd for"). */
+  formula: string;
+  mz: number;
+  pattern: IsotopePeak[] | null;
+}
+
+/** The ion of a structure for an adduct, or null when it can't be made (e.g. losing water from CH4). */
+export function ionInfo(r: FragmentResult, adductText: string): IonInfo | null {
+  let adduct: Adduct;
+  try {
+    adduct = parseAdduct(adductText);
+  } catch {
+    return null;
+  }
+  // a structure that is already charged is its own ion
+  if (r.charge !== 0) adduct = { n: 1, parts: [], z: r.charge, label: '[M]' + (Math.abs(r.charge) > 1 ? Math.abs(r.charge) : '') + (r.charge > 0 ? '+' : '-') };
+  const counts = r.props ? ionCounts(new Map(Object.entries(r.props.counts)), adduct) : null;
+  if (!counts) return null;
+  const formula = hillFormula(Object.fromEntries(counts));
+  // m/z from the same masses the rest of the panel uses
+  const mz = r.charge !== 0 ? (r.exact - r.charge * 0.000548579909065) / Math.abs(r.charge) : ionMz(r.exact, adduct);
+  return { adduct, formula, mz, pattern: isotopePattern(counts, adduct.z) };
+}
+
+/** Elemental analysis numbers for a structure, Hill order. */
+export function analysisPercents(r: FragmentResult): { el: string; pct: number }[] | null {
+  if (!r.props) return null;
+  return elementalAnalysis(new Map(Object.entries(r.props.counts)), r.props.weights);
+}
+
+/** Elements an elemental analysis reports: C, H and N, and S or a halogen when present. */
+function reported(ea: { el: string; pct: number }[]): { el: string; pct: number }[] {
+  const keep = new Set(['C', 'H', 'N', 'S']);
+  const out = ea.filter((x) => keep.has(x.el));
+  return out.length ? out : ea;
+}
+
+/** A small bar picture of an isotope pattern. */
+function patternSvg(p: IsotopePeak[]): string {
+  const W = 220, H = 56, pad = 4;
+  const lo = p[0].mz, hi = p[p.length - 1].mz;
+  const span = Math.max(hi - lo, 4);
+  const x = (mz: number) => pad + ((mz - lo) / span) * (W - 2 * pad - 30) + 10;
+  const bars = p.map((q) => `<line x1="${x(q.mz).toFixed(1)}" x2="${x(q.mz).toFixed(1)}" y1="${H - 12}" y2="${(H - 12 - (q.rel / 100) * (H - 18)).toFixed(1)}" />`).join('');
+  return `<svg class="iso-svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Isotope pattern">
+    <line class="axis" x1="${pad}" x2="${W - pad}" y1="${H - 12}" y2="${H - 12}" />${bars}
+    <text x="${x(p[0].mz)}" y="${H - 1}" text-anchor="middle">${p[0].mz.toFixed(1)}</text></svg>`;
+}
+
+function deg(k: number | null): string {
+  return k === null ? '' : `${Math.round(k - 273.15)} °C`;
+}
+
+/**
+ * The panel's HTML for one structure. `i` numbers the structure's buttons
+ * (data-insert="hrms:i" and so on), which the app wires up.
+ */
+export function analysisHtml(r: FragmentResult, i: number, adductText: string, extras: { stereo?: string; unknown?: string[] }): string {
+  if (r.error) return `<div class="frag"><p class="warn">${esc(r.error)}</p></div>`;
+  const ion = ionInfo(r, adductText);
+  const ea = analysisPercents(r);
+  const p = r.props;
+  const rows: string[] = [
+    `<tr><th>Exact mass</th><td>${r.exact.toFixed(4)}</td></tr>`,
+    `<tr><th>Mol. wt.</th><td>${r.mw.toFixed(2)}</td></tr>`,
+  ];
+  if (ion) rows.push(`<tr><th>m/z ${adductHtml(ion.adduct.label)}</th><td>${ion.mz.toFixed(4)}</td></tr>`);
+  if (ea) rows.push(`<tr><th>Elemental</th><td>${reported(ea).map((x) => `${x.el}, ${x.pct.toFixed(2)}`).join('; ')}</td></tr>`);
+  if (extras.stereo) rows.push(`<tr><th>Stereo</th><td>${esc(extras.stereo)}</td></tr>`);
+  let iso = '';
+  if (ion?.pattern && ion.pattern.length) {
+    const top = ion.pattern.slice(0, 6);
+    iso = `<details class="iso"><summary>Isotope pattern ${adductHtml(ion.adduct.label)}</summary>
+      ${patternSvg(top)}
+      <table class="iso-table">${top.map((q) => `<tr><td>${q.mz.toFixed(4)}</td><td>${q.rel.toFixed(1)}%</td></tr>`).join('')}</table></details>`;
+  } else if (ion) iso = '<p class="muted small">No isotope pattern: an element in it isn\'t in the isotope table.</p>';
+  let props = '';
+  if (p) {
+    const jb = p.joback;
+    const groups = Object.entries(jb.groups).map(([g, n]) => `${n} × ${g}`).join(', ');
+    const tip = `Joback–Reid group contributions (Chem. Eng. Commun. 1987, 57, 233). Rough: typical errors are 10–25 °C, more for large molecules.${groups ? ' Groups: ' + groups + '.' : ''}`;
+    props = `<details class="props"><summary>Properties</summary><table>
+      <tr><th title="Wildman–Crippen logP">cLogP</th><td>${p.clogp.toFixed(2)}</td></tr>
+      <tr><th title="Wildman–Crippen molar refractivity">Molar refractivity</th><td>${p.mr.toFixed(2)}</td></tr>
+      <tr><th title="Topological polar surface area (Ertl), Å²">tPSA</th><td>${p.tpsa.toFixed(1)} Å²</td></tr>
+      <tr><th title="OH and NH hydrogens (Lipinski)">H-bond donors</th><td>${p.hbd}</td></tr>
+      <tr><th title="N and O atoms (Lipinski)">H-bond acceptors</th><td>${p.hba}</td></tr>
+      <tr><th>Rotatable bonds</th><td>${p.rotb}</td></tr>
+      <tr><th>Heavy atoms</th><td>${p.heavy}</td></tr>
+      <tr><th title="Fraction of carbons that are sp3">Fsp3</th><td>${p.fsp3.toFixed(2)}</td></tr>
+      <tr><th title="${esc(tip)}">Boiling point (est.)</th><td>${jb.tb === null ? '<span class="muted">—</span>' : deg(jb.tb)}</td></tr>
+      <tr><th title="${esc(tip)}">Melting point (est.)</th><td>${jb.tm === null ? '<span class="muted">—</span>' : deg(jb.tm)}</td></tr>
+      </table>${jb.missing ? `<p class="muted small">${esc(jb.missing)}</p>` : ''}</details>`;
+  }
+  const buttons = `<div class="an-buttons">
+      <button type="button" data-insert="formula:${i}" title="Put the formula, exact mass and molecular weight under the structure as a caption you can edit">Add caption</button>
+      ${ion ? `<button type="button" data-insert="hrms:${i}" title="Put an HRMS line under the structure (ACS style); type the found value into it">HRMS text</button>` : ''}
+      ${ea ? `<button type="button" data-insert="ea:${i}" title="Put an elemental analysis line under the structure (ACS style)">Anal. text</button>` : ''}
+    </div>`;
+  return `<div class="frag">
+    <div class="formula">${formulaHtml(r.formula)}</div>
+    <table>${rows.join('')}</table>
+    ${iso}${props}
+    <div class="smiles" title="SMILES">${esc(r.smiles)}</div>
+    ${extras.unknown?.length ? `<p class="warn">Not understood (left out): ${extras.unknown.map(esc).join(', ')}</p>` : ''}
+    ${buttons}
+  </div>`;
+}
+
+/** Runs for a formula in formula style (digits lowered). */
+const f = (text: string): TextRun => ({ text, formula: true });
+
+/** The text a button puts in the drawing, as caption runs. Null when it can't be made. */
+export function analysisRuns(kind: 'formula' | 'hrms' | 'ea', r: FragmentResult, adductText: string): TextRun[] | null {
+  if (kind === 'formula') {
+    return [f(r.formula), { text: `\nExact Mass: ${r.exact.toFixed(4)}\nMol. Wt.: ${r.mw.toFixed(2)}` }];
+  }
+  if (kind === 'hrms') {
+    const ion = ionInfo(r, adductText);
+    if (!ion) return null;
+    const label = ion.adduct.label.replace(/^\[(.*)\](\d*[+-])$/, (_, body: string, c: string) => `[${body.replace(/([+-])/g, ' $1 ').replace(/-/g, '−')}]${c}`);
+    const m = /^(.*\])(\d*[+-])$/.exec(label)!;
+    return [
+      { text: 'HRMS (ESI) ' }, { text: 'm/z', italic: true }, { text: `: ${m[1]}` }, { text: m[2].replace('-', '−'), sup: true },
+      { text: ' Calcd for ' }, f(ion.formula), { text: ` ${ion.mz.toFixed(4)}; Found ${ion.mz.toFixed(4).replace(/\d/g, '0')}.` },
+    ];
+  }
+  const ea = analysisPercents(r);
+  if (!ea) return null;
+  const rep = reported(ea);
+  return [
+    { text: 'Anal. Calcd for ' }, f(r.formula.replace(/\d*[+−]$/, '')), { text: `: ${rep.map((x) => `${x.el}, ${x.pct.toFixed(2)}`).join('; ')}. Found: ${rep.map((x) => `${x.el}, 00.00`).join('; ')}.` },
+  ];
+}

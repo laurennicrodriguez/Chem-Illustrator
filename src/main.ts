@@ -9,6 +9,9 @@ import { Editor, TOOLS } from './editor/editor';
 import type { Align } from './editor/arrange';
 import { readCdxml, ReadStats } from './io/cdxml';
 import { ChemClient } from './chem/client';
+import type { FragmentResult } from './worker/chem-worker';
+import { COMMON_ADDUCTS } from './chem/hrms';
+import { analysisHtml, analysisRuns } from './ui/analysis-panel';
 import { toMolfile, addMolfile } from './chem/molfile';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -2154,6 +2157,30 @@ function stressTest(n: number): void {
 // ---------------------------------------------------------------- analysis (background chemistry)
 
 let analysisTimer = 0;
+/** The structures last analysed, for the panel's buttons. */
+let lastAnalysis: { results: FragmentResult[]; frags: Set<number>[] } | null = null;
+const adductSel = $<HTMLSelectElement>('#analysis-adduct');
+adductSel.innerHTML = COMMON_ADDUCTS.map((a) => `<option>${a}</option>`).join('');
+adductSel.addEventListener('change', () => scheduleAnalysis(true));
+$('#analysis-body').addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-insert]');
+  if (!b || !lastAnalysis) return;
+  const [kind, n] = b.dataset.insert!.split(':');
+  const r = lastAnalysis.results[Number(n)], frag = lastAnalysis.frags[Number(n)];
+  const runs = r && analysisRuns(kind as 'formula' | 'hrms' | 'ea', r, adductSel.value);
+  if (!runs || !frag) return;
+  // under the structure, lined up with its left edge
+  const atoms = [...frag].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a);
+  if (!atoms.length) return;
+  const x = Math.min(...atoms.map((a) => a.x)), y = Math.max(...atoms.map((a) => a.y)) + doc.style.bondLength * 1.2;
+  doc.edit(kind === 'formula' ? 'Analysis caption' : kind === 'hrms' ? 'HRMS text' : 'Elemental analysis text', () => {
+    // long lines wrap to the structure's width (or about 15 bond lengths, if wider)
+    const w = Math.max(Math.max(...atoms.map((a) => a.x)) - x, doc.style.bondLength * 15);
+    doc.addCaption({ x, y, runs, justify: 'left', ...(kind === 'formula' ? {} : { wrap: w }) });
+  });
+  editor.changed();
+  flash(kind === 'formula' ? 'Added the formula and masses as a caption. Double-click it to edit.' : 'Added the text. Double-click it to type the found values.');
+});
 let analysisSeq = 0;
 let analysisKey = '';
 
@@ -2193,23 +2220,8 @@ async function runAnalysis(force: boolean): Promise<void> {
   const roundTrip = performance.now() - t0;
   chemTimes.push(roundTrip);
   if (chemTimes.length > 50) chemTimes.shift();
-  const H = 1.00727646688, NA = 22.98922070;
-  panel.innerHTML = res.results.map((r, i) => {
-    if (r.error) return `<div class="frag"><p class="warn">${escapeHtml(r.error)}</p></div>`;
-    const unk = exports[i].unknownLabels;
-    const stereo = stereoSummary(frags[i]);
-    return `<div class="frag">
-      <div class="formula">${formatFormula(r.formula)}</div>
-      <table>
-        <tr><th>Exact mass</th><td>${r.exact.toFixed(4)}</td></tr>
-        <tr><th>Mol. wt.</th><td>${r.mw.toFixed(2)}</td></tr>
-        ${r.charge === 0 ? `<tr><th>[M+H]<sup>+</sup></th><td>${(r.exact + H).toFixed(4)}</td></tr><tr><th>[M+Na]<sup>+</sup></th><td>${(r.exact + NA).toFixed(4)}</td></tr>` : ''}
-        ${stereo ? `<tr><th>Stereo</th><td>${escapeHtml(stereo)}</td></tr>` : ''}
-      </table>
-      <div class="smiles" title="SMILES">${escapeHtml(r.smiles)}</div>
-      ${unk.length ? `<p class="warn">Not understood (left out): ${unk.map(escapeHtml).join(', ')}</p>` : ''}
-    </div>`;
-  }).join('');
+  lastAnalysis = { results: res.results, frags };
+  panel.innerHTML = res.results.map((r, i) => analysisHtml(r, i, adductSel.value, { stereo: r.error ? '' : stereoSummary(frags[i]), unknown: exports[i].unknownLabels })).join('');
   updatePanels();
 }
 
@@ -2250,10 +2262,6 @@ function stereoSummary(frag: Set<number>): string {
   }
   dbl.sort(byPlace);
   return [centres.join(', '), dbl.map((d) => d.l).join(', ')].filter(Boolean).join('; ');
-}
-
-function formatFormula(f: string): string {
-  return escapeHtml(f).replace(/(\d+)(?=[+−]$)/, '<sup>$1</sup>').replace(/([A-Za-z])(\d+)/g, '$1<sub>$2</sub>').replace(/([+−])$/, '<sup>$1</sup>');
 }
 
 function escapeHtml(s: string): string {
