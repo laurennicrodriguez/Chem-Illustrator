@@ -234,6 +234,27 @@ export interface Arrow {
   color?: string;
   /** Line width when it differs from the document's. */
   lineWidth?: number;
+  /**
+   * A reaction arrow's roles as they were stored (read from a file, set by Clean Up Reaction, or
+   * chosen by hand); without them they are worked out from where things sit (chem/reaction.ts).
+   */
+  step?: StepRoles;
+}
+
+/**
+ * The parts of one reaction step, as references: 'a12' the structure holding atom 12, 'c5'
+ * caption 5, 's7' shape 7.
+ */
+export interface StepRoles {
+  reactants: string[];
+  products: string[];
+  /** Conditions above and below the arrow. */
+  above: string[];
+  below: string[];
+  /** The + signs between starting materials or products. */
+  plusses?: string[];
+  /** Chosen by hand: Clean Up Reaction keeps these instead of working the roles out again. */
+  manual?: boolean;
 }
 
 export interface Shape {

@@ -288,6 +288,16 @@ aside h3 { font-size: 12px; font-weight: 600; margin: 2px 0 4px; }
 label.style-row.check { display: flex; gap: 6px; }
 .style-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
 .style-buttons button { padding: 3px 8px; font-size: 12px; }
+/* a reaction arrow's roles, each with the colour it is outlined in on the drawing */
+.style-roles { display: grid; gap: 2px; margin: 2px 0 4px; }
+.style-roles button { display: flex; align-items: center; gap: 6px; padding: 3px 6px; font-size: 12px; text-align: left; background: none; border: 1px solid transparent; border-radius: 5px; color: var(--text); cursor: pointer; }
+.style-roles button:hover:not(:disabled) { border-color: var(--line); background: var(--accent-soft); }
+.style-roles button:disabled { cursor: default; opacity: 0.7; }
+.style-roles .muted { margin-left: auto; font-variant-numeric: tabular-nums; }
+.role-dot { width: 9px; height: 9px; border-radius: 2px; border: 1.5px dashed currentColor; flex: none; }
+.role-reactants .role-dot { color: #2f6fde; }
+.role-products .role-dot { color: #16955a; }
+.role-above .role-dot, .role-below .role-dot { color: #c47a00; }
 .style-row select, .style-row input[type='number'] { width: 100%; padding: 2px 4px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; }
 .style-row input[type='color'] { width: 44px; height: 22px; padding: 0 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
 aside table { border-collapse: collapse; width: 100%; }

@@ -3,7 +3,8 @@
 // bond (label, charge, atom number; order and style).
 // Anything the drawing tools set automatically can be changed here by hand.
 
-import { Doc, Arrow, Shape, Caption, Atom, Bond } from '../model';
+import { Doc, Arrow, Shape, Caption, Atom, Bond, type StepRoles } from '../model';
+import type { Role } from '../chem/reaction';
 import { setStereoShown, setStereoText } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
 import { Selection } from '../editor/editor';
@@ -24,6 +25,17 @@ export interface TableHooks {
   /** Start typing into a part of a table. */
   edit(id: number, part: TablePart): void;
   measure: Measure;
+}
+
+/** What the Reaction controls need from the editor. */
+export interface ReactionHooks {
+  roles(arrowId: number): StepRoles | null;
+  /** How many things other than arrows are selected. */
+  others(): number;
+  setRole(arrowId: number, role: Role | 'none'): void;
+  reset(arrowId: number): void;
+  select(arrowId: number, role: Role): void;
+  cleanUp(): void;
 }
 
 type Opt<T> = [T, string];
@@ -53,6 +65,8 @@ export class StylePanel {
   private keepProportions = true;
   /** Table commands (set up by the app). */
   tables: TableHooks | null = null;
+  /** Reaction step commands (set up by the app). */
+  reaction: ReactionHooks | null = null;
 
   constructor(private section: HTMLElement, private body: HTMLElement, private doc: Doc, private sel: () => Selection, private changed: () => void) {}
 
@@ -118,6 +132,51 @@ export class StylePanel {
     this.number('Head width (pt)', round(r.headWidth), 0.25, 0, 100, (v) => set('Arrowhead size', () => ({ headWidth: v })));
     this.number('Line width (pt)', round(r.lineWidth ?? lw), 0.1, 0.1, 20, (v) => set('Arrow line width', () => ({ lineWidth: Math.abs(v - lw) < 1e-9 ? undefined : v })));
     this.color('Colour', r.color, (v) => set('Arrow colour', () => ({ color: v })));
+    if (arrows.length === 1) this.reactionControls(r);
+  }
+
+  /** A reaction arrow's step: what its starting materials, products and conditions are, and changing them. */
+  private reactionControls(r: Arrow): void {
+    const hooks = this.reaction;
+    const roles = hooks?.roles(r.id);
+    if (!hooks || !roles) return;
+    this.heading('Reaction');
+    const names: [Role, string, string][] = [
+      ['reactants', 'Starting materials', 'starting material'], ['products', 'Products', 'product'],
+      ['above', 'Above the arrow', 'thing'], ['below', 'Below the arrow', 'thing'],
+    ];
+    const list = document.createElement('div');
+    list.className = 'style-roles';
+    for (const [k, label] of names) {
+      const n = roles[k].length;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `role-${k}`;
+      b.innerHTML = `<span class="role-dot"></span>${label}<span class="muted">${n || 'none'}</span>`;
+      b.title = n ? `Select the ${label.toLowerCase()}` : `Nothing is ${label.toLowerCase()}`;
+      b.disabled = !n;
+      b.addEventListener('click', () => hooks.select(r.id, k));
+      list.append(b);
+    }
+    this.body.appendChild(list);
+    this.note(r.step?.manual ? 'Chosen by hand.' : r.step ? 'Kept with the arrow (from the file, or when it was last tidied).' : 'Worked out from where things sit.');
+    if (hooks.others()) {
+      const opts: Opt<string>[] = [['', 'Choose…'], ['reactants', 'Starting materials'], ['products', 'Products'], ['above', 'Above the arrow'], ['below', 'Below the arrow'], ['none', 'Not part of this step']];
+      this.select('Selected things are', opts, '', (v) => { if (v) hooks.setRole(r.id, v as Role | 'none'); },);
+    } else this.note('To change a role by hand, select the arrow and the things with Shift, then choose what they are here.');
+    const buttons = document.createElement('div');
+    buttons.className = 'style-buttons';
+    const button = (text: string, title: string, on: () => void) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = text;
+      btn.title = title;
+      btn.addEventListener('click', on);
+      buttons.append(btn);
+    };
+    button('Clean Up Reaction', 'Space this step evenly: starting materials and products in line with the arrow, conditions centred on it (Ctrl+Shift+R)', () => hooks.cleanUp());
+    if (r.step) button('Work out again', 'Forget the kept roles and work them out from where things sit', () => hooks.reset(r.id));
+    this.body.appendChild(buttons);
   }
 
   // ------------------------------------------------------------------ shapes

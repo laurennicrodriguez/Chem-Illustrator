@@ -1685,6 +1685,8 @@ const COMMANDS: Record<string, () => unknown> = {
   'typing-spelling': () => typingDialog.open(),
   'mode-colours': () => modeDialog.open(),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
+  'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
+  'show-roles': () => { editor.showRoles = !editor.showRoles; $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(editor.showRoles)); editor.requestScene(); storeSettings(); },
   'check-structure': () => checkStructure(),
   'stereo-labels': () => toggleStereoLabels(),
   'name-to-structure': () => nameToStructure(),
@@ -1759,6 +1761,7 @@ function storeSettings(): void {
     fixedLength: editor.options.fixedLength,
     fixedAngles: editor.options.fixedAngles,
     devTools,
+    showRoles: editor.showRoles,
     chemTyping: typingPrefs.chemistry,
     spellCheck: typingPrefs.spelling,
     replacements: typingPrefs.replacements,
@@ -1857,6 +1860,8 @@ void loadSettings().then((s) => {
   editor.options.keepHotspotOnBond = s.keepHotspotOnBond;
   editor.options.fixedLength = s.fixedLength;
   editor.options.fixedAngles = s.fixedAngles;
+  editor.showRoles = s.showRoles;
+  $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(s.showRoles));
   showDevTools(s.devTools);
   modeColours = s.modeColours;
   applyModeColours(ws.active.mode, modeColours);
@@ -2215,6 +2220,14 @@ function updatePanels(): void {
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
 stylePanel.cropWithMouse = () => cropPicture();
+stylePanel.reaction = {
+  roles: (id) => editor.reactionRoles(id),
+  others: () => editor.sel.atoms.size + editor.sel.captions.size + editor.sel.shapes.size,
+  setRole: (id, role) => { editor.setReactionRole(id, role); },
+  reset: (id) => editor.resetReactionRoles(id),
+  select: (id, role) => editor.selectRole(id, role),
+  cleanUp: () => command('clean-up-reaction'),
+};
 stylePanel.tables = {
   part: () => editor.tablePart,
   setPart: (p) => { editor.tablePart = p; },

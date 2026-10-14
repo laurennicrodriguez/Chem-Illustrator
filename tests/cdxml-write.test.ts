@@ -171,8 +171,9 @@ describe('saving a file that was opened', () => {
     expect(has(out, 'arrow', '31')).toBe(false);
     expect(has(out, 'graphic', '30')).toBe(false);
     expect(has(out, 't', '20')).toBe(false);
-    expect(attr(out, 'step', '51', 'ReactionStepArrows')).toBe(null);
-    expect(attr(out, 'step', '51', 'ReactionStepReactants')).toBe('10');
+    // the reaction step had nothing left without its arrow
+    expect(has(out, 'step', '51')).toBe(false);
+    expect(has(out, 'scheme', '50')).toBe(false);
   });
 
   it('rewrites a changed atom label and drops stale stereo marks', () => {

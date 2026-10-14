@@ -6,7 +6,8 @@
 // deleted ones are removed and new ones are added. A new drawing is written from scratch in
 // the same form ChemDraw uses, so ChemDraw opens both.
 
-import { Doc, Atom, Bond, Caption, Arrow, Shape, TextRun, Entity, Kind } from '../model';
+import { Doc, Atom, Bond, Caption, Arrow, Shape, TextRun, Entity, Kind, StepRoles } from '../model';
+import { interpretArrow, isReactionArrow, isStep, plainMeasure, schemeItems, type Item } from '../chem/reaction';
 import { SYMBOLS } from '../chem/elements';
 import { labelSpec, layoutLabel, labelDir, labelGraph, tokenize, isGenericLabel, Measure, MiniGraph, kekulize } from '../chem/labels';
 import { Vec, DEG, arcCenter, norm, sub, Rect } from '../geom';
@@ -104,6 +105,7 @@ class CdxmlWriter {
     for (const c of doc.captions.values()) this.writeCaption(c);
     for (const r of doc.arrows.values()) this.writeArrow(r);
     for (const s of doc.shapes.values()) this.writeShape(s);
+    this.writeSteps();
     if (src) this.cleanUp();
 
     // the file name stored inside; an untouched file is not rewritten just for a rename
@@ -767,10 +769,10 @@ class CdxmlWriter {
     const e = this.source('r', r.id, ['arrow']);
     const o = this.orig<Arrow>('r', r.id);
     if (e && o) {
-      if (sameExcept(r, o, [])) return;
+      if (sameExcept(r, o, ['step'])) return;
       const d = { x: r.tail.x - o.tail.x, y: r.tail.y - o.tail.y };
       const moved = { ...o, tail: r.tail, head: { x: o.head.x + d.x, y: o.head.y + d.y } };
-      if (sameExcept(r, moved, [])) {
+      if (sameExcept(r, moved, ['step'])) {
         shift(e, d.x, d.y);
         for (const g of this.legacyOf(e)) shift(g, d.x, d.y);
       } else {
@@ -1054,6 +1056,124 @@ class CdxmlWriter {
     }
   }
 
+  // ------------------------------------------------------------------ reaction steps
+
+  /**
+   * ChemDraw's reaction steps (scheme > step), which say what each arrow's starting materials,
+   * products and conditions are. Steps kept from the file stay as they were unless their roles
+   * changed; every other reaction arrow gets a step with the roles worked out from where things
+   * sit, as ChemDraw does (only when the file is being written anyway).
+   */
+  private writeSteps(): void {
+    const doc = this.doc, src = doc.source;
+    const stepOf = new Map<Element, Element>();
+    if (src) {
+      const byId = new Map<string, Element>();
+      for (const e of this.all) { const id = e.getAttribute('id'); if (id && !byId.has(id)) byId.set(id, e); }
+      for (const st of this.all) {
+        if (st.nodeName !== 'step') continue;
+        for (const id of (st.getAttribute('ReactionStepArrows') ?? '').split(/\s+/).filter(Boolean)) {
+          let e = byId.get(id);
+          const newer = e?.nodeName === 'graphic' ? e.getAttribute('SupersededBy') : null;
+          if (newer) e = byId.get(newer);
+          if (e?.nodeName === 'arrow' && !stepOf.has(e)) stepOf.set(e, st);
+        }
+      }
+    }
+    const rewriting = !src || this.changed;
+    let items: Item[] | null = null;
+    const steps: { arrow: Element; roles: StepRoles }[] = [];
+    for (const r of doc.arrows.values()) {
+      const e = this.source('r', r.id, ['arrow']) ?? this.findArrow(r.id);
+      if (!e || !isReactionArrow(r)) continue;
+      const old = stepOf.get(e);
+      const o = this.orig<Arrow>('r', r.id);
+      // a step from the file whose roles weren't changed stays exactly as ChemDraw wrote it
+      if (old && o && r.step && deepEqual(r.step, o.step)) { this.fixStepArrow(old, e); continue; }
+      if (!r.step && !rewriting && !old) continue;
+      items ??= schemeItems(doc, plainMeasure(doc));
+      const roles = r.step ?? interpretArrow(r, items, doc.style.bondLength);
+      if (!isStep(roles) && !r.step) {
+        if (old) { old.parentNode?.removeChild(old); this.changed = true; }
+        continue;
+      }
+      if (old) { this.fillStep(old, roles, e); continue; }
+      steps.push({ arrow: e, roles });
+    }
+    if (!steps.length) return;
+    // steps that share a structure (one's product is the next one's starting material) make one scheme
+    const parent = steps.map((_, i) => i);
+    const top = (i: number): number => (parent[i] === i ? i : (parent[i] = top(parent[i])));
+    const owner = new Map<string, number>();
+    steps.forEach(({ roles }, i) => {
+      for (const ref of [...roles.reactants, ...roles.products]) {
+        const k = this.stepRef(ref);
+        if (!k) continue;
+        const j = owner.get(k);
+        if (j === undefined) owner.set(k, i);
+        else parent[top(i)] = top(j);
+      }
+    });
+    const schemes = new Map<number, Element>();
+    steps.forEach(({ arrow, roles }, i) => {
+      let sc = schemes.get(top(i));
+      if (!sc) { sc = this.el('scheme', { id: this.id() }); this.page.appendChild(sc); schemes.set(top(i), sc); }
+      const st = this.el('step', { id: this.id() });
+      sc.appendChild(st);
+      this.fillStep(st, roles, arrow);
+    });
+    this.changed = true;
+  }
+
+  /** A new arrow's element (written with the arrow's own id). */
+  private findArrow(id: number): Element | null {
+    for (const e of kids(this.page)) if (e.nodeName === 'arrow' && e.getAttribute('id') === String(id)) return e;
+    return null;
+  }
+
+  /** The element id a role's reference becomes in the file. */
+  private stepRef(ref: string): string | null {
+    const id = Number(ref.slice(1));
+    switch (ref[0]) {
+      case 'a': return this.fragOfAtom.get(id)?.getAttribute('id') ?? null;
+      case 'c': return this.doc.captions.has(id) ? this.source('c', id, ['t'])?.getAttribute('id') ?? String(id) : null;
+      case 's': return this.doc.shapes.has(id) ? this.source('s', id, ['graphic', 'embeddedobject', 'table', 'group'])?.getAttribute('id') ?? String(id) : null;
+    }
+    return null;
+  }
+
+  private fillStep(st: Element, roles: StepRoles, arrow: Element): void {
+    const ids = (refs: string[] | undefined) => [...new Set((refs ?? []).map((r) => this.stepRef(r)).filter((x): x is string => !!x))].join(' ');
+    const want: [string, string][] = [
+      ['ReactionStepReactants', ids(roles.reactants)],
+      ['ReactionStepProducts', ids(roles.products)],
+      ['ReactionStepPlusses', ids(roles.plusses)],
+      ['ReactionStepArrows', this.arrowRef(arrow)],
+      ['ReactionStepObjectsAboveArrow', ids(roles.above)],
+      ['ReactionStepObjectsBelowArrow', ids(roles.below)],
+    ];
+    for (const [k, v] of want) {
+      if ((st.getAttribute(k) ?? '') === v) continue;
+      this.set(st, k, v);
+      this.changed = true;
+    }
+  }
+
+  /** How a step names its arrow: ChemDraw names the older copy it keeps for old versions, when there is one. */
+  private arrowRef(arrow: Element): string {
+    const legacy = this.legacyOf(arrow).find((g) => g.parentNode);
+    return (legacy ?? arrow).getAttribute('id') ?? '';
+  }
+
+  /** A kept step still names its arrow after the arrow was redrawn. */
+  private fixStepArrow(st: Element, arrow: Element): void {
+    const ids = (st.getAttribute('ReactionStepArrows') ?? '').split(/\s+/).filter(Boolean);
+    const here = new Set([arrow.getAttribute('id'), ...this.legacyOf(arrow).filter((g) => g.parentNode).map((g) => g.getAttribute('id'))]);
+    if (ids.some((x) => here.has(x))) return;
+    this.set(st, 'ReactionStepArrows', this.arrowRef(arrow));
+    this.changed = true;
+  }
+
   // ------------------------------------------------------------------ tidy references
 
   /** Drop references to objects that no longer exist (reaction steps, charge symbols, empty groups). */
@@ -1072,6 +1192,9 @@ class CdxmlWriter {
         if (kept.length !== list.length) this.set(st, at.name, kept.join(' '));
       }
     }
+    // a step whose arrow is gone, and a scheme with no steps left
+    for (const st of named('step')) if (!(st.getAttribute('ReactionStepArrows') ?? '').trim()) st.parentNode?.removeChild(st);
+    for (const sc of named('scheme')) if (!sc.firstElementChild) sc.parentNode?.removeChild(sc);
     for (const r of named('represent')) if (!ids.has(r.getAttribute('object') ?? '')) r.parentNode?.removeChild(r);
     for (const c of named('crossingbond')) if (!ids.has(c.getAttribute('BondID') ?? '')) c.parentNode?.removeChild(c);
     for (const g of named('group')) if (!g.firstElementChild) g.parentNode?.removeChild(g);

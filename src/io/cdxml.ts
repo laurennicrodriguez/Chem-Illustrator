@@ -2,7 +2,7 @@
 // their formatting, arrows, and the common graphics (lines, boxes, circles, brackets,
 // charge symbols). Anything not understood yet is counted and skipped, never fatal.
 
-import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption } from '../model';
+import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles } from '../model';
 import { TEXT_TAG, parseTextTag, runsFromChemDraw } from '../text/chemdraw-text';
 import { DocStyle } from '../style';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
@@ -57,7 +57,9 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     if (v > maxId) maxId = v;
   }
   const ord = new Map<string, number>();
-  const from = (kind: Kind, id: number, el: Element) => ord.set(kind + id, ordOf.get(el)!);
+  /** Which entity each element became (kind + id), for the references in reaction steps. */
+  const refOf = new Map<Element, string>();
+  const from = (kind: Kind, id: number, el: Element) => { ord.set(kind + id, ordOf.get(el)!); refOf.set(el, kind + id); };
   const stats: ReadStats = { atoms: 0, bonds: 0, captions: 0, arrows: 0, shapes: 0, skipped: {}, parseMs: t1 - t0, buildMs: 0 };
   const skip = (what: string) => { stats.skipped[what] = (stats.skipped[what] ?? 0) + 1; };
 
@@ -578,6 +580,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
 
   doc.bulk(() => {
     walk(root);
+    readSteps(all, refOf, doc);
     // Element labels like "OH", "H2N" or "N" become automatic labels (so they re-justify
     // when the structure changes); anything else is kept exactly as written.
     for (const { atom, text, hShown } of pendingLabels) {
@@ -602,6 +605,51 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   doc.allDirty = true;
   stats.buildMs = performance.now() - t1;
   return { doc, stats };
+}
+
+const STEP_ROLES: [string, keyof StepRoles][] = [
+  ['ReactionStepReactants', 'reactants'], ['ReactionStepProducts', 'products'],
+  ['ReactionStepObjectsAboveArrow', 'above'], ['ReactionStepObjectsBelowArrow', 'below'], ['ReactionStepPlusses', 'plusses'],
+];
+
+/**
+ * ChemDraw's reaction steps: the roles are kept with each step's arrow. A step names whole
+ * structures (fragments), captions, groups of them, and the arrow (or the older copy of it that
+ * ChemDraw keeps for old versions).
+ */
+function readSteps(all: Element[], refOf: Map<Element, string>, doc: Doc): void {
+  const byId = new Map<string, Element>();
+  for (const el of all) { const id = el.getAttribute('id'); if (id && !byId.has(id)) byId.set(id, el); }
+  const refsOf = (el: Element | undefined, out: string[]) => {
+    if (!el) return;
+    const own = refOf.get(el);
+    if (own) { if (!out.includes(own)) out.push(own); return; }
+    if (el.nodeName === 'fragment') {
+      const n = kids(el).find((k) => k.nodeName === 'n' && refOf.has(k));
+      if (n && !out.includes(refOf.get(n)!)) out.push(refOf.get(n)!);
+      return;
+    }
+    if (el.nodeName === 'group') for (const k of kids(el)) refsOf(k, out);
+  };
+  for (const st of all) {
+    if (st.nodeName !== 'step') continue;
+    const arrows: string[] = [];
+    for (const id of (st.getAttribute('ReactionStepArrows') ?? '').split(/\s+/).filter(Boolean)) {
+      let el = byId.get(id);
+      const newer = el?.getAttribute('SupersededBy');
+      if (el && !refOf.has(el) && newer) el = byId.get(newer);
+      refsOf(el, arrows);
+    }
+    const r = arrows.map((a) => (a[0] === 'r' ? doc.arrows.get(Number(a.slice(1))) : undefined)).find(Boolean);
+    if (!r || r.step) continue;
+    const roles: StepRoles = { reactants: [], products: [], above: [], below: [] };
+    for (const [attr, key] of STEP_ROLES) {
+      const list: string[] = [];
+      for (const id of (st.getAttribute(attr) ?? '').split(/\s+/).filter(Boolean)) refsOf(byId.get(id), list);
+      if (list.length || key !== 'plusses') (roles[key] as string[]) = list;
+    }
+    r.step = roles;
+  }
 }
 
 /** Insert line breaks into styled runs at the given UTF-8 byte offsets. */

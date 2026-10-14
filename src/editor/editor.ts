@@ -2,7 +2,7 @@
 // pan. The editor changes the document and asks for a repaint; hover and drawing previews
 // only repaint the overlay layer.
 
-import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, applyBase, stripBase } from '../model';
+import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, applyBase, stripBase, type StepRoles } from '../model';
 import { CaptionEditor } from '../ui/caption-editor';
 import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
 import { styleFromFace, plainText } from '../richtext';
@@ -19,6 +19,8 @@ import { keymap, chordOf, parseAction, KeyContext } from './keymap';
 import { sproutGroup, fuseChair, SPROUT_KINDS, SproutKind, nextNumber } from '../chem/sprouts';
 import { joinAtoms, joinBonds } from '../chem/join';
 import { extractDrawing, insertDrawing } from '../io/clipboard';
+import { isReactionArrow, itemFinder, rolesOf, ROLES, schemeItems, type Item, type Role } from '../chem/reaction';
+import { applySchemePlan, planCleanUp } from '../chem/scheme-layout';
 import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, rotation, mirrorX, mirrorY } from './arrange';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { tokenize } from '../chem/labels';
@@ -106,6 +108,11 @@ export type Hit =
   | { kind: 'shape'; id: number }
   | null;
 
+/** Colour and name for each role of a reaction step, when the arrow is selected. */
+const ROLE_LOOK: Record<Role, [string, string]> = {
+  reactants: ['#2f6fde', 'starting material'], products: ['#16955a', 'product'], above: ['#c47a00', 'above'], below: ['#c47a00', 'below'],
+};
+
 export interface Selection {
   atoms: Set<number>;
   bonds: Set<number>;
@@ -155,6 +162,9 @@ export class Editor {
   /** What the mouse pointed at when the keyboard highlight was set. */
   private keyHotHover: Hit = null;
   /** Preferences from the settings file. */
+  /** With one reaction arrow selected, outline what its starting materials, products and conditions are. */
+  showRoles = true;
+
   options = {
     /** After 1 or 0 on the atom under the mouse, the highlight stays there (ChemDraw). */
     keepHotspotOnBond: true,
@@ -1207,6 +1217,133 @@ export class Editor {
     return true;
   }
 
+  // ------------------------------------------------------------------ reaction schemes
+
+  /** Outline the parts of a reaction arrow's step, each in its role's colour with a small name. */
+  private drawRoles(ctx: CanvasRenderingContext2D, arrowId: number, px: number): void {
+    const roles = this.reactionRoles(arrowId);
+    if (!roles) return;
+    const find = itemFinder(this.schemeItems());
+    const pad = 3 * px;
+    ctx.save();
+    ctx.lineWidth = 1.2 * px;
+    ctx.setLineDash([4 * px, 3 * px]);
+    ctx.font = `${10 * px}px system-ui, sans-serif`;
+    ctx.textBaseline = 'bottom';
+    for (const k of ROLES) {
+      const [colour, name] = ROLE_LOOK[k];
+      for (const ref of roles[k]) {
+        const it = find(ref);
+        if (!it) continue;
+        const b = it.box;
+        ctx.strokeStyle = colour;
+        ctx.strokeRect(b.x1 - pad, b.y1 - pad, b.x2 - b.x1 + 2 * pad, b.y2 - b.y1 + 2 * pad);
+        ctx.fillStyle = colour;
+        ctx.fillText(name, b.x1 - pad, b.y1 - pad - px);
+      }
+    }
+    ctx.restore();
+  }
+
+  /** The things in the drawing as scheme items (remembered until the drawing changes). */
+  private itemsCache: { version: number; items: Item[] } | null = null;
+  schemeItems(): Item[] {
+    if (this.itemsCache?.version !== this.doc.version) this.itemsCache = { version: this.doc.version, items: schemeItems(this.doc, this.fullMeasure()) };
+    return this.itemsCache.items;
+  }
+
+  /** Label and caption sizes for every atom (schemes need whole structures, however big the selection). */
+  private fullMeasure(): Measure {
+    return { atomBoxes: (a) => this.r.atomInfo(this.doc, a).boxes, captionBox: (c) => this.r.captionBox(c) };
+  }
+
+  /** An arrow's reaction roles: kept with it, or worked out from where things sit. */
+  reactionRoles(arrowId: number): StepRoles | null {
+    const r = this.doc.arrows.get(arrowId);
+    if (!r || !isReactionArrow(r)) return null;
+    return rolesOf(r, this.schemeItems(), this.doc.style.bondLength);
+  }
+
+  /** The reaction arrows to work on: those selected, those whose steps hold something selected, or all. */
+  private selectedSteps(): number[] | undefined {
+    const s = this.sel;
+    if (s.arrows.size) return [...s.arrows];
+    if (!this.hasSelection()) return undefined;
+    const find = itemFinder(this.schemeItems());
+    const picked = new Set<Item>();
+    for (const id of s.atoms) { const it = find('a' + id); if (it) picked.add(it); }
+    for (const id of s.captions) { const it = find('c' + id); if (it) picked.add(it); }
+    for (const id of s.shapes) { const it = find('s' + id); if (it) picked.add(it); }
+    const out: number[] = [];
+    for (const r of this.doc.arrows.values()) {
+      const roles = this.reactionRoles(r.id);
+      if (roles && ROLES.some((k) => roles[k].some((ref) => { const it = find(ref); return it && picked.has(it); }))) out.push(r.id);
+    }
+    return out.length ? out : undefined;
+  }
+
+  /**
+   * Clean Up Reaction: space the selected steps (or every step) evenly, add missing + signs,
+   * centre the conditions and fit the arrows to them. False when there is no step to tidy.
+   */
+  cleanUpReaction(): boolean {
+    const m = this.fullMeasure();
+    const plan = planCleanUp(this.doc, m, this.selectedSteps());
+    if (!plan) return false;
+    applySchemePlan(this.doc, m, plan);
+    this.changed();
+    return true;
+  }
+
+  /**
+   * Give the selected things (other than the arrow) a role in the selected arrow's step by hand,
+   * or ('none') take them out of it. The roles are then kept as they are.
+   */
+  setReactionRole(arrowId: number, role: Role | 'none'): boolean {
+    const r = this.doc.arrows.get(arrowId);
+    const roles = this.reactionRoles(arrowId);
+    if (!r || !roles) return false;
+    const find = itemFinder(this.schemeItems());
+    const picked: Item[] = [];
+    const add_ = (ref: string) => { const it = find(ref); if (it && !picked.includes(it)) picked.push(it); };
+    for (const id of this.sel.atoms) add_('a' + id);
+    for (const id of this.sel.captions) add_('c' + id);
+    for (const id of this.sel.shapes) add_('s' + id);
+    if (!picked.length) return false;
+    const mine = new Set(picked);
+    const next: StepRoles = { reactants: [], products: [], above: [], below: [], plusses: [...(roles.plusses ?? [])], manual: true };
+    for (const k of ROLES) next[k] = roles[k].filter((ref) => { const it = find(ref); return !it || !mine.has(it); });
+    next.plusses = next.plusses!.filter((ref) => { const it = find(ref); return !it || !mine.has(it); });
+    if (role !== 'none') for (const it of picked) (it.plus && (role === 'reactants' || role === 'products') ? next.plusses! : next[role]).push(it.ref);
+    this.doc.edit('Reaction roles', () => this.doc.updateArrow(arrowId, { step: next }));
+    this.changed();
+    return true;
+  }
+
+  /** Forget roles chosen by hand (or read from a file): they are worked out from where things sit again. */
+  resetReactionRoles(arrowId: number): void {
+    if (!this.doc.arrows.get(arrowId)?.step) return;
+    this.doc.edit('Reaction roles', () => this.doc.updateArrow(arrowId, { step: undefined }));
+    this.changed();
+  }
+
+  /** Select everything in an arrow's step with the given role. */
+  selectRole(arrowId: number, role: Role): void {
+    const roles = this.reactionRoles(arrowId);
+    if (!roles) return;
+    const find = itemFinder(this.schemeItems());
+    this.clearSelection();
+    for (const ref of roles[role]) {
+      const it = find(ref);
+      if (!it) continue;
+      for (const a of it.atoms) this.sel.atoms.add(a);
+      for (const b of this.doc.bonds.values()) if (it.atoms.includes(b.a1)) this.sel.bonds.add(b.id);
+      if (it.caption !== undefined) this.sel.captions.add(it.caption);
+      if (it.shape !== undefined) this.sel.shapes.add(it.shape);
+    }
+    this.changed();
+  }
+
   /** Move the selection a few points (the arrow keys). False with nothing selected. */
   nudge(dx: number, dy: number): boolean {
     if (!this.hasSelection()) return false;
@@ -1883,6 +2020,7 @@ export class Editor {
         else if (sh) outlineShape(ctx, sh);
       }
     }
+    if (this.showRoles && s.arrows.size === 1 && !this.drag) this.drawRoles(ctx, [...s.arrows][0], px);
     // hotspot
     const h = this.drag?.mode === 'move' || this.drag?.mode === 'rotate' ? null : this.hotspot();
     if (h) {

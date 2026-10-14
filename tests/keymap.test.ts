@@ -214,7 +214,7 @@ describe('the settings file', () => {
 
   it('reads back what it writes', () => {
     const s = {
-      hotkeys: { command: { 'Ctrl+M': 'command zoom-in' } }, keepHotspotOnBond: false, fixedLength: true, fixedAngles: false, devTools: true,
+      hotkeys: { command: { 'Ctrl+M': 'command zoom-in' } }, keepHotspotOnBond: false, fixedLength: true, fixedAngles: false, devTools: true, showRoles: false,
       chemTyping: false, spellCheck: true, replacements: [['oC', '°C'], ['rxn', 'reaction']] as [string, string][], dictionary: ['Fooxane'],
       modeColours: { style: 'off' as const, drawing: '#2f6fdf', slides: '#00aa00', sheet: '#1e8a50', document: '#2647a8' },
     };

@@ -23,6 +23,8 @@ export interface Settings {
   fixedAngles: boolean;
   /** View > Developer Tools: the Speed panel and the stress test. Off unless switched on. */
   devTools: boolean;
+  /** Scheme > Show Reaction Roles: with a reaction arrow selected, outline its starting materials, products and conditions. */
+  showRoles: boolean;
   /** Format chemistry as words are finished (CH2Cl2, 1H NMR, DMSO-d6). Edit > Typing and Spelling. */
   chemTyping: boolean;
   /** Underline misspelled words (red) and chemistry formatting slips (blue) while typing. */
@@ -36,7 +38,7 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false,
+  hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false, showRoles: true,
   chemTyping: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
   modeColours: DEFAULT_MODE_COLOURS,
 };
@@ -52,7 +54,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (!raw || typeof raw !== 'object') return s;
   const r = raw as Record<string, unknown>;
   if (r.hotkeys && typeof r.hotkeys === 'object' && !Array.isArray(r.hotkeys)) s.hotkeys = r.hotkeys as KeyOverrides;
-  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'chemTyping', 'spellCheck'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
+  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'spellCheck'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
   if (Array.isArray(r.replacements)) {
     s.replacements = r.replacements.filter((x): x is [string, string] => Array.isArray(x) && typeof x[0] === 'string' && typeof x[1] === 'string' && x[0] !== '').map(([a, b]) => [a, b]);
   }
