@@ -27,6 +27,8 @@ export interface PptxRead {
   slides: PptxSlide[];
   /** Things that came in differently or not at all (shown to the person, never blocking). */
   warnings: string[];
+  /** Saved from Design mode (opens there again). */
+  design: boolean;
 }
 
 const EXT_MIME: Record<string, string> = Object.fromEntries(Object.entries(MIME_EXT).map(([m, e]) => [e, m]));
@@ -183,6 +185,7 @@ class Reader {
   private master!: Part;
   private defaultText: Element | null = null;
   private ourMaster: Partial<Master> | null = null;
+  private design = false;
   private masterOut!: Master;
   private size: SlideSize = { w: 960, h: 540 };
   /** The slide's tables, placed once their titles and footnotes (separate text boxes) are known. */
@@ -220,7 +223,9 @@ class Reader {
     const sz = kid(root, 'sldSz');
     if (sz) this.size = { w: Math.round(fromEmu(sz.getAttribute('cx'))), h: Math.round(fromEmu(sz.getAttribute('cy'))) };
     this.defaultText = kid(root, 'defaultTextStyle');
-    const ours = this.tagsOf(main, root)[TAG.master];
+    const tags = this.tagsOf(main, root);
+    const ours = tags[TAG.master];
+    this.design = tags[TAG.design] === '1';
     if (ours) {
       try { this.ourMaster = JSON.parse(ours); } catch { /* use PowerPoint's master */ }
     }
@@ -235,7 +240,7 @@ class Reader {
     this.readTheme();
     this.masterOut = this.readMaster(slidePaths);
     const slides = slidePaths.map((p) => this.slide(p));
-    return { size: this.size, master: this.masterOut, slides, warnings: [...this.warnings] };
+    return { size: this.size, master: this.masterOut, slides, warnings: [...this.warnings], design: this.design };
   }
 
   private readTheme(): void {

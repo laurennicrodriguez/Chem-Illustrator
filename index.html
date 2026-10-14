@@ -14,6 +14,7 @@
       <div id="file-menu" class="menu" role="menu" hidden>
         <button role="menuitem" data-cmd="new">New Drawing</button>
         <button role="menuitem" data-cmd="new-slides">New Slides</button>
+        <button role="menuitem" data-cmd="new-design">New Design…</button>
         <button role="menuitem" data-cmd="new-sheet">New Sheet</button>
         <button role="menuitem" data-cmd="new-document">New Document</button>
         <button role="menuitem" data-cmd="open">Open…</button>
@@ -553,10 +554,80 @@
     </div>
   </div>
 
+  <div id="design-ribbon" class="ribbon design-only" role="toolbar" aria-label="Design" hidden>
+    <div class="rb-group">
+      <div class="rb-row">
+        <button class="rb-big" data-cmd="design-size" title="Change the page size: journal TOC graphics, graphical abstracts, posters, slides, paper or your own size"><span class="rb-icon">▭</span>Page Size</button>
+        <div class="rb-col">
+          <span id="dz-size" class="muted small"></span>
+          <label class="rb-field" title="The page's colour (saved with the design)">Background <input id="dz-bg" type="color" value="#ffffff" /></label>
+          <div class="rb-pair">
+            <label class="check small" title="Lines to line things up by (shown on screen only, never saved or printed)"><input id="dz-grid" type="checkbox" /> Grid</label>
+            <select id="dz-grid-step" aria-label="Grid spacing" title="How far apart the grid lines are">
+              <option value="7.2">0.1 in</option>
+              <option value="18">0.25 in</option>
+              <option value="36">0.5 in</option>
+              <option value="72">1 in</option>
+              <option value="14.173">0.5 cm</option>
+              <option value="28.346">1 cm</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="rb-label">Page</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-row">
+        <button class="rb-big" data-cmd="design-shapes" title="Find a shape in the library on the left"><span class="rb-icon">◇</span>Shapes</button>
+        <button class="rb-big" data-cmd="text-box" title="Click on the page to type, or drag to make a text box that wraps"><span class="rb-icon">T</span>Text Box</button>
+        <button class="rb-big" data-cmd="insert-picture" title="Put a picture on the page (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
+        <button class="rb-big" data-cmd="insert-table" title="Put a table on the page (or paste cells from Excel or a sheet)"><span class="rb-icon">▦</span>Table</button>
+        <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
+      </div>
+      <div class="rb-label">Insert</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-row">
+        <div class="rb-col">
+          <button data-cmd="shape-front" title="Put the selected shapes in front of all the others">Bring to Front</button>
+          <button data-cmd="shape-forward" title="Put the selected shapes one step forward">Bring Forward</button>
+        </div>
+        <div class="rb-col">
+          <button data-cmd="shape-back" title="Put the selected shapes behind all the others">Send to Back</button>
+          <button data-cmd="shape-backward" title="Put the selected shapes one step back">Send Backward</button>
+        </div>
+        <div class="rb-col">
+          <div class="rb-pair">
+            <button class="rb-sq" data-cmd="align-left" title="Line up the left edges">⇤</button>
+            <button class="rb-sq" data-cmd="align-hcenter" title="Line up the centres, across">↔</button>
+            <button class="rb-sq" data-cmd="align-right" title="Line up the right edges">⇥</button>
+          </div>
+          <div class="rb-pair">
+            <button class="rb-sq" data-cmd="align-top" title="Line up the tops">⤒</button>
+            <button class="rb-sq" data-cmd="align-vcenter" title="Line up the middles, up and down">↕</button>
+            <button class="rb-sq" data-cmd="align-bottom" title="Line up the bottoms">⤓</button>
+          </div>
+        </div>
+        <div class="rb-col">
+          <button data-cmd="distribute-h" title="Space the selected things evenly across">Space Across</button>
+          <button data-cmd="distribute-v" title="Space the selected things evenly up and down">Space Down</button>
+        </div>
+      </div>
+      <div class="rb-label">Arrange</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-row">
+        <button class="rb-big" data-cmd="export-pdf" title="Save the design as a PDF at its page size"><span class="rb-icon">⎙</span>Export PDF</button>
+      </div>
+      <div class="rb-label">Share</div>
+    </div>
+  </div>
+
   <nav id="tools" aria-label="Drawing tools"></nav>
 
   <main id="work">
     <div id="slide-list" class="slides-only" hidden></div>
+    <div id="design-lib" class="design-only" hidden></div>
     <div id="sheet-pane" class="sheet-only" hidden>
       <div id="formula-bar">
         <input id="sh-name" spellcheck="false" aria-label="Cell name (type a cell such as B5 and press Enter to go there)" title="The selected cell. Type a cell such as B5, a block such as A1:C9, or a sheet name, and press Enter to go there" />

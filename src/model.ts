@@ -295,7 +295,19 @@ export interface StepRoles {
 
 export interface Shape {
   id: number;
-  kind: 'line' | 'rect' | 'oval' | 'symbol' | 'bracket' | 'picture' | 'table';
+  kind: 'line' | 'rect' | 'oval' | 'symbol' | 'bracket' | 'picture' | 'table' | 'geo';
+  /** A design shape (kind 'geo'): which one, from the shape library (design/geo.ts). */
+  geo?: string;
+  /** Text inside a design shape: wraps to the shape's text area and moves with it. */
+  text?: { runs: TextRun[]; paras?: ParaStyle[] };
+  /** Text inside a design shape: across (centred unless set) and up and down (middle unless set). */
+  textAlign?: Justify;
+  textValign?: 'top' | 'middle' | 'bottom';
+  /** Outline width in points, when not the drawing's line width; 0 for no outline. */
+  lineWidth?: number;
+  /** See-through amount of the fill, 0 (solid) to 1 (clear). */
+  transparency?: number;
+
   /** x1, y1 is the top left corner; for a table x2, y2 follow from its layout and are kept up to date when it changes. */
   x1: number;
   y1: number;

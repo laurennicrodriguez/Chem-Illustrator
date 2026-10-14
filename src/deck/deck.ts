@@ -24,6 +24,29 @@ export function sizeName(s: SlideSize): string {
   return `${+(s.w / 72).toFixed(2)} × ${+(s.h / 72).toFixed(2)} in`;
 }
 
+/** Design mode's page sizes, in points (1 in = 72 pt). */
+export const DESIGN_SIZES: { id: string; name: string; group: string; size: SlideSize }[] = [
+  { id: 'toc-acs', name: 'TOC graphic, ACS', group: 'Journal graphics', size: { w: 234, h: 126 } },
+  { id: 'ga-elsevier', name: 'Graphical abstract, Elsevier', group: 'Journal graphics', size: { w: 368.5, h: 141.7 } },
+  { id: 'toc-wiley', name: 'TOC graphic, Wiley', group: 'Journal graphics', size: { w: 155.9, h: 141.7 } },
+  { id: 'toc-rsc', name: 'Graphical abstract, RSC', group: 'Journal graphics', size: { w: 226.8, h: 113.4 } },
+  { id: 'figure-1', name: 'Journal figure, one column', group: 'Journal graphics', size: { w: 240, h: 216 } },
+  { id: 'figure-2', name: 'Journal figure, two columns', group: 'Journal graphics', size: { w: 504, h: 288 } },
+  { id: 'poster-36x48', name: 'Poster 36 × 48 in, portrait', group: 'Posters', size: { w: 2592, h: 3456 } },
+  { id: 'poster-48x36', name: 'Poster 48 × 36 in, landscape', group: 'Posters', size: { w: 3456, h: 2592 } },
+  { id: 'poster-a0', name: 'Poster A0', group: 'Posters', size: { w: 2384, h: 3370 } },
+  { id: 'slide-wide', name: 'Slide 16:9', group: 'Screens', size: { w: 960, h: 540 } },
+  { id: 'letter', name: 'Letter', group: 'Paper', size: { w: 612, h: 792 } },
+  { id: 'letter-wide', name: 'Letter, landscape', group: 'Paper', size: { w: 792, h: 612 } },
+  { id: 'a4', name: 'A4', group: 'Paper', size: { w: 595.3, h: 841.9 } },
+];
+
+/** How much larger than ACS 1996 structures are drawn on a design page: 1× on journal graphics and paper, 2× on slides, 4× on posters. */
+export function designScale(size: SlideSize): number {
+  const big = Math.max(size.w, size.h);
+  return big <= 900 ? 1 : big <= 1300 ? 2 : 4;
+}
+
 export type LayoutId = 'title' | 'title-content' | 'two-content' | 'title-only' | 'blank';
 
 export const LAYOUTS: { id: LayoutId; name: string }[] = [
@@ -261,6 +284,20 @@ export class Deck {
     this.index = 0;
     this.undoList.length = 0;
     this.redoList.length = 0;
+  }
+
+  /**
+   * A new design (Design mode): one blank page of the size chosen, white, without slide numbers,
+   * structures drawn at a size that suits the page (ACS 1996 on a TOC graphic, larger on a poster).
+   */
+  static design(host: Doc, size: SlideSize): Deck {
+    const d = new Deck(host);
+    const m = defaultMaster();
+    m.slideNumbers = false;
+    m.titleSize = 28; m.subtitleSize = 18; m.bodySize = 14;
+    m.drawing = slideDrawingStyle(designScale(size));
+    d.load([d.makeSlide('blank')], size, m);
+    return d;
   }
 
   /** A new deck: one Title Slide. */

@@ -38,6 +38,8 @@ export const TAG = {
   layout: 'CHEMILLUSTRATOR_LAYOUT',
   table: 'CHEMILLUSTRATOR_TABLE',
   tablePart: 'CHEMILLUSTRATOR_TABLE_PART',
+  /** The file is a design (Design mode), not slides: it opens in Design mode again. */
+  design: 'CHEMILLUSTRATOR_DESIGN',
 };
 
 /** A picture of part of a slide (structures, schemes): SVG and PNG, and the area it shows, in points. */
@@ -57,6 +59,8 @@ export interface DeckData {
   size: SlideSize;
   master: Master;
   slides: { layout: LayoutId; doc: Doc; notes: string }[];
+  /** A design (Design mode): marked so it opens in Design mode again. */
+  design?: boolean;
 }
 
 /**
@@ -370,7 +374,7 @@ class Writer {
     pkg.add('ppt/tableStyles.xml', `${HEAD}<a:tblStyleLst xmlns:a="${NS.a}" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"/>`, CT.tableStyles);
     pkg.relate(P, REL.tableStyles, 'tableStyles.xml');
     pkg.relate(P, REL.theme, 'theme/theme1.xml');
-    const masterTags = this.addTags(P, { [TAG.master]: JSON.stringify(masterSettings(deck.master)) });
+    const masterTags = this.addTags(P, { [TAG.master]: JSON.stringify(masterSettings(deck.master)), ...(deck.design ? { [TAG.design]: '1' } : {}) });
     const { w, h } = deck.size;
     pkg.add(P, `${HEAD}<p:presentation ${XMLNS} saveSubsetFonts="1">` +
       `<p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="${masterRel}"/></p:sldMasterIdLst>` +

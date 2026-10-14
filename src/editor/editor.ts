@@ -4,6 +4,7 @@
 
 import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, applyBase, stripBase, type StepRoles } from '../model';
 import { CaptionEditor } from '../ui/caption-editor';
+import { GEO_BY_ID, geoDef, moveSteps, traceSteps } from '../design/geo';
 import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
 import { styleFromFace, plainText } from '../richtext';
 import { cleanUpMoves } from '../chem/cleanup';
@@ -34,6 +35,7 @@ import { tokenize, addNicknames, isBuiltInNickname } from '../chem/labels';
 import {
   Handle, arrowHit, shapeHit, arrowHandles, shapeHandles, dragArrowHandle, dragShapeHandle, dragCropHandle, shapeBox,
   arrowPoints, bracketsAround, bracketLip, unionRect,
+  shapeOrder,
 } from '../objects';
 import { isEmptyText } from '../deck/deck';
 import { crossedBonds, lineAcross } from '../chem/fragments';
@@ -66,7 +68,7 @@ export type ArrowStyle = Partial<Pick<Arrow, 'headStyle' | 'tailStyle' | 'headTy
 };
 
 /** How a new shape looks. */
-export type ShapeStyle = Partial<Omit<Shape, 'id' | 'kind' | 'x1' | 'y1' | 'x2' | 'y2'>> & { kind: 'line' | 'rect' | 'oval' };
+export type ShapeStyle = Partial<Omit<Shape, 'id' | 'kind' | 'x1' | 'y1' | 'x2' | 'y2'>> & { kind: 'line' | 'rect' | 'oval' | 'geo' };
 
 export const TOOLS: Record<string, Tool> = {
   select: { kind: 'select' },
@@ -294,7 +296,7 @@ export class Editor {
   }
 
   setTool(name: string): void {
-    const t = TOOLS[name];
+    const t = TOOLS[name] ?? (name.startsWith('geo:') ? geoTool(name.slice(4), this.geoLook) : undefined);
     if (!t) return;
     this.tool = t;
     this.toolName = name;
@@ -597,6 +599,8 @@ export class Editor {
       this.editCaption(h.id, { x: e.clientX, y: e.clientY });
     } else if (h && h.kind === 'shape' && this.doc.shapes.get(h.id)?.kind === 'table') {
       this.editTableAt(h.id, p);
+    } else if (h && h.kind === 'shape' && this.doc.shapes.get(h.id)?.kind === 'geo') {
+      this.editGeoText(h.id, p);
     }
   }
 
@@ -703,6 +707,7 @@ export class Editor {
         if (h && h.kind === 'atom') this.editLabel(h.id);
         else if (h && h.kind === 'caption') this.editCaption(h.id, this.clientPoint(p));
         else if (h && h.kind === 'shape' && doc.shapes.get(h.id)?.kind === 'table') this.editTableAt(h.id, p);
+        else if (h && h.kind === 'shape' && doc.shapes.get(h.id)?.kind === 'geo') this.editGeoText(h.id, p);
         else this.newCaption(p);
         return;
       }
@@ -711,6 +716,14 @@ export class Editor {
       case 'bracket': {
         // clicking an arrow or shape picks it up, so its handles can be dragged
         if (h && (h.kind === 'arrow' || h.kind === 'shape')) { this.selectOnly(h); return; }
+        if (t.kind === 'shape' && t.shape.kind === 'geo') {
+          // a click puts the shape down at its usual size, centred there
+          const [w, hh] = geoDef(t.shape.geo).size;
+          doc.edit('Shape', () => this.selectOnly({ kind: 'shape', id: doc.addShape({ ...t.shape, x1: p.x - w / 2, y1: p.y - hh / 2, x2: p.x + w / 2, y2: p.y + hh / 2 }).id }));
+          this.afterGeo();
+          this.changed();
+          return;
+        }
         if (t.kind === 'bracket') {
           // brackets round the structure that was clicked
           if (h && (h.kind === 'atom' || h.kind === 'bond')) {
@@ -959,6 +972,7 @@ export class Editor {
     } else if (t.kind === 'shape') {
       const g = this.shapeGeometry(t, d.start, p, d.shift, d.alt);
       if (g) doc.edit('Shape', () => this.selectOnly({ kind: 'shape', id: doc.addShape({ ...t.shape, ...g }).id }));
+      if (g && t.shape.kind === 'geo') this.afterGeo();
     } else if (t.kind === 'bracket') {
       const r = { x1: Math.min(d.start.x, p.x), y1: Math.min(d.start.y, p.y), x2: Math.max(d.start.x, p.x), y2: Math.max(d.start.y, p.y) };
       if (r.y2 - r.y1 >= 4) this.addBrackets(r, t.bracket);
@@ -1623,6 +1637,37 @@ export class Editor {
     return true;
   }
 
+  /**
+   * Bring the selected shapes (boxes, design shapes, pictures, tables) in front of the other
+   * shapes, or send them behind, or one step either way. False when no shape is selected.
+   */
+  setShapeLayer(how: 'front' | 'back' | 'forward' | 'backward'): boolean {
+    const doc = this.doc;
+    const picked = new Set(this.sel.shapes);
+    if (!picked.size) return false;
+    const order = shapeOrder([...doc.shapes.values()]);
+    const rest = order.filter((s) => !picked.has(s.id)), mine = order.filter((s) => picked.has(s.id));
+    let next: Shape[];
+    if (how === 'front') next = [...rest, ...mine];
+    else if (how === 'back') next = [...mine, ...rest];
+    else {
+      // one step: past the next shape (not picked) in that direction
+      next = [...order];
+      const step = how === 'forward' ? 1 : -1;
+      const idx = (how === 'forward' ? [...next.keys()].reverse() : [...next.keys()]);
+      for (const i of idx) {
+        if (!picked.has(next[i].id)) continue;
+        const j = i + step;
+        if (j < 0 || j >= next.length || picked.has(next[j].id)) continue;
+        [next[i], next[j]] = [next[j], next[i]];
+      }
+    }
+    const label = { front: 'Bring to Front', back: 'Send to Back', forward: 'Bring Forward', backward: 'Send Backward' }[how];
+    doc.edit(label, () => next.forEach((s, i) => { if ((s.z ?? 0) !== i + 1) doc.updateShape(s.id, { z: i + 1 }); }));
+    this.changed();
+    return true;
+  }
+
   /** The next free compound number in this drawing. */
   nextCompoundNumber(): number {
     return nextCompound(this.doc, this.fullMeasure());
@@ -2174,6 +2219,73 @@ export class Editor {
     if (click) ed.ed.setCaret(ed.ed.offsetAt(click.x - at.x, click.y - at.y));
   }
 
+  // ------------------------------------------------------------------ text in design shapes
+
+  /** How new design shapes look (Design mode sets its own defaults; settable in settings). */
+  geoLook: Partial<Shape> = {};
+
+  /** Shapes put down go back to the Select tool, as in PowerPoint (unless kept with the setting). */
+  keepGeoTool = false;
+  private afterGeo(): void {
+    if (!this.keepGeoTool) this.setTool('select');
+  }
+
+  /** Put a library shape down at its usual size, centred on `p` (a shape dropped from the library). */
+  placeGeo(id: string, p: Vec): void {
+    const t = geoTool(id, this.geoLook);
+    if (!t || t.kind !== 'shape') return;
+    this.closeCaption();
+    this.commitLabel();
+    const doc = this.doc;
+    const [w, h] = geoDef(id).size;
+    doc.edit('Shape', () => this.selectOnly({ kind: 'shape', id: doc.addShape({ ...t.shape, x1: p.x - w / 2, y1: p.y - h / 2, x2: p.x + w / 2, y2: p.y + h / 2 }).id }));
+    this.changed();
+  }
+
+  /** Type into a design shape (its text wraps in the shape's text area and stays with the shape). */
+  editGeoText(id: number, click?: Vec): void {
+    this.closeCaption();
+    this.commitLabel();
+    const doc = this.doc;
+    const s = doc.shapes.get(id);
+    if (!s || s.kind !== 'geo') return;
+    // where the first line starts: from the text there, or from a space while it's empty
+    const g = this.r.geoText(s, s.text?.runs.length ? s.text : { runs: [{ text: ' ' }] })!;
+    const size = this.r.geoTextSize();
+    this.sel = emptySel();
+    this.sel.shapes.add(id);
+    this.r.geoEdit = id;
+    doc.dirtyRects.push(shapeBox(s));
+    this.requestScene();
+    const host = {
+      host: this.host,
+      view: this.r.view,
+      toScreen: (p: Vec) => this.r.toScreen(p),
+      measure: (t: string, sz: number, family: string, style: string) => measureText(t, sz, family, style),
+      defaultSize: size,
+      redraw: () => this.requestOverlay(),
+      hint: 'Enter: new line · Esc: done',
+      around: () => shapeBox(doc.shapes.get(id) ?? s),
+    };
+    const wrap = Math.max(4, g.area.x2 - g.area.x1);
+    const ed = new CaptionEditor(host, { x: g.x, y: g.y }, { runs: s.text?.runs ?? [], paras: s.text?.paras, justify: s.textAlign ?? 'center', wrap }, {}, (res) => {
+      if (this.captionEd === ed) this.captionEd = null;
+      this.r.geoEdit = null;
+      const cur = doc.shapes.get(id);
+      if (cur) {
+        doc.dirtyRects.push(shapeBox(cur));
+        const empty = !plainText(res.runs).trim();
+        const text = empty ? undefined : { runs: res.runs, ...(res.paras?.length ? { paras: res.paras } : {}) };
+        const align = res.justify === 'center' ? undefined : res.justify;
+        if (JSON.stringify(text) !== JSON.stringify(cur.text) || align !== cur.textAlign) doc.edit('Type in shape', () => doc.updateShape(id, { text, textAlign: align }));
+      }
+      this.requestScene();
+      this.changed();
+    });
+    this.captionEd = ed;
+    if (click) ed.ed.setCaret(ed.ed.offsetAt(click.x - g.x, click.y - g.y));
+  }
+
   // ------------------------------------------------------------------ tables
 
   /** The table cell (or title or footnotes) last clicked or typed into, for the Style panel's row and column commands. */
@@ -2595,10 +2707,19 @@ function outlineShape(ctx: CanvasRenderingContext2D, s: Shape): void {
     }
     case 'rect': ctx.rect(x, y, w, h); break;
     case 'oval': ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2); break;
+    case 'geo': traceSteps(ctx, moveSteps(geoDef(s.geo).draw(w, h).body, x, y)); ctx.stroke(); return;
     case 'picture': ctx.rect(x, y, w, h); ctx.stroke(); return;
     default: ctx.rect(x, y, w, h); ctx.fill(); return;
   }
   if (s.filled) ctx.fill(); else ctx.stroke();
+}
+
+/** The tool that draws a shape from the library, looking as `look` says. */
+function geoTool(id: string, look: Partial<Shape>): Tool | undefined {
+  const def = GEO_BY_ID.get(id);
+  if (!def) return undefined;
+  const base: Partial<Shape> = def.outline ? { color: '#000000' } : { filled: true, fillColor: '#dae3f3', color: '#2f5597', ...look };
+  return { kind: 'shape', shape: { ...base, kind: 'geo', geo: id } as ShapeStyle, from: 'corner' };
 }
 
 function sameHit(a: Hit, b: Hit): boolean {

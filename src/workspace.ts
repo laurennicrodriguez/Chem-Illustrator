@@ -5,7 +5,7 @@
 // New, Open, Save, Save As, Close and the unsaved-changes questions go through here.
 
 import { Doc } from './model';
-import { Deck } from './deck/deck';
+import { Deck, type SlideSize } from './deck/deck';
 import { Workbook } from './sheet/workbook';
 import { DocFile } from './document/doc-file';
 import type { DocText } from './document/document';
@@ -22,7 +22,8 @@ import {
   showError, withExtension, extensionOf,
 } from './io/files';
 
-export type Mode = 'drawing' | 'slides' | 'sheet' | 'document';
+/** Design is a deck of one page (a TOC graphic, poster or diagram) with design tools. */
+export type Mode = 'drawing' | 'slides' | 'sheet' | 'document' | 'design';
 
 export interface Tab {
   id: number;
@@ -73,7 +74,7 @@ export interface WorkspaceHooks {
 }
 
 /** What each kind of tab saves as (the first is the default). */
-const SAVE_TYPES: Record<Mode, FileType[]> = { drawing: [CDXML, CDX], slides: [PPTX], sheet: [XLSX, CSV, SDF], document: [DOCX] };
+const SAVE_TYPES: Record<Mode, FileType[]> = { drawing: [CDXML, CDX], slides: [PPTX], design: [PPTX], sheet: [XLSX, CSV, SDF], document: [DOCX] };
 
 export class Workspace {
   tabs: Tab[] = [];
@@ -113,7 +114,7 @@ export class Workspace {
     if (tab !== this.active) {
       this.putAway(this.active);
       this.active = tab;
-      if (tab.mode === 'slides') tab.deck!.attach();
+      if (tab.deck) tab.deck.attach();
       else this.host.swap(tab.stash);
       tab.seen = this.host.version;
       this.paneIn();
@@ -125,7 +126,7 @@ export class Workspace {
   private putAway(tab: Tab): void {
     this.hooks.leave(tab);
     this.paneOut();
-    if (tab.mode === 'slides') tab.deck!.detach();
+    if (tab.deck) tab.deck.detach();
     else this.host.swap(tab.stash);
   }
 
@@ -167,7 +168,7 @@ export class Workspace {
   noteChange(): void {
     const t = this.active;
     let dirty = t.dirty;
-    if (t.mode === 'slides') dirty = t.deck!.edits !== t.savedEdits;
+    if (t.deck) dirty = t.deck.edits !== t.savedEdits;
     else if (t.mode === 'sheet') dirty = t.book!.edits !== t.savedEdits;
     else if (t.mode === 'document') dirty = t.document!.edits !== t.savedEdits;
     else if (this.host.version !== t.seen) {
@@ -208,6 +209,17 @@ export class Workspace {
     const spare = this.active.mode === 'drawing' ? this.spare() : null;
     const t = this.makeTab('slides', this.untitled('slides'));
     t.deck = Deck.blank(this.host);
+    this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
+    this.activate(t, true);
+    if (spare) this.drop(spare);
+    return t;
+  }
+
+  /** A new design (Design mode) of a size, in place of an untouched new drawing. */
+  newDesign(size: SlideSize): Tab {
+    const spare = this.active.mode === 'drawing' ? this.spare() : null;
+    const t = this.makeTab('design', this.untitled('design'));
+    t.deck = Deck.design(this.host, size);
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
     if (spare) this.drop(spare);
@@ -298,7 +310,7 @@ export class Workspace {
   private openSlides(bytes: Uint8Array, name: string, ref: FileRef): boolean {
     const got = readPptx(bytes);
     const spare = this.spare();
-    const t = this.makeTab('slides', name, ref);
+    const t = this.makeTab(got.design ? 'design' : 'slides', name, ref);
     const deck = new Deck(this.host);
     deck.master = got.master;
     deck.size = got.size;
@@ -308,7 +320,8 @@ export class Workspace {
     this.activate(t, true);
     if (spare) this.drop(spare);
     const n = got.slides.length;
-    this.hooks.flash(`Opened ${name}: ${n} slide${n === 1 ? '' : 's'}.${got.warnings.length ? ' ' + got.warnings.join(' ') : ''}`, got.warnings.length ? 12000 : 3500);
+    if (got.design) this.hooks.flash(`Opened ${name}.${got.warnings.length ? ' ' + got.warnings.join(' ') : ''}`, got.warnings.length ? 12000 : 3500);
+    else this.hooks.flash(`Opened ${name}: ${n} slide${n === 1 ? '' : 's'}.${got.warnings.length ? ' ' + got.warnings.join(' ') : ''}`, got.warnings.length ? 12000 : 3500);
     return true;
   }
 
@@ -415,10 +428,10 @@ export class Workspace {
   private async writeTo(tab: Tab, ref: FileRef, name: string): Promise<boolean> {
     let note = '';
     try {
-      if (tab.mode === 'slides') {
-        const deck = tab.deck!;
+      if (tab.deck) {
+        const deck = tab.deck;
         const bytes = await writePptx({
-          size: deck.size, master: deck.master,
+          size: deck.size, master: deck.master, design: tab.mode === 'design',
           slides: deck.slides.map((s, i) => ({ layout: s.layout, doc: deck.docOf(i), notes: s.notes })),
         }, { ...this.hooks.pptx, title: name.replace(/\.[^.]+$/, '') });
         await writeFile(ref, name, bytes, PPTX);

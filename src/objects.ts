@@ -4,6 +4,7 @@
 
 import type { Arrow, Shape } from './model';
 import { Vec, Rect, add, sub, mul, perp, dist, dot, len, angleOf, fromAngle, normAngle, snapAngle, distToSegment, arcCenter, DEG } from './geom';
+import { geoDef, flatten, moveSteps, insideOutline, distToOutline } from './design/geo';
 
 // ------------------------------------------------------------------ arrows
 
@@ -115,6 +116,14 @@ export function bracketPath(p: Vec, q: Vec, kind: Shape['bracket']): PathStep[] 
 /** Is this oval a circle? */
 export const isCircle = (s: Shape): boolean => s.kind === 'oval' && Math.abs(Math.abs(s.x2 - s.x1) - Math.abs(s.y2 - s.y1)) < 0.01;
 
+/**
+ * The order shapes are drawn in, back to front: by their place in the order (set by Bring to
+ * Front and Send to Back), and where that is the same, filled shapes behind outlines.
+ */
+export function shapeOrder(shapes: Shape[]): Shape[] {
+  return [...shapes].sort((a, b) => (a.z ?? 0) - (b.z ?? 0) || (b.filled ? 1 : 0) - (a.filled ? 1 : 0) || a.id - b.id);
+}
+
 export function shapeBox(s: Shape): Rect {
   const r = { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
   if (s.kind === 'bracket') return padRect(r, bracketReach(s));
@@ -141,6 +150,13 @@ export function shapeHit(s: Shape, p: Vec, tol: number): boolean {
       const edge = Math.min(Math.abs(p.x - x1), Math.abs(p.x - x2), Math.abs(p.y - y1), Math.abs(p.y - y2));
       const near = p.x >= x1 - tol && p.x <= x2 + tol && p.y >= y1 - tol && p.y <= y2 + tol;
       return near && (!inside || edge <= tol);
+    }
+    case 'geo': {
+      // the outline itself, and inside it when filled (or when it has text)
+      const out = geoDef(s.geo).draw(x2 - x1, y2 - y1);
+      const polys = flatten(moveSteps(out.body, x1, y1));
+      if ((s.filled || s.text) && insideOutline(polys, p)) return true;
+      return distToOutline(polys, p) <= tol || (!!out.lines && distToOutline(flatten(moveSteps(out.lines, x1, y1)), p) <= tol);
     }
     case 'oval': {
       const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, rx = Math.max((x2 - x1) / 2, 1e-6), ry = Math.max((y2 - y1) / 2, 1e-6);
