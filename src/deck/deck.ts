@@ -13,6 +13,7 @@ import { DocStyle, ACS_1996 } from '../style';
 import { applyStyle, type RestyleHow } from '../drawing-styles';
 import type { Rect } from '../geom';
 import { ASCENT } from '../text/layout';
+import type { Transition, Anim } from './animation';
 
 export interface SlideSize { w: number; h: number }
 /** PowerPoint's two standard sizes, in points: widescreen 13.33 × 7.5 in, and 10 × 7.5 in. */
@@ -281,7 +282,18 @@ export interface Slide {
   doc: Doc;
   /** Speaker notes. */
   notes: string;
+  /** How the slide comes in during the slide show. */
+  transition?: Transition;
+  /** Its objects' animations, in the order they play. */
+  anims?: Anim[];
 }
+
+/** A slide's transition and animations, copied (for duplicates and the undo history). */
+export interface Motion { transition?: Transition; anims?: Anim[] }
+const copyMotion = (m: Motion): Motion => ({
+  ...(m.transition ? { transition: { ...m.transition } } : {}),
+  ...(m.anims?.length ? { anims: m.anims.map((a) => ({ ...a, target: { ...a.target } })) } : {}),
+});
 
 type HistoryEntry =
   | { kind: 'slide'; slide: Slide }
@@ -297,6 +309,8 @@ export class Deck {
   onChange: () => void = () => {};
   /** Called after the slide being edited changes (the editor clears its selection and redraws). */
   onSwitch: () => void = () => {};
+  /** Called when a slide's transition or animations change (also on undo and redo). */
+  onMotion: () => void = () => {};
   /** Counts changes (edits, undos and redos), so the file knows when it has unsaved changes. */
   edits = 0;
   private nextSlideId = 1;
@@ -353,11 +367,11 @@ export class Deck {
   }
 
   /** Make a slide from contents (opening a file, pasting slides). Not undoable on its own. */
-  makeSlide(layout: LayoutId, contents?: Contents, notes = ''): Slide {
+  makeSlide(layout: LayoutId, contents?: Contents, notes = '', motion: Motion = {}): Slide {
     const doc = new Doc();
     this.styleDoc(doc, layout);
     if (contents) doc.restoreContents(contents);
-    return { id: this.nextSlideId++, layout, doc, notes };
+    return { id: this.nextSlideId++, layout, doc, notes, ...copyMotion(motion) };
   }
 
   /** Start with these slides (a new deck or one read from a file), editing the first. Clears the history. */
@@ -524,7 +538,7 @@ export class Deck {
   duplicate(indices: number[] = [this.index]): void {
     const sorted = [...new Set(indices)].filter((i) => i >= 0 && i < this.slides.length).sort((a, b) => a - b);
     if (!sorted.length) return;
-    const copies = sorted.map((i) => this.makeSlide(this.slides[i].layout, this.docOf(i).contents(), this.slides[i].notes));
+    const copies = sorted.map((i) => this.makeSlide(this.slides[i].layout, this.docOf(i).contents(), this.slides[i].notes, this.slides[i]));
     this.insert(sorted[sorted.length - 1] + 1, copies, sorted.length > 1 ? 'Duplicate slides' : 'Duplicate slide');
   }
 
@@ -690,5 +704,32 @@ export class Deck {
     const before = s.notes;
     s.notes = text;
     this.record('Edit notes', () => { s.notes = before; this.onSwitch(); }, () => { s.notes = text; this.onSwitch(); });
+  }
+
+  /** Change the transition of some slides (the current one by default). One undo step. */
+  setTransition(t: Transition | undefined, indices: number[] = [this.index], label = 'Transition'): void {
+    const slides = [...new Set(indices)].map((i) => this.slides[i]).filter(Boolean);
+    if (!slides.length) return;
+    const before = slides.map((s) => (s.transition ? { ...s.transition } : undefined));
+    const put = (vals: (Transition | undefined)[]) => {
+      slides.forEach((s, k) => { if (vals[k]) s.transition = { ...vals[k]! }; else delete s.transition; });
+      this.onMotion();
+    };
+    const after = slides.map(() => (t && (t.kind !== 'none' || t.advanceAfter) ? { ...t } : undefined));
+    if (JSON.stringify(before) === JSON.stringify(after)) return;
+    put(after);
+    this.record(label, () => put(before), () => put(after));
+  }
+
+  /** Change a slide's animations (the current slide by default). One undo step. */
+  setAnims(anims: Anim[], label = 'Animation', i = this.index): void {
+    const s = this.slides[i];
+    if (!s) return;
+    const before = copyMotion(s).anims ?? [];
+    const after = copyMotion({ anims }).anims ?? [];
+    if (JSON.stringify(before) === JSON.stringify(after)) return;
+    const put = (v: Anim[]) => { if (v.length) s.anims = copyMotion({ anims: v }).anims; else delete s.anims; this.onMotion(); };
+    put(after);
+    this.record(label, () => put(before), () => put(after));
   }
 }

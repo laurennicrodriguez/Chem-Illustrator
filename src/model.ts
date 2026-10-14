@@ -653,6 +653,11 @@ export class Doc {
     return this.nextId++;
   }
 
+  /** The id the next new object will get (objects made after this have this id or higher). */
+  get idMark(): number {
+    return this.nextId;
+  }
+
   /** Make sure new ids are above `id` (ids used by a file for things not in the model). */
   reserveIds(id: number): void {
     if (id >= this.nextId) this.nextId = id + 1;

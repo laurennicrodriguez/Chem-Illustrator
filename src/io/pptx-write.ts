@@ -28,6 +28,7 @@ import { facesToEmbed, toEot, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
 import { patternInk } from '../render/fills';
 import { FADE, tint } from '../colours';
+import { transitionXml, timingXml, type Transition, type Anim } from '../deck/animation';
 import {
   Master, SlideSize, LayoutId, LAYOUTS, layoutFrames, decorFrames, showsNumber, textStyles, isEmptyText, slideColours, decorShapes, type DecorShape,
 } from '../deck/deck';
@@ -67,7 +68,7 @@ export interface PptxOptions {
 export interface DeckData {
   size: SlideSize;
   master: Master;
-  slides: { layout: LayoutId; doc: Doc; notes: string }[];
+  slides: { layout: LayoutId; doc: Doc; notes: string; transition?: Transition; anims?: Anim[] }[];
   /** A design (Design mode): marked so it opens in Design mode again. */
   design?: boolean;
 }
@@ -491,13 +492,35 @@ class Writer {
     const parts = splitSlide(doc, this.measure);
     const out: string[] = [];
     let id = 2;
+    // which PowerPoint shapes each object went into, for the animations
+    const spids = new Map<string, number[]>();
+    const mark = (sel: Partial<Selection>, ...ids: number[]) => {
+      const add = (k: string) => spids.set(k, [...(spids.get(k) ?? []), ...ids]);
+      for (const a of sel.atoms ?? []) add(`atom ${a}`);
+      for (const c of sel.captions ?? []) add(`caption ${c}`);
+      for (const r of sel.arrows ?? []) add(`arrow ${r}`);
+      for (const x of sel.shapes ?? []) add(`shape ${x}`);
+    };
     const styles = textStyles(this.deck.master, s.layout);
     // pictures and shapes at the back, as on screen
-    for (const p of parts.pictures) out.push(await this.picture(path, p.src!, { x1: Math.min(p.x1, p.x2), y1: Math.min(p.y1, p.y2), x2: Math.max(p.x1, p.x2), y2: Math.max(p.y1, p.y2) }, `Picture ${id - 1}`, id++, p.crop ?? null, p.look));
-    for (const sh of parts.shapes) out.push(sh.kind === 'geo' ? this.geo(path, sh, id++, doc, styles.body?.size ?? doc.style.captionSize) : shapeXml(sh, id++, doc.style.lineWidth));
-    for (const r of parts.connectors) out.push(this.connector(path, r, id++, doc.style.lineWidth));
+    for (const p of parts.pictures) {
+      mark({ shapes: new Set([p.id]) }, id);
+      out.push(await this.picture(path, p.src!, { x1: Math.min(p.x1, p.x2), y1: Math.min(p.y1, p.y2), x2: Math.max(p.x1, p.x2), y2: Math.max(p.y1, p.y2) }, `Picture ${id - 1}`, id++, p.crop ?? null, p.look));
+    }
+    for (const sh of parts.shapes) {
+      mark({ shapes: new Set([sh.id]) }, id);
+      out.push(sh.kind === 'geo' ? this.geo(path, sh, id++, doc, styles.body?.size ?? doc.style.captionSize) : shapeXml(sh, id++, doc.style.lineWidth));
+    }
+    for (const r of parts.connectors) {
+      mark({ arrows: new Set([r.id]) }, id);
+      out.push(this.connector(path, r, id++, doc.style.lineWidth));
+    }
     const phCount: Record<string, number> = {};
-    for (const tb of parts.tables) out.push(this.table(path, tb, () => id++, s.layout, styles, phCount, doc));
+    for (const tb of parts.tables) {
+      const used: number[] = [];
+      out.push(this.table(path, tb, () => { used.push(id); return id++; }, s.layout, styles, phCount, doc));
+      mark({ shapes: new Set([tb.id]) }, ...used);
+    }
     // structures and schemes
     for (const sel of parts.drawings) {
       const part = extractDrawing(doc, sel);
@@ -507,11 +530,13 @@ class Writer {
       const tags = this.addTags(path, { [TAG.cdxml]: cdxml, [TAG.box]: [pic.box.x1, pic.box.y1, pic.box.x2, pic.box.y2].map((v) => +v.toFixed(3)).join(' ') });
       const png = this.addMedia(path, pic.png, 'png');
       const svg = this.addMedia(path, new TextEncoder().encode(pic.svg), 'svg');
+      mark(sel, id);
       out.push(picXml(id, `Structure ${id - 1}`, png, svg, pic.box, null, tags));
       id++;
     }
     // text on top
     for (const c of parts.texts) {
+      mark({ captions: new Set([c.id]) }, id);
       out.push(this.text(path, c, id++, s.layout, styles, phCount, doc));
     }
     // slide number and footer, when the master shows them
@@ -521,7 +546,7 @@ class Writer {
     if (m.footer.trim()) out.push(footerShape(id++, 'Footer', '<p:ph type="ftr" sz="quarter" idx="11"/>', d.footer, m, m.footer, true));
     const tags = this.addTags(path, { [TAG.layout]: s.layout });
     return `${HEAD}<p:sld ${XMLNS}><p:cSld><p:spTree>${GROUP}${out.join('')}</p:spTree><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:cSld>` +
-      `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`;
+      `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(s.transition)}${timingXml(s.anims ?? [], (a) => spids.get(`${a.target.kind} ${a.target.id}`) ?? [])}</p:sld>`;
   }
 
   /**

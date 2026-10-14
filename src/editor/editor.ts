@@ -2490,6 +2490,15 @@ export class Editor {
     this.onChange();
   }
 
+  /** Select these objects (from the Animation pane). */
+  selectThese(sel: Selection): void {
+    this.closeCaption();
+    this.sel = { atoms: new Set(sel.atoms), bonds: new Set(sel.bonds), captions: new Set(sel.captions), arrows: new Set(sel.arrows), shapes: new Set(sel.shapes) };
+    for (const b of this.doc.bonds.values()) if (this.sel.atoms.has(b.a1) && this.sel.atoms.has(b.a2)) this.sel.bonds.add(b.id);
+    this.requestOverlay();
+    this.onChange();
+  }
+
   /** The shapes selected now. */
   selectedShapes(): number[] {
     return [...this.sel.shapes];

@@ -1,23 +1,24 @@
-// The slide show (F5): slides full screen, one after another, as in PowerPoint.
-// Next: click, →, ↓, Space, Enter, Page Down or N. Back: ←, ↑, Backspace, Page Up or P.
+// The slide show (F5): slides full screen, one after another, as in PowerPoint, with their
+// transitions and animations. Next (the next animation, else the next slide): click, →, ↓, Space,
+// Enter, Page Down or N. Back: ←, ↑, Backspace, Page Up or P.
 // Home and End go to the first and last slide; a number then Enter goes to that slide.
 // B (or .) makes the screen black and W (or ,) white until a key is pressed. Esc ends the show.
 
 import { isTauri } from '@tauri-apps/api/core';
 import type { Deck } from '../deck/deck';
-import { paintSlide } from '../deck/slide-view';
+import { Player } from '../deck/playback';
 import { onImageReady } from '../render/images';
 
 export class Presenter {
   private root: HTMLDivElement | null = null;
   private canvas: HTMLCanvasElement | null = null;
   private deck: Deck | null = null;
-  private i = 0;
+  private player: Player | null = null;
   /** Black or white screen, or the end-of-show screen. */
   private blank: 'black' | 'white' | 'end' | null = null;
   private typed = '';
   private keyHandler = (e: KeyboardEvent) => this.onKey(e);
-  private resizeHandler = () => this.paint();
+  private resizeHandler = () => { this.size(); this.paint(); };
   private wasFullscreen = false;
   private hideCursorTimer = 0;
 
@@ -25,7 +26,7 @@ export class Presenter {
   onEnd: (index: number) => void = () => {};
 
   constructor() {
-    onImageReady(() => { if (this.root) this.paint(); });
+    onImageReady(() => { if (this.root) this.player?.refresh(); });
   }
 
   get running(): boolean {
@@ -35,7 +36,6 @@ export class Presenter {
   async start(deck: Deck, from = 0): Promise<void> {
     if (this.root) return;
     this.deck = deck;
-    this.i = Math.max(0, Math.min(deck.slides.length - 1, from));
     this.blank = null;
     const root = document.createElement('div');
     root.className = 'present';
@@ -45,6 +45,9 @@ export class Presenter {
     document.body.append(root);
     this.root = root;
     this.canvas = canvas;
+    const player = new Player(canvas, deck);
+    player.onPastEnd = () => { this.blank = 'end'; this.paint(); };
+    this.player = player;
     root.addEventListener('click', () => this.next());
     root.addEventListener('contextmenu', (e) => { e.preventDefault(); this.prev(); });
     root.addEventListener('wheel', (e) => { if (e.deltaY > 0) this.next(); else if (e.deltaY < 0) this.prev(); }, { passive: true });
@@ -53,8 +56,11 @@ export class Presenter {
     window.addEventListener('resize', this.resizeHandler);
     root.focus();
     await this.fullscreen(true);
-    this.paint();
+    this.size();
+    // the first slide comes in with its transition too, as in PowerPoint
+    player.show(Math.max(0, Math.min(deck.slides.length - 1, from)), { transition: true });
     this.showCursor();
+    void document.fonts?.ready.then(() => { if (this.player === player) player.refresh(); });
   }
 
   stop(): void {
@@ -62,11 +68,14 @@ export class Presenter {
     window.removeEventListener('keydown', this.keyHandler, true);
     window.removeEventListener('resize', this.resizeHandler);
     clearTimeout(this.hideCursorTimer);
+    const i = this.player?.i ?? 0;
+    this.player?.stop();
+    this.player = null;
     this.root.remove();
     this.root = null;
     this.canvas = null;
     void this.fullscreen(false);
-    this.onEnd(this.i);
+    this.onEnd(i);
   }
 
   private async fullscreen(on: boolean): Promise<void> {
@@ -96,24 +105,19 @@ export class Presenter {
   }
 
   private next(): void {
-    const deck = this.deck!;
     if (this.blank === 'black' || this.blank === 'white') { this.blank = null; this.paint(); return; }
     if (this.blank === 'end') { this.stop(); return; }
-    if (this.i < deck.slides.length - 1) this.i++;
-    else this.blank = 'end';
-    this.paint();
+    this.player?.next();
   }
 
   private prev(): void {
     if (this.blank) { this.blank = null; this.paint(); return; }
-    if (this.i > 0) this.i--;
-    this.paint();
+    this.player?.prev();
   }
 
   private go(i: number): void {
     this.blank = null;
-    this.i = Math.max(0, Math.min(this.deck!.slides.length - 1, i));
-    this.paint();
+    this.player?.show(Math.max(0, Math.min(this.deck!.slides.length - 1, i)));
   }
 
   private onKey(e: KeyboardEvent): void {
@@ -134,28 +138,27 @@ export class Presenter {
     else if (k === 'w' || k === 'W' || k === ',') { this.blank = this.blank === 'white' ? null : 'white'; this.paint(); }
   }
 
+  private size(): void {
+    const root = this.root;
+    if (!root) return;
+    const w = root.clientWidth || window.innerWidth, h = root.clientHeight || window.innerHeight;
+    this.player?.resize(w, h, window.devicePixelRatio || 1);
+  }
+
   private paint(): void {
-    const deck = this.deck, canvas = this.canvas, root = this.root;
-    if (!deck || !canvas || !root) return;
+    const canvas = this.canvas, root = this.root;
+    if (!canvas || !root) return;
+    if (!this.blank) { this.player?.paint(); return; }
     const w = root.clientWidth || window.innerWidth, h = root.clientHeight || window.innerHeight;
     const dpr = window.devicePixelRatio || 1;
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${h}px`;
-    if (this.blank) {
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
-      const ctx = canvas.getContext('2d')!;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = this.blank === 'white' ? '#fff' : '#000';
-      ctx.fillRect(0, 0, w, h);
-      if (this.blank === 'end') {
-        ctx.fillStyle = '#bbb';
-        ctx.font = '16px system-ui, sans-serif';
-        ctx.fillText('End of slide show. Click or press a key to finish.', 24, 36);
-      }
-      return;
+    const ctx = canvas.getContext('2d')!;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = this.blank === 'white' ? '#fff' : '#000';
+    ctx.fillRect(0, 0, w, h);
+    if (this.blank === 'end') {
+      ctx.fillStyle = '#bbb';
+      ctx.font = '16px system-ui, sans-serif';
+      ctx.fillText('End of slide show. Click or press a key to finish.', 24, 36);
     }
-    const s = deck.slides[this.i];
-    paintSlide(canvas, w, h, dpr, { size: deck.size, master: deck.master, layout: s.layout, index: this.i }, deck.docOf(this.i), '#000');
   }
 }

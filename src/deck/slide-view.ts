@@ -80,6 +80,11 @@ function drawDecor(ctx: CanvasRenderingContext2D, sh: DecorShape): void {
 /** A whole slide (page and drawing) drawn on `ctx`, which is already scaled to slide points. */
 export function drawSlide(ctx: CanvasRenderingContext2D, p: SlidePage, doc: Doc): void {
   drawSlidePage(ctx, p);
+  drawDrawing(ctx, doc);
+}
+
+/** Just the slide's drawing, without its page (for animated objects, drawn on their own). */
+export function drawDrawing(ctx: CanvasRenderingContext2D, doc: Doc): void {
   const r = new Renderer(noCanvas, noCanvas);
   r.showWarnings = false;
   r.drawDocument(ctx, doc);
@@ -104,9 +109,10 @@ export function recordSlide(p: SlidePage, doc: Doc): Item[] {
 
 /**
  * Paint a slide on a canvas `w` × `h` CSS pixels big, centred with `fill` around it (black
- * for a slide show). Returns where the slide went, in CSS pixels.
+ * for a slide show). Returns where the slide went, in CSS pixels. Without `pageToo`, only the
+ * drawing is painted, on a clear canvas.
  */
-export function paintSlide(canvas: HTMLCanvasElement, w: number, h: number, dpr: number, p: SlidePage, doc: Doc, fill: string | null = null): { x: number; y: number; k: number } {
+export function paintSlide(canvas: HTMLCanvasElement, w: number, h: number, dpr: number, p: SlidePage, doc: Doc, fill: string | null = null, pageToo = true): { x: number; y: number; k: number } {
   const pw = Math.max(1, Math.round(w * dpr)), ph = Math.max(1, Math.round(h * dpr));
   if (canvas.width !== pw) canvas.width = pw;
   if (canvas.height !== ph) canvas.height = ph;
@@ -124,7 +130,8 @@ export function paintSlide(canvas: HTMLCanvasElement, w: number, h: number, dpr:
   ctx.beginPath();
   ctx.rect(0, 0, p.size.w, p.size.h);
   ctx.clip();
-  drawSlide(ctx, p, doc);
+  if (pageToo) drawSlide(ctx, p, doc);
+  else drawDrawing(ctx, doc);
   ctx.restore();
   return { x, y, k };
 }

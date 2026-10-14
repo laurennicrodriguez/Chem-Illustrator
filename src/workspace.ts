@@ -343,7 +343,7 @@ export class Workspace {
     const deck = new Deck(this.host);
     deck.master = got.master;
     deck.size = got.size;
-    deck.load(got.slides.map((s) => deck.makeSlide(s.layout, s.contents, s.notes)), got.size, got.master);
+    deck.load(got.slides.map((s) => deck.makeSlide(s.layout, s.contents, s.notes, s)), got.size, got.master);
     t.deck = deck;
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
@@ -461,7 +461,7 @@ export class Workspace {
         const deck = tab.deck;
         const bytes = await writePptx({
           size: deck.size, master: deck.master, design: tab.mode === 'design',
-          slides: deck.slides.map((s, i) => ({ layout: s.layout, doc: deck.docOf(i), notes: s.notes })),
+          slides: deck.slides.map((s, i) => ({ layout: s.layout, doc: deck.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims })),
         }, { ...this.hooks.pptx, title: name.replace(/\.[^.]+$/, '') });
         await writeFile(ref, name, bytes, PPTX);
         tab.savedEdits = deck.edits;

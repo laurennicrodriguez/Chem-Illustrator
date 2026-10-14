@@ -49,6 +49,8 @@ import { pngWithDpi } from './render/emf-read';
 import { whiteToClear } from './render/background';
 
 import { pickSlideTemplate } from './ui/slide-templates';
+import { AnimationUI } from './ui/animation-ui';
+import { EFFECTS, animName, newAnim } from './deck/animation';
 import { SLIDE_TEMPLATES, applyTemplate } from './deck/templates';import { pickTemplate } from './ui/template-gallery';
 import { showContextMenu, type MenuItem } from './ui/context-menu';
 import { fillTemplate, templateSize } from './design/templates';
@@ -337,6 +339,7 @@ const TEMPLATE_HINT = 'Click empty space to place it (drag to turn it), a bond t
 // Design mode's shape library (made further down, once the page is ready)
 let designLib: DesignLibrary | null = null;
 let layers: LayersPanel | null = null;
+let animUi: AnimationUI | null = null;
 /** View > Alignment Guides: moved things snap into line with other things and the page, on or off for each kind of tab. */
 const guidesOn: Record<'drawing' | 'slides' | 'design', boolean> = { drawing: false, slides: true, design: true };
 const guideMode = (): keyof typeof guidesOn | null => {
@@ -1067,7 +1070,7 @@ const ws: Workspace = new Workspace(doc, {
     modeTool[tab.mode] = editor.toolName;
     editor.cropping = null;
     (ws.pane ?? tab).view = { ...renderer.view };
-    if (tab.deck) { tab.deck.onChange = () => {}; tab.deck.onSwitch = () => {}; }
+    if (tab.deck) { tab.deck.onChange = () => {}; tab.deck.onSwitch = () => {}; tab.deck.onMotion = () => {}; }
   },
   enter: (tab, opened) => enterTab(tab, opened),
   changed: () => { renderTabs(); updateTitle(); layoutSplit(); },
@@ -1121,6 +1124,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   editor.glueArrows = design;
   layers?.show(design ? doc : null);
   showGuides();
+  if (deck) deck.onMotion = () => { animUi?.refresh(); ws.noteChange(); renderer.repaintAll(); editor.requestScene(); };
   editor.textFirst = !!deck;
   editor.structuresLocked = slides && structuresLocked;
   for (const el of document.querySelectorAll<HTMLElement>('.design-only')) el.hidden = !design;
@@ -1150,6 +1154,7 @@ function enterTab(tab: Tab, opened: boolean): void {
     notesBox.value = deck.current?.notes ?? '';
     showSlideState();
   } else slideList.show(null);
+  animUi?.update();
   layoutSplit();
   // the slide list and notes take room from the drawing area
   resize();
@@ -1175,6 +1180,7 @@ const slidePage = {
     if (!d?.current) return;
     drawSlidePage(ctx, { size: d.size, master: d.master, layout: d.current.layout, index: d.index }, SURROUND);
     if (ws.active.mode === 'design' && designGrid.on) drawGrid(ctx, d.size, designGrid.step);
+    if (ws.active.mode === 'slides') animUi?.drawMarkers(ctx, renderer.view.scale);
   },
 };
 
@@ -1203,6 +1209,7 @@ function slideSwitched(deck: Deck): void {
   renderer.repaintAll();
   editor.requestScene();
   editor.clearSelection();
+  animUi?.slideChanged();
 }
 
 /** The layout and size boxes and the Slide menu show the slide being edited. */
@@ -1221,6 +1228,22 @@ function showSlideState(): void {
   $('[data-cmd="size-wide"]')?.setAttribute('aria-checked', String(named === 'wide'));
   $('[data-cmd="size-standard"]')?.setAttribute('aria-checked', String(named === 'standard'));
 }
+
+// ---------------------------------------------------------------- transitions and animations (Slides mode)
+
+animUi = new AnimationUI($('#ribbon'), $('#anim-section'), {
+  deck: () => (ws.active.mode === 'slides' ? deckNow() : null),
+  doc: () => doc,
+  selection: () => {
+    const s = editor.sel;
+    const typing = renderer.hiddenCaption;
+    return typing === null ? s : { ...s, captions: new Set([...s.captions, typing]) };
+  },
+  select: (sel) => editor.selectThese(sel),
+  finishTyping,
+  flash,
+  repaint: () => { renderer.repaintAll(); editor.requestScene(); },
+});
 
 // ---------------------------------------------------------------- Design mode
 
@@ -2341,7 +2364,13 @@ function setPictureStyle(look: PictureLook | undefined): boolean {
 }
 
 /** Slide commands that don't apply to a design's single page. */
-const SLIDE_ONLY = new Set(['new-slide', 'duplicate-slide', 'delete-slide', 'size-wide', 'size-standard', 'slide-master', 'slide-templates']);
+const SLIDE_ONLY = new Set(['new-slide', 'duplicate-slide', 'delete-slide', 'size-wide', 'size-standard', 'slide-master', 'slide-templates',
+  'slide-transitions', 'slide-animations', 'animation-pane', 'preview-slide', 'remove-animation']);
+
+/** The animation commands: an effect for the selected objects (the right-click menu's Animation). */
+const ANIM_COMMANDS: { cmd: string; label: string }[] = [false, true].flatMap((exit) => EFFECTS.map((e) => ({
+  cmd: `animate-${e.id}${exit ? '-out' : ''}`, label: animName(newAnim({ kind: 'shape', id: 0 }, e.id, exit)),
+})));
 
 const COMMANDS: Record<string, () => unknown> = {
   new: () => { finishTyping(); ws.newDrawing(); },
@@ -2382,6 +2411,11 @@ const COMMANDS: Record<string, () => unknown> = {
   'size-standard': () => setSlideSize(STANDARD),
   'slide-master': () => slideMaster(),
   'slide-templates': () => slideTemplates(),
+  'slide-transitions': () => animUi?.showTab('transitions'),
+  'slide-animations': () => animUi?.showTab('animations'),
+  'animation-pane': () => animUi?.showPane(!animUi.paneShown),
+  'preview-slide': () => animUi?.preview(),
+  'remove-animation': () => animUi?.removePicked(),
   'drawing-style': () => drawingStyleDialog(),
   present: () => present(false),
   'present-current': () => present(true),
@@ -2506,6 +2540,11 @@ const COMMANDS: Record<string, () => unknown> = {
   },
 };
 for (const p of PICTURE_STYLES) COMMANDS[`picture-style-${p.id}`] = () => setPictureStyle(p.look);
+for (const [i, a] of ANIM_COMMANDS.entries()) {
+  const e = EFFECTS[i % EFFECTS.length].id, exit = i >= EFFECTS.length;
+  COMMANDS[a.cmd] = () => { if (ws.active.mode !== 'slides') return false; animUi?.applyEffect(e, exit); return true; };
+  SLIDE_ONLY.add(a.cmd);
+}
 
 // The menus: click a name to open its menu; with one open, pointing at another name opens that.
 const menus = [...document.querySelectorAll<HTMLDivElement>('.menu-wrap')].map((w) => ({
@@ -3825,6 +3864,10 @@ function drawingMenu(): MenuItem[] {
     { label: 'Rotate or Flip', items: turn },
     ...(order.length ? [{ label: 'Order', items: order }] : []),
     ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }, { label: 'Picture Style', items: PICTURE_STYLES.map((p) => ({ cmd: `picture-style-${p.id}`, label: p.name })) }] : []),
+    ...(ws.active.mode === 'slides' ? [{ label: 'Animation', items: [
+      ...ANIM_COMMANDS.slice(0, EFFECTS.length), null, ...ANIM_COMMANDS.slice(EFFECTS.length), null,
+      { cmd: 'remove-animation', label: 'Remove Animation' }, { cmd: 'animation-pane', label: 'Animation Pane' }, { cmd: 'preview-slide', label: 'Preview Slide' },
+    ] }] : []),
     null,
     { cmd: 'select-all' },
     view,
@@ -4146,7 +4189,7 @@ editor.onFrame = () => {
   updateWarnings();
   if (doc.version !== stereoSeen) { stereoSeen = doc.version; updateStereo(); }
 };
-editor.onChange = () => { updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); void refreshDescriptors(); scheduleLabelCheck(); };
+editor.onChange = () => { animUi?.selectionChanged(); updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); void refreshDescriptors(); scheduleLabelCheck(); };
 chem.onReady = () => {
   (window as any).__chemReadyMs = performance.now() - startMs;
   sheetChem.flush();

@@ -1341,3 +1341,27 @@ dialog.cf-manage { width: min(92vw, 640px); }
 /* short choices in the Layout ribbon need less room */
 #doc-ribbon #doc-orient, #doc-ribbon #doc-columns { min-width: 96px; }
 #doc-ribbon #doc-wrap { min-width: 128px; }
+
+/* ---------------------------------------------------------------- slide transitions and animations */
+#tr-kinds { gap: 2px; }
+.an-gallery { display: grid; grid-template-columns: repeat(4, auto); gap: 1px 2px; align-content: start; }
+.ribbon button.an-effect { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px 1px 4px; white-space: nowrap; }
+.ribbon button.an-effect svg { width: 18px; height: 18px; }
+#anim-section h2 { display: flex; align-items: center; }
+#anim-section .an-close { margin-left: auto; padding: 0 6px; border: 0; background: transparent; font-size: 15px; line-height: 1; color: var(--muted); }
+.an-bar { display: flex; gap: 4px; margin-bottom: 6px; }
+.an-bar button { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; font-size: 12px; }
+.an-bar button:first-child { margin-right: auto; }
+.an-list { display: flex; flex-direction: column; gap: 1px; outline: none; }
+.an-row { display: grid; grid-template-columns: 16px 16px 18px 1fr auto; align-items: center; gap: 3px; padding: 2px 4px; border: 1px solid transparent; border-radius: 3px; cursor: pointer; font-size: 12px; }
+.an-row:hover { background: var(--accent-soft); }
+.an-row.picked { border-color: var(--accent); background: var(--accent-soft); }
+.an-row.gone .an-name { color: var(--muted); text-decoration: line-through; }
+.an-row.dragging { opacity: 0.5; }
+.an-row.drop { border-top: 2px solid var(--accent); }
+.an-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.an-when, .an-icon { display: inline-flex; color: var(--muted); }
+.an-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.an-del { padding: 0 4px; border: 0; background: transparent; color: var(--muted); visibility: hidden; }
+.an-row:hover .an-del, .an-row.picked .an-del { visibility: visible; }
+.an-preview canvas { display: block; margin: 6px 0; border: 1px solid var(--line); }
