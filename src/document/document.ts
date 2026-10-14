@@ -16,6 +16,7 @@ import { ACS_1996, type DocStyle } from '../style';
 import * as rt from '../richtext';
 import { cleanPara, fitParas, paraCount, paraRange } from '../text/paragraphs';
 import { citationTexts, type CiteStyle, type Reference } from './references';
+import type { CiteFormat } from './cite-styles';
 
 /** The character that stands for a figure, table or field in the text (Unicode's object replacement character). */
 export const OBJECT_CHAR = '￼';
@@ -100,8 +101,10 @@ export interface DocText extends RichText {
   drawingStyle: DocStyle;
   /** The document's references (References > Manage References), cited or not. */
   references?: Reference[];
-  /** How citations and the bibliography are printed (ACS when not chosen). */
+  /** How citations and the bibliography are printed (when not chosen, the person's own style: ACS unless changed). */
   citeStyle?: CiteStyle;
+  /** Details of that style changed for this document (References > Manage References > Style Options). */
+  citeOptions?: Partial<CiteFormat>;
 }
 
 // ---------------------------------------------------------------- defaults
@@ -297,7 +300,7 @@ export const COMPOUND = 'Compound';
  * A reference to a compound shows just its number. A citation shows the numbers of the
  * references it cites (in the order references are first cited).
  */
-export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle'>>): Map<number, string> {
+export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions'>>): Map<number, string> {
   const shown = new Map<number, string>();
   const counts = new Map<string, number>();
   const order = objectsInText(t.runs);
@@ -376,7 +379,7 @@ export function paragraphAt(t: Pick<RichText, 'runs'>, offset: number): { index:
 }
 
 /** Text of a document without objects (for word counts, searching and plain copies). */
-export function documentPlainText(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle'>>): string {
+export function documentPlainText(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions'>>): string {
   const shown = fieldTexts(t);
   let out = '';
   for (const r of t.runs) {

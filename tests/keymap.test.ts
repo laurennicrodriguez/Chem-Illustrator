@@ -217,7 +217,7 @@ describe('the settings file', () => {
       hotkeys: { command: { 'Ctrl+M': 'command zoom-in' } }, keepHotspotOnBond: false, fixedLength: true, fixedAngles: false, devTools: true, showRoles: false,
       chemTyping: false, spellCheck: true, replacements: [['oC', '°C'], ['rxn', 'reaction']] as [string, string][], dictionary: ['Fooxane'],
       modeColours: { style: 'off' as const, drawing: '#2f6fdf', slides: '#00aa00', sheet: '#1e8a50', document: '#2647a8' },
-      nicknames: { Qq: 'CC' }, templates: [], splitWidth: 0.6,
+      nicknames: { Qq: 'CC' }, templates: [], splitWidth: 0.6, citeStyle: 'rsc', citeOptions: { lastAuthor: 'none', etAlOver: 5 },
     };
     const text = settingsText(s);
     expect(text).toContain('"app": "Chem Illustrator"');
