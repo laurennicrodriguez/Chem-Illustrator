@@ -4,6 +4,7 @@
 // value can be typed in; lengths take inches, cm, mm or pt ("2.5 cm").
 
 import type { Justify } from '../model';
+import { FloatBox, PINNED_ICON } from './float-box';
 import type { DocFile } from '../document/doc-file';
 import {
   A4, CM, INCH, LETTER, defaultStyles, modifyStyle, setParaStyle, styleOf,
@@ -20,8 +21,6 @@ export interface DocPanelHost {
   setScale(id: number, scale: number): void;
 }
 
-/** Fonts offered (any installed font can be typed). */
-export const DOC_FONTS = ['Times New Roman', 'Arial', 'Calibri', 'Cambria', 'Helvetica', 'Georgia', 'Garamond', 'Palatino Linotype', 'Courier New', 'Symbol'];
 
 const ALIGNS: [Justify, string][] = [['left', 'Left'], ['center', 'Centre'], ['right', 'Right'], ['justify', 'Justified']];
 const PLACES: [NumberPlace, string][] = [
@@ -53,29 +52,116 @@ export function showLength(pt: number, unit: 'in' | 'pt' | 'cm'): string {
 
 type Field = HTMLInputElement | HTMLSelectElement;
 
+/** The settings boxes: each floats (opened from its ribbon group's corner button) or is pinned in the panel. */
+export type DocBoxKey = 'para' | 'style' | 'page' | 'hf';
+export const DOC_BOXES: DocBoxKey[] = ['para', 'style', 'page', 'hf'];
+const BOX_TITLES: Record<DocBoxKey, string> = { para: 'Paragraph', style: 'Style', page: 'Page Setup', hf: 'Header, footer and page numbers' };
+
+/** Which boxes are pinned in the panel on the right (kept in the settings); `changed` saves them. */
+export const docBoxPrefs: { pinned: DocBoxKey[]; changed?: () => void } = { pinned: [] };
+
+export function parseDocPins(raw: unknown): DocBoxKey[] {
+  return Array.isArray(raw) ? DOC_BOXES.filter((k) => raw.includes(k)) : [];
+}
+
 export class DocPanel {
   private fields = new Map<string, Field>();
   private sections: Record<'para' | 'style' | 'page' | 'hf' | 'figure', HTMLElement>;
   private styleTitle!: HTMLElement;
   private figureInfo!: HTMLElement;
+  private floats = {} as Record<DocBoxKey, FloatBox>;
+  private emptyNote: HTMLElement;
 
-  constructor(body: HTMLElement, private host: DocPanelHost) {
-    const sec = (title: string) => {
+  constructor(private body: HTMLElement, private host: DocPanelHost) {
+    const sec = (title: string, box?: DocBoxKey) => {
       const s = document.createElement('div');
       s.className = 'dp-section';
       const h = document.createElement('h3');
-      h.textContent = title;
+      const t = document.createElement('span');
+      t.textContent = title;
+      h.append(t);
+      if (box) {
+        const unpin = document.createElement('button');
+        unpin.type = 'button';
+        unpin.className = 'dp-unpin';
+        unpin.innerHTML = PINNED_ICON;
+        unpin.title = 'Unpin: it goes back to opening from its ribbon button';
+        unpin.addEventListener('click', () => this.pin(box, false));
+        h.append(unpin);
+        this.floats[box] = new FloatBox(title, () => this.pin(box, true));
+      }
       s.append(h);
       body.append(s);
       return s;
     };
-    this.sections = { figure: sec('Figure'), para: sec('Paragraph'), style: sec('Style'), page: sec('Page'), hf: sec('Header, footer and page numbers') };
-    this.styleTitle = this.sections.style.querySelector('h3')!;
+    this.sections = { figure: sec('Figure'), para: sec(BOX_TITLES.para, 'para'), style: sec(BOX_TITLES.style, 'style'), page: sec(BOX_TITLES.page, 'page'), hf: sec(BOX_TITLES.hf, 'hf') };
+    this.styleTitle = this.sections.style.querySelector('h3 > span')!;
+    this.emptyNote = document.createElement('p');
+    this.emptyNote.className = 'muted small dp-note';
+    this.emptyNote.textContent = 'The Paragraph, Style, Page Setup and Header settings open from the small ⬊ buttons on the ribbon. Pin one with its pin button to keep it here.';
+    body.append(this.emptyNote);
     this.buildFigure();
     this.buildPara();
     this.buildStyle();
     this.buildPage();
     this.buildHeaderFooter();
+    this.placeBoxes();
+  }
+
+  // ---------------------------------------------------------------- the boxes
+
+  /** Pinned boxes go in the panel (in a fixed order), the others into their floating windows. */
+  placeBoxes(): void {
+    for (const k of DOC_BOXES) {
+      const pinned = docBoxPrefs.pinned.includes(k);
+      const sec = this.sections[k];
+      sec.classList.toggle('dp-pinned', pinned);
+      if (pinned) { this.body.append(sec); this.floats[k].close(); }
+      else this.floats[k].body.append(sec);
+    }
+    this.body.append(this.emptyNote);
+    this.emptyNote.hidden = docBoxPrefs.pinned.length > 0;
+  }
+
+  /** Pin a box to the panel, or unpin it (it then floats, open, so it doesn't vanish). */
+  pin(key: DocBoxKey, on: boolean): void {
+    const was = this.floats[key].open;
+    docBoxPrefs.pinned = on ? [...new Set([...docBoxPrefs.pinned, key])] : docBoxPrefs.pinned.filter((k) => k !== key);
+    this.placeBoxes();
+    if (on) this.reveal(key);
+    else if (!was) this.floats[key].show();
+    this.update();
+    docBoxPrefs.changed?.();
+  }
+
+  /** Open a box (a ribbon group's corner button): float it, or show it in the panel when pinned there. */
+  open(key: DocBoxKey, near?: HTMLElement | null, focus?: string): void {
+    const sec = this.sections[key];
+    if (docBoxPrefs.pinned.includes(key) && sec.offsetParent !== null) this.reveal(key);
+    else {
+      // pinned but the panel is folded away: float it this time
+      if (sec.parentElement !== this.floats[key].body) this.floats[key].body.append(sec);
+      this.update();
+      this.floats[key].show(near);
+    }
+    if (focus) this.fields.get(focus)?.focus();
+  }
+
+  /** Close the floating boxes (another kind of tab is showing). */
+  closeBoxes(): void {
+    for (const k of DOC_BOXES) this.floats[k].close();
+  }
+
+  isOpen(key: DocBoxKey): boolean {
+    return this.floats[key].open;
+  }
+
+  private reveal(key: DocBoxKey): void {
+    const sec = this.sections[key];
+    sec.scrollIntoView({ block: 'nearest' });
+    sec.classList.remove('dp-flash');
+    void sec.offsetWidth;
+    sec.classList.add('dp-flash');
   }
 
   // ---------------------------------------------------------------- building
@@ -356,6 +442,7 @@ export class DocPanel {
     put('p-keep', !!p.keepNext);
     // its style
     this.styleTitle.textContent = `Style: ${st.name}`;
+    this.floats.style.title = `Style: ${st.name}`;
     put('s-font', st.font);
     put('s-size', String(st.size));
     put('s-bold', st.bold);

@@ -83,6 +83,7 @@ import { ArrangeDialog } from './ui/arrange-dialog';
 import { PeriodicTable } from './ui/periodic-table';
 import { SheetMode, ClipboardCells } from './ui/sheet-mode';
 import { DocumentMode, DocPaste } from './ui/doc-mode';
+import { docBoxPrefs, parseDocPins } from './ui/doc-panel';
 import { setScreenMeasure, figures } from './document/doc-file';
 import { readDocx, writeDocx, type DocxDeps, type DocxReadDeps } from './io/docx';
 import { FIGURE_MARGIN } from './document/figures';
@@ -2146,7 +2147,7 @@ const SHEET_COMMANDS: Record<string, () => unknown> = {
 
 // ---------------------------------------------------------------- documents: pages of text with structures in them
 
-const DOC_HINT = 'Type on the page. Insert > Structure draws a structure in the text (double-click it to change it); References > Insert Caption numbers figures and schemes. The panel on the right sets the paragraph, its style, the page and the page numbers.';
+const DOC_HINT = 'Type on the page. Insert > Structure draws a structure in the text (double-click it to change it); References > Insert Caption numbers figures and schemes. The small ⬊ buttons on the ribbon (or a right-click) open the Paragraph, Style, Page Setup and Header settings.';
 
 /** True when a document is showing (and no structure is being drawn for it). */
 function docActive(): boolean {
@@ -2171,6 +2172,7 @@ const docMode = new DocumentMode({
   newTable: (rows, cols, style) => tableDrawing(emptyTable(rows, cols, style.captionSize), style),
   measure: measureText,
 });
+docBoxPrefs.changed = () => storeSettings();
 // documents measure fonts they have no published widths for on the screen
 setScreenMeasure(measureText);
 void document.fonts?.ready.then(() => docMode.fontsChanged());
@@ -2912,6 +2914,7 @@ function storeSettings(): void {
     darkPalette: dark.palette,
     darkPalettes: dark.own,
     guides: { ...guidesOn },
+    docPins: [...docBoxPrefs.pinned],
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -3031,6 +3034,8 @@ void loadSettings().then((s) => {
   dark.own = s.darkPalettes;
   showDark(s.darkPage);
   Object.assign(guidesOn, s.guides);
+  docBoxPrefs.pinned = parseDocPins(s.docPins);
+  docMode.boxesChanged();
   showGuides();
   // the drawing the app opened with takes your default style, if nothing has been drawn yet
   const first = modeStyles.drawing ? styleNamed(modeStyles.drawing, ownStyles) : undefined;

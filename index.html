@@ -559,6 +559,7 @@
           </div>
         </div>
         <div class="rb-label">Paragraph</div>
+        <button class="rb-launch" data-doc="box-para" title="Paragraph settings: indents, spacing before and after, line spacing, page breaks">⬊</button>
       </div>
       <div class="rb-group">
         <div class="rb-row rb-styles">
@@ -569,7 +570,8 @@
           <button class="rb-style" data-doc="style-h3" aria-pressed="false" title="Heading 3"><span class="s-h3">AaBbCc</span>Heading 3</button>
           <button class="rb-style" data-doc="style-caption" aria-pressed="false" title="Caption"><span class="s-cap">AaBbCcDd</span>Caption</button>
         </div>
-        <div class="rb-label">Styles (change them in the panel on the right)</div>
+        <div class="rb-label">Styles</div>
+        <button class="rb-launch" data-doc="box-style" title="Change how the style the caret is in looks (font, size, spacing…); every paragraph in it follows">⬊</button>
       </div>
       <div class="rb-group">
         <div class="rb-row">
@@ -619,12 +621,14 @@
               <option value="narrow">Narrow (0.5 in)</option>
               <option value="moderate">Moderate (1 in, 0.75 in sides)</option>
               <option value="wide">Wide (1 in, 2 in sides)</option>
-              <option value="other" hidden>Other (set in the panel)</option>
+              <option value="other" hidden>Other</option>
+              <option value="custom">Custom Margins…</option>
             </select></label>
             <label class="rb-field">Paper <select id="doc-paper" data-doc-prefix="paper">
               <option value="letter">Letter (8.5 × 11 in)</option>
               <option value="a4">A4 (21 × 29.7 cm)</option>
-              <option value="other" hidden>Other (set in the panel)</option>
+              <option value="other" hidden>Other size</option>
+              <option value="custom">More Paper Sizes…</option>
             </select></label>
           </div>
           <div class="rb-col">
@@ -636,6 +640,7 @@
           </div>
         </div>
         <div class="rb-label">Page Setup</div>
+        <button class="rb-launch" data-doc="box-page" title="Page Setup: paper size, orientation and exact margins">⬊</button>
       </div>
       <div class="rb-group">
         <div class="rb-row">
@@ -651,8 +656,13 @@
             </select></label>
             <button data-doc="numbers-s" aria-pressed="false" title="Number pages S1, S2… as Supporting Information is">S1, S2… numbering</button>
           </div>
+          <div class="rb-col">
+            <button data-doc="header-edit" title="Text at the top of every page (left, centre, right)">Header…</button>
+            <button data-doc="footer-edit" title="Text at the bottom of every page (left, centre, right)">Footer…</button>
+          </div>
         </div>
-        <div class="rb-label">Header and Footer (more in the panel)</div>
+        <div class="rb-label">Header and Footer</div>
+        <button class="rb-launch" data-doc="box-hf" title="Header, footer and page number settings">⬊</button>
       </div>
     </div>
     <div class="rb-panel" data-doc-panel="references" hidden>

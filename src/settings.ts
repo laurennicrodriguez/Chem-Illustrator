@@ -78,6 +78,8 @@ export interface Settings {
   darkPalettes: DarkPalette[];
   /** Alignment guides on or off in each kind of tab (View > Alignment Guides). */
   guides: { drawing: boolean; slides: boolean; design: boolean };
+  /** Document settings boxes pinned in the panel on the right ('para', 'style', 'page', 'hf'). */
+  docPins: string[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -87,13 +89,14 @@ export const DEFAULT_SETTINGS: Settings = {
   citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(),
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
   guides: { drawing: false, slides: true, design: true },
+  docPins: [],
 };
 
 const STORAGE_KEY = 'chem-illustrator.settings';
 
 /** Read settings saved as text, keeping only what makes sense. */
 export function parseSettings(text: string | null | undefined): Settings {
-  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), myStyles: [], modeStyles: {}, darkPalettes: [], guides: { ...DEFAULT_SETTINGS.guides } };
+  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), myStyles: [], modeStyles: {}, darkPalettes: [], guides: { ...DEFAULT_SETTINGS.guides }, docPins: [] };
   if (!text) return s;
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { return s; }
@@ -122,6 +125,7 @@ export function parseSettings(text: string | null | undefined): Settings {
     const g = r.guides as Record<string, unknown>;
     for (const k of ['drawing', 'slides', 'design'] as const) if (typeof g[k] === 'boolean') s.guides[k] = g[k] as boolean;
   }
+  if (Array.isArray(r.docPins)) s.docPins = ['para', 'style', 'page', 'hf'].filter((k) => (r.docPins as unknown[]).includes(k));
   if (r.methylStyle === 'Me' || r.methylStyle === 'CH3') s.methylStyle = r.methylStyle;
   if (r.axialStyle === 'RaSa' || r.axialStyle === 'PM') s.axialStyle = r.axialStyle;
   if (Array.isArray(r.dictionary)) s.dictionary = r.dictionary.filter((w): w is string => typeof w === 'string' && w.trim() !== '').map((w) => w.trim());

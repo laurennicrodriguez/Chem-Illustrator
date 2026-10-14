@@ -18,7 +18,7 @@ import { findIssues, type CharLook, type Issue } from '../text/chemtext';
 import { loadSpeller, type Speller } from '../text/spelling';
 import { paraAt, paraRange, splitParagraphs } from '../text/paragraphs';
 import { DocView, ACTUAL, type Overlay } from './doc-view';
-import { DocPanel } from './doc-panel';
+import { DocPanel, type DocBoxKey } from './doc-panel';
 import { DocFind } from './doc-find';
 import { ask } from './ask';
 import { ReferencesDialog, chooseReferences } from './references-dialog';
@@ -155,6 +155,7 @@ export class DocumentMode {
     this.view.file = f;
     if (!f) {
       if (this.blink) { clearInterval(this.blink); this.blink = null; }
+      this.panel.closeBoxes();
       return;
     }
     f.listener = (kind) => this.changed(kind);
@@ -325,7 +326,6 @@ export class DocumentMode {
     const near = (a: number, b: number) => offset >= a && offset <= b;
     const word = c.spell.find(([a, b]) => near(a, b));
     const issue = c.issues.find((i) => near(i.start, i.end));
-    if (!word && !issue) return false;
     const ed = this.ed;
     const menu = document.createElement('div');
     menu.className = 'text-menu';
@@ -356,6 +356,22 @@ export class DocumentMode {
       item('Add to Dictionary', () => setTypingPrefs({ dictionary: [...typingPrefs.dictionary, text] }), 'Accept this word from now on (Edit > Typing and Spelling lists your words)');
       item('Ignore', () => { ignored.add(text.toLowerCase()); this.speller?.ignore(text); this.checkCache.clear(); this.checked = null; this.view.redraw(); }, 'Accept this word until the program is closed');
     }
+    // the usual commands, as on the ribbon
+    if (word || issue) menu.appendChild(document.createElement('hr'));
+    const cmd = (label: string, name: string, title?: string) => item(label, () => { if (!this.run(name)) this.host.command(name); }, title);
+    cmd('Cut', 'cut');
+    cmd('Copy', 'copy');
+    cmd('Paste', 'paste');
+    menu.appendChild(document.createElement('hr'));
+    if (this.pickedObject() !== null) {
+      cmd('Edit Drawing', 'edit-figure');
+      cmd('Insert Caption…', 'insert-caption');
+      menu.appendChild(document.createElement('hr'));
+    }
+    cmd('Paragraph…', 'box-para', 'Indents, spacing and line spacing');
+    cmd('Style…', 'box-style', 'Change how this paragraph\'s style looks');
+    cmd('Page Setup…', 'box-page', 'Paper, orientation and margins');
+    cmd('Header and Footer…', 'box-hf', 'Header, footer and page numbers');
     const host = this.view.host;
     host.appendChild(menu);
     const r = host.getBoundingClientRect();
@@ -844,6 +860,15 @@ export class DocumentMode {
       case 'find': case 'replace': this.find(cmd === 'replace'); return true;
       case 'paste': void this.paste(null); break;
       case 'copy': case 'cut': this.focus(); document.execCommand(cmd); break;
+      case 'box-para': case 'box-style': case 'box-page': case 'box-hf':
+        this.panel.open(cmd.slice(4) as DocBoxKey);
+        return true;
+      case 'margins-custom': case 'paper-custom':
+        this.panel.open('page', this.ribbon.querySelector<HTMLElement>(cmd === 'paper-custom' ? '#doc-paper' : '#doc-margins'), cmd === 'paper-custom' ? 'pg-w' : 'pg-top');
+        this.updateRibbon();
+        return true;
+      case 'header-edit': this.panel.open('hf', null, 'hf-header0'); return true;
+      case 'footer-edit': this.panel.open('hf', null, 'hf-footer1'); return true;
       case 'numbers-s': {
         const s = f.t.hf.prefix === 'S';
         ed.update({ ...f.t, hf: { ...f.t.hf, prefix: s ? '' : 'S', numbers: f.t.hf.numbers === 'none' ? 'footer-center' : f.t.hf.numbers } } as DocText, 'Page numbers');
@@ -856,6 +881,11 @@ export class DocumentMode {
     }
     this.focus();
     return true;
+  }
+
+  /** The pinned settings boxes were read from the settings. */
+  boxesChanged(): void {
+    this.panel.placeBoxes();
   }
 
   /** Find, and Find and Replace (Ctrl+F, Ctrl+H). */
@@ -1133,11 +1163,13 @@ export class DocumentMode {
       const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-doc]');
       if (!b) return;
       const cmd = b.dataset.doc!;
+      const box = /^box-(para|style|page|hf)$/.exec(cmd);
+      if (box) { this.panel.open(box[1] as DocBoxKey, b); return; }
       if (!this.run(cmd)) this.host.command(cmd);
     });
     // selects that run a command: margins, paper, orientation, page numbers
     for (const sel of r.querySelectorAll<HTMLSelectElement>('select[data-doc-prefix]')) {
-      sel.addEventListener('change', () => { this.run(`${sel.dataset.docPrefix}-${sel.value}`); this.focus(); });
+      sel.addEventListener('change', () => { const v = sel.value; this.run(`${sel.dataset.docPrefix}-${v}`); if (v !== 'custom') this.focus(); });
     }
     // zoom, under the pages
     for (const b of document.querySelectorAll<HTMLButtonElement>('#doc-statusbar [data-doc]')) {

@@ -967,6 +967,30 @@ dialog.prop-dialog { width: min(94vw, 520px); }
 .dp-input { width: 100%; padding: 2px 5px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; }
 .dp-input:focus, #doc-section select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .dp-note { margin: 2px 0 6px; }
+.dp-section > h3 { display: flex; align-items: center; gap: 6px; }
+.dp-section > h3 > span { flex: 1; }
+.dp-unpin { display: none; padding: 1px 3px; border: 0; background: none; color: var(--accent); cursor: pointer; border-radius: 4px; }
+.dp-unpin:hover { background: var(--hover, rgb(0 0 0 / 0.06)); }
+.dp-pinned > h3 > .dp-unpin { display: inline-flex; }
+.dp-flash { animation: dp-flash 0.9s ease-out; }
+@keyframes dp-flash { from { background: color-mix(in srgb, var(--accent) 22%, transparent); } to { background: transparent; } }
+.dp-section[hidden], #doc-body > .dp-note[hidden] { display: none; }
+
+/* Document mode: a settings box floating over the window (Paragraph, Style, Page Setup, Header) */
+.float-box { position: fixed; z-index: 40; width: 300px; max-width: calc(100vw - 8px); max-height: calc(100vh - 16px); display: flex; flex-direction: column;
+  background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.2); font-size: 12px; }
+.float-box[hidden] { display: none; }
+.fb-head { display: flex; align-items: center; gap: 4px; padding: 5px 6px 5px 10px; border-bottom: 1px solid var(--line); cursor: move; user-select: none; }
+.fb-title { flex: 1; font-weight: 600; }
+.fb-head button { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 4px; border: 0; border-radius: 4px; background: none; color: var(--muted); cursor: pointer; font-size: 15px; }
+.fb-head button:hover { background: var(--hover, rgb(0 0 0 / 0.06)); color: var(--text); }
+.fb-body { padding: 6px 10px 10px; overflow: auto; }
+.fb-body .dp-section > h3 { display: none; }
+.fb-body .dp-input:focus, .fb-body select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+/* the corner button of a ribbon group that opens its settings box */
+.rb-group:has(> .rb-launch) { position: relative; padding-right: 18px; }
+.ribbon button.rb-launch { position: absolute; right: 2px; bottom: 0; width: 15px; height: 15px; min-width: 0; padding: 0; border: 0; border-radius: 3px; background: none; color: var(--muted); font-size: 10px; line-height: 15px; cursor: pointer; }
+.ribbon button.rb-launch:hover { background: var(--hover, rgb(0 0 0 / 0.08)); color: var(--text); }
 
 /* Document mode: Find and Replace, floating over the top right of the pages */
 .doc-find { position: absolute; top: 8px; right: 22px; z-index: 6; width: 330px; max-width: calc(100% - 44px); display: flex; flex-direction: column; gap: 5px;
