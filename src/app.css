@@ -18,6 +18,8 @@
   --tab-document: var(--mode-document, #2647a8);
   --tab-design: var(--mode-design, #7b3fbf);
   --surround: #d5d8de;
+  /* the paper behind clip-art previews: always light, so black outlines show in dark mode too */
+  --tile: transparent;
   --ui-font: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --mono-font: 'IBM Plex Mono', ui-monospace, Consolas, monospace;
   color-scheme: light;
@@ -35,6 +37,7 @@
     --ok: #5fd39a;
     --slow: #ff7b81;
     --warn: #f0b85a;
+    --tile: #e9ecf1;
     color-scheme: dark;
   }
 }
@@ -50,6 +53,7 @@
   --ok: #5fd39a;
   --slow: #ff7b81;
   --warn: #f0b85a;
+  --tile: #e9ecf1;
   color-scheme: dark;
 }
 
@@ -666,8 +670,8 @@ dialog.typing-dialog p { margin: 2px 0 6px; }
 .dl-body { flex: 1 1 auto; overflow-y: auto; padding: 4px 8px 10px; min-height: 0; }
 .dl-body h3 { margin: 10px 0 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted, #666); }
 .dl-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
-.dl-shape { display: flex; align-items: center; justify-content: center; padding: 2px; aspect-ratio: 1; border: 1px solid transparent; border-radius: 4px; background: none; cursor: grab; }
-.dl-shape:hover { border-color: var(--line); background: var(--hover, rgba(0, 0, 0, 0.05)); }
+.dl-shape { display: flex; align-items: center; justify-content: center; padding: 2px; aspect-ratio: 1; border: 1px solid transparent; border-radius: 4px; background: var(--tile); cursor: grab; }
+.dl-shape:hover { border-color: var(--accent); }
 .dl-shape.active { border-color: var(--tab-design); background: color-mix(in srgb, var(--tab-design) 14%, transparent); }
 .dl-shape canvas { pointer-events: none; }
 #dz-size { white-space: nowrap; }
