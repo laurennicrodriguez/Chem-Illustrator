@@ -218,6 +218,7 @@ describe('the settings file', () => {
       chemTyping: false, spellCheck: true, replacements: [['oC', '°C'], ['rxn', 'reaction']] as [string, string][], dictionary: ['Fooxane'],
       modeColours: { style: 'off' as const, drawing: '#2f6fdf', slides: '#00aa00', sheet: '#1e8a50', document: '#2647a8', design: '#7b3fbf' },
       nicknames: { Qq: 'CC' }, templates: [], splitWidth: 0.6, scrollBars: false, citeStyle: 'rsc', citeOptions: { lastAuthor: 'none', etAlOver: 5 }, methylStyle: 'Me' as const,
+      palettes: [{ name: 'Group colours', colors: ['#1f5fbf', '#e69f00'] }],
     };
     const text = settingsText(s);
     expect(text).toContain('"app": "Chem Illustrator"');

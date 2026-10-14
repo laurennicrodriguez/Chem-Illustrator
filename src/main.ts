@@ -4,6 +4,8 @@
 
 import './app.css';
 import type { MethylStyle } from './chem/hydrogens';
+import { usedColours } from './colours';
+import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
 import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS } from './model';
 import { Renderer, measureText } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
@@ -2047,7 +2049,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+const ANY_TAB = new Set(['edit-palettes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'show-stereo', 'clipboard-formats', 'split-view']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
@@ -2173,6 +2175,7 @@ const COMMANDS: Record<string, () => unknown> = {
   hotkeys: () => hotkeysDialog.open(),
   'typing-spelling': () => typingDialog.open(),
   'mode-colours': () => modeDialog.open(),
+  'edit-palettes': () => editPalettes(),
   'add-frame': () => editor.addFrame() || flash('Select what to frame: structures, text, arrows or shapes.'),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
@@ -2560,6 +2563,10 @@ function chooseMethylStyle(style: MethylStyle): void {
 }
 
 let settingsLoaded = false;
+// your palettes show in every colour box, in every mode
+usePaletteMenus();
+useDrawingColours(() => usedColours(editor.doc));
+onPalettes(() => storeSettings());
 /** Save the key map and preferences (after the saved ones have been read, so they aren't lost). */
 function storeSettings(): void {
   if (!settingsLoaded) return;
@@ -2582,6 +2589,7 @@ function storeSettings(): void {
     citeStyle: preferredStyle().style,
     citeOptions: preferredStyle().options,
     methylStyle: editor.options.methylStyle,
+    palettes: getPalettes(),
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -2690,6 +2698,7 @@ void loadSettings().then((s) => {
   applySplitWidth();
   setPreferredStyle(s.citeStyle, s.citeOptions);
   editor.options.methylStyle = s.methylStyle;
+  setPalettes(s.palettes);
   tickMethylStyle();
   settingsLoaded = true;
   refreshKeys();

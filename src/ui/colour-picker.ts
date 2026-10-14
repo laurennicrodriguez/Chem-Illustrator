@@ -1,9 +1,10 @@
 // A colour button for the Style panel: a swatch that opens a small palette of the drawing's
-// colours (a standard set plus the colours already used, up to twenty), "Automatic", and
-// "More colours…" for any colour at all.
+// colours (a standard set plus the colours already used, up to twenty), your own palette rows,
+// "Automatic", and "More colours…" for any colour at all.
 
 import type { Doc } from '../model';
 import { documentColours } from '../colours';
+import { paletteRows } from './palette-ui';
 
 export interface ColourPickerOptions {
   /** What "no colour set" means here, shown as the first choice (Automatic, None…). */
@@ -80,11 +81,12 @@ function openPalette(btn: HTMLElement, doc: Doc, value: string | undefined, on: 
   more.className = 'colour-more';
   const inp = document.createElement('input');
   inp.type = 'color';
+  inp.dataset.systemPicker = '';
   inp.value = value ?? '#000000';
   inp.addEventListener('change', () => pick(inp.value.toLowerCase()));
   more.append(document.createTextNode('More colours…'), inp);
 
-  pop.append(autoBtn, grid, more);
+  pop.append(autoBtn, grid, paletteRows(value, pick, closePalette), more);
   document.body.append(pop);
   const r = btn.getBoundingClientRect();
   const w = pop.offsetWidth;
