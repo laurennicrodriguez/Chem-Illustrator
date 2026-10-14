@@ -9,7 +9,7 @@ import { ICONS } from './icons';
 import { Toolboxes, lockIcon, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
 import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS, type Attachment, type HighlightStyle } from './model';
-import { Renderer, measureText } from './render/renderer';
+import { Renderer, measureText, forgetTextWidths } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
 import type { Align } from './editor/arrange';
 import { readCdxml, ReadStats } from './io/cdxml';
@@ -56,6 +56,7 @@ import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from '.
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
 import { StylePanel, tidyStyle } from './ui/style-panel';
 import { installCombos } from './ui/combo';
+import { installFontList, registerBundledFonts, bundledFaces } from './fonts';
 import { applyRibbonIcons } from './ui/ribbon-icons';
 import { TEMPLATES, Template, templateById, ownTemplates, setOwnTemplates, templateFromAtoms } from './chem/templates';
 import { addNicknames, removeNickname, isBuiltInNickname } from './chem/labels';
@@ -333,8 +334,19 @@ const TEMPLATE_HINT = 'Click empty space to place it (drag to turn it), a bond t
 // Design mode's shape library (made further down, once the page is ready)
 let designLib: DesignLibrary | null = null;
 let layers: LayersPanel | null = null;
-/** Design > Smart Guides: moved things snap into line with other shapes and the page. */
-let designGuides = true;
+/** View > Alignment Guides: moved things snap into line with other things and the page, on or off for each kind of tab. */
+const guidesOn: Record<'drawing' | 'slides' | 'design', boolean> = { drawing: false, slides: true, design: true };
+const guideMode = (): keyof typeof guidesOn | null => {
+  const m = ws.active.mode;
+  return m === 'drawing' || m === 'slides' || m === 'design' ? m : null;
+};
+/** Turn the guides on or off for the kind of tab showing, and tick the menus. */
+function showGuides(): void {
+  const m = guideMode();
+  editor.smartGuides = !!m && guidesOn[m];
+  $('[data-cmd="alignment-guides"]')?.setAttribute('aria-checked', String(editor.smartGuides));
+  if (m === 'design') $<HTMLInputElement>('#dz-guides').checked = guidesOn.design;
+}
 const GEO_HINT = 'Click on the page to put the shape down, or drag to draw it at any size (Shift keeps its shape). Double-click a shape to type in it.';
 
 editor.onToolChange = (name) => {
@@ -1027,6 +1039,7 @@ const docFiles: DocxDeps = {
     return { png, svg: pictureSvg(pic), w: pic.box.x2 - pic.box.x1, h: pic.box.y2 - pic.box.y1 };
   },
   svgToPng,
+  fonts: bundledFaces,
 };
 
 /** Opening Word files: ChemDraw objects in them become structures, kept at the size they had. */
@@ -1064,6 +1077,7 @@ const ws: Workspace = new Workspace(doc, {
       return { svg: pictureSvg(pic), png, box: pic.box };
     },
     svgToPng,
+    fonts: bundledFaces,
   },
   measure: measureText,
   sheets: {
@@ -1102,7 +1116,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   document.body.classList.toggle('design-mode', design);
   editor.glueArrows = design;
   layers?.show(design ? doc : null);
-  editor.smartGuides = design && designGuides;
+  showGuides();
   editor.textFirst = !!deck;
   editor.structuresLocked = slides && structuresLocked;
   for (const el of document.querySelectorAll<HTMLElement>('.design-only')) el.hidden = !design;
@@ -1220,8 +1234,8 @@ dzGrid.addEventListener('change', () => { designGrid.on = dzGrid.checked; render
 dzStep.addEventListener('change', () => { designGrid.step = Number(dzStep.value) || 18; dzGrid.checked = designGrid.on = true; renderer.repaintAll(); editor.requestScene(); });
 dzStep.value = String(designGrid.step);
 const dzGuides = $<HTMLInputElement>('#dz-guides');
-dzGuides.checked = designGuides;
-dzGuides.addEventListener('change', () => { designGuides = dzGuides.checked; editor.smartGuides = ws.active.mode === 'design' && designGuides; });
+dzGuides.checked = guidesOn.design;
+dzGuides.addEventListener('change', () => { guidesOn.design = dzGuides.checked; showGuides(); storeSettings(); });
 dzBg.addEventListener('change', () => {
   const d = deckNow();
   if (!d || d.master.background.toLowerCase() === dzBg.value.toLowerCase()) return;
@@ -2273,7 +2287,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-custom', 'toolbox-details', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'drawing-style', 'dark-page', 'dark-colours', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view']);
+  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
@@ -2393,6 +2407,14 @@ const COMMANDS: Record<string, () => unknown> = {
   'scroll-bars': () => { showScrollBars(!scrollbars.shown); storeSettings(); },
   'group-tips': () => { showGroupTips(!labelTips.enabled); storeSettings(); },
   'dark-page': () => { showDark(!dark.on); storeSettings(); },
+  'alignment-guides': () => {
+    const m = guideMode();
+    if (!m) { flash('Alignment guides are for drawings, slides and designs. In a document, figures line up with the text.'); return; }
+    guidesOn[m] = !guidesOn[m];
+    showGuides();
+    storeSettings();
+    flash(guidesOn[m] ? 'Alignment guides on: moved things snap into line with structures, text and shapes (hold Alt to move freely).' : 'Alignment guides off.');
+  },
   'dark-colours': () => darkColours(),
   'zoom-in': () => editor.zoomBy(1.25),
   'zoom-out': () => editor.zoomBy(0.8),
@@ -2889,6 +2911,7 @@ function storeSettings(): void {
     darkPage: dark.on,
     darkPalette: dark.palette,
     darkPalettes: dark.own,
+    guides: { ...guidesOn },
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -3007,6 +3030,8 @@ void loadSettings().then((s) => {
   dark.palette = s.darkPalette;
   dark.own = s.darkPalettes;
   showDark(s.darkPage);
+  Object.assign(guidesOn, s.guides);
+  showGuides();
   // the drawing the app opened with takes your default style, if nothing has been drawn yet
   const first = modeStyles.drawing ? styleNamed(modeStyles.drawing, ownStyles) : undefined;
   if (first && ws.tabs.length === 1 && ws.active.mode === 'drawing' && ws.active.ref.kind === 'none' && doc.atoms.size === 0 && !doc.canUndo()) {
@@ -3667,7 +3692,19 @@ function updatePanels(): void {
 }
 
 // font, size and other typed boxes get drop-downs that list every choice
+installFontList();
 installCombos();
+// the free fonts that come with the app load when first used; then text is measured and drawn again
+let fontRedraw = 0;
+registerBundledFonts(() => {
+  clearTimeout(fontRedraw);
+  fontRedraw = window.setTimeout(() => {
+    forgetTextWidths();
+    doc.allDirty = true;
+    editor.changed();
+    docMode.fontsChanged();
+  }, 50);
+});
 applyRibbonIcons();
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
@@ -3703,7 +3740,7 @@ function drawingMenu(): MenuItem[] {
   const atoms = s.atoms.size > 0;
   const shapes = [...s.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => !!x);
   const design = ws.active.mode === 'design';
-  const view: MenuItem = { label: 'View', items: [{ cmd: 'zoom-in' }, { cmd: 'zoom-out' }, { cmd: 'zoom-fit' }, { cmd: 'zoom-actual' }, null, { cmd: 'show-stereo' }, { cmd: 'group-tips' }, { cmd: 'scroll-bars' }, null, { cmd: 'dark-page' }, { cmd: 'dark-colours' }] };
+  const view: MenuItem = { label: 'View', items: [{ cmd: 'zoom-in' }, { cmd: 'zoom-out' }, { cmd: 'zoom-fit' }, { cmd: 'zoom-actual' }, null, { cmd: 'show-stereo' }, { cmd: 'group-tips' }, { cmd: 'scroll-bars' }, { cmd: 'alignment-guides' }, null, { cmd: 'dark-page' }, { cmd: 'dark-colours' }] };
   if (!any) {
     return [
       { cmd: 'paste' }, { cmd: 'paste-smiles' }, { cmd: 'select-all' }, null,

@@ -18,7 +18,7 @@ import { findIssues, type CharLook, type Issue } from '../text/chemtext';
 import { loadSpeller, type Speller } from '../text/spelling';
 import { paraAt, paraRange, splitParagraphs } from '../text/paragraphs';
 import { DocView, ACTUAL, type Overlay } from './doc-view';
-import { DocPanel, DOC_FONTS } from './doc-panel';
+import { DocPanel } from './doc-panel';
 import { DocFind } from './doc-find';
 import { ask } from './ask';
 import { ReferencesDialog, chooseReferences } from './references-dialog';
@@ -1144,8 +1144,6 @@ export class DocumentMode {
       b.addEventListener('mousedown', (e) => e.preventDefault());
       b.addEventListener('click', () => this.run(b.dataset.doc!));
     }
-    const fontList = r.querySelector('#doc-font-list');
-    for (const name of DOC_FONTS) fontList?.append(new Option(name));
     const font = r.querySelector<HTMLInputElement>('#doc-font')!;
     const size = r.querySelector<HTMLInputElement>('#doc-size')!;
     const colour = r.querySelector<HTMLInputElement>('#doc-colour')!;

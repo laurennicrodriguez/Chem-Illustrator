@@ -177,7 +177,7 @@ interface Drag {
   /** Rotating the selection: what it looked like before, the centre, and the angle so far. */
   rot?: { snap: Snapshot; center: Vec; from: number; angle: number };
   /** Moving with smart guides: the selection's box when the move began, and how far it has gone. */
-  guide?: { box: Rect; moved: Vec };
+  guide?: { box: Rect; moved: Vec; targets: Rect[] };
 }
 
 const HILITE = 'rgba(40, 120, 255, 0.28)';
@@ -538,9 +538,9 @@ export class Editor {
     }
     if (d.mode === 'move' && this.smartGuides && !e.altKey) {
       // smart guides: edges and middles snap into line with other shapes and the page
-      if (!d.guide) { const box = this.selBox(); if (box) d.guide = { box, moved: { x: 0, y: 0 } }; }
+      if (!d.guide) { const box = this.selBox(); if (box) d.guide = { box, moved: { x: 0, y: 0 }, targets: this.guideTargets() }; }
       if (d.guide) {
-        const g = guideSnap(d.guide.box, sub(p, d.start), this.guideTargets(), this.tol(6));
+        const g = guideSnap(d.guide.box, sub(p, d.start), d.guide.targets, this.tol(6));
         this.moveSelection(g.offset.x - d.guide.moved.x, g.offset.y - d.guide.moved.y);
         d.guide.moved = g.offset;
         this.guideLines = g.lines;
@@ -2431,6 +2431,7 @@ export class Editor {
       toScreen: (p: Vec) => this.r.toScreen(p),
       measure: (t: string, size: number, family: string, style: string) => measureText(t, size, family, style),
       defaultSize: base?.size ?? st.captionSize,
+      defaultFont: base?.font ?? st.captionFont,
       redraw: () => this.requestOverlay(),
     };
     const initial = c
@@ -2479,7 +2480,7 @@ export class Editor {
     return [...this.sel.shapes];
   }
 
-  /** Smart guides: things moved snap into line with other shapes and the page (Design mode; Alt turns them off while dragging). */
+  /** Smart guides: things moved snap into line with other structures, text, shapes and the page (View > Alignment Guides; Alt turns them off while dragging). */
   smartGuides = false;
   /** Text boxes take a click as typing (Slides and Design), with an I-beam over them. */
   textFirst = false;
@@ -2493,6 +2494,16 @@ export class Editor {
     const out: Rect[] = [];
     for (const s of this.doc.shapes.values()) if (!this.sel.shapes.has(s.id) && s.kind !== 'line' && s.kind !== 'bracket' && s.kind !== 'symbol') out.push(shapeBox(s));
     if (this.fitArea) out.push(this.fitArea());
+    // structures, text and arrows line up too (worked out once, when the move starts)
+    const m = this.measure();
+    const none = () => ({ atoms: new Set<number>(), bonds: new Set<number>(), captions: new Set<number>(), arrows: new Set<number>(), shapes: new Set<number>() });
+    const add = (sel: ReturnType<typeof none>) => { const b = selectionBox(this.doc, sel, m); if (b) out.push(b); };
+    for (const f of this.doc.fragments()) {
+      if ([...f].some((id) => this.sel.atoms.has(id))) continue;
+      add({ ...none(), atoms: f });
+    }
+    for (const c of this.doc.captions.values()) if (!this.sel.captions.has(c.id) && (c.runs.length || !c.ph)) add({ ...none(), captions: new Set([c.id]) });
+    for (const r of this.doc.arrows.values()) if (!this.sel.arrows.has(r.id)) add({ ...none(), arrows: new Set([r.id]) });
     return out;
   }
 
@@ -2560,6 +2571,7 @@ export class Editor {
       toScreen: (p: Vec) => this.r.toScreen(p),
       measure: (t: string, sz: number, family: string, style: string) => measureText(t, sz, family, style),
       defaultSize: size,
+      defaultFont: this.doc.style.captionFont,
       redraw: () => this.requestOverlay(),
       hint: 'Enter: new line · Esc: done',
       around: () => shapeBox(doc.shapes.get(id) ?? s),
@@ -2653,6 +2665,7 @@ export class Editor {
       toScreen: (p: Vec) => this.r.toScreen(p),
       measure: (t: string, sz: number, family: string, style: string) => measureText(t, sz, family, style),
       defaultSize: size,
+      defaultFont: this.doc.style.captionFont,
       redraw: () => this.requestOverlay(),
       hint: typeof part === 'string' ? 'Enter: new paragraph · Esc: done' : 'Tab: next cell · Shift+Tab: back · Enter: new line · Esc: done',
       around: () => { const cur = doc.shapes.get(id); return cur ? this.r.tableBox(cur) : this.r.tableBox(s); },

@@ -25,6 +25,8 @@ export interface EditorHost {
   measure: Measure;
   /** Text size for runs that don't give one (the document's caption size). */
   defaultSize: number;
+  /** Font for runs that don't give one (the document's caption font). */
+  defaultFont?: string;
   /** Ask for the top layer to be drawn again. */
   redraw(): void;
   /** Keys the place being typed into handles itself (Tab moves between table cells); true when it did. */
@@ -72,7 +74,7 @@ export class CaptionEditor {
   private caretOn = true;
   private blink: ReturnType<typeof setInterval> | null = null;
   private buttons = new Map<string, HTMLButtonElement>();
-  private inputs: Record<'size' | 'color' | 'line' | 'before' | 'after' | 'wrap', HTMLInputElement> = {} as never;
+  private inputs: Record<'font' | 'size' | 'color' | 'line' | 'before' | 'after' | 'wrap', HTMLInputElement> = {} as never;
   private plainPaste = false;
   private clicks = { n: 0, time: 0, at: { x: 0, y: 0 } };
   private dragging: 'text' | 'wrap' | null = null;
@@ -568,6 +570,22 @@ export class CaptionEditor {
     button(g, 'formula', 'CH<sub>3</sub>', 'Formula: numbers after letters go down, charges go up', () => ed.toggle('formula'));
 
     g = group();
+    const font = d.createElement('input');
+    font.type = 'text';
+    font.className = 'cb-font font-box';
+    font.title = 'Font: free fonts that come with the app, or any font on this computer';
+    font.setAttribute('aria-label', 'Font');
+    font.setAttribute('list', 'ci-fonts');
+    font.spellcheck = false;
+    const setFont = () => { const v = font.value.trim(); ed.setStyle({ font: v && v !== this.h.defaultFont ? v : undefined }); };
+    font.addEventListener('change', setFont);
+    font.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); setFont(); this.ta.focus({ preventScroll: true }); }
+      if (e.key === 'Escape') { e.preventDefault(); this.ta.focus({ preventScroll: true }); }
+    });
+    g.appendChild(font);
+    this.inputs.font = font;
     number(g, 'size', 'Text size (points)', { min: 1, max: 400, step: 0.5, list: SIZES, cls: 'cb-size' }, (v) => { if (v) ed.setStyle({ size: v }); });
     const color = d.createElement('input');
     color.type = 'color';
@@ -659,6 +677,8 @@ export class CaptionEditor {
     const active = this.h.host.ownerDocument.activeElement;
     const show = (k: keyof CaptionEditor['inputs'], v: string) => { if (active !== this.inputs[k]) this.inputs[k].value = v; };
     const r2 = (v: number) => String(Math.round(v * 100) / 100);
+    show('font', s.font ?? '');
+    this.inputs.font.placeholder = s.font === undefined ? this.h.defaultFont ?? 'Font' : '';
     show('size', s.size !== undefined ? r2(s.size) : '');
     this.inputs.size.placeholder = s.size === undefined ? '—' : '';
     show('color', s.color ?? '#000000');

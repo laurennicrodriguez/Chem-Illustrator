@@ -221,7 +221,7 @@ describe('the settings file', () => {
       nicknames: { Qq: 'CC' }, templates: [], splitWidth: 0.6, scrollBars: false, groupTips: false, citeStyle: 'rsc', citeOptions: { lastAuthor: 'none', etAlOver: 5 }, methylStyle: 'Me' as const, axialStyle: 'PM' as const, askWholeDrawing: false,
       palettes: [{ name: 'Group colours', colors: ['#1f5fbf', '#e69f00'] }],
       toolboxes: { ...defaultToolboxes(), locked: false, custom: ['tool:chain', 'cmd:clean-up'] },
-      myStyles: [], modeStyles: { document: 'RSC' }, darkPage: true, darkPalette: 'Slate', darkPalettes: [],
+      myStyles: [], modeStyles: { document: 'RSC' }, darkPage: true, darkPalette: 'Slate', darkPalettes: [], guides: { drawing: true, slides: false, design: true },
     };
     const text = settingsText(s);
     expect(text).toContain('"app": "Chem Illustrator"');

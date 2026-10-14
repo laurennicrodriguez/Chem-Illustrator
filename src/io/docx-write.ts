@@ -12,6 +12,7 @@ import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model'
 import type { DocStyle } from '../style';
 import * as rt from '../richtext';
 import { Package, REL, NS, xml, hex6, emu } from './ooxml';
+import { facesToEmbed, newGuid, obfuscate, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
 import { COMPOUND, OBJECT_CHAR, fieldTexts, pruneObjects, styleOf, runStyleOf, type DocObject, type DocText, type NamedStyle } from '../document/document';
@@ -29,6 +30,8 @@ export interface DocxDeps {
   picture(contents: Contents, style: DocStyle): Promise<{ png: Uint8Array; svg?: string; w: number; h: number } | null>;
   /** A PNG of an SVG picture, for Word versions that can't show SVG (w × h pixels). */
   svgToPng?(svg: string, w: number, h: number): Promise<Uint8Array>;
+  /** The free fonts that come with the app, to put inside the file when the document uses them. */
+  fonts?: FontSource;
 }
 
 const HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
@@ -88,9 +91,10 @@ class DocxWriter {
     pkg.relate(main, DOCX_REL.numbering, 'numbering.xml');
     pkg.add('word/numbering.xml', this.numbering(), DOCX_CT.numbering);
     pkg.relate(main, DOCX_REL.settings, 'settings.xml');
-    pkg.add('word/settings.xml', `${HEAD}<w:settings xmlns:w="${W_NS}"><w:zoom w:percent="100"/><w:defaultTabStop w:val="720"/>` +
-      `${this.t.hf.onFirst ? '' : ''}<w:characterSpacingControl w:val="doNotCompress"/>` +
-      `<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`, DOCX_CT.settings);
+    const settings = (embed: boolean) => `${HEAD}<w:settings xmlns:w="${W_NS}"><w:zoom w:percent="100"/>${embed ? '<w:embedTrueTypeFonts/><w:saveSubsetFonts/>' : ''}<w:defaultTabStop w:val="720"/>` +
+      `<w:characterSpacingControl w:val="doNotCompress"/>` +
+      `<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`;
+    pkg.add('word/settings.xml', settings(false), DOCX_CT.settings);
     // our own part: each structure's drawing, and each table as made here
     pkg.relate(main, DOCX_REL.customXml, '../customXml/item1.xml');
     pkg.add('customXml/item1.xml', `${HEAD}<chemIllustrator xmlns="${MODEL_NS}" version="1">${xml(JSON.stringify(this.model))}</chemIllustrator>`);
@@ -103,6 +107,28 @@ class DocxWriter {
     pkg.add('docProps/core.xml', `${HEAD}<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">` +
       `${title ? `<dc:title>${xml(title)}</dc:title>` : ''}<dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`, DOCX_CT.core);
     pkg.add('docProps/app.xml', `${HEAD}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Chem Illustrator</Application></Properties>`, DOCX_CT.app);
+    // the free fonts the document uses go inside it, so it looks the same where they aren't installed
+    const embed = await facesToEmbed(pkg.xmlTexts(), this.deps.fonts);
+    if (embed.length) {
+      const FT = 'word/fontTable.xml';
+      pkg.relate(main, DOCX_REL.fontTable, 'fontTable.xml');
+      let n = 0;
+      const fonts = embed.map(({ family, faces }) => {
+        const parts = faces.map((f) => {
+          const key = newGuid();
+          const name = `fonts/font${++n}.odttf`;
+          pkg.add(`word/${name}`, obfuscate(f.data, key), DOCX_CT.font);
+          const id = pkg.relate(FT, DOCX_REL.font, name);
+          const tag = f.bold ? (f.italic ? 'embedBoldItalic' : 'embedBold') : f.italic ? 'embedItalic' : 'embedRegular';
+          return { tag, xml: `<w:${tag} r:id="${id}" w:fontKey="${key}"/>` };
+        });
+        const order = ['embedRegular', 'embedBold', 'embedItalic', 'embedBoldItalic'];
+        parts.sort((a, b) => order.indexOf(a.tag) - order.indexOf(b.tag));
+        return `<w:font w:name="${xml(family)}"><w:charset w:val="00"/><w:family w:val="auto"/><w:pitch w:val="variable"/>${parts.map((p) => p.xml).join('')}</w:font>`;
+      });
+      pkg.add(FT, `${HEAD}<w:fonts xmlns:w="${W_NS}" xmlns:r="${NS.r}">${fonts.join('')}</w:fonts>`, DOCX_CT.fontTable);
+      pkg.add('word/settings.xml', settings(true), DOCX_CT.settings);
+    }
     return pkg.build();
   }
 

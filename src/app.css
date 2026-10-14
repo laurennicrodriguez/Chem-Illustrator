@@ -330,6 +330,7 @@ body.slides-mode #canvas-host, body.design-mode #canvas-host { background: var(-
 .cb-btn:hover { background: var(--accent-soft); border-color: transparent; }
 .cb-btn.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .cb-btn sub, .cb-btn sup { font-size: 9px; }
+.cb-font { width: 120px; padding: 2px 4px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; }
 .cb-size { width: 52px; padding: 2px 4px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; }
 .cb-color { width: 30px; height: 22px; padding: 0 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
 .cb-hint { color: var(--muted); font-size: 11px; white-space: nowrap; }
@@ -1194,6 +1195,9 @@ dialog.toolbox-dialog { width: min(94vw, 720px); }
 .combo-item { padding: 3px 10px; cursor: default; white-space: nowrap; }
 .combo-item:hover, .combo-item.active { background: var(--accent-soft); }
 .combo-item.current { font-weight: 600; }
+.combo-group { padding: 5px 10px 2px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); cursor: default; }
+.combo-group.foldable { cursor: pointer; }
+.combo-group.foldable:hover { color: var(--accent); }
 
 /* Group tooltips: what OTBS, Boc, CO2Me… stand for. Light like the page, so the drawing reads in either theme. */
 .label-tip {

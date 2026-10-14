@@ -32,6 +32,7 @@ export const REL = {
   presProps: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/presProps',
   viewProps: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/viewProps',
   tableStyles: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/tableStyles',
+  font: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/font',
 };
 
 /** Escape text for XML (also the characters XML 1.0 can't hold at all, which are dropped). */
@@ -87,6 +88,11 @@ export class Package {
 
   has(path: string): boolean {
     return this.parts.has(path);
+  }
+
+  /** The XML parts' text (for finding which fonts they use). */
+  *xmlTexts(): Generator<string> {
+    for (const [path, data] of this.parts) if (path.endsWith('.xml')) yield strFromU8(data);
   }
 
   /** The zip file. */
