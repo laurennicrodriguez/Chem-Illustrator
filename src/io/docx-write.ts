@@ -18,11 +18,14 @@ import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/parag
 import { BOX_PAD, COL_GAP, COMPOUND, FLOAT_GAP, columnsOf, OBJECT_CHAR, SHADOWS, fieldTexts, floatOf, lookExtent, lookOf, pruneObjects, styleOf, runStyleOf, type DocObject, type DocText, type FigureLook, type NamedStyle, type PageSetup } from '../document/document';
 import { ACS_LINE, CELL_PAD, GRID_LINE, bibHang, docCellAlign, shownSize } from '../document/doc-layout';
 import { bibliography, piecesText } from '../document/references';
+import { TOC_INDENT, tocEntries } from '../document/toc';
+import { parseRev } from '../document/revisions';
+import { toOmml } from '../document/math';
 import { documentMeasure } from '../text/font-measure';
 import { arialWidth } from '../text-metrics';
 import { PAD_X, PAD_Y, cellAlign, isCovered, spanOf } from '../table';
 import {
-  BIB_MARK, CITE_FIELD, DOCX_CT, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, MC_NS, PIC_NS, TABLE_NAME, W_NS, WORD_HIGHLIGHTS, WP_NS, WPS_NS, twips, type DocxModel,
+  BIB_MARK, CITE_FIELD, DOCX_CT, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, MC_NS, M_NS, PIC_NS, TABLE_NAME, W_NS, WORD_HIGHLIGHTS, WP_NS, WPS_NS, twips, type DocxModel,
 } from './docx';
 
 export interface DocxDeps {
@@ -32,6 +35,8 @@ export interface DocxDeps {
   svgToPng?(svg: string, w: number, h: number): Promise<Uint8Array>;
   /** The free fonts that come with the app, to put inside the file when the document uses them. */
   fonts?: FontSource;
+  /** Each paragraph's page number as laid out here, for the contents (without it Word works them out when the file opens). */
+  pages?(t: DocText): string[] | undefined;
 }
 
 const HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
@@ -51,7 +56,7 @@ const JC: Record<Justify, string> = { left: 'left', center: 'center', right: 'ri
 
 /** Save a document as a Word file. */
 export async function writeDocx(t: DocText, deps: DocxDeps, title = ''): Promise<Uint8Array> {
-  return new DocxWriter(pruneObjects(t), deps).write(title);
+  return new DocxWriter(pruneObjects(t), deps, deps.pages?.(t)).write(title);
 }
 
 class DocxWriter {
@@ -67,7 +72,7 @@ class DocxWriter {
   private textW: number;
   private fullW: number;
 
-  constructor(private t: DocText, private deps: DocxDeps) {
+  constructor(private t: DocText, private deps: DocxDeps, private pages?: string[]) {
     this.shown = fieldTexts(t);
     for (const o of Object.values(t.objects)) {
       if (o.kind === 'ref' && t.objects[o.target]?.kind === 'seq') this.bookmarks.set(o.target, `_Ref${100000000 + o.target}`);
@@ -88,13 +93,13 @@ class DocxWriter {
     const main = 'word/document.xml';
     const body = await this.body(main);
     const sect = this.section(main);
-    pkg.add(main, `${HEAD}<w:document xmlns:w="${W_NS}" xmlns:r="${NS.r}" xmlns:wp="${WP_NS}" xmlns:a="${NS.a}" xmlns:pic="${PIC_NS}" xmlns:wps="${WPS_NS}" xmlns:mc="${MC_NS}"><w:body>${body}${sect}</w:body></w:document>`, DOCX_CT.document);
+    pkg.add(main, `${HEAD}<w:document xmlns:w="${W_NS}" xmlns:r="${NS.r}" xmlns:wp="${WP_NS}" xmlns:a="${NS.a}" xmlns:pic="${PIC_NS}" xmlns:wps="${WPS_NS}" xmlns:mc="${MC_NS}" xmlns:m="${M_NS}"><w:body>${body}${sect}</w:body></w:document>`, DOCX_CT.document);
     pkg.relate(main, DOCX_REL.styles, 'styles.xml');
     pkg.add('word/styles.xml', this.styles(), DOCX_CT.styles);
     pkg.relate(main, DOCX_REL.numbering, 'numbering.xml');
     pkg.add('word/numbering.xml', this.numbering(), DOCX_CT.numbering);
     pkg.relate(main, DOCX_REL.settings, 'settings.xml');
-    const settings = (embed: boolean) => `${HEAD}<w:settings xmlns:w="${W_NS}"><w:zoom w:percent="100"/>${embed ? '<w:embedTrueTypeFonts/><w:saveSubsetFonts/>' : ''}<w:defaultTabStop w:val="720"/>` +
+    const settings = (embed: boolean) => `${HEAD}<w:settings xmlns:w="${W_NS}"><w:zoom w:percent="100"/>${embed ? '<w:embedTrueTypeFonts/><w:saveSubsetFonts/>' : ''}${this.t.track ? '<w:trackRevisions/>' : ''}<w:defaultTabStop w:val="720"/>` +
       `<w:characterSpacingControl w:val="doNotCompress"/>` +
       `<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`;
     pkg.add('word/settings.xml', settings(false), DOCX_CT.settings);
@@ -143,6 +148,10 @@ class DocxWriter {
     const paras = fitParas(t.paras, n);
     const runsOf = splitParagraphs(t.runs);
     const markers = listMarkers(paras);
+    // tracked changes on the paragraph marks (a line break typed or deleted while tracking)
+    const markRev: (string | undefined)[] = [];
+    for (const r of t.runs) for (const ch of r.text) if (ch === '\n') markRev.push(r.rev);
+    this.markRev = markRev;
     const out: string[] = [];
     let lastWasTable = false;
     let listNum = 0;
@@ -167,17 +176,18 @@ class DocxWriter {
       // numbered lists: a new Word list where our numbers start again
       if (ps.list === 'number' && !ps.cont && markers[p] === '1.' && (ps.level ?? 0) === 0) listNum = ++this.numberedLists + 1;
       // a bibliography: its entries as paragraphs of their own, with any text round it in paragraphs before and after
-      const isBib = (r: TextRun) => r.obj !== undefined && t.objects[r.obj]?.kind === 'bib';
+      const isBib = (r: TextRun) => r.obj !== undefined && (t.objects[r.obj]?.kind === 'bib' || t.objects[r.obj]?.kind === 'toc');
       if (runs.some(isBib)) {
         let part: TextRun[] = [];
         for (const r of runs) {
           if (!isBib(r)) { part.push(r); continue; }
           if (part.some((x) => x.text)) out.push(await this.paragraph(main, ps, part, listNum));
           part = [];
-          out.push(this.bibliography(r.obj!, ps));
+          const o = t.objects[r.obj!];
+          out.push(o?.kind === 'toc' ? this.contents(o.levels, ps) : this.bibliography(r.obj!, ps));
         }
         if (part.some((x) => x.text)) out.push(await this.paragraph(main, ps, part, listNum));
-      } else out.push(await this.paragraph(main, ps, runs, listNum));
+      } else out.push(await this.paragraph(main, ps, runs, listNum, p));
       lastWasTable = false;
     }
     // Word ends the text with a paragraph
@@ -185,7 +195,28 @@ class DocxWriter {
     return out.join('');
   }
 
-  private async paragraph(main: string, ps: ParaStyle, runs: TextRun[], listNum: number): Promise<string> {
+  /** Each paragraph mark's tracked change, if any. */
+  private markRev: (string | undefined)[] = [];
+  // tracked changes count apart from the bookmarks (Word wants each id used once)
+  private revId = 10001;
+
+  /** A tracked change's attributes for Word. */
+  private revAttrs(rev: string): string {
+    const v = parseRev(rev)!;
+    return `w:id="${this.revId++}" w:author="${xml(v.author || 'Author')}"${v.date ? ` w:date="${xml(v.date)}"` : ''}`;
+  }
+
+  /** A run's Word XML inside its tracked change (deleted text is Word's w:delText). */
+  private tracked(rev: string | undefined, body: string): string {
+    const v = parseRev(rev);
+    if (!v || !body) return body;
+    if (v.kind === 'ins') return `<w:ins ${this.revAttrs(rev!)}>${body}</w:ins>`;
+    const del = body.replace(/<w:t( [^>]*)?>/g, '<w:delText$1>').replace(/<\/w:t>/g, '</w:delText>')
+      .replace(/<w:instrText( [^>]*)?>/g, '<w:delInstrText$1>').replace(/<\/w:instrText>/g, '</w:delInstrText>');
+    return `<w:del ${this.revAttrs(rev!)}>${del}</w:del>`;
+  }
+
+  private async paragraph(main: string, ps: ParaStyle, runs: TextRun[], listNum: number, index = -1): Promise<string> {
     const t = this.t;
     const st = styleOf(t, ps);
     const pPr: string[] = [];
@@ -218,6 +249,9 @@ class DocxWriter {
     }
     const align = ps.align ?? 'left';
     if (align !== st.align) pPr.push(`<w:jc w:val="${JC[align]}"/>`);
+    // the paragraph mark itself inserted or deleted while tracking
+    const mr = parseRev(index >= 0 ? this.markRev[index] : undefined);
+    if (mr) pPr.push(`<w:rPr><w:${mr.kind} ${this.revAttrs(this.markRev[index]!)}/></w:rPr>`);
 
     // a caption that references point to: a bookmark round its label and number; a compound
     // number's bookmark is round just the number
@@ -229,11 +263,20 @@ class DocxWriter {
       open = { id: this.bookmarkId++, seq: seqs[0] };
       out.push(`<w:bookmarkStart w:id="${open.id}" w:name="${this.bookmarks.get(seqs[0])}"/>`);
     }
+    // an equation on its own in its paragraph is a display equation (Word's equation paragraph)
+    const shownRuns = runs.filter((r) => r.obj !== undefined || r.text.trim());
+    const display = shownRuns.length === 1 && shownRuns[0].obj !== undefined && this.t.objects[shownRuns[0].obj]?.kind === 'math';
     for (const r of runs) {
-      if (r.obj === undefined) { out.push(this.textRuns(r, st)); continue; }
+      if (r.obj === undefined) { out.push(this.tracked(r.rev, this.textRuns(r, st))); continue; }
+      const o = this.t.objects[r.obj];
+      if (o?.kind === 'math') {
+        const m = `<m:oMath>${toOmml(o.tex)}</m:oMath>`;
+        out.push(display ? `<m:oMathPara>${m}</m:oMathPara>` : m);
+        continue;
+      }
       const mark = this.bookmarks.has(r.obj) && isCompound(r.obj) ? this.bookmarkId++ : null;
       if (mark !== null) out.push(`<w:bookmarkStart w:id="${mark}" w:name="${this.bookmarks.get(r.obj)}"/>`);
-      out.push(await this.objectRun(main, r, st));
+      out.push(this.tracked(r.rev, await this.objectRun(main, r, st)));
       if (mark !== null) out.push(`<w:bookmarkEnd w:id="${mark}"/>`);
       if (open && r.obj === open.seq) { out.push(`<w:bookmarkEnd w:id="${open.id}"/>`); open = null; }
     }
@@ -265,6 +308,31 @@ class DocxWriter {
     return paras.map((x) => `<w:p>${entries.length ? pPr : '<w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>'}${x}</w:p>`).join('');
   }
 
+  /**
+   * A table of contents as Word's own TOC field: Word shows the headings and page numbers as
+   * written here, and works them out again with Update Field. Without page numbers from the
+   * layout here, the field is marked for Word to update when the file is opened.
+   */
+  private contents(levels: number, ps: ParaStyle): string {
+    const t = this.t;
+    const entries = tocEntries(t, levels);
+    const pages = this.pages;
+    const st = styleOf(t, undefined);
+    const textW = Math.max(36, t.page.w - t.page.left - t.page.right);
+    const dirty = pages ? '' : ' w:dirty="true"';
+    const begin = `<w:r><w:fldChar w:fldCharType="begin"${dirty}/></w:r><w:r><w:instrText xml:space="preserve"> TOC \\o "1-${levels}" \\h \\z \\u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>`;
+    const end = '<w:r><w:fldChar w:fldCharType="end"/></w:r>';
+    const line = ps.line && ps.line !== 1 ? ` w:line="${Math.round(240 * ps.line)}" w:lineRule="auto"` : '';
+    const paras = entries.map((e, i) => {
+      const pPr = `<w:pPr><w:pStyle w:val="TOC${e.level}"/><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="${twips(textW)}"/></w:tabs>` +
+        `<w:spacing w:before="${e.level === 1 && i > 0 ? twips(0.25 * st.size) : 0}" w:after="0"${line}/><w:ind w:left="${twips((e.level - 1) * TOC_INDENT)}"/></w:pPr>`;
+      return `<w:p>${pPr}${i === 0 ? begin : ''}${run('', e.text)}${run('', `\t${pages?.[e.para] ?? ''}`)}${i === entries.length - 1 ? end : ''}</w:p>`;
+    });
+    // no headings yet: the field with nothing in it, for Word to fill in
+    if (!paras.length) paras.push(`<w:p>${begin}${end}</w:p>`);
+    return paras.join('');
+  }
+
   /** Runs of text, a formula's parts each with its own position. */
   private textRuns(r: TextRun, st: NamedStyle): string {
     if (!r.text) return '';
@@ -290,7 +358,7 @@ class DocxWriter {
     }
     // a citation: its numbers, which Word shows as they are (an ADDIN field is never worked out again by Word)
     if (o.kind === 'cite') return field(rPr, ` ${CITE_FIELD} ${o.refs.map(xml).join(' ')} `, shown);
-    if (o.kind === 'bib') return '';
+    if (o.kind === 'bib' || o.kind === 'toc' || o.kind === 'math') return '';
     if (o.kind === 'textbox') return this.textBox(main, id, o, rPr);
     return this.picture(main, id, o, rPr);
   }
@@ -559,6 +627,10 @@ class DocxWriter {
     for (const id of ['Normal', ...ids.filter((k) => k !== 'Normal')]) {
       const s = t.styles[id];
       if (s) out.push(styleXml(s, ids));
+    }
+    // the contents' lines (Word's own "toc 1" to "toc 3", which Update Field uses)
+    if (Object.values(t.objects).some((o) => o.kind === 'toc')) {
+      for (let n = 1; n <= 3; n++) out.push(`<w:style w:type="paragraph" w:styleId="TOC${n}"><w:name w:val="toc ${n}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="39"/><w:unhideWhenUsed/><w:pPr><w:spacing w:after="0"/><w:ind w:left="${twips((n - 1) * TOC_INDENT)}"/><w:jc w:val="left"/></w:pPr></w:style>`);
     }
     out.push(`<w:style w:type="character" w:default="1" w:styleId="DefaultParagraphFont"><w:name w:val="Default Paragraph Font"/><w:uiPriority w:val="1"/><w:semiHidden/><w:unhideWhenUsed/></w:style>`);
     // formulas look like any other text in Word: the style only marks them, so they stay formulas when opened here

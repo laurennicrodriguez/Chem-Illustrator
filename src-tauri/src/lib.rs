@@ -153,6 +153,7 @@ pub fn run() {
         // against the public key in tauri.conf.json, installs it and restarts the app
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // A self-test that never reports (the page failed to load) still ends.
             if let Some(path) = selftest_path() {

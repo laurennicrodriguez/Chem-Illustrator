@@ -1084,6 +1084,19 @@ dialog.periodic-table { position: fixed; inset: 64px 16px auto auto; margin: 0; 
 .an-buttons { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .an-buttons button { padding: 2px 8px; font-size: 12px; }
 #side-content th sup, #side-content th sub { line-height: 0; }
+/* the Analysis panel's PubChem section */
+.pubchem { margin-top: 6px; }
+.pubchem .pc-name { overflow-wrap: anywhere; font-family: var(--ui-font); }
+.pubchem a { color: var(--accent); }
+.pc-signal { font-weight: 600; }
+.pc-danger { color: var(--slow); }
+.pc-warning { color: var(--warn); }
+.pc-pictos { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 4px 0; font-size: 12px; }
+.pc-picto { display: inline-flex; align-items: center; gap: 4px; }
+/* a plain red-edged diamond stands for the pictogram; its name says which */
+.pc-diamond { width: 8px; height: 8px; border: 1.5px solid var(--slow); transform: rotate(45deg); }
+.pc-h { margin: 4px 0; padding-left: 0; list-style: none; font-size: 12px; }
+.pc-h li { margin: 2px 0; }
 
 /* References > Manage References, a reference's details, and Insert Citation's list */
 dialog.refs-dialog { width: min(94vw, 860px); display: flex; flex-direction: column; }
@@ -1454,3 +1467,13 @@ dialog.command-search .cs-foot { margin: 8px 2px 0; }
 /* narrow windows: the search box gives up its key, then the app's name goes, before anything wraps */
 @media (max-width: 1240px) { .search-box { min-width: 0; } .search-box kbd { display: none; } }
 @media (max-width: 1100px) { header h1.app-name { display: none; } }
+
+/* the equation window */
+dialog.equation-dialog { width: min(92vw, 620px); }
+dialog.equation-dialog code { font-size: 0.92em; }
+.eq-palette { display: flex; flex-wrap: wrap; gap: 3px; margin: 6px 0; }
+.eq-palette button { min-width: 2.2em; padding: 3px 6px; font-family: 'Cambria Math', 'STIX Two Math', 'Times New Roman', serif; font-size: 15px; line-height: 1.2; }
+.eq-symbols button { min-width: 1.9em; padding: 2px 4px; font-size: 14px; }
+dialog.equation-dialog textarea { width: 100%; box-sizing: border-box; font: 14px ui-monospace, Consolas, monospace; padding: 6px; resize: vertical; margin-top: 4px; }
+.eq-preview { margin: 8px 0; min-height: 48px; max-height: 220px; overflow: auto; border: 1px solid var(--border, #ccd); border-radius: 4px; background: #fff; padding: 4px; display: flex; justify-content: center; align-items: center; }
+.eq-preview canvas { display: block; }

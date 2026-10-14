@@ -65,14 +65,24 @@ function errBarsXml(e: ErrorBars, scatter: boolean): string {
     `${e.kind !== 'cells' ? v('val', e.value ?? (e.kind === 'percent' ? 5 : 1)) : ''}<c:spPr><a:ln w="9525">${fill('#404040')}</a:ln></c:spPr></c:errBars>`;
 }
 
+/**
+ * A mass spectrum's sticks, as Excel draws them: error bars from each point to zero (minus 100 %
+ * of the value, which Excel takes with its sign, so peaks below zero run up to it), with no caps,
+ * in the series' colour.
+ */
+function sticksXml(color: string, width: number): string {
+  return `<c:errBars>${v('errDir', 'y')}${v('errBarType', 'minus')}${v('errValType', 'percentage')}${v('noEndCap', true)}${v('val', 100)}` +
+    `<c:spPr><a:ln w="${Math.round(width * 9525)}" cap="flat">${fill(color)}</a:ln></c:spPr></c:errBars>`;
+}
+
 const MARKER_NAME: Record<MarkerShape, string> = { circle: 'circle', square: 'square', diamond: 'diamond', triangle: 'triangle', cross: 'x', none: 'none' };
 
-function axisXml(kind: 'cat' | 'val', id: number, cross: number, pos: string, a: ChartAxis, deleteIt: boolean, grid: boolean, crossBetween?: string): string {
+function axisXml(kind: 'cat' | 'val', id: number, cross: number, pos: string, a: ChartAxis, deleteIt: boolean, grid: boolean, crossBetween?: string, labelsLow = false): string {
   const scaling = `<c:scaling>${a.log ? v('logBase', 10) : ''}${v('orientation', a.reverse ? 'maxMin' : 'minMax')}${kind === 'val' && a.max !== undefined ? v('max', a.max) : ''}${kind === 'val' && a.min !== undefined ? v('min', a.min) : ''}</c:scaling>`;
   const gridXml = grid ? `<c:majorGridlines><c:spPr><a:ln w="9525">${fill('#d9d9d9')}</a:ln></c:spPr></c:majorGridlines>` : '';
   const fmt = `<c:numFmt formatCode="${xml(a.numFmt ?? 'General')}" sourceLinked="${a.numFmt ? 0 : 1}"/>`;
   const common = `${v('axId', id)}${scaling}${v('delete', deleteIt)}${v('axPos', pos)}${gridXml}${titleXml(a.title, 10)}${fmt}` +
-    `${v('majorTickMark', 'out')}${v('minorTickMark', 'none')}${v('tickLblPos', 'nextTo')}<c:spPr><a:ln w="9525">${fill('#bfbfbf')}</a:ln></c:spPr>${v('crossAx', cross)}${v('crosses', 'autoZero')}`;
+    `${v('majorTickMark', 'out')}${v('minorTickMark', 'none')}${v('tickLblPos', labelsLow ? 'low' : 'nextTo')}<c:spPr><a:ln w="9525">${fill('#bfbfbf')}</a:ln></c:spPr>${v('crossAx', cross)}${v('crosses', 'autoZero')}`;
   if (kind === 'cat') return `<c:catAx>${common}${v('auto', true)}${v('lblAlgn', 'ctr')}${v('lblOffset', 100)}${v('noMultiLvlLbl', false)}</c:catAx>`;
   return `<c:valAx>${common}${crossBetween ? v('crossBetween', crossBetween) : ''}${a.step ? v('majorUnit', a.step) : ''}</c:valAx>`;
 }
@@ -90,11 +100,16 @@ export function chartXml(c: Chart, data: SeriesData[]): string {
     const sp = pie ? '' : lineLike
       ? `<c:spPr>${lineOn ? `<a:ln w="${Math.round((s.lineWidth ?? 2) * 9525)}" cap="rnd">${fill(color)}${s.dash && s.dash !== 'solid' ? `<a:prstDash val="${DASH[s.dash]}"/>` : ''}<a:round/></a:ln>` : '<a:ln w="19050"><a:noFill/></a:ln>'}</c:spPr>`
       : `<c:spPr>${fill(color)}</c:spPr>`;
-    const markerShape = s.marker ?? (scatter ? 'circle' : 'none');
+    const sticks = scatter && !!s.sticks;
+    const markerShape = s.marker ?? (scatter && !sticks ? 'circle' : 'none');
     const marker = lineLike ? `<c:marker>${v('symbol', MARKER_NAME[markerShape])}${markerShape !== 'none' ? `${v('size', Math.max(2, Math.min(72, Math.round((s.markerSize ?? 7) * 0.75))))}<c:spPr>${fill(color)}<a:ln w="9525">${fill(color)}</a:ln></c:spPr>` : ''}</c:marker>` : '';
-    const dLbls = s.labels ? `<c:dLbls>${v('showLegendKey', false)}${v('showVal', !pie)}${v('showCatName', false)}${v('showSerName', false)}${v('showPercent', pie)}${v('showBubbleSize', false)}</c:dLbls>` : '';
+    const showX = scatter && !!s.labelX;
+    const lblFmt = s.labelFmt ? `<c:numFmt formatCode="${xml(s.labelFmt)}" sourceLinked="0"/>` : '';
+    // labels of peaks drawn downwards go under them
+    const below = sticks && (d?.ys ?? []).some((y) => y < 0) && !(d?.ys ?? []).some((y) => y > 0);
+    const dLbls = s.labels ? `<c:dLbls>${lblFmt}${showX || sticks ? v('dLblPos', below ? 'b' : 't') : ''}${v('showLegendKey', false)}${v('showVal', !pie && !showX)}${v('showCatName', showX)}${v('showSerName', false)}${v('showPercent', pie)}${v('showBubbleSize', false)}</c:dLbls>` : '';
     const trend = s.fit && !pie ? trendlineXml(s.fit, color) : '';
-    const errs = s.errors && !pie ? errBarsXml(s.errors, scatter) : '';
+    const errs = sticks ? sticksXml(color, s.lineWidth ?? 1.5) : s.errors && !pie ? errBarsXml(s.errors, scatter) : '';
     const xs = d?.xs ?? [], ys = d?.ys ?? [];
     const catNumbers = s.x && d ? d.cats.every((t) => t === '' || Number.isFinite(Number(t))) : false;
     const cat = s.x ? (scatter || catNumbers ? numRef(s.x, xs) : strRef(s.x, d?.cats ?? [])) : '';
@@ -113,7 +128,7 @@ export function chartXml(c: Chart, data: SeriesData[]): string {
   switch (c.kind) {
     case 'scatter':
       plot = `<c:scatterChart>${v('scatterStyle', 'lineMarker')}${v('varyColors', false)}${sers}${ax}</c:scatterChart>` +
-        axisXml('val', 101, 102, 'b', c.x, false, !!c.x.grid, 'midCat') + axisXml('val', 102, 101, 'l', c.y, false, c.y.grid !== false, 'midCat');
+        axisXml('val', 101, 102, 'b', c.x, false, !!c.x.grid, 'midCat', true) + axisXml('val', 102, 101, 'l', c.y, false, c.y.grid !== false, 'midCat');
       break;
     case 'line': case 'area':
       plot = `<c:${c.kind}Chart>${v('grouping', grouping)}${v('varyColors', false)}${sers}${c.kind === 'line' ? v('marker', true) : ''}${ax}</c:${c.kind}Chart>` +
@@ -238,7 +253,11 @@ function readSeries(ser: Element, kind: ChartKind): Series {
     if (!s.color) s.color = colourIn(kid(m, 'spPr'));
     if (bool(ser, 'smooth')) s.smooth = true;
   } else if (fillColour && kind !== 'pie') s.color = fillColour;
-  if (kid(ser, 'dLbls') && (bool(kid(ser, 'dLbls'), 'showVal') || bool(kid(ser, 'dLbls'), 'showPercent'))) s.labels = true;
+  const dl = kid(ser, 'dLbls');
+  if (dl && (bool(dl, 'showVal') || bool(dl, 'showPercent'))) s.labels = true;
+  else if (dl && kind === 'scatter' && bool(dl, 'showCatName')) { s.labels = true; s.labelX = true; }
+  const lf = kid(dl, 'numFmt');
+  if (s.labels && lf?.getAttribute('sourceLinked') !== '1' && lf?.getAttribute('formatCode') && lf.getAttribute('formatCode') !== 'General') s.labelFmt = lf.getAttribute('formatCode')!;
   const tl = kid(ser, 'trendline');
   if (tl && kind !== 'pie') {
     const t = val(tl, 'trendlineType') ?? 'linear';
@@ -257,7 +276,16 @@ function readSeries(ser: Element, kind: ChartKind): Series {
   const eb = kids(ser, 'errBars').find((e) => val(e, 'errDir') !== 'x');
   if (eb && kind !== 'pie') {
     const t = val(eb, 'errValType');
-    if (t === 'cust') {
+    const dir = val(eb, 'errBarType');
+    if (kind === 'scatter' && t === 'percentage' && numVal(eb, 'val') === 100 && (dir === 'minus' || dir === 'plus') && bool(eb, 'noEndCap')) {
+      // sticks to zero: a mass spectrum
+      s.sticks = true;
+      const ebc = colourIn(kid(eb, 'spPr'));
+      if (ebc) s.color = ebc;
+      const w = Number(kid(kid(eb, 'spPr'), 'ln')?.getAttribute('w') ?? 0);
+      if (w && Math.abs(w / 9525 - 1.5) > 0.2) s.lineWidth = Math.round((w / 9525) * 10) / 10;
+      if (s.marker === 'none') delete s.marker;
+    } else if (t === 'cust') {
       const plus = kid(eb, 'plus', 'numRef', 'f')?.textContent, minus = kid(eb, 'minus', 'numRef', 'f')?.textContent;
       if (plus) s.errors = { kind: 'cells', plus: `=${plus}`, ...(minus && minus !== plus ? { minus: `=${minus}` } : {}) };
     } else if (t) {

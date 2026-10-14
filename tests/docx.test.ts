@@ -432,8 +432,11 @@ describe('opening files made by Word', () => {
     const { doc, warnings } = await readDocx(wordFile(
       '<w:p><w:hyperlink r:id="x"><w:r><w:t>link</w:t></w:r></w:hyperlink><w:ins><w:r><w:t xml:space="preserve"> added</w:t></w:r></w:ins><w:del><w:r><w:delText>gone</w:delText></w:r></w:del><w:r><w:footnoteReference w:id="1"/></w:r></w:p>',
     ));
-    expect(documentPlainText(doc)).toBe('link added');
-    expect(warnings).toEqual(expect.arrayContaining(['Links were kept as plain text.', 'Tracked changes were accepted.', 'Footnotes and endnotes were left out.']));
+    // tracked changes stay tracked (see revisions.test.ts)
+    expect(documentPlainText(doc)).toBe('link addedgone');
+    expect(doc.runs.filter((r) => r.rev).map((r) => r.rev!.split('|')[0])).toEqual(['ins', 'del']);
+    expect(warnings).toEqual(expect.arrayContaining(['Links were kept as plain text.', 'Footnotes and endnotes were left out.']));
+    expect(warnings.join(' ')).not.toMatch(/Tracked/);
   });
 
   it('says so when a file is not a Word document', async () => {

@@ -16,6 +16,9 @@ import { isCovered, spanOf } from '../table';
 import * as rt from '../richtext';
 import { BOX_PAD, FLOAT_GAP, OBJECT_CHAR, columnsOf, fieldTexts, floatOf, lookExtent, lookOf, styleOf, type DocText, type HeaderFooter, type NamedStyle, type WrapKind } from './document';
 import { bibliography, type BibEntry } from './references';
+import { tocEntries, tocLines, type TocEntry } from './toc';
+import { authorColours, hasChanges, markedRuns } from './revisions';
+import { layoutMath, type MathBox } from './math';
 
 /** A table row is at least one line of Normal text tall. */
 export const SINGLE_ROW = 1.15;
@@ -158,6 +161,8 @@ export interface DocLayout {
   boxes: Map<number, TextLayout>;
   /** The tables in the text. */
   tables: Map<number, TableBox>;
+  /** Each equation laid out, with the font and colour it is drawn in. */
+  maths: Map<number, PlacedMath>;
   /** The top of each paragraph (after its space above), in the document's coordinates, and its page. */
   paraTops: { y: number; page: number }[];
   /** The page size, and the width of the text between the margins. */
@@ -168,6 +173,9 @@ export interface DocLayout {
   /** The columns: how many, and the left edge of each from the left margin. */
   cols: { n: number; w: number; x: number[] };
 }
+
+/** An equation as laid out: drawn with its baseline `ascent` below the top of its box. */
+export interface PlacedMath extends MathBox { family: string; color: string }
 
 /** The page number shown on a page (index from 0), or '' for none. */
 export function pageLabel(hf: HeaderFooter, index: number): string {
@@ -194,7 +202,7 @@ export class DocLayouter {
    * the text (the caret passes over the whole bibliography as its one character). The lines
    * flow onto the next page like any others.
    */
-  withBlocks(frame: TextFrame, st: NamedStyle, entries: BibEntry[], isBib: (r: TextRun) => boolean, table?: (id: number) => TableBox | null): TextLayout {
+  withBlocks(frame: TextFrame, st: NamedStyle, block: (id: number, st: NamedStyle, ps: ParaStyle, wrap: number) => LaidLine[] | null, table?: (id: number) => TableBox | null): TextLayout {
     const measure = this.deps.measure;
     const ps = frame.paras?.[0] ?? {};
     const lines: LaidLine[] = [];
@@ -235,13 +243,9 @@ export class DocLayouter {
         first = false;
         continue;
       }
-      if (!isBib(r)) { part.push(r); at += r.text.length; continue; }
+      const bl = r.obj !== undefined ? block(r.obj, st, ps, frame.wrap ?? 0) : null;
+      if (!bl) { part.push(r); at += r.text.length; continue; }
       flush();
-      const bf = bibFrame(entries, st, ps, measure);
-      const bl = layoutText({
-        runs: bf.runs, paras: bf.paras, justify: 'left', wrap: frame.wrap, boxes: true,
-        inline: (id) => (id < 0 ? { w: bf.spacer(id), ascent: 0 } : null),
-      }, st.size, measure).lines;
       const id = r.obj!;
       bl.forEach((l, i) => {
         const shown: Glyphs[] = l.pieces.filter((g) => g.obj === undefined).map((g) => ({ ...g, start: at, decor: true }));
@@ -300,7 +304,28 @@ export class DocLayouter {
     this.cache.clear();
   }
 
+  /** Each paragraph's page number as last laid out, for the tables of contents. */
+  private tocPages: string[] = [];
+
+  /**
+   * The document laid out on its pages. With a table of contents, its page numbers are those
+   * of the layout before; when a heading turns out to be on another page, it is laid out again
+   * (only the contents change, so it settles at once, and the rest comes from the cache).
+   */
   layout(t: DocText): DocLayout {
+    const hasToc = Object.values(t.objects).some((o) => o.kind === 'toc');
+    let lay = this.layoutOnce(t);
+    for (let pass = 0; hasToc && pass < 3; pass++) {
+      const now = lay.paraTops.map((pt) => lay.pages[pt.page]?.label || String(pt.page + 1));
+      const heads = Object.values(t.objects).filter((o) => o.kind === 'toc').flatMap((o) => tocEntries(t, (o as { levels: number }).levels));
+      if (heads.every((e) => this.tocPages[e.para] === now[e.para])) break;
+      this.tocPages = now;
+      lay = this.layoutOnce(t);
+    }
+    return lay;
+  }
+
+  private layoutOnce(t: DocText): DocLayout {
     this.used.clear();
     const page = t.page;
     const fullW = Math.max(36, page.w - page.left - page.right);
@@ -315,12 +340,31 @@ export class DocLayouter {
     const markers = listMarkers(paras);
     const fields = fieldTexts(t);
     const paraRuns = splitParagraphs(t.runs);
+    const colours = hasChanges(t.runs) ? authorColours(t.runs) : null;
 
     // sizes of figures and pictures
     const sizes = new Map<number, { w: number; h: number }>();
     for (const [k, o] of Object.entries(t.objects)) {
       if (o.kind === 'drawing') sizes.set(Number(k), shownSize(this.deps.drawingSize(o.contents, t.drawingStyle), o.scale ?? 1, textW));
       else if (o.kind === 'picture') sizes.set(Number(k), shownSize({ w: o.w, h: o.h }, o.scale ?? 1, textW));
+    }
+    // equations: laid out in the font and size of the text round them
+    const maths = new Map<number, PlacedMath>();
+    const mathAt = (r: TextRun, st: NamedStyle) => {
+      const o = r.obj !== undefined ? t.objects[r.obj] : undefined;
+      if (o?.kind !== 'math') return;
+      const size = r.size ?? st.size, family = `${r.font ?? st.font}, ${FONT_STACK}`;
+      const m = layoutMath(o.tex, size, family, this.deps.measure);
+      maths.set(r.obj!, { ...m, family, color: r.color ?? '#000' });
+      sizes.set(r.obj!, { w: m.w, h: m.ascent + m.descent });
+    };
+    if (Object.values(t.objects).some((o) => o.kind === 'math')) {
+      const N0 = t.styles.Normal ?? styleOf(t, {});
+      paraRuns.forEach((runs, p) => { const st = styleOf(t, paras[p]); for (const r of runs) mathAt(r, st); });
+      for (const o of Object.values(t.objects)) {
+        if (o.kind === 'table') for (const row of o.table.rows) for (const cell of row) for (const r of cell.runs) mathAt(r, N0);
+        if (o.kind === 'textbox') for (const r of o.runs) mathAt(r, N0);
+      }
     }
     // text boxes: their text laid out in the box, which grows to fit it
     const boxes = new Map<number, TextLayout>();
@@ -350,7 +394,22 @@ export class DocLayouter {
     // the bibliography's entries (worked out once: every bibliography in the text shows them)
     const hasBib = Object.values(t.objects).some((o) => o.kind === 'bib');
     const entries = hasBib ? bibliography(t) : [];
-    const isBib = (r: { obj?: number }) => r.obj !== undefined && t.objects[r.obj]?.kind === 'bib';
+    // the contents' headings, for each depth asked for, and their page numbers from the last layout
+    const tocs = new Map<number, TocEntry[]>();
+    for (const o of Object.values(t.objects)) if (o.kind === 'toc' && !tocs.has(o.levels)) tocs.set(o.levels, tocEntries(t, o.levels));
+    const pageOf = (p: number) => this.tocPages[p] ?? '';
+    const tocKey = tocs.size ? JSON.stringify([...tocs].map(([k, es]) => [k, es.map((e) => [e.level, e.text, pageOf(e.para)])])) : 0;
+    const isBib = (r: { obj?: number }) => r.obj !== undefined && (t.objects[r.obj]?.kind === 'bib' || t.objects[r.obj]?.kind === 'toc');
+    const blockLines = (id: number, st: NamedStyle, ps: ParaStyle, wrap: number): LaidLine[] | null => {
+      const o = t.objects[id];
+      if (o?.kind === 'toc') return tocLines(tocs.get(o.levels) ?? [], pageOf, st, ps.line, wrap, this.deps.measure);
+      if (o?.kind !== 'bib') return null;
+      const bf = bibFrame(entries, st, ps, this.deps.measure);
+      return layoutText({
+        runs: bf.runs, paras: bf.paras, justify: 'left', wrap, boxes: true,
+        inline: (x) => (x < 0 ? { w: bf.spacer(x), ascent: 0 } : null),
+      }, st.size, this.deps.measure).lines;
+    };
     const extentOf = (id: number) => lookExtent(lookOf(t.objects[id]));
     const floating = (id: number) => floatOf(t.objects[id]) !== undefined;
     const inline = (id: number): InlineBox | null => {
@@ -358,6 +417,9 @@ export class DocLayouter {
       if (f !== undefined) return { text: f };
       // a floating figure keeps its place in the text but takes no room in the line
       if (floating(id)) return { w: 0, ascent: 0 };
+      // an equation sits on the baseline like a letter, with its lower part below it
+      const m = maths.get(id);
+      if (m) return { w: m.w, ascent: m.ascent, descent: m.descent };
       const s = sizes.get(id);
       if (!s) return null;
       // a frame or shadow takes room round the figure
@@ -392,7 +454,9 @@ export class DocLayouter {
       const ps = paras[p];
       const st = styleOf(t, ps);
       // runs without a font or size of their own take their paragraph style's
-      const resolved = runs.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? st.font, size: r.size ?? st.size }));
+      // tracked changes: inserted text underlined, deleted text struck through, in each author's colour
+      const shownRuns = colours ? markedRuns(runs, colours) : runs;
+      const resolved = shownRuns.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? st.font, size: r.size ?? st.size }));
       const objs = runs.filter((r) => r.obj !== undefined).map((r) => {
         const f = fields.get(r.obj!);
         const s = sizes.get(r.obj!);
@@ -400,14 +464,14 @@ export class DocLayouter {
         return f !== undefined ? `${r.obj}=${f}` : s ? `${r.obj}:${s.w.toFixed(3)}x${s.h.toFixed(3)}/${extentOf(r.obj!).join(',')}` : `${r.obj}?`;
       });
       const tabs = runs.filter(isTable).map((r) => tableOf(r.obj!)!);
-      const bib = (hasBib && runs.some(isBib)) || tabs.length > 0;
-      const key = JSON.stringify([resolved, ps, markers[p], textW, objs, st.size, bib ? [t.citeStyle, t.citeOptions, entries.map((e) => [e.label, e.pieces]), st.font] : 0, tabs.map((x) => [x.xs, x.hs])]);
+      const bib = runs.some(isBib) || tabs.length > 0;
+      const key = JSON.stringify([resolved, ps, markers[p], textW, objs, st.size, bib ? [t.citeStyle, t.citeOptions, entries.map((e) => [e.label, e.pieces]), st.font, tocKey] : 0, tabs.map((x) => [x.xs, x.hs])]);
       let lay = this.cache.get(key);
       if (!lay) {
         const frame: TextFrame = {
           runs: resolved, paras: [ps], justify: 'left', wrap: textW, boxes: true, markers: [markers[p]], inline,
         };
-        lay = bib ? this.withBlocks(frame, st, entries, isBib, tableOf) : layoutText(frame, st.size, this.deps.measure);
+        lay = bib ? this.withBlocks(frame, st, blockLines, tableOf) : layoutText(frame, st.size, this.deps.measure);
         this.cache.set(key, lay);
       }
       this.used.add(key);
@@ -527,7 +591,7 @@ export class DocLayouter {
         lines.push(placed);
         for (const g of placed.pieces) {
           const s = g.obj !== undefined ? sizes.get(g.obj) : undefined;
-          if (s && !fields.has(g.obj!) && !floating(g.obj!)) objects.push({ id: g.obj!, page: pageIdx, x: g.x + extentOf(g.obj!)[0], y: placed.y - s.h, w: s.w, h: s.h, line: lines.length - 1 });
+          if (s && !fields.has(g.obj!) && !floating(g.obj!)) objects.push({ id: g.obj!, page: pageIdx, x: g.x + extentOf(g.obj!)[0], y: placed.y - s.h + (maths.get(g.obj!)?.descent ?? 0), w: s.w, h: s.h, line: lines.length - 1 });
         }
         cursor += hs[i];
         hasContent = true;
@@ -554,7 +618,7 @@ export class DocLayouter {
           const ox = l.x + tb.xs[c] + CP.x, oy = top + CP.y + tb.drop[r][c] - cl.box.y1;
           for (const cline of cl.lines) for (const g of cline.pieces) {
             const s = g.obj !== undefined ? sizes.get(g.obj) : undefined;
-            if (s && !fields.has(g.obj!)) objects.push({ id: g.obj!, page: pg.index, x: ox + g.x + extentOf(g.obj!)[0], y: oy + cline.y - s.h, w: s.w, h: s.h, line: i });
+            if (s && !fields.has(g.obj!)) objects.push({ id: g.obj!, page: pg.index, x: ox + g.x + extentOf(g.obj!)[0], y: oy + cline.y - s.h + (maths.get(g.obj!)?.descent ?? 0), w: s.w, h: s.h, line: i });
           }
         });
       }
@@ -579,7 +643,7 @@ export class DocLayouter {
     const last = pages[pages.length - 1];
     const box = { x1: 0, y1: 0, x2: page.w, y2: last.top + page.h };
     const textLayout: TextLayout = { lines, boxWidth: textW, box, length: text.length, measure: this.deps.measure };
-    return { text: textLayout, pages, objects, fields, sizes, boxes, tables, paraTops, pageW: page.w, pageH: page.h, textW, cols: { n: cs.n, w: textW, x: colX } };
+    return { text: textLayout, pages, objects, fields, sizes, boxes, tables, maths, paraTops, pageW: page.w, pageH: page.h, textW, cols: { n: cs.n, w: textW, x: colX } };
   }
 
   /** A table's cells laid out (each from the cache when nothing about it changed), and its rows' heights. */

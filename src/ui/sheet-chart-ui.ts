@@ -421,18 +421,20 @@ export class SheetCharts {
           s.color ? button('Auto', () => this.patchSeries(i, { color: undefined }, 'Series colour')) : null));
       }
       if (c.kind === 'scatter' || c.kind === 'line') {
-        out.push(row('Markers', select([...MARKERS, 'none'].map((m) => [m, m[0].toUpperCase() + m.slice(1)]), s.marker ?? (c.kind === 'scatter' ? 'circle' : 'none'), (v) => this.patchSeries(i, { marker: v as MarkerShape }, 'Markers')),
+        if (c.kind === 'scatter') out.push(row('Sticks', check(!!s.sticks, (v) => this.patchSeries(i, { sticks: v || undefined, ...(v ? { errors: undefined } : {}) }, 'Sticks'), 'Peaks drawn from zero, as a mass spectrum')));
+        out.push(row('Markers', select([...MARKERS, 'none'].map((m) => [m, m[0].toUpperCase() + m.slice(1)]), s.marker ?? (c.kind === 'scatter' && !s.sticks ? 'circle' : 'none'), (v) => this.patchSeries(i, { marker: v as MarkerShape }, 'Markers')),
           numberBox(s.markerSize, (v) => this.patchSeries(i, { markerSize: v }, 'Marker size'), '7', 'px')));
         out.push(row('Line', check(c.kind === 'line' ? s.line !== false : !!s.line, (v) => this.patchSeries(i, { line: c.kind === 'line' ? (v ? undefined : false) : v || undefined }, 'Series line')),
           check(!!s.smooth, (v) => this.patchSeries(i, { smooth: v || undefined }, 'Smooth line'), 'Smooth')));
         out.push(row('Line style', select([['solid', 'Solid'], ['dash', 'Dashed'], ['dot', 'Dotted']], s.dash ?? 'solid', (v) => this.patchSeries(i, { dash: v === 'solid' ? undefined : (v as 'dash') }, 'Line style')),
           numberBox(s.lineWidth, (v) => this.patchSeries(i, { lineWidth: v }, 'Line width'), '2', 'px')));
       }
-      out.push(row('Values shown', check(!!s.labels, (v) => this.patchSeries(i, { labels: v || undefined }, 'Data labels'))));
+      out.push(row('Values shown', check(!!s.labels, (v) => this.patchSeries(i, { labels: v || undefined }, 'Data labels')),
+        c.kind === 'scatter' ? check(!!s.labelX, (v) => this.patchSeries(i, { labelX: v || undefined, ...(v ? { labels: true } : {}) }, 'Data labels'), 'Show x (m/z)') : null));
       if (c.kind === 'pie') return;
       // error bars
       const e = s.errors;
-      out.push(row('Error bars', select([['', 'None'], ['fixed', 'Fixed amount'], ['percent', 'Percentage'], ['stdev', 'Standard deviations'], ['cells', 'From cells']], e?.kind ?? '', (v) => this.patchSeries(i, { errors: v ? { kind: v as ErrorBars['kind'], value: v === 'percent' ? 5 : 1 } : undefined }, 'Error bars'))));
+      if (!s.sticks) out.push(row('Error bars', select([['', 'None'], ['fixed', 'Fixed amount'], ['percent', 'Percentage'], ['stdev', 'Standard deviations'], ['cells', 'From cells']], e?.kind ?? '', (v) => this.patchSeries(i, { errors: v ? { kind: v as ErrorBars['kind'], value: v === 'percent' ? 5 : 1 } : undefined }, 'Error bars'))));
       if (e && e.kind !== 'cells') out.push(row(e.kind === 'percent' ? 'Percent' : e.kind === 'stdev' ? 'How many' : 'Amount', numberBox(e.value, (v) => this.patchSeries(i, { errors: { ...e, value: v } }, 'Error bars'), '1')));
       if (e?.kind === 'cells') {
         out.push(row('Plus', text(e.plus ?? '', (v) => this.patchSeries(i, { errors: clean({ ...e, plus: this.asRef(v) }) }, 'Error bars'), 'D2:D9', true)));

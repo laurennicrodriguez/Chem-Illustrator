@@ -86,6 +86,10 @@ export interface Settings {
   docPins: string[];
   /** Look for a newer version when the desktop app starts (Edit > Preferences). */
   updateCheck: boolean;
+  /** Names the name reader can't read are looked up on PubChem (Edit > Preferences). */
+  pubchemNames: boolean;
+  /** The name put on tracked changes in documents (Review > Your Name, Edit > Preferences). */
+  reviewName: string;
   /** A version the user chose Skip This Version for, so starting the app doesn't offer it again. */
   skipVersion: string | null;
   /** Files and workspaces opened or saved lately, newest first (File menu, desktop app). */
@@ -100,7 +104,7 @@ export const DEFAULT_SETTINGS: Settings = {
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
   guides: { drawing: false, slides: true, design: true },
   docPins: [],
-  updateCheck: true, skipVersion: null, recentFiles: [],
+  updateCheck: true, pubchemNames: true, reviewName: '', skipVersion: null, recentFiles: [],
 };
 
 const STORAGE_KEY = 'chem-illustrator.settings';
@@ -114,7 +118,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (!raw || typeof raw !== 'object') return s;
   const r = raw as Record<string, unknown>;
   if (r.hotkeys && typeof r.hotkeys === 'object' && !Array.isArray(r.hotkeys)) s.hotkeys = r.hotkeys as KeyOverrides;
-  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'spellCheck', 'scrollBars', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'updateCheck'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
+  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'spellCheck', 'scrollBars', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'updateCheck', 'pubchemNames'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
   if (Array.isArray(r.replacements)) {
     s.replacements = r.replacements.filter((x): x is [string, string] => Array.isArray(x) && typeof x[0] === 'string' && typeof x[1] === 'string' && x[0] !== '').map(([a, b]) => [a, b]);
   }
@@ -122,6 +126,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (r.nicknames && typeof r.nicknames === 'object' && !Array.isArray(r.nicknames)) {
     for (const [k, v] of Object.entries(r.nicknames as Record<string, unknown>)) if (k.trim() && typeof v === 'string' && v.trim()) s.nicknames[k.trim()] = v.trim();
   }
+  if (typeof r.reviewName === 'string') s.reviewName = r.reviewName.trim().slice(0, 80);
   s.templates = parseOwnTemplates(r.templates);
   if (typeof r.splitWidth === 'number' && isFinite(r.splitWidth)) s.splitWidth = Math.min(0.8, Math.max(0.2, r.splitWidth));
   if (typeof r.citeStyle === 'string' && r.citeStyle in CITE_PRESETS) s.citeStyle = r.citeStyle;

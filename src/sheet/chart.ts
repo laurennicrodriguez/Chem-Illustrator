@@ -57,6 +57,15 @@ export interface Series {
   errors?: ErrorBars;
   /** Show each point's value beside it. */
   labels?: boolean;
+  /** Scatter: labels show each point's x value (m/z over a mass spectrum's peaks) in place of y. */
+  labelX?: boolean;
+  /** An Excel number format for the labels (unset: the axis's). */
+  labelFmt?: string;
+  /**
+   * Scatter: draw each point as a line up (or down) from zero, as peaks in a mass spectrum. Saved
+   * for Excel as error bars running from each point to zero.
+   */
+  sticks?: boolean;
 }
 
 export interface ChartAxis {

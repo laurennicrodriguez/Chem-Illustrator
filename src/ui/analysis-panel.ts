@@ -78,7 +78,7 @@ function deg(k: number | null): string {
  * The panel's HTML for one structure. `i` numbers the structure's buttons
  * (data-insert="hrms:i" and so on), which the app wires up.
  */
-export function analysisHtml(r: FragmentResult, i: number, adductText: string, extras: { stereo?: string; unknown?: string[] }): string {
+export function analysisHtml(r: FragmentResult, i: number, adductText: string, extras: { stereo?: string; unknown?: string[]; pubchem?: string }): string {
   if (r.error) return `<div class="frag"><p class="warn">${esc(r.error)}</p></div>`;
   const ion = ionInfo(r, adductText);
   const ea = analysisPercents(r);
@@ -126,7 +126,7 @@ export function analysisHtml(r: FragmentResult, i: number, adductText: string, e
     ${iso}${props}
     <div class="smiles" title="SMILES">${esc(r.smiles)}</div>
     ${extras.unknown?.length ? `<p class="warn">Not understood (left out): ${extras.unknown.map(esc).join(', ')}</p>` : ''}
-    ${buttons}
+    ${buttons}${extras.pubchem ?? ''}
   </div>`;
 }
 

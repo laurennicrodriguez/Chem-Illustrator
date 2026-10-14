@@ -109,6 +109,8 @@
         <button role="menuitem" class="doc-only" data-cmd="compound-number" title="A bold compound number that renumbers itself">Compound Number…</button>
         <button role="menuitem" class="doc-only" data-cmd="insert-citation" title="Cite references: superscript numbers in order of first citation">Citation…</button>
         <button role="menuitem" class="doc-only" data-cmd="insert-bibliography" title="The references cited, numbered, in the journal style">Bibliography</button>
+        <button role="menuitem" class="doc-only" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha), shown as maths; a Word equation in .docx files">Equation…</button>
+        <button role="menuitem" class="doc-only" data-cmd="insert-toc" title="The headings (Heading 1, 2, 3) with their page numbers; it updates by itself">Table of Contents…</button>
         <button role="menuitem" class="doc-only" data-cmd="page-break">Page Break</button>
       </div>
     </div>
@@ -146,6 +148,7 @@
         <button role="menuitem" data-cmd="draw-structure">Draw Structure in Cell</button>
         <button role="menuitem" data-cmd="structure-from-name">Structure from Name or SMILES…</button>
         <button role="menuitem" data-cmd="property-column">Insert Property Columns…</button>
+        <button role="menuitem" data-cmd="isotope-pattern">Isotope Pattern…</button>
         <button role="menuitem" data-cmd="reagent-table">New Reagent Table</button>
         <button role="menuitem" data-cmd="reset-calculated">Reset to Calculated</button>
         <hr />
@@ -227,6 +230,7 @@
         <button role="menuitem" data-cmd="chiral-flag">Chiral Flag (Abs, Rel, Rac)…</button>
         <button role="menuitem" data-cmd="rgroup-table">R-Group Table…</button>
         <button role="menuitem" data-cmd="name-to-structure">Name to Structure…</button>
+        <button role="menuitem" data-cmd="pubchem-lookup" title="Send the selected structure (as SMILES) to PubChem, the free NIH database, and show its name, CAS number, hazards and measured values in the Analysis panel">Look Up on PubChem</button>
         <hr />
         <button role="menuitemcheckbox" aria-checked="true" data-cmd="fixed-length"><span>Fixed Bond Lengths</span></button>
         <button role="menuitemcheckbox" aria-checked="true" data-cmd="fixed-angles"><span>Fixed Angles</span></button>
@@ -366,6 +370,7 @@
           <button class="rb-big" data-sh="draw-structure" title="Draw a structure in the cell (or double-click a structure to change it)"><span class="rb-icon">⬡</span>Structure</button>
           <button class="rb-big" data-sh="structure-from-name" title="Draw structures from names or SMILES: in the cell, or for each selected name"><span class="rb-icon">Aa</span>From Name</button>
           <button class="rb-big" data-sh="property-column" title="Columns that work out formula, MW, exact mass, HRMS m/z, cLogP and more from each structure"><span class="rb-icon">MW</span>Properties</button>
+          <button class="rb-big" data-sh="isotope-pattern" title="The isotope pattern of an ion ([M+H]+, [M+Na]+…) as a table and a mass spectrum chart, with columns for the peaks you found and their error in ppm"><span class="rb-icon"><svg viewBox="0 0 20 20" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M2.5 17.5h15"/><path d="M5 17.5V4M8 17.5v-3M11 17.5V5M14 17.5v-3" stroke-width="2.2"/></svg></span>Isotopes</button>
           <div class="rb-col">
             <button data-sh="reagent-table" title="A new sheet that works out the amounts for a reaction: MW, mmol, mass and volume from each reagent's structure and equivalents">Reagent Table</button>
             <button data-sh="reset-calculated" title="Put back the calculated values where values were typed over">Reset to Calculated</button>
@@ -521,6 +526,7 @@
       <button role="tab" data-doc-tab="insert" aria-selected="false">Insert</button>
       <button role="tab" data-doc-tab="layout" aria-selected="false">Layout</button>
       <button role="tab" data-doc-tab="references" aria-selected="false">References</button>
+      <button role="tab" data-doc-tab="review" aria-selected="false">Review</button>
       <button role="tab" data-doc-tab="table" aria-selected="false" class="rb-context" hidden title="Shown while you are in a table">Table</button>
     </div>
     <div class="rb-panel" data-doc-panel="home">
@@ -631,6 +637,12 @@
       </div>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-doc="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha) and shown as maths, or one of the usual ones (Arrhenius, Eyring…). Double-click it to change it. Saved as a Word equation (Alt+=)"><span class="rb-icon">π</span>Equation</button>
+        </div>
+        <div class="rb-label">Symbols</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-doc="insert-caption" title="A numbered caption: Figure 1, Scheme 2, Table S1…"><span class="rb-icon">¶</span>Caption</button>
         </div>
         <div class="rb-label">Captions</div>
@@ -733,6 +745,12 @@
     <div class="rb-panel" data-doc-panel="references" hidden>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-doc="insert-toc" title="The headings (Heading 1, 2 and 3 styles) with their page numbers after a line of dots. It updates by itself; double-click it to choose the levels shown"><span class="rb-icon">≡</span>Table of Contents</button>
+        </div>
+        <div class="rb-label">Contents</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-doc="insert-caption" title="A numbered caption: Figure 1, Scheme 2, Table S1…"><span class="rb-icon">¶</span>Insert Caption</button>
           <button class="rb-big" data-doc="cross-reference" title="&quot;Figure 2&quot; in the text: it follows the caption's number when captions are added or moved"><span class="rb-icon">↪</span>Cross-reference</button>
         </div>
@@ -751,6 +769,30 @@
           <button class="rb-big" data-doc="manage-references" title="The document's references: add by DOI, by hand or from BibTeX or RIS; edit, delete; the citation style (ACS, Angewandte, RSC)"><span class="rb-icon">✎</span>Manage References…</button>
         </div>
         <div class="rb-label">Citations and Bibliography</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-doc-panel="review" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="track-changes" aria-pressed="false" title="Track Changes (Ctrl+Shift+E): while on, what you type is marked as inserted and what you delete stays, struck through, until it is accepted or rejected. Each change shows who made it and when"><span class="rb-icon">✎</span>Track Changes</button>
+          <button class="rb-big" data-doc="review-name" title="The name put on your changes"><span class="rb-icon">👤</span>Your Name…</button>
+        </div>
+        <div class="rb-label">Tracking</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="accept-change" title="Keep the change at the caret (or every change in the selection) and go to the next"><span class="rb-icon">✓</span>Accept</button>
+          <button class="rb-big" data-doc="reject-change" title="Undo the change at the caret (or every change in the selection) and go to the next"><span class="rb-icon">✗</span>Reject</button>
+          <div class="rb-col">
+            <button data-doc="prev-change" title="Go to the change before the caret">◀ Previous</button>
+            <button data-doc="next-change" title="Go to the next change">Next ▶</button>
+          </div>
+          <div class="rb-col">
+            <button data-doc="accept-all" title="Keep every change in the document">Accept All</button>
+            <button data-doc="reject-all" title="Undo every change in the document">Reject All</button>
+          </div>
+        </div>
+        <div class="rb-label">Changes</div>
       </div>
     </div>
     <div class="rb-panel" data-doc-panel="table" hidden>

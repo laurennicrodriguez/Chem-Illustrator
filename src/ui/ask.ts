@@ -13,6 +13,8 @@ export interface Field {
   placeholder?: string;
   /** Pick one of these instead of typing. */
   options?: { value: string; label: string }[];
+  /** Offered in a list under a text box, which can still be typed in. */
+  suggestions?: string[];
 }
 
 /** Show the fields; resolves with what was entered, or null if the window was cancelled. */
@@ -61,6 +63,13 @@ export function ask(title: string, fields: Field[], opts: { ok?: string; note?: 
         if (inp.type === 'number') inp.step = 'any';
         inp.value = f.value;
         if (f.placeholder) inp.placeholder = f.placeholder;
+        if (f.suggestions) {
+          const dl = document.createElement('datalist');
+          dl.id = `ask-list-${f.name}-${Math.random().toString(36).slice(2, 8)}`;
+          for (const sg of f.suggestions) dl.append(new Option(sg));
+          inp.setAttribute('list', dl.id);
+          row.append(dl);
+        }
         input = inp;
       }
       inputs.set(f.name, input);

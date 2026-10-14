@@ -6,6 +6,7 @@ import type { Measure, TextFrame } from '../text/layout';
 import { TextEditing, type ChangeKind } from '../text/editing';
 import { documentMeasure } from '../text/font-measure';
 import { CELL_PAD, DocLayouter, movedLayout, type DocLayout } from './doc-layout';
+import { reviewAuthor, revisionDate } from './revisions';
 import { setPart } from '../table';
 import { FigurePictures } from './figures';
 import { BOX_PAD, newDocument, runStyleOf, styleOf, type DocText } from './document';
@@ -27,6 +28,9 @@ export const figures = new FigurePictures();
 /** Indent added by Tab outside a list, as Word's Increase Indent (half an inch). */
 const INDENT = 36;
 
+/** Each paragraph's page number as last laid out, by document (for the contents' page numbers in Word files). */
+export const paragraphPages = new WeakMap<DocText, string[]>();
+
 export class DocFile {
   readonly ed: TextEditing;
   readonly layouter: DocLayouter;
@@ -47,6 +51,8 @@ export class DocFile {
     this.ed.anchor = this.ed.focus = 0;
     this.ed.layoutWith = (frame) => this.layoutOf(frame).text;
     this.ed.emptyParaStyle = (p) => runStyleOf(styleOf(this.t, this.t.paras[p]));
+    // Review > Track Changes: edits to the text are marked with who made them and when
+    this.ed.track = () => (this.t.track ? { author: reviewAuthor() || 'Author', date: revisionDate() } : null);
     this.ed.indentStep = INDENT;
     this.ed.onChange = (kind) => {
       if (kind === 'text') this.edits++;
@@ -156,7 +162,11 @@ export class DocFile {
   }
 
   private layoutOf(frame: TextFrame): DocLayout {
-    if (this.memo?.frame !== frame) this.memo = { frame, lay: this.layouter.layout(frame as DocText) };
+    if (this.memo?.frame !== frame) {
+      const lay = this.layouter.layout(frame as DocText);
+      this.memo = { frame, lay };
+      paragraphPages.set(frame as DocText, lay.paraTops.map((pt) => lay.pages[pt.page]?.label || String(pt.page + 1)));
+    }
     return this.memo.lay;
   }
 }

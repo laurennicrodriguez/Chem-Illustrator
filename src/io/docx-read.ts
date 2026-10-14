@@ -30,6 +30,8 @@ import { cfbStreams, isCfb } from './cfb';
 import { isCdx } from './cdx';
 import { BIB_MARK, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
 import { cleanRef } from '../document/references';
+import { revText } from '../document/revisions';
+import { mathText, ommlToTex } from '../document/math';
 import { CITE_PRESETS, cleanOptions } from '../document/cite-styles';
 import { listIndent, tableText } from './docx-write';
 
@@ -55,8 +57,7 @@ const WARN = {
   links: 'Links were kept as plain text.',
   notes: 'Footnotes and endnotes were left out.',
   comments: 'Comments were left out.',
-  tracked: 'Tracked changes were accepted.',
-  equations: 'Equations were kept as plain text.',
+  equations: 'Equations in table cells were kept as plain text.',
   shapes: 'Charts, SmartArt and drawn shapes were left out.',
   sections: 'This file has several sections: the last one\'s page size, margins, header and footer are used for the whole document.',
   vmerge: 'Table cells merged down a column were split (merging across a row is kept).',
@@ -67,7 +68,6 @@ const WARN = {
   crop: 'Cropped pictures show uncropped.',
   numbering: 'Some numbered lists use numbering that shows here as 1., a., i.',
   looks: 'Strikethrough, highlighting and small capitals were left out.',
-  toc: 'The table of contents was kept as plain text.',
   citations: 'Citations from a reference manager were kept as plain text.',
   pageText: 'Text after the page number in the header or footer was left out.',
   ole: 'Embedded objects other than ChemDraw drawings came in as pictures.',
@@ -88,8 +88,8 @@ interface WStyle { id: string; type: string; name: string; basedOn?: string; nex
 interface Level { fmt: string; text: string; p: PProps }
 interface Piece { runs: TextRun[]; pageBreak: boolean; soft: boolean; colBreak?: boolean }
 interface Ctx { base: RProps; pieces: Piece[]; cell: boolean }
-interface Field { instr: string; phase: 'instr' | 'result'; swallow: boolean; text: string; props: RProps; done: boolean; ref?: { id: number; mark: string; text: string } }
-interface OutPara { ps: ParaStyle; runs: TextRun[]; mark: rt.RunStyle; style: string; contextual: boolean; table?: boolean; bib?: string }
+interface Field { instr: string; phase: 'instr' | 'result'; swallow: boolean; text: string; props: RProps; done: boolean; ref?: { id: number; mark: string; text: string }; toc?: boolean }
+interface OutPara { ps: ParaStyle; runs: TextRun[]; mark: rt.RunStyle; style: string; contextual: boolean; table?: boolean; bib?: string; markRev?: string }
 
 /** Open a Word file. Throws only when the file is not a Word file at all. */
 export async function readDocx(bytes: Uint8Array, deps: DocxReadDeps = {}): Promise<{ doc: DocText; warnings: string[] }> {
@@ -123,6 +123,10 @@ class DocxReader {
   private page: PageSetup = defaultPage();
   private textW = 468;
   private fields: Field[] = [];
+  /** The tracked change the text being read is in (w:ins or w:del), as stored on runs. */
+  private rev: string | undefined;
+  /** The paragraph being read holds a display equation (Word's equation paragraph): centred here. */
+  private displayMath = false;
   private openMarks = new Map<string, string>();
   private markSeq = new Map<string, number>();
   private refs: { id: number; mark: string; text: string }[] = [];
@@ -160,6 +164,14 @@ class DocxReader {
     this.joinBibliographies();
     const hf = this.readHeaderFooter(last);
     return { doc: this.assemble(hf), warnings: [...this.warnings] };
+  }
+
+  /** Word was set to track changes in this document (settings.xml's w:trackRevisions). */
+  private trackOn(): boolean {
+    const path = this.pkg.relOfType(this.main, DOCX_REL.settings);
+    const st = path ? this.pkg.xml(path) : null;
+    const el = st?.getElementsByTagNameNS('*', 'trackRevisions')[0];
+    return !!el && this.on(el);
   }
 
   private warn(k: keyof typeof WARN): void {
@@ -515,7 +527,11 @@ class DocxReader {
     const ctx: Ctx = { base, pieces: [{ runs: [], pageBreak: false, soft: false }], cell: false };
     const bibBefore = this.bibOpen;
     this.bibMet = null;
+    const inToc = this.fields.some((f) => f.toc);
+    this.displayMath = false;
     this.inline(kids(el), ctx);
+    // the contents' own lines (and the paragraph its field ends in): left out
+    if (inToc && ctx.pieces.every((pc) => !pc.runs.length)) { if (kid(pPr, 'sectPr')) this.breakNext = !/^continuous$/i.test(this.a(kid(kid(pPr, 'sectPr'), 'type')) ?? 'nextPage'); return; }
     const bib = bibBefore ?? this.bibMet ?? undefined;
     const sectionBreak = () => { if (sect) this.breakNext = !/^continuous$/i.test(this.a(kid(sect, 'type')) ?? 'nextPage'); };
     const text = ctx.pieces.map((pc) => rt.plainText(pc.runs)).join('\n');
@@ -545,7 +561,7 @@ class DocxReader {
     const brk = this.takeBreak();
     const ps: ParaStyle = {
       style: ours === 'Normal' ? undefined : ours,
-      align: p.align && p.align !== 'left' ? p.align : undefined,
+      align: p.align && p.align !== 'left' ? p.align : this.displayMath && !p.align ? 'center' : undefined,
       spaceBefore: round(p.before ?? 0), spaceAfter: round(p.after ?? 0),
       // spacing in points stays in points for the paragraph (its style takes the nearest multiple)
       ...(p.line && p.line.rule !== 'auto' ? { linePt: round(p.line.v / 20), lineRule: p.line.rule === 'exact' ? 'exact' as const : 'atLeast' as const } : { line: this.lineOf(p, size) }),
@@ -553,6 +569,8 @@ class DocxReader {
       pageBreak: p.pageBreak || brk, list, level: list ? ilvl : undefined,
     };
     const markStyle = this.runStyle(mark);
+    const mrEl = kid(kid(pPr, 'rPr'), 'ins') ?? kid(kid(pPr, 'rPr'), 'del');
+    const markRevOf = mrEl ? revText({ kind: mrEl.localName === 'ins' ? 'ins' : 'del', author: this.a(mrEl, 'author') ?? '', date: this.a(mrEl, 'date') ?? '' }) : undefined;
     ctx.pieces.forEach((pc, i) => {
       let q: ParaStyle = { ...ps };
       if (i > 0) {
@@ -571,7 +589,9 @@ class DocxReader {
         if (pc.colBreak) q.colBreak = true;
       }
       q = cleanPara(q);
-      this.out.push({ ps: q, runs: pc.runs, mark: markStyle, style: ours, contextual: !!p.contextual, bib });
+      // the paragraph mark inserted or deleted while Word tracked changes (on the last piece: the real mark)
+      const mr = i === ctx.pieces.length - 1 ? markRevOf : undefined;
+      this.out.push({ ps: q, runs: pc.runs, mark: markStyle, style: ours, contextual: !!p.contextual, bib, ...(mr ? { markRev: mr } : {}) });
     });
     sectionBreak();
   }
@@ -628,7 +648,7 @@ class DocxReader {
       text = rt.fromSymbolFont(plain);
       props = { ...r, font: ctx.base.font };
     }
-    this.piece(ctx).runs.push({ ...this.runStyle(props), text });
+    this.piece(ctx).runs.push({ ...this.runStyle(props), ...(this.rev ? { rev: this.rev } : {}), text });
   }
 
   private emitObject(ctx: Ctx, o: DocObject, r: RProps, keepPos = false): number | null {
@@ -637,7 +657,7 @@ class DocxReader {
     this.objects[id] = o;
     const { formula: _f, sub, sup, ...style } = this.runStyle(r);
     // a citation keeps its superscript; caption numbers and references take the text's position
-    this.piece(ctx).runs.push({ ...style, ...(keepPos ? rt.cleanStyle({ sub, sup }) : {}), obj: id, text: OBJECT_CHAR });
+    this.piece(ctx).runs.push({ ...style, ...(keepPos ? rt.cleanStyle({ sub, sup }) : {}), ...(this.rev ? { rev: this.rev } : {}), obj: id, text: OBJECT_CHAR });
     return id;
   }
 
@@ -662,8 +682,15 @@ class DocxReader {
         case 'fldSimple': this.simpleField(el, ctx); break;
         case 'smartTag': case 'customXml': case 'dir': case 'bdo': this.inline(kids(el), ctx); break;
         case 'sdt': this.inline(kids(kid(el, 'sdtContent')), ctx); break;
-        case 'ins': case 'moveTo': this.warn('tracked'); this.inline(kids(el), ctx); break;
-        case 'del': case 'moveFrom': this.warn('tracked'); break;
+        // tracked changes: the text keeps its mark, to be accepted or rejected here or in Word
+        case 'ins': case 'moveTo': case 'del': case 'moveFrom': {
+          const before = this.rev;
+          const kind = el.localName === 'ins' || el.localName === 'moveTo' ? 'ins' : 'del';
+          this.rev = revText({ kind, author: this.a(el, 'author') ?? '', date: this.a(el, 'date') ?? '' });
+          this.inline(kids(el), ctx);
+          this.rev = before;
+          break;
+        }
         case 'bookmarkStart': this.markStart(el); break;
         case 'bookmarkEnd': this.markEnd(el); break;
         case 'commentRangeStart': this.warn('comments'); break;
@@ -673,17 +700,21 @@ class DocxReader {
     }
   }
 
+  /** A Word equation: kept as an equation (its LaTeX), or as its text in a table cell. */
   private math(el: Element, ctx: Ctx): void {
-    this.warn('equations');
-    const t = Array.from(el.getElementsByTagNameNS('*', 't')).map((x) => x.textContent ?? '').join('');
-    this.emitText(ctx, t, ctx.base);
+    if (this.swallowing()) return;
+    const tex = ommlToTex(el);
+    if (!tex) return;
+    if (ctx.cell) { this.warn('equations'); this.emitText(ctx, mathText(tex), ctx.base); return; }
+    if (el.localName === 'oMathPara') this.displayMath = true;
+    this.emitObject(ctx, { kind: 'math', tex }, ctx.base);
   }
 
   private run(el: Element, ctx: Ctx): void {
     const r = merge<RProps>(ctx.base, this.readRPr(kid(el, 'rPr')));
     for (const c of kids(el)) {
       switch (c.localName) {
-        case 't': this.emitText(ctx, c.textContent ?? '', r); break;
+        case 't': case 'delText': this.emitText(ctx, c.textContent ?? '', r); break;
         case 'tab': case 'ptab': this.emitText(ctx, '\t', r); break;
         case 'noBreakHyphen': this.emitText(ctx, '‑', r); break;
         case 'br': {
@@ -704,7 +735,7 @@ class DocxReader {
           break;
         }
         case 'fldChar': this.fieldChar(c, r, ctx); break;
-        case 'instrText': { const top = this.fields[this.fields.length - 1]; if (top?.phase === 'instr') top.instr += c.textContent ?? ''; break; }
+        case 'instrText': case 'delInstrText': { const top = this.fields[this.fields.length - 1]; if (top?.phase === 'instr') top.instr += c.textContent ?? ''; break; }
         case 'drawing': if (!this.swallowing()) this.drawing(c, r, ctx); break;
         case 'pict': if (!this.swallowing()) this.vml(c, r, ctx, null); break;
         case 'object': if (!this.swallowing()) this.vml(c, r, ctx, c); break;
@@ -786,8 +817,15 @@ class DocxReader {
       if (id !== null) f.swallow = true;
       return;
     }
-    if (/^TOC\b/i.test(ins)) this.warn('toc');
-    else if (/^ADDIN\s+(EN\.CITE|ZOTERO|CSL|Mendeley|RW)/i.test(ins)) this.warn('citations');
+    // a table of contents: ours again, its lines (Word's last update) left out, as they are worked out here
+    const toc = /^TOC\b(.*)$/i.exec(ins);
+    if (toc && !ctx.cell) {
+      const depth = /\\o\s*"?\s*\d+\s*-\s*(\d+)/i.exec(toc[1]);
+      const id = this.emitObject(ctx, { kind: 'toc', levels: Math.max(1, Math.min(3, depth ? Number(depth[1]) : 3)) }, f.props);
+      if (id !== null) { f.swallow = true; f.toc = true; }
+      return;
+    }
+    if (/^ADDIN\s+(EN\.CITE|ZOTERO|CSL|Mendeley|RW)/i.test(ins)) this.warn('citations');
   }
 
   private markStart(el: Element): void {
@@ -1374,7 +1412,7 @@ class DocxReader {
     if (!out.length) out.push({ ps: {}, runs: [], mark: this.runStyle(merge<RProps>(this.docDefaults.r, this.chain('paragraph', this.defaultPara).r)), style: 'Normal', contextual: false });
     const runs: TextRun[] = [];
     out.forEach((p, i) => {
-      if (i > 0) runs.push({ ...out[i - 1].mark, text: '\n' });
+      if (i > 0) runs.push({ ...out[i - 1].mark, ...(out[i - 1].markRev ? { rev: out[i - 1].markRev } : {}), text: '\n' });
       runs.push(...p.runs);
     });
     // (with the structures in tables' cells)
@@ -1391,6 +1429,7 @@ class DocxReader {
       hf,
       objects,
       drawingStyle: this.drawingStyle,
+      ...(this.trackOn() ? { track: true } : {}),
       ...(Array.isArray(m?.references) ? { references: m.references.map((r) => cleanRef(r)) } : {}),
       ...(typeof m?.citeStyle === 'string' && m.citeStyle in CITE_PRESETS ? { citeStyle: m.citeStyle } : {}),
       ...(m?.citeOptions && Object.keys(cleanOptions(m.citeOptions)).length ? { citeOptions: cleanOptions(m.citeOptions) } : {}),

@@ -175,7 +175,11 @@ export type DocObject =
   /** A citation of references in the document's list (by their ids): numbers in order of first citation. */
   | { kind: 'cite'; refs: string[] }
   /** The bibliography: the references cited, in citation order, in the citation style (a block of its own). */
-  | { kind: 'bib' };
+  | { kind: 'bib' }
+  /** A table of contents: the headings down to `levels` (1 to 3) deep with their page numbers (a block of its own). */
+  | { kind: 'toc'; levels: number }
+  /** An equation, typed as LaTeX and shown laid out as maths (see math.ts); a Word equation in .docx files. */
+  | { kind: 'math'; tex: string };
 
 export interface DocText extends RichText {
   styles: Record<string, NamedStyle>;
@@ -190,6 +194,8 @@ export interface DocText extends RichText {
   citeStyle?: CiteStyle;
   /** Details of that style changed for this document (References > Manage References > Style Options). */
   citeOptions?: Partial<CiteFormat>;
+  /** Changes are being tracked (Review > Track Changes): edits are marked, not made outright. */
+  track?: boolean;
 }
 
 // ---------------------------------------------------------------- defaults

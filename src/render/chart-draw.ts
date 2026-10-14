@@ -262,7 +262,8 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
     data.forEach((d, i) => {
       const s = chart.series[i];
       const lineLike = kind === 'scatter' || kind === 'line';
-      legend.push({ name: d.name, color: d.color, kind: lineLike ? 'line' : 'box', marker: lineLike ? s.marker ?? (kind === 'scatter' ? 'circle' : 'none') : undefined, dash: dashOf(s.dash), line: kind === 'line' ? s.line !== false : !!s.line });
+      const sticks = kind === 'scatter' && !!s.sticks;
+      legend.push({ name: d.name, color: d.color, kind: lineLike ? 'line' : 'box', marker: lineLike ? s.marker ?? (kind === 'scatter' && !sticks ? 'circle' : 'none') : undefined, dash: dashOf(s.dash), line: kind === 'line' ? s.line !== false : !!s.line || sticks });
     });
     chart.series.forEach((s, i) => {
       if (s.fit && fits[i] && s.fit.legend !== false) legend.push({ name: `${SHORT_FIT[s.fit.kind]} (${data[i].name})`, color: s.fit.color ?? data[i].color, kind: 'fit' });
@@ -317,6 +318,12 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
     data.forEach((d) => d.ys.forEach((v, j) => { growY(v); if (d.plus) growY(v + (d.plus[j] || 0)); if (d.minus) growY(v - (d.minus[j] || 0)); }));
   }
   if (kind === 'scatter') data.forEach((d) => d.xs.forEach((x, j) => { if (Number.isFinite(d.ys[j])) growX(x); }));
+  // sticks stand on zero, and keep clear of the plot's sides
+  const anySticks = kind === 'scatter' && chart.series.some((s) => s.sticks);
+  if (anySticks) {
+    growY(0);
+    if (xlo !== Infinity) { const padX = Math.max(0.5, (xhi - xlo) * 0.05); xlo -= padX; xhi += padX; }
+  }
   // fitted lines reach beyond the data when asked
   chart.series.forEach((s, i) => {
     const f = fits[i];
@@ -442,6 +449,32 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
       ctx.setLineDash([]);
     }
   });
+  // sticks (a mass spectrum's peaks), from zero to each point
+  if (anySticks) {
+    const zeroY = clampY(Y(vAxis.frac(vAxis.log ? vAxis.min : Math.min(Math.max(0, vAxis.min), vAxis.max))), plot);
+    data.forEach((d, i) => {
+      const s = chart.series[i];
+      if (!s.sticks) return;
+      ctx.strokeStyle = d.color;
+      ctx.lineWidth = s.lineWidth ?? 1.5;
+      ctx.lineCap = 'butt';
+      ctx.setLineDash(dashOf(s.dash));
+      ctx.beginPath();
+      d.ys.forEach((v, j) => {
+        const x = ptX(d, j);
+        if (!Number.isFinite(v) || !Number.isFinite(x) || x < plot.x || x > plot.x + plot.w) return;
+        ctx.moveTo(x, zeroY);
+        ctx.lineTo(x, clampY(Y(vAxis.frac(v)), plot));
+      });
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+    // the zero line, when it isn't the bottom of the plot (calculated peaks drawn downwards)
+    if (zeroY < plot.y + plot.h - 1) {
+      ctx.strokeStyle = AXIS; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(plot.x, Math.round(zeroY) + 0.5); ctx.lineTo(plot.x + plot.w, Math.round(zeroY) + 0.5); ctx.stroke();
+    }
+  }
   // error bars and markers go over every line
   data.forEach((d, i) => {
     const s = chart.series[i];
@@ -470,7 +503,7 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
       ctx.stroke();
     }
     if (bars || kind === 'area') return;
-    const marker = s.marker ?? (kind === 'scatter' ? 'circle' : 'none');
+    const marker = s.marker ?? (kind === 'scatter' && !s.sticks ? 'circle' : 'none');
     const size = s.markerSize ?? 7;
     d.ys.forEach((v, j) => {
       const x = ptX(d, j), y = Number.isFinite(v) && (!vAxis.log || v > 0) ? Y(vAxis.frac(v)) : NaN;
@@ -545,16 +578,21 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
     if (!chart.series[i].labels) return;
     const bars = kind === 'column' || kind === 'bar';
     const groupW = band / 1.8, each = stackable ? groupW : groupW / Math.max(1, data.length);
+    const showX = kind === 'scatter' && chart.series[i].labelX;
     d.ys.forEach((v, j) => {
       if (!Number.isFinite(v)) return;
-      const t = formatValue(v, valueAxisDef.numFmt).text;
+      if (showX && !Number.isFinite(d.xs[j])) return;
+      const fmt = chart.series[i].labelFmt;
+      const t = showX ? formatValue(d.xs[j], fmt ?? chart.x.numFmt).text : formatValue(v, fmt ?? valueAxisDef.numFmt).text;
       if (horizontal) {
         const c = catAt(j) - groupW / 2 + (stackable ? 0 : i * each) + each / 2;
         text(ctx, t, valAt(v) + 4, c + tickFs * 0.35, opt(tickFs));
       } else {
         const x = bars ? catAt(j) - groupW / 2 + (stackable ? 0 : i * each) + each / 2 : ptX(d, j);
         const y = valAt(v);
-        if (inside(x, y)) text(ctx, t, x, y - 6, opt(tickFs, { align: 'center' }));
+        // under a peak drawn downwards
+        const below = chart.series[i].sticks && v < 0;
+        if (inside(x, y)) text(ctx, t, x, below ? y + tickFs + 4 : y - 6, opt(tickFs, { align: 'center' }));
       }
     });
   });
