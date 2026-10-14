@@ -89,6 +89,11 @@ const screenMeasure: TextMeasure = (text, size, font, style) => {
 };
 let measureImpl = screenMeasure;
 
+/** Forget measured text widths (a font has just loaded, so text measured with a stand-in is wrong). */
+export function forgetTextWidths(): void {
+  widthCache.clear();
+}
+
 /** Width in points of `text` at `size` points. */
 export function measureText(text: string, size: number, font = FONT_STACK, style = ''): number {
   return measureImpl(text, size, font, style);

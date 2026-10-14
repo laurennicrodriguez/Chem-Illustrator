@@ -6,7 +6,6 @@ import { Master, Corner, Image } from '../deck/deck';
 import { scaleStyle } from '../drawing-styles';
 import { ACS_1996 } from '../style';
 
-const FONTS = ['Arial', 'Aptos', 'Calibri', 'Calibri Light', 'Cambria', 'Georgia', 'Helvetica', 'Segoe UI', 'Times New Roman', 'Verdana'];
 const CORNERS: [Corner, string][] = [['top-left', 'Top left'], ['top-right', 'Top right'], ['bottom-left', 'Bottom left'], ['bottom-right', 'Bottom right']];
 
 export interface MasterDialogHooks {
@@ -29,10 +28,6 @@ export function editMaster(m: Master, hooks: MasterDialogHooks): Promise<Master 
     note.textContent = 'These settings apply to every slide. Text you have formatted yourself keeps its own formatting.';
     form.append(h, note);
 
-    const fontList = document.createElement('datalist');
-    fontList.id = 'master-fonts';
-    for (const f of FONTS) fontList.append(new Option(f));
-    form.append(fontList);
 
     const grid = document.createElement('div');
     grid.className = 'md-grid';
@@ -58,7 +53,7 @@ export function editMaster(m: Master, hooks: MasterDialogHooks): Promise<Master 
       const i = document.createElement('input');
       i.type = 'text';
       i.value = v;
-      if (list) i.setAttribute('list', 'master-fonts');
+      if (list) i.setAttribute('list', 'ci-fonts');
       return i;
     };
     const num = (v: number, min: number, max: number, step = 1) => {

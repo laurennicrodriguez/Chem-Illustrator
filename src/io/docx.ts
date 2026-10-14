@@ -25,6 +25,8 @@ export const DOCX_CT = {
   core: 'application/vnd.openxmlformats-package.core-properties+xml',
   app: 'application/vnd.openxmlformats-officedocument.extended-properties+xml',
   itemProps: 'application/vnd.openxmlformats-officedocument.customXmlProperties+xml',
+  fontTable: 'application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml',
+  font: 'application/vnd.openxmlformats-officedocument.obfuscatedFont',
 };
 
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/';
@@ -39,6 +41,8 @@ export const DOCX_REL = {
   oleObject: R + 'oleObject',
   customXml: R + 'customXml',
   customXmlProps: R + 'customXmlProps',
+  fontTable: R + 'fontTable',
+  font: R + 'font',
 };
 
 /** Names Word's pictures of our drawings carry (kept by Word), so each can be found again. */

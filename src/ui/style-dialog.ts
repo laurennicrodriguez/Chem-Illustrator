@@ -27,7 +27,6 @@ export interface StyleDialogOptions {
   hasStructures: boolean;
 }
 
-const FONTS = ['Arial', 'Helvetica', 'Times New Roman', 'Calibri', 'Aptos', 'Segoe UI', 'Verdana', 'Georgia'];
 
 type NumKey = 'bondLength' | 'lineWidth' | 'boldWidth' | 'marginWidth' | 'hashSpacing' | 'bondSpacing' | 'chainAngle' | 'labelSize' | 'captionSize';
 const NUMS: [NumKey, string, string][] = [
@@ -57,9 +56,6 @@ export function editDrawingStyle(o: StyleDialogOptions): Promise<StyleChoice | n
       el('h2', { textContent: 'Drawing style' }),
       el('p', { className: 'muted', textContent: `How structures are drawn in ${o.where}: bond length, line widths and label fonts. Pick a journal's style or your own, and change any number.` }),
     );
-    const fontList = el('datalist', { id: 'style-fonts' });
-    for (const f of FONTS) fontList.append(new Option(f));
-    form.append(fontList);
 
     const grid = el('div', { className: 'md-grid' });
     form.append(grid);
@@ -94,10 +90,10 @@ export function editDrawingStyle(o: StyleDialogOptions): Promise<StyleChoice | n
       }
     }
     const labelFont = el('input', { type: 'text' }), labelSize = el('input', { type: 'number', className: 'md-num', step: 'any', min: '0' });
-    labelFont.setAttribute('list', 'style-fonts');
+    labelFont.setAttribute('list', 'ci-fonts');
     row('Atom labels', labelFont, labelSize, el('span', { className: 'muted', textContent: 'pt' }));
     const captionFont = el('input', { type: 'text' }), captionSize = el('input', { type: 'number', className: 'md-num', step: 'any', min: '0' });
-    captionFont.setAttribute('list', 'style-fonts');
+    captionFont.setAttribute('list', 'ci-fonts');
     row('Captions', captionFont, captionSize, el('span', { className: 'muted', textContent: 'pt' }));
     inputs.set('labelSize', labelSize);
     inputs.set('captionSize', captionSize);

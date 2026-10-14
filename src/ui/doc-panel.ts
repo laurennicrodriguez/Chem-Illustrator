@@ -206,11 +206,7 @@ export class DocPanel {
       const cur = styleOf(f.t, f.ed.currentPara());
       this.change('Change style', (t) => modifyStyle(t, { ...cur, ...patch }));
     };
-    this.row(s, 'Font', this.input('s-font', (v) => { if (v.trim()) set({ font: v.trim() }); }, { list: 'dp-fonts' }));
-    const fonts = document.createElement('datalist');
-    fonts.id = 'dp-fonts';
-    for (const f of DOC_FONTS) fonts.append(new Option(f));
-    s.append(fonts);
+    this.row(s, 'Font', this.input('s-font', (v) => { if (v.trim()) set({ font: v.trim() }); }, { list: 'ci-fonts' }));
     this.row(s, 'Size (pt)', this.input('s-size', (v) => { const n = Number(v); if (n > 0 && n <= 1638) set({ size: n }); }));
     this.check(s, 's-bold', 'Bold', (v) => set({ bold: v }));
     this.check(s, 's-italic', 'Italic', (v) => set({ italic: v }));

@@ -24,6 +24,7 @@ import { writeCdxml } from './cdxml-write';
 import { extractDrawing } from './clipboard';
 import type { Selection } from '../editor/editor';
 import { Package, NS, REL, emu, xml, hex6 } from './ooxml';
+import { facesToEmbed, toEot, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
 import { patternInk } from '../render/fills';
 import { FADE, tint } from '../colours';
@@ -59,6 +60,8 @@ export interface PptxOptions {
   /** Text widths, for laying out text boxes (Arial's widths by default). */
   measure?: Measure;
   title?: string;
+  /** The free fonts that come with the app, to put inside the file when the slides use them. */
+  fonts?: FontSource;
 }
 
 export interface DeckData {
@@ -390,12 +393,29 @@ class Writer {
     pkg.relate(P, REL.theme, 'theme/theme1.xml');
     const masterTags = this.addTags(P, { [TAG.master]: JSON.stringify(masterSettings(deck.master)), ...(deck.design ? { [TAG.design]: '1' } : {}) });
     const { w, h } = deck.size;
-    pkg.add(P, `${HEAD}<p:presentation ${XMLNS} saveSubsetFonts="1">` +
+    // the free fonts the slides use go inside the file, so they look the same where they aren't installed
+    const embed = await facesToEmbed(pkg.xmlTexts(), this.opts.fonts);
+    let fontList = '';
+    if (embed.length) {
+      pkg.defaultType('fntdata', 'application/x-fontdata');
+      let n = 0;
+      fontList = '<p:embeddedFontLst>' + embed.map(({ family, faces }) => {
+        const ids = new Map<string, string>();
+        for (const f of faces) {
+          const name = `fonts/font${++n}.fntdata`;
+          pkg.add(`ppt/${name}`, toEot(f.data));
+          ids.set(f.bold ? (f.italic ? 'boldItalic' : 'bold') : f.italic ? 'italic' : 'regular', pkg.relate(P, REL.font, name));
+        }
+        const kinds = ['regular', 'bold', 'italic', 'boldItalic'].filter((k) => ids.has(k));
+        return `<p:embeddedFont><p:font typeface="${xml(family)}" charset="0"/>${kinds.map((k) => `<p:${k} r:id="${ids.get(k)}"/>`).join('')}</p:embeddedFont>`;
+      }).join('') + '</p:embeddedFontLst>';
+    }
+    pkg.add(P, `${HEAD}<p:presentation ${XMLNS} saveSubsetFonts="1"${embed.length ? ' embedTrueTypeFonts="1"' : ''}>` +
       `<p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="${masterRel}"/></p:sldMasterIdLst>` +
       (hasNotes ? `<p:notesMasterIdLst><p:notesMasterId r:id="${notesMasterRel}"/></p:notesMasterIdLst>` : '') +
       `<p:sldIdLst>${slideRels.map((r, i) => `<p:sldId id="${256 + i}" r:id="${r}"/>`).join('')}</p:sldIdLst>` +
       `<p:sldSz cx="${emu(w)}" cy="${emu(h)}"${w === 720 && h === 540 ? ' type="screen4x3"' : ''}/>` +
-      `<p:notesSz cx="6858000" cy="9144000"/>` +
+      `<p:notesSz cx="6858000" cy="9144000"/>` + fontList +
       `<p:custDataLst><p:tags r:id="${masterTags}"/></p:custDataLst>` +
       `<p:defaultTextStyle>${defaultLevels(this.deck.master)}</p:defaultTextStyle>` +
       `</p:presentation>`, CT.presentation);

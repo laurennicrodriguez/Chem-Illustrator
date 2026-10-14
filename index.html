@@ -62,6 +62,7 @@
         <button role="menuitem" data-cmd="zoom-actual">Actual Size</button>
         <hr />
         <button role="menuitemcheckbox" aria-checked="false" data-cmd="show-stereo" title="Preview every R/S and E/Z label in red (on screen only; use Structure &gt; Show Stereo Labels to add them to the drawing)"><span>Show R/S Preview</span></button>
+        <button role="menuitemcheckbox" aria-checked="false" data-cmd="alignment-guides" title="While moving, edges and middles snap into line with other structures, text, shapes and the page (pink lines; hold Alt to move freely). Set separately for drawings, slides and designs"><span>Alignment Guides</span></button>
         <button role="menuitemcheckbox" aria-checked="false" data-cmd="dark-page" title="Show the page dark on screen only: files, printing, copying and exports are not changed"><span>Dark Page</span></button>
         <button role="menuitem" data-cmd="dark-colours" title="Choose the dark page's colours (Graphite, Slate, Warm dark) or make your own">Dark Page Colours…</button>
         <button role="menuitemcheckbox" aria-checked="true" data-cmd="group-tips" title="Rest the mouse on an abbreviation such as OTBS, Boc or CO2Me to see the group written out, with its name and formula"><span>Group Tooltips</span></button>
@@ -518,8 +519,7 @@
         <div class="rb-row">
           <div class="rb-col">
             <div class="rb-pair">
-              <input id="doc-font" class="rb-text rb-font" list="doc-font-list" spellcheck="false" aria-label="Font" title="Font (type any installed font)" />
-              <datalist id="doc-font-list"></datalist>
+              <input id="doc-font" class="rb-text rb-font" list="ci-fonts" spellcheck="false" aria-label="Font" title="Font (type any installed font)" />
               <input id="doc-size" class="rb-text rb-num" list="doc-size-list" spellcheck="false" aria-label="Font size" title="Font size in points" />
               <datalist id="doc-size-list"><option>8</option><option>9</option><option>10</option><option>10.5</option><option>11</option><option>12</option><option>14</option><option>16</option><option>18</option><option>20</option><option>24</option><option>28</option><option>36</option><option>48</option><option>72</option></datalist>
               <button class="rb-sq" data-doc="font-bigger" title="Bigger text">A<sup>+</sup></button>
@@ -936,6 +936,7 @@
         <ul>
           <li>File &gt; Drawing Style… sets how structures are drawn in the tab showing: bond length, line widths, double-bond spacing and label fonts. Built in are ACS 1996 (every ACS journal), RSC, Nature journals and a larger Slides style, with the source of each set of numbers shown. Every number can be changed</li>
           <li>Save as My Style keeps your changes under a name, in every mode. Tick Use this style for new … to make new drawings, slides, designs, documents or sheets start in it</li>
+          <li>View &gt; Alignment Guides: while you move something, its edges and middle snap into line with other structures, text, arrows, shapes and the page, shown by pink lines. Hold <kbd>Alt</kbd> to move freely. It is on for slides and designs and off for drawings to start with; each remembers its own setting</li>
           <li>View &gt; Dark Page (or the eye button at the top) shows the page dark: black ink as light grey, white paper as dark grey, colours dimmed. It changes the screen only; files, printing, copies and exports stay as they are. View &gt; Dark Page Colours… picks Graphite, Slate or Warm dark, or your own paper and ink colours</li>
           <li>When there are structures already, choose Redraw (they take the new bond length and widths) or Keep their look (only new structures use the new style). One Undo puts it all back</li>
         </ul>

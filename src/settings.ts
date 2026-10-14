@@ -76,6 +76,8 @@ export interface Settings {
   darkPalette: string;
   /** Your own dark palettes (View > Dark Page Colours). */
   darkPalettes: DarkPalette[];
+  /** Alignment guides on or off in each kind of tab (View > Alignment Guides). */
+  guides: { drawing: boolean; slides: boolean; design: boolean };
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -84,13 +86,14 @@ export const DEFAULT_SETTINGS: Settings = {
   modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true, groupTips: true,
   citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(),
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
+  guides: { drawing: false, slides: true, design: true },
 };
 
 const STORAGE_KEY = 'chem-illustrator.settings';
 
 /** Read settings saved as text, keeping only what makes sense. */
 export function parseSettings(text: string | null | undefined): Settings {
-  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), myStyles: [], modeStyles: {}, darkPalettes: [] };
+  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), myStyles: [], modeStyles: {}, darkPalettes: [], guides: { ...DEFAULT_SETTINGS.guides } };
   if (!text) return s;
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { return s; }
@@ -115,6 +118,10 @@ export function parseSettings(text: string | null | undefined): Settings {
   s.modeStyles = parseModeStyles(r.modeStyles);
   if (typeof r.darkPalette === 'string' && r.darkPalette.trim()) s.darkPalette = r.darkPalette.trim();
   s.darkPalettes = parseDarkPalettes(r.darkPalettes);
+  if (r.guides && typeof r.guides === 'object') {
+    const g = r.guides as Record<string, unknown>;
+    for (const k of ['drawing', 'slides', 'design'] as const) if (typeof g[k] === 'boolean') s.guides[k] = g[k] as boolean;
+  }
   if (r.methylStyle === 'Me' || r.methylStyle === 'CH3') s.methylStyle = r.methylStyle;
   if (r.axialStyle === 'RaSa' || r.axialStyle === 'PM') s.axialStyle = r.axialStyle;
   if (Array.isArray(r.dictionary)) s.dictionary = r.dictionary.filter((w): w is string => typeof w === 'string' && w.trim() !== '').map((w) => w.trim());

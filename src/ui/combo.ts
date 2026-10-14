@@ -23,10 +23,21 @@ export function makeCombo(input: HTMLInputElement): void {
   input.setAttribute('autocomplete', 'off');
   input.setAttribute('aria-haspopup', 'listbox');
   input.classList.add('combo');
-  const options = () => [...(document.getElementById(listId)?.querySelectorAll('option') ?? [])].map((o) => o.value || o.textContent || '').filter(Boolean);
+  const optionEls = () => [...(document.getElementById(listId)?.querySelectorAll('option') ?? [])].filter((o) => o.value || o.textContent);
+  const options = () => optionEls().map((o) => o.value || o.textContent || '');
+  // a grouped list (fonts): its group headings, the folded groups opened so far, and whether items show in their own font
+  const groupOf = new Map<string, { group: string; folded: boolean }>();
+  const opened = new Set<string>();
+  const fontList = () => input.classList.contains('font-box') || listId === 'ci-fonts';
   let filtering = false;
   let active = -1;
 
+  /** The choices to show: all (or those matching what is typed), with folded groups' items left out unless opened. */
+  const visible = (): string[] => {
+    groupOf.clear();
+    for (const o of optionEls()) if (o.dataset.group) groupOf.set(o.value || o.textContent || '', { group: o.dataset.group, folded: o.dataset.folded === 'true' });
+    return comboChoices(options(), input.value, filtering);
+  };
   const pick = (v: string) => {
     input.value = v;
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -36,13 +47,31 @@ export function makeCombo(input: HTMLInputElement): void {
   const render = () => {
     if (open?.input !== input) return;
     const box = open.box;
-    const items = comboChoices(options(), input.value, filtering);
+    const items = visible();
     box.replaceChildren();
-    items.forEach((v, i) => {
+    let lastGroup = '';
+    let i = -1;
+    items.forEach((v) => {
+      const g = groupOf.get(v);
+      if (g && g.group !== lastGroup) {
+        lastGroup = g.group;
+        const h = document.createElement('div');
+        h.className = 'combo-group';
+        const shut = g.folded && !opened.has(g.group) && !(filtering && input.value.trim());
+        h.textContent = (g.folded ? (shut ? '▸ ' : '▾ ') : '') + g.group;
+        if (g.folded) {
+          h.classList.add('foldable');
+          h.addEventListener('mousedown', (e) => { e.preventDefault(); if (opened.has(g.group)) opened.delete(g.group); else opened.add(g.group); render(); });
+        }
+        box.append(h);
+        if (shut) return;
+      } else if (g && g.folded && !opened.has(g.group) && !(filtering && input.value.trim())) return;
+      i++;
       const b = document.createElement('div');
       b.className = 'combo-item' + (v === input.value ? ' current' : '') + (i === active ? ' active' : '');
       b.setAttribute('role', 'option');
       b.textContent = v;
+      if (fontList()) b.style.fontFamily = `"${v}", var(--ui-font, sans-serif)`;
       // keep the box focused while picking
       b.addEventListener('mousedown', (e) => { e.preventDefault(); pick(v); });
       box.append(b);
@@ -81,7 +110,7 @@ export function makeCombo(input: HTMLInputElement): void {
   input.addEventListener('blur', () => close());
   input.addEventListener('input', () => { filtering = true; active = -1; if (open?.input !== input) show(); render(); });
   input.addEventListener('keydown', (e) => {
-    const items = comboChoices(options(), input.value, filtering);
+    const items = visible().filter((v) => { const g = groupOf.get(v); return !g?.folded || opened.has(g.group) || (filtering && !!input.value.trim()); });
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       if (open?.input !== input) show();
       const cur = active >= 0 ? active : items.indexOf(input.value);
