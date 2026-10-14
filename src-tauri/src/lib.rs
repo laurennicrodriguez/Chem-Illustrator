@@ -39,6 +39,12 @@ fn write_text_file(path: String, contents: String) -> Result<(), String> {
     write_bytes(&path, contents.as_bytes())
 }
 
+/// Whether a file is there already (File > Save Workspace, so it doesn't write over one).
+#[tauri::command]
+fn path_exists(path: String) -> bool {
+    std::path::Path::new(&path).exists()
+}
+
 /// Read a file the user chose, as bytes (PowerPoint files, CDX drawings, pictures).
 #[tauri::command]
 fn read_binary_file(path: String) -> Result<tauri::ipc::Response, String> {
@@ -166,6 +172,7 @@ pub fn run() {
             write_text_file,
             read_binary_file,
             write_binary_file,
+            path_exists,
             settings_path,
             settings_read,
             settings_write,

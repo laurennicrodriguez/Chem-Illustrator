@@ -20,8 +20,9 @@ import { zipHas } from './io/ooxml';
 import { adoptSaved } from './io/document-file';
 import {
   FileRef, FileType, CDXML, CDX, PPTX, XLSX, CSV, SDF, DOCX, TABLE_TEXT_EXTENSIONS, openBytesDialog, saveFileDialog, writeFile, canSaveInPlace, askSaveChanges,
-  showError, withExtension, extensionOf,
+  showError, withExtension, extensionOf, baseName, readPath, pathExists,
 } from './io/files';
+import { WORKSPACE, workspaceText, parseWorkspace, folderOf, joinPath, relativeTo, resolveIn, freeName, safeFileName, type WorkspaceEntry } from './io/workspace-file';
 
 /** Design is a deck of one page (a TOC graphic, poster or diagram) with design tools. */
 export type Mode = 'drawing' | 'slides' | 'sheet' | 'document' | 'design';
@@ -89,6 +90,8 @@ export class Workspace {
    * while the document or sheet shows (they don't use it), so both can be worked on side by side.
    */
   pane: Tab | null = null;
+  /** The workspace file last saved or opened, so File > Save Workspace saves there again. */
+  workspacePath: string | null = null;
   private nextId = 1;
 
   constructor(public host: Doc, private hooks: WorkspaceHooks) {
@@ -299,6 +302,12 @@ export class Workspace {
       return true;
     }
     const ext = extensionOf(name);
+    if (ext === WORKSPACE.extension) {
+      // a workspace lists files by where they are, so it needs its own place on disk
+      if (ref.kind === 'path') await this.openWorkspace(new TextDecoder().decode(bytes), ref.path);
+      else await showError(`${name} is a workspace: open it with File > Open Workspace in the desktop app.`);
+      return ref.kind === 'path';
+    }
     const zip = bytes[0] === 0x50 && bytes[1] === 0x4b;
     try {
       if (ext === 'xlsx' || (zip && zipHas(bytes, 'xl/workbook.xml')) || ext === 'sdf' || ext === 'sd' || TABLE_TEXT_EXTENSIONS.includes(ext)) return await this.openSheet(bytes, name, ref);
@@ -495,5 +504,102 @@ export class Workspace {
     this.hooks.changed();
     this.hooks.flash((ref.kind === 'none' ? `Downloaded ${name}` : `Saved ${name}`) + note, note ? 8000 : 3500);
     return true;
+  }
+
+  // ---------------------------------------------------------------- workspaces
+
+  /** Tabs with no file on disk yet (new, or downloaded in a browser): Save Workspace puts them in its folder. */
+  get unsavedTabs(): Tab[] {
+    return this.tabs.filter((t) => t.ref.kind !== 'path');
+  }
+
+  /**
+   * File > Save Workspace: save the tabs and a list of them to `path`. Tabs that were never saved
+   * go into the workspace file's folder; with `copyIn`, so do copies of files kept in other folders
+   * (their tabs then save to the copies). With `saveChanges`, unsaved changes to files already on
+   * disk are saved too. False if a file couldn't be written (the error has been shown).
+   */
+  async saveWorkspace(path: string, opts: { copyIn: boolean; saveChanges: boolean }): Promise<boolean> {
+    const folder = folderOf(path);
+    this.noteChange();
+    const taken = new Set<string>();
+    for (const t of this.tabs) {
+      const inFolder = t.ref.kind === 'path' && !/[\\/]/.test(relativeTo(folder, t.ref.path));
+      if (t.ref.kind === 'path' && inFolder) taken.add(baseName(t.ref.path));
+    }
+    for (const t of this.tabs) {
+      const onDisk = t.ref.kind === 'path';
+      const outside = onDisk && relativeTo(folder, (t.ref as { path: string }).path) === (t.ref as { path: string }).path;
+      if (!onDisk || (opts.copyIn && outside)) {
+        // into the workspace folder, under a name no other file there has
+        const ext = SAVE_TYPES[t.mode].some((x) => x.extension === extensionOf(t.name)) ? extensionOf(t.name) : SAVE_TYPES[t.mode][0].extension;
+        let name = freeName(safeFileName(withExtension(t.name, ext)), taken);
+        while (await pathExists(joinPath(folder, name))) { taken.add(name); name = freeName(name, taken); }
+        taken.add(name);
+        if (!(await this.writeTo(t, { kind: 'path', path: joinPath(folder, name) }, name))) return false;
+      } else if (t.dirty && opts.saveChanges) {
+        if (!(await this.save(t))) return false;
+      }
+    }
+    const index = new Map(this.tabs.map((t, i) => [t, i]));
+    const tabs: WorkspaceEntry[] = this.tabs.map((t) => {
+      const p = t.partner && index.has(t.partner) ? index.get(t.partner)! : undefined;
+      return { file: relativeTo(folder, (t.ref as { path: string }).path), ...(p !== undefined ? { beside: p } : {}) };
+    });
+    try {
+      await writeFile({ kind: 'path', path }, baseName(path), workspaceText({ tabs, active: this.tabs.indexOf(this.active) }), WORKSPACE);
+    } catch (e) {
+      await showError(`Could not save the workspace: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
+    this.workspacePath = path;
+    this.hooks.flash(`Saved workspace ${baseName(path)} with ${tabs.length} tab${tabs.length === 1 ? '' : 's'}.`);
+    return true;
+  }
+
+  /**
+   * File > Open Workspace: open every file a workspace lists, in order, beside the tabs already
+   * open (a file already open just goes to its tab). Files that can't be found are named, not stopped for.
+   */
+  async openWorkspace(text: string, path: string): Promise<void> {
+    let list;
+    try {
+      list = parseWorkspace(text);
+    } catch (e) {
+      await showError(`Could not open ${baseName(path)}: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    const folder = folderOf(path);
+    const opened: (Tab | null)[] = [];
+    const missing: string[] = [];
+    for (const e of list.tabs) {
+      const full = resolveIn(folder, e.file);
+      let bytes: Uint8Array;
+      try {
+        bytes = await readPath(full);
+      } catch {
+        missing.push(e.file);
+        opened.push(null);
+        continue;
+      }
+      opened.push((await this.openBytes(bytes, baseName(full), { kind: 'path', path: full })) ? this.active : null);
+    }
+    // split views, then the tab that was showing
+    list.tabs.forEach((e, i) => {
+      const t = opened[i], p = e.beside !== undefined ? opened[e.beside] : null;
+      if (t && p && p.mode === 'drawing' && t.mode !== 'drawing') t.partner = p;
+    });
+    const show = opened[list.active] ?? opened.find((t) => t);
+    if (show) {
+      if (show === this.active && show.partner && (show.mode === 'document' || show.mode === 'sheet')) {
+        // the partner was set after the tab came in: bring its drawing in now
+        const p = show.partner;
+        show.partner = null;
+        this.setPartner(p);
+      } else this.activate(show);
+    }
+    this.workspacePath = path;
+    const n = opened.filter((t) => t).length;
+    this.hooks.flash(`Opened workspace ${baseName(path)}: ${n} file${n === 1 ? '' : 's'}.` + (missing.length ? ` Not found: ${missing.join(', ')}.` : ''), missing.length ? 15000 : 4000);
   }
 }
