@@ -442,6 +442,8 @@ export interface Shape {
   px?: { w: number; h: number };
   /** Parts of a picture cut off, as fractions of its width and height from each side. */
   crop?: { l: number; t: number; r: number; b: number };
+  /** A picture's frame, corners and shadow (PowerPoint's Picture Styles). */
+  look?: PictureLook;
   color?: string;
   z?: number;
   /** Its name in the Layers panel (Design mode). */
@@ -458,6 +460,46 @@ export interface Shape {
    * shrinks and moves as they change). Moving or resizing the frame by hand stops it following.
    */
   frame?: Frame;
+}
+
+/**
+ * A picture's frame, corners and shadow. The line is drawn centred on the picture's edge, as
+ * PowerPoint draws a picture's border.
+ */
+export interface PictureLook {
+  /** A line round it, this many points wide, in `lineColor` (black when not set). */
+  line?: number;
+  lineColor?: string;
+  /** Rounded corners: the radius as a fraction of the shorter side (0 to 0.5), as PowerPoint keeps it. */
+  round?: number;
+  /** A shadow down and to the right: soft (blurred) or hard (sharp). */
+  shadow?: 'soft' | 'hard';
+}
+
+/** The two picture shadows: how far down and right, how blurred and how dark, in points (as in Document mode). */
+export const PICTURE_SHADOWS: Record<'soft' | 'hard', { off: number; blur: number; alpha: number }> = {
+  soft: { off: 3, blur: 6, alpha: 0.35 },
+  hard: { off: 3, blur: 0, alpha: 0.5 },
+};
+
+/** Ready-made picture looks (Picture Format > Styles); each can be changed afterwards in the panel. */
+export const PICTURE_STYLES: { id: string; name: string; look: PictureLook | undefined }[] = [
+  { id: 'none', name: 'No frame', look: undefined },
+  { id: 'thin', name: 'Thin line', look: { line: 1, lineColor: '#000000' } },
+  { id: 'grey', name: 'Grey line', look: { line: 1.5, lineColor: '#7f7f7f' } },
+  { id: 'thick', name: 'Thick line', look: { line: 4, lineColor: '#000000' } },
+  { id: 'white', name: 'White frame', look: { line: 10, lineColor: '#ffffff', shadow: 'soft' } },
+  { id: 'black', name: 'Black frame', look: { line: 10, lineColor: '#000000' } },
+  { id: 'soft', name: 'Soft shadow', look: { shadow: 'soft' } },
+  { id: 'hard', name: 'Hard shadow', look: { shadow: 'hard' } },
+  { id: 'rounded', name: 'Rounded corners', look: { round: 0.08 } },
+  { id: 'rounded-shadow', name: 'Rounded with shadow', look: { round: 0.08, shadow: 'soft' } },
+  { id: 'rounded-line', name: 'Rounded with line', look: { round: 0.08, line: 1.5, lineColor: '#404040' } },
+];
+
+/** The corner radius of a picture with this look, in points, for a picture w × h. */
+export function pictureRadius(look: PictureLook | undefined, w: number, h: number): number {
+  return Math.max(0, Math.min(0.5, look?.round ?? 0)) * Math.min(Math.abs(w), Math.abs(h));
 }
 
 /** One cell of a table. */

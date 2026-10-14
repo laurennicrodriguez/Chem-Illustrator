@@ -8,7 +8,7 @@ import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
 import { Toolboxes, lockIcon, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
-import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS, type Attachment, type HighlightStyle } from './model';
+import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle } from './model';
 import { Renderer, measureText, forgetTextWidths } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
 import type { Align } from './editor/arrange';
@@ -2313,6 +2313,14 @@ function command(name: string): boolean {
   return !!run && run() !== false;
 }
 
+/** Picture Style (right-click on a picture): a ready-made frame, corners and shadow for the pictures picked. */
+function setPictureStyle(look: PictureLook | undefined): boolean {
+  const pics = [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => x?.kind === 'picture');
+  if (!pics.length) { flash('Select a picture first.'); return false; }
+  doc.edit('Picture style', () => { for (const p of pics) doc.updateShape(p.id, { look: look && { ...look } }); });
+  return true;
+}
+
 /** Slide commands that don't apply to a design's single page. */
 const SLIDE_ONLY = new Set(['new-slide', 'duplicate-slide', 'delete-slide', 'size-wide', 'size-standard', 'slide-master']);
 
@@ -2477,6 +2485,7 @@ const COMMANDS: Record<string, () => unknown> = {
     flash(names.length ? 'On the clipboard: ' + names.join(', ') : 'The clipboard is empty.', 15000);
   },
 };
+for (const p of PICTURE_STYLES) COMMANDS[`picture-style-${p.id}`] = () => setPictureStyle(p.look);
 
 // The menus: click a name to open its menu; with one open, pointing at another name opens that.
 const menus = [...document.querySelectorAll<HTMLDivElement>('.menu-wrap')].map((w) => ({
@@ -3793,7 +3802,7 @@ function drawingMenu(): MenuItem[] {
     { label: 'Align', items: arrange },
     { label: 'Rotate or Flip', items: turn },
     ...(order.length ? [{ label: 'Order', items: order }] : []),
-    ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }] : []),
+    ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }, { label: 'Picture Style', items: PICTURE_STYLES.map((p) => ({ cmd: `picture-style-${p.id}`, label: p.name })) }] : []),
     null,
     { cmd: 'select-all' },
     view,

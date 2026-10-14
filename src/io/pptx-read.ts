@@ -9,7 +9,7 @@
 // lines, arrows and tables. What has no place here yet (charts, rotated things) is noted in
 // warnings, never refused.
 
-import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData } from '../model';
+import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureLook } from '../model';
 import { layoutTable, NOTE_SCALE } from '../table';
 import { linesFromBorders, type Borders } from './cdxml-table';
 import type { Vec, Rect } from '../geom';
@@ -480,7 +480,36 @@ class Reader {
     if (tags[TAG.cdxml] && this.drawing(tags[TAG.cdxml], tags[TAG.box], box, doc)) return;
     const img = this.image(s.path, el);
     if (!img) return;
-    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}) });
+    const look = this.pictureLook(kid(el, 'spPr'));
+    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...(look ? { look } : {}) });
+  }
+
+  /**
+   * A picture's border, rounded corners and shadow. A shadow is read as soft or hard by its blur;
+   * PowerPoint's other picture effects (glow, bevels, reflections) are left off.
+   */
+  private pictureLook(spPr: Element | null): PictureLook | undefined {
+    if (!spPr) return undefined;
+    const look: PictureLook = {};
+    const geom = kid(spPr, 'prstGeom');
+    if (geom?.getAttribute('prst') === 'roundRect') {
+      const gd = kids(kid(geom, 'avLst')).find((g) => g.getAttribute('name') === 'adj');
+      const v = /val\s+(-?\d+)/.exec(gd?.getAttribute('fmla') ?? '');
+      look.round = Math.max(0, Math.min(0.5, (v ? Number(v[1]) : 16667) / 100000));
+    } else if (geom && geom.getAttribute('prst') !== 'rect') this.warnings.add('Pictures cut to shapes other than rectangles came in as rectangles.');
+    const ln = kid(spPr, 'ln');
+    if (ln && !kid(ln, 'noFill')) {
+      const c = this.color(kid(ln, 'solidFill'));
+      if (c) {
+        look.line = +fromEmu(Number(ln.getAttribute('w') ?? 9525)).toFixed(2);
+        look.lineColor = c;
+      }
+    }
+    const fx = kid(spPr, 'effectLst');
+    const sh = kid(fx, 'outerShdw');
+    if (sh) look.shadow = fromEmu(Number(sh.getAttribute('blurRad') ?? 0)) >= 1 ? 'soft' : 'hard';
+    if (fx && kids(fx).some((k) => k.localName !== 'outerShdw')) this.warnings.add('Picture effects other than shadows (glow, soft edges, reflections) were left off.');
+    return Object.keys(look).length ? look : undefined;
   }
 
   /** A structure or scheme saved here: its drawing, moved and sized as the picture now is. */
