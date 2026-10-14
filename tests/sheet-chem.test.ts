@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { molProps, substructureMatches } from '../src/chem/props';
 import { SheetChem, ChemEngine } from '../src/sheet/sheet-chem';
 import { Workbook, makeStructure } from '../src/sheet/workbook';
+import { fillReagentTable } from '../src/sheet/reagents';
 import { CellError } from '../src/sheet/values';
 import type { MolProps } from '../src/sheet/properties';
 import type { Contents } from '../src/model';
@@ -159,5 +160,59 @@ describe('chemistry for a workbook', () => {
     expect(wb.sheet.value(0, 1)).toBeCloseTo(46.069, 3);
     expect(wb.sheet.value(0, 2)).toBeCloseTo(998.5, 1);
     expect(wb.sheet.value(1, 1)).toBe('C2H4O2');
+  });
+
+  it('finds the same compound in another row, however it was drawn or written', async () => {
+    const chem = new SheetChem(fakeEngine(), smilesOf);
+    const wb = new Workbook();
+    wb.chem = chem;
+    chem.onAnswers = () => wb.recalc();
+    wb.edit('Type', () => {
+      const s = wb.sheet;
+      s.setInput(0, 0, 'Structure');
+      s.setStructure(1, 0, drawn('OCC'));
+      s.setStructure(2, 0, drawn('c1ccccc1'));
+      s.setInput(3, 0, 'CCO');
+      s.setStructure(4, 0, drawn('Cc1ccccc1'));
+      s.setColDef(1, { formula: '=DUPLICATE(A2,$A:$A)', firstRow: 1 });
+    });
+    for (let i = 0; i < 4 && chem.busy; i++) await chem.settled();
+    // ethanol drawn as OCC and typed as CCO is the same compound; the heading reads as no structure
+    expect([1, 2, 3, 4].map((r) => wb.sheet.value(r, 1))).toEqual(['A4', '', 'A2', '']);
+  });
+
+  it('works out a reagent table: amounts from equivalents, mass from MW, volume from density or concentration', async () => {
+    const chem = new SheetChem(fakeEngine(), smilesOf);
+    const wb = new Workbook();
+    wb.chem = chem;
+    chem.onAnswers = () => wb.recalc();
+    wb.edit('Reagents', () => {
+      const s = wb.sheet;
+      fillReagentTable(s);
+      // bromobenzene, 2 mmol, a liquid (1.495 g/mL); n-butyllithium, 1.1 equiv, as a 2.5 M solution
+      s.setStructure(1, 1, drawn('Brc1ccccc1'));
+      s.setInput(1, 4, '2');
+      s.setInput(1, 6, '1.495');
+      s.setInput(2, 0, 'n-BuLi');
+      s.setInput(2, 1, '[Li]CCCC');
+      s.setInput(2, 3, '1.1');
+      s.setInput(2, 7, '2.5');
+      // a reagent whose MW is typed over (no structure)
+      s.setInput(3, 0, 'Celite');
+      s.setInput(3, 2, '60');
+      s.setInput(3, 3, '0.5');
+    });
+    for (let i = 0; i < 4 && chem.busy; i++) await chem.settled();
+    const v = (r: number, c: number) => wb.sheet.value(r, c) as number;
+    expect(v(1, 2)).toBeCloseTo(157.01, 2);
+    expect(v(1, 5)).toBeCloseTo(314.02, 1);
+    expect(v(1, 8)).toBeCloseTo(210.05, 1);
+    expect(v(2, 4)).toBeCloseTo(2.2, 6);
+    expect(v(2, 2)).toBeCloseTo(64.06, 2);
+    expect(v(2, 5)).toBeCloseTo(140.9, 1);
+    expect(v(2, 8)).toBeCloseTo(880, 6);
+    expect(v(3, 4)).toBeCloseTo(1, 6);
+    expect(v(3, 5)).toBeCloseTo(60, 6);
+    expect(wb.sheet.value(3, 8)).toBe('');
   });
 });

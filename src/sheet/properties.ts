@@ -1,6 +1,6 @@
 // The chemistry a sheet can work out from a structure: formula, masses, HRMS m/z, cLogP, TPSA,
-// hydrogen-bond donors and acceptors, rotatable bonds, SMILES and InChIKey. Each is a sheet
-// function (MW(B2)) and can fill a whole column by itself.
+// hydrogen-bond donors and acceptors, rotatable bonds, SMILES and InChIKey, and whether the same
+// compound is in another row. Each is a sheet function (MW(B2)) and can fill a whole column by itself.
 //
 // Definitions (as RDKit works them out):
 // - cLogP: Wildman and Crippen, J. Chem. Inf. Comput. Sci. 1999, 39, 868–873.
@@ -56,6 +56,7 @@ export const PROPERTIES: Record<string, PropertyDef> = {
   ROTB: { label: 'Rotatable bonds', help: 'Rotatable bonds (RDKit)', format: '0', extra: 0 },
   SMILES: { label: 'SMILES', help: 'Canonical SMILES (RDKit)', format: 'General', extra: 0 },
   INCHIKEY: { label: 'InChIKey', help: 'Standard InChIKey', format: 'General', extra: 0 },
+  DUPLICATE: { label: 'Duplicate of', help: 'Another row with the same compound (same InChIKey), or blank: DUPLICATE(B2,B:B)', format: 'General', extra: 1 },
 };
 
 /** One property of a molecule (extra arguments as given in the formula). */

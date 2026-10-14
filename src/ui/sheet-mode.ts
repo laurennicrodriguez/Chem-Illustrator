@@ -7,6 +7,7 @@
 import { SheetView, popupMenu, selectionName } from './sheet-view';
 import { Workbook, Sheet, Structure, CellStyle, CellBlock, Cell, Condition, CompareOp, makeStructure, growToMerges } from '../sheet/workbook';
 import { Range, MAX_ROWS, MAX_COLS, colName, cellName, parseRange, keyOf, rowOf, colOf, inRange } from '../sheet/refs';
+import { fillReagentTable } from '../sheet/reagents';
 import { shiftFormula } from '../sheet/formula';
 import { PROPERTIES, MolProps, propertyValue } from '../sheet/properties';
 import { FORMATS, changeDecimals, describeFormat } from '../sheet/numfmt';
@@ -348,6 +349,7 @@ export class SheetMode {
       case 'filter-structure': this.filterByStructure(v.sel.active.c); break;
       case 'freeze-header': this.freezeHeader(); break;
       case 'property-column': void this.propertyColumns(); break;
+      case 'reagent-table': this.reagentTable(); break;
       case 'structure-from-name': void this.structureFromName(); break;
       case 'draw-structure': this.drawStructure(v.sel.active.r, v.sel.active.c); break;
       case 'reset-calculated': this.resetCalculated(); break;
@@ -964,7 +966,8 @@ export class SheetMode {
       props.forEach((p, i) => {
         const def = PROPERTIES[p.name];
         const target = at + i;
-        const extra = p.name === 'HRMS' && p.adduct && p.adduct !== '[M+H]+' ? `,"${p.adduct}"` : '';
+        const extra = p.name === 'HRMS' && p.adduct && p.adduct !== '[M+H]+' ? `,"${p.adduct}"`
+          : p.name === 'DUPLICATE' ? `,$${colName(col)}:$${colName(col)}` : '';
         const style: CellStyle = {};
         if (def.format !== 'General') style.numFmt = def.format;
         if (def.chem) style.chem = true;
@@ -973,10 +976,32 @@ export class SheetMode {
           sh.setInput(header, target, p.name === 'HRMS' ? `${p.adduct ?? '[M+H]+'} m/z` : def.label);
           if (headStyle) sh.patchStyle({ r1: header, c1: target, r2: header, c2: target }, { bold: headStyle.bold, fill: headStyle.fill, align: headStyle.align, borders: headStyle.borders });
         }
-        sh.setColWidth(target, p.name === 'SMILES' ? 220 : p.name === 'INCHIKEY' ? 200 : p.name === 'FORMULA' ? 96 : 80);
+        sh.setColWidth(target, p.name === 'SMILES' ? 220 : p.name === 'INCHIKEY' ? 200 : p.name === 'FORMULA' || p.name === 'DUPLICATE' ? 96 : 80);
       });
     });
     this.host.flash(`Added ${props.map((p) => PROPERTIES[p.name].label).join(', ')}. Type over any value to replace it; Reset to Calculated puts it back.`, 6000);
+  }
+
+  /**
+   * A new sheet laid out as a reagent table: each reagent's structure gives its MW, and its
+   * equivalents give its amount from the limiting reagent's (row 2), as mass and, with a density
+   * or concentration, volume. Every worked-out value can be typed over.
+   */
+  private reagentTable(): void {
+    const wb = this.book;
+    const v = this.view;
+    if (!wb) return;
+    v.commitEdit();
+    const names = new Set(wb.sheets.map((x) => x.name.toLowerCase()));
+    let name = 'Reagents';
+    for (let i = 2; names.has(name.toLowerCase()); i++) name = `Reagents ${i}`;
+    const s = wb.edit('Reagent table', () => {
+      const sh = wb.addSheet(name, wb.active + 1);
+      fillReagentTable(sh);
+      return sh;
+    }, v.place());
+    v.goSheet(wb.sheets.indexOf(s));
+    this.host.flash('Reagent table: type the limiting reagent\'s mmol in E2, then each reagent\'s structure (draw it, or type SMILES) and equiv. MW, mmol, mass and volume work themselves out; type over any of them to replace it.', 10000);
   }
 
   /** Put back the calculated values where they were typed over. */

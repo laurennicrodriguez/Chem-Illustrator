@@ -4,7 +4,7 @@
 // properties of a structure cell, or of SMILES text.
 
 import type { Node, RefToken } from './formula';
-import type { Range } from './refs';
+import { cellName, type Range } from './refs';
 import { CellError, ERR, Value, compareValues, isError, toBool, toNumber, toText } from './values';
 import { MolProps, PROPERTIES, propertyValue } from './properties';
 
@@ -22,6 +22,12 @@ export interface EvalHost {
    * #VALUE! when the structure can't be read. Null for an empty cell.
    */
   molecule(src: { sheet: string | undefined; row: number; col: number } | { smiles: string }): MolProps | CellError | null;
+  /**
+   * Which molecule each cell of a block holds (its InChIKey, or SMILES when it has none), row by
+   * row, for finding the same structure twice: null for a cell with none, #BUSY! while being
+   * worked out. Whole columns are cut to the rows in use.
+   */
+  identities?(sheet: string | undefined, r: Range): (string | CellError | null)[][];
 }
 
 /** A block of cells given to a function (SUM(A1:A9)). */
@@ -323,6 +329,7 @@ function call(name: string, argNodes: Node[], host: EvalHost): Arg {
     const v = scalar(evalNode(argNodes[0], host));
     return isError(v) && v.code !== '#BUSY!' ? evalNode(argNodes[1], host) : v;
   }
+  if (name === 'DUPLICATE') return duplicate(argNodes, host);
   const prop = PROPERTIES[name];
   if (prop) return chemistry(name, argNodes, host);
   const def = FUNCTIONS[name];
@@ -356,4 +363,35 @@ function chemistry(name: string, argNodes: Node[], host: EvalHost): Value {
   if (isError(mol)) return mol;
   const extra: Value[] = argNodes.slice(1).map((a) => scalar(evalNode(a, host)));
   return propertyValue(name, mol, extra);
+}
+
+/**
+ * DUPLICATE(B2, B:B): the first other cell of the block holding the same molecule as B2 (the
+ * same InChIKey, so the same compound however it was drawn), or "" when there is none.
+ */
+function duplicate(argNodes: Node[], host: EvalHost): Value {
+  const usage = 'DUPLICATE needs a structure cell and the cells to look in: DUPLICATE(B2,B:B)';
+  if (argNodes.length !== 2) return ERR.value(usage);
+  const [a, b] = argNodes;
+  if (a.t !== 'ref' || a.v.kind !== 'cell' || a.v.broken || b.t !== 'ref' || b.v.broken) return ERR.value(usage);
+  for (const r of [a.v, b.v]) if (r.sheet !== undefined && !host.hasSheet(r.sheet)) return ERR.ref(`There is no sheet called "${r.sheet}"`);
+  const mol = host.molecule({ sheet: a.v.sheet, row: a.v.a.row, col: a.v.a.col });
+  if (mol === null) return '';
+  if (isError(mol)) return mol;
+  if (!host.identities) return '';
+  const me = mol.inchikey || mol.smiles;
+  const range = refRange(b.v);
+  const ids = host.identities(b.v.sheet, range);
+  const sameSheet = (a.v.sheet ?? '').toLowerCase() === (b.v.sheet ?? '').toLowerCase();
+  let busy = false;
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = 0; j < ids[i].length; j++) {
+      const row = range.r1 + i, col = range.c1 + j;
+      if (sameSheet && row === a.v.a.row && col === a.v.a.col) continue;
+      const id = ids[i][j];
+      if (id === me) return (b.v.sheet !== undefined && !sameSheet ? `${b.v.sheet}!` : '') + cellName(row, col);
+      if (isError(id) && id.code === '#BUSY!') busy = true;
+    }
+  }
+  return busy ? ERR.busy() : '';
 }

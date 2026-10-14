@@ -980,6 +980,7 @@ export class Workbook {
 
   /** Work out every cell of every sheet. */
   recalc(): void {
+    this.identityCache.clear();
     const sheetIndex = new Map(this.sheets.map((s, i) => [s, i] as const));
     // 1. what each cell holds; formulas (own and property columns) found
     const nodes: { s: Sheet; key: number; text: string }[] = [];
@@ -1084,6 +1085,8 @@ export class Workbook {
   }
 
   private hosts = new WeakMap<Sheet, EvalHost>();
+  /** Which molecule each cell of a block holds, kept while the sheets are worked out (DUPLICATE asks once per row). */
+  private identityCache = new Map<string, (string | CellError | null)[][]>();
 
   private hostFor(home: Sheet): EvalHost {
     let h = this.hosts.get(home);
@@ -1116,6 +1119,26 @@ export class Workbook {
         if (isError(v)) return v;
         if (typeof v !== 'string') return ERR.value('A number where a structure or SMILES was wanted');
         return this.chem.smiles(v.trim());
+      },
+      identities: (sheet, r) => {
+        const s = sheetOf(sheet);
+        if (!s) return [[ERR.ref()]];
+        const r2 = Math.min(r.r2, s.lastRow), c2 = Math.min(r.c2, s.lastCol);
+        const key = `${s.name}|${r.r1}|${r.c1}|${r2}|${c2}`;
+        const got = this.identityCache.get(key);
+        if (got) return got;
+        const out: (string | CellError | null)[][] = [];
+        for (let row = r.r1; row <= r2; row++) {
+          const line: (string | CellError | null)[] = [];
+          for (let col = r.c1; col <= c2; col++) {
+            // a structure, or text that reads as SMILES (a heading doesn't, and counts as none)
+            const m = h!.molecule({ sheet: s.name, row, col });
+            line.push(m === null ? null : isError(m) ? (m.code === '#BUSY!' ? m : null) : m.inchikey || m.smiles);
+          }
+          out.push(line);
+        }
+        this.identityCache.set(key, out);
+        return out;
       },
     };
     this.hosts.set(home, h);
