@@ -37,7 +37,7 @@ const escape = (e: KeyboardEvent) => {
 };
 
 /** The name and tick of a command as the top menus show it. */
-function topMenuEntry(cmd: string): { label: string; checked: boolean | null } | null {
+export function topMenuEntry(cmd: string): { label: string; checked: boolean | null } | null {
   const b = document.querySelector<HTMLButtonElement>(`.menu-wrap [data-cmd="${cmd}"]`);
   if (!b) return null;
   const span = b.querySelector('span');

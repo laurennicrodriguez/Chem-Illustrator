@@ -63,6 +63,15 @@
         <button role="menuitemcheckbox" aria-checked="true" data-cmd="scroll-bars" title="Scroll bars along the bottom and right of the drawing, showing where you are"><span>Scroll Bars</span></button>
         <button role="menuitemcheckbox" aria-checked="false" data-cmd="split-view" title="A drawing beside the document, sheet or slides, so you can draw and write without switching tabs"><span>Split View: Drawing Beside</span></button>
         <hr />
+        <button role="menuitemcheckbox" aria-checked="true" data-cmd="toolbox-main" title="The drawing tools (bonds, rings, templates, arrows…)"><span>Toolbox: Drawing Tools</span></button>
+        <button role="menuitemcheckbox" aria-checked="false" data-cmd="toolbox-structure" title="Clean Up, Add Frame, Fill Rings, Highlight, terminal methyls and other structure commands"><span>Toolbox: Structure</span></button>
+        <button role="menuitemcheckbox" aria-checked="false" data-cmd="toolbox-arrange" title="Align, space, flip, turn and order"><span>Toolbox: Arrange</span></button>
+        <button role="menuitemcheckbox" aria-checked="false" data-cmd="toolbox-templates" title="Ring systems and heterocycles laid out to click, without opening a palette"><span>Toolbox: Templates</span></button>
+        <button role="menuitemcheckbox" aria-checked="false" data-cmd="toolbox-colours" title="One click colours or highlights what is selected, from the standard colours and your palettes"><span>Toolbox: Colours</span></button>
+        <button role="menuitemcheckbox" aria-checked="false" data-cmd="toolbox-custom" title="Your own toolbox: any tools and commands you choose"><span>Toolbox: My Toolbox</span></button>
+        <button role="menuitem" data-cmd="customize-toolbox" title="Choose the tools and commands in My Toolbox">Choose What Is in My Toolbox…</button>
+        <button role="menuitemcheckbox" aria-checked="true" data-cmd="lock-toolboxes" title="Unlock to drag toolboxes by their titles: to an edge of the drawing to dock them, anywhere else to float"><span>Lock Toolboxes</span></button>
+        <hr />
         <button role="menuitem" data-cmd="mode-colours" title="Blue for drawings, orange for slides: choose how much of the window is coloured, and the colours">Mode Colours…</button>
         <button role="menuitemcheckbox" aria-checked="false" data-cmd="dev-tools" title="Speed readout and a stress test, for checking how fast the app runs"><span>Developer Tools</span></button>
       </div>
@@ -640,7 +649,11 @@
     </div>
   </div>
 
-  <nav id="tools" aria-label="Drawing tools"></nav>
+  <!-- toolboxes dock along the drawing's edges (View > Toolboxes); the drawing tools start on the left -->
+  <div id="dock-top" class="dock dock-h"></div>
+  <div id="dock-left" class="dock dock-v"><nav id="tools" aria-label="Drawing tools"></nav></div>
+  <div id="dock-right" class="dock dock-v"></div>
+  <div id="dock-bottom" class="dock dock-h"></div>
 
   <main id="work">
     <div id="slide-list" class="slides-only" hidden></div>

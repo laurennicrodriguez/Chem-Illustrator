@@ -1435,6 +1435,37 @@ export class Editor {
     return `${ids.length} ring${ids.length > 1 ? 's' : ''} filled: choose the colour, gradient or pattern in the Style panel.`;
   }
 
+  /**
+   * Colour what is selected in one go (the Colours toolbox): the lines and text, the highlight
+   * behind atoms and bonds, or the fill of shapes and ring fills. Undefined takes it off.
+   */
+  colourSelection(colour: string | undefined, what: 'line' | 'highlight' | 'fill'): boolean {
+    const doc = this.doc, s = this.sel;
+    if (!this.hasSelection()) return false;
+    const black = colour?.toLowerCase() === '#000000' ? undefined : colour;
+    doc.edit(what === 'highlight' ? 'Highlight' : what === 'fill' ? 'Fill colour' : 'Colour', () => {
+      if (what === 'highlight') {
+        for (const id of s.atoms) doc.updateAtom(id, { highlight: colour });
+        for (const id of s.bonds) doc.updateBond(id, { highlight: colour });
+        return;
+      }
+      if (what === 'fill') {
+        for (const id of s.shapes) {
+          const sh = doc.shapes.get(id);
+          if (sh && (sh.kind === 'rect' || sh.kind === 'oval' || sh.kind === 'geo' || sh.kind === 'ring')) doc.updateShape(id, colour ? { filled: true, fillColor: colour } : { filled: false });
+        }
+        return;
+      }
+      for (const id of s.atoms) doc.updateAtom(id, { color: black });
+      for (const id of s.bonds) doc.updateBond(id, { color: black });
+      for (const id of s.arrows) doc.updateArrow(id, { color: black });
+      for (const id of s.captions) { const c = doc.captions.get(id); if (c) doc.updateCaption(id, { runs: c.runs.map((r) => ({ ...r, color: black })) }); }
+      for (const id of s.shapes) { const sh = doc.shapes.get(id); if (sh && sh.kind !== 'ring' && sh.kind !== 'picture') doc.updateShape(id, { color: black }); }
+    });
+    this.changed();
+    return true;
+  }
+
   /** Highlight the selected atoms and bonds in a colour (Structure > Highlight), or take it off (undefined). */
   highlight(colour: string | undefined): boolean {
     const doc = this.doc;
