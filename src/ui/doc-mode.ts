@@ -18,7 +18,8 @@ import { findIssues, type CharLook, type Issue } from '../text/chemtext';
 import { loadSpeller, type Speller } from '../text/spelling';
 import { paraAt, paraRange, splitParagraphs } from '../text/paragraphs';
 import { DocView, ACTUAL, type Overlay } from './doc-view';
-import { DocPanel, type DocBoxKey } from './doc-panel';
+import { DocPanel, parseLength, showLength, type DocBoxKey } from './doc-panel';
+import { WORD_HIGHLIGHTS } from '../io/docx';
 import { DocFind } from './doc-find';
 import { ask } from './ask';
 import { ReferencesDialog, chooseReferences } from './references-dialog';
@@ -27,7 +28,7 @@ import { dataUrl, imageSize } from '../render/images';
 import type { DocFile } from '../document/doc-file';
 import {
   A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, captionRuns, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets,
-  type DocObject, type DocText, type NumberPlace, type PageSetup,
+  type DocObject, type DocText, type FigureLook, type NumberPlace, type PageSetup,
 } from '../document/document';
 
 export interface DocModeHost {
@@ -124,6 +125,8 @@ export class DocumentMode {
       editFigure: (id) => this.editFigure(id),
       picked: () => this.pickedObject(),
       setScale: (id, k) => this.setScale(id, k),
+      setLook: (id, patch) => this.setLook(id, patch),
+      lookOf: (id) => this.lookOf(id),
     });
     this.refs = new ReferencesDialog({
       file: () => this.file,
@@ -363,9 +366,13 @@ export class DocumentMode {
     cmd('Copy', 'copy');
     cmd('Paste', 'paste');
     menu.appendChild(document.createElement('hr'));
-    if (this.pickedObject() !== null) {
-      cmd('Edit Drawing', 'edit-figure');
+    const picked = this.pickedObject();
+    if (picked !== null) {
+      if (this.file?.t.objects[picked]?.kind === 'drawing') cmd('Edit Drawing', 'edit-figure');
       cmd('Insert Caption…', 'insert-caption');
+      const look = this.lookOf(picked);
+      item(look?.frame ? 'Remove Frame' : 'Add Frame', () => this.setLook(picked, { frame: look?.frame ? undefined : 0.75, frameColor: undefined }), 'A thin black line round it (Format in the panel sets its width and colour)');
+      item(look?.shadow ? 'Remove Shadow' : 'Add Shadow', () => this.setLook(picked, { shadow: look?.shadow ? undefined : 'soft' }), 'A soft shadow down and to the right');
       menu.appendChild(document.createElement('hr'));
     }
     cmd('Paragraph…', 'box-para', 'Indents, spacing and line spacing');
@@ -380,6 +387,64 @@ export class DocumentMode {
     this.menu = menu;
     document.addEventListener('pointerdown', this.closeMenuOutside, true);
     return true;
+  }
+
+  /** The highlighter's colour (the bar under "ab"); yellow to start with, as in Word. */
+  private highlighter = '#ffff00';
+
+  /** Word's highlighter colours, then no colour and any other colour. */
+  private highlightMenu(): void {
+    this.closeMenu();
+    const anchor = this.ribbon.querySelector<HTMLElement>('[data-doc="doc-highlight-menu"]')!;
+    const menu = document.createElement('div');
+    menu.className = 'hl-menu';
+    menu.setAttribute('role', 'menu');
+    const grid = document.createElement('div');
+    grid.className = 'hl-grid';
+    const cur = this.file?.ed.currentStyle().highlight;
+    const use = (c: string | undefined) => {
+      this.closeMenu();
+      if (c) this.highlighter = c;
+      this.paintHighlighter();
+      this.file?.ed.setStyle({ highlight: c });
+      this.focus();
+    };
+    for (const [name, c] of Object.entries(WORD_HIGHLIGHTS)) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.style.background = c;
+      b.title = name.replace(/([A-Z])/g, ' $1').toLowerCase().replace(/^./, (x) => x.toUpperCase());
+      b.setAttribute('aria-pressed', String(cur === c));
+      b.addEventListener('mousedown', (e) => e.preventDefault());
+      b.addEventListener('click', () => use(c));
+      grid.append(b);
+    }
+    const row = document.createElement('div');
+    row.className = 'hl-row';
+    const none = document.createElement('button');
+    none.type = 'button';
+    none.textContent = 'No Colour';
+    none.title = 'Take the highlight off the selected text';
+    none.addEventListener('mousedown', (e) => e.preventDefault());
+    none.addEventListener('click', () => use(undefined));
+    const other = document.createElement('input');
+    other.type = 'color';
+    other.value = this.highlighter;
+    other.title = 'Any other colour (saved to Word as shading, which it shows the same way)';
+    other.addEventListener('change', () => use(other.value));
+    row.append(none, other);
+    menu.append(grid, row);
+    document.body.append(menu);
+    const r = anchor.getBoundingClientRect();
+    menu.style.left = `${Math.max(4, Math.min(r.left - 60, window.innerWidth - menu.offsetWidth - 4))}px`;
+    menu.style.top = `${r.bottom + 4}px`;
+    this.menu = menu;
+    document.addEventListener('pointerdown', this.closeMenuOutside, true);
+  }
+
+  private paintHighlighter(): void {
+    const bar = this.ribbon.querySelector<HTMLElement>('#doc-hl-bar');
+    if (bar) bar.style.background = this.highlighter;
   }
 
   private closeMenu(): void {
@@ -794,6 +859,23 @@ export class DocumentMode {
     f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, record ? 'Resize' : null);
   }
 
+  /** Change a figure's or picture's frame and shadow (undefined values take them off). */
+  setLook(id: number, patch: Partial<FigureLook>): void {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (!o || (o.kind !== 'drawing' && o.kind !== 'picture')) return;
+    const look: FigureLook = { ...o.look, ...patch };
+    for (const k of Object.keys(look) as (keyof FigureLook)[]) if (look[k] === undefined) delete look[k];
+    const next: DocObject = { ...o, look: Object.keys(look).length ? look : undefined };
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, 'Picture format');
+  }
+
+  /** The frame and shadow of the figure picked. */
+  lookOf(id: number): FigureLook | undefined {
+    const o = this.file?.t.objects[id];
+    return o && (o.kind === 'drawing' || o.kind === 'picture') ? o.look : undefined;
+  }
+
   // ---------------------------------------------------------------- commands
 
   /** Run a command from the ribbon, the menus or a key. False when it doesn't apply here. */
@@ -834,6 +916,12 @@ export class DocumentMode {
       case 'doc-sub': ed.toggle('sub'); break;
       case 'doc-sup': ed.toggle('sup'); break;
       case 'doc-formula': ed.toggle('formula'); break;
+      case 'doc-highlight': {
+        const on = ed.currentStyle().highlight;
+        ed.setStyle({ highlight: on && on === this.highlighter ? undefined : this.highlighter });
+        break;
+      }
+      case 'doc-highlight-menu': this.highlightMenu(); return true;
       case 'doc-bullets': ed.list('bullet'); break;
       case 'doc-numbering': ed.list('number'); break;
       case 'doc-indent': ed.indent(1); break;
@@ -1190,10 +1278,20 @@ export class DocumentMode {
     go(font, () => { if (font.value.trim() && this.file) this.ed.setStyle({ font: font.value.trim() }); });
     go(size, () => { const v = Number(size.value); if (v > 0 && v <= 1638 && this.file) this.ed.setStyle({ size: v }); });
     colour.addEventListener('change', () => { if (this.file) this.ed.setStyle({ color: colour.value.toLowerCase() === '#000000' ? undefined : colour.value }); this.focus(); });
+    // Layout > Paragraph: indents (inches) and spacing (points); any unit can be typed
+    const para = (id: string, unit: 'in' | 'pt', patch: (n: number) => Partial<ParaStyle>) => {
+      const el = r.querySelector<HTMLInputElement>(id)!;
+      go(el, () => { const n = parseLength(el.value, unit); if (n !== null && this.file) this.ed.setSelectedParas(patch(Math.max(0, n)), unit === 'in' ? 'indent' : 'spacing'); });
+    };
+    para('#doc-ind-left', 'in', (n) => ({ indent: n || undefined }));
+    para('#doc-ind-right', 'in', (n) => ({ indentRight: n || undefined }));
+    para('#doc-sp-before', 'pt', (n) => ({ spaceBefore: n }));
+    para('#doc-sp-after', 'pt', (n) => ({ spaceAfter: n }));
     const lineSel = r.querySelector<HTMLSelectElement>('#doc-line')!;
     lineSel.addEventListener('change', () => {
+      if (lineSel.value === 'more') { this.panel.open('para', lineSel, 'p-rule'); this.updateRibbon(); return; }
       const v = Number(lineSel.value);
-      if (this.file && v > 0) this.ed.setSelectedParas({ line: Math.abs(v - 1) < 1e-6 ? undefined : v }, 'spacing');
+      if (this.file && v > 0) this.ed.setSelectedParas({ line: Math.abs(v - 1) < 1e-6 ? undefined : v, linePt: undefined, lineRule: undefined }, 'spacing');
       this.focus();
     });
   }
@@ -1220,6 +1318,7 @@ export class DocumentMode {
     press('doc-sub', !!s.sub);
     press('doc-sup', !!s.sup);
     press('doc-formula', !!s.formula);
+    press('doc-highlight', !!s.highlight);
     const align = para.align ?? 'left';
     press('doc-align-left', align === 'left');
     press('doc-align-center', align === 'center');
@@ -1238,8 +1337,13 @@ export class DocumentMode {
     if (active !== size) size.value = s.size !== undefined ? String(Math.round(s.size * 100) / 100) : '';
     if (active !== colour) colour.value = s.color ?? '#000000';
     if (active !== lineSel) {
-      const v = String(para.line ?? 1);
+      const v = para.linePt ? '' : String(para.line ?? 1);
       lineSel.value = [...lineSel.options].some((o) => o.value === v) ? v : '';
+    }
+    // Layout > Paragraph: indents and spacing
+    for (const [id, v] of [['#doc-ind-left', para.indent ?? 0, 'in'], ['#doc-ind-right', para.indentRight ?? 0, 'in'], ['#doc-sp-before', para.spaceBefore ?? 0, 'pt'], ['#doc-sp-after', para.spaceAfter ?? 0, 'pt']] as const) {
+      const el = this.ribbon.querySelector<HTMLInputElement>(id);
+      if (el && el !== active) el.value = showLength(v, id.includes('ind') ? 'in' : 'pt');
     }
     const pick = (id: string, v: string) => {
       const el = this.ribbon.querySelector<HTMLSelectElement>(id);

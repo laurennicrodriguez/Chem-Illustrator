@@ -13,7 +13,7 @@ import type { DocStyle } from '../style';
 import { FONT_STACK, layoutText, type Glyphs, type InlineBox, type LaidLine, type Measure, type TextFrame, type TextLayout } from '../text/layout';
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
 import * as rt from '../richtext';
-import { OBJECT_CHAR, fieldTexts, styleOf, type DocText, type HeaderFooter, type NamedStyle } from './document';
+import { OBJECT_CHAR, fieldTexts, lookExtent, styleOf, type DocText, type HeaderFooter, type NamedStyle } from './document';
 import { bibliography, type BibEntry } from './references';
 
 /** Space between pages on screen, in points. */
@@ -191,11 +191,15 @@ export class DocLayouter {
     const hasBib = Object.values(t.objects).some((o) => o.kind === 'bib');
     const entries = hasBib ? bibliography(t) : [];
     const isBib = (r: { obj?: number }) => r.obj !== undefined && t.objects[r.obj]?.kind === 'bib';
+    const extentOf = (id: number) => { const o = t.objects[id]; return lookExtent(o?.kind === 'drawing' || o?.kind === 'picture' ? o.look : undefined); };
     const inline = (id: number): InlineBox | null => {
       const f = fields.get(id);
       if (f !== undefined) return { text: f };
       const s = sizes.get(id);
-      return s ? { w: s.w, ascent: s.h, descent: 0 } : null;
+      if (!s) return null;
+      // a frame or shadow takes room round the figure
+      const [l, tp, r, b] = extentOf(id);
+      return { w: s.w + l + r, ascent: s.h + tp, descent: b };
     };
 
     // each paragraph's lines (from the cache when nothing about it changed)
@@ -210,7 +214,7 @@ export class DocLayouter {
       const objs = runs.filter((r) => r.obj !== undefined).map((r) => {
         const f = fields.get(r.obj!);
         const s = sizes.get(r.obj!);
-        return f !== undefined ? `${r.obj}=${f}` : s ? `${r.obj}:${s.w.toFixed(3)}x${s.h.toFixed(3)}` : `${r.obj}?`;
+        return f !== undefined ? `${r.obj}=${f}` : s ? `${r.obj}:${s.w.toFixed(3)}x${s.h.toFixed(3)}/${extentOf(r.obj!).join(',')}` : `${r.obj}?`;
       });
       const bib = hasBib && runs.some(isBib);
       const key = JSON.stringify([resolved, ps, markers[p], textW, objs, st.size, bib ? [t.citeStyle, t.citeOptions, entries.map((e) => [e.label, e.pieces]), st.font] : 0]);
@@ -287,7 +291,7 @@ export class DocLayouter {
         lines.push(placed);
         for (const g of placed.pieces) {
           const s = g.obj !== undefined ? sizes.get(g.obj) : undefined;
-          if (s && !fields.has(g.obj!)) objects.push({ id: g.obj!, page: pageIdx, x: g.x, y: placed.y - s.h, w: s.w, h: s.h, line: lines.length - 1 });
+          if (s && !fields.has(g.obj!)) objects.push({ id: g.obj!, page: pageIdx, x: g.x + extentOf(g.obj!)[0], y: placed.y - s.h, w: s.w, h: s.h, line: lines.length - 1 });
         }
         cursor += hs[i];
         hasContent = true;

@@ -15,14 +15,14 @@ import { Package, REL, NS, xml, hex6, emu } from './ooxml';
 import { facesToEmbed, newGuid, obfuscate, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
-import { COMPOUND, OBJECT_CHAR, fieldTexts, pruneObjects, styleOf, runStyleOf, type DocObject, type DocText, type NamedStyle } from '../document/document';
+import { COMPOUND, OBJECT_CHAR, SHADOWS, fieldTexts, lookExtent, pruneObjects, styleOf, runStyleOf, type DocObject, type DocText, type FigureLook, type NamedStyle } from '../document/document';
 import { bibHang, shownSize } from '../document/doc-layout';
 import { bibliography, piecesText } from '../document/references';
 import { documentMeasure } from '../text/font-measure';
 import { arialWidth } from '../text-metrics';
 import { PAD_X, PAD_Y, cellAlign, isCovered, spanOf } from '../table';
 import {
-  BIB_MARK, CITE_FIELD, DOCX_CT, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, PIC_NS, TABLE_NAME, W_NS, WP_NS, twips, type DocxModel,
+  BIB_MARK, CITE_FIELD, DOCX_CT, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, PIC_NS, TABLE_NAME, W_NS, WORD_HIGHLIGHTS, WP_NS, twips, type DocxModel,
 } from './docx';
 
 export interface DocxDeps {
@@ -192,16 +192,18 @@ class DocxWriter {
     const before = ps.spaceBefore ?? 0, after = ps.spaceAfter ?? 0, line = ps.line ?? 1;
     if (before !== st.spaceBefore) sp.push(`w:before="${twips(before)}"`);
     if (after !== st.spaceAfter) sp.push(`w:after="${twips(after)}"`);
-    if (line !== st.line) sp.push(`w:line="${Math.round(240 * line)}" w:lineRule="auto"`);
+    if (ps.linePt && ps.linePt > 0) sp.push(`w:line="${twips(ps.linePt)}" w:lineRule="${ps.lineRule === 'exact' ? 'exact' : 'atLeast'}"`);
+    else if (line !== st.line) sp.push(`w:line="${Math.round(240 * line)}" w:lineRule="auto"`);
     if (sp.length) pPr.push(`<w:spacing ${sp.join(' ')}/>`);
     // indents: list items hang their bullet or number, as laid out here
     const indent = ps.indent ?? 0;
+    const right = ps.indentRight ? ` w:right="${twips(ps.indentRight)}"` : '';
     if (ps.list) {
       const { left, hang } = listIndent(ps, em);
-      pPr.push(`<w:ind w:left="${twips(left)}" ${ps.cont ? 'w:firstLine="0"' : `w:hanging="${twips(hang)}"`}/>`);
+      pPr.push(`<w:ind w:left="${twips(left)}"${right} ${ps.cont ? 'w:firstLine="0"' : `w:hanging="${twips(hang)}"`}/>`);
     } else {
       const first = ps.firstLine ?? 0;
-      if (indent !== st.indent || first !== st.firstLine) pPr.push(`<w:ind w:left="${twips(indent)}" ${first < 0 ? `w:hanging="${twips(-first)}"` : `w:firstLine="${twips(first)}"`}/>`);
+      if (indent !== st.indent || first !== st.firstLine || right) pPr.push(`<w:ind w:left="${twips(indent)}"${right} ${first < 0 ? `w:hanging="${twips(-first)}"` : `w:firstLine="${twips(first)}"`}/>`);
     }
     const align = ps.align ?? 'left';
     if (align !== st.align) pPr.push(`<w:jc w:val="${JC[align]}"/>`);
@@ -318,11 +320,13 @@ class DocxWriter {
     const n = this.docPr++;
     const ext = svgId ? `<a:extLst><a:ext uri="${SVG_EXT}"><asvg:svgBlip xmlns:asvg="${NS_SVG}" r:embed="${svgId}"/></a:ext></a:extLst>` : '';
     const descr = o.kind === 'drawing' ? ' descr="Chemical structure or scheme"' : '';
-    return `<w:r>${rPr ? `<w:rPr>${rPr}</w:rPr>` : ''}<w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/>` +
+    const look = o.kind === 'drawing' || o.kind === 'picture' ? o.look : undefined;
+    const [el, et, er, eb] = lookExtent(look).map(emu);
+    return `<w:r>${rPr ? `<w:rPr>${rPr}</w:rPr>` : ''}<w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="${el}" t="${et}" r="${er}" b="${eb}"/>` +
       `<wp:docPr id="${n}" name="${xml(name)}"${descr}/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>` +
       `<a:graphic><a:graphicData uri="${PIC_NS}"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="${xml(name)}"/><pic:cNvPicPr/></pic:nvPicPr>` +
       `<pic:blipFill><a:blip r:embed="${blip}">${ext}</a:blip><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
-      `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
+      `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${lookXml(look)}</pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
   }
 
   private mediaCount = 0;
@@ -515,6 +519,28 @@ function fontsXml(font: string): string {
   return `<w:rFonts w:ascii="${f}" w:eastAsia="${f}" w:hAnsi="${f}" w:cs="${f}"/>`;
 }
 
+/** A figure's frame and shadow as a picture's shape properties (fill, line, effects, in that order). */
+export function lookXml(look: FigureLook | undefined): string {
+  if (!look) return '';
+  let out = '';
+  // a shadow is a box's, so the figure sits on white
+  if (look.shadow) out += '<a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>';
+  if (look.frame) out += `<a:ln w="${emu(look.frame)}"><a:solidFill><a:srgbClr val="${hex6(look.frameColor ?? '#000000')}"/></a:solidFill></a:ln>`;
+  if (look.shadow) {
+    const sh = SHADOWS[look.shadow];
+    // down and to the right: 45° is 2,700,000 in sixty-thousandths of a degree
+    out += `<a:effectLst><a:outerShdw blurRad="${emu(sh.blur)}" dist="${emu(sh.off * Math.SQRT2)}" dir="2700000" algn="tl" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="${Math.round(sh.alpha * 100000)}"/></a:srgbClr></a:outerShdw></a:effectLst>`;
+  }
+  return out;
+}
+
+/** Word's name for a highlighter colour, when it is one of Word's (others are written as shading). */
+export function highlightName(color: string): string | null {
+  const c = '#' + hex6(color).toLowerCase();
+  for (const [name, v] of Object.entries(WORD_HIGHLIGHTS)) if (v === c) return name;
+  return null;
+}
+
 /** A run's formatting where it differs from its paragraph's style. */
 function runProps(r: TextRun, st: NamedStyle, x: { formula?: boolean; pos?: 'base' | 'sub' | 'sup' }): string {
   const out: string[] = [];
@@ -527,7 +553,11 @@ function runProps(r: TextRun, st: NamedStyle, x: { formula?: boolean; pos?: 'bas
   if ((color ?? '') !== (st.color ?? '')) out.push(`<w:color w:val="${color ? hex6(color) : 'auto'}"/>`);
   const size = r.size ?? st.size;
   if (size !== st.size) out.push(`<w:sz w:val="${half(size)}"/><w:szCs w:val="${half(size)}"/>`);
+  const hl = r.highlight ? highlightName(r.highlight) : null;
+  if (hl) out.push(`<w:highlight w:val="${hl}"/>`);
   if (r.underline) out.push('<w:u w:val="single"/>');
+  // any other colour behind the text goes as shading
+  if (r.highlight && !hl) out.push(`<w:shd w:val="clear" w:color="auto" w:fill="${hex6(r.highlight)}"/>`);
   const pos = x.pos ?? (r.sub ? 'sub' : r.sup ? 'sup' : 'base');
   if (pos !== 'base') out.push(`<w:vertAlign w:val="${pos === 'sub' ? 'subscript' : 'superscript'}"/>`);
   return out.join('');

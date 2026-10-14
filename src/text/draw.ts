@@ -10,6 +10,13 @@ export const fontOf = (g: Glyphs): string => `${g.style}${g.size}px ${g.family}`
 export function drawLayout(ctx: CanvasRenderingContext2D, lay: TextLayout, ox: number, oy: number, from = 0, to = lay.lines.length): void {
   for (let i = from; i < to; i++) {
     const l = lay.lines[i];
+    // highlighter colours go under all the line's text
+    for (const g of l.pieces) {
+      if (!g.highlight) continue;
+      ctx.fillStyle = g.highlight;
+      const h = l.above !== undefined ? Math.min(l.above, l.ascent * 1.12) : l.ascent;
+      ctx.fillRect(ox + g.x, oy + l.y - h, g.w, h + l.descent);
+    }
     if (l.marker) drawGlyphs(ctx, lay, l, l.marker, ox, oy);
     for (const g of l.pieces) drawGlyphs(ctx, lay, l, g, ox, oy);
   }

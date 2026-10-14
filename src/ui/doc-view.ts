@@ -8,7 +8,7 @@ import type { DocLayout, PageBox, PlacedObject } from '../document/doc-layout';
 import type { DocFile } from '../document/doc-file';
 import { figures } from '../document/doc-file';
 import { drawHeaderFooter } from '../document/doc-paint';
-import type { DocText } from '../document/document';
+import { SHADOWS, type DocText } from '../document/document';
 import { drawLayout } from '../text/draw';
 import { selectionRects } from '../text/layout';
 import { imageFor, onImageReady } from '../render/images';
@@ -269,6 +269,30 @@ export class DocView {
   }
 
   private object(ctx: CanvasRenderingContext2D, t: DocText, o: PlacedObject): void {
+    const obj = t.objects[o.id];
+    if (!obj) return;
+    const look = obj.kind === 'drawing' || obj.kind === 'picture' ? obj.look : undefined;
+    if (look?.shadow) {
+      // a shadow is a box's: the figure sits on white, and the white casts it
+      const s = SHADOWS[look.shadow];
+      const k = this.zoom * this.dpr;
+      ctx.save();
+      ctx.shadowColor = `rgba(0, 0, 0, ${s.alpha})`;
+      ctx.shadowBlur = s.blur * k;
+      ctx.shadowOffsetX = ctx.shadowOffsetY = s.off * k;
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(o.x, o.y, o.w, o.h);
+      ctx.restore();
+    }
+    this.figure(ctx, t, o);
+    if (look?.frame) {
+      ctx.strokeStyle = look.frameColor ?? '#000';
+      ctx.lineWidth = look.frame;
+      ctx.strokeRect(o.x, o.y, o.w, o.h);
+    }
+  }
+
+  private figure(ctx: CanvasRenderingContext2D, t: DocText, o: PlacedObject): void {
     const obj = t.objects[o.id];
     if (!obj) return;
     if (obj.kind === 'drawing') {

@@ -8,7 +8,7 @@ import type { Picture } from '../render/picture';
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
 import { drawLayout } from '../text/draw';
-import { styleOf, type DocText, type NumberPlace } from './document';
+import { SHADOWS, styleOf, type DocText, type NumberPlace } from './document';
 import type { DocLayout, PageBox } from './doc-layout';
 import { docMeasure } from './doc-file';
 
@@ -68,10 +68,24 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
     for (const o of lay.objects) {
       if (o.page !== p.index) continue;
       const obj = t.objects[o.id];
+      const look = obj?.kind === 'drawing' || obj?.kind === 'picture' ? obj.look : undefined;
+      if (look?.shadow) {
+        // a PDF has no blur: the shadow is a grey box, lighter when soft
+        const s = SHADOWS[look.shadow];
+        c.fillStyle = look.shadow === 'soft' ? '#c9c9c9' : '#8c8c8c';
+        c.fillRect(o.x + s.off, o.y + s.off, o.w, o.h);
+        c.fillStyle = '#fff';
+        c.fillRect(o.x, o.y, o.w, o.h);
+      }
       if (obj?.kind === 'picture') ctx.items.push({ kind: 'image', src: obj.src, x: o.x, y: o.y, w: o.w, h: o.h, px: obj.px });
       else if (obj?.kind === 'drawing') {
         const pic = drawing(obj.contents, t.drawingStyle);
         if (pic) ctx.items.push(...placeItems(pic, o));
+      }
+      if (look?.frame) {
+        c.strokeStyle = look.frameColor ?? '#000';
+        c.lineWidth = look.frame;
+        c.strokeRect(o.x, o.y, o.w, o.h);
       }
     }
     return { w: lay.pageW, h: lay.pageH, items: ctx.items, origin: { x: 0, y: p.top } };

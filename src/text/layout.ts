@@ -57,6 +57,8 @@ export interface Glyphs {
   style: string;
   color?: string;
   underline?: boolean;
+  /** Background colour behind the piece (a highlighter). */
+  highlight?: string;
   /** Extra width each space gets in a justified line. */
   spread?: number;
   /** A figure, table or field (documents): its id. Its one character isn't drawn. */
@@ -116,7 +118,7 @@ export const DESCENT = 0.25;
 export const SINGLE = 1.15;
 
 interface Seg {
-  text: string; start: number; size: number; base: number; dy: number; family: string; style: string; color?: string; underline?: boolean;
+  text: string; start: number; size: number; base: number; dy: number; family: string; style: string; color?: string; underline?: boolean; highlight?: string;
   /** A figure, table or field (documents): its id, and once laid out its width, what it shows and its height. */
   obj?: number; w?: number; shown?: string; objAscent?: number; objDescent?: number;
 }
@@ -138,7 +140,7 @@ function segments(runs: TextRun[], defaultSize: number, n: number): { segs: Seg[
       const dy = r.sub ? base * 0.22 : r.sup ? -base * 0.42 : 0;
       for (const ch of r.text) {
         if (ch === '\n') { off++; p++; if (p < n) sizes[p] = base; continue; }
-        if (p < n) segs[p].push({ text: ch, start: off, size, base, dy, family, style, color: r.color, underline: r.underline, obj: r.obj });
+        if (p < n) segs[p].push({ text: ch, start: off, size, base, dy, family, style, color: r.color, underline: r.underline, highlight: r.highlight, obj: r.obj });
         off += ch.length;
       }
       continue;
@@ -156,7 +158,7 @@ function segments(runs: TextRun[], defaultSize: number, n: number): { segs: Seg[
           if (p < n) sizes[p] = base;
         }
         if (!t || p >= n) { off += t.length; return; }
-        segs[p].push({ text: t, start: off, size, base, dy, family, style, color: r.color, underline: r.underline });
+        segs[p].push({ text: t, start: off, size, base, dy, family, style, color: r.color, underline: r.underline, highlight: r.highlight });
         off += t.length;
       });
     }
@@ -219,7 +221,8 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
         left = Math.max(left, markLeft + marker.w + 0.3 * em);
       }
     } else firstLine = ps.firstLine ?? 0;
-    const room = f.wrap !== undefined ? Math.max(1, f.wrap - left) : Infinity;
+    const right = ps.indentRight ?? 0;
+    const room = f.wrap !== undefined ? Math.max(1, f.wrap - left - right) : Infinity;
 
     // figures and fields: their size, and what a field shows
     const around = new Set<number>();
@@ -287,6 +290,7 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
         const t = s.text.slice(a - s0, b - s0);
         const w = segWidth(s, a - s0, b - s0);
         const g: Glyphs = { text: t, start: paraStart + a, x, w, dy: s.dy, size: s.size, family: s.family, style: s.style, color: s.color, underline: s.underline };
+        if (s.highlight) g.highlight = s.highlight;
         if (s.obj !== undefined) {
           g.obj = s.obj;
           if (s.shown !== undefined) g.shown = s.shown;
@@ -308,6 +312,8 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
         // a document's line: the height of single spacing (times the line spacing), or of its tallest figure
         l.above = Math.max((SINGLE * pSpacing - DESCENT) * size, objUp);
         l.below = l.descent;
+        // spacing in points: exactly (figures may then reach into the line above), or at least
+        if (ps.linePt && ps.linePt > 0) l.above = ps.lineRule === 'exact' ? Math.max(0, ps.linePt - l.below) : Math.max(l.above, ps.linePt - l.below);
       }
       lines.push(l);
     });
@@ -330,7 +336,7 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
     }
     l.y = y;
     prev = l;
-    const room = Math.max(0, boxWidth - l.left);
+    const room = Math.max(0, boxWidth - l.left - (paras[l.para].indentRight ?? 0));
     const align = paras[l.para].align ?? f.justify;
     let shift = 0;
     if (align === 'center') shift = (room - l.width) / 2;

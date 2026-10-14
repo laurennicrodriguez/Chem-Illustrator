@@ -77,12 +77,35 @@ export interface HeaderFooter {
   onFirst: boolean;
 }
 
+/** A figure's or picture's frame and shadow (Word's Picture Format). */
+export interface FigureLook {
+  /** A line round it, this many points wide, in `frameColor` (black when not set). */
+  frame?: number;
+  frameColor?: string;
+  /** A shadow down and to the right (the figure then gets a white background, so the shadow is a box's). */
+  shadow?: 'soft' | 'hard';
+}
+
+/** The two shadows: how far down and right, how blurred and how dark, in points. */
+export const SHADOWS: Record<'soft' | 'hard', { off: number; blur: number; alpha: number }> = {
+  soft: { off: 3, blur: 6, alpha: 0.35 },
+  hard: { off: 3, blur: 0, alpha: 0.5 },
+};
+
+/** How far a frame and shadow reach outside a figure's box: left, top, right, bottom, in points. */
+export function lookExtent(look: FigureLook | undefined): [number, number, number, number] {
+  const f = (look?.frame ?? 0) / 2;
+  const s = look?.shadow ? SHADOWS[look.shadow] : null;
+  const r = s ? s.off + s.blur : 0;
+  return [f, f, Math.max(f, r), Math.max(f, r)];
+}
+
 /** Something that sits in the text in place of one character. */
 export type DocObject =
   /** A structure, scheme or table: a drawing, edited with the drawing tools. `scale` 1 is the drawing's own size. */
-  | { kind: 'drawing'; contents: Contents; scale?: number }
+  | { kind: 'drawing'; contents: Contents; scale?: number; look?: FigureLook }
   /** A picture: its own size is w × h points (`px` its pixels); `scale` 1 is that size. */
-  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number }
+  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook }
   /** A caption's number (Figure 1, Scheme 2): it counts the captions of its name. */
   | { kind: 'seq'; name: string }
   /** A reference to a caption ("see Figure 2"), which follows its number. */

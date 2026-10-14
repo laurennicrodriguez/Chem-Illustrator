@@ -8,7 +8,7 @@ import { FloatBox, PINNED_ICON } from './float-box';
 import type { DocFile } from '../document/doc-file';
 import {
   A4, CM, INCH, LETTER, defaultStyles, modifyStyle, setParaStyle, styleOf,
-  type DocText, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
+  type DocText, type FigureLook, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
 } from '../document/document';
 
 export interface DocPanelHost {
@@ -19,6 +19,8 @@ export interface DocPanelHost {
   /** The figure or picture picked on its own. */
   picked(): number | null;
   setScale(id: number, scale: number): void;
+  setLook(id: number, patch: Partial<FigureLook>): void;
+  lookOf(id: number): FigureLook | undefined;
 }
 
 
@@ -251,6 +253,22 @@ export class DocPanel {
       const n = Number(v.replace('%', ''));
       if (id !== null && n > 0) this.host.setScale(id, n / 100);
     }), 'Its own size is 100%. A figure wider than the space between the margins is made to fit.');
+    const look = (patch: Partial<FigureLook>) => { const id = this.host.picked(); if (id !== null) this.host.setLook(id, patch); };
+    this.row(s, 'Frame (pt)', this.input('fig-frame', (v) => {
+      const n = v.trim() === '' || /^none$/i.test(v.trim()) ? 0 : parseLength(v, 'pt');
+      if (n !== null) look({ frame: n > 0 ? Math.min(n, 20) : undefined });
+    }, { list: 'dp-frames', placeholder: 'None' }), 'A line round it, this many points wide (0.5 is a hairline, 0.75 thin, 1.5 medium, 3 thick). Clear it for none');
+    const frames = document.createElement('datalist');
+    frames.id = 'dp-frames';
+    for (const v of ['0.5', '0.75', '1', '1.5', '2.25', '3']) frames.append(new Option(v));
+    s.append(frames);
+    const fc = document.createElement('input');
+    fc.type = 'color';
+    fc.addEventListener('change', () => { look({ frameColor: fc.value.toLowerCase() === '#000000' ? undefined : fc.value }); this.host.focus(); });
+    this.fields.set('fig-frame-colour', fc);
+    this.row(s, 'Frame colour', fc);
+    this.row(s, 'Shadow', this.select('fig-shadow', [['none', 'None'], ['soft', 'Soft'], ['hard', 'Sharp']], (v) => look({ shadow: v === 'none' ? undefined : v as 'soft' | 'hard' })),
+      'Down and to the right; the figure gets a white background so the shadow is a box\'s');
     this.buttons(s, [
       ['Edit Drawing', 'Change it with the drawing tools (or double-click it)', () => { const id = this.host.picked(); if (id !== null) this.host.editFigure(id); }],
       ['Own Size', 'Back to 100%', () => { const id = this.host.picked(); if (id !== null) this.host.setScale(id, 1); }],
@@ -271,7 +289,18 @@ export class DocPanel {
     this.row(s, 'First line (in)', this.input('p-first', (v) => { const n = parseLength(v, 'in'); if (n !== null) paras({ firstLine: n || undefined }, 'indent'); }), 'The first line\'s indent from the rest; less than 0 hangs it out to the left');
     this.row(s, 'Space before (pt)', this.input('p-before', (v) => { const n = parseLength(v, 'pt'); if (n !== null) paras({ spaceBefore: Math.max(0, n) }, 'spacing'); }));
     this.row(s, 'Space after (pt)', this.input('p-after', (v) => { const n = parseLength(v, 'pt'); if (n !== null) paras({ spaceAfter: Math.max(0, n) }, 'spacing'); }));
-    this.row(s, 'Line spacing', this.input('p-line', (v) => { const n = Number(v); if (n > 0 && n <= 10) paras({ line: Math.abs(n - 1) < 1e-6 ? undefined : n }, 'spacing'); }, { list: 'dp-lines' }), 'Times single spacing: 1, 1.15, 1.5, 2…');
+    this.row(s, 'Right indent (in)', this.input('p-right', (v) => { const n = parseLength(v, 'in'); if (n !== null) paras({ indentRight: Math.max(0, n) || undefined }, 'indent'); }), 'From the right margin');
+    this.row(s, 'Line spacing', this.select('p-rule', [['multiple', 'Multiple'], ['atLeast', 'At least'], ['exact', 'Exactly']], (v) => {
+      const p = this.host.file()?.ed.currentPara();
+      if (v === 'multiple') paras({ linePt: undefined, lineRule: undefined }, 'spacing');
+      else paras({ linePt: p?.linePt ?? 12, lineRule: v as 'exact' | 'atLeast', line: undefined }, 'spacing');
+    }), 'Multiple: times single spacing. At least or Exactly: a height in points (Exactly can cut off tall figures, as in Word)');
+    this.row(s, 'At', this.input('p-line', (v) => {
+      const p = this.host.file()?.ed.currentPara();
+      if (p?.linePt) { const n = parseLength(v, 'pt'); if (n !== null && n > 0 && n <= 1584) paras({ linePt: n }, 'spacing'); return; }
+      const n = Number(v);
+      if (n > 0 && n <= 10) paras({ line: Math.abs(n - 1) < 1e-6 ? undefined : n }, 'spacing');
+    }, { list: 'dp-lines' }), 'Times single spacing (1, 1.15, 1.5, 2…), or points for At least and Exactly');
     const lines = document.createElement('datalist');
     lines.id = 'dp-lines';
     for (const v of ['1', '1.15', '1.5', '2', '2.5', '3']) lines.append(new Option(v));
@@ -420,6 +449,10 @@ export class DocPanel {
       const scale = o && (o.kind === 'drawing' || o.kind === 'picture') ? o.scale ?? 1 : 1;
       const fitted = sz && o?.kind === 'drawing' ? lay.textW < sz.w + 0.01 && scale > 0 : false;
       put('fig-scale', String(Math.round(scale * 1000) / 10));
+      const lk = this.host.lookOf(id);
+      put('fig-frame', lk?.frame ? String(lk.frame) : '');
+      put('fig-frame-colour', lk?.frameColor ?? '#000000');
+      put('fig-shadow', lk?.shadow ?? 'none');
       this.figureInfo.textContent = (o?.kind === 'picture' ? 'A picture. ' : 'A drawing: double-click it to change it with the drawing tools. ')
         + (sz ? `Shown ${showLength(sz.w, 'in')} × ${showLength(sz.h, 'in')} in${fitted ? ', made smaller to fit between the margins' : ''}.` : '');
       const edit = this.sections.figure.querySelector('button');
@@ -437,7 +470,9 @@ export class DocPanel {
     put('p-first', showLength(p.firstLine ?? 0, 'in'));
     put('p-before', showLength(p.spaceBefore ?? 0, 'pt'));
     put('p-after', showLength(p.spaceAfter ?? 0, 'pt'));
-    put('p-line', String(p.line ?? 1));
+    put('p-right', showLength(p.indentRight ?? 0, 'in'));
+    put('p-rule', p.linePt ? p.lineRule ?? 'atLeast' : 'multiple');
+    put('p-line', p.linePt ? showLength(p.linePt, 'pt') : String(p.line ?? 1));
     put('p-break', !!p.pageBreak);
     put('p-keep', !!p.keepNext);
     // its style

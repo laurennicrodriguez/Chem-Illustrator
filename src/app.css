@@ -987,6 +987,21 @@ dialog.prop-dialog { width: min(94vw, 520px); }
 .fb-body { padding: 6px 10px 10px; overflow: auto; }
 .fb-body .dp-section > h3 { display: none; }
 .fb-body .dp-input:focus, .fb-body select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+/* Document mode, Layout > Paragraph */
+.rb-caption { font-size: 11px; color: var(--muted); align-self: flex-start; }
+#doc-ribbon .rb-field input.rb-num { width: 46px; }
+/* Document mode: the highlighter button, and its colours */
+.rb-split { display: inline-flex; }
+.ribbon button.rb-hl { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; padding-bottom: 2px; }
+.hl-ab { font-size: 11px; line-height: 1; }
+.hl-bar { width: 14px; height: 4px; border-radius: 1px; background: #ffff00; border: 1px solid rgb(0 0 0 / 0.15); }
+.ribbon button.rb-drop { min-width: 0; width: 13px; padding: 0; font-size: 9px; }
+.hl-menu { position: fixed; z-index: 45; padding: 8px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.2); font-size: 12px; }
+.hl-grid { display: grid; grid-template-columns: repeat(5, 22px); gap: 4px; margin-bottom: 6px; }
+.hl-grid button { width: 22px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+.hl-grid button:hover, .hl-grid button[aria-pressed='true'] { outline: 2px solid var(--accent); outline-offset: 1px; }
+.hl-menu .hl-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.hl-menu .hl-row button { flex: 1; padding: 3px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--text); cursor: pointer; }
 /* the corner button of a ribbon group that opens its settings box */
 .rb-group:has(> .rb-launch) { position: relative; padding-right: 18px; }
 .ribbon button.rb-launch { position: absolute; right: 2px; bottom: 0; width: 15px; height: 15px; min-width: 0; padding: 0; border: 0; border-radius: 3px; background: none; color: var(--muted); font-size: 10px; line-height: 15px; cursor: pointer; }

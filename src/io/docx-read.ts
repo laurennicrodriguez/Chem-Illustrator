@@ -21,13 +21,13 @@ import { arialWidth } from '../text-metrics';
 import { documentMeasure } from '../text/font-measure';
 import {
   OBJECT_CHAR, defaultHeaderFooter, defaultPage, defaultStyles,
-  type DocObject, type DocText, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
+  type DocObject, type DocText, type FigureLook, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
 } from '../document/document';
 import { shownSize } from '../document/doc-layout';
 import { layoutTable } from '../table';
 import { cfbStreams, isCfb } from './cfb';
 import { isCdx } from './cdx';
-import { BIB_MARK, CITE_FIELD, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
+import { BIB_MARK, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
 import { cleanRef } from '../document/references';
 import { CITE_PRESETS, cleanOptions } from '../document/cite-styles';
 import { listIndent, tableText } from './docx-write';
@@ -76,11 +76,11 @@ const WARN = {
 
 type Pos = 'base' | 'sub' | 'sup';
 /** Text formatting as a file gives it (only what it gives). `color` null is "automatic". */
-interface RProps { font?: string; size?: number; bold?: boolean; italic?: boolean; underline?: boolean; color?: string | null; pos?: Pos; hidden?: boolean; formula?: boolean }
+interface RProps { font?: string; size?: number; bold?: boolean; italic?: boolean; underline?: boolean; color?: string | null; highlight?: string | null; pos?: Pos; hidden?: boolean; formula?: boolean }
 /** Paragraph formatting as a file gives it, in points. */
 interface PProps {
   align?: Justify; before?: number; after?: number; line?: { v: number; rule: string };
-  left?: number; first?: number; keepNext?: boolean; pageBreak?: boolean; outline?: number;
+  left?: number; right?: number; first?: number; keepNext?: boolean; pageBreak?: boolean; outline?: number;
   numId?: string; ilvl?: number; contextual?: boolean;
 }
 interface WStyle { id: string; type: string; name: string; basedOn?: string; next?: string; isDefault: boolean; p: PProps; r: RProps; el: Element }
@@ -220,7 +220,14 @@ class DocxReader {
         case 'vertAlign': { const v = this.a(c); out.pos = v === 'subscript' ? 'sub' : v === 'superscript' ? 'sup' : 'base'; break; }
         case 'vanish': out.hidden = this.on(c); break;
         case 'rStyle': Object.assign(out, this.charStyle(this.a(c) ?? '')); break;
-        case 'strike': case 'dstrike': case 'smallCaps': case 'caps': case 'highlight':
+        case 'highlight': { const v = this.a(c) ?? 'none'; out.highlight = WORD_HIGHLIGHTS[v] ?? null; break; }
+        case 'shd': {
+          // shading behind the text: kept as a highlight unless a real highlight is set too
+          const v = this.a(c, 'fill') ?? 'auto';
+          if (out.highlight === undefined || out.highlight === null) out.highlight = /^[0-9a-f]{6}$/i.test(v) && this.a(c) !== 'nil' ? `#${v.toLowerCase()}` : null;
+          break;
+        }
+        case 'strike': case 'dstrike': case 'smallCaps': case 'caps':
           if (direct && this.on(c) && this.a(c) !== 'none') this.warn('looks');
           break;
       }
@@ -246,6 +253,8 @@ class DocxReader {
         case 'ind': {
           const left = this.tw(c, 'left') ?? this.tw(c, 'start');
           if (left !== undefined) out.left = left;
+          const right = this.tw(c, 'right') ?? this.tw(c, 'end');
+          if (right !== undefined) out.right = right;
           const hang = this.tw(c, 'hanging'), first = this.tw(c, 'firstLine');
           if (hang !== undefined) out.first = -hang;
           else if (first !== undefined) out.first = first;
@@ -470,8 +479,10 @@ class DocxReader {
     const ps: ParaStyle = {
       style: ours === 'Normal' ? undefined : ours,
       align: p.align && p.align !== 'left' ? p.align : undefined,
-      spaceBefore: round(p.before ?? 0), spaceAfter: round(p.after ?? 0), line: this.lineOf(p, size),
-      indent: round(indent), firstLine: list ? undefined : round(p.first ?? 0), keepNext: p.keepNext,
+      spaceBefore: round(p.before ?? 0), spaceAfter: round(p.after ?? 0),
+      // spacing in points stays in points for the paragraph (its style takes the nearest multiple)
+      ...(p.line && p.line.rule !== 'auto' ? { linePt: round(p.line.v / 20), lineRule: p.line.rule === 'exact' ? 'exact' as const : 'atLeast' as const } : { line: this.lineOf(p, size) }),
+      indent: round(indent), indentRight: p.right ? round(Math.max(0, p.right)) : undefined, firstLine: list ? undefined : round(p.first ?? 0), keepNext: p.keepNext,
       pageBreak: p.pageBreak || brk, list, level: list ? ilvl : undefined,
     };
     const markStyle = this.runStyle(mark);
@@ -518,7 +529,7 @@ class DocxReader {
     const formula = !!r.formula;
     return rt.cleanStyle({
       font: r.font ?? WORD_FONT, size: r.size ?? WORD_SIZE, bold: r.bold, italic: r.italic, underline: r.underline,
-      color: r.color ?? undefined, formula: formula || undefined,
+      color: r.color ?? undefined, highlight: r.highlight ?? undefined, formula: formula || undefined,
       sub: (!formula && r.pos === 'sub') || undefined, sup: (!formula && r.pos === 'sup') || undefined,
     });
   }
@@ -778,17 +789,18 @@ class DocxReader {
     // one of our structures: its drawing from our part
     const ours = new RegExp(`^${DRAWING_NAME} (\\d+)$`).exec(name);
     const m = ours ? this.model?.drawings?.[Number(ours[1])] : undefined;
+    const look = readLook(kid(pic, 'spPr'));
     if (m?.contents) {
       const natural = shownSize({ w: m.w, h: m.h }, 1, this.textW);
       const scale = Math.abs(natural.w - shown.w) < 0.75 || m.w <= 0 ? undefined : round(shown.w / m.w, 1e4);
-      this.emitObject(ctx, { kind: 'drawing', contents: structuredClone(m.contents), scale }, r);
+      this.emitObject(ctx, { kind: 'drawing', contents: structuredClone(m.contents), scale, ...(look ? { look } : {}) }, r);
       return;
     }
     const blip = kid(pic, 'blipFill', 'blip');
     if (kid(kid(pic, 'blipFill'), 'srcRect')?.attributes.length) this.warn('crop');
     const svg = blip ? Array.from(blip.getElementsByTagNameNS('*', 'svgBlip'))[0] : undefined;
     const target = this.relTarget(rAttr(svg, 'embed')) ?? this.relTarget(rAttr(blip, 'embed'));
-    this.picture(target, shown, r, ctx);
+    this.picture(target, shown, r, ctx, look);
   }
 
   private relTarget(id: string | null): string | null {
@@ -797,7 +809,7 @@ class DocxReader {
     return rel && !rel.external ? rel.target : null;
   }
 
-  private picture(path: string | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx): void {
+  private picture(path: string | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx, look?: FigureLook | null): void {
     const bytes = path ? this.pkg.bytes(path) : null;
     if (!bytes || shown.w <= 0 || shown.h <= 0) return;
     const ext = (path ?? '').split('.').pop()?.toLowerCase() ?? '';
@@ -805,7 +817,7 @@ class DocxReader {
     if (!mime) return;
     if (mime === 'image/x-wmf') this.warn('wmf');
     const px = imageSize(bytes, mime) ?? undefined;
-    this.emitObject(ctx, { kind: 'picture', src: dataUrl(bytes, mime), w: round(shown.w), h: round(shown.h), px }, r);
+    this.emitObject(ctx, { kind: 'picture', src: dataUrl(bytes, mime), w: round(shown.w), h: round(shown.h), px, ...(look ? { look } : {}) }, r);
   }
 
   /** Older (VML) pictures, and embedded objects with their picture: ChemDraw's become structures. */
@@ -1201,4 +1213,22 @@ function vmlSize(style: string): { w: number; h: number } {
     return v * ({ pt: 1, in: 72, cm: 72 / 2.54, mm: 72 / 25.4, px: 0.75, pc: 12 } as Record<string, number>)[unit];
   };
   return { w: get('width'), h: get('height') };
+}
+
+/** A picture's line and shadow (Word's Picture Format) as a frame and one of our two shadows. */
+export function readLook(spPr: Element | null): FigureLook | null {
+  if (!spPr) return null;
+  const look: FigureLook = {};
+  const ln = kid(spPr, 'ln');
+  if (ln && !kid(ln, 'noFill')) {
+    const w = fromEmu(ln.getAttribute('w') ?? '9525');
+    const clr = kid(ln, 'solidFill', 'srgbClr')?.getAttribute('val');
+    if (kid(ln, 'solidFill') && w > 0) {
+      look.frame = Math.round(w * 100) / 100;
+      if (clr && /^[0-9a-f]{6}$/i.test(clr) && clr.toLowerCase() !== '000000') look.frameColor = `#${clr.toLowerCase()}`;
+    }
+  }
+  const sh = kid(spPr, 'effectLst', 'outerShdw');
+  if (sh) look.shadow = fromEmu(sh.getAttribute('blurRad') ?? '0') >= 1.5 ? 'soft' : 'hard';
+  return look.frame || look.shadow ? look : null;
 }

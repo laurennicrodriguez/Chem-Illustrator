@@ -533,6 +533,10 @@
               <button class="rb-sq" data-doc="doc-sup" aria-pressed="false" title="Superscript">x<sup>2</sup></button>
               <button class="rb-sq" data-doc="doc-formula" aria-pressed="false" title="Formula style: numbers lowered (CH₂Cl₂), charges raised">C₉H₈</button>
               <label class="rb-sq rb-colour" title="Text colour"><span>A</span><input id="doc-colour" type="color" aria-label="Text colour" /></label>
+              <span class="rb-split">
+                <button class="rb-sq rb-hl" data-doc="doc-highlight" aria-pressed="false" title="Highlight the selected text in the colour under the letters (click again to take it off)"><span class="hl-ab">ab</span><span id="doc-hl-bar" class="hl-bar"></span></button>
+                <button class="rb-sq rb-drop" data-doc="doc-highlight-menu" title="Highlight colours">▾</button>
+              </span>
             </div>
           </div>
         </div>
@@ -547,7 +551,7 @@
               <button class="rb-sq" data-doc="doc-outdent" title="Less indent (Shift+Tab)">⇤</button>
               <button class="rb-sq" data-doc="doc-indent" title="More indent (Tab)">⇥</button>
               <select id="doc-line" title="Line spacing" aria-label="Line spacing">
-                <option value="1">Single</option><option value="1.15">1.15</option><option value="1.5">1.5</option><option value="2">Double</option><option value="" hidden>Other</option>
+                <option value="1">Single</option><option value="1.15">1.15</option><option value="1.5">1.5</option><option value="2">Double</option><option value="" hidden>Other</option><option value="more">Line Spacing Options…</option>
               </select>
             </div>
             <div class="rb-pair">
@@ -641,6 +645,22 @@
         </div>
         <div class="rb-label">Page Setup</div>
         <button class="rb-launch" data-doc="box-page" title="Page Setup: paper size, orientation and exact margins">⬊</button>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <span class="rb-caption">Indent</span>
+            <label class="rb-field" title="From the left margin, in inches (or type cm, mm or pt)">Left <input id="doc-ind-left" class="rb-text rb-num" spellcheck="false" /></label>
+            <label class="rb-field" title="From the right margin, in inches (or type cm, mm or pt)">Right <input id="doc-ind-right" class="rb-text rb-num" spellcheck="false" /></label>
+          </div>
+          <div class="rb-col">
+            <span class="rb-caption">Spacing</span>
+            <label class="rb-field" title="Space above the paragraph, in points">Before <input id="doc-sp-before" class="rb-text rb-num" spellcheck="false" /></label>
+            <label class="rb-field" title="Space below the paragraph, in points">After <input id="doc-sp-after" class="rb-text rb-num" spellcheck="false" /></label>
+          </div>
+        </div>
+        <div class="rb-label">Paragraph</div>
+        <button class="rb-launch" data-doc="box-para" title="Paragraph settings: indents, spacing before and after, line spacing, page breaks">⬊</button>
       </div>
       <div class="rb-group">
         <div class="rb-row">
