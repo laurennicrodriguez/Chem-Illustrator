@@ -11,6 +11,7 @@ import * as rt from '../richtext';
 import { caretPos, layoutText, lineOf, offsetAt, offsetInLine, selectionRects, wordAt, type Measure, type TextFrame, type TextLayout } from './layout';
 import { cleanPara, editParas, fitParas, paraAt, paraCount, paraRange, storedParas } from './paragraphs';
 import type { CharLook, FixEdit } from './chemtext';
+import { trackedReplace } from '../document/revisions';
 
 /** A styled text with its paragraph formatting: what a caption, a text box or a slide holds. */
 export interface RichText {
@@ -58,6 +59,13 @@ export class TextEditing {
   emptyParaStyle: ((para: number) => rt.RunStyle) | null = null;
   /** Indent added by Tab outside a list, in points. */
   indentStep = INDENT_STEP;
+  /**
+   * Tracked changes (documents): while set, typing, pasting and deleting mark the text as
+   * inserted or deleted by this person instead of changing it outright (see document/revisions).
+   */
+  track: (() => { author: string; date: string } | null) | null = null;
+  /** How much of the last tracked deletion stayed in place, struck through. */
+  private keptLast = 0;
 
   private goalX: number | null = null;
   private undoStack: Snap[] = [];
@@ -196,6 +204,13 @@ export class TextEditing {
 
   /** Put runs in place of the text between two places, leaving the caret after them (kind null: part of the change before). */
   replace(start: number, end: number, runs: TextRun[], paras?: ParaStyle[], kind: string | null = 'edit'): void {
+    const who = kind !== null ? this.track?.() : null;
+    if (who) {
+      const got = trackedReplace(this.t, start, end, runs, paras, who);
+      this.keptLast = got.kept;
+      this.commit(kind, got.t, got.caret);
+      return;
+    }
     const text = this.text;
     const inserted = rt.plainText(runs);
     const t: RichText = {
@@ -264,8 +279,11 @@ export class TextEditing {
       if (ps.firstLine && ps.firstLine > 0) { this.setParas(p, p, { firstLine: undefined }, 'indent'); return; }
       if (ps.indent) { this.setParas(p, p, { indent: undefined }, 'indent'); return; }
     }
-    const from = word ? wordStart(text, at) : at - (isLow(text[at - 1]) ? 2 : 1);
-    this.replace(Math.max(0, from), at, [], undefined, 'delete');
+    const from = Math.max(0, word ? wordStart(text, at) : at - (isLow(text[at - 1]) ? 2 : 1));
+    this.keptLast = 0;
+    this.replace(from, at, [], undefined, 'delete');
+    // tracked: the deleted text stays, struck through, and the caret goes before it
+    if (this.keptLast) this.setCaret(from);
   }
 
   /** Delete (Ctrl: the word after). */
@@ -275,7 +293,10 @@ export class TextEditing {
     const at = this.focus;
     if (at >= text.length) return;
     const to = word ? wordEnd(text, at) : at + (isLow(text[at + 1]) ? 2 : 1);
+    this.keptLast = 0;
     this.replace(at, Math.min(text.length, to), [], undefined, 'delete');
+    // tracked: the deleted text stays, struck through, and the caret goes past it
+    if (this.keptLast) this.setCaret(at + this.keptLast);
   }
 
   // ------------------------------------------------------------------ the caret and selection

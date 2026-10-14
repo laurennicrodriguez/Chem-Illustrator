@@ -88,6 +88,8 @@ export interface Settings {
   updateCheck: boolean;
   /** Names the name reader can't read are looked up on PubChem (Edit > Preferences). */
   pubchemNames: boolean;
+  /** The name put on tracked changes in documents (Review > Your Name, Edit > Preferences). */
+  reviewName: string;
   /** A version the user chose Skip This Version for, so starting the app doesn't offer it again. */
   skipVersion: string | null;
   /** Files and workspaces opened or saved lately, newest first (File menu, desktop app). */
@@ -102,7 +104,7 @@ export const DEFAULT_SETTINGS: Settings = {
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
   guides: { drawing: false, slides: true, design: true },
   docPins: [],
-  updateCheck: true, pubchemNames: true, skipVersion: null, recentFiles: [],
+  updateCheck: true, pubchemNames: true, reviewName: '', skipVersion: null, recentFiles: [],
 };
 
 const STORAGE_KEY = 'chem-illustrator.settings';
@@ -124,6 +126,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (r.nicknames && typeof r.nicknames === 'object' && !Array.isArray(r.nicknames)) {
     for (const [k, v] of Object.entries(r.nicknames as Record<string, unknown>)) if (k.trim() && typeof v === 'string' && v.trim()) s.nicknames[k.trim()] = v.trim();
   }
+  if (typeof r.reviewName === 'string') s.reviewName = r.reviewName.trim().slice(0, 80);
   s.templates = parseOwnTemplates(r.templates);
   if (typeof r.splitWidth === 'number' && isFinite(r.splitWidth)) s.splitWidth = Math.min(0.8, Math.max(0.2, r.splitWidth));
   if (typeof r.citeStyle === 'string' && r.citeStyle in CITE_PRESETS) s.citeStyle = r.citeStyle;

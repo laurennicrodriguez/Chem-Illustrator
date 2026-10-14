@@ -17,6 +17,7 @@ import * as rt from '../richtext';
 import { BOX_PAD, FLOAT_GAP, OBJECT_CHAR, columnsOf, fieldTexts, floatOf, lookExtent, lookOf, styleOf, type DocText, type HeaderFooter, type NamedStyle, type WrapKind } from './document';
 import { bibliography, type BibEntry } from './references';
 import { tocEntries, tocLines, type TocEntry } from './toc';
+import { authorColours, hasChanges, markedRuns } from './revisions';
 
 /** A table row is at least one line of Normal text tall. */
 export const SINGLE_ROW = 1.15;
@@ -333,6 +334,7 @@ export class DocLayouter {
     const markers = listMarkers(paras);
     const fields = fieldTexts(t);
     const paraRuns = splitParagraphs(t.runs);
+    const colours = hasChanges(t.runs) ? authorColours(t.runs) : null;
 
     // sizes of figures and pictures
     const sizes = new Map<number, { w: number; h: number }>();
@@ -425,7 +427,9 @@ export class DocLayouter {
       const ps = paras[p];
       const st = styleOf(t, ps);
       // runs without a font or size of their own take their paragraph style's
-      const resolved = runs.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? st.font, size: r.size ?? st.size }));
+      // tracked changes: inserted text underlined, deleted text struck through, in each author's colour
+      const shownRuns = colours ? markedRuns(runs, colours) : runs;
+      const resolved = shownRuns.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? st.font, size: r.size ?? st.size }));
       const objs = runs.filter((r) => r.obj !== undefined).map((r) => {
         const f = fields.get(r.obj!);
         const s = sizes.get(r.obj!);

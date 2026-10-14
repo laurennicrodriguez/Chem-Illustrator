@@ -7,7 +7,7 @@ import type { TextRun } from './model';
 export type RunStyle = Omit<TextRun, 'text'>;
 export type Toggle = 'bold' | 'italic' | 'underline' | 'sub' | 'sup' | 'formula';
 
-const KEYS = ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'size', 'font', 'color', 'highlight', 'obj'] as const;
+const KEYS = ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'size', 'font', 'color', 'highlight', 'obj', 'strike', 'rev'] as const;
 /** Subscript, superscript and formula style change where characters sit, so only one applies. */
 const POSITION: Toggle[] = ['sub', 'sup', 'formula'];
 
@@ -92,9 +92,10 @@ export function typingStyle(runs: TextRun[], start: number, end: number, fallbac
   if (end > start) s = charStyle(runs, start) ?? fallback;
   else if (start > 0 && text[start - 1] !== '\n') s = charStyle(runs, start - 1) ?? fallback;
   else s = charStyle(runs, start) ?? (start > 0 ? charStyle(runs, start - 1) : null) ?? fallback;
-  // typing next to a figure or field types text, not another of them
-  if (s.obj === undefined) return s;
-  const { obj: _, ...rest } = s;
+  // typing next to a figure or field types text, not another of them, and typing next to a
+  // tracked change isn't part of that change (tracking marks it as its own)
+  if (s.obj === undefined && s.rev === undefined) return s;
+  const { obj: _, rev: _r, ...rest } = s;
   return rest;
 }
 

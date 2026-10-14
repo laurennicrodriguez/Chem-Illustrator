@@ -159,6 +159,10 @@ export interface TextRun {
   highlight?: string;
   /** A document's figure, table or field sitting in the text: its one character (U+FFFC) stands for the object with this id. */
   obj?: number;
+  /** A line through the text (shown on deleted text while changes are tracked). */
+  strike?: boolean;
+  /** Documents with tracked changes: this text was inserted or deleted, by whom and when ("ins|Nate|2026-10-14T21:00:00Z"; see document/revisions). */
+  rev?: string;
 }
 
 /**

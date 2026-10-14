@@ -19,6 +19,7 @@ import { COMMON_ADDUCTS } from './chem/hrms';
 import { pubchemName, pubchemCid, pubchemCompound, compoundPage } from './chem/pubchem';
 import { pubchemHtml, pubchemRuns, type PubChemState } from './ui/pubchem-panel';
 import { paragraphPages } from './document/doc-file';
+import { reviewAuthor, setReviewAuthor } from './document/revisions';
 import { analysisHtml, analysisRuns, withRepeats, polymerHtml, descriptorRuns, DEFAULT_DESCRIPTORS, type RepeatUnit } from './ui/analysis-panel';
 import { attachedAtoms, attachWhereItIs, defaultGap, nearestStructure, placeAttached, structureSig } from './editor/attached';
 import { repeatGroups, lipDirection } from './chem/polymer';
@@ -2337,6 +2338,7 @@ const docMode = new DocumentMode({
   pickPicture: () => pickPicture(),
   pickReferenceFile: () => pickReferenceFile(),
   preferredChanged: () => storeSettings(),
+  reviewNameChanged: () => storeSettings(),
   newTable: (rows, cols, style) => tableDrawing(emptyTable(rows, cols, style.captionSize), style),
   measure: measureText,
 });
@@ -3167,10 +3169,12 @@ async function openPreferences(): Promise<void> {
     { name: 'ask', label: 'Ask before changing every structure on the page when nothing is selected', type: 'checkbox', value: String(askWholeDrawing) },
     ...(canUpdate ? [{ name: 'updates', label: 'Check for a newer version when the app starts', type: 'checkbox' as const, value: String(updateCheck) }] : []),
     { name: 'pubchem', label: 'Look up names the name reader can\'t read on PubChem (sends the name typed to PubChem, a free NIH database)', type: 'checkbox', value: String(pubchemNames) },
+    { name: 'reviewer', label: 'Your name on tracked changes in documents', value: reviewAuthor() },
   ], { ok: 'Save', note: 'Charges already drawn keep their look; the circle tools on the Object toolbox always draw a circled charge. Show Terminal Methyls writes them this way; methyls already written out in the selection (or the whole drawing, with nothing selected) change too. Axial chirality labels (biaryls, allenes) follow the choice at once; Ra is the same as M, and Sa as P.' });
   if (!r) return;
   askWholeDrawing = r.ask === 'true';
   pubchemNames = r.pubchem === 'true';
+  setReviewAuthor(r.reviewer ?? '');
   if (canUpdate) {
     // turning the check back on also forgets a skipped version
     if (r.updates === 'true' && !updateCheck) skipVersion = null;
@@ -3225,6 +3229,7 @@ function storeSettings(): void {
     docPins: [...docBoxPrefs.pinned],
     updateCheck,
     pubchemNames,
+    reviewName: reviewAuthor(),
     skipVersion,
     recentFiles,
   };
@@ -3345,6 +3350,7 @@ void loadSettings().then((s) => {
   askWholeDrawing = s.askWholeDrawing;
   updateCheck = s.updateCheck;
   pubchemNames = s.pubchemNames;
+  setReviewAuthor(s.reviewName);
   skipVersion = s.skipVersion;
   recentFiles = s.recentFiles;
   renderRecent();

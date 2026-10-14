@@ -22,6 +22,7 @@ import { DocPanel, parseLength, showLength, type DocBoxKey } from './doc-panel';
 import { WORD_HIGHLIGHTS } from '../io/docx';
 import { DocFind } from './doc-find';
 import { tocEntries } from '../document/toc';
+import { changesIn, decide, reviewAuthor, setReviewAuthor } from '../document/revisions';
 import { ask } from './ask';
 import { ReferencesDialog, chooseReferences } from './references-dialog';
 import { citeSuper, formatOf, type Reference } from '../document/references';
@@ -61,6 +62,8 @@ export interface DocModeHost {
   pickReferenceFile(): Promise<{ name: string; text: string } | null>;
   /** The person chose a reference style for new documents (save settings). */
   preferredChanged?(): void;
+  /** The name put on tracked changes was changed (save settings). */
+  reviewNameChanged?(): void;
   measure: Measure;
 }
 
@@ -682,6 +685,15 @@ export class DocumentMode {
     // the usual commands, as on the ribbon
     if (word || issue) menu.appendChild(document.createElement('hr'));
     const cmd = (label: string, name: string, title?: string) => item(label, () => { if (!this.run(name)) this.host.command(name); }, title);
+    // a tracked change here (Review tab)
+    const change = this.file ? changesIn(this.file.t.runs).find((x) => x.start <= offset && offset <= x.end) : undefined;
+    if (change) {
+      const what = `${change.kind === 'ins' ? 'Insertion' : 'Deletion'} by ${change.author || 'unknown'}`;
+      const pick = (accept: boolean) => () => { if (ed.collapsed || ed.end <= change.start || ed.start >= change.end) ed.select(change.start, change.start); this.decideChange(accept); };
+      item(`Accept ${what}`, pick(true));
+      item(`Reject ${what}`, pick(false));
+      menu.appendChild(document.createElement('hr'));
+    }
     cmd('Cut', 'cut');
     cmd('Copy', 'copy');
     cmd('Paste', 'paste');
@@ -1561,6 +1573,11 @@ export class DocumentMode {
       case 'insert-citation': void this.insertCitation(); break;
       case 'insert-bibliography': this.insertBibliography(); break;
       case 'insert-toc': void this.insertToc(); break;
+      case 'track-changes': void this.toggleTracking(); break;
+      case 'review-name': void this.askReviewName(); break;
+      case 'accept-change': case 'reject-change': this.decideChange(cmd === 'accept-change'); break;
+      case 'accept-all': case 'reject-all': this.decideAll(cmd === 'accept-all'); break;
+      case 'next-change': case 'prev-change': this.goToChange(cmd === 'next-change'); break;
       case 'manage-references': void this.manageReferences(); break;
       case 'edit-figure': { const id = this.pickedObject(); if (id === null) { this.host.flash('Click a structure or scheme first, then Edit Drawing (or double-click it).'); break; } this.editFigure(id); break; }
       case 'zoom-in': this.view.setZoom(this.view.zoom * 1.25); this.showZoom(); break;
@@ -1953,6 +1970,65 @@ export class DocumentMode {
     f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'toc', levels } } } as DocText, 'Table of contents levels');
   }
 
+  // ---------------------------------------------------------------- tracked changes
+
+  /** Review > Track Changes: on or off for this document (the first time, ask for the name to put on changes). */
+  private async toggleTracking(): Promise<void> {
+    const f = this.file!;
+    if (!f.t.track && !reviewAuthor() && !(await this.askReviewName())) return;
+    const on = !f.t.track;
+    f.ed.update({ ...f.t, track: on || undefined } as DocText, on ? 'Track changes on' : 'Track changes off');
+    this.host.flash(on ? `Tracking changes as ${reviewAuthor()}: what you type is underlined and what you delete is struck through, until accepted or rejected (Review tab).` : 'Changes are no longer tracked. Changes already marked stay until accepted or rejected.', 7000);
+  }
+
+  /** The name put on your changes (kept in your settings). */
+  private async askReviewName(): Promise<boolean> {
+    const got = await ask('Your Name', [{ name: 'name', label: 'Name shown on your changes', value: reviewAuthor() }], { ok: 'Save', note: 'Word shows this name on your changes too. Change it any time here or in Edit > Preferences.' });
+    if (!got || !got.name.trim()) return false;
+    setReviewAuthor(got.name);
+    this.host.reviewNameChanged?.();
+    return true;
+  }
+
+  /** Accept or reject the changes in the selection, or the one at the caret, then go to the next. */
+  private decideChange(accept: boolean): void {
+    const f = this.file!;
+    const ed = f.ed;
+    const all = changesIn(f.t.runs);
+    let start = ed.start, end = ed.end;
+    if (start === end) {
+      const c = all.find((x) => x.start <= start && start < x.end) ?? all.find((x) => x.start === start || x.end === start);
+      if (!c) { this.goToChange(true); return; }
+      start = c.start; end = c.end;
+    }
+    if (!all.some((x) => x.start < end && x.end > start)) { this.goToChange(true); return; }
+    // the caret stays where the change was; what follows moved up by what was taken away
+    ed.update(decide(f.t, accept, start, end), accept ? 'Accept change' : 'Reject change', start, start);
+    this.goToChange(true, start);
+  }
+
+  private decideAll(accept: boolean): void {
+    const f = this.file!;
+    const n = changesIn(f.t.runs).length;
+    if (!n) { this.host.flash('There are no tracked changes in this document.'); return; }
+    f.ed.update(decide(f.t, accept), accept ? 'Accept all changes' : 'Reject all changes', f.ed.start, f.ed.start);
+    this.host.flash(`${accept ? 'Accepted' : 'Rejected'} ${n} change${n === 1 ? '' : 's'}.`);
+  }
+
+  /** Select the next (or previous) change after the caret, starting again from the top at the end. */
+  private goToChange(forward: boolean, from?: number): void {
+    const f = this.file!;
+    const ed = f.ed;
+    const all = changesIn(f.t.runs);
+    if (!all.length) { this.host.flash('There are no tracked changes in this document.'); return; }
+    const at = from ?? (forward ? ed.end : ed.start);
+    const c = forward ? all.find((x) => x.start >= at) ?? all[0] : [...all].reverse().find((x) => x.end <= at) ?? all[all.length - 1];
+    ed.select(c.start, c.end);
+    this.revealCaret();
+    const when = c.date ? new Date(c.date) : null;
+    this.host.flash(`${c.kind === 'ins' ? 'Inserted' : 'Deleted'} by ${c.author || 'unknown'}${when && !isNaN(+when) ? `, ${when.toLocaleString()}` : ''}.`, 5000);
+  }
+
   // ---------------------------------------------------------------- the ribbon
 
   private wireRibbon(): void {
@@ -2093,6 +2169,7 @@ export class DocumentMode {
     pick('#doc-numbers', f.t.hf.numbers);
     pick('#doc-columns', String(f.t.page.cols ?? 1));
     press('numbers-s', f.t.hf.prefix === 'S');
+    press('track-changes', !!f.t.track);
     const fig = this.pickedObject() ?? f.box?.id ?? null;
     const wrapSel = this.ribbon.querySelector<HTMLSelectElement>('#doc-wrap');
     if (wrapSel) {

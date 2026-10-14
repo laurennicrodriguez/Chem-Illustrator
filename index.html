@@ -523,6 +523,7 @@
       <button role="tab" data-doc-tab="insert" aria-selected="false">Insert</button>
       <button role="tab" data-doc-tab="layout" aria-selected="false">Layout</button>
       <button role="tab" data-doc-tab="references" aria-selected="false">References</button>
+      <button role="tab" data-doc-tab="review" aria-selected="false">Review</button>
       <button role="tab" data-doc-tab="table" aria-selected="false" class="rb-context" hidden title="Shown while you are in a table">Table</button>
     </div>
     <div class="rb-panel" data-doc-panel="home">
@@ -759,6 +760,30 @@
           <button class="rb-big" data-doc="manage-references" title="The document's references: add by DOI, by hand or from BibTeX or RIS; edit, delete; the citation style (ACS, Angewandte, RSC)"><span class="rb-icon">✎</span>Manage References…</button>
         </div>
         <div class="rb-label">Citations and Bibliography</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-doc-panel="review" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="track-changes" aria-pressed="false" title="Track Changes (Ctrl+Shift+E): while on, what you type is marked as inserted and what you delete stays, struck through, until it is accepted or rejected. Each change shows who made it and when"><span class="rb-icon">✎</span>Track Changes</button>
+          <button class="rb-big" data-doc="review-name" title="The name put on your changes"><span class="rb-icon">👤</span>Your Name…</button>
+        </div>
+        <div class="rb-label">Tracking</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="accept-change" title="Keep the change at the caret (or every change in the selection) and go to the next"><span class="rb-icon">✓</span>Accept</button>
+          <button class="rb-big" data-doc="reject-change" title="Undo the change at the caret (or every change in the selection) and go to the next"><span class="rb-icon">✗</span>Reject</button>
+          <div class="rb-col">
+            <button data-doc="prev-change" title="Go to the change before the caret">◀ Previous</button>
+            <button data-doc="next-change" title="Go to the next change">Next ▶</button>
+          </div>
+          <div class="rb-col">
+            <button data-doc="accept-all" title="Keep every change in the document">Accept All</button>
+            <button data-doc="reject-all" title="Undo every change in the document">Reject All</button>
+          </div>
+        </div>
+        <div class="rb-label">Changes</div>
       </div>
     </div>
     <div class="rb-panel" data-doc-panel="table" hidden>

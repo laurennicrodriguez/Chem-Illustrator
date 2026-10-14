@@ -192,6 +192,8 @@ export interface DocText extends RichText {
   citeStyle?: CiteStyle;
   /** Details of that style changed for this document (References > Manage References > Style Options). */
   citeOptions?: Partial<CiteFormat>;
+  /** Changes are being tracked (Review > Track Changes): edits are marked, not made outright. */
+  track?: boolean;
 }
 
 // ---------------------------------------------------------------- defaults

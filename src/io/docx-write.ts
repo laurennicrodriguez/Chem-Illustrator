@@ -19,6 +19,7 @@ import { BOX_PAD, COL_GAP, COMPOUND, FLOAT_GAP, columnsOf, OBJECT_CHAR, SHADOWS,
 import { ACS_LINE, CELL_PAD, GRID_LINE, bibHang, docCellAlign, shownSize } from '../document/doc-layout';
 import { bibliography, piecesText } from '../document/references';
 import { TOC_INDENT, tocEntries } from '../document/toc';
+import { parseRev } from '../document/revisions';
 import { documentMeasure } from '../text/font-measure';
 import { arialWidth } from '../text-metrics';
 import { PAD_X, PAD_Y, cellAlign, isCovered, spanOf } from '../table';
@@ -97,7 +98,7 @@ class DocxWriter {
     pkg.relate(main, DOCX_REL.numbering, 'numbering.xml');
     pkg.add('word/numbering.xml', this.numbering(), DOCX_CT.numbering);
     pkg.relate(main, DOCX_REL.settings, 'settings.xml');
-    const settings = (embed: boolean) => `${HEAD}<w:settings xmlns:w="${W_NS}"><w:zoom w:percent="100"/>${embed ? '<w:embedTrueTypeFonts/><w:saveSubsetFonts/>' : ''}<w:defaultTabStop w:val="720"/>` +
+    const settings = (embed: boolean) => `${HEAD}<w:settings xmlns:w="${W_NS}"><w:zoom w:percent="100"/>${embed ? '<w:embedTrueTypeFonts/><w:saveSubsetFonts/>' : ''}${this.t.track ? '<w:trackRevisions/>' : ''}<w:defaultTabStop w:val="720"/>` +
       `<w:characterSpacingControl w:val="doNotCompress"/>` +
       `<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`;
     pkg.add('word/settings.xml', settings(false), DOCX_CT.settings);
@@ -146,6 +147,10 @@ class DocxWriter {
     const paras = fitParas(t.paras, n);
     const runsOf = splitParagraphs(t.runs);
     const markers = listMarkers(paras);
+    // tracked changes on the paragraph marks (a line break typed or deleted while tracking)
+    const markRev: (string | undefined)[] = [];
+    for (const r of t.runs) for (const ch of r.text) if (ch === '\n') markRev.push(r.rev);
+    this.markRev = markRev;
     const out: string[] = [];
     let lastWasTable = false;
     let listNum = 0;
@@ -181,7 +186,7 @@ class DocxWriter {
           out.push(o?.kind === 'toc' ? this.contents(o.levels, ps) : this.bibliography(r.obj!, ps));
         }
         if (part.some((x) => x.text)) out.push(await this.paragraph(main, ps, part, listNum));
-      } else out.push(await this.paragraph(main, ps, runs, listNum));
+      } else out.push(await this.paragraph(main, ps, runs, listNum, p));
       lastWasTable = false;
     }
     // Word ends the text with a paragraph
@@ -189,7 +194,28 @@ class DocxWriter {
     return out.join('');
   }
 
-  private async paragraph(main: string, ps: ParaStyle, runs: TextRun[], listNum: number): Promise<string> {
+  /** Each paragraph mark's tracked change, if any. */
+  private markRev: (string | undefined)[] = [];
+  // tracked changes count apart from the bookmarks (Word wants each id used once)
+  private revId = 10001;
+
+  /** A tracked change's attributes for Word. */
+  private revAttrs(rev: string): string {
+    const v = parseRev(rev)!;
+    return `w:id="${this.revId++}" w:author="${xml(v.author || 'Author')}"${v.date ? ` w:date="${xml(v.date)}"` : ''}`;
+  }
+
+  /** A run's Word XML inside its tracked change (deleted text is Word's w:delText). */
+  private tracked(rev: string | undefined, body: string): string {
+    const v = parseRev(rev);
+    if (!v || !body) return body;
+    if (v.kind === 'ins') return `<w:ins ${this.revAttrs(rev!)}>${body}</w:ins>`;
+    const del = body.replace(/<w:t( [^>]*)?>/g, '<w:delText$1>').replace(/<\/w:t>/g, '</w:delText>')
+      .replace(/<w:instrText( [^>]*)?>/g, '<w:delInstrText$1>').replace(/<\/w:instrText>/g, '</w:delInstrText>');
+    return `<w:del ${this.revAttrs(rev!)}>${del}</w:del>`;
+  }
+
+  private async paragraph(main: string, ps: ParaStyle, runs: TextRun[], listNum: number, index = -1): Promise<string> {
     const t = this.t;
     const st = styleOf(t, ps);
     const pPr: string[] = [];
@@ -222,6 +248,9 @@ class DocxWriter {
     }
     const align = ps.align ?? 'left';
     if (align !== st.align) pPr.push(`<w:jc w:val="${JC[align]}"/>`);
+    // the paragraph mark itself inserted or deleted while tracking
+    const mr = parseRev(index >= 0 ? this.markRev[index] : undefined);
+    if (mr) pPr.push(`<w:rPr><w:${mr.kind} ${this.revAttrs(this.markRev[index]!)}/></w:rPr>`);
 
     // a caption that references point to: a bookmark round its label and number; a compound
     // number's bookmark is round just the number
@@ -234,10 +263,10 @@ class DocxWriter {
       out.push(`<w:bookmarkStart w:id="${open.id}" w:name="${this.bookmarks.get(seqs[0])}"/>`);
     }
     for (const r of runs) {
-      if (r.obj === undefined) { out.push(this.textRuns(r, st)); continue; }
+      if (r.obj === undefined) { out.push(this.tracked(r.rev, this.textRuns(r, st))); continue; }
       const mark = this.bookmarks.has(r.obj) && isCompound(r.obj) ? this.bookmarkId++ : null;
       if (mark !== null) out.push(`<w:bookmarkStart w:id="${mark}" w:name="${this.bookmarks.get(r.obj)}"/>`);
-      out.push(await this.objectRun(main, r, st));
+      out.push(this.tracked(r.rev, await this.objectRun(main, r, st)));
       if (mark !== null) out.push(`<w:bookmarkEnd w:id="${mark}"/>`);
       if (open && r.obj === open.seq) { out.push(`<w:bookmarkEnd w:id="${open.id}"/>`); open = null; }
     }

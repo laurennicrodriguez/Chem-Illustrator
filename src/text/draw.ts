@@ -42,4 +42,8 @@ function drawGlyphs(ctx: CanvasRenderingContext2D, lay: TextLayout, l: LaidLine,
     const base = l.ascent / 0.8;
     ctx.fillRect(ox + g.x, oy + l.y + Math.max(1, base * 0.1), g.w, Math.max(0.5, base * 0.05));
   }
+  if (g.strike) {
+    // through the middle of the small letters
+    ctx.fillRect(ox + g.x, oy + l.y + g.dy - g.size * 0.27, g.w, Math.max(0.5, g.size * 0.05));
+  }
 }
