@@ -25,7 +25,7 @@ export interface LayersHooks {
 /** The name a shape shows in the Layers panel: its own, or what it is (and the start of its text). */
 export function layerName(s: Shape): string {
   if (s.name?.trim()) return s.name.trim();
-  const kind = s.kind === 'geo' ? geoDef(s.geo).name : s.kind === 'rect' ? 'Box' : s.kind === 'oval' ? 'Oval' : s.kind === 'picture' ? 'Picture'
+  const kind = s.kind === 'geo' && s.geo === 'rect' && !s.filled && s.lineWidth === 0 ? 'Text' : s.kind === 'geo' ? geoDef(s.geo).name : s.kind === 'rect' ? 'Box' : s.kind === 'oval' ? 'Oval' : s.kind === 'picture' ? 'Picture'
     : s.kind === 'table' ? 'Table' : s.kind === 'line' ? 'Line' : s.kind === 'bracket' ? 'Bracket' : 'Symbol';
   const text = s.text?.runs.map((r) => r.text).join('').replace(/\s+/g, ' ').trim();
   return text ? `${kind}: ${text.length > 24 ? text.slice(0, 23) + '…' : text}` : kind;

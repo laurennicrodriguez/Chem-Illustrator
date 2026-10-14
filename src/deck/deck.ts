@@ -290,13 +290,20 @@ export class Deck {
    * A new design (Design mode): one blank page of the size chosen, white, without slide numbers,
    * structures drawn at a size that suits the page (ACS 1996 on a TOC graphic, larger on a poster).
    */
-  static design(host: Doc, size: SlideSize): Deck {
+  static design(host: Doc, size: SlideSize, fill?: (doc: Doc) => void): Deck {
     const d = new Deck(host);
     const m = defaultMaster();
     m.slideNumbers = false;
     m.titleSize = 28; m.subtitleSize = 18; m.bodySize = 14;
     m.drawing = slideDrawingStyle(designScale(size));
     d.load([d.makeSlide('blank')], size, m);
+    if (fill) {
+      // a template's shapes are where the page starts, not a step to undo
+      const tmp = new Doc();
+      d.styleDoc(tmp);
+      tmp.edit('Template', () => fill(tmp));
+      d.slides[0].doc.restoreContents(tmp.contents());
+    }
     return d;
   }
 

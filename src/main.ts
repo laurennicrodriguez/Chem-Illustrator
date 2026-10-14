@@ -35,6 +35,8 @@ import { Presenter } from './ui/present';
 import { editMaster } from './ui/master-dialog';
 import { recordPicture, pictureSvg, pictureCanvas, canvasPng, bitmapScale, EXPORT_MAX_SIDE, EXPORT_MAX_PIXELS } from './render/picture';
 import { pngWithDpi } from './render/emf-read';
+import { pickTemplate } from './ui/template-gallery';
+import { fillTemplate, templateSize } from './design/templates';
 import { itemsToSvg } from './render/svg';
 import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc } from './render/images';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
@@ -1082,8 +1084,14 @@ function drawGrid(ctx: CanvasRenderingContext2D, size: SlideSize, step: number):
 
 async function newDesign(): Promise<void> {
   finishTyping();
-  const size = await pickDesignSize('New Design: page size');
-  if (size) ws.newDesign(size);
+  const t = await pickTemplate();
+  if (t === 'blank') {
+    const size = await pickDesignSize('New Design: page size');
+    if (size) ws.newDesign(size);
+  } else if (t) {
+    ws.newDesign(templateSize(t), (d) => fillTemplate(d, t));
+    editor.fit();
+  }
 }
 
 async function designSize(): Promise<void> {

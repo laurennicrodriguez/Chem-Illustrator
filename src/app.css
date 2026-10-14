@@ -1033,3 +1033,12 @@ dialog.cite-style-dialog h3 { margin: 10px 0 4px; font-size: 13px; }
 .cite-preview p { margin: 4px 0; }
 .cite-entry { padding-left: 2.6em; text-indent: -2.6em; }
 .cite-label { display: inline-block; min-width: 2.6em; text-indent: 0; }
+
+/* File > New Design: the template gallery */
+dialog.template-gallery { width: min(94vw, 760px); }
+.tg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(188px, 1fr)); gap: 10px; max-height: min(64vh, 560px); overflow-y: auto; padding: 2px; }
+.tg-card { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; text-align: left; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: inherit; cursor: pointer; font: inherit; }
+.tg-card:hover, .tg-card:focus-visible { border-color: var(--accent); background: var(--accent-soft); }
+.tg-thumb { align-self: center; background: var(--line); border-radius: 3px; margin-bottom: 4px; }
+.tg-blurb { font-size: 12px; line-height: 1.35; }
+.tg-size { font-size: 11px; }

@@ -10,11 +10,12 @@ import { Deck, DESIGN_SIZES, designScale } from '../src/deck/deck';
 import { GEOS, GEO_BY_ID, geoDef, flatten, insideOutline, textArea } from '../src/design/geo';
 import { writePptx, type PptxOptions } from '../src/io/pptx-write';
 import { readPptx } from '../src/io/pptx-read';
-import { shapeHit, shapeOrder, elbowRoute } from '../src/objects';
+import { shapeHit, shapeOrder, elbowRoute, gluePoint } from '../src/objects';
 import { writeCdxml, chemDrawCurves } from '../src/io/cdxml-write';
 import { guideSnap } from '../src/editor/editor';
 import { layerName, reorderLayers } from '../src/ui/layers-panel';
 import { readCdxml } from '../src/io/cdxml';
+import { DESIGN_TEMPLATES, fillTemplate, templateSize } from '../src/design/templates';
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 40, 0, 0, 0, 30]);
 const opts: PptxOptions = { async picture() { return null; }, async svgToPng() { return PNG; } };
@@ -274,4 +275,50 @@ describe('the Layers panel', () => {
     expect(reorderLayers([1, 2, 3, 4], [1, 2], 4)).toEqual([3, 4, 1, 2]);
   });
 
+});
+
+describe('design templates', () => {
+  it('every template fits its page, and its connectors are glued to its own shapes', () => {
+    for (const t of DESIGN_TEMPLATES) {
+      const size = templateSize(t);
+      const deck = Deck.design(new Doc(), size, (d) => fillTemplate(d, t));
+      const doc = deck.docOf(0);
+      expect(doc.shapes.size, t.id).toBe(t.boxes.length);
+      for (const s of doc.shapes.values()) {
+        expect(GEO_BY_ID.has(s.geo!), `${t.id} ${s.geo}`).toBe(true);
+        expect(Math.min(s.x1, s.x2), t.id).toBeGreaterThanOrEqual(0);
+        expect(Math.min(s.y1, s.y2), t.id).toBeGreaterThanOrEqual(0);
+        expect(Math.max(s.x1, s.x2), t.id).toBeLessThanOrEqual(size.w + 0.01);
+        expect(Math.max(s.y1, s.y2), t.id).toBeLessThanOrEqual(size.h + 0.01);
+      }
+      expect(doc.arrows.size, t.id).toBe(t.links.length + (t.arrows?.length ?? 0));
+      for (const a of [...doc.arrows.values()].filter((x) => x.from)) {
+        expect(doc.shapes.has(a.from!.shape)).toBe(true);
+        expect(doc.shapes.has(a.to!.shape)).toBe(true);
+        expect(a.tail).toEqual(gluePoint(doc.shapes.get(a.from!.shape)!, a.from!.port));
+      }
+    }
+  });
+
+  it('starts the page with nothing to undo, and connectors still follow a moved shape', () => {
+    const t = DESIGN_TEMPLATES.find((x) => x.id === 'flowchart')!;
+    const deck = Deck.design(new Doc(), templateSize(t), (d) => fillTemplate(d, t));
+    const doc = deck.docOf(0);
+    expect(doc.canUndo()).toBe(false);
+    const a = [...doc.arrows.values()][0];
+    const s = doc.shapes.get(a.to!.shape)!;
+    doc.edit('Move', () => doc.updateShape(s.id, { x1: s.x1 + 50, x2: s.x2 + 50 }));
+    expect(doc.arrows.get(a.id)!.head).toEqual(gluePoint(doc.shapes.get(s.id)!, a.to!.port));
+  });
+
+  it('writes several-line text as paragraphs, a bold title over smaller lines', () => {
+    const t = DESIGN_TEMPLATES.find((x) => x.id === 'poster')!;
+    const deck = Deck.design(new Doc(), templateSize(t), (d) => fillTemplate(d, t));
+    const banner = [...deck.docOf(0).shapes.values()].find((s) => s.name === 'Title banner')!;
+    const runs = banner.text!.runs;
+    expect(runs.filter((r) => r.text === '\n')).toHaveLength(2);
+    expect(runs[0].bold).toBe(true);
+    expect(runs[2].bold).toBeUndefined();
+    expect(runs[2].size!).toBeLessThan(runs[0].size!);
+  });
 });

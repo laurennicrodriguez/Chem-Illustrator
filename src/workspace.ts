@@ -216,10 +216,10 @@ export class Workspace {
   }
 
   /** A new design (Design mode) of a size, in place of an untouched new drawing. */
-  newDesign(size: SlideSize): Tab {
+  newDesign(size: SlideSize, fill?: (doc: Doc) => void): Tab {
     const spare = this.active.mode === 'drawing' ? this.spare() : null;
     const t = this.makeTab('design', this.untitled('design'));
-    t.deck = Deck.design(this.host, size);
+    t.deck = Deck.design(this.host, size, fill);
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
     if (spare) this.drop(spare);
