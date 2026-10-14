@@ -589,7 +589,9 @@ const ACCENT_CHARS: Record<Accent, string> = { bar: '̅', hat: '̂', vec: '⃗',
 
 function ommlRun(s: string, style: 'it' | 'up' | 'op' | 'text'): string {
   // Word shows letters in italic by itself; upright text says so, and words are "normal text"
-  const pr = style === 'text' ? '<m:rPr><m:nor/></m:rPr>' : style === 'up' && /[A-Za-z]/.test(s) ? '<m:rPr><m:sty m:val="p"/></m:rPr>' : '';
+  // an operator sign kept plain ({-} as a bond) is normal text too, so Word puts no space round it
+  const plainSign = style === 'up' && OP_CHARS.has(s.replace('−', '-'));
+  const pr = style === 'text' || plainSign ? '<m:rPr><m:nor/></m:rPr>' : style === 'up' && /\p{L}/u.test(s) ? '<m:rPr><m:sty m:val="p"/></m:rPr>' : '';
   return `<m:r>${pr}<m:t xml:space="preserve">${esc(s)}</m:t></m:r>`;
 }
 
@@ -606,10 +608,14 @@ function omml(n: MathNode): string {
       let out = '';
       for (let i = 0; i < n.kids.length; i++) {
         const k = n.kids[i];
+        const next = n.kids[i + 1];
         if (k.t === 'big') {
-          const next = n.kids[i + 1];
           if (next) i++;
           out += nary(k, next);
+        } else if (k.t === 'sym' && k.style === 'up' && FUNCTIONS.has(k.s) && next) {
+          // a function name and what it acts on: Word's function, with its thin space
+          i++;
+          out += `<m:func><m:fName>${ommlRun(k.s, 'up')}</m:fName><m:e>${omml(next)}</m:e></m:func>`;
         } else out += omml(k);
       }
       return out;
@@ -635,8 +641,8 @@ function omml(n: MathNode): string {
       return x;
     }
     case 'arrow': {
-      // Word's way: the arrow as a stretching group character, with the conditions as limits
-      let x = `<m:groupChr><m:groupChrPr><m:chr m:val="${n.ch}"/><m:pos m:val="top"/><m:vertJc m:val="bot"/></m:groupChrPr><m:e>${n.over ? e(n.over) : ommlRun(' ', 'up')}</m:e></m:groupChr>`;
+      // Word's way: the arrow as a group character stretched under the conditions (over it), and what goes under as a lower limit
+      let x = `<m:groupChr><m:groupChrPr><m:chr m:val="${n.ch}"/><m:vertJc m:val="bot"/></m:groupChrPr><m:e>${n.over ? e(n.over) : ommlRun(' ', 'up')}</m:e></m:groupChr>`;
       if (n.under) x = `<m:limLow><m:e>${x}</m:e><m:lim>${e(n.under)}</m:lim></m:limLow>`;
       return x;
     }
