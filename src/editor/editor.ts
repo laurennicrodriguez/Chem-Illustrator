@@ -347,7 +347,8 @@ export class Editor {
     const atomR = Math.max(L * 0.28, this.tol(6));
     let best: Atom | null = null;
     let bd = Infinity;
-    for (const a of doc.atomsNear(p, Math.max(atomR, L * 2))) {
+    // structures locked (Slides): clicks go through them to the text and shapes
+    if (!this.structuresLocked) for (const a of doc.atomsNear(p, Math.max(atomR, L * 2))) {
       const d = dist(a, p);
       const k = a.s ?? 1;
       let hit = d <= atomR * k;
@@ -360,7 +361,7 @@ export class Editor {
     const bondTol = Math.max(L * 0.16, this.tol(5));
     let bb: Bond | null = null;
     let bbd = bondTol;
-    for (const b of doc.bondsNear(p, bondTol)) {
+    if (!this.structuresLocked) for (const b of doc.bondsNear(p, bondTol)) {
       const a1 = doc.atoms.get(b.a1)!, a2 = doc.atoms.get(b.a2)!;
       const d = distToSegment(p, a1, a2);
       if (d < bbd) { bbd = d; bb = b; }
@@ -505,7 +506,9 @@ export class Editor {
       }
       // a hand over what is selected: dragging there moves it
       const movable = !!h && this.tool.kind !== 'eraser' && this.isSelected(h);
-      this.r.overlay.style.cursor = onRotate ? 'grab' : handle ? (handle.which === 'mid' ? 'grab' : 'crosshair') : movable ? 'grab' : '';
+      // in Slides and Design, text boxes show an I-beam: a click there types, a drag moves the box
+      const typing = this.textFirst && this.tool.kind === 'select' && h?.kind === 'caption';
+      this.r.overlay.style.cursor = onRotate ? 'grab' : handle ? (handle.which === 'mid' ? 'grab' : 'crosshair') : typing ? 'text' : movable ? 'grab' : '';
       this.requestOverlay(e.timeStamp);
       return;
     }
@@ -761,6 +764,8 @@ export class Editor {
         // an empty title or text placeholder takes typing straight away, as in PowerPoint
         const c = h?.kind === 'caption' ? doc.captions.get(h.id) : undefined;
         if (c?.ph && isEmptyText(c) && !d.shift) { this.sel = emptySel(); this.editCaption(c.id); return; }
+        // in Slides and Design a click in a text box puts the caret there, as in PowerPoint
+        if (c && this.textFirst && !d.shift) { this.sel = emptySel(); this.editCaption(c.id, this.clientPoint(p)); return; }
         if (!d.shift) this.sel = emptySel();
         if (h) this.toggleSel(h);
         if (h?.kind === 'shape') this.noteTablePart(h.id, p);
@@ -1383,7 +1388,7 @@ export class Editor {
     const r: Rect = { x1: Math.min(a.x, b.x), y1: Math.min(a.y, b.y), x2: Math.max(a.x, b.x), y2: Math.max(a.y, b.y) };
     if (!add) this.sel = emptySel();
     const doc = this.doc;
-    for (const at of doc.atomsIn(r)) this.sel.atoms.add(at.id);
+    if (!this.structuresLocked) for (const at of doc.atomsIn(r)) this.sel.atoms.add(at.id);
     for (const id of this.sel.atoms) {
       for (const bid of doc.adj.get(id) ?? []) {
         const bb = doc.bonds.get(bid)!;
@@ -2476,6 +2481,10 @@ export class Editor {
 
   /** Smart guides: things moved snap into line with other shapes and the page (Design mode; Alt turns them off while dragging). */
   smartGuides = false;
+  /** Text boxes take a click as typing (Slides and Design), with an I-beam over them. */
+  textFirst = false;
+  /** Structures ignore clicks and box selection, so text near them is easy to work on (Slides). */
+  structuresLocked = false;
   /** The guide lines shown while moving. */
   private guideLines: GuideLine[] = [];
 
@@ -3046,10 +3055,15 @@ function outlineShape(ctx: CanvasRenderingContext2D, s: Shape): void {
 }
 
 /** The tool that draws a shape from the library, looking as `look` says. */
+/** The usual line widths of new design shapes, in points. */
+export const CLIP_ART_LINE = 1.75, SHAPE_LINE = 1;
+
 function geoTool(id: string, look: Partial<Shape>): Tool | undefined {
   const def = GEO_BY_ID.get(id);
   if (!def) return undefined;
-  const base: Partial<Shape> = def.outline ? { color: '#000000' } : { filled: true, fillColor: '#dae3f3', color: '#2f5597', ...look };
+  // lines in proportion to the shape: clip art (glassware…) at 1.75 pt, as it is drawn about 60 pt
+  // across; other shapes at PowerPoint's 1 pt. Change it in the Style panel.
+  const base: Partial<Shape> = def.outline ? { color: '#000000', lineWidth: CLIP_ART_LINE } : { filled: true, fillColor: '#dae3f3', color: '#2f5597', lineWidth: SHAPE_LINE, ...look };
   return { kind: 'shape', shape: { ...base, kind: 'geo', geo: id } as ShapeStyle, from: 'corner' };
 }
 

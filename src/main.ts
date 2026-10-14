@@ -51,6 +51,8 @@ import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, 
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
 import { StylePanel, tidyStyle } from './ui/style-panel';
+import { installCombos } from './ui/combo';
+import { applyRibbonIcons } from './ui/ribbon-icons';
 import { TEMPLATES, Template, templateById, ownTemplates, setOwnTemplates, templateFromAtoms } from './chem/templates';
 import { addNicknames, removeNickname, isBuiltInNickname } from './chem/labels';
 import { selectedGroup } from './chem/group-smiles';
@@ -539,6 +541,23 @@ function addNamed(got: { mb: string; attach: number[] }, x: number, y: number, t
     if (ids[i] !== undefined) to.updateAtom(ids[i], { attach: 'Wavy', attachNum: undefined, z: 0, label: null, charge: 0 });
   }
   return ids;
+}
+
+/** Slides: structures locked so clicks reach the text near them. */
+let structuresLocked = false;
+
+function toggleStructureLock(): void {
+  structuresLocked = !structuresLocked;
+  const slides = !!ws.active.deck && ws.active.mode !== 'design';
+  editor.structuresLocked = slides && structuresLocked;
+  $('#rb-lock-structures').setAttribute('aria-pressed', String(structuresLocked));
+  if (structuresLocked) {
+    // let go of any atoms and bonds picked up
+    editor.sel.atoms.clear();
+    editor.sel.bonds.clear();
+    editor.changed();
+  }
+  flash(structuresLocked ? 'Structures locked: clicks go to text and pictures. Click Lock Structures again to edit structures.' : 'Structures can be clicked again.');
 }
 
 /** How Number Compounds counted last time (offered again). */
@@ -1071,6 +1090,8 @@ function enterTab(tab: Tab, opened: boolean): void {
   editor.glueArrows = design;
   layers?.show(design ? doc : null);
   editor.smartGuides = design && designGuides;
+  editor.textFirst = !!deck;
+  editor.structuresLocked = slides && structuresLocked;
   for (const el of document.querySelectorAll<HTMLElement>('.design-only')) el.hidden = !design;
   document.body.classList.toggle('sheet-mode', sheet);
   document.body.classList.toggle('doc-mode', words);
@@ -1350,8 +1371,15 @@ function redo(): void {
 
 // ---------------------------------------------------------------- the tab strip
 
+/** Each kind of tab's picture (white on its mode's colour), so they tell apart at a glance. */
+const tabSvg = (body: string) => `<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">${body}</svg>`;
 const TAB_ICONS: Record<Tab['mode'], [string, string]> = {
-  drawing: ['D', 'Drawing'], slides: ['P', 'Slides'], sheet: ['X', 'Sheet'], document: ['W', 'Document'], design: ['G', 'Design'],
+  // a hexagon (a ring), a page of lines, a screen, a grid, and a pen nib over shapes
+  drawing: [tabSvg('<polygon points="8,2 13.2,5 13.2,11 8,14 2.8,11 2.8,5"/>'), 'Drawing'],
+  document: [tabSvg('<path d="M4 2.5h6l2.5 2.5v8.5h-8.5z"/><path d="M6 7.5h4.5M6 10h4.5"/>'), 'Document'],
+  slides: [tabSvg('<rect x="2" y="3" width="12" height="8.5" rx="1"/><path d="M8 11.5V14M5.5 14h5"/>'), 'Slides'],
+  sheet: [tabSvg('<rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6.5h11M2.5 10h11M6.5 2.5v11"/>'), 'Sheet'],
+  design: [tabSvg('<circle cx="5" cy="11" r="2.6"/><rect x="8.3" y="2.5" width="5.2" height="5.2" rx="0.6"/><path d="M3 4.5l3-2.2 1.5 3.4z"/>'), 'Design'],
 };
 
 function renderTabs(): void {
@@ -1363,7 +1391,7 @@ function renderTabs(): void {
     el.title = (t.ref.kind === 'path' ? t.ref.path : t.name) + (t.dirty ? ' (not saved)' : '');
     const icon = document.createElement('span');
     icon.className = 'tab-icon';
-    icon.textContent = TAB_ICONS[t.mode][0];
+    icon.innerHTML = TAB_ICONS[t.mode][0];
     icon.title = TAB_ICONS[t.mode][1];
     const name = document.createElement('span');
     name.className = 'tab-name';
@@ -2327,6 +2355,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'number-compounds': () => void numberCompounds(),
   'attach-descriptors': () => void attachDescriptors(),
   'add-id-label': () => void addTiedText('label'),
+  'lock-structures': () => toggleStructureLock(),
   'add-caption': () => void addTiedText('caption'),
   'bring-front': () => editor.setBondLayer(true) || flash('Select the bond to bring to the front (where bonds cross, the one behind has a gap).'),
   'send-back': () => editor.setBondLayer(false) || flash('Select the bond to send to the back (where bonds cross, the one behind has a gap).'),
@@ -3537,6 +3566,10 @@ function updatePanels(): void {
       ${lastStats ? '' : ''}`;
   });
 }
+
+// font, size and other typed boxes get drop-downs that list every choice
+installCombos();
+applyRibbonIcons();
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
