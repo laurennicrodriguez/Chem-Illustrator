@@ -63,10 +63,10 @@ export const COMMAND_ICONS: Record<string, string> = {
   'check-structure': svg(hex(11, 12.5, 8) + '<path d="M14.5 17.5l2.5 2.5 5-6"/>'),
   'periodic-table': ICONS.element ?? svg(txt(12, 15, 'Pt', 9)),
   // ---- text tied under a structure
-  'add-id-label': svg(hex(12, 8, 5.5) + txt(12, 22, '1', 8.5, 800)),
-  'add-caption': svg(hex(12, 8, 5.5) + '<path d="M5 18h14M7 21.5h10"/>'),
-  'attach-descriptors': svg(hex(12, 7, 5) + txt(12, 17.5, 'C₆H₆', 6.5, 600) + '<path d="M7 21h10" stroke-width="1.2"/>'),
-  'number-compounds': svg(hex(12, 9, 5) + txt(12, 21.5, '1', 8, 700)),
+  'add-id-label': svg(hex(12, 7, 5) + txt(12, 22, '1', 10.5, 800)),
+  'add-caption': svg(hex(12, 7, 5) + '<path d="M4 16.5h16M6.5 20.5h11"/>'),
+  'attach-descriptors': svg(hex(12, 7, 5) + txt(12, 21.5, 'MW', 8.5, 700)),
+  'number-compounds': svg(hex(6.5, 7, 4.2) + hex(17.5, 7, 4.2) + txt(6.5, 21.5, '1', 9, 800) + txt(17.5, 21.5, '2', 9, 800)),
   'clean-up-reaction': svg('<path d="M3 12h14"/><path d="M14 9l3 3-3 3"/><path d="M19.5 3.5l.8 1.7 1.7.8-1.7.8-.8 1.7-.8-1.7-1.7-.8 1.7-.8z" fill="currentColor" stroke="none"/>'),
 };
 
