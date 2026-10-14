@@ -10,7 +10,7 @@ import { Deck, DESIGN_SIZES, designScale } from '../src/deck/deck';
 import { GEOS, GEO_BY_ID, geoDef, flatten, insideOutline, textArea } from '../src/design/geo';
 import { writePptx, type PptxOptions } from '../src/io/pptx-write';
 import { readPptx } from '../src/io/pptx-read';
-import { shapeHit, shapeOrder } from '../src/objects';
+import { shapeHit, shapeOrder, elbowRoute } from '../src/objects';
 import { writeCdxml, chemDrawCurves } from '../src/io/cdxml-write';
 import { readCdxml } from '../src/io/cdxml';
 
@@ -191,3 +191,51 @@ describe('designs saved for ChemDraw', () => {
     expect(Math.round(m.y1)).toBe(25);
   });
 });
+
+describe('connectors', () => {
+  const two = () => {
+    const doc = new Doc();
+    let a = 0, b = 0;
+    doc.edit('shapes', () => {
+      a = doc.addShape({ kind: 'geo', geo: 'fcProcess', x1: 0, y1: 0, x2: 100, y2: 50 }).id;
+      b = doc.addShape({ kind: 'geo', geo: 'fcDecision', x1: 200, y1: 100, x2: 300, y2: 160 }).id;
+      doc.addArrow({ tail: { x: 100, y: 25 }, head: { x: 250, y: 100 }, headStyle: 'full', tailStyle: 'none', headType: 'solid', line: 'solid', noGo: false, equilibrium: false, sweep: 0, headLength: 6, headWidth: 1.5, elbow: true, from: { shape: a, port: 1 }, to: { shape: b, port: 0 } });
+    });
+    return { doc, a, b };
+  };
+
+  it('follow the shapes they are stuck to, and come loose when a shape goes', () => {
+    const { doc, a, b } = two();
+    const r = () => [...doc.arrows.values()][0];
+    doc.edit('move', () => doc.updateShape(b, { x1: 220, y1: 140, x2: 320, y2: 200 }));
+    expect(r().head).toEqual({ x: 270, y: 140 });
+    doc.undo();
+    expect(r().head).toEqual({ x: 250, y: 100 });
+    doc.edit('delete', () => doc.removeShape(a));
+    expect(r().from).toBeUndefined();
+    expect(r().to).toEqual({ shape: b, port: 0 });
+  });
+
+  it('bend square: out of each shape, across and down', () => {
+    const { doc } = two();
+    const pts = elbowRoute([...doc.arrows.values()][0]);
+    expect(pts[0]).toEqual({ x: 100, y: 25 });
+    expect(pts[pts.length - 1]).toEqual({ x: 250, y: 100 });
+    for (let i = 1; i < pts.length; i++) expect(pts[i].x === pts[i - 1].x || pts[i].y === pts[i - 1].y).toBe(true);
+  });
+
+  it('stay stuck to the same shapes in a PowerPoint file', async () => {
+    const { doc } = two();
+    const bytes = await writePptx({ size: { w: 504, h: 288 }, master: Deck.design(new Doc(), { w: 504, h: 288 }).master, slides: [{ layout: 'blank', doc, notes: '' }], design: true }, opts);
+    expect(slideXml(bytes)).toContain('<p:cxnSp>');
+    const back = readPptx(bytes).slides[0].contents;
+    const shapes = back.shapes.filter((s) => s.kind === 'geo');
+    expect(back.arrows).toHaveLength(1);
+    const r = back.arrows[0];
+    expect(r.elbow).toBe(true);
+    expect(shapes.find((s) => s.id === r.from?.shape)?.geo).toBe('fcProcess');
+    expect(shapes.find((s) => s.id === r.to?.shape)?.geo).toBe('fcDecision');
+  });
+});
+
+function slideXml(bytes: Uint8Array): string { return strFromU8(unzipSync(bytes)['ppt/slides/slide1.xml']); }

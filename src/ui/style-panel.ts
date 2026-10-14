@@ -139,6 +139,19 @@ export class StylePanel {
     this.select('Line', LINES, r.line, (v) => set('Arrow line', () => ({ line: v })));
     this.check('Crossed out (no reaction)', r.noGo, (v) => set('Crossed-out arrow', () => ({ noGo: v })));
     if (!r.equilibrium && !r.shaftSpacing) {
+      this.check('Square bends (elbow)', !!r.elbow, (v) => set('Elbow connector', () => ({ elbow: v || undefined, sweep: 0 })));
+    }
+    if (r.from || r.to) {
+      const loose = (a: Arrow) => ({ from: undefined, to: undefined } as Partial<Arrow>);
+      this.note('Stuck to shapes: it follows them when they move.');
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = 'Unstick from shapes';
+      b.title = 'Let the ends stay where they are when the shapes move';
+      b.addEventListener('click', () => set('Unstick connector', loose));
+      this.body.append(b);
+    }
+    if (!r.equilibrium && !r.shaftSpacing && !r.elbow) {
       this.number('Curve (°)', round(r.sweep / DEG, 1), 5, -330, 330, (v) => set('Bend arrow', () => ({ sweep: v * DEG })),
         'Positive bends to the left of the arrow’s direction, negative to the right; 0 is straight.');
     }

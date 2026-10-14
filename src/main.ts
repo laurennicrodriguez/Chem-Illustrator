@@ -282,6 +282,8 @@ const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => 
 });
 
 const HINTS: Record<string, string> = {
+  connector: 'Drag from one shape\'s blue dot to another\'s: the connector sticks to both and follows them when they move.',
+  'connector-elbow': 'Drag from one shape\'s blue dot to another\'s: the connector bends square and follows the shapes when they move.',
   select: 'Click to select, drag to box-select or move. Double-click selects a whole structure. Delete removes.',
   eraser: 'Click an atom, bond, caption, arrow or shape to remove it.',
   chain: 'Drag from empty space or an atom; the number shows how many bonds. Click to type how many atoms; Alt+click repeats the last number.',
@@ -922,6 +924,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   const words = tab.mode === 'document';
   document.body.classList.toggle('slides-mode', slides);
   document.body.classList.toggle('design-mode', design);
+  editor.glueArrows = design;
   for (const el of document.querySelectorAll<HTMLElement>('.design-only')) el.hidden = !design;
   document.body.classList.toggle('sheet-mode', sheet);
   document.body.classList.toggle('doc-mode', words);
@@ -1888,6 +1891,8 @@ const COMMANDS: Record<string, () => unknown> = {
   'new-slides': () => { finishTyping(); ws.newSlides(); },
   'new-design': () => newDesign(),
   'design-size': () => designSize(),
+  'connector-tool': () => { finishTyping(); editor.setTool('connector'); },
+  'connector-elbow-tool': () => { finishTyping(); editor.setTool('connector-elbow'); },
   'design-shapes': () => { if (ws.active.mode === 'design') lib.focusSearch(); else flash('Shapes are in Design mode: use File > New Design.'); },
   'shape-front': () => editor.setShapeLayer('front') || flash('Select the shapes to bring to the front.'),
   'shape-back': () => editor.setShapeLayer('back') || flash('Select the shapes to send to the back.'),
@@ -3091,10 +3096,12 @@ function sampleMolecule(): void {
 }
 
 // the ribbon's buttons run the same commands as the menus
-$('#ribbon').addEventListener('click', (e) => {
-  const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-cmd]')?.dataset.cmd;
-  if (cmd) command(cmd);
-});
+for (const id of ['#ribbon', '#design-ribbon']) {
+  $(id).addEventListener('click', (e) => {
+    const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-cmd]')?.dataset.cmd;
+    if (cmd) command(cmd);
+  });
+}
 renderTabs();
 updateTitle();
 

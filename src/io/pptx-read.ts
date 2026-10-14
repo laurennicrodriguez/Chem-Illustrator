@@ -20,6 +20,7 @@ import { layoutText, ASCENT } from '../text/layout';
 import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle } from '../deck/deck';
 import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure } from './pptx-write';
 import { GEOS } from '../design/geo';
+import { gluePoint } from '../objects';
 
 /** PowerPoint's shapes that are shapes in the library, by PowerPoint's name. */
 const GEO_BY_PRST = new Map(GEOS.filter((g) => g.prst).map((g) => [g.prst!, g.id]));
@@ -354,6 +355,7 @@ class Reader {
     if (bg && bg.toLowerCase() !== this.masterOut.background.toLowerCase()) this.warnings.add('Slides with a background colour of their own now use the master\'s.');
     this.tables = [];
     this.tableParts.clear();
+    this.geoIds.clear();
     doc.bulk(() => {
       this.tree(s, layout, s.tree, IDENTITY, doc);
       this.placeTables(doc);
@@ -395,7 +397,7 @@ class Reader {
     switch (el.localName) {
       case 'sp': this.shape(s, layout, el, t, doc); break;
       case 'pic': this.pictureEl(s, el, t, doc); break;
-      case 'cxnSp': this.line(el, kid(el, 'spPr'), t, doc); break;
+      case 'cxnSp': if (!this.ourConnector(s, el, t, doc)) this.line(el, kid(el, 'spPr'), t, doc); break;
       case 'grpSp': {
         const x = kid(el, 'grpSpPr', 'xfrm');
         const off = kid(x, 'off'), ext = kid(x, 'ext'), chOff = kid(x, 'chOff'), chExt = kid(x, 'chExt');
@@ -586,6 +588,42 @@ class Reader {
    * A design shape: as saved here (moved and sized as it now is, with PowerPoint's text if that
    * was changed there), or made from a PowerPoint shape of the same kind.
    */
+  /** The design shapes read on this slide: their number when saved → their number now (for connectors). */
+  private geoIds = new Map<number, number>();
+
+  /** A connector saved here: the arrow, stuck to the same shapes, where PowerPoint now has it. */
+  private ourConnector(s: Part, el: Element, t: Xf, doc: Doc): boolean {
+    const tag = this.tagsOf(s.path, kid(el, 'nvCxnSpPr', 'nvPr'))[TAG.connector];
+    if (!tag) return false;
+    let saved: { a?: Omit<Arrow, 'id'> } | null;
+    try { saved = JSON.parse(tag); } catch { return false; }
+    const a = saved?.a;
+    if (!a || !a.tail || !a.head) return false;
+    const arrow: Omit<Arrow, 'id'> = { ...a };
+    // a straight one moved in PowerPoint goes where it is now
+    const box = boxOf(kid(kid(el, 'spPr'), 'xfrm'), t);
+    if (box && !a.elbow) {
+      arrow.tail = { x: box.flipH ? box.x2 : box.x1, y: box.flipV ? box.y2 : box.y1 };
+      arrow.head = { x: box.flipH ? box.x1 : box.x2, y: box.flipV ? box.y1 : box.y2 };
+    }
+    const glue = (g: Arrow['from']) => {
+      const id = g ? this.geoIds.get(g.shape) : undefined;
+      return g && id !== undefined ? { shape: id, port: g.port } : undefined;
+    };
+    arrow.from = glue(a.from);
+    arrow.to = glue(a.to);
+    if (!arrow.from) delete arrow.from;
+    if (!arrow.to) delete arrow.to;
+    const r = doc.addArrow(arrow);
+    // stuck ends sit on their shapes' connection points
+    const patch: Partial<Arrow> = {};
+    const at = (g: NonNullable<Arrow['from']>) => { const sh = doc.shapes.get(g.shape); return sh ? gluePoint(sh, g.port) : null; };
+    if (arrow.from) { const p = at(arrow.from); if (p) patch.tail = p; }
+    if (arrow.to) { const p = at(arrow.to); if (p) patch.head = p; }
+    if (patch.tail || patch.head) doc.updateArrow(r.id, patch);
+    return true;
+  }
+
   private geoShape(sp: Element, spPr: Element | null, prst: string, box: Rect, tag: string | undefined, doc: Doc): boolean {
     let saved: { s: Partial<Shape>; plain: string } | null = null;
     try { saved = tag ? JSON.parse(tag) : null; } catch { saved = null; }
@@ -602,7 +640,9 @@ class Reader {
         const t = theirText();
         if (t) sh.text = t; else delete sh.text;
       }
-      doc.addShape(sh);
+      const made = doc.addShape(sh);
+      const sid = (saved as { sid?: unknown }).sid;
+      if (typeof sid === 'number') this.geoIds.set(sid, made.id);
       return true;
     }
     const geo = GEO_BY_PRST.get(prst);

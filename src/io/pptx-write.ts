@@ -10,13 +10,13 @@
 // The slide master's fonts, colours, background, logo, slide numbers and footer become the
 // file's slide master and theme, so PowerPoint's own placeholders follow them too.
 
-import { Doc, Caption, Shape, TextRun, ParaStyle, applyBase } from '../model';
+import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, applyBase } from '../model';
 import type { Rect } from '../geom';
 import { layoutText, ASCENT, FONT_STACK, type Measure } from '../text/layout';
 import { fitParas, listMarkers, splitParagraphs } from '../text/paragraphs';
 import { formulaParts } from '../richtext';
 import { arialWidth } from '../text-metrics';
-import { arrowPoints, shapeBox, boxOf, shapeOrder } from '../objects';
+import { arrowPoints, shapeBox, boxOf, shapeOrder, elbowRoute } from '../objects';
 import { geoDef, textArea, type GeoStep } from '../design/geo';
 import { layoutTable, cellAlign, spanOf, isCovered, tableText, NOTE_SCALE } from '../table';
 import { tableBorders } from './cdxml-table';
@@ -43,6 +43,8 @@ export const TAG = {
   design: 'CHEMILLUSTRATOR_DESIGN',
   /** A design shape (Design mode): which shape and how it looks, used when it comes back. */
   geo: 'CHEMILLUSTRATOR_GEO',
+  /** A connector (an arrow stuck to design shapes, or bent square): the arrow as it was. */
+  connector: 'CHEMILLUSTRATOR_CONNECTOR',
 };
 
 /** A picture of part of a slide (structures, schemes): SVG and PNG, and the area it shows, in points. */
@@ -111,6 +113,8 @@ export interface SlideParts {
   shapes: Shape[];
   /** Tables: PowerPoint tables. */
   tables: Shape[];
+  /** Connectors between design shapes (and elbow arrows): PowerPoint connectors. */
+  connectors: Arrow[];
   /** Structures and schemes, each with the captions, arrows and shapes around it: one picture each. */
   drawings: Selection[];
 }
@@ -145,7 +149,9 @@ export function splitSlide(doc: Doc, measure: Measure = arialMeasure): SlidePart
       },
     });
   }
-  for (const r of doc.arrows.values()) items.push({ box: boxOf(arrowPoints(r, 12)), chem: true, add: (s) => s.arrows.add(r.id) });
+  const connectors: Arrow[] = [];
+  for (const r of doc.arrows.values()) if (r.from || r.to || r.elbow) connectors.push(r);
+  for (const r of doc.arrows.values()) if (!(r.from || r.to || r.elbow)) items.push({ box: boxOf(arrowPoints(r, 12)), chem: true, add: (s) => s.arrows.add(r.id) });
   for (const sh of doc.shapes.values()) {
     if (sh.picture) continue; // a stand-in for a picture from a ChemDraw file
     if (sh.kind === 'picture') { pictures.push(sh); continue; }
@@ -191,7 +197,7 @@ export function splitSlide(doc: Doc, measure: Measure = arialMeasure): SlidePart
   // top to bottom, then left to right, as people read (and as PowerPoint tabs through them)
   const top = (s: Selection) => Math.min(...[...s.atoms].map((id) => doc.atoms.get(id)!.y), ...[...s.arrows].map((id) => doc.arrows.get(id)!.tail.y), ...[...s.shapes].map((id) => doc.shapes.get(id)!.y1));
   drawings.sort((a, b) => top(a) - top(b));
-  return { texts, pictures, shapes: shapeOrder([...shapes, ...geos]), tables, drawings };
+  return { texts, pictures, shapes: shapeOrder([...shapes, ...geos]), tables, drawings, connectors };
 }
 
 export const arialMeasure: Measure = (t, size, _family, style) => arialWidth(t, size, /bold/.test(style));
@@ -457,6 +463,7 @@ class Writer {
     // pictures and shapes at the back, as on screen
     for (const p of parts.pictures) out.push(await this.picture(path, p.src!, { x1: Math.min(p.x1, p.x2), y1: Math.min(p.y1, p.y2), x2: Math.max(p.x1, p.x2), y2: Math.max(p.y1, p.y2) }, `Picture ${id - 1}`, id++, p.crop ?? null));
     for (const sh of parts.shapes) out.push(sh.kind === 'geo' ? this.geo(path, sh, id++, doc, styles.body?.size ?? doc.style.captionSize) : shapeXml(sh, id++, doc.style.lineWidth));
+    for (const r of parts.connectors) out.push(this.connector(path, r, id++, doc.style.lineWidth));
     const phCount: Record<string, number> = {};
     for (const tb of parts.tables) out.push(this.table(path, tb, () => id++, s.layout, styles, phCount, doc));
     // structures and schemes
@@ -525,9 +532,38 @@ class Writer {
     const bodyPr = `<a:bodyPr wrap="square" lIns="${emu(ins)}" tIns="${emu(ins)}" rIns="${emu(ins)}" bIns="${emu(ins)}" rtlCol="0" anchor="${anchor}"><a:noAutofit/></a:bodyPr>`;
     const { id: _, x1: _a, y1: _b, x2: _c, y2: _d, ...look } = s;
     const plain = s.text?.runs.map((r) => r.text).join('') ?? '';
-    const tag = this.addTags(path, { [TAG.geo]: JSON.stringify({ v: 1, s: look, plain }) });
+    const tag = this.addTags(path, { [TAG.geo]: JSON.stringify({ v: 1, s: look, plain, sid: s.id }) });
     return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${xml(def.name)} ${id - 1}"/><p:cNvSpPr/><p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvSpPr>` +
       `<p:spPr>${xfrm(box)}${geom}${fill}${ln}${shadow}</p:spPr><p:txBody>${bodyPr}<a:lstStyle/>${body}</p:txBody></p:sp>`;
+  }
+
+  /**
+   * A connector: PowerPoint's straight connector, or a bent line for an elbow, with its heads.
+   * A tag keeps the arrow (and which shapes it is stuck to).
+   */
+  private connector(path: string, r: Arrow, id: number, lw: number): string {
+    const pts = r.elbow ? elbowRoute(r) : [r.tail, r.head];
+    const b = boxOf(pts);
+    const w = Math.max(b.x2 - b.x1, 0), h = Math.max(b.y2 - b.y1, 0);
+    let geom: string, frame: string;
+    if (r.elbow) {
+      const steps = pts.map((p, i) => [i ? 'L' : 'M', p.x - b.x1, p.y - b.y1] as GeoStep);
+      geom = `<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="r" b="b"/><a:pathLst>${geoPath(steps, Math.max(w, 0.01), Math.max(h, 0.01), ' fill="none"')}</a:pathLst></a:custGeom>`;
+      frame = xfrm(b);
+    } else {
+      geom = '<a:prstGeom prst="straightConnector1"><a:avLst/></a:prstGeom>';
+      frame = xfrm(b, `${r.head.x < r.tail.x ? ' flipH="1"' : ''}${r.head.y < r.tail.y ? ' flipV="1"' : ''}`);
+    }
+    const width = r.lineWidth ?? lw;
+    const end = (style: Arrow['headStyle']) => (style === 'none' ? '' : r.headType === 'angle' ? 'arrow' : 'triangle');
+    // PowerPoint's "head end" is where the line starts, its "tail end" where it finishes
+    const headEnd = end(r.tailStyle), tailEnd = end(r.headStyle);
+    const ln = `<a:ln w="${emu(r.line === 'bold' ? width * 2.5 : width)}"><a:solidFill><a:srgbClr val="${hex6(r.color ?? '#000000')}"/></a:solidFill>${r.line === 'dashed' ? '<a:prstDash val="dash"/>' : ''}<a:miter lim="800000"/>` +
+      `${headEnd ? `<a:headEnd type="${headEnd}"/>` : ''}${tailEnd ? `<a:tailEnd type="${tailEnd}"/>` : ''}</a:ln>`;
+    const { id: _, ...keep } = r;
+    const tag = this.addTags(path, { [TAG.connector]: JSON.stringify({ v: 1, a: keep }) });
+    return `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="${id}" name="${r.elbow ? 'Elbow Connector' : 'Straight Arrow Connector'} ${id - 1}"/><p:cNvCxnSpPr/><p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvCxnSpPr>` +
+      `<p:spPr>${frame}${geom}${ln}</p:spPr></p:cxnSp>`;
   }
 
   /** A picture from image data, cropped as given. */

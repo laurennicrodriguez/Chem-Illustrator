@@ -35,7 +35,7 @@ import { tokenize, addNicknames, isBuiltInNickname } from '../chem/labels';
 import {
   Handle, arrowHit, shapeHit, arrowHandles, shapeHandles, dragArrowHandle, dragShapeHandle, dragCropHandle, shapeBox,
   arrowPoints, bracketsAround, bracketLip, unionRect,
-  shapeOrder,
+  shapeOrder, portNear, shapePorts,
 } from '../objects';
 import { isEmptyText } from '../deck/deck';
 import { crossedBonds, lineAcross } from '../chem/fragments';
@@ -62,9 +62,11 @@ export type Tool =
 export type SymbolKind = 'LonePair' | 'Electron' | 'CirclePlus' | 'CircleMinus' | 'DeltaPlus' | 'DeltaMinus';
 
 /** How a new arrow looks (everything else is the document's default). */
-export type ArrowStyle = Partial<Pick<Arrow, 'headStyle' | 'tailStyle' | 'headType' | 'line' | 'noGo' | 'equilibrium' | 'sweep'>> & {
+export type ArrowStyle = Partial<Pick<Arrow, 'headStyle' | 'tailStyle' | 'headType' | 'line' | 'noGo' | 'equilibrium' | 'sweep' | 'elbow' | 'from' | 'to'>> & {
   /** Two shafts and an open head (⇒). */
   retro?: boolean;
+  /** A connector: its ends stick to shapes' connection points, and it isn't snapped to 15° steps. */
+  connector?: boolean;
 };
 
 /** How a new shape looks. */
@@ -105,6 +107,8 @@ export const TOOLS: Record<string, Tool> = {
   'arrow-nogo': { kind: 'arrow', style: { noGo: true } },
   'arrow-curved': { kind: 'arrow', style: { sweep: 120 * DEG } },
   'arrow-fishhook': { kind: 'arrow', style: { sweep: 120 * DEG, headStyle: 'halfLeft' } },
+  connector: { kind: 'arrow', style: { connector: true } },
+  'connector-elbow': { kind: 'arrow', style: { connector: true, elbow: true } },
   'shape-rect': { kind: 'shape', shape: { kind: 'rect' }, from: 'corner' },
   'shape-rect-rounded': { kind: 'shape', shape: { kind: 'rect', rounded: true }, from: 'corner' },
   'shape-rect-shadow': { kind: 'shape', shape: { kind: 'rect', shadow: true }, from: 'corner' },
@@ -519,7 +523,16 @@ export class Editor {
       const h = d.handle!;
       if (h.kind === 'arrow') {
         const r = this.doc.arrows.get(h.id);
-        if (r) this.doc.updateArrow(h.id, dragArrowHandle(r, h.which, p, e.altKey));
+        if (r) {
+          let patch = dragArrowHandle(r, h.which, p, e.altKey);
+          // a connector's end sticks to the connection point it is dropped on, and comes loose elsewhere
+          if ((h.which === 'tail' || h.which === 'head') && (this.glueArrows || r.from || r.to || r.elbow)) {
+            const key = h.which === 'tail' ? 'from' : 'to';
+            const port = this.portAt(p);
+            patch = port ? { [h.which]: port.at, [key]: { shape: port.shape, port: port.port } } : { [h.which]: p, [key]: undefined };
+          }
+          this.doc.updateArrow(h.id, patch);
+        }
       } else {
         const sh = this.doc.shapes.get(h.id);
         if (sh) this.doc.updateShape(h.id, this.cropping === h.id ? dragCropHandle(sh, h.which, p) : dragShapeHandle(sh, h.which, p, e.altKey));
@@ -966,6 +979,12 @@ export class Editor {
         doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(push.tail, push.head, { ...t.style, sweep: Math.abs(push.sweep), ...(push.small ? { headLength: lw * SMALL_HEAD.length, headWidth: lw * SMALL_HEAD.width } : {}) }, Math.sign(push.sweep)).id }));
         return;
       }
+      const c = this.connectorEnds(t.style, d.start, p);
+      if (c) {
+        if (dist(c.tail, c.head) < 2) return;
+        doc.edit('Connector', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(c.tail, c.head, { ...t.style, ...c.glue }).id }));
+        return;
+      }
       const start = this.branchStart(d);
       const end = this.arrowEnd(start, p, d.alt);
       doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(start, end, t.style, this.bendSide(d, end)).id }));
@@ -1174,7 +1193,7 @@ export class Editor {
   /** Add an arrow from tail to head in the given style; `side` −1 bends a curved arrow the other way. */
   private addArrow(tail: Vec, head: Vec, style: ArrowStyle = {}, side = 1): Arrow {
     const lw = this.doc.style.lineWidth;
-    const { retro, ...rest } = style;
+    const { retro, connector: _, ...rest } = style;
     // ChemDraw's defaults: heads ten line widths long and 2.5 wide
     const a: Omit<Arrow, 'id'> = {
       tail, head, headStyle: 'full', tailStyle: 'none', headType: 'solid', line: 'solid', noGo: false,
@@ -1297,7 +1316,15 @@ export class Editor {
     const doc = this.doc;
     doc.moveAtoms(this.sel.atoms, dx, dy);
     for (const id of this.sel.captions) { const c = doc.captions.get(id); if (c) doc.updateCaption(id, { x: c.x + dx, y: c.y + dy }); }
-    for (const id of this.sel.arrows) { const r = doc.arrows.get(id); if (r) doc.updateArrow(id, { tail: { x: r.tail.x + dx, y: r.tail.y + dy }, head: { x: r.head.x + dx, y: r.head.y + dy } }); }
+    for (const id of this.sel.arrows) {
+      const r = doc.arrows.get(id);
+      if (!r) continue;
+      const patch: Partial<Arrow> = { tail: { x: r.tail.x + dx, y: r.tail.y + dy }, head: { x: r.head.x + dx, y: r.head.y + dy } };
+      // a connector moved away from a shape that stays comes loose from it
+      if (r.from && !this.sel.shapes.has(r.from.shape)) patch.from = undefined;
+      if (r.to && !this.sel.shapes.has(r.to.shape)) patch.to = undefined;
+      doc.updateArrow(id, patch);
+    }
     for (const id of this.sel.shapes) { const s = doc.shapes.get(id); if (s) doc.updateShape(id, { x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy }); }
   }
 
@@ -2221,6 +2248,28 @@ export class Editor {
 
   // ------------------------------------------------------------------ text in design shapes
 
+  /** Arrows drawn or dragged onto a shape's connection point stick to it (Design mode). */
+  glueArrows = false;
+
+  /** The connection point under `p`, on the shape in front. */
+  private portAt(p: Vec): ReturnType<typeof portNear> {
+    return portNear(shapeOrder([...this.doc.shapes.values()]).reverse(), p, this.tol(9));
+  }
+
+  /**
+   * Where a connector drawn from `a` to `b` goes: its ends on the connection points there.
+   * Null for an ordinary arrow that touches no connection point.
+   */
+  private connectorEnds(style: ArrowStyle, a: Vec, b: Vec): { tail: Vec; head: Vec; glue: Pick<Arrow, 'from' | 'to'> } | null {
+    if (!style.connector && !this.glueArrows) return null;
+    const pa = this.portAt(a), pb = this.portAt(b);
+    if (!pa && !pb && !style.connector) return null;
+    const glue: Pick<Arrow, 'from' | 'to'> = {};
+    if (pa) glue.from = { shape: pa.shape, port: pa.port };
+    if (pb && pb.shape !== pa?.shape) glue.to = { shape: pb.shape, port: pb.port };
+    return { tail: pa?.at ?? a, head: glue.to ? pb!.at : b, glue };
+  }
+
   /** How new design shapes look (Design mode sets its own defaults; settable in settings). */
   geoLook: Partial<Shape> = {};
 
@@ -2591,6 +2640,7 @@ export class Editor {
         ctx.fillText(r.sweep ? `${Math.round(Math.abs(r.sweep) / DEG)}°` : 'straight', this.pointer.x + 10 * px, this.pointer.y - 10 * px);
       }
     }
+    this.drawPorts(ctx, px);
     // previews of what a drag will draw
     const d = this.drag;
     if (d && d.moved) {
@@ -2608,6 +2658,36 @@ export class Editor {
       }
     }
     this.captionEd?.draw(ctx);
+  }
+
+  /** While drawing a connector (or dragging its end), the connection points of the shape under the pointer. */
+  private drawPorts(ctx: CanvasRenderingContext2D, px: number): void {
+    const dh = this.drag?.mode === 'handle' ? this.drag.handle : undefined;
+    const r = dh?.kind === 'arrow' ? this.doc.arrows.get(dh.id) : undefined;
+    const drawing = this.tool.kind === 'arrow' && (this.tool.style.connector || this.glueArrows);
+    const dragging = !!r && (dh!.which === 'tail' || dh!.which === 'head') && (this.glueArrows || !!r.from || !!r.to || !!r.elbow);
+    if (!drawing && !dragging) return;
+    const p = this.pointer;
+    const near = this.portAt(p);
+    const pad = 14 * px;
+    ctx.save();
+    ctx.lineWidth = 1.2 * px;
+    for (const s of this.doc.shapes.values()) {
+      const ps = shapePorts(s);
+      if (!ps) continue;
+      const b = shapeBox(s);
+      if (p.x < b.x1 - pad || p.x > b.x2 + pad || p.y < b.y1 - pad || p.y > b.y2 + pad) continue;
+      ps.forEach((q, i) => {
+        const hot = near && near.shape === s.id && near.port === i;
+        ctx.beginPath();
+        ctx.arc(q.x, q.y, (hot ? 5 : 3.5) * px, 0, Math.PI * 2);
+        ctx.fillStyle = hot ? '#2f80ed' : '#fff';
+        ctx.strokeStyle = '#2f80ed';
+        ctx.fill();
+        ctx.stroke();
+      });
+    }
+    ctx.restore();
   }
 
   private drawPreview(ctx: CanvasRenderingContext2D, d: Drag): void {
@@ -2650,6 +2730,8 @@ export class Editor {
     } else if (t.kind === 'arrow') {
       const push = this.pushFor(d, d.last);
       if (push) { poly(arrowPoints(push), false); return; }
+      const c = this.connectorEnds(t.style, d.start, d.last);
+      if (c) { poly(arrowPoints({ tail: c.tail, head: c.head, sweep: 0, elbow: t.style.elbow, ...c.glue }), false); return; }
       const start = this.branchStart(d);
       const end = this.arrowEnd(start, d.last, d.alt);
       const sweep = (t.style.sweep ?? 0) * this.bendSide(d, end);
