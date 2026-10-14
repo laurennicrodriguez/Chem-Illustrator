@@ -257,6 +257,41 @@ export function sprout(doc: Doc, atomId: number, order = 1, display: BondDisplay
 }
 
 /**
+ * A zig-zag chain of `n` bonds from an atom (or from a point, when `atomId` is null), for the
+ * chain tool's "how many atoms" click. The first bond goes where a new bond normally would, and
+ * the chain turns to whichever side carries on the zig-zag and stays clear of other atoms.
+ */
+export function chainFrom(doc: Doc, atomId: number | null, at: Vec, n: number, chainAngle = 120): Vec[] {
+  const a = atomId === null ? null : doc.atoms.get(atomId)!;
+  const start = a ?? at;
+  const L = a ? bondLength(doc, a) : doc.style.bondLength;
+  const d0 = a ? sproutDir(doc, a.id) : fromAngle(-30 * DEG);
+  const turn = (180 - chainAngle) * DEG;
+  const build = (s: number) => {
+    const pts: Vec[] = [start];
+    let cur = start;
+    for (let i = 0; i < n; i++) {
+      cur = add(cur, fromAngle(angleOf(d0) + (i % 2 ? s * turn : 0), L));
+      pts.push(cur);
+    }
+    return pts;
+  };
+  const prev = a ? doc.neighbors(a.id) : [];
+  const ignore = new Set(a ? [a.id, ...prev.map((x) => x.id)] : []);
+  const score = (pts: Vec[]) => {
+    let sc = 0;
+    for (const p of pts.slice(1)) sc -= crowding(doc, p, L, ignore);
+    // the second bond runs parallel to the bond before the chain (a zig-zag carries on)
+    if (prev.length === 1 && pts.length > 2) sc += 0.5 * dot(norm(sub(pts[2], pts[1])), norm(sub(a!, prev[0])));
+    // otherwise lean right, then up, like a chain drawn by hand
+    if (pts.length > 2) sc += 0.01 * (pts[2].x - pts[1].x) - 0.001 * (pts[2].y - pts[1].y);
+    return sc;
+  };
+  const up = build(1), down = build(-1);
+  return score(up) >= score(down) ? up : down;
+}
+
+/**
  * Zig-zag chain points from `start` towards `end` (ChemDraw's acyclic chain tool).
  * `firstUp` picks which side the first bond leans to.
  */

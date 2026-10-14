@@ -192,7 +192,7 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     { name: 'bond-bold', title: 'Bold bond' },
     { name: 'bond-dash', title: 'Dashed bond' },
     { name: 'bond-wavy', title: 'Wavy bond' },
-    { name: 'chain', title: 'Chain: drag to draw a zig-zag chain' },
+    { name: 'chain', title: 'Chain: drag to draw a zig-zag chain, or click to type how many atoms (Alt+click: the same number again)' },
   ],
   [
     { name: 'ring-3', title: 'Cyclopropane' },
@@ -243,7 +243,7 @@ const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => 
 const HINTS: Record<string, string> = {
   select: 'Click to select, drag to box-select or move. Double-click selects a whole structure. Delete removes.',
   eraser: 'Click an atom, bond, caption, arrow or shape to remove it.',
-  chain: 'Drag from empty space or an atom; the number shows how many bonds.',
+  chain: 'Drag from empty space or an atom; the number shows how many bonds. Click to type how many atoms; Alt+click repeats the last number.',
   text: 'Click an atom to type a label (OMe, CO2Et, NHBoc…), or click empty space for a caption.',
 };
 const ARROW_HINT = 'Drag to draw an arrow (Alt: any angle); click for a standard one. Drag the ends to move them, the middle to bend it.';
@@ -481,6 +481,13 @@ async function numberCompounds(): Promise<void> {
   const n = editor.numberCompounds({ start, letters: got.style === 'letters', keep: got.old === 'keep', reagents: got.reagents === 'number' });
   if (!n) flash('No structures to number.');
 }
+
+editor.askChainLength = async (last) => {
+  const got = await ask('Chain', [{ name: 'n', label: 'Number of atoms', value: String(last), type: 'number' }],
+    { ok: 'Draw', note: 'Clicked on an atom, the chain adds this many atoms to it. Alt+click draws the same number again without asking.' });
+  const n = got ? Math.round(Number(got.n)) : NaN;
+  return n >= 1 ? n : null;
+};
 
 const arrangeDialog = new ArrangeDialog({ apply: (o) => editor.arrangeScheme(o), undo: () => editor.undo() });
 const nameDialog = new NameDialog(async (name) => {

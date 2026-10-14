@@ -13,7 +13,7 @@ import { cellAlign, insertRow, nextCell, partAt, partRuns, setColumnWidth, setPa
 import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG, exitParam } from '../geom';
 import {
   sproutDir, sprout, bondTo, bondLength, atomAt, freeRing, fusedRing, fuseSide, ringOnAtom,
-  placeRing, chainPoints, MERGE_FRACTION,
+  placeRing, chainPoints, chainFrom, MERGE_FRACTION,
 } from '../chem/chemgeom';
 import { keymap, chordOf, parseAction, KeyContext } from './keymap';
 import { sproutGroup, fuseChair, SPROUT_KINDS, SproutKind, nextNumber } from '../chem/sprouts';
@@ -718,16 +718,10 @@ export class Editor {
         return;
       }
       case 'chain': {
-        if (!this.sel.atoms.size) this.sel = emptySel();
-        doc.edit('Chain', () => {
-          if (h && h.kind === 'atom') this.lastEdited = sprout(doc, h.id).id;
-          else {
-            const a = doc.addAtom(p.x, p.y);
-            this.lastEdited = bondTo(doc, a, add(p, fromAngle(-30 * DEG, doc.style.bondLength))).id;
-          }
-        });
-        this.setKeyHot({ kind: 'atom', id: this.lastEdited! });
-        this.changed();
+        // a click asks how long a chain to draw (Alt+click draws the same length again)
+        const from = h && h.kind === 'atom' ? h.id : null;
+        if (d.alt || !this.askChainLength) this.drawChain(from, p, this.chainLength);
+        else void this.askChainLength(this.chainLength).then((n) => { if (n) this.drawChain(from, p, n); });
         return;
       }
       case 'ring': {
@@ -1070,6 +1064,29 @@ export class Editor {
     this.addToSel(h);
     this.requestOverlay();
     this.onChange();
+  }
+
+  /** How many atoms the chain tool's click adds; set by the window it opens. */
+  chainLength = 4;
+  /** Asks how many atoms a clicked chain should add (null: cancelled). */
+  askChainLength: ((last: number) => Promise<number | null>) | null = null;
+
+  /** Draw a zig-zag chain of n new atoms on an atom, or of n atoms in empty space. */
+  drawChain(from: number | null, p: Vec, n: number): void {
+    const doc = this.doc;
+    n = Math.max(1, Math.min(200, Math.round(n)));
+    this.chainLength = n;
+    const bonds = from === null ? Math.max(1, n - 1) : n;
+    if (from !== null && !doc.atoms.has(from)) return;
+    if (!this.sel.atoms.size) this.sel = emptySel();
+    doc.edit('Chain', () => {
+      const pts = chainFrom(doc, from, p, bonds, doc.style.chainAngle);
+      let cur = from !== null ? doc.atoms.get(from)! : doc.addAtom(p.x, p.y);
+      for (let i = 1; i < pts.length; i++) cur = bondTo(doc, cur, pts[i]);
+      this.lastEdited = cur.id;
+    });
+    this.setKeyHot({ kind: 'atom', id: this.lastEdited! });
+    this.changed();
   }
 
   private chainFirstUp(a: Vec & { id?: number }, p: Vec): boolean {
