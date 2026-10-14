@@ -87,6 +87,8 @@ import { layoutTable } from './table';
 import { SheetChem } from './sheet/sheet-chem';
 import { structureDoc, structureMolfile } from './sheet/structure-doc';
 import { StructurePictures } from './ui/structure-pictures';
+import { LabelTooltip } from './ui/label-tooltip';
+import { starAtoms } from './chem/label-tip';
 import { structurePlace } from './sheet/layout';
 import { readSheetFile, writeSheetFile, SheetFileDeps } from './io/sheet-files';
 import { ACS_1996, DocStyle } from './style';
@@ -2208,7 +2210,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-custom', 'toolbox-details', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'show-stereo', 'clipboard-formats', 'split-view']);
+  'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
@@ -2325,6 +2327,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'dev-tools': () => { showDevTools(!devTools); storeSettings(); },
   'show-stereo': () => previewStereo(!renderer.previewStereo),
   'scroll-bars': () => { showScrollBars(!scrollbars.shown); storeSettings(); },
+  'group-tips': () => { showGroupTips(!labelTips.enabled); storeSettings(); },
   'zoom-in': () => editor.zoomBy(1.25),
   'zoom-out': () => editor.zoomBy(0.8),
   'zoom-fit': () => editor.fit(),
@@ -2799,6 +2802,7 @@ function storeSettings(): void {
     devTools,
     showRoles: editor.showRoles,
     scrollBars: scrollbars.shown,
+    groupTips: labelTips.enabled,
     chemTyping: typingPrefs.chemistry,
     spellCheck: typingPrefs.spelling,
     replacements: typingPrefs.replacements,
@@ -2911,6 +2915,7 @@ void loadSettings().then((s) => {
   $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(s.showRoles));
   showDevTools(s.devTools);
   showScrollBars(s.scrollBars);
+  showGroupTips(s.groupTips);
   modeColours = s.modeColours;
   applyModeColours(ws.active.mode, modeColours);
   keymap.setOverrides(s.hotkeys);
@@ -3615,7 +3620,7 @@ function drawingMenu(): MenuItem[] {
   const atoms = s.atoms.size > 0;
   const shapes = [...s.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => !!x);
   const design = ws.active.mode === 'design';
-  const view: MenuItem = { label: 'View', items: [{ cmd: 'zoom-in' }, { cmd: 'zoom-out' }, { cmd: 'zoom-fit' }, { cmd: 'zoom-actual' }, null, { cmd: 'show-stereo' }, { cmd: 'scroll-bars' }] };
+  const view: MenuItem = { label: 'View', items: [{ cmd: 'zoom-in' }, { cmd: 'zoom-out' }, { cmd: 'zoom-fit' }, { cmd: 'zoom-actual' }, null, { cmd: 'show-stereo' }, { cmd: 'group-tips' }, { cmd: 'scroll-bars' }] };
   if (!any) {
     return [
       { cmd: 'paste' }, { cmd: 'paste-smiles' }, { cmd: 'select-all' }, null,
@@ -3663,6 +3668,46 @@ function drawingMenu(): MenuItem[] {
     { cmd: 'select-all' },
     view,
   ];
+}
+
+// ---------------------------------------------------------------- group tooltips (View > Group Tooltips)
+
+/** Resting the mouse on OTBS, Boc, CO2Me… shows the group written out. */
+const labelTips = new LabelTooltip(async (tip) => {
+  if (!chem.ready) return null;
+  const mb = await chem.smilesToMol(tip.smiles).catch(() => null);
+  if (!mb) return null;
+  const d = new Doc();
+  d.style = { ...editor.doc.style };
+  d.bulk(() => {
+    const ids = addMolfile(d, mb, 0, 0);
+    for (const i of starAtoms(tip.smiles)) {
+      if (ids[i] !== undefined) d.updateAtom(ids[i], { attach: 'Wavy', attachNum: undefined, z: 0, label: null, charge: 0 });
+    }
+  });
+  const pic = recordPicture(d, 3);
+  if (!pic) return null;
+  return pictureCanvas(d, pic, 72 * 1.4 * (window.devicePixelRatio || 1)).canvas;
+});
+
+function groupTipTarget(e: PointerEvent) {
+  const h = editor.hover;
+  if (h?.kind !== 'atom' || e.buttons) return null;
+  const d = editor.doc;
+  const a = d.atoms.get(h.id);
+  if (!a?.label) return null;
+  const ext = (d.adj.get(h.id) ?? []).map((bid) => d.bonds.get(bid)!).filter((b) => b && b.display !== 'dative').map((b) => (b.order === 4 ? 1 : b.order));
+  return { label: a.label, ext: ext.length ? ext : [1], x: e.clientX, y: e.clientY };
+}
+// the editor reads the pointer first (its listeners were added first), so its hover is up to date
+renderer.overlay.addEventListener('pointermove', (e) => labelTips.over(groupTipTarget(e)));
+for (const ev of ['pointerdown', 'pointerleave', 'wheel'] as const) renderer.overlay.addEventListener(ev, () => labelTips.hide());
+window.addEventListener('keydown', () => labelTips.hide());
+
+function showGroupTips(on: boolean): void {
+  labelTips.enabled = on;
+  if (!on) labelTips.hide();
+  $('[data-cmd="group-tips"]')?.setAttribute('aria-checked', String(on));
 }
 
 editor.onContextMenu = (e) => {
