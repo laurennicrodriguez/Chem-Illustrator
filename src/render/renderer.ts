@@ -907,7 +907,7 @@ export class Renderer {
           ctx.stroke();
           const size = flagTextSize(s);
           ctx.font = `${size}px ${FONT_STACK}`;
-          ctx.fillText(flag, cx - measureText(flag, size) / 2, cy + size * 0.36);
+          ctx.fillText(flag, cx - measureText(flag, size) / 2, cy + size * 0.32);
         } else if (s.symbol === 'CirclePlus' || s.symbol === 'CircleMinus') {
           ctx.arc(cx, cy, r, 0, Math.PI * 2);
           ctx.moveTo(cx - r * 0.6, cy); ctx.lineTo(cx + r * 0.6, cy);

@@ -1220,9 +1220,10 @@ class CdxmlWriter {
           const word = CHIRAL_FLAGS[s.symbol];
           const size = flagTextSize(s);
           const w = this.measure(word, size);
-          const cx = (s.x1 + s.x2) / 2, base = (s.y1 + s.y2) / 2 + size * 0.36;
+          // the text box as ChemDraw makes it: 0.895 of the size above the baseline, 0.255 below
+          const cx = (s.x1 + s.x2) / 2, base = (s.y1 + s.y2) / 2 + size * 0.32;
           set('BoundingBox', `${f2(cx - w / 2)} ${f2(base)} ${f2(cx + w / 2)} ${f2(base)}`);
-          const t = this.el('t', { p: `${f2(cx - w / 2)} ${f2(base)}`, BoundingBox: box({ x1: cx - w / 2, y1: base - CAP * size, x2: cx + w / 2, y2: base }), LineHeight: 'auto' });
+          const t = this.el('t', { p: `${f2(cx - w / 2)} ${f2(base)}`, BoundingBox: box({ x1: cx - w / 2, y1: base - 0.895 * size, x2: cx + w / 2, y2: base + 0.255 * size }), LineHeight: 'auto' });
           const sp = this.el('s', { font: this.fontId(), size: f2(size).replace(/\.00$/, ''), color: '0', face: 96 });
           sp.textContent = word;
           t.appendChild(sp);
