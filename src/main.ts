@@ -153,6 +153,19 @@ const BRACKETS: PaletteDef = {
   ],
 };
 
+const SYMBOLS: PaletteDef = {
+  palette: 'symbols',
+  title: 'Mechanism symbols',
+  items: [
+    { name: 'sym-lonepair', title: 'Lone pair: click an atom to put one in its most open space' },
+    { name: 'sym-radical', title: 'Radical dot: click an atom (it becomes a radical)' },
+    { name: 'sym-plus', title: 'Circled plus: click an atom to give it a + charge shown in a circle' },
+    { name: 'sym-minus', title: 'Circled minus: click an atom to give it a − charge shown in a circle' },
+    { name: 'sym-delta-plus', title: 'Partial positive charge (δ+): click an atom' },
+    { name: 'sym-delta-minus', title: 'Partial negative charge (δ−): click an atom' },
+  ],
+};
+
 // Template palettes, one per kind of structure
 const templatePalette = (group: Template['group'], palette: string, title: string, columns: number, iconSize?: number): PaletteDef => ({
   palette,
@@ -200,6 +213,7 @@ const TOOL_GROUPS: ToolbarItem[][] = [
   [
     { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption' },
     ARROWS,
+    SYMBOLS,
     SHAPES,
     BRACKETS,
   ],

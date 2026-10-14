@@ -21,7 +21,7 @@ import { joinAtoms, joinBonds } from '../chem/join';
 import { extractDrawing, insertDrawing } from '../io/clipboard';
 import { isReactionArrow, itemFinder, rolesOf, ROLES, schemeItems, type Item, type Role } from '../chem/reaction';
 import { applySchemePlan, planCleanUp } from '../chem/scheme-layout';
-import { pushArrow, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
+import { pushArrow, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
 import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
 import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, rotation, mirrorX, mirrorY } from './arrange';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
@@ -43,7 +43,11 @@ export type Tool =
   | { kind: 'arrow'; style: ArrowStyle }
   | { kind: 'shape'; shape: ShapeStyle; from: 'corner' | 'center' }
   | { kind: 'bracket'; bracket: NonNullable<Shape['bracket']> }
-  | { kind: 'template'; id: string };
+  | { kind: 'template'; id: string }
+  | { kind: 'symbol'; symbol: SymbolKind };
+
+/** Marks put on atoms for mechanisms: a lone pair, a radical's dot, a circled charge, or δ+ / δ−. */
+export type SymbolKind = 'LonePair' | 'Electron' | 'CirclePlus' | 'CircleMinus' | 'DeltaPlus' | 'DeltaMinus';
 
 /** How a new arrow looks (everything else is the document's default). */
 export type ArrowStyle = Partial<Pick<Arrow, 'headStyle' | 'tailStyle' | 'headType' | 'line' | 'noGo' | 'equilibrium' | 'sweep'>> & {
@@ -99,6 +103,12 @@ export const TOOLS: Record<string, Tool> = {
   'bracket-square': { kind: 'bracket', bracket: 'square' },
   'bracket-round': { kind: 'bracket', bracket: 'round' },
   'bracket-curly': { kind: 'bracket', bracket: 'curly' },
+  'sym-lonepair': { kind: 'symbol', symbol: 'LonePair' },
+  'sym-radical': { kind: 'symbol', symbol: 'Electron' },
+  'sym-plus': { kind: 'symbol', symbol: 'CirclePlus' },
+  'sym-minus': { kind: 'symbol', symbol: 'CircleMinus' },
+  'sym-delta-plus': { kind: 'symbol', symbol: 'DeltaPlus' },
+  'sym-delta-minus': { kind: 'symbol', symbol: 'DeltaMinus' },
 };
 for (const t of TEMPLATES) TOOLS[`tpl-${t.id}`] = { kind: 'template', id: t.id };
 
@@ -509,6 +519,7 @@ export class Editor {
       case 'select':
         return d.hit ? 'move' : 'marquee';
       case 'eraser':
+      case 'symbol':
         return 'none';
       case 'bond':
       case 'chain':
@@ -640,6 +651,10 @@ export class Editor {
       case 'eraser': {
         if (h) doc.edit('Erase', () => this.erase(h));
         this.changed();
+        return;
+      }
+      case 'symbol': {
+        this.placeSymbol(t.symbol, h, p);
         return;
       }
       case 'template': {
@@ -960,6 +975,51 @@ export class Editor {
     if (shift) { const m = Math.max(Math.abs(w), Math.abs(h)); w = Math.sign(w || 1) * m; h = Math.sign(h || 1) * m; }
     if (Math.abs(w) < 2 && Math.abs(h) < 2) return null;
     return { x1: Math.min(a.x, a.x + w), y1: Math.min(a.y, a.y + h), x2: Math.max(a.x, a.x + w), y2: Math.max(a.y, a.y + h) };
+  }
+
+  /**
+   * Put a lone pair, radical dot, circled charge or δ+ / δ− on the clicked atom, in the most open
+   * space round it, or where the click was. A circled charge also gives the atom that charge
+   * (shown by the circle instead of in its label).
+   */
+  private placeSymbol(kind: SymbolKind, h: Hit, p: Vec): void {
+    const doc = this.doc;
+    const L = doc.style.bondLength;
+    const atom = h?.kind === 'atom' ? doc.atoms.get(h.id)! : null;
+    const delta = kind === 'DeltaPlus' || kind === 'DeltaMinus';
+    const circled = kind === 'CirclePlus' || kind === 'CircleMinus';
+    const size = kind === 'LonePair' ? 2.6 : circled ? 4.5 : delta ? 0.9 * L : 1.4;
+    let at = p, dir = { x: 0, y: -1 };
+    if (atom) {
+      // what already sits round the atom: other symbols and short captions
+      const taken: Vec[] = [];
+      for (const s of doc.shapes.values()) if (s.kind === 'symbol') { const c = { x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 }; if (dist(c, atom) < 0.8 * L) taken.push(c); }
+      for (const c of doc.captions.values()) { const b = this.r.captionBox(c); const m = { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 }; if (dist(m, atom) < 0.8 * L && plainText(c.runs).length <= 3) taken.push(m); }
+      ({ at, dir } = symbolSpot(doc, this.measure(), atom.id, taken, size));
+    }
+    doc.edit('Symbol', () => {
+      this.sel = emptySel();
+      if (delta) {
+        const c = doc.addCaption({ x: at.x, y: at.y, runs: [{ text: 'δ' }, { text: kind === 'DeltaPlus' ? '+' : '−', sup: true }], justify: 'left' });
+        // centre it on the spot
+        const b = this.r.captionBox(c);
+        doc.updateCaption(c.id, { x: c.x + at.x - (b.x1 + b.x2) / 2, y: c.y + at.y - (b.y1 + b.y2) / 2 });
+        this.sel.captions.add(c.id);
+        return;
+      }
+      let box: Pick<Shape, 'x1' | 'y1' | 'x2' | 'y2'>;
+      if (kind === 'LonePair') {
+        // the two dots side by side across the direction they point
+        const n = perp(dir);
+        box = { x1: at.x - n.x * 1.12, y1: at.y - n.y * 1.12, x2: at.x + n.x * 1.12, y2: at.y + n.y * 1.12 };
+      } else if (kind === 'Electron') box = { x1: at.x, y1: at.y, x2: at.x, y2: at.y };
+      else box = { x1: at.x - size / 2, y1: at.y - size / 2, x2: at.x + size / 2, y2: at.y + size / 2 };
+      this.sel.shapes.add(doc.addShape({ kind: 'symbol', symbol: kind, ...box }).id);
+      // a radical's dot makes the atom a radical (one hydrogen fewer)
+      if (atom && kind === 'Electron' && !atom.radical) doc.updateAtom(atom.id, { radical: 'doublet' });
+      if (atom && circled) doc.updateAtom(atom.id, { charge: atom.charge + (kind === 'CirclePlus' ? 1 : -1), hideCharge: true });
+    });
+    this.changed();
   }
 
   private addBrackets(r: Rect, bracket: NonNullable<Shape['bracket']>): void {

@@ -27,13 +27,11 @@ const BARE = 0.24;
 
 /** How far from an atom's centre its label reaches in direction d (0 for a bare carbon). */
 function labelReach(c: Vec, boxes: Rect[], d: Vec): number {
+  // the last point along d that is still inside any part of the label (O, H, charge...)
   let reach = 0;
-  for (const b of boxes) {
-    // walk out along d until leaving the box
-    for (let t = 0; t < 200; t += 0.5) {
-      const p = add(c, mul(d, t));
-      if (p.x < b.x1 || p.x > b.x2 || p.y < b.y1 || p.y > b.y2) { reach = Math.max(reach, t); break; }
-    }
+  for (let t = 0; t < 60; t += 0.5) {
+    const p = add(c, mul(d, t));
+    if (boxes.some((b) => p.x >= b.x1 && p.x <= b.x2 && p.y >= b.y1 && p.y <= b.y2)) reach = t + 0.5;
   }
   return reach;
 }
@@ -57,7 +55,8 @@ const centreOf = (doc: Doc, e: PushEnd): Vec => {
 /** Directions of the bonds round an atom. */
 const bondDirs = (doc: Doc, id: number): Vec[] => doc.neighbors(id).map((n) => norm(sub(n, doc.atoms.get(id)!)));
 
-const angleBetween = (a: Vec, b: Vec) => Math.abs(normAngle(angleOf(a) - angleOf(b)));
+/** The angle between two directions, 0 to π. */
+const angleBetween = (a: Vec, b: Vec) => { const d = normAngle(angleOf(a) - angleOf(b)); return Math.min(d, 2 * Math.PI - d); };
 
 /**
  * Which way a lone pair on this atom points: into the widest open space between its bonds,
@@ -201,4 +200,27 @@ export function pushArrow(doc: Doc, m: Measure, from: PushEnd, to: PushEnd, side
     }
   }
   return { tail, head, sweep };
+}
+
+/**
+ * Where a lone pair, radical dot or charge goes on an atom: in the widest open space between its
+ * bonds and anything already sitting round it (`taken`), just clear of its label. Gives the
+ * direction from the atom and the symbol's centre, `size` across.
+ */
+export function symbolSpot(doc: Doc, m: Measure, id: number, taken: Vec[], size: number): { dir: Vec; at: Vec } {
+  const a = doc.atoms.get(id)!;
+  const L = doc.style.bondLength;
+  const avoid = [...bondDirs(doc, id), ...taken.map((p) => norm(sub(p, a)))];
+  // with nothing round it, the first goes above (where people look for a charge or lone pair)
+  let best = { x: 0, y: -1 }, bestOpen = -Infinity;
+  for (let k = 0; k < 24; k++) {
+    const d = fromAngle(-90 * DEG + k * 15 * DEG);
+    // anything 100° clear is open enough (so a lone pair on an end atom sits off to the side,
+    // not straight on from its bond); ties go to the direction nearest straight up, then right
+    const open = Math.min(100 * DEG, avoid.length ? Math.min(...avoid.map((b) => angleBetween(d, b))) : Math.PI);
+    if (open > bestOpen + 1e-6) { bestOpen = open; best = d; }
+  }
+  const boxes = m.atomBoxes(a);
+  const reach = boxes.length ? labelReach(a, boxes, best) + 0.06 * L : 0.18 * L;
+  return { dir: best, at: add(a, mul(best, reach + size / 2)) };
 }

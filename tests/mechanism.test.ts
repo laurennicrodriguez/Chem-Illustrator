@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { Doc } from '../src/model';
 import { plainMeasure } from '../src/chem/reaction';
-import { lonePairDir, pushArrow } from '../src/chem/mechanism';
+import { lonePairDir, pushArrow, symbolSpot } from '../src/chem/mechanism';
 import { arcCenter, dist, dot, sub } from '../src/geom';
 
 /** Acetone with hydroxide up and to the left of it. */
@@ -79,5 +79,22 @@ describe('electron-pushing arrows', () => {
     const a = pushArrow(doc, m, { kind: 'atom', id: oh }, { kind: 'atom', id: c }, 1)!;
     const b = pushArrow(doc, m, { kind: 'atom', id: oh }, { kind: 'atom', id: c }, -1)!;
     expect(Math.sign(a.sweep)).not.toBe(Math.sign(b.sweep));
+  });
+
+  it('puts lone pairs and charges in the open space round an atom, one after another', () => {
+    const { doc, o, m2 } = acetone();
+    const m = plainMeasure(doc);
+    const first = symbolSpot(doc, m, o, [], 2.6);
+    // the C=O bond points down, so the first goes straight up, clear of the O
+    expect(first.dir.y).toBeCloseTo(-1, 6);
+    for (const b of m.atomBoxes(doc.atoms.get(o)!)) expect(first.at.y).toBeLessThan(b.y1);
+    const second = symbolSpot(doc, m, o, [first.at], 2.6);
+    expect(Math.abs(second.dir.x)).toBeGreaterThan(0.9);
+    // on an end carbon, off to the side of its bond rather than straight on from it
+    const end = symbolSpot(doc, m, m2, [], 1.4);
+    const along = sub(doc.atoms.get(m2)!, { x: 150, y: 100 });
+    const cos = dot(end.dir, along) / Math.hypot(along.x, along.y);
+    expect(cos).toBeLessThan(0.9);
+    expect(cos).toBeGreaterThan(-0.5);
   });
 });

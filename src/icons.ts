@@ -68,5 +68,11 @@ export const ICONS: Record<string, string> = {
   'shape-line-bold': svg('<line x1="5" y1="18" x2="19" y2="6" stroke-width="3.4"/>'),
   'bracket-square': svg('<path d="M8.5 4H5.5v16h3M15.5 4h3v16h-3"/>'),
   'bracket-round': svg('<path d="M8.5 4c-4.5 4-4.5 12 0 16M15.5 4c4.5 4 4.5 12 0 16"/>'),
+  'sym-lonepair': svg('<text x="12" y="19" font-size="13" text-anchor="middle" fill="currentColor" stroke="none" font-family="Arial, sans-serif">O</text><circle cx="9.5" cy="4.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="14.5" cy="4.5" r="1.3" fill="currentColor" stroke="none"/>'),
+  'sym-radical': svg('<text x="11" y="19" font-size="13" text-anchor="middle" fill="currentColor" stroke="none" font-family="Arial, sans-serif">C</text><circle cx="18.5" cy="7" r="1.5" fill="currentColor" stroke="none"/>'),
+  'sym-plus': svg('<circle cx="12" cy="12" r="6.5"/><path d="M8.5 12h7M12 8.5v7"/>'),
+  'sym-minus': svg('<circle cx="12" cy="12" r="6.5"/><path d="M8.5 12h7"/>'),
+  'sym-delta-plus': svg('<text x="10" y="18" font-size="13" text-anchor="middle" fill="currentColor" stroke="none" font-family="Arial, sans-serif">δ</text><path d="M15 7h5M17.5 4.5v5"/>'),
+  'sym-delta-minus': svg('<text x="10" y="18" font-size="13" text-anchor="middle" fill="currentColor" stroke="none" font-family="Arial, sans-serif">δ</text><path d="M15 7h5"/>'),
   'bracket-curly': svg('<path d="M9.5 4C7.5 4 7 5 7 7v2.5c0 1.5-.8 2.5-2.5 2.5C6.2 12 7 13 7 14.5V17c0 2 .5 3 2.5 3M14.5 4c2 0 2.5 1 2.5 3v2.5c0 1.5.8 2.5 2.5 2.5-1.7 0-2.5 1-2.5 2.5V17c0 2-.5 3-2.5 3"/>'),
 };
