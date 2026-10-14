@@ -301,6 +301,8 @@ const TEMPLATE_HINT = 'Click empty space to place it (drag to turn it), a bond t
 
 // Design mode's shape library (made further down, once the page is ready)
 let designLib: DesignLibrary | null = null;
+/** Design > Smart Guides: moved things snap into line with other shapes and the page. */
+let designGuides = true;
 const GEO_HINT = 'Click on the page to put the shape down, or drag to draw it at any size (Shift keeps its shape). Double-click a shape to type in it.';
 
 editor.onToolChange = (name) => {
@@ -925,6 +927,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   document.body.classList.toggle('slides-mode', slides);
   document.body.classList.toggle('design-mode', design);
   editor.glueArrows = design;
+  editor.smartGuides = design && designGuides;
   for (const el of document.querySelectorAll<HTMLElement>('.design-only')) el.hidden = !design;
   document.body.classList.toggle('sheet-mode', sheet);
   document.body.classList.toggle('doc-mode', words);
@@ -1033,6 +1036,9 @@ const dzStep = $<HTMLSelectElement>('#dz-grid-step');
 dzGrid.addEventListener('change', () => { designGrid.on = dzGrid.checked; renderer.repaintAll(); editor.requestScene(); });
 dzStep.addEventListener('change', () => { designGrid.step = Number(dzStep.value) || 18; dzGrid.checked = designGrid.on = true; renderer.repaintAll(); editor.requestScene(); });
 dzStep.value = String(designGrid.step);
+const dzGuides = $<HTMLInputElement>('#dz-guides');
+dzGuides.checked = designGuides;
+dzGuides.addEventListener('change', () => { designGuides = dzGuides.checked; editor.smartGuides = ws.active.mode === 'design' && designGuides; });
 dzBg.addEventListener('change', () => {
   const d = deckNow();
   if (!d || d.master.background.toLowerCase() === dzBg.value.toLowerCase()) return;

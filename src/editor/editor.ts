@@ -173,6 +173,8 @@ interface Drag {
   path?: Vec[];
   /** Rotating the selection: what it looked like before, the centre, and the angle so far. */
   rot?: { snap: Snapshot; center: Vec; from: number; angle: number };
+  /** Moving with smart guides: the selection's box when the move began, and how far it has gone. */
+  guide?: { box: Rect; moved: Vec };
 }
 
 const HILITE = 'rgba(40, 120, 255, 0.28)';
@@ -500,6 +502,19 @@ export class Editor {
       this.requestScene(e.timeStamp);
       return;
     }
+    if (d.mode === 'move' && this.smartGuides && !e.altKey) {
+      // smart guides: edges and middles snap into line with other shapes and the page
+      if (!d.guide) { const box = this.selBox(); if (box) d.guide = { box, moved: { x: 0, y: 0 } }; }
+      if (d.guide) {
+        const g = guideSnap(d.guide.box, sub(p, d.start), this.guideTargets(), this.tol(6));
+        this.moveSelection(g.offset.x - d.guide.moved.x, g.offset.y - d.guide.moved.y);
+        d.guide.moved = g.offset;
+        this.guideLines = g.lines;
+        d.last = p;
+        this.requestScene(e.timeStamp);
+        return;
+      }
+    }
     if (d.mode === 'move') {
       const dx = p.x - d.last.x, dy = p.y - d.last.y;
       this.moveSelection(dx, dy);
@@ -582,6 +597,7 @@ export class Editor {
       return;
     }
     if (d.mode === 'move') {
+      this.guideLines = [];
       this.doc.commit();
       this.changed();
       return;
@@ -2248,6 +2264,19 @@ export class Editor {
 
   // ------------------------------------------------------------------ text in design shapes
 
+  /** Smart guides: things moved snap into line with other shapes and the page (Design mode; Alt turns them off while dragging). */
+  smartGuides = false;
+  /** The guide lines shown while moving. */
+  private guideLines: GuideLine[] = [];
+
+  /** What a moved selection lines up with: the shapes not being moved, and the page. */
+  private guideTargets(): Rect[] {
+    const out: Rect[] = [];
+    for (const s of this.doc.shapes.values()) if (!this.sel.shapes.has(s.id) && s.kind !== 'line' && s.kind !== 'bracket' && s.kind !== 'symbol') out.push(shapeBox(s));
+    if (this.fitArea) out.push(this.fitArea());
+    return out;
+  }
+
   /** Arrows drawn or dragged onto a shape's connection point stick to it (Design mode). */
   glueArrows = false;
 
@@ -2641,6 +2670,16 @@ export class Editor {
       }
     }
     this.drawPorts(ctx, px);
+    if (this.guideLines.length && this.drag?.mode === 'move') {
+      ctx.save();
+      ctx.strokeStyle = '#e8336d';
+      ctx.lineWidth = px;
+      ctx.setLineDash([4 * px, 3 * px]);
+      ctx.beginPath();
+      for (const g of this.guideLines) { ctx.moveTo(g.x1, g.y1); ctx.lineTo(g.x2, g.y2); }
+      ctx.stroke();
+      ctx.restore();
+    }
     // previews of what a drag will draw
     const d = this.drag;
     if (d && d.moved) {
@@ -2802,6 +2841,30 @@ function geoTool(id: string, look: Partial<Shape>): Tool | undefined {
   if (!def) return undefined;
   const base: Partial<Shape> = def.outline ? { color: '#000000' } : { filled: true, fillColor: '#dae3f3', color: '#2f5597', ...look };
   return { kind: 'shape', shape: { ...base, kind: 'geo', geo: id } as ShapeStyle, from: 'corner' };
+}
+
+export interface GuideLine { x1: number; y1: number; x2: number; y2: number }
+
+/**
+ * Smart guides: how far to move a box (`raw` is how far the pointer moved) so its left, middle
+ * or right lines up with one of the targets' (and its top, middle or bottom), when within `tol`;
+ * and the lines that show what it lined up with.
+ */
+export function guideSnap(box: Rect, raw: Vec, targets: Rect[], tol: number): { offset: Vec; lines: GuideLine[] } {
+  const xs = (r: Rect) => [r.x1, (r.x1 + r.x2) / 2, r.x2];
+  const ys = (r: Rect) => [r.y1, (r.y1 + r.y2) / 2, r.y2];
+  let bx: { d: number; at: number; t: Rect } | null = null, by: { d: number; at: number; t: Rect } | null = null;
+  const moved = { x1: box.x1 + raw.x, y1: box.y1 + raw.y, x2: box.x2 + raw.x, y2: box.y2 + raw.y };
+  for (const t of targets) {
+    for (const a of xs(moved)) for (const b of xs(t)) { const d = b - a; if (Math.abs(d) <= tol && (!bx || Math.abs(d) < Math.abs(bx.d))) bx = { d, at: b, t }; }
+    for (const a of ys(moved)) for (const b of ys(t)) { const d = b - a; if (Math.abs(d) <= tol && (!by || Math.abs(d) < Math.abs(by.d))) by = { d, at: b, t }; }
+  }
+  const offset = { x: raw.x + (bx?.d ?? 0), y: raw.y + (by?.d ?? 0) };
+  const end = { x1: box.x1 + offset.x, y1: box.y1 + offset.y, x2: box.x2 + offset.x, y2: box.y2 + offset.y };
+  const lines: GuideLine[] = [];
+  if (bx) lines.push({ x1: bx.at, y1: Math.min(end.y1, bx.t.y1), x2: bx.at, y2: Math.max(end.y2, bx.t.y2) });
+  if (by) lines.push({ x1: Math.min(end.x1, by.t.x1), y1: by.at, x2: Math.max(end.x2, by.t.x2), y2: by.at });
+  return { offset, lines };
 }
 
 function sameHit(a: Hit, b: Hit): boolean {

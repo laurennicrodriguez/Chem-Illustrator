@@ -12,6 +12,7 @@ import { writePptx, type PptxOptions } from '../src/io/pptx-write';
 import { readPptx } from '../src/io/pptx-read';
 import { shapeHit, shapeOrder, elbowRoute } from '../src/objects';
 import { writeCdxml, chemDrawCurves } from '../src/io/cdxml-write';
+import { guideSnap } from '../src/editor/editor';
 import { readCdxml } from '../src/io/cdxml';
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 40, 0, 0, 0, 30]);
@@ -239,3 +240,21 @@ describe('connectors', () => {
 });
 
 function slideXml(bytes: Uint8Array): string { return strFromU8(unzipSync(bytes)['ppt/slides/slide1.xml']); }
+
+describe('smart guides', () => {
+  const box = { x1: 0, y1: 0, x2: 50, y2: 20 };
+  const other = { x1: 100, y1: 100, x2: 160, y2: 140 };
+
+  it('snap a nearby edge or middle into line, and show the line', () => {
+    // moved so its left edge is 1 pt from the other's
+    const g = guideSnap(box, { x: 101, y: 40 }, [other], 5);
+    expect(g.offset).toEqual({ x: 100, y: 40 });
+    expect(g.lines).toEqual([{ x1: 100, y1: 40, x2: 100, y2: 140 }]);
+    // middles: 25 + 104 = 129, the other's middle is 130
+    expect(guideSnap(box, { x: 104, y: 0 }, [other], 2).offset.x).toBe(105);
+  });
+
+  it('leave it where it is when nothing is close', () => {
+    expect(guideSnap(box, { x: 30, y: 40 }, [other], 5)).toEqual({ offset: { x: 30, y: 40 }, lines: [] });
+  });
+});
