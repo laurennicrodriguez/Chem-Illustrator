@@ -35,7 +35,17 @@ export interface TextFrame {
   boxes?: boolean;
   /** How big a figure is, or what a field shows, given the room the line has (documents). */
   inline?: (id: number, room: number) => InlineBox | null;
+  /**
+   * Documents: room taken from a line by figures beside it (text wrapping round them). Asked
+   * for each line with the top of its box (from the top of the first line's box) and its
+   * height; gives how much to leave at the left and right, or how far down to move the line
+   * to get past them. The tops are worked out as the lines are filled, from single spacing.
+   */
+  narrow?: (top: number, height: number) => Narrow | null;
 }
+
+/** Room a line gives up to a figure beside it, or how far it moves down past one. */
+export interface Narrow { left: number; right: number; down?: number }
 
 /** A figure in a line (sitting on the baseline), or a field's text. */
 export type InlineBox = { w: number; ascent: number; descent?: number } | { text: string };
@@ -94,6 +104,8 @@ export interface LaidLine {
   pieces: Glyphs[];
   /** The bullet or number in front of a list item's first line. */
   marker?: Glyphs;
+  /** Room given up at the right to a figure beside the line (documents). */
+  cutRight?: number;
   /** The last line of its paragraph. */
   last: boolean;
   /** A line of a block that a field shows (a bibliography): the field's id. */
@@ -110,6 +122,8 @@ export interface TextLayout {
   length: number;
   measure: Measure;
 }
+
+const NO_CUT: Narrow = { left: 0, right: 0 };
 
 /** Fraction of the text size above and below the baseline (Arial). */
 export const ASCENT = 0.8;
@@ -263,19 +277,45 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
     }
     if (!words.length) words.push({ start: 0, end: 0, body: 0, spaces: 0 });
 
-    // fill lines word by word (the first line has the first-line indent taken off its room)
-    const pLines: { start: number; end: number; width: number }[] = [];
+    // fill lines word by word (the first line has the first-line indent taken off its room);
+    // beside a figure a line gives up room to it, or moves down past it
+    type PLine = { start: number; end: number; width: number; cut: Narrow };
+    const pLines: PLine[] = [];
+    const step = SINGLE * pSpacing * em;
+    const lineGuess = ps.linePt && ps.linePt > 0 ? (ps.lineRule === 'exact' ? ps.linePt : Math.max(ps.linePt, step)) : step;
+    let top = 0;
+    const cutAt = (): Narrow => {
+      if (!f.narrow) return NO_CUT;
+      let down = 0;
+      for (let k = 0; k < 50; k++) {
+        const c = f.narrow(top + down, lineGuess);
+        if (!c) break;
+        if (!c.down) return { left: c.left, right: c.right, down: down || undefined };
+        down += c.down;
+      }
+      return down ? { left: 0, right: 0, down } : NO_CUT;
+    };
+    let cut = cutAt();
+    if (cut.down) top += cut.down;
     let cur: { start: number; end: number; width: number; full: number } | null = null;
-    const emit = () => { if (cur) pLines.push({ start: cur.start, end: cur.end, width: cur.width }); cur = null; };
+    const emit = () => {
+      if (cur) {
+        pLines.push({ start: cur.start, end: cur.end, width: cur.width, cut });
+        top += lineGuess;
+        cut = cutAt();
+        if (cut.down) top += cut.down;
+      }
+      cur = null;
+    };
     for (const w of words) {
-      const lineRoom = pLines.length ? room : room - firstLine;
+      const lineRoom = (pLines.length ? room : room - firstLine) - cut.left - cut.right;
       // a word fits when it and the space after it do (ChemDraw counts that space too)
       if (cur && cur.full + w.body + w.spaces > lineRoom + 1e-6) emit();
       if (!cur) cur = { start: w.start, end: w.end, width: w.body, full: w.body + w.spaces };
       else { cur.end = w.end; cur.width = cur.full + w.body; cur.full += w.body + w.spaces; }
     }
     emit();
-    if (!pLines.length) pLines.push({ start: 0, end: 0, width: 0 });
+    if (!pLines.length) pLines.push({ start: 0, end: 0, width: 0, cut });
 
     // place the pieces of each line
     pLines.forEach((pl, li) => {
@@ -303,17 +343,21 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
       }
       if (!size) size = em;
       const last = li === pLines.length - 1;
-      const lineLeft = li === 0 ? left + firstLine : left;
+      const lineLeft = (li === 0 ? left + firstLine : left) + pl.cut.left;
       const l: LaidLine = {
         para: p, start: paraStart + pl.start, end: paraStart + pl.end, y: 0, ascent: Math.max(ASCENT * size, objUp), descent: Math.max(DESCENT * size, objDown),
-        size, left: lineLeft, room: li === 0 ? room - firstLine : room, x: lineLeft, width: pl.width, pieces, marker: li === 0 ? marker : undefined, last,
+        size, left: lineLeft, room: (li === 0 ? room - firstLine : room) - pl.cut.left - pl.cut.right, x: lineLeft, width: pl.width, pieces, marker: li === 0 ? marker : undefined, last,
       };
+      if (pl.cut.right) l.cutRight = pl.cut.right;
+      if (l.marker && pl.cut.left) l.marker = { ...l.marker, x: l.marker.x + pl.cut.left };
       if (f.boxes) {
         // a document's line: the height of single spacing (times the line spacing), or of its tallest figure
         l.above = Math.max((SINGLE * pSpacing - DESCENT) * size, objUp);
         l.below = l.descent;
         // spacing in points: exactly (figures may then reach into the line above), or at least
         if (ps.linePt && ps.linePt > 0) l.above = ps.lineRule === 'exact' ? Math.max(0, ps.linePt - l.below) : Math.max(l.above, ps.linePt - l.below);
+        // moved down past a figure
+        if (pl.cut.down) l.above += pl.cut.down;
       }
       lines.push(l);
     });
@@ -336,7 +380,7 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
     }
     l.y = y;
     prev = l;
-    const room = Math.max(0, boxWidth - l.left - (paras[l.para].indentRight ?? 0));
+    const room = Math.max(0, boxWidth - l.left - (paras[l.para].indentRight ?? 0) - (l.cutRight ?? 0));
     const align = paras[l.para].align ?? f.justify;
     let shift = 0;
     if (align === 'center') shift = (room - l.width) / 2;

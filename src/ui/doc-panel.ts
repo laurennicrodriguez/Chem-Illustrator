@@ -7,8 +7,8 @@ import type { Justify } from '../model';
 import { FloatBox, PINNED_ICON } from './float-box';
 import type { DocFile } from '../document/doc-file';
 import {
-  A4, CM, INCH, LETTER, defaultStyles, modifyStyle, setParaStyle, styleOf,
-  type DocText, type FigureLook, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
+  A4, CM, INCH, LETTER, FLOAT_GAP, defaultStyles, floatOf, modifyStyle, setParaStyle, styleOf,
+  type DocText, type FigureLook, type Float, type WrapKind, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
 } from '../document/document';
 
 export interface DocPanelHost {
@@ -21,6 +21,10 @@ export interface DocPanelHost {
   setScale(id: number, scale: number): void;
   setLook(id: number, patch: Partial<FigureLook>): void;
   lookOf(id: number): FigureLook | undefined;
+  setWrap(id: number, wrap: WrapKind | 'inline'): void;
+  setFloat(id: number, fl: Float): void;
+  setBoxWidth(id: number, w: number): void;
+  setFill(id: number, fill: string | undefined): void;
 }
 
 
@@ -71,6 +75,7 @@ export class DocPanel {
   private sections: Record<'para' | 'style' | 'page' | 'hf' | 'figure', HTMLElement>;
   private styleTitle!: HTMLElement;
   private figureInfo!: HTMLElement;
+  private figButtons!: HTMLElement;
   private floats = {} as Record<DocBoxKey, FloatBox>;
   private emptyNote: HTMLElement;
 
@@ -253,6 +258,33 @@ export class DocPanel {
       const n = Number(v.replace('%', ''));
       if (id !== null && n > 0) this.host.setScale(id, n / 100);
     }), 'Its own size is 100%. A figure wider than the space between the margins is made to fit.');
+    this.row(s, 'Width (in)', this.input('fig-width', (v) => {
+      const id = this.host.picked();
+      const n = parseLength(v, 'in');
+      if (id !== null && n !== null && n > 0) this.host.setBoxWidth(id, n);
+    }), 'The text box\'s width; it grows down to fit its text');
+    const fill = document.createElement('input');
+    fill.type = 'color';
+    fill.addEventListener('change', () => { const id = this.host.picked(); if (id !== null) this.host.setFill(id, fill.value); this.host.focus(); });
+    this.fields.set('fig-fill', fill);
+    this.row(s, 'Fill', fill, 'The text box\'s background');
+    this.buttons(s, [['No Fill', 'A see-through text box', () => { const id = this.host.picked(); if (id !== null) this.host.setFill(id, undefined); }]]).dataset.key = 'fig-nofill';
+    // where it sits: in the line, or on the page with the text wrapping round it
+    this.row(s, 'Wrap text', this.select('fig-wrap', [['inline', 'In Line with Text'], ['square', 'Square'], ['topBottom', 'Top and Bottom'], ['behind', 'Behind Text'], ['front', 'In Front of Text']], (v) => {
+      const id = this.host.picked();
+      if (id !== null) this.host.setWrap(id, v as WrapKind | 'inline');
+    }), 'In the line like a letter, or on the page with the text going round it (or under or over it). Drag it on the page to move it');
+    const fl = (patch: Partial<Float>) => {
+      const id = this.host.picked();
+      const f = this.host.file();
+      const cur = id !== null ? floatOf(f?.t.objects[id]) : undefined;
+      if (id !== null && cur) this.host.setFloat(id, { ...cur, ...patch });
+    };
+    this.row(s, 'Across (in)', this.input('fig-x', (v) => { const n = parseLength(v, 'in'); if (n !== null) fl({ x: n }); }), 'From the left of the margin (or of the page)');
+    this.row(s, '… from', this.select('fig-xfrom', [['margin', 'Margin'], ['page', 'Page']], (v) => this.refrom('x', v)));
+    this.row(s, 'Down (in)', this.input('fig-y', (v) => { const n = parseLength(v, 'in'); if (n !== null) fl({ y: n }); }), 'From the top of its paragraph (it moves with that text), of the margin, or of the page');
+    this.row(s, '… from', this.select('fig-yfrom', [['para', 'Paragraph'], ['margin', 'Margin'], ['page', 'Page']], (v) => this.refrom('y', v)));
+    this.row(s, 'Text gap (pt)', this.input('fig-gap', (v) => { const n = parseLength(v, 'pt'); if (n !== null) fl({ gap: Math.max(0, n) }); }), `Room kept between it and the text round it (Word's is ${FLOAT_GAP} pt, 0.13 in)`);
     const look = (patch: Partial<FigureLook>) => { const id = this.host.picked(); if (id !== null) this.host.setLook(id, patch); };
     this.row(s, 'Frame (pt)', this.input('fig-frame', (v) => {
       const n = v.trim() === '' || /^none$/i.test(v.trim()) ? 0 : parseLength(v, 'pt');
@@ -269,15 +301,59 @@ export class DocPanel {
     this.row(s, 'Frame colour', fc);
     this.row(s, 'Shadow', this.select('fig-shadow', [['none', 'None'], ['soft', 'Soft'], ['hard', 'Sharp']], (v) => look({ shadow: v === 'none' ? undefined : v as 'soft' | 'hard' })),
       'Down and to the right; the figure gets a white background so the shadow is a box\'s');
-    this.buttons(s, [
+    this.figButtons = this.buttons(s, [
       ['Edit Drawing', 'Change it with the drawing tools (or double-click it)', () => { const id = this.host.picked(); if (id !== null) this.host.editFigure(id); }],
       ['Own Size', 'Back to 100%', () => { const id = this.host.picked(); if (id !== null) this.host.setScale(id, 1); }],
     ]);
   }
 
+  /** Measure a floating figure's place from somewhere else, keeping it where it is on the page. */
+  private refrom(axis: 'x' | 'y', from: string): void {
+    const id = this.host.picked();
+    const f = this.host.file();
+    const cur = id !== null ? floatOf(f?.t.objects[id]) : undefined;
+    if (!f || id === null || !cur) return;
+    const lay = f.layout();
+    const placed = lay.objects.find((o) => o.id === id);
+    if (!placed) return;
+    const pg = f.t.page;
+    const pageTop = lay.pages[placed.page]?.top ?? 0;
+    if (axis === 'x') {
+      const abs = cur.xFrom === 'page' ? cur.x : cur.x + pg.left;
+      this.host.setFloat(id, { ...cur, xFrom: from === 'page' ? 'page' : undefined, x: from === 'page' ? abs : abs - pg.left });
+      return;
+    }
+    const at = [...lay.paraTops.entries()].find(([, t]) => t.page === placed.page);
+    // y on the page, then from the new place
+    const at0 = (() => {
+      if (cur.yFrom === 'page') return cur.y;
+      if (cur.yFrom === 'margin') return cur.y + pg.top;
+      const para = this.anchorPara(f, id);
+      const top = para !== null ? lay.paraTops[para] : at?.[1];
+      return (top ? top.y - pageTop : pg.top) + cur.y;
+    })();
+    if (from === 'page') this.host.setFloat(id, { ...cur, yFrom: 'page', y: at0 });
+    else if (from === 'margin') this.host.setFloat(id, { ...cur, yFrom: 'margin', y: at0 - pg.top });
+    else {
+      const para = this.anchorPara(f, id);
+      const top = para !== null ? lay.paraTops[para] : null;
+      this.host.setFloat(id, { ...cur, yFrom: undefined, y: at0 - (top ? top.y - pageTop : pg.top) });
+    }
+  }
+
+  /** The paragraph a floating figure belongs to (where its character is). */
+  private anchorPara(f: DocFile, id: number): number | null {
+    let at = 0;
+    for (const r of f.t.runs) {
+      if (r.obj === id) return f.ed.text.slice(0, at).split('\n').length - 1;
+      at += r.text.length;
+    }
+    return null;
+  }
+
   private buildPara(): void {
     const s = this.sections.para;
-    const paras = (patch: Parameters<DocFile['ed']['setSelectedParas']>[0], kind = 'para') => this.host.file()?.ed.setSelectedParas(patch, kind);
+    const paras = (patch: Parameters<DocFile['ed']['setSelectedParas']>[0], kind = 'para') => this.host.file()?.textEd.setSelectedParas(patch, kind);
     this.row(s, 'Style', this.select('p-style', [], (id) => {
       const f = this.host.file();
       if (!f) return;
@@ -431,7 +507,7 @@ export class DocPanel {
     const f = this.host.file();
     if (!f) return;
     const t = f.t;
-    const ed = f.ed;
+    const ed = f.textEd;
     const active = document.activeElement;
     const put = (key: string, v: string | boolean) => {
       const el = this.fields.get(key);
@@ -447,16 +523,38 @@ export class DocPanel {
       const lay = f.layout();
       const sz = lay.sizes.get(id);
       const scale = o && (o.kind === 'drawing' || o.kind === 'picture') ? o.scale ?? 1 : 1;
+      const isBox = o?.kind === 'textbox';
+      const fl = floatOf(o);
+      const show = (key: string, on: boolean) => { const el = this.fields.get(key); const row = el?.closest('label'); if (row) row.style.display = on ? '' : 'none'; };
+      show('fig-scale', !isBox);
+      show('fig-width', isBox);
+      show('fig-fill', isBox);
+      const nofill = this.sections.figure.querySelector<HTMLElement>('[data-key="fig-nofill"]');
+      if (nofill) nofill.style.display = isBox ? '' : 'none';
+      for (const k of ['fig-x', 'fig-xfrom', 'fig-y', 'fig-yfrom', 'fig-gap']) show(k, !!fl);
+      const wrapSel = this.fields.get('fig-wrap') as HTMLSelectElement | undefined;
+      const inl = wrapSel?.querySelector<HTMLOptionElement>('option[value="inline"]');
+      if (inl) inl.disabled = isBox;
+      put('fig-wrap', fl?.wrap ?? 'inline');
+      if (isBox) { put('fig-width', showLength(o.w, 'in')); put('fig-fill', o.fill ?? '#ffffff'); }
+      if (fl) {
+        put('fig-x', showLength(fl.x, 'in'));
+        put('fig-xfrom', fl.xFrom ?? 'margin');
+        put('fig-y', showLength(fl.y, 'in'));
+        put('fig-yfrom', fl.yFrom ?? 'para');
+        put('fig-gap', String(Math.round((fl.gap ?? FLOAT_GAP) * 10) / 10));
+      }
       const fitted = sz && o?.kind === 'drawing' ? lay.textW < sz.w + 0.01 && scale > 0 : false;
       put('fig-scale', String(Math.round(scale * 1000) / 10));
       const lk = this.host.lookOf(id);
       put('fig-frame', lk?.frame ? String(lk.frame) : '');
       put('fig-frame-colour', lk?.frameColor ?? '#000000');
       put('fig-shadow', lk?.shadow ?? 'none');
-      this.figureInfo.textContent = (o?.kind === 'picture' ? 'A picture. ' : 'A drawing: double-click it to change it with the drawing tools. ')
+      this.figureInfo.textContent = (isBox ? 'A text box: click inside it to type, drag its edge to move it. ' : o?.kind === 'picture' ? 'A picture. ' : 'A drawing: double-click it to change it with the drawing tools. ')
         + (sz ? `Shown ${showLength(sz.w, 'in')} × ${showLength(sz.h, 'in')} in${fitted ? ', made smaller to fit between the margins' : ''}.` : '');
-      const edit = this.sections.figure.querySelector('button');
-      if (edit) edit.hidden = o?.kind !== 'drawing';
+      const [edit, own] = this.figButtons.querySelectorAll('button');
+      edit.style.display = o?.kind === 'drawing' ? '' : 'none';
+      own.style.display = isBox ? 'none' : '';
     }
     // the paragraph
     const p = ed.currentPara();

@@ -606,6 +606,7 @@
         <div class="rb-row">
           <button class="rb-big" data-doc="insert-table" title="An ACS-style table"><span class="rb-icon">▦</span>Table</button>
           <button class="rb-big" data-doc="insert-picture" title="A picture from a file (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
+          <button class="rb-big" data-doc="insert-text-box" title="A box of text on the page, with the page's text wrapping round it. Drag its edge to move it"><span class="rb-icon">▭</span>Text Box</button>
         </div>
         <div class="rb-label">Tables and pictures</div>
       </div>
@@ -683,6 +684,21 @@
         </div>
         <div class="rb-label">Header and Footer</div>
         <button class="rb-launch" data-doc="box-hf" title="Header, footer and page number settings">⬊</button>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-field" title="How the text goes round the structure, picture or text box picked">Wrap Text <select id="doc-wrap" data-doc-prefix="wrap">
+              <option value="inline">In Line with Text</option>
+              <option value="square">Square</option>
+              <option value="topBottom">Top and Bottom</option>
+              <option value="behind">Behind Text</option>
+              <option value="front">In Front of Text</option>
+            </select></label>
+            <button data-doc="insert-text-box" title="A box of text on the page, with the page's text wrapping round it">Text Box</button>
+          </div>
+        </div>
+        <div class="rb-label">Arrange</div>
       </div>
     </div>
     <div class="rb-panel" data-doc-panel="references" hidden>

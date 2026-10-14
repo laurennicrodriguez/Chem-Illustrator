@@ -100,12 +100,55 @@ export function lookExtent(look: FigureLook | undefined): [number, number, numbe
   return [f, f, Math.max(f, r), Math.max(f, r)];
 }
 
+/**
+ * How text goes round a figure taken out of the line (Word's Wrap Text): beside it on its wider
+ * side (square), above and below only (top and bottom), or not at all, with the figure behind or
+ * in front of the text.
+ */
+export type WrapKind = 'square' | 'topBottom' | 'behind' | 'front';
+
+/**
+ * A figure placed on the page instead of in a line. Its character stays in the text where it is
+ * anchored (its paragraph). `x` is from the left margin (or the page's edge), `y` from the top of
+ * the anchor paragraph (or of the margin, or the page), in points.
+ */
+export interface Float {
+  wrap: WrapKind;
+  x: number;
+  y: number;
+  xFrom?: 'margin' | 'page';
+  yFrom?: 'para' | 'margin' | 'page';
+  /** Room kept between the figure and the text round it, in points (Word's is 0.13 in). */
+  gap?: number;
+}
+
+/** The room text keeps from a floating figure unless set (Word's 0.13 inch). */
+export const FLOAT_GAP = 9;
+
+/** A text box's inner margins, in points (Word's: 0.1 in at the sides, 0.05 in above and below). */
+export const BOX_PAD = { x: 7.2, y: 3.6 };
+
+/** A figure's, picture's or text box's frame and shadow (none for other objects). */
+export function lookOf(o: DocObject | undefined): FigureLook | undefined {
+  return o && (o.kind === 'drawing' || o.kind === 'picture' || o.kind === 'textbox') ? o.look : undefined;
+}
+
+/** Where a figure, picture or text box floats on the page (none when it sits in its line). */
+export function floatOf(o: DocObject | undefined): Float | undefined {
+  return o && (o.kind === 'drawing' || o.kind === 'picture' || o.kind === 'textbox') ? o.float : undefined;
+}
+
 /** Something that sits in the text in place of one character. */
 export type DocObject =
   /** A structure, scheme or table: a drawing, edited with the drawing tools. `scale` 1 is the drawing's own size. */
-  | { kind: 'drawing'; contents: Contents; scale?: number; look?: FigureLook }
+  | { kind: 'drawing'; contents: Contents; scale?: number; look?: FigureLook; float?: Float }
   /** A picture: its own size is w × h points (`px` its pixels); `scale` 1 is that size. */
-  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook }
+  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float }
+  /**
+   * A text box: text of its own (typed into in place), `w` wide; it grows to fit its text, and is
+   * at least `h` tall when that is set. Always placed on the page. `fill` is its background.
+   */
+  | { kind: 'textbox'; runs: TextRun[]; paras?: ParaStyle[]; w: number; h?: number; fill?: string; look?: FigureLook; float: Float }
   /** A caption's number (Figure 1, Scheme 2): it counts the captions of its name. */
   | { kind: 'seq'; name: string }
   /** A reference to a caption ("see Figure 2"), which follows its number. */

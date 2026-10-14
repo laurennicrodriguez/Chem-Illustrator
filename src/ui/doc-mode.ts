@@ -11,7 +11,7 @@ import type { Measure } from '../text/layout';
 import { keymap, chordOf, parseAction, type KeyContext } from '../editor/keymap';
 import * as rt from '../richtext';
 import type { Move } from '../text/editing';
-import { offsetAt, caretPos } from '../text/layout';
+import { offsetAt, caretPos, selectionRects } from '../text/layout';
 import { htmlToRich, richToHtml, richToPlain } from '../text/html';
 import { afterTyping, typingPrefs, setTypingPrefs } from '../text/typing';
 import { findIssues, type CharLook, type Issue } from '../text/chemtext';
@@ -28,7 +28,8 @@ import { dataUrl, imageSize } from '../render/images';
 import type { DocFile } from '../document/doc-file';
 import {
   A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, captionRuns, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets,
-  type DocObject, type DocText, type FigureLook, type NumberPlace, type PageSetup,
+  floatOf, lookExtent, lookOf,
+  type DocObject, type DocText, type FigureLook, type Float, type NumberPlace, type PageSetup, type WrapKind,
 } from '../document/document';
 
 export interface DocModeHost {
@@ -71,6 +72,20 @@ const FORMATTING = '#2f6fdf';
 const ignored = new Set<string>();
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
+/** Commands that, in a text box, work on its text (others leave the box first). */
+const BOX_COMMANDS = /^(doc-(align-|justify|bold|italic|underline|sub|sup|formula|highlight|bullets|numbering|indent|outdent)|line-|font-|select-all$|undo$|redo$|zoom-|copy$|cut$|paste$|box-|find$|replace$|wrap-)/;
+
+/** Word's Wrap Text choices. */
+export const WRAPS: [WrapKind | 'inline', string, string][] = [
+  ['inline', 'In Line with Text', 'In the line, moving with the text as a letter does'],
+  ['square', 'Square', 'On the page, with text down its wider side'],
+  ['topBottom', 'Top and Bottom', 'On the page, with text above and below it only'],
+  ['behind', 'Behind Text', 'On the page, under the text'],
+  ['front', 'In Front of Text', 'On the page, over the text'],
+];
+
+const lookExtentOf = (o: DocObject) => lookExtent(lookOf(o));
+
 /** Our own copy of document text, figures and all, for pasting back into a document. */
 const OWN_KIND = 'chem-illustrator-document';
 
@@ -83,7 +98,12 @@ export class DocumentMode {
   private caretOn = true;
   private blink: ReturnType<typeof setInterval> | null = null;
   private clicks = { n: 0, time: 0, at: { x: 0, y: 0 } };
-  private dragging: { kind: 'text' } | { kind: 'resize'; id: number; w0: number; scale0: number; x0: number } | null = null;
+  private dragging:
+    | { kind: 'text' }
+    | { kind: 'box' }
+    | { kind: 'resize'; id: number; w0: number; scale0: number; x0: number }
+    | { kind: 'move'; id: number; from: { x: number; y: number }; float: Float; moved: boolean }
+    | null = null;
   private plainPaste = false;
   private speller: Speller | null = null;
   private dictSeen: string[] | null = null;
@@ -123,8 +143,12 @@ export class DocumentMode {
       run: (cmd) => this.run(cmd),
       focus: () => this.focus(),
       editFigure: (id) => this.editFigure(id),
-      picked: () => this.pickedObject(),
+      picked: () => this.pickedObject() ?? this.file?.box?.id ?? null,
       setScale: (id, k) => this.setScale(id, k),
+      setWrap: (id, w) => this.setWrap(id, w),
+      setFloat: (id, fl) => this.setFloat(id, fl),
+      setBoxWidth: (id, w) => this.setBoxWidth(id, w),
+      setFill: (id, c) => this.setFill(id, c),
       setLook: (id, patch) => this.setLook(id, patch),
       lookOf: (id) => this.lookOf(id),
     });
@@ -144,8 +168,35 @@ export class DocumentMode {
     return this.tab?.document ?? null;
   }
 
+  /** Where typing goes: the text box being typed into, or the document. */
   private get ed() {
-    return this.file!.ed;
+    return this.file!.textEd;
+  }
+
+  /** Start typing into a text box (the caret at the end of its text, or at a point on it). */
+  private startBox(id: number, at?: { x: number; y: number }): boolean {
+    const f = this.file;
+    if (!f) return false;
+    const ed = f.editBox(id);
+    if (!ed) return false;
+    ed.onTyped = (typed) => afterTyping(ed, typed);
+    if (at) ed.setCaret(offsetAt(ed.layout(), at.x, at.y));
+    else ed.setCaret(ed.text.length);
+    this.changed('selection');
+    return true;
+  }
+
+  /** Stop typing into the text box (`pick`: and pick the box, as Escape does in Word). */
+  private stopBox(pick = false): void {
+    const f = this.file;
+    if (!f?.box) return;
+    const id = f.box.id;
+    f.endBox();
+    if (pick) {
+      const at = objectOffsets(f.t.runs).get(id);
+      if (at !== undefined) f.ed.select(at, at + 1);
+    }
+    this.changed('selection');
   }
 
   // ---------------------------------------------------------------- showing a tab
@@ -153,6 +204,7 @@ export class DocumentMode {
   /** A document tab came to the front (or null: another kind of tab). */
   show(tab: Tab | null): void {
     if (this.tab && this.tab !== tab) this.leave();
+    this.tab?.document?.endBox();
     this.tab = tab;
     const f = tab?.document ?? null;
     this.view.file = f;
@@ -204,6 +256,8 @@ export class DocumentMode {
   private changed(kind: 'text' | 'selection'): void {
     const f = this.file;
     if (!f) return;
+    // the text box being typed into was taken away (Undo, Cut)
+    if (f.box && f.t.objects[f.box.id]?.kind !== 'textbox') f.endBox();
     this.caretOn = true;
     if (kind === 'text') {
       this.view.sizeSpace();
@@ -244,12 +298,23 @@ export class DocumentMode {
     const runs = rt.sliceRuns(ed.t.runs, ed.start, ed.end);
     const id = runs[0]?.obj;
     const o = id !== undefined ? f.t.objects[id] : undefined;
-    return o && (o.kind === 'drawing' || o.kind === 'picture') ? id! : null;
+    return o && (o.kind === 'drawing' || o.kind === 'picture' || o.kind === 'textbox') ? id! : null;
   }
 
   private overlay(): Overlay {
     const f = this.file;
     if (!f) return { selection: null, caret: null, squiggles: [], picked: null, found: [], framed: null };
+    if (f.box) {
+      // typing into a text box: its caret and selection
+      const ed = f.box.ed;
+      const showCaret = this.caretOn && (ed.collapsed || ed.composing !== null) && document.activeElement === this.ta;
+      const lay = ed.layout();
+      return {
+        selection: null, caret: showCaret ? ed.caret() : null, squiggles: [], picked: null, framed: null,
+        found: this.finder.open ? this.finder.hits : [],
+        editing: { id: f.box.id, selection: ed.collapsed || ed.composing ? [] : selectionRects(lay, ed.start, ed.end) },
+      };
+    }
     const ed = f.ed;
     const picked = this.pickedObject();
     const framed = this.pickedField('bib')?.id ?? null;
@@ -373,6 +438,16 @@ export class DocumentMode {
       const look = this.lookOf(picked);
       item(look?.frame ? 'Remove Frame' : 'Add Frame', () => this.setLook(picked, { frame: look?.frame ? undefined : 0.75, frameColor: undefined }), 'A thin black line round it (Format in the panel sets its width and colour)');
       item(look?.shadow ? 'Remove Shadow' : 'Add Shadow', () => this.setLook(picked, { shadow: look?.shadow ? undefined : 'soft' }), 'A soft shadow down and to the right');
+      menu.appendChild(document.createElement('hr'));
+      const now = floatOf(this.file?.t.objects[picked])?.wrap ?? 'inline';
+      const head = document.createElement('div');
+      head.className = 'menu-head';
+      head.textContent = 'Wrap Text';
+      menu.appendChild(head);
+      for (const [v, label, title] of WRAPS) {
+        if (v === 'inline' && this.file?.t.objects[picked]?.kind === 'textbox') continue;
+        item(`${now === v ? '✓ ' : '   '}${label}`, () => this.setWrap(picked, v), title);
+      }
       menu.appendChild(document.createElement('hr'));
     }
     cmd('Paragraph…', 'box-para', 'Indents, spacing and line spacing');
@@ -513,7 +588,7 @@ export class DocumentMode {
         case 'Backspace': return run(() => ed.backspace(word));
         case 'Delete': return run(() => ed.deleteForward(word));
         case 'Tab': return run(() => ed.indent(shift ? -1 : 1));
-        case 'Escape': return run(() => { if (!ed.collapsed) ed.setCaret(ed.focus); });
+        case 'Escape': return run(() => { if (this.file?.box) this.stopBox(true); else if (!ed.collapsed) ed.setCaret(ed.focus); });
       }
     }
     if (ctrl && !e.altKey) {
@@ -566,6 +641,7 @@ export class DocumentMode {
    */
   private enter(soft: boolean): void {
     const ed = this.ed;
+    if (this.file?.box) { ed.enter(soft); return; }
     const before = ed.text;
     const p = paraAt(before, ed.start);
     const r = paraRange(before, p);
@@ -581,6 +657,7 @@ export class DocumentMode {
 
   /** Page Up and Page Down: the caret moves by a window's height. */
   private pageMove(dir: 1 | -1, extend: boolean): void {
+    this.stopBox();
     const ed = this.ed;
     const lay = this.file!.layout().text;
     const c = caretPos(lay, ed.focus);
@@ -595,7 +672,18 @@ export class DocumentMode {
   private copy(e: ClipboardEvent, cut: boolean): void {
     e.preventDefault();
     const f = this.file;
-    if (!f || f.ed.collapsed || !e.clipboardData) return;
+    if (!f || !e.clipboardData) return;
+    if (f.box) {
+      // text from a text box: as text only
+      const ed = f.box.ed;
+      if (ed.collapsed) return;
+      const sel = ed.selected();
+      e.clipboardData.setData('text/plain', richToPlain(sel));
+      e.clipboardData.setData('text/html', richToHtml(sel, { defaultSize: 11 }));
+      if (cut) ed.replaceSelection([], undefined, 'cut');
+      return;
+    }
+    if (f.ed.collapsed) return;
     const ed = f.ed;
     const picked = this.pickedObject();
     if (picked !== null) {
@@ -641,6 +729,13 @@ export class DocumentMode {
     const html = e?.clipboardData?.getData('text/html') ?? '';
     const text0 = e?.clipboardData?.getData('text/plain') ?? '';
     if (!own && this.clip && text0 && text0.replace(/\r\n?/g, '\n') === this.clip.text) own = this.clip;
+    if (f.box) {
+      // into a text box: text only (figures go in the page's text)
+      const r = !plain && html ? htmlToRich(html) : null;
+      if (r) f.box.ed.replaceSelection(rt.normalizeRuns(r.runs.map((x) => ({ ...x, obj: undefined }))), r.paras.length > 1 ? r.paras : undefined);
+      else if (text0) f.box.ed.pastePlain(text0);
+      return;
+    }
     if (own && !plain) { this.pasteOwn(own); return; }
     const got = await this.host.readPaste(e);
     const ed = f.ed;
@@ -692,12 +787,19 @@ export class DocumentMode {
     const s = this.view.scroller;
     s.addEventListener('pointerdown', (e) => this.pointerDown(e));
     s.addEventListener('pointermove', (e) => this.pointerMove(e));
-    s.addEventListener('pointerup', (e) => { this.dragging = null; try { s.releasePointerCapture(e.pointerId); } catch { /* not captured */ } });
+    s.addEventListener('pointerup', (e) => {
+      const d = this.dragging;
+      this.dragging = null;
+      try { s.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
+      if (d?.kind === 'move' && d.moved) this.reanchor(d.id);
+    });
     s.addEventListener('dblclick', (e) => {
       const f = this.file;
       if (!f) return;
       const id = this.objectAt(e.clientX, e.clientY);
       if (id !== null && f.t.objects[id]?.kind === 'bib') { e.preventDefault(); void this.manageReferences(); return; }
+      if (f.box) { e.preventDefault(); return; }
+      if (id !== null && f.t.objects[id]?.kind === 'textbox') { e.preventDefault(); this.startBox(id, this.view.toDoc(e.clientX, e.clientY)); return; }
       if (id !== null) { e.preventDefault(); this.editFigure(id); return; }
       // a citation: change what it cites
       const p = this.view.toDoc(e.clientX, e.clientY);
@@ -724,8 +826,22 @@ export class DocumentMode {
   private objectAt(clientX: number, clientY: number): number | null {
     if (!this.file) return null;
     const p = this.view.toDoc(clientX, clientY);
-    for (const o of this.file.layout().objects) if (p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + o.h) return o.id;
+    const lay = this.file.layout();
+    const hit = lay.objects.filter((o) => p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + o.h);
+    // floating ones are on top of the text; one behind the text is picked only away from any text
+    const top = hit.filter((o) => o.wrap && o.wrap !== 'behind').pop() ?? hit.find((o) => !o.wrap);
+    if (top) return top.id;
+    const behind = hit.find((o) => o.wrap === 'behind');
+    if (behind && !lay.text.lines.some((l) => p.y >= l.y - (l.above ?? l.ascent) && p.y <= l.y + (l.below ?? l.descent) && p.x >= l.x && p.x <= l.x + l.width)) return behind.id;
     return null;
+  }
+
+  /** Near the edge of a placed object (where a text box is picked or moved rather than typed into). */
+  private nearEdge(id: number, p: { x: number; y: number }): boolean {
+    const o = this.file?.layout().objects.find((x) => x.id === id);
+    if (!o) return false;
+    const m = 5 / this.view.zoom;
+    return p.x - o.x < m || o.x + o.w - p.x < m || p.y - o.y < m || o.y + o.h - p.y < m;
   }
 
   private pointerDown(e: PointerEvent): void {
@@ -739,6 +855,25 @@ export class DocumentMode {
     this.closeMenu();
     this.focus();
     const p = this.view.toDoc(e.clientX, e.clientY);
+    const now0 = performance.now();
+    const c0 = this.clicks;
+    const n = now0 - c0.time < 450 && Math.hypot(e.clientX - c0.at.x, e.clientY - c0.at.y) < 4 ? c0.n + 1 : 1;
+    // typing into a text box: clicks inside it place its caret, clicks outside leave it
+    if (f.box) {
+      const id = f.box.id;
+      if (this.objectAt(e.clientX, e.clientY) === id && !this.nearEdge(id, p)) {
+        Object.assign(c0, { n, time: now0, at: { x: e.clientX, y: e.clientY } });
+        const bed = f.box.ed;
+        const o = offsetAt(bed.layout(), p.x, p.y);
+        if (n === 2) bed.selectWord(o);
+        else if (n >= 3) bed.selectParagraph(o);
+        else bed.setCaret(o, e.shiftKey);
+        this.dragging = { kind: 'box' };
+        s.setPointerCapture(e.pointerId);
+        return;
+      }
+      this.stopBox();
+    }
     const ed = f.ed;
     // the picked figure's corner handle resizes it
     const picked = this.pickedObject();
@@ -747,7 +882,7 @@ export class DocumentMode {
       const hs = 8 / this.view.zoom;
       if (o && Math.abs(p.x - (o.x + o.w)) <= hs && Math.abs(p.y - (o.y + o.h)) <= hs) {
         const obj = f.t.objects[picked];
-        const scale0 = obj.kind === 'drawing' || obj.kind === 'picture' ? obj.scale ?? 1 : 1;
+        const scale0 = obj.kind === 'drawing' || obj.kind === 'picture' ? obj.scale ?? 1 : obj.kind === 'textbox' ? obj.w : 1;
         this.dragging = { kind: 'resize', id: picked, w0: o.w, scale0, x0: o.x };
         s.setPointerCapture(e.pointerId);
         return;
@@ -755,8 +890,17 @@ export class DocumentMode {
     }
     const id = this.objectAt(e.clientX, e.clientY);
     if (id !== null && !e.shiftKey) {
+      const obj = f.t.objects[id];
+      // a click inside a text box types into it; its edge picks it, to move it or change its look
+      if (obj?.kind === 'textbox' && !this.nearEdge(id, p)) { this.startBox(id, p); this.dragging = { kind: 'box' }; s.setPointerCapture(e.pointerId); return; }
       const at = objectOffsets(f.t.runs).get(id);
-      if (at !== undefined) { ed.select(at, at + 1); return; }
+      if (at !== undefined) {
+        ed.select(at, at + 1);
+        // a floating figure is moved by dragging it
+        const fl = floatOf(obj);
+        if (fl) { this.dragging = { kind: 'move', id, from: p, float: fl, moved: false }; s.setPointerCapture(e.pointerId); }
+        return;
+      }
     }
     const now = performance.now();
     const c = this.clicks;
@@ -777,13 +921,31 @@ export class DocumentMode {
     if (!f) return;
     if (!d) {
       const id = this.objectAt(e.clientX, e.clientY);
-      this.view.scroller.style.cursor = id !== null ? 'default' : 'text';
+      const p = this.view.toDoc(e.clientX, e.clientY);
+      const o = id !== null ? f.t.objects[id] : undefined;
+      this.view.scroller.style.cursor = id === null ? 'text'
+        : o?.kind === 'textbox' ? (this.nearEdge(id, p) ? 'move' : 'text')
+        : floatOf(o) ? 'move' : 'default';
       return;
     }
     const p = this.view.toDoc(e.clientX, e.clientY);
     if (d.kind === 'resize') {
       const w = Math.max(12, p.x - d.x0);
-      this.setScale(d.id, Math.max(0.05, d.scale0 * (w / d.w0)), false);
+      const o = f.t.objects[d.id];
+      if (o?.kind === 'textbox') this.setBoxWidth(d.id, Math.max(18, d.scale0 + (w - d.w0)), false);
+      else this.setScale(d.id, Math.max(0.05, d.scale0 * (w / d.w0)), false);
+      return;
+    }
+    if (d.kind === 'move') {
+      const dx = p.x - d.from.x, dy = p.y - d.from.y;
+      if (!d.moved && Math.hypot(dx, dy) * this.view.zoom < 3) return;
+      this.setFloat(d.id, { ...d.float, x: d.float.x + dx, y: d.float.y + dy }, d.moved ? null : 'Move');
+      d.moved = true;
+      return;
+    }
+    if (d.kind === 'box') {
+      if (this.clicks.n !== 1 || !f.box) return;
+      f.box.ed.setCaret(offsetAt(f.box.ed.layout(), p.x, p.y), true);
       return;
     }
     if (this.clicks.n !== 1) return;
@@ -863,7 +1025,7 @@ export class DocumentMode {
   setLook(id: number, patch: Partial<FigureLook>): void {
     const f = this.file!;
     const o = f.t.objects[id];
-    if (!o || (o.kind !== 'drawing' && o.kind !== 'picture')) return;
+    if (!o || (o.kind !== 'drawing' && o.kind !== 'picture' && o.kind !== 'textbox')) return;
     const look: FigureLook = { ...o.look, ...patch };
     for (const k of Object.keys(look) as (keyof FigureLook)[]) if (look[k] === undefined) delete look[k];
     const next: DocObject = { ...o, look: Object.keys(look).length ? look : undefined };
@@ -872,8 +1034,110 @@ export class DocumentMode {
 
   /** The frame and shadow of the figure picked. */
   lookOf(id: number): FigureLook | undefined {
-    const o = this.file?.t.objects[id];
-    return o && (o.kind === 'drawing' || o.kind === 'picture') ? o.look : undefined;
+    return lookOf(this.file?.t.objects[id]);
+  }
+
+  /** A text box's width (it grows down to fit its text). */
+  setBoxWidth(id: number, w: number, record = true): void {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'textbox') return;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { ...o, w } } } as DocText, record ? 'Resize' : null);
+  }
+
+  /** Change a figure's or text box's background colour (text boxes only). */
+  setFill(id: number, fill: string | undefined): void {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'textbox') return;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { ...o, fill } } } as DocText, 'Fill');
+  }
+
+  /** Put a figure on the page at a place (or back in its line with null). Text boxes always float. */
+  setFloat(id: number, fl: Float | null, kind: string | null = 'Wrap text'): void {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (!o || (o.kind !== 'drawing' && o.kind !== 'picture' && o.kind !== 'textbox')) return;
+    if (!fl && o.kind === 'textbox') return;
+    const next = { ...o, float: fl ?? undefined } as DocObject;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, kind);
+  }
+
+  /**
+   * Wrap Text: in line with the text, or floating with text round it (square, top and bottom),
+   * or behind or in front of the text. A figure taken out of its line stays where it was shown.
+   */
+  setWrap(id: number, wrap: WrapKind | 'inline'): void {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (!o) return;
+    const cur = floatOf(o);
+    if (wrap === 'inline') { if (cur) this.setFloat(id, null); return; }
+    if (cur) { this.setFloat(id, { ...cur, wrap }); return; }
+    // from its line: keep it where it is, measured from the top of its paragraph and the left margin
+    const lay = f.layout();
+    const placed = lay.objects.find((x) => x.id === id);
+    const at = objectOffsets(f.t.runs).get(id);
+    const para = at !== undefined ? paraAt(f.ed.text, at) : 0;
+    const [el, et] = lookExtentOf(o);
+    const top = lay.paraTops[para];
+    const x = placed ? placed.x - el - f.t.page.left : 0;
+    const y = placed && top ? placed.y - et - top.y : 0;
+    this.setFloat(id, { wrap, x, y });
+  }
+
+  /**
+   * After a floating figure is dragged: it belongs to the paragraph it was dropped beside
+   * (its character moves to the start of that paragraph), so it moves with that text from now on.
+   */
+  private reanchor(id: number): void {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    const fl = floatOf(o);
+    if (!fl || (fl.yFrom && fl.yFrom !== 'para')) return;
+    const lay = f.layout();
+    const placed = lay.objects.find((x) => x.id === id);
+    const at = objectOffsets(f.t.runs).get(id);
+    if (!placed || at === undefined) return;
+    const text = f.ed.text;
+    const from = paraAt(text, at);
+    const [, et] = lookExtentOf(o!);
+    const topY = placed.y - et;
+    // the paragraph whose top is the last one above the figure's top on its page
+    let to = from;
+    let best = -Infinity;
+    lay.paraTops.forEach((pt, i) => { if (pt.page === placed.page && pt.y <= topY + 0.5 && pt.y > best) { best = pt.y; to = i; } });
+    if (best === -Infinity) {
+      // above every paragraph's top on its page: the first paragraph on the page
+      const first = lay.paraTops.findIndex((pt) => pt.page === placed.page);
+      if (first >= 0) to = first;
+    }
+    if (to === from) return;
+    const run = rt.sliceRuns(f.t.runs, at, at + 1);
+    let runs = rt.replaceRange(f.t.runs, at, at + 1, []);
+    const target = paraRange(rt.plainText(runs), to > from ? to : to).start;
+    runs = rt.replaceRange(runs, target, target, run);
+    const y = topY - lay.paraTops[to].y;
+    f.ed.update({ ...f.t, runs, objects: { ...f.t.objects, [id]: { ...o, float: { ...fl, y } } as DocObject } } as DocText, null, target, target + 1);
+  }
+
+  /** Insert > Text Box: a box of text on the page, at the left margin beside the paragraph the caret is in. */
+  insertTextBox(): void {
+    const f = this.file!;
+    this.stopBox();
+    const ed = f.ed;
+    const text = ed.text;
+    const p = paraAt(text, ed.start);
+    const start = paraRange(text, p).start;
+    const id = nextObjectId(f.t);
+    const N = styleOf(f.t, {});
+    const box: DocObject = {
+      kind: 'textbox', runs: [{ ...runStyleOf(N), text: '' }], w: 2 * INCH, fill: '#ffffff', look: { frame: 0.75 },
+      float: { wrap: 'square', x: 0, y: 0 },
+    };
+    ed.update({ ...f.t, objects: { ...f.t.objects, [id]: box } } as DocText, 'Insert text box');
+    ed.replace(start, start, [objectRun(id, ed.typingStyle())], undefined, null);
+    this.startBox(id);
   }
 
   // ---------------------------------------------------------------- commands
@@ -882,7 +1146,9 @@ export class DocumentMode {
   run(cmd: string): boolean {
     const f = this.file;
     if (!f) return false;
-    const ed = f.ed;
+    // in a text box, the text buttons work on its text; other commands leave it first
+    if (f.box && !BOX_COMMANDS.test(cmd)) this.stopBox();
+    const ed = this.ed;
     const style = (id: string) => {
       const [a, b] = ed.selectedParas();
       ed.update(setParaStyle(f.t, a, b, id), 'Style');
@@ -933,6 +1199,13 @@ export class DocumentMode {
       case 'insert-structure': this.drawNew(); break;
       case 'structure-from-name-doc': case 'name-to-structure': void this.fromName(); break;
       case 'insert-picture': void this.insertPicture(); break;
+      case 'insert-text-box': this.insertTextBox(); break;
+      case 'wrap-inline': case 'wrap-square': case 'wrap-topBottom': case 'wrap-behind': case 'wrap-front': {
+        const id = this.pickedObject() ?? f.box?.id ?? null;
+        if (id === null) { this.host.flash('Click a structure, picture or text box first, then choose how text wraps round it.'); break; }
+        this.setWrap(id, cmd.slice(5) as WrapKind | 'inline');
+        break;
+      }
       case 'insert-table': void this.insertTable(); break;
       case 'insert-caption': void this.insertCaption(); break;
       case 'cross-reference': void this.crossReference(); break;
@@ -1305,10 +1578,10 @@ export class DocumentMode {
   private updateRibbon(): void {
     const f = this.file;
     if (!f) return;
-    const ed = f.ed;
+    const ed = f.textEd;
     const s = ed.currentStyle();
     const para = ed.currentPara();
-    const st = styleOf(f.t, para);
+    const st = f.box ? styleOf(f.t, {}) : styleOf(f.t, para);
     const press = (cmd: string, on: boolean) => {
       for (const b of this.ribbon.querySelectorAll<HTMLButtonElement>(`[data-doc="${cmd}"]`)) b.setAttribute('aria-pressed', String(on));
     };
@@ -1359,13 +1632,21 @@ export class DocumentMode {
     pick('#doc-orient', pg.w > pg.h ? 'landscape' : 'portrait');
     pick('#doc-numbers', f.t.hf.numbers);
     press('numbers-s', f.t.hf.prefix === 'S');
+    const fig = this.pickedObject() ?? f.box?.id ?? null;
+    const wrapSel = this.ribbon.querySelector<HTMLSelectElement>('#doc-wrap');
+    if (wrapSel) {
+      wrapSel.disabled = fig === null;
+      pick('#doc-wrap', fig === null ? 'inline' : floatOf(f.t.objects[fig])?.wrap ?? 'inline');
+      const inl = wrapSel.querySelector<HTMLOptionElement>('option[value="inline"]');
+      if (inl) inl.disabled = fig !== null && f.t.objects[fig]?.kind === 'textbox';
+    }
     this.showZoom();
     const status = document.querySelector<HTMLElement>('#doc-status');
     if (status) {
       const lay = f.layout();
-      const c = ed.caret();
+      const c = f.ed.caret();
       const page = lay.pages.findIndex((p) => c.line >= p.first && c.line < p.end);
-      const words = ed.text.split(/[\s￼]+/).filter((w) => /\p{L}|\p{N}/u.test(w)).length;
+      const words = f.ed.text.split(/[\s￼]+/).filter((w) => /\p{L}|\p{N}/u.test(w)).length;
       status.textContent = `Page ${page + 1} of ${lay.pages.length}  ·  ${words.toLocaleString()} word${words === 1 ? '' : 's'}`;
     }
   }

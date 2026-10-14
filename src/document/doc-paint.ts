@@ -8,7 +8,7 @@ import type { Picture } from '../render/picture';
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
 import { drawLayout } from '../text/draw';
-import { SHADOWS, styleOf, type DocText, type NumberPlace } from './document';
+import { BOX_PAD, SHADOWS, lookOf, styleOf, type DocText, type NumberPlace } from './document';
 import type { DocLayout, PageBox } from './doc-layout';
 import { docMeasure } from './doc-file';
 
@@ -64,11 +64,13 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
     const ctx = new VectorContext(width);
     const c = ctx as unknown as CanvasRenderingContext2D;
     drawHeaderFooter(c, t, p, lay);
-    drawLayout(c, lay.text, 0, 0, p.first, p.end);
-    for (const o of lay.objects) {
-      if (o.page !== p.index) continue;
+    // figures behind the text first
+    const mine = lay.objects.filter((o) => o.page === p.index);
+    const order = [...mine.filter((o) => o.wrap === 'behind'), null, ...mine.filter((o) => o.wrap !== 'behind')];
+    for (const o of order) {
+      if (!o) { drawLayout(c, lay.text, 0, 0, p.first, p.end); continue; }
       const obj = t.objects[o.id];
-      const look = obj?.kind === 'drawing' || obj?.kind === 'picture' ? obj.look : undefined;
+      const look = lookOf(obj);
       if (look?.shadow) {
         // a PDF has no blur: the shadow is a grey box, lighter when soft
         const s = SHADOWS[look.shadow];
@@ -77,7 +79,11 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
         c.fillStyle = '#fff';
         c.fillRect(o.x, o.y, o.w, o.h);
       }
-      if (obj?.kind === 'picture') ctx.items.push({ kind: 'image', src: obj.src, x: o.x, y: o.y, w: o.w, h: o.h, px: obj.px });
+      if (obj?.kind === 'textbox') {
+        if (obj.fill) { c.fillStyle = obj.fill; c.fillRect(o.x, o.y, o.w, o.h); }
+        const bl = lay.boxes.get(o.id);
+        if (bl) drawLayout(c, bl, o.x + BOX_PAD.x, o.y + BOX_PAD.y - bl.box.y1);
+      } else if (obj?.kind === 'picture') ctx.items.push({ kind: 'image', src: obj.src, x: o.x, y: o.y, w: o.w, h: o.h, px: obj.px });
       else if (obj?.kind === 'drawing') {
         const pic = drawing(obj.contents, t.drawingStyle);
         if (pic) ctx.items.push(...placeItems(pic, o));

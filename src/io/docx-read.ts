@@ -21,7 +21,8 @@ import { arialWidth } from '../text-metrics';
 import { documentMeasure } from '../text/font-measure';
 import {
   OBJECT_CHAR, defaultHeaderFooter, defaultPage, defaultStyles,
-  type DocObject, type DocText, type FigureLook, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
+  FLOAT_GAP, lookExtent,
+  type DocObject, type DocText, type FigureLook, type Float, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
 } from '../document/document';
 import { shownSize } from '../document/doc-layout';
 import { layoutTable } from '../table';
@@ -56,8 +57,7 @@ const WARN = {
   comments: 'Comments were left out.',
   tracked: 'Tracked changes were accepted.',
   equations: 'Equations were kept as plain text.',
-  shapes: 'Charts, SmartArt, shapes and text boxes were left out.',
-  floating: 'Pictures that floated beside the text are now in line with it.',
+  shapes: 'Charts, SmartArt and drawn shapes were left out.',
   sections: 'This file has several sections: the last one\'s page size, margins, header and footer are used for the whole document.',
   vmerge: 'Table cells merged down a column were split (merging across a row is kept).',
   nested: 'A table inside a table cell was kept as text.',
@@ -425,7 +425,65 @@ class DocxReader {
 
   /** The part of a choice of contents (mc:AlternateContent) to read: the plain one meant for older programs. */
   private alternate(el: Element): Element | null {
-    return kid(el, 'Fallback') ?? kid(el, 'Choice');
+    // Word 2010's text boxes (wps) are read from the choice itself; their fallback is an older shape
+    const choice = kid(el, 'Choice');
+    if (choice && /(^|\s)wps(\s|$)/.test(choice.getAttribute('Requires') ?? '') && choice.getElementsByTagNameNS('*', 'txbx').length) return choice;
+    return kid(el, 'Fallback') ?? choice;
+  }
+
+  /**
+   * Where a floating drawing (wp:anchor) is: its place from the margin, page or paragraph, and
+   * how text wraps round it. Null for places that can't be kept (then it goes in the line).
+   * `look` is its frame and shadow, which our place includes and Word's leaves out.
+   */
+  private floatOf(anchor: Element, look: FigureLook | null | undefined, w: number): Float | null {
+    const [l, t] = lookExtent(look ?? undefined);
+    const H = kid(anchor, 'positionH'), V = kid(anchor, 'positionV');
+    const hFrom = H?.getAttribute('relativeFrom') ?? 'column';
+    const vFrom = V?.getAttribute('relativeFrom') ?? 'paragraph';
+    const off = (el: Element | null) => { const o = kid(el, 'posOffset'); return o ? fromEmu(o.textContent ?? '0') : null; };
+    const pg = this.page;
+    let x = off(H);
+    if (x === null) {
+      // aligned rather than placed: left, centre or right of the margins (or the page)
+      const a = kid(H, 'align')?.textContent ?? 'left';
+      const room = hFrom === 'page' ? pg.w : this.textW;
+      x = a === 'center' ? (room - w) / 2 : a === 'right' || a === 'outside' ? room - w : 0;
+    }
+    let y = off(V) ?? 0;
+    const xFrom = hFrom === 'page' ? 'page' as const : undefined;
+    // from the left of the margin (columns and characters are near enough to it)
+    if (hFrom === 'leftMargin' || hFrom === 'insideMargin') x -= pg.left;
+    if (hFrom === 'rightMargin' || hFrom === 'outsideMargin') x += pg.w - pg.right - pg.left;
+    let yFrom: Float['yFrom'] = vFrom === 'page' ? 'page' : vFrom === 'margin' || vFrom === 'topMargin' ? 'margin' : undefined;
+    if (vFrom === 'bottomMargin') { yFrom = 'page'; y += pg.h - pg.bottom; }
+    const kind = kids(anchor).map((k) => k.localName).find((n) => n.startsWith('wrap')) ?? 'wrapNone';
+    const wrap = kind === 'wrapTopAndBottom' ? 'topBottom' as const
+      : kind === 'wrapNone' ? (yes(anchor.getAttribute('behindDoc')) ? 'behind' as const : 'front' as const)
+      : 'square' as const;
+    const dist = Math.max(fromEmu(anchor.getAttribute('distL') ?? '0'), fromEmu(anchor.getAttribute('distR') ?? '0'), fromEmu(anchor.getAttribute('distT') ?? '0'));
+    const fl: Float = { wrap, x: round(x - l), y: round(y - t) };
+    if (xFrom) fl.xFrom = xFrom;
+    if (yFrom) fl.yFrom = yFrom;
+    if (Math.abs(dist - FLOAT_GAP) > 0.5) fl.gap = round(dist);
+    return fl;
+  }
+
+  /** A text box's paragraphs, read as the document's are. */
+  private boxText(content: Element): { runs: TextRun[]; paras: ParaStyle[] } {
+    const out = this.out, brk = this.breakNext;
+    this.out = [];
+    this.blocks(kids(content));
+    const got = this.out;
+    this.out = out;
+    this.breakNext = brk;
+    const runs: TextRun[] = [];
+    got.forEach((p, i) => {
+      if (i > 0) runs.push({ ...got[i - 1].mark, text: '\n' });
+      runs.push(...p.runs);
+    });
+    if (!runs.length) runs.push({ ...(got[0]?.mark ?? {}), text: '' });
+    return { runs: rt.normalizeRuns(runs), paras: got.map((p) => { const q = cleanPara(p.ps); delete q.style; delete q.pageBreak; return q; }) };
   }
 
   /** A paragraph's own and its style's formatting. */
@@ -779,13 +837,27 @@ class DocxReader {
   private drawing(el: Element, r: RProps, ctx: Ctx): void {
     const box = kid(el, 'inline') ?? kid(el, 'anchor');
     if (!box) return;
-    if (box.localName === 'anchor') this.warn('floating');
     const ext = kid(box, 'extent');
     const shown = { w: fromEmu(ext?.getAttribute('cx')), h: fromEmu(ext?.getAttribute('cy')) };
     const name = kid(box, 'docPr')?.getAttribute('name') ?? '';
     const data = kid(box, 'graphic', 'graphicData');
     const pic = kid(data, 'pic');
+    const wsp = kid(data, 'wsp');
+    const content = kid(wsp, 'txbx', 'txbxContent');
+    if (wsp && content) {
+      // a text box: its text, fill, line and place
+      const spPr = kid(wsp, 'spPr');
+      const look = readLook(spPr);
+      const fillClr = kid(spPr, 'solidFill', 'srgbClr')?.getAttribute('val');
+      const fill = fillClr && /^[0-9a-f]{6}$/i.test(fillClr) ? `#${fillClr.toLowerCase()}` : kid(spPr, 'noFill') ? undefined : kid(spPr, 'solidFill') ? '#ffffff' : undefined;
+      const float = (box.localName === 'anchor' ? this.floatOf(box, look, shown.w) : null) ?? { wrap: 'topBottom' as const, x: 0, y: 0 };
+      const { runs, paras } = this.boxText(content);
+      const o: DocObject = { kind: 'textbox', runs, w: round(shown.w), float, ...(paras.some((q) => Object.keys(q).length) ? { paras } : {}), ...(fill ? { fill } : {}), ...(look ? { look } : {}) };
+      this.emitObject(ctx, o, r);
+      return;
+    }
     if (!pic) { this.warn('shapes'); return; }
+    const float = box.localName === 'anchor' ? this.floatOf(box, readLook(kid(pic, 'spPr')), shown.w) : null;
     // one of our structures: its drawing from our part
     const ours = new RegExp(`^${DRAWING_NAME} (\\d+)$`).exec(name);
     const m = ours ? this.model?.drawings?.[Number(ours[1])] : undefined;
@@ -793,14 +865,14 @@ class DocxReader {
     if (m?.contents) {
       const natural = shownSize({ w: m.w, h: m.h }, 1, this.textW);
       const scale = Math.abs(natural.w - shown.w) < 0.75 || m.w <= 0 ? undefined : round(shown.w / m.w, 1e4);
-      this.emitObject(ctx, { kind: 'drawing', contents: structuredClone(m.contents), scale, ...(look ? { look } : {}) }, r);
+      this.emitObject(ctx, { kind: 'drawing', contents: structuredClone(m.contents), scale, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r);
       return;
     }
     const blip = kid(pic, 'blipFill', 'blip');
     if (kid(kid(pic, 'blipFill'), 'srcRect')?.attributes.length) this.warn('crop');
     const svg = blip ? Array.from(blip.getElementsByTagNameNS('*', 'svgBlip'))[0] : undefined;
     const target = this.relTarget(rAttr(svg, 'embed')) ?? this.relTarget(rAttr(blip, 'embed'));
-    this.picture(target, shown, r, ctx, look);
+    this.picture(target, shown, r, ctx, look, float);
   }
 
   private relTarget(id: string | null): string | null {
@@ -809,7 +881,7 @@ class DocxReader {
     return rel && !rel.external ? rel.target : null;
   }
 
-  private picture(path: string | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx, look?: FigureLook | null): void {
+  private picture(path: string | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx, look?: FigureLook | null, float?: Float | null): void {
     const bytes = path ? this.pkg.bytes(path) : null;
     if (!bytes || shown.w <= 0 || shown.h <= 0) return;
     const ext = (path ?? '').split('.').pop()?.toLowerCase() ?? '';
@@ -817,7 +889,7 @@ class DocxReader {
     if (!mime) return;
     if (mime === 'image/x-wmf') this.warn('wmf');
     const px = imageSize(bytes, mime) ?? undefined;
-    this.emitObject(ctx, { kind: 'picture', src: dataUrl(bytes, mime), w: round(shown.w), h: round(shown.h), px, ...(look ? { look } : {}) }, r);
+    this.emitObject(ctx, { kind: 'picture', src: dataUrl(bytes, mime), w: round(shown.w), h: round(shown.h), px, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r);
   }
 
   /** Older (VML) pictures, and embedded objects with their picture: ChemDraw's become structures. */

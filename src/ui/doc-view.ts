@@ -8,7 +8,7 @@ import type { DocLayout, PageBox, PlacedObject } from '../document/doc-layout';
 import type { DocFile } from '../document/doc-file';
 import { figures } from '../document/doc-file';
 import { drawHeaderFooter } from '../document/doc-paint';
-import { SHADOWS, type DocText } from '../document/document';
+import { BOX_PAD, SHADOWS, lookOf, type DocText } from '../document/document';
 import { drawLayout } from '../text/draw';
 import { selectionRects } from '../text/layout';
 import { imageFor, onImageReady } from '../render/images';
@@ -33,6 +33,8 @@ export interface Overlay {
   framed: number | null;
   /** Found text to show (find and replace). */
   found: [number, number][];
+  /** The text box being typed into, and its selection (in the document's coordinates). */
+  editing?: { id: number; selection: Rect[] } | null;
 }
 
 export class DocView {
@@ -209,8 +211,10 @@ export class DocView {
         ctx.fillStyle = SELECTION;
         for (const r of rectsOn(lay, p, ...ov.selection)) ctx.fillRect(r.x1, r.y1, r.x2 - r.x1, r.y2 - r.y1);
       }
+      // figures behind the text first, then the text, then the rest
+      for (const o of lay.objects) if (o.page === p.index && o.wrap === 'behind') this.object(ctx, t, o, lay);
       drawLayout(ctx, lay.text, 0, 0, p.first, p.end);
-      for (const o of lay.objects) if (o.page === p.index) this.object(ctx, t, o);
+      for (const o of lay.objects) if (o.page === p.index && o.wrap !== 'behind') this.object(ctx, t, o, lay);
       const px = 1 / k;
       for (const s of ov.squiggles) {
         if (!inPage(s.start, s.end)) continue;
@@ -237,6 +241,18 @@ export class DocView {
       ctx.strokeStyle = OBJECT_FRAME;
       ctx.lineWidth = 1.2 / k;
       for (const o of lay.objects) if (o.id === ov.framed) ctx.strokeRect(o.x - 2, o.y - 1, o.w + 4, o.h + 2);
+    }
+    if (ov.editing) {
+      const o = lay.objects.find((x) => x.id === ov.editing!.id);
+      if (o) {
+        ctx.fillStyle = SELECTION;
+        for (const r of ov.editing.selection) ctx.fillRect(r.x1, r.y1, r.x2 - r.x1, r.y2 - r.y1);
+        ctx.strokeStyle = OBJECT_FRAME;
+        ctx.lineWidth = 1 / k;
+        ctx.setLineDash([4 / k, 3 / k]);
+        ctx.strokeRect(o.x - 1.5 / k, o.y - 1.5 / k, o.w + 3 / k, o.h + 3 / k);
+        ctx.setLineDash([]);
+      }
     }
     if (ov.caret) {
       ctx.fillStyle = '#000';
@@ -268,10 +284,10 @@ export class DocView {
     ctx.stroke();
   }
 
-  private object(ctx: CanvasRenderingContext2D, t: DocText, o: PlacedObject): void {
+  private object(ctx: CanvasRenderingContext2D, t: DocText, o: PlacedObject, lay: DocLayout): void {
     const obj = t.objects[o.id];
     if (!obj) return;
-    const look = obj.kind === 'drawing' || obj.kind === 'picture' ? obj.look : undefined;
+    const look = lookOf(obj);
     if (look?.shadow) {
       // a shadow is a box's: the figure sits on white, and the white casts it
       const s = SHADOWS[look.shadow];
@@ -284,7 +300,21 @@ export class DocView {
       ctx.fillRect(o.x, o.y, o.w, o.h);
       ctx.restore();
     }
-    this.figure(ctx, t, o);
+    if (obj.kind === 'textbox') {
+      if (obj.fill) {
+        ctx.fillStyle = obj.fill;
+        ctx.fillRect(o.x, o.y, o.w, o.h);
+      }
+      const bl = lay.boxes.get(o.id);
+      if (bl) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(o.x, o.y, o.w, o.h);
+        ctx.clip();
+        drawLayout(ctx, bl, o.x + BOX_PAD.x, o.y + BOX_PAD.y - bl.box.y1);
+        ctx.restore();
+      }
+    } else this.figure(ctx, t, o);
     if (look?.frame) {
       ctx.strokeStyle = look.frameColor ?? '#000';
       ctx.lineWidth = look.frame;
