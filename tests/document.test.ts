@@ -13,6 +13,9 @@ import { caretPos, offsetAt } from '../src/text/layout';
 import { TextEditing } from '../src/text/editing';
 import { paraFromStyle } from '../src/document/document';
 import type { ParaStyle, TextRun } from '../src/model';
+import { recordPages, placeItems } from '../src/document/doc-paint';
+import type { Item } from '../src/render/vector';
+import type { Picture } from '../src/render/picture';
 
 const screen = (t: string, size: number) => t.length * size * 0.5;
 const measure = documentMeasure(screen);
@@ -276,5 +279,32 @@ describe('pages', () => {
     ed.enter(false);
     expect(ed.t.paras).toHaveLength(2);
     expect(ed.t.paras[1]).toEqual({ align: 'justify', spaceAfter: 8 });
+  });
+});
+
+describe('printing (PDF)', () => {
+  it('records each page with its text where the screen puts it, and its header, footer and number', () => {
+    const d = docOf(['Hello world', 'Second paragraph']);
+    d.hf = { ...d.hf, header: ['', '', 'SI'], numbers: 'footer-center', prefix: 'S' };
+    const lay = layouter().layout(d);
+    const pages = recordPages(d, lay, () => null);
+    expect(pages).toHaveLength(1);
+    const texts = pages[0].items.filter((i) => i.kind === 'text') as Extract<Item, { kind: 'text' }>[];
+    expect(texts.map((t) => t.text)).toEqual(expect.arrayContaining(['SI', 'S1']));
+    const hello = texts.find((t) => t.text.startsWith('Hello'))!;
+    // each character as wide as Times New Roman's published width, so the PDF breaks no line differently
+    expect(hello.widths.reduce((a, b) => a + b, 0)).toBeCloseTo(publishedWidth(hello.text, 11, 'serif', false, false)!, 6);
+    expect(pages[0]).toMatchObject({ w: 612, h: 792, origin: { x: 0, y: 0 } });
+  });
+  it('scales a figure\'s recorded drawing into the place it has on the page', () => {
+    const pic = { box: { x1: 10, y1: 10, x2: 110, y2: 60 }, items: [
+      { kind: 'path', segs: [{ k: 'M', x: 10, y: 10 }, { k: 'L', x: 110, y: 60 }], stroke: { color: '#000', width: 1, cap: 'butt', join: 'miter' } },
+      { kind: 'text', text: 'O', x: 60, y: 35, size: 10, family: 'Arial', bold: false, italic: false, color: '#000', widths: [7.78] },
+    ] } as Picture;
+    const [line, label] = placeItems(pic, { x: 100, y: 200, w: 50, h: 25 }) as [Extract<Item, { kind: 'path' }>, Extract<Item, { kind: 'text' }>];
+    expect(line.segs).toEqual([{ k: 'M', x: 100, y: 200 }, { k: 'L', x: 150, y: 225 }]);
+    expect(line.stroke!.width).toBe(0.5);
+    expect(label).toMatchObject({ x: 125, y: 212.5, size: 5 });
+    expect(label.widths[0]).toBeCloseTo(3.89, 6);
   });
 });

@@ -6,8 +6,9 @@
 import type { Rect } from '../geom';
 import type { DocLayout, PageBox, PlacedObject } from '../document/doc-layout';
 import type { DocFile } from '../document/doc-file';
-import { figures, docMeasure } from '../document/doc-file';
-import { styleOf, type DocText, type NumberPlace } from '../document/document';
+import { figures } from '../document/doc-file';
+import { drawHeaderFooter } from '../document/doc-paint';
+import type { DocText } from '../document/document';
 import { drawLayout } from '../text/draw';
 import { selectionRects } from '../text/layout';
 import { imageFor, onImageReady } from '../render/images';
@@ -195,7 +196,7 @@ export class DocView {
     ctx.fontKerning = 'none';
     for (const p of visible) this.paper(ctx, p, lay);
     for (const p of visible) {
-      this.headerFooter(ctx, t, p, lay);
+      drawHeaderFooter(ctx, t, p, lay);
       // the found text and the selection, under the text
       const from = lay.text.lines[p.first]?.start ?? 0;
       const to = p.end > p.first ? lay.text.lines[p.end - 1].end : from;
@@ -260,17 +261,6 @@ export class DocView {
     ctx.stroke();
   }
 
-  /** The header and footer text, and the page number. */
-  private headerFooter(ctx: CanvasRenderingContext2D, t: DocText, p: PageBox, lay: DocLayout): void {
-    for (const part of headerFooterText(t, p.index, p.label)) {
-      const y = part.where === 'header' ? p.top + t.page.header + part.size * 0.8 : p.top + lay.pageH - t.page.footer - part.size * 0.25;
-      const x = part.align === 'left' ? t.page.left : part.align === 'center' ? (t.page.left + lay.pageW - t.page.right) / 2 - part.w / 2 : lay.pageW - t.page.right - part.w;
-      ctx.font = `${part.size}px ${part.font}`;
-      ctx.fillStyle = '#000';
-      ctx.fillText(part.text, x, y);
-    }
-  }
-
   private object(ctx: CanvasRenderingContext2D, t: DocText, o: PlacedObject): void {
     const obj = t.objects[o.id];
     if (!obj) return;
@@ -305,31 +295,4 @@ function squiggle(ctx: CanvasRenderingContext2D, r: Rect, px: number): void {
     if (k) ctx.lineTo(x, yy); else ctx.moveTo(x, yy);
   }
   ctx.stroke();
-}
-
-/** One piece of a header or footer line: its text, where it goes, and its font. */
-export interface HfPart { where: 'header' | 'footer'; align: 'left' | 'center' | 'right'; text: string; font: string; size: number; w: number }
-
-const PLACES: Record<Exclude<NumberPlace, 'none'>, ['header' | 'footer', 'left' | 'center' | 'right']> = {
-  'header-left': ['header', 'left'], 'header-center': ['header', 'center'], 'header-right': ['header', 'right'],
-  'footer-left': ['footer', 'left'], 'footer-center': ['footer', 'center'], 'footer-right': ['footer', 'right'],
-};
-
-/** The header and footer text of a page, with its number put in its place (after any text there). */
-export function headerFooterText(t: DocText, index: number, label: string): HfPart[] {
-  const st = styleOf(t, undefined);
-  const font = st.font, size = Math.min(10, st.size);
-  const out: HfPart[] = [];
-  const aligns = ['left', 'center', 'right'] as const;
-  const where = t.hf.numbers !== 'none' ? PLACES[t.hf.numbers] : null;
-  for (const w of ['header', 'footer'] as const) {
-    aligns.forEach((a, i) => {
-      let text = t.hf[w][i] ?? '';
-      if (where && where[0] === w && where[1] === a && label) text = text ? `${text} ${label}` : label;
-      if (!text) return;
-      out.push({ where: w, align: a, text, font, size, w: docMeasure(text, size, font, '') });
-    });
-  }
-  void index;
-  return out;
 }

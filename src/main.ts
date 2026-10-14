@@ -46,9 +46,10 @@ import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names'
 import { NameDialog } from './ui/name-dialog';
 import { SheetMode, ClipboardCells } from './ui/sheet-mode';
 import { DocumentMode, DocPaste } from './ui/doc-mode';
-import { setScreenMeasure } from './document/doc-file';
+import { setScreenMeasure, figures } from './document/doc-file';
 import { readDocx, writeDocx, type DocxDeps, type DocxReadDeps } from './io/docx';
 import { FIGURE_MARGIN } from './document/figures';
+import { recordPages } from './document/doc-paint';
 import { layoutTable } from './table';
 import { SheetChem } from './sheet/sheet-chem';
 import { structureDoc, structureMolfile } from './sheet/structure-doc';
@@ -1103,7 +1104,11 @@ async function exportMolfile(): Promise<void> {
 async function exportPdf(): Promise<void> {
   const tab = ws.active, deck = tab.deck;
   let pages: PdfPage[];
-  if (deck) {
+  const docFile = docActive() ? tab.document : null;
+  if (docFile) {
+    // the pages as laid out on screen, figures as shapes and text so they stay sharp
+    pages = recordPages(docFile.t, docFile.layout(), (c, style) => figures.record(c, style).pic);
+  } else if (deck) {
     pages = deck.slides.map((s, i) => ({
       w: deck.size.w, h: deck.size.h,
       items: recordSlide({ size: deck.size, master: deck.master, layout: s.layout, index: i }, deck.docOf(i)),

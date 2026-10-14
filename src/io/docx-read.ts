@@ -189,7 +189,7 @@ class DocxReader {
     this.theme.minor = kid(kid(fs, 'minorFont'), 'latin')?.getAttribute('typeface') ?? '';
   }
 
-  private readRPr(el: Element | null): RProps {
+  private readRPr(el: Element | null, direct = true): RProps {
     const out: RProps = {};
     for (const c of kids(el)) {
       switch (c.localName) {
@@ -213,7 +213,7 @@ class DocxReader {
         case 'vanish': out.hidden = this.on(c); break;
         case 'rStyle': Object.assign(out, this.charStyle(this.a(c) ?? '')); break;
         case 'strike': case 'dstrike': case 'smallCaps': case 'caps': case 'highlight':
-          if (this.on(c) && this.a(c) !== 'none') this.warn('looks');
+          if (direct && this.on(c) && this.a(c) !== 'none') this.warn('looks');
           break;
       }
     }
@@ -304,7 +304,7 @@ class DocxReader {
     if (!el) return {};
     const clone = el.cloneNode(true) as Element;
     for (const c of kids(clone, 'rStyle')) clone.removeChild(c);
-    return this.readRPr(clone);
+    return this.readRPr(clone, false);
   }
 
   /** A style's settings with those of the styles it is based on. */

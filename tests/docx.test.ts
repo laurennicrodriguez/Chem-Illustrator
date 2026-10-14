@@ -121,17 +121,21 @@ describe('saving Word files', () => {
 
   it('writes captions and references as Word\'s fields, with the reference\'s bookmark round the label and number', async () => {
     const body = parts(await writeDocx(sample(), deps))['word/document.xml'];
-    expect(body).toContain('w:instr=" SEQ Scheme \\* ARABIC "');
-    expect(body).toContain('w:instr=" REF _Ref100000002 \\h "');
+    expect(body).toContain('> SEQ Scheme \\* ARABIC \\* CHARFORMAT </w:instrText>');
+    expect(body).toContain('> REF _Ref100000002 \\h \\* CHARFORMAT </w:instrText>');
     const start = body.indexOf('<w:bookmarkStart w:id="0" w:name="_Ref100000002"/>');
     const seq = body.indexOf('SEQ Scheme');
     const end = body.indexOf('<w:bookmarkEnd w:id="0"/>');
     expect(start).toBeGreaterThan(0);
     expect(start).toBeLessThan(seq);
     expect(seq).toBeLessThan(end);
-    // what Word shows until it updates the fields
-    expect(body).toMatch(/SEQ Scheme[^>]*><w:r><w:rPr>.*?<\/w:rPr><w:t xml:space="preserve">1<\/w:t>/);
-    expect(body).toMatch(/REF _Ref100000002[^>]*><w:r>(<w:rPr>.*?<\/w:rPr>)?<w:t xml:space="preserve">Scheme S1<\/w:t>/);
+    // what Word shows until it updates the fields, in the same look as the field's code, which
+    // Word keeps when it updates them: the caption number bold, the reference plain
+    const b = '<w:rPr><w:b/><w:bCs/></w:rPr>';
+    expect(body).toContain(`<w:r>${b}<w:instrText xml:space="preserve"> SEQ Scheme \\* ARABIC \\* CHARFORMAT </w:instrText></w:r>` +
+      `<w:r>${b}<w:fldChar w:fldCharType="separate"/></w:r><w:r>${b}<w:t xml:space="preserve">1</w:t></w:r>`);
+    expect(body).toContain('<w:r><w:instrText xml:space="preserve"> REF _Ref100000002 \\h \\* CHARFORMAT </w:instrText></w:r>' +
+      '<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t xml:space="preserve">Scheme S1</w:t></w:r>');
   });
 
   it('writes tables as Word tables with ACS rules, and structures as pictures with their SVG', async () => {
@@ -161,7 +165,7 @@ describe('saving Word files', () => {
     expect(body).toContain('w:left="1080"');
     expect(body).toContain('<w:pgNumType w:start="2"/>');
     expect(body).toContain('<w:titlePg/>');
-    expect(p['word/footer1.xml']).toContain('w:instr=" PAGE "');
+    expect(p['word/footer1.xml']).toContain('> PAGE \\* CHARFORMAT </w:instrText>');
     expect(p['word/footer1.xml']).toContain('>S</w:t>');
     expect(p['word/footer2.xml']).toBeUndefined();
     expect(p['word/header1.xml']).toContain('>Supporting Information</w:t>');

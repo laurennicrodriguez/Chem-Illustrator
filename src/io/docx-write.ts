@@ -192,11 +192,11 @@ class DocxWriter {
     const shown = this.shown.get(id) ?? '';
     if (o.kind === 'seq') {
       const name = /\s/.test(o.name) ? `"${o.name}"` : o.name;
-      return `<w:fldSimple w:instr=" SEQ ${xml(name)} \\* ARABIC ">${run(rPr, shown)}</w:fldSimple>`;
+      return field(rPr, ` SEQ ${xml(name)} \\* ARABIC \\* CHARFORMAT `, shown);
     }
     if (o.kind === 'ref') {
       const bm = this.bookmarks.get(o.target);
-      return bm ? `<w:fldSimple w:instr=" REF ${bm} \\h ">${run(rPr, shown)}</w:fldSimple>` : run(rPr, shown);
+      return bm ? field(rPr, ` REF ${bm} \\h \\* CHARFORMAT `, shown) : run(rPr, shown);
     }
     return this.picture(main, id, o, rPr);
   }
@@ -350,7 +350,7 @@ class DocxWriter {
       if (i === at) {
         const lead = (text ? ' ' : '') + hf.prefix;
         if (lead) parts.push(run(rPr, lead));
-        parts.push(`<w:fldSimple w:instr=" PAGE ">${run(rPr, String(hf.start))}</w:fldSimple>`);
+        parts.push(field(rPr, ' PAGE \\* CHARFORMAT ', String(hf.start)));
       }
     }
     // drop the tabs after the last zone with something in it
@@ -467,6 +467,17 @@ function tableRun(r: TextRun, font: string, size: number): string {
   }
   if (r.sub || r.sup) parts.push(`<w:vertAlign w:val="${r.sub ? 'subscript' : 'superscript'}"/>`);
   return run(parts.join(''), r.text);
+}
+
+/**
+ * A field (caption number, reference or page number) in Word's long form, its code in the same
+ * font as its result: when Word updates it (F9, or printing) the result keeps that formatting
+ * (CHARFORMAT), so a bold caption number stays bold and a reference doesn't take on the caption's bold.
+ */
+function field(rPr: string, instr: string, result: string): string {
+  const pr = rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
+  return `<w:r>${pr}<w:fldChar w:fldCharType="begin"/></w:r><w:r>${pr}<w:instrText xml:space="preserve">${instr}</w:instrText></w:r>` +
+    `<w:r>${pr}<w:fldChar w:fldCharType="separate"/></w:r>${run(rPr, result)}<w:r>${pr}<w:fldChar w:fldCharType="end"/></w:r>`;
 }
 
 /** A run of text (tabs as Word's tabs). */

@@ -133,8 +133,13 @@ interface State {
  * Stands in for a canvas's 2D context and records the drawing. Only what the renderer uses is
  * provided; anything else would be a mistake in the renderer and throws.
  */
+/** The width of one character in a font (Arial's widths when not given). */
+export type CharWidth = (ch: string, size: number, family: string, bold: boolean, italic: boolean) => number;
+
 export class VectorContext {
   items: Item[] = [];
+  /** Text is placed with these widths (a document's fonts), else Arial's. */
+  constructor(private charWidth: CharWidth | null = null) {}
   private path = new VecPath();
   private st: State = { fillStyle: '#000', strokeStyle: '#000', lineWidth: 1, lineCap: 'butt', lineJoin: 'miter', font: '10px Arial', dash: [] };
   private stack: State[] = [];
@@ -199,13 +204,15 @@ export class VectorContext {
 
   fillText(text: string, x: number, y: number): void {
     const f = parseFont(this.st.font);
-    const widths = [...text].map((ch) => arialWidth(ch, f.size, f.bold));
+    const cw = this.charWidth;
+    const widths = [...text].map((ch) => (cw ? cw(ch, f.size, f.family, f.bold, f.italic) : arialWidth(ch, f.size, f.bold)));
     this.items.push({ kind: 'text', text, x, y, size: f.size, family: f.family, bold: f.bold, italic: f.italic, color: this.st.fillStyle, widths });
   }
 
   measureText(text: string): TextMetrics {
     const f = parseFont(this.st.font);
-    return { width: arialWidth(text, f.size, f.bold) } as TextMetrics;
+    const cw = this.charWidth;
+    return { width: cw ? [...text].reduce((n, ch) => n + cw(ch, f.size, f.family, f.bold, f.italic), 0) : arialWidth(text, f.size, f.bold) } as TextMetrics;
   }
 
   drawImage(): void { throw new Error('The renderer records pictures with picture()'); }
