@@ -16,7 +16,8 @@ import { layoutText, ASCENT, FONT_STACK, type Measure } from '../text/layout';
 import { fitParas, listMarkers, splitParagraphs } from '../text/paragraphs';
 import { formulaParts } from '../richtext';
 import { arialWidth } from '../text-metrics';
-import { arrowPoints, shapeBox, boxOf } from '../objects';
+import { arrowPoints, shapeBox, boxOf, shapeOrder } from '../objects';
+import { geoDef, textArea, type GeoStep } from '../design/geo';
 import { layoutTable, cellAlign, spanOf, isCovered, tableText, NOTE_SCALE } from '../table';
 import { tableBorders } from './cdxml-table';
 import { writeCdxml } from './cdxml-write';
@@ -40,6 +41,8 @@ export const TAG = {
   tablePart: 'CHEMILLUSTRATOR_TABLE_PART',
   /** The file is a design (Design mode), not slides: it opens in Design mode again. */
   design: 'CHEMILLUSTRATOR_DESIGN',
+  /** A design shape (Design mode): which shape and how it looks, used when it comes back. */
+  geo: 'CHEMILLUSTRATOR_GEO',
 };
 
 /** A picture of part of a slide (structures, schemes): SVG and PNG, and the area it shows, in points. */
@@ -127,6 +130,7 @@ export function splitSlide(doc: Doc, measure: Measure = arialMeasure): SlidePart
   const texts: Caption[] = [];
   const pictures: Shape[] = [];
   const tables: Shape[] = [];
+  const geos: Shape[] = [];
   for (const frag of doc.fragments()) {
     const pts = [...frag].map((id) => doc.atoms.get(id)!);
     const b = boxOf(pts);
@@ -146,6 +150,8 @@ export function splitSlide(doc: Doc, measure: Measure = arialMeasure): SlidePart
     if (sh.picture) continue; // a stand-in for a picture from a ChemDraw file
     if (sh.kind === 'picture') { pictures.push(sh); continue; }
     if (sh.kind === 'table') { if (sh.table) tables.push(sh); continue; }
+    // design shapes stay PowerPoint shapes even beside structures (boxes round a structure, flasks under one)
+    if (sh.kind === 'geo') { geos.push(sh); continue; }
     const chem = sh.kind === 'bracket' || sh.kind === 'symbol';
     items.push({ box: shapeBox(sh), chem, add: (s) => s.shapes.add(sh.id), shape: sh });
   }
@@ -185,7 +191,7 @@ export function splitSlide(doc: Doc, measure: Measure = arialMeasure): SlidePart
   // top to bottom, then left to right, as people read (and as PowerPoint tabs through them)
   const top = (s: Selection) => Math.min(...[...s.atoms].map((id) => doc.atoms.get(id)!.y), ...[...s.arrows].map((id) => doc.arrows.get(id)!.tail.y), ...[...s.shapes].map((id) => doc.shapes.get(id)!.y1));
   drawings.sort((a, b) => top(a) - top(b));
-  return { texts, pictures, shapes, tables, drawings };
+  return { texts, pictures, shapes: shapeOrder([...shapes, ...geos]), tables, drawings };
 }
 
 export const arialMeasure: Measure = (t, size, _family, style) => arialWidth(t, size, /bold/.test(style));
@@ -450,7 +456,7 @@ class Writer {
     const styles = textStyles(this.deck.master);
     // pictures and shapes at the back, as on screen
     for (const p of parts.pictures) out.push(await this.picture(path, p.src!, { x1: Math.min(p.x1, p.x2), y1: Math.min(p.y1, p.y2), x2: Math.max(p.x1, p.x2), y2: Math.max(p.y1, p.y2) }, `Picture ${id - 1}`, id++, p.crop ?? null));
-    for (const sh of parts.shapes) out.push(shapeXml(sh, id++, doc.style.lineWidth));
+    for (const sh of parts.shapes) out.push(sh.kind === 'geo' ? this.geo(path, sh, id++, doc, styles.body?.size ?? doc.style.captionSize) : shapeXml(sh, id++, doc.style.lineWidth));
     const phCount: Record<string, number> = {};
     for (const tb of parts.tables) out.push(this.table(path, tb, () => id++, s.layout, styles, phCount, doc));
     // structures and schemes
@@ -477,6 +483,51 @@ class Writer {
     const tags = this.addTags(path, { [TAG.layout]: s.layout });
     return `${HEAD}<p:sld ${XMLNS}><p:cSld><p:spTree>${GROUP}${out.join('')}</p:spTree><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:cSld>` +
       `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`;
+  }
+
+  /**
+   * A design shape: PowerPoint's own shape where it has one (so PowerPoint can change it), else
+   * the outline itself; its text inside, wrapped. A tag keeps the shape as it was.
+   */
+  private geo(path: string, s: Shape, id: number, doc: Doc, textSize: number): string {
+    const def = geoDef(s.geo);
+    const box = { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
+    const w = box.x2 - box.x1, h = box.y2 - box.y1;
+    const lw = doc.style.lineWidth;
+    const width = s.lineWidth ?? (s.bold ? lw * 2.5 : lw);
+    let geom: string;
+    if (def.prst) geom = `<a:prstGeom prst="${def.prst}"><a:avLst/></a:prstGeom>`;
+    else {
+      const o = def.draw(w, h);
+      const ta = textArea(def, 0, 0, w, h);
+      geom = '<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/>' +
+        `<a:rect l="${emu(ta.x1)}" t="${emu(ta.y1)}" r="${emu(ta.x2)}" b="${emu(ta.y2)}"/>` +
+        `<a:pathLst>${geoPath(o.body, w, h, '')}${o.lines?.length ? geoPath(o.lines, w, h, ' fill="none"') : ''}</a:pathLst></a:custGeom>`;
+    }
+    const fc = hex6(s.fillColor ?? s.color ?? '#000000');
+    const clear = Math.max(0, Math.min(1, s.transparency ?? 0));
+    const alpha = clear ? `<a:alpha val="${Math.round((1 - clear) * 100000)}"/>` : '';
+    const fill = !s.filled ? '<a:noFill/>'
+      : s.fill === 'faded' ? `<a:solidFill><a:srgbClr val="${hex6(tint('#' + fc, FADE))}">${alpha}</a:srgbClr></a:solidFill>`
+      : s.fill === 'shaded' ? `<a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="${hex6(tint('#' + fc, 0.85))}">${alpha}</a:srgbClr></a:gs><a:gs pos="100000"><a:srgbClr val="${fc}">${alpha}</a:srgbClr></a:gs></a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill>`
+      : `<a:solidFill><a:srgbClr val="${fc}">${alpha}</a:srgbClr></a:solidFill>`;
+    const dash = s.dashed ? '<a:prstDash val="dash"/>' : '';
+    const ln = width > 0 ? `<a:ln w="${emu(width)}"><a:solidFill><a:srgbClr val="${hex6(s.color ?? '#000000')}"/></a:solidFill>${dash}<a:round/></a:ln>` : '<a:ln><a:noFill/></a:ln>';
+    const shadow = s.shadow ? `<a:effectLst><a:outerShdw dist="${emu(s.shadowSize ?? Math.max(2, 0.04 * Math.min(w, h)))}" dir="2700000" algn="tl" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="25000"/></a:srgbClr></a:outerShdw></a:effectLst>` : '';
+    const justify = s.textAlign ?? 'center';
+    const algn = justify === 'center' ? 'ctr' : justify === 'right' ? 'r' : justify === 'justify' ? 'just' : 'l';
+    const hasText = !!s.text?.runs.some((r) => r.text);
+    const body = hasText
+      ? paragraphsXml({ id: 0, x: 0, y: 0, runs: s.text!.runs, paras: s.text!.paras, justify }, { size: textSize, font: doc.style.captionFont || 'Arial' }, textSize, this.measure)
+      : `<a:p><a:pPr algn="${algn}"/><a:endParaRPr ${lang} sz="${Math.round(textSize * 100)}" dirty="0"/></a:p>`;
+    const anchor = s.textValign === 'top' ? 't' : s.textValign === 'bottom' ? 'b' : 'ctr';
+    const ins = def.prst ? 3.6 : 0;
+    const bodyPr = `<a:bodyPr wrap="square" lIns="${emu(ins)}" tIns="${emu(ins)}" rIns="${emu(ins)}" bIns="${emu(ins)}" rtlCol="0" anchor="${anchor}"><a:noAutofit/></a:bodyPr>`;
+    const { id: _, x1: _a, y1: _b, x2: _c, y2: _d, ...look } = s;
+    const plain = s.text?.runs.map((r) => r.text).join('') ?? '';
+    const tag = this.addTags(path, { [TAG.geo]: JSON.stringify({ v: 1, s: look, plain }) });
+    return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${xml(def.name)} ${id - 1}"/><p:cNvSpPr/><p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvSpPr>` +
+      `<p:spPr>${xfrm(box)}${geom}${fill}${ln}${shadow}</p:spPr><p:txBody>${bodyPr}<a:lstStyle/>${body}</p:txBody></p:sp>`;
   }
 
   /** A picture from image data, cropped as given. */
@@ -633,6 +684,20 @@ function picXml(id: number, name: string, blipId: string, svgId: string | null, 
   return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${xml(name)}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>${nvPr}</p:nvPicPr>` +
     `<p:blipFill><a:blip r:embed="${blipId}">${ext}</a:blip>${src}<a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
     `<p:spPr>${xfrm(box)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`;
+}
+
+/** A design shape's outline as a PowerPoint path, in its own box (w × h points). */
+function geoPath(steps: GeoStep[], w: number, h: number, attrs: string): string {
+  const pt = (x: number, y: number) => `<a:pt x="${emu(x)}" y="${emu(y)}"/>`;
+  const out = steps.map((st) => {
+    switch (st[0]) {
+      case 'M': return `<a:moveTo>${pt(st[1], st[2])}</a:moveTo>`;
+      case 'L': return `<a:lnTo>${pt(st[1], st[2])}</a:lnTo>`;
+      case 'C': return `<a:cubicBezTo>${pt(st[1], st[2])}${pt(st[3], st[4])}${pt(st[5], st[6])}</a:cubicBezTo>`;
+      default: return '<a:close/>';
+    }
+  });
+  return `<a:path w="${emu(w)}" h="${emu(h)}"${attrs}>${out.join('')}</a:path>`;
 }
 
 /** A box, oval or line as a PowerPoint shape. */

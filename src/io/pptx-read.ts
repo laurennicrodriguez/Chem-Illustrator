@@ -19,6 +19,12 @@ import { dataUrl, imageSize } from '../render/images';
 import { layoutText, ASCENT } from '../text/layout';
 import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle } from '../deck/deck';
 import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure } from './pptx-write';
+import { GEOS } from '../design/geo';
+
+/** PowerPoint's shapes that are shapes in the library, by PowerPoint's name. */
+const GEO_BY_PRST = new Map(GEOS.filter((g) => g.prst).map((g) => [g.prst!, g.id]));
+/** PowerPoint shapes that come into slides as plain boxes and ovals (with their text beside them as text boxes). */
+const PLAIN_PRST = new Set(['rect', 'roundRect', 'ellipse', 'snip1Rect', 'flowChartProcess', 'flowChartAlternateProcess']);
 
 export interface PptxSlide { layout: LayoutId; contents: Contents; notes: string }
 export interface PptxRead {
@@ -530,6 +536,13 @@ class Reader {
     if (box.rot) this.warnings.add('Rotated pictures and shapes came in unrotated.');
     const prst = kid(spPr, 'prstGeom')?.getAttribute('prst') ?? (kid(spPr, 'custGeom') ? 'cust' : 'rect');
     if (!ph && /line|Connector/i.test(prst)) { this.line(sp, spPr, t, doc); return; }
+    if (!ph) {
+      // a design shape saved here, or a PowerPoint shape that is one (in designs, boxes and ovals too)
+      const geoTag = this.tagsOf(s.path, kid(sp, 'nvSpPr', 'nvPr'))[TAG.geo];
+      if (geoTag || (GEO_BY_PRST.has(prst) && (this.design || !PLAIN_PRST.has(prst)))) {
+        if (this.geoShape(sp, spPr, prst, box, geoTag, doc)) return;
+      }
+    }
     const hasText = !!this.plain(sp).trim();
     if (!ph) {
       const look = this.look(sp, spPr);
@@ -567,6 +580,50 @@ class Reader {
       return;
     }
     if (c) doc.addCaption(c);
+  }
+
+  /**
+   * A design shape: as saved here (moved and sized as it now is, with PowerPoint's text if that
+   * was changed there), or made from a PowerPoint shape of the same kind.
+   */
+  private geoShape(sp: Element, spPr: Element | null, prst: string, box: Rect, tag: string | undefined, doc: Doc): boolean {
+    let saved: { s: Partial<Shape>; plain: string } | null = null;
+    try { saved = tag ? JSON.parse(tag) : null; } catch { saved = null; }
+    const where = { x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2 };
+    const now = this.plain(sp);
+    const theirText = () => {
+      if (!now.trim()) return undefined;
+      const c = this.text(sp, box, null, []);
+      return c ? { runs: c.runs, ...(c.paras ? { paras: c.paras } : {}) } : undefined;
+    };
+    if (saved?.s && saved.s.kind === 'geo') {
+      const sh = { ...saved.s, ...where, kind: 'geo' } as Omit<Shape, 'id'>;
+      if (now !== saved.plain) {
+        const t = theirText();
+        if (t) sh.text = t; else delete sh.text;
+      }
+      doc.addShape(sh);
+      return true;
+    }
+    const geo = GEO_BY_PRST.get(prst);
+    if (!geo) return false;
+    const look = this.look(sp, spPr);
+    const sh: Omit<Shape, 'id'> = { kind: 'geo', geo, ...where, color: look.line ?? look.fill ?? '#000000' };
+    if (look.fill) { sh.filled = true; sh.fillColor = look.fill; }
+    if (look.shaded) sh.fill = 'shaded';
+    sh.lineWidth = look.line ? +look.width.toFixed(2) : 0;
+    if (look.dashed) sh.dashed = true;
+    const t = theirText();
+    if (t) {
+      sh.text = t;
+      const c = this.text(sp, box, null, []);
+      if (c?.justify && c.justify !== 'center') sh.textAlign = c.justify;
+      const anchor = kid(sp, 'txBody', 'bodyPr')?.getAttribute('anchor');
+      if (!anchor || anchor === 't') sh.textValign = 'top';
+      else if (anchor === 'b') sh.textValign = 'bottom';
+    }
+    doc.addShape(sh);
+    return true;
   }
 
   /**
