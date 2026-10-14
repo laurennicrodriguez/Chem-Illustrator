@@ -66,22 +66,23 @@ function errBarsXml(e: ErrorBars, scatter: boolean): string {
 }
 
 /**
- * A mass spectrum's sticks, as Excel draws them: error bars from each point to zero (100 % of the
- * value, towards zero), with no caps, in the series' colour.
+ * A mass spectrum's sticks, as Excel draws them: error bars from each point to zero (minus 100 %
+ * of the value, which Excel takes with its sign, so peaks below zero run up to it), with no caps,
+ * in the series' colour.
  */
-function sticksXml(color: string, width: number, down: boolean): string {
-  return `<c:errBars>${v('errDir', 'y')}${v('errBarType', down ? 'plus' : 'minus')}${v('errValType', 'percentage')}${v('noEndCap', true)}${v('val', 100)}` +
+function sticksXml(color: string, width: number): string {
+  return `<c:errBars>${v('errDir', 'y')}${v('errBarType', 'minus')}${v('errValType', 'percentage')}${v('noEndCap', true)}${v('val', 100)}` +
     `<c:spPr><a:ln w="${Math.round(width * 9525)}" cap="flat">${fill(color)}</a:ln></c:spPr></c:errBars>`;
 }
 
 const MARKER_NAME: Record<MarkerShape, string> = { circle: 'circle', square: 'square', diamond: 'diamond', triangle: 'triangle', cross: 'x', none: 'none' };
 
-function axisXml(kind: 'cat' | 'val', id: number, cross: number, pos: string, a: ChartAxis, deleteIt: boolean, grid: boolean, crossBetween?: string): string {
+function axisXml(kind: 'cat' | 'val', id: number, cross: number, pos: string, a: ChartAxis, deleteIt: boolean, grid: boolean, crossBetween?: string, labelsLow = false): string {
   const scaling = `<c:scaling>${a.log ? v('logBase', 10) : ''}${v('orientation', a.reverse ? 'maxMin' : 'minMax')}${kind === 'val' && a.max !== undefined ? v('max', a.max) : ''}${kind === 'val' && a.min !== undefined ? v('min', a.min) : ''}</c:scaling>`;
   const gridXml = grid ? `<c:majorGridlines><c:spPr><a:ln w="9525">${fill('#d9d9d9')}</a:ln></c:spPr></c:majorGridlines>` : '';
   const fmt = `<c:numFmt formatCode="${xml(a.numFmt ?? 'General')}" sourceLinked="${a.numFmt ? 0 : 1}"/>`;
   const common = `${v('axId', id)}${scaling}${v('delete', deleteIt)}${v('axPos', pos)}${gridXml}${titleXml(a.title, 10)}${fmt}` +
-    `${v('majorTickMark', 'out')}${v('minorTickMark', 'none')}${v('tickLblPos', 'nextTo')}<c:spPr><a:ln w="9525">${fill('#bfbfbf')}</a:ln></c:spPr>${v('crossAx', cross)}${v('crosses', 'autoZero')}`;
+    `${v('majorTickMark', 'out')}${v('minorTickMark', 'none')}${v('tickLblPos', labelsLow ? 'low' : 'nextTo')}<c:spPr><a:ln w="9525">${fill('#bfbfbf')}</a:ln></c:spPr>${v('crossAx', cross)}${v('crosses', 'autoZero')}`;
   if (kind === 'cat') return `<c:catAx>${common}${v('auto', true)}${v('lblAlgn', 'ctr')}${v('lblOffset', 100)}${v('noMultiLvlLbl', false)}</c:catAx>`;
   return `<c:valAx>${common}${crossBetween ? v('crossBetween', crossBetween) : ''}${a.step ? v('majorUnit', a.step) : ''}</c:valAx>`;
 }
@@ -104,10 +105,11 @@ export function chartXml(c: Chart, data: SeriesData[]): string {
     const marker = lineLike ? `<c:marker>${v('symbol', MARKER_NAME[markerShape])}${markerShape !== 'none' ? `${v('size', Math.max(2, Math.min(72, Math.round((s.markerSize ?? 7) * 0.75))))}<c:spPr>${fill(color)}<a:ln w="9525">${fill(color)}</a:ln></c:spPr>` : ''}</c:marker>` : '';
     const showX = scatter && !!s.labelX;
     const lblFmt = s.labelFmt ? `<c:numFmt formatCode="${xml(s.labelFmt)}" sourceLinked="0"/>` : '';
-    const dLbls = s.labels ? `<c:dLbls>${lblFmt}${showX ? v('dLblPos', 't') : ''}${v('showLegendKey', false)}${v('showVal', !pie && !showX)}${v('showCatName', showX)}${v('showSerName', false)}${v('showPercent', pie)}${v('showBubbleSize', false)}</c:dLbls>` : '';
+    // labels of peaks drawn downwards go under them
+    const below = sticks && (d?.ys ?? []).some((y) => y < 0) && !(d?.ys ?? []).some((y) => y > 0);
+    const dLbls = s.labels ? `<c:dLbls>${lblFmt}${showX || sticks ? v('dLblPos', below ? 'b' : 't') : ''}${v('showLegendKey', false)}${v('showVal', !pie && !showX)}${v('showCatName', showX)}${v('showSerName', false)}${v('showPercent', pie)}${v('showBubbleSize', false)}</c:dLbls>` : '';
     const trend = s.fit && !pie ? trendlineXml(s.fit, color) : '';
-    const down = (d?.ys ?? []).some((y) => y < 0) && !(d?.ys ?? []).some((y) => y > 0);
-    const errs = sticks ? sticksXml(color, s.lineWidth ?? 1.5, down) : s.errors && !pie ? errBarsXml(s.errors, scatter) : '';
+    const errs = sticks ? sticksXml(color, s.lineWidth ?? 1.5) : s.errors && !pie ? errBarsXml(s.errors, scatter) : '';
     const xs = d?.xs ?? [], ys = d?.ys ?? [];
     const catNumbers = s.x && d ? d.cats.every((t) => t === '' || Number.isFinite(Number(t))) : false;
     const cat = s.x ? (scatter || catNumbers ? numRef(s.x, xs) : strRef(s.x, d?.cats ?? [])) : '';
@@ -126,7 +128,7 @@ export function chartXml(c: Chart, data: SeriesData[]): string {
   switch (c.kind) {
     case 'scatter':
       plot = `<c:scatterChart>${v('scatterStyle', 'lineMarker')}${v('varyColors', false)}${sers}${ax}</c:scatterChart>` +
-        axisXml('val', 101, 102, 'b', c.x, false, !!c.x.grid, 'midCat') + axisXml('val', 102, 101, 'l', c.y, false, c.y.grid !== false, 'midCat');
+        axisXml('val', 101, 102, 'b', c.x, false, !!c.x.grid, 'midCat', true) + axisXml('val', 102, 101, 'l', c.y, false, c.y.grid !== false, 'midCat');
       break;
     case 'line': case 'area':
       plot = `<c:${c.kind}Chart>${v('grouping', grouping)}${v('varyColors', false)}${sers}${c.kind === 'line' ? v('marker', true) : ''}${ax}</c:${c.kind}Chart>` +

@@ -98,8 +98,11 @@ describe('the isotope pattern chart', () => {
     const f = unzipSync(bytes);
     const part = strFromU8(f['xl/charts/chart1.xml']);
     expect(part).toContain('<c:errBarType val="minus"/><c:errValType val="percentage"/><c:noEndCap val="1"/><c:val val="100"/>');
-    // the calculated peaks, all below zero, run up to it
-    expect(part).toContain('<c:errBarType val="plus"/>');
+    // the calculated peaks, all below zero, run up to it too (Excel takes the percentage with its sign)
+    expect(part).not.toContain('<c:errBarType val="plus"/>');
+    // m/z under the plot, not on the zero line across its middle
+    expect(part).toContain('<c:tickLblPos val="low"/>');
+    expect(part).toContain('<c:dLblPos val="b"/>');
     expect(part).toContain('<c:showCatName val="1"/>');
     expect(part).toContain('<c:numFmt formatCode="0.0000" sourceLinked="0"/>');
     expect(part).toContain('<c:symbol val="none"/>');
@@ -114,6 +117,6 @@ describe('the isotope pattern chart', () => {
     delete f['customXml/item1.xml'];
     const fromExcel = (await readXlsx(zipSync(f))).book.sheet.charts[0];
     expect(fromExcel.series.map((x) => [x.sticks, x.labelX, x.labelFmt, x.errors])).toEqual([[true, true, '0.0000', undefined], [true, true, '0.0000', undefined]]);
-    expect(fromExcel.y).toMatchObject({ min: -125, max: 125, numFmt: '0;0' });
+    expect(fromExcel.y).toMatchObject({ min: -150, max: 150, numFmt: '0;0' });
   });
 });

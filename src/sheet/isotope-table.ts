@@ -77,8 +77,8 @@ export function isotopeTable(o: IsotopeTableOptions): { cells: TableCell[]; widt
 
   const first = r0 + H + 1, last = r0 + H + o.peaks.length;
   const rng = (c: number) => refText(o.sheet, { r1: first, c1: c0 + c, r2: Math.max(first, last), c2: c0 + c });
-  const stick = (name: string, x: number, y: number, color: string, width: number): Series => ({
-    name, x: rng(x), y: rng(y), color, sticks: true, lineWidth: width, labels: true, labelX: true, labelFmt: '0.0000',
+  const stick = (name: string, x: number, y: number, color: string, width: number, labelled = true): Series => ({
+    name, x: rng(x), y: rng(y), color, sticks: true, lineWidth: width, ...(labelled ? { labels: true, labelX: true, labelFmt: '0.0000' } : {}),
   });
   let chart: Chart | null = null;
   const kind = o.found ? o.chart : o.chart === 'none' ? 'none' : 'calc';
@@ -86,16 +86,18 @@ export function isotopeTable(o: IsotopeTableOptions): { cells: TableCell[]; widt
     const series: Series[] =
       kind === 'calc' ? [stick('Calculated', 1, 2, CALC_COLOUR, 2)]
       : kind === 'mirror' ? [stick('Found', 3, 4, FOUND_COLOUR, 2), stick('Calculated', 1, 6, CALC_COLOUR, 2)]
-      : [stick('Found', 3, 4, FOUND_COLOUR, 3), stick('Calculated', 1, 2, CALC_COLOUR, 1.5)];
+      // drawn on top of each other: only the found peaks are labelled, so the labels don't collide
+      : [stick('Found', 3, 4, FOUND_COLOUR, 3), stick('Calculated', 1, 2, CALC_COLOUR, 1.5, false)];
     chart = {
       id: newChartId(),
       kind: 'scatter',
       title: `Isotope pattern`,
       series,
-      x: { title: 'm/z', numFmt: '0', grid: false },
+      // a label at each whole m/z (Excel would otherwise label every half, and show each twice)
+      x: { title: 'm/z', numFmt: '0', step: 1, grid: false },
       y: kind === 'mirror'
-        ? { title: 'Relative abundance (%)', min: -125, max: 125, step: 50, numFmt: '0;0', grid: false }
-        : { title: 'Relative abundance (%)', min: 0, max: 125, step: 25, grid: false },
+        ? { title: 'Relative abundance (%)', min: -150, max: 150, step: 50, numFmt: '0;0', grid: false }
+        : { title: 'Relative abundance (%)', min: 0, max: 125, step: 25, numFmt: '0', grid: false },
       legend: series.length > 1 ? 'bottom' : 'none',
       at: { row: r0, col: c0 + names.length + 1, dx: 0, dy: 0 },
       w: 520,
