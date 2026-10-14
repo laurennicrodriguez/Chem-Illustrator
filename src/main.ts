@@ -45,6 +45,7 @@ import { ask } from './ui/ask';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
 import { NameDialog } from './ui/name-dialog';
 import { ArrangeDialog } from './ui/arrange-dialog';
+import { PeriodicTable } from './ui/periodic-table';
 import { SheetMode, ClipboardCells } from './ui/sheet-mode';
 import { DocumentMode, DocPaste } from './ui/doc-mode';
 import { setScreenMeasure, figures } from './document/doc-file';
@@ -214,6 +215,7 @@ const TOOL_GROUPS: ToolbarItem[][] = [
   ],
   [
     { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption' },
+    { name: 'element', title: 'Periodic table: pick an element, then click atoms to change them' },
     ARROWS,
     SYMBOLS,
     SHAPES,
@@ -237,7 +239,8 @@ for (const group of TOOL_GROUPS) {
 }
 registerToolNames(toolNames);
 
-const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => editor.setTool(name), (name) => {
+const periodicTable = new PeriodicTable((z) => editor.pickElement(z), () => editor.element);
+const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => { editor.setTool(name); if (name === 'element') periodicTable.open(); }, (name) => {
   const keys = keysOf('space', `tool ${name}`);
   return keys.length ? ` (${keys.join(', ')})` : '';
 });
@@ -247,6 +250,7 @@ const HINTS: Record<string, string> = {
   eraser: 'Click an atom, bond, caption, arrow or shape to remove it.',
   chain: 'Drag from empty space or an atom; the number shows how many bonds. Click to type how many atoms; Alt+click repeats the last number.',
   text: 'Click an atom to type a label (OMe, CO2Et, NHBoc…), or click empty space for a caption.',
+  element: 'Click atoms to make them the element picked in the periodic table, or empty space to add one.',
 };
 const ARROW_HINT = 'Drag to draw an arrow (Alt: any angle); click for a standard one. Drag the ends to move them, the middle to bend it.';
 const CURVE_HINT = 'Drag from where the electrons start to where they go; swing out to one side to bend that way. Drag the middle dot to change the curve.';
@@ -1730,6 +1734,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'number-compounds': () => void numberCompounds(),
   'bring-front': () => editor.setBondLayer(true) || flash('Select the bond to bring to the front (where bonds cross, the one behind has a gap).'),
   'send-back': () => editor.setBondLayer(false) || flash('Select the bond to send to the back (where bonds cross, the one behind has a gap).'),
+  'periodic-table': () => { editor.setTool('element'); periodicTable.open(); },
   'aromatic-circles': () => flash(editor.toggleAromaticCircles() ?? 'No aromatic rings here: select a ring with alternating double bonds, or one drawn with a circle.', 5000),
   'show-roles': () => { editor.showRoles = !editor.showRoles; $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(editor.showRoles)); editor.requestScene(); storeSettings(); },
   'check-structure': () => checkStructure(),

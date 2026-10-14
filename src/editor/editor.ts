@@ -47,7 +47,9 @@ export type Tool =
   | { kind: 'shape'; shape: ShapeStyle; from: 'corner' | 'center' }
   | { kind: 'bracket'; bracket: NonNullable<Shape['bracket']> }
   | { kind: 'template'; id: string }
-  | { kind: 'symbol'; symbol: SymbolKind };
+  | { kind: 'symbol'; symbol: SymbolKind }
+  /** Puts the element picked in the periodic table on atoms (or new atoms in empty space). */
+  | { kind: 'element' };
 
 /** Marks put on atoms for mechanisms: a lone pair, a radical's dot, a circled charge, or δ+ / δ−. */
 export type SymbolKind = 'LonePair' | 'Electron' | 'CirclePlus' | 'CircleMinus' | 'DeltaPlus' | 'DeltaMinus';
@@ -64,6 +66,7 @@ export type ShapeStyle = Partial<Omit<Shape, 'id' | 'kind' | 'x1' | 'y1' | 'x2' 
 export const TOOLS: Record<string, Tool> = {
   select: { kind: 'select' },
   eraser: { kind: 'eraser' },
+  element: { kind: 'element' },
   'bond-single': { kind: 'bond', order: 1, display: 'solid' },
   'bond-double': { kind: 'bond', order: 2, display: 'solid' },
   'bond-triple': { kind: 'bond', order: 3, display: 'solid' },
@@ -527,6 +530,7 @@ export class Editor {
         return d.hit ? 'move' : 'marquee';
       case 'eraser':
       case 'symbol':
+      case 'element':
         return 'none';
       case 'bond':
       case 'chain':
@@ -665,6 +669,14 @@ export class Editor {
       }
       case 'symbol': {
         this.placeSymbol(t.symbol, h, p);
+        return;
+      }
+      case 'element': {
+        const sym = SYMBOLS[this.element];
+        if (h && h.kind === 'atom') doc.edit(`Make ${sym}`, () => this.applyLabel(h.id, sym));
+        else if (!h) doc.edit(`Add ${sym}`, () => { this.lastEdited = doc.addAtom(p.x, p.y, this.element).id; });
+        else return;
+        this.changed();
         return;
       }
       case 'template': {
@@ -1079,6 +1091,20 @@ export class Editor {
     this.addToSel(h);
     this.requestOverlay();
     this.onChange();
+  }
+
+  /** The element the periodic table tool puts on atoms (its atomic number). */
+  element = 7;
+
+  /** Pick the periodic table tool's element; atoms already selected become that element too. */
+  pickElement(z: number): void {
+    this.element = z;
+    const ids = [...this.sel.atoms].filter((id) => this.doc.atoms.has(id));
+    if (ids.length) {
+      this.doc.edit(`Make ${SYMBOLS[z]}`, () => { for (const id of ids) this.applyLabel(id, SYMBOLS[z]); });
+      this.changed();
+    }
+    this.setTool('element');
   }
 
   /** How many atoms the chain tool's click adds; set by the window it opens. */
