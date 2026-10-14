@@ -299,7 +299,7 @@ class CdxmlWriter {
 
   private removeDeleted(): void {
     const doc = this.doc;
-    const maps: Record<Kind, Map<number, Entity>> = { a: doc.atoms, b: doc.bonds, c: doc.captions, r: doc.arrows, s: doc.shapes };
+    const maps: Record<Kind, Map<number, Entity>> = { a: doc.atoms, b: doc.bonds, c: doc.captions, r: doc.arrows, s: doc.shapes, y: new Map() };
     for (const [key, o] of doc.source!.ord) {
       const kind = key[0] as Kind;
       if (maps[kind].has(Number(key.slice(1)))) continue;

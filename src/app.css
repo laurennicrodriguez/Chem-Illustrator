@@ -778,6 +778,8 @@ dialog.design-size { width: min(94vw, 500px); }
 
 /* ------------------------------------------------------------------ Slide > Slide Master */
 dialog.master-dialog { width: min(94vw, 560px); }
+.style-dialog .style-source { margin: 2px 0 6px; max-width: 60ch; }
+.style-dialog .style-radio { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
 dialog.master-dialog form { margin: 0; }
 dialog.master-dialog > form > .muted { margin: 2px 0 6px; max-width: 60ch; }
 .md-grid { display: grid; grid-template-columns: 1fr; max-height: 60vh; overflow-y: auto; padding-right: 4px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
@@ -1278,3 +1280,10 @@ dialog.cf-manage { width: min(92vw, 640px); }
 .sh-tab.dash-tab::before { content: '▦ '; color: var(--accent); }
 #cell-body .cp-textarea { flex: 1 1 auto; min-width: 0; min-height: 54px; font: 12px var(--ui-font); padding: 3px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--text); resize: vertical; }
 #formula-bar[hidden] { display: none; }
+
+/* View > Dark Page: the page canvases only, on screen (see dark-page.ts) */
+.dark-page #scene, .dark-page .doc-canvas, .dark-page .sh-canvas, .dark-page #main-snap canvas, .dark-page #split-snap { filter: url(#dark-page-filter); }
+.dark-page #canvas-host { background: var(--dark-paper, #1e1e1e); }
+#btn-dark { display: inline-flex; align-items: center; justify-content: center; padding: 0 7px; }
+#btn-dark svg { width: 18px; height: 18px; }
+#btn-dark[aria-pressed='true'] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }

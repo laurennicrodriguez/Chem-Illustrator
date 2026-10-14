@@ -10,6 +10,9 @@ import { ModeColours, DEFAULT_MODE_COLOURS, parseModeColours } from './ui/mode-c
 import { parseOwnTemplates, type Template } from './chem/templates';
 import { parsePalettes, type Palette } from './palettes';
 import { defaultToolboxes, parseToolboxes, type ToolboxState } from './ui/toolboxes';
+import { parseOwnStyles, parseModeStyles, type StyleMode } from './drawing-styles';
+import type { DocStyle } from './style';
+import { parseDarkPalettes, type DarkPalette } from './dark-page';
 import { CITE_PRESETS, DEFAULT_STYLE, cleanOptions, type CiteFormat } from './document/cite-styles';
 
 export interface Settings {
@@ -63,6 +66,16 @@ export interface Settings {
   palettes: Palette[];
   /** Which toolboxes show and where (View > Toolboxes), and what is in your own. */
   toolboxes: ToolboxState;
+  /** Your own drawing styles (File > Drawing Style > Save as My Style). */
+  myStyles: DocStyle[];
+  /** The style each kind of new tab starts with, by name (File > Drawing Style > Use for new…). */
+  modeStyles: Partial<Record<StyleMode, string>>;
+  /** Show the page dark on screen (View > Dark Page, or the eye button). */
+  darkPage: boolean;
+  /** Which dark palette, by name. */
+  darkPalette: string;
+  /** Your own dark palettes (View > Dark Page Colours). */
+  darkPalettes: DarkPalette[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -70,20 +83,21 @@ export const DEFAULT_SETTINGS: Settings = {
   chemTyping: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
   modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true, groupTips: true,
   citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(),
+  myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
 };
 
 const STORAGE_KEY = 'chem-illustrator.settings';
 
 /** Read settings saved as text, keeping only what makes sense. */
 export function parseSettings(text: string | null | undefined): Settings {
-  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes() };
+  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), myStyles: [], modeStyles: {}, darkPalettes: [] };
   if (!text) return s;
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { return s; }
   if (!raw || typeof raw !== 'object') return s;
   const r = raw as Record<string, unknown>;
   if (r.hotkeys && typeof r.hotkeys === 'object' && !Array.isArray(r.hotkeys)) s.hotkeys = r.hotkeys as KeyOverrides;
-  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'spellCheck', 'scrollBars', 'groupTips', 'askWholeDrawing'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
+  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'spellCheck', 'scrollBars', 'groupTips', 'askWholeDrawing', 'darkPage'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
   if (Array.isArray(r.replacements)) {
     s.replacements = r.replacements.filter((x): x is [string, string] => Array.isArray(x) && typeof x[0] === 'string' && typeof x[1] === 'string' && x[0] !== '').map(([a, b]) => [a, b]);
   }
@@ -97,6 +111,10 @@ export function parseSettings(text: string | null | undefined): Settings {
   s.citeOptions = cleanOptions(r.citeOptions);
   s.palettes = parsePalettes(r.palettes);
   s.toolboxes = parseToolboxes(r.toolboxes);
+  s.myStyles = parseOwnStyles(r.myStyles);
+  s.modeStyles = parseModeStyles(r.modeStyles);
+  if (typeof r.darkPalette === 'string' && r.darkPalette.trim()) s.darkPalette = r.darkPalette.trim();
+  s.darkPalettes = parseDarkPalettes(r.darkPalettes);
   if (r.methylStyle === 'Me' || r.methylStyle === 'CH3') s.methylStyle = r.methylStyle;
   if (r.axialStyle === 'RaSa' || r.axialStyle === 'PM') s.axialStyle = r.axialStyle;
   if (Array.isArray(r.dictionary)) s.dictionary = r.dictionary.filter((w): w is string => typeof w === 'string' && w.trim() !== '').map((w) => w.trim());
