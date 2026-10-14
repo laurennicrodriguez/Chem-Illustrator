@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { unzlibSync } from 'fflate';
-import { emfToSvg, emfSize, decodeDib, rgbaToPng } from '../src/render/emf-read';
+import { emfToSvg, emfSize, decodeDib, rgbaToPng, pngWithDpi, crc32 } from '../src/render/emf-read';
 import { itemsToEmf } from '../src/render/emf';
 import { VecPath } from '../src/render/vector';
 
@@ -182,5 +182,41 @@ describe('EMF pictures as SVG', () => {
       }
     }
     expect(n).toBeGreaterThan(0);
+  });
+});
+
+describe('PNG resolution (Export Picture)', () => {
+  const chunks = (png: Uint8Array) => {
+    const dv = new DataView(png.buffer, png.byteOffset, png.byteLength);
+    const out: { type: string; data: Uint8Array; crcOk: boolean }[] = [];
+    for (let i = 8; i + 12 <= png.length;) {
+      const len = dv.getUint32(i);
+      const type = String.fromCharCode(...png.subarray(i + 4, i + 8));
+      out.push({ type, data: png.subarray(i + 8, i + 8 + len), crcOk: crc32(png.subarray(i + 4, i + 8 + len)) === dv.getUint32(i + 8 + len) });
+      i += 12 + len;
+    }
+    return out;
+  };
+  const png = rgbaToPng(new Uint8Array(16).fill(200), 2, 2);
+
+  it('writes the dpi as dots per metre straight after the header, with a good checksum', () => {
+    const c = chunks(pngWithDpi(png, 300));
+    expect(c.map((x) => x.type)).toEqual(['IHDR', 'pHYs', ...chunks(png).slice(1).map((x) => x.type)]);
+    const p = new DataView(c[1].data.buffer, c[1].data.byteOffset);
+    expect(p.getUint32(0)).toBe(11811); // 300 / 0.0254
+    expect(p.getUint32(4)).toBe(11811);
+    expect(c[1].data[8]).toBe(1);
+    expect(c.every((x) => x.crcOk)).toBe(true);
+  });
+
+  it('replaces an older resolution instead of adding a second one', () => {
+    const c = chunks(pngWithDpi(pngWithDpi(png, 150), 600));
+    expect(c.filter((x) => x.type === 'pHYs')).toHaveLength(1);
+    expect(new DataView(c[1].data.buffer, c[1].data.byteOffset).getUint32(0)).toBe(23622);
+  });
+
+  it('leaves a file that is not a PNG alone', () => {
+    const junk = new Uint8Array([1, 2, 3]);
+    expect(pngWithDpi(junk, 300)).toBe(junk);
   });
 });

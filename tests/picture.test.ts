@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { writeFileSync } from 'node:fs';
 import { Doc } from '../src/model';
-import { recordPicture, pictureEmf, pictureSvg } from '../src/render/picture';
+import { recordPicture, pictureEmf, pictureSvg, bitmapScale } from '../src/render/picture';
 import { dashed, flatten, VecPath } from '../src/render/vector';
 import { arialWidth } from '../src/text-metrics';
 
@@ -95,5 +95,18 @@ describe('pictures', () => {
     // every point of the flattened circle is 5 from the centre
     const pts = flatten(c.segs, 0.01)[0].pts;
     expect(Math.max(...pts.map((q) => Math.abs(Math.hypot(q.x, q.y) - 5)))).toBeLessThan(0.01);
+  });
+});
+
+describe('Export Picture resolution', () => {
+  it('uses the dpi asked for on a journal-sized graphic', () => {
+    // a 3.25 × 1.75 in TOC graphic at 1200 dpi is well within the limits
+    expect(bitmapScale(234, 126, 1200, 16000, 64e6)).toBeCloseTo(1200 / 72);
+  });
+  it('turns the dpi down for a poster too big to hold in memory', () => {
+    const k = bitmapScale(48 * 72, 36 * 72, 600, 16000, 64e6);
+    expect(k).toBeLessThan(600 / 72);
+    expect(48 * 72 * k).toBeLessThanOrEqual(16000);
+    expect(48 * 72 * k * 36 * 72 * k).toBeLessThanOrEqual(64e6 + 1);
   });
 });

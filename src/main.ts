@@ -23,17 +23,19 @@ import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, r
   nativeFirst, writeNativeFormats, looksLikeCdxml, cfHtml, fromCfHtml, CELLS_FORMAT, OWN_FORMAT, CDX_FORMAT } from './io/clipboard';
 import { cdxToCdxml } from './io/cdx';
 import { writeCdxml } from './io/cdxml-write';
-import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE_EXTENSIONS } from './io/files';
+import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, PICTURE_EXTENSIONS } from './io/files';
 import { Workspace, Tab } from './workspace';
 import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize } from './deck/deck';
-import { drawSlidePage, recordSlide, SURROUND } from './deck/slide-view';
+import { drawSlidePage, recordSlide, paintSlide, SURROUND } from './deck/slide-view';
 import { writePdf, jpegInfo, PdfPage, PdfImage } from './io/pdf';
 import { SlideList } from './ui/slide-list';
 import { DesignLibrary, GEO_DRAG_TYPE, pickDesignSize, sizeLabel } from './ui/design-panel';
 import { LayersPanel } from './ui/layers-panel';
 import { Presenter } from './ui/present';
 import { editMaster } from './ui/master-dialog';
-import { recordPicture, pictureSvg, pictureCanvas, canvasPng } from './render/picture';
+import { recordPicture, pictureSvg, pictureCanvas, canvasPng, bitmapScale, EXPORT_MAX_SIDE, EXPORT_MAX_PIXELS } from './render/picture';
+import { pngWithDpi } from './render/emf-read';
+import { itemsToSvg } from './render/svg';
 import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc } from './render/images';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
@@ -1414,6 +1416,82 @@ async function exportPdf(): Promise<void> {
   flash(`Saved ${target.name}${pages.length > 1 ? ` (${pages.length} pages)` : ''}`);
 }
 
+/**
+ * File > Export Picture: the page (a design or the current slide) or the drawing as a PNG at
+ * the resolution picked, or as an SVG, on its background colour or see-through.
+ */
+async function exportPicture(): Promise<void> {
+  const tab = ws.active, deck = tab.deck;
+  const what = deck ? (tab.mode === 'design' ? 'the page' : 'this slide') : 'the drawing';
+  const v = await ask('Export Picture', [
+    { name: 'format', label: 'Format', value: 'png', options: [
+      { value: 'png', label: 'PNG (a picture of dots: journals, Word, web)' },
+      { value: 'svg', label: 'SVG (shapes that stay sharp: Illustrator, Inkscape, web)' },
+    ] },
+    { name: 'dpi', label: 'Resolution (PNG)', value: '300', type: 'number', unit: 'dpi' },
+    { name: 'bg', label: 'Background', value: deck ? 'page' : 'clear', options: [
+      { value: deck ? 'page' : 'white', label: deck ? 'The page colour' : 'White' },
+      { value: 'clear', label: 'See-through' },
+    ] },
+  ], { ok: 'Export…', note: `Saves ${what}. Journals usually ask for 300 dpi for colour pictures and 600 to 1200 dpi for line drawings.` });
+  if (!v) return;
+  const dpi = Math.max(30, Math.min(2400, Number(v.dpi) || 300));
+  const clear = v.bg === 'clear';
+  const CLEAR = 'rgba(0,0,0,0)';
+  let w: number, h: number;
+  let svg: () => string;
+  let png: (k: number) => HTMLCanvasElement;
+  if (deck) {
+    const i = deck.index, s = deck.slides[i];
+    const page = { size: deck.size, master: clear ? { ...deck.master, background: CLEAR } : deck.master, layout: s.layout, index: i };
+    ({ w, h } = deck.size);
+    svg = () => itemsToSvg(recordSlide(page, deck.docOf(i)).filter((it) => !(it.kind === 'path' && it.fill === CLEAR)), { x1: 0, y1: 0, x2: w, y2: h });
+    png = (k) => {
+      const c = document.createElement('canvas');
+      paintSlide(c, w, h, k, page, deck.docOf(i));
+      return c;
+    };
+  } else {
+    const pic = recordPicture(doc, 4);
+    if (!pic) { flash('There is nothing to export yet.'); return; }
+    const b = pic.box;
+    w = b.x2 - b.x1; h = b.y2 - b.y1;
+    const back = clear ? [] : [{ kind: 'path' as const, segs: [{ k: 'M' as const, x: b.x1, y: b.y1 }, { k: 'L' as const, x: b.x2, y: b.y1 }, { k: 'L' as const, x: b.x2, y: b.y2 }, { k: 'L' as const, x: b.x1, y: b.y2 }, { k: 'Z' as const }], fill: '#ffffff' }];
+    svg = () => itemsToSvg([...back, ...pic.items], b);
+    png = (k) => {
+      const { canvas } = pictureCanvas(doc, pic, k * 72);
+      if (clear) return canvas;
+      const c = document.createElement('canvas');
+      c.width = canvas.width; c.height = canvas.height;
+      const g = c.getContext('2d')!;
+      g.fillStyle = '#ffffff';
+      g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(canvas, 0, 0);
+      return c;
+    };
+  }
+  const type = v.format === 'svg' ? SVG : PICTURE;
+  const target = await saveFileDialog(withExtension(tab.name, type.extension), type).catch(async (e) => { await showError(String(e)); return null; });
+  if (!target) return;
+  let note = '';
+  try {
+    if (type === SVG) await writeFile(target.ref, target.name, svg(), SVG);
+    else {
+      const k = bitmapScale(w, h, dpi, EXPORT_MAX_SIDE, EXPORT_MAX_PIXELS);
+      const c = png(k);
+      const got = Math.round((c.width / w) * 72);
+      if (got < dpi - 1) note = ` at ${got} dpi (the most for a page this big)`;
+      const bytes = new Uint8Array(await (await canvasPng(c)).arrayBuffer());
+      await writeFile(target.ref, target.name, pngWithDpi(bytes, (c.width / w) * 72), PICTURE);
+      note = `, ${c.width} × ${c.height} pixels` + note;
+    }
+  } catch (e) {
+    await showError(`Could not save ${target.name}: ${e instanceof Error ? e.message : String(e)}`);
+    return;
+  }
+  flash(`Saved ${target.name}${note}`);
+}
+
 /** A picture's pixels for a PDF: JPEGs go in as they are; others are read through the browser. */
 async function pdfImage(src: string): Promise<PdfImage | null> {
   const { mime, bytes } = fromDataUrl(src);
@@ -1922,6 +2000,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'prev-tab': () => ws.cycle(-1),
   'export-mol': () => exportMolfile(),
   'export-pdf': () => { finishTyping(); return exportPdf(); },
+  'export-picture': () => { finishTyping(); return exportPicture(); },
   undo: () => undo(),
   redo: () => redo(),
   'insert-picture': () => insertPicture(),
