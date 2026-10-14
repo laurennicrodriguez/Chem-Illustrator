@@ -7,6 +7,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { KeyOverrides } from './editor/keymap';
 import { DEFAULT_TYPING } from './text/typing';
 import { ModeColours, DEFAULT_MODE_COLOURS, parseModeColours } from './ui/mode-colours';
+import { parseOwnTemplates, type Template } from './chem/templates';
 
 export interface Settings {
   /** Changes to ChemDraw's default keys. */
@@ -23,6 +24,8 @@ export interface Settings {
   fixedAngles: boolean;
   /** View > Developer Tools: the Speed panel and the stress test. Off unless switched on. */
   devTools: boolean;
+  /** Scheme > Show Reaction Roles: with a reaction arrow selected, outline its starting materials, products and conditions. */
+  showRoles: boolean;
   /** Format chemistry as words are finished (CH2Cl2, 1H NMR, DMSO-d6). Edit > Typing and Spelling. */
   chemTyping: boolean;
   /** Underline misspelled words (red) and chemistry formatting slips (blue) while typing. */
@@ -33,30 +36,38 @@ export interface Settings {
   dictionary: string[];
   /** Each mode's colour and how much of the window it colours (View > Mode Colours). */
   modeColours: ModeColours;
+  /** Nicknames of the person's own: name → SMILES, first atom where it joins (Structure > Define Nickname). */
+  nicknames: Record<string, string>;
+  /** Drawings saved as templates (Structure > Save as Template), in the "My templates" palette. */
+  templates: Template[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false,
+  hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false, showRoles: true,
   chemTyping: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
-  modeColours: DEFAULT_MODE_COLOURS,
+  modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [],
 };
 
 const STORAGE_KEY = 'chem-illustrator.settings';
 
 /** Read settings saved as text, keeping only what makes sense. */
 export function parseSettings(text: string | null | undefined): Settings {
-  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS } };
+  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [] };
   if (!text) return s;
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { return s; }
   if (!raw || typeof raw !== 'object') return s;
   const r = raw as Record<string, unknown>;
   if (r.hotkeys && typeof r.hotkeys === 'object' && !Array.isArray(r.hotkeys)) s.hotkeys = r.hotkeys as KeyOverrides;
-  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'chemTyping', 'spellCheck'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
+  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'spellCheck'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
   if (Array.isArray(r.replacements)) {
     s.replacements = r.replacements.filter((x): x is [string, string] => Array.isArray(x) && typeof x[0] === 'string' && typeof x[1] === 'string' && x[0] !== '').map(([a, b]) => [a, b]);
   }
   s.modeColours = parseModeColours(r.modeColours);
+  if (r.nicknames && typeof r.nicknames === 'object' && !Array.isArray(r.nicknames)) {
+    for (const [k, v] of Object.entries(r.nicknames as Record<string, unknown>)) if (k.trim() && typeof v === 'string' && v.trim()) s.nicknames[k.trim()] = v.trim();
+  }
+  s.templates = parseOwnTemplates(r.templates);
   if (Array.isArray(r.dictionary)) s.dictionary = r.dictionary.filter((w): w is string => typeof w === 'string' && w.trim() !== '').map((w) => w.trim());
   return s;
 }

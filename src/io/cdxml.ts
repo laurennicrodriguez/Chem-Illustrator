@@ -2,10 +2,12 @@
 // their formatting, arrows, and the common graphics (lines, boxes, circles, brackets,
 // charge symbols). Anything not understood yet is counted and skipped, never fatal.
 
-import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption } from '../model';
+import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles } from '../model';
 import { TEXT_TAG, parseTextTag, runsFromChemDraw } from '../text/chemdraw-text';
 import { DocStyle } from '../style';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
+import { addNicknames } from '../chem/labels';
+import { ringBonds, ringsThroughBond } from '../chem/aromatic';
 import { DEG } from '../geom';
 import { kids, descendants } from './xml';
 import { styleFromFace, isSymbolFont, fromSymbolFont } from '../richtext';
@@ -57,7 +59,9 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     if (v > maxId) maxId = v;
   }
   const ord = new Map<string, number>();
-  const from = (kind: Kind, id: number, el: Element) => ord.set(kind + id, ordOf.get(el)!);
+  /** Which entity each element became (kind + id), for the references in reaction steps. */
+  const refOf = new Map<Element, string>();
+  const from = (kind: Kind, id: number, el: Element) => { ord.set(kind + id, ordOf.get(el)!); refOf.set(el, kind + id); };
   const stats: ReadStats = { atoms: 0, bonds: 0, captions: 0, arrows: 0, shapes: 0, skipped: {}, parseMs: t1 - t0, buildMs: 0 };
   const skip = (what: string) => { stats.skipped[what] = (stats.skipped[what] ?? 0) + 1; };
 
@@ -147,6 +151,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
 
   interface PendingLabel { atom: Atom; text: string; hShown: number | null }
   const pendingLabels: PendingLabel[] = [];
+  /** Circles drawn inside structures: ring circles when they sit in the middle of an aromatic ring. */
+  const pendingCircles: { x: number; y: number; oval: () => void }[] = [];
 
   const readFragment = (frag: Element) => {
     const nodeIds = new Map<string, number>();
@@ -189,6 +195,9 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         }
       }
       if (n.getAttribute('ShowAtomStereo') === 'yes') extra.showStereo = true;
+      const groupTag = kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === GROUP_TAG)?.getAttribute('Value');
+      if (groupTag) extra.group = groupTag;
+      if (n.getAttribute('ShowTerminalCarbonLabels') === 'yes' || n.getAttribute('ShowNonTerminalCarbonLabels') === 'yes') extra.showCarbon = true;
       const atomNumber = n.getAttribute('AtomNumber');
       if (atomNumber) extra.atomNumber = atomNumber;
       if (n.getAttribute('ShowAtomNumber') === 'yes') extra.showNumber = true;
@@ -224,7 +233,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       let a2 = nodeIds.get(b.getAttribute('E') ?? '');
       if (a1 === undefined || a2 === undefined || a1 === a2) continue;
       const ord = b.getAttribute('Order') ?? '1';
-      let order = ord === '2' ? 2 : ord === '3' ? 3 : ord === '1.5' ? 1.5 : 1;
+      let order = ord === '2' ? 2 : ord === '3' ? 3 : ord === '4' ? 4 : ord === '1.5' ? 1.5 : 1;
       let display: BondDisplay = 'solid';
       const disp = b.getAttribute('Display');
       let swap = false;
@@ -239,6 +248,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         case 'Wavy': display = 'wavy'; break;
       }
       if (ord === 'hydrogen') display = 'dash';
+      if (ord === 'dative') display = 'dative';
       if (order === 2 && b.getAttribute('Display2') === 'Dash') order = 1.5;
       let dpos: Bond['dpos'] = 'auto';
       const dp = b.getAttribute('DoublePosition');
@@ -252,6 +262,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       const extra: Partial<Bond> = { id: idFor(b), dpos };
       if (b.getAttribute('IgnoreWarnings') === 'yes') extra.ignoreWarnings = true;
       if (b.getAttribute('ShowBondStereo') === 'yes') extra.showStereo = true;
+      // a bond crossing others: the higher Z is in front
+      if (b.hasAttribute('CrossingBonds') && b.hasAttribute('Z')) extra.z = num(b, 'Z');
       const tag = kids(b).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === 'stereo');
       if (tag) {
         // ChemDraw's (E)/(Z) label by the double bond, kept relative to the bond's middle
@@ -482,7 +494,19 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     const c = color(g);
     const z = num(g, 'Z', 0);
     const base = { id: idFor(g), color: c, z };
-    const add = (s: Omit<Shape, 'id'> & { id: number }) => { doc.addShape(s); from('s', s.id, g); stats.shapes++; };
+    const add = (s: Omit<Shape, 'id'> & { id: number }) => {
+      // our fill style and outline colour, which ChemDraw has no words for
+      const tag = s.filled ? kids(g).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === FILL_TAG) : undefined;
+      if (tag) {
+        try {
+          const v = JSON.parse(tag.getAttribute('Value') ?? '{}') as Pick<Shape, 'fill' | 'fillColor' | 'color'>;
+          s.fill = v.fill === 'faded' || v.fill === 'shaded' ? v.fill : undefined;
+          s.fillColor = typeof v.fillColor === 'string' ? v.fillColor : undefined;
+          s.color = typeof v.color === 'string' ? v.color : undefined;
+        } catch { /* a damaged tag: keep what ChemDraw shows */ }
+      }
+      doc.addShape(s); from('s', s.id, g); stats.shapes++;
+    };
     switch (type) {
       case 'Line': {
         if (bb.length < 4) return;
@@ -495,7 +519,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         const rt = g.getAttribute('RectangleType') ?? '';
         const rect: Omit<Shape, 'id'> & { id: number } = {
           ...base, kind: 'rect', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], rounded: rt.includes('RoundEdge'), shadow: rt.includes('Shadow'),
-          filled: rt.includes('Filled'), dashed: rt.includes('Dashed'), bold: rt.includes('Bold'),
+          filled: rt.includes('Filled') || rt.includes('Shaded'), dashed: rt.includes('Dashed'), bold: rt.includes('Bold'),
+          ...(rt.includes('Shaded') ? { fill: 'shaded' as const } : {}),
         };
         // corner radius and shadow size are stored in hundredths of the line width
         const lw = num(g, 'LineWidth', st.lineWidth);
@@ -512,14 +537,22 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         const rx = Math.hypot(maj[0] - cen[0], maj[1] - cen[1]);
         const ry = min.length >= 2 ? Math.hypot(min[0] - cen[0], min[1] - cen[1]) : rx;
         const ot = g.getAttribute('OvalType') ?? '';
-        add({ ...base, kind: 'oval', x1: cen[0] - rx, y1: cen[1] - ry, x2: cen[0] + rx, y2: cen[1] + ry, filled: ot.includes('Filled'), dashed: ot.includes('Dashed'), bold: ot.includes('Bold'), shadow: ot.includes('Shadow') });
+        const filled = ot.includes('Filled') || ot.includes('Shaded');
+        const oval = () => add({ ...base, kind: 'oval', x1: cen[0] - rx, y1: cen[1] - ry, x2: cen[0] + rx, y2: cen[1] + ry, filled, ...(ot.includes('Shaded') ? { fill: 'shaded' as const } : {}), dashed: ot.includes('Dashed'), bold: ot.includes('Bold'), shadow: ot.includes('Shadow') });
+        // a plain circle kept with a structure may be an aromatic ring's circle (checked once the bonds are in)
+        if (g.parentElement?.nodeName === 'fragment' && ot.includes('Circle') && !filled) pendingCircles.push({ x: cen[0], y: cen[1], oval });
+        else oval();
         return;
       }
       case 'Symbol': {
         if (bb.length < 4) return;
         const sym = g.getAttribute('SymbolType') ?? '';
-        if (sym === 'LonePair' || sym === 'Electron') {
+        if (sym === 'LonePair') {
+          // the two dots
           add({ ...base, kind: 'symbol', symbol: sym, x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3] });
+        } else if (sym === 'Electron') {
+          // the dot, then a point further out that only sets its size
+          add({ ...base, kind: 'symbol', symbol: sym, x1: bb[0], y1: bb[1], x2: bb[0], y2: bb[1] });
         } else {
           // circled charges: the box is the symbol's width, sitting on the baseline y
           const d = Math.abs(bb[0] - bb[2]) || 4;
@@ -578,6 +611,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
 
   doc.bulk(() => {
     walk(root);
+    readSteps(all, refOf, doc);
+    for (const c of pendingCircles) if (!ringOfCircle(doc, c)) c.oval();
     // Element labels like "OH", "H2N" or "N" become automatic labels (so they re-justify
     // when the structure changes); anything else is kept exactly as written.
     for (const { atom, text, hShown } of pendingLabels) {
@@ -587,6 +622,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       if (!implicitOk) {
         atom.label = text;
         atom.fileLabel = true;
+        // a contracted label brings its group with it, as a nickname for this session
+        if (atom.group) addNicknames({ [text]: atom.group });
         if (hShown === null && atom.z === 6 && /^[A-Z][a-z]?$/.test(text) && elementNumber(text) !== undefined) {
           atom.z = elementNumber(text)!;
           atom.label = null;
@@ -602,6 +639,75 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   doc.allDirty = true;
   stats.buildMs = performance.now() - t1;
   return { doc, stats };
+}
+
+/**
+ * ChemDraw draws an aromatic ring's circle as a circle kept with the structure, in the middle of
+ * a ring of aromatic bonds. When one is found there, the ring's bonds are marked to draw with a
+ * circle (and the circle is not kept as a separate shape). True when it was a ring circle.
+ */
+export function ringOfCircle(doc: Doc, c: { x: number; y: number }): boolean {
+  const L = doc.style.bondLength || 14.4;
+  for (const a of doc.atomsNear(c, 1.6 * L)) {
+    for (const bid of doc.adj.get(a.id) ?? []) {
+      if (doc.bonds.get(bid)!.order !== 1.5) continue;
+      for (const ring of ringsThroughBond(doc, bid)) {
+        let x = 0, y = 0;
+        for (const id of ring) { const r = doc.atoms.get(id)!; x += r.x; y += r.y; }
+        if (Math.hypot(x / ring.length - c.x, y / ring.length - c.y) > 0.3 * L) continue;
+        const bonds = ringBonds(doc, ring);
+        if (bonds.length !== ring.length || bonds.some((id) => doc.bonds.get(id)!.order !== 1.5)) continue;
+        for (const id of bonds) doc.bonds.get(id)!.circle = true;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+const STEP_ROLES: [string, keyof StepRoles][] = [
+  ['ReactionStepReactants', 'reactants'], ['ReactionStepProducts', 'products'],
+  ['ReactionStepObjectsAboveArrow', 'above'], ['ReactionStepObjectsBelowArrow', 'below'], ['ReactionStepPlusses', 'plusses'],
+];
+
+/**
+ * ChemDraw's reaction steps: the roles are kept with each step's arrow. A step names whole
+ * structures (fragments), captions, groups of them, and the arrow (or the older copy of it that
+ * ChemDraw keeps for old versions).
+ */
+function readSteps(all: Element[], refOf: Map<Element, string>, doc: Doc): void {
+  const byId = new Map<string, Element>();
+  for (const el of all) { const id = el.getAttribute('id'); if (id && !byId.has(id)) byId.set(id, el); }
+  const refsOf = (el: Element | undefined, out: string[]) => {
+    if (!el) return;
+    const own = refOf.get(el);
+    if (own) { if (!out.includes(own)) out.push(own); return; }
+    if (el.nodeName === 'fragment') {
+      const n = kids(el).find((k) => k.nodeName === 'n' && refOf.has(k));
+      if (n && !out.includes(refOf.get(n)!)) out.push(refOf.get(n)!);
+      return;
+    }
+    if (el.nodeName === 'group') for (const k of kids(el)) refsOf(k, out);
+  };
+  for (const st of all) {
+    if (st.nodeName !== 'step') continue;
+    const arrows: string[] = [];
+    for (const id of (st.getAttribute('ReactionStepArrows') ?? '').split(/\s+/).filter(Boolean)) {
+      let el = byId.get(id);
+      const newer = el?.getAttribute('SupersededBy');
+      if (el && !refOf.has(el) && newer) el = byId.get(newer);
+      refsOf(el, arrows);
+    }
+    const r = arrows.map((a) => (a[0] === 'r' ? doc.arrows.get(Number(a.slice(1))) : undefined)).find(Boolean);
+    if (!r || r.step) continue;
+    const roles: StepRoles = { reactants: [], products: [], above: [], below: [] };
+    for (const [attr, key] of STEP_ROLES) {
+      const list: string[] = [];
+      for (const id of (st.getAttribute(attr) ?? '').split(/\s+/).filter(Boolean)) refsOf(byId.get(id), list);
+      if (list.length || key !== 'plusses') (roles[key] as string[]) = list;
+    }
+    r.step = roles;
+  }
 }
 
 /** Insert line breaks into styled runs at the given UTF-8 byte offsets. */
@@ -636,6 +742,13 @@ export function isAutoLabel(z: number, text: string, h: number): boolean {
 }
 
 /** Our own clipboard attributes for pictures (any format, and cropping), which ChemDraw doesn't have. */
+/** The tag that marks a bond as part of an aromatic ring drawn with a circle (ours; ChemDraw has none). */
+/** An older way this program marked ring circles; removed from bonds when saving (the circle itself is what counts). */
+export const CIRCLE_TAG = 'ci-aromatic-circle';
+/** The tag that keeps a filled shape's fill style and outline colour (ChemDraw has one colour). */
+export const FILL_TAG = 'Chem Illustrator fill';
+/** The tag that keeps a contracted label's group (SMILES), so its chemistry comes back with the file. */
+export const GROUP_TAG = 'Chem Illustrator group';
 export const OWN_PICTURE = 'ChemIllustratorPicture';
 export const OWN_CROP = 'ChemIllustratorCrop';
 

@@ -29,7 +29,9 @@ import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, 
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
 import { StylePanel } from './ui/style-panel';
-import { TEMPLATES, Template, templateById } from './chem/templates';
+import { TEMPLATES, Template, templateById, ownTemplates, setOwnTemplates, templateFromAtoms } from './chem/templates';
+import { addNicknames, removeNickname, isBuiltInNickname } from './chem/labels';
+import { selectedGroup } from './chem/group-smiles';
 import { templateIcon } from './ui/template-icons';
 import { StructureChecks } from './chem/warnings';
 import { LiveStereo } from './chem/live-stereo';
@@ -44,6 +46,8 @@ import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
 import { NameDialog } from './ui/name-dialog';
+import { ArrangeDialog } from './ui/arrange-dialog';
+import { PeriodicTable } from './ui/periodic-table';
 import { SheetMode, ClipboardCells } from './ui/sheet-mode';
 import { DocumentMode, DocPaste } from './ui/doc-mode';
 import { setScreenMeasure, figures } from './document/doc-file';
@@ -112,15 +116,15 @@ const ARROWS: PaletteDef = {
   palette: 'arrows',
   title: 'Arrows',
   items: [
-    { name: 'arrow', title: 'Reaction arrow' },
+    { name: 'arrow', title: 'Reaction arrow. Shift+drag from an arrow\'s end or middle to branch a new arrow off it' },
     { name: 'arrow-dashed', title: 'Dashed arrow' },
     { name: 'arrow-hollow', title: 'Arrow with a hollow head' },
     { name: 'arrow-double', title: 'Resonance arrow (heads at both ends)' },
     { name: 'arrow-equilibrium', title: 'Equilibrium arrows' },
     { name: 'arrow-retro', title: 'Retrosynthetic arrow' },
     { name: 'arrow-nogo', title: 'Crossed-out arrow (reaction does not go)' },
-    { name: 'arrow-curved', title: 'Curved arrow (electron pair)' },
-    { name: 'arrow-fishhook', title: 'Curved half-headed arrow (one electron)' },
+    { name: 'arrow-curved', title: 'Curved arrow (electron pair). Drag from an atom or bond to an atom or bond and it snaps like a mechanism arrow; hold Alt to draw freely' },
+    { name: 'arrow-fishhook', title: 'Curved half-headed arrow (one electron). Snaps between atoms and bonds like the curved arrow; hold Alt to draw freely' },
   ],
 };
 
@@ -152,6 +156,30 @@ const BRACKETS: PaletteDef = {
   ],
 };
 
+const SYMBOLS: PaletteDef = {
+  palette: 'symbols',
+  title: 'Mechanism symbols',
+  items: [
+    { name: 'sym-lonepair', title: 'Lone pair: click an atom to put one in its most open space' },
+    { name: 'sym-radical', title: 'Radical dot: click an atom (it becomes a radical)' },
+    { name: 'sym-plus', title: 'Circled plus: click an atom to give it a + charge shown in a circle' },
+    { name: 'sym-minus', title: 'Circled minus: click an atom to give it a − charge shown in a circle' },
+    { name: 'sym-delta-plus', title: 'Partial positive charge (δ+): click an atom' },
+    { name: 'sym-delta-minus', title: 'Partial negative charge (δ−): click an atom' },
+  ],
+};
+
+// The person's own templates; the first button saves the selected structure as a new one
+const OWN_ADD = 'own-template-add';
+const OWN_PALETTE: PaletteDef = {
+  palette: 'tpl-own',
+  title: 'My templates',
+  items: [{ name: OWN_ADD, title: 'Save the selected structure as a template of your own' }],
+  columns: 4,
+  large: true,
+  icon: (name, size) => { const t = templateById(name.slice(4)); return t ? templateIcon(t, size) : name; },
+};
+
 // Template palettes, one per kind of structure
 const templatePalette = (group: Template['group'], palette: string, title: string, columns: number, iconSize?: number): PaletteDef => ({
   palette,
@@ -172,13 +200,15 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     { name: 'bond-single', title: 'Single bond. Click a bond: single, double, triple' },
     { name: 'bond-double', title: 'Double bond. Click again to move the second line' },
     { name: 'bond-triple', title: 'Triple bond' },
+    { name: 'bond-quadruple', title: 'Quadruple bond (metal–metal)' },
     { name: 'bond-wedge', title: 'Wedge. Click again to reverse' },
     { name: 'bond-hashWedge', title: 'Hashed wedge. Click again to reverse' },
     { name: 'bond-hash', title: 'Hashed bond' },
     { name: 'bond-bold', title: 'Bold bond' },
     { name: 'bond-dash', title: 'Dashed bond' },
     { name: 'bond-wavy', title: 'Wavy bond' },
-    { name: 'chain', title: 'Chain: drag to draw a zig-zag chain' },
+    { name: 'bond-dative', title: 'Dative bond: draw from the donor atom to the acceptor. Click again to reverse' },
+    { name: 'chain', title: 'Chain: drag to draw a zig-zag chain, or click to type how many atoms (Alt+click: the same number again)' },
   ],
   [
     { name: 'ring-3', title: 'Cyclopropane' },
@@ -187,18 +217,21 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     { name: 'ring-6', title: 'Cyclohexane' },
     { name: 'ring-7', title: 'Cycloheptane' },
     { name: 'ring-8', title: 'Cyclooctane' },
-    { name: 'ring-benzene', title: 'Benzene. Shift+click swaps the double bonds' },
-    { name: 'ring-cp', title: 'Cyclopentadiene' },
+    { name: 'ring-benzene', title: 'Benzene. Shift+click swaps the double bonds; Ctrl+click draws it with a circle' },
+    { name: 'ring-cp', title: 'Cyclopentadiene. Ctrl+click draws it with a circle' },
   ],
   [
     templatePalette('rings', 'tpl-rings', 'Ring systems', 5),
     templatePalette('heterocycles', 'tpl-heterocycles', 'Heterocycles', 7),
     templatePalette('amino', 'tpl-amino', 'Amino acids', 5, 64),
     templatePalette('sugars', 'tpl-sugars', 'Sugars and chair', 4, 64),
+    OWN_PALETTE,
   ],
   [
     { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption' },
+    { name: 'element', title: 'Periodic table: pick an element, then click atoms to change them' },
     ARROWS,
+    SYMBOLS,
     SHAPES,
     BRACKETS,
   ],
@@ -220,7 +253,12 @@ for (const group of TOOL_GROUPS) {
 }
 registerToolNames(toolNames);
 
-const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => editor.setTool(name), (name) => {
+const periodicTable = new PeriodicTable((z) => editor.pickElement(z), () => editor.element);
+const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => {
+  if (name === OWN_ADD) { void saveTemplate(); return; }
+  editor.setTool(name);
+  if (name === 'element') periodicTable.open();
+}, (name) => {
   const keys = keysOf('space', `tool ${name}`);
   return keys.length ? ` (${keys.join(', ')})` : '';
 });
@@ -228,8 +266,9 @@ const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => 
 const HINTS: Record<string, string> = {
   select: 'Click to select, drag to box-select or move. Double-click selects a whole structure. Delete removes.',
   eraser: 'Click an atom, bond, caption, arrow or shape to remove it.',
-  chain: 'Drag from empty space or an atom; the number shows how many bonds.',
+  chain: 'Drag from empty space or an atom; the number shows how many bonds. Click to type how many atoms; Alt+click repeats the last number.',
   text: 'Click an atom to type a label (OMe, CO2Et, NHBoc…), or click empty space for a caption.',
+  element: 'Click atoms to make them the element picked in the periodic table, or empty space to add one.',
 };
 const ARROW_HINT = 'Drag to draw an arrow (Alt: any angle); click for a standard one. Drag the ends to move them, the middle to bend it.';
 const CURVE_HINT = 'Drag from where the electrons start to where they go; swing out to one side to bend that way. Drag the middle dot to change the curve.';
@@ -452,6 +491,111 @@ function addNamed(got: { mb: string; attach: number[] }, x: number, y: number, t
   return ids;
 }
 
+/** Scheme > Number Compounds: ask where to start, then number the structures in scheme order. */
+async function numberCompounds(): Promise<void> {
+  const next = editor.nextCompoundNumber();
+  const got = await ask('Number Compounds', [
+    { name: 'start', label: 'Start at', value: String(editor.sel.atoms.size ? next : 1), type: 'number' },
+    { name: 'style', label: 'Numbers', value: 'numbers', options: [{ value: 'numbers', label: '1, 2, 3 …' }, { value: 'letters', label: '1a, 1b, 1c …' }] },
+    { name: 'old', label: 'Numbers already there', value: 'renumber', options: [{ value: 'renumber', label: 'Number again' }, { value: 'keep', label: 'Keep' }] },
+    { name: 'reagents', label: 'Reagents over arrows', value: 'skip', options: [{ value: 'skip', label: 'Leave unnumbered' }, { value: 'number', label: 'Number them too' }] },
+  ], { ok: 'Number', note: 'Puts a bold number under each selected structure (or every structure), following the arrows of a scheme, else left to right and top to bottom. The numbers are ordinary text you can change.' });
+  if (!got) return;
+  const start = Math.max(0, Math.round(Number(got.start)) || 1);
+  const n = editor.numberCompounds({ start, letters: got.style === 'letters', keep: got.old === 'keep', reagents: got.reagents === 'number' });
+  if (!n) flash('No structures to number.');
+}
+
+editor.askChainLength = async (last) => {
+  const got = await ask('Chain', [{ name: 'n', label: 'Number of atoms', value: String(last), type: 'number' }],
+    { ok: 'Draw', note: 'Clicked on an atom, the chain adds this many atoms to it. Alt+click draws the same number again without asking.' });
+  const n = got ? Math.round(Number(got.n)) : NaN;
+  return n >= 1 ? n : null;
+};
+
+// ---------------------------------------------------------------- your own templates and nicknames
+
+/** Nicknames the person defined (kept in the settings file). */
+let ownNicknames: Record<string, string> = {};
+
+/** Put these templates in the My templates palette. */
+function useOwnTemplates(list: Template[]): void {
+  setOwnTemplates(list);
+  for (const name of Object.keys(TOOLS)) if (name.startsWith('tpl-own-')) delete TOOLS[name];
+  for (const t of ownTemplates()) TOOLS[`tpl-${t.id}`] = { kind: 'template', id: t.id };
+  OWN_PALETTE.items = [OWN_PALETTE.items[0], ...ownTemplates().map((t) => ({ name: `tpl-${t.id}`, title: t.name }))];
+  toolbar.refreshTitles();
+}
+
+/** Structure > Save as Template: the selected structure goes into My templates. */
+async function saveTemplate(): Promise<void> {
+  const ids = [...editor.sel.atoms];
+  if (!ids.length) { flash('Select a structure first, then save it as a template.'); return; }
+  const got = await ask('Save as Template', [{ name: 'name', label: 'Name', value: '' }],
+    { ok: 'Save', note: 'The selected structure goes into My templates on the tool bar (the last template palette). It is kept in your settings file, so it is there every time.' });
+  const name = got?.name.trim();
+  if (!name) return;
+  const t = templateFromAtoms(doc, ids, name, `own-${Date.now().toString(36)}`);
+  if (!t) { flash('Nothing to save: select atoms and bonds.'); return; }
+  useOwnTemplates([...ownTemplates(), t]);
+  storeSettings();
+  editor.setTool(`tpl-${t.id}`);
+  flash(`Saved “${name}” in My templates. Click to place it, a bond to fuse it, or an atom to join it.`, 6000);
+}
+
+/** Structure > Delete Template…: take one of your own templates away. */
+async function deleteTemplate(): Promise<void> {
+  const list = ownTemplates();
+  if (!list.length) { flash('You have no templates of your own yet (Structure > Save as Template).'); return; }
+  const got = await ask('Delete Template', [{ name: 'id', label: 'Template', value: list[list.length - 1].id, options: list.map((t) => ({ value: t.id, label: t.name })) }], { ok: 'Delete' });
+  if (!got) return;
+  useOwnTemplates(list.filter((t) => t.id !== got.id));
+  if (editor.toolName === `tpl-${got.id}`) editor.setTool('bond-single');
+  storeSettings();
+}
+
+/** Structure > Define Nickname…: the selected group gets a name that can be typed as a label. */
+async function defineNickname(): Promise<void> {
+  const g = selectedGroup(doc, editor.sel.atoms);
+  if ('error' in g) { flash(g.error, 6000); return; }
+  const got = await ask('Define Nickname', [{ name: 'name', label: 'Nickname', value: '' }],
+    { ok: 'Define', note: `Select a group that hangs off a structure by one bond. Its nickname can then be typed as an atom label (like Boc or TBS), with the formula and mass worked out. The group is ${g.smiles}.` });
+  const name = got?.name.trim();
+  if (!name) return;
+  if (isBuiltInNickname(name)) { flash(`“${name}” is already a nickname. Choose another name.`, 6000); return; }
+  if (/\s/.test(name)) { flash('A nickname can\'t have spaces in it.'); return; }
+  ownNicknames = { ...ownNicknames, [name]: g.smiles };
+  addNicknames({ [name]: g.smiles });
+  storeSettings();
+  flash(`“${name}” can now be typed as a label.`, 5000);
+}
+
+/** Structure > Delete Nickname…: take one of your own nicknames away. */
+async function deleteNickname(): Promise<void> {
+  const names = Object.keys(ownNicknames);
+  if (!names.length) { flash('You have no nicknames of your own yet (Structure > Define Nickname).'); return; }
+  const got = await ask('Delete Nickname', [{ name: 'name', label: 'Nickname', value: names[0], options: names.map((n) => ({ value: n, label: `${n}  (${ownNicknames[n]})` })) }], { ok: 'Delete' });
+  if (!got) return;
+  const { [got.name]: _, ...rest } = ownNicknames;
+  ownNicknames = rest;
+  removeNickname(got.name);
+  renderer.repaintAll();
+  editor.requestScene();
+  storeSettings();
+}
+
+/** Structure > Contract Label…: fold the selected group into one label (Undo opens it again). */
+async function contractLabel(): Promise<void> {
+  const g = selectedGroup(doc, editor.sel.atoms);
+  if ('error' in g) { flash(g.error, 6000); return; }
+  const got = await ask('Contract Label', [{ name: 'name', label: 'Label', value: '' }],
+    { ok: 'Contract', note: 'The selected group becomes one label with this name. The formula and mass still count the whole group, and ChemDraw sees the group inside the label.' });
+  if (!got) return;
+  const err = editor.contractLabel(got.name);
+  if (err) flash(err, 6000);
+}
+
+const arrangeDialog = new ArrangeDialog({ apply: (o) => editor.arrangeScheme(o), undo: () => editor.undo() });
 const nameDialog = new NameDialog(async (name) => {
   const got = await nameToMolfile(name);
   if ('error' in got) return got.error;
@@ -1685,6 +1829,21 @@ const COMMANDS: Record<string, () => unknown> = {
   'typing-spelling': () => typingDialog.open(),
   'mode-colours': () => modeDialog.open(),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
+  'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
+  'arrange-scheme': () => arrangeDialog.open(),
+  'number-compounds': () => void numberCompounds(),
+  'bring-front': () => editor.setBondLayer(true) || flash('Select the bond to bring to the front (where bonds cross, the one behind has a gap).'),
+  'send-back': () => editor.setBondLayer(false) || flash('Select the bond to send to the back (where bonds cross, the one behind has a gap).'),
+  'save-template': () => void saveTemplate(),
+  'delete-template': () => void deleteTemplate(),
+  'define-nickname': () => void defineNickname(),
+  'delete-nickname': () => void deleteNickname(),
+  'contract-label': () => void contractLabel(),
+  'chain-ends': () => flash(editor.toggleChainEnds(), 5000),
+  'explicit-h': () => flash(editor.toggleHydrogens(), 6000),
+  'periodic-table': () => { editor.setTool('element'); periodicTable.open(); },
+  'aromatic-circles': () => flash(editor.toggleAromaticCircles() ?? 'No aromatic rings here: select a ring with alternating double bonds, or one drawn with a circle.', 5000),
+  'show-roles': () => { editor.showRoles = !editor.showRoles; $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(editor.showRoles)); editor.requestScene(); storeSettings(); },
   'check-structure': () => checkStructure(),
   'stereo-labels': () => toggleStereoLabels(),
   'name-to-structure': () => nameToStructure(),
@@ -1759,11 +1918,14 @@ function storeSettings(): void {
     fixedLength: editor.options.fixedLength,
     fixedAngles: editor.options.fixedAngles,
     devTools,
+    showRoles: editor.showRoles,
     chemTyping: typingPrefs.chemistry,
     spellCheck: typingPrefs.spelling,
     replacements: typingPrefs.replacements,
     dictionary: typingPrefs.dictionary,
     modeColours,
+    nicknames: ownNicknames,
+    templates: ownTemplates(),
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -1857,11 +2019,16 @@ void loadSettings().then((s) => {
   editor.options.keepHotspotOnBond = s.keepHotspotOnBond;
   editor.options.fixedLength = s.fixedLength;
   editor.options.fixedAngles = s.fixedAngles;
+  editor.showRoles = s.showRoles;
+  $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(s.showRoles));
   showDevTools(s.devTools);
   modeColours = s.modeColours;
   applyModeColours(ws.active.mode, modeColours);
   keymap.setOverrides(s.hotkeys);
   setTypingPrefs({ chemistry: s.chemTyping, spelling: s.spellCheck, replacements: s.replacements, dictionary: s.dictionary });
+  ownNicknames = s.nicknames;
+  addNicknames(ownNicknames);
+  useOwnTemplates(s.templates);
   settingsLoaded = true;
   refreshKeys();
 });
@@ -2215,6 +2382,15 @@ function updatePanels(): void {
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
 stylePanel.cropWithMouse = () => cropPicture();
+stylePanel.reaction = {
+  roles: (id) => editor.reactionRoles(id),
+  others: () => editor.sel.atoms.size + editor.sel.captions.size + editor.sel.shapes.size,
+  setRole: (id, role) => { editor.setReactionRole(id, role); },
+  reset: (id) => editor.resetReactionRoles(id),
+  select: (id, role) => editor.selectRole(id, role),
+  cleanUp: () => command('clean-up-reaction'),
+  arrange: () => command('arrange-scheme'),
+};
 stylePanel.tables = {
   part: () => editor.tablePart,
   setPart: (p) => { editor.tablePart = p; },

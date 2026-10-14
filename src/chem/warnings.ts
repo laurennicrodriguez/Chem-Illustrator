@@ -67,7 +67,8 @@ function atomName(z: number, charge: number): string {
 export function atomWarnings(doc: Doc, a: Atom): string[] {
   const out: string[] = [];
   const orders: number[] = [];
-  for (const bid of doc.adj.get(a.id) ?? []) orders.push(doc.bonds.get(bid)!.order);
+  // a dative bond leaves both atoms' valences as they were (H3N→BF3)
+  for (const bid of doc.adj.get(a.id) ?? []) { const b = doc.bonds.get(bid)!; if (b.display !== 'dative') orders.push(b.order); }
   if (a.attach) return out;
   const z = a.label ? 6 : a.z;
   const bonds = valenceOfBonds(orders, z);
@@ -129,7 +130,7 @@ export function isotopeOk(z: number, mass: number): boolean {
 
 /** A single bond on its own between two plain carbons, which reads as ethane. */
 export function isLoneBond(doc: Doc, b: Bond): boolean {
-  if (b.order !== 1) return false;
+  if (b.order !== 1 || b.display === 'dative') return false;
   const p = doc.atoms.get(b.a1), q = doc.atoms.get(b.a2);
   if (!p || !q || p.label || q.label || p.z !== 6 || q.z !== 6 || p.charge || q.charge) return false;
   return doc.degree(p.id) === 1 && doc.degree(q.id) === 1;

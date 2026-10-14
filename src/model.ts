@@ -6,7 +6,8 @@ import { Vec, Rect } from './geom';
 import { DocStyle, ACS_1996 } from './style';
 import { arrowPoints } from './objects';
 
-export type BondDisplay = 'solid' | 'wedge' | 'hashWedge' | 'hash' | 'bold' | 'dash' | 'wavy';
+/** 'dative' is a coordinate bond, drawn as an arrow from the donor (a1) to the acceptor (a2). */
+export type BondDisplay = 'solid' | 'wedge' | 'hashWedge' | 'hash' | 'bold' | 'dash' | 'wavy' | 'dative';
 export type DoublePos = 'auto' | 'left' | 'right' | 'center';
 
 export interface Atom {
@@ -26,6 +27,10 @@ export interface Atom {
   color?: string;
   /** Size relative to the document style (structures shrunk or enlarged in ChemDraw keep their own scale). */
   s?: number;
+  /** A contracted label: the group it stands for, as SMILES from the atom where it joins (Structure > Contract Label). */
+  group?: string;
+  /** A carbon shown with its letter and hydrogens (CH3 at a chain end; ChemDraw's ShowTerminalCarbonLabels). */
+  showCarbon?: boolean;
   /** The charge is drawn by a separate circled-charge symbol, so the label leaves it out. */
   hideCharge?: boolean;
   /** Numbers after R groups are superscripts (R¹ rather than R₁). */
@@ -94,6 +99,10 @@ export interface Bond {
   color?: string;
   /** Line widths relative to the document style. */
   s?: number;
+  /** An aromatic bond (order 1.5) in a ring drawn with a circle rather than a dashed second line. */
+  circle?: boolean;
+  /** Where it sits among bonds that cross it (higher in front; else the order it was drawn in). ChemDraw's Z. */
+  z?: number;
   /** The person chose to ignore this bond's chemistry warnings. */
   ignoreWarnings?: boolean;
   /** Show this double bond's E/Z label when it has one. */
@@ -234,6 +243,29 @@ export interface Arrow {
   color?: string;
   /** Line width when it differs from the document's. */
   lineWidth?: number;
+  /**
+   * A reaction arrow's roles as they were stored (read from a file, set by Clean Up Reaction, or
+   * chosen by hand); without them they are worked out from where things sit (chem/reaction.ts).
+   */
+  step?: StepRoles;
+  /** A small arrow a catalytic cycle drew to bring a reagent into this arrow's step (or take a by-product out). */
+  reagentFor?: number;
+}
+
+/**
+ * The parts of one reaction step, as references: 'a12' the structure holding atom 12, 'c5'
+ * caption 5, 's7' shape 7.
+ */
+export interface StepRoles {
+  reactants: string[];
+  products: string[];
+  /** Conditions above and below the arrow. */
+  above: string[];
+  below: string[];
+  /** The + signs between starting materials or products. */
+  plusses?: string[];
+  /** Chosen by hand: Clean Up Reaction keeps these instead of working the roles out again. */
+  manual?: boolean;
 }
 
 export interface Shape {
@@ -246,6 +278,10 @@ export interface Shape {
   y2: number;
   dashed?: boolean;
   filled?: boolean;
+  /** How a filled box or oval is filled: evenly (absent), a light tint, or shaded light to dark. */
+  fill?: 'faded' | 'shaded';
+  /** Fill colour, when it differs from the outline colour (the outline is then drawn too). */
+  fillColor?: string;
   rounded?: boolean;
   /** Corner radius of a rounded box, in points (ChemDraw's default is six line widths). */
   radius?: number;
@@ -896,8 +932,10 @@ export class Doc {
   bondOrderSum(atomId: number): number {
     let s = 0;
     for (const bid of this.adj.get(atomId) ?? []) {
-      const o = this.bonds.get(bid)!.order;
-      s += o === 1.5 ? 1.5 : o;
+      const b = this.bonds.get(bid)!;
+      // a dative bond doesn't change either atom's hydrogens (H3N→BF3)
+      if (b.display === 'dative') continue;
+      s += b.order;
     }
     return s;
   }

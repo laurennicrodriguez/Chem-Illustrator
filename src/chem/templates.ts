@@ -5,7 +5,7 @@
 import data from './templates.json';
 import type { Doc, BondDisplay } from '../model';
 import { Vec, add, sub, mul, dist, angleOf, DEG } from '../geom';
-import { elementNumber } from './elements';
+import { elementNumber, SYMBOLS } from './elements';
 import { atomAt, MERGE_FRACTION } from './chemgeom';
 
 /** x, y, element, then charge and a text label (such as CH2OH) when there is one. */
@@ -16,7 +16,8 @@ export type TemplateBond = [number, number, number, BondDisplay?];
 export interface Template {
   id: string;
   name: string;
-  group: 'rings' | 'heterocycles' | 'amino' | 'sugars';
+  /** 'own': saved by the person (Structure > Save as Template). */
+  group: 'rings' | 'heterocycles' | 'amino' | 'sugars' | 'own';
   atoms: TemplateAtom[];
   bonds: TemplateBond[];
   /** The atom put on (or joined to) an atom that is clicked. */
@@ -30,6 +31,73 @@ export interface Template {
 export const TEMPLATES = data as Template[];
 const BY_ID = new Map(TEMPLATES.map((t) => [t.id, t]));
 export const templateById = (id: string): Template | undefined => BY_ID.get(id);
+
+/** The person's own templates, in the order they were saved. */
+let OWN: Template[] = [];
+export const ownTemplates = (): Template[] => OWN;
+
+/** Use these as the person's own templates (replacing any before). */
+export function setOwnTemplates(list: Template[]): void {
+  for (const t of OWN) BY_ID.delete(t.id);
+  OWN = list.filter((t) => !TEMPLATES.some((b) => b.id === t.id));
+  for (const t of OWN) BY_ID.set(t.id, t);
+}
+
+/** Own templates read from the settings file, keeping only ones that make sense. */
+export function parseOwnTemplates(raw: unknown): Template[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Template[] = [];
+  for (const t of raw as Partial<Template>[]) {
+    if (!t || typeof t.id !== 'string' || typeof t.name !== 'string' || !Array.isArray(t.atoms) || !Array.isArray(t.bonds)) continue;
+    const n = t.atoms.length;
+    const atomsOk = n > 0 && t.atoms.every((a) => Array.isArray(a) && Number.isFinite(a[0]) && Number.isFinite(a[1]) && typeof a[2] === 'string');
+    const bondsOk = t.bonds.every((b) => Array.isArray(b) && Number.isInteger(b[0]) && Number.isInteger(b[1]) && b[0] >= 0 && b[1] >= 0 && b[0] < n && b[1] < n && Number.isFinite(b[2]));
+    if (!atomsOk || !bondsOk) continue;
+    const attach = Number.isInteger(t.attach) && t.attach! >= 0 && t.attach! < n ? t.attach! : 0;
+    const fuse = Array.isArray(t.fuse) && t.fuse.length === 2 && t.fuse.every((i) => Number.isInteger(i) && i >= 0 && i < n) ? t.fuse : undefined;
+    out.push({ id: t.id, name: t.name, group: 'own', atoms: t.atoms, bonds: t.bonds, attach, ...(fuse ? { fuse } : {}), ...(t.join === 'bond' ? { join: 'bond' as const } : {}) });
+  }
+  return out;
+}
+
+/**
+ * A template made from drawn atoms (and the bonds between them): one bond long, centred on
+ * (0, 0). It joins things at an end atom (the leftmost with fewest bonds) and fuses along a ring
+ * bond when it has one.
+ */
+export function templateFromAtoms(doc: Doc, ids: Iterable<number>, name: string, id: string): Template | null {
+  const list = [...ids].filter((i) => { const a = doc.atoms.get(i); return !!a && !a.attach; });
+  if (!list.length) return null;
+  const index = new Map(list.map((i, k) => [i, k]));
+  const bonds = [...doc.bonds.values()].filter((b) => index.has(b.a1) && index.has(b.a2));
+  const L = bonds.length ? bonds.reduce((s, b) => s + dist(doc.atoms.get(b.a1)!, doc.atoms.get(b.a2)!), 0) / bonds.length : doc.style.bondLength;
+  let cx = 0, cy = 0;
+  for (const i of list) { const a = doc.atoms.get(i)!; cx += a.x; cy += a.y; }
+  cx /= list.length; cy /= list.length;
+  const r3 = (v: number) => Math.round(v * 1000) / 1000;
+  const atoms: TemplateAtom[] = list.map((i) => {
+    const a = doc.atoms.get(i)!;
+    const t: TemplateAtom = [r3((a.x - cx) / L), r3((a.y - cy) / L), SYMBOLS[a.z] || 'C'];
+    if (a.charge || a.label) t.push(a.charge);
+    if (a.label) t.push(a.label);
+    return t;
+  });
+  const tb: TemplateBond[] = bonds.map((b) => {
+    const t: TemplateBond = [index.get(b.a1)!, index.get(b.a2)!, b.order];
+    if (b.display !== 'solid') t.push(b.display);
+    return t;
+  });
+  const degree = (k: number) => tb.filter((b) => b[0] === k || b[1] === k).length;
+  let attach = 0;
+  for (let k = 1; k < atoms.length; k++) {
+    if (degree(k) < degree(attach) || (degree(k) === degree(attach) && atoms[k][0] < atoms[attach][0])) attach = k;
+  }
+  const ringBond = bonds.find((b) => doc.ringThroughBond(b.id) !== null);
+  const out: Template = { id, name, group: 'own', atoms, bonds: tb, attach };
+  if (ringBond) out.fuse = [index.get(ringBond.a1)!, index.get(ringBond.a2)!];
+  else out.join = 'bond';
+  return out;
+}
 
 /** Where a template goes: mirrored top to bottom (or not), turned, sized and moved. */
 export interface Placement {

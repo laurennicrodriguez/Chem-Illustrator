@@ -2,7 +2,7 @@
 // pan. The editor changes the document and asks for a repaint; hover and drawing previews
 // only repaint the overlay layer.
 
-import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, applyBase, stripBase } from '../model';
+import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, applyBase, stripBase, type StepRoles } from '../model';
 import { CaptionEditor } from '../ui/caption-editor';
 import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
 import { styleFromFace, plainText } from '../richtext';
@@ -10,18 +10,27 @@ import { cleanUpMoves } from '../chem/cleanup';
 import { Renderer, measureText } from '../render/renderer';
 import { ASCENT } from '../text/layout';
 import { cellAlign, insertRow, nextCell, partAt, partRuns, setColumnWidth, setPart, spanOf, NOTE_SCALE, type TablePart } from '../table';
-import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG } from '../geom';
+import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG, exitParam } from '../geom';
 import {
   sproutDir, sprout, bondTo, bondLength, atomAt, freeRing, fusedRing, fuseSide, ringOnAtom,
-  placeRing, chainPoints, MERGE_FRACTION,
+  placeRing, chainPoints, chainFrom, MERGE_FRACTION,
 } from '../chem/chemgeom';
 import { keymap, chordOf, parseAction, KeyContext } from './keymap';
 import { sproutGroup, fuseChair, SPROUT_KINDS, SproutKind, nextNumber } from '../chem/sprouts';
 import { joinAtoms, joinBonds } from '../chem/join';
 import { extractDrawing, insertDrawing } from '../io/clipboard';
+import { isReactionArrow, itemFinder, rolesOf, ROLES, schemeItems, type Item, type Role } from '../chem/reaction';
+import { applySchemePlan, planCleanUp } from '../chem/scheme-layout';
+import { toggleChainEndLabels, toggleExplicitHydrogens } from '../chem/hydrogens';
+import { selectedGroup } from '../chem/group-smiles';
+import { circleRing, circleRings, kekulize } from '../chem/aromatic';
+import { bondLayer, crossingBonds } from '../chem/crossing';
+import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
+import { pushArrow, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
+import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
 import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, rotation, mirrorX, mirrorY } from './arrange';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
-import { tokenize } from '../chem/labels';
+import { tokenize, addNicknames, isBuiltInNickname } from '../chem/labels';
 import {
   Handle, arrowHit, shapeHit, arrowHandles, shapeHandles, dragArrowHandle, dragShapeHandle, dragCropHandle, shapeBox,
   arrowPoints, bracketsAround, bracketLip, unionRect,
@@ -39,7 +48,13 @@ export type Tool =
   | { kind: 'arrow'; style: ArrowStyle }
   | { kind: 'shape'; shape: ShapeStyle; from: 'corner' | 'center' }
   | { kind: 'bracket'; bracket: NonNullable<Shape['bracket']> }
-  | { kind: 'template'; id: string };
+  | { kind: 'template'; id: string }
+  | { kind: 'symbol'; symbol: SymbolKind }
+  /** Puts the element picked in the periodic table on atoms (or new atoms in empty space). */
+  | { kind: 'element' };
+
+/** Marks put on atoms for mechanisms: a lone pair, a radical's dot, a circled charge, or δ+ / δ−. */
+export type SymbolKind = 'LonePair' | 'Electron' | 'CirclePlus' | 'CircleMinus' | 'DeltaPlus' | 'DeltaMinus';
 
 /** How a new arrow looks (everything else is the document's default). */
 export type ArrowStyle = Partial<Pick<Arrow, 'headStyle' | 'tailStyle' | 'headType' | 'line' | 'noGo' | 'equilibrium' | 'sweep'>> & {
@@ -53,9 +68,12 @@ export type ShapeStyle = Partial<Omit<Shape, 'id' | 'kind' | 'x1' | 'y1' | 'x2' 
 export const TOOLS: Record<string, Tool> = {
   select: { kind: 'select' },
   eraser: { kind: 'eraser' },
+  element: { kind: 'element' },
   'bond-single': { kind: 'bond', order: 1, display: 'solid' },
   'bond-double': { kind: 'bond', order: 2, display: 'solid' },
   'bond-triple': { kind: 'bond', order: 3, display: 'solid' },
+  'bond-quadruple': { kind: 'bond', order: 4, display: 'solid' },
+  'bond-dative': { kind: 'bond', order: 1, display: 'dative' },
   'bond-wedge': { kind: 'bond', order: 1, display: 'wedge' },
   'bond-hashWedge': { kind: 'bond', order: 1, display: 'hashWedge' },
   'bond-hash': { kind: 'bond', order: 1, display: 'hash' },
@@ -95,6 +113,12 @@ export const TOOLS: Record<string, Tool> = {
   'bracket-square': { kind: 'bracket', bracket: 'square' },
   'bracket-round': { kind: 'bracket', bracket: 'round' },
   'bracket-curly': { kind: 'bracket', bracket: 'curly' },
+  'sym-lonepair': { kind: 'symbol', symbol: 'LonePair' },
+  'sym-radical': { kind: 'symbol', symbol: 'Electron' },
+  'sym-plus': { kind: 'symbol', symbol: 'CirclePlus' },
+  'sym-minus': { kind: 'symbol', symbol: 'CircleMinus' },
+  'sym-delta-plus': { kind: 'symbol', symbol: 'DeltaPlus' },
+  'sym-delta-minus': { kind: 'symbol', symbol: 'DeltaMinus' },
 };
 for (const t of TEMPLATES) TOOLS[`tpl-${t.id}`] = { kind: 'template', id: t.id };
 
@@ -105,6 +129,11 @@ export type Hit =
   | { kind: 'arrow'; id: number }
   | { kind: 'shape'; id: number }
   | null;
+
+/** Colour and name for each role of a reaction step, when the arrow is selected. */
+const ROLE_LOOK: Record<Role, [string, string]> = {
+  reactants: ['#2f6fde', 'starting material'], products: ['#16955a', 'product'], above: ['#c47a00', 'above'], below: ['#c47a00', 'below'],
+};
 
 export interface Selection {
   atoms: Set<number>;
@@ -155,6 +184,9 @@ export class Editor {
   /** What the mouse pointed at when the keyboard highlight was set. */
   private keyHotHover: Hit = null;
   /** Preferences from the settings file. */
+  /** With one reaction arrow selected, outline what its starting materials, products and conditions are. */
+  showRoles = true;
+
   options = {
     /** After 1 or 0 on the atom under the mouse, the highlight stays there (ChemDraw). */
     keepHotspotOnBond: true,
@@ -385,7 +417,9 @@ export class Editor {
     const rect = this.r.overlay.getBoundingClientRect();
     const rh = e.button === 0 ? this.rotateHandle() : null;
     const rotating = !!rh && dist(rh, p) <= this.tol(7);
-    const handle = e.button === 0 && !rotating ? this.handleAt(p) : null;
+    // Shift+drag from an arrow with an arrow tool branches a new arrow off it (not its handles)
+    const branching = e.shiftKey && this.tool.kind === 'arrow';
+    const handle = e.button === 0 && !rotating && !branching ? this.handleAt(p) : null;
     const hit = handle || rotating ? null : this.hitTest(p);
     this.drag = {
       start: p, startScreen: { x: e.clientX - rect.left, y: e.clientY - rect.top }, hit, button: e.button, moved: false,
@@ -497,6 +531,8 @@ export class Editor {
       case 'select':
         return d.hit ? 'move' : 'marquee';
       case 'eraser':
+      case 'symbol':
+      case 'element':
         return 'none';
       case 'bond':
       case 'chain':
@@ -596,8 +632,11 @@ export class Editor {
 
   /** Zoom and scroll so the whole drawing (or the slide) fits the window. */
   fit(): void {
-    const b = this.fitArea ? this.fitArea() : this.doc.bounds();
-    if (!b) return;
+    const raw = this.fitArea ? this.fitArea() : this.doc.bounds();
+    if (!raw) return;
+    // room for atom labels, which reach past the atoms themselves (H3N, Re)
+    const m = this.fitArea ? 0 : this.doc.style.labelSize * 1.5;
+    const b = { x1: raw.x1 - m, y1: raw.y1 - m, x2: raw.x2 + m, y2: raw.y2 + m };
     const w = this.r.width, h = this.r.height;
     const bw = Math.max(20, b.x2 - b.x1), bh = Math.max(20, b.y2 - b.y1);
     const s = Math.min(8, 0.92 * Math.min(w / bw, h / bh));
@@ -627,6 +666,18 @@ export class Editor {
       }
       case 'eraser': {
         if (h) doc.edit('Erase', () => this.erase(h));
+        this.changed();
+        return;
+      }
+      case 'symbol': {
+        this.placeSymbol(t.symbol, h, p);
+        return;
+      }
+      case 'element': {
+        const sym = SYMBOLS[this.element];
+        if (h && h.kind === 'atom') doc.edit(`Make ${sym}`, () => this.applyLabel(h.id, sym));
+        else if (!h) doc.edit(`Add ${sym}`, () => { this.lastEdited = doc.addAtom(p.x, p.y, this.element).id; });
+        else return;
         this.changed();
         return;
       }
@@ -686,21 +737,15 @@ export class Editor {
         return;
       }
       case 'chain': {
-        if (!this.sel.atoms.size) this.sel = emptySel();
-        doc.edit('Chain', () => {
-          if (h && h.kind === 'atom') this.lastEdited = sprout(doc, h.id).id;
-          else {
-            const a = doc.addAtom(p.x, p.y);
-            this.lastEdited = bondTo(doc, a, add(p, fromAngle(-30 * DEG, doc.style.bondLength))).id;
-          }
-        });
-        this.setKeyHot({ kind: 'atom', id: this.lastEdited! });
-        this.changed();
+        // a click asks how long a chain to draw (Alt+click draws the same length again)
+        const from = h && h.kind === 'atom' ? h.id : null;
+        if (d.alt || !this.askChainLength) this.drawChain(from, p, this.chainLength);
+        else void this.askChainLength(this.chainLength).then((n) => { if (n) this.drawChain(from, p, n); });
         return;
       }
       case 'ring': {
         if (!this.sel.atoms.size) this.sel = emptySel();
-        doc.edit('Ring', () => this.ringClick(h, p, t.size, t.aromatic, d.alt, d.shift));
+        doc.edit('Ring', () => this.ringClick(h, p, t.size, t.aromatic, d.alt, d.shift, undefined, d.ctrl));
         this.changed();
         return;
       }
@@ -723,6 +768,16 @@ export class Editor {
       }
     } else if (t.order === 3) {
       doc.updateBond(id, { order: 3, display: 'solid' });
+    } else if (t.order === 4) {
+      doc.updateBond(id, { order: b.order === 4 ? 1 : 4, display: 'solid' });
+    } else if (t.display === 'dative') {
+      // the arrow points away from the atom nearer the click; clicking a dative bond reverses it
+      if (b.display === 'dative') doc.updateBond(id, { a1: b.a2, a2: b.a1 });
+      else {
+        const a1 = doc.atoms.get(b.a1)!, a2 = doc.atoms.get(b.a2)!;
+        const flip = dist(p, a2) < dist(p, a1);
+        doc.updateBond(id, { order: 1, display: 'dative', ...(flip ? { a1: b.a2, a2: b.a1 } : {}) });
+      }
     } else if (t.display === 'wedge' || t.display === 'hashWedge') {
       if (b.display === t.display) doc.updateBond(id, { a1: b.a2, a2: b.a1 });
       else {
@@ -736,7 +791,7 @@ export class Editor {
     }
   }
 
-  private ringClick(h: Hit, p: Vec, n: number, aromatic: boolean, alt: boolean, shift: boolean, towards?: Vec): void {
+  private ringClick(h: Hit, p: Vec, n: number, aromatic: boolean, alt: boolean, shift: boolean, towards?: Vec, circle = false): void {
     const doc = this.doc;
     let ids: number[];
     if (h && h.kind === 'bond') {
@@ -755,6 +810,8 @@ export class Editor {
       const L = doc.style.bondLength;
       ids = placeRing(doc, freeRing(p, n, L, towards), { aromatic, shiftPhase: shift });
     }
+    // Ctrl: an aromatic ring drawn with a circle
+    if (circle && aromatic) circleRing(doc, ids.slice(0, n));
     this.lastEdited = ids[0];
   }
 
@@ -867,17 +924,25 @@ export class Editor {
       });
     } else if (t.kind === 'ring') {
       doc.edit('Ring', () => {
-        if (h && h.kind === 'bond') this.ringClick(h, p, t.size, t.aromatic, d.alt, d.shift);
+        if (h && h.kind === 'bond') this.ringClick(h, p, t.size, t.aromatic, d.alt, d.shift, undefined, d.ctrl);
         else if (h && h.kind === 'atom') {
           const a = doc.atoms.get(h.id)!;
           const dir = norm(fromAngle(snapAngle(angleOf(sub(p, a)))));
           const ids = placeRing(doc, ringOnAtom(a, dir, t.size, bondLength(doc, a)), { aromatic: t.aromatic, shiftPhase: d.shift, existing: [a.id], scale: a.s });
+          if (d.ctrl && t.aromatic) circleRing(doc, ids.slice(0, t.size));
           this.lastEdited = ids[0];
-        } else this.ringClick(null, d.start, t.size, t.aromatic, false, d.shift, p);
+        } else this.ringClick(null, d.start, t.size, t.aromatic, false, d.shift, p, d.ctrl);
       });
     } else if (t.kind === 'arrow') {
-      const end = this.arrowEnd(d.start, p, d.alt);
-      doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(d.start, end, t.style, this.bendSide(d, end)).id }));
+      const push = this.pushFor(d, p);
+      if (push) {
+        const lw = doc.style.lineWidth;
+        doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(push.tail, push.head, { ...t.style, sweep: Math.abs(push.sweep), ...(push.small ? { headLength: lw * SMALL_HEAD.length, headWidth: lw * SMALL_HEAD.width } : {}) }, Math.sign(push.sweep)).id }));
+        return;
+      }
+      const start = this.branchStart(d);
+      const end = this.arrowEnd(start, p, d.alt);
+      doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(start, end, t.style, this.bendSide(d, end)).id }));
     } else if (t.kind === 'shape') {
       const g = this.shapeGeometry(t, d.start, p, d.shift, d.alt);
       if (g) doc.edit('Shape', () => this.selectOnly({ kind: 'shape', id: doc.addShape({ ...t.shape, ...g }).id }));
@@ -897,12 +962,48 @@ export class Editor {
     return add(start, fromAngle(free ? angleOf(sub(p, start)) : snapAngle(angleOf(sub(p, start))), l));
   }
 
+  /**
+   * A new arrow Shift+dragged from an existing one branches from it: it starts exactly at that arrow's
+   * head, tail or middle, whichever is nearest (to split a scheme into two paths).
+   */
+  private branchStart(d: Drag): Vec {
+    if (d.hit?.kind !== 'arrow' || !d.shift) return d.start;
+    const r = this.doc.arrows.get(d.hit.id);
+    if (!r) return d.start;
+    const mid = r.sweep ? arrowPoints(r)[12] : { x: (r.tail.x + r.head.x) / 2, y: (r.tail.y + r.head.y) / 2 };
+    const spots = [r.tail, r.head, mid];
+    return spots.reduce((a, b) => (dist(b, d.start) < dist(a, d.start) ? b : a));
+  }
+
   /** Which way a curved arrow bends: towards the side the pointer swung out to, else to the left. */
   private bendSide(d: Drag, end: Vec): number {
-    const n = perp(norm(sub(end, d.start)));
+    return this.swing(d, d.start, end) ?? 1;
+  }
+
+  /** The side the pointer swung out to on its way from a to b (+1 left, −1 right), if it clearly did. */
+  private swing(d: Drag, a: Vec, b: Vec): number | undefined {
+    const n = perp(norm(sub(b, a)));
     let most = 0;
-    for (const q of d.path ?? []) { const o = dot(sub(q, d.start), n); if (Math.abs(o) > Math.abs(most)) most = o; }
-    return Math.abs(most) > this.tol(4) && most > 0 ? -1 : 1;
+    for (const q of d.path ?? []) { const o = dot(sub(q, a), n); if (Math.abs(o) > Math.abs(most)) most = o; }
+    return Math.abs(most) > this.tol(4) ? (most > 0 ? -1 : 1) : undefined;
+  }
+
+  /**
+   * A curved arrow dragged from an atom or bond, or onto one, is an electron-pushing arrow: it
+   * snaps from the lone pair or bond to the atom or bond it points at (Alt: draw it freely).
+   */
+  private pushFor(d: Drag, p: Vec): PushArrow | null {
+    const t = this.tool;
+    if (t.kind !== 'arrow' || !t.style.sweep || d.alt) return null;
+    const endOf = (h: Hit, at: Vec): PushEnd => (h && (h.kind === 'atom' || h.kind === 'bond') ? { kind: h.kind, id: h.id } : { kind: 'point', p: at });
+    const from = endOf(d.hit, d.start);
+    let to = endOf(this.hitTest(p), p);
+    if (from.kind === 'point' && to.kind === 'point') return null;
+    if (to.kind !== 'point' && from.kind === to.kind && (from as { id: number }).id === to.id) to = { kind: 'point', p };
+    if (to.kind === 'point' && dist(p, d.start) < this.tol(6)) return null;
+    // a swing of the pointer chooses the bend; otherwise it bends away from the structure
+    const a = from.kind === 'point' ? from.p : d.start;
+    return pushArrow(this.doc, this.measure(), from, to, this.swing(d, a, p));
   }
 
   /** The box, circle or line a shape tool draws for a drag from a to b (Shift: square or circle). */
@@ -919,6 +1020,51 @@ export class Editor {
     if (shift) { const m = Math.max(Math.abs(w), Math.abs(h)); w = Math.sign(w || 1) * m; h = Math.sign(h || 1) * m; }
     if (Math.abs(w) < 2 && Math.abs(h) < 2) return null;
     return { x1: Math.min(a.x, a.x + w), y1: Math.min(a.y, a.y + h), x2: Math.max(a.x, a.x + w), y2: Math.max(a.y, a.y + h) };
+  }
+
+  /**
+   * Put a lone pair, radical dot, circled charge or δ+ / δ− on the clicked atom, in the most open
+   * space round it, or where the click was. A circled charge also gives the atom that charge
+   * (shown by the circle instead of in its label).
+   */
+  private placeSymbol(kind: SymbolKind, h: Hit, p: Vec): void {
+    const doc = this.doc;
+    const L = doc.style.bondLength;
+    const atom = h?.kind === 'atom' ? doc.atoms.get(h.id)! : null;
+    const delta = kind === 'DeltaPlus' || kind === 'DeltaMinus';
+    const circled = kind === 'CirclePlus' || kind === 'CircleMinus';
+    const size = kind === 'LonePair' ? 2.6 : circled ? 4.5 : delta ? 0.9 * L : 1.4;
+    let at = p, dir = { x: 0, y: -1 };
+    if (atom) {
+      // what already sits round the atom: other symbols and short captions
+      const taken: Vec[] = [];
+      for (const s of doc.shapes.values()) if (s.kind === 'symbol') { const c = { x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 }; if (dist(c, atom) < 0.8 * L) taken.push(c); }
+      for (const c of doc.captions.values()) { const b = this.r.captionBox(c); const m = { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 }; if (dist(m, atom) < 0.8 * L && plainText(c.runs).length <= 3) taken.push(m); }
+      ({ at, dir } = symbolSpot(doc, this.measure(), atom.id, taken, size));
+    }
+    doc.edit('Symbol', () => {
+      this.sel = emptySel();
+      if (delta) {
+        const c = doc.addCaption({ x: at.x, y: at.y, runs: [{ text: 'δ' }, { text: kind === 'DeltaPlus' ? '+' : '−', sup: true }], justify: 'left' });
+        // centre it on the spot
+        const b = this.r.captionBox(c);
+        doc.updateCaption(c.id, { x: c.x + at.x - (b.x1 + b.x2) / 2, y: c.y + at.y - (b.y1 + b.y2) / 2 });
+        this.sel.captions.add(c.id);
+        return;
+      }
+      let box: Pick<Shape, 'x1' | 'y1' | 'x2' | 'y2'>;
+      if (kind === 'LonePair') {
+        // the two dots side by side across the direction they point
+        const n = perp(dir);
+        box = { x1: at.x - n.x * 1.12, y1: at.y - n.y * 1.12, x2: at.x + n.x * 1.12, y2: at.y + n.y * 1.12 };
+      } else if (kind === 'Electron') box = { x1: at.x, y1: at.y, x2: at.x, y2: at.y };
+      else box = { x1: at.x - size / 2, y1: at.y - size / 2, x2: at.x + size / 2, y2: at.y + size / 2 };
+      this.sel.shapes.add(doc.addShape({ kind: 'symbol', symbol: kind, ...box }).id);
+      // a radical's dot makes the atom a radical (one hydrogen fewer)
+      if (atom && kind === 'Electron' && !atom.radical) doc.updateAtom(atom.id, { radical: 'doublet' });
+      if (atom && circled) doc.updateAtom(atom.id, { charge: atom.charge + (kind === 'CirclePlus' ? 1 : -1), hideCharge: true });
+    });
+    this.changed();
   }
 
   private addBrackets(r: Rect, bracket: NonNullable<Shape['bracket']>): void {
@@ -947,6 +1093,43 @@ export class Editor {
     this.addToSel(h);
     this.requestOverlay();
     this.onChange();
+  }
+
+  /** The element the periodic table tool puts on atoms (its atomic number). */
+  element = 7;
+
+  /** Pick the periodic table tool's element; atoms already selected become that element too. */
+  pickElement(z: number): void {
+    this.element = z;
+    const ids = [...this.sel.atoms].filter((id) => this.doc.atoms.has(id));
+    if (ids.length) {
+      this.doc.edit(`Make ${SYMBOLS[z]}`, () => { for (const id of ids) this.applyLabel(id, SYMBOLS[z]); });
+      this.changed();
+    }
+    this.setTool('element');
+  }
+
+  /** How many atoms the chain tool's click adds; set by the window it opens. */
+  chainLength = 4;
+  /** Asks how many atoms a clicked chain should add (null: cancelled). */
+  askChainLength: ((last: number) => Promise<number | null>) | null = null;
+
+  /** Draw a zig-zag chain of n new atoms on an atom, or of n atoms in empty space. */
+  drawChain(from: number | null, p: Vec, n: number): void {
+    const doc = this.doc;
+    n = Math.max(1, Math.min(200, Math.round(n)));
+    this.chainLength = n;
+    const bonds = from === null ? Math.max(1, n - 1) : n;
+    if (from !== null && !doc.atoms.has(from)) return;
+    if (!this.sel.atoms.size) this.sel = emptySel();
+    doc.edit('Chain', () => {
+      const pts = chainFrom(doc, from, p, bonds, doc.style.chainAngle);
+      let cur = from !== null ? doc.atoms.get(from)! : doc.addAtom(p.x, p.y);
+      for (let i = 1; i < pts.length; i++) cur = bondTo(doc, cur, pts[i]);
+      this.lastEdited = cur.id;
+    });
+    this.setKeyHot({ kind: 'atom', id: this.lastEdited! });
+    this.changed();
   }
 
   private chainFirstUp(a: Vec & { id?: number }, p: Vec): boolean {
@@ -1126,6 +1309,7 @@ export class Editor {
 
   /** Sizes of labels and captions, for lining things up. Very large selections go by atom positions. */
   measure(): Measure {
+    this.r.invalidate(this.doc);
     if (this.sel.atoms.size > 5000) return { ...POINTS, captionBox: (c) => this.r.captionBox(c) };
     return { atomBoxes: (a) => this.r.atomInfo(this.doc, a).boxes, captionBox: (c) => this.r.captionBox(c) };
   }
@@ -1205,6 +1389,275 @@ export class Editor {
     doc.edit('Clean Up Structure', () => { for (const [id, p] of moves) doc.updateAtom(id, { x: p.x, y: p.y }); });
     this.changed();
     return true;
+  }
+
+  // ------------------------------------------------------------------ reaction schemes
+
+  /** Outline the parts of a reaction arrow's step, each in its role's colour with a small name. */
+  private drawRoles(ctx: CanvasRenderingContext2D, arrowId: number, px: number): void {
+    const roles = this.reactionRoles(arrowId);
+    if (!roles) return;
+    const find = itemFinder(this.schemeItems());
+    const pad = 3 * px;
+    ctx.save();
+    ctx.lineWidth = 1.2 * px;
+    ctx.setLineDash([4 * px, 3 * px]);
+    ctx.font = `${10 * px}px system-ui, sans-serif`;
+    ctx.textBaseline = 'bottom';
+    for (const k of ROLES) {
+      const [colour, name] = ROLE_LOOK[k];
+      for (const ref of roles[k]) {
+        const it = find(ref);
+        if (!it) continue;
+        const b = it.box;
+        ctx.strokeStyle = colour;
+        ctx.strokeRect(b.x1 - pad, b.y1 - pad, b.x2 - b.x1 + 2 * pad, b.y2 - b.y1 + 2 * pad);
+        ctx.fillStyle = colour;
+        ctx.fillText(name, b.x1 - pad, b.y1 - pad - px);
+      }
+    }
+    ctx.restore();
+  }
+
+  /** The things in the drawing as scheme items (remembered until the drawing changes). */
+  private itemsCache: { version: number; items: Item[] } | null = null;
+  schemeItems(): Item[] {
+    if (this.itemsCache?.version !== this.doc.version) this.itemsCache = { version: this.doc.version, items: schemeItems(this.doc, this.fullMeasure()) };
+    return this.itemsCache.items;
+  }
+
+  /** Label and caption sizes for every atom (schemes need whole structures, however big the selection). */
+  private fullMeasure(): Measure {
+    this.r.invalidate(this.doc);
+    return { atomBoxes: (a) => this.r.atomInfo(this.doc, a).boxes, captionBox: (c) => this.r.captionBox(c) };
+  }
+
+  /** An arrow's reaction roles: kept with it, or worked out from where things sit. */
+  reactionRoles(arrowId: number): StepRoles | null {
+    const r = this.doc.arrows.get(arrowId);
+    if (!r || !isReactionArrow(r)) return null;
+    return rolesOf(r, this.schemeItems(), this.doc.style.bondLength);
+  }
+
+  /** The reaction arrows to work on: those selected, those whose steps hold something selected, or all. */
+  private selectedSteps(): number[] | undefined {
+    const s = this.sel;
+    if (s.arrows.size) return [...s.arrows];
+    if (!this.hasSelection()) return undefined;
+    const find = itemFinder(this.schemeItems());
+    const picked = new Set<Item>();
+    for (const id of s.atoms) { const it = find('a' + id); if (it) picked.add(it); }
+    for (const id of s.captions) { const it = find('c' + id); if (it) picked.add(it); }
+    for (const id of s.shapes) { const it = find('s' + id); if (it) picked.add(it); }
+    const out: number[] = [];
+    for (const r of this.doc.arrows.values()) {
+      const roles = this.reactionRoles(r.id);
+      if (roles && ROLES.some((k) => roles[k].some((ref) => { const it = find(ref); return it && picked.has(it); }))) out.push(r.id);
+    }
+    return out.length ? out : undefined;
+  }
+
+  /**
+   * Clean Up Reaction: space the selected steps (or every step) evenly, add missing + signs,
+   * centre the conditions and fit the arrows to them. False when there is no step to tidy.
+   */
+  cleanUpReaction(): boolean {
+    const m = this.fullMeasure();
+    const plan = planCleanUp(this.doc, m, this.selectedSteps());
+    if (!plan) return false;
+    applySchemePlan(this.doc, m, plan);
+    this.changed();
+    return true;
+  }
+
+  /**
+   * Arrange the selected scheme (or the whole drawing) in one go: in a line, in rows, as a
+   * snake, down the page, round a catalytic cycle, or as a branching tree. Selected structures
+   * that aren't in a step yet are joined on with new arrows. False when it can't be done.
+   */
+  arrangeScheme(opts: ArrangeOptions): boolean {
+    const m = this.fullMeasure();
+    const s = this.sel;
+    const plan = planArrange(this.doc, m, { atoms: s.atoms, captions: s.captions, shapes: s.shapes, arrows: s.arrows }, opts);
+    if (!plan) return false;
+    const made = applyArrange(this.doc, m, plan);
+    for (const id of made) this.sel.arrows.add(id);
+    this.changed();
+    return true;
+  }
+
+  /**
+   * Number Compounds: a bold number under each selected structure (or every structure), in
+   * scheme order. Numbers already under a structure are changed in place. Returns how many.
+   */
+  numberCompounds(opts: NumberOptions): number {
+    const doc = this.doc;
+    const plan = planNumbers(doc, this.fullMeasure(), this.sel.atoms, opts);
+    if (!plan.labels.length) return 0;
+    doc.edit('Number Compounds', () => {
+      for (const l of plan.labels) {
+        if (l.caption !== undefined) {
+          const c = doc.captions.get(l.caption)!;
+          doc.updateCaption(c.id, { runs: [{ ...c.runs[0], text: l.text, bold: true }] });
+          continue;
+        }
+        const c = doc.addCaption({ x: l.at.x, y: l.at.y, runs: [{ text: l.text, bold: true }], justify: 'left' });
+        // centred under the structure, its top at the spot
+        const b = this.r.captionBox(c);
+        doc.updateCaption(c.id, { x: c.x + l.at.x - (b.x1 + b.x2) / 2, y: c.y + l.at.y - b.y1 });
+        this.sel.captions.add(c.id);
+        // an arrow leaving from under the structure starts below the new number instead
+        const nb = this.r.captionBox(doc.captions.get(c.id)!);
+        const pad = 0.2 * doc.style.bondLength;
+        const room = { x1: nb.x1 - pad, y1: nb.y1 - pad, x2: nb.x2 + pad, y2: nb.y2 + pad };
+        for (const r of doc.arrows.values()) {
+          if (r.sweep) continue;
+          const t = exitParam(r.tail, r.head, room), h = exitParam(r.head, r.tail, room);
+          const cut = (from: Vec, to: Vec, k: number) => ({ x: from.x + (to.x - from.x) * k, y: from.y + (to.y - from.y) * k });
+          const tail = t > 0 ? cut(r.tail, r.head, t) : r.tail, head = h > 0 ? cut(r.head, r.tail, h) : r.head;
+          if ((t > 0 || h > 0) && dist(tail, head) > doc.style.bondLength) doc.updateArrow(r.id, { tail, head });
+        }
+      }
+    });
+    this.changed();
+    return plan.labels.length;
+  }
+
+  /**
+   * Aromatic rings in the selection (or the whole drawing) drawn with circles, or back as
+   * alternating double bonds when they already have circles. Says what it did, or null.
+   */
+  /**
+   * Fold the selected group into one label with this name (it keeps its chemistry: the name
+   * becomes a nickname for the group). Returns a problem to tell the person, or null.
+   */
+  contractLabel(name: string): string | null {
+    const doc = this.doc;
+    const g = selectedGroup(doc, this.sel.atoms);
+    if ('error' in g) return g.error;
+    const label = name.trim();
+    if (!label) return 'Type a name for the label.';
+    if (isBuiltInNickname(label)) return `“${label}” is already a nickname (${label} means something else). Choose another name.`;
+    addNicknames({ [label]: g.smiles });
+    const ids = [...this.sel.atoms].filter((id) => id !== g.start && doc.atoms.has(id));
+    doc.edit('Contract Label', () => {
+      for (const id of ids) doc.removeAtom(id);
+      this.applyLabel(g.start, label);
+      doc.updateAtom(g.start, { group: g.smiles });
+    });
+    this.r.invalidate(doc);
+    this.sel = emptySel();
+    this.sel.atoms.add(g.start);
+    this.changed();
+    return null;
+  }
+
+  /** Show or hide CH3 at the chain ends of the selection (or the whole drawing). */
+  toggleChainEnds(): string {
+    let r = { count: 0, shown: false };
+    this.doc.edit('Chain-End Carbons', () => { r = toggleChainEndLabels(this.doc, this.sel.atoms); });
+    if (!r.count) return 'No chain ends here: a chain end is a plain carbon with one bond.';
+    this.changed();
+    return r.shown ? `CH₃ written out at ${r.count} chain end${r.count > 1 ? 's' : ''}.` : 'Chain ends back to plain lines.';
+  }
+
+  /** Hide the H atoms that don't matter, or draw the selected atoms' hydrogens as atoms. */
+  toggleHydrogens(): string {
+    const ids = [...this.sel.atoms];
+    let r = { removed: 0, added: 0 };
+    this.doc.edit('Explicit Hydrogens', () => { r = toggleExplicitHydrogens(this.doc, ids); });
+    if (!r.removed && !r.added) return ids.length ? 'These atoms have no hydrogens to draw.' : 'No H atoms to hide. Select atoms to draw their hydrogens as atoms.';
+    this.sel = emptySel();
+    this.changed();
+    return r.removed ? `${r.removed} H atom${r.removed > 1 ? 's' : ''} hidden (those on wedges, charged or on heteroatoms are kept).` : r.added > 1 ? `${r.added} hydrogens drawn as atoms.` : '1 hydrogen drawn as an atom.';
+  }
+
+  toggleAromaticCircles(): string | null {
+    const doc = this.doc;
+    const bonds = new Set(this.sel.bonds);
+    for (const id of this.sel.atoms) for (const b of doc.adj.get(id) ?? []) bonds.add(b);
+    let msg: string | null = null;
+    doc.edit('Aromatic Circles', () => {
+      const n = circleRings(doc, bonds);
+      if (n > 0) { msg = n === 1 ? 'Ring drawn with a circle.' : `${n} rings drawn with circles.`; return; }
+      const k = kekulize(doc, bonds);
+      msg = k > 0 ? (k === 1 ? 'Ring drawn with double bonds.' : `${k} rings drawn with double bonds.`) : k < 0 ? 'These rings can\'t be given alternating double bonds.' : null;
+    });
+    if (msg) this.changed();
+    return msg;
+  }
+
+  /**
+   * Where crossing bonds are drawn bring the selected bonds in front of (or behind) the bonds they
+   * cross: the bond behind gets a gap. False when no bond is selected.
+   */
+  setBondLayer(front: boolean): boolean {
+    const doc = this.doc;
+    const ids = [...this.sel.bonds];
+    if (!ids.length) return false;
+    let hi = -Infinity, lo = Infinity;
+    for (const b of doc.bonds.values()) { const l = bondLayer(b); hi = Math.max(hi, l); lo = Math.min(lo, l); }
+    doc.edit(front ? 'Bring to Front' : 'Send to Back', () => {
+      ids.forEach((id, i) => doc.updateBond(id, { z: front ? hi + 1 + i : lo - ids.length + i }));
+      // the bonds crossing them are redrawn too (their gaps change)
+      for (const id of ids) for (const o of crossingBonds(doc, doc.bonds.get(id)!)) doc.updateBond(o.id, {});
+    });
+    this.changed();
+    return true;
+  }
+
+  /** The next free compound number in this drawing. */
+  nextCompoundNumber(): number {
+    return nextCompound(this.doc, this.fullMeasure());
+  }
+
+  /**
+   * Give the selected things (other than the arrow) a role in the selected arrow's step by hand,
+   * or ('none') take them out of it. The roles are then kept as they are.
+   */
+  setReactionRole(arrowId: number, role: Role | 'none'): boolean {
+    const r = this.doc.arrows.get(arrowId);
+    const roles = this.reactionRoles(arrowId);
+    if (!r || !roles) return false;
+    const find = itemFinder(this.schemeItems());
+    const picked: Item[] = [];
+    const add_ = (ref: string) => { const it = find(ref); if (it && !picked.includes(it)) picked.push(it); };
+    for (const id of this.sel.atoms) add_('a' + id);
+    for (const id of this.sel.captions) add_('c' + id);
+    for (const id of this.sel.shapes) add_('s' + id);
+    if (!picked.length) return false;
+    const mine = new Set(picked);
+    const next: StepRoles = { reactants: [], products: [], above: [], below: [], plusses: [...(roles.plusses ?? [])], manual: true };
+    for (const k of ROLES) next[k] = roles[k].filter((ref) => { const it = find(ref); return !it || !mine.has(it); });
+    next.plusses = next.plusses!.filter((ref) => { const it = find(ref); return !it || !mine.has(it); });
+    if (role !== 'none') for (const it of picked) (it.plus && (role === 'reactants' || role === 'products') ? next.plusses! : next[role]).push(it.ref);
+    this.doc.edit('Reaction roles', () => this.doc.updateArrow(arrowId, { step: next }));
+    this.changed();
+    return true;
+  }
+
+  /** Forget roles chosen by hand (or read from a file): they are worked out from where things sit again. */
+  resetReactionRoles(arrowId: number): void {
+    if (!this.doc.arrows.get(arrowId)?.step) return;
+    this.doc.edit('Reaction roles', () => this.doc.updateArrow(arrowId, { step: undefined }));
+    this.changed();
+  }
+
+  /** Select everything in an arrow's step with the given role. */
+  selectRole(arrowId: number, role: Role): void {
+    const roles = this.reactionRoles(arrowId);
+    if (!roles) return;
+    const find = itemFinder(this.schemeItems());
+    this.clearSelection();
+    for (const ref of roles[role]) {
+      const it = find(ref);
+      if (!it) continue;
+      for (const a of it.atoms) this.sel.atoms.add(a);
+      for (const b of this.doc.bonds.values()) if (it.atoms.includes(b.a1)) this.sel.bonds.add(b.id);
+      if (it.caption !== undefined) this.sel.captions.add(it.caption);
+      if (it.shape !== undefined) this.sel.shapes.add(it.shape);
+    }
+    this.changed();
   }
 
   /** Move the selection a few points (the arrow keys). False with nothing selected. */
@@ -1883,6 +2336,7 @@ export class Editor {
         else if (sh) outlineShape(ctx, sh);
       }
     }
+    if (this.showRoles && s.arrows.size === 1 && !this.drag) this.drawRoles(ctx, [...s.arrows][0], px);
     // hotspot
     const h = this.drag?.mode === 'move' || this.drag?.mode === 'rotate' ? null : this.hotspot();
     if (h) {
@@ -2065,9 +2519,12 @@ export class Editor {
       } else pts = freeRing(d.start, t.size, L, d.last);
       poly(pts, true);
     } else if (t.kind === 'arrow') {
-      const end = this.arrowEnd(d.start, d.last, d.alt);
+      const push = this.pushFor(d, d.last);
+      if (push) { poly(arrowPoints(push), false); return; }
+      const start = this.branchStart(d);
+      const end = this.arrowEnd(start, d.last, d.alt);
       const sweep = (t.style.sweep ?? 0) * this.bendSide(d, end);
-      poly(arrowPoints({ tail: d.start, head: end, sweep }), false);
+      poly(arrowPoints({ tail: start, head: end, sweep }), false);
     } else if (t.kind === 'shape') {
       const g = this.shapeGeometry(t, d.start, d.last, d.shift, d.alt);
       if (g) outlineShape(ctx, { id: 0, ...t.shape, ...g });

@@ -24,6 +24,7 @@ import { extractDrawing } from './clipboard';
 import type { Selection } from '../editor/editor';
 import { Package, NS, REL, emu, xml, hex6 } from './ooxml';
 import { fromDataUrl } from '../render/images';
+import { FADE, tint } from '../colours';
 import {
   Master, SlideSize, LayoutId, LAYOUTS, layoutFrames, decorFrames, showsNumber, textStyles, isEmptyText,
 } from '../deck/deck';
@@ -649,8 +650,14 @@ function shapeXml(s: Shape, id: number, lw: number): string {
     const adj = Math.round((r / Math.max(1e-6, Math.min(box.x2 - box.x1, box.y2 - box.y1))) * 100000);
     geom = `<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val ${adj}"/></a:avLst></a:prstGeom>`;
   }
-  const fill = s.filled ? `<a:solidFill><a:srgbClr val="${color}"/></a:solidFill>` : '<a:noFill/>';
-  const ln = s.filled ? '<a:ln><a:noFill/></a:ln>' : `<a:ln w="${emu(width)}"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dash}</a:ln>`;
+  // a fill of its own colour, faded (a light tint) or shaded (light to full colour)
+  const fc = (s.fillColor ?? s.color ?? '#000000').replace('#', '').toUpperCase();
+  const fill = !s.filled ? '<a:noFill/>'
+    : s.fill === 'faded' ? `<a:solidFill><a:srgbClr val="${tint('#' + fc, FADE).slice(1).toUpperCase()}"/></a:solidFill>`
+    : s.fill === 'shaded' ? `<a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="${tint('#' + fc, 0.85).slice(1).toUpperCase()}"/></a:gs><a:gs pos="100000"><a:srgbClr val="${fc}"/></a:gs></a:gsLst>${s.kind === 'oval' ? '<a:path path="circle"><a:fillToRect l="35000" t="30000" r="65000" b="70000"/></a:path>' : '<a:lin ang="2700000" scaled="0"/>'}</a:gradFill>`
+    : `<a:solidFill><a:srgbClr val="${fc}"/></a:solidFill>`;
+  const outlined = !s.filled || (!!s.fillColor && s.fillColor.toLowerCase() !== (s.color ?? '#000000').toLowerCase());
+  const ln = !outlined ? '<a:ln><a:noFill/></a:ln>' : `<a:ln w="${emu(width)}"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dash}</a:ln>`;
   const shadow = s.shadow ? `<a:effectLst><a:outerShdw dist="${emu(s.shadowSize ?? 4 * lw)}" dir="2700000" algn="tl" rotWithShape="0"><a:srgbClr val="C0C0C0"/></a:outerShdw></a:effectLst>` : '';
   return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${s.kind === 'oval' ? 'Oval' : 'Rectangle'} ${id - 1}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>` +
     `<p:spPr>${xfrm(box)}${geom}${fill}${ln}${shadow}</p:spPr></p:sp>`;

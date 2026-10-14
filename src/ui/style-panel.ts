@@ -3,7 +3,8 @@
 // bond (label, charge, atom number; order and style).
 // Anything the drawing tools set automatically can be changed here by hand.
 
-import { Doc, Arrow, Shape, Caption, Atom, Bond } from '../model';
+import { Doc, Arrow, Shape, Caption, Atom, Bond, type StepRoles } from '../model';
+import type { Role } from '../chem/reaction';
 import { setStereoShown, setStereoText } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
 import { Selection } from '../editor/editor';
@@ -13,6 +14,7 @@ import { nextNumber } from '../chem/sprouts';
 import type { TableData } from '../model';
 import { deleteColumn, deleteRow, fitColumns, insertColumn, insertRow, setColumnAlign, setColumnWidth, setSpan, spanOf, type TablePart } from '../table';
 import type { Measure } from '../text/layout';
+import { colourButton } from './colour-picker';
 
 /** What the table controls need from the editor. */
 export interface TableHooks {
@@ -26,6 +28,18 @@ export interface TableHooks {
   measure: Measure;
 }
 
+/** What the Reaction controls need from the editor. */
+export interface ReactionHooks {
+  roles(arrowId: number): StepRoles | null;
+  /** How many things other than arrows are selected. */
+  others(): number;
+  setRole(arrowId: number, role: Role | 'none'): void;
+  reset(arrowId: number): void;
+  select(arrowId: number, role: Role): void;
+  cleanUp(): void;
+  arrange(): void;
+}
+
 type Opt<T> = [T, string];
 
 const HEADS: Opt<Arrow['headStyle']>[] = [['none', 'None'], ['full', 'Full'], ['halfLeft', 'Half, left side'], ['halfRight', 'Half, right side']];
@@ -36,8 +50,13 @@ const BRACKETS: Opt<NonNullable<Shape['bracket']>>[] = [['square', 'Square [ ]']
 const JUSTIFY: Opt<Caption['justify']>[] = [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']];
 const TABLE_LINES: Opt<TableData['lines']>[] = [['acs', 'ACS style (rules above and below the headings, and at the end)'], ['grid', 'Every cell boxed'], ['none', 'None']];
 
+const LABEL_DIRS: Opt<Atom['just']>[] = [['auto', 'Automatically (away from the bonds)'], ['right', 'To the right (OMe)'], ['left', 'To the left (MeO)']];
+
+type Fill = 'none' | 'solid' | 'faded' | 'shaded';
+const FILLS: Opt<Fill>[] = [['none', 'None'], ['solid', 'Solid colour'], ['faded', 'Faded (light tint)'], ['shaded', 'Shaded (light to dark)']];
+
 const BOND_ORDERS: Opt<string>[] = [['1', 'Single'], ['2', 'Double'], ['3', 'Triple'], ['1.5', 'Aromatic'], ['4', 'Quadruple']];
-const BOND_STYLES: Opt<Bond['display']>[] = [['solid', 'Plain'], ['wedge', 'Wedge'], ['hashWedge', 'Hashed wedge'], ['hash', 'Hashed'], ['bold', 'Bold'], ['dash', 'Dashed'], ['wavy', 'Wavy']];
+const BOND_STYLES: Opt<Bond['display']>[] = [['solid', 'Plain'], ['wedge', 'Wedge'], ['hashWedge', 'Hashed wedge'], ['hash', 'Hashed'], ['bold', 'Bold'], ['dash', 'Dashed'], ['wavy', 'Wavy'], ['dative', 'Dative (arrow to the acceptor)']];
 const DOUBLE_POS: Opt<Bond['dpos']>[] = [['auto', 'Automatic'], ['left', 'Left'], ['center', 'Centred'], ['right', 'Right']];
 
 const round = (x: number, k = 100) => Math.round(x * k) / k;
@@ -53,6 +72,8 @@ export class StylePanel {
   private keepProportions = true;
   /** Table commands (set up by the app). */
   tables: TableHooks | null = null;
+  /** Reaction step commands (set up by the app). */
+  reaction: ReactionHooks | null = null;
 
   constructor(private section: HTMLElement, private body: HTMLElement, private doc: Doc, private sel: () => Selection, private changed: () => void) {}
 
@@ -78,8 +99,13 @@ export class StylePanel {
     const atom = s.atoms.size === 1 && !s.bonds.size ? this.doc.atoms.get([...s.atoms][0]) : undefined;
     const bond = s.bonds.size === 1 && s.atoms.size <= 2 ? this.doc.bonds.get([...s.bonds][0]) : undefined;
     this.section.hidden = !arrows.length && !shapes.length && !pictures.length && !tables.length && !caps.length && !centres.length && !dbls.length && !atom && !bond;
+    const selAtoms = [...s.atoms].map((id) => this.doc.atoms.get(id)).filter((a): a is Atom => !!a);
+    const selBonds = [...s.bonds].map((id) => this.doc.bonds.get(id)).filter((b): b is Bond => !!b);
+    const several = !atom && !bond && selAtoms.length + selBonds.length > 1;
+    if (several) this.section.hidden = false;
     if (atom) this.atomControls(atom);
     if (bond) this.bondControls(bond);
+    if (several) this.structureControls(selAtoms, selBonds);
     if (arrows.length) this.arrowControls(arrows);
     if (shapes.length) this.shapeControls(shapes);
     if (pictures.length) this.pictureControls(pictures);
@@ -118,6 +144,52 @@ export class StylePanel {
     this.number('Head width (pt)', round(r.headWidth), 0.25, 0, 100, (v) => set('Arrowhead size', () => ({ headWidth: v })));
     this.number('Line width (pt)', round(r.lineWidth ?? lw), 0.1, 0.1, 20, (v) => set('Arrow line width', () => ({ lineWidth: Math.abs(v - lw) < 1e-9 ? undefined : v })));
     this.color('Colour', r.color, (v) => set('Arrow colour', () => ({ color: v })));
+    if (arrows.length === 1) this.reactionControls(r);
+  }
+
+  /** A reaction arrow's step: what its starting materials, products and conditions are, and changing them. */
+  private reactionControls(r: Arrow): void {
+    const hooks = this.reaction;
+    const roles = hooks?.roles(r.id);
+    if (!hooks || !roles) return;
+    this.heading('Reaction');
+    const names: [Role, string, string][] = [
+      ['reactants', 'Starting materials', 'starting material'], ['products', 'Products', 'product'],
+      ['above', 'Above the arrow', 'thing'], ['below', 'Below the arrow', 'thing'],
+    ];
+    const list = document.createElement('div');
+    list.className = 'style-roles';
+    for (const [k, label] of names) {
+      const n = roles[k].length;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `role-${k}`;
+      b.innerHTML = `<span class="role-dot"></span>${label}<span class="muted">${n || 'none'}</span>`;
+      b.title = n ? `Select the ${label.toLowerCase()}` : `Nothing is ${label.toLowerCase()}`;
+      b.disabled = !n;
+      b.addEventListener('click', () => hooks.select(r.id, k));
+      list.append(b);
+    }
+    this.body.appendChild(list);
+    this.note(r.step?.manual ? 'Chosen by hand.' : r.step ? 'Kept with the arrow (from the file, or when it was last tidied).' : 'Worked out from where things sit.');
+    if (hooks.others()) {
+      const opts: Opt<string>[] = [['', 'Choose…'], ['reactants', 'Starting materials'], ['products', 'Products'], ['above', 'Above the arrow'], ['below', 'Below the arrow'], ['none', 'Not part of this step']];
+      this.select('Selected things are', opts, '', (v) => { if (v) hooks.setRole(r.id, v as Role | 'none'); },);
+    } else this.note('To change a role by hand, select the arrow and the things with Shift, then choose what they are here.');
+    const buttons = document.createElement('div');
+    buttons.className = 'style-buttons';
+    const button = (text: string, title: string, on: () => void) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = text;
+      btn.title = title;
+      btn.addEventListener('click', on);
+      buttons.append(btn);
+    };
+    button('Clean Up Reaction', 'Space this step evenly: starting materials and products in line with the arrow, conditions centred on it (Ctrl+Shift+R)', () => hooks.cleanUp());
+    button('Arrange…', 'Lay the scheme out as a line, rows, a snake, down the page, a catalytic cycle or a branching tree', () => hooks.arrange());
+    if (r.step) button('Work out again', 'Forget the kept roles and work them out from where things sit', () => hooks.reset(r.id));
+    this.body.appendChild(buttons);
   }
 
   // ------------------------------------------------------------------ shapes
@@ -138,7 +210,11 @@ export class StylePanel {
     }
     const fillable = (x: Shape) => x.kind === 'rect' || x.kind === 'oval';
     const f = any(fillable);
-    if (f) this.check('Filled', !!f.filled, (v) => set('Fill', fillable, () => ({ filled: v })));
+    if (f) {
+      const now: Fill = !f.filled ? 'none' : f.fill ?? 'solid';
+      this.select('Fill', FILLS, now, (v) => set('Fill', fillable, () => (v === 'none' ? { filled: false } : { filled: true, fill: v === 'solid' ? undefined : v })));
+      if (f.filled) this.color('Fill colour', f.fillColor, (v) => set('Fill colour', fillable, () => ({ fillColor: v })), 'Same as the line');
+    }
     const box = any((x) => x.kind === 'rect');
     if (box) {
       const isBox = (x: Shape) => x.kind === 'rect';
@@ -149,7 +225,7 @@ export class StylePanel {
     }
     const br = any((x) => x.kind === 'bracket');
     if (br) this.select('Bracket', BRACKETS, br.bracket ?? 'square', (v) => set('Bracket shape', (x) => x.kind === 'bracket', () => ({ bracket: v })));
-    this.color('Colour', s.color, (v) => set('Colour', () => true, () => ({ color: v })));
+    this.color(f?.filled && f.fillColor ? 'Line colour' : 'Colour', s.color, (v) => set('Colour', () => true, () => ({ color: v })));
   }
 
   // ------------------------------------------------------------------ pictures
@@ -300,6 +376,13 @@ export class StylePanel {
     this.text('Label', a.label ?? '', a.z === 6 ? 'carbon (no label)' : 'automatic', (v) => this.edit('Label', () => this.applyLabel(a.id, v)),
       'Type a label (O, NH2, OTBS, CO2Et…); leave empty for a plain carbon.');
     this.number('Charge', a.charge, 1, -8, 8, (v) => set('Charge', { charge: v }));
+    this.color('Colour', a.color, (v) => set('Atom colour', { color: v }));
+    if (a.label || a.z !== 6 || a.showCarbon) {
+      this.select('Label runs', LABEL_DIRS, a.just, (v) => set('Label direction', { just: v }));
+    }
+    if (a.z === 6 && !a.label && this.doc.degree(a.id) > 0) {
+      this.check('Show C and its H', !!a.showCarbon, (v) => set(v ? 'Show carbon' : 'Hide carbon', { showCarbon: v || undefined }));
+    }
     this.check('Show atom number', !!a.showNumber, (v) => set(v ? 'Show atom number' : 'Hide atom number',
       v ? { showNumber: true, atomNumber: a.atomNumber || String(nextNumber(this.doc, a.id, (x) => x.atomNumber)) } : { showNumber: false }));
     if (a.showNumber || a.atomNumber) {
@@ -314,6 +397,18 @@ export class StylePanel {
     this.select('Order', BOND_ORDERS, String(b.order), (v) => set('Bond order', { order: Number(v) }));
     this.select('Style', BOND_STYLES, b.display, (v) => set('Bond style', { display: v }));
     if (b.order === 2) this.select('Second line', DOUBLE_POS, b.dpos, (v) => set('Double bond position', { dpos: v }));
+    this.color('Colour', b.color, (v) => set('Bond colour', { color: v }));
+  }
+
+  /** Several atoms and bonds: their colour (labels and lines together). */
+  private structureControls(atoms: Atom[], bonds: Bond[]): void {
+    const parts = [atoms.length && `${atoms.length} atom${atoms.length > 1 ? 's' : ''}`, bonds.length && `${bonds.length} bond${bonds.length > 1 ? 's' : ''}`].filter(Boolean);
+    this.heading(parts.join(', '));
+    const first = atoms[0]?.color ?? bonds[0]?.color;
+    this.color('Colour', first, (v) => this.edit('Colour', () => {
+      for (const a of atoms) this.doc.updateAtom(a.id, { color: v });
+      for (const b of bonds) this.doc.updateBond(b.id, { color: v });
+    }));
   }
 
   // ------------------------------------------------------------------ stereo labels
@@ -419,12 +514,9 @@ export class StylePanel {
     this.row(label, inp, help);
   }
 
-  private color(label: string, value: string | undefined, on: (v: string | undefined) => void): void {
-    const inp = document.createElement('input');
-    inp.type = 'color';
-    inp.value = value ?? '#000000';
-    inp.addEventListener('change', () => on(inp.value.toLowerCase() === '#000000' ? undefined : inp.value));
-    this.row(label, inp);
+  /** A colour row: the drawing's palette, "automatic" (black unless `auto` says otherwise), or any colour. */
+  private color(label: string, value: string | undefined, on: (v: string | undefined) => void, auto?: string): void {
+    this.row(label, colourButton(this.doc, value, (v) => on(v && v.toLowerCase() === '#000000' && !auto ? undefined : v), auto ? { autoLabel: auto } : { autoSwatch: '#000000' }));
   }
 }
 

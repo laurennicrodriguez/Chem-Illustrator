@@ -145,18 +145,39 @@
         <button role="menuitem" data-cmd="scale">Scale…</button>
         <hr />
         <button role="menuitem" data-cmd="join">Join</button>
+        <hr />
+        <button role="menuitem" data-cmd="bring-front">Bring Bond to Front</button>
+        <button role="menuitem" data-cmd="send-back">Send Bond to Back</button>
       </div>
     </div>
     <div class="menu-wrap draw-only">
       <button id="btn-structure" aria-haspopup="menu" aria-expanded="false" aria-controls="structure-menu">Structure</button>
       <div id="structure-menu" class="menu" role="menu" hidden>
         <button role="menuitem" data-cmd="clean-up">Clean Up Structure</button>
+        <button role="menuitem" data-cmd="aromatic-circles">Aromatic Rings: Circle or Double Bonds</button>
+        <button role="menuitem" data-cmd="periodic-table">Periodic Table…</button>
+        <button role="menuitem" data-cmd="contract-label">Contract Label…</button>
+        <button role="menuitem" data-cmd="define-nickname">Define Nickname…</button>
+        <button role="menuitem" data-cmd="delete-nickname">Delete Nickname…</button>
+        <button role="menuitem" data-cmd="save-template">Save as Template…</button>
+        <button role="menuitem" data-cmd="delete-template">Delete Template…</button>
+        <button role="menuitem" data-cmd="chain-ends">CH3 at Chain Ends: Show or Hide</button>
+        <button role="menuitem" data-cmd="explicit-h">H Atoms: Hide or Draw</button>
         <button role="menuitem" data-cmd="check-structure">Check Structure (next warning)</button>
         <button role="menuitem" data-cmd="stereo-labels">Show Stereo Labels (R/S, E/Z)</button>
         <button role="menuitem" data-cmd="name-to-structure">Name to Structure…</button>
         <hr />
         <button role="menuitemcheckbox" aria-checked="true" data-cmd="fixed-length"><span>Fixed Bond Lengths</span></button>
         <button role="menuitemcheckbox" aria-checked="true" data-cmd="fixed-angles"><span>Fixed Angles</span></button>
+      </div>
+    </div>
+    <div class="menu-wrap draw-only">
+      <button id="btn-scheme" aria-haspopup="menu" aria-expanded="false" aria-controls="scheme-menu">Scheme</button>
+      <div id="scheme-menu" class="menu" role="menu" hidden>
+        <button role="menuitem" data-cmd="clean-up-reaction">Clean Up Reaction</button>
+        <button role="menuitem" data-cmd="arrange-scheme">Arrange Scheme…</button>
+        <button role="menuitem" data-cmd="number-compounds">Number Compounds…</button>
+        <button role="menuitemcheckbox" aria-checked="true" data-cmd="show-roles"><span>Show Reaction Roles</span></button>
       </div>
     </div>
     <span class="sep"></span>

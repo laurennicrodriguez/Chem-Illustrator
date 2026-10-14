@@ -288,6 +288,16 @@ aside h3 { font-size: 12px; font-weight: 600; margin: 2px 0 4px; }
 label.style-row.check { display: flex; gap: 6px; }
 .style-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
 .style-buttons button { padding: 3px 8px; font-size: 12px; }
+/* a reaction arrow's roles, each with the colour it is outlined in on the drawing */
+.style-roles { display: grid; gap: 2px; margin: 2px 0 4px; }
+.style-roles button { display: flex; align-items: center; gap: 6px; padding: 3px 6px; font-size: 12px; text-align: left; background: none; border: 1px solid transparent; border-radius: 5px; color: var(--text); cursor: pointer; }
+.style-roles button:hover:not(:disabled) { border-color: var(--line); background: var(--accent-soft); }
+.style-roles button:disabled { cursor: default; opacity: 0.7; }
+.style-roles .muted { margin-left: auto; font-variant-numeric: tabular-nums; }
+.role-dot { width: 9px; height: 9px; border-radius: 2px; border: 1.5px dashed currentColor; flex: none; }
+.role-reactants .role-dot { color: #2f6fde; }
+.role-products .role-dot { color: #16955a; }
+.role-above .role-dot, .role-below .role-dot { color: #c47a00; }
 .style-row select, .style-row input[type='number'] { width: 100%; padding: 2px 4px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; }
 .style-row input[type='color'] { width: 44px; height: 22px; padding: 0 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
 aside table { border-collapse: collapse; width: 100%; }
@@ -825,3 +835,46 @@ dialog.prop-dialog { width: min(94vw, 520px); }
 .df-look { flex-wrap: wrap; padding-left: 22px; }
 .df-look button[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .df-hint { margin: 0; padding-left: 22px; font-size: 11px; }
+
+/* Scheme > Arrange: the gallery of layouts */
+dialog.arrange-dialog { width: min(94vw, 500px); margin: 64px 16px auto auto; }
+dialog.arrange-dialog::backdrop { background: transparent; }
+.arrange-opts [hidden] { display: none; }
+dialog.arrange-dialog .muted { margin: 2px 0 10px; max-width: 62ch; }
+.arrange-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.arrange-tile { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 6px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: inherit; font: inherit; cursor: pointer; }
+.arrange-tile:hover { border-color: var(--accent); }
+.arrange-tile[aria-checked='true'] { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.arrange-tile svg { width: 100%; max-width: 120px; height: auto; stroke: currentColor; stroke-width: 1.4; fill: none; }
+.arrange-tile svg marker path { fill: currentColor; stroke: none; }
+.arrange-tile svg text { font: 9px sans-serif; fill: currentColor; stroke: none; }
+.arrange-opts { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 0; }
+.arrange-opts label { display: flex; align-items: center; gap: 8px; }
+.arrange-opts input[type='number'] { width: 4.5em; font: inherit; padding: 2px 4px; }
+
+/* colour buttons and their palette */
+.colour-button { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding: 3px 8px 3px 4px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: inherit; font: inherit; cursor: pointer; }
+.colour-button > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.colour-swatch { flex: none; width: 16px; height: 16px; border: 1px solid var(--line); border-radius: 3px; }
+.colour-swatch.none { background: linear-gradient(to top right, transparent calc(50% - 1px), #d33 calc(50% - 1px), #d33 calc(50% + 1px), transparent calc(50% + 1px)), var(--panel); }
+.colour-pop { position: fixed; z-index: 60; display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 6px 20px rgb(0 0 0 / 0.18); }
+.colour-auto { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border: 1px solid transparent; border-radius: 4px; background: none; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.colour-auto:hover, .colour-auto:focus-visible { border-color: var(--accent); }
+.colour-grid { display: grid; grid-template-columns: repeat(5, 22px); gap: 5px; }
+.colour-cell { width: 22px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: 3px; cursor: pointer; }
+.colour-cell:hover, .colour-cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.colour-cell[aria-pressed='true'] { outline: 2px solid var(--text); outline-offset: 1px; }
+.colour-more { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 0.92em; }
+.colour-more input { width: 32px; height: 22px; padding: 0; border: none; background: none; }
+
+/* periodic table window: stays open beside the drawing */
+dialog.periodic-table { position: fixed; inset: 64px 16px auto auto; margin: 0; z-index: 40; width: min(94vw, 640px); padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); box-shadow: 0 8px 28px rgb(0 0 0 / 0.2); }
+.pt-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.pt-head h2 { margin: 0; font-size: 1rem; flex: 1; }
+.pt-head input { width: 9em; }
+.pt-close { border: none; background: none; color: inherit; font-size: 1.3rem; line-height: 1; cursor: pointer; }
+.pt-grid { display: grid; grid-template-columns: repeat(18, minmax(0, 1fr)); grid-template-rows: repeat(7, auto) 8px repeat(2, auto); gap: 2px; overflow-x: auto; }
+.pt-cell { position: relative; min-width: 0; aspect-ratio: 1; padding: 0; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); color: inherit; font: inherit; font-size: 0.82rem; font-weight: 600; cursor: pointer; }
+.pt-cell small { position: absolute; top: 1px; left: 2px; font-size: 0.5rem; font-weight: 400; color: var(--muted); }
+.pt-cell:hover, .pt-cell:focus-visible { border-color: var(--accent); }
+.pt-cell[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }

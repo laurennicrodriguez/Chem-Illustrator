@@ -60,7 +60,7 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = '', opts: 
     const x = (a.x - first.x) / L, y = -(a.y - first.y) / L;
     let g: MiniGraph | null = null;
     if (a.label) {
-      g = labelGraph(a.label, valenceOfBonds((doc.adj.get(id) ?? []).map((bid) => doc.bonds.get(bid)!.order)));
+      g = labelGraph(a.label, valenceOfBonds((doc.adj.get(id) ?? []).map((bid) => doc.bonds.get(bid)!).filter((b) => b.display !== 'dative').map((b) => b.order)));
       if (!g) unknown.push(a.label);
     }
     if (!g || g.atoms.length === 0) {
@@ -93,6 +93,8 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = '', opts: 
       seen.add(bid);
       const b = doc.bonds.get(bid)!;
       if (!inSet.has(b.a1) || !inSet.has(b.a2)) continue;
+      // a dative bond joins two molecules that are each whole (the formula is the same)
+      if (b.display === 'dative') continue;
       const order = b.order === 1.5 ? 4 : b.order === 2 ? 2 : b.order === 3 ? 3 : 1;
       // a stereo bond is written from the atom it describes
       const sense = stereoSense(b);

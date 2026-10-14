@@ -114,3 +114,18 @@ export function valenceExceeded(z: number, bondOrderSum: number, charge: number)
   if (max === undefined) return false;
   return Math.ceil(bondOrderSum - 1e-6) > max;
 }
+
+/** Where an element sits in the periodic table: row 1–7, or 9–10 for the f-block rows below. */
+export function tablePosition(z: number): { row: number; col: number } | null {
+  if (z < 1 || z > 118) return null;
+  const ends = [2, 10, 18, 36, 54, 86, 118];
+  const period = ends.findIndex((e) => z <= e) + 1;
+  const i = z - (period === 1 ? 0 : ends[period - 2]) - 1; // place within the period, from 0
+  if (period === 1) return { row: 1, col: i === 0 ? 1 : 18 };
+  if (period <= 3) return { row: period, col: i < 2 ? i + 1 : i + 11 };
+  if (period <= 5) return { row: period, col: i + 1 };
+  // periods 6 and 7: s-block, then the f-block (lanthanides, actinides) in its own row, then the rest
+  if (i < 2) return { row: period, col: i + 1 };
+  if (i < 17) return { row: period + 3, col: i + 1 };
+  return { row: period, col: i - 13 };
+}

@@ -6,7 +6,10 @@
 // and bond and only recomputed near what changed.
 
 import { Doc, Atom, Bond, Arrow, Caption, Shape, applyBase, type TextBase } from '../model';
-import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter } from '../geom';
+import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
+import { crossingGaps } from '../chem/crossing';
+import { FADE, tint } from '../colours';
+import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter, fromAngle } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
 import type { StructureChecks } from '../chem/warnings';
@@ -59,6 +62,8 @@ interface BondCache {
   /** Interior angles at each end on the double-bond side (for trimming the inner line). */
   trim1: number;
   trim2: number;
+  /** An aromatic bond drawn with a circle: the circles of the rings it is in. */
+  circles?: { center: Vec; radius: number }[];
 }
 
 let mctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
@@ -170,8 +175,12 @@ export class Renderer {
 
   // ------------------------------------------------------------------ caches
 
-  /** Drop cached layout and painted tiles near anything that changed since the last paint. */
-  private invalidate(doc: Doc): void {
+  /**
+   * Drop cached layout and painted tiles near anything that changed since the last paint. Also
+   * called before measuring between paints (an undo and a new layout in one go), so label sizes
+   * are never those of where atoms used to be.
+   */
+  invalidate(doc: Doc): void {
     const warned = this.checks?.update();
     if (warned?.length && this.showWarnings && !doc.allDirty) {
       // warnings that came or went (including on atoms the edit itself didn't touch)
@@ -230,7 +239,7 @@ export class Renderer {
     if (c) return c;
     const deg = doc.degree(a.id);
     const bos = doc.valenceSum(a.id);
-    const spec = a.attach ? null : labelSpec(a.z, a.label, a.charge, a.isotope, bos, deg, !a.hideCharge);
+    const spec = a.attach ? null : labelSpec(a.z, a.label, a.charge, a.isotope, bos, deg, !a.hideCharge, !!a.showCarbon);
     let layout: LabelLayout | null = null;
     const boxes: Rect[] = [];
     const k = a.s ?? 1;
@@ -251,7 +260,9 @@ export class Renderer {
     let c = this.bondCache.get(b.id);
     if (c) return c;
     c = { side: 0, trim1: 0, trim2: 0 };
-    if (b.order === 2 || b.order === 1.5) {
+    if (b.order === 1.5 && b.circle) {
+      c.circles = ringsThroughBond(doc, b.id).filter((r) => isCircleRing(doc, r)).map((r) => ringCircle(doc, r));
+    } else if (b.order === 2 || b.order === 1.5) {
       const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
       const dir = norm(sub(q, p));
       const nrm = perp(dir);
@@ -607,7 +618,7 @@ export class Renderer {
           if (f !== curFont) { ctx.font = f; curFont = f; }
           ctx.fillText(r.text, a.x + r.dx, a.y + r.dy);
         }
-      } else if (a.charge && a.z === 6 && !a.hideCharge) {
+      } else if (a.charge && a.z === 6 && !a.hideCharge, !!a.showCarbon) {
         this.drawCarbonCharge(ctx, doc, a);
       }
       if (a.showNumber && a.atomNumber) curFont = this.drawAtomNumber(ctx, doc, a, curFont);
@@ -689,14 +700,69 @@ export class Renderer {
     const dir = mul(d, 1 / l);
     const nrm = perp(dir);
     const gap = doubleBondGap(st);
-    const line = (path: Path2D, a: Vec, c: Vec) => { path.moveTo(a.x, a.y); path.lineTo(c.x, c.y); };
+    // a bond behind a bond that crosses it has a gap there
+    const gaps = crossingGaps(doc, b, ds.marginWidth * k + ds.lineWidth);
+    const pq = sub(q, p), pq2 = dot(pq, pq) || 1;
+    const along = (x: Vec) => dot(sub(x, p), pq) / pq2;
+    const line = (path: Path2D, a: Vec, c: Vec) => {
+      if (!gaps.length) { path.moveTo(a.x, a.y); path.lineTo(c.x, c.y); return; }
+      const fa = along(a), fc = along(c);
+      if (Math.abs(fc - fa) < 1e-6) {
+        // across the bond (a hash): left out if it falls in a gap
+        if (!gaps.some(([g0, g1]) => fa > g0 && fa < g1)) { path.moveTo(a.x, a.y); path.lineTo(c.x, c.y); }
+        return;
+      }
+      let from = 0;
+      const at = (t: number) => add(a, mul(sub(c, a), t));
+      for (const [g0, g1] of gaps) {
+        let t0 = (g0 - fa) / (fc - fa), t1 = (g1 - fa) / (fc - fa);
+        if (t0 > t1) [t0, t1] = [t1, t0];
+        if (t1 <= from || t0 >= 1) continue;
+        if (t0 > from) { const u = at(from), v = at(t0); path.moveTo(u.x, u.y); path.lineTo(v.x, v.y); }
+        from = Math.max(from, t1);
+      }
+      if (from < 1) { const u = at(from); path.moveTo(u.x, u.y); path.lineTo(c.x, c.y); }
+    };
     // a point of attachment: a wavy line across the end of the bond
     if (p.attach === 'Wavy') attachWave(thin, p, nrm, st.bondLength);
     if (q.attach === 'Wavy') attachWave(thin, q, nrm, st.bondLength);
 
-    if (b.order === 1 || b.order === 4) {
+    // an aromatic ring drawn with a circle: a plain line, and the stretch of each ring's circle
+    // that faces this bond
+    if (b.order === 1.5 && b.circle) {
+      line(b.display === 'bold' ? bold : thin, s, e);
+      for (const { center, radius } of this.bondInfo(doc, b).circles ?? []) {
+        const a1 = angleOf(sub(p, center)), a2 = angleOf(sub(q, center));
+        let da = a2 - a1;
+        while (da > Math.PI) da -= 2 * Math.PI;
+        while (da < -Math.PI) da += 2 * Math.PI;
+        const from = add(center, { x: Math.cos(a1) * radius, y: Math.sin(a1) * radius });
+        thin.moveTo(from.x, from.y);
+        thin.arc(center.x, center.y, radius, a1, a1 + da, da < 0);
+      }
+      return;
+    }
+
+    if (b.order === 4 && b.display !== 'dative') {
+      // four lines, evenly spaced about the bond
+      for (const k of [-1.5, -0.5, 0.5, 1.5]) line(thin, add(s, mul(nrm, gap * k)), add(e, mul(nrm, gap * k)));
+      return;
+    }
+
+    if (b.order === 1 || b.display === 'dative') {
       switch (b.display) {
         case 'solid': line(thin, s, e); break;
+        case 'dative': {
+          // a line with a filled head at the acceptor (a2)
+          const hl = Math.min(l * 0.45, st.lineWidth * 8), hw = st.lineWidth * 2.2;
+          const base = sub(e, mul(dir, hl));
+          line(thin, s, add(base, mul(dir, hl * 0.3)));
+          fills.moveTo(e.x, e.y);
+          fills.lineTo(base.x + nrm.x * hw, base.y + nrm.y * hw);
+          fills.lineTo(base.x - nrm.x * hw, base.y - nrm.y * hw);
+          fills.closePath();
+          break;
+        }
         case 'bold': line(bold, s, e); break;
         case 'dash': line(dashed, s, e); break;
         case 'wedge': {
@@ -817,7 +883,7 @@ export class Renderer {
           ctx.beginPath();
         }
         ctx.roundRect(x, y, w, h, r);
-        if (s.filled) { ctx.fillStyle = s.color ?? '#000'; ctx.fill(); } else ctx.stroke();
+        if (s.filled) fillShape(ctx, s, x, y, w, h); else ctx.stroke();
         if (s.picture) {
           ctx.fillStyle = '#eef1f5';
           ctx.fillRect(x, y, w, h);
@@ -829,7 +895,7 @@ export class Renderer {
       }
       case 'oval':
         ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
-        if (s.filled) ctx.fill(); else ctx.stroke();
+        if (s.filled) fillShape(ctx, s, x, y, w, h); else ctx.stroke();
         break;
       case 'symbol': {
         const cx = (s.x1 + s.x2) / 2, cy = (s.y1 + s.y2) / 2, r = Math.max(1.6, Math.min(w, h) / 2);
@@ -975,10 +1041,13 @@ export class Renderer {
     ctx.beginPath();
     ctx.arc(center.x, center.y, radius, a0, a1, sweep < 0);
     ctx.stroke();
-    // heads point along the arc
-    const along = (p: Vec) => { const rad = norm(sub(p, center)); return sweep < 0 ? { x: rad.y, y: -rad.x } : { x: -rad.y, y: rad.x }; };
-    this.arrowHead(ctx, head, along(head), r.headStyle, r);
-    this.arrowHead(ctx, tail, mul(along(tail), -1), r.tailStyle, r);
+    // a head points from where its base meets the arc to its tip, so on a tight curl it sits
+    // across the curve instead of sticking out along the last bit of it
+    const s = Math.sign(sweep);
+    const back = Math.min(Math.abs(sweep) / 2, (r.headLength * 0.8) / Math.max(radius, 1e-6));
+    const aim = (tip: Vec, a: number) => norm(sub(tip, add(center, fromAngle(a, radius))));
+    this.arrowHead(ctx, head, aim(head, a1 - s * back), r.headStyle, r);
+    this.arrowHead(ctx, tail, aim(tail, a0 + s * back), r.tailStyle, r);
   }
 
   private arrowHead(ctx: CanvasRenderingContext2D, tip: Vec, dir: Vec, style: Arrow['headStyle'], r: Arrow): void {
@@ -1185,3 +1254,23 @@ const WARN_COLOR = '#e0141e';
 const ATTACH_HALF = 0.6;
 const ATTACH_AMP = 0.06;
 const ATTACH_HALF_WAVES = 24;
+
+/**
+ * Fill the path just traced for a filled box or oval: evenly, with a light tint (faded), or
+ * shaded from light at the top left to the full colour. A fill colour of its own gets the
+ * outline drawn round it in the line colour.
+ */
+function fillShape(ctx: CanvasRenderingContext2D, s: Shape, x: number, y: number, w: number, h: number): void {
+  const c = s.fillColor ?? s.color ?? '#000000';
+  if (s.fill === 'faded') ctx.fillStyle = tint(c, FADE);
+  else if (s.fill === 'shaded') {
+    const g = s.kind === 'oval'
+      ? ctx.createRadialGradient(x + w * 0.35, y + h * 0.3, 0, x + w / 2, y + h / 2, Math.max(w, h) * 0.6)
+      : ctx.createLinearGradient(x, y, x + w, y + h);
+    g.addColorStop(0, tint(c, 0.85));
+    g.addColorStop(1, c);
+    ctx.fillStyle = g;
+  } else ctx.fillStyle = c;
+  ctx.fill();
+  if (s.fillColor && s.fillColor.toLowerCase() !== (s.color ?? '#000000').toLowerCase()) ctx.stroke();
+}
