@@ -247,6 +247,36 @@ export interface Caption {
   ph?: Placeholder;
   /** Height of a placeholder's box, in points (its top is the top of the first line). */
   boxH?: number;
+  /** Tied to a structure: it keeps its place beside it when the structure moves or changes. */
+  attach?: Attachment;
+}
+
+/** Which side of its structure an attached caption sits on. */
+export type AttachSide = 'below' | 'above' | 'left' | 'right';
+
+/** What an attached caption shows about its structure (Analysis > Attach descriptors). */
+export type DescriptorKey = 'formula' | 'exact' | 'mw' | 'mz' | 'ea' | 'hrms';
+
+/**
+ * A caption tied to a structure: an ID label, a caption, or its descriptors (formula, masses…),
+ * which are worked out again when the structure changes.
+ */
+export interface Attachment {
+  /** The structure's atoms (any one still there finds it). */
+  atoms: number[];
+  side: AttachSide;
+  /** Space between the structure and the caption, in points. */
+  gap: number;
+  /** How far it sits off the middle of that side (across for below and above, down for left and right), in points. */
+  shift: number;
+  role: 'label' | 'caption' | 'descriptors';
+  /** For descriptors: what is shown, in order, and the ion for m/z and HRMS. */
+  show?: DescriptorKey[];
+  adduct?: string;
+  /** For descriptors: the structure as it was when they were worked out (they are redone when it changes). */
+  sig?: string;
+  /** For descriptors: keep the text as it is (typed over by hand) instead of working it out again. */
+  keepText?: boolean;
 }
 
 export type ArrowHead = 'none' | 'full' | 'halfLeft' | 'halfRight';
@@ -579,6 +609,35 @@ export class Doc {
     } finally {
       if (!outer) this.commit();
     }
+  }
+
+  /**
+   * Changes worked out after the last step finished (a caption's masses, from the chemistry
+   * engine): they join that step, so one undo takes back both. With nothing to join, they make
+   * a step of their own.
+   */
+  amend(label: string, fn: () => void): void {
+    if (this.tx) { fn(); return; }
+    const last = this.undoStack[this.undoStack.length - 1];
+    this.begin(label);
+    const tx = this.tx!;
+    try {
+      fn();
+      if (tx.before.size && this.beforeCommit) this.beforeCommit(new Map(tx.before));
+    } finally {
+      this.tx = null;
+    }
+    if (!tx.before.size) return;
+    if (!last) {
+      for (const key of tx.before.keys()) tx.after.set(key, this.snapshot(key));
+      this.undoStack.push(tx);
+    } else {
+      for (const [key, was] of tx.before) {
+        if (!last.before.has(key)) last.before.set(key, was);
+        last.after.set(key, this.snapshot(key));
+      }
+    }
+    this.onCommit?.();
   }
 
   canUndo(): boolean { return this.undoStack.length > 0; }

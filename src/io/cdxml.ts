@@ -3,6 +3,7 @@
 // charge symbols). Anything not understood yet is counted and skipped, never fatal.
 
 import { fillFrameMembers, frameFromTag } from '../editor/frames';
+import { ATTACH_TAG, attachFromTag, fillAttachments } from '../editor/attached';
 import { attachRingFills } from '../chem/ring-fill';
 import { lipDirection } from '../chem/polymer';
 import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, CHIRAL_FLAGS } from '../model';
@@ -334,6 +335,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     if (wrap !== undefined) extra.wrap = wrap;
     if (back.paras) extra.paras = back.paras;
     if (back.lineSpacing) { extra.lineSpacing = back.lineSpacing; lineHeight = undefined; }
+    const attach = attachFromTag(kids(t).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === ATTACH_TAG)?.getAttribute('Value') ?? null);
+    if (attach) extra.attach = attach;
     return { x, y: py, runs: back.runs, justify, width, lineHeight, ...extra };
   };
 
@@ -703,6 +706,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     }
     attachRingFills(doc);
     fillFrameMembers(doc);
+    fillAttachments(doc);
   });
   doc.reserveIds(maxId);
   const orig = new Map<string, Entity>();

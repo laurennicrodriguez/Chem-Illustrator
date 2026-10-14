@@ -3,7 +3,9 @@
 // bond (label, charge, atom number; order and style).
 // Anything the drawing tools set automatically can be changed here by hand.
 
-import { Doc, Arrow, Shape, Caption, Atom, Bond, type StepRoles, type Pattern } from '../model';
+import { Doc, Arrow, Shape, Caption, Atom, Bond, type StepRoles, type Pattern, type AttachSide, type Attachment, type DescriptorKey } from '../model';
+import { DESCRIPTORS } from './analysis-panel';
+import { COMMON_ADDUCTS } from '../chem/hrms';
 import { PATTERNS, patternSpacing } from '../render/fills';
 import type { Role } from '../chem/reaction';
 import { setStereoShown, setStereoText } from '../chem/stereo';
@@ -53,6 +55,7 @@ const LINES: Opt<Arrow['line']>[] = [['solid', 'Solid'], ['dashed', 'Dashed'], [
 const SHAFTS: Opt<string>[] = [['one', 'One line'], ['equilibrium', 'Equilibrium (two half arrows)'], ['retro', 'Retrosynthetic (double line)']];
 const BRACKETS: Opt<NonNullable<Shape['bracket']>>[] = [['square', 'Square [ ]'], ['round', 'Round ( )'], ['curly', 'Curly { }']];
 const VALIGN: Opt<NonNullable<Shape['textValign']>>[] = [['top', 'Top'], ['middle', 'Middle'], ['bottom', 'Bottom']];
+const SIDES: Opt<AttachSide>[] = [['below', 'Below'], ['above', 'Above'], ['left', 'Left'], ['right', 'Right']];
 const JUSTIFY: Opt<Caption['justify']>[] = [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']];
 const TABLE_LINES: Opt<TableData['lines']>[] = [['acs', 'ACS style (rules above and below the headings, and at the end)'], ['grid', 'Every cell boxed'], ['none', 'None']];
 
@@ -90,6 +93,8 @@ export class StylePanel {
   tables: TableHooks | null = null;
   /** Reaction step commands (set up by the app). */
   reaction: ReactionHooks | null = null;
+  /** Tie captions to the structure nearest each (Tie to Structure). */
+  tie: ((captionIds: number[]) => void) | null = null;
 
   constructor(private section: HTMLElement, private body: HTMLElement, private doc: Doc, private sel: () => Selection, private changed: () => void) {}
 
@@ -477,6 +482,62 @@ export class StylePanel {
     whole('Formula style (CH₃, NH₄⁺)', 'formula');
     this.select('Line up', JUSTIFY, c.justify, (v) => set('Justification', () => ({ justify: v })));
     this.color('Colour', c.runs[0]?.color, (v) => set('Text colour', (x) => ({ runs: x.runs.map((r) => ({ ...r, color: v })) })));
+    this.attachControls(caps);
+  }
+
+  /** Where a caption tied to a structure sits, what descriptors it shows; tie or untie it. */
+  private attachControls(caps: Caption[]): void {
+    const tied = caps.filter((x) => x.attach);
+    const loose = caps.filter((x) => !x.attach);
+    let row: HTMLDivElement | null = null;
+    const button = (text: string, help: string, on: () => void) => {
+      if (!row) { row = document.createElement('div'); row.className = 'style-buttons'; }
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = text;
+      b.title = help;
+      b.addEventListener('click', on);
+      row.append(b);
+      this.body.appendChild(row);
+    };
+    if (!tied.length) {
+      if (this.tie) button('Tie to nearest structure', 'Keep this caption beside the structure nearest it: it follows when the structure moves', () => this.tie?.(loose.map((x) => x.id)));
+      return;
+    }
+    const a = tied[0].attach!;
+    const setA = (label: string, patch: (x: Attachment) => Partial<Attachment>) =>
+      this.edit(label, () => { for (const x of tied) this.doc.updateCaption(x.id, { attach: { ...x.attach!, ...patch(x.attach!) } }); });
+    this.heading(a.role === 'descriptors' ? 'Tied descriptors' : a.role === 'label' ? 'Tied ID label' : 'Tied to its structure');
+    // text beside a structure lines up towards it; above and below, centred (Line up changes it back)
+    this.select<AttachSide>('Sits', SIDES, a.side, (v) => this.edit('Caption side', () => {
+      for (const x of tied) this.doc.updateCaption(x.id, { attach: { ...x.attach!, side: v, shift: 0 }, justify: v === 'right' ? 'left' : v === 'left' ? 'right' : 'center' });
+    }));
+    this.number('Gap (pt)', round(a.gap, 10), 0.5, -200, 500, (v) => setA('Caption gap', () => ({ gap: v })),
+      'Space between the structure (with its atom labels) and the caption. You can also drag the caption.');
+    this.number('Shift (pt)', round(a.shift, 10), 0.5, -1000, 1000, (v) => setA('Caption shift', () => ({ shift: v })),
+      'How far off the middle of its side: across for below and above, down for left and right. 0 centres it.');
+    const desc = tied.filter((x) => x.attach!.role === 'descriptors');
+    if (desc.length) {
+      const show = new Set<DescriptorKey>(desc[0].attach!.show ?? []);
+      for (const d of DESCRIPTORS) {
+        this.check(d.label, show.has(d.key), (v) => setA(`Show ${d.label.toLowerCase()}`, (x) => {
+          if (x.role !== 'descriptors') return {};
+          const now = new Set(x.show ?? []);
+          if (v) now.add(d.key); else now.delete(d.key);
+          // keep the usual order; the text is worked out again
+          return { show: DESCRIPTORS.map((y) => y.key).filter((k) => now.has(k)), sig: undefined, keepText: undefined };
+        }));
+      }
+      const ions: Opt<string>[] = COMMON_ADDUCTS.map((x) => [x, x]);
+      const ion = desc[0].attach!.adduct ?? '[M+H]+';
+      if (!COMMON_ADDUCTS.includes(ion)) ions.push([ion, ion]);
+      this.select('Ion (m/z, HRMS)', ions, ion, (v) => setA('Ion', (x) => (x.role === 'descriptors' ? { adduct: v, sig: undefined, keepText: undefined } : {})));
+      this.check('Update when the structure changes', !desc[0].attach!.keepText, (v) => setA(v ? 'Update descriptors' : 'Keep descriptor text', (x) => (x.role === 'descriptors' ? { keepText: v ? undefined : true, sig: v ? undefined : x.sig } : {})),
+        'Turn off to keep the text as it is, for instance after typing over it by hand.');
+    }
+    button('Untie from structure', 'Leave the caption where it is as ordinary text: it no longer follows the structure', () =>
+      this.edit('Untie caption', () => { for (const x of tied) this.doc.updateCaption(x.id, { attach: undefined }); }));
+    if (loose.length && this.tie) button('Tie the others too', 'Tie the selected captions that are loose to the structure nearest each', () => this.tie?.(loose.map((x) => x.id)));
   }
 
   // ------------------------------------------------------------------ building blocks

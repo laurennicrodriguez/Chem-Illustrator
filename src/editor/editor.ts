@@ -30,6 +30,7 @@ import { bondLayer, crossingBonds } from '../chem/crossing';
 import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
 import { pushArrow, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
 import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
+import { refitAttached } from './attached';
 import { frameAround, frameBox, frameMembers, refitFrames, defaultPad, thingsInside } from './frames';
 import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, rotation, mirrorX, mirrorY } from './arrange';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
@@ -266,10 +267,12 @@ export class Editor {
     window.addEventListener('keydown', (e) => this.onKey(e));
     // frames that follow what they surround are refitted as each change finishes
     doc.beforeCommit = (before) => {
-      let frames = false, rings = false;
+      let frames = false, rings = false, tied = false;
       for (const s of this.doc.shapes.values()) { if (s.frame?.fit) frames = true; if (s.kind === 'ring') rings = true; }
-      // ring fills first: a frame round a structure takes in its ring fills' new places
+      for (const c of this.doc.captions.values()) if (c.attach) { tied = true; break; }
+      // ring fills first, then labels beside their structures: a frame round a structure takes in both
       if (rings) refitRingFills(this.doc, before);
+      if (tied) refitAttached(this.doc, before, this.measure());
       if (frames) refitFrames(this.doc, before, this.measure());
     };
   }

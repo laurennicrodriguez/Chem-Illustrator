@@ -16,6 +16,7 @@ import { arialWidth } from '../text-metrics';
 import { toSymbolPieces, isSymbolFont, faceFromStyle } from '../richtext';
 import { layoutText, SINGLE } from '../text/layout';
 import { runsForChemDraw, TEXT_TAG } from '../text/chemdraw-text';
+import { ATTACH_TAG, attachTag } from '../editor/attached';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { fromDataUrl } from '../render/images';
 import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, GROUP_TAG, GEO_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG } from './cdxml';
@@ -944,7 +945,7 @@ class CdxmlWriter {
 
   private fillCaption(t: Element, c: Caption): void {
     for (const ch of kids(t)) {
-      if (ch.nodeName === 's' || (ch.nodeName === 'objecttag' && ch.getAttribute('Name') === TEXT_TAG)) t.removeChild(ch);
+      if (ch.nodeName === 's' || (ch.nodeName === 'objecttag' && (ch.getAttribute('Name') === TEXT_TAG || ch.getAttribute('Name') === ATTACH_TAG))) t.removeChild(ch);
     }
     const def = this.doc.style.captionSize;
     // lists and paragraph formatting are written as ChemDraw can show them, with a tag to read them back
@@ -963,6 +964,7 @@ class CdxmlWriter {
       }
     }
     if (tag) t.appendChild(this.el('objecttag', { TagType: 'String', Name: TEXT_TAG, Value: JSON.stringify(tag), Visible: 'no' }));
+    if (c.attach) t.appendChild(this.el('objecttag', { TagType: 'String', Name: ATTACH_TAG, Value: attachTag(c.attach), Visible: 'no' }));
     const fixed = c.lineHeight ?? (c.lineSpacing && c.lineSpacing !== 1 ? SINGLE * c.lineSpacing * maxSize : undefined);
     // the text as it is drawn: wrapped to the box with the app's text widths (Arial's by default)
     const lay = layoutText({ runs, justify: c.justify, wrap: c.wrap, width: c.width, lineHeight: fixed }, def, this.opts.textMeasure ?? ((text, size, _f, style) => arialWidth(text, size, /bold/.test(style))));

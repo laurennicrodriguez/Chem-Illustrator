@@ -8,7 +8,7 @@ import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
 import { Toolboxes, lockIcon, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
-import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS } from './model';
+import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS, type Attachment } from './model';
 import { Renderer, measureText } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
 import type { Align } from './editor/arrange';
@@ -16,7 +16,8 @@ import { readCdxml, ReadStats } from './io/cdxml';
 import { ChemClient } from './chem/client';
 import type { FragmentResult } from './worker/chem-worker';
 import { COMMON_ADDUCTS } from './chem/hrms';
-import { analysisHtml, analysisRuns, withRepeats, polymerHtml, type RepeatUnit } from './ui/analysis-panel';
+import { analysisHtml, analysisRuns, withRepeats, polymerHtml, descriptorRuns, DEFAULT_DESCRIPTORS, type RepeatUnit } from './ui/analysis-panel';
+import { attachedAtoms, attachWhereItIs, defaultGap, nearestStructure, placeAttached, structureSig } from './editor/attached';
 import { repeatGroups, lipDirection } from './chem/polymer';
 import { rGroupsOf, substituted, rowNumbers, parseRows, rGroupCells, type RowMass } from './chem/rgroup';
 import type { Vec } from './geom';
@@ -2199,6 +2200,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
   'arrange-scheme': () => arrangeDialog.open(),
   'number-compounds': () => void numberCompounds(),
+  'attach-descriptors': () => void attachDescriptors(),
   'bring-front': () => editor.setBondLayer(true) || flash('Select the bond to bring to the front (where bonds cross, the one behind has a gap).'),
   'send-back': () => editor.setBondLayer(false) || flash('Select the bond to send to the back (where bonds cross, the one behind has a gap).'),
   'save-template': () => void saveTemplate(),
@@ -2934,6 +2936,7 @@ $('#analysis-body').addEventListener('click', (e) => {
   if (!b || !lastAnalysis) return;
   const [kind, n] = b.dataset.insert!.split(':');
   const r = lastAnalysis.results[Number(n)], frag = lastAnalysis.frags[Number(n)];
+  if (kind === 'formula') { if (frag) void attachDescriptors([frag]); return; }
   const runs = r && analysisRuns(kind as 'formula' | 'hrms' | 'ea', r, adductSel.value);
   if (!runs || !frag) return;
   // under the structure, lined up with its left edge
@@ -2950,6 +2953,89 @@ $('#analysis-body').addEventListener('click', (e) => {
 });
 let analysisSeq = 0;
 let analysisKey = '';
+
+// ---------------------------------------------------------------- captions tied to structures
+
+/** The structures to work on: those with atoms selected, else the one last drawn on. */
+function chosenStructures(): Set<number>[] {
+  const roots = editor.sel.atoms.size ? [...editor.sel.atoms] : editor.lastEdited !== null && doc.atoms.has(editor.lastEdited) ? [editor.lastEdited] : [];
+  const out: Set<number>[] = [];
+  const seen = new Set<number>();
+  for (const r of roots) {
+    if (seen.has(r)) continue;
+    const f = doc.fragmentOf(r);
+    for (const x of f) seen.add(x);
+    out.push(f);
+  }
+  return out;
+}
+
+/** A structure's formula and masses from the chemistry engine (null when it can't be worked out). */
+async function weigh(atoms: Set<number>): Promise<FragmentResult | null> {
+  if (!chem.ready || !atoms.size) return null;
+  const ex = toMolfile(doc, atoms);
+  const res = await chem.analyze([{ molblock: ex.molblock, map: ex.map }]).catch(() => null);
+  const r = res?.results[0];
+  return r && !r.error ? r : null;
+}
+
+/**
+ * Structure > Attach Descriptors (and the Analysis panel's button): the formula and masses under
+ * each structure, tied to it. They follow it, and are worked out again when it changes; the Style
+ * panel chooses what they show and where they sit.
+ */
+async function attachDescriptors(frags = chosenStructures()): Promise<void> {
+  if (!frags.length) { flash('Select a structure first.'); return; }
+  if (!chem.ready) { flash('The chemistry engine is still loading. Try again in a moment.'); return; }
+  const made: number[] = [];
+  const weighed = await Promise.all(frags.map((f) => weigh(f)));
+  doc.edit('Attach descriptors', () => {
+    frags.forEach((f, i) => {
+      const r = weighed[i];
+      if (!r) return;
+      const adduct = adductSel.value;
+      const runs = descriptorRuns(r, DEFAULT_DESCRIPTORS, adduct);
+      const attach: Attachment = { atoms: [...f], side: 'below', gap: defaultGap(doc), shift: 0, role: 'descriptors', show: [...DEFAULT_DESCRIPTORS], adduct, sig: structureSig(doc, f) };
+      const c = doc.addCaption({ x: 0, y: 0, runs, justify: 'center', attach });
+      placeAttached(doc, c, editor.measure());
+      made.push(c.id);
+    });
+  });
+  if (!made.length) { flash('Couldn\'t work out the formula of that structure.'); return; }
+  editor.clearSelection();
+  for (const id of made) editor.sel.captions.add(id);
+  editor.changed();
+  flash('Attached the formula and masses. They follow the structure and update when it changes; choose what they show in the Style panel.', 7000);
+}
+
+let descriptorBusy = false, descriptorAgain = false;
+/** Work out tied descriptors again for structures that changed (the new text joins the change that caused it). */
+async function refreshDescriptors(): Promise<void> {
+  if (descriptorBusy) { descriptorAgain = true; return; }
+  descriptorBusy = true;
+  try {
+    do {
+      descriptorAgain = false;
+      for (const c of [...doc.captions.values()]) {
+        const a = c.attach;
+        if (a?.role !== 'descriptors' || a.keepText) continue;
+        const atoms = attachedAtoms(doc, a);
+        const sig = structureSig(doc, atoms);
+        if (!atoms.size || sig === a.sig) continue;
+        const version = doc.version;
+        const r = await weigh(atoms);
+        // something else changed meanwhile: look again from the start
+        if (doc.version !== version) { descriptorAgain = true; break; }
+        const now = doc.captions.get(c.id);
+        if (!r || !now?.attach) continue;
+        doc.amend('Descriptors', () => doc.updateCaption(c.id, { runs: descriptorRuns(r, now.attach!.show ?? DEFAULT_DESCRIPTORS, now.attach!.adduct ?? adductSel.value), attach: { ...now.attach!, sig } }));
+        editor.changed();
+      }
+    } while (descriptorAgain);
+  } finally {
+    descriptorBusy = false;
+  }
+}
 
 function scheduleAnalysis(force = false): void {
   clearTimeout(analysisTimer);
@@ -3322,6 +3408,24 @@ function updatePanels(): void {
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
+stylePanel.tie = (ids) => tieCaptions(ids);
+
+/** Tie captions to the structure nearest each, where they sit now (Style panel). */
+function tieCaptions(ids: number[]): void {
+  const m = editor.measure();
+  let n = 0;
+  doc.edit('Tie caption to structure', () => {
+    for (const id of ids) {
+      const c = doc.captions.get(id);
+      if (!c) continue;
+      const f = nearestStructure(doc, m.captionBox(c), m);
+      const a = f && attachWhereItIs(doc, c, f, m, 'caption');
+      if (a) { doc.updateCaption(id, { attach: a }); n++; }
+    }
+  });
+  editor.changed();
+  flash(n ? 'Tied: the caption now follows its structure.' : 'There is no structure to tie it to.');
+}
 // ---------------------------------------------------------------- right-click menu on the drawing
 
 /**
@@ -3372,6 +3476,8 @@ function drawingMenu(): MenuItem[] {
     ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] }] : []),
     null,
     { cmd: 'add-frame' },
+    ...(atoms ? [{ cmd: 'attach-descriptors' }] : []),
+    { cmd: 'scale' },
     ...(atoms ? [{ label: 'Highlight and Fill', items: [{ cmd: 'highlight' }, { cmd: 'remove-highlight' }, null, { cmd: 'fill-rings' }] }] : []),
     { label: 'Align', items: arrange },
     { label: 'Rotate or Flip', items: turn },
@@ -3613,7 +3719,7 @@ editor.onFrame = () => {
   updateWarnings();
   if (doc.version !== stereoSeen) { stereoSeen = doc.version; updateStereo(); }
 };
-editor.onChange = () => { updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); };
+editor.onChange = () => { updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); void refreshDescriptors(); };
 chem.onReady = () => {
   (window as any).__chemReadyMs = performance.now() - startMs;
   sheetChem.flush();
