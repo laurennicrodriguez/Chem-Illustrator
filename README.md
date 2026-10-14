@@ -24,17 +24,21 @@ You need Node.js once. Everything else is installed into this folder.
    ```
    Then open the address it prints, usually <http://localhost:5173>, in Chrome or Edge. Press Ctrl+C in the terminal to stop it.
 
-## Desktop app (Windows)
+## Desktop app (Windows, macOS, Linux)
 
-Download the newest installer from the repository's **Releases** (on the right of the repository's GitHub page): the file whose name ends in `setup.exe`. The installer is not signed with a Windows certificate, so Windows will say "Windows protected your PC"; click **More info**, then **Run anyway**.
+Download the newest installer from the repository's **Releases** (on the right of the repository's GitHub page):
+
+- **Windows:** the file ending in `x64-setup.exe`. The installer is not signed with a Windows certificate, so Windows will say "Windows protected your PC"; click **More info**, then **Run anyway**.
+- **macOS** (Apple silicon and Intel, macOS 11 or newer): the file ending in `universal.dmg`. Open it and drag Chem Illustrator to Applications. The app is not signed with an Apple Developer certificate, so the first time macOS says it can't check it: open **System Settings ▸ Privacy & Security**, scroll down and click **Open Anyway** next to Chem Illustrator (on older macOS, right-click the app and choose **Open**). If macOS instead says the app "is damaged", run `xattr -cr "/Applications/Chem Illustrator.app"` in Terminal once.
+- **Linux:** the `.AppImage` runs on most distributions (make it executable, then double-click it), and keeps itself up to date; the `.deb` (Ubuntu, Debian) and `.rpm` (Fedora) install it like any other package, and are updated by downloading the newer one.
 
 Once installed, the app looks for a newer version a few seconds after it starts and offers to install it (turn this off in **Edit ▸ Preferences**; **File ▸ Check for Updates…** looks at any time). Updates are checked against a signing key before they install, so only releases built from this repository are accepted.
 
 ### How releases are made
 
-Every merge into `main` builds the Windows installer, runs the app's self-test, and publishes the installer as a release numbered 0.1.*build number*, with a `latest.json` file that the app's update check reads (`.github/workflows/desktop.yml`, `scripts/release.mjs`). This needs the update signing key saved as a repository secret named `TAURI_SIGNING_PRIVATE_KEY` (**Settings ▸ Secrets and variables ▸ Actions**). Its public half is in `src-tauri/tauri.conf.json`. Keep a copy of the private key somewhere safe: if it is lost, a new key can be made, but copies installed before the change won't accept updates and need installing once by hand. Without the secret the build still runs, and the installer is kept for a week under the run in the **Actions** tab instead of being published.
+Every merge into `main` builds the installers for Windows, macOS and Linux, runs the app's self-test on Windows, and publishes them as a release numbered 0.1.*build number*, with a `latest.json` file that the app's update check reads (`.github/workflows/desktop.yml`, `scripts/release.mjs`). This needs the update signing key saved as a repository secret named `TAURI_SIGNING_PRIVATE_KEY` (**Settings ▸ Secrets and variables ▸ Actions**). Its public half is in `src-tauri/tauri.conf.json`. Keep a copy of the private key somewhere safe: if it is lost, a new key can be made, but copies installed before the change won't accept updates and need installing once by hand. Without the secret the builds still run, and the installers are kept for a week under the run in the **Actions** tab instead of being published. Builds cost nothing while the repository is public; if it is made private, only Windows is built unless a run is started by hand.
 
-To build it on your own computer you also need Rust (from [rustup.rs](https://rustup.rs)) and the Microsoft C++ Build Tools that the Rust installer offers. Then:
+To build it on your own computer you also need Rust (from [rustup.rs](https://rustup.rs)) and, on Windows, the Microsoft C++ Build Tools that the Rust installer offers (on macOS, Xcode's command line tools; on Linux, the WebKitGTK packages listed in the workflow). Then:
 ```
 npm run desktop          # opens the desktop app; it reloads as the code changes
 npm run desktop:build    # makes the installers in src-tauri/target/release/bundle/
@@ -44,6 +48,10 @@ npm run desktop:build    # makes the installers in src-tauri/target/release/bund
 
 - Point at an atom or bond and press a hotkey, as in ChemDraw: `1 1 1` grows a chain, `6` adds cyclohexane, `a` on a bond fuses benzene, `o` makes an O, `Shift+O` makes OMe. The Help button lists them all.
 - **Workspaces** (desktop app): **File ▸ Save Workspace** saves every open tab together in a folder you pick, with a small `.ciworkspace` file listing the tabs, their order and any split view. **File ▸ Open Workspace** (or opening the `.ciworkspace` file) opens them all again. Tabs never saved go into the folder; files kept in other folders can be copied in or left where they are.
+- **Search** (top bar, or Alt+Q): type a few letters of what you want to do (bold, wedge, number compounds, transitions…) and press Enter. It finds every menu command, the buttons of the ribbon showing and the drawing tools, with their keys.
+- **File ▸ Recent** (desktop app): the last ten files and workspaces opened or saved, at the top of the File menu.
+- **File ▸ Print** (Ctrl+P): a drawing on Letter or A4 at its own size or as large as fits; slides one to a page or as handouts (2, 3 with lines for notes, 4, 6 or 9 to a page); documents page by page; sheets (all or the selected cells, with or without gridlines). The system's Print window then picks the printer and copies, and can save a PDF.
+- **Slide ▸ Presenter View** (Alt+F5): the slides fill the second screen (the projector) while your screen shows the slide on show, the next one, your speaker notes (A− and A+ size them), a timer you can pause and the clock. With one screen the audience's slides open in a window of their own that can be dragged to a projector.
 - **File ▸ Open** (Ctrl+O) a ChemDraw `.cdxml` file, or drop one onto the drawing. Edit it and **Save** (Ctrl+S): only what you changed is rewritten, so everything else in the file stays exactly as ChemDraw wrote it. **Save As** (Ctrl+Shift+S) saves a copy; new drawings are saved as `.cdxml` too.
 - **Edit ▸ Copy** (Ctrl+C) copies the selection, or the whole drawing when nothing is selected. In the Windows app, paste it into ChemDraw as structures, or into Word or PowerPoint as a sharp picture that stays crisp when enlarged; in a browser it is copied as a high-resolution picture. **Paste** (Ctrl+V) takes drawings copied here or in ChemDraw (Windows app), or a SMILES string or molfile. **Cut** is Ctrl+X.
 - **File ▸ Export Molfile** saves the selected structures (or all of them) as a `.mol` file; **Edit ▸ Copy as SMILES** (Ctrl+Alt+C) copies them as SMILES text.

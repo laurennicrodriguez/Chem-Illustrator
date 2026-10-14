@@ -1451,3 +1451,6 @@ dialog.command-search .cs-foot { margin: 8px 2px 0; }
 .pv-notes.muted { color: #6f7787; }
 .pv-bottom { justify-content: center; }
 .pv-count { min-width: 16em; text-align: center; color: #c6cbd4; font-variant-numeric: tabular-nums; }
+/* narrow windows: the search box gives up its key, then the app's name goes, before anything wraps */
+@media (max-width: 1240px) { .search-box { min-width: 0; } .search-box kbd { display: none; } }
+@media (max-width: 1100px) { header h1.app-name { display: none; } }
