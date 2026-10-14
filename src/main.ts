@@ -13,6 +13,8 @@ import type { FragmentResult } from './worker/chem-worker';
 import { COMMON_ADDUCTS } from './chem/hrms';
 import { analysisHtml, analysisRuns, withRepeats, polymerHtml, type RepeatUnit } from './ui/analysis-panel';
 import { repeatGroups, lipDirection } from './chem/polymer';
+import { rGroupsOf, substituted, rowNumbers, parseRows, rGroupCells, type RowMass } from './chem/rgroup';
+import type { Vec } from './geom';
 import { captionPlaces, fragmentRuns } from './chem/fragments';
 import { toMolfile, addMolfile } from './chem/molfile';
 import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -416,12 +418,12 @@ function pasteTable(rows: PastedRows): void {
 const textMeasure = (t: string, size: number, family: string, style: string) => measureText(t, size, family, style);
 
 /** Put a table in the middle of the window (or slide), selected. */
-function placeTable(t: TableData, label: string): number {
+function placeTable(t: TableData, label: string, top?: Vec): number {
   finishTyping();
   renderer.useStyle(doc);
   const lay = renderer.tableLayout(t);
-  const c = pasteCentre();
-  const x1 = c.x - lay.width / 2, y1 = c.y - lay.height / 2;
+  const c = top ?? pasteCentre();
+  const x1 = c.x - lay.width / 2, y1 = top ? top.y : c.y - lay.height / 2;
   let id = 0;
   doc.edit(label, () => { id = doc.addShape({ kind: 'table', x1, y1, x2: x1 + lay.width, y2: y1 + lay.height, table: t }).id; });
   editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set([id]) };
@@ -1863,6 +1865,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'stereo-labels': () => toggleStereoLabels(),
   'enhanced-stereo': () => { void setStereoGroup(); },
   'chiral-flag': () => { void setChiralFlag(); },
+  'rgroup-table': () => { void rGroupTable(); },
   'repeat-group': () => { void setRepeatGroup(); },
   'name-to-structure': () => nameToStructure(),
   'clipboard-formats': async () => {
@@ -2364,6 +2367,57 @@ async function setRepeatGroup(): Promise<void> {
     else if (!g.inner.length) flash('There are no atoms between these brackets.');
     else flash(`${g.inner.length} atom${g.inner.length === 1 ? '' : 's'} in the repeat unit, joined by ${g.crossing.length} bond${g.crossing.length === 1 ? '' : 's'} crossing the brackets.`);
   }
+}
+
+let rGroupLast = { rows: '', prefix: '', cols: 'formula-mw', extra: 'Yield (%)' };
+
+/**
+ * Structure > R-Group Table: a table under a core structure with R groups (R1, R2…) listing what
+ * each group is in each compound, with each compound's number, formula and mass worked out by
+ * putting its groups in place. The result is an ordinary table, so anything in it can be typed over.
+ */
+async function rGroupTable(): Promise<void> {
+  const root = editor.sel.atoms.size ? [...editor.sel.atoms][0] : editor.lastEdited;
+  if (root === null || !doc.atoms.has(root)) { flash('Select a structure with R groups (R1, R2, X…) first.'); return; }
+  const ids = [...doc.fragmentOf(root)];
+  const groups = rGroupsOf(doc, ids);
+  if (!groups.length) { flash('This structure has no R groups. Type R1, R2… (or R, X, Ar) as atom labels where the groups go.'); return; }
+  const labels = groups.map((g) => g.label);
+  const got = await ask('R-group table', [
+    { name: 'rows', label: `One compound per line: ${labels.join(', ')}`, value: rGroupLast.rows, type: 'textarea', placeholder: labels.map((_, i) => ['Me', 'H', 'Ph', 'OMe'][i % 4]).join(', ') + '\n' + labels.map((_, i) => ['OMe', 'Cl', 'CF3', 'Et'][i % 4]).join(', ') },
+    { name: 'prefix', label: 'Compound number', value: rGroupLast.prefix, placeholder: 'e.g. 2 for 2a, 2b…' },
+    { name: 'cols', label: 'Worked out', value: rGroupLast.cols, options: [
+      { value: 'formula-mw', label: 'Formula and MW' },
+      { value: 'formula-mw-exact', label: 'Formula, MW and exact mass' },
+      { value: 'none', label: 'Nothing' },
+    ] },
+    { name: 'extra', label: 'Columns to fill in', value: rGroupLast.extra, placeholder: 'e.g. Yield (%), ee (%)' },
+  ], { ok: 'Make table', note: 'Type each compound\'s groups the way you would label an atom (Me, Ph, OMe, CO2Et, Cl, H), separated by commas, or paste cells from Excel. Start a line with #number (#12, Me, H) to give that compound its own number.' });
+  if (!got) return;
+  rGroupLast = { rows: got.rows, prefix: got.prefix, cols: got.cols, extra: got.extra };
+  const parsed = parseRows(got.rows, labels);
+  if (!parsed.length) { flash('Type at least one compound\'s groups.'); return; }
+  const numbers = rowNumbers(parsed.length, got.prefix);
+  const rows = parsed.map((r, i) => ({ number: r.number ?? numbers[i], values: r.values }));
+  const cols = { formula: got.cols !== 'none', mw: got.cols !== 'none', exact: got.cols === 'formula-mw-exact', extra: got.extra.split(',').map((e) => e.trim()).filter((e) => e) };
+  let masses: RowMass[] = rows.map(() => null);
+  if (cols.formula) {
+    const mols = rows.map((r) => substituted(doc, ids, Object.fromEntries(labels.map((l, k) => [l, r.values[k]]))));
+    const ok = rows.map((r, i) => r.values.every((v) => v) && !mols[i].unknownLabels.length);
+    const res = await chem.analyze(mols.map((m) => ({ molblock: m.molblock, map: m.map }))).catch(() => null);
+    masses = rows.map((_, i) => {
+      const x = res?.results[i];
+      return ok[i] && x && !x.error ? { formula: x.formula, mw: x.mw, exact: x.exact } : null;
+    });
+  }
+  const t = tableFromCells(rGroupCells(labels, rows, masses, cols), textMeasure, doc.style.captionSize);
+  const atoms = ids.map((id) => doc.atoms.get(id)!);
+  const top = { x: (Math.min(...atoms.map((a) => a.x)) + Math.max(...atoms.map((a) => a.x))) / 2, y: Math.max(...atoms.map((a) => a.y)) + doc.style.bondLength * 1.2 };
+  placeTable(t, 'R-group table', top);
+  const bad = masses.filter((m) => !m).length;
+  flash(cols.formula && bad
+    ? `Made the table. ${bad} compound${bad === 1 ? '\'s' : 's\''} formula couldn't be worked out (a group left empty or not recognised), shown as ?. Double-click a cell to type it in.`
+    : 'Made the table. Double-click any cell to change it; the Style panel has its rows, columns and lines.', 8000);
 }
 
 /**
