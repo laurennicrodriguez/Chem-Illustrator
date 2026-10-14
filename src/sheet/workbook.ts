@@ -16,6 +16,8 @@ import { CellError, ERR, Value, readTyped, compareValues, isError } from './valu
 import { MolProps } from './properties';
 import { formatValue } from './numfmt';
 import { MAX_COLS, MAX_ROWS, Range, colOf, keyOf, normRange, rowOf, inRange, rangesOverlap } from './refs';
+import { CondFormat, CellLook, workOutLooks } from './conditional';
+import { TableDef, tableCellLook } from './table-styles';
 
 export type BorderStyle = 'thin' | 'medium' | 'thick' | 'double' | 'dashed' | 'dotted';
 export interface Border { style: BorderStyle; color?: string }
@@ -152,7 +154,7 @@ function patchStyleWith(s: CellStyle | undefined, patch: Partial<CellStyle>): Ce
 // ---------------------------------------------------------------- history
 
 type MapField = 'cells' | 'colWidths' | 'rowHeights' | 'colDefs' | 'colStyles' | 'hiddenRows' | 'hiddenCols';
-type ValueField = 'merges' | 'filter' | 'frozen' | 'name';
+type ValueField = 'merges' | 'filter' | 'frozen' | 'name' | 'condFormats' | 'tables';
 
 interface Change {
   sheet: Sheet | null; // null: the workbook's list of sheets
@@ -193,6 +195,11 @@ export class Sheet {
   filter: Filter | null = null;
   /** Rows and columns that stay put while scrolling. */
   frozen = { rows: 0, cols: 0 };
+  /** Conditional formatting rules, the first in the list winning. */
+  condFormats: CondFormat[] = [];
+  /** Blocks formatted as tables (Excel's Format as Table). */
+  tables: TableDef[] = [];
+  private looks: { values: Map<number, Value>; rules: CondFormat[]; map: Map<number, CellLook> } | null = null;
 
   /** Worked out by Workbook.recalc: the value of every cell in use. */
   values = new Map<number, Value>();
@@ -246,6 +253,42 @@ export class Sheet {
     const def = this.colDefs.get(col);
     const defStyle = def && row >= def.firstRow ? def.style : undefined;
     return mergeStyle(mergeStyle(this.colStyles.get(col), defStyle), this.cell(row, col)?.style);
+  }
+
+  /** What conditional formatting does to a cell (worked out once per change of values or rules). */
+  condLook(row: number, col: number): CellLook | undefined {
+    if (!this.condFormats.length) return undefined;
+    if (!this.looks || this.looks.values !== this.values || this.looks.rules !== this.condFormats) {
+      const host = {
+        value: (r: number, c: number) => this.value(r, c),
+        formulaAt: (f: string, home: { row: number; col: number }, r: number, c: number) => this.wb.formulaAt(this, f, home, r, c),
+      };
+      this.looks = { values: this.values, rules: this.condFormats, map: workOutLooks(this.condFormats, host, Math.max(this.lastRow, this.lastDataRow), this.lastCol) };
+    }
+    return this.looks.map.get(keyOf(row, col));
+  }
+
+  /** The table a cell is in, if any. */
+  tableAt(row: number, col: number): TableDef | undefined {
+    return this.tables.find((t) => inRange(t.range, row, col));
+  }
+
+  /**
+   * The formatting a cell shows: its table's look, then its own formatting, then conditional
+   * formatting on top. (Saving uses styleAt: tables and rules are saved as themselves.)
+   */
+  shownStyleAt(row: number, col: number): CellStyle | undefined {
+    let st = this.styleAt(row, col);
+    const t = this.tables.length ? this.tableAt(row, col) : undefined;
+    if (t) {
+      const look = tableCellLook(t, row, col, (r) => this.hiddenRows.has(r));
+      if (look) st = mergeStyle(look as CellStyle, st);
+    }
+    const cf = this.condLook(row, col);
+    if (cf && (cf.fill || cf.color || cf.bold || cf.italic || cf.underline)) {
+      st = mergeStyle(st, { fill: cf.fill, color: cf.color, bold: cf.bold, italic: cf.italic, underline: cf.underline });
+    }
+    return st;
   }
 
   /** The text a cell shows (numbers in its format). */
@@ -436,6 +479,14 @@ export class Sheet {
     if (keep.length !== this.merges.length) this.setMerges(keep);
   }
 
+  setCondFormats(list: CondFormat[]): void {
+    this.assign('condFormats', list);
+  }
+
+  setTables(list: TableDef[]): void {
+    this.assign('tables', list);
+  }
+
   setFrozen(rows: number, cols: number): void {
     this.assign('frozen', { rows: Math.max(0, rows), cols: Math.max(0, cols) });
   }
@@ -622,6 +673,15 @@ export class Sheet {
     };
     const merges = this.merges.map(moveRange).filter((r): r is Range => !!r && !(r.r1 === r.r2 && r.c1 === r.c2));
     if (JSON.stringify(merges) !== JSON.stringify(this.merges)) this.setMerges(merges);
+    // conditional formatting and tables move and stretch with their cells
+    if (this.condFormats.length) {
+      const cfs = this.condFormats.map((cf) => ({ ...cf, ranges: cf.ranges.map(moveRange).filter((r): r is Range => !!r) })).filter((cf) => cf.ranges.length);
+      if (JSON.stringify(cfs) !== JSON.stringify(this.condFormats)) this.setCondFormats(cfs);
+    }
+    if (this.tables.length) {
+      const ts = this.tables.map((t) => ({ ...t, range: moveRange(t.range)! })).filter((t) => t.range);
+      if (JSON.stringify(ts) !== JSON.stringify(this.tables)) this.setTables(ts);
+    }
     if (this.filter) {
       const range = moveRange(this.filter.range);
       if (!range) this.assign('filter', null);
@@ -900,7 +960,7 @@ export class Workbook {
       return;
     }
     const s = c.sheet!;
-    if (c.field === 'merges' || c.field === 'filter' || c.field === 'frozen' || c.field === 'name') {
+    if (c.field === 'merges' || c.field === 'filter' || c.field === 'frozen' || c.field === 'name' || c.field === 'condFormats' || c.field === 'tables') {
       (s as unknown as Record<string, unknown>)[c.field] = v;
       return;
     }
@@ -1082,6 +1142,13 @@ export class Workbook {
     if (queue.length < nodes.length) {
       for (let i = 0; i < nodes.length; i++) if (!done[i]) nodes[i].s.values.set(nodes[i].key, ERR.circ());
     }
+  }
+
+  /** A formula written for cell `home`, worked out as if moved to (row, col) of a sheet (conditional formatting's formula rules). */
+  formulaAt(s: Sheet, formula: string, home: { row: number; col: number }, row: number, col: number): Value {
+    const text = shiftFormula(formula.startsWith('=') ? formula : '=' + formula, row - home.row, col - home.col);
+    const tree = this.parse(text);
+    return tree instanceof CellError ? tree : evaluate(tree, this.hostFor(s));
   }
 
   private evaluateNode(n: { s: Sheet; key: number; text: string }): void {

@@ -132,6 +132,10 @@
         <button role="menuitem" data-cmd="filter-structure">Filter by Substructure…</button>
         <button role="menuitem" data-cmd="freeze-header">Freeze Header Row</button>
         <hr />
+        <button role="menuitem" data-cmd="new-rule">New Conditional Formatting Rule…</button>
+        <button role="menuitem" data-cmd="manage-rules">Manage Conditional Formatting…</button>
+        <button role="menuitem" data-cmd="insert-table">Format as Table</button>
+        <hr />
         <button role="menuitem" data-cmd="insert-cells">Insert Rows or Columns</button>
         <button role="menuitem" data-cmd="delete-cells">Delete Rows or Columns</button>
         <button role="menuitem" data-cmd="insert-sheet">Insert Worksheet</button>
@@ -231,115 +235,179 @@
 
   <div id="tabs" role="tablist" aria-label="Open files"></div>
 
-  <div id="sheet-ribbon" class="ribbon sheet-only" role="toolbar" aria-label="Sheet" hidden>
-    <div class="rb-group">
-      <div class="rb-row">
-        <button class="rb-big" data-sh="paste" title="Paste cells, a structure from ChemDraw, or a table from Excel"><span class="rb-icon">⎘</span>Paste</button>
-        <div class="rb-col">
-          <button data-sh="cut" title="Cut (paste to move the cells)">Cut</button>
-          <button data-sh="copy" title="Copy: one structure goes as a drawing for ChemDraw and Word; cells go as a table for Excel">Copy</button>
-        </div>
-      </div>
-      <div class="rb-label">Clipboard</div>
+  <div id="sheet-ribbon" class="ribbon tabbed sheet-only" role="toolbar" aria-label="Sheet" hidden>
+    <div class="rb-tabs" role="tablist">
+      <button role="tab" data-sh-tab="home" aria-selected="true">Home</button>
+      <button role="tab" data-sh-tab="insert" aria-selected="false">Insert</button>
+      <button role="tab" data-sh-tab="table" aria-selected="false" class="rb-context" hidden>Table Design</button>
+      <button role="tab" data-sh-tab="chart" aria-selected="false" class="rb-context" hidden>Chart</button>
     </div>
-    <div class="rb-group">
-      <div class="rb-row">
-        <div class="rb-col">
-          <div class="rb-pair">
-            <select id="sh-size" title="Font size" aria-label="Font size">
-              <option>8</option><option>9</option><option>10</option><option>11</option><option>12</option><option>14</option><option>16</option><option>18</option><option>20</option><option>24</option>
+    <div class="rb-panel" data-sh-panel="home">
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="paste" title="Paste cells, a structure from ChemDraw, or a table from Excel"><span class="rb-icon">⎘</span>Paste</button>
+          <div class="rb-col">
+            <button data-sh="cut" title="Cut (paste to move the cells)">Cut</button>
+            <button data-sh="copy" title="Copy: one structure goes as a drawing for ChemDraw and Word; cells go as a table for Excel">Copy</button>
+          </div>
+        </div>
+        <div class="rb-label">Clipboard</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <div class="rb-pair">
+              <select id="sh-size" title="Font size" aria-label="Font size">
+                <option>8</option><option>9</option><option>10</option><option>11</option><option>12</option><option>14</option><option>16</option><option>18</option><option>20</option><option>24</option>
+              </select>
+            </div>
+            <div class="rb-pair">
+              <button class="rb-sq" data-sh="cell-bold" aria-pressed="false" title="Bold"><b>B</b></button>
+              <button class="rb-sq" data-sh="cell-italic" aria-pressed="false" title="Italic"><i>I</i></button>
+              <button class="rb-sq" data-sh="cell-underline" aria-pressed="false" title="Underline"><u>U</u></button>
+              <button class="rb-sq" data-sh="borders" title="Borders">▦</button>
+              <button class="rb-sq rb-colour" data-sh="fill-colour" title="Fill colour"><span>▨</span><span class="sw"></span></button>
+              <button class="rb-sq rb-colour" data-sh="text-colour" title="Text colour"><span>A</span><span class="sw"></span></button>
+            </div>
+          </div>
+        </div>
+        <div class="rb-label">Font</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <div class="rb-pair">
+              <button data-sh="valign-top" title="Top">Top</button>
+              <button data-sh="valign-middle" title="Middle">Middle</button>
+              <button data-sh="valign-bottom" title="Bottom">Bottom</button>
+              <button data-sh="wrap" aria-pressed="false" title="Wrap text onto more lines">Wrap</button>
+            </div>
+            <div class="rb-pair">
+              <button data-sh="align-left" aria-pressed="false" title="Align left">Left</button>
+              <button data-sh="align-center" aria-pressed="false" title="Centre">Centre</button>
+              <button data-sh="align-right" aria-pressed="false" title="Align right">Right</button>
+              <button data-sh="merge-cells" aria-pressed="false" title="Merge the selected cells into one and centre (again to split them)">Merge</button>
+            </div>
+          </div>
+        </div>
+        <div class="rb-label">Alignment</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <select id="sh-numfmt" title="Number format" aria-label="Number format">
+              <option value="General">General</option>
+              <option value="0.00">Number (0.00)</option>
+              <option value="0%">Percentage</option>
+              <option value="0.00E+00">Scientific</option>
+              <option value="#,##0">Thousands (1,234)</option>
+              <option value="@">Text</option>
+              <option value="custom">Other…</option>
             </select>
-          </div>
-          <div class="rb-pair">
-            <button class="rb-sq" data-sh="cell-bold" aria-pressed="false" title="Bold"><b>B</b></button>
-            <button class="rb-sq" data-sh="cell-italic" aria-pressed="false" title="Italic"><i>I</i></button>
-            <button class="rb-sq" data-sh="cell-underline" aria-pressed="false" title="Underline"><u>U</u></button>
-            <button class="rb-sq" data-sh="borders" title="Borders">▦</button>
-            <button class="rb-sq rb-colour" data-sh="fill-colour" title="Fill colour"><span>▨</span><span class="sw"></span></button>
-            <button class="rb-sq rb-colour" data-sh="text-colour" title="Text colour"><span>A</span><span class="sw"></span></button>
+            <div class="rb-pair">
+              <button data-sh="decimals-more" title="More decimal places">+.0</button>
+              <button data-sh="decimals-less" title="Fewer decimal places">−.0</button>
+              <button data-sh="format-chem" aria-pressed="false" title="Formula style: numbers in formulas lowered (CH₂Cl₂), charges raised">C₉H₈</button>
+            </div>
           </div>
         </div>
+        <div class="rb-label">Number</div>
       </div>
-      <div class="rb-label">Font</div>
-    </div>
-    <div class="rb-group">
-      <div class="rb-row">
-        <div class="rb-col">
-          <div class="rb-pair">
-            <button data-sh="valign-top" title="Top">Top</button>
-            <button data-sh="valign-middle" title="Middle">Middle</button>
-            <button data-sh="valign-bottom" title="Bottom">Bottom</button>
-            <button data-sh="wrap" aria-pressed="false" title="Wrap text onto more lines">Wrap</button>
-          </div>
-          <div class="rb-pair">
-            <button data-sh="align-left" aria-pressed="false" title="Align left">Left</button>
-            <button data-sh="align-center" aria-pressed="false" title="Centre">Centre</button>
-            <button data-sh="align-right" aria-pressed="false" title="Align right">Right</button>
-            <button data-sh="merge-cells" aria-pressed="false" title="Merge the selected cells into one and centre (again to split them)">Merge</button>
+          <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <button data-sh="conditional-formatting" title="Colour scales, data bars, icons and highlight rules that change a cell's look by its value">Conditional Formatting ▾</button>
+            <button data-sh="format-as-table" title="Format the table with a header row and banded rows, in one of Excel's table looks">Format as Table ▾</button>
+            <button data-sh="manage-rules" title="See, reorder and change the conditional formatting rules">Manage Rules…</button>
           </div>
         </div>
+        <div class="rb-label">Styles</div>
       </div>
-      <div class="rb-label">Alignment</div>
-    </div>
-    <div class="rb-group">
-      <div class="rb-row">
-        <div class="rb-col">
-          <select id="sh-numfmt" title="Number format" aria-label="Number format">
-            <option value="General">General</option>
-            <option value="0.00">Number (0.00)</option>
-            <option value="0%">Percentage</option>
-            <option value="0.00E+00">Scientific</option>
-            <option value="#,##0">Thousands (1,234)</option>
-            <option value="@">Text</option>
-            <option value="custom">Other…</option>
-          </select>
-          <div class="rb-pair">
-            <button data-sh="decimals-more" title="More decimal places">+.0</button>
-            <button data-sh="decimals-less" title="Fewer decimal places">−.0</button>
-            <button data-sh="format-chem" aria-pressed="false" title="Formula style: numbers in formulas lowered (CH₂Cl₂), charges raised">C₉H₈</button>
+  <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <button data-sh="insert" title="Insert rows, columns or a worksheet">Insert ▾</button>
+            <button data-sh="delete" title="Delete rows, columns or a worksheet">Delete ▾</button>
           </div>
         </div>
+        <div class="rb-label">Cells</div>
       </div>
-      <div class="rb-label">Number</div>
-    </div>
-    <div class="rb-group">
-      <div class="rb-row">
-        <div class="rb-col">
-          <button data-sh="insert" title="Insert rows, columns or a worksheet">Insert ▾</button>
-          <button data-sh="delete" title="Delete rows, columns or a worksheet">Delete ▾</button>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="draw-structure" title="Draw a structure in the cell (or double-click a structure to change it)"><span class="rb-icon">⬡</span>Structure</button>
+          <button class="rb-big" data-sh="structure-from-name" title="Draw structures from names or SMILES: in the cell, or for each selected name"><span class="rb-icon">Aa</span>From Name</button>
+          <button class="rb-big" data-sh="property-column" title="Columns that work out formula, MW, exact mass, HRMS m/z, cLogP and more from each structure"><span class="rb-icon">MW</span>Properties</button>
+          <div class="rb-col">
+            <button data-sh="reagent-table" title="A new sheet that works out the amounts for a reaction: MW, mmol, mass and volume from each reagent's structure and equivalents">Reagent Table</button>
+            <button data-sh="reset-calculated" title="Put back the calculated values where values were typed over">Reset to Calculated</button>
+          </div>
         </div>
+        <div class="rb-label">Chemistry</div>
       </div>
-      <div class="rb-label">Cells</div>
-    </div>
-    <div class="rb-group">
-      <div class="rb-row">
-        <button class="rb-big" data-sh="draw-structure" title="Draw a structure in the cell (or double-click a structure to change it)"><span class="rb-icon">⬡</span>Structure</button>
-        <button class="rb-big" data-sh="structure-from-name" title="Draw structures from names or SMILES: in the cell, or for each selected name"><span class="rb-icon">Aa</span>From Name</button>
-        <button class="rb-big" data-sh="property-column" title="Columns that work out formula, MW, exact mass, HRMS m/z, cLogP and more from each structure"><span class="rb-icon">MW</span>Properties</button>
-        <div class="rb-col">
-          <button data-sh="reagent-table" title="A new sheet that works out the amounts for a reaction: MW, mmol, mass and volume from each reagent's structure and equivalents">Reagent Table</button>
-          <button data-sh="reset-calculated" title="Put back the calculated values where values were typed over">Reset to Calculated</button>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <button data-sh="sort-up" title="Sort the table by this column, smallest first (structures by molecular weight)">Sort ↑</button>
+            <button data-sh="sort-down" title="Sort the table by this column, largest first">Sort ↓</button>
+          </div>
+          <div class="rb-col">
+            <button data-sh="filter" aria-pressed="false" title="Filter buttons on the table's headers">Filter</button>
+            <button data-sh="filter-structure" title="Show only rows whose structure contains a part you draw">By Substructure</button>
+          </div>
+          <div class="rb-col">
+            <button data-sh="freeze-header" aria-pressed="false" title="Keep the header row in view while scrolling">Freeze Header</button>
+            <button data-sh="autosum" title="Add up the numbers above">Σ AutoSum</button>
+          </div>
         </div>
+        <div class="rb-label">Data</div>
       </div>
-      <div class="rb-label">Chemistry</div>
     </div>
-    <div class="rb-group">
-      <div class="rb-row">
-        <div class="rb-col">
-          <button data-sh="sort-up" title="Sort the table by this column, smallest first (structures by molecular weight)">Sort ↑</button>
-          <button data-sh="sort-down" title="Sort the table by this column, largest first">Sort ↓</button>
+    <div class="rb-panel" data-sh-panel="insert" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="insert-table" title="Format the table around the selection as a table (header row, banded rows, filter buttons)"><span class="rb-icon">▦</span>Table</button>
         </div>
-        <div class="rb-col">
-          <button data-sh="filter" aria-pressed="false" title="Filter buttons on the table's headers">Filter</button>
-          <button data-sh="filter-structure" title="Show only rows whose structure contains a part you draw">By Substructure</button>
-        </div>
-        <div class="rb-col">
-          <button data-sh="freeze-header" aria-pressed="false" title="Keep the header row in view while scrolling">Freeze Header</button>
-          <button data-sh="autosum" title="Add up the numbers above">Σ AutoSum</button>
-        </div>
+        <div class="rb-label">Tables</div>
       </div>
-      <div class="rb-label">Data</div>
     </div>
+    <div class="rb-panel" data-sh-panel="table" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-field">Table name <input id="sh-table-name" class="rb-text" spellcheck="false" aria-label="Table name" /></label>
+            <button data-sh="table-convert" title="Make the table plain cells again, keeping its look as ordinary formatting">Convert to Range</button>
+          </div>
+        </div>
+        <div class="rb-label">Properties</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-check"><input type="checkbox" data-table-opt="header" /> Header Row</label>
+            <label class="rb-check"><input type="checkbox" data-table-opt="totals" /> Totals Row</label>
+            <label class="rb-check"><input type="checkbox" data-table-opt="bandRows" /> Banded Rows</label>
+          </div>
+          <div class="rb-col">
+            <label class="rb-check"><input type="checkbox" data-table-opt="firstCol" /> First Column</label>
+            <label class="rb-check"><input type="checkbox" data-table-opt="lastCol" /> Last Column</label>
+            <label class="rb-check"><input type="checkbox" data-table-opt="bandCols" /> Banded Columns</label>
+          </div>
+        </div>
+        <div class="rb-label">Table Style Options</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="table-style" title="Pick another look for the table"><span class="rb-icon">▤</span>Table Style ▾</button>
+          <div class="rb-col">
+            <label class="rb-field">Header <input type="color" id="sh-table-header" title="Your own header colour" aria-label="Header colour" /></label>
+            <label class="rb-field">Bands <input type="color" id="sh-table-band" title="Your own band colour" aria-label="Band colour" /></label>
+            <button data-sh="table-colours-reset" title="Use the table style's own colours again">Style's Colours</button>
+          </div>
+        </div>
+        <div class="rb-label">Table Styles</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-sh-panel="chart" hidden></div>
   </div>
 
   <div id="doc-ribbon" class="ribbon doc-ribbon doc-only" role="toolbar" aria-label="Document" hidden>

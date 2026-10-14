@@ -21,6 +21,8 @@ import { isBlankDrawing } from '../sheet/structure-doc';
 import { StructurePictures } from './structure-pictures';
 import { askProperties, PropertyChoice } from './property-dialog';
 import { ask } from './ask';
+import { SheetFormatting } from './sheet-format-ui';
+import type { TableDef } from '../sheet/table-styles';
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
 import type { Tab } from '../workspace';
@@ -71,6 +73,8 @@ export class SheetMode {
   private panelTitle: HTMLElement;
   private ribbon: HTMLElement;
   private panelQueued = false;
+  /** Conditional formatting and tables. */
+  readonly formatting: SheetFormatting;
   /** The last cells copied here: pasting the same text back uses these (formulas, structures and formats kept). */
   private clip: { text: string; block: CellBlock; sheet: Sheet; range: Range; cut: boolean } | null = null;
 
@@ -101,6 +105,11 @@ export class SheetMode {
       this.view.refresh();
       this.schedulePanel();
     };
+    this.formatting = new SheetFormatting({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+    });
     this.wireFormulaBar();
     this.wireRibbon();
   }
@@ -299,6 +308,48 @@ export class SheetMode {
     rb.addEventListener('pointerdown', (e) => {
       if ((e.target as HTMLElement).closest('button')) e.preventDefault();
     });
+    // ribbon tabs
+    for (const b of rb.querySelectorAll<HTMLButtonElement>('[data-sh-tab]')) b.addEventListener('click', () => this.showRibbonTab(b.dataset.shTab!));
+    // Table Design
+    const table = () => this.tableHere();
+    for (const box of rb.querySelectorAll<HTMLInputElement>('[data-table-opt]')) {
+      box.addEventListener('change', () => {
+        const t = table();
+        if (!t) return;
+        const opt = box.dataset.tableOpt as keyof TableDef;
+        if (opt === 'totals') this.formatting.toggleTotals(t);
+        else if (opt === 'header' && !box.checked) { box.checked = true; this.host.flash('A table keeps its header row here (Excel needs one to save it as a table). Use Convert to Range for plain cells.'); }
+        else this.formatting.setTable(t, { [opt]: box.checked || undefined } as Partial<TableDef>, 'Table options');
+        this.view.focus();
+      });
+    }
+    const name = rb.querySelector<HTMLInputElement>('#sh-table-name')!;
+    name.addEventListener('change', () => {
+      const t = table();
+      const v = name.value.trim().replace(/\s+/g, '_');
+      if (!t || !v) return;
+      if (!/^[A-Za-z_\\][A-Za-z0-9_.]*$/.test(v)) { this.host.flash('A table name starts with a letter and has no spaces (Excel\'s rule).'); name.value = t.name; return; }
+      this.formatting.setTable(t, { name: v }, 'Rename table');
+    });
+    for (const [id, key] of [['#sh-table-header', 'header'], ['#sh-table-band', 'band']] as const) {
+      rb.querySelector<HTMLInputElement>(id)!.addEventListener('change', (e) => {
+        const t = table();
+        if (!t) return;
+        this.formatting.setTable(t, { custom: { ...t.custom, [key]: (e.target as HTMLInputElement).value } }, 'Table colours');
+      });
+    }
+  }
+
+  /** Show one of the ribbon's tabs. */
+  private showRibbonTab(name: string): void {
+    for (const x of this.ribbon.querySelectorAll<HTMLButtonElement>('[data-sh-tab]')) x.setAttribute('aria-selected', String(x.dataset.shTab === name));
+    for (const p of this.ribbon.querySelectorAll<HTMLElement>('[data-sh-panel]')) p.hidden = p.dataset.shPanel !== name;
+  }
+
+  /** The table the active cell is in. */
+  private tableHere(): TableDef | undefined {
+    const s = this.view.sheet;
+    return s?.tableAt(this.view.sel.active.r, this.view.sel.active.c);
   }
 
   private ribbonCommand(name: string, btn: HTMLElement): void {
@@ -309,6 +360,13 @@ export class SheetMode {
       case 'borders': this.bordersMenu(b.left, b.bottom + 2); return;
       case 'insert': this.insertMenu(b.left, b.bottom + 2); return;
       case 'delete': this.deleteMenu(b.left, b.bottom + 2); return;
+      case 'conditional-formatting': this.formatting.conditionalMenu(b.left, b.bottom + 2); return;
+      case 'format-as-table': this.formatting.tableMenu(b.left, b.bottom + 2); return;
+      case 'table-style': {
+        const t = this.tableHere();
+        if (t) this.formatting.tableMenu(b.left, b.bottom + 2, (style) => this.formatting.setTable(t, { style }, 'Table style'));
+        return;
+      }
     }
     this.run(name);
   }
@@ -361,6 +419,11 @@ export class SheetMode {
       case 'structure-from-name': void this.structureFromName(); break;
       case 'draw-structure': this.drawStructure(v.sel.active.r, v.sel.active.c); break;
       case 'reset-calculated': this.resetCalculated(); break;
+      case 'manage-rules': this.formatting.manage(); break;
+      case 'new-rule': void this.formatting.ruleDialog(null); break;
+      case 'insert-table': void this.formatting.formatAsTable(this.tableHere()?.style ?? 'TableStyleMedium2'); break;
+      case 'table-convert': { const t = this.tableHere(); if (t) this.formatting.convertToRange(t); break; }
+      case 'table-colours-reset': { const t = this.tableHere(); if (t) this.formatting.setTable(t, { custom: undefined }, 'Table colours'); break; }
       case 'copy': void this.copy(); break;
       case 'cut': void this.copy(true); break;
       case 'paste': void this.paste(null); break;
@@ -1287,7 +1350,17 @@ export class SheetMode {
       ['Structure from name or SMILES…', () => void this.structureFromName()],
       ['Insert property columns…', () => void this.propertyColumns()],
       ['Reset to calculated', () => this.resetCalculated(), overrides],
+      null,
+      ['Conditional Formatting ▸', () => this.formatting.conditionalMenu(x, y)],
     );
+    const table = this.tableHere();
+    if (table) {
+      items.push(
+        ['Table Style ▸', () => this.formatting.tableMenu(x, y, (style) => this.formatting.setTable(table, { style }, 'Table style'))],
+        [table.totals ? 'Remove the totals row' : 'Add a totals row', () => this.formatting.toggleTotals(table)],
+        ['Convert table to range', () => this.formatting.convertToRange(table)],
+      );
+    } else items.push(['Format as Table ▸', () => this.formatting.tableMenu(x, y)]);
     popupMenu(x, y, items);
   }
 
@@ -1392,6 +1465,18 @@ export class SheetMode {
     };
     sw('[data-sh=text-colour] .sw', st.color, '#000000');
     sw('[data-sh=fill-colour] .sw', st.fill, 'transparent');
+    // Table Design shows while the active cell is in a table
+    const t = s.tableAt(r, c);
+    const tab = this.ribbon.querySelector<HTMLButtonElement>('[data-sh-tab=table]')!;
+    if (!t && tab.getAttribute('aria-selected') === 'true') this.showRibbonTab('home');
+    tab.hidden = !t;
+    if (t) {
+      for (const box of this.ribbon.querySelectorAll<HTMLInputElement>('[data-table-opt]')) box.checked = !!t[box.dataset.tableOpt as keyof TableDef];
+      const name = this.ribbon.querySelector<HTMLInputElement>('#sh-table-name')!;
+      if (document.activeElement !== name) name.value = t.name;
+      this.ribbon.querySelector<HTMLInputElement>('#sh-table-header')!.value = t.custom?.header ?? '#4472c4';
+      this.ribbon.querySelector<HTMLInputElement>('#sh-table-band')!.value = t.custom?.band ?? '#d9e1f2';
+    }
   }
 
   /** The panel on the right: what the active cell holds, how its value is worked out, and its format. */

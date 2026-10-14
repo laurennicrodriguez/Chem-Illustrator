@@ -528,13 +528,17 @@ export class SheetView {
           ctx.fillRect(x, y, w - 1, h - 1);
         }
         const cell = s.cell(rr, cc);
-        const style = s.styleAt(rr, cc);
+        const style = s.shownStyleAt(rr, cc);
+        const look = s.condLook(rr, cc);
         const v = s.values.get(keyOf(rr, cc));
         if (style?.fill) {
           ctx.fillStyle = style.fill;
           ctx.fillRect(x - 1, y - 1, w + 1, h + 1);
         }
+        if (look?.bar) this.drawDataBar(look.bar, x, y, w, h);
+        if (look?.icon) this.drawIcon(look.icon.set, look.icon.level, x + 3 * z, y + h / 2, Math.min(14 * z, h - 4));
         if (cell?.structure) this.drawStructure(cell.structure, x, y, w, h, style, budget);
+        else if (look?.hideValue) { /* only the bar or icon shows */ }
         else if (v !== undefined && v !== null && v !== '' && c > spillUntil) {
           const last = this.drawText(rr, cc, x, y, w, h, style, g, X);
           if (last > c) spillUntil = last;
@@ -572,6 +576,89 @@ export class SheetView {
       ctx.strokeRect(x1 + 0.5, y1 + 0.5, x2 - x1 - 2, y2 - y1 - 2);
       ctx.restore();
     }
+  }
+
+  /** A data bar across a cell (conditional formatting). */
+  private drawDataBar(bar: { from: number; to: number; color: string; gradient: boolean; negative: boolean }, x: number, y: number, w: number, h: number): void {
+    const ctx = this.ctx;
+    const colour = bar.negative ? '#ff0000' : bar.color;
+    const inner = w - 4;
+    const bx = x + 2 + bar.from * inner, bw = Math.max(1, (bar.to - bar.from) * inner);
+    const by = y + 2, bh = Math.max(2, h - 5);
+    if (bar.gradient) {
+      const g = bar.negative ? ctx.createLinearGradient(bx + bw, 0, bx, 0) : ctx.createLinearGradient(bx, 0, bx + bw, 0);
+      g.addColorStop(0, colour);
+      g.addColorStop(1, '#ffffff');
+      ctx.fillStyle = g;
+    } else ctx.fillStyle = colour;
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(Math.round(bx) + 0.5, Math.round(by) + 0.5, Math.max(0, Math.round(bw) - 1), Math.max(0, Math.round(bh) - 1));
+  }
+
+  /** An icon of an icon set at the left of a cell: level 0 the lowest, 2 the highest. */
+  private drawIcon(set: string, level: number, x: number, cy: number, size: number): void {
+    const ctx = this.ctx;
+    const colours = ['#e0453a', '#f2b81b', '#3a9b4a'];
+    const col = colours[level];
+    const s = size, r = s / 2, cx = x + r;
+    ctx.save();
+    ctx.fillStyle = col;
+    ctx.strokeStyle = col;
+    ctx.lineWidth = Math.max(1, s / 7);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    if (set === 'arrows') {
+      const a = level === 2 ? -Math.PI / 2 : level === 1 ? 0 : Math.PI / 2;
+      ctx.translate(cx, cy);
+      ctx.rotate(a);
+      ctx.moveTo(r * 0.9, 0); ctx.lineTo(0, -r * 0.8); ctx.lineTo(0, -r * 0.3); ctx.lineTo(-r * 0.9, -r * 0.3);
+      ctx.lineTo(-r * 0.9, r * 0.3); ctx.lineTo(0, r * 0.3); ctx.lineTo(0, r * 0.8); ctx.closePath();
+      ctx.fill();
+    } else if (set === 'lights') {
+      ctx.arc(cx, cy, r * 0.85, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    } else if (set === 'marks') {
+      ctx.arc(cx, cy, r * 0.9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.beginPath();
+      if (level === 2) { ctx.moveTo(cx - r * 0.45, cy); ctx.lineTo(cx - r * 0.1, cy + r * 0.35); ctx.lineTo(cx + r * 0.45, cy - r * 0.35); }
+      else if (level === 1) { ctx.moveTo(cx, cy - r * 0.45); ctx.lineTo(cx, cy + r * 0.1); ctx.moveTo(cx, cy + r * 0.42); ctx.lineTo(cx, cy + r * 0.44); }
+      else { ctx.moveTo(cx - r * 0.35, cy - r * 0.35); ctx.lineTo(cx + r * 0.35, cy + r * 0.35); ctx.moveTo(cx + r * 0.35, cy - r * 0.35); ctx.lineTo(cx - r * 0.35, cy + r * 0.35); }
+      ctx.stroke();
+    } else if (set === 'flags') {
+      ctx.lineWidth = Math.max(1, s / 10);
+      ctx.strokeStyle = '#555555';
+      ctx.moveTo(x + s * 0.2, cy + r * 0.9); ctx.lineTo(x + s * 0.2, cy - r * 0.9);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x + s * 0.22, cy - r * 0.9); ctx.lineTo(x + s * 0.95, cy - r * 0.5); ctx.lineTo(x + s * 0.22, cy - r * 0.05); ctx.closePath();
+      ctx.fill();
+    } else {
+      // stars: empty, half and full
+      const star = () => {
+        ctx.beginPath();
+        for (let i = 0; i < 10; i++) {
+          const rr = i % 2 ? r * 0.42 : r * 0.95, a = -Math.PI / 2 + (i * Math.PI) / 5;
+          ctx[i ? 'lineTo' : 'moveTo'](cx + rr * Math.cos(a), cy + rr * Math.sin(a));
+        }
+        ctx.closePath();
+      };
+      ctx.fillStyle = '#f2b81b';
+      ctx.strokeStyle = '#c99200';
+      ctx.lineWidth = 1;
+      star();
+      if (level === 2) ctx.fill();
+      else if (level === 1) { ctx.save(); ctx.clip(); ctx.fillRect(cx - r, cy - r, r, s); ctx.restore(); star(); }
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   private accent(): string {

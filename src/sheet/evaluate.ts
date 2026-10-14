@@ -233,6 +233,16 @@ const FUNCTIONS: Record<string, FnDef> = {
       return n;
     },
   },
+  // Excel's SUBTOTAL (as a table's totals row writes it): 1 average, 2 count, 3 count filled, 4 max, 5 min, 6 product, 7 standard deviation, 9 sum (101… the same)
+  SUBTOTAL: {
+    min: 2, max: 255,
+    fn: (args, host) => {
+      const k = toNumber(scalar(args[0]));
+      if (isError(k)) return k;
+      const name = ({ 1: 'AVERAGE', 2: 'COUNT', 3: 'COUNTA', 4: 'MAX', 5: 'MIN', 6: 'PRODUCT', 7: 'STDEV', 9: 'SUM' } as Record<number, string>)[Math.trunc(k) % 100];
+      return name ? FUNCTIONS[name].fn(args.slice(1), host) : ERR.value('SUBTOTAL works out 1 to 7 and 9 (101 to 107 and 109)');
+    },
+  },
   ROUND: { min: 1, max: 2, fn: roundFn('near') },
   ROUNDUP: { min: 1, max: 2, fn: roundFn('up') },
   ROUNDDOWN: { min: 1, max: 2, fn: roundFn('down') },

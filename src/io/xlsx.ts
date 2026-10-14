@@ -15,7 +15,7 @@
 
 import { Package, PackageReader, xml, hex6, REL, kids, kid, rAttr } from './ooxml';
 import { Workbook, Sheet, Structure, CellStyle, ColumnDef, Filter, Condition, CompareOp, Border, BorderStyle, Side, makeStructure } from '../sheet/workbook';
-import { keyOf, rowOf, colOf, colName, cellName, parseRange, quoteSheet, Range, MAX_COLS } from '../sheet/refs';
+import { keyOf, rowOf, colOf, colName, cellName, parseRange, quoteSheet, Range, MAX_COLS, rangesOverlap } from '../sheet/refs';
 import { normalizeFormula, shiftFormula } from '../sheet/formula';
 import { readTyped, isError, CellError, Value, EXCEL_ERRORS } from '../sheet/values';
 import { PROPERTIES } from '../sheet/properties';
@@ -23,6 +23,12 @@ import { chemPieces } from '../sheet/cell-text';
 import { DEFAULT_COL_W, DEFAULT_ROW_H, MAX_AUTO_ROW, structureHeight } from '../sheet/layout';
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
+import { applyTint } from '../colours';
+import { condFormatsXml, dxfXml, tableXml, readDxfs, readCondFormats, readTable, sameRules } from './xlsx-format';
+import type { CondFormat, CfLook } from '../sheet/conditional';
+import { seenCondFormatId } from '../sheet/conditional';
+import { TableDef, tableColumnNames, seenTableId } from '../sheet/table-styles';
+export { applyTint };
 
 /** Pictures of structures for Excel (the app draws them; tests use stand-ins). */
 export interface XlsxPictures {
@@ -51,6 +57,7 @@ const CT = {
   styles: 'application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml',
   strings: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml',
   drawing: 'application/vnd.openxmlformats-officedocument.drawing+xml',
+  table: 'application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml',
   core: 'application/vnd.openxmlformats-package.core-properties+xml',
   app: 'application/vnd.openxmlformats-officedocument.extended-properties+xml',
   itemProps: 'application/vnd.openxmlformats-officedocument.customXmlProperties+xml',
@@ -61,6 +68,7 @@ const RELS = {
   styles: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles',
   sharedStrings: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings',
   drawing: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing',
+  table: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/table',
   theme: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme',
   customXml: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml',
   customXmlProps: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps',
@@ -130,6 +138,9 @@ interface ModelSheet {
   filter: Filter | null;
   /** Rows grown to fit (Excel is given them as set heights), with their heights in pixels: they keep fitting here. */
   autoRows?: [number, number][];
+  /** Conditional formatting and tables as this program holds them (Excel's own copy can't say everything). */
+  condFormats?: CondFormat[];
+  tables?: TableDef[];
 }
 
 interface Model {
@@ -148,6 +159,12 @@ class Styles {
   private formats = new Map<string, number>();
   private xfs = ['<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'];
   private byKey = new Map<string, number>([['{}', 0]]);
+  private dxfs: string[] = [];
+
+  /** The number of a highlight look (conditional formatting). */
+  dxf(l: CfLook): number {
+    return this.index(this.dxfs, dxfXml(l));
+  }
 
   private index(list: string[], item: string): number {
     const i = list.indexOf(item);
@@ -205,7 +222,7 @@ class Styles {
       '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
       `<cellXfs count="${this.xfs.length}">${this.xfs.join('')}</cellXfs>` +
       '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>' +
-      '<dxfs count="0"/><tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/></styleSheet>';
+      `<dxfs count="${this.dxfs.length}">${this.dxfs.join('')}</dxfs><tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/></styleSheet>`;
   }
 }
 
@@ -265,13 +282,25 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
   const model: Model = { app: 'Chem Illustrator', version: 1, drawingStyle: book.drawingStyle, sheets: [] };
   const sheetEntries: string[] = [];
   const filterNames: string[] = [];
-  let imageNo = 0, drawingNo = 0;
+  let imageNo = 0, drawingNo = 0, tableNo = 0;
   pkg.defaultType('png', 'image/png');
 
   for (let si = 0; si < book.sheets.length; si++) {
     const s = book.sheets[si];
     const path = `xl/worksheets/sheet${si + 1}.xml`;
     const ms: ModelSheet = { name: s.name, cells: [], defs: [...s.colDefs].map(([col, def]) => ({ col, def })), chemCols: [], filter: s.filter };
+    if (s.condFormats.length) ms.condFormats = s.condFormats;
+    if (s.tables.length) ms.tables = s.tables;
+    // a table's header cells hold its column names, as Excel needs them (filled in and all different)
+    const headerName = new Map<number, string>();
+    const tableNames = new Map<TableDef, string[]>();
+    for (const t of s.tables) {
+      const heads: string[] = [];
+      for (let c = t.range.c1; c <= t.range.c2; c++) heads.push(s.shownText(t.range.r1, c));
+      const names = tableColumnNames(heads);
+      tableNames.set(t, names);
+      names.forEach((n, i) => headerName.set(keyOf(t.range.r1, t.range.c1 + i), n));
+    }
     for (const [c, st] of s.colStyles) if (st.chem) ms.chemCols.push(c);
 
     // sizes: set by hand, else grown to fit structures (and wrapped text, measured by the grid)
@@ -288,7 +317,7 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
     const cols = new Axis(colW), rows = new Axis(rowH);
 
     // every cell in use: typed, formatted, or worked out by a property column
-    const keys = new Set<number>([...s.cells.keys(), ...s.values.keys()]);
+    const keys = new Set<number>([...s.cells.keys(), ...s.values.keys(), ...headerName.keys()]);
     const byRow = new Map<number, number[]>();
     for (const k of keys) {
       const r = rowOf(k);
@@ -307,7 +336,8 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
       for (const k of byRow.get(r)!.sort((a, b) => a - b)) {
         const c = colOf(k);
         const cell = s.cell(r, c);
-        const v = s.values.get(k) ?? null;
+        const header = headerName.get(k);
+        const v = header ?? s.values.get(k) ?? null;
         const style = s.styleAt(r, c);
         const ref = cellName(r, c);
         const own = cell?.style;
@@ -322,7 +352,7 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
         if (cell?.structure) entry = { r, c, wrote: null, fix, structure: cell.structure.contents };
         else if (s.defAt(r, c)) entry = { r, c, wrote: null, fix, computed: true };
         else if (input?.startsWith('=') && usesChemistry(input)) entry = { r, c, wrote: null, fix, formula: input };
-        else if (input?.startsWith('=')) formula = input.slice(1);
+        else if (input?.startsWith('=') && header === undefined) formula = input.slice(1);
         if (!entry && fix) entry = { r, c, wrote: null, fix };
         if (entry) ms.cells.push(entry);
         // a structure's SMILES is in its cell, hidden under the picture (the format ;;; shows nothing)
@@ -411,13 +441,39 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
         `<selection pane="${fr && fc ? 'bottomRight' : fr ? 'bottomLeft' : 'topRight'}" activeCell="${cellName(fr, fc)}" sqref="${cellName(fr, fc)}"/>`
       : '';
     let filterXml = '';
-    if (s.filter) {
+    // a filter on a table goes in the table's part (Excel allows no sheet filter over a table)
+    const filterTable = s.filter ? s.tables.find((t) => rangesOverlap(t.range, s.filter!.range)) : undefined;
+    if (s.filter && !filterTable) {
       const R = { ...s.filter.range, r2: Math.max(s.filter.range.r2, s.lastDataRow) };
       const ref = `${cellName(R.r1, R.c1)}:${cellName(R.r2, R.c2)}`;
       const colsXml = Object.entries(s.filter.conditions).map(([col, cond]) => filterColumnXml(Number(col) - R.c1, cond)).filter(Boolean).join('');
       filterXml = `<autoFilter ref="${ref}">${colsXml}</autoFilter>`;
       filterNames.push(`<definedName name="_xlnm._FilterDatabase" localSheetId="${si}" hidden="1">${xml(quoteSheet(s.name))}!${absRef(R)}</definedName>`);
     }
+    const cfXml = condFormatsXml(s.condFormats, (l) => styles.dxf(l));
+    const tableIds: string[] = [];
+    for (const t of s.tables) {
+      tableNo++;
+      const R = t.range;
+      const dataEnd = t.totals ? R.r2 - 1 : R.r2;
+      let af = '';
+      if (t === filterTable) {
+        const colsXml = Object.entries(s.filter!.conditions).filter(([col]) => Number(col) >= R.c1 && Number(col) <= R.c2)
+          .map(([col, cond]) => filterColumnXml(Number(col) - R.c1, cond)).filter(Boolean).join('');
+        af = `<autoFilter ref="${cellName(R.r1, R.c1)}:${cellName(dataEnd, R.c2)}">${colsXml}</autoFilter>`;
+      }
+      const totals = t.totals
+        ? Array.from({ length: R.c2 - R.c1 + 1 }, (_, i) => {
+          const input = s.effectiveInput(R.r2, R.c1 + i);
+          if (!input) return null;
+          return input.startsWith('=') ? (usesChemistry(input) ? null : { formula: input }) : s.shownText(R.r2, R.c1 + i);
+        })
+        : null;
+      const tpath = `xl/tables/table${tableNo}.xml`;
+      pkg.add(tpath, HEAD + tableXml(t, tableNo, tableNames.get(t)!, totals, af), CT.table);
+      tableIds.push(pkg.relate(path, RELS.table, `../tables/table${tableNo}.xml`));
+    }
+    const tableParts = tableIds.length ? `<tableParts count="${tableIds.length}">${tableIds.map((id) => `<tablePart r:id="${id}"/>`).join('')}</tableParts>` : '';
     const merges = s.merges.length ? `<mergeCells count="${s.merges.length}">${s.merges.map((m) => `<mergeCell ref="${cellName(m.r1, m.c1)}:${cellName(m.r2, m.c2)}"/>`).join('')}</mergeCells>` : '';
     let drawingXml = '';
     const sheetRels = path;
@@ -430,12 +486,12 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
     }
     pkg.add(path,
       `${HEAD}<worksheet xmlns="${MAIN}" xmlns:r="${RNS}">` +
-      `${s.filter ? '<sheetPr filterMode="1"/>' : ''}<dimension ref="${used}"/>` +
+      `${s.filter && !filterTable ? '<sheetPr filterMode="1"/>' : ''}<dimension ref="${used}"/>` +
       `<sheetViews><sheetView${si === book.active ? ' tabSelected="1"' : ''} workbookViewId="0">${pane}</sheetView></sheetViews>` +
       `<sheetFormatPr defaultRowHeight="15"/>` +
       (colXml.length ? `<cols>${colXml.join('')}</cols>` : '') +
-      `<sheetData>${rowXml.join('')}</sheetData>${filterXml}${merges}` +
-      `<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>${drawingXml}</worksheet>`,
+      `<sheetData>${rowXml.join('')}</sheetData>${filterXml}${merges}${cfXml}` +
+      `<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>${drawingXml}${tableParts}</worksheet>`,
       CT.sheet);
     const rid = pkg.relate('xl/workbook.xml', RELS.worksheet, `worksheets/sheet${si + 1}.xml`);
     sheetEntries.push(`<sheet name="${xml(s.name)}" sheetId="${si + 1}" r:id="${rid}"/>`);
@@ -516,36 +572,6 @@ function readColour(el: Element | null, theme: string[]): string | undefined {
   if (!hex || !/^[0-9a-f]{6}$/i.test(hex)) return undefined;
   const tint = Number(el.getAttribute('tint') ?? 0);
   return '#' + (tint ? applyTint(hex, tint) : hex).toLowerCase();
-}
-
-/** Lighten (tint > 0) or darken a colour as Excel does, by its lightness (ECMA-376 part 1, 18.8.19). */
-export function applyTint(hex: string, tint: number): string {
-  const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
-  const max = Math.max(r, g, b), min = Math.min(r, g, b);
-  let h = 0, s = 0;
-  let l = (max + min) / 2;
-  if (max !== min) {
-    const d = max - min;
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-    h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
-    h /= 6;
-  }
-  l = tint < 0 ? l * (1 + tint) : l * (1 - tint) + tint;
-  const hue = (p: number, q: number, t: number) => {
-    if (t < 0) t += 1;
-    if (t > 1) t -= 1;
-    if (t < 1 / 6) return p + (q - p) * 6 * t;
-    if (t < 1 / 2) return q;
-    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
-    return p;
-  };
-  let out: number[];
-  if (s === 0) out = [l, l, l];
-  else {
-    const q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
-    out = [hue(p, q, h + 1 / 3), hue(p, q, h), hue(p, q, h - 1 / 3)];
-  }
-  return out.map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0')).join('').toUpperCase();
 }
 
 const BORDER_STYLES: Record<string, BorderStyle> = {
@@ -674,7 +700,10 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
 
   const relTarget = (type: string) => [...rels.values()].find((r) => r.type === type)?.target ?? null;
   const theme = readTheme(relTarget(RELS.theme) ? pkg.xml(relTarget(RELS.theme)!) : null);
-  const xfs = readStyles(relTarget(RELS.styles) ? pkg.xml(relTarget(RELS.styles)!) : null, theme);
+  const stylesDoc = relTarget(RELS.styles) ? pkg.xml(relTarget(RELS.styles)!) : null;
+  const xfs = readStyles(stylesDoc, theme);
+  const colourOf = (el: Element | null) => readColour(el, theme);
+  const dxfs = readDxfs(stylesDoc, colourOf);
   const ssPath = relTarget(RELS.sharedStrings);
   const shared = ssPath ? kids(pkg.xml(ssPath)?.documentElement, 'si').map(stringItem) : [];
 
@@ -849,6 +878,35 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
         }
       }
 
+      // conditional formatting: our own copy where it matches what Excel kept (it can say more)
+      const cf = readCondFormats(ws, dxfs, colourOf);
+      let rules = cf.rules;
+      if (ms?.condFormats && sameRules(rules, ms.condFormats)) rules = ms.condFormats.map((x) => { seenCondFormatId(x.id); return x; });
+      if (rules.length) s.setCondFormats(rules);
+      if (cf.skipped) notKept.add('some conditional formatting rules');
+      // tables
+      const tables: TableDef[] = [];
+      for (const r of pkg.rels(path!).values()) {
+        if (r.type !== RELS.table) continue;
+        const td = pkg.xml(r.target);
+        const got = td ? readTable(td, tables.length + 1) : null;
+        if (!got) continue;
+        const mine = ms?.tables?.find((t) => t.name === got.table.name && sameRange(t.range, got.table.range) && t.range.r2 === got.table.range.r2);
+        if (mine) seenTableId(mine.id);
+        tables.push(mine ? { ...got.table, id: mine.id, ...(mine.custom ? { custom: mine.custom } : {}), ...(got.table.style === 'none' && mine.style !== 'none' ? { style: mine.style } : {}) } : got.table);
+        const afr = got.autoFilter ? parseRange(got.autoFilter.getAttribute('ref') ?? '') : null;
+        if (got.autoFilter && afr && !filters.some((f) => f.s === s)) {
+          const conditions: Record<number, Condition> = {};
+          for (const fc of kids(got.autoFilter, 'filterColumn')) {
+            const cond = readFilterColumn(fc);
+            if (cond) conditions[afr.c1 + Number(fc.getAttribute('colId') ?? 0)] = cond;
+          }
+          const keep = ms?.filter && sameRange(ms.filter.range, afr) ? ms.filter : { range: afr, conditions };
+          filters.push({ s, f: keep });
+        }
+      }
+      if (tables.length) s.setTables(tables);
+
       // pictures and charts that aren't structures saved here
       const drawingPath = [...pkg.rels(path!).values()].find((r) => r.type === RELS.drawing)?.target;
       const dr = drawingPath ? pkg.xml(drawingPath) : null;
@@ -859,7 +917,7 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
         }
         foreignPictures += dr.getElementsByTagNameNS(XDR, 'graphicFrame').length + dr.getElementsByTagNameNS(XDR, 'sp').length;
       }
-      for (const [tag, what] of [['conditionalFormatting', 'conditional formatting'], ['dataValidations', 'data validation lists'], ['hyperlinks', 'links'], ['tableParts', 'Excel tables (their cells are kept)'], ['legacyDrawing', 'comments']] as const) {
+      for (const [tag, what] of [['dataValidations', 'data validation lists'], ['hyperlinks', 'links'], ['legacyDrawing', 'comments']] as const) {
         if (kid(ws, tag)) notKept.add(what);
       }
     });
