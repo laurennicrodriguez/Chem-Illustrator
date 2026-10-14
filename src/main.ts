@@ -2177,6 +2177,9 @@ const COMMANDS: Record<string, () => unknown> = {
   'mode-colours': () => modeDialog.open(),
   'edit-palettes': () => editPalettes(),
   'add-frame': () => editor.addFrame() || flash('Select what to frame: structures, text, arrows or shapes.'),
+  'fill-rings': () => flash(editor.fillRings(), 6000),
+  'highlight': () => editor.highlight(highlightColour) ? flash('Highlighted. Change the colour with Highlight in the Style panel.', 5000) : flash('Select the atoms and bonds to highlight.'),
+  'remove-highlight': () => editor.highlight(undefined) || flash('Select the atoms and bonds to take the highlight off.'),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
   'arrange-scheme': () => arrangeDialog.open(),
@@ -2546,6 +2549,9 @@ $('#split-handle').addEventListener('pointerdown', (e) => {
 applySplitWidth();
 
 // ---------------------------------------------------------------- settings and the Hotkeys window
+
+/** The colour Structure > Highlight uses: the one last chosen in the Style panel (a soft yellow at first). */
+let highlightColour = '#ffe680';
 
 /** Tick the chosen way of writing terminal methyls in the Structure menu. */
 function tickMethylStyle(): void {
@@ -3313,6 +3319,7 @@ function drawingMenu(): MenuItem[] {
     ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] }] : []),
     null,
     { cmd: 'add-frame' },
+    ...(atoms ? [{ label: 'Highlight and Fill', items: [{ cmd: 'highlight' }, { cmd: 'remove-highlight' }, null, { cmd: 'fill-rings' }] }] : []),
     { label: 'Align', items: arrange },
     { label: 'Rotate or Flip', items: turn },
     ...(order.length ? [{ label: 'Order', items: order }] : []),
@@ -3333,6 +3340,8 @@ editor.onContextMenu = (e) => {
 stylePanel.cropWithMouse = () => cropPicture();
 stylePanel.removeWhite = (ids) => void removeWhite(ids);
 stylePanel.frames = { add: () => void command('add-frame'), fit: (id) => editor.fitFrame(id) };
+stylePanel.ringFill = () => void command('fill-rings');
+stylePanel.highlightUsed = (c) => { highlightColour = c; };
 stylePanel.reaction = {
   roles: (id) => editor.reactionRoles(id),
   others: () => editor.sel.atoms.size + editor.sel.captions.size + editor.sel.shapes.size,

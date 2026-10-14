@@ -104,7 +104,7 @@ function kekuleAromatic(doc: Doc, ring: number[]): boolean {
 }
 
 /** Rings that use these bonds (every ring in the drawing when `bonds` is empty). */
-function ringsAmong(doc: Doc, bonds: Iterable<number>): number[][] {
+export function ringsAmong(doc: Doc, bonds: Iterable<number>): number[][] {
   const seen = new Map<string, number[]>();
   const ids = [...bonds];
   for (const id of ids.length ? ids : doc.bonds.keys()) for (const r of ringsThroughBond(doc, id)) seen.set(key(r), r);

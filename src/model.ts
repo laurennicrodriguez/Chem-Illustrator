@@ -41,6 +41,8 @@ export interface Atom {
   stereoLabel?: StereoLabel;
   /** The person chose to ignore this atom's chemistry warnings (ChemDraw's IgnoreWarnings). */
   ignoreWarnings?: boolean;
+  /** A highlight drawn behind the atom (a disc of this colour), to pick out part of a structure. */
+  highlight?: string;
   /** Unpaired electrons: a doublet radical uses one bond's worth of valence, a carbene two. */
   radical?: 'singlet' | 'doublet' | 'triplet';
   /**
@@ -134,6 +136,8 @@ export interface Bond {
   showStereo?: boolean;
   /** Where the E/Z label sits, relative to the middle of the bond. */
   stereoLabel?: StereoLabel;
+  /** A highlight drawn behind the bond (a broad band of this colour), to pick out part of a structure. */
+  highlight?: string;
 }
 
 export interface TextRun {
@@ -301,9 +305,18 @@ export interface StepRoles {
   manual?: boolean;
 }
 
+/** Lines or dots over a fill (Style panel > Pattern). */
+export type Pattern = 'hatch' | 'backhatch' | 'crosshatch' | 'horizontal' | 'vertical' | 'grid' | 'dots' | 'dense-dots';
+
 export interface Shape {
   id: number;
-  kind: 'line' | 'rect' | 'oval' | 'symbol' | 'bracket' | 'picture' | 'table' | 'geo';
+  kind: 'line' | 'rect' | 'oval' | 'symbol' | 'bracket' | 'picture' | 'table' | 'geo' | 'ring';
+  /**
+   * A ring's fill (Structure > Fill Rings): the ring's atoms in order. The fill follows them, and
+   * goes when one of them goes. `poly` is where their centres were at the last change.
+   */
+  ring?: number[];
+  poly?: { x: number; y: number }[];
   /** A design shape (kind 'geo'): which one, from the shape library (design/geo.ts). */
   geo?: string;
   /** Text inside a design shape: wraps to the shape's text area and moves with it. */
@@ -323,8 +336,20 @@ export interface Shape {
   y2: number;
   dashed?: boolean;
   filled?: boolean;
-  /** How a filled box or oval is filled: evenly (absent), a light tint, or shaded light to dark. */
-  fill?: 'faded' | 'shaded';
+  /**
+   * How a filled shape is filled: evenly (absent), a light tint, shaded light to dark, or a
+   * gradient from the fill colour to `fill2` (across at `gradAngle` degrees, or out from the middle).
+   */
+  fill?: 'faded' | 'shaded' | 'gradient';
+  fill2?: string;
+  /** The gradient's direction in degrees: 0 left to right, 90 top to bottom. */
+  gradAngle?: number;
+  gradRadial?: boolean;
+  /** Lines or dots drawn over the fill (or on their own when there is no fill): hatching, stippling. */
+  pattern?: Pattern;
+  /** The pattern's colour (the outline colour when not given) and its spacing in points. */
+  patternColor?: string;
+  patternSize?: number;
   /** Fill colour, when it differs from the outline colour (the outline is then drawn too). */
   fillColor?: string;
   rounded?: boolean;

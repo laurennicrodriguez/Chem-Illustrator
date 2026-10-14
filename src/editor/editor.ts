@@ -22,6 +22,7 @@ import { joinAtoms, joinBonds } from '../chem/join';
 import { extractDrawing, insertDrawing } from '../io/clipboard';
 import { isReactionArrow, itemFinder, rolesOf, ROLES, schemeItems, type Item, type Role } from '../chem/reaction';
 import { applySchemePlan, planCleanUp } from '../chem/scheme-layout';
+import { fillRings, refitRingFills } from '../chem/ring-fill';
 import { setMethylStyle, toggleChainEndLabels, toggleExplicitHydrogens, type MethylStyle } from '../chem/hydrogens';
 import { selectedGroup } from '../chem/group-smiles';
 import { circleRing, circleRings, kekulize } from '../chem/aromatic';
@@ -265,7 +266,11 @@ export class Editor {
     window.addEventListener('keydown', (e) => this.onKey(e));
     // frames that follow what they surround are refitted as each change finishes
     doc.beforeCommit = (before) => {
-      for (const s of this.doc.shapes.values()) if (s.frame?.fit) { refitFrames(this.doc, before, this.measure()); return; }
+      let frames = false, rings = false;
+      for (const s of this.doc.shapes.values()) { if (s.frame?.fit) frames = true; if (s.kind === 'ring') rings = true; }
+      // ring fills first: a frame round a structure takes in its ring fills' new places
+      if (rings) refitRingFills(this.doc, before);
+      if (frames) refitFrames(this.doc, before, this.measure());
     };
   }
 
@@ -1414,11 +1419,42 @@ export class Editor {
     this.changed();
   }
 
+  /** Fill the rings in the selection (Structure > Fill Rings), and select the fills so the Style panel shows them. */
+  fillRings(): string {
+    const doc = this.doc;
+    const bonds = new Set(this.sel.bonds);
+    // atoms selected without their bonds (one by one) count as their bonds between them
+    for (const b of doc.bonds.values()) if (this.sel.atoms.has(b.a1) && this.sel.atoms.has(b.a2)) bonds.add(b.id);
+    if (!bonds.size) return 'Select the rings to fill (or the whole structure) first.';
+    let ids: number[] = [];
+    doc.edit('Fill rings', () => { ids = fillRings(doc, bonds); });
+    if (!ids.length) return 'No rings in the selection.';
+    this.sel = emptySel();
+    for (const id of ids) this.sel.shapes.add(id);
+    this.changed();
+    return `${ids.length} ring${ids.length > 1 ? 's' : ''} filled: choose the colour, gradient or pattern in the Style panel.`;
+  }
+
+  /** Highlight the selected atoms and bonds in a colour (Structure > Highlight), or take it off (undefined). */
+  highlight(colour: string | undefined): boolean {
+    const doc = this.doc;
+    if (!this.sel.atoms.size && !this.sel.bonds.size) return false;
+    doc.edit(colour ? 'Highlight' : 'Remove highlight', () => {
+      for (const id of this.sel.atoms) doc.updateAtom(id, { highlight: colour });
+      for (const id of this.sel.bonds) doc.updateBond(id, { highlight: colour });
+    });
+    this.changed();
+    return true;
+  }
+
   private moveSelection(dx: number, dy: number): void {
     const doc = this.doc;
     // a frame that follows its contents takes them with it
     const sel: Selection = { atoms: new Set(this.sel.atoms), bonds: this.sel.bonds, captions: new Set(this.sel.captions), arrows: new Set(this.sel.arrows), shapes: new Set(this.sel.shapes) };
     for (const id of this.sel.shapes) {
+      // a ring's fill takes its structure along (it sits on the ring's atoms)
+      const ring = doc.shapes.get(id)?.ring;
+      if (ring?.length && doc.atoms.has(ring[0])) for (const a of doc.fragmentOf(ring[0])) sel.atoms.add(a);
       const f = doc.shapes.get(id)?.frame;
       if (!f?.fit) continue;
       const m = frameMembers(doc, f);
@@ -1435,7 +1471,10 @@ export class Editor {
       if (r.to && !sel.shapes.has(r.to.shape)) patch.to = undefined;
       doc.updateArrow(id, patch);
     }
-    for (const id of sel.shapes) { const s = doc.shapes.get(id); if (s) doc.updateShape(id, { x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy }); }
+    for (const id of sel.shapes) {
+      const s = doc.shapes.get(id);
+      if (s) doc.updateShape(id, { x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy, ...(s.poly ? { poly: s.poly.map((p) => ({ x: p.x + dx, y: p.y + dy })) } : {}) });
+    }
   }
 
   deleteSelection(): void {

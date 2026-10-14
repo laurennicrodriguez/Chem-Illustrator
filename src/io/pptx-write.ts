@@ -10,7 +10,7 @@
 // The slide master's fonts, colours, background, logo, slide numbers and footer become the
 // file's slide master and theme, so PowerPoint's own placeholders follow them too.
 
-import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, applyBase } from '../model';
+import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, applyBase, type Pattern } from '../model';
 import type { Rect } from '../geom';
 import { layoutText, ASCENT, FONT_STACK, type Measure } from '../text/layout';
 import { fitParas, listMarkers, splitParagraphs } from '../text/paragraphs';
@@ -158,7 +158,8 @@ export function splitSlide(doc: Doc, measure: Measure = arialMeasure): SlidePart
     if (sh.kind === 'table') { if (sh.table) tables.push(sh); continue; }
     // design shapes stay PowerPoint shapes even beside structures (boxes round a structure, flasks under one)
     if (sh.kind === 'geo') { geos.push(sh); continue; }
-    const chem = sh.kind === 'bracket' || sh.kind === 'symbol';
+    // ring fills sit under their structure, in its picture
+    const chem = sh.kind === 'bracket' || sh.kind === 'symbol' || sh.kind === 'ring';
     items.push({ box: shapeBox(sh), chem, add: (s) => s.shapes.add(sh.id), shape: sh });
   }
   for (const c of doc.captions.values()) {
@@ -514,10 +515,10 @@ class Writer {
     const fc = hex6(s.fillColor ?? s.color ?? '#000000');
     const clear = Math.max(0, Math.min(1, s.transparency ?? 0));
     const alpha = clear ? `<a:alpha val="${Math.round((1 - clear) * 100000)}"/>` : '';
-    const fill = !s.filled ? '<a:noFill/>'
+    const fill = patternOrGradient(s, fc, alpha) ?? (!s.filled ? '<a:noFill/>'
       : s.fill === 'faded' ? `<a:solidFill><a:srgbClr val="${hex6(tint('#' + fc, FADE))}">${alpha}</a:srgbClr></a:solidFill>`
       : s.fill === 'shaded' ? `<a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="${hex6(tint('#' + fc, 0.85))}">${alpha}</a:srgbClr></a:gs><a:gs pos="100000"><a:srgbClr val="${fc}">${alpha}</a:srgbClr></a:gs></a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill>`
-      : `<a:solidFill><a:srgbClr val="${fc}">${alpha}</a:srgbClr></a:solidFill>`;
+      : `<a:solidFill><a:srgbClr val="${fc}">${alpha}</a:srgbClr></a:solidFill>`);
     const dash = s.dashed ? '<a:prstDash val="dash"/>' : '';
     const ln = width > 0 ? `<a:ln w="${emu(width)}"><a:solidFill><a:srgbClr val="${hex6(s.color ?? '#000000')}"/></a:solidFill>${dash}<a:round/></a:ln>` : '<a:ln><a:noFill/></a:ln>';
     const shadow = s.shadow ? `<a:effectLst><a:outerShdw dist="${emu(s.shadowSize ?? Math.max(2, 0.04 * Math.min(w, h)))}" dir="2700000" algn="tl" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="25000"/></a:srgbClr></a:outerShdw></a:effectLst>` : '';
@@ -736,6 +737,31 @@ function geoPath(steps: GeoStep[], w: number, h: number, attrs: string): string 
   return `<a:path w="${emu(w)}" h="${emu(h)}"${attrs}>${out.join('')}</a:path>`;
 }
 
+/** PowerPoint's own patterns for ours (its pattern spacing is fixed). */
+const PPT_PATTERN: Record<Pattern, string> = {
+  hatch: 'wdUpDiag', backhatch: 'wdDnDiag', crosshatch: 'diagCross', horizontal: 'horz', vertical: 'vert', grid: 'cross', dots: 'pct20', 'dense-dots': 'pct50',
+};
+
+/**
+ * A pattern (PowerPoint's nearest, over the fill colour, or over nothing) or a two-colour
+ * gradient as PowerPoint fill XML; null for the other fills. PowerPoint can't put a pattern
+ * over a gradient, so a pattern goes over the gradient's first colour.
+ */
+function patternOrGradient(s: Shape, fc: string, alpha: string): string | null {
+  if (s.pattern) {
+    const fg = hex6(s.patternColor ?? s.color ?? '#000000');
+    const bg = s.filled ? `<a:srgbClr val="${s.fill === 'faded' ? hex6(tint('#' + fc, FADE)) : fc}">${alpha}</a:srgbClr>` : '<a:srgbClr val="FFFFFF"><a:alpha val="0"/></a:srgbClr>';
+    return `<a:pattFill prst="${PPT_PATTERN[s.pattern]}"><a:fgClr><a:srgbClr val="${fg}"/></a:fgClr><a:bgClr>${bg}</a:bgClr></a:pattFill>`;
+  }
+  if (s.filled && s.fill === 'gradient') {
+    const to = hex6(s.fill2 ?? '#ffffff');
+    const ang = ((((s.gradAngle ?? 90) % 360) + 360) % 360);
+    const dir = s.gradRadial ? '<a:path path="circle"><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path>' : `<a:lin ang="${Math.round(ang * 60000)}" scaled="0"/>`;
+    return `<a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="${fc}">${alpha}</a:srgbClr></a:gs><a:gs pos="100000"><a:srgbClr val="${to}">${alpha}</a:srgbClr></a:gs></a:gsLst>${dir}</a:gradFill>`;
+  }
+  return null;
+}
+
 /** A box, oval or line as a PowerPoint shape. */
 function shapeXml(s: Shape, id: number, lw: number): string {
   const width = (s.bold ? lw * 2.5 : lw);
@@ -757,10 +783,10 @@ function shapeXml(s: Shape, id: number, lw: number): string {
   }
   // a fill of its own colour, faded (a light tint) or shaded (light to full colour)
   const fc = (s.fillColor ?? s.color ?? '#000000').replace('#', '').toUpperCase();
-  const fill = !s.filled ? '<a:noFill/>'
+  const fill = patternOrGradient(s, fc, '') ?? (!s.filled ? '<a:noFill/>'
     : s.fill === 'faded' ? `<a:solidFill><a:srgbClr val="${tint('#' + fc, FADE).slice(1).toUpperCase()}"/></a:solidFill>`
     : s.fill === 'shaded' ? `<a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="${tint('#' + fc, 0.85).slice(1).toUpperCase()}"/></a:gs><a:gs pos="100000"><a:srgbClr val="${fc}"/></a:gs></a:gsLst>${s.kind === 'oval' ? '<a:path path="circle"><a:fillToRect l="35000" t="30000" r="65000" b="70000"/></a:path>' : '<a:lin ang="2700000" scaled="0"/>'}</a:gradFill>`
-    : `<a:solidFill><a:srgbClr val="${fc}"/></a:solidFill>`;
+    : `<a:solidFill><a:srgbClr val="${fc}"/></a:solidFill>`);
   const outlined = !s.filled || (!!s.fillColor && s.fillColor.toLowerCase() !== (s.color ?? '#000000').toLowerCase());
   const ln = !outlined ? '<a:ln><a:noFill/></a:ln>' : `<a:ln w="${emu(width)}"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dash}</a:ln>`;
   const shadow = s.shadow ? `<a:effectLst><a:outerShdw dist="${emu(s.shadowSize ?? 4 * lw)}" dir="2700000" algn="tl" rotWithShape="0"><a:srgbClr val="C0C0C0"/></a:outerShdw></a:effectLst>` : '';
