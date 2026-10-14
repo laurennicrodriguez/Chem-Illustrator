@@ -23,7 +23,7 @@ import { tableBorders } from './cdxml-table';
 import { writeCdxml } from './cdxml-write';
 import { extractDrawing } from './clipboard';
 import type { Selection } from '../editor/editor';
-import { Package, NS, REL, emu, xml, hex6 } from './ooxml';
+import { Package, NS, REL, emu, xml, xmlAttr, hex6 } from './ooxml';
 import { facesToEmbed, toEot, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
 import { patternInk } from '../render/fills';
@@ -335,7 +335,7 @@ class Writer {
   /** A set of tags in ppt/tags; returns its relationship id from `from`. */
   private addTags(from: string, tags: Record<string, string>): string {
     const path = `ppt/tags/tag${++this.tags}.xml`;
-    const list = Object.entries(tags).map(([k, v]) => `<p:tag name="${xml(k)}" val="${xml(v)}"/>`).join('');
+    const list = Object.entries(tags).map(([k, v]) => `<p:tag name="${xml(k)}" val="${xmlAttr(v)}"/>`).join('');
     this.pkg.add(path, `${HEAD}<p:tagLst ${XMLNS}>${list}</p:tagLst>`, CT.tags);
     return this.pkg.relate(from, REL.tags, fromPpt(from, path));
   }

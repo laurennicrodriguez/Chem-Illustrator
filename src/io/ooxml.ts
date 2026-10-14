@@ -42,6 +42,11 @@ export function xml(s: string): string {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/** Escape text for an XML attribute: as xml(), with tabs and line breaks kept (a parser turns bare ones into spaces). */
+export function xmlAttr(s: string): string {
+  return xml(s).replace(/\t/g, '&#9;').replace(/\n/g, '&#10;').replace(/\r/g, '&#13;');
+}
+
 /** A colour as six hex digits for Office ("#1a2b3c" → "1A2B3C"); black when unreadable. */
 export function hex6(color: string | undefined): string {
   if (!color) return '000000';

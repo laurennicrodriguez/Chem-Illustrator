@@ -99,9 +99,10 @@ export function safeSheetName(name: string): string {
 /** The records of an SD file: each molfile with its data items. */
 export function parseSdf(text: string): { molblock: string; title: string; data: [string, string][] }[] {
   const out: { molblock: string; title: string; data: [string, string][] }[] = [];
-  for (const rec of text.replace(/\r\n?/g, '\n').split(/^\$\$\$\$[^\n]*$/m)) {
+  // (the line break after each $$$$ goes with it, so a first record with an empty title line keeps that line)
+  for (const rec of text.replace(/\r\n?/g, '\n').split(/^\$\$\$\$[^\n]*(?:\n|$)/m)) {
     if (!rec.trim()) continue;
-    const lines = rec.replace(/^\n/, '').split('\n');
+    const lines = rec.split('\n');
     const end = lines.findIndex((l) => l.startsWith('M  END'));
     if (end < 0) continue;
     const molblock = lines.slice(0, end + 1).join('\n');

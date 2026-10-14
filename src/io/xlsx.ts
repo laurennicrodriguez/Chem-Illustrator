@@ -107,6 +107,26 @@ const BUILTIN_FORMATS: Record<number, string> = {
 };
 
 const CHEM_FUNCTION = new RegExp(`\\b(${[...Object.keys(PROPERTIES), ...Object.keys(ISOTOPE_FUNCTIONS)].join('|')})\\s*\\(`, 'i');
+// Functions newer than Excel 2007 are written in the file with a prefix (_xlfn.), which Excel
+// needs to know them; reading a file takes the prefix off, so saving puts it back.
+const XLFN = new Set(['AGGREGATE', 'BETA.DIST', 'BETA.INV', 'BINOM.DIST', 'BINOM.INV', 'CEILING.MATH', 'CHISQ.DIST', 'CHISQ.DIST.RT',
+  'CHISQ.INV', 'CHISQ.INV.RT', 'CHISQ.TEST', 'CONCAT', 'CONFIDENCE.NORM', 'CONFIDENCE.T', 'COVARIANCE.P', 'COVARIANCE.S', 'DAYS',
+  'ERF.PRECISE', 'ERFC.PRECISE', 'EXPON.DIST', 'F.DIST', 'F.INV', 'F.TEST', 'FLOOR.MATH', 'FORECAST.LINEAR', 'GAMMA', 'GAMMA.DIST',
+  'GAMMA.INV', 'GAMMALN.PRECISE', 'GAUSS', 'IFNA', 'IFS', 'ISOWEEKNUM', 'LET', 'LOGNORM.DIST', 'LOGNORM.INV', 'MAXIFS', 'MINIFS',
+  'MODE.MULT', 'MODE.SNGL', 'NORM.DIST', 'NORM.INV', 'NORM.S.DIST', 'NORM.S.INV', 'PERCENTILE.EXC', 'PERCENTILE.INC',
+  'PERCENTRANK.EXC', 'PERCENTRANK.INC', 'POISSON.DIST', 'QUARTILE.EXC', 'QUARTILE.INC', 'RANK.AVG', 'RANK.EQ', 'SEQUENCE',
+  'STDEV.P', 'STDEV.S', 'SWITCH', 'T.DIST', 'T.DIST.2T', 'T.DIST.RT', 'T.INV', 'T.INV.2T', 'T.TEST', 'TEXTJOIN', 'UNIQUE',
+  'VAR.P', 'VAR.S', 'WEIBULL.DIST', 'XLOOKUP', 'XMATCH', 'XOR', 'Z.TEST']);
+const XLWS = new Set(['FILTER', 'SORT', 'SORTBY']);
+
+/** A formula (without its =) with Excel's prefixes on the newer functions, leaving text in quotes alone. */
+export function excelFunctionNames(f: string): string {
+  return f.split(/("(?:[^"]|"")*")/).map((part, i) => (i % 2 ? part : part.replace(/(^|[^A-Za-z0-9_.])([A-Za-z][A-Za-z0-9.]*)(?=\()/g, (m, before: string, name: string) => {
+    const up = name.toUpperCase();
+    return XLWS.has(up) ? `${before}_xlfn._xlws.${name}` : XLFN.has(up) ? `${before}_xlfn.${name}` : m;
+  }))).join('');
+}
+
 /** Does a formula use a chemistry function (which Excel can't work out)? */
 export function usesChemistry(formula: string): boolean {
   return CHEM_FUNCTION.test(formula.replace(/"(?:[^"]|"")*"/g, '""'));
@@ -251,7 +271,7 @@ class Strings {
     const key = (rich ? '1' : '0') + text;
     const got = this.byKey.get(key);
     if (got !== undefined) return got;
-    const t = (s: string) => `<t${/^\s|\s$|\n/.test(s) ? ' xml:space="preserve"' : ''}>${xml(s)}</t>`;
+    const t = (s: string) => `<t${/^\s|\s$|\n/.test(s) ? ' xml:space="preserve"' : ''}>${xml(excelEscape(s))}</t>`;
     this.list.push(rich
       ? `<si>${pieces!.map((p) => `<r>${p.pos !== 'base' || p.italic ? `<rPr>${p.italic ? '<i/>' : ''}${p.pos !== 'base' ? `<vertAlign val="${p.pos === 'sub' ? 'subscript' : 'superscript'}"/>` : ''}</rPr>` : ''}${t(p.text)}</r>`).join('')}</si>`
       : `<si>${t(text)}</si>`);
@@ -365,7 +385,7 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
         if (cell?.structure) entry = { r, c, wrote: null, fix, structure: cell.structure.contents };
         else if (s.defAt(r, c)) entry = { r, c, wrote: null, fix, computed: true };
         else if (input?.startsWith('=') && usesChemistry(input)) entry = { r, c, wrote: null, fix, formula: input };
-        else if (input?.startsWith('=') && header === undefined) formula = input.slice(1);
+        else if (input?.startsWith('=') && header === undefined) formula = excelFunctionNames(input.slice(1));
         if (!entry && fix) entry = { r, c, wrote: null, fix };
         if (entry) ms.cells.push(entry);
         // a structure's SMILES is in its cell, hidden under the picture (the format ;;; shows nothing)
@@ -678,13 +698,20 @@ function readTheme(doc: Document | null): string[] {
   return order.map((n, i) => colour(n) ?? OFFICE_THEME[i]);
 }
 
+/**
+ * Excel writes characters XML can't hold as _xHHHH_ (a carriage return is _x000D_), and a typed
+ * "_x" that would read as one as _x005F_x: undone on reading, and done on writing.
+ */
+const excelUnescape = (s: string) => s.replace(/_x([0-9A-Fa-f]{4})_/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
+export const excelEscape = (s: string) => s.replace(/_(?=x[0-9A-Fa-f]{4}_)/g, '_x005F_').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, (c) => `_x${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}_`);
+
 /** A shared string's text, and whether some of it is lowered or raised (chemistry). */
 function stringItem(si: Element): { text: string; chem: boolean } {
   const t = kid(si, 't');
-  if (t) return { text: t.textContent ?? '', chem: false };
+  if (t) return { text: excelUnescape(t.textContent ?? ''), chem: false };
   let text = '', chem = false;
   for (const r of kids(si, 'r')) {
-    text += kid(r, 't')?.textContent ?? '';
+    text += excelUnescape(kid(r, 't')?.textContent ?? '');
     const va = kid(r, 'rPr', 'vertAlign')?.getAttribute('val');
     if (va === 'subscript' || va === 'superscript') chem = true;
   }

@@ -72,15 +72,17 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
 
   // Document style.
   const st: DocStyle = { ...doc.style, name: 'From file' };
-  st.bondLength = num(root, 'BondLength', 30);
-  st.lineWidth = num(root, 'LineWidth', 1);
-  st.boldWidth = num(root, 'BoldWidth', 4);
+  // sizes must be above zero (a hash spacing of 0 would draw hashes for ever)
+  const size = (name: string, dflt: number) => { const v = num(root, name, dflt); return v > 0 ? v : dflt; };
+  st.bondLength = size('BondLength', 30);
+  st.lineWidth = size('LineWidth', 1);
+  st.boldWidth = size('BoldWidth', 4);
   st.marginWidth = num(root, 'MarginWidth', 2);
-  st.hashSpacing = num(root, 'HashSpacing', 2.7);
+  st.hashSpacing = size('HashSpacing', 2.7);
   st.bondSpacing = num(root, 'BondSpacing', 12);
   st.chainAngle = num(root, 'ChainAngle', 120);
-  st.labelSize = num(root, 'LabelSize', 10);
-  st.captionSize = num(root, 'CaptionSize', 12);
+  st.labelSize = size('LabelSize', 10);
+  st.captionSize = size('CaptionSize', 12);
   st.captionFace = num(root, 'CaptionFace', 0);
   doc.style = st;
 
