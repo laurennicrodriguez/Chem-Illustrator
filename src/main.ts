@@ -8,7 +8,7 @@ import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
 import { Toolboxes, lockIcon, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
-import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS, type Attachment } from './model';
+import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS, type Attachment, type HighlightStyle } from './model';
 import { Renderer, measureText } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
 import type { Align } from './editor/arrange';
@@ -50,7 +50,7 @@ import { itemsToSvg } from './render/svg';
 import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc } from './render/images';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
-import { StylePanel } from './ui/style-panel';
+import { StylePanel, tidyStyle } from './ui/style-panel';
 import { TEMPLATES, Template, templateById, ownTemplates, setOwnTemplates, templateFromAtoms } from './chem/templates';
 import { addNicknames, removeNickname, isBuiltInNickname } from './chem/labels';
 import { selectedGroup } from './chem/group-smiles';
@@ -2319,7 +2319,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'lock-toolboxes': () => { toolboxes.setLocked(!toolboxState.locked); flash(toolboxState.locked ? 'Toolboxes locked.' : 'Toolboxes unlocked: drag one by its title to an edge of the drawing to dock it, or anywhere else to float.', 6000); },
   'add-frame': () => editor.addFrame() || flash('Select what to frame: structures, text, arrows or shapes.'),
   'fill-rings': () => flash(editor.fillRings(), 6000),
-  'highlight': () => editor.highlight(highlightColour) ? flash('Highlighted. Change the colour with Highlight in the Style panel.', 5000) : flash('Select the atoms and bonds to highlight.'),
+  'highlight': () => editor.highlight(highlightColour, highlightStyle) ? flash('Highlighted. Change the colour with Highlight in the Style panel.', 5000) : flash('Select the atoms and bonds to highlight.'),
   'remove-highlight': () => editor.highlight(undefined) || flash('Select the atoms and bonds to take the highlight off.'),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
@@ -2696,6 +2696,8 @@ applySplitWidth();
 
 /** The colour Structure > Highlight uses: the one last chosen in the Style panel (a soft yellow at first). */
 let highlightColour = '#ffe680';
+/** The look new highlights take: the one last chosen in the Style panel. */
+let highlightStyle: HighlightStyle | undefined;
 
 /** Tick the chosen way of writing terminal methyls in the Structure menu. */
 function tickMethylStyle(): void {
@@ -3631,6 +3633,7 @@ stylePanel.removeWhite = (ids) => void removeWhite(ids);
 stylePanel.frames = { add: () => void command('add-frame'), fit: (id) => editor.fitFrame(id) };
 stylePanel.ringFill = () => void command('fill-rings');
 stylePanel.highlightUsed = (c) => { highlightColour = c; };
+stylePanel.highlightStyleUsed = (st) => { highlightStyle = tidyStyle(st); };
 
 // ---------------------------------------------------------------- toolboxes (View > Toolboxes)
 

@@ -2,7 +2,7 @@
 // pan. The editor changes the document and asks for a repaint; hover and drawing previews
 // only repaint the overlay layer.
 
-import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, applyBase, stripBase, type StepRoles } from '../model';
+import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, applyBase, stripBase, type StepRoles, type HighlightStyle } from '../model';
 import { CaptionEditor } from '../ui/caption-editor';
 import { GEO_BY_ID, geoDef, moveSteps, traceSteps } from '../design/geo';
 import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
@@ -1480,12 +1480,12 @@ export class Editor {
   }
 
   /** Highlight the selected atoms and bonds in a colour (Structure > Highlight), or take it off (undefined). */
-  highlight(colour: string | undefined): boolean {
+  highlight(colour: string | undefined, hl?: HighlightStyle): boolean {
     const doc = this.doc;
     if (!this.sel.atoms.size && !this.sel.bonds.size) return false;
     doc.edit(colour ? 'Highlight' : 'Remove highlight', () => {
-      for (const id of this.sel.atoms) doc.updateAtom(id, { highlight: colour });
-      for (const id of this.sel.bonds) doc.updateBond(id, { highlight: colour });
+      for (const id of this.sel.atoms) doc.updateAtom(id, { highlight: colour, hl: colour ? hl : undefined });
+      for (const id of this.sel.bonds) doc.updateBond(id, { highlight: colour, hl: colour ? hl : undefined });
     });
     this.changed();
     return true;

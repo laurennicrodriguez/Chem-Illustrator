@@ -43,6 +43,8 @@ export interface Atom {
   ignoreWarnings?: boolean;
   /** A highlight drawn behind the atom (a disc of this colour), to pick out part of a structure. */
   highlight?: string;
+  /** How the highlight is drawn (its shape, size, shadow…); the usual look when not set. */
+  hl?: HighlightStyle;
   /** Unpaired electrons: a doublet radical uses one bond's worth of valence, a carbene two. */
   radical?: 'singlet' | 'doublet' | 'triplet';
   /**
@@ -138,6 +140,7 @@ export interface Bond {
   stereoLabel?: StereoLabel;
   /** A highlight drawn behind the bond (a broad band of this colour), to pick out part of a structure. */
   highlight?: string;
+  hl?: HighlightStyle;
 }
 
 export interface TextRun {
@@ -252,6 +255,23 @@ export interface Caption {
   /** Don't warn about this compound label (shared with a different structure on purpose). */
   ignoreWarnings?: boolean;
 }
+
+/** The shape of a highlight: discs and round-ended bands, diamonds, or squares. */
+export type HighlightShape = 'round' | 'diamond' | 'square';
+
+/** How a highlight is drawn. Anything left out takes the usual look (HIGHLIGHT_DEFAULTS). */
+export interface HighlightStyle {
+  shape?: HighlightShape;
+  /** Bigger or smaller than usual: 1 is the usual size. */
+  size?: number;
+  /** Grow round an atom's label (Me, OTBS) so the whole label sits on the highlight. */
+  fit?: boolean;
+  shadow?: boolean;
+  /** Fade out at the edges instead of a sharp edge. */
+  soft?: boolean;
+}
+
+export const HIGHLIGHT_DEFAULTS: Required<HighlightStyle> = { shape: 'round', size: 1, fit: true, shadow: false, soft: false };
 
 /** Which side of its structure an attached caption sits on. */
 export type AttachSide = 'below' | 'above' | 'left' | 'right';

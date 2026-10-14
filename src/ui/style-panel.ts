@@ -3,7 +3,8 @@
 // bond (label, charge, atom number; order and style).
 // Anything the drawing tools set automatically can be changed here by hand.
 
-import { Doc, Arrow, Shape, Caption, Atom, Bond, type StepRoles, type Pattern, type AttachSide, type Attachment, type DescriptorKey } from '../model';
+import { Doc, Arrow, Shape, Caption, Atom, Bond, type StepRoles, type Pattern, type AttachSide, type Attachment, type DescriptorKey, type HighlightShape, type HighlightStyle } from '../model';
+import { fullStyle } from '../render/highlight';
 import { DESCRIPTORS } from './analysis-panel';
 import { COMMON_ADDUCTS } from '../chem/hrms';
 import { PATTERNS, patternSpacing } from '../render/fills';
@@ -55,6 +56,7 @@ const LINES: Opt<Arrow['line']>[] = [['solid', 'Solid'], ['dashed', 'Dashed'], [
 const SHAFTS: Opt<string>[] = [['one', 'One line'], ['equilibrium', 'Equilibrium (two half arrows)'], ['retro', 'Retrosynthetic (double line)']];
 const BRACKETS: Opt<NonNullable<Shape['bracket']>>[] = [['square', 'Square [ ]'], ['round', 'Round ( )'], ['curly', 'Curly { }']];
 const VALIGN: Opt<NonNullable<Shape['textValign']>>[] = [['top', 'Top'], ['middle', 'Middle'], ['bottom', 'Bottom']];
+const HL_SHAPES: Opt<HighlightShape>[] = [['round', 'Round (discs and bands)'], ['diamond', 'Diamond'], ['square', 'Square']];
 const SIDES: Opt<AttachSide>[] = [['below', 'Below'], ['above', 'Above'], ['left', 'Left'], ['right', 'Right']];
 const JUSTIFY: Opt<Caption['justify']>[] = [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']];
 const TABLE_LINES: Opt<TableData['lines']>[] = [['acs', 'ACS style (rules above and below the headings, and at the end)'], ['grid', 'Every cell boxed'], ['none', 'None']];
@@ -83,6 +85,8 @@ export class StylePanel {
   frames: { add(): void; fit(shapeId: number): void } | null = null;
   /** A highlight colour was chosen (the app remembers it for Structure > Highlight). */
   highlightUsed: (colour: string) => void = () => {};
+  /** The look last chosen for highlights (new highlights take it). */
+  highlightStyleUsed: (style: HighlightStyle) => void = () => {};
   /** Fill the rings in the selection (set up by the app). */
   ringFill: (() => void) | null = null;
   /** Make a picture's white background see-through (set up by the app). */
@@ -558,6 +562,7 @@ export class StylePanel {
     this.number('Charge', a.charge, 1, -8, 8, (v) => set('Charge', { charge: v }));
     this.color('Colour', a.color, (v) => set('Atom colour', { color: v }));
     this.color('Highlight', a.highlight, (v) => { set(v ? 'Highlight' : 'Remove highlight', { highlight: v }); if (v) this.highlightUsed(v); }, 'None');
+    this.highlightControls([a], []);
     if (a.label || a.z !== 6 || a.showCarbon) {
       this.select('Label runs', LABEL_DIRS, a.just, (v) => set('Label direction', { just: v }));
     }
@@ -581,6 +586,28 @@ export class StylePanel {
     if (b.order === 2) this.select('Second line', DOUBLE_POS, b.dpos, (v) => set('Double bond position', { dpos: v }));
     this.color('Colour', b.color, (v) => set('Bond colour', { color: v }));
     this.color('Highlight', b.highlight, (v) => { set(v ? 'Highlight' : 'Remove highlight', { highlight: v }); if (v) this.highlightUsed(v); }, 'None');
+    this.highlightControls([], [b]);
+  }
+
+  /** How the highlight on these atoms and bonds is drawn: shape, size, round labels, shadow, soft edges. */
+  private highlightControls(atoms: Atom[], bonds: Bond[]): void {
+    const lit = [...atoms, ...bonds].filter((x) => x.highlight);
+    if (!lit.length) return;
+    const st = fullStyle(lit[0].hl);
+    const set = (label: string, patch: HighlightStyle) => {
+      this.edit(label, () => {
+        for (const a of atoms) if (a.highlight) this.doc.updateAtom(a.id, { hl: tidyStyle({ ...a.hl, ...patch }) });
+        for (const b of bonds) if (b.highlight) this.doc.updateBond(b.id, { hl: tidyStyle({ ...b.hl, ...patch }) });
+      });
+      this.highlightStyleUsed({ ...st, ...patch });
+    };
+    this.select<HighlightShape>('Highlight shape', HL_SHAPES, st.shape, (v) => set('Highlight shape', { shape: v }));
+    this.number('Highlight size (%)', Math.round(st.size * 100), 10, 20, 400, (v) => set('Highlight size', { size: v / 100 }),
+      '100% is the usual size; larger for a bolder highlight.');
+    this.check('Grow round atom labels', st.fit, (v) => set(v ? 'Highlight round labels' : 'Highlight not round labels', { fit: v }),
+      'Make the highlight under a labelled atom (Me, OTBS, CO2Et) big enough to hold its whole label.');
+    this.check('Shadow', st.shadow, (v) => set(v ? 'Highlight shadow' : 'No highlight shadow', { shadow: v }));
+    this.check('Soft edges', st.soft, (v) => set(v ? 'Soft highlight' : 'Sharp highlight', { soft: v }), 'Fade the highlight out at its edges.');
   }
 
   /** Several atoms and bonds: their colour (labels and lines together). */
@@ -601,6 +628,7 @@ export class StylePanel {
       });
       if (v) this.highlightUsed(v);
     }, 'None');
+    this.highlightControls(atoms, bonds);
     if (bonds.length >= 3 && this.ringFill) {
       const row = document.createElement('div');
       row.className = 'style-buttons';
@@ -757,3 +785,11 @@ function resizeTableText(t: TableData, size: number): TableData {
 }
 
 type TextRunList = TableData['rows'][number][number]['runs'];
+
+/** A highlight style with the usual values left out (none at all when it is the usual look). */
+export function tidyStyle(s: HighlightStyle): HighlightStyle | undefined {
+  const d = fullStyle(undefined);
+  const out: HighlightStyle = {};
+  for (const k of Object.keys(s) as (keyof HighlightStyle)[]) if (s[k] !== undefined && s[k] !== d[k]) (out as Record<string, unknown>)[k] = s[k];
+  return Object.keys(out).length ? out : undefined;
+}

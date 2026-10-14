@@ -5,7 +5,8 @@
 // fast however big the document is. Label layouts and bond geometry are cached per atom
 // and bond and only recomputed near what changed.
 
-import { Doc, Atom, Bond, Arrow, Caption, Shape, applyBase, enhancedText, CHIRAL_FLAGS, flagTextSize, type TextBase } from '../model';
+import { Doc, Atom, Bond, Arrow, Caption, Shape, applyBase, enhancedText, CHIRAL_FLAGS, flagTextSize, type TextBase, type HighlightStyle } from '../model';
+import { atomPiece, bondPiece, fullStyle, highlightSizes, softRings, tracePieces, type Piece } from './highlight';
 import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
 import { crossingGaps } from '../chem/crossing';
 import { FADE, tint } from '../colours';
@@ -1156,35 +1157,64 @@ export class Renderer {
     return lay;
   }
 
-  /** Highlighted atoms and bonds: discs and broad round-ended bands of their colour, behind everything in the structure. */
+  /**
+   * Highlighted atoms and bonds: discs (or diamonds, squares) under atoms and broad bands under
+   * bonds, in their colour, behind everything in the structure; with a shadow or soft edges when
+   * asked. Each colour and look is filled at once, so overlaps don't show darker.
+   */
   private drawHighlights(ctx: CanvasRenderingContext2D, doc: Doc, atoms: Iterable<Atom>, bonds: Iterable<Bond>): void {
     const L = doc.style.bondLength;
-    const byColour = new Map<string, { bands: [Atom, Atom, number][]; discs: [Atom, number][] }>();
-    const of = (c: string) => { let g = byColour.get(c); if (!g) { g = { bands: [], discs: [] }; byColour.set(c, g); } return g; };
+    type Group = { colour: string; style: Required<HighlightStyle>; scale: number; atoms: Atom[]; bonds: [Atom, Atom][] };
+    const groups = new Map<string, Group>();
+    const of = (colour: string, hl: HighlightStyle | undefined, k: number) => {
+      const style = fullStyle(hl);
+      const key = colour + JSON.stringify(style) + k;
+      let g = groups.get(key);
+      if (!g) { g = { colour, style, scale: k, atoms: [], bonds: [] }; groups.set(key, g); }
+      return g;
+    };
     for (const b of bonds) {
       if (!b.highlight) continue;
       const p = doc.atoms.get(b.a1), q = doc.atoms.get(b.a2);
-      if (p && q) of(b.highlight).bands.push([p, q, (b.s ?? 1) * L * 0.42]);
+      if (p && q) of(b.highlight, b.hl, b.s ?? 1).bonds.push([p, q]);
     }
-    for (const a of atoms) if (a.highlight) of(a.highlight).discs.push([a, (a.s ?? 1) * L * 0.27]);
-    if (!byColour.size) return;
+    for (const a of atoms) if (a.highlight) of(a.highlight, a.hl, a.s ?? 1).atoms.push(a);
+    if (!groups.size) return;
+    const pieces = (g: Group, grow: number, shift = 0): Piece[] => {
+      const { disc, band } = highlightSizes(L * g.scale, g.style.size);
+      const out: Piece[] = [];
+      const mv = (v: Vec) => (shift ? { x: v.x + shift, y: v.y + shift } : v);
+      for (const [p, q] of g.bonds) out.push(bondPiece(mv(p), mv(q), band, g.style.shape, grow));
+      for (const a of g.atoms) {
+        let label: Rect | null = null;
+        if (g.style.fit) {
+          const bx = this.atomInfo(doc, a).boxes;
+          if (bx.length) label = { x1: Math.min(...bx.map((b) => b.x1)) + shift, y1: Math.min(...bx.map((b) => b.y1)) + shift, x2: Math.max(...bx.map((b) => b.x2)) + shift, y2: Math.max(...bx.map((b) => b.y2)) + shift };
+        }
+        out.push(atomPiece(mv(a), disc, g.style.shape, label, 0.04 * L * g.style.size, grow));
+      }
+      return out;
+    };
+    const fill = (ps: Piece[], colour: string) => {
+      ctx.fillStyle = colour;
+      ctx.beginPath();
+      tracePieces(ctx, ps);
+      ctx.fill();
+    };
+    /** The whole highlight, soft-edged when asked: faint rings outside, solid in the middle. */
+    const paint = (g: Group, colour: string, alpha: number, shift: number) => {
+      if (g.style.soft) {
+        const { step, count } = softRings(highlightSizes(L * g.scale, g.style.size).band);
+        // the solid part is a little smaller, so the soft edge doesn't make it look bigger
+        for (let i = count; i >= 1; i--) fill(pieces(g, (i - count / 2) * step, shift), withAlpha(colour, alpha * 0.28));
+        fill(pieces(g, -(count / 2) * step, shift), withAlpha(colour, alpha));
+      } else fill(pieces(g, 0, shift), alpha < 1 ? withAlpha(colour, alpha) : colour);
+    };
     ctx.save();
     ctx.setLineDash([]);
-    ctx.lineCap = 'round';
-    for (const [c, g] of byColour) {
-      // one colour at a time, so the bands and discs of one highlight join without darker overlaps
-      ctx.strokeStyle = ctx.fillStyle = c;
-      for (const [p, q, w] of g.bands) {
-        ctx.lineWidth = w;
-        ctx.beginPath();
-        ctx.moveTo(p.x, p.y);
-        ctx.lineTo(q.x, q.y);
-        ctx.stroke();
-      }
-      ctx.beginPath();
-      for (const [a, r] of g.discs) { ctx.moveTo(a.x + r, a.y); ctx.arc(a.x, a.y, r, 0, Math.PI * 2); }
-      if (g.discs.length) ctx.fill();
-    }
+    // shadows first, so no highlight's shadow falls on another highlight
+    for (const g of groups.values()) if (g.style.shadow) paint(g, '#000000', 0.22, 0.07 * L * g.scale * g.style.size);
+    for (const g of groups.values()) paint(g, g.colour, 1, 0);
     ctx.restore();
   }
 

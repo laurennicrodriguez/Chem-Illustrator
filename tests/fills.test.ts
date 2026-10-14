@@ -153,7 +153,8 @@ describe('fills in pictures', () => {
     const fills = new Set(p.items.filter((i) => i.kind === 'path' && i.fill).map((i) => (i as { fill: string }).fill));
     // the gradient's bands are many colours
     expect(fills.size).toBeGreaterThan(10);
-    expect(p.items.some((i) => i.kind === 'path' && i.stroke?.color.toLowerCase() === '#ffe680')).toBe(true);
+    // highlights are filled outlines, so they come out in Word and PowerPoint as shapes
+    expect(fills.has('#ffe680')).toBe(true);
     expect(pictureSvg(p)).toContain('<path');
     expect(pictureEmf(p).length).toBeGreaterThan(1000);
   });

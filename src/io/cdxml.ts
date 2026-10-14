@@ -4,6 +4,7 @@
 
 import { fillFrameMembers, frameFromTag } from '../editor/frames';
 import { ATTACH_TAG, IGNORE_TAG, attachFromTag, fillAttachments } from '../editor/attached';
+import { highlightStyleFromTag } from '../render/highlight';
 import { attachRingFills } from '../chem/ring-fill';
 import { lipDirection } from '../chem/polymer';
 import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, CHIRAL_FLAGS } from '../model';
@@ -206,6 +207,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       if (groupTag) extra.group = groupTag;
       const hlA = kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === HIGHLIGHT_TAG)?.getAttribute('Value');
       if (hlA && /^#[0-9a-f]{6}$/i.test(hlA)) extra.highlight = hlA.toLowerCase();
+      const lookA = highlightStyleFromTag(kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === HIGHLIGHT_LOOK_TAG)?.getAttribute('Value'));
+      if (lookA && extra.highlight) extra.hl = lookA;
       if (n.getAttribute('ShowTerminalCarbonLabels') === 'yes' || n.getAttribute('ShowNonTerminalCarbonLabels') === 'yes') extra.showCarbon = true;
       const atomNumber = n.getAttribute('AtomNumber');
       if (atomNumber) extra.atomNumber = atomNumber;
@@ -286,6 +289,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       if (c) extra.color = c;
       const hlB = kids(b).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === HIGHLIGHT_TAG)?.getAttribute('Value');
       if (hlB && /^#[0-9a-f]{6}$/i.test(hlB)) extra.highlight = hlB.toLowerCase();
+      const lookB = highlightStyleFromTag(kids(b).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === HIGHLIGHT_LOOK_TAG)?.getAttribute('Value'));
+      if (lookB && extra.highlight) extra.hl = lookB;
       const bond = doc.addBond(a1, a2, order, display, extra);
       from('b', bond.id, b);
       stats.bonds++;
@@ -844,6 +849,8 @@ export function fillExtras(v: Partial<Shape>): Partial<Shape> {
 
 /** A highlight behind an atom or bond: its colour (ChemDraw has no highlights, so it shows nothing). */
 export const HIGHLIGHT_TAG = 'Chem Illustrator highlight';
+/** How a highlight is drawn (its shape, size, shadow…), when not the usual look. */
+export const HIGHLIGHT_LOOK_TAG = 'Chem Illustrator highlight look';
 /** The tag that keeps a contracted label's group (SMILES), so its chemistry comes back with the file. */
 export const GROUP_TAG = 'Chem Illustrator group';
 /** The tag on the group that draws a design shape in ChemDraw: the shape as it is here. */

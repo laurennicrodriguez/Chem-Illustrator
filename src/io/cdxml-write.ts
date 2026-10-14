@@ -6,7 +6,7 @@
 // deleted ones are removed and new ones are added. A new drawing is written from scratch in
 // the same form ChemDraw uses, so ChemDraw opens both.
 
-import { Doc, Atom, Bond, Caption, Arrow, Shape, TextRun, Entity, Kind, StepRoles, enhancedText, CHIRAL_FLAGS, flagTextSize } from '../model';
+import { Doc, Atom, Bond, Caption, Arrow, Shape, TextRun, Entity, Kind, StepRoles, enhancedText, CHIRAL_FLAGS, flagTextSize, type HighlightStyle } from '../model';
 import { interpretArrow, isReactionArrow, isStep, plainMeasure, schemeItems, type Item } from '../chem/reaction';
 import { SYMBOLS } from '../chem/elements';
 import { labelSpec, layoutLabel, labelDir, labelGraph, tokenize, isGenericLabel, Measure, MiniGraph, kekulize } from '../chem/labels';
@@ -19,7 +19,7 @@ import { runsForChemDraw, TEXT_TAG } from '../text/chemdraw-text';
 import { ATTACH_TAG, IGNORE_TAG, attachTag } from '../editor/attached';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { fromDataUrl } from '../render/images';
-import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, GROUP_TAG, GEO_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG } from './cdxml';
+import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, GROUP_TAG, GEO_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG, HIGHLIGHT_LOOK_TAG } from './cdxml';
 import { frameTag } from '../editor/frames';
 import { geoDef, moveSteps, textArea, type GeoStep } from '../design/geo';
 import { FADE, tint } from '../colours';
@@ -543,13 +543,14 @@ class CdxmlWriter {
   private atomGroup(n: Element, a: Atom): void {
     for (const c of kids(n)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === GROUP_TAG) n.removeChild(c);
     if (a.group && a.label) n.appendChild(this.el('objecttag', { TagType: 'String', Name: GROUP_TAG, Value: a.group, Visible: 'no' }));
-    this.highlightTag(n, a.highlight);
+    this.highlightTag(n, a.highlight, a.hl);
   }
 
   /** A highlight's colour, in a hidden tag (ChemDraw has no highlights). */
-  private highlightTag(e: Element, colour: string | undefined): void {
-    for (const c of kids(e)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === HIGHLIGHT_TAG) e.removeChild(c);
+  private highlightTag(e: Element, colour: string | undefined, look: HighlightStyle | undefined): void {
+    for (const c of kids(e)) if (c.nodeName === 'objecttag' && (c.getAttribute('Name') === HIGHLIGHT_TAG || c.getAttribute('Name') === HIGHLIGHT_LOOK_TAG)) e.removeChild(c);
     if (colour) e.appendChild(this.el('objecttag', { TagType: 'String', Name: HIGHLIGHT_TAG, Value: colour, Visible: 'no' }));
+    if (colour && look && Object.keys(look).length) e.appendChild(this.el('objecttag', { TagType: 'String', Name: HIGHLIGHT_LOOK_TAG, Value: JSON.stringify(look), Visible: 'no' }));
   }
 
   private patchNodeBody(n: Element, a: Atom, o: Atom, dx: number, dy: number): void {
@@ -923,7 +924,7 @@ class CdxmlWriter {
     this.bondStereo(e, b, true);
     // an older mark for ring circles (the circle is now written as ChemDraw draws it, see writeRingCircles)
     for (const c of kids(e)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === CIRCLE_TAG) e.removeChild(c);
-    this.highlightTag(e, b.highlight);
+    this.highlightTag(e, b.highlight, b.hl);
   }
 
   // ------------------------------------------------------------------ captions, arrows, shapes
