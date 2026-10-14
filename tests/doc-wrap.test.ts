@@ -167,3 +167,54 @@ describe('floating figures in Word files', () => {
     expect(o?.kind === 'picture' ? o.float : null).toEqual({ wrap: 'square', x: 20, y: 10 });
   });
 });
+
+describe('columns', () => {
+  const cols = (n: number, paras: string[], colGap?: number): DocText => {
+    const t = doc(paras, { kind: 'seq', name: 'Figure' });
+    return { ...t, page: { ...t.page, cols: n, ...(colGap !== undefined ? { colGap } : {}) } };
+  };
+  const LONG = Array.from({ length: 14 }, () => WORDS);
+
+  it('sets the text in columns half an inch apart, filling the first before the second', () => {
+    const t = cols(2, LONG);
+    const lay = layouter().layout(t);
+    const w = (468 - 36) / 2;
+    expect(lay.textW).toBeCloseTo(w);
+    expect(lay.cols.x).toEqual([0, w + 36]);
+    const first = lay.pages[0];
+    const xs = lay.text.lines.slice(first.first, first.end).map((l) => l.left);
+    const k = xs.findIndex((x) => x > 72 + 1);
+    // the first column's lines, then the second's
+    expect(k).toBeGreaterThan(10);
+    expect(xs.slice(k).every((x) => Math.abs(x - (72 + w + 36)) < 1e-6)).toBe(true);
+    for (const l of lay.text.lines) expect(l.width).toBeLessThanOrEqual(w + 1e-6);
+    // the second column starts at the top of the page
+    const second = lay.text.lines[first.first + k];
+    expect(second.y - (second.above ?? 0)).toBeCloseTo(t.page.top);
+  });
+
+  it('a column break starts the next column, and a click finds the line in the column clicked', async () => {
+    const t = cols(2, ['one', 'two']);
+    t.paras[1] = { ...t.paras[1], colBreak: true };
+    const lay = layouter().layout(t);
+    const [a, b] = lay.text.lines;
+    expect(b.left).toBeGreaterThan(a.left + 200);
+    expect(b.y).toBeCloseTo(a.y);
+    const { offsetAt } = await import('../src/text/layout');
+    expect(offsetAt(lay.text, b.left + 2, b.y)).toBeGreaterThanOrEqual(b.start);
+    expect(offsetAt(lay.text, a.left + 2, a.y)).toBeLessThanOrEqual(a.end);
+  });
+
+  it('saves columns and column breaks for Word, and opens them again', async () => {
+    const t = cols(3, ['one', 'two'], 18);
+    t.paras[1] = { ...t.paras[1], colBreak: true };
+    const body = strFromU8(unzipSync(await writeDocx(t, deps))['word/document.xml']);
+    expect(body).toContain('<w:cols w:num="3" w:space="360"/>');
+    expect(body).toContain('<w:br w:type="column"/>');
+    const back = (await readDocx(await writeDocx(t, deps))).doc;
+    expect(back.page.cols).toBe(3);
+    expect(back.page.colGap).toBe(18);
+    expect(back.paras[1].colBreak).toBe(true);
+    expect(rt.plainText(back.runs)).toBe(rt.plainText(t.runs));
+  });
+});

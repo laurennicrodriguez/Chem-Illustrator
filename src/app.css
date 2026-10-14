@@ -1330,3 +1330,6 @@ dialog.cf-manage { width: min(92vw, 640px); }
 #btn-dark { display: inline-flex; align-items: center; justify-content: center; padding: 0 7px; }
 #btn-dark svg { width: 18px; height: 18px; }
 #btn-dark[aria-pressed='true'] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+/* short choices in the Layout ribbon need less room */
+#doc-ribbon #doc-orient, #doc-ribbon #doc-columns { min-width: 96px; }
+#doc-ribbon #doc-wrap { min-width: 128px; }

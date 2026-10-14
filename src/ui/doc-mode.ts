@@ -1193,6 +1193,7 @@ export class DocumentMode {
       case 'doc-indent': ed.indent(1); break;
       case 'doc-outdent': ed.indent(-1); break;
       case 'page-break': this.pageBreak(); break;
+      case 'col-break': this.pageBreak(true); break;
       case 'select-all': ed.selectAll(); break;
       case 'undo': ed.undo(); break;
       case 'redo': ed.redo(); break;
@@ -1236,7 +1237,7 @@ export class DocumentMode {
         break;
       }
       default: {
-        const m = /^(margins|paper|orient|numbers)-(.+)$/.exec(cmd);
+        const m = /^(margins|paper|orient|numbers|columns)-(.+)$/.exec(cmd);
         if (!m || !this.layoutCommand(m[1], m[2])) return false;
       }
     }
@@ -1280,6 +1281,11 @@ export class DocumentMode {
       page(land ? { w: size.h, h: size.w } : { ...size });
     } else if (what === 'orient') {
       if ((v === 'landscape') !== land) page({ w: t.page.h, h: t.page.w });
+    } else if (what === 'columns') {
+      if (v === 'more') { this.panel.open('page', this.ribbon.querySelector<HTMLElement>('#doc-columns'), 'pg-cols'); return true; }
+      const n = Number(v);
+      if (!(n >= 1 && n <= 4)) return false;
+      page({ cols: n > 1 ? n : undefined });
     } else if (what === 'numbers') {
       f.ed.update({ ...t, hf: { ...t.hf, numbers: v as NumberPlace } } as DocText, 'Page numbers');
     } else return false;
@@ -1287,11 +1293,11 @@ export class DocumentMode {
   }
 
   /** Ctrl+Enter: what follows the caret starts a new page. */
-  private pageBreak(): void {
+  private pageBreak(column = false): void {
     const ed = this.ed;
     ed.enter(false);
     const p = paraAt(ed.text, ed.focus);
-    ed.setParas(p, p, { pageBreak: true }, 'break');
+    ed.setParas(p, p, column ? { colBreak: true } : { pageBreak: true }, 'break');
   }
 
   private drawNew(): void {
@@ -1530,7 +1536,7 @@ export class DocumentMode {
     });
     // selects that run a command: margins, paper, orientation, page numbers
     for (const sel of r.querySelectorAll<HTMLSelectElement>('select[data-doc-prefix]')) {
-      sel.addEventListener('change', () => { const v = sel.value; this.run(`${sel.dataset.docPrefix}-${v}`); if (v !== 'custom') this.focus(); });
+      sel.addEventListener('change', () => { const v = sel.value; this.run(`${sel.dataset.docPrefix}-${v}`); if (v !== 'custom' && v !== 'more') this.focus(); });
     }
     // zoom, under the pages
     for (const b of document.querySelectorAll<HTMLButtonElement>('#doc-statusbar [data-doc]')) {
@@ -1631,6 +1637,7 @@ export class DocumentMode {
     pick('#doc-paper', near(short, LETTER.w) && near(long, LETTER.h) ? 'letter' : near(short, A4.w) && near(long, A4.h) ? 'a4' : 'other');
     pick('#doc-orient', pg.w > pg.h ? 'landscape' : 'portrait');
     pick('#doc-numbers', f.t.hf.numbers);
+    pick('#doc-columns', String(f.t.page.cols ?? 1));
     press('numbers-s', f.t.hf.prefix === 'S');
     const fig = this.pickedObject() ?? f.box?.id ?? null;
     const wrapSel = this.ribbon.querySelector<HTMLSelectElement>('#doc-wrap');

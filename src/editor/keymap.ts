@@ -191,7 +191,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   // documents
   'new-document': 'New document', 'doc-align-left': 'Align text left', 'doc-align-center': 'Centre text', 'doc-align-right': 'Align text right',
   'doc-justify': 'Justify text', 'style-normal': 'Normal style', 'style-title': 'Title style', 'style-h1': 'Heading 1 style', 'style-h2': 'Heading 2 style',
-  'style-h3': 'Heading 3 style', 'style-caption': 'Caption style', 'page-break': 'Page break', 'line-single': 'Single line spacing',
+  'style-h3': 'Heading 3 style', 'style-caption': 'Caption style', 'page-break': 'Page break', 'col-break': 'Column break', 'line-single': 'Single line spacing',
   'line-1-5': '1.5 line spacing', 'line-double': 'Double line spacing', 'font-bigger': 'Larger text', 'font-smaller': 'Smaller text',
   'doc-bullets': 'Bullets', 'doc-numbering': 'Numbering', replace: 'Find and replace…', 'insert-structure': 'Insert a structure (draw it)',
   'insert-caption': 'Insert a caption…', 'cross-reference': 'Insert a cross-reference…', 'compound-number': 'Insert a compound number…', 'structure-from-name-doc': 'Insert a structure from a name or SMILES…',
@@ -334,7 +334,7 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
   document: verbs('command', {
     'Ctrl+L': 'doc-align-left', 'Ctrl+E': 'doc-align-center', 'Ctrl+R': 'doc-align-right', 'Ctrl+J': 'doc-justify',
     'Ctrl+Alt+1': 'style-h1', 'Ctrl+Alt+2': 'style-h2', 'Ctrl+Alt+3': 'style-h3', 'Ctrl+Shift+N': 'style-normal',
-    'Ctrl+Enter': 'page-break', 'Ctrl+1': 'line-single', 'Ctrl+5': 'line-1-5', 'Ctrl+2': 'line-double',
+    'Ctrl+Enter': 'page-break', 'Ctrl+Shift+Enter': 'col-break', 'Ctrl+1': 'line-single', 'Ctrl+5': 'line-1-5', 'Ctrl+2': 'line-double',
     'Ctrl+]': 'font-bigger', 'Ctrl+[': 'font-smaller', 'Ctrl+Shift+L': 'doc-bullets',
     'Ctrl+F': 'find', 'Ctrl+H': 'replace', 'Ctrl+N': 'new-document',
   }),

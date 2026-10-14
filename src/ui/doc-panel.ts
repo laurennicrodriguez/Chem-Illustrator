@@ -7,7 +7,7 @@ import type { Justify } from '../model';
 import { FloatBox, PINNED_ICON } from './float-box';
 import type { DocFile } from '../document/doc-file';
 import {
-  A4, CM, INCH, LETTER, FLOAT_GAP, defaultStyles, floatOf, modifyStyle, setParaStyle, styleOf,
+  A4, CM, COL_GAP, INCH, LETTER, FLOAT_GAP, defaultStyles, floatOf, modifyStyle, setParaStyle, styleOf,
   type DocText, type FigureLook, type Float, type WrapKind, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
 } from '../document/document';
 
@@ -382,6 +382,7 @@ export class DocPanel {
     for (const v of ['1', '1.15', '1.5', '2', '2.5', '3']) lines.append(new Option(v));
     s.append(lines);
     this.check(s, 'p-break', 'Start on a new page', (v) => paras({ pageBreak: v || undefined }, 'break'), 'A page break before this paragraph (Ctrl+Enter makes one at the caret)');
+    this.check(s, 'p-colbreak', 'Start a new column', (v) => paras({ colBreak: v || undefined }, 'break'), 'In a page of columns: this paragraph starts the next column (Ctrl+Shift+Enter makes one at the caret)');
     this.check(s, 'p-keep', 'Keep with next', (v) => paras({ keepNext: v || undefined }, 'keep'), 'On the same page as the paragraph after it (headings do this)');
   }
 
@@ -477,6 +478,10 @@ export class DocPanel {
     len('right', 'Right margin (in)');
     len('header', 'Header from top (in)', 'How far the header sits from the top of the page');
     len('footer', 'Footer from bottom (in)', 'How far the footer and page numbers sit from the bottom of the page');
+    this.row(s, 'Columns', this.select('pg-cols', [['1', 'One'], ['2', 'Two'], ['3', 'Three'], ['4', 'Four']], (v) => page({ cols: Number(v) > 1 ? Number(v) : undefined })),
+      'Text runs down one column, then the next (Layout > Column Break starts the next one early)');
+    this.row(s, 'Column spacing (in)', this.input('pg-colGap', (v) => { const n = parseLength(v, 'in'); if (n !== null && n >= 0) page({ colGap: Math.abs(n - COL_GAP) < 0.01 ? undefined : n }); }),
+      'Space between columns (Word\'s is 0.5 in)');
   }
 
   private buildHeaderFooter(): void {
@@ -572,6 +577,7 @@ export class DocPanel {
     put('p-rule', p.linePt ? p.lineRule ?? 'atLeast' : 'multiple');
     put('p-line', p.linePt ? showLength(p.linePt, 'pt') : String(p.line ?? 1));
     put('p-break', !!p.pageBreak);
+    put('p-colbreak', !!p.colBreak);
     put('p-keep', !!p.keepNext);
     // its style
     this.styleTitle.textContent = `Style: ${st.name}`;
@@ -594,6 +600,8 @@ export class DocPanel {
     put('pg-size', same(LETTER) ? 'letter' : same(A4) ? 'a4' : 'custom');
     put('pg-orient', pg.w > pg.h ? 'landscape' : 'portrait');
     for (const k of ['w', 'h', 'top', 'bottom', 'left', 'right', 'header', 'footer'] as const) put('pg-' + k, showLength(pg[k], 'in'));
+    put('pg-cols', String(pg.cols ?? 1));
+    put('pg-colGap', showLength(pg.colGap ?? COL_GAP, 'in'));
     // header and footer
     const hf = t.hf;
     put('hf-numbers', hf.numbers);

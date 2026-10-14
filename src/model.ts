@@ -223,6 +223,8 @@ export interface ParaStyle {
   style?: string;
   /** Documents: starts a new page. */
   pageBreak?: boolean;
+  /** Documents set in columns: starts the next column. */
+  colBreak?: boolean;
   /** Documents: the first line's indent from the rest, in points (less than 0 hangs it out). */
   firstLine?: number;
   /** Documents: line spacing as a multiple of single spacing (single when left out). */

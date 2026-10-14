@@ -15,7 +15,7 @@ import { Package, REL, NS, xml, hex6, emu } from './ooxml';
 import { facesToEmbed, newGuid, obfuscate, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
-import { BOX_PAD, COMPOUND, FLOAT_GAP, OBJECT_CHAR, SHADOWS, fieldTexts, floatOf, lookExtent, lookOf, pruneObjects, styleOf, runStyleOf, type DocObject, type DocText, type FigureLook, type NamedStyle } from '../document/document';
+import { BOX_PAD, COL_GAP, COMPOUND, FLOAT_GAP, columnsOf, OBJECT_CHAR, SHADOWS, fieldTexts, floatOf, lookExtent, lookOf, pruneObjects, styleOf, runStyleOf, type DocObject, type DocText, type FigureLook, type NamedStyle, type PageSetup } from '../document/document';
 import { bibHang, shownSize } from '../document/doc-layout';
 import { bibliography, piecesText } from '../document/references';
 import { documentMeasure } from '../text/font-measure';
@@ -65,6 +65,7 @@ class DocxWriter {
   private numberedLists = 0;
   private model: DocxModel;
   private textW: number;
+  private fullW: number;
 
   constructor(private t: DocText, private deps: DocxDeps) {
     this.shown = fieldTexts(t);
@@ -76,7 +77,9 @@ class DocxWriter {
     if (t.references?.length || Object.values(t.objects).some((o) => o.kind === 'cite' || o.kind === 'bib')) this.model.references = t.references ?? [];
     if (t.citeStyle) this.model.citeStyle = t.citeStyle;
     if (t.citeOptions && Object.keys(t.citeOptions).length) this.model.citeOptions = t.citeOptions;
-    this.textW = Math.max(36, t.page.w - t.page.left - t.page.right);
+    this.fullW = Math.max(36, t.page.w - t.page.left - t.page.right);
+    // figures are made to fit a column's width
+    this.textW = columnsOf(t.page, this.fullW).w;
   }
 
   async write(title: string): Promise<Uint8Array> {
@@ -183,6 +186,8 @@ class DocxWriter {
     if (st.id !== 'Normal') pPr.push(`<w:pStyle w:val="${xml(st.id)}"/>`);
     if (!!ps.keepNext !== st.keepNext) pPr.push(ps.keepNext ? '<w:keepNext/>' : '<w:keepNext w:val="0"/>');
     if (ps.pageBreak) pPr.push('<w:pageBreakBefore/>');
+    // Word has no "start a new column" for a paragraph: a column break begins it
+    const colBreak = ps.colBreak ? '<w:r><w:br w:type="column"/></w:r>' : '';
     const em = runs.find((r) => r.obj === undefined)?.size ?? st.size;
     if (ps.list && !ps.cont) {
       const id = ps.list === 'bullet' ? 1 : Math.max(2, listNum);
@@ -226,7 +231,7 @@ class DocxWriter {
       if (mark !== null) out.push(`<w:bookmarkEnd w:id="${mark}"/>`);
       if (open && r.obj === open.seq) { out.push(`<w:bookmarkEnd w:id="${open.id}"/>`); open = null; }
     }
-    return `<w:p>${pPr.length ? `<w:pPr>${pPr.join('')}</w:pPr>` : ''}${out.join('')}</w:p>`;
+    return `<w:p>${pPr.length ? `<w:pPr>${pPr.join('')}</w:pPr>` : ''}${colBreak}${out.join('')}</w:p>`;
   }
 
   /**
@@ -456,7 +461,7 @@ class DocxWriter {
     const land = pg.w > pg.h;
     return `<w:sectPr>${refs.join('')}<w:pgSz w:w="${twips(pg.w)}" w:h="${twips(pg.h)}"${land ? ' w:orient="landscape"' : ''}/>` +
       `<w:pgMar w:top="${twips(pg.top)}" w:right="${twips(pg.right)}" w:bottom="${twips(pg.bottom)}" w:left="${twips(pg.left)}" w:header="${twips(pg.header)}" w:footer="${twips(pg.footer)}" w:gutter="0"/>` +
-      `<w:pgNumType w:start="${Math.round(hf.start)}"/><w:cols w:space="720"/>${titlePg ? '<w:titlePg/>' : ''}<w:docGrid w:linePitch="360"/></w:sectPr>`;
+      `<w:pgNumType w:start="${Math.round(hf.start)}"/>${colsXml(pg)}${titlePg ? '<w:titlePg/>' : ''}<w:docGrid w:linePitch="360"/></w:sectPr>`;
   }
 
   /** A header or footer part: its left, centre and right text on one line (with tab stops), and the page number. Null when empty. */
@@ -483,7 +488,7 @@ class DocxWriter {
     }
     // drop the tabs after the last zone with something in it
     while (parts.length && parts[parts.length - 1].includes('<w:tab/>')) parts.pop();
-    const pPr = `<w:pPr><w:tabs><w:tab w:val="center" w:pos="${twips(this.textW / 2)}"/><w:tab w:val="right" w:pos="${twips(this.textW)}"/></w:tabs>` +
+    const pPr = `<w:pPr><w:tabs><w:tab w:val="center" w:pos="${twips(this.fullW / 2)}"/><w:tab w:val="right" w:pos="${twips(this.fullW)}"/></w:tabs>` +
       `<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/><w:ind w:left="0" w:firstLine="0"/><w:jc w:val="left"/></w:pPr>`;
     return `${HEAD}<w:${kind === 'header' ? 'hdr' : 'ftr'} xmlns:w="${W_NS}" xmlns:r="${NS.r}"><w:p>${pPr}${parts.join('')}</w:p></w:${kind === 'header' ? 'hdr' : 'ftr'}>`;
   }
@@ -561,6 +566,12 @@ const half = (pt: number): number => Math.max(2, Math.round(pt * 2));
 function fontsXml(font: string): string {
   const f = xml(font);
   return `<w:rFonts w:ascii="${f}" w:eastAsia="${f}" w:hAnsi="${f}" w:cs="${f}"/>`;
+}
+
+/** The page's columns, as Word's section sets them. */
+export function colsXml(pg: PageSetup): string {
+  const n = Math.max(1, Math.min(4, Math.round(pg.cols ?? 1)));
+  return n > 1 ? `<w:cols w:num="${n}" w:space="${twips(pg.colGap ?? COL_GAP)}"/>` : '<w:cols w:space="720"/>';
 }
 
 /** A figure's frame and shadow as a picture's shape properties (fill, line, effects, in that order). */

@@ -106,6 +106,8 @@ export interface LaidLine {
   marker?: Glyphs;
   /** Room given up at the right to a figure beside the line (documents). */
   cutRight?: number;
+  /** Documents in columns: the left and right of the line's column (clicks find lines in it). */
+  band?: [number, number];
   /** The last line of its paragraph. */
   last: boolean;
   /** A line of a block that a field shows (a bibliography): the field's id. */
@@ -469,12 +471,20 @@ export function caretPos(lay: TextLayout, offset: number): { x: number; line: nu
 
 /** The place in the text nearest a point (relative to the origin). */
 export function offsetAt(lay: TextLayout, x: number, y: number): number {
-  const ls = lay.lines;
+  let idx = lay.lines.map((_, i) => i);
+  // text in columns: the lines of the column nearest the point (they run down it, page after page)
+  if (lay.lines.some((l) => l.band)) {
+    const gap = (l: LaidLine) => (l.band ? Math.max(0, l.band[0] - x, x - l.band[1]) : 0);
+    const best = Math.min(...idx.map((i) => gap(lay.lines[i])));
+    const band = lay.lines[idx.find((i) => gap(lay.lines[i]) === best)!].band;
+    if (band) idx = idx.filter((i) => { const b = lay.lines[i].band; return !b || (b[0] === band[0] && b[1] === band[1]); });
+  }
+  const ls = idx.map((i) => lay.lines[i]);
   let li = ls.length - 1;
   for (let i = 0; i < ls.length; i++) {
     if (y < ls[i].y + ls[i].descent + (i + 1 < ls.length ? (ls[i + 1].y - ls[i + 1].ascent - ls[i].y - ls[i].descent) / 2 : Infinity)) { li = i; break; }
   }
-  return offsetInLine(lay, li, x);
+  return offsetInLine(lay, idx[Math.max(0, li)], x);
 }
 
 /** The place on a line nearest an x position. */

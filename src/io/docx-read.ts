@@ -21,7 +21,7 @@ import { arialWidth } from '../text-metrics';
 import { documentMeasure } from '../text/font-measure';
 import {
   OBJECT_CHAR, defaultHeaderFooter, defaultPage, defaultStyles,
-  FLOAT_GAP, lookExtent,
+  COL_GAP, FLOAT_GAP, columnsOf, lookExtent,
   type DocObject, type DocText, type FigureLook, type Float, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
 } from '../document/document';
 import { shownSize } from '../document/doc-layout';
@@ -85,7 +85,7 @@ interface PProps {
 }
 interface WStyle { id: string; type: string; name: string; basedOn?: string; next?: string; isDefault: boolean; p: PProps; r: RProps; el: Element }
 interface Level { fmt: string; text: string; p: PProps }
-interface Piece { runs: TextRun[]; pageBreak: boolean; soft: boolean }
+interface Piece { runs: TextRun[]; pageBreak: boolean; soft: boolean; colBreak?: boolean }
 interface Ctx { base: RProps; pieces: Piece[]; cell: boolean }
 interface Field { instr: string; phase: 'instr' | 'result'; swallow: boolean; text: string; props: RProps; done: boolean; ref?: { id: number; mark: string; text: string } }
 interface OutPara { ps: ParaStyle; runs: TextRun[]; mark: rt.RunStyle; style: string; contextual: boolean; table?: boolean; bib?: string }
@@ -403,7 +403,15 @@ class DocxReader {
       header: get(mar, 'header', d.header), footer: get(mar, 'footer', d.footer),
     };
     if (this.page.w < 72 || this.page.h < 72) this.page = d;
-    this.textW = Math.max(36, this.page.w - this.page.left - this.page.right);
+    // columns (Word's equal columns; columns of their own widths are read as equal ones)
+    const cols = kid(sect, 'cols');
+    const n = Number(this.a(cols, 'num') ?? 1);
+    if (n > 1 && n <= 4) {
+      this.page.cols = Math.round(n);
+      const gap = this.tw(cols, 'space');
+      if (gap !== undefined && Math.abs(gap - COL_GAP) > 0.5) this.page.colGap = gap;
+    }
+    this.textW = columnsOf(this.page, Math.max(36, this.page.w - this.page.left - this.page.right)).w;
   }
 
   // ---------------------------------------------------------------- the text
@@ -548,6 +556,7 @@ class DocxReader {
       let q: ParaStyle = { ...ps };
       if (i > 0) {
         q.pageBreak = pc.pageBreak || undefined;
+        q.colBreak = pc.colBreak || undefined;
         if (pc.soft) {
           // a line break inside a paragraph: the next line as a paragraph of its own, with no space between
           if (list) q.cont = true;
@@ -556,7 +565,10 @@ class DocxReader {
           const prev = this.out[this.out.length - 1];
           if (prev) prev.ps = cleanPara({ ...prev.ps, spaceAfter: 0 });
         }
-      } else if (pc.pageBreak) q.pageBreak = true;
+      } else {
+        if (pc.pageBreak) q.pageBreak = true;
+        if (pc.colBreak) q.colBreak = true;
+      }
       q = cleanPara(q);
       this.out.push({ ps: q, runs: pc.runs, mark: markStyle, style: ours, contextual: !!p.contextual, bib });
     });
@@ -628,11 +640,11 @@ class DocxReader {
     return id;
   }
 
-  private pageBreak(ctx: Ctx): void {
+  private pageBreak(ctx: Ctx, column = false): void {
     if (ctx.cell) return;
     const pc = this.piece(ctx);
-    if (!pc.runs.length && !pc.soft) pc.pageBreak = true;
-    else ctx.pieces.push({ runs: [], pageBreak: true, soft: false });
+    if (!pc.runs.length && !pc.soft) { if (column) pc.colBreak = true; else pc.pageBreak = true; }
+    else ctx.pieces.push({ runs: [], pageBreak: !column, soft: false, colBreak: column || undefined });
   }
 
   private lineBreak(ctx: Ctx): void {
@@ -677,7 +689,8 @@ class DocxReader {
           if (this.swallowing()) break;
           const type = this.a(c, 'type');
           if (type === 'page') this.pageBreak(ctx);
-          else if (type !== 'column') this.lineBreak(ctx);
+          else if (type === 'column') this.pageBreak(ctx, true);
+          else this.lineBreak(ctx);
           break;
         }
         case 'cr': if (!this.swallowing()) this.lineBreak(ctx); break;

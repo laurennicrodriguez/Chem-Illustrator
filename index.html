@@ -641,7 +641,17 @@
               <option value="portrait">Portrait</option>
               <option value="landscape">Landscape</option>
             </select></label>
-            <button data-doc="page-break" title="Start a new page here">Page Break</button>
+            <label class="rb-field" title="Text in columns, as journals set it">Columns <select id="doc-columns" data-doc-prefix="columns">
+              <option value="1">One</option>
+              <option value="2">Two</option>
+              <option value="3">Three</option>
+              <option value="4" hidden>Four</option>
+              <option value="more">More Columns…</option>
+            </select></label>
+          </div>
+          <div class="rb-col">
+            <button data-doc="page-break" title="Start a new page here (Ctrl+Enter)">Page Break</button>
+            <button data-doc="col-break" title="Start the next column here (Ctrl+Shift+Enter)">Column Break</button>
           </div>
         </div>
         <div class="rb-label">Page Setup</div>

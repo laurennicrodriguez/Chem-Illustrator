@@ -13,7 +13,7 @@ import type { DocStyle } from '../style';
 import { FONT_STACK, layoutText, type Glyphs, type InlineBox, type LaidLine, type Measure, type Narrow, type TextFrame, type TextLayout } from '../text/layout';
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
 import * as rt from '../richtext';
-import { BOX_PAD, FLOAT_GAP, OBJECT_CHAR, fieldTexts, floatOf, lookExtent, lookOf, styleOf, type DocText, type HeaderFooter, type NamedStyle, type WrapKind } from './document';
+import { BOX_PAD, FLOAT_GAP, OBJECT_CHAR, columnsOf, fieldTexts, floatOf, lookExtent, lookOf, styleOf, type DocText, type HeaderFooter, type NamedStyle, type WrapKind } from './document';
 import { bibliography, type BibEntry } from './references';
 
 /** Space between pages on screen, in points. */
@@ -130,7 +130,10 @@ export interface DocLayout {
   /** The page size, and the width of the text between the margins. */
   pageW: number;
   pageH: number;
+  /** The width text is set in: between the margins, or a column's when there are columns. */
   textW: number;
+  /** The columns: how many, and the left edge of each from the left margin. */
+  cols: { n: number; w: number; x: number[] };
 }
 
 /** The page number shown on a page (index from 0), or '' for none. */
@@ -208,7 +211,11 @@ export class DocLayouter {
   layout(t: DocText): DocLayout {
     this.used.clear();
     const page = t.page;
-    const textW = Math.max(36, page.w - page.left - page.right);
+    const fullW = Math.max(36, page.w - page.left - page.right);
+    // in columns, text is set in a column's width
+    const cs = columnsOf(page, fullW);
+    const textW = cs.w;
+    const colX = Array.from({ length: cs.n }, (_, c) => c * (cs.w + cs.gap));
     const textH = Math.max(36, page.h - page.top - page.bottom);
     const text = rt.plainText(t.runs);
     const n = paraCount(text);
@@ -279,9 +286,10 @@ export class DocLayouter {
       again.push(bib ? null : { key, frame: { runs: resolved, paras: [ps], justify: 'left', wrap: textW, boxes: true, markers: [markers[p]], inline }, size: st.size });
     }
     // a paragraph laid out again round the floating figures beside it (`y` its top on the page)
-    const wrapped = (p: number, y: number, rects: WrapRect[]): TextLayout => {
+    const wrapped = (p: number, y: number, all: WrapRect[], dx: number): TextLayout => {
       const a = again[p];
-      const near = rects.filter((r) => r.y2 > y && (r.wrap === 'square' || r.wrap === 'topBottom'));
+      // the figures' places from the column's left edge
+      const near = all.filter((r) => r.y2 > y && (r.wrap === 'square' || r.wrap === 'topBottom')).map((r) => ({ ...r, x1: r.x1 - dx, x2: r.x2 - dx }));
       if (!a || !near.length) return laid[p];
       const rel = near.map((r) => [r.x1, r.y1 - y, r.x2, r.y2 - y, r.wrap].map((v) => (typeof v === 'number' ? +v.toFixed(2) : v)));
       const key = `${a.key}|${JSON.stringify(rel)}|${textH}`;
@@ -305,6 +313,7 @@ export class DocLayouter {
     let pageIdx = 0;
     let cursor = 0;
     let hasContent = false;
+    let col = 0;
     // the floating figures on the page so far
     let rects: WrapRect[] = [];
     const pageTop = (i: number) => i * (page.h + PAGE_GAP);
@@ -316,6 +325,14 @@ export class DocLayouter {
       cursor = 0;
       hasContent = false;
       rects = [];
+      col = 0;
+    };
+    // the next column, or the next page after the last column
+    const nextColumn = () => {
+      if (col + 1 >= cs.n) { newPage(); return; }
+      col++;
+      cursor = 0;
+      hasContent = false;
     };
     const heightOf = (l: LaidLine) => (l.above ?? l.ascent) + (l.below ?? l.descent);
 
@@ -325,7 +342,8 @@ export class DocLayouter {
       const lay = laid[p];
       let pl = lay.lines;
       let hs = pl.map(heightOf);
-      if (ps.pageBreak && hasContent) newPage();
+      if (ps.pageBreak && (hasContent || col > 0)) newPage();
+      else if (ps.colBreak && hasContent) nextColumn();
       // space above a paragraph isn't kept at the top of a page, except on the first page
       const before = () => (hasContent || pageIdx === 0 ? ps.spaceBefore ?? 0 : 0);
       // a heading moves to the next page when the start of the paragraph after it won't fit beside it
@@ -333,11 +351,11 @@ export class DocLayouter {
         const next = laid[p + 1].lines;
         const nextNeed = (paras[p + 1].spaceBefore ?? 0) + next.slice(0, Math.min(2, next.length)).reduce((a, l) => a + heightOf(l), 0);
         const need = before() + sum(hs) + (ps.spaceAfter ?? 0) + nextNeed;
-        if (cursor + need > textH + 0.01 && need <= textH) newPage();
+        if (cursor + need > textH + 0.01 && need <= textH) nextColumn();
       }
       // a paragraph's first line isn't left alone at the bottom of a page
       const firstNeed = sum(hs.slice(0, pl.length >= 2 ? 2 : 1));
-      if (hasContent && cursor + before() + firstNeed > textH + 0.01) newPage();
+      if (hasContent && cursor + before() + firstNeed > textH + 0.01) nextColumn();
       cursor += before();
       paraTops.push({ y: pageTop(pageIdx) + page.top + cursor, page: pageIdx });
 
@@ -356,7 +374,7 @@ export class DocLayouter {
         const g = fl.gap ?? FLOAT_GAP;
         rects.push({ x1: bx - page.left - g, y1: by - page.top - g, x2: bx + bw - page.left + g, y2: by + bh - page.top + g, wrap: fl.wrap });
       }
-      const wl = rects.length ? wrapped(p, cursor, rects).lines : pl;
+      const wl = rects.length ? wrapped(p, cursor, rects, colX[col]).lines : pl;
       if (wl !== pl) { pl = wl; hs = pl.map(heightOf); }
 
       let i = 0;
@@ -369,13 +387,14 @@ export class DocLayouter {
             lines.pop();
             while (objects.length && objects[objects.length - 1].line === lines.length && !objects[objects.length - 1].wrap) objects.pop();
           }
-          newPage();
+          nextColumn();
           onPage = 0;
         }
         const l = pl[i];
         const above = l.above ?? l.ascent;
         const top = pageTop(pageIdx) + page.top + cursor;
-        const placed = shiftLine(l, page.left, top + above - l.y, paraStart, p);
+        const placed = shiftLine(l, page.left + colX[col], top + above - l.y, paraStart, p);
+        if (cs.n > 1) placed.band = [page.left + colX[col], page.left + colX[col] + textW];
         lines.push(placed);
         for (const g of placed.pieces) {
           const s = g.obj !== undefined ? sizes.get(g.obj) : undefined;
@@ -400,7 +419,7 @@ export class DocLayouter {
         const k = `${l.block}@${pg.index}`;
         const y1 = l.y - (l.above ?? l.ascent), y2 = l.y + (l.below ?? l.descent);
         const got = blocks.get(k);
-        if (!got) blocks.set(k, { id: l.block, page: pg.index, x: page.left, y: y1, w: textW, h: y2 - y1, line: i });
+        if (!got) blocks.set(k, { id: l.block, page: pg.index, x: l.band?.[0] ?? page.left, y: y1, w: textW, h: y2 - y1, line: i });
         else got.h = y2 - got.y;
       }
     });
@@ -409,7 +428,7 @@ export class DocLayouter {
     const last = pages[pages.length - 1];
     const box = { x1: 0, y1: 0, x2: page.w, y2: last.top + page.h };
     const textLayout: TextLayout = { lines, boxWidth: textW, box, length: text.length, measure: this.deps.measure };
-    return { text: textLayout, pages, objects, fields, sizes, boxes, paraTops, pageW: page.w, pageH: page.h, textW };
+    return { text: textLayout, pages, objects, fields, sizes, boxes, paraTops, pageW: page.w, pageH: page.h, textW, cols: { n: cs.n, w: textW, x: colX } };
   }
 
   /** A text box's text laid out inside it (`w` the box's width), from the top left of its inner margins. */

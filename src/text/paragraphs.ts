@@ -5,7 +5,7 @@
 
 import type { ParaStyle, TextRun } from '../model';
 
-const KEYS = ['list', 'level', 'cont', 'align', 'spaceBefore', 'spaceAfter', 'indent', 'style', 'pageBreak', 'firstLine', 'line', 'keepNext', 'indentRight', 'linePt', 'lineRule'] as const;
+const KEYS = ['list', 'level', 'cont', 'align', 'spaceBefore', 'spaceAfter', 'indent', 'style', 'pageBreak', 'colBreak', 'firstLine', 'line', 'keepNext', 'indentRight', 'linePt', 'lineRule'] as const;
 
 /** A paragraph style with nothing unset or zero, so two styles compare simply. */
 export function cleanPara(p: ParaStyle | undefined): ParaStyle {
@@ -84,6 +84,7 @@ export function editParas(paras: ParaStyle[], text: string, start: number, end: 
     delete p.cont;
     // a page break stays with the first part of a paragraph split in two
     delete p.pageBreak;
+    delete p.colBreak;
     return cleanPara(p);
   };
   const mid: ParaStyle[] = [base];

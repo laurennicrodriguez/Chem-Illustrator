@@ -60,6 +60,19 @@ export interface PageSetup {
   /** How far the header is from the top of the page, and the footer from the bottom. */
   header: number;
   footer: number;
+  /** Columns of text (one when left out), and the space between them in points. */
+  cols?: number;
+  colGap?: number;
+}
+
+/** The space between columns unless set (Word's half inch). */
+export const COL_GAP = 36;
+
+/** The number of columns and the width of each, for a page whose text is `textW` wide. */
+export function columnsOf(page: PageSetup, textW: number): { n: number; gap: number; w: number } {
+  const n = Math.max(1, Math.min(4, Math.round(page.cols ?? 1)));
+  const gap = n > 1 ? Math.max(0, page.colGap ?? COL_GAP) : 0;
+  return { n, gap, w: Math.max(36, (textW - gap * (n - 1)) / n) };
 }
 
 export type NumberPlace = 'none' | 'footer-left' | 'footer-center' | 'footer-right' | 'header-left' | 'header-center' | 'header-right';
@@ -238,7 +251,7 @@ export function runStyleOf(s: NamedStyle): rt.RunStyle {
 /** A paragraph in a style: the style's spacing, indents and alignment, keeping its list, level and page break. */
 export function paraFromStyle(s: NamedStyle, keep: ParaStyle): ParaStyle {
   return cleanPara({
-    list: keep.list, level: keep.level, cont: keep.cont, pageBreak: keep.pageBreak,
+    list: keep.list, level: keep.level, cont: keep.cont, pageBreak: keep.pageBreak, colBreak: keep.colBreak,
     style: s.id === 'Normal' ? undefined : s.id,
     align: s.align === 'left' ? undefined : s.align,
     spaceBefore: s.spaceBefore, spaceAfter: s.spaceAfter,
