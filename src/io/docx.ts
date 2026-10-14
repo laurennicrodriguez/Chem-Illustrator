@@ -13,6 +13,9 @@ import type { CiteFormat } from '../document/cite-styles';
 export const W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 export const WP_NS = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
 export const PIC_NS = 'http://schemas.openxmlformats.org/drawingml/2006/picture';
+/** Word 2010's shapes (text boxes), and the markup that lets older programs skip them. */
+export const WPS_NS = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape';
+export const MC_NS = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
 export const MODEL_NS = 'urn:chem-illustrator:document';
 
 export const DOCX_CT = {
@@ -79,3 +82,10 @@ export const twips = (pt: number): number => Math.round(pt * 20);
 
 export { writeDocx, type DocxDeps } from './docx-write';
 export { readDocx, type DocxReadDeps } from './docx-read';
+
+/** Word's highlighter colours (w:highlight) and the colours they show. */
+export const WORD_HIGHLIGHTS: Record<string, string> = {
+  yellow: '#ffff00', green: '#00ff00', cyan: '#00ffff', magenta: '#ff00ff', blue: '#0000ff', red: '#ff0000',
+  darkBlue: '#000080', darkCyan: '#008080', darkGreen: '#008000', darkMagenta: '#800080', darkRed: '#800000', darkYellow: '#808000',
+  darkGray: '#808080', lightGray: '#c0c0c0', black: '#000000', white: '#ffffff',
+};

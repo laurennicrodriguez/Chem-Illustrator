@@ -4,10 +4,11 @@
 // value can be typed in; lengths take inches, cm, mm or pt ("2.5 cm").
 
 import type { Justify } from '../model';
+import { FloatBox, PINNED_ICON } from './float-box';
 import type { DocFile } from '../document/doc-file';
 import {
-  A4, CM, INCH, LETTER, defaultStyles, modifyStyle, setParaStyle, styleOf,
-  type DocText, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
+  A4, CM, COL_GAP, INCH, LETTER, FLOAT_GAP, defaultStyles, floatOf, modifyStyle, setParaStyle, styleOf,
+  type DocText, type FigureLook, type Float, type WrapKind, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
 } from '../document/document';
 
 export interface DocPanelHost {
@@ -18,10 +19,14 @@ export interface DocPanelHost {
   /** The figure or picture picked on its own. */
   picked(): number | null;
   setScale(id: number, scale: number): void;
+  setLook(id: number, patch: Partial<FigureLook>): void;
+  lookOf(id: number): FigureLook | undefined;
+  setWrap(id: number, wrap: WrapKind | 'inline'): void;
+  setFloat(id: number, fl: Float): void;
+  setBoxWidth(id: number, w: number): void;
+  setFill(id: number, fill: string | undefined): void;
 }
 
-/** Fonts offered (any installed font can be typed). */
-export const DOC_FONTS = ['Times New Roman', 'Arial', 'Calibri', 'Cambria', 'Helvetica', 'Georgia', 'Garamond', 'Palatino Linotype', 'Courier New', 'Symbol'];
 
 const ALIGNS: [Justify, string][] = [['left', 'Left'], ['center', 'Centre'], ['right', 'Right'], ['justify', 'Justified']];
 const PLACES: [NumberPlace, string][] = [
@@ -53,29 +58,117 @@ export function showLength(pt: number, unit: 'in' | 'pt' | 'cm'): string {
 
 type Field = HTMLInputElement | HTMLSelectElement;
 
+/** The settings boxes: each floats (opened from its ribbon group's corner button) or is pinned in the panel. */
+export type DocBoxKey = 'para' | 'style' | 'page' | 'hf';
+export const DOC_BOXES: DocBoxKey[] = ['para', 'style', 'page', 'hf'];
+const BOX_TITLES: Record<DocBoxKey, string> = { para: 'Paragraph', style: 'Style', page: 'Page Setup', hf: 'Header, footer and page numbers' };
+
+/** Which boxes are pinned in the panel on the right (kept in the settings); `changed` saves them. */
+export const docBoxPrefs: { pinned: DocBoxKey[]; changed?: () => void } = { pinned: [] };
+
+export function parseDocPins(raw: unknown): DocBoxKey[] {
+  return Array.isArray(raw) ? DOC_BOXES.filter((k) => raw.includes(k)) : [];
+}
+
 export class DocPanel {
   private fields = new Map<string, Field>();
   private sections: Record<'para' | 'style' | 'page' | 'hf' | 'figure', HTMLElement>;
   private styleTitle!: HTMLElement;
   private figureInfo!: HTMLElement;
+  private figButtons!: HTMLElement;
+  private floats = {} as Record<DocBoxKey, FloatBox>;
+  private emptyNote: HTMLElement;
 
-  constructor(body: HTMLElement, private host: DocPanelHost) {
-    const sec = (title: string) => {
+  constructor(private body: HTMLElement, private host: DocPanelHost) {
+    const sec = (title: string, box?: DocBoxKey) => {
       const s = document.createElement('div');
       s.className = 'dp-section';
       const h = document.createElement('h3');
-      h.textContent = title;
+      const t = document.createElement('span');
+      t.textContent = title;
+      h.append(t);
+      if (box) {
+        const unpin = document.createElement('button');
+        unpin.type = 'button';
+        unpin.className = 'dp-unpin';
+        unpin.innerHTML = PINNED_ICON;
+        unpin.title = 'Unpin: it goes back to opening from its ribbon button';
+        unpin.addEventListener('click', () => this.pin(box, false));
+        h.append(unpin);
+        this.floats[box] = new FloatBox(title, () => this.pin(box, true));
+      }
       s.append(h);
       body.append(s);
       return s;
     };
-    this.sections = { figure: sec('Figure'), para: sec('Paragraph'), style: sec('Style'), page: sec('Page'), hf: sec('Header, footer and page numbers') };
-    this.styleTitle = this.sections.style.querySelector('h3')!;
+    this.sections = { figure: sec('Figure'), para: sec(BOX_TITLES.para, 'para'), style: sec(BOX_TITLES.style, 'style'), page: sec(BOX_TITLES.page, 'page'), hf: sec(BOX_TITLES.hf, 'hf') };
+    this.styleTitle = this.sections.style.querySelector('h3 > span')!;
+    this.emptyNote = document.createElement('p');
+    this.emptyNote.className = 'muted small dp-note';
+    this.emptyNote.textContent = 'The Paragraph, Style, Page Setup and Header settings open from the small ⬊ buttons on the ribbon. Pin one with its pin button to keep it here.';
+    body.append(this.emptyNote);
     this.buildFigure();
     this.buildPara();
     this.buildStyle();
     this.buildPage();
     this.buildHeaderFooter();
+    this.placeBoxes();
+  }
+
+  // ---------------------------------------------------------------- the boxes
+
+  /** Pinned boxes go in the panel (in a fixed order), the others into their floating windows. */
+  placeBoxes(): void {
+    for (const k of DOC_BOXES) {
+      const pinned = docBoxPrefs.pinned.includes(k);
+      const sec = this.sections[k];
+      sec.classList.toggle('dp-pinned', pinned);
+      if (pinned) { this.body.append(sec); this.floats[k].close(); }
+      else this.floats[k].body.append(sec);
+    }
+    this.body.append(this.emptyNote);
+    this.emptyNote.hidden = docBoxPrefs.pinned.length > 0;
+  }
+
+  /** Pin a box to the panel, or unpin it (it then floats, open, so it doesn't vanish). */
+  pin(key: DocBoxKey, on: boolean): void {
+    const was = this.floats[key].open;
+    docBoxPrefs.pinned = on ? [...new Set([...docBoxPrefs.pinned, key])] : docBoxPrefs.pinned.filter((k) => k !== key);
+    this.placeBoxes();
+    if (on) this.reveal(key);
+    else if (!was) this.floats[key].show();
+    this.update();
+    docBoxPrefs.changed?.();
+  }
+
+  /** Open a box (a ribbon group's corner button): float it, or show it in the panel when pinned there. */
+  open(key: DocBoxKey, near?: HTMLElement | null, focus?: string): void {
+    const sec = this.sections[key];
+    if (docBoxPrefs.pinned.includes(key) && sec.offsetParent !== null) this.reveal(key);
+    else {
+      // pinned but the panel is folded away: float it this time
+      if (sec.parentElement !== this.floats[key].body) this.floats[key].body.append(sec);
+      this.update();
+      this.floats[key].show(near);
+    }
+    if (focus) this.fields.get(focus)?.focus();
+  }
+
+  /** Close the floating boxes (another kind of tab is showing). */
+  closeBoxes(): void {
+    for (const k of DOC_BOXES) this.floats[k].close();
+  }
+
+  isOpen(key: DocBoxKey): boolean {
+    return this.floats[key].open;
+  }
+
+  private reveal(key: DocBoxKey): void {
+    const sec = this.sections[key];
+    sec.scrollIntoView({ block: 'nearest' });
+    sec.classList.remove('dp-flash');
+    void sec.offsetWidth;
+    sec.classList.add('dp-flash');
   }
 
   // ---------------------------------------------------------------- building
@@ -165,15 +258,102 @@ export class DocPanel {
       const n = Number(v.replace('%', ''));
       if (id !== null && n > 0) this.host.setScale(id, n / 100);
     }), 'Its own size is 100%. A figure wider than the space between the margins is made to fit.');
-    this.buttons(s, [
+    this.row(s, 'Width (in)', this.input('fig-width', (v) => {
+      const id = this.host.picked();
+      const n = parseLength(v, 'in');
+      if (id !== null && n !== null && n > 0) this.host.setBoxWidth(id, n);
+    }), 'The text box\'s width; it grows down to fit its text');
+    const fill = document.createElement('input');
+    fill.type = 'color';
+    fill.addEventListener('change', () => { const id = this.host.picked(); if (id !== null) this.host.setFill(id, fill.value); this.host.focus(); });
+    this.fields.set('fig-fill', fill);
+    this.row(s, 'Fill', fill, 'The text box\'s background');
+    this.buttons(s, [['No Fill', 'A see-through text box', () => { const id = this.host.picked(); if (id !== null) this.host.setFill(id, undefined); }]]).dataset.key = 'fig-nofill';
+    // where it sits: in the line, or on the page with the text wrapping round it
+    this.row(s, 'Wrap text', this.select('fig-wrap', [['inline', 'In Line with Text'], ['square', 'Square'], ['topBottom', 'Top and Bottom'], ['behind', 'Behind Text'], ['front', 'In Front of Text']], (v) => {
+      const id = this.host.picked();
+      if (id !== null) this.host.setWrap(id, v as WrapKind | 'inline');
+    }), 'In the line like a letter, or on the page with the text going round it (or under or over it). Drag it on the page to move it');
+    const fl = (patch: Partial<Float>) => {
+      const id = this.host.picked();
+      const f = this.host.file();
+      const cur = id !== null ? floatOf(f?.t.objects[id]) : undefined;
+      if (id !== null && cur) this.host.setFloat(id, { ...cur, ...patch });
+    };
+    this.row(s, 'Across (in)', this.input('fig-x', (v) => { const n = parseLength(v, 'in'); if (n !== null) fl({ x: n }); }), 'From the left of the margin (or of the page)');
+    this.row(s, '… from', this.select('fig-xfrom', [['margin', 'Margin'], ['page', 'Page']], (v) => this.refrom('x', v)));
+    this.row(s, 'Down (in)', this.input('fig-y', (v) => { const n = parseLength(v, 'in'); if (n !== null) fl({ y: n }); }), 'From the top of its paragraph (it moves with that text), of the margin, or of the page');
+    this.row(s, '… from', this.select('fig-yfrom', [['para', 'Paragraph'], ['margin', 'Margin'], ['page', 'Page']], (v) => this.refrom('y', v)));
+    this.row(s, 'Text gap (pt)', this.input('fig-gap', (v) => { const n = parseLength(v, 'pt'); if (n !== null) fl({ gap: Math.max(0, n) }); }), `Room kept between it and the text round it (Word's is ${FLOAT_GAP} pt, 0.13 in)`);
+    const look = (patch: Partial<FigureLook>) => { const id = this.host.picked(); if (id !== null) this.host.setLook(id, patch); };
+    this.row(s, 'Frame (pt)', this.input('fig-frame', (v) => {
+      const n = v.trim() === '' || /^none$/i.test(v.trim()) ? 0 : parseLength(v, 'pt');
+      if (n !== null) look({ frame: n > 0 ? Math.min(n, 20) : undefined });
+    }, { list: 'dp-frames', placeholder: 'None' }), 'A line round it, this many points wide (0.5 is a hairline, 0.75 thin, 1.5 medium, 3 thick). Clear it for none');
+    const frames = document.createElement('datalist');
+    frames.id = 'dp-frames';
+    for (const v of ['0.5', '0.75', '1', '1.5', '2.25', '3']) frames.append(new Option(v));
+    s.append(frames);
+    const fc = document.createElement('input');
+    fc.type = 'color';
+    fc.addEventListener('change', () => { look({ frameColor: fc.value.toLowerCase() === '#000000' ? undefined : fc.value }); this.host.focus(); });
+    this.fields.set('fig-frame-colour', fc);
+    this.row(s, 'Frame colour', fc);
+    this.row(s, 'Shadow', this.select('fig-shadow', [['none', 'None'], ['soft', 'Soft'], ['hard', 'Sharp']], (v) => look({ shadow: v === 'none' ? undefined : v as 'soft' | 'hard' })),
+      'Down and to the right; the figure gets a white background so the shadow is a box\'s');
+    this.figButtons = this.buttons(s, [
       ['Edit Drawing', 'Change it with the drawing tools (or double-click it)', () => { const id = this.host.picked(); if (id !== null) this.host.editFigure(id); }],
       ['Own Size', 'Back to 100%', () => { const id = this.host.picked(); if (id !== null) this.host.setScale(id, 1); }],
     ]);
   }
 
+  /** Measure a floating figure's place from somewhere else, keeping it where it is on the page. */
+  private refrom(axis: 'x' | 'y', from: string): void {
+    const id = this.host.picked();
+    const f = this.host.file();
+    const cur = id !== null ? floatOf(f?.t.objects[id]) : undefined;
+    if (!f || id === null || !cur) return;
+    const lay = f.layout();
+    const placed = lay.objects.find((o) => o.id === id);
+    if (!placed) return;
+    const pg = f.t.page;
+    const pageTop = lay.pages[placed.page]?.top ?? 0;
+    if (axis === 'x') {
+      const abs = cur.xFrom === 'page' ? cur.x : cur.x + pg.left;
+      this.host.setFloat(id, { ...cur, xFrom: from === 'page' ? 'page' : undefined, x: from === 'page' ? abs : abs - pg.left });
+      return;
+    }
+    const at = [...lay.paraTops.entries()].find(([, t]) => t.page === placed.page);
+    // y on the page, then from the new place
+    const at0 = (() => {
+      if (cur.yFrom === 'page') return cur.y;
+      if (cur.yFrom === 'margin') return cur.y + pg.top;
+      const para = this.anchorPara(f, id);
+      const top = para !== null ? lay.paraTops[para] : at?.[1];
+      return (top ? top.y - pageTop : pg.top) + cur.y;
+    })();
+    if (from === 'page') this.host.setFloat(id, { ...cur, yFrom: 'page', y: at0 });
+    else if (from === 'margin') this.host.setFloat(id, { ...cur, yFrom: 'margin', y: at0 - pg.top });
+    else {
+      const para = this.anchorPara(f, id);
+      const top = para !== null ? lay.paraTops[para] : null;
+      this.host.setFloat(id, { ...cur, yFrom: undefined, y: at0 - (top ? top.y - pageTop : pg.top) });
+    }
+  }
+
+  /** The paragraph a floating figure belongs to (where its character is). */
+  private anchorPara(f: DocFile, id: number): number | null {
+    let at = 0;
+    for (const r of f.t.runs) {
+      if (r.obj === id) return f.ed.text.slice(0, at).split('\n').length - 1;
+      at += r.text.length;
+    }
+    return null;
+  }
+
   private buildPara(): void {
     const s = this.sections.para;
-    const paras = (patch: Parameters<DocFile['ed']['setSelectedParas']>[0], kind = 'para') => this.host.file()?.ed.setSelectedParas(patch, kind);
+    const paras = (patch: Parameters<DocFile['ed']['setSelectedParas']>[0], kind = 'para') => this.host.file()?.textEd.setSelectedParas(patch, kind);
     this.row(s, 'Style', this.select('p-style', [], (id) => {
       const f = this.host.file();
       if (!f) return;
@@ -185,12 +365,24 @@ export class DocPanel {
     this.row(s, 'First line (in)', this.input('p-first', (v) => { const n = parseLength(v, 'in'); if (n !== null) paras({ firstLine: n || undefined }, 'indent'); }), 'The first line\'s indent from the rest; less than 0 hangs it out to the left');
     this.row(s, 'Space before (pt)', this.input('p-before', (v) => { const n = parseLength(v, 'pt'); if (n !== null) paras({ spaceBefore: Math.max(0, n) }, 'spacing'); }));
     this.row(s, 'Space after (pt)', this.input('p-after', (v) => { const n = parseLength(v, 'pt'); if (n !== null) paras({ spaceAfter: Math.max(0, n) }, 'spacing'); }));
-    this.row(s, 'Line spacing', this.input('p-line', (v) => { const n = Number(v); if (n > 0 && n <= 10) paras({ line: Math.abs(n - 1) < 1e-6 ? undefined : n }, 'spacing'); }, { list: 'dp-lines' }), 'Times single spacing: 1, 1.15, 1.5, 2…');
+    this.row(s, 'Right indent (in)', this.input('p-right', (v) => { const n = parseLength(v, 'in'); if (n !== null) paras({ indentRight: Math.max(0, n) || undefined }, 'indent'); }), 'From the right margin');
+    this.row(s, 'Line spacing', this.select('p-rule', [['multiple', 'Multiple'], ['atLeast', 'At least'], ['exact', 'Exactly']], (v) => {
+      const p = this.host.file()?.ed.currentPara();
+      if (v === 'multiple') paras({ linePt: undefined, lineRule: undefined }, 'spacing');
+      else paras({ linePt: p?.linePt ?? 12, lineRule: v as 'exact' | 'atLeast', line: undefined }, 'spacing');
+    }), 'Multiple: times single spacing. At least or Exactly: a height in points (Exactly can cut off tall figures, as in Word)');
+    this.row(s, 'At', this.input('p-line', (v) => {
+      const p = this.host.file()?.ed.currentPara();
+      if (p?.linePt) { const n = parseLength(v, 'pt'); if (n !== null && n > 0 && n <= 1584) paras({ linePt: n }, 'spacing'); return; }
+      const n = Number(v);
+      if (n > 0 && n <= 10) paras({ line: Math.abs(n - 1) < 1e-6 ? undefined : n }, 'spacing');
+    }, { list: 'dp-lines' }), 'Times single spacing (1, 1.15, 1.5, 2…), or points for At least and Exactly');
     const lines = document.createElement('datalist');
     lines.id = 'dp-lines';
     for (const v of ['1', '1.15', '1.5', '2', '2.5', '3']) lines.append(new Option(v));
     s.append(lines);
     this.check(s, 'p-break', 'Start on a new page', (v) => paras({ pageBreak: v || undefined }, 'break'), 'A page break before this paragraph (Ctrl+Enter makes one at the caret)');
+    this.check(s, 'p-colbreak', 'Start a new column', (v) => paras({ colBreak: v || undefined }, 'break'), 'In a page of columns: this paragraph starts the next column (Ctrl+Shift+Enter makes one at the caret)');
     this.check(s, 'p-keep', 'Keep with next', (v) => paras({ keepNext: v || undefined }, 'keep'), 'On the same page as the paragraph after it (headings do this)');
   }
 
@@ -286,6 +478,10 @@ export class DocPanel {
     len('right', 'Right margin (in)');
     len('header', 'Header from top (in)', 'How far the header sits from the top of the page');
     len('footer', 'Footer from bottom (in)', 'How far the footer and page numbers sit from the bottom of the page');
+    this.row(s, 'Columns', this.select('pg-cols', [['1', 'One'], ['2', 'Two'], ['3', 'Three'], ['4', 'Four']], (v) => page({ cols: Number(v) > 1 ? Number(v) : undefined })),
+      'Text runs down one column, then the next (Layout > Column Break starts the next one early)');
+    this.row(s, 'Column spacing (in)', this.input('pg-colGap', (v) => { const n = parseLength(v, 'in'); if (n !== null && n >= 0) page({ colGap: Math.abs(n - COL_GAP) < 0.01 ? undefined : n }); }),
+      'Space between columns (Word\'s is 0.5 in)');
   }
 
   private buildHeaderFooter(): void {
@@ -316,7 +512,7 @@ export class DocPanel {
     const f = this.host.file();
     if (!f) return;
     const t = f.t;
-    const ed = f.ed;
+    const ed = f.textEd;
     const active = document.activeElement;
     const put = (key: string, v: string | boolean) => {
       const el = this.fields.get(key);
@@ -332,12 +528,38 @@ export class DocPanel {
       const lay = f.layout();
       const sz = lay.sizes.get(id);
       const scale = o && (o.kind === 'drawing' || o.kind === 'picture') ? o.scale ?? 1 : 1;
+      const isBox = o?.kind === 'textbox';
+      const fl = floatOf(o);
+      const show = (key: string, on: boolean) => { const el = this.fields.get(key); const row = el?.closest('label'); if (row) row.style.display = on ? '' : 'none'; };
+      show('fig-scale', !isBox);
+      show('fig-width', isBox);
+      show('fig-fill', isBox);
+      const nofill = this.sections.figure.querySelector<HTMLElement>('[data-key="fig-nofill"]');
+      if (nofill) nofill.style.display = isBox ? '' : 'none';
+      for (const k of ['fig-x', 'fig-xfrom', 'fig-y', 'fig-yfrom', 'fig-gap']) show(k, !!fl);
+      const wrapSel = this.fields.get('fig-wrap') as HTMLSelectElement | undefined;
+      const inl = wrapSel?.querySelector<HTMLOptionElement>('option[value="inline"]');
+      if (inl) inl.disabled = isBox;
+      put('fig-wrap', fl?.wrap ?? 'inline');
+      if (isBox) { put('fig-width', showLength(o.w, 'in')); put('fig-fill', o.fill ?? '#ffffff'); }
+      if (fl) {
+        put('fig-x', showLength(fl.x, 'in'));
+        put('fig-xfrom', fl.xFrom ?? 'margin');
+        put('fig-y', showLength(fl.y, 'in'));
+        put('fig-yfrom', fl.yFrom ?? 'para');
+        put('fig-gap', String(Math.round((fl.gap ?? FLOAT_GAP) * 10) / 10));
+      }
       const fitted = sz && o?.kind === 'drawing' ? lay.textW < sz.w + 0.01 && scale > 0 : false;
       put('fig-scale', String(Math.round(scale * 1000) / 10));
-      this.figureInfo.textContent = (o?.kind === 'picture' ? 'A picture. ' : 'A drawing: double-click it to change it with the drawing tools. ')
+      const lk = this.host.lookOf(id);
+      put('fig-frame', lk?.frame ? String(lk.frame) : '');
+      put('fig-frame-colour', lk?.frameColor ?? '#000000');
+      put('fig-shadow', lk?.shadow ?? 'none');
+      this.figureInfo.textContent = (isBox ? 'A text box: click inside it to type, drag its edge to move it. ' : o?.kind === 'picture' ? 'A picture. ' : 'A drawing: double-click it to change it with the drawing tools. ')
         + (sz ? `Shown ${showLength(sz.w, 'in')} × ${showLength(sz.h, 'in')} in${fitted ? ', made smaller to fit between the margins' : ''}.` : '');
-      const edit = this.sections.figure.querySelector('button');
-      if (edit) edit.hidden = o?.kind !== 'drawing';
+      const [edit, own] = this.figButtons.querySelectorAll('button');
+      edit.style.display = o?.kind === 'drawing' ? '' : 'none';
+      own.style.display = isBox ? 'none' : '';
     }
     // the paragraph
     const p = ed.currentPara();
@@ -351,11 +573,15 @@ export class DocPanel {
     put('p-first', showLength(p.firstLine ?? 0, 'in'));
     put('p-before', showLength(p.spaceBefore ?? 0, 'pt'));
     put('p-after', showLength(p.spaceAfter ?? 0, 'pt'));
-    put('p-line', String(p.line ?? 1));
+    put('p-right', showLength(p.indentRight ?? 0, 'in'));
+    put('p-rule', p.linePt ? p.lineRule ?? 'atLeast' : 'multiple');
+    put('p-line', p.linePt ? showLength(p.linePt, 'pt') : String(p.line ?? 1));
     put('p-break', !!p.pageBreak);
+    put('p-colbreak', !!p.colBreak);
     put('p-keep', !!p.keepNext);
     // its style
     this.styleTitle.textContent = `Style: ${st.name}`;
+    this.floats.style.title = `Style: ${st.name}`;
     put('s-font', st.font);
     put('s-size', String(st.size));
     put('s-bold', st.bold);
@@ -374,6 +600,8 @@ export class DocPanel {
     put('pg-size', same(LETTER) ? 'letter' : same(A4) ? 'a4' : 'custom');
     put('pg-orient', pg.w > pg.h ? 'landscape' : 'portrait');
     for (const k of ['w', 'h', 'top', 'bottom', 'left', 'right', 'header', 'footer'] as const) put('pg-' + k, showLength(pg[k], 'in'));
+    put('pg-cols', String(pg.cols ?? 1));
+    put('pg-colGap', showLength(pg.colGap ?? COL_GAP, 'in'));
     // header and footer
     const hf = t.hf;
     put('hf-numbers', hf.numbers);

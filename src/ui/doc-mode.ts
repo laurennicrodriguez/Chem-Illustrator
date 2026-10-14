@@ -11,23 +11,29 @@ import type { Measure } from '../text/layout';
 import { keymap, chordOf, parseAction, type KeyContext } from '../editor/keymap';
 import * as rt from '../richtext';
 import type { Move } from '../text/editing';
-import { offsetAt, caretPos } from '../text/layout';
+import { offsetAt, caretPos, selectionRects } from '../text/layout';
 import { htmlToRich, richToHtml, richToPlain } from '../text/html';
 import { afterTyping, typingPrefs, setTypingPrefs } from '../text/typing';
 import { findIssues, type CharLook, type Issue } from '../text/chemtext';
 import { loadSpeller, type Speller } from '../text/spelling';
 import { paraAt, paraRange, splitParagraphs } from '../text/paragraphs';
 import { DocView, ACTUAL, type Overlay } from './doc-view';
-import { DocPanel } from './doc-panel';
+import { DocPanel, parseLength, showLength, type DocBoxKey } from './doc-panel';
+import { WORD_HIGHLIGHTS } from '../io/docx';
 import { DocFind } from './doc-find';
 import { ask } from './ask';
 import { ReferencesDialog, chooseReferences } from './references-dialog';
 import { citeSuper, formatOf, type Reference } from '../document/references';
 import { dataUrl, imageSize } from '../render/images';
 import type { DocFile } from '../document/doc-file';
+import type { TableData } from '../model';
+import {
+  coveringCell, deleteColumn, deleteRow, emptyTable, insertColumn, insertRow, isCovered, mergeRight, nextCell, setColumnAlign, setColumnWidth, setSpan, spanOf,
+} from '../table';
 import {
   A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, captionRuns, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets,
-  type DocObject, type DocText, type NumberPlace, type PageSetup,
+  floatOf, lookExtent, lookOf, cellHolding, innerObjects,
+  type DocObject, type DocText, type FigureLook, type Float, type NumberPlace, type PageSetup, type WrapKind,
 } from '../document/document';
 
 export interface DocModeHost {
@@ -70,6 +76,31 @@ const FORMATTING = '#2f6fdf';
 const ignored = new Set<string>();
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
+/** Commands that, in a text box, work on its text (others leave the box first). */
+const BOX_COMMANDS = /^(doc-(align-|justify|bold|italic|underline|sub|sup|formula|highlight|bullets|numbering|indent|outdent)|line-|font-|select-all$|undo$|redo$|zoom-|copy$|cut$|paste$|box-|find$|replace$|wrap-)/;
+
+/** Commands that, in a table cell, work there too (others leave the cell first). */
+const CELL_COMMANDS = /^(table-|tbl-|insert-structure$|structure-from-name-doc$|name-to-structure$|insert-picture$|edit-figure$|compound-number$|cross-reference$|insert-citation$)/;
+
+/** A new table's look: Word's grid, the ACS rules in the text, or the ACS table drawn as a figure. */
+export const TABLE_KINDS: [string, string][] = [
+  ['grid', 'Plain table (grid lines, as in Word)'],
+  ['acs', 'ACS table in the text (rules above, under the headings and at the bottom)'],
+  ['none', 'No lines'],
+  ['drawing', 'ACS table as a drawing (edited in the drawing tools)'],
+];
+
+/** Word's Wrap Text choices. */
+export const WRAPS: [WrapKind | 'inline', string, string][] = [
+  ['inline', 'In Line with Text', 'In the line, moving with the text as a letter does'],
+  ['square', 'Square', 'On the page, with text down its wider side'],
+  ['topBottom', 'Top and Bottom', 'On the page, with text above and below it only'],
+  ['behind', 'Behind Text', 'On the page, under the text'],
+  ['front', 'In Front of Text', 'On the page, over the text'],
+];
+
+const lookExtentOf = (o: DocObject) => lookExtent(lookOf(o));
+
 /** Our own copy of document text, figures and all, for pasting back into a document. */
 const OWN_KIND = 'chem-illustrator-document';
 
@@ -82,7 +113,12 @@ export class DocumentMode {
   private caretOn = true;
   private blink: ReturnType<typeof setInterval> | null = null;
   private clicks = { n: 0, time: 0, at: { x: 0, y: 0 } };
-  private dragging: { kind: 'text' } | { kind: 'resize'; id: number; w0: number; scale0: number; x0: number } | null = null;
+  private dragging:
+    | { kind: 'text' }
+    | { kind: 'box' }
+    | { kind: 'resize'; id: number; w0: number; scale0: number; x0: number }
+    | { kind: 'move'; id: number; from: { x: number; y: number }; float: Float; moved: boolean }
+    | null = null;
   private plainPaste = false;
   private speller: Speller | null = null;
   private dictSeen: string[] | null = null;
@@ -122,8 +158,14 @@ export class DocumentMode {
       run: (cmd) => this.run(cmd),
       focus: () => this.focus(),
       editFigure: (id) => this.editFigure(id),
-      picked: () => this.pickedObject(),
+      picked: () => this.pickedObject() ?? (this.file?.box && !this.file.box.cell ? this.file.box.id : null),
       setScale: (id, k) => this.setScale(id, k),
+      setWrap: (id, w) => this.setWrap(id, w),
+      setFloat: (id, fl) => this.setFloat(id, fl),
+      setBoxWidth: (id, w) => this.setBoxWidth(id, w),
+      setFill: (id, c) => this.setFill(id, c),
+      setLook: (id, patch) => this.setLook(id, patch),
+      lookOf: (id) => this.lookOf(id),
     });
     this.refs = new ReferencesDialog({
       file: () => this.file,
@@ -141,8 +183,267 @@ export class DocumentMode {
     return this.tab?.document ?? null;
   }
 
+  /** Where typing goes: the text box being typed into, or the document. */
   private get ed() {
-    return this.file!.ed;
+    return this.file!.textEd;
+  }
+
+  /** Start typing into a text box (the caret at the end of its text, or at a point on it). */
+  private startBox(id: number, at?: { x: number; y: number }): boolean {
+    const f = this.file;
+    if (!f) return false;
+    const ed = f.editBox(id);
+    if (!ed) return false;
+    ed.onTyped = (typed) => afterTyping(ed, typed);
+    if (at) ed.setCaret(offsetAt(ed.layout(), at.x, at.y));
+    else ed.setCaret(ed.text.length);
+    this.changed('selection');
+    return true;
+  }
+
+  /** Start typing into a table cell (the caret at a point in it, or at its start or end). */
+  private startCell(id: number, r: number, c: number, at: { x: number; y: number } | 'start' | 'end' = 'end'): boolean {
+    const f = this.file;
+    if (!f) return false;
+    if (f.box && (f.box.id !== id || f.box.cell?.r !== r || f.box.cell?.c !== c)) f.endBox();
+    const ed = f.editCell(id, r, c);
+    if (!ed) return false;
+    ed.onTyped = (typed) => afterTyping(ed, typed);
+    if (at === 'start') ed.setCaret(0);
+    else if (at === 'end') ed.setCaret(ed.text.length);
+    else ed.setCaret(offsetAt(ed.layout(), at.x, at.y));
+    this.changed('selection');
+    return true;
+  }
+
+  /** The table cell under a point (in the document's coordinates), if any. */
+  private cellAt(p: { x: number; y: number }): { id: number; r: number; c: number } | null {
+    const f = this.file;
+    if (!f) return null;
+    const lay = f.layout();
+    for (const [id, tb] of lay.tables) {
+      const o = f.t.objects[id];
+      if (o?.kind !== 'table') continue;
+      const W = tb.xs[tb.xs.length - 1];
+      for (let r = 0; r < tb.rows.length; r++) {
+        const at = tb.rows[r];
+        if (p.x < at.x || p.x > at.x + W || p.y < at.y || p.y > at.y + tb.hs[r]) continue;
+        let c = 0;
+        while (c < tb.xs.length - 2 && p.x > at.x + tb.xs[c + 1]) c++;
+        const cv = coveringCell(o.table, r, c);
+        return { id, r: cv.r, c: cv.c };
+      }
+    }
+    return null;
+  }
+
+  /** The table picked on its own (a selection of just its character), if any. */
+  private pickedTable(): number | null {
+    const f = this.file;
+    if (!f || f.box) return null;
+    const ed = f.ed;
+    if (ed.end - ed.start !== 1) return null;
+    const id = rt.sliceRuns(ed.t.runs, ed.start, ed.end)[0]?.obj;
+    return id !== undefined && f.t.objects[id]?.kind === 'table' ? id : null;
+  }
+
+  /** The table and cell the Table tab works on: the cell typed into, or the last cell of the table picked. */
+  private tableTarget(): { id: number; r: number; c: number; t: TableData } | null {
+    const f = this.file;
+    if (!f) return null;
+    if (f.box?.cell) {
+      const o = f.t.objects[f.box.id];
+      return o?.kind === 'table' ? { id: f.box.id, ...f.box.cell, t: o.table } : null;
+    }
+    const id = this.pickedTable();
+    const o = id !== null ? f.t.objects[id] : undefined;
+    if (id === null || o?.kind !== 'table') return null;
+    const r = o.table.rows.length - 1;
+    return { id, ...coveringCell(o.table, r, o.table.cols.length - 1), t: o.table };
+  }
+
+  /** Where the caret is in a table cell (to come back to after the drawing tools or a dialog). */
+  private cellSpot(): { id: number; r: number; c: number; start: number; end: number } | null {
+    const b = this.file?.box;
+    return b?.cell ? { id: b.id, ...b.cell, start: b.ed.start, end: b.ed.end } : null;
+  }
+
+  private backToCell(s: { id: number; r: number; c: number; start: number; end: number } | null): void {
+    const f = this.file;
+    if (!s || !f) return;
+    if (f.box?.id === s.id && f.box.cell?.r === s.r && f.box.cell.c === s.c) return;
+    if (!this.startCell(s.id, s.r, s.c)) return;
+    const ed = f.box!.ed;
+    const n = ed.text.length;
+    ed.select(Math.min(s.start, n), Math.min(s.end, n));
+  }
+
+  /** Arrow keys past the edge of a cell: on to the next cell, or out of the table. */
+  private cellStep(dir: 'up' | 'down' | 'left' | 'right'): void {
+    const tg = this.tableTarget();
+    const f = this.file!;
+    if (!tg || !f.box?.cell) return;
+    const back = dir === 'up' || dir === 'left';
+    let to: { r: number; c: number } | null;
+    if (dir === 'left' || dir === 'right') to = nextCell(tg.t, tg.r, tg.c, back);
+    else {
+      const r = tg.r + (back ? -1 : spanRows(tg.t, tg.r));
+      to = r >= 0 && r < tg.t.rows.length ? coveringCell(tg.t, r, tg.c) : null;
+    }
+    if (to) { this.startCell(tg.id, to.r, to.c, back ? 'end' : 'start'); return; }
+    this.stopBox();
+    const at = objectOffsets(f.t.runs).get(tg.id);
+    if (at !== undefined) f.ed.setCaret(back ? at : at + 1);
+  }
+
+  /** Tab in a table: the next cell (its text selected, as in Word); in the last cell, a new row. */
+  private tabCell(back: boolean): void {
+    const tg = this.tableTarget();
+    if (!tg) return;
+    const to = nextCell(tg.t, tg.r, tg.c, back);
+    if (to) {
+      this.startCell(tg.id, to.r, to.c);
+      this.file!.box?.ed.selectAll();
+      this.changed('selection');
+      return;
+    }
+    if (!back) this.setTable(tg.id, insertRow(tg.t, tg.t.rows.length), 'Insert row', { r: tg.t.rows.length, c: 0 });
+  }
+
+  /** Change a table in the text (one undo step), and go back into a cell of it (the same one, or `go`). */
+  setTable(id: number, table: TableData, kind: string, go?: { r: number; c: number } | null): void {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'table') return;
+    const keep = go !== undefined ? go : f.box?.id === id ? f.box.cell ?? null : null;
+    f.endBox();
+    // (the Table tab stays up while the table changes)
+    this.keepTableTab = true;
+    try {
+      f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { ...o, table } } } as DocText, kind);
+    } finally { this.keepTableTab = false; }
+    if (keep && table.rows.length) {
+      const cv = coveringCell(table, Math.min(keep.r, table.rows.length - 1), Math.min(keep.c, table.cols.length - 1));
+      this.startCell(id, cv.r, cv.c);
+    } else this.changed('selection');
+  }
+
+  /** The Table tab's commands (and the table part of the right-click menu). */
+  private tableCommand(cmd: string): void {
+    const tg = this.tableTarget();
+    if (!tg) { this.host.flash('Click in a table first.'); return; }
+    const { id, r, c, t } = tg;
+    const f = this.file!;
+    const span = spanOf(t, r, c);
+    const lay = f.layout();
+    switch (cmd) {
+      case 'table-row-above': this.setTable(id, insertRow(t, r), 'Insert row', { r, c }); break;
+      case 'table-row-below': this.setTable(id, insertRow(t, r + 1), 'Insert row', { r: r + 1, c }); break;
+      case 'table-col-left': this.setTable(id, insertColumn(t, c), 'Insert column', { r, c }); break;
+      case 'table-col-right': this.setTable(id, insertColumn(t, c + span), 'Insert column', { r, c: c + span }); break;
+      case 'table-del-row':
+        if (t.rows.length <= 1) { this.tableCommand('table-delete'); return; }
+        this.setTable(id, deleteRow(t, r), 'Delete row', { r: Math.min(r, t.rows.length - 2), c });
+        break;
+      case 'table-del-col':
+        if (t.cols.length <= 1) { this.tableCommand('table-delete'); return; }
+        this.setTable(id, deleteColumn(t, c), 'Delete column', { r, c: Math.min(c, t.cols.length - 2) });
+        break;
+      case 'table-delete': {
+        this.stopBox();
+        const at = objectOffsets(f.t.runs).get(id);
+        if (at !== undefined) { f.ed.select(at, at + 1); f.ed.replaceSelection([], undefined, 'Delete table'); }
+        break;
+      }
+      case 'table-select': this.stopBox(true); break;
+      case 'table-merge':
+        if (c + span >= t.cols.length) { this.host.flash('There is no cell to the right to join.'); return; }
+        this.setTable(id, mergeRight(t, r, c), 'Merge cells', { r, c });
+        break;
+      case 'table-split': this.setTable(id, setSpan(t, r, c, 1), 'Split cells', { r, c }); break;
+      case 'table-lines-grid': case 'table-lines-acs': case 'table-lines-none':
+        this.setTable(id, { ...t, lines: cmd.slice(12) as TableData['lines'] }, 'Table lines');
+        break;
+      case 'table-valign-top': case 'table-valign-center': case 'table-valign-bottom': {
+        const v = cmd.slice(13);
+        this.setTable(id, mapCells(t, (cell, rr, cc) => (this.inChosen(tg, rr, cc) ? { ...cell, valign: v === 'top' ? undefined : v as 'center' | 'bottom' } : cell)), 'Cell alignment');
+        break;
+      }
+      case 'table-shade-none': this.shade(undefined); break;
+      case 'table-align-left': case 'table-align-center': case 'table-align-right': this.alignColumn(cmd.slice(12) as 'left' | 'center' | 'right'); break;
+      case 'table-fit': this.setTable(id, fitDocColumns(t, f, lay.textW), 'Fit columns'); break;
+      case 'table-even': this.setTable(id, { ...t, cols: t.cols.map(() => Math.floor((Math.min(lay.textW, t.cols.reduce((a, b) => a + b, 0)) / t.cols.length) * 100) / 100) }, 'Even columns'); break;
+      case 'table-fill-width': this.setTable(id, { ...t, cols: t.cols.map((w) => (w * lay.textW) / t.cols.reduce((a, b) => a + b, 0)) }, 'Fit to page'); break;
+      case 'table-head-more': this.setTable(id, { ...t, head: Math.min(t.rows.length, t.head + 1) }, 'Heading rows'); break;
+      case 'table-head-less': this.setTable(id, { ...t, head: Math.max(0, t.head - 1) }, 'Heading rows'); break;
+      default: this.host.flash(`Unknown table command ${cmd}`);
+    }
+  }
+
+  /** Whether a cell is one the cell commands change: the cell typed into, or every cell of a picked table. */
+  private inChosen(tg: { r: number; c: number }, r: number, c: number): boolean {
+    return !this.file?.box?.cell || (r === tg.r && c === tg.c);
+  }
+
+  /** Shade the cell typed into (or the whole table picked) with a colour, or take the shading off. */
+  shade(fill: string | undefined): void {
+    const tg = this.tableTarget();
+    if (!tg) return;
+    this.setTable(tg.id, mapCells(tg.t, (cell, r, c) => {
+      if (!this.inChosen(tg, r, c)) return cell;
+      const out = { ...cell, fill };
+      if (!fill) delete out.fill;
+      return out;
+    }), 'Shading');
+  }
+
+  /** Set the width of the column of the cell typed into (or of every column of a picked table). */
+  setColumnWidthOf(w: number): void {
+    const tg = this.tableTarget();
+    if (!tg || !(w > 0)) return;
+    let t = tg.t;
+    if (this.file?.box?.cell) t = setColumnWidth(t, tg.c, w);
+    else t = { ...t, cols: t.cols.map(() => Math.max(4, w)) };
+    this.setTable(tg.id, t, 'Column width');
+  }
+
+  /** Line up the text of the column of the cell typed into (or every column of a picked table). */
+  alignColumn(a: 'left' | 'center' | 'right'): void {
+    const tg = this.tableTarget();
+    if (!tg) return;
+    let t = tg.t;
+    if (this.file?.box?.cell) t = setColumnAlign(t, tg.c, a);
+    else for (let c = 0; c < t.cols.length; c++) t = setColumnAlign(t, c, a);
+    this.setTable(tg.id, t, 'Column alignment');
+  }
+
+  /** Undo and Redo: in a table cell, its typing first, then the document's changes (rows added…). */
+  private undo(redo: boolean): void {
+    const f = this.file!;
+    const b = f.box;
+    if (b?.cell && !(redo ? b.ed.canRedo : b.ed.canUndo)) {
+      const { id, cell } = b;
+      f.endBox();
+      if (redo) f.ed.redo(); else f.ed.undo();
+      const o = f.t.objects[id];
+      if (o?.kind === 'table' && o.table.rows[cell.r]?.[cell.c] && !isCovered(o.table, cell.r, cell.c)) this.startCell(id, cell.r, cell.c);
+      else this.changed('selection');
+      return;
+    }
+    if (redo) this.ed.redo(); else this.ed.undo();
+  }
+
+  /** Stop typing into the text box (`pick`: and pick the box, as Escape does in Word). */
+  private stopBox(pick = false): void {
+    const f = this.file;
+    if (!f?.box) return;
+    const id = f.box.id;
+    f.endBox();
+    if (pick) {
+      const at = objectOffsets(f.t.runs).get(id);
+      if (at !== undefined) f.ed.select(at, at + 1);
+    }
+    this.changed('selection');
   }
 
   // ---------------------------------------------------------------- showing a tab
@@ -150,11 +451,13 @@ export class DocumentMode {
   /** A document tab came to the front (or null: another kind of tab). */
   show(tab: Tab | null): void {
     if (this.tab && this.tab !== tab) this.leave();
+    this.tab?.document?.endBox();
     this.tab = tab;
     const f = tab?.document ?? null;
     this.view.file = f;
     if (!f) {
       if (this.blink) { clearInterval(this.blink); this.blink = null; }
+      this.panel.closeBoxes();
       return;
     }
     f.listener = (kind) => this.changed(kind);
@@ -200,6 +503,13 @@ export class DocumentMode {
   private changed(kind: 'text' | 'selection'): void {
     const f = this.file;
     if (!f) return;
+    // the text box being typed into was taken away (Undo, Cut)
+    if (f.box) {
+      const bo = f.t.objects[f.box.id];
+      const cell = f.box.cell;
+      const ok = cell ? bo?.kind === 'table' && !!bo.table.rows[cell.r]?.[cell.c] && !isCovered(bo.table, cell.r, cell.c) : bo?.kind === 'textbox';
+      if (!ok) f.endBox();
+    }
     this.caretOn = true;
     if (kind === 'text') {
       this.view.sizeSpace();
@@ -235,20 +545,33 @@ export class DocumentMode {
   pickedObject(): number | null {
     const f = this.file;
     if (!f) return null;
-    const ed = f.ed;
+    // a structure or picture in a table cell is picked in the cell's text
+    const ed = f.textEd;
     if (ed.end - ed.start !== 1) return null;
     const runs = rt.sliceRuns(ed.t.runs, ed.start, ed.end);
     const id = runs[0]?.obj;
     const o = id !== undefined ? f.t.objects[id] : undefined;
-    return o && (o.kind === 'drawing' || o.kind === 'picture') ? id! : null;
+    return o && (o.kind === 'drawing' || o.kind === 'picture' || o.kind === 'textbox') ? id! : null;
   }
 
   private overlay(): Overlay {
     const f = this.file;
     if (!f) return { selection: null, caret: null, squiggles: [], picked: null, found: [], framed: null };
+    if (f.box) {
+      // typing into a text box: its caret and selection
+      const ed = f.box.ed;
+      const showCaret = this.caretOn && (ed.collapsed || ed.composing !== null) && document.activeElement === this.ta;
+      const lay = ed.layout();
+      const picked = this.pickedObject();
+      return {
+        selection: null, caret: showCaret ? ed.caret() : null, squiggles: [], picked, framed: null,
+        found: this.finder.open ? this.finder.hits : [],
+        editing: { id: f.box.id, cell: !!f.box.cell, selection: ed.collapsed || ed.composing || picked !== null ? [] : selectionRects(lay, ed.start, ed.end) },
+      };
+    }
     const ed = f.ed;
     const picked = this.pickedObject();
-    const framed = this.pickedField('bib')?.id ?? null;
+    const framed = this.pickedField('bib')?.id ?? this.pickedTable();
     const showCaret = this.caretOn && (ed.collapsed || ed.composing !== null) && document.activeElement === this.ta;
     const c = showCaret ? ed.caret() : null;
     const squiggles: Overlay['squiggles'] = [];
@@ -325,7 +648,6 @@ export class DocumentMode {
     const near = (a: number, b: number) => offset >= a && offset <= b;
     const word = c.spell.find(([a, b]) => near(a, b));
     const issue = c.issues.find((i) => near(i.start, i.end));
-    if (!word && !issue) return false;
     const ed = this.ed;
     const menu = document.createElement('div');
     menu.className = 'text-menu';
@@ -356,6 +678,58 @@ export class DocumentMode {
       item('Add to Dictionary', () => setTypingPrefs({ dictionary: [...typingPrefs.dictionary, text] }), 'Accept this word from now on (Edit > Typing and Spelling lists your words)');
       item('Ignore', () => { ignored.add(text.toLowerCase()); this.speller?.ignore(text); this.checkCache.clear(); this.checked = null; this.view.redraw(); }, 'Accept this word until the program is closed');
     }
+    // the usual commands, as on the ribbon
+    if (word || issue) menu.appendChild(document.createElement('hr'));
+    const cmd = (label: string, name: string, title?: string) => item(label, () => { if (!this.run(name)) this.host.command(name); }, title);
+    cmd('Cut', 'cut');
+    cmd('Copy', 'copy');
+    cmd('Paste', 'paste');
+    menu.appendChild(document.createElement('hr'));
+    const picked = this.pickedObject();
+    if (picked !== null) {
+      if (this.file?.t.objects[picked]?.kind === 'drawing') cmd('Edit Drawing', 'edit-figure');
+      cmd('Insert Caption…', 'insert-caption');
+      const look = this.lookOf(picked);
+      item(look?.frame ? 'Remove Frame' : 'Add Frame', () => this.setLook(picked, { frame: look?.frame ? undefined : 0.75, frameColor: undefined }), 'A thin black line round it (Format in the panel sets its width and colour)');
+      item(look?.shadow ? 'Remove Shadow' : 'Add Shadow', () => this.setLook(picked, { shadow: look?.shadow ? undefined : 'soft' }), 'A soft shadow down and to the right');
+      menu.appendChild(document.createElement('hr'));
+      const nested = this.file ? cellHolding(this.file.t, picked) !== null : false;
+      const now = floatOf(this.file?.t.objects[picked])?.wrap ?? 'inline';
+      const head = document.createElement('div');
+      head.className = 'menu-head';
+      head.textContent = 'Wrap Text';
+      menu.appendChild(head);
+      for (const [v, label, title] of WRAPS) {
+        if (v === 'inline' && this.file?.t.objects[picked]?.kind === 'textbox') continue;
+        if (nested && v !== 'inline') continue;
+        item(`${now === v ? '✓ ' : '   '}${label}`, () => this.setWrap(picked, v), title);
+      }
+      menu.appendChild(document.createElement('hr'));
+    }
+    const tg = this.tableTarget();
+    if (tg) {
+      const head = document.createElement('div');
+      head.className = 'menu-head';
+      head.textContent = 'Table';
+      menu.appendChild(head);
+      cmd('Insert Row Above', 'table-row-above');
+      cmd('Insert Row Below', 'table-row-below');
+      cmd('Insert Column Left', 'table-col-left');
+      cmd('Insert Column Right', 'table-col-right');
+      cmd('Delete Row', 'table-del-row');
+      cmd('Delete Column', 'table-del-col');
+      cmd('Delete Table', 'table-delete');
+      if (spanOf(tg.t, tg.r, tg.c) > 1) cmd('Split Cells', 'table-split', 'Undo a merge: the cell goes back to one column');
+      else cmd('Merge with Cell to the Right', 'table-merge');
+      cmd('Fit Columns to Contents', 'table-fit', 'Each column as wide as its widest cell (structures at their own size)');
+      for (const [v, label] of [['grid', 'Grid Lines'], ['acs', 'ACS Rules'], ['none', 'No Lines']] as const) cmd(`${tg.t.lines === v ? '✓ ' : '   '}${label}`, `table-lines-${v}`);
+      cmd('Select Table', 'table-select', 'Pick the whole table (to copy, cut or delete it)');
+      menu.appendChild(document.createElement('hr'));
+    }
+    cmd('Paragraph…', 'box-para', 'Indents, spacing and line spacing');
+    cmd('Style…', 'box-style', 'Change how this paragraph\'s style looks');
+    cmd('Page Setup…', 'box-page', 'Paper, orientation and margins');
+    cmd('Header and Footer…', 'box-hf', 'Header, footer and page numbers');
     const host = this.view.host;
     host.appendChild(menu);
     const r = host.getBoundingClientRect();
@@ -364,6 +738,67 @@ export class DocumentMode {
     this.menu = menu;
     document.addEventListener('pointerdown', this.closeMenuOutside, true);
     return true;
+  }
+
+  /** The highlighter's colour (the bar under "ab"); yellow to start with, as in Word. */
+  private highlighter = '#ffff00';
+  /** The style chosen for the last table inserted (offered first next time). */
+  private lastTableKind = 'grid';
+  private keepTableTab = false;
+
+  /** Word's highlighter colours, then no colour and any other colour. */
+  private highlightMenu(): void {
+    this.closeMenu();
+    const anchor = this.ribbon.querySelector<HTMLElement>('[data-doc="doc-highlight-menu"]')!;
+    const menu = document.createElement('div');
+    menu.className = 'hl-menu';
+    menu.setAttribute('role', 'menu');
+    const grid = document.createElement('div');
+    grid.className = 'hl-grid';
+    const cur = this.file?.ed.currentStyle().highlight;
+    const use = (c: string | undefined) => {
+      this.closeMenu();
+      if (c) this.highlighter = c;
+      this.paintHighlighter();
+      this.file?.ed.setStyle({ highlight: c });
+      this.focus();
+    };
+    for (const [name, c] of Object.entries(WORD_HIGHLIGHTS)) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.style.background = c;
+      b.title = name.replace(/([A-Z])/g, ' $1').toLowerCase().replace(/^./, (x) => x.toUpperCase());
+      b.setAttribute('aria-pressed', String(cur === c));
+      b.addEventListener('mousedown', (e) => e.preventDefault());
+      b.addEventListener('click', () => use(c));
+      grid.append(b);
+    }
+    const row = document.createElement('div');
+    row.className = 'hl-row';
+    const none = document.createElement('button');
+    none.type = 'button';
+    none.textContent = 'No Colour';
+    none.title = 'Take the highlight off the selected text';
+    none.addEventListener('mousedown', (e) => e.preventDefault());
+    none.addEventListener('click', () => use(undefined));
+    const other = document.createElement('input');
+    other.type = 'color';
+    other.value = this.highlighter;
+    other.title = 'Any other colour (saved to Word as shading, which it shows the same way)';
+    other.addEventListener('change', () => use(other.value));
+    row.append(none, other);
+    menu.append(grid, row);
+    document.body.append(menu);
+    const r = anchor.getBoundingClientRect();
+    menu.style.left = `${Math.max(4, Math.min(r.left - 60, window.innerWidth - menu.offsetWidth - 4))}px`;
+    menu.style.top = `${r.bottom + 4}px`;
+    this.menu = menu;
+    document.addEventListener('pointerdown', this.closeMenuOutside, true);
+  }
+
+  private paintHighlighter(): void {
+    const bar = this.ribbon.querySelector<HTMLElement>('#doc-hl-bar');
+    if (bar) bar.style.background = this.highlighter;
   }
 
   private closeMenu(): void {
@@ -424,21 +859,29 @@ export class DocumentMode {
     const moves: Record<string, Move> = isMac && e.metaKey
       ? { ArrowLeft: 'lineStart', ArrowRight: 'lineEnd', ArrowUp: 'textStart', ArrowDown: 'textEnd' }
       : { ArrowLeft: word ? 'wordLeft' : 'left', ArrowRight: word ? 'wordRight' : 'right', ArrowUp: 'up', ArrowDown: 'down', Home: e.ctrlKey ? 'textStart' : 'lineStart', End: e.ctrlKey ? 'textEnd' : 'lineEnd' };
-    if (moves[e.key] && !e.altKey) return run(() => ed.move(moves[e.key], shift));
+    if (moves[e.key] && !e.altKey) {
+      return run(() => {
+        const before = ed.collapsed ? ed.focus : -1;
+        ed.move(moves[e.key], shift);
+        // past the edge of a table cell: the next cell
+        const dir = ({ ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' } as const)[e.key as 'ArrowUp'];
+        if (this.file?.box?.cell && !shift && !word && dir && ed.focus === before) this.cellStep(dir);
+      });
+    }
     if (e.key === 'PageDown' || e.key === 'PageUp') return run(() => this.pageMove(e.key === 'PageDown' ? 1 : -1, shift));
     if (!ctrl && !e.altKey) {
       switch (e.key) {
         case 'Enter': return run(() => this.enter(shift));
         case 'Backspace': return run(() => ed.backspace(word));
         case 'Delete': return run(() => ed.deleteForward(word));
-        case 'Tab': return run(() => ed.indent(shift ? -1 : 1));
-        case 'Escape': return run(() => { if (!ed.collapsed) ed.setCaret(ed.focus); });
+        case 'Tab': return run(() => (this.file?.box?.cell ? this.tabCell(shift) : ed.indent(shift ? -1 : 1)));
+        case 'Escape': return run(() => { if (this.file?.box) this.stopBox(true); else if (!ed.collapsed) ed.setCaret(ed.focus); });
       }
     }
     if (ctrl && !e.altKey) {
       const k = e.key.toLowerCase();
-      if (k === 'z' && !shift) return run(() => ed.undo());
-      if (k === 'y' || (k === 'z' && shift)) return run(() => ed.redo());
+      if (k === 'z' && !shift) return run(() => this.undo(false));
+      if (k === 'y' || (k === 'z' && shift)) return run(() => this.undo(true));
       if (k === 'a') return run(() => ed.selectAll());
       if (k === 'backspace') return run(() => ed.backspace(true));
       if (k === 'delete') return run(() => ed.deleteForward(true));
@@ -463,8 +906,8 @@ export class DocumentMode {
     else if (t === 'deleteContentForward') ed.deleteForward();
     else if (t === 'deleteWordBackward') ed.backspace(true);
     else if (t === 'deleteWordForward') ed.deleteForward(true);
-    else if (t === 'historyUndo') ed.undo();
-    else if (t === 'historyRedo') ed.redo();
+    else if (t === 'historyUndo') this.undo(false);
+    else if (t === 'historyRedo') this.undo(true);
     else if (t.startsWith('format')) {
       const f = ({ formatBold: 'bold', formatItalic: 'italic', formatUnderline: 'underline', formatSubscript: 'sub', formatSuperscript: 'sup' } as Record<string, rt.Toggle>)[t];
       if (f) ed.toggle(f);
@@ -485,6 +928,7 @@ export class DocumentMode {
    */
   private enter(soft: boolean): void {
     const ed = this.ed;
+    if (this.file?.box) { ed.enter(soft); return; }
     const before = ed.text;
     const p = paraAt(before, ed.start);
     const r = paraRange(before, p);
@@ -500,6 +944,7 @@ export class DocumentMode {
 
   /** Page Up and Page Down: the caret moves by a window's height. */
   private pageMove(dir: 1 | -1, extend: boolean): void {
+    this.stopBox();
     const ed = this.ed;
     const lay = this.file!.layout().text;
     const c = caretPos(lay, ed.focus);
@@ -514,8 +959,20 @@ export class DocumentMode {
   private copy(e: ClipboardEvent, cut: boolean): void {
     e.preventDefault();
     const f = this.file;
-    if (!f || f.ed.collapsed || !e.clipboardData) return;
-    const ed = f.ed;
+    if (!f || !e.clipboardData) return;
+    if (f.box && !f.box.cell) {
+      // text from a text box: as text only
+      const ed = f.box.ed;
+      if (ed.collapsed) return;
+      const sel = ed.selected();
+      e.clipboardData.setData('text/plain', richToPlain(sel));
+      e.clipboardData.setData('text/html', richToHtml(sel, { defaultSize: 11 }));
+      if (cut) ed.replaceSelection([], undefined, 'cut');
+      return;
+    }
+    // the document's text, or a table cell's
+    const ed = f.textEd;
+    if (ed.collapsed) return;
     const picked = this.pickedObject();
     if (picked !== null) {
       // a figure on its own goes as a drawing, for ChemDraw and Word
@@ -534,7 +991,14 @@ export class DocumentMode {
     e.clipboardData.setData('text/plain', plain);
     e.clipboardData.setData('text/html', richToHtml({ runs: plainRuns, paras: sel.paras }, { defaultSize: 11 }));
     const objects: Record<number, DocObject> = {};
-    for (const r of sel.runs) if (r.obj !== undefined && f.t.objects[r.obj]) objects[r.obj] = f.t.objects[r.obj];
+    // with the structures in any table's cells
+    const add = (id: number) => {
+      const o = f.t.objects[id];
+      if (!o || objects[id]) return;
+      objects[id] = o;
+      for (const x of innerObjects(o)) add(x);
+    };
+    for (const r of sel.runs) if (r.obj !== undefined) add(r.obj);
     // citations bring the references they cite, so they work when pasted into another document
     const cited = new Set(Object.values(objects).flatMap((o) => (o.kind === 'cite' ? o.refs : [])));
     const references = (f.t.references ?? []).filter((r) => cited.has(r.id));
@@ -560,9 +1024,16 @@ export class DocumentMode {
     const html = e?.clipboardData?.getData('text/html') ?? '';
     const text0 = e?.clipboardData?.getData('text/plain') ?? '';
     if (!own && this.clip && text0 && text0.replace(/\r\n?/g, '\n') === this.clip.text) own = this.clip;
+    if (f.box && !f.box.cell) {
+      // into a text box: text only (figures go in the page's text)
+      const r = !plain && html ? htmlToRich(html) : null;
+      if (r) f.box.ed.replaceSelection(rt.normalizeRuns(r.runs.map((x) => ({ ...x, obj: undefined }))), r.paras.length > 1 ? r.paras : undefined);
+      else if (text0) f.box.ed.pastePlain(text0);
+      return;
+    }
     if (own && !plain) { this.pasteOwn(own); return; }
     const got = await this.host.readPaste(e);
-    const ed = f.ed;
+    const ed = f.textEd;
     if (got.drawing) { this.insertObject({ kind: 'drawing', contents: got.drawing }, 'Paste structure'); return; }
     if (got.picture && !got.text && !got.html && !html) { this.dropPicture(got.picture.bytes, got.picture.mime); return; }
     const h = plain ? '' : html || got.html || '';
@@ -592,16 +1063,27 @@ export class DocumentMode {
       objects[id] = o;
     }
     // a pasted reference keeps pointing at its pasted caption, or at the caption it pointed to here
+    const remap = (runs: TextRun[]) => runs.map((r) => (r.obj !== undefined ? { ...r, obj: ids.get(r.obj) } : r)).filter((r) => r.obj !== undefined || !r.text.includes(OBJECT_CHAR));
     for (const [, id] of ids) {
       const o = objects[id];
       if (o.kind === 'ref' && ids.has(o.target)) objects[id] = { ...o, target: ids.get(o.target)! };
+      // the structures in a pasted table's cells are its own copies
+      if (o.kind === 'table') objects[id] = { ...o, table: { ...o.table, rows: o.table.rows.map((row) => row.map((cell) => ({ ...cell, runs: remap(cell.runs) }))) } };
     }
-    const runs = own.runs.map((r) => (r.obj !== undefined ? { ...r, obj: ids.get(r.obj) } : r)).filter((r) => r.obj !== undefined || !r.text.includes(OBJECT_CHAR));
+    const b = f.box?.cell ? f.box : null;
+    // into a table cell: no tables, text boxes or bibliographies inside it
+    const runs = remap(own.runs).filter((r) => !b || r.obj === undefined || !['table', 'textbox', 'bib'].includes(objects[r.obj]?.kind));
     // references cited by pasted citations join the list (unless it has them)
     const have = new Set((f.t.references ?? []).map((r) => r.id));
     const adding = (own.references ?? []).filter((r) => !have.has(r.id));
+    f.ed.update({ ...f.t, objects, ...(adding.length ? { references: [...(f.t.references ?? []), ...adding] } : {}) } as DocText, 'paste');
+    if (b) {
+      b.recorded = true;
+      b.ed.replace(b.ed.start, b.ed.end, runs, own.paras.length > 1 ? own.paras : undefined, 'edit');
+      b.recorded = false;
+      return;
+    }
     const ed = f.ed;
-    ed.update({ ...f.t, objects, ...(adding.length ? { references: [...(f.t.references ?? []), ...adding] } : {}) } as DocText, 'paste');
     ed.replace(ed.start, ed.end, runs, own.paras.length > 1 ? own.paras : undefined, null);
   }
 
@@ -611,12 +1093,20 @@ export class DocumentMode {
     const s = this.view.scroller;
     s.addEventListener('pointerdown', (e) => this.pointerDown(e));
     s.addEventListener('pointermove', (e) => this.pointerMove(e));
-    s.addEventListener('pointerup', (e) => { this.dragging = null; try { s.releasePointerCapture(e.pointerId); } catch { /* not captured */ } });
+    s.addEventListener('pointerup', (e) => {
+      const d = this.dragging;
+      this.dragging = null;
+      try { s.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
+      if (d?.kind === 'move' && d.moved) this.reanchor(d.id);
+    });
     s.addEventListener('dblclick', (e) => {
       const f = this.file;
       if (!f) return;
       const id = this.objectAt(e.clientX, e.clientY);
       if (id !== null && f.t.objects[id]?.kind === 'bib') { e.preventDefault(); void this.manageReferences(); return; }
+      if (f.box?.cell && id !== null && id !== f.box.id && f.t.objects[id]?.kind === 'drawing') { e.preventDefault(); this.editFigure(id); return; }
+      if (f.box) { e.preventDefault(); return; }
+      if (id !== null && f.t.objects[id]?.kind === 'textbox') { e.preventDefault(); this.startBox(id, this.view.toDoc(e.clientX, e.clientY)); return; }
       if (id !== null) { e.preventDefault(); this.editFigure(id); return; }
       // a citation: change what it cites
       const p = this.view.toDoc(e.clientX, e.clientY);
@@ -634,6 +1124,10 @@ export class DocumentMode {
     s.addEventListener('contextmenu', (e) => {
       if (!this.file) return;
       const p = this.view.toDoc(e.clientX, e.clientY);
+      // in a table: into the cell clicked (unless a structure in the cell typed into is picked)
+      const cell = this.cellAt(p);
+      const b = this.file.box;
+      if (cell && !(b?.cell && b.id === cell.id && b.cell.r === cell.r && b.cell.c === cell.c)) this.startCell(cell.id, cell.r, cell.c, p);
       const o = offsetAt(this.file.layout().text, p.x, p.y);
       if (this.contextMenu(o, e.clientX, e.clientY)) e.preventDefault();
     });
@@ -643,8 +1137,22 @@ export class DocumentMode {
   private objectAt(clientX: number, clientY: number): number | null {
     if (!this.file) return null;
     const p = this.view.toDoc(clientX, clientY);
-    for (const o of this.file.layout().objects) if (p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + o.h) return o.id;
+    const lay = this.file.layout();
+    const hit = lay.objects.filter((o) => p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + o.h);
+    // floating ones are on top of the text; one behind the text is picked only away from any text
+    const top = hit.filter((o) => o.wrap && o.wrap !== 'behind').pop() ?? hit.find((o) => !o.wrap);
+    if (top) return top.id;
+    const behind = hit.find((o) => o.wrap === 'behind');
+    if (behind && !lay.text.lines.some((l) => p.y >= l.y - (l.above ?? l.ascent) && p.y <= l.y + (l.below ?? l.descent) && p.x >= l.x && p.x <= l.x + l.width)) return behind.id;
     return null;
+  }
+
+  /** Near the edge of a placed object (where a text box is picked or moved rather than typed into). */
+  private nearEdge(id: number, p: { x: number; y: number }): boolean {
+    const o = this.file?.layout().objects.find((x) => x.id === id);
+    if (!o) return false;
+    const m = 5 / this.view.zoom;
+    return p.x - o.x < m || o.x + o.w - p.x < m || p.y - o.y < m || o.y + o.h - p.y < m;
   }
 
   private pointerDown(e: PointerEvent): void {
@@ -658,24 +1166,67 @@ export class DocumentMode {
     this.closeMenu();
     this.focus();
     const p = this.view.toDoc(e.clientX, e.clientY);
-    const ed = f.ed;
-    // the picked figure's corner handle resizes it
+    const now0 = performance.now();
+    const c0 = this.clicks;
+    const n = now0 - c0.time < 450 && Math.hypot(e.clientX - c0.at.x, e.clientY - c0.at.y) < 4 ? c0.n + 1 : 1;
+    // the picked figure's corner handle resizes it (one in a table cell too)
     const picked = this.pickedObject();
     if (picked !== null) {
       const o = f.layout().objects.find((x) => x.id === picked);
       const hs = 8 / this.view.zoom;
       if (o && Math.abs(p.x - (o.x + o.w)) <= hs && Math.abs(p.y - (o.y + o.h)) <= hs) {
         const obj = f.t.objects[picked];
-        const scale0 = obj.kind === 'drawing' || obj.kind === 'picture' ? obj.scale ?? 1 : 1;
+        const scale0 = obj.kind === 'drawing' || obj.kind === 'picture' ? obj.scale ?? 1 : obj.kind === 'textbox' ? obj.w : 1;
         this.dragging = { kind: 'resize', id: picked, w0: o.w, scale0, x0: o.x };
         s.setPointerCapture(e.pointerId);
         return;
       }
     }
+    // in a text box or table cell: clicks inside place its caret (or pick a structure in the cell)
+    const inBox = () => {
+      Object.assign(c0, { n, time: now0, at: { x: e.clientX, y: e.clientY } });
+      const bed = f.box!.ed;
+      const under = this.objectAt(e.clientX, e.clientY);
+      const at = under !== null && under !== f.box!.id ? objectOffsets(bed.t.runs).get(under) : undefined;
+      if (at !== undefined) { bed.select(at, at + 1); this.changed('selection'); return; }
+      const o = offsetAt(bed.layout(), p.x, p.y);
+      if (n === 2) bed.selectWord(o);
+      else if (n >= 3) bed.selectParagraph(o);
+      else bed.setCaret(o, e.shiftKey);
+      this.dragging = { kind: 'box' };
+      s.setPointerCapture(e.pointerId);
+    };
+    const cell = e.shiftKey ? null : this.cellAt(p);
+    if (f.box) {
+      const id = f.box.id;
+      if (f.box.cell && cell?.id === id) {
+        if (cell.r !== f.box.cell.r || cell.c !== f.box.cell.c) this.startCell(cell.id, cell.r, cell.c);
+        inBox();
+        return;
+      }
+      if (!f.box.cell && this.objectAt(e.clientX, e.clientY) === id && !this.nearEdge(id, p)) { inBox(); return; }
+      this.stopBox();
+    }
+    // a click in a table types into the cell clicked
+    if (cell) {
+      this.startCell(cell.id, cell.r, cell.c);
+      inBox();
+      return;
+    }
+    const ed = f.ed;
     const id = this.objectAt(e.clientX, e.clientY);
     if (id !== null && !e.shiftKey) {
+      const obj = f.t.objects[id];
+      // a click inside a text box types into it; its edge picks it, to move it or change its look
+      if (obj?.kind === 'textbox' && !this.nearEdge(id, p)) { this.startBox(id, p); this.dragging = { kind: 'box' }; s.setPointerCapture(e.pointerId); return; }
       const at = objectOffsets(f.t.runs).get(id);
-      if (at !== undefined) { ed.select(at, at + 1); return; }
+      if (at !== undefined) {
+        ed.select(at, at + 1);
+        // a floating figure is moved by dragging it
+        const fl = floatOf(obj);
+        if (fl) { this.dragging = { kind: 'move', id, from: p, float: fl, moved: false }; s.setPointerCapture(e.pointerId); }
+        return;
+      }
     }
     const now = performance.now();
     const c = this.clicks;
@@ -696,13 +1247,31 @@ export class DocumentMode {
     if (!f) return;
     if (!d) {
       const id = this.objectAt(e.clientX, e.clientY);
-      this.view.scroller.style.cursor = id !== null ? 'default' : 'text';
+      const p = this.view.toDoc(e.clientX, e.clientY);
+      const o = id !== null ? f.t.objects[id] : undefined;
+      this.view.scroller.style.cursor = id === null || o?.kind === 'table' ? 'text'
+        : o?.kind === 'textbox' ? (this.nearEdge(id, p) ? 'move' : 'text')
+        : floatOf(o) ? 'move' : 'default';
       return;
     }
     const p = this.view.toDoc(e.clientX, e.clientY);
     if (d.kind === 'resize') {
       const w = Math.max(12, p.x - d.x0);
-      this.setScale(d.id, Math.max(0.05, d.scale0 * (w / d.w0)), false);
+      const o = f.t.objects[d.id];
+      if (o?.kind === 'textbox') this.setBoxWidth(d.id, Math.max(18, d.scale0 + (w - d.w0)), false);
+      else this.setScale(d.id, Math.max(0.05, d.scale0 * (w / d.w0)), false);
+      return;
+    }
+    if (d.kind === 'move') {
+      const dx = p.x - d.from.x, dy = p.y - d.from.y;
+      if (!d.moved && Math.hypot(dx, dy) * this.view.zoom < 3) return;
+      this.setFloat(d.id, { ...d.float, x: d.float.x + dx, y: d.float.y + dy }, d.moved ? null : 'Move');
+      d.moved = true;
+      return;
+    }
+    if (d.kind === 'box') {
+      if (this.clicks.n !== 1 || !f.box) return;
+      f.box.ed.setCaret(offsetAt(f.box.ed.layout(), p.x, p.y), true);
       return;
     }
     if (this.clicks.n !== 1) return;
@@ -718,6 +1287,20 @@ export class DocumentMode {
   /** Put an object into the text at the caret (in place of the selection), and pick it. */
   insertObject(o: DocObject, kind = 'Insert', look: Partial<rt.RunStyle> = {}): number {
     const f = this.file!;
+    const b = f.box?.cell ? f.box : null;
+    if (b && (o.kind === 'table' || o.kind === 'textbox' || o.kind === 'bib')) this.stopBox();
+    else if (b) {
+      // into the table cell typed into: the object joins the document, its character the cell's text
+      const id = nextObjectId(f.t);
+      f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: o } } as DocText, kind);
+      const bed = b.ed;
+      const at = bed.start;
+      b.recorded = true;
+      bed.replace(bed.start, bed.end, [objectRun(id, { ...bed.typingStyle(), ...look })], undefined, 'edit');
+      b.recorded = false;
+      if (o.kind === 'drawing' || o.kind === 'picture') bed.select(at, at + 1);
+      return id;
+    }
     const ed = f.ed;
     const id = nextObjectId(f.t);
     ed.update({ ...f.t, objects: { ...f.t.objects, [id]: o } } as DocText, kind);
@@ -760,10 +1343,13 @@ export class DocumentMode {
     const f = this.file;
     const o = f?.t.objects[id];
     if (!f || !o || o.kind !== 'drawing') return;
+    const spot = this.cellSpot();
     this.host.editDrawing(o.contents, 'Figure', (c) => {
+      if (this.file === f) this.backToCell(spot);
       if (!c || this.file !== f) { this.focus(); return; }
       const cur = f.t.objects[id];
       if (cur?.kind !== 'drawing') return;
+      if (f.box?.cell) f.box.recorded = false;
       f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { ...cur, contents: c } } } as DocText, 'Edit figure');
       this.focus();
     });
@@ -778,13 +1364,136 @@ export class DocumentMode {
     f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, record ? 'Resize' : null);
   }
 
+  /** Change a figure's or picture's frame and shadow (undefined values take them off). */
+  setLook(id: number, patch: Partial<FigureLook>): void {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (!o || (o.kind !== 'drawing' && o.kind !== 'picture' && o.kind !== 'textbox')) return;
+    const look: FigureLook = { ...o.look, ...patch };
+    for (const k of Object.keys(look) as (keyof FigureLook)[]) if (look[k] === undefined) delete look[k];
+    const next: DocObject = { ...o, look: Object.keys(look).length ? look : undefined };
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, 'Picture format');
+  }
+
+  /** The frame and shadow of the figure picked. */
+  lookOf(id: number): FigureLook | undefined {
+    return lookOf(this.file?.t.objects[id]);
+  }
+
+  /** A text box's width (it grows down to fit its text). */
+  setBoxWidth(id: number, w: number, record = true): void {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'textbox') return;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { ...o, w } } } as DocText, record ? 'Resize' : null);
+  }
+
+  /** Change a figure's or text box's background colour (text boxes only). */
+  setFill(id: number, fill: string | undefined): void {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'textbox') return;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { ...o, fill } } } as DocText, 'Fill');
+  }
+
+  /** Put a figure on the page at a place (or back in its line with null). Text boxes always float. */
+  setFloat(id: number, fl: Float | null, kind: string | null = 'Wrap text'): void {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (!o || (o.kind !== 'drawing' && o.kind !== 'picture' && o.kind !== 'textbox')) return;
+    if (!fl && o.kind === 'textbox') return;
+    if (fl && cellHolding(f.t, id)) { this.host.flash('A structure or picture in a table cell stays in its line.'); return; }
+    const next = { ...o, float: fl ?? undefined } as DocObject;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, kind);
+  }
+
+  /**
+   * Wrap Text: in line with the text, or floating with text round it (square, top and bottom),
+   * or behind or in front of the text. A figure taken out of its line stays where it was shown.
+   */
+  setWrap(id: number, wrap: WrapKind | 'inline'): void {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (!o) return;
+    const cur = floatOf(o);
+    if (wrap === 'inline') { if (cur) this.setFloat(id, null); return; }
+    if (cur) { this.setFloat(id, { ...cur, wrap }); return; }
+    // from its line: keep it where it is, measured from the top of its paragraph and the left margin
+    const lay = f.layout();
+    const placed = lay.objects.find((x) => x.id === id);
+    const at = objectOffsets(f.t.runs).get(id);
+    const para = at !== undefined ? paraAt(f.ed.text, at) : 0;
+    const [el, et] = lookExtentOf(o);
+    const top = lay.paraTops[para];
+    const x = placed ? placed.x - el - f.t.page.left : 0;
+    const y = placed && top ? placed.y - et - top.y : 0;
+    this.setFloat(id, { wrap, x, y });
+  }
+
+  /**
+   * After a floating figure is dragged: it belongs to the paragraph it was dropped beside
+   * (its character moves to the start of that paragraph), so it moves with that text from now on.
+   */
+  private reanchor(id: number): void {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    const fl = floatOf(o);
+    if (!fl || (fl.yFrom && fl.yFrom !== 'para')) return;
+    const lay = f.layout();
+    const placed = lay.objects.find((x) => x.id === id);
+    const at = objectOffsets(f.t.runs).get(id);
+    if (!placed || at === undefined) return;
+    const text = f.ed.text;
+    const from = paraAt(text, at);
+    const [, et] = lookExtentOf(o!);
+    const topY = placed.y - et;
+    // the paragraph whose top is the last one above the figure's top on its page
+    let to = from;
+    let best = -Infinity;
+    lay.paraTops.forEach((pt, i) => { if (pt.page === placed.page && pt.y <= topY + 0.5 && pt.y > best) { best = pt.y; to = i; } });
+    if (best === -Infinity) {
+      // above every paragraph's top on its page: the first paragraph on the page
+      const first = lay.paraTops.findIndex((pt) => pt.page === placed.page);
+      if (first >= 0) to = first;
+    }
+    if (to === from) return;
+    const run = rt.sliceRuns(f.t.runs, at, at + 1);
+    let runs = rt.replaceRange(f.t.runs, at, at + 1, []);
+    const target = paraRange(rt.plainText(runs), to > from ? to : to).start;
+    runs = rt.replaceRange(runs, target, target, run);
+    const y = topY - lay.paraTops[to].y;
+    f.ed.update({ ...f.t, runs, objects: { ...f.t.objects, [id]: { ...o, float: { ...fl, y } } as DocObject } } as DocText, null, target, target + 1);
+  }
+
+  /** Insert > Text Box: a box of text on the page, at the left margin beside the paragraph the caret is in. */
+  insertTextBox(): void {
+    const f = this.file!;
+    this.stopBox();
+    const ed = f.ed;
+    const text = ed.text;
+    const p = paraAt(text, ed.start);
+    const start = paraRange(text, p).start;
+    const id = nextObjectId(f.t);
+    const N = styleOf(f.t, {});
+    const box: DocObject = {
+      kind: 'textbox', runs: [{ ...runStyleOf(N), text: '' }], w: 2 * INCH, fill: '#ffffff', look: { frame: 0.75 },
+      float: { wrap: 'square', x: 0, y: 0 },
+    };
+    ed.update({ ...f.t, objects: { ...f.t.objects, [id]: box } } as DocText, 'Insert text box');
+    ed.replace(start, start, [objectRun(id, ed.typingStyle())], undefined, null);
+    this.startBox(id);
+  }
+
   // ---------------------------------------------------------------- commands
 
   /** Run a command from the ribbon, the menus or a key. False when it doesn't apply here. */
   run(cmd: string): boolean {
     const f = this.file;
     if (!f) return false;
-    const ed = f.ed;
+    // in a text box, the text buttons work on its text; other commands leave it first
+    if (f.box && !BOX_COMMANDS.test(cmd) && !(f.box.cell && CELL_COMMANDS.test(cmd))) this.stopBox();
+    if (/^table-/.test(cmd)) { this.tableCommand(cmd); return true; }
+    const ed = this.ed;
     const style = (id: string) => {
       const [a, b] = ed.selectedParas();
       ed.update(setParaStyle(f.t, a, b, id), 'Style');
@@ -818,17 +1527,31 @@ export class DocumentMode {
       case 'doc-sub': ed.toggle('sub'); break;
       case 'doc-sup': ed.toggle('sup'); break;
       case 'doc-formula': ed.toggle('formula'); break;
+      case 'doc-highlight': {
+        const on = ed.currentStyle().highlight;
+        ed.setStyle({ highlight: on && on === this.highlighter ? undefined : this.highlighter });
+        break;
+      }
+      case 'doc-highlight-menu': this.highlightMenu(); return true;
       case 'doc-bullets': ed.list('bullet'); break;
       case 'doc-numbering': ed.list('number'); break;
       case 'doc-indent': ed.indent(1); break;
       case 'doc-outdent': ed.indent(-1); break;
       case 'page-break': this.pageBreak(); break;
+      case 'col-break': this.pageBreak(true); break;
       case 'select-all': ed.selectAll(); break;
-      case 'undo': ed.undo(); break;
-      case 'redo': ed.redo(); break;
+      case 'undo': this.undo(false); break;
+      case 'redo': this.undo(true); break;
       case 'insert-structure': this.drawNew(); break;
       case 'structure-from-name-doc': case 'name-to-structure': void this.fromName(); break;
       case 'insert-picture': void this.insertPicture(); break;
+      case 'insert-text-box': this.insertTextBox(); break;
+      case 'wrap-inline': case 'wrap-square': case 'wrap-topBottom': case 'wrap-behind': case 'wrap-front': {
+        const id = this.pickedObject() ?? f.box?.id ?? null;
+        if (id === null) { this.host.flash('Click a structure, picture or text box first, then choose how text wraps round it.'); break; }
+        this.setWrap(id, cmd.slice(5) as WrapKind | 'inline');
+        break;
+      }
       case 'insert-table': void this.insertTable(); break;
       case 'insert-caption': void this.insertCaption(); break;
       case 'cross-reference': void this.crossReference(); break;
@@ -844,18 +1567,32 @@ export class DocumentMode {
       case 'find': case 'replace': this.find(cmd === 'replace'); return true;
       case 'paste': void this.paste(null); break;
       case 'copy': case 'cut': this.focus(); document.execCommand(cmd); break;
+      case 'box-para': case 'box-style': case 'box-page': case 'box-hf':
+        this.panel.open(cmd.slice(4) as DocBoxKey);
+        return true;
+      case 'margins-custom': case 'paper-custom':
+        this.panel.open('page', this.ribbon.querySelector<HTMLElement>(cmd === 'paper-custom' ? '#doc-paper' : '#doc-margins'), cmd === 'paper-custom' ? 'pg-w' : 'pg-top');
+        this.updateRibbon();
+        return true;
+      case 'header-edit': this.panel.open('hf', null, 'hf-header0'); return true;
+      case 'footer-edit': this.panel.open('hf', null, 'hf-footer1'); return true;
       case 'numbers-s': {
         const s = f.t.hf.prefix === 'S';
         ed.update({ ...f.t, hf: { ...f.t.hf, prefix: s ? '' : 'S', numbers: f.t.hf.numbers === 'none' ? 'footer-center' : f.t.hf.numbers } } as DocText, 'Page numbers');
         break;
       }
       default: {
-        const m = /^(margins|paper|orient|numbers)-(.+)$/.exec(cmd);
+        const m = /^(margins|paper|orient|numbers|columns)-(.+)$/.exec(cmd);
         if (!m || !this.layoutCommand(m[1], m[2])) return false;
       }
     }
     this.focus();
     return true;
+  }
+
+  /** The pinned settings boxes were read from the settings. */
+  boxesChanged(): void {
+    this.panel.placeBoxes();
   }
 
   /** Find, and Find and Replace (Ctrl+F, Ctrl+H). */
@@ -889,6 +1626,11 @@ export class DocumentMode {
       page(land ? { w: size.h, h: size.w } : { ...size });
     } else if (what === 'orient') {
       if ((v === 'landscape') !== land) page({ w: t.page.h, h: t.page.w });
+    } else if (what === 'columns') {
+      if (v === 'more') { this.panel.open('page', this.ribbon.querySelector<HTMLElement>('#doc-columns'), 'pg-cols'); return true; }
+      const n = Number(v);
+      if (!(n >= 1 && n <= 4)) return false;
+      page({ cols: n > 1 ? n : undefined });
     } else if (what === 'numbers') {
       f.ed.update({ ...t, hf: { ...t.hf, numbers: v as NumberPlace } } as DocText, 'Page numbers');
     } else return false;
@@ -896,16 +1638,18 @@ export class DocumentMode {
   }
 
   /** Ctrl+Enter: what follows the caret starts a new page. */
-  private pageBreak(): void {
+  private pageBreak(column = false): void {
     const ed = this.ed;
     ed.enter(false);
     const p = paraAt(ed.text, ed.focus);
-    ed.setParas(p, p, { pageBreak: true }, 'break');
+    ed.setParas(p, p, column ? { colBreak: true } : { pageBreak: true }, 'break');
   }
 
   private drawNew(): void {
     const f = this.file!;
+    const spot = this.cellSpot();
     this.host.editDrawing(null, 'New structure', (c) => {
+      if (this.file === f) this.backToCell(spot);
       if (!c || this.file !== f) { this.focus(); return; }
       this.insertObject({ kind: 'drawing', contents: c }, 'Insert structure');
       this.focus();
@@ -914,6 +1658,7 @@ export class DocumentMode {
 
   private async fromName(): Promise<void> {
     const f = this.file!;
+    const spot = this.cellSpot();
     const got = await ask('Structure from Name or SMILES', [{ name: 'text', label: 'Name or SMILES', value: '' }], {
       ok: 'Insert', note: 'A systematic or common name (ethyl acetate, 4-bromoanisole) or a SMILES string. The structure goes in the text at the caret.',
     });
@@ -921,14 +1666,17 @@ export class DocumentMode {
     if (!got?.text.trim() || this.file !== f) return;
     const r = await this.host.toStructure(got.text, f.t.drawingStyle);
     if ('error' in r) { this.host.flash(r.error, 8000); return; }
+    this.backToCell(spot);
     this.insertObject({ kind: 'drawing', contents: r.contents }, 'Insert structure');
     if (r.notes.length) this.host.flash(r.notes.join(' '), 8000);
   }
 
   private async insertPicture(): Promise<void> {
     const f = this.file!;
+    const spot = this.cellSpot();
     const pic = await this.host.pickPicture();
     if (!pic || this.file !== f) return;
+    this.backToCell(spot);
     // pictures come in at 96 pixels to the inch, as in Word
     this.dropPicture(pic.bytes, pic.mime);
   }
@@ -938,13 +1686,52 @@ export class DocumentMode {
     const got = await ask('Insert Table', [
       { name: 'rows', label: 'Rows', value: '4', type: 'number' },
       { name: 'cols', label: 'Columns', value: '3', type: 'number' },
-    ], { ok: 'Insert', note: 'An ACS-style table. Double-click it to type in its cells; the Style panel changes its lines, headings, rows and columns.' });
+      { name: 'kind', label: 'Style', value: this.lastTableKind, options: TABLE_KINDS.map(([value, label]) => ({ value, label })) },
+    ], { ok: 'Insert', note: 'A table in the text is typed into where it is, like a table in Word: click a cell to type, Tab goes to the next cell, and the Table tab adds rows and columns. Structures and pictures can go in its cells. The drawing kind is edited in the drawing tools.' });
     this.focus();
     if (!got || this.file !== f) return;
     const rows = Math.max(1, Math.min(500, Math.round(Number(got.rows) || 4)));
     const cols = Math.max(1, Math.min(60, Math.round(Number(got.cols) || 3)));
-    const id = this.insertObject({ kind: 'drawing', contents: this.host.newTable(rows, cols, f.t.drawingStyle) }, 'Insert table');
-    this.editFigure(id);
+    this.lastTableKind = got.kind;
+    if (got.kind === 'drawing') {
+      const id = this.insertObject({ kind: 'drawing', contents: this.host.newTable(rows, cols, f.t.drawingStyle) }, 'Insert table');
+      this.editFigure(id);
+      return;
+    }
+    this.stopBox();
+    const lay = f.layout();
+    const N = styleOf(f.t, {});
+    const lines = got.kind === 'acs' ? 'acs' : got.kind === 'none' ? 'none' : 'grid';
+    // columns share the width of the text, as Word's do
+    const t0 = emptyTable(rows, cols, N.size);
+    const w = Math.floor((lay.textW / cols) * 100) / 100;
+    const table: TableData = { ...t0, cols: Array(cols).fill(w), lines, head: lines === 'grid' ? 0 : t0.head, align: Array(cols).fill('left') };
+    this.insertTableObject(table);
+  }
+
+  /** Put a table in the text as a paragraph of its own (after the caret's paragraph text), and type into its first cell. */
+  private insertTableObject(table: TableData): void {
+    const f = this.file!;
+    const ed = f.ed;
+    const id = nextObjectId(f.t);
+    ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'table', table } } } as DocText, 'Insert table');
+    const text = ed.text;
+    const p = paraAt(text, ed.start);
+    const r = paraRange(text, p);
+    const style = ed.typingStyle();
+    if (r.end === r.start) ed.replace(r.start, r.end, [objectRun(id, style)], undefined, null);
+    else {
+      // a table is a paragraph of its own: after this one, with an empty paragraph to carry on typing in
+      ed.replace(r.end, r.end, [{ ...style, text: '\n' }, objectRun(id, style)], undefined, null);
+    }
+    if (!rt.plainText(f.t.runs).slice(objectOffsets(f.t.runs).get(id)! + 1).startsWith('\n')) {
+      const at = objectOffsets(f.t.runs).get(id)! + 1;
+      ed.replace(at, at, [{ ...style, text: '\n' }], undefined, null);
+    }
+    // a table's paragraph has no spacing or indent of its own (as in Word)
+    const tp = paraAt(ed.text, objectOffsets(f.t.runs).get(id)!);
+    ed.setParas(tp, tp, { spaceBefore: 0, spaceAfter: 0, firstLine: 0, indent: undefined, list: undefined }, null);
+    this.startCell(id, 0, 0, 'start');
   }
 
   /**
@@ -1133,11 +1920,13 @@ export class DocumentMode {
       const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-doc]');
       if (!b) return;
       const cmd = b.dataset.doc!;
+      const box = /^box-(para|style|page|hf)$/.exec(cmd);
+      if (box) { this.panel.open(box[1] as DocBoxKey, b); return; }
       if (!this.run(cmd)) this.host.command(cmd);
     });
     // selects that run a command: margins, paper, orientation, page numbers
     for (const sel of r.querySelectorAll<HTMLSelectElement>('select[data-doc-prefix]')) {
-      sel.addEventListener('change', () => { this.run(`${sel.dataset.docPrefix}-${sel.value}`); this.focus(); });
+      sel.addEventListener('change', () => { const v = sel.value; this.run(`${sel.dataset.docPrefix}-${v}`); if (v !== 'custom' && v !== 'more') this.focus(); });
     }
     // zoom, under the pages
     for (const b of document.querySelectorAll<HTMLButtonElement>('#doc-statusbar [data-doc]')) {
@@ -1158,10 +1947,31 @@ export class DocumentMode {
     go(font, () => { if (font.value.trim() && this.file) this.ed.setStyle({ font: font.value.trim() }); });
     go(size, () => { const v = Number(size.value); if (v > 0 && v <= 1638 && this.file) this.ed.setStyle({ size: v }); });
     colour.addEventListener('change', () => { if (this.file) this.ed.setStyle({ color: colour.value.toLowerCase() === '#000000' ? undefined : colour.value }); this.focus(); });
+    // Layout > Paragraph: indents (inches) and spacing (points); any unit can be typed
+    const para = (id: string, unit: 'in' | 'pt', patch: (n: number) => Partial<ParaStyle>) => {
+      const el = r.querySelector<HTMLInputElement>(id)!;
+      go(el, () => { const n = parseLength(el.value, unit); if (n !== null && this.file) this.ed.setSelectedParas(patch(Math.max(0, n)), unit === 'in' ? 'indent' : 'spacing'); });
+    };
+    para('#doc-ind-left', 'in', (n) => ({ indent: n || undefined }));
+    para('#doc-ind-right', 'in', (n) => ({ indentRight: n || undefined }));
+    para('#doc-sp-before', 'pt', (n) => ({ spaceBefore: n }));
+    para('#doc-sp-after', 'pt', (n) => ({ spaceAfter: n }));
+    // the Table tab: heading rows, shading and column width
+    const head = r.querySelector<HTMLInputElement>('#doc-tbl-head')!;
+    go(head, () => {
+      const tg = this.tableTarget();
+      const n = Math.round(Number(head.value));
+      if (tg && Number.isFinite(n)) this.setTable(tg.id, { ...tg.t, head: Math.max(0, Math.min(tg.t.rows.length, n)) }, 'Heading rows');
+    });
+    const shade = r.querySelector<HTMLInputElement>('#doc-tbl-shade')!;
+    shade.addEventListener('change', () => { this.shade(shade.value.toLowerCase() === '#ffffff' ? undefined : shade.value); this.focus(); });
+    const width = r.querySelector<HTMLInputElement>('#doc-tbl-width')!;
+    go(width, () => { const n = parseLength(width.value, 'in'); if (n !== null) this.setColumnWidthOf(n); });
     const lineSel = r.querySelector<HTMLSelectElement>('#doc-line')!;
     lineSel.addEventListener('change', () => {
+      if (lineSel.value === 'more') { this.panel.open('para', lineSel, 'p-rule'); this.updateRibbon(); return; }
       const v = Number(lineSel.value);
-      if (this.file && v > 0) this.ed.setSelectedParas({ line: Math.abs(v - 1) < 1e-6 ? undefined : v }, 'spacing');
+      if (this.file && v > 0) this.ed.setSelectedParas({ line: Math.abs(v - 1) < 1e-6 ? undefined : v, linePt: undefined, lineRule: undefined }, 'spacing');
       this.focus();
     });
   }
@@ -1175,10 +1985,10 @@ export class DocumentMode {
   private updateRibbon(): void {
     const f = this.file;
     if (!f) return;
-    const ed = f.ed;
+    const ed = f.textEd;
     const s = ed.currentStyle();
     const para = ed.currentPara();
-    const st = styleOf(f.t, para);
+    const st = f.box ? styleOf(f.t, {}) : styleOf(f.t, para);
     const press = (cmd: string, on: boolean) => {
       for (const b of this.ribbon.querySelectorAll<HTMLButtonElement>(`[data-doc="${cmd}"]`)) b.setAttribute('aria-pressed', String(on));
     };
@@ -1188,6 +1998,7 @@ export class DocumentMode {
     press('doc-sub', !!s.sub);
     press('doc-sup', !!s.sup);
     press('doc-formula', !!s.formula);
+    press('doc-highlight', !!s.highlight);
     const align = para.align ?? 'left';
     press('doc-align-left', align === 'left');
     press('doc-align-center', align === 'center');
@@ -1206,8 +2017,13 @@ export class DocumentMode {
     if (active !== size) size.value = s.size !== undefined ? String(Math.round(s.size * 100) / 100) : '';
     if (active !== colour) colour.value = s.color ?? '#000000';
     if (active !== lineSel) {
-      const v = String(para.line ?? 1);
+      const v = para.linePt ? '' : String(para.line ?? 1);
       lineSel.value = [...lineSel.options].some((o) => o.value === v) ? v : '';
+    }
+    // Layout > Paragraph: indents and spacing
+    for (const [id, v] of [['#doc-ind-left', para.indent ?? 0, 'in'], ['#doc-ind-right', para.indentRight ?? 0, 'in'], ['#doc-sp-before', para.spaceBefore ?? 0, 'pt'], ['#doc-sp-after', para.spaceAfter ?? 0, 'pt']] as const) {
+      const el = this.ribbon.querySelector<HTMLInputElement>(id);
+      if (el && el !== active) el.value = showLength(v, id.includes('ind') ? 'in' : 'pt');
     }
     const pick = (id: string, v: string) => {
       const el = this.ribbon.querySelector<HTMLSelectElement>(id);
@@ -1222,14 +2038,43 @@ export class DocumentMode {
     pick('#doc-paper', near(short, LETTER.w) && near(long, LETTER.h) ? 'letter' : near(short, A4.w) && near(long, A4.h) ? 'a4' : 'other');
     pick('#doc-orient', pg.w > pg.h ? 'landscape' : 'portrait');
     pick('#doc-numbers', f.t.hf.numbers);
+    pick('#doc-columns', String(f.t.page.cols ?? 1));
     press('numbers-s', f.t.hf.prefix === 'S');
+    const fig = this.pickedObject() ?? f.box?.id ?? null;
+    const wrapSel = this.ribbon.querySelector<HTMLSelectElement>('#doc-wrap');
+    if (wrapSel) {
+      wrapSel.disabled = fig === null;
+      pick('#doc-wrap', fig === null ? 'inline' : floatOf(f.t.objects[fig])?.wrap ?? 'inline');
+      const inl = wrapSel.querySelector<HTMLOptionElement>('option[value="inline"]');
+      if (inl) inl.disabled = fig !== null && f.t.objects[fig]?.kind === 'textbox';
+    }
+    // the Table tab shows while the caret is in a table (or a table is picked)
+    const tg = this.tableTarget();
+    const tabBtn = this.ribbon.querySelector<HTMLButtonElement>('[data-doc-tab="table"]');
+    if (tabBtn) {
+      tabBtn.hidden = !tg && !this.keepTableTab;
+      if (!tg && !this.keepTableTab && tabBtn.getAttribute('aria-selected') === 'true') this.ribbon.querySelector<HTMLButtonElement>('[data-doc-tab="home"]')?.click();
+    }
+    if (tg) {
+      pick('#doc-tbl-lines', tg.t.lines);
+      const head = this.ribbon.querySelector<HTMLInputElement>('#doc-tbl-head');
+      if (head && head !== active) head.value = String(tg.t.head);
+      const w = this.ribbon.querySelector<HTMLInputElement>('#doc-tbl-width');
+      if (w && w !== active) w.value = showLength(f.box?.cell ? tg.t.cols[tg.c] : tg.t.cols[0], 'in');
+      const shade = this.ribbon.querySelector<HTMLInputElement>('#doc-tbl-shade');
+      if (shade && shade !== active) shade.value = tg.t.rows[tg.r]?.[tg.c]?.fill ?? '#ffffff';
+      const al = tg.t.rows[tg.r]?.[tg.c]?.align ?? tg.t.align?.[tg.c] ?? 'left';
+      for (const a of ['left', 'center', 'right']) press(`table-align-${a}`, al === a);
+      const v = tg.t.rows[tg.r]?.[tg.c]?.valign ?? 'top';
+      for (const a of ['top', 'center', 'bottom']) press(`table-valign-${a}`, v === a);
+    }
     this.showZoom();
     const status = document.querySelector<HTMLElement>('#doc-status');
     if (status) {
       const lay = f.layout();
-      const c = ed.caret();
+      const c = f.ed.caret();
       const page = lay.pages.findIndex((p) => c.line >= p.first && c.line < p.end);
-      const words = ed.text.split(/[\s￼]+/).filter((w) => /\p{L}|\p{N}/u.test(w)).length;
+      const words = f.ed.text.split(/[\s￼]+/).filter((w) => /\p{L}|\p{N}/u.test(w)).length;
       status.textContent = `Page ${page + 1} of ${lay.pages.length}  ·  ${words.toLocaleString()} word${words === 1 ? '' : 's'}`;
     }
   }
@@ -1248,4 +2093,31 @@ function runLooks(runs: TextRun[]): CharLook[] {
     else for (let i = 0; i < r.text.length; i++) looks.push({ pos: 'base', italic });
   }
   return looks;
+}
+
+/** How many rows a cell reaches down (always one: cells join across, not down). */
+function spanRows(_t: TableData, _r: number): number {
+  return 1;
+}
+
+/** A table with each cell changed by a function. */
+function mapCells(t: TableData, f: (cell: TableData['rows'][number][number], r: number, c: number) => TableData['rows'][number][number]): TableData {
+  return { ...t, rows: t.rows.map((row, r) => row.map((cell, c) => f(cell, r, c))) };
+}
+
+/**
+ * Columns as wide as their widest cell (text unwrapped, structures at their own size), the
+ * table no wider than the text: Word's AutoFit to Contents.
+ */
+export function fitDocColumns(t: TableData, f: DocFile, textW: number): TableData {
+  const cols = t.cols.map((_, c) => {
+    let w = 18;
+    t.rows.forEach((row, r) => {
+      if (!row[c] || isCovered(t, r, c) || spanOf(t, r, c) > 1) return;
+      w = Math.max(w, f.layouter.naturalWidth(f.t, row[c].runs, row[c].paras));
+    });
+    return Math.ceil(w);
+  });
+  const total = cols.reduce((a, b) => a + b, 0);
+  return { ...t, cols: total > textW ? cols.map((w) => (w * textW) / total) : cols };
 }

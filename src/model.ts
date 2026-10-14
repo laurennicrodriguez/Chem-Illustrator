@@ -155,6 +155,8 @@ export interface TextRun {
   size?: number;
   font?: string;
   color?: string;
+  /** A coloured background behind the text, like a highlighter pen (documents). */
+  highlight?: string;
   /** A document's figure, table or field sitting in the text: its one character (U+FFFC) stands for the object with this id. */
   obj?: number;
 }
@@ -221,12 +223,19 @@ export interface ParaStyle {
   style?: string;
   /** Documents: starts a new page. */
   pageBreak?: boolean;
+  /** Documents set in columns: starts the next column. */
+  colBreak?: boolean;
   /** Documents: the first line's indent from the rest, in points (less than 0 hangs it out). */
   firstLine?: number;
   /** Documents: line spacing as a multiple of single spacing (single when left out). */
   line?: number;
   /** Documents: kept on the same page as the paragraph after it (headings). */
   keepNext?: boolean;
+  /** Documents: indent from the right margin, in points. */
+  indentRight?: number;
+  /** Documents: line spacing in points instead of a multiple: exactly this, or at least this. */
+  linePt?: number;
+  lineRule?: 'exact' | 'atLeast';
 }
 
 export interface Caption {
@@ -459,6 +468,10 @@ export interface TableCell {
   align?: Justify;
   /** Number of columns the cell spans (the cells it covers are left empty). */
   span?: number;
+  /** Documents: the cell's background colour (Word's shading). */
+  fill?: string;
+  /** Documents: where the text sits up and down in a cell taller than it (top when left out). */
+  valign?: 'center' | 'bottom';
 }
 
 /**

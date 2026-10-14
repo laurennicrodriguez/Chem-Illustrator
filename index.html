@@ -503,6 +503,7 @@
       <button role="tab" data-doc-tab="insert" aria-selected="false">Insert</button>
       <button role="tab" data-doc-tab="layout" aria-selected="false">Layout</button>
       <button role="tab" data-doc-tab="references" aria-selected="false">References</button>
+      <button role="tab" data-doc-tab="table" aria-selected="false" class="rb-context" hidden title="Shown while you are in a table">Table</button>
     </div>
     <div class="rb-panel" data-doc-panel="home">
       <div class="rb-group">
@@ -533,6 +534,10 @@
               <button class="rb-sq" data-doc="doc-sup" aria-pressed="false" title="Superscript">x<sup>2</sup></button>
               <button class="rb-sq" data-doc="doc-formula" aria-pressed="false" title="Formula style: numbers lowered (CH₂Cl₂), charges raised">C₉H₈</button>
               <label class="rb-sq rb-colour" title="Text colour"><span>A</span><input id="doc-colour" type="color" aria-label="Text colour" /></label>
+              <span class="rb-split">
+                <button class="rb-sq rb-hl" data-doc="doc-highlight" aria-pressed="false" title="Highlight the selected text in the colour under the letters (click again to take it off)"><span class="hl-ab">ab</span><span id="doc-hl-bar" class="hl-bar"></span></button>
+                <button class="rb-sq rb-drop" data-doc="doc-highlight-menu" title="Highlight colours">▾</button>
+              </span>
             </div>
           </div>
         </div>
@@ -547,7 +552,7 @@
               <button class="rb-sq" data-doc="doc-outdent" title="Less indent (Shift+Tab)">⇤</button>
               <button class="rb-sq" data-doc="doc-indent" title="More indent (Tab)">⇥</button>
               <select id="doc-line" title="Line spacing" aria-label="Line spacing">
-                <option value="1">Single</option><option value="1.15">1.15</option><option value="1.5">1.5</option><option value="2">Double</option><option value="" hidden>Other</option>
+                <option value="1">Single</option><option value="1.15">1.15</option><option value="1.5">1.5</option><option value="2">Double</option><option value="" hidden>Other</option><option value="more">Line Spacing Options…</option>
               </select>
             </div>
             <div class="rb-pair">
@@ -559,6 +564,7 @@
           </div>
         </div>
         <div class="rb-label">Paragraph</div>
+        <button class="rb-launch" data-doc="box-para" title="Paragraph settings: indents, spacing before and after, line spacing, page breaks">⬊</button>
       </div>
       <div class="rb-group">
         <div class="rb-row rb-styles">
@@ -569,7 +575,8 @@
           <button class="rb-style" data-doc="style-h3" aria-pressed="false" title="Heading 3"><span class="s-h3">AaBbCc</span>Heading 3</button>
           <button class="rb-style" data-doc="style-caption" aria-pressed="false" title="Caption"><span class="s-cap">AaBbCcDd</span>Caption</button>
         </div>
-        <div class="rb-label">Styles (change them in the panel on the right)</div>
+        <div class="rb-label">Styles</div>
+        <button class="rb-launch" data-doc="box-style" title="Change how the style the caret is in looks (font, size, spacing…); every paragraph in it follows">⬊</button>
       </div>
       <div class="rb-group">
         <div class="rb-row">
@@ -600,6 +607,7 @@
         <div class="rb-row">
           <button class="rb-big" data-doc="insert-table" title="An ACS-style table"><span class="rb-icon">▦</span>Table</button>
           <button class="rb-big" data-doc="insert-picture" title="A picture from a file (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
+          <button class="rb-big" data-doc="insert-text-box" title="A box of text on the page, with the page's text wrapping round it. Drag its edge to move it"><span class="rb-icon">▭</span>Text Box</button>
         </div>
         <div class="rb-label">Tables and pictures</div>
       </div>
@@ -619,12 +627,14 @@
               <option value="narrow">Narrow (0.5 in)</option>
               <option value="moderate">Moderate (1 in, 0.75 in sides)</option>
               <option value="wide">Wide (1 in, 2 in sides)</option>
-              <option value="other" hidden>Other (set in the panel)</option>
+              <option value="other" hidden>Other</option>
+              <option value="custom">Custom Margins…</option>
             </select></label>
             <label class="rb-field">Paper <select id="doc-paper" data-doc-prefix="paper">
               <option value="letter">Letter (8.5 × 11 in)</option>
               <option value="a4">A4 (21 × 29.7 cm)</option>
-              <option value="other" hidden>Other (set in the panel)</option>
+              <option value="other" hidden>Other size</option>
+              <option value="custom">More Paper Sizes…</option>
             </select></label>
           </div>
           <div class="rb-col">
@@ -632,10 +642,37 @@
               <option value="portrait">Portrait</option>
               <option value="landscape">Landscape</option>
             </select></label>
-            <button data-doc="page-break" title="Start a new page here">Page Break</button>
+            <label class="rb-field" title="Text in columns, as journals set it">Columns <select id="doc-columns" data-doc-prefix="columns">
+              <option value="1">One</option>
+              <option value="2">Two</option>
+              <option value="3">Three</option>
+              <option value="4" hidden>Four</option>
+              <option value="more">More Columns…</option>
+            </select></label>
+          </div>
+          <div class="rb-col">
+            <button data-doc="page-break" title="Start a new page here (Ctrl+Enter)">Page Break</button>
+            <button data-doc="col-break" title="Start the next column here (Ctrl+Shift+Enter)">Column Break</button>
           </div>
         </div>
         <div class="rb-label">Page Setup</div>
+        <button class="rb-launch" data-doc="box-page" title="Page Setup: paper size, orientation and exact margins">⬊</button>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <span class="rb-caption">Indent</span>
+            <label class="rb-field" title="From the left margin, in inches (or type cm, mm or pt)">Left <input id="doc-ind-left" class="rb-text rb-num" spellcheck="false" /></label>
+            <label class="rb-field" title="From the right margin, in inches (or type cm, mm or pt)">Right <input id="doc-ind-right" class="rb-text rb-num" spellcheck="false" /></label>
+          </div>
+          <div class="rb-col">
+            <span class="rb-caption">Spacing</span>
+            <label class="rb-field" title="Space above the paragraph, in points">Before <input id="doc-sp-before" class="rb-text rb-num" spellcheck="false" /></label>
+            <label class="rb-field" title="Space below the paragraph, in points">After <input id="doc-sp-after" class="rb-text rb-num" spellcheck="false" /></label>
+          </div>
+        </div>
+        <div class="rb-label">Paragraph</div>
+        <button class="rb-launch" data-doc="box-para" title="Paragraph settings: indents, spacing before and after, line spacing, page breaks">⬊</button>
       </div>
       <div class="rb-group">
         <div class="rb-row">
@@ -651,8 +688,28 @@
             </select></label>
             <button data-doc="numbers-s" aria-pressed="false" title="Number pages S1, S2… as Supporting Information is">S1, S2… numbering</button>
           </div>
+          <div class="rb-col">
+            <button data-doc="header-edit" title="Text at the top of every page (left, centre, right)">Header…</button>
+            <button data-doc="footer-edit" title="Text at the bottom of every page (left, centre, right)">Footer…</button>
+          </div>
         </div>
-        <div class="rb-label">Header and Footer (more in the panel)</div>
+        <div class="rb-label">Header and Footer</div>
+        <button class="rb-launch" data-doc="box-hf" title="Header, footer and page number settings">⬊</button>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-field" title="How the text goes round the structure, picture or text box picked">Wrap Text <select id="doc-wrap" data-doc-prefix="wrap">
+              <option value="inline">In Line with Text</option>
+              <option value="square">Square</option>
+              <option value="topBottom">Top and Bottom</option>
+              <option value="behind">Behind Text</option>
+              <option value="front">In Front of Text</option>
+            </select></label>
+            <button data-doc="insert-text-box" title="A box of text on the page, with the page's text wrapping round it">Text Box</button>
+          </div>
+        </div>
+        <div class="rb-label">Arrange</div>
       </div>
     </div>
     <div class="rb-panel" data-doc-panel="references" hidden>
@@ -676,6 +733,83 @@
           <button class="rb-big" data-doc="manage-references" title="The document's references: add by DOI, by hand or from BibTeX or RIS; edit, delete; the citation style (ACS, Angewandte, RSC)"><span class="rb-icon">✎</span>Manage References…</button>
         </div>
         <div class="rb-label">Citations and Bibliography</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-doc-panel="table" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <button data-doc="table-row-above" title="A new row above this one">Insert Above</button>
+            <button data-doc="table-row-below" title="A new row below this one (Tab in the last cell does this too)">Insert Below</button>
+          </div>
+          <div class="rb-col">
+            <button data-doc="table-col-left" title="A new column to the left">Insert Left</button>
+            <button data-doc="table-col-right" title="A new column to the right">Insert Right</button>
+          </div>
+          <div class="rb-col">
+            <button data-doc="table-del-row" title="Delete this row">Delete Row</button>
+            <button data-doc="table-del-col" title="Delete this column">Delete Column</button>
+          </div>
+        </div>
+        <div class="rb-label">Rows and Columns</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <button data-doc="table-merge" title="Join this cell with the one to its right">Merge Right</button>
+            <button data-doc="table-split" title="Split a merged cell back into its columns">Split Cell</button>
+          </div>
+          <div class="rb-col">
+            <button data-doc="table-select" title="Pick the whole table, to copy, cut or delete it">Select Table</button>
+            <button data-doc="table-delete" title="Delete the whole table">Delete Table</button>
+          </div>
+        </div>
+        <div class="rb-label">Merge and Table</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-field" title="Lines round the cells (Word's grid), the ACS rules (above, under the headings, at the bottom), or none">Lines <select id="doc-tbl-lines" data-doc-prefix="table-lines">
+              <option value="grid">Grid</option>
+              <option value="acs">ACS rules</option>
+              <option value="none">None</option>
+            </select></label>
+            <label class="rb-field" title="How many rows at the top are headings (the ACS rule goes under them; Word repeats them on each page)">Heading rows <input id="doc-tbl-head" class="rb-text rb-num" spellcheck="false" /></label>
+          </div>
+          <div class="rb-col">
+            <label class="rb-field" title="The cell's background colour (the whole table's when the table is picked)">Shading <input id="doc-tbl-shade" type="color" value="#ffffff" /></label>
+            <button data-doc="table-shade-none" title="Take the shading off">No Shading</button>
+          </div>
+        </div>
+        <div class="rb-label">Table Style</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <div class="rb-row"><span class="rb-caption">Across</span>
+            <button data-doc="table-align-left" title="The column's text and structures to the left">Left</button>
+            <button data-doc="table-align-center" title="The column's text and structures centred (lines structures up down a column)">Centre</button>
+            <button data-doc="table-align-right" title="The column's text and structures to the right">Right</button></div>
+            <div class="rb-row"><span class="rb-caption">Down</span>
+            <button data-doc="table-valign-top" title="The cell's text at the top">Top</button>
+            <button data-doc="table-valign-center" title="The cell's text in the middle of its row (beside a tall structure)">Middle</button>
+            <button data-doc="table-valign-bottom" title="The cell's text at the bottom">Bottom</button></div>
+          </div>
+        </div>
+        <div class="rb-label">Alignment</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-field" title="Width of this column, in inches (or type cm, mm or pt)">Column width <input id="doc-tbl-width" class="rb-text rb-num" spellcheck="false" /></label>
+            <button data-doc="table-fit" title="Each column as wide as its widest cell, structures at their own size (Word's AutoFit to Contents)">Fit to Contents</button>
+          </div>
+          <div class="rb-col">
+            <button data-doc="table-fill-width" title="Stretch the table to the width of the text">Fit to Page</button>
+            <button data-doc="table-even" title="Every column the same width">Even Columns</button>
+          </div>
+        </div>
+        <div class="rb-label">Cell Size</div>
       </div>
     </div>
   </div>

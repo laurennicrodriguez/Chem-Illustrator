@@ -10,7 +10,7 @@
 // document, while anything formatted by hand (an italic word, a paragraph centred on its
 // own) keeps its own look.
 
-import type { Contents, Justify, ParaStyle, TextRun } from '../model';
+import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
 import type { RichText } from '../text/editing';
 import { ACS_1996, type DocStyle } from '../style';
 import * as rt from '../richtext';
@@ -60,6 +60,19 @@ export interface PageSetup {
   /** How far the header is from the top of the page, and the footer from the bottom. */
   header: number;
   footer: number;
+  /** Columns of text (one when left out), and the space between them in points. */
+  cols?: number;
+  colGap?: number;
+}
+
+/** The space between columns unless set (Word's half inch). */
+export const COL_GAP = 36;
+
+/** The number of columns and the width of each, for a page whose text is `textW` wide. */
+export function columnsOf(page: PageSetup, textW: number): { n: number; gap: number; w: number } {
+  const n = Math.max(1, Math.min(4, Math.round(page.cols ?? 1)));
+  const gap = n > 1 ? Math.max(0, page.colGap ?? COL_GAP) : 0;
+  return { n, gap, w: Math.max(36, (textW - gap * (n - 1)) / n) };
 }
 
 export type NumberPlace = 'none' | 'footer-left' | 'footer-center' | 'footer-right' | 'header-left' | 'header-center' | 'header-right';
@@ -77,12 +90,84 @@ export interface HeaderFooter {
   onFirst: boolean;
 }
 
+/** A figure's or picture's frame and shadow (Word's Picture Format). */
+export interface FigureLook {
+  /** A line round it, this many points wide, in `frameColor` (black when not set). */
+  frame?: number;
+  frameColor?: string;
+  /** A shadow down and to the right (the figure then gets a white background, so the shadow is a box's). */
+  shadow?: 'soft' | 'hard';
+}
+
+/** The two shadows: how far down and right, how blurred and how dark, in points. */
+export const SHADOWS: Record<'soft' | 'hard', { off: number; blur: number; alpha: number }> = {
+  soft: { off: 3, blur: 6, alpha: 0.35 },
+  hard: { off: 3, blur: 0, alpha: 0.5 },
+};
+
+/** How far a frame and shadow reach outside a figure's box: left, top, right, bottom, in points. */
+export function lookExtent(look: FigureLook | undefined): [number, number, number, number] {
+  const f = (look?.frame ?? 0) / 2;
+  const s = look?.shadow ? SHADOWS[look.shadow] : null;
+  const r = s ? s.off + s.blur : 0;
+  return [f, f, Math.max(f, r), Math.max(f, r)];
+}
+
+/**
+ * How text goes round a figure taken out of the line (Word's Wrap Text): beside it on its wider
+ * side (square), above and below only (top and bottom), or not at all, with the figure behind or
+ * in front of the text.
+ */
+export type WrapKind = 'square' | 'topBottom' | 'behind' | 'front';
+
+/**
+ * A figure placed on the page instead of in a line. Its character stays in the text where it is
+ * anchored (its paragraph). `x` is from the left margin (or the page's edge), `y` from the top of
+ * the anchor paragraph (or of the margin, or the page), in points.
+ */
+export interface Float {
+  wrap: WrapKind;
+  x: number;
+  y: number;
+  xFrom?: 'margin' | 'page';
+  yFrom?: 'para' | 'margin' | 'page';
+  /** Room kept between the figure and the text round it, in points (Word's is 0.13 in). */
+  gap?: number;
+}
+
+/** The room text keeps from a floating figure unless set (Word's 0.13 inch). */
+export const FLOAT_GAP = 9;
+
+/** A text box's inner margins, in points (Word's: 0.1 in at the sides, 0.05 in above and below). */
+export const BOX_PAD = { x: 7.2, y: 3.6 };
+
+/** A figure's, picture's or text box's frame and shadow (none for other objects). */
+export function lookOf(o: DocObject | undefined): FigureLook | undefined {
+  return o && (o.kind === 'drawing' || o.kind === 'picture' || o.kind === 'textbox') ? o.look : undefined;
+}
+
+/** Where a figure, picture or text box floats on the page (none when it sits in its line). */
+export function floatOf(o: DocObject | undefined): Float | undefined {
+  return o && (o.kind === 'drawing' || o.kind === 'picture' || o.kind === 'textbox') ? o.float : undefined;
+}
+
 /** Something that sits in the text in place of one character. */
 export type DocObject =
   /** A structure, scheme or table: a drawing, edited with the drawing tools. `scale` 1 is the drawing's own size. */
-  | { kind: 'drawing'; contents: Contents; scale?: number }
+  | { kind: 'drawing'; contents: Contents; scale?: number; look?: FigureLook; float?: Float }
   /** A picture: its own size is w × h points (`px` its pixels); `scale` 1 is that size. */
-  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number }
+  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float }
+  /**
+   * A text box: text of its own (typed into in place), `w` wide; it grows to fit its text, and is
+   * at least `h` tall when that is set. Always placed on the page. `fill` is its background.
+   */
+  | { kind: 'textbox'; runs: TextRun[]; paras?: ParaStyle[]; w: number; h?: number; fill?: string; look?: FigureLook; float: Float }
+  /**
+   * A table in the text, typed into in place as in Word: its own paragraph, cells of text that
+   * can hold structures and pictures (objects of the document, like those in the text), and
+   * grid lines, the ACS rules, or none.
+   */
+  | { kind: 'table'; table: TableData }
   /** A caption's number (Figure 1, Scheme 2): it counts the captions of its name. */
   | { kind: 'seq'; name: string }
   /** A reference to a caption ("see Figure 2"), which follows its number. */
@@ -172,7 +257,7 @@ export function runStyleOf(s: NamedStyle): rt.RunStyle {
 /** A paragraph in a style: the style's spacing, indents and alignment, keeping its list, level and page break. */
 export function paraFromStyle(s: NamedStyle, keep: ParaStyle): ParaStyle {
   return cleanPara({
-    list: keep.list, level: keep.level, cont: keep.cont, pageBreak: keep.pageBreak,
+    list: keep.list, level: keep.level, cont: keep.cont, pageBreak: keep.pageBreak, colBreak: keep.colBreak,
     style: s.id === 'Normal' ? undefined : s.id,
     align: s.align === 'left' ? undefined : s.align,
     spaceBefore: s.spaceBefore, spaceAfter: s.spaceAfter,
@@ -271,9 +356,47 @@ export function objectRun(id: number, style: rt.RunStyle): TextRun {
   return { ...style, obj: id, text: OBJECT_CHAR };
 }
 
+/** The objects inside an object (structures in a table's cells), in order. */
+export function innerObjects(o: DocObject | undefined): number[] {
+  if (o?.kind === 'table') return o.table.rows.flatMap((row) => row.flatMap((c) => objectsInText(c.runs)));
+  return [];
+}
+
+/**
+ * The text with each table's cells' text after its character, cell by cell: the order the
+ * objects come in, for numbering captions and compounds wherever they are.
+ */
+export function flatRuns(t: Pick<DocText, 'runs' | 'objects'>): TextRun[] {
+  if (!Object.values(t.objects).some((o) => o.kind === 'table')) return t.runs;
+  const out: TextRun[] = [];
+  for (const r of t.runs) {
+    out.push(r);
+    const o = r.obj !== undefined ? t.objects[r.obj] : undefined;
+    if (o?.kind === 'table') for (const row of o.table.rows) for (const c of row) out.push(...c.runs);
+  }
+  return out;
+}
+
+/** The table cell an object sits in (a structure or picture in a table), or null for one in the text. */
+export function cellHolding(t: Pick<DocText, 'objects'>, id: number): { id: number; r: number; c: number } | null {
+  for (const [k, o] of Object.entries(t.objects)) {
+    if (o.kind !== 'table') continue;
+    for (let r = 0; r < o.table.rows.length; r++) {
+      const c = o.table.rows[r].findIndex((cell) => cell.runs.some((x) => x.obj === id));
+      if (c >= 0) return { id: Number(k), r, c };
+    }
+  }
+  return null;
+}
+
+/** Every object the text uses, with those inside tables. */
+export function usedObjects(t: Pick<DocText, 'runs' | 'objects'>): Set<number> {
+  return new Set(objectsInText(flatRuns(t)));
+}
+
 /** Keep only the objects the text still uses (before saving). */
 export function pruneObjects(t: DocText): DocText {
-  const used = new Set(objectsInText(t.runs));
+  const used = usedObjects(t);
   const objects: Record<number, DocObject> = {};
   for (const [k, v] of Object.entries(t.objects)) if (used.has(Number(k))) objects[Number(k)] = v;
   return { ...t, objects };
@@ -303,6 +426,8 @@ export const COMPOUND = 'Compound';
 export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions'>>): Map<number, string> {
   const shown = new Map<number, string>();
   const counts = new Map<string, number>();
+  // numbers inside tables count in their place too
+  t = { ...t, runs: flatRuns(t) };
   const order = objectsInText(t.runs);
   for (const id of order) {
     const o = t.objects[id];

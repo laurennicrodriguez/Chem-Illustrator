@@ -254,12 +254,12 @@ export class TextEditing {
     if (!this.collapsed) { this.replace(this.start, this.end, [], undefined, 'delete'); return; }
     const at = this.focus;
     const p0 = this.t.paras[0];
-    if (at === 0 && !p0?.list && !p0?.indent && !p0?.firstLine && !p0?.pageBreak) return;
+    if (at === 0 && !p0?.list && !p0?.indent && !p0?.firstLine && !p0?.pageBreak && !p0?.colBreak) return;
     const text = this.text;
     const p = paraAt(text, at);
     if (paraRange(text, p).start === at) {
       const ps = this.t.paras[p] ?? {};
-      if (ps.pageBreak) { this.setParas(p, p, { pageBreak: undefined }, 'break'); return; }
+      if (ps.pageBreak || ps.colBreak) { this.setParas(p, p, { pageBreak: undefined, colBreak: undefined }, 'break'); return; }
       if (ps.list) { this.setParas(p, p, { list: undefined, level: undefined, cont: undefined }, 'list'); return; }
       if (ps.firstLine && ps.firstLine > 0) { this.setParas(p, p, { firstLine: undefined }, 'indent'); return; }
       if (ps.indent) { this.setParas(p, p, { indent: undefined }, 'indent'); return; }
@@ -391,7 +391,7 @@ export class TextEditing {
   }
 
   /** Change the paragraphs from `first` to `last`. */
-  setParas(first: number, last: number, patch: Partial<ParaStyle>, kind: string): void {
+  setParas(first: number, last: number, patch: Partial<ParaStyle>, kind: string | null): void {
     const paras = fitParas(this.t.paras, paraCount(this.text)).map((p, i) => (i < first || i > last ? p : cleanPara({ ...p, ...patch })));
     this.commit(kind, { ...this.t, paras }, this.anchor, this.focus);
   }

@@ -8,8 +8,11 @@ import type { Picture } from '../render/picture';
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
 import { drawLayout } from '../text/draw';
-import { styleOf, type DocText, type NumberPlace } from './document';
-import type { DocLayout, PageBox } from './doc-layout';
+import { BOX_PAD, SHADOWS, lookOf, styleOf, type DocText, type NumberPlace } from './document';
+import type { DocLayout, PageBox, TableBox } from './doc-layout';
+import { ACS_LINE, CELL_PAD, GRID_LINE } from './doc-layout';
+import type { TableData } from '../model';
+import { isCovered, spanOf } from '../table';
 import { docMeasure } from './doc-file';
 
 /** One piece of a header or footer line: its text, where it goes, and its font. */
@@ -64,14 +67,38 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
     const ctx = new VectorContext(width);
     const c = ctx as unknown as CanvasRenderingContext2D;
     drawHeaderFooter(c, t, p, lay);
-    drawLayout(c, lay.text, 0, 0, p.first, p.end);
-    for (const o of lay.objects) {
-      if (o.page !== p.index) continue;
+    // figures behind the text first
+    // tables go under the figures in their cells
+    const mine = lay.objects.filter((o) => o.page === p.index).sort((a, b) => Number(t.objects[b.id]?.kind === 'table') - Number(t.objects[a.id]?.kind === 'table'));
+    const order = [...mine.filter((o) => o.wrap === 'behind'), null, ...mine.filter((o) => o.wrap !== 'behind')];
+    for (const o of order) {
+      if (!o) { drawLayout(c, lay.text, 0, 0, p.first, p.end); continue; }
       const obj = t.objects[o.id];
-      if (obj?.kind === 'picture') ctx.items.push({ kind: 'image', src: obj.src, x: o.x, y: o.y, w: o.w, h: o.h, px: obj.px });
+      const look = lookOf(obj);
+      if (look?.shadow) {
+        // a PDF has no blur: the shadow is a grey box, lighter when soft
+        const s = SHADOWS[look.shadow];
+        c.fillStyle = look.shadow === 'soft' ? '#c9c9c9' : '#8c8c8c';
+        c.fillRect(o.x + s.off, o.y + s.off, o.w, o.h);
+        c.fillStyle = '#fff';
+        c.fillRect(o.x, o.y, o.w, o.h);
+      }
+      if (obj?.kind === 'table') {
+        const tb = lay.tables.get(o.id);
+        if (tb) drawDocTable(c, obj.table, tb, p.index, null);
+      } else if (obj?.kind === 'textbox') {
+        if (obj.fill) { c.fillStyle = obj.fill; c.fillRect(o.x, o.y, o.w, o.h); }
+        const bl = lay.boxes.get(o.id);
+        if (bl) drawLayout(c, bl, o.x + BOX_PAD.x, o.y + BOX_PAD.y - bl.box.y1);
+      } else if (obj?.kind === 'picture') ctx.items.push({ kind: 'image', src: obj.src, x: o.x, y: o.y, w: o.w, h: o.h, px: obj.px });
       else if (obj?.kind === 'drawing') {
         const pic = drawing(obj.contents, t.drawingStyle);
         if (pic) ctx.items.push(...placeItems(pic, o));
+      }
+      if (look?.frame) {
+        c.strokeStyle = look.frameColor ?? '#000';
+        c.lineWidth = look.frame;
+        c.strokeRect(o.x, o.y, o.w, o.h);
       }
     }
     return { w: lay.pageW, h: lay.pageH, items: ctx.items, origin: { x: 0, y: p.top } };
@@ -96,4 +123,69 @@ export function placeItems(pic: Picture, at: { x: number; y: number; w: number; 
         : { k: s.k, x: X(s.x), y: Y(s.y) })),
     };
   });
+}
+
+
+/**
+ * Draw the rows of a table that are on one page: cell shading, cell text, then the lines.
+ * `faint` (the screen only) is the colour for the gridlines of a table drawn with no lines, so
+ * its cells can be seen while typing; leave it null to draw none (print).
+ */
+export function drawDocTable(ctx: CanvasRenderingContext2D, t: TableData, tb: TableBox, page: number, faint: { color: string; px: number } | null): void {
+  const n = t.cols.length;
+  const rows = tb.rows.map((at, r) => ({ ...at, r })).filter((at) => at.page === page);
+  if (!rows.length) return;
+  // shading under everything
+  for (const { r, x, y } of rows) {
+    for (let c = 0; c < n; c++) {
+      const fill = t.rows[r]?.[c]?.fill;
+      if (!fill || isCovered(t, r, c)) continue;
+      ctx.fillStyle = fill;
+      ctx.fillRect(x + tb.xs[c], y, tb.xs[c + spanOf(t, r, c)] - tb.xs[c], tb.hs[r]);
+    }
+  }
+  for (const { r, x, y } of rows) {
+    tb.cells[r]?.forEach((cl, c) => {
+      if (cl) drawLayout(ctx, cl, x + tb.xs[c] + CELL_PAD.x, y + CELL_PAD.y + tb.drop[r][c] - cl.box.y1);
+    });
+  }
+  const lines: [number, number, number, number, number][] = [];
+  const W = tb.xs[n];
+  const head = Math.max(0, Math.min(t.head, t.rows.length));
+  const last = t.rows.length - 1;
+  const grid = t.lines === 'grid' || (t.lines === 'none' && faint);
+  for (const { r, x, y } of rows) {
+    const h = tb.hs[r];
+    if (grid) {
+      const lw = t.lines === 'grid' ? GRID_LINE : 0;
+      lines.push([x, y, x + W, y, lw], [x, y + h, x + W, y + h, lw]);
+      for (let c = 0; c <= n; c++) {
+        if (c > 0 && c < n && isCovered(t, r, c)) continue;
+        lines.push([x + tb.xs[c], y, x + tb.xs[c], y + h, lw]);
+      }
+    } else if (t.lines === 'acs') {
+      // the top of the table (and of each page it carries on to), under the headings, and under the last row
+      if (r === 0 || r === rows[0].r) lines.push([x, y, x + W, y, ACS_LINE]);
+      if (head > 0 && r === head - 1 && r < last) lines.push([x, y + h, x + W, y + h, GRID_LINE]);
+      if (r === last) lines.push([x, y + h, x + W, y + h, ACS_LINE]);
+    }
+  }
+  ctx.save();
+  ctx.lineCap = 'butt';
+  for (const [x1, y1, x2, y2, lw] of lines) {
+    if (lw === 0 && faint) {
+      ctx.strokeStyle = faint.color;
+      ctx.lineWidth = faint.px;
+      ctx.setLineDash([2 * faint.px, 2 * faint.px]);
+    } else {
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = lw;
+      ctx.setLineDash([]);
+    }
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  }
+  ctx.restore();
 }

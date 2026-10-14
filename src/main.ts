@@ -83,6 +83,7 @@ import { ArrangeDialog } from './ui/arrange-dialog';
 import { PeriodicTable } from './ui/periodic-table';
 import { SheetMode, ClipboardCells } from './ui/sheet-mode';
 import { DocumentMode, DocPaste } from './ui/doc-mode';
+import { docBoxPrefs, parseDocPins } from './ui/doc-panel';
 import { setScreenMeasure, figures } from './document/doc-file';
 import { readDocx, writeDocx, type DocxDeps, type DocxReadDeps } from './io/docx';
 import { FIGURE_MARGIN } from './document/figures';
@@ -2146,7 +2147,7 @@ const SHEET_COMMANDS: Record<string, () => unknown> = {
 
 // ---------------------------------------------------------------- documents: pages of text with structures in them
 
-const DOC_HINT = 'Type on the page. Insert > Structure draws a structure in the text (double-click it to change it); References > Insert Caption numbers figures and schemes. The panel on the right sets the paragraph, its style, the page and the page numbers.';
+const DOC_HINT = 'Type on the page. Insert > Structure draws a structure in the text (double-click it to change it); References > Insert Caption numbers figures and schemes. The small ⬊ buttons on the ribbon (or a right-click) open the Paragraph, Style, Page Setup and Header settings.';
 
 /** True when a document is showing (and no structure is being drawn for it). */
 function docActive(): boolean {
@@ -2171,6 +2172,7 @@ const docMode = new DocumentMode({
   newTable: (rows, cols, style) => tableDrawing(emptyTable(rows, cols, style.captionSize), style),
   measure: measureText,
 });
+docBoxPrefs.changed = () => storeSettings();
 // documents measure fonts they have no published widths for on the screen
 setScreenMeasure(measureText);
 void document.fonts?.ready.then(() => docMode.fontsChanged());
@@ -2912,6 +2914,7 @@ function storeSettings(): void {
     darkPalette: dark.palette,
     darkPalettes: dark.own,
     guides: { ...guidesOn },
+    docPins: [...docBoxPrefs.pinned],
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -3031,6 +3034,8 @@ void loadSettings().then((s) => {
   dark.own = s.darkPalettes;
   showDark(s.darkPage);
   Object.assign(guidesOn, s.guides);
+  docBoxPrefs.pinned = parseDocPins(s.docPins);
+  docMode.boxesChanged();
   showGuides();
   // the drawing the app opened with takes your default style, if nothing has been drawn yet
   const first = modeStyles.drawing ? styleNamed(modeStyles.drawing, ownStyles) : undefined;
@@ -3812,11 +3817,18 @@ const labelTips = new LabelTooltip(async (tip) => {
 });
 
 function groupTipTarget(e: PointerEvent) {
-  const h = editor.hover;
-  if (h?.kind !== 'atom' || e.buttons) return null;
+  if (e.buttons) return null;
+  // what is under the pointer now (not the editor's last hover, which can lag a move behind)
+  const rect = renderer.overlay.getBoundingClientRect();
+  const p = renderer.toDoc(e.clientX - rect.left, e.clientY - rect.top);
+  const h = editor.hitTest(p);
+  if (h?.kind !== 'atom') return null;
   const d = editor.doc;
   const a = d.atoms.get(h.id);
   if (!a?.label) return null;
+  // only on the label's letters, so the tooltip goes as soon as the pointer is off them
+  const pad = 2 / Math.max(1e-6, renderer.view.scale);
+  if (!renderer.atomInfo(d, a).boxes.some((b) => p.x >= b.x1 - pad && p.x <= b.x2 + pad && p.y >= b.y1 - pad && p.y <= b.y2 + pad)) return null;
   const ext = (d.adj.get(h.id) ?? []).map((bid) => d.bonds.get(bid)!).filter((b) => b && b.display !== 'dative').map((b) => (b.order === 4 ? 1 : b.order));
   return { label: a.label, ext: ext.length ? ext : [1], x: e.clientX, y: e.clientY };
 }
@@ -3824,6 +3836,10 @@ function groupTipTarget(e: PointerEvent) {
 renderer.overlay.addEventListener('pointermove', (e) => labelTips.over(groupTipTarget(e)));
 for (const ev of ['pointerdown', 'pointerleave', 'wheel'] as const) renderer.overlay.addEventListener(ev, () => labelTips.hide());
 window.addEventListener('keydown', () => labelTips.hide());
+// anywhere off the drawing (a panel, a menu, another window) the tooltip goes too
+window.addEventListener('pointermove', (e) => { if (e.target !== renderer.overlay) labelTips.hide(); }, true);
+window.addEventListener('blur', () => labelTips.hide());
+document.addEventListener('visibilitychange', () => labelTips.hide());
 
 /** Show the page dark (screen only) or as it is, and tick the menu and the eye button. */
 function showDark(on: boolean): void {
@@ -4148,7 +4164,7 @@ requestAnimationFrame(() => {
 });
 
 // Hooks for the automated speed tests.
-(window as any).__app = { doc, editor, renderer, chem, live, cdxml: (name: string) => writeCdxml(doc, { name, textMeasure: measureText }), openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode };
+(window as any).__app = { doc, editor, renderer, chem, live, cdxml: (name: string) => writeCdxml(doc, { name, textMeasure: measureText }), openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode, docxBytes: () => writeDocx(docMode.file!.t, docFiles) };
 
 // ---------------------------------------------------------------- desktop self-test
 
