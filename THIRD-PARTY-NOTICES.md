@@ -26,6 +26,8 @@ Remaking the font width tables (`scripts/font-widths.py`, rarely needed) uses Py
 
 `src/text/font-widths.ts` holds the width of every character in the Liberation fonts (Liberation Serif, Sans and Mono 2.x; Digitized data copyright (c) 2010 Google Corporation with Reserved Font Arimo, Tinos and Cousine; copyright (c) 2012 Red Hat, Inc. with Reserved Font Name Liberation), licensed under the [SIL Open Font License 1.1](https://openfontlicense.org). The Liberation fonts have the same widths as Times New Roman, Arial and Courier New, so documents break their lines in the same places on every computer, in PDFs and in Word. Only the widths are used; no font files or glyph outlines are included.
 
+The ready-made palette rows (Edit ▸ Colour Palettes) include the colour-blind-safe set of M. Okabe and K. Ito (*Color Universal Design*, 2008) and steps of the Blues and OrRd schemes from [ColorBrewer](https://colorbrewer2.org) by Cynthia A. Brewer, Pennsylvania State University (Apache-2.0). Only the colour values are used.
+
 Copied pictures are written as Enhanced Metafiles (EMF) and Windows bitmaps from Microsoft's published format specifications ([MS-EMF], BMP); no Microsoft code is included.
 
 PowerPoint (.pptx), Excel (.xlsx) and Word (.docx) files are read and written from the published Office Open XML standard (ECMA-376); ChemDraw drawings embedded in Word files are read from the published compound file format ([MS-CFB]) and the CDX format documentation; PDF files from the published PDF specification (ISO 32000), using only the standard 14 PDF fonts. No Microsoft or Adobe code is included.
