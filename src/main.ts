@@ -467,6 +467,21 @@ function addNamed(got: { mb: string; attach: number[] }, x: number, y: number, t
   return ids;
 }
 
+/** Scheme > Number Compounds: ask where to start, then number the structures in scheme order. */
+async function numberCompounds(): Promise<void> {
+  const next = editor.nextCompoundNumber();
+  const got = await ask('Number Compounds', [
+    { name: 'start', label: 'Start at', value: String(editor.sel.atoms.size ? next : 1), type: 'number' },
+    { name: 'style', label: 'Numbers', value: 'numbers', options: [{ value: 'numbers', label: '1, 2, 3 …' }, { value: 'letters', label: '1a, 1b, 1c …' }] },
+    { name: 'old', label: 'Numbers already there', value: 'renumber', options: [{ value: 'renumber', label: 'Number again' }, { value: 'keep', label: 'Keep' }] },
+    { name: 'reagents', label: 'Reagents over arrows', value: 'skip', options: [{ value: 'skip', label: 'Leave unnumbered' }, { value: 'number', label: 'Number them too' }] },
+  ], { ok: 'Number', note: 'Puts a bold number under each selected structure (or every structure), following the arrows of a scheme, else left to right and top to bottom. The numbers are ordinary text you can change.' });
+  if (!got) return;
+  const start = Math.max(0, Math.round(Number(got.start)) || 1);
+  const n = editor.numberCompounds({ start, letters: got.style === 'letters', keep: got.old === 'keep', reagents: got.reagents === 'number' });
+  if (!n) flash('No structures to number.');
+}
+
 const arrangeDialog = new ArrangeDialog({ apply: (o) => editor.arrangeScheme(o), undo: () => editor.undo() });
 const nameDialog = new NameDialog(async (name) => {
   const got = await nameToMolfile(name);
@@ -1703,6 +1718,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
   'arrange-scheme': () => arrangeDialog.open(),
+  'number-compounds': () => void numberCompounds(),
   'show-roles': () => { editor.showRoles = !editor.showRoles; $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(editor.showRoles)); editor.requestScene(); storeSettings(); },
   'check-structure': () => checkStructure(),
   'stereo-labels': () => toggleStereoLabels(),

@@ -137,7 +137,7 @@ export function readScheme(doc: Doc, m: Measure, scope: Scope): SchemeShape {
 const uniq = (xs: (Item | undefined)[]): Item[] => [...new Set(xs.filter((x): x is Item => !!x))];
 
 /** Left to right along rows, rows top to bottom. */
-function readingOrder(its: Item[], bond: number): Item[] {
+export function readingOrder(its: Item[], bond: number): Item[] {
   const rows: Item[][] = [];
   for (const it of [...its].sort((a, b) => centre(a.box).y - centre(b.box).y)) {
     const row = rows.find((r) => Math.abs(centre(r[0].box).y - centre(it.box).y) < 3 * bond);

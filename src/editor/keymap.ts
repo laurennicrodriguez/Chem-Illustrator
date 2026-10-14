@@ -165,7 +165,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   'reaction-down': 'Reaction: arrow and copy below', 'reaction-up': 'Reaction: arrow and copy above',
   'fixed-length': 'Fixed bond lengths on or off', 'fixed-angles': 'Fixed angles on or off',
   join: 'Join two selected atoms or bonds',
-  'clean-up': 'Clean Up Structure', 'clean-up-reaction': 'Clean Up Reaction', 'arrange-scheme': 'Arrange Scheme…', 'show-roles': 'Show reaction roles on or off', 'check-structure': 'Check Structure (next warning)', 'stereo-labels': 'Show stereo labels',
+  'clean-up': 'Clean Up Structure', 'clean-up-reaction': 'Clean Up Reaction', 'arrange-scheme': 'Arrange Scheme…', 'number-compounds': 'Number Compounds…', 'show-roles': 'Show reaction roles on or off', 'check-structure': 'Check Structure (next warning)', 'stereo-labels': 'Show stereo labels',
   'name-to-structure': 'Name to Structure…',
   'zoom-in': 'Zoom in', 'zoom-out': 'Zoom out', 'zoom-fit': 'Fit the drawing in the window', 'zoom-actual': 'Actual size',
   hotkeys: 'Hotkeys…', 'typing-spelling': 'Typing and Spelling…', 'mode-colours': 'Mode Colours…',

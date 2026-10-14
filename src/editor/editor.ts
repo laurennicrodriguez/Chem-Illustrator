@@ -10,7 +10,7 @@ import { cleanUpMoves } from '../chem/cleanup';
 import { Renderer, measureText } from '../render/renderer';
 import { ASCENT } from '../text/layout';
 import { cellAlign, insertRow, nextCell, partAt, partRuns, setColumnWidth, setPart, spanOf, NOTE_SCALE, type TablePart } from '../table';
-import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG } from '../geom';
+import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG, exitParam } from '../geom';
 import {
   sproutDir, sprout, bondTo, bondLength, atomAt, freeRing, fusedRing, fuseSide, ringOnAtom,
   placeRing, chainPoints, MERGE_FRACTION,
@@ -21,6 +21,7 @@ import { joinAtoms, joinBonds } from '../chem/join';
 import { extractDrawing, insertDrawing } from '../io/clipboard';
 import { isReactionArrow, itemFinder, rolesOf, ROLES, schemeItems, type Item, type Role } from '../chem/reaction';
 import { applySchemePlan, planCleanUp } from '../chem/scheme-layout';
+import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
 import { pushArrow, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
 import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
 import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, rotation, mirrorX, mirrorY } from './arrange';
@@ -1402,6 +1403,48 @@ export class Editor {
     for (const id of made) this.sel.arrows.add(id);
     this.changed();
     return true;
+  }
+
+  /**
+   * Number Compounds: a bold number under each selected structure (or every structure), in
+   * scheme order. Numbers already under a structure are changed in place. Returns how many.
+   */
+  numberCompounds(opts: NumberOptions): number {
+    const doc = this.doc;
+    const plan = planNumbers(doc, this.fullMeasure(), this.sel.atoms, opts);
+    if (!plan.labels.length) return 0;
+    doc.edit('Number Compounds', () => {
+      for (const l of plan.labels) {
+        if (l.caption !== undefined) {
+          const c = doc.captions.get(l.caption)!;
+          doc.updateCaption(c.id, { runs: [{ ...c.runs[0], text: l.text, bold: true }] });
+          continue;
+        }
+        const c = doc.addCaption({ x: l.at.x, y: l.at.y, runs: [{ text: l.text, bold: true }], justify: 'left' });
+        // centred under the structure, its top at the spot
+        const b = this.r.captionBox(c);
+        doc.updateCaption(c.id, { x: c.x + l.at.x - (b.x1 + b.x2) / 2, y: c.y + l.at.y - b.y1 });
+        this.sel.captions.add(c.id);
+        // an arrow leaving from under the structure starts below the new number instead
+        const nb = this.r.captionBox(doc.captions.get(c.id)!);
+        const pad = 0.2 * doc.style.bondLength;
+        const room = { x1: nb.x1 - pad, y1: nb.y1 - pad, x2: nb.x2 + pad, y2: nb.y2 + pad };
+        for (const r of doc.arrows.values()) {
+          if (r.sweep) continue;
+          const t = exitParam(r.tail, r.head, room), h = exitParam(r.head, r.tail, room);
+          const cut = (from: Vec, to: Vec, k: number) => ({ x: from.x + (to.x - from.x) * k, y: from.y + (to.y - from.y) * k });
+          const tail = t > 0 ? cut(r.tail, r.head, t) : r.tail, head = h > 0 ? cut(r.head, r.tail, h) : r.head;
+          if ((t > 0 || h > 0) && dist(tail, head) > doc.style.bondLength) doc.updateArrow(r.id, { tail, head });
+        }
+      }
+    });
+    this.changed();
+    return plan.labels.length;
+  }
+
+  /** The next free compound number in this drawing. */
+  nextCompoundNumber(): number {
+    return nextCompound(this.doc, this.fullMeasure());
   }
 
   /**
