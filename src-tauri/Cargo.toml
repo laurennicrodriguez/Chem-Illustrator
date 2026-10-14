@@ -3,19 +3,25 @@ name = "chem-illustrator"
 version = "0.1.0"
 description = "Chem Illustrator: fast chemical structure drawing"
 repository = "https://github.com/nathanohare/chem-illustrator"
+license = "GPL-3.0-or-later"
 edition = "2021"
 rust-version = "1.77.2"
 
 [lib]
 name = "chem_illustrator_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# no "cdylib": that is only for phone builds, and its export table is too big for the MinGW
+# linker used to build the Windows installer on Linux
+crate-type = ["staticlib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
+serde_json = "1"
 tauri = { version = "2.12", features = [] }
 tauri-plugin-dialog = "2.8"
+tauri-plugin-process = "2"
+tauri-plugin-updater = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_DataExchange", "Win32_System_Memory"] }

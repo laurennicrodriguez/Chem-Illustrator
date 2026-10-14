@@ -82,6 +82,8 @@ import { ModeColoursDialog, ModeColours, DEFAULT_MODE_COLOURS, applyModeColours 
 import { typingPrefs, setTypingPrefs, onTypingPrefs } from './text/typing';
 import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
+import { UpdateUI } from './ui/update-ui';
+import { canUpdate, appVersion } from './updates';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
 import { NameDialog } from './ui/name-dialog';
 import { ArrangeDialog } from './ui/arrange-dialog';
@@ -2496,6 +2498,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'mode-colours': () => modeDialog.open(),
   'edit-palettes': () => editPalettes(),
   preferences: () => void openPreferences(),
+  'check-updates': () => void updates.check(),
   'toolbox-main': () => toolboxes.toggle('main'),
   'toolbox-structure': () => toolboxes.toggle('structure'),
   'toolbox-arrange': () => toolboxes.toggle('arrange'),
@@ -2936,6 +2939,17 @@ function showHelicity(on: boolean): void {
   editor.requestScene();
 }
 
+// Newer versions of the desktop app (File > Check for Updates…, Edit > Preferences)
+let updateCheck = true;
+let skipVersion: string | null = null;
+const updates = new UpdateUI({
+  unsaved: () => ws.tabs.filter((t) => t.dirty).map((t) => t.name),
+  skipped: () => skipVersion,
+  skip: (v) => { skipVersion = v; storeSettings(); },
+});
+for (const el of document.querySelectorAll<HTMLElement>('.desktop-only')) el.hidden = !canUpdate;
+void appVersion().then((v) => { const el = document.querySelector('#app-version'); if (el) el.textContent = canUpdate ? `Version ${v}` : 'Web version'; });
+
 /** Edit > Preferences: drawing choices that are set once rather than per structure. */
 async function openPreferences(): Promise<void> {
   const r = await ask('Preferences', [
@@ -2943,9 +2957,15 @@ async function openPreferences(): Promise<void> {
     { name: 'axial', label: 'Axial chirality written as', value: axialStyle.helicity ? 'PM' : 'RaSa', options: [{ value: 'RaSa', label: 'Ra / Sa' }, { value: 'PM', label: 'P / M (helicity)' }] },
     { name: 'charges', label: 'Charges from the + and − keys', value: editor.options.circledCharges ? 'circled' : 'plain', options: [{ value: 'plain', label: 'Plain sign (N+)' }, { value: 'circled', label: 'In a circle (⊕, ⊖)' }] },
     { name: 'ask', label: 'Ask before changing every structure on the page when nothing is selected', type: 'checkbox', value: String(askWholeDrawing) },
+    ...(canUpdate ? [{ name: 'updates', label: 'Check for a newer version when the app starts', type: 'checkbox' as const, value: String(updateCheck) }] : []),
   ], { ok: 'Save', note: 'Charges already drawn keep their look; the circle tools on the Object toolbox always draw a circled charge. Show Terminal Methyls writes them this way; methyls already written out in the selection (or the whole drawing, with nothing selected) change too. Axial chirality labels (biaryls, allenes) follow the choice at once; Ra is the same as M, and Sa as P.' });
   if (!r) return;
   askWholeDrawing = r.ask === 'true';
+  if (canUpdate) {
+    // turning the check back on also forgets a skipped version
+    if (r.updates === 'true' && !updateCheck) skipVersion = null;
+    updateCheck = r.updates === 'true';
+  }
   editor.options.circledCharges = r.charges === 'circled';
   showHelicity(r.axial === 'PM');
   if (r.methyl !== editor.options.methylStyle) chooseMethylStyle(r.methyl as MethylStyle);
@@ -2993,6 +3013,8 @@ function storeSettings(): void {
     darkPalettes: dark.own,
     guides: { ...guidesOn },
     docPins: [...docBoxPrefs.pinned],
+    updateCheck,
+    skipVersion,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -3106,6 +3128,8 @@ void loadSettings().then((s) => {
   editor.options.circledCharges = s.circledCharges;
   slideTemplate = s.slideTemplate;
   askWholeDrawing = s.askWholeDrawing;
+  updateCheck = s.updateCheck;
+  skipVersion = s.skipVersion;
   setPalettes(s.palettes);
   toolboxState = s.toolboxes;
   ownStyles = s.myStyles;
@@ -3129,6 +3153,8 @@ void loadSettings().then((s) => {
   placeSidePanel();
   tickMethylStyle();
   settingsLoaded = true;
+  // a few seconds after starting, so the check doesn't slow down opening the window
+  if (canUpdate && updateCheck) setTimeout(() => void updates.quietCheck(), 4000);
   refreshKeys();
 });
 refreshKeys();

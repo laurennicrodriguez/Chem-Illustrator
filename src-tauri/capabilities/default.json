@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the main window may do: Tauri's basic window functions, setting its title, going full screen to present slides, closing after asking about unsaved work, and native Open/Save dialogs.",
+  "description": "What the main window may do: Tauri's basic window functions, setting its title, going full screen to present slides, closing after asking about unsaved work, native Open/Save dialogs, and checking for, installing and restarting into updates.",
   "windows": [
     "main"
   ],
@@ -10,6 +10,8 @@
     "core:window:allow-set-title",
     "core:window:allow-set-fullscreen",
     "core:window:allow-destroy",
-    "dialog:default"
+    "dialog:default",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

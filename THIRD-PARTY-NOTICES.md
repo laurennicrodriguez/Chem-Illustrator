@@ -1,6 +1,6 @@
 # Third-party notices
 
-Chem Illustrator ships the following open-source software.
+Chem Illustrator is licensed under the GNU General Public License, version 3 or later (see `LICENSE`). It ships the following open-source software, each part under its own licence, all of which allow it to be shipped with a GPL-3.0 program. (Apache-2.0 parts need GPL version 3, which is why the app uses version 3 or later rather than version 2.)
 
 | Package | Used for | Licence |
 |---|---|---|
@@ -13,8 +13,9 @@ Chem Illustrator ships the following open-source software.
 | Free fonts from [Google Fonts](https://fonts.google.com), packaged by [Fontsource](https://fontsource.org) 5.3 (`@fontsource/*`): Inter, Source Sans 3, IBM Plex Sans, Lato, Source Serif 4, Merriweather, Libre Baskerville, Montserrat, Oswald, Bebas Neue, Archivo Black, Barlow Condensed, JetBrains Mono, IBM Plex Mono (Latin, Latin-extended and Greek letters, regular and bold) | The font boxes in every mode; put inside saved Word and PowerPoint files that use them | SIL Open Font License 1.1 (copyright lines and full text below) |
 | [Tauri](https://tauri.app) (`tauri` crate, `@tauri-apps/api`) | Desktop app shell | MIT or Apache-2.0 |
 | Tauri dialog plugin (`tauri-plugin-dialog` crate, `@tauri-apps/plugin-dialog`) | The desktop app's Open and Save dialogs | MIT or Apache-2.0 |
+| Tauri updater and process plugins (`tauri-plugin-updater`, `tauri-plugin-process` crates, `@tauri-apps/plugin-updater`, `@tauri-apps/plugin-process`) | File ▸ Check for Updates: downloading a newer version, checking its signature, installing it and restarting | MIT or Apache-2.0 |
 | [windows-sys](https://github.com/microsoft/windows-rs) crate (Windows only) | The desktop app's clipboard on Windows (pictures for Word and PowerPoint) | MIT or Apache-2.0 |
-| About 260 Rust crates that Tauri uses (listed in `src-tauri/Cargo.lock`) | Desktop app shell | Mostly MIT or Apache-2.0; a few are Unicode-3.0, BSD-3-Clause, Zlib or MPL-2.0. All are free and open source; MPL-2.0 only asks that changes to those crates' own files be shared. |
+| About 260 Rust crates that Tauri uses (listed in `src-tauri/Cargo.lock`) | Desktop app shell | Mostly MIT or Apache-2.0; a few are ISC, Unicode-3.0, BSD-3-Clause, Zlib, MPL-2.0 or CDLA-Permissive-2.0 (the list of trusted web certificates the updater uses). All are free and open source; MPL-2.0 only asks that changes to those crates' own files be shared. |
 | English word list from [pyspellchecker](https://github.com/barrust/pyspellchecker) 0.8.1 (`public/dict/english.txt`) | Spell check: ordinary English words, most common first (for suggestions) | MIT (full text below). The list was built by pyspellchecker from word counts in the OpenSubtitles2018 corpus (P. Lison and J. Tiedemann, LREC 2016). |
 | [Open Source Chemistry Dictionary](https://www.sciencebase.com/chem-dic.zip) v3.0 by Adam M. Azman (`public/dict/chemistry.txt`) | Spell check: chemistry words | CC BY 3.0 US. Credits, source and changes in `public/dict/chemistry-LICENSE.txt`. A. M. Azman, *J. Chem. Educ.* 2012, 89, 412–413. |
 | Chemistry word lists from Chem SI Assistant by Nathan O'Hare (`public/dict/lab-words.txt`) | Spell check: lab terms, name reactions and other chemistry words | The project owner's own work |

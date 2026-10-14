@@ -1255,6 +1255,7 @@ dialog.toolbox-dialog { width: min(94vw, 720px); }
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
   font: 12px var(--ui-font);
 }
+.label-tip[hidden] { display: none; }
 .label-tip-head { align-self: stretch; text-align: left; }
 .label-tip img { display: block; max-width: 300px; height: auto; }
 .label-tip-formula { color: #677084; font-variant-numeric: tabular-nums; }
@@ -1365,3 +1366,25 @@ dialog.cf-manage { width: min(92vw, 640px); }
 .an-del { padding: 0 4px; border: 0; background: transparent; color: var(--muted); visibility: hidden; }
 .an-row:hover .an-del, .an-row.picked .an-del { visibility: visible; }
 .an-preview canvas { display: block; margin: 6px 0; border: 1px solid var(--line); }
+
+/* "A newer version is ready" notice (desktop app; src/ui/update-ui.ts) */
+.update-box {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  width: min(360px, calc(100vw - 32px));
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--accent);
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+.update-box p { margin: 0; white-space: pre-line; }
+.update-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.update-progress { font-variant-numeric: tabular-nums; }
+.desktop-only[hidden] { display: none !important; }

@@ -27,6 +27,8 @@
         <button role="menuitem" class="no-sheet no-doc" data-cmd="export-mol">Export Molfile…</button>
         <hr />
         <button role="menuitem" data-cmd="close-tab">Close</button>
+        <hr class="desktop-only" hidden />
+        <button role="menuitem" class="desktop-only" data-cmd="check-updates" title="Look on GitHub for a newer version of the app and install it" hidden>Check for Updates…</button>
       </div>
     </div>
     <div class="menu-wrap">
@@ -864,13 +866,15 @@
       <div class="rb-group">
         <div class="rb-row">
           <div class="rb-col">
-            <button data-cmd="slide-templates" title="Ready-made looks for the whole deck: fonts, colours, background and shapes">Templates…</button>
             <label class="rb-field">Size <select id="rb-size">
               <option value="wide">Widescreen (16:9)</option>
               <option value="standard">Standard (4:3)</option>
             </select></label>
-            <button data-cmd="slide-master" title="Fonts, colours, background, logo, slide numbers, footer and structure size for every slide">Slide Master…</button>
-            <button data-cmd="drawing-style" title="How structures are drawn on every slide: a journal's style or your own">Drawing Style…</button>
+            <div class="rb-pair">
+              <button data-cmd="slide-templates" title="Ready-made looks for the whole deck: fonts, colours, background and shapes">Templates…</button>
+              <button data-cmd="slide-master" title="Fonts, colours, background, logo, slide numbers, footer and structure size for every slide">Slide Master…</button>
+              <button data-cmd="drawing-style" title="How structures are drawn on every slide: a journal's style or your own">Drawing Style…</button>
+            </div>
           </div>
         </div>
         <div class="rb-label">Design</div>
@@ -907,12 +911,13 @@
           <div class="rb-col">
             <label class="rb-field" title="How long the transition takes">Speed <select id="tr-speed"></select></label>
             <label class="rb-field" title="How long the transition takes, in seconds (type any length)">Duration <input id="tr-dur" type="number" min="0.1" max="60" step="0.05" style="width: 64px" /> s</label>
-            <button data-tr="apply-all" title="Give every slide this slide's transition, speed and timing">Apply To All</button>
           </div>
           <div class="rb-col">
-            <span class="rb-field muted">Advance slide</span>
-            <label class="rb-field check" title="A click goes on to the next slide (always on, as in PowerPoint)"><input type="checkbox" checked disabled /> On mouse click</label>
+            <label class="rb-field check" title="A click goes on to the next slide (always on, as in PowerPoint)"><input type="checkbox" checked disabled /> Advance on mouse click</label>
             <label class="rb-field check" title="Go on to the next slide by itself after this long, once the slide's animations have played"><input id="tr-after-on" type="checkbox" /> After <input id="tr-after" type="number" min="0" max="3600" step="0.5" style="width: 56px" /> s</label>
+          </div>
+          <div class="rb-col">
+            <button data-tr="apply-all" title="Give every slide this slide's transition, speed and timing">Apply To All</button>
           </div>
         </div>
         <div class="rb-label">Timing</div>
@@ -953,15 +958,14 @@
               <option value="after">After Previous</option>
             </select></label>
             <label class="rb-field" title="How long it takes">Speed <select id="an-speed"></select></label>
-            <label class="rb-field" title="How long it takes, in seconds (type any length)">Duration <input id="an-dur" type="number" min="0" max="60" step="0.05" style="width: 64px" /> s</label>
           </div>
           <div class="rb-col">
+            <label class="rb-field" title="How long it takes, in seconds (type any length)">Duration <input id="an-dur" type="number" min="0" max="60" step="0.05" style="width: 64px" /> s</label>
             <label class="rb-field" title="Seconds to wait before it starts">Delay <input id="an-delay" type="number" min="0" max="600" step="0.25" style="width: 64px" /> s</label>
-            <span class="rb-field muted">Reorder Animation</span>
-            <div class="rb-pair">
-              <button data-an="earlier" title="Play the selected animation earlier">▲ Earlier</button>
-              <button data-an="later" title="Play the selected animation later">▼ Later</button>
-            </div>
+          </div>
+          <div class="rb-col">
+            <button data-an="earlier" title="Reorder: play the selected animation earlier">▲ Earlier</button>
+            <button data-an="later" title="Reorder: play the selected animation later">▼ Later</button>
           </div>
         </div>
         <div class="rb-label">Timing</div>
@@ -1144,6 +1148,7 @@
 
   <dialog id="help">
     <h2>Using the prototype</h2>
+    <p class="muted"><span id="app-version"></span>. Free software under the GNU General Public License, version 3 or later.</p>
     <p class="muted">Hotkeys work like ChemDraw: point at an atom or bond (it highlights blue) and press a key. A key that grows something moves the highlight to the new atom, so you can carry on typing (<kbd>8</kbd> then <kbd>1</kbd> makes an E double bond). <kbd>1</kbd> and <kbd>0</kbd> keep the highlight under the mouse, so pressing 1 three times adds three bonds; after a click or another key they move it, so 1 1 1 draws a chain. Every key can be changed.</p>
     <p><button id="help-hotkeys" type="button">Show and change all hotkeys…</button></p>
     <div class="cols">
