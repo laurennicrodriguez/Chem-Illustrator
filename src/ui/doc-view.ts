@@ -7,7 +7,7 @@ import type { Rect } from '../geom';
 import type { DocLayout, PageBox, PlacedObject } from '../document/doc-layout';
 import type { DocFile } from '../document/doc-file';
 import { figures } from '../document/doc-file';
-import { drawHeaderFooter } from '../document/doc-paint';
+import { drawDocTable, drawHeaderFooter } from '../document/doc-paint';
 import { BOX_PAD, SHADOWS, lookOf, type DocText } from '../document/document';
 import { drawLayout } from '../text/draw';
 import { selectionRects } from '../text/layout';
@@ -34,7 +34,7 @@ export interface Overlay {
   /** Found text to show (find and replace). */
   found: [number, number][];
   /** The text box being typed into, and its selection (in the document's coordinates). */
-  editing?: { id: number; selection: Rect[] } | null;
+  editing?: { id: number; cell?: boolean; selection: Rect[] } | null;
 }
 
 export class DocView {
@@ -214,7 +214,13 @@ export class DocView {
       // figures behind the text first, then the text, then the rest
       for (const o of lay.objects) if (o.page === p.index && o.wrap === 'behind') this.object(ctx, t, o, lay);
       drawLayout(ctx, lay.text, 0, 0, p.first, p.end);
-      for (const o of lay.objects) if (o.page === p.index && o.wrap !== 'behind') this.object(ctx, t, o, lay);
+      // tables, then the figures (some of them in table cells)
+      for (const o of lay.objects) {
+        const obj = t.objects[o.id];
+        const tb = obj?.kind === 'table' ? lay.tables.get(o.id) : undefined;
+        if (o.page === p.index && obj?.kind === 'table' && tb) drawDocTable(ctx, obj.table, tb, p.index, { color: '#9fb4d8', px: 1 / k });
+      }
+      for (const o of lay.objects) if (o.page === p.index && o.wrap !== 'behind' && t.objects[o.id]?.kind !== 'table') this.object(ctx, t, o, lay);
       const px = 1 / k;
       for (const s of ov.squiggles) {
         if (!inPage(s.start, s.end)) continue;
@@ -247,6 +253,8 @@ export class DocView {
       if (o) {
         ctx.fillStyle = SELECTION;
         for (const r of ov.editing.selection) ctx.fillRect(r.x1, r.y1, r.x2 - r.x1, r.y2 - r.y1);
+      }
+      if (o && !ov.editing.cell) {
         ctx.strokeStyle = OBJECT_FRAME;
         ctx.lineWidth = 1 / k;
         ctx.setLineDash([4 / k, 3 / k]);

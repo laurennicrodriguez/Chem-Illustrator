@@ -10,7 +10,7 @@
 // document, while anything formatted by hand (an italic word, a paragraph centred on its
 // own) keeps its own look.
 
-import type { Contents, Justify, ParaStyle, TextRun } from '../model';
+import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
 import type { RichText } from '../text/editing';
 import { ACS_1996, type DocStyle } from '../style';
 import * as rt from '../richtext';
@@ -162,6 +162,12 @@ export type DocObject =
    * at least `h` tall when that is set. Always placed on the page. `fill` is its background.
    */
   | { kind: 'textbox'; runs: TextRun[]; paras?: ParaStyle[]; w: number; h?: number; fill?: string; look?: FigureLook; float: Float }
+  /**
+   * A table in the text, typed into in place as in Word: its own paragraph, cells of text that
+   * can hold structures and pictures (objects of the document, like those in the text), and
+   * grid lines, the ACS rules, or none.
+   */
+  | { kind: 'table'; table: TableData }
   /** A caption's number (Figure 1, Scheme 2): it counts the captions of its name. */
   | { kind: 'seq'; name: string }
   /** A reference to a caption ("see Figure 2"), which follows its number. */
@@ -350,9 +356,47 @@ export function objectRun(id: number, style: rt.RunStyle): TextRun {
   return { ...style, obj: id, text: OBJECT_CHAR };
 }
 
+/** The objects inside an object (structures in a table's cells), in order. */
+export function innerObjects(o: DocObject | undefined): number[] {
+  if (o?.kind === 'table') return o.table.rows.flatMap((row) => row.flatMap((c) => objectsInText(c.runs)));
+  return [];
+}
+
+/**
+ * The text with each table's cells' text after its character, cell by cell: the order the
+ * objects come in, for numbering captions and compounds wherever they are.
+ */
+export function flatRuns(t: Pick<DocText, 'runs' | 'objects'>): TextRun[] {
+  if (!Object.values(t.objects).some((o) => o.kind === 'table')) return t.runs;
+  const out: TextRun[] = [];
+  for (const r of t.runs) {
+    out.push(r);
+    const o = r.obj !== undefined ? t.objects[r.obj] : undefined;
+    if (o?.kind === 'table') for (const row of o.table.rows) for (const c of row) out.push(...c.runs);
+  }
+  return out;
+}
+
+/** The table cell an object sits in (a structure or picture in a table), or null for one in the text. */
+export function cellHolding(t: Pick<DocText, 'objects'>, id: number): { id: number; r: number; c: number } | null {
+  for (const [k, o] of Object.entries(t.objects)) {
+    if (o.kind !== 'table') continue;
+    for (let r = 0; r < o.table.rows.length; r++) {
+      const c = o.table.rows[r].findIndex((cell) => cell.runs.some((x) => x.obj === id));
+      if (c >= 0) return { id: Number(k), r, c };
+    }
+  }
+  return null;
+}
+
+/** Every object the text uses, with those inside tables. */
+export function usedObjects(t: Pick<DocText, 'runs' | 'objects'>): Set<number> {
+  return new Set(objectsInText(flatRuns(t)));
+}
+
 /** Keep only the objects the text still uses (before saving). */
 export function pruneObjects(t: DocText): DocText {
-  const used = new Set(objectsInText(t.runs));
+  const used = usedObjects(t);
   const objects: Record<number, DocObject> = {};
   for (const [k, v] of Object.entries(t.objects)) if (used.has(Number(k))) objects[Number(k)] = v;
   return { ...t, objects };
@@ -382,6 +426,8 @@ export const COMPOUND = 'Compound';
 export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions'>>): Map<number, string> {
   const shown = new Map<number, string>();
   const counts = new Map<string, number>();
+  // numbers inside tables count in their place too
+  t = { ...t, runs: flatRuns(t) };
   const order = objectsInText(t.runs);
   for (const id of order) {
     const o = t.objects[id];

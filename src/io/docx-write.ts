@@ -16,7 +16,7 @@ import { facesToEmbed, newGuid, obfuscate, type FontSource } from './font-embed'
 import { fromDataUrl } from '../render/images';
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
 import { BOX_PAD, COL_GAP, COMPOUND, FLOAT_GAP, columnsOf, OBJECT_CHAR, SHADOWS, fieldTexts, floatOf, lookExtent, lookOf, pruneObjects, styleOf, runStyleOf, type DocObject, type DocText, type FigureLook, type NamedStyle, type PageSetup } from '../document/document';
-import { bibHang, shownSize } from '../document/doc-layout';
+import { ACS_LINE, CELL_PAD, GRID_LINE, bibHang, docCellAlign, shownSize } from '../document/doc-layout';
 import { bibliography, piecesText } from '../document/references';
 import { documentMeasure } from '../text/font-measure';
 import { arialWidth } from '../text-metrics';
@@ -151,6 +151,12 @@ class DocxWriter {
       const ps = paras[p];
       // a paragraph holding just a table: Word's own table
       const only = runs.length === 1 && runs[0].obj !== undefined && runs[0].text === OBJECT_CHAR ? t.objects[runs[0].obj] : undefined;
+      if (only?.kind === 'table') {
+        if (lastWasTable) out.push('<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p>');
+        out.push(await this.docTable(main, only.table, ps.align ?? styleOf(t, ps).align));
+        lastWasTable = true;
+        continue;
+      }
       const table = only?.kind === 'drawing' ? soleTable(only.contents) : null;
       if (table) {
         if (lastWasTable) out.push('<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p>');
@@ -434,6 +440,54 @@ class DocxWriter {
     const titlePara = tab.title?.length ? cellPara(tab.title, undefined, 'left') : '';
     const notesPara = tab.notes?.length ? cellPara(tab.notes, undefined, 'left', 0.8) : '';
     return `${titlePara}<w:tbl>${tblPr}${grid}${rows.join('')}</w:tbl>${notesPara}`;
+  }
+
+  /**
+   * A table typed into in the text, as a Word table: its cells' paragraphs written as the
+   * text's are (structures and pictures in them too), its lines, shading and cell alignment.
+   */
+  private async docTable(main: string, tab: TableData, align: Justify): Promise<string> {
+    const grid = `w:val="single" w:sz="${Math.round(GRID_LINE * 8)}" w:space="0" w:color="000000"`;
+    const rule = `w:val="single" w:sz="${Math.round(ACS_LINE * 8)}" w:space="0" w:color="000000"`;
+    const none = 'w:val="nil"';
+    const borders = tab.lines === 'grid'
+      ? `<w:top ${grid}/><w:left ${grid}/><w:bottom ${grid}/><w:right ${grid}/><w:insideH ${grid}/><w:insideV ${grid}/>`
+      : tab.lines === 'acs' ? `<w:top ${rule}/><w:left ${none}/><w:bottom ${rule}/><w:right ${none}/><w:insideH ${none}/><w:insideV ${none}/>`
+        : `<w:top ${none}/><w:left ${none}/><w:bottom ${none}/><w:right ${none}/><w:insideH ${none}/><w:insideV ${none}/>`;
+    const width = tab.cols.reduce((a, b) => a + b, 0);
+    const padX = twips(CELL_PAD.x), padY = twips(CELL_PAD.y);
+    const tblPr = `<w:tblPr><w:tblW w:w="${twips(width)}" w:type="dxa"/><w:jc w:val="${align === 'right' ? 'right' : align === 'center' ? 'center' : 'left'}"/>` +
+      `<w:tblBorders>${borders}</w:tblBorders><w:tblLayout w:type="fixed"/>` +
+      `<w:tblCellMar><w:top w:w="${padY}" w:type="dxa"/><w:left w:w="${padX}" w:type="dxa"/><w:bottom w:w="${padY}" w:type="dxa"/><w:right w:w="${padX}" w:type="dxa"/></w:tblCellMar>` +
+      `<w:tblLook w:val="0000" w:firstRow="0" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="1" w:noVBand="1"/></w:tblPr>`;
+    const gridXml = `<w:tblGrid>${tab.cols.map((w) => `<w:gridCol w:w="${twips(w)}"/>`).join('')}</w:tblGrid>`;
+    const rows: string[] = [];
+    for (let r = 0; r < tab.rows.length; r++) {
+      const row = tab.rows[r];
+      const cells: string[] = [];
+      const lastHead = tab.head > 0 && r === tab.head - 1 && r < tab.rows.length - 1;
+      for (let c = 0; c < tab.cols.length; c++) {
+        if (isCovered(tab, r, c)) continue;
+        const span = spanOf(tab, r, c);
+        const w = tab.cols.slice(c, c + span).reduce((a, b) => a + b, 0);
+        const cell = row[c] ?? { runs: [] };
+        const tcPr = [`<w:tcW w:w="${twips(w)}" w:type="dxa"/>`];
+        if (span > 1) tcPr.push(`<w:gridSpan w:val="${span}"/>`);
+        if (tab.lines === 'acs' && lastHead) tcPr.push(`<w:tcBorders><w:bottom ${grid}/></w:tcBorders>`);
+        if (cell.fill) tcPr.push(`<w:shd w:val="clear" w:color="auto" w:fill="${hex6(cell.fill)}"/>`);
+        if (cell.valign) tcPr.push(`<w:vAlign w:val="${cell.valign}"/>`);
+        // the cell's paragraphs, set as the text is, lined up as the cell is
+        const n = paraCount(rt.plainText(cell.runs));
+        const ps = fitParas(cell.paras, n);
+        const ca = docCellAlign(tab, r, c);
+        const parts = splitParagraphs(cell.runs);
+        const paras: string[] = [];
+        for (let i = 0; i < n; i++) paras.push(await this.paragraph(main, { ...ps[i], align: ps[i]?.align ?? ca }, parts[i] ?? [], 0));
+        cells.push(`<w:tc><w:tcPr>${tcPr.join('')}</w:tcPr>${paras.join('') || '<w:p/>'}</w:tc>`);
+      }
+      rows.push(`<w:tr>${r < tab.head ? '<w:trPr><w:tblHeader/></w:trPr>' : ''}${cells.join('')}</w:tr>`);
+    }
+    return `<w:tbl>${tblPr}${gridXml}${rows.join('')}</w:tbl>`;
   }
 
   // ---------------------------------------------------------------- page, header and footer

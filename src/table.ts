@@ -374,3 +374,16 @@ export function nextCell(t: TableData, r: number, c: number, back = false): { r:
     if (!isCovered(t, rr, cc)) return { r: rr, c: cc };
   }
 }
+
+/** Join a cell with the one to its right (its text added after a space). */
+export function mergeRight(t: TableData, r: number, c: number): TableData {
+  const span = spanOf(t, r, c);
+  const next = t.rows[r]?.[c + span];
+  if (!next) return t;
+  const nextSpan = spanOf(t, r, c + span);
+  const cell = t.rows[r][c];
+  const runs = next.runs.length && cell.runs.length ? [...cell.runs, { ...cell.runs[cell.runs.length - 1], obj: undefined, text: ' ' }, ...next.runs] : [...cell.runs, ...next.runs];
+  const joined = setSpan(t, r, c, span + nextSpan);
+  return { ...joined, rows: joined.rows.map((row, rr) => row.map((x, cc) => (rr === r && cc === c ? { ...x, runs } : rr === r && cc === c + span ? { runs: [] } : x))) };
+}
+

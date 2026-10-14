@@ -21,7 +21,7 @@ import { arialWidth } from '../text-metrics';
 import { documentMeasure } from '../text/font-measure';
 import {
   OBJECT_CHAR, defaultHeaderFooter, defaultPage, defaultStyles,
-  COL_GAP, FLOAT_GAP, columnsOf, lookExtent,
+  COL_GAP, FLOAT_GAP, columnsOf, lookExtent, usedObjects,
   type DocObject, type DocText, type FigureLook, type Float, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
 } from '../document/document';
 import { shownSize } from '../document/doc-layout';
@@ -62,6 +62,7 @@ const WARN = {
   vmerge: 'Table cells merged down a column were split (merging across a row is kept).',
   nested: 'A table inside a table cell was kept as text.',
   cellObjects: 'Pictures and structures inside table cells were left out.',
+  cellBoxes: 'Text boxes inside table cells were left out.',
   wmf: 'Some pictures are in the older Windows Metafile (WMF) format, which can\'t be shown here yet. They are kept, and saved back to Word unchanged.',
   crop: 'Cropped pictures show uncropped.',
   numbering: 'Some numbered lists use numbering that shows here as 1., a., i.',
@@ -960,6 +961,10 @@ class DocxReader {
   private table(tbl: Element): void {
     this.pendingNotes = null;
     const tblPr = kid(tbl, 'tblPr');
+    // a table from Word (or one typed into here) is a table in the text; an ACS table drawn here
+    // comes back as its drawing, and a table inside a cell as a drawn table
+    const cap0 = new RegExp(`^${TABLE_NAME} (\\d+)$`).exec(this.a(kid(tblPr, 'tblCaption')) ?? '');
+    if (!(cap0 && this.model?.tables?.[Number(cap0[1])]) && !this.inCell) { this.textTable(tbl); return; }
     const rows = kids(tbl, 'tr');
     let cols = kids(kid(tbl, 'tblGrid'), 'gridCol').map((g) => this.tw(g, 'w') ?? 0);
     // the cells, each with how many grid columns it spans
@@ -1063,6 +1068,112 @@ class DocxReader {
       ps: cleanPara({ align: jc === 'left' ? undefined : jc, spaceBefore: np.before, spaceAfter: np.after, pageBreak: this.takeBreak() }),
       runs: ctx.pieces[0].runs, mark: this.runStyle(normal), style: 'Normal', contextual: false, table: true,
     });
+  }
+
+  /** Inside a table cell being read (a table in it becomes a drawn table). */
+  private inCell = false;
+
+  /** A Word table as a table in the text: its cells read as text is (structures and pictures kept). */
+  private textTable(tbl: Element): void {
+    const tblPr = kid(tbl, 'tblPr');
+    const rows = kids(tbl, 'tr');
+    let cols = kids(kid(tbl, 'tblGrid'), 'gridCol').map((g) => this.tw(g, 'w') ?? 0);
+    type Cell = { cell: TableCell; span: number; borders: Element | null };
+    const grid: Cell[][] = [];
+    let head = 0, counting = true;
+    const was = this.inCell;
+    this.inCell = true;
+    try {
+      for (const tr of rows) {
+        const trPr = kid(tr, 'trPr');
+        if (counting && kid(trPr, 'tblHeader') && this.on(kid(trPr, 'tblHeader'))) head++;
+        else counting = false;
+        const row: Cell[] = [];
+        const before = Number(this.a(kid(trPr, 'gridBefore')) ?? 0);
+        for (let i = 0; i < before; i++) row.push({ cell: { runs: [] }, span: 1, borders: null });
+        for (const tc of this.cellsOf(tr)) {
+          const tcPr = kid(tc, 'tcPr');
+          const span = Math.max(1, Number(this.a(kid(tcPr, 'gridSpan')) ?? 1));
+          const vm = kid(tcPr, 'vMerge');
+          const vmerge = !!vm && this.a(vm) !== 'restart';
+          if (vmerge) this.warn('vmerge');
+          const cell: TableCell = vmerge ? { runs: [] } : this.textCell(tc);
+          const fill = this.a(kid(tcPr, 'shd'), 'fill');
+          if (fill && /^[0-9a-f]{6}$/i.test(fill) && fill.toLowerCase() !== 'ffffff') cell.fill = `#${fill.toLowerCase()}`;
+          const va = this.a(kid(tcPr, 'vAlign'));
+          if (va === 'center' || va === 'bottom') cell.valign = va;
+          row.push({ cell, span, borders: kid(tcPr, 'tcBorders') });
+        }
+        grid.push(row);
+      }
+    } finally { this.inCell = was; }
+    const width = Math.max(1, ...grid.map((row) => row.reduce((n, c) => n + c.span, 0)));
+    if (cols.length < width) {
+      const first = rows[0] ? this.cellsOf(rows[0]).map((tc) => this.tw(kid(kid(tc, 'tcPr'), 'tcW'), 'w') ?? 72) : [];
+      cols = Array.from({ length: width }, (_, i) => cols[i] ?? first[i] ?? 72);
+    }
+    cols = cols.map((w) => round(Math.max(6, w)));
+    const table: TableData = { cols, rows: [], head: 0, lines: 'none' };
+    for (const row of grid) {
+      const out: TableCell[] = [];
+      for (const c of row) {
+        if (out.length >= cols.length) break;
+        out.push(c.span > 1 ? { ...c.cell, span: Math.min(c.span, cols.length - out.length) } : c.cell);
+        for (let k = 1; k < c.span && out.length < cols.length; k++) out.push({ runs: [] });
+      }
+      while (out.length < cols.length) out.push({ runs: [] });
+      table.rows.push(out);
+    }
+    const style = this.a(kid(tblPr, 'tblStyle'));
+    const b = new Map([...(style ? this.styleTableBorders(style) : new Map<string, boolean>()), ...this.borders(kid(tblPr, 'tblBorders'))]);
+    let cellV = false, cellH = false, underRow = -1;
+    grid.forEach((row, ri) => row.forEach((c) => {
+      const cb = this.borders(c.borders);
+      if (cb.get('left') || cb.get('right') || cb.get('start') || cb.get('end')) cellV = true;
+      if (cb.get('top') || cb.get('bottom')) cellH = true;
+      if (cb.get('bottom') && ri < grid.length - 1 && underRow < 0) underRow = ri;
+    }));
+    table.lines = b.get('insideV') || cellV ? 'grid' : b.get('top') || b.get('bottom') || b.get('insideH') || cellH ? 'acs' : 'none';
+    table.head = head || (table.lines === 'acs' && underRow >= 0 && underRow < 3 ? underRow + 1 : 0);
+    // each column lines up the way most of its cells do
+    table.align = cols.map((_, ci) => {
+      const count = new Map<Justify, number>();
+      for (const row of table.rows) { const a = row[ci]?.align; if (a && row[ci].runs.length) count.set(a, (count.get(a) ?? 0) + 1); }
+      return [...count.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] ?? 'left';
+    });
+    table.rows.forEach((row) => row.forEach((c, ci) => { if (c.align === table.align![ci] || (!c.runs.length && c.align)) delete c.align; }));
+    const jc = JUSTIFY[this.a(kid(tblPr, 'jc')) ?? 'left'] ?? 'left';
+    const normal = merge<RProps>(this.docDefaults.r, this.chain('paragraph', this.defaultPara).r);
+    const ctx: Ctx = { base: normal, pieces: [{ runs: [], pageBreak: false, soft: false }], cell: false };
+    this.emitObject(ctx, { kind: 'table', table }, normal);
+    this.used.add(this.defaultPara);
+    this.out.push({
+      ps: cleanPara({ align: jc === 'left' ? undefined : jc, spaceBefore: 0, spaceAfter: 0, pageBreak: this.takeBreak() }),
+      runs: ctx.pieces[0].runs, mark: this.runStyle(normal), style: 'Normal', contextual: false, table: true,
+    });
+  }
+
+  /**
+   * A cell of a table in the text: its paragraphs read as the text's are. Structures and
+   * pictures stay (in their line); text boxes and the like inside a cell are left out.
+   */
+  private textCell(tc: Element): TableCell {
+    const { runs, paras } = this.boxText(tc);
+    const kept = runs.filter((r) => {
+      const o = r.obj !== undefined ? this.objects[r.obj] : undefined;
+      if (!o) return true;
+      if (o.kind === 'textbox' || o.kind === 'table' || o.kind === 'bib') { this.warn('cellBoxes'); return false; }
+      if ((o.kind === 'drawing' || o.kind === 'picture') && o.float) { const { float: _, ...rest } = o; this.objects[r.obj!] = rest as DocObject; }
+      return true;
+    });
+    const clean = rt.normalizeRuns(kept.length ? kept : runs.filter((r) => r.obj === undefined));
+    const cell: TableCell = { runs: clean.filter((r) => r.text) };
+    // the first paragraph's alignment is the cell's; others keep their own when it differs
+    const align = paras[0]?.align ?? 'left';
+    const ps = paras.map((p) => { const q = { ...p }; if ((q.align ?? 'left') === align) delete q.align; else q.align ??= 'left'; return q; });
+    if (ps.some((p) => Object.keys(p).length)) cell.paras = ps;
+    if (align !== 'left') cell.align = align;
+    return cell;
   }
 
   private tableDrawing(t: TableData): Contents {
@@ -1266,7 +1377,8 @@ class DocxReader {
       if (i > 0) runs.push({ ...out[i - 1].mark, text: '\n' });
       runs.push(...p.runs);
     });
-    const used = new Set(runs.filter((r) => r.obj !== undefined).map((r) => r.obj!));
+    // (with the structures in tables' cells)
+    const used = usedObjects({ runs, objects: this.objects });
     const objects: Record<number, DocObject> = {};
     for (const [k, v] of Object.entries(this.objects)) if (used.has(Number(k))) objects[Number(k)] = v;
     const m = this.model;

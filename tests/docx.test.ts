@@ -378,14 +378,14 @@ describe('opening files made by Word', () => {
     const { doc } = await readDocx(wordFile(tbl));
     expect(doc.paras).toHaveLength(1);
     const o = Object.values(doc.objects)[0];
-    const t = o.kind === 'drawing' ? soleTable(o.contents)! : null;
+    // a table from Word is a table in the text, typed into in place
+    const t = o.kind === 'table' ? o.table : null;
     expect(t!.cols).toEqual([100, 100, 100]);
     expect(t!.rows[0][0].span).toBe(2);
     expect(rt.plainText(t!.rows[0][2].runs)).toBe('Yield');
     expect(t!.head).toBe(1);
     expect(t!.lines).toBe('grid');
     expect(t!.align).toEqual(['center', 'center', 'center']);
-    expect(t!.size).toBe(11);
     expect(doc.paras[0].align).toBe('center');
   });
 

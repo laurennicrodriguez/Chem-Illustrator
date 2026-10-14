@@ -391,7 +391,7 @@ export class TextEditing {
   }
 
   /** Change the paragraphs from `first` to `last`. */
-  setParas(first: number, last: number, patch: Partial<ParaStyle>, kind: string): void {
+  setParas(first: number, last: number, patch: Partial<ParaStyle>, kind: string | null): void {
     const paras = fitParas(this.t.paras, paraCount(this.text)).map((p, i) => (i < first || i > last ? p : cleanPara({ ...p, ...patch })));
     this.commit(kind, { ...this.t, paras }, this.anchor, this.focus);
   }

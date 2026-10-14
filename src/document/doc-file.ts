@@ -5,7 +5,8 @@
 import type { Measure, TextFrame } from '../text/layout';
 import { TextEditing, type ChangeKind } from '../text/editing';
 import { documentMeasure } from '../text/font-measure';
-import { DocLayouter, movedLayout, type DocLayout } from './doc-layout';
+import { CELL_PAD, DocLayouter, movedLayout, type DocLayout } from './doc-layout';
+import { setPart } from '../table';
 import { FigurePictures } from './figures';
 import { BOX_PAD, newDocument, runStyleOf, styleOf, type DocText } from './document';
 import { storedParas } from '../text/paragraphs';
@@ -34,8 +35,11 @@ export class DocFile {
   /** Called after every change to the text or the selection. */
   listener: (kind: ChangeKind) => void = () => {};
   private memo: { frame: TextFrame; lay: DocLayout } | null = null;
-  /** The text box being typed into, if any: its own editing, whose changes go back into the document. */
-  box: { id: number; ed: TextEditing; recorded: boolean } | null = null;
+  /**
+   * The text box or table cell being typed into, if any: its own editing, whose changes go back
+   * into the document.
+   */
+  box: { id: number; cell?: { r: number; c: number }; ed: TextEditing; recorded: boolean } | null = null;
 
   constructor(t: DocText = newDocument()) {
     this.layouter = new DocLayouter({ measure: docMeasure, drawingSize: (c, s) => figures.size(c, s) });
@@ -79,6 +83,46 @@ export class DocFile {
         const cur = this.t.objects[id];
         if (cur?.kind === 'textbox') {
           this.ed.update({ ...this.t, objects: { ...this.t.objects, [id]: { ...cur, runs: ed.t.runs, paras: storedParas(ed.t.paras) } } } as DocText, box.recorded ? null : 'Edit text box');
+          box.recorded = true;
+        }
+        ed.relayout();
+      }
+      this.listener(kind);
+    };
+    this.box = box;
+    return ed;
+  }
+
+  /**
+   * Start typing into a cell of a table in the text, as editBox does for a text box: the cell's
+   * text laid out where the cell is, every change going back into the table.
+   */
+  editCell(id: number, r: number, c: number): TextEditing | null {
+    const o = this.t.objects[id];
+    if (o?.kind !== 'table') return null;
+    const cell = o.table.rows[r]?.[c];
+    if (!cell) return null;
+    if (this.box?.id === id && this.box.cell?.r === r && this.box.cell.c === c) return this.box.ed;
+    const N = styleOf(this.t, {});
+    const ed = new TextEditing({ runs: cell.runs, paras: cell.paras ?? [], justify: 'left', wrap: 100 }, runStyleOf(N), docMeasure, N.size);
+    ed.anchor = ed.focus = ed.text.length;
+    ed.layoutWith = (frame) => {
+      const cur = this.t.objects[id];
+      const lay = this.layout();
+      const tb = lay.tables.get(id);
+      const tab = cur?.kind === 'table' ? cur.table : o.table;
+      const cl = this.layouter.cellNow(tab, r, c, frame.runs, frame.paras) ?? tb?.cells[r]?.[c];
+      const at = tb?.rows[r];
+      if (!cl) return this.layouter.boxText(this.t, frame.runs, frame.paras, 100);
+      return at && tb ? movedLayout(cl, at.x + tb.xs[c] + CELL_PAD.x, at.y + CELL_PAD.y + (tb.drop[r]?.[c] ?? 0) - cl.box.y1) : cl;
+    };
+    const box = { id, cell: { r, c }, ed, recorded: false };
+    ed.onChange = (kind) => {
+      if (kind === 'text') {
+        const cur = this.t.objects[id];
+        if (cur?.kind === 'table' && cur.table.rows[r]?.[c]) {
+          const table = setPart(cur.table, { r, c }, { runs: ed.t.runs, paras: storedParas(ed.t.paras) });
+          this.ed.update({ ...this.t, objects: { ...this.t.objects, [id]: { ...cur, table } } } as DocText, box.recorded ? null : 'Edit table');
           box.recorded = true;
         }
         ed.relayout();

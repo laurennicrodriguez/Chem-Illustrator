@@ -8,13 +8,17 @@
 // points), and the lines of every page together make one text layout, so the text editing's
 // caret, selection and arrow keys run across pages without knowing about them.
 
-import type { Contents, ParaStyle, TextRun } from '../model';
+import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
 import type { DocStyle } from '../style';
 import { FONT_STACK, layoutText, type Glyphs, type InlineBox, type LaidLine, type Measure, type Narrow, type TextFrame, type TextLayout } from '../text/layout';
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
+import { isCovered, spanOf } from '../table';
 import * as rt from '../richtext';
 import { BOX_PAD, FLOAT_GAP, OBJECT_CHAR, columnsOf, fieldTexts, floatOf, lookExtent, lookOf, styleOf, type DocText, type HeaderFooter, type NamedStyle, type WrapKind } from './document';
 import { bibliography, type BibEntry } from './references';
+
+/** A table row is at least one line of Normal text tall. */
+export const SINGLE_ROW = 1.15;
 
 /** Space between pages on screen, in points. */
 export const PAGE_GAP = 18;
@@ -85,6 +89,33 @@ export interface PlacedObject {
   wrap?: WrapKind;
 }
 
+/** A table in the text: its columns and rows, each cell's text, and where each row went. */
+export interface TableBox {
+  id: number;
+  /** Left edge of each column from the table's left, and the right edge of the last one. */
+  xs: number[];
+  /** Each row's height. */
+  hs: number[];
+  /** Each cell's text, laid out from the top left of the inside of the cell (null where a cell spans over it). */
+  cells: (TextLayout | null)[][];
+  /** How far each cell's text is moved down to sit in the middle or at the bottom of its row. */
+  drop: number[][];
+  /** Each row's page and top left corner (in the document's coordinates), as placed. */
+  rows: { page: number; x: number; y: number }[];
+}
+
+/** Room inside a table cell at the sides and above and below the text (Word's 0.075 in at the sides). */
+export const CELL_PAD = { x: 5.4, y: 1.5 };
+
+/** Width of a table's lines: Word's half-point grid; the ACS rules a little heavier at the top and bottom. */
+export const GRID_LINE = 0.5;
+export const ACS_LINE = 0.75;
+
+/** How a cell's text lines up across: its own choice, its column's, or left. */
+export function docCellAlign(t: TableData, r: number, c: number): Justify {
+  return t.rows[r]?.[c]?.align ?? t.align?.[c] ?? 'left';
+}
+
 /** Room a floating figure keeps clear on its page, from the top left of the margins (gap included). */
 export interface WrapRect { x1: number; y1: number; x2: number; y2: number; wrap: WrapKind }
 
@@ -125,6 +156,8 @@ export interface DocLayout {
   sizes: Map<number, { w: number; h: number }>;
   /** Each text box's text, laid out from the top left of the inside of the box. */
   boxes: Map<number, TextLayout>;
+  /** The tables in the text. */
+  tables: Map<number, TableBox>;
   /** The top of each paragraph (after its space above), in the document's coordinates, and its page. */
   paraTops: { y: number; page: number }[];
   /** The page size, and the width of the text between the margins. */
@@ -161,7 +194,7 @@ export class DocLayouter {
    * the text (the caret passes over the whole bibliography as its one character). The lines
    * flow onto the next page like any others.
    */
-  withBlocks(frame: TextFrame, st: NamedStyle, entries: BibEntry[], isBib: (r: TextRun) => boolean): TextLayout {
+  withBlocks(frame: TextFrame, st: NamedStyle, entries: BibEntry[], isBib: (r: TextRun) => boolean, table?: (id: number) => TableBox | null): TextLayout {
     const measure = this.deps.measure;
     const ps = frame.paras?.[0] ?? {};
     const lines: LaidLine[] = [];
@@ -178,6 +211,30 @@ export class DocLayouter {
       part = [];
     };
     for (const r of frame.runs) {
+      const tb = r.obj !== undefined ? table?.(r.obj) ?? null : null;
+      if (tb) {
+        // a table: a line for each row, the caret passing over the whole table as its one character
+        flush();
+        const w = tb.xs[tb.xs.length - 1];
+        const room = frame.wrap ?? w;
+        const align = ps.align ?? 'left';
+        const x = align === 'center' ? Math.max(0, (room - w) / 2) : align === 'right' ? Math.max(0, room - w) : 0;
+        const family = `${st.font}, ${FONT_STACK}`;
+        let y = 0;
+        tb.hs.forEach((h, i) => {
+          y += h;
+          const pieces: Glyphs[] = [];
+          if (i === 0) pieces.push({ text: OBJECT_CHAR, start: at, x, w, dy: 0, size: st.size, family, style: '', obj: r.obj, shown: '' });
+          if (i === tb.hs.length - 1) pieces.push({ text: '', start: at + 1, x: x + w, w: 0, dy: 0, size: st.size, family, style: '' });
+          lines.push({
+            para: 0, start: i === 0 ? at : at + 1, end: at + 1, y, ascent: Math.min(h, st.size), descent: 0, above: h, below: 0,
+            size: st.size, left: x, room, x, width: w, pieces, last: false, block: r.obj,
+          });
+        });
+        at += 1;
+        first = false;
+        continue;
+      }
       if (!isBib(r)) { part.push(r); at += r.text.length; continue; }
       flush();
       const bf = bibFrame(entries, st, ps, measure);
@@ -201,6 +258,41 @@ export class DocLayouter {
     if (lines.length) lines[lines.length - 1].last = true;
     const box = { x1: 0, y1: 0, x2: frame.wrap ?? 0, y2: 0 };
     return { lines, boxWidth: frame.wrap ?? 0, box, length: at, measure };
+  }
+
+  /** What a table cell's text is laid out with, from the last layout (for typing into a cell). */
+  cellCtx: { N: NamedStyle; inline: (id: number) => InlineBox | null; objKey: (id: number) => string } | null = null;
+
+  /** A table cell's text as it would be laid out in the document now (typing into the cell). */
+  cellNow(tb: TableData, r: number, c: number, runs: TextRun[], paras: ParaStyle[] | undefined): TextLayout | null {
+    const cx = this.cellCtx;
+    if (!cx) return null;
+    const xs = [0];
+    for (const w of tb.cols) xs.push(xs[xs.length - 1] + w);
+    return this.cellText(cx.N, runs, paras, xs[c + spanOf(tb, r, c)] - xs[c], docCellAlign(tb, r, c), cx.inline, cx.objKey);
+  }
+
+  /**
+   * How wide a table cell's text is without wrapping, structures and pictures at their own
+   * size, with the cell's margins: what Fit Columns makes its column.
+   */
+  naturalWidth(t: DocText, runs: TextRun[], paras: ParaStyle[] | undefined): number {
+    const cx = this.cellCtx;
+    const N = cx?.N ?? t.styles.Normal ?? styleOf(t, {});
+    const inline = (id: number): InlineBox | null => {
+      const o = t.objects[id];
+      const k = o && (o.kind === 'drawing' || o.kind === 'picture') ? o.scale ?? 1 : 1;
+      const own = o?.kind === 'drawing' ? this.deps.drawingSize(o.contents, t.drawingStyle) : o?.kind === 'picture' ? { w: o.w, h: o.h } : null;
+      if (own) {
+        const [l, tp, r, b] = lookExtent(lookOf(o));
+        return { w: own.w * k + l + r, ascent: own.h * k + tp, descent: b };
+      }
+      return cx?.inline(id) ?? null;
+    };
+    const resolved = runs.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? N.font, size: r.size ?? N.size }));
+    const ps = fitParas(paras, paraCount(rt.plainText(runs)));
+    const lay = layoutText({ runs: resolved, paras: ps, justify: 'left', boxes: true, markers: listMarkers(ps), inline }, N.size, this.deps.measure);
+    return Math.max(0, ...lay.lines.map((l) => l.x + l.width)) + 2 * CELL_PAD.x;
   }
 
   /** Forget every paragraph's layout (fonts were loaded, measurements changed). */
@@ -238,6 +330,23 @@ export class DocLayouter {
       boxes.set(Number(k), lay);
       sizes.set(Number(k), { w: o.w, h: Math.max(o.h ?? 0, lay.box.y2 - lay.box.y1 + 2 * BOX_PAD.y) });
     }
+    // tables: structures and pictures in a cell fit its width
+    const CP = CELL_PAD;
+    for (const o of Object.values(t.objects)) {
+      if (o.kind !== 'table') continue;
+      const tb = o.table;
+      const xs = [0];
+      for (const w of tb.cols) xs.push(xs[xs.length - 1] + w);
+      tb.rows.forEach((row, r) => row.forEach((cell, c) => {
+        if (isCovered(tb, r, c)) return;
+        const room = Math.max(6, xs[c + spanOf(tb, r, c)] - xs[c] - 2 * CP.x);
+        for (const x of cell.runs) {
+          const n = x.obj !== undefined ? t.objects[x.obj] : undefined;
+          if (n?.kind === 'drawing') sizes.set(x.obj!, shownSize(this.deps.drawingSize(n.contents, t.drawingStyle), n.scale ?? 1, room));
+          else if (n?.kind === 'picture') sizes.set(x.obj!, shownSize({ w: n.w, h: n.h }, n.scale ?? 1, room));
+        }
+      }));
+    }
     // the bibliography's entries (worked out once: every bibliography in the text shows them)
     const hasBib = Object.values(t.objects).some((o) => o.kind === 'bib');
     const entries = hasBib ? bibliography(t) : [];
@@ -255,6 +364,25 @@ export class DocLayouter {
       const [l, tp, r, b] = extentOf(id);
       return { w: s.w + l + r, ascent: s.h + tp, descent: b };
     };
+    // each table's cells laid out, and its rows' heights
+    const tables = new Map<number, TableBox>();
+    const N = t.styles.Normal ?? styleOf(t, {});
+    const objKey = (x: number) => {
+      const f = fields.get(x), s = sizes.get(x);
+      return f !== undefined ? `=${f}` : s ? `${s.w.toFixed(3)}x${s.h.toFixed(3)}/${extentOf(x).join(',')}` : '?';
+    };
+    this.cellCtx = { N, inline, objKey };
+    const tableOf = (id: number): TableBox | null => {
+      const o = t.objects[id];
+      if (o?.kind !== 'table') return null;
+      let tb = tables.get(id);
+      if (!tb) {
+        tb = this.tableBox(id, o.table, N, inline, objKey);
+        tables.set(id, tb);
+      }
+      return tb;
+    };
+    const isTable = (r: { obj?: number }) => r.obj !== undefined && t.objects[r.obj]?.kind === 'table';
 
     // each paragraph's lines (from the cache when nothing about it changed)
     const laid: TextLayout[] = [];
@@ -271,14 +399,15 @@ export class DocLayouter {
         if (floating(r.obj!)) return `${r.obj}~`;
         return f !== undefined ? `${r.obj}=${f}` : s ? `${r.obj}:${s.w.toFixed(3)}x${s.h.toFixed(3)}/${extentOf(r.obj!).join(',')}` : `${r.obj}?`;
       });
-      const bib = hasBib && runs.some(isBib);
-      const key = JSON.stringify([resolved, ps, markers[p], textW, objs, st.size, bib ? [t.citeStyle, t.citeOptions, entries.map((e) => [e.label, e.pieces]), st.font] : 0]);
+      const tabs = runs.filter(isTable).map((r) => tableOf(r.obj!)!);
+      const bib = (hasBib && runs.some(isBib)) || tabs.length > 0;
+      const key = JSON.stringify([resolved, ps, markers[p], textW, objs, st.size, bib ? [t.citeStyle, t.citeOptions, entries.map((e) => [e.label, e.pieces]), st.font] : 0, tabs.map((x) => [x.xs, x.hs])]);
       let lay = this.cache.get(key);
       if (!lay) {
         const frame: TextFrame = {
           runs: resolved, paras: [ps], justify: 'left', wrap: textW, boxes: true, markers: [markers[p]], inline,
         };
-        lay = bib ? this.withBlocks(frame, st, entries, isBib) : layoutText(frame, st.size, this.deps.measure);
+        lay = bib ? this.withBlocks(frame, st, entries, isBib, tableOf) : layoutText(frame, st.size, this.deps.measure);
         this.cache.set(key, lay);
       }
       this.used.add(key);
@@ -410,7 +539,28 @@ export class DocLayouter {
     }
     pages[pageIdx].end = lines.length;
 
-    // a bibliography is picked by clicking anywhere on it: its box on each page it is on
+    // where each table's rows went, and the structures and pictures in its cells
+    for (const tb of tables.values()) tb.rows = [];
+    pages.forEach((pg) => {
+      for (let i = pg.first; i < pg.end; i++) {
+        const l = lines[i];
+        const tb = l.block !== undefined ? tables.get(l.block) : undefined;
+        if (!tb) continue;
+        const r = tb.rows.length;
+        const top = l.y - (l.above ?? 0);
+        tb.rows.push({ page: pg.index, x: l.x, y: top });
+        tb.cells[r]?.forEach((cl, c) => {
+          if (!cl) return;
+          const ox = l.x + tb.xs[c] + CP.x, oy = top + CP.y + tb.drop[r][c] - cl.box.y1;
+          for (const cline of cl.lines) for (const g of cline.pieces) {
+            const s = g.obj !== undefined ? sizes.get(g.obj) : undefined;
+            if (s && !fields.has(g.obj!)) objects.push({ id: g.obj!, page: pg.index, x: ox + g.x + extentOf(g.obj!)[0], y: oy + cline.y - s.h, w: s.w, h: s.h, line: i });
+          }
+        });
+      }
+    });
+
+    // a bibliography or table is picked by clicking anywhere on it: its box on each page it is on
     const blocks = new Map<string, PlacedObject>();
     pages.forEach((pg) => {
       for (let i = pg.first; i < pg.end; i++) {
@@ -419,7 +569,8 @@ export class DocLayouter {
         const k = `${l.block}@${pg.index}`;
         const y1 = l.y - (l.above ?? l.ascent), y2 = l.y + (l.below ?? l.descent);
         const got = blocks.get(k);
-        if (!got) blocks.set(k, { id: l.block, page: pg.index, x: l.band?.[0] ?? page.left, y: y1, w: textW, h: y2 - y1, line: i });
+        const tb = tables.get(l.block);
+        if (!got) blocks.set(k, tb ? { id: l.block, page: pg.index, x: l.x, y: y1, w: l.width, h: y2 - y1, line: i } : { id: l.block, page: pg.index, x: l.band?.[0] ?? page.left, y: y1, w: textW, h: y2 - y1, line: i });
         else got.h = y2 - got.y;
       }
     });
@@ -428,7 +579,50 @@ export class DocLayouter {
     const last = pages[pages.length - 1];
     const box = { x1: 0, y1: 0, x2: page.w, y2: last.top + page.h };
     const textLayout: TextLayout = { lines, boxWidth: textW, box, length: text.length, measure: this.deps.measure };
-    return { text: textLayout, pages, objects, fields, sizes, boxes, paraTops, pageW: page.w, pageH: page.h, textW, cols: { n: cs.n, w: textW, x: colX } };
+    return { text: textLayout, pages, objects, fields, sizes, boxes, tables, paraTops, pageW: page.w, pageH: page.h, textW, cols: { n: cs.n, w: textW, x: colX } };
+  }
+
+  /** A table's cells laid out (each from the cache when nothing about it changed), and its rows' heights. */
+  tableBox(id: number, tb: TableData, N: NamedStyle, inline: (id: number, room: number) => InlineBox | null, objKey: (id: number) => string): TableBox {
+    const xs = [0];
+    for (const w of tb.cols) xs.push(xs[xs.length - 1] + w);
+    const cells: (TextLayout | null)[][] = [];
+    const hs: number[] = [];
+    const drop: number[][] = [];
+    tb.rows.forEach((row, r) => {
+      const out: (TextLayout | null)[] = [];
+      for (let c = 0; c < tb.cols.length; c++) {
+        if (isCovered(tb, r, c)) { out.push(null); continue; }
+        const cell = row[c] ?? { runs: [] };
+        out.push(this.cellText(N, cell.runs, cell.paras, xs[c + spanOf(tb, r, c)] - xs[c], docCellAlign(tb, r, c), inline, objKey));
+      }
+      const h = Math.max(SINGLE_ROW * N.size, ...out.map((l) => (l ? l.box.y2 - l.box.y1 : 0))) + 2 * CELL_PAD.y;
+      hs.push(h);
+      drop.push(out.map((l, c) => {
+        if (!l) return 0;
+        const room = h - 2 * CELL_PAD.y - (l.box.y2 - l.box.y1);
+        const v = row[c]?.valign;
+        return v === 'center' ? room / 2 : v === 'bottom' ? room : 0;
+      }));
+      cells.push(out);
+    });
+    return { id, xs, hs, cells, drop, rows: [] };
+  }
+
+  /** A table cell's text laid out in its width (`w`, the inner margins taken off). */
+  cellText(N: NamedStyle, runs: TextRun[], paras: ParaStyle[] | undefined, w: number, align: Justify, inline: (id: number, room: number) => InlineBox | null, objKey: (id: number) => string): TextLayout {
+    const resolved = runs.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? N.font, size: r.size ?? N.size }));
+    const n = paraCount(rt.plainText(runs));
+    const ps = fitParas(paras, n);
+    const objs = runs.filter((r) => r.obj !== undefined).map((r) => `${r.obj}${objKey(r.obj!)}`);
+    const key = `cell|${JSON.stringify([resolved, ps, w, align, objs])}`;
+    let lay = this.cache.get(key);
+    if (!lay) {
+      lay = layoutText({ runs: resolved, paras: ps, justify: align, wrap: Math.max(6, w - 2 * CELL_PAD.x), boxes: true, markers: listMarkers(ps), inline }, N.size, this.deps.measure);
+      this.cache.set(key, lay);
+    }
+    this.used.add(key);
+    return lay;
   }
 
   /** A text box's text laid out inside it (`w` the box's width), from the top left of its inner margins. */

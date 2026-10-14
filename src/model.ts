@@ -468,6 +468,10 @@ export interface TableCell {
   align?: Justify;
   /** Number of columns the cell spans (the cells it covers are left empty). */
   span?: number;
+  /** Documents: the cell's background colour (Word's shading). */
+  fill?: string;
+  /** Documents: where the text sits up and down in a cell taller than it (top when left out). */
+  valign?: 'center' | 'bottom';
 }
 
 /**
