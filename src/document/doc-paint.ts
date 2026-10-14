@@ -14,6 +14,7 @@ import { ACS_LINE, CELL_PAD, GRID_LINE } from './doc-layout';
 import type { TableData } from '../model';
 import { isCovered, spanOf } from '../table';
 import { docMeasure } from './doc-file';
+import { drawMath } from './math';
 
 /** One piece of a header or footer line: its text, where it goes, and its font. */
 export interface HfPart { where: 'header' | 'footer'; align: 'left' | 'center' | 'right'; text: string; font: string; size: number; w: number }
@@ -90,6 +91,9 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
         if (obj.fill) { c.fillStyle = obj.fill; c.fillRect(o.x, o.y, o.w, o.h); }
         const bl = lay.boxes.get(o.id);
         if (bl) drawLayout(c, bl, o.x + BOX_PAD.x, o.y + BOX_PAD.y - bl.box.y1);
+      } else if (obj?.kind === 'math') {
+        const m = lay.maths.get(o.id);
+        if (m) drawMath(c, m, o.x, o.y + m.ascent, m.family, m.color);
       } else if (obj?.kind === 'picture') ctx.items.push({ kind: 'image', src: obj.src, x: o.x, y: o.y, w: o.w, h: o.h, px: obj.px });
       else if (obj?.kind === 'drawing') {
         const pic = drawing(obj.contents, t.drawingStyle);

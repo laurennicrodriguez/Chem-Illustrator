@@ -199,7 +199,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   'doc-bullets': 'Bullets', 'doc-numbering': 'Numbering', replace: 'Find and replace…', 'insert-structure': 'Insert a structure (draw it)',
   'insert-caption': 'Insert a caption…', 'cross-reference': 'Insert a cross-reference…', 'compound-number': 'Insert a compound number…', 'structure-from-name-doc': 'Insert a structure from a name or SMILES…',
   'insert-citation': 'Insert a citation…', 'insert-bibliography': 'Insert the bibliography', 'manage-references': 'Manage references…',
-  'insert-toc': 'Insert a table of contents…', 'track-changes': 'Track changes (on or off)', 'accept-change': 'Accept the change', 'reject-change': 'Reject the change',
+  'insert-toc': 'Insert a table of contents…', 'insert-equation': 'Insert an equation…', 'edit-equation': 'Change the equation…', 'track-changes': 'Track changes (on or off)', 'accept-change': 'Accept the change', 'reject-change': 'Reject the change',
   'accept-all': 'Accept all changes', 'reject-all': 'Reject all changes', 'next-change': 'Next change', 'prev-change': 'Previous change', 'review-name': 'Your name on changes…',
 };
 
@@ -341,7 +341,7 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
     'Ctrl+Alt+1': 'style-h1', 'Ctrl+Alt+2': 'style-h2', 'Ctrl+Alt+3': 'style-h3', 'Ctrl+Shift+N': 'style-normal',
     'Ctrl+Enter': 'page-break', 'Ctrl+Shift+Enter': 'col-break', 'Ctrl+1': 'line-single', 'Ctrl+5': 'line-1-5', 'Ctrl+2': 'line-double',
     'Ctrl+]': 'font-bigger', 'Ctrl+[': 'font-smaller', 'Ctrl+Shift+L': 'doc-bullets',
-    'Ctrl+F': 'find', 'Ctrl+H': 'replace', 'Ctrl+N': 'new-document', 'Ctrl+Shift+E': 'track-changes',
+    'Ctrl+F': 'find', 'Ctrl+H': 'replace', 'Ctrl+N': 'new-document', 'Ctrl+Shift+E': 'track-changes', 'Alt+=': 'insert-equation',
   }),
   text: verbs('text', {
     'Ctrl+B': 'bold', 'Ctrl+I': 'italic', 'Ctrl+U': 'underline', 'Ctrl+=': 'sub', 'Ctrl+Shift+=': 'sup', 'Ctrl++': 'sup',

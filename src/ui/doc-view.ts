@@ -10,6 +10,7 @@ import { figures } from '../document/doc-file';
 import { drawDocTable, drawHeaderFooter } from '../document/doc-paint';
 import { BOX_PAD, SHADOWS, lookOf, type DocText } from '../document/document';
 import { drawLayout } from '../text/draw';
+import { drawMath } from '../document/math';
 import { selectionRects } from '../text/layout';
 import { imageFor, onImageReady } from '../render/images';
 
@@ -322,6 +323,9 @@ export class DocView {
         drawLayout(ctx, bl, o.x + BOX_PAD.x, o.y + BOX_PAD.y - bl.box.y1);
         ctx.restore();
       }
+    } else if (obj.kind === 'math') {
+      const m = lay.maths.get(o.id);
+      if (m) drawMath(ctx, m, o.x, o.y + m.ascent, m.family, m.color);
     } else this.figure(ctx, t, o);
     if (look?.frame) {
       ctx.strokeStyle = look.frameColor ?? '#000';

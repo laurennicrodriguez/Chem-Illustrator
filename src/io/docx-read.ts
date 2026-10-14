@@ -31,6 +31,7 @@ import { isCdx } from './cdx';
 import { BIB_MARK, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
 import { cleanRef } from '../document/references';
 import { revText } from '../document/revisions';
+import { mathText, ommlToTex } from '../document/math';
 import { CITE_PRESETS, cleanOptions } from '../document/cite-styles';
 import { listIndent, tableText } from './docx-write';
 
@@ -56,7 +57,7 @@ const WARN = {
   links: 'Links were kept as plain text.',
   notes: 'Footnotes and endnotes were left out.',
   comments: 'Comments were left out.',
-  equations: 'Equations were kept as plain text.',
+  equations: 'Equations in table cells were kept as plain text.',
   shapes: 'Charts, SmartArt and drawn shapes were left out.',
   sections: 'This file has several sections: the last one\'s page size, margins, header and footer are used for the whole document.',
   vmerge: 'Table cells merged down a column were split (merging across a row is kept).',
@@ -124,6 +125,8 @@ class DocxReader {
   private fields: Field[] = [];
   /** The tracked change the text being read is in (w:ins or w:del), as stored on runs. */
   private rev: string | undefined;
+  /** The paragraph being read holds a display equation (Word's equation paragraph): centred here. */
+  private displayMath = false;
   private openMarks = new Map<string, string>();
   private markSeq = new Map<string, number>();
   private refs: { id: number; mark: string; text: string }[] = [];
@@ -525,6 +528,7 @@ class DocxReader {
     const bibBefore = this.bibOpen;
     this.bibMet = null;
     const inToc = this.fields.some((f) => f.toc);
+    this.displayMath = false;
     this.inline(kids(el), ctx);
     // the contents' own lines (and the paragraph its field ends in): left out
     if (inToc && ctx.pieces.every((pc) => !pc.runs.length)) { if (kid(pPr, 'sectPr')) this.breakNext = !/^continuous$/i.test(this.a(kid(kid(pPr, 'sectPr'), 'type')) ?? 'nextPage'); return; }
@@ -557,7 +561,7 @@ class DocxReader {
     const brk = this.takeBreak();
     const ps: ParaStyle = {
       style: ours === 'Normal' ? undefined : ours,
-      align: p.align && p.align !== 'left' ? p.align : undefined,
+      align: p.align && p.align !== 'left' ? p.align : this.displayMath && !p.align ? 'center' : undefined,
       spaceBefore: round(p.before ?? 0), spaceAfter: round(p.after ?? 0),
       // spacing in points stays in points for the paragraph (its style takes the nearest multiple)
       ...(p.line && p.line.rule !== 'auto' ? { linePt: round(p.line.v / 20), lineRule: p.line.rule === 'exact' ? 'exact' as const : 'atLeast' as const } : { line: this.lineOf(p, size) }),
@@ -696,10 +700,14 @@ class DocxReader {
     }
   }
 
+  /** A Word equation: kept as an equation (its LaTeX), or as its text in a table cell. */
   private math(el: Element, ctx: Ctx): void {
-    this.warn('equations');
-    const t = Array.from(el.getElementsByTagNameNS('*', 't')).map((x) => x.textContent ?? '').join('');
-    this.emitText(ctx, t, ctx.base);
+    if (this.swallowing()) return;
+    const tex = ommlToTex(el);
+    if (!tex) return;
+    if (ctx.cell) { this.warn('equations'); this.emitText(ctx, mathText(tex), ctx.base); return; }
+    if (el.localName === 'oMathPara') this.displayMath = true;
+    this.emitObject(ctx, { kind: 'math', tex }, ctx.base);
   }
 
   private run(el: Element, ctx: Ctx): void {

@@ -24,6 +24,7 @@ import { DocFind } from './doc-find';
 import { tocEntries } from '../document/toc';
 import { changesIn, decide, reviewAuthor, setReviewAuthor } from '../document/revisions';
 import { ask } from './ask';
+import { askEquation } from './equation-dialog';
 import { ReferencesDialog, chooseReferences } from './references-dialog';
 import { citeSuper, formatOf, type Reference } from '../document/references';
 import { dataUrl, imageSize } from '../render/images';
@@ -685,6 +686,12 @@ export class DocumentMode {
     // the usual commands, as on the ribbon
     if (word || issue) menu.appendChild(document.createElement('hr'));
     const cmd = (label: string, name: string, title?: string) => item(label, () => { if (!this.run(name)) this.host.command(name); }, title);
+    // an equation here
+    const mathHere = [offset, offset - 1].map((at) => (at >= 0 ? rt.sliceRuns(ed.t.runs, at, at + 1)[0]?.obj : undefined)).find((x) => x !== undefined && this.file?.t.objects[x]?.kind === 'math');
+    if (mathHere !== undefined) {
+      item('Edit Equation…', () => void this.editEquation(mathHere), 'Change it in the equation window (or double-click it)');
+      menu.appendChild(document.createElement('hr'));
+    }
     // a tracked change here (Review tab)
     const change = this.file ? changesIn(this.file.t.runs).find((x) => x.start <= offset && offset <= x.end) : undefined;
     if (change) {
@@ -1118,6 +1125,7 @@ export class DocumentMode {
       const id = this.objectAt(e.clientX, e.clientY);
       if (id !== null && f.t.objects[id]?.kind === 'bib') { e.preventDefault(); void this.manageReferences(); return; }
       if (id !== null && f.t.objects[id]?.kind === 'toc') { e.preventDefault(); void this.tocOptions(id); return; }
+      if (id !== null && f.t.objects[id]?.kind === 'math') { e.preventDefault(); void this.editEquation(id); return; }
       if (f.box?.cell && id !== null && id !== f.box.id && f.t.objects[id]?.kind === 'drawing') { e.preventDefault(); this.editFigure(id); return; }
       if (f.box) { e.preventDefault(); return; }
       if (id !== null && f.t.objects[id]?.kind === 'textbox') { e.preventDefault(); this.startBox(id, this.view.toDoc(e.clientX, e.clientY)); return; }
@@ -1573,6 +1581,8 @@ export class DocumentMode {
       case 'insert-citation': void this.insertCitation(); break;
       case 'insert-bibliography': this.insertBibliography(); break;
       case 'insert-toc': void this.insertToc(); break;
+      case 'insert-equation': void this.insertEquation(); break;
+      case 'edit-equation': { const m = this.pickedMath(); if (m === null) { this.host.flash('Click an equation first (or double-click it).'); break; } void this.editEquation(m); break; }
       case 'track-changes': void this.toggleTracking(); break;
       case 'review-name': void this.askReviewName(); break;
       case 'accept-change': case 'reject-change': this.decideChange(cmd === 'accept-change'); break;
@@ -1968,6 +1978,66 @@ export class DocumentMode {
     const levels = await this.askTocLevels(o.levels, 'Apply');
     if (!levels || levels === o.levels) return;
     f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'toc', levels } } } as DocText, 'Table of contents levels');
+  }
+
+  // ---------------------------------------------------------------- equations
+
+  /** The equation picked (a selection of just its character), or the one just before the caret. */
+  private pickedMath(): number | null {
+    const f = this.file;
+    if (!f) return null;
+    const ed = f.ed;
+    const at = ed.end - ed.start === 1 ? ed.start : ed.collapsed ? ed.focus - 1 : -1;
+    const id = at >= 0 ? rt.sliceRuns(ed.t.runs, at, at + 1)[0]?.obj : undefined;
+    return id !== undefined && f.t.objects[id]?.kind === 'math' ? id : null;
+  }
+
+  /**
+   * Insert > Equation: typed as LaTeX in the equation window. On a line of its own it gets a
+   * centred paragraph of its own (after the one the caret is in, unless that one is empty).
+   */
+  private async insertEquation(): Promise<void> {
+    const f = this.file!;
+    const ed = f.ed;
+    const style = ed.typingStyle();
+    const font = style.font ?? styleOf(f.t, undefined).font;
+    const text0 = ed.text;
+    const r0 = paraRange(text0, paraAt(text0, ed.focus));
+    const got = await askEquation({ tex: '', display: r0.start === r0.end || /[:：]\s*$/.test(text0.slice(r0.start, ed.focus)), font, ok: 'Insert' });
+    if (!got) return;
+    const id = nextObjectId(f.t);
+    ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'math', tex: got.tex } } } as DocText, 'Insert equation');
+    const run = objectRun(id, rt.cleanStyle({ ...style, sub: undefined, sup: undefined }));
+    if (!got.display) {
+      ed.replace(ed.start, ed.end, [run], undefined, null);
+    } else {
+      const text = ed.text;
+      const p = paraAt(text, ed.focus);
+      const r = paraRange(text, p);
+      const empty = r.start === r.end;
+      const before = f.t.paras[p] ?? {};
+      // the text goes on below it in a paragraph like the one before, not centred
+      ed.replace(empty ? r.start : r.end, empty ? r.start : r.end, [...(empty ? [] : [{ ...style, text: '\n' }]), run, { ...style, text: '\n' }], undefined, null);
+      const h = empty ? p : p + 1;
+      ed.setParas(h, h, { align: 'center', list: undefined, level: undefined, firstLine: undefined }, null);
+      ed.setParas(h + 1, h + 1, { align: undefined, list: undefined, level: undefined, ...before, pageBreak: undefined, colBreak: undefined }, null);
+      const at = objectOffsets(f.t.runs).get(id);
+      if (at !== undefined) ed.setCaret(at + 2);
+      return;
+    }
+    const at = objectOffsets(f.t.runs).get(id);
+    if (at !== undefined) ed.setCaret(at + 1);
+  }
+
+  /** Change an equation (double-click it). Emptying it leaves it as it was; delete it like a letter. */
+  private async editEquation(id: number): Promise<void> {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'math') return;
+    const run = f.t.runs.find((r) => r.obj === id);
+    const got = await askEquation({ tex: o.tex, font: run?.font ?? styleOf(f.t, undefined).font, ok: 'Apply' });
+    if (!got || got.tex === o.tex) return;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'math', tex: got.tex } } } as DocText, 'Change equation');
   }
 
   // ---------------------------------------------------------------- tracked changes

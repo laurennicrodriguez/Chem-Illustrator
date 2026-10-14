@@ -177,7 +177,9 @@ export type DocObject =
   /** The bibliography: the references cited, in citation order, in the citation style (a block of its own). */
   | { kind: 'bib' }
   /** A table of contents: the headings down to `levels` (1 to 3) deep with their page numbers (a block of its own). */
-  | { kind: 'toc'; levels: number };
+  | { kind: 'toc'; levels: number }
+  /** An equation, typed as LaTeX and shown laid out as maths (see math.ts); a Word equation in .docx files. */
+  | { kind: 'math'; tex: string };
 
 export interface DocText extends RichText {
   styles: Record<string, NamedStyle>;

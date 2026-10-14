@@ -1467,3 +1467,13 @@ dialog.command-search .cs-foot { margin: 8px 2px 0; }
 /* narrow windows: the search box gives up its key, then the app's name goes, before anything wraps */
 @media (max-width: 1240px) { .search-box { min-width: 0; } .search-box kbd { display: none; } }
 @media (max-width: 1100px) { header h1.app-name { display: none; } }
+
+/* the equation window */
+dialog.equation-dialog { width: min(92vw, 620px); }
+dialog.equation-dialog code { font-size: 0.92em; }
+.eq-palette { display: flex; flex-wrap: wrap; gap: 3px; margin: 6px 0; }
+.eq-palette button { min-width: 2.2em; padding: 3px 6px; font-family: 'Cambria Math', 'STIX Two Math', 'Times New Roman', serif; font-size: 15px; line-height: 1.2; }
+.eq-symbols button { min-width: 1.9em; padding: 2px 4px; font-size: 14px; }
+dialog.equation-dialog textarea { width: 100%; box-sizing: border-box; font: 14px ui-monospace, Consolas, monospace; padding: 6px; resize: vertical; margin-top: 4px; }
+.eq-preview { margin: 8px 0; min-height: 48px; max-height: 220px; overflow: auto; border: 1px solid var(--border, #ccd); border-radius: 4px; background: #fff; padding: 4px; display: flex; justify-content: center; align-items: center; }
+.eq-preview canvas { display: block; }

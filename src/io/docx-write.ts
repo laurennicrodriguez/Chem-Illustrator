@@ -20,11 +20,12 @@ import { ACS_LINE, CELL_PAD, GRID_LINE, bibHang, docCellAlign, shownSize } from 
 import { bibliography, piecesText } from '../document/references';
 import { TOC_INDENT, tocEntries } from '../document/toc';
 import { parseRev } from '../document/revisions';
+import { toOmml } from '../document/math';
 import { documentMeasure } from '../text/font-measure';
 import { arialWidth } from '../text-metrics';
 import { PAD_X, PAD_Y, cellAlign, isCovered, spanOf } from '../table';
 import {
-  BIB_MARK, CITE_FIELD, DOCX_CT, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, MC_NS, PIC_NS, TABLE_NAME, W_NS, WORD_HIGHLIGHTS, WP_NS, WPS_NS, twips, type DocxModel,
+  BIB_MARK, CITE_FIELD, DOCX_CT, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, MC_NS, M_NS, PIC_NS, TABLE_NAME, W_NS, WORD_HIGHLIGHTS, WP_NS, WPS_NS, twips, type DocxModel,
 } from './docx';
 
 export interface DocxDeps {
@@ -92,7 +93,7 @@ class DocxWriter {
     const main = 'word/document.xml';
     const body = await this.body(main);
     const sect = this.section(main);
-    pkg.add(main, `${HEAD}<w:document xmlns:w="${W_NS}" xmlns:r="${NS.r}" xmlns:wp="${WP_NS}" xmlns:a="${NS.a}" xmlns:pic="${PIC_NS}" xmlns:wps="${WPS_NS}" xmlns:mc="${MC_NS}"><w:body>${body}${sect}</w:body></w:document>`, DOCX_CT.document);
+    pkg.add(main, `${HEAD}<w:document xmlns:w="${W_NS}" xmlns:r="${NS.r}" xmlns:wp="${WP_NS}" xmlns:a="${NS.a}" xmlns:pic="${PIC_NS}" xmlns:wps="${WPS_NS}" xmlns:mc="${MC_NS}" xmlns:m="${M_NS}"><w:body>${body}${sect}</w:body></w:document>`, DOCX_CT.document);
     pkg.relate(main, DOCX_REL.styles, 'styles.xml');
     pkg.add('word/styles.xml', this.styles(), DOCX_CT.styles);
     pkg.relate(main, DOCX_REL.numbering, 'numbering.xml');
@@ -262,8 +263,17 @@ class DocxWriter {
       open = { id: this.bookmarkId++, seq: seqs[0] };
       out.push(`<w:bookmarkStart w:id="${open.id}" w:name="${this.bookmarks.get(seqs[0])}"/>`);
     }
+    // an equation on its own in its paragraph is a display equation (Word's equation paragraph)
+    const shownRuns = runs.filter((r) => r.obj !== undefined || r.text.trim());
+    const display = shownRuns.length === 1 && shownRuns[0].obj !== undefined && this.t.objects[shownRuns[0].obj]?.kind === 'math';
     for (const r of runs) {
       if (r.obj === undefined) { out.push(this.tracked(r.rev, this.textRuns(r, st))); continue; }
+      const o = this.t.objects[r.obj];
+      if (o?.kind === 'math') {
+        const m = `<m:oMath>${toOmml(o.tex)}</m:oMath>`;
+        out.push(display ? `<m:oMathPara>${m}</m:oMathPara>` : m);
+        continue;
+      }
       const mark = this.bookmarks.has(r.obj) && isCompound(r.obj) ? this.bookmarkId++ : null;
       if (mark !== null) out.push(`<w:bookmarkStart w:id="${mark}" w:name="${this.bookmarks.get(r.obj)}"/>`);
       out.push(this.tracked(r.rev, await this.objectRun(main, r, st)));
@@ -348,7 +358,7 @@ class DocxWriter {
     }
     // a citation: its numbers, which Word shows as they are (an ADDIN field is never worked out again by Word)
     if (o.kind === 'cite') return field(rPr, ` ${CITE_FIELD} ${o.refs.map(xml).join(' ')} `, shown);
-    if (o.kind === 'bib' || o.kind === 'toc') return '';
+    if (o.kind === 'bib' || o.kind === 'toc' || o.kind === 'math') return '';
     if (o.kind === 'textbox') return this.textBox(main, id, o, rPr);
     return this.picture(main, id, o, rPr);
   }
