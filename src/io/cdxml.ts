@@ -226,7 +226,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       let a2 = nodeIds.get(b.getAttribute('E') ?? '');
       if (a1 === undefined || a2 === undefined || a1 === a2) continue;
       const ord = b.getAttribute('Order') ?? '1';
-      let order = ord === '2' ? 2 : ord === '3' ? 3 : ord === '1.5' ? 1.5 : 1;
+      let order = ord === '2' ? 2 : ord === '3' ? 3 : ord === '4' ? 4 : ord === '1.5' ? 1.5 : 1;
       let display: BondDisplay = 'solid';
       const disp = b.getAttribute('Display');
       let swap = false;
@@ -241,6 +241,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         case 'Wavy': display = 'wavy'; break;
       }
       if (ord === 'hydrogen') display = 'dash';
+      if (ord === 'dative') display = 'dative';
       if (order === 2 && b.getAttribute('Display2') === 'Dash') order = 1.5;
       let dpos: Bond['dpos'] = 'auto';
       const dp = b.getAttribute('DoublePosition');

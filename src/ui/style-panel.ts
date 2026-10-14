@@ -54,7 +54,7 @@ type Fill = 'none' | 'solid' | 'faded' | 'shaded';
 const FILLS: Opt<Fill>[] = [['none', 'None'], ['solid', 'Solid colour'], ['faded', 'Faded (light tint)'], ['shaded', 'Shaded (light to dark)']];
 
 const BOND_ORDERS: Opt<string>[] = [['1', 'Single'], ['2', 'Double'], ['3', 'Triple'], ['1.5', 'Aromatic'], ['4', 'Quadruple']];
-const BOND_STYLES: Opt<Bond['display']>[] = [['solid', 'Plain'], ['wedge', 'Wedge'], ['hashWedge', 'Hashed wedge'], ['hash', 'Hashed'], ['bold', 'Bold'], ['dash', 'Dashed'], ['wavy', 'Wavy']];
+const BOND_STYLES: Opt<Bond['display']>[] = [['solid', 'Plain'], ['wedge', 'Wedge'], ['hashWedge', 'Hashed wedge'], ['hash', 'Hashed'], ['bold', 'Bold'], ['dash', 'Dashed'], ['wavy', 'Wavy'], ['dative', 'Dative (arrow to the acceptor)']];
 const DOUBLE_POS: Opt<Bond['dpos']>[] = [['auto', 'Automatic'], ['left', 'Left'], ['center', 'Centred'], ['right', 'Right']];
 
 const round = (x: number, k = 100) => Math.round(x * k) / k;

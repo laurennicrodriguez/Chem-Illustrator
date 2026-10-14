@@ -67,6 +67,8 @@ export const TOOLS: Record<string, Tool> = {
   'bond-single': { kind: 'bond', order: 1, display: 'solid' },
   'bond-double': { kind: 'bond', order: 2, display: 'solid' },
   'bond-triple': { kind: 'bond', order: 3, display: 'solid' },
+  'bond-quadruple': { kind: 'bond', order: 4, display: 'solid' },
+  'bond-dative': { kind: 'bond', order: 1, display: 'dative' },
   'bond-wedge': { kind: 'bond', order: 1, display: 'wedge' },
   'bond-hashWedge': { kind: 'bond', order: 1, display: 'hashWedge' },
   'bond-hash': { kind: 'bond', order: 1, display: 'hash' },
@@ -624,8 +626,11 @@ export class Editor {
 
   /** Zoom and scroll so the whole drawing (or the slide) fits the window. */
   fit(): void {
-    const b = this.fitArea ? this.fitArea() : this.doc.bounds();
-    if (!b) return;
+    const raw = this.fitArea ? this.fitArea() : this.doc.bounds();
+    if (!raw) return;
+    // room for atom labels, which reach past the atoms themselves (H3N, Re)
+    const m = this.fitArea ? 0 : this.doc.style.labelSize * 1.5;
+    const b = { x1: raw.x1 - m, y1: raw.y1 - m, x2: raw.x2 + m, y2: raw.y2 + m };
     const w = this.r.width, h = this.r.height;
     const bw = Math.max(20, b.x2 - b.x1), bh = Math.max(20, b.y2 - b.y1);
     const s = Math.min(8, 0.92 * Math.min(w / bw, h / bh));
@@ -749,6 +754,16 @@ export class Editor {
       }
     } else if (t.order === 3) {
       doc.updateBond(id, { order: 3, display: 'solid' });
+    } else if (t.order === 4) {
+      doc.updateBond(id, { order: b.order === 4 ? 1 : 4, display: 'solid' });
+    } else if (t.display === 'dative') {
+      // the arrow points away from the atom nearer the click; clicking a dative bond reverses it
+      if (b.display === 'dative') doc.updateBond(id, { a1: b.a2, a2: b.a1 });
+      else {
+        const a1 = doc.atoms.get(b.a1)!, a2 = doc.atoms.get(b.a2)!;
+        const flip = dist(p, a2) < dist(p, a1);
+        doc.updateBond(id, { order: 1, display: 'dative', ...(flip ? { a1: b.a2, a2: b.a1 } : {}) });
+      }
     } else if (t.display === 'wedge' || t.display === 'hashWedge') {
       if (b.display === t.display) doc.updateBond(id, { a1: b.a2, a2: b.a1 });
       else {

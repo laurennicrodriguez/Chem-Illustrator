@@ -6,7 +6,8 @@ import { Vec, Rect } from './geom';
 import { DocStyle, ACS_1996 } from './style';
 import { arrowPoints } from './objects';
 
-export type BondDisplay = 'solid' | 'wedge' | 'hashWedge' | 'hash' | 'bold' | 'dash' | 'wavy';
+/** 'dative' is a coordinate bond, drawn as an arrow from the donor (a1) to the acceptor (a2). */
+export type BondDisplay = 'solid' | 'wedge' | 'hashWedge' | 'hash' | 'bold' | 'dash' | 'wavy' | 'dative';
 export type DoublePos = 'auto' | 'left' | 'right' | 'center';
 
 export interface Atom {
@@ -927,8 +928,10 @@ export class Doc {
   bondOrderSum(atomId: number): number {
     let s = 0;
     for (const bid of this.adj.get(atomId) ?? []) {
-      const o = this.bonds.get(bid)!.order;
-      s += o === 1.5 ? 1.5 : o;
+      const b = this.bonds.get(bid)!;
+      // a dative bond doesn't change either atom's hydrogens (H3N→BF3)
+      if (b.display === 'dative') continue;
+      s += b.order;
     }
     return s;
   }

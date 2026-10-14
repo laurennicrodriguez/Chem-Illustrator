@@ -740,7 +740,7 @@ class CdxmlWriter {
   private patchBond(e: Element, b: Bond): void {
     e.setAttribute('B', this.nodeId(b.a1));
     e.setAttribute('E', this.nodeId(b.a2));
-    this.set(e, 'Order', orderAttr(b.order));
+    this.set(e, 'Order', b.display === 'dative' ? 'dative' : orderAttr(b.order));
     this.set(e, 'Display', DISPLAY[b.display] ?? null);
     e.removeAttribute('Display2');
     const dp = b.order === 2 || b.order === 1.5 ? { left: 'Left', right: 'Right', center: 'Center', auto: null }[b.dpos] : null;

@@ -743,9 +743,26 @@ export class Renderer {
       return;
     }
 
-    if (b.order === 1 || b.order === 4) {
+    if (b.order === 4 && b.display !== 'dative') {
+      // four lines, evenly spaced about the bond
+      for (const k of [-1.5, -0.5, 0.5, 1.5]) line(thin, add(s, mul(nrm, gap * k)), add(e, mul(nrm, gap * k)));
+      return;
+    }
+
+    if (b.order === 1 || b.display === 'dative') {
       switch (b.display) {
         case 'solid': line(thin, s, e); break;
+        case 'dative': {
+          // a line with a filled head at the acceptor (a2)
+          const hl = Math.min(l * 0.45, st.lineWidth * 8), hw = st.lineWidth * 2.2;
+          const base = sub(e, mul(dir, hl));
+          line(thin, s, add(base, mul(dir, hl * 0.3)));
+          fills.moveTo(e.x, e.y);
+          fills.lineTo(base.x + nrm.x * hw, base.y + nrm.y * hw);
+          fills.lineTo(base.x - nrm.x * hw, base.y - nrm.y * hw);
+          fills.closePath();
+          break;
+        }
         case 'bold': line(bold, s, e); break;
         case 'dash': line(dashed, s, e); break;
         case 'wedge': {
