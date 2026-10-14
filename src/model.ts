@@ -350,6 +350,11 @@ export interface Shape {
   /** The pattern's colour (the outline colour when not given) and its spacing in points. */
   patternColor?: string;
   patternSize?: number;
+  /**
+   * A ring fill's pattern keeps clear of the bonds and the inner lines of double bonds (true), or
+   * runs right up to the ring's bonds and under its double bonds (absent, the default).
+   */
+  patternClear?: boolean;
   /** Fill colour, when it differs from the outline colour (the outline is then drawn too). */
   fillColor?: string;
   rounded?: boolean;

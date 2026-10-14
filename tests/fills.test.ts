@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { Doc } from '../src/model';
-import { dotCentres, gradientBands, hatchLines, insetPolygon, mix, patternAngles, radialBands } from '../src/render/fills';
+import { cutCorners, dotCentres, gradientBands, hatchLines, insetPolygon, mix, patternAngles, patternInk, patternSpacing, radialBands, RING_PATTERN_COLOUR } from '../src/render/fills';
 import { fillRings, refitRingFills, ringsIn } from '../src/chem/ring-fill';
 import { writeCdxml } from '../src/io/cdxml-write';
 import { readCdxml } from '../src/io/cdxml';
@@ -156,5 +156,23 @@ describe('fills in pictures', () => {
     expect(p.items.some((i) => i.kind === 'path' && i.stroke?.color.toLowerCase() === '#ffe680')).toBe(true);
     expect(pictureSvg(p)).toContain('<path');
     expect(pictureEmf(p).length).toBeGreaterThan(1000);
+  });
+});
+
+describe('ring fill patterns', () => {
+  it('cuts off only the marked corners', () => {
+    const sq = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }];
+    const out = cutCorners(sq, [true, false, false, false], 0.4);
+    expect(out).toHaveLength(5);
+    expect(out[0]).toEqual({ x: 0, y: 4 });
+    expect(out[1]).toEqual({ x: 4, y: 0 });
+    expect(out.slice(2)).toEqual(sq.slice(1));
+  });
+  it('gives rings a finer pattern in light grey unless chosen', () => {
+    expect(patternSpacing({ kind: 'ring', pattern: 'hatch' })).toBeLessThan(patternSpacing({ kind: 'rect', pattern: 'hatch' }));
+    expect(patternSpacing({ kind: 'ring', pattern: 'dots', patternSize: 5 })).toBe(5);
+    expect(patternInk({ kind: 'ring' })).toBe(RING_PATTERN_COLOUR);
+    expect(patternInk({ kind: 'ring', patternColor: '#ff0000' })).toBe('#ff0000');
+    expect(patternInk({ kind: 'rect', color: '#00ff00' })).toBe('#00ff00');
   });
 });

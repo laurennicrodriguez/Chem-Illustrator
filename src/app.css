@@ -162,7 +162,7 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
 .tb-body > * { flex-shrink: 0; }
 .toolbox + .toolbox { border-top: 1px solid var(--line); padding-top: 6px; }
 .dock-h .toolbox + .toolbox { border-top: 0; padding-top: 0; border-left: 1px solid var(--line); padding-left: 6px; }
-.toolbox.floating { position: fixed; z-index: 45; padding: 4px 6px 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgb(0 0 0 / 0.18); max-width: min(560px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; }
+.toolbox.floating { position: fixed; z-index: 25; padding: 4px 6px 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgb(0 0 0 / 0.18); max-width: min(560px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; }
 .toolbox.floating + .toolbox { border-top: 1px solid var(--line); }
 .toolbox.dragging { opacity: 0.85; cursor: grabbing; }
 .tb-head { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); cursor: grab; user-select: none; touch-action: none; }

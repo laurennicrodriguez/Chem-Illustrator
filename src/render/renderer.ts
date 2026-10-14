@@ -21,7 +21,7 @@ import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
 import { layoutText, FONT_STACK, type TextLayout } from '../text/layout';
 import { drawLayout } from '../text/draw';
 import { geoDef, moveSteps, textArea, traceSteps } from '../design/geo';
-import { insetPolygon, dotCentres, gradientBands, hatchLines, isDotPattern, patternAngles, patternSpacing, radialBands, shapePolygons } from './fills';
+import { cutCorners, patternInk, insetPolygon, dotCentres, gradientBands, hatchLines, isDotPattern, patternAngles, patternSpacing, radialBands, shapePolygons } from './fills';
 import { placeholderRect, isEmptyText } from '../deck/deck';
 import { imageFor } from './images';
 import { layoutTable, drawTable, type TableLayout, type TablePart } from '../table';
@@ -914,8 +914,15 @@ export class Renderer {
         for (const p of pts.slice(1)) ctx.lineTo(p.x, p.y);
         ctx.closePath();
         this.paintFill(ctx, { ...s, pattern: undefined }, x, y, w, h, [pts]);
-        // the lines or dots keep clear of the bonds, the inner lines of double bonds and the atom labels
-        if (s.pattern) this.paintFill(ctx, { ...s, filled: false }, x, y, w, h, [insetPolygon(pts, this.ringDoc?.style.bondLength ? this.ringDoc.style.bondLength * 0.26 : 3.8)]);
+        // the lines or dots run under the double bonds' inner lines (the bonds are drawn over
+        // them), or keep clear of the bonds, the inner lines and the atom labels when asked
+        const L = this.ringDoc?.style.bondLength ?? 14.4;
+        if (s.pattern) {
+          const doc = this.ringDoc;
+          const labelled = pts.map((_, i) => { const a = doc?.atoms.get(s.ring?.[i] ?? -1); return !!a && !!doc && this.hasLabel(doc, a); });
+          const area = s.patternClear ? insetPolygon(pts, L * 0.26) : cutCorners(insetPolygon(pts, L * 0.03), labelled, 0.4);
+          this.paintFill(ctx, { ...s, filled: false }, x, y, w, h, [area]);
+        }
         break;
       }
       case 'symbol': {
@@ -1250,7 +1257,7 @@ export class Renderer {
     }
     if (s.pattern) {
       const gap = patternSpacing(s);
-      const pc = s.patternColor ?? s.color ?? '#000000';
+      const pc = patternInk(s);
       const p = this.makePath();
       if (isDotPattern(s.pattern)) {
         const r = Math.max(0.25, gap * (s.pattern === 'dense-dots' ? 0.24 : 0.18));

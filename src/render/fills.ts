@@ -27,9 +27,33 @@ export function patternAngles(p: Pattern): number[] {
 }
 
 /** Line spacing (or dot spacing) in points, when the shape doesn't give its own. */
-export function patternSpacing(s: Pick<Shape, 'pattern' | 'patternSize'>): number {
+export function patternSpacing(s: Pick<Shape, 'pattern' | 'patternSize'> & { kind?: Shape['kind'] }): number {
   if (s.patternSize && s.patternSize > 0) return s.patternSize;
+  // a ring is small: its pattern is finer, so it reads as a tone rather than as lines
+  if (s.kind === 'ring') return s.pattern === 'dense-dots' ? 1.1 : s.pattern === 'dots' ? 1.6 : 1.8;
   return s.pattern === 'dense-dots' ? 1.6 : s.pattern === 'dots' ? 2.6 : 3;
+}
+
+/**
+ * The polygon with the marked corners cut off, `t` of the way along each side, so a pattern keeps
+ * clear of the atom labels on those corners.
+ */
+export function cutCorners(pts: Vec[], cut: boolean[], t: number): Vec[] {
+  const out: Vec[] = [];
+  pts.forEach((p, i) => {
+    if (!cut[i]) { out.push(p); return; }
+    const a = pts[(i + pts.length - 1) % pts.length], b = pts[(i + 1) % pts.length];
+    out.push({ x: p.x + (a.x - p.x) * t, y: p.y + (a.y - p.y) * t }, { x: p.x + (b.x - p.x) * t, y: p.y + (b.y - p.y) * t });
+  });
+  return out;
+}
+
+/** A ring fill's pattern is a light grey unless chosen: it shades the ring without competing with the bonds. */
+export const RING_PATTERN_COLOUR = '#a0a0a0';
+
+/** The colour of a shape's pattern: its own, else the outline's (a ring's light grey), else black. */
+export function patternInk(s: Pick<Shape, 'patternColor' | 'color' | 'kind'>): string {
+  return s.patternColor ?? (s.kind === 'ring' ? RING_PATTERN_COLOUR : s.color ?? '#000000');
 }
 
 /** A shape's outline as closed polygons, for patterns and gradients (rings use their atoms' places). */

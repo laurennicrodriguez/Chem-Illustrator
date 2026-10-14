@@ -833,6 +833,7 @@ export function fillExtras(v: Partial<Shape>): Partial<Shape> {
   if (typeof v.pattern === 'string' && patterns.includes(v.pattern)) out.pattern = v.pattern;
   if (hex(v.patternColor)) out.patternColor = hex(v.patternColor);
   if (typeof v.patternSize === 'number' && v.patternSize > 0 && v.patternSize < 100) out.patternSize = v.patternSize;
+  if (v.patternClear === true) out.patternClear = true;
   return out;
 }
 

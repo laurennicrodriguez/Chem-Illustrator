@@ -1425,6 +1425,11 @@ export class Editor {
     const bonds = new Set(this.sel.bonds);
     // atoms selected without their bonds (one by one) count as their bonds between them
     for (const b of doc.bonds.values()) if (this.sel.atoms.has(b.a1) && this.sel.atoms.has(b.a2)) bonds.add(b.id);
+    // a selected frame stands for the structures inside it
+    for (const id of this.sel.shapes) {
+      const f = doc.shapes.get(id)?.frame;
+      if (f) for (const b of frameMembers(doc, f).bonds) bonds.add(b);
+    }
     if (!bonds.size) return 'Select the rings to fill (or the whole structure) first.';
     let ids: number[] = [];
     doc.edit('Fill rings', () => { ids = fillRings(doc, bonds); });

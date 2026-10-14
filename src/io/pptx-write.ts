@@ -25,6 +25,7 @@ import { extractDrawing } from './clipboard';
 import type { Selection } from '../editor/editor';
 import { Package, NS, REL, emu, xml, hex6 } from './ooxml';
 import { fromDataUrl } from '../render/images';
+import { patternInk } from '../render/fills';
 import { FADE, tint } from '../colours';
 import {
   Master, SlideSize, LayoutId, LAYOUTS, layoutFrames, decorFrames, showsNumber, textStyles, isEmptyText,
@@ -749,7 +750,7 @@ const PPT_PATTERN: Record<Pattern, string> = {
  */
 function patternOrGradient(s: Shape, fc: string, alpha: string): string | null {
   if (s.pattern) {
-    const fg = hex6(s.patternColor ?? s.color ?? '#000000');
+    const fg = hex6(patternInk(s));
     const bg = s.filled ? `<a:srgbClr val="${s.fill === 'faded' ? hex6(tint('#' + fc, FADE)) : fc}">${alpha}</a:srgbClr>` : '<a:srgbClr val="FFFFFF"><a:alpha val="0"/></a:srgbClr>';
     return `<a:pattFill prst="${PPT_PATTERN[s.pattern]}"><a:fgClr><a:srgbClr val="${fg}"/></a:fgClr><a:bgClr>${bg}</a:bgClr></a:pattFill>`;
   }

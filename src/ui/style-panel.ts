@@ -13,6 +13,8 @@ import { DEG } from '../geom';
 import { isCircle, cropTo } from '../objects';
 import { GEOS, geoDef } from '../design/geo';
 import { nextNumber } from '../chem/sprouts';
+import { ringFillsOn } from '../chem/ring-fill';
+import { frameMembers } from '../editor/frames';
 import { methylState, writeTerminalMethyls, type MethylStyle } from '../chem/hydrogens';
 import type { TableData } from '../model';
 import { deleteColumn, deleteRow, fitColumns, insertColumn, insertRow, setColumnAlign, setColumnWidth, setSpan, spanOf, type TablePart } from '../table';
@@ -102,7 +104,13 @@ export class StylePanel {
     this.body.textContent = '';
     const arrows = [...s.arrows].map((id) => this.doc.arrows.get(id)).filter((x): x is Arrow => !!x);
     const all = [...s.shapes].map((id) => this.doc.shapes.get(id)).filter((x): x is Shape => !!x && !x.picture);
-    const shapes = all.filter((x) => x.kind !== 'picture' && x.kind !== 'table'), pictures = all.filter((x) => x.kind === 'picture');
+    const shapes = all.filter((x) => x.kind !== 'picture' && x.kind !== 'table' && x.kind !== 'ring'), pictures = all.filter((x) => x.kind === 'picture');
+    // ring fills get their own section, with those on the selected structures and on the
+    // structures inside selected frames, so they can be changed without picking them out
+    const under = new Set(s.atoms);
+    for (const x of all) if (x.frame) for (const id of frameMembers(this.doc, x.frame).atoms) under.add(id);
+    const ringIds = new Set([...all.filter((x) => x.kind === 'ring').map((x) => x.id), ...ringFillsOn(this.doc, under)]);
+    const rings = [...ringIds].map((id) => this.doc.shapes.get(id)).filter((x): x is Shape => !!x);
     const tables = all.filter((x) => x.kind === 'table' && x.table);
     const caps = [...s.captions].map((id) => this.doc.captions.get(id)).filter((x): x is Caption => !!x);
     // stereocentres and E/Z double bonds among the selected atoms and bonds
@@ -112,7 +120,7 @@ export class StylePanel {
     // one atom or one bond on its own (as after / or ? over it)
     const atom = s.atoms.size === 1 && !s.bonds.size ? this.doc.atoms.get([...s.atoms][0]) : undefined;
     const bond = s.bonds.size === 1 && s.atoms.size <= 2 ? this.doc.bonds.get([...s.bonds][0]) : undefined;
-    this.section.hidden = !arrows.length && !shapes.length && !pictures.length && !tables.length && !caps.length && !centres.length && !dbls.length && !atom && !bond;
+    this.section.hidden = !arrows.length && !shapes.length && !rings.length && !pictures.length && !tables.length && !caps.length && !centres.length && !dbls.length && !atom && !bond;
     const selAtoms = [...s.atoms].map((id) => this.doc.atoms.get(id)).filter((a): a is Atom => !!a);
     const selBonds = [...s.bonds].map((id) => this.doc.bonds.get(id)).filter((b): b is Bond => !!b);
     const several = !atom && !bond && selAtoms.length + selBonds.length > 1;
@@ -122,6 +130,7 @@ export class StylePanel {
     if (several) this.structureControls(selAtoms, selBonds);
     if (arrows.length) this.arrowControls(arrows);
     if (shapes.length) this.shapeControls(shapes);
+    if (rings.length) this.shapeControls(rings, rings.length > 1 ? `${rings.length} ring fills` : 'Ring fill');
     if (pictures.length) this.pictureControls(pictures);
     if (tables.length) this.tableControls(tables[0]);
     if (caps.length) this.captionControls(caps);
@@ -234,14 +243,14 @@ export class StylePanel {
 
   // ------------------------------------------------------------------ shapes
 
-  private shapeControls(shapes: Shape[]): void {
+  private shapeControls(shapes: Shape[], title?: string): void {
     const s = shapes[0];
     const lw = this.doc.style.lineWidth;
     const set = (label: string, ok: (x: Shape) => boolean, patch: (x: Shape) => Partial<Shape>) =>
       this.edit(label, () => { for (const x of shapes) if (ok(x)) this.doc.updateShape(x.id, patch(x)); });
     const any = (f: (x: Shape) => boolean) => shapes.find(f);
     const names: Record<Shape['kind'], string> = { line: 'Line', rect: 'Box', oval: 'Oval', symbol: 'Symbol', bracket: 'Bracket', picture: 'Picture', table: 'Table', geo: 'Shape', ring: 'Ring fill' };
-    this.heading(shapes.length > 1 ? `${shapes.length} shapes` : isCircle(s) ? 'Circle' : s.kind === 'geo' ? geoDef(s.geo).name : names[s.kind]);
+    this.heading(title ?? (shapes.length > 1 ? `${shapes.length} shapes` : isCircle(s) ? 'Circle' : s.kind === 'geo' ? geoDef(s.geo).name : names[s.kind]));
     const geo = any((x) => x.kind === 'geo');
     const isGeo = (x: Shape) => x.kind === 'geo';
     if (geo) {
@@ -272,8 +281,11 @@ export class StylePanel {
       // hatching and stippling, over the fill or on their own
       this.select('Pattern', PATTERN_OPTS, f.pattern ?? 'none', (v) => set('Pattern', fillable, () => ({ pattern: v === 'none' ? undefined : (v as Pattern) })));
       if (f.pattern) {
-        this.color('Pattern colour', f.patternColor, (v) => set('Pattern colour', fillable, () => ({ patternColor: v })), 'Same as the line');
+        this.color('Pattern colour', f.patternColor, (v) => set('Pattern colour', fillable, () => ({ patternColor: v })), f.kind === 'ring' ? 'Light grey' : 'Same as the line');
         this.number('Pattern spacing (pt)', round(patternSpacing(f)), 0.25, 0.5, 40, (v) => set('Pattern spacing', fillable, () => ({ patternSize: v })), 'How far apart the lines or dots are');
+        const ring = any((x) => x.kind === 'ring' && !!x.pattern);
+        if (ring) this.check('Pattern under double bonds', !ring.patternClear, (v) => set('Pattern under double bonds', (x) => x.kind === 'ring', () => ({ patternClear: v ? undefined : true })),
+          'Run the lines or dots up to the bonds and under the double bonds; untick to keep them clear of the bonds and labels');
       }
     }
     if (geo) {
@@ -628,7 +640,7 @@ export class StylePanel {
     this.row(label, sel);
   }
 
-  private check(label: string, value: boolean, on: (v: boolean) => void): void {
+  private check(label: string, value: boolean, on: (v: boolean) => void, help?: string): void {
     const box = document.createElement('input');
     box.type = 'checkbox';
     box.checked = value;
@@ -638,6 +650,7 @@ export class StylePanel {
     const span = document.createElement('span');
     span.textContent = label;
     l.append(box, span);
+    if (help) l.title = help;
     this.body.appendChild(l);
   }
 
