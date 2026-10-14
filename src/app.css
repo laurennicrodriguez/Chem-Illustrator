@@ -184,10 +184,17 @@ body.toolboxes-locked .toolbox:not(.floating) + .toolbox { padding-top: 6px; }
 .tb-body.tb-grid { display: grid; grid-template-columns: repeat(var(--cols, 6), auto); }
 .toolbox.vertical .tb-body.tb-grid { display: grid; grid-template-columns: repeat(2, auto); max-width: none; }
 .tb-cmd { padding: 3px 7px; font-size: 12px; white-space: nowrap; text-align: left; }
+.tb-cmd.tb-icon { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; flex: 0 0 auto; }
+.tb-cmd.tb-icon svg { display: block; }
 .tb-cmd[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); }
 .toolbox.vertical .tb-cmd { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
-.tb-sep { flex-basis: 100%; height: 0; }
-.toolbox.vertical .tb-sep { flex-basis: auto; border-top: 1px solid var(--line); margin: 2px 0; }
+/* a thin line between groups of buttons, across the box when it stands upright */
+.tb-sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 2px; }
+.toolbox.vertical .tb-sep { width: auto; height: 1px; flex-basis: 100%; margin: 2px 0; }
+/* upright boxes of command icons: two to a row (wider when some show their names) */
+.toolbox.vertical .tb-body:has(> .tb-cmd) { flex-direction: row; flex-wrap: wrap; width: 66px; align-items: flex-start; }
+.toolbox.vertical .tb-body:has(> .tb-cmd:not(.tb-icon)) { width: 150px; }
+.toolbox.vertical .tb-cmd:not(.tb-icon) { flex-basis: 100%; }
 /* the drawing tools laid out across, in a toolbox along the top or bottom */
 .toolbox[data-dock='top'] #tools, .toolbox[data-dock='bottom'] #tools { flex-direction: row; flex-wrap: wrap; }
 .toolbox[data-dock='top'] .tool-group, .toolbox[data-dock='bottom'] .tool-group { grid-template-columns: none; grid-template-rows: repeat(2, 32px); grid-auto-flow: column; }
@@ -479,6 +486,8 @@ button.link { border: 0; background: none; padding: 0 2px; color: var(--accent);
 dialog.ask { min-width: min(92vw, 340px); }
 .ask-row { display: grid; grid-template-columns: 9em 1fr auto; align-items: center; gap: 8px; margin: 8px 0; }
 .ask-row input, .ask-row select, .ask-row textarea { min-width: 0; font: inherit; padding: 3px 6px; }
+.ask-row.ask-check { grid-template-columns: auto 1fr; max-width: 30em; }
+.ask-row.ask-check input { padding: 0; }
 .ask-row.ask-wide { grid-template-columns: 1fr; align-items: start; }
 .ask-row textarea { width: 32em; max-width: 70vw; resize: vertical; font-family: ui-monospace, Consolas, monospace; }
 .ask-buttons { display: flex; justify-content: flex-end; gap: 8px; margin: 14px 0 0; }

@@ -4,6 +4,7 @@
 // the drawing to dock there. Where each one is, and what is in your own, is kept with the settings.
 
 import { showContextMenu, topMenuEntry, type MenuItem } from './context-menu';
+import { commandIcon } from './command-icons';
 
 export type Dock = 'left' | 'right' | 'top' | 'bottom' | 'float';
 export const DOCKS: Dock[] = ['left', 'right', 'top', 'bottom', 'float'];
@@ -24,7 +25,7 @@ export type ToolboxId = (typeof TOOLBOX_IDS)[number];
 
 export function defaultToolboxes(): ToolboxState {
   const places: Record<string, BoxPlace> = {};
-  TOOLBOX_IDS.forEach((id, i) => { places[id] = { shown: id === 'main', dock: id === 'main' ? 'left' : 'float', x: 120 + i * 30, y: 160 + i * 30 }; });
+  TOOLBOX_IDS.forEach((id, i) => { places[id] = { shown: id === 'main', dock: id === 'main' ? 'left' : 'float', x: 110 + i * 24, y: 90 + i * 64 }; });
   return { locked: true, places, custom: ['cmd:clean-up', 'cmd:add-frame', 'cmd:fill-rings', 'cmd:highlight', 'cmd:chain-ends'] };
 }
 
@@ -263,8 +264,11 @@ export function commandButton(cmd: string, run: (cmd: string) => void, label?: s
   b.className = 'tb-cmd';
   b.dataset.cmd = cmd;
   const top = topMenuEntry(cmd);
-  b.textContent = label ?? top?.label ?? cmd;
-  b.title = top?.label ?? cmd;
+  const name = label ?? top?.label ?? cmd;
+  const icon = commandIcon(cmd);
+  // an icon when the command has one (its name shows on hover), else the name
+  if (icon) { b.innerHTML = icon; b.classList.add('tb-icon'); b.setAttribute('aria-label', name); } else b.textContent = name;
+  b.title = top?.label ?? name;
   if (top?.checked != null) b.setAttribute('aria-pressed', String(top.checked));
   b.addEventListener('click', () => {
     run(cmd);

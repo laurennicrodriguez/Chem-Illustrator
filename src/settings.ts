@@ -51,8 +51,10 @@ export interface Settings {
   citeStyle: string;
   /** That style's details changed. */
   citeOptions: Partial<CiteFormat>;
-  /** Show Terminal Methyls writes them as CH3 or as Me (Structure > Terminal Methyls as …). */
+  /** Show Terminal Methyls writes them as CH3 or as Me (Edit > Preferences). */
   methylStyle: 'CH3' | 'Me';
+  /** Ask before a command with nothing selected changes every structure on the page (Edit > Preferences). */
+  askWholeDrawing: boolean;
   /** Your own colour rows, in every colour menu and every mode (Edit > Colour Palettes). */
   palettes: Palette[];
   /** Which toolboxes show and where (View > Toolboxes), and what is in your own. */
@@ -63,7 +65,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false, showRoles: true,
   chemTyping: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
   modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true,
-  citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'CH3', palettes: [], toolboxes: defaultToolboxes(),
+  citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(),
 };
 
 const STORAGE_KEY = 'chem-illustrator.settings';
@@ -77,7 +79,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (!raw || typeof raw !== 'object') return s;
   const r = raw as Record<string, unknown>;
   if (r.hotkeys && typeof r.hotkeys === 'object' && !Array.isArray(r.hotkeys)) s.hotkeys = r.hotkeys as KeyOverrides;
-  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'spellCheck', 'scrollBars'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
+  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'spellCheck', 'scrollBars', 'askWholeDrawing'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
   if (Array.isArray(r.replacements)) {
     s.replacements = r.replacements.filter((x): x is [string, string] => Array.isArray(x) && typeof x[0] === 'string' && typeof x[1] === 'string' && x[0] !== '').map(([a, b]) => [a, b]);
   }

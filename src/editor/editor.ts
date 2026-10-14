@@ -209,7 +209,7 @@ export class Editor {
     /** New bonds point in 15° steps, unless Alt is held (Ctrl+E). */
     fixedAngles: true,
     /** Show Terminal Methyls writes them as CH3 or as Me (Structure > Terminal Methyls as …). */
-    methylStyle: 'CH3' as MethylStyle,
+    methylStyle: 'Me' as MethylStyle,
   };
   /** Run a menu command by name; false when it doesn't apply, so the key does nothing. */
   runCommand: (name: string) => boolean = () => false;

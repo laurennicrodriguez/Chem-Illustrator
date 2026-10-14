@@ -7,7 +7,8 @@ export interface Field {
   value: string;
   /** Text after the box, such as a unit. */
   unit?: string;
-  type?: 'number' | 'text' | 'textarea';
+  /** A checkbox gives 'true' or 'false'. */
+  type?: 'number' | 'text' | 'textarea' | 'checkbox';
   /** Grey example text shown in an empty box. */
   placeholder?: string;
   /** Pick one of these instead of typing. */
@@ -44,6 +45,12 @@ export function ask(title: string, fields: Field[], opts: { ok?: string; note?: 
         if (f.placeholder) ta.placeholder = f.placeholder;
         input = ta;
         row.classList.add('ask-wide');
+      } else if (f.type === 'checkbox') {
+        const inp = document.createElement('input');
+        inp.type = 'checkbox';
+        inp.checked = f.value === 'true';
+        input = inp;
+        row.classList.add('ask-check');
       } else if (f.options) {
         const sel = document.createElement('select');
         for (const o of f.options) sel.add(new Option(o.label, o.value, false, o.value === f.value));
@@ -57,7 +64,7 @@ export function ask(title: string, fields: Field[], opts: { ok?: string; note?: 
         input = inp;
       }
       inputs.set(f.name, input);
-      row.append(name, input);
+      if (f.type === 'checkbox') row.append(input, name); else row.append(name, input);
       if (f.unit) {
         const u = document.createElement('span');
         u.className = 'muted';
@@ -90,14 +97,14 @@ export function ask(title: string, fields: Field[], opts: { ok?: string; note?: 
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       const out: Record<string, string> = {};
-      for (const [k, el] of inputs) out[k] = el.value;
+      for (const [k, el] of inputs) out[k] = el instanceof HTMLInputElement && el.type === 'checkbox' ? String(el.checked) : el.value;
       done(out);
     });
     cancel.addEventListener('click', () => done(null));
     d.addEventListener('close', () => done(null));
     document.body.append(d);
     d.showModal();
-    const first = form.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea');
+    const first = form.querySelector<HTMLInputElement | HTMLTextAreaElement>('input:not([type=checkbox]), textarea');
     first?.focus();
     first?.select();
   });

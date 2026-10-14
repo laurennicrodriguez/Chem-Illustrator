@@ -2052,7 +2052,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['edit-palettes', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-custom', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-custom', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'show-stereo', 'clipboard-formats', 'split-view']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
@@ -2179,6 +2179,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'typing-spelling': () => typingDialog.open(),
   'mode-colours': () => modeDialog.open(),
   'edit-palettes': () => editPalettes(),
+  preferences: () => void openPreferences(),
   'toolbox-main': () => toolboxes.toggle('main'),
   'toolbox-structure': () => toolboxes.toggle('structure'),
   'toolbox-arrange': () => toolboxes.toggle('arrange'),
@@ -2202,7 +2203,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'define-nickname': () => void defineNickname(),
   'delete-nickname': () => void deleteNickname(),
   'contract-label': () => void contractLabel(),
-  'chain-ends': () => flash(editor.toggleChainEnds(), 5000),
+  'chain-ends': () => void toggleTerminalMethyls(),
   'methyls-ch3': () => chooseMethylStyle('CH3'),
   'methyls-me': () => chooseMethylStyle('Me'),
   'explicit-h': () => flash(editor.toggleHydrogens(), 6000),
@@ -2579,6 +2580,37 @@ function chooseMethylStyle(style: MethylStyle): void {
   flash(n ? `${n} terminal methyl${n > 1 ? 's' : ''} now written ${how}.` : `Show Terminal Methyls will write them as ${how}.`, 5000);
 }
 
+/** Ask before a command with nothing selected changes every structure on the page (Edit > Preferences). */
+let askWholeDrawing = true;
+
+/**
+ * Show Terminal Methyls: on the selection, or with nothing selected on every structure, after
+ * asking when there are several (some may be meant one way and some the other).
+ */
+async function toggleTerminalMethyls(): Promise<void> {
+  const doc = editor.doc;
+  if (!editor.sel.atoms.size && askWholeDrawing && doc.fragments().length > 1) {
+    const r = await ask('Every structure on the page?', [
+      { name: 'again', label: 'Don\u2019t ask again (Edit > Preferences)', type: 'checkbox', value: 'false' },
+    ], { ok: 'Change every structure', note: 'Nothing is selected, so this shows or hides the terminal methyls on every structure on the page. To change only some, cancel and select them first.' });
+    if (!r) return;
+    if (r.again === 'true') { askWholeDrawing = false; storeSettings(); }
+  }
+  flash(editor.toggleChainEnds(), 5000);
+}
+
+/** Edit > Preferences: drawing choices that are set once rather than per structure. */
+async function openPreferences(): Promise<void> {
+  const r = await ask('Preferences', [
+    { name: 'methyl', label: 'Terminal methyls written as', value: editor.options.methylStyle, options: [{ value: 'Me', label: 'Me' }, { value: 'CH3', label: 'CH3' }] },
+    { name: 'ask', label: 'Ask before changing every structure on the page when nothing is selected', type: 'checkbox', value: String(askWholeDrawing) },
+  ], { ok: 'Save', note: 'Show Terminal Methyls writes them this way; methyls already written out in the selection (or the whole drawing, with nothing selected) change too.' });
+  if (!r) return;
+  askWholeDrawing = r.ask === 'true';
+  if (r.methyl !== editor.options.methylStyle) chooseMethylStyle(r.methyl as MethylStyle);
+  else storeSettings();
+}
+
 let settingsLoaded = false;
 // your palettes show in every colour box, in every mode
 usePaletteMenus();
@@ -2606,6 +2638,7 @@ function storeSettings(): void {
     citeStyle: preferredStyle().style,
     citeOptions: preferredStyle().options,
     methylStyle: editor.options.methylStyle,
+    askWholeDrawing,
     palettes: getPalettes(),
     toolboxes: toolboxState,
   };
@@ -2716,6 +2749,7 @@ void loadSettings().then((s) => {
   applySplitWidth();
   setPreferredStyle(s.citeStyle, s.citeOptions);
   editor.options.methylStyle = s.methylStyle;
+  askWholeDrawing = s.askWholeDrawing;
   setPalettes(s.palettes);
   toolboxState = s.toolboxes;
   toolboxes.render();
@@ -3325,7 +3359,7 @@ function drawingMenu(): MenuItem[] {
     ...(atoms ? [
       { cmd: 'clean-up' },
       { label: 'Structure', items: [
-        { cmd: 'stereo-labels' }, { cmd: 'aromatic-circles' }, { cmd: 'chain-ends' }, { cmd: 'methyls-ch3' }, { cmd: 'methyls-me' }, { cmd: 'explicit-h' }, null,
+        { cmd: 'stereo-labels' }, { cmd: 'aromatic-circles' }, { cmd: 'chain-ends' }, { cmd: 'explicit-h' }, null,
         { cmd: 'contract-label' }, { cmd: 'join' }, { cmd: 'bring-front' }, { cmd: 'send-back' }, null,
         { cmd: 'enhanced-stereo' }, { cmd: 'chiral-flag' }, { cmd: 'repeat-group' }, { cmd: 'rgroup-table' }, null,
         { cmd: 'check-structure' }, { cmd: 'save-template' }, { cmd: 'define-nickname' },
@@ -3405,10 +3439,10 @@ const TOOLBOX_DEFS: ToolboxDef[] = [
   { id: 'main', title: 'Drawing Tools', build: (body) => body.append(toolsNav) },
   {
     id: 'structure', title: 'Structure',
-    build: (body) => cmdRow(body, ['clean-up', 'add-frame', 'fill-rings', 'highlight', 'remove-highlight', null, 'chain-ends', ['methyls-ch3', 'Methyls as CH3'], ['methyls-me', 'Methyls as Me'], 'explicit-h', 'aromatic-circles', 'stereo-labels', null, 'contract-label', 'check-structure', 'name-to-structure', 'periodic-table']),
+    build: (body) => cmdRow(body, ['clean-up', 'add-frame', 'fill-rings', 'highlight', 'remove-highlight', null, 'chain-ends', 'explicit-h', 'aromatic-circles', 'stereo-labels', null, 'contract-label', 'name-to-structure']),
   },
   {
-    id: 'arrange', title: 'Arrange',
+    id: 'arrange', title: 'Object',
     build: (body) => cmdRow(body, ['align-left', 'align-hcenter', 'align-right', 'align-top', 'align-vcenter', 'align-bottom', null, 'distribute-h', 'distribute-v', null, 'flip-h', 'flip-v', 'rotate-cw', 'rotate-ccw', null, 'shape-front', 'shape-back']),
   },
   {
