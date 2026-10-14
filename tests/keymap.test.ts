@@ -227,3 +227,14 @@ describe('the settings file', () => {
     expect(parseSettings(text)).toEqual(s);
   });
 });
+
+describe('drop-down lists for typed boxes', () => {
+  it('lists every choice until typing starts, then what matches first', async () => {
+    const { comboChoices } = await import('../src/ui/combo');
+    const sizes = ['8', '10', '11', '12', '110'];
+    expect(comboChoices(sizes, '11', false)).toEqual(sizes);
+    expect(comboChoices(sizes, '11', true)).toEqual(['11', '110']);
+    expect(comboChoices(['Arial', 'Times New Roman', 'Georgia'], 'new', true)).toEqual(['Times New Roman']);
+    expect(comboChoices(sizes, 'zz', true)).toEqual(sizes);
+  });
+});

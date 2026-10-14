@@ -80,7 +80,8 @@ header {
   border-bottom: 1px solid var(--line);
   flex-wrap: wrap;
 }
-header h1 { font-size: 14px; margin: 0 10px 0 2px; font-weight: 650; letter-spacing: 0.01em; }
+/* the app's name sits at the right, so the menus start at the top left as in other programs */
+header h1.app-name { font-size: 12px; margin: 0 4px 0 auto; font-weight: 600; letter-spacing: 0.01em; color: var(--muted); white-space: nowrap; }
 header .sep { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
 /* View > Mode Colours > The whole window: the menu bar in the mode's colour with white text */
 body.mode-window header { background: var(--bar); border-bottom-color: var(--bar); color: #fff; }
@@ -623,6 +624,7 @@ dialog.typing-dialog p { margin: 2px 0 6px; }
 .tab-slides .tab-icon { background: var(--tab-slides); }
 .tab-sheet .tab-icon { background: var(--tab-sheet); }
 .tab-document .tab-icon { background: var(--tab-document); }
+.tab-design .tab-icon { background: var(--tab-design); }
 .tab-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab.dirty .tab-name::before { content: '• '; color: var(--accent); }
 .tab-close { flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 15px; line-height: 1; }
@@ -660,6 +662,8 @@ dialog.typing-dialog p { margin: 2px 0 6px; }
 .ribbon button[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .ribbon select { padding: 2px 4px; font-size: 12px; }
 .ribbon button.rb-sq { min-width: 26px; padding: 3px 5px; }
+.ribbon button.rb-iconbtn { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; height: 24px; padding: 3px 5px; }
+.ribbon button.rb-iconbtn svg { display: block; }
 .rb-colour { display: inline-flex; flex-direction: column; align-items: center; gap: 1px; line-height: 1; }
 .rb-colour .sw { display: block; width: 16px; height: 4px; border: 1px solid var(--line); border-radius: 1px; }
 #sh-numfmt { min-width: 150px; }
@@ -1170,3 +1174,21 @@ dialog.toolbox-dialog { width: min(94vw, 720px); }
 .tbd-order li { display: flex; align-items: center; gap: 4px; padding: 1px 0; }
 .tbd-order li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tbd-order li button { width: 24px; height: 22px; padding: 0; }
+
+/* drop-down lists for typed boxes (font, size): every choice, the current one marked */
+.combo-list {
+  position: fixed;
+  z-index: 60;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  padding: 3px 0;
+  font-size: 12px;
+}
+.combo-item { padding: 3px 10px; cursor: default; white-space: nowrap; }
+.combo-item:hover, .combo-item.active { background: var(--accent-soft); }
+.combo-item.current { font-weight: 600; }
