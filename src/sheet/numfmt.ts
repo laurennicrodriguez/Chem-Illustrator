@@ -4,6 +4,7 @@
 
 import { CellError, Value, isError } from './values';
 import { roundTo } from './evaluate';
+import { unitOfFormat } from './units';
 
 export interface Shown {
   text: string;
@@ -339,6 +340,8 @@ export function describeFormat(code: string | undefined): string {
   const first = code.split(';')[0];
   const d = decimalsOf(code) ?? 0;
   const dp = `${d} decimal place${d === 1 ? '' : 's'}`;
+  const unit = unitOfFormat(code);
+  if (unit) return `${unit.name} (${unit.unit}), ${dp}`;
   if (/E[+-]/i.test(first)) return `Scientific, ${dp}`;
   if (first.includes('%')) return `Percentage, ${dp}`;
   if (/[ymdhs]/i.test(first.replace(/"[^"]*"/g, '')) && !/[0#]/.test(first)) return 'Date or time';
