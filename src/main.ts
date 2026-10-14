@@ -30,6 +30,7 @@ import { drawSlidePage, recordSlide, SURROUND } from './deck/slide-view';
 import { writePdf, jpegInfo, PdfPage, PdfImage } from './io/pdf';
 import { SlideList } from './ui/slide-list';
 import { DesignLibrary, GEO_DRAG_TYPE, pickDesignSize, sizeLabel } from './ui/design-panel';
+import { LayersPanel } from './ui/layers-panel';
 import { Presenter } from './ui/present';
 import { editMaster } from './ui/master-dialog';
 import { recordPicture, pictureSvg, pictureCanvas, canvasPng } from './render/picture';
@@ -301,6 +302,7 @@ const TEMPLATE_HINT = 'Click empty space to place it (drag to turn it), a bond t
 
 // Design mode's shape library (made further down, once the page is ready)
 let designLib: DesignLibrary | null = null;
+let layers: LayersPanel | null = null;
 /** Design > Smart Guides: moved things snap into line with other shapes and the page. */
 let designGuides = true;
 const GEO_HINT = 'Click on the page to put the shape down, or drag to draw it at any size (Shift keeps its shape). Double-click a shape to type in it.';
@@ -927,6 +929,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   document.body.classList.toggle('slides-mode', slides);
   document.body.classList.toggle('design-mode', design);
   editor.glueArrows = design;
+  layers?.show(design ? doc : null);
   editor.smartGuides = design && designGuides;
   for (const el of document.querySelectorAll<HTMLElement>('.design-only')) el.hidden = !design;
   document.body.classList.toggle('sheet-mode', sheet);
@@ -1028,6 +1031,11 @@ function showSlideState(): void {
 
 // ---------------------------------------------------------------- Design mode
 
+layers = new LayersPanel($('#layers-section'), {
+  select: (ids) => editor.selectShapes(ids),
+  selected: () => editor.selectedShapes(),
+  edit: (label, f) => { finishTyping(); doc.edit(label, f); editor.changed(); },
+});
 const lib = (designLib = new DesignLibrary($('#design-lib'), (id) => { finishTyping(); editor.setTool(`geo:${id}`); }));
 const designGrid = { on: false, step: 18 };
 const dzBg = $<HTMLInputElement>('#dz-bg');
@@ -3064,6 +3072,7 @@ stylePanel.tables = {
 
 let stereoSeen = -1;
 editor.onFrame = () => {
+  layers?.refresh();
   updatePanels();
   updateWarnings();
   if (doc.version !== stereoSeen) { stereoSeen = doc.version; updateStereo(); }

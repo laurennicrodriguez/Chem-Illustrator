@@ -192,7 +192,7 @@ export const isCircle = (s: Shape): boolean => s.kind === 'oval' && Math.abs(Mat
  * Front and Send to Back), and where that is the same, filled shapes behind outlines.
  */
 export function shapeOrder(shapes: Shape[]): Shape[] {
-  return [...shapes].sort((a, b) => (a.z ?? 0) - (b.z ?? 0) || (b.filled ? 1 : 0) - (a.filled ? 1 : 0) || a.id - b.id);
+  return shapes.slice().sort((a, b) => (a.z ?? 0) - (b.z ?? 0) || (b.filled ? 1 : 0) - (a.filled ? 1 : 0) || a.id - b.id);
 }
 
 export function shapeBox(s: Shape): Rect {

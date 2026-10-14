@@ -613,6 +613,20 @@ dialog.typing-dialog p { margin: 2px 0 6px; }
 .dl-shape.active { border-color: var(--tab-design); background: color-mix(in srgb, var(--tab-design) 14%, transparent); }
 .dl-shape canvas { pointer-events: none; }
 #dz-size { white-space: nowrap; }
+
+/* the Layers panel (Design mode) */
+.layers-note { margin: 0 0 6px; }
+.layers-list { display: flex; flex-direction: column; gap: 1px; max-height: 260px; overflow-y: auto; }
+.layer { display: flex; align-items: center; gap: 4px; padding: 2px 4px; border-radius: 4px; cursor: default; position: relative; }
+.layer:hover { background: var(--hover, rgba(0, 0, 0, 0.05)); }
+.layer.picked { background: color-mix(in srgb, var(--tab-design) 16%, transparent); }
+.layer.is-hidden .layer-name { opacity: 0.45; }
+.layer.dragging { z-index: 2; background: var(--panel); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2); }
+.layer-grip { cursor: grab; color: var(--muted, #888); font-size: 11px; letter-spacing: -2px; padding: 0 3px; user-select: none; touch-action: none; }
+.layer-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layer-rename { flex: 1 1 auto; min-width: 0; font: inherit; padding: 1px 4px; }
+.layer-toggle { display: inline-flex; border: 0; background: none; padding: 1px 3px; line-height: 1; opacity: 0.55; color: var(--text); }
+.layer-toggle:hover, .layer-toggle.on { opacity: 1; }
 #dz-bg { width: 34px; height: 20px; padding: 0 1px; vertical-align: middle; }
 
 /* the page-size window */

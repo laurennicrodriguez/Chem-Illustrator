@@ -546,7 +546,7 @@ export class Renderer {
 
   private sortedShapes(doc: Doc): Shape[] {
     if (this.shapeVersion !== doc.version || !this.shapeList) {
-      this.shapeList = shapeOrder([...doc.shapes.values()]);
+      this.shapeList = shapeOrder([...doc.shapes.values()].filter((s) => !s.hidden));
       this.shapeVersion = doc.version;
     }
     return this.shapeList;

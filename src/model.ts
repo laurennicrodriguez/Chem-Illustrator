@@ -353,6 +353,12 @@ export interface Shape {
   crop?: { l: number; t: number; r: number; b: number };
   color?: string;
   z?: number;
+  /** Its name in the Layers panel (Design mode). */
+  name?: string;
+  /** Hidden (Layers panel): not drawn, printed or picked. */
+  hidden?: boolean;
+  /** Locked (Layers panel): drawn, but can't be picked or moved by clicking. */
+  locked?: boolean;
   /** A table: its cells, column widths and rules (see table.ts). */
   table?: TableData;
 }

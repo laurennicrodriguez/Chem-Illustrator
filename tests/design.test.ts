@@ -13,6 +13,7 @@ import { readPptx } from '../src/io/pptx-read';
 import { shapeHit, shapeOrder, elbowRoute } from '../src/objects';
 import { writeCdxml, chemDrawCurves } from '../src/io/cdxml-write';
 import { guideSnap } from '../src/editor/editor';
+import { layerName, reorderLayers } from '../src/ui/layers-panel';
 import { readCdxml } from '../src/io/cdxml';
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 40, 0, 0, 0, 30]);
@@ -257,4 +258,20 @@ describe('smart guides', () => {
   it('leave it where it is when nothing is close', () => {
     expect(guideSnap(box, { x: 30, y: 40 }, [other], 5)).toEqual({ offset: { x: 30, y: 40 }, lines: [] });
   });
+});
+
+describe('the Layers panel', () => {
+  it('names shapes by what they are and their text, unless renamed', () => {
+    expect(layerName({ id: 1, kind: 'geo', geo: 'fcDecision', x1: 0, y1: 0, x2: 1, y2: 1, text: { runs: [{ text: 'Pure  by\nTLC?' }] } })).toBe('Decision: Pure by TLC?');
+    expect(layerName({ id: 1, kind: 'oval', x1: 0, y1: 0, x2: 1, y2: 1 })).toBe('Oval');
+    expect(layerName({ id: 1, kind: 'rect', x1: 0, y1: 0, x2: 1, y2: 1, name: 'Background' })).toBe('Background');
+  });
+
+  it('moves the dragged shapes to where they are dropped', () => {
+    // front to back: 1 2 3 4; drag 4 to the top, 1 below 3
+    expect(reorderLayers([1, 2, 3, 4], [4], 0)).toEqual([4, 1, 2, 3]);
+    expect(reorderLayers([1, 2, 3, 4], [1], 3)).toEqual([2, 3, 1, 4]);
+    expect(reorderLayers([1, 2, 3, 4], [1, 2], 4)).toEqual([3, 4, 1, 2]);
+  });
+
 });

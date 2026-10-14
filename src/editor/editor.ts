@@ -350,9 +350,12 @@ export class Editor {
       if (arrowHit(r, p, at)) return { kind: 'arrow', id: r.id };
     }
     // the shape drawn last is on top
-    let shape: Shape | null = null;
-    for (const s of doc.shapes.values()) if (shapeHit(s, p, at) && (!shape || (s.z ?? 0) >= (shape.z ?? 0))) shape = s;
-    return shape ? { kind: 'shape', id: shape.id } : null;
+    const order = shapeOrder([...doc.shapes.values()]);
+    for (let i = order.length - 1; i >= 0; i--) {
+      const s = order[i];
+      if (!s.hidden && !s.locked && shapeHit(s, p, at)) return { kind: 'shape', id: s.id };
+    }
+    return null;
   }
 
   /**
@@ -1254,7 +1257,7 @@ export class Editor {
 
   selectAll(): void {
     const d = this.doc;
-    this.sel = { atoms: new Set(d.atoms.keys()), bonds: new Set(d.bonds.keys()), captions: new Set(d.captions.keys()), arrows: new Set(d.arrows.keys()), shapes: new Set(d.shapes.keys()) };
+    this.sel = { atoms: new Set(d.atoms.keys()), bonds: new Set(d.bonds.keys()), captions: new Set(d.captions.keys()), arrows: new Set(d.arrows.keys()), shapes: new Set([...d.shapes.values()].filter((s) => !s.hidden && !s.locked).map((s) => s.id)) };
     this.requestOverlay();
     this.onChange();
   }
@@ -1325,7 +1328,7 @@ export class Editor {
     for (const c of doc.captions.values()) { const bx = this.r.captionBox(c); if (inside(bx.x1, bx.y1) && inside(bx.x2, bx.y2)) this.sel.captions.add(c.id); }
     const within = (b: Rect) => inside(b.x1, b.y1) && inside(b.x2, b.y2);
     for (const ar of doc.arrows.values()) if (arrowPoints(ar).every((q) => inside(q.x, q.y))) this.sel.arrows.add(ar.id);
-    for (const s of doc.shapes.values()) if (within(s.kind === 'bracket' ? { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) } : shapeBox(s))) this.sel.shapes.add(s.id);
+    for (const s of doc.shapes.values()) if (!s.hidden && !s.locked && within(s.kind === 'bracket' ? { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) } : shapeBox(s))) this.sel.shapes.add(s.id);
   }
 
   private moveSelection(dx: number, dy: number): void {
@@ -2263,6 +2266,20 @@ export class Editor {
   }
 
   // ------------------------------------------------------------------ text in design shapes
+
+  /** Select these shapes (from the Layers panel). */
+  selectShapes(ids: number[]): void {
+    this.closeCaption();
+    this.sel = emptySel();
+    for (const id of ids) if (this.doc.shapes.has(id)) this.sel.shapes.add(id);
+    this.requestOverlay();
+    this.onChange();
+  }
+
+  /** The shapes selected now. */
+  selectedShapes(): number[] {
+    return [...this.sel.shapes];
+  }
 
   /** Smart guides: things moved snap into line with other shapes and the page (Design mode; Alt turns them off while dragging). */
   smartGuides = false;
