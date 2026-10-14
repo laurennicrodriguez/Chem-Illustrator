@@ -2172,6 +2172,7 @@ const COMMANDS: Record<string, () => unknown> = {
   hotkeys: () => hotkeysDialog.open(),
   'typing-spelling': () => typingDialog.open(),
   'mode-colours': () => modeDialog.open(),
+  'add-frame': () => editor.addFrame() || flash('Select what to frame: structures, text, arrows or shapes.'),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
   'arrange-scheme': () => arrangeDialog.open(),
@@ -3281,6 +3282,7 @@ function drawingMenu(): MenuItem[] {
     ] : []),
     ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] }] : []),
     null,
+    { cmd: 'add-frame' },
     { label: 'Align', items: arrange },
     { label: 'Rotate or Flip', items: turn },
     ...(order.length ? [{ label: 'Order', items: order }] : []),
@@ -3300,6 +3302,7 @@ editor.onContextMenu = (e) => {
 
 stylePanel.cropWithMouse = () => cropPicture();
 stylePanel.removeWhite = (ids) => void removeWhite(ids);
+stylePanel.frames = { add: () => void command('add-frame'), fit: (id) => editor.fitFrame(id) };
 stylePanel.reaction = {
   roles: (id) => editor.reactionRoles(id),
   others: () => editor.sel.atoms.size + editor.sel.captions.size + editor.sel.shapes.size,

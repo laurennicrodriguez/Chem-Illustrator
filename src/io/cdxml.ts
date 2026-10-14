@@ -2,6 +2,7 @@
 // their formatting, arrows, and the common graphics (lines, boxes, circles, brackets,
 // charge symbols). Anything not understood yet is counted and skipped, never fatal.
 
+import { fillFrameMembers, frameFromTag } from '../editor/frames';
 import { lipDirection } from '../chem/polymer';
 import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, CHIRAL_FLAGS } from '../model';
 import { TEXT_TAG, parseTextTag, runsFromChemDraw } from '../text/chemdraw-text';
@@ -509,6 +510,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
           s.color = typeof v.color === 'string' ? v.color : undefined;
         } catch { /* a damaged tag: keep what ChemDraw shows */ }
       }
+      const ft = kids(g).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === FRAME_TAG);
+      if (ft) s.frame = frameFromTag(ft.getAttribute('Value'));
       doc.addShape(s); from('s', s.id, g); stats.shapes++;
     };
     switch (type) {
@@ -689,6 +692,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         }
       }
     }
+    fillFrameMembers(doc);
   });
   doc.reserveIds(maxId);
   const orig = new Map<string, Entity>();
@@ -806,6 +810,8 @@ export function isAutoLabel(z: number, text: string, h: number): boolean {
 export const CIRCLE_TAG = 'ci-aromatic-circle';
 /** The tag that keeps a filled shape's fill style and outline colour (ChemDraw has one colour). */
 export const FILL_TAG = 'Chem Illustrator fill';
+/** A frame's gap and whether it follows what it surrounds (editor/frames.ts). */
+export const FRAME_TAG = 'Chem Illustrator frame';
 /** The tag that keeps a contracted label's group (SMILES), so its chemistry comes back with the file. */
 export const GROUP_TAG = 'Chem Illustrator group';
 /** The tag on the group that draws a design shape in ChemDraw: the shape as it is here. */

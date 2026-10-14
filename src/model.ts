@@ -361,6 +361,12 @@ export interface Shape {
   locked?: boolean;
   /** A table: its cells, column widths and rules (see table.ts). */
   table?: TableData;
+  /**
+   * A frame round other things (Structure > Add Frame): what it surrounds (whole structures for
+   * the atoms), the gap it keeps round them in points, and whether it follows them (grows,
+   * shrinks and moves as they change). Moving or resizing the frame by hand stops it following.
+   */
+  frame?: Frame;
 }
 
 /** One cell of a table. */
@@ -422,6 +428,16 @@ export interface AtomWatch { ids: Set<number>; all: boolean }
 /** Everything in a drawing, as plain lists (see Doc.contents). */
 export interface Contents { atoms: Atom[]; bonds: Bond[]; captions: Caption[]; arrows: Arrow[]; shapes: Shape[] }
 
+export interface Frame {
+  atoms: number[];
+  captions: number[];
+  arrows: number[];
+  shapes: number[];
+  padX: number;
+  padY: number;
+  fit: boolean;
+}
+
 interface UndoEntry {
   label: string;
   before: Map<string, Entity | null>;
@@ -450,6 +466,11 @@ export class Doc {
   textStyles: Partial<Record<Placeholder, TextBase>> | null = null;
   /** Called each time an undoable change is recorded (a slide deck keeps one history across its slides). */
   onCommit: (() => void) | null = null;
+  /**
+   * Called as an undoable change finishes, with what it changed (and how those things were
+   * before); changes made here join the same undo step (frames follow what they surround).
+   */
+  beforeCommit: ((before: ReadonlyMap<string, Entity | null>) => void) | null = null;
   atoms = new Map<number, Atom>();
   bonds = new Map<number, Bond>();
   captions = new Map<number, Caption>();
@@ -509,6 +530,7 @@ export class Doc {
   commit(): void {
     const tx = this.tx;
     if (!tx) return;
+    if (tx.before.size && this.beforeCommit) this.beforeCommit(new Map(tx.before));
     this.tx = null;
     if (tx.before.size === 0) return;
     for (const key of tx.before.keys()) tx.after.set(key, this.snapshot(key));

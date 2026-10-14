@@ -70,6 +70,8 @@ export class StylePanel {
   applyLabel: (atomId: number, text: string) => void = () => {};
   /** Crop a picture with the mouse (its handles cut the edges off), or stop. */
   cropWithMouse: (shapeId: number) => void = () => {};
+  /** Frames (set up by the app): add one round the selection, or fit a box round what is inside it. */
+  frames: { add(): void; fit(shapeId: number): void } | null = null;
   /** Make a picture's white background see-through (set up by the app). */
   removeWhite: (shapeIds: number[]) => void = () => {};
   /** A picture's width and height change together. */
@@ -116,6 +118,19 @@ export class StylePanel {
     if (tables.length) this.tableControls(tables[0]);
     if (caps.length) this.captionControls(caps);
     if (centres.length || dbls.length) this.stereoControls(centres, dbls);
+    const boxes = shapes.filter((x) => x.kind === 'rect' || x.kind === 'oval' || x.kind === 'geo');
+    if (boxes.length === 1 && all.length === 1 && !caps.length && !arrows.length && !s.atoms.size) this.frameControls(boxes[0]);
+    else if (!this.section.hidden && this.frames) {
+      const row = document.createElement('div');
+      row.className = 'style-buttons';
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = 'Add frame';
+      b.title = 'Draw a box round the selection that grows and moves with it (Structure > Add Frame)';
+      b.addEventListener('click', () => this.frames?.add());
+      row.append(b);
+      this.body.append(row);
+    }
     if (focused) [...this.body.querySelectorAll<HTMLElement>('.style-row')].find((r) => r.textContent === focused)?.querySelector<HTMLElement>('select, input')?.focus();
   }
 
@@ -259,6 +274,42 @@ export class StylePanel {
     const br = any((x) => x.kind === 'bracket');
     if (br) this.select('Bracket', BRACKETS, br.bracket ?? 'square', (v) => set('Bracket shape', (x) => x.kind === 'bracket', () => ({ bracket: v })));
     this.color(f?.filled && f.fillColor ? 'Line colour' : 'Colour', s.color, (v) => set('Colour', () => true, () => ({ color: v })));
+  }
+
+  // ------------------------------------------------------------------ frames
+
+  /** A box: as a frame, the gap it keeps round what it surrounds and whether it follows them. */
+  private frameControls(sh: Shape): void {
+    const f = sh.frame;
+    this.heading('Frame');
+    if (!f) {
+      this.note('Make this box a frame: it fits round what lies inside it, with a gap, and follows it from then on.');
+    } else {
+      const set = (label: string, patch: Partial<NonNullable<Shape['frame']>>) => this.edit(label, () => {
+        const now = this.doc.shapes.get(sh.id)?.frame;
+        if (now) this.doc.updateShape(sh.id, { frame: { ...now, ...patch } });
+      });
+      this.check('Fit round its contents', f.fit, (v) => (v ? this.frames?.fit(sh.id) : set('Stop fitting frame', { fit: false })));
+      this.number('Gap across (pt)', round(f.padX, 10), 0.5, 0, 500, (v) => set('Frame gap', { padX: v }),
+        'Space between the frame and what it surrounds, left and right.');
+      this.number('Gap up and down (pt)', round(f.padY, 10), 0.5, 0, 500, (v) => set('Frame gap', { padY: v }),
+        'Space between the frame and what it surrounds, above and below.');
+      // each structure counts once, however many of its atoms were selected
+      const seen = new Set<number>();
+      let n = f.captions.length + f.arrows.length + f.shapes.length;
+      for (const id of f.atoms) if (this.doc.atoms.has(id) && !seen.has(id)) { n++; for (const a of this.doc.fragmentOf(id)) seen.add(a); }
+      this.note(`${f.fit ? 'Follows' : 'Surrounds'} ${n} ${n === 1 ? 'thing' : 'things'} (structures, text, arrows, shapes). Moving or resizing the frame by hand stops it fitting; tick the box to fit it again.`);
+    }
+    if (!f || !f.fit) {
+      const row = document.createElement('div');
+      row.className = 'style-buttons';
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = f ? 'Fit now' : 'Fit round what is inside';
+      b.addEventListener('click', () => this.frames?.fit(sh.id));
+      row.append(b);
+      this.body.append(row);
+    }
   }
 
   // ------------------------------------------------------------------ pictures

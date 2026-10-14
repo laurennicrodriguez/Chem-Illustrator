@@ -29,6 +29,7 @@ import { bondLayer, crossingBonds } from '../chem/crossing';
 import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
 import { pushArrow, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
 import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
+import { frameAround, frameBox, frameMembers, refitFrames, defaultPad, thingsInside } from './frames';
 import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, rotation, mirrorX, mirrorY } from './arrange';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { tokenize, addNicknames, isBuiltInNickname } from '../chem/labels';
@@ -260,6 +261,10 @@ export class Editor {
       else if (!this.rightDragged) this.onContextMenu(e);
     });
     window.addEventListener('keydown', (e) => this.onKey(e));
+    // frames that follow what they surround are refitted as each change finishes
+    doc.beforeCommit = (before) => {
+      for (const s of this.doc.shapes.values()) if (s.frame?.fit) { refitFrames(this.doc, before, this.measure()); return; }
+    };
   }
 
   // ------------------------------------------------------------------ painting
@@ -1377,20 +1382,58 @@ export class Editor {
     for (const s of doc.shapes.values()) if (!s.hidden && !s.locked && within(s.kind === 'bracket' ? { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) } : shapeBox(s))) this.sel.shapes.add(s.id);
   }
 
+  /**
+   * Structure > Add Frame: a box round the selection, with a gap, that follows what it surrounds.
+   * False when nothing is selected.
+   */
+  addFrame(): boolean {
+    if (!this.hasSelection()) return false;
+    const doc = this.doc;
+    const f = frameAround(doc, this.sel, this.measure());
+    if (!f) return false;
+    doc.edit('Add frame', () => this.selectOnly({ kind: 'shape', id: doc.addShape({ ...f, lineWidth: doc.style.lineWidth }).id }));
+    this.changed();
+    return true;
+  }
+
+  /** Make a box into a frame round what lies inside it (or fit a frame again), following its contents from now on. */
+  fitFrame(id: number): void {
+    const doc = this.doc;
+    const s = doc.shapes.get(id);
+    if (!s) return;
+    const m = this.measure();
+    doc.edit('Fit frame', () => {
+      const pad = defaultPad(doc);
+      const frame = s.frame ? { ...s.frame, fit: true } : { ...thingsInside(doc, shapeBox(s), m, id), padX: pad, padY: pad, fit: true };
+      doc.updateShape(id, { frame });
+      const b = frameBox(doc, frame, m);
+      if (b) doc.updateShape(id, b);
+    });
+    this.changed();
+  }
+
   private moveSelection(dx: number, dy: number): void {
     const doc = this.doc;
-    doc.moveAtoms(this.sel.atoms, dx, dy);
-    for (const id of this.sel.captions) { const c = doc.captions.get(id); if (c) doc.updateCaption(id, { x: c.x + dx, y: c.y + dy }); }
-    for (const id of this.sel.arrows) {
+    // a frame that follows its contents takes them with it
+    const sel: Selection = { atoms: new Set(this.sel.atoms), bonds: this.sel.bonds, captions: new Set(this.sel.captions), arrows: new Set(this.sel.arrows), shapes: new Set(this.sel.shapes) };
+    for (const id of this.sel.shapes) {
+      const f = doc.shapes.get(id)?.frame;
+      if (!f?.fit) continue;
+      const m = frameMembers(doc, f);
+      for (const k of ['atoms', 'captions', 'arrows', 'shapes'] as const) for (const x of m[k]) sel[k].add(x);
+    }
+    doc.moveAtoms(sel.atoms, dx, dy);
+    for (const id of sel.captions) { const c = doc.captions.get(id); if (c) doc.updateCaption(id, { x: c.x + dx, y: c.y + dy }); }
+    for (const id of sel.arrows) {
       const r = doc.arrows.get(id);
       if (!r) continue;
       const patch: Partial<Arrow> = { tail: { x: r.tail.x + dx, y: r.tail.y + dy }, head: { x: r.head.x + dx, y: r.head.y + dy } };
       // a connector moved away from a shape that stays comes loose from it
-      if (r.from && !this.sel.shapes.has(r.from.shape)) patch.from = undefined;
-      if (r.to && !this.sel.shapes.has(r.to.shape)) patch.to = undefined;
+      if (r.from && !sel.shapes.has(r.from.shape)) patch.from = undefined;
+      if (r.to && !sel.shapes.has(r.to.shape)) patch.to = undefined;
       doc.updateArrow(id, patch);
     }
-    for (const id of this.sel.shapes) { const s = doc.shapes.get(id); if (s) doc.updateShape(id, { x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy }); }
+    for (const id of sel.shapes) { const s = doc.shapes.get(id); if (s) doc.updateShape(id, { x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy }); }
   }
 
   deleteSelection(): void {
