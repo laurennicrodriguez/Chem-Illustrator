@@ -10,7 +10,7 @@ export interface Piece {
   italic?: boolean;
 }
 
-const HILL = /^((?:[A-Z][a-z]?\d*)+)(\d*[+\-−])?$/;
+const HILL = /^((?:[A-Z][a-z]?\d*)+)((?:\s\d+)?[+\-−])?$/;
 
 /** The text split into pieces that sit on the line, below it or above it. */
 export function chemPieces(text: string): Piece[] {

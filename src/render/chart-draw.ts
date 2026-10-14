@@ -9,6 +9,10 @@ import { formatValue, generalNumber } from '../sheet/numfmt';
 import { VectorContext, Item, Seg } from './vector';
 import { itemsToSvg } from './svg';
 
+// smallest and largest of a series (Math.min(...xs) overflows the stack for very long ones)
+const least = (xs: number[]) => xs.reduce((a, b) => (b < a ? b : a), Infinity);
+const most = (xs: number[]) => xs.reduce((a, b) => (b > a ? b : a), -Infinity);
+
 type Ctx = CanvasRenderingContext2D | VectorContext;
 export interface Box { x: number; y: number; w: number; h: number }
 
@@ -329,7 +333,7 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
     const f = fits[i];
     if (!f || !s.fit) return;
     const xs = kind === 'scatter' ? data[i].xs.filter(Number.isFinite) : data[i].ys.map((_, j) => j + 1);
-    const a = Math.min(...xs) - (s.fit.backward ?? 0), b = Math.max(...xs) + (s.fit.forward ?? 0);
+    const a = least(xs) - (s.fit.backward ?? 0), b = most(xs) + (s.fit.forward ?? 0);
     if (kind === 'scatter') { growX(a); growX(b); }
     growY(fitAt(f, a)); growY(fitAt(f, b));
   });
@@ -519,7 +523,7 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
     const f = fits[i], d = data[i];
     if (!f || !s.fit || !d) return;
     const xs = kind === 'scatter' ? d.xs.filter(Number.isFinite) : d.ys.map((_, j) => j + 1);
-    const a = Math.min(...xs), b = Math.max(...xs);
+    const a = least(xs), b = most(xs);
     for (let k = 0; k <= 40; k++) {
       const x = a + ((b - a) * k) / 40, y = fitAt(f, x);
       const px = xAxis ? X(xAxis.frac(x)) : catAt(x - 1), py = valAt(y);
@@ -530,8 +534,8 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
     const f = fits[i], d = data[i];
     if (!f || !s.fit || !d) return;
     const xs = kind === 'scatter' ? d.xs.filter(Number.isFinite) : d.ys.map((_, j) => j + 1);
-    let a = Math.min(...xs) - (s.fit.backward ?? 0), b = Math.max(...xs) + (s.fit.forward ?? 0);
-    if (f.kind === 'log' || f.kind === 'power') a = Math.max(a, Math.min(...xs.filter((x) => x > 0)) * 0.01);
+    let a = least(xs) - (s.fit.backward ?? 0), b = most(xs) + (s.fit.forward ?? 0);
+    if (f.kind === 'log' || f.kind === 'power') a = Math.max(a, least(xs.filter((x) => x > 0)) * 0.01);
     const toX = (x: number) => (xAxis ? X(xAxis.frac(x)) : catAt(x - 1));
     const pts: [number, number][] = [];
     const n = f.kind === 'linear' ? 1 : 80;

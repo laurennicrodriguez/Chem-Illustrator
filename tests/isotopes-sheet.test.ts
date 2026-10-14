@@ -110,3 +110,29 @@ describe('the peaks worth listing', () => {
     expect(peakName(2)).toBe('M+2');
   });
 });
+
+describe('charged structures', () => {
+  it('keeps the last element\'s count when it takes off the charge', async () => {
+    const { withoutCharge } = await import('../src/chem/formula');
+    expect(withoutCharge('C8H11N4O2+', 1)).toBe('C8H11N4O2');
+    expect(withoutCharge('BF4−', -1)).toBe('BF4');
+    expect(withoutCharge('C4H12N2 2+', 2)).toBe('C4H12N2');
+    expect(withoutCharge('C9H8O4', 0)).toBe('C9H8O4');
+    // caffeine-H+ drawn gives the same peak as its formula typed
+    const drawn = ionPeaks({ mol: { ...aspirin, formula: 'C8H11N4O2+', charge: 1 } }, '');
+    const typed = ionPeaks({ formula: 'C8H11N4O2+' }, '');
+    if ('code' in drawn || 'code' in typed) throw new Error('no pattern');
+    expect(drawn.peaks[0]!.mz).toBeCloseTo(typed.peaks[0]!.mz, 6);
+    expect(drawn.peaks[0]!.mz).toBeCloseTo(195.0877, 3);
+  });
+
+  it('gives a cation\'s own m/z for HRMS(), with its electron taken off once', async () => {
+    const { propertyValue } = await import('../src/sheet/properties');
+    const { ionInfo } = await import('../src/ui/analysis-panel');
+    // NMe4+: RDKit's exact mass (74.096426) already has the electron taken off
+    const nme4 = { ...aspirin, formula: 'C4H12N+', charge: 1, exact: 74.096426 };
+    expect(propertyValue('HRMS', nme4, ['[M+H]+'])).toBeCloseTo(74.0964, 4);
+    const props = { counts: { C: 4, H: 12, N: 1 } } as never;
+    expect(ionInfo({ formula: 'C4H12N+', exact: 74.096426, mw: 74.15, charge: 1, smiles: '', props }, '[M+H]+')!.mz).toBeCloseTo(74.0964, 4);
+  });
+});

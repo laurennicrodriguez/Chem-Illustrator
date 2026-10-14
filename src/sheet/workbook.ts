@@ -10,9 +10,9 @@
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
 import { ACS_1996 } from '../style';
-import { Chart, adjustChart, renameInChart } from './chart';
-import { Dashboard, adjustDashboard, renameInDashboard } from './dashboard';
-import { Node, parseFormula, shiftFormula, adjustFormula, renameSheetInFormula, formulaRefs, SheetChange, normalizeFormula, FormulaSyntaxError } from './formula';
+import { Chart, mapChartRefs } from './chart';
+import { Dashboard, mapDashboardRefs } from './dashboard';
+import { Node, parseFormula, shiftFormula, adjustFormula, renameSheetInFormula, formulaRefs, SheetChange, normalizeFormula, FormulaSyntaxError, moveRefs } from './formula';
 import { evaluate, EvalHost } from './evaluate';
 import { CellError, ERR, Value, readTyped, compareValues, isError } from './values';
 import { MolProps } from './properties';
@@ -106,6 +106,19 @@ export interface CellBlock {
   cells: (Cell | undefined)[][];
   /** Where it was copied from (formulas move by the distance to where they're pasted); null for text from other programs. */
   origin: { row: number; col: number } | null;
+  /** What the formulas showed when copied, as typed text (for Paste Values). */
+  shown?: (string | undefined)[][];
+}
+
+/** A worked-out value as text that types back in as the same value. */
+export function valueInput(v: Value | CellError): string {
+  if (v instanceof CellError) return v.code;
+  if (v === null) return '';
+  if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
+  if (typeof v === 'number') return String(v);
+  // text that would be read as a number or a formula is kept as text
+  const t = readTyped(v);
+  return t.formula || typeof t.value !== 'string' || t.value !== v ? "'" + v : v;
 }
 
 let nextStructureId = 1;
@@ -510,25 +523,7 @@ export class Sheet {
     if (old === name) return;
     this.assign('name', name);
     // formulas that name the sheet follow it
-    for (const s of this.wb.sheets) {
-      for (const [k, c] of [...s.cells]) {
-        if (!c.input?.startsWith('=')) continue;
-        const f = renameSheetInFormula(c.input, old, name);
-        if (f !== c.input) s.setCell(rowOf(k), colOf(k), { ...c, input: f });
-      }
-      for (const [col, d] of [...s.colDefs]) {
-        const f = renameSheetInFormula(d.formula, old, name);
-        if (f !== d.formula) s.setColDef(col, { ...d, formula: f });
-      }
-      if (s.charts.length) {
-        const cs = s.charts.map((c) => renameInChart(c, old, name));
-        if (JSON.stringify(cs) !== JSON.stringify(s.charts)) s.setCharts(cs);
-      }
-      if (s.dashboard) {
-        const d = renameInDashboard(s.dashboard, old, name);
-        if (JSON.stringify(d) !== JSON.stringify(s.dashboard)) s.setDashboard(d);
-      }
-    }
+    this.wb.rewriteAllFormulas((f) => renameSheetInFormula(f, old, name));
   }
 
   /** Empty cells: their contents, their formatting, or both. Nothing outside the cells in use is visited. */
@@ -557,7 +552,9 @@ export class Sheet {
         const old = this.cell(row, col);
         if (what === 'formats') { this.setCell(row, col, { ...old, style: src?.style }); continue; }
         let input = src?.input;
-        if (input?.startsWith('=') && block.origin) input = shiftFormula(input, row - (block.origin.row + i), col - (block.origin.col + j));
+        // Paste Values puts in what the formulas showed (worked out when copied)
+        if (what === 'values' && input?.startsWith('=') && block.shown?.[i]?.[j] !== undefined) input = block.shown[i][j];
+        else if (input?.startsWith('=') && block.origin) input = shiftFormula(input, row - (block.origin.row + i), col - (block.origin.col + j));
         const style = what === 'values' ? old?.style : src?.style;
         this.setCell(row, col, { input, structure: src?.structure, style });
       }
@@ -565,20 +562,40 @@ export class Sheet {
     return target;
   }
 
+  /**
+   * Cut and Paste on this sheet: the block goes to its new place as it is (its formulas aren't
+   * moved by the distance, as a copy's are), and formulas anywhere that pointed at its cells point
+   * at them in their new place, as in Excel.
+   */
+  move(from: Range, at: { row: number; col: number }, what: 'all' | 'values' | 'formats' = 'all'): Range {
+    const dr = at.row - from.r1, dc = at.col - from.c1;
+    const block = this.copy(from);
+    this.clear(from, 'all');
+    const follow = (f: string, home: string) => moveRefs(f, home, this.name, from, dr, dc);
+    block.cells = block.cells.map((line) => line.map((c) => (c?.input?.startsWith('=') ? { ...c, input: follow(c.input, this.name) } : c)));
+    this.wb.rewriteAllFormulas(follow);
+    return this.paste(at, { ...block, origin: null }, what);
+  }
+
   /** The cells of a range, for Copy (property columns give their formulas). */
   copy(r: Range): CellBlock {
     const cells: (Cell | undefined)[][] = [];
+    const shown: (string | undefined)[][] = [];
+    let formulas = false;
     for (let row = r.r1; row <= r.r2; row++) {
       const line: (Cell | undefined)[] = [];
+      const seen: (string | undefined)[] = [];
       for (let col = r.c1; col <= r.c2; col++) {
         const c = this.cell(row, col);
         const input = this.effectiveInput(row, col);
         const style = this.styleAt(row, col);
         line.push(input || c?.structure || style ? { input, structure: c?.structure, style } : undefined);
+        if (input?.startsWith('=')) { formulas = true; seen.push(valueInput(this.value(row, col))); } else seen.push(undefined);
       }
       cells.push(line);
+      shown.push(seen);
     }
-    return { rows: r.r2 - r.r1 + 1, cols: r.c2 - r.c1 + 1, cells, origin: { row: r.r1, col: r.c1 } };
+    return { rows: r.r2 - r.r1 + 1, cols: r.c2 - r.c1 + 1, cells, origin: { row: r.r1, col: r.c1 }, ...(formulas ? { shown } : {}) };
   }
 
   /** The used part of a range (null when it holds nothing). */
@@ -612,6 +629,7 @@ export class Sheet {
       const nums = srcCells.map((s) => (s.input && !s.input.startsWith('=') ? readTyped(s.input).value : null));
       const numeric = series && nums.every((v) => typeof v === 'number');
       const step = numeric && nums.length > 1 ? ((nums[nums.length - 1] as number) - (nums[0] as number)) / (nums.length - 1) : 1;
+      const textStep = series && !numeric && srcLen > 1 ? textSeriesStep(srcCells.map((s) => s.input)) : null;
       const targets: [number, number][] = [];
       if (vertical) {
         for (let r = dst.r1; r <= dst.r2; r++) if (r < src.r1 || r > src.r2) targets.push([r, src.c1 + l]);
@@ -628,8 +646,8 @@ export class Sheet {
           const v = (nums[0] as number) + step * pos;
           input = String(Number(v.toPrecision(15)));
         } else if (series && input) {
-          const cycles = Math.floor(pos / srcLen);
-          input = countOn(input, cycles);
+          // S1, S2 → S3, S4 (the cells go on as one series); otherwise each cell counts on by itself (a1, b7 → a2, b8)
+          input = textStep !== null ? countOn(srcCells[0].input!, textStep * pos) : countOn(input, Math.floor(pos / srcLen));
         }
         const keepsDef = !s.cell?.input && this.defAt(r, c) && input === this.effectiveInput(r, c);
         this.setCell(r, c, { input: keepsDef ? undefined : input, structure: s.cell?.structure, style: s.cell?.style });
@@ -779,8 +797,11 @@ export class Sheet {
       for (let col = r.c1; col <= r.c2; col++) line.push(this.cell(row, col));
       return { row, line };
     });
+    // rows hidden by a filter (or by hand) stay hidden as they move
+    const hidden = keyed.map(({ row }) => this.hiddenRows.has(row));
     blocks.forEach(({ row: from, line }, i) => {
       const to = r.r1 + i;
+      if (hidden[i] !== this.hiddenRows.has(to)) this.setRowHidden(to, hidden[i]);
       line.forEach((c, j) => {
         const col = r.c1 + j;
         const input = c?.input?.startsWith('=') ? shiftFormula(c.input, to - from, 0) : c?.input;
@@ -1023,23 +1044,41 @@ export class Workbook {
 
   /** Keep every formula in the workbook pointing at the same cells after rows or columns move. */
   adjustAllFormulas(ch: SheetChange): void {
+    // (the changed sheet's property columns are done with its rows)
+    this.rewriteAllFormulas((f, home) => adjustFormula(f, home, ch), (s) => s.name === ch.sheet && ch.axis === 'row');
+  }
+
+  /**
+   * Pass every formula in the workbook (cells, property columns, conditional formatting rules,
+   * charts, dashboards) through `fn`.
+   */
+  rewriteAllFormulas(fn: (formula: string, home: string) => string, skipColDefs?: (s: Sheet) => boolean): void {
     for (const s of this.sheets) {
       for (const [k, c] of [...s.cells]) {
         if (!c.input?.startsWith('=')) continue;
-        const f = adjustFormula(c.input, s.name, ch);
+        const f = fn(c.input, s.name);
         if (f !== c.input) s.setCell(rowOf(k), colOf(k), { ...c, input: f });
       }
-      for (const [col, d] of [...s.colDefs]) {
-        if (s.name === ch.sheet && ch.axis === 'row') continue; // done with the rows (above)
-        const f = adjustFormula(d.formula, s.name, ch);
+      if (s.condFormats.some((cf) => cf.rule.kind === 'formula')) {
+        const cfs = s.condFormats.map((cf) => {
+          if (cf.rule.kind !== 'formula') return cf;
+          const was = cf.rule.formula, eq = was.startsWith('=');
+          const f = fn(eq ? was : '=' + was, s.name);
+          const formula = eq ? f : f.slice(1);
+          return formula === was ? cf : { ...cf, rule: { ...cf.rule, formula } };
+        });
+        if (cfs.some((cf, i) => cf !== s.condFormats[i])) s.setCondFormats(cfs);
+      }
+      if (!skipColDefs?.(s)) for (const [col, d] of [...s.colDefs]) {
+        const f = fn(d.formula, s.name);
         if (f !== d.formula) s.setColDef(col, { ...d, formula: f });
       }
       if (s.charts.length) {
-        const cs = s.charts.map((c) => adjustChart(c, s.name, ch));
+        const cs = s.charts.map((c) => mapChartRefs(c, (f) => fn(f, s.name)));
         if (JSON.stringify(cs) !== JSON.stringify(s.charts)) s.setCharts(cs);
       }
       if (s.dashboard) {
-        const d = adjustDashboard(s.dashboard, s.name, ch);
+        const d = mapDashboardRefs(s.dashboard, (f) => fn(f, s.name));
         if (JSON.stringify(d) !== JSON.stringify(s.dashboard)) s.setDashboard(d);
       }
     }
@@ -1187,12 +1226,22 @@ export class Workbook {
   formulaAt(s: Sheet, formula: string, home: { row: number; col: number }, row: number, col: number): Value {
     const text = shiftFormula(formula.startsWith('=') ? formula : '=' + formula, row - home.row, col - home.col);
     const tree = this.parse(text);
-    return tree instanceof CellError ? tree : evaluate(tree, this.hostFor(s));
+    try {
+      return tree instanceof CellError ? tree : evaluate(tree, this.hostFor(s));
+    } catch (e) {
+      return ERR.value(`This formula could not be worked out (${(e as Error).message})`);
+    }
   }
 
   private evaluateNode(n: { s: Sheet; key: number; text: string }): void {
     const tree = this.parse(n.text);
-    const v = tree instanceof CellError ? tree : evaluate(tree, this.hostFor(n.s));
+    let v: Value | CellError;
+    try {
+      v = tree instanceof CellError ? tree : evaluate(tree, this.hostFor(n.s));
+    } catch (e) {
+      // one formula that fails outright shows an error in its cell rather than stopping every other
+      v = ERR.value(`This formula could not be worked out (${(e as Error).message})`);
+    }
     n.s.values.set(n.key, v === null ? 0 : v);
   }
 
@@ -1259,6 +1308,23 @@ export class Workbook {
 }
 
 /** The next name in a series: "S1" → "S2", "2a" → "2b", "Entry 9" → "Entry 10", n steps on. Other text is copied. */
+/** The count at the end of a text (S12 → 12, 2b → 1), and what comes before it. */
+function textCount(text: string): { head: string; n: number } | null {
+  const num = /^(.*?)(\d+)$/.exec(text);
+  if (num) return { head: num[1] + '#', n: Number(num[2]) };
+  const letter = /^(.*\d)([a-z])$/i.exec(text);
+  if (letter) return { head: letter[1] + (letter[2] === letter[2].toLowerCase() ? 'a' : 'A'), n: letter[2].toLowerCase().charCodeAt(0) - 97 };
+  return null;
+}
+
+/** The step of texts that count on evenly with the same start (S1, S2, S3 → 1; 2a, 2c → 2), or null. */
+export function textSeriesStep(inputs: (string | undefined)[]): number | null {
+  const counts = inputs.map((t) => (t ? textCount(t) : null));
+  if (counts.some((c) => !c || c.head !== counts[0]!.head)) return null;
+  const step = counts[1]!.n - counts[0]!.n;
+  return counts.every((c, i) => c!.n === counts[0]!.n + step * i) ? step : null;
+}
+
 export function countOn(text: string, steps: number): string {
   if (!steps) return text;
   const num = /^(.*?)(\d+)$/.exec(text);

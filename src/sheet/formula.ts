@@ -328,12 +328,17 @@ export function adjustFormula(text: string, home: string, ch: SheetChange): stri
   return mapRefs(text, (r) => adjustRef(r, home, ch));
 }
 
+/** Is a reference on this sheet? (Sheet names are matched whatever their case, as they are worked out.) */
+const onSheet = (r: RefToken, home: string, sheet: string) => (r.sheet ?? home).toLowerCase() === sheet.toLowerCase();
+
 export function adjustRef(r: RefToken, home: string, ch: SheetChange): RefToken {
-  if (r.broken || (r.sheet ?? home) !== ch.sheet) return r;
+  if (r.broken || !onSheet(r, home, ch.sheet)) return r;
   const key = ch.axis === 'row' ? 'row' : 'col';
   if (r.kind === 'cols' && ch.axis === 'row') return r;
   const pos = (c: CellRef) => c[key];
   const set = (c: CellRef, v: number): CellRef => ({ ...c, [key]: v });
+  // a block typed backwards (A10:A5) is the same block put in order
+  if (r.b && pos(r.a) > pos(r.b)) r = { ...r, a: set(r.a, pos(r.b)), b: set(r.b, pos(r.a)) };
   if (ch.count > 0) {
     const shift = (c: CellRef) => (pos(c) >= ch.at ? set(c, pos(c) + ch.count) : c);
     if (r.kind === 'cell') return { ...r, a: shift(r.a) };
@@ -356,6 +361,21 @@ export function adjustRef(r: RefToken, home: string, ch: SheetChange): RefToken 
   const newHi = hi > end ? hi - n : ch.at - 1;
   if (newHi < newLo) return { ...r, broken: true };
   return { ...r, a: set(r.a, newLo), b: set(r.b!, newHi) };
+}
+
+/**
+ * Keep a formula pointing at cells that were moved (Cut and Paste): a reference to a cell of the
+ * block, or to a range inside it, follows the block by dr rows and dc columns, fixed ($) or not,
+ * as in Excel. References to anything else stay as they are.
+ */
+export function moveRefs(text: string, home: string, sheet: string, block: { r1: number; c1: number; r2: number; c2: number }, dr: number, dc: number): string {
+  const inside = (c: CellRef) => c.row >= block.r1 && c.row <= block.r2 && c.col >= block.c1 && c.col <= block.c2;
+  const move = (c: CellRef): CellRef => ({ ...c, row: c.row + dr, col: c.col + dc });
+  return mapRefs(text, (r) => {
+    if (r.broken || r.kind === 'cols' || !onSheet(r, home, sheet)) return r;
+    if (r.kind === 'cell') return inside(r.a) ? { ...r, a: move(r.a) } : r;
+    return inside(r.a) && inside(r.b!) ? { ...r, a: move(r.a), b: move(r.b!) } : r;
+  });
 }
 
 /** Rename a sheet in a formula's references. */

@@ -7,7 +7,7 @@
 
 import type { Range } from './refs';
 import { keyOf, inRange } from './refs';
-import { Value, isError, compareValues } from './values';
+import { Value, isError, compareValues, sigFigs15 } from './values';
 
 /** How one end (or the middle) of a scale or bar is set. */
 export interface CfValue {
@@ -142,7 +142,7 @@ export function scaleColour(x: number, stops: { at: number; color: string }[]): 
 export function passesOp(v: Value, op: CfOp, a: number | string, b?: number | string): boolean {
   if (v === null || v === '' || isError(v)) return false;
   const cmp = (x: number | string) => {
-    if (typeof x === 'number' && typeof v === 'number') return v - x;
+    if (typeof x === 'number' && typeof v === 'number') return sigFigs15(v) - sigFigs15(x);
     if (typeof x === 'number' || typeof v === 'number') return typeof v === 'number' ? -1 : 1; // numbers sort before text
     return compareValues(v, x);
   };

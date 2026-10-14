@@ -86,7 +86,11 @@ export function parseAdduct(text: string): Adduct {
   return { n, parts, z, label };
 }
 
-/** m/z of the ion, from the molecule's monoisotopic mass (as RDKit gives it: atoms only, no electrons). */
+/**
+ * m/z of the ion, from the neutral molecule's monoisotopic mass. (RDKit's exact mass of a charged
+ * molecule already allows for its missing or extra electrons: that molecule is its own ion, with
+ * m/z = exact mass / |charge|.)
+ */
 export function ionMz(exactMass: number, adduct: Adduct | string): number {
   const a = typeof adduct === 'string' ? parseAdduct(adduct) : adduct;
   let m = a.n * exactMass;

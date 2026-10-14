@@ -233,8 +233,8 @@ const FUNCTIONS: Record<string, FnDef> = {
   SUM: { min: 1, max: 255, fn: agg((xs) => xs.reduce((s, x) => s + x, 0)) },
   PRODUCT: { min: 1, max: 255, fn: agg((xs) => (xs.length ? xs.reduce((s, x) => s * x, 1) : 0)) },
   AVERAGE: { min: 1, max: 255, fn: agg((xs) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : ERR.div0())) },
-  MIN: { min: 1, max: 255, fn: agg((xs) => (xs.length ? Math.min(...xs) : 0)) },
-  MAX: { min: 1, max: 255, fn: agg((xs) => (xs.length ? Math.max(...xs) : 0)) },
+  MIN: { min: 1, max: 255, fn: agg((xs) => (xs.length ? xs.reduce((a, b) => (b < a ? b : a)) : 0)) },
+  MAX: { min: 1, max: 255, fn: agg((xs) => (xs.length ? xs.reduce((a, b) => (b > a ? b : a)) : 0)) },
   MEDIAN: { min: 1, max: 255, fn: agg(median) },
   STDEV: {
     min: 1, max: 255,

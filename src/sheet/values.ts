@@ -109,6 +109,9 @@ export function toBool(v: Value): boolean | CellError {
   return ERR.value(`"${v}" is not TRUE or FALSE`);
 }
 
+/** A number rounded to the 15 significant figures Excel keeps. */
+export const sigFigs15 = (n: number): number => (Number.isFinite(n) ? Number(n.toPrecision(15)) : n);
+
 /** Excel's order when sorting and comparing: numbers, then text (ignoring case), then TRUE/FALSE. */
 const rank = (v: Value): number => (typeof v === 'number' ? 0 : typeof v === 'string' ? 1 : typeof v === 'boolean' ? 2 : 3);
 
@@ -118,7 +121,8 @@ export function compareValues(a: Value, b: Value): number {
   if (b === null) b = typeof a === 'string' ? '' : typeof a === 'boolean' ? false : 0;
   const ra = rank(a), rb = rank(b);
   if (ra !== rb) return ra - rb;
-  if (typeof a === 'number') return a - (b as number);
+  // numbers compare at 15 significant figures, as Excel does (so 0.1+0.2 = 0.3)
+  if (typeof a === 'number') return sigFigs15(a) - sigFigs15(b as number);
   if (typeof a === 'string') {
     const x = a.toLowerCase(), y = (b as string).toLowerCase();
     return x < y ? -1 : x > y ? 1 : 0;

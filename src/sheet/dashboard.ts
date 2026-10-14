@@ -206,8 +206,8 @@ export function aggregate(agg: Aggregate, vals: Value[]): Value {
     case 'distinct': return new Set(vals.filter((v) => v !== null && v !== '').map(slicerText)).size;
     case 'sum': return nums.reduce((a, b) => a + b, 0);
     case 'average': return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
-    case 'min': return nums.length ? Math.min(...nums) : null;
-    case 'max': return nums.length ? Math.max(...nums) : null;
+    case 'min': return nums.length ? nums.reduce((a, b) => (b < a ? b : a)) : null;
+    case 'max': return nums.length ? nums.reduce((a, b) => (b > a ? b : a)) : null;
     case 'median': {
       if (!nums.length) return null;
       const s = [...nums].sort((a, b) => a - b), m = s.length >> 1;
@@ -292,6 +292,7 @@ function mapRefs(d: Dashboard, fn: (f: string) => string): Dashboard {
   };
 }
 
+export const mapDashboardRefs = mapRefs;
 export const adjustDashboard = (d: Dashboard, home: string, ch: SheetChange): Dashboard => mapRefs(d, (f) => adjustFormula(f, home, ch));
 export const renameInDashboard = (d: Dashboard, from: string, to: string): Dashboard => mapRefs(d, (f) => renameSheetInFormula(f, from, to));
 
