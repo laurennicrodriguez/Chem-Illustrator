@@ -58,6 +58,8 @@
         <button role="menuitem" data-cmd="zoom-fit">Fit to Window</button>
         <button role="menuitem" data-cmd="zoom-actual">Actual Size</button>
         <hr />
+        <button role="menuitemcheckbox" aria-checked="false" data-cmd="show-stereo" title="Preview every R/S and E/Z label in red (on screen only; use Structure &gt; Show Stereo Labels to add them to the drawing)"><span>Show R/S Preview</span></button>
+        <button role="menuitemcheckbox" aria-checked="true" data-cmd="scroll-bars" title="Scroll bars along the bottom and right of the drawing, showing where you are"><span>Scroll Bars</span></button>
         <button role="menuitemcheckbox" aria-checked="false" data-cmd="split-view" title="A drawing beside the document, sheet or slides, so you can draw and write without switching tabs"><span>Split View: Drawing Beside</span></button>
         <hr />
         <button role="menuitem" data-cmd="mode-colours" title="Blue for drawings, orange for slides: choose how much of the window is coloured, and the colours">Mode Colours…</button>
@@ -194,8 +196,6 @@
     <button id="btn-undo" title="Undo">Undo</button>
     <button id="btn-redo" title="Redo">Redo</button>
     <button id="btn-fit" title="Fit drawing to window">Fit</button>
-    <span class="sep"></span>
-    <label class="check" title="Preview every R/S and E/Z label in red (on screen only; use Structure &gt; Show Stereo Labels to add them to the drawing)"><input id="show-stereo" type="checkbox" /> Show R/S</label>
     <span class="sep dev-only" hidden></span>
     <select id="stress-n" class="dev-only" hidden title="How many drug-sized molecules to draw">
       <option value="100">100 molecules</option>

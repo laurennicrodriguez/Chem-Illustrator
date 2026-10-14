@@ -31,6 +31,7 @@ import { writePdf, jpegInfo, PdfPage, PdfImage } from './io/pdf';
 import { SlideList } from './ui/slide-list';
 import { DesignLibrary, GEO_DRAG_TYPE, pickDesignSize, sizeLabel } from './ui/design-panel';
 import { LayersPanel } from './ui/layers-panel';
+import { Scrollbars } from './ui/scrollbars';
 import { Presenter } from './ui/present';
 import { editMaster } from './ui/master-dialog';
 import { recordPicture, pictureSvg, pictureCanvas, canvasPng, bitmapScale, EXPORT_MAX_SIDE, EXPORT_MAX_PIXELS } from './render/picture';
@@ -330,12 +331,13 @@ $('#btn-stress').addEventListener('click', () => stressTest(Number($<HTMLSelectE
 $('#btn-help').addEventListener('click', () => openHelp());
 $('#help-hotkeys').addEventListener('click', () => { $<HTMLDialogElement>('#help').close(); hotkeysDialog.open(); });
 $('#help-close').addEventListener('click', () => $<HTMLDialogElement>('#help').close());
-const stereoBox = $<HTMLInputElement>('#show-stereo');
-stereoBox.addEventListener('change', () => {
-  renderer.previewStereo = stereoBox.checked;
+/** View > Show R/S Preview: every R/S and E/Z label in red, on screen only. */
+function previewStereo(on: boolean): void {
+  renderer.previewStereo = on;
+  $('[data-cmd="show-stereo"]')?.setAttribute('aria-checked', String(on));
   renderer.repaintAll();
   editor.requestScene();
-});
+}
 
 // Files dropped on the window: pictures go on the drawing or slide, other files open in tabs.
 const hasFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files');
@@ -1238,7 +1240,8 @@ function renderTabs(): void {
     close.setAttribute('aria-label', `Close ${t.name}`);
     close.textContent = '×';
     close.addEventListener('click', (e) => { e.stopPropagation(); void ws.close(t); });
-    el.addEventListener('click', () => ws.activate(t));
+    el.addEventListener('click', () => { if (!tabDragged) ws.activate(t); });
+    el.addEventListener('pointerdown', (e) => dragTab(e, el, t));
     // the middle mouse button closes a tab, as in browsers
     el.addEventListener('auxclick', (e) => { if (e.button === 1) { e.preventDefault(); void ws.close(t); } });
     el.append(icon, name, close);
@@ -1255,6 +1258,54 @@ function renderTabs(): void {
   };
   tabsEl.replaceChildren(...items, add('+ Drawing', 'New drawing', 'new'), add('+ Slides', 'New slides', 'new-slides'), add('+ Sheet', 'New sheet', 'new-sheet'), add('+ Document', 'New document', 'new-document'), add('+ Design', 'New design: a TOC graphic, graphical abstract, poster, flowchart or figure', 'new-design'));
   tabsEl.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+// Tabs are dragged along the strip to put them in another order (as in browsers).
+let tabDragged = false;
+function dragTab(e: PointerEvent, el: HTMLElement, t: Tab): void {
+  if (e.button !== 0 || (e.target as HTMLElement).closest('.tab-close')) return;
+  tabDragged = false;
+  const startX = e.clientX;
+  const tabs = [...tabsEl.querySelectorAll<HTMLElement>('.tab')];
+  const from = tabs.indexOf(el);
+  let to = from;
+  const move = (ev: PointerEvent) => {
+    const dx = ev.clientX - startX;
+    if (!tabDragged) {
+      if (Math.abs(dx) < 6) return;
+      tabDragged = true;
+      el.setPointerCapture(ev.pointerId);
+      el.classList.add('tab-dragging');
+    }
+    el.style.transform = `translateX(${dx}px)`;
+    // the place it would go: past every tab whose middle it has crossed
+    const mid = el.getBoundingClientRect().left + el.offsetWidth / 2;
+    to = from;
+    tabs.forEach((o, i) => {
+      if (o === el) return;
+      const r = o.getBoundingClientRect(), m = r.left + r.width / 2;
+      if (i < from && mid < m) to = Math.min(to, i);
+      if (i > from && mid > m) to = Math.max(to, i);
+    });
+    tabs.forEach((o, i) => {
+      if (o === el) return;
+      const shift = from < to && i > from && i <= to ? -el.offsetWidth : from > to && i >= to && i < from ? el.offsetWidth : 0;
+      o.style.transform = shift ? `translateX(${shift}px)` : '';
+    });
+  };
+  const up = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
+    if (!tabDragged) return;
+    for (const o of tabs) { o.style.transform = ''; o.classList.remove('tab-dragging'); }
+    if (to !== from) ws.moveTab(t, to);
+    // the click that ends a drag doesn't switch tabs
+    setTimeout(() => { tabDragged = false; }, 0);
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', up);
 }
 
 let lastTitle = '';
@@ -1959,7 +2010,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'clipboard-formats', 'split-view']);
+  'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'show-stereo', 'clipboard-formats', 'split-view']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
@@ -2073,6 +2124,8 @@ const COMMANDS: Record<string, () => unknown> = {
   'fixed-length': () => toggleOption('fixedLength'),
   'fixed-angles': () => toggleOption('fixedAngles'),
   'dev-tools': () => { showDevTools(!devTools); storeSettings(); },
+  'show-stereo': () => previewStereo(!renderer.previewStereo),
+  'scroll-bars': () => { showScrollBars(!scrollbars.shown); storeSettings(); },
   'zoom-in': () => editor.zoomBy(1.25),
   'zoom-out': () => editor.zoomBy(0.8),
   'zoom-fit': () => editor.fit(),
@@ -2460,6 +2513,7 @@ function storeSettings(): void {
     fixedAngles: editor.options.fixedAngles,
     devTools,
     showRoles: editor.showRoles,
+    scrollBars: scrollbars.shown,
     chemTyping: typingPrefs.chemistry,
     spellCheck: typingPrefs.spelling,
     replacements: typingPrefs.replacements,
@@ -2566,6 +2620,7 @@ void loadSettings().then((s) => {
   editor.showRoles = s.showRoles;
   $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(s.showRoles));
   showDevTools(s.devTools);
+  showScrollBars(s.scrollBars);
   modeColours = s.modeColours;
   applyModeColours(ws.active.mode, modeColours);
   keymap.setOverrides(s.hotkeys);
@@ -3158,8 +3213,21 @@ stylePanel.tables = {
 };
 
 let stereoSeen = -1;
+// scroll bars over the drawing: they cover what is drawn (or the slide), and the part on screen
+const scrollbars = new Scrollbars(host, renderer, () => {
+  const d = ws.active.deck;
+  return d ? { x1: 0, y1: 0, x2: d.size.w, y2: d.size.h } : doc.bounds();
+}, () => editor.requestScene());
+
+function showScrollBars(on: boolean): void {
+  scrollbars.shown = on;
+  $('[data-cmd="scroll-bars"]')?.setAttribute('aria-checked', String(on));
+  scrollbars.update(doc.version);
+}
+
 editor.onFrame = () => {
   layers?.refresh();
+  scrollbars.update(doc.version);
   updatePanels();
   updateWarnings();
   if (doc.version !== stereoSeen) { stereoSeen = doc.version; updateStereo(); }
