@@ -142,6 +142,30 @@ describe('a tied caption follows its structure', () => {
   });
 });
 
+describe('several tied captions', () => {
+  it('stack on one side: ID label nearest, then caption, then descriptors, even when added later', () => {
+    const { doc, ids, cap, capBox, sBox } = setup();
+    let desc = 0, note = 0;
+    doc.edit('Descriptors', () => {
+      const d = doc.addCaption({ x: 0, y: 0, runs: [{ text: 'C3H8' }], justify: 'center', attach: { atoms: [...ids], side: 'below', gap: 5, shift: 0, role: 'descriptors' } });
+      placeAttached(doc, d, POINTS);
+      desc = d.id;
+    });
+    doc.edit('Caption', () => {
+      const n = doc.addCaption({ x: 0, y: 0, runs: [{ text: '82%' }], justify: 'center', attach: { atoms: [...ids], side: 'below', gap: 5, shift: 0, role: 'caption' } });
+      placeAttached(doc, n, POINTS);
+      note = n.id;
+    });
+    const label = capBox(), n = POINTS.captionBox(doc.captions.get(note)!), d = POINTS.captionBox(doc.captions.get(desc)!);
+    expect(label.y1).toBeCloseTo(sBox().y2 + 5, 6);
+    expect(n.y1).toBeCloseTo(label.y2 + 5, 6);
+    expect(d.y1).toBeCloseTo(n.y2 + 5, 6);
+    // the label gets a second line: the others move down with it
+    doc.edit('Longer', () => doc.updateCaption(cap, { runs: [{ text: '12\n(racemic)' }] }));
+    expect(POINTS.captionBox(doc.captions.get(note)!).y1).toBeCloseTo(capBox().y2 + 5, 6);
+  });
+});
+
 describe('Doc.amend', () => {
   it('folds a later change into the last undo step', () => {
     const { doc, cap } = setup();

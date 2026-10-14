@@ -9,6 +9,8 @@ import { POINTS, selectionBox, type Measure } from './arrange';
 
 /** The name of the tag that saves a caption's tie in a CDXML file. */
 export const ATTACH_TAG = 'Chem Illustrator attached';
+/** The tag that marks a caption whose label warning was ignored. */
+export const IGNORE_TAG = 'Chem Illustrator ignore';
 
 /** The usual gap between a structure and its label: a third of a bond length. */
 export function defaultGap(doc: Doc): number {
@@ -88,10 +90,38 @@ export function structureSig(doc: Doc, atoms: Set<number>): string {
   return parts.join('|');
 }
 
+const RANK: Record<Attachment['role'], number> = { label: 0, caption: 1, descriptors: 2 };
+
+/** Which of two tied captions on one side sits nearer the structure: ID label, then caption, then descriptors. */
+function nearer(x: Caption, y: Caption): number {
+  return RANK[x.attach!.role] - RANK[y.attach!.role] || x.id - y.id;
+}
+
+/**
+ * The box a tied caption is placed against: its structure's, grown past the tied captions that
+ * sit nearer the structure on the same side, so several stack up instead of overlapping.
+ */
+export function placeBox(doc: Doc, c: Caption, atoms: Set<number>, m: Measure): Rect | null {
+  const box = structureBox(doc, atoms, m);
+  if (!box || !c.attach) return box;
+  const side = c.attach.side;
+  const out = { ...box };
+  for (const o of doc.captions.values()) {
+    if (o.id === c.id || !o.attach || o.attach.side !== side || nearer(o, c) > 0) continue;
+    if (!o.attach.atoms.some((a) => atoms.has(a))) continue;
+    const b = m.captionBox(o);
+    if (side === 'below') out.y2 = Math.max(out.y2, b.y2);
+    else if (side === 'above') out.y1 = Math.min(out.y1, b.y1);
+    else if (side === 'left') out.x1 = Math.min(out.x1, b.x1);
+    else out.x2 = Math.max(out.x2, b.x2);
+  }
+  return out;
+}
+
 /** Put a caption in its place beside its structure (inside an edit). */
 export function placeAttached(doc: Doc, c: Caption, m: Measure): void {
   if (!c.attach) return;
-  const box = structureBox(doc, attachedAtoms(doc, c.attach), m);
+  const box = placeBox(doc, c, attachedAtoms(doc, c.attach), m);
   if (!box) return;
   const d = attachOffset(box, m.captionBox(c), c.attach);
   if (Math.abs(d.x) > 1e-6 || Math.abs(d.y) > 1e-6) doc.updateCaption(c.id, { x: c.x + d.x, y: c.y + d.y });
@@ -101,13 +131,20 @@ const sameList = (a: number[], b: Set<number>) => a.length === b.size && a.every
 
 /**
  * At the end of a change (`before` holds how the changed things were): captions whose structure
- * moved or changed take their places beside it again; a caption moved by hand on its own keeps
- * its new place; captions whose structure was deleted go with it.
+ * moved or changed take their places beside it again, as do the others tied to a structure when
+ * one of them changed (they stack); a caption moved by hand on its own keeps its new place; captions
+ * whose structure was deleted go with it.
  */
 export function refitAttached(doc: Doc, before: ReadonlyMap<string, Entity | null>, m: Measure): void {
-  for (const c of [...doc.captions.values()]) {
-    const a = c.attach;
-    if (!a) continue;
+  const tied = [...doc.captions.values()].filter((c) => c.attach).sort(nearer);
+  if (!tied.length) return;
+  // structures (by an atom) with a tied caption that changed
+  const touched = new Set<number>();
+  for (const c of tied) if (before.has('c' + c.id)) for (const a of c.attach!.atoms) touched.add(a);
+  for (const c0 of tied) {
+    const c = doc.captions.get(c0.id);
+    const a = c?.attach;
+    if (!c || !a) continue;
     const atoms = attachedAtoms(doc, a);
     if (!atoms.size) {
       // the structure is gone: so is its label, unless the caption was what changed
@@ -116,15 +153,16 @@ export function refitAttached(doc: Doc, before: ReadonlyMap<string, Entity | nul
     }
     const structure = a.atoms.some((id) => before.has('a' + id)) || [...atoms].some((id) => before.has('a' + id));
     const old = before.get('c' + c.id) as Caption | null | undefined;
-    if (!structure && !old) continue;
+    const neighbour = [...atoms].some((id) => touched.has(id));
+    if (!structure && !old && !neighbour) continue;
     // keep the list of atoms up to date (atoms added to or erased from the structure)
     let at: Attachment = a;
     if (!sameList(a.atoms, atoms)) at = { ...a, atoms: [...atoms] };
-    const box = structureBox(doc, atoms, m);
-    if (!box) continue;
     const moved = !!old && !structure && (old.x !== c.x || old.y !== c.y) && sameAttach(old.attach, a);
     if (moved) {
       // moved by hand: it stays there, and follows the structure from there on
+      const box = placeBox(doc, c, atoms, m);
+      if (!box) continue;
       at = { ...at, ...readPlace(box, m.captionBox(c), a.side) };
       doc.updateCaption(c.id, { attach: at });
       continue;

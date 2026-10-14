@@ -62,6 +62,10 @@ export const COMMAND_ICONS: Record<string, string> = {
   'name-to-structure': svg(txt(6.5, 9, 'abc', 7) + '<path d="M6 11v4M4.5 13.5L6 15l1.5-1.5"/>' + hex(15.5, 15, 5)),
   'check-structure': svg(hex(11, 12.5, 8) + '<path d="M14.5 17.5l2.5 2.5 5-6"/>'),
   'periodic-table': ICONS.element ?? svg(txt(12, 15, 'Pt', 9)),
+  // ---- text tied under a structure
+  'add-id-label': svg(hex(12, 8, 5.5) + txt(12, 22, '1', 8.5, 800)),
+  'add-caption': svg(hex(12, 8, 5.5) + '<path d="M5 18h14M7 21.5h10"/>'),
+  'attach-descriptors': svg(hex(12, 7, 5) + txt(12, 17.5, 'C₆H₆', 6.5, 600) + '<path d="M7 21h10" stroke-width="1.2"/>'),
   'number-compounds': svg(hex(12, 9, 5) + txt(12, 21.5, '1', 8, 700)),
   'clean-up-reaction': svg('<path d="M3 12h14"/><path d="M14 9l3 3-3 3"/><path d="M19.5 3.5l.8 1.7 1.7.8-1.7.8-.8 1.7-.8-1.7-1.7-.8 1.7-.8z" fill="currentColor" stroke="none"/>'),
 };

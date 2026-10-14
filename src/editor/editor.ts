@@ -30,7 +30,7 @@ import { bondLayer, crossingBonds } from '../chem/crossing';
 import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
 import { pushArrow, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
 import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
-import { refitAttached } from './attached';
+import { attachWhereItIs, defaultGap, placeAttached, refitAttached } from './attached';
 import { frameAround, frameBox, frameMembers, refitFrames, defaultPad, thingsInside } from './frames';
 import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, rotation, mirrorX, mirrorY } from './arrange';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
@@ -1324,10 +1324,15 @@ export class Editor {
   }
 
   /** Select one atom or bond and bring it into view (from the list of warnings). */
-  reveal(kind: 'atom' | 'bond', id: number): void {
+  reveal(kind: 'atom' | 'bond' | 'caption', id: number): void {
     const doc = this.doc;
     let p: Vec;
-    if (kind === 'atom') {
+    if (kind === 'caption') {
+      const c = doc.captions.get(id);
+      if (!c) return;
+      const b = this.r.captionBox(c);
+      p = { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 };
+    } else if (kind === 'atom') {
       const a = doc.atoms.get(id);
       if (!a) return;
       p = a;
@@ -1736,21 +1741,25 @@ export class Editor {
    * Number Compounds: a bold number under each selected structure (or every structure), in
    * scheme order. Numbers already under a structure are changed in place. Returns how many.
    */
-  numberCompounds(opts: NumberOptions): number {
+  numberCompounds(opts: NumberOptions & { bold?: boolean }): number {
     const doc = this.doc;
-    const plan = planNumbers(doc, this.fullMeasure(), this.sel.atoms, opts);
+    const m = this.fullMeasure();
+    const plan = planNumbers(doc, m, this.sel.atoms, opts);
     if (!plan.labels.length) return 0;
+    const bold = opts.bold ?? true;
     doc.edit('Number Compounds', () => {
       for (const l of plan.labels) {
         if (l.caption !== undefined) {
           const c = doc.captions.get(l.caption)!;
-          doc.updateCaption(c.id, { runs: [{ ...c.runs[0], text: l.text, bold: true }] });
+          // changed in place, and tied to its structure from now on
+          const attach = c.attach ?? attachWhereItIs(doc, c, new Set(l.item.atoms), m, 'label') ?? undefined;
+          doc.updateCaption(c.id, { runs: [{ ...c.runs[0], text: l.text, bold: bold || undefined }], attach });
           continue;
         }
-        const c = doc.addCaption({ x: l.at.x, y: l.at.y, runs: [{ text: l.text, bold: true }], justify: 'left' });
-        // centred under the structure, its top at the spot
-        const b = this.r.captionBox(c);
-        doc.updateCaption(c.id, { x: c.x + l.at.x - (b.x1 + b.x2) / 2, y: c.y + l.at.y - b.y1 });
+        // centred under the structure and tied to it
+        const c = doc.addCaption({ x: l.at.x, y: l.at.y, runs: [{ text: l.text, bold: bold || undefined }], justify: 'center',
+          attach: { atoms: [...l.item.atoms], side: 'below', gap: defaultGap(doc), shift: 0, role: 'label' } });
+        placeAttached(doc, c, m);
         this.sel.captions.add(c.id);
         // an arrow leaving from under the structure starts below the new number instead
         const nb = this.r.captionBox(doc.captions.get(c.id)!);
@@ -2371,6 +2380,11 @@ export class Editor {
 
   private newCaption(p: Vec): void {
     this.openCaption(null, p);
+  }
+
+  /** Start typing into a caption (Add Caption, Add ID Label). */
+  typeInto(id: number): void {
+    this.editCaption(id);
   }
 
   private editCaption(id: number, client?: { x: number; y: number }): void {

@@ -56,6 +56,10 @@ import { addNicknames, removeNickname, isBuiltInNickname } from './chem/labels';
 import { selectedGroup } from './chem/group-smiles';
 import { templateIcon } from './ui/template-icons';
 import { StructureChecks } from './chem/warnings';
+import { idText, labelClashes, parseIdStart, type IdStyle } from './chem/compound-numbers';
+import { schemeItems } from './chem/reaction';
+import { labelsOf } from './chem/scheme-layout';
+import { plainText } from './richtext';
 import { LiveStereo } from './chem/live-stereo';
 import { setStereoShown } from './chem/stereo';
 import { keymap, registerToolNames, displayChord, actionName, chordOf, parseAction, KeyContext, KeyOverrides } from './editor/keymap';
@@ -537,19 +541,140 @@ function addNamed(got: { mb: string; attach: number[] }, x: number, y: number, t
   return ids;
 }
 
-/** Scheme > Number Compounds: ask where to start, then number the structures in scheme order. */
+/** How Number Compounds counted last time (offered again). */
+const numbering = { style: 'numbers' as IdStyle, prefix: '', suffix: '', bold: true, same: true };
+
+/**
+ * Each structure's key for "the same structure, the same ID": its canonical SMILES (with
+ * stereo), by atom. Structures the chemistry engine can't read have none.
+ */
+async function structureKeys(): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  if (!chem.ready) return out;
+  const frags = doc.fragments().filter((f) => f.size);
+  const mols = frags.map((f) => { const ex = toMolfile(doc, f); return { molblock: ex.molblock, map: ex.map }; });
+  if (!mols.length) return out;
+  const res = await chem.analyze(mols).catch(() => null);
+  frags.forEach((f, i) => {
+    const r = res?.results[i];
+    if (r && !r.error && r.smiles) for (const a of f) out.set(a, r.smiles);
+  });
+  return out;
+}
+
+/**
+ * Scheme > Number Compounds: ID labels under the selected structures (or all), in scheme order,
+ * counted as chosen; copies of one structure share an ID. Labels are tied to their structures.
+ */
 async function numberCompounds(): Promise<void> {
-  const next = editor.nextCompoundNumber();
+  const next = editor.sel.atoms.size ? editor.nextCompoundNumber() : 1;
+  const startText = idText(numbering.style, next, 0).replace(/^\d+(?=[a-z])/, '');
   const got = await ask('Number Compounds', [
-    { name: 'start', label: 'Start at', value: String(editor.sel.atoms.size ? next : 1), type: 'number' },
-    { name: 'style', label: 'Numbers', value: 'numbers', options: [{ value: 'numbers', label: '1, 2, 3 …' }, { value: 'letters', label: '1a, 1b, 1c …' }] },
-    { name: 'old', label: 'Numbers already there', value: 'renumber', options: [{ value: 'renumber', label: 'Number again' }, { value: 'keep', label: 'Keep' }] },
+    { name: 'style', label: 'Count', value: numbering.style, options: [
+      { value: 'numbers', label: '1, 2, 3 …' }, { value: 'letters', label: '1a, 1b, 1c …' }, { value: 'lower', label: 'a, b, c …' },
+      { value: 'upper', label: 'A, B, C …' }, { value: 'roman', label: 'i, ii, iii …' }, { value: 'ROMAN', label: 'I, II, III …' }] },
+    { name: 'start', label: 'Start at', value: numbering.style === 'letters' ? String(next) : startText, type: 'text', placeholder: '1, c or iii' },
+    { name: 'prefix', label: 'Before each', value: numbering.prefix, type: 'text', placeholder: 'e.g. S for S1, S2' },
+    { name: 'suffix', label: 'After each', value: numbering.suffix, type: 'text', placeholder: 'e.g. ′' },
+    { name: 'bold', label: 'Bold', value: String(numbering.bold), type: 'checkbox' },
+    { name: 'same', label: 'Same structure, same ID', value: String(numbering.same), type: 'checkbox' },
+    { name: 'old', label: 'IDs already there', value: 'renumber', options: [{ value: 'renumber', label: 'Number again' }, { value: 'keep', label: 'Keep' }] },
     { name: 'reagents', label: 'Reagents over arrows', value: 'skip', options: [{ value: 'skip', label: 'Leave unnumbered' }, { value: 'number', label: 'Number them too' }] },
-  ], { ok: 'Number', note: 'Puts a bold number under each selected structure (or every structure), following the arrows of a scheme, else left to right and top to bottom. The numbers are ordinary text you can change.' });
+  ], { ok: 'Number', note: 'Puts an ID under each selected structure (or every structure), following the arrows of a scheme, else left to right and top to bottom. Each is tied to its structure and is ordinary text you can change. For 1a, 1b, “Start at” is the number.' });
   if (!got) return;
-  const start = Math.max(0, Math.round(Number(got.start)) || 1);
-  const n = editor.numberCompounds({ start, letters: got.style === 'letters', keep: got.old === 'keep', reagents: got.reagents === 'number' });
+  const style = got.style as IdStyle;
+  const start = parseIdStart(got.start, style);
+  if (start === null) { flash(`“${got.start}” isn't a place to start counting ${style === 'roman' || style === 'ROMAN' ? 'in roman numerals' : style === 'lower' || style === 'upper' ? 'in letters' : 'from'}.`); return; }
+  Object.assign(numbering, { style, prefix: got.prefix, suffix: got.suffix, bold: got.bold === 'true', same: got.same === 'true' });
+  let keyOf: ((atoms: number[]) => string | undefined) | undefined;
+  if (numbering.same) {
+    const keys = await structureKeys();
+    keyOf = (atoms) => keys.get(atoms[0]);
+  }
+  const n = editor.numberCompounds({ start: Math.max(0, start), style, prefix: got.prefix, suffix: got.suffix, bold: numbering.bold, keep: got.old === 'keep', reagents: got.reagents === 'number', keyOf });
   if (!n) flash('No structures to number.');
+}
+
+/**
+ * Structure > Add ID Label and Add Caption: text centred under each chosen structure, tied to
+ * it, then typing straight away. An ID label is the next compound number (or the ID a copy of
+ * the structure already has).
+ */
+async function addTiedText(role: 'label' | 'caption'): Promise<void> {
+  const frags = chosenStructures();
+  if (!frags.length) { flash('Select a structure first.'); return; }
+  const m = editor.measure();
+  // copies already labelled keep their ID
+  const keys = role === 'label' && numbering.same ? await structureKeys() : new Map<number, string>();
+  const known = new Map<string, string>();
+  if (keys.size) {
+    for (const c of doc.captions.values()) {
+      if (c.attach?.role !== 'label') continue;
+      const k = c.attach.atoms.map((a) => keys.get(a)).find((x) => x);
+      if (k) known.set(k, plainText(c.runs).trim());
+    }
+  }
+  // new IDs count on in the style Number Compounds last used, skipping any already in use
+  const inUse = new Set([...doc.captions.values()].filter((c) => c.attach?.role === 'label').map((c) => plainText(c.runs).trim()));
+  const base = numbering.style === 'numbers' || numbering.style === 'letters' ? editor.nextCompoundNumber() : 1;
+  let k = 0;
+  const freshId = () => {
+    let t: string;
+    do t = idText(numbering.style, base, k++, numbering.prefix, numbering.suffix); while (inUse.has(t));
+    inUse.add(t);
+    return t;
+  };
+  const made: number[] = [];
+  doc.edit(role === 'label' ? 'Add ID label' : 'Add caption', () => {
+    for (const f of frags) {
+      const k = keys.get([...f][0]);
+      const text = role === 'caption' ? '' : (k && known.get(k)) || freshId();
+      if (k && role === 'label' && !known.has(k)) known.set(k, text);
+      const c = doc.addCaption({ x: 0, y: 0, runs: [{ text, bold: role === 'label' && numbering.bold ? true : undefined }], justify: 'center',
+        attach: { atoms: [...f], side: 'below', gap: defaultGap(doc), shift: 0, role } });
+      placeAttached(doc, c, m);
+      made.push(c.id);
+    }
+  });
+  editor.changed();
+  // type into the first (the others are selected, to style together)
+  if (made.length === 1) editor.typeInto(made[0]);
+  else { editor.clearSelection(); for (const id of made) editor.sel.captions.add(id); editor.changed(); }
+}
+
+// ---------------------------------------------------------------- labels that clash
+
+/** Captions whose compound label is also used for a different structure, with the warning to show. */
+let labelWarnings = new Map<number, string>();
+let labelWarnVersion = 0, labelCheckTimer = 0, labelCheckedAt = -1;
+
+/** Look for one ID used under different structures (shortly after each change). */
+function scheduleLabelCheck(): void {
+  if (labelCheckedAt === doc.version) return;
+  clearTimeout(labelCheckTimer);
+  labelCheckTimer = window.setTimeout(() => void checkLabels(), 400);
+}
+
+async function checkLabels(): Promise<void> {
+  const version = doc.version;
+  const items = schemeItems(doc, editor.measure());
+  const labels = labelsOf(items, new Set(), doc, doc.style.bondLength);
+  let found = new Map<number, string>();
+  if (labels.size > 1) {
+    const keys = await structureKeys();
+    if (doc.version !== version) { scheduleLabelCheck(); return; }
+    const list: { caption: number; text: string; key?: string }[] = [];
+    for (const [it, caps] of labels) {
+      for (const c of caps) {
+        const cap = doc.captions.get(c.caption!);
+        if (cap && !cap.ignoreWarnings) list.push({ caption: cap.id, text: plainText(cap.runs), key: keys.get(it.atoms[0]) });
+      }
+    }
+    found = labelClashes(list);
+  }
+  labelCheckedAt = version;
+  const same = found.size === labelWarnings.size && [...found].every(([k, v]) => labelWarnings.get(k) === v);
+  if (!same) { labelWarnings = found; labelWarnVersion++; updateWarnings(); }
 }
 
 editor.askChainLength = async (last) => {
@@ -2201,6 +2326,8 @@ const COMMANDS: Record<string, () => unknown> = {
   'arrange-scheme': () => arrangeDialog.open(),
   'number-compounds': () => void numberCompounds(),
   'attach-descriptors': () => void attachDescriptors(),
+  'add-id-label': () => void addTiedText('label'),
+  'add-caption': () => void addTiedText('caption'),
   'bring-front': () => editor.setBondLayer(true) || flash('Select the bond to bring to the front (where bonds cross, the one behind has a gap).'),
   'send-back': () => editor.setBondLayer(false) || flash('Select the bond to send to the back (where bonds cross, the one behind has a gap).'),
   'save-template': () => void saveTemplate(),
@@ -3325,11 +3452,12 @@ function updateWarnings(): void {
   } else warnTip.hidden = true;
 
   // the list, redone only when the warnings or the drawing changed
-  const key = checks.version + ':' + doc.version;
+  const key = checks.version + ':' + doc.version + ':' + labelWarnVersion;
   if (key === warnKey) return;
   warnKey = key;
-  const list = checks.list();
-  const ignored = checks.ignoredCount();
+  const list: { kind: 'atom' | 'bond' | 'caption'; id: number; text: string[] }[] = checks.list();
+  for (const [id, text] of labelWarnings) if (doc.captions.has(id)) list.push({ kind: 'caption', id, text: [text] });
+  const ignored = checks.ignoredCount() + [...doc.captions.values()].filter((c) => c.ignoreWarnings).length;
   $('#warnings-count').textContent = list.length ? String(list.length) : '';
   const MAX = 100;
   const rows = list.slice(0, MAX).map((w, i) =>
@@ -3347,7 +3475,8 @@ function updateWarnings(): void {
       const w = items[Number(b.dataset.i)];
       doc.edit('Ignore warning', () => {
         if (w.kind === 'atom') doc.updateAtom(w.id, { ignoreWarnings: true });
-        else doc.updateBond(w.id, { ignoreWarnings: true });
+        else if (w.kind === 'bond') doc.updateBond(w.id, { ignoreWarnings: true });
+        else doc.updateCaption(w.id, { ignoreWarnings: true });
       });
       editor.changed();
     });
@@ -3356,6 +3485,7 @@ function updateWarnings(): void {
     doc.edit('Show ignored warnings', () => {
       for (const id of checks.atoms.keys()) if (doc.atoms.get(id)?.ignoreWarnings) doc.updateAtom(id, { ignoreWarnings: false });
       for (const id of checks.bonds.keys()) if (doc.bonds.get(id)?.ignoreWarnings) doc.updateBond(id, { ignoreWarnings: false });
+      for (const c of doc.captions.values()) if (c.ignoreWarnings) doc.updateCaption(c.id, { ignoreWarnings: undefined });
     });
     editor.changed();
   });
@@ -3476,7 +3606,7 @@ function drawingMenu(): MenuItem[] {
     ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] }] : []),
     null,
     { cmd: 'add-frame' },
-    ...(atoms ? [{ cmd: 'attach-descriptors' }] : []),
+    ...(atoms ? [{ label: 'Label the Structure', items: [{ cmd: 'add-id-label' }, { cmd: 'add-caption' }, { cmd: 'attach-descriptors' }, null, { cmd: 'number-compounds' }] }] : []),
     { cmd: 'scale' },
     ...(atoms ? [{ label: 'Highlight and Fill', items: [{ cmd: 'highlight' }, { cmd: 'remove-highlight' }, null, { cmd: 'fill-rings' }] }] : []),
     { label: 'Align', items: arrange },
@@ -3552,7 +3682,7 @@ const TOOLBOX_DEFS: ToolboxDef[] = [
   { id: 'main', title: 'Drawing Tools', build: (body) => body.append(toolsNav) },
   {
     id: 'structure', title: 'Structure',
-    build: (body) => cmdRow(body, ['clean-up', 'add-frame', 'fill-rings', 'highlight', 'remove-highlight', null, 'chain-ends', 'explicit-h', 'aromatic-circles', 'stereo-labels', null, 'contract-label', 'name-to-structure']),
+    build: (body) => cmdRow(body, ['clean-up', 'add-frame', 'fill-rings', 'highlight', 'remove-highlight', null, 'chain-ends', 'explicit-h', 'aromatic-circles', 'stereo-labels', null, 'add-id-label', 'add-caption', 'attach-descriptors', 'number-compounds', null, 'contract-label', 'name-to-structure']),
   },
   {
     id: 'arrange', title: 'Object',
@@ -3719,7 +3849,7 @@ editor.onFrame = () => {
   updateWarnings();
   if (doc.version !== stereoSeen) { stereoSeen = doc.version; updateStereo(); }
 };
-editor.onChange = () => { updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); void refreshDescriptors(); };
+editor.onChange = () => { updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); void refreshDescriptors(); scheduleLabelCheck(); };
 chem.onReady = () => {
   (window as any).__chemReadyMs = performance.now() - startMs;
   sheetChem.flush();

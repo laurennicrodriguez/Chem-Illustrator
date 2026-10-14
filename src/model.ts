@@ -249,6 +249,8 @@ export interface Caption {
   boxH?: number;
   /** Tied to a structure: it keeps its place beside it when the structure moves or changes. */
   attach?: Attachment;
+  /** Don't warn about this compound label (shared with a different structure on purpose). */
+  ignoreWarnings?: boolean;
 }
 
 /** Which side of its structure an attached caption sits on. */
