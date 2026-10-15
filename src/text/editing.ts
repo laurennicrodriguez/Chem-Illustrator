@@ -204,7 +204,8 @@ export class TextEditing {
 
   /** Put runs in place of the text between two places, leaving the caret after them (kind null: part of the change before). */
   replace(start: number, end: number, runs: TextRun[], paras?: ParaStyle[], kind: string | null = 'edit'): void {
-    const who = kind !== null ? this.track?.() : null;
+    // tracked whether a step of its own or part of the one before (a paste puts its objects in first)
+    const who = this.track?.();
     if (who) {
       const got = trackedReplace(this.t, start, end, runs, paras, who);
       this.keptLast = got.kept;
@@ -515,9 +516,21 @@ export class TextEditing {
     }
     let anchor = this.anchor, focus = this.focus;
     const moved = (at: number, e: FixEdit, len: number) => (at >= e.end ? at + len - (e.end - e.start) : at > e.start ? e.start + len : at);
+    const who = this.track?.();
     for (const e of [...edits].filter((x) => x.text !== undefined).sort((a, b) => b.start - a.start)) {
       const text = rt.plainText(runs);
       const style = rt.typingStyle(runs, e.start, e.end, this.defaults);
+      if (who) {
+        // tracked: what was there is marked deleted (or just goes, if it was typed while tracking) and the fix inserted
+        const got = trackedReplace({ ...this.t, runs, paras }, e.start, e.end, [{ ...style, text: e.text! }], undefined, who);
+        const delta = rt.plainText(got.t.runs).length - text.length;
+        const shift = (at: number) => (at >= e.end ? at + delta : at > e.start ? got.caret : at);
+        runs = got.t.runs;
+        paras = got.t.paras;
+        anchor = shift(anchor);
+        focus = shift(focus);
+        continue;
+      }
       paras = editParas(paras, text, e.start, e.end, e.text!);
       runs = rt.replaceRange(runs, e.start, e.end, [{ ...style, text: e.text! }]);
       anchor = moved(anchor, e, e.text!.length);

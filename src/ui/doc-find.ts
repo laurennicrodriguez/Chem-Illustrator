@@ -6,7 +6,8 @@
 import type { DocFile } from '../document/doc-file';
 import type { DocText } from '../document/document';
 import { OBJECT_CHAR } from '../document/document';
-import { findAll, lookPatch, replaceRanges, type FindOptions, type ReplaceLook } from '../document/find';
+import * as rt from '../richtext';
+import { findAll, lookPatch, replaceRanges, trackedReplaceRanges, withoutDeleted, type FindOptions, type ReplaceLook } from '../document/find';
 
 export interface DocFindHost {
   file(): DocFile | null;
@@ -144,7 +145,7 @@ export class DocFind {
   /** Look again (the words or the text changed). */
   refresh(): void {
     const f = this.host.file();
-    this.hits = f && this.open ? findAll(f.ed.text, this.findBox.value, this.options()) : [];
+    this.hits = f && this.open ? withoutDeleted(f.t.runs, findAll(f.ed.text, this.findBox.value, this.options())) : [];
     this.showCount();
     this.host.redraw();
   }
@@ -192,9 +193,18 @@ export class DocFind {
     const [a, b] = this.hits[i];
     const with_ = this.withBox.value;
     const keep = !with_ && lookPatch(this.look) !== null;
-    const runs = replaceRanges(f.t.runs, [[a, b]], with_, this.look, f.ed.defaults);
-    const after = keep ? b : a + with_.length;
-    f.ed.update({ ...f.t, runs } as DocText, 'Replace', after, after);
+    const who = keep ? null : f.ed.track?.();
+    let after: number;
+    if (who) {
+      // tracked: the old words stay, struck through, with the new ones after them
+      const got = trackedReplaceRanges(f.t, [[a, b]], with_, this.look, f.ed.defaults, who);
+      after = got.caret;
+      f.ed.update(got.t, 'Replace', after, after);
+    } else {
+      const runs = replaceRanges(f.t.runs, [[a, b]], with_, this.look, f.ed.defaults);
+      after = keep ? b : a + with_.length;
+      f.ed.update({ ...f.t, runs } as DocText, 'Replace', after, after);
+    }
     // the text changed, so the places were found again; go to the next one from here
     this.refresh();
     const h = this.hits;
@@ -210,9 +220,10 @@ export class DocFind {
     const n = this.hits.length;
     const with_ = this.withBox.value;
     const keep = !with_ && lookPatch(this.look) !== null;
-    const runs = replaceRanges(f.t.runs, this.hits, with_, this.look, f.ed.defaults);
-    const at = Math.min(f.ed.start, f.ed.text.length);
-    f.ed.update({ ...f.t, runs } as DocText, 'Replace all', at, at);
+    const who = keep ? null : f.ed.track?.();
+    const next = who ? trackedReplaceRanges(f.t, this.hits, with_, this.look, f.ed.defaults, who).t : ({ ...f.t, runs: replaceRanges(f.t.runs, this.hits, with_, this.look, f.ed.defaults) } as DocText);
+    const at = Math.min(f.ed.start, rt.plainText(next.runs).length);
+    f.ed.update(next, 'Replace all', at, at);
     this.refresh();
     const what = n === 1 ? 'one place' : `${n} places`;
     this.host.flash(keep ? `Changed the look of ${what}. Ctrl+Z puts it back.` : with_ ? `Replaced ${what}. Ctrl+Z puts them back.` : `Deleted ${what}. Ctrl+Z puts them back.`);

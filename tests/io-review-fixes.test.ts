@@ -63,3 +63,16 @@ describe('PowerPoint tags', () => {
     expect(p.documentElement.getAttribute('v')).toBe('one\ntwo\tthree');
   });
 });
+
+describe('pictures used more than once', () => {
+  it('are stored once in a .pptx or .docx', async () => {
+    const { MediaFiles } = await import('../src/io/ooxml');
+    const m = new MediaFiles();
+    const a = new Uint8Array([1, 2, 3, 4]), same = new Uint8Array([1, 2, 3, 4]), other = new Uint8Array([1, 2, 3, 5]);
+    expect(m.find(a, 'png')).toBeNull();
+    m.note(a, 'png', 'media/image1.png');
+    expect(m.find(same, 'png')).toBe('media/image1.png');
+    expect(m.find(other, 'png')).toBeNull();
+    expect(m.find(same, 'jpeg')).toBeNull();
+  });
+});

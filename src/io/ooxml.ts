@@ -134,6 +134,40 @@ export class Package {
 }
 
 /** Where a relationship from `from` points, as a path in the package ("../media/a.png" from "ppt/slides/slide1.xml"). */
+/**
+ * Pictures already put in a package, so the same picture used on many slides or pages is
+ * stored once (each use still gets its own relationship to it).
+ */
+export class MediaFiles {
+  private seen = new Map<string, { path: string; bytes: Uint8Array }[]>();
+
+  /** The path the same bytes were stored at, or null. */
+  find(bytes: Uint8Array, ext: string): string | null {
+    for (const m of this.seen.get(MediaFiles.key(bytes, ext)) ?? []) if (sameBytes(m.bytes, bytes)) return m.path;
+    return null;
+  }
+
+  note(bytes: Uint8Array, ext: string, path: string): void {
+    const k = MediaFiles.key(bytes, ext);
+    const list = this.seen.get(k) ?? [];
+    list.push({ path, bytes });
+    this.seen.set(k, list);
+  }
+
+  private static key(bytes: Uint8Array, ext: string): string {
+    // FNV-1a over the bytes: quick, and a match is checked byte by byte
+    let h = 0x811c9dc5;
+    for (let i = 0; i < bytes.length; i++) h = Math.imul(h ^ bytes[i], 0x01000193);
+    return `${ext}|${bytes.length}|${h >>> 0}`;
+  }
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
 export function resolvePath(from: string, target: string): string {
   if (target.startsWith('/')) return target.slice(1);
   const parts = from.split('/');

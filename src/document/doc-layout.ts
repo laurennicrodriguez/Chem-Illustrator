@@ -180,7 +180,12 @@ export interface PlacedMath extends MathBox { family: string; color: string }
 /** The page number shown on a page (index from 0), or '' for none. */
 export function pageLabel(hf: HeaderFooter, index: number): string {
   if (hf.numbers === 'none' || (index === 0 && !hf.onFirst)) return '';
-  return `${hf.prefix}${hf.start + index}`;
+  return pageNumber(hf, index);
+}
+
+/** A page's number as a table of contents lists it, shown on the page or not (S1 on a first page whose number is hidden). */
+export function pageNumber(hf: HeaderFooter, index: number): string {
+  return `${hf.prefix ?? ''}${(hf.start ?? 1) + index}`;
 }
 
 /** The size a figure or picture is shown at: its own size (times its scale), made smaller to fit the width between the margins. */
@@ -316,7 +321,7 @@ export class DocLayouter {
     const hasToc = Object.values(t.objects).some((o) => o.kind === 'toc');
     let lay = this.layoutOnce(t);
     for (let pass = 0; hasToc && pass < 3; pass++) {
-      const now = lay.paraTops.map((pt) => lay.pages[pt.page]?.label || String(pt.page + 1));
+      const now = lay.paraTops.map((pt) => pageNumber(t.hf, pt.page));
       const heads = Object.values(t.objects).filter((o) => o.kind === 'toc').flatMap((o) => tocEntries(t, (o as { levels: number }).levels));
       if (heads.every((e) => this.tocPages[e.para] === now[e.para])) break;
       this.tocPages = now;
@@ -675,6 +680,7 @@ export class DocLayouter {
 
   /** A table cell's text laid out in its width (`w`, the inner margins taken off). */
   cellText(N: NamedStyle, runs: TextRun[], paras: ParaStyle[] | undefined, w: number, align: Justify, inline: (id: number, room: number) => InlineBox | null, objKey: (id: number) => string): TextLayout {
+    if (hasChanges(runs)) runs = markedRuns(runs);
     const resolved = runs.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? N.font, size: r.size ?? N.size }));
     const n = paraCount(rt.plainText(runs));
     const ps = fitParas(paras, n);
@@ -692,6 +698,7 @@ export class DocLayouter {
   /** A text box's text laid out inside it (`w` the box's width), from the top left of its inner margins. */
   boxText(t: DocText, runs: TextRun[], paras: ParaStyle[] | undefined, w: number): TextLayout {
     const N = t.styles.Normal ?? styleOf(t, {});
+    if (hasChanges(runs)) runs = markedRuns(runs);
     const resolved = runs.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? N.font, size: r.size ?? N.size }));
     const n = paraCount(rt.plainText(runs));
     const ps = fitParas(paras, n);

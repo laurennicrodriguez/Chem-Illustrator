@@ -179,6 +179,7 @@ export class Player {
   private frames: SlideFrames | null = null;
   private moving: { kind: 'transition'; from: HTMLCanvasElement | null; to?: HTMLCanvasElement; t: Transition; t0: number } | { kind: 'step'; t0: number } | null = null;
   private raf = 0;
+  private loops = 0;
   private timer = 0;
   private timeUp = false;
   private w = 1;
@@ -312,9 +313,12 @@ export class Player {
 
   private loop(): void {
     cancelAnimationFrame(this.raf);
+    // one loop at a time: a paint that starts the next animation starts a new loop, and this one stops
+    const gen = ++this.loops;
     const tick = () => {
+      if (gen !== this.loops) return;
       this.paint();
-      if (this.moving) this.raf = requestAnimationFrame(tick);
+      if (this.moving && gen === this.loops) this.raf = requestAnimationFrame(tick);
     };
     this.raf = requestAnimationFrame(tick);
   }

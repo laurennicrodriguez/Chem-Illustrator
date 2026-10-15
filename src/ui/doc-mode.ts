@@ -22,7 +22,7 @@ import { DocPanel, parseLength, showLength, type DocBoxKey } from './doc-panel';
 import { WORD_HIGHLIGHTS } from '../io/docx';
 import { DocFind } from './doc-find';
 import { tocEntries } from '../document/toc';
-import { changesIn, decide, reviewAuthor, setReviewAuthor } from '../document/revisions';
+import { changesIn, countChanges, decide, decideEverywhere, reviewAuthor, setReviewAuthor } from '../document/revisions';
 import { ask } from './ask';
 import { askEquation } from './equation-dialog';
 import { ReferencesDialog, chooseReferences } from './references-dialog';
@@ -2063,8 +2063,9 @@ export class DocumentMode {
   /** Accept or reject the changes in the selection, or the one at the caret, then go to the next. */
   private decideChange(accept: boolean): void {
     const f = this.file!;
-    const ed = f.ed;
-    const all = changesIn(f.t.runs);
+    // in a text box or table cell being typed in, its own changes
+    const ed = f.textEd;
+    const all = changesIn(ed.t.runs);
     let start = ed.start, end = ed.end;
     if (start === end) {
       const c = all.find((x) => x.start <= start && start < x.end) ?? all.find((x) => x.start === start || x.end === start);
@@ -2073,24 +2074,26 @@ export class DocumentMode {
     }
     if (!all.some((x) => x.start < end && x.end > start)) { this.goToChange(true); return; }
     // the caret stays where the change was; what follows moved up by what was taken away
-    ed.update(decide(f.t, accept, start, end), accept ? 'Accept change' : 'Reject change', start, start);
+    ed.update(decide(ed.t, accept, start, end), accept ? 'Accept change' : 'Reject change', start, start);
     this.goToChange(true, start);
   }
 
   private decideAll(accept: boolean): void {
     const f = this.file!;
-    const n = changesIn(f.t.runs).length;
+    const n = countChanges(f.t);
     if (!n) { this.host.flash('There are no tracked changes in this document.'); return; }
-    f.ed.update(decide(f.t, accept), accept ? 'Accept all changes' : 'Reject all changes', f.ed.start, f.ed.start);
+    // text boxes and table cells too, so stop typing in one first (its text is about to change)
+    if (f.box) this.stopBox();
+    f.ed.update(decideEverywhere(f.t, accept), accept ? 'Accept all changes' : 'Reject all changes', f.ed.start, f.ed.start);
     this.host.flash(`${accept ? 'Accepted' : 'Rejected'} ${n} change${n === 1 ? '' : 's'}.`);
   }
 
   /** Select the next (or previous) change after the caret, starting again from the top at the end. */
   private goToChange(forward: boolean, from?: number): void {
     const f = this.file!;
-    const ed = f.ed;
-    const all = changesIn(f.t.runs);
-    if (!all.length) { this.host.flash('There are no tracked changes in this document.'); return; }
+    const ed = f.textEd;
+    const all = changesIn(ed.t.runs);
+    if (!all.length) { this.host.flash(f.box ? 'There are no tracked changes here. Click outside to see the rest of the document.' : countChanges(f.t) ? 'The other tracked changes are in text boxes or table cells: click into one to go through them.' : 'There are no tracked changes in this document.'); return; }
     const at = from ?? (forward ? ed.end : ed.start);
     const c = forward ? all.find((x) => x.start >= at) ?? all[0] : [...all].reverse().find((x) => x.end <= at) ?? all[all.length - 1];
     ed.select(c.start, c.end);

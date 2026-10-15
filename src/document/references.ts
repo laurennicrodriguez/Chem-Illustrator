@@ -387,10 +387,18 @@ export interface Citing {
 export const formatOf = (t: Pick<Citing, 'citeStyle' | 'citeOptions'>): CiteFormat => citeFormat(t.citeStyle, t.citeOptions);
 const asFormat = (style: CiteStyle | CiteFormat | undefined): CiteFormat => (typeof style === 'object' ? style : citeFormat(style ?? DEFAULT_STYLE));
 
-/** The ids of the fields in the text, in order. */
-function fieldOrder(runs: TextRun[]): number[] {
+/** The ids of the fields in the text, in order, with those in a table's cells after the table. */
+function fieldOrder(t: Pick<Citing, 'runs' | 'objects'>): number[] {
   const out: number[] = [];
-  for (const r of runs) if (r.obj !== undefined) for (let i = 0; i < r.text.length; i++) out.push(r.obj);
+  const walk = (runs: TextRun[]): void => {
+    for (const r of runs) {
+      if (r.obj === undefined) continue;
+      for (let i = 0; i < r.text.length; i++) out.push(r.obj);
+      const o = t.objects[r.obj] as { kind: string; table?: { rows: { runs: TextRun[] }[][] } } | undefined;
+      if (o?.kind === 'table' && o.table) for (const row of o.table.rows) for (const c of row) walk(c.runs);
+    }
+  };
+  walk(t.runs);
   return out;
 }
 
@@ -402,7 +410,7 @@ function fieldOrder(runs: TextRun[]): number[] {
 export function citationNumbers(t: Citing): Map<string, number> {
   const known = new Set((t.references ?? []).map((r) => r.id));
   const out = new Map<string, number>();
-  for (const id of fieldOrder(t.runs)) {
+  for (const id of fieldOrder(t)) {
     const o = t.objects[id];
     if (o?.kind !== 'cite') continue;
     for (const r of o.refs ?? []) if (known.has(r) && !out.has(r)) out.set(r, out.size + 1);
@@ -413,7 +421,7 @@ export function citationNumbers(t: Citing): Map<string, number> {
 /** How many times each reference is cited. */
 export function citeCounts(t: Citing): Map<string, number> {
   const out = new Map<string, number>();
-  for (const id of fieldOrder(t.runs)) {
+  for (const id of fieldOrder(t)) {
     const o = t.objects[id];
     if (o?.kind !== 'cite') continue;
     for (const r of new Set(o.refs ?? [])) out.set(r, (out.get(r) ?? 0) + 1);
@@ -467,7 +475,7 @@ export function citationTexts(t: Citing): Map<number, string> {
 /** Citations (by field id) that cite a reference no longer in the list. */
 export function brokenCitations(t: Citing): number[] {
   const known = new Set((t.references ?? []).map((r) => r.id));
-  const used = new Set(fieldOrder(t.runs));
+  const used = new Set(fieldOrder(t));
   return Object.entries(t.objects)
     .filter(([k, o]) => o.kind === 'cite' && used.has(Number(k)) && (!o.refs?.length || o.refs.some((r) => !known.has(r))))
     .map(([k]) => Number(k));

@@ -608,6 +608,8 @@ export class Doc {
   textStyles: Partial<Record<Placeholder, TextBase>> | null = null;
   /** Called each time an undoable change is recorded (a slide deck keeps one history across its slides). */
   onCommit: (() => void) | null = null;
+  /** Called when amend() adds to the last step instead of making a new one. */
+  onAmend: (() => void) | null = null;
   /**
    * Called as an undoable change finishes, with what it changed (and how those things were
    * before); changes made here join the same undo step (frames follow what they surround).
@@ -728,13 +730,15 @@ export class Doc {
     if (!last) {
       for (const key of tx.before.keys()) tx.after.set(key, this.snapshot(key));
       this.undoStack.push(tx);
+      this.onCommit?.();
     } else {
       for (const [key, was] of tx.before) {
         if (!last.before.has(key)) last.before.set(key, was);
         last.after.set(key, this.snapshot(key));
       }
+      // no new step: a listener counting steps (Slides' undo across slides) must not count one
+      this.onAmend?.();
     }
-    this.onCommit?.();
   }
 
   canUndo(): boolean { return this.undoStack.length > 0; }

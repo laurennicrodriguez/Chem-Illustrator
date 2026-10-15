@@ -149,7 +149,23 @@ export interface Snapshot {
   shapes: Shape[];
 }
 
+/**
+ * The selection with what its auto-fit frames hold, so a flip, rotation or scaling takes a
+ * frame's contents with it (and the frame fits round them again after, still following them).
+ */
+export function withFrameContents(doc: Doc, sel: Selection): Selection {
+  const fits = [...sel.shapes].map((id) => doc.shapes.get(id)?.frame).filter((f) => f?.fit);
+  if (!fits.length) return sel;
+  const all: Selection = { atoms: new Set(sel.atoms), bonds: new Set(sel.bonds), captions: new Set(sel.captions), arrows: new Set(sel.arrows), shapes: new Set(sel.shapes) };
+  for (const f of fits) {
+    const mem = frameMembers(doc, f!);
+    for (const k of ['atoms', 'bonds', 'captions', 'arrows', 'shapes'] as const) for (const id of mem[k]) all[k].add(id);
+  }
+  return all;
+}
+
 export function snapshot(doc: Doc, sel: Selection, m: Measure): Snapshot {
+  sel = withFrameContents(doc, sel);
   const pick = <T>(ids: Set<number>, map: Map<number, T>) => [...ids].map((id) => map.get(id)).filter((x): x is T => !!x);
   // bonds turned over with a flip: those inside the selection
   const bonds = [...doc.bonds.values()].filter((b) => sel.atoms.has(b.a1) && sel.atoms.has(b.a2));

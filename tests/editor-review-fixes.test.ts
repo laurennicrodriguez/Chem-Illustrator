@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { Doc } from '../src/model';
 import { chordOf } from '../src/editor/keymap';
-import { units, alignOffsets, moveUnit, POINTS } from '../src/editor/arrange';
+import { units, alignOffsets, moveUnit, POINTS, snapshot, transform, mirrorX } from '../src/editor/arrange';
 import { frameAround, refitFrames } from '../src/editor/frames';
 
 describe('a step still being made', () => {
@@ -67,5 +67,25 @@ describe('lining up frames', () => {
     expect(f2.x1).toBeCloseTo(f1.x1, 6);
     expect(doc.atoms.get(first[1])!.x).toBeCloseTo(doc.atoms.get(first[0])!.x, 6);
     expect(f2.frame!.fit).toBe(true);
+  });
+});
+
+describe('flipping a frame', () => {
+  it('turns its contents over with it and keeps it following them', () => {
+    const doc = new Doc();
+    doc.beforeCommit = (before) => refitFrames(doc, before, POINTS);
+    let a = 0, frame = 0;
+    doc.edit('draw', () => {
+      const p = doc.addAtom(0, 0), q = doc.addAtom(14, 8);
+      doc.addBond(p.id, q.id);
+      a = p.id;
+      const sel = { atoms: new Set([p.id, q.id]), bonds: new Set<number>(), captions: new Set<number>(), arrows: new Set<number>(), shapes: new Set<number>() };
+      frame = doc.addShape(frameAround(doc, sel, POINTS)!).id;
+    });
+    const sel = { atoms: new Set<number>(), bonds: new Set<number>(), captions: new Set<number>(), arrows: new Set<number>(), shapes: new Set([frame]) };
+    const snap = snapshot(doc, sel, POINTS);
+    doc.edit('Flip', () => transform(doc, snap, mirrorX(7), true));
+    expect(doc.atoms.get(a)!.x).toBeCloseTo(14, 6);
+    expect(doc.shapes.get(frame)!.frame!.fit).toBe(true);
   });
 });

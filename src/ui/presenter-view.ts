@@ -123,15 +123,19 @@ export class PresenterView {
     this.sizer.observe(this.els.nextBox);
     root.focus();
     await this.fullscreen(true);
+    // the show may have been ended while the window went full screen
+    if (this.root !== root) { void this.fullscreen(false); return; }
     this.started = performance.now();
     this.pausedAt = null;
     this.tick = window.setInterval(() => this.clock(), 500);
     this.clock();
     this.layout();
     player.show(Math.max(0, Math.min(deck.slides.length - 1, from)), { transition: true });
-    this.link = new ShowLink('presenter', (m) => this.heard(m));
-    await this.link.open();
+    const link = (this.link = new ShowLink('presenter', (m) => this.heard(m)));
+    await link.open();
+    if (this.root !== root) { link.close(); return; }
     await this.openAudience();
+    if (this.root !== root) { this.closeAudience(); return; }
     void document.fonts?.ready.then(() => { if (this.player === player) { player.refresh(); this.paintNext(); } });
   }
 
@@ -146,13 +150,17 @@ export class PresenterView {
     this.link?.send({ kind: 'bye' });
     this.link?.close();
     this.link = null;
-    this.audienceWin?.close();
-    this.audienceWin = null;
-    if (isTauri()) void import('@tauri-apps/api/webviewWindow').then(async ({ WebviewWindow }) => (await WebviewWindow.getByLabel(AUDIENCE))?.destroy());
+    this.closeAudience();
     this.root.remove();
     this.root = null;
     void this.fullscreen(false);
     this.onEnd(i);
+  }
+
+  private closeAudience(): void {
+    this.audienceWin?.close();
+    this.audienceWin = null;
+    if (isTauri()) void import('@tauri-apps/api/webviewWindow').then(async ({ WebviewWindow }) => (await WebviewWindow.getByLabel(AUDIENCE))?.destroy());
   }
 
   private async openAudience(): Promise<void> {

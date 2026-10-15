@@ -5,7 +5,7 @@
 import type { Measure, TextFrame } from '../text/layout';
 import { TextEditing, type ChangeKind } from '../text/editing';
 import { documentMeasure } from '../text/font-measure';
-import { CELL_PAD, DocLayouter, movedLayout, type DocLayout } from './doc-layout';
+import { CELL_PAD, DocLayouter, movedLayout, pageNumber, type DocLayout } from './doc-layout';
 import { reviewAuthor, revisionDate } from './revisions';
 import { setPart } from '../table';
 import { FigurePictures } from './figures';
@@ -83,6 +83,8 @@ export class DocFile {
       const at = this.layout().objects.find((x) => x.id === id);
       return at ? movedLayout(lay, at.x + BOX_PAD.x, at.y + BOX_PAD.y - lay.box.y1) : lay;
     };
+    // tracked like the document's own text
+    ed.track = this.ed.track;
     const box = { id, ed, recorded: false };
     ed.onChange = (kind) => {
       if (kind === 'text') {
@@ -122,6 +124,8 @@ export class DocFile {
       if (!cl) return this.layouter.boxText(this.t, frame.runs, frame.paras, 100);
       return at && tb ? movedLayout(cl, at.x + tb.xs[c] + CELL_PAD.x, at.y + CELL_PAD.y + (tb.drop[r]?.[c] ?? 0) - cl.box.y1) : cl;
     };
+    // tracked like the document's own text
+    ed.track = this.ed.track;
     const box = { id, cell: { r, c }, ed, recorded: false };
     ed.onChange = (kind) => {
       if (kind === 'text') {
@@ -165,7 +169,7 @@ export class DocFile {
     if (this.memo?.frame !== frame) {
       const lay = this.layouter.layout(frame as DocText);
       this.memo = { frame, lay };
-      paragraphPages.set(frame as DocText, lay.paraTops.map((pt) => lay.pages[pt.page]?.label || String(pt.page + 1)));
+      paragraphPages.set(frame as DocText, lay.paraTops.map((pt) => pageNumber((frame as DocText).hf, pt.page)));
     }
     return this.memo.lay;
   }

@@ -23,7 +23,7 @@ import { tableBorders } from './cdxml-table';
 import { writeCdxml } from './cdxml-write';
 import { extractDrawing } from './clipboard';
 import type { Selection } from '../editor/editor';
-import { Package, NS, REL, emu, xml, xmlAttr, hex6 } from './ooxml';
+import { Package, NS, REL, emu, xml, xmlAttr, hex6, MediaFiles } from './ooxml';
 import { facesToEmbed, toEot, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
 import { patternInk } from '../render/fills';
@@ -316,6 +316,7 @@ const GROUP = '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p
 class Writer {
   pkg = new Package();
   private media = 0;
+  private mediaFiles = new MediaFiles();
   private tags = 0;
   private tableKeys = 0;
   private measure: Measure;
@@ -327,8 +328,12 @@ class Writer {
 
   /** A picture file in ppt/media; returns its relationship id from `from`. */
   private addMedia(from: string, bytes: Uint8Array, ext: string): string {
-    const path = `ppt/media/image${++this.media}.${ext}`;
-    this.pkg.add(path, bytes);
+    let path = this.mediaFiles.find(bytes, ext);
+    if (!path) {
+      path = `ppt/media/image${++this.media}.${ext}`;
+      this.pkg.add(path, bytes);
+      this.mediaFiles.note(bytes, ext, path);
+    }
     return this.pkg.relate(from, REL.image, fromPpt(from, path));
   }
 

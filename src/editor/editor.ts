@@ -32,7 +32,7 @@ import { pushArrow, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from 
 import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
 import { attachWhereItIs, defaultGap, placeAttached, refitAttached } from './attached';
 import { frameAround, frameBox, frameMembers, refitFrames, defaultPad, thingsInside } from './frames';
-import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, rotation, mirrorX, mirrorY } from './arrange';
+import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, withFrameContents, rotation, mirrorX, mirrorY } from './arrange';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { tokenize, addNicknames, isBuiltInNickname } from '../chem/labels';
 import {
@@ -2006,7 +2006,7 @@ export class Editor {
   scaleSelection(f: number): boolean {
     const b = this.selBox();
     if (!b || !this.hasSelection() || !(f > 0) || f === 1) return false;
-    const doc = this.doc, s = this.sel;
+    const doc = this.doc, s = withFrameContents(this.doc, this.sel);
     const c = { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 };
     const at = (p: Vec): Vec => add(c, mul(sub(p, c), f));
     doc.edit('Scale', () => {

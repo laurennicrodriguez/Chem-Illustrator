@@ -135,6 +135,41 @@ export function decide<T extends Revisable>(t: T, accept: boolean, start = 0, en
   return t;
 }
 
+/** Text inside a document's objects: text boxes and table cells. */
+type InnerText = { runs: TextRun[]; paras?: ParaStyle[] };
+type WithObjects = Revisable & { objects: Record<number, { kind: string; runs?: TextRun[]; paras?: ParaStyle[]; table?: { rows: InnerText[][] } }> };
+
+/** Every piece of text in a document: its own, then each text box's and table cell's. */
+function innerTexts(t: WithObjects): InnerText[] {
+  const out: InnerText[] = [];
+  for (const o of Object.values(t.objects)) {
+    if (o.kind === 'textbox' && o.runs) out.push(o as InnerText);
+    else if (o.kind === 'table' && o.table) for (const row of o.table.rows) out.push(...row);
+  }
+  return out;
+}
+
+/** How many changes the document has, with those in text boxes and table cells. */
+export function countChanges(t: WithObjects): number {
+  return changesIn(t.runs).length + innerTexts(t).reduce((n, x) => n + changesIn(x.runs).length, 0);
+}
+
+/** Accept (or reject) every change in the document, in text boxes and table cells too. */
+export function decideEverywhere<T extends WithObjects>(t: T, accept: boolean): T {
+  const inner = <X extends InnerText>(x: X): X => {
+    if (!changesIn(x.runs).length) return x;
+    const d = decide({ runs: x.runs, paras: x.paras ?? [] }, accept);
+    return { ...x, runs: d.runs, ...(x.paras ? { paras: d.paras } : {}) };
+  };
+  const objects: WithObjects['objects'] = {};
+  for (const [k, o] of Object.entries(t.objects)) {
+    if (o.kind === 'textbox' && o.runs) objects[+k] = inner(o as typeof o & InnerText);
+    else if (o.kind === 'table' && o.table) objects[+k] = { ...o, table: { ...o.table, rows: o.table.rows.map((row) => row.map(inner)) } };
+    else objects[+k] = o;
+  }
+  return decide({ ...t, objects }, accept);
+}
+
 /** The text with every change accepted (as it will read). */
 export const accepted = <T extends Revisable>(t: T): T => decide(t, true);
 
