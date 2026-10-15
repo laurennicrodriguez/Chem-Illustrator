@@ -97,6 +97,22 @@ const BY_EXTENSION: Record<string, string> = {
   svg: 'image/svg+xml', emf: 'image/x-emf', tif: 'image/tiff', tiff: 'image/tiff',
 };
 
+/**
+ * A WebP picture as PNG (Word and PowerPoint files can't hold WebP), drawn by the browser.
+ * Null when it can't be read.
+ */
+export async function webpToPng(bytes: Uint8Array): Promise<Uint8Array | null> {
+  try {
+    const bmp = await createImageBitmap(new Blob([bytes as BlobPart], { type: 'image/webp' }));
+    const c = new OffscreenCanvas(bmp.width, bmp.height);
+    c.getContext('2d')!.drawImage(bmp, 0, 0);
+    bmp.close();
+    return new Uint8Array(await (await c.convertToBlob({ type: 'image/png' })).arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
 /** A picture file's type, from its first bytes, or else from its name. Null when it isn't a picture. */
 export function pictureMime(name: string, b: Uint8Array): string | null {
   const at = (i: number, ...xs: number[]) => xs.every((x, k) => b[i + k] === x);

@@ -170,7 +170,10 @@ class CdxmlWriter {
     const b = doc.bounds();
     if (b) this.root.setAttribute('BoundingBox', box(b));
     if (!src) this.sizePage(b);
-    return this.prolog + new XMLSerializer().serializeToString(this.root) + '\n';
+    // characters XML 1.0 can't hold (from text pasted out of Word or a PDF) would make the file
+    // unreadable: Word's line break (U+000B) becomes a line break, and the rest are dropped
+    const out = new XMLSerializer().serializeToString(this.root).replace(/\u000B/g, '\n').replace(/[\u0000-\u0008\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '');
+    return this.prolog + out + '\n';
   }
 
   // ------------------------------------------------------------------ document set-up

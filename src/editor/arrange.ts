@@ -5,6 +5,7 @@
 import { Doc, Atom, Caption, Bond, Arrow, Shape } from '../model';
 import { Vec, Rect, add, sub } from '../geom';
 import { arrowPoints, boxOf, shapeBox, unionRect } from '../objects';
+import { frameMembers } from './frames';
 
 export interface Selection {
   atoms: Set<number>;
@@ -40,6 +41,17 @@ export type Align = 'left' | 'hcenter' | 'right' | 'top' | 'vcenter' | 'bottom';
 export function units(doc: Doc, sel: Selection, m: Measure): Unit[] {
   const out: Unit[] = [];
   const seen = new Set<number>();
+  // a frame that follows its contents is one object with them (as when dragged)
+  const carried = { atoms: new Set<number>(), captions: new Set<number>(), arrows: new Set<number>(), shapes: new Set<number>() };
+  for (const id of sel.shapes) {
+    const s = doc.shapes.get(id);
+    if (!s?.frame?.fit || carried.shapes.has(id)) continue;
+    const mem = frameMembers(doc, s.frame);
+    for (const k of ['atoms', 'captions', 'arrows', 'shapes'] as const) for (const x of mem[k]) carried[k].add(x);
+    carried.shapes.add(id);
+    out.push({ atoms: [...mem.atoms], captions: [...mem.captions], arrows: [...mem.arrows], shapes: [id, ...mem.shapes], box: shapeBox(s) });
+  }
+  for (const id of carried.atoms) seen.add(id);
   for (const id of sel.atoms) {
     if (seen.has(id) || !doc.atoms.has(id)) continue;
     // the selected atoms of this structure
@@ -53,9 +65,9 @@ export function units(doc: Doc, sel: Selection, m: Measure): Unit[] {
     }
     out.push({ atoms, captions: [], arrows: [], shapes: [], box: atomsBox(doc, atoms, m) });
   }
-  for (const id of sel.captions) { const c = doc.captions.get(id); if (c) out.push({ atoms: [], captions: [id], arrows: [], shapes: [], box: m.captionBox(c) }); }
-  for (const id of sel.arrows) { const r = doc.arrows.get(id); if (r) out.push({ atoms: [], captions: [], arrows: [id], shapes: [], box: boxOf(arrowPoints(r)) }); }
-  for (const id of sel.shapes) { const s = doc.shapes.get(id); if (s) out.push({ atoms: [], captions: [], arrows: [], shapes: [id], box: shapeBox(s) }); }
+  for (const id of sel.captions) { const c = doc.captions.get(id); if (c && !carried.captions.has(id)) out.push({ atoms: [], captions: [id], arrows: [], shapes: [], box: m.captionBox(c) }); }
+  for (const id of sel.arrows) { const r = doc.arrows.get(id); if (r && !carried.arrows.has(id)) out.push({ atoms: [], captions: [], arrows: [id], shapes: [], box: boxOf(arrowPoints(r)) }); }
+  for (const id of sel.shapes) { const s = doc.shapes.get(id); if (s && !carried.shapes.has(id)) out.push({ atoms: [], captions: [], arrows: [], shapes: [id], box: shapeBox(s) }); }
   return out;
 }
 
@@ -137,7 +149,23 @@ export interface Snapshot {
   shapes: Shape[];
 }
 
+/**
+ * The selection with what its auto-fit frames hold, so a flip, rotation or scaling takes a
+ * frame's contents with it (and the frame fits round them again after, still following them).
+ */
+export function withFrameContents(doc: Doc, sel: Selection): Selection {
+  const fits = [...sel.shapes].map((id) => doc.shapes.get(id)?.frame).filter((f) => f?.fit);
+  if (!fits.length) return sel;
+  const all: Selection = { atoms: new Set(sel.atoms), bonds: new Set(sel.bonds), captions: new Set(sel.captions), arrows: new Set(sel.arrows), shapes: new Set(sel.shapes) };
+  for (const f of fits) {
+    const mem = frameMembers(doc, f!);
+    for (const k of ['atoms', 'bonds', 'captions', 'arrows', 'shapes'] as const) for (const id of mem[k]) all[k].add(id);
+  }
+  return all;
+}
+
 export function snapshot(doc: Doc, sel: Selection, m: Measure): Snapshot {
+  sel = withFrameContents(doc, sel);
   const pick = <T>(ids: Set<number>, map: Map<number, T>) => [...ids].map((id) => map.get(id)).filter((x): x is T => !!x);
   // bonds turned over with a flip: those inside the selection
   const bonds = [...doc.bonds.values()].filter((b) => sel.atoms.has(b.a1) && sel.atoms.has(b.a2));

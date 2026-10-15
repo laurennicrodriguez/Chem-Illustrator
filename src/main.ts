@@ -65,7 +65,7 @@ import { fillTemplate, templateSize } from './design/templates';
 import { itemsToSvg } from './render/svg';
 import { PAPERS, defaultPaper, orient, placeIn, inside, handoutCells, noteLines, placeSvg, pageSvg } from './print-layout';
 import { printPages } from './ui/print';
-import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc } from './render/images';
+import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc, webpToPng } from './render/images';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
 import { StylePanel, tidyStyle } from './ui/style-panel';
@@ -1610,6 +1610,11 @@ async function insertPicture(): Promise<void> {
  * when null), at its own size (96 pixels to the inch) or smaller to fit.
  */
 function placePicture(bytes: Uint8Array, mime: string, at: { x: number; y: number } | null): void {
+  // WebP goes in as PNG, so it can be saved in Word and PowerPoint files
+  if (mime === 'image/webp') {
+    void webpToPng(bytes).then((png) => (png ? placePicture(png, 'image/png', at) : flash('Could not read this WebP picture.')));
+    return;
+  }
   finishTyping();
   const px = imageSize(bytes, mime) ?? { w: 400, h: 300 };
   const deck = deckNow();

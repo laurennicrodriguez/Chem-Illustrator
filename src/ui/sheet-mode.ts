@@ -1401,9 +1401,7 @@ export class SheetMode {
     this.edit(cut ? 'Move' : 'Paste', (sh) => {
       if (cut) {
         // moving: the old place is emptied first (where it doesn't overlap the new one)
-        const moved = sh.copy(cut);
-        sh.clear(cut, 'all');
-        sh.paste({ row: top, col: left }, moved, what);
+        sh.move(cut, { row: top, col: left }, what);
         return;
       }
       for (let i = 0; i < timesR; i++) for (let j = 0; j < timesC; j++) sh.paste({ row: top + i * b.rows, col: left + j * b.cols }, b, what);

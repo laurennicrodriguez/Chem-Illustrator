@@ -68,6 +68,8 @@ export function propertyValue(name: string, m: MolProps, extra: Value[] = []): V
     case 'HRMS': {
       const a = extra[0];
       const text = a === undefined || a === null || a === '' ? '[M+H]+' : String(a);
+      // a charged molecule is its own ion, whatever adduct is asked for (as ISOMZ and the Analysis panel)
+      if (m.charge) return m.exact / Math.abs(m.charge);
       try {
         return ionMz(m.exact, parseAdduct(text));
       } catch (e) {

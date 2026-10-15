@@ -136,10 +136,10 @@ export function addMolfile(doc: Doc, molblock: string, cx: number, cy: number): 
   const counts = lines[3] ?? '';
   const na = parseInt(counts.slice(0, 3), 10), nb = parseInt(counts.slice(3, 6), 10);
   if (!Number.isFinite(na) || counts.includes('V3000')) throw new Error('Only V2000 molfiles are supported so far.');
-  const raw: { x: number; y: number; sym: string; chg: number }[] = [];
+  const raw: { x: number; y: number; sym: string; chg: number; iso: number; rad: number }[] = [];
   for (let i = 0; i < na; i++) {
     const l = lines[4 + i];
-    raw.push({ x: parseFloat(l.slice(0, 10)), y: parseFloat(l.slice(10, 20)), sym: l.slice(31, 34).trim(), chg: 0 });
+    raw.push({ x: parseFloat(l.slice(0, 10)), y: parseFloat(l.slice(10, 20)), sym: l.slice(31, 34).trim(), chg: 0, iso: 0, rad: 0 });
   }
   // average bond length, to scale to the document's bond length
   let sum = 0;
@@ -152,12 +152,14 @@ export function addMolfile(doc: Doc, molblock: string, cx: number, cy: number): 
   }
   for (let i = 4 + na + nb; i < lines.length; i++) {
     const l = lines[i];
-    if (l.startsWith('M  CHG')) {
+    // charges, isotopes (13C, D) and radicals, each as atom-value pairs
+    const field = l.startsWith('M  CHG') ? 'chg' : l.startsWith('M  ISO') ? 'iso' : l.startsWith('M  RAD') ? 'rad' : null;
+    if (field) {
       const n = parseInt(l.slice(6, 9), 10);
       for (let k = 0; k < n; k++) {
         const idx = parseInt(l.slice(10 + k * 8, 13 + k * 8), 10) - 1;
-        const c = parseInt(l.slice(14 + k * 8, 17 + k * 8), 10);
-        if (raw[idx]) raw[idx].chg = c;
+        const v = parseInt(l.slice(14 + k * 8, 17 + k * 8), 10);
+        if (raw[idx] && Number.isFinite(v)) raw[idx][field] = v;
       }
     }
   }
@@ -169,7 +171,10 @@ export function addMolfile(doc: Doc, molblock: string, cx: number, cy: number): 
   const atoms: Atom[] = [];
   for (const r of raw) {
     const z = elementNumber(r.sym);
-    const a = doc.addAtom(cx + (r.x - mx) * k, cy - (r.y - my) * k, z ?? 6, { charge: r.chg, label: z === undefined ? r.sym : null });
+    const radical = r.rad === 1 ? 'singlet' : r.rad === 2 ? 'doublet' : r.rad === 3 ? 'triplet' : undefined;
+    const a = doc.addAtom(cx + (r.x - mx) * k, cy - (r.y - my) * k, z ?? 6, {
+      charge: r.chg, label: z === undefined ? r.sym : null, ...(r.iso ? { isotope: r.iso } : {}), ...(radical ? { radical } : {}),
+    });
     ids.push(a.id);
     atoms.push(a);
   }

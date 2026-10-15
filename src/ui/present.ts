@@ -56,6 +56,8 @@ export class Presenter {
     window.addEventListener('resize', this.resizeHandler);
     root.focus();
     await this.fullscreen(true);
+    // the show may have been ended while the window went full screen
+    if (this.root !== root) { void this.fullscreen(false); return; }
     this.size();
     // the first slide comes in with its transition too, as in PowerPoint
     player.show(Math.max(0, Math.min(deck.slides.length - 1, from)), { transition: true });

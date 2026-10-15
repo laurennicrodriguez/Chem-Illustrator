@@ -227,6 +227,15 @@ const symbolChar = (c: number): string => {
 
 /** An EMF file as an SVG picture, or null when it isn't one or holds nothing that can be drawn. */
 export function emfToSvg(bytes: Uint8Array): EmfSvg | null {
+  // a damaged picture (a record shorter than its contents) is no picture, rather than a failed paste or open
+  try {
+    return readEmf(bytes);
+  } catch {
+    return null;
+  }
+}
+
+function readEmf(bytes: Uint8Array): EmfSvg | null {
   if (bytes.length < 88) return null;
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (dv.getUint32(0, true) !== 1 || dv.getUint32(40, true) !== 0x464d4520) return null;

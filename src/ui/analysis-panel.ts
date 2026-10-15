@@ -5,13 +5,15 @@ import type { FragmentResult } from '../worker/chem-worker';
 import type { DescriptorKey, TextRun } from '../model';
 import { parseAdduct, ionMz, type Adduct } from '../chem/hrms';
 import { ionCounts, isotopePattern, elementalAnalysis, type IsotopePeak } from '../chem/analysis';
-import { hillFormula } from '../chem/formula';
+import { chargeText, hillFormula, withoutCharge } from '../chem/formula';
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 
 /** A formula with subscript counts and a superscript charge, as HTML. */
 export function formulaHtml(f: string): string {
-  return esc(f).replace(/(\d+)(?=[+−]$)/, '<sup>$1</sup>').replace(/([A-Za-z])(\d+)/g, '$1<sub>$2</sub>').replace(/([+−])$/, '<sup>$1</sup>');
+  // the charge: + or − at the end, with its size after a space (C4H12N2 2+)
+  const m = /^(.*?)(?:\s+(\d+))?([+−])?$/.exec(f)!;
+  return esc(m[1]).replace(/([A-Za-z])(\d+)/g, '$1<sub>$2</sub>') + (m[3] ? `<sup>${m[2] ?? ''}${m[3]}</sup>` : '');
 }
 
 /** An adduct label with its charge raised: [M+H]<sup>+</sup>. */
@@ -41,7 +43,8 @@ export function ionInfo(r: FragmentResult, adductText: string): IonInfo | null {
   if (!counts) return null;
   const formula = hillFormula(Object.fromEntries(counts));
   // m/z from the same masses the rest of the panel uses
-  const mz = r.charge !== 0 ? (r.exact - r.charge * 0.000548579909065) / Math.abs(r.charge) : ionMz(r.exact, adduct);
+  // (RDKit's exact mass of a charged structure already has its electrons added or taken away)
+  const mz = r.charge !== 0 ? r.exact / Math.abs(r.charge) : ionMz(r.exact, adduct);
   return { adduct, formula, mz, pattern: isotopePattern(counts, adduct.z) };
 }
 
@@ -92,7 +95,11 @@ export function analysisHtml(r: FragmentResult, i: number, adductText: string, e
   if (extras.stereo) rows.push(`<tr><th>Stereo</th><td>${esc(extras.stereo)}</td></tr>`);
   let iso = '';
   if (ion?.pattern && ion.pattern.length) {
-    const top = ion.pattern.slice(0, 6);
+    // the peaks of 0.5 % or more (with any between), so a Br6 or Cl4 cluster shows its tallest peaks
+    const pat = ion.pattern;
+    const big = pat.map((q, i) => (q.rel >= 0.5 ? i : -1)).filter((i) => i >= 0);
+    const first = big[0] ?? 0, last = Math.min(big[big.length - 1] ?? 5, first + 11);
+    const top = pat.slice(first, last + 1);
     iso = `<details class="iso"><summary>Isotope pattern ${adductHtml(ion.adduct.label)}</summary>
       ${patternSvg(top)}
       <table class="iso-table">${top.map((q) => `<tr><td>${q.mz.toFixed(4)}</td><td>${q.rel.toFixed(1)}%</td></tr>`).join('')}</table></details>`;
@@ -132,11 +139,14 @@ export function analysisHtml(r: FragmentResult, i: number, adductText: string, e
 
 /** Runs for a formula in formula style (digits lowered). */
 const f = (text: string): TextRun => ({ text, formula: true });
+/** A formula with its charge raised (formula style raises a + only, and not its size). */
+const fc = (formula: string, charge: number): TextRun[] =>
+  charge ? [f(withoutCharge(formula, charge)), { text: chargeText(charge).trim(), sup: true }] : [f(formula)];
 
 /** The text a button puts in the drawing, as caption runs. Null when it can't be made. */
 export function analysisRuns(kind: 'formula' | 'hrms' | 'ea', r: FragmentResult, adductText: string): TextRun[] | null {
   if (kind === 'formula') {
-    return [f(r.formula), { text: `\nExact Mass: ${r.exact.toFixed(4)}\nMol. Wt.: ${r.mw.toFixed(2)}` }];
+    return [...fc(r.formula, r.charge), { text: `\nExact Mass: ${r.exact.toFixed(4)}\nMol. Wt.: ${r.mw.toFixed(2)}` }];
   }
   if (kind === 'hrms') {
     const ion = ionInfo(r, adductText);
@@ -152,7 +162,7 @@ export function analysisRuns(kind: 'formula' | 'hrms' | 'ea', r: FragmentResult,
   if (!ea) return null;
   const rep = reported(ea);
   return [
-    { text: 'Anal. Calcd for ' }, f(r.formula.replace(/\d*[+−]$/, '')), { text: `: ${rep.map((x) => `${x.el}, ${x.pct.toFixed(2)}`).join('; ')}. Found: ${rep.map((x) => `${x.el}, 00.00`).join('; ')}.` },
+    { text: 'Anal. Calcd for ' }, f(withoutCharge(r.formula, r.charge)), { text: `: ${rep.map((x) => `${x.el}, ${x.pct.toFixed(2)}`).join('; ')}. Found: ${rep.map((x) => `${x.el}, 00.00`).join('; ')}.` },
   ];
 }
 
@@ -177,7 +187,7 @@ export function descriptorRuns(r: FragmentResult, show: DescriptorKey[], adductT
   const out: TextRun[] = [];
   const line = (runs: TextRun[]) => { if (out.length) out.push({ text: '\n' }); out.push(...runs); };
   for (const k of show) {
-    if (k === 'formula') line([f(r.formula)]);
+    if (k === 'formula') line(fc(r.formula, r.charge));
     else if (k === 'exact') line([{ text: `Exact Mass: ${r.exact.toFixed(4)}` }]);
     else if (k === 'mw') line([{ text: `Mol. Wt.: ${r.mw.toFixed(2)}` }]);
     else if (k === 'mz') {

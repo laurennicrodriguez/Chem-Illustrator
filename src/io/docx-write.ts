@@ -11,7 +11,7 @@
 import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
 import type { DocStyle } from '../style';
 import * as rt from '../richtext';
-import { Package, REL, NS, xml, hex6, emu } from './ooxml';
+import { Package, REL, NS, xml, hex6, emu, MediaFiles } from './ooxml';
 import { facesToEmbed, newGuid, obfuscate, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
@@ -453,9 +453,14 @@ class DocxWriter {
   }
 
   private mediaCount = 0;
+  private mediaFiles = new MediaFiles();
   private media(from: string, bytes: Uint8Array, ext: string): string {
-    const name = `media/image${++this.mediaCount}.${ext}`;
-    this.pkg.add(`word/${name}`, bytes);
+    let name = this.mediaFiles.find(bytes, ext);
+    if (!name) {
+      name = `media/image${++this.mediaCount}.${ext}`;
+      this.pkg.add(`word/${name}`, bytes);
+      this.mediaFiles.note(bytes, ext, name);
+    }
     return this.pkg.relate(from, DOCX_REL.image, name);
   }
 

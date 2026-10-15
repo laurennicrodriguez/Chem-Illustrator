@@ -8,6 +8,7 @@
 
 import { isotopePattern, ionCounts, formulaCounts, ISOTOPES, type IsotopePeak } from '../chem/analysis';
 import { parseAdduct, type Adduct } from '../chem/hrms';
+import { withoutCharge } from '../chem/formula';
 import { CellError, ERR, type Value } from './values';
 import type { MolProps } from './properties';
 
@@ -58,8 +59,9 @@ const kept = new Map<string, IsotopePeak[] | null>();
 export function ionPeaks(src: IsotopeSource, adductText: string): { peaks: (IsotopePeak | undefined)[]; adduct: Adduct } | CellError {
   let counts: Map<string, number> | null, charge: number;
   if ('mol' in src) {
-    // the formula ends with its charge (C4H12N2 is written C4H12N22+ for a dication), so drop it
-    counts = formulaCounts(src.mol.charge ? src.mol.formula.replace(/\d*[+\-−]$/, '') : src.mol.formula);
+    // the formula ends with its charge (C4H12N22+ for a dication, C8H11N4O2+ for a cation), so drop
+    // exactly that: the count before a single + belongs to the last element
+    counts = formulaCounts(withoutCharge(src.mol.formula, src.mol.charge));
     charge = src.mol.charge;
   } else {
     const f = formulaWithCharge(src.formula);

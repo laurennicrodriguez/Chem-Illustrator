@@ -608,6 +608,8 @@ export class Doc {
   textStyles: Partial<Record<Placeholder, TextBase>> | null = null;
   /** Called each time an undoable change is recorded (a slide deck keeps one history across its slides). */
   onCommit: (() => void) | null = null;
+  /** Called when amend() adds to the last step instead of making a new one. */
+  onAmend: (() => void) | null = null;
   /**
    * Called as an undoable change finishes, with what it changed (and how those things were
    * before); changes made here join the same undo step (frames follow what they surround).
@@ -637,7 +639,17 @@ export class Doc {
   private atomCell = new Map<number, number>();
   private maxBondLen = 0;
   /** Longest bond drawn so far (used to know how far around a point to look). */
-  get maxBondLength(): number { return this.maxBondLen; }
+  /** Set when the longest bond may have got shorter (an atom moved, a bond went): worked out again when next asked. */
+  private bondLenStale = false;
+  /** The longest bond (for how far around a point to look for bonds that reach it). */
+  get maxBondLength(): number {
+    if (this.bondLenStale) {
+      this.bondLenStale = false;
+      this.maxBondLen = 0;
+      for (const b of this.bonds.values()) this.noteBondLength(b);
+    }
+    return this.maxBondLen;
+  }
   private tx: UndoEntry | null = null;
   private undoStack: UndoEntry[] = [];
   private redoStack: UndoEntry[] = [];
@@ -718,19 +730,23 @@ export class Doc {
     if (!last) {
       for (const key of tx.before.keys()) tx.after.set(key, this.snapshot(key));
       this.undoStack.push(tx);
+      this.onCommit?.();
     } else {
       for (const [key, was] of tx.before) {
         if (!last.before.has(key)) last.before.set(key, was);
         last.after.set(key, this.snapshot(key));
       }
+      // no new step: a listener counting steps (Slides' undo across slides) must not count one
+      this.onAmend?.();
     }
-    this.onCommit?.();
   }
 
   canUndo(): boolean { return this.undoStack.length > 0; }
   canRedo(): boolean { return this.redoStack.length > 0; }
 
   undo(): boolean {
+    // not while a step is still being made (a drag): it would be undone half-way and lost
+    if (this.tx) return false;
     const e = this.undoStack.pop();
     if (!e) return false;
     this.apply(e.before);
@@ -739,6 +755,7 @@ export class Doc {
   }
 
   redo(): boolean {
+    if (this.tx) return false;
     const e = this.redoStack.pop();
     if (!e) return false;
     this.apply(e.after);
@@ -799,12 +816,21 @@ export class Doc {
   private markDirty(kind: Kind, e: Entity | undefined | null): void {
     if (!e) return;
     const pt = (x: number, y: number) => this.dirtyRects.push({ x1: x, y1: y, x2: x, y2: y });
-    if (kind === 'a') { const a = e as Atom; pt(a.x, a.y); }
-    else if (kind === 'b') {
+    // a bond's whole length, so the tiles along a long one are drawn again however short the longest bond is now
+    const span = (p: Vec, q: Vec) => this.dirtyRects.push({ x1: Math.min(p.x, q.x), y1: Math.min(p.y, q.y), x2: Math.max(p.x, q.x), y2: Math.max(p.y, q.y) });
+    if (kind === 'a') {
+      const a = e as Atom;
+      pt(a.x, a.y);
+      for (const bid of this.adj.get(a.id) ?? []) {
+        const b = this.bonds.get(bid), q = b && this.atoms.get(b.a1 === a.id ? b.a2 : b.a1);
+        if (q) span(a, q);
+      }
+    } else if (kind === 'b') {
       const b = e as Bond;
       const p = this.atoms.get(b.a1), q = this.atoms.get(b.a2);
-      if (p) pt(p.x, p.y);
-      if (q) pt(q.x, q.y);
+      if (p && q) span(p, q);
+      else if (p) pt(p.x, p.y);
+      else if (q) pt(q.x, q.y);
     } else if (kind === 'c') this.dirtyCaptions.push(e as Caption);
     else if (kind === 'r') {
       const r = e as Arrow;
@@ -829,6 +855,9 @@ export class Doc {
     if (kind === 'a') {
       this.dirtyAtoms.add(id);
       this.noteAtom(id);
+      // a moved or removed atom may have shortened the longest bond
+      const was = this.atoms.get(id);
+      if (was && (!e || (e as Atom).x !== was.x || (e as Atom).y !== was.y) && this.adj.get(id)?.length) this.bondLenStale = true;
       if (e) {
         this.atoms.set(id, e as Atom);
         if (!this.adj.has(id)) this.adj.set(id, []);
@@ -842,6 +871,7 @@ export class Doc {
       this.dirtyBonds.add(id);
       const old = this.bonds.get(id);
       if (old) {
+        this.bondLenStale = true;
         this.detach(old.a1, id);
         this.detach(old.a2, id);
         this.dirtyAtoms.add(old.a1);
@@ -961,7 +991,7 @@ export class Doc {
 
   /** Bonds that could lie within `r` of p (candidates; caller checks distance). */
   bondsNear(p: Vec, r: number): Bond[] {
-    const reach = Math.min(this.maxBondLen, 200) / 2 + r;
+    const reach = Math.min(this.maxBondLength, 200) / 2 + r;
     const seen = new Set<number>();
     const out: Bond[] = [];
     for (const a of this.atomsNear(p, reach)) {
@@ -1114,7 +1144,7 @@ export class Doc {
     this.source = other.source;
     this.nextId = Math.max(this.nextId, other.nextId);
     this.atoms.clear(); this.bonds.clear(); this.captions.clear(); this.arrows.clear(); this.shapes.clear();
-    this.adj.clear(); this.grid.clear(); this.atomCell.clear(); this.maxBondLen = 0;
+    this.adj.clear(); this.grid.clear(); this.atomCell.clear(); this.maxBondLen = 0; this.bondLenStale = false;
     for (const a of other.atoms.values()) this.rawSet('a', a.id, clone(a));
     for (const b of other.bonds.values()) this.rawSet('b', b.id, clone(b));
     for (const c of other.captions.values()) this.rawSet('c', c.id, clone(c));
@@ -1136,7 +1166,7 @@ export class Doc {
   swap(other: Doc): void {
     if (this.tx || other.tx) throw new Error('Cannot swap documents in the middle of an edit');
     const fields = ['style', 'background', 'source', 'textStyles', 'atoms', 'bonds', 'captions', 'arrows', 'shapes', 'adj',
-      'grid', 'atomCell', 'maxBondLen', 'undoStack', 'redoStack'] as const;
+      'grid', 'atomCell', 'maxBondLen', 'bondLenStale', 'undoStack', 'redoStack'] as const;
     const a = this as unknown as Record<string, unknown>, b = other as unknown as Record<string, unknown>;
     for (const f of fields) { const t = a[f]; a[f] = b[f]; b[f] = t; }
     // ids stay unique across both, so things moved between them never clash
@@ -1174,10 +1204,16 @@ export class Doc {
 
   /** Build without undo tracking (file loading, tests). */
   bulk(fn: () => void): void {
-    this.begin('bulk');
-    fn();
+    // a step already open (a drag) is kept as it was, not folded into this or closed by it
+    const outer = this.tx;
     this.tx = null;
-    this.version++;
+    this.begin('bulk');
+    try {
+      fn();
+    } finally {
+      this.tx = outer;
+      this.version++;
+    }
   }
 
   // ---------------------------------------------------------------- queries

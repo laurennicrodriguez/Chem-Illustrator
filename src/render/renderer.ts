@@ -83,6 +83,8 @@ const screenMeasure: TextMeasure = (text, size, font, style) => {
     mctx ??= (typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(8, 8).getContext('2d') : document.createElement('canvas').getContext('2d'))!;
     mctx.font = `${style} 100px ${font}`;
     w = mctx.measureText(text).width / 100;
+    // (kept to a size: typing measures every slice of a line, and these build up over a session)
+    if (widthCache.size > 50000) widthCache.clear();
     widthCache.set(key, w);
   }
   return w * size;
@@ -92,7 +94,10 @@ let measureImpl = screenMeasure;
 /** Forget measured text widths (a font has just loaded, so text measured with a stand-in is wrong). */
 export function forgetTextWidths(): void {
   widthCache.clear();
+  textGeneration++;
 }
+/** Goes up each time measured widths are forgotten, so laid-out text is laid out again. */
+let textGeneration = 0;
 
 /** Width in points of `text` at `size` points. */
 export function measureText(text: string, size: number, font = FONT_STACK, style = ''): number {
@@ -135,6 +140,7 @@ export class Renderer {
   private atomCache = new Map<number, AtomCache>();
   private capBoxes = new WeakMap<Caption, Rect>();
   private capLayouts = new WeakMap<Caption, TextLayout>();
+  private textGen = 0;
   /** Text size for caption runs that don't give one (the document's caption size). */
   private captionSize = 10;
   /** A caption being typed into: the text box shows it, so the page doesn't. */
@@ -411,6 +417,11 @@ export class Renderer {
     if (canvas.width !== px) { canvas.width = px; canvas.height = px; }
     const ctx = canvas.getContext('2d', { alpha: false }) as CanvasRenderingContext2D;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+    // a canvas used before keeps its settings: start each tile as a new canvas would
+    ctx.lineJoin = 'miter';
+    ctx.lineCap = 'butt';
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
     ctx.fillStyle = doc.background;
     ctx.fillRect(0, 0, px, px);
     ctx.setTransform(dpr * scale, 0, 0, dpr * scale, -tx * T * dpr, -ty * T * dpr);
@@ -634,7 +645,7 @@ export class Renderer {
           ctx.fillText(r.text, a.x + r.dx, a.y + r.dy);
         }
       } else if (a.charge && a.z === 6 && !a.hideCharge) {
-        this.drawCarbonCharge(ctx, doc, a);
+        curFont = this.drawCarbonCharge(ctx, doc, a);
       }
       if (a.showNumber && a.atomNumber) curFont = this.drawAtomNumber(ctx, doc, a, curFont);
       if (hasAttachDiamond(a)) curFont = this.drawAttachDiamond(ctx, doc, a, curFont);
@@ -793,7 +804,7 @@ export class Renderer {
         }
         case 'hashWedge': {
           const w = wedgeWidth(st) / 2;
-          const n = Math.max(2, Math.floor(l / st.hashSpacing));
+          const n = Math.min(MAX_HASHES, Math.max(2, Math.floor(l / st.hashSpacing)));
           for (let i = 0; i <= n; i++) {
             const t = i / n;
             const c = add(s, mul(d, t));
@@ -804,7 +815,7 @@ export class Renderer {
         }
         case 'hash': {
           const w = st.boldWidth / 2;
-          const n = Math.max(2, Math.floor(l / st.hashSpacing));
+          const n = Math.min(MAX_HASHES, Math.max(2, Math.floor(l / st.hashSpacing)));
           for (let i = 0; i <= n; i++) {
             const c = add(s, mul(d, i / n));
             line(thin, add(c, mul(nrm, w)), sub(c, mul(nrm, w)));
@@ -812,7 +823,7 @@ export class Renderer {
           break;
         }
         case 'wavy': {
-          const waves = Math.max(2, Math.round(l / (st.bondLength * 0.17)));
+          const waves = Math.min(MAX_HASHES, Math.max(2, Math.round(l / (st.bondLength * 0.17))));
           const step = l / waves;
           const amp = st.bondLength * 0.09;
           thin.moveTo(s.x, s.y);
@@ -855,15 +866,19 @@ export class Renderer {
     line(second, add(add(s, off), mul(dir, t1)), sub(add(e, off), mul(dir, t2)));
   }
 
-  private drawCarbonCharge(ctx: CanvasRenderingContext2D, doc: Doc, a: Atom): void {
+  /** A charge beside a carbon drawn without a label. Returns the font it leaves set. */
+  private drawCarbonCharge(ctx: CanvasRenderingContext2D, doc: Doc, a: Atom): string {
     let sx = 0, sy = 0;
     for (const n of doc.neighbors(a.id)) { const d = norm(sub(n, a)); sx += d.x; sy += d.y; }
     const away = len({ x: sx, y: sy }) > 0.1 ? norm({ x: -sx, y: -sy }) : { x: 0.7, y: -0.7 };
     const size = doc.style.labelSize * 0.8;
     const t = (Math.abs(a.charge) > 1 ? String(Math.abs(a.charge)) : '') + (a.charge > 0 ? '+' : '−');
-    ctx.font = `${size}px ${FONT_STACK}`;
+    const font = `${size}px ${FONT_STACK}`;
+    ctx.font = font;
+    ctx.fillStyle = a.color ?? '#000';
     const w = measureText(t, size);
     ctx.fillText(t, a.x + away.x * size * 0.8 - w / 2, a.y + away.y * size * 0.8 + size * 0.35);
+    return font;
   }
 
   private drawShape(ctx: CanvasRenderingContext2D, s: Shape, lw: number, labelSize = 10): void {
@@ -1451,12 +1466,14 @@ export class Renderer {
 
   /** Take the caption size and placeholder formatting from the document being drawn. */
   useStyle(doc: Doc): void {
-    if (doc.style.captionSize !== this.captionSize || doc.textStyles !== this.textStyles) {
+    if (doc.style.captionSize !== this.captionSize || doc.textStyles !== this.textStyles || this.textGen !== textGeneration) {
       this.captionSize = doc.style.captionSize;
       this.textStyles = doc.textStyles;
+      this.textGen = textGeneration;
       this.capBoxes = new WeakMap();
       this.capLayouts = new WeakMap();
       this.tableLayouts = new WeakMap();
+      this.geoLayouts = new WeakMap();
     }
   }
 
@@ -1519,6 +1536,8 @@ export class Renderer {
 /** Tile size in CSS pixels. */
 const TILE = 256;
 const MAX_TILES = 600;
+/** Most hashes or waves drawn on one bond (a hash spacing near 0 would otherwise draw for ever). */
+const MAX_HASHES = 400;
 
 interface Tile { canvas: OffscreenCanvas | HTMLCanvasElement; tx: number; ty: number }
 

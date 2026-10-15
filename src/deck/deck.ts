@@ -297,7 +297,7 @@ const copyMotion = (m: Motion): Motion => ({
 
 type HistoryEntry =
   | { kind: 'slide'; slide: Slide }
-  | { kind: 'deck'; label: string; undo: () => void; redo: () => void };
+  | { kind: 'deck'; label: string; undo: () => void; redo: () => void; slide?: Slide };
 
 export class Deck {
   size: SlideSize = { ...WIDE };
@@ -334,12 +334,14 @@ export class Deck {
     this.host.swap(this.current.doc);
     this.attached = true;
     this.host.onCommit = () => this.noteSlideEdit();
+    this.host.onAmend = () => { this.edits++; this.onChange(); };
   }
 
   /** Take the current slide out of the app's document (another tab is shown). */
   detach(): void {
     if (!this.attached || !this.current) return;
     this.host.onCommit = null;
+    this.host.onAmend = null;
     this.host.swap(this.current.doc);
     this.attached = false;
   }
@@ -445,8 +447,9 @@ export class Deck {
     this.onChange();
   }
 
-  private record(label: string, undo: () => void, redo: () => void): void {
-    this.undoList.push({ kind: 'deck', label, undo, redo });
+  /** Record a change to the deck; `slide` is the one slide it changed, gone to on undo and redo so the change is seen. */
+  private record(label: string, undo: () => void, redo: () => void, slide?: Slide): void {
+    this.undoList.push({ kind: 'deck', label, undo, redo, slide });
     this.redoList.length = 0;
     this.edits++;
     this.onChange();
@@ -464,7 +467,10 @@ export class Deck {
       if (i < 0) return this.undo(); // the slide has gone (should not happen: its removal is undone first)
       this.go(i);
       this.host.undo();
-    } else e.undo();
+    } else {
+      this.showSlide(e.slide);
+      e.undo();
+    }
     this.redoList.push(e);
     this.edits++;
     this.onChange();
@@ -479,11 +485,20 @@ export class Deck {
       if (i < 0) return this.redo();
       this.go(i);
       this.host.redo();
-    } else e.redo();
+    } else {
+      this.showSlide(e.slide);
+      e.redo();
+    }
     this.undoList.push(e);
     this.edits++;
     this.onChange();
     return true;
+  }
+
+  /** Go to a slide (if it is still in the deck) before its change is undone or redone. */
+  private showSlide(s: Slide | undefined): void {
+    const i = s ? this.slides.indexOf(s) : -1;
+    if (i >= 0 && i !== this.index) this.go(i);
   }
 
   // ---------------------------------------------------------------- slide operations
@@ -629,7 +644,7 @@ export class Deck {
       this.onSwitch();
     };
     this.onSwitch();
-    this.record(label, () => { undoDeck(); put(before); }, () => { redoDeck(); put(after); });
+    this.record(label, () => { undoDeck(); put(before); }, () => { redoDeck(); put(after); }, slides.length === 1 ? slides[0] : undefined);
   }
 
   /** Change the master (fonts, colours, background, logo, numbers, drawing style). */
@@ -703,7 +718,7 @@ export class Deck {
     if (!s || s.notes === text) return;
     const before = s.notes;
     s.notes = text;
-    this.record('Edit notes', () => { s.notes = before; this.onSwitch(); }, () => { s.notes = text; this.onSwitch(); });
+    this.record('Edit notes', () => { s.notes = before; this.onSwitch(); }, () => { s.notes = text; this.onSwitch(); }, s);
   }
 
   /** Change the transition of some slides (the current one by default). One undo step. */
@@ -718,7 +733,7 @@ export class Deck {
     const after = slides.map(() => (t && (t.kind !== 'none' || t.advanceAfter) ? { ...t } : undefined));
     if (JSON.stringify(before) === JSON.stringify(after)) return;
     put(after);
-    this.record(label, () => put(before), () => put(after));
+    this.record(label, () => put(before), () => put(after), slides.length === 1 ? slides[0] : undefined);
   }
 
   /** Change a slide's animations (the current slide by default). One undo step. */
@@ -730,6 +745,6 @@ export class Deck {
     if (JSON.stringify(before) === JSON.stringify(after)) return;
     const put = (v: Anim[]) => { if (v.length) s.anims = copyMotion({ anims: v }).anims; else delete s.anims; this.onMotion(); };
     put(after);
-    this.record(label, () => put(before), () => put(after));
+    this.record(label, () => put(before), () => put(after), s);
   }
 }

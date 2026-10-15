@@ -2,7 +2,7 @@
 // structure, for nicknames of the person's own and contracted labels.
 
 import type { Doc } from '../model';
-import { SYMBOLS } from './elements';
+import { SYMBOLS, implicitHydrogens } from './elements';
 import { kekulize, labelGraph, type MiniGraph } from './labels';
 
 /** Atoms written without brackets when they have no charge, isotope or fixed hydrogens. */
@@ -37,8 +37,12 @@ export function groupGraph(doc: Doc, ids: Set<number>, start: number): MiniGraph
 }
 
 /** SMILES for a small graph, starting at its first atom (aromatic bonds written as double and single). */
-export function graphSmiles(g: MiniGraph): string {
+export function graphSmiles(g: MiniGraph, ext0 = 0): string {
   const bonds = kekulize(g);
+  // bonds each atom makes (the first also makes `ext0` to the rest of the drawing), for the
+  // hydrogens an atom written in brackets must show: [13CH3], [NH3+], [SiH3]
+  const valence = g.atoms.map((_, i) => (i === 0 ? ext0 : 0));
+  for (const b of bonds) { valence[b.a] += b.order; valence[b.b] += b.order; }
   const nbrs = g.atoms.map(() => [] as { to: number; order: number; bond: number }[]);
   bonds.forEach((b, i) => { nbrs[b.a].push({ to: b.b, order: b.order, bond: i }); nbrs[b.b].push({ to: b.a, order: b.order, bond: i }); });
   const seen = new Set<number>();
@@ -56,7 +60,8 @@ export function graphSmiles(g: MiniGraph): string {
     if (m.dummy) return '*';
     const s = SYMBOLS[m.z] ?? '*';
     if (PLAIN.has(s) && !m.charge && !m.iso && m.hCount === undefined) return s;
-    const h = m.hCount ? (m.hCount > 1 ? `H${m.hCount}` : 'H') : '';
+    const hs = m.hCount ?? implicitHydrogens(m.z, valence[i], m.charge);
+    const h = hs ? (hs > 1 ? `H${hs}` : 'H') : '';
     const c = m.charge ? (m.charge > 0 ? '+' : '-') + (Math.abs(m.charge) > 1 ? Math.abs(m.charge) : '') : '';
     return `[${m.iso || ''}${s}${h}${c}]`;
   };
@@ -96,5 +101,6 @@ export function selectedGroup(doc: Doc, ids: Iterable<number>): { start: number;
   const start = out[0]?.inside ?? [...set][0];
   const g = groupGraph(doc, set, start);
   if (!g) return { error: 'A label in the group can\'t be read as chemistry.' };
-  return { start, smiles: graphSmiles(g), outside: out[0]?.outside ?? null };
+  const join = out[0] ? doc.bondBetween(out[0].inside, out[0].outside) : undefined;
+  return { start, smiles: graphSmiles(g, join ? Math.round(join.order) : 0), outside: out[0]?.outside ?? null };
 }

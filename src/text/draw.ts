@@ -39,7 +39,8 @@ function drawGlyphs(ctx: CanvasRenderingContext2D, lay: TextLayout, l: LaidLine,
     }
   } else ctx.fillText(g.text, ox + g.x, y);
   if (g.underline) {
-    const base = l.ascent / 0.8;
+    // from the text's own size (the line's height also takes in pictures set in the line)
+    const base = g.size;
     ctx.fillRect(ox + g.x, oy + l.y + Math.max(1, base * 0.1), g.w, Math.max(0.5, base * 0.05));
   }
   if (g.strike) {

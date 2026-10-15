@@ -28,7 +28,7 @@ export function formulaFromJson(json: string): { formula: string; charge: number
     return x < y ? -1 : x > y ? 1 : 0;
   });
   let formula = keys.map((k) => k + (counts.get(k)! > 1 ? counts.get(k) : '')).join('');
-  if (charge) formula += (Math.abs(charge) > 1 ? Math.abs(charge) : '') + (charge > 0 ? '+' : '−');
+  if (charge) formula += chargeText(charge);
   return { formula, charge };
 }
 
@@ -60,6 +60,22 @@ export function hillFormula(counts: Record<string, number>, charge = 0): string 
     return x < y ? -1 : x > y ? 1 : 0;
   });
   let formula = keys.map((k) => k + (counts[k] > 1 ? counts[k] : '')).join('');
-  if (charge) formula += (Math.abs(charge) > 1 ? Math.abs(charge) : '') + (charge > 0 ? '+' : '−');
+  if (charge) formula += chargeText(charge);
   return formula;
+}
+
+/**
+ * The charge written after a formula: + or − for one, and a space before a bigger one (C4H12N2 2+),
+ * so the 2 can't be read as the last element's count.
+ */
+export function chargeText(charge: number): string {
+  return (Math.abs(charge) > 1 ? ` ${Math.abs(charge)}` : '') + (charge > 0 ? '+' : '−');
+}
+
+/** A formula as written with its charge (C8H11N4O2+, C4H12N2 2+), without the charge. */
+export function withoutCharge(formula: string, charge: number): string {
+  if (!charge) return formula;
+  const tail = chargeText(charge);
+  if (formula.endsWith(tail)) return formula.slice(0, -tail.length).trimEnd();
+  return formula.replace(/\s*[+\-−]$/, '');
 }

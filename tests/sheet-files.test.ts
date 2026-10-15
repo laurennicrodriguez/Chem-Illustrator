@@ -90,6 +90,14 @@ describe('SD files', () => {
     expect(recs[1].data).toEqual([['Yield', '0.62']]);
   });
 
+  it('keeps a first record whose title line is empty', () => {
+    const blank = (m: string) => '\n' + m.split('\n').slice(1).join('\n');
+    const recs = parseSdf(`${blank(ETHANOL)}\n$$$$\n${blank(ACETONE)}\n$$$$\n`);
+    expect(recs).toHaveLength(2);
+    expect(recs.map((r) => r.molblock.split('\n').length)).toEqual([ETHANOL.split('\n').length, ACETONE.split('\n').length]);
+    expect(recs[0].title).toBe('');
+  });
+
   it('opens as a sheet: structures, names, and a column for each data item', () => {
     const { book, warnings } = readSdf(sdf, 'compounds');
     const s = book.sheet;

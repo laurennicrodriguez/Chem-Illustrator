@@ -5,6 +5,7 @@
 import type { TextRun } from '../model';
 import * as rt from '../richtext';
 import { OBJECT_CHAR } from './document';
+import { parseRev, trackedReplace, type Revisable } from './revisions';
 
 export interface FindOptions {
   /** Capitals and small letters must match. */
@@ -86,6 +87,36 @@ export function replaceRanges(runs: TextRun[], hits: [number, number][], replace
     if (patch && replacement) out = rt.applyStyle(out, a, a + replacement.length, patch);
   }
   return out;
+}
+
+/**
+ * Replace the found places while changes are tracked: each one is marked deleted, with the
+ * replacement after it marked inserted. Returns the text and where the caret goes after the
+ * last place replaced (the first in the text).
+ */
+export function trackedReplaceRanges<T extends Revisable>(t: T, hits: [number, number][], replacement: string, look: ReplaceLook, fallback: rt.RunStyle, who: { author: string; date: string }): { t: T; caret: number } {
+  const patch = lookPatch(look);
+  let caret = 0;
+  for (const [a, b] of [...hits].sort((x, y) => y[0] - x[0])) {
+    const style = rt.typingStyle(t.runs, a, b, fallback);
+    const got = trackedReplace(t, a, b, replacement ? [{ ...style, text: replacement }] : [], undefined, who);
+    t = got.t;
+    caret = got.caret;
+    if (patch && replacement) t = { ...t, runs: rt.applyStyle(t.runs, got.caret - replacement.length, got.caret, patch) };
+  }
+  return { t, caret };
+}
+
+/** Leave out places in text deleted while tracking changes (still there, struck through, but gone from what the text says). */
+export function withoutDeleted(runs: TextRun[], hits: [number, number][]): [number, number][] {
+  const del: [number, number][] = [];
+  let at = 0;
+  for (const r of runs) {
+    if (parseRev(r.rev)?.kind === 'del') del.push([at, at + r.text.length]);
+    at += r.text.length;
+  }
+  if (!del.length) return hits;
+  return hits.filter(([a, b]) => !del.some(([x, y]) => a < y && b > x));
 }
 
 /** Where a found range ends up after the ranges before it were replaced (for keeping the selection on the next one). */
