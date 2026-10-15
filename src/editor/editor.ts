@@ -221,6 +221,8 @@ export class Editor {
   /** Show the Style panel for what was just selected, for /. */
   onProperties: () => void = () => {};
   private drag: Drag | null = null;
+  /** Something is being dragged (moved, rotated or resized) right now. */
+  get dragging(): boolean { return !!this.drag?.moved; }
   private needScene = true;
   private needOverlay = true;
   private frameQueued = false;
@@ -352,7 +354,18 @@ export class Editor {
     return px / this.r.view.scale;
   }
 
+  /** The last hit test, as a pointer move asks twice for the same place (the hover and the group tooltip). */
+  private lastHit: { x: number; y: number; doc: Doc; version: number; scale: number; locked: boolean; hit: Hit } | null = null;
+
   hitTest(p: Vec): Hit {
+    const lh = this.lastHit, scale = this.r.view.scale;
+    if (lh && lh.x === p.x && lh.y === p.y && lh.doc === this.doc && lh.version === this.doc.version && lh.scale === scale && lh.locked === this.structuresLocked) return lh.hit;
+    const hit = this.hitTestNow(p);
+    this.lastHit = { x: p.x, y: p.y, doc: this.doc, version: this.doc.version, scale, locked: this.structuresLocked, hit };
+    return hit;
+  }
+
+  private hitTestNow(p: Vec): Hit {
     const doc = this.doc;
     const L = doc.style.bondLength;
     const atomR = Math.max(L * 0.28, this.tol(6));

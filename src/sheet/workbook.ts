@@ -12,7 +12,7 @@ import type { DocStyle } from '../style';
 import { ACS_1996 } from '../style';
 import { Chart, mapChartRefs } from './chart';
 import { Dashboard, mapDashboardRefs } from './dashboard';
-import { Node, parseFormula, shiftFormula, adjustFormula, renameSheetInFormula, formulaRefs, SheetChange, normalizeFormula, FormulaSyntaxError, moveRefs } from './formula';
+import { type RefToken, Node, parseFormula, shiftFormula, shiftTree, adjustFormula, renameSheetInFormula, formulaRefs, SheetChange, normalizeFormula, FormulaSyntaxError, moveRefs } from './formula';
 import { evaluate, EvalHost } from './evaluate';
 import { CellError, ERR, Value, readTyped, compareValues, isError } from './values';
 import { MolProps } from './properties';
@@ -218,7 +218,9 @@ export class Sheet {
   charts: Chart[] = [];
   /** A dashboard sheet's tiles (null: an ordinary sheet of cells). */
   dashboard: Dashboard | null = null;
-  private looks: { values: Map<number, Value>; rules: CondFormat[]; map: Map<number, CellLook> } | null = null;
+  private looks: { gen: number; rules: CondFormat[]; map: Map<number, CellLook> } | null = null;
+  /** Goes up each time the values are worked out again (all of them, or only those an edit changed). */
+  valuesGen = 0;
 
   /** Worked out by Workbook.recalc: the value of every cell in use. */
   values = new Map<number, Value>();
@@ -277,12 +279,12 @@ export class Sheet {
   /** What conditional formatting does to a cell (worked out once per change of values or rules). */
   condLook(row: number, col: number): CellLook | undefined {
     if (!this.condFormats.length) return undefined;
-    if (!this.looks || this.looks.values !== this.values || this.looks.rules !== this.condFormats) {
+    if (!this.looks || this.looks.gen !== this.valuesGen || this.looks.rules !== this.condFormats) {
       const host = {
         value: (r: number, c: number) => this.value(r, c),
         formulaAt: (f: string, home: { row: number; col: number }, r: number, c: number) => this.wb.formulaAt(this, f, home, r, c),
       };
-      this.looks = { values: this.values, rules: this.condFormats, map: workOutLooks(this.condFormats, host, Math.max(this.lastRow, this.lastDataRow), this.lastCol) };
+      this.looks = { gen: this.valuesGen, rules: this.condFormats, map: workOutLooks(this.condFormats, host, Math.max(this.lastRow, this.lastDataRow), this.lastCol) };
     }
     return this.looks.map.get(keyOf(row, col));
   }
@@ -890,6 +892,27 @@ export class Sheet {
 
 // ---------------------------------------------------------------- the workbook
 
+/** Columns per sheet in the index of which formulas read which cells. */
+const READER_COLS = 1 << 15;
+
+/** Changes that leave every value as it was. */
+const NO_VALUES = new Set<string>(['colWidths', 'rowHeights', 'colStyles', 'hiddenRows', 'hiddenCols', 'merges', 'filter', 'frozen', 'condFormats', 'tables', 'charts', 'dashboard']);
+
+const isFormulaText = (t: string | undefined): boolean => !!t && t.startsWith('=') && t.length > 1;
+
+/** The formulas of a workbook and the order they are worked out in, as the last full recalculation found them. */
+interface Graph {
+  sheets: Sheet[];
+  nodes: { s: Sheet; key: number; text: string }[];
+  /** For each formula, the formulas that read it. */
+  dependents: number[][];
+  /** For each sheet and column (sheet × READER_COLS + column): first row, last row and formula of each reference into it. */
+  readers: Map<number, number[]>;
+  /** Formulas in a loop, or reading one: they stay #CIRC! until the formulas change. */
+  loop: boolean[];
+  bounds: { lastRow: number; lastCol: number; lastData: number }[];
+}
+
 export class Workbook {
   sheets: Sheet[] = [];
   /** The sheet showing. */
@@ -906,6 +929,12 @@ export class Workbook {
   private undoList: Entry[] = [];
   private redoList: Entry[] = [];
   private parsed = new Map<string, Node | CellError>();
+  /** The references in each formula's text (for the order formulas are worked out in). */
+  private refsByText = new Map<string, RefToken[]>();
+  /** A property column's formula as written in each of its rows. */
+  private shifted = new Map<string, string>();
+  /** What the last full recalculation found, so an edit to plain values works out only what reads them. */
+  private graph: Graph | null = null;
   private literals = new WeakMap<Cell, Value>();
 
   constructor(sheetNames: string[] = ['Sheet1']) {
@@ -946,7 +975,7 @@ export class Workbook {
         if (this.undoList.length > 500) this.undoList.shift();
         this.redoList.length = 0;
         this.edits++;
-        this.recalc();
+        this.recalcAfter(entry.changes);
         this.onChange();
       }
     }
@@ -988,7 +1017,7 @@ export class Workbook {
     for (let i = e.changes.length - 1; i >= 0; i--) this.applyChange(e.changes[i], 'before');
     this.redoList.push(e);
     this.edits++;
-    this.recalc();
+    this.recalcAfter(e.changes, 'before');
     this.onChange();
     return e.before ?? e.after ?? null;
   }
@@ -999,7 +1028,7 @@ export class Workbook {
     for (const c of e.changes) this.applyChange(c, 'after');
     this.undoList.push(e);
     this.edits++;
-    this.recalc();
+    this.recalcAfter(e.changes);
     this.onChange();
     return e.after ?? e.before ?? null;
   }
@@ -1094,7 +1123,8 @@ export class Workbook {
       } catch (e) {
         n = new CellError('#NAME?', e instanceof FormulaSyntaxError ? e.message : String(e));
       }
-      if (this.parsed.size > 50000) this.parsed.clear();
+      // big enough for every formula of a large workbook, so a recalculation never reads them all again
+      if (this.parsed.size > 500000) this.parsed.clear();
       this.parsed.set(text, n);
     }
     return n;
@@ -1125,6 +1155,7 @@ export class Workbook {
   /** Work out every cell of every sheet. */
   recalc(): void {
     this.identityCache.clear();
+    this.graph = null;
     const sheetIndex = new Map(this.sheets.map((s, i) => [s, i] as const));
     // 1. what each cell holds; formulas (own and property columns) found
     const nodes: { s: Sheet; key: number; text: string }[] = [];
@@ -1133,6 +1164,7 @@ export class Workbook {
     for (const s of this.sheets) {
       const si = sheetIndex.get(s)!;
       s.values = new Map();
+      s.valuesGen++;
       s.formulas = new Map();
       let lastRow = -1, lastCol = -1, lastData = -1;
       for (const [k, c] of s.cells) {
@@ -1160,7 +1192,13 @@ export class Workbook {
           const k = keyOf(r, col);
           const c = s.cells.get(k);
           if (c?.input || c?.structure) continue;
-          const text = shiftFormula(d.formula, r - d.firstRow, 0);
+          const sk = `${r - d.firstRow}|${d.formula}`;
+          let text = this.shifted.get(sk);
+          if (text === undefined) {
+            text = shiftFormula(d.formula, r - d.firstRow, 0);
+            if (this.shifted.size > 500000) this.shifted.clear();
+            this.shifted.set(sk, text);
+          }
           s.formulas.set(k, text);
           byId.set(gid(si, k), nodes.length);
           nodes.push({ s, key: k, text });
@@ -1180,18 +1218,32 @@ export class Workbook {
     for (const m of formulaRowsByCol.values()) for (const list of m.values()) list.sort((a, b) => a - b);
     const dependents: number[][] = nodes.map(() => []);
     const indeg = new Array<number>(nodes.length).fill(0);
+    // which formulas read each column: [first row, last row, formula] for each reference
+    const readers = new Map<number, number[]>();
     nodes.forEach((n, i) => {
       const seen = new Set<number>();
-      for (const ref of formulaRefs(n.text)) {
+      let refs = this.refsByText.get(n.text);
+      if (!refs) {
+        refs = formulaRefs(n.text);
+        if (this.refsByText.size > 500000) this.refsByText.clear();
+        this.refsByText.set(n.text, refs);
+      }
+      for (const ref of refs) {
         if (ref.broken) continue;
         const s = ref.sheet !== undefined ? this.sheetNamed(ref.sheet) : n.s;
         if (!s) continue;
         const si = sheetIndex.get(s)!;
-        const cols = formulaRowsByCol.get(s);
-        if (!cols) continue;
         const b = ref.b ?? ref.a;
         const r1 = Math.min(ref.a.row, b.row), r2 = Math.max(ref.a.row, b.row);
         const c1 = Math.min(ref.a.col, b.col), c2 = Math.max(ref.a.col, b.col);
+        for (let col = c1; col <= Math.min(c2, s.lastCol); col++) {
+          const k = si * READER_COLS + col;
+          let list = readers.get(k);
+          if (!list) readers.set(k, (list = []));
+          list.push(r1, r2, i);
+        }
+        const cols = formulaRowsByCol.get(s);
+        if (!cols) continue;
         for (const [col, rows] of cols) {
           if (col < c1 || col > c2) continue;
           // the formula rows of this column inside the block
@@ -1220,14 +1272,94 @@ export class Workbook {
     if (queue.length < nodes.length) {
       for (let i = 0; i < nodes.length; i++) if (!done[i]) nodes[i].s.values.set(nodes[i].key, ERR.circ());
     }
+    this.graph = {
+      sheets: [...this.sheets], nodes, dependents, readers, loop: done.map((x) => !x),
+      bounds: this.sheets.map((s) => ({ lastRow: s.lastRow, lastCol: s.lastCol, lastData: s.lastDataRow })),
+    };
+  }
+
+  /**
+   * Work out the values again after a change. When the change only typed or cleared plain
+   * values (no formulas, structures or property columns) inside the area in use, only the
+   * formulas that read them, and those that read those, are worked out again; anything else
+   * works out the whole workbook, as recalc does.
+   */
+  private recalcAfter(changes: Change[], now: 'before' | 'after' = 'after'): void {
+    if (!this.recalcChanged(changes, now)) this.recalc();
+  }
+
+  /** `now`: which side of each change is in place (undo puts back 'before'). */
+  private recalcChanged(changes: Change[], now: 'before' | 'after'): boolean {
+    const g = this.graph;
+    if (!g || g.sheets.length !== this.sheets.length || g.sheets.some((s, i) => s !== this.sheets[i])) return false;
+    const typed: { s: Sheet; si: number; key: number; cell: Cell | undefined }[] = [];
+    for (const c of changes) {
+      if (c.field !== 'cells') {
+        // formatting, sizes, hidden rows, rules and charts change no value
+        if (c.sheet && NO_VALUES.has(c.field)) continue;
+        return false;
+      }
+      const before = c[now === 'after' ? 'before' : 'after'] as Cell | undefined, after = c[now] as Cell | undefined;
+      if (before?.input === after?.input && before?.structure === after?.structure) continue;
+      if (before?.structure || after?.structure || isFormulaText(before?.input) || isFormulaText(after?.input)) return false;
+      const s = c.sheet!, si = this.sheets.indexOf(s);
+      if (si < 0) return false;
+      const r = rowOf(c.key), col = colOf(c.key), b = g.bounds[si];
+      // a value typed into a property column takes the place of its formula
+      const def = s.colDefs.get(col);
+      if (def && r >= def.firstRow) return false;
+      // the area in use (how far property columns and whole-column references reach) must stay as it was
+      if (after?.input ? r > b.lastRow || col > b.lastCol || r > b.lastData : r >= b.lastRow || col >= b.lastCol || r >= b.lastData) return false;
+      typed.push({ s, si, key: c.key, cell: after });
+    }
+    if (!typed.length) return true;
+    // the formulas that read the changed cells
+    const start = new Set<number>();
+    for (const t of typed) {
+      const list = g.readers.get(t.si * READER_COLS + colOf(t.key));
+      if (!list) continue;
+      const r = rowOf(t.key);
+      for (let j = 0; j < list.length; j += 3) if (list[j] <= r && r <= list[j + 1]) start.add(list[j + 2]);
+    }
+    // and those that read those, and so on
+    const todo = new Set<number>();
+    const stack = [...start];
+    while (stack.length) {
+      const i = stack.pop()!;
+      if (todo.has(i) || g.loop[i]) continue;
+      todo.add(i);
+      for (const j of g.dependents[i]) if (!todo.has(j)) stack.push(j);
+    }
+    if (todo.size > g.nodes.length / 2) return false;
+    this.identityCache.clear();
+    for (const t of typed) {
+      if (t.cell?.input) t.s.values.set(t.key, this.literal(t.cell));
+      else t.s.values.delete(t.key);
+    }
+    // in order: each formula after those it reads (a loop stays an error, as in a full recalculation)
+    const indeg = new Map<number, number>();
+    for (const i of todo) indeg.set(i, 0);
+    for (const i of todo) for (const j of g.dependents[i]) if (todo.has(j)) indeg.set(j, indeg.get(j)! + 1);
+    const queue = [...todo].filter((i) => !indeg.get(i));
+    let worked = 0;
+    for (let qi = 0; qi < queue.length; qi++) {
+      const i = queue[qi];
+      this.evaluateNode(g.nodes[i]);
+      worked++;
+      for (const j of g.dependents[i]) if (todo.has(j)) { const d = indeg.get(j)! - 1; indeg.set(j, d); if (!d) queue.push(j); }
+    }
+    if (worked < todo.size) for (const i of todo) if (indeg.get(i)) g.nodes[i].s.values.set(g.nodes[i].key, ERR.circ());
+    for (const s of new Set(typed.map((t) => t.s))) s.valuesGen++;
+    for (const i of todo) g.nodes[i].s.valuesGen++;
+    return true;
   }
 
   /** A formula written for cell `home`, worked out as if moved to (row, col) of a sheet (conditional formatting's formula rules). */
   formulaAt(s: Sheet, formula: string, home: { row: number; col: number }, row: number, col: number): Value {
-    const text = shiftFormula(formula.startsWith('=') ? formula : '=' + formula, row - home.row, col - home.col);
-    const tree = this.parse(text);
+    // read once, then moved as a tree for each cell
+    const tree = this.parse(formula.startsWith('=') ? formula : '=' + formula);
     try {
-      return tree instanceof CellError ? tree : evaluate(tree, this.hostFor(s));
+      return tree instanceof CellError ? tree : evaluate(shiftTree(tree, row - home.row, col - home.col), this.hostFor(s));
     } catch (e) {
       return ERR.value(`This formula could not be worked out (${(e as Error).message})`);
     }

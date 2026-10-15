@@ -8,7 +8,7 @@
 import { Doc, Atom, Bond, Arrow, Caption, Shape, PICTURE_SHADOWS, pictureRadius, applyBase, enhancedText, CHIRAL_FLAGS, flagTextSize, type TextBase, type HighlightStyle } from '../model';
 import { atomPiece, bondPiece, fullStyle, highlightSizes, softRings, tracePieces, type Piece } from './highlight';
 import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
-import { crossingGaps } from '../chem/crossing';
+import { crossingGapsCached } from '../chem/crossing';
 import { FADE, tint } from '../colours';
 import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter, fromAngle } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
@@ -110,6 +110,9 @@ export function withMeasure<T>(m: TextMeasure, fn: () => T): T {
   measureImpl = m;
   try { return fn(); } finally { measureImpl = old; }
 }
+
+/** A patterned shape's dots or hatching, kept with the shape (a changed shape is a new object). */
+const patternPaths = new WeakMap<Shape, { make: () => Path2D; path: Path2D }>();
 
 export class Renderer {
   view: View = { scale: 2, ox: 40, oy: 40 };
@@ -465,7 +468,9 @@ export class Renderer {
 
   /** Keep the tile cache to a sensible size by forgetting tiles far off screen. */
   private pruneTiles(tx0: number, tx1: number, ty0: number, ty1: number): void {
-    if (this.tiles.size <= MAX_TILES) return;
+    // a tile holds (256 × screen scale)² pixels: on a high-resolution screen, fewer of them fit the budget
+    const px = TILE * this.dpr;
+    if (this.tiles.size <= Math.min(MAX_TILES, Math.floor(TILE_BYTES / (px * px * 4)))) return;
     const m = 4;
     for (const [key, t] of this.tiles) {
       if (t.tx < tx0 - m || t.tx > tx1 + m || t.ty < ty0 - m || t.ty > ty1 + m) {
@@ -727,7 +732,7 @@ export class Renderer {
     const nrm = perp(dir);
     const gap = doubleBondGap(st);
     // a bond behind a bond that crosses it has a gap there
-    const gaps = crossingGaps(doc, b, ds.marginWidth * k + ds.lineWidth);
+    const gaps = crossingGapsCached(doc, b, ds.marginWidth * k + ds.lineWidth);
     const pq = sub(q, p), pq2 = dot(pq, pq) || 1;
     const along = (x: Vec) => dot(sub(x, p), pq) / pq2;
     const line = (path: Path2D, a: Vec, c: Vec) => {
@@ -1355,16 +1360,20 @@ export class Renderer {
     if (s.pattern) {
       const gap = patternSpacing(s);
       const pc = patternInk(s);
-      const p = this.makePath();
+      // the dots or lines are worked out once for the shape as it is, not again for every tile it crosses
+      let cached = patternPaths.get(s);
+      const fresh = !cached || cached.make !== this.makePath;
+      if (fresh) patternPaths.set(s, (cached = { make: this.makePath, path: this.makePath() }));
+      const p = cached!.path;
       if (isDotPattern(s.pattern)) {
         const r = Math.max(0.25, gap * (s.pattern === 'dense-dots' ? 0.24 : 0.18));
-        for (const d of dotCentres(outline(), gap)) { p.moveTo(d.x + r, d.y); p.arc(d.x, d.y, r, 0, Math.PI * 2); }
+        if (fresh) for (const d of dotCentres(outline(), gap)) { p.moveTo(d.x + r, d.y); p.arc(d.x, d.y, r, 0, Math.PI * 2); }
         ctx.save();
         ctx.fillStyle = pc;
         ctx.fill(p);
         ctx.restore();
       } else {
-        for (const ang of patternAngles(s.pattern)) for (const [a, b] of hatchLines(outline(), ang, gap)) { p.moveTo(a.x, a.y); p.lineTo(b.x, b.y); }
+        if (fresh) for (const ang of patternAngles(s.pattern)) for (const [a, b] of hatchLines(outline(), ang, gap)) { p.moveTo(a.x, a.y); p.lineTo(b.x, b.y); }
         ctx.save();
         ctx.strokeStyle = pc;
         ctx.lineWidth = Math.max(0.25, Math.min(gap * 0.12, 0.5));
@@ -1536,6 +1545,8 @@ export class Renderer {
 /** Tile size in CSS pixels. */
 const TILE = 256;
 const MAX_TILES = 600;
+/** Memory the tiles may take, in bytes (600 tiles at standard resolution). */
+const TILE_BYTES = 160 * 1024 * 1024;
 /** Most hashes or waves drawn on one bond (a hash spacing near 0 would otherwise draw for ever). */
 const MAX_HASHES = 400;
 

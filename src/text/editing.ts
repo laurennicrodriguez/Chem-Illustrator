@@ -86,7 +86,12 @@ export class TextEditing {
 
   // ------------------------------------------------------------------ reading
 
-  get text(): string { return rt.plainText(this.t.runs); }
+  get text(): string {
+    // asked for many times per key press, and the text only changes with a new `t`
+    if (this.textCache?.t !== this.t) this.textCache = { t: this.t, text: rt.plainText(this.t.runs) };
+    return this.textCache.text;
+  }
+  private textCache: { t: RichText; text: string } | null = null;
   get start(): number { return Math.min(this.anchor, this.focus); }
   get end(): number { return Math.max(this.anchor, this.focus); }
   get collapsed(): boolean { return this.anchor === this.focus; }
@@ -487,6 +492,26 @@ export class TextEditing {
   private lookCache: { t: RichText; looks: CharLook[] } | null = null;
 
   /** How each character looks: its position (formula style worked out) and italics. */
+  /** The looks of the characters from `from` up to `to` (a few words, without going through the whole text). */
+  looksBetween(from: number, to: number): CharLook[] {
+    if (this.lookCache?.t === this.t) return this.lookCache.looks.slice(from, to);
+    const out: CharLook[] = [];
+    let at = 0;
+    for (const r of this.t.runs) {
+      const n = r.text.length;
+      if (at + n > from && at < to) {
+        const italic = !!r.italic;
+        const parts = r.formula && !r.sub && !r.sup ? rt.formulaParts(r.text) : null;
+        const pos: CharLook['pos'][] = [];
+        if (parts) for (const p of parts) for (let i = 0; i < p.text.length; i++) pos.push(p.pos);
+        for (let i = Math.max(0, from - at); i < Math.min(n, to - at); i++) out.push({ pos: r.sub ? 'sub' : r.sup ? 'sup' : parts ? pos[i] : 'base', italic });
+      }
+      at += n;
+      if (at >= to) break;
+    }
+    return out;
+  }
+
   looks(): CharLook[] {
     if (this.lookCache?.t === this.t) return this.lookCache.looks;
     const looks: CharLook[] = [];

@@ -11,6 +11,8 @@ import { recordPicture, pictureCanvas, type Picture } from '../render/picture';
 /** Space round a drawing's picture, in points (as for structures in sheet cells). */
 export const FIGURE_MARGIN = 1.5;
 const KEEP = 120;
+/** At most this much memory for them, in bytes. */
+const KEEP_BYTES = 96 * 1024 * 1024;
 const STEP = 1.25;
 
 export interface Recorded { doc: Doc; pic: Picture | null }
@@ -18,6 +20,8 @@ export interface Recorded { doc: Doc; pic: Picture | null }
 export class FigurePictures {
   private recorded = new WeakMap<Contents, { style: DocStyle; r: Recorded }>();
   private bitmaps = new Map<string, HTMLCanvasElement>();
+  /** Memory the bitmaps take. */
+  private bytes = 0;
   private ids = new WeakMap<Contents, number>();
   private nextId = 1;
 
@@ -54,7 +58,14 @@ export class FigurePictures {
     if (!r.pic) return null;
     const { canvas } = pictureCanvas(r.doc, r.pic, step * 72);
     this.bitmaps.set(key, canvas);
-    if (this.bitmaps.size > KEEP) this.bitmaps.delete(this.bitmaps.keys().next().value as string);
+    this.bytes += canvas.width * canvas.height * 4;
+    // the oldest go first, when there are too many or they take too much memory (a figure zoomed right in is big)
+    while (this.bitmaps.size > 1 && (this.bitmaps.size > KEEP || this.bytes > KEEP_BYTES)) {
+      const old = this.bitmaps.keys().next().value as string;
+      const c = this.bitmaps.get(old)!;
+      this.bytes -= c.width * c.height * 4;
+      this.bitmaps.delete(old);
+    }
     return canvas;
   }
 }

@@ -99,6 +99,15 @@ export class SlideList {
     this.items[deck.index]?.scrollIntoView({ block: 'nearest' });
   }
 
+  /** Another slide is being edited: only the marks move (the pictures stay as they are). */
+  switched(): void {
+    const deck = this.deck;
+    if (!deck) return;
+    if (!this.picked.has(deck.index)) this.picked = new Set([deck.index]);
+    this.mark();
+    this.items[deck.index]?.scrollIntoView({ block: 'nearest' });
+  }
+
   private mark(): void {
     const deck = this.deck;
     this.items.forEach((it, i) => {

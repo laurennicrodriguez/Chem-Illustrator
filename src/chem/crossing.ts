@@ -52,3 +52,16 @@ export function crossingGaps(doc: Doc, b: Bond, half: number): [number, number][
   }
   return out.sort((a, b) => a[0] - b[0]);
 }
+
+/** Gaps already worked out, for each drawing as it was (a repaint asks for every bond in every tile). */
+const gapCache = new WeakMap<Doc, { version: number; map: Map<string, [number, number][]> }>();
+
+/** crossingGaps, kept until the drawing changes. */
+export function crossingGapsCached(doc: Doc, b: Bond, half: number): [number, number][] {
+  let c = gapCache.get(doc);
+  if (!c || c.version !== doc.version) gapCache.set(doc, (c = { version: doc.version, map: new Map() }));
+  const key = `${b.id}|${half}`;
+  let gaps = c.map.get(key);
+  if (!gaps) c.map.set(key, (gaps = crossingGaps(doc, b, half)));
+  return gaps;
+}
