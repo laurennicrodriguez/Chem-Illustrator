@@ -741,6 +741,8 @@ export class Doc {
   canRedo(): boolean { return this.redoStack.length > 0; }
 
   undo(): boolean {
+    // not while a step is still being made (a drag): it would be undone half-way and lost
+    if (this.tx) return false;
     const e = this.undoStack.pop();
     if (!e) return false;
     this.apply(e.before);
@@ -749,6 +751,7 @@ export class Doc {
   }
 
   redo(): boolean {
+    if (this.tx) return false;
     const e = this.redoStack.pop();
     if (!e) return false;
     this.apply(e.after);
@@ -1197,10 +1200,16 @@ export class Doc {
 
   /** Build without undo tracking (file loading, tests). */
   bulk(fn: () => void): void {
-    this.begin('bulk');
-    fn();
+    // a step already open (a drag) is kept as it was, not folded into this or closed by it
+    const outer = this.tx;
     this.tx = null;
-    this.version++;
+    this.begin('bulk');
+    try {
+      fn();
+    } finally {
+      this.tx = outer;
+      this.version++;
+    }
   }
 
   // ---------------------------------------------------------------- queries

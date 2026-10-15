@@ -255,6 +255,15 @@ export class Editor {
     el.addEventListener('mousedown', (e) => { if (this.captionEd?.hit(this.docPoint(e))) e.preventDefault(); });
     el.addEventListener('pointermove', (e) => this.onMove(e));
     el.addEventListener('pointerup', (e) => this.onUp(e));
+    // a drag the system takes away (a pen gesture, the window losing the pointer) ends where it
+    // got to, as if let go; one that hadn't moved is forgotten
+    const cancel = (e: PointerEvent) => {
+      if (!this.drag) return;
+      if (this.drag.moved) this.onUp(e);
+      else this.drag = null;
+    };
+    el.addEventListener('pointercancel', cancel);
+    el.addEventListener('lostpointercapture', cancel);
     el.addEventListener('pointerenter', () => { this.pointerInside = true; });
     el.addEventListener('pointerleave', () => { this.pointerInside = false; if (!this.drag) { this.hover = null; this.requestOverlay(); } });
     el.addEventListener('dblclick', (e) => this.onDoubleClick(e));
@@ -540,7 +549,11 @@ export class Editor {
     }
     if (d.mode === 'move' && this.smartGuides && !e.altKey) {
       // smart guides: edges and middles snap into line with other shapes and the page
-      if (!d.guide) { const box = this.selBox(); if (box) d.guide = { box, moved: { x: 0, y: 0 }, targets: this.guideTargets() }; }
+      if (!d.guide) {
+        // (measured where the drag started: Alt may have moved the selection already)
+        const box = this.selBox(), done = sub(d.last, d.start);
+        if (box) d.guide = { box: { x1: box.x1 - done.x, y1: box.y1 - done.y, x2: box.x2 - done.x, y2: box.y2 - done.y }, moved: done, targets: this.guideTargets() };
+      }
       if (d.guide) {
         const g = guideSnap(d.guide.box, sub(p, d.start), d.guide.targets, this.tol(6));
         this.moveSelection(g.offset.x - d.guide.moved.x, g.offset.y - d.guide.moved.y);
@@ -554,6 +567,8 @@ export class Editor {
     if (d.mode === 'move') {
       const dx = p.x - d.last.x, dy = p.y - d.last.y;
       this.moveSelection(dx, dy);
+      // (with Alt held the guides are off, but they count this move when Alt is let go)
+      if (d.guide) d.guide.moved = { x: d.guide.moved.x + dx, y: d.guide.moved.y + dy };
       d.last = p;
       this.requestScene(e.timeStamp);
       return;
@@ -2103,6 +2118,9 @@ export class Editor {
     if (e.defaultPrevented || target?.closest?.('dialog, .menu, .flyout')) return;
     const chord = chordOf(e);
     if (!chord) return;
+    // in the middle of a drag (its step still open), commands wait: Undo or a tab switch now
+    // would act on a half-made change
+    if (this.drag?.moved && chord !== 'Escape' && !/^(Shift|Control|Alt|Meta)$/.test(e.key)) { e.preventDefault(); return; }
     // on a focused button or menu, Enter, Space and Tab do their usual jobs (unless the mouse
     // is over the drawing: then they are drawing keys, as in ChemDraw)
     if (!this.pointerInside && target && target !== document.body && target !== this.r.overlay && /^(Shift\+)?(Enter|Space|Tab)$/.test(chord)) return;

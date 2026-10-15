@@ -55,12 +55,15 @@ export function chordOf(e: KeyPress): string | null {
   const shift = !!e.shiftKey;
   const printable = key.length === 1 && key !== ' ';
   if (ctrl || alt) {
-    // Ctrl and Alt change the character on some keyboards (Alt+K is ˚ on a Mac), so read
-    // letters, digits and common punctuation from the physical key instead.
+    // The letter or digit on the key, as the keyboard layout gives it (Ctrl+Z is Z on a German or
+    // French keyboard too, wherever the key sits). Ctrl and Alt change the character on some
+    // keyboards (Alt+K is ˚ on a Mac), and other alphabets have no A to Z, so then the physical
+    // key is read instead.
     const code = e.code ?? '';
     let base: string;
     const m = /^Key([A-Z])$/.exec(code) || /^(?:Digit|Numpad)(\d)$/.exec(code);
-    if (m) base = m[1];
+    if (/^[a-z0-9]$/i.test(key)) base = key.toUpperCase();
+    else if (m) base = m[1];
     else if (CODE_CHARS[code]) base = CODE_CHARS[code];
     else if (printable) base = key.toUpperCase();
     else base = keyName(key);
