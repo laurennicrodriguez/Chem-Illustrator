@@ -295,18 +295,39 @@ export function mapRefs(text: string, fn: (r: RefToken) => RefToken): string {
 /** A formula copied dr rows down and dc columns across: relative references move with it (Excel's copy and fill). */
 export function shiftFormula(text: string, dr: number, dc: number): string {
   if (!dr && !dc) return text;
+  return mapRefs(text, (r) => shiftRef(r, dr, dc));
+}
+
+/** A reference copied dr rows down and dc columns across (its $ parts stay); broken when it would leave the sheet. */
+function shiftRef(r: RefToken, dr: number, dc: number): RefToken {
+  if (r.broken) return r;
   const move = (c: CellRef, wholeCol: boolean): CellRef | null => {
     const row = c.absRow || wholeCol ? c.row : c.row + dr;
     const col = c.absCol ? c.col : c.col + dc;
     if (row < 0 || row >= MAX_ROWS || col < 0 || col >= MAX_COLS) return null;
     return { ...c, row, col };
   };
-  return mapRefs(text, (r) => {
-    if (r.broken) return r;
-    const a = move(r.a, r.kind === 'cols'), b = r.b ? move(r.b, r.kind === 'cols') : null;
-    if (!a || (r.b && !b)) return { ...r, broken: true };
-    return { ...r, a, b: b ?? undefined };
-  });
+  const a = move(r.a, r.kind === 'cols'), b = r.b ? move(r.b, r.kind === 'cols') : null;
+  if (!a || (r.b && !b)) return { ...r, broken: true };
+  return { ...r, a, b: b ?? undefined };
+}
+
+/**
+ * A formula's tree as if copied dr rows down and dc columns across: the same as shifting its
+ * text and reading it again, without the reading (conditional formatting asks this of every cell).
+ */
+export function shiftTree(n: Node, dr: number, dc: number): Node {
+  if (!dr && !dc) return n;
+  switch (n.t) {
+    case 'ref': {
+      const r = shiftRef(n.v, dr, dc);
+      return r.broken ? { t: 'err', v: '#REF!' } : { t: 'ref', v: r };
+    }
+    case 'neg': case 'pct': return { t: n.t, x: shiftTree(n.x, dr, dc) };
+    case 'bin': return { t: 'bin', op: n.op, l: shiftTree(n.l, dr, dc), r: shiftTree(n.r, dr, dc) };
+    case 'fn': return { t: 'fn', name: n.name, args: n.args.map((x) => shiftTree(x, dr, dc)) };
+    default: return n;
+  }
 }
 
 /** Rows or columns put in or taken out of a sheet. */

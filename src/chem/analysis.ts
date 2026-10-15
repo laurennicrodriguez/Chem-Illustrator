@@ -70,37 +70,65 @@ export const ISOTOPES: Record<string, [number, number][]> = {
   Cs: [[132.905451961, 100]],
 };
 
-interface Peak { m: number; p: number }
+/**
+ * A distribution by nominal mass: entry k holds the isotopologues k mass units above the
+ * lightest (their summed probability `p`, and `pm`, the sum of probability times mass, so
+ * their mean mass is pm / p). This is exactly what the pattern shows (M, M+1, M+2…, each at
+ * its mean m/z), and it stays a few hundred numbers long even for a protein, where keeping
+ * every isotopologue apart took seconds.
+ */
+interface Nominal { p: Float64Array; pm: Float64Array }
 
-/** Peaks closer than this (u) are merged while combining: far finer than any mass spectrometer resolves. */
-const MERGE = 1e-4;
-/** Peaks weaker than this fraction of the strongest are dropped while combining. */
-const PRUNE = 1e-9;
+/** Entries weaker than this fraction of the strongest are dropped from the ends. */
+const PRUNE = 1e-12;
 
-function combine(a: Peak[], b: Peak[]): Peak[] {
-  const out: Peak[] = [];
-  for (const x of a) for (const y of b) out.push({ m: x.m + y.m, p: x.p * y.p });
-  out.sort((x, y) => x.m - y.m);
-  const merged: Peak[] = [];
-  for (const q of out) {
-    const last = merged[merged.length - 1];
-    if (last && q.m - last.m < MERGE) {
-      const p = last.p + q.p;
-      last.m = (last.m * last.p + q.m * q.p) / p;
-      last.p = p;
-    } else merged.push({ ...q });
+function convolve(a: Nominal, b: Nominal): Nominal {
+  const n = a.p.length + b.p.length - 1;
+  const p = new Float64Array(n), pm = new Float64Array(n);
+  for (let i = 0; i < a.p.length; i++) {
+    const ap = a.p[i], apm = a.pm[i];
+    if (!ap) continue;
+    for (let j = 0; j < b.p.length; j++) {
+      const bp = b.p[j];
+      if (!bp) continue;
+      p[i + j] += ap * bp;
+      // the mean mass of a sum is the sum of the means: Σ pa·pb·(ma + mb)
+      pm[i + j] += apm * bp + ap * b.pm[j];
+    }
   }
-  const max = Math.max(...merged.map((q) => q.p));
-  return merged.filter((q) => q.p >= max * PRUNE);
+  return trim({ p, pm });
+}
+
+/** Drop the negligible ends (keeping index 0, the lightest, as the reference). */
+function trim(d: Nominal): Nominal {
+  let max = 0;
+  for (const x of d.p) if (x > max) max = x;
+  let end = d.p.length;
+  while (end > 1 && d.p[end - 1] < max * PRUNE) end--;
+  for (let i = 0; i < end; i++) if (d.p[i] < max * PRUNE) { d.p[i] = 0; d.pm[i] = 0; }
+  return end === d.p.length ? d : { p: d.p.slice(0, end), pm: d.pm.slice(0, end) };
+}
+
+/** One atom of an element, by nominal mass above its lightest isotope. */
+function atomOf(iso: [number, number][]): Nominal {
+  const light = Math.min(...iso.map(([m]) => m));
+  const n = Math.max(...iso.map(([m]) => Math.round(m - light))) + 1;
+  const p = new Float64Array(n), pm = new Float64Array(n);
+  for (const [m, a] of iso) {
+    const k = Math.round(m - light);
+    p[k] += a / 100;
+    pm[k] += (a / 100) * m;
+  }
+  return { p, pm };
 }
 
 /** The distribution of n atoms of one element, by repeated squaring. */
-function elementPeaks(iso: [number, number][], n: number): Peak[] {
-  let result: Peak[] = [{ m: 0, p: 1 }];
-  let base: Peak[] = iso.map(([m, a]) => ({ m, p: a / 100 }));
+function elementPeaks(iso: [number, number][], n: number): Nominal {
+  let result: Nominal = { p: Float64Array.of(1), pm: Float64Array.of(0) };
+  let base = atomOf(iso);
   for (let k = n; k > 0; k >>= 1) {
-    if (k & 1) result = combine(result, base);
-    if (k > 1) base = combine(base, base);
+    if (k & 1) result = convolve(result, base);
+    if (k > 1) base = convolve(base, base);
   }
   return result;
 }
@@ -112,32 +140,42 @@ export interface IsotopePeak {
   rel: number;
 }
 
+/** Patterns already worked out (the Analysis panel asks again on every change). */
+const patterns = new Map<string, IsotopePeak[] | null>();
+
 /**
  * The isotope pattern of an ion with these element counts and charge z, as a mass spectrometer
  * shows it: isotopologues one mass unit apart are summed into one peak (M, M+1, M+2…), at their
  * mean m/z. Peaks below `min` % of the tallest are left out. Null when an element is not in the table.
  */
 export function isotopePattern(counts: Map<string, number>, z: number, min = 0.1): IsotopePeak[] | null {
-  let peaks: Peak[] = [{ m: 0, p: 1 }];
+  const key = `${[...counts].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([e, n]) => e + n).join('')}|${z}`;
+  let all = patterns.get(key);
+  if (all === undefined) {
+    all = computePattern(counts, z);
+    if (patterns.size > 200) patterns.clear();
+    patterns.set(key, all);
+  }
+  return all && all.filter((g) => g.rel >= min);
+}
+
+function computePattern(counts: Map<string, number>, z: number): IsotopePeak[] | null {
+  let d: Nominal = { p: Float64Array.of(1), pm: Float64Array.of(0) };
   for (const [el, n] of counts) {
     const iso = ISOTOPES[el];
     if (!iso) return null;
-    if (n > 0) peaks = combine(peaks, elementPeaks(iso, n));
+    if (n > 0) d = convolve(d, elementPeaks(iso, n));
   }
   if (!z) z = 1;
-  const mono = peaks.reduce((lo, q) => (q.m < lo ? q.m : lo), Infinity);
-  const groups = new Map<number, Peak>();
-  for (const q of peaks) {
-    const k = Math.round(q.m - mono);
-    const g = groups.get(k);
-    if (g) { const p = g.p + q.p; g.m = (g.m * g.p + q.m * q.p) / p; g.p = p; }
-    else groups.set(k, { ...q });
+  let max = 0;
+  for (const x of d.p) if (x > max) max = x;
+  const out: IsotopePeak[] = [];
+  for (let k = 0; k < d.p.length; k++) {
+    if (!d.p[k]) continue;
+    const m = d.pm[k] / d.p[k];
+    out.push({ mz: (m - z * ELECTRON) / Math.abs(z), rel: (100 * d.p[k]) / max });
   }
-  const list = [...groups.entries()].sort((a, b) => a[0] - b[0]).map(([, g]) => g);
-  const max = Math.max(...list.map((g) => g.p));
-  return list
-    .map((g) => ({ mz: (g.m - z * ELECTRON) / Math.abs(z), rel: (100 * g.p) / max }))
-    .filter((g) => g.rel >= min);
+  return out;
 }
 
 /**
