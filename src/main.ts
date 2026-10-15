@@ -1230,14 +1230,20 @@ const slidePage = {
 // edited gets a new picture.
 let listKey = '';
 let masterSeen: unknown = null;
-const slideListKey = (d: Deck) => `${d.slides.map((s) => s.id + (s.notes.trim() ? 'n' : '')).join(',')}|${d.index}|${d.size.w}x${d.size.h}`;
+let indexSeen = -1;
+const slideListKey = (d: Deck) => `${d.slides.map((s) => s.id + (s.notes.trim() ? 'n' : '')).join(',')}|${d.size.w}x${d.size.h}`;
 
 function deckChanged(deck: Deck): void {
   const key = slideListKey(deck);
   if (key !== listKey || masterSeen !== deck.master) {
     listKey = key;
     masterSeen = deck.master;
+    indexSeen = deck.index;
     slideList.rebuild();
+  } else if (deck.index !== indexSeen) {
+    // going to another slide moves the highlight; no picture needs drawing again
+    indexSeen = deck.index;
+    slideList.switched();
   } else slideList.refresh();
   showSlideState();
   if (ws.active.mode === 'design') showDesignState();
@@ -4568,6 +4574,8 @@ editor.onFrame = () => {
   layers?.refresh();
   scrollbars.update(doc.version);
   updatePanels();
+  // while dragging, the warnings list and R/S labels wait for the drop (they changed every frame)
+  if (editor.dragging) { warnTip.hidden = true; return; }
   updateWarnings();
   if (doc.version !== stereoSeen) { stereoSeen = doc.version; updateStereo(); }
 };

@@ -8,6 +8,19 @@ import { emfToSvg, emfSize } from './emf-read';
 interface Entry { img: HTMLImageElement; ready: boolean; failed: boolean }
 
 const cache = new Map<string, Entry>();
+/** Pictures are forgotten, least recently drawn first, once their data passes this many characters (decoded again if needed). */
+const KEEP_CHARS = 150_000_000;
+
+function forgetOld(): void {
+  let total = 0;
+  for (const k of cache.keys()) total += k.length;
+  for (const k of cache.keys()) {
+    if (total <= KEEP_CHARS || cache.size <= 1) break;
+    total -= k.length;
+    cache.delete(k);
+    shown.delete(k);
+  }
+}
 const listeners: (() => void)[] = [];
 
 /** Call `fn` whenever a picture finishes loading (to redraw). */
@@ -37,7 +50,12 @@ export function showableSrc(src: string): string | null {
 /** The decoded image, or null while it loads (or when it can't be shown). */
 export function imageFor(src: string): HTMLImageElement | null {
   let e = cache.get(src);
-  if (!e) {
+  if (e) {
+    // used now: last to be forgotten
+    cache.delete(src);
+    cache.set(src, e);
+  } else {
+    forgetOld();
     if (typeof Image === 'undefined') return null;
     const img = new Image();
     e = { img, ready: false, failed: false };

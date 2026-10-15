@@ -33,11 +33,27 @@ export function afterTyping(ed: TextEditing, typed: string, prefs: TypingPrefs =
       end = r[0] + r[1].length;
     }
   }
-  if (prefs.chemistry) {
-    const looks = ed.looks();
-    const edits = typingFormats(ed.text, end, (i) => looks[i] ?? { pos: 'base', italic: false });
-    if (edits.length) ed.fix(edits, 'format');
+  if (prefs.chemistry) formatWord(ed, end);
+}
+
+/** How far back the chemistry rules look for the word just finished: they need it and the word before. */
+const LOOK_BACK = 300;
+
+/**
+ * Format the word ending at `end`, looking only at its paragraph (at most LOOK_BACK characters
+ * of it), so a long document isn't searched on every space.
+ */
+function formatWord(ed: TextEditing, end: number): void {
+  const text = ed.text;
+  let from = text.lastIndexOf('\n', end - 1) + 1;
+  if (end - from > LOOK_BACK) {
+    // start after a space, never in the middle of a word
+    const cut = text.slice(end - LOOK_BACK, end).search(/\s/);
+    if (cut >= 0) from = end - LOOK_BACK + cut + 1;
   }
+  const looks = ed.looksBetween(from, end + 1);
+  const edits = typingFormats(text.slice(from, end + 1), end - from, (i) => looks[i] ?? { pos: 'base', italic: false });
+  if (edits.length) ed.fix(edits.map((e) => ({ ...e, start: e.start + from, end: e.end + from })), 'format');
 }
 
 /**
@@ -57,11 +73,7 @@ export function finishWord(ed: TextEditing, prefs: TypingPrefs = typingPrefs): v
       end = r[0] + r[1].length;
     }
   }
-  if (prefs.chemistry) {
-    const looks = ed.looks();
-    const edits = typingFormats(ed.text, end, (i) => looks[i] ?? { pos: 'base', italic: false });
-    if (edits.length) ed.fix(edits, 'format');
-  }
+  if (prefs.chemistry) formatWord(ed, end);
 }
 
 const listeners = new Set<() => void>();
