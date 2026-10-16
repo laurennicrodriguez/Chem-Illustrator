@@ -2,6 +2,7 @@
 // its drawing. The same code draws the slide being edited (under the drawing), the slide list,
 // the slide show and PDF pages, so they all look the same.
 
+import { cssFamily } from '../text/layout';
 import { Doc } from '../model';
 import { Renderer, withMeasure } from '../render/renderer';
 import { imageFor } from '../render/images';
@@ -46,7 +47,7 @@ export function drawSlidePage(ctx: CanvasRenderingContext2D, p: SlidePage, surro
     }
   }
   const text = (s: string, r: { x1: number; y1: number; x2: number; y2: number }, align: 'right' | 'center') => {
-    ctx.font = `${m.footerSize}px ${m.bodyFont}, Arial, sans-serif`;
+    ctx.font = `${m.footerSize}px ${cssFamily(m.bodyFont)}, Arial, sans-serif`;
     ctx.fillStyle = colours.footerColor;
     const w = ctx.measureText(s).width;
     const x = align === 'right' ? r.x2 - w : (r.x1 + r.x2 - w) / 2;

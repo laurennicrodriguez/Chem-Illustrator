@@ -240,6 +240,7 @@
       <button id="btn-scheme" aria-haspopup="menu" aria-expanded="false" aria-controls="scheme-menu">Scheme</button>
       <div id="scheme-menu" class="menu" role="menu" hidden>
         <button role="menuitem" data-cmd="clean-up-reaction">Clean Up Reaction</button>
+        <button role="menuitem" data-cmd="clean-up-arrow" title="Redraw the selected curved arrows from their lone pair, bond or atom to what they point at, clear of the structure">Clean Up Arrow</button>
         <button role="menuitem" data-cmd="arrange-scheme">Arrange Scheme…</button>
         <button role="menuitem" data-cmd="number-compounds" title="ID labels under every selected structure (or all of them) in scheme order: choose how they count and where they start; the same structure gets the same ID">Number Compounds…</button>
         <button role="menuitemcheckbox" aria-checked="true" data-cmd="show-roles"><span>Show Reaction Roles</span></button>
@@ -261,7 +262,16 @@
     <span class="sep"></span>
     <button id="btn-dark" type="button" aria-pressed="false" data-cmd="dark-page" title="Dark page: show the page dark on screen only (files, printing and copies are not changed)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12S5.5 4.5 12 4.5 22.5 12 22.5 12 18.5 19.5 12 19.5 1.5 12 1.5 12Z"/><circle cx="12" cy="12" r="3.5"/></svg></button>
     <button id="btn-search" type="button" class="search-box" title="Search for a command by name (Alt+Q)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg><span>Search</span><kbd>Alt+Q</kbd></button>
-    <button id="btn-help" title="Hotkeys and how to use the program">Help</button>
+    <div class="menu-wrap">
+      <button id="btn-help" aria-haspopup="menu" aria-expanded="false" aria-controls="help-menu" title="Hotkeys, the user guide, and sending feedback">Help</button>
+      <div id="help-menu" class="menu right" role="menu" hidden>
+        <button role="menuitem" data-cmd="help" title="The most used hotkeys and tips, with a button to change any key">Hotkeys and Tips</button>
+        <button role="menuitem" data-cmd="user-guide" title="The user guide, on the project's GitHub page">User Guide</button>
+        <hr />
+        <button role="menuitem" data-cmd="send-feedback" title="A comment, an idea for a new feature, or a question: sent as a GitHub issue, or copied to send another way">Send Feedback…</button>
+        <button role="menuitem" data-cmd="report-problem" title="Something not working as it should">Report a Problem…</button>
+      </div>
+    </div>
     <h1 class="app-name">Chem Illustrator</h1>
   </header>
 
@@ -632,8 +642,9 @@
           <button class="rb-big" data-doc="insert-table" title="An ACS-style table"><span class="rb-icon">▦</span>Table</button>
           <button class="rb-big" data-doc="insert-picture" title="A picture from a file (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
           <button class="rb-big" data-doc="insert-text-box" title="A box of text on the page, with the page's text wrapping round it. Drag its edge to move it"><span class="rb-icon">▭</span>Text Box</button>
+          <button class="rb-big" data-doc="insert-shapes" aria-haspopup="true" title="Basic shapes, block arrows, flowchart shapes, callouts and lab glassware: the one you pick goes in the text at the caret. Double-click it to change it with the drawing tools"><span class="rb-icon">◇</span>Shapes ▾</button>
         </div>
-        <div class="rb-label">Tables and pictures</div>
+        <div class="rb-label">Tables, pictures and shapes</div>
       </div>
       <div class="rb-group">
         <div class="rb-row">
@@ -877,8 +888,11 @@
   <div id="ribbon" class="ribbon tabbed slides-only" role="toolbar" aria-label="Slides" hidden>
     <div class="rb-tabs" role="tablist">
       <button role="tab" data-sl-tab="home" aria-selected="true">Home</button>
+      <button role="tab" data-sl-tab="insert" aria-selected="false">Insert</button>
+      <button role="tab" data-sl-tab="design" aria-selected="false">Design</button>
       <button role="tab" data-sl-tab="transitions" aria-selected="false">Transitions</button>
       <button role="tab" data-sl-tab="animations" aria-selected="false">Animations</button>
+      <button role="tab" data-sl-tab="show" aria-selected="false">Slide Show</button>
     </div>
     <div class="rb-panel" data-sl-panel="home">
       <div class="rb-group">
@@ -900,14 +914,50 @@
         </div>
         <div class="rb-label">Slides</div>
       </div>
-      <div class="rb-group">
+      <div class="rb-group" data-sl-text>
         <div class="rb-row">
-          <button class="rb-big" data-cmd="insert-picture" title="Put a picture on the slide (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
-          <button class="rb-big" data-cmd="text-box" title="Click on the slide to type, or drag to make a text box that wraps"><span class="rb-icon">T</span>Text Box</button>
-          <button class="rb-big" data-cmd="insert-table" title="Put a table on the slide (or paste cells from Excel or a sheet)"><span class="rb-icon">▦</span>Table</button>
-          <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
+          <div class="rb-col">
+            <div class="rb-pair">
+              <input id="sl-font" class="rb-text rb-font" list="ci-fonts" spellcheck="false" aria-label="Font" title="Font of the selected text, or of the whole of each picked text box (type any installed font)" />
+              <input id="sl-size" class="rb-text rb-num" list="sl-size-list" spellcheck="false" aria-label="Font size" title="Font size in points" />
+              <datalist id="sl-size-list"><option>8</option><option>9</option><option>10</option><option>10.5</option><option>11</option><option>12</option><option>14</option><option>16</option><option>18</option><option>20</option><option>24</option><option>28</option><option>32</option><option>36</option><option>40</option><option>44</option><option>48</option><option>54</option><option>60</option><option>66</option><option>72</option><option>80</option><option>88</option><option>96</option></datalist>
+              <button class="rb-sq" data-sl-fmt="grow" title="Increase font size">A<sup>+</sup></button>
+              <button class="rb-sq" data-sl-fmt="shrink" title="Decrease font size">A<sup>−</sup></button>
+            </div>
+            <div class="rb-pair">
+              <button class="rb-sq" data-sl-fmt="bold" aria-pressed="false" title="Bold (Ctrl+B)"><b>B</b></button>
+              <button class="rb-sq" data-sl-fmt="italic" aria-pressed="false" title="Italic (Ctrl+I)"><i>I</i></button>
+              <button class="rb-sq" data-sl-fmt="underline" aria-pressed="false" title="Underline (Ctrl+U)"><u>U</u></button>
+              <button class="rb-sq" data-sl-fmt="sub" aria-pressed="false" title="Subscript (Ctrl+=)">x<sub>2</sub></button>
+              <button class="rb-sq" data-sl-fmt="sup" aria-pressed="false" title="Superscript (Ctrl+Shift+=)">x<sup>2</sup></button>
+              <button class="rb-sq" data-sl-fmt="formula" aria-pressed="false" title="Formula style: numbers lowered (CH₂Cl₂), charges raised">C₉H₈</button>
+              <label class="rb-sq rb-colour" title="Text colour"><span>A</span><input id="sl-colour" type="color" aria-label="Text colour" /></label>
+            </div>
+          </div>
         </div>
-        <div class="rb-label">Insert</div>
+        <div class="rb-label">Font</div>
+      </div>
+      <div class="rb-group" data-sl-text>
+        <div class="rb-row">
+          <div class="rb-col">
+            <div class="rb-pair">
+              <button class="rb-sq" data-sl-fmt="bullets" aria-pressed="false" title="Bullets">• ≡</button>
+              <button class="rb-sq" data-sl-fmt="numbering" aria-pressed="false" title="Numbering">1. ≡</button>
+              <button class="rb-sq" data-sl-fmt="outdent" title="Decrease list level (Shift+Tab)">⇤</button>
+              <button class="rb-sq" data-sl-fmt="indent" title="Increase list level (Tab)">⇥</button>
+              <select id="sl-line" title="Line spacing" aria-label="Line spacing">
+                <option value="1">1.0</option><option value="1.15">1.15</option><option value="1.5">1.5</option><option value="2">2.0</option><option value="2.5">2.5</option><option value="3">3.0</option><option value="" hidden>Other</option>
+              </select>
+            </div>
+            <div class="rb-pair">
+              <button class="rb-sq" data-sl-fmt="align-left" aria-pressed="false" title="Align left">Left</button>
+              <button class="rb-sq" data-sl-fmt="align-center" aria-pressed="false" title="Centre">Centre</button>
+              <button class="rb-sq" data-sl-fmt="align-right" aria-pressed="false" title="Align right">Right</button>
+              <button class="rb-sq" data-sl-fmt="justify" aria-pressed="false" title="Justify (both edges straight)">Justify</button>
+            </div>
+          </div>
+        </div>
+        <div class="rb-label">Paragraph</div>
       </div>
       <div class="rb-group">
         <div class="rb-row">
@@ -915,6 +965,26 @@
         </div>
         <div class="rb-label">Editing</div>
       </div>
+    </div>
+    <div class="rb-panel" data-sl-panel="insert" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="new-slide" title="New slide after this one"><span class="rb-icon">＋</span>New Slide</button>
+        </div>
+        <div class="rb-label">Slides</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="insert-picture" title="Put a picture on the slide (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
+          <button class="rb-big" data-cmd="text-box" title="Click on the slide to type, or drag to make a text box that wraps"><span class="rb-icon">T</span>Text Box</button>
+          <button class="rb-big" data-cmd="insert-table" title="Put a table on the slide (or paste cells from Excel or a sheet)"><span class="rb-icon">▦</span>Table</button>
+          <button class="rb-big" data-cmd="slide-shapes" aria-haspopup="true" title="Basic shapes, block arrows, flowchart shapes, callouts and lab glassware: pick one, then click or drag on the slide"><span class="rb-icon">◇</span>Shapes ▾</button>
+          <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
+        </div>
+        <div class="rb-label">Pictures, Text and Shapes</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-sl-panel="design" hidden>
       <div class="rb-group">
         <div class="rb-row">
           <div class="rb-col">
@@ -931,6 +1001,8 @@
         </div>
         <div class="rb-label">Design</div>
       </div>
+    </div>
+    <div class="rb-panel" data-sl-panel="show" hidden>
       <div class="rb-group">
         <div class="rb-row">
           <button class="rb-big" data-cmd="present" title="Show the slides full screen from the first"><span class="rb-icon">▶</span>From Beginning</button>
@@ -1200,7 +1272,7 @@
   <div id="flash" role="status" aria-live="polite"></div>
 
   <dialog id="help">
-    <h2>Using the prototype</h2>
+    <h2>Hotkeys and Tips</h2>
     <p class="muted"><span id="app-version"></span>. Free software under the GNU General Public License, version 3 or later.</p>
     <p class="muted">Hotkeys work like ChemDraw: point at an atom or bond (it highlights blue) and press a key. A key that grows something moves the highlight to the new atom, so you can carry on typing (<kbd>8</kbd> then <kbd>1</kbd> makes an E double bond). <kbd>1</kbd> and <kbd>0</kbd> keep the highlight under the mouse, so pressing 1 three times adds three bonds; after a click or another key they move it, so 1 1 1 draws a chain. Every key can be changed.</p>
     <p><button id="help-hotkeys" type="button">Show and change all hotkeys…</button></p>
@@ -1236,7 +1308,7 @@
           <li>Red boxes mark atoms with too many or too few bonds, labels that can't be read, and atoms sitting on top of others. Point at one to see why; the Warnings panel lists them all, with Ignore. Structure &gt; Check Structure goes to the next one. They are never printed, saved or copied</li>
           <li>Rest the mouse on an abbreviation or condensed label (OTBS, NHBoc, CO2Me) to see the group written out, with its name and formula. View &gt; Group Tooltips turns this off.</li>
           <li>Axial chirality (biaryls, allenes, alkylidenecycloalkanes) gets Ra or Sa by IUPAC P-93.5.1: draw the groups on one end of the axis with a wedge and a hash (or one wedge) to show which way round it is. Edit &gt; Preferences writes them as P/M instead.</li>
-          <li>R/S and E/Z are worked out for every structure as you draw. Structure &gt; Show Stereo Labels adds them to the selected structures (or all) as part of the drawing; they update by themselves after edits. Select a stereocentre to hide its label or type your own (for example (R*)). The Show R/S box at the top previews every label in red</li>
+          <li>R/S and E/Z are worked out for every structure as you draw. Structure &gt; Show Stereo Labels adds them to the selected structures (or all) as part of the drawing; they update by themselves after edits. Select a stereocentre to hide its label or type your own (for example (R*)). View &gt; Show R/S Preview shows every label in red on screen</li>
           <li>As in ChemDraw, plain bold bonds count as wedges and plain hashed or dashed bonds as hashed wedges. Where R or S would depend on what an R or Ar group is, no label is given</li>
         </ul>
         <h3>Everywhere</h3>

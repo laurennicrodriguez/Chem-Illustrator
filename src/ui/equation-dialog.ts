@@ -4,7 +4,7 @@
 
 import { drawMath, layoutMath } from '../document/math';
 import { docMeasure } from '../document/doc-file';
-import { FONT_STACK } from '../text/layout';
+import { withStack } from '../text/layout';
 
 export interface EquationChoice { tex: string; display: boolean }
 
@@ -76,7 +76,7 @@ export function askEquation(opts: { tex: string; display?: boolean; font: string
     else disp.checked = opts.display;
     for (const ex of EXAMPLES) sel.add(new Option(ex.name, ex.tex));
 
-    const family = `${opts.font}, ${FONT_STACK}`;
+    const family = withStack(opts.font);
     const draw = () => {
       const size = 20;
       const m = layoutMath(ta.value, size, family, docMeasure);

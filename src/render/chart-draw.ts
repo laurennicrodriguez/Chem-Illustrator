@@ -5,6 +5,7 @@
 import type { Chart, ChartAxis, SeriesData, MarkerShape } from '../sheet/chart';
 import { niceTicks, logTicks, CHART_PALETTES } from '../sheet/chart';
 import { fitPoints, fitAt, fitEquation, r2Text, Fit, FitKind } from '../sheet/fit';
+import { cssFamily } from '../text/layout';
 import { formatValue, generalNumber } from '../sheet/numfmt';
 import { VectorContext, Item, Seg } from './vector';
 import { itemsToSvg } from './svg';
@@ -237,7 +238,7 @@ export function chartFits(chart: Chart, data: SeriesData[]): (Fit | null)[] {
 interface LegendItem { name: string; color: string; kind: 'line' | 'box' | 'fit'; marker?: MarkerShape; dash?: number[]; line?: boolean }
 
 export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number, h: number): ChartHits {
-  const family = chart.font || CHART_FONT;
+  const family = chart.font ? `${cssFamily(chart.font)}, ${CHART_FONT}` : CHART_FONT;
   const fs = chart.fontSize ?? 12;
   const opt = (size: number, more: Partial<TextOpts> = {}): TextOpts => ({ size, family, ...more });
   const kind = chart.kind;

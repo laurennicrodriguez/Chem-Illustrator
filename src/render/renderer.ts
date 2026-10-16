@@ -10,12 +10,12 @@ import { atomPiece, bondPiece, fullStyle, highlightSizes, softRings, tracePieces
 import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
 import { crossingGapsCached } from '../chem/crossing';
 import { FADE, tint } from '../colours';
-import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter, fromAngle } from '../geom';
+import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter, fromAngle, turnedCorners, DEG } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
 import type { StructureChecks } from '../chem/warnings';
 import { isGenericLabel } from '../chem/labels';
-import { bracketPath, shaftOffset, shapeOrder, elbowRoute, type PathStep } from '../objects';
+import { bracketPath, shaftOffset, shapeOrder, elbowRoute, boxOf, type PathStep } from '../objects';
 import { atomStereoText, bondStereoText, shownDescriptor, axialStyle, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
 import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
@@ -142,6 +142,7 @@ export class Renderer {
   private placerKey = '';
   private atomCache = new Map<number, AtomCache>();
   private capBoxes = new WeakMap<Caption, Rect>();
+  private capTurned = new WeakMap<Caption, Rect>();
   private capLayouts = new WeakMap<Caption, TextLayout>();
   private textGen = 0;
   /** Text size for caption runs that don't give one (the document's caption size). */
@@ -1088,8 +1089,9 @@ export class Renderer {
       if (r.sweep) { this.arcArrow(ctx, r, tail, head); return; }
       const dir = mul(d, 1 / l);
       const hl = Math.min(r.headLength, l * 0.6);
-      const back = headStyle === 'none' ? 0 : hl * 0.7;
-      const tback = tailStyle === 'none' ? 0 : hl * 0.7;
+      const into = shaftInto(hl, r.headType, ctx.lineWidth);
+      const back = headStyle === 'none' ? 0 : into;
+      const tback = tailStyle === 'none' ? 0 : into;
       ctx.setLineDash(r.line === 'dashed' ? [lw * 4, lw * 3] : []);
       ctx.beginPath();
       const s = add(tail, mul(dir, tback)), e = sub(head, mul(dir, back));
@@ -1178,16 +1180,26 @@ export class Renderer {
     const { center, radius } = arcCenter(tail, head, sweep);
     const a0 = angleOf(sub(tail, center));
     const a1 = angleOf(sub(head, center));
-    ctx.beginPath();
-    ctx.arc(center.x, center.y, radius, a0, a1, sweep < 0);
-    ctx.stroke();
+    const s = Math.sign(sweep);
     // a head points from where its base meets the arc to its tip, so on a tight curl it sits
     // across the curve instead of sticking out along the last bit of it
-    const s = Math.sign(sweep);
-    const back = Math.min(Math.abs(sweep) / 2, (r.headLength * 0.8) / Math.max(radius, 1e-6));
+    const back = arcHeadBack(r.headLength, radius, sweep);
     const aim = (tip: Vec, a: number) => norm(sub(tip, add(center, fromAngle(a, radius))));
-    this.arrowHead(ctx, head, aim(head, a1 - s * back), r.headStyle, r);
-    this.arrowHead(ctx, tail, aim(tail, a0 + s * back), r.tailStyle, r);
+    const hDir = aim(head, a1 - s * back), tDir = aim(tail, a0 + s * back);
+    // the line follows the arc to where the head starts, then runs straight along the head's
+    // middle into it, so it can't show beside or past the head's point
+    const into = shaftInto(r.headLength, r.headType, ctx.lineWidth);
+    const hasHead = r.headStyle !== 'none', hasTail = r.tailStyle !== 'none';
+    const start = hasTail ? sub(tail, mul(tDir, into)) : tail;
+    const end = hasHead ? sub(head, mul(hDir, into)) : head;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.arc(center.x, center.y, radius, a0 + (hasTail ? s * back : 0), a1 - (hasHead ? s * back : 0), sweep < 0);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+    this.arrowHead(ctx, head, hDir, r.headStyle, r);
+    this.arrowHead(ctx, tail, tDir, r.tailStyle, r);
   }
 
   private arrowHead(ctx: CanvasRenderingContext2D, tip: Vec, dir: Vec, style: Arrow['headStyle'], r: Arrow): void {
@@ -1215,7 +1227,11 @@ export class Renderer {
   }
 
   drawCaption(ctx: CanvasRenderingContext2D, c: Caption): void {
+    if (!c.rot) { drawLayout(ctx, this.captionLayout(c), c.x, c.y); return; }
+    ctx.save();
+    turnAt(ctx, c, c.rot);
     drawLayout(ctx, this.captionLayout(c), c.x, c.y);
+    ctx.restore();
   }
 
   /** Where every piece of a caption's text goes (cached per caption version). */
@@ -1480,14 +1496,26 @@ export class Renderer {
       this.textStyles = doc.textStyles;
       this.textGen = textGeneration;
       this.capBoxes = new WeakMap();
+      this.capTurned = new WeakMap();
       this.capLayouts = new WeakMap();
       this.tableLayouts = new WeakMap();
       this.geoLayouts = new WeakMap();
     }
   }
 
-  /** Bounding box of a caption in document coordinates (a placeholder's whole box, at least). */
+  /**
+   * Bounding box of a caption in document coordinates (a placeholder's whole box, at least).
+   * Turned text: the box round it as it is turned.
+   */
   captionBox(c: Caption): Rect {
+    if (!c.rot) return this.captionFrame(c);
+    let r = this.capTurned.get(c);
+    if (!r) this.capTurned.set(c, (r = boxOf(turnedCorners(this.captionFrame(c), c, c.rot))));
+    return r;
+  }
+
+  /** A caption's box before it is turned (the same as captionBox for text that isn't turned). */
+  captionFrame(c: Caption): Rect {
     let r = this.capBoxes.get(c);
     if (r) return r;
     const b = this.captionLayout(c).box;
@@ -1506,6 +1534,7 @@ export class Renderer {
     const f = placeholderRect(c, base);
     const lw = 1 / this.view.scale;
     ctx.save();
+    if (c.rot) turnAt(ctx, c, c.rot);
     ctx.strokeStyle = '#a3a9b3';
     ctx.lineWidth = lw;
     ctx.setLineDash([4 * lw, 3 * lw]);
@@ -1628,3 +1657,24 @@ function withAlpha(c: string, a: number): string {
   return m ? `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${+a.toFixed(3)})` : c;
 }
 
+
+/** Turn what is drawn next `deg` degrees clockwise about a point (between save and restore). */
+export function turnAt(ctx: CanvasRenderingContext2D, at: Vec, deg: number): void {
+  ctx.translate(at.x, at.y);
+  ctx.rotate(deg * DEG);
+  ctx.translate(-at.x, -at.y);
+}
+
+/**
+ * How far before a head's point its arrow's line stops: inside a filled or outlined head (so the
+ * line's square end can't show past the point), and just short of the point for an open head,
+ * whose two barbs meet there.
+ */
+export function shaftInto(headLength: number, headType: Arrow['headType'], lineWidth: number): number {
+  return headType === 'angle' ? Math.min(lineWidth, headLength * 0.5) : headLength * 0.7;
+}
+
+/** How far round a curved arrow's arc (radians) its head's base sits from the point. */
+export function arcHeadBack(headLength: number, radius: number, sweep: number): number {
+  return Math.min(Math.abs(sweep) / 2, (headLength * 0.8) / Math.max(radius, 1e-6));
+}

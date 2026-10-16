@@ -5,7 +5,7 @@
 // A bar above the text has the buttons for character and paragraph styles.
 
 import type { Caption, TextRun } from '../model';
-import type { Rect, Vec } from '../geom';
+import { turnAbout, type Rect, type Vec } from '../geom';
 import { keymap, chordOf, parseAction } from '../editor/keymap';
 import * as rt from '../richtext';
 import { TextEditing, type Move, type RichText } from '../text/editing';
@@ -92,6 +92,8 @@ export class CaptionEditor {
     initial: Partial<RichText> & { runs: TextRun[] },
     defaults: rt.RunStyle,
     private done: (result: CaptionResult) => void,
+    /** Turned text: degrees clockwise about `at`. It is typed turned, as it shows on the page. */
+    private turn = 0,
   ) {
     this.ed = new TextEditing(initial, defaults, h.measure, h.defaultSize);
     this.ed.onChange = (kind) => this.changed(kind);
@@ -161,9 +163,15 @@ export class CaptionEditor {
     return { x: this.at.x + Math.max(lay.boxWidth, b.x2 - this.at.x), y: (b.y1 + b.y2) / 2 };
   }
 
+  /** A point on the page as the text sees it (turned back, for turned text). */
+  private local(p: Vec): Vec {
+    return this.turn ? turnAbout(p, this.at, -this.turn) : p;
+  }
+
   /** What is at a point: the text, the width handle, or nothing of this editor. */
   hit(p: Vec): 'text' | 'wrap' | null {
     if (this.closed) return null;
+    p = this.local(p);
     const px = 1 / this.h.view.scale;
     const w = this.wrapHandle();
     if (Math.abs(p.x - w.x) <= 6 * px && Math.abs(p.y - w.y) <= 8 * px) return 'wrap';
@@ -176,6 +184,7 @@ export class CaptionEditor {
   pointerDown(p: Vec, shift: boolean): void {
     const where = this.hit(p);
     if (!where) return;
+    p = this.local(p);
     this.ta.focus({ preventScroll: true });
     if (where === 'wrap') { this.dragging = 'wrap'; this.wrapDragged = false; return; }
     this.dragging = 'text';
@@ -192,6 +201,7 @@ export class CaptionEditor {
   }
 
   pointerMove(p: Vec): void {
+    p = this.local(p);
     if (this.dragging === 'text' && this.clicks.n === 1) this.ed.setCaret(this.ed.offsetAt(p.x - this.at.x, p.y - this.at.y), true);
     else if (this.dragging === 'wrap') {
       this.ed.setWrap(Math.max(4, p.x - this.at.x), !this.wrapDragged);
@@ -218,6 +228,7 @@ export class CaptionEditor {
     const b = this.box();
     // the box, and its width handle
     ctx.save();
+    if (this.turn) { ctx.translate(x, y); ctx.rotate((this.turn * Math.PI) / 180); ctx.translate(-x, -y); }
     ctx.lineWidth = px;
     ctx.strokeStyle = FRAME;
     ctx.setLineDash([3 * px, 2 * px]);
@@ -365,6 +376,14 @@ export class CaptionEditor {
     this.bar.style.top = `${below ? br.y + 8 : tl.y - hb - 8}px`;
   }
 
+  /** Called whenever the text or the selection changes (the Slides ribbon shows how it looks). */
+  static onState: (() => void) | null = null;
+
+  /** Put the keyboard back in the text (after a ribbon button or box). */
+  focusText(): void {
+    if (!this.closed) this.ta.focus({ preventScroll: true });
+  }
+
   /** Stop editing and hand back the text. */
   finish(): void {
     if (this.closed) return;
@@ -399,6 +418,7 @@ export class CaptionEditor {
     this.updateBar();
     this.place();
     this.h.redraw();
+    CaptionEditor.onState?.();
   }
 
   /**

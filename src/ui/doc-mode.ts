@@ -4,7 +4,8 @@
 // spelling check knows chemistry words. The panel on the right shows the paragraph's formatting,
 // its style, the page and the figure picked, every value of which can be typed in.
 
-import type { Contents, ParaStyle, TextRun } from '../model';
+import { Doc, type Contents, type ParaStyle, type Shape, type TextRun } from '../model';
+import { geoDef, geoShapeStyle } from '../design/geo';
 import type { DocStyle } from '../style';
 import type { Tab } from '../workspace';
 import type { Measure } from '../text/layout';
@@ -1499,6 +1500,17 @@ export class DocumentMode {
     runs = rt.replaceRange(runs, target, target, run);
     const y = topY - lay.paraTops[to].y;
     f.ed.update({ ...f.t, runs, objects: { ...f.t.objects, [id]: { ...o, float: { ...fl, y } } as DocObject } } as DocText, null, target, target + 1);
+  }
+
+  /** Insert > Shapes: a shape from the library, as a drawing in the text at the caret (double-click to change it). */
+  insertShape(geo: string): void {
+    const look = geoShapeStyle(geo);
+    if (!this.file || !look) return;
+    const d = new Doc();
+    const [w, h] = geoDef(geo).size;
+    d.edit('Shape', () => d.addShape({ ...look, x1: 0, y1: 0, x2: w, y2: h } as Omit<Shape, 'id'>));
+    this.insertObject({ kind: 'drawing', contents: d.contents() }, 'Insert shape');
+    this.focus();
   }
 
   /** Insert > Text Box: a box of text on the page, at the left margin beside the paragraph the caret is in. */

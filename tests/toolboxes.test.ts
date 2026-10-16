@@ -1,7 +1,7 @@
 // Toolboxes (View > Toolboxes): where each one goes when dropped, and reading their settings.
 
 import { describe, expect, it } from 'vitest';
-import { defaultToolboxes, dropTarget, parseToolboxes } from '../src/ui/toolboxes';
+import { defaultToolboxes, dropTarget, parseToolboxes, boxLocked, withAllLocked, withBoxLocked, sideFolded, withSideFolded } from '../src/ui/toolboxes';
 
 describe('toolboxes', () => {
   const work = { left: 100, top: 100, right: 900, bottom: 700 };
@@ -34,5 +34,31 @@ describe('toolboxes', () => {
     expect(s.places).not.toHaveProperty('nonsense');
     expect(s.custom).toEqual(['tool:chain', 'cmd:clean-up']);
     expect(parseToolboxes(null)).toEqual(defaultToolboxes());
+  });
+
+  it('locks each toolbox on its own, and all of them with the big button', () => {
+    let s = defaultToolboxes();
+    s = { ...s, places: { ...s.places, colours: { ...s.places.colours, shown: true } } };
+    s = withBoxLocked(s, 'colours', false);
+    expect(boxLocked(s, 'colours')).toBe(false);
+    expect(boxLocked(s, 'main')).toBe(true);
+    // the big button shows unlocked while any shown toolbox is
+    expect(s.locked).toBe(false);
+    s = withBoxLocked(s, 'colours', true);
+    expect(s.locked).toBe(true);
+    s = withAllLocked(s, false);
+    expect(['main', 'colours', 'structure'].map((id) => boxLocked(s, id))).toEqual([false, false, false]);
+    // kept in the settings
+    expect(boxLocked(parseToolboxes(JSON.parse(JSON.stringify(withBoxLocked(s, 'main', true)))), 'main')).toBe(true);
+  });
+
+  it('folds the side panel in one mode only', () => {
+    let s = defaultToolboxes();
+    s = withSideFolded(s, 'sheet', true);
+    expect(sideFolded(s, 'sheet')).toBe(true);
+    expect(sideFolded(s, 'drawing')).toBe(false);
+    // an older settings file's single choice still counts in every mode
+    expect(sideFolded(parseToolboxes({ sideCollapsed: true }), 'document')).toBe(true);
+    expect(parseToolboxes(JSON.parse(JSON.stringify(s))).sideByMode).toEqual({ sheet: true });
   });
 });

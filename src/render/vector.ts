@@ -129,6 +129,8 @@ interface State {
   lineJoin: CanvasLineJoin;
   font: string;
   dash: number[];
+  /** Turned and moved (translate and rotate only): [a, b, c, d, e, f] as a canvas has it. */
+  m: number[] | null;
 }
 
 /**
@@ -143,7 +145,7 @@ export class VectorContext {
   /** Text is placed with these widths (a document's fonts), else Arial's. */
   constructor(private charWidth: CharWidth | null = null) {}
   private path = new VecPath();
-  private st: State = { fillStyle: '#000', strokeStyle: '#000', lineWidth: 1, lineCap: 'butt', lineJoin: 'miter', font: '10px Arial', dash: [] };
+  private st: State = { fillStyle: '#000', strokeStyle: '#000', lineWidth: 1, lineCap: 'butt', lineJoin: 'miter', font: '10px Arial', dash: [], m: null };
   private stack: State[] = [];
   textBaseline: CanvasTextBaseline = 'alphabetic';
   imageSmoothingEnabled = true;
@@ -167,6 +169,27 @@ export class VectorContext {
   getLineDash(): number[] { return [...this.st.dash]; }
   setTransform(): void { /* drawings are recorded in document coordinates */ }
 
+  // Turned text: what follows is moved and turned as it is recorded (no stretching).
+  translate(x: number, y: number): void { this.mul([1, 0, 0, 1, x, y]); }
+  rotate(a: number): void { const c = Math.cos(a), s = Math.sin(a); this.mul([c, s, -s, c, 0, 0]); }
+  private mul(n: number[]): void {
+    const m = this.st.m ?? [1, 0, 0, 1, 0, 0];
+    this.st.m = [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
+  }
+  private pt(x: number, y: number): { x: number; y: number } {
+    const m = this.st.m;
+    return m ? { x: m[0] * x + m[2] * y + m[4], y: m[1] * x + m[3] * y + m[5] } : { x, y };
+  }
+  private moved(segs: Seg[]): Seg[] {
+    if (!this.st.m) return [...segs];
+    return segs.map((g) => {
+      if (g.k === 'Z') return g;
+      if (g.k === 'C') { const a = this.pt(g.x1, g.y1), b = this.pt(g.x2, g.y2), e = this.pt(g.x, g.y); return { k: 'C', x1: a.x, y1: a.y, x2: b.x, y2: b.y, x: e.x, y: e.y }; }
+      const p = this.pt(g.x, g.y);
+      return { k: g.k, x: p.x, y: p.y };
+    });
+  }
+
   beginPath(): void { this.path = new VecPath(); }
   moveTo(x: number, y: number): void { this.path.moveTo(x, y); }
   lineTo(x: number, y: number): void { this.path.lineTo(x, y); }
@@ -180,20 +203,20 @@ export class VectorContext {
 
   fill(p?: VecPath | Path2D): void {
     const segs = ((p as VecPath | undefined) ?? this.path).segs;
-    if (segs.length) this.items.push({ kind: 'path', segs: [...segs], fill: this.st.fillStyle });
+    if (segs.length) this.items.push({ kind: 'path', segs: this.moved(segs), fill: this.st.fillStyle });
   }
 
   stroke(p?: VecPath | Path2D): void {
     const segs = ((p as VecPath | undefined) ?? this.path).segs;
     if (!segs.length) return;
     const stroke: StrokeStyle = { color: this.st.strokeStyle, width: this.st.lineWidth, cap: this.st.lineCap, join: this.st.lineJoin };
-    this.items.push({ kind: 'path', segs: this.st.dash.length ? dashed(segs, this.st.dash) : [...segs], stroke });
+    this.items.push({ kind: 'path', segs: this.moved(this.st.dash.length ? dashed(segs, this.st.dash) : segs), stroke });
   }
 
   fillRect(x: number, y: number, w: number, h: number): void {
     const p = new VecPath();
     p.rect(x, y, w, h);
-    this.items.push({ kind: 'path', segs: p.segs, fill: this.st.fillStyle });
+    this.items.push({ kind: 'path', segs: this.moved(p.segs), fill: this.st.fillStyle });
   }
 
   strokeRect(x: number, y: number, w: number, h: number): void {
@@ -208,14 +231,18 @@ export class VectorContext {
     const f = parseFont(this.st.font);
     const cw = this.charWidth;
     const widths = [...text].map((ch) => (cw ? cw(ch, f.size, f.family, f.bold, f.italic) : arialWidth(ch, f.size, f.bold)));
-    this.items.push({ kind: 'text', text, x, y, size: f.size, family: f.family, bold: f.bold, italic: f.italic, color: this.st.fillStyle, widths });
+    const m = this.st.m;
+    const at = this.pt(x, y);
+    // (a turn clockwise on the page is an angle anticlockwise taken away)
+    const turned = m ? -Math.atan2(m[1], m[0]) / (Math.PI / 180) : 0;
+    this.items.push({ kind: 'text', text, x: at.x, y: at.y, size: f.size, family: f.family, bold: f.bold, italic: f.italic, color: this.st.fillStyle, widths, ...(Math.abs(turned) > 1e-9 ? { angle: turned } : {}) });
   }
 
   /** Text turned about its starting point (degrees anticlockwise), which a canvas does with rotate(). */
   fillTextTurned(text: string, x: number, y: number, angle: number): void {
     this.fillText(text, x, y);
     const it = this.items[this.items.length - 1];
-    if (angle && it.kind === 'text') it.angle = angle;
+    if (angle && it.kind === 'text') it.angle = (it.angle ?? 0) + angle;
   }
 
   measureText(text: string): TextMetrics {

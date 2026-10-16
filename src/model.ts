@@ -267,6 +267,8 @@ export interface Caption {
   attach?: Attachment;
   /** Don't warn about this compound label (shared with a different structure on purpose). */
   ignoreWarnings?: boolean;
+  /** Turned this many degrees clockwise about (x, y), the start of its first line. */
+  rot?: number;
 }
 
 /** The shape of a highlight: discs and round-ended bands, diamonds, or squares. */
