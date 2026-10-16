@@ -11,7 +11,7 @@ import { cleanUpMoves } from '../chem/cleanup';
 import { Renderer, measureText } from '../render/renderer';
 import { ASCENT } from '../text/layout';
 import { cellAlign, insertRow, nextCell, partAt, partRuns, setColumnWidth, setPart, spanOf, NOTE_SCALE, type TablePart } from '../table';
-import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG, exitParam, lockAxis } from '../geom';
+import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG, exitParam, lockAxis, turnAbout, turnedCorners } from '../geom';
 import {
   sproutDir, sprout, bondTo, bondLength, atomAt, freeRing, fusedRing, fuseSide, ringOnAtom,
   placeRing, chainPoints, chainFrom, MERGE_FRACTION,
@@ -32,7 +32,7 @@ import { pushArrow, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from 
 import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
 import { attachWhereItIs, defaultGap, placeAttached, refitAttached } from './attached';
 import { frameAround, frameBox, frameMembers, refitFrames, defaultPad, thingsInside } from './frames';
-import { Align, Measure, POINTS, Snapshot, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, withFrameContents, rotation, mirrorX, mirrorY } from './arrange';
+import { Align, Measure, POINTS, Snapshot, type TurnText, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, withFrameContents, rotation, mirrorX, mirrorY } from './arrange';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { tokenize, addNicknames, isBuiltInNickname } from '../chem/labels';
 import {
@@ -410,8 +410,10 @@ export class Editor {
     }
     if (bb) return { kind: 'bond', id: bb.id };
     for (const c of doc.captions.values()) {
-      const r = this.r.captionBox(c);
-      if (p.x >= r.x1 - 1 && p.x <= r.x2 + 1 && p.y >= r.y1 - 1 && p.y <= r.y2 + 1) return { kind: 'caption', id: c.id };
+      // turned text: the point turned back, against the text's own box
+      const r = c.rot ? this.r.captionFrame(c) : this.r.captionBox(c);
+      const q = c.rot ? turnAbout(p, c, -c.rot) : p;
+      if (q.x >= r.x1 - 1 && q.x <= r.x2 + 1 && q.y >= r.y1 - 1 && q.y <= r.y2 + 1) return { kind: 'caption', id: c.id };
     }
     const at = this.tol(5);
     for (const r of doc.arrows.values()) {
@@ -617,7 +619,7 @@ export class Editor {
       // Shift or Alt turns in 15° steps
       ang = e.shiftKey || e.altKey ? snapAngle(ang) : Math.round(ang / DEG) * DEG;
       r.angle = ang;
-      transform(this.doc, r.snap, rotation(r.center, ang), false);
+      transform(this.doc, r.snap, rotation(r.center, ang), false, this.textTurn(ang / DEG));
       d.last = p;
       this.requestScene(e.timeStamp);
       return;
@@ -1652,9 +1654,31 @@ export class Editor {
   }
 
   /** The round handle above the selection that turns it (select tool only). */
-  private rotateHandle(): Vec | null {
+/** A caption's box as drawn (turned with the text), `pad` points bigger all round. */
+  private captionOutline(c: Caption, pad = 0): Path2D {
+    const f = this.r.captionFrame(c);
+    const pts = turnedCorners({ x1: f.x1 - pad, y1: f.y1 - pad, x2: f.x2 + pad, y2: f.y2 + pad }, c, c.rot ?? 0);
+    const path = new Path2D();
+    pts.forEach((q, i) => (i ? path.lineTo(q.x, q.y) : path.moveTo(q.x, q.y)));
+    path.closePath();
+    return path;
+  }
+
+  /**
+   * Which text turns when the selection is turned. In Slides and Design every text box turns, as
+   * in PowerPoint. In a drawing, text stays level when it goes round with structures (as ChemDraw
+   * keeps labels level), and turns when only text is selected. Labels tied to a structure stay level.
+   */
+  private textTurn(deg: number): TurnText {
     const s = this.sel;
-    if (this.tool.kind !== 'select' || (!s.atoms.size && !s.arrows.size && !s.shapes.size)) return null;
+    const onlyText = !s.atoms.size && !s.arrows.size && !s.shapes.size;
+    const turns = this.textFirst || onlyText;
+    return { deg, which: (c) => turns && !c.attach };
+  }
+
+    private rotateHandle(): Vec | null {
+    const s = this.sel;
+    if (this.tool.kind !== 'select' || (!s.atoms.size && !s.arrows.size && !s.shapes.size && !s.captions.size)) return null;
     const b = this.selBox();
     return b ? { x: (b.x1 + b.x2) / 2, y: b.y1 - this.tol(24) } : null;
   }
@@ -1696,7 +1720,7 @@ export class Editor {
     if (!b || !this.hasSelection()) return false;
     const snap = snapshot(this.doc, this.sel, this.measure());
     const c = { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 };
-    this.doc.edit('Rotate', () => transform(this.doc, snap, rotation(c, deg * DEG), false));
+    this.doc.edit('Rotate', () => transform(this.doc, snap, rotation(c, deg * DEG), false, this.textTurn(deg)));
     this.changed();
     return true;
   }
@@ -2532,9 +2556,12 @@ export class Editor {
         doc.edit('Caption', () => doc.addCaption({ ...fields, x: res.x, y: res.y, runs: res.runs, justify: res.justify }));
       }
       this.changed();
-    });
+    }, c?.rot ?? 0);
     this.captionEd = ed;
-    if (click) ed.ed.setCaret(ed.ed.offsetAt(click.x - at.x, click.y - at.y));
+    if (click) {
+      const q = c?.rot ? turnAbout(click, at, -c.rot) : click;
+      ed.ed.setCaret(ed.ed.offsetAt(q.x - at.x, q.y - at.y));
+    }
   }
 
   // ------------------------------------------------------------------ text in design shapes
@@ -2868,7 +2895,7 @@ export class Editor {
       }
       ctx.fill(dots);
       ctx.lineWidth = px;
-      for (const id of s.captions) { const c = doc.captions.get(id); if (c) { const r = this.r.captionBox(c); ctx.fillRect(r.x1, r.y1, r.x2 - r.x1, r.y2 - r.y1); } }
+      for (const id of s.captions) { const c = doc.captions.get(id); if (c) { ctx.fill(this.captionOutline(c)); } }
       ctx.lineWidth = L * 0.15;
       for (const id of s.arrows) { const r = doc.arrows.get(id); if (r) strokeAlong(ctx, arrowPoints(r)); }
       for (const id of s.shapes) {
@@ -2918,7 +2945,7 @@ export class Editor {
         }
       } else if (h.kind === 'caption') {
         const c = doc.captions.get(h.id);
-        if (c) { const r = this.r.captionBox(c); ctx.lineWidth = px; ctx.strokeStyle = mk.hover; ctx.strokeRect(r.x1 - 1, r.y1 - 1, r.x2 - r.x1 + 2, r.y2 - r.y1 + 2); }
+        if (c) { ctx.lineWidth = px; ctx.strokeStyle = mk.hover; ctx.stroke(this.captionOutline(c, 1)); }
       } else if (h.kind === 'arrow') {
         const r = doc.arrows.get(h.id);
         if (r) { ctx.lineWidth = doc.style.bondLength * 0.2; ctx.lineCap = 'round'; strokeAlong(ctx, arrowPoints(r)); }

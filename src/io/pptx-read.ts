@@ -12,7 +12,7 @@
 import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureLook } from '../model';
 import { layoutTable, NOTE_SCALE } from '../table';
 import { linesFromBorders, type Borders } from './cdxml-table';
-import type { Vec, Rect } from '../geom';
+import { turnAbout, normDegrees, type Vec, type Rect } from '../geom';
 import { PackageReader, NS, REL, kids, kid, rAttr, fromEmu } from './ooxml';
 import { readCdxml } from './cdxml';
 import { dataUrl, imageSize } from '../render/images';
@@ -602,7 +602,9 @@ class Reader {
     const xfrm = kid(spPr, 'xfrm') ?? from.map((e) => kid(e, 'spPr', 'xfrm')).find((x) => x) ?? null;
     const box = boxOf(xfrm, xfrm && kid(spPr, 'xfrm') ? t : IDENTITY);
     if (!box) return;
-    if (box.rot) this.warnings.add('Rotated pictures and shapes came in unrotated.');
+    // (text boxes and placeholders turn; other shapes don't yet)
+    const textBox = !!ph || kid(sp, 'nvSpPr', 'cNvSpPr')?.getAttribute('txBox') === '1';
+    if (box.rot && !textBox) this.warnings.add('Rotated pictures and shapes came in unrotated.');
     const prst = kid(spPr, 'prstGeom')?.getAttribute('prst') ?? (kid(spPr, 'custGeom') ? 'cust' : 'rect');
     if (!ph && /line|Connector/i.test(prst)) { this.line(sp, spPr, t, doc); return; }
     if (!ph) {
@@ -637,7 +639,7 @@ class Reader {
       if (!hasText) return;
     }
     const tags = this.tagsOf(s.path, kid(sp, 'nvSpPr', 'nvPr'));
-    const c = this.ourText(tags[TAG.text], sp, box) ?? this.text(sp, box, ph, from);
+    const c = this.ourText(tags[TAG.text], sp, box) ?? turned(this.text(sp, box, ph, from), box);
     // a table's title or footnotes, saved here as a text box beside it
     const part = (() => {
       try { return tags[TAG.tablePart] ? JSON.parse(tags[TAG.tablePart]) as { key: string; part: 'title' | 'notes' } : null; } catch { return null; }
@@ -834,9 +836,9 @@ class Reader {
   }
 
   /** Text saved here, when PowerPoint has not changed it, moved to where its box now is. */
-  private ourText(tag: string | undefined, sp: Element, box: Rect): Omit<Caption, 'id'> | null {
+  private ourText(tag: string | undefined, sp: Element, box: Rect & { rot?: number }): Omit<Caption, 'id'> | null {
     if (!tag) return null;
-    let saved: { c: Caption; plain: string; at?: number[] };
+    let saved: { c: Caption; plain: string; at?: number[]; o?: number[] };
     try {
       saved = JSON.parse(tag);
     } catch {
@@ -846,7 +848,19 @@ class Reader {
     if (now !== saved.plain) return null;
     const c: Omit<Caption, 'id'> & { id?: number } = { ...saved.c };
     delete c.id;
-    if (saved.at?.length === 4) {
+    if (saved.at?.length === 4 && saved.o?.length === 2) {
+      // where the text starts in its box, turned with the box about the box's middle (as PowerPoint turns it)
+      const [, , w, h] = saved.at;
+      const mid = { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 };
+      const a = turnAbout({ x: box.x1 + saved.o[0], y: box.y1 + saved.o[1] }, mid, box.rot ?? 0);
+      c.x = a.x;
+      c.y = a.y;
+      const rot = normDegrees(box.rot ?? 0);
+      if (rot) c.rot = rot; else delete c.rot;
+      const nw = box.x2 - box.x1, nh = box.y2 - box.y1;
+      if (c.wrap !== undefined && Math.abs(nw - w) > 0.5) c.wrap = nw;
+      if (c.ph && Math.abs(nh - h) > 0.5) c.boxH = nh;
+    } else if (saved.at?.length === 4) {
       const [x, y, w, h] = saved.at;
       c.x += box.x1 - x;
       c.y += box.y1 - y;
@@ -1116,4 +1130,12 @@ export function mergeDrawing(doc: Doc, src: Doc, map: (p: Vec) => Vec): void {
 /** Read a PowerPoint file. Throws only when the file is not a PowerPoint file at all. */
 export function readPptx(bytes: Uint8Array): PptxRead {
   return new Reader(bytes).read();
+}
+
+/** A PowerPoint text box turned in its box: the text starts where the turn takes its first line. */
+function turned(c: Omit<Caption, 'id'> | null, box: Rect & { rot: number }): Omit<Caption, 'id'> | null {
+  const rot = normDegrees(box.rot);
+  if (!c || !rot) return c;
+  const a = turnAbout(c, { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 }, rot);
+  return { ...c, x: a.x, y: a.y, rot };
 }

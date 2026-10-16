@@ -10,12 +10,12 @@ import { atomPiece, bondPiece, fullStyle, highlightSizes, softRings, tracePieces
 import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
 import { crossingGapsCached } from '../chem/crossing';
 import { FADE, tint } from '../colours';
-import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter, fromAngle } from '../geom';
+import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter, fromAngle, turnedCorners, DEG } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
 import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
 import type { StructureChecks } from '../chem/warnings';
 import { isGenericLabel } from '../chem/labels';
-import { bracketPath, shaftOffset, shapeOrder, elbowRoute, type PathStep } from '../objects';
+import { bracketPath, shaftOffset, shapeOrder, elbowRoute, boxOf, type PathStep } from '../objects';
 import { atomStereoText, bondStereoText, shownDescriptor, axialStyle, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
 import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
@@ -142,6 +142,7 @@ export class Renderer {
   private placerKey = '';
   private atomCache = new Map<number, AtomCache>();
   private capBoxes = new WeakMap<Caption, Rect>();
+  private capTurned = new WeakMap<Caption, Rect>();
   private capLayouts = new WeakMap<Caption, TextLayout>();
   private textGen = 0;
   /** Text size for caption runs that don't give one (the document's caption size). */
@@ -1215,7 +1216,11 @@ export class Renderer {
   }
 
   drawCaption(ctx: CanvasRenderingContext2D, c: Caption): void {
+    if (!c.rot) { drawLayout(ctx, this.captionLayout(c), c.x, c.y); return; }
+    ctx.save();
+    turnAt(ctx, c, c.rot);
     drawLayout(ctx, this.captionLayout(c), c.x, c.y);
+    ctx.restore();
   }
 
   /** Where every piece of a caption's text goes (cached per caption version). */
@@ -1480,14 +1485,26 @@ export class Renderer {
       this.textStyles = doc.textStyles;
       this.textGen = textGeneration;
       this.capBoxes = new WeakMap();
+      this.capTurned = new WeakMap();
       this.capLayouts = new WeakMap();
       this.tableLayouts = new WeakMap();
       this.geoLayouts = new WeakMap();
     }
   }
 
-  /** Bounding box of a caption in document coordinates (a placeholder's whole box, at least). */
+  /**
+   * Bounding box of a caption in document coordinates (a placeholder's whole box, at least).
+   * Turned text: the box round it as it is turned.
+   */
   captionBox(c: Caption): Rect {
+    if (!c.rot) return this.captionFrame(c);
+    let r = this.capTurned.get(c);
+    if (!r) this.capTurned.set(c, (r = boxOf(turnedCorners(this.captionFrame(c), c, c.rot))));
+    return r;
+  }
+
+  /** A caption's box before it is turned (the same as captionBox for text that isn't turned). */
+  captionFrame(c: Caption): Rect {
     let r = this.capBoxes.get(c);
     if (r) return r;
     const b = this.captionLayout(c).box;
@@ -1506,6 +1523,7 @@ export class Renderer {
     const f = placeholderRect(c, base);
     const lw = 1 / this.view.scale;
     ctx.save();
+    if (c.rot) turnAt(ctx, c, c.rot);
     ctx.strokeStyle = '#a3a9b3';
     ctx.lineWidth = lw;
     ctx.setLineDash([4 * lw, 3 * lw]);
@@ -1628,3 +1646,10 @@ function withAlpha(c: string, a: number): string {
   return m ? `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${+a.toFixed(3)})` : c;
 }
 
+
+/** Turn what is drawn next `deg` degrees clockwise about a point (between save and restore). */
+export function turnAt(ctx: CanvasRenderingContext2D, at: Vec, deg: number): void {
+  ctx.translate(at.x, at.y);
+  ctx.rotate(deg * DEG);
+  ctx.translate(-at.x, -at.y);
+}

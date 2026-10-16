@@ -286,11 +286,14 @@ export async function writePdf(pages: PdfPage[], opts: PdfOptions): Promise<Uint
         const paint = rgb(it.color);
         if (paint.a <= 0 || !it.text) continue;
         ops.push('q', `${paint.v} rg`);
+        // turned text (degrees anticlockwise): along the line, and up from it, on the page
+        const a = ((it.angle ?? 0) * Math.PI) / 180, cos = Math.cos(a), sin = Math.sin(a);
         for (const piece of textPieces(it.text, it.widths)) {
           const f = fontRef(piece.symbol ? 'Symbol' : standardFont(it.family, it.bold, it.italic));
           usedFonts.add(f);
           // the text matrix turns the letters the right way up again
-          ops.push(`BT /${f} ${num(it.size)} Tf 1 0 0 -1 ${num(it.x + piece.dx)} ${num(it.y)} Tm ${pdfString(piece.codes)} Tj ET`);
+          const m = `${num(cos)} ${num(-sin)} ${num(-sin)} ${num(-cos)} ${num(it.x + piece.dx * cos)} ${num(it.y - piece.dx * sin)}`;
+          ops.push(`BT /${f} ${num(it.size)} Tf ${m} Tm ${pdfString(piece.codes)} Tj ET`);
         }
         ops.push('Q');
       } else {
