@@ -14,6 +14,22 @@ import { fitParas, listMarkers, paraCount } from './paragraphs';
 
 export const FONT_STACK = "Arial, 'Liberation Sans', Helvetica, sans-serif";
 
+const GENERIC = new Set(['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace', 'math']);
+
+/**
+ * A font's name as CSS can read it in a font list: quoted, unless it is already quoted, a list,
+ * or a generic family. Unquoted, a name with a word starting with a digit (Source Sans 3) is not
+ * valid CSS, and the browser then ignores the whole font setting.
+ */
+export function cssFamily(name: string): string {
+  const n = name.trim();
+  if (!n || /^['"]/.test(n) || n.includes(',') || GENERIC.has(n.toLowerCase())) return n;
+  return `"${n.replace(/["\\]/g, '')}"`;
+}
+
+/** A font, then the usual fallbacks. */
+export const withStack = (font: string): string => `${cssFamily(font)}, ${FONT_STACK}`;
+
 /** Width in points of text in a font: (text, size in points, CSS font family, 'bold '/'italic '). */
 export type Measure = (text: string, size: number, family: string, style: string) => number;
 
@@ -151,7 +167,7 @@ function segments(runs: TextRun[], defaultSize: number, n: number): { segs: Seg[
   for (const r of runs) {
     const base = r.size ?? defaultSize;
     const style = `${r.italic ? 'italic ' : ''}${r.bold ? 'bold ' : ''}`;
-    const family = r.font ? `${r.font}, ${FONT_STACK}` : FONT_STACK;
+    const family = r.font ? withStack(r.font) : FONT_STACK;
     if (r.obj !== undefined) {
       // each object character is a piece of its own (a field in superscript, a citation, shows its text raised)
       const size = r.sub || r.sup ? base * 0.75 : base;

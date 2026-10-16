@@ -10,7 +10,7 @@
 
 import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
 import type { DocStyle } from '../style';
-import { FONT_STACK, layoutText, type Glyphs, type InlineBox, type LaidLine, type Measure, type Narrow, type TextFrame, type TextLayout } from '../text/layout';
+import { withStack, layoutText, type Glyphs, type InlineBox, type LaidLine, type Measure, type Narrow, type TextFrame, type TextLayout } from '../text/layout';
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
 import { isCovered, spanOf } from '../table';
 import * as rt from '../richtext';
@@ -51,7 +51,7 @@ export const EMPTY_BIBLIOGRAPHY = 'Bibliography: no references are cited yet. Ci
  * little space, so every entry's text starts at the same place.
  */
 export function bibHang(labels: string[], size: number, font: string, measure: Measure): number {
-  const family = `${font}, ${FONT_STACK}`;
+  const family = withStack(font);
   const widest = Math.max(0, ...labels.map((l) => measure(l, size, family, '')));
   return Math.max(1.5 * size, widest + 0.5 * size);
 }
@@ -66,7 +66,7 @@ export function bibFrame(entries: BibEntry[], st: NamedStyle, ps: ParaStyle, mea
   const base = { font, size };
   if (!entries.length) return { runs: [{ ...base, italic: true, color: '#8a8f98', text: EMPTY_BIBLIOGRAPHY }], paras: [{ line: ps.line }], spacer: () => 0 };
   const hang = bibHang(entries.map((e) => e.label), size, font, measure);
-  const family = `${font}, ${FONT_STACK}`;
+  const family = withStack(font);
   const runs: TextRun[] = [];
   const widths: number[] = [];
   entries.forEach((e, i) => {
@@ -232,7 +232,7 @@ export class DocLayouter {
         const room = frame.wrap ?? w;
         const align = ps.align ?? 'left';
         const x = align === 'center' ? Math.max(0, (room - w) / 2) : align === 'right' ? Math.max(0, room - w) : 0;
-        const family = `${st.font}, ${FONT_STACK}`;
+        const family = withStack(st.font);
         let y = 0;
         tb.hs.forEach((h, i) => {
           y += h;
@@ -255,9 +255,9 @@ export class DocLayouter {
       bl.forEach((l, i) => {
         const shown: Glyphs[] = l.pieces.filter((g) => g.obj === undefined).map((g) => ({ ...g, start: at, decor: true }));
         const pieces: Glyphs[] = [];
-        if (i === 0) pieces.push({ text: OBJECT_CHAR, start: at, x: l.x, w: l.width, dy: 0, size: st.size, family: `${st.font}, ${FONT_STACK}`, style: '', obj: id, shown: '' });
+        if (i === 0) pieces.push({ text: OBJECT_CHAR, start: at, x: l.x, w: l.width, dy: 0, size: st.size, family: withStack(st.font), style: '', obj: id, shown: '' });
         pieces.push(...shown);
-        if (i === bl.length - 1 && i > 0) pieces.push({ text: '', start: at + 1, x: l.x + l.width, w: 0, dy: 0, size: st.size, family: `${st.font}, ${FONT_STACK}`, style: '' });
+        if (i === bl.length - 1 && i > 0) pieces.push({ text: '', start: at + 1, x: l.x + l.width, w: 0, dy: 0, size: st.size, family: withStack(st.font), style: '' });
         lines.push({ ...l, para: 0, block: id, marker: undefined, start: i === 0 ? at : at + 1, end: at + 1, last: false, pieces });
       });
       at += 1;
@@ -358,7 +358,7 @@ export class DocLayouter {
     const mathAt = (r: TextRun, st: NamedStyle) => {
       const o = r.obj !== undefined ? t.objects[r.obj] : undefined;
       if (o?.kind !== 'math') return;
-      const size = r.size ?? st.size, family = `${r.font ?? st.font}, ${FONT_STACK}`;
+      const size = r.size ?? st.size, family = withStack(r.font ?? st.font);
       const m = layoutMath(o.tex, size, family, this.deps.measure);
       maths.set(r.obj!, { ...m, family, color: r.color ?? '#000' });
       sizes.set(r.obj!, { w: m.w, h: m.ascent + m.descent });
