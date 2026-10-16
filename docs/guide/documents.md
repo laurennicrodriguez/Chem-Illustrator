@@ -62,7 +62,7 @@ Pick a structure, picture or text box, then use **Layout** tab ▸ **Wrap Text**
 | **Top and Bottom** | Text only above and below |
 | **Behind Text** / **In Front of Text** | Floats over or under the text |
 
-A floating item can be dragged anywhere and moves with the paragraph it is dropped beside.
+A floating item can be dragged anywhere and moves with the paragraph it is dropped beside. One in line with the text is dragged to another place in the text, as in Word: the caret shows where it will land (Ctrl+Z puts it back).
 
 **Insert** tab ▸ **Text Box** (also on the **Layout** tab) puts a box at the left margin with the text wrapping round it. Type in it, then press Esc to pick the box. Drag its edge to move it and its corner to make it wider. Fill colour, frame and wrapping are in the panel.
 

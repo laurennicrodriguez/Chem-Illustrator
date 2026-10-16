@@ -2480,7 +2480,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-custom', 'toolbox-details', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'print',
   'help', 'user-guide', 'send-feedback', 'report-problem', 'check-updates']);
 
@@ -2663,9 +2663,8 @@ const COMMANDS: Record<string, () => unknown> = {
   'toolbox-templates': () => toolboxes.toggle('templates'),
   'toolbox-colours': () => toolboxes.toggle('colours'),
   'toolbox-custom': () => toolboxes.toggle('custom'),
-  'toolbox-details': () => toolboxes.toggle('details'),
   // the panel taken out as a toolbox folds up to its title bar; at the right it folds to a strip
-  'fold-side': () => sideIsOut() ? toolboxes.fold('details') : toolboxes.setSideCollapsed(ws.active.mode, !sideIsFolded()),
+  'fold-side': () => toolboxes.setSideCollapsed(ws.active.mode, !sideIsFolded()),
   'customize-toolbox': () => openCustomToolbox(),
   'lock-toolboxes': () => { toolboxes.setLocked(!toolboxState.locked); flash(toolboxState.locked ? 'Toolboxes locked.' : 'Toolboxes unlocked: drag one by its title to an edge of the drawing to dock it, or anywhere else to float.', 6000); },
   'add-frame': () => editor.addFrame() || flash('Select what to frame: structures, text, arrows or shapes.'),
@@ -4483,20 +4482,24 @@ const TOOLBOX_DEFS: ToolboxDef[] = [
   },
 ];
 
-// The panel's contents go into the toolbox only while it is taken out there: in a document or
-// sheet the panel stays at the right, and rebuilding the (hidden) toolbox must not empty it.
-TOOLBOX_DEFS.push({ id: 'details', title: 'Side Panel', build: (body) => { if (sideIsOut()) { body.before($('#side-fold')); body.append(sideContent); } } });
+// The side panel (Style, Warnings, Analysis; Format in documents, Cell in sheets) is a toolbox,
+// docked at the right to start with. Its arrow goes with it, so it shows even when the title bar is
+// locked away.
+TOOLBOX_DEFS.push({ id: 'details', title: 'Side Panel', build: (body) => { body.before($('#side-fold')); body.append(sideContent); } });
 
 const toolboxes = new Toolboxes(TOOLBOX_DEFS, {
   get: () => toolboxState,
   set: (st) => { toolboxState = st; tickToolboxes(); storeSettings(); placeSidePanel(); },
   work: () => $('#work'),
   customize: () => openCustomToolbox(),
+  // each mode keeps the side panel folded or open on its own
+  folded: (id) => (id === 'details' ? sideIsFolded() : undefined),
+  fold: (id) => { if (id !== 'details') return false; command('fold-side'); return true; },
 });
 
 /** Tick the shown toolboxes and the lock in the View menu, and show the lock on its button. */
 function tickToolboxes(): void {
-  for (const id of ['main', 'structure', 'arrange', 'templates', 'colours', 'custom', 'details'] as ToolboxId[]) $(`[data-cmd="toolbox-${id}"]`)?.setAttribute('aria-checked', String(!!toolboxState.places[id]?.shown));
+  for (const id of ['main', 'structure', 'arrange', 'templates', 'colours', 'custom'] as ToolboxId[]) $(`[data-cmd="toolbox-${id}"]`)?.setAttribute('aria-checked', String(!!toolboxState.places[id]?.shown));
   $('[data-cmd="lock-toolboxes"]')?.setAttribute('aria-checked', String(toolboxState.locked));
   $('[data-cmd="fold-side"]')?.setAttribute('aria-checked', String(sideIsFolded()));
   const lock = $('#btn-lock');
@@ -4505,38 +4508,20 @@ function tickToolboxes(): void {
   lock.querySelector('.lock-text')!.textContent = toolboxState.locked ? 'Locked' : 'Unlocked';
 }
 
-/**
- * Put the side panel's contents where they belong: in the "details" toolbox when it is taken out
- * (drawings, slides and designs), else in the panel at the right, open or folded to a strip.
- */
+/** Show the side panel folded or open as the mode showing has it, and its arrow to match. */
 function placeSidePanel(): void {
-  const b = document.body.classList;
-  const out = sideIsOut();
-  b.toggle('side-out', out);
-  b.toggle('side-collapsed', sideIsFolded() && !out);
-  const aside = $('aside');
-  if (!out && sideContent.parentElement !== aside) aside.append(sideContent);
-  // the fold arrow goes with the panel, so it shows even when the toolbox's title bar is locked away
-  const arrow = $('#side-fold');
-  if (!out && arrow.parentElement !== aside) aside.prepend(arrow);
-  if (out && sideContent.parentElement === aside) toolboxes.render();
+  const folded = sideIsFolded();
+  $('.toolbox[data-id="details"]')?.classList.toggle('collapsed', folded);
   const fold = $('#side-fold');
-  fold.textContent = sideIsFolded() ? '‹' : '›';
-  fold.title = sideIsFolded() ? 'Open the side panel (View > Fold Side Panel)' : 'Fold the side panel away (View > Fold Side Panel)';
+  fold.textContent = folded ? '‹' : '›';
+  fold.title = folded ? 'Open the side panel (View > Fold Side Panel)' : 'Fold the side panel away (View > Fold Side Panel)';
   fold.setAttribute('aria-label', fold.title);
 }
 $('#side-fold').addEventListener('click', () => command('fold-side'));
 
 /** The side panel is folded away in the mode showing (each mode keeps its own choice). */
 function sideIsFolded(): boolean {
-  if (sideIsOut()) return !!toolboxState.places.details?.collapsed;
   return sideFolded(toolboxState, ws.active.mode);
-}
-
-/** The side panel is taken out into its toolbox (documents and sheets keep it at the right). */
-function sideIsOut(): boolean {
-  const b = document.body.classList;
-  return !!toolboxState.places.details?.shown && !((b.contains('sheet-mode') || b.contains('doc-mode')) && !b.contains('floating-drawing') && !b.contains('split-view'));
 }
 $('#btn-lock').addEventListener('click', () => command('lock-toolboxes'));
 
