@@ -73,6 +73,17 @@ export function sproutDir(doc: Doc, atomId: number): Vec {
   return best >= 0 ? fromAngle(bestMid) : fromAngle(-30 * DEG);
 }
 
+/**
+ * Which way a ring grows from an atom it is drawn on. On a chain end the ring carries straight
+ * on from the bond, so both ring bonds sit at 120° to it; otherwise it fills the widest gap
+ * (a spiro ring on an atom with two bonds).
+ */
+export function ringDir(doc: Doc, atomId: number): Vec {
+  const nb = doc.neighbors(atomId);
+  if (nb.length === 1) return norm(sub(doc.atoms.get(atomId)!, nb[0]));
+  return sproutDir(doc, atomId);
+}
+
 /** Two directions splitting the widest gap at an atom into thirds (gem-dimethyl, =O pairs). */
 export function sproutPair(doc: Doc, atomId: number): [Vec, Vec] {
   const a = doc.atoms.get(atomId)!;

@@ -15,7 +15,7 @@ import { ASCENT } from '../text/layout';
 import { cellAlign, insertRow, nextCell, partAt, partRuns, setColumnWidth, setPart, spanOf, NOTE_SCALE, type TablePart } from '../table';
 import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG, exitParam, lockAxis, turnAbout, turnedCorners } from '../geom';
 import {
-  sproutDir, sprout, bondTo, bondLength, atomAt, freeRing, fusedRing, fuseSide, ringOnAtom,
+  sproutDir, sprout, bondTo, bondLength, atomAt, freeRing, fusedRing, fuseSide, ringOnAtom, ringDir,
   placeRing, chainPoints, chainFrom, MERGE_FRACTION,
 } from '../chem/chemgeom';
 import { keymap, chordOf, parseAction, KeyContext } from './keymap';
@@ -993,7 +993,7 @@ export class Editor {
       const L = bondLength(doc, a);
       const deg = doc.degree(a.id);
       if (alt || deg >= 3) a = sprout(doc, a.id);
-      const dir = sproutDir(doc, a.id);
+      const dir = ringDir(doc, a.id);
       ids = placeRing(doc, ringOnAtom(a, dir, n, L), { aromatic, shiftPhase: shift, existing: [a.id], scale: a.s });
     } else {
       const L = doc.style.bondLength;
@@ -1044,7 +1044,7 @@ export class Editor {
       const L = bondLength(doc, a);
       let byBond = (t.join === 'bond') !== alt;
       if (!byBond && doc.degree(a.id) >= 3) byBond = true;
-      const dir = cursor && dist(cursor, a) > L * 0.3 ? norm(fromAngle(snapAngle(angleOf(sub(cursor, a))))) : sproutDir(doc, a.id);
+      const dir = cursor && dist(cursor, a) > L * 0.3 ? norm(fromAngle(snapAngle(angleOf(sub(cursor, a))))) : byBond ? sproutDir(doc, a.id) : ringDir(doc, a.id);
       const pl = best(atomPlacements(t, a, dir, L, byBond), new Set([a.id]));
       if (!pl) return null;
       return byBond ? { pl, existing: new Map(), bondFrom: a.id, scale: a.s } : { pl, existing: new Map([[t.attach, a.id]]), scale: a.s };

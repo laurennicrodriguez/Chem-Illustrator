@@ -69,7 +69,7 @@ import { itemsToSvg } from './render/svg';
 import { PAPERS, defaultPaper, orient, placeIn, inside, handoutCells, noteLines, placeSvg, pageSvg } from './print-layout';
 import { printPages } from './ui/print';
 import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc, webpToPng } from './render/images';
-import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, sproutDir } from './chem/chemgeom';
+import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, ringDir } from './chem/chemgeom';
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
 import { StylePanel, tidyStyle } from './ui/style-panel';
 import { installCombos } from './ui/combo';
@@ -3542,7 +3542,7 @@ function stressTest(n: number): void {
       const s1 = sprout(doc, top.id);
       doc.updateAtom(s1.id, { label: 'CO2Et' });
       const r5 = doc.atoms.get(ring2[4])!;
-      placeRing(doc, ringOnAtom(r5, sproutDir(doc, r5.id), 5, L), { existing: [r5.id] });
+      placeRing(doc, ringOnAtom(r5, ringDir(doc, r5.id), 5, L), { existing: [r5.id] });
       const f = sprout(doc, ring[5]);
       doc.updateAtom(f.id, { z: 9 });
     }

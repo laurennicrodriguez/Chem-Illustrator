@@ -4,7 +4,7 @@
 
 import type { Doc, Atom, BondDisplay } from '../model';
 import { Vec, add, sub, mul, norm, dist, angleOf, fromAngle, DEG } from '../geom';
-import { sproutDir, sproutPair, sprout, bondTo, bondLength, ringOnAtom, placeRing } from './chemgeom';
+import { sproutDir, sproutPair, sprout, bondTo, bondLength, ringOnAtom, ringDir, placeRing } from './chemgeom';
 import { templateById, fusePlacements, crowdingOf, placeTemplate } from './templates';
 
 export type SproutKind =
@@ -86,7 +86,7 @@ export function sproutGroup(doc: Doc, id: number, kind: SproutKind): number | nu
     }
     case 'phenyl': {
       const base = deg >= 2 ? sprout(doc, id) : a;
-      return far(placeRing(doc, ringOnAtom(base, sproutDir(doc, base.id), 6, L), { aromatic: true, existing: [base.id], scale: a.s }));
+      return far(placeRing(doc, ringOnAtom(base, ringDir(doc, base.id), 6, L), { aromatic: true, existing: [base.id], scale: a.s }));
     }
     case 'wedge':
     case 'hash-wedge': {
@@ -106,7 +106,7 @@ export function sproutGroup(doc: Doc, id: number, kind: SproutKind): number | nu
     case 'cyclopropyl': {
       const n = kind === 'cyclohexyl' ? 6 : kind === 'cyclopentyl' ? 5 : kind === 'cyclobutyl' ? 4 : 3;
       const base = busy || n <= 4 ? sprout(doc, id) : a;
-      return far(placeRing(doc, ringOnAtom(base, sproutDir(doc, base.id), n, L), { existing: [base.id], scale: a.s }));
+      return far(placeRing(doc, ringOnAtom(base, ringDir(doc, base.id), n, L), { existing: [base.id], scale: a.s }));
     }
     case 'methylidene': {
       const base = busy ? sprout(doc, id) : a;
