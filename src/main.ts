@@ -2664,7 +2664,8 @@ const COMMANDS: Record<string, () => unknown> = {
   'toolbox-colours': () => toolboxes.toggle('colours'),
   'toolbox-custom': () => toolboxes.toggle('custom'),
   'toolbox-details': () => toolboxes.toggle('details'),
-  'fold-side': () => toolboxes.setSideCollapsed(ws.active.mode, !sideIsFolded()),
+  // the panel taken out as a toolbox folds up to its title bar; at the right it folds to a strip
+  'fold-side': () => sideIsOut() ? toolboxes.fold('details') : toolboxes.setSideCollapsed(ws.active.mode, !sideIsFolded()),
   'customize-toolbox': () => openCustomToolbox(),
   'lock-toolboxes': () => { toolboxes.setLocked(!toolboxState.locked); flash(toolboxState.locked ? 'Toolboxes locked.' : 'Toolboxes unlocked: drag one by its title to an edge of the drawing to dock it, or anywhere else to float.', 6000); },
   'add-frame': () => editor.addFrame() || flash('Select what to frame: structures, text, arrows or shapes.'),
@@ -3625,7 +3626,7 @@ async function lookUpChosen(): Promise<void> {
   const r = await weigh(f);
   if (!r?.smiles) { flash('Couldn\'t read that structure to look it up.'); return; }
   // the answer shows in the Analysis panel, so unfold it if it's folded away
-  if (sideIsFolded()) toolboxes.setSideCollapsed(ws.active.mode, false);
+  if (sideIsFolded()) command('fold-side');
   await lookUpOnPubChem(r.smiles);
   $('#analysis-body .pubchem')?.scrollIntoView({ block: 'nearest' });
 }
@@ -4482,7 +4483,9 @@ const TOOLBOX_DEFS: ToolboxDef[] = [
   },
 ];
 
-TOOLBOX_DEFS.push({ id: 'details', title: 'Side Panel', build: (body) => body.append(sideContent) });
+// The panel's contents go into the toolbox only while it is taken out there: in a document or
+// sheet the panel stays at the right, and rebuilding the (hidden) toolbox must not empty it.
+TOOLBOX_DEFS.push({ id: 'details', title: 'Side Panel', build: (body) => { if (sideIsOut()) { body.before($('#side-fold')); body.append(sideContent); } } });
 
 const toolboxes = new Toolboxes(TOOLBOX_DEFS, {
   get: () => toolboxState,
@@ -4508,11 +4511,14 @@ function tickToolboxes(): void {
  */
 function placeSidePanel(): void {
   const b = document.body.classList;
-  const out = !!toolboxState.places.details?.shown && !((b.contains('sheet-mode') || b.contains('doc-mode')) && !b.contains('floating-drawing') && !b.contains('split-view'));
+  const out = sideIsOut();
   b.toggle('side-out', out);
   b.toggle('side-collapsed', sideIsFolded() && !out);
   const aside = $('aside');
   if (!out && sideContent.parentElement !== aside) aside.append(sideContent);
+  // the fold arrow goes with the panel, so it shows even when the toolbox's title bar is locked away
+  const arrow = $('#side-fold');
+  if (!out && arrow.parentElement !== aside) aside.prepend(arrow);
   if (out && sideContent.parentElement === aside) toolboxes.render();
   const fold = $('#side-fold');
   fold.textContent = sideIsFolded() ? '‹' : '›';
@@ -4523,7 +4529,14 @@ $('#side-fold').addEventListener('click', () => command('fold-side'));
 
 /** The side panel is folded away in the mode showing (each mode keeps its own choice). */
 function sideIsFolded(): boolean {
+  if (sideIsOut()) return !!toolboxState.places.details?.collapsed;
   return sideFolded(toolboxState, ws.active.mode);
+}
+
+/** The side panel is taken out into its toolbox (documents and sheets keep it at the right). */
+function sideIsOut(): boolean {
+  const b = document.body.classList;
+  return !!toolboxState.places.details?.shown && !((b.contains('sheet-mode') || b.contains('doc-mode')) && !b.contains('floating-drawing') && !b.contains('split-view'));
 }
 $('#btn-lock').addEventListener('click', () => command('lock-toolboxes'));
 
