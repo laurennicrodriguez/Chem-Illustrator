@@ -409,6 +409,15 @@ export function pruneObjects(t: DocText): DocText {
 }
 
 /** Where each object's character is in the text. */
+/**
+ * Moving an in-line figure (the one character at `at`) to the text place `to`: where to put the copy
+ * first and then where the old one is left to delete. Null when the drop is on or beside itself.
+ */
+export function inlineMove(at: number, to: number | null): { insertAt: number; removeAt: number } | null {
+  if (to === null || to === at || to === at + 1) return null;
+  return to > at ? { insertAt: to, removeAt: at } : { insertAt: to, removeAt: at + 1 };
+}
+
 export function objectOffsets(runs: TextRun[]): Map<number, number> {
   const out = new Map<number, number>();
   let at = 0;

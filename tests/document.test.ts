@@ -3,7 +3,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  COMPOUND, newDocument, setParaStyle, modifyStyle, fieldTexts, captionRuns, objectRun, runStyleOf, styleOf, pruneObjects, documentPlainText,
+  COMPOUND, newDocument, setParaStyle, modifyStyle, fieldTexts, captionRuns, objectRun, runStyleOf, styleOf, pruneObjects, documentPlainText, inlineMove,
   type DocText,
 } from '../src/document/document';
 import { DocLayouter, pageLabel, shownSize, PAGE_GAP } from '../src/document/doc-layout';
@@ -351,5 +351,27 @@ describe('lengths typed in the Format panel', () => {
     expect(showLength(90, 'in')).toBe('1.25');
     expect(showLength(72, 'cm')).toBe('2.54');
     expect(showLength(10.5, 'pt')).toBe('10.5');
+  });
+});
+
+describe('dragging an in-line figure', () => {
+  // "ab#cd" with the figure (#) at 2, applied as insert-then-delete
+  const apply = (to: number) => {
+    const plan = inlineMove(2, to);
+    if (!plan) return null;
+    let s = 'ab#cd';
+    s = s.slice(0, plan.insertAt) + '#' + s.slice(plan.insertAt);
+    return s.slice(0, plan.removeAt) + s.slice(plan.removeAt + 1);
+  };
+  it('moves it later or earlier in the text', () => {
+    expect(apply(5)).toBe('abcd#');
+    expect(apply(4)).toBe('abc#d');
+    expect(apply(0)).toBe('#abcd');
+    expect(apply(1)).toBe('a#bcd');
+  });
+  it('does nothing when dropped on or beside itself', () => {
+    expect(apply(2)).toBeNull();
+    expect(apply(3)).toBeNull();
+    expect(inlineMove(2, null)).toBeNull();
   });
 });
