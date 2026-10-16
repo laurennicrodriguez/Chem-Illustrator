@@ -2,6 +2,7 @@
 // (which are saved, so they must survive bad input).
 
 import { defaultToolboxes } from '../src/ui/toolboxes';
+import { DEFAULT_SCHEME_PREFS } from '../src/chem/scheme-layout';
 import { describe, it, expect } from 'vitest';
 import {
   chordOf, displayChord, parseAction, Keymap, DEFAULT_KEYS, CONTEXTS, validAction, actionName, actionsFor,
@@ -225,6 +226,7 @@ describe('the settings file', () => {
       palettes: [{ name: 'Group colours', colors: ['#1f5fbf', '#e69f00'] }],
       toolboxes: { ...defaultToolboxes(), locked: false, custom: ['tool:chain', 'cmd:clean-up'] },
       myStyles: [], modeStyles: { document: 'RSC' }, darkPage: true, darkPalette: 'Slate', darkPalettes: [], guides: { drawing: true, slides: false, design: true }, docPins: ['style', 'hf'], updateCheck: false, pubchemNames: false, reviewName: 'Nate O.', skipVersion: '0.1.80', recentFiles: ['C:\\Work\\a.cdxml'],
+      scheme: { ...DEFAULT_SCHEME_PREFS, structGap: 14, textAlign: 'left', fit: false },
     };
     const text = settingsText(s);
     expect(text).toContain('"app": "Chem Illustrator"');

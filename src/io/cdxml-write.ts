@@ -216,6 +216,8 @@ class CdxmlWriter {
     this.fonttable = this.root.appendChild(this.x.createElement('fonttable'));
     this.fonttable.appendChild(this.el('font', { id: '3', charset: 'iso-8859-1', name: 'Arial' }));
     this.fontIds.set('arial', '3');
+    this.root.setAttribute('LabelFont', this.fontId(st.labelFont || 'Arial'));
+    this.root.setAttribute('CaptionFont', this.fontId(st.captionFont || 'Arial'));
     this.page = this.root.appendChild(this.el('page', { id: '' }));
     if (this.doc.background !== '#ffffff') this.root.setAttribute('bgcolor', String(this.colorIndex(this.doc.background, true)));
     this.changed = true;
@@ -672,7 +674,7 @@ class CdxmlWriter {
     const digits = a.supDigits ? /\d+$/.exec(text) : null;
     const runs: TextRun[] = digits ? [{ text: text.slice(0, digits.index), formula: true }, { text: digits[0], sup: true }] : [{ text, formula: true }];
     for (const r of runs) {
-      const s = this.el('s', { font: keepFont ?? this.fontId(), size: f2(size).replace(/\.00$/, ''), color: color ?? '0', face: (faceOf(r) ?? 0) | keepBits });
+      const s = this.el('s', { font: keepFont ?? this.fontId(this.doc.style.labelFont || 'Arial'), size: f2(size).replace(/\.00$/, ''), color: color ?? '0', face: (faceOf(r) ?? 0) | keepBits });
       s.textContent = r.text;
       t.appendChild(s);
     }
@@ -961,7 +963,7 @@ class CdxmlWriter {
       maxSize = Math.max(maxSize, size);
       // Greek letters and signs that an ordinary font can't hold go in the Symbol font, as ChemDraw does
       for (const piece of toSymbolPieces(r.text)) {
-        const s = this.el('s', { font: this.fontId(piece.symbol ? 'Symbol' : r.font ?? 'Arial'), size: f2(size).replace(/\.00$/, ''), color: this.colorAttr(r.color) ?? '0', face: faceOf(r) });
+        const s = this.el('s', { font: this.fontId(piece.symbol ? 'Symbol' : r.font ?? (this.doc.style.captionFont || 'Arial')), size: f2(size).replace(/\.00$/, ''), color: this.colorAttr(r.color) ?? '0', face: faceOf(r) });
         s.textContent = piece.text;
         t.appendChild(s);
         stored += piece.text;

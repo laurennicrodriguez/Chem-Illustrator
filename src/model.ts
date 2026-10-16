@@ -173,6 +173,12 @@ export type TextBase = Pick<TextRun, 'size' | 'font' | 'color' | 'bold' | 'itali
 const BASE_KEYS = ['size', 'font', 'color', 'bold', 'italic'] as const;
 
 /** Runs with the base formatting filled in wherever a run doesn't set its own. */
+/** A drawing's own caption font, as the base its captions' text takes (none when it is Arial, the plain default). */
+export function captionBase(style: { captionFont: string }): TextBase | undefined {
+  const f = style.captionFont?.trim();
+  return f && !/^arial$/i.test(f) ? { font: f } : undefined;
+}
+
 export function applyBase(runs: TextRun[], base: TextBase | undefined): TextRun[] {
   if (!base) return runs;
   return runs.map((r) => {

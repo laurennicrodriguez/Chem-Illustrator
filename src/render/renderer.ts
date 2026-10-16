@@ -5,7 +5,7 @@
 // fast however big the document is. Label layouts and bond geometry are cached per atom
 // and bond and only recomputed near what changed.
 
-import { Doc, Atom, Bond, Arrow, Caption, Shape, PICTURE_SHADOWS, pictureRadius, applyBase, enhancedText, CHIRAL_FLAGS, flagTextSize, type TextBase, type HighlightStyle } from '../model';
+import { Doc, Atom, Bond, Arrow, Caption, Shape, PICTURE_SHADOWS, pictureRadius, applyBase, captionBase, enhancedText, CHIRAL_FLAGS, flagTextSize, type TextBase, type HighlightStyle } from '../model';
 import { atomPiece, bondPiece, fullStyle, highlightSizes, softRings, tracePieces, type Piece } from './highlight';
 import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
 import { crossingGapsCached } from '../chem/crossing';
@@ -19,7 +19,7 @@ import { bracketPath, shaftOffset, shapeOrder, elbowRoute, boxOf, type PathStep 
 import { atomStereoText, bondStereoText, shownDescriptor, axialStyle, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
 import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
-import { layoutText, FONT_STACK, type TextLayout } from '../text/layout';
+import { layoutText, FONT_STACK, withStack, type TextLayout } from '../text/layout';
 import { drawLayout } from '../text/draw';
 import { geoDef, moveSteps, textArea, traceSteps } from '../design/geo';
 import { cutCorners, patternInk, insetPolygon, dotCentres, gradientBands, hatchLines, isDotPattern, patternAngles, patternSpacing, radialBands, shapePolygons } from './fills';
@@ -147,6 +147,10 @@ export class Renderer {
   private textGen = 0;
   /** Text size for caption runs that don't give one (the document's caption size). */
   private captionSize = 10;
+  /** The drawing's caption font as a base for its captions, and the CSS font for atom labels. */
+  private capBase: TextBase | undefined;
+  private labelFont = 'Arial';
+  private labelStack = FONT_STACK;
   /** A caption being typed into: the text box shows it, so the page doesn't. */
   hiddenCaption: number | null = null;
   /** A table being typed into: drawn as this draft (so rows grow as the text does), without the part the text editor shows. */
@@ -266,7 +270,7 @@ export class Renderer {
     if (spec) {
       if (a.supDigits) spec.supDigits = true;
       const dirs = doc.neighbors(a.id).map((n) => norm(sub(n, a)));
-      layout = layoutLabel(spec, dirs, size, (t, s) => measureText(t, s), a.just);
+      layout = layoutLabel(spec, dirs, size, (t, s) => measureText(t, s, this.labelStack), a.just);
       const m = doc.style.marginWidth * k;
       for (const b of layout.boxes) boxes.push({ x1: a.x + b.x1 - m, y1: a.y + b.y1 - m, x2: a.x + b.x2 + m, y2: a.y + b.y2 + m });
     }
@@ -646,7 +650,7 @@ export class Renderer {
       if (info.layout) {
         ctx.fillStyle = a.color ?? '#000';
         for (const r of info.layout.runs) {
-          const f = `${r.size}px ${FONT_STACK}`;
+          const f = `${r.size}px ${this.labelStack}`;
           if (f !== curFont) { ctx.font = f; curFont = f; }
           ctx.fillText(r.text, a.x + r.dx, a.y + r.dy);
         }
@@ -1486,13 +1490,21 @@ export class Renderer {
 
   /** The master formatting a placeholder's text takes. */
   baseOf(c: Caption): TextBase | undefined {
-    return c.ph ? this.textStyles?.[c.ph] : undefined;
+    return c.ph ? this.textStyles?.[c.ph] : this.capBase;
   }
 
   /** Take the caption size and placeholder formatting from the document being drawn. */
   useStyle(doc: Doc): void {
-    if (doc.style.captionSize !== this.captionSize || doc.textStyles !== this.textStyles || this.textGen !== textGeneration) {
+    if (doc.style.labelFont !== this.labelFont) {
+      this.labelFont = doc.style.labelFont;
+      this.labelStack = /^arial$/i.test(this.labelFont.trim()) || !this.labelFont.trim() ? FONT_STACK : withStack(this.labelFont);
+      this.atomCache.clear();
+      this.dropAllTiles();
+    }
+    const capFont = captionBase(doc.style)?.font;
+    if (doc.style.captionSize !== this.captionSize || capFont !== this.capBase?.font || doc.textStyles !== this.textStyles || this.textGen !== textGeneration) {
       this.captionSize = doc.style.captionSize;
+      this.capBase = captionBase(doc.style);
       this.textStyles = doc.textStyles;
       this.textGen = textGeneration;
       this.capBoxes = new WeakMap();

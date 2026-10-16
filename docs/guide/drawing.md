@@ -182,6 +182,17 @@ R/S and E/Z are worked out for every structure as you draw.
 - **Arrange Scheme…**: lays out a multi-step scheme. Click the layouts to try each one: **Line**, **Rows**, **Snake**, **Down the page**, **Catalytic cycle** (select a caption such as the catalyst's name too, and it goes in the middle) and **Branching**. **Done** keeps it; **Cancel** puts it back.
 - **Number Compounds…**: puts numbers under the structures in scheme order. Choose 1, 2, 3; 1a, 1b; a, b; A, B; i, ii or I, II; where to start; text before and after (S for S1, S2); bold; whether copies of one structure share a number (**Same structure, same ID**); whether to renumber or keep existing numbers; and whether reagents over arrows get numbers. Each number is an ordinary caption you can retype. If two different structures end up with the same number, the Warnings panel says so.
 - **Show Reaction Roles**: marks how the program reads the scheme (starting materials, products, above and below the arrow).
+- **Scheme Settings…**: your defaults for schemes, kept between sessions. Distances are in points; leave one blank to scale it with the bond length (the grey number shows what that comes to).
+  - **Gap between arrow and structures** and **Space either side of +**, used by Clean Up Reaction and Arrange Scheme.
+  - **Show + boxes above and below new arrows**.
+  - **Text size**, **Text alignment** (left, centre or right) and **Gap between arrow and text** for reagents and conditions.
+  - **Fit arrow length to its text**: the arrow grows or shrinks to its text, and the products, their + signs and their numbers move with the head. **Arrow before the text starts** and **Space between text and arrowhead** set how much arrow shows on each side of the text. Untick it to keep arrows the length you drew them, with the text centred on them.
+
+### Reagents and conditions on an arrow
+
+When you draw a level reaction arrow, dotted boxes with a **+** appear above and below it for a few seconds. Click one and type the reagents or conditions; formulas such as K2CO3 get their subscripts as you type. When you finish, the text is lined up and (with fitting on) the arrow is sized to it. Afterwards, move the mouse just above or below an arrow that has no text on that side and the box comes back.
+
+With an arrow selected, the **Reaction** section of the Style panel also has **Above arrow** and **Below arrow** boxes. Type and press Enter to set the text (Shift+Enter starts a new line); empty a box to remove that text. You can still click any reagent text to edit it by hand, drag it anywhere, and change its font, size or alignment like any caption.
 
 ## Warnings
 

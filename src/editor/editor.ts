@@ -2,7 +2,7 @@
 // pan. The editor changes the document and asks for a repaint; hover and drawing previews
 // only repaint the overlay layer.
 
-import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, applyBase, stripBase, type StepRoles, type Justify, type HighlightStyle } from '../model';
+import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, applyBase, captionBase, stripBase, type StepRoles, type Justify, type HighlightStyle } from '../model';
 import { CaptionEditor } from '../ui/caption-editor';
 import { geoDef, geoShapeStyle, moveSteps, traceSteps } from '../design/geo';
 import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
@@ -24,6 +24,8 @@ import { joinAtoms, joinBonds } from '../chem/join';
 import { extractDrawing, insertDrawing } from '../io/clipboard';
 import { isReactionArrow, itemFinder, rolesOf, ROLES, schemeItems, type Item, type Role } from '../chem/reaction';
 import { applySchemePlan, planCleanUp } from '../chem/scheme-layout';
+import { adoptSideCaption, arrowTexts, helperBox, setSideText, sideSlot, takesHelpers, textJustify, textSize, type ArrowSide } from '../chem/arrow-text';
+import { schemePrefs } from '../chem/scheme-layout';
 import { fillRings, refitRingFills } from '../chem/ring-fill';
 import { setMethylStyle, toggleChainEndLabels, toggleExplicitHydrogens, type MethylStyle } from '../chem/hydrogens';
 import { selectedGroup } from '../chem/group-smiles';
@@ -282,7 +284,7 @@ export class Editor {
     el.addEventListener('pointercancel', cancel);
     el.addEventListener('lostpointercapture', cancel);
     el.addEventListener('pointerenter', () => { this.pointerInside = true; });
-    el.addEventListener('pointerleave', () => { this.pointerInside = false; if (!this.drag) { this.hover = null; this.requestOverlay(); } });
+    el.addEventListener('pointerleave', () => { this.pointerInside = false; if (!this.drag) { this.hover = null; this.helperHover = null; this.requestOverlay(); } });
     el.addEventListener('dblclick', (e) => this.onDoubleClick(e));
     el.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     el.addEventListener('contextmenu', (e) => {
@@ -499,6 +501,14 @@ export class Editor {
       cap.pointerDown(p, e.shiftKey);
       return;
     }
+    // a click on a "+" box above or below a reaction arrow starts the text there
+    const slot = e.button === 0 && !e.shiftKey ? this.helperAt(this.docPoint(e), false) : null;
+    if (slot) {
+      e.preventDefault();
+      this.closeCaption();
+      this.typeBesideArrow(slot.id, slot.side);
+      return;
+    }
     this.closeCaption();
     this.keyHot = null;
     this.r.overlay.setPointerCapture(e.pointerId);
@@ -551,7 +561,10 @@ export class Editor {
         else if (!sameHit(h, this.keyHotHover)) this.keyHot = null;
       }
       this.lastHover = { onRotate, handle, h };
+      const slot = !handle && !onRotate ? this.helperAt(p, true) : null;
+      if (slot?.id !== this.helperHover?.id || slot?.side !== this.helperHover?.side) this.helperHover = slot;
       this.showPointer(e.ctrlKey || e.metaKey);
+      if (slot) this.r.overlay.style.cursor = 'pointer';
       this.requestOverlay(e.timeStamp);
       return;
     }
@@ -901,6 +914,7 @@ export class Editor {
         if (t.kind === 'arrow') {
           const L = doc.style.bondLength;
           doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(p, add(p, { x: L * (t.style.sweep ? 2 : 3), y: 0 }), t.style).id }));
+          this.offerArrowText();
           this.changed();
         }
         return;
@@ -1138,6 +1152,7 @@ export class Editor {
       const start = this.branchStart(d);
       const end = this.arrowEnd(start, p, d.alt);
       doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(start, end, t.style, this.bendSide(d, end)).id }));
+      this.offerArrowText();
     } else if (t.kind === 'shape') {
       const g = this.shapeGeometry(t, d.start, p, d.shift, d.alt);
       if (g) doc.edit('Shape', () => this.selectOnly({ kind: 'shape', id: doc.addShape({ ...t.shape, ...g }).id }));
@@ -2614,6 +2629,129 @@ export class Editor {
     return null;
   }
 
+  // ------------------------------------------------------------------ text above and below arrows
+
+  /** A new reaction arrow shows its "+" boxes for a few seconds; after that they show on hover. */
+  private freshArrow: { id: number; until: number } | null = null;
+  private helperHover: { id: number; side: ArrowSide } | null = null;
+  private emptySides: { version: number; map: Map<number, Record<ArrowSide, boolean>> } | null = null;
+  /** How long a new arrow's "+" boxes stay up (ms). */
+  static HELPER_TIME = 4000;
+
+  private offerArrowText(): void {
+    const id = [...this.sel.arrows][0];
+    const r = id !== undefined ? this.doc.arrows.get(id) : undefined;
+    if (!r || !takesHelpers(r) || !schemePrefs.helpers) return;
+    const until = performance.now() + Editor.HELPER_TIME;
+    this.freshArrow = { id: r.id, until };
+    setTimeout(() => { if (this.freshArrow?.until === until) { this.freshArrow = null; this.requestOverlay(); } }, Editor.HELPER_TIME + 20);
+  }
+
+  /** Which sides of an arrow have no text yet (worked out once per change to the drawing). */
+  private sidesFree(r: Arrow): Record<ArrowSide, boolean> {
+    const v = this.doc.version;
+    if (this.emptySides?.version !== v) this.emptySides = { version: v, map: new Map() };
+    let got = this.emptySides.map.get(r.id);
+    if (!got) {
+      const t = arrowTexts(this.doc, this.measure(), r);
+      got = { above: !t.above.length, below: !t.below.length };
+      this.emptySides.map.set(r.id, got);
+    }
+    return got;
+  }
+
+  /** The "+" box at a point: on a new arrow, or (`hovering`) one shown because the pointer is near it. */
+  private helperAt(p: Vec, hovering: boolean): { id: number; side: ArrowSide } | null {
+    if (!schemePrefs.helpers || this.captionEd || this.textFirst && this.tool.kind !== 'arrow') return null;
+    const L = this.doc.style.bondLength;
+    for (const r of this.doc.arrows.values()) {
+      if (!takesHelpers(r)) continue;
+      const fresh = this.freshArrow?.id === r.id;
+      const shown = (s: ArrowSide) => fresh || this.helperHover?.id === r.id && this.helperHover.side === s;
+      for (const side of ['above', 'below'] as ArrowSide[]) {
+        const b = helperBox(this.doc, r, side);
+        // hovering finds a box within reach; a click needs the box to be showing and under it
+        const pad = hovering ? L * 0.5 : 0;
+        if (p.x < b.x1 - pad || p.x > b.x2 + pad || p.y < b.y1 - pad || p.y > b.y2 + pad) continue;
+        if (!hovering && !shown(side)) continue;
+        if (this.sidesFree(r)[side]) return { id: r.id, side };
+      }
+    }
+    return null;
+  }
+
+  private drawArrowHelpers(ctx: CanvasRenderingContext2D, px: number, colour: string): void {
+    if (!schemePrefs.helpers || this.captionEd) return;
+    const boxes: Rect[] = [];
+    const f = this.freshArrow;
+    const fr = f && performance.now() < f.until ? this.doc.arrows.get(f.id) : undefined;
+    if (fr && takesHelpers(fr)) for (const side of ['above', 'below'] as ArrowSide[]) if (this.sidesFree(fr)[side]) boxes.push(helperBox(this.doc, fr, side));
+    const h = this.helperHover;
+    const hr = h ? this.doc.arrows.get(h.id) : undefined;
+    if (h && hr && hr !== fr && takesHelpers(hr) && this.sidesFree(hr)[h.side]) boxes.push(helperBox(this.doc, hr, h.side));
+    if (!boxes.length) return;
+    ctx.save();
+    ctx.strokeStyle = colour;
+    ctx.fillStyle = colour;
+    ctx.lineWidth = px;
+    ctx.setLineDash([3 * px, 2.5 * px]);
+    for (const b of boxes) {
+      ctx.strokeRect(b.x1, b.y1, b.x2 - b.x1, b.y2 - b.y1);
+      // a "+" in the middle
+      const cx = (b.x1 + b.x2) / 2, cy = (b.y1 + b.y2) / 2, k = Math.min(b.y2 - b.y1, b.x2 - b.x1) * 0.28;
+      ctx.save();
+      ctx.setLineDash([]);
+      ctx.lineWidth = 1.4 * px;
+      ctx.beginPath();
+      ctx.moveTo(cx - k, cy); ctx.lineTo(cx + k, cy);
+      ctx.moveTo(cx, cy - k); ctx.lineTo(cx, cy + k);
+      ctx.stroke();
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  /** Start typing reagents or conditions above or below an arrow, centred on it. */
+  typeBesideArrow(id: number, side: ArrowSide): void {
+    const r = this.doc.arrows.get(id);
+    if (!r) return;
+    this.freshArrow = null;
+    this.helperHover = null;
+    const m = this.measure();
+    const slot = sideSlot(this.doc, m, r, side);
+    // the first line's baseline, so the text sits about where it will settle
+    const size = textSize(this.doc);
+    const at = add(slot.mid, mul(slot.out, slot.gap + size * (side === 'above' ? 0.25 : 0.8)));
+    this.sel = emptySel();
+    this.openCaption(null, at, undefined, undefined, {
+      justify: textJustify(),
+      size,
+      // once typed: counted as the arrow's conditions, the arrow fitted to it and the text lined up
+      done: (cid) => {
+        const a = this.doc.arrows.get(id);
+        if (a) adoptSideCaption(this.doc, this.measure(), a, cid, side);
+      },
+    });
+    this.requestOverlay();
+  }
+
+  /** The text above and below a reaction arrow (the side panel's fields), as plain text. */
+  arrowSideText(id: number): { above: string; below: string } | null {
+    const r = this.doc.arrows.get(id);
+    if (!r || !isReactionArrow(r)) return null;
+    const t = arrowTexts(this.doc, this.measure(), r);
+    return { above: t.above[0] ? plainText(t.above[0].runs) : '', below: t.below[0] ? plainText(t.below[0].runs) : '' };
+  }
+
+  /** Set the text above or below the picked reaction arrow from the side panel. */
+  setArrowSideText(id: number, side: ArrowSide, text: string): void {
+    const r = this.doc.arrows.get(id);
+    if (!r) return;
+    const before = this.doc.version;
+    this.doc.edit(side === 'above' ? 'Text Above Arrow' : 'Text Below Arrow', () => setSideText(this.doc, this.measure(), r, side, text));
+    if (this.doc.version !== before) this.changed();
+  }
+
   private newCaption(p: Vec): void {
     this.openCaption(null, p);
   }
@@ -2639,14 +2777,14 @@ export class Editor {
    * one, with the caret at `click`. New text takes the document's caption style; everything
    * can be restyled in the bar above the text.
    */
-  private openCaption(c: Caption | null, at: Vec, click?: Vec, wrap?: number): void {
+  private openCaption(c: Caption | null, at: Vec, click?: Vec, wrap?: number, opts?: { justify?: Justify; size?: number; done?: (id: number) => void }): void {
     this.closeCaption();
     this.commitLabel();
     const doc = this.doc;
     const st = doc.style;
     // a slide's title and text placeholders take the slide master's formatting
-    const base = c?.ph ? doc.textStyles?.[c.ph] : undefined;
-    const defaults = base ? { ...base } : { ...styleFromFace(st.captionFace), size: st.captionSize };
+    const base = c?.ph ? doc.textStyles?.[c.ph] : captionBase(st);
+    const defaults = c?.ph && base ? { ...base } : { ...styleFromFace(st.captionFace), size: opts?.size ?? st.captionSize, ...base };
     const hide = (id: number | null) => {
       const shown = this.r.hiddenCaption !== null ? doc.captions.get(this.r.hiddenCaption) : null;
       if (shown) doc.dirtyRects.push(this.r.captionBox(shown));
@@ -2667,7 +2805,7 @@ export class Editor {
     };
     const initial = c
       ? { runs: applyBase(c.runs, base), paras: c.paras, justify: c.justify, wrap: c.wrap, width: c.width, lineHeight: c.lineHeight, lineSpacing: c.lineSpacing }
-      : { runs: [], justify: 'left' as const, wrap };
+      : { runs: [], justify: opts?.justify ?? 'left' as const, wrap };
     const ed = new CaptionEditor(host, at, initial, defaults, (res) => {
       if (this.captionEd === ed) this.captionEd = null;
       if (id !== null) hide(null);
@@ -2687,7 +2825,7 @@ export class Editor {
           doc.edit('Edit caption', () => doc.updateCaption(cur.id, fields));
         }
       } else if (!empty) {
-        doc.edit('Caption', () => doc.addCaption({ ...fields, x: res.x, y: res.y, runs: res.runs, justify: res.justify }));
+        doc.edit('Caption', () => { const nc = doc.addCaption({ ...fields, x: res.x, y: res.y, runs: fields.runs!, justify: res.justify }); opts?.done?.(nc.id); });
       }
       this.changed();
     }, c?.rot ?? 0);
@@ -3193,6 +3331,7 @@ export class Editor {
         this.drawPreview(ctx, d);
       }
     }
+    this.drawArrowHelpers(ctx, px, mk.box);
     this.captionEd?.draw(ctx);
   }
 

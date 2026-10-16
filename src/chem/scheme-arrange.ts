@@ -9,7 +9,7 @@ import type { Rect, Vec } from '../geom';
 import { add, mul, sub, fromAngle, dist } from '../geom';
 import type { Measure } from '../editor/arrange';
 import { arrowFrame, inFrame, interpretArrow, isReactionArrow, isStep, itemFinder, schemeItems, type Item } from './reaction';
-import { labelsOf, SPACING } from './scheme-layout';
+import { labelsOf, spacing, fittedLength } from './scheme-layout';
 import { sweepThrough } from '../objects';
 
 export type ArrangeKind = 'line' | 'rows' | 'snake' | 'down' | 'cycle' | 'tree';
@@ -210,7 +210,7 @@ class Layout {
   private at = new Map<number, Rect>();
 
   constructor(private sh: SchemeShape, private bond: number) {
-    this.g = SPACING.gap * bond;
+    this.g = spacing(bond).gap;
     let b: Rect | null = null;
     for (const n of sh.nodes) b = union(b, n.box);
     for (const l of sh.links) if (l.arrow) b = union(b, { x1: Math.min(l.arrow.tail.x, l.arrow.head.x), y1: Math.min(l.arrow.tail.y, l.arrow.head.y), x2: Math.max(l.arrow.tail.x, l.arrow.head.x), y2: Math.max(l.arrow.tail.y, l.arrow.head.y) });
@@ -237,13 +237,14 @@ class Layout {
   private arrowLength(l: Link, u: Vec): number {
     let widest = 0;
     for (const it of [...l.above, ...l.below]) widest = Math.max(widest, Math.abs(u.x) * width(it.box) + Math.abs(u.y) * height(it.box));
-    return Math.max(SPACING.minArrow * this.bond, widest + 2 * SPACING.overhang * this.bond);
+    return fittedLength(widest, l.arrow?.headLength ?? DEFAULT_ARROW.headLength, this.bond);
   }
 
   /** How far a link's conditions reach out on each side of a straight arrow along `u`. */
   private reach(l: Link, u: Vec): { above: number; below: number } {
     const across = (it: Item) => Math.abs(u.y) * width(it.box) + Math.abs(u.x) * height(it.box);
-    const stack = (its: Item[]) => (its.length ? SPACING.conditions * this.bond + its.reduce((s, it) => s + across(it), 0) + (its.length - 1) * SPACING.stack * this.bond : 0);
+    const sp = spacing(this.bond);
+    const stack = (its: Item[]) => (its.length ? sp.conditions + its.reduce((s, it) => s + across(it), 0) + (its.length - 1) * sp.stack : 0);
     return { above: stack(l.above), below: stack(l.below) };
   }
 
@@ -254,13 +255,13 @@ class Layout {
     const f = arrowFrame({ ...(l.arrow ?? DEFAULT_ARROW), tail, head, sweep: 0 } as Arrow);
     const pt = (t: number, s: number) => add(f.tail, add(mul(f.u, t), mul(f.n, s)));
     const stackUp = (its: Item[], sign: 1 | -1) => {
-      let cursor = SPACING.conditions * this.bond;
+      let cursor = spacing(this.bond).conditions;
       for (const it of its) {
         const q = inFrame(f, it.box);
         const d = sign > 0 ? cursor - q.s1 : -cursor - q.s2;
         const target = pt(f.length / 2 - (q.t1 + q.t2) / 2, d);
         this.shift(it, sub(target, f.tail));
-        cursor += q.s2 - q.s1 + SPACING.stack * this.bond;
+        cursor += q.s2 - q.s1 + spacing(this.bond).stack;
       }
     };
     const near = (sign: 1 | -1) => (it: Item) => { const q = inFrame(f, it.box); return sign > 0 ? q.s1 : -q.s2; };
@@ -458,7 +459,7 @@ class Layout {
       if (l.arrow) this.plan.arrows.set(l.arrow.id, r); else this.plan.added.push(r);
       // conditions sit outside the circle by the middle of their arc (those below the arrow inside it,
       // or with reagent arrows: coming in before the middle and going out after it)
-      const out = (its: Item[], a: number, inward: boolean, from = SPACING.conditions * bond * 2) => {
+      const out = (its: Item[], a: number, inward: boolean, from = spacing(bond).conditions * 2) => {
         const rad = fromAngle(a, 1);
         let dist0 = inward ? -from : from;
         for (const it of its) {
@@ -466,7 +467,7 @@ class Layout {
           const ext = Math.abs(rad.x) * w / 2 + Math.abs(rad.y) * h / 2;
           const c = add(cen, mul(rad, R + dist0 + (inward ? -ext : ext)));
           this.shift(it, sub(c, centre(it.box)));
-          dist0 += (inward ? -1 : 1) * (2 * ext + SPACING.stack * bond);
+          dist0 += (inward ? -1 : 1) * (2 * ext + spacing(bond).stack);
         }
       };
       const amid = (s + e) / 2;
@@ -542,7 +543,7 @@ class Layout {
       const w = Math.max(...col.map((i) => width(nodes[i].box)));
       if (c > 0) {
         const into = links.filter((l) => col.includes(l.to));
-        const len = Math.max(...into.map((l) => this.arrowLength(l, right)), SPACING.minArrow * bond);
+        const len = Math.max(...into.map((l) => this.arrowLength(l, right)), spacing(bond).minArrow);
         x += len + 2 * g;
       }
       let y = this.origin.y + (tallest - colHeight(col)) / 2;

@@ -13,7 +13,7 @@ import { plainText } from '../richtext';
 /** Spacing, as fractions of the bond length (ChemDraw-like: an arrow starts about half a bond from a structure). */
 export const SPACING = {
   /** Between an arrow's end and a structure. */
-  gap: 0.53,
+  gap: 0.75,
   /** Either side of a + sign. */
   plus: 0.45,
   /** Between the arrow and the conditions above or below it. */
@@ -25,6 +25,82 @@ export const SPACING = {
   /** Extra arrow length beyond the widest condition, at each end. */
   overhang: 0.35,
 };
+
+/**
+ * The person's own scheme settings (Scheme > Scheme Settings): distances in points, or null to
+ * follow the drawing's bond length (the fractions above). Used by Clean Up Reaction, Arrange
+ * Scheme and the text typed above and below arrows.
+ */
+export interface SchemePrefs {
+  /** Between an arrow's end and the structures. */
+  structGap: number | null;
+  /** Either side of a + sign. */
+  plusGap: number | null;
+  /** Between an arrow and the text above or below it. */
+  textGap: number | null;
+  /** Text above and below arrows: its size (null: the drawing's caption size) and how its lines line up. */
+  textSize: number | null;
+  textAlign: 'left' | 'center' | 'right';
+  /** The "+" boxes above and below new reaction arrows. */
+  helpers: boolean;
+  /** Arrows grow or shrink to fit their text (moving the products along), when it is typed and on Clean Up. */
+  fit: boolean;
+  /** With fit: arrow before the text starts, and between the text's end and the arrowhead. */
+  lead: number | null;
+  headGap: number | null;
+}
+
+export const DEFAULT_SCHEME_PREFS: SchemePrefs = { structGap: null, plusGap: null, textGap: null, textSize: null, textAlign: 'center', helpers: true, fit: true, lead: null, headGap: null };
+
+export const schemePrefs: SchemePrefs = { ...DEFAULT_SCHEME_PREFS };
+
+/** Change the scheme settings (from the saved settings or the dialog). */
+export function setSchemePrefs(p: Partial<SchemePrefs>): void {
+  Object.assign(schemePrefs, p);
+}
+
+/** Read saved scheme settings, keeping only what makes sense. */
+export function parseSchemePrefs(raw: unknown): SchemePrefs {
+  const out = { ...DEFAULT_SCHEME_PREFS };
+  if (!raw || typeof raw !== 'object') return out;
+  const r = raw as Record<string, unknown>;
+  const len = (v: unknown) => (typeof v === 'number' && isFinite(v) && v >= 0 && v <= 500 ? v : null);
+  for (const k of ['structGap', 'plusGap', 'textGap', 'lead', 'headGap'] as const) out[k] = len(r[k]);
+  out.textSize = len(r.textSize) || null;
+  if (r.textAlign === 'left' || r.textAlign === 'center' || r.textAlign === 'right') out.textAlign = r.textAlign;
+  if (typeof r.helpers === 'boolean') out.helpers = r.helpers;
+  if (typeof r.fit === 'boolean') out.fit = r.fit;
+  return out;
+}
+
+/** The spacings for a drawing with this bond length, in points. */
+export function spacing(bond: number, p: SchemePrefs = schemePrefs) {
+  const over = SPACING.overhang * bond;
+  return {
+    gap: p.structGap ?? SPACING.gap * bond,
+    plus: p.plusGap ?? SPACING.plus * bond,
+    conditions: p.textGap ?? SPACING.conditions * bond,
+    stack: SPACING.stack * bond,
+    minArrow: SPACING.minArrow * bond,
+    lead: p.lead ?? over,
+    headGap: p.headGap ?? over,
+  };
+}
+
+/** How long an arrow is to fit text this wide (its head this long), as the settings ask. */
+export function fittedLength(widest: number, headLength: number, bond: number, p: SchemePrefs = schemePrefs): number {
+  const sp = spacing(bond, p);
+  return Math.max(sp.minArrow, sp.lead + widest + sp.headGap + headLength);
+}
+
+/** Where along an arrow (from its tail) a line of text this wide starts, in a block `widest` wide. */
+export function lineStart(width: number, widest: number, length: number, headLength: number, bond: number, p: SchemePrefs = schemePrefs): number {
+  const sp = spacing(bond, p);
+  // with fitting the block starts after the lead; otherwise it is centred on the arrow's shaft
+  const start = p.fit ? sp.lead : (length - headLength - widest) / 2;
+  const block = Math.max(0, start);
+  return p.textAlign === 'left' ? block : p.textAlign === 'right' ? block + widest - width : block + (widest - width) / 2;
+}
 
 export interface SchemePlan {
   /** How far each item moves, by its reference. */
@@ -136,7 +212,8 @@ export function planCleanUp(doc: Doc, m: Measure, arrowIds?: Iterable<number>): 
     placed.set(it, { x1: b.x1 + d.x, y1: b.y1 + d.y, x2: b.x2 + d.x, y2: b.y2 + d.y });
     for (const l of labels.get(it) ?? []) move(l, d);
   };
-  const g = SPACING.gap * bond, pg = SPACING.plus * bond;
+  const sp = spacing(bond);
+  const g = sp.gap, pg = sp.plus;
   const plusSize = plusBox(doc, m);
 
   for (const { arrow, roles } of order) {
@@ -160,7 +237,8 @@ export function planCleanUp(doc: Doc, m: Measure, arrowIds?: Iterable<number>): 
     // the arrow fits its conditions
     let widest = 0;
     for (const it of [...A, ...B]) { const q = span([it]); widest = Math.max(widest, q.t2 - q.t1); }
-    const L = Math.max(SPACING.minArrow * bond, widest + 2 * SPACING.overhang * bond);
+    const headLen = arrow.headStyle !== 'none' || arrow.tailStyle !== 'none' ? arrow.headLength : 0;
+    const L = schemePrefs.fit ? fittedLength(widest, headLen, bond) : Math.max(f.length, sp.minArrow);
 
     const lineUp = (groups: Item[][], start: number, dir: 1 | -1, role: 'reactants' | 'products') => {
       let cursor = start;
@@ -196,14 +274,14 @@ export function planCleanUp(doc: Doc, m: Measure, arrowIds?: Iterable<number>): 
 
     // conditions: stacked from the arrow outwards, each centred along it
     const stackUp = (its: Item[], sign: 1 | -1) => {
-      let cursor = SPACING.conditions * bond;
+      let cursor = sp.conditions;
       const near = (it: Item) => { const q = span([it]); return sign > 0 ? q.s1 : -q.s2; };
       for (const it of its.sort((a, b) => near(a) - near(b))) {
         const q = span([it]);
-        const dt = L / 2 - (q.t1 + q.t2) / 2;
+        const dt = lineStart(q.t2 - q.t1, widest, L, headLen, bond) - q.t1;
         const ds = sign > 0 ? cursor - q.s1 : -cursor - q.s2;
         moveIn(it, dt, ds);
-        cursor += q.s2 - q.s1 + SPACING.stack * bond;
+        cursor += q.s2 - q.s1 + sp.stack;
       }
     };
     stackUp(A, 1);
