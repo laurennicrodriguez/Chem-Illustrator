@@ -108,6 +108,11 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   const fonts = new Map<string, string>();
   const ft = all.find((e) => e.nodeName === 'fonttable');
   if (ft) for (const f of kids(ft)) if (f.nodeName === 'font') fonts.set(f.getAttribute('id') ?? '', f.getAttribute('name') ?? 'Arial');
+  // the drawing's label and caption fonts (a Symbol font is only for single characters)
+  for (const [attr, key] of [['LabelFont', 'labelFont'], ['CaptionFont', 'captionFont']] as const) {
+    const name = fonts.get(root.getAttribute(attr) ?? '');
+    if (name?.trim() && !isSymbolFont(name)) doc.style[key] = name.trim();
+  }
 
   // Charges drawn by a separate circled-charge graphic are not drawn again on the atom.
   const chargeShown = new Set<string>();
@@ -127,7 +132,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       if (size !== null) run.size = Number(size);
       // Greek letters and signs written in the Symbol font become the characters they show
       if (isSymbolFont(fontName) && !raw) run.text = fromSymbolFont(run.text);
-      else if (fontName && !/^arial$/i.test(fontName)) run.font = fontName;
+      else if (fontName && !/^arial$/i.test(fontName) && fontName !== doc.style.captionFont) run.font = fontName;
       const c = color(s);
       if (c) run.color = c;
       out.push(run);

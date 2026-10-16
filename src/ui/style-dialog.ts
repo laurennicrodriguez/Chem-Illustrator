@@ -3,6 +3,7 @@
 // structures already drawn (redrawn in the new style, or left as they look now).
 
 import type { DocStyle } from '../style';
+import { FONT_GROUPS } from '../fonts';
 import { STYLE_PRESETS, presetNamed, sameLook, scaleStyle, type RestyleHow } from '../drawing-styles';
 
 export interface StyleChoice {
@@ -89,11 +90,9 @@ export function editDrawingStyle(o: StyleDialogOptions): Promise<StyleChoice | n
         row('', keep, el('span', { className: 'muted', textContent: 'Change widths and font sizes with it' }));
       }
     }
-    const labelFont = el('input', { type: 'text' }), labelSize = el('input', { type: 'number', className: 'md-num', step: 'any', min: '0' });
-    labelFont.setAttribute('list', 'ci-fonts');
+    const labelFont = fontSelect(), labelSize = el('input', { type: 'number', className: 'md-num', step: 'any', min: '0' });
     row('Atom labels', labelFont, labelSize, el('span', { className: 'muted', textContent: 'pt' }));
-    const captionFont = el('input', { type: 'text' }), captionSize = el('input', { type: 'number', className: 'md-num', step: 'any', min: '0' });
-    captionFont.setAttribute('list', 'ci-fonts');
+    const captionFont = fontSelect(), captionSize = el('input', { type: 'number', className: 'md-num', step: 'any', min: '0' });
     row('Captions', captionFont, captionSize, el('span', { className: 'muted', textContent: 'pt' }));
     inputs.set('labelSize', labelSize);
     inputs.set('captionSize', captionSize);
@@ -130,8 +129,8 @@ export function editDrawingStyle(o: StyleDialogOptions): Promise<StyleChoice | n
     const fill = (st: DocStyle) => {
       shown = { ...st };
       for (const [k, i] of inputs) i.value = String(+st[k].toFixed(3));
-      labelFont.value = st.labelFont;
-      captionFont.value = st.captionFont;
+      pickFont(labelFont, st.labelFont);
+      pickFont(captionFont, st.captionFont);
       name.value = st.name;
       showCm();
     };
@@ -245,4 +244,30 @@ export function editDrawingStyle(o: StyleDialogOptions): Promise<StyleChoice | n
     d.showModal();
     pick.focus();
   });
+}
+
+/** A list of the fonts the app can draw with: those bundled with it, then the usual ones on a computer. */
+function fontSelect(): HTMLSelectElement {
+  const sel = document.createElement('select');
+  sel.className = 'style-font';
+  for (const g of FONT_GROUPS) {
+    const og = document.createElement('optgroup');
+    og.label = g.name;
+    for (const f of g.fonts) if (f !== 'Symbol') { const o = new Option(f, f); o.style.fontFamily = `"${f}", sans-serif`; og.append(o); }
+    sel.append(og);
+  }
+  return sel;
+}
+
+/** Choose a font in the list, adding it first (under "In this file") when it is not one of the usual ones. */
+function pickFont(sel: HTMLSelectElement, font: string): void {
+  sel.querySelector('optgroup[data-own]')?.remove();
+  const has = [...sel.options].find((o) => o.value.toLowerCase() === font.toLowerCase());
+  if (has) { sel.value = has.value; return; }
+  const og = document.createElement('optgroup');
+  og.label = 'In this file';
+  og.dataset.own = 'true';
+  og.append(new Option(font, font));
+  sel.prepend(og);
+  sel.value = font;
 }

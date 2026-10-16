@@ -436,3 +436,27 @@ describe('atom numbers and numbered points of attachment', () => {
     expect(text.match(/Name="number"/g)).toHaveLength(1);
   });
 });
+
+describe('the drawing style’s fonts', () => {
+  it('saves the label and caption fonts and reads them back', () => {
+    const doc = new Doc();
+    doc.style = { ...doc.style, labelFont: 'Times New Roman', captionFont: 'Georgia' };
+    doc.edit('t', () => {
+      const a = doc.addAtom(100, 100, 8), b = doc.addAtom(114, 100);
+      doc.addBond(a.id, b.id);
+      doc.addCaption({ x: 100, y: 130, runs: [{ text: 'THF' }], justify: 'left' });
+    });
+    const text = writeCdxml(doc, {});
+    const x = new DOMParser().parseFromString(text.replace(/<!DOCTYPE[^>]*>/i, ''), 'application/xml');
+    const fontName = (id: string | null) => [...x.querySelectorAll('font')].find((f) => f.getAttribute('id') === id)?.getAttribute('name');
+    expect(fontName(x.documentElement.getAttribute('LabelFont'))).toBe('Times New Roman');
+    expect(fontName(x.documentElement.getAttribute('CaptionFont'))).toBe('Georgia');
+    const label = [...x.querySelectorAll('n > t > s')][0];
+    expect(fontName(label.getAttribute('font'))).toBe('Times New Roman');
+    const back = readCdxml(text).doc;
+    expect(back.style.labelFont).toBe('Times New Roman');
+    expect(back.style.captionFont).toBe('Georgia');
+    // the caption follows the drawing's caption font rather than naming it itself
+    expect([...back.captions.values()][0].runs[0].font).toBeUndefined();
+  });
+});
