@@ -182,10 +182,13 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
 .tb-grip { letter-spacing: -2px; }
 .tb-close { width: 18px; height: 18px; padding: 0; border: 0; background: none; color: var(--muted); font-size: 14px; line-height: 1; }
 .tb-close:hover { color: var(--text); }
-/* locked: docked toolboxes show no title (floating ones keep theirs, without the grab hand) */
-body.toolboxes-locked .toolbox:not(.floating) > .tb-head { display: none; }
-body.toolboxes-locked .tb-head { cursor: default; }
-body.toolboxes-locked .toolbox:not(.floating) + .toolbox { padding-top: 6px; }
+/* a locked docked toolbox shows no title (floating ones keep theirs, without the grab hand) */
+.toolbox.locked:not(.floating) > .tb-head { display: none; }
+.toolbox.locked > .tb-head { cursor: default; }
+.toolbox.locked:not(.floating) + .toolbox { padding-top: 6px; }
+/* docked down a side, the title bar takes the toolbox's width rather than widening it: the name on its own line */
+.toolbox.vertical:not(.floating) > .tb-head { contain: inline-size; flex-wrap: wrap; row-gap: 0; }
+.toolbox.vertical:not(.floating) > .tb-head > .tb-title { order: -1; flex-basis: 100%; white-space: normal; line-height: 1.2; }
 .tb-body { display: flex; flex-wrap: wrap; gap: 3px; align-items: flex-start; }
 .toolbox.vertical .tb-body { flex-direction: column; flex-wrap: nowrap; align-items: stretch; }
 .toolbox.vertical .tb-body.tb-grid { flex-direction: row; flex-wrap: wrap; max-width: 76px; }
@@ -1490,3 +1493,11 @@ dialog.equation-dialog code { font-size: 0.92em; }
 dialog.equation-dialog textarea { width: 100%; box-sizing: border-box; font: 14px ui-monospace, Consolas, monospace; padding: 6px; resize: vertical; margin-top: 4px; }
 .eq-preview { margin: 8px 0; min-height: 48px; max-height: 220px; overflow: auto; border: 1px solid var(--border, #ccd); border-radius: 4px; background: #fff; padding: 4px; display: flex; justify-content: center; align-items: center; }
 .eq-preview canvas { display: block; }
+
+/* Insert > Shapes in Slides and Documents: the shape library as a drop-down */
+.shape-pop { position: fixed; z-index: 60; width: 300px; max-height: min(70vh, 520px); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18); }
+.shape-pop[hidden] { display: none; }
+.shape-pop > .design-lib { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+.shape-pop .dl-shape { cursor: pointer; }
+/* Slides' Font and Paragraph groups with no text picked */
+.rb-group.rb-idle .rb-sq, .rb-group.rb-idle input, .rb-group.rb-idle select { opacity: 0.6; }

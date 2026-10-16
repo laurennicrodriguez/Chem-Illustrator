@@ -60,7 +60,7 @@ Along the top are the menus: **File**, **Edit**, **View** and **Insert**, then t
 To the right of the menus are:
 
 - **Undo**, **Redo** and **Fit** (fit the whole drawing in the window);
-- **Locked**, which locks or unlocks the toolboxes so they can be moved (see [Drawing](drawing.md#toolboxes-and-my-toolbox));
+- **Locked**, which locks or unlocks all the toolboxes at once so they can be moved (each toolbox also has its own padlock; see [Drawing](drawing.md#toolboxes-and-my-toolbox));
 - the **eye button**, which turns the dark page on and off;
 - the **Search** box;
 - **Help**, which lists the hotkeys and gives short notes on each part of the program.
@@ -95,7 +95,7 @@ The panel on the right changes with what you are doing. In a drawing it has:
 - **Warnings**: possible problems in the structures, such as a carbon with five bonds (see [Drawing](drawing.md#warnings)).
 - **Analysis**: formula, masses and more for the selected structure (see [Drawing](drawing.md#the-analysis-panel)).
 
-The **›** arrow at the top of the panel folds it away to give the drawing more room (also **View ▸ Fold Side Panel**).
+The **›** arrow at the top of the panel folds it away to give the drawing more room (also **View ▸ Fold Side Panel**). Each kind of tab remembers this on its own, so you can keep the panel folded in sheets and open in drawings.
 
 ### The hint line at the bottom
 

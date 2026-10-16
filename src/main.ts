@@ -6,7 +6,7 @@ import './app.css';
 import type { MethylStyle } from './chem/hydrogens';
 import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
-import { Toolboxes, lockIcon, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
+import { Toolboxes, lockIcon, sideFolded, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
 import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle } from './model';
 import { Renderer, measureText, forgetTextWidths } from './render/renderer';
@@ -41,6 +41,9 @@ import { drawSlidePage, recordSlide, paintSlide, SURROUND } from './deck/slide-v
 import { writePdf, jpegInfo, PdfPage, PdfImage } from './io/pdf';
 import { SlideList } from './ui/slide-list';
 import { DesignLibrary, GEO_DRAG_TYPE, pickDesignSize, sizeLabel } from './ui/design-panel';
+import { ShapeMenu } from './ui/shape-menu';
+import { SlideTextRibbon } from './ui/slide-text-ribbon';
+import { CaptionEditor } from './ui/caption-editor';
 import { LayersPanel } from './ui/layers-panel';
 import { Scrollbars } from './ui/scrollbars';
 import { Presenter } from './ui/present';
@@ -352,6 +355,8 @@ const TEMPLATE_HINT = 'Click empty space to place it (drag to turn it), a bond t
 
 // Design mode's shape library (made further down, once the page is ready)
 let designLib: DesignLibrary | null = null;
+/** Insert > Shapes in Slides and Documents. */
+const shapeMenu = new ShapeMenu();
 let layers: LayersPanel | null = null;
 let animUi: AnimationUI | null = null;
 /** View > Alignment Guides: moved things snap into line with other things and the page, on or off for each kind of tab. */
@@ -1173,6 +1178,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   document.body.classList.toggle('sheet-mode', sheet);
   document.body.classList.toggle('doc-mode', words);
   placeSidePanel();
+  tickToolboxes();
   applyModeColours(tab.mode, modeColours);
   for (const el of document.querySelectorAll<HTMLElement>('.slides-only')) el.hidden = !slides;
   showSheetParts();
@@ -2421,6 +2427,11 @@ function pickedFigureDoc(): Doc | null {
 
 /** Menu commands that work differently while a document shows. */
 const DOC_COMMANDS: Record<string, () => unknown> = {
+  'insert-shapes': () => {
+    const b = document.querySelector<HTMLElement>('#doc-ribbon [data-doc="insert-shapes"]');
+    const anchor = b && b.offsetParent ? b : document.querySelector<HTMLElement>('#doc-ribbon .rb-tabs')!;
+    shapeMenu.show(anchor, 'Click a shape to put it in the text at the caret. Double-click it there to change its size, colour or text.', (id) => docMode.insertShape(id));
+  },
   'copy-smiles': async () => {
     const d = pickedFigureDoc();
     if (!d) { flash('Click a structure first (it gets a blue frame), then Copy as SMILES.'); return; }
@@ -2519,6 +2530,11 @@ const COMMANDS: Record<string, () => unknown> = {
   'design-size': () => designSize(),
   'connector-tool': () => { finishTyping(); editor.setTool('connector'); },
   'connector-elbow-tool': () => { finishTyping(); editor.setTool('connector-elbow'); },
+  'slide-shapes': () => {
+    const b = document.querySelector<HTMLElement>('#ribbon [data-cmd="slide-shapes"]:not([hidden])');
+    const anchor = b && b.offsetParent ? b : document.querySelector<HTMLElement>('#ribbon .rb-tabs')!;
+    shapeMenu.show(anchor, 'Click a shape, then click or drag on the slide. Type in it once placed.', (id) => { finishTyping(); editor.setTool(`geo:${id}`); });
+  },
   'design-shapes': () => { if (ws.active.mode === 'design') lib.focusSearch(); else flash('Shapes are in Design mode: use File > New Design.'); },
   'shape-front': () => editor.setShapeLayer('front') || flash('Select the shapes to bring to the front.'),
   'shape-back': () => editor.setShapeLayer('back') || flash('Select the shapes to send to the back.'),
@@ -2648,7 +2664,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'toolbox-colours': () => toolboxes.toggle('colours'),
   'toolbox-custom': () => toolboxes.toggle('custom'),
   'toolbox-details': () => toolboxes.toggle('details'),
-  'fold-side': () => toolboxes.setSideCollapsed(!toolboxState.sideCollapsed),
+  'fold-side': () => toolboxes.setSideCollapsed(ws.active.mode, !sideIsFolded()),
   'customize-toolbox': () => openCustomToolbox(),
   'lock-toolboxes': () => { toolboxes.setLocked(!toolboxState.locked); flash(toolboxState.locked ? 'Toolboxes locked.' : 'Toolboxes unlocked: drag one by its title to an edge of the drawing to dock it, or anywhere else to float.', 6000); },
   'add-frame': () => editor.addFrame() || flash('Select what to frame: structures, text, arrows or shapes.'),
@@ -2656,6 +2672,12 @@ const COMMANDS: Record<string, () => unknown> = {
   'highlight': () => editor.highlight(highlightColour, highlightStyle) ? flash('Highlighted. Change the colour with Highlight in the Style panel.', 5000) : flash('Select the atoms and bonds to highlight.'),
   'remove-highlight': () => editor.highlight(undefined) || flash('Select the atoms and bonds to take the highlight off.'),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
+  'clean-up-arrow': () => {
+    const curved = [...editor.sel.arrows].some((id) => doc.arrows.get(id)?.sweep);
+    if (!curved) { flash('Select one or more curved (mechanism) arrows first.'); return; }
+    const n = editor.cleanUpArrows();
+    flash(n ? `Tidied ${n} arrow${n === 1 ? '' : 's'}.` : 'The arrows are already as tidy as they can be.');
+  },
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
   'arrange-scheme': () => arrangeDialog.open(),
   'number-compounds': () => void numberCompounds(),
@@ -3603,7 +3625,7 @@ async function lookUpChosen(): Promise<void> {
   const r = await weigh(f);
   if (!r?.smiles) { flash('Couldn\'t read that structure to look it up.'); return; }
   // the answer shows in the Analysis panel, so unfold it if it's folded away
-  if (toolboxState.sideCollapsed) { toolboxState.sideCollapsed = false; placeSidePanel(); storeSettings(); }
+  if (sideIsFolded()) toolboxes.setSideCollapsed(ws.active.mode, false);
   await lookUpOnPubChem(r.smiles);
   $('#analysis-body .pubchem')?.scrollIntoView({ block: 'nearest' });
 }
@@ -4166,7 +4188,7 @@ function drawingMenu(): MenuItem[] {
     return [
       { cmd: 'paste' }, { cmd: 'paste-smiles' }, { cmd: 'select-all' }, null,
       { cmd: 'undo' }, { cmd: 'redo' }, null,
-      { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'connector-tool' }] : [])] },
+      { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'connector-tool' }] : []), ...(ws.active.mode === 'slides' ? [{ cmd: 'slide-shapes', label: 'Shape…' }] : [])] },
       { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] },
       { cmd: 'drawing-style' },
       view,
@@ -4197,7 +4219,8 @@ function drawingMenu(): MenuItem[] {
         { cmd: 'pubchem-lookup' },
       ] },
     ] : []),
-    ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] }] : []),
+    ...([...s.arrows].some((id) => doc.arrows.get(id)?.sweep) ? [{ cmd: 'clean-up-arrow' }] : []),
+    ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'clean-up-arrow' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] }] : []),
     null,
     { cmd: 'add-frame' },
     ...(atoms ? [{ label: 'Label the Structure', items: [{ cmd: 'add-id-label' }, { cmd: 'add-caption' }, { cmd: 'attach-descriptors' }, null, { cmd: 'number-compounds' }] }] : []),
@@ -4472,7 +4495,7 @@ const toolboxes = new Toolboxes(TOOLBOX_DEFS, {
 function tickToolboxes(): void {
   for (const id of ['main', 'structure', 'arrange', 'templates', 'colours', 'custom', 'details'] as ToolboxId[]) $(`[data-cmd="toolbox-${id}"]`)?.setAttribute('aria-checked', String(!!toolboxState.places[id]?.shown));
   $('[data-cmd="lock-toolboxes"]')?.setAttribute('aria-checked', String(toolboxState.locked));
-  $('[data-cmd="fold-side"]')?.setAttribute('aria-checked', String(toolboxState.sideCollapsed));
+  $('[data-cmd="fold-side"]')?.setAttribute('aria-checked', String(sideIsFolded()));
   const lock = $('#btn-lock');
   lock.setAttribute('aria-pressed', String(toolboxState.locked));
   lock.querySelector('.lock-icon')!.innerHTML = lockIcon(toolboxState.locked);
@@ -4487,16 +4510,21 @@ function placeSidePanel(): void {
   const b = document.body.classList;
   const out = !!toolboxState.places.details?.shown && !((b.contains('sheet-mode') || b.contains('doc-mode')) && !b.contains('floating-drawing') && !b.contains('split-view'));
   b.toggle('side-out', out);
-  b.toggle('side-collapsed', toolboxState.sideCollapsed && !out);
+  b.toggle('side-collapsed', sideIsFolded() && !out);
   const aside = $('aside');
   if (!out && sideContent.parentElement !== aside) aside.append(sideContent);
   if (out && sideContent.parentElement === aside) toolboxes.render();
   const fold = $('#side-fold');
-  fold.textContent = toolboxState.sideCollapsed ? '‹' : '›';
-  fold.title = toolboxState.sideCollapsed ? 'Open the side panel (View > Fold Side Panel)' : 'Fold the side panel away (View > Fold Side Panel)';
+  fold.textContent = sideIsFolded() ? '‹' : '›';
+  fold.title = sideIsFolded() ? 'Open the side panel (View > Fold Side Panel)' : 'Fold the side panel away (View > Fold Side Panel)';
   fold.setAttribute('aria-label', fold.title);
 }
-$('#side-fold').addEventListener('click', () => toolboxes.setSideCollapsed(!toolboxState.sideCollapsed));
+$('#side-fold').addEventListener('click', () => command('fold-side'));
+
+/** The side panel is folded away in the mode showing (each mode keeps its own choice). */
+function sideIsFolded(): boolean {
+  return sideFolded(toolboxState, ws.active.mode);
+}
 $('#btn-lock').addEventListener('click', () => command('lock-toolboxes'));
 
 function openCustomToolbox(): void {
@@ -4620,7 +4648,14 @@ editor.onFrame = () => {
   updateWarnings();
   if (doc.version !== stereoSeen) { stereoSeen = doc.version; updateStereo(); }
 };
-editor.onChange = () => { animUi?.selectionChanged(); updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); void refreshDescriptors(); scheduleLabelCheck(); };
+const slideText = new SlideTextRibbon($('#ribbon'), {
+  format: (f) => editor.formatText(f),
+  look: () => editor.textLook(),
+  refocus: () => editor.refocusText(),
+  nothing: () => flash('Click into some text, or pick a text box or a shape with text, first.'),
+});
+CaptionEditor.onState = () => { if (ws.active.mode === 'slides') slideText.refresh(); };
+editor.onChange = () => { if (ws.active.mode === 'slides') slideText.refresh(); animUi?.selectionChanged(); updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); void refreshDescriptors(); scheduleLabelCheck(); };
 chem.onReady = () => {
   (window as any).__chemReadyMs = performance.now() - startMs;
   sheetChem.flush();

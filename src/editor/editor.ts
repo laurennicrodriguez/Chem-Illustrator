@@ -2,11 +2,13 @@
 // pan. The editor changes the document and asks for a repaint; hover and drawing previews
 // only repaint the overlay layer.
 
-import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, applyBase, stripBase, type StepRoles, type HighlightStyle } from '../model';
+import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, applyBase, stripBase, type StepRoles, type Justify, type HighlightStyle } from '../model';
 import { CaptionEditor } from '../ui/caption-editor';
-import { GEO_BY_ID, geoDef, moveSteps, traceSteps } from '../design/geo';
+import { geoDef, geoShapeStyle, moveSteps, traceSteps } from '../design/geo';
 import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
 import { styleFromFace, plainText } from '../richtext';
+import * as rt from '../richtext';
+import { applyFormat, formatWhole, type TextFormat } from '../text/format';
 import { cleanUpMoves } from '../chem/cleanup';
 import { Renderer, measureText } from '../render/renderer';
 import { ASCENT } from '../text/layout';
@@ -28,7 +30,7 @@ import { selectedGroup } from '../chem/group-smiles';
 import { circleRing, circleRings, kekulize } from '../chem/aromatic';
 import { bondLayer, crossingBonds } from '../chem/crossing';
 import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
-import { pushArrow, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
+import { bendSide, cleanUpArrow, isLonePair, pairOwner, pushArrow, pushEndAt, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
 import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
 import { attachWhereItIs, defaultGap, placeAttached, refitAttached } from './attached';
 import { frameAround, frameBox, frameMembers, refitFrames, defaultPad, thingsInside } from './frames';
@@ -635,6 +637,10 @@ export class Editor {
             const key = h.which === 'tail' ? 'from' : 'to';
             const port = this.portAt(p);
             patch = port ? { [h.which]: port.at, [key]: { shape: port.shape, port: port.port } } : { [h.which]: p, [key]: undefined };
+          } else if ((h.which === 'tail' || h.which === 'head') && r.sweep && !r.equilibrium && !e.altKey) {
+            // a curved arrow's end dropped on a lone pair, atom or bond snaps to it (Alt: anywhere)
+            const snap = this.snapPushEnd(r, h.which, p);
+            if (snap) patch = snap;
           }
           this.doc.updateArrow(h.id, patch);
         }
@@ -1189,15 +1195,75 @@ export class Editor {
   private pushFor(d: Drag, p: Vec): PushArrow | null {
     const t = this.tool;
     if (t.kind !== 'arrow' || !t.style.sweep || d.alt) return null;
-    const endOf = (h: Hit, at: Vec): PushEnd => (h && (h.kind === 'atom' || h.kind === 'bond') ? { kind: h.kind, id: h.id } : { kind: 'point', p: at });
+    const endOf = (h: Hit, at: Vec): PushEnd => {
+      if (h && (h.kind === 'atom' || h.kind === 'bond')) return { kind: h.kind, id: h.id };
+      // a drawn lone pair: the arrow starts from it (and one ending on it points at its atom)
+      if (h?.kind === 'shape' && isLonePair(this.doc.shapes.get(h.id))) return { kind: 'pair', id: h.id };
+      return { kind: 'point', p: at };
+    };
     const from = endOf(d.hit, d.start);
     let to = endOf(this.hitTest(p), p);
+    if (to.kind === 'pair') { const o = pairOwner(this.doc, this.doc.shapes.get(to.id)!); to = o !== null ? { kind: 'atom', id: o } : { kind: 'point', p }; }
     if (from.kind === 'point' && to.kind === 'point') return null;
     if (to.kind !== 'point' && from.kind === to.kind && (from as { id: number }).id === to.id) to = { kind: 'point', p };
     if (to.kind === 'point' && dist(p, d.start) < this.tol(6)) return null;
     // a swing of the pointer chooses the bend; otherwise it bends away from the structure
     const a = from.kind === 'point' ? from.p : d.start;
     return pushArrow(this.doc, this.measure(), from, to, this.swing(d, a, p));
+  }
+
+  /** A curved arrow with one end dragged to `p`: snapped to the lone pair, atom or bond there, keeping its bend; null when there is nothing there. */
+  private snapPushEnd(r: Arrow, which: 'tail' | 'head', p: Vec): Partial<Arrow> | null {
+    const doc = this.doc;
+    const m = this.measure();
+    let here = pushEndAt(doc, m, p);
+    if (here.kind === 'point') return null;
+    if (which === 'head' && here.kind === 'pair') { const o = pairOwner(doc, doc.shapes.get(here.id)!); if (o === null) return null; here = { kind: 'atom', id: o }; }
+    const other = pushEndAt(doc, m, which === 'tail' ? r.head : r.tail);
+    const from = which === 'tail' ? here : other;
+    let to = which === 'head' ? here : other;
+    if (to.kind === 'pair') { const o = pairOwner(doc, doc.shapes.get(to.id)!); to = o !== null ? { kind: 'atom', id: o } : { kind: 'point', p: r.head }; }
+    if (to.kind !== 'point' && from.kind === to.kind && (from as { id: number }).id === to.id) return null;
+    // keep the side it bends to
+    const push = pushArrow(doc, m, from, to, bendSide(r));
+    if (!push) return null;
+    const patch: Partial<Arrow> = { tail: push.tail, head: push.head, sweep: push.sweep };
+    if (Math.sign(push.sweep) !== Math.sign(r.sweep)) {
+      const swap = (x: Arrow['headStyle']) => (x === 'halfLeft' ? 'halfRight' : x === 'halfRight' ? 'halfLeft' : x);
+      patch.headStyle = swap(r.headStyle);
+      patch.tailStyle = swap(r.tailStyle);
+    }
+    return patch;
+  }
+
+  /**
+   * Clean Up Arrow: each picked curved arrow redrawn from the lone pair, bond or atom its tail is
+   * on to the atom or bond its head points at, on the side and at the curl that keep it clear of
+   * the structure. Gives how many arrows changed.
+   */
+  cleanUpArrows(): number {
+    const doc = this.doc;
+    const lw = doc.style.lineWidth;
+    const m = this.measure();
+    const arrows = [...this.sel.arrows].map((id) => doc.arrows.get(id)).filter((r): r is Arrow => !!r && !!r.sweep && !r.equilibrium && !r.elbow);
+    const plans = arrows.map((r) => ({ r, push: cleanUpArrow(doc, m, r) })).filter((x): x is { r: Arrow; push: PushArrow } => !!x.push);
+    const changed = plans.filter(({ r, push }) => dist(r.tail, push.tail) > 0.01 || dist(r.head, push.head) > 0.01 || Math.abs(r.sweep - push.sweep) > 1e-4);
+    if (!changed.length) return 0;
+    doc.edit('Clean up arrow', () => {
+      for (const { r, push } of changed) {
+        const patch: Partial<Arrow> = { tail: push.tail, head: push.head, sweep: push.sweep };
+        // a half head (fishhook) keeps its barb on the outside of the curve
+        if (Math.sign(push.sweep) !== Math.sign(r.sweep)) {
+          const swap = (h: Arrow['headStyle']) => (h === 'halfLeft' ? 'halfRight' : h === 'halfRight' ? 'halfLeft' : h);
+          patch.headStyle = swap(r.headStyle);
+          patch.tailStyle = swap(r.tailStyle);
+        }
+        if (push.small) Object.assign(patch, { headLength: lw * SMALL_HEAD.length, headWidth: lw * SMALL_HEAD.width });
+        doc.updateArrow(r.id, patch);
+      }
+    });
+    this.changed();
+    return changed.length;
   }
 
   /** The box, circle or line a shape tool draws for a drag from a to b (Shift: square or circle). */
@@ -2480,6 +2546,74 @@ export class Editor {
     this.captionEd?.finish();
   }
 
+  /** Put the keyboard back in the text being typed, if any. */
+  refocusText(): void {
+    this.captionEd?.focusText();
+  }
+
+  /** True while a caption or a shape's text is being typed in. */
+  get typing(): boolean {
+    return this.captionEd !== null;
+  }
+
+  /**
+   * The ribbon's Font and Paragraph buttons: on the text being typed (its selection, or what is
+   * typed next), or else on the whole of each picked caption and shape with text, as in PowerPoint.
+   * False when there is no text to change.
+   */
+  formatText(f: TextFormat): boolean {
+    if (this.captionEd) { applyFormat(this.captionEd.ed, f); return true; }
+    const doc = this.doc;
+    const st = doc.style;
+    const caps = [...this.sel.captions].map((id) => doc.captions.get(id)).filter((c): c is Caption => !!c);
+    const shapes = [...this.sel.shapes].map((id) => doc.shapes.get(id)).filter((s): s is Shape => !!s && s.kind === 'geo');
+    if (!caps.length && !shapes.length) return false;
+    doc.edit('Format text', () => {
+      for (const c of caps) {
+        const base = c.ph ? doc.textStyles?.[c.ph] : undefined;
+        const defaults = base ? { ...base } : { ...styleFromFace(st.captionFace), size: st.captionSize };
+        const t = { runs: applyBase(c.runs, base), paras: c.paras, justify: c.justify, wrap: c.wrap, width: c.width, lineHeight: c.lineHeight, lineSpacing: c.lineSpacing };
+        const res = formatWhole(t, f, defaults, base?.size ?? st.captionSize, (x, sz, family, style) => measureText(x, sz, family, style));
+        doc.dirtyRects.push(this.r.captionBox(c));
+        doc.updateCaption(c.id, { runs: stripBase(res.runs, base), paras: res.paras, justify: res.justify, lineHeight: res.lineHeight, lineSpacing: res.lineSpacing });
+      }
+      for (const sh of shapes) {
+        // a shape's text: its look and lining up (line spacing and lists don't apply to it)
+        if (!sh.text?.runs.length || f.kind === 'line') continue;
+        const res = formatWhole({ runs: sh.text.runs, paras: sh.text.paras, justify: sh.textAlign ?? 'center' }, f, {}, this.r.geoTextSize());
+        const text = { runs: res.runs, ...(res.paras?.length ? { paras: res.paras } : {}) };
+        doc.dirtyRects.push(shapeBox(sh));
+        doc.updateShape(sh.id, { text, textAlign: res.justify === 'center' ? undefined : res.justify });
+      }
+    });
+    this.requestScene();
+    this.changed();
+    return true;
+  }
+
+  /** How the text the ribbon's Font and Paragraph buttons would change looks now (for showing which are on). */
+  textLook(): { style: rt.RunStyle; align: Justify; list?: 'bullet' | 'number'; line: number; defaultSize: number; defaultFont?: string } | null {
+    const st = this.doc.style;
+    const ed = this.captionEd?.ed;
+    if (ed) {
+      const p = ed.currentPara();
+      return { style: ed.currentStyle(), align: ed.currentAlign(), list: p.list, line: ed.t.lineSpacing ?? 1, defaultSize: ed.defaultSize, defaultFont: ed.defaults.font ?? st.captionFont };
+    }
+    const c = [...this.sel.captions].map((id) => this.doc.captions.get(id)).find((x): x is Caption => !!x);
+    if (c) {
+      const base = c.ph ? this.doc.textStyles?.[c.ph] : undefined;
+      const runs = applyBase(c.runs, base);
+      const len = plainText(runs).length;
+      return { style: len ? rt.commonStyle(runs, 0, len) : { ...(base ?? {}) }, align: c.justify ?? 'left', list: c.paras?.[0]?.list, line: c.lineSpacing ?? 1, defaultSize: base?.size ?? st.captionSize, defaultFont: base?.font ?? st.captionFont };
+    }
+    const sh = [...this.sel.shapes].map((id) => this.doc.shapes.get(id)).find((x): x is Shape => !!x && x.kind === 'geo' && !!x.text?.runs.length);
+    if (sh?.text) {
+      const len = plainText(sh.text.runs).length;
+      return { style: rt.commonStyle(sh.text.runs, 0, len), align: sh.textAlign ?? 'center', line: 1, defaultSize: this.r.geoTextSize(), defaultFont: st.captionFont };
+    }
+    return null;
+  }
+
   private newCaption(p: Vec): void {
     this.openCaption(null, p);
   }
@@ -3199,16 +3333,10 @@ function outlineShape(ctx: CanvasRenderingContext2D, s: Shape): void {
 }
 
 /** The tool that draws a shape from the library, looking as `look` says. */
-/** The usual line widths of new design shapes, in points. */
-export const CLIP_ART_LINE = 1.75, SHAPE_LINE = 1;
 
 function geoTool(id: string, look: Partial<Shape>): Tool | undefined {
-  const def = GEO_BY_ID.get(id);
-  if (!def) return undefined;
-  // lines in proportion to the shape: clip art (glassware…) at 1.75 pt, as it is drawn about 60 pt
-  // across; other shapes at PowerPoint's 1 pt. Change it in the Style panel.
-  const base: Partial<Shape> = def.outline ? { color: '#000000', lineWidth: CLIP_ART_LINE } : { filled: true, fillColor: '#dae3f3', color: '#2f5597', lineWidth: SHAPE_LINE, ...look };
-  return { kind: 'shape', shape: { ...base, kind: 'geo', geo: id } as ShapeStyle, from: 'corner' };
+  const shape = geoShapeStyle(id, look);
+  return shape ? { kind: 'shape', shape: shape as ShapeStyle, from: 'corner' } : undefined;
 }
 
 export interface GuideLine { x1: number; y1: number; x2: number; y2: number }
