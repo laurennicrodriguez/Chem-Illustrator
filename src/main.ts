@@ -324,8 +324,7 @@ registerToolNames(toolNames);
 const periodicTable = new PeriodicTable((z) => editor.pickElement(z), () => editor.element);
 const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => {
   if (name === OWN_ADD) { void saveTemplate(); return; }
-  editor.setTool(name);
-  if (name === 'element') periodicTable.open();
+  pickTool(name);
 }, (name) => {
   const keys = keysOf('space', `tool ${name}`);
   return keys.length ? ` (${keys.join(', ')})` : '';
@@ -334,7 +333,7 @@ const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => 
 const HINTS: Record<string, string> = {
   connector: 'Drag from one shape\'s blue dot to another\'s: the connector sticks to both and follows them when they move.',
   'connector-elbow': 'Drag from one shape\'s blue dot to another\'s: the connector bends square and follows the shapes when they move.',
-  select: 'Click to select, drag to box-select or move. Double-click selects a whole structure. Delete removes.',
+  select: 'Click to select (Shift or Ctrl+click adds), drag to box-select or move. Ctrl+drag copies; Shift keeps a drag straight. Double-click selects a whole structure. Delete removes.',
   eraser: 'Click an atom, bond, caption, arrow or shape to remove it.',
   chain: 'Drag from empty space or an atom; the number shows how many bonds. Click to type how many atoms; Alt+click repeats the last number.',
   text: 'Click an atom to type a label (OMe, CO2Et, NHBoc…), or click empty space for a caption.',
@@ -4245,6 +4244,8 @@ document.addEventListener('visibilitychange', () => labelTips.hide());
 function showDark(on: boolean): void {
   dark.on = on;
   showDarkPage(on ? darkPaletteNamed(dark.palette, dark.own) : null);
+  editor.dark = on;
+  editor.requestOverlay();
   $('[data-cmd="dark-page"][role="menuitemcheckbox"]')?.setAttribute('aria-checked', String(on));
   $('#btn-dark').setAttribute('aria-pressed', String(on));
 }
@@ -4312,6 +4313,24 @@ for (const group of TOOL_GROUPS) {
   }
 }
 
+/**
+ * A tool picked from a toolbox. In Document and Sheet modes, with no drawing open, a drawing
+ * tool opens one to use it on: a new structure at the text cursor, or the selected cell's.
+ */
+function pickTool(name: string): void {
+  const mode = ws.active.mode;
+  const b = document.body.classList;
+  if ((mode === 'document' || mode === 'sheet') && !b.contains('floating-drawing') && !b.contains('split-view')) {
+    modeTool[mode] = name;
+    editor.setTool(name);
+    if (name !== 'select' && name !== 'eraser') {
+      if (mode === 'document') docMode.drawWithTool();
+      else command('draw-structure');
+    }
+  } else editor.setTool(name);
+  if (name === 'element') periodicTable.open();
+}
+
 /** A tool's button in a toolbox: picks the tool, and shows when it is the one in use. */
 function toolButton(name: string): HTMLButtonElement | null {
   const t = ALL_TOOLS.get(name);
@@ -4324,7 +4343,7 @@ function toolButton(name: string): HTMLButtonElement | null {
   b.setAttribute('aria-label', t.title);
   b.innerHTML = t.icon;
   b.classList.toggle('active', editor.toolName === name);
-  b.addEventListener('click', () => { editor.setTool(name); if (name === 'element') periodicTable.open(); });
+  b.addEventListener('click', () => pickTool(name));
   return b;
 }
 

@@ -1271,9 +1271,15 @@ export class DocumentMode {
       const id = this.objectAt(e.clientX, e.clientY);
       const p = this.view.toDoc(e.clientX, e.clientY);
       const o = id !== null ? f.t.objects[id] : undefined;
-      this.view.scroller.style.cursor = id === null || o?.kind === 'table' ? 'text'
+      // the picked figure's corner handle resizes it
+      const picked = this.pickedObject();
+      const box = picked !== null ? f.layout().objects.find((x) => x.id === picked) : undefined;
+      const hs = 8 / this.view.zoom;
+      const corner = !!box && Math.abs(p.x - (box.x + box.w)) <= hs && Math.abs(p.y - (box.y + box.h)) <= hs;
+      // a structure: a hand, since a double-click opens it for drawing (and a click picks it)
+      this.view.scroller.style.cursor = corner ? 'nwse-resize' : id === null || o?.kind === 'table' ? 'text'
         : o?.kind === 'textbox' ? (this.nearEdge(id, p) ? 'move' : 'text')
-        : floatOf(o) ? 'move' : 'default';
+        : floatOf(o) ? 'move' : o?.kind === 'drawing' ? 'pointer' : 'default';
       return;
     }
     const p = this.view.toDoc(e.clientX, e.clientY);
@@ -1361,6 +1367,14 @@ export class DocumentMode {
   }
 
   /** Open a figure in the drawing tools; the document gets the changed drawing on Done. */
+  /** A drawing tool picked from a toolbox: the picked structure opens for it, else a new one starts at the cursor. */
+  drawWithTool(): void {
+    if (!this.file) return;
+    const id = this.pickedObject();
+    if (id !== null && this.file.t.objects[id]?.kind === 'drawing') this.editFigure(id);
+    else this.drawNew();
+  }
+
   editFigure(id: number): void {
     const f = this.file;
     const o = f?.t.objects[id];

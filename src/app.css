@@ -804,7 +804,10 @@ dialog.master-dialog > form > .muted { margin: 2px 0 6px; max-width: 60ch; }
 #sheet-pane { grid-area: host; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); }
 #sheet-pane[hidden] { display: none; }
 body.sheet-mode #canvas-host, body.doc-mode #canvas-host { display: none; }
-body.sheet-mode:not(.floating-drawing):not(.split-view) :is(.dock, .toolbox.floating), body.doc-mode:not(.floating-drawing):not(.split-view) :is(.dock, .toolbox.floating) { display: none; }
+/* the toolboxes stay out at the side (a drawing tool opens a structure to draw); the details
+   toolbox holds the drawing's side panel, which these modes keep at the right */
+body.sheet-mode:not(.floating-drawing):not(.split-view) .toolbox[data-id='details'], body.doc-mode:not(.floating-drawing):not(.split-view) .toolbox[data-id='details'] { display: none; }
+body.sheet-mode:not(.floating-drawing):not(.split-view) .dock:not(:has(.toolbox:not([data-id='details']))), body.doc-mode:not(.floating-drawing):not(.split-view) .dock:not(:has(.toolbox:not([data-id='details'])))  { display: none; }
 /* drawing a structure for a cell or a document: the drawing area floats over the sheet or pages */
 body.sheet-mode.floating-drawing #canvas-host, body.doc-mode.floating-drawing #canvas-host {
   display: block;
@@ -1353,7 +1356,7 @@ dialog.cf-manage { width: min(92vw, 640px); }
 #formula-bar[hidden] { display: none; }
 
 /* View > Dark Page: the page canvases only, on screen (see dark-page.ts) */
-.dark-page #scene, .dark-page .doc-canvas, .dark-page .sh-canvas, .dark-page #main-snap canvas, .dark-page #split-snap { filter: url(#dark-page-filter); }
+.dark-page #scene, .dark-page #overlay, .dark-page .doc-canvas, .dark-page .sh-canvas, .dark-page #main-snap canvas, .dark-page #split-snap { filter: url(#dark-page-filter); }
 .dark-page #canvas-host { background: var(--dark-paper, #1e1e1e); }
 #btn-dark { display: inline-flex; align-items: center; justify-content: center; padding: 0 7px; }
 #btn-dark svg { width: 18px; height: 18px; }

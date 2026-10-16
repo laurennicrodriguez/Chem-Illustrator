@@ -1901,7 +1901,9 @@ export class SheetView {
       this.scroller.style.cursor = border ? (border.kind === 'col' ? 'col-resize' : 'row-resize')
         : this.filterButtonAt(x, y) !== null ? 'pointer'
           : !this.editing && h.where === 'cell' && this.onFillHandle(x, y) ? 'crosshair'
-            : h.where === 'col' ? 's-resize' : h.where === 'row' ? 'e-resize' : 'cell';
+            : h.where === 'col' ? 's-resize' : h.where === 'row' ? 'e-resize'
+              // a structure: a hand, since a double-click opens it for drawing
+              : h.where === 'cell' && this.sheet?.cell(h.r, h.c)?.structure ? 'pointer' : 'cell';
       const tip = h.where === 'cell' ? this.tipFor(h.r, h.c) : '';
       if (tip !== this.hoverTip) { this.hoverTip = tip; this.scroller.title = tip; }
       return;
