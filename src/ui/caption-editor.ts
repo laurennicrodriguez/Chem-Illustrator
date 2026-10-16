@@ -376,6 +376,14 @@ export class CaptionEditor {
     this.bar.style.top = `${below ? br.y + 8 : tl.y - hb - 8}px`;
   }
 
+  /** Called whenever the text or the selection changes (the Slides ribbon shows how it looks). */
+  static onState: (() => void) | null = null;
+
+  /** Put the keyboard back in the text (after a ribbon button or box). */
+  focusText(): void {
+    if (!this.closed) this.ta.focus({ preventScroll: true });
+  }
+
   /** Stop editing and hand back the text. */
   finish(): void {
     if (this.closed) return;
@@ -410,6 +418,7 @@ export class CaptionEditor {
     this.updateBar();
     this.place();
     this.h.redraw();
+    CaptionEditor.onState?.();
   }
 
   /**

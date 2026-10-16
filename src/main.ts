@@ -41,6 +41,9 @@ import { drawSlidePage, recordSlide, paintSlide, SURROUND } from './deck/slide-v
 import { writePdf, jpegInfo, PdfPage, PdfImage } from './io/pdf';
 import { SlideList } from './ui/slide-list';
 import { DesignLibrary, GEO_DRAG_TYPE, pickDesignSize, sizeLabel } from './ui/design-panel';
+import { ShapeMenu } from './ui/shape-menu';
+import { SlideTextRibbon } from './ui/slide-text-ribbon';
+import { CaptionEditor } from './ui/caption-editor';
 import { LayersPanel } from './ui/layers-panel';
 import { Scrollbars } from './ui/scrollbars';
 import { Presenter } from './ui/present';
@@ -352,6 +355,8 @@ const TEMPLATE_HINT = 'Click empty space to place it (drag to turn it), a bond t
 
 // Design mode's shape library (made further down, once the page is ready)
 let designLib: DesignLibrary | null = null;
+/** Insert > Shapes in Slides and Documents. */
+const shapeMenu = new ShapeMenu();
 let layers: LayersPanel | null = null;
 let animUi: AnimationUI | null = null;
 /** View > Alignment Guides: moved things snap into line with other things and the page, on or off for each kind of tab. */
@@ -2422,6 +2427,11 @@ function pickedFigureDoc(): Doc | null {
 
 /** Menu commands that work differently while a document shows. */
 const DOC_COMMANDS: Record<string, () => unknown> = {
+  'insert-shapes': () => {
+    const b = document.querySelector<HTMLElement>('#doc-ribbon [data-doc="insert-shapes"]');
+    const anchor = b && b.offsetParent ? b : document.querySelector<HTMLElement>('#doc-ribbon .rb-tabs')!;
+    shapeMenu.show(anchor, 'Click a shape to put it in the text at the caret. Double-click it there to change its size, colour or text.', (id) => docMode.insertShape(id));
+  },
   'copy-smiles': async () => {
     const d = pickedFigureDoc();
     if (!d) { flash('Click a structure first (it gets a blue frame), then Copy as SMILES.'); return; }
@@ -2520,6 +2530,11 @@ const COMMANDS: Record<string, () => unknown> = {
   'design-size': () => designSize(),
   'connector-tool': () => { finishTyping(); editor.setTool('connector'); },
   'connector-elbow-tool': () => { finishTyping(); editor.setTool('connector-elbow'); },
+  'slide-shapes': () => {
+    const b = document.querySelector<HTMLElement>('#ribbon [data-cmd="slide-shapes"]:not([hidden])');
+    const anchor = b && b.offsetParent ? b : document.querySelector<HTMLElement>('#ribbon .rb-tabs')!;
+    shapeMenu.show(anchor, 'Click a shape, then click or drag on the slide. Type in it once placed.', (id) => { finishTyping(); editor.setTool(`geo:${id}`); });
+  },
   'design-shapes': () => { if (ws.active.mode === 'design') lib.focusSearch(); else flash('Shapes are in Design mode: use File > New Design.'); },
   'shape-front': () => editor.setShapeLayer('front') || flash('Select the shapes to bring to the front.'),
   'shape-back': () => editor.setShapeLayer('back') || flash('Select the shapes to send to the back.'),
@@ -4167,7 +4182,7 @@ function drawingMenu(): MenuItem[] {
     return [
       { cmd: 'paste' }, { cmd: 'paste-smiles' }, { cmd: 'select-all' }, null,
       { cmd: 'undo' }, { cmd: 'redo' }, null,
-      { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'connector-tool' }] : [])] },
+      { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'connector-tool' }] : []), ...(ws.active.mode === 'slides' ? [{ cmd: 'slide-shapes', label: 'Shape…' }] : [])] },
       { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] },
       { cmd: 'drawing-style' },
       view,
@@ -4626,7 +4641,14 @@ editor.onFrame = () => {
   updateWarnings();
   if (doc.version !== stereoSeen) { stereoSeen = doc.version; updateStereo(); }
 };
-editor.onChange = () => { animUi?.selectionChanged(); updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); void refreshDescriptors(); scheduleLabelCheck(); };
+const slideText = new SlideTextRibbon($('#ribbon'), {
+  format: (f) => editor.formatText(f),
+  look: () => editor.textLook(),
+  refocus: () => editor.refocusText(),
+  nothing: () => flash('Click into some text, or pick a text box or a shape with text, first.'),
+});
+CaptionEditor.onState = () => { if (ws.active.mode === 'slides') slideText.refresh(); };
+editor.onChange = () => { if (ws.active.mode === 'slides') slideText.refresh(); animUi?.selectionChanged(); updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); void refreshDescriptors(); scheduleLabelCheck(); };
 chem.onReady = () => {
   (window as any).__chemReadyMs = performance.now() - startMs;
   sheetChem.flush();

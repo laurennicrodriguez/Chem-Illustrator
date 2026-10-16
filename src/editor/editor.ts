@@ -2,11 +2,13 @@
 // pan. The editor changes the document and asks for a repaint; hover and drawing previews
 // only repaint the overlay layer.
 
-import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, applyBase, stripBase, type StepRoles, type HighlightStyle } from '../model';
+import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, applyBase, stripBase, type StepRoles, type Justify, type HighlightStyle } from '../model';
 import { CaptionEditor } from '../ui/caption-editor';
-import { GEO_BY_ID, geoDef, moveSteps, traceSteps } from '../design/geo';
+import { geoDef, geoShapeStyle, moveSteps, traceSteps } from '../design/geo';
 import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
 import { styleFromFace, plainText } from '../richtext';
+import * as rt from '../richtext';
+import { applyFormat, formatWhole, type TextFormat } from '../text/format';
 import { cleanUpMoves } from '../chem/cleanup';
 import { Renderer, measureText } from '../render/renderer';
 import { ASCENT } from '../text/layout';
@@ -2480,6 +2482,74 @@ export class Editor {
     this.captionEd?.finish();
   }
 
+  /** Put the keyboard back in the text being typed, if any. */
+  refocusText(): void {
+    this.captionEd?.focusText();
+  }
+
+  /** True while a caption or a shape's text is being typed in. */
+  get typing(): boolean {
+    return this.captionEd !== null;
+  }
+
+  /**
+   * The ribbon's Font and Paragraph buttons: on the text being typed (its selection, or what is
+   * typed next), or else on the whole of each picked caption and shape with text, as in PowerPoint.
+   * False when there is no text to change.
+   */
+  formatText(f: TextFormat): boolean {
+    if (this.captionEd) { applyFormat(this.captionEd.ed, f); return true; }
+    const doc = this.doc;
+    const st = doc.style;
+    const caps = [...this.sel.captions].map((id) => doc.captions.get(id)).filter((c): c is Caption => !!c);
+    const shapes = [...this.sel.shapes].map((id) => doc.shapes.get(id)).filter((s): s is Shape => !!s && s.kind === 'geo');
+    if (!caps.length && !shapes.length) return false;
+    doc.edit('Format text', () => {
+      for (const c of caps) {
+        const base = c.ph ? doc.textStyles?.[c.ph] : undefined;
+        const defaults = base ? { ...base } : { ...styleFromFace(st.captionFace), size: st.captionSize };
+        const t = { runs: applyBase(c.runs, base), paras: c.paras, justify: c.justify, wrap: c.wrap, width: c.width, lineHeight: c.lineHeight, lineSpacing: c.lineSpacing };
+        const res = formatWhole(t, f, defaults, base?.size ?? st.captionSize, (x, sz, family, style) => measureText(x, sz, family, style));
+        doc.dirtyRects.push(this.r.captionBox(c));
+        doc.updateCaption(c.id, { runs: stripBase(res.runs, base), paras: res.paras, justify: res.justify, lineHeight: res.lineHeight, lineSpacing: res.lineSpacing });
+      }
+      for (const sh of shapes) {
+        // a shape's text: its look and lining up (line spacing and lists don't apply to it)
+        if (!sh.text?.runs.length || f.kind === 'line') continue;
+        const res = formatWhole({ runs: sh.text.runs, paras: sh.text.paras, justify: sh.textAlign ?? 'center' }, f, {}, this.r.geoTextSize());
+        const text = { runs: res.runs, ...(res.paras?.length ? { paras: res.paras } : {}) };
+        doc.dirtyRects.push(shapeBox(sh));
+        doc.updateShape(sh.id, { text, textAlign: res.justify === 'center' ? undefined : res.justify });
+      }
+    });
+    this.requestScene();
+    this.changed();
+    return true;
+  }
+
+  /** How the text the ribbon's Font and Paragraph buttons would change looks now (for showing which are on). */
+  textLook(): { style: rt.RunStyle; align: Justify; list?: 'bullet' | 'number'; line: number; defaultSize: number; defaultFont?: string } | null {
+    const st = this.doc.style;
+    const ed = this.captionEd?.ed;
+    if (ed) {
+      const p = ed.currentPara();
+      return { style: ed.currentStyle(), align: ed.currentAlign(), list: p.list, line: ed.t.lineSpacing ?? 1, defaultSize: ed.defaultSize, defaultFont: ed.defaults.font ?? st.captionFont };
+    }
+    const c = [...this.sel.captions].map((id) => this.doc.captions.get(id)).find((x): x is Caption => !!x);
+    if (c) {
+      const base = c.ph ? this.doc.textStyles?.[c.ph] : undefined;
+      const runs = applyBase(c.runs, base);
+      const len = plainText(runs).length;
+      return { style: len ? rt.commonStyle(runs, 0, len) : { ...(base ?? {}) }, align: c.justify ?? 'left', list: c.paras?.[0]?.list, line: c.lineSpacing ?? 1, defaultSize: base?.size ?? st.captionSize, defaultFont: base?.font ?? st.captionFont };
+    }
+    const sh = [...this.sel.shapes].map((id) => this.doc.shapes.get(id)).find((x): x is Shape => !!x && x.kind === 'geo' && !!x.text?.runs.length);
+    if (sh?.text) {
+      const len = plainText(sh.text.runs).length;
+      return { style: rt.commonStyle(sh.text.runs, 0, len), align: sh.textAlign ?? 'center', line: 1, defaultSize: this.r.geoTextSize(), defaultFont: st.captionFont };
+    }
+    return null;
+  }
+
   private newCaption(p: Vec): void {
     this.openCaption(null, p);
   }
@@ -3199,16 +3269,10 @@ function outlineShape(ctx: CanvasRenderingContext2D, s: Shape): void {
 }
 
 /** The tool that draws a shape from the library, looking as `look` says. */
-/** The usual line widths of new design shapes, in points. */
-export const CLIP_ART_LINE = 1.75, SHAPE_LINE = 1;
 
 function geoTool(id: string, look: Partial<Shape>): Tool | undefined {
-  const def = GEO_BY_ID.get(id);
-  if (!def) return undefined;
-  // lines in proportion to the shape: clip art (glassware…) at 1.75 pt, as it is drawn about 60 pt
-  // across; other shapes at PowerPoint's 1 pt. Change it in the Style panel.
-  const base: Partial<Shape> = def.outline ? { color: '#000000', lineWidth: CLIP_ART_LINE } : { filled: true, fillColor: '#dae3f3', color: '#2f5597', lineWidth: SHAPE_LINE, ...look };
-  return { kind: 'shape', shape: { ...base, kind: 'geo', geo: id } as ShapeStyle, from: 'corner' };
+  const shape = geoShapeStyle(id, look);
+  return shape ? { kind: 'shape', shape: shape as ShapeStyle, from: 'corner' } : undefined;
 }
 
 export interface GuideLine { x1: number; y1: number; x2: number; y2: number }

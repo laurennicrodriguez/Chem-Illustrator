@@ -6,6 +6,7 @@
 // The lab equipment is drawn here, from simple outlines (no outside artwork).
 
 import type { Rect, Vec } from '../geom';
+import type { Shape } from '../model';
 
 export type GeoStep =
   | ['M', number, number]
@@ -444,3 +445,17 @@ export function ports(x1: number, y1: number, x2: number, y2: number): Vec[] {
   const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
   return [{ x: mx, y: y1 }, { x: x2, y: my }, { x: mx, y: y2 }, { x: x1, y: my }];
 }
+
+/** The usual line widths of new design shapes, in points. */
+export const CLIP_ART_LINE = 1.75, SHAPE_LINE = 1;
+
+/** How a new shape from the library looks (null for a shape that isn't in it). */
+export function geoShapeStyle(id: string, look: Partial<Shape> = {}): Partial<Shape> | null {
+  const def = GEO_BY_ID.get(id);
+  if (!def) return null;
+  // lines in proportion to the shape: clip art (glassware…) at 1.75 pt, as it is drawn about 60 pt
+  // across; other shapes at PowerPoint's 1 pt. Change it in the Style panel.
+  const base: Partial<Shape> = def.outline ? { color: '#000000', lineWidth: CLIP_ART_LINE } : { filled: true, fillColor: '#dae3f3', color: '#2f5597', lineWidth: SHAPE_LINE, ...look };
+  return { ...base, kind: 'geo', geo: id };
+}
+

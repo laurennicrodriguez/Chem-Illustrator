@@ -641,8 +641,9 @@
           <button class="rb-big" data-doc="insert-table" title="An ACS-style table"><span class="rb-icon">▦</span>Table</button>
           <button class="rb-big" data-doc="insert-picture" title="A picture from a file (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
           <button class="rb-big" data-doc="insert-text-box" title="A box of text on the page, with the page's text wrapping round it. Drag its edge to move it"><span class="rb-icon">▭</span>Text Box</button>
+          <button class="rb-big" data-doc="insert-shapes" aria-haspopup="true" title="Basic shapes, block arrows, flowchart shapes, callouts and lab glassware: the one you pick goes in the text at the caret. Double-click it to change it with the drawing tools"><span class="rb-icon">◇</span>Shapes ▾</button>
         </div>
-        <div class="rb-label">Tables and pictures</div>
+        <div class="rb-label">Tables, pictures and shapes</div>
       </div>
       <div class="rb-group">
         <div class="rb-row">
@@ -886,8 +887,11 @@
   <div id="ribbon" class="ribbon tabbed slides-only" role="toolbar" aria-label="Slides" hidden>
     <div class="rb-tabs" role="tablist">
       <button role="tab" data-sl-tab="home" aria-selected="true">Home</button>
+      <button role="tab" data-sl-tab="insert" aria-selected="false">Insert</button>
+      <button role="tab" data-sl-tab="design" aria-selected="false">Design</button>
       <button role="tab" data-sl-tab="transitions" aria-selected="false">Transitions</button>
       <button role="tab" data-sl-tab="animations" aria-selected="false">Animations</button>
+      <button role="tab" data-sl-tab="show" aria-selected="false">Slide Show</button>
     </div>
     <div class="rb-panel" data-sl-panel="home">
       <div class="rb-group">
@@ -909,14 +913,50 @@
         </div>
         <div class="rb-label">Slides</div>
       </div>
-      <div class="rb-group">
+      <div class="rb-group" data-sl-text>
         <div class="rb-row">
-          <button class="rb-big" data-cmd="insert-picture" title="Put a picture on the slide (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
-          <button class="rb-big" data-cmd="text-box" title="Click on the slide to type, or drag to make a text box that wraps"><span class="rb-icon">T</span>Text Box</button>
-          <button class="rb-big" data-cmd="insert-table" title="Put a table on the slide (or paste cells from Excel or a sheet)"><span class="rb-icon">▦</span>Table</button>
-          <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
+          <div class="rb-col">
+            <div class="rb-pair">
+              <input id="sl-font" class="rb-text rb-font" list="ci-fonts" spellcheck="false" aria-label="Font" title="Font of the selected text, or of the whole of each picked text box (type any installed font)" />
+              <input id="sl-size" class="rb-text rb-num" list="sl-size-list" spellcheck="false" aria-label="Font size" title="Font size in points" />
+              <datalist id="sl-size-list"><option>8</option><option>9</option><option>10</option><option>10.5</option><option>11</option><option>12</option><option>14</option><option>16</option><option>18</option><option>20</option><option>24</option><option>28</option><option>32</option><option>36</option><option>40</option><option>44</option><option>48</option><option>54</option><option>60</option><option>66</option><option>72</option><option>80</option><option>88</option><option>96</option></datalist>
+              <button class="rb-sq" data-sl-fmt="grow" title="Increase font size">A<sup>+</sup></button>
+              <button class="rb-sq" data-sl-fmt="shrink" title="Decrease font size">A<sup>−</sup></button>
+            </div>
+            <div class="rb-pair">
+              <button class="rb-sq" data-sl-fmt="bold" aria-pressed="false" title="Bold (Ctrl+B)"><b>B</b></button>
+              <button class="rb-sq" data-sl-fmt="italic" aria-pressed="false" title="Italic (Ctrl+I)"><i>I</i></button>
+              <button class="rb-sq" data-sl-fmt="underline" aria-pressed="false" title="Underline (Ctrl+U)"><u>U</u></button>
+              <button class="rb-sq" data-sl-fmt="sub" aria-pressed="false" title="Subscript (Ctrl+=)">x<sub>2</sub></button>
+              <button class="rb-sq" data-sl-fmt="sup" aria-pressed="false" title="Superscript (Ctrl+Shift+=)">x<sup>2</sup></button>
+              <button class="rb-sq" data-sl-fmt="formula" aria-pressed="false" title="Formula style: numbers lowered (CH₂Cl₂), charges raised">C₉H₈</button>
+              <label class="rb-sq rb-colour" title="Text colour"><span>A</span><input id="sl-colour" type="color" aria-label="Text colour" /></label>
+            </div>
+          </div>
         </div>
-        <div class="rb-label">Insert</div>
+        <div class="rb-label">Font</div>
+      </div>
+      <div class="rb-group" data-sl-text>
+        <div class="rb-row">
+          <div class="rb-col">
+            <div class="rb-pair">
+              <button class="rb-sq" data-sl-fmt="bullets" aria-pressed="false" title="Bullets">• ≡</button>
+              <button class="rb-sq" data-sl-fmt="numbering" aria-pressed="false" title="Numbering">1. ≡</button>
+              <button class="rb-sq" data-sl-fmt="outdent" title="Decrease list level (Shift+Tab)">⇤</button>
+              <button class="rb-sq" data-sl-fmt="indent" title="Increase list level (Tab)">⇥</button>
+              <select id="sl-line" title="Line spacing" aria-label="Line spacing">
+                <option value="1">1.0</option><option value="1.15">1.15</option><option value="1.5">1.5</option><option value="2">2.0</option><option value="2.5">2.5</option><option value="3">3.0</option><option value="" hidden>Other</option>
+              </select>
+            </div>
+            <div class="rb-pair">
+              <button class="rb-sq" data-sl-fmt="align-left" aria-pressed="false" title="Align left">Left</button>
+              <button class="rb-sq" data-sl-fmt="align-center" aria-pressed="false" title="Centre">Centre</button>
+              <button class="rb-sq" data-sl-fmt="align-right" aria-pressed="false" title="Align right">Right</button>
+              <button class="rb-sq" data-sl-fmt="justify" aria-pressed="false" title="Justify (both edges straight)">Justify</button>
+            </div>
+          </div>
+        </div>
+        <div class="rb-label">Paragraph</div>
       </div>
       <div class="rb-group">
         <div class="rb-row">
@@ -924,6 +964,26 @@
         </div>
         <div class="rb-label">Editing</div>
       </div>
+    </div>
+    <div class="rb-panel" data-sl-panel="insert" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="new-slide" title="New slide after this one"><span class="rb-icon">＋</span>New Slide</button>
+        </div>
+        <div class="rb-label">Slides</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="insert-picture" title="Put a picture on the slide (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
+          <button class="rb-big" data-cmd="text-box" title="Click on the slide to type, or drag to make a text box that wraps"><span class="rb-icon">T</span>Text Box</button>
+          <button class="rb-big" data-cmd="insert-table" title="Put a table on the slide (or paste cells from Excel or a sheet)"><span class="rb-icon">▦</span>Table</button>
+          <button class="rb-big" data-cmd="slide-shapes" aria-haspopup="true" title="Basic shapes, block arrows, flowchart shapes, callouts and lab glassware: pick one, then click or drag on the slide"><span class="rb-icon">◇</span>Shapes ▾</button>
+          <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
+        </div>
+        <div class="rb-label">Pictures, Text and Shapes</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-sl-panel="design" hidden>
       <div class="rb-group">
         <div class="rb-row">
           <div class="rb-col">
@@ -940,6 +1000,8 @@
         </div>
         <div class="rb-label">Design</div>
       </div>
+    </div>
+    <div class="rb-panel" data-sl-panel="show" hidden>
       <div class="rb-group">
         <div class="rb-row">
           <button class="rb-big" data-cmd="present" title="Show the slides full screen from the first"><span class="rb-icon">▶</span>From Beginning</button>
