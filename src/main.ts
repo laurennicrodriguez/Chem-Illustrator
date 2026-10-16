@@ -82,7 +82,7 @@ import { templateIcon } from './ui/template-icons';
 import { StructureChecks } from './chem/warnings';
 import { idText, labelClashes, parseIdStart, type IdStyle } from './chem/compound-numbers';
 import { schemeItems } from './chem/reaction';
-import { labelsOf } from './chem/scheme-layout';
+import { labelsOf, schemePrefs, setSchemePrefs, SPACING, type SchemePrefs } from './chem/scheme-layout';
 import { plainText } from './richtext';
 import { LiveStereo } from './chem/live-stereo';
 import { setStereoShown, shownDescriptor, axialStyle } from './chem/stereo';
@@ -648,6 +648,41 @@ async function structureKeys(): Promise<Map<number, string>> {
     if (r && !r.error && r.smiles) for (const a of f) out.set(a, r.smiles);
   });
   return out;
+}
+
+/**
+ * Scheme > Scheme Settings: spacing between structures and + signs, and the text above and below
+ * arrows (size, alignment, gap, the + boxes, fitting the arrow to it). A blank distance follows
+ * the drawing's bond length.
+ */
+async function schemeSettings(): Promise<void> {
+  finishTyping();
+  const p = schemePrefs;
+  const bond = doc.style.bondLength;
+  const pt = (v: number | null) => (v === null ? '' : String(v));
+  const auto = (frac: number) => `${Math.round(frac * bond * 10) / 10} pt`;
+  const got = await ask('Scheme Settings', [
+    { name: 'structGap', label: 'Gap between arrow and structures', value: pt(p.structGap), type: 'number', unit: 'pt', placeholder: auto(SPACING.gap) },
+    { name: 'plusGap', label: 'Space either side of +', value: pt(p.plusGap), type: 'number', unit: 'pt', placeholder: auto(SPACING.plus) },
+    { name: 'helpers', label: 'Show + boxes above and below new arrows', value: String(p.helpers), type: 'checkbox' },
+    { name: 'textSize', label: 'Text size above and below arrows', value: pt(p.textSize), type: 'number', unit: 'pt', placeholder: `${doc.style.captionSize} pt` },
+    { name: 'textAlign', label: 'Text alignment', value: p.textAlign, options: [{ value: 'left', label: 'Left' }, { value: 'center', label: 'Centre' }, { value: 'right', label: 'Right' }] },
+    { name: 'textGap', label: 'Gap between arrow and text', value: pt(p.textGap), type: 'number', unit: 'pt', placeholder: auto(SPACING.conditions) },
+    { name: 'fit', label: 'Fit arrow length to its text (moves the products)', value: String(p.fit), type: 'checkbox' },
+    { name: 'lead', label: 'Arrow before the text starts', value: pt(p.lead), type: 'number', unit: 'pt', placeholder: auto(SPACING.overhang) },
+    { name: 'headGap', label: 'Space between text and arrowhead', value: pt(p.headGap), type: 'number', unit: 'pt', placeholder: auto(SPACING.overhang) },
+  ], { ok: 'Save', note: 'Used when you type text beside an arrow, and by Clean Up Reaction and Arrange Scheme. Leave a distance blank to scale it with the bond length. Existing schemes change when you next clean them up.' });
+  if (!got) return;
+  const len = (v: string) => { const n = Number(v); return v.trim() === '' || !isFinite(n) || n < 0 ? null : Math.min(500, n); };
+  const next: Partial<SchemePrefs> = {
+    structGap: len(got.structGap), plusGap: len(got.plusGap), textGap: len(got.textGap), lead: len(got.lead), headGap: len(got.headGap),
+    textSize: len(got.textSize) || null,
+    textAlign: got.textAlign === 'left' || got.textAlign === 'right' ? got.textAlign : 'center',
+    helpers: got.helpers === 'true', fit: got.fit === 'true',
+  };
+  setSchemePrefs(next);
+  storeSettings();
+  editor.requestOverlay();
 }
 
 /**
@@ -2681,6 +2716,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
   'arrange-scheme': () => arrangeDialog.open(),
   'number-compounds': () => void numberCompounds(),
+  'scheme-settings': () => void schemeSettings(),
   'attach-descriptors': () => void attachDescriptors(),
   'pubchem-lookup': () => void lookUpChosen(),
   'add-id-label': () => void addTiedText('label'),
@@ -3286,6 +3322,7 @@ function storeSettings(): void {
     reviewName: reviewAuthor(),
     skipVersion,
     recentFiles,
+    scheme: { ...schemePrefs },
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -3383,6 +3420,7 @@ void loadSettings().then((s) => {
   editor.options.fixedLength = s.fixedLength;
   editor.options.fixedAngles = s.fixedAngles;
   editor.showRoles = s.showRoles;
+  setSchemePrefs(s.scheme);
   $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(s.showRoles));
   showDevTools(s.devTools);
   showScrollBars(s.scrollBars);
@@ -4615,6 +4653,8 @@ stylePanel.reaction = {
   select: (id, role) => editor.selectRole(id, role),
   cleanUp: () => command('clean-up-reaction'),
   arrange: () => command('arrange-scheme'),
+  sideText: (id) => editor.arrowSideText(id),
+  setSideText: (id, side, text) => editor.setArrowSideText(id, side, text),
 };
 stylePanel.tables = {
   part: () => editor.tablePart,

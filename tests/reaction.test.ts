@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { Doc } from '../src/model';
 import { interpretArrow, plainMeasure, schemeItems } from '../src/chem/reaction';
-import { applySchemePlan, planCleanUp, SPACING } from '../src/chem/scheme-layout';
+import { applySchemePlan, planCleanUp, SPACING, spacing } from '../src/chem/scheme-layout';
 import { writeCdxml } from '../src/io/cdxml-write';
 import { readCdxml } from '../src/io/cdxml';
 
@@ -96,9 +96,13 @@ describe('Clean Up Reaction', () => {
     expect((box('a' + c).y1 + box('a' + c).y2) / 2).toBeCloseTo(arr.tail.y, 5);
     // the other starting material lines up too, with the + sign between them
     expect((box('a' + a).y1 + box('a' + a).y2) / 2).toBeCloseTo(arr.tail.y, 5);
-    // conditions are centred over and under the arrow, which is long enough for them
+    // conditions are centred on each other, starting a lead-in after the tail, and the arrow is
+    // fitted to them: the same gap again before its head
     const ab = box('c' + above), bb = box('c' + below);
-    const mid = (arr.tail.x + arr.head.x) / 2;
+    const widest = Math.max(ab.x2 - ab.x1, bb.x2 - bb.x1);
+    const sp = spacing(bl);
+    const mid = arr.tail.x + sp.lead + widest / 2;
+    expect(arr.head.x - arr.tail.x).toBeCloseTo(Math.max(sp.minArrow, sp.lead + widest + sp.headGap + arr.headLength), 5);
     expect((ab.x1 + ab.x2) / 2).toBeCloseTo(mid, 5);
     expect((bb.x1 + bb.x2) / 2).toBeCloseTo(mid, 5);
     expect(ab.y2).toBeCloseTo(arr.tail.y - SPACING.conditions * bl, 5);

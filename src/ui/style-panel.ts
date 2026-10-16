@@ -46,6 +46,10 @@ export interface ReactionHooks {
   select(arrowId: number, role: Role): void;
   cleanUp(): void;
   arrange(): void;
+  /** The text above and below the arrow (the nearest line of each), as plain text. */
+  sideText(arrowId: number): { above: string; below: string } | null;
+  /** Set it: a new line of text if there is none, the nearest one changed, or removed when emptied. */
+  setSideText(arrowId: number, side: 'above' | 'below', text: string): void;
 }
 
 type Opt<T> = [T, string];
@@ -157,7 +161,7 @@ export class StylePanel {
       row.append(b);
       this.body.append(row);
     }
-    if (focused) [...this.body.querySelectorAll<HTMLElement>('.style-row')].find((r) => r.textContent === focused)?.querySelector<HTMLElement>('select, input')?.focus();
+    if (focused) [...this.body.querySelectorAll<HTMLElement>('.style-row')].find((r) => r.textContent === focused)?.querySelector<HTMLElement>('select, input, textarea')?.focus();
   }
 
   // ------------------------------------------------------------------ arrows
@@ -211,6 +215,25 @@ export class StylePanel {
     const roles = hooks?.roles(r.id);
     if (!hooks || !roles) return;
     this.heading('Reaction');
+    // reagents and conditions typed straight in (the "+" boxes on the drawing do the same)
+    const sides = hooks.sideText(r.id);
+    if (sides) {
+      for (const [side, label] of [['above', 'Above arrow'], ['below', 'Below arrow']] as const) {
+        const ta = document.createElement('textarea');
+        ta.rows = Math.min(4, Math.max(1, sides[side].split('\n').length));
+        ta.value = sides[side];
+        ta.placeholder = side === 'above' ? 'Reagents' : 'Solvent, temperature, time';
+        ta.className = 'style-arrow-text';
+        const set = () => { if (ta.value !== sides[side]) hooks.setSideText(r.id, side, ta.value); };
+        ta.addEventListener('change', set);
+        ta.addEventListener('keydown', (e) => {
+          e.stopPropagation();
+          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ta.blur(); }
+        });
+        ta.addEventListener('input', () => { ta.rows = Math.min(4, Math.max(1, ta.value.split('\n').length)); });
+        this.row(label, ta, `Text ${side} the arrow. Enter sets it; Shift+Enter starts a new line. Formulas get their subscripts (H2O, Pd(PPh3)4); select the text on the drawing for other formatting.`);
+      }
+    }
     const names: [Role, string, string][] = [
       ['reactants', 'Starting materials', 'starting material'], ['products', 'Products', 'product'],
       ['above', 'Above the arrow', 'thing'], ['below', 'Below the arrow', 'thing'],
