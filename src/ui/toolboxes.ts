@@ -13,16 +13,52 @@ export interface BoxPlace {
   shown: boolean; dock: Dock; x: number; y: number;
   /** Folded up to its title bar (the arrow in the title). */
   collapsed?: boolean;
+  /** Locked where it is (its own padlock); unset follows the big Locked button. */
+  locked?: boolean;
 }
 
 export interface ToolboxState {
-  /** Locked: toolboxes stay where they are (unlock to drag them). */
+  /** The big Locked button: on when every toolbox is locked (each can also be locked on its own). */
   locked: boolean;
   places: Record<string, BoxPlace>;
   /** Your own toolbox: "tool:name" and "cmd:name" items, in order. */
   custom: string[];
-  /** The side panel (Style, Warnings, Analysis) folded to a strip at the right. */
+  /** The side panel (Style, Warnings, Analysis) folded to a strip at the right, in modes without their own choice. */
   sideCollapsed: boolean;
+  /** Folded or open in each mode (drawing, slides, sheet, document, design), as last left there. */
+  sideByMode?: Record<string, boolean>;
+}
+
+/** Whether a toolbox is locked where it is. */
+export function boxLocked(st: ToolboxState, id: string): boolean {
+  return st.places[id]?.locked ?? st.locked;
+}
+
+/** Every toolbox locked or unlocked together (the big Locked button). */
+export function withAllLocked(st: ToolboxState, locked: boolean): ToolboxState {
+  const places: Record<string, BoxPlace> = {};
+  for (const [id, p] of Object.entries(st.places)) places[id] = { ...p, locked };
+  return { ...st, locked, places };
+}
+
+/** One toolbox locked or unlocked (its own padlock). The big button shows locked while every shown one is. */
+export function withBoxLocked(st: ToolboxState, id: string, locked: boolean): ToolboxState {
+  // the others keep the lock they have now, whatever the big button then shows
+  const places: Record<string, BoxPlace> = {};
+  for (const [k, p] of Object.entries(st.places)) places[k] = { ...p, locked: k === id ? locked : boxLocked(st, k) };
+  const next = { ...st, places };
+  const shown = Object.keys(places).filter((k) => places[k].shown);
+  return { ...next, locked: shown.length ? shown.every((k) => boxLocked(next, k)) : locked };
+}
+
+/** Whether the side panel is folded away in a mode. */
+export function sideFolded(st: ToolboxState, mode: string): boolean {
+  return st.sideByMode?.[mode] ?? st.sideCollapsed;
+}
+
+/** The side panel folded or opened in one mode only. */
+export function withSideFolded(st: ToolboxState, mode: string, folded: boolean): ToolboxState {
+  return { ...st, sideByMode: { ...st.sideByMode, [mode]: folded } };
 }
 
 /**
@@ -47,6 +83,11 @@ export function parseToolboxes(raw: unknown): ToolboxState {
   const r = raw as Record<string, unknown>;
   if (typeof r.locked === 'boolean') s.locked = r.locked;
   if (typeof r.sideCollapsed === 'boolean') s.sideCollapsed = r.sideCollapsed;
+  if (r.sideByMode && typeof r.sideByMode === 'object') {
+    const by: Record<string, boolean> = {};
+    for (const [m, v] of Object.entries(r.sideByMode as Record<string, unknown>)) if (/^[a-z]+$/.test(m) && typeof v === 'boolean') by[m] = v;
+    s.sideByMode = by;
+  }
   if (r.places && typeof r.places === 'object') {
     for (const [id, v] of Object.entries(r.places as Record<string, unknown>)) {
       if (!(TOOLBOX_IDS as readonly string[]).includes(id) || !v || typeof v !== 'object') continue;
@@ -57,6 +98,7 @@ export function parseToolboxes(raw: unknown): ToolboxState {
         dock: DOCKS.includes(p.dock as Dock) ? (p.dock as Dock) : s.places[id].dock,
         x: num(p.x, s.places[id].x), y: num(p.y, s.places[id].y),
         ...(p.collapsed === true ? { collapsed: true } : {}),
+        ...(typeof p.locked === 'boolean' ? { locked: p.locked } : {}),
       };
     }
   }
@@ -107,7 +149,6 @@ export class Toolboxes {
   /** Show every toolbox where the settings say (building them again, so their contents are up to date). */
   render(): void {
     const st = this.hooks.get();
-    document.body.classList.toggle('toolboxes-locked', st.locked);
     for (const def of this.defs) {
       const place = st.places[def.id];
       let f = this.frames.get(def.id);
@@ -117,10 +158,12 @@ export class Toolboxes {
       f.classList.toggle('vertical', vertical);
       f.classList.toggle('floating', place.dock === 'float');
       f.classList.toggle('collapsed', !!place.collapsed);
+      const locked = boxLocked(st, def.id);
+      f.classList.toggle('locked', locked);
       const fold = f.querySelector<HTMLElement>('.tb-fold');
       if (fold) { fold.textContent = place.collapsed ? '▸' : '▾'; fold.title = place.collapsed ? `Open ${def.title} out` : `Fold ${def.title} up to its title`; }
       const lock = f.querySelector<HTMLElement>('.tb-lock');
-      if (lock) { lock.innerHTML = lockIcon(st.locked, 14); lock.title = st.locked ? 'Toolboxes are locked: click to unlock them, then drag a toolbox by its title' : 'Toolboxes are unlocked: click to lock them where they are'; lock.setAttribute('aria-pressed', String(st.locked)); }
+      if (lock) { lock.innerHTML = lockIcon(locked, 14); lock.title = locked ? `${def.title} is locked: click to unlock it, then drag it by its title` : `${def.title} is unlocked: click to lock it where it is`; lock.setAttribute('aria-pressed', String(locked)); }
       f.dataset.dock = place.dock;
       const body = f.querySelector<HTMLElement>('.tb-body')!;
       body.replaceChildren();
@@ -153,8 +196,14 @@ export class Toolboxes {
     return !!this.hooks.get().places[id]?.shown;
   }
 
+  /** Lock or unlock every toolbox (the big Locked button). */
   setLocked(locked: boolean): void {
-    this.change({ ...this.hooks.get(), locked });
+    this.change(withAllLocked(this.hooks.get(), locked));
+  }
+
+  /** Lock or unlock one toolbox (its own padlock). */
+  setBoxLocked(id: string, locked: boolean): void {
+    this.change(withBoxLocked(this.hooks.get(), id, locked));
   }
 
   /** Fold a toolbox up to its title bar, or open it out again. */
@@ -163,9 +212,9 @@ export class Toolboxes {
     if (p) this.place(id, { collapsed: (collapsed ?? !p.collapsed) || undefined });
   }
 
-  /** Fold the side panel to a strip at the right, or open it again. */
-  setSideCollapsed(collapsed: boolean): void {
-    this.change({ ...this.hooks.get(), sideCollapsed: collapsed });
+  /** Fold the side panel to a strip at the right, or open it again, in one mode. */
+  setSideCollapsed(mode: string, collapsed: boolean): void {
+    this.change(withSideFolded(this.hooks.get(), mode, collapsed));
   }
 
   private place(id: string, p: Partial<BoxPlace>): void {
@@ -200,7 +249,7 @@ export class Toolboxes {
     close.setAttribute('aria-label', close.title);
     close.addEventListener('click', () => this.toggle(def.id, false));
     if (def.id === 'details') close.title = 'Put the panel back at the right side';
-    // fold the box up to its title, and lock or unlock every toolbox, from the title bar
+    // fold the box up to its title, and lock or unlock it, from the title bar
     const fold = document.createElement('button');
     fold.type = 'button';
     fold.className = 'tb-fold';
@@ -208,22 +257,28 @@ export class Toolboxes {
     const lock = document.createElement('button');
     lock.type = 'button';
     lock.className = 'tb-lock';
-    lock.addEventListener('click', () => this.setLocked(!this.hooks.get().locked));
+    lock.addEventListener('click', () => this.setBoxLocked(def.id, !boxLocked(this.hooks.get(), def.id)));
     head.append(grip, name, lock, fold, close);
     const body = document.createElement('div');
     body.className = 'tb-body';
     f.append(head, body);
     head.addEventListener('pointerdown', (e) => { if (e.button === 0 && !(e.target as Element).closest('button')) this.drag(def.id, f, e); });
-    head.addEventListener('contextmenu', (e) => { e.preventDefault(); this.menu(def, e.clientX, e.clientY); });
+    // right-click the title, or the box round its buttons (a locked docked box has no title showing)
+    f.addEventListener('contextmenu', (e) => {
+      if ((e.target as Element).closest('.tb-body button, .tb-body input, .tb-body select')) return;
+      e.preventDefault();
+      this.menu(def, e.clientX, e.clientY);
+    });
     return f;
   }
 
-  /** The toolbox's own menu: dock it, float it, lock all toolboxes, hide it. */
+  /** The toolbox's own menu: dock it, float it, lock it or all of them, hide it. */
   private menu(def: ToolboxDef, x: number, y: number): void {
     const st = this.hooks.get();
     const items: MenuItem[] = [
       ...DOCKS.map((d) => ({ cmd: `tbx:${d}`, label: DOCK_LABEL[d] })), null,
-      { cmd: 'tbx:lock', label: st.locked ? 'Unlock Toolboxes' : 'Lock Toolboxes' },
+      { cmd: 'tbx:lock', label: boxLocked(st, def.id) ? `Unlock ${def.title}` : `Lock ${def.title}` },
+      { cmd: 'tbx:lock-all', label: st.locked ? 'Unlock All Toolboxes' : 'Lock All Toolboxes' },
       { cmd: 'tbx:fold', label: st.places[def.id]?.collapsed ? 'Open Out' : 'Fold Up' },
       ...(def.id === 'custom' ? [{ cmd: 'tbx:customize', label: 'Choose What Is in It…' }] : []),
       { cmd: 'tbx:hide', label: def.id === 'details' ? 'Put Back at the Right Side' : `Hide ${def.title}` },
@@ -232,7 +287,8 @@ export class Toolboxes {
       key: () => undefined,
       run: (cmd) => {
         const what = cmd.slice(4);
-        if (what === 'lock') this.setLocked(!st.locked);
+        if (what === 'lock') this.setBoxLocked(def.id, !boxLocked(st, def.id));
+        else if (what === 'lock-all') this.setLocked(!st.locked);
         else if (what === 'hide') this.toggle(def.id, false);
         else if (what === 'fold') this.fold(def.id);
         else if (what === 'customize') this.hooks.customize();
@@ -246,7 +302,7 @@ export class Toolboxes {
 
   /** Drag a toolbox by its title: it follows the pointer, and the dock it would go to lights up. */
   private drag(id: string, f: HTMLElement, e: PointerEvent): void {
-    if (this.hooks.get().locked) return;
+    if (boxLocked(this.hooks.get(), id)) return;
     e.preventDefault();
     const r = f.getBoundingClientRect();
     const dx = e.clientX - r.left, dy = e.clientY - r.top;

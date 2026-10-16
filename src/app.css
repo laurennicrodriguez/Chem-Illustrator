@@ -182,10 +182,13 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
 .tb-grip { letter-spacing: -2px; }
 .tb-close { width: 18px; height: 18px; padding: 0; border: 0; background: none; color: var(--muted); font-size: 14px; line-height: 1; }
 .tb-close:hover { color: var(--text); }
-/* locked: docked toolboxes show no title (floating ones keep theirs, without the grab hand) */
-body.toolboxes-locked .toolbox:not(.floating) > .tb-head { display: none; }
-body.toolboxes-locked .tb-head { cursor: default; }
-body.toolboxes-locked .toolbox:not(.floating) + .toolbox { padding-top: 6px; }
+/* a locked docked toolbox shows no title (floating ones keep theirs, without the grab hand) */
+.toolbox.locked:not(.floating) > .tb-head { display: none; }
+.toolbox.locked > .tb-head { cursor: default; }
+.toolbox.locked:not(.floating) + .toolbox { padding-top: 6px; }
+/* docked down a side, the title bar takes the toolbox's width rather than widening it: the name on its own line */
+.toolbox.vertical:not(.floating) > .tb-head { contain: inline-size; flex-wrap: wrap; row-gap: 0; }
+.toolbox.vertical:not(.floating) > .tb-head > .tb-title { order: -1; flex-basis: 100%; white-space: normal; line-height: 1.2; }
 .tb-body { display: flex; flex-wrap: wrap; gap: 3px; align-items: flex-start; }
 .toolbox.vertical .tb-body { flex-direction: column; flex-wrap: nowrap; align-items: stretch; }
 .toolbox.vertical .tb-body.tb-grid { flex-direction: row; flex-wrap: wrap; max-width: 76px; }
