@@ -2672,6 +2672,12 @@ const COMMANDS: Record<string, () => unknown> = {
   'highlight': () => editor.highlight(highlightColour, highlightStyle) ? flash('Highlighted. Change the colour with Highlight in the Style panel.', 5000) : flash('Select the atoms and bonds to highlight.'),
   'remove-highlight': () => editor.highlight(undefined) || flash('Select the atoms and bonds to take the highlight off.'),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
+  'clean-up-arrow': () => {
+    const curved = [...editor.sel.arrows].some((id) => doc.arrows.get(id)?.sweep);
+    if (!curved) { flash('Select one or more curved (mechanism) arrows first.'); return; }
+    const n = editor.cleanUpArrows();
+    flash(n ? `Tidied ${n} arrow${n === 1 ? '' : 's'}.` : 'The arrows are already as tidy as they can be.');
+  },
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
   'arrange-scheme': () => arrangeDialog.open(),
   'number-compounds': () => void numberCompounds(),
@@ -4213,7 +4219,8 @@ function drawingMenu(): MenuItem[] {
         { cmd: 'pubchem-lookup' },
       ] },
     ] : []),
-    ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] }] : []),
+    ...([...s.arrows].some((id) => doc.arrows.get(id)?.sweep) ? [{ cmd: 'clean-up-arrow' }] : []),
+    ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'clean-up-arrow' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] }] : []),
     null,
     { cmd: 'add-frame' },
     ...(atoms ? [{ label: 'Label the Structure', items: [{ cmd: 'add-id-label' }, { cmd: 'add-caption' }, { cmd: 'attach-descriptors' }, null, { cmd: 'number-compounds' }] }] : []),

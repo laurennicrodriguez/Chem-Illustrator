@@ -8,14 +8,14 @@ This page covers Slides mode: building a deck, the slide master and templates, c
 
 Click **+ Slides** at the end of the tab strip, or choose **File ▸ New Slides**. While a deck is showing, Ctrl+N starts another one. Each open file has its own tab: Ctrl+Tab moves between tabs and Ctrl+W closes one.
 
-The Slides ribbon has three tabs: **Home**, **Transitions** and **Animations**. The **Slide** menu at the top holds the same commands.
+The Slides ribbon has PowerPoint's tabs: **Home** (slides, font, paragraph), **Insert** (pictures, text boxes, tables, shapes), **Design** (size, templates, slide master, drawing style), **Transitions**, **Animations** and **Slide Show**. The **Slide** menu at the top holds the same commands.
 
 ## Slides and layouts
 
 - **New slide:** Ctrl+M, **Home** tab ▸ **New Slide**, or **+ New slide** under the slide list. The new slide goes after the current one.
 - **Layout:** pick one from **Layout** on the **Home** tab or the **Slide** menu: Title Slide, Title and Content, Two Content, Title Only or Blank.
 - **Text:** click "Click to add title" (or any placeholder) and type. Lists and the chemistry typing helpers work as in any text box, so CH2Cl2 gets its subscripts.
-- **Slide size:** **Home** tab ▸ **Size**, or **Slide ▸ Widescreen (16:9)** / **Standard (4:3)**.
+- **Slide size:** **Design** tab ▸ **Size**, or **Slide ▸ Widescreen (16:9)** / **Standard (4:3)**.
 - **Speaker notes:** type them in the box under the slide. A slide with notes shows a small mark in the slide list.
 
 ### The slide list
@@ -32,7 +32,7 @@ The list down the left shows every slide.
 
 ## The slide master
 
-**Home** tab ▸ **Slide Master…** (or **Slide ▸ Slide Master…**) sets the look of every slide at once:
+**Design** tab ▸ **Slide Master…** (or **Slide ▸ Slide Master…**) sets the look of every slide at once:
 
 - **Background:** colour, the template's shapes and its accent colours.
 - **Title slides:** their own background and text colours, if you want them different.
@@ -45,25 +45,40 @@ Click **Apply to all slides**. Text you formatted by hand keeps its own formatti
 
 ## Design templates
 
-**Home** tab ▸ **Templates…** (or **Slide ▸ Templates…**) offers 21 ready-made looks in three groups: **Light**, **Dark title slide** and **Bright**. Picking one changes the fonts, colours, background and the shapes behind every slide. Your text, structures and pictures stay where they are, and Undo puts the old look back.
+**Design** tab ▸ **Templates…** (or **Slide ▸ Templates…**) offers 21 ready-made looks in three groups: **Light**, **Dark title slide** and **Bright**. Picking one changes the fonts, colours, background and the shapes behind every slide. Your text, structures and pictures stay where they are, and Undo puts the old look back.
 
 Tick **Also start new slide decks with the template I pick** to make it the starting look for new decks. You can change any part of a template afterwards with **Slide Master…**.
+
+## Text
+
+Click a placeholder or a text box to type in it. **Insert** tab ▸ **Text Box** makes a new one: click to type, or drag to make a box that wraps.
+
+The **Font** and **Paragraph** groups on the **Home** tab work as in PowerPoint. While you are typing they change the selected words (or what you type next); with a text box or a shape picked, they change all of its text at once.
+
+- **Font:** font, size, **A+** and **A−** (bigger and smaller in PowerPoint's steps), bold, italic, underline, subscript, superscript, formula style (CH₂Cl₂ with the numbers lowered) and colour.
+- **Paragraph:** bullets, numbering, list level (or indent), line spacing, and lining up left, centre, right or both edges.
+
+The small bar that appears above text while you type has the same buttons, plus Greek letters and symbols and the paragraph spacing.
+
+## Shapes
+
+**Insert** tab ▸ **Shapes** opens the shape library: basic shapes, block arrows, flowchart shapes, callouts and lab glassware. Type in its box to find one (for example "flask"). Click a shape, then click on the slide to place it at its usual size, or drag to draw it the size you want. Double-click a shape to type in it. Its fill, outline and text are in the **Style** panel, and shapes save to PowerPoint as PowerPoint's own shapes where it has a matching one.
 
 ## Structures on slides
 
 Every drawing tool in the toolbox works on a slide: draw structures, use the ChemDraw-style hotkeys, add reaction arrows, run Clean Up, and see R/S labels and warnings as you would in a drawing. You can also:
 
 - copy a scheme from a drawing tab (or from ChemDraw, in the Windows app) and paste it onto a slide, or the other way round;
-- choose how structures look on every slide with **Home** tab ▸ **Drawing Style…** (a journal's style, or your own);
+- choose how structures look on every slide with **Design** tab ▸ **Drawing Style…** (a journal's style, or your own);
 - click **Home** tab ▸ **Lock Structures** so clicks pass through structures, which makes text and pictures near them easier to pick. Click it again to edit structures.
 
 To put a drawing beside your slides while you work, see Split View in [Files and sharing](files-and-sharing.md).
 
 ## Pictures
 
-- **Add a picture:** **Home** tab ▸ **Picture**, paste one, or drag a file onto the slide.
+- **Add a picture:** **Insert** tab ▸ **Picture**, paste one, or drag a file onto the slide.
 - **Resize:** drag a corner. The **Style** panel on the right takes an exact width and height, with **Keep proportions** and **Original size**.
-- **Crop:** **Home** tab ▸ **Crop**, then drag the black handles and press Esc. The panel also takes exact crop amounts for each side, and **Uncrop** shows the whole picture again.
+- **Crop:** **Insert** tab ▸ **Crop**, then drag the black handles and press Esc. The panel also takes exact crop amounts for each side, and **Uncrop** shows the whole picture again.
 - **Spectra:** in the Windows app, a spectrum copied from MestReNova pastes as lines and text, so it stays sharp when you zoom. A spectrum saved as an .emf file works the same way with **Picture** or by dropping the file.
 
 ### Frames, rounded corners and shadows
@@ -72,7 +87,7 @@ Select a picture, then use the **Style** panel: **Frame style**, frame line and 
 
 ## Tables
 
-**Home** tab ▸ **Table** (or **Insert ▸ Table…**) puts an ACS-style table on the slide. Double-click a cell to type; Tab moves to the next cell. The **Style** panel adds and removes rows and columns, sets heading rows, lines, column widths, a title and footnotes. Cells copied from Excel, Word or a sheet paste as a new table.
+**Insert** tab ▸ **Table** (or **Insert ▸ Table…**) puts an ACS-style table on the slide. Double-click a cell to type; Tab moves to the next cell. The **Style** panel adds and removes rows and columns, sets heading rows, lines, column widths, a title and footnotes. Cells copied from Excel, Word or a sheet paste as a new table.
 
 ## Transitions
 
@@ -119,8 +134,8 @@ A reagent written over an arrow animates with its whole scheme, because the sche
 
 | To do this | Press |
 |---|---|
-| Start from the first slide | F5, or **Home** tab ▸ **From Beginning** |
-| Start from this slide | Shift+F5, or **Home** tab ▸ **From This Slide** |
+| Start from the first slide | F5, or **Slide Show** tab ▸ **From Beginning** |
+| Start from this slide | Shift+F5, or **Slide Show** tab ▸ **From This Slide** |
 | Next click or slide | Click, →, Space or Enter |
 | Back one click | ← or Backspace |
 | Jump to a slide | Type its number, then Enter |
@@ -131,7 +146,7 @@ Each click plays the next animation, then moves on to the next slide with its tr
 
 ### Presenter View
 
-**Slide ▸ Presenter View**, **Home** tab ▸ **Presenter View**, or Alt+F5.
+**Slide ▸ Presenter View**, **Slide Show** tab ▸ **Presenter View**, or Alt+F5.
 
 With a second screen or projector set to extend the desktop, the slides fill the second screen. Your own screen shows:
 

@@ -30,7 +30,7 @@ import { selectedGroup } from '../chem/group-smiles';
 import { circleRing, circleRings, kekulize } from '../chem/aromatic';
 import { bondLayer, crossingBonds } from '../chem/crossing';
 import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
-import { pushArrow, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
+import { bendSide, cleanUpArrow, isLonePair, pairOwner, pushArrow, pushEndAt, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
 import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
 import { attachWhereItIs, defaultGap, placeAttached, refitAttached } from './attached';
 import { frameAround, frameBox, frameMembers, refitFrames, defaultPad, thingsInside } from './frames';
@@ -637,6 +637,10 @@ export class Editor {
             const key = h.which === 'tail' ? 'from' : 'to';
             const port = this.portAt(p);
             patch = port ? { [h.which]: port.at, [key]: { shape: port.shape, port: port.port } } : { [h.which]: p, [key]: undefined };
+          } else if ((h.which === 'tail' || h.which === 'head') && r.sweep && !r.equilibrium && !e.altKey) {
+            // a curved arrow's end dropped on a lone pair, atom or bond snaps to it (Alt: anywhere)
+            const snap = this.snapPushEnd(r, h.which, p);
+            if (snap) patch = snap;
           }
           this.doc.updateArrow(h.id, patch);
         }
@@ -1191,15 +1195,75 @@ export class Editor {
   private pushFor(d: Drag, p: Vec): PushArrow | null {
     const t = this.tool;
     if (t.kind !== 'arrow' || !t.style.sweep || d.alt) return null;
-    const endOf = (h: Hit, at: Vec): PushEnd => (h && (h.kind === 'atom' || h.kind === 'bond') ? { kind: h.kind, id: h.id } : { kind: 'point', p: at });
+    const endOf = (h: Hit, at: Vec): PushEnd => {
+      if (h && (h.kind === 'atom' || h.kind === 'bond')) return { kind: h.kind, id: h.id };
+      // a drawn lone pair: the arrow starts from it (and one ending on it points at its atom)
+      if (h?.kind === 'shape' && isLonePair(this.doc.shapes.get(h.id))) return { kind: 'pair', id: h.id };
+      return { kind: 'point', p: at };
+    };
     const from = endOf(d.hit, d.start);
     let to = endOf(this.hitTest(p), p);
+    if (to.kind === 'pair') { const o = pairOwner(this.doc, this.doc.shapes.get(to.id)!); to = o !== null ? { kind: 'atom', id: o } : { kind: 'point', p }; }
     if (from.kind === 'point' && to.kind === 'point') return null;
     if (to.kind !== 'point' && from.kind === to.kind && (from as { id: number }).id === to.id) to = { kind: 'point', p };
     if (to.kind === 'point' && dist(p, d.start) < this.tol(6)) return null;
     // a swing of the pointer chooses the bend; otherwise it bends away from the structure
     const a = from.kind === 'point' ? from.p : d.start;
     return pushArrow(this.doc, this.measure(), from, to, this.swing(d, a, p));
+  }
+
+  /** A curved arrow with one end dragged to `p`: snapped to the lone pair, atom or bond there, keeping its bend; null when there is nothing there. */
+  private snapPushEnd(r: Arrow, which: 'tail' | 'head', p: Vec): Partial<Arrow> | null {
+    const doc = this.doc;
+    const m = this.measure();
+    let here = pushEndAt(doc, m, p);
+    if (here.kind === 'point') return null;
+    if (which === 'head' && here.kind === 'pair') { const o = pairOwner(doc, doc.shapes.get(here.id)!); if (o === null) return null; here = { kind: 'atom', id: o }; }
+    const other = pushEndAt(doc, m, which === 'tail' ? r.head : r.tail);
+    const from = which === 'tail' ? here : other;
+    let to = which === 'head' ? here : other;
+    if (to.kind === 'pair') { const o = pairOwner(doc, doc.shapes.get(to.id)!); to = o !== null ? { kind: 'atom', id: o } : { kind: 'point', p: r.head }; }
+    if (to.kind !== 'point' && from.kind === to.kind && (from as { id: number }).id === to.id) return null;
+    // keep the side it bends to
+    const push = pushArrow(doc, m, from, to, bendSide(r));
+    if (!push) return null;
+    const patch: Partial<Arrow> = { tail: push.tail, head: push.head, sweep: push.sweep };
+    if (Math.sign(push.sweep) !== Math.sign(r.sweep)) {
+      const swap = (x: Arrow['headStyle']) => (x === 'halfLeft' ? 'halfRight' : x === 'halfRight' ? 'halfLeft' : x);
+      patch.headStyle = swap(r.headStyle);
+      patch.tailStyle = swap(r.tailStyle);
+    }
+    return patch;
+  }
+
+  /**
+   * Clean Up Arrow: each picked curved arrow redrawn from the lone pair, bond or atom its tail is
+   * on to the atom or bond its head points at, on the side and at the curl that keep it clear of
+   * the structure. Gives how many arrows changed.
+   */
+  cleanUpArrows(): number {
+    const doc = this.doc;
+    const lw = doc.style.lineWidth;
+    const m = this.measure();
+    const arrows = [...this.sel.arrows].map((id) => doc.arrows.get(id)).filter((r): r is Arrow => !!r && !!r.sweep && !r.equilibrium && !r.elbow);
+    const plans = arrows.map((r) => ({ r, push: cleanUpArrow(doc, m, r) })).filter((x): x is { r: Arrow; push: PushArrow } => !!x.push);
+    const changed = plans.filter(({ r, push }) => dist(r.tail, push.tail) > 0.01 || dist(r.head, push.head) > 0.01 || Math.abs(r.sweep - push.sweep) > 1e-4);
+    if (!changed.length) return 0;
+    doc.edit('Clean up arrow', () => {
+      for (const { r, push } of changed) {
+        const patch: Partial<Arrow> = { tail: push.tail, head: push.head, sweep: push.sweep };
+        // a half head (fishhook) keeps its barb on the outside of the curve
+        if (Math.sign(push.sweep) !== Math.sign(r.sweep)) {
+          const swap = (h: Arrow['headStyle']) => (h === 'halfLeft' ? 'halfRight' : h === 'halfRight' ? 'halfLeft' : h);
+          patch.headStyle = swap(r.headStyle);
+          patch.tailStyle = swap(r.tailStyle);
+        }
+        if (push.small) Object.assign(patch, { headLength: lw * SMALL_HEAD.length, headWidth: lw * SMALL_HEAD.width });
+        doc.updateArrow(r.id, patch);
+      }
+    });
+    this.changed();
+    return changed.length;
   }
 
   /** The box, circle or line a shape tool draws for a drag from a to b (Shift: square or circle). */
