@@ -318,24 +318,42 @@ export function cropTo(s: Shape, crop: { l: number; t: number; r: number; b: num
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 /** A picture resized from a corner keeps its proportions (unless `free`); from an edge it stretches. */
-function dragPictureHandle(s: Shape, which: HandleId, p: Vec, free: boolean): Partial<Shape> {
+function dragPictureHandle(s: Shape, which: HandleId, p: Vec, free: boolean, how: ResizeHow): Partial<Shape> {
   const x1 = Math.min(s.x1, s.x2), x2 = Math.max(s.x1, s.x2), y1 = Math.min(s.y1, s.y2), y2 = Math.max(s.y1, s.y2);
-  if (free || which.length === 1) return stretch(x1, y1, x2, y2, which, p);
-  const ox = which.includes('w') ? x2 : x1, oy = which.includes('n') ? y2 : y1;
-  const w0 = x2 - x1, h0 = y2 - y1;
-  // the larger of the two stretches decides the new size
-  const k = Math.max(0.01, Math.max(Math.abs(p.x - ox) / w0, Math.abs(p.y - oy) / h0));
-  const w = w0 * k, h = h0 * k;
-  const nx1 = which.includes('w') ? ox - w : ox, ny1 = which.includes('n') ? oy - h : oy;
-  return { x1: nx1, y1: ny1, x2: nx1 + w, y2: ny1 + h };
+  // a picture keeps its proportions unless Alt is held (Shift keeps them even then)
+  return resizeBox({ x1, y1, x2, y2 }, which, p, { keep: !free || !!how.keep, centre: how.centre });
 }
 
-function stretch(x1: number, y1: number, x2: number, y2: number, which: HandleId, p: Vec): Partial<Shape> {
-  if (which.includes('w')) x1 = p.x;
-  if (which.includes('e')) x2 = p.x;
-  if (which.includes('n')) y1 = p.y;
-  if (which.includes('s')) y2 = p.y;
-  return { x1: Math.min(x1, x2), x2: Math.max(x1, x2), y1: Math.min(y1, y2), y2: Math.max(y1, y2) };
+/** How a resize handle drags: keeping the proportions (Shift), and about the middle (Ctrl). */
+export interface ResizeHow {
+  keep?: boolean;
+  centre?: boolean;
+}
+
+/**
+ * A box resized by dragging one of its handles to `p`. The opposite side stays put, or the
+ * middle does with `centre`. With `keep`, a corner keeps the box's proportions (the larger
+ * stretch decides the size). A side or corner dragged past the opposite one turns the box over.
+ */
+export function resizeBox(r: Rect, which: HandleId, p: Vec, how: ResizeHow = {}): Rect {
+  const hx = which.includes('w') ? -1 : which.includes('e') ? 1 : 0;
+  const hy = which.includes('n') ? -1 : which.includes('s') ? 1 : 0;
+  const cx = (r.x1 + r.x2) / 2, cy = (r.y1 + r.y2) / 2;
+  // where each moving side is measured from, and how much of the box that distance spans
+  const ax = how.centre ? cx : hx < 0 ? r.x2 : r.x1, ay = how.centre ? cy : hy < 0 ? r.y2 : r.y1;
+  const part = how.centre ? 0.5 : 1;
+  let dx = p.x - ax, dy = p.y - ay;
+  if (how.keep && hx && hy) {
+    const w0 = Math.max(1e-6, (r.x2 - r.x1) * part), h0 = Math.max(1e-6, (r.y2 - r.y1) * part);
+    const k = Math.max(0.01, Math.abs(dx) / w0, Math.abs(dy) / h0);
+    dx = hx * w0 * k;
+    dy = hy * h0 * k;
+  }
+  const span = (a: number, d: number, lo: number, hi: number, moving: number): [number, number] =>
+    !moving ? [lo, hi] : how.centre ? [a - Math.abs(d), a + Math.abs(d)] : [Math.min(a, a + d), Math.max(a, a + d)];
+  const [x1, x2] = span(ax, dx, r.x1, r.x2, hx);
+  const [y1, y2] = span(ay, dy, r.y1, r.y2, hy);
+  return { x1, y1, x2, y2 };
 }
 
 /** End point `p` seen from `from`, with the angle snapped to 15° unless `free`. */
@@ -368,23 +386,21 @@ export function dragArrowHandle(r: Arrow, which: HandleId, p: Vec, free: boolean
 }
 
 /** What dragging a shape's handle to `p` changes. `free` (Alt) turns off angle snapping for lines. */
-export function dragShapeHandle(s: Shape, which: HandleId, p: Vec, free: boolean): Partial<Shape> {
+export function dragShapeHandle(s: Shape, which: HandleId, p: Vec, free: boolean, how: ResizeHow = {}): Partial<Shape> {
   if (which === 'p1') { const q = snapEnd({ x: s.x2, y: s.y2 }, p, free); return { x1: q.x, y1: q.y }; }
   if (which === 'p2') { const q = snapEnd({ x: s.x1, y: s.y1 }, p, free); return { x2: q.x, y2: q.y }; }
-  if (s.kind === 'picture') return dragPictureHandle(s, which, p, free);
-  let x1 = Math.min(s.x1, s.x2), x2 = Math.max(s.x1, s.x2), y1 = Math.min(s.y1, s.y2), y2 = Math.max(s.y1, s.y2);
+  if (s.kind === 'picture') return dragPictureHandle(s, which, p, free, how);
+  const box = { x1: Math.min(s.x1, s.x2), x2: Math.max(s.x1, s.x2), y1: Math.min(s.y1, s.y2), y2: Math.max(s.y1, s.y2) };
   if (isCircle(s)) {
-    // resize about the opposite corner, keeping it round
-    const ox = which.includes('w') ? x2 : x1, oy = which.includes('n') ? y2 : y1;
+    // resize about the opposite corner (or the middle), keeping it round
+    const ox = how.centre ? (box.x1 + box.x2) / 2 : which.includes('w') ? box.x2 : box.x1;
+    const oy = how.centre ? (box.y1 + box.y2) / 2 : which.includes('n') ? box.y2 : box.y1;
     const d = Math.max(1, Math.max(Math.abs(p.x - ox), Math.abs(p.y - oy)));
+    if (how.centre) return { x1: ox - d, x2: ox + d, y1: oy - d, y2: oy + d };
     const sx = p.x < ox ? -1 : 1, sy = p.y < oy ? -1 : 1;
     return { x1: Math.min(ox, ox + sx * d), x2: Math.max(ox, ox + sx * d), y1: Math.min(oy, oy + sy * d), y2: Math.max(oy, oy + sy * d) };
   }
-  if (which.includes('w')) x1 = p.x;
-  if (which.includes('e')) x2 = p.x;
-  if (which.includes('n')) y1 = p.y;
-  if (which.includes('s')) y2 = p.y;
-  return { x1: Math.min(x1, x2), x2: Math.max(x1, x2), y1: Math.min(y1, y2), y2: Math.max(y1, y2) };
+  return resizeBox(box, which, p, how);
 }
 
 /** Two brackets, facing each other, on the left and right edges of a box. */

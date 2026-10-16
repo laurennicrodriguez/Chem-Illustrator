@@ -30,6 +30,11 @@ export function snapAngle(a: number, step = 15 * DEG): number {
   return Math.round(a / step) * step;
 }
 
+/** A move kept straight across or straight up and down, whichever it is closer to. */
+export function lockAxis(v: Vec): Vec {
+  return Math.abs(v.x) >= Math.abs(v.y) ? { x: v.x, y: 0 } : { x: 0, y: v.y };
+}
+
 /** Distance from point p to segment ab. */
 export function distToSegment(p: Vec, a: Vec, b: Vec): number {
   const ab = sub(b, a);

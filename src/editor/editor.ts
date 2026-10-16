@@ -11,7 +11,7 @@ import { cleanUpMoves } from '../chem/cleanup';
 import { Renderer, measureText } from '../render/renderer';
 import { ASCENT } from '../text/layout';
 import { cellAlign, insertRow, nextCell, partAt, partRuns, setColumnWidth, setPart, spanOf, NOTE_SCALE, type TablePart } from '../table';
-import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG, exitParam } from '../geom';
+import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG, exitParam, lockAxis } from '../geom';
 import {
   sproutDir, sprout, bondTo, bondLength, atomAt, freeRing, fusedRing, fuseSide, ringOnAtom,
   placeRing, chainPoints, chainFrom, MERGE_FRACTION,
@@ -43,6 +43,7 @@ import {
 import { isEmptyText } from '../deck/deck';
 import { crossedBonds, lineAcross } from '../chem/fragments';
 import { imageFor } from '../render/images';
+import { ROTATE, handleCursor, pointerFor } from './cursors';
 
 export type Tool =
   | { kind: 'select' }
@@ -176,12 +177,24 @@ interface Drag {
   path?: Vec[];
   /** Rotating the selection: what it looked like before, the centre, and the angle so far. */
   rot?: { snap: Snapshot; center: Vec; from: number; angle: number };
-  /** Moving with smart guides: the selection's box when the move began, and how far it has gone. */
-  guide?: { box: Rect; moved: Vec; targets: Rect[] };
+  /** Moving with smart guides: the selection's box when the move began, and what it lines up with. */
+  guide?: { box: Rect; targets: Rect[] };
+  /** How far the selection has been moved so far. */
+  applied?: Vec;
 }
 
 const HILITE = 'rgba(40, 120, 255, 0.28)';
 const PREVIEW = '#2f6fdf';
+
+/**
+ * Colours of the marks drawn over the page. With View > Dark Page on, the marks go through the
+ * page's colour filter too (so text being typed shows in the ink colour), which turns lightness
+ * round: these are picked to come out bright and clear on the dark page.
+ */
+const MARKS = {
+  light: { selFill: 'rgba(40, 120, 255, 0.18)', selLine: 'rgba(40, 120, 255, 0.35)', hot: HILITE, box: 'rgba(47, 111, 223, 0.55)', hover: 'rgba(40,120,255,0.7)', marquee: '#333', next: '#19a34a' },
+  dark: { selFill: 'rgba(0, 70, 190, 0.34)', selLine: 'rgba(0, 70, 190, 0.6)', hot: 'rgba(0, 70, 190, 0.5)', box: 'rgba(0, 60, 158, 0.9)', hover: 'rgba(0, 60, 158, 0.95)', marquee: '#000', next: '#0b6b2f' },
+};
 
 export class Editor {
   tool: Tool = TOOLS['bond-single'];
@@ -278,6 +291,10 @@ export class Editor {
       else if (!this.rightDragged) this.onContextMenu(e);
     });
     window.addEventListener('keydown', (e) => this.onKey(e));
+    // holding Ctrl over the selection shows that a drag will copy it
+    const ctrlKey = (e: KeyboardEvent) => { if (e.key === 'Control' || e.key === 'Meta') this.showPointer(e.type === 'keydown'); };
+    window.addEventListener('keydown', ctrlKey);
+    window.addEventListener('keyup', ctrlKey);
     // frames that follow what they surround are refitted as each change finishes
     doc.beforeCommit = (before) => {
       let frames = false, rings = false, tied = false;
@@ -345,6 +362,7 @@ export class Editor {
     this.tool = t;
     this.toolName = name;
     this.onToolChange(name);
+    this.showPointer(false);
     this.requestOverlay();
   }
 
@@ -528,11 +546,8 @@ export class Editor {
         if (!h) this.keyHotHover = null;
         else if (!sameHit(h, this.keyHotHover)) this.keyHot = null;
       }
-      // a hand over what is selected: dragging there moves it
-      const movable = !!h && this.tool.kind !== 'eraser' && this.isSelected(h);
-      // in Slides and Design, text boxes show an I-beam: a click there types, a drag moves the box
-      const typing = this.textFirst && this.tool.kind === 'select' && h?.kind === 'caption';
-      this.r.overlay.style.cursor = onRotate ? 'grab' : handle ? (handle.which === 'mid' ? 'grab' : 'crosshair') : typing ? 'text' : movable ? 'grab' : '';
+      this.lastHover = { onRotate, handle, h };
+      this.showPointer(e.ctrlKey || e.metaKey);
       this.requestOverlay(e.timeStamp);
       return;
     }
@@ -544,14 +559,22 @@ export class Editor {
       if (d.mode === 'handle') this.doc.begin(d.handle!.which === 'mid' ? 'Bend arrow' : this.cropping === d.handle!.id ? 'Crop picture' : 'Resize');
       if (d.mode === 'rotate') this.doc.begin('Rotate');
       if (d.mode === 'move') {
-        this.r.overlay.style.cursor = 'grabbing';
-        this.doc.begin('Move');
+        this.r.overlay.style.cursor = d.ctrl ? 'copy' : 'grabbing';
+        this.doc.begin(d.ctrl ? 'Copy' : 'Move');
         if (d.hit && !this.isSelected(d.hit)) {
-          // dragging an unselected atom or object moves just that
+          // dragging an unselected atom or object moves just that (a copy takes its whole structure)
           this.sel = emptySel();
-          this.addToSel(d.hit);
+          if (d.ctrl && (d.hit.kind === 'atom' || d.hit.kind === 'bond')) this.selectFragment(d.hit.kind === 'atom' ? d.hit.id : this.doc.bonds.get(d.hit.id)!.a1, false);
+          else this.addToSel(d.hit);
+        }
+        // Ctrl+drag: a copy goes with the pointer and the original stays where it was
+        if (d.ctrl) {
+          const part = extractDrawing(this.doc, this.sel);
+          const pb = part.bounds();
+          if (pb) this.sel = insertDrawing(this.doc, part, { x: (pb.x1 + pb.x2) / 2, y: (pb.y1 + pb.y2) / 2 }, 'Copy');
         }
       }
+      if (d.mode === 'pan') this.r.overlay.style.cursor = 'grabbing';
     }
     if (!d.moved) return;
     if (d.mode === 'pan') {
@@ -560,28 +583,29 @@ export class Editor {
       this.requestScene(e.timeStamp);
       return;
     }
-    if (d.mode === 'move' && this.smartGuides && !e.altKey) {
-      // smart guides: edges and middles snap into line with other shapes and the page
-      if (!d.guide) {
-        // (measured where the drag started: Alt may have moved the selection already)
-        const box = this.selBox(), done = sub(d.last, d.start);
-        if (box) d.guide = { box: { x1: box.x1 - done.x, y1: box.y1 - done.y, x2: box.x2 - done.x, y2: box.y2 - done.y }, moved: done, targets: this.guideTargets() };
-      }
-      if (d.guide) {
-        const g = guideSnap(d.guide.box, sub(p, d.start), d.guide.targets, this.tol(6));
-        this.moveSelection(g.offset.x - d.guide.moved.x, g.offset.y - d.guide.moved.y);
-        d.guide.moved = g.offset;
-        this.guideLines = g.lines;
-        d.last = p;
-        this.requestScene(e.timeStamp);
-        return;
-      }
-    }
     if (d.mode === 'move') {
-      const dx = p.x - d.last.x, dy = p.y - d.last.y;
-      this.moveSelection(dx, dy);
-      // (with Alt held the guides are off, but they count this move when Alt is let go)
-      if (d.guide) d.guide.moved = { x: d.guide.moved.x + dx, y: d.guide.moved.y + dy };
+      // Shift keeps the move straight across or straight up and down from where it started
+      const want = e.shiftKey ? lockAxis(sub(p, d.start)) : sub(p, d.start);
+      const done = d.applied ?? { x: 0, y: 0 };
+      let to = want;
+      this.guideLines = [];
+      // smart guides: edges and middles snap into line with other shapes and the page (Alt: off)
+      if (this.smartGuides && !e.altKey) {
+        if (!d.guide) {
+          // (measured where the drag started: Alt may have moved the selection already)
+          const box = this.selBox();
+          if (box) d.guide = { box: { x1: box.x1 - done.x, y1: box.y1 - done.y, x2: box.x2 - done.x, y2: box.y2 - done.y }, targets: this.guideTargets() };
+        }
+        if (d.guide) {
+          const g = guideSnap(d.guide.box, want, d.guide.targets, this.tol(6));
+          const across = want.y === 0 && e.shiftKey, upDown = want.x === 0 && e.shiftKey;
+          to = { x: upDown ? 0 : g.offset.x, y: across ? 0 : g.offset.y };
+          // (a straight move keeps only the guides along its way)
+          this.guideLines = g.lines.filter((l) => !(across && l.y1 === l.y2 && l.x1 !== l.x2) && !(upDown && l.x1 === l.x2 && l.y1 !== l.y2));
+        }
+      }
+      this.moveSelection(to.x - done.x, to.y - done.y);
+      d.applied = to;
       d.last = p;
       this.requestScene(e.timeStamp);
       return;
@@ -590,8 +614,8 @@ export class Editor {
       const r = d.rot!;
       let ang = angleOf(sub(p, r.center)) - r.from;
       ang = Math.atan2(Math.sin(ang), Math.cos(ang));
-      // Shift turns in 15° steps
-      ang = e.shiftKey ? snapAngle(ang) : Math.round(ang / DEG) * DEG;
+      // Shift or Alt turns in 15° steps
+      ang = e.shiftKey || e.altKey ? snapAngle(ang) : Math.round(ang / DEG) * DEG;
       r.angle = ang;
       transform(this.doc, r.snap, rotation(r.center, ang), false);
       d.last = p;
@@ -614,7 +638,7 @@ export class Editor {
         }
       } else {
         const sh = this.doc.shapes.get(h.id);
-        if (sh) this.doc.updateShape(h.id, this.cropping === h.id ? dragCropHandle(sh, h.which, p) : dragShapeHandle(sh, h.which, p, e.altKey));
+        if (sh) this.doc.updateShape(h.id, this.cropping === h.id ? dragCropHandle(sh, h.which, p) : dragShapeHandle(sh, h.which, p, e.altKey, { keep: e.shiftKey, centre: e.ctrlKey || e.metaKey }));
       }
       d.last = p;
       this.requestScene(e.timeStamp);
@@ -655,6 +679,7 @@ export class Editor {
     const d = this.drag;
     this.drag = null;
     if (!d) return;
+    if (d.moved) this.showPointer(e.ctrlKey || e.metaKey);
     const p = this.docPoint(e);
     if (d.mode === 'text') { this.captionEd?.pointerUp(); return; }
     if (d.button === 2) {
@@ -793,10 +818,12 @@ export class Editor {
       case 'select': {
         // an empty title or text placeholder takes typing straight away, as in PowerPoint
         const c = h?.kind === 'caption' ? doc.captions.get(h.id) : undefined;
-        if (c?.ph && isEmptyText(c) && !d.shift) { this.sel = emptySel(); this.editCaption(c.id); return; }
+        const adding = d.shift || d.ctrl;
+        if (c?.ph && isEmptyText(c) && !adding) { this.sel = emptySel(); this.editCaption(c.id); return; }
         // in Slides and Design a click in a text box puts the caret there, as in PowerPoint
-        if (c && this.textFirst && !d.shift) { this.sel = emptySel(); this.editCaption(c.id, this.clientPoint(p)); return; }
-        if (!d.shift) this.sel = emptySel();
+        if (c && this.textFirst && !adding) { this.sel = emptySel(); this.editCaption(c.id, this.clientPoint(p)); return; }
+        // Shift+click or Ctrl+click adds to the selection, or takes out what is already in it
+        if (!adding) this.sel = emptySel();
         if (h) this.toggleSel(h);
         if (h?.kind === 'shape') this.noteTablePart(h.id, p);
         if (this.cropping !== null && !this.sel.shapes.has(this.cropping)) this.cropping = null;
@@ -2539,6 +2566,27 @@ export class Editor {
   smartGuides = false;
   /** Text boxes take a click as typing (Slides and Design), with an I-beam over them. */
   textFirst = false;
+  /** View > Dark Page is on: marks drawn over the page are made to show up on it. */
+  dark = false;
+
+  /** What the pointer was last over (to change the pointer when Ctrl is pressed or let go). */
+  private lastHover: { onRotate: boolean; handle: Handle | null; h: Hit } | null = null;
+
+  /** Show the pointer that says what a click or drag will do where the mouse is. */
+  private showPointer(ctrl: boolean): void {
+    const o = this.lastHover;
+    if (!o || this.drag) return;
+    const { onRotate, handle, h } = o;
+    this.r.overlay.style.cursor = onRotate ? ROTATE : handle ? handleCursor(handle.which) : pointerFor({
+      tool: this.tool.kind,
+      over: !h ? null : h.kind === 'atom' || h.kind === 'bond' ? 'chem' : 'object',
+      overSelection: !!h && this.isSelected(h),
+      ctrl,
+      slides: this.textFirst,
+      // in Slides and Design, text boxes show an I-beam: a click there types, a drag moves the box
+      typing: this.textFirst && this.tool.kind === 'select' && h?.kind === 'caption',
+    });
+  }
   /** Structures ignore clicks and box selection, so text near them is easy to work on (Slides). */
   structuresLocked = false;
   /** The guide lines shown while moving. */
@@ -2793,11 +2841,12 @@ export class Editor {
     const doc = this.doc;
     const scale = this.r.view.scale;
     const px = 1 / scale;
+    const mk = this.dark ? MARKS.dark : MARKS.light;
     // selection
     const s = this.sel;
     if (s.atoms.size || s.bonds.size || s.captions.size || s.arrows.size || s.shapes.size) {
-      ctx.fillStyle = 'rgba(40, 120, 255, 0.18)';
-      ctx.strokeStyle = 'rgba(40, 120, 255, 0.35)';
+      ctx.fillStyle = mk.selFill;
+      ctx.strokeStyle = mk.selLine;
       ctx.lineCap = 'round';
       const L = doc.style.bondLength;
       ctx.lineWidth = L * 0.22;
@@ -2834,8 +2883,8 @@ export class Editor {
     // hotspot
     const h = this.drag?.mode === 'move' || this.drag?.mode === 'rotate' ? null : this.hotspot();
     if (h) {
-      ctx.fillStyle = HILITE;
-      ctx.strokeStyle = HILITE;
+      ctx.fillStyle = mk.hot;
+      ctx.strokeStyle = mk.hot;
       if (h.kind === 'atom') {
         const a = doc.atoms.get(h.id);
         if (a) {
@@ -2845,7 +2894,7 @@ export class Editor {
           ctx.fill();
           // a green dot where 1 would grow the next bond, as in ChemDraw
           const dot = add(a, mul(sproutDir(doc, a.id), bondLength(doc, a) * 0.46));
-          ctx.fillStyle = '#19a34a';
+          ctx.fillStyle = mk.next;
           ctx.beginPath();
           ctx.arc(dot.x, dot.y, Math.max(0.9, 2.6 * px), 0, Math.PI * 2);
           ctx.fill();
@@ -2869,7 +2918,7 @@ export class Editor {
         }
       } else if (h.kind === 'caption') {
         const c = doc.captions.get(h.id);
-        if (c) { const r = this.r.captionBox(c); ctx.lineWidth = px; ctx.strokeStyle = 'rgba(40,120,255,0.7)'; ctx.strokeRect(r.x1 - 1, r.y1 - 1, r.x2 - r.x1 + 2, r.y2 - r.y1 + 2); }
+        if (c) { const r = this.r.captionBox(c); ctx.lineWidth = px; ctx.strokeStyle = mk.hover; ctx.strokeRect(r.x1 - 1, r.y1 - 1, r.x2 - r.x1 + 2, r.y2 - r.y1 + 2); }
       } else if (h.kind === 'arrow') {
         const r = doc.arrows.get(h.id);
         if (r) { ctx.lineWidth = doc.style.bondLength * 0.2; ctx.lineCap = 'round'; strokeAlong(ctx, arrowPoints(r)); }
@@ -2925,7 +2974,7 @@ export class Editor {
     if (rh) {
       const b = this.selBox()!;
       ctx.lineWidth = px;
-      ctx.strokeStyle = 'rgba(47, 111, 223, 0.55)';
+      ctx.strokeStyle = mk.box;
       ctx.setLineDash([3 * px, 3 * px]);
       ctx.strokeRect(b.x1 - 2 * px, b.y1 - 2 * px, b.x2 - b.x1 + 4 * px, b.y2 - b.y1 + 4 * px);
       ctx.setLineDash([]);
@@ -2976,7 +3025,7 @@ export class Editor {
       if (d.mode === 'marquee') {
         ctx.setLineDash([4 * px, 3 * px]);
         ctx.lineWidth = px;
-        ctx.strokeStyle = '#333';
+        ctx.strokeStyle = mk.marquee;
         ctx.strokeRect(Math.min(d.start.x, d.last.x), Math.min(d.start.y, d.last.y), Math.abs(d.last.x - d.start.x), Math.abs(d.last.y - d.start.y));
         ctx.setLineDash([]);
       } else if (d.mode === 'draw') {
