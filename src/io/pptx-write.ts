@@ -11,7 +11,7 @@
 // file's slide master and theme, so PowerPoint's own placeholders follow them too.
 
 import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, applyBase, PICTURE_SHADOWS, type Pattern, type PictureLook } from '../model';
-import type { Rect } from '../geom';
+import { turnAbout, type Rect } from '../geom';
 import { layoutText, ASCENT, FONT_STACK, type Measure } from '../text/layout';
 import { fitParas, listMarkers, splitParagraphs } from '../text/paragraphs';
 import { formulaParts } from '../richtext';
@@ -657,7 +657,15 @@ class Writer {
     const top = c.y - PPT_ASCENT * firstSize;
     const width = c.wrap ?? lay.boxWidth;
     const height = c.ph && c.boxH ? Math.max(c.boxH, lay.box.y2 - lay.box.y1) : (lay.box.y2 - (lay.lines[0]?.y ?? 0)) + PPT_ASCENT * firstSize + 0.1 * firstSize;
-    const box = { x1: c.x, y1: top, x2: c.x + Math.max(width, 1), y2: top + height };
+    let box = { x1: c.x, y1: top, x2: c.x + Math.max(width, 1), y2: top + height };
+    // where the text starts in its box; turned text: the box moved so that PowerPoint, turning it
+    // about its middle, puts the text where it is here (turned about where it starts)
+    const o = [+(c.x - box.x1).toFixed(3), +(c.y - box.y1).toFixed(3)];
+    if (c.rot) {
+      const mid = { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 };
+      const to = turnAbout(mid, c, c.rot);
+      box = { x1: box.x1 + to.x - mid.x, y1: box.y1 + to.y - mid.y, x2: box.x2 + to.x - mid.x, y2: box.y2 + to.y - mid.y };
+    }
     const explicit = c.ph ? null : { size: doc.style.captionSize, font: doc.style.captionFont || 'Arial' };
     const body = isEmptyText(c) && c.ph ? `<a:p><a:endParaRPr ${lang} dirty="0"/></a:p>` : paragraphsXml(c, explicit, base?.size ?? doc.style.captionSize, this.measure);
     const wrap = c.wrap !== undefined || c.ph ? 'square' : 'none';
@@ -666,7 +674,7 @@ class Writer {
     // the caption's exact settings, used when it comes back unchanged from PowerPoint
     const plain = c.runs.map((r) => r.text).join('');
     const at = [box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1].map((v) => +v.toFixed(2));
-    const tag = this.addTags(path, { [TAG.text]: JSON.stringify({ c: { ...c, id: undefined }, plain, at }), ...more });
+    const tag = this.addTags(path, { [TAG.text]: JSON.stringify({ c: { ...c, id: undefined }, plain, at, o }), ...more });
     let ph = '';
     if (c.ph) {
       const k = c.ph === 'title' ? 'title' : 'body';
@@ -681,7 +689,8 @@ class Writer {
       ? `<p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr>${ph}<p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvSpPr>`
       : `<p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr txBox="1"/><p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvSpPr>`;
     const geom = ph ? '' : '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/>';
-    return `<p:sp>${nvSp}<p:spPr>${xfrm(box)}${geom}</p:spPr><p:txBody>${bodyPr}<a:lstStyle/>${body}</p:txBody></p:sp>`;
+    const rot = c.rot ? ` rot="${Math.round((((c.rot % 360) + 360) % 360) * 60000)}"` : '';
+    return `<p:sp>${nvSp}<p:spPr>${xfrm(box, rot)}${geom}</p:spPr><p:txBody>${bodyPr}<a:lstStyle/>${body}</p:txBody></p:sp>`;
   }
 
   /**

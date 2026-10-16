@@ -3,7 +3,7 @@
 // part of a structure moves.
 
 import { Doc, Atom, Caption, Bond, Arrow, Shape } from '../model';
-import { Vec, Rect, add, sub } from '../geom';
+import { Vec, Rect, add, sub, normDegrees } from '../geom';
 import { arrowPoints, boxOf, shapeBox, unionRect } from '../objects';
 import { frameMembers } from './frames';
 
@@ -184,16 +184,24 @@ export function snapshot(doc: Doc, sel: Selection, m: Measure): Snapshot {
  * their second line on the same side, curved arrows bend the other way and brackets keep
  * facing in. Call inside an edit.
  */
-export function transform(doc: Doc, snap: Snapshot, f: (p: Vec) => Vec, mirror: boolean): void {
+export function transform(doc: Doc, snap: Snapshot, f: (p: Vec) => Vec, mirror: boolean, turn?: TurnText): void {
   for (const a of snap.atoms) { const p = f(a); doc.updateAtom(a.id, { x: p.x, y: p.y }); }
   if (mirror) {
     const side: Record<Bond['dpos'], Bond['dpos']> = { auto: 'auto', center: 'center', left: 'right', right: 'left' };
     for (const b of snap.bonds) if (b.dpos === 'left' || b.dpos === 'right') doc.updateBond(b.id, { dpos: side[b.dpos] });
   }
   for (const { c, box } of snap.captions) {
+    // text that turns with the selection turns about its own start, which goes where it is taken
+    if (turn && turn.which(c)) {
+      const p = f(c);
+      const rot = normDegrees((c.rot ?? 0) + turn.deg);
+      doc.updateCaption(c.id, { x: p.x, y: p.y, rot: Math.abs(rot) < 1e-9 ? undefined : rot });
+      continue;
+    }
     const mid = { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 };
     const d = sub(f(mid), mid);
-    doc.updateCaption(c.id, { x: c.x + d.x, y: c.y + d.y });
+    // turned text stays readable in a mirror image, leaning the other way
+    doc.updateCaption(c.id, { x: c.x + d.x, y: c.y + d.y, ...(mirror && c.rot ? { rot: -c.rot } : {}) });
   }
   const half = (h: Arrow['headStyle']): Arrow['headStyle'] => (h === 'halfLeft' ? 'halfRight' : h === 'halfRight' ? 'halfLeft' : h);
   for (const r of snap.arrows) {
@@ -216,6 +224,12 @@ export function transform(doc: Doc, snap: Snapshot, f: (p: Vec) => Vec, mirror: 
       doc.updateShape(s.id, { x1: s.x1 + d.x, y1: s.y1 + d.y, x2: s.x2 + d.x, y2: s.y2 + d.y });
     }
   }
+}
+
+/** A turn of the selection that turns text too: by how much (degrees clockwise), and which text. */
+export interface TurnText {
+  deg: number;
+  which: (c: Caption) => boolean;
 }
 
 export const rotation = (c: Vec, ang: number) => (p: Vec): Vec => {

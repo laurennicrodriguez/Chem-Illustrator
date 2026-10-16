@@ -35,6 +35,25 @@ export function lockAxis(v: Vec): Vec {
   return Math.abs(v.x) >= Math.abs(v.y) ? { x: v.x, y: 0 } : { x: 0, y: v.y };
 }
 
+/** A point turned `deg` degrees clockwise (on the page, y down) about `c`. */
+export function turnAbout(p: Vec, c: Vec, deg: number): Vec {
+  if (!deg) return p;
+  const a = deg * DEG, cos = Math.cos(a), sin = Math.sin(a);
+  const x = p.x - c.x, y = p.y - c.y;
+  return { x: c.x + x * cos - y * sin, y: c.y + x * sin + y * cos };
+}
+
+/** The corners of a box turned `deg` degrees clockwise about `c` (top left, top right, bottom right, bottom left). */
+export function turnedCorners(r: Rect, c: Vec, deg: number): Vec[] {
+  return [{ x: r.x1, y: r.y1 }, { x: r.x2, y: r.y1 }, { x: r.x2, y: r.y2 }, { x: r.x1, y: r.y2 }].map((p) => turnAbout(p, c, deg));
+}
+
+/** An angle in degrees brought into (-180, 180]; 0 stays 0. */
+export function normDegrees(d: number): number {
+  const r = ((d % 360) + 360) % 360;
+  return r > 180 ? r - 360 : r;
+}
+
 /** Distance from point p to segment ab. */
 export function distToSegment(p: Vec, a: Vec, b: Vec): number {
   const ab = sub(b, a);

@@ -345,6 +345,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     const attach = attachFromTag(kids(t).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === ATTACH_TAG)?.getAttribute('Value') ?? null);
     if (attach) extra.attach = attach;
     if (kids(t).some((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === IGNORE_TAG)) extra.ignoreWarnings = true;
+    const turn = Number(kids(t).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === TURN_TAG)?.getAttribute('Value'));
+    if (Number.isFinite(turn) && turn) extra.rot = turn;
     return { x, y: py, runs: back.runs, justify, width, lineHeight, ...extra };
   };
 
@@ -855,6 +857,8 @@ export const HIGHLIGHT_TAG = 'Chem Illustrator highlight';
 export const HIGHLIGHT_LOOK_TAG = 'Chem Illustrator highlight look';
 /** The tag that keeps a contracted label's group (SMILES), so its chemistry comes back with the file. */
 export const GROUP_TAG = 'Chem Illustrator group';
+/** The tag on turned text: degrees clockwise about the start of its first line (ChemDraw shows it level). */
+export const TURN_TAG = 'Chem Illustrator turn';
 /** The tag on the group that draws a design shape in ChemDraw: the shape as it is here. */
 export const GEO_TAG = 'Chem Illustrator shape';
 /** The group's box when saved here (ChemDraw rewrites BoundingBox when the group is moved). */
