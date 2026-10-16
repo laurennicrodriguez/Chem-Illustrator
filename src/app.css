@@ -127,6 +127,7 @@ button:hover { border-color: var(--accent); }
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
 }
 .menu[hidden] { display: none; }
+.menu.right { left: auto; right: 0; }
 .menu button {
   display: flex;
   justify-content: space-between;
@@ -515,6 +516,15 @@ dialog.ask { min-width: min(92vw, 340px); }
 .ask-row textarea { width: 32em; max-width: 70vw; resize: vertical; font-family: ui-monospace, Consolas, monospace; }
 .ask-buttons { display: flex; justify-content: flex-end; gap: 8px; margin: 14px 0 0; }
 dialog.name-dialog { width: min(92vw, 520px); }
+/* Help > Send Feedback */
+dialog.feedback-dialog { width: min(92vw, 560px); }
+dialog.feedback-dialog .muted { margin: 4px 0 10px; max-width: 62ch; }
+.feedback-kinds { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 6px 0 10px; }
+.feedback-field { display: flex; flex-direction: column; gap: 3px; margin: 8px 0; }
+.feedback-field[hidden] { display: none; }
+.feedback-field > span { font-size: 12px; color: var(--muted); }
+.feedback-field input, .feedback-field textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 5px 8px; resize: vertical; }
+.feedback-about { display: flex; gap: 6px; align-items: baseline; font-size: 12px; color: var(--muted); margin-top: 6px; }
 dialog.name-dialog .muted { margin: 4px 0 10px; max-width: 60ch; }
 .name-input { width: 100%; box-sizing: border-box; font: inherit; padding: 5px 8px; }
 .name-status { min-height: 1.4em; margin: 8px 0 0; color: var(--muted); overflow-wrap: anywhere; }

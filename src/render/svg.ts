@@ -47,7 +47,7 @@ export function itemsToSvg(items: Item[], box: EmfBox): string {
     } else {
       const family = /^(sans-serif|system-ui|helvetica)$/i.test(it.family) ? 'Arial' : it.family;
       out.push(
-        `<text x="${n(it.x)}" y="${n(it.y)}" font-family="${esc(family)}, Arial, Helvetica, sans-serif" font-size="${n(it.size)}"` +
+        `<text x="${n(it.x)}" y="${n(it.y)}" font-family="'${esc(family)}', Arial, Helvetica, sans-serif" font-size="${n(it.size)}"` +
           `${it.bold ? ' font-weight="bold"' : ''}${it.italic ? ' font-style="italic"' : ''} fill="${esc(it.color)}"${it.angle ? ` transform="rotate(${n(-it.angle)} ${n(it.x)} ${n(it.y)})"` : ''} xml:space="preserve">${esc(it.text)}</text>`,
       );
     }

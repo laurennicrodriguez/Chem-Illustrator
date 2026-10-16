@@ -6,7 +6,7 @@
 
 import type { ParaStyle, TextRun } from '../model';
 import * as rt from '../richtext';
-import { FONT_STACK, layoutText, type Glyphs, type LaidLine, type Measure } from '../text/layout';
+import { withStack, layoutText, type Glyphs, type LaidLine, type Measure } from '../text/layout';
 import { fitParas, paraCount, splitParagraphs } from '../text/paragraphs';
 import { styleOf, type DocText, type NamedStyle } from './document';
 
@@ -45,7 +45,7 @@ export const TOC_INDENT = 11;
  */
 export function tocLines(entries: TocEntry[], pageOf: (para: number) => string, st: NamedStyle, line: number | undefined, wrap: number, measure: Measure): LaidLine[] {
   const base = { font: st.font, size: st.size };
-  const family = `${st.font}, ${FONT_STACK}`;
+  const family = withStack(st.font);
   if (!entries.length) {
     return layoutText({ runs: [{ ...base, italic: true, color: '#8a8f98', text: EMPTY_TOC }], paras: [{ line }], justify: 'left', wrap, boxes: true }, st.size, measure).lines;
   }

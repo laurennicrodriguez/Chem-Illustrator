@@ -261,7 +261,16 @@
     <span class="sep"></span>
     <button id="btn-dark" type="button" aria-pressed="false" data-cmd="dark-page" title="Dark page: show the page dark on screen only (files, printing and copies are not changed)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12S5.5 4.5 12 4.5 22.5 12 22.5 12 18.5 19.5 12 19.5 1.5 12 1.5 12Z"/><circle cx="12" cy="12" r="3.5"/></svg></button>
     <button id="btn-search" type="button" class="search-box" title="Search for a command by name (Alt+Q)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg><span>Search</span><kbd>Alt+Q</kbd></button>
-    <button id="btn-help" title="Hotkeys and how to use the program">Help</button>
+    <div class="menu-wrap">
+      <button id="btn-help" aria-haspopup="menu" aria-expanded="false" aria-controls="help-menu" title="Hotkeys, the user guide, and sending feedback">Help</button>
+      <div id="help-menu" class="menu right" role="menu" hidden>
+        <button role="menuitem" data-cmd="help" title="The most used hotkeys and tips, with a button to change any key">Hotkeys and Tips</button>
+        <button role="menuitem" data-cmd="user-guide" title="The user guide, on the project's GitHub page">User Guide</button>
+        <hr />
+        <button role="menuitem" data-cmd="send-feedback" title="A comment, an idea for a new feature, or a question: sent as a GitHub issue, or copied to send another way">Send Feedback…</button>
+        <button role="menuitem" data-cmd="report-problem" title="Something not working as it should">Report a Problem…</button>
+      </div>
+    </div>
     <h1 class="app-name">Chem Illustrator</h1>
   </header>
 
@@ -1200,7 +1209,7 @@
   <div id="flash" role="status" aria-live="polite"></div>
 
   <dialog id="help">
-    <h2>Using the prototype</h2>
+    <h2>Hotkeys and Tips</h2>
     <p class="muted"><span id="app-version"></span>. Free software under the GNU General Public License, version 3 or later.</p>
     <p class="muted">Hotkeys work like ChemDraw: point at an atom or bond (it highlights blue) and press a key. A key that grows something moves the highlight to the new atom, so you can carry on typing (<kbd>8</kbd> then <kbd>1</kbd> makes an E double bond). <kbd>1</kbd> and <kbd>0</kbd> keep the highlight under the mouse, so pressing 1 three times adds three bonds; after a click or another key they move it, so 1 1 1 draws a chain. Every key can be changed.</p>
     <p><button id="help-hotkeys" type="button">Show and change all hotkeys…</button></p>
@@ -1236,7 +1245,7 @@
           <li>Red boxes mark atoms with too many or too few bonds, labels that can't be read, and atoms sitting on top of others. Point at one to see why; the Warnings panel lists them all, with Ignore. Structure &gt; Check Structure goes to the next one. They are never printed, saved or copied</li>
           <li>Rest the mouse on an abbreviation or condensed label (OTBS, NHBoc, CO2Me) to see the group written out, with its name and formula. View &gt; Group Tooltips turns this off.</li>
           <li>Axial chirality (biaryls, allenes, alkylidenecycloalkanes) gets Ra or Sa by IUPAC P-93.5.1: draw the groups on one end of the axis with a wedge and a hash (or one wedge) to show which way round it is. Edit &gt; Preferences writes them as P/M instead.</li>
-          <li>R/S and E/Z are worked out for every structure as you draw. Structure &gt; Show Stereo Labels adds them to the selected structures (or all) as part of the drawing; they update by themselves after edits. Select a stereocentre to hide its label or type your own (for example (R*)). The Show R/S box at the top previews every label in red</li>
+          <li>R/S and E/Z are worked out for every structure as you draw. Structure &gt; Show Stereo Labels adds them to the selected structures (or all) as part of the drawing; they update by themselves after edits. Select a stereocentre to hide its label or type your own (for example (R*)). View &gt; Show R/S Preview shows every label in red on screen</li>
           <li>As in ChemDraw, plain bold bonds count as wedges and plain hashed or dashed bonds as hashed wedges. Where R or S would depend on what an R or Ar group is, no label is given</li>
         </ul>
         <h3>Everywhere</h3>

@@ -1,0 +1,117 @@
+# Files and sharing
+
+This page covers the files Chem Illustrator opens and saves, copying and pasting with ChemDraw and Office, Split View, workspaces, recent files, printing and fonts.
+
+## File types
+
+Each kind of tab saves to its own file type. **Save** (Ctrl+S) uses the first type in the list; **Save As…** (Ctrl+Shift+S) offers the others.
+
+| Tab | Opens | Saves | Also exports |
+|---|---|---|---|
+| Drawing | .cdxml, .cdx | .cdxml (the default), .cdx | Molfile (.mol), PDF, PNG, SVG |
+| Slides | .pptx | .pptx | PDF (one page per slide), PNG or SVG of the current slide |
+| Design | .pptx | .pptx (one slide) | PDF, PNG, SVG |
+| Document | .docx | .docx | PDF |
+| Sheet | .xlsx, .csv, .tsv, .txt, .sdf | .xlsx, .csv, .sdf | Charts as PNG or SVG |
+| Workspace | .ciworkspace | .ciworkspace | |
+
+Open files with **File ▸ Open…** (Ctrl+O), or drop them onto the window. Picture files (PNG, JPEG, GIF, SVG, EMF, BMP, WebP) dropped on a drawing, slide, design or document are placed as pictures.
+
+### ChemDraw files
+
+- **.cdxml** is the default for drawings. When you save a ChemDraw file you opened, only what you changed is rewritten, so the rest stays exactly as ChemDraw wrote it.
+- **.cdx** is ChemDraw's binary format. It opens and saves, and it is what ChemDraw reads from the clipboard.
+
+### Structures in Office files
+
+- **Word (.docx):** structures show as pictures in Word. Open the file here again and they are editable drawings, even after Word has saved it. ChemDraw drawings embedded in a Word file made elsewhere also open as editable structures.
+- **PowerPoint (.pptx):** the same: pictures in PowerPoint, editable drawings when opened here again. A ChemDraw object embedded in a PowerPoint slide comes in as a picture.
+- **Excel (.xlsx):** structures are pictures with their SMILES in the cell, and become editable drawings again when opened here.
+
+### Other formats
+
+- **SMILES:** **Edit ▸ Copy as SMILES** (Ctrl+Alt+C) copies the selected structures as SMILES; **Edit ▸ Paste SMILES** (Ctrl+Alt+P) draws them. A SMILES string pasted with Ctrl+V is drawn too.
+- **Molfile:** **File ▸ Export Molfile…** saves the selected structures (or all of them) as a .mol file; **Edit ▸ Copy as Molfile Text** copies them as text. A molfile pasted with Ctrl+V is drawn.
+- **CDXML text:** **Edit ▸ Copy as CDXML Text** copies the drawing as ChemDraw XML.
+- **SD files (.sdf):** open in a sheet with one row per structure and its data fields as columns.
+- **PDF:** **File ▸ Export PDF…** for drawings, slides, designs and documents. Structures and text stay sharp at any zoom.
+- **PNG and SVG:** **File ▸ Export Picture…** for a drawing, the current slide or a design page. Type the dpi for a PNG (300 for colour, 600 to 1200 for line art), and pick a white or page-coloured background or a see-through one.
+
+## Copy and paste
+
+**Edit ▸ Copy** (Ctrl+C) copies the selection, or the whole drawing when nothing is selected.
+
+| Where you paste | What arrives |
+|---|---|
+| Chem Illustrator | Everything, fully editable |
+| ChemDraw (Windows app) | Editable structures, through the CDX format |
+| Word or PowerPoint (Windows app) | A sharp picture (EMF) that stays crisp when enlarged |
+| Other programs, or from the browser version or on macOS and Linux | A high-resolution picture |
+
+In the Windows app, **Paste** (Ctrl+V) takes drawings copied in ChemDraw as editable structures, and spectra copied in MestReNova as sharp lines and text. **Edit ▸ Show Clipboard Formats** lists what is on the clipboard, which helps when a paste doesn't come out as expected.
+
+Tables travel too:
+
+- A table selected on a drawing or slide and copied pastes into Word or Excel as real cells.
+- Cells copied from Excel, Word or a sheet here paste onto a drawing or slide as a new table.
+- Cells copied from a sheet paste into Excel with their values, and SMILES for structures.
+
+Charts in a sheet have **Copy as Picture** on the **Chart** tab, to paste into Word, PowerPoint, or a document or slide here.
+
+## Split View
+
+Split View puts a drawing beside a document, sheet or slide deck, so you can draw and write at the same time.
+
+![A drawing beside a document in Split View](../images/split-view.png)
+
+1. In a document, sheet or slides tab, choose **View ▸ Split View: Drawing Beside**. A drawing opens on the right: the first drawing tab, or a new one.
+2. Click a side to work on it. Beside a document or sheet, both sides stay live; Ctrl+Z and Ctrl+S act on the side you clicked last. Beside slides, the side you aren't working on shows as a picture until you click it.
+3. The bar above the drawing picks another open drawing or a new one. **Insert into Document** (or **Cell**, or **Slide**) puts the selected structures, or the whole drawing, in at the caret, the selected cell or the slide.
+4. Drag the divider to change the widths. The × closes the split; the drawing stays open in its own tab.
+
+## Workspaces
+
+A workspace saves all your open tabs together, so a project's scheme, slides, SI document and data sheet open in one go. Workspaces are in the desktop app only.
+
+1. **File ▸ Save Workspace**. A window lists any tabs that have never been saved and offers two choices:
+   - **Put copies of files kept in other folders into the workspace folder.** On: everything ends up in one folder. Off: the workspace points to the files where they are.
+   - **Save changes to tabs already saved as files.**
+2. Click **Choose Folder…**, pick or make a folder, and name the workspace.
+
+The folder then holds your files plus a small `.ciworkspace` file listing the tabs, their order, which tab was showing and any Split View. Tabs never saved are saved there under their tab names; a file that would replace another gets "(2)" added instead.
+
+To open it again, use **File ▸ Open Workspace…** or **File ▸ Open**, and pick the `.ciworkspace` file. **Save Workspace** then saves back to the same place, and **Save Workspace As…** saves a new one.
+
+Files inside the workspace folder are listed by name, so you can move or copy the whole folder (to another computer through a cloud drive, say) and it still opens. If a file has been moved or deleted, the rest open and a message names the missing ones.
+
+## Recent files
+
+In the desktop app, the **File** menu lists the last ten files and workspaces you opened or saved, under **Open…**, newest first. Click one to open it. If it has been moved or deleted, a message says so and it comes off the list. **Clear Recent Files** empties the list.
+
+## Printing
+
+**File ▸ Print…** (Ctrl+P) asks a question or two, then opens your system's Print window, where you pick the printer and copies, or save a PDF.
+
+| Tab | Choices |
+|---|---|
+| Drawing | Letter or A4; orientation to suit the drawing, portrait or landscape; actual size (smaller only if it wouldn't fit) or as large as fits |
+| Slides | Full page slides, or handouts with 2, 3 (with lines for notes), 4, 6 or 9 to a page, optionally framed |
+| Design | The page at its own size |
+| Document | Every page as laid out on screen |
+| Sheet | The whole sheet or the selected cells; portrait or landscape; with or without gridlines |
+
+## Fonts
+
+Every font box (the Document ribbon, the text bar while you type a caption, Slide Master, **File ▸ Drawing Style…**) shows the fonts in groups, each name in its own font:
+
+- **Sans:** Inter, Source Sans 3, IBM Plex Sans, Lato
+- **Serif:** Source Serif 4, Merriweather, Libre Baskerville
+- **Poster:** Montserrat, Oswald, Bebas Neue, Archivo Black, Barlow Condensed
+- **Monospace:** JetBrains Mono, IBM Plex Mono
+- **On this computer** (folded away; click the heading to open it): Arial, Calibri, Times New Roman and the rest of your installed fonts.
+
+Type in the box to filter the list, or type the name of any font installed on your computer.
+
+The first fourteen are free fonts (SIL Open Font License) that come with the app. When you use them in a document or slide deck, they are saved inside the .docx or .pptx file, so it looks the same in Word or PowerPoint on a computer that doesn't have them. Only the fonts you used are included. Fonts from your own computer are not embedded, as Word does by default for fonts that may not be shared.
+
+Next: [Getting started](getting-started.md) · [Drawing](drawing.md) · [Keyboard and mouse](keyboard-and-mouse.md) · [Slides](slides.md) · [Documents](documents.md) · [Sheets](sheets.md) · [Design](design.md) · [Feedback](feedback.md)

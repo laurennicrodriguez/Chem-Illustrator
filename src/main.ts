@@ -93,6 +93,8 @@ import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
 import { UpdateUI } from './ui/update-ui';
 import { canUpdate, appVersion } from './updates';
+import { GUIDE_URL, computerName } from './feedback';
+import { FeedbackDialog } from './ui/feedback-dialog';
 import { addRecent, removeRecent, recentLabel } from './recent';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
 import { NameDialog } from './ui/name-dialog';
@@ -384,7 +386,6 @@ $('#btn-undo').addEventListener('click', () => undo());
 $('#btn-redo').addEventListener('click', () => redo());
 $('#btn-fit').addEventListener('click', () => command('zoom-fit'));
 $('#btn-stress').addEventListener('click', () => stressTest(Number($<HTMLSelectElement>('#stress-n').value)));
-$('#btn-help').addEventListener('click', () => openHelp());
 $('#btn-dark').addEventListener('click', () => command('dark-page'));
 $('#help-hotkeys').addEventListener('click', () => { $<HTMLDialogElement>('#help').close(); hotkeysDialog.open(); });
 $('#help-close').addEventListener('click', () => $<HTMLDialogElement>('#help').close());
@@ -2469,7 +2470,8 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-custom', 'toolbox-details', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'print']);
+  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'print',
+  'help', 'user-guide', 'send-feedback', 'report-problem', 'check-updates']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
@@ -2634,6 +2636,10 @@ const COMMANDS: Record<string, () => unknown> = {
   'edit-palettes': () => editPalettes(),
   preferences: () => void openPreferences(),
   'check-updates': () => void updates.check(),
+  help: () => openHelp(),
+  'user-guide': () => openWebPage(GUIDE_URL),
+  'send-feedback': () => feedback.open(),
+  'report-problem': () => feedback.open('problem'),
   'command-search': () => commandSearch.open(),
   'toolbox-main': () => toolboxes.toggle('main'),
   'toolbox-structure': () => toolboxes.toggle('structure'),
@@ -3168,7 +3174,23 @@ const updates = new UpdateUI({
   skip: (v) => { skipVersion = v; storeSettings(); },
 });
 for (const el of document.querySelectorAll<HTMLElement>('.desktop-only')) el.hidden = !canUpdate;
-void appVersion().then((v) => { const el = document.querySelector('#app-version'); if (el) el.textContent = canUpdate ? `Version ${v}` : 'Web version'; });
+let versionText = canUpdate ? '' : 'Web version';
+void appVersion().then((v) => {
+  versionText = canUpdate ? `Version ${v}` : 'Web version';
+  const el = document.querySelector('#app-version');
+  if (el) el.textContent = versionText;
+});
+
+// Help > Send Feedback and Report a Problem
+const feedback = new FeedbackDialog({
+  openWebPage,
+  copyText,
+  about: () => ({
+    Version: versionText || 'desktop app',
+    Computer: computerName(navigator.userAgent),
+    Mode: ws.active.mode,
+  }),
+});
 
 /** Edit > Preferences: drawing choices that are set once rather than per structure. */
 async function openPreferences(): Promise<void> {
@@ -4651,7 +4673,7 @@ requestAnimationFrame(() => {
 });
 
 // Hooks for the automated speed tests.
-(window as any).__app = { doc, editor, renderer, chem, live, cdxml: (name: string) => writeCdxml(doc, { name, textMeasure: measureText }), openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode, docxBytes: () => writeDocx(docMode.file!.t, docFiles),
+(window as any).__app = { doc, editor, renderer, chem, live, command, addMolfile, cdxml: (name: string) => writeCdxml(doc, { name, textMeasure: measureText }), openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode, docxBytes: () => writeDocx(docMode.file!.t, docFiles),
   pptxBytes: () => { const d = deckNow()!; return writePptx({ size: d.size, master: d.master, slides: d.slides.map((s, i) => ({ layout: s.layout, doc: d.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims })) }, pptxOptions()); } };
 
 // ---------------------------------------------------------------- desktop self-test
