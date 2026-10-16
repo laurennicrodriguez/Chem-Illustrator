@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Doc } from '../src/model';
 import { dist, angleOf, DEG } from '../src/geom';
-import { freeRing, fusedRing, placeRing, sproutDir, sprout, chainPoints, ringOnAtom, fuseSide, bondTo } from '../src/chem/chemgeom';
+import { freeRing, fusedRing, placeRing, sproutDir, sprout, chainPoints, ringOnAtom, ringDir, fuseSide, bondTo } from '../src/chem/chemgeom';
 
 const L = 14.4;
 const close = (a: number, b: number, eps = 1e-6) => Math.abs(a - b) < eps;
@@ -115,6 +115,35 @@ describe('sprouting bonds', () => {
     const pts = ringOnAtom({ x: 0, y: 0 }, { x: 1, y: 0 }, 5, L);
     expect(pts[0]).toEqual({ x: 0, y: 0 });
     expect(close(dist(pts[0], pts[1]), L, 1e-6)).toBe(true);
+  });
+  it('grows a ring on a chain end straight on from the bond, so both ring bonds sit at 120°', () => {
+    // N-CH2-CH3 as drawn: the end carbon's bond runs down and to the right
+    const d = new Doc();
+    const ids = d.edit('ring', () => {
+      const n = d.addAtom(0, 0);
+      const c1 = bondTo(d, n, { x: 0, y: L });
+      const c2 = bondTo(d, c1, { x: L * Math.cos(30 * DEG), y: L * 1.5 });
+      const ring = placeRing(d, ringOnAtom(c2, ringDir(d, c2.id), 6, L), { aromatic: true, existing: [c2.id] });
+      return { c1, c2, ring };
+    });
+    const { c1, c2, ring } = ids;
+    const ortho = d.neighbors(c2.id).filter((x) => x.id !== c1.id);
+    expect(ortho.length).toBe(2);
+    for (const o of ortho) {
+      const a = Math.abs(angleOf({ x: o.x - c2.x, y: o.y - c2.y }) - angleOf({ x: c1.x - c2.x, y: c1.y - c2.y }));
+      expect(close(Math.min(a, 2 * Math.PI - a), 120 * DEG, 1e-6)).toBe(true);
+    }
+    expect(ring.length).toBe(6);
+  });
+  it('keeps a spiro ring in the widest gap of an atom with two bonds', () => {
+    const d = new Doc();
+    const id = d.edit('chain', () => {
+      const a = d.addAtom(0, 0);
+      const m = bondTo(d, a, { x: L * Math.cos(30 * DEG), y: -L / 2 });
+      bondTo(d, m, { x: 2 * L * Math.cos(30 * DEG), y: 0 });
+      return m.id;
+    });
+    expect(close(angleOf(ringDir(d, id)), -90 * DEG, 1e-6)).toBe(true);
   });
 });
 
