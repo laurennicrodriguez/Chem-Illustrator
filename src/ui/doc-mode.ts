@@ -35,7 +35,7 @@ import {
   coveringCell, deleteColumn, deleteRow, emptyTable, insertColumn, insertRow, isCovered, mergeRight, nextCell, setColumnAlign, setColumnWidth, setSpan, spanOf,
 } from '../table';
 import {
-  A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, captionRuns, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets,
+  A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, captionRuns, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets, inlineMove,
   floatOf, lookExtent, lookOf, cellHolding, innerObjects,
   type DocObject, type DocText, type FigureLook, type Float, type NumberPlace, type PageSetup, type WrapKind,
 } from '../document/document';
@@ -124,6 +124,7 @@ export class DocumentMode {
     | { kind: 'box' }
     | { kind: 'resize'; id: number; w0: number; scale0: number; x0: number }
     | { kind: 'move'; id: number; from: { x: number; y: number }; float: Float; moved: boolean }
+    | { kind: 'inline'; id: number; from: { x: number; y: number }; to: number | null }
     | null = null;
   private plainPaste = false;
   private speller: Speller | null = null;
@@ -1119,6 +1120,7 @@ export class DocumentMode {
       this.dragging = null;
       try { s.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
       if (d?.kind === 'move' && d.moved) this.reanchor(d.id);
+      if (d?.kind === 'inline') this.dropInline(d.id, d.to);
     });
     s.addEventListener('dblclick', (e) => {
       const f = this.file;
@@ -1248,6 +1250,8 @@ export class DocumentMode {
         // a floating figure is moved by dragging it
         const fl = floatOf(obj);
         if (fl) { this.dragging = { kind: 'move', id, from: p, float: fl, moved: false }; s.setPointerCapture(e.pointerId); }
+        // one in line with the text is dragged to another place in the text, as in Word
+        else if (obj?.kind !== 'table' && !f.box) { this.dragging = { kind: 'inline', id, from: p, to: null }; s.setPointerCapture(e.pointerId); }
         return;
       }
     }
@@ -1298,6 +1302,14 @@ export class DocumentMode {
       d.moved = true;
       return;
     }
+    if (d.kind === 'inline') {
+      if (d.to === null && Math.hypot(p.x - d.from.x, p.y - d.from.y) * this.view.zoom < 3) return;
+      // the caret shows where it will go
+      d.to = offsetAt(f.layout().text, p.x, p.y);
+      f.ed.setCaret(d.to);
+      this.view.scroller.style.cursor = 'move';
+      return;
+    }
     if (d.kind === 'box') {
       if (this.clicks.n !== 1 || !f.box) return;
       f.box.ed.setCaret(offsetAt(f.box.ed.layout(), p.x, p.y), true);
@@ -1309,6 +1321,21 @@ export class DocumentMode {
     if (e.clientY < r.top + 10) this.view.scroller.scrollTop -= 20;
     else if (e.clientY > r.bottom - 10) this.view.scroller.scrollTop += 20;
     f.ed.setCaret(offsetAt(f.layout().text, p.x, p.y), true);
+  }
+
+  /** An in-line figure dragged to another place in the text: move it there (one undo step) and keep it picked. */
+  private dropInline(id: number, to: number | null): void {
+    const f = this.file;
+    const at = f ? objectOffsets(f.t.runs).get(id) : undefined;
+    if (!f || at === undefined) return;
+    const back = () => f.ed.select(objectOffsets(f.t.runs).get(id) ?? at, (objectOffsets(f.t.runs).get(id) ?? at) + 1);
+    const plan = inlineMove(at, to);
+    if (!plan) { back(); return; }
+    if (f.t.track) { this.host.flash('Moving a figure isn\'t tracked: turn off Track Changes to drag it, or cut and paste it.'); back(); return; }
+    const run = rt.sliceRuns(f.t.runs, at, at + 1);
+    f.ed.replace(plan.insertAt, plan.insertAt, run, undefined, 'Move');
+    f.ed.replace(plan.removeAt, plan.removeAt + 1, [], undefined, null);
+    back();
   }
 
   // ---------------------------------------------------------------- figures

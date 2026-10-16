@@ -71,8 +71,8 @@ export type ToolboxId = (typeof TOOLBOX_IDS)[number];
 export function defaultToolboxes(): ToolboxState {
   const places: Record<string, BoxPlace> = {};
   TOOLBOX_IDS.forEach((id, i) => { places[id] = { shown: id === 'main', dock: id === 'main' ? 'left' : 'float', x: 110 + i * 24, y: 90 + i * 64 }; });
-  // the side panel, when taken out, starts near where it was
-  places.details = { shown: false, dock: 'right', x: 900, y: 90 };
+  // the side panel (Style, Warnings, Analysis) is always shown, docked at the right to start with
+  places.details = { shown: true, dock: 'right', x: 900, y: 90 };
   return { locked: true, places, custom: ['cmd:clean-up', 'cmd:add-frame', 'cmd:fill-rings', 'cmd:highlight', 'cmd:chain-ends'], sideCollapsed: false };
 }
 
@@ -102,6 +102,8 @@ export function parseToolboxes(raw: unknown): ToolboxState {
       };
     }
   }
+  // the side panel can't be hidden (older settings could put it away)
+  s.places.details = { ...s.places.details, shown: true };
   if (Array.isArray(r.custom)) s.custom = r.custom.filter((x): x is string => typeof x === 'string' && /^(tool|cmd):[\w:-]+$/.test(x)).slice(0, 80);
   return s;
 }
@@ -130,6 +132,10 @@ export interface ToolboxHooks {
   work(): HTMLElement;
   /** Open the window for choosing what is in your own toolbox. */
   customize(): void;
+  /** Whether a toolbox is folded, when the app keeps that itself (the side panel, per mode). */
+  folded?(id: string): boolean | undefined;
+  /** Fold or open a toolbox the app folds itself; true when it did. */
+  fold?(id: string): boolean;
 }
 
 const DOCK_LABEL: Record<Dock, string> = { left: 'Dock Left', right: 'Dock Right', top: 'Dock at the Top', bottom: 'Dock at the Bottom', float: 'Float' };
@@ -157,7 +163,7 @@ export class Toolboxes {
       const vertical = place.dock === 'left' || place.dock === 'right';
       f.classList.toggle('vertical', vertical);
       f.classList.toggle('floating', place.dock === 'float');
-      f.classList.toggle('collapsed', !!place.collapsed);
+      f.classList.toggle('collapsed', this.hooks.folded?.(def.id) ?? !!place.collapsed);
       const locked = boxLocked(st, def.id);
       f.classList.toggle('locked', locked);
       const fold = f.querySelector<HTMLElement>('.tb-fold');
@@ -208,6 +214,7 @@ export class Toolboxes {
 
   /** Fold a toolbox up to its title bar, or open it out again. */
   fold(id: string, collapsed?: boolean): void {
+    if (this.hooks.fold?.(id)) return;
     const p = this.hooks.get().places[id];
     if (p) this.place(id, { collapsed: (collapsed ?? !p.collapsed) || undefined });
   }
@@ -248,7 +255,6 @@ export class Toolboxes {
     close.title = `Hide ${def.title} (View > Toolboxes shows it again)`;
     close.setAttribute('aria-label', close.title);
     close.addEventListener('click', () => this.toggle(def.id, false));
-    if (def.id === 'details') close.title = 'Put the panel back at the right side';
     // fold the box up to its title, and lock or unlock it, from the title bar
     const fold = document.createElement('button');
     fold.type = 'button';
@@ -279,9 +285,9 @@ export class Toolboxes {
       ...DOCKS.map((d) => ({ cmd: `tbx:${d}`, label: DOCK_LABEL[d] })), null,
       { cmd: 'tbx:lock', label: boxLocked(st, def.id) ? `Unlock ${def.title}` : `Lock ${def.title}` },
       { cmd: 'tbx:lock-all', label: st.locked ? 'Unlock All Toolboxes' : 'Lock All Toolboxes' },
-      { cmd: 'tbx:fold', label: st.places[def.id]?.collapsed ? 'Open Out' : 'Fold Up' },
+      { cmd: 'tbx:fold', label: (this.hooks.folded?.(def.id) ?? st.places[def.id]?.collapsed) ? 'Open Out' : 'Fold Up' },
       ...(def.id === 'custom' ? [{ cmd: 'tbx:customize', label: 'Choose What Is in It…' }] : []),
-      { cmd: 'tbx:hide', label: def.id === 'details' ? 'Put Back at the Right Side' : `Hide ${def.title}` },
+      ...(def.id === 'details' ? [] : [{ cmd: 'tbx:hide', label: `Hide ${def.title}` }]),
     ];
     showContextMenu(x, y, items, {
       key: () => undefined,

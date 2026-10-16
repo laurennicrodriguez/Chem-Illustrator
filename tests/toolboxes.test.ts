@@ -14,11 +14,11 @@ describe('toolboxes', () => {
     expect(dropTarget(500, 400, work)).toBe('float');
   });
 
-  it('starts with only the drawing tools showing, on the left, locked', () => {
+  it('starts with only the drawing tools (left) and the side panel (right) showing, locked', () => {
     const d = defaultToolboxes();
     expect(d.locked).toBe(true);
     expect(d.places.main).toMatchObject({ shown: true, dock: 'left' });
-    expect(Object.values(d.places).filter((p) => p.shown)).toHaveLength(1);
+    expect(Object.entries(d.places).filter(([, p]) => p.shown).map(([id]) => id).sort()).toEqual(['details', 'main']);
   });
 
   it('reads saved settings, keeping only what makes sense', () => {
@@ -60,5 +60,13 @@ describe('toolboxes', () => {
     // an older settings file's single choice still counts in every mode
     expect(sideFolded(parseToolboxes({ sideCollapsed: true }), 'document')).toBe(true);
     expect(parseToolboxes(JSON.parse(JSON.stringify(s))).sideByMode).toEqual({ sheet: true });
+  });
+});
+
+describe('the side panel toolbox', () => {
+  it('is always shown, docked at the right to start with', () => {
+    expect(defaultToolboxes().places.details).toMatchObject({ shown: true, dock: 'right' });
+    // older settings could put it away
+    expect(parseToolboxes({ places: { details: { shown: false, dock: 'float', x: 50, y: 60 } } }).places.details).toMatchObject({ shown: true, dock: 'float', x: 50, y: 60 });
   });
 });
