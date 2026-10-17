@@ -28,7 +28,8 @@ import { shownSize } from '../document/doc-layout';
 import { layoutTable } from '../table';
 import { cfbStreams, isCfb } from './cfb';
 import { isCdx } from './cdx';
-import { BIB_MARK, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
+import { cmtIds, cmtString, type CommentNote, type CommentThread } from '../document/comments';
+import { BIB_MARK, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, W14_NS, W15_NS, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
 import { cleanRef } from '../document/references';
 import { revText } from '../document/revisions';
 import { mathText, ommlToTex } from '../document/math';
@@ -56,7 +57,6 @@ const EXT_MIME: Record<string, string> = { wmf: 'image/x-wmf', emf: 'image/x-emf
 const WARN = {
   links: 'Links were kept as plain text.',
   notes: 'Footnotes and endnotes were left out.',
-  comments: 'Comments were left out.',
   equations: 'Equations in table cells were kept as plain text.',
   shapes: 'Charts, SmartArt and drawn shapes were left out.',
   sections: 'This file has several sections: the last one\'s page size, margins, header and footer are used for the whole document.',
@@ -125,6 +125,9 @@ class DocxReader {
   private fields: Field[] = [];
   /** The tracked change the text being read is in (w:ins or w:del), as stored on runs. */
   private rev: string | undefined;
+  /** Word's comments whose range the text being read is in, and those met so far. */
+  private cmtOpen = new Set<number>();
+  private cmtMet = new Set<number>();
   /** The paragraph being read holds a display equation (Word's equation paragraph): centred here. */
   private displayMath = false;
   private openMarks = new Map<string, string>();
@@ -648,7 +651,81 @@ class DocxReader {
       text = rt.fromSymbolFont(plain);
       props = { ...r, font: ctx.base.font };
     }
-    this.piece(ctx).runs.push({ ...this.runStyle(props), ...(this.rev ? { rev: this.rev } : {}), text });
+    this.piece(ctx).runs.push({ ...this.runStyle(props), ...(this.rev ? { rev: this.rev } : {}), ...this.cmtMark(ctx), text });
+  }
+
+  // ---------------------------------------------------------------- comments
+
+  private cmtMark(ctx: Ctx): { cmt?: string } {
+    if (ctx.cell || !this.cmtOpen.size) return {};
+    return { cmt: cmtString(this.cmtOpen) };
+  }
+
+  private cmtRange(el: Element): void {
+    const id = Number(this.a(el, 'id'));
+    if (!Number.isInteger(id) || id < 0) return;
+    if (el.localName === 'commentRangeStart') { this.cmtOpen.add(id); this.cmtMet.add(id); } else this.cmtOpen.delete(id);
+  }
+
+  /** A comment's mark in the text: one with no range of its own goes on the character before it. */
+  private cmtPoint(el: Element, ctx: Ctx): void {
+    const id = Number(this.a(el, 'id'));
+    if (!Number.isInteger(id) || id < 0 || this.cmtMet.has(id) || ctx.cell) return;
+    this.cmtMet.add(id);
+    const runs = this.piece(ctx).runs;
+    const last = runs[runs.length - 1];
+    if (!last?.text) return;
+    const keep = last.text.slice(0, -1);
+    const one = { ...last, text: last.text.slice(-1), cmt: cmtString([...cmtIds(last.cmt), id]) };
+    runs.splice(runs.length - 1, 1, ...(keep ? [{ ...last, text: keep }, one] : [one]));
+  }
+
+  /**
+   * Word's comments (comments.xml), with Word 2013's replies and Resolved marks
+   * (commentsExtended.xml). Replies become their comment's replies here.
+   */
+  private readComments(): { comments: Record<number, CommentThread>; replies: Set<number> } | null {
+    const path = this.pkg.relOfType(this.main, DOCX_REL.comments);
+    const root = path ? this.pkg.xml(path)?.documentElement : null;
+    if (!root) return null;
+    const notes = new Map<number, CommentNote & { para: string }>();
+    for (const c of kids(root, 'comment')) {
+      const id = Number(this.a(c, 'id'));
+      if (!Number.isInteger(id) || id < 0) continue;
+      const paras = [...c.getElementsByTagNameNS(this.W, 'p')];
+      const text = paras.map((p) => [...p.getElementsByTagNameNS(this.W, '*')]
+        .map((e) => (e.localName === 't' ? e.textContent ?? '' : e.localName === 'tab' ? '\t' : e.localName === 'br' ? '\n' : '')).join('')).join('\n');
+      const last = paras[paras.length - 1];
+      notes.set(id, { author: this.a(c, 'author') ?? '', date: this.a(c, 'date') ?? '', text, para: last?.getAttributeNS(W14_NS, 'paraId') ?? '' });
+    }
+    // which comment each reply answers, and which are resolved
+    const parent = new Map<string, string>(), done = new Set<string>();
+    const exPath = this.pkg.relOfType(this.main, DOCX_REL.commentsExtended);
+    const ex = exPath ? this.pkg.xml(exPath)?.documentElement : null;
+    for (const e of ex ? [...ex.getElementsByTagNameNS(W15_NS, 'commentEx')] : []) {
+      const pid = e.getAttributeNS(W15_NS, 'paraId') ?? '';
+      const up = e.getAttributeNS(W15_NS, 'paraIdParent');
+      if (up) parent.set(pid, up);
+      if (/^(1|true)$/i.test(e.getAttributeNS(W15_NS, 'done') ?? '')) done.add(pid);
+    }
+    const byPara = new Map<string, number>();
+    for (const [id, n] of notes) if (n.para) byPara.set(n.para, id);
+    const comments: Record<number, CommentThread> = {};
+    const replies = new Set<number>();
+    for (const [id, n] of notes) {
+      if (n.para && parent.has(n.para) && byPara.has(parent.get(n.para)!)) { replies.add(id); continue; }
+      comments[id] = { author: n.author, date: n.date, text: n.text, ...(done.has(n.para) ? { done: true } : {}) };
+    }
+    for (const id of [...notes.keys()].sort((a, b) => a - b)) {
+      if (!replies.has(id)) continue;
+      const n = notes.get(id)!;
+      // (a reply to a reply belongs to the comment at the top)
+      let top = byPara.get(parent.get(n.para)!)!;
+      for (let k = 0; replies.has(top) && k < 50; k++) top = byPara.get(parent.get(notes.get(top)!.para)!)!;
+      const c = comments[top];
+      if (c) (c.replies ??= []).push({ author: n.author, date: n.date, text: n.text });
+    }
+    return { comments, replies };
   }
 
   private emitObject(ctx: Ctx, o: DocObject, r: RProps, keepPos = false): number | null {
@@ -657,7 +734,7 @@ class DocxReader {
     this.objects[id] = o;
     const { formula: _f, sub, sup, ...style } = this.runStyle(r);
     // a citation keeps its superscript; caption numbers and references take the text's position
-    this.piece(ctx).runs.push({ ...style, ...(keepPos ? rt.cleanStyle({ sub, sup }) : {}), ...(this.rev ? { rev: this.rev } : {}), obj: id, text: OBJECT_CHAR });
+    this.piece(ctx).runs.push({ ...style, ...(keepPos ? rt.cleanStyle({ sub, sup }) : {}), ...(this.rev ? { rev: this.rev } : {}), ...this.cmtMark(ctx), obj: id, text: OBJECT_CHAR });
     return id;
   }
 
@@ -693,7 +770,7 @@ class DocxReader {
         }
         case 'bookmarkStart': this.markStart(el); break;
         case 'bookmarkEnd': this.markEnd(el); break;
-        case 'commentRangeStart': this.warn('comments'); break;
+        case 'commentRangeStart': case 'commentRangeEnd': this.cmtRange(el); break;
         case 'oMath': case 'oMathPara': this.math(el, ctx); break;
         case 'AlternateContent': this.inline(kids(this.alternate(el)), ctx); break;
       }
@@ -740,7 +817,7 @@ class DocxReader {
         case 'pict': if (!this.swallowing()) this.vml(c, r, ctx, null); break;
         case 'object': if (!this.swallowing()) this.vml(c, r, ctx, c); break;
         case 'footnoteReference': case 'endnoteReference': this.warn('notes'); break;
-        case 'commentReference': this.warn('comments'); break;
+        case 'commentReference': this.cmtPoint(c, ctx); break;
         case 'AlternateContent': {
           const alt = this.alternate(c);
           // a run's choice holds run content (a picture, a shape)
@@ -1420,8 +1497,24 @@ class DocxReader {
     const objects: Record<number, DocObject> = {};
     for (const [k, v] of Object.entries(this.objects)) if (used.has(Number(k))) objects[Number(k)] = v;
     const m = this.model;
+    // comments: the replies' ranges are their comment's; comments with no text go
+    const cm = this.readComments();
+    let comments: Record<number, CommentThread> | undefined;
+    if (cm) {
+      for (let i = 0; i < runs.length; i++) {
+        if (!runs[i].cmt) continue;
+        const { cmt: _, ...rest } = runs[i];
+        const ids = cmtIds(runs[i].cmt).filter((id) => cm.comments[id]);
+        runs[i] = ids.length ? { ...rest, cmt: cmtString(ids) } : rest;
+      }
+      const on = new Set(runs.flatMap((r) => cmtIds(r.cmt)));
+      comments = {};
+      for (const [id, c] of Object.entries(cm.comments)) if (on.has(Number(id))) comments[Number(id)] = c;
+      if (!Object.keys(comments).length) comments = undefined;
+    } else for (let i = 0; i < runs.length; i++) if (runs[i].cmt) { const { cmt: _, ...rest } = runs[i]; runs[i] = rest; }
     return {
       runs: rt.normalizeRuns(runs),
+      ...(comments ? { comments } : {}),
       paras: out.map((p) => cleanPara(p.ps)),
       justify: 'left',
       styles,

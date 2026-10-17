@@ -1378,8 +1378,8 @@ dialog.cf-manage { width: min(92vw, 640px); }
 .an-gallery { display: grid; grid-template-columns: repeat(4, auto); gap: 1px 2px; align-content: start; }
 .ribbon button.an-effect { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px 1px 4px; white-space: nowrap; }
 .ribbon button.an-effect svg { width: 18px; height: 18px; }
-#anim-section h2 { display: flex; align-items: center; }
-#anim-section .an-close { margin-left: auto; padding: 0 6px; border: 0; background: transparent; font-size: 15px; line-height: 1; color: var(--muted); }
+#anim-section h2, #cmt-section h2 { display: flex; align-items: center; }
+#anim-section .an-close, #cmt-section .an-close { margin-left: auto; padding: 0 6px; border: 0; background: transparent; font-size: 15px; line-height: 1; color: var(--muted); }
 .an-bar { display: flex; gap: 4px; margin-bottom: 6px; }
 .an-bar button { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; font-size: 12px; }
 .an-bar button:first-child { margin-right: auto; }
@@ -1496,3 +1496,42 @@ dialog.equation-dialog textarea { width: 100%; box-sizing: border-box; font: 14p
 .shape-pop .dl-shape { cursor: pointer; }
 /* Slides' Font and Paragraph groups with no text picked */
 .rb-group.rb-idle .rb-sq, .rb-group.rb-idle input, .rb-group.rb-idle select { opacity: 0.6; }
+
+/* Comments (Review > New Comment): cards beside a document's page, or listed beside a slide */
+.doc-comments { position: absolute; top: 0; bottom: 0; pointer-events: none; overflow: hidden; z-index: 3; }
+.doc-comments .cmt-card { position: absolute; left: 0; right: 0; pointer-events: auto; transition: top 0.12s ease-out; }
+.cmt-card { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid #e0a83a; border-radius: 6px; padding: 7px 9px; font: 12px/1.4 var(--ui-font); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); }
+.cmt-card.active { border-color: #d8901f; border-left-color: #d8901f; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); }
+.cmt-card.done { opacity: 0.62; border-left-color: var(--muted); }
+.cmt-card.done.active { opacity: 0.85; }
+.cmt-head { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+.cmt-badge { flex: none; width: 20px; height: 20px; border-radius: 50%; color: #fff; font-size: 9.5px; font-weight: 600; display: grid; place-items: center; letter-spacing: 0.02em; }
+.cmt-who { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmt-when { color: var(--muted); font-size: 11px; margin-left: auto; white-space: nowrap; }
+.cmt-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.cmt-label { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 3px; }
+.cmt-reply { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 5px; }
+.cmt-resolved { font-size: 11px; color: var(--muted); font-style: italic; margin-top: 2px; }
+.cmt-input { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; resize: vertical; font: 12px/1.4 var(--ui-font); color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; }
+.cmt-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.cmt-bar { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.cmt-card:not(.active) .cmt-bar { display: none; }
+.cmt-btn { font: 11.5px var(--ui-font); padding: 2px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--text); cursor: pointer; }
+.cmt-btn:hover { background: var(--accent-soft); }
+.cmt-tools { display: flex; gap: 8px; margin-top: 2px; }
+.cmt-card:not(.active) .cmt-tools { display: none; }
+.cmt-link { font: 11px var(--ui-font); border: 0; padding: 0; background: none; color: var(--accent); cursor: pointer; }
+.cmt-link:hover { text-decoration: underline; }
+
+/* comments on slides: the Comments pane and the markers pinned to the slide */
+.cmt-pane { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow-y: auto; padding: 2px; }
+.cmt-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 2px; }
+.slide-cmt-markers { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 3; }
+.slide-cmt-marker {
+  position: absolute; left: 0; top: 0; pointer-events: auto; min-width: 26px; height: 22px; padding: 0 5px;
+  border: 1.5px solid var(--who, #d8901f); border-radius: 6px 6px 6px 1px; background: #fff8e8; color: #4a3a12;
+  font: 600 11px/18px var(--ui-font); text-align: center; cursor: grab; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.slide-cmt-marker:active { cursor: grabbing; }
+.slide-cmt-marker.active { background: var(--who, #d8901f); color: #fff; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35); }
+.slide-cmt-marker.done { opacity: 0.55; }

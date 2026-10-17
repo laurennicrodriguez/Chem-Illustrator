@@ -36,6 +36,8 @@ export interface Overlay {
   found: [number, number][];
   /** The text box being typed into, and its selection (in the document's coordinates). */
   editing?: { id: number; cell?: boolean; selection: Rect[] } | null;
+  /** Text with comments on it, shaded (more strongly for the comment being looked at). */
+  comments?: { start: number; end: number; active: boolean }[];
 }
 
 export class DocView {
@@ -43,6 +45,8 @@ export class DocView {
   readonly scroller: HTMLDivElement;
   private space: HTMLDivElement;
   zoom = ACTUAL;
+  /** Room kept to the right of the pages, in pixels (for the comments beside them). */
+  gutter = 0;
   private dpr = 1;
   private w = 0;
   private h = 0;
@@ -96,7 +100,7 @@ export class DocView {
     const lay = this.layout;
     if (!lay) return;
     const last = lay.pages[lay.pages.length - 1];
-    const w = lay.pageW * this.zoom + 2 * PAD_X;
+    const w = lay.pageW * this.zoom + 2 * PAD_X + this.gutter;
     const h = (last.top + lay.pageH) * this.zoom + 2 * PAD_Y;
     this.space.style.width = `${Math.ceil(w)}px`;
     this.space.style.height = `${Math.ceil(h)}px`;
@@ -106,7 +110,7 @@ export class DocView {
   private get ox(): number {
     const lay = this.layout;
     const pw = (lay?.pageW ?? 612) * this.zoom;
-    return Math.max(PAD_X, (this.scroller.clientWidth - pw) / 2);
+    return Math.max(PAD_X, (this.scroller.clientWidth - this.gutter - pw) / 2);
   }
 
   /** A point of the document (points) on screen (pixels from the view's top left). */
@@ -118,6 +122,23 @@ export class DocView {
   toDoc(clientX: number, clientY: number): { x: number; y: number } {
     const r = this.scroller.getBoundingClientRect();
     return { x: (clientX - r.left + this.scroller.scrollLeft - this.ox) / this.zoom, y: (clientY - r.top + this.scroller.scrollTop - PAD_Y) / this.zoom };
+  }
+
+  /** The pages and the room beside them are wider than the view. */
+  overflows(): boolean {
+    const lay = this.layout;
+    return !!lay && lay.pageW * this.zoom + 2 * PAD_X + this.gutter > this.scroller.clientWidth;
+  }
+
+  /** The pages' width in points. */
+  pageWidth(): number {
+    return this.layout?.pageW ?? 612;
+  }
+
+  /** Where a stretch of the text is, in the document's coordinates (one box per line). */
+  rangeRects(a: number, b: number): Rect[] {
+    const lay = this.layout;
+    return lay && lay.text.lines.length ? selectionRects(lay.text, a, b) : [];
   }
 
   /** Zoom, keeping the point under `at` (pixels in the view) where it is. */
@@ -137,7 +158,7 @@ export class DocView {
   fitWidth(): void {
     const lay = this.layout;
     if (!lay) return;
-    this.setZoom((this.scroller.clientWidth - 2 * PAD_X - 16) / lay.pageW);
+    this.setZoom((this.scroller.clientWidth - 2 * PAD_X - 16 - this.gutter) / lay.pageW);
   }
 
   /** Scroll so a part of the document (points) is in view. */
@@ -206,6 +227,11 @@ export class DocView {
       const from = lay.text.lines[p.first]?.start ?? 0;
       const to = p.end > p.first ? lay.text.lines[p.end - 1].end : from;
       const inPage = (a: number, b: number) => b >= from && a <= to;
+      for (const c of ov.comments ?? []) {
+        if (!inPage(c.start, c.end)) continue;
+        ctx.fillStyle = c.active ? 'rgba(232, 160, 40, 0.42)' : 'rgba(240, 190, 90, 0.22)';
+        for (const r of rectsOn(lay, p, c.start, c.end)) ctx.fillRect(r.x1, r.y1, r.x2 - r.x1, r.y2 - r.y1);
+      }
       ctx.fillStyle = 'rgba(255, 200, 0, 0.45)';
       for (const [a, b] of ov.found) if (inPage(a, b)) for (const r of rectsOn(lay, p, a, b)) ctx.fillRect(r.x1, r.y1, r.x2 - r.x1, r.y2 - r.y1);
       if (ov.selection && inPage(...ov.selection)) {

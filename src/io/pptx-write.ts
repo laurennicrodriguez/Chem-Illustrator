@@ -10,6 +10,8 @@
 // The slide master's fonts, colours, background, logo, slide numbers and footer become the
 // file's slide master and theme, so PowerPoint's own placeholders follow them too.
 
+import type { PinnedComment } from '../document/comments';
+import { COMMENT_CT, COMMENT_REL, writeSlideComments } from './pptx-comments';
 import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, applyBase, PICTURE_SHADOWS, type Pattern, type PictureLook } from '../model';
 import { turnAbout, type Rect } from '../geom';
 import { layoutText, ASCENT, FONT_STACK, type Measure } from '../text/layout';
@@ -68,7 +70,7 @@ export interface PptxOptions {
 export interface DeckData {
   size: SlideSize;
   master: Master;
-  slides: { layout: LayoutId; doc: Doc; notes: string; transition?: Transition; anims?: Anim[] }[];
+  slides: { layout: LayoutId; doc: Doc; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[] }[];
   /** A design (Design mode): marked so it opens in Design mode again. */
   design?: boolean;
 }
@@ -378,12 +380,22 @@ class Writer {
       pkg.add('ppt/notesMasters/notesMaster1.xml', this.notesMaster(), CT.notesMaster);
     }
     const slideRels: string[] = [];
+    const cmts = writeSlideComments(deck.slides.map((s) => s.comments));
+    if (cmts.authors) {
+      pkg.add('ppt/commentAuthors.xml', cmts.authors, COMMENT_CT.authors);
+      pkg.relate(P, COMMENT_REL.authors, 'commentAuthors.xml');
+    }
     for (let i = 0; i < n; i++) {
       const path = `ppt/slides/slide${i + 1}.xml`;
       slideRels.push(pkg.relate(P, REL.slide, `slides/slide${i + 1}.xml`));
       const s = deck.slides[i];
       pkg.relate(path, REL.slideLayout, `../slideLayouts/slideLayout${LAYOUTS.findIndex((l) => l.id === s.layout) + 1}.xml`);
       pkg.add(path, await this.slide(path, i), CT.slide);
+      const cm = cmts.slides[i];
+      if (cm) {
+        pkg.add(`ppt/comments/comment${i + 1}.xml`, cm, COMMENT_CT.comments);
+        pkg.relate(path, COMMENT_REL.comments, `../comments/comment${i + 1}.xml`);
+      }
       if (s.notes.trim()) {
         const np = `ppt/notesSlides/notesSlide${i + 1}.xml`;
         pkg.add(np, this.notesSlide(s.notes), CT.notes);

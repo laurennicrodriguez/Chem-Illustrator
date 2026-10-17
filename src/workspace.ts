@@ -476,7 +476,7 @@ export class Workspace {
         const deck = tab.deck;
         const bytes = await writePptx({
           size: deck.size, master: deck.master, design: tab.mode === 'design',
-          slides: deck.slides.map((s, i) => ({ layout: s.layout, doc: deck.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims })),
+          slides: deck.slides.map((s, i) => ({ layout: s.layout, doc: deck.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims, comments: s.comments })),
         }, { ...this.hooks.pptx, title: name.replace(/\.[^.]+$/, '') });
         await writeFile(ref, name, bytes, PPTX);
         tab.savedEdits = deck.edits;

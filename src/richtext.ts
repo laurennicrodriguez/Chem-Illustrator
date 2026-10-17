@@ -7,7 +7,7 @@ import type { TextRun } from './model';
 export type RunStyle = Omit<TextRun, 'text'>;
 export type Toggle = 'bold' | 'italic' | 'underline' | 'sub' | 'sup' | 'formula';
 
-const KEYS = ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'size', 'font', 'color', 'highlight', 'obj', 'strike', 'rev'] as const;
+const KEYS = ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'size', 'font', 'color', 'highlight', 'obj', 'strike', 'rev', 'cmt'] as const;
 /** Subscript, superscript and formula style change where characters sit, so only one applies. */
 const POSITION: Toggle[] = ['sub', 'sup', 'formula'];
 
@@ -94,9 +94,15 @@ export function typingStyle(runs: TextRun[], start: number, end: number, fallbac
   else s = charStyle(runs, start) ?? (start > 0 ? charStyle(runs, start - 1) : null) ?? fallback;
   // typing next to a figure or field types text, not another of them, and typing next to a
   // tracked change isn't part of that change (tracking marks it as its own)
-  if (s.obj === undefined && s.rev === undefined) return s;
+  // typing just after a comment's words isn't part of it (inside them it is, as in Word)
+  if (s.cmt !== undefined && end === start) {
+    const after = start < text.length ? charStyle(runs, start)?.cmt : undefined;
+    const keep = s.cmt.split(',').filter((id) => after?.split(',').includes(id));
+    s = { ...s, cmt: keep.length ? keep.join(',') : undefined };
+  }
+  if (s.obj === undefined && s.rev === undefined) return cleanStyle(s);
   const { obj: _, rev: _r, ...rest } = s;
-  return rest;
+  return cleanStyle(rest);
 }
 
 /** What every character between two offsets has in common (for showing which buttons are on). */

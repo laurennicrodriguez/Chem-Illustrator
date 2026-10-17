@@ -20,12 +20,13 @@ import { ACS_LINE, CELL_PAD, GRID_LINE, bibHang, docCellAlign, shownSize } from 
 import { bibliography, piecesText } from '../document/references';
 import { TOC_INDENT, tocEntries } from '../document/toc';
 import { parseRev } from '../document/revisions';
+import { cmtIds, initials, placedComments, type CommentThread } from '../document/comments';
 import { toOmml } from '../document/math';
 import { documentMeasure } from '../text/font-measure';
 import { arialWidth } from '../text-metrics';
 import { PAD_X, PAD_Y, cellAlign, isCovered, spanOf } from '../table';
 import {
-  BIB_MARK, CITE_FIELD, DOCX_CT, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, MC_NS, M_NS, PIC_NS, TABLE_NAME, W_NS, WORD_HIGHLIGHTS, WP_NS, WPS_NS, twips, type DocxModel,
+  BIB_MARK, CITE_FIELD, DOCX_CT, W14_NS, W15_NS, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, MC_NS, M_NS, PIC_NS, TABLE_NAME, W_NS, WORD_HIGHLIGHTS, WP_NS, WPS_NS, twips, type DocxModel,
 } from './docx';
 
 export interface DocxDeps {
@@ -71,6 +72,11 @@ class DocxWriter {
   private model: DocxModel;
   private textW: number;
   private fullW: number;
+  /** The comments to write (those on some text), with the Word ids of each one's replies. */
+  private cmts = new Map<number, { c: CommentThread; replies: number[] }>();
+  /** How much of each comment's text is still to be written (its range closes when none is left). */
+  private cmtLeft = new Map<number, number>();
+  private cmtOpen = new Set<number>();
 
   constructor(private t: DocText, private deps: DocxDeps, private pages?: string[]) {
     this.shown = fieldTexts(t);
@@ -85,6 +91,14 @@ class DocxWriter {
     this.fullW = Math.max(36, t.page.w - t.page.left - t.page.right);
     // figures are made to fit a column's width
     this.textW = columnsOf(t.page, this.fullW).w;
+    // comments: replies are comments of their own in Word, numbered after the others
+    const placed = placedComments(t.runs, t.comments);
+    let next = Math.max(-1, ...placed.map((p) => p.id)) + 1;
+    for (const p of placed) this.cmts.set(p.id, { c: p.c, replies: (p.c.replies ?? []).map(() => next++) });
+    for (const r of t.runs) {
+      const n = r.text.replace(/\n/g, '').length;
+      for (const id of cmtIds(r.cmt)) if (this.cmts.has(id)) this.cmtLeft.set(id, (this.cmtLeft.get(id) ?? 0) + n);
+    }
   }
 
   async write(title: string): Promise<Uint8Array> {
@@ -96,6 +110,7 @@ class DocxWriter {
     pkg.add(main, `${HEAD}<w:document xmlns:w="${W_NS}" xmlns:r="${NS.r}" xmlns:wp="${WP_NS}" xmlns:a="${NS.a}" xmlns:pic="${PIC_NS}" xmlns:wps="${WPS_NS}" xmlns:mc="${MC_NS}" xmlns:m="${M_NS}"><w:body>${body}${sect}</w:body></w:document>`, DOCX_CT.document);
     pkg.relate(main, DOCX_REL.styles, 'styles.xml');
     pkg.add('word/styles.xml', this.styles(), DOCX_CT.styles);
+    if (this.cmts.size) this.commentParts(main);
     pkg.relate(main, DOCX_REL.numbering, 'numbering.xml');
     pkg.add('word/numbering.xml', this.numbering(), DOCX_CT.numbering);
     pkg.relate(main, DOCX_REL.settings, 'settings.xml');
@@ -190,6 +205,9 @@ class DocxWriter {
       } else out.push(await this.paragraph(main, ps, runs, listNum, p));
       lastWasTable = false;
     }
+    // comments still open (on a table, say) close in a paragraph of their own
+    const left = [...this.cmtOpen].map((id) => this.cmtEnd(id)).join('');
+    if (left) { out.push(`<w:p>${left}</w:p>`); lastWasTable = false; }
     // Word ends the text with a paragraph
     if (lastWasTable || !out.length) out.push('<w:p/>');
     return out.join('');
@@ -214,6 +232,65 @@ class DocxWriter {
     const del = body.replace(/<w:t( [^>]*)?>/g, '<w:delText$1>').replace(/<\/w:t>/g, '</w:delText>')
       .replace(/<w:instrText( [^>]*)?>/g, '<w:delInstrText$1>').replace(/<\/w:instrText>/g, '</w:delInstrText>');
     return `<w:del ${this.revAttrs(rev!)}>${del}</w:del>`;
+  }
+
+  // ---------------------------------------------------------------- comments
+
+  /** Where comments begin at a run: Word's comment range starts (the replies' with their comment's). */
+  private cmtBefore(r: TextRun): string {
+    let out = '';
+    for (const id of cmtIds(r.cmt)) {
+      const w = this.cmts.get(id);
+      if (!w || this.cmtOpen.has(id) || !this.cmtLeft.get(id)) continue;
+      this.cmtOpen.add(id);
+      for (const x of [id, ...w.replies]) out += `<w:commentRangeStart w:id="${x}"/>`;
+    }
+    return out;
+  }
+
+  /** After a run: the ends of the comments whose last text it was, each with its mark in the text. */
+  private cmtAfter(r: TextRun): string {
+    let out = '';
+    const n = r.text.replace(/\n/g, '').length;
+    for (const id of cmtIds(r.cmt)) {
+      if (!this.cmts.has(id)) continue;
+      const left = (this.cmtLeft.get(id) ?? 0) - n;
+      this.cmtLeft.set(id, left);
+      if (left <= 0 && this.cmtOpen.has(id)) out += this.cmtEnd(id);
+    }
+    return out;
+  }
+
+  private cmtEnd(id: number): string {
+    this.cmtOpen.delete(id);
+    return [id, ...this.cmts.get(id)!.replies].map((x) => `<w:commentRangeEnd w:id="${x}"/><w:r><w:commentReference w:id="${x}"/></w:r>`).join('');
+  }
+
+  /**
+   * Word's comments part, and Word 2013's part linking replies to their comment and marking the
+   * resolved ones (by the id of each comment's last paragraph).
+   */
+  private commentParts(main: string): void {
+    let para = 0x10000000;
+    const notes: string[] = [], ex: string[] = [];
+    const note = (id: number, c: { author: string; date: string; text: string }, parent: string | null, done: boolean): string => {
+      const lines = c.text.split('\n');
+      const ids = lines.map(() => (para++).toString(16).toUpperCase());
+      const ps = lines.map((line, i) => `<w:p w14:paraId="${ids[i]}" w14:textId="77777777">${i === 0 ? '<w:r><w:annotationRef/></w:r>' : ''}${run('', line)}</w:p>`);
+      const last = ids[ids.length - 1];
+      const date = c.date ? ` w:date="${xml(c.date.replace(/\.\d+Z$/, 'Z'))}"` : '';
+      notes.push(`<w:comment w:id="${id}" w:author="${xml(c.author || 'Author')}"${date} w:initials="${xml(initials(c.author) || 'A')}">${ps.join('')}</w:comment>`);
+      ex.push(`<w15:commentEx w15:paraId="${last}"${parent ? ` w15:paraIdParent="${parent}"` : ''} w15:done="${done ? 1 : 0}"/>`);
+      return last;
+    };
+    for (const [id, { c, replies }] of this.cmts) {
+      const top = note(id, c, null, !!c.done);
+      (c.replies ?? []).forEach((r, i) => note(replies[i], r, top, !!c.done));
+    }
+    this.pkg.relate(main, DOCX_REL.comments, 'comments.xml');
+    this.pkg.add('word/comments.xml', `${HEAD}<w:comments xmlns:w="${W_NS}" xmlns:w14="${W14_NS}">${notes.join('')}</w:comments>`, DOCX_CT.comments);
+    this.pkg.relate(main, DOCX_REL.commentsExtended, 'commentsExtended.xml');
+    this.pkg.add('word/commentsExtended.xml', `${HEAD}<w15:commentsEx xmlns:w15="${W15_NS}" xmlns:mc="${MC_NS}">${ex.join('')}</w15:commentsEx>`, DOCX_CT.commentsExtended);
   }
 
   private async paragraph(main: string, ps: ParaStyle, runs: TextRun[], listNum: number, index = -1): Promise<string> {
@@ -267,11 +344,12 @@ class DocxWriter {
     const shownRuns = runs.filter((r) => r.obj !== undefined || r.text.trim());
     const display = shownRuns.length === 1 && shownRuns[0].obj !== undefined && this.t.objects[shownRuns[0].obj]?.kind === 'math';
     for (const r of runs) {
-      if (r.obj === undefined) { out.push(this.tracked(r.rev, this.textRuns(r, st))); continue; }
+      out.push(this.cmtBefore(r));
+      if (r.obj === undefined) { out.push(this.tracked(r.rev, this.textRuns(r, st)), this.cmtAfter(r)); continue; }
       const o = this.t.objects[r.obj];
       if (o?.kind === 'math') {
         const m = `<m:oMath>${toOmml(o.tex)}</m:oMath>`;
-        out.push(display ? `<m:oMathPara>${m}</m:oMathPara>` : m);
+        out.push(display ? `<m:oMathPara>${m}</m:oMathPara>` : m, this.cmtAfter(r));
         continue;
       }
       const mark = this.bookmarks.has(r.obj) && isCompound(r.obj) ? this.bookmarkId++ : null;
@@ -279,6 +357,7 @@ class DocxWriter {
       out.push(this.tracked(r.rev, await this.objectRun(main, r, st)));
       if (mark !== null) out.push(`<w:bookmarkEnd w:id="${mark}"/>`);
       if (open && r.obj === open.seq) { out.push(`<w:bookmarkEnd w:id="${open.id}"/>`); open = null; }
+      out.push(this.cmtAfter(r));
     }
     return `<w:p>${pPr.length ? `<w:pPr>${pPr.join('')}</w:pPr>` : ''}${colBreak}${out.join('')}</w:p>`;
   }

@@ -161,6 +161,22 @@ The contents keep themselves up to date: page numbers change as text moves, and 
 
 Changes made by other people in Word open here as changes, in a different colour for each person.
 
+## Comments
+
+1. Select some words (or just click in a word) and choose **Review** tab ▸ **New Comment** (Ctrl+Alt+M, or right-click ▸ **New Comment**). The first time, it asks for the name to put on your comments.
+2. Type the comment in the card that opens beside the page and press Enter (Shift+Enter starts a new line). Escape on an empty card takes it away again.
+3. The words a comment is on are shaded. Click in them, or click the card, to see that comment; the cards line up beside their words.
+
+On a card:
+
+- **Reply** adds an answer under the comment, with your name and the time.
+- **Resolve** marks it as dealt with: it stays, greyed, until you delete it. **Reopen** brings it back.
+- **Edit** changes the text, and **Delete** removes the comment with its replies. Replies have their own Edit and Delete.
+
+The Review tab also has **◀ Previous** and **Next ▶** to step through the comments, **Delete All**, and **Show Comments** to hide or show the cards. Undo works for every change. If you delete all the words a comment is on, the comment goes with them (and comes back with Undo).
+
+Comments are saved in the .docx as Word's own, with their replies and Resolved marks, so they show in Word's comment pane; comments added in Word open here the same way.
+
 ## Equations
 
 **Insert** tab ▸ **Equation** (or **Insert ▸ Equation…**, or Alt+=) opens the equation window.

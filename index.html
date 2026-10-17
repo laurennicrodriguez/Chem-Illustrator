@@ -136,6 +136,9 @@
         <button role="menuitemcheckbox" aria-checked="false" data-cmd="animation-pane"><span>Animation Pane</span></button>
         <button role="menuitem" data-cmd="preview-slide">Preview Slide</button>
         <hr />
+        <button role="menuitem" data-cmd="new-comment">New Comment</button>
+        <button role="menuitemcheckbox" aria-checked="false" data-cmd="show-comments"><span>Show Comments</span></button>
+        <hr />
         <button role="menuitem" data-cmd="present">Present from Beginning</button>
         <button role="menuitem" data-cmd="present-current">Present from This Slide</button>
         <button role="menuitem" data-cmd="presenter-view" title="Slides full screen on the projector; your notes, the next slide and a timer on your own screen">Presenter View</button>
@@ -805,6 +808,22 @@
         </div>
         <div class="rb-label">Changes</div>
       </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="new-comment" title="New Comment (Ctrl+Alt+M): a note on the selected text, or on the word at the caret, shown beside the page with your name and the time"><span class="rb-icon">💬</span>New Comment</button>
+          <div class="rb-col">
+            <button data-doc="prev-comment" title="Go to the comment before this one">◀ Previous</button>
+            <button data-doc="next-comment" title="Go to the next comment">Next ▶</button>
+          </div>
+          <div class="rb-col">
+            <button data-doc="resolve-comment" title="Mark the comment at the caret as dealt with (or open again)">Resolve</button>
+            <button data-doc="delete-comment" title="Delete the comment at the caret and its replies">Delete</button>
+            <button data-doc="delete-all-comments" title="Delete every comment in the document">Delete All</button>
+          </div>
+          <button class="rb-big" data-doc="show-comments" aria-pressed="true" title="Show the comments beside the page, or hide them"><span class="rb-icon">☰</span>Show Comments</button>
+        </div>
+        <div class="rb-label">Comments</div>
+      </div>
     </div>
     <div class="rb-panel" data-doc-panel="table" hidden>
       <div class="rb-group">
@@ -893,6 +912,7 @@
       <button role="tab" data-sl-tab="transitions" aria-selected="false">Transitions</button>
       <button role="tab" data-sl-tab="animations" aria-selected="false">Animations</button>
       <button role="tab" data-sl-tab="show" aria-selected="false">Slide Show</button>
+      <button role="tab" data-sl-tab="review" aria-selected="false">Review</button>
     </div>
     <div class="rb-panel" data-sl-panel="home">
       <div class="rb-group">
@@ -1010,6 +1030,24 @@
           <button class="rb-big" data-cmd="presenter-view" title="Slides full screen on the projector; your notes, the next slide and a timer on your own screen"><span class="rb-icon">▣</span>Presenter View</button>
         </div>
         <div class="rb-label">Present</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-sl-panel="review" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="new-comment" title="New Comment (Ctrl+Alt+M): a note pinned to the slide beside what is selected, with your name and the time"><span class="rb-icon">💬</span>New Comment</button>
+          <div class="rb-col">
+            <button data-cmd="prev-comment" title="Go to the comment before this one (on this slide or an earlier one)">◀ Previous</button>
+            <button data-cmd="next-comment" title="Go to the next comment (on this slide or a later one)">Next ▶</button>
+          </div>
+          <div class="rb-col">
+            <button data-cmd="resolve-comment" title="Mark the comment picked as dealt with (or open again)">Resolve</button>
+            <button data-cmd="delete-comment" title="Delete the comment picked and its replies">Delete</button>
+            <button data-cmd="delete-all-comments" title="Delete every comment on this slide">Delete All on Slide</button>
+          </div>
+          <button class="rb-big" data-cmd="show-comments" data-sl-cmt="show" aria-pressed="false" title="Show the comments: their markers on the slide and the Comments pane"><span class="rb-icon">☰</span>Show Comments</button>
+        </div>
+        <div class="rb-label">Comments</div>
       </div>
     </div>
     <div class="rb-panel" data-sl-panel="transitions" hidden>
@@ -1239,6 +1277,7 @@
     <button id="side-fold" type="button" title="Fold the side panel away (View > Fold Side Panel)" aria-label="Fold the side panel away">›</button>
     <div id="side-content">
     <section id="anim-section" hidden></section>
+    <section id="cmt-section" hidden></section>
     <section id="style-section" hidden>
       <h2>Style</h2>
       <div id="style-body"></div>
