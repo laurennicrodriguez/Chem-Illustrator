@@ -11,7 +11,7 @@ import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, 
 import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle } from './model';
 import { Renderer, measureText, forgetTextWidths } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
-import type { Align } from './editor/arrange';
+import { selectionBox, POINTS, type Align } from './editor/arrange';
 import { readCdxml, ReadStats } from './io/cdxml';
 import { ChemClient } from './chem/client';
 import type { FragmentResult } from './worker/chem-worker';
@@ -59,6 +59,7 @@ import { whiteToClear } from './render/background';
 
 import { pickSlideTemplate } from './ui/slide-templates';
 import { AnimationUI } from './ui/animation-ui';
+import { SlideComments } from './ui/slide-comments';
 import { writePptx, type PptxOptions } from './io/pptx-write';
 import { EFFECTS, animName, newAnim } from './deck/animation';
 import { SLIDE_TEMPLATES, applyTemplate } from './deck/templates';import { pickTemplate } from './ui/template-gallery';
@@ -359,6 +360,7 @@ let designLib: DesignLibrary | null = null;
 const shapeMenu = new ShapeMenu();
 let layers: LayersPanel | null = null;
 let animUi: AnimationUI | null = null;
+let slideCmts: SlideComments | null = null;
 /** View > Alignment Guides: moved things snap into line with other things and the page, on or off for each kind of tab. */
 const guidesOn: Record<'drawing' | 'slides' | 'design', boolean> = { drawing: false, slides: true, design: true };
 const guideMode = (): keyof typeof guidesOn | null => {
@@ -1207,6 +1209,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   layers?.show(design ? doc : null);
   showGuides();
   if (deck) deck.onMotion = () => { animUi?.refresh(); ws.noteChange(); renderer.repaintAll(); editor.requestScene(); };
+  if (deck) deck.onComments = () => { slideCmts?.update(); ws.noteChange(); };
   editor.textFirst = !!deck;
   editor.structuresLocked = slides && structuresLocked;
   for (const el of document.querySelectorAll<HTMLElement>('.design-only')) el.hidden = !design;
@@ -1238,6 +1241,7 @@ function enterTab(tab: Tab, opened: boolean): void {
     showSlideState();
   } else slideList.show(null);
   animUi?.update();
+  slideCmts?.slideChanged();
   layoutSplit();
   // the slide list and notes take room from the drawing area
   resize();
@@ -1264,6 +1268,8 @@ const slidePage = {
     drawSlidePage(ctx, { size: d.size, master: d.master, layout: d.current.layout, index: d.index }, SURROUND);
     if (ws.active.mode === 'design' && designGrid.on) drawGrid(ctx, d.size, designGrid.step);
     if (ws.active.mode === 'slides') animUi?.drawMarkers(ctx, renderer.view.scale);
+    // (the comment markers are over the drawing, and follow it as it moves)
+    if (ws.active.mode === 'slides') slideCmts?.place();
   },
 };
 
@@ -1299,6 +1305,7 @@ function slideSwitched(deck: Deck): void {
   editor.requestScene();
   editor.clearSelection();
   animUi?.slideChanged();
+  slideCmts?.slideChanged();
 }
 
 /** The layout and size boxes and the Slide menu show the slide being edited. */
@@ -1332,6 +1339,19 @@ animUi = new AnimationUI($('#ribbon'), $('#anim-section'), {
   finishTyping,
   flash,
   repaint: () => { renderer.repaintAll(); editor.requestScene(); },
+});
+
+slideCmts = new SlideComments($('#cmt-section'), $('#canvas-host'), {
+  deck: () => (ws.active.mode === 'slides' ? deckNow() : null),
+  anchor: () => {
+    const s = editor.sel;
+    const b = s.atoms.size + s.captions.size + s.arrows.size + s.shapes.size ? selectionBox(doc, s, POINTS) : null;
+    return b ? { x: b.x2 + 4, y: b.y1 } : null;
+  },
+  view: () => renderer.view,
+  askName: () => docMode.askReviewName(),
+  flash,
+  focus: () => $('#overlay').focus(),
 });
 
 // ---------------------------------------------------------------- Design mode
@@ -2611,6 +2631,14 @@ const COMMANDS: Record<string, () => unknown> = {
   'animation-pane': () => animUi?.showPane(!animUi.paneShown),
   'preview-slide': () => animUi?.preview(),
   'remove-animation': () => animUi?.removePicked(),
+  // comments on slides (in documents, the document's own commands run first)
+  'new-comment': () => { if (ws.active.mode !== 'slides' || !slideCmts) return false; finishTyping(); void slideCmts.add(); },
+  'prev-comment': () => { if (ws.active.mode !== 'slides') return false; slideCmts?.step(false); },
+  'next-comment': () => { if (ws.active.mode !== 'slides') return false; slideCmts?.step(true); },
+  'resolve-comment': () => { if (ws.active.mode !== 'slides') return false; slideCmts?.toggleResolved(); },
+  'delete-comment': () => { if (ws.active.mode !== 'slides') return false; slideCmts?.remove(); },
+  'delete-all-comments': () => { if (ws.active.mode !== 'slides') return false; slideCmts?.removeAll(); },
+  'show-comments': () => { if (ws.active.mode !== 'slides' || !slideCmts) return false; slideCmts.show(!slideCmts.shown); },
   'drawing-style': () => drawingStyleDialog(),
   present: () => present(false),
   'present-current': () => present(true),
@@ -4226,6 +4254,7 @@ function drawingMenu(): MenuItem[] {
     return [
       { cmd: 'paste' }, { cmd: 'paste-smiles' }, { cmd: 'select-all' }, null,
       { cmd: 'undo' }, { cmd: 'redo' }, null,
+      ...(ws.active.mode === 'slides' ? [{ cmd: 'new-comment', label: 'New Comment' }, { cmd: 'show-comments', label: 'Show Comments' }, null] : []),
       { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'connector-tool' }] : []), ...(ws.active.mode === 'slides' ? [{ cmd: 'slide-shapes', label: 'Shape…' }] : [])] },
       { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] },
       { cmd: 'drawing-style' },
@@ -4271,7 +4300,7 @@ function drawingMenu(): MenuItem[] {
     ...(ws.active.mode === 'slides' ? [{ label: 'Animation', items: [
       ...ANIM_COMMANDS.slice(0, EFFECTS.length), null, ...ANIM_COMMANDS.slice(EFFECTS.length), null,
       { cmd: 'remove-animation', label: 'Remove Animation' }, { cmd: 'animation-pane', label: 'Animation Pane' }, { cmd: 'preview-slide', label: 'Preview Slide' },
-    ] }] : []),
+    ] }, { cmd: 'new-comment', label: 'New Comment' }] : []),
     null,
     { cmd: 'select-all' },
     view,
@@ -4747,7 +4776,7 @@ requestAnimationFrame(() => {
 
 // Hooks for the automated speed tests.
 (window as any).__app = { doc, editor, renderer, chem, live, command, addMolfile, cdxml: (name: string) => writeCdxml(doc, { name, textMeasure: measureText }), openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode, docxBytes: () => writeDocx(docMode.file!.t, docFiles),
-  pptxBytes: () => { const d = deckNow()!; return writePptx({ size: d.size, master: d.master, slides: d.slides.map((s, i) => ({ layout: s.layout, doc: d.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims })) }, pptxOptions()); } };
+  pptxBytes: () => { const d = deckNow()!; return writePptx({ size: d.size, master: d.master, slides: d.slides.map((s, i) => ({ layout: s.layout, doc: d.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims, comments: s.comments })) }, pptxOptions()); } };
 
 // ---------------------------------------------------------------- desktop self-test
 

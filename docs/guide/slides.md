@@ -130,6 +130,17 @@ A reagent written over an arrow animates with its whole scheme, because the sche
 
 **Preview** on the Animations tab (or **Slide ▸ Preview Slide**) plays the slide's transition and animations. Undo and redo work for every change.
 
+## Comments
+
+**Review** tab ▸ **New Comment** (Ctrl+Alt+M, **Slide ▸ New Comment**, or right-click ▸ **New Comment**) pins a note to the slide, beside what is selected or in the slide's top corner. The **Comments** pane opens in the right-hand panel with a card to type in; press Enter to save it.
+
+- Each comment shows on the slide as a small marker with the writer's initials and its number. Drag a marker to move it; click it to see its card.
+- On a card: **Reply**, **Resolve** (greyed until deleted; **Reopen** brings it back), **Edit** and **Delete**.
+- **◀ Previous** and **Next ▶** step through every comment in the deck, going to each one's slide. **Delete All on Slide** clears the slide being edited.
+- **Show Comments** hides or shows the markers and the pane. Markers are only on screen: they are never shown in the slide show, in pictures or in print.
+
+Undo works for every change. Comments are saved in the .pptx as PowerPoint comments, with their replies, so PowerPoint, Keynote and Google Slides show them. Comments added in PowerPoint (old or new style) open here too.
+
 ## Giving the show
 
 | To do this | Press |

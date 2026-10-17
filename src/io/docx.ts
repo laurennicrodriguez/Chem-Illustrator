@@ -32,6 +32,8 @@ export const DOCX_CT = {
   itemProps: 'application/vnd.openxmlformats-officedocument.customXmlProperties+xml',
   fontTable: 'application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml',
   font: 'application/vnd.openxmlformats-officedocument.obfuscatedFont',
+  comments: 'application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml',
+  commentsExtended: 'application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml',
 };
 
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/';
@@ -48,7 +50,14 @@ export const DOCX_REL = {
   customXmlProps: R + 'customXmlProps',
   fontTable: R + 'fontTable',
   font: R + 'font',
+  comments: R + 'comments',
+  /** Word 2013's part saying which comments are replies, and which are resolved. */
+  commentsExtended: 'http://schemas.microsoft.com/office/2011/relationships/commentsExtended',
 };
+
+/** Word 2010's and 2013's additions (paragraph ids, and the comments' replies and Resolved marks). */
+export const W14_NS = 'http://schemas.microsoft.com/office/word/2010/wordml';
+export const W15_NS = 'http://schemas.microsoft.com/office/word/2012/wordml';
 
 /** Names Word's pictures of our drawings carry (kept by Word), so each can be found again. */
 export const DRAWING_NAME = 'Chem Illustrator drawing';

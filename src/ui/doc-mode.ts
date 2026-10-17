@@ -22,6 +22,7 @@ import { DocView, ACTUAL, type Overlay } from './doc-view';
 import { DocPanel, parseLength, showLength, type DocBoxKey } from './doc-panel';
 import { WORD_HIGHLIGHTS } from '../io/docx';
 import { DocFind } from './doc-find';
+import { DocComments } from './doc-comments';
 import { tocEntries } from '../document/toc';
 import { changesIn, countChanges, decide, decideEverywhere, reviewAuthor, setReviewAuthor } from '../document/revisions';
 import { ask } from './ask';
@@ -136,6 +137,8 @@ export class DocumentMode {
   /** The last copy made here: pasting the same text back brings its figures and fields too (and the references its citations cite). */
   private clip: (OwnCopy & { text: string }) | null = null;
   private refs: ReferencesDialog;
+  /** Review > New Comment: comments beside the page. */
+  readonly comments: DocComments;
   private readonly closeMenuOutside = (e: Event) => { if (this.menu && !this.menu.contains(e.target as Node)) this.closeMenu(); };
 
   constructor(private host: DocModeHost) {
@@ -143,7 +146,7 @@ export class DocumentMode {
     const docHost = $<HTMLDivElement>('#doc-host');
     this.view = new DocView(docHost);
     this.view.overlay = () => this.overlay();
-    this.view.onMove = () => { this.placeInput(); this.showZoom(); };
+    this.view.onMove = () => { this.placeInput(); this.showZoom(); this.comments?.place(); };
     this.ribbon = $('#doc-ribbon');
     this.ta = document.createElement('textarea');
     this.ta.className = 'text-input doc-input';
@@ -173,6 +176,12 @@ export class DocumentMode {
       setFill: (id, c) => this.setFill(id, c),
       setLook: (id, patch) => this.setLook(id, patch),
       lookOf: (id) => this.lookOf(id),
+    });
+    this.comments = new DocComments(docHost, this.view, {
+      file: () => this.file,
+      focus: () => this.focus(),
+      flash: (msg, ms) => this.host.flash(msg, ms),
+      askName: () => this.askReviewName(),
     });
     this.refs = new ReferencesDialog({
       file: () => this.file,
@@ -465,6 +474,7 @@ export class DocumentMode {
     if (!f) {
       if (this.blink) { clearInterval(this.blink); this.blink = null; }
       this.panel.closeBoxes();
+      this.comments.update();
       return;
     }
     f.listener = (kind) => this.changed(kind);
@@ -528,6 +538,8 @@ export class DocumentMode {
     this.placeInput();
     this.updateRibbon();
     this.panel.update();
+    this.comments.followCaret();
+    this.comments.update();
     this.view.redraw();
   }
 
@@ -594,6 +606,7 @@ export class DocumentMode {
       picked,
       found: this.finder.open ? this.finder.hits : [],
       framed,
+      comments: this.comments.shading(),
     };
   }
 
@@ -706,6 +719,14 @@ export class DocumentMode {
     cmd('Cut', 'cut');
     cmd('Copy', 'copy');
     cmd('Paste', 'paste');
+    menu.appendChild(document.createElement('hr'));
+    cmd('New Comment', 'new-comment', 'A comment on the selection, or on the word here (Review tab)');
+    const commented = this.comments.placed().filter((x) => x.start <= offset && offset <= x.end);
+    if (commented.length) {
+      const last = commented[commented.length - 1];
+      item('Delete Comment', () => this.comments.remove(last.id));
+      item(last.c.done ? 'Reopen Comment' : 'Resolve Comment', () => { this.comments.active = last.id; this.comments.toggleResolved(); });
+    }
     menu.appendChild(document.createElement('hr'));
     const picked = this.pickedObject();
     if (picked !== null) {
@@ -1024,8 +1045,10 @@ export class DocumentMode {
     // citations bring the references they cite, so they work when pasted into another document
     const cited = new Set(Object.values(objects).flatMap((o) => (o.kind === 'cite' ? o.refs : [])));
     const references = (f.t.references ?? []).filter((r) => cited.has(r.id));
-    this.clip = { text: plain, runs: sel.runs, paras: sel.paras, objects, references };
-    try { e.clipboardData.setData('application/x-' + OWN_KIND, JSON.stringify({ runs: sel.runs, paras: sel.paras, objects, references })); } catch { /* not every browser allows own types */ }
+    // (comments stay with the words they are on: a copy doesn't bring them)
+    const runs = sel.runs.map((r) => { if (!r.cmt) return r; const { cmt: _, ...rest } = r; return rest; });
+    this.clip = { text: plain, runs, paras: sel.paras, objects, references };
+    try { e.clipboardData.setData('application/x-' + OWN_KIND, JSON.stringify({ runs, paras: sel.paras, objects, references })); } catch { /* not every browser allows own types */ }
     if (cut) ed.replaceSelection([], undefined, 'cut');
   }
 
@@ -1638,6 +1661,12 @@ export class DocumentMode {
       case 'edit-equation': { const m = this.pickedMath(); if (m === null) { this.host.flash('Click an equation first (or double-click it).'); break; } void this.editEquation(m); break; }
       case 'track-changes': void this.toggleTracking(); break;
       case 'review-name': void this.askReviewName(); break;
+      case 'new-comment': void this.comments.add(); return true;
+      case 'delete-comment': this.comments.remove(); break;
+      case 'delete-all-comments': this.comments.removeAll(); break;
+      case 'resolve-comment': this.comments.toggleResolved(); break;
+      case 'next-comment': case 'prev-comment': this.comments.step(cmd === 'next-comment'); return true;
+      case 'show-comments': this.comments.toggleShown(); this.updateRibbon(); break;
       case 'accept-change': case 'reject-change': this.decideChange(cmd === 'accept-change'); break;
       case 'accept-all': case 'reject-all': this.decideAll(cmd === 'accept-all'); break;
       case 'next-change': case 'prev-change': this.goToChange(cmd === 'next-change'); break;
@@ -2105,7 +2134,7 @@ export class DocumentMode {
   }
 
   /** The name put on your changes (kept in your settings). */
-  private async askReviewName(): Promise<boolean> {
+  async askReviewName(): Promise<boolean> {
     const got = await ask('Your Name', [{ name: 'name', label: 'Name shown on your changes', value: reviewAuthor() }], { ok: 'Save', note: 'Word shows this name on your changes too. Change it any time here or in Edit > Preferences.' });
     if (!got || !got.name.trim()) return false;
     setReviewAuthor(got.name);
@@ -2296,6 +2325,7 @@ export class DocumentMode {
     pick('#doc-columns', String(f.t.page.cols ?? 1));
     press('numbers-s', f.t.hf.prefix === 'S');
     press('track-changes', !!f.t.track);
+    press('show-comments', this.comments.shown);
     const fig = this.pickedObject() ?? f.box?.id ?? null;
     const wrapSel = this.ribbon.querySelector<HTMLSelectElement>('#doc-wrap');
     if (wrapSel) {

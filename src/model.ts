@@ -163,6 +163,8 @@ export interface TextRun {
   strike?: boolean;
   /** Documents with tracked changes: this text was inserted or deleted, by whom and when ("ins|Nate|2026-10-14T21:00:00Z"; see document/revisions). */
   rev?: string;
+  /** Documents: the comments this text is under, by id, joined by commas ("2,5"; see document/comments). */
+  cmt?: string;
 }
 
 /**

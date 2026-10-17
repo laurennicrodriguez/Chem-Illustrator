@@ -10,6 +10,7 @@
 // document, while anything formatted by hand (an italic word, a paragraph centred on its
 // own) keeps its own look.
 
+import type { CommentThread } from './comments';
 import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
 import type { RichText } from '../text/editing';
 import { ACS_1996, type DocStyle } from '../style';
@@ -196,6 +197,8 @@ export interface DocText extends RichText {
   citeOptions?: Partial<CiteFormat>;
   /** Changes are being tracked (Review > Track Changes): edits are marked, not made outright. */
   track?: boolean;
+  /** Comments (Review > New Comment), by id; the text they are on carries the id (see comments.ts). */
+  comments?: Record<number, CommentThread>;
 }
 
 // ---------------------------------------------------------------- defaults

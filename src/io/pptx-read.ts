@@ -9,6 +9,8 @@
 // lines, arrows and tables. What has no place here yet (charts, rotated things) is noted in
 // warnings, never refused.
 
+import type { PinnedComment } from '../document/comments';
+import { COMMENT_REL, readCommentAuthors, readLegacyComments, readModernComments } from './pptx-comments';
 import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureLook } from '../model';
 import { layoutTable, NOTE_SCALE } from '../table';
 import { linesFromBorders, type Borders } from './cdxml-table';
@@ -28,7 +30,7 @@ const GEO_BY_PRST = new Map(GEOS.filter((g) => g.prst).map((g) => [g.prst!, g.id
 /** PowerPoint shapes that come into slides as plain boxes and ovals (with their text beside them as text boxes). */
 const PLAIN_PRST = new Set(['rect', 'roundRect', 'ellipse', 'snip1Rect', 'flowChartProcess', 'flowChartAlternateProcess']);
 
-export interface PptxSlide { layout: LayoutId; contents: Contents; notes: string; transition?: Transition; anims?: Anim[] }
+export interface PptxSlide { layout: LayoutId; contents: Contents; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[] }
 export interface PptxRead {
   size: SlideSize;
   master: Master;
@@ -379,10 +381,34 @@ class Reader {
     const targets = this.spidTargets;
     const anims = targets ? readTiming(root, (spid) => targets.get(spid) ?? null, warn) : [];
     this.spidTargets = null;
+    const comments = this.comments(path);
     return {
       layout: ['title', 'title-content', 'two-content', 'title-only', 'blank'].includes(id) ? id : 'title-content', contents: doc.contents(), notes: this.notes(path),
       ...(transition && (transition.kind !== 'none' || transition.advanceAfter) ? { transition } : {}), ...(anims.length ? { anims } : {}),
+      ...(comments.length ? { comments } : {}),
     };
+  }
+
+  /** The slide's comments (PowerPoint's of either kind). */
+  private authors: Map<string, string> | null = null;
+  private comments(path: string): PinnedComment[] {
+    const main = this.r.relOfType('', REL.officeDocument) ?? '';
+    if (!this.authors) {
+      this.authors = new Map();
+      try {
+        this.authors = readCommentAuthors(this.r.xml(this.r.relOfType(main, COMMENT_REL.authors) ?? ''));
+        for (const [k, v] of readCommentAuthors(this.r.xml(this.r.relOfType(main, COMMENT_REL.modernAuthors) ?? ''))) this.authors.set(k, v);
+      } catch { /* names left blank */ }
+    }
+    try {
+      const legacy = this.r.relOfType(path, COMMENT_REL.comments);
+      const modern = this.r.relOfType(path, COMMENT_REL.modernComments);
+      const out = readLegacyComments(legacy ? this.r.xml(legacy) : null, this.authors);
+      return [...out, ...readModernComments(modern ? this.r.xml(modern) : null, this.authors, out.length)];
+    } catch {
+      this.warnings.add('Some comments could not be read and were left out.');
+      return [];
+    }
   }
 
   /** Our layout for PowerPoint's, by its type or else by the text boxes on the slide. */

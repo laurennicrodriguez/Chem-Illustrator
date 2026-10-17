@@ -8,6 +8,7 @@
 // on a slide is undone on that slide (the deck goes back to it), and adding, deleting or
 // moving slides, or changing the master, are undone too.
 
+import { copyPinned, type PinnedComment } from '../document/comments';
 import { Doc, Caption, Placeholder, TextBase, ParaStyle, Contents } from '../model';
 import { DocStyle, ACS_1996 } from '../style';
 import { applyStyle, type RestyleHow } from '../drawing-styles';
@@ -286,13 +287,16 @@ export interface Slide {
   transition?: Transition;
   /** Its objects' animations, in the order they play. */
   anims?: Anim[];
+  /** Comments pinned to points on it (Review > New Comment). */
+  comments?: PinnedComment[];
 }
 
 /** A slide's transition and animations, copied (for duplicates and the undo history). */
-export interface Motion { transition?: Transition; anims?: Anim[] }
+export interface Motion { transition?: Transition; anims?: Anim[]; comments?: PinnedComment[] }
 const copyMotion = (m: Motion): Motion => ({
   ...(m.transition ? { transition: { ...m.transition } } : {}),
   ...(m.anims?.length ? { anims: m.anims.map((a) => ({ ...a, target: { ...a.target } })) } : {}),
+  ...(m.comments?.length ? { comments: copyPinned(m.comments) } : {}),
 });
 
 type HistoryEntry =
@@ -311,6 +315,8 @@ export class Deck {
   onSwitch: () => void = () => {};
   /** Called when a slide's transition or animations change (also on undo and redo). */
   onMotion: () => void = () => {};
+  /** Called when a slide's comments change (also on undo and redo). */
+  onComments: () => void = () => {};
   /** Counts changes (edits, undos and redos), so the file knows when it has unsaved changes. */
   edits = 0;
   private nextSlideId = 1;
@@ -734,6 +740,18 @@ export class Deck {
     if (JSON.stringify(before) === JSON.stringify(after)) return;
     put(after);
     this.record(label, () => put(before), () => put(after), slides.length === 1 ? slides[0] : undefined);
+  }
+
+  /** Change a slide's comments (the current slide by default). One undo step. */
+  setComments(list: PinnedComment[], label = 'Comment', i = this.index): void {
+    const s = this.slides[i];
+    if (!s) return;
+    const before = copyPinned(s.comments);
+    const after = copyPinned(list);
+    if (JSON.stringify(before) === JSON.stringify(after)) return;
+    const put = (v: PinnedComment[]) => { if (v.length) s.comments = copyPinned(v); else delete s.comments; this.onComments(); };
+    put(after);
+    this.record(label, () => put(before), () => put(after), s);
   }
 
   /** Change a slide's animations (the current slide by default). One undo step. */
