@@ -29,8 +29,8 @@ describe('releases', () => {
     expect(m.platforms['windows-x86_64'].signature).toBe('WIN');
   });
 
-  it('zips the portable app with the folder that keeps its settings', () => {
-    const files = unzipSync(portableZip(new Uint8Array([77, 90, 1, 2])));
+  it('zips the portable app with the folder that keeps its settings', async () => {
+    const files = unzipSync(await portableZip(new Uint8Array([77, 90, 1, 2])));
     expect(Object.keys(files).sort()).toEqual(['Chem Illustrator/Chem Illustrator Data/About this folder.txt', 'Chem Illustrator/Chem Illustrator.exe']);
     expect([...files['Chem Illustrator/Chem Illustrator.exe']]).toEqual([77, 90, 1, 2]);
     expect(strFromU8(files['Chem Illustrator/Chem Illustrator Data/About this folder.txt'])).toContain('\r\nChem Illustrator.exe');

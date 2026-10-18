@@ -13,7 +13,6 @@
 
 import { readFileSync, writeFileSync, copyFileSync, mkdirSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { zipSync, strToU8 } from 'fflate';
 import { pathToFileURL } from 'node:url';
 
 const REPO = 'nathanohare/Chem-Illustrator';
@@ -57,7 +56,9 @@ export function installers(version) {
 }
 
 /** What the portable zip holds: the app, and the folder that makes it keep its settings beside it. */
-export function portableZip(exe) {
+export async function portableZip(exe) {
+  // loaded here, not at the top: the publish job runs this script without installing packages
+  const { zipSync, strToU8 } = await import('fflate');
   return zipSync({
     'Chem Illustrator/Chem Illustrator.exe': [exe, { level: 6 }],
     'Chem Illustrator/Chem Illustrator Data/About this folder.txt': strToU8(PORTABLE_NOTE.replace(/\n/g, '\r\n')),
@@ -122,7 +123,7 @@ if (!run) {
   }
   if (p.portable) {
     const exe = readFileSync(p.portable.exe);
-    writeFileSync(join(out, p.portable.zip), portableZip(exe));
+    writeFileSync(join(out, p.portable.zip), await portableZip(exe));
     copyFileSync(p.portable.exe, join(out, p.portable.update));
     if (existsSync(p.portable.exe + '.sig')) copyFileSync(p.portable.exe + '.sig', join(out, p.portable.update + '.sig'));
     console.log(`${p.portable.exe} → ${p.portable.zip}, ${p.portable.update}`);
