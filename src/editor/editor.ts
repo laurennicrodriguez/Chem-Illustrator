@@ -289,6 +289,8 @@ export class Editor {
     el.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     el.addEventListener('contextmenu', (e) => {
       e.preventDefault();
+      // a right-click on the text being typed already showed its spelling and chemistry menu
+      if (this.captionEd?.hit(this.docPoint(e)) === 'text') return;
       // a right-button drag pans; the menu only shows for a right click that stayed put.
       // (Windows sends this after the button comes up, macOS while it is still down.)
       if (this.drag?.button === 2) this.pendingContext = e;

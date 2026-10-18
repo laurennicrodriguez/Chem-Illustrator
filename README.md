@@ -10,32 +10,92 @@ It is free and open source (GPL v3), and runs on Windows, macOS and Linux.
 
 ![A two-step reaction scheme in Drawing mode, with the Analysis panel showing the product's formula and masses](docs/images/drawing.png)
 
-## What it does
+## Smart reaction arrows
 
-### Drawing
+Draw an arrow between two structures and a **+** box appears above and below it. Click one and type the reagents: formulas get their subscripts as you type, the text sits just clear of the arrow, and the arrow grows to fit it, pushing the products along so nothing overlaps. **Scheme ▸ Scheme Settings** sets the gaps, the text size and alignment, and whether arrows fit their text.
 
-- ChemDraw's tools and hotkeys: point at an atom and press `1 1 1` for a chain, `6` for cyclohexane, `a` on a bond to fuse benzene, `o` for an O. Every key can be changed.
-- Opens and saves ChemDraw `.cdxml` files, keeping everything it doesn't change exactly as ChemDraw wrote it. Copy and paste with ChemDraw on Windows.
-- Reaction schemes: **Clean Up Reaction**, **Arrange Scheme** (rows, snakes, catalytic cycles), compound numbering that follows the arrows.
-- Chemistry as you draw: formula, exact mass, m/z for the ion you pick, elemental analysis, isotope pattern, cLogP and TPSA; R/S and E/Z by the IUPAC 2013 rules, including axial chirality; red marks on atoms with impossible valences.
-- Name to Structure (works offline), PubChem look-up, templates for rings, heterocycles, amino acids and sugars.
-- Journal drawing styles (ACS, RSC, Nature), your own styles, and a dark page for the screen.
+![Typing reagents above and conditions below a new reaction arrow: the arrow lengthens to fit the text and the product moves along](docs/images/smart-arrows.gif)
 
-### Slides, sheets, documents and designs
+## Schemes that lay themselves out
+
+**Clean Up Reaction** spaces a scheme evenly in one click. **Arrange Scheme** turns a row of steps into rows, a snake, a column down the page, a branching tree or a catalytic cycle, previewing each layout as you click it. A caption on its own goes in the middle of the cycle.
+
+![A row of four palladium intermediates turned into a Suzuki–Miyaura catalytic cycle with Arrange Scheme](docs/images/catalytic-cycle.gif)
+
+## Labels and frames that follow your structures
+
+| Compound numbers stay with their compounds | Frames fit what they surround |
+|---|---|
+| ![Moving, growing and flipping structures: each compound number stays underneath its structure](docs/images/id-labels.gif) | ![A frame round a structure grows as bonds are added with hotkeys, and moves with it when it is dragged](docs/images/frames.gif) |
+| **Number Compounds** ties each ID label to its structure. Move it, rotate it, flip it or add to it, and the number keeps its place underneath. | **Add Frame** draws a box that follows its contents: it grows as the structure grows and moves when it moves. |
+
+## Colour that means something
+
+Fill rings with a colour, a gradient, hatching or dots, and pick out parts of a structure with round, diamond or square highlights, soft-edged or with a shadow. Fills and highlights move with their atoms.
+
+![Estrone with each ring filled differently (gradient, hatching, dots, solid), and a kinase inhibitor with its parts highlighted in round, diamond and square shapes](docs/images/ring-fills.png)
+
+## It knows the chemistry
+
+| Abbreviations explained on hover | Name to Structure, offline |
+|---|---|
+| ![Resting the mouse on an OTBS label shows a tooltip with the group drawn out, its full name and formula](docs/images/group-tooltip.png) | ![Typing an IUPAC name into Name to Structure draws ibuprofen, and the side panel shows its formula, masses and stereochemistry](docs/images/name-to-structure.gif) |
+| Rest the mouse on OTBS, Boc, CO2Me or any other abbreviation to see what it stands for. | Type a systematic or common name and the structure is drawn. Names are read on your computer; others can be looked up on PubChem. |
+
+Select anything and the side panel shows its formula, exact mass, m/z for the ion you pick, elemental analysis, isotope pattern, cLogP and TPSA. R/S and E/Z come from the IUPAC 2013 rules, including axial chirality, and atoms with impossible valences get a red mark.
+
+## Spelling and chemistry checked everywhere
+
+Text on drawings, slides and documents is spell-checked, and a second check catches chemistry formatting slips: formulas without subscripts, deuterated solvents, a number glued to its unit (5mL), a hyphen in a range (10-15), and the nucleus before "NMR". Right-click a marked word for the fix. Formulas are also formatted as you type (CH2Cl2 becomes CH₂Cl₂).
+
+![Right-clicking marked words in a caption: CH2Cl2, 5mL, 10-15, 1H and CDCl3 get their formatting fixed, and two misspellings are corrected](docs/images/spelling.gif)
+
+## Dark mode
+
+The eye button shows the page dark on screen, with your structures in light ink. Files, printing and copies keep their white paper. Choose Graphite, Slate or Warm dark, or mix your own in **View ▸ Dark Page Colours**.
+
+![Turning the dark page on, then switching its colours between palettes](docs/images/dark-mode.gif)
+
+## Make it yours
+
+Every hotkey can be changed (**Edit ▸ Hotkeys**), and the hotkeys can be exported and shared. Toolboxes unlock to dock on any edge or float anywhere, and **My Toolbox** holds whichever tools and commands you use most. The dark page colours, each mode's accent colour, the scheme spacing, your own templates, nicknames and drawing styles are all settings, kept in one file you can back up.
+
+![Toolboxes moved to new places, the dark page in Slate colours, and the Hotkeys window open](docs/images/customize.png)
+
+## Slides, sheets, documents and designs
 
 | Slides | Sheets |
 |---|---|
-| ![Slides mode with a reaction scheme on a templated slide](docs/images/slides.png) | ![Sheet mode with structures in cells, formula and MW columns, and a chart](docs/images/sheet.png) |
-| Layouts, about twenty design templates, transitions, animations and presenter view. Saves as `.pptx` that opens in PowerPoint. | Excel's keys and formulas, structures in cells, columns that work out formula, MW, HRMS m/z and more, charts and dashboards. Saves as `.xlsx`. |
+| ![Slides mode with the reaction scheme on a templated slide, the mouse pointing at a bond of the product](docs/images/slides.png) | ![Sheet mode with structures in cells, formula and MW columns, and a chart](docs/images/sheet.png) |
+| Layouts, about twenty design templates, transitions, animations and presenter view. The structures on a slide are real structures: point at one and edit it with the same tools and hotkeys. Saves as `.pptx` that opens in PowerPoint. | Excel's keys and formulas, structures in cells, columns that work out formula, MW, HRMS m/z and more, charts and dashboards. Saves as `.xlsx`. |
 
 | Documents | Design |
 |---|---|
-| ![Document mode with an experimental paragraph and a structure in the text](docs/images/document.png) | ![Design mode with a workup scheme drawn from the lab glassware shapes](docs/images/design.png) |
-| Word's styles and keys, structures in the text, numbered captions, references in ACS and other styles, tracked changes and equations. Saves as `.docx`. | TOC graphics, graphical abstracts and posters at the journals' sizes, with flowchart and lab glassware shapes. |
+| ![Document mode with an experimental paragraph and a structure in the text](docs/images/document.png) | ![Design mode with the conference poster template and the shape library](docs/images/design.png) |
+| Word's styles and keys, structures in the text, numbered captions, references, tracked changes, comments and equations. Saves as `.docx`. | Posters, TOC graphics and graphical abstracts at the journals' sizes, with templates and a shape library that includes flowcharts and lab glassware. |
 
 **Split View** puts a drawing beside a document, sheet or slides, so you can draw on one side and insert on the other.
 
 ![Split View: a document on the left, the scheme it describes on the right](docs/images/split-view.png)
+
+### A reference manager in your documents
+
+Add references by DOI, by hand or from BibTeX and RIS files, cite them as you write, and the bibliography numbers itself in citation order in the ACS, RSC, Nature or another journal's style. The references are saved inside the Word file.
+
+![A document with numbered citations and a bibliography, with the References window listing four papers](docs/images/references.png)
+
+## Your files, in their own formats
+
+Nothing is locked into a format of our own. Each mode saves the file type its program uses, so you can send your files to anyone.
+
+| Mode | Opens | Saves | Works with |
+|---|---|---|---|
+| Drawing | `.cdxml`, `.cdx` | `.cdxml`, `.cdx` | ChemDraw. A ChemDraw file you open keeps everything you didn't change exactly as ChemDraw wrote it. Copy and paste with ChemDraw on Windows. |
+| Slides and Design | `.pptx` | `.pptx` | PowerPoint |
+| Documents | `.docx` | `.docx` | Word |
+| Sheets | `.xlsx`, `.csv`, `.sdf` | `.xlsx`, `.csv`, `.sdf` | Excel |
+
+In Word, PowerPoint and Excel your structures show as sharp pictures; open the file in Chem Illustrator again and they are editable structures, even after Office has saved it. Drawings also export as PDF, PNG, SVG and Molfile. [Files and sharing](docs/guide/files-and-sharing.md) has the details.
 
 ## Install
 

@@ -72,7 +72,7 @@ The `bench/` scripts drive the app in a headless browser to measure speed. Start
 
 ## Screenshots
 
-The pictures in `docs/images/` are taken by `scripts/screenshots.mjs`, which drives the program in a browser and builds each scene (the scheme, the slides, the sheet, the document, the design) from scratch. To take them again after the look changes, start the program (`npm run dev`), then run `node scripts/screenshots.mjs`. It needs Playwright (`npm install --no-save playwright` and `npx playwright install chromium`).
+The pictures in `docs/images/` are taken by `scripts/screenshots.mjs`, which drives the program in a browser and builds each scene (the scheme, the slides, the sheet, the document, the design, the ring fills, the hover tooltip, the moved toolboxes) from scratch. The animated GIFs are recorded by `scripts/animations.mjs`; both share their helpers in `scripts/shot-lib.mjs`. To take them again after the look changes, start the program (`npm run dev`), then run `node scripts/screenshots.mjs` and `node scripts/animations.mjs` (add names, such as `node scripts/animations.mjs frames spelling`, to record only some). They need Playwright (`npm install --no-save playwright` and `npx playwright install chromium`, or set `CHROMIUM` to a Chromium you already have), and the animations need `ffmpeg` on the path.
 
 ## What stays out of the repository
 

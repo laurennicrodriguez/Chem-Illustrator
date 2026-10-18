@@ -2,7 +2,7 @@
 
 This page covers Design mode: single-page graphics such as TOC graphics, graphical abstracts, posters, flowcharts and workup schemes, and how to export them for a journal.
 
-![A TOC graphic in Design mode](../images/design.png)
+![A conference poster template in Design mode](../images/design.png)
 
 ## Starting a design
 
