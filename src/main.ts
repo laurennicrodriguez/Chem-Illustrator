@@ -96,7 +96,7 @@ import { typingPrefs, setTypingPrefs, onTypingPrefs } from './text/typing';
 import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
 import { UpdateUI } from './ui/update-ui';
-import { canUpdate, appVersion } from './updates';
+import { canUpdate, appVersion, portableInfo } from './updates';
 import { GUIDE_URL, computerName } from './feedback';
 import { FeedbackDialog } from './ui/feedback-dialog';
 import { addRecent, removeRecent, recentLabel } from './recent';
@@ -3261,8 +3261,9 @@ const updates = new UpdateUI({
 });
 for (const el of document.querySelectorAll<HTMLElement>('.desktop-only')) el.hidden = !canUpdate;
 let versionText = canUpdate ? '' : 'Web version';
-void appVersion().then((v) => {
-  versionText = canUpdate ? `Version ${v}` : 'Web version';
+void Promise.all([appVersion(), portableInfo()]).then(([v, portable]) => {
+  versionText = canUpdate ? `Version ${v}${portable ? ' (portable)' : ''}` : 'Web version';
+  if (portable && !portable.writable) flash(`This portable copy can’t write to its “Chem Illustrator Data” folder (a locked or read-only drive), so settings are kept on this computer instead.`, 8000);
   const el = document.querySelector('#app-version');
   if (el) el.textContent = versionText;
 });

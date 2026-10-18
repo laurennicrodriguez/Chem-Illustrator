@@ -16,6 +16,24 @@ Download the newest installer from the **Releases** page of the project on GitHu
 2. Windows may say **"Windows protected your PC"**. This is Windows SmartScreen: it warns about any program that has not been signed with a paid Windows certificate. Click **More info**, then **Run anyway**.
 3. Follow the installer. A newer installer can be run over an older version; you don't need to remove the old one first.
 
+The installer puts the app in your own user folder, so it doesn't need administrator rights. On a computer managed by an IT department, their rules may still block programs that aren't signed; if so, ask them, since neither the installer nor the portable copy below gets round those rules.
+
+### Windows, without installing (portable copy)
+
+A portable copy runs from a flash drive or any folder, with nothing installed, and keeps its settings with it.
+
+1. Download the file ending in `x64-portable.zip`.
+2. Right-click it, choose **Extract All…**, and put the **Chem Illustrator** folder wherever you want it: a flash drive, Documents, the desktop.
+3. Open the folder and double-click **Chem Illustrator.exe**. The first time, SmartScreen may warn as described above.
+
+The **Chem Illustrator Data** folder next to the app is what makes it portable: your hotkeys, preferences, styles, templates and recent files are saved there instead of on the computer, so the copy behaves the same on every computer you plug it into. Keep the two together, and copy both to move your copy. **Help ▸ Hotkeys and Tips** shows "(portable)" after the version number.
+
+Updates work as in an installed copy, except that **Install and Restart** replaces Chem Illustrator.exe in its folder rather than installing anything. If the drive can't be written to (locked, or read-only), the app says so and keeps its settings on the computer for that session.
+
+The app needs the Microsoft Edge WebView2 Runtime, which Windows 10 and 11 already have. The only thing a portable copy leaves on the computer is WebView2's cache in `%LOCALAPPDATA%\io.github.nathanohare.chemillustrator`, which holds none of your work or settings.
+
+On macOS and Linux, a folder named **Chem Illustrator Data** next to the app (or the AppImage) has the same effect. On a Mac, the app keeps its normal settings folder until the "damaged" step below has been done, because macOS runs a downloaded app from a hidden copy until then.
+
 ### macOS
 
 Works on Apple silicon and Intel Macs, macOS 11 or newer.
