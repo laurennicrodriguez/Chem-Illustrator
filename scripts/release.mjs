@@ -6,13 +6,14 @@
 //     Tauri to sign the installers for the updater.
 //   node scripts/release.mjs collect <version> <platform: windows|macos|linux> <out dir>
 //     After a build: copies that platform's installers (and the updater's signatures) into
-//     <out dir> with names without spaces.
+//     <out dir> with names without spaces, and on Windows makes the portable zip.
 //   node scripts/release.mjs manifest <version> <notes file> <dir>
 //     Once every platform is built and collected into <dir>: writes latest.json there, the
 //     newest version, what changed, and where each platform's signed installer is.
 
 import { readFileSync, writeFileSync, copyFileSync, mkdirSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { zipSync, strToU8 } from 'fflate';
 import { pathToFileURL } from 'node:url';
 
 const REPO = 'nathanohare/Chem-Illustrator';
@@ -27,6 +28,13 @@ export function installers(version) {
         { dir: 'nsis', end: '-setup.exe', as: `Chem-Illustrator_${version}_x64-setup.exe`, signed: true },
         { dir: 'msi', end: '.msi', as: `Chem-Illustrator_${version}_x64.msi` },
       ],
+      // the app on its own, for portable copies: the zip to download (the app and its
+      // "Chem Illustrator Data" folder), and the bare app that portable copies update from
+      portable: {
+        exe: 'src-tauri/target/release/chem-illustrator.exe',
+        zip: `Chem-Illustrator_${version}_x64-portable.zip`,
+        update: `Chem-Illustrator_${version}_x64-portable.exe`,
+      },
     },
     macos: {
       // one app for both Apple silicon and Intel Macs
@@ -48,6 +56,27 @@ export function installers(version) {
   };
 }
 
+/** What the portable zip holds: the app, and the folder that makes it keep its settings beside it. */
+export function portableZip(exe) {
+  return zipSync({
+    'Chem Illustrator/Chem Illustrator.exe': [exe, { level: 6 }],
+    'Chem Illustrator/Chem Illustrator Data/About this folder.txt': strToU8(PORTABLE_NOTE.replace(/\n/g, '\r\n')),
+  });
+}
+
+const PORTABLE_NOTE = `This folder makes Chem Illustrator a portable copy. While it sits next to
+Chem Illustrator.exe, the app keeps your settings (hotkeys, preferences, styles, templates,
+recent files) here instead of on the computer, so you can run it from a flash drive or any
+folder without installing it.
+
+Keep this folder and the app together. Copy both to move your copy, settings and all.
+Delete this folder and the app keeps its settings on the computer, as an installed copy does.
+
+Help > Check for Updates replaces Chem Illustrator.exe with the newer version in place.
+
+Windows needs the Microsoft Edge WebView2 Runtime, which Windows 10 and 11 already have.
+`;
+
 /** latest.json: for each of the updater's platform names, the signed installer it downloads. */
 export function manifest(version, notes, signatures, date = new Date()) {
   const url = (name) => `https://github.com/${REPO}/releases/download/v${version}/${name}`;
@@ -58,6 +87,7 @@ export function manifest(version, notes, signatures, date = new Date()) {
     if (sig) for (const k of keys) platforms[k] = { signature: sig, url: url(file) };
   };
   add(['windows-x86_64', 'windows-x86_64-nsis'], all.windows.files[0].as);
+  add(['windows-x86_64-portable'], all.windows.portable.update);
   add(['darwin-aarch64', 'darwin-x86_64', 'darwin-aarch64-app', 'darwin-x86_64-app'], all.macos.files[1].as);
   add(['linux-x86_64', 'linux-x86_64-appimage'], all.linux.files[0].as);
   return { version, notes: notes.trim(), pub_date: date.toISOString(), platforms };
@@ -89,6 +119,13 @@ if (!run) {
     copyFileSync(join(dir, name), join(out, f.as));
     if (existsSync(join(dir, name + '.sig'))) copyFileSync(join(dir, name + '.sig'), join(out, f.as + '.sig'));
     console.log(`${name} → ${f.as}`);
+  }
+  if (p.portable) {
+    const exe = readFileSync(p.portable.exe);
+    writeFileSync(join(out, p.portable.zip), portableZip(exe));
+    copyFileSync(p.portable.exe, join(out, p.portable.update));
+    if (existsSync(p.portable.exe + '.sig')) copyFileSync(p.portable.exe + '.sig', join(out, p.portable.update + '.sig'));
+    console.log(`${p.portable.exe} → ${p.portable.zip}, ${p.portable.update}`);
   }
 } else if (cmd === 'manifest') {
   const [notesFile, dir] = rest;

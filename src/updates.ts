@@ -17,6 +17,29 @@ export interface Release {
 /** Updates only exist for the desktop app; the web version is always the newest. */
 export const canUpdate = isTauri();
 
+/** A portable copy: one with a "Chem Illustrator Data" folder next to it, which holds its settings. */
+export interface PortableInfo {
+  folder: string;
+  /** False on a locked or read-only drive: settings are then kept on the computer. */
+  writable: boolean;
+  /** Windows: updates replace the app in its folder instead of running the installer. */
+  updatesInPlace: boolean;
+}
+
+let portableAsked: Promise<PortableInfo | null> | null = null;
+
+/** Whether this is a portable copy (null for an installed one, and the web version). */
+export function portableInfo(): Promise<PortableInfo | null> {
+  if (!canUpdate) return Promise.resolve(null);
+  portableAsked ??= import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke<PortableInfo | null>('portable_info'))
+    .catch(() => null);
+  return portableAsked;
+}
+
+/** What latest.json calls the portable Windows app (src-tauri/src/portable.rs). */
+export const PORTABLE_TARGET = 'windows-x86_64-portable';
+
 /** The version of the app that is running. */
 export async function appVersion(): Promise<string> {
   if (!canUpdate) return 'web';
@@ -28,13 +51,22 @@ export async function appVersion(): Promise<string> {
 export async function findRelease(): Promise<Release | null> {
   if (!canUpdate) return null;
   const { check } = await import('@tauri-apps/plugin-updater');
-  const u = await check();
+  const inPlace = (await portableInfo())?.updatesInPlace ?? false;
+  const u = await check(inPlace ? { target: PORTABLE_TARGET } : undefined);
   if (!u) return null;
   return {
     version: u.version,
     notes: (u.body ?? '').trim(),
     date: u.date,
     async install(progress) {
+      if (inPlace) {
+        // the shell downloads the new app, checks it, swaps it for this one and starts it
+        const { invoke, Channel } = await import('@tauri-apps/api/core');
+        const onProgress = new Channel<number>();
+        onProgress.onmessage = (done) => progress(done < 0 ? null : done);
+        await invoke('portable_install_update', { onProgress });
+        return;
+      }
       let total = 0, got = 0;
       await u.downloadAndInstall((e) => {
         if (e.event === 'Started') { total = e.data.contentLength ?? 0; progress(total ? 0 : null); }

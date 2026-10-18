@@ -3,6 +3,7 @@
 // self-test used by the automatic Windows build.
 
 mod clipboard;
+mod portable;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -101,11 +102,67 @@ fn write_bytes(path: &str, bytes: &[u8]) -> Result<(), String> {
 }
 
 /// The person's settings file (key map and preferences): settings.json in the app's
-/// settings folder, e.g. %APPDATA%\io.github.nathanohare.chemillustrator on Windows.
+/// settings folder, e.g. %APPDATA%\io.github.nathanohare.chemillustrator on Windows, or in the
+/// "Chem Illustrator Data" folder next to a portable copy.
 fn settings_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     use tauri::Manager;
+    if let Some(dir) = portable::settings_folder() {
+        return Ok(dir.join("settings.json"));
+    }
     let dir = app.path().app_config_dir().map_err(|e| format!("No settings folder: {e}"))?;
     Ok(dir.join("settings.json"))
+}
+
+/// Whether this is a portable copy: its folder, whether it can be written to, and whether it
+/// updates itself in place (Windows) rather than with the installer.
+#[tauri::command]
+fn portable_info() -> serde_json::Value {
+    match portable::get() {
+        Some(p) => serde_json::json!({
+            "folder": p.folder.to_string_lossy(),
+            "writable": p.writable,
+            "updatesInPlace": cfg!(windows),
+        }),
+        None => serde_json::Value::Null,
+    }
+}
+
+/// Help > Check for Updates in a portable copy on Windows: download the newer portable app,
+/// check its signature, put it in place of this one and start it. Reports how far the download
+/// has got (0 to 1, or -1 when the size isn't known).
+#[tauri::command]
+async fn portable_install_update(app: tauri::AppHandle, on_progress: tauri::ipc::Channel<f64>) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    if !cfg!(windows) || portable::get().is_none() {
+        return Err("Only portable copies on Windows update themselves in place.".into());
+    }
+    let update = app
+        .updater_builder()
+        .target(portable::UPDATE_TARGET)
+        .build()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("There is no newer version.")?;
+    let mut got = 0usize;
+    let bytes = update
+        .download(
+            |chunk, total| {
+                got += chunk;
+                let _ = on_progress.send(total.map_or(-1.0, |t| (got as f64 / t as f64).min(1.0)));
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let exe = std::env::current_exe().map_err(|e| format!("Could not find the running app: {e}"))?;
+    portable::swap_in(&exe, &bytes)?;
+    std::process::Command::new(&exe)
+        .spawn()
+        .map_err(|e| format!("The new version is in place but didn't start ({e}); open it again."))?;
+    app.exit(0);
+    Ok(())
 }
 
 #[tauri::command]
@@ -155,6 +212,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            portable::tidy();
             // A self-test that never reports (the page failed to load) still ends.
             if let Some(path) = selftest_path() {
                 let handle = app.handle().clone();
@@ -177,6 +235,8 @@ pub fn run() {
             settings_path,
             settings_read,
             settings_write,
+            portable_info,
+            portable_install_update,
             clipboard::clipboard_write,
             clipboard::clipboard_read,
             clipboard::clipboard_formats
