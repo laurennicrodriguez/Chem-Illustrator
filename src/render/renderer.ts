@@ -10,9 +10,9 @@ import { fullStyle, highlightPieces, highlightSizes, movePieces, softRings, trac
 import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
 import { crossingGapsCached } from '../chem/crossing';
 import { FADE, tint } from '../colours';
-import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter, fromAngle, turnedCorners, DEG } from '../geom';
+import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, passParam, angleOf, arcCenter, fromAngle, turnedCorners, DEG } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
-import { labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
+import { chargeInk, labelBonds, labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
 import type { StructureChecks } from '../chem/warnings';
 import { isGenericLabel } from '../chem/labels';
 import { bracketPath, shaftOffset, shapeOrder, elbowRoute, boxOf, type PathStep } from '../objects';
@@ -58,6 +58,14 @@ interface AtomCache {
   layout: LabelLayout | null;
   /** Knock-out boxes in document coordinates, already grown by the margin. */
   boxes: Rect[];
+  /** The charge shown by the label: which of `boxes` it is, where a bond touches it, and where a bond touching it stops. */
+  charge?: { index: number; hit: Rect[]; cut: Rect[] };
+}
+
+/** How far along p→q a bond from p starts so as to clear p's charge: 0 unless it would touch the sign. */
+function chargeCut(p: Vec, q: Vec, c: AtomCache['charge']): number {
+  if (!c || c.hit.every((r) => passParam(p, q, r) <= 0)) return 0;
+  return Math.max(...c.cut.map((r) => passParam(p, q, r)));
 }
 
 interface BondCache {
@@ -273,12 +281,19 @@ export class Renderer {
     const size = doc.style.labelSize * k;
     if (spec) {
       if (a.supDigits) spec.supDigits = true;
-      const dirs = doc.neighbors(a.id).map((n) => norm(sub(n, a)));
-      layout = layoutLabel(spec, dirs, size, (t, s) => measureText(t, s, this.labelStack), a.just);
+      layout = layoutLabel(spec, labelBonds(doc, a), size, (t, s) => measureText(t, s, this.labelStack), a.just);
       const m = doc.style.marginWidth * k;
       for (const b of layout.boxes) boxes.push({ x1: a.x + b.x1 - m, y1: a.y + b.y1 - m, x2: a.x + b.x2 + m, y2: a.y + b.y2 + m });
     }
     c = { layout, boxes };
+    if (layout?.charge !== undefined) {
+      // a bond is cut short at the charge only where it would touch the sign itself
+      const r = layout.runs[layout.charge];
+      const ink = chargeInk(r.text, a.x + r.dx, a.y + r.dy, r.size, (t, s) => measureText(t, s, this.labelStack));
+      const grow = (m: number): Rect[] => ink.map((b) => ({ x1: b.x1 - m, y1: b.y1 - m, x2: b.x2 + m, y2: b.y2 + m }));
+      // (the signs are small, so three quarters of the label margin keeps the same look of space)
+      c.charge = { index: layout.charge, hit: grow(doc.style.lineWidth * k / 2 + 0.3 * k), cut: grow(doc.style.marginWidth * k * 0.75) };
+    }
     this.atomCache.set(a.id, c);
     return c;
   }
@@ -717,15 +732,30 @@ export class Renderer {
     ctx.setLineDash([]);
   }
 
-  /** Bond end points after stopping at atom labels. */
+  /**
+   * Bond end points after stopping at atom labels. A bond that runs under the charge beside a
+   * label (N⁺ with a ring bond going up and right) starts past the charge, as in ChemDraw.
+   */
   bondEnds(doc: Doc, p: Atom, q: Atom): [Vec, Vec] {
     const ip = this.atomInfo(doc, p), iq = this.atomInfo(doc, q);
     let t1 = 0, t2 = 0;
-    for (const r of ip.boxes) t1 = Math.max(t1, exitParam(p, q, r));
-    for (const r of iq.boxes) t2 = Math.max(t2, exitParam(q, p, r));
+    ip.boxes.forEach((r, i) => { if (i !== ip.charge?.index) t1 = Math.max(t1, exitParam(p, q, r)); });
+    iq.boxes.forEach((r, i) => { if (i !== iq.charge?.index) t2 = Math.max(t2, exitParam(q, p, r)); });
+    t1 = Math.max(t1, chargeCut(p, q, ip.charge));
+    t2 = Math.max(t2, chargeCut(q, p, iq.charge));
     if (t1 + t2 >= 0.95) { t1 = Math.min(t1, 0.45); t2 = Math.min(t2, 0.45); }
     const d = sub(q, p);
     return [add(p, mul(d, t1)), sub(q, mul(d, t2))];
+  }
+
+  /** One line of a multiple bond, from a to c, pulled back out of the charges by its two atoms. */
+  private clearCharges(doc: Doc, p: Atom, q: Atom, a: Vec, c: Vec): [Vec, Vec] {
+    const cp = this.atomInfo(doc, p).charge, cq = this.atomInfo(doc, q).charge;
+    if (!cp && !cq) return [a, c];
+    const t1 = chargeCut(a, c, cp), t2 = chargeCut(c, a, cq);
+    if (t1 + t2 >= 0.95) return [a, c];
+    const d = sub(c, a);
+    return [add(a, mul(d, t1)), sub(c, mul(d, t2))];
   }
 
   private bondPaths(doc: Doc, b: Bond, p: Atom, q: Atom, bb: BondBatch): void {
@@ -763,6 +793,8 @@ export class Renderer {
       }
       if (from < 1) { const u = at(from); path.moveTo(u.x, u.y); path.lineTo(c.x, c.y); }
     };
+    // a line of a double or triple bond set off to one side can still run under a charge
+    const offLine = (path: Path2D, a: Vec, c: Vec) => { const [u, v] = this.clearCharges(doc, p, q, a, c); line(path, u, v); };
     // a point of attachment: a wavy line across the end of the bond
     if (p.attach === 'Wavy') attachWave(thin, p, nrm, st.bondLength);
     if (q.attach === 'Wavy') attachWave(thin, q, nrm, st.bondLength);
@@ -785,7 +817,7 @@ export class Renderer {
 
     if (b.order === 4 && b.display !== 'dative') {
       // four lines, evenly spaced about the bond
-      for (const k of [-1.5, -0.5, 0.5, 1.5]) line(thin, add(s, mul(nrm, gap * k)), add(e, mul(nrm, gap * k)));
+      for (const k of [-1.5, -0.5, 0.5, 1.5]) offLine(thin, add(s, mul(nrm, gap * k)), add(e, mul(nrm, gap * k)));
       return;
     }
 
@@ -855,8 +887,8 @@ export class Renderer {
 
     if (b.order === 3) {
       line(thin, s, e);
-      line(thin, add(s, mul(nrm, gap)), add(e, mul(nrm, gap)));
-      line(thin, sub(s, mul(nrm, gap)), sub(e, mul(nrm, gap)));
+      offLine(thin, add(s, mul(nrm, gap)), add(e, mul(nrm, gap)));
+      offLine(thin, sub(s, mul(nrm, gap)), sub(e, mul(nrm, gap)));
       return;
     }
 
@@ -866,8 +898,8 @@ export class Renderer {
     const main = b.display === 'bold' ? bold : b.display === 'dash' ? dashed : thin;
     if (info.side === 0) {
       const h = gap / 2;
-      line(main, add(s, mul(nrm, h)), add(e, mul(nrm, h)));
-      line(second, sub(s, mul(nrm, h)), sub(e, mul(nrm, h)));
+      offLine(main, add(s, mul(nrm, h)), add(e, mul(nrm, h)));
+      offLine(second, sub(s, mul(nrm, h)), sub(e, mul(nrm, h)));
       return;
     }
     // The main line runs atom to atom; the second line is inset on the chosen side.
@@ -877,7 +909,7 @@ export class Renderer {
     const t1 = pLabelled ? 0 : Math.min(gap * info.trim1 + gap * 0.15, l * 0.3);
     const t2 = qLabelled ? 0 : Math.min(gap * info.trim2 + gap * 0.15, l * 0.3);
     line(main, s, e);
-    line(second, add(add(s, off), mul(dir, t1)), sub(add(e, off), mul(dir, t2)));
+    offLine(second, add(add(s, off), mul(dir, t1)), sub(add(e, off), mul(dir, t2)));
   }
 
   /** A charge beside a carbon drawn without a label. Returns the font it leaves set. */

@@ -33,7 +33,7 @@ import { selectedGroup } from '../chem/group-smiles';
 import { circleRing, circleRings, kekulize } from '../chem/aromatic';
 import { bondLayer, crossingBonds } from '../chem/crossing';
 import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
-import { bendSide, cleanUpArrow, isLonePair, pairOwner, pushArrow, pushEndAt, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
+import { bendSide, cleanUpArrow, isLonePair, pairOwner, pushArrow, pushEndAt, symbolAt, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
 import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
 import { attachWhereItIs, defaultGap, placeAttached, refitAttached } from './attached';
 import { frameAround, frameBox, frameMembers, refitFrames, defaultPad, thingsInside } from './frames';
@@ -668,6 +668,7 @@ export class Editor {
       this.requestScene(e.timeStamp);
       return;
     }
+    if (d.mode === 'draw' && this.tool.kind === 'symbol') { d.alt = e.altKey; d.shift = e.shiftKey; }
     d.last = p;
     d.path?.push(p);
     this.hover = this.hitTest(p);
@@ -680,8 +681,10 @@ export class Editor {
     switch (this.tool.kind) {
       case 'select':
         return d.hit ? 'move' : 'marquee';
-      case 'eraser':
       case 'symbol':
+        // press on an atom and drag: the lone pair (dot, circled charge) goes round it after the pointer
+        return d.hit?.kind === 'atom' && this.symbolAims(this.tool.symbol) ? 'draw' : 'none';
+      case 'eraser':
       case 'element':
         return 'none';
       case 'bond':
@@ -730,7 +733,10 @@ export class Editor {
       return;
     }
     if (!d.moved) this.click(d, p);
-    else if (d.mode === 'draw') this.finishDraw(d, p);
+    else if (d.mode === 'draw') {
+      if (this.tool.kind === 'symbol') { d.alt = e.altKey; d.shift = e.shiftKey; }
+      this.finishDraw(d, p);
+    }
     this.hover = this.hitTest(p);
     this.requestScene(e.timeStamp);
   }
@@ -1104,6 +1110,10 @@ export class Editor {
     const h = d.hit;
     const startAtom = h && h.kind === 'atom' ? doc.atoms.get(h.id)! : null;
     const start = startAtom ?? d.start;
+    if (t.kind === 'symbol') {
+      this.placeSymbol(t.symbol, h, p, this.symbolAim(d, p) ?? undefined);
+      return;
+    }
     if (t.kind === 'text') {
       // a text box as wide as the drag, its first line at the top
       const x1 = Math.min(d.start.x, p.x), x2 = Math.max(d.start.x, p.x), y1 = Math.min(d.start.y, p.y);
@@ -1300,20 +1310,46 @@ export class Editor {
     return { x1: Math.min(a.x, a.x + w), y1: Math.min(a.y, a.y + h), x2: Math.max(a.x, a.x + w), y2: Math.max(a.y, a.y + h) };
   }
 
+  /** Can this symbol be dragged round its atom to aim it (everything but δ+ / δ−, which are text)? */
+  private symbolAims(kind: SymbolKind): boolean {
+    return kind !== 'DeltaPlus' && kind !== 'DeltaMinus';
+  }
+
+  /** How big a symbol is across, for keeping it clear of the label. */
+  private symbolSize(kind: SymbolKind): number {
+    if (kind === 'LonePair') return 2.6;
+    if (kind === 'CirclePlus' || kind === 'CircleMinus') return 4.5;
+    if (kind === 'DeltaPlus' || kind === 'DeltaMinus') return 0.9 * this.doc.style.bondLength;
+    return 1.4;
+  }
+
+  /**
+   * Which way a symbol dragged round an atom points: toward the pointer, in whole degrees, or in
+   * 15° steps with Alt (or Shift), the same steps as turning a structure. Null with the pointer
+   * still on the atom.
+   */
+  private symbolAim(d: Drag, p: Vec): Vec | null {
+    const h = d.hit;
+    const atom = h?.kind === 'atom' ? this.doc.atoms.get(h.id) : undefined;
+    if (!atom || dist(p, atom) < 0.5) return null;
+    const ang = angleOf(sub(p, atom));
+    return fromAngle(d.alt || d.shift ? snapAngle(ang) : Math.round(ang / DEG) * DEG);
+  }
+
   /**
    * Put a lone pair, radical dot, circled charge or δ+ / δ− on the clicked atom, in the most open
-   * space round it, or where the click was. A circled charge also gives the atom that charge
-   * (shown by the circle instead of in its label).
+   * space round it (or toward `aim`, when it was dragged round the atom), or where the click was.
+   * A circled charge also gives the atom that charge (shown by the circle instead of in its label).
    */
-  private placeSymbol(kind: SymbolKind, h: Hit, p: Vec): void {
+  private placeSymbol(kind: SymbolKind, h: Hit, p: Vec, aim?: Vec): void {
     const doc = this.doc;
-    const L = doc.style.bondLength;
     const atom = h?.kind === 'atom' ? doc.atoms.get(h.id)! : null;
     const delta = kind === 'DeltaPlus' || kind === 'DeltaMinus';
     const circled = kind === 'CirclePlus' || kind === 'CircleMinus';
-    const size = kind === 'LonePair' ? 2.6 : circled ? 4.5 : delta ? 0.9 * L : 1.4;
+    const size = this.symbolSize(kind);
     let at = p, dir = { x: 0, y: -1 };
-    if (atom) ({ at, dir } = this.openSpot(atom, size));
+    if (atom && aim) ({ at, dir } = { at: symbolAt(doc, this.measure(), atom.id, aim, size), dir: aim });
+    else if (atom) ({ at, dir } = this.openSpot(atom, size));
     doc.edit('Symbol', () => {
       this.sel = emptySel();
       if (delta) {
@@ -3400,6 +3436,29 @@ export class Editor {
     ctx.restore();
   }
 
+  /** A lone pair, radical dot or circled charge as it will be placed, centred on `at`, pointing along `dir`. */
+  private drawSymbolGhost(ctx: CanvasRenderingContext2D, kind: SymbolKind, at: Vec, dir: Vec): void {
+    ctx.save();
+    ctx.fillStyle = ctx.strokeStyle = PREVIEW;
+    ctx.beginPath();
+    if (kind === 'LonePair') {
+      const n = perp(dir);
+      for (const k of [-1.12, 1.12]) { const c = add(at, mul(n, k)); ctx.moveTo(c.x + 0.55, c.y); ctx.arc(c.x, c.y, 0.55, 0, Math.PI * 2); }
+      ctx.fill();
+    } else if (kind === 'CirclePlus' || kind === 'CircleMinus') {
+      const r = this.symbolSize(kind) / 2;
+      ctx.lineWidth = this.doc.style.lineWidth;
+      ctx.arc(at.x, at.y, r, 0, Math.PI * 2);
+      ctx.moveTo(at.x - r * 0.6, at.y); ctx.lineTo(at.x + r * 0.6, at.y);
+      if (kind === 'CirclePlus') { ctx.moveTo(at.x, at.y - r * 0.6); ctx.lineTo(at.x, at.y + r * 0.6); }
+      ctx.stroke();
+    } else {
+      ctx.arc(at.x, at.y, 0.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   private drawPreview(ctx: CanvasRenderingContext2D, d: Drag): void {
     const doc = this.doc;
     const t = this.tool;
@@ -3413,7 +3472,11 @@ export class Editor {
       if (close) ctx.closePath();
       ctx.stroke();
     };
-    if (t.kind === 'text') {
+    if (t.kind === 'symbol') {
+      // the symbol where it will go, turned toward the pointer
+      const aim = startAtom && this.symbolAim(d, d.last);
+      if (aim) this.drawSymbolGhost(ctx, t.symbol, symbolAt(doc, this.measure(), startAtom.id, aim, this.symbolSize(t.symbol)), aim);
+    } else if (t.kind === 'text') {
       ctx.setLineDash([4 / this.r.view.scale, 3 / this.r.view.scale]);
       ctx.lineWidth = 1 / this.r.view.scale;
       ctx.strokeRect(Math.min(d.start.x, d.last.x), Math.min(d.start.y, d.last.y), Math.abs(d.last.x - d.start.x), Math.abs(d.last.y - d.start.y));

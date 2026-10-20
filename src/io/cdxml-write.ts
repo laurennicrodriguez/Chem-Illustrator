@@ -9,7 +9,7 @@
 import { Doc, Atom, Bond, Caption, Arrow, Shape, TextRun, Entity, Kind, StepRoles, enhancedText, CHIRAL_FLAGS, flagTextSize, type HighlightStyle } from '../model';
 import { interpretArrow, isReactionArrow, isStep, plainMeasure, schemeItems, type Item } from '../chem/reaction';
 import { SYMBOLS } from '../chem/elements';
-import { labelSpec, layoutLabel, labelDir, labelGraph, tokenize, isGenericLabel, Measure, MiniGraph, kekulize } from '../chem/labels';
+import { labelBonds, labelSpec, layoutLabel, labelDir, labelGraph, tokenize, isGenericLabel, Measure, MiniGraph, kekulize } from '../chem/labels';
 import { Vec, DEG, arcCenter, norm, sub, Rect } from '../geom';
 import { kids, descendants } from './xml';
 import { arialWidth } from '../text-metrics';
@@ -748,7 +748,7 @@ class CdxmlWriter {
     const spec = labelSpec(a.z, a.label, a.charge, a.isotope, doc.valenceSum(a.id), doc.degree(a.id), !a.hideCharge, !!a.showCarbon);
     if (!spec) return;
     if (a.supDigits) spec.supDigits = true;
-    const dirs = doc.neighbors(a.id).map((nb) => norm(sub(nb, a)));
+    const dirs = labelBonds(doc, a);
     const size = doc.style.labelSize * (a.s ?? 1);
     const layout = layoutLabel(spec, dirs, size, this.measure, a.just);
     const dir = labelDir(spec, dirs, a.just);
