@@ -40,6 +40,7 @@ export const ICONS: Record<string, string> = {
   element: svg('<rect x="3" y="4" width="5" height="5"/><rect x="3" y="9" width="5" height="5"/><rect x="8" y="9" width="5" height="5"/><rect x="16" y="4" width="5" height="5"/><rect x="16" y="9" width="5" height="5"/><rect x="8" y="16" width="8" height="4"/>'),
   'bond-quadruple': svg('<line x1="3" y1="14" x2="14" y2="4"/><line x1="5" y1="16.3" x2="16.3" y2="6"/><line x1="7.5" y1="18.5" x2="18.8" y2="8"/><line x1="10" y1="20.5" x2="21" y2="10.5"/>'),
   'bond-dative': svg('<line x1="4" y1="19" x2="17" y2="7"/><path d="M20 4l-7.2 2.3 4.8 5z" fill="currentColor"/>'),
+  'bond-hapto': svg('<polygon points="12.0,5.3 18.7,7.5 16.1,11.1 7.9,11.1 5.3,7.5"/><line x1="12" y1="9" x2="12" y2="20"/><circle cx="12" cy="20.2" r="1.6" fill="currentColor"/>'),
   'bond-wavy': svg('<path d="M4 18c2-1 1-3 3-4s2 1 4 0 1-3 3-4 2 1 4 0 1-3 3-4"/>'),
   chain: svg('<polyline points="3,15 7.5,9 12,15 16.5,9 21,15"/>'),
   'ring-3': poly(3),

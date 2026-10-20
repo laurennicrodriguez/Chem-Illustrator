@@ -25,6 +25,7 @@ import type { TableData } from '../model';
 import { deleteColumn, deleteRow, fitColumns, insertColumn, insertRow, setColumnAlign, setColumnWidth, setSpan, spanOf, type TablePart } from '../table';
 import type { Measure } from '../text/layout';
 import { colourButton } from './colour-picker';
+import { centreEnd, haptoText, splitHapto } from '../chem/hapto';
 
 /** What the table controls need from the editor. */
 export interface TableHooks {
@@ -619,6 +620,14 @@ export class StylePanel {
 
   private atomControls(a: Atom): void {
     const set = (label: string, patch: Partial<Atom>) => this.edit(label, () => this.doc.updateAtom(a.id, patch));
+    if (a.multi) {
+      this.heading(`Middle of ${a.multi.length === 2 ? 'a π-bond' : 'a ring'} (${haptoText(a.multi.length)})`);
+      const note = document.createElement('p');
+      note.className = 'muted';
+      note.textContent = 'Where a metal\'s hapto bond ends. It stays in the middle of its atoms; delete it to remove the bond.';
+      this.body.appendChild(note);
+      return;
+    }
     if (a.attach) {
       this.heading('Point of attachment');
       this.number('Number', a.attachNum ?? 0, 1, 0, 99, (v) => set('Attachment number', { attachNum: v || undefined }),
@@ -649,6 +658,25 @@ export class StylePanel {
 
   private bondControls(b: Bond): void {
     const set = (label: string, patch: Partial<Bond>) => this.edit(label, () => this.doc.updateBond(b.id, patch));
+    const centre = centreEnd(this.doc, b);
+    if (centre) {
+      // a metal bonded to the middle of a ring or π-bond
+      this.heading(`Hapto bond (${haptoText(centre.multi!.length)})`);
+      this.select('Style', BOND_STYLES.filter(([v]) => v !== 'wedge' && v !== 'hashWedge'), b.display, (v) => set('Bond style', { display: v }));
+      this.check('A line to each atom', !!b.spokes, (v) => set(v ? 'Hapto bond to each atom' : 'Hapto bond to the middle', { spokes: v || undefined }),
+        'Draw a line from the metal to each atom of the ring or π-bond, instead of one line to its middle. ChemDraw shows it to the middle either way.');
+      this.color('Colour', b.color, (v) => set('Bond colour', { color: v }));
+      const row = document.createElement('div');
+      row.className = 'style-buttons';
+      const split = document.createElement('button');
+      split.type = 'button';
+      split.textContent = 'Split into single bonds';
+      split.title = 'Replace the hapto bond with an ordinary bond from the metal to each atom (σ bonds, or a κ chelate)';
+      split.addEventListener('click', () => this.edit('Split hapto bond', () => { splitHapto(this.doc, b.id); }));
+      row.append(split);
+      this.body.appendChild(row);
+      return;
+    }
     this.heading('Bond');
     this.select('Order', BOND_ORDERS, String(b.order), (v) => set('Bond order', { order: Number(v) }));
     this.select('Style', BOND_STYLES, b.display, (v) => set('Bond style', { display: v }));

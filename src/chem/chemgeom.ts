@@ -17,7 +17,8 @@ export function atomAt(doc: Doc, p: Vec, tol: number, except?: Set<number>): Ato
   let best: Atom | undefined;
   let bd = tol;
   for (const a of doc.atomsNear(p, tol)) {
-    if (except?.has(a.id)) continue;
+    // (a ring's middle, where a metal's hapto bond ends, is not an atom to join)
+    if (except?.has(a.id) || a.multi) continue;
     const d = dist(a, p);
     if (d <= bd) { bd = d; best = a; }
   }

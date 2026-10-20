@@ -7,7 +7,7 @@
 
 import { isMetalAtom, radicalElectrons, type Atom, type AtomWatch, type Bond, type Doc } from '../model';
 import { SYMBOLS, elementNumber, maxValence, minValence, valenceOfBonds } from './elements';
-import { bracketsUnbalanced, labelGraph, labelOverValent, tokenize } from './labels';
+import { bracketsUnbalanced, labelDonates, labelGraph, labelOverValent, tokenize } from './labels';
 
 /** Atoms closer than this (a fraction of the bond length) look dropped on top of each other. */
 export const TOO_CLOSE_ATOM = 0.2;
@@ -82,12 +82,15 @@ export function atomWarnings(doc: Doc, a: Atom): string[] {
   if (metal && !a.label) return a.isotope && !isotopeOk(a.z, a.isotope) ? [`There is no isotope ${a.isotope}${SYMBOLS[a.z] ?? ''}.`] : out;
   const z = a.label ? 6 : a.z;
   const bonds = valenceOfBonds(orders, z);
+  // a label giving a metal a lone pair or π-bond (PPh3, NH3, COD) takes no valence from it
+  const ext = a.label && toMetal && labelDonates(a.label) ? Math.max(0, bonds - toMetal) : bonds;
   if (a.label) {
     if (bracketsUnbalanced(a.label)) out.push(`The brackets in “${a.label}” don't pair up.`);
-    else if (!labelGraph(a.label, bonds)) out.push(`“${a.label}” can't be read as chemistry, so it's left out of the formula and mass.`);
+    else if (!labelGraph(a.label, ext)) out.push(`“${a.label}” can't be read as chemistry, so it's left out of the formula and mass.`);
     else {
       // (the label's first atom may give the metal a lone pair: THF's O, DMSO's S)
-      const over = metal ? [] : labelOverValent(a.label, bonds, a.charge).filter((o) => o.atom !== 0 || o.used - o.max > toMetal);
+      // (a bridging OMe or Cl may go past its valence by its bonds to metals)
+      const over = metal ? [] : labelOverValent(a.label, ext, a.charge).filter((o) => o.atom !== 0 || o.used - o.max > toMetal);
       if (over.length) {
         const o = over[0];
         const sym = SYMBOLS[o.z] ?? '?';

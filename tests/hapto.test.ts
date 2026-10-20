@@ -3,7 +3,8 @@
 // Hapto (η) bonds: a metal bonded to the middle of a ring or π-bond through a multicentre
 // point, which follows its atoms, goes with them, and is saved as ChemDraw's MultiAttachment.
 
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { createRequire } from 'node:module';
 import { Doc } from '../src/model';
 import { writeCdxml } from '../src/io/cdxml-write';
 import { readCdxml } from '../src/io/cdxml';
@@ -221,5 +222,44 @@ describe('atoms bonded to metals', () => {
     const checks = new StructureChecks(doc);
     checks.update();
     expect(checks.list()).toEqual([]);
+  });
+});
+
+describe('formulas of metal complexes (the chemistry engine)', () => {
+  let RDKit: any;
+  beforeAll(async () => { RDKit = await createRequire(import.meta.url)('@rdkit/rdkit')(); });
+  const formula = (doc: Doc) => {
+    const m = RDKit.get_mol(toMolfile(doc, [...doc.atoms.keys()]).molblock);
+    try { return JSON.parse(m.get_descriptors()).NumHeavyAtoms !== undefined ? RDKit.get_mol(m.get_smiles()).get_smiles() : ''; } finally { m.delete(); }
+  };
+  const hCount = (doc: Doc) => {
+    const m = RDKit.get_mol(toMolfile(doc, [...doc.atoms.keys()]).molblock);
+    try { const mh = RDKit.get_mol(m.get_molblock()); const n = JSON.parse(mh.get_json()).molecules[0].atoms.reduce((s: number, a: any) => s + (a.impHs ?? 0), 0); mh.delete(); return n; } finally { m.delete(); }
+  };
+
+  it('labels on a metal keep their hydrogens: Pd(PPh3)(THF)(NH3)Cl(Me)', () => {
+    const doc = new Doc();
+    doc.edit('a', () => {
+      const pd = doc.addAtom(0, 0, 46);
+      for (const [i, label] of ['PPh3', 'THF', 'NH3', 'Cl', 'Me', 'COD'].entries()) doc.addBond(pd.id, doc.addAtom(14 * Math.cos(i), 14 * Math.sin(i), 6, { label }).id);
+    });
+    const smi = formula(doc);
+    expect(smi).toContain('Pd');
+    // PPh3 15 H, THF 8, NH3 3, Me 3, COD 12
+    expect(hCount(doc)).toBe(15 + 8 + 3 + 3 + 12);
+  });
+
+  it('a drawn phosphine and a bridging chloride keep theirs too', () => {
+    const doc = new Doc();
+    doc.edit('a', () => {
+      const pd = doc.addAtom(0, 0, 46), pd2 = doc.addAtom(28, 0, 46);
+      const p = doc.addAtom(-14, 0, 15);
+      for (let i = 0; i < 3; i++) doc.addBond(p.id, doc.addAtom(-28, i * 10).id);
+      doc.addBond(pd.id, p.id);
+      const cl = doc.addAtom(14, 10, 17);
+      doc.addBond(pd.id, cl.id); doc.addBond(pd2.id, cl.id);
+    });
+    // three methyls on P: 9 H, and none on P or Cl
+    expect(hCount(doc)).toBe(9);
   });
 });

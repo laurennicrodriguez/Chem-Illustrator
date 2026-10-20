@@ -6,6 +6,7 @@ import { Vec, Rect } from './geom';
 import { DocStyle, ACS_1996 } from './style';
 import { arrowPoints, gluePoint } from './objects';
 import { isMetal, isMetalLabel, lowestValence } from './chem/elements';
+import { NICKNAMES } from './chem/labels';
 
 /** 'dative' is a coordinate bond, drawn as an arrow from the donor (a1) to the acceptor (a2). */
 export type BondDisplay = 'solid' | 'wedge' | 'hashWedge' | 'hash' | 'bold' | 'dash' | 'wavy' | 'dative';
@@ -79,7 +80,8 @@ export interface Atom {
 /** A metal atom: a metal element, or a label written for one (Pd, PdCl2, LnPd, [M]). */
 export function isMetalAtom(a: Atom | undefined): boolean {
   if (!a || a.multi || a.attach) return false;
-  return a.label ? isMetalLabel(a.label) : isMetal(a.z);
+  // (abbreviations that start like a metal are groups: MOM, Allyl, Ind)
+  return a.label ? !NICKNAMES[a.label] && isMetalLabel(a.label) : isMetal(a.z);
 }
 
 /** A multicentre point standing for several atoms at once (see Atom.multi), rather than an atom. */

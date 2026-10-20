@@ -7,6 +7,7 @@ import { CaptionEditor } from '../ui/caption-editor';
 import { geoDef, geoShapeStyle, moveSteps, traceSteps } from '../design/geo';
 import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
 import { fusions3d } from '../chem/fuse3d';
+import { bondHapto, centreEnd, haptoTarget } from '../chem/hapto';
 import { styleFromFace, plainText } from '../richtext';
 import * as rt from '../richtext';
 import { applyFormat, formatWhole, type TextFormat } from '../text/format';
@@ -54,7 +55,8 @@ import { ROTATE, handleCursor, pointerFor } from './cursors';
 export type Tool =
   | { kind: 'select' }
   | { kind: 'eraser' }
-  | { kind: 'bond'; order: number; display: BondDisplay }
+  /** `hapto`: bonds a metal to the middle of a ring or π-bond (η⁵, η²), or splits one into a line to each atom. */
+  | { kind: 'bond'; order: number; display: BondDisplay; hapto?: boolean }
   | { kind: 'chain' }
   | { kind: 'ring'; size: number; aromatic: boolean }
   | { kind: 'text' }
@@ -92,6 +94,7 @@ export const TOOLS: Record<string, Tool> = {
   'bond-triple': { kind: 'bond', order: 3, display: 'solid' },
   'bond-quadruple': { kind: 'bond', order: 4, display: 'solid' },
   'bond-dative': { kind: 'bond', order: 1, display: 'dative' },
+  'bond-hapto': { kind: 'bond', order: 1, display: 'solid', hapto: true },
   'bond-wedge': { kind: 'bond', order: 1, display: 'wedge' },
   'bond-hashWedge': { kind: 'bond', order: 1, display: 'hashWedge' },
   'bond-hash': { kind: 'bond', order: 1, display: 'hash' },
@@ -947,6 +950,7 @@ export class Editor {
         return;
       }
       case 'bond': {
+        if (t.hapto) { this.clickHapto(h, p); return; }
         if (!this.sel.atoms.size) this.sel = emptySel();
         doc.edit('Bond', () => {
           if (h && h.kind === 'atom') {
@@ -1189,6 +1193,107 @@ export class Editor {
     this.lastEdited = ids[t.attach];
   }
 
+  // ------------------------------------------------------------------ hapto bonds
+
+  /**
+   * What one end of a hapto bond drag is on: an atom (the metal, or the donor of an η¹ bond),
+   * or the π-system there (the ring round the point, the bond under it, or a ring's middle
+   * already bonded to another metal).
+   */
+  private haptoEnd(p: Vec, skip?: number): { atom?: Atom; pi?: { atoms: number[]; at: Vec } } {
+    const h = this.hitTest(p);
+    const target = haptoTarget(this.doc, p, skip);
+    // a bond under the pointer is a π-bond to hold; an atom is itself
+    if (h?.kind === 'atom' && h.id !== skip) return { atom: this.doc.atoms.get(h.id)! };
+    return target ? { pi: target } : {};
+  }
+
+  /** A new metal for a hapto bond, labelled M (type over it: Fe, Pd…). */
+  private newMetal(at: Vec, scale?: number): Atom {
+    return this.doc.addAtom(at.x, at.y, 6, { label: 'M', ...(scale && scale !== 1 ? { s: scale } : {}) });
+  }
+
+  /**
+   * The hapto tool's drag: from a metal to a ring, bond or allyl (or the other way), bonding the
+   * metal to its middle. Either end may be empty space, which makes a new metal there.
+   */
+  private dragHapto(d: Drag, p: Vec): void {
+    const doc = this.doc;
+    const from = this.haptoEnd(d.start);
+    const to = this.haptoEnd(p, from.atom?.id);
+    const L = doc.style.bondLength;
+    let metal: Atom | undefined, pi: { atoms: number[]; at: Vec } | undefined;
+    if (from.atom && to.pi) { metal = from.atom; pi = to.pi; }
+    else if (from.pi && to.atom) { metal = to.atom; pi = from.pi; }
+    else if (from.atom && !to.atom && !to.pi) {
+      // from a metal into empty space: an ordinary bond (to a ring drawn later)
+      const end = this.snapEnd(from.atom, p, bondLength(doc, from.atom), from.atom.id, d.alt);
+      this.lastEdited = bondTo(doc, from.atom, end.pt).id;
+      return;
+    } else if (from.pi && !to.atom && !to.pi) { pi = from.pi; metal = this.newMetal(dist(p, pi.at) < L * 0.5 ? add(pi.at, { x: 0, y: L }) : p); }
+    else if (!from.atom && !from.pi && to.pi) { pi = to.pi; metal = this.newMetal(d.start); }
+    else if (from.atom && to.atom) {
+      if (!doc.bondBetween(from.atom.id, to.atom.id)) doc.addBond(from.atom.id, to.atom.id);
+      this.lastEdited = to.atom.id;
+      return;
+    }
+    if (!metal || !pi) return;
+    bondHapto(doc, metal.id, pi.atoms);
+    this.lastEdited = metal.id;
+    this.setKeyHot({ kind: 'atom', id: metal.id });
+  }
+
+  /**
+   * The hapto tool's click. On a ring (inside it) or a bond: a new metal bonded to its middle,
+   * on the side away from the rest of the structure. On a hapto bond: draw it to each atom
+   * instead of to the middle, or back. On a metal with atoms selected: bond it to their middle
+   * (an allyl, a diene).
+   */
+  private clickHapto(h: Hit, p: Vec): void {
+    const doc = this.doc;
+    if (h?.kind === 'bond') {
+      const b = doc.bonds.get(h.id)!;
+      if (centreEnd(doc, b)) {
+        doc.edit(b.spokes ? 'Hapto bond to the middle' : 'Hapto bond to each atom', () => doc.updateBond(b.id, { spokes: b.spokes ? undefined : true }));
+        this.changed();
+        return;
+      }
+    }
+    if (h?.kind === 'atom') {
+      const picked = [...this.sel.atoms].filter((id) => id !== h.id && !doc.atoms.get(id)?.multi);
+      if (picked.length >= 2) {
+        doc.edit('Hapto bond', () => { bondHapto(doc, h.id, picked); });
+        this.sel = emptySel();
+        this.changed();
+      }
+      return;
+    }
+    const target = haptoTarget(doc, p);
+    if (!target) return;
+    const L = doc.style.bondLength;
+    // away from the rest of the structure (straight down for a ring on its own)
+    const frag = doc.fragmentOf(target.atoms[0]);
+    let cx = 0, cy = 0, n = 0;
+    for (const id of frag) { const a = doc.atoms.get(id)!; if (a.multi) continue; cx += a.x; cy += a.y; n++; }
+    let dir = sub(target.at, { x: cx / n, y: cy / n });
+    if (target.atoms.length === 2) {
+      // a π-bond: square to it, on its outer side
+      const q = doc.atoms.get(target.atoms[0])!, r = doc.atoms.get(target.atoms[1])!;
+      const across = perp(norm(sub(r, q)));
+      dir = dot(across, dir) < 0 ? mul(across, -1) : across;
+      if (dist({ x: cx / n, y: cy / n }, target.at) < 1e-6) dir = across;
+    }
+    if (Math.hypot(dir.x, dir.y) < L * 0.2 || target.atoms.length > 2 && dist({ x: cx / n, y: cy / n }, target.at) < L * 0.2) dir = { x: 0, y: 1 };
+    const at = add(target.at, mul(norm(dir), L));
+    doc.edit('Hapto bond', () => {
+      const m = this.newMetal(at);
+      bondHapto(doc, m.id, target.atoms);
+      this.lastEdited = m.id;
+    });
+    this.setKeyHot({ kind: 'atom', id: this.lastEdited! });
+    this.changed();
+  }
+
   // ------------------------------------------------------------------ drags that draw
 
   /**
@@ -1223,7 +1328,9 @@ export class Editor {
       this.openCaption(null, { x: x1, y: y1 + ASCENT * doc.style.captionSize }, undefined, Math.max(8, x2 - x1));
       return;
     }
-    if (t.kind === 'bond') {
+    if (t.kind === 'bond' && t.hapto) {
+      doc.edit('Hapto bond', () => this.dragHapto(d, p));
+    } else if (t.kind === 'bond') {
       doc.edit('Bond', () => {
         const a = startAtom ?? doc.addAtom(start.x, start.y);
         const L = bondLength(doc, a);
@@ -3588,6 +3695,15 @@ export class Editor {
       ctx.lineWidth = 1 / this.r.view.scale;
       ctx.strokeRect(Math.min(d.start.x, d.last.x), Math.min(d.start.y, d.last.y), Math.abs(d.last.x - d.start.x), Math.abs(d.last.y - d.start.y));
       ctx.setLineDash([]);
+    } else if (t.kind === 'bond' && t.hapto) {
+      // the line from one end's atom or π-system to the other's, with the π-system outlined
+      const from = this.haptoEnd(d.start), to = this.haptoEnd(d.last, from.atom?.id);
+      const at = (e: ReturnType<Editor['haptoEnd']>, p: Vec): Vec => e.atom ?? e.pi?.at ?? p;
+      poly([at(from, d.start), at(to, d.last)], false);
+      ctx.save();
+      ctx.setLineDash([3 / this.r.view.scale, 2 / this.r.view.scale]);
+      for (const e of [from, to]) if (e.pi) poly(e.pi.atoms.map((id) => doc.atoms.get(id)!), e.pi.atoms.length > 2);
+      ctx.restore();
     } else if (t.kind === 'bond') {
       const end = this.snapEnd(start, d.last, L, startAtom?.id, d.alt);
       poly([start, end.pt], false);

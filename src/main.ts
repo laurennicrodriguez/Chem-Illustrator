@@ -284,6 +284,7 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     { name: 'bond-dash', title: 'Dashed bond' },
     { name: 'bond-wavy', title: 'Wavy bond' },
     { name: 'bond-dative', title: 'Dative bond: draw from the donor atom to the acceptor. Click again to reverse' },
+    { name: 'bond-hapto', title: 'Hapto (η) bond: drag from a metal into a ring or onto a π-bond to bond it to the middle (η⁵-Cp, η⁶-arene, η²-alkene); click inside a ring or on a bond for a new metal there. Click a hapto bond to draw it to each atom' },
     { name: 'chain', title: 'Chain: drag to draw a zig-zag chain, or click to type how many atoms (Alt+click: the same number again)' },
   ],
   [
@@ -354,6 +355,7 @@ const HINTS: Record<string, string> = {
   chain: 'Drag from empty space or an atom; the number shows how many bonds. Click to type how many atoms; Alt+click repeats the last number.',
   text: 'Click an atom to type a label (OMe, CO2Et, NHBoc…), or click empty space for a caption.',
   element: 'Click atoms to make them the element picked in the periodic table, or empty space to add one.',
+  'bond-hapto': 'Drag from a metal into a ring (η⁵, η⁶) or onto a bond (η²), or the other way. Click inside a ring or on a bond for a new metal M there; select an allyl or diene, then click the metal. Click a hapto bond to draw it to each atom.',
   fragment: 'Drag a line across the bonds to break (or click one bond). Each piece gets a caption with its formula and exact mass, which you can edit.',
 };
 const ARROW_HINT = 'Drag to draw an arrow (Alt: any angle); click for a standard one. Drag the ends to move them, the middle to bend it.';
