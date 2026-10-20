@@ -1,0 +1,56 @@
+{
+ "structures": 2,
+ "stages": [
+  {
+   "kind": "morph",
+   "from": "O6C cyclisation #1",
+   "to": "O6C cyclisation #2",
+   "atoms": "18 paired of 21 -> 22",
+   "bonds": "16 carried of 21 -> 24",
+   "shifts": 0,
+   "breaking": [
+    "33-34",
+    "34-36",
+    "36-37",
+    "37-38",
+    "41-43"
+   ],
+   "forming": [
+    "12-13",
+    "13-14",
+    "14-15",
+    "14-16",
+    "16-17",
+    "17-18",
+    "15-20",
+    "14-21"
+   ],
+   "unpaired_start": [
+    "34",
+    "38",
+    "43"
+   ],
+   "unpaired_product": [
+    "14",
+    "17",
+    "20",
+    "21"
+   ],
+   "mirrored_rings": []
+  }
+ ],
+ "crossings": {
+  "O6C cyclisation #1": {
+   "drawn": 0,
+   "declared_by_chemdraw": 0,
+   "drawn_but_not_declared": 0,
+   "declared_but_not_drawn": 0
+  },
+  "O6C cyclisation #2": {
+   "drawn": 0,
+   "declared_by_chemdraw": 0,
+   "drawn_but_not_declared": 0,
+   "declared_but_not_drawn": 0
+  }
+ }
+}

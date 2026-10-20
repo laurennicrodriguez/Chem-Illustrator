@@ -1,0 +1,67 @@
+{
+ "structures": 3,
+ "stages": [
+  {
+   "kind": "morph",
+   "from": "GB13 to GB16 (three structures) #1",
+   "to": "GB13 to GB16 (three structures) #2",
+   "atoms": "29 paired of 30 -> 29",
+   "bonds": "33 carried of 34 -> 34",
+   "shifts": 0,
+   "breaking": [
+    "22-11"
+   ],
+   "forming": [
+    "46-40"
+   ],
+   "unpaired_start": [
+    "11"
+   ],
+   "unpaired_product": [],
+   "mirrored_rings": []
+  },
+  {
+   "kind": "morph",
+   "from": "GB13 to GB16 (three structures) #2",
+   "to": "GB13 to GB16 (three structures) #3",
+   "atoms": "29 paired of 29 -> 33",
+   "bonds": "34 carried of 34 -> 38",
+   "shifts": 0,
+   "breaking": [],
+   "forming": [
+    "80-89",
+    "80-90",
+    "82-91",
+    "77-92"
+   ],
+   "unpaired_start": [],
+   "unpaired_product": [
+    "89",
+    "90",
+    "91",
+    "92"
+   ],
+   "mirrored_rings": []
+  }
+ ],
+ "crossings": {
+  "GB13 to GB16 (three structures) #1": {
+   "drawn": 4,
+   "declared_by_chemdraw": 4,
+   "drawn_but_not_declared": 0,
+   "declared_but_not_drawn": 0
+  },
+  "GB13 to GB16 (three structures) #2": {
+   "drawn": 4,
+   "declared_by_chemdraw": 4,
+   "drawn_but_not_declared": 0,
+   "declared_but_not_drawn": 0
+  },
+  "GB13 to GB16 (three structures) #3": {
+   "drawn": 4,
+   "declared_by_chemdraw": 4,
+   "drawn_but_not_declared": 0,
+   "declared_but_not_drawn": 0
+  }
+ }
+}

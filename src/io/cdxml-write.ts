@@ -19,7 +19,7 @@ import { runsForChemDraw, TEXT_TAG } from '../text/chemdraw-text';
 import { ATTACH_TAG, IGNORE_TAG, attachTag } from '../editor/attached';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { fromDataUrl } from '../render/images';
-import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, INSIDE_TAG, GROUP_TAG, GEO_TAG, TURN_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG, HIGHLIGHT_LOOK_TAG, SPOKES_TAG } from './cdxml';
+import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, INSIDE_TAG, GROUP_TAG, GEO_TAG, MORPH_TAG, TURN_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG, HIGHLIGHT_LOOK_TAG, SPOKES_TAG } from './cdxml';
 import { frameTag } from '../editor/frames';
 import { geoDef, moveSteps, textArea, type GeoStep } from '../design/geo';
 import { FADE, tint } from '../colours';
@@ -1023,10 +1023,11 @@ class CdxmlWriter {
     const e = this.source('r', r.id, ['arrow']);
     const o = this.orig<Arrow>('r', r.id);
     if (e && o) {
-      if (sameExcept(r, o, ['step', 'reagentFor'])) return;
+      if (!deepEqual(r.morph, o.morph)) { this.writeMorph(e, r); this.changed = true; }
+      if (sameExcept(r, o, ['step', 'reagentFor', 'morph'])) return;
       const d = { x: r.tail.x - o.tail.x, y: r.tail.y - o.tail.y };
       const moved = { ...o, tail: r.tail, head: { x: o.head.x + d.x, y: o.head.y + d.y } };
-      if (sameExcept(r, moved, ['step', 'reagentFor'])) {
+      if (sameExcept(r, moved, ['step', 'reagentFor', 'morph'])) {
         shift(e, d.x, d.y);
         for (const g of this.legacyOf(e)) shift(g, d.x, d.y);
       } else {
@@ -1036,9 +1037,24 @@ class CdxmlWriter {
     } else {
       const a = this.el('arrow', { id: r.id });
       this.fillArrow(a, r);
+      this.writeMorph(a, r);
       this.page.appendChild(a);
     }
     this.changed = true;
+  }
+
+  /** The step's animation settings, with atoms named by their nodes' ids in this file. */
+  private writeMorph(e: Element, r: Arrow): void {
+    for (const c of kids(e)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === MORPH_TAG) e.removeChild(c);
+    const m = r.morph;
+    if (!m) return;
+    const n = (id: number) => this.nodeId(id);
+    const v: Record<string, unknown> = {};
+    if (m.pairs?.length) v.pairs = m.pairs.map(([a, b]) => [n(a), n(b)]);
+    if (m.exact) v.exact = true;
+    if (m.shifts?.length) v.shifts = m.shifts.map(([a, b, c]) => [n(a), n(b), n(c)]);
+    if (m.slides?.length) v.slides = m.slides.map(([[a, b], [c, d]]) => [[n(a), n(b)], [n(c), n(d)]]);
+    e.appendChild(this.el('objecttag', { TagType: 'String', Name: MORPH_TAG, Value: JSON.stringify(v), Visible: 'no' }));
   }
 
   private fillArrow(e: Element, r: Arrow): void {

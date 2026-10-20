@@ -7,7 +7,7 @@ import { ATTACH_TAG, IGNORE_TAG, attachFromTag, fillAttachments } from '../edito
 import { highlightStyleFromTag } from '../render/highlight';
 import { attachRingFills } from '../chem/ring-fill';
 import { lipDirection } from '../chem/polymer';
-import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, CHIRAL_FLAGS, PARTIAL } from '../model';
+import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, MorphStep, CHIRAL_FLAGS, PARTIAL } from '../model';
 import { TEXT_TAG, parseTextTag, runsFromChemDraw } from '../text/chemdraw-text';
 import { DocStyle } from '../style';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
@@ -66,6 +66,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   const ord = new Map<string, number>();
   /** Which entity each element became (kind + id), for the references in reaction steps. */
   const refOf = new Map<Element, string>();
+  const morphTags: [number, string][] = [];
   const from = (kind: Kind, id: number, el: Element) => { ord.set(kind + id, ordOf.get(el)!); refOf.set(el, kind + id); };
   const stats: ReadStats = { atoms: 0, bonds: 0, captions: 0, arrows: 0, shapes: 0, skipped: {}, parseMs: t1 - t0, buildMs: 0 };
   const skip = (what: string) => { stats.skipped[what] = (stats.skipped[what] ?? 0) + 1; };
@@ -527,6 +528,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     if (spacing !== null && !arrow.equilibrium && Number(spacing) > 0) arrow.shaftSpacing = (Number(spacing) / 100) * lw;
     doc.addArrow(arrow);
     from('r', arrow.id, a);
+    const mt = kids(a).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === MORPH_TAG);
+    if (mt) morphTags.push([arrow.id, mt.getAttribute('Value') ?? '']);
     stats.arrows++;
   };
 
@@ -715,6 +718,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   doc.bulk(() => {
     walk(root);
     readSteps(all, refOf, doc);
+    readMorphTags(morphTags, refOf, doc);
     readRepeats();
     for (const c of pendingCircles) if (!ringOfCircle(doc, c)) c.oval();
     // Element labels like "OH", "H2N" or "N" become automatic labels (so they re-justify
@@ -770,6 +774,27 @@ export function ringOfCircle(doc: Doc, c: { x: number; y: number }): boolean {
     }
   }
   return false;
+}
+
+/** Animation settings on arrows, with the file's node ids turned back into atoms (dropped if any is gone). */
+function readMorphTags(tags: [number, string][], refOf: Map<Element, string>, doc: Doc): void {
+  if (!tags.length) return;
+  const atomOf = new Map<string, number>();
+  for (const [el, ref] of refOf) if (ref[0] === 'a') atomOf.set(el.getAttribute('id') ?? '', Number(ref.slice(1)));
+  for (const [id, json] of tags) {
+    const r = doc.arrows.get(id);
+    if (!r) continue;
+    try {
+      const v = JSON.parse(json) as { pairs?: string[][]; exact?: boolean; shifts?: string[][]; slides?: string[][][] };
+      const at = (k: string) => { const a = atomOf.get(String(k)); if (a === undefined) throw new Error('gone'); return a; };
+      const m: MorphStep = {};
+      if (v.pairs?.length) m.pairs = v.pairs.map(([a, b]) => [at(a), at(b)]);
+      if (v.exact) m.exact = true;
+      if (v.shifts?.length) m.shifts = v.shifts.map(([u, w, d]) => [at(u), at(w), at(d)]);
+      if (v.slides?.length) m.slides = v.slides.map(([[a, b], [c, d]]) => [[at(a), at(b)], [at(c), at(d)]]);
+      r.morph = m;
+    } catch { /* a pairing naming atoms that are not there is no pairing */ }
+  }
 }
 
 const STEP_ROLES: [string, keyof StepRoles][] = [
@@ -894,6 +919,8 @@ export const GROUP_TAG = 'Chem Illustrator group';
 export const TURN_TAG = 'Chem Illustrator turn';
 /** The tag on the group that draws a design shape in ChemDraw: the shape as it is here. */
 export const GEO_TAG = 'Chem Illustrator shape';
+/** A reaction arrow's animation settings (MorphStep as JSON, atoms by the file's node ids). */
+export const MORPH_TAG = 'Chem Illustrator animation';
 /** The group's box when saved here (ChemDraw rewrites BoundingBox when the group is moved). */
 export const GEO_BOX_ATTR = 'ChemIllustratorBox';
 export const OWN_PICTURE = 'ChemIllustratorPicture';

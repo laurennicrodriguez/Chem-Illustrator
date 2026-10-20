@@ -9,6 +9,7 @@ Chem Illustrator is licensed under the GNU General Public License, version 3 or 
 | [dk.brics.automaton](https://www.brics.dk/automaton/) 1.12-4 (part of the OPSIN build) | OPSIN's name grammar | BSD-3-Clause (full text below) |
 | [TeaVM](https://teavm.org) 0.16.0 runtime and class library (part of the OPSIN build) | Runs OPSIN's Java code as JavaScript | Apache-2.0; includes code from Apache Harmony (Apache-2.0). Notice: "This product includes software developed by Alexey Andreev (http://teavm.org). This product includes software developed by The Apache Software Foundation (http://www.apache.org/)." |
 | StAX API 1.0.1 (`stax:stax-api`, interfaces only, part of the OPSIN build) | Lets OPSIN read its XML word lists | Apache-2.0 |
+| [cdxmorph](https://github.com/rshenvi/cdxmorph) 1.47.0 by Ryan Shenvi (Shenvi Lab), ported from Python to TypeScript (`src/morph/`), with its example schemes in `tests/morph/` | Scheme ▸ Animate Reaction: pairing the atoms of each step and drawing the frames between the structures | MIT (full text below). Used with the author's permission, which Ryan Shenvi gave Nathan O'Hare in October 2026. |
 | [fflate](https://github.com/101arrowz/fflate) 0.8.2 | Packing and unpacking PowerPoint, Excel and Word files (.pptx, .xlsx, .docx), and compressing PDF pages | MIT (full text below) |
 | Free fonts from [Google Fonts](https://fonts.google.com), packaged by [Fontsource](https://fontsource.org) 5.3 (`@fontsource/*`): Inter, Source Sans 3, IBM Plex Sans, Lato, Source Serif 4, Merriweather, Libre Baskerville, Montserrat, Oswald, Bebas Neue, Archivo Black, Barlow Condensed, JetBrains Mono, IBM Plex Mono (Latin, Latin-extended and Greek letters, regular and bold) | The font boxes in every mode; put inside saved Word and PowerPoint files that use them | SIL Open Font License 1.1 (copyright lines and full text below) |
 | [Tauri](https://tauri.app) (`tauri` crate, `@tauri-apps/api`) | Desktop app shell | MIT or Apache-2.0 |
@@ -254,6 +255,22 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## cdxmorph licence
+
+```
+MIT License
+
+Copyright (c) 2026 Ryan Shenvi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+The files in `src/morph/` keep this notice (they carry `SPDX-License-Identifier: MIT`); the rest of Chem Illustrator is GPL-3.0-or-later.
 
 ## fflate licence
 

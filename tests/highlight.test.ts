@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { Doc } from '../src/model';
-import { atomPiece, bondPiece, clockwise, fullStyle, highlightPieces, highlightSizes, highlightStyleFromTag, tracePieces, type Piece } from '../src/render/highlight';
+import { atomPiece, bondPiece, centredSpots, clockwise, fullStyle, highlightPieces, highlightSizes, highlightStyleFromTag, tracePieces, type Piece } from '../src/render/highlight';
 import { tidyStyle } from '../src/ui/style-panel';
 import { writeCdxml } from '../src/io/cdxml-write';
 import { readCdxml } from '../src/io/cdxml';
@@ -22,45 +22,29 @@ describe('highlight shapes', () => {
     const ccw = [{ x: 0, y: 0 }, { x: 0, y: 1 }, { x: 1, y: 1 }, { x: 1, y: 0 }];
     expect(area(clockwise(ccw))).toBeGreaterThan(0);
     expect(area(clockwise(clockwise(ccw)))).toBeGreaterThan(0);
-    for (const shape of ['diamond', 'square'] as const) {
-      const a = atomPiece({ x: 0, y: 0 }, 5, shape, null, 0);
-      const b = bondPiece({ x: 0, y: 0 }, { x: 10, y: 5 }, 4, shape);
-      if (a.kind !== 'poly' || b.kind !== 'poly') throw new Error('expected outlines');
-      expect(area(a.pts)).toBeGreaterThan(0);
-      expect(area(b.pts)).toBeGreaterThan(0);
-    }
+    const b = bondPiece({ x: 0, y: 0 }, { x: 10, y: 5 }, 4, 'straight');
+    if (b.kind !== 'poly') throw new Error('expected an outline');
+    expect(area(b.pts)).toBeGreaterThan(0);
   });
 
   it('is a disc of the usual size under a plain atom', () => {
-    expect(atomPiece({ x: 3, y: 4 }, 5, 'round', null, 1)).toEqual({ kind: 'disc', c: { x: 3, y: 4 }, r: 5 });
-    expect(atomPiece({ x: 3, y: 4 }, 5, 'round', null, 1, 2)).toEqual({ kind: 'disc', c: { x: 3, y: 4 }, r: 7 });
+    expect(atomPiece({ x: 3, y: 4 }, 5, null, 1)).toEqual({ kind: 'disc', c: { x: 3, y: 4 }, r: 5 });
+    expect(atomPiece({ x: 3, y: 4 }, 5, null, 1, 2)).toEqual({ kind: 'disc', c: { x: 3, y: 4 }, r: 7 });
   });
 
   it('grows round a long label so the whole label sits on it', () => {
     // "OTBS": 24 wide, 8 high, centred on (12, 0)
     const label = { x1: 0, y1: -4, x2: 24, y2: 4 };
-    const pill = atomPiece({ x: 4, y: 0 }, 5, 'round', label, 1);
-    expect(pill).toEqual({ kind: 'band', p: { x: 4, y: 0 }, q: { x: 20, y: 0 }, r: 5 });
-    const sq = atomPiece({ x: 4, y: 0 }, 5, 'square', label, 1);
-    if (sq.kind !== 'poly') throw new Error('expected a square');
-    expect(Math.min(...sq.pts.map((p) => p.x))).toBe(-1);
-    expect(Math.max(...sq.pts.map((p) => p.x))).toBe(25);
-    // a diamond half as wide again as the label (with its pad), and never smaller than a plain one
-    const di = atomPiece({ x: 4, y: 0 }, 5, 'diamond', label, 1);
-    if (di.kind !== 'poly') throw new Error('expected a diamond');
-    expect(Math.max(...di.pts.map((p) => p.x)) - 12).toBeCloseTo(19.5, 9);
-    expect(Math.max(...di.pts.map((p) => p.y))).toBeCloseTo(7.5, 9);
+    expect(atomPiece({ x: 4, y: 0 }, 5, label, 1)).toEqual({ kind: 'band', p: { x: 4, y: 0 }, q: { x: 20, y: 0 }, r: 5 });
   });
 
-  it('draws bands with round or square ends past the atoms, or flat ends for diamonds', () => {
+  it('draws bands with round ends, or flat ends at the atoms when straight', () => {
     expect(bondPiece({ x: 0, y: 0 }, { x: 10, y: 0 }, 3, 'round')).toEqual({ kind: 'band', p: { x: 0, y: 0 }, q: { x: 10, y: 0 }, r: 3 });
-    const sq = bondPiece({ x: 0, y: 0 }, { x: 10, y: 0 }, 3, 'square');
-    if (sq.kind !== 'poly') throw new Error('expected an outline');
-    expect(Math.min(...sq.pts.map((p) => p.x))).toBeCloseTo(-3, 9);
-    expect(Math.max(...sq.pts.map((p) => p.y))).toBeCloseTo(3, 9);
-    const di = bondPiece({ x: 0, y: 0 }, { x: 10, y: 0 }, 3, 'diamond');
-    if (di.kind !== 'poly') throw new Error('expected an outline');
-    expect(Math.max(...di.pts.map((p) => p.x))).toBeCloseTo(10, 9);
+    const st = bondPiece({ x: 0, y: 0 }, { x: 10, y: 0 }, 3, 'straight');
+    if (st.kind !== 'poly') throw new Error('expected an outline');
+    expect(Math.min(...st.pts.map((p) => p.x))).toBeCloseTo(0, 9);
+    expect(Math.max(...st.pts.map((p) => p.x))).toBeCloseTo(10, 9);
+    expect(Math.max(...st.pts.map((p) => p.y))).toBeCloseTo(3, 9);
   });
 
   it('traces a band as one closed loop', () => {
@@ -79,33 +63,39 @@ const chain = () => {
 };
 /** The top of some pieces (outlines only). */
 const top = (ps: Piece[]) => Math.min(...ps.flatMap((pc) => (pc.kind === 'poly' ? pc.pts.map((p) => p.y) : [])));
+/** The farthest left any piece reaches. */
+const left = (ps: Piece[]) => Math.min(...ps.flatMap((pc) => pc.kind === 'poly' ? pc.pts.map((p) => p.x) : pc.kind === 'disc' ? [pc.c.x - pc.r] : [Math.min(pc.p.x, pc.q.x) - pc.r]));
 
-describe('smooth highlights', () => {
-  it('makes square and diamond highlights one even band with a sharp corner, not a shape on each atom', () => {
-    for (const shape of ['square', 'diamond'] as const) {
-      const { a, b, c, bonds } = chain();
-      const ps = highlightPieces(bonds, [a, b, c].map((at) => ({ at, label: null })), sizes, fullStyle({ shape }), 1);
-      // the corner at the bend: the band's outer edges carried on to meet (h / sin 60° out)
-      expect(b.y - top(ps)).toBeCloseTo(sizes.band / Math.sin(Math.PI / 3), 6);
-      for (const pc of ps) if (pc.kind === 'poly') expect(area(pc.pts)).toBeGreaterThan(0);
-      expect(ps.some((pc) => pc.kind === 'disc')).toBe(false);
-    }
-  });
-
-  it('ends a square band square and a diamond band in a point', () => {
+describe('straight and smooth highlights', () => {
+  it('makes a straight highlight one even band with a sharp corner, not a shape on each atom', () => {
     const { a, b, c, bonds } = chain();
-    const sq = highlightPieces(bonds, [a, b, c].map((at) => ({ at, label: null })), sizes, fullStyle({ shape: 'square' }), 1);
-    const di = highlightPieces(bonds, [a, b, c].map((at) => ({ at, label: null })), sizes, fullStyle({ shape: 'diamond' }), 1);
-    // past the end atom by the band's half width: square corners, or one point
-    expect(Math.min(...sq.flatMap((pc) => pc.kind === 'poly' ? pc.pts.map((p) => p.x) : []))).toBeCloseTo(-sizes.band * Math.cos(Math.PI / 6) - sizes.band * Math.sin(Math.PI / 6), 6);
-    const tip = di.flatMap((pc) => pc.kind === 'poly' ? pc.pts : []).reduce((m, p) => (p.x - a.x) * Math.cos(Math.PI / 6) - (p.y - a.y) * -0.5 < (m.x - a.x) * Math.cos(Math.PI / 6) - (m.y - a.y) * -0.5 ? p : m);
-    expect(Math.hypot(tip.x - a.x, tip.y - a.y)).toBeCloseTo(sizes.band, 6);
+    const ps = highlightPieces(bonds, [a, b, c].map((at) => ({ at, label: null })), sizes, fullStyle({ shape: 'straight' }), 1);
+    // the corner at the bend: the band's outer edges carried on to meet (h / sin 60° out)
+    expect(b.y - top(ps)).toBeCloseTo(sizes.band / Math.sin(Math.PI / 3), 6);
+    for (const pc of ps) if (pc.kind === 'poly') expect(area(pc.pts)).toBeGreaterThan(0);
   });
 
-  it('keeps the shape under an atom with no highlighted bond', () => {
+  it('ends a straight band round, square or in a point', () => {
+    const { a, b, c, bonds } = chain();
+    const atoms = [a, b, c].map((at) => ({ at, label: null }));
+    const reach = (ends: 'round' | 'square' | 'pointed') => -left(highlightPieces(bonds, atoms, sizes, fullStyle({ shape: 'straight', ends }), 1));
+    const h = sizes.band;
+    expect(reach('round')).toBeCloseTo(h, 6);
+    // the square's far corner, turned with the bond (30° off level)
+    expect(reach('square')).toBeCloseTo(h * Math.cos(Math.PI / 6) + h * Math.sin(Math.PI / 6), 6);
+    expect(reach('pointed')).toBeCloseTo(h * Math.cos(Math.PI / 6), 6);
+  });
+
+  it('puts a disc round each label on a straight highlight', () => {
+    const { a, b, c, bonds } = chain();
+    const label = { x1: b.x - 5, y1: b.y - 5, x2: b.x + 5, y2: b.y + 5 };
+    const ps = highlightPieces(bonds, [{ at: a, label: null }, { at: b, label }, { at: c, label: null }], sizes, fullStyle({ shape: 'straight' }), 0.5);
+    expect(ps).toContainEqual({ kind: 'band', p: { x: b.x, y: b.y }, q: { x: b.x, y: b.y }, r: 5.5 });
+  });
+
+  it('keeps a disc under an atom with no highlighted bond', () => {
     const at = { x: 5, y: 5 };
-    expect(highlightPieces([], [{ at, label: null }], sizes, fullStyle({ shape: 'diamond' }), 1)).toEqual([atomPiece(at, sizes.disc, 'diamond', null, 1)]);
-    expect(highlightPieces([], [{ at, label: null }], sizes, fullStyle({ smooth: true }), 1)).toEqual([{ kind: 'disc', c: at, r: sizes.disc }]);
+    for (const style of [{ shape: 'straight' as const }, { smooth: true }]) expect(highlightPieces([], [{ at, label: null }], sizes, fullStyle(style), 1)).toEqual([{ kind: 'disc', c: at, r: sizes.disc }]);
   });
 
   it('puts a disc on each atom of a round highlight unless it is smooth', () => {
@@ -116,36 +106,41 @@ describe('smooth highlights', () => {
     const smooth = highlightPieces(bonds, atoms, sizes, fullStyle({ smooth: true }), 1);
     expect(smooth).toEqual(bonds.map(([p, q]) => ({ kind: 'band', p, q, r: sizes.band })));
   });
+});
 
-  it('swells the band just enough to hold a label at a bend', () => {
-    const { a, b, c, bonds } = chain();
-    // a label as big as an N: wider than the band
-    const label = { x1: b.x - 5, y1: b.y - 5, x2: b.x + 5, y2: b.y + 5 };
-    const ps = highlightPieces(bonds, [{ at: a, label: null }, { at: b, label }, { at: c, label: null }], sizes, fullStyle({ shape: 'square' }), 0.5);
-    const inPiece = (v: { x: number; y: number }) => ps.some((pc) => {
-      if (pc.kind !== 'poly') return false;
-      let n = false;
-      for (let i = 0, j = pc.pts.length - 1; i < pc.pts.length; j = i++) {
-        const p = pc.pts[i], q = pc.pts[j];
-        if ((p.y > v.y) !== (q.y > v.y) && v.x < ((q.x - p.x) * (v.y - p.y)) / (q.y - p.y) + p.x) n = !n;
-      }
-      return n;
-    });
-    for (const v of [{ x: b.x + 5.4, y: b.y }, { x: b.x - 5.4, y: b.y }, { x: b.x, y: b.y + 5.4 }, { x: b.x, y: b.y - 5.4 }]) expect(inPiece(v)).toBe(true);
-    // and no further than it needs
-    expect(b.y - top(ps)).toBeLessThan(5.4 + sizes.band);
+describe('highlights centred on double bonds', () => {
+  it('takes a ring in by half the gap on every side', () => {
+    // a hexagon of side 20 round the origin
+    const ring = Array.from({ length: 6 }, (_, i) => ({ x: 20 * Math.cos((i * Math.PI) / 3), y: 20 * Math.sin((i * Math.PI) / 3) }));
+    const spots = centredSpots([ring], [], 2);
+    for (const a of ring) {
+      const s = spots.get(a)!;
+      // each corner moves toward the middle by d / cos 30°, so each side moves in by d
+      expect(Math.hypot(s.x, s.y)).toBeCloseTo(20 - 2 / Math.cos(Math.PI / 6), 6);
+    }
+  });
+
+  it('moves a double bond outside a ring toward its second line, and leaves other atoms', () => {
+    const p = { x: 0, y: 0 }, q = { x: 20, y: 0 }, r = { x: 30, y: 10 };
+    const spots = centredSpots([], [{ p, q, side: { x: 0, y: 1 } }], 1.5);
+    expect(spots.get(p)).toEqual({ x: 0, y: 1.5 });
+    expect(spots.get(q)).toEqual({ x: 20, y: 1.5 });
+    expect(spots.has(r)).toBe(false);
   });
 });
 
 describe('highlight look', () => {
   it('fills in the usual look, and keeps only what differs from it', () => {
-    expect(fullStyle(undefined)).toEqual({ shape: 'round', size: 1, fit: true, shadow: false, soft: false, smooth: false });
+    expect(fullStyle(undefined)).toEqual({ shape: 'round', ends: 'round', size: 1, fit: true, shadow: false, soft: false, smooth: false, centre: false });
     expect(tidyStyle({ shape: 'round', size: 1.5, shadow: false })).toEqual({ size: 1.5 });
     expect(tidyStyle({ fit: true })).toBeUndefined();
   });
 
   it('reads a saved look, leaving out nonsense', () => {
-    expect(highlightStyleFromTag('{"shape":"diamond","size":2,"soft":true}')).toEqual({ shape: 'diamond', size: 2, soft: true });
+    expect(highlightStyleFromTag('{"shape":"straight","ends":"pointed","centre":true}')).toEqual({ shape: 'straight', ends: 'pointed', centre: true });
+    // diamonds and squares from older files are straight, with pointed or square ends
+    expect(highlightStyleFromTag('{"shape":"diamond","size":2,"soft":true}')).toEqual({ shape: 'straight', ends: 'pointed', size: 2, soft: true });
+    expect(highlightStyleFromTag('{"shape":"square"}')).toEqual({ shape: 'straight', ends: 'square' });
     expect(highlightStyleFromTag('{"smooth":true}')).toEqual({ smooth: true });
     expect(highlightStyleFromTag('{"shape":"star","size":-1,"shadow":"yes"}')).toBeUndefined();
     expect(highlightStyleFromTag('nope')).toBeUndefined();
@@ -155,13 +150,13 @@ describe('highlight look', () => {
     const doc = new Doc();
     doc.edit('Draw', () => {
       const a = doc.addAtom(0, 0), b = doc.addAtom(20, 0);
-      doc.addBond(a.id, b.id, 1, 'Solid', { highlight: '#ffe680', hl: { shape: 'square', shadow: true } });
+      doc.addBond(a.id, b.id, 1, 'Solid', { highlight: '#ffe680', hl: { shape: 'straight', ends: 'square', centre: true, shadow: true } });
       doc.updateAtom(a.id, { highlight: '#ffe680', hl: { size: 1.6, soft: true, smooth: true } });
     });
     const back = readCdxml(writeCdxml(doc)).doc;
     const atom = [...back.atoms.values()].find((x) => x.highlight)!;
     const bond = [...back.bonds.values()][0];
     expect(atom.hl).toEqual({ size: 1.6, soft: true, smooth: true });
-    expect(bond.hl).toEqual({ shape: 'square', shadow: true });
+    expect(bond.hl).toEqual({ shape: 'straight', ends: 'square', centre: true, shadow: true });
   });
 });

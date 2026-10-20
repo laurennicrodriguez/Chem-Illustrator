@@ -317,12 +317,21 @@ export interface Caption {
   rot?: number;
 }
 
-/** The shape of a highlight: discs and round-ended bands, diamonds, or squares. */
-export type HighlightShape = 'round' | 'diamond' | 'square';
+/**
+ * The shape of a highlight: discs and round-ended bands (round), or straight bands with sharp
+ * corners where bonds meet and a disc round each atom label (straight). Files from before
+ * straight highlights may say diamond or square; they are read as straight.
+ */
+export type HighlightShape = 'round' | 'straight';
+
+/** How the end of a straight highlight looks: round, square past the atom, or a point. */
+export type HighlightEnds = 'round' | 'square' | 'pointed';
 
 /** How a highlight is drawn. Anything left out takes the usual look (HIGHLIGHT_DEFAULTS). */
 export interface HighlightStyle {
   shape?: HighlightShape;
+  /** Straight highlights only: how a line of highlighted bonds ends. */
+  ends?: HighlightEnds;
   /** Bigger or smaller than usual: 1 is the usual size. */
   size?: number;
   /** Grow round an atom's label (Me, OTBS) so the whole label sits on the highlight. */
@@ -330,14 +339,16 @@ export interface HighlightStyle {
   shadow?: boolean;
   /** Fade out at the edges instead of a sharp edge. */
   soft?: boolean;
-  /**
-   * Round highlights only: one even band along the bonds, with no bulging disc at each atom
-   * (square and diamond highlights are always drawn this way).
-   */
+  /** Round highlights only: one even band along the bonds, with no bulging disc at each atom. */
   smooth?: boolean;
+  /**
+   * Run the highlight midway between a double bond's two lines (and round a ring drawn with its
+   * double bonds inside, midway between the ring and those inner lines) instead of on the bond.
+   */
+  centre?: boolean;
 }
 
-export const HIGHLIGHT_DEFAULTS: Required<HighlightStyle> = { shape: 'round', size: 1, fit: true, shadow: false, soft: false, smooth: false };
+export const HIGHLIGHT_DEFAULTS: Required<HighlightStyle> = { shape: 'round', ends: 'round', size: 1, fit: true, shadow: false, soft: false, smooth: false, centre: false };
 
 /** Which side of its structure an attached caption sits on. */
 export type AttachSide = 'below' | 'above' | 'left' | 'right';
@@ -402,6 +413,21 @@ export interface Arrow {
   to?: Glue;
   /** Drawn with right-angled bends (an elbow connector). */
   elbow?: boolean;
+  /** How this step animates (Scheme > Animate Reaction): the atom pairing and moves chosen for it. */
+  morph?: MorphStep;
+}
+
+/**
+ * A reaction step's animation settings, in atom ids: pairs chosen by hand (starting material
+ * atom, product atom), 1,2-shifts (bond u–v walks its v end onto dest) and double-bond lines
+ * that slide onto another bond.
+ */
+export interface MorphStep {
+  pairs?: [number, number][];
+  /** Use exactly these pairs; otherwise they are fixed points and the rest is matched. */
+  exact?: boolean;
+  shifts?: [number, number, number][];
+  slides?: [[number, number], [number, number]][];
 }
 
 /** Where a connector's end is stuck: a shape and its connection point (0 top, 1 right, 2 bottom, 3 left). */
