@@ -1,0 +1,36 @@
+{
+ "structures": 2,
+ "stages": [
+  {
+   "kind": "morph",
+   "from": "GB13 to GB16 (two structures) #1",
+   "to": "GB13 to GB16 (two structures) #2",
+   "atoms": "29 paired of 29 -> 29",
+   "bonds": "32 carried of 33 -> 33",
+   "shifts": 0,
+   "breaking": [
+    "21-17"
+   ],
+   "forming": [
+    "31-40"
+   ],
+   "unpaired_start": [],
+   "unpaired_product": [],
+   "mirrored_rings": []
+  }
+ ],
+ "crossings": {
+  "GB13 to GB16 (two structures) #1": {
+   "drawn": 3,
+   "declared_by_chemdraw": 4,
+   "drawn_but_not_declared": 0,
+   "declared_but_not_drawn": 1
+  },
+  "GB13 to GB16 (two structures) #2": {
+   "drawn": 2,
+   "declared_by_chemdraw": 3,
+   "drawn_but_not_declared": 0,
+   "declared_but_not_drawn": 1
+  }
+ }
+}

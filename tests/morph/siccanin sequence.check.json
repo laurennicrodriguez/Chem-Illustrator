@@ -1,0 +1,143 @@
+{
+ "structures": 6,
+ "stages": [
+  {
+   "kind": "morph",
+   "from": "siccanin sequence #1",
+   "to": "siccanin sequence #2",
+   "atoms": "24 paired of 24 -> 25",
+   "bonds": "26 carried of 26 -> 28",
+   "shifts": 0,
+   "breaking": [],
+   "forming": [
+    "60-55",
+    "60-66"
+   ],
+   "unpaired_start": [],
+   "unpaired_product": [
+    "66"
+   ],
+   "mirrored_rings": []
+  },
+  {
+   "kind": "morph",
+   "from": "siccanin sequence #2",
+   "to": "siccanin sequence #3",
+   "atoms": "25 paired of 25 -> 26",
+   "bonds": "28 carried of 28 -> 29",
+   "shifts": 0,
+   "breaking": [],
+   "forming": [
+    "119-125"
+   ],
+   "unpaired_start": [],
+   "unpaired_product": [
+    "125"
+   ],
+   "mirrored_rings": []
+  },
+  {
+   "kind": "morph",
+   "from": "siccanin sequence #3",
+   "to": "siccanin sequence #4",
+   "atoms": "26 paired of 26 -> 26",
+   "bonds": "28 carried of 29 -> 29",
+   "shifts": 0,
+   "breaking": [
+    "118-119"
+   ],
+   "forming": [
+    "144-145"
+   ],
+   "unpaired_start": [],
+   "unpaired_product": [],
+   "mirrored_rings": []
+  },
+  {
+   "kind": "morph",
+   "from": "siccanin sequence #4",
+   "to": "siccanin sequence #5",
+   "atoms": "24 paired of 26 -> 25",
+   "bonds": "26 carried of 29 -> 27",
+   "shifts": 0,
+   "breaking": [
+    "144-145",
+    "145-146",
+    "146-136"
+   ],
+   "forming": [
+    "11-14"
+   ],
+   "unpaired_start": [
+    "145",
+    "146"
+   ],
+   "unpaired_product": [
+    "14"
+   ],
+   "mirrored_rings": []
+  },
+  {
+   "kind": "morph",
+   "from": "siccanin sequence #5",
+   "to": "siccanin sequence #6",
+   "atoms": "25 paired of 25 -> 25",
+   "bonds": "27 carried of 27 -> 28",
+   "shifts": 0,
+   "breaking": [],
+   "forming": [
+    "34-48"
+   ],
+   "unpaired_start": [],
+   "unpaired_product": [],
+   "mirrored_rings": [
+    [
+     "18",
+     "13",
+     "22",
+     "21",
+     "20",
+     "19"
+    ]
+   ]
+  }
+ ],
+ "crossings": {
+  "siccanin sequence #1": {
+   "drawn": 0,
+   "declared_by_chemdraw": 0,
+   "drawn_but_not_declared": 0,
+   "declared_but_not_drawn": 0
+  },
+  "siccanin sequence #2": {
+   "drawn": 0,
+   "declared_by_chemdraw": 0,
+   "drawn_but_not_declared": 0,
+   "declared_but_not_drawn": 0
+  },
+  "siccanin sequence #3": {
+   "drawn": 0,
+   "declared_by_chemdraw": 0,
+   "drawn_but_not_declared": 0,
+   "declared_but_not_drawn": 0
+  },
+  "siccanin sequence #4": {
+   "drawn": 0,
+   "declared_by_chemdraw": 0,
+   "drawn_but_not_declared": 0,
+   "declared_but_not_drawn": 0
+  },
+  "siccanin sequence #5": {
+   "drawn": 0,
+   "declared_by_chemdraw": 0,
+   "drawn_but_not_declared": 0,
+   "declared_but_not_drawn": 0
+  },
+  "siccanin sequence #6": {
+   "drawn": 0,
+   "declared_by_chemdraw": 0,
+   "drawn_but_not_declared": 0,
+   "declared_but_not_drawn": 0
+  }
+ }
+}
