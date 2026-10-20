@@ -135,7 +135,7 @@ export const CYCLE_PRESETS: CyclePreset[] = [
         },
         {
           stations: ['Ir^{III}', '*Ir^{III}', 'Ir^{II}'],
-          steps: [st('hν', 'excitation', 'hν'), st('SET', 'single-electron transfer', 'RCO_2^−', 'CO_2, R•'), st('SET', 'single-electron transfer')],
+          steps: [st('hν', 'excitation'), st('SET', 'single-electron transfer', 'RCO_2^−', 'CO_2, R•'), st('SET', 'single-electron transfer')],
           middle: 'photocatalyst',
         },
       ],
