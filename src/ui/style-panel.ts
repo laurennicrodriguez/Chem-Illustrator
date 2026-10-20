@@ -3,7 +3,7 @@
 // bond (label, charge, atom number; order and style).
 // Anything the drawing tools set automatically can be changed here by hand.
 
-import { Doc, Arrow, Shape, Caption, Atom, Bond, PICTURE_STYLES, type PictureLook, type StepRoles, type Pattern, type AttachSide, type Attachment, type DescriptorKey, type HighlightShape, type HighlightStyle } from '../model';
+import { Doc, Arrow, Shape, Caption, Atom, Bond, PICTURE_STYLES, type PictureLook, type StepRoles, type Pattern, type AttachSide, type Attachment, type DescriptorKey, type HighlightEnds, type HighlightShape, type HighlightStyle } from '../model';
 import { fullStyle, tidyStyle } from '../render/highlight';
 
 export { tidyStyle };
@@ -63,7 +63,8 @@ const LINES: Opt<Arrow['line']>[] = [['solid', 'Solid'], ['dashed', 'Dashed'], [
 const SHAFTS: Opt<string>[] = [['one', 'One line'], ['equilibrium', 'Equilibrium (two half arrows)'], ['retro', 'Retrosynthetic (double line)']];
 const BRACKETS: Opt<NonNullable<Shape['bracket']>>[] = [['square', 'Square [ ]'], ['round', 'Round ( )'], ['curly', 'Curly { }']];
 const VALIGN: Opt<NonNullable<Shape['textValign']>>[] = [['top', 'Top'], ['middle', 'Middle'], ['bottom', 'Bottom']];
-const HL_SHAPES: Opt<HighlightShape>[] = [['round', 'Round (discs and bands)'], ['diamond', 'Diamond'], ['square', 'Square']];
+const HL_SHAPES: Opt<HighlightShape>[] = [['round', 'Round (discs and bands)'], ['straight', 'Straight (sharp corners, discs round labels)']];
+const HL_ENDS: Opt<HighlightEnds>[] = [['round', 'Round'], ['square', 'Square'], ['pointed', 'Pointed']];
 const SIDES: Opt<AttachSide>[] = [['below', 'Below'], ['above', 'Above'], ['left', 'Left'], ['right', 'Right']];
 const JUSTIFY: Opt<Caption['justify']>[] = [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']];
 const TABLE_LINES: Opt<TableData['lines']>[] = [['acs', 'ACS style (rules above and below the headings, and at the end)'], ['grid', 'Every cell boxed'], ['none', 'None']];
@@ -686,7 +687,7 @@ export class StylePanel {
     this.highlightControls([], [b]);
   }
 
-  /** How the highlight on these atoms and bonds is drawn: shape, smooth, size, round labels, shadow, soft edges. */
+  /** How the highlight on these atoms and bonds is drawn: shape, smooth or ends, centring, size, round labels, shadow, soft edges. */
   private highlightControls(atoms: Atom[], bonds: Bond[]): void {
     const lit = [...atoms, ...bonds].filter((x) => x.highlight);
     if (!lit.length) return;
@@ -699,9 +700,12 @@ export class StylePanel {
       this.highlightStyleUsed({ ...st, ...patch });
     };
     this.select<HighlightShape>('Highlight shape', HL_SHAPES, st.shape, (v) => set('Highlight shape', { shape: v }));
-    // square and diamond highlights are always one even band; round ones can have a disc on each atom
+    // straight highlights are always one even band; round ones can have a disc on each atom
     if (st.shape === 'round') this.check('Smooth outline', st.smooth, (v) => set(v ? 'Smooth highlight' : 'Highlight with discs', { smooth: v }),
       'One even band along the bonds, with no disc bulging out at each atom (Structure > Smooth Highlight).');
+    else this.select<HighlightEnds>('Highlight ends', HL_ENDS, st.ends, (v) => set('Highlight ends', { ends: v }));
+    this.check('Centre on double bonds', st.centre, (v) => set(v ? 'Centre highlight on double bonds' : 'Highlight on the bonds', { centre: v }),
+      'Run the highlight midway between a double bond\'s two lines, and round a ring midway between the ring and its inner double-bond lines (Structure > Centre Highlight on Double Bonds).');
     this.number('Highlight size (%)', Math.round(st.size * 100), 10, 20, 400, (v) => set('Highlight size', { size: v / 100 }),
       '100% is the usual size; larger for a bolder highlight.');
     this.check('Grow round atom labels', st.fit, (v) => set(v ? 'Highlight round labels' : 'Highlight not round labels', { fit: v }),
