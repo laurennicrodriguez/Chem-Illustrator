@@ -327,3 +327,41 @@ export function replacementAt(text: string, end: number, list: readonly [string,
   }
   return best;
 }
+
+// ------------------------------------------------------------------ text with markup
+
+/**
+ * Text typed with a little markup, as styled runs: `_x` or `_{xy}` a subscript, `^x` or `^{xy}`
+ * a superscript, and the digits of formulas dropped as subscripts (L_nPd^0, ArPd^{II}X,
+ * ArB(OH)2, [Rh(CO)2I2]^−). Used for the species and labels the cycle and energy diagram
+ * tools write.
+ */
+export function chemRuns(text: string): { text: string; sub?: boolean; sup?: boolean }[] {
+  const out: { text: string; sub?: boolean; sup?: boolean }[] = [];
+  const put = (t: string, pos?: 'sub' | 'sup') => {
+    if (!t) return;
+    const last = out[out.length - 1];
+    if (last && !!last.sub === (pos === 'sub') && !!last.sup === (pos === 'sup')) { last.text += t; return; }
+    out.push({ text: t, ...(pos ? { [pos]: true } : {}) });
+  };
+  const plain = (t: string) => {
+    const digits = new Set(formulaDigits(t));
+    // a count after a bracket is a subscript even where the rest isn't a known formula (ROB(OH)2)
+    for (let i = 1; i < t.length; i++) if (/\d/.test(t[i]) && (/[)\]]/.test(t[i - 1]) || digits.has(i - 1))) digits.add(i);
+    let run = '';
+    for (let i = 0; i < t.length; i++) {
+      if (digits.has(i) !== digits.has(i - 1) && run) { put(run, digits.has(i - 1) ? 'sub' : undefined); run = ''; }
+      run += t[i];
+    }
+    put(run, digits.has(t.length - 1) ? 'sub' : undefined);
+  };
+  const re = /([_^])(?:\{([^}]*)\}|(\S))/g;
+  let at = 0;
+  for (const m of text.matchAll(re)) {
+    plain(text.slice(at, m.index));
+    put(m[2] ?? m[3], m[1] === '_' ? 'sub' : 'sup');
+    at = m.index! + m[0].length;
+  }
+  plain(text.slice(at));
+  return out.length ? out : [{ text: '' }];
+}

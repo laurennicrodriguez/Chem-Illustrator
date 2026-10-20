@@ -37,7 +37,8 @@ import { circleRing, circleRings, kekulize } from '../chem/aromatic';
 import { bondLayer, crossingBonds } from '../chem/crossing';
 import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
 import { bendSide, cleanUpArrow, isLonePair, pairOwner, pushArrow, pushEndAt, symbolAt, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
-import { applyArrange, planArrange, type ArrangeOptions } from '../chem/scheme-arrange';
+import { applyArrange, planArrange, readingOrder, type ArrangeOptions } from '../chem/scheme-arrange';
+import { buildCycle, type CycleLook, type CycleSpec } from '../chem/cycles';
 import { attachWhereItIs, defaultGap, placeAttached, refitAttached } from './attached';
 import { frameAround, frameBox, frameMembers, refitFrames, defaultPad, thingsInside } from './frames';
 import { Align, Measure, POINTS, Snapshot, type TurnText, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, withFrameContents, rotation, mirrorX, mirrorY } from './arrange';
@@ -2289,6 +2290,27 @@ export class Editor {
     for (const id of made) this.sel.arrows.add(id);
     this.changed();
     return true;
+  }
+
+  /** The selected structures (any atom of one picks it all), in reading order: the species for a new catalytic cycle. */
+  selectedStructures(): { atoms: number[] }[] {
+    const its = this.schemeItems().filter((it) => it.atoms.some((a) => this.sel.atoms.has(a)));
+    return readingOrder(its, this.doc.style.bondLength).map((it) => ({ atoms: it.atoms }));
+  }
+
+  /**
+   * Insert ▸ Catalytic Cycle: draw the cycle with its middle at `at`, the selected structures
+   * (if any) standing for the first loop's species. The new cycle is selected.
+   */
+  insertCycle(spec: CycleSpec, look: CycleLook, at: Vec): void {
+    const stations = this.selectedStructures();
+    const made = buildCycle(this.doc, this.fullMeasure(), spec, look, at, stations);
+    this.sel = emptySel();
+    for (const st of stations) for (const a of st.atoms) this.sel.atoms.add(a);
+    for (const a of this.sel.atoms) for (const b of this.doc.adj.get(a) ?? []) this.sel.bonds.add(b);
+    for (const id of made.captions) this.sel.captions.add(id);
+    for (const id of made.arrows) this.sel.arrows.add(id);
+    this.changed();
   }
 
   /**

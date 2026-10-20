@@ -813,6 +813,14 @@ function readSteps(all: Element[], refOf: Map<Element, string>, doc: Doc): void 
       for (const id of (st.getAttribute(attr) ?? '').split(/\s+/).filter(Boolean)) refsOf(byId.get(id), list);
       if (list.length || key !== 'plusses') (roles[key] as string[]) = list;
     }
+    // a cycle's step names, written inside it (ChemDraw counts them as below the arrow)
+    const inside: string[] = [];
+    const tag = kids(st).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === INSIDE_TAG)?.getAttribute('Value');
+    for (const id of (tag ?? '').split(/\s+/).filter(Boolean)) refsOf(byId.get(id), inside);
+    if (inside.length) {
+      roles.inside = inside;
+      roles.below = roles.below.filter((x) => !inside.includes(x));
+    }
     r.step = roles;
   }
 }
@@ -856,6 +864,8 @@ export const CIRCLE_TAG = 'ci-aromatic-circle';
 export const FILL_TAG = 'Chem Illustrator fill';
 /** A frame's gap and whether it follows what it surrounds (editor/frames.ts). */
 export const FRAME_TAG = 'Chem Illustrator frame';
+/** The tag on a reaction step listing the captions written inside a catalytic cycle (its step names). */
+export const INSIDE_TAG = 'Chem Illustrator inside';
 /** The gradient and pattern settings kept in a fill tag, checked. */
 export function fillExtras(v: Partial<Shape>): Partial<Shape> {
   const out: Partial<Shape> = {};

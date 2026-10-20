@@ -22,6 +22,10 @@ export interface ArrangeOptions {
   anticlockwise?: boolean;
   /** Cycle: conditions come in (above) and go out (below) on small curved arrows. */
   reagentArrows?: boolean;
+  /** Cycle: the node holding this item (a reference such as 'c12') comes first, at `startAngle`. */
+  start?: string;
+  /** Cycle: where the first node goes round the circle, in radians (−π/2, the top, by default; y points down). */
+  startAngle?: number;
   /** Branching: the arrows from one structure to several fan out from one point (a forked arrow). */
   forked?: boolean;
 }
@@ -32,7 +36,7 @@ export interface Scope { atoms: Set<number>; captions: Set<number>; shapes: Set<
 /** A structure, or starting materials joined by + signs, that the scheme leads into or out of. */
 interface Node { items: Item[]; box: Rect }
 /** One step: an arrow (made new when there isn't one) from one node to the next, with its conditions. */
-interface Link { from: number; to: number; arrow?: Arrow; above: Item[]; below: Item[]; plusses: Item[] }
+interface Link { from: number; to: number; arrow?: Arrow; above: Item[]; below: Item[]; plusses: Item[]; inside: Item[] }
 
 export interface SchemeShape {
   nodes: Node[];
@@ -99,10 +103,10 @@ export function readScheme(doc: Doc, m: Measure, scope: Scope): SchemeShape {
     const rp = plus.filter((x) => mid(x) < f.length / 2), pp = plus.filter((x) => mid(x) >= f.length / 2);
     join([...r, ...rp]);
     join([...p, ...pp]);
-    return { r, p, rp, pp, above: uniq(roles.above.map(find)), below: uniq(roles.below.map(find)) };
+    return { r, p, rp, pp, above: uniq(roles.above.map(find)), below: uniq(roles.below.map(find)), inside: uniq((roles.inside ?? []).map(find)) };
   });
   const used = new Set<Item>();
-  for (const s of side) for (const it of [...s.r, ...s.p, ...s.rp, ...s.pp, ...s.above, ...s.below]) used.add(it);
+  for (const s of side) for (const it of [...s.r, ...s.p, ...s.rp, ...s.pp, ...s.above, ...s.below, ...s.inside]) used.add(it);
   const labels = labelsOf(items, used, doc, bond);
   const labelled = new Set([...labels.values()].flat());
 
@@ -118,7 +122,7 @@ export function readScheme(doc: Doc, m: Measure, scope: Scope): SchemeShape {
   const links: Link[] = side.map((s, i) => ({
     from: s.r.length ? nodeOf.get(top(s.r[0]))! : -1,
     to: s.p.length ? nodeOf.get(top(s.p[0]))! : -1,
-    arrow: steps[i].arrow, above: s.above, below: s.below, plusses: [...s.rp, ...s.pp],
+    arrow: steps[i].arrow, above: s.above, below: s.below, plusses: [...s.rp, ...s.pp], inside: s.inside,
   })).filter((l) => l.from >= 0 && l.to >= 0 && l.from !== l.to);
 
   // structures in the selection that are in no step yet join the end, in reading order
@@ -173,7 +177,7 @@ function chainOf(n: number, links: Link[], extra: number[], nodes: Node[]): { pa
   if (inSteps.some((i) => !seen.has(i))) return { path: null, closed: false };
   for (const i of extra) {
     if (seen.has(i)) continue;
-    if (path.length) links.push({ from: path[path.length - 1], to: i, above: [], below: [], plusses: [] });
+    if (path.length) links.push({ from: path[path.length - 1], to: i, above: [], below: [], plusses: [], inside: [] });
     path.push(i);
     seen.add(i);
   }
@@ -193,7 +197,7 @@ export function planArrange(doc: Doc, m: Measure, scope: Scope, opts: ArrangeOpt
     case 'rows': L.rows(Math.max(1, opts.perRow ?? 3), false); break;
     case 'snake': L.rows(Math.max(1, opts.perRow ?? 3), true); break;
     case 'down': L.down(); break;
-    case 'cycle': L.cycle(!!opts.anticlockwise, !!opts.reagentArrows); break;
+    case 'cycle': L.cycle(!!opts.anticlockwise, !!opts.reagentArrows, opts.start, opts.startAngle); break;
     case 'tree': L.tree(!!opts.forked); break;
   }
   // reagent arrows from an earlier arrangement of these steps go (a new cycle draws its own)
@@ -245,7 +249,7 @@ class Layout {
     const across = (it: Item) => Math.abs(u.y) * width(it.box) + Math.abs(u.x) * height(it.box);
     const sp = spacing(this.bond);
     const stack = (its: Item[]) => (its.length ? sp.conditions + its.reduce((s, it) => s + across(it), 0) + (its.length - 1) * sp.stack : 0);
-    return { above: stack(l.above), below: stack(l.below) };
+    return { above: stack(l.above), below: stack([...l.inside, ...l.below]) };
   }
 
   /** A straight arrow from tail to head, with its conditions stacked on it as Clean Up Reaction does. */
@@ -266,7 +270,8 @@ class Layout {
     };
     const near = (sign: 1 | -1) => (it: Item) => { const q = inFrame(f, it.box); return sign > 0 ? q.s1 : -q.s2; };
     stackUp([...l.above].sort((a, b) => near(1)(a) - near(1)(b)), 1);
-    stackUp([...l.below].sort((a, b) => near(-1)(a) - near(-1)(b)), -1);
+    // a cycle's step names go under the arrow when the scheme is laid out in a line
+    stackUp([...l.inside, ...l.below].sort((a, b) => near(-1)(a) - near(-1)(b)), -1);
   }
 
   private stepOf(l: Link): StepRoles {
@@ -275,6 +280,7 @@ class Layout {
       reactants: n(l.from), products: n(l.to),
       above: l.above.map((it) => it.ref), below: l.below.map((it) => it.ref),
       ...(l.plusses.length ? { plusses: l.plusses.map((it) => it.ref) } : {}),
+      ...(l.inside.length ? { inside: l.inside.map((it) => it.ref) } : {}),
     };
   }
 
@@ -406,22 +412,29 @@ class Layout {
 
   // ---------------------------------------------------------------- catalytic cycle
 
-  cycle(anticlockwise: boolean, reagentArrows: boolean): void {
-    const path = this.sh.path!, nodes = this.sh.nodes, g = this.g, bond = this.bond;
+  cycle(anticlockwise: boolean, reagentArrows: boolean, start?: string, startAngle = -Math.PI / 2): void {
+    const nodes = this.sh.nodes, g = this.g, bond = this.bond;
+    let path = this.sh.path!;
     const N = path.length;
     // a cycle closes on itself: add the step back to the start when it isn't there yet
-    if (!this.sh.closed && N > 1) this.sh.links.push({ from: path[N - 1], to: path[0], above: [], below: [], plusses: [] });
+    if (!this.sh.closed && N > 1) this.sh.links.push({ from: path[N - 1], to: path[0], above: [], below: [], plusses: [], inside: [] });
+    // round a loop, any node can come first
+    const first = start === undefined ? -1 : path.findIndex((i) => nodes[i].items.some((it) => it.ref === start));
+    if (first > 0) path = this.sh.path = [...path.slice(first), ...path.slice(0, first)];
     const link = (k: number) => this.linkBetween(path[k], path[(k + 1) % N]);
     const size = (i: number) => Math.hypot(width(nodes[i].box), height(nodes[i].box));
     // a circle big enough for the structures with room for arrows between them
     let R = Math.max(3 * bond, path.reduce((s, i) => s + size(i) + 3 * bond, 0) / (2 * Math.PI));
     const sign = anticlockwise ? -1 : 1;
-    const angle = (k: number) => -Math.PI / 2 + sign * (2 * Math.PI * k) / N;
+    const angle = (k: number) => startAngle + sign * (2 * Math.PI * k) / N;
     let reach = 0;
     for (const i of path) reach = Math.max(reach, size(i) / 2);
     const cen = { x: this.origin.x + R + reach, y: this.origin.y + R + reach };
     const boxAt = (i: number, c: Vec): Rect => { const b = nodes[i].box, w = width(b) / 2, h = height(b) / 2; return { x1: c.x - w - g, y1: c.y - h - g, x2: c.x + w + g, y2: c.y + h + g }; };
     const inside = (r: Rect, p: Vec) => p.x >= r.x1 && p.x <= r.x2 && p.y >= r.y1 && p.y <= r.y2;
+    // how far a caption reaches along the radius at angle a (half its box, seen that way)
+    const radial = (it: Item, a: number) => { const d = fromAngle(a, 1); return Math.abs(d.x) * width(it.box) / 2 + Math.abs(d.y) * height(it.box) / 2; };
+    const middle = this.sh.loose.length === 1 ? Math.hypot(width(this.sh.loose[0].box), height(this.sh.loose[0].box)) / 2 : 0;
     // the arc from one structure to the next starts and ends where the circle leaves their boxes
     const ends = (k: number) => {
       const a0 = angle(k), a1 = angle(k + 1);
@@ -439,8 +452,11 @@ class Layout {
         const { s, e } = ends(k);
         // each arc needs room for its arrowhead, and for its conditions alongside it
         const l = link(k);
-        const need = Math.max(2.8 * bond, ...[...l.above, ...l.below].map((it) => 0.9 * Math.max(width(it.box), height(it.box))));
+        const need = Math.max(2.8 * bond, ...[...l.above, ...l.below, ...l.inside].map((it) => 0.9 * Math.max(width(it.box), height(it.box))));
         if (sign * (e - s) * R < need) { ok = false; break; }
+        // and the step names inside need room clear of the middle (and of the catalyst's name there)
+        const inward = [...l.inside, ...(reagentArrows ? [] : l.below)].reduce((d, it) => d + 2 * radial(it, (s + e) / 2) + spacing(bond).stack, spacing(bond).conditions * 2);
+        if (inward > spacing(bond).conditions * 2 && R - inward < middle + g) { ok = false; break; }
       }
       if (ok) break;
       R *= 1.15;
@@ -459,18 +475,21 @@ class Layout {
       if (l.arrow) this.plan.arrows.set(l.arrow.id, r); else this.plan.added.push(r);
       // conditions sit outside the circle by the middle of their arc (those below the arrow inside it,
       // or with reagent arrows: coming in before the middle and going out after it)
+      // (returns how far out from the circle, or in, the last one reaches)
       const out = (its: Item[], a: number, inward: boolean, from = spacing(bond).conditions * 2) => {
         const rad = fromAngle(a, 1);
         let dist0 = inward ? -from : from;
         for (const it of its) {
-          const w = width(it.box), h = height(it.box);
-          const ext = Math.abs(rad.x) * w / 2 + Math.abs(rad.y) * h / 2;
+          const ext = radial(it, a);
           const c = add(cen, mul(rad, R + dist0 + (inward ? -ext : ext)));
           this.shift(it, sub(c, centre(it.box)));
           dist0 += (inward ? -1 : 1) * (2 * ext + spacing(bond).stack);
         }
+        return Math.abs(dist0);
       };
       const amid = (s + e) / 2;
+      // the step's name inside the circle, nearest the arc
+      const inner = l.inside.length ? out(l.inside, amid, true) : spacing(bond).conditions * 2;
       if (reagentArrows) {
         const dirA = Math.sign(e - s) || 1, span = Math.abs(e - s);
         const d = 1.5 * bond, delta = Math.min(span * 0.3, (1.6 * bond) / R);
@@ -490,7 +509,7 @@ class Layout {
         }
       } else {
         out(l.above, amid, false);
-        out(l.below, amid, true);
+        out(l.below, amid, true, inner);
       }
     }
     // a caption on its own (the catalyst's name) goes in the middle

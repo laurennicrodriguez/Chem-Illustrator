@@ -407,6 +407,8 @@ export interface StepRoles {
   below: string[];
   /** The + signs between starting materials or products. */
   plusses?: string[];
+  /** Written inside a catalytic cycle beside the arrow: the step's name (oxidative addition, OA). */
+  inside?: string[];
   /** Chosen by hand: Clean Up Reaction keeps these instead of working the roles out again. */
   manual?: boolean;
 }

@@ -66,6 +66,7 @@ import { SLIDE_TEMPLATES, applyTemplate } from './deck/templates';import { pickT
 import { showContextMenu, topMenuEntry, type MenuItem } from './ui/context-menu';
 import { CommandSearch, uniqueCommands, type CommandItem } from './ui/command-search';
 import { fillTemplate, templateSize } from './design/templates';
+import { askCycle } from './ui/cycle-dialog';
 import { itemsToSvg } from './render/svg';
 import { PAPERS, defaultPaper, orient, placeIn, inside, handoutCells, noteLines, placeSvg, pageSvg } from './print-layout';
 import { printPages } from './ui/print';
@@ -574,6 +575,13 @@ async function pasteChemistry(text: string): Promise<void> {
   } catch (err) {
     flash(String(err));
   }
+}
+
+/** Insert ▸ Catalytic Cycle…: a ready-made cycle to edit, or the selected structures put round one. */
+async function insertCycle(): Promise<void> {
+  finishTyping();
+  const got = await askCycle(editor.selectedStructures().length);
+  if (got) editor.insertCycle(got.spec, got.look, pasteCentre());
 }
 
 /** Select just these (new) atoms and their bonds. */
@@ -2798,6 +2806,7 @@ const COMMANDS: Record<string, () => unknown> = {
   },
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
   'arrange-scheme': () => arrangeDialog.open(),
+  'catalytic-cycle': () => void insertCycle(),
   'number-compounds': () => void numberCompounds(),
   'scheme-settings': () => void schemeSettings(),
   'attach-descriptors': () => void attachDescriptors(),
@@ -4352,7 +4361,7 @@ function drawingMenu(): MenuItem[] {
       { cmd: 'undo' }, { cmd: 'redo' }, null,
       ...(ws.active.mode === 'slides' ? [{ cmd: 'new-comment', label: 'New Comment' }, { cmd: 'show-comments', label: 'Show Comments' }, null] : []),
       { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'connector-tool' }] : []), ...(ws.active.mode === 'slides' ? [{ cmd: 'slide-shapes', label: 'Shape…' }] : [])] },
-      { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] },
+      { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }, { cmd: 'catalytic-cycle' }] },
       { cmd: 'drawing-style' },
       view,
     ];
@@ -4386,7 +4395,7 @@ function drawingMenu(): MenuItem[] {
       ] },
     ] : []),
     ...([...s.arrows].some((id) => doc.arrows.get(id)?.sweep) ? [{ cmd: 'clean-up-arrow' }] : []),
-    ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'clean-up-arrow' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] }] : []),
+    ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'clean-up-arrow' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }, { cmd: 'catalytic-cycle' }] }] : []),
     null,
     { cmd: 'add-frame' },
     ...(atoms ? [{ label: 'Label the Structure', items: [{ cmd: 'add-id-label' }, { cmd: 'add-caption' }, { cmd: 'attach-descriptors' }, null, { cmd: 'number-compounds' }] }] : []),
