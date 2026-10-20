@@ -1991,11 +1991,6 @@ export class Editor {
     return true;
   }
 
-  /**
-   * Smooth the round highlights on the selected atoms and bonds (one even band, no disc at each
-   * atom), or put the discs back when they are all smooth already. Says which, or null when
-   * nothing selected is highlighted.
-   */
   /** A drop shadow on the selected ring fills (and those on the selected structures), or off again. */
   ringShadow(): 'on' | 'off' | null {
     const doc = this.doc;
@@ -2009,15 +2004,21 @@ export class Editor {
     return on ? 'on' : 'off';
   }
 
-  smoothHighlight(): 'on' | 'off' | null {
+  /**
+   * Turn a highlight option on for the highlighted atoms and bonds selected (smooth: one even
+   * band for round highlights; centre: midway between double bonds' lines), or off when it is
+   * on for all of them already. Says which, or null when nothing selected is highlighted.
+   */
+  toggleHighlight(key: 'smooth' | 'centre'): 'on' | 'off' | null {
     const doc = this.doc;
     const atoms = [...this.sel.atoms].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a?.highlight);
     const bonds = [...this.sel.bonds].map((id) => doc.bonds.get(id)).filter((b): b is Bond => !!b?.highlight);
     if (!atoms.length && !bonds.length) return null;
-    const on = ![...atoms, ...bonds].every((x) => x.hl?.smooth);
-    doc.edit(on ? 'Smooth highlight' : 'Highlight with discs', () => {
-      for (const a of atoms) doc.updateAtom(a.id, { hl: tidyStyle({ ...a.hl, smooth: on }) });
-      for (const b of bonds) doc.updateBond(b.id, { hl: tidyStyle({ ...b.hl, smooth: on }) });
+    const on = ![...atoms, ...bonds].every((x) => x.hl?.[key]);
+    const labels = { smooth: ['Smooth highlight', 'Highlight with discs'], centre: ['Centre highlight on double bonds', 'Highlight on the bonds'] };
+    doc.edit(labels[key][on ? 0 : 1], () => {
+      for (const a of atoms) doc.updateAtom(a.id, { hl: tidyStyle({ ...a.hl, [key]: on }) });
+      for (const b of bonds) doc.updateBond(b.id, { hl: tidyStyle({ ...b.hl, [key]: on }) });
     });
     this.changed();
     return on ? 'on' : 'off';

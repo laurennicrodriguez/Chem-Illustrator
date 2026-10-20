@@ -6,7 +6,7 @@
 // and bond and only recomputed near what changed.
 
 import { Doc, Atom, Bond, Arrow, Caption, Shape, PICTURE_SHADOWS, pictureRadius, applyBase, captionBase, enhancedText, CHIRAL_FLAGS, flagTextSize, type TextBase, type HighlightStyle } from '../model';
-import { fullStyle, highlightPieces, highlightSizes, movePieces, softRings, tracePieces, type Piece } from './highlight';
+import { centredSpots, fullStyle, highlightPieces, highlightSizes, movePieces, softRings, tracePieces, type Piece } from './highlight';
 import { ellipseArc, isCircleRing, ringCircle, ringsThroughBond, type RingCircle } from '../chem/aromatic';
 import { crossingGapsCached } from '../chem/crossing';
 import { FADE, tint } from '../colours';
@@ -1335,32 +1335,37 @@ export class Renderer {
    */
   private drawHighlights(ctx: CanvasRenderingContext2D, doc: Doc, atoms: Iterable<Atom>, bonds: Iterable<Bond>): void {
     const L = doc.style.bondLength;
-    type Group = { colour: string; style: Required<HighlightStyle>; scale: number; atoms: Atom[]; bonds: [Atom, Atom][] };
+    type Group = { colour: string; style: Required<HighlightStyle>; scale: number; atoms: Atom[]; bonds: [Atom, Atom][]; lit: Bond[]; at?: Map<Vec, Vec> };
     const groups = new Map<string, Group>();
     const of = (colour: string, hl: HighlightStyle | undefined, k: number) => {
       const style = fullStyle(hl);
       const key = colour + JSON.stringify(style) + k;
       let g = groups.get(key);
-      if (!g) { g = { colour, style, scale: k, atoms: [], bonds: [] }; groups.set(key, g); }
+      if (!g) { g = { colour, style, scale: k, atoms: [], bonds: [], lit: [] }; groups.set(key, g); }
       return g;
     };
     for (const b of bonds) {
       if (!b.highlight) continue;
       const p = doc.atoms.get(b.a1), q = doc.atoms.get(b.a2);
-      if (p && q) of(b.highlight, b.hl, b.s ?? 1).bonds.push([p, q]);
+      if (!p || !q) continue;
+      const g = of(b.highlight, b.hl, b.s ?? 1);
+      g.bonds.push([p, q]);
+      g.lit.push(b);
     }
     for (const a of atoms) if (a.highlight) of(a.highlight, a.hl, a.s ?? 1).atoms.push(a);
     if (!groups.size) return;
+    for (const g of groups.values()) if (g.style.centre) g.at = this.centredSpots(doc, g.lit, g.scale);
     const pieces = (g: Group, grow: number, shift = 0): Piece[] => {
+      const spot = (a: Atom): Vec => g.at?.get(a) ?? a;
       const atoms = g.atoms.map((a) => {
         let label: Rect | null = null;
         if (g.style.fit) {
           const bx = this.atomInfo(doc, a).boxes;
           if (bx.length) label = { x1: Math.min(...bx.map((b) => b.x1)), y1: Math.min(...bx.map((b) => b.y1)), x2: Math.max(...bx.map((b) => b.x2)), y2: Math.max(...bx.map((b) => b.y2)) };
         }
-        return { at: a as Vec, label };
+        return { at: spot(a), label };
       });
-      const out = highlightPieces(g.bonds, atoms, highlightSizes(L * g.scale, g.style.size), g.style, 0.04 * L * g.style.size, grow);
+      const out = highlightPieces(g.at ? g.bonds.map(([p, q]) => [spot(p), spot(q)]) : g.bonds, atoms, highlightSizes(L * g.scale, g.style.size), g.style, 0.04 * L * g.style.size, grow);
       return shift ? movePieces(out, shift, shift) : out;
     };
     const fill = (ps: Piece[], colour: string) => {
@@ -1384,6 +1389,34 @@ export class Renderer {
     for (const g of groups.values()) if (g.style.shadow) paint(g, '#000000', 0.22, 0.07 * L * g.scale * g.style.size);
     for (const g of groups.values()) paint(g, g.colour, 1, 0);
     ctx.restore();
+  }
+
+  /**
+   * Where a highlight on these bonds runs when centred between double bonds' lines (see
+   * centredSpots): the rings drawn with their double bonds inside whose bonds are all lit, and
+   * the other double bonds drawn with their second line to one side.
+   */
+  private centredSpots(doc: Doc, lit: Bond[], scale: number): Map<Vec, Vec> {
+    const isLit = new Set(lit.map((b) => b.id));
+    const litBetween = (a: number, c: number) => (doc.adj.get(a) ?? []).some((id) => { const b = doc.bonds.get(id)!; return isLit.has(id) && (b.a1 === c || b.a2 === c); });
+    const rings = new Map<string, Atom[]>();
+    const offset: { p: Vec; q: Vec; side: Vec }[] = [];
+    for (const b of lit) {
+      const { side } = this.bondInfo(doc, b);
+      if (!side) continue;
+      const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
+      const n = mul(perp(norm(sub(q, p))), side);
+      const ring = doc.ringThroughBond(b.id);
+      if (ring && ring.every((id, i) => litBetween(id, ring[(i + 1) % ring.length]))) {
+        const atoms = ring.map((id) => doc.atoms.get(id)!);
+        const c = mul(atoms.reduce((s, a) => add(s, a), { x: 0, y: 0 }), 1 / atoms.length);
+        // the second line inside the ring
+        if (dot(sub(c, p), n) > 0) { rings.set([...ring].sort((x, y) => x - y).join(','), atoms); continue; }
+      }
+      offset.push({ p, q, side: n });
+    }
+    const st = doc.style;
+    return centredSpots([...rings.values()], offset, doubleBondGap({ ...st, bondLength: st.bondLength * scale }) / 2);
   }
 
   /** Where a ring fill's corners are: on its atoms as they are now (as saved, when they are not in this drawing). */

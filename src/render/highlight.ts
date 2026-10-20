@@ -1,9 +1,9 @@
-// The shapes of a highlight. Square and diamond highlights, and round ones made smooth, are one
-// even band along the bonds (mitred or round where bonds meet), swelling smoothly round a label
-// too big for it; an atom with no highlighted bond gets a disc, diamond or square. Round
-// highlights that aren't smooth have a disc under each atom and a round-ended band under each
-// bond. Every outline goes round the same way, so all of one highlight can be filled at once
-// and overlaps don't show darker. Soft edges are rings of the same shapes, grown a little each
+// The shapes of a highlight. Round highlights have a disc under each atom and a round-ended
+// band under each bond, or, made smooth, one even band with round corners. Straight
+// highlights are one even band with sharp (mitred) corners where bonds meet, round, square or
+// pointed ends, and a disc round each atom label. An atom with no highlighted bond gets a disc.
+// Every outline goes round the same way, so all of one highlight can be filled at once and
+// overlaps don't show darker. Soft edges are rings of the same shapes, grown a little each
 // time and faint.
 
 import type { Rect, Vec } from '../geom';
@@ -43,68 +43,50 @@ export function clockwise(pts: Vec[]): Vec[] {
   return a < 0 ? [...pts].reverse() : pts;
 }
 
-const diamond = (c: Vec, hx: number, hy: number): Vec[] => clockwise([{ x: c.x, y: c.y - hy }, { x: c.x + hx, y: c.y }, { x: c.x, y: c.y + hy }, { x: c.x - hx, y: c.y }]);
-const rect = (c: Vec, hx: number, hy: number): Vec[] => clockwise([{ x: c.x - hx, y: c.y - hy }, { x: c.x + hx, y: c.y - hy }, { x: c.x + hx, y: c.y + hy }, { x: c.x - hx, y: c.y + hy }]);
-
 /**
- * The piece under an atom at `a`: radius `r` for a plain one; with `label` (its label's box)
- * and fitting on, big enough to hold the label with `pad` round it. `grow` widens it all round
- * (for soft edges).
+ * The disc under an atom at `a`, radius `r`; with `label` (its label's box) and fitting on,
+ * big enough to hold the label with `pad` round it (a pill along a long label). `grow` widens
+ * it all round (for soft edges).
  */
-export function atomPiece(a: Vec, r: number, shape: Required<HighlightStyle>['shape'], label: Rect | null, pad: number, grow = 0): Piece {
-  if (label) {
-    const c = { x: (label.x1 + label.x2) / 2, y: (label.y1 + label.y2) / 2 };
-    const hx = Math.max(r, (label.x2 - label.x1) / 2 + pad), hy = Math.max(r, (label.y2 - label.y1) / 2 + pad);
-    if (shape === 'square') return { kind: 'poly', pts: rect(c, hx + grow, hy + grow) };
-    // a diamond round the label: the letters reach well into its corners' box, so a little
-    // over the label's half sizes holds them without the diamond getting huge
-    if (shape === 'diamond') {
-      const dx = Math.max(1.3 * r, 1.5 * ((label.x2 - label.x1) / 2 + pad)), dy = Math.max(1.3 * r, 1.5 * ((label.y2 - label.y1) / 2 + pad));
-      return { kind: 'poly', pts: diamond(c, dx + grow * Math.SQRT2, dy + grow * Math.SQRT2) };
-    }
-    // round: a pill along the longer side
-    const rr = Math.min(hx, hy) + grow;
-    return hx >= hy
-      ? { kind: 'band', p: { x: c.x - (hx - hy), y: c.y }, q: { x: c.x + (hx - hy), y: c.y }, r: rr }
-      : { kind: 'band', p: { x: c.x, y: c.y - (hy - hx) }, q: { x: c.x, y: c.y + (hy - hx) }, r: rr };
-  }
-  if (shape === 'square') return { kind: 'poly', pts: rect(a, 0.9 * r + grow, 0.9 * r + grow) };
-  if (shape === 'diamond') return { kind: 'poly', pts: diamond(a, 1.3 * r + grow * Math.SQRT2, 1.3 * r + grow * Math.SQRT2) };
-  return { kind: 'disc', c: a, r: r + grow };
+export function atomPiece(a: Vec, r: number, label: Rect | null, pad: number, grow = 0): Piece {
+  if (!label) return { kind: 'disc', c: a, r: r + grow };
+  const c = { x: (label.x1 + label.x2) / 2, y: (label.y1 + label.y2) / 2 };
+  const hx = Math.max(r, (label.x2 - label.x1) / 2 + pad), hy = Math.max(r, (label.y2 - label.y1) / 2 + pad);
+  const rr = Math.min(hx, hy) + grow;
+  return hx >= hy
+    ? { kind: 'band', p: { x: c.x - (hx - hy), y: c.y }, q: { x: c.x + (hx - hy), y: c.y }, r: rr }
+    : { kind: 'band', p: { x: c.x, y: c.y - (hy - hx) }, q: { x: c.x, y: c.y + (hy - hx) }, r: rr };
 }
 
-/** The piece under a bond from p to q, `half` either side of it, its ends matching the shape. */
+/** The piece under a bond from p to q, `half` either side of it: round-ended, or flat-ended at the atoms (straight). */
 export function bondPiece(p: Vec, q: Vec, half: number, shape: Required<HighlightStyle>['shape'], grow = 0): Piece {
   const h = half + grow;
   if (shape === 'round') return { kind: 'band', p, q, r: h };
   const d = Math.hypot(q.x - p.x, q.y - p.y) || 1;
   const u = { x: (q.x - p.x) / d, y: (q.y - p.y) / d }, n = { x: -u.y, y: u.x };
-  const at = (o: Vec, t: number, s: number) => ({ x: o.x + u.x * t + n.x * s, y: o.y + u.y * t + n.y * s });
-  // square ends reach as far past the atoms as round ones; with diamonds the band stops at the
-  // atoms (their diamonds make the ends)
-  const e = shape === 'square' ? h : 0;
-  return { kind: 'poly', pts: clockwise([at(p, -e, -h), at(q, e, -h), at(q, e, h), at(p, -e, h)]) };
+  const at = (o: Vec, s: number) => ({ x: o.x + n.x * s, y: o.y + n.y * s });
+  return { kind: 'poly', pts: clockwise([at(p, -h), at(q, -h), at(q, h), at(p, h)]) };
 }
 
 /**
- * All the pieces of one highlight (one colour and look). Square and diamond highlights, and
- * round ones made smooth, are one even band along the bonds: mitred corners (square, diamond)
- * or round ones where bonds meet, square, pointed or round ends, and an atom's own shape only
- * on an atom with no highlighted bond. Where a label is too big for the band, the band swells
- * smoothly round it. Round highlights that aren't smooth are a disc on each atom and a band on
- * each bond. Atoms are matched to bond ends by identity, so pass the same objects in both.
+ * All the pieces of one highlight (one colour and look). Round highlights that aren't smooth
+ * are a disc on each atom and a band on each bond. Smooth round ones are one even band with
+ * round corners, swelling smoothly round a label too big for it. Straight ones are one even
+ * band with mitred corners, the chosen ends, and a disc round each label. An atom with no
+ * highlighted bond gets a disc. Atoms are matched to bond ends by identity, so pass the same
+ * objects in both.
  */
 export function highlightPieces(bonds: [Vec, Vec][], atoms: { at: Vec; label: Rect | null }[], sizes: { disc: number; band: number }, style: Required<HighlightStyle>, pad: number, grow = 0): Piece[] {
   const { shape } = style;
   const out: Piece[] = [];
   if (shape === 'round' && !style.smooth) {
     for (const [p, q] of bonds) out.push(bondPiece(p, q, sizes.band, shape, grow));
-    for (const a of atoms) out.push(atomPiece(a.at, sizes.disc, shape, a.label, pad, grow));
+    for (const a of atoms) out.push(atomPiece(a.at, sizes.disc, a.label, pad, grow));
     return out;
   }
   const h = sizes.band + grow;
   // where each atom's highlighted bonds go, and how far along them a swelling tapers back
-  const ends = new Map<Vec, Way[]>();
+  const ends = new Map<Vec, { u: Vec; s: number }[]>();
   for (const [p, q] of bonds) {
     const d = Math.hypot(q.x - p.x, q.y - p.y);
     if (d < 1e-9) continue;
@@ -112,12 +94,12 @@ export function highlightPieces(bonds: [Vec, Vec][], atoms: { at: Vec; label: Re
     (ends.get(p) ?? ends.set(p, []).get(p)!).push({ u, s });
     (ends.get(q) ?? ends.set(q, []).get(q)!).push({ u: { x: -u.x, y: -u.y }, s });
     // round ends make round corners too; mitred corners and ends are added at the atoms
-    out.push(shape === 'round' ? { kind: 'band', p, q, r: h } : bondPiece(p, q, sizes.band, 'diamond', grow));
+    out.push(bondPiece(p, q, sizes.band, shape, grow));
   }
   const labelOf = new Map<Vec, Rect>();
   for (const a of atoms) {
-    // an atom on its own keeps its shape
-    if (!ends.has(a.at)) out.push(atomPiece(a.at, sizes.disc, shape, a.label, pad, grow));
+    // an atom on its own: a disc
+    if (!ends.has(a.at)) out.push(atomPiece(a.at, sizes.disc, a.label, pad, grow));
     else if (a.label) labelOf.set(a.at, a.label);
   }
   for (const [a, ways] of ends) {
@@ -125,7 +107,7 @@ export function highlightPieces(bonds: [Vec, Vec][], atoms: { at: Vec; label: Re
     if (shape === 'round') {
       if (!label) continue;
       // a pill just round the label, joined to each bond by a taper
-      const pill = piecePoints(atomPiece(a, sizes.band, 'round', label, pad, grow));
+      const pill = piecePoints(atomPiece(a, sizes.band, label, pad, grow));
       for (const { u, s } of ways) {
         const n = { x: -u.y, y: u.x };
         const pts = [...pill];
@@ -134,71 +116,77 @@ export function highlightPieces(bonds: [Vec, Vec][], atoms: { at: Vec; label: Re
       }
       continue;
     }
-    // without a label, an even band; with one, the band widens at the atom just enough to hold
-    // it (each side on its own) and tapers back to its width along each bond. The letters
-    // don't reach their box's corners, so its corners are taken a little in.
-    let need: Vec[] = [];
-    if (label) {
-      const c = { x: (label.x1 + label.x2) / 2, y: (label.y1 + label.y2) / 2 };
-      const hx = (label.x2 - label.x1) / 2 + pad + grow, hy = (label.y2 - label.y1) / 2 + pad + grow;
-      need = [[1, 0], [0.75, 0.75], [0, 1], [-0.75, 0.75], [-1, 0], [-0.75, -0.75], [0, -1], [0.75, -0.75]].map(([x, y]) => ({ x: c.x + x * hx, y: c.y + y * hy }));
-    }
-    out.push(...joint(a, ways, shape, h, need));
+    // straight: a disc round a label (it covers the bands' ends), else a corner or an end
+    if (label) out.push(atomPiece(a, sizes.disc, label, pad, grow));
+    else if (ways.length === 1) out.push(endPiece(a, ways[0].u, h, style.ends));
+    else out.push(...corners(a, ways.map((w) => w.u), h));
   }
   return out;
 }
 
-type Way = { u: Vec; s: number };
+/** The end of a straight band at `a`, going off along `u`: round, square past the atom, or a point. */
+function endPiece(a: Vec, u: Vec, h: number, ends: Required<HighlightStyle>['ends']): Piece {
+  if (ends === 'round') return { kind: 'disc', c: a, r: h };
+  const at = (t: number, k: number) => ({ x: a.x + u.x * t - u.y * k, y: a.y + u.y * t + u.x * k });
+  return { kind: 'poly', pts: clockwise(ends === 'square' ? [at(0, -h), at(0, h), at(-h, h), at(-h, -h)] : [at(0, -h), at(0, h), at(-h, 0)]) };
+}
 
 /**
- * The band round an atom: in each gap between neighbouring bonds, the bands' edges carried on
- * till they meet (mitred, or cut off flat when the bonds are so close together that the point
- * would reach far out); at the end of a line, a square end or a point (diamonds). Where the
- * points `need` lie in a gap, the band there widens at the atom till it holds them, narrowing
- * back to `h` at each bond's `s`.
+ * The mitred corners where straight bands meet at `a`: in each gap between neighbouring bonds
+ * wider than a straight line, the bands' outer edges carried on till they meet (cut off flat
+ * when the bonds are so close together that the point would reach far out).
  */
-function joint(a: Vec, ways: Way[], shape: 'diamond' | 'square', h: number, need: Vec[]): Piece[] {
-  const sorted = ways.map((w) => ({ ...w, t: Math.atan2(w.u.y, w.u.x) })).sort((p, q) => p.t - q.t);
-  const at = (u: Vec, t: number, k: number) => ({ x: a.x + u.x * t - u.y * k, y: a.y + u.y * t + u.x * k });
-  const stubs = ways.map(({ u, s }) => [at(u, 0, -h), at(u, s, -h), at(u, s, h), at(u, 0, h)]);
+function corners(a: Vec, ways: Vec[], h: number): Piece[] {
+  const sorted = ways.map((u) => ({ u, t: Math.atan2(u.y, u.x) })).sort((p, q) => p.t - q.t);
+  const at = (u: Vec, k: number) => ({ x: a.x - u.y * k, y: a.y + u.x * k });
   const out: Piece[] = [];
   for (let i = 0; i < sorted.length; i++) {
     const w = sorted[i], nx = sorted[(i + 1) % sorted.length];
     let gap = nx.t - w.t;
     if (gap <= 1e-9) gap += Math.PI * 2;
-    const m = { x: Math.cos(w.t + gap / 2), y: Math.sin(w.t + gap / 2) };
-    const piece = (wide: number): Vec[] => {
-      // each band's edge on this side of the atom: where its taper starts, and at the atom
-      const P = at(w.u, w.s, h), Q = at(w.u, 0, wide), P2 = at(nx.u, nx.s, -h), Q2 = at(nx.u, 0, -wide);
-      const far = wide / Math.sin(gap / 2), tip = { x: a.x + m.x * far, y: a.y + m.y * far };
-      if (sorted.length === 1) return shape === 'square' ? [a, P, Q, at(w.u, -wide, wide), at(w.u, -wide, -wide), Q2, P2] : [a, P, Q, at(w.u, -wide, 0), Q2, P2];
-      if (gap < Math.PI) return wide > h ? [a, P, tip, P2] : [];
-      return far > 3 * wide ? [a, P, Q, Q2, P2] : [a, P, Q, tip, Q2, P2];
-    };
-    // the points to hold that lie in this gap
-    const mine = need.filter((v) => {
-      let t = Math.atan2(v.y - a.y, v.x - a.x) - w.t;
-      while (t < 0) t += Math.PI * 2;
-      return t <= gap;
-    });
-    const holds = (pts: Vec[]) => mine.every((v) => (pts.length && inside(v, pts)) || stubs.some((st) => inside(v, st)));
-    let wide = h, pts = piece(wide);
-    while (wide < 2.5 * h && !holds(pts)) pts = piece((wide *= 1.05));
-    // a label well off to one side (NH with its H below): the band's outline stretched round it
-    if (!holds(pts)) pts = hull([...pts, ...mine, a, at(w.u, w.s, h), at(nx.u, nx.s, -h)]);
-    if (pts.length) out.push({ kind: 'poly', pts: clockwise(pts) });
+    if (gap <= Math.PI + 1e-6) continue;
+    const A = at(w.u, h), B = at(nx.u, -h), far = h / Math.sin(gap / 2);
+    const tip = { x: a.x + Math.cos(w.t + gap / 2) * far, y: a.y + Math.sin(w.t + gap / 2) * far };
+    out.push({ kind: 'poly', pts: clockwise(far > 3 * h ? [a, A, B] : [a, A, tip, B]) });
   }
   return out;
 }
 
-/** Whether a point is inside an outline. */
-function inside(v: Vec, pts: Vec[]): boolean {
-  let n = false;
-  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-    const p = pts[i], q = pts[j];
-    if ((p.y > v.y) !== (q.y > v.y) && v.x < ((q.x - p.x) * (v.y - p.y)) / (q.y - p.y) + p.x) n = !n;
+/**
+ * Where a highlight centred on double bonds runs instead of through each atom. A ring whose
+ * bonds are all highlighted, drawn with a double bond's second line inside it, is taken in by
+ * `d` all round (half the gap between the lines), so the band runs midway between the ring and
+ * the inner lines on every bond. An atom of a double bond outside such a ring moves `d` toward
+ * its second line. Atoms in two such rings, or two such bonds, take the average. Atoms not
+ * listed stay where they are.
+ */
+export function centredSpots(rings: Vec[][], offset: { p: Vec; q: Vec; side: Vec }[], d: number): Map<Vec, Vec> {
+  const shifts = new Map<Vec, Vec[]>();
+  const add = (a: Vec, v: Vec) => (shifts.get(a) ?? shifts.set(a, []).get(a)!).push(v);
+  for (const ring of rings) {
+    const n = ring.length;
+    const c = { x: ring.reduce((s, a) => s + a.x, 0) / n, y: ring.reduce((s, a) => s + a.y, 0) / n };
+    // each side's line taken in toward the middle by d
+    const lines = ring.map((p, i) => {
+      const q = ring[(i + 1) % n], l = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+      const u = { x: (q.x - p.x) / l, y: (q.y - p.y) / l };
+      let nn = { x: -u.y, y: u.x };
+      if ((c.x - p.x) * nn.x + (c.y - p.y) * nn.y < 0) nn = { x: -nn.x, y: -nn.y };
+      return { o: { x: p.x + nn.x * d, y: p.y + nn.y * d }, u, nn };
+    });
+    ring.forEach((a, i) => {
+      const L1 = lines[(i + n - 1) % n], L2 = lines[i];
+      const den = L1.u.x * L2.u.y - L1.u.y * L2.u.x;
+      if (Math.abs(den) < 1e-9) { add(a, { x: L2.nn.x * d, y: L2.nn.y * d }); return; }
+      const t = ((L2.o.x - L1.o.x) * L2.u.y - (L2.o.y - L1.o.y) * L2.u.x) / den;
+      add(a, { x: L1.o.x + L1.u.x * t - a.x, y: L1.o.y + L1.u.y * t - a.y });
+    });
   }
-  return n;
+  const inRing = new Set(shifts.keys());
+  for (const { p, q, side } of offset) for (const a of [p, q]) if (!inRing.has(a)) add(a, { x: side.x * d, y: side.y * d });
+  const out = new Map<Vec, Vec>();
+  for (const [a, vs] of shifts) out.set(a, { x: a.x + vs.reduce((s, v) => s + v.x, 0) / vs.length, y: a.y + vs.reduce((s, v) => s + v.y, 0) / vs.length });
+  return out;
 }
 
 /** A piece's outline as points (arcs in short steps). */
@@ -260,9 +248,12 @@ export function highlightStyleFromTag(text: string | null | undefined): Highligh
   try {
     const v = JSON.parse(text) as Record<string, unknown>;
     const out: HighlightStyle = {};
-    if (v.shape === 'round' || v.shape === 'diamond' || v.shape === 'square') out.shape = v.shape;
+    if (v.shape === 'round' || v.shape === 'straight') out.shape = v.shape;
+    // diamonds and squares (before straight highlights): straight, with pointed or square ends
+    else if (v.shape === 'diamond' || v.shape === 'square') { out.shape = 'straight'; out.ends = v.shape === 'diamond' ? 'pointed' : 'square'; }
+    if (v.ends === 'round' || v.ends === 'square' || v.ends === 'pointed') out.ends = v.ends;
     if (typeof v.size === 'number' && v.size > 0 && v.size <= 10) out.size = v.size;
-    for (const k of ['fit', 'shadow', 'soft', 'smooth'] as const) if (typeof v[k] === 'boolean') out[k] = v[k] as boolean;
+    for (const k of ['fit', 'shadow', 'soft', 'smooth', 'centre'] as const) if (typeof v[k] === 'boolean') out[k] = v[k] as boolean;
     return Object.keys(out).length ? out : undefined;
   } catch {
     return undefined;
