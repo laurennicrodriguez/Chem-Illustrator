@@ -61,18 +61,18 @@ const L_LIGANDS = new Set(['THF', 'DMF', 'DMSO', 'Et2O', 'DME', 'MeCN', 'PhCN', 
 /**
  * Does this label, bonded to a metal, give it a lone pair or π-bond rather than share an
  * electron (PPh3, NH3, OH2, NEt3, COD: yes; Cl, OMe, Me, OAc, Cp: no)? Written formulas give
- * a lone pair when their first atom already has its lowest valence without the bond.
+ * a lone pair when their first atom already has its lowest valence without the bond, counting
+ * `others`, the label's bonds to atoms that aren't metals (dppf's PPh2 on its Cp ring: yes).
  */
-export function labelDonates(label: string): boolean {
+export function labelDonates(label: string, others = 0): boolean {
   if (L_LIGANDS.has(label)) return true;
-  if (NICKNAMES[label]) return false;
   const g = labelGraph(label, 0);
   const head = g?.atoms[0];
   if (!g || !head || head.dummy) return false;
   const low = lowestValence(head.z, head.charge);
   if (low === undefined) return false;
   const orders = g.bonds.filter((b) => b.a === 0 || b.b === 0).map((b) => b.order);
-  return valenceOfBonds(orders, head.z) + (head.hCount ?? 0) >= low;
+  return valenceOfBonds(orders, head.z) + (head.hCount ?? 0) + others >= low;
 }
 
 /** Labels that stand for "any group" and are left out of formula and mass. */

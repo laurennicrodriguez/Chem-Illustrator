@@ -17,11 +17,12 @@ The drawing tools run down the left side, in groups. A button with a small arrow
 
 ### Bonds and chains
 
-Single, double, triple and quadruple bonds; wedge, hashed wedge, hashed, bold, dashed and wavy bonds; a dative bond; and the chain tool.
+Single, double, triple and quadruple bonds; wedge, hashed wedge, hashed, bold, dashed and wavy bonds; a dative bond; a hapto (η) bond; and the chain tool.
 
 - Click empty space or an atom to draw a bond; drag to aim it. New bonds point in 15° steps and are a standard length. Hold Alt while drawing to draw at any angle, or turn off **Structure ▸ Fixed Bond Lengths** (Ctrl+L) and **Fixed Angles** (Ctrl+E).
 - Click an existing bond with the single bond tool to step it through single, double and triple. Click a double bond again with the double bond tool to move its second line. Click a wedge or dative bond again to reverse it.
 - Draw a dative bond from the donor atom to the acceptor (H3N→BF3). Neither atom loses a hydrogen for it.
+- **Hapto (η) bond**: drag from a metal into a ring, or onto a C=C, to bond the metal to its middle (η⁵-Cp, η⁶-arene, η³-allyl, η²-alkene; the η number is how many atoms it holds). Drag the other way, from the ring to empty space, for a new metal M. Click inside a ring or on a bond for a new metal there. The bond stays in the middle when you move or reshape the ring. Click a hapto bond to draw it as a line to each atom instead (some draw ferrocene that way). In ChemDraw the bond opens as a multicentre attachment.
 - **Chain**: drag from empty space or an atom; a number shows how many bonds you have. Or click and type how many atoms you want. Alt+click draws the same number again.
 
 ### Rings
@@ -43,6 +44,8 @@ Ready-made structures in palettes on the tool bar, plus **My templates**:
 - **Large rings**: 9- to 20-membered rings, as polygons and folded.
 - **Aromatics**: from the cyclopropenylium ion to coronene and porphine, plus corannulene, triptycene and C₆₀.
 - **Rings in perspective**: 3- to 6-membered rings seen at an angle, with and without bold front bonds.
+- **Metal complexes**: coordination geometries round a metal M (linear to octahedral, with wedges for the bonds towards you), ferrocene and other metallocenes, bent metallocenes, piano-stool CpML₃, Cp*ML₃ and (η⁶-arene)ML₃, η³-allyl and η²-alkene complexes, a chloride-bridged dimer, an M≣M quadruple bond and a β-agostic alkyl.
+- **Ligands**: PPh₃, PCy₃, P(t-Bu)₃, XPhos, SPhos, dppe, dppp, dppf, BINAP, Xantphos, IMes, IPr, CO, MeCN, pyridine, bipy, phen, TMEDA, en, acac, Cp, Cp*, benzene, allyl, ethylene and COD. Click a metal and the ligand goes on it, on its most open side; a chelate's donors both bond to it.
 
 The conformers are drawn from real 3-D models (MMFF94 geometries), so their bond angles and ring shapes are true to life.
 
@@ -62,6 +65,14 @@ When you fuse a conformer onto a ring that is itself drawn in 3-D (a chair, enve
 - The `9` and `0` keys on a bond of a chair fuse another chair trans and cis.
 
 This is enough to build decalins, hydrindanes, steroids (5α and 5β), triterpenes such as oleanane, and the hydroazulenes of the guaianes ring by ring.
+
+#### Metal complexes
+
+Metals know they are metals: a metal gets no hydrogens and no valence warning however many ligands it holds, and a phosphine, amine, pyridine, bridging chloride or carbonyl on a metal keeps the hydrogens and charges it had (PPh₃ stays P, not PH; M–C≡O needs no charges). Ligand labels work too: type PPh3, dppe, BINAP, XPhos, bpy, IMes, Cp*, COD, acac, THF and so on as labels on a metal. The formula and masses in the Analysis panel count them all, ferrocene included.
+
+- Right-click a metal: **Add Ligand** puts a ligand from the list on it.
+- **Structure ▸ Bond Metal to Ring (η)**: select a metal and the ring or π-bond atoms; their bonds become one hapto bond to the middle. **Split Hapto Bond** goes back to a bond to each atom.
+- **Structure ▸ Expand Label**: draws a label out as atoms. A ligand on a metal comes from its template (dppe gives both P atoms bonded to the metal); other abbreviations (OMe, Boc, CO₂Et) are laid out along the bond they hung from.
 
 To make your own template, select a structure and click the first button on the **My templates** palette, or use **Structure ▸ Save as Template…**. Give it a name and it appears in the palette. **Structure ▸ Delete Template…** removes one.
 
@@ -164,6 +175,7 @@ To start a reaction quickly, select a structure and press Ctrl+→ (or Ctrl+←,
 ### Labels and groups
 
 - **Contract Label…**: turns a selected group into one label (such as PMP) that keeps its chemistry. ChemDraw opens it as a contracted label.
+- **Expand Label**: the other way round: the selected labels drawn out as atoms and bonds (ligands on a metal from their templates). See [Metal complexes](#metal-complexes).
 - **Define Nickname…**: select a group that hangs off a structure by one bond and give it a name. Typing that name as a label anywhere then counts as the full group for formula and mass. **Delete Nickname…** removes one.
 - **Name to Structure…** (Ctrl+Shift+N): type a systematic, CAS-style or common name and the structure is drawn. Select a caption holding a name first to turn the caption into the structure. Names are read on your computer, so this works offline; names it can't read (DMAP, DIPEA) can be looked up on PubChem if you allow it in **Edit ▸ Preferences**.
 

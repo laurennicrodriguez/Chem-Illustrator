@@ -147,3 +147,16 @@ export function splitHapto(doc: Doc, bondId: number): number[] {
   for (const id of c.multi!) if (!doc.bondBetween(metal, id)) out.push(doc.addBond(metal, id, 1, b.display === 'dative' ? 'solid' : b.display, b.s ? { s: b.s } : {}).id);
   return out;
 }
+
+/**
+ * The carbon of a carbonyl ligand (M–C≡O) whose oxygen this is, or null. Drawn without the
+ * formal charges (M–C⁻≡O⁺ in full), as usual, so the oxygen's third bond is no mistake.
+ */
+export function metalCarbonyl(doc: Doc, a: Atom): Atom | null {
+  if (a.z !== 8 || a.label || a.charge) return null;
+  const bonds = (doc.adj.get(a.id) ?? []).map((id) => doc.bonds.get(id)!);
+  if (bonds.length !== 1 || bonds[0].order !== 3) return null;
+  const c = doc.atoms.get(bonds[0].a1 === a.id ? bonds[0].a2 : bonds[0].a1);
+  if (!c || c.z !== 6 || c.label || c.charge) return null;
+  return (doc.adj.get(c.id) ?? []).some((id) => { const b = doc.bonds.get(id)!; return isMetalAtom(doc.atoms.get(b.a1 === c.id ? b.a2 : b.a1)); }) ? c : null;
+}

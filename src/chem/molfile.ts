@@ -3,6 +3,7 @@
 // formula, mass and stereo come out right; "R"-type labels become dummy atoms.
 
 import { Doc, Atom, isMetalAtom, radicalElectrons } from '../model';
+import { metalCarbonyl } from './hapto';
 import { SYMBOLS, elementNumber, valenceOfBonds } from './elements';
 import { labelDonates, labelGraph, MiniGraph } from './labels';
 import { stereoAnchor, stereoSense } from './stereo';
@@ -62,12 +63,79 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = '', opts: 
   const dative = new Set<number>();
   const metalBonds = (id: number) => (doc.adj.get(id) ?? []).map((bid) => doc.bonds.get(bid)!)
     .filter((b) => b.display !== 'dative' && isMetalAtom(doc.atoms.get(b.a1 === id ? b.a2 : b.a1)));
+  // a carbonyl ligand, drawn M–C≡O, is M←C⁻≡O⁺ to the engine
+  const charged = new Map<number, number>();
+  for (const id of ids) {
+    const c = metalCarbonyl(doc, doc.atoms.get(id)!);
+    if (!c || !inSet.has(c.id)) continue;
+    charged.set(id, 1);
+    charged.set(c.id, -1);
+    for (const b of metalBonds(c.id)) dative.add(b.id);
+  }
+  // an N-heterocyclic carbene (a carbon with two N, bonded to the metal) gives it its lone pair
+  const carbene = new Set<number>();
   for (const id of ids) {
     const a = doc.atoms.get(id)!;
-    if (isMetalAtom(a)) continue;
+    if (a.z !== 6 || a.label || a.charge || a.radical || isMetalAtom(a) || charged.has(id)) continue;
+    const mb = metalBonds(id);
+    if (mb.length !== 1) continue;
+    const rest = (doc.adj.get(id) ?? []).map((bid) => doc.bonds.get(bid)!).filter((b) => b !== mb[0]);
+    if (rest.length !== 2 || rest.some((b) => b.order !== 1 || doc.atoms.get(b.a1 === id ? b.a2 : b.a1)?.z !== 7)) continue;
+    carbene.add(id);
+    charged.set(id, 0);
+    dative.add(mb[0].id);
+  }
+  // An odd π-system bonded through its middle (η⁵-Cp, η³-allyl) is an anion on a cation to the
+  // engine: one of its carbons −1, the metal +1 (Cp⁻ Fe²⁺ Cp⁻ for ferrocene), so it reads as the
+  // aromatic ring or allyl it is and the formula comes out right.
+  const kekule = new Map<number, number>();
+  const centres = new Set(ids.flatMap((id) => [...(doc.centresOf.get(id) ?? [])]));
+  for (const id of centres) {
+    const c = doc.atoms.get(id);
+    if (!c?.multi || c.multi.length % 2 === 0 || !c.multi.every((m) => inSet.has(m))) continue;
+    const metals = (doc.adj.get(id) ?? []).map((bid) => { const b = doc.bonds.get(bid)!; return b.a1 === id ? b.a2 : b.a1; }).filter((m) => inSet.has(m));
+    if (!metals.length) continue;
+    const members = new Set(c.multi);
+    const inner = (m: number) => (doc.adj.get(m) ?? []).map((bid) => doc.bonds.get(bid)!).filter((b) => members.has(b.a1 === m ? b.a2 : b.a1));
+    const plain = (m: number) => inner(m).every((b) => b.order !== 2);
+    const ends = c.multi.filter((m) => inner(m).length === 1);
+    // the anion: the carbon with no double bond (an end of an allyl, the CH of a Kekulé Cp)
+    const anion = (ends.length ? ends : c.multi).find(plain);
+    const at = anion !== undefined ? doc.atoms.get(anion)! : null;
+    if (!at || at.z !== 6 || at.label || at.charge || charged.has(anion!)) continue;
+    charged.set(anion!, -1);
+    charged.set(metals[0], (charged.get(metals[0]) ?? 0) + 1);
+    // a ring's 1½ bonds written out round from the anion: single, double, single… (C5H5⁻)
+    if (!ends.length && c.multi.every((m) => inner(m).every((b) => b.order === 1.5))) {
+      let cur = anion!, prev = -1;
+      for (let k = 0; k < members.size; k++) {
+        const next = inner(cur).find((b) => (b.a1 === cur ? b.a2 : b.a1) !== prev && !kekule.has(b.id));
+        if (!next) break;
+        kekule.set(next.id, k % 2 === 1 && k < members.size - 1 ? 2 : 1);
+        prev = cur; cur = next.a1 === cur ? next.a2 : next.a1;
+      }
+    }
+    // an open chain's 1½ bonds: double, single… from the far end
+    if (ends.length === 2) {
+      let cur = ends.find((e) => e !== anion)!, prev = -1, k = 0;
+      while (cur !== anion && k < members.size) {
+        const next = inner(cur).find((b) => (b.a1 === cur ? b.a2 : b.a1) !== prev);
+        if (!next) break;
+        if (next.order === 1.5) kekule.set(next.id, k % 2 === 0 ? 2 : 1);
+        prev = cur; cur = next.a1 === cur ? next.a2 : next.a1; k++;
+      }
+    }
+  }
+  for (const id of ids) {
+    const a = doc.atoms.get(id)!;
+    if (isMetalAtom(a) || charged.has(id)) continue;
     const mb = metalBonds(id);
     if (!mb.length) continue;
-    if (a.label) { if (labelDonates(a.label)) for (const b of mb) dative.add(b.id); continue; }
+    if (a.label) {
+      const others = (doc.adj.get(id) ?? []).map((bid) => doc.bonds.get(bid)!).filter((b) => b.display !== 'dative' && !mb.includes(b)).reduce((s, b) => s + b.order, 0);
+      if (labelDonates(a.label, others)) for (const b of mb) dative.add(b.id);
+      continue;
+    }
     // as many as the atom's hydrogens were worked out with stay ordinary (see Doc.valenceSum)
     let own = 0;
     for (const bid of doc.adj.get(id) ?? []) { const b = doc.bonds.get(bid)!; if (b.display !== 'dative' && !mb.includes(b)) own += b.order; }
@@ -84,10 +152,10 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = '', opts: 
     }
     if (!g || g.atoms.length === 0) {
       attach.set(id, atoms.length);
-      const rad = a.radical === 'singlet' ? 1 : a.radical === 'doublet' ? 2 : a.radical === 'triplet' ? 3 : 0;
+      const rad = a.radical === 'singlet' || carbene.has(id) ? 1 : a.radical === 'doublet' ? 2 : a.radical === 'triplet' ? 3 : 0;
       const sym = a.label && !g ? generic : SYMBOLS[a.z] || generic;
       if (sym === generic) genericAt.push([atoms.length, a.label ?? '']);
-      atoms.push({ sym, x, y, charge: a.charge, iso: a.isotope, rad });
+      atoms.push({ sym, x, y, charge: a.charge + (charged.get(id) ?? 0), iso: a.isotope, rad });
       map.push(id);
       continue;
     }
@@ -120,7 +188,7 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = '', opts: 
         bonds.push({ a: attach.get(donor)!, b: attach.get(donor === b.a1 ? b.a2 : b.a1)!, order: 9, stereo: 0 });
         continue;
       }
-      const order = b.order === 1.5 ? 4 : b.order === 2 ? 2 : b.order === 3 ? 3 : 1;
+      const order = kekule.get(b.id) ?? (b.order === 1.5 ? 4 : b.order === 2 ? 2 : b.order === 3 ? 3 : 1);
       // a stereo bond is written from the atom it describes
       const sense = stereoSense(b);
       const from = sense ? stereoAnchor(doc, b)! : b.a1;

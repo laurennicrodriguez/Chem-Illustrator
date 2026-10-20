@@ -2,12 +2,13 @@
 // pan. The editor changes the document and asks for a repaint; hover and drawing previews
 // only repaint the overlay layer.
 
-import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, applyBase, captionBase, stripBase, type StepRoles, type Justify, type HighlightStyle } from '../model';
+import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, isMetalAtom, applyBase, captionBase, stripBase, type StepRoles, type Justify, type HighlightStyle } from '../model';
 import { CaptionEditor } from '../ui/caption-editor';
 import { geoDef, geoShapeStyle, moveSteps, traceSteps } from '../design/geo';
 import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
 import { fusions3d } from '../chem/fuse3d';
-import { bondHapto, centreEnd, haptoTarget } from '../chem/hapto';
+import { bondHapto, centreEnd, haptoTarget, haptoText, splitHapto } from '../chem/hapto';
+import { expandLigand, expandWithMolblock, labelSmiles, ligandTemplateFor } from '../chem/expand';
 import { styleFromFace, plainText } from '../richtext';
 import * as rt from '../richtext';
 import { applyFormat, formatWhole, type TextFormat } from '../text/format';
@@ -1088,7 +1089,9 @@ export class Editor {
       const a = doc.atoms.get(h.id)!;
       const L = bondLength(doc, a);
       let byBond = (t.join === 'bond') !== alt;
-      if (!byBond && doc.degree(a.id) >= 3) byBond = true;
+      // a ligand goes on the metal however many bonds it has already
+      if (t.onMetal) byBond = false;
+      else if (!byBond && doc.degree(a.id) >= 3) byBond = true;
       const dir = cursor && dist(cursor, a) > L * 0.3 ? norm(fromAngle(snapAngle(angleOf(sub(cursor, a))))) : byBond ? sproutDir(doc, a.id) : ringDir(doc, a.id);
       return rank(atomPlacements(t, a, dir, L, byBond), new Set([a.id])).map((pl) => (
         byBond ? { pl, existing: new Map(), bondFrom: a.id, scale: a.s } : { pl, existing: new Map([[t.attach, a.id]]), scale: a.s }));
@@ -1194,6 +1197,96 @@ export class Editor {
   }
 
   // ------------------------------------------------------------------ hapto bonds
+
+  /**
+   * Structure > Bond Metal to Ring (η): the selected metal bonded to the middle of the other
+   * selected atoms (a ring, an allyl, a C=C) by one hapto bond, in place of any bonds it had to
+   * each of them. Says what it did, or what to select.
+   */
+  bondMetalToRing(): string {
+    const doc = this.doc;
+    const sel = [...this.sel.atoms].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a && !a.multi && !a.attach);
+    const metals = sel.filter((a) => isMetalAtom(a));
+    const rest = sel.filter((a) => !isMetalAtom(a));
+    if (metals.length !== 1 || rest.length < 2) return 'Select one metal and the atoms of the ring or π-bond it is bonded to (two or more).';
+    const m = metals[0];
+    doc.edit('Bond Metal to Ring', () => {
+      for (const a of rest) { const b = doc.bondBetween(m.id, a.id); if (b) doc.removeBond(b.id); }
+      bondHapto(doc, m.id, rest.map((a) => a.id));
+    });
+    this.changed();
+    return `Bonded ${haptoText(rest.length)} to the middle of the ${rest.length} atoms.`;
+  }
+
+  /** The selected metal (right-click a metal > Add Ligand), when exactly one is selected. */
+  selectedMetal(): number | null {
+    const ids = [...this.sel.atoms].filter((id) => isMetalAtom(this.doc.atoms.get(id)));
+    return ids.length === 1 ? ids[0] : null;
+  }
+
+  /** Put a ligand (a template from the Ligands palette) on the selected metal, on its most open side. */
+  addLigand(templateId: string): boolean {
+    const m = this.selectedMetal();
+    const t = templateById(templateId);
+    if (m === null || !t) return false;
+    const at = this.doc.atoms.get(m)!;
+    this.doc.edit('Add Ligand', () => this.placeTemplateAt(t.id, { kind: 'atom', id: m }, { x: at.x, y: at.y }, null, false));
+    this.r.invalidate(this.doc);
+    this.changed();
+    return true;
+  }
+
+  /** Structure > Split Hapto Bond: the selected hapto bonds (or those of selected metals) drawn as a bond to each atom. */
+  splitHaptoBonds(): string {
+    const doc = this.doc;
+    const ids = new Set<number>();
+    for (const bid of this.sel.bonds) { const b = doc.bonds.get(bid); if (b && centreEnd(doc, b)) ids.add(bid); }
+    for (const aid of this.sel.atoms) for (const bid of doc.adj.get(aid) ?? []) { const b = doc.bonds.get(bid)!; if (centreEnd(doc, b)) ids.add(bid); }
+    if (!ids.size) return 'Select a hapto (η) bond, or the metal it comes from.';
+    let n = 0;
+    doc.edit('Split Hapto Bond', () => { for (const id of ids) n += splitHapto(doc, id).length; });
+    this.sel = emptySel();
+    this.changed();
+    return `Split into ${n} bonds.`;
+  }
+
+  /** The selected labels Expand Label can draw out: ligands on a metal (by template) and other labels (by SMILES). */
+  expandableLabels(): { id: number; template: boolean; smiles: string | null }[] {
+    const doc = this.doc;
+    const out: { id: number; template: boolean; smiles: string | null }[] = [];
+    for (const id of this.sel.atoms) {
+      const a = doc.atoms.get(id);
+      if (!a?.label) continue;
+      const deg = doc.degree(id);
+      if (ligandTemplateFor(doc, a)) out.push({ id, template: true, smiles: null });
+      else if (deg <= 1) out.push({ id, template: false, smiles: labelSmiles(a, deg) });
+    }
+    return out;
+  }
+
+  /**
+   * Structure > Expand Label: draw out labels as their atoms, given the molfiles the chemistry
+   * engine laid out for those without a template (by atom id). Returns how many were expanded.
+   */
+  expandLabels(list: { id: number; template: boolean }[], molblocks: Map<number, string>): number {
+    const doc = this.doc;
+    const added: number[] = [];
+    let n = 0;
+    doc.edit('Expand Label', () => {
+      for (const { id, template } of list) {
+        if (!doc.atoms.has(id)) continue;
+        const ids = template ? expandLigand(doc, id) : molblocks.has(id) ? expandWithMolblock(doc, id, molblocks.get(id)!) : null;
+        if (ids) { added.push(...ids); n++; }
+      }
+    });
+    if (!n) return 0;
+    this.r.invalidate(doc);
+    this.sel = emptySel();
+    for (const id of added) if (doc.atoms.has(id)) this.sel.atoms.add(id);
+    this.changed();
+    return n;
+  }
+
 
   /**
    * What one end of a hapto bond drag is on: an atom (the metal, or the donor of an η¹ bond),

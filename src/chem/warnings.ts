@@ -6,6 +6,7 @@
 // their close neighbours are looked at again.
 
 import { isMetalAtom, radicalElectrons, type Atom, type AtomWatch, type Bond, type Doc } from '../model';
+import { metalCarbonyl } from './hapto';
 import { SYMBOLS, elementNumber, maxValence, minValence, valenceOfBonds } from './elements';
 import { bracketsUnbalanced, labelDonates, labelGraph, labelOverValent, tokenize } from './labels';
 
@@ -83,7 +84,7 @@ export function atomWarnings(doc: Doc, a: Atom): string[] {
   const z = a.label ? 6 : a.z;
   const bonds = valenceOfBonds(orders, z);
   // a label giving a metal a lone pair or π-bond (PPh3, NH3, COD) takes no valence from it
-  const ext = a.label && toMetal && labelDonates(a.label) ? Math.max(0, bonds - toMetal) : bonds;
+  const ext = a.label && toMetal && labelDonates(a.label, Math.max(0, bonds - toMetal)) ? Math.max(0, bonds - toMetal) : bonds;
   if (a.label) {
     if (bracketsUnbalanced(a.label)) out.push(`The brackets in “${a.label}” don't pair up.`);
     else if (!labelGraph(a.label, ext)) out.push(`“${a.label}” can't be read as chemistry, so it's left out of the formula and mass.`);
@@ -104,7 +105,9 @@ export function atomWarnings(doc: Doc, a: Atom): string[] {
   } else {
     const max = maxValence(a.z, a.charge);
     const rad = radicalElectrons(a);
-    if (max !== undefined && bonds + rad > max + toMetal) {
+    // a carbonyl ligand's O (M–C≡O)
+    const carbonyl = metalCarbonyl(doc, a) ? 1 : 0;
+    if (max !== undefined && bonds + rad > max + toMetal + carbonyl) {
       const who = atomName(a.z, a.charge);
       out.push(`Too many bonds: ${who} has ${bonds}${rad ? ` and ${rad === 1 ? 'an unpaired electron' : 'two unpaired electrons'}` : ''}, but ${valenceAdvice(a.z, a.charge, bonds + rad)}`);
     }

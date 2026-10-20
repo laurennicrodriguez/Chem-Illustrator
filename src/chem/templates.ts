@@ -4,11 +4,13 @@
 
 import data from './templates.json';
 import conformerData from './conformers.json';
+import metalData from './metal-templates.json';
 import type { Doc, BondDisplay } from '../model';
 import { Vec, add, sub, mul, dist, angleOf, DEG } from '../geom';
 import { elementNumber, SYMBOLS } from './elements';
 import { atomAt, MERGE_FRACTION } from './chemgeom';
 import { circleRing } from './aromatic';
+import { bondHapto } from './hapto';
 
 /** x, y, element, then charge and a text label (such as CH2OH) when there is one. */
 export type TemplateAtom = [number, number, string, number?, string?];
@@ -37,14 +39,21 @@ export interface Template {
   circle?: number[][];
   /** Lines and circles that go with it (a Newman projection's circle and back bonds): kind, then x1, y1, x2, y2. */
   shapes?: TemplateShape[];
+  /** Hapto (η) bonds: the metal, the atoms it is bonded to the middle of (a Cp ring, a C=C), and how the bond is drawn when not plain. */
+  hapto?: TemplateHapto[];
+  /** The attach atom is a stand-in for a metal (a ligand on M): put on a clicked atom, never joined to it by a bond. */
+  onMetal?: boolean;
 }
+
+export type TemplateHapto = [number, number[], BondDisplay?];
 
 export type TemplateShape = ['line' | 'oval', number, number, number, number];
 
 export type TemplateGroup = 'rings' | 'heterocycles' | 'amino' | 'sugars' | 'own'
-  | 'conformers' | 'fused' | 'projections' | 'stereo' | 'bicyclics' | 'cycloalkanes' | 'aromatics' | 'perspective';
+  | 'conformers' | 'fused' | 'projections' | 'stereo' | 'bicyclics' | 'cycloalkanes' | 'aromatics' | 'perspective'
+  | 'geometries' | 'organometallic' | 'ligands';
 
-export const TEMPLATES = [...(data as Template[]), ...(conformerData as Template[])];
+export const TEMPLATES = [...(data as Template[]), ...(conformerData as Template[]), ...(metalData as Template[])];
 const BY_ID = new Map(TEMPLATES.map((t) => [t.id, t]));
 export const templateById = (id: string): Template | undefined => BY_ID.get(id);
 
@@ -71,7 +80,9 @@ export function parseOwnTemplates(raw: unknown): Template[] {
     if (!atomsOk || !bondsOk) continue;
     const attach = Number.isInteger(t.attach) && t.attach! >= 0 && t.attach! < n ? t.attach! : 0;
     const fuse = Array.isArray(t.fuse) && t.fuse.length === 2 && t.fuse.every((i) => Number.isInteger(i) && i >= 0 && i < n) ? t.fuse : undefined;
-    out.push({ id: t.id, name: t.name, group: 'own', atoms: t.atoms, bonds: t.bonds, attach, ...(fuse ? { fuse } : {}), ...(t.join === 'bond' ? { join: 'bond' as const } : {}) });
+    const idx = (i: unknown) => Number.isInteger(i) && (i as number) >= 0 && (i as number) < n;
+    const hapto = Array.isArray(t.hapto) ? t.hapto.filter((h) => Array.isArray(h) && idx(h[0]) && Array.isArray(h[1]) && h[1].length >= 2 && h[1].every(idx)) : [];
+    out.push({ id: t.id, name: t.name, group: 'own', atoms: t.atoms, bonds: t.bonds, attach, ...(fuse ? { fuse } : {}), ...(t.join === 'bond' ? { join: 'bond' as const } : {}), ...(hapto.length ? { hapto } : {}) });
   }
   return out;
 }
@@ -103,6 +114,16 @@ export function templateFromAtoms(doc: Doc, ids: Iterable<number>, name: string,
     if (b.display !== 'solid') t.push(b.display);
     return t;
   });
+  // hapto bonds: a metal bonded to the middle of drawn atoms, all of them in the template
+  const hapto: TemplateHapto[] = [];
+  for (const b of doc.bonds.values()) {
+    const p = doc.atoms.get(b.a1), q = doc.atoms.get(b.a2);
+    const [c, m] = p?.multi ? [p, q] : q?.multi ? [q, p] : [];
+    if (!c?.multi || !m || !index.has(m.id) || !c.multi.every((i) => index.has(i))) continue;
+    const h: TemplateHapto = [index.get(m.id)!, c.multi.map((i) => index.get(i)!)];
+    if (b.display !== 'solid') h.push(b.display);
+    hapto.push(h);
+  }
   const degree = (k: number) => tb.filter((b) => b[0] === k || b[1] === k).length;
   let attach = 0;
   for (let k = 1; k < atoms.length; k++) {
@@ -110,6 +131,7 @@ export function templateFromAtoms(doc: Doc, ids: Iterable<number>, name: string,
   }
   const ringBond = bonds.find((b) => doc.ringThroughBond(b.id) !== null);
   const out: Template = { id, name, group: 'own', atoms, bonds: tb, attach };
+  if (hapto.length) out.hapto = hapto;
   if (ringBond) out.fuse = [index.get(ringBond.a1)!, index.get(ringBond.a2)!];
   else out.join = 'bond';
   return out;
@@ -244,6 +266,7 @@ export function placeTemplate(doc: Doc, t: Template, pl: Placement, opts: PlaceO
     if (pl.mirror) d = d === 'wedge' ? 'hashWedge' : d === 'hashWedge' ? 'wedge' : d;
     doc.addBond(a, b, o, d, extra);
   });
+  for (const [m, members, display] of t.hapto ?? []) bondHapto(doc, ids[m], members.map((i) => ids[i]), display ?? 'solid');
   if (opts.bondFrom !== undefined && !doc.bondBetween(opts.bondFrom, ids[t.attach])) doc.addBond(opts.bondFrom, ids[t.attach], 1, 'solid', extra);
   for (const ring of t.circle ?? []) circleRing(doc, ring.map((i) => ids[i]));
   for (const [kind, x1, y1, x2, y2] of t.shapes ?? []) {
