@@ -292,9 +292,14 @@ export interface HighlightStyle {
   shadow?: boolean;
   /** Fade out at the edges instead of a sharp edge. */
   soft?: boolean;
+  /**
+   * Round highlights only: one even band along the bonds, with no bulging disc at each atom
+   * (square and diamond highlights are always drawn this way).
+   */
+  smooth?: boolean;
 }
 
-export const HIGHLIGHT_DEFAULTS: Required<HighlightStyle> = { shape: 'round', size: 1, fit: true, shadow: false, soft: false };
+export const HIGHLIGHT_DEFAULTS: Required<HighlightStyle> = { shape: 'round', size: 1, fit: true, shadow: false, soft: false, smooth: false };
 
 /** Which side of its structure an attached caption sits on. */
 export type AttachSide = 'below' | 'above' | 'left' | 'right';
