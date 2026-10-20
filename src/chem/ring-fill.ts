@@ -4,9 +4,10 @@
 
 import type { Doc, Entity, Shape } from '../model';
 import { ringsAmong, ringBonds } from './aromatic';
+import { RING_FILL_COLOUR } from '../render/fills';
 
 /** A soft blue that shows the ring without hiding the bonds. Change it in the Style panel. */
-export const RING_FILL_COLOUR = '#cfe0ff';
+export { RING_FILL_COLOUR };
 
 const sameRing = (a: number[], b: number[]) => a.length === b.length && a.every((id) => b.includes(id));
 

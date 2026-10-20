@@ -9,7 +9,7 @@ import { fullStyle, tidyStyle } from '../render/highlight';
 export { tidyStyle };
 import { DESCRIPTORS } from './analysis-panel';
 import { COMMON_ADDUCTS } from '../chem/hrms';
-import { PATTERNS, patternSpacing } from '../render/fills';
+import { PATTERNS, RING_FILL_COLOUR, RING_PATTERN_COLOUR, patternSpacing, ringShadowSize } from '../render/fills';
 import type { Role } from '../chem/reaction';
 import { setStereoShown, setStereoText } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
@@ -302,9 +302,14 @@ export class StylePanel {
     if (f) {
       const now: Fill = !f.filled ? 'none' : f.fill ?? 'solid';
       this.select('Fill', FILLS, now, (v) => set('Fill', fillable, () => (v === 'none' ? { filled: false } : { filled: true, fill: v === 'solid' ? undefined : v })));
-      if (f.filled) this.color(f.fill === 'gradient' ? 'From colour' : 'Fill colour', f.fillColor, (v) => set('Fill colour', fillable, () => ({ fillColor: v })), 'Same as the line');
+      // a ring fill has no line of its own: its colour unless chosen is the soft blue
+      const ringOnly = shapes.every((x) => x.kind === 'ring');
+      if (f.filled) {
+        this.color(f.fill === 'gradient' ? 'From colour' : 'Fill colour', f.fillColor, (v) => set('Fill colour', fillable, (x) => (x.kind === 'ring' && !v ? { fillColor: undefined, color: undefined } : { fillColor: v })),
+          ringOnly ? 'Soft blue' : 'Same as the line', ringOnly ? RING_FILL_COLOUR : f.color ?? '#000000');
+      }
       if (f.filled && f.fill === 'gradient') {
-        this.color('To colour', f.fill2, (v) => set('Gradient colour', fillable, () => ({ fill2: v })), 'White');
+        this.color('To colour', f.fill2, (v) => set('Gradient colour', fillable, () => ({ fill2: v })), 'White', '#ffffff');
         this.select('Direction', GRAD_DIRS, f.gradRadial ? 'radial' : String(f.gradAngle ?? 90), (v) => set('Gradient direction', fillable, () => (v === 'radial' ? { gradRadial: true } : { gradRadial: undefined, gradAngle: Number(v) })));
       }
       const see = any((x) => x.kind === 'geo' || x.kind === 'ring');
@@ -315,12 +320,22 @@ export class StylePanel {
       // hatching and stippling, over the fill or on their own
       this.select('Pattern', PATTERN_OPTS, f.pattern ?? 'none', (v) => set('Pattern', fillable, () => ({ pattern: v === 'none' ? undefined : (v as Pattern) })));
       if (f.pattern) {
-        this.color('Pattern colour', f.patternColor, (v) => set('Pattern colour', fillable, () => ({ patternColor: v })), f.kind === 'ring' ? 'Light grey' : 'Same as the line');
+        this.color('Pattern colour', f.patternColor, (v) => set('Pattern colour', fillable, () => ({ patternColor: v })),
+          f.kind === 'ring' ? 'Light grey' : 'Same as the line', f.kind === 'ring' ? RING_PATTERN_COLOUR : f.color ?? '#000000');
+        this.number('Pattern see-through (%)', Math.round((f.patternTransparency ?? 0) * 100), 5, 0, 100, (v) => set('Pattern transparency', fillable, () => ({ patternTransparency: v ? v / 100 : undefined })),
+          'How much shows through the lines or dots: 0 is solid');
         this.number('Pattern spacing (pt)', round(patternSpacing(f)), 0.25, 0.5, 40, (v) => set('Pattern spacing', fillable, () => ({ patternSize: v })), 'How far apart the lines or dots are');
         const ring = any((x) => x.kind === 'ring' && !!x.pattern);
         if (ring) this.check('Pattern under double bonds', !ring.patternClear, (v) => set('Pattern under double bonds', (x) => x.kind === 'ring', () => ({ patternClear: v ? undefined : true })),
           'Run the lines or dots up to the bonds and under the double bonds; untick to keep them clear of the bonds and labels');
       }
+    }
+    const ringFill = any((x) => x.kind === 'ring');
+    if (ringFill) {
+      // a drop shadow under the ring, as a highlight's shadow (with or without a highlight)
+      const isRing = (x: Shape) => x.kind === 'ring';
+      this.check('Shadow', !!ringFill.shadow, (v) => set('Ring fill shadow', isRing, () => ({ shadow: v || undefined })), 'A drop shadow down and to the right of the ring');
+      if (ringFill.shadow) this.number('Shadow size (pt)', round(ringShadowSize(ringFill, this.doc.style.bondLength)), 0.25, 0, 50, (v) => set('Shadow size', isRing, () => ({ shadowSize: v })), 'How far the shadow sticks out');
     }
     if (geo) {
       this.number('Outline (pt)', round(geo.lineWidth ?? (geo.bold ? lw * 2.5 : lw)), 0.25, 0, 50, (v) => set('Outline width', isGeo, () => ({ lineWidth: v, bold: undefined })), '0 for no outline');
@@ -339,7 +354,8 @@ export class StylePanel {
     }
     const br = any((x) => x.kind === 'bracket');
     if (br) this.select('Bracket', BRACKETS, br.bracket ?? 'square', (v) => set('Bracket shape', (x) => x.kind === 'bracket', () => ({ bracket: v })));
-    this.color(f?.filled && f.fillColor ? 'Line colour' : 'Colour', s.color, (v) => set('Colour', () => true, () => ({ color: v })));
+    // ring fills have no line, so no line colour (it only stood in for a fill colour that wasn't set)
+    if (shapes.some((x) => x.kind !== 'ring')) this.color(f?.filled && f.fillColor ? 'Line colour' : 'Colour', s.color, (v) => set('Colour', (x) => x.kind !== 'ring', () => ({ color: v })));
   }
 
   // ------------------------------------------------------------------ frames
@@ -816,8 +832,8 @@ export class StylePanel {
   }
 
   /** A colour row: the drawing's palette, "automatic" (black unless `auto` says otherwise), or any colour. */
-  private color(label: string, value: string | undefined, on: (v: string | undefined) => void, auto?: string): void {
-    this.row(label, colourButton(this.doc, value, (v) => on(v && v.toLowerCase() === '#000000' && !auto ? undefined : v), auto ? { autoLabel: auto } : { autoSwatch: '#000000' }));
+  private color(label: string, value: string | undefined, on: (v: string | undefined) => void, auto?: string, autoSwatch?: string): void {
+    this.row(label, colourButton(this.doc, value, (v) => on(v && v.toLowerCase() === '#000000' && !auto ? undefined : v), auto ? { autoLabel: auto, autoSwatch } : { autoSwatch: '#000000' }));
   }
 }
 

@@ -28,7 +28,7 @@ import type { Selection } from '../editor/editor';
 import { Package, NS, REL, emu, xml, xmlAttr, hex6, MediaFiles } from './ooxml';
 import { facesToEmbed, toEot, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
-import { patternInk } from '../render/fills';
+import { patternClear, patternInk } from '../render/fills';
 import { FADE, tint } from '../colours';
 import { transitionXml, timingXml, type Transition, type Anim } from '../deck/animation';
 import {
@@ -866,8 +866,10 @@ const PPT_PATTERN: Record<Pattern, string> = {
 function patternOrGradient(s: Shape, fc: string, alpha: string): string | null {
   if (s.pattern) {
     const fg = hex6(patternInk(s));
+    const pc = patternClear(s);
+    const fgAlpha = pc ? `<a:alpha val="${Math.round((1 - pc) * 100000)}"/>` : '';
     const bg = s.filled ? `<a:srgbClr val="${s.fill === 'faded' ? hex6(tint('#' + fc, FADE)) : fc}">${alpha}</a:srgbClr>` : '<a:srgbClr val="FFFFFF"><a:alpha val="0"/></a:srgbClr>';
-    return `<a:pattFill prst="${PPT_PATTERN[s.pattern]}"><a:fgClr><a:srgbClr val="${fg}"/></a:fgClr><a:bgClr>${bg}</a:bgClr></a:pattFill>`;
+    return `<a:pattFill prst="${PPT_PATTERN[s.pattern]}"><a:fgClr><a:srgbClr val="${fg}">${fgAlpha}</a:srgbClr></a:fgClr><a:bgClr>${bg}</a:bgClr></a:pattFill>`;
   }
   if (s.filled && s.fill === 'gradient') {
     const to = hex6(s.fill2 ?? '#ffffff');

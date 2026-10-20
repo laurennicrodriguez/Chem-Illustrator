@@ -430,6 +430,8 @@ export interface Shape {
   /** The pattern's colour (the outline colour when not given) and its spacing in points. */
   patternColor?: string;
   patternSize?: number;
+  /** See-through amount of the pattern, 0 (solid, when not given) to 1 (clear). */
+  patternTransparency?: number;
   /**
    * A ring fill's pattern keeps clear of the bonds and the inner lines of double bonds (true), or
    * runs right up to the ring's bonds and under its double bonds (absent, the default).
@@ -440,8 +442,12 @@ export interface Shape {
   rounded?: boolean;
   /** Corner radius of a rounded box, in points (ChemDraw's default is six line widths). */
   radius?: number;
+  /** Boxes, design shapes and ring fills: a drop shadow down and to the right. */
   shadow?: boolean;
-  /** How far a box's shadow sticks out, in points (ChemDraw's default is four line widths). */
+  /**
+   * How far the shadow sticks out, in points (a box's default is four line widths, ChemDraw's; a
+   * ring fill's is that of a highlight's shadow).
+   */
   shadowSize?: number;
   bold?: boolean;
   symbol?: string;

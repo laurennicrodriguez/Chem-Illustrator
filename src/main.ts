@@ -2735,6 +2735,10 @@ const COMMANDS: Record<string, () => unknown> = {
   'lock-toolboxes': () => { toolboxes.setLocked(!toolboxState.locked); flash(toolboxState.locked ? 'Toolboxes locked.' : 'Toolboxes unlocked: drag one by its title to an edge of the drawing to dock it, or anywhere else to float.', 6000); },
   'add-frame': () => editor.addFrame() || flash('Select what to frame: structures, text, arrows or shapes.'),
   'fill-rings': () => flash(editor.fillRings(), 6000),
+  'ring-shadow': () => {
+    const r = editor.ringShadow();
+    flash(!r ? 'Select filled rings (or their structure) first: Fill Rings fills them.' : r === 'on' ? 'Ring fills have a drop shadow. Change its size in the Style panel.' : 'Ring fill shadows off.', 5000);
+  },
   'highlight': () => editor.highlight(highlightColour, highlightStyle) ? flash('Highlighted. Change the colour with Highlight in the Style panel.', 5000) : flash('Select the atoms and bonds to highlight.'),
   'remove-highlight': () => editor.highlight(undefined) || flash('Select the atoms and bonds to take the highlight off.'),
   'smooth-highlight': () => {
@@ -4303,7 +4307,7 @@ function drawingMenu(): MenuItem[] {
     { cmd: 'add-frame' },
     ...(atoms ? [{ label: 'Label the Structure', items: [{ cmd: 'add-id-label' }, { cmd: 'add-caption' }, { cmd: 'attach-descriptors' }, null, { cmd: 'number-compounds' }] }] : []),
     { cmd: 'scale' },
-    ...(atoms ? [{ label: 'Highlight and Fill', items: [{ cmd: 'highlight' }, { cmd: 'remove-highlight' }, { cmd: 'smooth-highlight' }, null, { cmd: 'fill-rings' }] }] : []),
+    ...(atoms || shapes.some((x) => x.kind === 'ring') ? [{ label: 'Highlight and Fill', items: [{ cmd: 'highlight' }, { cmd: 'remove-highlight' }, { cmd: 'smooth-highlight' }, null, { cmd: 'fill-rings' }, { cmd: 'ring-shadow' }] }] : []),
     { label: 'Align', items: arrange },
     { label: 'Rotate or Flip', items: turn },
     ...(order.length ? [{ label: 'Order', items: order }] : []),

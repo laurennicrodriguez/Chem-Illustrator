@@ -76,10 +76,21 @@ export function extractDrawing(doc: Doc, sel: Selection | null): Doc {
       const r = doc.arrows.get(id);
       if (r) { out.addArrow(structuredClone(r)); seen(id); }
     }
-    for (const id of sel ? sel.shapes : doc.shapes.keys()) {
+    // ring fills come along with their rings, picked or not
+    const shapes = new Set<number>(sel ? sel.shapes : doc.shapes.keys());
+    if (sel) for (const s of doc.shapes.values()) if (s.kind === 'ring' && s.ring?.length && s.ring.every((a) => atoms.has(a))) shapes.add(s.id);
+    for (const id of shapes) {
       const s = doc.shapes.get(id);
       // a placeholder for a picture from ChemDraw has no picture in it to copy
-      if (s && !s.picture) { out.addShape(structuredClone(s)); seen(id); }
+      if (!s || s.picture) continue;
+      const copy = structuredClone(s);
+      // a ring fill copied without its ring keeps the ring's shape, where the atoms were
+      if (copy.kind === 'ring' && copy.ring && !copy.ring.every((a) => atoms.has(a))) {
+        copy.poly = copy.ring.every((a) => doc.atoms.has(a)) ? copy.ring.map((a) => { const at = doc.atoms.get(a)!; return { x: at.x, y: at.y }; }) : copy.poly;
+        delete copy.ring;
+      }
+      out.addShape(copy);
+      seen(id);
     }
   });
   out.reserveIds(maxId);
@@ -190,6 +201,10 @@ export function insertDrawing(doc: Doc, src: Doc, center: Vec, label = 'Paste'):
     }
     for (const s of src.shapes.values()) {
       const { id: _id, ...rest } = structuredClone(s);
+      // a ring fill sits on the new copies of its ring's atoms
+      const ring = rest.ring?.map((a) => ids.get(a));
+      if (rest.ring) rest.ring = ring!.every((a) => a !== undefined) ? (ring as number[]) : undefined;
+      if (rest.poly) rest.poly = rest.poly.map((p) => ({ x: p.x + dx, y: p.y + dy }));
       sel.shapes.add(doc.addShape({ ...rest, x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy }).id);
     }
   });
