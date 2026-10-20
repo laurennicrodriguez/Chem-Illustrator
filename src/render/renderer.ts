@@ -173,14 +173,18 @@ export class Renderer {
     this.octx = overlay.getContext('2d')!;
   }
 
-  resize(w: number, h: number, dpr: number): void {
+  /** Size the canvases (false when they already had this size: resizing would only blank them). */
+  resize(w: number, h: number, dpr: number): boolean {
+    const pw = Math.round(w * dpr), ph = Math.round(h * dpr);
+    if (w === this.width && h === this.height && dpr === this.dpr && this.scene.width === pw && this.scene.height === ph) return false;
     this.width = w; this.height = h; this.dpr = dpr;
     for (const c of [this.scene, this.overlay]) {
-      c.width = Math.round(w * dpr);
-      c.height = Math.round(h * dpr);
+      c.width = pw;
+      c.height = ph;
       c.style.width = w + 'px';
       c.style.height = h + 'px';
     }
+    return true;
   }
 
   toDoc(sx: number, sy: number): Vec {
