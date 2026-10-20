@@ -312,7 +312,7 @@ function boxDistance(a: Rect, b: Rect): number {
 /** Boxes of an atom's label text, as the drawing lays it out. */
 function labelBoxesOf(doc: Doc, measure: Measure): (a: Atom) => Rect[] {
   return (a) => {
-    if (a.attach) return [];
+    if (a.attach || a.multi) return [];
     const spec = labelSpec(a.z, a.label, a.charge, a.isotope, doc.valenceSum(a.id), doc.degree(a.id), !a.hideCharge, !!a.showCarbon);
     if (!spec) return [];
     if (a.supDigits) spec.supDigits = true;
@@ -704,7 +704,7 @@ export function bondStereoPlace(doc: Doc, b: Bond, text: string, measure: Measur
 export function setStereoShown(doc: Doc, atoms: Iterable<number>, bonds: Iterable<number>, show: boolean): void {
   for (const id of atoms) {
     const a = doc.atoms.get(id);
-    if (!a || a.attach) continue;
+    if (!a || a.attach || a.multi) continue;
     if (show && !a.showStereo) doc.updateAtom(id, { showStereo: true });
     if (!show && (a.showStereo || a.stereoLabel)) doc.updateAtom(id, { showStereo: undefined, stereoLabel: undefined });
   }

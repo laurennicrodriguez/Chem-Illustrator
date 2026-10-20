@@ -82,7 +82,7 @@ export function parseOwnTemplates(raw: unknown): Template[] {
  * bond when it has one.
  */
 export function templateFromAtoms(doc: Doc, ids: Iterable<number>, name: string, id: string): Template | null {
-  const list = [...ids].filter((i) => { const a = doc.atoms.get(i); return !!a && !a.attach; });
+  const list = [...ids].filter((i) => { const a = doc.atoms.get(i); return !!a && !a.attach && !a.multi; });
   if (!list.length) return null;
   const index = new Map(list.map((i, k) => [i, k]));
   const bonds = [...doc.bonds.values()].filter((b) => index.has(b.a1) && index.has(b.a2));

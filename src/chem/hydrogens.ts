@@ -126,7 +126,7 @@ export function addExplicitHydrogens(doc: Doc, ids: Iterable<number>): number {
   let added = 0;
   for (const id of [...ids]) {
     const a = doc.atoms.get(id);
-    if (!a || a.z === 1 || a.attach || a.label) continue;
+    if (!a || a.z === 1 || a.attach || a.multi || a.label) continue;
     const n = implicitHydrogens(a.z, doc.valenceSum(id), a.charge);
     for (let i = 0; i < n; i++) { sprout(doc, id, 1, 'solid', 1); added++; }
   }

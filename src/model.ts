@@ -5,6 +5,7 @@
 import { Vec, Rect } from './geom';
 import { DocStyle, ACS_1996 } from './style';
 import { arrowPoints, gluePoint } from './objects';
+import { isMetal, isMetalLabel, lowestValence } from './chem/elements';
 
 /** 'dative' is a coordinate bond, drawn as an arrow from the donor (a1) to the acceptor (a2). */
 export type BondDisplay = 'solid' | 'wedge' | 'hashWedge' | 'hash' | 'bold' | 'dash' | 'wavy' | 'dative';
@@ -66,6 +67,24 @@ export interface Atom {
    * labelled &1) or are one form that isn't known ('or', labelled or1).
    */
   enhStereo?: EnhancedStereo;
+  /**
+   * A multicentre point (ChemDraw's MultiAttachment node): not an atom but the middle of these
+   * atoms together, the ring or π-bond a metal is bonded to all at once (η⁵-C₅H₅, η²-alkene,
+   * η³-allyl, an agostic C–H). A bond to it is a hapto bond, ηⁿ with n the number of atoms. It
+   * sits at their centre, follows them when they move, and goes when fewer than two are left.
+   */
+  multi?: number[];
+}
+
+/** A metal atom: a metal element, or a label written for one (Pd, PdCl2, LnPd, [M]). */
+export function isMetalAtom(a: Atom | undefined): boolean {
+  if (!a || a.multi || a.attach) return false;
+  return a.label ? isMetalLabel(a.label) : isMetal(a.z);
+}
+
+/** A multicentre point standing for several atoms at once (see Atom.multi), rather than an atom. */
+export function isCentre(a: Atom | undefined): boolean {
+  return !!a?.multi;
 }
 
 export interface EnhancedStereo {
@@ -134,6 +153,11 @@ export interface Bond {
   z?: number;
   /** The person chose to ignore this bond's chemistry warnings. */
   ignoreWarnings?: boolean;
+  /**
+   * A hapto bond (to a multicentre point) drawn as a line from the metal to each of the point's
+   * atoms, rather than one line to their middle.
+   */
+  spokes?: boolean;
   /** Show this double bond's E/Z label when it has one. */
   showStereo?: boolean;
   /** Where the E/Z label sits, relative to the middle of the bond. */
@@ -643,6 +667,8 @@ export class Doc {
   shapes = new Map<number, Shape>();
   /** Bonds at each atom. */
   adj = new Map<number, number[]>();
+  /** The multicentre points (Atom.multi) each atom belongs to. */
+  centresOf = new Map<number, number[]>();
   /** Incremented on every change; the renderer and analysis use it to know when to redo work. */
   version = 0;
   /** Atoms and bonds changed since the renderer last looked (it caches layout per atom and bond). */
@@ -710,6 +736,7 @@ export class Doc {
   commit(): void {
     const tx = this.tx;
     if (!tx) return;
+    this.dropLoneCentres(tx.before);
     if (tx.before.size && this.beforeCommit) this.beforeCommit(new Map(tx.before));
     this.tx = null;
     if (tx.before.size === 0) return;
@@ -718,6 +745,20 @@ export class Doc {
     if (this.undoStack.length > 500) this.undoStack.shift();
     this.redoStack.length = 0;
     this.onCommit?.();
+  }
+
+  /**
+   * Multicentre points left with no bond (the bond to the metal erased, or the metal) go too,
+   * at the end of the step, so a step that moves their bonds elsewhere keeps them.
+   */
+  private dropLoneCentres(before: ReadonlyMap<string, Entity | null>): void {
+    const ends = new Set<number>();
+    for (const [key, was] of before) {
+      if (key[0] !== 'b') continue;
+      const now = this.bonds.get(Number(key.slice(1)));
+      for (const b of [was as Bond | null, now]) if (b) { ends.add(b.a1); ends.add(b.a2); }
+    }
+    for (const id of ends) if (this.atoms.get(id)?.multi && !this.degree(id)) this.removeAtom(id);
   }
 
   /** Run `fn` inside one undoable step. */
@@ -845,6 +886,13 @@ export class Doc {
       for (const bid of this.adj.get(a.id) ?? []) {
         const b = this.bonds.get(bid), q = b && this.atoms.get(b.a1 === a.id ? b.a2 : b.a1);
         if (q) span(a, q);
+        // a hapto bond may be drawn to each of its point's atoms
+        for (const m of q?.multi ?? []) { const r = this.atoms.get(m); if (r) span(a, r); }
+      }
+      // and the bonds to a multicentre point this atom is part of
+      for (const c of this.centresOf.get(a.id) ?? []) for (const bid of this.adj.get(c) ?? []) {
+        const b = this.bonds.get(bid), q = b && this.atoms.get(b.a1 === c ? b.a2 : b.a1);
+        if (q) span(a, q);
       }
     } else if (kind === 'b') {
       const b = e as Bond;
@@ -852,6 +900,7 @@ export class Doc {
       if (p && q) span(p, q);
       else if (p) pt(p.x, p.y);
       else if (q) pt(q.x, q.y);
+      for (const [x, y] of [[p, q], [q, p]]) for (const m of x?.multi ?? []) { const r = this.atoms.get(m); if (r && y) span(y, r); }
     } else if (kind === 'c') this.dirtyCaptions.push(e as Caption);
     else if (kind === 'r') {
       const r = e as Arrow;
@@ -879,10 +928,12 @@ export class Doc {
       // a moved or removed atom may have shortened the longest bond
       const was = this.atoms.get(id);
       if (was && (!e || (e as Atom).x !== was.x || (e as Atom).y !== was.y) && this.adj.get(id)?.length) this.bondLenStale = true;
+      if (was?.multi) this.unlinkCentre(was);
       if (e) {
         this.atoms.set(id, e as Atom);
         if (!this.adj.has(id)) this.adj.set(id, []);
         this.indexAtom(e as Atom);
+        if ((e as Atom).multi) this.linkCentre(e as Atom);
       } else {
         this.atoms.delete(id);
         this.unindexAtom(id);
@@ -919,6 +970,31 @@ export class Doc {
       else m.delete(id);
     }
     if (id >= this.nextId) this.nextId = id + 1;
+  }
+
+  private linkCentre(c: Atom): void {
+    for (const m of c.multi!) {
+      const l = this.centresOf.get(m);
+      if (!l) this.centresOf.set(m, [c.id]);
+      else if (!l.includes(c.id)) l.push(c.id);
+    }
+  }
+
+  private unlinkCentre(c: Atom): void {
+    for (const m of c.multi!) {
+      const l = this.centresOf.get(m);
+      if (!l) continue;
+      const i = l.indexOf(c.id);
+      if (i >= 0) l.splice(i, 1);
+      if (!l.length) this.centresOf.delete(m);
+    }
+  }
+
+  /** The middle of a multicentre point's atoms, where it sits (null when none of them are left). */
+  centreOf(c: Pick<Atom, 'multi'>): Vec | null {
+    let x = 0, y = 0, n = 0;
+    for (const id of c.multi ?? []) { const a = this.atoms.get(id); if (a) { x += a.x; y += a.y; n++; } }
+    return n ? { x: x / n, y: y / n } : null;
   }
 
   private attach(atomId: number, bondId: number): void {
@@ -1040,9 +1116,12 @@ export class Doc {
     if (!a) return;
     this.touch('a', id);
     const n = { ...a, ...patch, id };
+    // a multicentre point always sits in the middle of its atoms, wherever it is asked to go
+    if (n.multi) { const c = this.centreOf(n); if (c) { n.x = c.x; n.y = c.y; } }
     this.rawSet('a', id, n);
-    if (patch.x !== undefined || patch.y !== undefined) {
+    if (n.x !== a.x || n.y !== a.y || patch.multi) {
       for (const bid of this.adj.get(id) ?? []) this.noteBondLength(this.bonds.get(bid)!);
+      for (const c of [...(this.centresOf.get(id) ?? [])]) this.updateAtom(c, {});
     }
   }
 
@@ -1056,8 +1135,17 @@ export class Doc {
   removeAtom(id: number): void {
     if (!this.atoms.has(id)) return;
     for (const bid of [...(this.adj.get(id) ?? [])]) this.removeBond(bid);
+    const centres = [...(this.centresOf.get(id) ?? [])];
     this.touch('a', id);
     this.rawSet('a', id, null);
+    // a multicentre point loses the atom, and goes once fewer than two are left
+    for (const c of centres) {
+      const ca = this.atoms.get(c);
+      if (!ca?.multi) continue;
+      const rest = ca.multi.filter((m) => m !== id && this.atoms.has(m));
+      if (rest.length < 2) this.removeAtom(c);
+      else this.updateAtom(c, { multi: rest });
+    }
   }
 
   addBond(a1: number, a2: number, order = 1, display: BondDisplay = 'solid', extra: Partial<Bond> = {}): Bond {
@@ -1165,7 +1253,7 @@ export class Doc {
     this.source = other.source;
     this.nextId = Math.max(this.nextId, other.nextId);
     this.atoms.clear(); this.bonds.clear(); this.captions.clear(); this.arrows.clear(); this.shapes.clear();
-    this.adj.clear(); this.grid.clear(); this.atomCell.clear(); this.maxBondLen = 0; this.bondLenStale = false;
+    this.adj.clear(); this.centresOf.clear(); this.grid.clear(); this.atomCell.clear(); this.maxBondLen = 0; this.bondLenStale = false;
     for (const a of other.atoms.values()) this.rawSet('a', a.id, clone(a));
     for (const b of other.bonds.values()) this.rawSet('b', b.id, clone(b));
     for (const c of other.captions.values()) this.rawSet('c', c.id, clone(c));
@@ -1186,7 +1274,7 @@ export class Doc {
    */
   swap(other: Doc): void {
     if (this.tx || other.tx) throw new Error('Cannot swap documents in the middle of an edit');
-    const fields = ['style', 'background', 'source', 'textStyles', 'atoms', 'bonds', 'captions', 'arrows', 'shapes', 'adj',
+    const fields = ['style', 'background', 'source', 'textStyles', 'atoms', 'bonds', 'captions', 'arrows', 'shapes', 'adj', 'centresOf',
       'grid', 'atomCell', 'maxBondLen', 'bondLenStale', 'undoStack', 'redoStack'] as const;
     const a = this as unknown as Record<string, unknown>, b = other as unknown as Record<string, unknown>;
     for (const f of fields) { const t = a[f]; a[f] = b[f]; b[f] = t; }
@@ -1262,10 +1350,27 @@ export class Doc {
     return this.adj.get(atomId)?.length ?? 0;
   }
 
-  /** Bond orders plus any radical electrons: what an atom's hydrogens are worked out from. */
+  /**
+   * Bond orders plus any radical electrons: what an atom's hydrogens are worked out from. Bonds
+   * to metals count only as far as the atom's lowest valence has room for them, as the rest are
+   * its lone pairs given to the metal: PPh₃ on a metal stays P (not PH), a chloride bridging two
+   * metals stays Cl, and a methyl on one is still CH₃.
+   */
   valenceSum(atomId: number): number {
     const a = this.atoms.get(atomId);
-    return this.bondOrderSum(atomId) + (a ? radicalElectrons(a) : 0);
+    const rad = a ? radicalElectrons(a) : 0;
+    let own = 0, toMetal = 0;
+    for (const bid of this.adj.get(atomId) ?? []) {
+      const b = this.bonds.get(bid)!;
+      if (b.display === 'dative') continue;
+      if (isMetalAtom(this.atoms.get(b.a1 === atomId ? b.a2 : b.a1))) toMetal += b.order;
+      else own += b.order;
+    }
+    if (toMetal && a && !a.label && !isMetalAtom(a)) {
+      const low = lowestValence(a.z, a.charge);
+      if (low !== undefined) toMetal = Math.min(toMetal, Math.max(0, low - Math.ceil(own - 1e-6) - rad));
+    }
+    return own + toMetal + rad;
   }
 
   bondOrderSum(atomId: number): number {
@@ -1287,6 +1392,11 @@ export class Doc {
       const id = stack.pop()!;
       for (const n of this.neighbors(id)) {
         if (!seen.has(n.id)) { seen.add(n.id); stack.push(n.id); }
+      }
+      // a metal bonded to a ring through its middle is one structure with it
+      const a = this.atoms.get(id);
+      for (const m of [...(a?.multi ?? []), ...(this.centresOf.get(id) ?? [])]) {
+        if (!seen.has(m) && this.atoms.has(m)) { seen.add(m); stack.push(m); }
       }
     }
     return seen;

@@ -27,7 +27,8 @@ export function rGroupsOf(doc: Doc, atomIds: Iterable<number>): { label: string;
  * an atom label is (Me, Ph, OMe, CO2Et, Cl, H…); an empty one leaves the R label as it is.
  */
 export function substituted(doc: Doc, atomIds: Iterable<number>, values: Record<string, string>): MolExport {
-  const ids = new Set([...atomIds].filter((id) => doc.atoms.has(id)));
+  // (a ring's middle, where a metal is bonded, is not an atom)
+  const ids = new Set([...atomIds].filter((id) => doc.atoms.has(id) && !doc.atoms.get(id)!.multi));
   const tmp = new Doc();
   tmp.style = doc.style;
   const map = new Map<number, number>();

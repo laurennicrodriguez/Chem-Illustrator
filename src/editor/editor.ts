@@ -412,6 +412,8 @@ export class Editor {
     let bd = Infinity;
     // structures locked (Slides): clicks go through them to the text and shapes
     if (!this.structuresLocked) for (const a of doc.atomsNear(p, Math.max(atomR, L * 2))) {
+      // a ring's middle (where a metal's hapto bond ends) is picked through its bond
+      if (a.multi) continue;
       const d = dist(a, p);
       const k = a.s ?? 1;
       let hit = d <= atomR * k;

@@ -42,7 +42,8 @@ const f = (v: number, w: number, d = 4) => v.toFixed(d).padStart(w);
 const i3 = (v: number) => String(v).padStart(3);
 
 export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = '', opts: MolfileOptions = {}): MolExport {
-  const ids = [...atomIds].filter((id) => doc.atoms.has(id));
+  // a ring's middle, where a metal is bonded (η⁵), is not an atom: it and its bonds are left out
+  const ids = [...atomIds].filter((id) => doc.atoms.has(id) && !doc.atoms.get(id)!.multi);
   const inSet = new Set(ids);
   const L = doc.style.bondLength || 14.4;
   const atoms: MAtom[] = [];

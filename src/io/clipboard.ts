@@ -47,13 +47,23 @@ export function extractDrawing(doc: Doc, sel: Selection | null): Doc {
     const b = doc.bonds.get(id);
     if (b) { atoms.add(b.a1); atoms.add(b.a2); }
   }
+  // a ring's middle comes with its atoms; and with the ring and the metal bonded to it, it comes too
+  for (const id of [...atoms]) for (const m of doc.atoms.get(id)?.multi ?? []) atoms.add(m);
+  if (sel) for (const id of [...atoms]) for (const c of doc.centresOf.get(id) ?? []) {
+    const ca = doc.atoms.get(c);
+    if (ca?.multi?.every((m) => atoms.has(m)) && doc.neighbors(c).some((n) => atoms.has(n.id))) atoms.add(c);
+  }
   if (sel) for (const b of doc.bonds.values()) if (atoms.has(b.a1) && atoms.has(b.a2)) bonds.add(b.id);
   let maxId = 0;
   const seen = (id: number) => { if (id > maxId) maxId = id; };
   out.bulk(() => {
     for (const id of atoms) {
       const a = doc.atoms.get(id);
-      if (a) { out.addAtom(a.x, a.y, a.z, structuredClone(a)); seen(id); }
+      if (!a) continue;
+      const copy = structuredClone(a);
+      if (copy.multi) copy.multi = copy.multi.filter((m) => atoms.has(m));
+      out.addAtom(a.x, a.y, a.z, copy);
+      seen(id);
     }
     for (const id of bonds) {
       const b = doc.bonds.get(id);
@@ -179,8 +189,14 @@ export function insertDrawing(doc: Doc, src: Doc, center: Vec, label = 'Paste'):
   const dx = center.x - (b.x1 + b.x2) / 2, dy = center.y - (b.y1 + b.y2) / 2;
   const ids = new Map<number, number>();
   doc.edit(label, () => {
-    for (const a of src.atoms.values()) {
+    // (multicentre points after the atoms they stand for, so they can point at the new ones)
+    const atoms = [...src.atoms.values()];
+    for (const a of [...atoms.filter((x) => !x.multi), ...atoms.filter((x) => x.multi)]) {
       const { id, ...rest } = structuredClone(a);
+      if (rest.multi) {
+        rest.multi = rest.multi.map((m) => ids.get(m)).filter((m): m is number => m !== undefined);
+        if (rest.multi.length < 2) continue;
+      }
       const n = doc.addAtom(a.x + dx, a.y + dy, a.z, { ...rest, x: a.x + dx, y: a.y + dy });
       ids.set(id, n.id);
       sel.atoms.add(n.id);

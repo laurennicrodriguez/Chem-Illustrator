@@ -1126,8 +1126,11 @@ function merge(runs: TextRun[]): TextRun[] {
 /** Add a drawing to `doc`, with every position passed through `map`. */
 export function mergeDrawing(doc: Doc, src: Doc, map: (p: Vec) => Vec): void {
   const ids = new Map<number, number>();
-  for (const a of src.atoms.values()) {
+  // (multicentre points after the atoms they stand for)
+  const atoms = [...src.atoms.values()];
+  for (const a of [...atoms.filter((x) => !x.multi), ...atoms.filter((x) => x.multi)]) {
     const { id, ...rest } = structuredClone(a);
+    if (rest.multi) rest.multi = rest.multi.map((m) => ids.get(m)).filter((m): m is number => m !== undefined);
     const p = map(a);
     ids.set(id, doc.addAtom(p.x, p.y, a.z, { ...rest, x: p.x, y: p.y }).id);
   }
