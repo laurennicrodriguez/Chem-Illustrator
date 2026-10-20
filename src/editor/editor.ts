@@ -6,6 +6,7 @@ import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, applyBase, caption
 import { CaptionEditor } from '../ui/caption-editor';
 import { geoDef, geoShapeStyle, moveSteps, traceSteps } from '../design/geo';
 import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
+import { fusions3d } from '../chem/fuse3d';
 import { styleFromFace, plainText } from '../richtext';
 import * as rt from '../richtext';
 import { applyFormat, formatWhole, type TextFormat } from '../text/format';
@@ -186,6 +187,19 @@ interface Drag {
   guide?: { box: Rect; targets: Rect[] };
   /** How far the selection has been moved so far. */
   applied?: Vec;
+  /** Drawing a template: the ways it can go here, and which one is picked (Tab, or the pointer). */
+  tpl?: { key: string; choices: TemplateChoice[]; index: number; manual: Vec | null };
+}
+
+/** One way a template can go: where its atoms land, and which are shared with the drawing. */
+interface TemplateChoice {
+  pl: Placement;
+  existing: Map<number, number>;
+  bondFrom?: number;
+  scale?: number;
+  noMerge?: boolean;
+  /** Shown while choosing (trans-fused, cis-fused). */
+  note?: string;
 }
 
 const HILITE = 'rgba(40, 120, 255, 0.28)';
@@ -533,6 +547,8 @@ export class Editor {
       const center = { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 };
       this.drag.rot = { snap: snapshot(this.doc, this.sel, this.measure()), center, from: angleOf(sub(p, center)), angle: 0 };
     }
+    // a template's outline shows where it will go while the mouse is held
+    if (e.button === 0 && this.tool.kind === 'template' && !handle && !rotating) this.requestOverlay();
     if (e.button === 1 || e.button === 2) {
       this.drag.mode = 'pan';
       this.drag.panOrigin = { ox: this.r.view.ox, oy: this.r.view.oy };
@@ -872,7 +888,7 @@ export class Editor {
         return;
       }
       case 'template': {
-        doc.edit('Template', () => this.placeTemplateAt(t.id, h, p, null, d.alt));
+        doc.edit('Template', () => this.placeTemplateAt(t.id, h, d.start, null, d.alt, d));
         this.changed();
         return;
       }
@@ -1022,39 +1038,39 @@ export class Editor {
   }
 
   /**
-   * Where a template goes. On a bond: fused along it, on its emptier side. On an atom: sharing
-   * it (rings, sugars) or joined to it by a new bond (amino acids; Alt swaps the two), lying
-   * away from the rest of the structure, or towards the pointer when dragged. Elsewhere: centred
-   * where clicked, turned towards the pointer when dragged (15° steps; Alt: any angle).
+   * The ways a template can go, best first. On a bond: fused along it; a 3-D template on a
+   * ring drawn in perspective joins the way real rings can (trans and cis for two chairs), and
+   * a flat one either way round on either side. On an atom: sharing it (rings, sugars) or
+   * joined to it by a new bond (amino acids; Alt swaps the two), lying away from the rest of the
+   * structure, or towards the pointer when dragged, as drawn or mirrored. Elsewhere: centred
+   * where clicked, turned towards the pointer when dragged (15° steps; Alt: any angle), as drawn
+   * or mirrored either way.
    */
-  private templatePlacement(t: Template, h: Hit, start: Vec, cursor: Vec | null, alt: boolean):
-    { pl: Placement; existing: Map<number, number>; bondFrom?: number; scale?: number } | null {
+  private templateChoices(t: Template, h: Hit, start: Vec, cursor: Vec | null, alt: boolean): TemplateChoice[] {
     const doc = this.doc;
-    const best = (cands: Placement[], ignore: Set<number>, prefer?: (pl: Placement) => number) => {
-      let pick: Placement | null = null, score = Infinity;
-      for (const pl of cands) {
-        const sc = crowdingOf(doc, t, pl, ignore) + (prefer?.(pl) ?? 0) + (pl.mirror ? 0.001 : 0);
-        if (sc < score - 1e-9) { score = sc; pick = pl; }
-      }
-      return pick;
-    };
+    const rank = (cands: Placement[], ignore: Set<number>, prefer?: (pl: Placement) => number) =>
+      cands.map((pl) => ({ pl, sc: crowdingOf(doc, t, pl, ignore) + (prefer?.(pl) ?? 0) + (pl.mirror ? 0.001 : 0) }))
+        .sort((a, b) => a.sc - b.sc).map((c) => c.pl);
     const nearest = (pl: Placement, i: number, ids: number[]) => {
       const q = templatePoints(t, pl)[i];
       return ids.reduce((m, id) => (dist(doc.atoms.get(id)!, q) < dist(doc.atoms.get(m)!, q) ? id : m));
     };
-    if (h && h.kind === 'bond' && t.fuse) {
+    if (h && h.kind === 'bond' && (t.fuse || t.z)) {
       const b = doc.bonds.get(h.id)!;
       const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
+      const in3d = fusions3d(doc, t, h.id);
+      if (in3d?.length) {
+        return in3d.map((f) => ({ pl: { origin: { x: 0, y: 0 }, scale: f.len, angle: 0, mirror: false, pts: f.pts }, existing: f.existing, scale: b.s, noMerge: true, ...(f.join ? { note: `${f.join}-fused` } : {}) }));
+      }
+      if (!t.fuse) return [];
       const n = perp(sub(q, p)), mid = mul(add(p, q), 0.5);
-      const towards = cursor ?? start;
-      // on a tie, the side the pointer is on
+      // on a tie, the side the click is on
       const side = (pl: Placement) => {
         const c = placePoint(pl, 0, 0);
-        return Math.sign(dot(sub(c, mid), n)) === Math.sign(dot(sub(towards, mid), n)) ? 0 : 0.01;
+        return Math.sign(dot(sub(c, mid), n)) === Math.sign(dot(sub(start, mid), n)) ? 0 : 0.01;
       };
-      const pl = best(fusePlacements(t, p, q), new Set([p.id, q.id]), side);
-      if (!pl) return null;
-      return { pl, existing: new Map([[t.fuse[0], nearest(pl, t.fuse[0], [p.id, q.id])], [t.fuse[1], nearest(pl, t.fuse[1], [p.id, q.id])]]), scale: b.s };
+      return rank(fusePlacements(t, p, q), new Set([p.id, q.id]), side).map((pl) => (
+        { pl, existing: new Map([[t.fuse![0], nearest(pl, t.fuse![0], [p.id, q.id])], [t.fuse![1], nearest(pl, t.fuse![1], [p.id, q.id])]]), scale: b.s }));
     }
     if (h && h.kind === 'atom') {
       const a = doc.atoms.get(h.id)!;
@@ -1062,21 +1078,106 @@ export class Editor {
       let byBond = (t.join === 'bond') !== alt;
       if (!byBond && doc.degree(a.id) >= 3) byBond = true;
       const dir = cursor && dist(cursor, a) > L * 0.3 ? norm(fromAngle(snapAngle(angleOf(sub(cursor, a))))) : byBond ? sproutDir(doc, a.id) : ringDir(doc, a.id);
-      const pl = best(atomPlacements(t, a, dir, L, byBond), new Set([a.id]));
-      if (!pl) return null;
-      return byBond ? { pl, existing: new Map(), bondFrom: a.id, scale: a.s } : { pl, existing: new Map([[t.attach, a.id]]), scale: a.s };
+      return rank(atomPlacements(t, a, dir, L, byBond), new Set([a.id])).map((pl) => (
+        byBond ? { pl, existing: new Map(), bondFrom: a.id, scale: a.s } : { pl, existing: new Map([[t.attach, a.id]]), scale: a.s }));
     }
     const L = doc.style.bondLength;
     let angle = 0;
     if (cursor && dist(cursor, start) > L * 0.3) angle = alt ? angleOf(sub(cursor, start)) : snap15(angleOf(sub(cursor, start)));
-    return { pl: freePlacement(start, L, angle), existing: new Map() };
+    // as drawn, mirrored top to bottom, mirrored left to right, and turned round
+    return [[false, 0], [true, 0], [true, Math.PI], [false, Math.PI]].map(([mirror, turn]) => (
+      { pl: { ...freePlacement(start, L, angle + (turn as number)), mirror: mirror as boolean }, existing: new Map() }));
   }
 
-  private placeTemplateAt(id: string, h: Hit, start: Vec, cursor: Vec | null, alt: boolean): void {
+  /**
+   * The way a template goes for this press of the mouse: the one picked with Tab, or (once the
+   * pointer has moved off the bond) the fusion lying nearest the pointer, or the best.
+   */
+  private templatePlacement(t: Template, h: Hit, start: Vec, cursor: Vec | null, alt: boolean, d?: Drag): TemplateChoice | null {
+    const key = `${t.id}|${h?.kind}:${h?.id}|${alt}|${h?.kind === 'bond' ? '' : cursor ? `${Math.round(cursor.x)},${Math.round(cursor.y)}` : ''}|${this.doc.version}`;
+    let pick = d?.tpl;
+    const choices = pick?.key === key ? pick.choices : this.templateChoices(t, h, start, cursor, alt);
+    if (!choices.length) return null;
+    if (d) {
+      if (!pick) pick = d.tpl = { key, choices, index: 0, manual: null };
+      pick.key = key;
+      pick.choices = choices;
+      if (pick.index >= choices.length) pick.index = 0;
+      const L = h?.kind === 'bond' ? dist(this.doc.atoms.get(this.doc.bonds.get(h.id)!.a1)!, this.doc.atoms.get(this.doc.bonds.get(h.id)!.a2)!) : this.doc.style.bondLength;
+      // Tab's pick holds until the pointer moves on
+      if (pick.manual && cursor && dist(cursor, pick.manual) > L * 0.6) pick.manual = null;
+      if (!pick.manual && h?.kind === 'bond' && cursor && dist(cursor, start) > L * 0.35) {
+        // the fusion whose new atoms lie nearest the pointer
+        let best = 0, bestD = Infinity;
+        choices.forEach((c, i) => {
+          const pts = templatePoints(t, c.pl).filter((_, k) => !c.existing.has(k));
+          if (!pts.length) return;
+          const cx = pts.reduce((s, q) => s + q.x, 0) / pts.length, cy = pts.reduce((s, q) => s + q.y, 0) / pts.length;
+          const dd = Math.hypot(cx - cursor.x, cy - cursor.y);
+          if (dd < bestD) { bestD = dd; best = i; }
+        });
+        pick.index = best;
+      }
+      return choices[pick.index];
+    }
+    return choices[0];
+  }
+
+  /** Tab and Shift+Tab while the mouse is held with a template: the next (or last) way it can go. */
+  private cycleTemplate(step: 1 | -1): boolean {
+    const d = this.drag;
+    if (!d || d.button !== 0 || this.tool.kind !== 'template' || (d.mode !== 'none' && d.mode !== 'draw')) return false;
+    const t = templateById(this.tool.id);
+    if (!t) return false;
+    const place = this.templatePlacement(t, d.hit, d.start, d.moved ? d.last : null, d.alt, d);
+    const pick = d.tpl;
+    if (!place || !pick || pick.choices.length < 2) return true;
+    pick.index = (pick.index + step + pick.choices.length) % pick.choices.length;
+    pick.manual = d.last;
+    this.requestOverlay();
+    return true;
+  }
+
+  /**
+   * The rings that can be fused onto a bond of a ring drawn in 3-D (right-click > Fuse a Ring
+   * Here): each template and the ways it can join, trans and cis. Empty unless the bond's ring
+   * reads as a conformer.
+   */
+  ringFusions(bondId: number, ids: string[]): { id: string; name: string; index: number; note: string }[] {
+    const out: { id: string; name: string; index: number; note: string }[] = [];
+    if (!this.doc.bonds.has(bondId)) return out;
+    for (const id of ids) {
+      const t = templateById(id);
+      const fs = t && fusions3d(this.doc, t, bondId);
+      const notes = fs?.map((f, index) => (f.join ? `${f.join}-fused` : `way ${index + 1}`)) ?? [];
+      // two cis fusions (either ring bond axial): number them
+      notes.forEach((note, index) => {
+        const same = notes.filter((n) => n === note).length;
+        out.push({ id, name: t!.name, index, note: same > 1 ? `${note} ${notes.slice(0, index + 1).filter((n) => n === note).length}` : note });
+      });
+    }
+    return out;
+  }
+
+  /** Fuse a template onto a bond the way ringFusions() listed it. */
+  fuseRing(bondId: number, id: string, index: number): boolean {
     const t = templateById(id);
-    const place = t && this.templatePlacement(t, h, start, cursor, alt);
+    const b = this.doc.bonds.get(bondId);
+    const f = t && b && fusions3d(this.doc, t, bondId)?.[index];
+    if (!t || !b || !f) return false;
+    this.doc.edit('Fuse ring', () => {
+      const ids = placeTemplate(this.doc, t, { origin: { x: 0, y: 0 }, scale: f.len, angle: 0, mirror: false, pts: f.pts }, { existing: f.existing, scale: b.s, noMerge: true });
+      this.lastEdited = ids[t.attach];
+    });
+    this.changed();
+    return true;
+  }
+
+  private placeTemplateAt(id: string, h: Hit, start: Vec, cursor: Vec | null, alt: boolean, d?: Drag): void {
+    const t = templateById(id);
+    const place = t && this.templatePlacement(t, h, start, cursor, alt, d);
     if (!t || !place) return;
-    const ids = placeTemplate(this.doc, t, place.pl, { existing: place.existing, bondFrom: place.bondFrom, scale: place.scale });
+    const ids = placeTemplate(this.doc, t, place.pl, { existing: place.existing, bondFrom: place.bondFrom, scale: place.scale, noMerge: place.noMerge });
     this.lastEdited = ids[t.attach];
   }
 
@@ -1164,7 +1265,7 @@ export class Editor {
       const r = { x1: Math.min(d.start.x, p.x), y1: Math.min(d.start.y, p.y), x2: Math.max(d.start.x, p.x), y2: Math.max(d.start.y, p.y) };
       if (r.y2 - r.y1 >= 4) this.addBrackets(r, t.bracket);
     } else if (t.kind === 'template') {
-      doc.edit('Template', () => this.placeTemplateAt(t.id, h, d.start, p, d.alt));
+      doc.edit('Template', () => this.placeTemplateAt(t.id, h, d.start, p, d.alt, d));
     } else if (t.kind === 'fragment') {
       this.onFragment(d.start, p, crossedBonds(doc, d.start, p));
       this.requestScene();
@@ -2298,6 +2399,8 @@ export class Editor {
     if (e.defaultPrevented || target?.closest?.('dialog, .menu, .flyout')) return;
     const chord = chordOf(e);
     if (!chord) return;
+    // Tab while a template is held: the next way it can go
+    if ((chord === 'Tab' || chord === 'Shift+Tab') && this.cycleTemplate(chord === 'Tab' ? 1 : -1)) { e.preventDefault(); return; }
     // in the middle of a drag (its step still open), commands wait: Undo or a tab switch now
     // would act on a half-made change
     if (this.drag?.moved && chord !== 'Escape' && !/^(Shift|Control|Alt|Meta)$/.test(e.key)) { e.preventDefault(); return; }
@@ -3352,7 +3455,9 @@ export class Editor {
     }
     // previews of what a drag will draw
     const d = this.drag;
-    if (d && d.moved) {
+    // a template shows where it will go as soon as the mouse is pressed
+    const pressing = !!d && !d.moved && d.button === 0 && d.mode === 'none' && this.tool.kind === 'template';
+    if (d && (d.moved || pressing)) {
       ctx.strokeStyle = PREVIEW;
       ctx.lineWidth = Math.max(doc.style.lineWidth, px * 1.2);
       ctx.lineCap = 'round';
@@ -3362,7 +3467,7 @@ export class Editor {
         ctx.strokeStyle = mk.marquee;
         ctx.strokeRect(Math.min(d.start.x, d.last.x), Math.min(d.start.y, d.last.y), Math.abs(d.last.x - d.start.x), Math.abs(d.last.y - d.start.y));
         ctx.setLineDash([]);
-      } else if (d.mode === 'draw') {
+      } else if (d.mode === 'draw' || pressing) {
         this.drawPreview(ctx, d);
       }
     }
@@ -3466,13 +3571,36 @@ export class Editor {
       const r = { x1: Math.min(d.start.x, d.last.x), y1: Math.min(d.start.y, d.last.y), x2: Math.max(d.start.x, d.last.x), y2: Math.max(d.start.y, d.last.y) };
       for (const b of bracketsAround(r, t.bracket)) outlineShape(ctx, { id: 0, ...b });    } else if (t.kind === 'template') {
       const tp = templateById(t.id);
-      const place = tp && this.templatePlacement(tp, h, d.start, d.last, d.alt);
+      const place = tp && this.templatePlacement(tp, h, d.start, d.moved ? d.last : null, d.alt, d);
       if (tp && place) {
         const pts = templatePoints(tp, place.pl);
         ctx.beginPath();
         for (const [a, b] of tp.bonds) { ctx.moveTo(pts[a].x, pts[a].y); ctx.lineTo(pts[b].x, pts[b].y); }
         if (place.bondFrom !== undefined) { const f = doc.atoms.get(place.bondFrom)!; ctx.moveTo(f.x, f.y); ctx.lineTo(pts[tp.attach].x, pts[tp.attach].y); }
+        for (const [kind, x1, y1, x2, y2] of tp.shapes ?? []) {
+          const a = placePoint(place.pl, x1, y1), b = placePoint(place.pl, x2, y2);
+          if (kind === 'oval') { const r = dist(a, b) / 2 / Math.SQRT2; ctx.moveTo((a.x + b.x) / 2 + r, (a.y + b.y) / 2); ctx.arc((a.x + b.x) / 2, (a.y + b.y) / 2, r, 0, Math.PI * 2); } else { ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); }
+        }
         ctx.stroke();
+        // how many ways there are, and how to go through them
+        const pick = d.tpl;
+        if (pick && pick.choices.length > 1) {
+          const px = 1 / this.r.view.scale;
+          const text = `${place.note ? place.note + ' · ' : ''}${pick.index + 1} of ${pick.choices.length} · Tab: next`;
+          ctx.save();
+          ctx.font = `${11 * px}px system-ui, sans-serif`;
+          const w = ctx.measureText(text).width;
+          // under the outline and the structure it joins, so it hides neither
+          const near = [...pts];
+          const from = h?.kind === 'bond' ? doc.bonds.get(h.id)?.a1 : h?.kind === 'atom' ? h.id : undefined;
+          if (from !== undefined) for (const id of doc.fragmentOf(from)) near.push(doc.atoms.get(id)!);
+          const at = { x: Math.min(...pts.map((q) => q.x)), y: Math.max(...near.map((q) => q.y), d.last.y) + 22 * px };
+          ctx.fillStyle = 'rgba(255,255,255,0.92)';
+          ctx.fillRect(at.x - 4 * px, at.y - 11 * px, w + 8 * px, 15 * px);
+          ctx.fillStyle = PREVIEW;
+          ctx.fillText(text, at.x, at.y);
+          ctx.restore();
+        }
       }
     }
   }

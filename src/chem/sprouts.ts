@@ -6,6 +6,7 @@ import type { Doc, Atom, BondDisplay } from '../model';
 import { Vec, add, sub, mul, norm, dist, angleOf, fromAngle, DEG } from '../geom';
 import { sproutDir, sproutPair, sprout, bondTo, bondLength, ringOnAtom, ringDir, placeRing } from './chemgeom';
 import { templateById, fusePlacements, crowdingOf, placeTemplate } from './templates';
+import { fusions3d } from './fuse3d';
 
 export type SproutKind =
   | 'bond' | 'ring-bond' | 'carbonyl' | 'phenyl' | 'wedge' | 'hash-wedge' | 'cyclohexyl' | 'cyclopentyl'
@@ -150,12 +151,19 @@ export function sproutGroup(doc: Doc, id: number, kind: SproutKind): number | nu
 
 /**
  * Fuse a chair cyclohexane onto a bond: `second` picks the other chair (ChemDraw's 9 and 0).
- * The chair goes on whichever way round is least crowded. Call inside an edit.
+ * On a bond of a ring drawn as a chair, 9 fuses it trans and 0 cis; elsewhere the chair goes on
+ * whichever way round is least crowded. Call inside an edit.
  */
 export function fuseChair(doc: Doc, bondId: number, second: boolean): number[] | null {
   const t = templateById('chair');
   const b = doc.bonds.get(bondId);
   if (!t?.fuse || !b) return null;
+  // on a ring drawn as a chair (or other conformer): the best fusion in 3-D (trans), or the next (cis)
+  const in3d = fusions3d(doc, t, bondId);
+  if (in3d?.length) {
+    const f = in3d[second && in3d.length > 1 ? 1 : 0];
+    return placeTemplate(doc, t, { origin: { x: 0, y: 0 }, scale: f.len, angle: 0, mirror: false, pts: f.pts }, { existing: f.existing, scale: b.s, noMerge: true });
+  }
   const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
   const ends = [[b.a1, b.a2], [b.a2, b.a1]];
   let best: { pl: ReturnType<typeof fusePlacements>[number]; ends: number[]; crowd: number } | null = null;

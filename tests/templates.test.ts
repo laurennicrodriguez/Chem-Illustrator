@@ -27,13 +27,15 @@ describe('template data', () => {
         expect(b).toBeLessThan(n);
         expect([1, 2, 3]).toContain(o);
         const d = Math.hypot(t.atoms[a][0] - t.atoms[b][0], t.atoms[a][1] - t.atoms[b][1]);
-        expect(d).toBeGreaterThan(0.45);
+        expect(d).toBeGreaterThan(t.z ? 0.25 : 0.45);
         // Haworth rings are drawn wide
         expect(d).toBeLessThan(t.group === 'sugars' ? 2.2 : 1.6);
       }
-      // no two atoms on top of each other
-      for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
-        expect(Math.hypot(t.atoms[i][0] - t.atoms[j][0], t.atoms[i][1] - t.atoms[j][1])).toBeGreaterThan(0.3);
+      // no two atoms on top of each other (shapes seen in perspective may come closer; C60's
+      // far side lies behind its near side)
+      const apart = t.z ? 0.12 : 0.3;
+      if (t.id !== 'c60') for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+        expect(Math.hypot(t.atoms[i][0] - t.atoms[j][0], t.atoms[i][1] - t.atoms[j][1])).toBeGreaterThan(apart);
       }
       expect(t.attach).toBeLessThan(n);
       if (t.fuse) expect(t.bonds.some(([a, b]) => (a === t.fuse![0] && b === t.fuse![1]) || (a === t.fuse![1] && b === t.fuse![0]))).toBe(true);

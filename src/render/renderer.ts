@@ -7,7 +7,7 @@
 
 import { Doc, Atom, Bond, Arrow, Caption, Shape, PICTURE_SHADOWS, pictureRadius, applyBase, captionBase, enhancedText, CHIRAL_FLAGS, flagTextSize, type TextBase, type HighlightStyle } from '../model';
 import { fullStyle, highlightPieces, highlightSizes, movePieces, softRings, tracePieces, type Piece } from './highlight';
-import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
+import { ellipseArc, isCircleRing, ringCircle, ringsThroughBond, type RingCircle } from '../chem/aromatic';
 import { crossingGapsCached } from '../chem/crossing';
 import { FADE, tint } from '../colours';
 import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, angleOf, arcCenter, fromAngle, turnedCorners, DEG } from '../geom';
@@ -67,7 +67,7 @@ interface BondCache {
   trim1: number;
   trim2: number;
   /** An aromatic bond drawn with a circle: the circles of the rings it is in. */
-  circles?: { center: Vec; radius: number }[];
+  circles?: RingCircle[];
 }
 
 let mctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
@@ -771,7 +771,12 @@ export class Renderer {
     // that faces this bond
     if (b.order === 1.5 && b.circle) {
       line(b.display === 'bold' ? bold : thin, s, e);
-      for (const { center, radius } of this.bondInfo(doc, b).circles ?? []) {
+      for (const { center, radius, ellipse } of this.bondInfo(doc, b).circles ?? []) {
+        if (ellipse) {
+          // a ring seen at an angle: its circle is an ellipse
+          ellipseArc(center, ellipse, p, q).forEach((pt, k) => (k ? thin.lineTo(pt.x, pt.y) : thin.moveTo(pt.x, pt.y)));
+          continue;
+        }
         const a1 = angleOf(sub(p, center)), a2 = angleOf(sub(q, center));
         let da = a2 - a1;
         while (da > Math.PI) da -= 2 * Math.PI;

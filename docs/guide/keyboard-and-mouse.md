@@ -82,7 +82,7 @@ If several atoms are selected and you point at one of them, a label key labels t
 | `h` | Hashed wedge (again to reverse) | `y` | Wavy |
 | Shift+H | Hashed | `l` / `c` / `r` | Double bond: second line left, centred, right |
 | `a` | Fuse benzene | `z` | Fuse cyclopentadiene |
-| `4` to `8` | Fuse a 4- to 8-membered ring | `9` / `0` | Fuse a chair cyclohexane (either way) |
+| `4` to `8` | Fuse a 4- to 8-membered ring | `9` / `0` | Fuse a chair cyclohexane (trans / cis on a chair) |
 | `/` or `?` | The bond's settings in the Style panel | `g` | Select the bond |
 | Delete or Backspace | Delete the bond | Arrow keys | Move the highlight |
 
@@ -186,6 +186,7 @@ Changes work straight away and are saved in the settings file; the window shows 
 - **Shift while dragging** keeps the move straight across or straight up and down.
 - **Alt while dragging** turns off the alignment guides, so you can move freely.
 - **Alt while drawing** a bond, arrow or line lets it point at any angle instead of 15° steps (and ignores fixed bond lengths).
+- **Holding the mouse with a template** on a bond shows a blue outline of where it will go. Move the pointer, or press **Tab** / **Shift+Tab**, to try the other ways it can join (trans or cis for conformers), and release to place it. See [Fusing conformers](drawing.md#fusing-conformers).
 
 ### Turning
 

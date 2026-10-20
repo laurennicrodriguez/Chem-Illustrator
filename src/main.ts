@@ -257,10 +257,10 @@ const OWN_PALETTE: PaletteDef = {
 };
 
 // Template palettes, one per kind of structure
-const templatePalette = (group: Template['group'], palette: string, title: string, columns: number, iconSize?: number): PaletteDef => ({
+const templatePalette = (group: Template['group'] | Template['group'][], palette: string, title: string, columns: number, iconSize?: number): PaletteDef => ({
   palette,
   title,
-  items: TEMPLATES.filter((t) => t.group === group).map((t) => ({ name: `tpl-${t.id}`, title: t.name })),
+  items: TEMPLATES.filter((t) => (Array.isArray(group) ? group.includes(t.group) : t.group === group)).map((t) => ({ name: `tpl-${t.id}`, title: t.name })),
   columns,
   large: true,
   iconSize,
@@ -300,7 +300,14 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     templatePalette('rings', 'tpl-rings', 'Ring systems', 5),
     templatePalette('heterocycles', 'tpl-heterocycles', 'Heterocycles', 7),
     templatePalette('amino', 'tpl-amino', 'Amino acids', 5, 64),
-    templatePalette('sugars', 'tpl-sugars', 'Sugars and chair', 4, 64),
+    templatePalette('sugars', 'tpl-sugars', 'Sugars', 4, 64),
+    templatePalette('conformers', 'tpl-conformers', 'Conformers', 5, 64),
+    templatePalette('fused', 'tpl-fused', 'Fused and caged rings in 3-D', 4, 64),
+    templatePalette('bicyclics', 'tpl-bicyclics', 'Bicyclic rings', 5, 56),
+    templatePalette(['projections', 'stereo'], 'tpl-projections', 'Projections and stereocentres', 6, 56),
+    templatePalette('cycloalkanes', 'tpl-cycloalkanes', 'Large rings', 6, 56),
+    templatePalette('aromatics', 'tpl-aromatics', 'Aromatics', 6, 56),
+    templatePalette('perspective', 'tpl-perspective', 'Rings in perspective', 6, 56),
     OWN_PALETTE,
   ],
   [
@@ -2560,6 +2567,10 @@ function command(name: string): boolean {
     flash('A design is one page: use Page Size and Background on the Design ribbon. For several pages, use File > New Slides.');
     return true;
   }
+  if (name.startsWith('fuse-ring:')) {
+    const [, id, index] = name.split(':');
+    return contextBond !== null && editor.fuseRing(contextBond, id, Number(index));
+  }
   const run = COMMANDS[name];
   return !!run && run() !== false;
 }
@@ -4258,6 +4269,27 @@ function tieCaptions(ids: number[]): void {
  * that fit what was clicked (a structure, an arrow, shapes or empty space), grouped as they are
  * at the top so they are found in the same place.
  */
+/** The bond right-clicked last, for Fuse a Ring Here. */
+let contextBond: number | null = null;
+/** The conformers Fuse a Ring Here offers, in this order. */
+const FUSE_RINGS = ['chair', 'boat', 'twist-boat', 'half-chair', 'cyclohexanone', 'envelope', 'c5-twist', 'cyclopentene', 'cyclobutane', 'c7-twist-chair'];
+
+/** Right-click on a bond of a ring drawn in 3-D: the conformers that can join it, each way they can. */
+function fuseRingMenu(): MenuItem[] {
+  if (contextBond === null) return [];
+  const ways = editor.ringFusions(contextBond, FUSE_RINGS);
+  if (!ways.length) return [];
+  const items: MenuItem[] = [];
+  for (const id of FUSE_RINGS) {
+    const mine = ways.filter((w) => w.id === id);
+    if (!mine.length) continue;
+    items.push(mine.length === 1
+      ? { cmd: `fuse-ring:${id}:${mine[0].index}`, label: mine[0].name }
+      : { label: mine[0].name, items: mine.map((w) => ({ cmd: `fuse-ring:${id}:${w.index}`, label: w.note[0].toUpperCase() + w.note.slice(1) })) });
+  }
+  return [{ label: 'Fuse a Ring Here', items }];
+}
+
 function drawingMenu(): MenuItem[] {
   const s = editor.sel;
   const any = s.atoms.size + s.bonds.size + s.captions.size + s.arrows.size + s.shapes.size > 0;
@@ -4293,6 +4325,7 @@ function drawingMenu(): MenuItem[] {
     ...(atoms ? [{ label: 'Copy As', items: [{ cmd: 'copy-smiles' }, { cmd: 'copy-mol' }, { cmd: 'copy-cdxml' }] }, null] : []),
     ...(atoms ? [
       { cmd: 'clean-up' },
+      ...fuseRingMenu(),
       { label: 'Structure', items: [
         { cmd: 'stereo-labels' }, { cmd: 'aromatic-circles' }, { cmd: 'chain-ends' }, { cmd: 'explicit-h' }, null,
         { cmd: 'contract-label' }, { cmd: 'join' }, { cmd: 'bring-front' }, { cmd: 'send-back' }, null,
@@ -4411,7 +4444,8 @@ function showGroupTips(on: boolean): void {
 editor.onContextMenu = (e) => {
   if (sheetActive() || docActive()) return;
   finishTyping();
-  editor.contextPick(e);
+  const h = editor.contextPick(e);
+  contextBond = h?.kind === 'bond' ? h.id : null;
   showContextMenu(e.clientX, e.clientY, drawingMenu(), { run: (cmd) => void command(cmd), key: commandKey });
 };
 
@@ -4499,10 +4533,16 @@ const TOOLBOX_DEFS: ToolboxDef[] = [
   {
     id: 'templates', title: 'Templates',
     build: (body, vertical) => {
-      body.classList.add('tb-grid');
+      // (many templates: the box scrolls rather than run off the window)
+      body.classList.add('tb-grid', 'tb-scroll');
       body.style.setProperty('--cols', vertical ? '2' : '12');
       for (const group of TOOL_GROUPS) for (const item of group) {
         if (!('palette' in item) || !item.palette.startsWith('tpl-') || item.palette === 'tpl-own') continue;
+        // a heading over each palette's buttons, so the families are easy to find
+        const head = document.createElement('div');
+        head.className = 'tb-heading';
+        head.textContent = head.title = item.title;
+        body.append(head);
         for (const t of item.items) { const b = toolButton(t.name); if (b) body.append(b); }
       }
     },

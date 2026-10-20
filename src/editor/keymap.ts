@@ -143,7 +143,7 @@ const BOND_ACTIONS: Record<string, string> = {
 const FUSE_ACTIONS: Record<string, string> = {
   benzene: 'Fuse benzene', cyclopentadiene: 'Fuse cyclopentadiene', '3': 'Fuse cyclopropane', '4': 'Fuse cyclobutane',
   '5': 'Fuse cyclopentane', '6': 'Fuse cyclohexane', '7': 'Fuse cycloheptane', '8': 'Fuse cyclooctane',
-  chair: 'Fuse a chair cyclohexane', 'chair-2': 'Fuse the other chair cyclohexane',
+  chair: 'Fuse a chair cyclohexane (trans on a chair)', 'chair-2': 'Fuse the other chair cyclohexane (cis on a chair)',
 };
 
 const HOTSPOT_ACTIONS: Record<string, string> = {

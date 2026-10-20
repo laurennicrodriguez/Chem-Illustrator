@@ -3,10 +3,12 @@
 // scripts/make-templates.mjs, with a bond length of 1 and the middle at (0, 0).
 
 import data from './templates.json';
+import conformerData from './conformers.json';
 import type { Doc, BondDisplay } from '../model';
 import { Vec, add, sub, mul, dist, angleOf, DEG } from '../geom';
 import { elementNumber, SYMBOLS } from './elements';
 import { atomAt, MERGE_FRACTION } from './chemgeom';
+import { circleRing } from './aromatic';
 
 /** x, y, element, then charge and a text label (such as CH2OH) when there is one. */
 export type TemplateAtom = [number, number, string, number?, string?];
@@ -17,7 +19,7 @@ export interface Template {
   id: string;
   name: string;
   /** 'own': saved by the person (Structure > Save as Template). */
-  group: 'rings' | 'heterocycles' | 'amino' | 'sugars' | 'own';
+  group: TemplateGroup;
   atoms: TemplateAtom[];
   bonds: TemplateBond[];
   /** The atom put on (or joined to) an atom that is clicked. */
@@ -26,9 +28,23 @@ export interface Template {
   fuse?: [number, number];
   /** 'bond': joined to a clicked atom by a new bond rather than sharing it. */
   join?: 'bond';
+  /**
+   * Depth of each atom, towards the viewer, for shapes drawn in perspective (conformers): the
+   * template is the flat shadow of a real 3-D shape, and fusing onto it works in 3-D (fuse3d.ts).
+   */
+  z?: number[];
+  /** Rings (atom indexes in order) drawn aromatic with a circle. */
+  circle?: number[][];
+  /** Lines and circles that go with it (a Newman projection's circle and back bonds): kind, then x1, y1, x2, y2. */
+  shapes?: TemplateShape[];
 }
 
-export const TEMPLATES = data as Template[];
+export type TemplateShape = ['line' | 'oval', number, number, number, number];
+
+export type TemplateGroup = 'rings' | 'heterocycles' | 'amino' | 'sugars' | 'own'
+  | 'conformers' | 'fused' | 'projections' | 'stereo' | 'bicyclics' | 'cycloalkanes' | 'aromatics' | 'perspective';
+
+export const TEMPLATES = [...(data as Template[]), ...(conformerData as Template[])];
 const BY_ID = new Map(TEMPLATES.map((t) => [t.id, t]));
 export const templateById = (id: string): Template | undefined => BY_ID.get(id);
 
@@ -105,6 +121,8 @@ export interface Placement {
   scale: number;
   angle: number;
   mirror: boolean;
+  /** Where every atom goes, when worked out some other way (fused in 3-D: fuse3d.ts). */
+  pts?: Vec[];
 }
 
 export function placePoint(pl: Placement, x: number, y: number): Vec {
@@ -113,7 +131,7 @@ export function placePoint(pl: Placement, x: number, y: number): Vec {
   return { x: pl.origin.x + pl.scale * (x * c - yy * s), y: pl.origin.y + pl.scale * (x * s + yy * c) };
 }
 
-export const templatePoints = (t: Template, pl: Placement): Vec[] => t.atoms.map(([x, y]) => placePoint(pl, x, y));
+export const templatePoints = (t: Template, pl: Placement): Vec[] => pl.pts ?? t.atoms.map(([x, y]) => placePoint(pl, x, y));
 
 /** The template with its middle at a point, turned by an angle (radians, clockwise on screen). */
 export function freePlacement(at: Vec, L: number, angle = 0): Placement {
@@ -180,6 +198,8 @@ export interface PlaceOptions {
   bondFrom?: number;
   /** Size of the new atoms and bonds relative to the document style. */
   scale?: number;
+  /** Only the atoms in `existing` are shared: others landing on drawn atoms stay separate (3-D fusions, where atoms may lie behind others). */
+  noMerge?: boolean;
 }
 
 /**
@@ -195,7 +215,7 @@ export function placeTemplate(doc: Doc, t: Template, pl: Placement, opts: PlaceO
   const shared = new Set<number>();
   t.atoms.forEach(([, , el, charge, label], i) => {
     let id = opts.existing?.get(i);
-    if (id === undefined) {
+    if (id === undefined && !opts.noMerge) {
       const hit = atomAt(doc, pts[i], tol, used);
       if (hit) id = hit.id;
     }
@@ -225,6 +245,18 @@ export function placeTemplate(doc: Doc, t: Template, pl: Placement, opts: PlaceO
     doc.addBond(a, b, o, d, extra);
   });
   if (opts.bondFrom !== undefined && !doc.bondBetween(opts.bondFrom, ids[t.attach])) doc.addBond(opts.bondFrom, ids[t.attach], 1, 'solid', extra);
+  for (const ring of t.circle ?? []) circleRing(doc, ring.map((i) => ids[i]));
+  for (const [kind, x1, y1, x2, y2] of t.shapes ?? []) {
+    const a = placePoint(pl, x1, y1), b = placePoint(pl, x2, y2);
+    if (kind === 'oval') {
+      // a circle stays a circle when turned: keep it square on its middle
+      const r = Math.hypot(b.x - a.x, b.y - a.y) / 2 / Math.SQRT2;
+      const c = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      doc.addShape({ kind: 'oval', x1: c.x - r, y1: c.y - r, x2: c.x + r, y2: c.y + r });
+    } else {
+      doc.addShape({ kind: 'line', x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+    }
+  }
   return ids;
 }
 
