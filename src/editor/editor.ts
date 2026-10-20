@@ -11,6 +11,7 @@ import * as rt from '../richtext';
 import { applyFormat, formatWhole, type TextFormat } from '../text/format';
 import { cleanUpMoves } from '../chem/cleanup';
 import { Renderer, measureText } from '../render/renderer';
+import { tidyStyle } from '../render/highlight';
 import { ASCENT } from '../text/layout';
 import { cellAlign, insertRow, nextCell, partAt, partRuns, setColumnWidth, setPart, spanOf, NOTE_SCALE, type TablePart } from '../table';
 import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG, exitParam, lockAxis, turnAbout, turnedCorners } from '../geom';
@@ -1649,6 +1650,25 @@ export class Editor {
     });
     this.changed();
     return true;
+  }
+
+  /**
+   * Smooth the round highlights on the selected atoms and bonds (one even band, no disc at each
+   * atom), or put the discs back when they are all smooth already. Says which, or null when
+   * nothing selected is highlighted.
+   */
+  smoothHighlight(): 'on' | 'off' | null {
+    const doc = this.doc;
+    const atoms = [...this.sel.atoms].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a?.highlight);
+    const bonds = [...this.sel.bonds].map((id) => doc.bonds.get(id)).filter((b): b is Bond => !!b?.highlight);
+    if (!atoms.length && !bonds.length) return null;
+    const on = ![...atoms, ...bonds].every((x) => x.hl?.smooth);
+    doc.edit(on ? 'Smooth highlight' : 'Highlight with discs', () => {
+      for (const a of atoms) doc.updateAtom(a.id, { hl: tidyStyle({ ...a.hl, smooth: on }) });
+      for (const b of bonds) doc.updateBond(b.id, { hl: tidyStyle({ ...b.hl, smooth: on }) });
+    });
+    this.changed();
+    return on ? 'on' : 'off';
   }
 
   private moveSelection(dx: number, dy: number): void {

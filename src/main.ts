@@ -2734,6 +2734,13 @@ const COMMANDS: Record<string, () => unknown> = {
   'fill-rings': () => flash(editor.fillRings(), 6000),
   'highlight': () => editor.highlight(highlightColour, highlightStyle) ? flash('Highlighted. Change the colour with Highlight in the Style panel.', 5000) : flash('Select the atoms and bonds to highlight.'),
   'remove-highlight': () => editor.highlight(undefined) || flash('Select the atoms and bonds to take the highlight off.'),
+  'smooth-highlight': () => {
+    const r = editor.smoothHighlight();
+    if (!r) { flash('Select highlighted atoms and bonds first.'); return; }
+    // new highlights take the same look
+    highlightStyle = tidyStyle({ ...highlightStyle, smooth: r === 'on' });
+    flash(r === 'on' ? 'Round highlights smoothed: one even band, with no disc at each atom. Square and diamond highlights are always smooth.' : 'Round highlights back to a disc at each atom.', 6000);
+  },
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
   'clean-up-arrow': () => {
     const curved = [...editor.sel.arrows].some((id) => doc.arrows.get(id)?.sweep);
@@ -4293,7 +4300,7 @@ function drawingMenu(): MenuItem[] {
     { cmd: 'add-frame' },
     ...(atoms ? [{ label: 'Label the Structure', items: [{ cmd: 'add-id-label' }, { cmd: 'add-caption' }, { cmd: 'attach-descriptors' }, null, { cmd: 'number-compounds' }] }] : []),
     { cmd: 'scale' },
-    ...(atoms ? [{ label: 'Highlight and Fill', items: [{ cmd: 'highlight' }, { cmd: 'remove-highlight' }, null, { cmd: 'fill-rings' }] }] : []),
+    ...(atoms ? [{ label: 'Highlight and Fill', items: [{ cmd: 'highlight' }, { cmd: 'remove-highlight' }, { cmd: 'smooth-highlight' }, null, { cmd: 'fill-rings' }] }] : []),
     { label: 'Align', items: arrange },
     { label: 'Rotate or Flip', items: turn },
     ...(order.length ? [{ label: 'Order', items: order }] : []),

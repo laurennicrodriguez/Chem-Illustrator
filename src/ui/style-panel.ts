@@ -4,7 +4,9 @@
 // Anything the drawing tools set automatically can be changed here by hand.
 
 import { Doc, Arrow, Shape, Caption, Atom, Bond, PICTURE_STYLES, type PictureLook, type StepRoles, type Pattern, type AttachSide, type Attachment, type DescriptorKey, type HighlightShape, type HighlightStyle } from '../model';
-import { fullStyle } from '../render/highlight';
+import { fullStyle, tidyStyle } from '../render/highlight';
+
+export { tidyStyle };
 import { DESCRIPTORS } from './analysis-panel';
 import { COMMON_ADDUCTS } from '../chem/hrms';
 import { PATTERNS, patternSpacing } from '../render/fills';
@@ -640,7 +642,7 @@ export class StylePanel {
     this.highlightControls([], [b]);
   }
 
-  /** How the highlight on these atoms and bonds is drawn: shape, size, round labels, shadow, soft edges. */
+  /** How the highlight on these atoms and bonds is drawn: shape, smooth, size, round labels, shadow, soft edges. */
   private highlightControls(atoms: Atom[], bonds: Bond[]): void {
     const lit = [...atoms, ...bonds].filter((x) => x.highlight);
     if (!lit.length) return;
@@ -653,6 +655,9 @@ export class StylePanel {
       this.highlightStyleUsed({ ...st, ...patch });
     };
     this.select<HighlightShape>('Highlight shape', HL_SHAPES, st.shape, (v) => set('Highlight shape', { shape: v }));
+    // square and diamond highlights are always one even band; round ones can have a disc on each atom
+    if (st.shape === 'round') this.check('Smooth outline', st.smooth, (v) => set(v ? 'Smooth highlight' : 'Highlight with discs', { smooth: v }),
+      'One even band along the bonds, with no disc bulging out at each atom (Structure > Smooth Highlight).');
     this.number('Highlight size (%)', Math.round(st.size * 100), 10, 20, 400, (v) => set('Highlight size', { size: v / 100 }),
       '100% is the usual size; larger for a bolder highlight.');
     this.check('Grow round atom labels', st.fit, (v) => set(v ? 'Highlight round labels' : 'Highlight not round labels', { fit: v }),
@@ -837,10 +842,3 @@ function resizeTableText(t: TableData, size: number): TableData {
 
 type TextRunList = TableData['rows'][number][number]['runs'];
 
-/** A highlight style with the usual values left out (none at all when it is the usual look). */
-export function tidyStyle(s: HighlightStyle): HighlightStyle | undefined {
-  const d = fullStyle(undefined);
-  const out: HighlightStyle = {};
-  for (const k of Object.keys(s) as (keyof HighlightStyle)[]) if (s[k] !== undefined && s[k] !== d[k]) (out as Record<string, unknown>)[k] = s[k];
-  return Object.keys(out).length ? out : undefined;
-}

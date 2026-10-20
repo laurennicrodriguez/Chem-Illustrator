@@ -6,7 +6,7 @@
 // and bond and only recomputed near what changed.
 
 import { Doc, Atom, Bond, Arrow, Caption, Shape, PICTURE_SHADOWS, pictureRadius, applyBase, captionBase, enhancedText, CHIRAL_FLAGS, flagTextSize, type TextBase, type HighlightStyle } from '../model';
-import { atomPiece, bondPiece, fullStyle, highlightSizes, softRings, tracePieces, type Piece } from './highlight';
+import { fullStyle, highlightPieces, highlightSizes, movePieces, softRings, tracePieces, type Piece } from './highlight';
 import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
 import { crossingGapsCached } from '../chem/crossing';
 import { FADE, tint } from '../colours';
@@ -1250,9 +1250,10 @@ export class Renderer {
   }
 
   /**
-   * Highlighted atoms and bonds: discs (or diamonds, squares) under atoms and broad bands under
-   * bonds, in their colour, behind everything in the structure; with a shadow or soft edges when
-   * asked. Each colour and look is filled at once, so overlaps don't show darker.
+   * Highlighted atoms and bonds: broad bands under bonds and discs (or diamonds, squares) under
+   * atoms, or one smooth band (see highlightPieces), in their colour, behind everything in the
+   * structure; with a shadow or soft edges when asked. Each colour and look is filled at once,
+   * so overlaps don't show darker.
    */
   private drawHighlights(ctx: CanvasRenderingContext2D, doc: Doc, atoms: Iterable<Atom>, bonds: Iterable<Bond>): void {
     const L = doc.style.bondLength;
@@ -1273,19 +1274,16 @@ export class Renderer {
     for (const a of atoms) if (a.highlight) of(a.highlight, a.hl, a.s ?? 1).atoms.push(a);
     if (!groups.size) return;
     const pieces = (g: Group, grow: number, shift = 0): Piece[] => {
-      const { disc, band } = highlightSizes(L * g.scale, g.style.size);
-      const out: Piece[] = [];
-      const mv = (v: Vec) => (shift ? { x: v.x + shift, y: v.y + shift } : v);
-      for (const [p, q] of g.bonds) out.push(bondPiece(mv(p), mv(q), band, g.style.shape, grow));
-      for (const a of g.atoms) {
+      const atoms = g.atoms.map((a) => {
         let label: Rect | null = null;
         if (g.style.fit) {
           const bx = this.atomInfo(doc, a).boxes;
-          if (bx.length) label = { x1: Math.min(...bx.map((b) => b.x1)) + shift, y1: Math.min(...bx.map((b) => b.y1)) + shift, x2: Math.max(...bx.map((b) => b.x2)) + shift, y2: Math.max(...bx.map((b) => b.y2)) + shift };
+          if (bx.length) label = { x1: Math.min(...bx.map((b) => b.x1)), y1: Math.min(...bx.map((b) => b.y1)), x2: Math.max(...bx.map((b) => b.x2)), y2: Math.max(...bx.map((b) => b.y2)) };
         }
-        out.push(atomPiece(mv(a), disc, g.style.shape, label, 0.04 * L * g.style.size, grow));
-      }
-      return out;
+        return { at: a as Vec, label };
+      });
+      const out = highlightPieces(g.bonds, atoms, highlightSizes(L * g.scale, g.style.size), g.style, 0.04 * L * g.style.size, grow);
+      return shift ? movePieces(out, shift, shift) : out;
     };
     const fill = (ps: Piece[], colour: string) => {
       ctx.fillStyle = colour;
