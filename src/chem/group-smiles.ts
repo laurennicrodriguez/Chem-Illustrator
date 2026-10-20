@@ -1,7 +1,7 @@
 // A drawn group written as SMILES, starting at the atom where it joins the rest of the
 // structure, for nicknames of the person's own and contracted labels.
 
-import type { Doc } from '../model';
+import { outsideValence, type Doc } from '../model';
 import { SYMBOLS, implicitHydrogens } from './elements';
 import { kekulize, labelGraph, type MiniGraph } from './labels';
 
@@ -30,7 +30,7 @@ export function groupGraph(doc: Doc, ids: Set<number>, start: number): MiniGraph
     }
   }
   for (const b of doc.bonds.values()) {
-    if (!ids.has(b.a1) || !ids.has(b.a2) || b.display === 'dative') continue;
+    if (!ids.has(b.a1) || !ids.has(b.a2) || outsideValence(b)) continue;
     g.bonds.push({ a: index.get(b.a1)!, b: index.get(b.a2)!, order: b.order === 4 ? 1 : b.order });
   }
   return g;

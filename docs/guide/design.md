@@ -56,6 +56,8 @@ To place a shape, click it and then click or drag on the page, or drag it straig
 
 The ribbon's **Insert** group also adds a **Text Box**, a **Picture** or a **Table**, and **Crop** trims a picture.
 
+The **Chemistry** group adds a **Catalytic Cycle** or an **Energy Diagram** (the same as in the Scheme menu: see [Drawing](drawing.md#the-scheme-menu)). A new one goes beside what is already on the page.
+
 ### Structures
 
 All the drawing tools and hotkeys work on a design page, so you can draw structures, reaction arrows and schemes straight onto it, or paste them from a drawing tab or ChemDraw (Windows app).

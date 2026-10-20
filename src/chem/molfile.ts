@@ -2,7 +2,7 @@
 // molfiles back (for pasted SMILES). Abbreviation labels are expanded into real atoms so
 // formula, mass and stereo come out right; "R"-type labels become dummy atoms.
 
-import { Doc, Atom, isMetalAtom, radicalElectrons } from '../model';
+import { Doc, Atom, isMetalAtom, outsideValence, radicalElectrons } from '../model';
 import { metalCarbonyl } from './hapto';
 import { SYMBOLS, elementNumber, valenceOfBonds } from './elements';
 import { labelDonates, labelGraph, MiniGraph } from './labels';
@@ -62,7 +62,7 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = '', opts: 
   // the atom giving them; the rest (a methyl, a chloride) are ordinary bonds.
   const dative = new Set<number>();
   const metalBonds = (id: number) => (doc.adj.get(id) ?? []).map((bid) => doc.bonds.get(bid)!)
-    .filter((b) => b.display !== 'dative' && isMetalAtom(doc.atoms.get(b.a1 === id ? b.a2 : b.a1)));
+    .filter((b) => !outsideValence(b) && isMetalAtom(doc.atoms.get(b.a1 === id ? b.a2 : b.a1)));
   // a carbonyl ligand, drawn M–C≡O, is M←C⁻≡O⁺ to the engine
   const charged = new Map<number, number>();
   for (const id of ids) {
@@ -132,13 +132,13 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = '', opts: 
     const mb = metalBonds(id);
     if (!mb.length) continue;
     if (a.label) {
-      const others = (doc.adj.get(id) ?? []).map((bid) => doc.bonds.get(bid)!).filter((b) => b.display !== 'dative' && !mb.includes(b)).reduce((s, b) => s + b.order, 0);
+      const others = (doc.adj.get(id) ?? []).map((bid) => doc.bonds.get(bid)!).filter((b) => !outsideValence(b) && !mb.includes(b)).reduce((s, b) => s + b.order, 0);
       if (labelDonates(a.label, others)) for (const b of mb) dative.add(b.id);
       continue;
     }
     // as many as the atom's hydrogens were worked out with stay ordinary (see Doc.valenceSum)
     let own = 0;
-    for (const bid of doc.adj.get(id) ?? []) { const b = doc.bonds.get(bid)!; if (b.display !== 'dative' && !mb.includes(b)) own += b.order; }
+    for (const bid of doc.adj.get(id) ?? []) { const b = doc.bonds.get(bid)!; if (!outsideValence(b) && !mb.includes(b)) own += b.order; }
     let keep = doc.valenceSum(id) - own - radicalElectrons(a);
     for (const b of mb) { if (keep >= b.order) keep -= b.order; else dative.add(b.id); }
   }
@@ -147,7 +147,7 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = '', opts: 
     const x = (a.x - first.x) / L, y = -(a.y - first.y) / L;
     let g: MiniGraph | null = null;
     if (a.label) {
-      g = labelGraph(a.label, valenceOfBonds((doc.adj.get(id) ?? []).map((bid) => doc.bonds.get(bid)!).filter((b) => b.display !== 'dative' && !dative.has(b.id)).map((b) => b.order)));
+      g = labelGraph(a.label, valenceOfBonds((doc.adj.get(id) ?? []).map((bid) => doc.bonds.get(bid)!).filter((b) => !outsideValence(b) && !dative.has(b.id)).map((b) => b.order)));
       if (!g) unknown.push(a.label);
     }
     if (!g || g.atoms.length === 0) {
@@ -181,7 +181,7 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = '', opts: 
       const b = doc.bonds.get(bid)!;
       if (!inSet.has(b.a1) || !inSet.has(b.a2)) continue;
       // a dative bond joins two molecules that are each whole (the formula is the same)
-      if (b.display === 'dative') continue;
+      if (outsideValence(b)) continue;
       if (dative.has(b.id)) {
         // from the atom giving the bond to the metal (V2000 bond type 9, a coordination bond)
         const donor = isMetalAtom(doc.atoms.get(b.a1)) ? b.a2 : b.a1;

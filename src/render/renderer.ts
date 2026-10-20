@@ -5,7 +5,7 @@
 // fast however big the document is. Label layouts and bond geometry are cached per atom
 // and bond and only recomputed near what changed.
 
-import { Doc, Atom, Bond, Arrow, Caption, Shape, PICTURE_SHADOWS, pictureRadius, applyBase, captionBase, enhancedText, CHIRAL_FLAGS, flagTextSize, type TextBase, type HighlightStyle } from '../model';
+import { Doc, Atom, Bond, Arrow, PARTIAL, Caption, Shape, PICTURE_SHADOWS, pictureRadius, applyBase, captionBase, enhancedText, CHIRAL_FLAGS, flagTextSize, type TextBase, type HighlightStyle } from '../model';
 import { fullStyle, highlightPieces, highlightSizes, movePieces, softRings, tracePieces, type Piece } from './highlight';
 import { ellipseArc, isCircleRing, ringCircle, ringsThroughBond, type RingCircle } from '../chem/aromatic';
 import { crossingGapsCached } from '../chem/crossing';
@@ -838,7 +838,7 @@ export class Renderer {
       return;
     }
 
-    if (b.order === 1 || b.display === 'dative') {
+    if (b.order === 1 || b.order === PARTIAL || b.display === 'dative') {
       switch (b.display) {
         case 'solid': line(thin, s, e); break;
         case 'dative': {

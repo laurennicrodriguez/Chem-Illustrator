@@ -5,7 +5,7 @@
 // The checks are worked out per atom and kept, so after an edit only the changed atoms and
 // their close neighbours are looked at again.
 
-import { isMetalAtom, radicalElectrons, type Atom, type AtomWatch, type Bond, type Doc } from '../model';
+import { isMetalAtom, outsideValence, PARTIAL, radicalElectrons, type Atom, type AtomWatch, type Bond, type Doc } from '../model';
 import { metalCarbonyl } from './hapto';
 import { SYMBOLS, elementNumber, maxValence, minValence, valenceOfBonds } from './elements';
 import { bracketsUnbalanced, labelDonates, labelGraph, labelOverValent, tokenize } from './labels';
@@ -70,14 +70,16 @@ export function atomWarnings(doc: Doc, a: Atom): string[] {
   const orders: number[] = [];
   // a dative bond leaves both atoms' valences as they were (H3N→BF3); a bond to a metal may be
   // a lone pair the atom gives it (PPh3, a bridging Cl, a pyridine N), so it may go past the valence
-  let toMetal = 0;
+  let toMetal = 0, partial = false;
   for (const bid of doc.adj.get(a.id) ?? []) {
     const b = doc.bonds.get(bid)!;
-    if (b.display === 'dative') continue;
+    if (b.order === PARTIAL) partial = true;
+    if (outsideValence(b)) continue;
     orders.push(b.order);
     if (isMetalAtom(doc.atoms.get(b.a1 === a.id ? b.a2 : b.a1))) toMetal++;
   }
-  if (a.attach || a.multi) return out;
+  // an atom in a transition state is part way between its valences
+  if (a.attach || a.multi || partial) return out;
   // metals: no valence check (how many ligands a metal holds varies too much)
   const metal = isMetalAtom(a);
   if (metal && !a.label) return a.isotope && !isotopeOk(a.z, a.isotope) ? [`There is no isotope ${a.isotope}${SYMBOLS[a.z] ?? ''}.`] : out;

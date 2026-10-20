@@ -2,7 +2,7 @@
 // pan. The editor changes the document and asks for a repaint; hover and drawing previews
 // only repaint the overlay layer.
 
-import { Doc, Atom, Bond, BondDisplay, Arrow, Shape, Caption, isMetalAtom, applyBase, captionBase, stripBase, type StepRoles, type Justify, type HighlightStyle } from '../model';
+import { Doc, Atom, Bond, BondDisplay, PARTIAL, Arrow, Shape, Caption, isMetalAtom, applyBase, captionBase, stripBase, type StepRoles, type Justify, type HighlightStyle } from '../model';
 import { CaptionEditor } from '../ui/caption-editor';
 import { geoDef, geoShapeStyle, moveSteps, traceSteps } from '../design/geo';
 import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
@@ -103,6 +103,7 @@ export const TOOLS: Record<string, Tool> = {
   'bond-hash': { kind: 'bond', order: 1, display: 'hash' },
   'bond-bold': { kind: 'bond', order: 1, display: 'bold' },
   'bond-dash': { kind: 'bond', order: 1, display: 'dash' },
+  'bond-partial': { kind: 'bond', order: PARTIAL, display: 'dash' },
   'bond-wavy': { kind: 'bond', order: 1, display: 'wavy' },
   chain: { kind: 'chain' },
   'ring-3': { kind: 'ring', size: 3, aromatic: false },
@@ -1707,6 +1708,29 @@ export class Editor {
     applyCharge(this.doc, id, charge, this.options.circledCharges, (a, size) => this.openSpot(a, size).at);
   }
 
+  /**
+   * Transition-state brackets: square brackets round the selection with a double dagger (‡) at
+   * the upper right (‡ as IUPAC marks transition-state quantities, ΔG‡). False with nothing selected.
+   */
+  tsBrackets(): boolean {
+    const doc = this.doc, m = this.measure();
+    const box = selectionBox(doc, withFrameContents(doc, this.sel), m);
+    if (!box) return false;
+    const L = doc.style.bondLength;
+    const r = { x1: box.x1 - L * 0.45, y1: box.y1 - L * 0.3, x2: box.x2 + L * 0.45, y2: box.y2 + L * 0.3 };
+    doc.edit('Transition State Brackets', () => {
+      const ids = bracketsAround(r, 'square').map((b) => doc.addShape(b).id);
+      const c = doc.addCaption({ x: 0, y: 0, runs: [{ text: '‡' }], justify: 'left' });
+      const cb = m.captionBox(c);
+      // just past the right bracket, its middle level with the bracket's top
+      doc.updateCaption(c.id, { x: r.x2 + 0.15 * L - cb.x1, y: r.y1 - (cb.y2 - cb.y1) / 2 - cb.y1 });
+      for (const id of ids) this.sel.shapes.add(id);
+      this.sel.captions.add(c.id);
+    });
+    this.changed();
+    return true;
+  }
+
   private addBrackets(r: Rect, bracket: NonNullable<Shape['bracket']>): void {
     this.doc.edit('Brackets', () => {
       this.sel = emptySel();
@@ -2870,7 +2894,7 @@ export class Editor {
     if (!b) return false;
     const SET: Record<string, Partial<Bond>> = {
       single: { order: 1, display: 'solid' }, double: { order: 2, display: 'solid' }, triple: { order: 3, display: 'solid' },
-      dashed: { order: 1, display: 'dash' }, 'dashed-double': { order: 1.5, display: 'solid' }, bold: { order: 1, display: 'bold' },
+      dashed: { order: 1, display: 'dash' }, partial: { order: PARTIAL, display: 'dash' }, 'dashed-double': { order: 1.5, display: 'solid' }, bold: { order: 1, display: 'bold' },
       'bold-double': { order: 2, display: 'bold' }, wavy: { order: 1, display: 'wavy' }, hashed: { order: 1, display: 'hash' },
       left: { dpos: 'left' }, center: { dpos: 'center' }, right: { dpos: 'right' },
     };
