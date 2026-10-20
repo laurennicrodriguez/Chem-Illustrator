@@ -361,6 +361,11 @@ body.slides-mode #canvas-host, body.design-mode #canvas-host { background: var(-
 .toolbox.collapsed > #side-fold { margin: 0 auto; }
 .toolbox[data-id='details'] .tb-fold, .toolbox[data-id='details'] .tb-close { display: none; }
 .toolbox[data-id='details'] > .tb-body { display: block; width: 290px; max-height: calc(100vh - 140px); overflow-y: auto; padding: 2px 4px; }
+/* docked down a side, the details panel shrinks to the dock and scrolls inside its own width: letting it
+   overflow gave the dock a scroll bar whenever a selection lengthened the panel, which widened the dock
+   and resized the drawing on every select and deselect (a flicker) */
+.dock-v > .toolbox[data-id='details'] { flex-shrink: 1; min-height: 0; }
+.dock-v > .toolbox[data-id='details'] > .tb-body { min-height: 0; max-height: none; }
 .toolbox.collapsed > .tb-body { display: none; }
 .tb-fold, .tb-lock { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: 0; background: none; color: var(--muted); font-size: 12px; line-height: 1; }
 .tb-fold:hover, .tb-lock:hover { color: var(--text); }

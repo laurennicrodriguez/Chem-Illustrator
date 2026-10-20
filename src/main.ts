@@ -174,14 +174,17 @@ let splitDrawing = false;
 
 // ---------------------------------------------------------------- layout
 
-function resize(): void {
+function resize(): boolean {
   const r = host.getBoundingClientRect();
   // hidden (a sheet is showing): keep the last size
-  if (r.width < 1 || r.height < 1) return;
-  renderer.resize(r.width, r.height, window.devicePixelRatio || 1);
+  if (r.width < 1 || r.height < 1) return false;
+  if (!renderer.resize(r.width, r.height, window.devicePixelRatio || 1)) return false;
   editor.requestScene();
+  return true;
 }
-new ResizeObserver(resize).observe(host);
+// resizing a canvas blanks it: when the window or a panel beside the drawing changes size,
+// paint again at once, before the browser shows the blank canvas (a flicker)
+new ResizeObserver(() => { if (resize()) editor.frame(); }).observe(host);
 
 // ---------------------------------------------------------------- toolbar
 
