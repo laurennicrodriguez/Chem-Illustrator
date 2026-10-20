@@ -33,11 +33,35 @@ Cyclopropane to cyclooctane, benzene and cyclopentadiene.
 
 ### Templates
 
-Four palettes of ready-made structures: **Ring systems**, **Heterocycles**, **Amino acids** and **Sugars and chair**, plus **My templates**.
+Ready-made structures in palettes on the tool bar, plus **My templates**:
+
+- **Ring systems**, **Heterocycles**, **Amino acids** and **Sugars** (pyranoses and furanoses flat and as ⁴C₁ chairs).
+- **Conformers**: cyclohexane chair (both ring flips), boat, twist-boat, half-chair and cyclohexanone; the cyclopentane envelope and half-chair, cyclopentene, puckered cyclobutane; the cycloheptane twist-chair, cyclooctane boat-chair and crown, and the cyclooctatetraene tub. The "with its bonds" versions show every axial and equatorial bond.
+- **Fused and caged rings in 3-D**: trans- and cis-decalin and hydrindane, diquinane, hydroazulene, perhydrophenanthrene and perhydroanthracene, the 5α and 5β steroid skeletons, adamantane, twistane and cubane.
+- **Bicyclic rings**: bicyclo[1.1.0]butane up to bicyclo[4.4.1]undecane, drawn in 3-D.
+- **Projections and stereocentres**: Newman, sawhorse and Fischer projections; tetrahedral centres drawn several ways; trigonal bipyramidal, octahedral, square pyramidal and square planar centres; zig-zag chains with wedges.
+- **Large rings**: 9- to 20-membered rings, as polygons and folded.
+- **Aromatics**: from the cyclopropenylium ion to coronene and porphine, plus corannulene, triptycene and C₆₀.
+- **Rings in perspective**: 3- to 6-membered rings seen at an angle, with and without bold front bonds.
+
+The conformers are drawn from real 3-D models (MMFF94 geometries), so their bond angles and ring shapes are true to life.
 
 - Click empty space to place a template (drag while placing to turn it).
 - Click a bond to fuse it on: pyridine on a benzene bond gives quinoline.
 - Click an atom to join it there. Hold Alt to join it the other way (by a new bond, or sharing the atom).
+
+#### Fusing conformers
+
+When you fuse a conformer onto a ring that is itself drawn in 3-D (a chair, envelope, half-chair, decalin and so on), Chem Illustrator works out the ways the two rings can really share the bond and offers only those. A chair on a chair, for example, can join trans (both new bonds equatorial, as in trans-decalin) or cis (one axial, one equatorial, either way round).
+
+- **Press and hold** on the bond: the blue outline shows the best way (trans first, then cis), with its name beside it ("trans-fused · 1 of 3").
+- **Move the pointer** towards where you want the new ring: the outline swaps to the fusion lying nearest the pointer.
+- **Tab** and **Shift+Tab**, with the mouse still held, step through the ways one at a time.
+- **Release** to place it.
+- Or **right-click the bond** and pick **Fuse a Ring Here**: each conformer that fits, and the ways it can join (Trans-fused, Cis-fused 1, Cis-fused 2).
+- The `9` and `0` keys on a bond of a chair fuse another chair trans and cis.
+
+This is enough to build decalins, hydrindanes, steroids (5α and 5β), triterpenes such as oleanane, and the hydroazulenes of the guaianes ring by ring.
 
 To make your own template, select a structure and click the first button on the **My templates** palette, or use **Structure ▸ Save as Template…**. Give it a name and it appears in the palette. **Structure ▸ Delete Template…** removes one.
 
@@ -261,7 +285,7 @@ The **View** menu can show more toolboxes besides the drawing tools:
 
 - **Toolbox: Structure**: Clean Up, frames, fills, highlights, terminal methyls, H atoms, aromatic circles, stereo labels, ID labels, captions, descriptors, Number Compounds, Contract Label and Name to Structure.
 - **Toolbox: Object**: align, space evenly, flip, rotate, and bring to front or send to back.
-- **Toolbox: Templates**: every template in one grid.
+- **Toolbox: Templates**: every template in one scrolling grid, under the names of their palettes.
 - **Toolbox: Colours**: pick **Colour**, **Highlight** or **Fill**, then click a swatch to apply it to the selection. Your palettes are there too.
 - **Toolbox: My Toolbox**: the tools and commands you choose with **View ▸ Choose What Is in My Toolbox…**, which lists every tool and menu command with a search box.
 
@@ -271,7 +295,7 @@ To move a toolbox, unlock it first: click the padlock on its title bar (or right
 
 Right-click the drawing for a menu of what fits what you clicked. The names and keys match the top menus.
 
-- **On a structure**: it is selected first (the whole structure), and the menu has Cut, Copy, Paste and Delete; **Copy As** (SMILES, molfile, CDXML text); **Clean Up Structure**; a **Structure** group (stereo labels, aromatic circles, terminal methyls, H atoms, Contract Label, Join, bond order, stereo groups, chiral flag, repeat brackets, R-group table, Check Structure, templates and nicknames, PubChem); **Scheme**; **Add Frame**; **Label the Structure**; **Scale…**; **Highlight and Fill**; **Align**; **Rotate or Flip**; and **View**.
+- **On a structure**: it is selected first (the whole structure), and the menu has Cut, Copy, Paste and Delete; **Copy As** (SMILES, molfile, CDXML text); **Clean Up Structure**; on a bond of a ring drawn in 3-D, **Fuse a Ring Here** (see [Fusing conformers](#fusing-conformers)); a **Structure** group (stereo labels, aromatic circles, terminal methyls, H atoms, Contract Label, Join, bond order, stereo groups, chiral flag, repeat brackets, R-group table, Check Structure, templates and nicknames, PubChem); **Scheme**; **Add Frame**; **Label the Structure**; **Scale…**; **Highlight and Fill**; **Align**; **Rotate or Flip**; and **View**.
 - **On empty space**: Paste, Paste SMILES, Select All, Undo and Redo, an **Insert** group (Name to Structure, Periodic Table, Picture, Text Box), **Scheme**, **Drawing Style…** and **View**.
 
 Right-drag still scrolls the drawing; the menu only opens when the mouse doesn't move.

@@ -66,18 +66,89 @@ export function isCircleRing(doc: Doc, ring: number[]): boolean {
   return bs.length === ring.length && bs.every((id) => { const b = doc.bonds.get(id)!; return b.order === 1.5 && !!b.circle; });
 }
 
-/** Centre of a ring and the radius its circle is drawn at (well inside the bonds). */
-export function ringCircle(doc: Doc, ring: number[]): { center: Vec; radius: number } {
+/**
+ * Centre of a ring and the radius its circle is drawn at (well inside the bonds). A ring drawn
+ * at an angle (a regular ring in perspective, as on a metallocene) has its circle seen at the
+ * same angle: an ellipse, given as `ellipse`.
+ */
+export function ringCircle(doc: Doc, ring: number[]): RingCircle {
+  return circleIn(ring.map((id) => doc.atoms.get(id)!));
+}
+
+export interface RingCircle {
+  center: Vec;
+  radius: number;
+  /** The circle seen at an angle: the points center + m·(r cos φ, r sin φ), φ round the ring as its atoms go. */
+  ellipse?: { m: [number, number, number, number]; r: number };
+}
+
+/** The circle (or, for a regular ring seen at an angle, the ellipse) inside a ring of points in order. */
+export function circleIn(pts: Vec[]): RingCircle {
+  const n = pts.length;
   let x = 0, y = 0;
-  for (const id of ring) { const a = doc.atoms.get(id)!; x += a.x; y += a.y; }
-  const center = { x: x / ring.length, y: y / ring.length };
+  for (const p of pts) { x += p.x; y += p.y; }
+  const center = { x: x / n, y: y / n };
   // distance from the centre to the nearest bond middle
   let apothem = Infinity;
-  for (let i = 0; i < ring.length; i++) {
-    const p = doc.atoms.get(ring[i])!, q = doc.atoms.get(ring[(i + 1) % ring.length])!;
+  for (let i = 0; i < n; i++) {
+    const p = pts[i], q = pts[(i + 1) % n];
     apothem = Math.min(apothem, Math.hypot((p.x + q.x) / 2 - center.x, (p.y + q.y) / 2 - center.y));
   }
-  return { center, radius: 0.62 * apothem };
+  const plain = { center, radius: 0.62 * apothem };
+  if (n < 3) return plain;
+  // the regular polygon that, stretched and turned (m), best gives these points
+  let a = 0, b = 0, c = 0, d = 0;
+  pts.forEach((p, k) => {
+    const u = Math.cos((2 * Math.PI * k) / n), v = Math.sin((2 * Math.PI * k) / n);
+    a += (p.x - center.x) * u; b += (p.x - center.x) * v; c += (p.y - center.y) * u; d += (p.y - center.y) * v;
+  });
+  const m: [number, number, number, number] = [(2 * a) / n, (2 * b) / n, (2 * c) / n, (2 * d) / n];
+  let miss = 0, size = 0;
+  pts.forEach((p, k) => {
+    const u = Math.cos((2 * Math.PI * k) / n), v = Math.sin((2 * Math.PI * k) / n);
+    miss = Math.max(miss, Math.hypot(center.x + m[0] * u + m[1] * v - p.x, center.y + m[2] * u + m[3] * v - p.y));
+    size += Math.hypot(p.x - center.x, p.y - center.y) / n;
+  });
+  // not a regular ring in perspective: the plain circle
+  if (miss > 0.12 * size) return plain;
+  const [s1, s2] = singularValues(m);
+  // seen face on (or nearly): the plain circle
+  if (s2 > 0.96 * s1) return plain;
+  return { center, radius: plain.radius, ellipse: { m, r: 0.62 * Math.cos(Math.PI / n) } };
+}
+
+/** The two singular values of a 2×2 matrix, larger first. */
+export function singularValues([a, b, c, d]: [number, number, number, number]): [number, number] {
+  const s = a * a + b * b + c * c + d * d, det = a * d - b * c;
+  const root = Math.sqrt(Math.max(0, s * s - 4 * det * det));
+  return [Math.sqrt((s + root) / 2), Math.sqrt(Math.max(0, (s - root) / 2))];
+}
+
+/** The ends of an ellipse's long and short axes, from its middle. */
+export function ellipseAxes(e: { m: [number, number, number, number]; r: number }): { major: Vec; minor: Vec } {
+  const [a, b, c, d] = e.m;
+  // the direction φ where |m·(cos φ, sin φ)| is largest
+  const phi = 0.5 * Math.atan2(2 * (a * b + c * d), a * a + c * c - b * b - d * d);
+  const at = (f: number) => ({ x: (a * Math.cos(f) + b * Math.sin(f)) * e.r, y: (c * Math.cos(f) + d * Math.sin(f)) * e.r });
+  const p = at(phi), q = at(phi + Math.PI / 2);
+  return Math.hypot(p.x, p.y) >= Math.hypot(q.x, q.y) ? { major: p, minor: q } : { major: q, minor: p };
+}
+
+/** Points along an ellipse's arc from the one towards `p` to the one towards `q` (the short way round). */
+export function ellipseArc(center: Vec, e: { m: [number, number, number, number]; r: number }, p: Vec, q: Vec, steps = 14): Vec[] {
+  const [a, b, c, d] = e.m;
+  const det = a * d - b * c || 1e-12;
+  const phiOf = (v: Vec) => { const dx = v.x - center.x, dy = v.y - center.y; return Math.atan2((-c * dx + a * dy) / det, (d * dx - b * dy) / det); };
+  const f1 = phiOf(p);
+  let df = phiOf(q) - f1;
+  while (df > Math.PI) df -= 2 * Math.PI;
+  while (df < -Math.PI) df += 2 * Math.PI;
+  const out: Vec[] = [];
+  for (let k = 0; k <= steps; k++) {
+    const f = f1 + (df * k) / steps;
+    out.push({ x: center.x + (a * Math.cos(f) + b * Math.sin(f)) * e.r, y: center.y + (c * Math.cos(f) + d * Math.sin(f)) * e.r });
+  }
+  return out;
 }
 
 /**

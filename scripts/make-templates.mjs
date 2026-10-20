@@ -1,7 +1,8 @@
 // Builds src/chem/templates.json, the structures offered by the template tools.
 //
 // Ring systems, heterocycles and amino acids are laid out by RDKit (CoordGen) from SMILES,
-// then turned to sit on the usual 30° grid; sugars and the chair are drawn by hand below.
+// then turned to sit on the usual 30° grid; sugars are drawn by hand below. (Conformers and
+// other 3-D templates are made by make-conformers.py.)
 // Every structure is checked: written back as a molfile, it must give the same molecule
 // (stereochemistry included) as the SMILES it came from.
 //
@@ -271,21 +272,7 @@ const HAND = [
     ...haworth('furanose', { 1: 'OH', 4: 'CH2OH' }, { 2: 'OH', 3: 'OH' }) },
   { group: 'sugars', id: 'b-drib', name: '2-Deoxy-β-D-ribofuranose', smiles: 'OCC1OC(O)CC1O',
     ...haworth('furanose', { 1: 'OH', 4: 'CH2OH' }, { 3: 'OH' }) },
-  { group: 'sugars', id: 'chair', name: 'Cyclohexane chair', smiles: 'C1CCCCC1', ...chair() },
 ];
-
-/** A chair seen a little from above: a real chair's corners, tipped 15° towards the viewer. */
-function chair() {
-  const tilt = (15 * Math.PI) / 180, h = 0.25;
-  const atoms = [];
-  for (let k = 0; k < 6; k++) {
-    const th = (k * Math.PI) / 3;
-    const X = Math.cos(th), Y = Math.sin(th), Z = k % 2 ? -h : h;
-    atoms.push({ el: 'C', x: X, y: -(Y * Math.sin(tilt) + Z * Math.cos(tilt)), charge: 0 });
-  }
-  const bonds = atoms.map((_, i) => ({ a: i, b: (i + 1) % 6, order: 1, stereo: 0 }));
-  return { atoms, bonds };
-}
 
 // ------------------------------------------------------------------ build and check
 

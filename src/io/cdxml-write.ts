@@ -28,7 +28,7 @@ import { layoutTable, cellAlign, isCovered, spanOf, NOTE_SCALE } from '../table'
 import { TABLE_TAG, TABLE_PART_TAG, tableBorders, type TableTag } from './cdxml-table';
 import { bondLayer, crossingBonds } from '../chem/crossing';
 import { repeatGroups, repeatCount, repeatLabelPlace } from '../chem/polymer';
-import { isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
+import { ellipseAxes, isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
 
 /** Numbers in an attribute such as "12.5 30 0". */
 const pts = (v: string | null): number[] => (v ?? '').trim().split(/\s+/).filter(Boolean).map(Number);
@@ -881,7 +881,9 @@ class CdxmlWriter {
         const key = [...ring].sort((p, q) => p - q).join(',');
         if (seen.has(key) || !isCircleRing(doc, ring)) continue;
         seen.add(key);
-        const { center: c, radius: r } = ringCircle(doc, ring);
+        const { center: c, radius: r, ellipse } = ringCircle(doc, ring);
+        // a ring seen at an angle: its circle is an ellipse, written with its two axes
+        const ax = ellipse ? ellipseAxes(ellipse) : { major: { x: r, y: 0 }, minor: { x: 0, y: r } };
         const frag = this.fragOfAtom.get(ring[0]);
         if (!frag) continue;
         const old = [...have].find((g) => g.parentNode === frag && (([x, y]) => Math.hypot(x - c.x, y - c.y) < 0.3 * L)(pts(g.getAttribute('Center3D'))));
@@ -900,7 +902,7 @@ class CdxmlWriter {
           frag.appendChild(this.el('graphic', {
             id: this.id(), BoundingBox: `${f2(c.x + r)} ${f2(c.y)} ${f2(c.x)} ${f2(c.y)}`, color: this.colorAttr(b.color),
             GraphicType: 'Orbital', OvalType: 'Circle', OrbitalType: 's',
-            Center3D: `${f2(c.x)} ${f2(c.y)} 0`, MajorAxisEnd3D: `${f2(c.x + r)} ${f2(c.y)} 0`, MinorAxisEnd3D: `${f2(c.x)} ${f2(c.y + r)} 0`,
+            Center3D: `${f2(c.x)} ${f2(c.y)} 0`, MajorAxisEnd3D: `${f2(c.x + ax.major.x)} ${f2(c.y + ax.major.y)} 0`, MinorAxisEnd3D: `${f2(c.x + ax.minor.x)} ${f2(c.y + ax.minor.y)} 0`,
           }));
         }
         this.changed = true;

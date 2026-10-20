@@ -9,6 +9,7 @@ import { elementNumber } from '../chem/elements';
 import { arialWidth } from '../text-metrics';
 import { exitParam, type Rect } from '../geom';
 import { ACS_1996 } from '../style';
+import { circleIn, ellipseAxes } from '../chem/aromatic';
 
 const SHORT: Record<string, string> = {};
 
@@ -56,8 +57,9 @@ export function templateIcon(t: Template, size = 44): string {
     return layoutLabel(spec, dirs, FONT, (s, sz) => arialWidth(s, sz));
   });
 
-  // Fit bonds and labels together, keeping their proportions.
+  // Fit bonds, labels and drawn lines together, keeping their proportions.
   let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+  for (const [, ax, ay, bx, by] of t.shapes ?? []) { x1 = Math.min(x1, ax, bx); x2 = Math.max(x2, ax, bx); y1 = Math.min(y1, ay, by); y2 = Math.max(y2, ay, by); }
   t.atoms.forEach(([x, y], i) => {
     x1 = Math.min(x1, x); x2 = Math.max(x2, x); y1 = Math.min(y1, y); y2 = Math.max(y2, y);
     for (const b of layouts[i]?.boxes ?? []) {
@@ -66,7 +68,7 @@ export function templateIcon(t: Template, size = 44): string {
   });
   const pad = small ? 2 : 3;
   const h = showCode ? size - CODE_H : size;
-  const k = Math.min((size - 2 * pad) / Math.max(1, x2 - x1), (h - 2 * pad) / Math.max(1, y2 - y1), small ? 13 : 12);
+  const k = Math.min((size - 2 * pad) / Math.max(1, x2 - x1), (h - 2 * pad) / Math.max(1, y2 - y1), t.z && !small ? size / 3.4 : small ? 13 : 12);
   const ox = size / 2 - ((x1 + x2) / 2) * k, oy = h / 2 - ((y1 + y2) / 2) * k;
   const P = (i: number) => ({ x: t.atoms[i][0] * k + ox, y: t.atoms[i][1] * k + oy });
 
@@ -119,6 +121,23 @@ export function templateIcon(t: Template, size = 44): string {
       // inner line shortened at ring atoms (not at a labelled end, which is already cut back)
       const sa = clear[a].length ? 0 : 0.16, sb = clear[b].length ? 0 : 0.16;
       line({ x: p.x + dx * sa + nx * off * sgn, y: p.y + dy * sa + ny * off * sgn }, { x: q.x - dx * sb + nx * off * sgn, y: q.y - dy * sb + ny * off * sgn });
+    }
+  }
+  // a Newman projection's circle and back bonds
+  for (const [kind, ax, ay, bx, by] of t.shapes ?? []) {
+    const p = { x: ax * k + ox, y: ay * k + oy }, q = { x: bx * k + ox, y: by * k + oy };
+    if (kind === 'oval') parts.push(`<circle cx="${f((p.x + q.x) / 2)}" cy="${f((p.y + q.y) / 2)}" r="${f(Math.abs(q.x - p.x) / 2)}" stroke-width="1"/>`);
+    else line(p, q);
+  }
+  // aromatic rings drawn with a circle (an ellipse when the ring is seen at an angle)
+  for (const ring of t.circle ?? []) {
+    const c = circleIn(ring.map(P));
+    if (c.ellipse) {
+      const ax = ellipseAxes(c.ellipse);
+      const rx = Math.hypot(ax.major.x, ax.major.y), ry = Math.hypot(ax.minor.x, ax.minor.y);
+      parts.push(`<ellipse cx="${f(c.center.x)}" cy="${f(c.center.y)}" rx="${f(rx)}" ry="${f(ry)}" transform="rotate(${f((Math.atan2(ax.major.y, ax.major.x) * 180) / Math.PI)} ${f(c.center.x)} ${f(c.center.y)})" stroke-width="1"/>`);
+    } else {
+      parts.push(`<circle cx="${f(c.center.x)}" cy="${f(c.center.y)}" r="${f(c.radius)}" stroke-width="1"/>`);
     }
   }
   layouts.forEach((lay, i) => {
