@@ -36,6 +36,14 @@ OUT = ROOT / 'src' / 'chem' / 'conformers.json'
 # ------------------------------------------------------------------ 3-D structures
 
 
+# axial and equatorial bonds are drawn this long (in bond lengths): shorter than the ring's
+# bonds, as in textbook pictures (a real C–H is 0.71 of a C–C)
+STUB = 0.75
+# how much more puckered than they are rings are drawn (see conv_view)
+PUCKER = 1.8
+VERBOSE = '-v' in sys.argv
+
+
 def embed(smiles, torsions=(), seed=7, confs=40, keep_h=False, minimize=True):
     """A molecule's lowest-energy MMFF94 conformer (heavy atoms, or all atoms with keep_h).
 
@@ -81,7 +89,8 @@ def torsion_list(ring, values):
 
 def with_stubs(smiles, torsions=(), only=None, seed=7):
     """A ring with its hydrogens' directions as bonds (axial and equatorial stubs): returns
-    atoms (element, xyz) and bonds, with every C–H turned into a C–C one bond long."""
+    atoms (element, xyz) and bonds, with every C–H turned into a C–C stub (add() draws stubs
+    STUB bond lengths long)."""
     mol, xyz, _ = embed(smiles, torsions, seed=seed, keep_h=True)
     cc = np.mean([np.linalg.norm(xyz[b.GetBeginAtomIdx()] - xyz[b.GetEndAtomIdx()]) for b in mol.GetBonds()
                   if b.GetBeginAtom().GetAtomicNum() > 1 and b.GetEndAtom().GetAtomicNum() > 1])
@@ -274,6 +283,152 @@ def best_view(xyz, bonds, ring_atoms=None, samples=1500):
     return p @ rot_z(-ang).T
 
 
+def conv_view(xyz, ring, right, left=None, up=None, tilt=20, turn=0, stretch=1.0, face=1):
+    """The textbook view of a ring or ring system: its mean plane seen almost edge on, from
+    `tilt`° above, the `right` atom(s) at the right-hand end and `left` (or the middle) at the
+    left, the face that `up` atoms (or the right-hand end) lie on facing up, so axial bonds run
+    straight up and down the page. `turn` swings the far side round to the right (degrees),
+    which is how a chair's back and front bonds are kept apart. Returns X right, Y up, Z
+    towards the viewer."""
+    pt = lambda k: xyz[list(k)].mean(axis=0) if isinstance(k, (list, tuple, set)) else xyz[k]
+    c, R = frame(xyz, ring)
+    n = R[2]
+    ref = pt(up) if up is not None else pt(right)
+    if np.dot(ref - c, n) * face < 0:
+        n = -n
+    v = pt(right) - (pt(left) if left is not None else c)
+    h = v - np.dot(v, n) * n
+    h = h / np.linalg.norm(h)
+    f = np.cross(h, n)  # towards the viewer
+    a = math.radians(turn)
+    h, f = h * math.cos(a) + f * math.sin(a), f * math.cos(a) - h * math.sin(a)
+    t = math.radians(tilt)
+    Z = f * math.cos(t) + n * math.sin(t)
+    Y = n * math.cos(t) - f * math.sin(t)
+    q = xyz - c
+    # textbooks draw rings more puckered than they are: the depth across the mean plane
+    # stretched (which keeps parallel bonds parallel and axial bonds upright)
+    q = q + np.outer(q @ n, n) * (stretch - 1)
+    return np.c_[q @ h, q @ Y, q @ Z]
+
+
+def crossings(p, bonds):
+    q = p[:, :2]
+    n = 0
+    for x in range(len(bonds)):
+        for y in range(x + 1, len(bonds)):
+            i, j = bonds[x][:2]
+            k, l = bonds[y][:2]
+            if len({i, j, k, l}) == 4 and crosses(q[i], q[j], q[k], q[l]):
+                n += 1
+    return n
+
+
+def straightest(p, bonds):
+    """The widest angle between two bonds at an atom in the picture (degrees)."""
+    q = p[:, :2]
+    nb = {}
+    for i, j, *_ in bonds:
+        nb.setdefault(i, []).append(j)
+        nb.setdefault(j, []).append(i)
+    worst = 0
+    for c, ns in nb.items():
+        for x in range(len(ns)):
+            for y in range(x + 1, len(ns)):
+                u, w = q[ns[x]] - q[c], q[ns[y]] - q[c]
+                cosv = np.dot(u, w) / max(1e-9, np.linalg.norm(u) * np.linalg.norm(w))
+                worst = max(worst, math.degrees(math.acos(max(-1, min(1, cosv)))))
+    return worst
+
+
+def restub(p, bonds, core):
+    """Axial and equatorial stubs (bonds to atoms from `core` on) cut to STUB of the ring's
+    bond length, after a view has stretched them."""
+    if core is None or core >= len(p):
+        return p
+    p = p.copy()
+    L = np.mean([np.linalg.norm(p[i] - p[j]) for i, j, *_ in bonds if i < core and j < core])
+    for i, j, *_ in bonds:
+        a, b = (i, j) if j >= core else (j, i)
+        if b >= core and a < core:
+            d = p[b] - p[a]
+            p[b] = p[a] + d / np.linalg.norm(d) * L * STUB
+    return p
+
+
+def gaps(p, bonds):
+    """The closest an atom comes to another atom, and to a bond it is not on, in bond lengths."""
+    q = p[:, :2]
+    L = core_bond(q, bonds)
+    aa = min((np.linalg.norm(q[i] - q[j]) for i in range(len(q)) for j in range(i + 1, len(q))), default=9) / L
+    ab = 9.0
+    for i, j, *_ in bonds:
+        for k in range(len(q)):
+            if k not in (i, j):
+                ab = min(ab, seg_dist(q[k], q[i], q[j]) / L)
+    return aa, ab
+
+
+def tune(xyz, bonds, make, turns=range(-16, 33, 2), tilts=(12, 15, 18, 21, 24, 28), want=0.42, core=None, center=(8, 18), prefer=None):
+    """The view `make(turn, tilt)` nearest the textbook one (`center`: a chair swung 8° and seen
+    from 18° above) that shows every atom and bond clearly (clarity `want`, no atom near another
+    or on a bond)."""
+    best = None
+    for tu in turns:
+        for ti in tilts:
+            p = restub(make(tu, ti), bonds, core)
+            aa, ab = gaps(p, bonds)
+            # nothing on top of anything else first, then no crossing bonds and no two bonds in
+            # a straight line, then as near the textbook view as that allows
+            bad = 10 * max(0, 0.36 - aa) + 10 * max(0, 0.2 - ab) + 0.3 * crossings(p, bonds) + 0.04 * max(0, straightest(p, bonds) - 160)
+            s = 0.05 * min(clarity(p, bonds), want) - bad - 0.0015 * abs(tu - center[0]) - 0.002 * abs(ti - center[1])
+            if prefer:
+                s += prefer(p)
+            if best is None or s > best[0] + 1e-9:
+                best = (s, p, tu, ti)
+    global LAST_VIEW
+    LAST_VIEW = dict(turns=[best[2]], tilts=[best[3]])
+    if VERBOSE:
+        aa, ab = gaps(best[1], bonds)
+        print(f'    view: turn {best[2]}, tilt {best[3]}, clarity {clarity(best[1], bonds):.2f}, gaps {aa:.2f} {ab:.2f}')
+    return best[:2]
+
+
+def tuned(xyz, bonds, make, **kw):
+    global LAST_PICK
+    p = tune(xyz, bonds, make, **kw)[1]
+    LAST_PICK = (0, LAST_VIEW)
+    return p
+
+
+def pick(xyz, bonds, makes, **kw):
+    """The clearest of several textbook views (each tuned as above): the first wins a tie."""
+    global LAST_PICK
+    best = None
+    for k, m in enumerate(makes):
+        s, p = tune(xyz, bonds, m, **kw)
+        if best is None or s > best[0] + 0.01:
+            best = (s, p, k, LAST_VIEW)
+    LAST_PICK = (best[2], best[3])
+    return best[1]
+
+
+def same_view(xyz, bonds, makes, core):
+    """A template with its axial and equatorial bonds seen exactly as the bare ring before it
+    (the last pick()), so the two look alike."""
+    k, view = LAST_PICK
+    tu, ti = view['turns'][0], view['tilts'][0]
+    p = restub(makes[k](tu, ti), bonds, core)
+    aa, ab = gaps(p, bonds)
+    if aa >= 0.36 and ab >= 0.2:
+        return p
+    # the bonds would sit on top of each other: the nearest view where they don't
+    return tuned(xyz, bonds, makes[k], core=core, center=(tu, ti), turns=range(tu - 20, tu + 21, 2), tilts=sorted({ti, *range(max(8, ti - 10), ti + 13, 3)}))
+
+
+LAST_VIEW = LAST_PICK = None
+
+
 def to_z(d):
     d = d / np.linalg.norm(d)
     z = np.array([0, 0, 1.0])
@@ -298,9 +453,19 @@ def crosses(a, b, c, d):
     return ccw(a, b, c) * ccw(a, b, d) < 0 and ccw(c, d, a) * ccw(c, d, b) < 0
 
 
+def core_bond(q, bonds):
+    """The mean bond length in the picture, leaving out bonds to end atoms (stubs)."""
+    deg = {}
+    for i, j, *_ in bonds:
+        deg[i] = deg.get(i, 0) + 1
+        deg[j] = deg.get(j, 0) + 1
+    inner = [np.linalg.norm(q[i] - q[j]) for i, j, *_ in bonds if deg[i] > 1 and deg[j] > 1]
+    return np.mean(inner or [np.linalg.norm(q[i] - q[j]) for i, j, *_ in bonds])
+
+
 def clarity(p, bonds):
     q = p[:, :2]
-    L = np.mean([np.linalg.norm(p[i] - p[j]) for i, j, *_ in bonds])
+    L = core_bond(q, bonds)
     worst = 10.0
     n = len(q)
     for i in range(n):
@@ -366,8 +531,13 @@ def add(group, tid, name, smiles, atoms, bonds, view, *, flat=False, stereo3d=Fa
     """Add a template: atoms are [element, xyz, charge] in Å (any units), seen as `view` gives
     (X right, Y up, Z towards the viewer). Bonds are [i, j, order] (+ display)."""
     P = np.array(view, dtype=float)
-    # bond length 1 in the picture on average (so it draws at the drawing's bond length)
-    proj = [np.linalg.norm(P[i, :2] - P[j, :2]) for i, j, *_ in bonds]
+    if isinstance(atoms, Stubbed):
+        P = restub(P, bonds, atoms.core)
+    # bond length 1 in the picture on average (so it draws at the drawing's bond length), not
+    # counting the shorter axial and equatorial stubs
+    n_core = core if core is not None else stub_start(atoms, bonds)
+    proj = [np.linalg.norm(P[i, :2] - P[j, :2]) for i, j, *_ in bonds if i < n_core and j < n_core] or \
+        [np.linalg.norm(P[i, :2] - P[j, :2]) for i, j, *_ in bonds]
     k = 1 / np.mean(proj) if bonds else 1
     P = P * k
     x1, x2 = P[:, 0].min(), P[:, 0].max()
@@ -501,35 +671,59 @@ def ring_idx(n):
 
 def cyclohexanes():
     G = 'conformers'
-    # chair: the energy minimum
+    R6 = ring_idx(6)
+    cv = lambda x, **k: (lambda tu, ti: conv_view(x, R6, tilt=ti, turn=tu, stretch=PUCKER, **k))
+    # chair: the energy minimum, tips left and right, the right one up (the usual picture)
     mol, xyz, _ = embed('C1CCCCC1')
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'chair', 'Cyclohexane chair', 'C1CCCCC1', atoms, bonds, chair_view(xyz))
-    add(G, 'chair-2', 'Cyclohexane chair (ring flipped)', 'C1CCCCC1', atoms, bonds, chair_view(xyz, flip=True))
+    add(G, 'chair', 'Cyclohexane chair', 'C1CCCCC1', atoms, bonds, tuned(xyz, bonds, cv(xyz, right=3, left=0)))
+    add(G, 'chair-2', 'Cyclohexane chair (ring flipped)', 'C1CCCCC1', atoms, bonds, tuned(xyz, bonds, cv(xyz, right=3, left=0, up=0)))
     a, b = with_stubs('C1CCCCC1')
-    add(G, 'chair-ae', 'Chair with axial and equatorial bonds', 'C1CCCCC1', a, b, chair_view(xyz_of(a), ring=ring_idx(6)))
-    # boat: ring torsions 0, +ω, −ω, 0, +ω, −ω (C2v), held while the rest relaxes
-    boat = torsion_list(ring_idx(6), [0, 52, -52, 0, 52, -52])
+    tuned(xyz, bonds, cv(xyz, right=3, left=0))  # (the chair's view again, for the next)
+    add(G, 'chair-ae', 'Chair with axial and equatorial bonds', 'C1CCCCC1', a, b, same_view(xyz_of(a), b, [cv(xyz_of(a), right=3, left=0)], a.core))
+    # boat: ring torsions 0, +ω, −ω, 0, +ω, −ω (C2v), held while the rest relaxes; drawn as the
+    # chair is, with both tips (bow and stern) up
+    boat = torsion_list(R6, [0, 52, -52, 0, 52, -52])
     mol, xyz, _ = embed('C1CCCCC1', boat)
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'boat', 'Cyclohexane boat', 'C1CCCCC1', atoms, bonds, edge_view(xyz, bonds, prefer=tips_up(raised(xyz, ring_idx(6), 2))))
+    bs = raised(xyz, R6, 2)
+    # (from in front: swung round as a chair is, the bow hides behind the bonds)
+    add(G, 'boat', 'Cyclohexane boat', 'C1CCCCC1', atoms, bonds, tuned(xyz, bonds, cv(xyz, right=bs[0], left=bs[1], up=bs), center=(0, 22)))
     a, b = with_stubs('C1CCCCC1', boat)
-    add(G, 'boat-ae', 'Boat with all its bonds (flagpoles, bowsprits)', 'C1CCCCC1', a, b, edge_view(xyz_of(a), b, ring_idx(6), prefer=tips_up(raised(xyz_of(a), ring_idx(6), 2))))
+    xa = xyz_of(a)
+    bs = raised(xa, R6, 2)
+    add(G, 'boat-ae', 'Boat with all its bonds (flagpoles, bowsprits)', 'C1CCCCC1', a, b, same_view(xa, b, [cv(xa, right=bs[0], left=bs[1], up=bs)], a.core))
     # twist-boat (D2): an energy minimum, reached from a twisted start
-    tb = torsion_list(ring_idx(6), [31, 31, -65, 31, 31, -65])
+    tb = torsion_list(R6, [31, 31, -65, 31, 31, -65])
     mol, xyz, _ = embed('C1CCCCC1', tb)
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'twist-boat', 'Cyclohexane twist-boat', 'C1CCCCC1', atoms, bonds, edge_view(xyz, bonds))
-    # cyclohexene half-chair (the minimum)
+    bs = raised(xyz, R6, 2)
+    add(G, 'twist-boat', 'Cyclohexane twist-boat', 'C1CCCCC1', atoms, bonds, tuned(xyz, bonds, cv(xyz, right=bs[0], left=bs[1], up=bs)))
+    # cyclohexene half-chair (the minimum): the double bond at the front left
     mol, xyz, _ = embed('C1=CCCCC1')
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'half-chair', 'Cyclohexene half-chair', 'C1=CCCCC1', atoms, bonds, edge_view(xyz, bonds))
+    hc = lambda x: [lambda tu, ti: conv_view(x, R6, right=[3, 4], left=[0, 1], up=3, tilt=ti, turn=tu, stretch=PUCKER)]
+    add(G, 'half-chair', 'Cyclohexene half-chair', 'C1=CCCCC1', atoms, bonds, pick(xyz, bonds, hc(xyz)))
     a, b = with_stubs('C1=CCCCC1', only={2, 3, 4, 5})
-    add(G, 'half-chair-ae', 'Cyclohexene half-chair with its bonds', 'C1=CCCCC1', a, b, edge_view(xyz_of(a), b, ring_idx(6)))
-    # cyclohexanone chair, the flattened end at the carbonyl
+    xa = xyz_of(a)
+    add(G, 'half-chair-ae', 'Cyclohexene half-chair with its bonds', 'C1=CCCCC1', a, b, same_view(xa, b, hc(xa), a.core))
+    # cyclohexanone chair, the carbonyl at the right-hand tip
     mol, xyz, _ = embed('O=C1CCCCC1')
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'cyclohexanone', 'Cyclohexanone chair', 'O=C1CCCCC1', atoms, bonds, chair_view(xyz, ring=[1, 2, 3, 4, 5, 6]))
+    ring = [1, 2, 3, 4, 5, 6]
+    add(G, 'cyclohexanone', 'Cyclohexanone chair', 'O=C1CCCCC1', atoms, bonds,
+        pick(xyz, bonds, [lambda tu, ti, u=u: conv_view(xyz, ring, right=1, left=4, up=u, tilt=ti, turn=tu, stretch=PUCKER) for u in (4, 1)]))
+
+
+def tips_views(xyz, ring, stretch=PUCKER):
+    """Textbook views with each pair of opposite ring atoms as the tips, either face up."""
+    n = len(ring)
+    out = []
+    for k in range(n // 2):
+        l, r = ring[k], ring[k + n // 2]
+        for u in (r, l):
+            out.append(lambda tu, ti, l=l, r=r, u=u: conv_view(xyz, ring, right=r, left=l, up=u, tilt=ti, turn=tu, stretch=stretch))
+    return out
 
 
 def chair_view(xyz, flip=False, ring=None, tilt=19):
@@ -570,49 +764,93 @@ def boat_view(xyz, ring=None):
 
 def small_rings():
     G = 'conformers'
-    # cyclopentane envelope (Cs): one ring torsion 0, the flap atom out of the plane of the other four
+    R5 = ring_idx(5)
+    # cyclopentane envelope (Cs): one ring torsion 0, the flap atom out of the plane of the other
+    # four; drawn with the flap up at the right, the opposite bond at the left
     env = [(1, 2, 3, 4, 0.0)]
     mol, xyz, _ = embed('C1CCCC1', env)
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'envelope', 'Cyclopentane envelope', 'C1CCCC1', atoms, bonds, edge_view(xyz, bonds, prefer=tips_up(raised(xyz, ring_idx(5), 1))))
+    add(G, 'envelope', 'Cyclopentane envelope', 'C1CCCC1', atoms, bonds, pick(xyz, bonds, flap_views(xyz, R5)))
     a, b = with_stubs('C1CCCC1', env)
-    add(G, 'envelope-ae', 'Envelope with all its bonds', 'C1CCCC1', a, b, edge_view(xyz_of(a), b, ring_idx(5), prefer=tips_up(raised(xyz_of(a), ring_idx(5), 1))))
+    xa = xyz_of(a)
+    add(G, 'envelope-ae', 'Envelope with all its bonds', 'C1CCCC1', a, b, same_view(xa, b, flap_views(xa, R5), a.core))
     # half-chair (twist, C2): two neighbouring atoms either side of the plane of the other three
-    tw = torsion_list(ring_idx(5), [0, 0, 0, 0, 0])
     tw = [(0, 1, 2, 3, 26), (1, 2, 3, 4, -42), (2, 3, 4, 0, 42), (3, 4, 0, 1, -26)]
     mol, xyz, _ = embed('C1CCCC1', tw)
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'c5-twist', 'Cyclopentane half-chair (twist)', 'C1CCCC1', atoms, bonds, edge_view(xyz, bonds))
-    # cyclopentanone and cyclopentene envelopes
+    add(G, 'c5-twist', 'Cyclopentane half-chair (twist)', 'C1CCCC1', atoms, bonds, pick(xyz, bonds, odd_views(xyz, R5)))
+    # cyclopentene envelope: the flap (C4) up at the right, the double bond at the left
     mol, xyz, _ = embed('C1=CCCC1')
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'cyclopentene', 'Cyclopentene envelope', 'C1=CCCC1', atoms, bonds, edge_view(xyz, bonds))
-    # puckered cyclobutane (butterfly)
+    add(G, 'cyclopentene', 'Cyclopentene envelope', 'C1=CCCC1', atoms, bonds,
+        tuned(xyz, bonds, lambda tu, ti: conv_view(xyz, R5, right=3, left=[0, 1], up=3, tilt=ti, turn=tu, stretch=PUCKER)))
+    # puckered cyclobutane (butterfly): drawn as a boat is, the folded-up corners at the ends
     mol, xyz, _ = embed('C1CCC1')
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'cyclobutane', 'Puckered cyclobutane', 'C1CCC1', atoms, bonds, edge_view(xyz, bonds))
+    add(G, 'cyclobutane', 'Puckered cyclobutane', 'C1CCC1', atoms, bonds, pick(xyz, bonds, tips_views(xyz, ring_idx(4)), tilts=(24, 28, 32, 36, 40), center=(8, 32)))
     a, b = with_stubs('C1CCC1')
-    add(G, 'cyclobutane-ae', 'Puckered cyclobutane with its bonds', 'C1CCC1', a, b, edge_view(xyz_of(a), b, ring_idx(4)))
+    xa = xyz_of(a)
+    add(G, 'cyclobutane-ae', 'Puckered cyclobutane with its bonds', 'C1CCC1', a, b, same_view(xa, b, tips_views(xa, ring_idx(4)), a.core))
     # cyclopropane, from just above its plane, with its bonds
     a, b = with_stubs('C1CC1')
-    add(G, 'cyclopropane-ae', 'Cyclopropane with its bonds', 'C1CC1', a, b, edge_view(xyz_of(a), b, ring_idx(3)))
+    xa = xyz_of(a)
+    add(G, 'cyclopropane-ae', 'Cyclopropane with its bonds', 'C1CC1', a, b,
+        pick(xa, b, [lambda tu, ti, k=k: conv_view(xa, ring_idx(3), right=k, tilt=ti, turn=tu) for k in range(3)], core=a.core, tilts=(24, 28, 32, 36, 40), center=(8, 32)))
 
 
-def flap_view(xyz, flap_hint, ring=None):
-    """An envelope from the side: the flap atom up, at the back right."""
-    ring = ring if ring is not None else list(range(5))
+def long_views(xyz, ring, up=None, left=None, right=None, stretch=PUCKER):
+    """A ring system along the page: the atoms at the two ends of its long axis left and right
+    (or those given), the face `up` atoms are on up (or either face)."""
     c, R = frame(xyz, ring)
-    p = (xyz - c) @ R.T
-    q = p[ring]
-    k = int(np.argmax(np.abs(q[:, 2])))
-    if q[k, 2] < 0:
-        p = p @ rot_x(math.pi).T
-        q = p[ring]
-    ang = math.atan2(q[k, 1], q[k, 0])
-    p = p @ rot_z(-ang + math.radians(30)).T
-    p = p @ rot_x(-math.pi / 2).T
-    p = p @ rot_x(math.radians(20)).T
-    return p
+    along = (xyz[ring] - c) @ R[0]
+    lo, hi = ring[int(np.argmin(along))], ring[int(np.argmax(along))]
+    l = left if left is not None else lo
+    r = right if right is not None else hi
+    out = []
+    for u, f in ([(up, 1)] if up is not None else [(r, 1), (r, -1)]):
+        out.append(lambda tu, ti, u=u, f=f: conv_view(xyz, ring, right=r, left=l, up=u, face=f, tilt=ti, turn=tu, stretch=stretch))
+    return out
+
+
+def system_views(xyz, ring, all_atoms=None, up=None, stretch=PUCKER):
+    """A fused ring system seen in the frame of one of its rings (`ring`, in ring order), as
+    that ring alone would be (tips left and right): each pair of opposite atoms as the tips,
+    either face up (or the face `up` atoms are on)."""
+    n = len(ring)
+    out = []
+    for k in range(n):
+        l = ring[k]
+        r = ring[(k + n // 2) % n] if n % 2 == 0 else [ring[(k + n // 2) % n], ring[(k + n // 2 + 1) % n]]
+        for f in ((1,) if up is not None else (1, -1)):
+            out.append(lambda tu, ti, l=l, r=r, f=f: conv_view(xyz, ring, right=r, left=l, up=up if up is not None else r, face=f, tilt=ti, turn=tu, stretch=stretch))
+    return out
+
+
+def wide_low(p):
+    """Score: ring systems read along the page (wide, not tall)."""
+    w = p[:, 0].max() - p[:, 0].min()
+    h = p[:, 1].max() - p[:, 1].min()
+    return 0.08 * min(w / max(h, 1e-6), 4)
+
+
+def flap_views(xyz, ring):
+    """Envelope views: the flap (the atom out of the plane of the rest) up at the right."""
+    n = len(ring)
+    k = ring.index(raised(xyz, ring, 1)[0])
+    opp = [ring[(k + n // 2) % n], ring[(k + n // 2 + 1) % n]]
+    return [lambda tu, ti: conv_view(xyz, ring, right=ring[k], left=opp, up=ring[k], tilt=ti, turn=tu, stretch=PUCKER),
+            lambda tu, ti: conv_view(xyz, ring, right=opp, left=ring[k], up=ring[k], tilt=ti, turn=tu, stretch=PUCKER)]
+
+
+def odd_views(xyz, ring):
+    """Views of an odd ring: each atom at one end, the bond opposite at the other, either face up."""
+    n = len(ring)
+    out = []
+    for k in range(n):
+        opp = [ring[(k + n // 2) % n], ring[(k + n // 2 + 1) % n]]
+        for u in (ring[k], opp[0]):
+            out.append(lambda tu, ti, k=k, opp=opp, u=u: conv_view(xyz, ring, right=ring[k], left=opp, up=u, tilt=ti, turn=tu, stretch=PUCKER))
+    return out
 
 
 def medium_rings():
@@ -620,19 +858,19 @@ def medium_rings():
     # cycloheptane twist-chair and cyclooctane boat-chair: the lowest-energy conformers
     mol, xyz, _ = embed('C1CCCCCC1', confs=200)
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'c7-twist-chair', 'Cycloheptane twist-chair', 'C1CCCCCC1', atoms, bonds, edge_view(xyz, bonds))
+    add(G, 'c7-twist-chair', 'Cycloheptane twist-chair', 'C1CCCCCC1', atoms, bonds, pick(xyz, bonds, odd_views(xyz, ring_idx(7))))
     mol, xyz, _ = embed('C1CCCCCCC1', confs=300)
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'c8-boat-chair', 'Cyclooctane boat-chair', 'C1CCCCCCC1', atoms, bonds, edge_view(xyz, bonds))
+    add(G, 'c8-boat-chair', 'Cyclooctane boat-chair', 'C1CCCCCCC1', atoms, bonds, pick(xyz, bonds, tips_views(xyz, ring_idx(8))))
     # cyclooctane crown (D4d): ring torsions ±87.5° alternately
     crown = torsion_list(ring_idx(8), [87.5, -87.5] * 4)
     mol, xyz, _ = embed('C1CCCCCCC1', crown)
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'c8-crown', 'Cyclooctane crown', 'C1CCCCCCC1', atoms, bonds, edge_view(xyz, bonds))
+    add(G, 'c8-crown', 'Cyclooctane crown', 'C1CCCCCCC1', atoms, bonds, pick(xyz, bonds, tips_views(xyz, ring_idx(8))))
     # cyclooctatetraene tub (D2d)
     mol, xyz, _ = embed('C1=CC=CC=CC=C1')
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'cot-tub', 'Cyclooctatetraene tub', 'C1=CC=CC=CC=C1', atoms, bonds, edge_view(xyz, bonds))
+    add(G, 'cot-tub', 'Cyclooctatetraene tub', 'C1=CC=CC=CC=C1', atoms, bonds, pick(xyz, bonds, tips_views(xyz, ring_idx(8), stretch=1.0)))
 
 
 def wide(weight=0.15):
@@ -700,15 +938,21 @@ def fused():
     for tid, name, smi, kinds in items:
         need(smi, kinds)
         atoms, bonds, xyz = mol3d(smi)
-        add(G, tid, name, smi, atoms, bonds, edge_view(xyz, bonds, elevs=(20, 25, 30), prefer=wide()), stereo3d=True)
+        m = Chem.MolFromSmiles(smi)  # (kept: ring info read from a dropped molecule is garbage)
+        rings = [list(r) for r in m.GetRingInfo().AtomRings()]
+        add(G, tid, name, smi, atoms, bonds, pick(xyz, bonds, [m for r in rings for m in system_views(xyz, r)], prefer=wide_low), stereo3d=True)
     # steroids: 5α (A/B trans) and 5β (A/B cis), from 5α- and 5β-dihydrotestosterone with the
-    # oxygens taken off, so the rings have the natural (8β,9α,10β,13β,14α) configuration
+    # oxygens taken off, so the rings have the natural (8β,9α,10β,13β,14α) configuration; drawn
+    # as usual, ring A at the left and D at the right, the β face (the angular methyls) up
     for tid, name, dht in [
         ('steroid-5a', '5α-Steroid (androstane) skeleton', 'C[C@]12CC[C@H]3[C@H]([C@@H]1CC[C@@H]2O)CC[C@@H]4[C@@]3(CCC(=O)C4)C'),
         ('steroid-5b', '5β-Steroid skeleton (A/B cis)', 'C[C@]12CC[C@H]3[C@H]([C@@H]1CC[C@@H]2O)CC[C@H]4[C@@]3(CCC(=O)C4)C'),
     ]:
         mol, xyz, _ = embed(dht, confs=80)
         keep = [a.GetIdx() for a in mol.GetAtoms() if a.GetSymbol() == 'C']
+        c3 = next(a.GetIdx() for a in mol.GetAtoms() if a.GetSymbol() == 'C' and any(n.GetSymbol() == 'O' and mol.GetBondBetweenAtoms(a.GetIdx(), n.GetIdx()).GetBondTypeAsDouble() == 2 for n in a.GetNeighbors()))
+        c17 = next(a.GetIdx() for a in mol.GetAtoms() if a.GetSymbol() == 'C' and any(n.GetSymbol() == 'O' and mol.GetBondBetweenAtoms(a.GetIdx(), n.GetIdx()).GetBondTypeAsDouble() == 1 for n in a.GetNeighbors()))
+        methyls = [a.GetIdx() for a in mol.GetAtoms() if a.GetSymbol() == 'C' and a.GetDegree() == 1]
         rw = Chem.RWMol(mol)
         for a in sorted((a.GetIdx() for a in mol.GetAtoms() if a.GetSymbol() != 'C'), reverse=True):
             rw.RemoveAtom(a)
@@ -727,15 +971,44 @@ def fused():
         m2.AddConformer(conf)
         Chem.AssignStereochemistryFrom3D(m2)
         smi = Chem.MolToSmiles(m2)
-        add(G, tid, name, smi, atoms, bonds, edge_view(xyz2, bonds, elevs=(20, 25, 30), prefer=wide()), stereo3d=True)
-    # bicyclo[3.3.1]nonane twin chair, adamantane, twistane, cubane
-    for tid, name, smi in [
-        ('adamantane-3d', 'Adamantane', 'C1C2CC3CC1CC(C2)C3'),
-        ('twistane', 'Twistane', 'C1CC2CC3CC1CC2C3'),
-        ('cubane', 'Cubane', 'C12C3C4C1C5C2C3C45'),
-    ]:
-        atoms, bonds, xyz = mol3d(smi)
-        add(G, tid, name, smi, atoms, bonds, clearest(xyz, bonds))
+        at = {old: new for new, old in enumerate(keep)}
+        rings = [list(r) for r in m2.GetRingInfo().AtomRings()]
+        a3, a17 = at[c3], at[c17]
+        ups = [at[m] for m in methyls]
+        add(G, tid, name, smi, atoms, bonds,
+            pick(xyz2, bonds, [m for r in rings for m in system_views(xyz2, r, up=ups)],
+                 prefer=lambda p: wide_low(p) + (0.5 if p[a3, 0] < p[a17, 0] else 0)), stereo3d=True)
+    # adamantane: a chair at the bottom, the three bridges rising to the top CH, as usually drawn
+    smi = 'C1C2CC3CC1CC(C2)C3'
+    atoms, bonds, xyz = mol3d(smi)
+    m = Chem.MolFromSmiles(smi)
+    chair = list(m.GetRingInfo().AtomRings()[0])
+    rest = [i for i in range(m.GetNumAtoms()) if i not in chair]
+    add(G, 'adamantane-3d', 'Adamantane', smi, atoms, bonds,
+        pick(xyz, bonds, [lambda tu, ti, k=k: conv_view(xyz, chair, right=chair[(k + 3) % 6], left=chair[k], up=rest, tilt=ti, turn=tu) for k in range(6)]))
+    # twistane: along the page like a ring system
+    smi = 'C1CC2CC3CC1CC2C3'
+    atoms, bonds, xyz = mol3d(smi)
+    add(G, 'twistane', 'Twistane', smi, atoms, bonds, pick(xyz, bonds, long_views(xyz, list(range(len(atoms))), stretch=1.0)))
+    # cubane: the front face square on, seen a little from the right and above (the usual cube)
+    smi = 'C12C3C4C1C5C2C3C45'
+    atoms, bonds, xyz = mol3d(smi)
+    add(G, 'cubane', 'Cubane', smi, atoms, bonds, cube_view(xyz))
+
+
+def cube_view(xyz, yaw=24, pitch=16):
+    """A cube with one face towards the viewer, turned `yaw`° and tipped `pitch`° so the faces
+    behind show: the cube as it is drawn in books."""
+    c = xyz.mean(axis=0)
+    q = xyz - c
+    # the cube's own axes: the three edge directions from one corner
+    d = [q[j] - q[0] for j in range(1, len(q)) if abs(np.linalg.norm(q[j] - q[0]) - np.min([np.linalg.norm(q[k] - q[0]) for k in range(1, len(q))])) < 0.05]
+    ex = d[0] / np.linalg.norm(d[0])
+    ey = d[1] - np.dot(d[1], ex) * ex
+    ey /= np.linalg.norm(ey)
+    ez = np.cross(ex, ey)
+    p = q @ np.array([ex, ey, ez]).T
+    return p @ rot_y(math.radians(yaw)).T @ rot_x(math.radians(pitch)).T
 
 
 def bicyclics():
