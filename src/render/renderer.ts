@@ -269,6 +269,16 @@ export class Renderer {
     if (rects.length) this.dropTiles(doc, rects);
   }
 
+  /** The font list atom labels are set in (after useStyle). */
+  labelFontStack(): string {
+    return this.labelStack;
+  }
+
+  /** Width of label text at a size, measured as labels are. */
+  measure(text: string, size: number): number {
+    return measureText(text, size, this.labelStack);
+  }
+
   atomInfo(doc: Doc, a: Atom): AtomCache {
     let c = this.atomCache.get(a.id);
     if (c) return c;

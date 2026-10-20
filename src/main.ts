@@ -83,7 +83,7 @@ import { selectedGroup } from './chem/group-smiles';
 import { templateIcon } from './ui/template-icons';
 import { StructureChecks } from './chem/warnings';
 import { idText, labelClashes, parseIdStart, type IdStyle } from './chem/compound-numbers';
-import { schemeItems } from './chem/reaction';
+import { schemeItems, isReactionArrow } from './chem/reaction';
 import { labelsOf, schemePrefs, setSchemePrefs, SPACING, type SchemePrefs } from './chem/scheme-layout';
 import { plainText } from './richtext';
 import { LiveStereo } from './chem/live-stereo';
@@ -104,6 +104,7 @@ import { addRecent, removeRecent, recentLabel } from './recent';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
 import { NameDialog } from './ui/name-dialog';
 import { ArrangeDialog } from './ui/arrange-dialog';
+import { AnimateDialog } from './ui/animate-dialog';
 import { PeriodicTable } from './ui/periodic-table';
 import { SheetMode, ClipboardCells } from './ui/sheet-mode';
 import { DocumentMode, DocPaste } from './ui/doc-mode';
@@ -927,6 +928,16 @@ async function contractLabel(): Promise<void> {
 }
 
 const arrangeDialog = new ArrangeDialog({ apply: (o) => editor.arrangeScheme(o), undo: () => editor.undo() });
+const animateDialog = new AnimateDialog({
+  doc: () => doc,
+  renderer: () => renderer,
+  selectedAtoms: () => new Set(editor.sel.atoms),
+  setMorph: (arrow, m) => doc.edit('Animation Pairing', () => doc.updateArrow(arrow, { morph: m })),
+  name: () => ws.active.name,
+  flash: (msg) => flash(msg, 6000),
+});
+/** The reaction arrow picked (for Animate This Step), if one is. */
+const pickedReactionArrow = (): number | undefined => [...editor.sel.arrows].find((id) => { const r = doc.arrows.get(id); return !!r && isReactionArrow(r); });
 const nameDialog = new NameDialog(async (name) => {
   const got = await nameToMolfile(name);
   if ('error' in got) return got.error;
@@ -2798,6 +2809,12 @@ const COMMANDS: Record<string, () => unknown> = {
   },
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
   'arrange-scheme': () => arrangeDialog.open(),
+  'animate-reaction': () => animateDialog.open(),
+  'animate-step': () => {
+    const arrow = pickedReactionArrow();
+    if (arrow === undefined) { flash('Select a reaction arrow first, or use Animate Reaction for the whole scheme.'); return; }
+    animateDialog.open({ arrow });
+  },
   'number-compounds': () => void numberCompounds(),
   'scheme-settings': () => void schemeSettings(),
   'attach-descriptors': () => void attachDescriptors(),
@@ -4352,7 +4369,7 @@ function drawingMenu(): MenuItem[] {
       { cmd: 'undo' }, { cmd: 'redo' }, null,
       ...(ws.active.mode === 'slides' ? [{ cmd: 'new-comment', label: 'New Comment' }, { cmd: 'show-comments', label: 'Show Comments' }, null] : []),
       { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'connector-tool' }] : []), ...(ws.active.mode === 'slides' ? [{ cmd: 'slide-shapes', label: 'Shape…' }] : [])] },
-      { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] },
+      { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }, null, { cmd: 'animate-reaction' }] },
       { cmd: 'drawing-style' },
       view,
     ];
@@ -4386,7 +4403,8 @@ function drawingMenu(): MenuItem[] {
       ] },
     ] : []),
     ...([...s.arrows].some((id) => doc.arrows.get(id)?.sweep) ? [{ cmd: 'clean-up-arrow' }] : []),
-    ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'clean-up-arrow' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }] }] : []),
+    ...(pickedReactionArrow() !== undefined ? [{ cmd: 'animate-step' }] : []),
+    ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'clean-up-arrow' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }, null, { cmd: 'animate-reaction' }, ...(pickedReactionArrow() !== undefined ? [{ cmd: 'animate-step' }] : [])] }] : []),
     null,
     { cmd: 'add-frame' },
     ...(atoms ? [{ label: 'Label the Structure', items: [{ cmd: 'add-id-label' }, { cmd: 'add-caption' }, { cmd: 'attach-descriptors' }, null, { cmd: 'number-compounds' }] }] : []),

@@ -1,0 +1,36 @@
+{
+ "structures": 2,
+ "stages": [
+  {
+   "kind": "morph",
+   "from": "himbadine to GB29 #1",
+   "to": "himbadine to GB29 #2",
+   "atoms": "29 paired of 30 -> 29",
+   "bonds": "32 carried of 34 -> 33",
+   "shifts": 1,
+   "breaking": [
+    "29-20"
+   ],
+   "forming": [],
+   "unpaired_start": [
+    "29"
+   ],
+   "unpaired_product": [],
+   "mirrored_rings": []
+  }
+ ],
+ "crossings": {
+  "himbadine to GB29 #1": {
+   "drawn": 3,
+   "declared_by_chemdraw": 5,
+   "drawn_but_not_declared": 0,
+   "declared_but_not_drawn": 2
+  },
+  "himbadine to GB29 #2": {
+   "drawn": 3,
+   "declared_by_chemdraw": 4,
+   "drawn_but_not_declared": 0,
+   "declared_but_not_drawn": 1
+  }
+ }
+}

@@ -390,6 +390,21 @@ export interface Arrow {
   to?: Glue;
   /** Drawn with right-angled bends (an elbow connector). */
   elbow?: boolean;
+  /** How this step animates (Scheme > Animate Reaction): the atom pairing and moves chosen for it. */
+  morph?: MorphStep;
+}
+
+/**
+ * A reaction step's animation settings, in atom ids: pairs chosen by hand (starting material
+ * atom, product atom), 1,2-shifts (bond u–v walks its v end onto dest) and double-bond lines
+ * that slide onto another bond.
+ */
+export interface MorphStep {
+  pairs?: [number, number][];
+  /** Use exactly these pairs; otherwise they are fixed points and the rest is matched. */
+  exact?: boolean;
+  shifts?: [number, number, number][];
+  slides?: [[number, number], [number, number]][];
 }
 
 /** Where a connector's end is stuck: a shape and its connection point (0 top, 1 right, 2 bottom, 3 left). */

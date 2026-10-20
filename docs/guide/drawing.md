@@ -226,6 +226,16 @@ R/S and E/Z are worked out for every structure as you draw.
   - **Text size**, **Text alignment** (left, centre or right) and **Gap between arrow and text** for reagents and conditions.
   - **Fit arrow length to its text**: the arrow grows or shrinks to its text, and the products, their + signs and their numbers move with the head. **Arrow before the text starts** and **Space between text and arrowhead** set how much arrow shows on each side of the text. Untick it to keep arrows the length you drew them, with the text centred on them.
 
+### Animating a reaction
+
+**Scheme ▸ Animate Reaction…** turns each structure of the scheme into the next as a short animation: atoms move to where they are in the product, bonds that break fade out and bonds that form fade in. It follows the arrows from the first step to the last; with structures selected it keeps to those, and with no arrows it takes the structures from left to right. Right-click a reaction arrow (or pick it and use **Scheme ▸ Animate This Step…**) to animate just that step. The animation is based on [cdxmorph](https://github.com/rshenvi/cdxmorph) by Ryan Shenvi (Shenvi Lab), used with permission.
+
+- The window shows a preview with **Play**, a slider to step through the frames, and the timing: seconds of movement, frames per second, how long it holds on the first and last structures and pauses on the ones in between, smooth or steady movement, and **Play back to the start** for a loop that never jumps. These are remembered.
+- **Steps** lists what each step does: how many atoms are paired and which bonds break and form, numbered as ChemDraw numbers the atoms.
+- **Edit Pairing…** shows the starting structure beside the product. Click an atom on the left, then the atom it becomes on the right; click a paired atom on the left again to unpair it. Red bonds break, green bonds form, and orange numbers are atoms with no partner. Your pairs are kept and the rest is matched automatically, unless you tick **Use only my pairs**. **1,2-shifts** (such as `14-17>21`: bond 14–17 keeps its 14 end and swings its 17 end onto 21) and **Moving lines** (`7-8>4-7`: the second line of the 7=8 double bond moves onto 4–7) are typed in the starting structure's numbers. **Save Pairing** keeps it with the arrow, so it is saved in the .cdxml file.
+- **Save GIF…** writes an animated GIF at the width you set; **Save PNG Frames…** writes every frame as a PNG, in one zip. GIFs store frame times in hundredths of a second, so 24 frames per second plays at 25.
+- **Import Pairing…** and **Export Pairing…** read and write cdxmorph's `.mapping.json` files, so a pairing made in either program works in the other.
+
 ### Reagents and conditions on an arrow
 
 When you draw a level reaction arrow, dotted boxes with a **+** appear above and below it for a few seconds. Click one and type the reagents or conditions; formulas such as K2CO3 get their subscripts as you type. When you finish, the text is lined up and (with fitting on) the arrow is sized to it. Afterwards, move the mouse just above or below an arrow that has no text on that side and the box comes back.
