@@ -9,7 +9,7 @@
 import { Doc, Bond, Atom, StereoInfo } from '../model';
 import { axialTags } from './axial';
 import { Vec, Rect, norm, sub, len, lerp, distToSegment } from '../geom';
-import { labelSpec, layoutLabel } from './labels';
+import { labelBonds, labelSpec, layoutLabel } from './labels';
 import { doubleBondGap, wedgeWidth } from '../style';
 import { NumberPlace, numberSlots, numberBox, numberSize } from '../render/atom-marks';
 
@@ -317,9 +317,8 @@ function labelBoxesOf(doc: Doc, measure: Measure): (a: Atom) => Rect[] {
     if (!spec) return [];
     if (a.supDigits) spec.supDigits = true;
     const k = a.s ?? 1;
-    const dirs = doc.neighbors(a.id).map((n) => norm(sub(n, a)));
     const m = doc.style.marginWidth * k;
-    return layoutLabel(spec, dirs, doc.style.labelSize * k, measure, a.just).boxes
+    return layoutLabel(spec, labelBonds(doc, a), doc.style.labelSize * k, measure, a.just).boxes
       .map((b) => ({ x1: a.x + b.x1 - m, y1: a.y + b.y1 - m, x2: a.x + b.x2 + m, y2: a.y + b.y2 + m }));
   };
 }

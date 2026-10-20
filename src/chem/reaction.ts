@@ -11,7 +11,7 @@ import type { Rect, Vec } from '../geom';
 import { dot, norm, sub } from '../geom';
 import { arrowBox } from '../objects';
 import { atomsBox, type Measure } from '../editor/arrange';
-import { labelSpec, layoutLabel } from './labels';
+import { labelBonds, labelSpec, layoutLabel } from './labels';
 import { arialWidth } from '../text-metrics';
 import { layoutText } from '../text/layout';
 import { plainText } from '../richtext';
@@ -194,8 +194,7 @@ export function plainMeasure(doc: Doc): Measure {
       const spec = a.attach ? null : labelSpec(a.z, a.label, a.charge, a.isotope, doc.valenceSum(a.id), doc.degree(a.id), !a.hideCharge, !!a.showCarbon);
       if (!spec) return [];
       const k = a.s ?? 1;
-      const dirs = doc.neighbors(a.id).map((n) => norm(sub(n, a)));
-      const lay = layoutLabel(spec, dirs, doc.style.labelSize * k, (t, s) => arialWidth(t, s), a.just);
+      const lay = layoutLabel(spec, labelBonds(doc, a), doc.style.labelSize * k, (t, s) => arialWidth(t, s), a.just);
       const m = doc.style.marginWidth * k;
       return lay.boxes.map((b) => ({ x1: a.x + b.x1 - m, y1: a.y + b.y1 - m, x2: a.x + b.x2 + m, y2: a.y + b.y2 + m }));
     },

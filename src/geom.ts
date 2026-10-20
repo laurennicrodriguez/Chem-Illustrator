@@ -88,6 +88,24 @@ export function exitParam(a: Vec, b: Vec, r: Rect): number {
   return Math.max(0, t);
 }
 
+/**
+ * Parameter t in [0,1] at which the segment a→b has passed right through rectangle r, whether
+ * or not a is inside it (a charge sitting beside a label, over the bond). 0 when it misses r.
+ */
+export function passParam(a: Vec, b: Vec, r: Rect): number {
+  const d = sub(b, a);
+  let t0 = 0, t1 = 1;
+  const edge = (p: number, q: number): boolean => {
+    // p·t ≤ q must hold for points inside
+    if (Math.abs(p) < 1e-12) return q >= 0;
+    const t = q / p;
+    if (p < 0) t0 = Math.max(t0, t); else t1 = Math.min(t1, t);
+    return t0 <= t1;
+  };
+  if (!edge(-d.x, a.x - r.x1) || !edge(d.x, r.x2 - a.x) || !edge(-d.y, a.y - r.y1) || !edge(d.y, r.y2 - a.y)) return 0;
+  return t1;
+}
+
 /** Centre and radius of the circular arc from `tail` to `head` that turns through `sweep` radians. */
 export function arcCenter(tail: Vec, head: Vec, sweep: number): { center: Vec; radius: number } {
   const chord = sub(head, tail);

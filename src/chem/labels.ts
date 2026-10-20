@@ -1,6 +1,9 @@
 // Atom labels: reading label text ("OMe", "CO2Et", "NHBoc"), choosing which way it runs
 // (OH vs HO, CH3 vs H3C), and turning it into atoms for the chemistry engine.
 
+import { passParam, type Rect } from '../geom';
+import type { Atom, Doc } from '../model';
+import { doubleBondGap } from '../style';
 import { SYMBOLS, elementNumber, hasImplicitH, implicitHydrogens, maxValence, valenceOfBonds } from './elements';
 
 /**
@@ -186,6 +189,30 @@ export function labelSpec(z: number, label: string | null, charge: number, isoto
   return { tokens: [{ kind: 'el', text: sym, count: 1, charge: '' }], hCount: h, charge: shown };
 }
 
+/**
+ * A bond as a label's layout sees it: the way it leaves the atom and, when known, its length,
+ * how far its lines reach either side, and whether the atom at its far end shows a label too.
+ */
+export interface LabelBond { x: number; y: number; len?: number; spread?: number; far?: boolean }
+
+/** The bonds round an atom, for laying out its label. */
+export function labelBonds(doc: Doc, a: Atom): LabelBond[] {
+  const out: LabelBond[] = [];
+  const k = a.s ?? 1;
+  const lw = (doc.style.lineWidth * k) / 2, gap = doubleBondGap(doc.style) * k;
+  for (const bid of doc.adj.get(a.id) ?? []) {
+    const b = doc.bonds.get(bid);
+    const n = b && doc.atoms.get(b.a1 === a.id ? b.a2 : b.a1);
+    if (!b || !n) continue;
+    const l = Math.hypot(n.x - a.x, n.y - a.y);
+    if (l < 1e-9) { out.push({ x: 0, y: 0, len: 0 }); continue; }
+    // a double bond's second line can sit either side, so count it both ways
+    const far = !!n.label || n.z !== 6 || !!n.showCarbon || !!n.isotope;
+    out.push({ x: (n.x - a.x) / l, y: (n.y - a.y) / l, len: l, spread: lw + (b.order >= 1.5 ? gap : 0), far });
+  }
+  return out;
+}
+
 export interface GlyphRun {
   text: string;
   /** Left of the run, relative to the atom position. */
@@ -199,6 +226,8 @@ export interface LabelLayout {
   runs: GlyphRun[];
   /** Boxes (relative to atom) that bonds must stop at, before adding the margin. */
   boxes: { x1: number; y1: number; x2: number; y2: number }[];
+  /** Which of the runs (and boxes) is the charge, when one is shown after the label. */
+  charge?: number;
 }
 
 export type Measure = (text: string, size: number) => number;
@@ -235,11 +264,12 @@ export function labelDir(spec: LabelSpec, bondDirs: { x: number; y: number }[], 
 }
 
 /**
- * Lay out a label. `bondDirs` are unit vectors from the atom to its neighbours.
+ * Lay out a label. `bondDirs` are unit vectors from the atom to its neighbours, with the bonds'
+ * lengths when known (so a charge can move out of the way of a short bond).
  * Follows ChemDraw's automatic justification: the bonded atom sits on the atom
  * position, and the rest of the label runs away from the bonds (p. 46).
  */
-export function layoutLabel(spec: LabelSpec, bondDirs: { x: number; y: number }[], size: number, measure: Measure, just: 'auto' | 'left' | 'right' = 'auto'): LabelLayout {
+export function layoutLabel(spec: LabelSpec, bondDirs: LabelBond[], size: number, measure: Measure, just: 'auto' | 'left' | 'right' = 'auto'): LabelLayout {
   const head = spec.tokens[0];
   const tail = spec.tokens.slice(1);
   const hTok: Token | null = spec.hCount > 0 ? { kind: 'el', text: 'H', count: spec.hCount, charge: '' } : null;
@@ -248,6 +278,9 @@ export function layoutLabel(spec: LabelSpec, bondDirs: { x: number; y: number }[
 
   const runs: GlyphRun[] = [];
   const boxes: LabelLayout['boxes'] = [];
+  // the charge goes on last, once the rest of the label is in place
+  let chargeAt = 0;
+  const pushCharge = (x: number) => { chargeAt = x; };
   const baseline = (CAP * size) / 2;
   const subSize = size * SUB_SCALE;
 
@@ -274,7 +307,7 @@ export function layoutLabel(spec: LabelSpec, bondDirs: { x: number; y: number }[
     let x = pushPieces(headPieces, headX);
     if (dir === 'right' && hTok) x = pushPieces(tokenPieces(hTok), x);
     for (const t of tail) x = pushPieces(tokenPieces(t, sd), x);
-    if (chargeText) pushPieces([{ text: chargeText, sup: true }], x);
+    if (chargeText) pushCharge(x);
     if (hTok && dir !== 'right') {
       // stacked H above or below the atom (e.g. the NH of a ring)
       const w = pieceWidth({ text: 'H' }) + (hTok.count > 1 ? pieceWidth({ text: String(hTok.count), sub: true }) : 0);
@@ -296,7 +329,7 @@ export function layoutLabel(spec: LabelSpec, bondDirs: { x: number; y: number }[
       x += pieceWidth(p);
     }
     const end = pushPieces(pieces, -anchor);
-    if (chargeText) pushPieces([{ text: chargeText, sup: true }], end);
+    if (chargeText) pushCharge(end);
   } else {
     // Reversed: rest of the label to the left, abbreviations kept whole (THPO, not PHTO).
     const leftTokens: Token[] = [...tail].reverse();
@@ -314,9 +347,84 @@ export function layoutLabel(spec: LabelSpec, bondDirs: { x: number; y: number }[
     }
     pushPieces(leftPieces, headStart - w);
     const x = pushPieces(headPieces, headStart);
-    if (chargeText) pushPieces([{ text: chargeText, sup: true }], x);
+    if (chargeText) pushCharge(x);
   }
-  return { runs, boxes };
+  let charge: number | undefined;
+  if (chargeText) {
+    const spot = chargeSpot(chargeText, chargeAt, boxes, dir, bondDirs, size, measure);
+    charge = runs.length;
+    const s = subSize, w = measure(chargeText, s);
+    runs.push({ text: chargeText, dx: spot.x, dy: spot.dy, size: s });
+    boxes.push({ x1: spot.x, y1: spot.dy - CAP * s, x2: spot.x + w, y2: spot.dy });
+  }
+  return { runs, boxes, charge };
+}
+
+/**
+ * Where the ink of a charge is, for a run of it at (x, baseline dy) in size s, as boxes: the
+ * two bars of a "+", the one of a "−" (a number is taken as a whole box). The signs are much
+ * smaller than a capital letter, so a bond can pass close by without touching them.
+ */
+export function chargeInk(text: string, x: number, dy: number, s: number, measure: Measure): Rect[] {
+  const w = measure(text, s);
+  if (/\d/.test(text)) return [{ x1: x, y1: dy - CAP * s, x2: x + w, y2: dy }];
+  // Arial's plus and minus are bars 0.07 of the size thick, 0.06 in from each side, across at
+  // 0.35 of the size above the baseline; the plus's upright runs 0.12–0.59
+  const x1 = x + 0.06 * s, x2 = x + w - 0.06 * s, mid = dy - 0.35 * s, t = 0.035 * s;
+  const across = { x1, y1: mid - t, x2, y2: mid + t };
+  if (!text.endsWith('+')) return [across];
+  const cx = (x1 + x2) / 2;
+  return [across, { x1: cx - t, y1: dy - 0.59 * s, x2: cx + t, y2: dy - 0.11 * s }];
+}
+
+/**
+ * Where a label's charge goes. Its place is raised after the label (N⁺), as in ChemDraw, and a
+ * bond that runs under it is cut short there. Only when that would leave almost nothing of a
+ * bond (short bonds, or a label at the far end too: a bent C=N⁺=N⁻) does it move, to the first
+ * of above the atom, raised before the label, lowered after it, below the atom or lowered
+ * before it that no bond runs under, else to wherever leaves the most of the bonds.
+ * Bond lengths (`len`) are needed for the move; without them the charge stays in its place.
+ */
+function chargeSpot(text: string, end: number, boxes: Rect[], dir: string, bonds: LabelBond[], size: number, measure: Measure): { x: number; dy: number } {
+  const s = size * SUB_SCALE, w = measure(text, s);
+  const baseline = (CAP * size) / 2;
+  const home = { x: end, dy: baseline - size * 0.42 };
+  if (!bonds.some((b) => b.len)) return home;
+  let left = Infinity, top = Infinity, bottom = -Infinity;
+  for (const b of boxes) { left = Math.min(left, b.x1); top = Math.min(top, b.y1); bottom = Math.max(bottom, b.y2); }
+  // how much of a bond a charge here cuts away, with the label at its far end (a fraction), and
+  // whether any line of a bond runs under it at all
+  const hit = 0.05 * size, cut = 0.12 * size, farCut = 0.7 * size;
+  const grow = (r: Rect, m: number): Rect => ({ x1: r.x1 - m, y1: r.y1 - m, x2: r.x2 + m, y2: r.y2 + m });
+  const cost = (p: { x: number; dy: number }) => {
+    const ink = chargeInk(text, p.x, p.dy, s, measure);
+    let worst = 0, touches = false;
+    for (const b of bonds) {
+      const l = b.len ?? 0;
+      if (l <= 0) continue;
+      const q = { x: b.x * l, y: b.y * l }, sp = b.spread ?? 0;
+      if (ink.every((r) => passParam({ x: 0, y: 0 }, q, grow(r, hit + sp)) <= 0)) continue;
+      touches = true;
+      for (const r of ink) worst = Math.max(worst, passParam({ x: 0, y: 0 }, q, grow(r, cut)) + (b.far ? farCut / l : 0));
+    }
+    return { worst, touches };
+  };
+  if (cost(home).worst <= 0.8) return home;
+  const raised = home.dy, lowered = baseline + size * 0.22;
+  const spots = [
+    dir !== 'up' && { x: -w / 2, dy: top - 0.05 * size },
+    { x: left - w, dy: raised },
+    { x: end, dy: lowered },
+    dir !== 'down' && { x: -w / 2, dy: bottom + CAP * s + 0.05 * size },
+    { x: left - w, dy: lowered },
+  ].filter((p): p is { x: number; dy: number } => !!p);
+  let best = home, bestCut = cost(home).worst;
+  for (const p of spots) {
+    const c = cost(p);
+    if (!c.touches) return p;
+    if (c.worst < bestCut) { best = p; bestCut = c.worst; }
+  }
+  return best;
 }
 
 // ------------------------------------------------------------------ chemistry of labels

@@ -375,7 +375,6 @@ function freeArc(doc: Doc, m: Measure, r: Pick<Arrow, 'tail' | 'head' | 'sweep'>
  */
 export function symbolSpot(doc: Doc, m: Measure, id: number, taken: Vec[], size: number): { dir: Vec; at: Vec } {
   const a = doc.atoms.get(id)!;
-  const L = doc.style.bondLength;
   const avoid = [...bondDirs(doc, id), ...taken.map((p) => norm(sub(p, a)))];
   // with nothing round it, the first goes above (where people look for a charge or lone pair)
   let best = { x: 0, y: -1 }, bestOpen = -Infinity;
@@ -386,7 +385,14 @@ export function symbolSpot(doc: Doc, m: Measure, id: number, taken: Vec[], size:
     const open = Math.min(100 * DEG, avoid.length ? Math.min(...avoid.map((b) => angleBetween(d, b))) : Math.PI);
     if (open > bestOpen + 1e-6) { bestOpen = open; best = d; }
   }
+  return { dir: best, at: symbolAt(doc, m, id, best, size) };
+}
+
+/** The centre of a symbol `size` across on an atom, in direction `dir` from it, just clear of its label. */
+export function symbolAt(doc: Doc, m: Measure, id: number, dir: Vec, size: number): Vec {
+  const a = doc.atoms.get(id)!;
+  const L = doc.style.bondLength;
   const boxes = m.atomBoxes(a);
-  const reach = boxes.length ? labelReach(a, boxes, best) + 0.06 * L : 0.18 * L;
-  return { dir: best, at: add(a, mul(best, reach + size / 2)) };
+  const reach = boxes.length ? labelReach(a, boxes, dir) + 0.06 * L : 0.18 * L;
+  return add(a, mul(dir, reach + size / 2));
 }
