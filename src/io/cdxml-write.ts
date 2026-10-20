@@ -23,6 +23,7 @@ import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, GROUP_TAG, GEO_
 import { frameTag } from '../editor/frames';
 import { geoDef, moveSteps, textArea, type GeoStep } from '../design/geo';
 import { FADE, tint } from '../colours';
+import { fillInk, mix, ringShadowSize, RING_SHADOW_ALPHA, shadowPieces } from '../render/fills';
 import { layoutTable, cellAlign, isCovered, spanOf, NOTE_SCALE } from '../table';
 import { TABLE_TAG, TABLE_PART_TAG, tableBorders, type TableTag } from './cdxml-table';
 import { bondLayer, crossingBonds } from '../chem/crossing';
@@ -1136,8 +1137,13 @@ class CdxmlWriter {
         }));
       }
     };
+    if (ringPts && s.shadow) {
+      // ChemDraw has no see-through colours: the shadow is the grey it looks on white
+      const d = ringShadowSize(s, this.doc.style.bondLength);
+      for (const piece of shadowPieces(ringPts, d, d)) curves([...piece.map((p, i): GeoStep => [i ? 'L' : 'M', p.x - b.x1, p.y - b.y1]), ['Z']], 'fill', mix('#ffffff', '#000000', RING_SHADOW_ALPHA));
+    }
     if (s.filled) {
-      const fc = s.fillColor ?? s.color ?? '#000000';
+      const fc = fillInk(s);
       curves(out.body, 'fill', s.fill === 'faded' ? tint(fc, FADE) : fc);
     }
     if (width > 0) {
@@ -1329,11 +1335,11 @@ class CdxmlWriter {
     const set = (k: string, v: string | null) => this.set(g, k, v);
     // ChemDraw fills with the shape's one colour, so a filled shape is saved in its fill colour
     // (a faded fill as its light tint); the outline colour and fill style ride along in a tag
-    const fillTo = s.filled ? s.fillColor ?? s.color : undefined;
+    const fillTo = s.filled ? (s.kind === 'ring' ? fillInk(s) : s.fillColor ?? s.color) : undefined;
     set('color', this.colorAttr(fillTo && s.fill === 'faded' ? tint(fillTo, FADE) : fillTo ?? s.color));
     for (const c of kids(g)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === FILL_TAG) g.removeChild(c);
     if ((s.filled && (s.fill || s.fillColor)) || s.pattern) {
-      const v = { fill: s.fill, fillColor: s.fillColor, color: s.color, fill2: s.fill2, gradAngle: s.gradAngle, gradRadial: s.gradRadial, pattern: s.pattern, patternColor: s.patternColor, patternSize: s.patternSize, patternClear: s.patternClear, ...(s.filled ? {} : { filled: false }) };
+      const v = { fill: s.fill, fillColor: s.fillColor, color: s.color, fill2: s.fill2, gradAngle: s.gradAngle, gradRadial: s.gradRadial, pattern: s.pattern, patternColor: s.patternColor, patternSize: s.patternSize, patternTransparency: s.patternTransparency, patternClear: s.patternClear, ...(s.filled ? {} : { filled: false }) };
       g.appendChild(this.el('objecttag', { TagType: 'String', Name: FILL_TAG, Value: JSON.stringify(v), Visible: 'no' }));
     }
     for (const c of kids(g)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === FRAME_TAG) g.removeChild(c);

@@ -1,6 +1,6 @@
 // SVG pictures of a drawing, from the same recorded shapes and text as the EMF pictures.
 
-import { Item, Seg, ImageItem } from './vector';
+import { Item, Seg, ImageItem, parseColor } from './vector';
 import { EmfBox } from './emf';
 import { showableSrc } from './images';
 
@@ -11,6 +11,17 @@ function pathData(segs: Seg[]): string {
 }
 
 const esc = (t: string): string => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/**
+ * A fill or stroke colour as attributes. See-through colours become a plain colour and an
+ * opacity, which every SVG reader takes (PowerPoint's and Word's don't all read rgba()).
+ */
+function paint(attr: 'fill' | 'stroke', colour: string): string {
+  if (!/^rgba?\(/i.test(colour.trim())) return `${attr}="${esc(colour)}"`;
+  const { r, g, b, a } = parseColor(colour);
+  const hex = '#' + [r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+  return `${attr}="${hex}"${a < 1 ? ` ${attr}-opacity="${n(Math.max(0, a))}"` : ''}`;
+}
 
 let clipCount = 0;
 
@@ -37,10 +48,10 @@ export function itemsToSvg(items: Item[], box: EmfBox): string {
   for (const it of items) {
     if (it.kind === 'path') {
       if (!it.segs.some((s) => s.k !== 'M')) continue;
-      if (it.fill) out.push(`<path d="${pathData(it.segs)}" fill="${esc(it.fill)}"/>`);
+      if (it.fill) out.push(`<path d="${pathData(it.segs)}" ${paint('fill', it.fill)}/>`);
       else if (it.stroke) {
         const st = it.stroke;
-        out.push(`<path d="${pathData(it.segs)}" fill="none" stroke="${esc(st.color)}" stroke-width="${n(st.width)}" stroke-linecap="${st.cap}" stroke-linejoin="${st.join}"/>`);
+        out.push(`<path d="${pathData(it.segs)}" fill="none" ${paint('stroke', st.color)} stroke-width="${n(st.width)}" stroke-linecap="${st.cap}" stroke-linejoin="${st.join}"/>`);
       }
     } else if (it.kind === 'image') {
       out.push(svgImage(it));
@@ -48,7 +59,7 @@ export function itemsToSvg(items: Item[], box: EmfBox): string {
       const family = /^(sans-serif|system-ui|helvetica)$/i.test(it.family) ? 'Arial' : it.family;
       out.push(
         `<text x="${n(it.x)}" y="${n(it.y)}" font-family="'${esc(family)}', Arial, Helvetica, sans-serif" font-size="${n(it.size)}"` +
-          `${it.bold ? ' font-weight="bold"' : ''}${it.italic ? ' font-style="italic"' : ''} fill="${esc(it.color)}"${it.angle ? ` transform="rotate(${n(-it.angle)} ${n(it.x)} ${n(it.y)})"` : ''} xml:space="preserve">${esc(it.text)}</text>`,
+          `${it.bold ? ' font-weight="bold"' : ''}${it.italic ? ' font-style="italic"' : ''} ${paint('fill', it.color)}${it.angle ? ` transform="rotate(${n(-it.angle)} ${n(it.x)} ${n(it.y)})"` : ''} xml:space="preserve">${esc(it.text)}</text>`,
       );
     }
   }

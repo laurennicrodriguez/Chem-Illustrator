@@ -27,7 +27,7 @@ import { isReactionArrow, itemFinder, rolesOf, ROLES, schemeItems, type Item, ty
 import { applySchemePlan, planCleanUp } from '../chem/scheme-layout';
 import { adoptSideCaption, arrowTexts, helperBox, setSideText, sideSlot, takesHelpers, textJustify, textSize, type ArrowSide } from '../chem/arrow-text';
 import { schemePrefs } from '../chem/scheme-layout';
-import { fillRings, refitRingFills } from '../chem/ring-fill';
+import { fillRings, refitRingFills, ringFillsOn } from '../chem/ring-fill';
 import { setMethylStyle, toggleChainEndLabels, toggleExplicitHydrogens, type MethylStyle } from '../chem/hydrogens';
 import { selectedGroup } from '../chem/group-smiles';
 import { circleRing, circleRings, kekulize } from '../chem/aromatic';
@@ -1657,6 +1657,19 @@ export class Editor {
    * atom), or put the discs back when they are all smooth already. Says which, or null when
    * nothing selected is highlighted.
    */
+  /** A drop shadow on the selected ring fills (and those on the selected structures), or off again. */
+  ringShadow(): 'on' | 'off' | null {
+    const doc = this.doc;
+    const ids = new Set([...this.sel.shapes].filter((id) => doc.shapes.get(id)?.kind === 'ring'));
+    for (const id of ringFillsOn(doc, this.sel.atoms)) ids.add(id);
+    const rings = [...ids].map((id) => doc.shapes.get(id)!).filter(Boolean);
+    if (!rings.length) return null;
+    const on = !rings.every((s) => s.shadow);
+    doc.edit(on ? 'Ring fill shadow' : 'No ring fill shadow', () => { for (const s of rings) doc.updateShape(s.id, { shadow: on || undefined }); });
+    this.changed();
+    return on ? 'on' : 'off';
+  }
+
   smoothHighlight(): 'on' | 'off' | null {
     const doc = this.doc;
     const atoms = [...this.sel.atoms].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a?.highlight);

@@ -22,7 +22,7 @@ import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
 import { layoutText, FONT_STACK, withStack, type TextLayout } from '../text/layout';
 import { drawLayout } from '../text/draw';
 import { geoDef, moveSteps, textArea, traceSteps } from '../design/geo';
-import { cutCorners, patternInk, insetPolygon, dotCentres, gradientBands, hatchLines, isDotPattern, patternAngles, patternSpacing, radialBands, shapePolygons } from './fills';
+import { cutCorners, fillInk, patternClear, patternInk, ringShadowSize, RING_SHADOW_ALPHA, shadowPieces, insetPolygon, dotCentres, gradientBands, hatchLines, isDotPattern, patternAngles, patternSpacing, radialBands, shapePolygons } from './fills';
 import { placeholderRect, isEmptyText } from '../deck/deck';
 import { imageFor } from './images';
 import { layoutTable, drawTable, type TableLayout, type TablePart } from '../table';
@@ -946,13 +946,28 @@ export class Renderer {
         // a ring's fill sits on its atoms, wherever they are now
         const pts = this.ringPoints(s);
         if (pts.length < 3) break;
+        const L = this.ringDoc?.style.bondLength ?? 14.4;
+        if (s.shadow) {
+          // down and to the right, as a highlight's shadow, showing only where it sticks out
+          const d = ringShadowSize(s, L);
+          ctx.save();
+          ctx.fillStyle = withAlpha('#000000', RING_SHADOW_ALPHA);
+          ctx.beginPath();
+          for (const piece of shadowPieces(pts, d, d)) {
+            ctx.moveTo(piece[0].x, piece[0].y);
+            for (const p of piece.slice(1)) ctx.lineTo(p.x, p.y);
+            ctx.closePath();
+          }
+          ctx.fill();
+          ctx.restore();
+          ctx.beginPath();
+        }
         ctx.moveTo(pts[0].x, pts[0].y);
         for (const p of pts.slice(1)) ctx.lineTo(p.x, p.y);
         ctx.closePath();
         this.paintFill(ctx, { ...s, pattern: undefined }, x, y, w, h, [pts]);
         // the lines or dots run under the double bonds' inner lines (the bonds are drawn over
         // them), or keep clear of the bonds, the inner lines and the atom labels when asked
-        const L = this.ringDoc?.style.bondLength ?? 14.4;
         if (s.pattern) {
           const doc = this.ringDoc;
           const labelled = pts.map((_, i) => { const a = doc?.atoms.get(s.ring?.[i] ?? -1); return !!a && !!doc && this.hasLabel(doc, a); });
@@ -1338,7 +1353,7 @@ export class Renderer {
    * tint (faded), shaded light to dark, or a gradient; then its pattern of lines or dots.
    */
   private paintFill(ctx: CanvasRenderingContext2D, s: Shape, x: number, y: number, w: number, h: number, polys?: Vec[][]): void {
-    const c = s.fillColor ?? s.color ?? '#000000';
+    const c = fillInk(s);
     const outline = () => (polys ??= shapePolygons(s));
     if (s.filled) {
       const clear = Math.max(0, Math.min(1, s.transparency ?? 0));
@@ -1381,7 +1396,8 @@ export class Renderer {
     }
     if (s.pattern) {
       const gap = patternSpacing(s);
-      const pc = patternInk(s);
+      const clear = patternClear(s);
+      const pc = clear ? withAlpha(patternInk(s), 1 - clear) : patternInk(s);
       // the dots or lines are worked out once for the shape as it is, not again for every tile it crosses
       let cached = patternPaths.get(s);
       const fresh = !cached || cached.make !== this.makePath;
@@ -1425,7 +1441,7 @@ export class Renderer {
     }
     traceSteps(ctx, body);
     if (s.filled) {
-      const c = s.fillColor ?? s.color ?? '#000000';
+      const c = fillInk(s);
       const clear = Math.max(0, Math.min(1, s.transparency ?? 0));
       if (s.fill) this.paintFill(ctx, { ...s, pattern: undefined }, x, y, w, h);
       else { ctx.fillStyle = clear ? withAlpha(c, 1 - clear) : c; ctx.fill(); }

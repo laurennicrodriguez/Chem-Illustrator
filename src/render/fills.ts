@@ -51,10 +51,64 @@ export function cutCorners(pts: Vec[], cut: boolean[], t: number): Vec[] {
 /** A ring fill's pattern is a light grey unless chosen: it shades the ring without competing with the bonds. */
 export const RING_PATTERN_COLOUR = '#a0a0a0';
 
+/** A soft blue that shows the ring without hiding the bonds: a ring fill's colour unless chosen. */
+export const RING_FILL_COLOUR = '#cfe0ff';
+
+/**
+ * The colour a shape is filled with: its own, else the outline's. A ring fill has no outline: its
+ * colour is its own, else (as older files kept it) its line colour, else the soft blue.
+ */
+export function fillInk(s: Pick<Shape, 'fillColor' | 'color' | 'kind'>): string {
+  return s.fillColor ?? s.color ?? (s.kind === 'ring' ? RING_FILL_COLOUR : '#000000');
+}
+
+/** A ring fill's shadow: as dark as a highlight's shadow, and as far out unless its size is set. */
+export const RING_SHADOW_ALPHA = 0.22;
+export const ringShadowSize = (s: Pick<Shape, 'shadowSize'>, bondLength: number) => s.shadowSize ?? 0.07 * bondLength;
+
+/**
+ * The polygon's drop shadow, `dx`, `dy` away, where it sticks out past the polygon (so a see-through
+ * fill or a pattern on its own shows nothing under it): pieces of the moved polygon outside each
+ * edge in turn. A ring that is not convex gets the whole moved polygon.
+ */
+export function shadowPieces(pts: Vec[], dx: number, dy: number): Vec[][] {
+  const n = pts.length;
+  if (n < 3 || (!dx && !dy)) return [];
+  const moved = pts.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+  let area = 0;
+  for (let i = 0; i < n; i++) { const u = pts[i], v = pts[(i + 1) % n]; area += u.x * v.y - v.x * u.y; }
+  const sgn = area > 0 ? 1 : -1;
+  // inward normals of each edge
+  const edges = pts.map((u, i) => {
+    const v = pts[(i + 1) % n];
+    const nn = { x: -(v.y - u.y) * sgn, y: (v.x - u.x) * sgn };
+    return { n: nn, k: nn.x * u.x + nn.y * u.y };
+  });
+  let convex = true;
+  for (let i = 0; i < n && convex; i++) {
+    const e = edges[i];
+    for (const p of pts) if (p.x * e.n.x + p.y * e.n.y - e.k < -1e-6) { convex = false; break; }
+  }
+  if (!convex) return [moved];
+  // A minus B, B convex: the parts of A outside edge i and inside every edge before it
+  const out: Vec[][] = [];
+  let rest = moved;
+  for (const e of edges) {
+    if (rest.length < 3) break;
+    const outside = clipHalf(rest, { x: -e.n.x, y: -e.n.y }, -e.k);
+    if (outside.length > 2) out.push(outside);
+    rest = clipHalf(rest, e.n, e.k);
+  }
+  return out;
+}
+
 /** The colour of a shape's pattern: its own, else the outline's (a ring's light grey), else black. */
 export function patternInk(s: Pick<Shape, 'patternColor' | 'color' | 'kind'>): string {
   return s.patternColor ?? (s.kind === 'ring' ? RING_PATTERN_COLOUR : s.color ?? '#000000');
 }
+
+/** How see-through a shape's pattern is, 0 (solid) to 1 (clear). */
+export const patternClear = (s: Pick<Shape, 'patternTransparency'>) => Math.max(0, Math.min(1, s.patternTransparency ?? 0));
 
 /** A shape's outline as closed polygons, for patterns and gradients (rings use their atoms' places). */
 export function shapePolygons(s: Shape, ringPts?: Vec[]): Vec[][] {

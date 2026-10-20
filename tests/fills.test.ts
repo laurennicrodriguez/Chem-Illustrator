@@ -5,7 +5,9 @@
 
 import { describe, it, expect } from 'vitest';
 import { Doc } from '../src/model';
-import { cutCorners, dotCentres, gradientBands, hatchLines, insetPolygon, mix, patternAngles, patternInk, patternSpacing, radialBands, RING_PATTERN_COLOUR } from '../src/render/fills';
+import { cutCorners, dotCentres, fillInk, gradientBands, hatchLines, insetPolygon, mix, patternAngles, patternInk, patternSpacing, radialBands, RING_FILL_COLOUR, RING_PATTERN_COLOUR, shadowPieces } from '../src/render/fills';
+import { extractDrawing, insertDrawing } from '../src/io/clipboard';
+import { recordPicture, pictureSvg } from '../src/render/picture';
 import { fillRings, refitRingFills, ringsIn } from '../src/chem/ring-fill';
 import { writeCdxml } from '../src/io/cdxml-write';
 import { readCdxml } from '../src/io/cdxml';
@@ -175,5 +177,80 @@ describe('ring fill patterns', () => {
     expect(patternInk({ kind: 'ring' })).toBe(RING_PATTERN_COLOUR);
     expect(patternInk({ kind: 'ring', patternColor: '#ff0000' })).toBe('#ff0000');
     expect(patternInk({ kind: 'rect', color: '#00ff00' })).toBe('#00ff00');
+  });
+
+  it('keeps a ring fill’s shadow and pattern see-through through a ChemDraw file', () => {
+    const { doc } = toluene();
+    doc.edit('Fill', () => fillRings(doc, [], { pattern: 'dots', patternTransparency: 0.4, shadow: true, shadowSize: 1.5 }));
+    const text = writeCdxml(doc);
+    const ring = [...readCdxml(text).doc.shapes.values()].find((s) => s.kind === 'ring')!;
+    expect(ring).toMatchObject({ pattern: 'dots', patternTransparency: 0.4, shadow: true, shadowSize: 1.5 });
+    // ChemDraw sees the shadow as grey curves under the fill
+    expect(text.match(/<curve /g)!.length).toBeGreaterThan(1);
+    const box = readCdxml(writeCdxml((() => {
+      const d = new Doc();
+      d.edit('Box', () => d.addShape({ kind: 'rect', x1: 0, y1: 0, x2: 50, y2: 30, pattern: 'hatch', patternTransparency: 0.25 }));
+      return d;
+    })())).doc;
+    expect([...box.shapes.values()][0].patternTransparency).toBe(0.25);
+  });
+
+  it('colours a ring fill soft blue unless chosen, as older files had it otherwise', () => {
+    expect(fillInk({ kind: 'ring' })).toBe(RING_FILL_COLOUR);
+    expect(fillInk({ kind: 'ring', color: '#e69f00' })).toBe('#e69f00');
+    expect(fillInk({ kind: 'ring', color: '#e69f00', fillColor: '#00a3a3' })).toBe('#00a3a3');
+    expect(fillInk({ kind: 'rect' })).toBe('#000000');
+  });
+
+  it('comes along when its structure is copied (Ctrl+drag, copy and paste)', () => {
+    const { doc } = toluene();
+    const [id] = doc.edit('Fill', () => fillRings(doc, [], { pattern: 'dots' }));
+    const sel = { atoms: new Set(doc.atoms.keys()), bonds: new Set(doc.bonds.keys()), captions: new Set<number>(), arrows: new Set<number>(), shapes: new Set<number>() };
+    const part = extractDrawing(doc, sel);
+    expect([...part.shapes.values()].filter((s) => s.kind === 'ring')).toHaveLength(1);
+    const got = insertDrawing(doc, part, { x: 200, y: 100 }, 'Copy');
+    const fills = [...doc.shapes.values()].filter((s) => s.kind === 'ring');
+    expect(fills).toHaveLength(2);
+    const copy = fills.find((s) => s.id !== id)!;
+    expect(got.shapes.has(copy.id)).toBe(true);
+    expect(copy.pattern).toBe('dots');
+    // on the new atoms, not the old ones
+    expect(copy.ring!.every((a) => got.atoms.has(a))).toBe(true);
+    expect(copy.poly![0].x).toBeCloseTo(doc.atoms.get(copy.ring![0])!.x);
+  });
+});
+
+describe('ring fill shadow', () => {
+  const hex = Array.from({ length: 6 }, (_, i) => ({ x: 10 * Math.cos((i * Math.PI) / 3), y: 10 * Math.sin((i * Math.PI) / 3) }));
+  const polyArea = (ps: { x: number; y: number }[][]) => ps.reduce((t, p) => t + area(p), 0);
+
+  it('shows only where it sticks out past the ring', () => {
+    const d = 1;
+    const pieces = shadowPieces(hex, d, d);
+    expect(pieces.length).toBeGreaterThan(0);
+    // the moved hexagon less the part still under the ring: less than the whole, more than nothing
+    const whole = area(hex);
+    const out = polyArea(pieces);
+    expect(out).toBeGreaterThan(0);
+    expect(out).toBeLessThan(whole / 2);
+    // no piece reaches into the middle of the ring
+    for (const p of pieces) for (const v of p) expect(Math.hypot(v.x, v.y)).toBeGreaterThan(5);
+  });
+
+  it('goes into pictures (Word and PowerPoint copies) as plain colours with an opacity', () => {
+    const { doc } = toluene();
+    doc.edit('Fill', () => fillRings(doc, [], { filled: false, pattern: 'dots', patternColor: '#ff0000', patternTransparency: 0.5, shadow: true }));
+    const svg = pictureSvg(recordPicture(doc)!);
+    expect(svg).not.toContain('rgba(');
+    expect(svg).toContain('fill="#ff0000" fill-opacity="0.5"');
+    expect(svg).toContain('fill="#000000" fill-opacity="0.22"');
+  });
+
+  it('gives nothing with no offset, and the whole moved ring when the ring is not convex', () => {
+    expect(shadowPieces(hex, 0, 0)).toEqual([]);
+    const notch = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 5, y: 4 }, { x: 0, y: 10 }];
+    const [one, ...rest] = shadowPieces(notch, 1, 1);
+    expect(rest).toHaveLength(0);
+    expect(one[0]).toEqual({ x: 1, y: 1 });
   });
 });
