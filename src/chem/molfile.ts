@@ -5,7 +5,7 @@
 import { Doc, Atom, isMetalAtom, radicalElectrons } from '../model';
 import { metalCarbonyl } from './hapto';
 import { SYMBOLS, elementNumber, valenceOfBonds } from './elements';
-import { labelDonates, labelGraph, MiniGraph } from './labels';
+import { CARBONYL_LIGAND, isCarbonylLabel, labelDonates, labelGraph, MiniGraph } from './labels';
 import { stereoAnchor, stereoSense } from './stereo';
 
 export interface MolExport {
@@ -61,6 +61,7 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = '', opts: 
   // second bond of a bridging Cl) go to the engine as dative bonds, which take no hydrogen off
   // the atom giving them; the rest (a methyl, a chloride) are ordinary bonds.
   const dative = new Set<number>();
+  const toMetal = (id: number) => (doc.adj.get(id) ?? []).some((bid) => { const b = doc.bonds.get(bid)!; return isMetalAtom(doc.atoms.get(b.a1 === id ? b.a2 : b.a1)); });
   const metalBonds = (id: number) => (doc.adj.get(id) ?? []).map((bid) => doc.bonds.get(bid)!)
     .filter((b) => b.display !== 'dative' && isMetalAtom(doc.atoms.get(b.a1 === id ? b.a2 : b.a1)));
   // a carbonyl ligand, drawn M–C≡O, is M←C⁻≡O⁺ to the engine
@@ -147,7 +148,8 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = '', opts: 
     const x = (a.x - first.x) / L, y = -(a.y - first.y) / L;
     let g: MiniGraph | null = null;
     if (a.label) {
-      g = labelGraph(a.label, valenceOfBonds((doc.adj.get(id) ?? []).map((bid) => doc.bonds.get(bid)!).filter((b) => b.display !== 'dative' && !dative.has(b.id)).map((b) => b.order)));
+      const own = valenceOfBonds((doc.adj.get(id) ?? []).map((bid) => doc.bonds.get(bid)!).filter((b) => b.display !== 'dative' && !dative.has(b.id)).map((b) => b.order));
+      g = !own && isCarbonylLabel(a.label) && toMetal(id) ? CARBONYL_LIGAND : labelGraph(a.label, own);
       if (!g) unknown.push(a.label);
     }
     if (!g || g.atoms.length === 0) {

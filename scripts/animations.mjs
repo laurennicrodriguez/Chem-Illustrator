@@ -1,10 +1,11 @@
 // Records the short animations (GIFs) in docs/images/ for the README.
 // Start the program first (npm run dev), then: node scripts/animations.mjs [address] [name …]
 // Needs Playwright with Chromium (as scripts/screenshots.mjs does) and ffmpeg. Give names
-// (smart-arrows, frames, catalytic-cycle, id-labels, spelling, name-to-structure, dark-mode) to
+// (smart-arrows, frames, catalytic-cycle, id-labels, spelling, name-to-structure, dark-mode,
+// metal-complex, lone-pairs) to
 // record only those.
 
-import { open, pointer, glide, look, addSmiles, record, canvasBox, screenOf, helperSpot, tool, drag, keys, newestAtom, atomAt, wordSpot, select } from './shot-lib.mjs';
+import { open, pointer, glide, look, addSmiles, record, canvasBox, screenOf, helperSpot, tool, drag, keys, newestAtom, atomAt, wordSpot, select, paletteTool, sweep } from './shot-lib.mjs';
 
 const args = process.argv.slice(2);
 const url = args[0]?.startsWith('http') ? args.shift() : 'http://localhost:5173/';
@@ -313,5 +314,74 @@ if (want('dark-mode')) {
     }
     await glide(page, c.x + c.width * 0.5, c.y + c.height * 0.8, 15);
   }, { width: 1000, hold: 2000 });
+  await browser.close();
+}
+
+// ---------------------------------------------------------------- a metal complex from a template
+if (want('metal-complex')) {
+  const { browser, page } = await open(url, { width: 1180, height: 900 });
+  await look(page, 5, 180, 128);
+  await pointer(page);
+  const c = await canvasBox(page);
+  await page.mouse.move(c.x + c.width * 0.5, c.y + c.height * 0.85);
+  await record(page, 'metal-complex', async () => {
+    // (η⁶-arene)ML₃ from the Metal complexes palette, placed with a click
+    await paletteTool(page, 'tpl-linear', '(η⁶-Arene)ML₃');
+    const at = await screenOf(page, { x: 180, y: 133 });
+    await glide(page, at.x, at.y, 25); await page.waitForTimeout(300);
+    await page.mouse.click(at.x, at.y);
+    await page.waitForTimeout(700);
+    // M becomes Cr and each L a CO, typed with the text tool
+    await tool(page, 'text');
+    await page.waitForTimeout(300);
+    const atoms = await page.evaluate(() => [...window.__app.doc.atoms.values()].filter((a) => a.label === 'M' || a.label === 'L').map((a) => ({ id: a.id, label: a.label })));
+    for (const a of atoms) {
+      const o = await atomAt(page, a.id);
+      await glide(page, o.x, o.y, 12); await page.waitForTimeout(150);
+      await page.mouse.click(o.x, o.y); await page.waitForTimeout(200);
+      await page.keyboard.press('Control+a');
+      await page.keyboard.type(a.label === 'M' ? 'Cr' : 'CO', { delay: 90 });
+      await page.keyboard.press('Enter'); await page.waitForTimeout(350);
+    }
+    // the benzene ring moved on its own: the η⁶ bond keeps to its middle
+    await tool(page, 'select');
+    await page.waitForTimeout(300);
+    const members = await page.evaluate(() => [...window.__app.doc.atoms.values()].find((a) => a.multi)?.multi ?? []);
+    const pts = await Promise.all(members.map((id) => atomAt(page, id)));
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    await drag(page, { x: Math.min(...xs) - 30, y: Math.min(...ys) - 30 }, { x: Math.max(...xs) + 30, y: Math.max(...ys) + 8 }, 20);
+    await page.waitForTimeout(400);
+    const top = pts.reduce((p, q) => (q.y < p.y ? q : p));
+    const ring = { x: top.x, y: top.y };
+    await drag(page, ring, { x: ring.x + 70, y: ring.y - 25 }, 30);
+    await page.waitForTimeout(700);
+    await drag(page, { x: ring.x + 70, y: ring.y - 25 }, ring, 30);
+    await page.waitForTimeout(300);
+    await glide(page, c.x + c.width * 0.4, c.y + c.height * 0.9, 15);
+    await page.mouse.click(c.x + c.width * 0.4, c.y + c.height * 0.9);
+  }, { clip: { x: 0, y: 0, width: 1180, height: 820 }, width: 1000, hold: 2500 });
+  await browser.close();
+}
+
+// ---------------------------------------------------------------- lone pairs aimed by dragging
+if (want('lone-pairs')) {
+  const { browser, page } = await open(url);
+  const ids = await addSmiles(page, 'CC(=O)[O-]', 300, 250);
+  await look(page, 6, 300, 250);
+  await pointer(page);
+  const c = await canvasBox(page);
+  await page.mouse.move(c.x + c.width * 0.8, c.y + c.height * 0.85);
+  const clip = { x: c.x + c.width / 2 - 360, y: c.y + c.height / 2 - 260, width: 720, height: 520 };
+  await record(page, 'lone-pairs', async () => {
+    await tool(page, 'sym-lonepair');
+    await page.waitForTimeout(400);
+    // each oxygen: press on it and sweep round to where the pair should sit
+    const pairs = [[ids[2], [[200, 250], [300, 330]]], [ids[3], [[30, 90], [130, 200], [330, 270]]]];
+    const centres = await Promise.all(pairs.map(([id]) => atomAt(page, id)));
+    for (const [k, [, aims]] of pairs.entries()) {
+      for (const [from, to] of aims) { await sweep(page, centres[k], 45, from, to, 22); await page.waitForTimeout(350); }
+    }
+    await glide(page, c.x + c.width * 0.8, c.y + c.height * 0.85, 15);
+  }, { clip, width: 620, hold: 2200 });
   await browser.close();
 }
