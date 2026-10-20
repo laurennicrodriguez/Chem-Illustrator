@@ -10,6 +10,11 @@
 //   node scripts/release.mjs manifest <version> <notes file> <dir>
 //     Once every platform is built and collected into <dir>: writes latest.json there, the
 //     newest version, what changed, and where each platform's signed installer is.
+//   node scripts/release.mjs newest <version> <releases file>
+//     After publishing: prints the tag of the highest version among the releases in <releases
+//     file> (gh release list --json tagName) and this one, the release to mark "latest". The
+//     updater reads releases/latest/download/latest.json, so "latest" must never go to an older
+//     build that happened to finish publishing last.
 
 import { readFileSync, writeFileSync, copyFileSync, mkdirSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -94,6 +99,18 @@ export function manifest(version, notes, signatures, date = new Date()) {
   return { version, notes: notes.trim(), pub_date: date.toISOString(), platforms };
 }
 
+/** The tag with the highest x.y.z version, compared number by number (0.1.100 is above 0.1.99). */
+export function newestTag(tags) {
+  const parse = (t) => /^v?(\d+)\.(\d+)\.(\d+)$/.exec(t)?.slice(1).map(Number);
+  const compare = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  let best = null;
+  for (const t of tags) {
+    const v = parse(t);
+    if (v && (!best || compare(v, parse(best)) > 0)) best = t;
+  }
+  return best;
+}
+
 const [cmd, version, ...rest] = process.argv.slice(2);
 const run = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (run && !/^\d+\.\d+\.\d+$/.test(version ?? '')) throw new Error(`Not a version: ${version}`);
@@ -136,6 +153,9 @@ if (!run) {
   if (!Object.keys(latest.platforms).length) throw new Error('No signed installers to list');
   writeFileSync(join(dir, 'latest.json'), JSON.stringify(latest, null, 2) + '\n');
   console.log(`Wrote latest.json for ${version}: ${Object.keys(latest.platforms).join(', ')}`);
+} else if (cmd === 'newest') {
+  const tags = JSON.parse(readFileSync(rest[0], 'utf8')).map((r) => r.tagName);
+  console.log(newestTag([...tags, `v${version}`]));
 } else {
   throw new Error(`Unknown command: ${cmd}`);
 }
