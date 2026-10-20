@@ -535,6 +535,19 @@ dialog.cycle-dialog { width: min(96vw, 760px); max-height: 92vh; }
 .cycle-loop td input { width: 100%; box-sizing: border-box; min-width: 0; font: inherit; padding: 2px 4px; }
 .cycle-loop td:last-child { width: 1.8em; }
 .cycle-loop .ask-row { margin: 6px 0 0; }
+/* Insert > Energy Diagram */
+dialog.energy-dialog { width: min(96vw, 680px); max-height: 92vh; }
+.energy-table-wrap { overflow-x: auto; max-height: 40vh; overflow-y: auto; }
+.energy-table { border-collapse: collapse; }
+.energy-table th { text-align: left; font-weight: 600; font-size: 0.85em; padding: 2px 3px; white-space: nowrap; }
+.energy-table th input:not([type=color]) { width: 9em; font: inherit; padding: 2px 4px; }
+.energy-table th input[type=color] { width: 2em; height: 1.6em; padding: 0; vertical-align: middle; margin-left: 4px; }
+.energy-table td { padding: 1px 2px; }
+.energy-table td input { width: 8em; font: inherit; padding: 2px 4px; box-sizing: border-box; }
+.energy-table td input.energy-num { width: 5em; text-align: right; }
+.energy-rows { display: flex; gap: 8px; margin: 6px 0; }
+.energy-pair { display: flex; align-items: center; gap: 6px; }
+.energy-pair input { width: 5em; }
 /* Help > Send Feedback */
 dialog.feedback-dialog { width: min(92vw, 560px); }
 dialog.feedback-dialog .muted { margin: 4px 0 10px; max-width: 62ch; }

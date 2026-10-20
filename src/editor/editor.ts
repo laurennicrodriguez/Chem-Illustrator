@@ -39,6 +39,7 @@ import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../
 import { bendSide, cleanUpArrow, isLonePair, pairOwner, pushArrow, pushEndAt, symbolAt, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
 import { applyArrange, planArrange, readingOrder, type ArrangeOptions } from '../chem/scheme-arrange';
 import { buildCycle, type CycleLook, type CycleSpec } from '../chem/cycles';
+import { energyFrameOf, plotFromBox, putEnergy, refitEnergy, type EnergyData } from '../design/energy';
 import { attachWhereItIs, defaultGap, placeAttached, refitAttached } from './attached';
 import { frameAround, frameBox, frameMembers, refitFrames, defaultPad, thingsInside } from './frames';
 import { Align, Measure, POINTS, Snapshot, type TurnText, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, withFrameContents, rotation, mirrorX, mirrorY } from './arrange';
@@ -257,6 +258,8 @@ export class Editor {
   onNickname: (atomId: number) => void = () => {};
   /** Show the Style panel for what was just selected, for /. */
   onProperties: () => void = () => {};
+  /** A double-click on an energy diagram: open its numbers (the frame's id). */
+  onEnergy: (id: number) => void = () => {};
   private drag: Drag | null = null;
   /** Something is being dragged (moved, rotated or resized) right now. */
   get dragging(): boolean { return !!this.drag?.moved; }
@@ -323,12 +326,14 @@ export class Editor {
     window.addEventListener('keyup', ctrlKey);
     // frames that follow what they surround are refitted as each change finishes
     doc.beforeCommit = (before) => {
-      let frames = false, rings = false, tied = false;
-      for (const s of this.doc.shapes.values()) { if (s.frame?.fit) frames = true; if (s.kind === 'ring') rings = true; }
+      let frames = false, rings = false, tied = false, energy = false;
+      for (const s of this.doc.shapes.values()) { if (s.frame?.fit) frames = true; if (s.kind === 'ring') rings = true; if (s.energy) energy = true; }
       for (const c of this.doc.captions.values()) if (c.attach) { tied = true; break; }
       // ring fills first, then labels beside their structures: a frame round a structure takes in both
       if (rings) refitRingFills(this.doc, before);
       if (tied) refitAttached(this.doc, before, this.measure());
+      // an energy diagram resized by hand is drawn again to fill its frame, before frames refit
+      if (energy) refitEnergy(this.doc, before, this.measure());
       if (frames) refitFrames(this.doc, before, this.measure());
     };
   }
@@ -608,7 +613,7 @@ export class Editor {
           // dragging an unselected atom or object moves just that (a copy takes its whole structure)
           this.sel = emptySel();
           if (d.ctrl && (d.hit.kind === 'atom' || d.hit.kind === 'bond')) this.selectFragment(d.hit.kind === 'atom' ? d.hit.id : this.doc.bonds.get(d.hit.id)!.a1, false);
-          else this.addToSel(d.hit);
+          else this.addToSel(this.groupFirst(d.hit));
         }
         // Ctrl+drag: a copy goes with the pointer and the original stays where it was
         if (d.ctrl) {
@@ -794,6 +799,9 @@ export class Editor {
     // (in the text being typed, a double-click selects a word: the text sees the clicks itself)
     if (this.captionEd?.hit(p)) return;
     const h = this.hitTest(p);
+    // any part of an energy diagram (but a structure put on it) opens its numbers
+    const diagram = h && h.kind !== 'atom' && h.kind !== 'bond' && (h.kind === 'caption' || h.kind === 'arrow' || h.kind === 'shape') ? energyFrameOf(this.doc, h.kind, h.id) : null;
+    if (diagram !== null) { this.selectOnly({ kind: 'shape', id: diagram }); this.onEnergy(diagram); return; }
     if (this.tool.kind === 'select' && h && (h.kind === 'atom' || h.kind === 'bond')) {
       const atom = h.kind === 'atom' ? h.id : this.doc.bonds.get(h.id)!.a1;
       this.selectFragment(atom, e.shiftKey);
@@ -876,8 +884,9 @@ export class Editor {
         // in Slides and Design a click in a text box puts the caret there, as in PowerPoint
         if (c && this.textFirst && !adding) { this.sel = emptySel(); this.editCaption(c.id, this.clientPoint(p)); return; }
         // Shift+click or Ctrl+click adds to the selection, or takes out what is already in it
+        const pick = h && this.groupFirst(h);
         if (!adding) this.sel = emptySel();
-        if (h) this.toggleSel(h);
+        if (pick) this.toggleSel(pick);
         if (h?.kind === 'shape') this.noteTablePart(h.id, p);
         if (this.cropping !== null && !this.sel.shapes.has(this.cropping)) this.cropping = null;
         this.onChange();
@@ -1719,6 +1728,44 @@ export class Editor {
   }
 
   /** Select just this one thing. */
+  /**
+   * A part of an energy diagram picks the whole diagram first, as a group does in PowerPoint;
+   * once the diagram is selected, a click picks the part.
+   */
+  private groupFirst(h: NonNullable<Hit>): NonNullable<Hit> {
+    if (h.kind !== 'atom' && h.kind !== 'bond' && h.kind !== 'caption' && h.kind !== 'arrow' && h.kind !== 'shape') return h;
+    const g = energyFrameOf(this.doc, h.kind, h.id);
+    return g !== null && g !== (h.kind === 'shape' ? h.id : null) && !this.sel.shapes.has(g) ? { kind: 'shape', id: g } : h;
+  }
+
+  /** The energy diagram the selection is in (its frame), if any. */
+  selectedEnergy(): number | null {
+    for (const id of this.sel.shapes) if (this.doc.shapes.get(id)?.energy) return id;
+    for (const [k, set] of [['caption', this.sel.captions], ['arrow', this.sel.arrows], ['shape', this.sel.shapes], ['atom', this.sel.atoms]] as const) {
+      for (const id of set) { const g = energyFrameOf(this.doc, k, id); if (g !== null) return g; }
+    }
+    return null;
+  }
+
+  /** Insert ▸ Energy Diagram: draw one with its middle at `at` (or draw diagram `id` again with new numbers), and select it. */
+  putEnergyDiagram(d: EnergyData, at: Vec, id?: number, page?: { w: number; h: number }): void {
+    const m = this.fullMeasure();
+    let frame = id;
+    this.doc.edit(id === undefined ? 'Energy Diagram' : 'Edit Energy Diagram', () => {
+      const s = id !== undefined ? this.doc.shapes.get(id) : undefined;
+      const L = this.doc.style.bondLength;
+      const corner = s ? plotFromBox(shapeBox(s), s.energy!, L).at : { x: at.x - d.w / 2, y: at.y - d.h / 2 };
+      frame = putEnergy(this.doc, m, d, corner, id);
+      if (id === undefined) {
+        this.sel = emptySel();
+        this.sel.shapes.add(frame);
+        this.moveClear(page);
+      }
+    });
+    if (frame !== undefined) this.selectOnly({ kind: 'shape', id: frame });
+    this.changed();
+  }
+
   private selectOnly(h: NonNullable<Hit>): void {
     this.sel = emptySel();
     this.addToSel(h);
@@ -2302,15 +2349,46 @@ export class Editor {
    * Insert ▸ Catalytic Cycle: draw the cycle with its middle at `at`, the selected structures
    * (if any) standing for the first loop's species. The new cycle is selected.
    */
-  insertCycle(spec: CycleSpec, look: CycleLook, at: Vec): void {
+  insertCycle(spec: CycleSpec, look: CycleLook, at: Vec, page?: { w: number; h: number }): void {
     const stations = this.selectedStructures();
-    const made = buildCycle(this.doc, this.fullMeasure(), spec, look, at, stations);
-    this.sel = emptySel();
-    for (const st of stations) for (const a of st.atoms) this.sel.atoms.add(a);
-    for (const a of this.sel.atoms) for (const b of this.doc.adj.get(a) ?? []) this.sel.bonds.add(b);
-    for (const id of made.captions) this.sel.captions.add(id);
-    for (const id of made.arrows) this.sel.arrows.add(id);
+    this.doc.edit('Catalytic Cycle', () => {
+      const made = buildCycle(this.doc, this.fullMeasure(), spec, look, at, stations);
+      this.sel = emptySel();
+      for (const st of stations) for (const a of st.atoms) this.sel.atoms.add(a);
+      for (const a of this.sel.atoms) for (const b of this.doc.adj.get(a) ?? []) this.sel.bonds.add(b);
+      for (const id of made.captions) this.sel.captions.add(id);
+      for (const id of made.arrows) this.sel.arrows.add(id);
+      // drawn round selected structures it stays put; otherwise it goes beside what is there
+      if (!stations.length) this.moveClear(page);
+    });
     this.changed();
+  }
+
+  /**
+   * Move what was just put down (the selection) off whatever else is on the page: to the right
+   * of it, or below it when that would run off the page. Call inside an edit.
+   */
+  private moveClear(page?: { w: number; h: number }): void {
+    const doc = this.doc, m = this.measure();
+    const mine = withFrameContents(doc, this.sel);
+    const others = emptySel();
+    for (const id of doc.atoms.keys()) if (!mine.atoms.has(id)) others.atoms.add(id);
+    for (const id of doc.captions.keys()) if (!mine.captions.has(id)) others.captions.add(id);
+    for (const id of doc.arrows.keys()) if (!mine.arrows.has(id)) others.arrows.add(id);
+    for (const id of doc.shapes.keys()) if (!mine.shapes.has(id)) others.shapes.add(id);
+    const b = selectionBox(doc, mine, m), o = selectionBox(doc, others, m);
+    if (!b || !o || b.x2 <= o.x1 || o.x2 <= b.x1 || b.y2 <= o.y1 || o.y2 <= b.y1) return;
+    const gap = doc.style.bondLength;
+    // how far past the page's edges it would go (none without a page)
+    const over = (t: Vec) => !page ? 0 : Math.max(0, -(b.x1 + t.x)) + Math.max(0, b.x2 + t.x - page.w) + Math.max(0, -(b.y1 + t.y)) + Math.max(0, b.y2 + t.y - page.h);
+    const tries = [{ x: o.x2 + gap - b.x1, y: 0 }, { x: 0, y: o.y2 + gap - b.y1 }, { x: o.x1 - gap - b.x2, y: 0 }, { x: 0, y: o.y1 - gap - b.y2 }];
+    const go = tries.reduce((best, t) => (over(t) < over(best) ? t : best));
+    // on a page too full for it, as near that side as the page allows (it may overlap a little)
+    if (page) {
+      go.x = Math.min(Math.max(go.x, -b.x1), page.w - b.x2);
+      go.y = Math.min(Math.max(go.y, -b.y1), page.h - b.y2);
+    }
+    this.moveSelection(go.x, go.y);
   }
 
   /**

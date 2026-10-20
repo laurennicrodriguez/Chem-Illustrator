@@ -75,7 +75,10 @@ export class LayersPanel {
     const key = `${doc.version}|${sel.join(',')}`;
     if (key === this.key) return;
     this.key = key;
-    const order = shapeOrder([...doc.shapes.values()]).reverse();
+    // an energy diagram's own lines are part of it, not layers of their own
+    const parts = new Set<number>();
+    for (const x of doc.shapes.values()) if (x.energy && x.frame) for (const id of x.frame.shapes) if (doc.shapes.get(id)?.kind === 'line') parts.add(id);
+    const order = shapeOrder([...doc.shapes.values()].filter((x) => !parts.has(x.id))).reverse();
     const picked = new Set(sel);
     if (!order.length) {
       const p = document.createElement('p');

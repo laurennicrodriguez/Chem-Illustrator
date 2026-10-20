@@ -5,6 +5,7 @@
 import { Vec, Rect } from './geom';
 import { DocStyle, ACS_1996 } from './style';
 import { arrowPoints, gluePoint } from './objects';
+import type { EnergyData } from './design/energy';
 import { isMetal, isMetalLabel, lowestValence } from './chem/elements';
 import { NICKNAMES } from './chem/labels';
 
@@ -513,6 +514,8 @@ export interface Shape {
    * shrinks and moves as they change). Moving or resizing the frame by hand stops it following.
    */
   frame?: Frame;
+  /** An energy diagram's numbers and look, kept on the invisible frame round its drawing (design/energy.ts). */
+  energy?: EnergyData;
 }
 
 /**

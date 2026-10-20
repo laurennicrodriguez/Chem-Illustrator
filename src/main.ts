@@ -67,6 +67,7 @@ import { showContextMenu, topMenuEntry, type MenuItem } from './ui/context-menu'
 import { CommandSearch, uniqueCommands, type CommandItem } from './ui/command-search';
 import { fillTemplate, templateSize } from './design/templates';
 import { askCycle } from './ui/cycle-dialog';
+import { askEnergy } from './ui/energy-dialog';
 import { itemsToSvg } from './render/svg';
 import { PAPERS, defaultPaper, orient, placeIn, inside, handoutCells, noteLines, placeSvg, pageSvg } from './print-layout';
 import { printPages } from './ui/print';
@@ -581,8 +582,18 @@ async function pasteChemistry(text: string): Promise<void> {
 async function insertCycle(): Promise<void> {
   finishTyping();
   const got = await askCycle(editor.selectedStructures().length);
-  if (got) editor.insertCycle(got.spec, got.look, pasteCentre());
+  if (got) editor.insertCycle(got.spec, got.look, pasteCentre(), deckNow()?.size);
 }
+
+/** Insert ▸ Energy Diagram…, or the selected diagram's numbers to change (`id`, its frame). */
+async function energyDiagram(id: number | null): Promise<void> {
+  finishTyping();
+  const L = doc.style.bondLength;
+  const now = id !== null ? doc.shapes.get(id)?.energy ?? null : null;
+  const got = await askEnergy(now, { w: Math.round(18 * L), h: Math.round(12 * L) });
+  if (got) editor.putEnergyDiagram(got, pasteCentre(), now ? id! : undefined, deckNow()?.size);
+}
+editor.onEnergy = (id) => void energyDiagram(id);
 
 /** Select just these (new) atoms and their bonds. */
 function selectNewAtoms(ids: number[]): void {
@@ -2807,6 +2818,8 @@ const COMMANDS: Record<string, () => unknown> = {
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
   'arrange-scheme': () => arrangeDialog.open(),
   'catalytic-cycle': () => void insertCycle(),
+  'energy-diagram': () => void energyDiagram(null),
+  'edit-energy': () => { const id = editor.selectedEnergy(); if (id === null) flash('Select an energy diagram first.'); else void energyDiagram(id); },
   'number-compounds': () => void numberCompounds(),
   'scheme-settings': () => void schemeSettings(),
   'attach-descriptors': () => void attachDescriptors(),
@@ -4361,7 +4374,7 @@ function drawingMenu(): MenuItem[] {
       { cmd: 'undo' }, { cmd: 'redo' }, null,
       ...(ws.active.mode === 'slides' ? [{ cmd: 'new-comment', label: 'New Comment' }, { cmd: 'show-comments', label: 'Show Comments' }, null] : []),
       { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'connector-tool' }] : []), ...(ws.active.mode === 'slides' ? [{ cmd: 'slide-shapes', label: 'Shape…' }] : [])] },
-      { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }, { cmd: 'catalytic-cycle' }] },
+      { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }, { cmd: 'catalytic-cycle' }, { cmd: 'energy-diagram' }] },
       { cmd: 'drawing-style' },
       view,
     ];
@@ -4380,6 +4393,7 @@ function drawingMenu(): MenuItem[] {
     : [];
   return [
     { cmd: 'cut' }, { cmd: 'copy' }, { cmd: 'paste' }, { cmd: 'delete', label: 'Delete' }, null,
+    ...(editor.selectedEnergy() !== null ? [{ cmd: 'edit-energy' }, null] : []),
     ...(atoms ? [{ label: 'Copy As', items: [{ cmd: 'copy-smiles' }, { cmd: 'copy-mol' }, { cmd: 'copy-cdxml' }] }, null] : []),
     ...(atoms ? [
       { cmd: 'clean-up' },
@@ -4395,7 +4409,7 @@ function drawingMenu(): MenuItem[] {
       ] },
     ] : []),
     ...([...s.arrows].some((id) => doc.arrows.get(id)?.sweep) ? [{ cmd: 'clean-up-arrow' }] : []),
-    ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'clean-up-arrow' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }, { cmd: 'catalytic-cycle' }] }] : []),
+    ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'clean-up-arrow' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }, { cmd: 'catalytic-cycle' }, { cmd: 'energy-diagram' }] }] : []),
     null,
     { cmd: 'add-frame' },
     ...(atoms ? [{ label: 'Label the Structure', items: [{ cmd: 'add-id-label' }, { cmd: 'add-caption' }, { cmd: 'attach-descriptors' }, null, { cmd: 'number-compounds' }] }] : []),
@@ -4512,6 +4526,10 @@ editor.onContextMenu = (e) => {
 stylePanel.cropWithMouse = () => cropPicture();
 stylePanel.removeWhite = (ids) => void removeWhite(ids);
 stylePanel.frames = { add: () => void command('add-frame'), fit: (id) => editor.fitFrame(id) };
+stylePanel.energy = {
+  edit: (id) => void energyDiagram(id),
+  restyle: (id, patch) => { const d = doc.shapes.get(id)?.energy; if (d) editor.putEnergyDiagram({ ...d, ...patch }, pasteCentre(), id); },
+};
 stylePanel.ringFill = () => void command('fill-rings');
 stylePanel.highlightUsed = (c) => { highlightColour = c; };
 stylePanel.highlightStyleUsed = (st) => { highlightStyle = tidyStyle(st); };

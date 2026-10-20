@@ -1180,6 +1180,8 @@ class CdxmlWriter {
       g.appendChild(t);
     }
     const { id: _, ...look } = s;
+    // a frame takes what lies inside it again on opening (ids change between files)
+    if (look.frame) look.frame = { ...look.frame, atoms: [], captions: [], arrows: [], shapes: [] };
     if (ringPts) look.poly = ringPts.map((p) => ({ x: p.x, y: p.y }));
     g.appendChild(this.el('objecttag', { TagType: 'String', Name: GEO_TAG, Value: JSON.stringify(look), Visible: 'no' }));
     this.set(g, 'BoundingBox', box(b));
