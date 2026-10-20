@@ -19,7 +19,7 @@ import { runsForChemDraw, TEXT_TAG } from '../text/chemdraw-text';
 import { ATTACH_TAG, IGNORE_TAG, attachTag } from '../editor/attached';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { fromDataUrl } from '../render/images';
-import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, GROUP_TAG, GEO_TAG, TURN_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG, HIGHLIGHT_LOOK_TAG } from './cdxml';
+import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, GROUP_TAG, GEO_TAG, TURN_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG, HIGHLIGHT_LOOK_TAG, SPOKES_TAG } from './cdxml';
 import { frameTag } from '../editor/frames';
 import { geoDef, moveSteps, textArea, type GeoStep } from '../design/geo';
 import { FADE, tint } from '../colours';
@@ -420,7 +420,7 @@ class CdxmlWriter {
     if (!others && !conn && !this.neighborsMovedApart(a)) {
       if (a.x !== o.x || a.y !== o.y) { shift(e, a.x - o.x, a.y - o.y); wrote = true; }
       // the label of an atom that didn't change can still change with its neighbours
-      if (!a.attach && this.atomStereo(e, a, false)) wrote = true;
+      if (!a.attach && !a.multi && this.atomStereo(e, a, false)) wrote = true;
     } else {
       this.patchNode(e, a, o);
       wrote = true;
@@ -475,6 +475,7 @@ class CdxmlWriter {
   }
 
   private buildNode(a: Atom): Element {
+    if (a.multi) return this.el('n', { id: a.id, p: pt(a), NodeType: 'MultiAttachment', Attachments: this.attachments(a) });
     if (a.attach) return this.el('n', { id: a.id, p: pt(a), NodeType: 'ExternalConnectionPoint', ExternalConnectionType: a.attach === 'Unspecified' ? null : a.attach, ExternalConnectionNum: a.attachNum ?? null });
     const n = this.el('n', { id: a.id, p: pt(a) });
     this.nodeCore(n, a);
@@ -526,9 +527,19 @@ class CdxmlWriter {
     n.appendChild(tag);
   }
 
+  /** A multicentre point's atoms, as the ids their nodes have in the file. */
+  private attachments(a: Atom): string {
+    return (a.multi ?? []).filter((id) => this.doc.atoms.has(id)).map((id) => this.nodeId(id)).join(' ');
+  }
+
   private patchNode(n: Element, a: Atom, o: Atom): void {
     const dx = a.x - o.x, dy = a.y - o.y;
     n.setAttribute('p', pt(a));
+    if (a.multi) {
+      this.set(n, 'NodeType', 'MultiAttachment');
+      this.set(n, 'Attachments', this.attachments(a));
+      return;
+    }
     if (a.attach) {
       this.set(n, 'NodeType', 'ExternalConnectionPoint');
       this.set(n, 'ExternalConnectionType', a.attach === 'Unspecified' ? null : a.attach);
@@ -929,6 +940,9 @@ class CdxmlWriter {
     this.set(e, 'LineWidth', b.s && b.s !== 1 ? f2(b.s * this.doc.style.lineWidth) : null);
     this.set(e, 'IgnoreWarnings', b.ignoreWarnings ? 'yes' : null);
     e.removeAttribute('BondCircularOrdering');
+    // a hapto bond drawn to each atom (ChemDraw draws it to the middle)
+    for (const c of kids(e)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === SPOKES_TAG) e.removeChild(c);
+    if (b.spokes) e.appendChild(this.el('objecttag', { TagType: 'String', Name: SPOKES_TAG, Value: 'yes', Visible: 'no' }));
     this.bondStereo(e, b, true);
     // an older mark for ring circles (the circle is now written as ChemDraw draws it, see writeRingCircles)
     for (const c of kids(e)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === CIRCLE_TAG) e.removeChild(c);

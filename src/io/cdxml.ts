@@ -168,12 +168,21 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
 
   const readFragment = (frag: Element) => {
     const nodeIds = new Map<string, number>();
+    const pendingMulti: { id: number; key: string; ids: string[] }[] = [];
     for (const n of kids(frag)) {
       if (n.nodeName !== 'n') continue;
       const type = n.getAttribute('NodeType');
       const [x, y] = pts(n.getAttribute('p'));
       if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
       const id = idFor(n);
+      if (type === 'MultiAttachment') {
+        // the middle of a ring or π-bond a metal is bonded to: its atoms are read once they all are
+        const a = doc.addAtom(x, y, 0, { id, multi: [] });
+        pendingMulti.push({ id: a.id, key: n.getAttribute('id') ?? '', ids: (n.getAttribute('Attachments') ?? '').trim().split(/\s+/).filter(Boolean) });
+        from('a', a.id, n);
+        nodeIds.set(n.getAttribute('id') ?? '', id);
+        continue;
+      }
       if (type === 'ExternalConnectionPoint') {
         // a point of attachment drawn on its own (the wavy line ending a substituent)
         const a = doc.addAtom(x, y, 0, { id, attach: n.getAttribute('ExternalConnectionType') ?? 'Unspecified' });
@@ -245,6 +254,11 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         pendingLabels.push({ atom, text: txt, hShown: isPlain && nh !== null ? Number(nh) : isPlain ? null : -1 });
       }
     }
+    for (const m of pendingMulti.splice(0)) {
+      const atoms = m.ids.map((x) => nodeIds.get(x)).filter((x): x is number => x !== undefined);
+      if (atoms.length >= 2) doc.updateAtom(m.id, { multi: atoms });
+      else { doc.removeAtom(m.id); nodeIds.delete(m.key); skip('multicentre attachment without its atoms'); }
+    }
     for (const b of kids(frag)) {
       if (b.nodeName === 'graphic') readGraphic(b); // circled charges and lone pairs sit with their structure
       if (b.nodeName !== 'b') continue;
@@ -298,6 +312,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       if (hlB && /^#[0-9a-f]{6}$/i.test(hlB)) extra.highlight = hlB.toLowerCase();
       const lookB = highlightStyleFromTag(kids(b).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === HIGHLIGHT_LOOK_TAG)?.getAttribute('Value'));
       if (lookB && extra.highlight) extra.hl = lookB;
+      if (kids(b).some((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === SPOKES_TAG)) extra.spokes = true;
       const bond = doc.addBond(a1, a2, order, display, extra);
       from('b', bond.id, b);
       stats.bonds++;
@@ -859,6 +874,8 @@ export function fillExtras(v: Partial<Shape>): Partial<Shape> {
 
 /** A highlight behind an atom or bond: its colour (ChemDraw has no highlights, so it shows nothing). */
 export const HIGHLIGHT_TAG = 'Chem Illustrator highlight';
+/** A hapto bond drawn as a line to each of its atoms rather than to their middle. */
+export const SPOKES_TAG = 'Chem Illustrator spokes';
 /** How a highlight is drawn (its shape, size, shadow…), when not the usual look. */
 export const HIGHLIGHT_LOOK_TAG = 'Chem Illustrator highlight look';
 /** The tag that keeps a contracted label's group (SMILES), so its chemistry comes back with the file. */

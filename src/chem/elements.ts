@@ -129,3 +129,39 @@ export function tablePosition(z: number): { row: number; col: number } | null {
   if (i < 17) return { row: period + 3, col: i + 1 };
   return { row: period, col: i - 13 };
 }
+
+/**
+ * Metals: the alkali and alkaline-earth metals, the d- and f-blocks, and the metals of the
+ * p-block (Al, Ga, In, Sn, Tl, Pb, Bi, Po). They take no implicit hydrogens, their bonds are
+ * never counted against a valence (coordination numbers vary too much), and the atoms bonded
+ * to them may give a lone pair to the bond.
+ */
+export function isMetal(z: number): boolean {
+  if (z === 3 || z === 4 || z === 11 || z === 12 || z === 13) return true;
+  if (z >= 19 && z <= 31) return true;
+  if (z >= 37 && z <= 50) return true;
+  if (z >= 55 && z <= 84) return true;
+  return z >= 87 && z <= 116 && z !== 117;
+}
+
+// Symbols that also stand for groups when written as a label (Ac acetyl, Pr propyl, Np naphthyl…)
+const GROUP_LIKE = new Set(['Ac', 'Pr', 'Np', 'Am', 'Cm', 'Pm', 'Es', 'No', 'Bk', 'Ts']);
+
+/**
+ * Does label text stand for a metal (with or without its ligands): Pd, PdCl2, Pd(PPh3)4, LnPd,
+ * [M], M, MLn? The first element written decides, after any L or Ln before it.
+ */
+export function isMetalLabel(label: string): boolean {
+  const m = /^\[?(?:\(?L\)?[n\d]*)?\]?\s*\[?([A-Z][a-z]?)/.exec(label.trim());
+  const sym = m?.[1];
+  if (!sym) return false;
+  if (sym === 'M') return true;
+  if (GROUP_LIKE.has(sym)) return false;
+  const z = elementNumber(sym);
+  return z !== undefined && isMetal(z);
+}
+
+/** The lowest valence an element normally has (adjusted for charge as for hydrogens), if it takes hydrogens. */
+export function lowestValence(z: number, charge = 0): number | undefined {
+  return VALENCES[z] ? implicitHydrogens(z, 0, charge) : undefined;
+}

@@ -22,18 +22,22 @@ describe('template data', () => {
   for (const t of TEMPLATES) {
     it(`${t.name}: sensible shape`, () => {
       const n = t.atoms.length;
+      // rings bonded side-on to a metal are seen in perspective too
+      const persp = !!(t.z || t.hapto);
+      // an η³-allyl's bonds are 1½, a metal–metal bond may be quadruple
+      const metal = t.group === 'organometallic' || t.group === 'ligands';
       for (const [a, b, o] of t.bonds) {
         expect(a).toBeLessThan(n);
         expect(b).toBeLessThan(n);
-        expect([1, 2, 3]).toContain(o);
+        expect(metal ? [1, 1.5, 2, 3, 4] : [1, 2, 3]).toContain(o);
         const d = Math.hypot(t.atoms[a][0] - t.atoms[b][0], t.atoms[a][1] - t.atoms[b][1]);
-        expect(d).toBeGreaterThan(t.z ? 0.25 : 0.45);
+        expect(d).toBeGreaterThan(persp ? 0.25 : 0.45);
         // Haworth rings are drawn wide
         expect(d).toBeLessThan(t.group === 'sugars' ? 2.2 : 1.6);
       }
       // no two atoms on top of each other (shapes seen in perspective may come closer; C60's
       // far side lies behind its near side)
-      const apart = t.z ? 0.12 : 0.3;
+      const apart = persp ? 0.12 : 0.3;
       if (t.id !== 'c60') for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
         expect(Math.hypot(t.atoms[i][0] - t.atoms[j][0], t.atoms[i][1] - t.atoms[j][1])).toBeGreaterThan(apart);
       }

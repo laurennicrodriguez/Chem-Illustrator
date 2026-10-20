@@ -4,7 +4,7 @@
 import { passParam, type Rect } from '../geom';
 import type { Atom, Doc } from '../model';
 import { doubleBondGap } from '../style';
-import { SYMBOLS, elementNumber, hasImplicitH, implicitHydrogens, maxValence, valenceOfBonds } from './elements';
+import { SYMBOLS, elementNumber, hasImplicitH, implicitHydrogens, lowestValence, maxValence, valenceOfBonds } from './elements';
 
 /**
  * Abbreviations, each written as SMILES whose first atom is the one bonded to the structure.
@@ -27,8 +27,53 @@ export const NICKNAMES: Record<string, string> = {
   CO2R: 'C(=O)O*', CHO: 'C=O', COMe: 'C(C)=O', OAc: 'OC(C)=O', OTf: 'OS(=O)(=O)C(F)(F)F', SO2Ph: 'S(=O)(=O)c1ccccc1',
   SO2Me: 'S(=O)(=O)C', Bpin: 'B1OC(C)(C)C(C)(C)O1', BPin: 'B1OC(C)(C)C(C)(C)O1', Cp: 'C1C=CC=C1',
   // solvents and ligands, bonded through the atom a metal would hold
-  THF: 'O1CCCC1', DMF: 'O=CN(C)C', DMSO: 'O=S(C)C',
+  THF: 'O1CCCC1', DMF: 'O=CN(C)C', DMSO: 'O=S(C)C', Et2O: 'O(CC)CC', DME: 'O(C)CCOC', MeCN: 'N#CC', PhCN: 'N#Cc1ccccc1',
+  'o-Tol': 'c1ccccc1C', 'm-Tol': 'c1cccc(C)c1',
+  // phosphines (P first; the second P of a chelating one is left free)
+  PPh3: 'P(c1ccccc1)(c1ccccc1)c1ccccc1', PCy3: 'P(C1CCCCC1)(C1CCCCC1)C1CCCCC1', PMe3: 'P(C)(C)C', PEt3: 'P(CC)(CC)CC',
+  PtBu3: 'P(C(C)(C)C)(C(C)(C)C)C(C)(C)C', PnBu3: 'P(CCCC)(CCCC)CCCC',
+  dppm: 'P(c1ccccc1)(c1ccccc1)CP(c1ccccc1)c1ccccc1', dppe: 'P(c1ccccc1)(c1ccccc1)CCP(c1ccccc1)c1ccccc1',
+  dppp: 'P(c1ccccc1)(c1ccccc1)CCCP(c1ccccc1)c1ccccc1', dppb: 'P(c1ccccc1)(c1ccccc1)CCCCP(c1ccccc1)c1ccccc1',
+  BINAP: 'P(c1ccccc1)(c1ccccc1)c1ccc2ccccc2c1-c1c(P(c3ccccc3)c3ccccc3)ccc2ccccc12',
+  Xantphos: 'P(c1ccccc1)(c1ccccc1)c1cccc2c1Oc1c(P(c3ccccc3)c3ccccc3)cccc1C2(C)C',
+  XPhos: 'P(C1CCCCC1)(C1CCCCC1)c1ccccc1-c1c(C(C)C)cc(C(C)C)cc1C(C)C', SPhos: 'P(C1CCCCC1)(C1CCCCC1)c1ccccc1-c1c(OC)cccc1OC',
+  RuPhos: 'P(C1CCCCC1)(C1CCCCC1)c1ccccc1-c1c(OC(C)C)cccc1OC(C)C', JohnPhos: 'P(C(C)(C)C)(C(C)(C)C)c1ccccc1-c1ccccc1',
+  DavePhos: 'P(C1CCCCC1)(C1CCCCC1)c1ccccc1-c1ccccc1N(C)C',
+  // nitrogen and carbon donors (N-heterocyclic carbenes bonded through the carbene carbon)
+  py: 'N1=CC=CC=C1', bpy: 'N1=CC=CC=C1C1=CC=CC=N1', bipy: 'N1=CC=CC=C1C1=CC=CC=N1', phen: 'N1=CC=CC2=C1C1=NC=CC=C1C=C2',
+  tmeda: 'N(C)(C)CCN(C)C', TMEDA: 'N(C)(C)CCN(C)C', en: 'NCCN',
+  IMes: '[C]1N(c2c(C)cc(C)cc2C)C=CN1c1c(C)cc(C)cc1C', SIMes: '[C]1N(c2c(C)cc(C)cc2C)CCN1c1c(C)cc(C)cc1C',
+  IPr: '[C]1N(c2c(C(C)C)cccc2C(C)C)C=CN1c1c(C(C)C)cccc1C(C)C', SIPr: '[C]1N(c2c(C(C)C)cccc2C(C)C)CCN1c1c(C(C)C)cccc1C(C)C',
+  // π ligands and anionic ones
+  'Cp*': 'C1(C)C(C)=C(C)C(C)=C1C', Ind: 'C1C=Cc2ccccc12', COD: 'C1=CCCC=CCC1', NBD: 'C1=CC2C=CC1C2',
+  dba: 'O=C(C=Cc1ccccc1)C=Cc1ccccc1', 'p-cymene': 'c1cc(C(C)C)ccc1C', C6Me6: 'c1(C)c(C)c(C)c(C)c(C)c1C',
+  acac: 'OC(C)=CC(C)=O', hfac: 'OC(C(F)(F)F)=CC(C(F)(F)F)=O', OPiv: 'OC(=O)C(C)(C)C', TFA: 'OC(=O)C(F)(F)F',
 };
+
+/**
+ * Ligands that give the metal a lone pair or a π-bond (L-type): their bond to a metal takes no
+ * hydrogen off them, so PPh₃, COD and THF keep every hydrogen they have as free molecules.
+ */
+const L_LIGANDS = new Set(['THF', 'DMF', 'DMSO', 'Et2O', 'DME', 'MeCN', 'PhCN', 'PPh3', 'PCy3', 'PMe3', 'PEt3', 'PtBu3', 'PnBu3',
+  'dppm', 'dppe', 'dppp', 'dppb', 'BINAP', 'Xantphos', 'XPhos', 'SPhos', 'RuPhos', 'JohnPhos', 'DavePhos', 'py', 'bpy', 'bipy',
+  'phen', 'tmeda', 'TMEDA', 'en', 'IMes', 'SIMes', 'IPr', 'SIPr', 'COD', 'NBD', 'dba', 'p-cymene', 'C6Me6']);
+
+/**
+ * Does this label, bonded to a metal, give it a lone pair or π-bond rather than share an
+ * electron (PPh3, NH3, OH2, NEt3, COD: yes; Cl, OMe, Me, OAc, Cp: no)? Written formulas give
+ * a lone pair when their first atom already has its lowest valence without the bond, counting
+ * `others`, the label's bonds to atoms that aren't metals (dppf's PPh2 on its Cp ring: yes).
+ */
+export function labelDonates(label: string, others = 0): boolean {
+  if (L_LIGANDS.has(label)) return true;
+  const g = labelGraph(label, 0);
+  const head = g?.atoms[0];
+  if (!g || !head || head.dummy) return false;
+  const low = lowestValence(head.z, head.charge);
+  if (low === undefined) return false;
+  const orders = g.bonds.filter((b) => b.a === 0 || b.b === 0).map((b) => b.order);
+  return valenceOfBonds(orders, head.z) + (head.hCount ?? 0) + others >= low;
+}
 
 /** Labels that stand for "any group" and are left out of formula and mass. */
 export const GENERIC = new Set(['R', "R'", "R''", 'R1', 'R2', 'R3', 'R4', 'R5', 'X', 'Z', 'A', 'Q', 'M', 'G', 'E', 'Nu', 'LG', 'PG', 'EWG', 'EDG', 'L', 'Ln']);

@@ -5,7 +5,7 @@
 
 import type { Template } from '../chem/templates';
 import { labelSpec, layoutLabel, type LabelLayout } from '../chem/labels';
-import { elementNumber } from '../chem/elements';
+import { elementNumber, isMetal, lowestValence } from '../chem/elements';
 import { arialWidth } from '../text-metrics';
 import { exitParam, type Rect } from '../geom';
 import { ACS_1996 } from '../style';
@@ -42,7 +42,19 @@ export function templateIcon(t: Template, size = 44): string {
   const n = t.atoms.length;
   const order = new Array(n).fill(0);
   const nbrs: number[][] = t.atoms.map(() => []);
-  for (const [a, b, o] of t.bonds) { order[a] += o; order[b] += o; nbrs[a].push(b); nbrs[b].push(a); }
+  // bonds to a metal count only as far as the atom's usual valence allows (PPh3 on M is no PH)
+  const metal = t.atoms.map(([, , el, , text]) => text === 'M' || (!text && isMetal(elementNumber(el) ?? 0)));
+  const toMetal = new Array(n).fill(0);
+  for (const [a, b, o] of t.bonds) {
+    nbrs[a].push(b); nbrs[b].push(a);
+    if (metal[b]) toMetal[a] += o; else order[a] += o;
+    if (metal[a]) toMetal[b] += o; else order[b] += o;
+  }
+  t.atoms.forEach(([, , el, charge, text], i) => {
+    if (!toMetal[i]) return;
+    const low = text || metal[i] ? undefined : lowestValence(elementNumber(el) ?? 6, charge ?? 0);
+    order[i] += low === undefined ? toMetal[i] : Math.min(toMetal[i], Math.max(0, low - Math.ceil(order[i] - 1e-6)));
+  });
 
   // Labels in bond-length units, relative to their atom.
   const layouts: (LabelLayout | null)[] = t.atoms.map(([x, y, el, charge, text], i) => {
@@ -87,8 +99,8 @@ export function templateIcon(t: Template, size = 44): string {
   };
 
   const parts: string[] = [];
-  const line = (p: { x: number; y: number }, q: { x: number; y: number }, w = 1) =>
-    parts.push(`<line x1="${f(p.x)}" y1="${f(p.y)}" x2="${f(q.x)}" y2="${f(q.y)}" stroke-width="${w}"/>`);
+  const line = (p: { x: number; y: number }, q: { x: number; y: number }, w = 1, dash = false) =>
+    parts.push(`<line x1="${f(p.x)}" y1="${f(p.y)}" x2="${f(q.x)}" y2="${f(q.y)}" stroke-width="${w}"${dash ? ' stroke-dasharray="2 1.6"' : ''}/>`);
   const off = Math.max(1.8, (ACS_1996.bondSpacing / 100) * k);
   const wedge = Math.max(1.6, 0.12 * k);
   for (const [a, b, o, disp] of t.bonds) {
@@ -101,6 +113,12 @@ export function templateIcon(t: Template, size = 44): string {
       continue;
     }
     if (disp === 'bold') { line(p, q, Math.max(2.4, 0.14 * k)); continue; }
+    if (disp === 'dash' || disp === 'hash') { line(p, q, 1, true); continue; }
+    if (o === 4) {
+      // a metal–metal quadruple bond: four lines
+      for (const u of [-1.5, -0.5, 0.5, 1.5]) line({ x: p.x + nx * off * u, y: p.y + ny * off * u }, { x: q.x + nx * off * u, y: q.y + ny * off * u });
+      continue;
+    }
     if (o === 2 && !nbrs[a].some((i) => i !== b) !== !nbrs[b].some((i) => i !== a)) {
       // C=O and the like: two lines either side of the bond line, as in a drawing
       line({ x: p.x + (nx * off) / 2, y: p.y + (ny * off) / 2 }, { x: q.x + (nx * off) / 2, y: q.y + (ny * off) / 2 });
@@ -122,6 +140,14 @@ export function templateIcon(t: Template, size = 44): string {
       const sa = clear[a].length ? 0 : 0.16, sb = clear[b].length ? 0 : 0.16;
       line({ x: p.x + dx * sa + nx * off * sgn, y: p.y + dy * sa + ny * off * sgn }, { x: q.x - dx * sb + nx * off * sgn, y: q.y - dy * sb + ny * off * sgn });
     }
+  }
+  // hapto bonds: from the metal (clear of its label) to the middle of the ring or π-bond
+  for (const [m, members, disp] of t.hapto ?? []) {
+    const c = members.reduce((acc, i) => ({ x: acc.x + P(i).x / members.length, y: acc.y + P(i).y / members.length }), { x: 0, y: 0 });
+    const p = P(m);
+    let u = 0;
+    for (const r of clear[m]) u = Math.max(u, exitParam(p, c, r));
+    line({ x: p.x + (c.x - p.x) * u, y: p.y + (c.y - p.y) * u }, c, 1, disp === 'dash');
   }
   // a Newman projection's circle and back bonds
   for (const [kind, ax, ay, bx, by] of t.shapes ?? []) {

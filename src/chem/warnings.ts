@@ -5,9 +5,10 @@
 // The checks are worked out per atom and kept, so after an edit only the changed atoms and
 // their close neighbours are looked at again.
 
-import { radicalElectrons, type Atom, type AtomWatch, type Bond, type Doc } from '../model';
+import { isMetalAtom, radicalElectrons, type Atom, type AtomWatch, type Bond, type Doc } from '../model';
+import { metalCarbonyl } from './hapto';
 import { SYMBOLS, elementNumber, maxValence, minValence, valenceOfBonds } from './elements';
-import { bracketsUnbalanced, labelGraph, labelOverValent, tokenize } from './labels';
+import { bracketsUnbalanced, labelDonates, labelGraph, labelOverValent, tokenize } from './labels';
 
 /** Atoms closer than this (a fraction of the bond length) look dropped on top of each other. */
 export const TOO_CLOSE_ATOM = 0.2;
@@ -67,16 +68,30 @@ function atomName(z: number, charge: number): string {
 export function atomWarnings(doc: Doc, a: Atom): string[] {
   const out: string[] = [];
   const orders: number[] = [];
-  // a dative bond leaves both atoms' valences as they were (H3N→BF3)
-  for (const bid of doc.adj.get(a.id) ?? []) { const b = doc.bonds.get(bid)!; if (b.display !== 'dative') orders.push(b.order); }
-  if (a.attach) return out;
+  // a dative bond leaves both atoms' valences as they were (H3N→BF3); a bond to a metal may be
+  // a lone pair the atom gives it (PPh3, a bridging Cl, a pyridine N), so it may go past the valence
+  let toMetal = 0;
+  for (const bid of doc.adj.get(a.id) ?? []) {
+    const b = doc.bonds.get(bid)!;
+    if (b.display === 'dative') continue;
+    orders.push(b.order);
+    if (isMetalAtom(doc.atoms.get(b.a1 === a.id ? b.a2 : b.a1))) toMetal++;
+  }
+  if (a.attach || a.multi) return out;
+  // metals: no valence check (how many ligands a metal holds varies too much)
+  const metal = isMetalAtom(a);
+  if (metal && !a.label) return a.isotope && !isotopeOk(a.z, a.isotope) ? [`There is no isotope ${a.isotope}${SYMBOLS[a.z] ?? ''}.`] : out;
   const z = a.label ? 6 : a.z;
   const bonds = valenceOfBonds(orders, z);
+  // a label giving a metal a lone pair or π-bond (PPh3, NH3, COD) takes no valence from it
+  const ext = a.label && toMetal && labelDonates(a.label, Math.max(0, bonds - toMetal)) ? Math.max(0, bonds - toMetal) : bonds;
   if (a.label) {
     if (bracketsUnbalanced(a.label)) out.push(`The brackets in “${a.label}” don't pair up.`);
-    else if (!labelGraph(a.label, bonds)) out.push(`“${a.label}” can't be read as chemistry, so it's left out of the formula and mass.`);
+    else if (!labelGraph(a.label, ext)) out.push(`“${a.label}” can't be read as chemistry, so it's left out of the formula and mass.`);
     else {
-      const over = labelOverValent(a.label, bonds, a.charge);
+      // (the label's first atom may give the metal a lone pair: THF's O, DMSO's S)
+      // (a bridging OMe or Cl may go past its valence by its bonds to metals)
+      const over = metal ? [] : labelOverValent(a.label, ext, a.charge).filter((o) => o.atom !== 0 || o.used - o.max > toMetal);
       if (over.length) {
         const o = over[0];
         const sym = SYMBOLS[o.z] ?? '?';
@@ -90,7 +105,9 @@ export function atomWarnings(doc: Doc, a: Atom): string[] {
   } else {
     const max = maxValence(a.z, a.charge);
     const rad = radicalElectrons(a);
-    if (max !== undefined && bonds + rad > max) {
+    // a carbonyl ligand's O (M–C≡O)
+    const carbonyl = metalCarbonyl(doc, a) ? 1 : 0;
+    if (max !== undefined && bonds + rad > max + toMetal + carbonyl) {
       const who = atomName(a.z, a.charge);
       out.push(`Too many bonds: ${who} has ${bonds}${rad ? ` and ${rad === 1 ? 'an unpaired electron' : 'two unpaired electrons'}` : ''}, but ${valenceAdvice(a.z, a.charge, bonds + rad)}`);
     }
@@ -232,12 +249,14 @@ export class StructureChecks {
   /** Work out one atom's warnings; `found` is told about close atoms that should be re-checked too. */
   private checkAtom(a: Atom, found: ((id: number) => void) | null): void {
     const doc = this.doc;
+    // a ring's middle, where a metal is bonded (η⁵), is not an atom: nothing to check
+    if (a.multi) { this.atoms.delete(a.id); return; }
     const list = atomWarnings(doc, a);
     const L = doc.style.bondLength * (a.s ?? 1);
     // another atom almost on top of this one
     let onAtom = false;
     for (const o of doc.atomsNear(a, TOO_CLOSE_ATOM * L)) {
-      if (o.id === a.id) continue;
+      if (o.id === a.id || o.multi) continue;
       onAtom = true;
       this.link(a.id, o.id);
       found?.(o.id);
@@ -255,6 +274,8 @@ export class StructureChecks {
         const b = doc.bonds.get(bid)!;
         if (b.a1 === a.id || b.a2 === a.id) continue;
         const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
+        // a bond to a ring's middle runs over the ring as it is meant to
+        if (p.multi || q.multi) continue;
         const { d, t } = segDist(a, p, q);
         if (t <= 0 || t >= 1 || d >= r) continue;
         onBond = true;

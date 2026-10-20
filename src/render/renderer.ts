@@ -274,7 +274,7 @@ export class Renderer {
     if (c) return c;
     const deg = doc.degree(a.id);
     const bos = doc.valenceSum(a.id);
-    const spec = a.attach ? null : labelSpec(a.z, a.label, a.charge, a.isotope, bos, deg, !a.hideCharge, !!a.showCarbon);
+    const spec = a.attach || a.multi ? null : labelSpec(a.z, a.label, a.charge, a.isotope, bos, deg, !a.hideCharge, !!a.showCarbon);
     let layout: LabelLayout | null = null;
     const boxes: Rect[] = [];
     const k = a.s ?? 1;
@@ -524,7 +524,7 @@ export class Renderer {
       ctx.fillText(text, p.x, p.y);
     };
     for (const a of atoms) {
-      if (a.attach) continue;
+      if (a.attach || a.multi) continue;
       const text = atomStereoText(a, info);
       if (text) draw(text, place.atom(a, text), '#000');
       else if (this.previewStereo && !a.showStereo && !a.stereoLabel) {
@@ -640,13 +640,13 @@ export class Renderer {
       const k = b.s ?? 1;
       let bb = batches.get(k);
       if (!bb) { bb = newBatch(this.makePath); batches.set(k, bb); }
-      this.bondPaths(doc, b, p, q, bb);
+      this.bondOrSpokes(doc, b, p, q, bb);
     }
     for (const [k, bb] of batches) this.strokeBatch(ctx, bb, k, st.lineWidth, st.boldWidth, '#000');
     for (const b of colored) {
       const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
       const bb = newBatch(this.makePath);
-      this.bondPaths(doc, b, p, q, bb);
+      this.bondOrSpokes(doc, b, p, q, bb);
       this.strokeBatch(ctx, bb, b.s ?? 1, st.lineWidth, st.boldWidth, b.color!);
     }
     ctx.strokeStyle = ctx.fillStyle = '#000';
@@ -756,6 +756,18 @@ export class Renderer {
     if (t1 + t2 >= 0.95) return [a, c];
     const d = sub(c, a);
     return [add(a, mul(d, t1)), sub(c, mul(d, t2))];
+  }
+
+  /** A bond, or a hapto bond drawn as a line from the metal to each of its point's atoms. */
+  private bondOrSpokes(doc: Doc, b: Bond, p: Atom, q: Atom, bb: BondBatch): void {
+    const c = b.spokes ? (q.multi ? q : p.multi ? p : null) : null;
+    if (!c) { this.bondPaths(doc, b, p, q, bb); return; }
+    const metal = c === q ? p : q;
+    c.multi!.forEach((id, k) => {
+      const m = doc.atoms.get(id);
+      // (each line is a bond of its own for the gaps where other bonds cross it)
+      if (m) this.bondPaths(doc, { ...b, id: -(b.id * 64 + k + 1), a1: metal.id, a2: m.id, order: 1 }, metal, m, bb);
+    });
   }
 
   private bondPaths(doc: Doc, b: Bond, p: Atom, q: Atom, bb: BondBatch): void {

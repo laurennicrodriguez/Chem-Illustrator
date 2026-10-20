@@ -59,6 +59,8 @@ export const COMMAND_ICONS: Record<string, string> = {
   'stereo-labels': svg(txt(12, 15.5, 'R/S', 9, 700)),
   'enhanced-stereo': svg(txt(12, 15.5, '&amp;1', 9, 700)),
   'contract-label': svg('<polyline points="2,15 5.5,11 9,15 12.5,11"/><path d="M14 13h4"/><path d="M16.5 11l2 2-2 2"/>' + txt(21, 9.5, 'R', 7)),
+  'expand-label': svg(txt(4.5, 9.5, 'R', 7) + '<path d="M3 13h4"/><path d="M5.5 11l2 2-2 2"/><polyline points="10,15 13.5,11 17,15 20.5,11"/>'),
+  'hapto-bond': svg('<polygon points="5,6 12,3.5 19,6 16.5,9 7.5,9"/><path d="M12 6.5V17"/>' + txt(12, 22.5, 'M', 7, 700)),
   'name-to-structure': svg(txt(6.5, 9, 'abc', 7) + '<path d="M6 11v4M4.5 13.5L6 15l1.5-1.5"/>' + hex(15.5, 15, 5)),
   'check-structure': svg(hex(11, 12.5, 8) + '<path d="M14.5 17.5l2.5 2.5 5-6"/>'),
   'periodic-table': ICONS.element ?? svg(txt(12, 15, 'Pt', 9)),

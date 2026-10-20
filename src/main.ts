@@ -77,6 +77,7 @@ import { installCombos } from './ui/combo';
 import { installFontList, registerBundledFonts, bundledFaces } from './fonts';
 import { applyRibbonIcons } from './ui/ribbon-icons';
 import { TEMPLATES, Template, templateById, ownTemplates, setOwnTemplates, templateFromAtoms } from './chem/templates';
+import { centreEnd } from './chem/hapto';
 import { addNicknames, removeNickname, isBuiltInNickname } from './chem/labels';
 import { selectedGroup } from './chem/group-smiles';
 import { templateIcon } from './ui/template-icons';
@@ -284,6 +285,7 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     { name: 'bond-dash', title: 'Dashed bond' },
     { name: 'bond-wavy', title: 'Wavy bond' },
     { name: 'bond-dative', title: 'Dative bond: draw from the donor atom to the acceptor. Click again to reverse' },
+    { name: 'bond-hapto', title: 'Hapto (η) bond: drag from a metal into a ring or onto a π-bond to bond it to the middle (η⁵-Cp, η⁶-arene, η²-alkene); click inside a ring or on a bond for a new metal there. Click a hapto bond to draw it to each atom' },
     { name: 'chain', title: 'Chain: drag to draw a zig-zag chain, or click to type how many atoms (Alt+click: the same number again)' },
   ],
   [
@@ -308,6 +310,8 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     templatePalette('cycloalkanes', 'tpl-cycloalkanes', 'Large rings', 6, 56),
     templatePalette('aromatics', 'tpl-aromatics', 'Aromatics', 6, 56),
     templatePalette('perspective', 'tpl-perspective', 'Rings in perspective', 6, 56),
+    templatePalette(['geometries', 'organometallic'], 'tpl-metal', 'Metal complexes', 6, 64),
+    templatePalette('ligands', 'tpl-ligands', 'Ligands', 6, 64),
     OWN_PALETTE,
   ],
   [
@@ -354,6 +358,7 @@ const HINTS: Record<string, string> = {
   chain: 'Drag from empty space or an atom; the number shows how many bonds. Click to type how many atoms; Alt+click repeats the last number.',
   text: 'Click an atom to type a label (OMe, CO2Et, NHBoc…), or click empty space for a caption.',
   element: 'Click atoms to make them the element picked in the periodic table, or empty space to add one.',
+  'bond-hapto': 'Drag from a metal into a ring (η⁵, η⁶) or onto a bond (η²), or the other way. Click inside a ring or on a bond for a new metal M there; select an allyl or diene, then click the metal. Click a hapto bond to draw it to each atom.',
   fragment: 'Drag a line across the bonds to break (or click one bond). Each piece gets a caption with its formula and exact mass, which you can edit.',
 };
 const ARROW_HINT = 'Drag to draw an arrow (Alt: any angle); click for a standard one. Drag the ends to move them, the middle to bend it.';
@@ -891,6 +896,26 @@ async function deleteNickname(): Promise<void> {
 }
 
 /** Structure > Contract Label…: fold the selected group into one label (Undo opens it again). */
+/**
+ * Structure > Expand Label: the selected labels drawn out as atoms and bonds. Ligands on a
+ * metal come from their templates; other abbreviations are laid out by the chemistry engine.
+ */
+async function expandLabel(): Promise<void> {
+  const list = editor.expandableLabels();
+  if (!list.length) { flash('Select a label to expand: an abbreviation such as OMe, Boc or CO2Et, or a ligand on a metal such as PPh3, dppe or Cp*.', 6000); return; }
+  const mbs = new Map<number, string>();
+  const failed: string[] = [];
+  for (const x of list) {
+    if (x.template) continue;
+    const mb = x.smiles ? await chem.smilesToMol((doc.degree(x.id) ? '*' : '') + x.smiles) : null;
+    if (mb) mbs.set(x.id, mb);
+    else failed.push(doc.atoms.get(x.id)?.label ?? '');
+  }
+  const n = editor.expandLabels(list, mbs);
+  if (failed.length) flash(`Not expanded (not read as chemistry): ${failed.map((f) => `“${f}”`).join(', ')}`, 6000);
+  else if (!n) flash('Nothing to expand.');
+}
+
 async function contractLabel(): Promise<void> {
   const g = selectedGroup(doc, editor.sel.atoms);
   if ('error' in g) { flash(g.error, 6000); return; }
@@ -2567,6 +2592,11 @@ function command(name: string): boolean {
     flash('A design is one page: use Page Size and Background on the Design ribbon. For several pages, use File > New Slides.');
     return true;
   }
+  if (name.startsWith('add-ligand:')) {
+    if (editor.addLigand(name.slice('add-ligand:'.length))) return true;
+    flash('Select one metal first, then add the ligand to it.');
+    return false;
+  }
   if (name.startsWith('fuse-ring:')) {
     const [, id, index] = name.split(':');
     return contextBond !== null && editor.fuseRing(contextBond, id, Number(index));
@@ -2782,6 +2812,9 @@ const COMMANDS: Record<string, () => unknown> = {
   'define-nickname': () => void defineNickname(),
   'delete-nickname': () => void deleteNickname(),
   'contract-label': () => void contractLabel(),
+  'expand-label': () => void expandLabel(),
+  'hapto-bond': () => flash(editor.bondMetalToRing(), 5000),
+  'split-hapto': () => flash(editor.splitHaptoBonds()),
   'chain-ends': () => void toggleTerminalMethyls(),
   'methyls-ch3': () => chooseMethylStyle('CH3'),
   'methyls-me': () => chooseMethylStyle('Me'),
@@ -4275,6 +4308,22 @@ let contextBond: number | null = null;
 const FUSE_RINGS = ['chair', 'boat', 'twist-boat', 'half-chair', 'cyclohexanone', 'envelope', 'c5-twist', 'cyclopentene', 'cyclobutane', 'c7-twist-chair'];
 
 /** Right-click on a bond of a ring drawn in 3-D: the conformers that can join it, each way they can. */
+/** Ligands offered on right-clicking a metal, as in the Ligands palette. */
+const MENU_LIGANDS = ['pph3', 'pcy3', 'co', 'mecn', 'py', 'cp', 'cpstar', 'benzene', 'allyl', 'ethylene', 'cod', 'dppe', 'dppf', 'binap', 'bipy', 'phen', 'acac', 'imes'];
+
+/** Right-click on metals and hapto bonds: add a ligand, bond to a ring's middle, split a hapto bond, expand a ligand label. */
+function metalMenu(): MenuItem[] {
+  const out: MenuItem[] = [];
+  const metal = editor.selectedMetal();
+  if (metal !== null) out.push({ label: 'Add Ligand', items: MENU_LIGANDS.map((id) => ({ cmd: `add-ligand:${id}`, label: templateById(id)?.name ?? id })) });
+  const sel = [...editor.sel.atoms].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a && !a.multi);
+  if (metal !== null && sel.length >= 3) out.push({ cmd: 'hapto-bond' });
+  const hapto = (bid: number) => { const b = doc.bonds.get(bid); return !!b && !!centreEnd(doc, b); };
+  if ((contextBond !== null && hapto(contextBond)) || [...editor.sel.atoms].some((id) => (doc.adj.get(id) ?? []).some(hapto))) out.push({ cmd: 'split-hapto' });
+  if (editor.expandableLabels().length) out.push({ cmd: 'expand-label' });
+  return out;
+}
+
 function fuseRingMenu(): MenuItem[] {
   if (contextBond === null) return [];
   const ways = editor.ringFusions(contextBond, FUSE_RINGS);
@@ -4326,9 +4375,11 @@ function drawingMenu(): MenuItem[] {
     ...(atoms ? [
       { cmd: 'clean-up' },
       ...fuseRingMenu(),
+      ...metalMenu(),
       { label: 'Structure', items: [
         { cmd: 'stereo-labels' }, { cmd: 'aromatic-circles' }, { cmd: 'chain-ends' }, { cmd: 'explicit-h' }, null,
-        { cmd: 'contract-label' }, { cmd: 'join' }, { cmd: 'bring-front' }, { cmd: 'send-back' }, null,
+        { cmd: 'contract-label' }, { cmd: 'expand-label' }, { cmd: 'join' }, { cmd: 'bring-front' }, { cmd: 'send-back' }, null,
+        { cmd: 'hapto-bond' }, { cmd: 'split-hapto' }, null,
         { cmd: 'enhanced-stereo' }, { cmd: 'chiral-flag' }, { cmd: 'repeat-group' }, { cmd: 'rgroup-table' }, null,
         { cmd: 'check-structure' }, { cmd: 'save-template' }, { cmd: 'define-nickname' }, null,
         { cmd: 'pubchem-lookup' },
@@ -4524,7 +4575,7 @@ const TOOLBOX_DEFS: ToolboxDef[] = [
   { id: 'main', title: 'Drawing Tools', build: (body) => body.append(toolsNav) },
   {
     id: 'structure', title: 'Structure',
-    build: (body) => cmdRow(body, ['clean-up', 'add-frame', 'fill-rings', 'highlight', 'remove-highlight', null, 'chain-ends', 'explicit-h', 'aromatic-circles', 'stereo-labels', null, 'add-id-label', 'add-caption', 'attach-descriptors', 'number-compounds', null, 'contract-label', 'name-to-structure']),
+    build: (body) => cmdRow(body, ['clean-up', 'add-frame', 'fill-rings', 'highlight', 'remove-highlight', null, 'chain-ends', 'explicit-h', 'aromatic-circles', 'stereo-labels', null, 'add-id-label', 'add-caption', 'attach-descriptors', 'number-compounds', null, 'contract-label', 'expand-label', 'hapto-bond', 'name-to-structure']),
   },
   {
     id: 'arrange', title: 'Object',
