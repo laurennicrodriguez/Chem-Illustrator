@@ -12,7 +12,7 @@ import { writeCdxml } from '../src/io/cdxml-write';
 import { Renderer, withMeasure } from '../src/render/renderer';
 import { arialWidth } from '../src/text-metrics';
 import { planOf, buildSteps, stepSummary, timeline, gifDelayMs, gifRate, DEFAULT_TIMING, type Step } from '../src/morph/clip';
-import { atomNumbers, readMapping, writeMapping } from '../src/morph/numbers';
+import { atomNumbers, readMapping, writeMapping, sourceAttr } from '../src/morph/numbers';
 import { encodeGif } from '../src/morph/gif';
 import type { Doc } from '../src/model';
 
@@ -194,4 +194,63 @@ describe('GIF', () => {
     const gif = readGif(await encodeGif(1, () => ({ data: d, width: w, height: h }), 40));
     expect(gif.frames[0].px.slice(0, 100).every((c) => c === 0xffffff)).toBe(true);
   });
+});
+
+describe('turns in 3-D (an equivalency sign)', () => {
+  const T = DIR + 'turns/decalone addition';
+  it('reads the page as a turn and two reactions, as cdxmorph does', arial(() => {
+    const { doc } = readCdxml(readFileSync(T + '.cdxml', 'utf8'));
+    const check = JSON.parse(readFileSync(T + '.check.json', 'utf8'));
+    const plan = planOf(doc);
+    expect(plan.groups.length).toBe(check.structures);
+    expect(plan.kinds).toEqual(check.stages.map((s: { kind: string }) => s.kind));
+    // the 3-D structures guide the two drawings below them and are not steps of their own
+    expect(plan.poses.map((p) => p?.length ?? 0)).toEqual([37, 37, 0, 0]);
+    const steps = buildSteps(doc, plan, new Renderer(noCanvas, noCanvas));
+    const num = atomNumbers(doc);
+    const n = (k: string) => num.get(Number(k))!;
+    const turn = steps[0], want = check.stages[0];
+    expect(turn.kind).toBe('turn');
+    expect(turn.turn!.mode).toBe('guided');
+    expect(turn.turn!.degrees).toBeCloseTo(want.rotation_deg, 1);
+    turn.turn!.axis.forEach((v, i) => expect(v).toBeCloseTo(want.axis[i], 3));
+    expect(turn.turn!.rmsd).toBeCloseTo(want.fit_rmsd_pt, 2);
+    expect(turn.turn!.notTurning).toBe(want.not_turning);
+    // the same drawn atoms pair (cdxmorph lists them by its node ids; ours by AtomID)
+    const ids = new Map<string, string>();
+    for (const [id, v] of sourceAttr(doc, 'id')) ids.set(v, String(id));
+    const theirPairs = Object.entries(want.atom_pairs as Record<string, string>).map(([a, b]) => [n(ids.get(a)!), n(ids.get(b)!)]).sort();
+    expect([...turn.map.nmap].map(([a, b]) => [n(a), n(b)]).sort()).toEqual(theirPairs);
+    expect(stepSummary(turn).unpairedStart.map(n).sort()).toEqual(want.fading_out);
+    steps.slice(1).forEach((s, i) => expect(report(doc, s)).toEqual(theirs(check.stages[i + 1])));
+  }));
+
+  it('starts on the first drawing and lands on the second', arial(() => {
+    const { doc } = readCdxml(readFileSync(T + '.cdxml', 'utf8'));
+    const [turn] = buildSteps(doc, planOf(doc), new Renderer(noCanvas, noCanvas));
+    const at = (t: number) => turn.opt.place!(t).pos;
+    for (const [k, p] of at(0)) expect(Math.hypot(p.x - turn.A.nodes.get(k)!.p.x, p.y - turn.A.nodes.get(k)!.p.y)).toBeLessThan(1e-6);
+    for (const [a, b] of turn.map.nmap) {
+      const p = at(1).get(a)!, q = turn.B.nodes.get(b)!.p;
+      expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeLessThan(1e-6);
+    }
+  }));
+
+  it('keeps the 3-D coordinates when the drawing is saved', () => {
+    const { doc } = readCdxml(readFileSync(T + '.cdxml', 'utf8'));
+    const again = readCdxml(writeCdxml(doc)).doc;
+    expect([...again.atoms.values()].filter((a) => a.xyz).length).toBe(74);
+  });
+
+  it('without the 3-D structures, carries the atoms across the page', arial(() => {
+    const { doc } = readCdxml(readFileSync(T + '.cdxml', 'utf8'));
+    doc.edit('remove poses', () => { for (const a of [...doc.atoms.values()]) if (a.xyz) doc.removeAtom(a.id); });
+    const plan = planOf(doc);
+    expect(plan.kinds).toEqual(['turn', 'morph', 'morph']);
+    expect(plan.poses).toEqual([null, null, null, null]);
+    const [turn] = buildSteps(doc, plan, new Renderer(noCanvas, noCanvas));
+    expect(turn.turn).toBeUndefined();
+    expect(turn.opt.place).toBeUndefined();
+    expect(stepSummary(turn).paired).toBe(12);
+  }));
 });

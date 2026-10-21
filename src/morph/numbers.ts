@@ -8,22 +8,27 @@
 import type { Doc, MorphStep } from '../model';
 import { descendants } from '../io/xml';
 
+/** An attribute of each atom's node in the file the drawing was read from (atoms drawn since have none). */
+export function sourceAttr(doc: Doc, name: string): Map<number, string> {
+  const out = new Map<number, string>();
+  const src = doc.source;
+  if (!src) return out;
+  const xml = new DOMParser().parseFromString(src.text.replace(/<!DOCTYPE[^>]*>/i, ''), 'application/xml');
+  const all = xml.documentElement ? descendants(xml.documentElement) : [];
+  for (const id of doc.atoms.keys()) {
+    const i = src.ord.get('a' + id);
+    const v = i !== undefined ? all[i]?.getAttribute(name) : null;
+    if (v) out.set(id, v);
+  }
+  return out;
+}
+
 /**
  * Each atom's number as cdxmorph names it: the AtomID from the file it was read from, and for
  * atoms drawn since, numbers after the highest one in use.
  */
 export function atomNumbers(doc: Doc): Map<number, string> {
-  const out = new Map<number, string>();
-  const src = doc.source;
-  if (src) {
-    const xml = new DOMParser().parseFromString(src.text.replace(/<!DOCTYPE[^>]*>/i, ''), 'application/xml');
-    const all = xml.documentElement ? descendants(xml.documentElement) : [];
-    for (const id of doc.atoms.keys()) {
-      const i = src.ord.get('a' + id);
-      const v = i !== undefined ? all[i]?.getAttribute('AtomID') : null;
-      if (v) out.set(id, v);
-    }
-  }
+  const out = sourceAttr(doc, 'AtomID');
   let next = Math.max(0, ...[...out.values()].map(Number).filter(Number.isFinite)) + 1;
   for (const id of [...doc.atoms.keys()].sort((a, b) => a - b)) if (!out.has(id)) out.set(id, String(next++));
   return out;

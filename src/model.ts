@@ -41,6 +41,8 @@ export interface Atom {
   color?: string;
   /** Size relative to the document style (structures shrunk or enlarged in ChemDraw keep their own scale). */
   s?: number;
+  /** A 3-D position kept from a file (ChemDraw's xyz on a structure built from a crystal file). */
+  xyz?: [number, number, number];
   /** A contracted label: the group it stands for, as SMILES from the atom where it joins (Structure > Contract Label). */
   group?: string;
   /** A carbon shown with its letter and hydrogens (CH3 at a chain end; ChemDraw's ShowTerminalCarbonLabels). */

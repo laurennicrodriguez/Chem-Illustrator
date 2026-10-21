@@ -58,7 +58,7 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 
 export class AnimateDialog {
   private d: HTMLDialogElement | null = null;
-  private plan: Plan = { groups: [], arrows: [] };
+  private plan: Plan = { groups: [], arrows: [], kinds: [], poses: [] };
   /** Each step's settings, as saved on its arrow or changed here. */
   private morphs: (MorphStep | undefined)[] = [];
   private steps: Step[] = [];
@@ -92,7 +92,7 @@ export class AnimateDialog {
     if (this.plan.groups.length < 2) {
       this.hooks.flash(opts.arrow !== undefined
         ? 'This arrow needs a structure on each side to animate.'
-        : 'Draw at least two structures (with a reaction arrow between them) to animate.');
+        : 'Draw at least two structures (with a reaction arrow or an equivalency sign between them) to animate.');
       return;
     }
     this.morphs = this.plan.arrows.map((a) => (a !== null ? doc.arrows.get(a)?.morph : undefined));
@@ -313,15 +313,23 @@ export class AnimateDialog {
       const sm = stepSummary(s);
       const row = el('div', 'animate-step');
       const head = el('div', 'animate-step-head');
-      const title = el('strong', undefined, this.steps.length > 1 ? `Step ${i + 1}` : 'The step');
+      const title = el('strong', undefined, (this.steps.length > 1 ? `Step ${i + 1}` : 'The step') + (s.kind === 'turn' ? ' (turn)' : ''));
       const how = el('span', 'muted', this.morphs[i]?.pairs?.length ? (this.morphs[i]!.exact ? ' · your pairs only' : ' · your pairs + automatic') : ' · automatic');
       const edit = button('Edit Pairing…', 'Choose which atom becomes which; see the bonds that break and form');
       edit.addEventListener('click', () => this.editPairing(i));
       head.append(title, how, edit);
       const facts = el('div', 'animate-step-facts');
       facts.textContent = `${sm.paired} of ${sm.startAtoms} atoms paired. Breaking: ${bondText(sm.breaking)}. Forming: ${bondText(sm.forming)}.`;
+      if (s.kind === 'turn') {
+        const t = s.turn;
+        facts.textContent = (t
+          ? `Turns ${t.degrees.toFixed(1)}° in 3-D, measured from ${t.mode === 'guided' ? 'the 3-D structures drawn above' : 'the structures\' own 3-D coordinates'} (${t.measured}).`
+          : 'The same molecule redrawn. With no 3-D structure above each drawing, the atoms move across the page.')
+          + ` ${sm.paired} of ${sm.startAtoms} atoms paired.`;
+        if (t?.reflected) row.append(el('div', 'animate-error', 'The two 3-D structures are mirror images, so no turn takes one to the other; this turn is the closest one.'));
+      }
       row.append(head, facts);
-      if (s.error) row.append(el('div', 'animate-error', `The saved pairing no longer fits (${s.error}), so this step is paired automatically.`));
+      if (s.error) row.append(el('div', 'animate-error', s.kind === 'turn' && !s.turn ? `This turn couldn't be measured in 3-D (${s.error}), so the atoms move across the page instead.` : `The saved pairing no longer fits (${s.error}), so this step is paired automatically.`));
       this.stepsList.append(row);
     });
   }
@@ -406,7 +414,7 @@ export class AnimateDialog {
     const refresh = () => {
       err.textContent = '';
       try {
-        map = resolve(configOf(current(), A, B), A, B);
+        map = resolve(configOf(current(), A, B), A, B, base.kind === 'turn');
       } catch (e) {
         if (!(e instanceof MappingError)) throw e;
         err.textContent = e.message;

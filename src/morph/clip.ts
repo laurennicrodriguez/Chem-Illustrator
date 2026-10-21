@@ -5,15 +5,18 @@
 // step's pairing, and the timeline of frames, held at the ends and paused between steps.
 
 import type { Arrow, Doc, MorphStep } from '../model';
-import type { Rect } from '../geom';
+import type { Rect, Vec } from '../geom';
 import type { Renderer } from '../render/renderer';
-import { itemFinder, reactionSteps, schemeItems, plainMeasure } from '../chem/reaction';
+import { itemFinder, reactionSteps, schemeItems, plainMeasure, type Item } from '../chem/reaction';
 import type { Measure } from '../editor/arrange';
 import { sceneOf, type MScene } from './scene';
 import { resolve, summary, type Mapping, type StepConfig, type StepSummary } from './mapping';
 import { frame, type FrameData, type FrameOptions } from './frame';
 import { planSwaps, paintFrame, framesBox, type Swaps } from './paint';
 import { turnPlan, kekuleShift, kekuleTime, reflectionAxis } from './turn';
+import { matchBonds } from './match';
+import { MIN_POSE_ATOMS, count3d, setupTurn, guideAt, ringOpenness, type TurnNote } from './rotate';
+import { sourceAttr } from './numbers';
 
 /** The structures an animation runs through, and the arrow (if any) behind each step between them. */
 export interface Plan {
@@ -21,70 +24,185 @@ export interface Plan {
   groups: number[][];
   /** The arrow behind step i (groups[i] → groups[i + 1]), or null when read from left to right. */
   arrows: (number | null)[];
+  /** Step i is a reaction ('morph') or the same molecule redrawn, an equivalency sign ('turn'). */
+  kinds: StepKind[];
+  /** The 3-D pose drawn above each structure, which says how it turns (atom ids), or null. */
+  poses: (number[] | null)[];
+}
+
+export type StepKind = 'morph' | 'turn';
+
+/** Longest line that still counts as one bar of an equivalency sign, and how close its bars sit. */
+const SIGN_BAR = 25, SIGN_GAP = 8;
+
+/**
+ * Centres of equivalency signs: two or more short parallel bars stacked close together (lines, or
+ * arrows with no heads, as ChemDraw writes them). There is no object for the sign itself.
+ */
+export function equivSigns(doc: Doc): Vec[] {
+  const mids: Vec[] = [];
+  const bar = (x1: number, y1: number, x2: number, y2: number) => {
+    const L = Math.hypot(x2 - x1, y2 - y1);
+    if (L > 1e-6 && L <= SIGN_BAR) mids.push({ x: (x1 + x2) / 2, y: (y1 + y2) / 2 });
+  };
+  for (const r of doc.arrows.values()) if (r.headStyle === 'none' && r.tailStyle === 'none' && !r.sweep) bar(r.tail.x, r.tail.y, r.head.x, r.head.y);
+  for (const sh of doc.shapes.values()) if (sh.kind === 'line') bar(sh.x1, sh.y1, sh.x2, sh.y2);
+  const out: Vec[] = [];
+  const used = new Set<number>();
+  mids.forEach((a, i) => {
+    if (used.has(i)) return;
+    const grp = [a], here = [i];
+    mids.forEach((b, j) => {
+      if (j === i || used.has(j)) return;
+      if (Math.abs(a.x - b.x) < SIGN_GAP && Math.abs(a.y - b.y) < 2 * SIGN_GAP) { grp.push(b); here.push(j); }
+    });
+    if (grp.length >= 2) { here.forEach((j) => used.add(j)); out.push({ x: grp.reduce((s, p) => s + p.x, 0) / grp.length, y: grp.reduce((s, p) => s + p.y, 0) / grp.length }); }
+  });
+  return out;
+}
+
+/** Structures carrying 3-D coordinates, each matched to the drawing below it in the same column. */
+function posesOf(doc: Doc, frags: Item[], overlap = 0.45): { guides: Map<string, number[]>; poses: Set<string> } {
+  const is3d = (it: Item) => it.atoms.filter((a) => doc.atoms.get(a)?.xyz).length >= MIN_POSE_ATOMS;
+  const guides = new Map<string, number[]>();
+  const poses = new Set<string>();
+  for (const p of frags) {
+    if (!is3d(p)) continue;
+    let best: Item | null = null;
+    for (const d of frags) {
+      if (d === p || is3d(d) || d.box.y1 <= p.box.y2 || guides.has(d.ref)) continue;
+      const share = Math.min(p.box.x2, d.box.x2) - Math.max(p.box.x1, d.box.x1);
+      const frac = share / Math.max(1e-6, Math.min(p.box.x2 - p.box.x1, d.box.x2 - d.box.x1));
+      if (frac >= overlap && (!best || d.box.y1 < best.box.y1)) best = d;
+    }
+    if (best) { guides.set(best.ref, p.atoms); poses.add(p.ref); }
+  }
+  return { guides, poses };
+}
+
+/** Pairs of structures an equivalency sign joins, left to right along its row. */
+function signLinks(doc: Doc, drawn: Item[]): Set<string> {
+  const out = new Set<string>();
+  for (const c of equivSigns(doc)) {
+    const row = drawn.filter((it) => it.box.y1 - 12 <= c.y && c.y <= it.box.y2 + 12);
+    const left = row.filter((it) => it.box.x2 <= c.x), right = row.filter((it) => it.box.x1 >= c.x);
+    if (!left.length || !right.length) continue;
+    const a = left.reduce((x, y) => (y.box.x2 > x.box.x2 ? y : x)), b = right.reduce((x, y) => (y.box.x1 < x.box.x1 ? y : x));
+    out.add(a.ref + '>' + b.ref);
+  }
+  return out;
 }
 
 /**
  * What to animate. With an arrow, just that step. Otherwise the scheme is followed from its first
  * step along the structures each step shares with the next (a later step may bring in a new
  * starting material); with no reaction arrows, the structures are taken from left to right.
- * `atoms` keeps only the structures with a selected atom.
+ * An equivalency sign between two structures makes a turn. A structure with 3-D coordinates drawn
+ * above another is that one's pose, not a step of its own. `atoms` keeps only the structures with
+ * a selected atom.
  */
 export function planOf(doc: Doc, opts: { arrow?: number; atoms?: Set<number>; measure?: Measure } = {}): Plan {
   const m = opts.measure ?? plainMeasure(doc);
   const items = schemeItems(doc, m);
   const find = itemFinder(items);
-  const side = (refs: string[]): number[] => {
+  const frags = items.filter((it) => it.atoms.length && it.caption === undefined && it.shape === undefined);
+  const { guides, poses } = posesOf(doc, frags);
+  const drawn = frags.filter((it) => !poses.has(it.ref));
+  const links = signLinks(doc, drawn);
+  const linked = (a: Item, b: Item) => links.has(a.ref + '>' + b.ref) || links.has(b.ref + '>' + a.ref);
+  const centre = (it: Item): Vec => ({ x: (it.box.x1 + it.box.x2) / 2, y: (it.box.y1 + it.box.y2) / 2 });
+  const wanted = (it: Item) => !opts.atoms || it.atoms.some((a) => opts.atoms!.has(a));
+
+  /** One side of an arrow: one structure, or several in a row joined by equivalency signs (each its own). */
+  const side = (refs: string[], dir: Vec): Item[][] => {
     const seen = new Set<string>();
-    const out: number[] = [];
+    const its: Item[] = [];
     for (const ref of refs) {
       const it = find(ref);
-      if (!it || !it.atoms.length || seen.has(it.ref)) continue;
-      if (opts.atoms && !it.atoms.some((a) => opts.atoms!.has(a))) continue;
+      if (!it || !it.atoms.length || seen.has(it.ref) || poses.has(it.ref) || !wanted(it)) continue;
       seen.add(it.ref);
-      out.push(...it.atoms);
+      its.push(it);
     }
-    return out;
+    if (!its.length) return [];
+    if (!its.some((a) => its.some((b) => a !== b && linked(a, b)))) return [its];
+    return [...its].sort((a, b) => { const p = centre(a), q = centre(b); return (p.x - q.x) * dir.x + (p.y - q.y) * dir.y; }).map((it) => [it]);
   };
   const steps = reactionSteps(doc, items)
-    .map(({ arrow, roles }) => ({ arrow: arrow.id, r: side(roles.reactants), p: side(roles.products) }))
+    .map(({ arrow, roles }) => {
+      const L = Math.hypot(arrow.head.x - arrow.tail.x, arrow.head.y - arrow.tail.y) || 1;
+      const dir = { x: (arrow.head.x - arrow.tail.x) / L, y: (arrow.head.y - arrow.tail.y) / L };
+      return { arrow: arrow.id, r: side(roles.reactants, dir), p: side(roles.products, dir) };
+    })
     .filter((s) => s.r.length && s.p.length);
+
+  const groups: Item[][] = [];
+  const arrows: (number | null)[] = [];
+  const kinds: StepKind[] = [];
+  const add = (g: Item[], kind: StepKind, arrow: number | null) => {
+    if (groups.length) { arrows.push(arrow); kinds.push(kind); }
+    groups.push(g);
+  };
+  const atomsOf = (g: Item[]) => g.flatMap((it) => it.atoms);
+  const shares = (x: number[], y: number[]) => { const ys = new Set(y); return x.some((a) => ys.has(a)); };
+  const same = (x: Item[], y: Item[]) => { const a = atomsOf(x), b = atomsOf(y); return a.length === b.length && a.every((v) => b.includes(v)); };
+  const done = () => {
+    const out: Plan = { groups: groups.map(atomsOf), arrows, kinds, poses: groups.map((g) => (g.length === 1 ? guides.get(g[0].ref) ?? null : null)) };
+    return out;
+  };
 
   if (opts.arrow !== undefined) {
     const s = steps.find((x) => x.arrow === opts.arrow);
-    return s ? { groups: [s.r, s.p], arrows: [s.arrow] } : { groups: [], arrows: [] };
+    if (!s) return { groups: [], arrows: [], kinds: [], poses: [] };
+    s.r.forEach((g) => add(g, 'turn', null));
+    s.p.forEach((g, i) => add(g, i ? 'turn' : 'morph', i ? null : s.arrow));
+    return done();
   }
   if (steps.length) {
-    const shares = (x: number[], y: number[]) => { const ys = new Set(y); return x.some((a) => ys.has(a)); };
-    const groups: number[][] = [];
-    const arrows: (number | null)[] = [];
-    const same = (x: number[], y: number[]) => x.length === y.length && shares(x, y) && x.every((a) => y.includes(a));
-    const produced = steps.flatMap((s) => s.p);
-    let cur: number | null = steps.findIndex((s) => !shares(s.r, produced));
+    const produced = steps.flatMap((s) => s.p.flatMap(atomsOf));
+    let cur: number | null = steps.findIndex((s) => !s.r.some((g) => shares(atomsOf(g), produced)));
     if (cur < 0) cur = 0;
     const seen = new Set<number>();
-    let last: number | null = null;
+    // the previous step's arrow while its product waits to be replaced by the next step's starting
+    // materials (which may add a new one); null once the products are in
+    let pending: number | null = null;
     while (cur !== null && !seen.has(cur)) {
       seen.add(cur);
       const s = steps[cur];
-      if (!groups.length || !same(groups[groups.length - 1], s.r)) {
-        if (groups.length) arrows.push(last);
-        groups.push(s.r);
+      if (!groups.length) s.r.forEach((g) => add(g, 'turn', null));
+      else {
+        const at = s.r.findIndex((g) => same(g, groups[groups.length - 1]));
+        if (at < 0) add(s.r[0], 'morph', pending);
+        s.r.slice(at < 0 ? 1 : at + 1).forEach((g) => add(g, 'turn', null));
       }
-      last = s.arrow;
+      pending = null;
       let nxt: number | null = null;
-      for (let k = 0; k < steps.length; k++) if (!seen.has(k) && shares(steps[k].r, s.p)) { nxt = k; break; }
-      if (nxt === null) { arrows.push(s.arrow); groups.push(s.p); }
+      const prod = s.p.flatMap(atomsOf);
+      for (let k = 0; k < steps.length; k++) if (!seen.has(k) && steps[k].r.some((g) => shares(atomsOf(g), prod))) { nxt = k; break; }
+      if (nxt === null || s.p.length > 1) s.p.forEach((g, i) => add(g, i ? 'turn' : 'morph', i ? null : s.arrow));
+      else pending = s.arrow;
       cur = nxt;
     }
-    return { groups, arrows };
+    // structures an equivalency sign joins to either end of the scheme
+    const used = new Set(groups.flat().map((it) => it.ref));
+    for (let more = true; more;) {
+      more = false;
+      const first = groups[0], last = groups[groups.length - 1];
+      for (const it of drawn) {
+        if (used.has(it.ref) || !wanted(it)) continue;
+        if (first.length === 1 && links.has(it.ref + '>' + first[0].ref)) {
+          groups.unshift([it]); arrows.unshift(null); kinds.unshift('turn'); used.add(it.ref); more = true; break;
+        }
+        if (last.length === 1 && links.has(last[0].ref + '>' + it.ref)) {
+          add([it], 'turn', null); used.add(it.ref); more = true; break;
+        }
+      }
+    }
+    return done();
   }
   // no scheme: every structure, left to right
-  const frags = doc.fragments()
-    .map((f) => [...f])
-    .filter((f) => !opts.atoms || f.some((a) => opts.atoms!.has(a)));
-  const cx = (f: number[]) => f.reduce((s, a) => s + doc.atoms.get(a)!.x, 0) / f.length;
-  frags.sort((x, y) => cx(x) - cx(y));
-  return { groups: frags, arrows: frags.slice(1).map(() => null) };
+  const row = drawn.filter(wanted).sort((x, y) => centre(x).x - centre(y).x);
+  row.forEach((it, i) => add([it], i && linked(row[i - 1], it) ? 'turn' : 'morph', null));
+  return done();
 }
 
 /** A saved pairing (atom ids) as the matcher's settings (atom keys), leaving out atoms not in either structure. */
@@ -157,6 +275,9 @@ export interface Step {
   opt: FrameOptions;
   swaps: Swaps;
   arrow: number | null;
+  kind: StepKind;
+  /** A turn measured in 3-D: by how much, and how it was paired. */
+  turn?: TurnNote;
   error?: string;
 }
 
@@ -181,22 +302,46 @@ function align(prev: MScene, next: MScene, map: Mapping): MScene {
 
 /** Pairings for the structures of a plan, with the settings saved on each step's arrow (or those given). */
 export function buildSteps(doc: Doc, plan: Plan, r: Renderer, morphs?: (MorphStep | undefined)[], probe = 25): Step[] {
-  const scenes = plan.groups.map((g) => sceneOf(doc, g, r));
+  const anums = plan.poses.some((p) => p) || plan.kinds.includes('turn') ? sourceAttr(doc, 'AtomNumber') : undefined;
+  const scenes = plan.groups.map((g) => sceneOf(doc, g, r, undefined, anums));
+  const poses = plan.poses.map((g) => (g ? sceneOf(doc, g, r, undefined, anums) : null));
   const out: Step[] = [];
   let prev = scenes[0];
+  const ts = Array.from({ length: probe }, (_, k) => k / (probe - 1));
   for (let i = 0; i + 1 < scenes.length; i++) {
     const A = prev, Bdrawn = scenes[i + 1];
     const arrow = plan.arrows[i];
+    const kind = plan.kinds[i] ?? 'morph';
     const r_: Arrow | undefined = arrow !== null ? doc.arrows.get(arrow) : undefined;
     const cfg = configOf(morphs ? morphs[i] : r_?.morph, A, Bdrawn);
-    let map: Mapping;
     let error: string | undefined;
+    if (kind === 'turn') {
+      // the same molecule redrawn: turned in 3-D when poses say how (or the drawings carry their own
+      // coordinates), else carried atom for atom from one drawing to the other
+      const SA = poses[i], SB = poses[i + 1];
+      const solid = (SA && SB) || (count3d(A) >= MIN_POSE_ATOMS && count3d(Bdrawn) >= MIN_POSE_ATOMS);
+      if (solid) {
+        try {
+          const given = cfg.pairs?.length ? resolve(cfg, A, Bdrawn, true).nmap : undefined;
+          const { setup, B } = setupTurn(A, Bdrawn, SA && SB ? SA : null, SA && SB ? SB : null, given);
+          const map: Mapping = { nmap: setup.pairs, bmap: matchBonds(A, B, setup.pairs), shifts: new Map(), slides: [] };
+          const G = setup.guide;
+          const opt: FrameOptions = { place: (t) => guideAt(G, t), openness: ringOpenness(A, B, setup.pairs) };
+          out.push({ A, B, map, opt, swaps: planSwaps(A, B, map, ts, opt), arrow, kind, turn: setup.note });
+          prev = B;
+          continue;
+        } catch (e) {
+          error = (e as Error).message;
+        }
+      }
+    }
+    let map: Mapping;
     try {
-      map = resolve(cfg, A, Bdrawn);
+      map = resolve(cfg, A, Bdrawn, kind === 'turn');
     } catch (e) {
       // a saved pairing that no longer fits the drawing: say so, and animate the automatic one
       error = (e as Error).message;
-      map = resolve({}, A, Bdrawn);
+      map = resolve({}, A, Bdrawn, kind === 'turn');
     }
     const B = align(A, Bdrawn, map);
     const turn = turnPlan(A, B, map.nmap);
@@ -206,8 +351,7 @@ export function buildSteps(doc: Doc, plan: Plan, r: Renderer, morphs?: (MorphSte
       kekule: kek.size ? [kek, kekuleTime(A, kek, turn)] : null,
       flip: reflectionAxis(A, B, map.nmap),
     };
-    const ts = Array.from({ length: probe }, (_, k) => k / (probe - 1));
-    out.push({ A, B, map, opt, swaps: planSwaps(A, B, map, ts, opt), arrow, error });
+    out.push({ A, B, map, opt, swaps: planSwaps(A, B, map, ts, opt), arrow, kind, error });
     prev = B;
   }
   return out;
