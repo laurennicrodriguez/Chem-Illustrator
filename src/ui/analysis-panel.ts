@@ -6,6 +6,7 @@ import type { DescriptorKey, TextRun } from '../model';
 import { parseAdduct, ionMz, type Adduct } from '../chem/hrms';
 import { ionCounts, isotopePattern, elementalAnalysis, type IsotopePeak } from '../chem/analysis';
 import { chargeText, hillFormula, withoutCharge } from '../chem/formula';
+import { roman, sup, type MetalCount } from '../chem/electrons';
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 
@@ -81,7 +82,36 @@ function deg(k: number | null): string {
  * The panel's HTML for one structure. `i` numbers the structure's buttons
  * (data-insert="hrms:i" and so on), which the app wires up.
  */
-export function analysisHtml(r: FragmentResult, i: number, adductText: string, extras: { stereo?: string; unknown?: string[]; pubchem?: string }): string {
+/** A ligand's name with the digits of a written formula lowered (PPh3 as PPh₃). */
+const ligandHtml = (name: string) => esc(name).replace(/(?<=[A-Za-z)\]])(\d+)/g, '<sub>$1</sub>');
+
+/**
+ * The electron count of each metal: oxidation state, dⁿ and electrons on the first line, then
+ * each ligand's class and the electrons it gives counted neutral (covalent) and ionic.
+ */
+export function electronsHtml(counts: MetalCount[]): string {
+  if (!counts.length) return '';
+  const metal = (c: MetalCount) => {
+    const plural = (n: number) => (n === 1 ? '' : ` ×${n}`);
+    const kind = (r: MetalCount['ligands'][number]) => r.mm ? 'M–M' : [r.l ? 'L' + (r.l > 1 ? sub(r.l) : '') : '', r.x ? 'X' + (r.x > 1 ? sub(r.x) : '') : '', r.z ? 'Z' : ''].join('');
+    const rows = c.ligands.map((r) => `<tr><td>${ligandHtml(r.name)}${plural(r.count)}</td><td>${kind(r)}</td><td>${r.neutral * r.count}</td><td>${r.ionic * r.count}</td></tr>`);
+    const closed = c.electrons === 18 ? ' (a closed shell)' : '';
+    return `<p class="ec-head"><b>${esc(c.symbol)}(${roman(c.oxidation)})</b>, d${sup(c.dn)}, <b>${c.electrons} electrons</b>${closed} · ${esc(c.classification)}</p>
+      <table class="ec-table">
+        <tr><th>Ligand</th><th>Class</th><th title="Neutral (covalent) counting: the metal atom's own electrons, one from each X, two from each L">Neutral</th><th title="Ionic counting: the metal ion's d electrons, two from each X⁻ and each L">Ionic</th></tr>
+        <tr><td>${esc(c.symbol)}</td><td></td><td>${c.group}</td><td>d${sup(c.dn)}: ${c.dn}</td></tr>
+        ${rows.join('')}
+        ${c.charge ? `<tr><td>Charge ${c.charge > 0 ? '+' : '−'}${Math.abs(c.charge)}</td><td></td><td>${c.charge > 0 ? '−' : '+'}${Math.abs(c.charge)}</td><td>in d${sup(c.dn)}</td></tr>` : ''}
+        <tr class="ec-total"><td>Total</td><td></td><td>${c.electrons}</td><td>${c.electrons}</td></tr>
+      </table>${c.notes.map((n) => `<p class="muted small">${esc(n)}</p>`).join('')}`;
+  };
+  return `<details class="electrons" open><summary title="Green's covalent bond classification: L gives two electrons, X shares one, Z takes two">Electron count</summary>${counts.map(metal).join('')}</details>`;
+}
+
+const SUBS = '₀₁₂₃₄₅₆₇₈₉';
+const sub = (n: number) => String(n).replace(/\d/g, (d) => SUBS[Number(d)]);
+
+export function analysisHtml(r: FragmentResult, i: number, adductText: string, extras: { stereo?: string; unknown?: string[]; pubchem?: string; electrons?: string }): string {
   if (r.error) return `<div class="frag"><p class="warn">${esc(r.error)}</p></div>`;
   const ion = ionInfo(r, adductText);
   const ea = analysisPercents(r);
@@ -130,7 +160,7 @@ export function analysisHtml(r: FragmentResult, i: number, adductText: string, e
   return `<div class="frag">
     <div class="formula">${formulaHtml(r.formula)}</div>
     <table>${rows.join('')}</table>
-    ${iso}${props}
+    ${extras.electrons ?? ''}${iso}${props}
     <div class="smiles" title="SMILES">${esc(r.smiles)}</div>
     ${extras.unknown?.length ? `<p class="warn">Not understood (left out): ${extras.unknown.map(esc).join(', ')}</p>` : ''}
     ${buttons}${extras.pubchem ?? ''}

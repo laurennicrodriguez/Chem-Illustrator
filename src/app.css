@@ -1122,6 +1122,11 @@ dialog.periodic-table { position: fixed; inset: 64px 16px auto auto; margin: 0; 
 .iso-svg line.axis { stroke: var(--line); stroke-width: 1; }
 .iso-svg text { font-size: 9px; fill: var(--muted); }
 .iso-table td { padding: 1px 10px 1px 0; font-size: 12px; }
+.ec-head { margin: 4px 0 2px; font-size: 12px; }
+.ec-table { font-size: 12px; border-collapse: collapse; }
+.ec-table th { font-weight: 600; color: var(--muted); text-align: left; padding: 1px 10px 1px 0; }
+.ec-table td { padding: 1px 10px 1px 0; }
+.ec-table tr.ec-total td { border-top: 1px solid var(--line); font-weight: 600; }
 .an-buttons { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .an-buttons button { padding: 2px 8px; font-size: 12px; }
 #side-content th sup, #side-content th sub { line-height: 0; }
