@@ -28,9 +28,9 @@ import type { Selection } from '../editor/editor';
 import { Package, NS, REL, emu, xml, xmlAttr, hex6, MediaFiles } from './ooxml';
 import { facesToEmbed, toEot, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
-import { patternClear, patternInk } from '../render/fills';
+import { patternClear, patternInk, shadowLook } from '../render/fills';
 import { FADE, tint } from '../colours';
-import { transitionXml, timingXml, type Transition, type Anim } from '../deck/animation';
+import { transitionXml, timingXml, highlightParts, partHolds, type Transition, type Anim } from '../deck/animation';
 import {
   Master, SlideSize, LayoutId, LAYOUTS, layoutFrames, decorFrames, showsNumber, textStyles, isEmptyText, slideColours, decorShapes, type DecorShape,
 } from '../deck/deck';
@@ -50,7 +50,22 @@ export const TAG = {
   geo: 'CHEMILLUSTRATOR_GEO',
   /** A connector (an arrow stuck to design shapes, or bent square): the arrow as it was. */
   connector: 'CHEMILLUSTRATOR_CONNECTOR',
+  /**
+   * A highlight animated on its own, as a picture under its structure: where one of its atoms (or
+   * bond middles) was, and the structure picture's box tag, so it finds its highlight again.
+   */
+  highlight: 'CHEMILLUSTRATOR_HIGHLIGHT',
 };
+
+/** Where a highlight is, for finding it again: one of its atoms, else the middle of one of its bonds. */
+function highlightSpot(doc: Doc, h: Selection): { x: number; y: number; bond?: true } | null {
+  for (const id of h.atoms) { const a = doc.atoms.get(id); if (a) return { x: +a.x.toFixed(3), y: +a.y.toFixed(3) }; }
+  for (const id of h.bonds) {
+    const b = doc.bonds.get(id), p = b && doc.atoms.get(b.a1), q = b && doc.atoms.get(b.a2);
+    if (p && q) return { x: +((p.x + q.x) / 2).toFixed(3), y: +((p.y + q.y) / 2).toFixed(3), bond: true };
+  }
+  return null;
+}
 
 /** A picture of part of a slide (structures, schemes): SVG and PNG, and the area it shows, in points. */
 export interface DrawingPicture { svg: string; png: Uint8Array; box: Rect }
@@ -541,10 +556,35 @@ class Writer {
     // structures and schemes
     for (const sel of parts.drawings) {
       const part = extractDrawing(doc, sel);
-      const pic = await this.opts.picture(part);
+      // highlights animated on their own go in pictures of their own, under the structure
+      const moving = highlightParts(doc, sel).filter((h) => (s.anims ?? []).some((a) => partHolds(h, a.target)));
+      const bare = moving.length ? extractDrawing(doc, sel) : part;
+      for (const h of moving) {
+        for (const a of h.sel.atoms) { const x = bare.atoms.get(a); if (x) { delete x.highlight; delete x.hl; } }
+        for (const b of h.sel.bonds) { const x = bare.bonds.get(b); if (x) { delete x.highlight; delete x.hl; } }
+      }
+      const pic = await this.opts.picture(bare);
       if (!pic) continue;
       const cdxml = writeCdxml(part, { name: 'Slide drawing.cdxml', textMeasure: this.measure });
-      const tags = this.addTags(path, { [TAG.cdxml]: cdxml, [TAG.box]: [pic.box.x1, pic.box.y1, pic.box.x2, pic.box.y2].map((v) => +v.toFixed(3)).join(' ') });
+      const box = [pic.box.x1, pic.box.y1, pic.box.x2, pic.box.y2].map((v) => +v.toFixed(3)).join(' ');
+      for (const h of moving) {
+        const only = extractDrawing(doc, sel);
+        only.onlyHighlights = true;
+        for (const a of only.atoms.values()) if (!h.sel.atoms.has(a.id)) { delete a.highlight; delete a.hl; }
+        for (const b of only.bonds.values()) if (!h.sel.bonds.has(b.id)) { delete b.highlight; delete b.hl; }
+        const hp = await this.opts.picture(only);
+        if (!hp) continue;
+        const at = highlightSpot(doc, h.sel);
+        if (!at) continue;
+        const htags = this.addTags(path, { [TAG.highlight]: JSON.stringify({ ...at, box }) });
+        const hpng = this.addMedia(path, hp.png, 'png');
+        const hsvg = this.addMedia(path, new TextEncoder().encode(hp.svg), 'svg');
+        for (const a of h.sel.atoms) spids.set(`highlight ${a}`, [...(spids.get(`highlight ${a}`) ?? []), id]);
+        for (const b of h.sel.bonds) spids.set(`highlight b${b}`, [...(spids.get(`highlight b${b}`) ?? []), id]);
+        out.push(picXml(id, `Highlight ${id - 1}`, hpng, hsvg, hp.box, null, htags));
+        id++;
+      }
+      const tags = this.addTags(path, { [TAG.cdxml]: cdxml, [TAG.box]: box });
       const png = this.addMedia(path, pic.png, 'png');
       const svg = this.addMedia(path, new TextEncoder().encode(pic.svg), 'svg');
       mark(sel, id);
@@ -563,7 +603,7 @@ class Writer {
     if (m.footer.trim()) out.push(footerShape(id++, 'Footer', '<p:ph type="ftr" sz="quarter" idx="11"/>', d.footer, m, m.footer, true));
     const tags = this.addTags(path, { [TAG.layout]: s.layout });
     return `${HEAD}<p:sld ${XMLNS}><p:cSld><p:spTree>${GROUP}${out.join('')}</p:spTree><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:cSld>` +
-      `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(s.transition)}${timingXml(s.anims ?? [], (a) => spids.get(`${a.target.kind} ${a.target.id}`) ?? [])}</p:sld>`;
+      `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(s.transition)}${timingXml(s.anims ?? [], (a) => spids.get(`${a.target.kind} ${a.target.bond ? 'b' : ''}${a.target.id}`) ?? [])}</p:sld>`;
   }
 
   /**
@@ -594,7 +634,8 @@ class Writer {
       : `<a:solidFill><a:srgbClr val="${fc}">${alpha}</a:srgbClr></a:solidFill>`);
     const dash = s.dashed ? '<a:prstDash val="dash"/>' : '';
     const ln = width > 0 ? `<a:ln w="${emu(width)}"><a:solidFill><a:srgbClr val="${hex6(s.color ?? '#000000')}"/></a:solidFill>${dash}<a:round/></a:ln>` : '<a:ln><a:noFill/></a:ln>';
-    const shadow = s.shadow ? `<a:effectLst><a:outerShdw dist="${emu(s.shadowSize ?? Math.max(2, 0.04 * Math.min(w, h)))}" dir="2700000" algn="tl" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="25000"/></a:srgbClr></a:outerShdw></a:effectLst>` : '';
+    const sl = shadowLook(s, s.shadowSize ?? Math.max(2, 0.04 * Math.min(w, h)));
+    const shadow = s.shadow ? `<a:effectLst><a:outerShdw${sl.blur ? ` blurRad="${emu(sl.blur)}"` : ''} dist="${emu(sl.distance)}" dir="${Math.round((((sl.angle % 360) + 360) % 360) * 60000)}" algn="tl" rotWithShape="0"><a:srgbClr val="${hex6(sl.colour)}"><a:alpha val="${Math.round(sl.opacity * 100000)}"/></a:srgbClr></a:outerShdw></a:effectLst>` : '';
     const justify = s.textAlign ?? 'center';
     const algn = justify === 'center' ? 'ctr' : justify === 'right' ? 'r' : justify === 'justify' ? 'just' : 'l';
     const hasText = !!s.text?.runs.some((r) => r.text);

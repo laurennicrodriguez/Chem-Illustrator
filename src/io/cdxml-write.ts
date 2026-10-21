@@ -23,7 +23,9 @@ import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, INSIDE_TAG, GRO
 import { frameTag } from '../editor/frames';
 import { geoDef, moveSteps, textArea, type GeoStep } from '../design/geo';
 import { FADE, tint } from '../colours';
-import { fillInk, mix, ringShadowSize, RING_SHADOW_ALPHA, shadowPieces } from '../render/fills';
+import { fillInk, mix, ringShadowSize, shadowLook } from '../render/fills';
+import { shapeShadow } from '../render/highlight-fx';
+import { parseColor } from '../render/vector';
 import { layoutTable, cellAlign, isCovered, spanOf, NOTE_SCALE } from '../table';
 import { TABLE_TAG, TABLE_PART_TAG, tableBorders, type TableTag } from './cdxml-table';
 import { bondLayer, crossingBonds } from '../chem/crossing';
@@ -1171,8 +1173,11 @@ class CdxmlWriter {
     };
     if (ringPts && s.shadow) {
       // ChemDraw has no see-through colours: the shadow is the grey it looks on white
-      const d = ringShadowSize(s, this.doc.style.bondLength);
-      for (const piece of shadowPieces(ringPts, d, d)) curves([...piece.map((p, i): GeoStep => [i ? 'L' : 'M', p.x - b.x1, p.y - b.y1]), ['Z']], 'fill', mix('#ffffff', '#000000', RING_SHADOW_ALPHA));
+      const look = shadowLook(s, ringShadowSize(s, this.doc.style.bondLength));
+      for (const p of shapeShadow([ringPts], look, true)) {
+        const { a } = parseColor(p.colour);
+        for (const r of p.region) curves([...r.map((v, i): GeoStep => [i ? 'L' : 'M', v.x - b.x1, v.y - b.y1]), ['Z']], 'fill', mix('#ffffff', look.colour, a));
+      }
     }
     if (s.filled) {
       const fc = fillInk(s);

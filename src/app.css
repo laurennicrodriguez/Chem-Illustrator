@@ -217,6 +217,15 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
 .tb-swatch { width: 18px; height: 18px; padding: 0; border: 1px solid var(--line); border-radius: 3px; }
 .tb-swatch:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
 .tb-swatch-name { grid-column: 1 / -1; font-size: 10px; color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* highlight looks: a list of names, each with its colour (a ring for looks that keep the highlight's own) */
+.tb-looks { display: flex; flex-direction: column; gap: 1px; flex-basis: 100%; max-height: 220px; overflow-y: auto; overscroll-behavior: contain; }
+.tb-looks[hidden] { display: none; }
+.tb-looks .tb-heading { font-size: 10px; color: var(--muted, #666); padding: 4px 2px 1px; }
+.tb-look { display: flex; align-items: center; gap: 5px; padding: 2px 6px; font-size: 11px; text-align: left; white-space: nowrap; border-color: transparent; background: transparent; }
+.tb-look:hover { background: var(--accent-soft); }
+.tb-look-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; border: 1px solid var(--line); }
+.tb-look-dot.keeps { background: conic-gradient(#ffe680, #9ed9a8, #a9c8ff, #f2a7c3, #ffe680) !important; }
+.toolbox.vertical .tb-looks { max-width: 150px; }
 .tb-modes { display: flex; gap: 2px; }
 .tb-modes button { padding: 2px 6px; font-size: 11px; }
 .tb-modes button[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); }
@@ -388,6 +397,14 @@ aside {
 #side-content h3 { font-size: 12px; font-weight: 600; margin: 2px 0 4px; }
 .style-row { display: grid; grid-template-columns: 1fr 138px; align-items: center; gap: 8px; margin: 3px 0; }
 label.style-row.check { display: flex; gap: 6px; }
+/* groups of settings in the Style panel that fold away (a highlight's fill, outline, shadow…) */
+details.style-group { margin: 4px 0; border-top: 1px solid var(--line); padding-top: 3px; }
+details.style-group > summary { cursor: pointer; display: flex; align-items: baseline; gap: 6px; font-size: 12px; padding: 2px 0; list-style: none; }
+details.style-group > summary::-webkit-details-marker { display: none; }
+details.style-group > summary::before { content: '▸'; font-size: 10px; color: var(--muted); width: 10px; }
+details.style-group[open] > summary::before { content: '▾'; }
+details.style-group > summary .style-group-state { margin-left: auto; color: var(--muted); font-size: 11px; }
+details.style-group > :not(summary) { margin-left: 12px; }
 .style-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
 .style-buttons button { padding: 3px 8px; font-size: 12px; }
 /* a reaction arrow's roles, each with the colour it is outlined in on the drawing */
@@ -1419,6 +1436,9 @@ dialog.cf-manage { width: min(92vw, 640px); }
 .an-bar button { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; font-size: 12px; }
 .an-bar button:first-child { margin-right: auto; }
 .an-list { display: flex; flex-direction: column; gap: 1px; outline: none; }
+.an-highlights { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 6px; }
+.an-highlights > div { flex-basis: 100%; }
+.an-hl { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; font-size: 11px; }
 .an-row { display: grid; grid-template-columns: 16px 16px 18px 1fr auto; align-items: center; gap: 3px; padding: 2px 4px; border: 1px solid transparent; border-radius: 3px; cursor: pointer; font-size: 12px; }
 .an-row:hover { background: var(--accent-soft); }
 .an-row.picked { border-color: var(--accent); background: var(--accent-soft); }

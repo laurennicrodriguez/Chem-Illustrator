@@ -3,8 +3,8 @@
 // highlights are one even band with sharp (mitred) corners where bonds meet, round, square or
 // pointed ends, and a disc round each atom label. An atom with no highlighted bond gets a disc.
 // Every outline goes round the same way, so all of one highlight can be filled at once and
-// overlaps don't show darker. Soft edges are rings of the same shapes, grown a little each
-// time and faint.
+// overlaps don't show darker. Soft edges, gradients, textures and the other effects are in
+// highlight-fx.ts.
 
 import type { Rect, Vec } from '../geom';
 import { HIGHLIGHT_DEFAULTS, type HighlightStyle } from '../model';
@@ -153,50 +153,58 @@ function corners(a: Vec, ways: Vec[], h: number): Piece[] {
 }
 
 /**
- * Where a highlight centred on double bonds runs instead of through each atom. A ring whose
- * bonds are all highlighted, drawn with a double bond's second line inside it, is taken in by
- * `d` all round (half the gap between the lines), so the band runs midway between the ring and
- * the inner lines on every bond. An atom of a double bond outside such a ring moves `d` toward
- * its second line. Atoms in two such rings, or two such bonds, take the average. Atoms not
- * listed stay where they are.
+ * Where a highlight centred on double bonds runs instead of through each atom. Each bond's band
+ * runs along a line moved off the bond by `shift` (midway between a double bond's two lines;
+ * round a ring drawn with its double bonds inside, midway between the ring and those lines;
+ * nothing for a plain single bond), and each atom moves to where its bonds' lines meet (the
+ * nearest point to all of them, when they don't meet in one point). So a single bond between
+ * two double bonds keeps its own line and the band's corners keep the bonds' angles. Atoms
+ * whose bonds all stay put are not listed.
  */
-export function centredSpots(rings: Vec[][], offset: { p: Vec; q: Vec; side: Vec }[], d: number): Map<Vec, Vec> {
-  const shifts = new Map<Vec, Vec[]>();
-  const add = (a: Vec, v: Vec) => (shifts.get(a) ?? shifts.set(a, []).get(a)!).push(v);
-  for (const ring of rings) {
-    const n = ring.length;
-    const c = { x: ring.reduce((s, a) => s + a.x, 0) / n, y: ring.reduce((s, a) => s + a.y, 0) / n };
-    // each side's line taken in toward the middle by d
-    const lines = ring.map((p, i) => {
-      const q = ring[(i + 1) % n], l = Math.hypot(q.x - p.x, q.y - p.y) || 1;
-      const u = { x: (q.x - p.x) / l, y: (q.y - p.y) / l };
-      let nn = { x: -u.y, y: u.x };
-      if ((c.x - p.x) * nn.x + (c.y - p.y) * nn.y < 0) nn = { x: -nn.x, y: -nn.y };
-      return { o: { x: p.x + nn.x * d, y: p.y + nn.y * d }, u, nn };
-    });
-    ring.forEach((a, i) => {
-      const L1 = lines[(i + n - 1) % n], L2 = lines[i];
-      const den = L1.u.x * L2.u.y - L1.u.y * L2.u.x;
-      if (Math.abs(den) < 1e-9) { add(a, { x: L2.nn.x * d, y: L2.nn.y * d }); return; }
-      const t = ((L2.o.x - L1.o.x) * L2.u.y - (L2.o.y - L1.o.y) * L2.u.x) / den;
-      add(a, { x: L1.o.x + L1.u.x * t - a.x, y: L1.o.y + L1.u.y * t - a.y });
-    });
+export function centredSpots(lines: { p: Vec; q: Vec; shift: Vec }[]): Map<Vec, Vec> {
+  type Acc = { xx: number; xy: number; yy: number; bx: number; by: number; sx: number; sy: number; n: number; moved: boolean };
+  const acc = new Map<Vec, Acc>();
+  for (const { p, q, shift } of lines) {
+    const l = Math.hypot(q.x - p.x, q.y - p.y);
+    if (l < 1e-9) continue;
+    // the line's normal, and a point on it
+    const n = { x: -(q.y - p.y) / l, y: (q.x - p.x) / l };
+    const moved = Math.hypot(shift.x, shift.y) > 1e-9;
+    for (const a of [p, q]) {
+      const o = { x: a.x + shift.x, y: a.y + shift.y };
+      const k = n.x * o.x + n.y * o.y;
+      let m = acc.get(a);
+      if (!m) acc.set(a, (m = { xx: 0, xy: 0, yy: 0, bx: 0, by: 0, sx: 0, sy: 0, n: 0, moved: false }));
+      m.xx += n.x * n.x; m.xy += n.x * n.y; m.yy += n.y * n.y;
+      m.bx += n.x * k; m.by += n.y * k;
+      m.sx += shift.x; m.sy += shift.y; m.n++;
+      m.moved ||= moved;
+    }
   }
-  const inRing = new Set(shifts.keys());
-  for (const { p, q, side } of offset) for (const a of [p, q]) if (!inRing.has(a)) add(a, { x: side.x * d, y: side.y * d });
   const out = new Map<Vec, Vec>();
-  for (const [a, vs] of shifts) out.set(a, { x: a.x + vs.reduce((s, v) => s + v.x, 0) / vs.length, y: a.y + vs.reduce((s, v) => s + v.y, 0) / vs.length });
+  for (const [a, m] of acc) {
+    if (!m.moved) continue;
+    // lines that are (nearly) parallel don't meet: then a pull toward the atom, moved by its
+    // bonds' average shift, keeps the point nearby
+    const t = { x: a.x + m.sx / m.n, y: a.y + m.sy / m.n };
+    const lam = m.xx * m.yy - m.xy * m.xy > 1e-3 ? 0 : 0.05;
+    const xx = m.xx + lam, yy = m.yy + lam, xy = m.xy;
+    const bx = m.bx + lam * t.x, by = m.by + lam * t.y;
+    const det = xx * yy - xy * xy;
+    out.set(a, Math.abs(det) < 1e-12 ? t : { x: (bx * yy - by * xy) / det, y: (by * xx - bx * xy) / det });
+  }
   return out;
 }
 
-/** A piece's outline as points (arcs in short steps). */
-function piecePoints(pc: Piece): Vec[] {
+/** A piece's outline as points (arcs in steps short enough to look round close up). */
+export function piecePoints(pc: Piece): Vec[] {
   const arc = (c: Vec, r: number, a0: number, a1: number, n: number) =>
     Array.from({ length: n + 1 }, (_, i) => { const t = a0 + ((a1 - a0) * i) / n; return { x: c.x + r * Math.cos(t), y: c.y + r * Math.sin(t) }; });
   if (pc.kind === 'poly') return pc.pts;
-  if (pc.kind === 'disc') return arc(pc.c, pc.r, 0, Math.PI * 2, 32).slice(1);
-  const a = Math.atan2(pc.q.y - pc.p.y, pc.q.x - pc.p.x);
-  return [...arc(pc.q, pc.r, a - Math.PI / 2, a + Math.PI / 2, 16), ...arc(pc.p, pc.r, a + Math.PI / 2, a + (3 * Math.PI) / 2, 16)];
+  const n = Math.max(24, Math.min(128, Math.ceil((2 * Math.PI * pc.r) / 0.6)));
+  if (pc.kind === 'disc') return arc(pc.c, pc.r, 0, Math.PI * 2, n).slice(1);
+  const a = Math.atan2(pc.q.y - pc.p.y, pc.q.x - pc.p.x), h = Math.ceil(n / 2);
+  return [...arc(pc.q, pc.r, a - Math.PI / 2, a + Math.PI / 2, h), ...arc(pc.p, pc.r, a + Math.PI / 2, a + (3 * Math.PI) / 2, h)];
 }
 
 /** The convex hull of some points (Andrew's monotone chain). */
@@ -214,11 +222,6 @@ function hull(pts: Vec[]): Vec[] {
 export function movePieces(ps: Piece[], dx: number, dy: number): Piece[] {
   const mv = (v: Vec) => ({ x: v.x + dx, y: v.y + dy });
   return ps.map((pc) => pc.kind === 'disc' ? { ...pc, c: mv(pc.c) } : pc.kind === 'band' ? { ...pc, p: mv(pc.p), q: mv(pc.q) } : { kind: 'poly', pts: pc.pts.map(mv) });
-}
-
-/** How far each soft ring reaches past the last, and how many there are. */
-export function softRings(half: number): { step: number; count: number } {
-  return { step: 0.22 * half, count: 4 };
 }
 
 /** Trace pieces into a path (each going round the same way). */
@@ -253,7 +256,20 @@ export function highlightStyleFromTag(text: string | null | undefined): Highligh
     else if (v.shape === 'diamond' || v.shape === 'square') { out.shape = 'straight'; out.ends = v.shape === 'diamond' ? 'pointed' : 'square'; }
     if (v.ends === 'round' || v.ends === 'square' || v.ends === 'pointed') out.ends = v.ends;
     if (typeof v.size === 'number' && v.size > 0 && v.size <= 10) out.size = v.size;
-    for (const k of ['fit', 'shadow', 'soft', 'smooth', 'centre'] as const) if (typeof v[k] === 'boolean') out[k] = v[k] as boolean;
+    for (const k of ['fit', 'shadow', 'soft', 'smooth', 'centre', 'glow'] as const) if (typeof v[k] === 'boolean') out[k] = v[k] as boolean;
+    const o = out as Record<string, unknown>;
+    const pick = (k: keyof HighlightStyle, ok: readonly string[]) => { if (typeof v[k] === 'string' && ok.includes(v[k] as string)) o[k] = v[k]; };
+    pick('softSide', ['outer', 'inner', 'both']);
+    pick('fill', ['solid', 'linear', 'edge', 'none']);
+    pick('pattern', ['none', 'hatch', 'backhatch', 'crosshatch', 'horizontal', 'vertical', 'grid', 'dots', 'dense-dots']);
+    pick('line', ['none', 'solid', 'dashed', 'dotted']);
+    for (const k of ['colour2', 'patternColour', 'lineColour', 'shadowColour', 'glowColour'] as const) {
+      if (typeof v[k] === 'string' && (v[k] === '' || /^#[0-9a-f]{6}$/i.test(v[k] as string))) o[k] = (v[k] as string).toLowerCase();
+    }
+    const num = (k: keyof HighlightStyle, lo: number, hi: number) => { const x = v[k]; if (typeof x === 'number' && Number.isFinite(x) && x >= lo && x <= hi) o[k] = x; };
+    num('softAmount', 0.01, 1); num('transparency', 0, 1); num('gradAngle', -360, 360); num('patternSize', 0, 50); num('lineWidth', 0.05, 20);
+    num('shadowOpacity', 0, 1); num('shadowAngle', -360, 360); num('shadowDistance', 0, 5); num('shadowBlur', 0, 5);
+    num('glowSize', 0, 5); num('glowTransparency', 0, 1);
     return Object.keys(out).length ? out : undefined;
   } catch {
     return undefined;
