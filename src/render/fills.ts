@@ -66,6 +66,11 @@ export function fillInk(s: Pick<Shape, 'fillColor' | 'color' | 'kind'>): string 
 export const RING_SHADOW_ALPHA = 0.22;
 export const ringShadowSize = (s: Pick<Shape, 'shadowSize'>, bondLength: number) => s.shadowSize ?? 0.07 * bondLength;
 
+/** A ring fill's or design shape's shadow as set (dark grey down and to the right, unless chosen). */
+export function shadowLook(s: Pick<Shape, 'kind' | 'shadowSize' | 'shadowColor' | 'shadowOpacity' | 'shadowAngle' | 'shadowBlur'>, distance: number): { colour: string; opacity: number; angle: number; distance: number; blur: number } {
+  return { colour: s.shadowColor ?? '#000000', opacity: s.shadowOpacity ?? (s.kind === 'ring' ? RING_SHADOW_ALPHA : 0.25), angle: s.shadowAngle ?? 45, distance, blur: s.shadowBlur ?? 0 };
+}
+
 /**
  * The polygon's drop shadow, `dx`, `dy` away, where it sticks out past the polygon (so a see-through
  * fill or a pattern on its own shows nothing under it): pieces of the moved polygon outside each

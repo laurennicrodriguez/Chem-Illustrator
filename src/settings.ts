@@ -3,6 +3,7 @@
 // %APPDATA%\io.github.nathanohare.chemillustrator); in a browser, the browser's storage for
 // this page. Drawings never go here.
 
+import { parseLooks, type HighlightLookPreset } from './ui/highlight-looks';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { KeyOverrides } from './editor/keymap';
 import { DEFAULT_TYPING } from './text/typing';
@@ -95,6 +96,8 @@ export interface Settings {
   skipVersion: string | null;
   /** Files and workspaces opened or saved lately, newest first (File menu, desktop app). */
   recentFiles: string[];
+  /** Your own saved highlight looks (Structure > Save Highlight Look). */
+  highlightLooks: HighlightLookPreset[];
   /** Spacing in schemes and the text above and below arrows (Scheme > Scheme Settings). */
   scheme: SchemePrefs;
 }
@@ -107,7 +110,7 @@ export const DEFAULT_SETTINGS: Settings = {
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
   guides: { drawing: false, slides: true, design: true },
   docPins: [],
-  updateCheck: true, pubchemNames: true, reviewName: '', skipVersion: null, recentFiles: [],
+  updateCheck: true, pubchemNames: true, reviewName: '', skipVersion: null, recentFiles: [], highlightLooks: [],
   scheme: DEFAULT_SCHEME_PREFS,
 };
 
@@ -115,7 +118,7 @@ const STORAGE_KEY = 'chem-illustrator.settings';
 
 /** Read settings saved as text, keeping only what makes sense. */
 export function parseSettings(text: string | null | undefined): Settings {
-  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), myStyles: [], modeStyles: {}, darkPalettes: [], guides: { ...DEFAULT_SETTINGS.guides }, docPins: [], recentFiles: [], scheme: { ...DEFAULT_SCHEME_PREFS } };
+  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), myStyles: [], modeStyles: {}, darkPalettes: [], guides: { ...DEFAULT_SETTINGS.guides }, docPins: [], recentFiles: [], highlightLooks: [], scheme: { ...DEFAULT_SCHEME_PREFS } };
   if (!text) return s;
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { return s; }
@@ -149,6 +152,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (r.methylStyle === 'Me' || r.methylStyle === 'CH3') s.methylStyle = r.methylStyle;
   if (r.axialStyle === 'RaSa' || r.axialStyle === 'PM') s.axialStyle = r.axialStyle;
   if (typeof r.slideTemplate === 'string' || r.slideTemplate === null) s.slideTemplate = r.slideTemplate as string | null;
+  s.highlightLooks = parseLooks(r.highlightLooks);
   if (Array.isArray(r.recentFiles)) s.recentFiles = r.recentFiles.filter((p): p is string => typeof p === 'string' && p.trim() !== '').slice(0, 10);
   if (typeof r.skipVersion === 'string' || r.skipVersion === null) s.skipVersion = r.skipVersion as string | null;
   s.scheme = parseSchemePrefs(r.scheme);

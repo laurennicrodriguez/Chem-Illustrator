@@ -65,7 +65,7 @@ export function withSideFolded(st: ToolboxState, mode: string, folded: boolean):
  * The toolboxes and where they start: the drawing tools on the left, the rest hidden until wanted.
  * "details" is the side panel taken out of its place at the right, to float or dock elsewhere.
  */
-export const TOOLBOX_IDS = ['main', 'structure', 'arrange', 'templates', 'colours', 'custom', 'details'] as const;
+export const TOOLBOX_IDS = ['main', 'structure', 'arrange', 'templates', 'colours', 'highlight', 'custom', 'details'] as const;
 export type ToolboxId = (typeof TOOLBOX_IDS)[number];
 
 export function defaultToolboxes(): ToolboxState {

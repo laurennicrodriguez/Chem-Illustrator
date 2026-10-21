@@ -7,7 +7,7 @@
 
 import { Doc, Atom, Bond, Arrow, PARTIAL, Caption, Shape, PICTURE_SHADOWS, pictureRadius, applyBase, captionBase, enhancedText, CHIRAL_FLAGS, flagTextSize, type TextBase, type HighlightStyle } from '../model';
 import { centredSpots, fullStyle, highlightPieces, highlightSizes, movePieces, tracePieces, type Piece } from './highlight';
-import { highlightFx, layerPaints, needsFx, patternMarks, regionOf, rgba, unionOf, type FxLayer, type FxPaint, type FxStep, type HighlightFx, type Region } from './highlight-fx';
+import { highlightFx, layerPaints, needsFx, patternMarks, regionOf, rgba, unionOf, type FxLayer, type FxPaint, type FxStep, type HighlightFx, type Region, shapeShadow } from './highlight-fx';
 import { ellipseArc, isCircleRing, ringCircle, ringsThroughBond, type RingCircle } from '../chem/aromatic';
 import { crossingGapsCached } from '../chem/crossing';
 import { FADE, tint } from '../colours';
@@ -23,7 +23,7 @@ import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
 import { layoutText, FONT_STACK, withStack, type TextLayout } from '../text/layout';
 import { drawLayout } from '../text/draw';
 import { geoDef, moveSteps, textArea, traceSteps } from '../design/geo';
-import { cutCorners, fillInk, patternClear, patternInk, ringShadowSize, RING_SHADOW_ALPHA, shadowPieces, insetPolygon, dotCentres, gradientBands, hatchLines, isDotPattern, patternAngles, patternSpacing, radialBands, shapePolygons } from './fills';
+import { cutCorners, fillInk, patternClear, patternInk, ringShadowSize, shadowLook, insetPolygon, dotCentres, gradientBands, hatchLines, isDotPattern, patternAngles, patternSpacing, radialBands, shapePolygons } from './fills';
 import { placeholderRect, isEmptyText } from '../deck/deck';
 import { imageFor } from './images';
 import { layoutTable, drawTable, type TableLayout, type TablePart } from '../table';
@@ -1008,18 +1008,8 @@ export class Renderer {
         if (pts.length < 3) break;
         const L = this.ringDoc?.style.bondLength ?? 14.4;
         if (s.shadow) {
-          // down and to the right, as a highlight's shadow, showing only where it sticks out
-          const d = ringShadowSize(s, L);
-          ctx.save();
-          ctx.fillStyle = withAlpha('#000000', RING_SHADOW_ALPHA);
-          ctx.beginPath();
-          for (const piece of shadowPieces(pts, d, d)) {
-            ctx.moveTo(piece[0].x, piece[0].y);
-            for (const p of piece.slice(1)) ctx.lineTo(p.x, p.y);
-            ctx.closePath();
-          }
-          ctx.fill();
-          ctx.restore();
+          // down and to the right unless set, as a highlight's shadow, showing only where it sticks out
+          this.paintShadow(ctx, [pts], shadowLook(s, ringShadowSize(s, L)), true);
           ctx.beginPath();
         }
         ctx.moveTo(pts[0].x, pts[0].y);
@@ -1714,6 +1704,18 @@ export class Renderer {
     }
   }
 
+  /** A ring fill's or design shape's shadow, worked out as areas (see shapeShadow). */
+  private paintShadow(ctx: CanvasRenderingContext2D, polys: Vec[][], look: ReturnType<typeof shadowLook>, cut: boolean): void {
+    ctx.save();
+    for (const p of shapeShadow(polys, look, cut)) {
+      ctx.fillStyle = p.colour;
+      ctx.beginPath();
+      traceRegion(ctx, p.region);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   /** A design shape: its shadow, fill and outline, its details, then its text. */
   private drawGeo(ctx: CanvasRenderingContext2D, s: Shape, x: number, y: number, w: number, h: number, lw: number): void {
     const def = geoDef(s.geo);
@@ -1722,12 +1724,17 @@ export class Renderer {
     const width = s.lineWidth ?? (s.bold ? lw * 2.5 : lw);
     if (s.shadow) {
       const d = s.shadowSize ?? Math.max(2, 0.04 * Math.min(w, h));
-      ctx.save();
-      ctx.fillStyle = 'rgba(0,0,0,0.25)';
-      ctx.beginPath();
-      traceSteps(ctx, moveSteps(body, d, d));
-      ctx.fill();
-      ctx.restore();
+      const look = shadowLook(s, d);
+      // a plain shadow is the outline moved; a blurred one, or one under a see-through fill, is worked out as areas
+      if (!look.blur && (s.filled && !(s.transparency ?? 0))) {
+        const a = (look.angle * Math.PI) / 180;
+        ctx.save();
+        ctx.fillStyle = withAlpha(look.colour, look.opacity);
+        ctx.beginPath();
+        traceSteps(ctx, moveSteps(body, Math.cos(a) * d, Math.sin(a) * d));
+        ctx.fill();
+        ctx.restore();
+      } else this.paintShadow(ctx, shapePolygons(s), look, !s.filled || (s.transparency ?? 0) > 0);
       ctx.beginPath();
     }
     traceSteps(ctx, body);

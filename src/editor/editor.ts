@@ -222,6 +222,9 @@ const MARKS = {
   dark: { selFill: 'rgba(0, 70, 190, 0.34)', selLine: 'rgba(0, 70, 190, 0.6)', hot: 'rgba(0, 70, 190, 0.5)', box: 'rgba(0, 60, 158, 0.9)', hover: 'rgba(0, 60, 158, 0.95)', marquee: '#000', next: '#0b6b2f' },
 };
 
+/** A highlight setting the Structure menu and Highlight toolbox turn on and off. */
+export type HighlightToggle = 'smooth' | 'centre' | 'soft' | 'shadow' | 'glow' | 'outline';
+
 export class Editor {
   tool: Tool = TOOLS['bond-single'];
   toolName = 'bond-single';
@@ -2081,19 +2084,45 @@ export class Editor {
    * band for round highlights; centre: midway between double bonds' lines), or off when it is
    * on for all of them already. Says which, or null when nothing selected is highlighted.
    */
-  toggleHighlight(key: 'smooth' | 'centre'): 'on' | 'off' | null {
+  toggleHighlight(key: HighlightToggle): 'on' | 'off' | null {
     const doc = this.doc;
     const atoms = [...this.sel.atoms].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a?.highlight);
     const bonds = [...this.sel.bonds].map((id) => doc.bonds.get(id)).filter((b): b is Bond => !!b?.highlight);
     if (!atoms.length && !bonds.length) return null;
-    const on = ![...atoms, ...bonds].every((x) => x.hl?.[key]);
-    const labels = { smooth: ['Smooth highlight', 'Highlight with discs'], centre: ['Centre highlight on double bonds', 'Highlight on the bonds'] };
+    // outline only: no fill and a line round it, or back to a filled highlight
+    const has = (hl: HighlightStyle | undefined) => (key === 'outline' ? hl?.fill === 'none' && !!hl.line && hl.line !== 'none' : !!hl?.[key]);
+    const on = ![...atoms, ...bonds].every((x) => has(x.hl));
+    const patch: HighlightStyle = key === 'outline' ? (on ? { fill: 'none', line: 'solid' } : { fill: 'solid', line: 'none' }) : { [key]: on };
+    const labels: Record<HighlightToggle, [string, string]> = {
+      smooth: ['Smooth highlight', 'Highlight with discs'], centre: ['Centre highlight on double bonds', 'Highlight on the bonds'],
+      soft: ['Soft highlight', 'Sharp highlight'], shadow: ['Highlight shadow', 'No highlight shadow'], glow: ['Highlight glow', 'No highlight glow'],
+      outline: ['Outline-only highlight', 'Filled highlight'],
+    };
     doc.edit(labels[key][on ? 0 : 1], () => {
-      for (const a of atoms) doc.updateAtom(a.id, { hl: tidyStyle({ ...a.hl, [key]: on }) });
-      for (const b of bonds) doc.updateBond(b.id, { hl: tidyStyle({ ...b.hl, [key]: on }) });
+      for (const a of atoms) doc.updateAtom(a.id, { hl: tidyStyle({ ...a.hl, ...patch }) });
+      for (const b of bonds) doc.updateBond(b.id, { hl: tidyStyle({ ...b.hl, ...patch }) });
     });
     this.changed();
     return on ? 'on' : 'off';
+  }
+
+  /**
+   * Give the selected highlights a look (a saved one): its style, and its colour when it has
+   * one. With a colour, atoms and bonds that aren't highlighted yet are highlighted too.
+   */
+  highlightLook(colour: string | undefined, style: HighlightStyle | undefined): boolean {
+    const doc = this.doc;
+    const lit = (x: { highlight?: string }) => !!colour || !!x.highlight;
+    const atoms = [...this.sel.atoms].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a && lit(a));
+    const bonds = [...this.sel.bonds].map((id) => doc.bonds.get(id)).filter((b): b is Bond => !!b && lit(b));
+    if (!atoms.length && !bonds.length) return false;
+    const hl = style && tidyStyle(style);
+    doc.edit('Highlight look', () => {
+      for (const a of atoms) doc.updateAtom(a.id, { highlight: colour ?? a.highlight, hl });
+      for (const b of bonds) doc.updateBond(b.id, { highlight: colour ?? b.highlight, hl });
+    });
+    this.changed();
+    return true;
   }
 
   private moveSelection(dx: number, dy: number): void {

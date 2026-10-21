@@ -221,3 +221,49 @@ export function extent(r: Region, d: Vec): [number, number] {
   for (const ring of r) for (const v of ring) { const k = v.x * d.x + v.y * d.y; lo = Math.min(lo, k); hi = Math.max(hi, k); }
   return [lo, hi];
 }
+
+// ------------------------------------------------------------------ shapes' shadows
+
+/** How a ring fill's or design shape's shadow looks. */
+export interface ShadowLook { colour: string; opacity: number; angle: number; distance: number; blur: number }
+
+/** Polygons grown by about `g` all round (taken in when `g` is less than 0), each about its own middle. */
+function grown(polys: Vec[][], g: number): Vec[][] {
+  return polys.map((pts) => {
+    const n = pts.length;
+    const c = { x: pts.reduce((t, p) => t + p.x, 0) / n, y: pts.reduce((t, p) => t + p.y, 0) / n };
+    let r = 0;
+    for (let i = 0; i < n; i++) { const a = pts[i], b = pts[(i + 1) % n]; r += Math.hypot((a.x + b.x) / 2 - c.x, (a.y + b.y) / 2 - c.y); }
+    r /= n;
+    const k = r > 0 ? Math.max(0, (r + g) / r) : 1;
+    return pts.map((p) => ({ x: c.x + (p.x - c.x) * k, y: c.y + (p.y - c.y) * k }));
+  });
+}
+
+const polysMP = (polys: Vec[][]): MP => {
+  const ps = polys.filter((p) => p.length > 2).map((p): polygonClipping.Polygon => [ring(p)]);
+  if (!ps.length) return [];
+  try { return polygonClipping.union(ps[0], ...ps.slice(1)); } catch { return ps; }
+};
+
+/**
+ * A shape's drop shadow as filled areas: the shape's outline moved, blurred by fading out over
+ * `blur` (half inside the edge, half outside), and, when `cut`, only where it sticks out past the
+ * shape (so a see-through fill shows nothing under it).
+ */
+export function shapeShadow(polys: Vec[][], look: ShadowLook, cut: boolean): FxPaint[] {
+  if (!polys.length || look.opacity <= 0) return [];
+  const a = (look.angle * Math.PI) / 180, d = { x: Math.cos(a) * look.distance, y: Math.sin(a) * look.distance };
+  const shape = cut ? polysMP(polys) : [];
+  const at = (g: number) => moveMP(polysMP(g ? grown(polys, g) : polys), d);
+  const out: FxPaint[] = [];
+  const push = (mp: MP, alpha: number) => { const r = regionOf(cut ? minus(mp, shape) : mp); if (r.length) out.push({ region: r, colour: rgba(look.colour, alpha) }); };
+  if (look.blur <= 0) { push(at(0), look.opacity); return out; }
+  const n = 10, B = look.blur;
+  for (let i = n; i >= 0; i--) {
+    const here = at(-B / 2 + (B * i) / n);
+    const k = i ? 0.5 * (1 + Math.cos((Math.PI * (i - 0.5)) / n)) : 1;
+    push(i ? minus(here, at(-B / 2 + (B * (i - 1)) / n)) : here, look.opacity * k);
+  }
+  return out;
+}

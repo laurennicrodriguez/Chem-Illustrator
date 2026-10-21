@@ -161,7 +161,7 @@ describe('highlights centred on double bonds', () => {
 
 describe('highlight look', () => {
   it('fills in the usual look, and keeps only what differs from it', () => {
-    expect(fullStyle(undefined)).toEqual({ shape: 'round', ends: 'round', size: 1, fit: true, shadow: false, soft: false, smooth: false, centre: false });
+    expect(fullStyle(undefined)).toMatchObject({ shape: 'round', ends: 'round', size: 1, fit: true, shadow: false, soft: false, smooth: false, centre: false, fill: 'solid', line: 'none', pattern: 'none' });
     expect(tidyStyle({ shape: 'round', size: 1.5, shadow: false })).toEqual({ size: 1.5 });
     expect(tidyStyle({ fit: true })).toBeUndefined();
   });
