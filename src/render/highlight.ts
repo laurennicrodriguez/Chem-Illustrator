@@ -3,8 +3,8 @@
 // highlights are one even band with sharp (mitred) corners where bonds meet, round, square or
 // pointed ends, and a disc round each atom label. An atom with no highlighted bond gets a disc.
 // Every outline goes round the same way, so all of one highlight can be filled at once and
-// overlaps don't show darker. Soft edges are rings of the same shapes, grown a little each
-// time and faint.
+// overlaps don't show darker. Soft edges, gradients, textures and the other effects are in
+// highlight-fx.ts.
 
 import type { Rect, Vec } from '../geom';
 import { HIGHLIGHT_DEFAULTS, type HighlightStyle } from '../model';
@@ -196,14 +196,15 @@ export function centredSpots(lines: { p: Vec; q: Vec; shift: Vec }[]): Map<Vec, 
   return out;
 }
 
-/** A piece's outline as points (arcs in short steps). */
-function piecePoints(pc: Piece): Vec[] {
+/** A piece's outline as points (arcs in steps short enough to look round close up). */
+export function piecePoints(pc: Piece): Vec[] {
   const arc = (c: Vec, r: number, a0: number, a1: number, n: number) =>
     Array.from({ length: n + 1 }, (_, i) => { const t = a0 + ((a1 - a0) * i) / n; return { x: c.x + r * Math.cos(t), y: c.y + r * Math.sin(t) }; });
   if (pc.kind === 'poly') return pc.pts;
-  if (pc.kind === 'disc') return arc(pc.c, pc.r, 0, Math.PI * 2, 32).slice(1);
-  const a = Math.atan2(pc.q.y - pc.p.y, pc.q.x - pc.p.x);
-  return [...arc(pc.q, pc.r, a - Math.PI / 2, a + Math.PI / 2, 16), ...arc(pc.p, pc.r, a + Math.PI / 2, a + (3 * Math.PI) / 2, 16)];
+  const n = Math.max(24, Math.min(128, Math.ceil((2 * Math.PI * pc.r) / 0.6)));
+  if (pc.kind === 'disc') return arc(pc.c, pc.r, 0, Math.PI * 2, n).slice(1);
+  const a = Math.atan2(pc.q.y - pc.p.y, pc.q.x - pc.p.x), h = Math.ceil(n / 2);
+  return [...arc(pc.q, pc.r, a - Math.PI / 2, a + Math.PI / 2, h), ...arc(pc.p, pc.r, a + Math.PI / 2, a + (3 * Math.PI) / 2, h)];
 }
 
 /** The convex hull of some points (Andrew's monotone chain). */
@@ -221,11 +222,6 @@ function hull(pts: Vec[]): Vec[] {
 export function movePieces(ps: Piece[], dx: number, dy: number): Piece[] {
   const mv = (v: Vec) => ({ x: v.x + dx, y: v.y + dy });
   return ps.map((pc) => pc.kind === 'disc' ? { ...pc, c: mv(pc.c) } : pc.kind === 'band' ? { ...pc, p: mv(pc.p), q: mv(pc.q) } : { kind: 'poly', pts: pc.pts.map(mv) });
-}
-
-/** How far each soft ring reaches past the last, and how many there are. */
-export function softRings(half: number): { step: number; count: number } {
-  return { step: 0.22 * half, count: 4 };
 }
 
 /** Trace pieces into a path (each going round the same way). */
@@ -260,7 +256,20 @@ export function highlightStyleFromTag(text: string | null | undefined): Highligh
     else if (v.shape === 'diamond' || v.shape === 'square') { out.shape = 'straight'; out.ends = v.shape === 'diamond' ? 'pointed' : 'square'; }
     if (v.ends === 'round' || v.ends === 'square' || v.ends === 'pointed') out.ends = v.ends;
     if (typeof v.size === 'number' && v.size > 0 && v.size <= 10) out.size = v.size;
-    for (const k of ['fit', 'shadow', 'soft', 'smooth', 'centre'] as const) if (typeof v[k] === 'boolean') out[k] = v[k] as boolean;
+    for (const k of ['fit', 'shadow', 'soft', 'smooth', 'centre', 'glow'] as const) if (typeof v[k] === 'boolean') out[k] = v[k] as boolean;
+    const o = out as Record<string, unknown>;
+    const pick = (k: keyof HighlightStyle, ok: readonly string[]) => { if (typeof v[k] === 'string' && ok.includes(v[k] as string)) o[k] = v[k]; };
+    pick('softSide', ['outer', 'inner', 'both']);
+    pick('fill', ['solid', 'linear', 'edge', 'none']);
+    pick('pattern', ['none', 'hatch', 'backhatch', 'crosshatch', 'horizontal', 'vertical', 'grid', 'dots', 'dense-dots']);
+    pick('line', ['none', 'solid', 'dashed', 'dotted']);
+    for (const k of ['colour2', 'patternColour', 'lineColour', 'shadowColour', 'glowColour'] as const) {
+      if (typeof v[k] === 'string' && (v[k] === '' || /^#[0-9a-f]{6}$/i.test(v[k] as string))) o[k] = (v[k] as string).toLowerCase();
+    }
+    const num = (k: keyof HighlightStyle, lo: number, hi: number) => { const x = v[k]; if (typeof x === 'number' && Number.isFinite(x) && x >= lo && x <= hi) o[k] = x; };
+    num('softAmount', 0.01, 1); num('transparency', 0, 1); num('gradAngle', -360, 360); num('patternSize', 0, 50); num('lineWidth', 0.05, 20);
+    num('shadowOpacity', 0, 1); num('shadowAngle', -360, 360); num('shadowDistance', 0, 5); num('shadowBlur', 0, 5);
+    num('glowSize', 0, 5); num('glowTransparency', 0, 1);
     return Object.keys(out).length ? out : undefined;
   } catch {
     return undefined;

@@ -6,7 +6,8 @@
 // and bond and only recomputed near what changed.
 
 import { Doc, Atom, Bond, Arrow, PARTIAL, Caption, Shape, PICTURE_SHADOWS, pictureRadius, applyBase, captionBase, enhancedText, CHIRAL_FLAGS, flagTextSize, type TextBase, type HighlightStyle } from '../model';
-import { centredSpots, fullStyle, highlightPieces, highlightSizes, movePieces, softRings, tracePieces, type Piece } from './highlight';
+import { centredSpots, fullStyle, highlightPieces, highlightSizes, movePieces, tracePieces, type Piece } from './highlight';
+import { highlightFx, layerPaints, needsFx, patternMarks, regionOf, rgba, unionOf, type FxLayer, type FxPaint, type FxStep, type HighlightFx, type Region } from './highlight-fx';
 import { ellipseArc, isCircleRing, ringCircle, ringsThroughBond, type RingCircle } from '../chem/aromatic';
 import { crossingGapsCached } from '../chem/crossing';
 import { FADE, tint } from '../colours';
@@ -1328,15 +1329,178 @@ export class Renderer {
   }
 
   /**
-   * Highlighted atoms and bonds: broad bands under bonds and discs (or diamonds, squares) under
-   * atoms, or one smooth band (see highlightPieces), in their colour, behind everything in the
-   * structure; with a shadow or soft edges when asked. Each colour and look is filled at once,
-   * so overlaps don't show darker.
+   * Highlighted atoms and bonds: broad bands under bonds and discs under atoms, or one smooth
+   * band (see highlightPieces), in their colour, behind everything in the structure; with a
+   * shadow, soft edges, a gradient, a texture, an outline or a glow when asked (highlight-fx.ts).
+   * Each colour and look is filled at once, so overlaps don't show darker.
    */
   private drawHighlights(ctx: CanvasRenderingContext2D, doc: Doc, atoms: Iterable<Atom>, bonds: Iterable<Bond>): void {
+    const near = this.highlightGroups(doc, atoms, bonds);
+    if (!near.size) return;
     const L = doc.style.bondLength;
-    type Group = { colour: string; style: Required<HighlightStyle>; scale: number; atoms: Atom[]; bonds: [Atom, Atom][]; lit: Bond[]; at?: Map<Vec, Vec> };
-    const groups = new Map<string, Group>();
+    // a highlight with effects is worked out whole (its outline is the whole highlight's)
+    let whole: Map<string, HighlightGroup> | null = null;
+    const groups = [...near].map(([k, g]) => {
+      if (!needsFx(g.style)) return g;
+      whole ??= this.wholeHighlights(doc);
+      return whole.get(k) ?? g;
+    });
+    const fill = (ps: Piece[], colour: string) => {
+      ctx.fillStyle = colour;
+      ctx.beginPath();
+      tracePieces(ctx, ps);
+      ctx.fill();
+    };
+    // the screen has a spare canvas to build effects on; pictures and copies get plain areas
+    const screen = typeof ctx.createLinearGradient === 'function' && !!ctx.canvas;
+    const fxs = groups.map((g) => (needsFx(g.style) ? this.highlightFx(doc, g) : null));
+    ctx.save();
+    ctx.setLineDash([]);
+    // shadows first, so no highlight's shadow falls on another highlight
+    groups.forEach((g, i) => {
+      const fx = fxs[i];
+      if (fx?.fx.shadow) this.paintFxLayer(ctx, doc, g, fx, fx.fx.shadow, screen);
+      else if (!fx && g.style.shadow) {
+        const a = (g.style.shadowAngle * Math.PI) / 180, d = g.style.shadowDistance * L * g.scale * g.style.size;
+        fill(movePieces(this.highlightPieces(doc, g, 1, 0), Math.cos(a) * d, Math.sin(a) * d), withAlpha(g.style.shadowColour, g.style.shadowOpacity));
+      }
+    });
+    groups.forEach((g, i) => {
+      const fx = fxs[i];
+      if (!fx) {
+        const clear = g.style.transparency;
+        fill(this.highlightPieces(doc, g, 1, 0), clear > 0 ? withAlpha(g.colour, 1 - clear) : g.colour);
+        return;
+      }
+      if (fx.fx.body) this.paintFxLayer(ctx, doc, g, fx, fx.fx.body, screen);
+      const pat = fx.fx.pattern;
+      if (pat) {
+        // the lines or dots line up on the page, so neighbouring highlights' textures match;
+        // on screen they are cut to the highlight by clipping, elsewhere worked out inside it
+        const region = screen ? null : regionOf(this.fxUnion(doc, g, fx));
+        let marks: { lines: [Vec, Vec][] } | { dots: Vec[] };
+        if (region) marks = patternMarks(pat, region);
+        else {
+          const b = piecesBox(fx.base);
+          marks = patternMarks(pat, [[{ x: b.x1, y: b.y1 }, { x: b.x2, y: b.y1 }, { x: b.x2, y: b.y2 }, { x: b.x1, y: b.y2 }]]);
+          ctx.save();
+          ctx.beginPath();
+          tracePieces(ctx, fx.base);
+          ctx.clip();
+        }
+        ctx.beginPath();
+        if ('dots' in marks && pat.kind === 'dots') {
+          for (const d of marks.dots) { ctx.moveTo(d.x + pat.r, d.y); ctx.arc(d.x, d.y, pat.r, 0, Math.PI * 2); ctx.closePath(); }
+          ctx.fillStyle = pat.colour;
+          ctx.fill();
+        } else if ('lines' in marks && pat.kind === 'lines') {
+          for (const [p, q] of marks.lines) { ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); }
+          ctx.strokeStyle = pat.colour;
+          ctx.lineWidth = pat.width;
+          ctx.lineCap = 'butt';
+          ctx.stroke();
+        }
+        if (!region) ctx.restore();
+      }
+      const o = fx.fx.outline;
+      if (o) {
+        ctx.strokeStyle = o.colour;
+        ctx.lineWidth = o.width;
+        ctx.lineCap = o.round ? 'round' : 'butt';
+        ctx.lineJoin = 'round';
+        ctx.setLineDash(o.dash);
+        ctx.beginPath();
+        traceRegion(ctx, regionOf(this.fxUnion(doc, g, fx)));
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    });
+    ctx.restore();
+  }
+
+  /**
+   * Paint one layer of a highlight's effects (its shadow, or its glow and fill). On screen each
+   * step is drawn on a spare canvas over the last, after clearing what it covers, and the
+   * result put on the page; elsewhere each step's ring is worked out as an area.
+   */
+  private paintFxLayer(ctx: CanvasRenderingContext2D, doc: Doc, g: HighlightGroup, fx: FxEntry, layer: FxLayer, screen: boolean): void {
+    if (!screen) {
+      const key = layer === fx.fx.shadow ? 'shadow' : 'body';
+      const paints = (fx[key] ??= layerPaints(layer, (t, grow) => this.fxLevel(doc, g, fx, t, grow), regionOf(this.fxUnion(doc, g, fx))));
+      for (const p of paints) {
+        ctx.fillStyle = p.colour;
+        ctx.beginPath();
+        traceRegion(ctx, p.region);
+        ctx.fill();
+      }
+      return;
+    }
+    const mv = layer.move ?? { x: 0, y: 0 };
+    const at = (st: FxStep) => { const ps = st.t === 1 && !st.grow ? fx.base : this.highlightPieces(doc, g, st.t, st.grow); return mv.x || mv.y ? movePieces(ps, mv.x, mv.y) : ps; };
+    // only the part of the page the layer covers is cleared and copied
+    const m = ctx.getTransform();
+    const W = ctx.canvas.width, H = ctx.canvas.height;
+    const outer = at(layer.steps[0]), ob = piecesBox(outer);
+    const corners = [[ob.x1, ob.y1], [ob.x2, ob.y1], [ob.x1, ob.y2], [ob.x2, ob.y2]].map(([x, y]) => ({ x: m.a * x + m.c * y + m.e, y: m.b * x + m.d * y + m.f }));
+    const bx = Math.max(0, Math.floor(Math.min(...corners.map((c) => c.x))) - 2), by = Math.max(0, Math.floor(Math.min(...corners.map((c) => c.y))) - 2);
+    const bx2 = Math.min(W, Math.ceil(Math.max(...corners.map((c) => c.x))) + 2), by2 = Math.min(H, Math.ceil(Math.max(...corners.map((c) => c.y))) + 2);
+    if (bx2 <= bx || by2 <= by) return;
+    const sc = this.fxScratch(W, H);
+    if (!sc) return;
+    sc.setTransform(1, 0, 0, 1, 0, 0);
+    sc.globalCompositeOperation = 'source-over';
+    sc.clearRect(bx, by, bx2 - bx, by2 - by);
+    sc.setTransform(m);
+    const erase = () => {
+      sc.globalCompositeOperation = 'destination-out';
+      sc.fillStyle = '#000';
+      sc.fill();
+      sc.globalCompositeOperation = 'source-over';
+    };
+    for (const st of layer.steps) {
+      sc.beginPath();
+      tracePieces(sc, st === layer.steps[0] ? outer : at(st));
+      if (st !== layer.steps[0]) erase();
+      if (st.alpha <= 0.002) continue;
+      if (typeof st.colour === 'string') sc.fillStyle = rgba(st.colour, st.alpha);
+      else {
+        // across the whole highlight at the gradient's angle, edge to edge
+        const a = (st.colour.angle * Math.PI) / 180, d = { x: Math.cos(a), y: Math.sin(a) };
+        const fb = piecesBox(fx.base);
+        const c = { x: (fb.x1 + fb.x2) / 2 + mv.x, y: (fb.y1 + fb.y2) / 2 + mv.y };
+        const half = (Math.abs(d.x) * (fb.x2 - fb.x1) + Math.abs(d.y) * (fb.y2 - fb.y1)) / 2;
+        const grad = sc.createLinearGradient(c.x - d.x * half, c.y - d.y * half, c.x + d.x * half, c.y + d.y * half);
+        grad.addColorStop(0, rgba(st.colour.from, st.alpha));
+        grad.addColorStop(1, rgba(st.colour.to, st.alpha));
+        sc.fillStyle = grad;
+      }
+      sc.fill();
+    }
+    if (layer.cut) {
+      sc.beginPath();
+      tracePieces(sc, fx.base);
+      erase();
+    }
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(sc.canvas, bx, by, bx2 - bx, by2 - by, bx, by, bx2 - bx, by2 - by);
+    ctx.restore();
+  }
+
+  /** A spare canvas at least this big, for building highlight effects on. */
+  private fxScratch(w: number, h: number): CanvasRenderingContext2D | null {
+    if (!this.scratch || this.scratch.canvas.width < w || this.scratch.canvas.height < h) {
+      const W = Math.max(w, this.scratch?.canvas.width ?? 0), H = Math.max(h, this.scratch?.canvas.height ?? 0);
+      const c = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(W, H) : Object.assign(document.createElement('canvas'), { width: W, height: H });
+      this.scratch = c.getContext('2d') as unknown as CanvasRenderingContext2D | null;
+    }
+    return this.scratch;
+  }
+  private scratch: CanvasRenderingContext2D | null = null;
+
+  /** The highlights on these atoms and bonds, by colour, look and size. */
+  private highlightGroups(doc: Doc, atoms: Iterable<Atom>, bonds: Iterable<Bond>): Map<string, HighlightGroup> {
+    const groups = new Map<string, HighlightGroup>();
     const of = (colour: string, hl: HighlightStyle | undefined, k: number) => {
       const style = fullStyle(hl);
       const key = colour + JSON.stringify(style) + k;
@@ -1353,43 +1517,63 @@ export class Renderer {
       g.lit.push(b);
     }
     for (const a of atoms) if (a.highlight) of(a.highlight, a.hl, a.s ?? 1).atoms.push(a);
-    if (!groups.size) return;
     for (const g of groups.values()) if (g.style.centre) g.at = this.centredSpots(doc, g.lit, g.scale);
-    const pieces = (g: Group, grow: number, shift = 0): Piece[] => {
-      const spot = (a: Atom): Vec => g.at?.get(a) ?? a;
-      const atoms = g.atoms.map((a) => {
-        let label: Rect | null = null;
-        if (g.style.fit) {
-          const bx = this.atomInfo(doc, a).boxes;
-          if (bx.length) label = { x1: Math.min(...bx.map((b) => b.x1)), y1: Math.min(...bx.map((b) => b.y1)), x2: Math.max(...bx.map((b) => b.x2)), y2: Math.max(...bx.map((b) => b.y2)) };
-        }
-        return { at: spot(a), label };
-      });
-      const out = highlightPieces(g.at ? g.bonds.map(([p, q]) => [spot(p), spot(q)]) : g.bonds, atoms, highlightSizes(L * g.scale, g.style.size), g.style, 0.04 * L * g.style.size, grow);
-      return shift ? movePieces(out, shift, shift) : out;
-    };
-    const fill = (ps: Piece[], colour: string) => {
-      ctx.fillStyle = colour;
-      ctx.beginPath();
-      tracePieces(ctx, ps);
-      ctx.fill();
-    };
-    /** The whole highlight, soft-edged when asked: faint rings outside, solid in the middle. */
-    const paint = (g: Group, colour: string, alpha: number, shift: number) => {
-      if (g.style.soft) {
-        const { step, count } = softRings(highlightSizes(L * g.scale, g.style.size).band);
-        // the solid part is a little smaller, so the soft edge doesn't make it look bigger
-        for (let i = count; i >= 1; i--) fill(pieces(g, (i - count / 2) * step, shift), withAlpha(colour, alpha * 0.28));
-        fill(pieces(g, -(count / 2) * step, shift), withAlpha(colour, alpha));
-      } else fill(pieces(g, 0, shift), alpha < 1 ? withAlpha(colour, alpha) : colour);
-    };
-    ctx.save();
-    ctx.setLineDash([]);
-    // shadows first, so no highlight's shadow falls on another highlight
-    for (const g of groups.values()) if (g.style.shadow) paint(g, '#000000', 0.22, 0.07 * L * g.scale * g.style.size);
-    for (const g of groups.values()) paint(g, g.colour, 1, 0);
-    ctx.restore();
+    return groups;
   }
+
+  /** Every highlight in the drawing (worked out once for each change to it). */
+  private wholeHighlights(doc: Doc): Map<string, HighlightGroup> {
+    const got = this.wholeCache.get(doc);
+    if (got && got.version === doc.version) return got.groups;
+    const groups = this.highlightGroups(doc, doc.atoms.values(), doc.bonds.values());
+    this.wholeCache.set(doc, { version: doc.version, groups });
+    return groups;
+  }
+  private wholeCache = new WeakMap<Doc, { version: number; groups: Map<string, HighlightGroup> }>();
+
+  /** A highlight's pieces at `t` times their size, widened by `grow`. */
+  private highlightPieces(doc: Doc, g: HighlightGroup, t: number, grow: number): Piece[] {
+    const L = doc.style.bondLength;
+    const spot = (a: Atom): Vec => g.at?.get(a) ?? a;
+    const atoms = g.atoms.map((a) => {
+      let label: Rect | null = null;
+      if (g.style.fit) {
+        const bx = this.atomInfo(doc, a).boxes;
+        if (bx.length) label = { x1: Math.min(...bx.map((b) => b.x1)), y1: Math.min(...bx.map((b) => b.y1)), x2: Math.max(...bx.map((b) => b.x2)), y2: Math.max(...bx.map((b) => b.y2)) };
+      }
+      return { at: spot(a), label };
+    });
+    const sz = highlightSizes(L * g.scale, g.style.size);
+    return highlightPieces(g.at ? g.bonds.map(([p, q]) => [spot(p), spot(q)]) : g.bonds, atoms, { disc: sz.disc * t, band: sz.band * t }, g.style, 0.04 * L * g.style.size * t, grow);
+  }
+
+  /** A highlight's effects, worked out again only when it or its look changes. */
+  private highlightFx(doc: Doc, g: HighlightGroup): FxEntry {
+    const base = this.highlightPieces(doc, g, 1, 0);
+    const key = g.colour + JSON.stringify(g.style) + g.scale + JSON.stringify(base);
+    let e = this.fxCache.get(key);
+    if (e) {
+      // (most recently used last, so the oldest go first)
+      this.fxCache.delete(key);
+      this.fxCache.set(key, e);
+      return e;
+    }
+    e = { base, fx: highlightFx(g.style, g.colour, doc.style.bondLength * g.scale * g.style.size), levels: new Map() };
+    this.fxCache.set(key, e);
+    if (this.fxCache.size > 64) this.fxCache.delete(this.fxCache.keys().next().value!);
+    return e;
+  }
+  private fxCache = new Map<string, FxEntry>();
+
+  /** A highlight's pieces at this size joined into one area (worked out once). */
+  private fxLevel(doc: Doc, g: HighlightGroup, e: FxEntry, t: number, grow: number): ReturnType<typeof unionOf> {
+    const k = `${t}|${grow}`;
+    let mp = e.levels.get(k);
+    if (!mp) e.levels.set(k, (mp = unionOf(t === 1 && !grow ? e.base : this.highlightPieces(doc, g, t, grow))));
+    return mp;
+  }
+  private fxUnion(doc: Doc, g: HighlightGroup, e: FxEntry): ReturnType<typeof unionOf> { return this.fxLevel(doc, g, e, 1, 0); }
+
 
   /**
    * Where a highlight on these bonds runs when centred between double bonds' lines (see
@@ -1717,6 +1901,33 @@ const TILE_BYTES = 160 * 1024 * 1024;
 const MAX_HASHES = 400;
 
 interface Tile { canvas: OffscreenCanvas | HTMLCanvasElement; tx: number; ty: number }
+
+/** One colour and look of highlight: its atoms and bonds (with where each atom's highlight runs, when centred on double bonds). */
+/** A highlight's effects as worked out: its pieces as drawn, what it draws, and (made when first needed) its joined areas and plain-area paints. */
+type FxEntry = { base: Piece[]; fx: HighlightFx; levels: Map<string, ReturnType<typeof unionOf>>; shadow?: FxPaint[]; body?: FxPaint[] };
+
+/** The box round some pieces. */
+function piecesBox(ps: Piece[]): Rect {
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+  const take = (x: number, y: number, r = 0) => { x1 = Math.min(x1, x - r); y1 = Math.min(y1, y - r); x2 = Math.max(x2, x + r); y2 = Math.max(y2, y + r); };
+  for (const p of ps) {
+    if (p.kind === 'disc') take(p.c.x, p.c.y, p.r);
+    else if (p.kind === 'band') { take(p.p.x, p.p.y, p.r); take(p.q.x, p.q.y, p.r); } else for (const v of p.pts) take(v.x, v.y);
+  }
+  return { x1, y1, x2, y2 };
+}
+
+/** Trace an area's outlines into a path. */
+function traceRegion(ctx: { moveTo(x: number, y: number): void; lineTo(x: number, y: number): void; closePath(): void }, r: Region): void {
+  for (const ring of r) {
+    if (ring.length < 3) continue;
+    ctx.moveTo(ring[0].x, ring[0].y);
+    for (let i = 1; i < ring.length; i++) ctx.lineTo(ring[i].x, ring[i].y);
+    ctx.closePath();
+  }
+}
+
+type HighlightGroup = { colour: string; style: Required<HighlightStyle>; scale: number; atoms: Atom[]; bonds: [Atom, Atom][]; lit: Bond[]; at?: Map<Vec, Vec> };
 
 /**
  * The part of a box's shadow that sticks out below and to the right: the box shifted by `d`,

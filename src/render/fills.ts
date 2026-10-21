@@ -210,7 +210,7 @@ export function dotCentres(polys: Vec[][], gap: number): Vec[] {
 }
 
 /** Cut a polygon to the side of a line where n·p ≥ k (Sutherland–Hodgman, one edge). */
-function clipHalf(poly: Vec[], n: Vec, k: number): Vec[] {
+export function clipHalf(poly: Vec[], n: Vec, k: number): Vec[] {
   const out: Vec[] = [];
   for (let i = 0; i < poly.length; i++) {
     const u = poly[i], v = poly[(i + 1) % poly.length];
