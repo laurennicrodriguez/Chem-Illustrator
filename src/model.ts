@@ -739,6 +739,11 @@ export class Doc {
   style: DocStyle = { ...ACS_1996 };
   /** Page colour. */
   background = '#ffffff';
+  /**
+   * Draw only the highlights (a highlight animated on its own in a slide show, or saved to
+   * PowerPoint as its own picture behind its structure). Not saved.
+   */
+  onlyHighlights = false;
   /** Set when the drawing came from a CDXML file. */
   source: CdxmlSource | null = null;
   /** Live R/S and E/Z labels from the chemistry engine (not saved, not undone). */

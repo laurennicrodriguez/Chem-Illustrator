@@ -626,7 +626,7 @@ export class Renderer {
     this.ringDoc = doc;
 
     // Shapes behind the structures (filled boxes first).
-    for (const s of this.sortedShapes(doc)) {
+    for (const s of doc.onlyHighlights ? [] : this.sortedShapes(doc)) {
       const b = s.kind === 'table' ? this.tableBox(s) : { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
       if (b.x2 < vis.x1 || b.x1 > vis.x2 || b.y2 < vis.y1 || b.y1 > vis.y2) continue;
       this.drawShape(ctx, s, st.lineWidth, st.labelSize);
@@ -639,6 +639,7 @@ export class Renderer {
 
     // Highlights behind the structures: broad bands under bonds and discs under atoms
     this.drawHighlights(ctx, doc, atoms, bondSet);
+    if (doc.onlyHighlights) return;
 
     // Bonds, batched by how they are stroked (and by size, for resized structures).
     const batches = new Map<number, BondBatch>();

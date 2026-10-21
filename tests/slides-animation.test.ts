@@ -8,6 +8,7 @@ import { Doc } from '../src/model';
 import { Deck } from '../src/deck/deck';
 import { writePptx, type PptxOptions } from '../src/io/pptx-write';
 import { readPptx } from '../src/io/pptx-read';
+import { highlightParts } from '../src/deck/animation';
 import {
   buildSteps, partStates, clickCount, newAnim, animName, slideParts, partOf, targetOf, transitionXml,
   type Anim, type Transition,
@@ -141,6 +142,55 @@ describe('transitions and animations in PowerPoint files', () => {
     expect(doc.shapes.get(got[1].target.id)?.kind).toBe('rect');
     expect(doc.captions.get(got[2].target.id)).toBeTruthy();
     expect(got[3].target).toEqual(got[0].target);
+  });
+
+  it('writes a highlight animated on its own as a picture under its structure, and finds it again', async () => {
+    const host = new Doc();
+    const d = Deck.blank(host);
+    d.attach();
+    d.setLayout('blank');
+    let lit: number[] = [];
+    host.edit('Chain', () => {
+      const a = [0, 1, 2, 3].map((i) => host.addAtom(200 + i * 26, 200 + (i % 2) * 15).id);
+      for (let i = 0; i < 3; i++) host.addBond(a[i], a[i + 1]);
+      lit = [a[1], a[2]];
+      for (const id of lit) host.atoms.get(id)!.highlight = '#ffd400';
+      for (const b of host.bonds.values()) if (lit.includes(b.a1) && lit.includes(b.a2)) b.highlight = '#ffd400';
+    });
+    const doc = d.docOf(0);
+    const all = { atoms: new Set(doc.atoms.keys()), bonds: new Set(doc.bonds.keys()), captions: new Set<number>(), arrows: new Set<number>(), shapes: new Set<number>() };
+    const [h] = highlightParts(doc, all);
+    const target = targetOf(h);
+    expect(target.kind).toBe('highlight');
+    const drawn: Doc[] = [];
+    const pics: PptxOptions = {
+      async picture(x) {
+        drawn.push(x);
+        const xs = [...x.atoms.values()];
+        return { svg: '<svg xmlns="http://www.w3.org/2000/svg"/>', png: PNG, box: { x1: Math.min(...xs.map((a) => a.x)) - 5, y1: Math.min(...xs.map((a) => a.y)) - 5, x2: Math.max(...xs.map((a) => a.x)) + 5, y2: Math.max(...xs.map((a) => a.y)) + 5 } };
+      },
+      async svgToPng() { return PNG; },
+    };
+    const bytes = await writePptx({ size: d.size, master: d.master, slides: d.slides.map((s, i) => ({ layout: s.layout, doc: d.docOf(i), notes: s.notes, anims: [newAnim(target, 'fade')] })) }, pics);
+    const xml = strFromU8(unzipSync(bytes)['ppt/slides/slide1.xml']);
+    // the highlight's own picture comes first (under the structure), and the animation moves it
+    expect(xml.indexOf('name="Highlight')).toBeGreaterThan(-1);
+    expect(xml.indexOf('name="Highlight')).toBeLessThan(xml.indexOf('name="Structure'));
+    const hid = xml.match(/<p:cNvPr id="(\d+)" name="Highlight/)![1];
+    expect(xml).toContain(`<p:spTgt spid="${hid}"/>`);
+    // the structure's picture leaves the highlight off; the highlight's picture draws only it
+    expect(drawn[0].onlyHighlights).toBe(false);
+    expect([...drawn[0].atoms.values()].some((a) => a.highlight)).toBe(false);
+    expect(drawn[1].onlyHighlights).toBe(true);
+    // back from PowerPoint: one structure with its highlight, and the animation on the highlight
+    const back = readPptx(bytes).slides[0];
+    const again = new Doc();
+    again.restoreContents(back.contents);
+    expect(again.shapes.size).toBe(0);
+    expect([...again.atoms.values()].filter((a) => a.highlight).length).toBe(2);
+    const t = back.anims![0].target;
+    expect(t.kind).toBe('highlight');
+    expect(again.atoms.get(t.id)?.highlight).toBe('#ffd400');
   });
 
   it('leaves out animations of objects that have been deleted', async () => {

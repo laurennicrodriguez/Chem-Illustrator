@@ -10,7 +10,7 @@ import { Toolboxes, lockIcon, sideFolded, commandButton, customizeToolbox, defau
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
 import { Doc, Atom, Caption, Shape, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle } from './model';
 import { Renderer, measureText, forgetTextWidths } from './render/renderer';
-import { Editor, TOOLS, type HighlightToggle } from './editor/editor';
+import { Editor, TOOLS, type HighlightToggle, type Selection } from './editor/editor';
 import { BUILT_IN_LOOKS, type HighlightLookPreset } from './ui/highlight-looks';
 import { selectionBox, POINTS, type Align } from './editor/arrange';
 import { readCdxml, ReadStats } from './io/cdxml';
@@ -62,7 +62,7 @@ import { pickSlideTemplate } from './ui/slide-templates';
 import { AnimationUI } from './ui/animation-ui';
 import { SlideComments } from './ui/slide-comments';
 import { writePptx, type PptxOptions } from './io/pptx-write';
-import { EFFECTS, animName, newAnim } from './deck/animation';
+import { EFFECTS, animName, newAnim, highlightParts } from './deck/animation';
 import { SLIDE_TEMPLATES, applyTemplate } from './deck/templates';import { pickTemplate } from './ui/template-gallery';
 import { showContextMenu, topMenuEntry, type MenuItem } from './ui/context-menu';
 import { CommandSearch, uniqueCommands, type CommandItem } from './ui/command-search';
@@ -2822,6 +2822,16 @@ const COMMANDS: Record<string, () => unknown> = {
   'glow-highlight': () => toggleHighlight('glow', 'Glow on. Change its colour and size under Glow in the Style panel.', 'No glow.'),
   'outline-highlight': () => toggleHighlight('outline', 'Outline only: no fill, a line round the highlight. Change the line under Outline in the Style panel.', 'Filled highlight.'),
   'highlight-look': () => void chooseHighlightLook(),
+  'select-highlight': () => {
+    // the highlight under the right-click, else those of the selection
+    const all: Selection = { atoms: new Set(doc.atoms.keys()), bonds: new Set(doc.bonds.keys()), captions: new Set(), arrows: new Set(), shapes: new Set() };
+    const parts = highlightParts(doc, all);
+    const hit = parts.filter((p) => (contextBond !== null && p.sel.bonds.has(contextBond)) || [...editor.sel.atoms].some((id) => p.sel.atoms.has(id)) || [...editor.sel.bonds].some((id) => p.sel.bonds.has(id)));
+    if (!hit.length) { flash('Right-click a highlight (or select part of one) first.'); return; }
+    const sel: Selection = { atoms: new Set(hit.flatMap((p) => [...p.sel.atoms])), bonds: new Set(hit.flatMap((p) => [...p.sel.bonds])), captions: new Set(), arrows: new Set(), shapes: new Set() };
+    if (animUi) animUi.selectHighlight(sel); else editor.selectThese(sel);
+    if (ws.active.mode === 'slides') flash('Highlight selected: pick an effect in the Animations tab to animate it on its own.', 5000);
+  },
   'save-highlight-look': () => void saveHighlightLook(),
   'delete-highlight-look': () => void deleteHighlightLook(),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
@@ -4513,7 +4523,7 @@ function drawingMenu(): MenuItem[] {
     { cmd: 'add-frame' },
     ...(atoms ? [{ label: 'Label the Structure', items: [{ cmd: 'add-id-label' }, { cmd: 'add-caption' }, { cmd: 'attach-descriptors' }, null, { cmd: 'number-compounds' }] }] : []),
     { cmd: 'scale' },
-    ...(atoms || shapes.some((x) => x.kind === 'ring') ? [{ label: 'Highlight and Fill', items: [{ cmd: 'highlight' }, { cmd: 'remove-highlight' }, { cmd: 'highlight-look' }, null, { cmd: 'smooth-highlight' }, { cmd: 'centre-highlight' }, { cmd: 'soft-highlight' }, { cmd: 'outline-highlight' }, { cmd: 'shadow-highlight' }, { cmd: 'glow-highlight' }, { cmd: 'save-highlight-look' }, null, { cmd: 'fill-rings' }, { cmd: 'ring-shadow' }] }] : []),
+    ...(atoms || shapes.some((x) => x.kind === 'ring') ? [{ label: 'Highlight and Fill', items: [{ cmd: 'highlight' }, { cmd: 'remove-highlight' }, { cmd: 'highlight-look' }, { cmd: 'select-highlight' }, null, { cmd: 'smooth-highlight' }, { cmd: 'centre-highlight' }, { cmd: 'soft-highlight' }, { cmd: 'outline-highlight' }, { cmd: 'shadow-highlight' }, { cmd: 'glow-highlight' }, { cmd: 'save-highlight-look' }, null, { cmd: 'fill-rings' }, { cmd: 'ring-shadow' }] }] : []),
     { label: 'Align', items: arrange },
     { label: 'Rotate or Flip', items: turn },
     ...(order.length ? [{ label: 'Order', items: order }] : []),

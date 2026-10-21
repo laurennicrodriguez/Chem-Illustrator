@@ -225,7 +225,7 @@ describe('the settings file', () => {
       nicknames: { Qq: 'CC' }, templates: [], splitWidth: 0.6, scrollBars: false, groupTips: false, citeStyle: 'rsc', citeOptions: { lastAuthor: 'none', etAlOver: 5 }, methylStyle: 'Me' as const, axialStyle: 'PM' as const, circledCharges: true, slideTemplate: 'harbor', askWholeDrawing: false,
       palettes: [{ name: 'Group colours', colors: ['#1f5fbf', '#e69f00'] }],
       toolboxes: { ...defaultToolboxes(), locked: false, custom: ['tool:chain', 'cmd:clean-up'] },
-      myStyles: [], modeStyles: { document: 'RSC' }, darkPage: true, darkPalette: 'Slate', darkPalettes: [], guides: { drawing: true, slides: false, design: true }, docPins: ['style', 'hf'], updateCheck: false, pubchemNames: false, reviewName: 'Nate O.', skipVersion: '0.1.80', recentFiles: ['C:\\Work\\a.cdxml'],
+      myStyles: [], modeStyles: { document: 'RSC' }, darkPage: true, darkPalette: 'Slate', darkPalettes: [], guides: { drawing: true, slides: false, design: true }, highlightLooks: [{ name: 'Mine', colour: '#abcdef', style: { glow: true } }], docPins: ['style', 'hf'], updateCheck: false, pubchemNames: false, reviewName: 'Nate O.', skipVersion: '0.1.80', recentFiles: ['C:\\Work\\a.cdxml'],
       scheme: { ...DEFAULT_SCHEME_PREFS, structGap: 14, textAlign: 'left', fit: false },
     };
     const text = settingsText(s);

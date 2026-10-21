@@ -1431,6 +1431,9 @@ dialog.cf-manage { width: min(92vw, 640px); }
 .an-bar button { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; font-size: 12px; }
 .an-bar button:first-child { margin-right: auto; }
 .an-list { display: flex; flex-direction: column; gap: 1px; outline: none; }
+.an-highlights { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 6px; }
+.an-highlights > div { flex-basis: 100%; }
+.an-hl { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; font-size: 11px; }
 .an-row { display: grid; grid-template-columns: 16px 16px 18px 1fr auto; align-items: center; gap: 3px; padding: 2px 4px; border: 1px solid transparent; border-radius: 3px; cursor: pointer; font-size: 12px; }
 .an-row:hover { background: var(--accent-soft); }
 .an-row.picked { border-color: var(--accent); background: var(--accent-soft); }
