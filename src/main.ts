@@ -8,7 +8,7 @@ import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
 import { Toolboxes, lockIcon, sideFolded, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
-import { Doc, Atom, Caption, Shape, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle } from './model';
+import { Doc, Atom, Caption, Shape, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle } from './model';
 import { Renderer, measureText, forgetTextWidths } from './render/renderer';
 import { Editor, TOOLS } from './editor/editor';
 import { selectionBox, POINTS, type Align } from './editor/arrange';
@@ -66,6 +66,8 @@ import { SLIDE_TEMPLATES, applyTemplate } from './deck/templates';import { pickT
 import { showContextMenu, topMenuEntry, type MenuItem } from './ui/context-menu';
 import { CommandSearch, uniqueCommands, type CommandItem } from './ui/command-search';
 import { fillTemplate, templateSize } from './design/templates';
+import { askCycle } from './ui/cycle-dialog';
+import { askEnergy } from './ui/energy-dialog';
 import { itemsToSvg } from './render/svg';
 import { PAPERS, defaultPaper, orient, placeIn, inside, handoutCells, noteLines, placeSvg, pageSvg } from './print-layout';
 import { printPages } from './ui/print';
@@ -284,6 +286,7 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     { name: 'bond-hash', title: 'Hashed bond' },
     { name: 'bond-bold', title: 'Bold bond' },
     { name: 'bond-dash', title: 'Dashed bond' },
+    { name: 'bond-partial', title: 'Partial bond: one forming or breaking in a transition state, drawn dashed. It leaves both atoms\' hydrogens as they were (hotkey P over a bond)' },
     { name: 'bond-wavy', title: 'Wavy bond' },
     { name: 'bond-dative', title: 'Dative bond: draw from the donor atom to the acceptor. Click again to reverse' },
     { name: 'bond-hapto', title: 'Hapto (η) bond: drag from a metal into a ring or onto a π-bond to bond it to the middle (η⁵-Cp, η⁶-arene, η²-alkene); click inside a ring or on a bond for a new metal there. Click a hapto bond to draw it to each atom' },
@@ -576,6 +579,23 @@ async function pasteChemistry(text: string): Promise<void> {
     flash(String(err));
   }
 }
+
+/** Insert ▸ Catalytic Cycle…: a ready-made cycle to edit, or the selected structures put round one. */
+async function insertCycle(): Promise<void> {
+  finishTyping();
+  const got = await askCycle(editor.selectedStructures().length);
+  if (got) editor.insertCycle(got.spec, got.look, pasteCentre(), deckNow()?.size);
+}
+
+/** Insert ▸ Energy Diagram…, or the selected diagram's numbers to change (`id`, its frame). */
+async function energyDiagram(id: number | null): Promise<void> {
+  finishTyping();
+  const L = doc.style.bondLength;
+  const now = id !== null ? doc.shapes.get(id)?.energy ?? null : null;
+  const got = await askEnergy(now, { w: Math.round(18 * L), h: Math.round(12 * L) });
+  if (got) editor.putEnergyDiagram(got, pasteCentre(), now ? id! : undefined, deckNow()?.size);
+}
+editor.onEnergy = (id) => void energyDiagram(id);
 
 /** Select just these (new) atoms and their bonds. */
 function selectNewAtoms(ids: number[]): void {
@@ -2815,6 +2835,10 @@ const COMMANDS: Record<string, () => unknown> = {
   },
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
   'arrange-scheme': () => arrangeDialog.open(),
+  'catalytic-cycle': () => void insertCycle(),
+  'ts-brackets': () => { if (!editor.tsBrackets()) flash('Select the transition state first (draw it with partial bonds: P over a bond).'); },
+  'energy-diagram': () => void energyDiagram(null),
+  'edit-energy': () => { const id = editor.selectedEnergy(); if (id === null) flash('Select an energy diagram first.'); else void energyDiagram(id); },
   'animate-reaction': () => animateDialog.open(),
   'animate-step': () => {
     const arrow = pickedReactionArrow();
@@ -4375,7 +4399,7 @@ function drawingMenu(): MenuItem[] {
       { cmd: 'undo' }, { cmd: 'redo' }, null,
       ...(ws.active.mode === 'slides' ? [{ cmd: 'new-comment', label: 'New Comment' }, { cmd: 'show-comments', label: 'Show Comments' }, null] : []),
       { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'connector-tool' }] : []), ...(ws.active.mode === 'slides' ? [{ cmd: 'slide-shapes', label: 'Shape…' }] : [])] },
-      { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }, null, { cmd: 'animate-reaction' }] },
+      { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }, { cmd: 'catalytic-cycle' }, { cmd: 'energy-diagram' }, { cmd: 'ts-brackets' }, null, { cmd: 'animate-reaction' }] },
       { cmd: 'drawing-style' },
       view,
     ];
@@ -4394,6 +4418,7 @@ function drawingMenu(): MenuItem[] {
     : [];
   return [
     { cmd: 'cut' }, { cmd: 'copy' }, { cmd: 'paste' }, { cmd: 'delete', label: 'Delete' }, null,
+    ...(editor.selectedEnergy() !== null ? [{ cmd: 'edit-energy' }, null] : []),
     ...(atoms ? [{ label: 'Copy As', items: [{ cmd: 'copy-smiles' }, { cmd: 'copy-mol' }, { cmd: 'copy-cdxml' }] }, null] : []),
     ...(atoms ? [
       { cmd: 'clean-up' },
@@ -4410,7 +4435,7 @@ function drawingMenu(): MenuItem[] {
     ] : []),
     ...([...s.arrows].some((id) => doc.arrows.get(id)?.sweep) ? [{ cmd: 'clean-up-arrow' }] : []),
     ...(pickedReactionArrow() !== undefined ? [{ cmd: 'animate-step' }] : []),
-    ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'clean-up-arrow' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }, null, { cmd: 'animate-reaction' }, ...(pickedReactionArrow() !== undefined ? [{ cmd: 'animate-step' }] : [])] }] : []),
+    ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'clean-up-arrow' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }, { cmd: 'catalytic-cycle' }, { cmd: 'energy-diagram' }, { cmd: 'ts-brackets' }, null, { cmd: 'animate-reaction' }, ...(pickedReactionArrow() !== undefined ? [{ cmd: 'animate-step' }] : [])] }] : []),
     null,
     { cmd: 'add-frame' },
     ...(atoms ? [{ label: 'Label the Structure', items: [{ cmd: 'add-id-label' }, { cmd: 'add-caption' }, { cmd: 'attach-descriptors' }, null, { cmd: 'number-compounds' }] }] : []),
@@ -4463,7 +4488,7 @@ function groupTipTarget(e: PointerEvent) {
   // only on the label's letters, so the tooltip goes as soon as the pointer is off them
   const pad = 2 / Math.max(1e-6, renderer.view.scale);
   if (!renderer.atomInfo(d, a).boxes.some((b) => p.x >= b.x1 - pad && p.x <= b.x2 + pad && p.y >= b.y1 - pad && p.y <= b.y2 + pad)) return null;
-  const ext = (d.adj.get(h.id) ?? []).map((bid) => d.bonds.get(bid)!).filter((b) => b && b.display !== 'dative').map((b) => (b.order === 4 ? 1 : b.order));
+  const ext = (d.adj.get(h.id) ?? []).map((bid) => d.bonds.get(bid)!).filter((b) => b && !outsideValence(b)).map((b) => (b.order === 4 ? 1 : b.order));
   return { label: a.label, ext: ext.length ? ext : [1], x: e.clientX, y: e.clientY };
 }
 // the editor reads the pointer first (its listeners were added first), so its hover is up to date
@@ -4527,6 +4552,10 @@ editor.onContextMenu = (e) => {
 stylePanel.cropWithMouse = () => cropPicture();
 stylePanel.removeWhite = (ids) => void removeWhite(ids);
 stylePanel.frames = { add: () => void command('add-frame'), fit: (id) => editor.fitFrame(id) };
+stylePanel.energy = {
+  edit: (id) => void energyDiagram(id),
+  restyle: (id, patch) => { const d = doc.shapes.get(id)?.energy; if (d) editor.putEnergyDiagram({ ...d, ...patch }, pasteCentre(), id); },
+};
 stylePanel.ringFill = () => void command('fill-rings');
 stylePanel.highlightUsed = (c) => { highlightColour = c; };
 stylePanel.highlightStyleUsed = (st) => { highlightStyle = tidyStyle(st); };

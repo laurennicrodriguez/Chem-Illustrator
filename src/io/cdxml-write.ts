@@ -19,7 +19,7 @@ import { runsForChemDraw, TEXT_TAG } from '../text/chemdraw-text';
 import { ATTACH_TAG, IGNORE_TAG, attachTag } from '../editor/attached';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { fromDataUrl } from '../render/images';
-import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, GROUP_TAG, GEO_TAG, MORPH_TAG, TURN_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG, HIGHLIGHT_LOOK_TAG, SPOKES_TAG } from './cdxml';
+import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, INSIDE_TAG, GROUP_TAG, GEO_TAG, MORPH_TAG, TURN_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG, HIGHLIGHT_LOOK_TAG, SPOKES_TAG } from './cdxml';
 import { frameTag } from '../editor/frames';
 import { geoDef, moveSteps, textArea, type GeoStep } from '../design/geo';
 import { FADE, tint } from '../colours';
@@ -1196,6 +1196,8 @@ class CdxmlWriter {
       g.appendChild(t);
     }
     const { id: _, ...look } = s;
+    // a frame takes what lies inside it again on opening (ids change between files)
+    if (look.frame) look.frame = { ...look.frame, atoms: [], captions: [], arrows: [], shapes: [] };
     if (ringPts) look.poly = ringPts.map((p) => ({ x: p.x, y: p.y }));
     g.appendChild(this.el('objecttag', { TagType: 'String', Name: GEO_TAG, Value: JSON.stringify(look), Visible: 'no' }));
     this.set(g, 'BoundingBox', box(b));
@@ -1552,13 +1554,20 @@ class CdxmlWriter {
       ['ReactionStepPlusses', ids(roles.plusses)],
       ['ReactionStepArrows', this.arrowRef(arrow)],
       ['ReactionStepObjectsAboveArrow', ids(roles.above)],
-      ['ReactionStepObjectsBelowArrow', ids(roles.below)],
+      // a cycle's step names count as below the arrow in ChemDraw; a tag says which they are
+      ['ReactionStepObjectsBelowArrow', ids([...(roles.inside ?? []), ...roles.below])],
     ];
     for (const [k, v] of want) {
       if ((st.getAttribute(k) ?? '') === v) continue;
       this.set(st, k, v);
       this.changed = true;
     }
+    const inside = ids(roles.inside);
+    const tag = kids(st).find((c) => c.nodeName === 'objecttag' && c.getAttribute('Name') === INSIDE_TAG);
+    if ((tag?.getAttribute('Value') ?? '') === inside) return;
+    if (tag) st.removeChild(tag);
+    if (inside) st.appendChild(this.el('objecttag', { TagType: 'String', Name: INSIDE_TAG, Value: inside, Visible: 'no' }));
+    this.changed = true;
   }
 
   /** How a step names its arrow: ChemDraw names the older copy it keeps for old versions, when there is one. */

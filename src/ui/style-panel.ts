@@ -26,6 +26,7 @@ import { deleteColumn, deleteRow, fitColumns, insertColumn, insertRow, setColumn
 import type { Measure } from '../text/layout';
 import { colourButton } from './colour-picker';
 import { centreEnd, haptoText, splitHapto } from '../chem/hapto';
+import type { EnergyData } from '../design/energy';
 
 /** What the table controls need from the editor. */
 export interface TableHooks {
@@ -76,7 +77,7 @@ const FILLS: Opt<Fill>[] = [['none', 'None'], ['solid', 'Solid colour'], ['faded
 const GRAD_DIRS: Opt<string>[] = [['90', 'Top to bottom'], ['270', 'Bottom to top'], ['0', 'Left to right'], ['180', 'Right to left'], ['45', 'Diagonal, top left to bottom right'], ['-45', 'Diagonal, bottom left to top right'], ['radial', 'Out from the middle']];
 const PATTERN_OPTS: Opt<string>[] = [['none', 'None'], ...PATTERNS];
 
-const BOND_ORDERS: Opt<string>[] = [['1', 'Single'], ['2', 'Double'], ['3', 'Triple'], ['1.5', 'Aromatic'], ['4', 'Quadruple']];
+const BOND_ORDERS: Opt<string>[] = [['1', 'Single'], ['2', 'Double'], ['3', 'Triple'], ['1.5', 'Aromatic'], ['4', 'Quadruple'], ['0.5', 'Partial (transition state)']];
 const BOND_STYLES: Opt<Bond['display']>[] = [['solid', 'Plain'], ['wedge', 'Wedge'], ['hashWedge', 'Hashed wedge'], ['hash', 'Hashed'], ['bold', 'Bold'], ['dash', 'Dashed'], ['wavy', 'Wavy'], ['dative', 'Dative (arrow to the acceptor)']];
 const DOUBLE_POS: Opt<Bond['dpos']>[] = [['auto', 'Automatic'], ['left', 'Left'], ['center', 'Centred'], ['right', 'Right']];
 
@@ -105,6 +106,8 @@ export class StylePanel {
   tables: TableHooks | null = null;
   /** Reaction step commands (set up by the app). */
   reaction: ReactionHooks | null = null;
+  /** Energy diagrams (set up by the app): open the window, or redraw with some settings changed. */
+  energy: { edit(shapeId: number): void; restyle(shapeId: number, patch: Partial<EnergyData>): void } | null = null;
   /** Tie captions to the structure nearest each (Tie to Structure). */
   tie: ((captionIds: number[]) => void) | null = null;
 
@@ -146,14 +149,18 @@ export class StylePanel {
     if (bond) this.bondControls(bond);
     if (several) this.structureControls(selAtoms, selBonds);
     if (arrows.length) this.arrowControls(arrows);
-    if (shapes.length) this.shapeControls(shapes);
+    // an energy diagram is a frame drawn from its numbers: its own section, not a rectangle's
+    const diagram = all.length === 1 && all[0].energy ? all[0] : undefined;
+    if (diagram) this.energyControls(diagram);
+    else if (shapes.length) this.shapeControls(shapes);
     if (rings.length) this.shapeControls(rings, rings.length > 1 ? `${rings.length} ring fills` : 'Ring fill');
     if (pictures.length) this.pictureControls(pictures);
     if (tables.length) this.tableControls(tables[0]);
     if (caps.length) this.captionControls(caps);
     if (centres.length || dbls.length) this.stereoControls(centres, dbls);
     const boxes = shapes.filter((x) => x.kind === 'rect' || x.kind === 'oval' || x.kind === 'geo');
-    if (boxes.length === 1 && all.length === 1 && !caps.length && !arrows.length && !s.atoms.size) this.frameControls(boxes[0]);
+    if (diagram) { /* the diagram keeps its own frame fitted */ }
+    else if (boxes.length === 1 && all.length === 1 && !caps.length && !arrows.length && !s.atoms.size) this.frameControls(boxes[0]);
     else if (!this.section.hidden && this.frames) {
       const row = document.createElement('div');
       row.className = 'style-buttons';
@@ -358,6 +365,31 @@ export class StylePanel {
     if (br) this.select('Bracket', BRACKETS, br.bracket ?? 'square', (v) => set('Bracket shape', (x) => x.kind === 'bracket', () => ({ bracket: v })));
     // ring fills have no line, so no line colour (it only stood in for a fill colour that wasn't set)
     if (shapes.some((x) => x.kind !== 'ring')) this.color(f?.filled && f.fillColor ? 'Line colour' : 'Colour', s.color, (v) => set('Colour', (x) => x.kind !== 'ring', () => ({ color: v })));
+  }
+
+  // ------------------------------------------------------------------ energy diagrams
+
+  /** An energy diagram: how it is drawn, and the window with its numbers. */
+  private energyControls(sh: Shape): void {
+    const d = sh.energy!;
+    this.heading('Energy diagram');
+    const set = (patch: Partial<EnergyData>) => this.energy?.restyle(sh.id, patch);
+    this.select('Joined by', [['levels', 'Levels and dashed lines'], ['curve', 'A smooth curve']], d.style, (v) => set({ style: v as EnergyData['style'] }));
+    this.check('Show the energies', d.values, (v) => set({ values: v }));
+    this.check('Axis and its titles', d.axis, (v) => set({ axis: v }));
+    this.check('Mark the largest barrier', d.barrier, (v) => set({ barrier: v }), 'A double arrow from the lowest point up to the highest after it, on each pathway');
+    this.number('Decimal places', d.digits, 1, 0, 3, (v) => set({ digits: v }));
+    const n = Math.max(...d.paths.map((p) => p.points.length));
+    this.note(`${d.paths.length === 1 ? 'One pathway' : `${d.paths.length} pathways`} through ${n} species. Change the names and energies in the window; drag a corner to resize it. Anything you draw inside stays when it is redrawn.`);
+    const row = document.createElement('div');
+    row.className = 'style-buttons';
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = 'Edit Energy Diagram…';
+    b.title = 'Change the species, energies and pathways (or double-click the diagram)';
+    b.addEventListener('click', () => this.energy?.edit(sh.id));
+    row.append(b);
+    this.body.append(row);
   }
 
   // ------------------------------------------------------------------ frames
@@ -679,7 +711,8 @@ export class StylePanel {
       return;
     }
     this.heading('Bond');
-    this.select('Order', BOND_ORDERS, String(b.order), (v) => set('Bond order', { order: Number(v) }));
+    // a partial bond is drawn dashed (until another style is chosen)
+    this.select('Order', BOND_ORDERS, String(b.order), (v) => set('Bond order', { order: Number(v), ...(Number(v) === 0.5 && b.display === 'solid' ? { display: 'dash' as const } : {}) }));
     this.select('Style', BOND_STYLES, b.display, (v) => set('Bond style', { display: v }));
     if (b.order === 2) this.select('Second line', DOUBLE_POS, b.dpos, (v) => set('Double bond position', { dpos: v }));
     this.color('Colour', b.color, (v) => set('Bond colour', { color: v }));

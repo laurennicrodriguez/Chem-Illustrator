@@ -49,6 +49,9 @@ export const COMMAND_ICONS: Record<string, string> = {
   'rotate-dialog': svg('<path d="M18.5 12.5a6.5 6.5 0 1 1-2.2-5"/><path d="M17 3.5v4h-4"/>' + txt(11.5, 15.5, '°', 9)),
   // ---- structure
   'clean-up': svg(hex(10.5, 13, 7) + '<path d="M19 2.5l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z" fill="currentColor" stroke="none"/>'),
+  // ---- scheme: a cycle of four species with arrows round it; levels over a reaction coordinate
+  'catalytic-cycle': svg('<path d="M12 4.5a7.5 7.5 0 0 1 7.5 7.5"/><path d="M19.5 12a7.5 7.5 0 0 1-7.5 7.5"/><path d="M12 19.5a7.5 7.5 0 0 1-7.5-7.5"/><path d="M4.5 12a7.5 7.5 0 0 1 7.5-7.5"/><path d="M17.6 9.6l1.9 2.4 1.9-2.4M14.4 17.6l-2.4 1.9 2.4 1.9M6.4 14.4l-1.9-2.4-1.9 2.4M9.6 6.4l2.4-1.9-2.4-1.9"/>'),
+  'energy-diagram': svg('<path d="M3 3v18h18" stroke-width="1.2"/><path d="M5 17h3M10 8h3M15 13h3M20 18.5h1.5" stroke-width="2.2"/><path d="M8 17l2-9M13 8l2 5M18 13l2 5.5" stroke-dasharray="1.5 1.5" stroke-width="1"/>'),
   'add-frame': svg('<rect x="2.5" y="3.5" width="19" height="17" rx="1"/>' + hex(12, 12, 5)),
   'fill-rings': svg(hex(12, 12.5, 8.5, filled(0.4))),
   highlight: svg('<path d="M3 15.5L13 5.5" stroke-width="7" stroke-opacity="0.35"/><path d="M3 15.5L13 5.5"/><path d="M13 5.5l7 4"/>'),

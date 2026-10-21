@@ -133,7 +133,7 @@ const ATOM_ACTIONS: Record<string, string> = {
 };
 
 const BOND_ACTIONS: Record<string, string> = {
-  single: 'Single', double: 'Double', triple: 'Triple', dashed: 'Dashed', 'dashed-double': 'Dashed double',
+  single: 'Single', double: 'Double', triple: 'Triple', dashed: 'Dashed', partial: 'Partial (transition state)', 'dashed-double': 'Dashed double',
   bold: 'Bold', 'bold-double': 'Bold double', wavy: 'Wavy', wedge: 'Wedge (again to reverse)',
   'hash-wedge': 'Hashed wedge (again to reverse)', hashed: 'Hashed', left: 'Double bond: second line left',
   center: 'Double bond: centred', right: 'Double bond: second line right', properties: 'Bond properties (Style panel)',
@@ -171,7 +171,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   'reaction-down': 'Reaction: arrow and copy below', 'reaction-up': 'Reaction: arrow and copy above',
   'fixed-length': 'Fixed bond lengths on or off', 'fixed-angles': 'Fixed angles on or off',
   join: 'Join two selected atoms or bonds',
-  'clean-up': 'Clean Up Structure', 'aromatic-circles': 'Aromatic rings: circle or double bonds', 'periodic-table': 'Periodic Table…', 'chain-ends': 'Show terminal methyls (or hide)', 'methyls-ch3': 'Terminal methyls as CH3', 'methyls-me': 'Terminal methyls as Me', highlight: 'Highlight', 'remove-highlight': 'Remove Highlight', 'smooth-highlight': 'Smooth Highlight (on or off)', 'centre-highlight': 'Centre Highlight on Double Bonds (on or off)', 'fill-rings': 'Fill Rings', 'ring-shadow': 'Ring Fill Shadow (on or off)', 'contract-label': 'Contract Label…', 'expand-label': 'Expand Label', 'hapto-bond': 'Bond Metal to Ring (η)', 'split-hapto': 'Split Hapto Bond', 'define-nickname': 'Define Nickname…', 'delete-nickname': 'Delete Nickname…', 'save-template': 'Save as Template…', 'delete-template': 'Delete Template…', 'explicit-h': 'H atoms: hide or draw', 'clean-up-reaction': 'Clean Up Reaction', 'clean-up-arrow': 'Clean Up Arrow', 'command-search': 'Search Commands…', print: 'Print…', 'arrange-scheme': 'Arrange Scheme…', 'animate-reaction': 'Animate Reaction…', 'animate-step': 'Animate This Step…', 'number-compounds': 'Number Compounds…', 'scheme-settings': 'Scheme Settings…', 'add-id-label': 'Add ID Label', 'lock-structures': 'Lock structures (Slides)', 'add-caption': 'Add Caption', 'bring-front': 'Bring Bond to Front', 'send-back': 'Send Bond to Back', 'show-roles': 'Show reaction roles on or off', 'check-structure': 'Check Structure (next warning)', 'stereo-labels': 'Show stereo labels',
+  'clean-up': 'Clean Up Structure', 'aromatic-circles': 'Aromatic rings: circle or double bonds', 'periodic-table': 'Periodic Table…', 'chain-ends': 'Show terminal methyls (or hide)', 'methyls-ch3': 'Terminal methyls as CH3', 'methyls-me': 'Terminal methyls as Me', highlight: 'Highlight', 'remove-highlight': 'Remove Highlight', 'smooth-highlight': 'Smooth Highlight (on or off)', 'centre-highlight': 'Centre Highlight on Double Bonds (on or off)', 'fill-rings': 'Fill Rings', 'ring-shadow': 'Ring Fill Shadow (on or off)', 'contract-label': 'Contract Label…', 'expand-label': 'Expand Label', 'hapto-bond': 'Bond Metal to Ring (η)', 'split-hapto': 'Split Hapto Bond', 'define-nickname': 'Define Nickname…', 'delete-nickname': 'Delete Nickname…', 'save-template': 'Save as Template…', 'delete-template': 'Delete Template…', 'explicit-h': 'H atoms: hide or draw', 'clean-up-reaction': 'Clean Up Reaction', 'clean-up-arrow': 'Clean Up Arrow', 'command-search': 'Search Commands…', print: 'Print…', 'arrange-scheme': 'Arrange Scheme…', 'catalytic-cycle': 'Catalytic Cycle…', 'energy-diagram': 'Energy Diagram…', 'ts-brackets': 'Transition State Brackets ‡', 'edit-energy': 'Edit Energy Diagram…', 'animate-reaction': 'Animate Reaction…', 'animate-step': 'Animate This Step…', 'number-compounds': 'Number Compounds…', 'scheme-settings': 'Scheme Settings…', 'add-id-label': 'Add ID Label', 'lock-structures': 'Lock structures (Slides)', 'add-caption': 'Add Caption', 'bring-front': 'Bring Bond to Front', 'send-back': 'Send Bond to Back', 'show-roles': 'Show reaction roles on or off', 'check-structure': 'Check Structure (next warning)', 'stereo-labels': 'Show stereo labels',
   'name-to-structure': 'Name to Structure…',
   'zoom-in': 'Zoom in', 'zoom-out': 'Zoom out', 'zoom-fit': 'Fit the drawing in the window', 'zoom-actual': 'Actual size',
   hotkeys: 'Hotkeys…', 'typing-spelling': 'Typing and Spelling…', 'mode-colours': 'Mode Colours…', 'edit-palettes': 'Colour Palettes…', preferences: 'Preferences…',
@@ -285,7 +285,7 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
   },
   bond: {
     ...verbs('bond', {
-      '1': 'single', '2': 'double', '3': 'triple', d: 'dashed', D: 'dashed-double', b: 'bold', B: 'bold-double',
+      '1': 'single', '2': 'double', '3': 'triple', d: 'dashed', p: 'partial', D: 'dashed-double', b: 'bold', B: 'bold-double',
       y: 'wavy', w: 'wedge', h: 'hash-wedge', H: 'hashed', l: 'left', c: 'center', r: 'right',
       '/': 'properties', '?': 'properties', g: 'select', Delete: 'delete', Backspace: 'delete',
     }),

@@ -35,6 +35,7 @@ export const ICONS: Record<string, string> = {
   'bond-hash': svg('<g stroke-width="1.3"><line x1="5" y1="15.5" x2="7.5" y2="18"/><line x1="8" y1="12.5" x2="10.5" y2="15"/><line x1="11" y1="9.5" x2="13.5" y2="12"/><line x1="14" y1="6.5" x2="16.5" y2="9"/><line x1="17" y1="3.5" x2="19.5" y2="6"/></g>'),
   'bond-bold': svg('<line x1="5" y1="18" x2="19" y2="6" stroke-width="4" stroke-linecap="butt"/>'),
   'bond-dash': svg('<line x1="5" y1="18" x2="19" y2="6" stroke-dasharray="2 2.2"/>'),
+  'bond-partial': svg('<line x1="4" y1="19" x2="15" y2="9" stroke-dasharray="2 2.2"/><path d="M18 3v8M15.5 5h5M15.5 8.5h5" stroke-width="1.2"/>'),
   'own-template-add': svg('<polygon points="12,3 19,7 19,15 12,19 5,15 5,7" stroke-dasharray="2 2"/><path d="M12 8v7M8.5 11.5h7"/>'),
   fragment: svg('<polyline points="3,16 7.5,11 12,16 16.5,11 21,14"/><line x1="12.5" y1="3" x2="9" y2="21" stroke-dasharray="2 2"/>'),
   element: svg('<rect x="3" y="4" width="5" height="5"/><rect x="3" y="9" width="5" height="5"/><rect x="8" y="9" width="5" height="5"/><rect x="16" y="4" width="5" height="5"/><rect x="16" y="9" width="5" height="5"/><rect x="8" y="16" width="8" height="4"/>'),

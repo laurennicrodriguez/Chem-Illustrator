@@ -77,6 +77,7 @@ If several atoms are selected and you point at one of them, a label key labels t
 |---|---|---|---|
 | `1` | Single | `d` | Dashed |
 | `2` | Double | Shift+D | Dashed double |
+| `p` | Partial bond (transition state) | | |
 | `3` | Triple | `b` | Bold |
 | `w` | Wedge (again to reverse) | Shift+B | Bold double |
 | `h` | Hashed wedge (again to reverse) | `y` | Wavy |

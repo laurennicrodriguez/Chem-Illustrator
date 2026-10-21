@@ -5,11 +5,23 @@
 import { Vec, Rect } from './geom';
 import { DocStyle, ACS_1996 } from './style';
 import { arrowPoints, gluePoint } from './objects';
+import type { EnergyData } from './design/energy';
 import { isMetal, isMetalLabel, lowestValence } from './chem/elements';
 import { NICKNAMES } from './chem/labels';
 
 /** 'dative' is a coordinate bond, drawn as an arrow from the donor (a1) to the acceptor (a2). */
 export type BondDisplay = 'solid' | 'wedge' | 'hashWedge' | 'hash' | 'bold' | 'dash' | 'wavy' | 'dative';
+
+/** A partial bond (order 0.5), one forming or breaking in a transition state: drawn dashed. */
+export const PARTIAL = 0.5;
+
+/**
+ * A bond that leaves both atoms' valences as they were: a dative bond (H3N→BF3) or a partial
+ * bond in a transition state. Neither counts toward hydrogens, and neither goes to RDKit.
+ */
+export function outsideValence(b: Pick<Bond, 'display' | 'order'>): boolean {
+  return b.display === 'dative' || b.order === PARTIAL;
+}
 export type DoublePos = 'auto' | 'left' | 'right' | 'center';
 
 export interface Atom {
@@ -433,6 +445,8 @@ export interface StepRoles {
   below: string[];
   /** The + signs between starting materials or products. */
   plusses?: string[];
+  /** Written inside a catalytic cycle beside the arrow: the step's name (oxidative addition, OA). */
+  inside?: string[];
   /** Chosen by hand: Clean Up Reaction keeps these instead of working the roles out again. */
   manual?: boolean;
 }
@@ -537,6 +551,8 @@ export interface Shape {
    * shrinks and moves as they change). Moving or resizing the frame by hand stops it following.
    */
   frame?: Frame;
+  /** An energy diagram's numbers and look, kept on the invisible frame round its drawing (design/energy.ts). */
+  energy?: EnergyData;
 }
 
 /**
@@ -1390,7 +1406,7 @@ export class Doc {
     let own = 0, toMetal = 0;
     for (const bid of this.adj.get(atomId) ?? []) {
       const b = this.bonds.get(bid)!;
-      if (b.display === 'dative') continue;
+      if (outsideValence(b)) continue;
       if (isMetalAtom(this.atoms.get(b.a1 === atomId ? b.a2 : b.a1))) toMetal += b.order;
       else own += b.order;
     }
@@ -1405,8 +1421,8 @@ export class Doc {
     let s = 0;
     for (const bid of this.adj.get(atomId) ?? []) {
       const b = this.bonds.get(bid)!;
-      // a dative bond doesn't change either atom's hydrogens (H3N→BF3)
-      if (b.display === 'dative') continue;
+      // a dative bond doesn't change either atom's hydrogens (H3N→BF3), nor does a partial bond
+      if (outsideValence(b)) continue;
       s += b.order;
     }
     return s;
