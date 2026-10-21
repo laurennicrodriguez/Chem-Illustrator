@@ -20,7 +20,7 @@ import { pubchemName, pubchemCid, pubchemCompound, compoundPage } from './chem/p
 import { pubchemHtml, pubchemRuns, type PubChemState } from './ui/pubchem-panel';
 import { paragraphPages } from './document/doc-file';
 import { reviewAuthor, setReviewAuthor } from './document/revisions';
-import { analysisHtml, analysisRuns, withRepeats, polymerHtml, descriptorRuns, DEFAULT_DESCRIPTORS, type RepeatUnit } from './ui/analysis-panel';
+import { analysisHtml, electronsHtml, analysisRuns, withRepeats, polymerHtml, descriptorRuns, DEFAULT_DESCRIPTORS, type RepeatUnit } from './ui/analysis-panel';
 import { attachedAtoms, attachWhereItIs, defaultGap, nearestStructure, placeAttached, structureSig } from './editor/attached';
 import { repeatGroups, lipDirection } from './chem/polymer';
 import { rGroupsOf, substituted, rowNumbers, parseRows, rGroupCells, type RowMass } from './chem/rgroup';
@@ -80,6 +80,7 @@ import { installFontList, registerBundledFonts, bundledFaces } from './fonts';
 import { applyRibbonIcons } from './ui/ribbon-icons';
 import { TEMPLATES, Template, templateById, ownTemplates, setOwnTemplates, templateFromAtoms } from './chem/templates';
 import { centreEnd } from './chem/hapto';
+import { countElectrons } from './chem/electrons';
 import { addNicknames, removeNickname, isBuiltInNickname } from './chem/labels';
 import { selectedGroup } from './chem/group-smiles';
 import { templateIcon } from './ui/template-icons';
@@ -3995,7 +3996,7 @@ async function runAnalysis(force: boolean): Promise<void> {
   }
   if (seq !== analysisSeq) return;
   lastAnalysis = { results, frags };
-  panel.innerHTML = results.map((r, i) => polymers[i] ? polymerHtml(r, polymers[i]!) : analysisHtml(r, i, adductSel.value, { stereo: r.error ? '' : stereoSummary(frags[i]), unknown: exports[i].unknownLabels, pubchem: r.error || !r.smiles ? '' : pubchemHtml(pubchemStates.get(r.smiles) ?? { kind: 'idle' }, i) })).join('');
+  panel.innerHTML = results.map((r, i) => polymers[i] ? polymerHtml(r, polymers[i]!) : analysisHtml(r, i, adductSel.value, { stereo: r.error ? '' : stereoSummary(frags[i]), unknown: exports[i].unknownLabels, electrons: electronsHtml(countElectrons(doc, frags[i].values().next().value!)), pubchem: r.error || !r.smiles ? '' : pubchemHtml(pubchemStates.get(r.smiles) ?? { kind: 'idle' }, i) })).join('');
   updatePanels();
 }
 
