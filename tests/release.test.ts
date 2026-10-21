@@ -2,7 +2,7 @@
 
 import { describe, it, expect } from 'vitest';
 // @ts-expect-error a plain JavaScript script
-import { manifest, installers, portableZip } from '../scripts/release.mjs';
+import { manifest, installers, portableZip, newestTag } from '../scripts/release.mjs';
 import { unzipSync, strFromU8 } from 'fflate';
 
 describe('releases', () => {
@@ -40,5 +40,12 @@ describe('releases', () => {
     const all = installers('0.1.91');
     const m = manifest('0.1.91', '', { [all.windows.files[0].as]: 'WIN' });
     expect(Object.keys(m.platforms)).toEqual(['windows-x86_64', 'windows-x86_64-nsis']);
+  });
+
+  it('marks the highest version latest, whichever finished publishing last', () => {
+    expect(newestTag(['v0.1.91', 'v0.1.92', 'v0.1.90'])).toBe('v0.1.92');
+    expect(newestTag(['v0.1.99', 'v0.1.100'])).toBe('v0.1.100');
+    expect(newestTag(['v0.2.0', 'v0.1.150', 'v1.0.0-beta', 'nightly'])).toBe('v0.2.0');
+    expect(newestTag([])).toBe(null);
   });
 });
