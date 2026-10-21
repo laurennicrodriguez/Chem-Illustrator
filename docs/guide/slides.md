@@ -81,6 +81,10 @@ To put a drawing beside your slides while you work, see Split View in [Files and
 - **Crop:** **Insert** tab ▸ **Crop**, then drag the black handles and press Esc. The panel also takes exact crop amounts for each side, and **Uncrop** shows the whole picture again.
 - **Spectra:** in the Windows app, a spectrum copied from MestReNova pastes as lines and text, so it stays sharp when you zoom. A spectrum saved as an .emf file works the same way with **Picture** or by dropping the file.
 
+### Videos
+
+An animated reaction can go on a slide as a video: in Slides mode, open **Scheme ▸ Animate Reaction…** and click **Put on Slide** (see [Animating a reaction](drawing.md#animating-a-reaction)). The video shows a play mark while you edit, plays on its own and loops in the slide show, and is saved into the .pptx as a PowerPoint video that starts by itself. On slides that have their own animations, PowerPoint plays it when clicked.
+
 ### Frames, rounded corners and shadows
 
 Select a picture, then use the **Style** panel: **Frame style**, frame line and colour, **Rounded corners (%)** and **Shadow** (None, Soft or Hard). For a ready-made look, right-click the picture and choose **Picture Style**. These looks are kept when you save to PowerPoint.

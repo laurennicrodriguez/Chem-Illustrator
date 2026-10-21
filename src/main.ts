@@ -956,6 +956,8 @@ const animateDialog = new AnimateDialog({
   setMorph: (arrow, m) => doc.edit('Animation Pairing', () => doc.updateArrow(arrow, { morph: m })),
   name: () => ws.active.name,
   flash: (msg) => flash(msg, 6000),
+  onSlide: () => ws.active.mode === 'slides',
+  putOnSlide: (v) => placeClip(v),
 });
 /** The reaction arrow picked (for Animate This Step), if one is. */
 const pickedReactionArrow = (): number | undefined => [...editor.sel.arrows].find((id) => { const r = doc.arrows.get(id); return !!r && isReactionArrow(r); });
@@ -1763,6 +1765,28 @@ function placePicture(bytes: Uint8Array, mime: string, at: { x: number; y: numbe
   editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set([made!.id]) };
   editor.changed();
   if (mime === 'image/tiff' || mime === 'image/x-wmf' || !showableSrc(made!.src ?? '')) flash('This kind of picture shows as a grey box here for now; it is kept, and saved with the file.', 8000);
+}
+
+/**
+ * An animation from Scheme > Animate Reaction on the slide: a video (its first frame shown while
+ * editing) or an animated GIF, in the middle of the slide, at most 80% of it.
+ */
+function placeClip(v: { mp4?: Uint8Array; still: Uint8Array; gif?: Uint8Array; w: number; h: number }): void {
+  finishTyping();
+  const deck = deckNow();
+  const room = deck ? { w: deck.size.w * 0.8, h: deck.size.h * 0.8 } : { w: (renderer.width * 0.8) / renderer.view.scale, h: (renderer.height * 0.8) / renderer.view.scale };
+  const k = Math.min(0.75, room.w / v.w, room.h / v.h);
+  const w = v.w * k, h = v.h * k;
+  const c = deck ? { x: deck.size.w / 2, y: deck.size.h / 2 } : pasteCentre();
+  let made: Shape | null = null;
+  doc.edit('Put Animation on Slide', () => {
+    made = doc.addShape({
+      kind: 'picture', x1: c.x - w / 2, y1: c.y - h / 2, x2: c.x + w / 2, y2: c.y + h / 2, px: { w: v.w, h: v.h },
+      ...(v.mp4 ? { src: dataUrl(v.still, 'image/png'), video: { src: dataUrl(v.mp4, 'video/mp4') } } : { src: dataUrl(v.gif!, 'image/gif') }),
+    });
+  });
+  editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set([made!.id]) };
+  editor.changed();
 }
 
 /** Insert > Crop Picture: the selected picture's handles cut its edges off until Esc or a click elsewhere. */
