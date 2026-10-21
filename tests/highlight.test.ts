@@ -110,9 +110,13 @@ describe('straight and smooth highlights', () => {
 
 describe('highlights centred on double bonds', () => {
   it('takes a ring in by half the gap on every side', () => {
-    // a hexagon of side 20 round the origin
+    // a hexagon of side 20 round the origin, each side moved 2 toward the middle
     const ring = Array.from({ length: 6 }, (_, i) => ({ x: 20 * Math.cos((i * Math.PI) / 3), y: 20 * Math.sin((i * Math.PI) / 3) }));
-    const spots = centredSpots([ring], [], 2);
+    const lines = ring.map((p, i) => {
+      const q = ring[(i + 1) % 6], m = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 }, l = Math.hypot(m.x, m.y);
+      return { p, q, shift: { x: (-m.x / l) * 2, y: (-m.y / l) * 2 } };
+    });
+    const spots = centredSpots(lines);
     for (const a of ring) {
       const s = spots.get(a)!;
       // each corner moves toward the middle by d / cos 30°, so each side moves in by d
@@ -122,16 +126,42 @@ describe('highlights centred on double bonds', () => {
 
   it('moves a double bond outside a ring toward its second line, and leaves other atoms', () => {
     const p = { x: 0, y: 0 }, q = { x: 20, y: 0 }, r = { x: 30, y: 10 };
-    const spots = centredSpots([], [{ p, q, side: { x: 0, y: 1 } }], 1.5);
-    expect(spots.get(p)).toEqual({ x: 0, y: 1.5 });
-    expect(spots.get(q)).toEqual({ x: 20, y: 1.5 });
+    const spots = centredSpots([{ p, q, shift: { x: 0, y: 1.5 } }, { p: q, q: r, shift: { x: 0, y: 0 } }]);
+    expect(spots.get(p)!.x).toBeCloseTo(0, 6);
+    expect(spots.get(p)!.y).toBeCloseTo(1.5, 6);
     expect(spots.has(r)).toBe(false);
+  });
+
+  it('keeps a single bond between double bonds on its own line, at the bonds\' angles', () => {
+    // a zigzag triene: = - = with 120° corners, the double bonds' second lines below
+    const L = 20, c = Math.cos(Math.PI / 6) * L, h = L / 2;
+    const at = [{ x: 0, y: 0 }, { x: c, y: -h }, { x: 2 * c, y: 0 }, { x: 3 * c, y: -h }];
+    const below = (p: { x: number; y: number }, q: { x: number; y: number }, d: number) => {
+      const l = Math.hypot(q.x - p.x, q.y - p.y);
+      let n = { x: -(q.y - p.y) / l, y: (q.x - p.x) / l };
+      if (n.y < 0) n = { x: -n.x, y: -n.y };
+      return { x: n.x * d, y: n.y * d };
+    };
+    const spots = centredSpots([
+      { p: at[0], q: at[1], shift: below(at[0], at[1], 1.5) },
+      { p: at[1], q: at[2], shift: { x: 0, y: 0 } },
+      { p: at[2], q: at[3], shift: below(at[2], at[3], 1.5) },
+    ]);
+    const s1 = spots.get(at[1])!, s2 = spots.get(at[2])!;
+    // the single bond's ends stay on its own line…
+    const u = { x: at[2].x - at[1].x, y: at[2].y - at[1].y };
+    const off = (s: { x: number; y: number }) => ((s.x - at[1].x) * u.y - (s.y - at[1].y) * u.x) / Math.hypot(u.x, u.y);
+    expect(off(s1)).toBeCloseTo(0, 6);
+    expect(off(s2)).toBeCloseTo(0, 6);
+    // …and each double bond's band runs parallel to it, 1.5 off
+    const s0 = spots.get(at[0])!;
+    expect(Math.atan2(s1.y - s0.y, s1.x - s0.x)).toBeCloseTo(Math.atan2(at[1].y - at[0].y, at[1].x - at[0].x), 6);
   });
 });
 
 describe('highlight look', () => {
   it('fills in the usual look, and keeps only what differs from it', () => {
-    expect(fullStyle(undefined)).toEqual({ shape: 'round', ends: 'round', size: 1, fit: true, shadow: false, soft: false, smooth: false, centre: false });
+    expect(fullStyle(undefined)).toMatchObject({ shape: 'round', ends: 'round', size: 1, fit: true, shadow: false, soft: false, smooth: false, centre: false, fill: 'solid', line: 'none', pattern: 'none' });
     expect(tidyStyle({ shape: 'round', size: 1.5, shadow: false })).toEqual({ size: 1.5 });
     expect(tidyStyle({ fit: true })).toBeUndefined();
   });

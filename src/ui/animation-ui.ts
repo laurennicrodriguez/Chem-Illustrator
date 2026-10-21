@@ -57,13 +57,35 @@ const ICONS = {
 
 const ENTRANCE = '#2e8b57', EXIT = '#c0392b';
 
-/** The parts of the slide the selection touches. */
+/**
+ * The parts of the slide the selection touches. A selection of highlighted atoms and bonds only
+ * (as Select Highlight, or clicking a highlight in the Animation pane, makes) is their
+ * highlights, not the whole structure, so a highlight can be animated on its own.
+ */
 function selectedParts(parts: Part[], sel: Selection): Part[] {
-  const hit = (p: Part) =>
+  const hl = parts.filter((p) => p.kind === 'highlight');
+  const onlyLit = (sel.atoms.size || sel.bonds.size) && !sel.captions.size && !sel.arrows.size && !sel.shapes.size
+    && [...sel.atoms].every((id) => hl.some((p) => p.sel.atoms.has(id))) && [...sel.bonds].every((id) => hl.some((p) => p.sel.bonds.has(id)));
+  if (onlyLit) {
+    const lit = hl.filter((p) => [...sel.bonds].some((id) => p.sel.bonds.has(id)) || [...sel.atoms].some((id) => p.sel.atoms.has(id)));
+    // a whole structure selected is the structure, even when all of it is highlighted (unless
+    // its highlight was picked as such)
+    const same = (a: Set<number>, b: Set<number>) => a.size === b.size && [...a].every((x) => b.has(x));
+    const picked = highlightPick && same(highlightPick.atoms, sel.atoms) && same(highlightPick.bonds, sel.bonds);
+    const whole = parts.some((p) => p.kind === 'drawing' && p.sel.atoms.size && [...p.sel.atoms].every((id) => sel.atoms.has(id)));
+    if (lit.length && (picked || !whole)) return lit;
+  }
+  const hit = (p: Part) => p.kind !== 'highlight' && (
     [...sel.atoms].some((id) => p.sel.atoms.has(id)) || [...sel.captions].some((id) => p.sel.captions.has(id))
-    || [...sel.arrows].some((id) => p.sel.arrows.has(id)) || [...sel.shapes].some((id) => p.sel.shapes.has(id));
+    || [...sel.arrows].some((id) => p.sel.arrows.has(id)) || [...sel.shapes].some((id) => p.sel.shapes.has(id)));
   return parts.filter(hit);
 }
+
+/** The highlight last picked as an object (Select Highlight, or the Animation pane's list): its atoms and bonds. */
+let highlightPick: Selection | null = null;
+
+/** Remember that this selection is a highlight picked as an object (to animate it rather than its structure). */
+export function pickHighlight(sel: Selection): void { highlightPick = sel; }
 
 export class AnimationUI {
   /** The animation picked in the pane (its place in the slide's list), or null. */
@@ -197,7 +219,45 @@ export class AnimationUI {
     const note = document.createElement('p');
     note.className = 'muted small';
     note.textContent = 'Numbers are clicks. Drag a row, or use ▲ ▼, to change the order.';
-    section.replaceChildren(h, bar, this.list, note);
+    // the slide's highlights, to pick one as an object (it is part of its structure on the slide)
+    this.highlights = document.createElement('div');
+    this.highlights.className = 'an-highlights';
+    section.replaceChildren(h, bar, this.list, this.highlights, note);
+  }
+
+  private highlights!: HTMLDivElement;
+
+  /** The slide's highlights as buttons: one selects that highlight, ready for an effect. */
+  private refreshHighlights(): void {
+    const doc = this.hooks.doc();
+    const hl = slideParts(doc).filter((p) => p.kind === 'highlight');
+    if (!hl.length) { this.highlights.replaceChildren(); return; }
+    const head = document.createElement('div');
+    head.className = 'muted small';
+    head.textContent = 'Highlights (pick one, then an effect):';
+    this.highlights.replaceChildren(head, ...hl.map((p) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'an-hl';
+      const x = p.sel.atoms.size ? doc.atoms.get(Math.min(...p.sel.atoms)) : doc.bonds.get(Math.min(...p.sel.bonds));
+      const dot = document.createElement('span');
+      dot.className = 'tb-look-dot';
+      dot.style.background = x?.highlight ?? '#ccc';
+      b.append(dot, partName(doc, p));
+      b.title = 'Select this highlight on its own, to animate it as a shape';
+      b.addEventListener('click', () => this.selectHighlight(p.sel));
+      return b;
+    }));
+  }
+
+  /** Select a highlight as an object of its own (Select Highlight, or the pane's list). */
+  selectHighlight(sel: Selection): void {
+    const pick: Selection = { atoms: new Set(sel.atoms), bonds: new Set(sel.bonds), captions: new Set(), arrows: new Set(), shapes: new Set() };
+    pickHighlight(pick);
+    this.picked = null;
+    this.hooks.select(pick);
+    this.paneKey = '';
+    this.refresh();
   }
 
   // ---------------------------------------------------------------- state
@@ -391,6 +451,7 @@ export class AnimationUI {
     const a = this.anims()[i];
     const doc = this.hooks.doc();
     const part = a ? partOf(slideParts(doc), a.target) : undefined;
+    if (part?.kind === 'highlight') pickHighlight(part.sel);
     if (part) this.hooks.select(part.sel);
     this.paneKey = '';
     this.refresh();
@@ -418,6 +479,7 @@ export class AnimationUI {
     const key = `${this.slideIndex()}|${doc.version}|${JSON.stringify(anims)}|${cur.join(',')}`;
     if (key === this.paneKey) return;
     this.paneKey = key;
+    this.refreshHighlights();
     if (!anims.length) {
       const p = document.createElement('p');
       p.className = 'muted';

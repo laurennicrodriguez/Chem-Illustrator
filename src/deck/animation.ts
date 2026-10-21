@@ -79,8 +79,11 @@ export const SIDES: { id: Side; name: string }[] = [
   { id: 'top', name: 'From Top' },
 ];
 
-/** What an animation moves: any object of the part (a structure is named by one of its atoms). */
-export interface AnimTarget { kind: 'caption' | 'shape' | 'atom' | 'arrow'; id: number }
+/**
+ * What an animation moves: any object of the part (a structure is named by one of its atoms). A
+ * highlight is named by one of its atoms (or, with `bond`, one of its bonds when it has no atoms).
+ */
+export interface AnimTarget { kind: 'caption' | 'shape' | 'atom' | 'arrow' | 'highlight'; id: number; bond?: boolean }
 
 export interface Anim {
   target: AnimTarget;
@@ -114,13 +117,18 @@ export function animName(a: Anim): string {
 
 /** One thing on a slide that moves as a whole (and is one shape or picture in PowerPoint). */
 export interface Part {
-  kind: 'text' | 'picture' | 'shape' | 'table' | 'connector' | 'drawing';
+  kind: 'text' | 'picture' | 'shape' | 'table' | 'connector' | 'drawing' | 'highlight';
+  /** A highlight: its highlighted atoms and bonds (its structure is a part of its own). */
   sel: Selection;
 }
 
 const sel = (p: Partial<Selection>): Selection => ({ atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set(), ...p });
 
-/** A slide's parts, back to front, as they are saved for PowerPoint. */
+/**
+ * A slide's parts, back to front, as they are saved for PowerPoint. Each highlight on a structure
+ * (each joined run of atoms and bonds of one colour and look) is a part too, just behind its
+ * structure, so it can be animated on its own, as a shape can.
+ */
 export function slideParts(doc: Doc): Part[] {
   const p = splitSlide(doc);
   return [
@@ -128,13 +136,45 @@ export function slideParts(doc: Doc): Part[] {
     ...p.shapes.map((s): Part => ({ kind: 'shape', sel: sel({ shapes: new Set([s.id]) }) })),
     ...p.connectors.map((r): Part => ({ kind: 'connector', sel: sel({ arrows: new Set([r.id]) }) })),
     ...p.tables.map((s): Part => ({ kind: 'table', sel: sel({ shapes: new Set([s.id]) }) })),
-    ...p.drawings.map((s): Part => ({ kind: 'drawing', sel: s })),
+    ...p.drawings.flatMap((s): Part[] => [...highlightParts(doc, s), { kind: 'drawing', sel: s }]),
     ...p.texts.map((c): Part => ({ kind: 'text', sel: sel({ captions: new Set([c.id]) }) })),
   ];
 }
 
+/** The highlights in part of a drawing: each run of highlighted atoms and bonds, joined by highlighted bonds, of one colour and look. */
+export function highlightParts(doc: Doc, within: Selection): Part[] {
+  const look = (x: { highlight?: string; hl?: object }) => (x.highlight ? x.highlight + JSON.stringify(x.hl ?? {}) : null);
+  const parent = new Map<string, string>();
+  const find = (k: string): string => { let r = k; while (parent.get(r) !== r) r = parent.get(r)!; parent.set(k, r); return r; };
+  const node = (k: string) => { if (!parent.has(k)) parent.set(k, k); return k; };
+  const join = (a: string, b: string) => { parent.set(find(node(a)), find(node(b))); };
+  for (const id of within.atoms) { const a = doc.atoms.get(id); if (a && look(a)) node(`a${id}`); }
+  for (const id of within.bonds) {
+    const b = doc.bonds.get(id);
+    const k = b && look(b);
+    if (!b || !k) continue;
+    node(`b${id}`);
+    // a bond joins its atoms when they have its look; else bonds of one look meet at the atom
+    for (const end of [b.a1, b.a2]) {
+      const a = doc.atoms.get(end);
+      join(`b${id}`, a && look(a) === k ? `a${end}` : `e${end}|${k}`);
+    }
+  }
+  const groups = new Map<string, Part>();
+  for (const k of parent.keys()) {
+    if (k[0] === 'e') continue;
+    const r = find(k);
+    let g = groups.get(r);
+    if (!g) groups.set(r, (g = { kind: 'highlight', sel: sel({}) }));
+    (k[0] === 'a' ? g.sel.atoms : g.sel.bonds).add(Number(k.slice(1)));
+  }
+  return [...groups.values()];
+}
+
 export function partHolds(part: Part, t: AnimTarget): boolean {
   const s = part.sel;
+  if ((t.kind === 'highlight') !== (part.kind === 'highlight')) return false;
+  if (t.kind === 'highlight') return t.bond ? s.bonds.has(t.id) : s.atoms.has(t.id);
   return t.kind === 'atom' ? s.atoms.has(t.id) : t.kind === 'caption' ? s.captions.has(t.id) : t.kind === 'shape' ? s.shapes.has(t.id) : s.arrows.has(t.id);
 }
 
@@ -143,10 +183,16 @@ export function partOf(parts: Part[], t: AnimTarget): Part | undefined {
   return parts.find((p) => partHolds(p, t));
 }
 
+/** The structure a highlight is on. */
+export function hostOf(parts: Part[], h: Part): Part | undefined {
+  return parts.find((p) => p.kind === 'drawing' && ([...h.sel.bonds].some((id) => p.sel.bonds.has(id)) || [...h.sel.atoms].some((id) => p.sel.atoms.has(id))));
+}
+
 /** The target that names a part: a structure by its first atom, else its text, shape or arrow. */
 export function targetOf(part: Part): AnimTarget {
   const first = (s: Set<number>) => Math.min(...s);
   const s = part.sel;
+  if (part.kind === 'highlight') return s.atoms.size ? { kind: 'highlight', id: first(s.atoms) } : { kind: 'highlight', id: first(s.bonds), bond: true };
   if (s.atoms.size) return { kind: 'atom', id: first(s.atoms) };
   if (s.captions.size && part.kind === 'text') return { kind: 'caption', id: first(s.captions) };
   if (s.shapes.size) return { kind: 'shape', id: first(s.shapes) };
@@ -173,8 +219,22 @@ export function partName(doc: Doc, part: Part | undefined): string {
       const words = sh?.text ? plainText(sh.text.runs).trim() : '';
       return words ? `Shape: ${words.length > 24 ? words.slice(0, 23) + '…' : words}` : 'Shape';
     }
+    case 'highlight': {
+      const x = s.atoms.size ? doc.atoms.get(Math.min(...s.atoms)) : doc.bonds.get(Math.min(...s.bonds));
+      return `Highlight${x?.highlight ? ` (${colourName(x.highlight)})` : ''}`;
+    }
     case 'drawing': return s.arrows.size ? 'Scheme' : s.atoms.size > 0 && countFragments(doc, s) > 1 ? 'Structures' : s.atoms.size ? 'Structure' : 'Drawing';
   }
+}
+
+/** A colour as a word when it is near one, else as written (#9ED9A8). */
+function colourName(hex: string): string {
+  const v = parseInt(hex.replace('#', ''), 16);
+  const r = (v >> 16) & 255, g = (v >> 8) & 255, b = v & 255;
+  const names: [string, number, number, number][] = [['yellow', 255, 230, 128], ['green', 158, 217, 168], ['blue', 169, 200, 255], ['pink', 242, 167, 195], ['orange', 246, 179, 138], ['teal', 26, 163, 163], ['red', 230, 80, 80], ['purple', 180, 140, 220], ['grey', 190, 190, 190]];
+  let best = '', d = Infinity;
+  for (const [n, R, G, B] of names) { const e = (r - R) ** 2 + (g - G) ** 2 + (b - B) ** 2; if (e < d) { d = e; best = n; } }
+  return d < 2500 ? best : hex.toUpperCase();
 }
 
 function countFragments(doc: Doc, s: Selection): number {

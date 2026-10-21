@@ -10,7 +10,8 @@ import { Toolboxes, lockIcon, sideFolded, commandButton, customizeToolbox, defau
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
 import { Doc, Atom, Caption, Shape, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle } from './model';
 import { Renderer, measureText, forgetTextWidths } from './render/renderer';
-import { Editor, TOOLS } from './editor/editor';
+import { Editor, TOOLS, type HighlightToggle, type Selection } from './editor/editor';
+import { BUILT_IN_LOOKS, type HighlightLookPreset } from './ui/highlight-looks';
 import { selectionBox, POINTS, type Align } from './editor/arrange';
 import { readCdxml, ReadStats } from './io/cdxml';
 import { ChemClient } from './chem/client';
@@ -61,7 +62,7 @@ import { pickSlideTemplate } from './ui/slide-templates';
 import { AnimationUI } from './ui/animation-ui';
 import { SlideComments } from './ui/slide-comments';
 import { writePptx, type PptxOptions } from './io/pptx-write';
-import { EFFECTS, animName, newAnim } from './deck/animation';
+import { EFFECTS, animName, newAnim, highlightParts } from './deck/animation';
 import { SLIDE_TEMPLATES, applyTemplate } from './deck/templates';import { pickTemplate } from './ui/template-gallery';
 import { showContextMenu, topMenuEntry, type MenuItem } from './ui/context-menu';
 import { CommandSearch, uniqueCommands, type CommandItem } from './ui/command-search';
@@ -2626,7 +2627,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'print',
   'help', 'user-guide', 'send-feedback', 'report-problem', 'check-updates']);
 
@@ -2825,6 +2826,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'toolbox-arrange': () => toolboxes.toggle('arrange'),
   'toolbox-templates': () => toolboxes.toggle('templates'),
   'toolbox-colours': () => toolboxes.toggle('colours'),
+  'toolbox-highlight': () => toolboxes.toggle('highlight'),
   'toolbox-custom': () => toolboxes.toggle('custom'),
   // the panel taken out as a toolbox folds up to its title bar; at the right it folds to a strip
   'fold-side': () => toolboxes.setSideCollapsed(ws.active.mode, !sideIsFolded()),
@@ -2838,19 +2840,25 @@ const COMMANDS: Record<string, () => unknown> = {
   },
   'highlight': () => editor.highlight(highlightColour, highlightStyle) ? flash('Highlighted. Change the colour with Highlight in the Style panel.', 5000) : flash('Select the atoms and bonds to highlight.'),
   'remove-highlight': () => editor.highlight(undefined) || flash('Select the atoms and bonds to take the highlight off.'),
-  'smooth-highlight': () => {
-    const r = editor.toggleHighlight('smooth');
-    if (!r) { flash('Select highlighted atoms and bonds first.'); return; }
-    // new highlights take the same look
-    highlightStyle = tidyStyle({ ...highlightStyle, smooth: r === 'on' });
-    flash(r === 'on' ? 'Round highlights smoothed: one even band, with no disc at each atom. Straight highlights are always one band.' : 'Round highlights back to a disc at each atom.', 6000);
+  'smooth-highlight': () => toggleHighlight('smooth', 'Round highlights smoothed: one even band, with no disc at each atom. Straight highlights are always one band.', 'Round highlights back to a disc at each atom.'),
+  'centre-highlight': () => toggleHighlight('centre', 'Highlight centred between the lines of the double bonds (and inside rings drawn with their double bonds inside).', 'Highlight back on the bonds.'),
+  'soft-highlight': () => toggleHighlight('soft', 'Soft edges on. Choose how much fades, and which way, under Soft edges in the Style panel.', 'Sharp edges.'),
+  'shadow-highlight': () => toggleHighlight('shadow', 'Highlight shadow on. Change its colour, direction and blur under Shadow in the Style panel.', 'No highlight shadow.'),
+  'glow-highlight': () => toggleHighlight('glow', 'Glow on. Change its colour and size under Glow in the Style panel.', 'No glow.'),
+  'outline-highlight': () => toggleHighlight('outline', 'Outline only: no fill, a line round the highlight. Change the line under Outline in the Style panel.', 'Filled highlight.'),
+  'highlight-look': () => void chooseHighlightLook(),
+  'select-highlight': () => {
+    // the highlight under the right-click, else those of the selection
+    const all: Selection = { atoms: new Set(doc.atoms.keys()), bonds: new Set(doc.bonds.keys()), captions: new Set(), arrows: new Set(), shapes: new Set() };
+    const parts = highlightParts(doc, all);
+    const hit = parts.filter((p) => (contextBond !== null && p.sel.bonds.has(contextBond)) || [...editor.sel.atoms].some((id) => p.sel.atoms.has(id)) || [...editor.sel.bonds].some((id) => p.sel.bonds.has(id)));
+    if (!hit.length) { flash('Right-click a highlight (or select part of one) first.'); return; }
+    const sel: Selection = { atoms: new Set(hit.flatMap((p) => [...p.sel.atoms])), bonds: new Set(hit.flatMap((p) => [...p.sel.bonds])), captions: new Set(), arrows: new Set(), shapes: new Set() };
+    if (animUi) animUi.selectHighlight(sel); else editor.selectThese(sel);
+    if (ws.active.mode === 'slides') flash('Highlight selected: pick an effect in the Animations tab to animate it on its own.', 5000);
   },
-  'centre-highlight': () => {
-    const r = editor.toggleHighlight('centre');
-    if (!r) { flash('Select highlighted atoms and bonds first.'); return; }
-    highlightStyle = tidyStyle({ ...highlightStyle, centre: r === 'on' });
-    flash(r === 'on' ? 'Highlight centred between the lines of the double bonds (and inside rings drawn with their double bonds inside).' : 'Highlight back on the bonds.', 6000);
-  },
+  'save-highlight-look': () => void saveHighlightLook(),
+  'delete-highlight-look': () => void deleteHighlightLook(),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
   'clean-up-arrow': () => {
     const curved = [...editor.sel.arrows].some((id) => doc.arrows.get(id)?.sweep);
@@ -3258,6 +3266,79 @@ applySplitWidth();
 let highlightColour = '#ffe680';
 /** The look new highlights take: the one last chosen in the Style panel. */
 let highlightStyle: HighlightStyle | undefined;
+/** Your own saved highlight looks (the ready-made ones are BUILT_IN_LOOKS). */
+let ownLooks: HighlightLookPreset[] = [];
+
+/** Turn a highlight setting on or off for the selected highlights; new highlights take the same look. */
+function toggleHighlight(key: HighlightToggle, on: string, off: string): void {
+  const r = editor.toggleHighlight(key);
+  if (!r) { flash('Select highlighted atoms and bonds first.'); return; }
+  const sel = [...editor.sel.atoms].map((id) => doc.atoms.get(id)?.hl).concat([...editor.sel.bonds].map((id) => doc.bonds.get(id)?.hl));
+  highlightStyle = tidyStyle({ ...highlightStyle, ...(sel.find(Boolean) ?? {}) });
+  flash(r === 'on' ? on : off, 6000);
+}
+
+/** Every highlight look: the ready-made ones, then your own. */
+const allLooks = (): HighlightLookPreset[] => [...BUILT_IN_LOOKS, ...ownLooks];
+
+/** Give the selection a look (the selected highlights keep their colour unless the look has its own). */
+function applyHighlightLook(look: HighlightLookPreset): void {
+  // nothing highlighted in the selection yet: highlight it in the last colour used
+  const any = [...editor.sel.atoms].some((id) => doc.atoms.get(id)?.highlight) || [...editor.sel.bonds].some((id) => doc.bonds.get(id)?.highlight);
+  if (!editor.highlightLook(look.colour ?? (any ? undefined : highlightColour), look.style)) { flash('Select the atoms and bonds to give the look to.'); return; }
+  highlightStyle = tidyStyle(look.style);
+  if (look.colour) highlightColour = look.colour;
+}
+
+/** Structure > Highlight Look…: pick a look for the selection. */
+async function chooseHighlightLook(): Promise<void> {
+  const looks = allLooks();
+  const got = await ask('Highlight look', [
+    { name: 'look', label: 'Look', value: '0', options: looks.map((l, i) => ({ value: String(i), label: i >= BUILT_IN_LOOKS.length ? `${l.name} (yours)` : l.name })) },
+  ], { ok: 'Use', note: 'The ready-made looks keep the highlight\'s colour; your own looks have their colour too. Save the look of a highlight you have set up with Structure > Save Highlight Look.' });
+  const look = got && looks[Number(got.look)];
+  if (look) applyHighlightLook(look);
+}
+
+/** The colour and look of the first highlighted atom or bond selected. */
+function selectedHighlight(): { colour: string; style: HighlightStyle } | null {
+  for (const id of editor.sel.bonds) { const b = doc.bonds.get(id); if (b?.highlight) return { colour: b.highlight, style: b.hl ?? {} }; }
+  for (const id of editor.sel.atoms) { const a = doc.atoms.get(id); if (a?.highlight) return { colour: a.highlight, style: a.hl ?? {} }; }
+  return null;
+}
+
+/** Structure > Save Highlight Look…: keep the selected highlight's look under a name. */
+async function saveHighlightLook(): Promise<void> {
+  const h = selectedHighlight();
+  if (!h) { flash('Select a highlight that looks the way you want first.'); return; }
+  const got = await ask('Save highlight look', [
+    { name: 'name', label: 'Name', value: '', placeholder: 'for example Reacting bonds' },
+    { name: 'colour', label: 'Keep its colour too', value: 'true', type: 'checkbox' },
+  ], { ok: 'Save', note: 'It is offered in Structure > Highlight Look, in the Style panel and in the Highlight toolbox, in every drawing.' });
+  const name = got?.name.trim();
+  if (!got || !name) return;
+  const look: HighlightLookPreset = { name, ...(got.colour === 'true' ? { colour: h.colour } : {}), style: tidyStyle(h.style) ?? {} };
+  ownLooks = [...ownLooks.filter((l) => l.name !== name), look];
+  storeSettings();
+  looksChanged();
+  flash(`Saved the look “${name}”.`);
+}
+
+/** Structure > Delete Highlight Look…: forget one of your own looks. */
+async function deleteHighlightLook(): Promise<void> {
+  if (!ownLooks.length) { flash('You have no saved highlight looks yet (Structure > Save Highlight Look).'); return; }
+  const got = await ask('Delete highlight look', [{ name: 'look', label: 'Look', value: ownLooks[0].name, options: ownLooks.map((l) => ({ value: l.name, label: l.name })) }], { ok: 'Delete' });
+  if (!got) return;
+  ownLooks = ownLooks.filter((l) => l.name !== got.look);
+  storeSettings();
+  looksChanged();
+}
+
+/** Show the saved looks again wherever they are offered. */
+function looksChanged(): void {
+  if (toolboxState.places.highlight?.shown || toolboxState.places.colours?.shown) toolboxes.render();
+  stylePanel.refresh(true);
+}
 
 /** Tick the chosen way of writing terminal methyls in the Structure menu. */
 function tickMethylStyle(): void {
@@ -3482,6 +3563,7 @@ function storeSettings(): void {
     skipVersion,
     recentFiles,
     scheme: { ...schemePrefs },
+    highlightLooks: ownLooks,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -3604,6 +3686,7 @@ void loadSettings().then((s) => {
   setReviewAuthor(s.reviewName);
   skipVersion = s.skipVersion;
   recentFiles = s.recentFiles;
+  ownLooks = s.highlightLooks;
   renderRecent();
   setPalettes(s.palettes);
   toolboxState = s.toolboxes;
@@ -4465,7 +4548,7 @@ function drawingMenu(): MenuItem[] {
     { cmd: 'add-frame' },
     ...(atoms ? [{ label: 'Label the Structure', items: [{ cmd: 'add-id-label' }, { cmd: 'add-caption' }, { cmd: 'attach-descriptors' }, null, { cmd: 'number-compounds' }] }] : []),
     { cmd: 'scale' },
-    ...(atoms || shapes.some((x) => x.kind === 'ring') ? [{ label: 'Highlight and Fill', items: [{ cmd: 'highlight' }, { cmd: 'remove-highlight' }, { cmd: 'smooth-highlight' }, { cmd: 'centre-highlight' }, null, { cmd: 'fill-rings' }, { cmd: 'ring-shadow' }] }] : []),
+    ...(atoms || shapes.some((x) => x.kind === 'ring') ? [{ label: 'Highlight and Fill', items: [{ cmd: 'highlight' }, { cmd: 'remove-highlight' }, { cmd: 'highlight-look' }, { cmd: 'select-highlight' }, null, { cmd: 'smooth-highlight' }, { cmd: 'centre-highlight' }, { cmd: 'soft-highlight' }, { cmd: 'outline-highlight' }, { cmd: 'shadow-highlight' }, { cmd: 'glow-highlight' }, { cmd: 'save-highlight-look' }, null, { cmd: 'fill-rings' }, { cmd: 'ring-shadow' }] }] : []),
     { label: 'Align', items: arrange },
     { label: 'Rotate or Flip', items: turn },
     ...(order.length ? [{ label: 'Order', items: order }] : []),
@@ -4584,6 +4667,7 @@ stylePanel.energy = {
 stylePanel.ringFill = () => void command('fill-rings');
 stylePanel.highlightUsed = (c) => { highlightColour = c; };
 stylePanel.highlightStyleUsed = (st) => { highlightStyle = tidyStyle(st); };
+stylePanel.highlightLooks = { list: allLooks, apply: (l) => applyHighlightLook(l), save: () => void saveHighlightLook() };
 
 // ---------------------------------------------------------------- toolboxes (View > Toolboxes)
 
@@ -4649,6 +4733,30 @@ let colourMode: 'line' | 'highlight' | 'fill' = 'line';
 /** The side panel's contents: in the panel at the right, or in the "details" toolbox when taken out. */
 const sideContent = $('#side-content');
 
+/** The highlight looks as buttons: one click gives the selection that look. */
+function looksList(vertical: boolean): HTMLElement {
+  const box = document.createElement('div');
+  box.className = 'tb-looks' + (vertical ? ' vertical' : '');
+  const head = document.createElement('div');
+  head.className = 'tb-heading';
+  head.textContent = 'Looks';
+  box.append(head);
+  for (const look of allLooks()) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tb-look';
+    const dot = document.createElement('span');
+    dot.className = 'tb-look-dot';
+    dot.style.background = look.colour ?? 'transparent';
+    if (!look.colour) dot.classList.add('keeps');
+    b.append(dot, look.name);
+    b.title = `${look.name}${look.colour ? '' : ' (keeps the highlight\'s colour)'}`;
+    b.addEventListener('click', () => { finishTyping(); applyHighlightLook(look); });
+    box.append(b);
+  }
+  return box;
+}
+
 const TOOLBOX_DEFS: ToolboxDef[] = [
   { id: 'main', title: 'Drawing Tools', build: (body) => body.append(toolsNav) },
   {
@@ -4681,13 +4789,16 @@ const TOOLBOX_DEFS: ToolboxDef[] = [
     build: (body, vertical) => {
       const modes = document.createElement('div');
       modes.className = 'tb-modes';
+      // in Highlight mode, the saved looks too
+      const looks = looksList(vertical);
+      looks.hidden = colourMode !== 'highlight';
       for (const [m, label, title] of [['line', 'Colour', 'Colour the lines and text'], ['highlight', 'Highlight', 'A band of colour behind atoms and bonds'], ['fill', 'Fill', 'Fill shapes and ring fills']] as const) {
         const b = document.createElement('button');
         b.type = 'button';
         b.textContent = label;
         b.title = title;
         b.setAttribute('aria-pressed', String(colourMode === m));
-        b.addEventListener('click', () => { colourMode = m; for (const o of modes.children) o.setAttribute('aria-pressed', String(o === b)); });
+        b.addEventListener('click', () => { colourMode = m; for (const o of modes.children) o.setAttribute('aria-pressed', String(o === b)); looks.hidden = m !== 'highlight'; });
         modes.append(b);
       }
       const grid = document.createElement('div');
@@ -4714,8 +4825,15 @@ const TOOLBOX_DEFS: ToolboxDef[] = [
         n.textContent = p.name;
         grid.append(n, ...p.colors.map((c) => swatch(c)));
       }
-      body.append(modes, grid);
+      body.append(modes, grid, looks);
       if (vertical) body.style.maxWidth = '110px';
+    },
+  },
+  {
+    id: 'highlight', title: 'Highlight',
+    build: (body, vertical) => {
+      cmdRow(body, ['highlight', 'remove-highlight', null, ['smooth-highlight', 'Smooth'], ['centre-highlight', 'Centre'], ['soft-highlight', 'Soft'], ['outline-highlight', 'Outline only'], ['shadow-highlight', 'Shadow'], ['glow-highlight', 'Glow'], null, ['save-highlight-look', 'Save look…']]);
+      body.append(looksList(vertical));
     },
   },
   {
@@ -4750,7 +4868,7 @@ const toolboxes = new Toolboxes(TOOLBOX_DEFS, {
 
 /** Tick the shown toolboxes and the lock in the View menu, and show the lock on its button. */
 function tickToolboxes(): void {
-  for (const id of ['main', 'structure', 'arrange', 'templates', 'colours', 'custom'] as ToolboxId[]) $(`[data-cmd="toolbox-${id}"]`)?.setAttribute('aria-checked', String(!!toolboxState.places[id]?.shown));
+  for (const id of ['main', 'structure', 'arrange', 'templates', 'colours', 'highlight', 'custom'] as ToolboxId[]) $(`[data-cmd="toolbox-${id}"]`)?.setAttribute('aria-checked', String(!!toolboxState.places[id]?.shown));
   $('[data-cmd="lock-toolboxes"]')?.setAttribute('aria-checked', String(toolboxState.locked));
   $('[data-cmd="fold-side"]')?.setAttribute('aria-checked', String(sideIsFolded()));
   const lock = $('#btn-lock');

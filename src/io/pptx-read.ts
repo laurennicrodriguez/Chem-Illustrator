@@ -207,6 +207,10 @@ class Reader {
   private spidTargets: Map<number, AnimTarget> | null = null;
   /** …and the PowerPoint shape each of the slide's tables came from (by the table's place in `tables`). */
   private tableSpids = new Map<number, number>();
+  /** The slide's structures (their box tags, where they went and the ids they got)… */
+  private drawn: { box: string; map: (p: Vec) => Vec; from: number; to: number }[] = [];
+  /** …and its highlight pictures, matched to their highlights once the structures are in. */
+  private highlightPics: { spid: number; x: number; y: number; bond: boolean; box: string }[] = [];
 
   constructor(bytes: Uint8Array) {
     this.r = new PackageReader(bytes);
@@ -371,6 +375,8 @@ class Reader {
     const root = s.doc.documentElement;
     this.spidTargets = kids(root, 'timing').length ? new Map() : null;
     this.tableSpids.clear();
+    this.drawn = [];
+    this.highlightPics = [];
     doc.bulk(() => {
       this.tree(s, layout, s.tree, IDENTITY, doc);
       this.placeTables(doc);
@@ -379,6 +385,7 @@ class Reader {
     const warn = (w: string) => this.warnings.add(w);
     const transition = readTransition(root, warn);
     const targets = this.spidTargets;
+    if (targets) this.findHighlights(doc, targets);
     const anims = targets ? readTiming(root, (spid) => targets.get(spid) ?? null, warn) : [];
     this.spidTargets = null;
     const comments = this.comments(path);
@@ -541,6 +548,15 @@ class Reader {
     if (!box) return;
     if (box.rot) this.warnings.add('Rotated pictures and shapes came in unrotated.');
     const tags = this.tagsOf(s.path, kid(el, 'nvPicPr', 'nvPr'));
+    if (tags[TAG.highlight]) {
+      // a highlight's own picture: the structure's drawing has the highlight, so only its animation is wanted
+      const spid = Number(kid(el, 'nvPicPr', 'cNvPr')?.getAttribute('id'));
+      try {
+        const h = JSON.parse(tags[TAG.highlight]);
+        if (Number.isFinite(spid) && Number.isFinite(h.x) && Number.isFinite(h.y)) this.highlightPics.push({ spid, x: h.x, y: h.y, bond: !!h.bond, box: String(h.box ?? '') });
+        return;
+      } catch { /* not ours after all: read it as a picture */ }
+    }
     if (tags[TAG.cdxml] && this.drawing(tags[TAG.cdxml], tags[TAG.box], box, doc)) return;
     const img = this.image(s.path, el);
     if (!img) return;
@@ -611,8 +627,28 @@ class Reader {
       const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, nx = (now.x1 + now.x2) / 2, ny = (now.y1 + now.y2) / 2;
       map = (p) => ({ x: nx + (p.x - cx) * k, y: ny + (p.y - cy) * k });
     }
+    const from = doc.idMark;
     mergeDrawing(doc, src, map);
+    this.drawn.push({ box: boxTag ?? '', map, from, to: doc.idMark });
     return true;
+  }
+
+  /** Each highlight picture's highlight: the highlighted atom (or bond) nearest where it was, in its structure. */
+  private findHighlights(doc: Doc, targets: Map<number, AnimTarget>): void {
+    for (const h of this.highlightPics) {
+      const d = this.drawn.find((x) => x.box === h.box);
+      if (!d) continue;
+      const at = d.map({ x: h.x, y: h.y });
+      let best: AnimTarget | null = null, far = Infinity;
+      const near = (x: number, y: number, t: AnimTarget) => { const r = Math.hypot(x - at.x, y - at.y); if (r < far) { far = r; best = t; } };
+      if (h.bond) {
+        for (const b of doc.bonds.values()) {
+          const p = doc.atoms.get(b.a1), q = doc.atoms.get(b.a2);
+          if (b.highlight && b.id >= d.from && b.id < d.to && p && q) near((p.x + q.x) / 2, (p.y + q.y) / 2, { kind: 'highlight', id: b.id, bond: true });
+        }
+      } else for (const a of doc.atoms.values()) if (a.highlight && a.id >= d.from && a.id < d.to) near(a.x, a.y, { kind: 'highlight', id: a.id });
+      if (best) targets.set(h.spid, best);
+    }
   }
 
   // ---------------------------------------------------------------- shapes and text

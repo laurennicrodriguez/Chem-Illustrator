@@ -348,9 +348,54 @@ export interface HighlightStyle {
    * double bonds inside, midway between the ring and those inner lines) instead of on the bond.
    */
   centre?: boolean;
+  /** Soft edges: how much of the band fades, 0 to 1 of the way in from its edge to its middle. */
+  softAmount?: number;
+  /** Soft edges: fade at the outer edge, along the middle (a hollow band), or both (half each). */
+  softSide?: HighlightSoftSide;
+  /** How see-through the fill and texture are, 0 (solid) to 1 (clear). */
+  transparency?: number;
+  /** One colour, a gradient across, a gradient out from the bonds to the edge, or none (outline or texture only). */
+  fill?: HighlightFill;
+  /** A gradient's second colour ('' for white). */
+  colour2?: string;
+  /** A gradient across: its direction in degrees, 0 left to right, 90 top to bottom. */
+  gradAngle?: number;
+  /** Lines or dots over the fill (or on their own with no fill). */
+  pattern?: Pattern | 'none';
+  /** The texture's colour ('' for a darker shade of the highlight) and spacing in points (0 for the usual). */
+  patternColour?: string;
+  patternSize?: number;
+  /** A line round the highlight's outline. */
+  line?: HighlightLine;
+  /** The outline's colour ('' for a darker shade of the highlight) and width in points. */
+  lineColour?: string;
+  lineWidth?: number;
+  /** The shadow's colour, how dark it is (0 to 1), which way it falls (degrees, 45 down and to the right). */
+  shadowColour?: string;
+  shadowOpacity?: number;
+  shadowAngle?: number;
+  /** How far the shadow falls and how blurred it is, as parts of a bond length (times the highlight's size). */
+  shadowDistance?: number;
+  shadowBlur?: number;
+  /** A soft halo of colour round the outside, as PowerPoint's glow. */
+  glow?: boolean;
+  /** The glow's colour ('' for the highlight's own), how far it reaches (part of a bond length) and how see-through it is. */
+  glowColour?: string;
+  glowSize?: number;
+  glowTransparency?: number;
 }
 
-export const HIGHLIGHT_DEFAULTS: Required<HighlightStyle> = { shape: 'round', ends: 'round', size: 1, fit: true, shadow: false, soft: false, smooth: false, centre: false };
+export type HighlightSoftSide = 'outer' | 'inner' | 'both';
+export type HighlightFill = 'solid' | 'linear' | 'edge' | 'none';
+export type HighlightLine = 'none' | 'solid' | 'dashed' | 'dotted';
+
+export const HIGHLIGHT_DEFAULTS: Required<HighlightStyle> = {
+  shape: 'round', ends: 'round', size: 1, fit: true, shadow: false, soft: false, smooth: false, centre: false,
+  softAmount: 0.5, softSide: 'outer', transparency: 0, fill: 'solid', colour2: '', gradAngle: 0,
+  pattern: 'none', patternColour: '', patternSize: 0, line: 'none', lineColour: '', lineWidth: 0.75,
+  shadowColour: '#000000', shadowOpacity: 0.22, shadowAngle: 45, shadowDistance: 0.07, shadowBlur: 0,
+  glow: false, glowColour: '', glowSize: 0.15, glowTransparency: 0.4,
+};
 
 /** Which side of its structure an attached caption sits on. */
 export type AttachSide = 'below' | 'above' | 'left' | 'right';
@@ -517,6 +562,11 @@ export interface Shape {
    * ring fill's is that of a highlight's shadow).
    */
   shadowSize?: number;
+  /** Design shapes and ring fills: the shadow's colour, how dark it is (0 to 1), which way it falls (degrees, 45 down and to the right) and its blur in points. */
+  shadowColor?: string;
+  shadowOpacity?: number;
+  shadowAngle?: number;
+  shadowBlur?: number;
   bold?: boolean;
   symbol?: string;
   bracket?: 'square' | 'round' | 'curly';
@@ -697,6 +747,11 @@ export class Doc {
   style: DocStyle = { ...ACS_1996 };
   /** Page colour. */
   background = '#ffffff';
+  /**
+   * Draw only the highlights (a highlight animated on its own in a slide show, or saved to
+   * PowerPoint as its own picture behind its structure). Not saved.
+   */
+  onlyHighlights = false;
   /** Set when the drawing came from a CDXML file. */
   source: CdxmlSource | null = null;
   /** Live R/S and E/Z labels from the chemistry engine (not saved, not undone). */

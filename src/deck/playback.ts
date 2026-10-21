@@ -11,28 +11,42 @@ import type { Deck } from './deck';
 import { paintSlide, type SlidePage } from './slide-view';
 import { selectionBox, POINTS } from '../editor/arrange';
 import type { Rect } from '../geom';
-import { buildSteps, partStates, slideParts, partOf, type Anim, type Part, type Step, type Transition, type Side } from './animation';
+import type { Selection } from '../editor/editor';
+import { buildSteps, partStates, slideParts, partOf, hostOf, type Anim, type Part, type Step, type Transition, type Side } from './animation';
 
 const ease = (p: number) => 1 - (1 - p) ** 3;
 
-/** A copy of the slide's drawing with only some of its objects (kept with their ids). */
-function subDoc(doc: Doc, keep: (kind: 'atom' | 'caption' | 'arrow' | 'shape', id: number) => boolean): Doc {
+/**
+ * A copy of the slide's drawing with only some of its objects (kept with their ids), with the
+ * highlights on the atoms and bonds in `strip` taken off.
+ */
+function subDoc(doc: Doc, keep: (kind: 'atom' | 'caption' | 'arrow' | 'shape', id: number) => boolean, strip?: Selection): Doc {
   const c = doc.contents();
   const d = new Doc();
   d.style = doc.style;
   d.background = doc.background;
   d.textStyles = doc.textStyles;
-  const atoms = c.atoms.filter((a) => keep('atom', a.id));
+  const atoms = c.atoms.filter((a) => keep('atom', a.id)).map((a) => (strip?.atoms.has(a.id) ? { ...a, highlight: undefined, hl: undefined } : a));
   const ids = new Set(atoms.map((a) => a.id));
   d.restoreContents({
-    atoms, bonds: c.bonds.filter((b) => ids.has(b.a1) && ids.has(b.a2)),
+    atoms, bonds: c.bonds.filter((b) => ids.has(b.a1) && ids.has(b.a2)).map((b) => (strip?.bonds.has(b.id) ? { ...b, highlight: undefined, hl: undefined } : b)),
     captions: c.captions.filter((x) => keep('caption', x.id)), arrows: c.arrows.filter((x) => keep('arrow', x.id)), shapes: c.shapes.filter((x) => keep('shape', x.id)),
   });
   return d;
 }
 
+/** A highlight on its own: its atoms and bonds (and its bonds' atoms), drawing nothing but the highlight. */
+export function highlightDoc(doc: Doc, h: Selection): Doc {
+  const atoms = new Set(h.atoms);
+  for (const id of h.bonds) { const b = doc.bonds.get(id); if (b) { atoms.add(b.a1); atoms.add(b.a2); } }
+  const others: Selection = { atoms: new Set([...atoms].filter((id) => !h.atoms.has(id))), bonds: new Set([...doc.bonds.keys()].filter((id) => !h.bonds.has(id))), captions: new Set(), arrows: new Set(), shapes: new Set() };
+  const d = subDoc(doc, (kind, id) => kind === 'atom' && atoms.has(id), others);
+  d.onlyHighlights = true;
+  return d;
+}
+
 const inPart = (part: Part, kind: 'atom' | 'caption' | 'arrow' | 'shape', id: number) =>
-  (kind === 'atom' ? part.sel.atoms : kind === 'caption' ? part.sel.captions : kind === 'arrow' ? part.sel.arrows : part.sel.shapes).has(id);
+  part.kind !== 'highlight' && (kind === 'atom' ? part.sel.atoms : kind === 'caption' ? part.sel.captions : kind === 'arrow' ? part.sel.arrows : part.sel.shapes).has(id);
 
 /** One slide, painted ready to play at one size. */
 export class SlideFrames {
@@ -50,15 +64,28 @@ export class SlideFrames {
     })() : [];
     this.anims = live;
     this.steps = buildSteps(live);
-    const moving = [...new Set(live.map((a) => partOf(this.parts, a.target)!))];
-    const still = moving.length ? subDoc(doc, (kind, id) => !moving.some((p) => inPart(p, kind, id))) : doc;
+    const moving = new Set(live.map((a) => partOf(this.parts, a.target)!));
+    // a highlight that moves on its own is drawn under its structure, so the structure comes
+    // off the page too (drawn over the highlight, without it)
+    const lifted = new Set(moving);
+    const strip: Selection = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set() };
+    for (const p of moving) {
+      if (p.kind !== 'highlight') continue;
+      const host = hostOf(this.parts, p);
+      if (host) lifted.add(host);
+      for (const id of p.sel.atoms) strip.atoms.add(id);
+      for (const id of p.sel.bonds) strip.bonds.add(id);
+    }
+    const out = [...lifted];
+    const still = lifted.size ? subDoc(doc, (kind, id) => !out.some((p) => inPart(p, kind, id)), strip) : doc;
     this.at = paintSlide(this.base, w, h, dpr, page, still, fill);
-    for (const part of this.parts.filter((p) => moving.includes(p))) {
+    for (const part of this.parts.filter((p) => lifted.has(p))) {
       const canvas = document.createElement('canvas');
-      const one = subDoc(doc, (kind, id) => inPart(part, kind, id));
+      const one = part.kind === 'highlight' ? highlightDoc(doc, part.sel) : subDoc(doc, (kind, id) => inPart(part, kind, id), strip);
       paintSlide(canvas, w, h, dpr, page, one, null, false);
       const b = selectionBox(doc, part.sel, POINTS) ?? { x1: 0, y1: 0, x2: page.size.w, y2: page.size.h };
-      const pad = 8; // room for frames, shadows and arrowheads
+      // room for frames, shadows, glows and arrowheads
+      const pad = part.kind === 'highlight' ? doc.style.bondLength : 8;
       this.layers.push({ part, canvas, box: { x1: b.x1 - pad, y1: b.y1 - pad, x2: b.x2 + pad, y2: b.y2 + pad } });
     }
   }

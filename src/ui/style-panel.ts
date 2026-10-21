@@ -3,13 +3,14 @@
 // bond (label, charge, atom number; order and style).
 // Anything the drawing tools set automatically can be changed here by hand.
 
-import { Doc, Arrow, Shape, Caption, Atom, Bond, PICTURE_STYLES, type PictureLook, type StepRoles, type Pattern, type AttachSide, type Attachment, type DescriptorKey, type HighlightEnds, type HighlightShape, type HighlightStyle } from '../model';
+import { Doc, Arrow, Shape, Caption, Atom, Bond, PICTURE_STYLES, type PictureLook, type StepRoles, type Pattern, type AttachSide, type Attachment, type DescriptorKey, type HighlightEnds, type HighlightFill, type HighlightLine, type HighlightShape, type HighlightSoftSide, type HighlightStyle } from '../model';
 import { fullStyle, tidyStyle } from '../render/highlight';
+import type { HighlightLookPreset } from './highlight-looks';
 
 export { tidyStyle };
 import { DESCRIPTORS } from './analysis-panel';
 import { COMMON_ADDUCTS } from '../chem/hrms';
-import { PATTERNS, RING_FILL_COLOUR, RING_PATTERN_COLOUR, patternSpacing, ringShadowSize } from '../render/fills';
+import { PATTERNS, RING_FILL_COLOUR, RING_PATTERN_COLOUR, patternSpacing, ringShadowSize, shadowLook } from '../render/fills';
 import type { Role } from '../chem/reaction';
 import { setStereoShown, setStereoText } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
@@ -66,6 +67,12 @@ const BRACKETS: Opt<NonNullable<Shape['bracket']>>[] = [['square', 'Square [ ]']
 const VALIGN: Opt<NonNullable<Shape['textValign']>>[] = [['top', 'Top'], ['middle', 'Middle'], ['bottom', 'Bottom']];
 const HL_SHAPES: Opt<HighlightShape>[] = [['round', 'Round (discs and bands)'], ['straight', 'Straight (sharp corners, discs round labels)']];
 const HL_ENDS: Opt<HighlightEnds>[] = [['round', 'Round'], ['square', 'Square'], ['pointed', 'Pointed']];
+const HL_FILLS: Opt<HighlightFill>[] = [['solid', 'One colour'], ['linear', 'Gradient across'], ['edge', 'Gradient (bonds to edge)'], ['none', 'None (outline or texture only)']];
+const HL_LINES: Opt<HighlightLine>[] = [['none', 'None'], ['solid', 'Solid'], ['dashed', 'Dashed'], ['dotted', 'Dotted']];
+const HL_SOFT_SIDES: Opt<HighlightSoftSide>[] = [['outer', 'At the outer edge'], ['inner', 'Inside (along the middle)'], ['both', 'Both (half each)']];
+const SHADOW_DIRS: Opt<string>[] = [['45', 'Down and right'], ['90', 'Down'], ['135', 'Down and left'], ['0', 'Right'], ['180', 'Left'], ['-45', 'Up and right'], ['-90', 'Up'], ['-135', 'Up and left']];
+/** The Style panel's folding groups that are open. */
+const OPEN_GROUPS = new Set<string>();
 const SIDES: Opt<AttachSide>[] = [['below', 'Below'], ['above', 'Above'], ['left', 'Left'], ['right', 'Right']];
 const JUSTIFY: Opt<Caption['justify']>[] = [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']];
 const TABLE_LINES: Opt<TableData['lines']>[] = [['acs', 'ACS style (rules above and below the headings, and at the end)'], ['grid', 'Every cell boxed'], ['none', 'None']];
@@ -96,6 +103,8 @@ export class StylePanel {
   highlightUsed: (colour: string) => void = () => {};
   /** The look last chosen for highlights (new highlights take it). */
   highlightStyleUsed: (style: HighlightStyle) => void = () => {};
+  /** Highlight looks (set up by the app): the ready-made and saved ones, giving the selection one, saving one. */
+  highlightLooks: { list(): HighlightLookPreset[]; apply(look: HighlightLookPreset): void; save(): void } = { list: () => [], apply: () => {}, save: () => {} };
   /** Fill the rings in the selection (set up by the app). */
   ringFill: (() => void) | null = null;
   /** Make a picture's white background see-through (set up by the app). */
@@ -114,7 +123,8 @@ export class StylePanel {
   constructor(private section: HTMLElement, private body: HTMLElement, private doc: Doc, private sel: () => Selection, private changed: () => void) {}
 
   /** Redraw the panel for the current selection, keeping the focus on the same control. */
-  refresh(): void {
+  refresh(force = false): void {
+    if (force) this.key = '';
     const s = this.sel();
     const tp = this.tables?.part();
     const key = `${this.doc.version}|${this.doc.stereo?.version}|${tp ? JSON.stringify(tp) : ''}|${[...s.arrows].join(',')}|${[...s.shapes].join(',')}|${[...s.captions].join(',')}|${[...s.atoms].join(',')}|${[...s.bonds].join(',')}`;
@@ -339,16 +349,22 @@ export class StylePanel {
           'Run the lines or dots up to the bonds and under the double bonds; untick to keep them clear of the bonds and labels');
       }
     }
-    const ringFill = any((x) => x.kind === 'ring');
-    if (ringFill) {
-      // a drop shadow under the ring, as a highlight's shadow (with or without a highlight)
-      const isRing = (x: Shape) => x.kind === 'ring';
-      this.check('Shadow', !!ringFill.shadow, (v) => set('Ring fill shadow', isRing, () => ({ shadow: v || undefined })), 'A drop shadow down and to the right of the ring');
-      if (ringFill.shadow) this.number('Shadow size (pt)', round(ringShadowSize(ringFill, this.doc.style.bondLength)), 0.25, 0, 50, (v) => set('Shadow size', isRing, () => ({ shadowSize: v })), 'How far the shadow sticks out');
+    // ring fills and design shapes: a drop shadow, with its colour, darkness, direction and blur folded away
+    const shaded = (x: Shape) => x.kind === 'ring' || x.kind === 'geo';
+    const sh = any(shaded);
+    if (sh) {
+      const dist = (x: Shape) => (x.kind === 'ring' ? ringShadowSize(x, this.doc.style.bondLength) : x.shadowSize ?? Math.max(2, 0.04 * Math.min(Math.abs(x.x2 - x.x1), Math.abs(x.y2 - x.y1))));
+      const look = shadowLook(sh, dist(sh));
+      this.group('Shadow', sh.shadow ? `${Math.round(look.opacity * 100)}%${look.blur ? ', blurred' : ''}` : 'off', () => {
+        this.check('Shadow', !!sh.shadow, (v) => set(sh.kind === 'ring' ? 'Ring fill shadow' : 'Shadow', shaded, () => ({ shadow: v || undefined })), 'A drop shadow, down and to the right unless you choose another way');
+        if (sh.shadow) this.shadowRows({ ...look }, 'pt', (p) => set('Shadow', shaded, () => ({
+          ...(p.colour !== undefined ? { shadowColor: p.colour === '#000000' ? undefined : p.colour } : {}), ...(p.opacity !== undefined ? { shadowOpacity: p.opacity } : {}),
+          ...(p.angle !== undefined ? { shadowAngle: p.angle === 45 ? undefined : p.angle } : {}), ...(p.distance !== undefined ? { shadowSize: p.distance } : {}), ...(p.blur !== undefined ? { shadowBlur: p.blur || undefined } : {}),
+        })));
+      });
     }
     if (geo) {
       this.number('Outline (pt)', round(geo.lineWidth ?? (geo.bold ? lw * 2.5 : lw)), 0.25, 0, 50, (v) => set('Outline width', isGeo, () => ({ lineWidth: v, bold: undefined })), '0 for no outline');
-      this.check('Shadow', !!geo.shadow, (v) => set('Shadow', isGeo, () => ({ shadow: v || undefined })));
       this.select('Text across', JUSTIFY, geo.textAlign ?? 'center', (v) => set('Text alignment', isGeo, () => ({ textAlign: v === 'center' ? undefined : v })));
       this.select('Text up and down', VALIGN, geo.textValign ?? 'middle', (v) => set('Text alignment', isGeo, () => ({ textValign: v === 'middle' ? undefined : v })));
       this.note('Double-click the shape to type in it.');
@@ -721,7 +737,11 @@ export class StylePanel {
     this.highlightControls([], [b]);
   }
 
-  /** How the highlight on these atoms and bonds is drawn: shape, smooth or ends, centring, size, round labels, shadow, soft edges. */
+  /**
+   * How the highlight on these atoms and bonds is drawn: a saved look, its shape, smooth or
+   * ends and size, then folded groups for placement, fill and texture, outline, soft edges,
+   * shadow and glow (each saying in a word or two how it is set while folded).
+   */
   private highlightControls(atoms: Atom[], bonds: Bond[]): void {
     const lit = [...atoms, ...bonds].filter((x) => x.highlight);
     if (!lit.length) return;
@@ -733,19 +753,121 @@ export class StylePanel {
       });
       this.highlightStyleUsed({ ...st, ...patch });
     };
+    const pct = (x: number) => Math.round(x * 100);
+    const looks = this.highlightLooks.list();
+    if (looks.length) {
+      this.select<string>('Look', [['', 'Choose a look…'], ...looks.map((l, i): Opt<string> => [String(i), l.name])], '', (v) => { if (v !== '') this.highlightLooks.apply(looks[Number(v)]); });
+    }
     this.select<HighlightShape>('Highlight shape', HL_SHAPES, st.shape, (v) => set('Highlight shape', { shape: v }));
     // straight highlights are always one even band; round ones can have a disc on each atom
     if (st.shape === 'round') this.check('Smooth outline', st.smooth, (v) => set(v ? 'Smooth highlight' : 'Highlight with discs', { smooth: v }),
       'One even band along the bonds, with no disc bulging out at each atom (Structure > Smooth Highlight).');
     else this.select<HighlightEnds>('Highlight ends', HL_ENDS, st.ends, (v) => set('Highlight ends', { ends: v }));
-    this.check('Centre on double bonds', st.centre, (v) => set(v ? 'Centre highlight on double bonds' : 'Highlight on the bonds', { centre: v }),
-      'Run the highlight midway between a double bond\'s two lines, and round a ring midway between the ring and its inner double-bond lines (Structure > Centre Highlight on Double Bonds).');
-    this.number('Highlight size (%)', Math.round(st.size * 100), 10, 20, 400, (v) => set('Highlight size', { size: v / 100 }),
+    this.number('Highlight size (%)', pct(st.size), 10, 20, 400, (v) => set('Highlight size', { size: v / 100 }),
       '100% is the usual size; larger for a bolder highlight.');
-    this.check('Grow round atom labels', st.fit, (v) => set(v ? 'Highlight round labels' : 'Highlight not round labels', { fit: v }),
-      'Make the highlight under a labelled atom (Me, OTBS, CO2Et) big enough to hold its whole label.');
-    this.check('Shadow', st.shadow, (v) => set(v ? 'Highlight shadow' : 'No highlight shadow', { shadow: v }));
-    this.check('Soft edges', st.soft, (v) => set(v ? 'Soft highlight' : 'Sharp highlight', { soft: v }), 'Fade the highlight out at its edges.');
+
+    this.group('Placement', [st.centre && 'centred', !st.fit && 'labels not held'].filter(Boolean).join(', ') || 'on the bonds', () => {
+      this.check('Centre on double bonds', st.centre, (v) => set(v ? 'Centre highlight on double bonds' : 'Highlight on the bonds', { centre: v }),
+        'Run the highlight midway between a double bond\'s two lines, and round a ring midway between the ring and its inner double-bond lines (Structure > Centre Highlight on Double Bonds).');
+      this.check('Grow round atom labels', st.fit, (v) => set(v ? 'Highlight round labels' : 'Highlight not round labels', { fit: v }),
+        'Make the highlight under a labelled atom (Me, OTBS, CO2Et) big enough to hold its whole label.');
+    });
+
+    const fillName = HL_FILLS.find(([v]) => v === st.fill)![1].split(' (')[0];
+    this.group('Fill and texture', [fillName, st.transparency > 0 && `${pct(st.transparency)}% see-through`, st.pattern !== 'none' && PATTERN_OPTS.find(([v]) => v === st.pattern)?.[1].split(' (')[0].toLowerCase()].filter(Boolean).join(', '), () => {
+      this.select<HighlightFill>('Fill', HL_FILLS, st.fill, (v) => set('Highlight fill', { fill: v }));
+      if (st.fill === 'linear' || st.fill === 'edge') {
+        this.color(st.fill === 'edge' ? 'Colour at the edge' : 'Second colour', st.colour2 || undefined, (v) => set('Highlight gradient colour', { colour2: v ?? '' }), 'White', '#ffffff');
+        if (st.fill === 'linear') {
+          const dirs = GRAD_DIRS.filter(([v]) => v !== 'radial');
+          this.select<string>('Direction', dirs.some(([v]) => v === String(st.gradAngle)) ? dirs : [...dirs, [String(st.gradAngle), `${st.gradAngle}°`]], String(st.gradAngle), (v) => set('Highlight gradient direction', { gradAngle: Number(v) }));
+        }
+      }
+      this.number('See-through (%)', pct(st.transparency), 5, 0, 100, (v) => set('Highlight transparency', { transparency: v / 100 }), 'How much shows through the fill and texture: 0 is solid');
+      this.select<string>('Texture', PATTERN_OPTS, st.pattern, (v) => set('Highlight texture', { pattern: v as HighlightStyle['pattern'] }));
+      if (st.pattern !== 'none') {
+        this.color('Texture colour', st.patternColour || undefined, (v) => set('Highlight texture colour', { patternColour: v ?? '' }), 'A darker shade', '#808080');
+        this.number('Texture spacing (pt)', st.patternSize, 0.25, 0, 40, (v) => set('Highlight texture spacing', { patternSize: v }), 'How far apart the lines or dots are: 0 for the usual spacing');
+      }
+    });
+
+    this.group('Outline', st.line === 'none' ? 'none' : HL_LINES.find(([v]) => v === st.line)![1].toLowerCase(), () => {
+      this.select<HighlightLine>('Line round it', HL_LINES, st.line, (v) => set('Highlight outline', { line: v }));
+      if (st.line !== 'none') {
+        this.color('Line colour', st.lineColour || undefined, (v) => set('Highlight outline colour', { lineColour: v ?? '' }), 'A darker shade', '#808080');
+        this.number('Line width (pt)', st.lineWidth, 0.25, 0.25, 10, (v) => set('Highlight outline width', { lineWidth: v }));
+      }
+      if (st.fill !== 'none') this.note('For an outline on its own, set Fill to None (Structure > Outline-Only Highlight).');
+    });
+
+    this.group('Soft edges', st.soft ? `${pct(st.softAmount)}%, ${HL_SOFT_SIDES.find(([v]) => v === st.softSide)![1].split(' (')[0].toLowerCase()}` : 'off', () => {
+      this.check('Soft edges', st.soft, (v) => set(v ? 'Soft highlight' : 'Sharp highlight', { soft: v }), 'Fade the highlight out instead of a sharp edge (Structure > Soft Highlight Edges).');
+      if (st.soft) {
+        this.number('How much fades (%)', pct(st.softAmount), 5, 5, 100, (v) => set('Soft edge amount', { softAmount: v / 100 }),
+          'How much of the band fades, measured from its edge in to its middle: 25% fades only the outer quarter');
+        this.select<HighlightSoftSide>('Fades', HL_SOFT_SIDES, st.softSide, (v) => set('Soft edge side', { softSide: v }));
+      }
+    });
+
+    this.group('Shadow', st.shadow ? `${pct(st.shadowOpacity)}%${st.shadowBlur > 0 ? ', blurred' : ''}` : 'off', () => {
+      this.check('Shadow', st.shadow, (v) => set(v ? 'Highlight shadow' : 'No highlight shadow', { shadow: v }), 'A drop shadow under the highlight (Structure > Highlight Shadow).');
+      if (st.shadow) this.shadowRows(
+        { colour: st.shadowColour, opacity: st.shadowOpacity, angle: st.shadowAngle, distance: pct(st.shadowDistance), blur: pct(st.shadowBlur) }, '% of a bond',
+        (p) => set('Highlight shadow', {
+          ...(p.colour !== undefined ? { shadowColour: p.colour } : {}), ...(p.opacity !== undefined ? { shadowOpacity: p.opacity } : {}), ...(p.angle !== undefined ? { shadowAngle: p.angle } : {}),
+          ...(p.distance !== undefined ? { shadowDistance: p.distance / 100 } : {}), ...(p.blur !== undefined ? { shadowBlur: p.blur / 100 } : {}),
+        }));
+    });
+
+    this.group('Glow', st.glow ? `${pct(st.glowSize)}%` : 'off', () => {
+      this.check('Glow', st.glow, (v) => set(v ? 'Highlight glow' : 'No highlight glow', { glow: v }), 'A soft halo of colour round the outside (Structure > Highlight Glow).');
+      if (st.glow) {
+        this.color('Glow colour', st.glowColour || undefined, (v) => set('Glow colour', { glowColour: v ?? '' }), 'The highlight\'s', '#ffe680');
+        this.number('Glow size (% of a bond)', pct(st.glowSize), 1, 1, 200, (v) => set('Glow size', { glowSize: v / 100 }));
+        this.number('Glow see-through (%)', pct(st.glowTransparency), 5, 0, 95, (v) => set('Glow transparency', { glowTransparency: v / 100 }));
+      }
+    });
+
+    const row = document.createElement('div');
+    row.className = 'style-buttons';
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.textContent = 'Save look…';
+    save.title = 'Keep this highlight\'s look (and colour) under a name, to use again in any drawing (Structure > Save Highlight Look)';
+    save.addEventListener('click', () => this.highlightLooks.save());
+    row.append(save);
+    this.body.append(row);
+  }
+
+  /** A drop shadow's colour, darkness, direction, distance and blur (distance and blur in `unit`). */
+  private shadowRows(now: { colour: string; opacity: number; angle: number; distance: number; blur: number }, unit: string, on: (patch: Partial<typeof now>) => void): void {
+    this.color('Shadow colour', now.colour === '#000000' ? undefined : now.colour, (v) => on({ colour: v ?? '#000000' }), 'Black', '#000000');
+    this.number('Darkness (%)', Math.round(now.opacity * 100), 5, 0, 100, (v) => on({ opacity: v / 100 }));
+    const a = Math.round(now.angle);
+    this.select<string>('Falls', SHADOW_DIRS.some(([v]) => Number(v) === a) ? SHADOW_DIRS : [...SHADOW_DIRS, [String(a), `${a}°`]], String(a), (v) => on({ angle: Number(v) }));
+    this.number(`Distance (${unit})`, round(now.distance), unit === 'pt' ? 0.25 : 1, 0, unit === 'pt' ? 50 : 200, (v) => on({ distance: v }));
+    this.number(`Blur (${unit})`, round(now.blur), unit === 'pt' ? 0.25 : 1, 0, unit === 'pt' ? 50 : 200, (v) => on({ blur: v }), 'How far the shadow fades out: 0 for a sharp shadow');
+  }
+
+  /** Settings that fold away under a title, with a word or two saying how they are set. */
+  private group(title: string, state: string, fill: () => void): void {
+    const d = document.createElement('details');
+    d.className = 'style-group';
+    d.open = OPEN_GROUPS.has(title);
+    const sum = document.createElement('summary');
+    const name = document.createElement('span');
+    name.textContent = title;
+    const st = document.createElement('span');
+    st.className = 'style-group-state';
+    st.textContent = state;
+    sum.append(name, st);
+    d.append(sum);
+    // which groups are open is remembered (for the rest of the session), so a setting stays in view
+    d.addEventListener('toggle', () => { if (d.open) OPEN_GROUPS.add(title); else OPEN_GROUPS.delete(title); });
+    const body = this.body;
+    this.body = d;
+    try { fill(); } finally { this.body = body; }
+    body.append(d);
   }
 
   /** Several atoms and bonds: their colour (labels and lines together). */
