@@ -3,7 +3,7 @@
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createRequire } from 'node:module';
-import { isotopePattern, elementalAnalysis, ionCounts, formulaCounts, joback } from '../src/chem/analysis';
+import { isotopePattern, elementalAnalysis, ionCounts, formulaCounts, joback, ISOTOPES } from '../src/chem/analysis';
 import { parseAdduct } from '../src/chem/hrms';
 import { panelProps, massFragments, atomicWeight } from '../src/chem/props';
 
@@ -42,7 +42,31 @@ describe('isotope pattern', () => {
   it('divides by the charge and knows when it can not help', () => {
     const p = isotopePattern(counts('C2H6'), 2)!;
     expect(p[0].mz).toBeCloseTo((30.04695 - 2 * 0.000548579909065) / 2, 4);
-    expect(isotopePattern(counts('C2H6Pt'), 1)).toBeNull();
+    // technetium has no stable isotope, so no natural pattern
+    expect(isotopePattern(counts('C2H6Tc'), 1)).toBeNull();
+  });
+
+  it('knows the transition metals', () => {
+    for (const el of ['Sc', 'Ti', 'V', 'Cr', 'Mn', 'Co', 'Ni', 'Zn', 'Y', 'Zr', 'Nb', 'Mo', 'Ru', 'Rh', 'Cd', 'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg']) {
+      expect(ISOTOPES[el], el).toBeTruthy();
+    }
+    // each element's abundances add up to 100 %
+    for (const [el, iso] of Object.entries(ISOTOPES)) {
+      expect(iso.reduce((t, [, a]) => t + a, 0), el).toBeCloseTo(100, 1);
+    }
+    // Wilkinson's catalyst, RhCl(PPh3)3: rhodium has one isotope, so the pattern is chlorine's
+    // (and carbon's) and starts at 103Rh + 35Cl
+    const rh = isotopePattern(counts('C54H45ClP3Rh'), 1)!;
+    expect(rh[0].mz).toBeCloseTo(12 * 54 + 1.00782503223 * 45 + 34.968852682 + 30.97376199842 * 3 + 102.905498 - 0.000548579909065, 3);
+    // iridium: 191Ir and 193Ir, 37.3 : 62.7
+    const ir = isotopePattern(counts('Ir'), 1)!;
+    expect(ir[0].rel).toBeCloseTo((100 * 37.3) / 62.7, 1);
+    expect(ir).toHaveLength(2);
+    expect(ir[1].rel).toBeCloseTo(100, 5);
+    // ruthenium's seven isotopes, tallest at 102
+    const ru = isotopePattern(counts('Ru'), 1)!;
+    expect(ru.map((p) => Math.round(p.mz))).toEqual([96, 98, 99, 100, 101, 102, 104]);
+    expect(Math.round(ru.find((p) => p.rel === 100)!.mz)).toBe(102);
   });
 
   it('builds adduct ions and refuses losses that are not there', () => {

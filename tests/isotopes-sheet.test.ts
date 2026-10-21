@@ -88,7 +88,7 @@ describe('isotope peaks in formulas', () => {
 
 describe('telling formulas from SMILES', () => {
   it('reads formulas', () => {
-    for (const f of ['C10H12N2O', 'CO2', 'CH2Cl2', 'C8H11N4O2+', 'C4H12N2 2+', 'H2O', 'C6H5Br']) expect(readsAsFormula(f)).toBe(true);
+    for (const f of ['C10H12N2O', 'CO2', 'CH2Cl2', 'C8H11N4O2+', 'C4H12N2 2+', 'H2O', 'C6H5Br', 'C54H45ClP3Rh', 'C43H72Cl2P2Ru']) expect(readsAsFormula(f)).toBe(true);
   });
   it('leaves SMILES as SMILES', () => {
     for (const s of ['CCO', 'C1CCCCC1', 'c1ccccc1', 'CN', 'CC(=O)O', 'O=C=O', 'C[N+](C)(C)C', 'Xx2']) expect(readsAsFormula(s)).toBe(false);
