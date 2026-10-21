@@ -249,6 +249,22 @@ describe('formulas of metal complexes (the chemistry engine)', () => {
     expect(hCount(doc)).toBe(15 + 8 + 3 + 3 + 12);
   });
 
+  it('CO labels on a metal are carbon monoxide, not formyl: (benzene)Cr(CO)3', () => {
+    const doc = new Doc();
+    const L = doc.style.bondLength;
+    doc.edit('a', () => {
+      const ring: number[] = [];
+      for (let i = 0; i < 6; i++) ring.push(doc.addAtom(Math.cos(i * Math.PI / 3) * L, Math.sin(i * Math.PI / 3) * L - 30).id);
+      for (let i = 0; i < 6; i++) doc.addBond(ring[i], ring[(i + 1) % 6], i % 2 ? 1 : 2);
+      const cr = doc.addAtom(0, 0, 24).id;
+      bondHapto(doc, cr, ring);
+      for (const [i, label] of ['CO', 'OC', 'CO'].entries()) doc.addBond(cr, doc.addAtom(14 * Math.cos(i + 1), 14 * Math.sin(i + 1), 6, { label }).id, 1, i === 2 ? 'dative' : 'solid');
+    });
+    // six ring hydrogens and none on the carbonyls
+    expect(hCount(doc)).toBe(6);
+    expect(formula(doc)).toContain('[O+]');
+  });
+
   it('a drawn phosphine and a bridging chloride keep theirs too', () => {
     const doc = new Doc();
     doc.edit('a', () => {
