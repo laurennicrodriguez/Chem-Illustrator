@@ -31,9 +31,16 @@ Draw an arrow between two structures and a **+** box appears above and below it.
 
 ## Colour that means something
 
-Fill rings with a colour, a gradient, hatching or dots, and pick out parts of a structure with round, diamond or square highlights, soft-edged or with a shadow. Fills and highlights move with their atoms.
+Fill rings with a colour, a gradient, hatching or dots (patterns can be see-through over a colour), add a drop shadow, and pick out parts of a structure with smooth round, diamond or square highlights, soft-edged or with a shadow. Fills and highlights move with their atoms and come along when you copy a structure.
 
 ![Estrone with each ring filled differently (gradient, hatching, dots, solid), and a kinase inhibitor with its parts highlighted in round, diamond and square shapes](docs/images/ring-fills.png)
+
+## Metals and mechanisms
+
+| Metal complexes, from templates | Lone pairs where you want them |
+|---|---|
+| ![Placing an arene chromium tricarbonyl from the Metal complexes palette, typing Cr and CO onto it, and moving the benzene ring: the η⁶ bond follows the ring's middle, and the side panel shows C9H6CrO3](docs/images/metal-complex.gif) | ![Adding lone pairs to acetate's oxygens by pressing on each oxygen and sweeping round it to aim the pair](docs/images/lone-pairs.gif) |
+| Coordination geometries, metallocenes, piano stools and 26 ligands are a click away. Hapto (η) bonds go to the middle of a ring or π-bond and follow it, and formulas count metal carbonyls, Cp and phosphines the way a chemist would. | Press on an atom with the lone pair, radical or circled charge tool and drag round it to put the symbol exactly where it should go. Charges keep clear of the bonds beside them. |
 
 ## It knows the chemistry
 

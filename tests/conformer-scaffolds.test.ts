@@ -50,7 +50,7 @@ class Builder {
     const f = fs!.find((x) => x.join === join);
     expect(f, `a ${join} fusion of ${id} onto ring ${r} (have ${fs!.map((x) => x.join).join(', ')})`).toBeTruthy();
     let ids: number[] = [];
-    this.doc.bulk(() => { ids = placeTemplate(this.doc, t, { origin: { x: 0, y: 0 }, scale: f!.len, angle: 0, mirror: false, pts: f!.pts }, { existing: f!.existing, noMerge: true }); });
+    this.doc.bulk(() => { ids = placeTemplate(this.doc, t, { origin: { x: 0, y: 0 }, scale: f!.len, angle: 0, mirror: false, pts: f!.pts }, { existing: f!.existing, move: f!.move, noMerge: true }); });
     this.rings.push({ ids: ringOnly(t, ids), shared: [a, b] });
     this.joins.push(f!.join);
     return this;

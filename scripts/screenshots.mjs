@@ -184,10 +184,10 @@ const url = process.argv[2] ?? 'http://localhost:5173/';
     a.command('fill-rings');
     const rings = [...doc.shapes.values()].filter((s) => s.kind === 'ring').sort((p, q) => p.x1 - q.x1);
     const looks = [
-      { filled: true, fill: 'gradient', fillColor: '#5b8def', fill2: '#e8f0ff', gradAngle: 90 },
-      { filled: false, pattern: 'hatch', patternColor: '#d9534f', patternSize: 2.2 },
+      { filled: true, fill: 'gradient', fillColor: '#5b8def', fill2: '#e8f0ff', gradAngle: 90, shadow: true },
+      { filled: true, fillColor: '#fbe0df', pattern: 'hatch', patternColor: '#d9534f', patternSize: 2.2, patternTransparency: 0.45 },
       { filled: true, fillColor: '#fde9b8', pattern: 'dots', patternColor: '#b8860b', patternSize: 2.2 },
-      { filled: true, fillColor: '#cdebd3' },
+      { filled: true, fillColor: '#cdebd3', shadow: true },
     ];
     doc.edit('Ring looks', () => rings.forEach((r, i) => doc.updateShape(r.id, looks[i % looks.length])));
     a.editor.clearSelection();

@@ -205,6 +205,8 @@ interface TemplateChoice {
   bondFrom?: number;
   scale?: number;
   noMerge?: boolean;
+  /** Drawn bond ends the template moves (see PlaceOptions.move). */
+  move?: Set<number>;
   /** Shown while choosing (trans-fused, cis-fused). */
   note?: string;
 }
@@ -1087,7 +1089,7 @@ export class Editor {
       const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
       const in3d = fusions3d(doc, t, h.id);
       if (in3d?.length) {
-        return in3d.map((f) => ({ pl: { origin: { x: 0, y: 0 }, scale: f.len, angle: 0, mirror: false, pts: f.pts }, existing: f.existing, scale: b.s, noMerge: true, ...(f.join ? { note: `${f.join}-fused` } : {}) }));
+        return in3d.map((f) => ({ pl: { origin: { x: 0, y: 0 }, scale: f.len, angle: 0, mirror: false, pts: f.pts }, existing: f.existing, move: f.move, scale: b.s, noMerge: true, ...(f.join ? { note: `${f.join}-fused` } : {}) }));
       }
       if (!t.fuse) return [];
       const n = perp(sub(q, p)), mid = mul(add(p, q), 0.5);
@@ -1195,7 +1197,7 @@ export class Editor {
     const f = t && b && fusions3d(this.doc, t, bondId)?.[index];
     if (!t || !b || !f) return false;
     this.doc.edit('Fuse ring', () => {
-      const ids = placeTemplate(this.doc, t, { origin: { x: 0, y: 0 }, scale: f.len, angle: 0, mirror: false, pts: f.pts }, { existing: f.existing, scale: b.s, noMerge: true });
+      const ids = placeTemplate(this.doc, t, { origin: { x: 0, y: 0 }, scale: f.len, angle: 0, mirror: false, pts: f.pts }, { existing: f.existing, move: f.move, scale: b.s, noMerge: true });
       this.lastEdited = ids[t.attach];
     });
     this.changed();
@@ -1206,7 +1208,7 @@ export class Editor {
     const t = templateById(id);
     const place = t && this.templatePlacement(t, h, start, cursor, alt, d);
     if (!t || !place) return;
-    const ids = placeTemplate(this.doc, t, place.pl, { existing: place.existing, bondFrom: place.bondFrom, scale: place.scale, noMerge: place.noMerge });
+    const ids = placeTemplate(this.doc, t, place.pl, { existing: place.existing, bondFrom: place.bondFrom, scale: place.scale, noMerge: place.noMerge, move: place.move });
     this.lastEdited = ids[t.attach];
   }
 

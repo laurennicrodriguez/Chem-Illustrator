@@ -36,6 +36,14 @@ OUT = ROOT / 'src' / 'chem' / 'conformers.json'
 # ------------------------------------------------------------------ 3-D structures
 
 
+# axial and equatorial bonds are drawn this long (in bond lengths): shorter than the ring's
+# bonds, as in textbook pictures (a real C–H is 0.71 of a C–C)
+STUB = 0.75
+# how much more puckered than they are rings are drawn (see conv_view)
+PUCKER = 1.8
+VERBOSE = '-v' in sys.argv
+
+
 def embed(smiles, torsions=(), seed=7, confs=40, keep_h=False, minimize=True):
     """A molecule's lowest-energy MMFF94 conformer (heavy atoms, or all atoms with keep_h).
 
@@ -81,7 +89,8 @@ def torsion_list(ring, values):
 
 def with_stubs(smiles, torsions=(), only=None, seed=7):
     """A ring with its hydrogens' directions as bonds (axial and equatorial stubs): returns
-    atoms (element, xyz) and bonds, with every C–H turned into a C–C one bond long."""
+    atoms (element, xyz) and bonds, with every C–H turned into a C–C stub (add() draws stubs
+    STUB bond lengths long)."""
     mol, xyz, _ = embed(smiles, torsions, seed=seed, keep_h=True)
     cc = np.mean([np.linalg.norm(xyz[b.GetBeginAtomIdx()] - xyz[b.GetEndAtomIdx()]) for b in mol.GetBonds()
                   if b.GetBeginAtom().GetAtomicNum() > 1 and b.GetEndAtom().GetAtomicNum() > 1])
@@ -156,28 +165,6 @@ def frame(xyz, ring_atoms=None):
     return c, np.array([u, v, n])
 
 
-def classic(xyz, tilt=18, turn=0, spin=0, ring_atoms=None, flip=False):
-    """The textbook view: the mean plane seen almost edge on from just above (tilted `tilt`°
-    towards the viewer), its long axis across the page. `turn` swings the shape round its
-    plane's normal first, `spin` turns the picture. Returns X (right), Y (up), Z (towards the viewer)."""
-    c, R = frame(xyz, ring_atoms)
-    p = (xyz - c) @ R.T  # long axis x, middle y, normal z
-    if flip:
-        p = p @ rot_x(math.pi).T
-    p = p @ rot_z(math.radians(turn)).T
-    # plane edge on (normal up the page), then tipped towards the viewer
-    p = p @ rot_x(-math.pi / 2).T
-    p = p @ rot_x(math.radians(tilt)).T
-    p = p @ rot_z(math.radians(spin)).T
-    return p
-
-
-def face_on(xyz, ring_atoms=None, spin=0):
-    c, R = frame(xyz, ring_atoms)
-    p = (xyz - c) @ R.T
-    return p @ rot_z(math.radians(spin)).T
-
-
 def look(xyz, yaw=0, pitch=0, roll=0):
     """Turn about the vertical axis, then tip forwards, then turn the picture."""
     c = xyz.mean(axis=0)
@@ -222,32 +209,6 @@ def raised(xyz, ring, count):
     return [ring[k] for k in np.argsort(-z)[:count]]
 
 
-def tips_up(atoms_up):
-    """A view score: these atoms at the far left and right (or one at a side), above the rest."""
-    def score(p):
-        xs = p[:, 0]
-        s = 0
-        if len(atoms_up) == 2:
-            lo, hi = int(np.argmin(xs)), int(np.argmax(xs))
-            s += 0.5 if {lo, hi} == set(atoms_up) else 0
-        else:
-            k = atoms_up[0]
-            s += 0.5 if k in (int(np.argmin(xs)), int(np.argmax(xs))) else 0
-        others = [i for i in range(len(p)) if i not in atoms_up]
-        s += 0.3 if min(p[atoms_up, 1]) > np.mean(p[others, 1]) else 0
-        return s
-    return score
-
-
-def clearest(xyz, bonds):
-    """Almost edge on if that shows everything clearly, otherwise from wherever does."""
-    p = edge_view(xyz, bonds, elevs=(15, 20, 25, 30))
-    if clarity(p, bonds) >= 0.33:
-        return p
-    q = best_view(xyz, bonds, samples=1200)
-    return q if clarity(q, bonds) > clarity(p, bonds) else p
-
-
 def best_view(xyz, bonds, ring_atoms=None, samples=1500):
     """A direction from which no atoms or bonds hide each other: the one where the closest
     pair of things in the picture are furthest apart (with no crossing bonds if possible)."""
@@ -274,6 +235,83 @@ def best_view(xyz, bonds, ring_atoms=None, samples=1500):
     return p @ rot_z(-ang).T
 
 
+def conv_view(xyz, ring, right, left=None, up=None, tilt=20, turn=0, stretch=1.0, face=1):
+    """The textbook view of a ring or ring system: its mean plane seen almost edge on, from
+    `tilt`° above, the `right` atom(s) at the right-hand end and `left` (or the middle) at the
+    left, the face that `up` atoms (or the right-hand end) lie on facing up, so axial bonds run
+    straight up and down the page. `turn` swings the far side round to the right (degrees),
+    which is how a chair's back and front bonds are kept apart. Returns X right, Y up, Z
+    towards the viewer."""
+    pt = lambda k: xyz[list(k)].mean(axis=0) if isinstance(k, (list, tuple, set)) else xyz[k]
+    c, R = frame(xyz, ring)
+    n = R[2]
+    ref = pt(up) if up is not None else pt(right)
+    if np.dot(ref - c, n) * face < 0:
+        n = -n
+    v = pt(right) - (pt(left) if left is not None else c)
+    h = v - np.dot(v, n) * n
+    h = h / np.linalg.norm(h)
+    f = np.cross(h, n)  # towards the viewer
+    a = math.radians(turn)
+    h, f = h * math.cos(a) + f * math.sin(a), f * math.cos(a) - h * math.sin(a)
+    t = math.radians(tilt)
+    Z = f * math.cos(t) + n * math.sin(t)
+    Y = n * math.cos(t) - f * math.sin(t)
+    q = xyz - c
+    # textbooks draw rings more puckered than they are: the depth across the mean plane
+    # stretched (which keeps parallel bonds parallel and axial bonds upright)
+    q = q + np.outer(q @ n, n) * (stretch - 1)
+    return np.c_[q @ h, q @ Y, q @ Z]
+
+
+def straightest(p, bonds):
+    """The widest angle between two bonds at an atom in the picture (degrees)."""
+    q = p[:, :2]
+    nb = {}
+    for i, j, *_ in bonds:
+        nb.setdefault(i, []).append(j)
+        nb.setdefault(j, []).append(i)
+    worst = 0
+    for c, ns in nb.items():
+        for x in range(len(ns)):
+            for y in range(x + 1, len(ns)):
+                u, w = q[ns[x]] - q[c], q[ns[y]] - q[c]
+                cosv = np.dot(u, w) / max(1e-9, np.linalg.norm(u) * np.linalg.norm(w))
+                worst = max(worst, math.degrees(math.acos(max(-1, min(1, cosv)))))
+    return worst
+
+
+def restub(p, bonds, core):
+    """Axial and equatorial stubs (bonds to atoms from `core` on) cut to STUB of the ring's
+    bond length, after a view has stretched them."""
+    if core is None or core >= len(p):
+        return p
+    p = p.copy()
+    L = np.mean([np.linalg.norm(p[i] - p[j]) for i, j, *_ in bonds if i < core and j < core])
+    for i, j, *_ in bonds:
+        a, b = (i, j) if j >= core else (j, i)
+        if b >= core and a < core:
+            d = p[b] - p[a]
+            p[b] = p[a] + d / np.linalg.norm(d) * L * STUB
+    return p
+
+
+def gaps(p, bonds):
+    """The closest an atom comes to another atom, and to a bond it is not on, in bond lengths."""
+    q = p[:, :2]
+    L = core_bond(q, bonds)
+    aa = min((np.linalg.norm(q[i] - q[j]) for i in range(len(q)) for j in range(i + 1, len(q))), default=9) / L
+    ab = 9.0
+    for i, j, *_ in bonds:
+        for k in range(len(q)):
+            if k not in (i, j):
+                ab = min(ab, seg_dist(q[k], q[i], q[j]) / L)
+    return aa, ab
+
+
+LAST_VIEW = LAST_PICK = None
+
+
 def to_z(d):
     d = d / np.linalg.norm(d)
     z = np.array([0, 0, 1.0])
@@ -298,9 +336,19 @@ def crosses(a, b, c, d):
     return ccw(a, b, c) * ccw(a, b, d) < 0 and ccw(c, d, a) * ccw(c, d, b) < 0
 
 
+def core_bond(q, bonds):
+    """The mean bond length in the picture, leaving out bonds to end atoms (stubs)."""
+    deg = {}
+    for i, j, *_ in bonds:
+        deg[i] = deg.get(i, 0) + 1
+        deg[j] = deg.get(j, 0) + 1
+    inner = [np.linalg.norm(q[i] - q[j]) for i, j, *_ in bonds if deg[i] > 1 and deg[j] > 1]
+    return np.mean(inner or [np.linalg.norm(q[i] - q[j]) for i, j, *_ in bonds])
+
+
 def clarity(p, bonds):
     q = p[:, :2]
-    L = np.mean([np.linalg.norm(p[i] - p[j]) for i, j, *_ in bonds])
+    L = core_bond(q, bonds)
     worst = 10.0
     n = len(q)
     for i in range(n):
@@ -334,6 +382,281 @@ def clarity(p, bonds):
     return worst - 0.25 * cross
 
 
+# ------------------------------------------------------------------ textbook drawings
+#
+# Textbooks do not draw a chair as its true shadow. Every ring bond is drawn the same length,
+# in one of three directions, opposite bonds parallel, axial bonds straight up and down, and
+# each equatorial bond parallel to the ring bonds one along (measured from textbook and
+# teaching drawings, e.g. Antonelli, Nascimento & Cunha, Rev. Virtual Quim. 2024,
+# doi:10.21577/1984-6835.20240007). That is a picture of the diamond lattice: the chair's
+# bonds, and those of decalins, steroids and adamantane, all run along the lattice's four bond
+# directions, and each of the four is given its own direction on the page (LW). Bonds that do
+# not lie along the lattice (in a five-membered ring, a boat's bow) are drawn by the oblique
+# projection that comes closest to that (LA). src/chem/fuse3d.ts uses the same numbers to read
+# such drawings back into 3-D, so keep the two in step.
+
+S8 = math.sqrt(8) / 3
+# the lattice's bond directions in the canonical frame (x right, y away from the viewer, z up):
+# from a "down" atom of a chair (the left-hand tip) to the ring atom behind it on the right,
+# to the equatorial direction (left), to the ring atom in front on the right, and axial (down)
+LT = np.array([[S8 / 2, S8 * math.sqrt(3) / 2, 1 / 3], [-S8, 0, 1 / 3], [S8 / 2, -S8 * math.sqrt(3) / 2, 1 / 3], [0, 0, -1.0]])
+# and on the page (x right, y up): steep, gentle up to the left, gentle up to the right, down
+LW_DEG = (56, 165, 12, 270)
+LW = np.array([[math.cos(math.radians(d)), math.sin(math.radians(d))] for d in LW_DEG])
+
+
+def _oblique():
+    """The linear projection nearest LW that keeps vertical lines vertical."""
+    ax, *_ = np.linalg.lstsq(LT[:, :2], LW[:, 0], rcond=None)
+    ay, *_ = np.linalg.lstsq(LT, LW[:, 1], rcond=None)
+    return np.array([[ax[0], ax[1], 0.0], ay])
+
+
+LA = _oblique()
+
+
+def vocab(mirror):
+    """(lattice directions, page directions, oblique projection), or their mirror images
+    (left and right swapped in both), which draw a chair the other way round."""
+    if not mirror:
+        return LT, LW, LA
+    return LT * [-1, 1, 1], LW * [-1, 1], LA * np.array([[1, -1, -1], [-1, 1, 1]])
+
+
+def towards_viewer(A):
+    _, _, vt = np.linalg.svd(A)
+    k = vt[2]
+    return k if k[1] < 0 else -k
+
+
+def ideal_chair(T):
+    return np.array([[0, 0, 0], T[0], T[0] - T[1], T[0] - T[1] + T[2], T[2] - T[1], T[2]])
+
+
+def kabsch(a, b):
+    """The proper rotation R and shift t with a @ R.T + t ≈ b, and the rms miss."""
+    ca, cb = a.mean(0), b.mean(0)
+    U, _, Vt = np.linalg.svd((a - ca).T @ (b - cb))
+    d = np.sign(np.linalg.det(Vt.T @ U.T))
+    R = Vt.T @ np.diag([1, 1, d]) @ U.T
+    rms = np.sqrt(np.mean(np.sum(((a - ca) @ R.T - (b - cb)) ** 2, axis=1)))
+    return R, cb - ca @ R.T, rms
+
+
+def mean_bond(xyz, bonds):
+    return np.mean([np.linalg.norm(xyz[i] - xyz[j]) for i, j, *_ in bonds])
+
+
+def chair_frames(xyz, ring, mirror, on=None):
+    """The ways of laying the chair `ring` (atoms in ring order) on the lattice's chair, as
+    (rotation, shift, bond length). `on`: the chair positions (0–5) its atoms go to, if only
+    some of them (a boat's other five atoms)."""
+    T, _, _ = vocab(mirror)
+    ideal = ideal_chair(T)
+    n = len(ring)
+    L = mean_bond(xyz, [[ring[k], ring[(k + 1) % n]] for k in range(n)])
+    pos = on if on is not None else list(range(n))
+    out = []
+    for k in range(n):
+        for d in (1, -1):
+            order = [ring[(k + d * m) % n] for m in range(n)]
+            R, t, rms = kabsch(xyz[order] / L, ideal[pos])
+            if rms < 0.2:
+                out.append((R, t, L))
+    return out
+
+
+def textbook(Q, bonds, mirror, snap=15, lattice=None, even=False):
+    """The textbook picture of atoms Q (in the canonical frame, bonds about 1 long): bonds
+    within `snap`° of a lattice direction are drawn along its page direction, others by the
+    oblique projection, and the atoms placed to fit them all best (exactly, on the lattice).
+    `lattice(k)`: whether bond k may be snapped; `even`: the other bonds evened out (see
+    even_out). Returns the picture (x, y and depth) and the
+    tidied 3-D shape (lattice bonds made exact)."""
+    T, W, A = vocab(mirror)
+    n = len(Q)
+    d2, d3 = [], []
+    cs = math.cos(math.radians(snap)) if snap else 2
+    for k, (i, j, *_) in enumerate(bonds):
+        v = Q[j] - Q[i]
+        c = T @ (v / np.linalg.norm(v))
+        m = int(np.argmax(np.abs(c)))
+        if abs(c[m]) >= cs and (lattice is None or lattice(k)):
+            d2.append(np.sign(c[m]) * W[m])
+            d3.append(np.sign(c[m]) * T[m])
+        else:
+            d2.append(A @ v)
+            d3.append(v)
+
+    def solve(ds, dim):
+        M = np.zeros((len(bonds) + 1, n))
+        rhs = np.zeros((len(bonds) + 1, dim))
+        for r, (b, d) in enumerate(zip(bonds, ds)):
+            M[r, b[0]], M[r, b[1]] = -1, 1
+            rhs[r] = d
+        M[-1, 0] = 1
+        X, *_ = np.linalg.lstsq(M, rhs, rcond=None)
+        return X
+
+    p2, q3 = solve(d2, 2), solve(d3, 3)
+    snapped = [k for k, d in enumerate(d3) if any(np.allclose(np.abs(d), np.abs(t)) for t in T)]
+    if even:
+        p2 = even_out(p2, bonds, snapped)
+    return np.c_[p2, q3 @ towards_viewer(A)], q3
+
+
+def even_out(p, bonds, snapped, keep=0.08, steps=400):
+    """Textbooks draw every bond the same length: the bonds not drawn along the lattice
+    stretched or shrunk towards one bond length, the atoms moving as little as they can (those
+    with only lattice bonds stay put)."""
+    free = np.ones(len(p), bool)
+    loose = [b for k, b in enumerate(bonds) if k not in snapped]
+    if not loose:
+        return p
+    touched = {i for b in loose for i in b[:2]}
+    for i in range(len(p)):
+        free[i] = i in touched
+    p0 = p.copy()
+    p = p.copy()
+    for _ in range(steps):
+        g = keep * (p - p0)
+        for i, j, *_ in loose:
+            d = p[j] - p[i]
+            L = np.linalg.norm(d) or 1e-9
+            f = (L - 1) * d / L
+            g[i] -= f
+            g[j] += f
+        p[free] -= 0.2 * g[free]
+    return p
+
+
+def pic_score(P, bonds, core=None):
+    """Nothing on top of anything else, then as few crossing bonds as can be (an axial bond
+    passing behind a ring bond, as textbooks draw it, hardly counts)."""
+    aa, ab = gaps(P, bonds)
+    q = P[:, :2]
+    cr = 0
+    for x in range(len(bonds)):
+        for y in range(x + 1, len(bonds)):
+            i, j = bonds[x][:2]
+            k, l = bonds[y][:2]
+            if len({i, j, k, l}) == 4 and crosses(q[i], q[j], q[k], q[l]):
+                stub = core is not None and max(i, j, k, l) >= core
+                cr += 0.05 if stub else 1
+    # and no bond drawn much shorter than the rest (seen end on)
+    L = core_bond(q, bonds)
+    short = sum(max(0, 0.6 - np.linalg.norm(q[i] - q[j]) / L) for i, j, *_ in bonds if core is None or max(i, j) < core)
+    # nor two bonds at an atom in a straight line
+    flat = max(0, straightest(P[:, :2] if core is None else P[:core, :2], [b for b in bonds if core is None or max(b[:2]) < core]) - 160)
+    return -10 * max(0, 0.36 - aa) - 10 * max(0, 0.2 - ab) - 0.3 * cr - 2 * short - 0.03 * flat
+
+
+def rings_of(n_atoms, bonds, size=None):
+    m = Chem.RWMol()
+    for _ in range(n_atoms):
+        m.AddAtom(Chem.Atom(6))
+    for i, j, *_ in bonds:
+        m.AddBond(int(i), int(j), Chem.BondType.SINGLE)
+    m = m.GetMol()
+    m.UpdatePropertyCache(False)
+    return [ring_order(list(r), bonds) for r in Chem.GetSymmSSSR(m) if size is None or len(r) == size]
+
+
+def ring_order(ring, bonds):
+    adj = {}
+    for i, j, *_ in bonds:
+        adj.setdefault(i, set()).add(j)
+        adj.setdefault(j, set()).add(i)
+    s = set(ring)
+    out = [ring[0]]
+    while len(out) < len(ring):
+        out.append(next(x for x in adj[out[-1]] if x in s and x not in out))
+    return out
+
+
+class Pic:
+    """A chosen picture: atoms on the page (x, y, depth) and the 3-D shape behind it."""
+    def __init__(self, score, P, q3, mirror):
+        self.score, self.P, self.q3, self.mirror = score, P, q3, mirror
+
+
+def distinct(cands, top):
+    out = []
+    for c in sorted(cands, key=lambda c: -c.score):
+        if any(np.allclose(c.P[:, :2] - c.P[0, :2], o.P[:, :2] - o.P[0, :2], atol=0.05) for o in out):
+            continue
+        out.append(c)
+    return out[:top]
+
+
+def lattice_pics(xyz, bonds, prefer=None, core=None, mirrors=(False, True), rings=None, on=None, top=1, snap=15, lattice=None):
+    """Textbook pictures of a molecule built on chairs, each of its chairs (or `rings`) in turn
+    laid on the lattice's chair, best first."""
+    cands = []
+    for mirror in mirrors:
+        for r in (rings if rings is not None else rings_of(len(xyz), bonds, 6)):
+            for R, t, L in chair_frames(xyz, r, mirror, on):
+                P, q3 = textbook((xyz / L) @ R.T + t, bonds, mirror, snap, lattice, even=True)
+                cands.append(Pic(pic_score(P, bonds, core) + (prefer(P) if prefer else 0), P, q3, mirror))
+    return distinct(cands, top)
+
+
+def oblique_pics(xyz, bonds, ring, prefer=None, core=None, mirrors=(False, True), top=1, snap=15, turns=range(0, 360, 5), tilts=(0,)):
+    """Textbook pictures of a ring that is not a chair: its mean plane level (as a chair's is),
+    turned about the vertical every 5°, either face up, drawn as textbook() does."""
+    c, R = frame(xyz, ring)
+    L = mean_bond(xyz, [[ring[k], ring[(k + 1) % len(ring)]] for k in range(len(ring))])
+    base = (xyz - c) @ R.T / L
+    cands = []
+    for mirror in mirrors:
+        for flip in (False, True):
+            b = base @ rot_x(math.pi).T if flip else base
+            for tu in turns:
+                for ti in tilts:
+                    Q = b @ rot_z(math.radians(tu)).T @ rot_x(math.radians(ti)).T
+                    P, q3 = textbook(Q, bonds, mirror, snap)
+                    cands.append(Pic(pic_score(P, bonds, core) + (prefer(P) if prefer else 0), P, q3, mirror))
+    return distinct(cands, top)
+
+
+def framed_pics(Q, bonds, prefer=None, core=None, mirrors=(False, True), top=1, snap=15, spins=(0,), tilts=(0,)):
+    """Textbook pictures of atoms already set up in the canonical frame (x right, y away, z
+    up), turned a little about the vertical (`spins`) and tipped (`tilts`) for clarity."""
+    cands = []
+    for mirror in mirrors:
+        for sp in spins:
+            for ti in tilts:
+                Q2 = Q @ rot_z(math.radians(sp)).T @ rot_x(math.radians(ti)).T
+                P, q3 = textbook(Q2, bonds, mirror, snap)
+                cands.append(Pic(pic_score(P, bonds, core) + (prefer(P) if prefer else 0), P, q3, mirror))
+    return distinct(cands, top)
+
+
+def like(pic, ring, xyz, bonds, core=None, snap=15):
+    """The same view as `pic` of another version of the molecule (one with its axial and
+    equatorial bonds): its `ring` atoms laid on the picture's."""
+    L = mean_bond(xyz, [[ring[k], ring[(k + 1) % len(ring)]] for k in range(len(ring))])
+    R, t, _ = kabsch(xyz[ring] / L, pic.q3[ring])
+    P, q3 = textbook((xyz / L) @ R.T + t, bonds, pic.mirror, snap)
+    return Pic(pic_score(P, bonds, core), P, q3, pic.mirror)
+
+
+def with_bonds(pics, ring, xyz, bonds, core, snap=15):
+    """Of several views of a ring, the one that also shows the ring with all its axial and
+    equatorial bonds (`xyz`, `bonds`) clearly: (bare picture, picture with the bonds)."""
+    pairs = [(p, like(p, ring, xyz, bonds, core, snap)) for p in pics]
+    return max(pairs, key=lambda pq: pq[0].score + pq[1].score)
+
+
+def vertical_ring_bonds(P, bonds):
+    rb = ring_bonds(len(P), bonds)
+    return sum(1 for k in rb if abs(P[bonds[k][1], 0] - P[bonds[k][0], 0]) < 0.1 * np.linalg.norm(P[bonds[k][1], :2] - P[bonds[k][0], :2]))
+
+
+def wide_pic(P, weight=0.1):
+    return weight * min(np.ptp(P[:, 0]) / max(np.ptp(P[:, 1]), 1e-6), 4)
+
+
 # ------------------------------------------------------------------ templates
 
 
@@ -364,10 +687,20 @@ def ring_bonds(n_atoms, bonds):
 def add(group, tid, name, smiles, atoms, bonds, view, *, flat=False, stereo3d=False, wedges=False,
         front_bold=False, fuse=None, attach=None, circle=False, shapes=None, labels=None, check=True, core=None):
     """Add a template: atoms are [element, xyz, charge] in Å (any units), seen as `view` gives
-    (X right, Y up, Z towards the viewer). Bonds are [i, j, order] (+ display)."""
+    (X right, Y up, Z towards the viewer). Bonds are [i, j, order] (+ display). A textbook
+    picture (a Pic) also gives the 3-D shape behind it, saved as `xyz` for fusing."""
+    shape = None
+    if isinstance(view, Pic):
+        shape = view.q3 - view.q3.mean(axis=0)
+        view = view.P
     P = np.array(view, dtype=float)
-    # bond length 1 in the picture on average (so it draws at the drawing's bond length)
-    proj = [np.linalg.norm(P[i, :2] - P[j, :2]) for i, j, *_ in bonds]
+    if isinstance(atoms, Stubbed):
+        P = restub(P, bonds, atoms.core)
+    # bond length 1 in the picture on average (so it draws at the drawing's bond length), not
+    # counting the shorter axial and equatorial stubs
+    n_core = core if core is not None else stub_start(atoms, bonds)
+    proj = [np.linalg.norm(P[i, :2] - P[j, :2]) for i, j, *_ in bonds if i < n_core and j < n_core] or \
+        [np.linalg.norm(P[i, :2] - P[j, :2]) for i, j, *_ in bonds]
     k = 1 / np.mean(proj) if bonds else 1
     P = P * k
     x1, x2 = P[:, 0].min(), P[:, 0].max()
@@ -408,6 +741,10 @@ def add(group, tid, name, smiles, atoms, bonds, view, *, flat=False, stereo3d=Fa
     t = {'id': tid, 'name': name, 'group': group, 'atoms': out_atoms, 'bonds': out_bonds}
     if not flat:
         t['z'] = [r3(v) for v in P[:, 2]]
+    if shape is not None:
+        n_core = core if core is not None else stub_start(atoms, bonds)
+        s3 = mean_bond(shape, [b for b in bonds if b[0] < n_core and b[1] < n_core] or bonds)
+        t['xyz'] = [[r3(v / s3) for v in row] for row in shape]
     rbs = ring_bonds(len(atoms), bonds)
     deg = [0] * len(atoms)
     for i, j, *_ in bonds:
@@ -437,7 +774,7 @@ def add(group, tid, name, smiles, atoms, bonds, view, *, flat=False, stereo3d=Fa
         t['shapes'] = [[sh[0], r3(sh[1] * k - cx), r3(-(sh[2] * k - cy)), r3(sh[3] * k - cx), r3(-(sh[4] * k - cy))] for sh in shapes]
     if check and smiles:
         n = core if core is not None else stub_start(atoms, bonds)
-        verify(t, smiles, P[:n], atoms[:n], [b for b in bonds if b[0] < n and b[1] < n], stereo3d)
+        verify(t, smiles, (shape if shape is not None else P)[:n], atoms[:n], [b for b in bonds if b[0] < n and b[1] < n], stereo3d)
     TEMPLATES.append(t)
     return t
 
@@ -501,118 +838,132 @@ def ring_idx(n):
 
 def cyclohexanes():
     G = 'conformers'
-    # chair: the energy minimum
+    R6 = ring_idx(6)
+    # chair: the energy minimum, drawn the textbook way (left-hand tip down, right-hand tip up),
+    # and the other way round (the chair after a ring flip)
     mol, xyz, _ = embed('C1CCCCC1')
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'chair', 'Cyclohexane chair', 'C1CCCCC1', atoms, bonds, chair_view(xyz))
-    add(G, 'chair-2', 'Cyclohexane chair (ring flipped)', 'C1CCCCC1', atoms, bonds, chair_view(xyz, flip=True))
+    add(G, 'chair', 'Cyclohexane chair', 'C1CCCCC1', atoms, bonds, lattice_pics(xyz, bonds, mirrors=(False,))[0])
+    add(G, 'chair-2', 'Cyclohexane chair (ring flipped)', 'C1CCCCC1', atoms, bonds, lattice_pics(xyz, bonds, mirrors=(True,))[0])
     a, b = with_stubs('C1CCCCC1')
-    add(G, 'chair-ae', 'Chair with axial and equatorial bonds', 'C1CCCCC1', a, b, chair_view(xyz_of(a), ring=ring_idx(6)))
-    # boat: ring torsions 0, +ω, −ω, 0, +ω, −ω (C2v), held while the rest relaxes
-    boat = torsion_list(ring_idx(6), [0, 52, -52, 0, 52, -52])
+    xa = xyz_of(a)
+    add(G, 'chair-ae', 'Chair with axial and equatorial bonds', 'C1CCCCC1', a, b, lattice_pics(xa, b, core=a.core, rings=[R6], mirrors=(False,))[0])
+    add(G, 'chair-ae-2', 'Chair with axial and equatorial bonds (ring flipped)', 'C1CCCCC1', a, b, lattice_pics(xa, b, core=a.core, rings=[R6], mirrors=(True,))[0])
+    # boat: ring torsions 0, +ω, −ω, 0, +ω, −ω (C2v), held while the rest relaxes; drawn from the
+    # side, bow and stern up at the two ends
+    boat = torsion_list(R6, [0, 52, -52, 0, 52, -52])
     mol, xyz, _ = embed('C1CCCCC1', boat)
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'boat', 'Cyclohexane boat', 'C1CCCCC1', atoms, bonds, edge_view(xyz, bonds, prefer=tips_up(raised(xyz, ring_idx(6), 2))))
     a, b = with_stubs('C1CCCCC1', boat)
-    add(G, 'boat-ae', 'Boat with all its bonds (flagpoles, bowsprits)', 'C1CCCCC1', a, b, edge_view(xyz_of(a), b, ring_idx(6), prefer=tips_up(raised(xyz_of(a), ring_idx(6), 2))))
+    pic = side_boat(xyz, bonds, R6, raised(xyz, R6, 2))
+    pic_ae = side_boat(xyz_of(a), b, R6, None, a.core, ref=pic.q3[R6])
+    add(G, 'boat', 'Cyclohexane boat', 'C1CCCCC1', atoms, bonds, pic)
+    add(G, 'boat-ae', 'Boat with all its bonds (flagpoles, bowsprits)', 'C1CCCCC1', a, b, pic_ae)
     # twist-boat (D2): an energy minimum, reached from a twisted start
-    tb = torsion_list(ring_idx(6), [31, 31, -65, 31, 31, -65])
+    tb = torsion_list(R6, [31, 31, -65, 31, 31, -65])
     mol, xyz, _ = embed('C1CCCCC1', tb)
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'twist-boat', 'Cyclohexane twist-boat', 'C1CCCCC1', atoms, bonds, edge_view(xyz, bonds))
-    # cyclohexene half-chair (the minimum)
+    add(G, 'twist-boat', 'Cyclohexane twist-boat', 'C1CCCCC1', atoms, bonds, oblique_pics(xyz, bonds, R6, prefer=wide_pic)[0])
+    # cyclohexene half-chair (the minimum): four atoms in a plane, the double bond at the front,
+    # the other two either side of the plane
     mol, xyz, _ = embed('C1=CCCCC1')
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'half-chair', 'Cyclohexene half-chair', 'C1=CCCCC1', atoms, bonds, edge_view(xyz, bonds))
+    def front(P):
+        v = P[1, :2] - P[0, :2]
+        level = 1 - abs(math.degrees(math.atan2(abs(v[1]), abs(v[0])))) / 45
+        return 0.2 * (P[0, 1] + P[1, 1] < P[3, 1] + P[4, 1]) + 0.2 * level + wide_pic(P)
     a, b = with_stubs('C1=CCCCC1', only={2, 3, 4, 5})
-    add(G, 'half-chair-ae', 'Cyclohexene half-chair with its bonds', 'C1=CCCCC1', a, b, edge_view(xyz_of(a), b, ring_idx(6)))
-    # cyclohexanone chair, the flattened end at the carbonyl
+    pic, pic_ae = with_bonds(oblique_pics(xyz, bonds, R6, prefer=front, top=12), R6, xyz_of(a), b, a.core)
+    add(G, 'half-chair', 'Cyclohexene half-chair', 'C1=CCCCC1', atoms, bonds, pic)
+    add(G, 'half-chair-ae', 'Cyclohexene half-chair with its bonds', 'C1=CCCCC1', a, b, pic_ae)
+    # cyclohexanone chair, the carbonyl at the right-hand tip
     mol, xyz, _ = embed('O=C1CCCCC1')
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'cyclohexanone', 'Cyclohexanone chair', 'O=C1CCCCC1', atoms, bonds, chair_view(xyz, ring=[1, 2, 3, 4, 5, 6]))
+    add(G, 'cyclohexanone', 'Cyclohexanone chair', 'O=C1CCCCC1', atoms, bonds,
+        lattice_pics(xyz, bonds, rings=[[1, 2, 3, 4, 5, 6]], mirrors=(False,), prefer=lambda P: 0.5 * (P[0, 0] == P[:, 0].max()))[0])
 
 
-def chair_view(xyz, flip=False, ring=None, tilt=19):
-    """A chair seen as in textbooks: the tips left and right, from 15–20° above its mean plane."""
-    ring = ring if ring is not None else list(range(6))
+def side_boat(xyz, bonds, ring, tips, core=None, ref=None, tilts=range(8, 27, 2)):
+    """A boat as textbooks draw it: square on from the side (straight, not oblique, so it is
+    symmetric), bow and stern up at the ends, seen a little from above. `ref`: the bare boat's
+    ring (atoms in the order of `ring`) to lay this one on, so a boat with its bonds is seen the
+    same way. Returns the best Pic over the tilts."""
+    n = len(ring)
+    L = mean_bond(xyz, [[ring[k], ring[(k + 1) % n]] for k in range(n)])
+    if ref is not None:
+        R, t, _ = kabsch(xyz[ring] / L, ref)
+        Q = (xyz / L) @ R.T + t
+    else:
+        c, F = frame(xyz, ring)
+        nz = F[2] if np.dot(xyz[tips].mean(0) - c, F[2]) > 0 else -F[2]
+        ex = xyz[tips[1]] - xyz[tips[0]]
+        ex -= np.dot(ex, nz) * nz
+        ex /= np.linalg.norm(ex)
+        Q = (xyz - c) @ np.array([ex, np.cross(nz, ex), nz]).T / L
+    cands = []
+    for ti in tilts:
+        a = math.radians(ti)
+        # the far side tipped up into view
+        y = Q[:, 1] * math.cos(a) - Q[:, 2] * math.sin(a)
+        z = Q[:, 2] * math.cos(a) + Q[:, 1] * math.sin(a)
+        P = np.c_[Q[:, 0], z, -y]
+        cands.append(Pic(pic_score(P, bonds, core), P, Q, False))
+    return max(cands, key=lambda c: c.score)
+
+
+def envelope_pics(xyz, bonds, ring, flap, top=1):
+    """An envelope drawn as a boat is, from the side: the four atoms in a plane along the page
+    (two bonds running back level), the flap up at one end."""
+    k = ring.index(flap)
+    n = len(ring)
+    far = (xyz[ring[(k + 2) % n]] + xyz[ring[(k + 3) % n]]) / 2
     c, R = frame(xyz, ring)
-    p = (xyz - c) @ R.T
-    q = p[ring]
-    # turn so that one ring atom (a tip) points along +x
-    ang = math.atan2(q[0, 1], q[0, 0])
-    p = p @ rot_z(-ang).T
-    if p[ring[0], 2] < 0:
-        p = p @ rot_x(math.pi).T  # left tip low, right tip high in the usual picture
-    p = p @ rot_x(-math.pi / 2).T
-    p = p @ rot_x(math.radians(tilt)).T
-    if flip:
-        p[:, 0] = -p[:, 0]
-    return p
-
-
-def boat_view(xyz, ring=None):
-    """A boat from the side and a little above: bow and stern (the raised atoms) up."""
-    ring = ring if ring is not None else list(range(6))
-    c, R = frame(xyz, ring)
-    p = (xyz - c) @ R.T
-    q = p[ring]
-    # the two atoms furthest from the mean plane (on the same side) are bow and stern
-    k = int(np.argmax(np.abs(q[:, 2])))
-    if q[k, 2] < 0:
-        p = p @ rot_x(math.pi).T
-        q = p[ring]
-    ang = math.atan2(q[k, 1], q[k, 0])
-    p = p @ rot_z(-ang).T
-    p = p @ rot_x(-math.pi / 2).T
-    p = p @ rot_x(math.radians(20)).T
-    return p
+    nz = R[2] if np.dot(xyz[flap] - c, R[2]) > 0 else -R[2]
+    ex = xyz[flap] - far
+    ex -= np.dot(ex, nz) * nz
+    ex /= np.linalg.norm(ex)
+    ey = np.cross(nz, ex)
+    L = mean_bond(xyz, [[ring[m], ring[(m + 1) % n]] for m in range(n)])
+    Q = (xyz - c) @ np.array([ex, ey, nz]).T / L
+    others = [i for i in ring if i != flap]
+    # the flap clearly above the rest
+    up = lambda P: 0.5 * min(1, (P[flap, 1] - P[others, 1].max()) / 0.3) + wide_pic(P)
+    return framed_pics(Q, bonds, prefer=up, spins=range(-30, 31, 5), tilts=(-25, -20, -15, -10, -5, 0), top=top)
 
 
 def small_rings():
     G = 'conformers'
-    # cyclopentane envelope (Cs): one ring torsion 0, the flap atom out of the plane of the other four
+    R5 = ring_idx(5)
+    # cyclopentane envelope (Cs): one ring torsion 0, the flap atom out of the plane of the other
+    # four; drawn with the flap up at one end
     env = [(1, 2, 3, 4, 0.0)]
     mol, xyz, _ = embed('C1CCCC1', env)
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'envelope', 'Cyclopentane envelope', 'C1CCCC1', atoms, bonds, edge_view(xyz, bonds, prefer=tips_up(raised(xyz, ring_idx(5), 1))))
+    flap = raised(xyz, R5, 1)[0]
     a, b = with_stubs('C1CCCC1', env)
-    add(G, 'envelope-ae', 'Envelope with all its bonds', 'C1CCCC1', a, b, edge_view(xyz_of(a), b, ring_idx(5), prefer=tips_up(raised(xyz_of(a), ring_idx(5), 1))))
+    pic, pic_ae = with_bonds(envelope_pics(xyz, bonds, R5, flap, top=12), R5, xyz_of(a), b, a.core)
+    add(G, 'envelope', 'Cyclopentane envelope', 'C1CCCC1', atoms, bonds, pic)
+    add(G, 'envelope-ae', 'Envelope with all its bonds', 'C1CCCC1', a, b, pic_ae)
     # half-chair (twist, C2): two neighbouring atoms either side of the plane of the other three
-    tw = torsion_list(ring_idx(5), [0, 0, 0, 0, 0])
     tw = [(0, 1, 2, 3, 26), (1, 2, 3, 4, -42), (2, 3, 4, 0, 42), (3, 4, 0, 1, -26)]
     mol, xyz, _ = embed('C1CCCC1', tw)
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'c5-twist', 'Cyclopentane half-chair (twist)', 'C1CCCC1', atoms, bonds, edge_view(xyz, bonds))
-    # cyclopentanone and cyclopentene envelopes
+    add(G, 'c5-twist', 'Cyclopentane half-chair (twist)', 'C1CCCC1', atoms, bonds, oblique_pics(xyz, bonds, R5, prefer=wide_pic)[0])
+    # cyclopentene envelope: the flap (C4) up, the double bond at the other end
     mol, xyz, _ = embed('C1=CCCC1')
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'cyclopentene', 'Cyclopentene envelope', 'C1=CCCC1', atoms, bonds, edge_view(xyz, bonds))
-    # puckered cyclobutane (butterfly)
+    add(G, 'cyclopentene', 'Cyclopentene envelope', 'C1=CCCC1', atoms, bonds, envelope_pics(xyz, bonds, R5, 3)[0])
+    # puckered cyclobutane (butterfly), seen a little more from above
     mol, xyz, _ = embed('C1CCC1')
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'cyclobutane', 'Puckered cyclobutane', 'C1CCC1', atoms, bonds, edge_view(xyz, bonds))
     a, b = with_stubs('C1CCC1')
-    add(G, 'cyclobutane-ae', 'Puckered cyclobutane with its bonds', 'C1CCC1', a, b, edge_view(xyz_of(a), b, ring_idx(4)))
+    pic, pic_ae = with_bonds(oblique_pics(xyz, bonds, ring_idx(4), prefer=wide_pic, tilts=(0, 10, 20), snap=0, top=12), ring_idx(4), xyz_of(a), b, a.core, snap=0)
+    add(G, 'cyclobutane', 'Puckered cyclobutane', 'C1CCC1', atoms, bonds, pic)
+    add(G, 'cyclobutane-ae', 'Puckered cyclobutane with its bonds', 'C1CCC1', a, b, pic_ae)
     # cyclopropane, from just above its plane, with its bonds
     a, b = with_stubs('C1CC1')
-    add(G, 'cyclopropane-ae', 'Cyclopropane with its bonds', 'C1CC1', a, b, edge_view(xyz_of(a), b, ring_idx(3)))
-
-
-def flap_view(xyz, flap_hint, ring=None):
-    """An envelope from the side: the flap atom up, at the back right."""
-    ring = ring if ring is not None else list(range(5))
-    c, R = frame(xyz, ring)
-    p = (xyz - c) @ R.T
-    q = p[ring]
-    k = int(np.argmax(np.abs(q[:, 2])))
-    if q[k, 2] < 0:
-        p = p @ rot_x(math.pi).T
-        q = p[ring]
-    ang = math.atan2(q[k, 1], q[k, 0])
-    p = p @ rot_z(-ang + math.radians(30)).T
-    p = p @ rot_x(-math.pi / 2).T
-    p = p @ rot_x(math.radians(20)).T
-    return p
+    add(G, 'cyclopropane-ae', 'Cyclopropane with its bonds', 'C1CC1', a, b,
+        oblique_pics(xyz_of(a), b, ring_idx(3), core=a.core, tilts=(0, 10, 20, 30), snap=0)[0])
 
 
 def medium_rings():
@@ -620,28 +971,19 @@ def medium_rings():
     # cycloheptane twist-chair and cyclooctane boat-chair: the lowest-energy conformers
     mol, xyz, _ = embed('C1CCCCCC1', confs=200)
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'c7-twist-chair', 'Cycloheptane twist-chair', 'C1CCCCCC1', atoms, bonds, edge_view(xyz, bonds))
+    add(G, 'c7-twist-chair', 'Cycloheptane twist-chair', 'C1CCCCCC1', atoms, bonds, oblique_pics(xyz, bonds, ring_idx(7), prefer=wide_pic)[0])
     mol, xyz, _ = embed('C1CCCCCCC1', confs=300)
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'c8-boat-chair', 'Cyclooctane boat-chair', 'C1CCCCCCC1', atoms, bonds, edge_view(xyz, bonds))
+    add(G, 'c8-boat-chair', 'Cyclooctane boat-chair', 'C1CCCCCCC1', atoms, bonds, oblique_pics(xyz, bonds, ring_idx(8), prefer=wide_pic)[0])
     # cyclooctane crown (D4d): ring torsions ±87.5° alternately
     crown = torsion_list(ring_idx(8), [87.5, -87.5] * 4)
     mol, xyz, _ = embed('C1CCCCCCC1', crown)
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'c8-crown', 'Cyclooctane crown', 'C1CCCCCCC1', atoms, bonds, edge_view(xyz, bonds))
+    add(G, 'c8-crown', 'Cyclooctane crown', 'C1CCCCCCC1', atoms, bonds, oblique_pics(xyz, bonds, ring_idx(8), prefer=wide_pic)[0])
     # cyclooctatetraene tub (D2d)
     mol, xyz, _ = embed('C1=CC=CC=CC=C1')
     atoms, bonds = from_mol(mol, xyz)
-    add(G, 'cot-tub', 'Cyclooctatetraene tub', 'C1=CC=CC=CC=C1', atoms, bonds, edge_view(xyz, bonds))
-
-
-def wide(weight=0.15):
-    """A view score: wider than tall (ring systems read along their length)."""
-    def score(p):
-        w = p[:, 0].max() - p[:, 0].min()
-        h = p[:, 1].max() - p[:, 1].min()
-        return weight * min(w / max(h, 1e-6), 4) / 4
-    return score
+    add(G, 'cot-tub', 'Cyclooctatetraene tub', 'C1=CC=CC=CC=C1', atoms, bonds, oblique_pics(xyz, bonds, ring_idx(8), prefer=wide_pic)[0])
 
 
 def both(*fs):
@@ -680,11 +1022,6 @@ def mol3d(smiles, confs=60, seed=7, torsions=()):
     return atoms, bonds, xyz
 
 
-def ring_atoms_of(smiles):
-    m = Chem.MolFromSmiles(smiles)
-    return sorted({i for r in m.GetRingInfo().AtomRings() for i in r})
-
-
 def fused():
     G = 'fused'
     items = [
@@ -692,23 +1029,38 @@ def fused():
         ('cis-decalin', 'cis-Decalin', 'C1CC[C@H]2CCCC[C@H]2C1', ['cis']),
         ('trans-hydrindane', 'trans-Hydrindane', 'C1CC[C@H]2CCC[C@@H]2C1', ['trans']),
         ('cis-hydrindane', 'cis-Hydrindane', 'C1CC[C@H]2CCC[C@H]2C1', ['cis']),
-        ('cis-bicyclooctane', 'cis-Bicyclo[3.3.0]octane (diquinane)', 'C1C[C@H]2CCC[C@H]2C1', ['cis']),
-        ('perhydroazulene', 'cis-Perhydroazulene (hydroazulene of guaianes)', 'C1CC[C@H]2CCC[C@H]2CC1', ['cis']),
-        ('trans-perhydrophenanthrene', 'Perhydrophenanthrene (trans-anti-trans)', 'C1CC[C@@H]2[C@@H](C1)CC[C@H]1CCCC[C@@H]12', ['trans', 'trans']),
-        ('trans-perhydroanthracene', 'Perhydroanthracene (trans-anti-trans)', 'C1CC[C@@H]2C[C@H]3CCCC[C@@H]3C[C@H]2C1', ['trans', 'trans']),
+        ('trans-perhydrophenanthrene', 'Perhydrophenanthrene (trans-anti-trans)', 'C1CC[C@@H]2[C@@H](C1)CC[C@@H]1CCCC[C@H]12', ['trans', 'trans']),
+        ('trans-perhydroanthracene', 'Perhydroanthracene (trans-anti-trans)', 'C1CC[C@@H]2C[C@@H]3CCCC[C@H]3C[C@H]2C1', ['trans', 'trans']),
     ]
+    # ring systems built on chairs: drawn along the page, with as few ring bonds upright as can be
     for tid, name, smi, kinds in items:
         need(smi, kinds)
         atoms, bonds, xyz = mol3d(smi)
-        add(G, tid, name, smi, atoms, bonds, edge_view(xyz, bonds, elevs=(20, 25, 30), prefer=wide()), stereo3d=True)
+        pref = lambda P, bonds=bonds: wide_pic(P) - 0.05 * vertical_ring_bonds(P, bonds)
+        pics = lattice_pics(xyz, bonds, prefer=pref, top=2, lattice=chair_bonds(len(atoms), bonds))
+        add(G, tid, name, smi, atoms, bonds, pics[0], stereo3d=True)
+        if tid == 'cis-decalin':
+            # the other common picture: the second ring going up instead of down
+            add(G, 'cis-decalin-2', 'cis-Decalin (drawn the other way up)', smi, atoms, bonds, pics[1], stereo3d=True)
+    for tid, name, smi, kinds in [
+        ('cis-bicyclooctane', 'cis-Bicyclo[3.3.0]octane (diquinane)', 'C1C[C@H]2CCC[C@H]2C1', ['cis']),
+        ('perhydroazulene', 'cis-Perhydroazulene (hydroazulene of guaianes)', 'C1CC[C@H]2CCC[C@H]2CC1', ['cis']),
+    ]:
+        need(smi, kinds)
+        atoms, bonds, xyz = mol3d(smi)
+        add(G, tid, name, smi, atoms, bonds, oblique_pics(xyz, bonds, list(range(len(atoms))), prefer=wide_pic)[0], stereo3d=True)
     # steroids: 5α (A/B trans) and 5β (A/B cis), from 5α- and 5β-dihydrotestosterone with the
-    # oxygens taken off, so the rings have the natural (8β,9α,10β,13β,14α) configuration
+    # oxygens taken off, so the rings have the natural (8β,9α,10β,13β,14α) configuration; drawn
+    # as usual, ring A at the left and D at the right, the β face (the angular methyls) up
     for tid, name, dht in [
         ('steroid-5a', '5α-Steroid (androstane) skeleton', 'C[C@]12CC[C@H]3[C@H]([C@@H]1CC[C@@H]2O)CC[C@@H]4[C@@]3(CCC(=O)C4)C'),
         ('steroid-5b', '5β-Steroid skeleton (A/B cis)', 'C[C@]12CC[C@H]3[C@H]([C@@H]1CC[C@@H]2O)CC[C@H]4[C@@]3(CCC(=O)C4)C'),
     ]:
         mol, xyz, _ = embed(dht, confs=80)
         keep = [a.GetIdx() for a in mol.GetAtoms() if a.GetSymbol() == 'C']
+        c3 = next(a.GetIdx() for a in mol.GetAtoms() if a.GetSymbol() == 'C' and any(n.GetSymbol() == 'O' and mol.GetBondBetweenAtoms(a.GetIdx(), n.GetIdx()).GetBondTypeAsDouble() == 2 for n in a.GetNeighbors()))
+        c17 = next(a.GetIdx() for a in mol.GetAtoms() if a.GetSymbol() == 'C' and any(n.GetSymbol() == 'O' and mol.GetBondBetweenAtoms(a.GetIdx(), n.GetIdx()).GetBondTypeAsDouble() == 1 for n in a.GetNeighbors()))
+        methyls = [a.GetIdx() for a in mol.GetAtoms() if a.GetSymbol() == 'C' and a.GetDegree() == 1]
         rw = Chem.RWMol(mol)
         for a in sorted((a.GetIdx() for a in mol.GetAtoms() if a.GetSymbol() != 'C'), reverse=True):
             rw.RemoveAtom(a)
@@ -727,15 +1079,49 @@ def fused():
         m2.AddConformer(conf)
         Chem.AssignStereochemistryFrom3D(m2)
         smi = Chem.MolToSmiles(m2)
-        add(G, tid, name, smi, atoms, bonds, edge_view(xyz2, bonds, elevs=(20, 25, 30), prefer=wide()), stereo3d=True)
-    # bicyclo[3.3.1]nonane twin chair, adamantane, twistane, cubane
-    for tid, name, smi in [
-        ('adamantane-3d', 'Adamantane', 'C1C2CC3CC1CC(C2)C3'),
-        ('twistane', 'Twistane', 'C1CC2CC3CC1CC2C3'),
-        ('cubane', 'Cubane', 'C12C3C4C1C5C2C3C45'),
-    ]:
-        atoms, bonds, xyz = mol3d(smi)
-        add(G, tid, name, smi, atoms, bonds, clearest(xyz, bonds))
+        at = {old: new for new, old in enumerate(keep)}
+        a3, a17 = at[c3], at[c17]
+        ups = [(at[m], next(at[n.GetIdx()] for n in mol.GetAtomWithIdx(m).GetNeighbors())) for m in methyls]
+
+        def pref(P, bonds=bonds, a3=a3, a17=a17, ups=ups):
+            s = wide_pic(P) + 0.5 * (P[a3, 0] < P[a17, 0]) - 0.05 * vertical_ring_bonds(P, bonds)
+            return s + sum(0.3 for m, c in ups if P[m, 1] > P[c, 1] + 0.5)
+        add(G, tid, name, smi, atoms, bonds, lattice_pics(xyz2, bonds, prefer=pref, lattice=chair_bonds(len(atoms), bonds))[0], stereo3d=True)
+    # adamantane: a chair at the bottom, the three bridges rising to the top CH, as usually drawn
+    smi = 'C1C2CC3CC1CC(C2)C3'
+    atoms, bonds, xyz = mol3d(smi)
+    add(G, 'adamantane-3d', 'Adamantane', smi, atoms, bonds, lattice_pics(xyz, bonds)[0])
+    # twistane: along the page like a ring system
+    smi = 'C1CC2CC3CC1CC2C3'
+    atoms, bonds, xyz = mol3d(smi)
+    add(G, 'twistane', 'Twistane', smi, atoms, bonds, oblique_pics(xyz, bonds, list(range(len(atoms))), prefer=wide_pic, tilts=(0, 15, 30))[0])
+    # cubane: the front face square on, seen a little from the right and above (the usual cube)
+    smi = 'C12C3C4C1C5C2C3C45'
+    atoms, bonds, xyz = mol3d(smi)
+    add(G, 'cubane', 'Cubane', smi, atoms, bonds, cube_view(xyz))
+
+
+def chair_bonds(n, bonds):
+    """Which bonds may be drawn along the lattice: those of six-membered rings and those not in
+    a ring (not the bonds of a fused five-membered ring, which is no chair)."""
+    six = {frozenset((r[k], r[(k + 1) % 6])) for r in rings_of(n, bonds, 6) for k in range(6)}
+    in_ring = set(ring_bonds(n, bonds))
+    return lambda k: frozenset(bonds[k][:2]) in six or k not in in_ring
+
+
+def cube_view(xyz, yaw=24, pitch=16):
+    """A cube with one face towards the viewer, turned `yaw`° and tipped `pitch`° so the faces
+    behind show: the cube as it is drawn in books."""
+    c = xyz.mean(axis=0)
+    q = xyz - c
+    # the cube's own axes: the three edge directions from one corner
+    d = [q[j] - q[0] for j in range(1, len(q)) if abs(np.linalg.norm(q[j] - q[0]) - np.min([np.linalg.norm(q[k] - q[0]) for k in range(1, len(q))])) < 0.05]
+    ex = d[0] / np.linalg.norm(d[0])
+    ey = d[1] - np.dot(d[1], ex) * ex
+    ey /= np.linalg.norm(ey)
+    ez = np.cross(ex, ey)
+    p = q @ np.array([ex, ey, ez]).T
+    return p @ rot_y(math.radians(yaw)).T @ rot_x(math.radians(pitch)).T
 
 
 def bicyclics():
@@ -791,7 +1177,79 @@ def bicyclics():
         except RuntimeError:
             continue
         name = names.get((x, y, z), f'Bicyclo[{x}.{y}.{z}]{ALKANE[x + y + z + 2]}')
-        add(G, f'bicyclo{x}{y}{z}', name, smi, atoms, bonds, clearest(xyz, bonds), stereo3d=z == 0)
+        if z == 0:
+            pics = lattice_pics(xyz, bonds, prefer=wide_pic, lattice=chair_bonds(len(atoms), bonds))
+            pic = pics[0] if pics else oblique_pics(xyz, bonds, list(range(len(atoms))), prefer=wide_pic)[0]
+        else:
+            bh1, bh2, bridges = bridges_of(len(atoms), bonds)
+            # on the diamond lattice (bicyclo[3.3.1]nonane, two chairs): drawn as chairs are
+            pic = lattice_pics(xyz, bonds, prefer=wide_pic)[0] if off_lattice(xyz, bonds) < 16 else bridged_pic(xyz, bonds, bh1, bh2, bridges)
+        add(G, f'bicyclo{x}{y}{z}', name, smi, atoms, bonds, pic, stereo3d=z == 0)
+
+
+def off_lattice(xyz, bonds):
+    """How far (degrees) the bond furthest from the lattice's directions is, the molecule laid
+    on the lattice as well as it goes (180 with no chair to lay it by)."""
+    best = 180
+    for r in rings_of(len(xyz), bonds, 6):
+        for R, t, L in chair_frames(xyz, r, False):
+            Q = (xyz / L) @ R.T + t
+            worst = max(math.degrees(math.acos(min(1, np.max(np.abs(LT @ ((Q[j] - Q[i]) / np.linalg.norm(Q[j] - Q[i]))))))) for i, j, *_ in bonds)
+            best = min(best, worst)
+    return best
+
+
+def bridges_of(n, bonds):
+    """A bicyclic's two bridgeheads and the atoms of each bridge between them."""
+    adj = {i: set() for i in range(n)}
+    for i, j, *_ in bonds:
+        adj[i].add(j)
+        adj[j].add(i)
+    bh = [i for i in range(n) if len(adj[i]) == 3]
+    bridges = []
+    for start in adj[bh[0]]:
+        if start == bh[1]:
+            bridges.append([])
+            continue
+        path, prev = [start], bh[0]
+        while path[-1] != bh[1]:
+            nxt = next(x for x in adj[path[-1]] if x != prev)
+            prev = path[-1]
+            path.append(nxt)
+        bridges.append(path[:-1])
+    return bh[0], bh[1], bridges
+
+
+def bridged_pic(xyz, bonds, bh1, bh2, bridges):
+    """A bridged ring system as it is usually drawn: the bridgeheads left and right, the
+    shortest bridge over the top, the longest at the front, seen a little from above (norbornane
+    as a boat with C7 across its top)."""
+    L = mean_bond(xyz, bonds)
+    c = (xyz[bh1] + xyz[bh2]) / 2
+    ex = xyz[bh2] - xyz[bh1]
+    ex /= np.linalg.norm(ex)
+    small, big = min(bridges, key=len), max(bridges, key=len)
+    up = xyz[small].mean(axis=0) - c
+    ez = up - np.dot(up, ex) * ex
+    ez /= np.linalg.norm(ez)
+    ey = np.cross(ez, ex)  # away from the viewer
+    Q = (xyz - c) @ np.array([ex, ey, ez]).T / L
+    if Q[big, 1].mean() > 0:
+        Q = Q @ rot_z(math.pi).T  # the longest bridge to the front
+    def top(P):
+        lens = [np.linalg.norm(P[i, :2] - P[j, :2]) for i, j, *_ in bonds]
+        # no bond foreshortened to a stub
+        even = -2 * max(0, 0.4 - min(lens) / np.median(lens))
+        # and no bonds crossing (pic_score lets one pass cheaply)
+        q = P[:, :2]
+        cross = sum(1 for x in range(len(bonds)) for y in range(x + 1, len(bonds))
+                    if len({*bonds[x][:2], *bonds[y][:2]}) == 4 and crosses(q[bonds[x][0]], q[bonds[x][1]], q[bonds[y][0]], q[bonds[y][1]]))
+        # the back bridge may run close inside the outline, as in the usual norbornane picture
+        # (pic_score wants atoms 0.2 bonds from other bonds; 0.13 will do here)
+        ab = gaps(P, bonds)[1]
+        close = 10 * max(0, 0.2 - ab) - 10 * max(0, 0.13 - ab)
+        return 0.3 * (P[small, 1].min() >= P[[i for i in range(len(P)) if i not in small], 1].max() - 0.05) + wide_pic(P) + even + close - 0.5 * cross
+    return framed_pics(Q, bonds, prefer=top, spins=range(-30, 31, 5), tilts=(-30, -20, -10, 0))[0]
 
 
 ALKANE = {4: 'butane', 5: 'pentane', 6: 'hexane', 7: 'heptane', 8: 'octane', 9: 'nonane', 10: 'decane', 11: 'undecane', 12: 'dodecane'}
@@ -1056,27 +1514,11 @@ def sugar_chairs():
         ('b-man-chair', 'β-D-Mannopyranose, ⁴C₁ chair', 'OC[C@H]1O[C@@H](O)[C@@H](O)[C@@H](O)[C@@H]1O'),
     ]:
         atoms, bonds, xyz = mol3d(smi, confs=80)
-        # ring in order C1, C2, C3, C4, C5, O5 (atom indexes in the SMILES)
+        # ring in order C1, C2, C3, C4, C5, O5 (atom indexes in the SMILES): drawn as usual, C1 the
+        # right-hand tip, C4 the left-hand one, the ring oxygen at the back
         ring = [4, 6, 8, 10, 2, 3]
-        p = pyranose_view(xyz, ring)
-        add(G, tid, name, smi, atoms, bonds, p, stereo3d=True, attach=5)
-
-
-def pyranose_view(xyz, ring):
-    """A ⁴C₁ pyranose as usually drawn: C1 the right-hand tip, below C4 at the left-hand tip,
-    with the ring oxygen at the back if the chair allows (seen from whichever face does)."""
-    c, R = frame(xyz, ring)
-    best = None
-    for face in (np.eye(3), rot_x(math.pi)):
-        p = (xyz - c) @ R.T @ face.T
-        ang = math.atan2(p[ring[0], 1], p[ring[0], 0])
-        p = p @ rot_z(-ang).T
-        p = p @ rot_x(-math.pi / 2).T
-        p = p @ rot_x(math.radians(19)).T
-        score = 2 * (p[ring[3], 1] > p[ring[0], 1]) + (p[ring[5], 2] < 0)
-        if best is None or score > best[0]:
-            best = (score, p)
-    return best[1]
+        pref = lambda P, r=ring: 0.5 * (P[r[0], 0] >= P[r, 0].max() - 1e-6) + 0.3 * (P[r[5], 1] > P[r[1], 1])
+        add(G, tid, name, smi, atoms, bonds, lattice_pics(xyz, bonds, prefer=pref, rings=[ring])[0], stereo3d=True, attach=5)
 
 
 # ------------------------------------------------------------------ main
