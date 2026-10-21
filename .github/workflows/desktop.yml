@@ -113,6 +113,13 @@ jobs:
     needs: [plan, build]
     if: needs.plan.outputs.release == 'true'
     runs-on: ubuntu-latest
+    # One publish at a time, so two merges close together can't both decide which release is
+    # "latest" at once. (GitHub keeps one waiting publish; if a third merge's publish arrives
+    # while one is waiting, the waiting one is dropped and that build is not published, which
+    # is harmless because the newer one replaces it.)
+    concurrency:
+      group: publish-release
+      cancel-in-progress: false
     env:
       VERSION: 0.1.${{ github.run_number }}
     steps:
@@ -129,4 +136,14 @@ jobs:
           printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.txt"
           node scripts/release.mjs manifest "$VERSION" "$RUNNER_TEMP/notes.txt" out
           # the signatures are inside latest.json; the release lists the installers
-          gh release create "v$VERSION" $(ls out/* | grep -v '\.sig$') --title "Chem Illustrator $VERSION" --notes-file "$RUNNER_TEMP/notes.txt" --target "$GITHUB_SHA"
+          # not marked "latest" yet: builds can finish out of order, and an older one must not
+          # take "latest" (and so the updater's latest.json) from a newer one
+          gh release create "v$VERSION" $(ls out/* | grep -v '\.sig$') --title "Chem Illustrator $VERSION" --notes-file "$RUNNER_TEMP/notes.txt" --target "$GITHUB_SHA" --latest=false
+      - name: Mark the highest version as latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list --limit 100 --exclude-drafts --exclude-pre-releases --json tagName > "$RUNNER_TEMP/releases.json"
+          newest=$(node scripts/release.mjs newest "$VERSION" "$RUNNER_TEMP/releases.json")
+          gh release edit "$newest" --latest
+          echo "Latest release: $newest"
