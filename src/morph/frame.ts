@@ -13,6 +13,7 @@ import { doubleSide, doubleRing, alternating, type MScene, type RGB, type MNode,
 import { turnAt, type TurnPlan } from './turn';
 import type { Mapping } from './mapping';
 import type { NodeMap } from './match';
+import type { Placement } from './rotate';
 
 export interface Inner {
   /** Offset from the bond, along its left normal, in points. */
@@ -65,6 +66,13 @@ export interface FrameOptions {
   flip?: [Vec, Vec] | null;
   /** How much of the step a bond takes to dissolve (1 = the whole step). */
   dissolve?: number;
+  /**
+   * A 3-D turn: where every atom of the start is at time t, and its depth. Bonds stack by depth
+   * while turning and by the drawings' own order at the two ends; wedges cross-dissolve.
+   */
+  place?: ((t: number) => Placement) | null;
+  /** Ring double bonds whose inner line closes up as the ring turns edge-on (rotate.ts ringOpenness). */
+  openness?: Map<string, [string[], number, number]> | null;
 }
 
 const lerp = (a: number, b: number, t: number) => a * (1 - t) + b * t;
@@ -263,10 +271,37 @@ export function frame(A: MScene, B: MScene, M: Mapping, t: number, opt: FrameOpt
     pinA = new Map([...turnAt(turn, t)].map(([k, v]) => [k, v[0]]));
     pinB = new Map([...pinA].filter(([k]) => nmap.has(k)).map(([k, v]) => [nmap.get(k)!, v]));
   }
+  let depth: Map<string, number> | null = null;
+  if (opt.place) {
+    const pl = opt.place(t);
+    pinA = pl.pos;
+    pinB = new Map([...pinA].filter(([k]) => nmap.has(k)).map(([k, v]) => [nmap.get(k)!, v]));
+    depth = pl.depth;
+  }
   const flip = opt.flip ?? null;
   const PA = flow(A, B, nmap, t, flip, pinA);
   const PB = flow(B, A, inv, 1 - t, flip, pinB);
   const zA = znorm(A), zB = znorm(B);
+  // a turn stacks bonds by depth, except at its two ends, which must be the drawings themselves
+  const END = 1e-3;
+  const atStart = t <= END, atEnd = t >= 1 - END;
+  let depthB: Map<string, number> | null = null;
+  if (depth) {
+    depthB = new Map();
+    for (const k of B.nodes.keys()) { const a = inv.get(k); if (a !== undefined && depth.has(a)) depthB.set(k, depth.get(a)!); }
+    for (const k of B.nodes.keys()) {
+      if (depthB.has(k)) continue;
+      const d = B.nbr.get(k)!.filter((n) => depthB!.has(n)).map((n) => depthB!.get(n)!);
+      depthB.set(k, d.length ? d.reduce((s, x) => s + x, 0) / d.length : 0);
+    }
+  }
+  const zTurnA = (aid: string, rankB?: number): number => {
+    const a = A.bonds.get(aid)!;
+    if (atStart || (atEnd && rankB === undefined)) return zA.get(a.z)!;
+    if (atEnd) return rankB!;
+    return (depth!.get(a.b)! + depth!.get(a.e)!) / 2;
+  };
+  const area = (ks: string[]) => Math.abs(ks.reduce((s, k, i) => { const p = PA.get(k)!, q = PA.get(ks[(i + 1) % ks.length])!; return s + p.x * q.y - q.x * p.y; }, 0)) / 2;
   const gap = A.style.gap;
   const fadeOut = 1 - ramp(t, 0, dissolve);
   const fadeIn = ramp(t, 1 - dissolve, 1);
@@ -296,7 +331,7 @@ export function frame(A: MScene, B: MScene, M: Mapping, t: number, opt: FrameOpt
       const bb = B.bonds.get(bmap.get(aid)!)!;
       col = lerpC(col, bb.color, t);
       wid = lerp(wid, bb.w, t);
-      z = lerp(z, zB.get(bb.z)!, t);
+      z = depth ? zTurnA(aid, zB.get(bb.z)!) : lerp(z, zB.get(bb.z)!, t);
       triple = a.order >= 3 || bb.order >= 3;
       aromatic = t < 0.5 ? a.aromatic : bb.aromatic;
       const kek = opt.kekule && opt.kekule[0].has(aid);
@@ -327,6 +362,13 @@ export function frame(A: MScene, B: MScene, M: Mapping, t: number, opt: FrameOpt
           if (Math.abs(side) < 0.02) side = 0.02 * (sideB > 0 ? 1 : -1);
         }
       }
+      if (opt.openness?.has(aid) && a.order === 2 && bb.order === 2) {
+        // the inner line closes onto its bond as the ring turns edge-on, and opens on the other side
+        const [ring, a0, a1] = opt.openness.get(aid)!;
+        const want = lerp(a0, a1, t);
+        const f = want > 1e-6 ? Math.min(1, area(ring) / want) : 1;
+        side = (side < 0 ? -1 : 1) * Math.max(f, 0.02);
+      }
       if (hushSecond.has(aid)) second = 0;
     } else if (shifts.has(aid)) {
       const { tgt, mover, dest } = shifts.get(aid)!;
@@ -339,7 +381,10 @@ export function frame(A: MScene, B: MScene, M: Mapping, t: number, opt: FrameOpt
       triple = a.order >= 3 || bb.order >= 3;
       if (bb.order >= 2 && a.order < 2) { second = t; side = sideFor(B, tgt, PB, a.b, nmap); } else if (a.order >= 2 && bb.order < 2) second = 1 - t;
       ends = [ka(a.b), ka(a.e), ka(dest)];
-    } else alpha = fadeOut;
+    } else {
+      alpha = fadeOut;
+      if (depth) z = zTurnA(aid);
+    }
     if (alpha <= 0.01) continue;
     const stA = stereoOf(A, aid, PA);
     const tgtB = bmap.get(aid) ?? shifts.get(aid)?.tgt;
@@ -352,7 +397,17 @@ export function frame(A: MScene, B: MScene, M: Mapping, t: number, opt: FrameOpt
       if (s) stB = { ...s, begin: PA.get(narrowB)! };
     }
     let stereo = stA;
-    if ((stA?.display ?? 'solid') !== (stB?.display ?? 'solid') || (stA && stB && narrowB !== a.b)) {
+    const differs = (stA?.display ?? 'solid') !== (stB?.display ?? 'solid') || (stA && stB && narrowB !== a.b);
+    if (differs && depth) {
+      // turning, a wedge becomes a plain line (or the reverse) by cross-dissolving: both shapes,
+      // one fading as the other comes
+      const f = ramp(t, 0, 1);
+      const base = { p0, p1, side, color: col, z, w: wid, ends, grp: 'A' + aid, nbrs: neighbours(A, aid, PA), triple, aromatic };
+      if (1 - f > 0.004) emit(lines, gap, { ...base, alpha: alpha * (1 - f), second: second * alpha * (1 - f), stereo: stA, flanks: null });
+      if (f > 0.004) emit(lines, gap, { ...base, alpha: alpha * f, second: second * alpha * f, stereo: stB, flanks: null });
+      continue;
+    }
+    if (differs) {
       // a wedge has no halfway shape: change it in one frame, at the midpoint, or where its
       // group passes edge-on if it turns
       let tSw = 0.5;
@@ -367,8 +422,9 @@ export function frame(A: MScene, B: MScene, M: Mapping, t: number, opt: FrameOpt
 
   for (const [bid, b] of B.bonds) {
     if (binv.has(bid) || fadeIn <= 0.01 || hushArrive.has(bid)) continue;
+    const zb = depthB && !atStart && !atEnd ? (depthB.get(b.b)! + depthB.get(b.e)!) / 2 : zB.get(b.z)!;
     emit(lines, gap, {
-      p0: PB.get(b.b)!, p1: PB.get(b.e)!, side: b.order === 2 ? doubleSide(B, bid, PB) : 0, color: b.color, z: zB.get(b.z)!,
+      p0: PB.get(b.b)!, p1: PB.get(b.e)!, side: b.order === 2 ? doubleSide(B, bid, PB) : 0, color: b.color, z: zb,
       alpha: fadeIn, w: b.w, ends: [kb(b.b), kb(b.e)], grp: 'B' + bid, second: b.order >= 2 ? fadeIn : 0,
       nbrs: neighbours(B, bid, PB), stereo: stereoOf(B, bid, PB), triple: b.order >= 3, flanks: null, aromatic: b.aromatic,
     });

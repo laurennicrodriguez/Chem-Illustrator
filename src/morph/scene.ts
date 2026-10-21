@@ -54,6 +54,12 @@ export interface MNode {
   frag: string;
   /** ChemDraw's AtomID from the file, for mapping files shared with the Python cdxmorph. */
   num?: string;
+  /** The element as its atomic number ("6"), for pairing two drawings of one molecule. */
+  el: string;
+  /** A 3-D position (a pose ChemDraw built from a crystal file): x and y are where it is drawn. */
+  xyz?: [number, number, number];
+  /** ChemDraw's own atom number on such a pose (AtomNumber), which survives a change of pose. */
+  anum?: string;
 }
 
 export interface MBond {
@@ -179,7 +185,7 @@ const MAX_HASHES = 400;
  * One structure of a drawing (the atoms in `atoms` and the bonds among them), with labels laid
  * out by the renderer exactly as the drawing shows them.
  */
-export function sceneOf(doc: Doc, atoms: Iterable<number>, r: Renderer, nums?: Map<number, string>): MScene {
+export function sceneOf(doc: Doc, atoms: Iterable<number>, r: Renderer, nums?: Map<number, string>, anums?: Map<number, string>): MScene {
   r.useStyle(doc);
   const sc = new MScene(styleOf(doc, r.labelFontStack()));
   const ids = new Set(atoms);
@@ -187,7 +193,10 @@ export function sceneOf(doc: Doc, atoms: Iterable<number>, r: Renderer, nums?: M
   for (const id of ids) {
     const a = doc.atoms.get(id);
     if (!a) continue;
-    sc.nodes.set(String(id), nodeOf(doc, a, r, frags.get(id) ?? String(id), nums?.get(id)));
+    const n = nodeOf(doc, a, r, frags.get(id) ?? String(id), nums?.get(id));
+    const an = anums?.get(id);
+    if (an) n.anum = an;
+    sc.nodes.set(String(id), n);
   }
   for (const b of doc.bonds.values()) {
     if (!ids.has(b.a1) || !ids.has(b.a2)) continue;
@@ -264,7 +273,9 @@ function nodeOf(doc: Doc, a: Atom, r: Renderer, frag: string, num?: string): MNo
     const w = r.measure(text, size);
     charge = { value: a.charge, glyph: { text, dx: away.x * size * 0.8 - w / 2, dy: away.y * size * 0.8 + size * 0.35, size }, color };
   }
-  return { key: String(a.id), atom: a.id, p: { x: a.x, y: a.y }, label, charge, color, frag, num };
+  const out: MNode = { key: String(a.id), atom: a.id, p: { x: a.x, y: a.y }, label, charge, color, frag, num, el: String(a.z) };
+  if (a.xyz) out.xyz = a.xyz;
+  return out;
 }
 
 function bondOf(doc: Doc, b: Bond, r: Renderer): MBond {

@@ -561,7 +561,24 @@ class Reader {
     const img = this.image(s.path, el);
     if (!img) return;
     const look = this.pictureLook(kid(el, 'spPr'));
-    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...(look ? { look } : {}) });
+    const video = this.videoOf(s.path, kid(el, 'nvPicPr', 'nvPr'));
+    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...(look ? { look } : {}), ...(video ? { video } : {}) });
+  }
+
+  /** The MP4 video a picture stands for (PowerPoint's media link, else its video link), if it is in the file. */
+  private videoOf(from: string, nvPr: Element | null): Shape['video'] | undefined {
+    if (!nvPr) return undefined;
+    const media = nvPr.getElementsByTagNameNS('http://schemas.microsoft.com/office/powerpoint/2010/main', 'media')[0];
+    const vf = kid(nvPr, 'videoFile');
+    if (!media && !vf) return undefined;
+    const rels = this.r.rels(from);
+    const target = (media && rels.get(rAttr(media, 'embed') ?? '')?.target) || (vf && rels.get(rAttr(vf, 'link') ?? '')?.target);
+    const bytes = target ? this.r.bytes(target) : null;
+    if (!target || !bytes || !/\.mp4$/i.test(target)) {
+      this.warnings.add('Videos other than MP4 files inside the PowerPoint file came in as their first picture.');
+      return undefined;
+    }
+    return { src: dataUrl(bytes, 'video/mp4') };
   }
 
   /**

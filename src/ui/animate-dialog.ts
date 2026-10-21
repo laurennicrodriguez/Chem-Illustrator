@@ -15,6 +15,7 @@ import { atomNumbers, readMapping, writeMapping, MappingFileError } from '../mor
 import { resolve, MappingError } from '../morph/mapping';
 import { configOf } from '../morph/clip';
 import { encodeGif } from '../morph/gif';
+import { encodeMp4, mp4Codec } from '../morph/mp4';
 import { saveFileDialog, openFileDialog, writeFile, showError, withExtension, type FileType } from '../io/files';
 import { zipSync } from 'fflate';
 
@@ -28,9 +29,14 @@ export interface AnimateHooks {
   /** Name of the drawing, for suggested file names. */
   name(): string;
   flash(msg: string): void;
+  /** The drawing is a slide, so the clip can go on it. */
+  onSlide(): boolean;
+  /** Put a video (MP4, with its first frame as a PNG) or, failing that, an animated GIF on the slide. */
+  putOnSlide(clip: { mp4?: Uint8Array; still: Uint8Array; gif?: Uint8Array; w: number; h: number }): void;
 }
 
 const GIF: FileType = { description: 'Animated GIF', extension: 'gif', mime: 'image/gif' };
+const MP4: FileType = { description: 'MP4 video', extension: 'mp4', mime: 'video/mp4' };
 const ZIP: FileType = { description: 'PNG frames (zip)', extension: 'zip', mime: 'application/zip' };
 const MAPPING: FileType = { description: 'cdxmorph pairing', extension: 'json', mime: 'application/json' };
 const TIMING_KEY = 'ci-animate-timing';
@@ -58,7 +64,7 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 
 export class AnimateDialog {
   private d: HTMLDialogElement | null = null;
-  private plan: Plan = { groups: [], arrows: [] };
+  private plan: Plan = { groups: [], arrows: [], kinds: [], poses: [] };
   /** Each step's settings, as saved on its arrow or changed here. */
   private morphs: (MorphStep | undefined)[] = [];
   private steps: Step[] = [];
@@ -92,7 +98,7 @@ export class AnimateDialog {
     if (this.plan.groups.length < 2) {
       this.hooks.flash(opts.arrow !== undefined
         ? 'This arrow needs a structure on each side to animate.'
-        : 'Draw at least two structures (with a reaction arrow between them) to animate.');
+        : 'Draw at least two structures (with a reaction arrow or an equivalency sign between them) to animate.');
       return;
     }
     this.morphs = this.plan.arrows.map((a) => (a !== null ? doc.arrows.get(a)?.morph : undefined));
@@ -199,12 +205,17 @@ export class AnimateDialog {
     exp.addEventListener('click', () => void this.exportMapping());
     const png = button('Save PNG Frames…', 'Every frame as a PNG picture, in one zip');
     png.addEventListener('click', () => void this.savePngs());
+    const mp4 = button('Save MP4…', 'A video, for PowerPoint, Keynote, Word or the web');
+    mp4.addEventListener('click', () => void this.saveMp4());
     const gif = button('Save GIF…');
-    gif.classList.add('primary');
     gif.addEventListener('click', () => void this.saveGif());
+    const slide = button('Put on Slide', 'Add the clip to this slide as a video that plays in the slide show (and in PowerPoint)');
+    slide.addEventListener('click', () => void this.putOnSlide());
+    slide.hidden = !this.hooks.onSlide();
+    (this.hooks.onSlide() ? slide : gif).classList.add('primary');
     const close = button('Close');
     close.addEventListener('click', () => this.close());
-    actions.append(imp, exp, el('span', 'spacer'), png, gif, close);
+    actions.append(imp, exp, el('span', 'spacer'), png, mp4, gif, slide, close);
 
     d.append(h, credit, body, this.status, actions);
     d.addEventListener('close', () => this.teardown());
@@ -313,15 +324,23 @@ export class AnimateDialog {
       const sm = stepSummary(s);
       const row = el('div', 'animate-step');
       const head = el('div', 'animate-step-head');
-      const title = el('strong', undefined, this.steps.length > 1 ? `Step ${i + 1}` : 'The step');
+      const title = el('strong', undefined, (this.steps.length > 1 ? `Step ${i + 1}` : 'The step') + (s.kind === 'turn' ? ' (turn)' : ''));
       const how = el('span', 'muted', this.morphs[i]?.pairs?.length ? (this.morphs[i]!.exact ? ' · your pairs only' : ' · your pairs + automatic') : ' · automatic');
       const edit = button('Edit Pairing…', 'Choose which atom becomes which; see the bonds that break and form');
       edit.addEventListener('click', () => this.editPairing(i));
       head.append(title, how, edit);
       const facts = el('div', 'animate-step-facts');
       facts.textContent = `${sm.paired} of ${sm.startAtoms} atoms paired. Breaking: ${bondText(sm.breaking)}. Forming: ${bondText(sm.forming)}.`;
+      if (s.kind === 'turn') {
+        const t = s.turn;
+        facts.textContent = (t
+          ? `Turns ${t.degrees.toFixed(1)}° in 3-D, measured from ${t.mode === 'guided' ? 'the 3-D structures drawn above' : 'the structures\' own 3-D coordinates'} (${t.measured}).`
+          : 'The same molecule redrawn. With no 3-D structure above each drawing, the atoms move across the page.')
+          + ` ${sm.paired} of ${sm.startAtoms} atoms paired.`;
+        if (t?.reflected) row.append(el('div', 'animate-error', 'The two 3-D structures are mirror images, so no turn takes one to the other; this turn is the closest one.'));
+      }
       row.append(head, facts);
-      if (s.error) row.append(el('div', 'animate-error', `The saved pairing no longer fits (${s.error}), so this step is paired automatically.`));
+      if (s.error) row.append(el('div', 'animate-error', s.kind === 'turn' && !s.turn ? `This turn couldn't be measured in 3-D (${s.error}), so the atoms move across the page instead.` : `The saved pairing no longer fits (${s.error}), so this step is paired automatically.`));
       this.stepsList.append(row);
     });
   }
@@ -406,7 +425,7 @@ export class AnimateDialog {
     const refresh = () => {
       err.textContent = '';
       try {
-        map = resolve(configOf(current(), A, B), A, B);
+        map = resolve(configOf(current(), A, B), A, B, base.kind === 'turn');
       } catch (e) {
         if (!(e instanceof MappingError)) throw e;
         err.textContent = e.message;
@@ -615,6 +634,81 @@ export class AnimateDialog {
     }, gifDelayMs(this.timing.fps));
     await writeFile(target.ref, target.name, bytes, GIF).catch((e) => showError(String(e)));
     this.say(`Saved ${target.name} (${f.w} × ${f.h}, ${(bytes.length / 1024).toFixed(0)} KB).`);
+  }
+
+  /** The clip as an MP4 at the chosen width (even sizes, as video needs), with its first frame; null when this system can't encode video. */
+  private async video(): Promise<{ mp4: Uint8Array; still: Uint8Array; w: number; h: number } | null> {
+    const clip = this.clip;
+    if (!clip) return null;
+    const scale = this.timing.width / (clip.box.x2 - clip.box.x1);
+    const size = clip.size(scale);
+    const w = size.w + (size.w % 2), h = size.h + (size.h % 2);
+    if (!(await mp4Codec(w, h, clip.rate))) return null;
+    const c = el('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    if (!ctx) return null;
+    const draw = (i: number) => {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, w, h);
+      clip.draw(ctx, i, scale);
+    };
+    draw(0);
+    const still = await new Promise<Blob | null>((r) => c.toBlob(r, 'image/png'));
+    this.say('Making the video…');
+    const mp4 = await encodeMp4(clip.length, c, draw, clip.rate, (n) => { if (n % 12 === 0) this.say(`Making the video… ${Math.round((100 * n) / clip.length)}%`); });
+    return { mp4, still: new Uint8Array(await still!.arrayBuffer()), w, h };
+  }
+
+  private async saveMp4(): Promise<void> {
+    this.pause();
+    if (!this.clip) return;
+    const scale = this.timing.width / (this.clip.box.x2 - this.clip.box.x1);
+    const { w, h } = this.clip.size(scale);
+    if (!(await mp4Codec(w + (w % 2), h + (h % 2), this.clip.rate))) {
+      this.say('This computer can\'t make MP4 videos (it has no H.264 video encoder). Save a GIF instead; PowerPoint, Keynote and Word play those too.', true);
+      return;
+    }
+    const target = await saveFileDialog(withExtension(this.hooks.name(), 'mp4'), MP4).catch(async (e) => { await showError(String(e)); return null; });
+    if (!target) return;
+    try {
+      const v = await this.video();
+      if (!v) return;
+      await writeFile(target.ref, target.name, v.mp4, MP4).catch((e) => showError(String(e)));
+      this.say(`Saved ${target.name} (${v.w} × ${v.h}, ${this.clip.seconds.toFixed(1)} s, ${(v.mp4.length / 1024).toFixed(0)} KB).`);
+    } catch (e) {
+      this.say(`The video could not be made: ${(e as Error).message}`, true);
+    }
+  }
+
+  private async putOnSlide(): Promise<void> {
+    this.pause();
+    try {
+      const v = await this.video();
+      if (v) {
+        this.hooks.putOnSlide(v);
+        this.close();
+        this.hooks.flash('The clip is on the slide. It plays by itself in the slide show, and in PowerPoint once saved as .pptx.');
+        return;
+      }
+      // no video encoder here: an animated GIF plays in PowerPoint too
+      const clip = new Clip(this.steps, this.timing, true);
+      const keep = this.clip;
+      this.clip = clip;
+      const f = this.frames();
+      this.clip = keep;
+      if (!f) return;
+      this.say('This computer can\'t make videos, so the clip goes on the slide as an animated GIF…');
+      const gif = await encodeGif(f.n, async (i) => { if (i % 8 === 0) await tick(); return f.at(i); }, gifDelayMs(this.timing.fps));
+      const first = f.at(0).canvas;
+      const still = await new Promise<Blob | null>((r) => first.toBlob(r, 'image/png'));
+      this.hooks.putOnSlide({ gif, still: new Uint8Array(await still!.arrayBuffer()), w: f.w, h: f.h });
+      this.close();
+      this.hooks.flash('This computer can\'t make videos, so the clip is on the slide as an animated GIF. It plays in PowerPoint and in the slide show.');
+    } catch (e) {
+      this.say(`The clip could not be made: ${(e as Error).message}`, true);
+    }
   }
 
   private async savePngs(): Promise<void> {

@@ -244,8 +244,14 @@ R/S and E/Z are worked out for every structure as you draw.
 - The window shows a preview with **Play**, a slider to step through the frames, and the timing: seconds of movement, frames per second, how long it holds on the first and last structures and pauses on the ones in between, smooth or steady movement, and **Play back to the start** for a loop that never jumps. These are remembered.
 - **Steps** lists what each step does: how many atoms are paired and which bonds break and form, numbered as ChemDraw numbers the atoms.
 - **Edit Pairing…** shows the starting structure beside the product. Click an atom on the left, then the atom it becomes on the right; click a paired atom on the left again to unpair it. Red bonds break, green bonds form, and orange numbers are atoms with no partner. Your pairs are kept and the rest is matched automatically, unless you tick **Use only my pairs**. **1,2-shifts** (such as `14-17>21`: bond 14–17 keeps its 14 end and swings its 17 end onto 21) and **Moving lines** (`7-8>4-7`: the second line of the 7=8 double bond moves onto 4–7) are typed in the starting structure's numbers. **Save Pairing** keeps it with the arrow, so it is saved in the .cdxml file.
+- **Save MP4…** writes a video at the width you set, using the computer's own H.264 encoder (Windows and macOS have one; if yours doesn't, the window says so and you can save a GIF instead). MP4s are smaller and sharper than GIFs and keep the exact frame rate.
 - **Save GIF…** writes an animated GIF at the width you set; **Save PNG Frames…** writes every frame as a PNG, in one zip. GIFs store frame times in hundredths of a second, so 24 frames per second plays at 25.
+- In Slides mode, **Put on Slide** places the animation on the current slide as a video (or a GIF where there is no video encoder). It plays on its own, looping, in the slide show and in PowerPoint, and its picture shows the first frame while you edit.
 - **Import Pairing…** and **Export Pairing…** read and write cdxmorph's `.mapping.json` files, so a pairing made in either program works in the other.
+
+#### Turning a structure in 3-D
+
+Put an equivalency sign (two short level lines, =) between two drawings of the same molecule in different orientations, and the animation turns the first into the second in 3-D instead of sliding the atoms flat. The 3-D comes from a structure with 3-D coordinates (for example a .cdxml whose atoms carry `xyz`, as Chem3D writes) placed just above each drawing; without them the step is animated as a flat move. The two 3-D structures are paired by ChemDraw atom numbers when they have them, otherwise by their order, and fitted so the turn is a single rotation. **Steps** shows a turn as "(turn)" with its angle and axis, and warns when the two are mirror images, which no turn can join. Turns and reaction arrows can be mixed in one clip: a scheme like A = A′ → B turns A, then reacts.
 
 ### Reagents and conditions on an arrow
 

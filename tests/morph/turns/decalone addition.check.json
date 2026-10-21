@@ -1,0 +1,86 @@
+{
+ "page": "turns and reactions",
+ "structures": 4,
+ "stages": [
+  {
+   "kind": "turn",
+   "mode": "guided",
+   "measured_from": "37 atoms paired by ChemDraw atom numbering",
+   "rotation_deg": 52.79,
+   "axis": [
+    -0.954,
+    0.2576,
+    0.1532
+   ],
+   "fit_rmsd_pt": 0.007,
+   "not_turning": 3,
+   "atom_pairs": {
+    "2089703943": "2089703772",
+    "2089703945": "2089703774",
+    "2089703947": "2089703776",
+    "2089703949": "2089703778",
+    "2089703951": "2089703780",
+    "2089703953": "2089703782",
+    "2089703961": "2089703790",
+    "2089703963": "2089703796",
+    "2089703965": "2089703794",
+    "2089703967": "2089703788",
+    "2089703974": "2089703802",
+    "2089703976": "2089703806"
+   },
+   "drawn_pairing": "direct geometric match",
+   "drawn_atoms": "12 of 14",
+   "drawn_bonds": "13 of 15",
+   "labels_reshaping": 2,
+   "stereo_dissolving": [
+    "90-98 WedgeBegin to Solid"
+   ],
+   "fading_out": [
+    "100",
+    "99"
+   ],
+   "kept_at_drawn_angle": [
+    "100",
+    "99"
+   ],
+   "crossings_from_the_drawing": 1,
+   "pairing": "composed through the 3D pair",
+   "atoms": "12 of 14",
+   "bonds": "13 of 15"
+  },
+  {
+   "kind": "morph",
+   "atoms": "11 paired of 12 -> 12",
+   "bonds": "12 carried of 13 -> 13",
+   "shifts": 0,
+   "breaking": [
+    "76-85"
+   ],
+   "forming": [
+    "102-111"
+   ],
+   "unpaired_start": [
+    "85"
+   ],
+   "unpaired_product": [
+    "111"
+   ],
+   "mirrored_rings": []
+  },
+  {
+   "kind": "morph",
+   "atoms": "12 paired of 12 -> 13",
+   "bonds": "13 carried of 13 -> 14",
+   "shifts": 0,
+   "breaking": [],
+   "forming": [
+    "114-125"
+   ],
+   "unpaired_start": [],
+   "unpaired_product": [
+    "125"
+   ],
+   "mirrored_rings": []
+  }
+ ]
+}

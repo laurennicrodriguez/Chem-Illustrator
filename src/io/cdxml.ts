@@ -196,6 +196,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       const z = num(n, 'Element', 6);
       const extra: Partial<Atom> = { id, charge: num(n, 'Charge', 0), isotope: num(n, 'Isotope', 0) };
       if (n.getAttribute('IgnoreWarnings') === 'yes') extra.ignoreWarnings = true;
+      const xyz = pts(n.getAttribute('xyz'));
+      if (xyz.length === 3 && xyz.every(Number.isFinite)) extra.xyz = xyz as [number, number, number];
       const rad = n.getAttribute('Radical');
       if (rad === 'Singlet' || rad === 'Doublet' || rad === 'Triplet') extra.radical = rad.toLowerCase() as Atom['radical'];
       const c = color(n);

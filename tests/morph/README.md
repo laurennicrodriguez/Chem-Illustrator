@@ -12,3 +12,7 @@ For each scheme:
 
 `tests/morph.test.ts` checks that our port finds the same bonds breaking and forming and the same
 unpaired atoms.
+
+`turns/` holds cdxmorph's example of a molecule turned in 3-D (`decalone addition.cdxml`: a flat
+drawing and a chair joined by an equivalency sign, each under a 3-D structure ChemDraw built from a
+crystal file, then two reactions), with what `cdxmorph check` reports for the whole page.

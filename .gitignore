@@ -13,6 +13,7 @@ public/RDKit_minimal.wasm
 *.pdf
 # except cdxmorph's public example schemes (MIT), the reaction animation's test files
 !tests/morph/*.cdxml
+!tests/morph/turns/*.cdxml
 
 # OPSIN build folder (see opsin-js/README.md)
 opsin-js/target/

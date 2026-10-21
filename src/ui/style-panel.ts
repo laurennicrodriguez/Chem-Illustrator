@@ -452,7 +452,8 @@ export class StylePanel {
     const box = (x: Shape) => ({ x1: Math.min(x.x1, x.x2), y1: Math.min(x.y1, x.y2), w: Math.abs(x.x2 - x.x1), h: Math.abs(x.y2 - x.y1) });
     this.heading(pics.length > 1 ? `${pics.length} pictures` : 'Picture');
     // vector pictures (SVG, Windows metafiles) have no pixels to count
-    if (pics.length === 1 && p.px) this.note(/^data:image\/(svg|x-emf)/.test(p.src ?? '') ? pictureType(p.src) : `${pictureType(p.src)}, ${p.px.w} × ${p.px.h} pixels`);
+    if (pics.length === 1 && p.video && p.px) this.note(`MP4 video, ${p.px.w} × ${p.px.h} pixels. It plays in the slide show and in PowerPoint.`);
+    else if (pics.length === 1 && p.px) this.note(/^data:image\/(svg|x-emf)/.test(p.src ?? '') ? pictureType(p.src) : `${pictureType(p.src)}, ${p.px.w} × ${p.px.h} pixels`);
     // sizes change from the top left corner, as in PowerPoint's size boxes
     const size = (w: number | null, h: number | null) => set('Resize picture', (x) => {
       const b = box(x);

@@ -41,6 +41,8 @@ export interface Atom {
   color?: string;
   /** Size relative to the document style (structures shrunk or enlarged in ChemDraw keep their own scale). */
   s?: number;
+  /** A 3-D position kept from a file (ChemDraw's xyz on a structure built from a crystal file). */
+  xyz?: [number, number, number];
   /** A contracted label: the group it stands for, as SMILES from the atom where it joins (Structure > Contract Label). */
   group?: string;
   /** A carbon shown with its letter and hydrogens (CH3 at a chain end; ChemDraw's ShowTerminalCarbonLabels). */
@@ -581,6 +583,12 @@ export interface Shape {
   src?: string;
   /** Picture size in pixels (for the crop and for saving). */
   px?: { w: number; h: number };
+  /**
+   * A video shown in the picture's place (an animation put on a slide): the MP4 as a data URL.
+   * `src` is its first frame, shown where a video can't play. It plays by itself in the slide
+   * show, round and round unless `once`.
+   */
+  video?: { src: string; once?: boolean };
   /** Parts of a picture cut off, as fractions of its width and height from each side. */
   crop?: { l: number; t: number; r: number; b: number };
   /** A picture's frame, corners and shadow (PowerPoint's Picture Styles). */

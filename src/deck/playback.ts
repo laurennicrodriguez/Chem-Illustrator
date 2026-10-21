@@ -57,7 +57,7 @@ export class SlideFrames {
   /** Where the slide sits on the canvas: its corner and scale (CSS pixels per point). */
   private at = { x: 0, y: 0, k: 1 };
 
-  constructor(private page: SlidePage, doc: Doc, private anims: Anim[], w: number, h: number, private dpr: number, fill: string | null) {
+  constructor(private page: SlidePage, private doc: Doc, private anims: Anim[], w: number, h: number, private dpr: number, fill: string | null) {
     const live = anims.length ? (() => {
       this.parts = slideParts(doc);
       return anims.filter((a) => partOf(this.parts, a.target));
@@ -88,6 +88,23 @@ export class SlideFrames {
       const pad = part.kind === 'highlight' ? doc.style.bondLength : 8;
       this.layers.push({ part, canvas, box: { x1: b.x1 - pad, y1: b.y1 - pad, x2: b.x2 + pad, y2: b.y2 + pad } });
     }
+  }
+
+  /** Videos on the slide, showing with `done` steps played: where they go, in CSS pixels on the canvas. */
+  videoSpots(done: number): { id: number; src: string; once: boolean; x: number; y: number; w: number; h: number }[] {
+    const states = this.layers.length ? partStates(this.parts, this.anims, done, -1) : null;
+    const { x, y, k } = this.at;
+    const out: { id: number; src: string; once: boolean; x: number; y: number; w: number; h: number }[] = [];
+    for (const sh of this.doc.shapes.values()) {
+      if (sh.kind !== 'picture' || !sh.video) continue;
+      const L = states && this.layers.find((l) => l.part.sel.shapes.has(sh.id));
+      if (L && !(states!.get(L.part)?.visible ?? true)) continue;
+      out.push({
+        id: sh.id, src: sh.video.src, once: !!sh.video.once,
+        x: x + Math.min(sh.x1, sh.x2) * k, y: y + Math.min(sh.y1, sh.y2) * k, w: Math.abs(sh.x2 - sh.x1) * k, h: Math.abs(sh.y2 - sh.y1) * k,
+      });
+    }
+    return out;
   }
 
   /** Number of animation steps (an automatic first one included). */
@@ -246,6 +263,42 @@ export class Player {
     cancelAnimationFrame(this.raf);
     clearTimeout(this.timer);
     this.moving = null;
+    this.videos(false);
+  }
+
+  private vids = new Map<number, HTMLVideoElement>();
+
+  /**
+   * Videos play over the canvas, each in its picture's place, while the slide is shown (not
+   * during a transition). They are muted and let clicks through to the show.
+   */
+  private videos(on: boolean): void {
+    const host = this.canvas.parentElement;
+    const spots = on && host ? this.current.videoSpots(this.done) : [];
+    const keep = new Set(spots.map((s) => s.id));
+    for (const [id, v] of this.vids) if (!keep.has(id)) { v.pause(); v.remove(); this.vids.delete(id); }
+    if (!host || !spots.length) return;
+    if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+    for (const s of spots) {
+      let v = this.vids.get(s.id);
+      if (!v) {
+        v = document.createElement('video');
+        v.muted = true;
+        v.playsInline = true;
+        v.loop = !s.once;
+        v.src = s.src;
+        v.style.position = 'absolute';
+        v.style.pointerEvents = 'none';
+        v.style.objectFit = 'fill';
+        host.append(v);
+        this.vids.set(s.id, v);
+        void v.play().catch(() => { /* the still picture under it shows instead */ });
+      }
+      v.style.left = `${this.canvas.offsetLeft + s.x}px`;
+      v.style.top = `${this.canvas.offsetTop + s.y}px`;
+      v.style.width = `${s.w}px`;
+      v.style.height = `${s.h}px`;
+    }
   }
 
   private framesFor(i: number): SlideFrames {
@@ -356,6 +409,7 @@ export class Player {
     const now = performance.now();
     const m = this.moving;
     if (m?.kind === 'transition') {
+      this.videos(false);
       const p = Math.min(1, (now - m.t0) / 1000 / Math.max(0.01, m.t.dur));
       if (!m.to) {
         m.to = document.createElement('canvas');
@@ -367,6 +421,7 @@ export class Player {
       if (p >= 1) {
         this.moving = null;
         this.arrived();
+        this.videos(true);
         if (this.moving) this.loop();
         else this.idle();
       }
@@ -379,6 +434,7 @@ export class Player {
         this.moving = null;
         this.done = Math.min(this.current.stepCount, this.done + 1);
         this.current.draw(ctx, this.done);
+        this.videos(true);
         this.onChange();
         this.idle();
         return;
@@ -387,5 +443,6 @@ export class Player {
       return;
     }
     this.current.draw(ctx, this.done);
+    this.videos(true);
   }
 }

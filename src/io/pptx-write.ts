@@ -99,6 +99,34 @@ export const PPT_ASCENT = 0.905;
 
 const SVG_EXT = '{96DAC541-7B7A-43D3-8B79-37D633B846F1}';
 const NS_SVG = 'http://schemas.microsoft.com/office/drawing/2016/SVG/main';
+const REL_MEDIA = 'http://schemas.microsoft.com/office/2007/relationships/media';
+const REL_VIDEO = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/video';
+const NS_P14 = 'http://schemas.microsoft.com/office/powerpoint/2010/main';
+
+/**
+ * A slide's videos starting by themselves when the slide comes in (PowerPoint's "Start:
+ * Automatically"), and repeating unless they play once. Only for slides without animations; with
+ * them, PowerPoint plays a video when it is clicked.
+ */
+export function videoTimingXml(videos: { spid: number; once: boolean }[]): string {
+  if (!videos.length) return '';
+  const calls = videos.map((v, k) =>
+    `<p:par><p:cTn id="0" presetID="1" presetClass="mediacall" presetSubtype="0" fill="hold" nodeType="${k ? 'withEffect' : 'afterEffect'}"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+    `<p:cmd type="call" cmd="playFrom(0.0)"><p:cBhvr><p:cTn id="0" dur="1" fill="hold"/><p:tgtEl><p:spTgt spid="${v.spid}"/></p:tgtEl></p:cBhvr></p:cmd></p:childTnLst></p:cTn></p:par>`).join('');
+  const nodes = videos.map((v) =>
+    `<p:video><p:cMediaNode vol="80000"><p:cTn id="0"${v.once ? '' : ' repeatCount="indefinite"'} fill="hold" display="0"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${v.spid}"/></p:tgtEl></p:cMediaNode></p:video>`).join('');
+  const xml = `<p:timing><p:tnLst><p:par><p:cTn id="0" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>` +
+    `<p:seq concurrent="1" nextAc="seek"><p:cTn id="0" dur="indefinite" nodeType="mainSeq"><p:childTnLst>` +
+    `<p:par><p:cTn id="0" fill="hold"><p:stCondLst><p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond></p:stCondLst><p:childTnLst>` +
+    `<p:par><p:cTn id="0" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${calls}</p:childTnLst></p:cTn></p:par>` +
+    `</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn>` +
+    `<p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst>` +
+    `<p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq>` +
+    `${nodes}</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`;
+  let n = 0;
+  return xml.replace(/<p:cTn id="0"/g, () => `<p:cTn id="${++n}"`);
+}
+
 const XMLNS = `xmlns:a="${NS.a}" xmlns:r="${NS.r}" xmlns:p="${NS.p}"`;
 const HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
 
@@ -120,7 +148,7 @@ const CT = {
 /** Picture types a PowerPoint file can hold (EMF and WMF come from Windows programs; kept as they are). */
 export const MIME_EXT: Record<string, string> = {
   'image/png': 'png', 'image/jpeg': 'jpeg', 'image/gif': 'gif', 'image/svg+xml': 'svg', 'image/bmp': 'bmp',
-  'image/tiff': 'tiff', 'image/x-emf': 'emf', 'image/x-wmf': 'wmf',
+  'image/tiff': 'tiff', 'image/x-emf': 'emf', 'image/x-wmf': 'wmf', 'video/mp4': 'mp4',
 };
 
 // ---------------------------------------------------------------- what goes where
@@ -535,9 +563,13 @@ class Writer {
     };
     const styles = textStyles(this.deck.master, s.layout);
     // pictures and shapes at the back, as on screen
+    const videos: { spid: number; once: boolean }[] = [];
     for (const p of parts.pictures) {
       mark({ shapes: new Set([p.id]) }, id);
-      out.push(await this.picture(path, p.src!, { x1: Math.min(p.x1, p.x2), y1: Math.min(p.y1, p.y2), x2: Math.max(p.x1, p.x2), y2: Math.max(p.y1, p.y2) }, `Picture ${id - 1}`, id++, p.crop ?? null, p.look));
+      const box = { x1: Math.min(p.x1, p.x2), y1: Math.min(p.y1, p.y2), x2: Math.max(p.x1, p.x2), y2: Math.max(p.y1, p.y2) };
+      const v = p.video ? this.video(path, p.video.src, p.src!, box, id) : '';
+      if (v) { videos.push({ spid: id, once: !!p.video!.once }); out.push(v); id++; continue; }
+      out.push(await this.picture(path, p.src!, box, `Picture ${id - 1}`, id++, p.crop ?? null, p.look));
     }
     for (const sh of parts.shapes) {
       mark({ shapes: new Set([sh.id]) }, id);
@@ -603,7 +635,32 @@ class Writer {
     if (m.footer.trim()) out.push(footerShape(id++, 'Footer', '<p:ph type="ftr" sz="quarter" idx="11"/>', d.footer, m, m.footer, true));
     const tags = this.addTags(path, { [TAG.layout]: s.layout });
     return `${HEAD}<p:sld ${XMLNS}><p:cSld><p:spTree>${GROUP}${out.join('')}</p:spTree><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:cSld>` +
-      `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(s.transition)}${timingXml(s.anims ?? [], (a) => spids.get(`${a.target.kind} ${a.target.bond ? 'b' : ''}${a.target.id}`) ?? [])}</p:sld>`;
+      `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(s.transition)}${timingXml(s.anims ?? [], (a) => spids.get(`${a.target.kind} ${a.target.bond ? 'b' : ''}${a.target.id}`) ?? []) || videoTimingXml(videos)}</p:sld>`;
+  }
+
+  /**
+   * A video (MP4) with its first frame as the picture PowerPoint shows until it plays: the file is
+   * linked both ways PowerPoint looks for it (PowerPoint 2010's media link and the older video link).
+   */
+  private video(from: string, src: string, poster: string, box: Rect, id: number): string {
+    let mp4: Uint8Array, still: { mime: string; bytes: Uint8Array };
+    try {
+      mp4 = fromDataUrl(src).bytes;
+      still = fromDataUrl(poster);
+    } catch {
+      return '';
+    }
+    const ext = MIME_EXT[still.mime];
+    if (!ext || ext === 'svg') return '';
+    const path = `ppt/media/media${++this.media}.mp4`;
+    this.pkg.add(path, mp4);
+    const media = this.pkg.relate(from, REL_MEDIA, fromPpt(from, path));
+    const link = this.pkg.relate(from, REL_VIDEO, fromPpt(from, path));
+    const blip = this.addMedia(from, still.bytes, ext);
+    return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="Animation ${id - 1}"><a:hlinkClick r:id="" action="ppaction://media"/></p:cNvPr><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>` +
+      `<p:nvPr><a:videoFile r:link="${link}"/><p:extLst><p:ext uri="{DAA4B4D4-6D71-4841-9C94-3DA1D7DE2C6F}"><p14:media xmlns:p14="${NS_P14}" r:embed="${media}"/></p:ext></p:extLst></p:nvPr></p:nvPicPr>` +
+      `<p:blipFill><a:blip r:embed="${blip}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
+      `<p:spPr>${xfrm(box)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`;
   }
 
   /**

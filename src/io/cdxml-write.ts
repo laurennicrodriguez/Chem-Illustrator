@@ -667,6 +667,7 @@ class CdxmlWriter {
     this.set(n, 'IgnoreWarnings', a.ignoreWarnings ? 'yes' : null);
     this.set(n, 'ShowTerminalCarbonLabels', a.showCarbon && !labelled ? 'yes' : null);
     this.set(n, 'Radical', a.radical ? a.radical[0].toUpperCase() + a.radical.slice(1) : null);
+    this.set(n, 'xyz', a.xyz ? a.xyz.map(f2).join(' ') : null);
   }
 
   /** The node's label text and what it stands for (element + H count, abbreviation, R group). */

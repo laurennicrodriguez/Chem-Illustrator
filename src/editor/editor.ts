@@ -3673,6 +3673,15 @@ export class Editor {
     const scale = this.r.view.scale;
     const px = 1 / scale;
     const mk = this.dark ? MARKS.dark : MARKS.light;
+    // videos (an animation on a slide) show their first frame here: a play mark says they move
+    for (const sh of doc.shapes.values()) {
+      if (sh.kind !== 'picture' || !sh.video) continue;
+      const r = 9 * px, cx = Math.min(sh.x1, sh.x2) + r + 4 * px, cy = Math.min(sh.y1, sh.y2) + r + 4 * px;
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.moveTo(cx - r * 0.35, cy - r * 0.5); ctx.lineTo(cx + r * 0.55, cy); ctx.lineTo(cx - r * 0.35, cy + r * 0.5); ctx.closePath(); ctx.fill();
+    }
     // selection
     const s = this.sel;
     if (s.atoms.size || s.bonds.size || s.captions.size || s.arrows.size || s.shapes.size) {
