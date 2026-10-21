@@ -162,7 +162,7 @@ export function fuseChair(doc: Doc, bondId: number, second: boolean): number[] |
   const in3d = fusions3d(doc, t, bondId);
   if (in3d?.length) {
     const f = in3d[second && in3d.length > 1 ? 1 : 0];
-    return placeTemplate(doc, t, { origin: { x: 0, y: 0 }, scale: f.len, angle: 0, mirror: false, pts: f.pts }, { existing: f.existing, scale: b.s, noMerge: true });
+    return placeTemplate(doc, t, { origin: { x: 0, y: 0 }, scale: f.len, angle: 0, mirror: false, pts: f.pts }, { existing: f.existing, move: f.move, scale: b.s, noMerge: true });
   }
   const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
   const ends = [[b.a1, b.a2], [b.a2, b.a1]];
