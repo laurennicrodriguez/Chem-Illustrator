@@ -1393,30 +1393,45 @@ export class Renderer {
 
   /**
    * Where a highlight on these bonds runs when centred between double bonds' lines (see
-   * centredSpots): the rings drawn with their double bonds inside whose bonds are all lit, and
-   * the other double bonds drawn with their second line to one side.
+   * centredSpots). A double bond's band moves half the gap toward its second line. A ring drawn
+   * with its double bonds inside, all of it lit, has every bond's band moved half the gap in
+   * (a bond shared by two such rings stays put). Other bonds stay on their own lines.
    */
   private centredSpots(doc: Doc, lit: Bond[], scale: number): Map<Vec, Vec> {
+    const st = doc.style;
+    const d = doubleBondGap({ ...st, bondLength: st.bondLength * scale }) / 2;
     const isLit = new Set(lit.map((b) => b.id));
-    const litBetween = (a: number, c: number) => (doc.adj.get(a) ?? []).some((id) => { const b = doc.bonds.get(id)!; return isLit.has(id) && (b.a1 === c || b.a2 === c); });
-    const rings = new Map<string, Atom[]>();
-    const offset: { p: Vec; q: Vec; side: Vec }[] = [];
+    const bondBetween = (a: number, c: number) => (doc.adj.get(a) ?? []).find((id) => { const b = doc.bonds.get(id)!; return b.a1 === c || b.a2 === c; });
+    const rings = new Map<string, number[]>();
+    const shift = new Map<Bond, Vec>();
     for (const b of lit) {
       const { side } = this.bondInfo(doc, b);
       if (!side) continue;
       const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
       const n = mul(perp(norm(sub(q, p))), side);
+      shift.set(b, mul(n, d));
       const ring = doc.ringThroughBond(b.id);
-      if (ring && ring.every((id, i) => litBetween(id, ring[(i + 1) % ring.length]))) {
-        const atoms = ring.map((id) => doc.atoms.get(id)!);
-        const c = mul(atoms.reduce((s, a) => add(s, a), { x: 0, y: 0 }), 1 / atoms.length);
-        // the second line inside the ring
-        if (dot(sub(c, p), n) > 0) { rings.set([...ring].sort((x, y) => x - y).join(','), atoms); continue; }
-      }
-      offset.push({ p, q, side: n });
+      if (!ring || !ring.every((id, i) => { const x = bondBetween(id, ring[(i + 1) % ring.length]); return x !== undefined && isLit.has(x); })) continue;
+      const c = mul(ring.map((id) => doc.atoms.get(id)!).reduce((s, a) => add(s, a), { x: 0, y: 0 }), 1 / ring.length);
+      // the second line inside the ring
+      if (dot(sub(c, p), n) > 0) rings.set([...ring].sort((x, y) => x - y).join(','), ring);
     }
-    const st = doc.style;
-    return centredSpots([...rings.values()], offset, doubleBondGap({ ...st, bondLength: st.bondLength * scale }) / 2);
+    // the other bonds of those rings move in toward each ring's middle (not between two rings)
+    const inner = new Map<Bond, Vec[]>();
+    for (const ring of rings.values()) {
+      const atoms = ring.map((id) => doc.atoms.get(id)!);
+      const c = mul(atoms.reduce((s, a) => add(s, a), { x: 0, y: 0 }), 1 / atoms.length);
+      ring.forEach((id, i) => {
+        const b = doc.bonds.get(bondBetween(id, ring[(i + 1) % ring.length])!)!;
+        if (shift.has(b)) return;
+        const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
+        let n = perp(norm(sub(q, p)));
+        if (dot(sub(c, p), n) < 0) n = mul(n, -1);
+        (inner.get(b) ?? inner.set(b, []).get(b)!).push(mul(n, d));
+      });
+    }
+    for (const [b, vs] of inner) if (vs.length === 1) shift.set(b, vs[0]);
+    return centredSpots(lit.map((b) => ({ p: doc.atoms.get(b.a1)!, q: doc.atoms.get(b.a2)!, shift: shift.get(b) ?? { x: 0, y: 0 } })));
   }
 
   /** Where a ring fill's corners are: on its atoms as they are now (as saved, when they are not in this drawing). */

@@ -153,39 +153,46 @@ function corners(a: Vec, ways: Vec[], h: number): Piece[] {
 }
 
 /**
- * Where a highlight centred on double bonds runs instead of through each atom. A ring whose
- * bonds are all highlighted, drawn with a double bond's second line inside it, is taken in by
- * `d` all round (half the gap between the lines), so the band runs midway between the ring and
- * the inner lines on every bond. An atom of a double bond outside such a ring moves `d` toward
- * its second line. Atoms in two such rings, or two such bonds, take the average. Atoms not
- * listed stay where they are.
+ * Where a highlight centred on double bonds runs instead of through each atom. Each bond's band
+ * runs along a line moved off the bond by `shift` (midway between a double bond's two lines;
+ * round a ring drawn with its double bonds inside, midway between the ring and those lines;
+ * nothing for a plain single bond), and each atom moves to where its bonds' lines meet (the
+ * nearest point to all of them, when they don't meet in one point). So a single bond between
+ * two double bonds keeps its own line and the band's corners keep the bonds' angles. Atoms
+ * whose bonds all stay put are not listed.
  */
-export function centredSpots(rings: Vec[][], offset: { p: Vec; q: Vec; side: Vec }[], d: number): Map<Vec, Vec> {
-  const shifts = new Map<Vec, Vec[]>();
-  const add = (a: Vec, v: Vec) => (shifts.get(a) ?? shifts.set(a, []).get(a)!).push(v);
-  for (const ring of rings) {
-    const n = ring.length;
-    const c = { x: ring.reduce((s, a) => s + a.x, 0) / n, y: ring.reduce((s, a) => s + a.y, 0) / n };
-    // each side's line taken in toward the middle by d
-    const lines = ring.map((p, i) => {
-      const q = ring[(i + 1) % n], l = Math.hypot(q.x - p.x, q.y - p.y) || 1;
-      const u = { x: (q.x - p.x) / l, y: (q.y - p.y) / l };
-      let nn = { x: -u.y, y: u.x };
-      if ((c.x - p.x) * nn.x + (c.y - p.y) * nn.y < 0) nn = { x: -nn.x, y: -nn.y };
-      return { o: { x: p.x + nn.x * d, y: p.y + nn.y * d }, u, nn };
-    });
-    ring.forEach((a, i) => {
-      const L1 = lines[(i + n - 1) % n], L2 = lines[i];
-      const den = L1.u.x * L2.u.y - L1.u.y * L2.u.x;
-      if (Math.abs(den) < 1e-9) { add(a, { x: L2.nn.x * d, y: L2.nn.y * d }); return; }
-      const t = ((L2.o.x - L1.o.x) * L2.u.y - (L2.o.y - L1.o.y) * L2.u.x) / den;
-      add(a, { x: L1.o.x + L1.u.x * t - a.x, y: L1.o.y + L1.u.y * t - a.y });
-    });
+export function centredSpots(lines: { p: Vec; q: Vec; shift: Vec }[]): Map<Vec, Vec> {
+  type Acc = { xx: number; xy: number; yy: number; bx: number; by: number; sx: number; sy: number; n: number; moved: boolean };
+  const acc = new Map<Vec, Acc>();
+  for (const { p, q, shift } of lines) {
+    const l = Math.hypot(q.x - p.x, q.y - p.y);
+    if (l < 1e-9) continue;
+    // the line's normal, and a point on it
+    const n = { x: -(q.y - p.y) / l, y: (q.x - p.x) / l };
+    const moved = Math.hypot(shift.x, shift.y) > 1e-9;
+    for (const a of [p, q]) {
+      const o = { x: a.x + shift.x, y: a.y + shift.y };
+      const k = n.x * o.x + n.y * o.y;
+      let m = acc.get(a);
+      if (!m) acc.set(a, (m = { xx: 0, xy: 0, yy: 0, bx: 0, by: 0, sx: 0, sy: 0, n: 0, moved: false }));
+      m.xx += n.x * n.x; m.xy += n.x * n.y; m.yy += n.y * n.y;
+      m.bx += n.x * k; m.by += n.y * k;
+      m.sx += shift.x; m.sy += shift.y; m.n++;
+      m.moved ||= moved;
+    }
   }
-  const inRing = new Set(shifts.keys());
-  for (const { p, q, side } of offset) for (const a of [p, q]) if (!inRing.has(a)) add(a, { x: side.x * d, y: side.y * d });
   const out = new Map<Vec, Vec>();
-  for (const [a, vs] of shifts) out.set(a, { x: a.x + vs.reduce((s, v) => s + v.x, 0) / vs.length, y: a.y + vs.reduce((s, v) => s + v.y, 0) / vs.length });
+  for (const [a, m] of acc) {
+    if (!m.moved) continue;
+    // lines that are (nearly) parallel don't meet: then a pull toward the atom, moved by its
+    // bonds' average shift, keeps the point nearby
+    const t = { x: a.x + m.sx / m.n, y: a.y + m.sy / m.n };
+    const lam = m.xx * m.yy - m.xy * m.xy > 1e-3 ? 0 : 0.05;
+    const xx = m.xx + lam, yy = m.yy + lam, xy = m.xy;
+    const bx = m.bx + lam * t.x, by = m.by + lam * t.y;
+    const det = xx * yy - xy * xy;
+    out.set(a, Math.abs(det) < 1e-12 ? t : { x: (bx * yy - by * xy) / det, y: (by * xx - bx * xy) / det });
+  }
   return out;
 }
 
