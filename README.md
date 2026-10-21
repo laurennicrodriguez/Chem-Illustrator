@@ -22,6 +22,12 @@ Draw an arrow between two structures and a **+** box appears above and below it.
 
 ![A row of four palladium intermediates turned into a Suzuki–Miyaura catalytic cycle with Arrange Scheme](docs/images/catalytic-cycle.gif)
 
+## Reactions that move
+
+**Scheme ▸ Animate Reaction** turns a drawn scheme into an animation: the atoms of each structure move to their places in the next, bonds that break fade out and new ones fade in. An equivalency sign between two drawings of the same molecule turns it in 3-D. Save the clip as a GIF or MP4, or put it on a slide as a looping video that plays in PowerPoint too. Based on [cdxmorph](https://github.com/rshenvi/cdxmorph) by Ryan Shenvi, used with permission.
+
+![A decalone turned in 3-D into its chair conformation, then its ketone taken on to an imine and an amine, and back again; made with Save GIF](docs/images/reaction-animation.gif)
+
 ## Labels and frames that follow your structures
 
 | Compound numbers stay with their compounds | Frames fit what they surround |
@@ -31,7 +37,7 @@ Draw an arrow between two structures and a **+** box appears above and below it.
 
 ## Colour that means something
 
-Fill rings with a colour, a gradient, hatching or dots (patterns can be see-through over a colour), add a drop shadow, and pick out parts of a structure with smooth round, diamond or square highlights, soft-edged or with a shadow. Fills and highlights move with their atoms and come along when you copy a structure.
+Fill rings with a colour, a gradient, hatching or dots (patterns can be see-through over a colour), add a drop shadow, and pick out parts of a structure with round or straight highlights, soft-edged, with a shadow, or centred between a double bond's lines. Fills and highlights move with their atoms and come along when you copy a structure.
 
 ![Estrone with each ring filled differently (gradient, hatching, dots, solid), and a kinase inhibitor with its parts highlighted in round, diamond and square shapes](docs/images/ring-fills.png)
 

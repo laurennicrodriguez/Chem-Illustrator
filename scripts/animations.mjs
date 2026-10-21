@@ -2,7 +2,7 @@
 // Start the program first (npm run dev), then: node scripts/animations.mjs [address] [name …]
 // Needs Playwright with Chromium (as scripts/screenshots.mjs does) and ffmpeg. Give names
 // (smart-arrows, frames, catalytic-cycle, id-labels, spelling, name-to-structure, dark-mode,
-// metal-complex, lone-pairs) to
+// metal-complex, lone-pairs, reaction-animation) to
 // record only those.
 
 import { open, pointer, glide, look, addSmiles, record, canvasBox, screenOf, helperSpot, tool, drag, keys, newestAtom, atomAt, wordSpot, select, paletteTool, sweep } from './shot-lib.mjs';
@@ -383,5 +383,34 @@ if (want('lone-pairs')) {
     }
     await glide(page, c.x + c.width * 0.8, c.y + c.height * 0.85, 15);
   }, { clip, width: 620, hold: 2200 });
+  await browser.close();
+}
+
+// ---------------------------------------------------------------- Scheme > Animate Reaction, saved by the app itself
+if (want('reaction-animation')) {
+  const { readFileSync, mkdtempSync, rmSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { out } = await import('./shot-lib.mjs');
+  const { browser, page } = await open(url);
+  // no system save window here: the app downloads the file instead
+  await page.evaluate(() => { window.showSaveFilePicker = undefined; });
+  // a test file from cdxmorph's author: a decalone turned in 3-D into its chair, then the ketone taken on to the amine
+  const text = readFileSync(new URL('../tests/morph/turns/decalone addition.cdxml', import.meta.url), 'utf8');
+  await page.evaluate((t) => window.__app.openText(t, 'decalone addition.cdxml'), text);
+  await page.evaluate(() => window.__app.command('animate-reaction'));
+  await page.waitForTimeout(3000);
+  await page.locator('dialog[open] label', { hasText: 'Play back to the start' }).click();
+  await page.waitForTimeout(1500);
+  const got = page.waitForEvent('download', { timeout: 120000 });
+  await page.locator('dialog[open] button', { hasText: 'Save GIF' }).click();
+  const dir = mkdtempSync(join(tmpdir(), 'ci-gif-'));
+  const raw = join(dir, 'raw.gif');
+  await (await got).saveAs(raw);
+  // smaller for the README: 15 frames a second, 600 pixels wide, few colours (it is black line art)
+  execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', raw, '-vf', 'fps=15,scale=600:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=24:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle', '-loop', '0', `${out}reaction-animation.gif`]);
+  rmSync(dir, { recursive: true, force: true });
+  console.log('docs/images/reaction-animation.gif');
   await browser.close();
 }
