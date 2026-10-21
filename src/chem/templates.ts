@@ -35,6 +35,11 @@ export interface Template {
    * template is the flat shadow of a real 3-D shape, and fusing onto it works in 3-D (fuse3d.ts).
    */
   z?: number[];
+  /**
+   * The 3-D shape (bond length 1) of a template drawn the textbook way, which is no true shadow
+   * of it (a chair's bonds all drawn one length, axial bonds upright): fuse3d.ts fuses with this.
+   */
+  xyz?: [number, number, number][];
   /** Rings (atom indexes in order) drawn aromatic with a circle. */
   circle?: number[][];
   /** Lines and circles that go with it (a Newman projection's circle and back bonds): kind, then x1, y1, x2, y2. */
@@ -222,6 +227,8 @@ export interface PlaceOptions {
   scale?: number;
   /** Only the atoms in `existing` are shared: others landing on drawn atoms stay separate (3-D fusions, where atoms may lie behind others). */
   noMerge?: boolean;
+  /** Template atoms in `existing` whose drawn atom moves to where the template puts it (a short axial or equatorial bond end that becomes a ring atom). */
+  move?: Set<number>;
 }
 
 /**
@@ -243,6 +250,7 @@ export function placeTemplate(doc: Doc, t: Template, pl: Placement, opts: PlaceO
     }
     if (id !== undefined) {
       shared.add(id);
+      if (opts.move?.has(i)) doc.updateAtom(id, { x: pts[i].x, y: pts[i].y });
     } else {
       const z = elementNumber(el) ?? 6;
       id = doc.addAtom(pts[i].x, pts[i].y, z, { ...extra, ...(charge ? { charge } : {}), ...(label ? { label } : {}) }).id;
