@@ -279,3 +279,26 @@ export async function contentClip(page, margin = 30) {
     return { x: r.left + p.x - margin, y: r.top + p.y - margin, width: q.x - p.x + 2 * margin, height: q.y - p.y + 2 * margin };
   }, margin);
 }
+
+/** Pick a tool from a palette: open it with its small arrow (the palette's button shows `first` until another is picked), then click the one named `label`. */
+export async function paletteTool(page, first, label) {
+  const m = await page.locator(`.palette-wrap:has([data-tool="${first}"]) .more`).boundingBox();
+  await glide(page, m.x + m.width / 2, m.y + m.height / 2, 20);
+  await page.mouse.click(m.x + m.width / 2, m.y + m.height / 2);
+  await page.waitForTimeout(450);
+  const b = await page.locator(`.flyout button[aria-label="${label}"]`).boundingBox();
+  await glide(page, b.x + b.width / 2, b.y + b.height / 2, 15);
+  await page.waitForTimeout(350);
+  await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+}
+
+/** Press at `from`, then sweep the mouse round `centre` to the angle `to` (degrees, clockwise from east) and let go. */
+export async function sweep(page, centre, r, from, to, steps = 30) {
+  const at = (d) => ({ x: centre.x + r * Math.cos(d * Math.PI / 180), y: centre.y + r * Math.sin(d * Math.PI / 180) });
+  await page.mouse.move(centre.x, centre.y, { steps: 10 });
+  await page.mouse.down();
+  const s = at(from); await page.mouse.move(s.x, s.y, { steps: 8 });
+  for (let i = 1; i <= steps; i++) { const p = at(from + (to - from) * i / steps); await page.mouse.move(p.x, p.y); await page.waitForTimeout(16); }
+  await page.waitForTimeout(250);
+  await page.mouse.up();
+}

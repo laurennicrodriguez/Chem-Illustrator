@@ -54,7 +54,7 @@ export const NICKNAMES: Record<string, string> = {
  * Ligands that give the metal a lone pair or a π-bond (L-type): their bond to a metal takes no
  * hydrogen off them, so PPh₃, COD and THF keep every hydrogen they have as free molecules.
  */
-const L_LIGANDS = new Set(['THF', 'DMF', 'DMSO', 'Et2O', 'DME', 'MeCN', 'PhCN', 'PPh3', 'PCy3', 'PMe3', 'PEt3', 'PtBu3', 'PnBu3',
+const L_LIGANDS = new Set(['CO', 'OC', 'THF', 'DMF', 'DMSO', 'Et2O', 'DME', 'MeCN', 'PhCN', 'PPh3', 'PCy3', 'PMe3', 'PEt3', 'PtBu3', 'PnBu3',
   'dppm', 'dppe', 'dppp', 'dppb', 'BINAP', 'Xantphos', 'XPhos', 'SPhos', 'RuPhos', 'JohnPhos', 'DavePhos', 'py', 'bpy', 'bipy',
   'phen', 'tmeda', 'TMEDA', 'en', 'IMes', 'SIMes', 'IPr', 'SIPr', 'COD', 'NBD', 'dba', 'p-cymene', 'C6Me6']);
 
@@ -942,6 +942,10 @@ function buildLabel(label: string, ext: number, charge = 0): { g: MiniGraph | nu
 export function labelGraph(label: string, ext = 1): MiniGraph | null {
   return buildLabel(label, ext).g;
 }
+
+/** A CO label given to a metal is carbon monoxide, M←C⁻≡O⁺ to the chemistry engine, not a formyl group. */
+export const CARBONYL_LIGAND: MiniGraph = parseSmiles('[C-]#[O+]');
+export const isCarbonylLabel = (label: string) => label === 'CO' || label === 'OC';
 
 /**
  * Atoms of a label with more bonds than their element allows, counting the hydrogens written in
