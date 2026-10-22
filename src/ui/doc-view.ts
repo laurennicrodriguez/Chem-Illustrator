@@ -16,6 +16,7 @@ import { drawLayout } from '../text/draw';
 import { drawMath } from '../document/math';
 import { selectionRects } from '../text/layout';
 import { imageFor, onImageReady } from '../render/images';
+import { fxCanvas, hasFx, traceShape } from '../render/picture-fx';
 import { paintChartBox } from '../render/chart-box-paint';
 
 /** Grey space round the pages, in pixels. */
@@ -596,7 +597,9 @@ export class DocView {
     const obj = t.objects[o.id];
     if (!obj) return;
     const look = lookOf(obj);
-    if (look?.shadow) {
+    // a picture changed in Picture Format (cut to a shape, background out) casts its own shadow
+    const own = obj.kind === 'picture' && !obj.chart && hasFx(obj.fx);
+    if (look?.shadow && !own) {
       // a shadow is a box's: the figure sits on white, and the white casts it
       const s = SHADOWS[look.shadow];
       const k = this.zoom * this.dpr;
@@ -634,7 +637,9 @@ export class DocView {
     if (look?.frame) {
       ctx.strokeStyle = look.frameColor ?? '#000';
       ctx.lineWidth = look.frame;
-      ctx.strokeRect(o.x, o.y, o.w, o.h);
+      ctx.beginPath();
+      if (!(obj.kind === 'picture' && obj.fx?.shape && traceShape(ctx, obj.fx.shape, o.x, o.y, o.w, o.h))) ctx.rect(o.x, o.y, o.w, o.h);
+      ctx.stroke();
     }
   }
 
@@ -649,9 +654,21 @@ export class DocView {
       paintChartBox(ctx, obj.chart, o.x, o.y, o.w, o.h);
     } else if (obj.kind === 'picture') {
       // pictures (EMF spectra from MestReNova too) are decoded once, shared with the drawings
-      const img = imageFor(obj.src);
-      if (img) ctx.drawImage(img, o.x, o.y, o.w, o.h);
-      else {
+      const img = fxCanvas(obj) ?? imageFor(obj.src);
+      const look = obj.look;
+      if (img) {
+        ctx.save();
+        if (look?.shadow && hasFx(obj.fx)) {
+          const s = SHADOWS[look.shadow], k = this.zoom * this.dpr;
+          ctx.shadowColor = `rgba(0, 0, 0, ${s.alpha})`;
+          ctx.shadowBlur = s.blur * k;
+          ctx.shadowOffsetX = ctx.shadowOffsetY = s.off * k;
+        }
+        const c = obj.crop ?? { l: 0, t: 0, r: 0, b: 0 };
+        const iw = (img as HTMLImageElement).naturalWidth || img.width, ih = (img as HTMLImageElement).naturalHeight || img.height;
+        ctx.drawImage(img, c.l * iw, c.t * ih, Math.max(1e-3, (1 - c.l - c.r) * iw), Math.max(1e-3, (1 - c.t - c.b) * ih), o.x, o.y, o.w, o.h);
+        ctx.restore();
+      } else {
         ctx.fillStyle = '#eceef2';
         ctx.fillRect(o.x, o.y, o.w, o.h);
       }

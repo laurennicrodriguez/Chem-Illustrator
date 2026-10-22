@@ -26,6 +26,7 @@ import { geoDef, moveSteps, textArea, traceSteps } from '../design/geo';
 import { cutCorners, fillInk, patternClear, patternInk, ringShadowSize, shadowLook, insetPolygon, dotCentres, gradientBands, hatchLines, isDotPattern, patternAngles, patternSpacing, radialBands, shapePolygons } from './fills';
 import { placeholderRect, isEmptyText } from '../deck/deck';
 import { imageFor } from './images';
+import { fxCanvas, fxSrc, shapeDef, traceShape } from './picture-fx';
 import { layoutTable, drawTable, type TableLayout, type TablePart } from '../table';
 import type { TableData } from '../model';
 import { repeatLabelPlace } from '../chem/polymer';
@@ -1097,14 +1098,19 @@ export class Renderer {
   /** A picture, cropped as set, with its frame, corners and shadow; a grey box until its image has loaded. */
   private drawPicture(ctx: CanvasRenderingContext2D, s: Shape, x: number, y: number, w: number, h: number): void {
     const look = s.look;
-    const r = pictureRadius(look, w, h);
+    // a picture cut to a shape (Picture Format) has that shape's outline in place of rounded corners
+    const cut = s.fx?.shape && shapeDef(s.fx.shape) ? s.fx.shape : null;
+    const r = cut ? 0 : pictureRadius(look, w, h);
+    const outline = (dx = 0, dy = 0) => {
+      ctx.beginPath();
+      if (!cut || !traceShape(ctx, cut, x + dx, y + dy, w, h)) ctx.roundRect(x + dx, y + dy, w, h, r);
+    };
     const edge = () => {
       if (!look?.line) return;
       ctx.setLineDash([]);
       ctx.lineWidth = look.line;
       ctx.strokeStyle = look.lineColor ?? '#000000';
-      ctx.beginPath();
-      ctx.roundRect(x, y, w, h, r);
+      outline();
       ctx.stroke();
     };
     if ('picture' in ctx) {
@@ -1112,15 +1118,14 @@ export class Renderer {
       if (look?.shadow) {
         const d = PICTURE_SHADOWS[look.shadow].off;
         ctx.fillStyle = look.shadow === 'soft' ? '#c9c9c9' : '#8c8c8c';
-        ctx.beginPath();
-        ctx.roundRect(x + d, y + d, w, h, r);
+        outline(d, d);
         ctx.fill();
       }
-      (ctx as unknown as PictureSink).picture(s, r);
+      (ctx as unknown as PictureSink).picture({ ...s, src: fxSrc(s) }, r);
       edge();
       return;
     }
-    const img = s.src && !s.chart && !s.math ? imageFor(s.src) : null;
+    const img = s.src && !s.chart && !s.math ? fxCanvas(s) ?? imageFor(s.src) : null;
     ctx.save();
     if (look?.shadow) {
       // canvas shadows ignore the zoom, so they are scaled by it here
@@ -1131,15 +1136,13 @@ export class Renderer {
       if (r || !img) {
         // rounded corners clip the picture, which would clip its shadow too: the shadow is the box's
         ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.roundRect(x, y, w, h, r);
+        outline();
         ctx.fill();
         ctx.shadowColor = 'transparent';
       }
     }
     if (r) {
-      ctx.beginPath();
-      ctx.roundRect(x, y, w, h, r);
+      outline();
       ctx.clip();
     }
     if (s.chart) {
@@ -1150,10 +1153,11 @@ export class Renderer {
       paintShapeMath(ctx, s.math, x, y, w, h, measureText);
     } else if (!img) {
       ctx.fillStyle = '#eef1f5';
-      ctx.fillRect(x, y, w, h);
+      outline();
+      ctx.fill();
     } else {
       const c = s.crop ?? { l: 0, t: 0, r: 0, b: 0 };
-      const iw = img.naturalWidth || s.px?.w || w, ih = img.naturalHeight || s.px?.h || h;
+      const iw = (img as HTMLImageElement).naturalWidth || img.width || s.px?.w || w, ih = (img as HTMLImageElement).naturalHeight || img.height || s.px?.h || h;
       const sx = c.l * iw, sy = c.t * ih, sw = Math.max(1e-3, (1 - c.l - c.r) * iw), sh = Math.max(1e-3, (1 - c.t - c.b) * ih);
       ctx.imageSmoothingEnabled = true;
       ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);

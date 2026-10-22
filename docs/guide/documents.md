@@ -53,6 +53,8 @@ To change a style, open the ⬊ in the corner of **Styles** (or the **Format** p
 
 Click a structure or picture to pick it. Drag its corner handle, or type a **Size (%)** in the panel; **Own Size** puts it back to 100%. Right-click it for **Add Frame** and **Add Shadow**; the panel sets the frame's width and colour and a soft or sharp shadow.
 
+For a picture, **Picture Format** (**Insert** tab, the panel, or right-click) changes its brightness, contrast and sharpness, recolours it (greyscale, sepia, washout, black and white, two colours), makes a colour or the whole picture see-through, removes its background, and crops it to a shape or to proportions (1:1, 4:3, 16:9…). It works as in [Slides: Picture Format](slides.md#picture-format), and is saved as Word's own picture settings.
+
 ### Wrapping and text boxes
 
 Pick a structure, picture or text box, then use **Layout** tab ▸ **Wrap Text** (or the right-click menu):

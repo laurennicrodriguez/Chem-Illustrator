@@ -16,6 +16,7 @@ import { coveringCell, spanOf } from '../table';
 import { DEFAULT_MARGINS, hasLines, resolveTable, strokeOf, type TableStyleDef } from './table-styles';
 import { docMeasure } from './doc-file';
 import { drawMath } from './math';
+import { fxSrc, hasFx, traceShape } from '../render/picture-fx';
 
 /** One piece of a header or footer line: its text, where it goes, and its font. */
 export interface HfPart { where: 'header' | 'footer'; align: 'left' | 'center' | 'right'; text: string; font: string; size: number; w: number }
@@ -152,13 +153,22 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
         continue;
       }
       const look = lookOf(obj);
+      // a picture cut to a shape has the shape's outline for its shadow and frame
+      const cut = obj?.kind === 'picture' ? obj.fx?.shape : undefined;
+      const outline = (dx: number) => {
+        c.beginPath();
+        if (!cut || !traceShape(c, cut, o.x + dx, o.y + dx, o.w, o.h)) c.rect(o.x + dx, o.y + dx, o.w, o.h);
+      };
       if (look?.shadow) {
         // a PDF has no blur: the shadow is a grey box, lighter when soft
         const s = SHADOWS[look.shadow];
         c.fillStyle = look.shadow === 'soft' ? '#c9c9c9' : '#8c8c8c';
-        c.fillRect(o.x + s.off, o.y + s.off, o.w, o.h);
-        c.fillStyle = '#fff';
-        c.fillRect(o.x, o.y, o.w, o.h);
+        outline(s.off);
+        c.fill();
+        if (!(obj?.kind === 'picture' && hasFx(obj.fx))) {
+          c.fillStyle = '#fff';
+          c.fillRect(o.x, o.y, o.w, o.h);
+        }
       }
       if (obj?.kind === 'table') {
         const tb = lay.tables.get(o.id);
@@ -170,7 +180,7 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
       } else if (obj?.kind === 'math') {
         const m = lay.maths.get(o.id);
         if (m) drawMath(c, m, o.x, o.y + m.ascent, m.family, m.color);
-      } else if (obj?.kind === 'picture') ctx.items.push({ kind: 'image', src: obj.src, x: o.x, y: o.y, w: o.w, h: o.h, px: obj.px });
+      } else if (obj?.kind === 'picture') ctx.items.push({ kind: 'image', src: fxSrc(obj) ?? obj.src, x: o.x, y: o.y, w: o.w, h: o.h, px: obj.px, ...(obj.crop ? { crop: obj.crop } : {}) });
       else if (obj?.kind === 'drawing') {
         const pic = drawing(obj.contents, t.drawingStyle);
         if (pic) ctx.items.push(...placeItems(pic, o));
@@ -178,7 +188,8 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
       if (look?.frame) {
         c.strokeStyle = look.frameColor ?? '#000';
         c.lineWidth = look.frame;
-        c.strokeRect(o.x, o.y, o.w, o.h);
+        outline(0);
+        c.stroke();
       }
     }
     return { w: p.w, h: p.h, items: ctx.items, origin: { x: p.x, y: p.top } };

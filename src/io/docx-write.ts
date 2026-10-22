@@ -12,7 +12,9 @@
 // Footnotes and endnotes are Word's own (footnotes.xml and endnotes.xml), and a table of figures
 // is Word's TOC field for a caption label (\c "Figure").
 
-import type { CellBorders, Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
+import type { CellBorders, Contents, Justify, ParaStyle, PictureFx, TableData, TextRun } from '../model';
+import { bakedPart } from '../render/picture-fx';
+import { blipEffectsXml, imgPropsXml, pictureGeomXml } from './picture-xml';
 import { DEFAULT_MARGINS, builtInStyle } from '../document/table-styles';
 import { bordersXml, lookXml as tableLookXml, marginsXml, tableStyleXml } from './docx-table-styles';
 import type { DocStyle } from '../style';
@@ -51,6 +53,11 @@ export interface DocxDeps {
   picture(contents: Contents, style: DocStyle): Promise<{ png: Uint8Array; svg?: string; w: number; h: number; x?: number; y?: number } | null>;
   /** A PNG of an SVG picture, for Word versions that can't show SVG (w × h pixels). */
   svgToPng?(svg: string, w: number, h: number): Promise<Uint8Array>;
+  /**
+   * A picture with its sharpening and Remove Background worked in, as PNG (Word keeps those
+   * worked in, with the original beside it). Without it they are left off.
+   */
+  bakePicture?(p: { src: string; fx?: PictureFx; crop?: { l: number; t: number; r: number; b: number }; px?: { w: number; h: number } }): Promise<Uint8Array | null>;
   /** A drawing's structures as SMILES, for the picture's alt text (null when there are none, or no chemistry engine). */
   smiles?(contents: Contents, style: DocStyle): Promise<string | null>;
   /** The free fonts that come with the app, to put inside the file when the document uses them. */
@@ -741,6 +748,8 @@ class DocxWriter {
     if (o.kind === 'picture' && o.chart) return this.chart(main, id, o, o.chart, rPr);
     const t = this.t;
     let blip: string, svgId: string | null = null, size: { w: number; h: number }, name: string, smiles: string | null = null;
+    // a picture's Picture Format settings, its cropping, and its original when the blip has effects worked in
+    let fx: PictureFx | undefined, crop: { l: number; t: number; r: number; b: number } | undefined, layer: string | null = null;
     // a diagram in the document's own text: Word gets its shapes as a group (the picture for older Words)
     let group: ((docPr: string) => string) | null = null;
     if (o.kind === 'drawing') {
@@ -769,27 +778,36 @@ class DocxWriter {
       const ext = MIME_EXT[mime];
       if (!ext) return '';
       size = shownSize({ w: o.w, h: o.h }, o.scale ?? 1, this.textW);
+      // what Word can't show live goes in worked in, with the original as the picture's layer
+      const baked = bakedPart(o.fx) && this.deps.bakePicture ? await this.deps.bakePicture(o).catch(() => null) : null;
       if (ext === 'svg') {
         // Word shows the SVG; older versions the PNG beside it
         if (!this.deps.svgToPng) return '';
         const k = 300 / 72;
         const png = await this.deps.svgToPng(new TextDecoder().decode(bytes), Math.max(1, Math.round(size.w * k)), Math.max(1, Math.round(size.h * k)));
         blip = this.media(main, png, 'png');
-        svgId = this.media(main, bytes, 'svg');
+        if (!baked) svgId = this.media(main, bytes, 'svg');
       } else blip = this.media(main, bytes, ext);
+      if (baked) { layer = blip; blip = this.media(main, baked, 'png'); }
+      fx = o.fx;
+      crop = o.crop;
+      if (fx?.bg?.tol !== undefined) (this.model.pictureTol ??= {})[id] = fx.bg.tol;
       name = `Picture ${id}`;
     } else return '';
     const cx = emu(size.w), cy = emu(size.h);
     const n = this.docPr++;
-    const ext = svgId ? `<a:extLst><a:ext uri="${SVG_EXT}"><asvg:svgBlip xmlns:asvg="${NS_SVG}" r:embed="${svgId}"/></a:ext></a:extLst>` : '';
+    const exts = (svgId ? `<a:ext uri="${SVG_EXT}"><asvg:svgBlip xmlns:asvg="${NS_SVG}" r:embed="${svgId}"/></a:ext>` : '') + (layer ? imgPropsXml(fx, layer, crop) : '');
+    const ext = blipEffectsXml(fx) + (exts ? `<a:extLst>${exts}</a:extLst>` : '');
+    const srcRect = crop && (crop.l || crop.t || crop.r || crop.b)
+      ? `<a:srcRect l="${Math.round(crop.l * 100000)}" t="${Math.round(crop.t * 100000)}" r="${Math.round(crop.r * 100000)}" b="${Math.round(crop.b * 100000)}"/>` : '';
     const descr = o.kind === 'drawing' ? ` descr="${xml(structureAltText(smiles))}"` : '';
     const look = lookOf(o);
     const docPr = `<wp:docPr id="${n}" name="${xml(name)}"${descr}/>`;
     const picture = `<w:drawing>` + this.placed(o, cx, cy,
       `${docPr}<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>` +
       `<a:graphic><a:graphicData uri="${PIC_NS}"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="${xml(name)}"/><pic:cNvPicPr/></pic:nvPicPr>` +
-      `<pic:blipFill><a:blip r:embed="${blip}">${ext}</a:blip><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
-      `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${lookXml(look)}</pic:spPr></pic:pic></a:graphicData></a:graphic>`) + '</w:drawing>';
+      `<pic:blipFill><a:blip r:embed="${blip}">${ext}</a:blip>${srcRect}<a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
+      `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>${pictureGeomXml(fx, '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>')}${lookXml(look)}</pic:spPr></pic:pic></a:graphicData></a:graphic>`) + '</w:drawing>';
     const r = rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
     if (group) return `<w:r>${r}<mc:AlternateContent><mc:Choice Requires="wpg"><w:drawing>${this.placed(o, cx, cy, group(docPr))}</w:drawing></mc:Choice><mc:Fallback>${picture}</mc:Fallback></mc:AlternateContent></w:r>`;
     return `<w:r>${r}${picture}</w:r>`;

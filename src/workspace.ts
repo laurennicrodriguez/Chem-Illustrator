@@ -501,7 +501,7 @@ export class Workspace {
     const deck = new Deck(this.host);
     deck.master = got.master;
     deck.size = got.size;
-    deck.load(got.slides.map((s) => deck.makeSlide(s.layout, s.contents, s.notes, s)), got.size, got.master);
+    deck.load(got.slides.map((s) => deck.makeSlide(s.layout, s.contents, s.notes, s, got.master)), got.size, got.master, got.sections);
     t.deck = deck;
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
@@ -670,7 +670,7 @@ export class Workspace {
     if (tab.deck) {
       const deck = tab.deck;
       const bytes = await writePptx({
-        size: deck.size, master: deck.master, design: tab.mode === 'design',
+        size: deck.size, master: deck.master, design: tab.mode === 'design', sections: deck.sectionCounts(),
         slides: deck.slides.map((s, i) => ({ id: s.id, layout: s.layout, doc: deck.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims, comments: s.comments, background: s.background, hideGraphics: s.hideGraphics, hidden: s.hidden })),
       }, { ...this.hooks.pptx, title: name.replace(/\.[^.]+$/, '') });
       return { data: bytes, type: PPTX, note: '' };
