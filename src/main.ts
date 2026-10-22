@@ -38,7 +38,9 @@ import { writeCdxml } from './io/cdxml-write';
 import { WORKSPACE } from './io/workspace-file';
 import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, PICTURE_EXTENSIONS } from './io/files';
 import { Workspace, Tab } from './workspace';
-import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize } from './deck/deck';
+import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize, slideBackground } from './deck/deck';
+import { solid } from './deck/background';
+import { formatBackground } from './ui/background-dialog';
 import { drawSlidePage, recordSlide, paintSlide, SURROUND } from './deck/slide-view';
 import { writePdf, jpegInfo, PdfPage, PdfImage } from './io/pdf';
 import { SlideList } from './ui/slide-list';
@@ -1341,7 +1343,7 @@ const slidePage = {
   draw(ctx: CanvasRenderingContext2D): void {
     const d = deckNow();
     if (!d?.current) return;
-    drawSlidePage(ctx, { size: d.size, master: d.master, layout: d.current.layout, index: d.index }, SURROUND);
+    drawSlidePage(ctx, d.page(), SURROUND);
     if (ws.active.mode === 'design' && designGrid.on) drawGrid(ctx, d.size, designGrid.step);
     if (ws.active.mode === 'slides') animUi?.drawMarkers(ctx, renderer.view.scale);
     // (the comment markers are over the drawing, and follow it as it moves)
@@ -1354,7 +1356,7 @@ const slidePage = {
 let listKey = '';
 let masterSeen: unknown = null;
 let indexSeen = -1;
-const slideListKey = (d: Deck) => `${d.slides.map((s) => s.id + (s.notes.trim() ? 'n' : '')).join(',')}|${d.size.w}x${d.size.h}`;
+const slideListKey = (d: Deck) => `${d.slides.map((s) => s.id + (s.notes.trim() ? 'n' : '')).join(',')}|${d.size.w}x${d.size.h}|${d.looks}`;
 
 function deckChanged(deck: Deck): void {
   const key = slideListKey(deck);
@@ -1450,9 +1452,10 @@ dzGuides.checked = guidesOn.design;
 dzGuides.addEventListener('change', () => { guidesOn.design = dzGuides.checked; showGuides(); storeSettings(); });
 dzBg.addEventListener('change', () => {
   const d = deckNow();
-  if (!d || d.master.background.toLowerCase() === dzBg.value.toLowerCase()) return;
+  if (!d || (!d.master.fill && !d.current?.background && d.master.background.toLowerCase() === dzBg.value.toLowerCase())) return;
   finishTyping();
-  d.setMaster({ ...d.master, background: dzBg.value });
+  // a colour here takes the place of a gradient or picture set with Format Background
+  d.setAllBackgrounds(solid(dzBg.value));
 });
 
 /** The Design ribbon shows the page's size and background. */
@@ -1927,6 +1930,42 @@ async function slideMaster(): Promise<void> {
   if (m && deckNow() === d) d.setMaster(m);
 }
 
+/**
+ * Design > Format Background: the background of the slides picked in the slide list (the one
+ * being edited when nothing else is picked), or of every slide; a design's page in Design mode.
+ */
+async function backgroundDialog(): Promise<void> {
+  const d = deckNow();
+  if (!d?.current) return;
+  finishTyping();
+  const design = ws.active.mode === 'design';
+  const picked = design ? [d.index] : slideList.pickedList();
+  const first = d.slides[picked[0]] ?? d.current;
+  const page = d.page(d.slides.indexOf(first));
+  const got = await formatBackground({
+    current: slideBackground(page.master, page.layout, page.own),
+    own: picked.some((i) => !!d.slides[i]?.background),
+    hideGraphics: !!first.hideGraphics,
+    count: picked.length,
+    design,
+    textColour: d.master.textColor,
+    aspect: d.size.w / d.size.h,
+    preview: (canvas, w, h, bg, hideGraphics) => {
+      const i = d.slides.indexOf(first);
+      if (i >= 0) paintSlide(canvas, w, h, window.devicePixelRatio || 1, { ...d.page(i), own: bg, hideGraphics }, d.docOf(i));
+    },
+    pickPicture: async (): Promise<SlideImage | null> => {
+      const p = await pickPicture();
+      return p ? { src: dataUrl(p.bytes, p.mime), px: imageSize(p.bytes, p.mime) ?? { w: 200, h: 200 } } : null;
+    },
+  });
+  // the deck may have gone (its tab closed) while the window was open
+  if (!got || deckNow() !== d) return;
+  if (got.action === 'reset') d.setBackground(undefined, picked, got.hideGraphics);
+  else if (got.action === 'all' || design) d.setAllBackgrounds(got.bg, got.hideGraphics);
+  else d.setBackground(got.bg, picked, got.hideGraphics);
+}
+
 /** Design > Templates: a ready-made look for every slide, and optionally for new decks too. */
 let slideTemplate: string | null = null;
 async function slideTemplates(): Promise<void> {
@@ -1988,7 +2027,7 @@ async function exportPdf(): Promise<void> {
   } else if (deck) {
     pages = deck.slides.map((s, i) => ({
       w: deck.size.w, h: deck.size.h,
-      items: recordSlide({ size: deck.size, master: deck.master, layout: s.layout, index: i }, deck.docOf(i)),
+      items: recordSlide(deck.page(i), deck.docOf(i)),
     }));
   } else {
     const pic = recordPicture(doc, 18);
@@ -2045,7 +2084,7 @@ async function printNow(): Promise<void> {
     return;
   }
   if (deck) {
-    const slide = (i: number) => itemsToSvg(recordSlide({ size: deck.size, master: deck.master, layout: deck.slides[i].layout, index: i }, deck.docOf(i)), { x1: 0, y1: 0, x2: deck.size.w, y2: deck.size.h });
+    const slide = (i: number) => itemsToSvg(recordSlide(deck.page(i), deck.docOf(i)), { x1: 0, y1: 0, x2: deck.size.w, y2: deck.size.h });
     if (tab.mode === 'design') { printPages({ pages: [slide(deck.index)], w: deck.size.w, h: deck.size.h }); return; }
     const v = await ask('Print', [
       { name: 'handout', label: 'Layout', value: printChoices.handout, options: [
@@ -2118,8 +2157,8 @@ async function exportPicture(): Promise<void> {
   let svg: () => string;
   let png: (k: number) => HTMLCanvasElement;
   if (deck) {
-    const i = deck.index, s = deck.slides[i];
-    const page = { size: deck.size, master: clear ? { ...deck.master, background: CLEAR } : deck.master, layout: s.layout, index: i };
+    const i = deck.index;
+    const page = clear ? { ...deck.page(i), own: solid(CLEAR) } : deck.page(i);
     ({ w, h } = deck.size);
     svg = () => itemsToSvg(recordSlide(page, deck.docOf(i)).filter((it) => !(it.kind === 'path' && it.fill === CLEAR)), { x1: 0, y1: 0, x2: w, y2: h });
     png = (k) => {
@@ -2732,6 +2771,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'size-wide': () => setSlideSize(WIDE),
   'size-standard': () => setSlideSize(STANDARD),
   'slide-master': () => slideMaster(),
+  'format-background': () => backgroundDialog(),
   'slide-templates': () => slideTemplates(),
   'slide-transitions': () => animUi?.showTab('transitions'),
   'slide-animations': () => animUi?.showTab('animations'),
@@ -4534,6 +4574,7 @@ function drawingMenu(): MenuItem[] {
       { cmd: 'paste' }, { cmd: 'paste-smiles' }, { cmd: 'select-all' }, null,
       { cmd: 'undo' }, { cmd: 'redo' }, null,
       ...(ws.active.mode === 'slides' ? [{ cmd: 'new-comment', label: 'New Comment' }, { cmd: 'show-comments', label: 'Show Comments' }, null] : []),
+      ...(ws.active.mode === 'slides' || design ? [{ cmd: 'format-background', label: 'Format Background…' }, null] : []),
       { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'connector-tool' }] : []), ...(ws.active.mode === 'slides' ? [{ cmd: 'slide-shapes', label: 'Shape…' }] : [])] },
       { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }, { cmd: 'catalytic-cycle' }, { cmd: 'energy-diagram' }, { cmd: 'ts-brackets' }, null, { cmd: 'animate-reaction' }] },
       { cmd: 'drawing-style' },

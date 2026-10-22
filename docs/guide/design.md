@@ -25,7 +25,7 @@ You can also type a custom size in in, cm, mm, pt or px. Journals change their r
 
 Structures are drawn larger on bigger pages so they stay readable: at their normal size on journal graphics and paper, twice as large on slides and four times as large on posters.
 
-The ribbon's **Page** group also sets the **Background** colour, shows a **Grid** (on screen only, never saved or printed) with its spacing, and turns **Guides** on and off.
+The ribbon's **Page** group also sets the **Background** colour (**Format…** beside it gives the page a gradient, picture or pattern, as in Slides), shows a **Grid** (on screen only, never saved or printed) with its spacing, and turns **Guides** on and off.
 
 ## Ready-made layouts
 

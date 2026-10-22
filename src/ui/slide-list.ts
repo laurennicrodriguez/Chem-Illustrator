@@ -136,7 +136,7 @@ export class SlideList {
     if (!deck || !item || !deck.slides[i]) return;
     const canvas = item.querySelector('canvas')!;
     const h = Math.round((THUMB_W * deck.size.h) / deck.size.w);
-    paintSlide(canvas, THUMB_W, h, window.devicePixelRatio || 1, { size: deck.size, master: deck.master, layout: deck.slides[i].layout, index: i }, deck.docOf(i));
+    paintSlide(canvas, THUMB_W, h, window.devicePixelRatio || 1, deck.page(i), deck.docOf(i));
   }
 
   // ---------------------------------------------------------------- picking

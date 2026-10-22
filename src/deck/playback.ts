@@ -303,7 +303,7 @@ export class Player {
 
   private framesFor(i: number): SlideFrames {
     const s = this.deck.slides[i];
-    const page: SlidePage = { size: this.deck.size, master: this.deck.master, layout: s.layout, index: i };
+    const page: SlidePage = this.deck.page(i);
     return new SlideFrames(page, this.deck.docOf(i), s.anims ?? [], this.w, this.h, this.dpr, this.fill);
   }
 

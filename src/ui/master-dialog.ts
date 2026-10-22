@@ -87,7 +87,8 @@ export function editMaster(m: Master, hooks: MasterDialogHooks): Promise<Master 
 
     section('Background');
     const bg = color(m.background);
-    row('Colour', bg);
+    const fancy = m.fill ? ({ gradient: 'a gradient', picture: 'a picture', pattern: 'a pattern', solid: 'a see-through colour' } as const)[m.fill.kind] : '';
+    row('Colour', bg, ...(fancy ? [unit(`(now ${fancy}, from Format Background; a colour here takes its place)`)] : []));
     const decor = document.createElement('select');
     for (const x of DECORS) decor.add(new Option(x.name, x.id, false, x.id === m.decor));
     row('Template shapes', decor);
@@ -192,9 +193,13 @@ export function editMaster(m: Master, hooks: MasterDialogHooks): Promise<Master 
       const len = n(bond, m.drawing.bondLength);
       // the drawing style scales as a whole with the bond length, so structures keep their proportions
       const drawing = Math.abs(len - m.drawing.bondLength) < 1e-6 ? m.drawing : scaleStyle(m.drawing, len / m.drawing.bondLength);
+      // a colour picked here takes the place of a gradient or picture; left alone, they stay
+      const sameBg = bg.value.toLowerCase() === m.background.toLowerCase();
+      const sameTs = !!ts && ownTitle.checked && tsBg.value.toLowerCase() === ts.background.toLowerCase();
       done({
         ...m,
         background: bg.value,
+        fill: sameBg ? m.fill : undefined,
         titleFont: titleFont.value.trim() || m.titleFont, titleSize: n(titleSize, m.titleSize), titleColor: titleColor.value, titleBold: titleBold.checked,
         bodyFont: bodyFont.value.trim() || m.bodyFont, bodySize: n(bodySize, m.bodySize), subtitleSize: n(subtitleSize, m.subtitleSize), textColor: textColor.value,
         logo, logoCorner: corner.value as Corner, logoWidth: n(logoWidth, m.logoWidth),
@@ -202,7 +207,7 @@ export function editMaster(m: Master, hooks: MasterDialogHooks): Promise<Master 
         footer: footer.value, footerSize: n(footerSize, m.footerSize), footerColor: footerColor.value,
         drawing, fitPasted: fit.checked,
         decor: decor.value as Decor, accent: accent.value, accent2: accent2.value,
-        titleSlide: ownTitle.checked ? { background: tsBg.value, titleColor: tsTitle.value, textColor: tsText.value } : undefined,
+        titleSlide: ownTitle.checked ? { background: tsBg.value, titleColor: tsTitle.value, textColor: tsText.value, ...(sameTs && ts.fill ? { fill: ts.fill } : {}) } : undefined,
       });
     });
     cancel.addEventListener('click', () => done(null));
