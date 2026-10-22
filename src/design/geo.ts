@@ -15,9 +15,9 @@ export type GeoStep =
   | ['C', number, number, number, number, number, number]
   | ['Z'];
 
-export type GeoGroup = 'Basic shapes' | 'Block arrows' | 'Flowchart' | 'Callouts' | 'Lab equipment' | 'Icons';
+export type GeoGroup = 'Basic shapes' | 'Block arrows' | 'Flowchart' | 'Callouts' | 'Action buttons' | 'Lab equipment' | 'Icons' | 'Ink';
 
-export const GEO_GROUPS: GeoGroup[] = ['Basic shapes', 'Block arrows', 'Flowchart', 'Callouts', 'Lab equipment'];
+export const GEO_GROUPS: GeoGroup[] = ['Basic shapes', 'Block arrows', 'Flowchart', 'Callouts', 'Action buttons', 'Lab equipment'];
 
 export interface GeoOutline {
   /** The shape's outline, filled and stroked. */
@@ -233,6 +233,8 @@ export const GEOS: GeoDef[] = [
     },
     text: [0.2, 0.15, 0.8, 0.65],
   },
+  // ---- action buttons: a click in the slide show goes where the button says (Shape.link)
+  ...actionButtons(),
   // ---- lab equipment (outlines; text goes beside them more often than in them)
   {
     id: 'labRbf', name: 'Round-bottom flask', group: 'Lab equipment', outline: true, size: [54, 72], keywords: 'rbf flask reaction',
@@ -385,8 +387,95 @@ export function sliceDef(id: string): GeoDef {
 
 export const GEO_BY_ID = new Map(GEOS.map((g) => [g.id, g]));
 
+// ---------------------------------------------------------------- action buttons
+
+/** Where each action button goes in the slide show when it is put on a slide (a link, see links.ts). */
+export const ACTION_LINKS: Record<string, string> = {
+  actBack: '#prev', actNext: '#next', actFirst: '#first', actLast: '#last', actHome: '#first', actReturn: '#return',
+};
+
+function actionButtons(): GeoDef[] {
+  const box = (w: number, h: number) => poly([[0, 0], [w, 0], [w, h], [0, h]]);
+  // the glyph in the middle, in a square of side g at (cx - g/2, cy - g/2)
+  const glyph = (w: number, h: number, pts: [number, number][][]): GeoStep[] => {
+    const g = 0.56 * Math.min(w, h), x0 = (w - g) / 2, y0 = (h - g) / 2;
+    return pts.flatMap((p) => poly(p.map(([x, y]) => [x0 + x * g, y0 + y * g] as [number, number]), true));
+  };
+  const def = (id: string, name: string, prst: string, keywords: string, shape: [number, number][][]): GeoDef => ({
+    id, name, group: 'Action buttons', prst, size: [54, 54], keywords: `action button slide show ${keywords}`,
+    draw: (w, h) => ({ body: box(w, h), ...(shape.length ? { lines: glyph(w, h, shape) } : {}) }),
+  });
+  return [
+    def('actBack', 'Back or previous', 'actionButtonBackPrevious', 'previous back left', [[[0.85, 0], [0.85, 1], [0.1, 0.5]]]),
+    def('actNext', 'Forward or next', 'actionButtonForwardNext', 'next forward right', [[[0.15, 0], [0.9, 0.5], [0.15, 1]]]),
+    def('actFirst', 'Beginning', 'actionButtonBeginning', 'first start', [[[0.95, 0], [0.95, 1], [0.3, 0.5]], [[0.08, 0], [0.2, 0], [0.2, 1], [0.08, 1]]]),
+    def('actLast', 'End', 'actionButtonEnd', 'last end', [[[0.05, 0], [0.7, 0.5], [0.05, 1]], [[0.8, 0], [0.92, 0], [0.92, 1], [0.8, 1]]]),
+    def('actHome', 'Home', 'actionButtonHome', 'home first house', [[[0.5, 0.02], [1, 0.5], [0.84, 0.5], [0.84, 1], [0.16, 1], [0.16, 0.5], [0, 0.5]]]),
+    def('actReturn', 'Return', 'actionButtonReturn', 'return back last viewed', [[[0.15, 0.25], [0.45, 0], [0.45, 0.15], [0.75, 0.15], [0.95, 0.35], [0.95, 0.8], [0.75, 1], [0.35, 1], [0.35, 0.82], [0.72, 0.82], [0.78, 0.76], [0.78, 0.4], [0.72, 0.33], [0.45, 0.33], [0.45, 0.5]]]),
+    def('actBlank', 'Blank action button', 'actionButtonBlank', 'blank custom', []),
+  ];
+}
+
+// ---------------------------------------------------------------- ink
+
+/**
+ * Ink drawn with the pen or highlighter in the slide show and kept: a design shape whose id holds
+ * its line, `ink:<width in points>:<x,y,x,y…>` with the points as ten-thousandths of the box, so it
+ * moves and stretches with its box like any shape, and goes to PowerPoint as a freeform.
+ */
+export const isInkId = (id: string | undefined): id is string => !!id && id.startsWith('ink:');
+
+/** The id for a line of ink: its points (in points on the slide) as fractions of its box. */
+export function inkId(width: number, pts: Vec[], box: Rect): string {
+  const w = Math.max(1e-6, box.x2 - box.x1), h = Math.max(1e-6, box.y2 - box.y1);
+  const q = (v: number) => Math.max(0, Math.min(10000, Math.round(v * 10000)));
+  return `ink:${+width.toFixed(2)}:${pts.map((p) => `${q((p.x - box.x1) / w)},${q((p.y - box.y1) / h)}`).join(',')}`;
+}
+
+/** A line `width` wide along points, as an outline to fill: round at its ends and turns. */
+export function inkOutline(pts: Vec[], width: number): GeoStep[] {
+  const r = width / 2;
+  if (!pts.length) return [];
+  const disc = (c: Vec): GeoStep[] => ellipse(c.x, c.y, r, r);
+  if (pts.length === 1) return disc(pts[0]);
+  const left: Vec[] = [], right: Vec[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len, ny = dx / len;
+    left.push({ x: pts[i].x + nx * r, y: pts[i].y + ny * r });
+    right.push({ x: pts[i].x - nx * r, y: pts[i].y - ny * r });
+  }
+  const band = poly([...left, ...right.reverse()].map((p) => [p.x, p.y] as [number, number]));
+  // round ends (and round over its own turns: a disc at each sharp corner)
+  const sharp: GeoStep[] = [];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const u = { x: pts[i].x - pts[i - 1].x, y: pts[i].y - pts[i - 1].y }, v = { x: pts[i + 1].x - pts[i].x, y: pts[i + 1].y - pts[i].y };
+    const cos = (u.x * v.x + u.y * v.y) / ((Math.hypot(u.x, u.y) * Math.hypot(v.x, v.y)) || 1);
+    if (cos < 0.5) sharp.push(...disc(pts[i]));
+  }
+  return [...band, ...disc(pts[0]), ...disc(pts[pts.length - 1]), ...sharp];
+}
+
+const inkDefs = new Map<string, GeoDef>();
+
+/** The library shape for a line of ink. */
+export function inkDef(id: string): GeoDef {
+  let d = inkDefs.get(id);
+  if (d) return d;
+  const [, wTxt = '2', ptsTxt = ''] = id.split(':');
+  const width = Math.max(0.1, Number(wTxt) || 2);
+  const n = ptsTxt.split(',').map(Number);
+  const rel: Vec[] = [];
+  for (let i = 0; i + 1 < n.length; i += 2) if (Number.isFinite(n[i]) && Number.isFinite(n[i + 1])) rel.push({ x: n[i] / 10000, y: n[i + 1] / 10000 });
+  d = { id, name: 'Ink', group: 'Ink', size: [72, 72], draw: (w, h) => ({ body: inkOutline(rel.map((p) => ({ x: p.x * w, y: p.y * h })), width) }) };
+  if (inkDefs.size > 500) inkDefs.clear();
+  inkDefs.set(id, d);
+  return d;
+}
+
 /** The shape with this id (an icon for "icon:…"), or the rectangle for one not known (from a newer version). */
-export const geoDef = (id: string | undefined): GeoDef => (isIconId(id) ? iconDef(id) : isSliceId(id) ? sliceDef(id) : GEO_BY_ID.get(id ?? '')) ?? GEO_BY_ID.get('rect')!;
+export const geoDef = (id: string | undefined): GeoDef => (isIconId(id) ? iconDef(id) : isSliceId(id) ? sliceDef(id) : isInkId(id) ? inkDef(id) : GEO_BY_ID.get(id ?? '')) ?? GEO_BY_ID.get('rect')!;
 
 /** The box of an outline's points (control points included: a little generous on curves). */
 export function stepsBox(steps: GeoStep[]): Rect {
@@ -515,6 +604,6 @@ export function geoShapeStyle(id: string, look: Partial<Shape> = {}): Partial<Sh
   // lines in proportion to the shape: clip art (glassware…) at 1.75 pt, as it is drawn about 60 pt
   // across; other shapes at PowerPoint's 1 pt. Change it in the Style panel.
   const base: Partial<Shape> = def.outline ? { color: '#000000', lineWidth: CLIP_ART_LINE } : { filled: true, fillColor: '#dae3f3', color: '#2f5597', lineWidth: SHAPE_LINE, ...look };
-  return { ...base, kind: 'geo', geo: id };
+  return { ...base, kind: 'geo', geo: id, ...(ACTION_LINKS[id] ? { link: ACTION_LINKS[id] } : {}) };
 }
 

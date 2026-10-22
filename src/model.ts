@@ -662,11 +662,22 @@ export interface Shape {
   /** Picture size in pixels (for the crop and for saving). */
   px?: { w: number; h: number };
   /**
-   * A video shown in the picture's place (an animation put on a slide): the MP4 as a data URL.
-   * `src` is its first frame, shown where a video can't play. It plays by itself in the slide
-   * show, round and round unless `once`.
+   * A video or sound shown in the picture's place (an animation put on a slide, or Insert >
+   * Video or Audio): the file as a data URL. `src` is the video's first frame (a speaker for a
+   * sound), shown where it can't play. See Media for how it plays.
    */
-  video?: { src: string; once?: boolean };
+  video?: Media;
+  /**
+   * What a click on it does in the slide show (an action button, a zoom, any shape): a link as
+   * text links have them (links.ts): a slide, a show jump (#next, #return…), a web page or file.
+   */
+  link?: string;
+  /**
+   * A picture that is a Slide Zoom (Insert > Zoom): a picture of the slide `link` goes to. In
+   * the show a click zooms into that slide; with `back`, the show comes back here after it (a
+   * Summary Zoom's part runs on to the slide `to` first).
+   */
+  zoom?: { back?: boolean; to?: string };
   /** Parts of a picture cut off, as fractions of its width and height from each side. */
   crop?: { l: number; t: number; r: number; b: number };
   /** A picture's frame, corners and shadow (PowerPoint's Picture Styles). */
@@ -707,6 +718,41 @@ export interface Shape {
 /** Can this shape be turned to any angle (Slides and Design), keeping its box and turning it as a whole? */
 export function turnsFreely(s: Pick<Shape, 'kind' | 'chart' | 'table' | 'ring' | 'frame' | 'pin'>): boolean {
   return (s.kind === 'rect' || s.kind === 'oval' || s.kind === 'geo' || s.kind === 'picture') && !s.chart && !s.frame && !s.pin;
+}
+
+/**
+ * How a video or sound on a slide plays (PowerPoint's Playback tab). Left out, a setting is as an
+ * animation put on a slide has always played: by itself as the slide comes in, round and round,
+ * at full volume.
+ */
+export interface Media {
+  /** The file, as a data URL (video/mp4, audio/mpeg…). */
+  src: string;
+  /** Play once rather than round and round until the slide changes (Loop until Stopped off). */
+  once?: boolean;
+  /** A sound: nothing to see but its icon. */
+  audio?: boolean;
+  /** Seconds cut off its start and its end (Trim). */
+  trimStart?: number;
+  trimEnd?: number;
+  /** Seconds it fades in over at the start, and out over at the end. */
+  fadeIn?: number;
+  fadeOut?: number;
+  /** When it starts: by itself as the slide comes in (absent) or when it is clicked in the show. */
+  start?: 'auto' | 'click';
+  /** Volume, 0 to 1 (absent: full); `mute` silences it. */
+  vol?: number;
+  mute?: boolean;
+  /** Back to its first frame when it has played (Rewind after Playing). */
+  rewind?: boolean;
+  /** A sound's icon isn't shown in the slide show (Hide During Show). */
+  hide?: boolean;
+  /** A sound keeps playing when the show goes on to the next slides (Play Across Slides). */
+  across?: boolean;
+  /** A video fills the screen while it plays (Play Full Screen). */
+  full?: boolean;
+  /** How long it is, in seconds, when known. */
+  length?: number;
 }
 
 /** An equation on a slide or design: LaTeX, its text size in points, colour and font. */

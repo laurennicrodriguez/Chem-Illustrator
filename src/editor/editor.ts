@@ -312,6 +312,8 @@ export class Editor {
   onDiagram: (id: number) => void = () => {};
   /** A chart (on a slide or drawing) was double-clicked: open its data and settings. */
   onChart: (id: number) => void = () => {};
+  /** Double-click on a video or sound: its Playback settings. */
+  onMedia: (id: number) => void = () => {};
   /** An equation (on a slide or design) was double-clicked: open the equation window. */
   onEquation: (id: number) => void = () => {};
   private drag: Drag | null = null;
@@ -959,6 +961,9 @@ export class Editor {
     } else if (h && h.kind === 'shape' && this.doc.shapes.get(h.id)?.chart) {
       this.selectOnly({ kind: 'shape', id: h.id });
       this.onChart(h.id);
+    } else if (h && h.kind === 'shape' && this.doc.shapes.get(h.id)?.video) {
+      this.selectOnly({ kind: 'shape', id: h.id });
+      this.onMedia(h.id);
     } else if (h && h.kind === 'shape' && this.doc.shapes.get(h.id)?.math) {
       this.selectOnly({ kind: 'shape', id: h.id });
       this.onEquation(h.id);

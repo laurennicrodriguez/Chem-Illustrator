@@ -15,8 +15,7 @@ import { PROPERTIES, MolProps, propertyValue } from '../sheet/properties';
 import { FORMATS, changeDecimals, describeFormat } from '../sheet/numfmt';
 import { UNITS, unitFormat } from '../sheet/units';
 import { isError, CellError, Value } from '../sheet/values';
-import { FUNCTION_NAMES } from '../sheet/evaluate';
-import { ISOTOPE_FUNCTIONS, listedPeaks, readsAsFormula, type IsotopeSource } from '../sheet/isotopes';
+import { listedPeaks, readsAsFormula, type IsotopeSource } from '../sheet/isotopes';
 import { isotopeTable, ISOTOPE_CHARTS, type IsotopeChartKind } from '../sheet/isotope-table';
 import { COMMON_ADDUCTS } from '../chem/hrms';
 import { parseDelimited, toDelimited } from '../sheet/csv';
@@ -30,6 +29,12 @@ import { SheetCharts } from './sheet-chart-ui';
 import { DASH_CHART_KINDS } from './dashboard-ui';
 import { SheetNotes } from './sheet-notes-ui';
 import { SheetValidation } from './sheet-validation-ui';
+import { SheetData } from './sheet-data-ui';
+import { pasteSpecial, goToSpecial, type PasteSpecialOptions, type SpecialKind } from '../sheet/data-tools';
+import { SheetFormulas } from './sheet-formulas-ui';
+import { SheetAnalysis } from './sheet-analysis-ui';
+import { SheetPivots } from './sheet-pivot-ui';
+import { CATEGORIES, type Category } from '../sheet/fn-help';
 import { askLink, followLink, type LinkPlace } from './links-ui';
 import { LINK_COLOUR, cellLink, cellOfLink, describeLink } from '../links';
 import { describeValidation, KIND_NAMES } from '../sheet/validation';
@@ -106,12 +111,20 @@ export class SheetMode {
   readonly notes: SheetNotes;
   /** Data validation: the window, drop-downs and alerts. */
   readonly validation: SheetValidation;
+  /** Find and Replace, Go To Special, Series, Paste Special, Text to Columns, Remove Duplicates, Flash Fill, Sort, Advanced Filter, Freeze Panes and Split. */
+  readonly data: SheetData;
   /** Pictures, shapes and text boxes over the cells. */
   readonly objects: SheetObjects;
   /** The Page Layout tab: page setup, print area, breaks, headers and footers. */
   readonly page: SheetPage;
+  /** The Formulas tab: Insert Function and the defined names. */
+  readonly formulas: SheetFormulas;
+  readonly analysis: SheetAnalysis;
+  readonly pivots: SheetPivots;
   /** The chart the panel and Chart tab showed last (the tab opens when a chart is first picked). */
   private chartShown: number | null = null;
+  /** The PivotTable the ribbon last brought its tab forward for. */
+  private pivotShown: number | null = null;
   /** The dashboard sheet the ribbon was last set up for. */
   private dashShown: Sheet | null = null;
   /** The last cells copied here: pasting the same text back uses these (formulas, structures and formats kept). */
@@ -131,6 +144,7 @@ export class SheetMode {
       structureBitmap: (s, scale) => this.pictures.bitmap(s, Math.abs(scale), scale < 0),
       editStructure: (r, c) => this.drawStructure(r, c),
       key: (e) => this.host.key(e),
+      f3: (e) => this.f3(e),
       changed: () => this.selectionChanged(),
       contextMenu: (x, y, where) => (where === 'chart' ? this.charts.contextMenu(x, y) : where === 'tile' ? this.dashUi.contextMenu(x, y) : where === 'object' ? this.objects.contextMenu(x, y) : this.contextMenu(x, y, where)),
       editObject: (id) => {
@@ -182,6 +196,14 @@ export class SheetMode {
       edit: (label, fn) => this.edit(label, fn),
       flash: (m, ms) => this.host.flash(m, ms),
     });
+    this.data = new SheetData({
+      view: this.view,
+      edit: (label, fn, after) => this.edit(label, fn, after),
+      flash: (m, ms) => this.host.flash(m, ms),
+      table: () => (this.view.sheet ? this.tableAt() : null),
+      goTo: (text) => this.goTo(text),
+      pasteSpecial: (o) => void this.pasteWith(o),
+    });
     this.objects = new SheetObjects({
       view: this.view,
       edit: (label, fn) => this.edit(label, fn),
@@ -193,6 +215,17 @@ export class SheetMode {
       edit: (label, fn) => this.edit(label, fn),
       flash: (m, ms) => this.host.flash(m, ms),
     });
+    this.formulas = new SheetFormulas({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+    });
+    this.analysis = new SheetAnalysis({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+    });
+    this.pivots = new SheetPivots({ view: this.view, flash: (m, ms) => this.host.flash(m, ms) });
     this.dashUi = new DashboardUi({ view: this.view, charts: this.charts, flash: (m, ms) => this.host.flash(m, ms) });
     this.wireFormulaBar();
     this.wireRibbon();
@@ -253,6 +286,8 @@ export class SheetMode {
       if (!s) return;
       const { r, c } = this.view.sel.active;
       if (s.cell(r, c)?.structure) { bar.blur(); this.host.flash('This cell holds a structure: double-click it to change the drawing.'); return; }
+      // the greyed formula of a spilled cell belongs to its first cell: typing here puts in a new value
+      if (bar.classList.contains('spilled')) { bar.value = ''; bar.classList.remove('spilled'); }
       this.view.beginFromBar();
     });
     bar.addEventListener('input', () => { this.view.setTyping(bar.value); this.fitBar(); });
@@ -280,7 +315,7 @@ export class SheetMode {
       e.preventDefault();
       this.goTo(nb.value.trim());
     });
-    document.querySelector('#sh-fx')!.addEventListener('click', (e) => this.functionMenu(e as MouseEvent));
+    document.querySelector('#sh-fx')!.addEventListener('click', () => this.formulas.insertFunction());
   }
 
   /** The name box: go to a cell, a block or a sheet ("B5", "A1:C9", "Sheet2!A1", "Sheet2"). */
@@ -291,13 +326,15 @@ export class SheetMode {
     let sheetName = m ? (m[1] ?? m[2]).replace(/''/g, "'") : null;
     let ref = m ? m[3] : text;
     if (!m && wb.sheetNamed(text)) { sheetName = text; ref = 'A1'; }
+    if (!m && !parseRange(text.toUpperCase()) && this.formulas.goToName(text)) return;
     if (sheetName !== null) {
       const i = wb.sheets.findIndex((s) => s.name.toLowerCase() === sheetName!.toLowerCase());
       if (i < 0) { this.host.flash(`There is no sheet called "${sheetName}".`); return; }
       this.view.goSheet(i);
     }
     const r = parseRange(ref.toUpperCase());
-    if (!r) { this.host.flash(`"${text}" isn't a cell or a block of cells (for example B5 or A1:C9).`); this.showActive(); return; }
+    if (!r && !m && this.formulas.nameSelection(text)) { this.showActive(); return; }
+    if (!r) { this.host.flash(`"${text}" isn't a cell, a block of cells (for example B5 or A1:C9) or a name.`); this.showActive(); return; }
     this.view.select(r, { r: r.r1, c: r.c1 });
     this.view.focus();
   }
@@ -317,53 +354,48 @@ export class SheetMode {
     }
   }
 
+  /** F3 pastes a name, Shift+F3 opens Insert Function, Ctrl+F3 the Name Manager, Ctrl+Shift+F3 Create from Selection. */
+  private f3(e: KeyboardEvent): void {
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (ctrl && e.shiftKey) this.formulas.createFromSelection();
+    else if (ctrl) this.formulas.nameManager();
+    else if (e.shiftKey) this.formulas.insertFunction();
+    else {
+      const rc = this.view.screenRect(this.view.sel.active.r, this.view.sel.active.c);
+      this.formulas.useInFormulaMenu(rc?.left ?? 200, (rc?.bottom ?? 200) + 2);
+    }
+  }
+
   /** The name box and formula bar show the active cell. */
   private showActive(): void {
     const s = this.view.sheet;
     if (!s) { this.nameBox.value = ''; this.bar.value = ''; return; }
     const sel = this.view.sel;
-    this.nameBox.value = sel.range.r1 === sel.range.r2 && sel.range.c1 === sel.range.c2 ? cellName(sel.active.r, sel.active.c) : selectionName(sel.range);
+    this.nameBox.value = this.formulas.nameFor(s, sel.range)
+      ?? (sel.range.r1 === sel.range.r2 && sel.range.c1 === sel.range.c2 ? cellName(sel.active.r, sel.active.c) : selectionName(sel.range));
     const { r, c } = sel.active;
     const cell = s.cell(r, c);
-    if (cell?.structure) {
+    const spill = cell?.input ? null : s.spillAt(r, c);
+    this.bar.classList.toggle('spilled', !!spill && !spill.blocked);
+    if (spill && !spill.blocked) {
+      // a cell an array spilled into shows the formula it came from, greyed: it is typed in its first cell
+      this.bar.value = s.cell(spill.row, spill.col)?.input ?? '';
+      this.bar.placeholder = '';
+      this.bar.readOnly = false;
+      this.bar.title = `Spilled from ${cellName(spill.row, spill.col)}: change the formula there.`;
+    } else if (cell?.structure) {
       const v = s.values.get(keyOf(r, c));
       this.bar.value = typeof v === 'string' && v ? v : '';
       this.bar.placeholder = 'A drawn structure (its SMILES shows here)';
       this.bar.readOnly = true;
+      this.bar.title = '';
     } else {
       this.bar.value = s.effectiveInput(r, c) ?? '';
       this.bar.placeholder = '';
       this.bar.readOnly = false;
+      this.bar.title = '';
     }
     this.fitBar();
-  }
-
-  /** fx: a list of the functions, chemistry first; picking one starts it in the cell. */
-  private functionMenu(e: MouseEvent): void {
-    const chemNames = Object.keys(PROPERTIES);
-    const isoNames = Object.keys(ISOTOPE_FUNCTIONS);
-    const rest = FUNCTION_NAMES.filter((n) => !chemNames.includes(n) && !isoNames.includes(n));
-    const put = (name: string) => {
-      const s = this.view.sheet;
-      if (!s) return;
-      if (this.view.editing) {
-        const inp = this.view.input;
-        const p = inp.selectionStart ?? inp.value.length;
-        inp.value = inp.value.slice(0, p) + `${name}(` + inp.value.slice(p);
-        this.view.setTyping(inp.value);
-        inp.focus();
-        inp.setSelectionRange(p + name.length + 1, p + name.length + 1);
-      } else this.view.editCell(`=${name}(`);
-    };
-    const items: ([string, () => void] | null)[] = [
-      ...chemNames.map((n) => [`${n} — ${PROPERTIES[n].label}`, () => put(n)] as [string, () => void]),
-      ...isoNames.map((n) => [`${n} — ${ISOTOPE_FUNCTIONS[n].label}`, () => put(n)] as [string, () => void]),
-      null,
-      ...rest.map((n) => [n, () => put(n)] as [string, () => void]),
-    ];
-    const b = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const m = popupMenu(b.left, b.bottom + 2, items);
-    m.classList.add('fx-menu');
   }
 
   // ---------------------------------------------------------------- the ribbon
@@ -450,6 +482,12 @@ export class SheetMode {
       case 'text-colour': this.colourMenu(b.left, b.bottom + 2, 'color'); return;
       case 'fill-colour': this.colourMenu(b.left, b.bottom + 2, 'fill'); return;
       case 'borders': this.bordersMenu(b.left, b.bottom + 2); return;
+      case 'use-in-formula': this.formulas.useInFormulaMenu(b.left, b.bottom + 2); return;
+      case 'fn-cat': {
+        const cat = btn.dataset.cat as Category;
+        if (CATEGORIES.includes(cat)) this.formulas.categoryMenu(cat, b.left, b.bottom + 2);
+        return;
+      }
       case 'insert': this.insertMenu(b.left, b.bottom + 2); return;
       case 'delete': this.deleteMenu(b.left, b.bottom + 2); return;
       case 'conditional-formatting': this.formatting.conditionalMenu(b.left, b.bottom + 2); return;
@@ -467,6 +505,14 @@ export class SheetMode {
       case 'chart-legend': this.charts.legendMenu(b.left, b.bottom + 2); return;
       case 'chart-palette': this.charts.paletteMenu(b.left, b.bottom + 2); return;
       case 'chart-errors': this.charts.errorsMenu(b.left, b.bottom + 2); return;
+      case 'freeze-panes-menu': this.data.freezeMenu(b.left, b.bottom + 2); return;
+      case 'find-select': this.findSelectMenu(b.left, b.bottom + 2); return;
+      case 'fill-menu': this.fillMenu(b.left, b.bottom + 2); return;
+      case 'paste-menu': this.pasteMenu(b.left, b.bottom + 2); return;
+      case 'what-if': this.analysis.whatIfMenu(b.left, b.bottom + 2); return;
+      case 'pivot-layout': this.pivots.layoutMenu(b.left, b.bottom + 2); return;
+      case 'pivot-subtotals': this.pivots.subtotalsMenu(b.left, b.bottom + 2); return;
+      case 'pivot-grand': this.pivots.grandMenu(b.left, b.bottom + 2); return;
       case 'table-style': {
         const t = this.tableHere();
         if (t) this.formatting.tableMenu(b.left, b.bottom + 2, (style) => this.formatting.setTable(t, { style }, 'Table style'));
@@ -508,7 +554,26 @@ export class SheetMode {
       case 'fill-down': this.fillDown(); break;
       case 'fill-right': this.fillRight(); break;
       case 'autosum': this.autoSum(); break;
-      case 'find': v.openFind(); break;
+      case 'find': this.data.findReplace(false); break;
+      case 'replace': this.data.findReplace(true); break;
+      case 'find-next': this.data.findNext(); break;
+      case 'go-to': this.data.goTo(); break;
+      case 'go-to-special': this.data.goToSpecial(); break;
+      case 'fill-series': this.data.series(); break;
+      case 'flash-fill': this.data.flashFill(); break;
+      case 'paste-special': this.data.pasteSpecial(); break;
+      case 'paste-values': void this.paste(null, 'values'); break;
+      case 'paste-transpose': void this.pasteWith({ what: 'all', transpose: true }); break;
+      case 'text-to-columns': this.data.textToColumns(); break;
+      case 'remove-duplicates': this.data.removeDuplicates(); break;
+      case 'custom-sort': this.data.sortDialog(); break;
+      case 'advanced-filter': this.data.advancedFilter(); break;
+      case 'clear-filter': this.data.clearFilter(); break;
+      case 'freeze-panes': this.data.freeze('cell'); break;
+      case 'freeze-top-row': this.data.freeze('row'); break;
+      case 'freeze-first-col': this.data.freeze('col'); break;
+      case 'unfreeze-panes': this.data.freeze('off'); break;
+      case 'split-window': this.data.toggleSplit(); break;
       case 'insert-cells': this.insertCells(); break;
       case 'delete-cells': this.deleteCells(); break;
       case 'hide-rows': this.hide('row', true); break;
@@ -573,6 +638,10 @@ export class SheetMode {
       case 'convert-notes': this.notes.convertNotes(); break;
       case 'prev-comment': case 'next-comment': this.notes.step(name === 'next-comment'); break;
       case 'data-validation': this.validation.dialog(); break;
+      case 'insert-function': this.formulas.insertFunction(); break;
+      case 'name-manager': this.formulas.nameManager(); break;
+      case 'define-name': void this.formulas.defineName(); break;
+      case 'names-from-selection': this.formulas.createFromSelection(); break;
       case 'circle-invalid': this.validation.toggleCircles(); this.showRibbonState(); break;
       case 'pick-from-list': v.openDropDown(); break;
       case 'insert-picture-sheet': void this.objects.insertPicture(); break;
@@ -589,6 +658,19 @@ export class SheetMode {
       case 'set-print-area': this.page.setPrintArea(false); break;
       case 'clear-print-area': this.page.set('Clear print area', { printArea: undefined }); break;
       case 'print-preview': this.printPreview(); break;
+      case 'data-analysis': this.analysis.dataAnalysis(); break;
+      case 'goal-seek': this.analysis.goalSeekWindow(); break;
+      case 'data-table': this.analysis.dataTableWindow(); break;
+      case 'solver': this.analysis.solverWindow(); break;
+      case 'insert-pivot': this.pivots.insertWindow(); break;
+      case 'insert-pivot-chart': this.pivots.pivotChart(); break;
+      case 'pivot-fields': this.pivots.fieldsWindow(); break;
+      case 'pivot-refresh': this.pivots.refresh(); break;
+      case 'refresh-all': this.pivots.refreshAll(); break;
+      case 'pivot-source': this.pivots.changeSource(); break;
+      case 'pivot-clear': this.pivots.clear(); break;
+      case 'pivot-select': this.pivots.selectReport(); break;
+      case 'pivot-details': this.pivots.showDetails(); break;
       default: return false;
     }
     return true;
@@ -597,7 +679,7 @@ export class SheetMode {
   /** Change the look of the selected cells. */
   private style(label: string, patch: Partial<CellStyle>): void {
     const v = this.view;
-    this.edit(label, (s) => s.patchStyle(growToMerges(s, v.sel.range), patch));
+    this.edit(label, (s) => { for (const a of v.areas()) s.patchStyle(growToMerges(s, a), patch); });
   }
 
   // ---------------------------------------------------------------- links
@@ -763,6 +845,52 @@ export class SheetMode {
       ['All borders', set('all', 'All borders')],
       null,
       ['No border', set('none', 'No border')],
+    ]);
+  }
+
+  /** Home > Find & Select ▾, as Excel's. */
+  private findSelectMenu(x: number, y: number): void {
+    const special = (kind: SpecialKind) => () => {
+      const v = this.view;
+      const got = goToSpecial(v.sheet!, v.sel.range, v.sel.active, { kind });
+      if (got) v.selectAreas(got);
+      else this.host.flash('No cells were found.');
+    };
+    popupMenu(x, y, [
+      ['Find… (Ctrl+F)', () => this.run('find')],
+      ['Replace… (Ctrl+H)', () => this.run('replace')],
+      ['Go To… (Ctrl+G)', () => this.run('go-to')],
+      ['Go To Special…', () => this.run('go-to-special')],
+      null,
+      ['Formulas', special('formulas')],
+      ['Notes and Comments', special('notes')],
+      ['Constants', special('constants')],
+      ['Blanks', special('blanks')],
+      ['Conditional Formatting', special('condformats')],
+      ['Data Validation', special('validation')],
+    ]);
+  }
+
+  /** Home > Fill ▾ */
+  private fillMenu(x: number, y: number): void {
+    popupMenu(x, y, [
+      ['Down (Ctrl+D)', () => this.run('fill-down')],
+      ['Right (Ctrl+R)', () => this.run('fill-right')],
+      ['Series…', () => this.run('fill-series')],
+      ['Flash Fill (Ctrl+E)', () => this.run('flash-fill')],
+    ]);
+  }
+
+  /** Home > Paste ▾ */
+  private pasteMenu(x: number, y: number): void {
+    popupMenu(x, y, [
+      ['Paste', () => void this.paste(null)],
+      ['Paste Values', () => void this.paste(null, 'values')],
+      ['Paste Formulas', () => void this.pasteWith({ what: 'formulas' })],
+      ['Paste Formatting', () => void this.paste(null, 'formats')],
+      ['Transpose', () => void this.pasteWith({ what: 'all', transpose: true })],
+      null,
+      ['Paste Special… (Ctrl+Alt+V)', () => this.run('paste-special')],
     ]);
   }
 
@@ -990,7 +1118,8 @@ export class SheetMode {
     if (s.frozen.rows) { this.edit('Unfreeze', (sh) => sh.setFrozen(0, sh.frozen.cols)); return; }
     const t = this.tableAt();
     const rows = t?.header !== null && t?.header !== undefined ? t.header + 1 : Math.max(1, v.sel.active.r);
-    this.edit('Freeze header row', (sh) => sh.setFrozen(rows, sh.frozen.cols));
+    v.keepPlaceForFreeze();
+    this.edit('Freeze header row', (sh) => { sh.setSplit(null); sh.setFrozen(rows, sh.frozen.cols); });
     this.host.flash(`Rows 1–${rows} stay in view as you scroll.`);
   }
 
@@ -1571,21 +1700,15 @@ export class SheetMode {
     this.view.focus();
   }
 
-  /** Paste at the selection: cells copied here, a drawing (into the active cell), or text from Excel and elsewhere. */
-  async paste(e: ClipboardEvent | null, what: 'all' | 'values' | 'formats' = 'all'): Promise<void> {
-    const v = this.view;
-    const s = v.sheet;
-    const wb = this.book;
-    if (!s || !wb) return;
-    v.commitEdit();
+  /** Cells on the clipboard: those copied here (with where they came from), our own copy from another window, or null. */
+  private async readBlock(e: ClipboardEvent | null): Promise<{ got: ClipboardCells; block: CellBlock | null; fromClip: boolean } | null> {
     let got: ClipboardCells;
     try {
       got = await this.host.readCells(e);
     } catch (err) {
       this.host.flash('Could not read the clipboard: ' + String(err));
-      return;
+      return null;
     }
-    const { r, c } = v.sel.active;
     let block: CellBlock | null = null;
     let fromClip = false;
     if (this.clip && got.text !== undefined && normalizeEol(got.text) === normalizeEol(this.clip.text)) {
@@ -1599,6 +1722,43 @@ export class SheetMode {
         block = null;
       }
     }
+    if (!block && !got.drawing && got.text !== undefined && got.text !== '') {
+      const rows = parseDelimited(got.text, got.text.includes('\t') ? '\t' : 'auto');
+      const width = Math.max(...rows.map((x) => x.length));
+      block = { rows: rows.length, cols: width, cells: rows.map((x) => x.map((t) => (t === '' ? undefined : { input: t } as Cell))), origin: null };
+    }
+    return { got, block, fromClip };
+  }
+
+  /** Paste Special: some part of the copied cells, combined, skipping blanks or turned (see data-tools). */
+  async pasteWith(o: PasteSpecialOptions): Promise<void> {
+    const v = this.view;
+    const s = v.sheet;
+    if (!s || !this.book) return;
+    v.commitEdit();
+    const read = await this.readBlock(null);
+    if (!read) return;
+    const { block, fromClip } = read;
+    if (!block) { this.host.flash('Copy some cells first: Paste Special pastes cells.'); return; }
+    if (fromClip && this.clip!.cut) { this.host.flash('Paste Special works on copied cells: copy them (Ctrl+C) rather than cut them.', 6000); return; }
+    const at = { row: v.sel.range.r1, col: v.sel.range.c1 };
+    const src = fromClip ? { sheet: this.clip!.sheet, range: this.clip!.range } : null;
+    let target: Range = { r1: at.row, c1: at.col, r2: at.row, c2: at.col };
+    this.edit(o.transpose ? 'Paste Transposed' : 'Paste Special', (sh) => { target = pasteSpecial(sh, at, block, o, src); }, () => target);
+    v.select(target, { r: target.r1, c: target.c1 });
+  }
+
+  /** Paste at the selection: cells copied here, a drawing (into the active cell), or text from Excel and elsewhere. */
+  async paste(e: ClipboardEvent | null, what: 'all' | 'values' | 'formats' = 'all'): Promise<void> {
+    const v = this.view;
+    const s = v.sheet;
+    const wb = this.book;
+    if (!s || !wb) return;
+    v.commitEdit();
+    const read = await this.readBlock(e);
+    if (!read) return;
+    const { got, fromClip, block } = read;
+    const { r, c } = v.sel.active;
     if (!block && got.drawing) {
       if (isBlankDrawing(got.drawing)) { this.host.flash('There is nothing to paste.'); return; }
       const m = s.mergeAt(r, c);
@@ -1607,11 +1767,6 @@ export class SheetMode {
       this.edit('Paste structure', (sh) => sh.setStructure(rr, cc, got.drawing!));
       this.host.flash(`Pasted the structure into ${cellName(rr, cc)}. Double-click it to change it.`);
       return;
-    }
-    if (!block && got.text !== undefined && got.text !== '') {
-      const rows = parseDelimited(got.text, got.text.includes('\t') ? '\t' : 'auto');
-      const width = Math.max(...rows.map((x) => x.length));
-      block = { rows: rows.length, cols: width, cells: rows.map((x) => x.map((t) => (t === '' ? undefined : { input: t } as Cell))), origin: null };
     }
     if (!block) { this.host.flash(got.picture ? 'Pictures can\'t go in a cell yet: paste structures, or text from Excel.' : 'There is nothing to paste.'); return; }
     // a block pasted on a larger selection that holds it a whole number of times is repeated (as in Excel)
@@ -1710,6 +1865,7 @@ export class SheetMode {
       ['Copy', () => void this.copy()],
       ['Paste', () => void this.paste(null)],
       ['Paste Values', () => void this.paste(null, 'values')],
+      ['Paste Special…', () => this.run('paste-special')],
       null,
     ];
     if (where === 'row') {
@@ -1722,6 +1878,9 @@ export class SheetMode {
         ['Column width…', () => void this.askSize('col')], ['Fit width to contents', () => { for (let c = R.c1; c <= Math.min(R.c2, s.lastCol + 1); c++) v.autoFit('col', c); }]);
       if (s.colDefs.has(R.c1)) items.push(['Change the column\'s formula…', () => void this.editColumnFormula(R.c1)], ['Stop calculating this column (keep the values)', () => this.freezeColumn(R.c1)]);
     } else {
+      // in a PivotTable, its own commands first, as Excel's menu has them
+      const pivot = this.pivots.contextItems(x, y);
+      if (pivot) items.push(...pivot, null);
       items.push(['Insert…', () => this.insertCells()], ['Delete…', () => this.deleteCells()], ['Clear contents', () => v.clearSelection()]);
       // notes and comments, as Excel's right-click menu has them
       const note = s.noteAt(v.sel.active.r, v.sel.active.c);
@@ -1739,6 +1898,7 @@ export class SheetMode {
     items.push(null,
       ['Sort smallest to largest', () => void this.sort(false)],
       ['Sort largest to smallest', () => void this.sort(true)],
+      ['Custom Sort…', () => this.run('custom-sort')],
       [s.filter ? 'Filter off' : 'Filter', () => this.toggleFilter()],
       null,
       [structure ? 'Change structure…' : 'Draw structure…', () => this.drawStructure(v.sel.active.r, v.sel.active.c)],
@@ -1813,6 +1973,8 @@ export class SheetMode {
 
   private selectionChanged(): void {
     this.showActive();
+    this.analysis.selectionChanged();
+    this.pivots.selectionChanged();
     this.schedulePanel();
   }
 
@@ -1834,6 +1996,8 @@ export class SheetMode {
     const on = !!s.dashboard;
     document.querySelector<HTMLElement>('#formula-bar')!.hidden = on;
     tab('home').hidden = on;
+    tab('formulas').hidden = on;
+    tab('data').hidden = on;
     tab('dashboard').hidden = !on;
     if (!on) {
       if (selected === 'dashboard') this.showRibbonTab('home');
@@ -1841,10 +2005,11 @@ export class SheetMode {
       return false;
     }
     tab('table').hidden = true;
+    tab('pivot').hidden = true;
     const t = this.view.dash.pickedTile;
     const chart = t?.kind === 'chart';
     tab('chart').hidden = !chart;
-    if (this.dashShown !== s || selected === 'home' || selected === 'table' || (selected === 'chart' && !chart)) this.showRibbonTab('dashboard');
+    if (this.dashShown !== s || selected === 'home' || selected === 'formulas' || selected === 'data' || selected === 'pivot' || selected === 'table' || (selected === 'chart' && !chart)) this.showRibbonTab('dashboard');
     if (chart && this.chartShown !== t.id) this.showRibbonTab('chart');
     this.chartShown = chart ? t.id : null;
     this.dashShown = s;
@@ -1858,7 +2023,8 @@ export class SheetMode {
     if (this.dashRibbon(s)) return;
     const { r, c } = this.view.sel.active;
     const st = s.styleAt(r, c) ?? {};
-    const press = (name: string, on: boolean) => this.ribbon.querySelector(`[data-sh="${name}"]`)?.setAttribute('aria-pressed', String(on));
+    // (some buttons are on two tabs, as in Excel: Filter on Home and on Data)
+    const press = (name: string, on: boolean) => { for (const b of this.ribbon.querySelectorAll(`[data-sh="${name}"]`)) b.setAttribute('aria-pressed', String(on)); };
     press('cell-bold', !!st.bold);
     press('cell-italic', !!st.italic);
     press('cell-underline', !!st.underline);
@@ -1869,6 +2035,8 @@ export class SheetMode {
     press('format-chem', this.chemShown());
     press('filter', !!s.filter);
     press('freeze-header', s.frozen.rows > 0);
+    press('split-window', !!s.split && !s.frozen.rows && !s.frozen.cols);
+    for (const m of document.querySelectorAll('[role="menuitemcheckbox"][data-cmd="split-window"]')) m.setAttribute('aria-checked', String(!!s.split));
     press('merge-cells', !!s.mergeAt(r, c));
     press('show-all-notes', this.notes.showAll);
     press('circle-invalid', this.view.circleInvalid);
@@ -1909,6 +2077,15 @@ export class SheetMode {
     ctab.hidden = !chart;
     if (chart && chart.id !== this.chartShown) this.showRibbonTab('chart');
     this.chartShown = chart?.id ?? null;
+    // PivotTable Analyze shows while the active cell is in a PivotTable
+    const pt = chart ? undefined : this.pivots.here();
+    const ptab = this.ribbon.querySelector<HTMLButtonElement>('[data-sh-tab=pivot]');
+    if (ptab) {
+      if (!pt && ptab.getAttribute('aria-selected') === 'true') this.showRibbonTab('home');
+      ptab.hidden = !pt;
+      if (pt && pt.id !== this.pivotShown) this.showRibbonTab('pivot');
+      this.pivotShown = pt?.id ?? null;
+    }
     // Table Design shows while the active cell is in a table
     const t = chart ? undefined : s.tableAt(r, c);
     const tab = this.ribbon.querySelector<HTMLButtonElement>('[data-sh-tab=table]')!;

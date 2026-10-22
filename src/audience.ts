@@ -7,12 +7,15 @@ import { Player } from './deck/playback';
 import { ShowLink, deckFromData, type ShowMessage } from './deck/show-link';
 import { registerBundledFonts } from './fonts';
 import { onImageReady } from './render/images';
+import { ShowInk } from './ui/show-ink';
 
 const canvas = document.createElement('canvas');
 document.body.append(canvas);
 const wait = document.getElementById('wait')!;
 let player: Player | null = null;
 let blank: 'black' | 'white' | 'end' | null = null;
+// the presenter's ink and laser, drawn over the slides
+let ink: ShowInk | null = null;
 
 registerBundledFonts(() => player?.refresh());
 onImageReady(() => player?.refresh());
@@ -20,6 +23,7 @@ onImageReady(() => player?.refresh());
 function size(): void {
   player?.resize(window.innerWidth, window.innerHeight, window.devicePixelRatio || 1);
   paint();
+  ink?.paint();
 }
 
 function paint(): void {
@@ -42,7 +46,10 @@ async function end(): Promise<void> {
 const link = new ShowLink('audience', (m: ShowMessage) => {
   if (m.kind === 'deck') {
     player?.stop();
-    player = new Player(canvas, deckFromData(m.deck));
+    const p = (player = new Player(canvas, deckFromData(m.deck)));
+    ink?.remove();
+    ink = new ShowInk(document.body, canvas, { slide: () => p.i, place: () => p.slidePlace }, false);
+    p.onChange = () => ink?.paint();
     wait.hidden = true;
     size();
     player.show(m.i, { atEnd: false });
@@ -51,6 +58,12 @@ const link = new ShowLink('audience', (m: ShowMessage) => {
   else if (m.kind === 'prev') player?.prev();
   else if (m.kind === 'go') player?.show(m.i, { atEnd: m.atEnd });
   else if (m.kind === 'blank') { blank = m.how; paint(); }
+  else if (m.kind === 'zoom' && player) {
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    player.zoom(m.i, { x1: m.rect.x1 * w, y1: m.rect.y1 * h, x2: m.rect.x2 * w, y2: m.rect.y2 * h }, m.out);
+  } else if (m.kind === 'tap') player?.clickMedia(m.fx * canvas.clientWidth, m.fy * canvas.clientHeight);
+  else if (m.kind === 'ink') ink?.setSlideInk(m.i, m.strokes);
+  else if (m.kind === 'laser') ink?.showLaser(m.p);
   else if (m.kind === 'bye') void end();
 });
 

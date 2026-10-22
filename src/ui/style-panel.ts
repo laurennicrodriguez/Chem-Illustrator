@@ -126,6 +126,8 @@ export class StylePanel {
 
   /** Open a chart's data and settings (Edit chart…). */
   onEditChart: (id: number) => void = () => {};
+  /** Playback… for a video or sound. */
+  onEditMedia: (id: number) => void = () => {};
   /** Open an equation in the equation window (Edit equation…), and colour equations. */
   onEditEquation: (id: number) => void = () => {};
   onEquationColour: (ids: number[], colour: string) => void = () => {};
@@ -540,7 +542,20 @@ export class StylePanel {
     this.heading(charts ? (pics.length > 1 ? `${pics.length} charts` : 'Chart') : pics.length > 1 ? `${pics.length} pictures` : 'Picture');
     // vector pictures (SVG, Windows metafiles) have no pixels to count
     if (charts) this.note('A chart with its own data. Double-click it to change the data, the kind of chart and its look; resizing it lays it out again.');
-    else if (pics.length === 1 && p.video && p.px) this.note(`MP4 video, ${p.px.w} × ${p.px.h} pixels. It plays in the slide show and in PowerPoint.`);
+    else if (pics.every((x) => x.zoom)) {
+      this.note('A Slide Zoom: in the slide show a click zooms into its slide. Its picture follows the slide.');
+      this.check('Return to Zoom', !!p.zoom?.back, (v) => set('Return to Zoom', (x) => ({ zoom: { ...x.zoom, back: v || undefined } })), 'After its slide (or its part of a Summary Zoom), the show comes back to this slide');
+    } else if (pics.length === 1 && p.video) {
+      const v = p.video;
+      const how = `${v.start === 'click' ? 'Starts when clicked' : 'Starts by itself'}${v.once ? '' : ', loops'}${v.trimStart || v.trimEnd ? ', trimmed' : ''}`;
+      this.note(v.audio ? `Sound. ${how}. It plays in the slide show and in PowerPoint.` : `Video${p.px ? `, ${p.px.w} × ${p.px.h} pixels` : ''}. ${how}. It plays in the slide show and in PowerPoint.`);
+      const buttons = document.createElement('div');
+      buttons.className = 'style-buttons';
+      const btn = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Playback…', title: 'Trim, fades, volume, when it starts, looping (or double-click it)' });
+      btn.addEventListener('click', () => this.onEditMedia(p.id));
+      buttons.append(btn);
+      this.body.appendChild(buttons);
+    }
     else if (pics.length === 1 && p.px) this.note(/^data:image\/(svg|x-emf)/.test(p.src ?? '') ? pictureType(p.src) : `${pictureType(p.src)}, ${p.px.w} × ${p.px.h} pixels`);
     // sizes change from the top left corner, as in PowerPoint's size boxes
     const size = (w: number | null, h: number | null) => set('Resize picture', (x) => {
