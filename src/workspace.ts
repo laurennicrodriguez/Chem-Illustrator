@@ -240,8 +240,8 @@ export class Workspace {
   }
 
   /** Call after anything changes, to keep the unsaved marks right. */
-  noteChange(): void {
-    const t = this.active;
+  noteChange(tab?: Tab): void {
+    const t = tab ?? this.active;
     let dirty = t.dirty;
     if (t.deck) dirty = t.deck.edits !== t.savedEdits;
     else if (t.mode === 'sheet') dirty = t.book!.edits !== this.mainOf(t).savedEdits;

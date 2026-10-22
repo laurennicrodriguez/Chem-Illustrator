@@ -23,7 +23,7 @@ import {
   TYPE_NAMES, FILTER_NAMES, DELIMITERS, newQueryId, newQueryName, textTable, jsonTable, jsonPaths, htmlTables,
   rawTable, firstSteps, runSteps, stepName, splitCount, sourceText,
 } from '../sheet/query';
-import { queryTable, queryOfTable, resultRange, loadProblem, wouldCover, writeResult, fitWidths, DATE_FORMAT } from '../sheet/query-sheet';
+import { queryTable, queryOfTable, resultRange, addedColumns, loadProblem, wouldCover, writeResult, fitWidths, DATE_FORMAT } from '../sheet/query-sheet';
 import { openBytesDialog, readPath, type FileType } from '../io/files';
 import { decodeText } from '../io/sheet-files';
 import { readXlsx } from '../io/xlsx';
@@ -664,8 +664,8 @@ export class SheetQueries {
       }
     }
     if (target.kind === 'here') {
-      const R = resultRange(target.at, t);
       const own = place && place.sheet === target.sheet ? place.table : null;
+      const R = resultRange(target.at, t, own ? addedColumns(target.sheet, own, t, old ?? q).length : 0);
       const p = loadProblem(target.sheet, R, own);
       if (p) return p;
       if (wouldCover(target.sheet, R, own)) {
@@ -691,10 +691,11 @@ export class SheetQueries {
           at = target.at;
           own = place && place.sheet === sheet ? place : null;
         }
-        const got = writeResult(sheet, at, t, own?.table ?? null, next);
+        // the columns it loaded before the edit tell the ones added by hand, which stay
+        const got = writeResult(sheet, at, t, own?.table ?? null, { ...next, loaded: old?.loaded ?? next.loaded });
         if (!own) fitWidths(sheet, at, t);
         errors = got.errors;
-        next = { ...next, table: got.table.name };
+        next = { ...next, table: got.table.name, loaded: got.cols };
         shownSheet = sheet;
       }
       wb.setQueries(fresh ? [...wb.queries, next] : wb.queries.map((x) => (x.id === q.id ? next : x)));
@@ -739,7 +740,7 @@ export class SheetQueries {
       return null;
     }
     const at = { row: place.table.range.r1, col: place.table.range.c1 };
-    const R = resultRange(at, t);
+    const R = resultRange(at, t, addedColumns(place.sheet, place.table, t, cur).length);
     const p = loadProblem(place.sheet, R, place.table);
     if (p) return `${q.name}: ${p}`;
     if (wouldCover(place.sheet, R, place.table)) {
@@ -750,8 +751,9 @@ export class SheetQueries {
     v.commitEdit();
     let errors = 0;
     wb.edit(`Refresh ${q.name}`, () => {
-      errors = writeResult(place.sheet, at, t, place.table, cur).errors;
-      wb.setQueries(wb.queries.map((x) => (x.id === q.id ? { ...x, refreshed: new Date().toISOString() } : x)));
+      const got = writeResult(place.sheet, at, t, place.table, cur);
+      errors = got.errors;
+      wb.setQueries(wb.queries.map((x) => (x.id === q.id ? { ...x, refreshed: new Date().toISOString(), loaded: got.cols } : x)));
     }, v.place());
     v.refresh();
     return errors ? `${q.name}: ${errors} error${errors > 1 ? 's' : ''} (left blank).` : null;
