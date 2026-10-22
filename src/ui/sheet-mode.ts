@@ -15,8 +15,7 @@ import { PROPERTIES, MolProps, propertyValue } from '../sheet/properties';
 import { FORMATS, changeDecimals, describeFormat } from '../sheet/numfmt';
 import { UNITS, unitFormat } from '../sheet/units';
 import { isError, CellError, Value } from '../sheet/values';
-import { FUNCTION_NAMES } from '../sheet/evaluate';
-import { ISOTOPE_FUNCTIONS, listedPeaks, readsAsFormula, type IsotopeSource } from '../sheet/isotopes';
+import { listedPeaks, readsAsFormula, type IsotopeSource } from '../sheet/isotopes';
 import { isotopeTable, ISOTOPE_CHARTS, type IsotopeChartKind } from '../sheet/isotope-table';
 import { COMMON_ADDUCTS } from '../chem/hrms';
 import { parseDelimited, toDelimited } from '../sheet/csv';
@@ -30,6 +29,8 @@ import { SheetCharts } from './sheet-chart-ui';
 import { DASH_CHART_KINDS } from './dashboard-ui';
 import { SheetNotes } from './sheet-notes-ui';
 import { SheetValidation } from './sheet-validation-ui';
+import { SheetFormulas } from './sheet-formulas-ui';
+import { CATEGORIES, type Category } from '../sheet/fn-help';
 import { askLink, followLink, type LinkPlace } from './links-ui';
 import { LINK_COLOUR, cellLink, cellOfLink, describeLink } from '../links';
 import { describeValidation, KIND_NAMES } from '../sheet/validation';
@@ -110,6 +111,8 @@ export class SheetMode {
   readonly objects: SheetObjects;
   /** The Page Layout tab: page setup, print area, breaks, headers and footers. */
   readonly page: SheetPage;
+  /** The Formulas tab: Insert Function and the defined names. */
+  readonly formulas: SheetFormulas;
   /** The chart the panel and Chart tab showed last (the tab opens when a chart is first picked). */
   private chartShown: number | null = null;
   /** The dashboard sheet the ribbon was last set up for. */
@@ -131,6 +134,7 @@ export class SheetMode {
       structureBitmap: (s, scale) => this.pictures.bitmap(s, Math.abs(scale), scale < 0),
       editStructure: (r, c) => this.drawStructure(r, c),
       key: (e) => this.host.key(e),
+      f3: (e) => this.f3(e),
       changed: () => this.selectionChanged(),
       contextMenu: (x, y, where) => (where === 'chart' ? this.charts.contextMenu(x, y) : where === 'tile' ? this.dashUi.contextMenu(x, y) : where === 'object' ? this.objects.contextMenu(x, y) : this.contextMenu(x, y, where)),
       editObject: (id) => {
@@ -189,6 +193,11 @@ export class SheetMode {
       pickPicture: () => this.host.pickPicture?.() ?? Promise.resolve(null),
     });
     this.page = new SheetPage({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+    });
+    this.formulas = new SheetFormulas({
       view: this.view,
       edit: (label, fn) => this.edit(label, fn),
       flash: (m, ms) => this.host.flash(m, ms),
@@ -253,6 +262,8 @@ export class SheetMode {
       if (!s) return;
       const { r, c } = this.view.sel.active;
       if (s.cell(r, c)?.structure) { bar.blur(); this.host.flash('This cell holds a structure: double-click it to change the drawing.'); return; }
+      // the greyed formula of a spilled cell belongs to its first cell: typing here puts in a new value
+      if (bar.classList.contains('spilled')) { bar.value = ''; bar.classList.remove('spilled'); }
       this.view.beginFromBar();
     });
     bar.addEventListener('input', () => { this.view.setTyping(bar.value); this.fitBar(); });
@@ -280,7 +291,7 @@ export class SheetMode {
       e.preventDefault();
       this.goTo(nb.value.trim());
     });
-    document.querySelector('#sh-fx')!.addEventListener('click', (e) => this.functionMenu(e as MouseEvent));
+    document.querySelector('#sh-fx')!.addEventListener('click', () => this.formulas.insertFunction());
   }
 
   /** The name box: go to a cell, a block or a sheet ("B5", "A1:C9", "Sheet2!A1", "Sheet2"). */
@@ -291,13 +302,15 @@ export class SheetMode {
     let sheetName = m ? (m[1] ?? m[2]).replace(/''/g, "'") : null;
     let ref = m ? m[3] : text;
     if (!m && wb.sheetNamed(text)) { sheetName = text; ref = 'A1'; }
+    if (!m && !parseRange(text.toUpperCase()) && this.formulas.goToName(text)) return;
     if (sheetName !== null) {
       const i = wb.sheets.findIndex((s) => s.name.toLowerCase() === sheetName!.toLowerCase());
       if (i < 0) { this.host.flash(`There is no sheet called "${sheetName}".`); return; }
       this.view.goSheet(i);
     }
     const r = parseRange(ref.toUpperCase());
-    if (!r) { this.host.flash(`"${text}" isn't a cell or a block of cells (for example B5 or A1:C9).`); this.showActive(); return; }
+    if (!r && !m && this.formulas.nameSelection(text)) { this.showActive(); return; }
+    if (!r) { this.host.flash(`"${text}" isn't a cell, a block of cells (for example B5 or A1:C9) or a name.`); this.showActive(); return; }
     this.view.select(r, { r: r.r1, c: r.c1 });
     this.view.focus();
   }
@@ -317,53 +330,48 @@ export class SheetMode {
     }
   }
 
+  /** F3 pastes a name, Shift+F3 opens Insert Function, Ctrl+F3 the Name Manager, Ctrl+Shift+F3 Create from Selection. */
+  private f3(e: KeyboardEvent): void {
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (ctrl && e.shiftKey) this.formulas.createFromSelection();
+    else if (ctrl) this.formulas.nameManager();
+    else if (e.shiftKey) this.formulas.insertFunction();
+    else {
+      const rc = this.view.screenRect(this.view.sel.active.r, this.view.sel.active.c);
+      this.formulas.useInFormulaMenu(rc?.left ?? 200, (rc?.bottom ?? 200) + 2);
+    }
+  }
+
   /** The name box and formula bar show the active cell. */
   private showActive(): void {
     const s = this.view.sheet;
     if (!s) { this.nameBox.value = ''; this.bar.value = ''; return; }
     const sel = this.view.sel;
-    this.nameBox.value = sel.range.r1 === sel.range.r2 && sel.range.c1 === sel.range.c2 ? cellName(sel.active.r, sel.active.c) : selectionName(sel.range);
+    this.nameBox.value = this.formulas.nameFor(s, sel.range)
+      ?? (sel.range.r1 === sel.range.r2 && sel.range.c1 === sel.range.c2 ? cellName(sel.active.r, sel.active.c) : selectionName(sel.range));
     const { r, c } = sel.active;
     const cell = s.cell(r, c);
-    if (cell?.structure) {
+    const spill = cell?.input ? null : s.spillAt(r, c);
+    this.bar.classList.toggle('spilled', !!spill && !spill.blocked);
+    if (spill && !spill.blocked) {
+      // a cell an array spilled into shows the formula it came from, greyed: it is typed in its first cell
+      this.bar.value = s.cell(spill.row, spill.col)?.input ?? '';
+      this.bar.placeholder = '';
+      this.bar.readOnly = false;
+      this.bar.title = `Spilled from ${cellName(spill.row, spill.col)}: change the formula there.`;
+    } else if (cell?.structure) {
       const v = s.values.get(keyOf(r, c));
       this.bar.value = typeof v === 'string' && v ? v : '';
       this.bar.placeholder = 'A drawn structure (its SMILES shows here)';
       this.bar.readOnly = true;
+      this.bar.title = '';
     } else {
       this.bar.value = s.effectiveInput(r, c) ?? '';
       this.bar.placeholder = '';
       this.bar.readOnly = false;
+      this.bar.title = '';
     }
     this.fitBar();
-  }
-
-  /** fx: a list of the functions, chemistry first; picking one starts it in the cell. */
-  private functionMenu(e: MouseEvent): void {
-    const chemNames = Object.keys(PROPERTIES);
-    const isoNames = Object.keys(ISOTOPE_FUNCTIONS);
-    const rest = FUNCTION_NAMES.filter((n) => !chemNames.includes(n) && !isoNames.includes(n));
-    const put = (name: string) => {
-      const s = this.view.sheet;
-      if (!s) return;
-      if (this.view.editing) {
-        const inp = this.view.input;
-        const p = inp.selectionStart ?? inp.value.length;
-        inp.value = inp.value.slice(0, p) + `${name}(` + inp.value.slice(p);
-        this.view.setTyping(inp.value);
-        inp.focus();
-        inp.setSelectionRange(p + name.length + 1, p + name.length + 1);
-      } else this.view.editCell(`=${name}(`);
-    };
-    const items: ([string, () => void] | null)[] = [
-      ...chemNames.map((n) => [`${n} — ${PROPERTIES[n].label}`, () => put(n)] as [string, () => void]),
-      ...isoNames.map((n) => [`${n} — ${ISOTOPE_FUNCTIONS[n].label}`, () => put(n)] as [string, () => void]),
-      null,
-      ...rest.map((n) => [n, () => put(n)] as [string, () => void]),
-    ];
-    const b = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const m = popupMenu(b.left, b.bottom + 2, items);
-    m.classList.add('fx-menu');
   }
 
   // ---------------------------------------------------------------- the ribbon
@@ -450,6 +458,12 @@ export class SheetMode {
       case 'text-colour': this.colourMenu(b.left, b.bottom + 2, 'color'); return;
       case 'fill-colour': this.colourMenu(b.left, b.bottom + 2, 'fill'); return;
       case 'borders': this.bordersMenu(b.left, b.bottom + 2); return;
+      case 'use-in-formula': this.formulas.useInFormulaMenu(b.left, b.bottom + 2); return;
+      case 'fn-cat': {
+        const cat = btn.dataset.cat as Category;
+        if (CATEGORIES.includes(cat)) this.formulas.categoryMenu(cat, b.left, b.bottom + 2);
+        return;
+      }
       case 'insert': this.insertMenu(b.left, b.bottom + 2); return;
       case 'delete': this.deleteMenu(b.left, b.bottom + 2); return;
       case 'conditional-formatting': this.formatting.conditionalMenu(b.left, b.bottom + 2); return;
@@ -573,6 +587,10 @@ export class SheetMode {
       case 'convert-notes': this.notes.convertNotes(); break;
       case 'prev-comment': case 'next-comment': this.notes.step(name === 'next-comment'); break;
       case 'data-validation': this.validation.dialog(); break;
+      case 'insert-function': this.formulas.insertFunction(); break;
+      case 'name-manager': this.formulas.nameManager(); break;
+      case 'define-name': void this.formulas.defineName(); break;
+      case 'names-from-selection': this.formulas.createFromSelection(); break;
       case 'circle-invalid': this.validation.toggleCircles(); this.showRibbonState(); break;
       case 'pick-from-list': v.openDropDown(); break;
       case 'insert-picture-sheet': void this.objects.insertPicture(); break;
@@ -1834,6 +1852,7 @@ export class SheetMode {
     const on = !!s.dashboard;
     document.querySelector<HTMLElement>('#formula-bar')!.hidden = on;
     tab('home').hidden = on;
+    tab('formulas').hidden = on;
     tab('dashboard').hidden = !on;
     if (!on) {
       if (selected === 'dashboard') this.showRibbonTab('home');
@@ -1844,7 +1863,7 @@ export class SheetMode {
     const t = this.view.dash.pickedTile;
     const chart = t?.kind === 'chart';
     tab('chart').hidden = !chart;
-    if (this.dashShown !== s || selected === 'home' || selected === 'table' || (selected === 'chart' && !chart)) this.showRibbonTab('dashboard');
+    if (this.dashShown !== s || selected === 'home' || selected === 'formulas' || selected === 'table' || (selected === 'chart' && !chart)) this.showRibbonTab('dashboard');
     if (chart && this.chartShown !== t.id) this.showRibbonTab('chart');
     this.chartShown = chart ? t.id : null;
     this.dashShown = s;
