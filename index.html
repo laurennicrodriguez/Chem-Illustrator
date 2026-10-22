@@ -131,6 +131,7 @@
         <button role="menuitemradio" aria-checked="false" data-cmd="size-standard"><span>Standard (4:3)</span></button>
         <button role="menuitem" data-cmd="slide-templates">Templates…</button>
         <button role="menuitem" data-cmd="slide-master">Slide Master…</button>
+        <button role="menuitem" data-cmd="format-background" title="This slide's background (or every slide's): a colour, gradient, picture or pattern">Format Background…</button>
         <hr />
         <button role="menuitem" data-cmd="slide-transitions">Transitions…</button>
         <button role="menuitem" data-cmd="slide-animations">Animations…</button>
@@ -1047,6 +1048,12 @@
         </div>
         <div class="rb-label">Design</div>
       </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="format-background" title="The background of this slide, the slides picked, or every slide: a colour, gradient, picture or pattern, see-through as you like"><span class="rb-icon">▨</span>Format Background</button>
+        </div>
+        <div class="rb-label">Customize</div>
+      </div>
     </div>
     <div class="rb-panel" data-sl-panel="show" hidden>
       <div class="rb-group">
@@ -1168,7 +1175,7 @@
         <button class="rb-big" data-cmd="design-size" title="Change the page size: journal TOC graphics, graphical abstracts, posters, slides, paper or your own size"><span class="rb-icon">▭</span>Page Size</button>
         <div class="rb-col">
           <span id="dz-size" class="muted small"></span>
-          <label class="rb-field" title="The page's colour (saved with the design)">Background <input id="dz-bg" type="color" value="#ffffff" /></label>
+          <span class="rb-pair"><label class="rb-field" title="The page's colour (saved with the design)">Background <input id="dz-bg" type="color" value="#ffffff" /></label> <button type="button" data-cmd="format-background" title="A gradient, picture or pattern behind the page, see-through as you like">Format…</button></span>
           <div class="rb-pair">
             <label class="check small" title="Lines to line things up by (shown on screen only, never saved or printed)"><input id="dz-grid" type="checkbox" /> Grid</label>
             <label class="check small" title="While moving, edges and middles snap into line with other shapes and the page, shown by pink lines (hold Alt to move freely)"><input id="dz-guides" type="checkbox" checked /> Guides</label>

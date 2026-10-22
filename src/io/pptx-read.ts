@@ -19,7 +19,9 @@ import { PackageReader, NS, REL, kids, kid, rAttr, fromEmu } from './ooxml';
 import { readCdxml } from './cdxml';
 import { dataUrl, imageSize } from '../render/images';
 import { layoutText, ASCENT } from '../text/layout';
-import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle, slideColours } from '../deck/deck';
+import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle, slideBackground } from '../deck/deck';
+import { backgroundColour, isPlain, sameBackground, type Background } from '../deck/background';
+import { readFill, readOneFill, type FillContext } from './pptx-background';
 import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure } from './pptx-write';
 import { GEOS } from '../design/geo';
 import { gluePoint } from '../objects';
@@ -30,7 +32,7 @@ const GEO_BY_PRST = new Map(GEOS.filter((g) => g.prst).map((g) => [g.prst!, g.id
 /** PowerPoint shapes that come into slides as plain boxes and ovals (with their text beside them as text boxes). */
 const PLAIN_PRST = new Set(['rect', 'roundRect', 'ellipse', 'snip1Rect', 'flowChartProcess', 'flowChartAlternateProcess']);
 
-export interface PptxSlide { layout: LayoutId; contents: Contents; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[] }
+export interface PptxSlide { layout: LayoutId; contents: Contents; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean }
 export interface PptxRead {
   size: SlideSize;
   master: Master;
@@ -106,7 +108,7 @@ function fromHsl(h: number, s: number, l: number): [number, number, number] {
 }
 
 /** The colour in a fill or colour element (srgbClr, schemeClr…, with PowerPoint's lighter/darker changes). */
-function colorIn(el: Element | null, theme: Theme, clrMap: Record<string, string>): string | null {
+function colorIn(el: Element | null, theme: Theme, clrMap: Record<string, string>, ph: string | null = null): string | null {
   if (!el) return null;
   const c = kids(el).find((k) => /Clr$/.test(k.localName));
   if (!c) return null;
@@ -114,7 +116,8 @@ function colorIn(el: Element | null, theme: Theme, clrMap: Record<string, string
   let hex: string | null = null;
   switch (c.localName) {
     case 'srgbClr': hex = v; break;
-    case 'schemeClr': hex = theme.colors[clrMap[v] ?? v] ?? null; break;
+    // (phClr: the colour a theme's fill style is used with)
+    case 'schemeClr': hex = v === 'phClr' ? ph : theme.colors[clrMap[v] ?? v] ?? null; break;
     case 'prstClr': hex = PRESET[v] ?? '000000'; break;
     case 'sysClr': hex = c.getAttribute('lastClr') ?? (v === 'window' ? 'FFFFFF' : '000000'); break;
     case 'scrgbClr': hex = ['r', 'g', 'b'].map((k) => Math.round(Math.pow(Number(c.getAttribute(k) ?? 0) / 100000, 1 / 2.2) * 255).toString(16).padStart(2, '0')).join(''); break;
@@ -191,6 +194,9 @@ class Reader {
   private r: PackageReader;
   warnings = new Set<string>();
   private theme: Theme = { colors: {}, major: 'Arial', minor: 'Arial' };
+  /** The theme's fill styles (backgrounds can use them) and where the theme is (for its pictures). */
+  private themeFills: Element | null = null;
+  private themePath: string | null = null;
   private clrMap: Record<string, string> = { bg1: 'lt1', tx1: 'dk1', bg2: 'lt2', tx2: 'dk2' };
   private master!: Part;
   private defaultText: Element | null = null;
@@ -274,13 +280,16 @@ class Reader {
       if (!v) continue;
       this.theme.colors[c.localName] = v.localName === 'sysClr' ? v.getAttribute('lastClr') ?? '000000' : v.getAttribute('val') ?? '000000';
     }
+    this.themeFills = kid(el, 'fmtScheme');
+    this.themePath = themePath;
     const fonts = kid(el, 'fontScheme');
     this.theme.major = kid(fonts, 'majorFont', 'latin')?.getAttribute('typeface') || 'Arial';
     this.theme.minor = kid(fonts, 'minorFont', 'latin')?.getAttribute('typeface') || 'Arial';
   }
 
-  private color(el: Element | null): string | null {
-    return colorIn(el, this.theme, this.clrMap);
+  private color(el: Element | null, ph: Element | null = null): string | null {
+    const p = ph ? colorIn(ph, this.theme, this.clrMap)?.slice(1) ?? null : null;
+    return colorIn(el, this.theme, this.clrMap, p);
   }
 
   /** A typeface, with the theme's title and body fonts filled in. */
@@ -296,7 +305,17 @@ class Reader {
     const m = defaultMaster();
     const root = this.master.doc.documentElement;
     const logo = this.masterLogo();
-    if (this.ourMaster) return { ...m, ...this.ourMaster, logo, drawing: { ...m.drawing, ...(this.ourMaster.drawing ?? {}) } };
+    if (this.ourMaster) {
+      const out: Master = { ...m, ...this.ourMaster, logo, drawing: { ...m.drawing, ...(this.ourMaster.drawing ?? {}) } };
+      // gradients and pictures are PowerPoint's own backgrounds, on the master and the title slide's layout
+      const fill = this.background(this.master);
+      if (fill && !isPlain(fill)) out.fill = fill;
+      const title = out.titleSlide && this.layoutPart('title');
+      // (a title slide layout with no background of its own has the master's)
+      const tfill = title ? this.background(title) ?? out.fill ?? null : null;
+      if (out.titleSlide && tfill && !isPlain(tfill)) out.titleSlide = { ...out.titleSlide, fill: tfill };
+      return out;
+    }
     const tx = kid(root, 'txStyles');
     const title = lvlOf(kid(tx, 'titleStyle'), 0), body = lvlOf(kid(tx, 'bodyStyle'), 0);
     const tR = kid(title, 'defRPr'), bR = kid(body, 'defRPr');
@@ -307,7 +326,11 @@ class Reader {
     m.titleBold = tR?.getAttribute('b') === '1';
     m.titleColor = this.color(kid(tR, 'solidFill')) ?? m.titleColor;
     m.textColor = this.color(kid(bR, 'solidFill')) ?? m.textColor;
-    m.background = this.background(root) ?? m.background;
+    const bg = this.background(this.master);
+    if (bg) {
+      m.background = backgroundColour(bg);
+      if (!isPlain(bg)) m.fill = bg;
+    }
     // numbers and footer: as the slides show them
     let numbers = false, footer = '';
     for (const p of slidePaths) {
@@ -325,19 +348,37 @@ class Reader {
     return m;
   }
 
-  /** A slide or master's own background colour. */
-  private background(root: Element): string | null {
-    const bg = kid(root, 'cSld', 'bg');
+  /** A slide, layout or master's own background (null when it uses the one behind it). */
+  private background(part: Part): Background | null {
+    const bg = kid(part.doc.documentElement, 'cSld', 'bg');
     if (!bg) return null;
+    const ctx = (from: string): FillContext => ({
+      color: (el, ph) => this.color(el, ph),
+      picture: (blipFill) => this.blipImage(from, blipFill),
+      warn: (w) => this.warnings.add(w),
+    });
     const pr = kid(bg, 'bgPr');
-    if (pr) {
-      const solid = kid(pr, 'solidFill');
-      if (solid) return this.color(solid);
-      this.warnings.add('Slide backgrounds with pictures or shading came in as plain colours.');
-      return null;
-    }
+    if (pr) return readFill(pr, this.size, ctx(part.path));
     const ref = kid(bg, 'bgRef');
-    return ref ? this.color(ref) : null;
+    if (!ref) return null;
+    // one of the theme's fill styles, in the colour given
+    const idx = Number(ref.getAttribute('idx') ?? 0);
+    if (!idx || idx === 1000) return { kind: 'solid', color: '#ffffff' };
+    const list = kid(this.themeFills, idx > 1000 ? 'bgFillStyleLst' : 'fillStyleLst');
+    const style = kids(list)[(idx > 1000 ? idx - 1001 : idx - 1)];
+    const got = style ? readOneFill(style, this.size, ctx(this.themePath ?? part.path), ref) : null;
+    if (got) return got;
+    const c = this.color(ref);
+    return c ? { kind: 'solid', color: c } : null;
+  }
+
+  /** The layout part used by slides of one of our layouts (files saved here have one of each). */
+  private layoutPart(id: LayoutId): Part | null {
+    for (const rel of this.r.rels(this.master.path).values()) {
+      const p = this.part(rel.target);
+      if (p && p.doc.documentElement.localName === 'sldLayout' && p.doc.documentElement.getAttribute('type') === ({ title: 'title', 'title-content': 'obj', 'two-content': 'twoObj', 'title-only': 'titleOnly', blank: 'blank' } as const)[id]) return p;
+    }
+    return null;
   }
 
   /** The logo: a picture on the master (the one named Logo in files saved here, else the first). */
@@ -366,9 +407,6 @@ class Reader {
     doc.style = { ...this.masterOut.drawing };
     // files saved here say which layout each slide has; a title slide can have its own colours
     this.curLayout = tags[TAG.layout] as LayoutId | undefined;
-    const bg = this.background(s.doc.documentElement);
-    const ownBg = this.curLayout ? slideColours(this.masterOut, this.curLayout).background : this.masterOut.background;
-    if (bg && bg.toLowerCase() !== ownBg.toLowerCase()) this.warnings.add('Slides with a background colour of their own now use the master\'s.');
     this.tables = [];
     this.tableParts.clear();
     this.geoIds.clear();
@@ -389,8 +427,14 @@ class Reader {
     const anims = targets ? readTiming(root, (spid) => targets.get(spid) ?? null, warn) : [];
     this.spidTargets = null;
     const comments = this.comments(path);
+    const lay: LayoutId = ['title', 'title-content', 'two-content', 'title-only', 'blank'].includes(id) ? id : 'title-content';
+    // the background PowerPoint shows (the slide's, else its layout's, else the master's): the slide's own when ours would differ
+    const shown = this.background(s) ?? (layout ? this.background(layout) : null) ?? slideBackground(this.masterOut, lay);
+    const background = sameBackground(shown, slideBackground(this.masterOut, lay)) ? undefined : shown;
+    const hideGraphics = /^(0|false)$/.test(root.getAttribute('showMasterSp') ?? '');
     return {
-      layout: ['title', 'title-content', 'two-content', 'title-only', 'blank'].includes(id) ? id : 'title-content', contents: doc.contents(), notes: this.notes(path),
+      layout: lay, contents: doc.contents(), notes: this.notes(path),
+      ...(background ? { background } : {}), ...(hideGraphics ? { hideGraphics } : {}),
       ...(transition && (transition.kind !== 'none' || transition.advanceAfter) ? { transition } : {}), ...(anims.length ? { anims } : {}),
       ...(comments.length ? { comments } : {}),
     };
@@ -523,7 +567,13 @@ class Reader {
 
   /** A picture's image (as a data URL), its size in pixels and its cropping. */
   private image(from: string, pic: Element): { src: string; px: { w: number; h: number }; crop: Shape['crop'] | null; mime: string } | null {
-    const blip = kid(pic, 'blipFill', 'blip');
+    const fill = kid(pic, 'blipFill');
+    return fill ? this.blipImage(from, fill) : null;
+  }
+
+  /** The picture of a blipFill (a picture's, or a background's). */
+  private blipImage(from: string, fill: Element): { src: string; px: { w: number; h: number }; crop: Shape['crop'] | null; mime: string } | null {
+    const blip = kid(fill, 'blip');
     if (!blip) return null;
     const rels = this.r.rels(from);
     // PowerPoint shows the SVG when there is one; so do we
@@ -537,7 +587,7 @@ class Reader {
     if (!bytes) return null;
     const mime = EXT_MIME[target.split('.').pop()!.toLowerCase()] ?? 'application/octet-stream';
     if (!SHOWABLE.has(mime)) this.warnings.add('Some pictures (old Windows WMF metafiles, or TIFF) can\'t be shown here yet; they are kept and saved back as they were.');
-    const src = kid(pic, 'blipFill', 'srcRect');
+    const src = kid(fill, 'srcRect');
     const f = (k: string) => Math.max(0, Number(src?.getAttribute(k) ?? 0) / 100000);
     const crop = src ? { l: f('l'), t: f('t'), r: f('r'), b: f('b') } : null;
     return { src: dataUrl(bytes, mime), px: imageSize(bytes, mime) ?? { w: 100, h: 100 }, crop: crop && (crop.l || crop.t || crop.r || crop.b) ? crop : null, mime };

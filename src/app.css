@@ -858,6 +858,28 @@ dialog.master-dialog > form > .muted { margin: 2px 0 6px; max-width: 60ch; }
 .md-controls input[type='color'] { width: 44px; height: 26px; padding: 0 2px; }
 .md-logo { max-width: 96px; max-height: 48px; border: 1px solid var(--line); background: #fff; }
 .md-logo[hidden] { display: none; }
+/* Design > Format Background */
+dialog.bg-dialog { width: min(94vw, 600px); }
+.bg-preview { display: block; margin: 4px auto 8px; border: 1px solid var(--line); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15); }
+.bg-kinds { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 8px 0 4px; }
+.bg-kinds label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.bg-section[hidden] { display: none; }
+.bg-slider { display: inline-flex; align-items: center; gap: 6px; }
+.bg-slider input[type='range'] { width: 110px; }
+.bg-dialog .md-row { grid-template-columns: 9.5em minmax(0, 1fr); }
+.bg-dialog .md-num { width: 4.6em; }
+.bg-dialog .md-controls { flex-wrap: nowrap; }
+.bg-dialog .bg-patterns + .md-row, .bg-dialog .bg-section .md-controls { flex-wrap: wrap; }
+.bg-stop .md-controls { flex-wrap: nowrap; }
+.bg-stop .bg-slider input[type='range'] { width: 70px; }
+.bg-stops-head { margin: 8px 0 2px; font-size: 12px; }
+.bg-patterns { display: grid; grid-template-columns: repeat(auto-fill, 34px); gap: 4px; padding: 6px 0; }
+.bg-pattern { width: 34px; height: 34px; padding: 1px; border: 1px solid var(--line); background: #fff; cursor: pointer; }
+.bg-pattern canvas { display: block; }
+.bg-pattern[aria-selected='true'] { outline: 2px solid var(--accent, #2f6fdf); outline-offset: 1px; }
+.bg-hide { margin-top: 10px; }
+.bg-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.bg-buttons .bg-spacer { flex: 1; }
 
 /* ------------------------------------------------------------------ Sheet mode */
 #sheet-pane { grid-area: host; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); }

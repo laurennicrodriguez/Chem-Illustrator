@@ -8,7 +8,7 @@ This page covers Slides mode: building a deck, the slide master and templates, c
 
 Click **+ Slides** at the end of the tab strip, or choose **File ▸ New Slides**. While a deck is showing, Ctrl+N starts another one. Each open file has its own tab: Ctrl+Tab moves between tabs and Ctrl+W closes one.
 
-The Slides ribbon has PowerPoint's tabs: **Home** (slides, font, paragraph), **Insert** (pictures, text boxes, tables, shapes), **Design** (size, templates, slide master, drawing style), **Transitions**, **Animations** and **Slide Show**. The **Slide** menu at the top holds the same commands.
+The Slides ribbon has PowerPoint's tabs: **Home** (slides, font, paragraph), **Insert** (pictures, text boxes, tables, shapes), **Design** (size, templates, slide master, drawing style, format background), **Transitions**, **Animations** and **Slide Show**. The **Slide** menu at the top holds the same commands.
 
 ## Slides and layouts
 
@@ -42,6 +42,21 @@ The list down the left shows every slide.
 - **Structures:** the bond length structures are drawn at, and whether pasted structures are resized to it.
 
 Click **Apply to all slides**. Text you formatted by hand keeps its own formatting. Ctrl+Z puts the old settings back in one step.
+
+## Slide backgrounds
+
+**Design** tab ▸ **Format Background** (or **Slide ▸ Format Background…**, or right-click an empty part of the slide) gives the slide a background of its own:
+
+- **Solid colour**, as see-through as you like (see-through backgrounds show white behind them).
+- **Gradient:** linear, radial or rectangular, in any direction or angle, with as many colour stops as you want, each with its own place and transparency. **Preset** offers ten ready-made ones to start from.
+- **Picture or texture:** a picture stretched to the slide, filling it (keeping its proportions and cutting the edges that stick out), fitting in it whole, or tiled as a texture (with its scale, where the tiles start, and mirrored tiles). Stretched pictures can be moved in from the edges or past them. Pictures can be see-through too, so text stays easy to read over a photo.
+- **Pattern:** PowerPoint's 54 patterns (dots, lines, grids, checks, bricks, diamonds and more), in the two colours you pick.
+
+**Hide background graphics** leaves the template's shapes and the logo off the slide, as in PowerPoint. The preview at the top shows the slide as it will look.
+
+**Apply to this slide** changes the slides picked in the slide list (Shift or Ctrl+click to pick several). **Apply to All** gives every slide the background, title slides too, through the slide master, so new slides get it as well. **Reset Background** gives the picked slides the master's background again. Each is one step for Undo.
+
+Backgrounds are saved as PowerPoint's own, so PowerPoint (and LibreOffice) shows them and Format Background there can change them. Gradients, pictures and patterns from PowerPoint files come in as they were, including the background styles built into PowerPoint's themes and backgrounds set on a layout.
 
 ## Design templates
 

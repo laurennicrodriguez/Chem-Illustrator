@@ -310,8 +310,7 @@ export class PresenterView {
       ctx.fillText('End of slide show', 12, 24);
       return;
     }
-    const s = d.slides[i];
-    paintSlide(c, w, h, window.devicePixelRatio || 1, { size: d.size, master: d.master, layout: s.layout, index: i }, d.docOf(i), '#111317');
+    paintSlide(c, w, h, window.devicePixelRatio || 1, d.page(i), d.docOf(i), '#111317');
   }
 
   private async fullscreen(on: boolean): Promise<void> {

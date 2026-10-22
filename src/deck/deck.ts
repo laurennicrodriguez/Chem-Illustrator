@@ -15,6 +15,7 @@ import { applyStyle, type RestyleHow } from '../drawing-styles';
 import type { Rect } from '../geom';
 import { ASCENT } from '../text/layout';
 import type { Transition, Anim } from './animation';
+import { backgroundColour, copyBackground, isPlain, sameBackground, solid, type Background } from './background';
 
 export interface SlideSize { w: number; h: number }
 /** PowerPoint's two standard sizes, in points: widescreen 13.33 × 7.5 in, and 10 × 7.5 in. */
@@ -66,8 +67,10 @@ export type Corner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 export interface Image { src: string; px: { w: number; h: number } }
 
 export interface Master {
-  /** Colour of every slide. */
+  /** Colour of every slide (the main colour of `fill` when there is one). */
   background: string;
+  /** Every slide's background when it is more than a colour: a gradient, picture, pattern or see-through colour (Format Background > Apply to All). */
+  fill?: Background;
   titleFont: string;
   bodyFont: string;
   titleSize: number;
@@ -96,7 +99,7 @@ export interface Master {
   accent2: string;
   decor: Decor;
   /** Title slides' own background and text colours (a dark title slide); as other slides when not set. */
-  titleSlide?: { background: string; titleColor: string; textColor: string; footerColor?: string };
+  titleSlide?: { background: string; titleColor: string; textColor: string; footerColor?: string; fill?: Background };
   /** The template's name, when one was used (Design > Templates). */
   template?: string;
 }
@@ -128,6 +131,17 @@ export function slideColours(m: Master, layout: LayoutId): { background: string;
     textColor: t?.textColor ?? m.textColor,
     footerColor: t?.footerColor ?? (t ? t.textColor : m.footerColor),
   };
+}
+
+/**
+ * The background of a slide with this layout: its own (Format Background) when it has one, else
+ * the title slides' own, else the master's.
+ */
+export function slideBackground(m: Master, layout: LayoutId, own?: Background): Background {
+  if (own) return own;
+  const t = layout === 'title' ? m.titleSlide : undefined;
+  if (t) return t.fill ?? solid(t.background);
+  return m.fill ?? solid(m.background);
 }
 
 /** One of a template's shapes: a box, a line (x1,y1 to x2,y2, `width` points wide), or a filled triangle. */
@@ -289,14 +303,20 @@ export interface Slide {
   anims?: Anim[];
   /** Comments pinned to points on it (Review > New Comment). */
   comments?: PinnedComment[];
+  /** Its own background (Design > Format Background); the master's when not set. */
+  background?: Background;
+  /** The master's shapes and logo are left off this slide (Format Background > Hide background graphics). */
+  hideGraphics?: boolean;
 }
 
-/** A slide's transition and animations, copied (for duplicates and the undo history). */
-export interface Motion { transition?: Transition; anims?: Anim[]; comments?: PinnedComment[] }
+/** A slide's transition, animations, comments and own background, copied (for duplicates and the undo history). */
+export interface Motion { transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean }
 const copyMotion = (m: Motion): Motion => ({
   ...(m.transition ? { transition: { ...m.transition } } : {}),
   ...(m.anims?.length ? { anims: m.anims.map((a) => ({ ...a, target: { ...a.target } })) } : {}),
   ...(m.comments?.length ? { comments: copyPinned(m.comments) } : {}),
+  ...(m.background ? { background: copyBackground(m.background) } : {}),
+  ...(m.hideGraphics ? { hideGraphics: true } : {}),
 });
 
 type HistoryEntry =
@@ -319,6 +339,8 @@ export class Deck {
   onComments: () => void = () => {};
   /** Counts changes (edits, undos and redos), so the file knows when it has unsaved changes. */
   edits = 0;
+  /** Counts changes to slides' own backgrounds (the slide list draws them again). */
+  looks = 0;
   private nextSlideId = 1;
   private undoList: HistoryEntry[] = [];
   private redoList: HistoryEntry[] = [];
@@ -328,6 +350,17 @@ export class Deck {
   constructor(public host: Doc) {}
 
   get current(): Slide | null { return this.slides[this.index] ?? null; }
+
+  /** What slide i's page needs to be drawn: its size, master, layout, number and background. */
+  page(i = this.index): { size: SlideSize; master: Master; layout: LayoutId; index: number; own?: Background; hideGraphics?: boolean } {
+    const s = this.slides[i];
+    return { size: this.size, master: this.master, layout: s?.layout ?? 'blank', index: i, own: s?.background, hideGraphics: s?.hideGraphics };
+  }
+
+  /** Restyle every slide's drawing after the master or backgrounds change. */
+  private restyleAll(): void {
+    for (let i = 0; i < this.slides.length; i++) this.styleDoc(this.docOf(i), this.slides[i].layout, this.slides[i].background);
+  }
 
   /** The drawing of slide i, wherever it is. */
   docOf(i: number): Doc {
@@ -365,10 +398,10 @@ export class Deck {
     return d;
   }
 
-  /** Give a slide's drawing the master's drawing style and text styles (a title slide's in its own colours). */
-  private styleDoc(d: Doc, layout: LayoutId): void {
+  /** Give a slide's drawing the master's drawing style and text styles (a title slide's in its own colours), and its background's colour. */
+  private styleDoc(d: Doc, layout: LayoutId, own?: Background): void {
     d.style = { ...this.master.drawing };
-    d.background = slideColours(this.master, layout).background;
+    d.background = backgroundColour(slideBackground(this.master, layout, own));
     d.textStyles = textStyles(this.master, layout);
     d.allDirty = true;
     d.version++;
@@ -377,7 +410,7 @@ export class Deck {
   /** Make a slide from contents (opening a file, pasting slides). Not undoable on its own. */
   makeSlide(layout: LayoutId, contents?: Contents, notes = '', motion: Motion = {}): Slide {
     const doc = new Doc();
-    this.styleDoc(doc, layout);
+    this.styleDoc(doc, layout, motion.background);
     if (contents) doc.restoreContents(contents);
     return { id: this.nextSlideId++, layout, doc, notes, ...copyMotion(motion) };
   }
@@ -389,7 +422,7 @@ export class Deck {
     this.master = master;
     this.slides = slides;
     for (const s of slides) {
-      this.styleDoc(s.doc, s.layout);
+      this.styleDoc(s.doc, s.layout, s.background);
       if (s.id >= this.nextSlideId) this.nextSlideId = s.id + 1;
     }
     if (!slides.length) this.slides.push(this.makeSlide('title', this.newSlideDoc('title').contents()));
@@ -604,9 +637,9 @@ export class Deck {
     this.contentEdit('Change layout', [i], () => {
       slide.layout = layout;
       const d = this.docOf(i);
-      this.styleDoc(d, layout);
+      this.styleDoc(d, layout, slide.background);
       d.bulk(() => this.fitPlaceholders(d, layout));
-    }, () => { slide.layout = old; this.styleDoc(this.docOf(this.slides.indexOf(slide)), old); }, () => { slide.layout = layout; this.styleDoc(this.docOf(this.slides.indexOf(slide)), layout); });
+    }, () => { slide.layout = old; this.styleDoc(this.docOf(this.slides.indexOf(slide)), old, slide.background); }, () => { slide.layout = layout; this.styleDoc(this.docOf(this.slides.indexOf(slide)), layout, slide.background); });
   }
 
   /**
@@ -658,7 +691,7 @@ export class Deck {
     const before = this.master;
     const apply = (x: Master) => {
       this.master = x;
-      for (let i = 0; i < this.slides.length; i++) this.styleDoc(this.docOf(i), this.slides[i].layout);
+      this.restyleAll();
       this.onSwitch();
     };
     apply(m);
@@ -673,7 +706,7 @@ export class Deck {
     const before = this.master, after = { ...before, drawing: { ...next } };
     const use = (m: Master) => {
       this.master = m;
-      for (let i = 0; i < this.slides.length; i++) this.styleDoc(this.docOf(i), this.slides[i].layout);
+      this.restyleAll();
     };
     const all = this.slides.map((_, i) => i);
     this.contentEdit('Change drawing style', all, () => {
@@ -688,13 +721,13 @@ export class Deck {
   /** Start a new deck with this master (your template for new decks). Not undoable. */
   useMaster(m: Master): void {
     this.master = m;
-    for (let i = 0; i < this.slides.length; i++) this.styleDoc(this.docOf(i), this.slides[i].layout);
+    this.restyleAll();
   }
 
   /** Start a new deck in a style (your default for new slides or designs). Not undoable. */
   useDrawingStyle(st: DocStyle): void {
     this.master = { ...this.master, drawing: { ...st } };
-    for (let i = 0; i < this.slides.length; i++) this.styleDoc(this.docOf(i), this.slides[i].layout);
+    this.restyleAll();
   }
 
   /** Change the slide size: everything stays centred, and placeholders move to the layout's places. */
@@ -716,6 +749,63 @@ export class Deck {
         });
       }
     }, () => { this.size = old; }, () => { this.size = { ...size }; });
+  }
+
+  /**
+   * Give some slides (the current one by default) their own background, or none (the master's
+   * again), and show or hide the master's shapes and logo on them. One undo step.
+   */
+  setBackground(bg: Background | undefined, indices: number[] = [this.index], hideGraphics?: boolean): void {
+    const slides = [...new Set(indices)].map((i) => this.slides[i]).filter(Boolean);
+    if (!slides.length) return;
+    type Look = { background?: Background; hideGraphics?: boolean };
+    const before: Look[] = slides.map((s) => ({ background: s.background, hideGraphics: s.hideGraphics }));
+    const after: Look[] = slides.map((s) => ({ background: bg ? copyBackground(bg) : undefined, hideGraphics: hideGraphics ?? s.hideGraphics }));
+    if (before.every((b, k) => sameBackground(b.background, after[k].background) && !!b.hideGraphics === !!after[k].hideGraphics)) return;
+    const put = (looks: Look[]) => {
+      slides.forEach((s, k) => {
+        if (looks[k].background) s.background = looks[k].background; else delete s.background;
+        if (looks[k].hideGraphics) s.hideGraphics = true; else delete s.hideGraphics;
+      });
+      this.looks++;
+      this.restyleAll();
+      this.onSwitch();
+    };
+    put(after);
+    this.record(bg ? 'Format background' : 'Reset background', () => put(before), () => put(after), slides.length === 1 ? slides[0] : undefined);
+  }
+
+  /**
+   * Format Background > Apply to All: every slide (title slides too) has this background, from
+   * the master; no slide keeps one of its own. One undo step.
+   */
+  setAllBackgrounds(bg: Background, hideGraphics?: boolean): void {
+    const plain = isPlain(bg);
+    const colour = backgroundColour(bg);
+    const m = this.master;
+    const master: Master = { ...m, background: plain ? bg.color : colour, fill: plain ? undefined : copyBackground(bg) };
+    if (!master.fill) delete master.fill;
+    if (m.titleSlide) {
+      master.titleSlide = { ...m.titleSlide, background: plain ? bg.color : colour, fill: plain ? undefined : copyBackground(bg) };
+      if (!master.titleSlide.fill) delete master.titleSlide.fill;
+    }
+    type Look = { background?: Background; hideGraphics?: boolean };
+    const beforeMaster = m;
+    const before: Look[] = this.slides.map((s) => ({ background: s.background, hideGraphics: s.hideGraphics }));
+    const after: Look[] = this.slides.map((s) => ({ hideGraphics: hideGraphics ?? s.hideGraphics }));
+    const slides = this.slides.slice();
+    const put = (mm: Master, looks: Look[]) => {
+      this.master = mm;
+      slides.forEach((s, k) => {
+        if (looks[k].background) s.background = looks[k].background; else delete s.background;
+        if (looks[k].hideGraphics) s.hideGraphics = true; else delete s.hideGraphics;
+      });
+      this.looks++;
+      this.restyleAll();
+      this.onSwitch();
+    };
+    put(master, after);
+    this.record('Apply background to all', () => put(beforeMaster, before), () => put(master, after));
   }
 
   /** Change a slide's speaker notes. */
