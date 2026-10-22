@@ -189,6 +189,47 @@ export function drawGeoIcon(c: HTMLCanvasElement, def: GeoDef, px: number, colou
   }
 }
 
+/** The size of the enlarged picture shown while the mouse rests on a shape or icon. */
+const PREVIEW_PX = 112;
+
+let preview: HTMLDivElement | null = null;
+let previewTimer = 0;
+
+/** After a moment's rest on a tile, its picture enlarged beside it, with its name. */
+function showPreview(tile: HTMLElement, name: string, big: () => HTMLElement | string): void {
+  hidePreview();
+  previewTimer = window.setTimeout(() => {
+    if (!tile.isConnected) return;
+    if (!preview) {
+      preview = document.createElement('div');
+      preview.className = 'dl-preview';
+      preview.setAttribute('aria-hidden', 'true');
+      document.body.append(preview);
+    }
+    const pic = document.createElement('div');
+    pic.className = 'dl-preview-pic';
+    const p = big();
+    if (typeof p === 'string') pic.innerHTML = p;
+    else pic.append(p);
+    const label = document.createElement('div');
+    label.className = 'dl-preview-name';
+    label.textContent = name;
+    preview.replaceChildren(pic, label);
+    preview.hidden = false;
+    // beside the tile, on whichever side has room, kept inside the window
+    const r = tile.getBoundingClientRect(), w = preview.offsetWidth, h = preview.offsetHeight;
+    const x = r.right + 8 + w <= innerWidth - 4 ? r.right + 8 : Math.max(4, r.left - 8 - w);
+    const y = Math.min(Math.max(4, r.top + r.height / 2 - h / 2), innerHeight - 4 - h);
+    preview.style.left = `${x}px`;
+    preview.style.top = `${y}px`;
+  }, 350);
+}
+
+function hidePreview(): void {
+  clearTimeout(previewTimer);
+  if (preview) preview.hidden = true;
+}
+
 /** How many icons are shown at a time (more with "Show more"). */
 const ICON_PAGE = 160;
 
@@ -291,14 +332,19 @@ export class DesignLibrary {
     this.body.replaceChildren(...(this.tab === 'icons' ? this.iconParts() : this.shapeParts()));
   }
 
-  /** A button for a shape or icon: click to pick it, or drag it onto the page. */
-  private tile(id: string, name: string, picture: HTMLElement | string): HTMLButtonElement {
+  /**
+   * A button for a shape or icon: click to pick it, or drag it onto the page. Resting the mouse
+   * on it shows `big`, the same picture enlarged, with its name (in place of a plain tooltip).
+   */
+  private tile(id: string, name: string, picture: HTMLElement | string, big: () => HTMLElement | string): HTMLButtonElement {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'dl-shape';
     b.dataset.geo = id;
-    b.title = name;
     b.setAttribute('aria-label', name);
+    b.addEventListener('pointerenter', () => showPreview(b, name, big));
+    b.addEventListener('pointerleave', hidePreview);
+    b.addEventListener('pointerdown', hidePreview);
     b.draggable = true;
     b.classList.toggle('active', id === this.active);
     if (typeof picture === 'string') b.innerHTML = picture;
@@ -318,7 +364,7 @@ export class DesignLibrary {
       const text = `${g.name} ${g.group} ${g.keywords ?? ''} ${g.id}`.toLowerCase();
       return words.every((w) => text.includes(w));
     });
-    const colour = getComputedStyle(this.el).getPropertyValue('--fg').trim() || '#222';
+    const colour = getComputedStyle(this.el).getPropertyValue('--tile-ink').trim() || '#222';
     const parts: HTMLElement[] = [];
     for (const group of GEO_GROUPS) {
       const inGroup = found.filter((g) => g.group === group);
@@ -329,8 +375,12 @@ export class DesignLibrary {
       grid.className = 'dl-grid';
       for (const def of inGroup) {
         const c = document.createElement('canvas');
-        drawGeoIcon(c, def, 34, colour);
-        grid.append(this.tile(def.id, def.name, c));
+        drawGeoIcon(c, def, 26, colour);
+        grid.append(this.tile(def.id, def.name, c, () => {
+          const large = document.createElement('canvas');
+          drawGeoIcon(large, def, PREVIEW_PX, colour);
+          return large;
+        }));
       }
       parts.push(h, grid);
     }
@@ -361,7 +411,7 @@ export class DesignLibrary {
     else {
       const grid = document.createElement('div');
       grid.className = 'dl-grid dl-icons';
-      for (const i of found.slice(0, this.iconCount)) grid.append(this.tile(i.id, i.name, iconSvg(i.id, 26)));
+      for (const i of found.slice(0, this.iconCount)) grid.append(this.tile(i.id, i.name, iconSvg(i.id, 26), () => iconSvg(i.id, PREVIEW_PX)));
       parts.push(grid);
       if (found.length > this.iconCount) parts.push(this.link(`Show more (${(found.length - this.iconCount).toLocaleString()} left)`, () => { this.iconCount += ICON_PAGE * 2; this.build(); }));
     }

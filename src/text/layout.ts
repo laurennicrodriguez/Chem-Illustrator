@@ -65,6 +65,20 @@ export interface TextFrame {
   boxH?: number;
   /** AutoFit: 'shrink' makes the text smaller until it fits in boxH; otherwise it doesn't change size. */
   fit?: 'shrink' | 'fixed';
+  /** Automatic hyphenation (documents): words that don't fit are broken where the hyphenation patterns allow. */
+  hyphenate?: Hyphenation;
+}
+
+/** How words are hyphenated at the ends of lines, as Word's Hyphenation Options. */
+export interface Hyphenation {
+  /** Where a word may be broken: offsets into it (after the first letters, before the last). */
+  points: (word: string) => number[];
+  /** Hyphenation zone: a word is broken only if leaving it whole would leave more than this much room (points). */
+  zone: number;
+  /** At most this many lines one after another ending in a hyphen (0: no limit). */
+  limit: number;
+  /** Words in capitals are broken too. */
+  caps: boolean;
 }
 
 /** Room a line gives up to a figure beside it, or how far it moves down past one. */
@@ -107,6 +121,8 @@ export interface Glyphs {
   /** A tab (its one character isn't drawn), with the dots or line that lead across it to its tab stop. */
   tab?: boolean;
   leader?: TabStop['leader'];
+  /** Not drawn and no width: text a markup view hides (deleted text in Simple Markup). The caret still passes through it. */
+  hidden?: boolean;
 }
 
 export interface LaidLine {
@@ -178,6 +194,8 @@ interface Seg {
   obj?: number; w?: number; shown?: string; objAscent?: number; objDescent?: number;
   /** A tab: its width (`w`) is worked out from where it starts and its tab stop. */
   tab?: boolean; leader?: TabStop['leader'];
+  /** Not shown, and taking no room (tracked changes a markup view hides). */
+  hide?: boolean;
 }
 
 /**
@@ -206,6 +224,14 @@ function segments(runs: TextRun[], defaultSize: number, n: number): { segs: Seg[
   let p = 0, off = 0;
   if (runs.length) sizes[0] = runs[0].size ?? defaultSize;
   for (const r of runs) {
+    const from0 = { p, k: segs[p]?.length ?? 0 };
+    collect(r);
+    // hidden text (a markup view's): every piece the run made
+    if (r.hide) for (let q = from0.p; q <= Math.min(p, n - 1); q++) for (const sg of segs[q].slice(q === from0.p ? from0.k : 0)) sg.hide = true;
+  }
+  return { segs, sizes };
+
+  function collect(r: TextRun): void {
     const base = r.size ?? defaultSize;
     const style = `${r.italic ? 'italic ' : ''}${r.bold ? 'bold ' : ''}`;
     const family = r.font ? withStack(r.font) : FONT_STACK;
@@ -218,7 +244,7 @@ function segments(runs: TextRun[], defaultSize: number, n: number): { segs: Seg[
         if (p < n) segs[p].push({ text: ch, start: off, size, base, dy, family, style, color: r.color, underline: r.underline, strike: r.strike, highlight: r.highlight, obj: r.obj });
         off += ch.length;
       }
-      continue;
+      return;
     }
     const from = { p, k: segs[p]?.length ?? 0 };
     const parts = r.formula && !r.sub && !r.sup ? formulaParts(r.text) : [{ text: r.text, pos: r.sub ? 'sub' : r.sup ? 'sup' : 'base' }];
@@ -252,7 +278,6 @@ function segments(runs: TextRun[], defaultSize: number, n: number): { segs: Seg[
     // character spacing goes on every piece the run made
     if (r.spacing) for (let q = from.p; q <= Math.min(p, n - 1); q++) for (const sg of segs[q].slice(q === from.p ? from.k : 0)) sg.spacing = r.spacing;
   }
-  return { segs, sizes };
 }
 
 /**
@@ -391,7 +416,7 @@ function layoutPlain(f: TextFrame, defaultSize: number, measure: Measure): TextL
       }
     }
     const segWidth = (s: Seg, a: number, b: number): number =>
-      s.obj !== undefined || s.tab ? (b > a ? s.w ?? 0 : 0) : measure(s.text.slice(a, b), s.size, s.family, s.style) + (s.spacing ? s.spacing * (b - a) : 0);
+      s.hide ? 0 : s.obj !== undefined || s.tab ? (b > a ? s.w ?? 0 : 0) : measure(s.text.slice(a, b), s.size, s.family, s.style) + (s.spacing ? s.spacing * (b - a) : 0);
 
     // the width of part of the paragraph (offsets within it), piece by piece
     const widthOf = (a: number, b: number): number => {
@@ -458,7 +483,7 @@ function layoutPlain(f: TextFrame, defaultSize: number, measure: Measure): TextL
 
     // fill lines word by word (the first line has the first-line indent taken off its room);
     // beside a figure a line gives up room to it, or moves down past it
-    type PLine = { start: number; end: number; width: number; cut: Narrow };
+    type PLine = { start: number; end: number; width: number; cut: Narrow; hyphen?: Glyphs };
     const pLines: PLine[] = [];
     const step = SINGLE * pSpacing * em;
     const lineGuess = ps.linePt && ps.linePt > 0 ? (ps.lineRule === 'exact' ? ps.linePt : Math.max(ps.linePt, step)) : step;
@@ -477,19 +502,50 @@ function layoutPlain(f: TextFrame, defaultSize: number, measure: Measure): TextL
     let cut = cutAt();
     if (cut.down) top += cut.down;
     let cur: { start: number; end: number; width: number; full: number } | null = null;
-    const emit = () => {
+    let hyphensInRow = 0;
+    const emit = (hyphen?: Glyphs) => {
       if (cur) {
-        pLines.push({ start: cur.start, end: cur.end, width: cur.width, cut });
+        pLines.push({ start: cur.start, end: cur.end, width: cur.width, cut, ...(hyphen ? { hyphen } : {}) });
+        hyphensInRow = hyphen ? hyphensInRow + 1 : 0;
         top += lineGuess;
         cut = cutAt();
         if (cut.down) top += cut.down;
       }
       cur = null;
     };
-    for (const w of words) {
+    const segAt = (at: number): Seg | undefined => pSegs.find((s) => s.start - paraStart <= at && at < s.start - paraStart + s.text.length);
+    /** Where to break a word that doesn't fit on the line (`room` left after the line so far), with the hyphen to draw; null to leave it whole. */
+    const hyphenBreak = (w: Word, room: number): { at: number; width: number; hyphen: Glyphs } | null => {
+      const hy = f.hyphenate;
+      if (!hy || room <= hy.zone || (hy.limit > 0 && hyphensInRow >= hy.limit)) return null;
+      const m = /^(\p{L}+)([^\p{L}\d\s]*)\s*$/u.exec(pText.slice(w.start, w.end));
+      if (!m || m[1].length < 5 || (!hy.caps && m[1] === m[1].toUpperCase())) return null;
+      // the word in one plain piece of text (not a formula, figure or field)
+      const s = segAt(w.start);
+      if (!s || s.obj !== undefined || s.tab || s.start - paraStart + s.text.length < w.start + m[1].length) return null;
+      const points = hy.points(m[1]).filter((k) => k >= 2 && k <= m[1].length - 2).sort((a, b) => b - a);
+      for (const k of points) {
+        const hw = measure('-', s.size, s.family, s.style);
+        const width = widthOf(w.start, w.start + k) + hw;
+        if (width <= room + 1e-6) return { at: w.start + k, width, hyphen: { text: '-', start: 0, x: 0, w: hw, dy: s.dy, size: s.size, family: s.family, style: s.style, color: s.color, decor: true } };
+      }
+      return null;
+    };
+    for (let w of words) {
       const lineRoom = (pLines.length ? room : room - firstLine) - cut.left - cut.right;
       // a word fits when it and the space after it do (ChemDraw counts that space too)
-      if (cur && cur.full + w.body + w.spaces > lineRoom + 1e-6) emit();
+      if (cur && cur.full + w.body + w.spaces > lineRoom + 1e-6) {
+        const hb = hyphenBreak(w, lineRoom - cur.full);
+        if (hb) {
+          // the start of the word, and a hyphen, end this line; the rest starts the next
+          cur.end = hb.at;
+          cur.width = cur.full + hb.width;
+          emit(hb.hyphen);
+          let be = w.end;
+          while (be > hb.at && pText[be - 1] === ' ') be--;
+          w = { start: hb.at, end: w.end, body: widthOf(hb.at, be), spaces: w.spaces };
+        } else emit();
+      }
       if (!cur) cur = { start: w.start, end: w.end, width: w.body, full: w.body + w.spaces };
       else { cur.end = w.end; cur.width = cur.full + w.body; cur.full += w.body + w.spaces; }
     }
@@ -515,6 +571,7 @@ function layoutPlain(f: TextFrame, defaultSize: number, measure: Measure): TextL
         if (s.strike) g.strike = true;
         if (s.spacing) g.spacing = s.spacing;
         if (s.tab) { g.tab = true; if (s.leader) g.leader = s.leader; }
+        if (s.hide) { g.hidden = true; pieces.push(g); continue; }
         if (s.obj !== undefined) {
           g.obj = s.obj;
           if (s.shown !== undefined) g.shown = s.shown;
@@ -525,6 +582,7 @@ function layoutPlain(f: TextFrame, defaultSize: number, measure: Measure): TextL
         x += w;
         size = Math.max(size, s.base);
       }
+      if (pl.hyphen) pieces.push({ ...pl.hyphen, start: paraStart + pl.end, x });
       if (!size) size = em;
       const last = li === pLines.length - 1;
       const lineLeft = (li === 0 ? left + firstLine : left) + pl.cut.left;
@@ -602,11 +660,14 @@ function spread(l: LaidLine, room: number, text: string): void {
   let inner = 0;
   const end = l.end - trailingSpaces(text, l.start, l.end);
   for (let i = l.start; i < end; i++) if (text[i] === ' ') inner++;
+  // spaces in hidden text (a markup view's) don't widen
+  for (const g of l.pieces) if (g.hidden) for (let i = 0; i < g.text.length; i++) if (g.text[i] === ' ' && g.start + i < end) inner--;
   if (!inner) return;
   const each = extra / inner;
   let added = 0;
   for (const g of l.pieces) {
     g.x += added;
+    if (g.hidden) continue;
     let k = 0;
     for (let i = 0; i < g.text.length; i++) if (g.text[i] === ' ' && g.start + i < end) k++;
     if (k) { g.spread = each; g.w += each * k; added += each * k; }
@@ -618,7 +679,7 @@ function spread(l: LaidLine, room: number, text: string): void {
 
 /** Distance from a piece's left end to the place before its k-th character. */
 export function pieceX(lay: TextLayout, g: Glyphs, k: number): number {
-  if (k <= 0) return 0;
+  if (k <= 0 || g.hidden) return 0;
   if (k >= g.text.length) return g.w;
   const t = g.text.slice(0, k);
   let w = lay.measure(t, g.size, g.family, g.style);

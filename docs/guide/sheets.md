@@ -8,6 +8,10 @@ This page covers Sheet mode: cells and formulas, structures in cells, the chemis
 
 Click **+ Sheet** at the end of the tab strip, or choose **File ▸ New Sheet**. While a sheet is showing, Ctrl+N starts another one.
 
+**File ▸ New from Template…** offers a **Reaction table** (one row per entry: catalyst, loading, solvent, temperature, time, conversion, yield, ee and dr, with the best yield and its entry found for you) and a **Reagent sheet** (the reagent table below, and a Yield sheet that works out the percent yield from the product's structure and its isolated mass).
+
+Sheets open from .xlsx, .xlsm, .xls and .ods files as well as text and SD files; see [File types](files-and-sharing.md#file-types).
+
 The ribbon has **Home** and **Insert** tabs. **Table Design**, **Chart** and **Dashboard** tabs appear when you click in a table, a chart or a dashboard. The **Sheet** menu at the top holds most of the same commands.
 
 ## Working with cells
@@ -107,6 +111,9 @@ You can combine them as usual: `=1000*D2/MW(B2)` turns mg into mmol.
 
 - **Home** tab: font size, bold, italic, underline, borders, fill and text colour, alignment, **Wrap**, **Merge**, and the number format with **+.0** and **−.0** for decimal places. **Other…** in the number format list takes your own Excel-style format, such as `0.00 "mg"`.
 - **Format Painter** (beside **Paste**) copies the formats of the selected cells to the cells you click or drag over next; double-click it to keep painting until Esc. **Insert** tab ▸ **Symbol** types °, µ, Å and other signs into the cell.
+- The **font box** takes any installed font; cells with no font of their own use the theme's body font. **Orientation** (ab↗) turns text up, down or to 45°, or stacks its letters, which suits narrow column headings. **⇤** and **⇥** indent text from the cell's edge.
+- **Cell Styles** puts one of Excel's named styles on the selected cells: Good, Bad and Neutral; Input, Output, Calculation, Note and the rest; Title, Heading 1 to 4 and Total; the Accent colours; and the Comma, Currency and Percent number styles. Excel shows them under the same names.
+- **Page Layout** tab ▸ **Themes** sets the workbook's colours and fonts together, with **Colours** and **Fonts** to change one part only. The colour menus offer the theme's colours, and cells styled with Heading, Title, Total or Accent styles take the new theme's colours. The themes are Office (Excel's default) and a few of our own, including a colour-blind safe one.
 - **C₉H₈** sets formulas with proper subscripts. Formulas typed into text cells (Pd(PPh3)4, CH2Cl2) show this way on their own; click **C₉H₈** on such a cell to show it as typed.
 - **Units:** the number format list has a **Units** group for reaction conditions: temperature (°C), catalyst loading (mol%), equivalents, concentration (M), density (g/mL), amount (mmol), mass (mg), volume (mL and µL), time (h and min), pressure (atm) and % ee. The cell keeps the plain number, so it still sorts and works in formulas. Typing "-78 °C" or "5 mol%" into a cell sets the unit for you.
 
@@ -117,6 +124,18 @@ Select some numbers and open **Home** tab ▸ **Conditional Formatting**. Choose
 ### Table styles
 
 Click in your data and choose **Home** tab ▸ **Format as Table** (or **Insert** tab ▸ **Table**). The **Table Design** tab then offers the table's name, **Header Row**, **Totals Row**, **Banded Rows**, first and last column, banded columns, the **Table Style**, its colours, and **Convert to Range** to make it plain cells again.
+
+### Sparklines
+
+Select a block of numbers, such as yields across five runs, and choose **Insert** tab ▸ **Sparklines** ▸ **Line**, **Column** or **Win/Loss**. Give the cells to put them in (one cell for each row of data), then click OK. Click a sparkline to open the **Sparkline** tab. It changes the type, marks the high, low, first, last or negative points, sets the colours and line width, sets the axis (each sparkline its own, the same for all, or a number you choose), sets how empty cells show, changes the data, and clears them. Sparklines are saved as Excel's own.
+
+## Outlines and subtotals
+
+**Data** tab ▸ **Outline**: **Group** (Shift+Alt+Right) puts the selected rows or columns in a group that folds away, up to seven levels deep, and **Ungroup** (Shift+Alt+Left) takes them out. **Auto Outline** groups rows that a SUM just below adds up. The buttons beside the row numbers fold and open each group (− and +), and **1 2 3** show the outline to a level. **Subtotal…** adds a total row under each change in a column (each catalyst, each solvent) worked out with SUBTOTAL, plus a Grand Total, all grouped. SUBTOTAL leaves out other subtotals and, with function numbers 101 to 111, hidden rows. **Settings…** puts the summary rows above their details instead of below.
+
+## Views
+
+The **View** tab has **Normal**, **Page Break Preview** (what prints, page by page, with the breaks as blue lines you can drag) and **Page Layout** (the cells on sheets of paper with their margins, headers and footers; double-click a header to change it). **Gridlines**, **Headings** and **Formula Bar** show or hide those parts of the screen. **New Window** opens the workbook in a second tab (Book.xlsx:2), with its own sheet and place, and typing in either shows in both. **Custom Views…** saves how you are looking at the workbook under a name (the sheet, the view, and, if you like, hidden rows and columns, the filter and print settings) to go back to it in one step. All of these are saved in the .xlsx file.
 
 ## Sort, filter and freeze
 
@@ -154,6 +173,27 @@ Notes and comments move with their cells when you sort, insert or delete rows, a
 - **Error Alert:** what happens when something else is typed. **Stop** asks you to type again, **Warning** asks whether to keep it, and **Information** says so and keeps it.
 
 A cell with a list shows a drop-down button beside it while selected; click it or press **Alt+Down** to pick. In any cell, **Pick From Drop-down List…** on the right-click menu (or Alt+Down) lists the entries already above and below it in its column. **Circle Invalid** rings the cells that break their rules in red (pasted values and formulas aren't checked as they go in, as in Excel). The rules are saved as Excel's own, so the drop-downs and alerts work in Excel too.
+
+## Get Data and the Query Editor
+
+**Data** tab ▸ **Get Data** reads data from outside the workbook into a table, as Excel's Power Query does (without its M language):
+
+- **From Text/CSV…**: a CSV, TSV or other text file, split at commas, tabs, semicolons, vertical bars, spaces or another character you give.
+- **From JSON…**: a JSON file. Records (a list of objects) become rows; nested objects become columns of their own (`bp.value`, `bp.unit`). When the file has several lists, pick which in the editor.
+- **From Web…**: a web page's tables (the **Navigator** previews each one), or a CSV or JSON file at a web address. Only the address is sent. In a browser only sites that allow it can be read; the desktop app reads any page.
+- **From Workbook…**: a table or sheet of another Excel (.xlsx, .xlsm, .xls) or OpenDocument (.ods) workbook.
+
+The **Query Editor** then shows a preview of the data. Click a column's header to pick it (Ctrl or Shift for more), then a button adds a step: **Use First Row as Headers**, **Remove Columns**, **Keep Only**, **Rename…**, **Data Type** (text, decimal or whole number, percentage, date, true/false), **Filter…**, **Split Column…** (at each, the left-most or the right-most delimiter), **Replace Values…**, **Trim**, **Sort**, **Remove Duplicates**, **Remove Blank Rows**, **Remove Top Rows…**, **Unpivot Columns** and **Unpivot Other Columns** (columns such as Run 1, Run 2, Run 3 become rows of Attribute and Value). New files start with their headers found and each column's type worked out.
+
+**Applied Steps** lists the steps in order: click one to see the data after it (new steps go in after it), or **×** to take it away. A value that can't take a column's type shows as **Error** and loads as a blank cell. **Change Source…** points the query at another file (one that moved, or the next batch of results) with the same steps.
+
+**Close & Load** puts the results on a new sheet as a table named after the query; **Close & Load To…** puts them at a cell you choose, or nowhere (**Only Create Connection**). **Refresh All** (or **Refresh** on the right-click menu of the table) reads the source again and runs the same steps, growing or shrinking the table; it asks before covering other cells. **Queries & Connections** lists the workbook's queries, with **Edit**, **Refresh**, **Go to** and **Delete**. Queries are saved in the .xlsx file: Excel shows the tables, and the queries come back when the file is opened here again. (In a browser, a query's file is asked for again after the file is reopened.)
+
+### The Compound data type
+
+Type names (aspirin, DMAP, THF, Pd(PPh3)4), or draw structures, down a column, pick them and choose **Data** tab ▸ **Compound**. Each is looked up on PubChem and becomes a compound cell, marked with a small ring, carrying a card of its properties: IUPAC name, formula, molecular weight, exact mass, CAS number, CID, SMILES, InChI and InChIKey, XLogP, TPSA, hydrogen-bond donors and acceptors, rotatable bonds, and (unless you choose **Data Types** ▸ **Compound, without measured properties**) its melting and boiling points, density and GHS hazards. Only the name or SMILES is sent.
+
+Click a compound to see its card in the side panel. **+** beside a field, or **Insert Data**, adds a column of that field beside the compounds, as formulas such as `=FIELDVALUE(A2,"Molecular weight")` (FIELDVALUE takes a field's name in several forms: `"MW"`, `"CAS"`, `"Density"`). **Refresh Compound Data** looks the cards up again; **Convert to Text** keeps the names without their cards. Typing over a compound makes it plain text again. In a saved .xlsx file Excel sees the names and the values of the FIELDVALUE columns; the cards come back when it is opened here.
 
 ## Analysis: PivotTables, What-If and the Analysis ToolPak
 

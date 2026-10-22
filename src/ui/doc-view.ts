@@ -9,7 +9,8 @@ import { SHEET_MARGIN, breaksIn, continuous, outlineMarks, type DocViewKind } fr
 import type { LaidLine } from '../text/layout';
 import type { DocFile } from '../document/doc-file';
 import { figures } from '../document/doc-file';
-import { drawDocTable, drawHeaderFooter, drawLineNumbers, drawNoteRules, drawPageLook } from '../document/doc-paint';
+import { turnOf } from '../document/arrange';
+import { drawChangeBars, turnAbout, drawDocTable, drawHeaderFooter, drawHfBodies, drawLineNumbers, drawNoteRules, drawPageLook } from '../document/doc-paint';
 import { BOX_PAD, SHADOWS, lookOf, type DocText } from '../document/document';
 import { BREAK_NAMES } from '../document/sections';
 import { drawLayout } from '../text/draw';
@@ -18,6 +19,7 @@ import { selectionRects } from '../text/layout';
 import { imageFor, onImageReady } from '../render/images';
 import { fxCanvas, hasFx, traceShape } from '../render/picture-fx';
 import { paintChartBox } from '../render/chart-box-paint';
+import { drawParaBorders, drawParaShading } from '../document/para-borders';
 
 /** Grey space round the pages, in pixels. */
 const PAD_X = 24;
@@ -45,6 +47,8 @@ export interface Overlay {
   comments?: { start: number; end: number; active: boolean }[];
   /** A block of table cells chosen together (dragged across), shaded. */
   cells?: { id: number; r0: number; c0: number; r1: number; c1: number } | null;
+  /** More stretches of text selected with the selection (Select Text with Similar Formatting). */
+  also?: [number, number][];
 }
 
 export class DocView {
@@ -394,7 +398,8 @@ export class DocView {
     if (!endless) for (const p of visible) { at(p); this.paper(ctx, p, lay); }
     for (const p of visible) {
       at(p);
-      if (!endless) { drawHeaderFooter(ctx, t, p); drawLineNumbers(ctx, lay, p.index, '#555'); }
+      if (!endless) { drawHeaderFooter(ctx, t, p); drawHfBodies(ctx, t, lay, p.index, (o) => this.object(ctx, t, o, lay)); drawLineNumbers(ctx, lay, p.index, '#555'); drawChangeBars(ctx, lay, p.index); }
+      drawParaShading(ctx, lay.frames, p.index);
       // the found text and the selection, under the text
       const from = lay.text.lines[p.first]?.start ?? 0;
       const to = p.end > p.first ? lay.text.lines[p.end - 1].end : from;
@@ -406,6 +411,10 @@ export class DocView {
       }
       ctx.fillStyle = 'rgba(255, 200, 0, 0.45)';
       for (const [a, b] of ov.found) if (inPage(a, b)) for (const r of rectsOn(lay, p, a, b)) ctx.fillRect(r.x1, r.y1, r.x2 - r.x1, r.y2 - r.y1);
+      if (ov.also) {
+        ctx.fillStyle = SELECTION;
+        for (const [a, b] of ov.also) if (inPage(a, b)) for (const r of rectsOn(lay, p, a, b)) ctx.fillRect(r.x1, r.y1, r.x2 - r.x1, r.y2 - r.y1);
+      }
       if (ov.selection && inPage(...ov.selection)) {
         ctx.fillStyle = SELECTION;
         for (const r of rectsOn(lay, p, ...ov.selection)) ctx.fillRect(r.x1, r.y1, r.x2 - r.x1, r.y2 - r.y1);
@@ -414,6 +423,7 @@ export class DocView {
       for (const o of lay.objects) if (o.page === p.index && o.wrap === 'behind') this.object(ctx, t, o, lay);
       drawLayout(ctx, lay.text, 0, 0, p.first, p.end);
       drawNoteRules(ctx, lay, p.index);
+      drawParaBorders(ctx, lay.frames, p.index);
       // tables, then the figures (some of them in table cells)
       // (a table in a cell after the table holding it)
       const tabs = lay.objects.filter((o) => o.page === p.index && t.objects[o.id]?.kind === 'table').sort((a, b) => (lay.tables.get(a.id)?.depth ?? 0) - (lay.tables.get(b.id)?.depth ?? 0));
@@ -594,6 +604,16 @@ export class DocView {
   }
 
   private object(ctx: CanvasRenderingContext2D, t: DocText, o: PlacedObject, lay: DocLayout): void {
+    // a picture turned or flipped (Arrange > Rotate) is drawn so about its middle
+    const turn = turnOf(t.objects[o.id]);
+    if (!turn) { this.objectBody(ctx, t, o, lay); return; }
+    ctx.save();
+    turnAbout(ctx, o, turn);
+    this.objectBody(ctx, t, o, lay);
+    ctx.restore();
+  }
+
+  private objectBody(ctx: CanvasRenderingContext2D, t: DocText, o: PlacedObject, lay: DocLayout): void {
     const obj = t.objects[o.id];
     if (!obj) return;
     const look = lookOf(obj);

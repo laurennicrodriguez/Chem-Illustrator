@@ -11,7 +11,7 @@ import * as rt from '../richtext';
 import { caretPos, layoutText, lineOf, offsetAt, offsetInLine, selectionRects, wordAt, type Measure, type TextFrame, type TextLayout } from './layout';
 import { cleanPara, editParas, fitParas, paraAt, paraCount, paraRange, storedParas } from './paragraphs';
 import type { CharLook, FixEdit } from './chemtext';
-import { trackedReplace } from '../document/revisions';
+import { trackFormatting, trackedReplace, trackingFormatting } from '../document/revisions';
 import { linkAt, removeLink as removeLinkRuns, setLink as setLinkRuns, type LinkSpan } from '../links';
 import { paintParas, paintRange, paintRuns, paraLook, picksParagraph, runLook, type TextLook } from '../format-painter';
 
@@ -66,6 +66,13 @@ export class TextEditing {
    * inserted or deleted by this person instead of changing it outright (see document/revisions).
    */
   track: (() => { author: string; date: string } | null) | null = null;
+  /**
+   * Documents under Review > Restrict Editing: whether a change may be made, from the text as it
+   * is to the text after it. A change turned away is not made (nor undone or redone), and
+   * `refused` is told.
+   */
+  guard: ((before: RichText, after: RichText) => boolean) | null = null;
+  refused: () => void = () => {};
   /** How much of the last tracked deletion stayed in place, struck through. */
   private keptLast = 0;
 
@@ -188,6 +195,7 @@ export class TextEditing {
 
   /** Make a change (kind null: part of the change before, as while dragging, so no new undo step). */
   private commit(kind: string | null, t: RichText, anchor: number, focus = anchor): void {
+    if (this.guard && !this.guard(this.t, t)) { this.refused(); return; }
     if (kind !== null) this.snapshot(kind, focus);
     this.t = t;
     this.anchor = anchor;
@@ -258,7 +266,9 @@ export class TextEditing {
       return;
     }
     const style = this.typingStyle();
+    const before = this.t;
     this.replace(this.start, this.end, [{ ...style, text: '\n' }], undefined, 'line');
+    if (this.t === before) return;
     if (soft && ps.list) {
       const paras = this.t.paras.slice();
       paras[p + 1] = cleanPara({ ...paras[p + 1], cont: true });
@@ -402,7 +412,7 @@ export class TextEditing {
       this.onChange('selection');
       return;
     }
-    this.commit('style', { ...this.t, runs: rt.toggleStyle(this.t.runs, this.start, this.end, key, this.defaults) }, this.anchor, this.focus);
+    this.commit('style', { ...this.t, runs: this.restyled(rt.toggleStyle(this.t.runs, this.start, this.end, key, this.defaults)) }, this.anchor, this.focus);
   }
 
   /** Home > Change Case: the selection (or the word at the caret) in another case. */
@@ -492,7 +502,13 @@ export class TextEditing {
       this.onChange('selection');
       return;
     }
-    this.commit('style', { ...this.t, runs: rt.applyStyle(this.t.runs, this.start, this.end, patch) }, this.anchor, this.focus);
+    this.commit('style', { ...this.t, runs: this.restyled(rt.applyStyle(this.t.runs, this.start, this.end, patch)) }, this.anchor, this.focus);
+  }
+
+  /** The selection restyled: while changes are tracked, its look before is kept as a formatting change. */
+  private restyled(runs: TextRun[]): TextRun[] {
+    const who = this.track?.();
+    return who && trackingFormatting() ? trackFormatting(this.t.runs, runs, this.start, this.end, who) : runs;
   }
 
   /** Change the selected paragraphs' formatting (one undo step). */
@@ -657,6 +673,7 @@ export class TextEditing {
   private restore(from: Snap[], to: Snap[]): void {
     const s = from.pop();
     if (!s) return;
+    if (this.guard && !this.guard(this.t, s.t)) { from.push(s); this.refused(); return; }
     to.push({ t: this.t, anchor: this.anchor, focus: this.focus });
     this.t = s.t;
     this.anchor = s.anchor;

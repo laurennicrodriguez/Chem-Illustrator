@@ -6,6 +6,8 @@ Chem Illustrator draws structures and reaction schemes the way ChemDraw does, wi
 
 It is free and open source (GPL v3), and runs on Windows, macOS and Linux.
 
+> **Beta.** Chem Illustrator is under active development: new features arrive every few days and some things may not work as they should yet. Save often, and please [report anything that goes wrong](docs/guide/feedback.md). If you would rather update less often, choose **Stable** updates in **Edit ▸ Settings ▸ Online**: those versions are tried out on a real computer before they are offered.
+
 **[Download the latest version](https://github.com/nathanohare/Chem-Illustrator/releases/latest)** · **[User guide](docs/README.md)** · **[Send feedback](docs/guide/feedback.md)**
 
 ![A two-step reaction scheme in Drawing mode, with the Analysis panel showing the product's formula and masses](docs/images/drawing.png)
@@ -65,7 +67,7 @@ The eye button shows the page dark on screen, with your structures in light ink.
 
 ## Make it yours
 
-Every hotkey can be changed (**Edit ▸ Hotkeys**), and the hotkeys can be exported and shared. Toolboxes unlock to dock on any edge or float anywhere, and **My Toolbox** holds whichever tools and commands you use most. The dark page colours, each mode's accent colour, the scheme spacing, your own templates, nicknames and drawing styles are all settings, kept in one file you can back up.
+Every hotkey can be changed (**Edit ▸ Hotkeys**), and the hotkeys can be exported and shared. Toolboxes unlock to dock on any edge or float anywhere, and **Customize Toolboxes** rearranges any of them (or new ones of your own) by dragging icons about, as on a phone's home screen. The dark page colours, each mode's accent colour, the scheme spacing, your own templates, nicknames and drawing styles are all settings, kept in one file you can export and import on another computer.
 
 ![Toolboxes moved to new places, the dark page in Slate colours, and the Hotkeys window open](docs/images/customize.png)
 

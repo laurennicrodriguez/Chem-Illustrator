@@ -25,6 +25,9 @@ export interface ImageItem {
   radius?: number;
   /** Turned this many degrees clockwise about its middle (a turned picture on a slide). */
   rot?: number;
+  /** Flipped across (left for right) or up and down, about its middle, after turning. */
+  flipH?: boolean;
+  flipV?: boolean;
 }
 
 export type Item =

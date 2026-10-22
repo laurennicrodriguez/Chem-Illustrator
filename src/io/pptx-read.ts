@@ -25,7 +25,7 @@ import { dataUrl, imageSize } from '../render/images';
 import { knownShape, tidyFx } from '../render/picture-fx';
 import { readPictureFx } from './picture-xml';
 import { layoutText, ASCENT } from '../text/layout';
-import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle, slideBackground, slideColours, hasLayout, newLayoutId, deckLayouts, type LayoutDef, type PlaceholderBox, type SectionCount } from '../deck/deck';
+import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle, slideBackground, slideColours, hasLayout, newLayoutId, deckLayouts, type LayoutDef, type PlaceholderBox, type SectionCount, type DeckSettings, type SlideHF, type DateFormat, showsNumber, showsFooter, showsDate } from '../deck/deck';
 import { backgroundColour, isPlain, sameBackground, type Background } from '../deck/background';
 import { readFill, readOneFill, type FillContext } from './pptx-background';
 import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure, NS_A14, NS_M, swapBox } from './pptx-write';
@@ -34,6 +34,11 @@ import { shapeMathPicture, shapeMathSize } from '../deck/equation';
 import { GEOS } from '../design/geo';
 import { cleanDiagram, textFromShapes } from '../design/diagrams';
 import { gluePoint, arrowPoints, boxOf as pointsBox } from '../objects';
+import { readEffects } from './pptx-effects';
+import { readViewProps } from '../deck/guides';
+import { readMasterHF } from '../deck/notes-pages';
+import { readShowPr, readCustShows } from '../deck/show-setup';
+import { NARRATION_NAME } from '../deck/narration';
 import { readTransition, readTiming, readMediaTiming, type Transition, type Anim, type AnimTarget } from '../deck/animation';
 import { mediaMime } from '../deck/media';
 import { readChart } from './office-chart';
@@ -45,7 +50,7 @@ const GEO_BY_PRST = new Map(GEOS.filter((g) => g.prst).map((g) => [g.prst!, g.id
 /** PowerPoint shapes that come into slides as plain boxes and ovals (with their text beside them as text boxes). */
 const PLAIN_PRST = new Set(['rect', 'roundRect', 'ellipse', 'snip1Rect', 'flowChartProcess', 'flowChartAlternateProcess']);
 
-export interface PptxSlide { layout: LayoutId; contents: Contents; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean; hidden?: boolean }
+export interface PptxSlide { layout: LayoutId; contents: Contents; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean; hidden?: boolean; hf?: SlideHF }
 export interface PptxRead {
   size: SlideSize;
   master: Master;
@@ -56,6 +61,13 @@ export interface PptxRead {
   design: boolean;
   /** The deck's sections, in order (none when the file has none). */
   sections?: SectionCount[];
+  /** Set Up Show, and custom shows (naming their slides by their places in the deck). */
+  settings?: DeckSettings;
+}
+
+/** A plain box or oval that needs a design shape to keep its look: a picture or gradient fill, or effects past a shadow. */
+function fancyFill(spPr: Element | null): boolean {
+  return !!(kid(spPr, 'blipFill') || kid(spPr, 'gradFill') || kid(spPr, 'sp3d', 'bevelT') || kids(kid(spPr, 'effectLst')).some((k) => k.localName !== 'outerShdw'));
 }
 
 const EXT_MIME: Record<string, string> = Object.fromEntries(Object.entries(MIME_EXT).map(([m, e]) => [e, m]));
@@ -296,13 +308,26 @@ class Reader {
     this.master = master;
     this.readTheme();
     this.masterOut = this.readMaster(slidePaths);
+    if (!this.ourMaster) {
+      // notes pages' and handouts' header and footer, as PowerPoint's masters have them
+      const nm = this.r.relOfType(main, REL.notesMaster) ?? this.r.relOfType(main, REL.handoutMaster);
+      const hf = readMasterHF(nm ? this.r.xml(nm)?.documentElement : null);
+      if (hf && (hf.header || hf.footer || hf.date || !hf.pageNumbers)) this.masterOut.notesHF = hf;
+    }
     this.slidePaths = slidePaths;
     const slides = slidePaths.map((p) => this.slide(p));
     placeSlideLinks(slides, this.slideIds);
     // the slides' ids in the file (as PowerPoint's sections name them)
     const sldIds = kids(kid(root, 'sldIdLst'), 'sldId').filter((x) => { const t = rels.get(rAttr(x, 'id') ?? '')?.target; return !!t && this.r.has(t); }).map((x) => x.getAttribute('id') ?? '');
     const sections = readSections(root, sldIds);
-    return { size: this.size, master: this.masterOut, slides, warnings: [...this.warnings], design: this.design, ...(sections ? { sections } : {}) };
+    // Set Up Show, and custom shows
+    const props = this.r.relOfType(main, REL.presProps);
+    const show = readShowPr(props ? this.r.xml(props)?.documentElement ?? null : null);
+    const customShows = readCustShows(root, (rid) => { const t = rels.get(rid)?.target; return t ? slidePaths.indexOf(t) : -1; }, (el) => rAttr(el, 'id'));
+    const vp = this.r.relOfType(main, REL.viewProps);
+    const view = readViewProps(vp ? this.r.xml(vp)?.documentElement : null);
+    const settings: DeckSettings = { ...(show ? { show } : {}), ...(customShows.length ? { customShows } : {}), ...(view ? { view } : {}) };
+    return { size: this.size, master: this.masterOut, slides, warnings: [...this.warnings], design: this.design, ...(sections ? { sections } : {}), ...(Object.keys(settings).length ? { settings } : {}) };
   }
 
   private readTheme(): void {
@@ -367,18 +392,28 @@ class Reader {
       m.background = backgroundColour(bg);
       if (!isPlain(bg)) m.fill = bg;
     }
-    // numbers and footer: as the slides show them
-    let numbers = false, footer = '';
+    // numbers, footer and date: as the slides show them
+    let numbers = false, footer = '', date: Element | null = null;
     for (const p of slidePaths) {
       const s = this.part(p);
       for (const sp of kids(s?.tree, 'sp')) {
         const ph = phOf(sp);
         if (ph?.type === 'sldNum') numbers = true;
         if (ph?.type === 'ftr' && !footer) footer = this.plain(sp);
+        if (ph?.type === 'dt' && !date) date = sp;
       }
     }
     m.slideNumbers = numbers;
     m.footer = footer;
+    if (date) {
+      // today's date in one of PowerPoint's forms, or fixed text
+      m.dateOn = true;
+      const fld = date.getElementsByTagNameNS(NS.a, 'fld')[0];
+      const type = fld?.getAttribute('type') ?? '';
+      if (/^datetime([1-9]|1[0-3])$/.test(type)) m.dateFormat = type as DateFormat;
+      else if (fld) m.dateFormat = 'datetime1';
+      else m.dateFixed = this.plain(date);
+    }
     m.drawing = slideDrawingStyle();
     m.logo = logo;
     return m;
@@ -486,9 +521,17 @@ class Reader {
     const hideGraphics = /^(0|false)$/.test(root.getAttribute('showMasterSp') ?? '');
     // Hide Slide: PowerPoint's show="0"
     const hidden = /^(0|false)$/.test(root.getAttribute('show') ?? '');
+    // the slide number, footer and date it shows, where they differ from what the master says
+    const has = (t: string) => kids(s.tree, 'sp').some((sp) => phOf(sp)?.type === t);
+    const m = this.masterOut;
+    const own: SlideHF = {};
+    if (has('sldNum') !== showsNumber(m, lay)) own.number = has('sldNum');
+    if (m.footer.trim() && has('ftr') !== showsFooter(m, lay)) own.footer = has('ftr');
+    if (has('dt') !== showsDate(m, lay)) own.date = has('dt');
+    const hf = Object.keys(own).length ? own : undefined;
     return {
       layout: lay, contents: doc.contents(), notes: this.notes(path),
-      ...(background ? { background } : {}), ...(hideGraphics ? { hideGraphics } : {}), ...(hidden ? { hidden } : {}),
+      ...(background ? { background } : {}), ...(hideGraphics ? { hideGraphics } : {}), ...(hidden ? { hidden } : {}), ...(hf ? { hf } : {}),
       ...(transition && (transition.kind !== 'none' || transition.advanceAfter) ? { transition } : {}), ...(anims.length ? { anims } : {}),
       ...(comments.length ? { comments } : {}),
     };
@@ -765,7 +808,8 @@ class Reader {
     } catch { kept = null; }
     const chosen = sizedBox(kept?.chart && Array.isArray(kept.cells) && sameBoxData(kept, got.box) ? freshBox(kept) : got.box, w, h);
     if (chosen === got.box && got.partial) this.warnings.add('Some charts mix chart types (a line over columns, a second axis): they show as one type.');
-    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: chartBoxPng(chosen, w, h), px: { w: chosen.chart.w, h: chosen.chart.h }, chart: chosen });
+    const alt = kid(el, 'nvGraphicFramePr', 'cNvPr')?.getAttribute('descr')?.trim();
+    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: chartBoxPng(chosen, w, h), px: { w: chosen.chart.w, h: chosen.chart.h }, chart: chosen, ...(alt ? { alt } : {}) });
   }
 
   /** A picture's image (as a data URL), its size in pixels and its cropping. */
@@ -831,7 +875,9 @@ class Reader {
     const img = this.image(s.path, el);
     if (!img) return;
     const look = this.pictureLook(kid(el, 'spPr'));
-    const video = this.videoOf(s.path, kid(el, 'nvPicPr', 'nvPr'));
+    const video0 = this.videoOf(s.path, kid(el, 'nvPicPr', 'nvPr'));
+    // recorded narration (Slide Show > Record), as we name it
+    const video = video0?.audio && kid(el, 'nvPicPr', 'cNvPr')?.getAttribute('name') === NARRATION_NAME ? { ...video0, narration: true } : video0;
     const fx = this.pictureFx(s.path, el, img, tags[TAG.picture]);
     // a picture cut to a shape has the shape's outline, not rounded corners
     if (fx?.shape && look) delete look.round;
@@ -841,8 +887,9 @@ class Reader {
     if (tags[TAG.zoom]) {
       try { const z = JSON.parse(tags[TAG.zoom]); if (z && typeof z === 'object' && z.zoom) zoom = { ...(z.zoom.back ? { back: true } : {}), ...(typeof z.zoom.to === 'string' ? { to: z.zoom.to } : {}) }; } catch { /* a plain link */ }
     } else if (this.zoomBack !== null && click) zoom = this.zoomBack ? { back: true } : {};
+    const alt = kid(el, 'nvPicPr', 'cNvPr')?.getAttribute('descr')?.trim();
     doc.addShape({
-      kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...(look && Object.keys(look).length ? { look } : {}), ...(fx ? { fx } : {}), ...(video ? { video } : {}),
+      kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...(look && Object.keys(look).length ? { look } : {}), ...(fx ? { fx } : {}), ...(video ? { video } : {}), ...(alt ? { alt } : {}),
       ...(click ? { link: click } : {}), ...(zoom && click ? { zoom } : {}), ...turn(box),
     });
   }
@@ -1012,8 +1059,8 @@ class Reader {
     if (!ph) {
       // a design shape saved here, or a PowerPoint shape that is one (in designs, boxes and ovals too)
       const geoTag = this.tagsOf(s.path, kid(sp, 'nvSpPr', 'nvPr'))[TAG.geo];
-      if (geoTag || (GEO_BY_PRST.has(prst) && (this.design || !PLAIN_PRST.has(prst)))) {
-        if (this.geoShape(sp, spPr, prst, box, geoTag, doc)) return;
+      if (geoTag || (GEO_BY_PRST.has(prst) && (this.design || !PLAIN_PRST.has(prst) || fancyFill(spPr)))) {
+        if (this.geoShape(sp, spPr, prst, box, geoTag, doc, s.path)) return;
       }
     }
     const hasText = !!this.plain(sp).trim();
@@ -1111,7 +1158,7 @@ class Reader {
     return true;
   }
 
-  private geoShape(sp: Element, spPr: Element | null, prst: string, box: Rect & { rot: number }, tag: string | undefined, doc: Doc): boolean {
+  private geoShape(sp: Element, spPr: Element | null, prst: string, box: Rect & { rot: number }, tag: string | undefined, doc: Doc, from: string): boolean {
     let saved: { s: Partial<Shape>; plain: string } | null = null;
     try { saved = tag ? JSON.parse(tag) : null; } catch { saved = null; }
     const where = { x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, rot: turn(box).rot };
@@ -1121,8 +1168,19 @@ class Reader {
       const c = this.text(sp, box, null, []);
       return c ? { runs: c.runs, ...(c.paras ? { paras: c.paras } : {}) } : undefined;
     };
+    // a picture fill's picture is in the file, not the tag
+    const blip = kid(spPr, 'blipFill');
+    const pic = blip ? this.blipImage(from, blip) : null;
+    const picFill = (was?: Shape['picFill']): Shape['picFill'] | undefined => {
+      if (!pic) return undefined;
+      const amt = kid(blip, 'blip', 'alphaModFix')?.getAttribute('amt');
+      const transparency = was?.transparency ?? (amt ? +(1 - Number(amt) / 100000).toFixed(3) : 0);
+      return { src: pic.src, px: pic.px, ...(transparency ? { transparency } : {}) };
+    };
     if (saved?.s && saved.s.kind === 'geo') {
       const sh = { ...saved.s, ...where, kind: 'geo' } as Omit<Shape, 'id'>;
+      const pf = picFill(sh.picFill);
+      if (pf) sh.picFill = pf; else delete sh.picFill;
       if (now !== saved.plain) {
         const t = theirText();
         if (t) sh.text = t; else delete sh.text;
@@ -1140,7 +1198,20 @@ class Reader {
     const click = this.hlinkOf(kid(sp, 'nvSpPr', 'cNvPr', 'hlinkClick'));
     if (click) sh.link = click;
     if (look.fill) { sh.filled = true; sh.fillColor = look.fill; }
-    if (look.shaded) sh.fill = 'shaded';
+    const grad = kid(spPr, 'gradFill');
+    const stops = grad ? kids(kid(grad, 'gsLst'), 'gs').sort((a, b) => Number(a.getAttribute('pos') ?? 0) - Number(b.getAttribute('pos') ?? 0)) : [];
+    if (grad && stops.length >= 2) {
+      // a gradient: its first and last colours, across at its angle or out from the middle
+      sh.fill = 'gradient';
+      sh.fillColor = this.color(stops[0]) ?? sh.fillColor;
+      sh.fill2 = this.color(stops[stops.length - 1]) ?? '#ffffff';
+      const lin = kid(grad, 'lin');
+      if (kid(grad, 'path')) sh.gradRadial = true;
+      else sh.gradAngle = Math.round(Number(lin?.getAttribute('ang') ?? 5400000) / 60000) % 360;
+    } else if (look.shaded) sh.fill = 'shaded';
+    const pf = picFill();
+    if (pf) sh.picFill = pf;
+    Object.assign(sh, this.effects(spPr));
     sh.lineWidth = look.line ? +look.width.toFixed(2) : 0;
     if (look.dashed) sh.dashed = true;
     const t = theirText();
@@ -1154,6 +1225,28 @@ class Reader {
     }
     doc.addShape(sh);
     return true;
+  }
+
+  /** A shape's glow, soft edges, reflection, bevel and shadow, as PowerPoint has them. */
+  private effects(spPr: Element | null): Partial<Shape> {
+    const alphaOf = (el: Element | null) => {
+      const a = el ? Array.from(el.getElementsByTagNameNS(NS.a, 'alpha'))[0] : undefined;
+      return a ? Number(a.getAttribute('val') ?? 100000) / 100000 : 1;
+    };
+    const out: Partial<Shape> = readEffects(spPr, (el) => this.color(el), alphaOf);
+    const sh = kid(spPr, 'effectLst', 'outerShdw');
+    if (sh) {
+      out.shadow = true;
+      const n = (a: string) => Number(sh.getAttribute(a) ?? 0);
+      out.shadowSize = +(fromEmu(String(n('dist'))) || 3).toFixed(2);
+      const blur = fromEmu(String(n('blurRad')));
+      if (blur) out.shadowBlur = +blur.toFixed(2);
+      out.shadowAngle = Math.round(n('dir') / 60000) % 360;
+      const c = this.color(sh);
+      if (c && c.toLowerCase() !== '#000000') out.shadowColor = c;
+      out.shadowOpacity = +alphaOf(Array.from(sh.children)[0] ?? null).toFixed(3);
+    }
+    return out;
   }
 
   /**

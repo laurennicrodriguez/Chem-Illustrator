@@ -138,7 +138,7 @@ jobs:
           # the signatures are inside latest.json; the release lists the installers
           # not marked "latest" yet: builds can finish out of order, and an older one must not
           # take "latest" (and so the updater's latest.json) from a newer one
-          gh release create "v$VERSION" $(ls out/* | grep -v '\.sig$') --title "Chem Illustrator $VERSION" --notes-file "$RUNNER_TEMP/notes.txt" --target "$GITHUB_SHA" --latest=false
+          gh release create "v$VERSION" $(ls out/* | grep -v '\.sig$') --title "Chem Illustrator $VERSION (beta)" --notes-file "$RUNNER_TEMP/notes.txt" --target "$GITHUB_SHA" --latest=false
       - name: Mark the highest version as latest
         env:
           GH_TOKEN: ${{ github.token }}

@@ -10,13 +10,15 @@ import type { DocStyle } from '../style';
 import { drawLayout } from '../text/draw';
 import { BOX_PAD, SHADOWS, borderRect, lookOf, styleOf, watermarkPlace, type DocText, type HeaderFooter, type NumberPlace, type PageBorder, type Watermark } from './document';
 import { withStack } from '../text/layout';
-import type { DocLayout, PageBox, TableBox } from './doc-layout';
+import type { DocLayout, PageBox, PlacedObject, TableBox } from './doc-layout';
 import type { BorderLine, TableData } from '../model';
 import { coveringCell, spanOf } from '../table';
 import { DEFAULT_MARGINS, hasLines, resolveTable, strokeOf, type TableStyleDef } from './table-styles';
 import { docMeasure } from './doc-file';
 import { drawMath } from './math';
 import { fxSrc, hasFx, traceShape } from '../render/picture-fx';
+import { drawParaBorders, drawParaShading } from './para-borders';
+import { hfKeyFor, numbersFor, zonesFor } from './hf-bodies';
 
 /** One piece of a header or footer line: its text, where it goes, and its font. */
 export interface HfPart { where: 'header' | 'footer'; align: 'left' | 'center' | 'right'; text: string; font: string; size: number; w: number }
@@ -27,15 +29,20 @@ const PLACES: Record<Exclude<NumberPlace, 'none'>, ['header' | 'footer', 'left' 
 };
 
 /** The header and footer text of a page, with its number put in its place (after any text there). `hf` is the page's section's (the document's when left out). */
-export function headerFooterText(t: DocText, label: string, hf: HeaderFooter = t.hf): HfPart[] {
+export function headerFooterText(t: DocText, label: string, hf: HeaderFooter = t.hf, page: { starts?: boolean; n?: number } = {}): HfPart[] {
   const st = styleOf(t, undefined);
   const font = st.font, size = Math.min(10, st.size);
   const out: HfPart[] = [];
   const aligns = ['left', 'center', 'right'] as const;
-  const where = hf.numbers !== 'none' ? PLACES[hf.numbers] : null;
   for (const w of ['header', 'footer'] as const) {
+    // the first page's or an even page's own, or the usual one; one with pictures or tables is drawn apart
+    const key = hfKeyFor(hf, w, !!page.starts, page.n ?? 1);
+    if (hf.bodies?.[key]) continue;
+    const numbers = numbersFor(hf, key);
+    const where = numbers !== 'none' ? PLACES[numbers] : null;
+    const zones = zonesFor(hf, key);
     aligns.forEach((a, i) => {
-      let text = hf[w][i] ?? '';
+      let text = zones[i] ?? '';
       if (where && where[0] === w && where[1] === a && label) text = text ? `${text} ${label}` : label;
       if (!text) return;
       out.push({ where: w, align: a, text, font, size, w: docMeasure(text, size, font, '') });
@@ -47,12 +54,28 @@ export function headerFooterText(t: DocText, label: string, hf: HeaderFooter = t
 /** Draw a page's header and footer (the page's top left corner is at `p.x`, `p.top`), in its section's margins. */
 export function drawHeaderFooter(ctx: CanvasRenderingContext2D, t: DocText, p: PageBox): void {
   const pg = p.setup;
-  for (const part of headerFooterText(t, p.label, p.hf)) {
+  for (const part of headerFooterText(t, p.label, p.hf, p)) {
     const y = part.where === 'header' ? p.top + pg.header + part.size * 0.8 : p.top + p.h - pg.footer - part.size * 0.25;
     const x = p.x + (part.align === 'left' ? pg.left : part.align === 'center' ? (pg.left + p.w - pg.right) / 2 - part.w / 2 : p.w - pg.right - part.w);
     ctx.font = `${part.size}px ${part.font}`;
     ctx.fillStyle = '#000';
     ctx.fillText(part.text, x, y);
+  }
+}
+
+/**
+ * Draw a page's headers and footers that have pictures, tables or formatted text: their text,
+ * their tables, then their pictures (`object` draws one, as the page's own figures are drawn).
+ */
+export function drawHfBodies(ctx: CanvasRenderingContext2D, t: DocText, lay: DocLayout, page: number, object: (o: PlacedObject) => void): void {
+  for (const h of lay.hfs) {
+    if (h.page !== page) continue;
+    for (const l of h.texts) drawLayout(ctx, l, 0, 0);
+    for (const { id, tb } of h.tables) {
+      const o = t.objects[id];
+      if (o?.kind === 'table') drawDocTable(ctx, o.table, tb, page, null, t.tableStyles);
+    }
+    for (const o of h.objects) object(o);
   }
 }
 
@@ -115,6 +138,24 @@ export function drawLineNumbers(ctx: CanvasRenderingContext2D, lay: DocLayout, p
   }
 }
 
+/** Turn a canvas about a figure's middle: `rot` degrees clockwise, flipped across or up and down. */
+export function turnAbout(ctx: CanvasRenderingContext2D, o: { x: number; y: number; w: number; h: number }, turn: { rot: number; flipH: boolean; flipV: boolean }): void {
+  const cx = o.x + o.w / 2, cy = o.y + o.h / 2;
+  ctx.translate(cx, cy);
+  if (turn.rot) ctx.rotate((turn.rot * Math.PI) / 180);
+  if (turn.flipH || turn.flipV) ctx.scale(turn.flipH ? -1 : 1, turn.flipV ? -1 : 1);
+  ctx.translate(-cx, -cy);
+}
+
+/** The bars in the left margin by lines with tracked changes: grey in All Markup, red in Simple Markup (as Word's). */
+export function drawChangeBars(ctx: CanvasRenderingContext2D, lay: DocLayout, page: number): void {
+  for (const b of lay.changeBars) {
+    if (b.page !== page) continue;
+    ctx.fillStyle = b.simple ? '#c00000' : '#808080';
+    ctx.fillRect(b.x - 0.5, b.y1, 1, b.y2 - b.y1);
+  }
+}
+
 /** The short lines above a page's footnotes and above the endnotes (half a point, as Word's). */
 export function drawNoteRules(ctx: CanvasRenderingContext2D, lay: DocLayout, page: number): void {
   ctx.fillStyle = '#000';
@@ -138,19 +179,20 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
     drawPageLook(c, t, p);
     drawHeaderFooter(c, t, p);
     drawLineNumbers(c, lay, p.index);
+    drawChangeBars(c, lay, p.index);
+    drawParaShading(c, lay.frames, p.index);
     // figures behind the text first
     // tables go under the figures in their cells
     // (a table in a cell after the table holding it)
     const depth = (id: number) => (t.objects[id]?.kind === 'table' ? lay.tables.get(id)?.depth ?? 0 : 1e9);
     const mine = lay.objects.filter((o) => o.page === p.index).sort((a, b) => depth(a.id) - depth(b.id));
     const order = [...mine.filter((o) => o.wrap === 'behind'), null, ...mine.filter((o) => o.wrap !== 'behind')];
-    for (const o of order) {
-      if (!o) { drawLayout(c, lay.text, 0, 0, p.first, p.end); drawNoteRules(c, lay, p.index); continue; }
+    const drawObject = (o: PlacedObject) => {
       const obj = t.objects[o.id];
       if (obj?.kind === 'note') {
         const n = lay.notes.get(o.id);
         if (n) drawLayout(c, n.lay, 0, 0);
-        continue;
+        return;
       }
       const look = lookOf(obj);
       // a picture cut to a shape has the shape's outline for its shadow and frame
@@ -180,7 +222,7 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
       } else if (obj?.kind === 'math') {
         const m = lay.maths.get(o.id);
         if (m) drawMath(c, m, o.x, o.y + m.ascent, m.family, m.color);
-      } else if (obj?.kind === 'picture') ctx.items.push({ kind: 'image', src: fxSrc(obj) ?? obj.src, x: o.x, y: o.y, w: o.w, h: o.h, px: obj.px, ...(obj.crop ? { crop: obj.crop } : {}) });
+      } else if (obj?.kind === 'picture') ctx.items.push({ kind: 'image', src: fxSrc(obj) ?? obj.src, x: o.x, y: o.y, w: o.w, h: o.h, px: obj.px, ...(obj.crop ? { crop: obj.crop } : {}), ...(obj.rot ? { rot: obj.rot } : {}), ...(obj.flipH ? { flipH: true } : {}), ...(obj.flipV ? { flipV: true } : {}) });
       else if (obj?.kind === 'drawing') {
         const pic = drawing(obj.contents, t.drawingStyle);
         if (pic) ctx.items.push(...placeItems(pic, o));
@@ -191,6 +233,11 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
         outline(0);
         c.stroke();
       }
+    };
+    drawHfBodies(c, t, lay, p.index, drawObject);
+    for (const o of order) {
+      if (!o) { drawLayout(c, lay.text, 0, 0, p.first, p.end); drawNoteRules(c, lay, p.index); drawParaBorders(c, lay.frames, p.index); continue; }
+      drawObject(o);
     }
     return { w: p.w, h: p.h, items: ctx.items, origin: { x: p.x, y: p.top } };
   });

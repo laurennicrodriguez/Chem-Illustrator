@@ -15,6 +15,7 @@ Chem Illustrator is licensed under the GNU General Public License, version 3 or 
 | [fflate](https://github.com/101arrowz/fflate) 0.8.2 | Packing and unpacking PowerPoint, Excel and Word files (.pptx, .xlsx, .docx), and compressing PDF pages | MIT (full text below) |
 | Free fonts from [Google Fonts](https://fonts.google.com), packaged by [Fontsource](https://fontsource.org) 5.3 (`@fontsource/*`): Inter, Source Sans 3, IBM Plex Sans, Lato, Source Serif 4, Merriweather, Libre Baskerville, Montserrat, Oswald, Bebas Neue, Archivo Black, Barlow Condensed, JetBrains Mono, IBM Plex Mono (Latin, Latin-extended and Greek letters, regular and bold) | The font boxes in every mode; put inside saved Word and PowerPoint files that use them | SIL Open Font License 1.1 (copyright lines and full text below) |
 | [Material Design Icons](https://pictogrammers.com/library/mdi/) 7.4.47 by Pictogrammers (`@mdi/svg`; the icons' outlines are copied into the app by `scripts/build-icons.mjs`, company and product logos left out) | Insert ▸ Icons in Design, Slides and Document modes | Apache-2.0 (the Pictogrammers Free License: icons under Apache-2.0, code under MIT). Some icons were contributed by other authors under Apache-2.0, as listed in the package's `meta.json`. |
+| [PDF.js](https://mozilla.github.io/pdf.js/) 5.7 by Mozilla (`pdfjs-dist`, its "legacy" build) | Document ▸ Insert ▸ Object: the first page of an embedded PDF as its picture | Apache-2.0 |
 | [Tauri](https://tauri.app) (`tauri` crate, `@tauri-apps/api`) | Desktop app shell | MIT or Apache-2.0 |
 | Tauri dialog plugin (`tauri-plugin-dialog` crate, `@tauri-apps/plugin-dialog`) | The desktop app's Open and Save dialogs | MIT or Apache-2.0 |
 | Tauri updater and process plugins (`tauri-plugin-updater`, `tauri-plugin-process` crates, `@tauri-apps/plugin-updater`, `@tauri-apps/plugin-process`) | File ▸ Check for Updates: downloading a newer version, checking its signature, installing it and restarting | MIT or Apache-2.0 |
@@ -23,6 +24,7 @@ Chem Illustrator is licensed under the GNU General Public License, version 3 or 
 | About 260 Rust crates that Tauri uses (listed in `src-tauri/Cargo.lock`) | Desktop app shell | Mostly MIT or Apache-2.0; a few are ISC, Unicode-3.0, BSD-3-Clause, Zlib, MPL-2.0 or CDLA-Permissive-2.0 (the list of trusted web certificates the updater uses). All are free and open source; MPL-2.0 only asks that changes to those crates' own files be shared. |
 | English word list from [pyspellchecker](https://github.com/barrust/pyspellchecker) 0.8.1 (`public/dict/english.txt`) | Spell check: ordinary English words, most common first (for suggestions) | MIT (full text below). The list was built by pyspellchecker from word counts in the OpenSubtitles2018 corpus (P. Lison and J. Tiedemann, LREC 2016). |
 | [Open Source Chemistry Dictionary](https://www.sciencebase.com/chem-dic.zip) v3.0 by Adam M. Azman (`public/dict/chemistry.txt`) | Spell check: chemistry words | CC BY 3.0 US. Credits, source and changes in `public/dict/chemistry-LICENSE.txt`. A. M. Azman, *J. Chem. Educ.* 2012, 89, 412–413. |
+| [hyphen](https://github.com/ytiurin/hyphen) 1.14.1 by Yevhen Tiurin, with its US English hyphenation patterns (Frank Liang's patterns for TeX, as packaged by the hyph-utf8 project) | Layout ▸ Hyphenation in Document mode: where words may be broken at the end of a line | ISC (the package). The patterns allow unlimited copying and redistribution, as stated in hyph-utf8's file for them. |
 | Chemistry word lists from Chem SI Assistant by Nathan O'Hare (`public/dict/lab-words.txt`) | Spell check: lab terms, name reactions and other chemistry words | The project owner's own work |
 | Microsoft Edge WebView2 (part of Windows, not bundled) | Shows the app's window contents on Windows | Microsoft software licence, free to use |
 
@@ -229,7 +231,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-The Apache License 2.0, which covers TeaVM and the StAX API, is in `opsin-js/licences/Apache-2.0.txt`.
+The Apache License 2.0, which covers TeaVM, the StAX API and PDF.js, is in `opsin-js/licences/Apache-2.0.txt`.
 
 Chem Illustrator replaces two of OPSIN's classes (`ResourceGetter` and `AutomatonInitialiser`, which load OPSIN's data files) and stands in for the Log4j logging calls; see `opsin-js/README.md`. The rest of OPSIN is unchanged.
 

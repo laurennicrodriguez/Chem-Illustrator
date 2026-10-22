@@ -7,10 +7,12 @@ import { TextEditing, type ChangeKind } from '../text/editing';
 import { documentMeasure } from '../text/font-measure';
 import { cellMargins } from './table-styles';
 import { DocLayouter, movedLayout, type DocLayout } from './doc-layout';
-import { reviewAuthor, revisionDate } from './revisions';
+import { reviewAuthor, revisionDate, type ReviewView } from './revisions';
 import { setPart } from '../table';
 import { FigurePictures } from './figures';
-import { BOX_PAD, newDocument, noteStyle, runStyleOf, styleOf, type DocText } from './document';
+import { BOX_PAD, newDocument, noteStyle, runStyleOf, styleOf, type DocObject, type DocText } from './document';
+import { allowedEdit } from './protect';
+import type { ParaStyle, TextRun } from '../model';
 import { fitParas, paraCount, storedParas } from '../text/paragraphs';
 import { PRINT_VIEW, continuous, hiddenParas, outlineLevel, screenText, type ScreenView } from './doc-views';
 import * as rt from '../richtext';
@@ -41,6 +43,8 @@ export class DocFile {
   edits = 0;
   /** Called after every change to the text or the selection. */
   listener: (kind: ChangeKind) => void = () => {};
+  /** Called when a change is turned away because the document is protected (Review > Restrict Editing). */
+  onRefused: () => void = () => {};
   private memo: { frame: TextFrame; view: ScreenView; lay: DocLayout } | null = null;
   /** Print Layout's pages while another view shows (for printing, PDFs and the contents' page numbers). */
   private printer: { layouter: DocLayouter; memo: { t: DocText; lay: DocLayout } | null } | null = null;
@@ -61,10 +65,24 @@ export class DocFile {
     // Review > Track Changes: edits to the text are marked with who made them and when
     this.ed.track = () => (this.t.track ? { author: reviewAuthor() || 'Author', date: revisionDate() } : null);
     this.ed.indentStep = INDENT;
+    // Review > Restrict Editing: only the changes the protection allows
+    this.ed.guard = (before, after) => allowedEdit(before as DocText, after as DocText);
+    this.ed.refused = () => this.onRefused();
     this.ed.onChange = (kind) => {
       if (kind === 'text') this.edits++;
       this.listener(kind);
     };
+  }
+
+  /** How tracked changes show (Review > Display for Review), on the screen and when printed. */
+  get review(): ReviewView {
+    return this.layouter.review;
+  }
+  set review(v: ReviewView) {
+    this.layouter.review = v;
+    if (this.printer) { this.printer.layouter.review = v; this.printer.memo = null; }
+    this.memo = null;
+    this.ed.relayout();
   }
 
   /** Where typing and the text buttons go: the text box being typed into, or the document. */
@@ -91,8 +109,9 @@ export class DocFile {
       const at = this.layout().objects.find((x) => x.id === id);
       return at ? movedLayout(lay, at.x + BOX_PAD.x, at.y + BOX_PAD.y - lay.box.y1) : lay;
     };
-    // tracked like the document's own text
+    // tracked like the document's own text, and protected with it
     ed.track = this.ed.track;
+    this.guardBox(ed, (x) => { const cur = this.t.objects[id]; return cur?.kind === 'textbox' ? { ...cur, runs: x.runs, paras: storedParas(x.paras) } : null; }, id);
     const box = { id, ed, recorded: false };
     ed.onChange = (kind) => {
       if (kind === 'text') {
@@ -126,8 +145,9 @@ export class DocFile {
       const nl = this.layouter.noteText(this.t, frame.runs, frame.paras, lay.fields.get(id) ?? '', at?.w ?? lay.textW);
       return at ? movedLayout(nl, at.x, at.y - nl.box.y1) : nl;
     };
-    // tracked like the document's own text
+    // tracked like the document's own text, and protected with it
     ed.track = this.ed.track;
+    this.guardBox(ed, (x) => { const cur = this.t.objects[id]; return cur?.kind === 'note' ? { ...cur, runs: x.runs, paras: storedParas(x.paras) } : null; }, id);
     const box = { id, ed, recorded: false };
     ed.onChange = (kind) => {
       if (kind === 'text') {
@@ -168,8 +188,9 @@ export class DocFile {
       const m = cellMargins(tab, r, c);
       return at && tb ? movedLayout(cl, at.x + tb.xs[c] + m.left, at.y + m.top + (tb.drop[r]?.[c] ?? 0) - cl.box.y1) : cl;
     };
-    // tracked like the document's own text
+    // tracked like the document's own text, and protected with it
     ed.track = this.ed.track;
+    this.guardBox(ed, (x) => { const cur = this.t.objects[id]; return cur?.kind === 'table' && cur.table.rows[r]?.[c] ? { ...cur, table: setPart(cur.table, { r, c }, { runs: x.runs, paras: storedParas(x.paras) }) } : null; }, id);
     const box = { id, cell: { r, c }, ed, recorded: false };
     ed.onChange = (kind) => {
       if (kind === 'text') {
@@ -185,6 +206,23 @@ export class DocFile {
     };
     this.box = box;
     return ed;
+  }
+
+  /** Make a change the protection would turn away (stopping it, once its password is given). */
+  unprotected(f: () => void): void {
+    const g = this.ed.guard;
+    this.ed.guard = null;
+    try { f(); } finally { this.ed.guard = g; }
+  }
+
+  /** A text box's, note's or cell's changes are let through when the document with them would be. */
+  private guardBox(ed: TextEditing, made: (t: { runs: TextRun[]; paras: ParaStyle[] }) => DocObject | null, id: number): void {
+    ed.guard = (_before, after) => {
+      if (!this.t.protect) return true;
+      const o = made(after);
+      return !!o && allowedEdit(this.t, { ...this.t, objects: { ...this.t.objects, [id]: o } });
+    };
+    ed.refused = () => this.onRefused();
   }
 
   /** Stop typing into the text box. */
@@ -227,6 +265,7 @@ export class DocFile {
   printLayout(): DocLayout {
     if (!continuous(this.shown.kind)) return this.layout();
     this.printer ??= { layouter: new DocLayouter({ measure: docMeasure, drawingSize: (c, s) => figures.size(c, s) }), memo: null };
+    this.printer.layouter.review = this.layouter.review;
     const t = this.t;
     if (this.printer.memo?.t !== t) {
       const lay = this.printer.layouter.layout(t);

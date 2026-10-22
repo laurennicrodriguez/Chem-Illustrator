@@ -1,4 +1,6 @@
-// Sheet files: Excel workbooks (.xlsx), CSV text, and SD files of structures with their data.
+// Sheet files: Excel workbooks (.xlsx, and .xlsm with their macros kept), CSV text, and SD files
+// of structures with their data. Old Excel (.xls) and OpenDocument (.ods) spreadsheets open too,
+// and save as .xlsx.
 // CSV and SD files hold only values, so they keep one sheet (the one showing) as it looks:
 // numbers as they are shown, structures as SMILES (CSV) or molfiles (SD).
 
@@ -11,6 +13,8 @@ import { isError, CellError } from '../sheet/values';
 import { parseDelimited, toDelimited } from '../sheet/csv';
 import { structureMolfile } from '../sheet/structure-doc';
 import { writeXlsx, readXlsx, XlsxPictures } from './xlsx';
+import { readXls, isXls } from './xls';
+import { readOds, isOds } from './ods';
 
 export interface SheetFileDeps extends XlsxPictures {
   /** Waits until every structure's properties (and SMILES) are worked out. */
@@ -23,7 +27,9 @@ const baseOf = (name: string) => name.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/
 /** Open a sheet file. */
 export async function readSheetFile(bytes: Uint8Array, name: string, deps: SheetFileDeps): Promise<{ book: Workbook; warnings: string[] }> {
   const ext = extOf(name);
-  if (ext === 'xlsx' || (bytes[0] === 0x50 && bytes[1] === 0x4b)) return readXlsx(bytes, deps);
+  if (ext === 'ods' || isOds(bytes)) return readOds(bytes);
+  if (ext === 'xlsx' || ext === 'xlsm' || (bytes[0] === 0x50 && bytes[1] === 0x4b)) return withMacroNote(await readXlsx(bytes, deps), ext);
+  if (ext === 'xls' || isXls(bytes)) return readXls(bytes);
   const text = decodeText(bytes);
   if (ext === 'sdf' || ext === 'sd') return readSdf(text, baseOf(name));
   return { book: bookFromText(text, baseOf(name), ext === 'tsv' ? '\t' : 'auto'), warnings: [] };
@@ -38,7 +44,17 @@ export async function writeSheetFile(book: Workbook, name: string, deps: SheetFi
   book.recalc();
   if (ext === 'csv') return '﻿' + csvText(book.sheet);
   if (ext === 'sdf' || ext === 'sd') return sdfText(book.sheet, book.drawingStyle);
-  return writeXlsx(book, deps);
+  return writeXlsx(book, deps, { macros: ext === 'xlsm' });
+}
+
+/** Says that a workbook's macros are kept but never run (and lost when it is saved as .xlsx). */
+function withMacroNote(got: { book: Workbook; warnings: string[] }, ext: string): { book: Workbook; warnings: string[] } {
+  if (got.book.macros) {
+    got.warnings.unshift(ext === 'xlsm'
+      ? 'This workbook has macros (VBA). They are kept as they are and saved back into the .xlsm file, but never run here.'
+      : 'This workbook has macros (VBA), which are never run here. Save it as .xlsm to keep them.');
+  }
+  return got;
 }
 
 /** UTF-8 (with or without a byte-order mark), else Windows' Western European code page, as Excel writes CSV. */

@@ -9,6 +9,8 @@ const PUG = 'https://pubchem.ncbi.nlm.nih.gov/rest/pug';
 const VIEW = 'https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound';
 export const PUBCHEM_HOST = 'pubchem.ncbi.nlm.nih.gov';
 
+import type { CompoundCard } from '../sheet/compound';
+
 export type Fetch = typeof fetch;
 
 /** A compound's page on PubChem, to open in the browser. */
@@ -191,4 +193,63 @@ export async function pubchemCompound(cid: number, fetchFn: Fetch = fetch): Prom
     boilingPoint: readValues(bp),
     density: readValues(density),
   };
+}
+
+const CARD_PROPS = 'Title,IUPACName,MolecularFormula,MolecularWeight,ExactMass,IsomericSMILES,InChI,InChIKey,XLogP,TPSA,HBondDonorCount,HBondAcceptorCount,RotatableBondCount,HeavyAtomCount,Charge,Complexity';
+
+/** A number PubChem sends as text ("180.16") or as a number. */
+const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : typeof v === 'string' && v.trim() && Number.isFinite(Number(v)) ? Number(v) : undefined);
+
+/**
+ * A compound's card for the Compound data type (sheets): looked up by name, SMILES or CID.
+ * With `measured`, also its melting and boiling points, density and GHS hazards (four more
+ * requests, so slower). Null when PubChem doesn't know it.
+ */
+export async function pubchemCard(q: { name: string } | { smiles: string } | { cid: number }, measured: boolean, fetchFn: Fetch = fetch): Promise<CompoundCard | null> {
+  let data: { PropertyTable?: { Properties?: Record<string, unknown>[] } } | null;
+  if ('smiles' in q) {
+    data = (await get(`${PUG}/compound/smiles/property/${CARD_PROPS}/JSON`, fetchFn, {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ smiles: q.smiles }).toString(),
+    })) as typeof data;
+  } else {
+    const where = 'cid' in q ? `cid/${q.cid}` : `name/${encodeURIComponent(q.name.trim())}`;
+    if ('name' in q && !q.name.trim()) return null;
+    data = (await get(`${PUG}/compound/${where}/property/${CARD_PROPS}/JSON`, fetchFn)) as typeof data;
+  }
+  const p = data?.PropertyTable?.Properties?.[0];
+  if (!p || typeof p.CID !== 'number' || p.CID <= 0) return null;
+  const cid = p.CID;
+  const fields: Record<string, string | number> = {};
+  const put = (k: string, v: string | number | undefined) => { if (v !== undefined && v !== '') fields[k] = v; };
+  const title = typeof p.Title === 'string' && p.Title ? p.Title : 'name' in q ? q.name.trim() : `CID ${cid}`;
+  put('Name', title);
+  put('IUPAC name', typeof p.IUPACName === 'string' ? p.IUPACName : undefined);
+  put('Formula', typeof p.MolecularFormula === 'string' ? p.MolecularFormula : undefined);
+  put('Molecular weight', num(p.MolecularWeight));
+  put('Exact mass', num(p.ExactMass));
+  put('PubChem CID', cid);
+  put('SMILES', smilesOf(p) ?? undefined);
+  put('InChI', typeof p.InChI === 'string' ? p.InChI : undefined);
+  put('InChIKey', typeof p.InChIKey === 'string' ? p.InChIKey : undefined);
+  put('XLogP', num(p.XLogP));
+  put('TPSA', num(p.TPSA));
+  put('H-bond donors', num(p.HBondDonorCount));
+  put('H-bond acceptors', num(p.HBondAcceptorCount));
+  put('Rotatable bonds', num(p.RotatableBondCount));
+  put('Heavy atoms', num(p.HeavyAtomCount));
+  put('Charge', num(p.Charge));
+  put('Complexity', num(p.Complexity));
+  const syn = (await get(`${PUG}/compound/cid/${cid}/synonyms/JSON`, fetchFn)) as { InformationList?: { Information?: { Synonym?: string[] }[] } } | null;
+  put('CAS', casNumbers(syn?.InformationList?.Information?.[0]?.Synonym ?? [])[0]);
+  if (measured) {
+    const view = (heading: string) => get(`${VIEW}/${cid}/JSON?heading=${encodeURIComponent(heading)}`, fetchFn);
+    put('Melting point', readValues(await view('Melting Point'), 1)[0]);
+    put('Boiling point', readValues(await view('Boiling Point'), 1)[0]);
+    put('Density', readValues(await view('Density'), 1)[0]);
+    const hz = readHazards(await view('GHS Classification'));
+    put('GHS signal', hz.signal ?? undefined);
+    put('Hazard statements', hz.statements.map((s) => s.code).join(', '));
+  }
+  put('PubChem page', compoundPage(cid));
+  return { cid, name: title, fields, looked: new Date().toISOString() };
 }

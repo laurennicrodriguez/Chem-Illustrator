@@ -39,7 +39,7 @@ export interface HighlightFx {
   outline: { colour: string; width: number; dash: number[]; round: boolean } | null;
 }
 
-type MP = polygonClipping.MultiPolygon;
+export type MP = polygonClipping.MultiPolygon;
 
 /** Does this look need its effects worked out (rather than its pieces just filled)? */
 export function needsFx(s: Required<HighlightStyle>): boolean {
@@ -139,7 +139,7 @@ export function highlightFx(s: Required<HighlightStyle>, colour: string, L: numb
 
 // ------------------------------------------------------------------ worked out as areas
 
-const ring = (pts: Vec[]): [number, number][] => {
+export const ring = (pts: Vec[]): [number, number][] => {
   const r = pts.map((p): [number, number] => [p.x, p.y]);
   if (r.length) r.push(r[0]);
   return r;
@@ -157,7 +157,7 @@ export function unionOf(pieces: Piece[]): MP {
   }
 }
 
-function minus(a: MP, b: MP): MP {
+export function minus(a: MP, b: MP): MP {
   if (!a.length || !b.length) return a;
   try {
     return polygonClipping.difference(a, b);
@@ -171,7 +171,7 @@ export function regionOf(mp: MP): Region {
   return mp.flatMap((poly) => poly.map((r) => r.slice(0, -1).map(([x, y]) => ({ x, y }))));
 }
 
-const moveMP = (mp: MP, d: Vec | undefined): MP => (d ? mp.map((poly) => poly.map((r) => r.map(([x, y]): [number, number] => [x + d.x, y + d.y]))) : mp);
+export const moveMP = (mp: MP, d: Vec | undefined): MP => (d ? mp.map((poly) => poly.map((r) => r.map(([x, y]): [number, number] => [x + d.x, y + d.y]))) : mp);
 
 /**
  * A layer's rings as plain filled areas (for pictures and copies). `level(t, grow)` is the
@@ -240,7 +240,7 @@ function grown(polys: Vec[][], g: number): Vec[][] {
   });
 }
 
-const polysMP = (polys: Vec[][]): MP => {
+export const polysMP = (polys: Vec[][]): MP => {
   const ps = polys.filter((p) => p.length > 2).map((p): polygonClipping.Polygon => [ring(p)]);
   if (!ps.length) return [];
   try { return polygonClipping.union(ps[0], ...ps.slice(1)); } catch { return ps; }

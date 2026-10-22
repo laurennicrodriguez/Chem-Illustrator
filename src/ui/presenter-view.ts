@@ -14,7 +14,7 @@ import { onImageReady } from '../render/images';
 import { followLink } from './links-ui';
 import { ShowActions } from './show-actions';
 import { ShowInk, type Stroke } from './show-ink';
-import { askKeepInk } from './present';
+import { askKeepInk, type ShowOptions } from './present';
 
 /** Where the audience's slides went. */
 type Audience = 'other-screen' | 'window' | 'none';
@@ -73,7 +73,8 @@ export class PresenterView {
     return this.root !== null;
   }
 
-  async start(deck: Deck, from = 0): Promise<void> {
+  /** `opts`: how the show plays (Set Up Show): its slides in order, animations, narration, timings, looping. */
+  async start(deck: Deck, from = 0, opts: ShowOptions = {}): Promise<void> {
     if (this.root) return;
     this.deck = deck;
     this.blank = null;
@@ -134,7 +135,11 @@ export class PresenterView {
     });
     this.els.cur.addEventListener('contextmenu', (e) => { e.preventDefault(); this.prev(); });
     const player = (this.player = new Player(this.els.canvas, deck, '#111317'));
-    player.onPastEnd = () => this.setBlank('end');
+    player.order = opts.order ?? null;
+    player.noAnimation = !!opts.noAnimation;
+    player.noNarration = !!opts.noNarration;
+    player.useTimings = !opts.manual;
+    player.onPastEnd = () => { if (opts.loop) { player.show(player.first, { transition: true }); this.link?.send({ kind: 'go', i: player.first }); } else this.setBlank('end'); };
     const frac = (r: { x1: number; y1: number; x2: number; y2: number }) => {
       const w = this.els.canvas.clientWidth || 1, h = this.els.canvas.clientHeight || 1;
       return { x1: r.x1 / w, y1: r.y1 / h, x2: r.x2 / w, y2: r.y2 / h };
@@ -162,7 +167,8 @@ export class PresenterView {
     this.tick = window.setInterval(() => this.clock(), 500);
     this.clock();
     this.layout();
-    player.show(Math.max(0, Math.min(deck.slides.length - 1, from)), { transition: true });
+    const first = player.order && !player.order.includes(from) ? player.first : from;
+    player.show(Math.max(0, Math.min(deck.slides.length - 1, first)), { transition: true });
     const link = (this.link = new ShowLink('presenter', (m) => this.heard(m)));
     await link.open();
     if (this.root !== root) { link.close(); return; }
@@ -217,7 +223,7 @@ export class PresenterView {
   private heard(m: ShowMessage): void {
     if (!this.deck || !this.player) return;
     if (m.kind === 'hello') {
-      this.link?.send({ kind: 'deck', deck: deckData(this.deck), i: this.player.i, done: this.player.done });
+      this.link?.send({ kind: 'deck', deck: deckData(this.deck, { order: this.player.order, noAnimation: this.player.noAnimation, useTimings: this.player.useTimings }), i: this.player.i, done: this.player.done });
       if (this.blank) this.link?.send({ kind: 'blank', how: this.blank });
       for (const [i, strokes] of this.ink?.all() ?? []) this.link?.send({ kind: 'ink', i, strokes });
     } else if (m.kind === 'key') {
@@ -293,8 +299,8 @@ export class PresenterView {
     if (k === 'Escape') this.stop();
     else if (['ArrowRight', 'ArrowDown', ' ', 'Enter', 'PageDown', 'n', 'N'].includes(k)) this.next();
     else if (['ArrowLeft', 'ArrowUp', 'Backspace', 'PageUp', 'p', 'P'].includes(k)) this.prev();
-    else if (k === 'Home') this.go(this.deck!.firstShown());
-    else if (k === 'End') this.go(Math.max(0, this.deck!.shownBefore(this.deck!.slides.length)));
+    else if (k === 'Home') this.go(this.player!.first);
+    else if (k === 'End') this.go(this.player!.last);
     else if (k === 'b' || k === 'B' || k === '.') this.setBlank(this.blank === 'black' ? null : 'black');
     else if (k === 'w' || k === 'W' || k === ',') this.setBlank(this.blank === 'white' ? null : 'white');
   }
@@ -337,7 +343,7 @@ export class PresenterView {
   private paintNext(): void {
     if (!this.root || !this.deck || !this.player) return;
     // the next slide the show plays (hidden slides are skipped)
-    const d = this.deck, i = d.shownAfter(this.player.i);
+    const d = this.deck, i = this.player.after(this.player.i);
     const box = this.els.nextBox.getBoundingClientRect();
     const w = Math.max(1, box.width), h = Math.max(1, Math.min(box.height, (box.width * d.size.h) / d.size.w));
     const c = this.els.next;

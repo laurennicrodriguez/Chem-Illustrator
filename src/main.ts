@@ -2,13 +2,20 @@
 // toolbar, the drawing area (with the slide list and notes in Slides mode, or the grid in Sheet
 // mode), and the panels on the right.
 
+import { readDocumentFile, writeDocumentFile } from './io/doc-files';
+import { newDocDesign, setNewDocDesign } from './document/themes';
+import { fieldEnv } from './document/fields';
+import type { QuickPart } from './document/quick-parts';
 import { SLIDE_TABLE_STYLES, DEFAULT_SLIDE_TABLE_STYLE } from './deck/table-styles';
 import { commandIcon } from './ui/command-icons';
 import './app.css';
 import type { MethylStyle } from './chem/hydrogens';
 import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
-import { Toolboxes, lockIcon, sideFolded, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
+import { Toolboxes, lockIcon, sideFolded, commandButton, defaultToolboxes, menuCommands, boxIds, boxItems, boxTitle, isEditable, isOwnBox, type Pickable, type ToolboxDef, type ToolboxState } from './ui/toolboxes';
+import { ToolboxEditor } from './ui/toolbox-editor';
+import { RibbonEditor } from './ui/ribbon-editor';
+import { readRibbons, applyRibbon, type RibbonInfo, type RibbonsPrefs } from './ui/ribbon-custom';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
 import { Doc, Atom, Caption, Shape, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle, type ShapeMath, PAPER, keepOnPage } from './model';
 import { Renderer, measureText, forgetTextWidths } from './render/renderer';
@@ -42,7 +49,7 @@ import { writeCdxml } from './io/cdxml-write';
 import { WORKSPACE, folderOf } from './io/workspace-file';
 import { askLink, followLink, setLinkHost, type LinkPlace } from './ui/links-ui';
 import { SHOW_JUMPS, cellOfLink, linkSpans, normalizeLink, removeLink, setLink, slideOfLink } from './links';
-import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, setEmbeddedWriter, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, DOCX, PICTURE_EXTENSIONS, type FileType } from './io/files';
+import { openFileDialog, openBytesDialog, openAnyBytesDialog, stampOf, readRef, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, setEmbeddedWriter, KEYMAP_FILE, SETTINGS_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, DOCX, PICTURE_EXTENSIONS, type FileType } from './io/files';
 import { readPptx } from './io/pptx-read';
 import { pickReuseSlides } from './ui/reuse-slides';
 import { writeTiff } from './render/tiff';
@@ -65,7 +72,12 @@ import { SlideTextRibbon } from './ui/slide-text-ribbon';
 import { CaptionEditor } from './ui/caption-editor';
 import { LayersPanel } from './ui/layers-panel';
 import { Scrollbars } from './ui/scrollbars';
-import { Presenter } from './ui/present';
+import { Presenter, type ShowOptions } from './ui/present';
+import { editHeaderFooter } from './ui/header-footer-dialog';
+import { setUpShow, editCustomShows } from './ui/show-setup-dialog';
+import { defaultShow, showOrder } from './deck/show-setup';
+import { recordingToWav, NARRATION_NAME } from './deck/narration';
+import { clockText } from './deck/show-link';
 import { PresenterView } from './ui/presenter-view';
 import { editMaster } from './ui/master-dialog';
 import { editDrawingStyle } from './ui/style-dialog';
@@ -85,6 +97,12 @@ import { SLIDE_TEMPLATES, applyTemplate, type SlideTemplate } from './deck/templ
 import { editLayouts } from './ui/layout-editor';
 import { pickSlideSize } from './ui/slide-size-dialog';import { pickTemplate } from './ui/template-gallery';
 import { showContextMenu, topMenuEntry, type MenuItem } from './ui/context-menu';
+import { defaultHandout, handoutLayout, handoutPageSvg, notesPageSize, notesPageSvg, type HandoutSetup } from './deck/notes-pages';
+import { OutlineView } from './ui/outline-view';
+import { NotesPageView, editHandoutMaster, editNotesMaster } from './ui/notes-page-view';
+import { GuideTip, SlideRulers, drawGuides, gridAndGuides } from './ui/slide-guides';
+import { defaultView, guideNear, rulerText, snapMove, type RulerPrefs, type SlideView } from './deck/guides';
+import { effectPatch, effectsMenu, showStyleGallery, styleColours, stylePatch } from './ui/shape-styles';
 import { CommandSearch, uniqueCommands, type CommandItem } from './ui/command-search';
 import { fillTemplate, templateSize } from './design/templates';
 import { askCycle } from './ui/cycle-dialog';
@@ -102,11 +120,11 @@ import { chartBoxPng } from './render/chart-box-paint';
 import { itemsToSvg } from './render/svg';
 import { itemsToEmf, type EmfBox } from './render/emf';
 import type { Item } from './render/vector';
-import { PAPERS, defaultPaper, orient, placeIn, inside, handoutCells, noteLines, placeSvg, pageSvg } from './print-layout';
+import { PAPERS, defaultPaper, orient, placeIn, inside, placeSvg, pageSvg } from './print-layout';
 import { printPages } from './ui/print';
 import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc, webpToPng } from './render/images';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, ringDir } from './chem/chemgeom';
-import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
+import { Toolbar, ToolbarItem, PaletteDef, type ToolDef } from './ui/toolbar';
 import { StylePanel, tidyStyle } from './ui/style-panel';
 import { installCombos } from './ui/combo';
 import { installFontList, registerBundledFonts, bundledFaces, pdfFonts } from './fonts';
@@ -125,7 +143,8 @@ import { plainText, savableChar } from './richtext';
 import { LiveStereo } from './chem/live-stereo';
 import { setStereoShown, shownDescriptor, axialStyle } from './chem/stereo';
 import { keymap, registerToolNames, displayChord, actionName, chordOf, parseAction, KeyContext, KeyOverrides } from './editor/keymap';
-import { loadSettings, saveSettings, settingsLocation, Settings } from './settings';
+import { loadSettings, saveSettings, settingsLocation, exportText, importSettings, Settings } from './settings';
+import { showDialog } from './ui/dialog-host';
 import { HotkeysDialog } from './ui/hotkeys-dialog';
 import { TypingDialog } from './ui/typing-dialog';
 import { ModeColoursDialog, ModeColours, DEFAULT_MODE_COLOURS, applyModeColours } from './ui/mode-colours';
@@ -133,12 +152,13 @@ import { typingPrefs, setTypingPrefs, onTypingPrefs } from './text/typing';
 import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
 import { UpdateUI } from './ui/update-ui';
-import { canUpdate, appVersion, portableInfo } from './updates';
+import { canUpdate, appVersion, portableInfo, STAGE, STAGE_NOTE, UPDATE_CHANNELS, type UpdateChannel } from './updates';
 import { computerName } from './feedback';
 import { GuideWindow, guideSpot } from './ui/guide-window';
 import { SettingsWindow } from './ui/settings-window';
 import { fileTypesPage, FILE_TYPES } from './ui/file-types-page';
-import { watchRibbons, fitRibbons } from './ui/ribbon-fit';
+import { watchRibbons, fitRibbons, setRibbonCollapsed, ribbonCollapsed } from './ui/ribbon-fit';
+import { placeTitleBar, titleBarPlace } from './ui/title-bar';
 import { FeedbackDialog } from './ui/feedback-dialog';
 import { addRecent, removeRecent, recentLabel } from './recent';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
@@ -150,6 +170,7 @@ import { SheetMode, ClipboardCells } from './ui/sheet-mode';
 import { DocumentMode, DocPaste } from './ui/doc-mode';
 import { docBoxPrefs, parseDocPins } from './ui/doc-panel';
 import { docRulerPrefs } from './ui/ruler';
+import { formulaBarPrefs } from './ui/sheet-views-ui';
 import { setScreenMeasure, figures } from './document/doc-file';
 import { readDocx, writeDocx, type DocxDeps, type DocxReadDeps } from './io/docx';
 import { FIGURE_MARGIN } from './document/figures';
@@ -163,9 +184,15 @@ import { LabelTooltip } from './ui/label-tooltip';
 import { starAtoms } from './chem/label-tip';
 import { structurePlace } from './sheet/layout';
 import { readSheetFile, writeSheetFile, SheetFileDeps } from './io/sheet-files';
+import { fromEmbedSource, type Embedded } from './io/ole-object';
+import { objectPicture, type ObjectPicture } from './render/object-picture';
 import { ACS_1996, DocStyle } from './style';
 import { emptyTable, tableFromCells } from './table';
 import type { TableData } from './model';
+import { checkDrawing, checkDocument, checkWorkbook, repeatedTitles, structureAlt, setStructureAlt, type Issue, type IssuePlace } from './accessibility';
+import { AccessibilityPane, askAltText } from './ui/accessibility-pane';
+import { SlideComparePane } from './ui/slide-compare';
+import { pickFileTemplate } from './ui/file-templates';
 import type { PastedRows } from './io/table-clip';
 import { Keeper } from './keep/keeper';
 import { DEFAULT_KEEP, type KeepPrefs } from './keep/prefs';
@@ -413,6 +440,17 @@ for (const group of [...TOOL_GROUPS, OFF_BAR]) {
 }
 registerToolNames(toolNames);
 
+/** Each fly-out palette by name, and the palette each tool in one comes in (for its picture). */
+const PALETTES = new Map<string, PaletteDef>();
+const TOOL_PALETTE = new Map<string, PaletteDef>();
+for (const group of TOOL_GROUPS) for (const item of group) {
+  if (!('palette' in item)) continue;
+  PALETTES.set(item.palette, item);
+  for (const t of item.items) TOOL_PALETTE.set(t.name, item);
+}
+/** What the Drawing Tools toolbox comes with: the tool bar's groups, a divider between each. */
+const MAIN_ITEMS: string[] = TOOL_GROUPS.flatMap((g, i) => [...(i ? ['sep'] : []), ...g.map((it) => ('palette' in it ? `pal:${it.palette}` : `tool:${it.name}`))]);
+
 const periodicTable = new PeriodicTable((z) => editor.pickElement(z), () => editor.element);
 const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => {
   if (name === OWN_ADD) { void saveTemplate(); return; }
@@ -420,7 +458,7 @@ const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => 
 }, (name) => {
   const keys = keysOf('space', `tool ${name}`);
   return keys.length ? ` (${keys.join(', ')})` : '';
-});
+}, (name, size) => TOOL_PALETTE.get(name)?.icon?.(name, size));
 
 const HINTS: Record<string, string> = {
   connector: 'Drag from one shape\'s blue dot to another\'s: the connector sticks to both and follows them when they move.',
@@ -448,6 +486,11 @@ const shapeMenu = new ShapeMenu();
 let layers: LayersPanel | null = null;
 let animUi: AnimationUI | null = null;
 let slideCmts: SlideComments | null = null;
+/** View > Ruler and Gridlines (kept in the settings); the rulers' units and where they count from. */
+const slideLook = { ruler: false, grid: false };
+const rulerPrefs: RulerPrefs = { units: 'in', from: 'centre' };
+/** A guide being dragged: which, and the guides as they are while it moves. */
+let guideDrag: { which: { axis: 'x' | 'y'; i: number }; view: SlideView } | null = null;
 /** View > Alignment Guides: moved things snap into line with other things and the page, on or off for each kind of tab. */
 const guidesOn: Record<'drawing' | 'slides' | 'design', boolean> = { drawing: false, slides: true, design: true };
 const guideMode = (): keyof typeof guidesOn | null => {
@@ -511,7 +554,7 @@ async function dropFiles(files: File[], at: { x: number; y: number }): Promise<v
   const inside = at.x >= r.left && at.x <= r.right && at.y >= r.top && at.y <= r.bottom;
   for (const f of files) {
     const bytes = new Uint8Array(await f.arrayBuffer());
-    const mime = /\.(cdxml|cdx|pptx|xlsx|docx|csv|tsv|txt|sdf?)$/i.test(f.name) ? null : pictureMime(f.name, bytes);
+    const mime = /\.(cdxml|cdx|pptx|xlsx|xlsm|xls|ods|docx|csv|tsv|txt|sdf?)$/i.test(f.name) ? null : pictureMime(f.name, bytes);
     if (mime && sheetActive()) flash('Pictures can\'t go in a cell yet. Drop sheet files (.xlsx, .csv, .sdf) to open them.');
     else if (mime && docActive()) docMode.dropPicture(bytes, mime);
     else if (mime) placePicture(bytes, mime, inside ? renderer.toDoc(at.x - r.left, at.y - r.top) : null);
@@ -990,7 +1033,7 @@ setLinkHost({
   },
   async openHere(path) {
     // drawings, documents, slides, sheets and workspaces open in a tab here
-    if (!/\.(cdxml|cdx|docx|pptx|xlsx|csv|tsv|sdf|sd)$/i.test(path) && !path.toLowerCase().endsWith(`.${WORKSPACE.extension}`)) return false;
+    if (!/\.(cdxml|cdx|docx|pptx|xlsx|xlsm|xls|ods|csv|tsv|sdf|sd)$/i.test(path) && !path.toLowerCase().endsWith(`.${WORKSPACE.extension}`)) return false;
     if (!isTauri()) return false;
     await openRecent(path);
     return true;
@@ -1731,8 +1774,8 @@ const ws: Workspace = new Workspace(doc, {
     write: (book, name) => writeSheetFile(book, name, sheetFiles),
   },
   documents: {
-    read: (bytes) => readDocx(bytes, docRead),
-    write: (d) => writeDocx(d, docFiles),
+    read: (bytes, name) => readDocumentFile(bytes, name, docRead),
+    write: (d, name) => writeDocumentFile(d, name, docFiles),
   },
   newStyle: (mode) => { const n = modeStyleFor(mode); return n ? styleNamed(n, ownStyles) ?? null : null; },
   newPage: () => (defaultPage ? { ...defaultPage } : null),
@@ -1842,9 +1885,12 @@ function enterTab(tab: Tab, opened: boolean): void {
     sorterEl.hidden = true;
     sorterList.show(null);
   }
+  if (outlineView.shown) outlineView.show(false);
+  if (notesView.shown) { notesView.show(false); $('#notes-pane').classList.remove('np-hidden'); }
   showSheetParts();
   editor.paused = sheet || words;
   sheetMode.show(sheet ? tab : null);
+  if (words) fieldEnv.fileName = ws.mainOf(tab).name;
   docMode.show(words ? tab : null);
   renderer.screen = !!deck;
   renderer.page = deck ? slidePage : drawingPage;
@@ -1862,7 +1908,7 @@ function enterTab(tab: Tab, opened: boolean): void {
     if (design) showDesignState();
     notesBox.value = deck.current?.notes ?? '';
     showSlideState();
-  } else slideList.show(null);
+  } else { slideList.show(null); showRulers(); }
   animUi?.update();
   slideCmts?.slideChanged();
   layoutSplit();
@@ -1892,6 +1938,11 @@ const slidePage = {
     if (!d?.current) return;
     drawSlidePage(ctx, d.page(), SURROUND);
     if (ws.active.mode === 'design' && designGrid.on) drawGrid(ctx, d.size, designGrid.step);
+    if (ws.active.mode === 'slides') {
+      const v = d.settings.view;
+      if (slideLook.grid) drawGrid(ctx, d.size, v?.grid ?? defaultView(d.size).grid);
+      if (v?.showGuides) drawGuides(ctx, v, d.size, renderer.view.scale, guideDrag?.which);
+    }
     if (ws.active.mode === 'slides') animUi?.drawMarkers(ctx, renderer.view.scale);
     // (the comment markers are over the drawing, and follow it as it moves)
     if (ws.active.mode === 'slides') slideCmts?.place();
@@ -1913,11 +1964,14 @@ function deckChanged(deck: Deck): void {
     indexSeen = deck.index;
     slideList.rebuild();
     if (sorterOn) sorterList.rebuild();
+    outlineView.rebuild();
+    notesView.rebuild();
   } else if (deck.index !== indexSeen) {
     // going to another slide moves the highlight; no picture needs drawing again
     indexSeen = deck.index;
     slideList.switched();
     if (sorterOn) sorterList.switched();
+    outlineView.mark(deck.index);
   } else {
     slideList.refresh();
     if (sorterOn) sorterList.refresh();
@@ -1972,6 +2026,7 @@ function showLayoutMenus(deck: Deck): void {
 /** The layout and size boxes and the Format menu show the slide being edited. */
 function showSlideState(): void {
   const deck = deckNow();
+  showRulers();
   if (!deck?.current) return;
   showLayoutMenus(deck);
   layoutSel.value = deck.current.layout;
@@ -1984,13 +2039,17 @@ function showSlideState(): void {
   sizeSel.value = named;
   for (const b of document.querySelectorAll<HTMLElement>('[data-cmd^="layout-"]')) b.setAttribute('aria-checked', String(b.dataset.cmd === `layout-${deck.current.layout}`));
   for (const b of document.querySelectorAll<HTMLElement>('[data-cmd="view-normal"], [data-cmd="view-sorter"]')) {
-    const on = (b.dataset.cmd === 'view-sorter') === sorterOn;
+    const on = b.dataset.cmd === 'view-sorter' ? slideViewNow() === 'sorter' : slideViewNow() === 'normal';
     b.setAttribute(b.getAttribute('role') === 'menuitemradio' ? 'aria-checked' : 'aria-pressed', String(on));
   }
   $('[data-cmd="size-wide"]')?.setAttribute('aria-checked', String(named === 'wide'));
   $('[data-cmd="size-standard"]')?.setAttribute('aria-checked', String(named === 'standard'));
   const hidden = String(!!deck.current.hidden);
   for (const b of document.querySelectorAll('[data-cmd="hide-slide"]')) b.setAttribute(b.getAttribute('role') === 'menuitemcheckbox' ? 'aria-checked' : 'aria-pressed', hidden);
+  // Set Up Show's two the ribbon shows as ticks
+  const show = deck.settings.show;
+  for (const b of document.querySelectorAll<HTMLInputElement>('[data-cmd="use-timings"]')) b.checked = !show?.manual;
+  for (const b of document.querySelectorAll<HTMLInputElement>('[data-cmd="play-narrations"]')) b.checked = !show?.noNarration;
 }
 
 // ---------------------------------------------------------------- transitions and animations (Slides mode)
@@ -2007,6 +2066,8 @@ animUi = new AnimationUI($('#ribbon'), $('#anim-section'), {
   finishTyping,
   flash,
   repaint: () => { renderer.repaintAll(); editor.requestScene(); },
+  host: () => $('#canvas-host'),
+  view: () => renderer.view,
 });
 
 slideCmts = new SlideComments($('#cmt-section'), $('#canvas-host'), {
@@ -2033,6 +2094,30 @@ layers = new LayersPanel($('#layers-section'), {
 });
 layers.onClose = () => { selectionPane = false; showLayers(); };
 const lib = (designLib = new DesignLibrary($('#design-lib'), (id) => { finishTyping(); editor.setTool(`geo:${id}`); }));
+// Design mode's shapes and icons fold away to a thin strip (remembered on this computer)
+{
+  const el = $('#design-lib');
+  const fold = document.createElement('button');
+  fold.type = 'button';
+  fold.className = 'dl-fold';
+  const KEY = 'chem-illustrator.design-lib-folded';
+  const show = (folded: boolean) => {
+    el.classList.toggle('folded', folded);
+    fold.textContent = folded ? '›' : '‹';
+    fold.title = folded ? 'Open the shapes and icons' : 'Fold the shapes and icons away, for more room for the page';
+    fold.setAttribute('aria-label', fold.title);
+    fold.setAttribute('aria-expanded', String(!folded));
+  };
+  let folded = false;
+  try { folded = localStorage.getItem(KEY) === '1'; } catch { /* no storage: start open */ }
+  show(folded);
+  fold.addEventListener('click', () => {
+    folded = !el.classList.contains('folded');
+    show(folded);
+    try { localStorage.setItem(KEY, folded ? '1' : '0'); } catch { /* not remembered */ }
+  });
+  el.querySelector('.dl-tabs')?.append(fold);
+}
 const designGrid = { on: false, step: 18 };
 const dzBg = $<HTMLInputElement>('#dz-bg');
 const dzGrid = $<HTMLInputElement>('#dz-grid');
@@ -2057,6 +2142,148 @@ function showDesignState(): void {
   if (!d) return;
   $('#dz-size').textContent = sizeLabel(d.size);
   if (/^#[0-9a-f]{6}$/i.test(d.master.background)) dzBg.value = d.master.background;
+}
+
+// ---------------------------------------------------------------- Slides' rulers, gridlines and guides
+
+const guideTip = new GuideTip(host);
+const rulers = new SlideRulers(host, {
+  view: () => renderer.view,
+  size: () => deckNow()?.size ?? null,
+  prefs: () => rulerPrefs,
+  selection: () => (editor.hasSelection() ? editor.selBox() : null),
+  newGuide: (axis, e) => {
+    const d = deckNow();
+    if (!d) return;
+    const view = slideViewOf(d);
+    // a new guide, shown, dragged from the ruler
+    const next = { ...view, showGuides: true, guides: { x: [...view.guides.x], y: [...view.guides.y] } };
+    next.guides[axis].push(axis === 'x' ? -1e6 : -1e6);
+    startGuideDrag(d, next, { axis, i: next.guides[axis].length - 1 }, e, 'Add guide', view);
+  },
+});
+
+/** The deck's guides and grid (PowerPoint's first ones when it has none). */
+function slideViewOf(d: Deck): SlideView {
+  return d.settings.view ?? defaultView(d.size);
+}
+
+
+/** Drag a guide (or a copy of it): its place shown by the pointer; let go off the slide to take it away. One undo step. */
+function startGuideDrag(d: Deck, view: SlideView, which: { axis: 'x' | 'y'; i: number }, e: PointerEvent, label: string, before = slideViewOf(d)): void {
+  finishTyping();
+  guideDrag = { which, view };
+  const el = renderer.overlay;
+  el.style.cursor = which.axis === 'x' ? 'col-resize' : 'row-resize';
+  const hostBox = host.getBoundingClientRect();
+  const move = (ev: PointerEvent) => {
+    const p = { x: (ev.clientX - hostBox.left - renderer.view.ox) / renderer.view.scale, y: (ev.clientY - hostBox.top - renderer.view.oy) / renderer.view.scale };
+    let v = which.axis === 'x' ? p.x : p.y;
+    // to a sixteenth of an inch (or a millimetre), Alt: anywhere
+    if (!ev.altKey) { const step = rulerPrefs.units === 'in' ? 4.5 : 72 / 25.4; const zero = rulerPrefs.from === 'centre' ? (which.axis === 'x' ? d.size.w : d.size.h) / 2 : 0; v = zero + Math.round((v - zero) / step) * step; }
+    view.guides[which.axis][which.i] = v;
+    const off = v < 0 || v > (which.axis === 'x' ? d.size.w : d.size.h);
+    guideTip.show(off ? 'Let go to take the guide away' : rulerText(v, d.size, which.axis, rulerPrefs), ev.clientX - hostBox.left, ev.clientY - hostBox.top);
+    renderer.repaintAll();
+    editor.requestScene();
+  };
+  const up = () => {
+    removeEventListener('pointermove', move, true);
+    removeEventListener('pointerup', up, true);
+    el.style.cursor = '';
+    guideTip.hide();
+    guideDrag = null;
+    const v = view.guides[which.axis][which.i];
+    const off = v < 0 || v > (which.axis === 'x' ? d.size.w : d.size.h);
+    if (off) view.guides[which.axis].splice(which.i, 1);
+    d.settings.view = before;
+    d.setSettings({ ...d.settings, view }, off ? 'Remove guide' : label);
+    renderer.repaintAll();
+    editor.requestScene();
+  };
+  addEventListener('pointermove', move, true);
+  addEventListener('pointerup', up, true);
+  move(e);
+}
+
+// on the slide, a guide is picked up where nothing else is: a drag moves it, Ctrl+drag copies it
+renderer.overlay.addEventListener('pointerdown', (e) => {
+  const d = deckNow();
+  if (e.button !== 0 || !d || ws.active.mode !== 'slides' || sorterOn || !d.settings.view?.showGuides || editor.toolName !== 'select') return;
+  const { p, taken } = editor.pointAt(e);
+  if (taken) return;
+  const view = d.settings.view;
+  const near = guideNear(view, p, 4 / renderer.view.scale);
+  if (!near) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const next: SlideView = { ...view, guides: { x: [...view.guides.x], y: [...view.guides.y] } };
+  let which = near;
+  if (e.ctrlKey || e.metaKey) { next.guides[near.axis].push(next.guides[near.axis][near.i]); which = { axis: near.axis, i: next.guides[near.axis].length - 1 }; }
+  startGuideDrag(d, next, which, e, e.ctrlKey || e.metaKey ? 'Copy guide' : 'Move guide');
+}, true);
+// over a guide, the pointer says it can be dragged
+renderer.overlay.addEventListener('pointermove', (e) => {
+  const d = deckNow();
+  if (guideDrag || e.buttons || !d || ws.active.mode !== 'slides' || !d.settings.view?.showGuides || editor.toolName !== 'select') return;
+  const { p, taken } = editor.pointAt(e);
+  const near = taken ? null : guideNear(d.settings.view, p, 4 / renderer.view.scale);
+  if (near) renderer.overlay.style.cursor = near.axis === 'x' ? 'col-resize' : 'row-resize';
+});
+
+editor.moveSnap = (box, raw, tol) => {
+  const d = deckNow();
+  return d && ws.active.mode === 'slides' ? snapMove(box, raw, d.settings.view ?? null, tol) : raw;
+};
+
+/** The rulers show in Normal view of slides when View > Ruler is ticked. */
+function showRulers(): void {
+  rulers.show(slideLook.ruler && ws.active.mode === 'slides' && !sorterOn && !!deckNow());
+  for (const b of document.querySelectorAll<HTMLInputElement>('[data-cmd="view-slide-ruler"]')) b.checked = slideLook.ruler;
+  for (const b of document.querySelectorAll<HTMLInputElement>('[data-cmd="view-gridlines"]')) b.checked = slideLook.grid;
+  const g = !!deckNow()?.settings.view?.showGuides;
+  for (const b of document.querySelectorAll<HTMLInputElement>('[data-cmd="view-guides"]')) b.checked = g;
+}
+
+/** View > Guides on or off (saved with the file, as PowerPoint does). */
+function toggleGuides(): void {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  const v = slideViewOf(d);
+  d.setSettings({ ...d.settings, view: { ...v, guides: { x: [...v.guides.x], y: [...v.guides.y] }, showGuides: !v.showGuides } }, v.showGuides ? 'Hide guides' : 'Show guides');
+  showRulers();
+  renderer.repaintAll();
+  editor.requestScene();
+}
+
+/** View > Grid Settings: snapping, the grid, the guides, the rulers' units. */
+async function gridSettings(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  const got = await gridAndGuides(slideViewOf(d), { grid: slideLook.grid, smart: guidesOn.slides }, rulerPrefs, d.size);
+  if (!got) return;
+  slideLook.grid = got.grid;
+  guidesOn.slides = got.smart;
+  Object.assign(rulerPrefs, got.prefs);
+  d.setSettings({ ...d.settings, view: got.view }, 'Grid and guides');
+  showGuides();
+  showRulers();
+  storeSettings();
+  renderer.repaintAll();
+  editor.requestScene();
+}
+
+/** Add a guide down (or across) the middle of the slide, shown. */
+function addGuide(axis: 'x' | 'y'): void {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  const v = slideViewOf(d);
+  const next = { ...v, showGuides: true, guides: { x: [...v.guides.x], y: [...v.guides.y] } };
+  next.guides[axis].push((axis === 'x' ? d.size.w : d.size.h) / 2);
+  d.setSettings({ ...d.settings, view: next }, 'Add guide');
+  showRulers();
+  renderer.repaintAll();
+  editor.requestScene();
 }
 
 /** Light lines across the page to line things up by (on screen only). */
@@ -2160,6 +2387,58 @@ function setSorter(on: boolean): void {
   editor.paused = on;
   resize();
   showSlideState();
+}
+
+// View > Outline View: the outline in place of the slide list; View > Notes Page: the notes pages over the slide
+const outlineView = new OutlineView($('#slide-list').parentElement!, {
+  deck: () => (ws.active.mode === 'slides' ? deckNow() : null),
+  go: (i) => goSlide(i),
+  focusSlide: () => overlay.focus(),
+});
+const notesView = new NotesPageView(host, {
+  deck: () => (ws.active.mode === 'slides' ? deckNow() : null),
+  open: (i) => { setSlideView('normal'); goSlide(i); },
+});
+
+/** Which of Normal, Outline, Slide Sorter and Notes Page shows. */
+function slideViewNow(): 'normal' | 'outline' | 'sorter' | 'notes' {
+  return sorterOn ? 'sorter' : notesView.shown ? 'notes' : outlineView.shown ? 'outline' : 'normal';
+}
+
+/** Change the slides' view (Normal, Outline, Slide Sorter or Notes Page). */
+function setSlideView(v: 'normal' | 'outline' | 'sorter' | 'notes'): void {
+  const d = deckNow();
+  if (v !== 'normal' && (!d || ws.active.mode !== 'slides')) { flash('That view is for slides: use File > New Slides, or open a PowerPoint file.'); return; }
+  finishTyping();
+  if (v !== 'sorter' && sorterOn) setSorter(false);
+  if (v !== 'notes' && notesView.shown) { notesView.show(false); $('#notes-pane').classList.remove('np-hidden'); editor.paused = false; }
+  if (v !== 'outline' && outlineView.shown) { outlineView.show(false); $('#slide-list').hidden = ws.active.mode !== 'slides'; if (d) slideList.show(d); }
+  if (v === 'sorter') setSorter(true);
+  if (v === 'outline' && !outlineView.shown) { $('#slide-list').hidden = true; outlineView.show(true); }
+  if (v === 'notes' && !notesView.shown) {
+    $('#notes-pane').classList.add('np-hidden');
+    editor.paused = true;
+    notesView.show(true);
+    notesView.reveal(d!.index);
+  }
+  resize();
+  showSlideState();
+  for (const b of document.querySelectorAll<HTMLElement>('[data-cmd="view-outline"], [data-cmd="view-notes-page"]')) {
+    const on = b.dataset.cmd === 'view-outline' ? outlineView.shown : notesView.shown;
+    if (b.getAttribute('role') !== 'menuitem') b.setAttribute('aria-pressed', String(on));
+  }
+  if (v === 'normal') overlay.focus();
+}
+
+/** View > Notes Master and Handout Master: their settings, as one step of the history. */
+async function editPageMaster(which: 'notes' | 'handout'): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') { flash('Notes pages and handouts are for slides.'); return; }
+  finishTyping();
+  const next = which === 'notes' ? await editNotesMaster(d.master) : await editHandoutMaster(d.master);
+  if (!next || deckNow() !== d) return;
+  d.setMaster(next);
+  if (notesView.shown) notesView.rebuild();
 }
 
 /** The slides picked in the list showing: Slide Sorter's, or the slide list's. */
@@ -2601,6 +2880,7 @@ tabAdd.addEventListener('click', () => {
   showContextMenu(x, y, [
     { cmd: 'new', label: 'Drawing' }, { cmd: 'new-slides', label: 'Slides' }, { cmd: 'new-sheet', label: 'Sheet' },
     { cmd: 'new-document', label: 'Document' }, { cmd: 'new-design', label: 'Design (TOC graphic, abstract, poster, figure)' },
+    { cmd: 'new-from-template', label: 'Document or Sheet from Template…' },
   ], { run: (cmd) => void command(cmd), key: commandKey });
 });
 tabsEl.replaceChildren(tabLeft, tabStrip, tabRight, tabList, tabAdd);
@@ -2684,6 +2964,76 @@ async function pickPicture(): Promise<{ bytes: Uint8Array; mime: string; name: s
   const mime = pictureMime(f.name, f.bytes);
   if (!mime) { flash(`${f.name} isn't a picture this can show.`); return null; }
   return { bytes: f.bytes, mime, name: f.name };
+}
+
+// ---------------------------------------------------------------- embedded objects (Insert > Object)
+
+/** Ask for a file of any kind, to put in a document as an object. */
+async function pickObjectFile(): Promise<{ name: string; bytes: Uint8Array } | null> {
+  try {
+    return await openAnyBytesDialog();
+  } catch (e) {
+    await showError('Could not open the file: ' + String(e));
+    return null;
+  }
+}
+
+/** The picture an object shows: a workbook's cells, a PDF's first page, a picture, or an icon. */
+function objectPictureOf(name: string, bytes: Uint8Array, icon: boolean): Promise<ObjectPicture> {
+  return objectPicture(name, bytes, icon, {
+    readBook: async (b) => (await readSheetFile(b, name, sheetFiles)).book,
+    pdfPage: (b) => import('./render/pdf-page').then((m) => m.pdfFirstPage(b)),
+  });
+}
+
+/**
+ * Open an object's file in its own program: written to a folder of its own in the temporary
+ * folder and opened as a double-click in Explorer would. While it is open (up to a working day)
+ * the file is checked every couple of seconds, and each save there is handed to `changed` once
+ * the file has stopped changing. In a browser the file is downloaded instead.
+ */
+async function openObjectFile(file: { name: string; bytes: Uint8Array }, changed: (bytes: Uint8Array) => void): Promise<string | null> {
+  const ext = /\.([^.\\/]+)$/.exec(file.name)?.[1] ?? 'bin';
+  if (!isTauri()) {
+    await writeFile({ kind: 'none' }, file.name, file.bytes, { description: file.name, extension: ext, mime: 'application/octet-stream' });
+    return `${file.name} was downloaded: in a browser it can't open in its program or bring changes back here (the desktop app does both).`;
+  }
+  let path: string;
+  try {
+    const dir = await invoke<string>('ole_object_folder');
+    path = `${dir}${/Windows/i.test(navigator.userAgent) ? '\\' : '/'}${file.name.replace(/[\\/:*?"<>|]/g, '_')}`;
+    await writeFile({ kind: 'path', path }, file.name, file.bytes, { description: file.name, extension: ext, mime: 'application/octet-stream' });
+    const { openPath } = await import('@tauri-apps/plugin-opener');
+    await openPath(path);
+  } catch (e) {
+    return `Could not open ${file.name}: ${String(e)}`;
+  }
+  const stamp = async () => { const s = await stampOf({ kind: 'path', path }); return s ? `${s.modified}:${s.size}` : ''; };
+  let seen = await stamp(), pending = '';
+  const until = Date.now() + 10 * 3600e3;
+  const timer = window.setInterval(() => {
+    if (Date.now() > until) { window.clearInterval(timer); return; }
+    void stamp().then(async (now) => {
+      if (!now || now === seen) { pending = ''; return; }
+      // wait for one more look at the same stamp: the program may still be writing
+      if (now !== pending) { pending = now; return; }
+      const bytes = await readRef({ kind: 'path', path });
+      if (!bytes?.length) return;
+      seen = now;
+      pending = '';
+      changed(bytes);
+    });
+  }, 1500);
+  return null;
+}
+
+/** Another program's object on the Windows clipboard (Excel's cells, for one), with the picture it came with. */
+async function clipboardObject(): Promise<{ embed: Embedded; picture: { bytes: Uint8Array; mime: string } | null } | null> {
+  const got = await nativeFirst(['Embedded Object']).catch(() => null);
+  const embed = got ? fromEmbedSource(got[1]) : null;
+  if (!embed) return null;
+  const pic = await nativeFirst(['PNG', 'CF_ENHMETAFILE']).catch(() => null);
+  return { embed, picture: pic ? { bytes: pic[1], mime: pic[0] === 'PNG' ? 'image/png' : 'image/x-emf' } : null };
 }
 
 /** Ask for a BibTeX or RIS file of references, and read its text. */
@@ -2986,15 +3336,110 @@ async function customSlideSize(): Promise<void> {
   if (got && deckNow() === d) setSlideSize(got.size, got.fit);
 }
 
-function present(fromHere: boolean, notes = false): void {
+function present(fromHere: boolean, notes = false, how: { custom?: number; windowed?: boolean; rehearse?: boolean; record?: boolean } = {}): void {
   const d = deckNow();
   if (!d) { flash('Present shows slides: use File > New Slides, or open a PowerPoint file.'); return; }
   if (presenter.running || presenterView.running) return;
   finishTyping();
+  // Set Up Show: the slides it plays, how it goes on, and the rest
+  const setup = d.settings.show ?? defaultShow();
+  const order = showOrder(d.slides, setup, d.settings.customShows ?? [], how.custom ?? setup.custom);
+  if (order && !order.length) { flash('The show has no slides to play: every slide it names is hidden or gone (Slide Show > Set Up Show).'); return; }
+  const kiosk = setup.type === 'kiosk' && !how.rehearse && !how.windowed;
+  if (kiosk && !d.slides.some((s) => s.transition?.advanceAfter)) flash('At a kiosk the show goes on only by the slides\' times: give them times with Rehearse Timings (or Transitions > After). Esc ends the show.', 9000);
+  const opts: ShowOptions = {
+    order, noAnimation: setup.noAnimation, noNarration: setup.noNarration, manual: setup.manual, loop: setup.loop, kiosk,
+    windowed: how.windowed || (setup.type === 'window' && !notes && !how.rehearse), rehearse: how.rehearse, record: how.record,
+  };
   editor.paused = true;
   refreshZooms(d);
   // from the start: the first slide that isn't hidden; from here: this slide even when hidden, as in PowerPoint
-  void (notes ? presenterView : presenter).start(d, fromHere ? d.index : d.firstShown());
+  const from = fromHere ? d.index : order ? order[0] : d.firstShown();
+  void (notes ? presenterView.start(d, from, opts) : presenter.start(d, from, opts));
+}
+
+/** Rehearse Timings and Record, kept: each slide's time, and its narration as a sound on it. */
+presenter.onRehearsed = (r) => {
+  const d = deckNow();
+  if (!d) return;
+  void (async () => {
+    if (r.recordings.size) {
+      const sounds = new Map<number, { src: string; seconds: number }>();
+      for (const [i, blob] of r.recordings) {
+        try {
+          const w = await recordingToWav(blob);
+          if (w.seconds > 0.2) sounds.set(i, { src: dataUrl(w.bytes, 'audio/wav'), seconds: w.seconds });
+        } catch { /* a recording this computer can't read is left out */ }
+      }
+      const ix = [...sounds.keys()].filter((i) => i >= 0 && i < d.slides.length);
+      if (ix.length) {
+        const poster = speakerPng(), s = 24;
+        d.editSlides('Record narration', ix, (sd, i) => {
+          // a new recording takes the place of the slide's old one
+          for (const sh of [...sd.shapes.values()]) if (sh.video?.narration) sd.removeShape(sh.id);
+          const n = sounds.get(i)!;
+          sd.addShape({
+            kind: 'picture', x1: d.size.w - s - 12, y1: d.size.h - s - 12, x2: d.size.w - 12, y2: d.size.h - 12, px: { w: 128, h: 128 }, src: poster, name: NARRATION_NAME,
+            video: { src: n.src, audio: true, start: 'auto', once: true, hide: true, narration: true, length: +n.seconds.toFixed(3) },
+          });
+        });
+      } else flash('Nothing was recorded (the microphone gave no sound).');
+    }
+    d.setTimings(r.times, r.recordings.size ? 'Record slide show timings' : 'Rehearse timings');
+    flash(`Kept: the show takes ${clockText(r.total)}${r.recordings.size ? ', with narration on the slides' : ''}. Set Up Show > Advance slides can turn the times off.`, 8000);
+  })();
+};
+
+/** Insert > Header & Footer (Date & Time, Slide Number): the slides', notes pages' and handouts' header and footer. */
+async function headerFooter(tab: 'slide' | 'notes' = 'slide'): Promise<void> {
+  const d = deckNow();
+  if (!d?.current || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const ix = pickedSlides();
+  const got = await editHeaderFooter(d.master, d.current, ix.length, tab);
+  if (!got || deckNow() !== d) return;
+  d.setHeaderFooter(got.master, got.show, got.scope === 'picked' ? ix : undefined);
+}
+
+/** Slide Show > Set Up Show. */
+async function setUpShowCmd(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const got = await setUpShow(d.settings.show, d.settings.customShows ?? [], d.slides.length);
+  if (got && deckNow() === d) d.setSettings({ ...d.settings, show: got }, 'Set up show');
+  showSlideState();
+}
+
+/** Custom Slide Show > Custom Shows: make and change them (and play one). */
+async function customShowsCmd(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const names = d.slides.map((s, i) => {
+    const t = [...d.docOf(i).captions.values()].find((c) => c.ph === 'title');
+    const words = t ? t.runs.map((r) => r.text).join('').replace(/\s+/g, ' ').trim() : '';
+    return { id: s.id, name: `${i + 1}. ${words || 'Slide ' + (i + 1)}${s.hidden ? ' (hidden)' : ''}` };
+  });
+  const got = await editCustomShows(d.settings.customShows ?? [], names);
+  if (!got || deckNow() !== d) return;
+  const show = d.settings.show && d.settings.show.custom !== undefined && !got.shows.some((c) => c.id === d.settings.show!.custom) ? { ...d.settings.show, custom: undefined } : d.settings.show;
+  if (show && show.custom === undefined) delete show.custom;
+  d.setSettings({ ...d.settings, customShows: got.shows, ...(show ? { show } : {}) }, 'Custom shows');
+  if (got.play !== undefined) present(false, false, { custom: got.play });
+}
+
+/** Custom Slide Show: the deck's custom shows to play, and Custom Shows… */
+function customShowMenu(anchor: HTMLElement): void {
+  const d = deckNow();
+  if (!d) return;
+  const r = anchor.getBoundingClientRect();
+  const shows = d.settings.customShows ?? [];
+  showContextMenu(r.left, r.bottom, [
+    ...shows.map((c) => ({ cmd: `custom-show:${c.id}`, label: c.name })),
+    ...(shows.length ? [null] : []),
+    { cmd: 'custom-shows', label: 'Custom Shows…' },
+  ], { run: (cmd) => (cmd.startsWith('custom-show:') ? present(false, false, { custom: Number(cmd.slice(12)) }) : void command(cmd)), key: commandKey });
 }
 
 /** Ink drawn in the slide show, kept: shapes on its slides, as one step to undo. */
@@ -3108,34 +3553,36 @@ async function printNow(): Promise<void> {
   if (deck) {
     const slide = (i: number) => itemsToSvg(recordSlide(deck.page(i), deck.docOf(i)), { x1: 0, y1: 0, x2: deck.size.w, y2: deck.size.h });
     if (tab.mode === 'design') { printPages({ pages: [slide(deck.index)], w: deck.size.w, h: deck.size.h }); return; }
+    const m = deck.master;
     const v = await ask('Print', [
       { name: 'handout', label: 'Layout', value: printChoices.handout, options: [
-        { value: '1', label: 'Full page slides' }, { value: '2', label: 'Handouts: 2 slides a page' }, { value: '3', label: 'Handouts: 3 slides a page, with lines for notes' },
+        { value: '1', label: 'Full page slides' }, { value: 'notes', label: 'Notes Pages (as the Notes Master sets them)' },
+        { value: 'master', label: `Handouts as the Handout Master sets them (${(m.handout ?? defaultHandout()).perPage} a page)` },
+        { value: '2', label: 'Handouts: 2 slides a page' }, { value: '3', label: 'Handouts: 3 slides a page, with lines for notes' },
         { value: '4', label: 'Handouts: 4 slides a page' }, { value: '6', label: 'Handouts: 6 slides a page' }, { value: '9', label: 'Handouts: 9 slides a page' },
       ] },
       { name: 'paper', label: 'Paper (handouts)', value: printChoices.paper, options: PAPER_OPTIONS },
       { name: 'frame', label: 'Frame the slides (handouts)', value: printChoices.frame, type: 'checkbox' },
-    ], { ok: 'Print…', note: 'Full page slides print at the slide\'s own shape; the next window fits them to the paper. Copies and which pages are chosen there too.' });
+    ], { ok: 'Print…', note: 'Full page slides print at the slide\'s own shape, notes pages at 7.5 × 10 in; the next window fits them to the paper. Handouts and notes pages carry the header and footer from Insert > Header & Footer > Notes and Handouts. Copies and which pages are chosen in the next window.' });
     if (!v) return;
     Object.assign(printChoices, v);
-    const n = Number(v.handout);
-    if (n === 1) { printPages({ pages: deck.slides.map((_, i) => slide(i)), w: deck.size.w, h: deck.size.h }); return; }
-    const page = orient(PAPERS[v.paper] ?? PAPERS.letter, 'portrait');
-    const cells = handoutCells(page, n);
-    const pages: string[] = [];
-    for (let first = 0; first < deck.slides.length; first += n) {
-      const parts: string[] = [];
-      cells.forEach((cell, k) => {
-        const i = first + k;
-        if (i >= deck.slides.length) return;
-        const at = placeIn(deck.size.w, deck.size.h, cell, 'fit');
-        parts.push(placeSvg(slide(i), at));
-        if (v.frame === 'true') parts.push(`<rect x="${at.x}" y="${at.y}" width="${at.w}" height="${at.h}" fill="none" stroke="#888" stroke-width="0.5"/>`);
-        if (n === 3) for (const l of noteLines({ ...cell, h: at.h, y: at.y }, page)) parts.push(`<line x1="${l.x1}" x2="${l.x2}" y1="${l.y}" y2="${l.y}" stroke="#bbb" stroke-width="0.5"/>`);
-      });
-      pages.push(pageSvg(page.w, page.h, parts));
+    if (v.handout === '1') { printPages({ pages: deck.slides.map((_, i) => slide(i)), w: deck.size.w, h: deck.size.h }); return; }
+    if (v.handout === 'notes') {
+      const size = notesPageSize(m.notesPage);
+      const pages = deck.slides.map((s, i) => notesPageSvg(m, deck.size, slide(i), s.notes, i + 1, (t, k) => measureText(t, k, m.notesPage?.font || m.bodyFont || 'Arial'), placeSvg));
+      printPages({ pages, w: size.w, h: size.h });
+      return;
     }
-    printPages({ pages, w: page.w, h: page.h });
+    const setup: HandoutSetup = v.handout === 'master' ? { ...(m.handout ?? defaultHandout()) } : { ...(m.handout ?? defaultHandout()), perPage: Number(v.handout) as HandoutSetup['perPage'] };
+    setup.frame = v.frame === 'true';
+    const paper = PAPERS[v.paper] ?? PAPERS.letter;
+    const pages: string[] = [];
+    for (let first = 0, page = 1; first < deck.slides.length; first += setup.perPage, page++) {
+      const svgs = deck.slides.slice(first, first + setup.perPage).map((_, k) => slide(first + k));
+      pages.push(handoutPageSvg(m, deck.size, setup, svgs, page, placeSvg, paper));
+    }
+    const L = handoutLayout(deck.size, setup, paper);
+    printPages({ pages, w: L.page.w, h: L.page.h });
     return;
   }
   const pic = recordPicture(doc, 4);
@@ -3317,10 +3764,10 @@ const sheetStyle = (): DocStyle => ws.active.book?.drawingStyle ?? ACS_1996;
 function showSheetParts(): void {
   const sheet = ws.active.mode === 'sheet';
   const words = ws.active.mode === 'document';
-  for (const el of document.querySelectorAll<HTMLElement>('.sheet-only, .no-sheet, .doc-only, .no-doc, .draw-only')) {
+  for (const el of document.querySelectorAll<HTMLElement>('.sheet-only, .no-sheet, .doc-only, .no-doc')) {
     const c = el.classList;
     el.hidden = (c.contains('sheet-only') && !sheet) || (c.contains('no-sheet') && sheet) || (c.contains('doc-only') && !words)
-      || (c.contains('no-doc') && words) || (c.contains('draw-only') && (sheet || words) && !drawingOnTop());
+      || (c.contains('no-doc') && words);
   }
   tickMenuModes();
 }
@@ -3523,6 +3970,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work differently while a sheet shows. */
 const SHEET_COMMANDS: Record<string, () => unknown> = {
+  'sheet-new-window': () => { sheetMode.view.commitEdit(); ws.newWindow(); },
   cut: () => sheetMode.copy(true),
   copy: () => sheetMode.copy(),
   paste: () => sheetMode.paste(null),
@@ -3572,6 +4020,9 @@ function docActive(): boolean {
 }
 
 /** The style structures in the document showing are drawn in. */
+/** Insert > Quick Parts: saved pieces of text (kept with the settings). */
+let docQuickParts: QuickPart[] = [];
+
 const docStyle = (): DocStyle => ws.active.document?.t.drawingStyle ?? ACS_1996;
 
 const docMode = new DocumentMode({
@@ -3585,9 +4036,16 @@ const docMode = new DocumentMode({
   readPaste: (e) => readDocPaste(e),
   toStructure: (text, style) => textToStructure(text, style),
   pickPicture: () => pickPicture(),
+  pickObjectFile: () => pickObjectFile(),
+  objectPicture: (name, bytes, icon) => objectPictureOf(name, bytes, icon),
+  openObjectFile: (file, changed) => openObjectFile(file, changed),
+  clipboardObject: nativeClipboard ? () => clipboardObject() : undefined,
   pickReferenceFile: () => pickReferenceFile(),
   preferredChanged: () => storeSettings(),
   reviewNameChanged: () => storeSettings(),
+  quickParts: () => docQuickParts,
+  setQuickParts: (list) => { docQuickParts = list; storeSettings(); },
+  setNewDesign: (d) => { setNewDocDesign(d); storeSettings(); },
   openDocuments: () => {
     const seen = new Set<unknown>();
     return ws.tabs.filter((t) => t.mode === 'document' && t.document && !seen.has(t.document) && seen.add(t.document)).map((t) => ({ name: ws.label(t), t: t.document!.t }));
@@ -3610,6 +4068,7 @@ const docMode = new DocumentMode({
 });
 docBoxPrefs.changed = () => storeSettings();
 docRulerPrefs.changed = () => storeSettings();
+formulaBarPrefs.changed = () => storeSettings();
 // documents measure fonts they have no published widths for on the screen
 setScreenMeasure(measureText);
 void document.fonts?.ready.then(() => docMode.fontsChanged());
@@ -3738,12 +4197,140 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'page-edge', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
+const ANY_TAB = new Set(['new-from-template', 'check-accessibility', 'format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'export-settings', 'import-settings', 'customize-ribbon', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'title-bar-in-menu', 'collapse-ribbon', 'page-edge', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
   'help', 'about', 'user-guide', 'help-here', 'send-feedback', 'report-problem', 'check-updates']);
+
+// ---------------------------------------------------------------- accessibility (Review > Check Accessibility, Alt Text…)
+
+/** What makes the file showing hard to use with a screen reader or to read. */
+function accessibilityIssues(): Issue[] {
+  if (sheetActive()) return ws.active.book ? checkWorkbook(ws.active.book) : [];
+  if (docActive()) { const t = docMode.file?.t; return t ? checkDocument(t) : []; }
+  const deck = deckNow();
+  if (deck && ws.active.mode === 'slides') {
+    const out: Issue[] = [];
+    const titles: (string | null)[] = [];
+    deck.slides.forEach((_, i) => {
+      const d = deck.docOf(i);
+      out.push(...checkDrawing(d, { slide: i, slideTitle: true, ...(d === doc ? { captionBox: (c: Caption) => renderer.captionBox(c) } : {}) }));
+      const t = [...d.captions.values()].find((c) => c.ph === 'title');
+      titles.push(t ? t.runs.map((r) => r.text).join('') : null);
+    });
+    return [...out, ...repeatedTitles(titles)];
+  }
+  return checkDrawing(doc, { captionBox: (c) => renderer.captionBox(c) });
+}
+
+/** Go to what an accessibility issue is about, and select it. */
+function goToIssue(p: IssuePlace): void {
+  if (sheetActive()) { sheetMode.goToIssue(p); return; }
+  if (docActive()) {
+    if (p.kind === 'doc-object') docMode.goToObject(p.id);
+    else if (p.kind === 'doc-para') docMode.revealPara(p.para);
+    return;
+  }
+  if (p.kind !== 'drawing') return;
+  const deck = deckNow();
+  if (deck && p.slide !== undefined) deck.go(p.slide);
+  // brought into view (zoomed in to it), then picked whole
+  if (p.atoms?.length) editor.reveal('atom', p.atoms[0]);
+  else if (p.captions?.length) editor.reveal('caption', p.captions[0]);
+  editor.selectThese({ atoms: new Set(p.atoms ?? []), bonds: new Set(), captions: new Set(p.captions ?? []), arrows: new Set(), shapes: new Set(p.shapes ?? []) });
+}
+
+/** Alt Text… in a drawing, on a slide or in a design: for the picture or chart picked, or else the structure picked. */
+async function drawingAltText(): Promise<boolean> {
+  const pics = [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => x?.kind === 'picture');
+  if (pics.length === 1) {
+    const p = pics[0];
+    const got = await askAltText(p.chart ? 'chart' : p.math ? 'equation' : p.video ? (p.video.audio ? 'sound' : 'video') : 'picture', p.alt);
+    if (got === null || !doc.shapes.has(p.id)) return false;
+    doc.edit('Alt text', () => doc.updateShape(p.id, { alt: got || undefined }));
+    return true;
+  }
+  const atom = [...editor.sel.atoms].find((id) => doc.atoms.has(id));
+  if (pics.length === 0 && atom !== undefined) {
+    const frag = [...doc.fragmentOf(atom)].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a);
+    const got = await askAltText('structure', structureAlt(frag), 'Screen readers read this out in place of the structure, and PowerPoint and Word keep it as the picture\'s alt text. Left empty, the structure is described by its SMILES.');
+    if (got === null || !doc.atoms.has(atom)) return false;
+    setStructureAlt(doc, atom, got);
+    return true;
+  }
+  flash(pics.length > 1 ? 'Select one picture at a time for Alt Text.' : 'Click a picture, chart or structure first, then Alt Text.');
+  return false;
+}
+
+const accessibility = new AccessibilityPane({
+  check: accessibilityIssues,
+  goTo: goToIssue,
+  fixAlt: async (p) => {
+    if (sheetActive()) return sheetMode.altText();
+    if (docActive()) return p.kind === 'doc-object' ? docMode.altText(p.id) : false;
+    return drawingAltText();
+  },
+});
+
+const slideCompare = new SlideComparePane({
+  deck: () => (ws.active.mode === 'slides' ? deckNow() : null),
+  flash: (m, ms) => flash(m, ms),
+  changed: () => { const d = deckNow(); if (d) deckChanged(d); },
+});
+
+/** File > New from Template: a document or sheet started from one of our templates. */
+async function newFromTemplate(): Promise<void> {
+  finishTyping();
+  const got = await pickFileTemplate(sheetActive() ? 'sheet' : 'document');
+  if (!got) return;
+  if (got.kind === 'sheet') {
+    ws.newSheet(got.template?.make());
+  } else ws.newDocument(got.template?.make());
+  if (got.template) flash(`New ${got.template.name.toLowerCase()}: type over the text in [brackets].`);
+}
+
+/** Review > Compare (slides): another version of this deck, from an open tab or a PowerPoint file, to review slide by slide. */
+async function compareSlides(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const others = ws.tabs.filter((t) => t !== ws.active && t.mode === 'slides' && t.deck);
+  let pick = 'file';
+  if (others.length) {
+    const got = await ask('Compare Presentations', [{
+      name: 'with', label: 'Compare with', value: 'file',
+      options: [{ value: 'file', label: 'A PowerPoint file…' }, ...others.map((t, i) => ({ value: String(i), label: t.name }))],
+    }], { ok: 'Compare', note: 'Each slide that differs in the other version is listed, to accept into this deck or reject.' });
+    if (!got) return;
+    pick = got.with;
+  }
+  const theirs = new Deck(new Doc());
+  let name: string;
+  if (pick === 'file') {
+    const f = await openBytesDialog('PowerPoint presentations', [PPTX]).catch(async (e) => { await showError(String(e)); return null; });
+    if (!f) return;
+    try {
+      const got = readPptx(f.bytes);
+      theirs.load(got.slides.map((s) => theirs.makeSlide(s.layout, s.contents, s.notes, s, got.master)), got.size, got.master);
+    } catch (e) {
+      flash(`Could not read ${f.name}: ${e instanceof Error ? e.message : String(e)}`, 8000);
+      return;
+    }
+    name = f.name;
+  } else {
+    const t = others[Number(pick)];
+    const src = t.deck!.copySlides(t.deck!.slides.map((_, i) => i));
+    theirs.load(src.slides.map((s) => theirs.makeSlide(s.layout, s.contents, s.notes, s.motion, src.master)), src.size, src.master);
+    name = t.name;
+  }
+  if (deckNow() !== d) return;
+  const n = slideCompare.start(d, theirs, name, document.querySelector<HTMLElement>('[data-cmd="compare-slides"]:not([hidden])'));
+  flash(n ? `${n} change${n === 1 ? '' : 's'} from ${name} to review.` : `${name} has the same slides as this deck.`);
+}
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
+  // View > Toolboxes: one of your own
+  if (name.startsWith('toolbox-own-')) { toolboxes.toggle(name.slice('toolbox-'.length)); return true; }
   if (sheetActive()) {
     const own = SHEET_COMMANDS[name];
     if (own) return own() !== false;
@@ -3760,6 +4347,7 @@ function command(name: string): boolean {
     flash('A design is one page: use Page Size and Background on the Design ribbon. For several pages, use File > New Slides.');
     return true;
   }
+  if (name.startsWith('shape-fx:')) { void shapeEffect(name); return true; }
   if (name.startsWith('add-ligand:')) {
     if (editor.addLigand(name.slice('add-ligand:'.length))) return true;
     flash('Select one metal first, then add the ligand to it.');
@@ -3774,6 +4362,92 @@ function command(name: string): boolean {
   return !!run && run() !== false;
 }
 
+/** Where the last right-click menu on the page opened (a gallery picked from it opens there). */
+let rightClickAt = { left: 0, bottom: 0 };
+
+/** The design shapes picked (the ones Shape Styles and Shape Effects change). */
+function pickedGeo(): Shape[] {
+  return [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => x?.kind === 'geo' && !x.diagram);
+}
+
+/** Where a ribbon button's drop-down goes: under the button showing, or under the tabs. */
+function dropAnchor(cmd: string): HTMLElement {
+  const b = [...document.querySelectorAll<HTMLElement>(`[data-cmd="${cmd}"]`)].find((x) => x.offsetParent);
+  return b ?? document.querySelector<HTMLElement>('#ribbon .rb-tabs')!;
+}
+
+/** Shape Styles: the gallery of ready-made looks for the shapes picked, in the deck's colours. */
+function shapeStyles(at?: { left: number; bottom: number }): void {
+  if (!pickedGeo().length) { flash('Select a shape first (Insert > Shapes).'); return; }
+  const m = deckNow()?.master;
+  const colours = styleColours(m?.textColor ?? '#333333', m?.accent ?? '#2f6fb0', m?.accent2 ?? '#c0504d');
+  showStyleGallery(at ?? dropAnchor('shape-styles'), colours, (look, c) => {
+    const shapes = pickedGeo();
+    finishTyping();
+    const { textColor, ...patch } = stylePatch(look, c);
+    doc.edit('Shape style', () => {
+      for (const s of shapes) {
+        const text = s.text && { ...s.text, runs: s.text.runs.map((r) => ({ ...r, color: textColor })) };
+        doc.updateShape(s.id, { ...patch, ...(text ? { text } : {}) });
+      }
+    });
+    editor.changed();
+  });
+}
+
+/** Shape Effects: shadow, reflection, glow, soft edges and bevel, from a menu under the button (or at the pointer). */
+function shapeEffects(at?: { x: number; y: number }): void {
+  if (!pickedGeo().length) { flash('Select a shape first (Insert > Shapes).'); return; }
+  const r = dropAnchor('shape-effects').getBoundingClientRect();
+  showContextMenu(at?.x ?? r.left, at?.y ?? r.bottom, effectsMenu(), { run: (cmd) => void command(cmd), key: () => undefined });
+}
+
+/** One of the Shape Effects menu's choices, for every shape picked. */
+async function shapeEffect(cmd: string): Promise<boolean> {
+  const shapes = pickedGeo();
+  if (!shapes.length) { flash('Select a shape first (Insert > Shapes).'); return false; }
+  finishTyping();
+  if (cmd === 'shape-fx:glow:options') {
+    const g = shapes[0].glow ?? { color: shapes[0].fillColor ?? shapes[0].color ?? '#ffc000', size: 8, transparency: 0.4 };
+    const v = await ask('Glow', [
+      { name: 'color', label: 'Colour', value: g.color, type: 'color' },
+      { name: 'size', label: 'Size (pt)', value: String(g.size), type: 'number' },
+      { name: 'clear', label: 'Transparency (%)', value: String(Math.round(g.transparency * 100)), type: 'number' },
+    ], { ok: 'Apply' });
+    if (!v) return false;
+    const size = Math.max(0, Math.min(150, Number(v.size) || 0));
+    const glow = size > 0 ? { color: v.color, size, transparency: Math.max(0, Math.min(1, (Number(v.clear) || 0) / 100)) } : undefined;
+    doc.edit('Glow', () => { for (const s of shapes) doc.updateShape(s.id, { glow }); });
+    editor.changed();
+    return true;
+  }
+  const label = { shadow: 'Shadow', reflection: 'Reflection', glow: 'Glow', soft: 'Soft edges', bevel: 'Bevel' }[cmd.split(':')[1]] ?? 'Shape effect';
+  doc.edit(label, () => { for (const s of shapes) { const p = effectPatch(cmd, s); if (p) doc.updateShape(s.id, p); } });
+  editor.changed();
+  return true;
+}
+
+/** Shape Fill > Picture: a picture from a file fills the shapes picked, stretched to each. */
+async function shapePictureFill(): Promise<void> {
+  const shapes = pickedGeo();
+  if (!shapes.length) { flash('Select a shape first (Insert > Shapes).'); return; }
+  const p = await pickPicture();
+  if (!p) return;
+  if (!/^image\/(png|jpeg|gif)$/.test(p.mime)) { flash('A shape can be filled with a PNG, JPEG or GIF picture.'); return; }
+  finishTyping();
+  const picFill = { src: dataUrl(p.bytes, p.mime), px: imageSize(p.bytes, p.mime) ?? { w: 100, h: 100 } };
+  doc.edit('Picture fill', () => { for (const s of shapes) doc.updateShape(s.id, { picFill, filled: true }); });
+  editor.changed();
+}
+
+/** Shape Fill > No Picture: back to the shapes' own fill colour. */
+function shapeNoPictureFill(): void {
+  const shapes = pickedGeo().filter((s) => s.picFill);
+  if (!shapes.length) { flash('None of the shapes picked has a picture fill.'); return; }
+  doc.edit('Picture fill', () => { for (const s of shapes) doc.updateShape(s.id, { picFill: undefined }); });
+  editor.changed();
+}
+
 /** Picture Style (right-click on a picture): a ready-made frame, corners and shadow for the pictures picked. */
 function setPictureStyle(look: PictureLook | undefined): boolean {
   const pics = [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => x?.kind === 'picture');
@@ -3783,9 +4457,10 @@ function setPictureStyle(look: PictureLook | undefined): boolean {
 }
 
 /** Slide commands that don't apply to a design's single page. */
-const SLIDE_ONLY = new Set(['section-menu', 'new-slide', 'duplicate-slide', 'delete-slide', 'cut-slides', 'copy-slides', 'paste-slides', 'paste-slides-keep', 'hide-slide', 'reuse-slides', 'size-wide', 'size-standard', 'size-custom', 'slide-master', 'slide-templates',
+const SLIDE_ONLY = new Set(['compare-slides', 'section-menu', 'new-slide', 'duplicate-slide', 'delete-slide', 'cut-slides', 'copy-slides', 'paste-slides', 'paste-slides-keep', 'hide-slide', 'reuse-slides', 'size-wide', 'size-standard', 'size-custom', 'slide-master', 'slide-templates',
   'edit-layouts', 'view-sorter', 'add-section', 'rename-section', 'remove-section', 'remove-section-slides', 'remove-all-sections', 'section-up', 'section-down', 'collapse-sections', 'expand-sections',
-  'slide-transitions', 'slide-animations', 'animation-pane', 'preview-slide', 'remove-animation', 'insert-slide-zoom', 'insert-summary-zoom', 'action-settings', 'insert-video', 'insert-audio']);
+  'slide-transitions', 'slide-animations', 'animation-pane', 'preview-slide', 'remove-animation', 'insert-slide-zoom', 'insert-summary-zoom', 'action-settings', 'insert-video', 'insert-audio',
+  'reading-view', 'rehearse-timings', 'record-show', 'set-up-show', 'custom-shows', 'custom-show-menu', 'use-timings', 'play-narrations', 'header-footer', 'insert-date-time', 'insert-slide-number', 'view-slide-ruler', 'view-gridlines', 'view-guides', 'grid-settings', 'add-vertical-guide', 'add-horizontal-guide', 'view-outline', 'view-notes-page', 'notes-master', 'handout-master']);
 
 /** The animation commands: an effect for the selected objects (the right-click menu's Animation). */
 const ANIM_COMMANDS: { cmd: string; label: string }[] = [false, true].flatMap((exit) => EFFECTS.filter((e) => !(exit && e.emph)).map((e) => ({
@@ -3794,15 +4469,26 @@ const ANIM_COMMANDS: { cmd: string; label: string }[] = [false, true].flatMap((e
 
 const COMMANDS: Record<string, () => unknown> = {
   new: () => { finishTyping(); ws.newDrawing(); },
+  'check-accessibility': () => { finishTyping(); if (accessibility.open) accessibility.refresh(); else accessibility.show(document.querySelector<HTMLElement>('[data-cmd="check-accessibility"]:not([hidden])')); },
+  'alt-text': () => { finishTyping(); void drawingAltText(); },
   'new-slides': () => { finishTyping(); ws.newSlides(); },
   'new-design': () => newDesign(),
   'design-size': () => designSize(),
   'connector-tool': () => { finishTyping(); editor.setTool('connector'); },
   'connector-elbow-tool': () => { finishTyping(); editor.setTool('connector-elbow'); },
+  'shape-styles': () => shapeStyles(),
+  'view-slide-ruler': () => { slideLook.ruler = !slideLook.ruler; showRulers(); storeSettings(); },
+  'view-gridlines': () => { slideLook.grid = !slideLook.grid; showRulers(); storeSettings(); renderer.repaintAll(); editor.requestScene(); },
+  'view-guides': () => toggleGuides(),
+  'grid-settings': () => void gridSettings(),
+  'add-vertical-guide': () => addGuide('x'),
+  'add-horizontal-guide': () => addGuide('y'),
+  'shape-styles-here': () => shapeStyles(rightClickAt),
+  'shape-effects': () => shapeEffects(),
+  'shape-picture-fill': () => void shapePictureFill(),
+  'shape-no-picture-fill': () => shapeNoPictureFill(),
   'slide-shapes': () => {
-    const b = document.querySelector<HTMLElement>('#ribbon [data-cmd="slide-shapes"]:not([hidden])');
-    const anchor = b && b.offsetParent ? b : document.querySelector<HTMLElement>('#ribbon .rb-tabs')!;
-    shapeMenu.show(anchor, 'Click a shape, then click or drag on the slide. Type in it once placed.', (id) => { finishTyping(); editor.setTool(`geo:${id}`); });
+    shapeMenu.show(dropAnchor('slide-shapes'), 'Click a shape, then click or drag on the slide. Type in it once placed.', (id) => { finishTyping(); editor.setTool(`geo:${id}`); });
   },
   'slide-icons': () => {
     const b = document.querySelector<HTMLElement>('#ribbon [data-cmd="slide-icons"]:not([hidden])');
@@ -3820,6 +4506,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'shape-backward': () => editor.setShapeLayer('backward') || flash('Select the shapes to send backward.'),
   'new-sheet': () => { finishTyping(); ws.newSheet(); },
   'new-document': () => { finishTyping(); ws.newDocument(); },
+  'new-from-template': () => { void newFromTemplate(); },
   open: () => ws.open(),
   save: () => { finishTyping(); return ws.save(focusTab()); },
   'save-as': () => { finishTyping(); return ws.saveAs(focusTab()); },
@@ -3864,6 +4551,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'hide-slide': () => hideSlides(),
   'selection-pane': () => { selectionPane = !selectionPane; showLayers(); },
   'reuse-slides': () => reuseSlides(),
+  'compare-slides': () => compareSlides(),
   'insert-equation': () => insertEquation(),
   'insert-link': () => insertLink(),
   'remove-link': () => removeLinks(),
@@ -3883,8 +4571,12 @@ const COMMANDS: Record<string, () => unknown> = {
     const items: MenuItem[] = d?.sections.length ? [{ cmd: 'add-section' }, null, ...sectionItems()] : [{ cmd: 'add-section' }];
     showContextMenu(r ? r.left : 200, r ? r.bottom + 2 : 120, items, { run: (cmd) => void command(cmd), key: commandKey });
   },
-  'view-normal': () => setSorter(false),
-  'view-sorter': () => setSorter(true),
+  'view-normal': () => setSlideView('normal'),
+  'view-outline': () => setSlideView(outlineView.shown ? 'normal' : 'outline'),
+  'view-notes-page': () => setSlideView(notesView.shown ? 'normal' : 'notes'),
+  'notes-master': () => void editPageMaster('notes'),
+  'handout-master': () => void editPageMaster('handout'),
+  'view-sorter': () => setSlideView('sorter'),
   ...Object.fromEntries(['add-section', 'rename-section', 'remove-section', 'remove-section-slides', 'remove-all-sections', 'section-up', 'section-down', 'collapse-sections', 'expand-sections'].map((c) => [c, () => sectionCommand(c)])),
   'slide-master': () => slideMaster(),
   'format-background': () => backgroundDialog(),
@@ -3906,6 +4598,32 @@ const COMMANDS: Record<string, () => unknown> = {
   present: () => present(false),
   'present-current': () => present(true),
   'presenter-view': () => present(false, true),
+  'reading-view': () => present(true, false, { windowed: true }),
+  'rehearse-timings': () => present(false, false, { rehearse: true }),
+  'record-show': () => present(false, false, { rehearse: true, record: true }),
+  'set-up-show': () => void setUpShowCmd(),
+  'custom-shows': () => void customShowsCmd(),
+  'custom-show-menu': () => {
+    const b = document.querySelector<HTMLElement>('#ribbon [data-cmd="custom-show-menu"]');
+    customShowMenu(b && b.offsetParent ? b : document.querySelector<HTMLElement>('#ribbon .rb-tabs')!);
+  },
+  'use-timings': () => {
+    const d = deckNow();
+    if (!d) return;
+    const s = d.settings.show ?? defaultShow();
+    d.setSettings({ ...d.settings, show: { ...s, manual: s.manual ? undefined : true } }, s.manual ? 'Use timings' : 'Advance manually');
+    showSlideState();
+  },
+  'play-narrations': () => {
+    const d = deckNow();
+    if (!d) return;
+    const s = d.settings.show ?? defaultShow();
+    d.setSettings({ ...d.settings, show: { ...s, noNarration: s.noNarration ? undefined : true } }, s.noNarration ? 'Play narrations' : 'Show without narration');
+    showSlideState();
+  },
+  'header-footer': () => void headerFooter(),
+  'insert-date-time': () => void headerFooter(),
+  'insert-slide-number': () => void headerFooter(),
   cut: () => cut(),
   copy: () => copy(),
   paste: () => paste(),
@@ -3958,6 +4676,8 @@ const COMMANDS: Record<string, () => unknown> = {
   'dev-tools': () => { showDevTools(!devTools); storeSettings(); },
   'show-stereo': () => previewStereo(!renderer.previewStereo),
   'scroll-bars': () => { showScrollBars(!scrollbars.shown); storeSettings(); },
+  'collapse-ribbon': () => { setRibbonCollapsed(!ribbonCollapsed()); storeSettings(); },
+  'title-bar-in-menu': () => { void placeTitleBar(titleBarPlace() === 'app' ? 'system' : 'app'); storeSettings(); },
   'page-edge': () => { showPageEdge(!pageEdge); storeSettings(); },
   'page-setup': () => void pageSetup(),
   'text-bar-docked': () => { placeTextBar('docked'); storeSettings(); },
@@ -3991,7 +4711,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'send-feedback': () => feedback.open(),
   about: () => void appVersion().then((v) => ask('About Chem Illustrator', [], {
     noCancel: true,
-    note: `Version ${v === 'web' ? 'for the browser' : v}. Free software under the GNU General Public License, version 3: `
+    note: `${STAGE_NOTE} Version ${v === 'web' ? 'for the browser' : v} (${STAGE.toLowerCase()}). Free software under the GNU General Public License, version 3: `
       + 'see the licence and the source on GitHub (github.com/nathanohare/Chem-Illustrator). ChemDraw is a trademark of Revvity Signals; '
       + 'Chem Illustrator is not made by or affiliated with Revvity Signals.',
   })),
@@ -4009,6 +4729,9 @@ const COMMANDS: Record<string, () => unknown> = {
   // the panel taken out as a toolbox folds up to its title bar; at the right it folds to a strip
   'fold-side': () => foldSide(!sideIsFolded()),
   'customize-toolbox': () => openCustomToolbox(),
+  'customize-ribbon': () => ribbonEditor.open(RIBBON_OF_MODE[ws.active.mode]),
+  'export-settings': () => void exportSettings(),
+  'import-settings': () => void importSettingsFile(),
   'lock-toolboxes': () => { toolboxes.setLocked(!toolboxState.locked); flash(toolboxState.locked ? 'Toolboxes locked.' : 'Toolboxes unlocked: drag one by its title to an edge of the drawing to dock it, or anywhere else to float.', 6000); },
   'add-frame': () => editor.addFrame() || flash('Select what to frame: structures, text, arrows or shapes.'),
   'fill-rings': () => flash(editor.fillRings(), 6000),
@@ -4863,16 +5586,18 @@ async function openWorkspace(): Promise<void> {
 
 // Newer versions of the desktop app (File > Check for Updates…, Edit > Settings)
 let updateCheck = true;
+let updateChannel: UpdateChannel = 'latest';
 let skipVersion: string | null = null;
 const updates = new UpdateUI({
   unsaved: () => ws.tabs.filter((t) => t.dirty).map((t) => t.name),
   skipped: () => skipVersion,
   skip: (v) => { skipVersion = v; storeSettings(); },
+  channel: () => updateChannel,
 });
 for (const el of document.querySelectorAll<HTMLElement>('.desktop-only')) el.hidden = !canUpdate;
 let versionText = canUpdate ? '' : 'Web version';
 void Promise.all([appVersion(), portableInfo()]).then(([v, portable]) => {
-  versionText = canUpdate ? `Version ${v}${portable ? ' (portable)' : ''}` : 'Web version';
+  versionText = canUpdate ? `Version ${v} ${STAGE.toLowerCase()}${portable ? ' (portable)' : ''}` : `Web version (${STAGE.toLowerCase()})`;
   if (portable && !portable.writable) flash(`This portable copy can’t write to its “Chem Illustrator Data” folder (a locked or read-only drive), so settings are kept on this computer instead.`, 8000);
   const el = document.querySelector('#app-version');
   if (el) el.textContent = versionText;
@@ -5036,7 +5761,9 @@ async function onlinePreferences(): Promise<void> {
     { name: 'pubchem', label: 'Look up names the name reader can\'t read on PubChem', type: 'checkbox', value: String(pubchemNames),
       help: 'Sends the name typed to PubChem, a free NIH database. Names the program can read itself never leave this computer.' },
     ...(canUpdate ? [{ name: 'updates', label: 'Check for a newer version when the app starts', type: 'checkbox' as const, value: String(updateCheck),
-      help: 'Asks GitHub for the latest release number; nothing about you or your files is sent.' }] : []),
+      help: 'Asks GitHub for the latest release number; nothing about you or your files is sent.' },
+    { name: 'channel', label: 'Updates', options: UPDATE_CHANNELS, value: updateChannel,
+      help: 'Stable versions have been tried out on a real computer before they are offered, so they change less often and have fewer surprises. Latest gets every new feature and fix the day it is made.' }] : []),
   ], { ok: 'Save' });
   if (!r) return;
   pubchemNames = r.pubchem === 'true';
@@ -5044,6 +5771,8 @@ async function onlinePreferences(): Promise<void> {
     // turning the check back on also forgets a skipped version
     if (r.updates === 'true' && !updateCheck) skipVersion = null;
     updateCheck = r.updates === 'true';
+    // the other channel's versions are new to you: forget a skipped one
+    if ((r.channel === 'stable' || r.channel === 'latest') && r.channel !== updateChannel) { updateChannel = r.channel; skipVersion = null; }
   }
   storeSettings();
 }
@@ -5056,7 +5785,12 @@ onPalettes(() => storeSettings());
 /** Save the key map and preferences (after the saved ones have been read, so they aren't lost). */
 function storeSettings(): void {
   if (!settingsLoaded) return;
-  const s: Settings = {
+  saveSettings(currentSettings(), (msg) => flash(msg, 10000));
+}
+
+/** Every setting as it is now. */
+function currentSettings(): Settings {
+  return {
     hotkeys: keymap.overrides(),
     keepHotspotOnBond: editor.options.keepHotspotOnBond,
     fixedLength: editor.options.fixedLength,
@@ -5064,6 +5798,8 @@ function storeSettings(): void {
     devTools,
     showRoles: editor.showRoles,
     scrollBars: scrollbars.shown,
+    titleBar: titleBarPlace(),
+    ribbonCollapsed: ribbonCollapsed(),
     textBar: CaptionEditor.barPlace,
     page: defaultPage,
     pageEdge,
@@ -5097,6 +5833,7 @@ function storeSettings(): void {
     askWholeDrawing,
     palettes: getPalettes(),
     toolboxes: toolboxState,
+    ribbons: ribbonPrefs,
     myStyles: ownStyles,
     modeStyles,
     darkPage: dark.on,
@@ -5105,7 +5842,13 @@ function storeSettings(): void {
     guides: { ...guidesOn },
     docPins: [...docBoxPrefs.pinned],
     docRuler: docRulerPrefs.shown,
+    sheetFormulaBar: formulaBarPrefs.shown,
+    slideRuler: slideLook.ruler,
+    slideGrid: slideLook.grid,
+    rulerUnits: rulerPrefs.units,
+    rulerFrom: rulerPrefs.from,
     updateCheck,
+    updateChannel,
     pubchemNames,
     fileTypesOffered,
     wordObjectsOffered,
@@ -5116,8 +5859,48 @@ function storeSettings(): void {
     scheme: { ...schemePrefs },
     keep: keepPrefs,
     highlightLooks: ownLooks,
+    quickParts: docQuickParts,
+    docDesign: newDocDesign(),
   };
-  saveSettings(s, (msg) => flash(msg, 10000));
+}
+
+// ---------------------------------------------------------------- Edit > Export Settings and Import Settings
+
+/** Save every setting in one file, to keep or to use on another computer. */
+async function exportSettings(say: (text: string) => void = flash): Promise<void> {
+  const target = await saveFileDialog('Chem Illustrator settings.json', SETTINGS_FILE).catch((e) => { say(String(e)); return null; });
+  if (!target) return;
+  await writeFile(target.ref, target.name, exportText(currentSettings()), SETTINGS_FILE).then(
+    () => say(`Saved every setting in ${target.name}. Import it on another computer (Edit > Import Settings) to set that one up the same.`),
+    (e) => say(`Could not save the settings: ${e}`),
+  );
+}
+
+/** Use the settings saved in a file with Export Settings (or the keys from a hotkeys file). */
+async function importSettingsFile(say: (text: string) => void = flash): Promise<void> {
+  const got = await openFileDialog([SETTINGS_FILE]).catch((e) => { say(String(e)); return null; });
+  if (!got) return;
+  const read = importSettings(got.text, currentSettings());
+  if (!read) { say(`${got.name} isn't a Chem Illustrator settings file (use one saved with Export Settings).`); return; }
+  applySettings(read.settings);
+  storeSettings();
+  say(read.only === 'hotkeys' ? `Using the keys from ${got.name}.` : `Using the settings from ${got.name}: keys, toolboxes, preferences, templates, nicknames, styles and palettes. Your recent files stay as they were.`);
+}
+
+/** Settings > Import and Export: both, with a word on what goes in the file. */
+function settingsTransfer(): void {
+  const d = document.createElement('dialog');
+  d.className = 'ask settings-transfer';
+  d.innerHTML = `<h2>Import and Export Settings</h2>
+    <p class="muted">One file holds every setting: hotkeys, toolboxes (and what is in them), preferences, your templates, nicknames, drawing styles, colour palettes, slide themes and highlight looks. Export it to keep a copy, or to set up another computer or a new install the same way; Import uses one. Recent files stay on each computer.</p>
+    <div class="ask-buttons"><button type="button" data-act="export">Export Settings…</button><button type="button" data-act="import">Import Settings…</button><button type="button" class="primary" data-act="close">Close</button></div>
+    <p class="muted small" aria-live="polite"></p>`;
+  const say = (t: string) => { d.querySelector('p.small')!.textContent = t; };
+  d.querySelector('[data-act=export]')!.addEventListener('click', () => void exportSettings(say));
+  d.querySelector('[data-act=import]')!.addEventListener('click', () => void importSettingsFile(say));
+  d.querySelector('[data-act=close]')!.addEventListener('click', () => d.close());
+  d.addEventListener('close', () => d.remove());
+  showDialog(d);
 }
 
 /** The key for a menu command as things are now (in Slides mode PowerPoint's keys come first, in sheets Excel's). */
@@ -5207,7 +5990,8 @@ const hotkeysDialog = new HotkeysDialog({
   },
 });
 
-void loadSettings().then((s) => {
+/** Use these settings: at start, and when settings are imported (Edit > Import Settings). */
+function applySettings(s: Settings): void {
   editor.options.keepHotspotOnBond = s.keepHotspotOnBond;
   editor.options.fixedLength = s.fixedLength;
   editor.options.fixedAngles = s.fixedAngles;
@@ -5216,6 +6000,8 @@ void loadSettings().then((s) => {
   $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(s.showRoles));
   showDevTools(s.devTools);
   showScrollBars(s.scrollBars);
+  void placeTitleBar(s.titleBar);
+  setRibbonCollapsed(s.ribbonCollapsed);
   defaultPage = s.page;
   showPageEdge(s.pageEdge);
   welcomed = s.welcomed;
@@ -5246,10 +6032,13 @@ void loadSettings().then((s) => {
   slideThemes = s.slideThemes;
   askWholeDrawing = s.askWholeDrawing;
   updateCheck = s.updateCheck;
+  updateChannel = s.updateChannel;
   pubchemNames = s.pubchemNames;
   fileTypesOffered = s.fileTypesOffered;
   wordObjectsOffered = s.wordObjectsOffered;
   setReviewAuthor(s.reviewName);
+  docQuickParts = s.quickParts;
+  setNewDocDesign(s.docDesign);
   skipVersion = s.skipVersion;
   recentFiles = s.recentFiles;
   recentSymbols = s.recentSymbols;
@@ -5259,6 +6048,8 @@ void loadSettings().then((s) => {
   renderRecent();
   setPalettes(s.palettes);
   toolboxState = s.toolboxes;
+  ribbonPrefs = s.ribbons;
+  applyRibbons();
   ownStyles = s.myStyles;
   modeStyles = s.modeStyles;
   dark.palette = s.darkPalette;
@@ -5267,6 +6058,12 @@ void loadSettings().then((s) => {
   Object.assign(guidesOn, s.guides);
   docBoxPrefs.pinned = parseDocPins(s.docPins);
   docRulerPrefs.shown = !!s.docRuler;
+  formulaBarPrefs.shown = s.sheetFormulaBar !== false;
+  sheetMode.showFormulaBar();
+  slideLook.ruler = !!s.slideRuler;
+  slideLook.grid = !!s.slideGrid;
+  rulerPrefs.units = s.rulerUnits;
+  rulerPrefs.from = s.rulerFrom;
   docMode.showRuler();
   docMode.boxesChanged();
   showGuides();
@@ -5281,6 +6078,11 @@ void loadSettings().then((s) => {
   tickToolboxes();
   placeSidePanel();
   tickMethylStyle();
+  refreshKeys();
+}
+
+void loadSettings().then((s) => {
+  applySettings(s);
   settingsLoaded = true;
   void keeper.start();
   void openOutsideFiles();
@@ -6224,6 +7026,12 @@ function drawingMenu(): MenuItem[] {
     { label: 'Rotate or Flip', items: turn },
     ...(order.length ? [{ label: 'Order', items: order }] : []),
     ...(shapes.some((x) => x.chart) ? [{ cmd: 'edit-chart', label: 'Edit Chart…' }] : []),
+    ...((shapes.length === 1 && shapes[0].kind === 'picture') || (atoms && !shapes.length) ? [{ cmd: 'alt-text', label: 'Alt Text…' }] : []),
+    ...(shapes.some((x) => x.kind === 'geo' && !x.diagram) ? [
+      { cmd: 'shape-styles-here', label: 'Shape Style…' },
+      { label: 'Shape Effects', items: effectsMenu() },
+      { label: 'Shape Fill', items: [{ cmd: 'shape-picture-fill', label: 'Picture…' }, { cmd: 'shape-no-picture-fill', label: 'No Picture' }] },
+    ] : []),
     ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }, { cmd: 'picture-format' }, { label: 'Picture Style', items: PICTURE_STYLES.map((p) => ({ cmd: `picture-style-${p.id}`, label: p.name })) }] : []),
     ...(ws.active.mode === 'slides' ? [{ label: 'Animation', items: [
       ...ANIM_COMMANDS.slice(0, EFFECTS.length), null, ...ANIM_COMMANDS.slice(EFFECTS.length), null,
@@ -6326,6 +7134,7 @@ editor.onContextMenu = (e) => {
   finishTyping();
   const h = editor.contextPick(e);
   contextBond = h?.kind === 'bond' ? h.id : null;
+  rightClickAt = { left: e.clientX, bottom: e.clientY };
   showContextMenu(e.clientX, e.clientY, drawingMenu(), { run: (cmd) => void command(cmd), key: commandKey });
 };
 
@@ -6492,9 +7301,6 @@ function toolButton(name: string): HTMLButtonElement | null {
 
 const runFromToolbox = (cmd: string) => { finishTyping(); command(cmd); };
 const sep = () => { const d = document.createElement('div'); d.className = 'tb-sep'; return d; };
-const cmdRow = (body: HTMLElement, cmds: (string | [string, string] | null)[]) => {
-  for (const c of cmds) body.append(!c ? sep() : typeof c === 'string' ? commandButton(c, runFromToolbox) : commandButton(c[0], runFromToolbox, c[1]));
-};
 
 /** What the Colours toolbox's swatches do: colour the lines and text, highlight, or fill. */
 let colourMode: 'line' | 'highlight' | 'fill' = 'line';
@@ -6526,110 +7332,151 @@ function looksList(vertical: boolean): HTMLElement {
   return box;
 }
 
-const TOOLBOX_DEFS: ToolboxDef[] = [
-  { id: 'main', title: 'Drawing Tools', build: (body) => body.append(toolsNav) },
-  {
-    id: 'structure', title: 'Structure',
-    build: (body) => cmdRow(body, ['clean-up', 'add-frame', 'fill-rings', 'highlight', 'remove-highlight', null, 'chain-ends', 'explicit-h', 'aromatic-circles', 'stereo-labels', null, 'add-id-label', 'add-caption', 'attach-descriptors', 'number-compounds', null, 'contract-label', 'expand-label', 'hapto-bond', 'name-to-structure']),
-  },
-  {
-    id: 'arrange', title: 'Object',
-    build: (body) => cmdRow(body, ['align-left', 'align-hcenter', 'align-right', 'align-top', 'align-vcenter', 'align-bottom', null, 'distribute-h', 'distribute-v', null, 'flip-h', 'flip-v', 'rotate-cw', 'rotate-ccw', null, 'shape-front', 'shape-back']),
-  },
-  {
-    id: 'templates', title: 'Templates',
-    build: (body, vertical) => {
-      // (many templates: the box scrolls rather than run off the window)
-      body.classList.add('tb-grid', 'tb-scroll');
-      body.style.setProperty('--cols', vertical ? '2' : '12');
-      for (const group of TOOL_GROUPS) for (const item of group) {
-        if (!('palette' in item) || !item.palette.startsWith('tpl-') || item.palette === 'tpl-own') continue;
-        // a heading over each palette's buttons, so the families are easy to find
-        const head = document.createElement('div');
-        head.className = 'tb-heading';
-        head.textContent = head.title = item.title;
-        body.append(head);
-        for (const t of item.items) { const b = toolButton(t.name); if (b) body.append(b); }
-      }
-    },
-  },
-  {
-    id: 'colours', title: 'Colours',
-    build: (body, vertical) => {
-      const modes = document.createElement('div');
-      modes.className = 'tb-modes';
-      // in Highlight mode, the saved looks too
-      const looks = looksList(vertical);
-      looks.hidden = colourMode !== 'highlight';
-      for (const [m, label, title] of [['line', 'Colour', 'Colour the lines and text'], ['highlight', 'Highlight', 'A band of colour behind atoms and bonds'], ['fill', 'Fill', 'Fill shapes and ring fills']] as const) {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.textContent = label;
-        b.title = title;
-        b.setAttribute('aria-pressed', String(colourMode === m));
-        b.addEventListener('click', () => { colourMode = m; for (const o of modes.children) o.setAttribute('aria-pressed', String(o === b)); looks.hidden = m !== 'highlight'; });
-        modes.append(b);
-      }
-      const grid = document.createElement('div');
-      grid.className = 'tb-swatches';
-      const swatch = (c: string | undefined) => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'tb-swatch';
-        if (c) b.style.background = c; else { b.textContent = '∅'; b.style.fontSize = '11px'; }
-        b.title = c ? c.toUpperCase() : 'None: take the colour, highlight or fill off';
-        b.setAttribute('aria-label', b.title);
-        b.addEventListener('click', () => {
-          if (!editor.colourSelection(c, colourMode)) flash('Select what to colour first.');
-          else if (colourMode === 'highlight' && c) highlightColour = c;
-        });
-        return b;
-      };
-      grid.append(swatch(undefined));
-      for (const c of [...STANDARD_COLOURS, '#ffffff']) grid.append(swatch(c));
-      for (const p of getPalettes()) {
-        if (!p.colors.length) continue;
-        const n = document.createElement('div');
-        n.className = 'tb-swatch-name';
-        n.textContent = p.name;
-        grid.append(n, ...p.colors.map((c) => swatch(c)));
-      }
-      body.append(modes, grid, looks);
-      if (vertical) body.style.maxWidth = '110px';
-    },
-  },
-  {
-    id: 'highlight', title: 'Highlight',
-    build: (body, vertical) => {
-      cmdRow(body, ['highlight', 'remove-highlight', null, ['smooth-highlight', 'Smooth'], ['centre-highlight', 'Centre'], ['soft-highlight', 'Soft'], ['outline-highlight', 'Outline only'], ['shadow-highlight', 'Shadow'], ['glow-highlight', 'Glow'], null, ['save-highlight-look', 'Save look…']]);
-      body.append(looksList(vertical));
-    },
-  },
-  {
-    id: 'custom', title: 'My Toolbox',
-    build: (body) => {
-      for (const k of toolboxState.custom) {
-        const [kind, name] = [k.slice(0, k.indexOf(':')), k.slice(k.indexOf(':') + 1)];
-        const b = kind === 'tool' ? toolButton(name) : commandButton(name, runFromToolbox);
-        if (b) body.append(b);
-      }
-      const edit = commandButton('customize-toolbox', runFromToolbox, toolboxState.custom.length ? '…' : 'Choose what goes here…');
-      edit.title = 'Choose What Is in My Toolbox';
-      body.append(edit);
-    },
-  },
-];
+/** The toolboxes' names, as they come. */
+const BOX_TITLES: Record<string, string> = {
+  main: 'Drawing Tools', structure: 'Structure', arrange: 'Object', templates: 'Templates', colours: 'Colours', highlight: 'Highlight', custom: 'My Toolbox', details: 'Side Panel',
+};
+/** What the toolboxes of buttons come with ("cmd:", "tool:", "pal:", "w:looks", "sep"). */
+const cmds = (list: (string | null)[]) => list.map((c) => (c ? `cmd:${c}` : 'sep'));
+const BOX_ITEMS: Record<string, readonly string[]> = {
+  main: MAIN_ITEMS,
+  structure: cmds(['clean-up', 'add-frame', 'fill-rings', 'highlight', 'remove-highlight', null, 'chain-ends', 'explicit-h', 'aromatic-circles', 'stereo-labels', null, 'add-id-label', 'add-caption', 'attach-descriptors', 'number-compounds', null, 'contract-label', 'expand-label', 'hapto-bond', 'name-to-structure']),
+  arrange: cmds(['align-left', 'align-hcenter', 'align-right', 'align-top', 'align-vcenter', 'align-bottom', null, 'distribute-h', 'distribute-v', null, 'flip-h', 'flip-v', 'rotate-cw', 'rotate-ccw', null, 'shape-front', 'shape-back']),
+  highlight: [...cmds(['highlight', 'remove-highlight', null, 'smooth-highlight', 'centre-highlight', 'soft-highlight', 'outline-highlight', 'shadow-highlight', 'glow-highlight', null, 'save-highlight-look']), 'w:looks'],
+  custom: defaultToolboxes().custom,
+};
+/** Short names on toolbox buttons for commands with no icon. */
+const SHORT_LABEL: Record<string, string> = {
+  'smooth-highlight': 'Smooth', 'centre-highlight': 'Centre', 'soft-highlight': 'Soft', 'outline-highlight': 'Outline only',
+  'shadow-highlight': 'Shadow', 'glow-highlight': 'Glow', 'save-highlight-look': 'Save look…',
+};
 
-// The side panel (Style, Warnings, Analysis; Format in documents, Cell in sheets) is a toolbox,
-// docked at the right to start with. Its arrow goes with it, so it shows even when the title bar is
-// locked away.
-TOOLBOX_DEFS.push({ id: 'details', title: 'Side Panel', build: (body) => { body.before($('#side-fold')); body.append(sideContent); } });
+/** A fly-out palette with the tools Customize Toolboxes gave it (null when it has none). */
+function paletteNow(name: string): PaletteDef | null {
+  const base = PALETTES.get(name);
+  if (!base) return null;
+  const own = toolboxState.flyouts?.[name];
+  // (My templates holds what you save, so its tools aren't chosen)
+  if (!own || name === 'tpl-own') return base.items.length ? base : null;
+  const items = own.map((n) => base.items.find((i) => i.name === n) ?? (ALL_TOOLS.has(n) ? { name: n, title: ALL_TOOLS.get(n)!.title } : null)).filter((x): x is { name: string; title: string } => !!x);
+  return items.length ? { ...base, items } : null;
+}
 
-const toolboxes = new Toolboxes(TOOLBOX_DEFS, {
+/** A toolbox's buttons, as Customize Toolboxes has them: tools, palettes, commands, dividers and the highlight looks. */
+function buildBox(body: HTMLElement, id: string, vertical: boolean): void {
+  const items = boxItems(toolboxState, id, BOX_ITEMS[id]);
+  if (id === 'main') {
+    // the tool bar, in groups between the dividers
+    const groups: (ToolbarItem | HTMLElement)[][] = [[]];
+    for (const k of items) {
+      if (k === 'sep') { groups.push([]); continue; }
+      const name = k.slice(k.indexOf(':') + 1);
+      const g = groups[groups.length - 1];
+      if (k.startsWith('tool:')) { const t = ALL_TOOLS.get(name); if (t) g.push({ name, title: t.title }); }
+      else if (k.startsWith('pal:')) { const p = paletteNow(name); if (p) g.push(p); }
+      else if (k.startsWith('cmd:')) g.push(commandButton(name, runFromToolbox, SHORT_LABEL[name]));
+      else if (k === 'w:looks') g.push(looksList(true));
+    }
+    toolbar.fill(groups);
+    body.append(toolsNav);
+    return;
+  }
+  for (const k of items) {
+    const name = k.slice(k.indexOf(':') + 1);
+    let b: HTMLElement | null = null;
+    if (k === 'sep') b = sep();
+    else if (k.startsWith('tool:')) b = toolButton(name);
+    else if (k.startsWith('pal:')) { const p = paletteNow(name); b = p && toolbar.paletteButton(p); }
+    else if (k.startsWith('cmd:')) b = commandButton(name, runFromToolbox, SHORT_LABEL[name]);
+    else if (k === 'w:looks') b = looksList(vertical);
+    if (b) body.append(b);
+  }
+  if (!items.length) {
+    const edit = commandButton('customize-toolbox', () => openCustomToolbox(id), 'Choose what goes here…');
+    edit.title = 'Customize Toolboxes: drag tools and commands into this one';
+    body.append(edit);
+  }
+}
+
+/** The toolboxes laid out by the app itself (the rest show buttons chosen in Customize Toolboxes). */
+const SPECIAL_BOXES: Record<string, (body: HTMLElement, vertical: boolean) => void> = {
+  templates: (body, vertical) => {
+    // (many templates: the box scrolls rather than run off the window)
+    body.classList.add('tb-grid', 'tb-scroll');
+    body.style.setProperty('--cols', vertical ? '2' : '12');
+    for (const group of TOOL_GROUPS) for (const item of group) {
+      if (!('palette' in item) || !item.palette.startsWith('tpl-') || item.palette === 'tpl-own') continue;
+      // a heading over each palette's buttons, so the families are easy to find
+      const head = document.createElement('div');
+      head.className = 'tb-heading';
+      head.textContent = head.title = item.title;
+      body.append(head);
+      for (const t of item.items) { const b = toolButton(t.name); if (b) body.append(b); }
+    }
+  },
+  colours: (body, vertical) => {
+    const modes = document.createElement('div');
+    modes.className = 'tb-modes';
+    // in Highlight mode, the saved looks too
+    const looks = looksList(vertical);
+    looks.hidden = colourMode !== 'highlight';
+    for (const [m, label, title] of [['line', 'Colour', 'Colour the lines and text'], ['highlight', 'Highlight', 'A band of colour behind atoms and bonds'], ['fill', 'Fill', 'Fill shapes and ring fills']] as const) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.title = title;
+      b.setAttribute('aria-pressed', String(colourMode === m));
+      b.addEventListener('click', () => { colourMode = m; for (const o of modes.children) o.setAttribute('aria-pressed', String(o === b)); looks.hidden = m !== 'highlight'; });
+      modes.append(b);
+    }
+    const grid = document.createElement('div');
+    grid.className = 'tb-swatches';
+    const swatch = (c: string | undefined) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tb-swatch';
+      if (c) b.style.background = c; else { b.textContent = '∅'; b.style.fontSize = '11px'; }
+      b.title = c ? c.toUpperCase() : 'None: take the colour, highlight or fill off';
+      b.setAttribute('aria-label', b.title);
+      b.addEventListener('click', () => {
+        if (!editor.colourSelection(c, colourMode)) flash('Select what to colour first.');
+        else if (colourMode === 'highlight' && c) highlightColour = c;
+      });
+      return b;
+    };
+    grid.append(swatch(undefined));
+    for (const c of [...STANDARD_COLOURS, '#ffffff']) grid.append(swatch(c));
+    for (const p of getPalettes()) {
+      if (!p.colors.length) continue;
+      const n = document.createElement('div');
+      n.className = 'tb-swatch-name';
+      n.textContent = p.name;
+      grid.append(n, ...p.colors.map((c) => swatch(c)));
+    }
+    body.append(modes, grid, looks);
+    if (vertical) body.style.maxWidth = '110px';
+  },
+  // The side panel (Style, Warnings, Analysis; Format in documents, Cell in sheets) is a toolbox,
+  // docked at the right to start with. Its arrow goes with it, so it shows even when the title bar is
+  // locked away.
+  details: (body) => { body.before($('#side-fold')); body.append(sideContent); },
+};
+
+/** The toolboxes there are now (the drawing tools first, as the others' buttons may come from its bar). */
+function toolboxDefs(): ToolboxDef[] {
+  const ids = boxIds(toolboxState);
+  return ['main', ...ids.filter((id) => id !== 'main')].map((id) => ({
+    id,
+    title: boxTitle(toolboxState, id, BOX_TITLES[id]),
+    build: (body: HTMLElement, vertical: boolean) => (SPECIAL_BOXES[id] && !isEditable(id) ? SPECIAL_BOXES[id](body, vertical) : buildBox(body, id, vertical)),
+  }));
+}
+
+const toolboxes = new Toolboxes(toolboxDefs, {
   get: () => toolboxState,
   set: (st) => { toolboxState = st; tickToolboxes(); storeSettings(); placeSidePanel(); },
   work: () => $('#work'),
-  customize: () => openCustomToolbox(),
+  customize: (id) => openCustomToolbox(id),
   // each mode keeps the side panel folded or open on its own
   folded: (id) => (id === 'details' ? sideIsFolded() : undefined),
   fold: (id) => { if (id !== 'details') return false; command('fold-side'); return true; },
@@ -6655,7 +7502,7 @@ addEventListener('resize', () => fitTools());
 
 /** Tick the shown toolboxes and the lock in the View menu, and show the lock on its button. */
 function tickToolboxes(): void {
-  for (const id of ['main', 'structure', 'arrange', 'templates', 'colours', 'highlight', 'custom'] as ToolboxId[]) $(`[data-cmd="toolbox-${id}"]`)?.setAttribute('aria-checked', String(!!toolboxState.places[id]?.shown));
+  fillToolboxMenu();
   $('[data-cmd="lock-toolboxes"]')?.setAttribute('aria-checked', String(toolboxState.locked));
   $('[data-cmd="fold-side"]')?.setAttribute('aria-checked', String(sideIsFolded()));
   const lock = $('#btn-lock');
@@ -6711,15 +7558,115 @@ addEventListener('resize', () => {
 });
 $('#btn-lock').addEventListener('click', () => command('lock-toolboxes'));
 
-function openCustomToolbox(): void {
-  const tools: Pickable[] = [...ALL_TOOLS].map(([name, t]) => ({ key: `tool:${name}`, label: t.title.split(/[.:] /)[0], icon: t.icon }));
-  const groups = [{ name: 'Drawing tools', items: tools }, ...menuCommands().filter((g) => g.items.length).map((g) => ({ name: `${g.menu} menu`, items: g.items.map((c) => ({ key: `cmd:${c.cmd}`, label: c.label })) }))];
-  customizeToolbox(groups, () => toolboxState.custom, (items) => {
-    toolboxState = { ...toolboxState, custom: items, places: { ...toolboxState.places, custom: { ...toolboxState.places.custom, shown: true } } };
-    tickToolboxes();
-    storeSettings();
-    toolboxes.render();
+/** Where View > Toolboxes' entries start (the line above them). */
+let toolboxMenuTop: Element | null = null;
+
+/** View > Toolboxes: a ticked entry for each toolbox there is now, named and in the order Customize Toolboxes has them. */
+function fillToolboxMenu(): void {
+  const first = document.querySelector<HTMLElement>('header .menu [data-cmd^="toolbox-"]');
+  if (!first) return;
+  toolboxMenuTop ??= first.previousElementSibling;
+  const menu = first.parentElement!;
+  const have = new Map([...menu.querySelectorAll<HTMLElement>(':scope > [data-cmd^="toolbox-"]')].map((b) => [b.dataset.cmd!.slice('toolbox-'.length), b]));
+  let at = toolboxMenuTop;
+  for (const id of boxIds(toolboxState)) {
+    if (id === 'details') continue;
+    let b = have.get(id);
+    if (!b) {
+      b = document.createElement('button');
+      b.setAttribute('role', 'menuitemcheckbox');
+      b.dataset.cmd = `toolbox-${id}`;
+      b.title = 'A toolbox of your own (View > Toolboxes > Customize Toolboxes changes it)';
+      b.append(document.createElement('span'));
+    }
+    have.delete(id);
+    b.hidden = false;
+    b.querySelector('span')!.textContent = `Toolbox: ${boxTitle(toolboxState, id, BOX_TITLES[id])}`;
+    b.setAttribute('aria-checked', String(!!toolboxState.places[id]?.shown));
+    if (at) at.after(b); else menu.prepend(b);
+    at = b;
+  }
+  // deleted ones: your own go, the app's wait for Restore
+  for (const [id, b] of have) { if (isOwnBox(id)) b.remove(); else b.hidden = true; }
+}
+
+/** A tool's or command's name and icon in Customize Toolboxes. */
+function describeItem(key: string): Pickable {
+  const name = key.slice(key.indexOf(':') + 1);
+  if (key === 'sep') return { key, label: 'Divider', icon: undefined };
+  if (key === 'w:looks') return { key, label: 'Highlight looks', icon: LOOKS_ICON };
+  if (key.startsWith('tool:')) { const t = ALL_TOOLS.get(name); return { key, label: t ? t.title.split(/[.:] /)[0] : name, icon: t?.icon }; }
+  if (key.startsWith('pal:')) { const p = PALETTES.get(name); return { key, label: p?.title ?? name, icon: p?.items[0] && (ALL_TOOLS.get(p.items[0].name)?.icon) }; }
+  return { key, label: topMenuEntry(name)?.label ?? SHORT_LABEL[name] ?? name, icon: commandIcon(name) };
+}
+const LOOKS_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="7" r="2.2" fill="currentColor" fill-opacity="0.35"/><circle cx="6" cy="12" r="2.2"/><circle cx="6" cy="17" r="2.2" fill="currentColor" fill-opacity="0.6"/><line x1="11" y1="7" x2="20" y2="7"/><line x1="11" y1="12" x2="20" y2="12"/><line x1="11" y1="17" x2="18" y2="17"/></svg>';
+
+/** Everything that can go in a toolbox, for Customize Toolboxes' list. */
+function toolboxCatalogue(): { name: string; items: Pickable[] }[] {
+  const d = (key: string) => describeItem(key);
+  const loose = [...TOOL_GROUPS.flat(), ...OFF_BAR].filter((it): it is ToolDef => !('palette' in it)).map((t) => d(`tool:${t.name}`));
+  const groups: { name: string; items: Pickable[] }[] = [
+    { name: 'Drawing tools', items: loose },
+    { name: 'Fly-out palettes', items: [...PALETTES.keys()].map((p) => d(`pal:${p}`)) },
+    { name: 'Dividers and lists', items: [d('sep'), d('w:looks')] },
+  ];
+  for (const p of PALETTES.values()) if (p.palette !== 'tpl-own' || p.items.length > 1) groups.push({ name: p.title, items: p.items.filter((t) => ALL_TOOLS.has(t.name)).map((t) => d(`tool:${t.name}`)) });
+  for (const g of menuCommands()) if (g.items.length) groups.push({ name: `${g.menu} menu`, items: g.items.filter((c) => !c.cmd.startsWith('toolbox-')).map((c) => ({ key: `cmd:${c.cmd}`, label: c.label, icon: commandIcon(c.cmd) })) });
+  return groups;
+}
+
+const toolboxEditor = new ToolboxEditor({
+  get: () => toolboxState,
+  set: (st) => { toolboxState = st; tickToolboxes(); storeSettings(); toolboxes.render(); placeSidePanel(); },
+  catalogue: toolboxCatalogue,
+  describe: describeItem,
+  title: (id) => BOX_TITLES[id] ?? 'My Toolbox',
+  given: (id) => BOX_ITEMS[id] ?? [],
+  palette: (name) => { const p = PALETTES.get(name); return p && name !== 'tpl-own' ? { title: p.title, given: p.items.map((t) => t.name) } : null; },
+  flyout: (name) => toolboxState.flyouts?.[name] ?? PALETTES.get(name)?.items.filter((t) => ALL_TOOLS.has(t.name)).map((t) => t.name) ?? [],
+  newPlace: () => { const w = $('#work').getBoundingClientRect(); return { x: Math.round(Math.max(w.left + 8, w.right - 300)), y: Math.round(w.top + 40) }; },
+});
+
+// ---------------------------------------------------------------- View > Customize the Ribbon
+
+/** Each ribbon's tabs and groups as you put them (kept in the settings). */
+let ribbonPrefs: RibbonsPrefs = {};
+/** The ribbons as they came (read the first time they are laid out). */
+let ribbonInfo: RibbonInfo[] | null = null;
+const ribbonsNow = () => (ribbonInfo ??= readRibbons());
+/** The ribbon each mode shows (drawings have none: the Slides one is offered). */
+const RIBBON_OF_MODE: Record<string, string> = { slides: 'slides', document: 'doc', sheet: 'sheet', design: 'design', drawing: 'slides' };
+
+/** Lay every ribbon out with your changes. */
+function applyRibbons(): void {
+  // (nothing changed and nothing laid out yet: the ribbons are as they come)
+  if (!ribbonInfo && !Object.keys(ribbonPrefs).length) return;
+  for (const info of ribbonsNow()) applyRibbon(info, ribbonPrefs[info.id], { run: (cmd) => { finishTyping(); command(cmd); } });
+  fitRibbons();
+}
+
+const ribbonEditor = new RibbonEditor({
+  ribbons: ribbonsNow,
+  get: () => ribbonPrefs,
+  set: (p) => { ribbonPrefs = p; applyRibbons(); storeSettings(); },
+  menus: () => menuCommands().filter((g) => g.items.length).map((g) => ({ name: `${g.menu} menu`, items: g.items.filter((c) => !c.cmd.startsWith('toolbox-')).map((c) => ({ key: `cmd:${c.cmd}`, label: c.label, icon: commandIcon(c.cmd) })) })),
+  jiggle: () => toolboxState.jiggle !== false,
+});
+// right-click a ribbon's tabs (or a group's name) to customize it
+for (const [mode, id] of [['slides', '#ribbon'], ['document', '#doc-ribbon'], ['sheet', '#sheet-ribbon'], ['design', '#design-ribbon']] as const) {
+  $(id).addEventListener('contextmenu', (e) => {
+    if (!(e.target as Element).closest('.rb-tabs, .rb-label')) return;
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY, [
+      { cmd: 'customize-ribbon', label: 'Customize the Ribbon…' },
+      { cmd: 'collapse-ribbon', label: ribbonCollapsed() ? 'Show the Whole Ribbon' : 'Collapse the Ribbon' },
+    ], { key: (c) => commandKey(c), run: (c) => (c === 'customize-ribbon' ? ribbonEditor.open(RIBBON_OF_MODE[mode]) : command(c)) });
   });
+}
+
+/** View > Toolboxes > Customize Toolboxes, at a toolbox (My Toolbox unless one is named). */
+function openCustomToolbox(id?: string): void {
+  toolboxEditor.open(id);
 }
 
 toolboxes.render();
@@ -6808,7 +7755,7 @@ function commandItems(): CommandItem[] {
 }
 const commandSearch = new CommandSearch(commandItems);
 const guide = new GuideWindow(openWebPage);
-watchRibbons();
+watchRibbons(() => storeSettings());
 const settingsWindow = new SettingsWindow([
   { id: 'general', title: 'General', words: 'groups selecting click outline linked text above below ask whole page tracked changes reviewer name', open: generalPreferences },
   { id: 'drawing', title: 'Drawing', words: 'methyl me ch3 axial chirality ra sa helicity charges circled text tool atom r groups superscript mechanism arrows reroute', open: drawingPreferences },
@@ -6820,7 +7767,8 @@ const settingsWindow = new SettingsWindow([
   { id: 'dark', title: 'Dark Page', words: 'dark mode night paper ink graphite slate appearance colours', open: darkColours },
   { id: 'schemes', title: 'Schemes', words: 'scheme arrow gap plus text size reagents conditions boxes', open: schemeSettings },
   { id: 'autosave', title: 'AutoSave and Recovery', words: 'autosave recovery versions backup copies shared folders onedrive', open: () => keeper.optionsCommand() },
-  { id: 'online', title: 'Online', words: 'pubchem internet names lookup updates check version privacy', open: onlinePreferences },
+  { id: 'online', title: 'Online', words: 'pubchem internet names lookup updates check version privacy stable latest channel beta', open: onlinePreferences },
+  { id: 'transfer', title: 'Import and Export', words: 'backup back up copy move settings file new computer install reinstall export import toolboxes hotkeys', open: settingsTransfer },
   { id: 'files', title: 'File Types', words: 'open with default app explorer finder associations cdxml cdx mol sdf docx pptx xlsx double-click', open: () => fileTypesPage(fileTypesHost) },
 ]);
 $('#btn-search').addEventListener('click', () => commandSearch.open());
@@ -6847,6 +7795,7 @@ stylePanel.tables = {
 };
 
 let stereoSeen = -1;
+let outlineSeen = -1;
 // scroll bars over the drawing: they cover what is drawn (or the slide), and the part on screen
 const scrollbars = new Scrollbars(host, renderer, () => {
   const d = ws.active.deck;
@@ -6979,6 +7928,9 @@ zoomPick.addEventListener('change', () => {
 
 editor.onFrame = () => {
   showZoom();
+  rulers.update();
+  // what is typed on the slide shows in the outline
+  if (outlineView.shown && doc.version !== outlineSeen) { outlineSeen = doc.version; outlineView.rebuild(); }
   layers?.refresh();
   scrollbars.update(doc.version);
   updatePanels();
@@ -7035,7 +7987,15 @@ for (const id of ['#ribbon', '#design-ribbon']) {
     const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-cmd]')?.dataset.cmd;
     if (cmd) command(cmd);
   });
+  // (ticks in the ribbon too)
+  $(id).addEventListener('change', (e) => {
+    const cmd = (e.target as HTMLElement).closest<HTMLInputElement>('input[type="checkbox"][data-cmd]')?.dataset.cmd;
+    if (cmd) command(cmd);
+  });
 }
+// the Beta mark beside the program's name says what beta means here
+$('#stage-badge').addEventListener('click', () => command('about'));
+
 renderTabs();
 updateTitle();
 

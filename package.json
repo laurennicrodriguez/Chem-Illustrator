@@ -53,7 +53,9 @@
     "@tauri-apps/plugin-process": "~2.4.0",
     "@tauri-apps/plugin-updater": "~2.13.3",
     "fflate": "^0.8.2",
+    "hyphen": "^1.14.1",
     "marked": "^18.1.1",
+    "pdfjs-dist": "^5.7.284",
     "polygon-clipping": "^0.15.7"
   },
   "private": true,

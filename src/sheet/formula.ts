@@ -38,7 +38,7 @@ export type Token =
 
 export class FormulaSyntaxError extends Error {}
 
-const ERRORS = ['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#SPILL!', '#CALC!', '#CIRC!', '#BUSY!'];
+const ERRORS = ['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#SPILL!', '#CALC!', '#CIRC!', '#BUSY!', '#FIELD!'];
 
 /** Split a formula (without its leading =) into tokens. Throws FormulaSyntaxError on text it can't read. */
 export function tokenize(src: string): Token[] {

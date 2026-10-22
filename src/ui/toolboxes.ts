@@ -27,7 +27,39 @@ export interface ToolboxState {
   sideCollapsed: boolean;
   /** Folded or open in each mode (drawing, slides, sheet, document, design), as last left there. */
   sideByMode?: Record<string, boolean>;
+  /** What is in each toolbox of buttons, where changed from how it comes (My Toolbox's is `custom`). See ITEM. */
+  items?: Record<string, string[]>;
+  /** Toolboxes of your own, made in Customize Toolboxes. */
+  own?: OwnBox[];
+  /** New names for the toolboxes that come with the app. */
+  titles?: Record<string, string>;
+  /** Toolboxes that come with the app and were deleted (Restore brings them back). */
+  removed?: string[];
+  /** The order the toolboxes are listed in (the View menu, and the docks), where changed. */
+  order?: string[];
+  /** The tools in each fly-out palette, where changed: palette name → tool names. */
+  flyouts?: Record<string, string[]>;
+  /** The icons jiggle while a toolbox is customized (never when the system asks for less motion). */
+  jiggle?: boolean;
 }
+
+/** A toolbox of your own. */
+export interface OwnBox { id: string; title: string }
+
+/**
+ * What can go in a toolbox: "tool:name" (a drawing tool), "cmd:name" (a menu command),
+ * "pal:name" (a fly-out palette of tools), "w:looks" (the highlight looks), or "sep" (a divider).
+ */
+export const ITEM = /^(?:(?:tool|cmd|pal|w):[^\s"'<>`]{1,80}|sep)$/;
+/** The name of a toolbox of your own. */
+const OWN_ID = /^own-[a-z0-9]{1,16}$/;
+/** The toolboxes whose buttons can be chosen (the rest are laid out by the app: templates, colours, the side panel). */
+export const EDITABLE: readonly string[] = ['main', 'structure', 'arrange', 'highlight', 'custom'];
+/** Toolboxes that can't be deleted (they can still be hidden, except the side panel). */
+export const KEEP: readonly string[] = ['main', 'details'];
+
+export const isOwnBox = (id: string): boolean => OWN_ID.test(id);
+export const isEditable = (id: string): boolean => EDITABLE.includes(id) || isOwnBox(id);
 
 /** Whether a toolbox is locked where it is. */
 export function boxLocked(st: ToolboxState, id: string): boolean {
@@ -104,8 +136,168 @@ export function parseToolboxes(raw: unknown): ToolboxState {
   }
   // the side panel can't be hidden (older settings could put it away)
   s.places.details = { ...s.places.details, shown: true };
-  if (Array.isArray(r.custom)) s.custom = r.custom.filter((x): x is string => typeof x === 'string' && /^(tool|cmd):[\w:-]+$/.test(x)).slice(0, 80);
+  const list = (v: unknown, max = 200): string[] | null => (Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string' && ITEM.test(x)))].slice(0, max) : null);
+  // (a divider may come more than once)
+  const items = (v: unknown): string[] | null => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && ITEM.test(x)).filter((x, i, a) => x === 'sep' || a.indexOf(x) === i).slice(0, 200) : null);
+  const custom = items(r.custom);
+  if (custom) s.custom = custom.filter((x) => !x.startsWith('w:') || x === 'w:looks');
+  if (Array.isArray(r.own)) {
+    const seen = new Set<string>();
+    s.own = [];
+    for (const b of r.own as unknown[]) {
+      if (!b || typeof b !== 'object') continue;
+      const { id, title } = b as Record<string, unknown>;
+      if (typeof id !== 'string' || !OWN_ID.test(id) || seen.has(id)) continue;
+      seen.add(id);
+      s.own.push({ id, title: typeof title === 'string' && title.trim() ? title.trim().slice(0, 60) : 'My Toolbox' });
+    }
+    if (!s.own.length) delete s.own;
+  }
+  const known = (id: string) => (TOOLBOX_IDS as readonly string[]).includes(id) || !!s.own?.some((b) => b.id === id);
+  if (r.items && typeof r.items === 'object') {
+    const by: Record<string, string[]> = {};
+    for (const [id, v] of Object.entries(r.items as Record<string, unknown>)) { const l = items(v); if (l && id !== 'custom' && known(id) && isEditable(id)) by[id] = l; }
+    if (Object.keys(by).length) s.items = by;
+  }
+  if (r.titles && typeof r.titles === 'object') {
+    const by: Record<string, string> = {};
+    for (const [id, v] of Object.entries(r.titles as Record<string, unknown>)) if ((TOOLBOX_IDS as readonly string[]).includes(id) && typeof v === 'string' && v.trim()) by[id] = v.trim().slice(0, 60);
+    if (Object.keys(by).length) s.titles = by;
+  }
+  const removed = list(r.removed)?.filter((id) => (TOOLBOX_IDS as readonly string[]).includes(id) && !KEEP.includes(id));
+  if (removed?.length) s.removed = removed;
+  const order = Array.isArray(r.order) ? [...new Set((r.order as unknown[]).filter((x): x is string => typeof x === 'string' && known(x)))] : [];
+  if (order.length) s.order = order;
+  if (r.flyouts && typeof r.flyouts === 'object') {
+    const by: Record<string, string[]> = {};
+    for (const [id, v] of Object.entries(r.flyouts as Record<string, unknown>)) {
+      const l = Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string' && /^[^\s"'<>`]{1,80}$/.test(x)))].slice(0, 400) : null;
+      if (l && /^[\w-]{1,40}$/.test(id)) by[id] = l;
+    }
+    if (Object.keys(by).length) s.flyouts = by;
+  }
+  if (r.jiggle === false) s.jiggle = false;
+  // a toolbox of your own goes where the settings say, or floats
+  for (const b of s.own ?? []) {
+    const p = (r.places as Record<string, Record<string, unknown>> | undefined)?.[b.id];
+    const num = (x: unknown, d: number) => (typeof x === 'number' && isFinite(x) ? x : d);
+    s.places[b.id] = {
+      shown: typeof p?.shown === 'boolean' ? p.shown : true,
+      dock: DOCKS.includes(p?.dock as Dock) ? (p!.dock as Dock) : 'float',
+      x: num(p?.x, 160), y: num(p?.y, 120),
+      ...(p?.collapsed === true ? { collapsed: true } : {}),
+      ...(typeof p?.locked === 'boolean' ? { locked: p.locked } : {}),
+    };
+  }
+  for (const id of s.removed ?? []) s.places[id] = { ...s.places[id], shown: false };
   return s;
+}
+
+// ---------------------------------------------------------------- changing the toolboxes (Customize Toolboxes)
+
+/** The buttons in a toolbox, in order: as changed, or as it comes (`given`). */
+export function boxItems(st: ToolboxState, id: string, given: readonly string[] = []): string[] {
+  if (id === 'custom') return st.custom;
+  return st.items?.[id] ?? (isOwnBox(id) ? [] : [...given]);
+}
+
+/** A toolbox's buttons changed. */
+export function withItems(st: ToolboxState, id: string, items: string[]): ToolboxState {
+  if (id === 'custom') return { ...st, custom: items };
+  return { ...st, items: { ...st.items, [id]: items } };
+}
+
+/** A toolbox's buttons back as they come. */
+export function withItemsReset(st: ToolboxState, id: string, given: readonly string[] = []): ToolboxState {
+  if (id === 'custom') return { ...st, custom: [...given] };
+  const items = { ...st.items };
+  delete items[id];
+  return { ...st, items };
+}
+
+/** A fly-out palette's tools changed, or back as they come (null). */
+export function withFlyout(st: ToolboxState, palette: string, tools: string[] | null): ToolboxState {
+  const flyouts = { ...st.flyouts };
+  if (tools) flyouts[palette] = tools; else delete flyouts[palette];
+  return { ...st, flyouts };
+}
+
+/** Every toolbox there is now (the app's, less deleted ones, then your own), in the order they are listed. */
+export function boxIds(st: ToolboxState): string[] {
+  const ids = [...TOOLBOX_IDS.filter((id) => !st.removed?.includes(id)), ...(st.own ?? []).map((b) => b.id)];
+  const at = (id: string) => { const i = st.order?.indexOf(id) ?? -1; return i < 0 ? 1000 + ids.indexOf(id) : i; };
+  return ids.sort((a, b) => at(a) - at(b));
+}
+
+/** A toolbox's name: your own, or as the app names it (`given`). */
+export function boxTitle(st: ToolboxState, id: string, given = ''): string {
+  return st.own?.find((b) => b.id === id)?.title ?? st.titles?.[id] ?? given;
+}
+
+/** A new toolbox of your own, empty, shown floating. */
+export function withNewBox(st: ToolboxState, title: string, at = { x: 160, y: 120 }, id = `own-${Date.now().toString(36)}`): { state: ToolboxState; id: string } {
+  while (st.own?.some((b) => b.id === id)) id += 'a';
+  const state: ToolboxState = {
+    ...st,
+    own: [...(st.own ?? []), { id, title: title.trim().slice(0, 60) || 'My Toolbox' }],
+    items: { ...st.items, [id]: [] },
+    places: { ...st.places, [id]: { shown: true, dock: 'float', x: at.x, y: at.y, locked: false } },
+    ...(st.order ? { order: [...st.order, id] } : {}),
+  };
+  return { state, id };
+}
+
+/** A toolbox renamed (one of the app's keeps the new name in `titles`). */
+export function withTitle(st: ToolboxState, id: string, title: string): ToolboxState {
+  const t = title.trim().slice(0, 60);
+  if (!t) return st;
+  if (isOwnBox(id)) return { ...st, own: st.own?.map((b) => (b.id === id ? { ...b, title: t } : b)) };
+  return { ...st, titles: { ...st.titles, [id]: t } };
+}
+
+/** A toolbox deleted: one of your own goes for good, one of the app's until Restore. */
+export function withoutBox(st: ToolboxState, id: string): ToolboxState {
+  if (KEEP.includes(id)) return st;
+  const order = st.order?.filter((x) => x !== id);
+  if (isOwnBox(id)) {
+    const places = { ...st.places };
+    delete places[id];
+    const items = { ...st.items };
+    delete items[id];
+    return { ...st, own: st.own?.filter((b) => b.id !== id), places, items, ...(order ? { order } : {}) };
+  }
+  return { ...st, removed: [...new Set([...(st.removed ?? []), id])], places: { ...st.places, [id]: { ...st.places[id], shown: false } } };
+}
+
+/** The app's deleted toolboxes back (hidden, to show from View > Toolboxes), and their names as they come. */
+export function withBoxesRestored(st: ToolboxState): ToolboxState {
+  return { ...st, removed: undefined, titles: undefined };
+}
+
+/** A toolbox moved up (-1) or down (+1) the list. */
+export function withBoxMoved(st: ToolboxState, id: string, by: number): ToolboxState {
+  const ids = boxIds(st);
+  const i = ids.indexOf(id), j = Math.max(0, Math.min(ids.length - 1, i + by));
+  if (i < 0 || i === j) return st;
+  ids.splice(j, 0, ...ids.splice(i, 1));
+  return { ...st, order: ids };
+}
+
+/** A list with one entry moved from `from` to before what is now at `to` (after taking it out). */
+export function moved<T>(list: readonly T[], from: number, to: number): T[] {
+  const n = list.slice();
+  const [x] = n.splice(from, 1);
+  n.splice(Math.max(0, Math.min(n.length, to)), 0, x);
+  return n;
+}
+
+/** A button put in a list at `at`: one already there moves (a divider can be there more than once). */
+export function inserted(list: readonly string[], key: string, at: number): string[] {
+  const i = key === 'sep' ? -1 : list.indexOf(key);
+  if (i >= 0) return moved(list, i, i < at ? at - 1 : at);
+  const n = list.slice();
+  n.splice(Math.max(0, Math.min(n.length, at)), 0, key);
+  return n;
 }
 
 /** Where a toolbox dropped at (x, y) goes: a dock when near an edge of the drawing, else floating there. */
@@ -119,7 +311,8 @@ export function dropTarget(x: number, y: number, work: { left: number; top: numb
 
 /** What a toolbox shows, as the app knows it. */
 export interface ToolboxDef {
-  id: ToolboxId;
+  /** One of TOOLBOX_IDS, or a toolbox of your own ("own-…"). */
+  id: string;
   title: string;
   /** Fill the toolbox's body; `vertical` when it is docked at the left or right. */
   build(body: HTMLElement, vertical: boolean): void;
@@ -130,8 +323,8 @@ export interface ToolboxHooks {
   set(s: ToolboxState): void;
   /** The drawing area, whose edges are the docks' drop zones. */
   work(): HTMLElement;
-  /** Open the window for choosing what is in your own toolbox. */
-  customize(): void;
+  /** Open Customize Toolboxes, at a toolbox. */
+  customize(id?: string): void;
   /** Whether a toolbox is folded, when the app keeps that itself (the side panel, per mode). */
   folded?(id: string): boolean | undefined;
   /** Fold or open a toolbox the app folds itself; true when it did. */
@@ -165,7 +358,8 @@ export class Toolboxes {
   private toldLocked = false;
   private docks: Record<Exclude<Dock, 'float'>, HTMLElement>;
 
-  constructor(private defs: ToolboxDef[], private hooks: ToolboxHooks) {
+  /** `defs` gives the toolboxes there are now (your own come and go), with their names as they are now. */
+  constructor(private defs: () => ToolboxDef[], private hooks: ToolboxHooks) {
     this.docks = {
       left: document.getElementById('dock-left')!, right: document.getElementById('dock-right')!,
       top: document.getElementById('dock-top')!, bottom: document.getElementById('dock-bottom')!,
@@ -176,11 +370,17 @@ export class Toolboxes {
   /** Show every toolbox where the settings say (building them again, so their contents are up to date). */
   render(): void {
     const st = this.hooks.get();
-    for (const def of this.defs) {
+    const defs = this.defs();
+    // toolboxes deleted go
+    for (const [id, f] of this.frames) if (!defs.some((d) => d.id === id)) { f.remove(); this.frames.delete(id); }
+    for (const def of defs) {
       const place = st.places[def.id];
       let f = this.frames.get(def.id);
       if (!place?.shown) { f?.remove(); continue; }
       if (!f) { f = this.frame(def); this.frames.set(def.id, f); }
+      // (renamed in Customize Toolboxes)
+      f.querySelector('.tb-title')!.textContent = def.title;
+      f.setAttribute('aria-label', def.title);
       const vertical = place.dock === 'left' || place.dock === 'right';
       f.classList.toggle('vertical', vertical);
       f.classList.toggle('floating', place.dock === 'float');
@@ -205,18 +405,20 @@ export class Toolboxes {
       }
     }
     // the docks keep the order the toolboxes are listed in
+    const order = boxIds(st);
     for (const d of Object.values(this.docks)) {
       const kids = [...d.children] as HTMLElement[];
-      kids.sort((a, b) => TOOLBOX_IDS.indexOf(a.dataset.id as ToolboxId) - TOOLBOX_IDS.indexOf(b.dataset.id as ToolboxId)).forEach((k) => d.append(k));
+      kids.sort((a, b) => order.indexOf(a.dataset.id!) - order.indexOf(b.dataset.id!)).forEach((k) => d.append(k));
     }
     this.keepOnScreen();
     this.hooks.rendered?.();
   }
 
   /** Show or hide a toolbox (View > Toolboxes). */
-  toggle(id: ToolboxId, show?: boolean): void {
+  toggle(id: string, show?: boolean): void {
     const st = this.hooks.get();
     const p = st.places[id];
+    if (!p) return;
     const shown = show ?? !p.shown;
     this.change({ ...st, places: { ...st.places, [id]: { ...p, shown } } });
     if (shown && !p.shown && p.dock === 'float') this.findRoom(id);
@@ -232,7 +434,7 @@ export class Toolboxes {
     this.place(id, { x, y });
   }
 
-  isShown(id: ToolboxId): boolean {
+  isShown(id: string): boolean {
     return !!this.hooks.get().places[id]?.shown;
   }
 
@@ -320,7 +522,7 @@ export class Toolboxes {
       { cmd: 'tbx:lock', label: boxLocked(st, def.id) ? `Unlock ${def.title}` : `Lock ${def.title}` },
       { cmd: 'tbx:lock-all', label: st.locked ? 'Unlock All Toolboxes' : 'Lock All Toolboxes' },
       { cmd: 'tbx:fold', label: (this.hooks.folded?.(def.id) ?? st.places[def.id]?.collapsed) ? 'Open Out' : 'Fold Up' },
-      ...(def.id === 'custom' ? [{ cmd: 'tbx:customize', label: 'Choose What Is in It…' }] : []),
+      { cmd: 'tbx:customize', label: isEditable(def.id) ? 'Customize This Toolbox…' : 'Customize Toolboxes…' },
       ...(def.id === 'details' ? [] : [{ cmd: 'tbx:hide', label: `Hide ${def.title}` }]),
     ];
     showContextMenu(x, y, items, {
@@ -331,7 +533,7 @@ export class Toolboxes {
         else if (what === 'lock-all') this.setLocked(!st.locked);
         else if (what === 'hide') this.toggle(def.id, false);
         else if (what === 'fold') this.fold(def.id);
-        else if (what === 'customize') this.hooks.customize();
+        else if (what === 'customize') this.hooks.customize(def.id);
         else if (DOCKS.includes(what as Dock)) {
           const r = this.frames.get(def.id)?.getBoundingClientRect();
           this.place(def.id, what === 'float' && r ? { dock: 'float', x: Math.round(r.left + 24), y: Math.round(r.top + 24) } : { dock: what as Dock });
@@ -446,133 +648,19 @@ export function menuCommands(): { menu: string; items: { cmd: string; label: str
   return out;
 }
 
-// ---------------------------------------------------------------- choosing what is in your own toolbox
-
+/** A tool, command or palette, as Customize Toolboxes lists it. */
 export interface Pickable { key: string; label: string; icon?: string }
 
-let customDialog: HTMLDialogElement | null = null;
-
 /**
- * The window for your own toolbox: every tool and menu command, ticked when it is in the
- * toolbox, and the toolbox's items in order (moved up and down, or taken out).
+ * Where something dragged over a packed grid of buttons goes, as an index among `boxes` (in
+ * reading order): before the first box below the pointer, or before the first one in the
+ * pointer's row whose middle is right of it; at the end otherwise.
  */
-export function customizeToolbox(groups: { name: string; items: Pickable[] }[], get: () => string[], set: (items: string[]) => void): void {
-  if (!customDialog) {
-    customDialog = document.createElement('dialog');
-    customDialog.className = 'toolbox-dialog';
-    customDialog.setAttribute('aria-label', 'My Toolbox');
-    customDialog.addEventListener('keydown', (e) => { if (e.key !== 'Escape') e.stopPropagation(); });
-    document.body.append(customDialog);
+export function slotAt(boxes: readonly Box[], x: number, y: number): number {
+  for (let i = 0; i < boxes.length; i++) {
+    const r = boxes[i];
+    if (y < r.top) return i;
+    if (y <= r.bottom && x < (r.left + r.right) / 2) return i;
   }
-  const d = customDialog;
-  const label = new Map<string, Pickable>();
-  for (const g of groups) for (const it of g.items) label.set(it.key, it);
-  let filter = '';
-  const draw = () => {
-    d.replaceChildren();
-    const h = document.createElement('h2');
-    h.textContent = 'My Toolbox';
-    const intro = document.createElement('p');
-    intro.className = 'muted';
-    intro.textContent = 'Tick the tools and commands you want together in one toolbox. View > Toolboxes > My Toolbox shows it.';
-    const cols = document.createElement('div');
-    cols.className = 'tbd-cols';
-
-    const left = document.createElement('div');
-    left.className = 'tbd-all';
-    const search = document.createElement('input');
-    search.type = 'search';
-    search.placeholder = 'Find a tool or command';
-    search.value = filter;
-    search.setAttribute('aria-label', 'Find a tool or command');
-    search.addEventListener('input', () => { filter = search.value; fillList(); });
-    const list = document.createElement('div');
-    list.className = 'tbd-list';
-    const fillList = () => {
-      list.replaceChildren();
-      const q = filter.trim().toLowerCase();
-      for (const g of groups) {
-        const items = g.items.filter((it) => !q || it.label.toLowerCase().includes(q));
-        if (!items.length) continue;
-        const gh = document.createElement('div');
-        gh.className = 'tbd-group';
-        gh.textContent = g.name;
-        list.append(gh);
-        for (const it of items) {
-          const row = document.createElement('label');
-          row.className = 'tbd-item';
-          const box = document.createElement('input');
-          box.type = 'checkbox';
-          box.checked = get().includes(it.key);
-          box.addEventListener('change', () => {
-            const cur = get();
-            set(box.checked ? [...cur, it.key] : cur.filter((k) => k !== it.key));
-            drawOrder();
-          });
-          const ic = document.createElement('span');
-          ic.className = 'tbd-icon';
-          if (it.icon) ic.innerHTML = it.icon;
-          row.append(box, ic, document.createTextNode(it.label));
-          list.append(row);
-        }
-      }
-    };
-    left.append(search, list);
-
-    const right = document.createElement('div');
-    right.className = 'tbd-order';
-    const oh = document.createElement('div');
-    oh.className = 'tbd-group';
-    oh.textContent = 'In my toolbox, in order';
-    const order = document.createElement('ol');
-    const drawOrder = () => {
-      const cur = get();
-      order.replaceChildren();
-      if (!cur.length) {
-        const li = document.createElement('li');
-        li.className = 'muted';
-        li.textContent = 'Nothing yet: tick some on the left.';
-        order.append(li);
-      }
-      cur.forEach((k, i) => {
-        const li = document.createElement('li');
-        const name = document.createElement('span');
-        name.textContent = label.get(k)?.label ?? k;
-        const btn = (t: string, title: string, on: () => void, off: boolean) => {
-          const b = document.createElement('button');
-          b.type = 'button';
-          b.textContent = t;
-          b.title = title;
-          b.setAttribute('aria-label', `${title}: ${name.textContent}`);
-          b.disabled = off;
-          b.addEventListener('click', () => { on(); drawOrder(); fillList(); });
-          return b;
-        };
-        const move = (to: number) => { const n = cur.slice(); const [x] = n.splice(i, 1); n.splice(to, 0, x); set(n); };
-        li.append(name, btn('↑', 'Move up', () => move(i - 1), i === 0), btn('↓', 'Move down', () => move(i + 1), i === cur.length - 1),
-          btn('×', 'Take out', () => set(cur.filter((_, j) => j !== i)), false));
-        order.append(li);
-      });
-    };
-    right.append(oh, order);
-    cols.append(left, right);
-
-    const foot = document.createElement('div');
-    foot.className = 'hk-foot';
-    const clear = document.createElement('button');
-    clear.type = 'button';
-    clear.textContent = 'Empty it';
-    clear.addEventListener('click', () => { set([]); drawOrder(); fillList(); });
-    const close = document.createElement('button');
-    close.type = 'button';
-    close.className = 'primary';
-    close.textContent = 'Close';
-    close.addEventListener('click', () => d.close());
-    foot.append(clear, close);
-    d.append(h, intro, cols, foot);
-    fillList();
-    drawOrder();
-  };
-  draw();
-  if (!d.open) d.showModal();
+  return boxes.length;
 }

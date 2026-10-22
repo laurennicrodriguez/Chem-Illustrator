@@ -12,6 +12,7 @@
 
 import type { TableStyleDef } from './table-styles';
 import type { CommentThread } from './comments';
+import type { Protection } from './protect';
 import type { Contents, Justify, ParaStyle, PictureFx, TableData, TextRun } from '../model';
 import type { RichText } from '../text/editing';
 import type { Measure } from '../text/layout';
@@ -22,6 +23,9 @@ import { citationTexts, type CiteStyle, type Reference } from './references';
 import type { CiteFormat } from './cite-styles';
 import type { CiteLive, CiteManager } from './live-cites';
 import type { ChartBox } from '../sheet/chart-box';
+import type { DocHyphenation } from '../text/hyphenate';
+import { allHf, hfObjectIds } from './hf-bodies';
+import { fieldText, needsPages, type DocProps, type FieldObj } from './fields';
 
 /** The character that stands for a figure, table or field in the text (Unicode's object replacement character). */
 export const OBJECT_CHAR = '￼';
@@ -172,7 +176,24 @@ export interface HeaderFooter {
   start: number;
   /** Shown on the first page (often left off a cover or title page). */
   onFirst: boolean;
+  /** Different First Page (Word's titlePg): the section's first page has its own header and footer (`first`). */
+  firstPage?: boolean;
+  first?: HfZones;
+  /** Different Odd & Even Pages: even pages have their own header and footer (`even`), the page number on the other side. */
+  oddEven?: boolean;
+  even?: HfZones;
+  /** Headers and footers with more than plain text (pictures, tables, formatted text, fields): each in place of the plain text of its place. */
+  bodies?: Partial<Record<HfKey, HfBody>>;
 }
+
+/** The plain text of a first or even page's header and footer: left, centre and right. */
+export interface HfZones { header: [string, string, string]; footer: [string, string, string] }
+
+/** Which header or footer: the usual one, the first page's, or even pages'. */
+export type HfKey = 'header' | 'footer' | 'firstHeader' | 'firstFooter' | 'evenHeader' | 'evenFooter';
+
+/** A header or footer as Word has it: paragraphs of formatted text, with fields, pictures and tables (objects in the document's objects). */
+export interface HfBody { runs: TextRun[]; paras?: ParaStyle[] }
 
 /** How a section starts: on a new page (Next Page), on the same page (Continuous), or on the next even or odd page. */
 export type BreakKind = 'nextPage' | 'continuous' | 'evenPage' | 'oddPage';
@@ -256,6 +277,14 @@ export interface Float {
   yFrom?: 'para' | 'margin' | 'page';
   /** Room kept between the figure and the text round it, in points (Word's is 0.13 in). */
   gap?: number;
+  /** Which is drawn over which (Bring Forward, Send Backward): higher on top; unset, in the order of the text. */
+  z?: number;
+  /** Figures grouped together (Arrange > Group) share a number, and move together. */
+  group?: number;
+  /** Its name in the Selection Pane (unset: "Picture 3", "Text Box 2"). */
+  name?: string;
+  /** Hidden from the page in the Selection Pane (still in the document). */
+  hidden?: boolean;
 }
 
 /** The room text keeps from a floating figure unless set (Word's 0.13 inch). */
@@ -275,16 +304,37 @@ export function floatOf(o: DocObject | undefined): Float | undefined {
 }
 
 /** Something that sits in the text in place of one character. */
+/**
+ * Another program's file kept whole in the document, shown as its picture (Insert > Object, or
+ * an object in a Word file): double-clicking it opens the file in its program.
+ */
+export interface Embedded {
+  /** The program's name for the kind of object, as Word records it (Excel.Sheet.12, Package). */
+  prog: string;
+  /** Kept as Word keeps it: an OLE compound file, or an Office file as a part of its own. */
+  part: 'ole' | 'package';
+  /** The part's extension in a Word file (bin, xlsx, docx, pptx). */
+  ext: string;
+  /** The part's bytes, as a data URL. */
+  data: string;
+  /** The name of the file it was made from, when known. */
+  name?: string;
+  /** Shown as an icon with its name, rather than its contents. */
+  icon?: boolean;
+}
+
 export type DocObject =
   /** A structure, scheme or table: a drawing, edited with the drawing tools. `scale` 1 is the drawing's own size. */
-  | { kind: 'drawing'; contents: Contents; scale?: number; look?: FigureLook; float?: Float }
+  | { kind: 'drawing'; contents: Contents; scale?: number; look?: FigureLook; float?: Float; alt?: string }
   /**
    * A picture: its own size is w × h points (`px` its pixels); `scale` 1 is that size. A chart
    * (Insert > Chart) is a picture with its chart and data: drawn from them, saved as Word's chart.
    * `crop` cuts parts off (fractions of the whole image from each side; w × h is the part left),
-   * and `fx` is its Picture Format settings (corrections, colour, background, shape).
+   * and `fx` is its Picture Format settings (corrections, colour, background, shape). An
+   * embedded object (Insert > Object) is a picture with another program's file in `embed`. `alt` is
+   * its alt text (a structure without it is described by its SMILES).
    */
-  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float; chart?: ChartBox; crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx }
+  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float; chart?: ChartBox; crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx; embed?: Embedded; alt?: string; /** Turned clockwise about its middle, in degrees, and flipped (Arrange > Rotate). */ rot?: number; flipH?: boolean; flipV?: boolean }
   /**
    * A text box: text of its own (typed into in place), `w` wide; it grows to fit its text, and is
    * at least `h` tall when that is set. Always placed on the page. `fill` is its background.
@@ -317,7 +367,31 @@ export type DocObject =
    */
   | { kind: 'note'; end?: boolean; runs: TextRun[]; paras?: ParaStyle[] }
   /** An equation, typed as LaTeX and shown laid out as maths (see math.ts); a Word equation in .docx files. */
-  | { kind: 'math'; tex: string };
+  | { kind: 'math'; tex: string }
+  /** A field: the date, a document property, the file's name, a page number, a bookmark's text or page (see fields.ts). */
+  | FieldObj
+  /**
+   * An index (References > Insert Index): the entries marked with Mark Entry, A to Z, each with
+   * its page numbers (a block of its own, like the contents). `cols` is how many columns it is
+   * set in (its own section's), `right` puts the page numbers at the right after dots, and
+   * `letters` puts a letter over each part (A, B, C).
+   */
+  | { kind: 'index'; cols?: number; right?: boolean; letters?: boolean }
+  /**
+   * A table of authorities (References > Insert Table of Authorities): the citations marked with
+   * Mark Citation in one category (Cases, Statutes…; 0 for every category, each under its
+   * heading), with their pages after dots, or "passim" for those on five pages or more.
+   */
+  | { kind: 'toa'; cat: number; passim?: boolean }
+  /**
+   * A form field (Word's legacy form fields): a box to type into, a check box or a drop-down
+   * list, filled in by whoever has the document, also when it is protected for filling in forms
+   * (Review > Restrict Editing). `name` is its name in Word (Text1, Check1, Dropdown1).
+   */
+  | { kind: 'form'; type: FormType; name?: string; value?: string; checked?: boolean; items?: string[]; help?: string };
+
+/** A form field's kind: a text box, a check box or a drop-down list. */
+export type FormType = 'text' | 'check' | 'drop';
 
 export interface DocText extends RichText {
   styles: Record<string, NamedStyle>;
@@ -357,7 +431,18 @@ export interface DocText extends RichText {
   pageBorder?: PageBorder;
   /** Table styles read from a Word file that aren't built in, by style id (see table-styles). */
   tableStyles?: Record<string, TableStyleDef>;
+  /** The document's properties: title, author and the rest (File > Properties), shown by fields and cover pages. */
+  props?: DocProps;
+  /** Layout > Hyphenation: words broken at the ends of lines (settings.xml's autoHyphenation and its options). */
+  hyphen?: DocHyphenation;
+  /** Review > Restrict Editing: what can still be changed, and the password that stops it (see protect.ts). */
+  protect?: Protection;
+  /** Design > Document Formatting: the theme, style set and paragraph spacing chosen (by name; see themes.ts). */
+  design?: DocDesign;
 }
+
+/** What Design has set: names of the choices made (kept with the document, so the galleries show them). */
+export interface DocDesign { theme?: string; fonts?: string; colors?: string; styleSet?: string; spacing?: string }
 
 /** How footnotes or endnotes are numbered, by Word's names: 1, 2, 3; i, ii, iii; a, b, c; *, †, ‡ (chicago). */
 export type NoteFormat = 'decimal' | 'lowerRoman' | 'upperRoman' | 'lowerLetter' | 'upperLetter' | 'chicago';
@@ -468,7 +553,7 @@ export function runStyleOf(s: NamedStyle): rt.RunStyle {
 export function paraFromStyle(s: NamedStyle, keep: ParaStyle): ParaStyle {
   return cleanPara({
     list: keep.list, level: keep.level, cont: keep.cont, pageBreak: keep.pageBreak, colBreak: keep.colBreak, section: keep.section, noLineNumbers: keep.noLineNumbers,
-    marks: keep.marks, tabs: keep.tabs, scheme: keep.scheme, bullet: keep.bullet,
+    marks: keep.marks, tabs: keep.tabs, scheme: keep.scheme, bullet: keep.bullet, border: keep.border, shade: keep.shade,
     style: s.id === 'Normal' ? undefined : s.id,
     align: s.align === 'left' ? undefined : s.align,
     spaceBefore: s.spaceBefore, spaceAfter: s.spaceAfter,
@@ -727,7 +812,7 @@ export function clearFormatting(t: DocText, start: number, end: number, first: n
   }
   let next: DocText = { ...t, runs: rt.normalizeRuns(out) };
   if (!keepStyle) {
-    const ps = fitParas(next.paras, paras.length).map((q, i) => (i < first || i > last ? q : paraFromStyle(styleOf(t, undefined), { ...q, list: undefined, level: undefined, cont: undefined, tabs: undefined } as ParaStyle)));
+    const ps = fitParas(next.paras, paras.length).map((q, i) => (i < first || i > last ? q : paraFromStyle(styleOf(t, undefined), { ...q, list: undefined, level: undefined, cont: undefined, tabs: undefined, border: undefined, shade: undefined } as ParaStyle)));
     next = { ...next, paras: ps.map((q, i) => (i < first || i > last ? q : cleanPara({ ...q, pageBreak: paras[i].pageBreak, colBreak: paras[i].colBreak, section: paras[i].section, marks: paras[i].marks }))) };
   }
   return next;
@@ -820,8 +905,11 @@ export function cellHolding(t: Pick<DocText, 'objects'>, id: number): { id: numb
 }
 
 /** Every object the text uses, with those inside tables. */
-export function usedObjects(t: Pick<DocText, 'runs' | 'objects'>): Set<number> {
-  return new Set(objectsInText(flatRuns(t)));
+export function usedObjects(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'hf' | 'paras'>>): Set<number> {
+  const used = new Set(objectsInText(flatRuns(t)));
+  // with those in the headers and footers
+  if (t.hf) for (const id of hfObjectIds(allHf({ hf: t.hf, paras: t.paras }), t.objects)) used.add(id);
+  return used;
 }
 
 /** Keep only the objects the text still uses (before saving). */
@@ -862,9 +950,10 @@ export const COMPOUND = 'Compound';
  * A reference to a compound shows just its number. A citation shows the numbers of the
  * references it cites (in the order references are first cited).
  */
-export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions' | 'notes'>>): Map<number, string> {
+export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions' | 'notes' | 'paras' | 'props'>>, pages?: (para: number) => string, pageCount?: number): Map<number, string> {
   const shown = new Map<number, string>();
   const counts = new Map<string, number>();
+  const top = t.runs;
   // numbers inside tables count in their place too
   t = { ...t, runs: flatRuns(t) };
   const order = objectsInText(t.runs);
@@ -876,6 +965,7 @@ export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<D
       shown.set(id, o.end ? noteLabel(++end, t.notes?.end ?? END_FORMAT) : noteLabel(++foot, t.notes?.foot ?? FOOT_FORMAT));
       continue;
     }
+    if (o?.kind === 'form') { shown.set(id, formShown(o)); continue; }
     if (o?.kind !== 'seq') continue;
     const n = (counts.get(o.name) ?? 0) + 1;
     counts.set(o.name, n);
@@ -895,8 +985,43 @@ export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<D
     }
   }
   if (order.some((id) => t.objects[id]?.kind === 'cite')) for (const [id, s] of citationTexts(t)) shown.set(id, s);
+  if (order.some((id) => t.objects[id]?.kind === 'field')) {
+    const at = objectParas({ runs: top, objects: t.objects });
+    const doc = { runs: top, paras: t.paras ?? [], props: t.props };
+    const cache = {};
+    for (const id of order) {
+      const o = t.objects[id];
+      if (o?.kind === 'field') shown.set(id, fieldText(o, doc, at.get(id) ?? 0, pages, pageCount, cache) || (needsPages(o) ? '1' : ''));
+    }
+  }
   return shown;
 }
+
+/** The paragraph each object is in (an object in a table's cell: the table's paragraph). */
+export function objectParas(t: Pick<DocText, 'runs' | 'objects'>): Map<number, number> {
+  const out = new Map<number, number>();
+  let p = 0;
+  for (const r of t.runs) {
+    if (r.obj !== undefined) {
+      out.set(r.obj, p);
+      for (const inner of innerObjects(t.objects[r.obj])) if (!out.has(inner)) out.set(inner, p);
+    } else for (const ch of r.text) if (ch === '\n') p++;
+  }
+  return out;
+}
+
+/** What a form field shows: its entry (five wide spaces when empty, as in Word), its box ticked or not, its item chosen. */
+export function formShown(o: Extract<DocObject, { kind: 'form' }>): string {
+  if (o.type === 'check') return o.checked ? '\u2612' : '\u2610';
+  if (o.type === 'drop') return o.value || o.items?.[0] || EMPTY_FORM;
+  return o.value || EMPTY_FORM;
+}
+
+/** How form fields are shaded (Word's grey). */
+export const FORM_SHADE = '#d9d9d9';
+
+/** An empty text field's look in Word: five en spaces, shaded. */
+export const EMPTY_FORM = '\u2002'.repeat(5);
 
 /** The object whose character is at an offset. */
 function objectAtChar(runs: TextRun[], offset: number): number | undefined {

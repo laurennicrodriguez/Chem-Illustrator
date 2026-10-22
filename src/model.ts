@@ -51,6 +51,12 @@ export interface Atom {
   xyz?: [number, number, number];
   /** A contracted label: the group it stands for, as SMILES from the atom where it joins (Chemistry > Contract Label). */
   group?: string;
+  /**
+   * Alt text for the whole structure this atom is in (Alt Text…), for people who can't see it:
+   * kept on one of its atoms (see accessibility.ts). Saved as the description of the structure's
+   * picture in Word and PowerPoint; a structure without it is described by its SMILES.
+   */
+  alt?: string;
   /** A carbon shown with its letter and hydrogens (CH3 at a chain end; ChemDraw's ShowTerminalCarbonLabels). */
   showCarbon?: boolean;
   /** The charge is drawn by a separate circled-charge symbol, so the label leaves it out. */
@@ -211,6 +217,10 @@ export interface TextRun {
   strike?: boolean;
   /** Documents with tracked changes: this text was inserted or deleted, by whom and when ("ins|Nate|2026-10-14T21:00:00Z"; see document/revisions). */
   rev?: string;
+  /** Documents with tracked changes: this text's formatting was changed, by whom and when, and how it looked before ("Nate|2026-10-14T21:00:00Z|{\"bold\":true}"; see document/revisions). */
+  fmt?: string;
+  /** Not shown: laid out with no width (tracked changes hidden by a markup view). Only ever on runs being laid out, never in a file. */
+  hide?: boolean;
   /** Documents: the comments this text is under, by id, joined by commas ("2,5"; see document/comments). */
   cmt?: string;
   /** Where the text links to: a web page, a DOI, an e-mail address, a file or a place in the file (see links.ts). */
@@ -313,6 +323,8 @@ export interface ParaStyle {
   section?: SectionBreak;
   /** Documents: this paragraph's lines get no line numbers (Word's Suppress Line Numbers). */
   noLineNumbers?: boolean;
+  /** Don't hyphenate this paragraph (Word's Don't hyphenate, under Line and Page Breaks). */
+  noHyphen?: boolean;
   /** Documents: bookmarks at this paragraph (Insert > Bookmark), by name, for links to point at. */
   marks?: string[];
   /** Documents: tab stops, in points from the left margin, in order (Word's default every half inch past the last). */
@@ -321,7 +333,45 @@ export interface ParaStyle {
   scheme?: string;
   /** Documents: a bulleted list item's own bullet (from the bullet library), in place of its level's. */
   bullet?: string;
+  /**
+   * Documents: lines round the paragraph (Home > Borders), as Word's paragraph borders. Paragraphs
+   * one after another with the same borders share one box, with `between` drawn between them.
+   */
+  border?: ParaBorders;
+  /** Documents: the paragraph's background colour (Home > Shading), behind its text and up to its borders. */
+  shade?: string;
+  /** Documents: index entries marked in this paragraph (References > Mark Entry; Word's XE fields). */
+  xe?: IndexMark[];
+  /** Documents: citations marked here for a table of authorities (References > Mark Citation; Word's TA fields). */
+  ta?: AuthorityMark[];
 }
+
+/**
+ * An index entry (Word's XE field): the word or phrase listed, and the entry under it when it is a
+ * subentry ("Aldol reaction: asymmetric"); its page number, in bold or italic if chosen, or
+ * instead a cross-reference ("See Enolates") in place of the page.
+ */
+export interface IndexMark {
+  main: string;
+  sub?: string;
+  see?: string;
+  bold?: boolean;
+  italic?: boolean;
+}
+
+/**
+ * A citation in a table of authorities (Word's TA field): its short form, which every mention
+ * of it shares, and, on the one marked first, its long form (as listed) and its category (1
+ * Cases, 2 Statutes and so on: see index-toa.ts).
+ */
+export interface AuthorityMark {
+  short: string;
+  long?: string;
+  cat?: number;
+}
+
+/** A paragraph's borders: any of its four sides, and a line between paragraphs that share a box. */
+export type ParaBorders = Partial<Record<'top' | 'bottom' | 'left' | 'right' | 'between', BorderLine>>;
 
 /** A tab stop: where text after a tab lines up, and how (Word's left, centre, right and decimal tabs), with dots or a line leading to it. */
 export interface TabStop {
@@ -664,6 +714,13 @@ export interface Shape {
   shadowOpacity?: number;
   shadowAngle?: number;
   shadowBlur?: number;
+  /** Design shapes: PowerPoint's Shape Effects (a glow round the outside, soft edges, a bevel, a reflection below) and a picture for the fill. */
+  glow?: ShapeGlow;
+  /** How far in from the edge the fill fades away, in points. */
+  softEdge?: number;
+  bevel?: ShapeBevel;
+  reflection?: ShapeReflection;
+  picFill?: PicFill;
   bold?: boolean;
   symbol?: string;
   bracket?: 'square' | 'round' | 'curly';
@@ -705,6 +762,11 @@ export interface Shape {
   fx?: PictureFx;
   color?: string;
   z?: number;
+  /**
+   * Alt text (Alt Text…): what a picture, chart or shape shows, for people who can't see it
+   * (screen readers). Saved as its description in Word, PowerPoint and Excel.
+   */
+  alt?: string;
   /** Its name in the Layers panel (Design mode). */
   name?: string;
   /** Hidden (Layers panel): not drawn, printed or picked. */
@@ -770,6 +832,8 @@ export interface Media {
   hide?: boolean;
   /** A sound keeps playing when the show goes on to the next slides (Play Across Slides). */
   across?: boolean;
+  /** Narration recorded for the slide (Slide Show > Record): left silent when the show is set up without narration. */
+  narration?: boolean;
   /** A video fills the screen while it plays (Play Full Screen). */
   full?: boolean;
   /** How long it is, in seconds, when known. */
@@ -797,6 +861,24 @@ export interface PictureLook {
  * How a picture is changed for showing (Picture Format), as PowerPoint and Word keep it: the
  * picture's own data is never changed, so every setting can be changed back.
  */
+/** A glow round a shape: its colour, how far it reaches (points) and how see-through it is (0 solid to 1 clear). */
+export interface ShapeGlow { color: string; size: number; transparency: number }
+
+/** PowerPoint's bevel shapes (its names for them). */
+export type BevelKind = 'circle' | 'relaxedInset' | 'cross' | 'coolSlant' | 'angle' | 'softRound' | 'convex' | 'slope' | 'divot' | 'riblet' | 'hardEdge' | 'artDeco';
+
+/** A raised edge round the top of a shape: which kind, how wide and how high, in points. */
+export interface ShapeBevel { kind: BevelKind; w: number; h: number }
+
+/**
+ * A reflection below a shape: how much of the shape shows (0 to 1 of its height), how solid it
+ * starts (0 to 1), how far below the shape it is and how blurred, in points.
+ */
+export interface ShapeReflection { size: number; opacity: number; dist: number; blur?: number }
+
+/** A picture filling a shape, stretched to the shape's box, and how see-through it is (0 solid to 1 clear). */
+export interface PicFill { src: string; px?: { w: number; h: number }; transparency?: number }
+
 export interface PictureFx {
   /** Brighter (up to 1) or darker (down to -1). */
   bright?: number;
@@ -1320,7 +1402,11 @@ export class Doc {
       this.dirtyRects.push({ x1: Math.min(r.tail.x, r.head.x) - pad, y1: Math.min(r.tail.y, r.head.y) - pad, x2: Math.max(r.tail.x, r.head.x) + pad, y2: Math.max(r.tail.y, r.head.y) + pad });
     } else {
       const sh = e as Shape;
-      this.dirtyRects.push({ x1: Math.min(sh.x1, sh.x2) - 4, y1: Math.min(sh.y1, sh.y2) - 4, x2: Math.max(sh.x1, sh.x2) + 4, y2: Math.max(sh.y1, sh.y2) + 4 });
+      // its glow, shadow and reflection reach past its box (and a turned shape's corners stick out)
+      const w = Math.abs(sh.x2 - sh.x1), h = Math.abs(sh.y2 - sh.y1);
+      const pad = 4 + Math.max(sh.glow?.size ?? 0, sh.shadow ? (sh.shadowSize ?? 4) + (sh.shadowBlur ?? 0) : 0) + (sh.rot ? Math.max(w, h) / 2 : 0);
+      const below = sh.reflection ? h * sh.reflection.size + sh.reflection.dist + (sh.rot ? Math.max(w, h) : 0) : 0;
+      this.dirtyRects.push({ x1: Math.min(sh.x1, sh.x2) - pad, y1: Math.min(sh.y1, sh.y2) - pad, x2: Math.max(sh.x1, sh.x2) + pad, y2: Math.max(sh.y1, sh.y2) + pad + below });
     }
   }
 

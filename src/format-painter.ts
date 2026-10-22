@@ -19,7 +19,7 @@ import { paraAt, paraRange } from './text/paragraphs';
 /** What of a run is its look (not its words, figures, links, comments or tracked changes). */
 export const RUN_LOOK_KEYS = ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'size', 'font', 'color', 'highlight', 'strike', 'spacing', 'smallCaps', 'allCaps', 'cstyle'] as const;
 /** What of a paragraph is its look (not its breaks, section or bookmarks). */
-export const PARA_LOOK_KEYS = ['list', 'level', 'align', 'spaceBefore', 'spaceAfter', 'indent', 'style', 'firstLine', 'line', 'keepNext', 'indentRight', 'linePt', 'lineRule', 'tabs', 'scheme', 'bullet'] as const;
+export const PARA_LOOK_KEYS = ['list', 'level', 'align', 'spaceBefore', 'spaceAfter', 'indent', 'style', 'firstLine', 'line', 'keepNext', 'indentRight', 'linePt', 'lineRule', 'tabs', 'scheme', 'bullet', 'border', 'shade'] as const;
 
 export type RunLook = Pick<TextRun, (typeof RUN_LOOK_KEYS)[number]>;
 export type ParaLook = Pick<ParaStyle, (typeof PARA_LOOK_KEYS)[number]>;
@@ -85,7 +85,7 @@ const BOND_KEYS = ['color', 'highlight', 'hl'] as const;
 /** An arrow's line and head size, not which heads it has (a fishhook means one electron). */
 const ARROW_KEYS = ['color', 'lineWidth', 'line', 'headType', 'headLength', 'headWidth'] as const;
 const SHAPE_KEYS = ['color', 'fillColor', 'filled', 'fill', 'fill2', 'gradAngle', 'gradRadial', 'pattern', 'patternColor', 'patternSize', 'patternTransparency',
-  'transparency', 'lineWidth', 'dashed', 'bold', 'shadow', 'shadowSize', 'shadowColor', 'shadowOpacity', 'shadowAngle', 'shadowBlur', 'textAlign', 'textValign'] as const;
+  'transparency', 'lineWidth', 'dashed', 'bold', 'shadow', 'shadowSize', 'shadowColor', 'shadowOpacity', 'shadowAngle', 'shadowBlur', 'glow', 'softEdge', 'bevel', 'reflection', 'picFill', 'textAlign', 'textValign'] as const;
 const PICTURE_KEYS = ['look'] as const;
 
 /** Shapes whose outline and fill are their look (not tables, charts, equations, videos, or the invisible frames of diagrams). */

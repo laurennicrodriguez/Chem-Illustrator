@@ -18,7 +18,7 @@ import { blipEffectsXml, imgPropsXml, pictureGeomXml } from './picture-xml';
 import { turnAbout, type Rect } from '../geom';
 import { layoutText, ASCENT, FONT_STACK, type Measure } from '../text/layout';
 import { fitParas, listMarkers, splitParagraphs } from '../text/paragraphs';
-import { formulaParts } from '../richtext';
+import { formulaParts, plainText } from '../richtext';
 import { officeTarget, slideOfLink } from '../links';
 import { arialWidth } from '../text-metrics';
 import { arrowPoints, shapeBox, boxOf, shapeOrder, elbowRoute } from '../objects';
@@ -28,16 +28,21 @@ import { PPT_STYLE_IDS, lookOf, slideCellLook, styledRuns, type CellLine, type S
 import { tableBorders } from './cdxml-table';
 import { writeCdxml } from './cdxml-write';
 import { extractDrawing } from './clipboard';
+import { contentsAlt, titleOverlaps, roughCaptionBox } from '../accessibility';
 import type { Selection } from '../editor/editor';
 import { Package, NS, REL, emu, xml, xmlAttr, hex6, MediaFiles, structureAltText } from './ooxml';
 import { facesToEmbed, toEot, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
 import { patternClear, patternInk, shadowLook } from '../render/fills';
 import { FADE, tint } from '../colours';
-import { transitionXml, timingXml, highlightParts, partHolds, type Transition, type Anim, type MediaTiming } from '../deck/animation';
+import { transitionXml, timingXml, highlightParts, partHolds, expandParas, targetKey, type Transition, type Anim, type MediaTiming } from '../deck/animation';
 import { MEDIA_EXT } from '../deck/media';
+import { effectsXml } from './pptx-effects';
+import { viewPropsXml } from '../deck/guides';
+import { handoutMasterXml, notesMasterXml } from '../deck/notes-pages';
+import { showPrXml, custShowsXml } from '../deck/show-setup';
 import {
-  Master, SlideSize, LayoutId, layoutFrames, deckLayouts, layoutDef, titleLook, isBuiltinLayout, type LayoutDef, type SectionCount, decorFrames, showsNumber, textStyles, isEmptyText, slideColours, slideBackground, decorShapes, type DecorShape,
+  Master, SlideSize, LayoutId, layoutFrames, deckLayouts, layoutDef, titleLook, isBuiltinLayout, type LayoutDef, type SectionCount, decorFrames, showsNumber, showsFooter, showsDate, dateText, type SlideHF, type DeckSettings, textStyles, isEmptyText, slideColours, slideBackground, decorShapes, type DecorShape,
 } from '../deck/deck';
 import { sameBackground, type Background } from '../deck/background';
 import { bgXml, type BlipIds } from './pptx-background';
@@ -119,11 +124,13 @@ export interface DeckData {
   size: SlideSize;
   master: Master;
   /** `id` is the slide's id in the deck, for links to it (#slide=id). */
-  slides: { id?: number; layout: LayoutId; doc: Doc; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean; hidden?: boolean }[];
+  slides: { id?: number; layout: LayoutId; doc: Doc; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean; hidden?: boolean; hf?: SlideHF }[];
   /** A design (Design mode): marked so it opens in Design mode again. */
   design?: boolean;
   /** The deck's sections, in order (none when left out). */
   sections?: SectionCount[];
+  /** Set Up Show and custom shows. */
+  settings?: DeckSettings;
 }
 
 /**
@@ -167,10 +174,12 @@ const CT = {
   layout: 'application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml',
   master: 'application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml',
   notesMaster: 'application/vnd.openxmlformats-officedocument.presentationml.notesMaster+xml',
+  handoutMaster: 'application/vnd.openxmlformats-officedocument.presentationml.handoutMaster+xml',
   notes: 'application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml',
   theme: 'application/vnd.openxmlformats-officedocument.theme+xml',
   tags: 'application/vnd.openxmlformats-officedocument.presentationml.tags+xml',
   presProps: 'application/vnd.openxmlformats-officedocument.presentationml.presProps+xml',
+  viewProps: 'application/vnd.openxmlformats-officedocument.presentationml.viewProps+xml',
   tableStyles: 'application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml',
   core: 'application/vnd.openxmlformats-package.core-properties+xml',
   app: 'application/vnd.openxmlformats-officedocument.extended-properties+xml',
@@ -527,7 +536,9 @@ class Writer {
   async build(): Promise<Uint8Array> {
     const { pkg, deck } = this;
     const n = deck.slides.length;
-    const hasNotes = deck.slides.some((s) => s.notes.trim());
+    // (a notes master too when notes pages have a look of their own, and a handout master for handouts')
+    const hasNotes = deck.slides.some((s) => s.notes.trim()) || !!deck.master.notesHF || !!deck.master.notesPage;
+    const hasHandout = !!deck.master.handout || !!deck.master.notesHF;
     pkg.add('ppt/presentation.xml', '', CT.presentation); // filled in below, once the ids are known
     pkg.relate('', REL.officeDocument, 'ppt/presentation.xml');
     pkg.relate('', REL.coreProps, 'docProps/core.xml');
@@ -555,7 +566,14 @@ class Writer {
       notesMasterRel = pkg.relate(P, REL.notesMaster, 'notesMasters/notesMaster1.xml');
       pkg.add('ppt/theme/theme2.xml', theme(deck.master, 'Notes'), CT.theme);
       pkg.relate('ppt/notesMasters/notesMaster1.xml', REL.theme, '../theme/theme2.xml');
-      pkg.add('ppt/notesMasters/notesMaster1.xml', this.notesMaster(), CT.notesMaster);
+      pkg.add('ppt/notesMasters/notesMaster1.xml', notesMasterXml(deck.master, deck.size, HEAD, XMLNS, GROUP, lang), CT.notesMaster);
+    }
+    let handoutRel = '';
+    if (hasHandout) {
+      handoutRel = pkg.relate(P, REL.handoutMaster, 'handoutMasters/handoutMaster1.xml');
+      pkg.add('ppt/theme/theme3.xml', theme(deck.master, 'Handout'), CT.theme);
+      pkg.relate('ppt/handoutMasters/handoutMaster1.xml', REL.theme, '../theme/theme3.xml');
+      pkg.add('ppt/handoutMasters/handoutMaster1.xml', handoutMasterXml(deck.master, deck.size, HEAD, XMLNS, GROUP, lang), CT.handoutMaster);
     }
     const slideRels: string[] = [];
     const cmts = writeSlideComments(deck.slides.map((s) => s.comments));
@@ -582,8 +600,11 @@ class Writer {
         pkg.relate(path, REL.notesSlide, `../notesSlides/notesSlide${i + 1}.xml`);
       }
     }
-    pkg.add('ppt/presProps.xml', `${HEAD}<p:presentationPr ${XMLNS}/>`, CT.presProps);
+    pkg.add('ppt/presProps.xml', `${HEAD}<p:presentationPr ${XMLNS}>${showPrXml(deck.settings?.show, deck.settings?.customShows ?? [])}</p:presentationPr>`, CT.presProps);
     pkg.relate(P, REL.presProps, 'presProps.xml');
+    // the guides and grid, where PowerPoint keeps them
+    pkg.add('ppt/viewProps.xml', `${HEAD}${viewPropsXml(deck.settings?.view, XMLNS)}`, CT.viewProps);
+    pkg.relate(P, REL.viewProps, 'viewProps.xml');
     pkg.add('ppt/tableStyles.xml', `${HEAD}<a:tblStyleLst xmlns:a="${NS.a}" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"/>`, CT.tableStyles);
     pkg.relate(P, REL.tableStyles, 'tableStyles.xml');
     pkg.relate(P, REL.theme, 'theme/theme1.xml');
@@ -609,9 +630,11 @@ class Writer {
     pkg.add(P, `${HEAD}<p:presentation ${XMLNS} saveSubsetFonts="1"${embed.length ? ' embedTrueTypeFonts="1"' : ''}>` +
       `<p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="${masterRel}"/></p:sldMasterIdLst>` +
       (hasNotes ? `<p:notesMasterIdLst><p:notesMasterId r:id="${notesMasterRel}"/></p:notesMasterIdLst>` : '') +
+      (hasHandout ? `<p:handoutMasterIdLst><p:handoutMasterId r:id="${handoutRel}"/></p:handoutMasterIdLst>` : '') +
       `<p:sldIdLst>${slideRels.map((r, i) => `<p:sldId id="${256 + i}" r:id="${r}"/>`).join('')}</p:sldIdLst>` +
       `<p:sldSz cx="${emu(w)}" cy="${emu(h)}"${w === 720 && h === 540 ? ' type="screen4x3"' : ''}/>` +
-      `<p:notesSz cx="6858000" cy="9144000"/>` + fontList +
+      (deck.master.notesPage?.landscape ? `<p:notesSz cx="9144000" cy="6858000"/>` : `<p:notesSz cx="6858000" cy="9144000"/>`) + fontList +
+      custShowsXml(deck.settings?.customShows ?? [], (sid) => slideRels[deck.slides.findIndex((x) => x.id === sid)], xml) +
       `<p:custDataLst><p:tags r:id="${masterTags}"/></p:custDataLst>` +
       `<p:defaultTextStyle>${defaultLevels(this.deck.master)}</p:defaultTextStyle>` +
       sectionsXml(deck.sections, n) +
@@ -640,6 +663,7 @@ class Writer {
       phShape(3, 'Text Placeholder 2', '<p:ph type="body" idx="1"/>', frames[1], 'Click to edit Master text styles', 'anchor="t"'),
       footerShape(4, 'Footer Placeholder 3', '<p:ph type="ftr" sz="quarter" idx="3"/>', d.footer, m, ''),
       footerShape(5, 'Slide Number Placeholder 4', '<p:ph type="sldNum" sz="quarter" idx="4"/>', d.number, m, '‹#›'),
+      footerShape(6, 'Date Placeholder 5', '<p:ph type="dt" sz="half" idx="2"/>', d.date, m, dateText(m)),
       logo,
     ].join('');
     const bg = await this.background(P, m.fill ?? { kind: 'solid', color: m.background });
@@ -679,6 +703,7 @@ class Writer {
     const fm = { ...m, footerColor: c.footerColor };
     shapes.push(footerShape(frames.length + 2, `Footer Placeholder ${frames.length + 1}`, '<p:ph type="ftr" sz="quarter" idx="11"/>', d.footer, fm, ''));
     shapes.push(footerShape(frames.length + 3, `Slide Number Placeholder ${frames.length + 2}`, '<p:ph type="sldNum" sz="quarter" idx="12"/>', d.number, fm, '‹#›'));
+    shapes.push(footerShape(first + decor.length, `Date Placeholder ${frames.length + 3}`, '<p:ph type="dt" sz="half" idx="10"/>', d.date, fm, dateText(m)));
     // a title slide's own background goes on its layout
     const ownBg = slideBackground(m, id), base: Background = m.fill ?? { kind: 'solid', color: m.background };
     const bg = own && !sameBackground(ownBg, base) ? await this.background(path, ownBg) : '';
@@ -705,6 +730,15 @@ class Writer {
       for (const x of sel.shapes ?? []) add(`shape ${x}`);
     };
     const styles = textStyles(this.deck.master, s.layout);
+    const phCount: Record<string, number> = {};
+    // the title first, so screen readers read it first (things are read in the order they are
+    // stacked), unless it overlaps something it must stay in front of
+    const title = parts.texts.find((c) => c.ph === 'title' && c.runs.some((r) => r.text.trim()));
+    if (title && !titleOverlaps(doc, title, roughCaptionBox(title, styles.title?.size ?? 32))) {
+      parts.texts.splice(parts.texts.indexOf(title), 1);
+      mark({ captions: new Set([title.id]) }, id);
+      out.push(this.text(path, title, id++, s.layout, styles, phCount, doc));
+    }
     // pictures and shapes at the back, as on screen
     const videos: MediaTiming[] = [];
     // pictures and shapes in their order front to back (the Selection Pane's), back first
@@ -715,7 +749,7 @@ class Writer {
         continue;
       }
       const box = { x1: Math.min(p.x1, p.x2), y1: Math.min(p.y1, p.y2), x2: Math.max(p.x1, p.x2), y2: Math.max(p.y1, p.y2) };
-      if (p.chart) { out.push(await this.chart(path, p.chart, box, id++, p.src)); continue; }
+      if (p.chart) { out.push(await this.chart(path, p.chart, box, id++, p.src, p.alt)); continue; }
       if (p.math) { out.push(await this.equation(path, p, box, id++)); continue; }
       if (p.zoom && p.link) { const z = this.zoomXml(path, p, box, id); if (z) { out.push(z); id++; continue; } }
       const v = p.video ? this.video(path, p.video, p.src!, box, id, p) : '';
@@ -738,7 +772,6 @@ class Writer {
       const tag = this.addTags(path, { [TAG.diagram]: JSON.stringify({ v: 1, s: look }) });
       out.push(groupXml(gid, `Diagram ${gid - 1}`, shapeBox(g.frame), kids.join(''), `<p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst>`));
     }
-    const phCount: Record<string, number> = {};
     for (const tb of parts.tables) {
       const used: number[] = [];
       out.push(this.table(path, tb, () => { used.push(id); return id++; }, s.layout, styles, phCount, doc));
@@ -780,7 +813,7 @@ class Writer {
       const svg = this.addMedia(path, new TextEncoder().encode(pic.svg), 'svg');
       mark(sel, id);
       const smiles = await this.opts.smiles?.(part).catch(() => null) ?? null;
-      out.push(picXml(id, `Structure ${id - 1}`, png, svg, pic.box, null, tags, undefined, structureAltText(smiles)));
+      out.push(picXml(id, `Structure ${id - 1}`, png, svg, pic.box, null, tags, undefined, contentsAlt(part.contents()) ?? structureAltText(smiles)));
       id++;
     }
     // text on top
@@ -791,12 +824,13 @@ class Writer {
     // slide number and footer, when the master shows them
     const m = this.deck.master;
     const d = decorFrames(this.deck.size, m);
-    if (showsNumber(m, s.layout)) out.push(footerShape(id++, 'Slide Number', '<p:ph type="sldNum" sz="quarter" idx="12"/>', d.number, m, String(index + 1), true));
-    if (m.footer.trim()) out.push(footerShape(id++, 'Footer', '<p:ph type="ftr" sz="quarter" idx="11"/>', d.footer, m, m.footer, true));
+    if (showsNumber(m, s.layout, s.hf)) out.push(footerShape(id++, 'Slide Number', '<p:ph type="sldNum" sz="quarter" idx="12"/>', d.number, m, String(index + 1), true));
+    if (showsFooter(m, s.layout, s.hf)) out.push(footerShape(id++, 'Footer', '<p:ph type="ftr" sz="quarter" idx="11"/>', d.footer, m, m.footer, true));
+    if (showsDate(m, s.layout, s.hf)) out.push(footerShape(id++, 'Date', '<p:ph type="dt" sz="half" idx="10"/>', d.date, m, dateText(m), true));
     const tags = this.addTags(path, { [TAG.layout]: s.layout, ...(s.id !== undefined ? { [TAG.slideId]: String(s.id) } : {}) });
     const bg = s.background ? await this.background(path, s.background) : '';
     return `${HEAD}<p:sld ${XMLNS}${s.hideGraphics ? ' showMasterSp="0"' : ''}${s.hidden ? ' show="0"' : ''}><p:cSld>${bg}<p:spTree>${GROUP}${out.join('')}</p:spTree><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:cSld>` +
-      `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(s.transition)}${timingXml(s.anims ?? [], (a) => spids.get(`${a.target.kind} ${a.target.bond ? 'b' : ''}${a.target.id}`) ?? [], videos)}` +
+      `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(s.transition)}${timingXml(expandParas(s.anims ?? [], (cid) => { const c = doc.captions.get(cid); return c ? plainText(c.runs).split('\n') : null; }), (a) => spids.get(targetKey(a.target)) ?? [], videos, (t) => spids.get(targetKey(t))?.[0])}` +
       // the slide's creation number, which zooms name it by
       `<p:extLst><p:ext uri="{BB962C8B-B14F-4D97-AF65-F5344CB8AC3E}"><p14:creationId xmlns:p14="${NS_P14}" val="${creationId(index)}"/></p:ext></p:extLst></p:sld>`;
   }
@@ -806,19 +840,19 @@ class Writer {
    * keeps it as made here, used when PowerPoint's copy charts the same numbers.
    */
   private charts = 0;
-  private async chart(path: string, box0: ChartBox, box: Rect, id: number, src?: string): Promise<string> {
+  private async chart(path: string, box0: ChartBox, box: Rect, id: number, src?: string, alt?: string): Promise<string> {
     const w = box.x2 - box.x1, h = box.y2 - box.y1;
     const rid = await addChart(this.pkg, path, 'ppt', ++this.charts, box0, w, h);
     const tags = this.addTags(path, { [TAG.chart]: JSON.stringify(box0) });
     const ex = isChartEx(box0.chart.kind);
     const uri = ex ? CX_NS : C_NS, tag = ex ? 'cx' : 'c';
-    const frame = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="Chart ${id - 1}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>` +
+    const frame = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="Chart ${id - 1}"${alt?.trim() ? ` descr="${xml(alt.trim())}"` : ''}/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>` +
       `<p:nvPr><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:nvPr></p:nvGraphicFramePr>` +
       `<p:xfrm><a:off x="${emu(box.x1)}" y="${emu(box.y1)}"/><a:ext cx="${emu(w)}" cy="${emu(h)}"/></p:xfrm>` +
       `<a:graphic><a:graphicData uri="${uri}"><${tag}:chart xmlns:${tag}="${uri}" r:id="${rid}"/></a:graphicData></a:graphic></p:graphicFrame>`;
     if (!ex) return frame;
     // PowerPoint 2016's newer chart, with a picture of it for older programs
-    const pic = src ? await this.picture(path, src, box, `Chart ${id - 1}`, id, null) : '';
+    const pic = src ? await this.picture(path, src, box, `Chart ${id - 1}`, id, null, undefined, undefined, alt) : '';
     return `<mc:AlternateContent xmlns:mc="${MC_NS}"><mc:Choice xmlns:cx1="${CX1_NS}" Requires="cx1">${frame}</mc:Choice><mc:Fallback>${pic}</mc:Fallback></mc:AlternateContent>`;
   }
 
@@ -926,7 +960,9 @@ class Writer {
    */
   private geo(path: string, s: Shape, id: number, doc: Doc, textSize: number): string {
     const def = geoDef(s.geo);
-    const { box, geom, fill, ln, shadow } = geoSpPr(s, doc.style.lineWidth);
+    const { box, geom, fill: plainFill, ln, shadow } = geoSpPr(s, doc.style.lineWidth);
+    // a picture fill: the picture stretched to the shape (the tag keeps the rest of the look, not the picture again)
+    const fill = s.picFill ? this.picFillXml(path, s.picFill) ?? plainFill : plainFill;
     const justify = s.textAlign ?? 'center';
     const algn = justify === 'center' ? 'ctr' : justify === 'right' ? 'r' : justify === 'justify' ? 'just' : 'l';
     const hasText = !!s.text?.runs.some((r) => r.text);
@@ -937,11 +973,23 @@ class Writer {
     const ins = def.prst ? 3.6 : 0;
     const bodyPr = `<a:bodyPr wrap="square" lIns="${emu(ins)}" tIns="${emu(ins)}" rIns="${emu(ins)}" bIns="${emu(ins)}" rtlCol="0" anchor="${anchor}"><a:noAutofit/></a:bodyPr>`;
     const { id: _, x1: _a, y1: _b, x2: _c, y2: _d, ...look } = s;
+    if (look.picFill) look.picFill = { ...look.picFill, src: '' };
     const plain = s.text?.runs.map((r) => r.text).join('') ?? '';
     const tag = this.addTags(path, { [TAG.geo]: JSON.stringify({ v: 1, s: look, plain, sid: s.id }) });
     const click = s.link ? this.hlink(s.link) : '';
     return `<p:sp><p:nvSpPr><p:cNvPr id="${id}"${nameAttrs(s.name?.trim() || `${def.name} ${id - 1}`, s.hidden)}${click ? `>${click}</p:cNvPr>` : '/>'}<p:cNvSpPr/><p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvSpPr>` +
       `<p:spPr>${xfrm(box, rotAttr(s.rot))}${geom}${fill}${ln}${shadow}</p:spPr><p:txBody>${bodyPr}<a:lstStyle/>${body}</p:txBody></p:sp>`;
+  }
+
+  /** A shape's picture fill as PowerPoint's blipFill, the picture added to the file (null when it can't be read). */
+  private picFillXml(path: string, f: NonNullable<Shape['picFill']>): string | null {
+    const m = /^data:image\/(png|jpeg|jpg|gif);base64,(.*)$/i.exec(f.src);
+    if (!m) return null;
+    const bytes = Uint8Array.from(atob(m[2]), (ch) => ch.charCodeAt(0));
+    const id = this.addMedia(path, bytes, m[1].toLowerCase() === 'jpg' ? 'jpeg' : m[1].toLowerCase());
+    const clear = Math.max(0, Math.min(1, f.transparency ?? 0));
+    const alpha = clear ? `<a:alphaModFix amt="${Math.round((1 - clear) * 100000)}"/>` : '';
+    return `<a:blipFill dpi="0" rotWithShape="1"><a:blip r:embed="${id}">${alpha}</a:blip><a:srcRect/><a:stretch><a:fillRect/></a:stretch></a:blipFill>`;
   }
 
   /**
@@ -959,8 +1007,8 @@ class Writer {
       `<p:spPr>${frame}${geom}${ln}</p:spPr></p:cxnSp>`;
   }
 
-  /** A picture from image data, cropped as given, with its Picture Format settings (`pic`) as PowerPoint's. */
-  private async picture(from: string, src: string, box: Rect, name: string, id: number, crop: Shape['crop'] | null, look?: PictureLook, pic?: Shape): Promise<string> {
+  /** A picture from image data, cropped as given, with its Picture Format settings (`pic`) as PowerPoint's, and its alt text. */
+  private async picture(from: string, src: string, box: Rect, name: string, id: number, crop: Shape['crop'] | null, look?: PictureLook, pic?: Shape, alt = pic?.alt): Promise<string> {
     let mime: string, bytes: Uint8Array;
     try {
       ({ mime, bytes } = fromDataUrl(src));
@@ -971,6 +1019,7 @@ class Writer {
     if (!ext) return '';
     const fx = tidyFx(pic?.fx);
     const more: PicMore = { rot: pic?.rot, hidden: pic?.hidden };
+    const descr = alt?.trim() || undefined;
     // what Office can't show live goes in worked in, with the original as the picture's layer
     let baked: Uint8Array | null = null;
     if (pic && bakedPart(fx) && this.opts.bakePicture) baked = await this.opts.bakePicture(pic).catch(() => null);
@@ -979,12 +1028,12 @@ class Writer {
       // PowerPoint shows the SVG; older programs the PNG beside it (300 dots per inch)
       const k = 300 / 72;
       const png = await this.opts.svgToPng(new TextDecoder().decode(bytes), Math.max(1, Math.round((box.x2 - box.x1) * k)), Math.max(1, Math.round((box.y2 - box.y1) * k)));
-      if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, undefined, fx, this.addMedia(from, png, 'png'), more);
-      return picXml(id, name, this.addMedia(from, png, 'png'), this.addMedia(from, bytes, 'svg'), box, crop, tags, look, undefined, fx, undefined, more);
+      if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, descr, fx, this.addMedia(from, png, 'png'), more);
+      return picXml(id, name, this.addMedia(from, png, 'png'), this.addMedia(from, bytes, 'svg'), box, crop, tags, look, descr, fx, undefined, more);
     }
     const own = this.addMedia(from, bytes, ext);
-    if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, undefined, fx, own, more);
-    return picXml(id, name, own, null, box, crop, tags, look, undefined, fx, undefined, more);
+    if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, descr, fx, own, more);
+    return picXml(id, name, own, null, box, crop, tags, look, descr, fx, undefined, more);
   }
 
   /** A title, text placeholder or text box. */
@@ -1137,17 +1186,6 @@ class Writer {
 
   // ---------------------------------------------------------------- notes
 
-  private notesMaster(): string {
-    return `${HEAD}<p:notesMaster ${XMLNS}><p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg><p:spTree>${GROUP}` +
-      `<p:sp><p:nvSpPr><p:cNvPr id="2" name="Slide Image Placeholder 1"/><p:cNvSpPr><a:spLocks noGrp="1" noRot="1" noChangeAspect="1"/></p:cNvSpPr><p:nvPr><p:ph type="sldImg" idx="2"/></p:nvPr></p:nvSpPr>` +
-      `<p:spPr><a:xfrm><a:off x="685800" y="1143000"/><a:ext cx="5486400" cy="3086100"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln w="12700"><a:solidFill><a:prstClr val="black"/></a:solidFill></a:ln></p:spPr></p:sp>` +
-      `<p:sp><p:nvSpPr><p:cNvPr id="3" name="Notes Placeholder 2"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="body" sz="quarter" idx="3"/></p:nvPr></p:nvSpPr>` +
-      `<p:spPr><a:xfrm><a:off x="685800" y="4400550"/><a:ext cx="5486400" cy="3600450"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>` +
-      `<p:txBody><a:bodyPr vert="horz" lIns="91440" tIns="45720" rIns="91440" bIns="45720" rtlCol="0"/><a:lstStyle/><a:p><a:pPr lvl="0"/><a:r><a:rPr ${lang}/><a:t>Click to edit Master text styles</a:t></a:r></a:p></p:txBody></p:sp>` +
-      `</p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>` +
-      `<p:notesStyle><a:lvl1pPr marL="0" algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1"><a:defRPr sz="1200" kern="1200"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/><a:cs typeface="+mn-cs"/></a:defRPr></a:lvl1pPr></p:notesStyle></p:notesMaster>`;
-  }
-
   private notesSlide(text: string): string {
     const paras = text.split('\n').map((t) => (t ? `<a:p><a:r><a:rPr ${lang} dirty="0"/><a:t>${xml(t)}</a:t></a:r></a:p>` : `<a:p><a:endParaRPr ${lang} dirty="0"/></a:p>`)).join('');
     return `${HEAD}<p:notes ${XMLNS}><p:cSld><p:spTree>${GROUP}` +
@@ -1182,7 +1220,7 @@ export function connectorSpPr(r: Arrow, lw: number): { frame: string; geom: stri
   return { frame, geom, ln, curved };
 }
 
-/** A design shape's place, outline, fill, line and shadow, as PowerPoint and Word (in groups) both write them. */
+/** A design shape's place, outline, fill, line and effects (shadow, glow, reflection, soft edges, bevel), as PowerPoint and Word (in groups) both write them. */
 export function geoSpPr(s: Shape, lw: number): { box: Rect; geom: string; fill: string; ln: string; shadow: string } {
   const def = geoDef(s.geo);
   const box = { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
@@ -1209,7 +1247,9 @@ export function geoSpPr(s: Shape, lw: number): { box: Rect; geom: string; fill: 
   const dash = s.dashed ? '<a:prstDash val="dash"/>' : '';
   const ln = width > 0 ? `<a:ln w="${emu(width)}"><a:solidFill><a:srgbClr val="${hex6(s.color ?? '#000000')}"/></a:solidFill>${dash}<a:round/></a:ln>` : '<a:ln><a:noFill/></a:ln>';
   const sl = shadowLook(s, s.shadowSize ?? Math.max(2, 0.04 * Math.min(w, h)));
-  const shadow = s.shadow ? `<a:effectLst><a:outerShdw${sl.blur ? ` blurRad="${emu(sl.blur)}"` : ''} dist="${emu(sl.distance)}" dir="${Math.round((((sl.angle % 360) + 360) % 360) * 60000)}" algn="tl" rotWithShape="0"><a:srgbClr val="${hex6(sl.colour)}"><a:alpha val="${Math.round(sl.opacity * 100000)}"/></a:srgbClr></a:outerShdw></a:effectLst>` : '';
+  const outer = s.shadow ? `<a:outerShdw${sl.blur ? ` blurRad="${emu(sl.blur)}"` : ''} dist="${emu(sl.distance)}" dir="${Math.round((((sl.angle % 360) + 360) % 360) * 60000)}" algn="tl" rotWithShape="0"><a:srgbClr val="${hex6(sl.colour)}"><a:alpha val="${Math.round(sl.opacity * 100000)}"/></a:srgbClr></a:outerShdw>` : '';
+  // (the shadow with the glow, reflection and soft edges, and the bevel)
+  const shadow = effectsXml(s, outer);
   return { box, geom, fill, ln, shadow };
 }
 
@@ -1355,11 +1395,13 @@ function phShape(id: number, name: string, ph: string, f: { x: number; y: number
 
 /** The footer or slide number box (in the master and layouts, and on each slide that shows it). */
 function footerShape(id: number, name: string, ph: string, r: Rect, m: Master, text: string, onSlide = false): string {
-  const isNum = ph.includes('sldNum');
+  const isNum = ph.includes('sldNum'), isDate = ph.includes('type="dt"');
+  // today's date as a field PowerPoint keeps up to date, in the form picked; a fixed date as text
   const run = isNum
     ? `<a:fld id="{B6F15528-21DE-4FAA-801E-634DDDAF4B2B}" type="slidenum"><a:rPr ${lang}/><a:t>${xml(text || '‹#›')}</a:t></a:fld>`
-    : text ? `<a:r><a:rPr ${lang}/><a:t>${xml(text)}</a:t></a:r>` : '';
-  const algn = isNum ? 'r' : 'ctr';
+    : isDate && !m.dateFixed?.trim() ? `<a:fld id="{3E1A4C2B-7D9F-4B8E-9C61-2F0A5D7E8B13}" type="${m.dateFormat ?? 'datetime1'}"><a:rPr ${lang}/><a:t>${xml(text)}</a:t></a:fld>`
+      : text ? `<a:r><a:rPr ${lang}/><a:t>${xml(text)}</a:t></a:r>` : '';
+  const algn = isNum ? 'r' : isDate ? 'l' : 'ctr';
   const lst = onSlide ? '' : `<a:lvl1pPr algn="${algn}"><a:defRPr sz="${Math.round(m.footerSize * 100)}"><a:solidFill><a:srgbClr val="${hex6(m.footerColor)}"/></a:solidFill></a:defRPr></a:lvl1pPr>`;
   return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${xml(name)}"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr>${ph}</p:nvPr></p:nvSpPr>` +
     `<p:spPr>${onSlide ? '' : xfrm(r)}</p:spPr>` +

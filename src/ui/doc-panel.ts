@@ -8,7 +8,7 @@ import { FloatBox, PINNED_ICON } from './float-box';
 import type { DocFile } from '../document/doc-file';
 import {
   A4, CM, COL_GAP, INCH, LETTER, FLOAT_GAP, defaultStyles, floatOf, modifyStyle, setParaStyle, styleOf,
-  type DocText, type FigureLook, type Float, type WrapKind, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
+  type DocText, type FigureLook, type Float, type WrapKind, type HeaderFooter, type HfZones, type NamedStyle, type NumberPlace, type PageSetup,
 } from '../document/document';
 import { changeAllSections, changeSection, pageNumText, sectionAt, sectionsOf, type Section, type SectionPatch } from '../document/sections';
 import { paraAt } from '../text/paragraphs';
@@ -541,6 +541,38 @@ export class DocPanel {
     zone('footer', 0, 'Footer, left');
     zone('footer', 1, 'Footer, centre');
     zone('footer', 2, 'Footer, right');
+    // a first page and even pages of their own (Word's Different First Page and Different Odd & Even Pages)
+    const blank = (): HfZones => ({ header: ['', '', ''], footer: ['', '', ''] });
+    this.check(s, 'hf-diffFirst', 'Different first page', (v) => hf((h) => ({ ...h, firstPage: v || undefined, first: h.first ?? blank() })),
+      'The first page of the section has its own header and footer (a title page\'s), set below; "Number the first page" puts the number on it');
+    this.check(s, 'hf-oddEven', 'Different odd and even pages', (v) => hf((h) => ({ ...h, oddEven: v || undefined, even: h.even ?? blank() })),
+      'Even pages have their own header and footer, set below, and the page number on the other side (the outside edge of a bound thesis)');
+    const three = (set: 'first' | 'even', part: 'header' | 'footer', label: string) => {
+      const box = document.createElement('span');
+      box.className = 'dp-three';
+      for (let i = 0; i < 3; i++) {
+        const el = this.input(`hf-${set}-${part}${i}`, (v) => hf((h) => {
+          const z = h[set] ?? blank();
+          const parts = [...z[part]] as [string, string, string];
+          parts[i] = v;
+          return { ...h, [set]: { ...z, [part]: parts } };
+        }), { placeholder: ['left', 'centre', 'right'][i] });
+        box.append(el);
+      }
+      this.row(s, label, box, 'Left, centre and right');
+    };
+    three('first', 'header', 'First page header');
+    three('first', 'footer', 'First page footer');
+    three('even', 'header', 'Even page header');
+    three('even', 'footer', 'Even page footer');
+    const note = document.createElement('p');
+    note.className = 'dp-note';
+    note.dataset.key = 'hf-rich';
+    s.append(note);
+    this.buttons(s, [
+      ['Picture…', 'Put a picture (a logo or crest) in the header or footer', () => this.host.run('hf-picture')],
+      ['Plain Text', 'Take the pictures, tables and formatting out of this section\'s headers and footers: back to the text above', () => this.host.run('hf-plain')],
+    ]);
   }
 
   // ---------------------------------------------------------------- showing the values
@@ -662,6 +694,21 @@ export class DocPanel {
     put('hf-start', String(sec.restart ?? 1));
     put('hf-first', hf.onFirst);
     for (let i = 0; i < 3; i++) { put(`hf-header${i}`, hf.header[i]); put(`hf-footer${i}`, hf.footer[i]); }
+    put('hf-diffFirst', !!hf.firstPage);
+    put('hf-oddEven', !!hf.oddEven);
+    for (const set of ['first', 'even'] as const) for (const part of ['header', 'footer'] as const) {
+      const on = set === 'first' ? !!hf.firstPage : !!hf.oddEven;
+      for (let i = 0; i < 3; i++) put(`hf-${set}-${part}${i}`, hf[set]?.[part][i] ?? '');
+      const row = this.fields.get(`hf-${set}-${part}0`)?.closest('label');
+      if (row) row.style.display = on ? '' : 'none';
+    }
+    const rich = Object.keys(hf.bodies ?? {});
+    const note = this.sections.hf.querySelector<HTMLElement>('[data-key="hf-rich"]');
+    if (note) {
+      const names: Record<string, string> = { header: 'header', footer: 'footer', firstHeader: 'first page header', firstFooter: 'first page footer', evenHeader: 'even page header', evenFooter: 'even page footer' };
+      note.hidden = !rich.length;
+      note.textContent = rich.length ? `The ${rich.map((k) => names[k] ?? k).join(', ')} ${rich.length > 1 ? 'have' : 'has'} pictures, tables or formatting (from Word, or a picture added here): shown and saved as they are, in place of the text above. Plain Text goes back to the text.` : '';
+    }
   }
 }
 

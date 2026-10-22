@@ -4,6 +4,7 @@
 // tool works the same everywhere; the other tabs wait in documents of their own (Doc.swap).
 // New, Open, Save, Save As, Close and the unsaved-changes questions go through here.
 
+import { applyDesign, newDocDesign } from './document/themes';
 import { Doc, keepOnPage, type PageSetup } from './model';
 import { Deck, type SlideSize, type Master } from './deck/deck';
 import { Workbook } from './sheet/workbook';
@@ -17,9 +18,12 @@ import { cdxToCdxml, cdxmlToCdx, isCdx } from './io/cdx';
 import { readPptx } from './io/pptx-read';
 import { writePptx, PptxOptions } from './io/pptx-write';
 import { zipHas } from './io/ooxml';
+import { isXls } from './io/xls';
+import { isOds } from './io/ods';
+import { DOC_OPEN_ONLY, documentSaveNote, isOtherDocument } from './io/doc-files';
 import { adoptSaved } from './io/document-file';
 import {
-  FileRef, FileType, CDXML, CDX, PPTX, XLSX, CSV, SDF, DOCX, TABLE_TEXT_EXTENSIONS, openBytesDialog, saveFileDialog, writeFile, canSaveInPlace, askSaveChanges,
+  FileRef, FileType, CDXML, CDX, PPTX, XLSX, XLSM, SHEET_OPEN_ONLY, CSV, SDF, DOCX, RTF, ODT, TABLE_TEXT_EXTENSIONS, openBytesDialog, saveFileDialog, writeFile, canSaveInPlace, askSaveChanges,
   showError, withExtension, extensionOf, baseName, readPath, pathExists, stampOf,
 } from './io/files';
 import type { FileStamp } from './keep/recovery';
@@ -117,7 +121,7 @@ export interface WorkspaceHooks {
 const NO_AUTOSAVE = new Set(['csv', 'tsv', 'txt', 'sdf', 'sd']);
 
 /** What each kind of tab saves as (the first is the default). */
-const SAVE_TYPES: Record<Mode, FileType[]> = { drawing: [CDXML, CDX], slides: [PPTX], design: [PPTX], sheet: [XLSX, CSV, SDF], document: [DOCX] };
+const SAVE_TYPES: Record<Mode, FileType[]> = { drawing: [CDXML, CDX], slides: [PPTX], design: [PPTX], sheet: [XLSX, XLSM, CSV, SDF], document: [DOCX, RTF, ODT] };
 
 /** Tabs already told, this session, how their structures look in Office (said once, not on every save). */
 const officeNoted = new WeakSet<Tab>();
@@ -233,7 +237,7 @@ export class Workspace {
     const t = this.active;
     let dirty = t.dirty;
     if (t.deck) dirty = t.deck.edits !== t.savedEdits;
-    else if (t.mode === 'sheet') dirty = t.book!.edits !== t.savedEdits;
+    else if (t.mode === 'sheet') dirty = t.book!.edits !== this.mainOf(t).savedEdits;
     else if (t.mode === 'document') dirty = t.document!.edits !== this.mainOf(t).savedEdits;
     else if (this.host.version !== t.seen) {
       t.seen = this.host.version;
@@ -242,8 +246,8 @@ export class Workspace {
     }
     if (dirty !== t.dirty) {
       t.dirty = dirty;
-      if (t.document) {
-        // the other windows of the document, and the tab owning its file
+      if (t.document || t.book) {
+        // the other windows of the document (or workbook), and the tab owning its file
         const main = this.mainOf(t);
         main.dirty = dirty;
         this.syncWindows(main);
@@ -270,28 +274,36 @@ export class Workspace {
     return t.windowOf ?? t;
   }
 
-  /** As Word names the windows of a document: "Report.docx:1", "Report.docx:2"; just the name with one window. */
+  /** What a tab's windows share: its document or workbook. */
+  private shared(t: Tab): object | null {
+    return t.document ?? t.book;
+  }
+
+  /** As Word and Excel name the windows of a file: "Report.docx:1", "Report.docx:2"; just the name with one window. */
   label(t: Tab): string {
-    if (!t.document) return t.name;
-    const all = this.tabs.filter((x) => x.document === t.document);
+    const doc = this.shared(t);
+    if (!doc) return t.name;
+    const all = this.tabs.filter((x) => this.shared(x) === doc);
     return all.length > 1 ? `${this.mainOf(t).name}:${all.indexOf(t) + 1}` : t.name;
   }
 
   /**
-   * View > New Window: the document showing in another tab too, each with its own view and
+   * View > New Window: the document (or workbook) showing in another tab too, each with its own view and
    * place in the text. Typing in either shows in both; Save in either saves the one file.
    */
   newWindow(): Tab | null {
     const from = this.active;
-    if (!from.document) return null;
+    const doc = this.shared(from);
+    if (!doc) return null;
     const main = this.mainOf(from);
-    const t = this.makeTab('document', main.name, main.ref);
+    const t = this.makeTab(from.document ? 'document' : 'sheet', main.name, main.ref);
     t.document = from.document;
+    t.book = from.book;
     t.windowOf = main;
     t.dirty = main.dirty;
     t.savedEdits = main.savedEdits;
     // after the last window of this document
-    const last = Math.max(...this.tabs.map((x, i) => (x.document === from.document ? i : -1)));
+    const last = Math.max(...this.tabs.map((x, i) => (this.shared(x) === doc ? i : -1)));
     this.tabs.splice(last + 1, 0, t);
     this.activate(t, true);
     return t;
@@ -381,11 +393,11 @@ export class Workspace {
     return t;
   }
 
-  /** New sheet, in place of an untouched new drawing. */
-  newSheet(): Tab {
+  /** New sheet (empty, or `book`: File > New from Template), in place of an untouched new drawing. */
+  newSheet(book?: Workbook): Tab {
     const spare = this.active.mode === 'drawing' ? this.spare() : null;
     const t = this.makeTab('sheet', this.untitled('sheet'));
-    t.book = new Workbook();
+    t.book = book ?? new Workbook();
     const st = this.hooks.newStyle?.('sheet');
     if (st) t.book.drawingStyle = { ...st };
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
@@ -394,12 +406,15 @@ export class Workspace {
     return t;
   }
 
-  /** New document, in place of an untouched new drawing. */
-  newDocument(): Tab {
+  /** New document (empty, or `doc`: File > New from Template), in place of an untouched new drawing. */
+  newDocument(doc?: DocText): Tab {
     const spare = this.active.mode === 'drawing' ? this.spare() : null;
     const t = this.makeTab('document', this.untitled('document'));
     const st = this.hooks.newStyle?.('document');
-    t.document = new DocFile(st ? { ...newDocument(), drawingStyle: { ...st } } : undefined);
+    // (Design > Set as Default: the look new documents start with)
+    const design = doc ? null : newDocDesign();
+    const start = doc ?? (st || design ? applyDesign(newDocument(), design) : undefined);
+    t.document = new DocFile(start && st ? { ...start, drawingStyle: { ...st } } : start);
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
     if (spare) this.drop(spare);
@@ -426,7 +441,7 @@ export class Workspace {
   async open(): Promise<void> {
     let f;
     try {
-      f = await openBytesDialog('Drawings, slides, sheets and documents', [CDXML, CDX, PPTX, XLSX, DOCX, CSV, SDF], ['sd', ...TABLE_TEXT_EXTENSIONS]);
+      f = await openBytesDialog('Drawings, slides, sheets and documents', [CDXML, CDX, PPTX, XLSX, XLSM, DOCX, RTF, ODT, CSV, SDF], ['sd', ...SHEET_OPEN_ONLY, ...DOC_OPEN_ONLY, ...TABLE_TEXT_EXTENSIONS]);
     } catch (e) {
       await showError('Could not open the file: ' + String(e));
       return;
@@ -453,7 +468,8 @@ export class Workspace {
     const zip = bytes[0] === 0x50 && bytes[1] === 0x4b;
     try {
       let ok: boolean;
-      if (ext === 'xlsx' || (zip && zipHas(bytes, 'xl/workbook.xml')) || ext === 'sdf' || ext === 'sd' || TABLE_TEXT_EXTENSIONS.includes(ext)) ok = await this.openSheet(bytes, name, ref, file);
+      if (isOtherDocument(bytes, file) && !TABLE_TEXT_EXTENSIONS.includes(ext)) ok = await this.openDocument(bytes, name, ref, file);
+      else if (ext === 'xlsx' || ext === 'xlsm' || SHEET_OPEN_ONLY.includes(ext) || (zip && (zipHas(bytes, 'xl/workbook.xml') || isOds(bytes))) || isXls(bytes) || ext === 'sdf' || ext === 'sd' || TABLE_TEXT_EXTENSIONS.includes(ext)) ok = await this.openSheet(bytes, name, ref, file);
       else if (ext === 'docx' || (zip && zipHas(bytes, 'word/document.xml'))) ok = await this.openDocument(bytes, name, ref, file);
       else if (ext === 'pptx' || zip) ok = this.openSlides(bytes, name, ref);
       else ok = this.openDrawing(isCdx(bytes) ? cdxToCdxml(bytes) : new TextDecoder().decode(bytes), name, ref);
@@ -501,7 +517,7 @@ export class Workspace {
     const deck = new Deck(this.host);
     deck.master = got.master;
     deck.size = got.size;
-    deck.load(got.slides.map((s) => deck.makeSlide(s.layout, s.contents, s.notes, s, got.master)), got.size, got.master, got.sections);
+    deck.load(got.slides.map((s) => deck.makeSlide(s.layout, s.contents, s.notes, s, got.master)), got.size, got.master, got.sections, got.settings);
     t.deck = deck;
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
@@ -670,8 +686,8 @@ export class Workspace {
     if (tab.deck) {
       const deck = tab.deck;
       const bytes = await writePptx({
-        size: deck.size, master: deck.master, design: tab.mode === 'design', sections: deck.sectionCounts(),
-        slides: deck.slides.map((s, i) => ({ id: s.id, layout: s.layout, doc: deck.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims, comments: s.comments, background: s.background, hideGraphics: s.hideGraphics, hidden: s.hidden })),
+        size: deck.size, master: deck.master, design: tab.mode === 'design', sections: deck.sectionCounts(), settings: deck.settings,
+        slides: deck.slides.map((s, i) => ({ id: s.id, layout: s.layout, doc: deck.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims, comments: s.comments, background: s.background, hideGraphics: s.hideGraphics, hidden: s.hidden, hf: s.hf })),
       }, { ...this.hooks.pptx, title: name.replace(/\.[^.]+$/, '') });
       return { data: bytes, type: PPTX, note: '' };
     }
@@ -679,13 +695,14 @@ export class Workspace {
       const book = tab.book!;
       const data = await this.hooks.sheets.write(book, name);
       // CSV and SD files keep only the values of the sheet showing: said, not stopped (as Excel does)
-      const note = ext !== 'xlsx' ? ` (${book.sheets.length > 1 ? `only the sheet "${book.sheet.name}", ` : ''}values only: save as .xlsx to keep formulas and formatting)` : '';
-      return { data, type: ext === 'csv' ? CSV : ext === 'sdf' || ext === 'sd' ? SDF : XLSX, note };
+      const note = ext === 'csv' || ext === 'sdf' || ext === 'sd' ? ` (${book.sheets.length > 1 ? `only the sheet "${book.sheet.name}", ` : ''}values only: save as .xlsx to keep formulas and formatting)`
+        : ext === 'xlsx' && book.macros ? ' (its macros are left out: save as .xlsm to keep them)' : '';
+      return { data, type: ext === 'csv' ? CSV : ext === 'sdf' || ext === 'sd' ? SDF : ext === 'xlsm' ? XLSM : XLSX, note };
     }
     if (tab.mode === 'document') {
       // the contents' page numbers come from the printed pages, whatever view shows
       tab.document!.printLayout();
-      return { data: await this.hooks.documents.write(tab.document!.t, name), type: DOCX, note: '' };
+      return { data: await this.hooks.documents.write(tab.document!.t, name), type: ext === 'rtf' ? RTF : ext === 'odt' ? ODT : DOCX, note: documentSaveNote(name) };
     }
     keepOnPage(this.docOf(tab));
     const text = writeCdxml(this.docOf(tab), { name, textMeasure: this.hooks.measure });

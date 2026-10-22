@@ -8,6 +8,8 @@ This page covers Document mode: writing and formatting text, putting structures,
 
 Click **+ Document** at the end of the tab strip, or choose **File ▸ New Document**. While a document is showing, Ctrl+N starts another one.
 
+**File ▸ New from Template…** starts from one of our own templates: a **Lab report** (aim, scheme, reagent table, procedure, observations, results, safety), **Supporting Information** (title block, contents, general information, procedures with a characterization line to fill in, spectra) or a **Thesis chapter** (numbered sections, a wide binding margin and 1.5 line spacing). Text in [brackets] says what goes there; type over it. The headings are in the Heading styles, so the Navigation pane and Table of Contents pick them up.
+
 The ribbon has Word's tabs: **Home**, **Insert**, **Layout**, **References** and **Review**, plus a **Table** tab that appears while the caret is in a table. Text flows on to the next page by itself. The status bar at the bottom shows the page and word count; Ctrl+mouse wheel or the − and + buttons zoom, and **Page Width** fits the page to the window.
 
 ## The chemistry toolbox
@@ -33,6 +35,8 @@ When the pointer turns into a pointing hand over a structure, it is a drawing yo
 - Indents and space before and after: **Layout** tab ▸ **Paragraph** group. Lengths are in inches; type `cm`, `mm` or `pt` after a number to use those instead.
 - **Bullets** and **Numbering** on the **Home** tab make lists. Tab and Shift+Tab change the level.
 - The small ⬊ in the corner of a ribbon group opens all of that group's settings. Its pin button docks the box in the right-hand panel so it stays open while you work.
+- **Borders** (the ▦ ▾ button on the **Home** tab) puts lines above, below, beside or round the selected paragraphs, as Word's Borders menu. Choosing a side again takes it off. **Borders and Shading…** sets the kind of line, its width and colour, and a shading colour; the shading button beside it shades paragraphs quickly. Paragraphs one after another with the same borders share one box.
+- **Sort** (A↓Z) puts the selected paragraphs in order (as text, numbers or dates, by the whole paragraph or by a field cut at tabs or commas), or, with the caret in a table, the table's rows by a column. A heading row stays at the top; rows with cells merged down can't be sorted.
 
 ## Styles
 
@@ -42,6 +46,18 @@ To change a style, open the ⬊ in the corner of **Styles** (or the **Format** p
 
 - **Match This Paragraph** makes the style look like the paragraph the caret is in.
 - **Reset Style** puts the style back as it first was.
+
+## Themes and style sets
+
+The **Design** tab changes the look of the whole document at once, as Word's Document Formatting does:
+
+- **Theme** sets the fonts and colours together: Journal (Times New Roman, black), Report, Technical, Clean, Classic, Field Notes and Poster. All of them use free fonts that come with the app.
+- **Style Set** changes the styles' layout: Journal (justified 11 pt text, bold headings), Simple, Centered, Compact, Open and Thesis (double-spaced, for a thesis or dissertation).
+- **Colors** and **Fonts** change one half of the theme on its own: the heading colour and the accents in the colour boxes, or the heading and body fonts.
+- **Paragraph Spacing** sets the space between paragraphs and lines for every style: No Paragraph Space, Compact, Tight, Open, Relaxed or Double.
+- **Set as Default** makes the current theme, style set and spacing the start of every new document.
+
+Formatting you set by hand stays as it is. The theme and style set are saved in the Word file, and its styles are Word's own, so Word shows the same look.
 
 ## Structures and pictures in the text
 
@@ -71,6 +87,18 @@ Pick a structure, picture or text box, then use **Layout** tab ▸ **Wrap Text**
 A floating item can be dragged anywhere and moves with the paragraph it is dropped beside. One in line with the text is dragged to another place in the text, as in Word: the caret shows where it will land (Ctrl+Z puts it back).
 
 **Insert** tab ▸ **Text Box** (also on the **Layout** tab) puts a box at the left margin with the text wrapping round it. Type in it, then press Esc to pick the box. Drag its edge to move it and its corner to make it wider. Fill colour, frame and wrapping are in the panel.
+
+### Position, order, rotate and group
+
+On the **Layout** tab, **Arrange** (folded into one **Arrange ▾** button when the window is narrow):
+
+- **Position ▾** puts the figure picked at one of nine places on the page (top, middle or bottom; left, centre or right) with **Square** wrapping. **In Line with Text** puts it back in the line.
+- **Bring Forward ▾** and **Send Backward ▾** put one floating figure over or under another, a step at a time or to the front or back of all.
+- **Rotate ▾** turns a picture 90° right or left, flips it, or turns it by any angle (**More Rotation Options…**).
+- **Selection Pane** lists every floating figure, front first. Click a name to pick it, Ctrl+click to pick more, double-click to rename it. The eye hides a figure from its page (it stays in the document); **Show All** and **Hide All** do every one; ▲ and ▼ change the order.
+- **Group ▾** joins the figures picked in the Selection Pane so they move together; **Ungroup** parts them.
+
+Word gets the position, order, rotation, names and hidden figures as its own; groups come back as groups when the file opens here again.
 
 ## Tables
 
@@ -113,6 +141,16 @@ For a substrate-scope or screening table, put the caret in a cell and use **Inse
 ## Charts
 
 **Insert** ▸ **Chart** puts a chart in the text at the caret, as Word's Insert Chart does. The chart window shows the chart's own data in a grid: type over the sample numbers or paste from Excel or a sheet, pick the kind of chart along the top, and change titles, axes, colours, error bars and fitted lines in the panel on the right. Double-click the chart to change it again. Charts sit in the text like pictures (wrap, frame, captions), and are saved in Word files as Word charts with their data inside, so **Edit Data** works in Word. Charts made in Word open here as charts.
+
+## Objects from other programs
+
+**Insert** ▸ **Object** puts another program's file in the document whole, as Word's Insert Object does: an Excel workbook, a PDF, a Word file or a presentation, or any other file. It shows what it holds where it can (a workbook's cells as Excel shows them, a PDF's first page, a picture), or an icon with the file's name: tick **Display as icon** for that. Right-click it to switch between the two.
+
+Double-click the object (or right-click ▸ **Open Object**) to open the file in its own program. Each time you save it there, the document takes the changes and a new picture of them, so a table of results can be kept up to date in Excel. This needs the desktop app; in a browser the file is downloaded instead.
+
+To embed cells from Excel, copy them in Excel and choose **Edit** ▸ **Paste as Object** (or right-click ▸ Paste as Object) in the Windows app, as Word's Paste Special does.
+
+Objects are saved in Word files as Word's own embedded objects, so double-clicking one in Word opens it in its program too (Office files as Word keeps them; other files as Windows packages). Objects in Word files you open here are kept as they are and saved back unchanged; ChemDraw objects still become structures. Objects stay in line with the text.
 
 ## Captions and cross-references
 
@@ -172,6 +210,17 @@ On the **Layout** tab:
 - **Page numbers**: top or bottom, left, centre or right. **S1, S2… numbering** numbers the pages as Supporting Information is numbered. **Number Format…** writes them 1, 2, 3 or i, ii, iii (or I, II; a, b; A, B) and sets where the numbering starts.
 - **Header…** and **Footer…** set the text at the top and bottom of every page. The ⬊ in the corner of the group sets where they sit, the first page number and whether the first page is numbered.
 - **Line Numbers**: numbers down the left margin, as journals ask for in manuscripts under review: **Continuous**, **Restart Each Page** or **Restart Each Section**. **Suppress for Current Paragraph** leaves the selected paragraphs out (a title, say). **Line Numbering Options…** sets the first number, shows only every 5th (or any nth) number, and sets how far they sit from the text.
+- **Hyphenation**: **Automatic** breaks long words at the ends of lines, with a hyphen, where English allows (US English patterns). **Don't Hyphenate This Paragraph** keeps the selected paragraphs whole. **Hyphenation Options…** sets the hyphenation zone (a word is broken only if leaving it whole would leave more room than this at the end of the line), a limit on hyphens in a row, and whether words in capitals are broken. Words with digits and formulas are never broken.
+- **Insert ▸ Cover Page** puts a first page in front: the title, subtitle, author, institution and date in one of five looks (Plain, Banded, Ruled, Lab Report, Supporting Information). They are fields, so they follow **Document Properties** (Insert ▸ Quick Parts). The cover page has no page number; **Remove Cover Page** on the same menu takes it out. **Blank Page** puts an empty page at the caret.
+
+### Headers and footers on odd, even and first pages
+
+In the Header and Footer settings (the ⬊ in the corner of the group, or **Header…**):
+
+- **Different first page** gives the first page of the section its own header and footer (or none), as a title page has.
+- **Different odd and even pages** gives even pages their own header and footer, and puts the page number on the outside edge, as a bound thesis has.
+- **Picture…** puts a picture (a logo or a crest) at the left, centre or right of the header or footer, on every page, the first page or even pages, at the height you give.
+- Headers and footers from Word with pictures, tables or formatting are shown and saved as they are. The settings say which ones; **Plain Text** turns them back into plain text you can type in the boxes.
 
 ### Sections
 
@@ -185,6 +234,13 @@ The margins, paper, orientation, columns, page numbers and line numbers on the r
 
 To remove a section break, put the caret at the start of the paragraph after it and press **Backspace** (the text joins the section before). **Draft** view shows section breaks as double dotted lines, labelled with their kind. Sections, their headers and footers, page numbering and line numbers are saved in Word files as Word's own and open again here as they were.
 
+## Fields, dates and Quick Parts
+
+- **Insert ▸ Date & Time** (Alt+Shift+D) puts in today's date or the time in one of Word's formats, as text or as a field that updates.
+- **Insert ▸ Quick Parts** saves the selected text (an affiliation, a standard experimental paragraph) to use again in any document; Quick Parts are kept with your settings. The same menu inserts **Fields** (dates, the author, title, file name, page number, number of pages, a bookmark's text or page, or "above"/"below" it) and **Document Properties**, and sets the document's title, subject, author, company and keywords.
+- **References ▸ Cross-reference** also points at headings and bookmarks: their text, their page, or "above"/"below".
+- Fields are saved as Word's own fields, so Word updates them too; Word's come back as fields.
+
 ## Table of contents
 
 Give your headings **Heading 1**, **2** or **3**, put the caret where the contents should go, and choose **References** tab ▸ **Table of Contents** (also **Insert ▸ Table of Contents…**). Pick how many heading levels to show.
@@ -194,6 +250,27 @@ The contents keep themselves up to date: page numbers change as text moves, and 
 ## Table of figures
 
 **References** tab ▸ **Table of Figures** (also **Insert ▸ Table of Figures…**) lists the captions made with Insert Caption, each with its page number after a line of dots. Choose Figure, Scheme, Table or Chart captions, or all of them. Like the contents, it keeps itself up to date; double-click it to list other captions. In Word it is Word's own table of figures.
+
+## Index
+
+1. Select a word or phrase (or just click in a word) and choose **References** tab ▸ **Mark Entry** (Alt+Shift+X, also **Insert ▸ Mark Index Entry…**).
+2. Check the **Main entry**, and type a **Subentry** to list it under the main one (Aldol reaction ▸ asymmetric).
+3. Leave **Current page** for its page number (in bold or italic if you tick them), or choose **Cross-reference** and type "See Enolates" to send readers elsewhere instead.
+4. Tick **Mark All** to mark every paragraph where the text comes up, once each, as Word does.
+
+Each entry is kept on its paragraph, so it moves with the text. Open Mark Entry in a marked paragraph to see its entries, and tick **Take this paragraph's entries off** to remove them.
+
+**References** tab ▸ **Insert Index** (also **Insert ▸ Index…**) puts an Index heading and the index after the caret's paragraph: the entries A to Z, ignoring case and accents, with the subentries indented under them and each page once. It is set in two columns unless you choose another number (it gets a section of its own, with continuous section breaks before and after, as Word does). **Right align page numbers** puts them at the right after dots, and **A letter over each letter's entries** adds A, B, C headings. Like the contents, it keeps itself up to date; double-click it to change it. In Word, entries are Word's XE fields and the index is Word's own INDEX field.
+
+## Table of authorities
+
+For legal writing (cases, statutes, rules and other authorities), as Word does it:
+
+1. Select a citation and choose **References** tab ▸ **Mark Citation** (Alt+Shift+I).
+2. Check the **Long citation** (as the table lists it) and the **Short citation** (later mentions are marked by it), and pick the **Category**: Cases, Statutes, Other Authorities, Rules, Treatises, Regulations or Constitutional Provisions.
+3. **Mark All** marks every paragraph where the short citation comes up. Mark a later mention by itself by picking its short form from the list.
+
+**References** tab ▸ **Table of Authorities** lists the citations marked, each category under its heading, A to Z, with its pages after dots. Choose one category or **All**; **Use passim** prints "passim" in place of the pages for a citation on five pages or more. Double-click it to change it. In Word, citations are Word's TA fields and the table is Word's TOA field (one for each category).
 
 ## Footnotes and endnotes
 
@@ -222,6 +299,17 @@ The contents keep themselves up to date: page numbers change as text moves, and 
 
 Changes made by other people in Word open here as changes, in a different colour for each person.
 
+### Markup views and reviewers
+
+**Review** tab ▸ **Tracking** chooses how changes show:
+
+- **All Markup**: insertions and deletions in each reviewer's colour, a grey bar in the margin beside every changed line.
+- **Simple Markup**: the text as it will read once the changes are accepted, with a red bar in the margin where something changed.
+- **No Markup**: the text with the changes accepted (nothing is accepted until you say so).
+- **Original**: the text as it was before the changes.
+
+**Show Markup ▾** shows or hides **Insertions and Deletions** and **Formatting**, and the changes of each reviewer (or **All Reviewers**). **Track Formatting Changes** (on by default) marks bold, italic, font, size, colour and the like changed while tracking: they show with a bar in the margin, the bar at the bottom says what changed, and **Accept** keeps the new look while **Reject** puts the old one back. Formatting changes are Word's own, so Word shows and decides them too.
+
 ### Compare and Combine
 
 - **Review** tab ▸ **Compare…** takes an original and a revised version (open tabs, or **Choose a Word file…**) and opens a new document: the revised version with what changed marked as tracked changes, under the name you give in **Label changes with**. Both versions are compared with their own tracked changes accepted.
@@ -229,6 +317,19 @@ Changes made by other people in Word open here as changes, in a different colour
 - **Show changes at** compares whole words (as Word does by default) or letter by letter.
 
 A structure, picture, table or equation counts as one word: if it changed, the old one shows deleted and the new one inserted. Changes of formatting alone are not marked; the revised version's formatting is kept. Headers, footers and the text inside tables and text boxes come from the revised version (Compare) or the original (Combine) and are not compared.
+
+## Restrict Editing and form fields
+
+**Review** tab ▸ **Restrict Editing** protects a document so others can read it but change it only one way:
+
+- **No changes (Read only)**: nothing can be changed.
+- **Comments**: only comments can be added (and replied to).
+- **Tracked changes**: everything typed or deleted is tracked; changes can't be accepted or rejected and formatting can't be changed, so the author decides later.
+- **Filling in forms**: only the document's form fields can be filled in.
+
+Give a password if you want one: it is needed to stop the protection. Click **Restrict Editing** again to stop it. The protection and password are saved in the .docx the way Word keeps them, so the document is protected in Word too, with the same password, and a document protected in Word opens protected here. As in Word, this stops changes made by mistake; it does not encrypt the file, and the text can still be read.
+
+**Form fields** (Word's legacy form fields) go in from the same group, or from **Insert**: **Text Field** (a shaded box to type into), **Check Box** and **Drop-Down** (one of a list of items). Each has a name, a default and an optional line of help. Double-click a field to change its settings. In a document protected for filling in forms, click a field to fill it in (a check box ticks at once), press **Tab** to go to the next field and **Space** or **Enter** to fill in the one picked.
 
 ## Comments
 
@@ -263,6 +364,16 @@ Letters are set in italic as variables. Use `\mathrm{…}` for element symbols, 
 
 The **Make it** buttons change how the replacement looks: formula, bold, italic, underline, subscript, superscript, or plain. Leave "Replace with" empty to change only the look: for example, find `CH2Cl2`, choose the formula look, then **All**, and every CH2Cl2 in the text becomes CH₂Cl₂. Each Replace All is one step to undo. Finding goes by the letters alone, so CH2Cl2 is found however it is formatted.
 
+**Go To** (Ctrl+G or F5) goes to a page, section, line, bookmark, comment, footnote, endnote, field, table, figure, equation or heading: type its number, `+` or `-` with a number to go on or back from the caret, or a bookmark's name. **Select ▾** selects everything, the figures, or all the text formatted like the text at the caret (then change its look in one go).
+
+## Spelling, grammar and word count
+
+On the **Review** tab:
+
+- **Spelling & Grammar** (F7) goes through the document from the caret: misspelled words, chemistry formatting slips (formulas without subscripts, solvents, units, ranges) and a few grammar slips (a word written twice, two spaces, a space before a comma or full stop, "a" or "an" before the wrong sound, a sentence starting with a small letter). For each: **Ignore Once**, **Ignore All**, **Add to Dictionary**, **Change** or **Change All**. Untick **Check grammar as well** to look at spelling only.
+- **Thesaurus** (Shift+F7) gives words with the same meaning as the word at the caret, and related words; click one to put it in. It looks the word up online (Datamuse), sending only that word.
+- **Word Count** (Ctrl+Shift+G) shows pages, words, characters with and without spaces, paragraphs and lines, of the document or the selection, with or without text boxes, footnotes and endnotes. The status bar shows the word count all the time.
+
 ## Views and windows
 
 The **View** tab has Word's ways of looking at a document. The text is the same in every view; only how it is shown changes. The three main views are also the small buttons beside the zoom, under the pages.
@@ -281,12 +392,14 @@ The **View** tab has Word's ways of looking at a document. The text is the same 
 
 Saving, printing and PDFs always use the pages of Print Layout, whatever view is showing. These views are also under **View ▸ Document Views** in the menu bar.
 
-## Saving as Word and PDF
+## Saving as Word, RTF, OpenDocument and PDF
 
-- **Save** (Ctrl+S) writes a Word file (.docx). In Word, styles are Word's own, lists are Word lists, and captions, cross-references, compound numbers, page numbers, the table of contents and the table of figures are Word fields, and footnotes and endnotes are Word's own. Tracked changes and equations are Word's own too, so they keep working there.
+- **Save** (Ctrl+S) writes a Word file (.docx). In Word, styles are Word's own, lists are Word lists, and captions, cross-references, compound numbers, page numbers, the table of contents, the table of figures, index entries, the index, marked citations and the table of authorities are Word fields, form fields are Word's legacy form fields, Restrict Editing is Word's own protection, and footnotes and endnotes are Word's own. Tracked changes and equations are Word's own too, so they keep working there.
 - Structures show as pictures in Word. Open the file here again and they are editable drawings, even after Word has saved it.
 - The free fonts that come with the app are saved inside the file when you use them.
 - Opening a Word file made in Word brings in its text, styles, lists, tables, pictures, captions and cross-references. ChemDraw drawings embedded in it become editable structures. Anything left out is listed in a note.
+- **File ▸ Save As…** can also write **Rich Text (.rtf)**, which every word processor opens, or **OpenDocument Text (.odt)** for LibreOffice and Google Docs. Both keep the text and its look, headings, lists, tables, pictures, footnotes and the page size. Structures go as pictures. Live fields, citations, comments and tracked changes are kept only as their text (the save note says so); save as .docx to keep everything.
+- **File ▸ Open** opens .rtf, .odt and old Word files (.doc, Word 97–2003) too. An old .doc brings in its text, formatting, headings, tables, links and footnotes; its pictures are left out (a note says so; open and save it in Word as .docx to keep them). Saving it again writes a .docx.
 - **File ▸ Export PDF…** saves the pages exactly as they look on screen, with sharp structures, text and equations.
 - **File ▸ Print…** (Ctrl+P) prints every page as laid out.
 

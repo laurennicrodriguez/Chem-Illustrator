@@ -225,6 +225,8 @@ interface Drag {
   rot?: { snap: Snapshot; center: Vec; from: number; angle: number };
   /** Moving with smart guides: the selection's box when the move began, and what it lines up with. */
   guide?: { box: Rect; targets: GuideTarget[]; stops?: { xs: number[]; ys: number[] } };
+  /** The selection's box where the move started (for snapping to the grid and drawing guides). */
+  snapBox?: Rect;
   /** How far the selection has been moved so far. */
   applied?: Vec;
   /** Drawing a template: the ways it can go here, and which one is picked (Tab, or the pointer). */
@@ -792,6 +794,14 @@ export class Editor {
           this.guideLines = g.lines.filter((l) => !(across && l.y1 === l.y2 && l.x1 !== l.x2) && !(upDown && l.x1 === l.x2 && l.y1 !== l.y2));
         }
       }
+      // the grid and drawing guides (Slides; Alt: off)
+      if (this.moveSnap && !e.altKey) {
+        if (!d.snapBox) { const b = this.selBox(); if (b) d.snapBox = { x1: b.x1 - done.x, y1: b.y1 - done.y, x2: b.x2 - done.x, y2: b.y2 - done.y }; }
+        if (d.snapBox) {
+          const snapped = this.moveSnap(d.snapBox, to, this.tol(6));
+          to = { x: want.x === 0 && e.shiftKey ? 0 : snapped.x, y: want.y === 0 && e.shiftKey ? 0 : snapped.y };
+        }
+      }
       this.moveSelection(to.x - done.x, to.y - done.y);
       // arrows and lone pairs stuck to what moves go along with it as it goes
       if (hasPins(this.doc)) followPins(this.doc);
@@ -939,6 +949,15 @@ export class Editor {
    * commands act on what was clicked. Empty space away from the selection clears it. Null on
    * empty space.
    */
+  /** The point on the page under the pointer, and whether something there (or the selection's box) would take a click. */
+  pointAt(e: MouseEvent): { p: Vec; taken: boolean } {
+    const p = this.docPoint(e);
+    const b = this.hasSelection() ? this.selBox() : null;
+    const pad = this.tol(8);
+    const onSel = !!b && p.x >= b.x1 - pad && p.x <= b.x2 + pad && p.y >= b.y1 - pad && p.y <= b.y2 + pad;
+    return { p, taken: onSel || !!this.hitTest(p) || !!this.captionEd?.hit(p) };
+  }
+
   contextPick(e: MouseEvent): Hit {
     const p = this.docPoint(e);
     if (this.captionEd?.hit(p)) return null;
@@ -4141,6 +4160,8 @@ export class Editor {
 
   /** Smart guides: things moved snap into line with other structures, text, shapes and the page (View > Alignment Guides; Alt turns them off while dragging). */
   smartGuides = false;
+  /** Where a moved selection (its box at the start, dragged `raw`) lands on the grid and drawing guides, when there are any (Slides). */
+  moveSnap: ((box: Rect, raw: Vec, tol: number) => Vec) | null = null;
   /** Text boxes take a click as typing (Slides and Design), with an I-beam over them. */
   textFirst = false;
   /** View > Dark Page is on: marks drawn over the page are made to show up on it. */
