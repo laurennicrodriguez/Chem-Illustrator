@@ -57,6 +57,8 @@ export const TAG = {
    * bond middles) was, and the structure picture's box tag, so it finds its highlight again.
    */
   highlight: 'CHEMILLUSTRATOR_HIGHLIGHT',
+  /** A SmartArt-style diagram (a group of shapes): its text and look, kept on the group. */
+  diagram: 'CHEMILLUSTRATOR_DIAGRAM',
 };
 
 /** Where a highlight is, for finding it again: one of its atoms, else the middle of one of its bonds. */
@@ -171,6 +173,26 @@ export interface SlideParts {
   connectors: Arrow[];
   /** Structures and schemes, each with the captions, arrows and shapes around it: one picture each. */
   drawings: Selection[];
+  /** SmartArt-style diagrams: their frame (which keeps the text), shapes and connectors, each saved as one group. */
+  diagrams: SlideDiagram[];
+}
+
+export interface SlideDiagram { frame: Shape; shapes: Shape[]; connectors: Arrow[] }
+
+/** A slide's diagrams, and what belongs to them (which is saved in their groups, not on its own). */
+export function slideDiagrams(doc: Doc): { diagrams: SlideDiagram[]; shapes: Set<number>; arrows: Set<number> } {
+  const diagrams: SlideDiagram[] = [];
+  const shapes = new Set<number>(), arrows = new Set<number>();
+  for (const sh of doc.shapes.values()) {
+    if (!sh.diagram || !sh.frame) continue;
+    const members = sh.frame.shapes.map((id) => doc.shapes.get(id)).filter((x): x is Shape => !!x && x.kind === 'geo');
+    const links = sh.frame.arrows.map((id) => doc.arrows.get(id)).filter((x): x is Arrow => !!x);
+    shapes.add(sh.id);
+    for (const x of members) shapes.add(x.id);
+    for (const x of links) arrows.add(x.id);
+    diagrams.push({ frame: sh, shapes: shapeOrder(members), connectors: links });
+  }
+  return { diagrams, shapes, arrows };
 }
 
 const emptySel = (): Selection => ({ atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set() });
@@ -203,11 +225,13 @@ export function splitSlide(doc: Doc, measure: Measure = arialMeasure): SlidePart
       },
     });
   }
+  const dia = slideDiagrams(doc);
   const connectors: Arrow[] = [];
-  for (const r of doc.arrows.values()) if (r.from || r.to || r.elbow) connectors.push(r);
-  for (const r of doc.arrows.values()) if (!(r.from || r.to || r.elbow)) items.push({ box: boxOf(arrowPoints(r, 12)), chem: true, add: (s) => s.arrows.add(r.id) });
+  for (const r of doc.arrows.values()) if (!dia.arrows.has(r.id) && (r.from || r.to || r.elbow)) connectors.push(r);
+  for (const r of doc.arrows.values()) if (!dia.arrows.has(r.id) && !(r.from || r.to || r.elbow)) items.push({ box: boxOf(arrowPoints(r, 12)), chem: true, add: (s) => s.arrows.add(r.id) });
   for (const sh of doc.shapes.values()) {
     if (sh.picture) continue; // a stand-in for a picture from a ChemDraw file
+    if (dia.shapes.has(sh.id)) continue;
     if (sh.kind === 'picture') { pictures.push(sh); continue; }
     if (sh.kind === 'table') { if (sh.table) tables.push(sh); continue; }
     // design shapes stay PowerPoint shapes even beside structures (boxes round a structure, flasks under one)
@@ -252,7 +276,7 @@ export function splitSlide(doc: Doc, measure: Measure = arialMeasure): SlidePart
   // top to bottom, then left to right, as people read (and as PowerPoint tabs through them)
   const top = (s: Selection) => Math.min(...[...s.atoms].map((id) => doc.atoms.get(id)!.y), ...[...s.arrows].map((id) => doc.arrows.get(id)!.tail.y), ...[...s.shapes].map((id) => doc.shapes.get(id)!.y1));
   drawings.sort((a, b) => top(a) - top(b));
-  return { texts, pictures, shapes: shapeOrder([...shapes, ...geos]), tables, drawings, connectors };
+  return { texts, pictures, shapes: shapeOrder([...shapes, ...geos]), tables, drawings, connectors, diagrams: dia.diagrams };
 }
 
 export const arialMeasure: Measure = (t, size, _family, style) => arialWidth(t, size, /bold/.test(style));
@@ -359,7 +383,7 @@ const LAYOUT_TYPE: Record<LayoutId, string> = { title: 'title', 'title-content':
 /** A part in ppt/ as seen from another part in ppt/ or a folder in it. */
 const fromPpt = (from: string, path: string) => (from.split('/').length > 2 ? '../' : '') + path.slice(4);
 
-const xfrm = (r: Rect, extra = '') => `<a:xfrm${extra}><a:off x="${emu(r.x1)}" y="${emu(r.y1)}"/><a:ext cx="${Math.max(0, emu(r.x2 - r.x1))}" cy="${Math.max(0, emu(r.y2 - r.y1))}"/></a:xfrm>`;
+export const xfrm = (r: Rect, extra = '') => `<a:xfrm${extra}><a:off x="${emu(r.x1)}" y="${emu(r.y1)}"/><a:ext cx="${Math.max(0, emu(r.x2 - r.x1))}" cy="${Math.max(0, emu(r.y2 - r.y1))}"/></a:xfrm>`;
 const GROUP = '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>';
 
 class Writer {
@@ -604,6 +628,18 @@ class Writer {
       mark({ arrows: new Set([r.id]) }, id);
       out.push(this.connector(path, r, id++, doc.style.lineWidth));
     }
+    // diagrams: a group each, which animates as one
+    for (const g of parts.diagrams) {
+      const gid = id++;
+      mark({ shapes: new Set([g.frame.id, ...g.shapes.map((x) => x.id)]), arrows: new Set(g.connectors.map((x) => x.id)) }, gid);
+      const kids = [
+        ...g.shapes.map((sh) => this.geo(path, sh, id++, doc, styles.body?.size ?? doc.style.captionSize)),
+        ...g.connectors.map((r) => this.connector(path, r, id++, doc.style.lineWidth)),
+      ];
+      const { id: _, x1: _a, y1: _b, x2: _c, y2: _d, frame: _f, ...look } = g.frame;
+      const tag = this.addTags(path, { [TAG.diagram]: JSON.stringify({ v: 1, s: look }) });
+      out.push(groupXml(gid, `Diagram ${gid - 1}`, shapeBox(g.frame), kids.join(''), `<p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst>`));
+    }
     const phCount: Record<string, number> = {};
     for (const tb of parts.tables) {
       const used: number[] = [];
@@ -696,30 +732,7 @@ class Writer {
    */
   private geo(path: string, s: Shape, id: number, doc: Doc, textSize: number): string {
     const def = geoDef(s.geo);
-    const box = { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
-    const w = box.x2 - box.x1, h = box.y2 - box.y1;
-    const lw = doc.style.lineWidth;
-    const width = s.lineWidth ?? (s.bold ? lw * 2.5 : lw);
-    let geom: string;
-    if (def.prst) geom = `<a:prstGeom prst="${def.prst}"><a:avLst/></a:prstGeom>`;
-    else {
-      const o = def.draw(w, h);
-      const ta = textArea(def, 0, 0, w, h);
-      geom = '<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/>' +
-        `<a:rect l="${emu(ta.x1)}" t="${emu(ta.y1)}" r="${emu(ta.x2)}" b="${emu(ta.y2)}"/>` +
-        `<a:pathLst>${geoPath(o.body, w, h, '')}${o.lines?.length ? geoPath(o.lines, w, h, ' fill="none"') : ''}</a:pathLst></a:custGeom>`;
-    }
-    const fc = hex6(s.fillColor ?? s.color ?? '#000000');
-    const clear = Math.max(0, Math.min(1, s.transparency ?? 0));
-    const alpha = clear ? `<a:alpha val="${Math.round((1 - clear) * 100000)}"/>` : '';
-    const fill = patternOrGradient(s, fc, alpha) ?? (!s.filled ? '<a:noFill/>'
-      : s.fill === 'faded' ? `<a:solidFill><a:srgbClr val="${hex6(tint('#' + fc, FADE))}">${alpha}</a:srgbClr></a:solidFill>`
-      : s.fill === 'shaded' ? `<a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="${hex6(tint('#' + fc, 0.85))}">${alpha}</a:srgbClr></a:gs><a:gs pos="100000"><a:srgbClr val="${fc}">${alpha}</a:srgbClr></a:gs></a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill>`
-      : `<a:solidFill><a:srgbClr val="${fc}">${alpha}</a:srgbClr></a:solidFill>`);
-    const dash = s.dashed ? '<a:prstDash val="dash"/>' : '';
-    const ln = width > 0 ? `<a:ln w="${emu(width)}"><a:solidFill><a:srgbClr val="${hex6(s.color ?? '#000000')}"/></a:solidFill>${dash}<a:round/></a:ln>` : '<a:ln><a:noFill/></a:ln>';
-    const sl = shadowLook(s, s.shadowSize ?? Math.max(2, 0.04 * Math.min(w, h)));
-    const shadow = s.shadow ? `<a:effectLst><a:outerShdw${sl.blur ? ` blurRad="${emu(sl.blur)}"` : ''} dist="${emu(sl.distance)}" dir="${Math.round((((sl.angle % 360) + 360) % 360) * 60000)}" algn="tl" rotWithShape="0"><a:srgbClr val="${hex6(sl.colour)}"><a:alpha val="${Math.round(sl.opacity * 100000)}"/></a:srgbClr></a:outerShdw></a:effectLst>` : '';
+    const { box, geom, fill, ln, shadow } = geoSpPr(s, doc.style.lineWidth);
     const justify = s.textAlign ?? 'center';
     const algn = justify === 'center' ? 'ctr' : justify === 'right' ? 'r' : justify === 'justify' ? 'just' : 'l';
     const hasText = !!s.text?.runs.some((r) => r.text);
@@ -741,27 +754,13 @@ class Writer {
    * A tag keeps the arrow (and which shapes it is stuck to).
    */
   private connector(path: string, r: Arrow, id: number, lw: number): string {
-    const pts = r.elbow ? elbowRoute(r) : [r.tail, r.head];
-    const b = boxOf(pts);
-    const w = Math.max(b.x2 - b.x1, 0), h = Math.max(b.y2 - b.y1, 0);
-    let geom: string, frame: string;
-    if (r.elbow) {
-      const steps = pts.map((p, i) => [i ? 'L' : 'M', p.x - b.x1, p.y - b.y1] as GeoStep);
-      geom = `<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="r" b="b"/><a:pathLst>${geoPath(steps, Math.max(w, 0.01), Math.max(h, 0.01), ' fill="none"')}</a:pathLst></a:custGeom>`;
-      frame = xfrm(b);
-    } else {
-      geom = '<a:prstGeom prst="straightConnector1"><a:avLst/></a:prstGeom>';
-      frame = xfrm(b, `${r.head.x < r.tail.x ? ' flipH="1"' : ''}${r.head.y < r.tail.y ? ' flipV="1"' : ''}`);
-    }
-    const width = r.lineWidth ?? lw;
-    const end = (style: Arrow['headStyle']) => (style === 'none' ? '' : r.headType === 'angle' ? 'arrow' : 'triangle');
-    // PowerPoint's "head end" is where the line starts, its "tail end" where it finishes
-    const headEnd = end(r.tailStyle), tailEnd = end(r.headStyle);
-    const ln = `<a:ln w="${emu(r.line === 'bold' ? width * 2.5 : width)}"><a:solidFill><a:srgbClr val="${hex6(r.color ?? '#000000')}"/></a:solidFill>${r.line === 'dashed' ? '<a:prstDash val="dash"/>' : ''}<a:miter lim="800000"/>` +
-      `${headEnd ? `<a:headEnd type="${headEnd}"/>` : ''}${tailEnd ? `<a:tailEnd type="${tailEnd}"/>` : ''}</a:ln>`;
+    const { frame, geom, ln, curved } = connectorSpPr(r, lw);
     const { id: _, ...keep } = r;
     const tag = this.addTags(path, { [TAG.connector]: JSON.stringify({ v: 1, a: keep }) });
-    return `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="${id}" name="${r.elbow ? 'Elbow Connector' : 'Straight Arrow Connector'} ${id - 1}"/><p:cNvCxnSpPr/><p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvCxnSpPr>` +
+    const nvPr = `<p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr>`;
+    // a curved arrow is a shape drawn along the curve (programs route a connector afresh, square)
+    if (curved) return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="Curved Arrow ${id - 1}"/><p:cNvSpPr/>${nvPr}</p:nvSpPr><p:spPr>${frame}${geom}${ln}</p:spPr></p:sp>`;
+    return `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="${id}" name="${r.elbow ? 'Elbow Connector' : 'Straight Arrow Connector'} ${id - 1}"/><p:cNvCxnSpPr/>${nvPr}</p:nvCxnSpPr>` +
       `<p:spPr>${frame}${geom}${ln}</p:spPr></p:cxnSp>`;
   }
 
@@ -920,6 +919,68 @@ class Writer {
 }
 
 /** One of a design template's shapes, as a plain PowerPoint shape in a slide layout. */
+/** A connector's place, path and line with its heads, as PowerPoint and Word (in groups) both write them. */
+export function connectorSpPr(r: Arrow, lw: number): { frame: string; geom: string; ln: string; curved: boolean } {
+  const curved = !r.elbow && !!r.sweep;
+  const pts = r.elbow ? elbowRoute(r) : curved ? arrowPoints(r, 32) : [r.tail, r.head];
+  const b = boxOf(pts);
+  const w = Math.max(b.x2 - b.x1, 0), h = Math.max(b.y2 - b.y1, 0);
+  let geom: string, frame: string;
+  if (r.elbow || curved) {
+    const steps = pts.map((p, i) => [i ? 'L' : 'M', p.x - b.x1, p.y - b.y1] as GeoStep);
+    geom = `<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="r" b="b"/><a:pathLst>${geoPath(steps, Math.max(w, 0.01), Math.max(h, 0.01), ' fill="none"')}</a:pathLst></a:custGeom>`;
+    frame = xfrm(b);
+  } else {
+    geom = '<a:prstGeom prst="straightConnector1"><a:avLst/></a:prstGeom>';
+    frame = xfrm(b, `${r.head.x < r.tail.x ? ' flipH="1"' : ''}${r.head.y < r.tail.y ? ' flipV="1"' : ''}`);
+  }
+  const width = r.lineWidth ?? lw;
+  const end = (style: Arrow['headStyle']) => (style === 'none' ? '' : r.headType === 'angle' ? 'arrow' : 'triangle');
+  // PowerPoint's "head end" is where the line starts, its "tail end" where it finishes
+  const headEnd = end(r.tailStyle), tailEnd = end(r.headStyle);
+  const ln = `<a:ln w="${emu(r.line === 'bold' ? width * 2.5 : width)}"><a:solidFill><a:srgbClr val="${hex6(r.color ?? '#000000')}"/></a:solidFill>${r.line === 'dashed' ? '<a:prstDash val="dash"/>' : ''}<a:miter lim="800000"/>` +
+    `${headEnd ? `<a:headEnd type="${headEnd}"/>` : ''}${tailEnd ? `<a:tailEnd type="${tailEnd}"/>` : ''}</a:ln>`;
+  return { frame, geom, ln, curved };
+}
+
+/** A design shape's place, outline, fill, line and shadow, as PowerPoint and Word (in groups) both write them. */
+export function geoSpPr(s: Shape, lw: number): { box: Rect; geom: string; fill: string; ln: string; shadow: string } {
+  const def = geoDef(s.geo);
+  const box = { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
+  const w = box.x2 - box.x1, h = box.y2 - box.y1;
+  const width = s.lineWidth ?? (s.bold ? lw * 2.5 : lw);
+  let geom: string;
+  if (def.prst) geom = `<a:prstGeom prst="${def.prst}"><a:avLst/></a:prstGeom>`;
+  else {
+    const o = def.draw(w, h);
+    const ta = textArea(def, 0, 0, w, h);
+    // the text's box through guides (LibreOffice ignores a text box given as plain numbers)
+    const f = (v: number, of: number) => Math.round((of > 0 ? v / of : 0) * 100000);
+    geom = `<a:custGeom><a:avLst/><a:gdLst><a:gd name="txL" fmla="*/ w ${f(ta.x1, w)} 100000"/><a:gd name="txT" fmla="*/ h ${f(ta.y1, h)} 100000"/><a:gd name="txR" fmla="*/ w ${f(ta.x2, w)} 100000"/><a:gd name="txB" fmla="*/ h ${f(ta.y2, h)} 100000"/></a:gdLst><a:ahLst/><a:cxnLst/>` +
+      '<a:rect l="txL" t="txT" r="txR" b="txB"/>' +
+      `<a:pathLst>${geoPath(o.body, w, h, '')}${o.lines?.length ? geoPath(o.lines, w, h, ' fill="none"') : ''}</a:pathLst></a:custGeom>`;
+  }
+  const fc = hex6(s.fillColor ?? s.color ?? '#000000');
+  const clear = Math.max(0, Math.min(1, s.transparency ?? 0));
+  const alpha = clear ? `<a:alpha val="${Math.round((1 - clear) * 100000)}"/>` : '';
+  const fill = patternOrGradient(s, fc, alpha) ?? (!s.filled ? '<a:noFill/>'
+    : s.fill === 'faded' ? `<a:solidFill><a:srgbClr val="${hex6(tint('#' + fc, FADE))}">${alpha}</a:srgbClr></a:solidFill>`
+    : s.fill === 'shaded' ? `<a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="${hex6(tint('#' + fc, 0.85))}">${alpha}</a:srgbClr></a:gs><a:gs pos="100000"><a:srgbClr val="${fc}">${alpha}</a:srgbClr></a:gs></a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill>`
+    : `<a:solidFill><a:srgbClr val="${fc}">${alpha}</a:srgbClr></a:solidFill>`);
+  const dash = s.dashed ? '<a:prstDash val="dash"/>' : '';
+  const ln = width > 0 ? `<a:ln w="${emu(width)}"><a:solidFill><a:srgbClr val="${hex6(s.color ?? '#000000')}"/></a:solidFill>${dash}<a:round/></a:ln>` : '<a:ln><a:noFill/></a:ln>';
+  const sl = shadowLook(s, s.shadowSize ?? Math.max(2, 0.04 * Math.min(w, h)));
+  const shadow = s.shadow ? `<a:effectLst><a:outerShdw${sl.blur ? ` blurRad="${emu(sl.blur)}"` : ''} dist="${emu(sl.distance)}" dir="${Math.round((((sl.angle % 360) + 360) % 360) * 60000)}" algn="tl" rotWithShape="0"><a:srgbClr val="${hex6(sl.colour)}"><a:alpha val="${Math.round(sl.opacity * 100000)}"/></a:srgbClr></a:outerShdw></a:effectLst>` : '';
+  return { box, geom, fill, ln, shadow };
+}
+
+/** A group of shapes, its box the same inside as out (so the shapes keep their places). */
+export function groupXml(id: number, name: string, box: Rect, kids: string, nvPr = ''): string {
+  const off = `<a:off x="${emu(box.x1)}" y="${emu(box.y1)}"/>`, ext = `<a:ext cx="${Math.max(0, emu(box.x2 - box.x1))}" cy="${Math.max(0, emu(box.y2 - box.y1))}"/>`;
+  return `<p:grpSp><p:nvGrpSpPr><p:cNvPr id="${id}" name="${xml(name)}"/><p:cNvGrpSpPr/><p:nvPr>${nvPr}</p:nvPr></p:nvGrpSpPr>` +
+    `<p:grpSpPr><a:xfrm>${off}${ext}<a:chOff x="${emu(box.x1)}" y="${emu(box.y1)}"/><a:chExt cx="${Math.max(0, emu(box.x2 - box.x1))}" cy="${Math.max(0, emu(box.y2 - box.y1))}"/></a:xfrm></p:grpSpPr>${kids}</p:grpSp>`;
+}
+
 function decorXml(sh: DecorShape, id: number): string {
   const nv = (name: string) => `<p:nvSpPr><p:cNvPr id="${id}" name="${name} ${id}"/><p:cNvSpPr/><p:nvPr userDrawn="1"/></p:nvSpPr>`;
   const solid = (c: string) => `<a:solidFill><a:srgbClr val="${hex6(c)}"/></a:solidFill>`;

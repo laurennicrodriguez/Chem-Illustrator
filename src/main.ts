@@ -74,6 +74,8 @@ import { CommandSearch, uniqueCommands, type CommandItem } from './ui/command-se
 import { fillTemplate, templateSize } from './design/templates';
 import { askCycle } from './ui/cycle-dialog';
 import { askEnergy } from './ui/energy-dialog';
+import { askDiagram } from './ui/diagram-dialog';
+import { putDiagram, type DiagramData } from './design/diagrams';
 import { itemsToSvg } from './render/svg';
 import { PAPERS, defaultPaper, orient, placeIn, inside, handoutCells, noteLines, placeSvg, pageSvg } from './print-layout';
 import { printPages } from './ui/print';
@@ -617,6 +619,33 @@ async function energyDiagram(id: number | null): Promise<void> {
   if (got) editor.putEnergyDiagram(got, pasteCentre(), now ? id! : undefined, deckNow()?.size);
 }
 editor.onEnergy = (id) => void energyDiagram(id);
+
+/** A diagram drawn as an SVG picture, for the diagram window's preview and its layout buttons. */
+function diagramSvg(d: DiagramData): string {
+  const x = new Doc();
+  x.edit('Diagram', () => putDiagram(x, POINTS, d, { x: 0, y: 0 }));
+  const pic = recordPicture(x, 2);
+  return pic ? pictureSvg(pic) : '';
+}
+
+/** Insert ▸ Diagram…, or the selected diagram's text and look to change (`id`, its frame). */
+async function smartDiagram(id: number | null): Promise<void> {
+  finishTyping();
+  const now = id !== null ? doc.shapes.get(id)?.diagram ?? null : null;
+  const got = await askDiagram(now, { preview: diagramSvg, scale: deckNow() ? 1 : 0.7 });
+  if (got) editor.putDiagramAt(got, pasteCentre(), now ? id! : undefined, deckNow()?.size);
+}
+editor.onDiagram = (id) => void smartDiagram(id);
+
+/** A document's diagram: a new one, or the one in a figure (its drawing) to change. Null when cancelled. */
+async function documentDiagram(contents: Contents | null): Promise<Contents | null> {
+  const d = structureDoc(contents ?? { atoms: [], bonds: [], captions: [], arrows: [], shapes: [] }, docStyle());
+  const frame = [...d.shapes.values()].find((s) => s.diagram);
+  const got = await askDiagram(frame?.diagram ?? null, { preview: diagramSvg, scale: 0.75 });
+  if (!got) return null;
+  d.edit(frame ? 'Change Diagram' : 'Diagram', () => putDiagram(d, POINTS, got, frame ? { x: Math.min(frame.x1, frame.x2), y: Math.min(frame.y1, frame.y2) } : { x: 0, y: 0 }, frame?.id));
+  return d.contents();
+}
 
 /** Select just these (new) atoms and their bonds. */
 function selectNewAtoms(ids: number[]): void {
@@ -1248,7 +1277,7 @@ const docFiles: DocxDeps = {
     const pic = recordPicture(d, FIGURE_MARGIN);
     if (!pic) return null;
     const png = new Uint8Array(await (await canvasPng(pictureCanvas(d, pic).canvas)).arrayBuffer());
-    return { png, svg: pictureSvg(pic), w: pic.box.x2 - pic.box.x1, h: pic.box.y2 - pic.box.y1 };
+    return { png, svg: pictureSvg(pic), w: pic.box.x2 - pic.box.x1, h: pic.box.y2 - pic.box.y1, x: pic.box.x1, y: pic.box.y1 };
   },
   svgToPng,
   fonts: bundledFaces,
@@ -2638,6 +2667,7 @@ const docMode = new DocumentMode({
   command: (name) => command(name),
   changed: () => ws.noteChange(),
   editDrawing: (contents, title, done) => editCellStructure(contents, title, done, docStyle()),
+  editDiagram: (contents) => documentDiagram(contents),
   copyDrawing: async (contents, style) => (await copyDrawing(structureDoc(contents, style), null)).replace(/^Copied the whole drawing/, 'Copied the structure'),
   readPaste: (e) => readDocPaste(e),
   toStructure: (text, style) => textToStructure(text, style),
@@ -2721,6 +2751,7 @@ const DOC_COMMANDS: Record<string, () => unknown> = {
     const anchor = b && b.offsetParent ? b : document.querySelector<HTMLElement>('#doc-ribbon .rb-tabs')!;
     shapeMenu.show(anchor, 'Click a shape to put it in the text at the caret. Double-click it there to change its size, colour or text.', (id) => docMode.insertShape(id));
   },
+  'insert-diagram': () => void docMode.insertDiagram(),
   'insert-icons': () => {
     const b = document.querySelector<HTMLElement>('#doc-ribbon [data-doc="insert-icons"]');
     const anchor = b && b.offsetParent ? b : document.querySelector<HTMLElement>('#doc-ribbon .rb-tabs')!;
@@ -3062,6 +3093,9 @@ const COMMANDS: Record<string, () => unknown> = {
   'catalytic-cycle': () => void insertCycle(),
   'ts-brackets': () => { if (!editor.tsBrackets()) flash('Select the transition state first (draw it with partial bonds: P over a bond).'); },
   'energy-diagram': () => void energyDiagram(null),
+  'insert-diagram': () => void smartDiagram(null),
+  'edit-diagram': () => { const id = editor.selectedDiagram(); if (id === null) flash('Select a diagram first.'); else void smartDiagram(id); },
+  'diagram-to-shapes': () => editor.ungroupSelectedDiagram() || flash('Select a diagram first.'),
   'edit-energy': () => { const id = editor.selectedEnergy(); if (id === null) flash('Select an energy diagram first.'); else void energyDiagram(id); },
   'animate-reaction': () => animateDialog.open(),
   'animate-step': () => {
@@ -4933,6 +4967,7 @@ function drawingMenu(): MenuItem[] {
   return [
     { cmd: 'cut' }, { cmd: 'copy' }, { cmd: 'paste' }, { cmd: 'delete', label: 'Delete' }, null,
     ...(editor.selectedEnergy() !== null ? [{ cmd: 'edit-energy' }, null] : []),
+    ...(editor.selectedDiagram() !== null ? [{ cmd: 'edit-diagram' }, { cmd: 'diagram-to-shapes' }, null] : []),
     ...(atoms ? [{ label: 'Copy As', items: [{ cmd: 'copy-smiles' }, { cmd: 'copy-mol' }, { cmd: 'copy-cdxml' }] }, null] : []),
     ...(atoms ? [
       { cmd: 'clean-up' },
@@ -5069,6 +5104,11 @@ editor.onContextMenu = (e) => {
 stylePanel.cropWithMouse = () => cropPicture();
 stylePanel.removeWhite = (ids) => void removeWhite(ids);
 stylePanel.frames = { add: () => void command('add-frame'), fit: (id) => editor.fitFrame(id) };
+stylePanel.diagram = {
+  edit: (id) => void smartDiagram(id),
+  restyle: (id, patch) => { const d = doc.shapes.get(id)?.diagram; if (d) editor.putDiagramAt({ ...d, ...patch }, pasteCentre(), id); },
+  ungroup: (id) => editor.ungroupSelectedDiagram(id),
+};
 stylePanel.energy = {
   edit: (id) => void energyDiagram(id),
   restyle: (id, patch) => { const d = doc.shapes.get(id)?.energy; if (d) editor.putEnergyDiagram({ ...d, ...patch }, pasteCentre(), id); },

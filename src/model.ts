@@ -7,6 +7,7 @@ import { DocStyle, ACS_1996 } from './style';
 import { arrowPoints, gluePoint } from './objects';
 import { followPins } from './chem/pins';
 import type { EnergyData } from './design/energy';
+import type { DiagramData } from './design/diagrams';
 import { isMetal, isMetalLabel, lowestValence } from './chem/elements';
 import { NICKNAMES } from './chem/labels';
 
@@ -642,6 +643,8 @@ export interface Shape {
   frame?: Frame;
   /** An energy diagram's numbers and look, kept on the invisible frame round its drawing (design/energy.ts). */
   energy?: EnergyData;
+  /** A SmartArt-style diagram's text and look, kept on the invisible frame round its shapes (design/diagrams.ts). */
+  diagram?: DiagramData;
 }
 
 /**

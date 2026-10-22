@@ -51,6 +51,8 @@ export interface DocModeHost {
   changed(): void;
   /** Open the drawing tools on a drawing (null to draw a new one); `done` gets it, or null when cancelled. */
   editDrawing(contents: Contents | null, title: string, done: (c: Contents | null) => void): void;
+  /** The diagram window (Insert > Diagram) on a figure's diagram, or for a new one (null); resolves to the drawing, or null when cancelled. */
+  editDiagram?(contents: Contents | null): Promise<Contents | null>;
   /** Put a drawing on the clipboard, for ChemDraw and Word. */
   copyDrawing(contents: Contents, style: DocStyle): Promise<string>;
   /** What a paste brings: a drawing (from ChemDraw or a drawing here), a picture, or text. */
@@ -1426,10 +1428,20 @@ export class DocumentMode {
     else this.drawNew();
   }
 
-  editFigure(id: number): void {
+  editFigure(id: number, tools = false): void {
     const f = this.file;
     const o = f?.t.objects[id];
     if (!f || !o || o.kind !== 'drawing') return;
+    // a diagram opens its text and look (Edit Drawing still opens the drawing tools on it)
+    if (!tools && this.host.editDiagram && o.contents.shapes.some((s) => s.diagram)) {
+      void this.host.editDiagram(o.contents).then((c) => {
+        const cur = this.file === f ? f.t.objects[id] : undefined;
+        if (!c || cur?.kind !== 'drawing') return;
+        f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { ...cur, contents: c } } } as DocText, 'Edit diagram');
+        this.focus();
+      });
+      return;
+    }
     const spot = this.cellSpot();
     this.host.editDrawing(o.contents, 'Figure', (c) => {
       if (this.file === f) this.backToCell(spot);
@@ -1563,6 +1575,16 @@ export class DocumentMode {
     this.focus();
   }
 
+  /** Insert > Diagram: a SmartArt-style diagram from text, as a drawing in the text at the caret (double-click to change it). */
+  async insertDiagram(): Promise<void> {
+    if (!this.file || !this.host.editDiagram) return;
+    const f = this.file;
+    const c = await this.host.editDiagram(null);
+    if (!c || this.file !== f) { this.focus(); return; }
+    this.insertObject({ kind: 'drawing', contents: c }, 'Insert diagram');
+    this.focus();
+  }
+
   /** Insert > Text Box: a box of text on the page, at the left margin beside the paragraph the caret is in. */
   insertTextBox(): void {
     const f = this.file!;
@@ -1671,7 +1693,7 @@ export class DocumentMode {
       case 'accept-all': case 'reject-all': this.decideAll(cmd === 'accept-all'); break;
       case 'next-change': case 'prev-change': this.goToChange(cmd === 'next-change'); break;
       case 'manage-references': void this.manageReferences(); break;
-      case 'edit-figure': { const id = this.pickedObject(); if (id === null) { this.host.flash('Click a structure or scheme first, then Edit Drawing (or double-click it).'); break; } this.editFigure(id); break; }
+      case 'edit-figure': { const id = this.pickedObject(); if (id === null) { this.host.flash('Click a structure or scheme first, then Edit Drawing (or double-click it).'); break; } this.editFigure(id, true); break; }
       case 'zoom-in': this.view.setZoom(this.view.zoom * 1.25); this.showZoom(); break;
       case 'zoom-out': this.view.setZoom(this.view.zoom * 0.8); this.showZoom(); break;
       case 'zoom-fit': this.view.fitWidth(); this.showZoom(); break;

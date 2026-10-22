@@ -555,7 +555,7 @@ export class DocPanel {
       put('fig-frame', lk?.frame ? String(lk.frame) : '');
       put('fig-frame-colour', lk?.frameColor ?? '#000000');
       put('fig-shadow', lk?.shadow ?? 'none');
-      this.figureInfo.textContent = (isBox ? 'A text box: click inside it to type, drag its edge to move it. ' : o?.kind === 'picture' ? 'A picture. ' : 'A drawing: double-click it to change it with the drawing tools. ')
+      this.figureInfo.textContent = (isBox ? 'A text box: click inside it to type, drag its edge to move it. ' : o?.kind === 'picture' ? 'A picture. ' : o?.kind === 'drawing' && o.contents.shapes.some((x) => x.diagram) ? 'A diagram: double-click it to change its text, layout or colours (Edit Drawing opens the drawing tools on it). ' : 'A drawing: double-click it to change it with the drawing tools. ')
         + (sz ? `Shown ${showLength(sz.w, 'in')} × ${showLength(sz.h, 'in')} in${fitted ? ', made smaller to fit between the margins' : ''}.` : '');
       const [edit, own] = this.figButtons.querySelectorAll('button');
       edit.style.display = o?.kind === 'drawing' ? '' : 'none';

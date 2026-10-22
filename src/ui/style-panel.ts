@@ -28,6 +28,7 @@ import type { Measure } from '../text/layout';
 import { colourButton } from './colour-picker';
 import { centreEnd, haptoText, splitHapto } from '../chem/hapto';
 import type { EnergyData } from '../design/energy';
+import { DIAGRAM_COLOURS, DIAGRAM_LAYOUTS, type DiagramData } from '../design/diagrams';
 
 /** What the table controls need from the editor. */
 export interface TableHooks {
@@ -117,6 +118,8 @@ export class StylePanel {
   reaction: ReactionHooks | null = null;
   /** Energy diagrams (set up by the app): open the window, or redraw with some settings changed. */
   energy: { edit(shapeId: number): void; restyle(shapeId: number, patch: Partial<EnergyData>): void } | null = null;
+  /** SmartArt-style diagrams: the window with their text, a change of layout or look, and Convert to Shapes. */
+  diagram: { edit(shapeId: number): void; restyle(shapeId: number, patch: Partial<DiagramData>): void; ungroup(shapeId: number): void } | null = null;
   /** Tie captions to the structure nearest each (Tie to Structure). */
   tie: ((captionIds: number[]) => void) | null = null;
 
@@ -160,8 +163,9 @@ export class StylePanel {
     if (several) this.structureControls(selAtoms, selBonds);
     if (arrows.length) this.arrowControls(arrows);
     // an energy diagram is a frame drawn from its numbers: its own section, not a rectangle's
-    const diagram = all.length === 1 && all[0].energy ? all[0] : undefined;
-    if (diagram) this.energyControls(diagram);
+    const diagram = all.length === 1 && (all[0].energy || all[0].diagram) ? all[0] : undefined;
+    if (diagram?.energy) this.energyControls(diagram);
+    else if (diagram?.diagram) this.diagramControls(diagram);
     else if (shapes.length) this.shapeControls(shapes);
     if (rings.length) this.shapeControls(rings, rings.length > 1 ? `${rings.length} ring fills` : 'Ring fill');
     if (pictures.length) this.pictureControls(pictures);
@@ -426,6 +430,37 @@ export class StylePanel {
     b.title = 'Change the species, energies and pathways (or double-click the diagram)';
     b.addEventListener('click', () => this.energy?.edit(sh.id));
     row.append(b);
+    this.body.append(row);
+  }
+
+  // ------------------------------------------------------------------ SmartArt-style diagrams
+
+  /** A diagram: its layout and look, the window with its text, and Convert to Shapes. */
+  private diagramControls(sh: Shape): void {
+    const d = sh.diagram!;
+    this.heading('Diagram');
+    const set = (patch: Partial<DiagramData>) => this.diagram?.restyle(sh.id, patch);
+    this.select('Layout', DIAGRAM_LAYOUTS.map((l) => [l.id, `${l.category}: ${l.name}`] as [string, string]), d.layout, (v) => set({ layout: v }));
+    this.select('Colours', DIAGRAM_COLOURS, d.colours, (v) => set({ colours: v }));
+    if (d.colours !== 'colourful' && d.colours !== 'mono' && d.colours !== 'grey') this.color('Accent colour', d.accent, (v) => set({ accent: v ?? '#4472c4' }), 'Blue', '#4472c4');
+    this.check('Rounded corners', d.rounded, (v) => set({ rounded: v }));
+    this.check('Shadow', d.shadow, (v) => set({ shadow: v }));
+    this.check('Fit the text', d.size === undefined, (v) => set({ size: v ? undefined : 14 }), 'The text as big as fits, the same size in every shape; off, a size of your own');
+    if (d.size !== undefined) this.number('Text size', d.size, 1, 4, 96, (v) => set({ size: v }));
+    this.note('Double-click a shape to type in it, or change all the text in the window. Drag a corner to resize it: it is drawn again to fill the box.');
+    const row = document.createElement('div');
+    row.className = 'style-buttons';
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = 'Edit Diagram…';
+    b.title = 'Change the text, one item per line (or double-click away from the words)';
+    b.addEventListener('click', () => this.diagram?.edit(sh.id));
+    const u = document.createElement('button');
+    u.type = 'button';
+    u.textContent = 'Convert to Shapes';
+    u.title = 'Make it ordinary shapes and connectors, to change one by one (it is no longer drawn from its text)';
+    u.addEventListener('click', () => this.diagram?.ungroup(sh.id));
+    row.append(b, u);
     this.body.append(row);
   }
 

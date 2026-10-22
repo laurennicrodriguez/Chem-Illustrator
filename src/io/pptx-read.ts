@@ -11,7 +11,7 @@
 
 import type { PinnedComment } from '../document/comments';
 import { COMMENT_REL, readCommentAuthors, readLegacyComments, readModernComments } from './pptx-comments';
-import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureLook } from '../model';
+import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureLook, type Frame } from '../model';
 import { layoutTable, NOTE_SCALE } from '../table';
 import { linesFromBorders, type Borders } from './cdxml-table';
 import { turnAbout, normDegrees, type Vec, type Rect } from '../geom';
@@ -25,7 +25,8 @@ import { backgroundColour, isPlain, sameBackground, type Background } from '../d
 import { readFill, readOneFill, type FillContext } from './pptx-background';
 import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure } from './pptx-write';
 import { GEOS } from '../design/geo';
-import { gluePoint } from '../objects';
+import { cleanDiagram, textFromShapes } from '../design/diagrams';
+import { gluePoint, arrowPoints, boxOf as pointsBox } from '../objects';
 import { readTransition, readTiming, type Transition, type Anim, type AnimTarget } from '../deck/animation';
 
 /** PowerPoint's shapes that are shapes in the library, by PowerPoint's name. */
@@ -511,7 +512,7 @@ class Reader {
 
   private elementOnly(s: Part, layout: Part | null, el: Element, t: Xf, doc: Doc): void {
     switch (el.localName) {
-      case 'sp': this.shape(s, layout, el, t, doc); break;
+      case 'sp': if (!this.ourConnector(s, el, t, doc)) this.shape(s, layout, el, t, doc); break;
       case 'pic': this.pictureEl(s, el, t, doc); break;
       case 'cxnSp': if (!this.ourConnector(s, el, t, doc)) this.line(el, kid(el, 'spPr'), t, doc); break;
       case 'grpSp': {
@@ -525,7 +526,11 @@ class Reader {
           inner = { sx, sy, tx: o.x - sx * fromEmu(chOff.getAttribute('x')), ty: o.y - sy * fromEmu(chOff.getAttribute('y')) };
         }
         if (Number(x?.getAttribute('rot') ?? 0)) this.warnings.add('Rotated groups came in unrotated.');
+        // one of our diagrams: its shapes come in as they are, then the frame that keeps its text goes round them
+        const diagramTag = this.tagsOf(s.path, kid(el, 'nvGrpSpPr', 'nvPr'))[TAG.diagram];
+        const hadShapes = new Set(doc.shapes.keys()), hadArrows = new Set(doc.arrows.keys());
         this.tree(s, layout, el, inner, doc);
+        if (diagramTag && off && ext) this.diagramFrame(diagramTag, off, ext, t, doc, hadShapes, hadArrows);
         break;
       }
       case 'graphicFrame': this.frame(s, el, t, doc); break;
@@ -538,6 +543,22 @@ class Reader {
       }
       default: break;
     }
+  }
+
+  /** The invisible frame of a diagram saved here, round the shapes its group brought in, keeping its text (with any words changed in PowerPoint). */
+  private diagramFrame(tag: string, off: Element, ext: Element, t: Xf, doc: Doc, hadShapes: Set<number>, hadArrows: Set<number>): void {
+    let saved: { s?: Partial<Shape> } | null;
+    try { saved = JSON.parse(tag); } catch { return; }
+    const diagram = cleanDiagram(saved?.s?.diagram);
+    if (!diagram) return;
+    const shapes = [...doc.shapes.keys()].filter((id) => !hadShapes.has(id));
+    const arrows = [...doc.arrows.keys()].filter((id) => !hadArrows.has(id));
+    const o = apply(t, fromEmu(off.getAttribute('x')), fromEmu(off.getAttribute('y')));
+    const box = { x1: o.x, y1: o.y, x2: o.x + t.sx * fromEmu(ext.getAttribute('cx')), y2: o.y + t.sy * fromEmu(ext.getAttribute('cy')) };
+    const frame: Frame = { atoms: [], captions: [], arrows, shapes, padX: 0, padY: 0, fit: true };
+    const made = doc.addShape({ kind: 'geo', geo: 'rect', ...box, filled: false, lineWidth: 0, color: '#000000', name: 'Diagram', frame, diagram: { ...diagram, w: box.x2 - box.x1, h: box.y2 - box.y1 } });
+    const text = textFromShapes(doc, made);
+    if (text !== diagram.text) doc.updateShape(made.id, { diagram: { ...made.diagram!, text } });
   }
 
   /** Tables, charts, and objects from other programs (ChemDraw) in PowerPoint. */
@@ -810,7 +831,7 @@ class Reader {
 
   /** A connector saved here: the arrow, stuck to the same shapes, where PowerPoint now has it. */
   private ourConnector(s: Part, el: Element, t: Xf, doc: Doc): boolean {
-    const tag = this.tagsOf(s.path, kid(el, 'nvCxnSpPr', 'nvPr'))[TAG.connector];
+    const tag = this.tagsOf(s.path, kid(el, el.localName === 'sp' ? 'nvSpPr' : 'nvCxnSpPr', 'nvPr'))[TAG.connector];
     if (!tag) return false;
     let saved: { a?: Omit<Arrow, 'id'> } | null;
     try { saved = JSON.parse(tag); } catch { return false; }
@@ -819,7 +840,16 @@ class Reader {
     const arrow: Omit<Arrow, 'id'> = { ...a };
     // a straight one moved in PowerPoint goes where it is now
     const box = boxOf(kid(kid(el, 'spPr'), 'xfrm'), t);
-    if (box && !a.elbow) {
+    if (box && a.sweep && !a.elbow) {
+      // a curved one: its ends go where the curve's box now is
+      const was = pointsBox(arrowPoints(a, 32));
+      const at = (p: { x: number; y: number }) => ({
+        x: box.x1 + (was.x2 > was.x1 ? ((p.x - was.x1) / (was.x2 - was.x1)) * (box.x2 - box.x1) : 0),
+        y: box.y1 + (was.y2 > was.y1 ? ((p.y - was.y1) / (was.y2 - was.y1)) * (box.y2 - box.y1) : 0),
+      });
+      arrow.tail = at(a.tail);
+      arrow.head = at(a.head);
+    } else if (box && !a.elbow) {
       arrow.tail = { x: box.flipH ? box.x2 : box.x1, y: box.flipV ? box.y2 : box.y1 };
       arrow.head = { x: box.flipH ? box.x1 : box.x2, y: box.flipV ? box.y1 : box.y2 };
     }

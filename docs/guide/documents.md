@@ -48,6 +48,7 @@ To change a style, open the ⬊ in the corner of **Styles** (or the **Format** p
 - Paste a structure copied from a drawing tab, or from ChemDraw (Windows app).
 - **Insert** tab ▸ **Picture** adds a picture from a file; you can also paste or drop one.
 - **Insert** tab ▸ **Shapes** puts a shape from the library (basic shapes, block arrows, flowchart shapes, callouts, lab glassware) in the text at the caret. It is a drawing like a structure: double-click it to change its size, colours or text with the drawing tools, and use the wrapping settings below to let text flow round it.
+- **Insert** tab ▸ **Diagram** puts a SmartArt-style diagram (lists, processes, cycles, hierarchies and more) in the text at the caret, drawn from lines of text. Double-click it to change its text or look. Word gets it as a group of shapes. See [Design: Diagrams](design.md#diagrams).
 - **Insert** tab ▸ **Icons** puts an icon in the text the same way: about 7,000, lab and science ones (glassware, molecules, hazard and safety signs) first. See [Design: Icons](design.md#icons).
 
 Click a structure or picture to pick it. Drag its corner handle, or type a **Size (%)** in the panel; **Own Size** puts it back to 100%. Right-click it for **Add Frame** and **Add Shadow**; the panel sets the frame's width and colour and a soft or sharp shadow.
