@@ -9,7 +9,7 @@
 // moving slides, or changing the master, are undone too.
 
 import { copyPinned, type PinnedComment } from '../document/comments';
-import { Doc, Caption, Placeholder, TextBase, ParaStyle, Contents } from '../model';
+import { Doc, Caption, Placeholder, TextBase, ParaStyle, Contents, applyBase } from '../model';
 import { DocStyle, ACS_1996 } from '../style';
 import { applyStyle, type RestyleHow } from '../drawing-styles';
 import type { Rect } from '../geom';
@@ -307,17 +307,37 @@ export interface Slide {
   background?: Background;
   /** The master's shapes and logo are left off this slide (Format Background > Hide background graphics). */
   hideGraphics?: boolean;
+  /** Hide Slide: skipped in the slide show, but kept (and saved) with the rest. */
+  hidden?: boolean;
 }
 
-/** A slide's transition, animations, comments and own background, copied (for duplicates and the undo history). */
-export interface Motion { transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean }
+/** A slide's transition, animations, comments, own background and whether it is hidden, copied (for duplicates and the undo history). */
+export interface Motion { transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean; hidden?: boolean }
 const copyMotion = (m: Motion): Motion => ({
   ...(m.transition ? { transition: { ...m.transition } } : {}),
   ...(m.anims?.length ? { anims: m.anims.map((a) => ({ ...a, target: { ...a.target } })) } : {}),
   ...(m.comments?.length ? { comments: copyPinned(m.comments) } : {}),
   ...(m.background ? { background: copyBackground(m.background) } : {}),
   ...(m.hideGraphics ? { hideGraphics: true } : {}),
+  ...(m.hidden ? { hidden: true } : {}),
 });
+
+/** A slide copied out of a deck (Copy, or Reuse Slides): its layout, drawing, notes and the rest. */
+export interface SlideCopy { layout: LayoutId; contents: Contents; notes: string; motion: Motion }
+
+/** Slides copied out of a deck, with the size and master they were made for. */
+export interface SlideSource { size: SlideSize; master: Master; slides: SlideCopy[] }
+
+/** Give a slide's drawing a master's drawing style and text styles (a title slide's in its own colours), and its background's colour. */
+function styleWith(d: Doc, m: Master, layout: LayoutId, own?: Background): void {
+  d.style = { ...m.drawing };
+  d.background = backgroundColour(slideBackground(m, layout, own));
+  d.textStyles = textStyles(m, layout);
+  d.allDirty = true;
+  d.version++;
+}
+
+const sameStyle = (a: DocStyle, b: DocStyle) => JSON.stringify({ ...a, name: '' }) === JSON.stringify({ ...b, name: '' });
 
 type HistoryEntry =
   | { kind: 'slide'; slide: Slide }
@@ -400,11 +420,7 @@ export class Deck {
 
   /** Give a slide's drawing the master's drawing style and text styles (a title slide's in its own colours), and its background's colour. */
   private styleDoc(d: Doc, layout: LayoutId, own?: Background): void {
-    d.style = { ...this.master.drawing };
-    d.background = backgroundColour(slideBackground(this.master, layout, own));
-    d.textStyles = textStyles(this.master, layout);
-    d.allDirty = true;
-    d.version++;
+    styleWith(d, this.master, layout, own);
   }
 
   /** Make a slide from contents (opening a file, pasting slides). Not undoable on its own. */
@@ -813,6 +829,97 @@ export class Deck {
     };
     put(master, after);
     this.record('Apply background to all', () => put(beforeMaster, before), () => put(master, after));
+  }
+
+  /**
+   * Hide Slide: hide some slides (the current one by default) from the slide show, or show them
+   * again. They stay in the deck and in saved files. One undo step.
+   */
+  setHidden(hidden: boolean, indices: number[] = [this.index]): void {
+    const slides = [...new Set(indices)].map((i) => this.slides[i]).filter((s) => s && !!s.hidden !== hidden);
+    if (!slides.length) return;
+    const put = (v: boolean) => {
+      for (const s of slides) { if (v) s.hidden = true; else delete s.hidden; }
+      this.looks++;
+      this.onChange();
+    };
+    put(hidden);
+    this.record(hidden ? 'Hide slide' : 'Show slide', () => put(!hidden), () => put(hidden), slides.length === 1 ? slides[0] : undefined);
+  }
+
+  /** The next slide the show plays after slide i (hidden slides are skipped), or -1 at the end. */
+  shownAfter(i: number): number {
+    for (let j = i + 1; j < this.slides.length; j++) if (!this.slides[j].hidden) return j;
+    return -1;
+  }
+
+  /** The slide the show went through before slide i, or -1 at the start. */
+  shownBefore(i: number): number {
+    for (let j = Math.min(i, this.slides.length) - 1; j >= 0; j--) if (!this.slides[j].hidden) return j;
+    return -1;
+  }
+
+  /** Where the show starts: the first slide that isn't hidden (the first slide when all are). */
+  firstShown(): number {
+    return Math.max(0, this.shownAfter(-1));
+  }
+
+  /** Copies of some slides (the current one by default), with this deck's size and master, for pasting into a deck. */
+  copySlides(indices: number[] = [this.index]): SlideSource {
+    const sorted = [...new Set(indices)].filter((i) => i >= 0 && i < this.slides.length).sort((a, b) => a - b);
+    return {
+      size: { ...this.size },
+      master: structuredClone(this.master),
+      slides: sorted.map((i) => {
+        const s = this.slides[i];
+        return { layout: s.layout, contents: structuredClone(this.docOf(i).contents()), notes: s.notes, motion: copyMotion(s) };
+      }),
+    };
+  }
+
+  /**
+   * Put copies of slides from a deck (this one or another) after slide `after` (the current
+   * one by default), and edit the first of them. They take this deck's master, as PowerPoint's
+   * Use Destination Theme, unless `keep` (Keep Source Formatting): then each keeps its background
+   * and the fonts, sizes and colours of its titles and text. Structures drawn in another style
+   * are redrawn in this deck's, or keep their look with `keep`. Slides made for another size stay
+   * centred on the slide. One undo step.
+   */
+  pasteSlides(from: SlideSource, keep = false, after = this.index): number {
+    if (!from.slides.length) return 0;
+    const dx = (this.size.w - from.size.w) / 2, dy = (this.size.h - from.size.h) / 2;
+    const resized = Math.abs(dx) > 1e-6 || Math.abs(dy) > 1e-6;
+    const restyle = !sameStyle(from.master.drawing, this.master.drawing);
+    const slides = from.slides.map((c) => {
+      const motion = copyMotion(c.motion);
+      const d = new Doc();
+      styleWith(d, from.master, c.layout, motion.background);
+      d.restoreContents(c.contents);
+      d.bulk(() => {
+        if (keep) {
+          // the look it had: its background, and its placeholders' text in the fonts and colours of its master
+          if (!motion.background) {
+            const bg = slideBackground(from.master, c.layout);
+            if (!sameBackground(bg, slideBackground(this.master, c.layout))) motion.background = copyBackground(bg);
+          }
+          const styles = textStyles(from.master, c.layout);
+          for (const cap of [...d.captions.values()]) if (cap.ph) d.updateCaption(cap.id, { runs: applyBase(cap.runs, styles[cap.ph]) });
+        }
+        if (restyle) applyStyle(d, this.master.drawing, keep ? 'new-only' : 'restyle');
+        if (resized) {
+          d.moveAtoms([...d.atoms.keys()], dx, dy);
+          for (const cap of [...d.captions.values()]) if (!cap.ph) d.updateCaption(cap.id, { x: cap.x + dx, y: cap.y + dy });
+          for (const r of [...d.arrows.values()]) d.updateArrow(r.id, { tail: { x: r.tail.x + dx, y: r.tail.y + dy }, head: { x: r.head.x + dx, y: r.head.y + dy } });
+          for (const s of [...d.shapes.values()]) d.updateShape(s.id, { x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy });
+        }
+      });
+      const made = this.makeSlide(c.layout, d.contents(), c.notes, motion);
+      if (resized) made.doc.bulk(() => this.fitPlaceholders(made.doc, c.layout));
+      return made;
+    });
+    const at = Math.max(0, Math.min(this.slides.length, after + 1));
+    this.insert(at, slides, slides.length > 1 ? 'Paste slides' : 'Paste slide');
+    return slides.length;
   }
 
   /** Change a slide's speaker notes. */

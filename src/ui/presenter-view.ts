@@ -248,8 +248,8 @@ export class PresenterView {
     if (k === 'Escape') this.stop();
     else if (['ArrowRight', 'ArrowDown', ' ', 'Enter', 'PageDown', 'n', 'N'].includes(k)) this.next();
     else if (['ArrowLeft', 'ArrowUp', 'Backspace', 'PageUp', 'p', 'P'].includes(k)) this.prev();
-    else if (k === 'Home') this.go(0);
-    else if (k === 'End') this.go(this.deck!.slides.length - 1);
+    else if (k === 'Home') this.go(this.deck!.firstShown());
+    else if (k === 'End') this.go(Math.max(0, this.deck!.shownBefore(this.deck!.slides.length)));
     else if (k === 'b' || k === 'B' || k === '.') this.setBlank(this.blank === 'black' ? null : 'black');
     else if (k === 'w' || k === 'W' || k === ',') this.setBlank(this.blank === 'white' ? null : 'white');
   }
@@ -290,7 +290,8 @@ export class PresenterView {
 
   private paintNext(): void {
     if (!this.root || !this.deck || !this.player) return;
-    const d = this.deck, i = this.player.i + 1;
+    // the next slide the show plays (hidden slides are skipped)
+    const d = this.deck, i = d.shownAfter(this.player.i);
     const box = this.els.nextBox.getBoundingClientRect();
     const w = Math.max(1, box.width), h = Math.max(1, Math.min(box.height, (box.width * d.size.h) / d.size.w));
     const c = this.els.next;
@@ -298,7 +299,7 @@ export class PresenterView {
     c.style.height = `${h}px`;
     const more = this.player.done < this.player.stepCount;
     this.els.nextLabel.textContent = more ? 'Next: more of this slide, then' : 'Next';
-    if (i >= d.slides.length) {
+    if (i < 0) {
       const ctx = c.getContext('2d')!;
       const dpr = window.devicePixelRatio || 1;
       c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);

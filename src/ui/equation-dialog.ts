@@ -50,14 +50,14 @@ export const EXAMPLES: { name: string; tex: string }[] = [
  * Ask for an equation. `display` is offered when inserting (an equation on a line of its own,
  * centred, as against one in the line of text); leave it undefined when changing one.
  */
-export function askEquation(opts: { tex: string; display?: boolean; font: string; ok: string }): Promise<EquationChoice | null> {
+export function askEquation(opts: { tex: string; display?: boolean; font: string; ok: string; app?: 'Word' | 'PowerPoint' }): Promise<EquationChoice | null> {
   return new Promise((resolve) => {
     const d = document.createElement('dialog');
     d.className = 'ask equation-dialog';
     d.setAttribute('aria-label', 'Equation');
     const form = document.createElement('form');
     form.innerHTML = `<h2>Equation</h2>
-      <p class="muted">Type it as LaTeX, as in journal templates: <code>x^2</code>, <code>k_{obs}</code>, <code>\\frac{a}{b}</code>, <code>\\alpha</code>. Letters come out in italic; use <code>\\mathrm{…}</code> for element symbols and <code>\\text{…}</code> for words and units. Word opens it as its own equation.</p>
+      <p class="muted">Type it as LaTeX, as in journal templates: <code>x^2</code>, <code>k_{obs}</code>, <code>\\frac{a}{b}</code>, <code>\\alpha</code>. Letters come out in italic; use <code>\\mathrm{…}</code> for element symbols and <code>\\text{…}</code> for words and units. ${opts.app ?? 'Word'} opens it as its own equation.</p>
       <div class="eq-palette" role="toolbar" aria-label="Pieces"></div>
       <div class="eq-palette eq-symbols" role="toolbar" aria-label="Greek letters and signs"></div>
       <textarea name="tex" rows="3" spellcheck="false" aria-label="Equation (LaTeX)"></textarea>

@@ -905,6 +905,10 @@ dialog.design-size { width: min(94vw, 500px); }
 .sl-item.current .sl-num { color: var(--accent); font-weight: 600; }
 .sl-list:focus-visible .sl-item.current .sl-thumb { box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px var(--accent-soft); }
 .sl-has-notes { position: absolute; left: 6px; top: 18px; font-size: 11px; color: var(--muted); }
+/* Hide Slide: greyed, its number struck through and boxed, as PowerPoint marks it */
+.sl-item.is-hidden .sl-thumb { opacity: 0.45; }
+.sl-item.is-hidden .sl-num { text-decoration: line-through; }
+.sl-item.is-hidden .sl-num::after { content: ''; display: block; margin: 2px 0 0 auto; width: 9px; height: 9px; border: 1px solid currentColor; border-radius: 1px; background: linear-gradient(to top right, transparent 45%, currentColor 45%, currentColor 55%, transparent 55%); }
 .sl-drop { position: absolute; left: 26px; right: 8px; height: 3px; margin-top: -2px; border-radius: 2px; background: var(--accent); pointer-events: none; }
 .sl-drop[hidden] { display: none; }
 .sl-add { flex: none; margin: 6px 8px 8px 30px; border-style: dashed; color: var(--muted); }
@@ -1395,6 +1399,11 @@ dialog.slide-templates { width: min(94vw, 840px); }
 .st-body .tg-grid { max-height: none; overflow: visible; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
 .st-body .tg-thumb { background: transparent; }
 .tg-card.current { border-color: var(--accent); }
+/* Reuse Slides: the other file's slides, picked ones marked */
+dialog.reuse-slides { width: min(94vw, 860px); }
+.rs-grid .tg-thumb { background: transparent; border: 1px solid var(--line); }
+.rs-card.current { background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent); }
+.rs-card .tg-size { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .st-option { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
 
 /* right-click menus on the drawing */
