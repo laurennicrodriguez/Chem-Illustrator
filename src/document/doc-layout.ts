@@ -12,9 +12,9 @@ import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model'
 import type { DocStyle } from '../style';
 import { withStack, layoutText, type Glyphs, type InlineBox, type LaidLine, type Measure, type Narrow, type TextFrame, type TextLayout } from '../text/layout';
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
-import { isCovered, spanOf } from '../table';
+import { isCovered, rowSpanOf, spanOf } from '../table';
 import * as rt from '../richtext';
-import { BOX_PAD, FLOAT_GAP, OBJECT_CHAR, columnsOf, fieldTexts, floatOf, lookExtent, lookOf, styleOf, type DocText, type HeaderFooter, type NamedStyle, type WrapKind } from './document';
+import { nestedTables, BOX_PAD, FLOAT_GAP, OBJECT_CHAR, columnsOf, fieldTexts, floatOf, lookExtent, lookOf, styleOf, type DocText, type HeaderFooter, type NamedStyle, type WrapKind } from './document';
 import { bibliography, type BibEntry } from './references';
 import { tocEntries, tocLines, type TocEntry } from './toc';
 import { authorColours, hasChanges, markedRuns } from './revisions';
@@ -111,6 +111,8 @@ export interface TableBox {
   drop: number[][];
   /** Each row's page and top left corner (in the document's coordinates), as placed. */
   rows: { page: number; x: number; y: number }[];
+  /** 0 for a table in the text, 1 for one in a cell of such a table, and so on. */
+  depth: number;
 }
 
 /** Room inside a table cell at the sides and above and below the text (Word's 0.075 in at the sides). */
@@ -455,7 +457,16 @@ export class DocLayouter {
       }
       return tb;
     };
-    const isTable = (r: { obj?: number }) => r.obj !== undefined && t.objects[r.obj]?.kind === 'table';
+    // tables inside table cells, the innermost first: each sits in its cell's text as a figure does
+    const nested = nestedTables(t);
+    for (const { id, depth } of nested) {
+      const o = t.objects[id];
+      if (o?.kind !== 'table') continue;
+      const tb = this.tableBox(id, o.table, N, inline, objKey, depth);
+      tables.set(id, tb);
+      sizes.set(id, { w: tb.xs[tb.xs.length - 1], h: sum(tb.hs) });
+    }
+    const isTable = (r: { obj?: number }) => r.obj !== undefined && t.objects[r.obj]?.kind === 'table' && !tables.get(r.obj)?.depth;
 
     // each paragraph's lines (from the cache when nothing about it changed)
     const laid: TextLayout[] = [];
@@ -620,26 +631,35 @@ export class DocLayouter {
     }
     pages[pageIdx].end = lines.length;
 
-    // where each table's rows went, and the structures and pictures in its cells
+    // where each table's rows went, and the structures and pictures (and tables) in its cells
     for (const tb of tables.values()) tb.rows = [];
+    const placeRow = (tb: TableBox, r: number, page: number, x: number, top: number, line: number) => {
+      tb.rows.push({ page, x, y: top });
+      tb.cells[r]?.forEach((cl, c) => {
+        if (!cl) return;
+        const ox = x + tb.xs[c] + CP.x, oy = top + CP.y + tb.drop[r][c] - cl.box.y1;
+        for (const cline of cl.lines) for (const g of cline.pieces) {
+          const s = g.obj !== undefined ? sizes.get(g.obj) : undefined;
+          if (s && !fields.has(g.obj!)) objects.push({ id: g.obj!, page, x: ox + g.x + extentOf(g.obj!)[0], y: oy + cline.y - s.h + (maths.get(g.obj!)?.descent ?? 0), w: s.w, h: s.h, line });
+        }
+      });
+    };
     pages.forEach((pg) => {
       for (let i = pg.first; i < pg.end; i++) {
         const l = lines[i];
         const tb = l.block !== undefined ? tables.get(l.block) : undefined;
         if (!tb) continue;
-        const r = tb.rows.length;
-        const top = l.y - (l.above ?? 0);
-        tb.rows.push({ page: pg.index, x: l.x, y: top });
-        tb.cells[r]?.forEach((cl, c) => {
-          if (!cl) return;
-          const ox = l.x + tb.xs[c] + CP.x, oy = top + CP.y + tb.drop[r][c] - cl.box.y1;
-          for (const cline of cl.lines) for (const g of cline.pieces) {
-            const s = g.obj !== undefined ? sizes.get(g.obj) : undefined;
-            if (s && !fields.has(g.obj!)) objects.push({ id: g.obj!, page: pg.index, x: ox + g.x + extentOf(g.obj!)[0], y: oy + cline.y - s.h + (maths.get(g.obj!)?.descent ?? 0), w: s.w, h: s.h, line: i });
-          }
-        });
+        placeRow(tb, tb.rows.length, pg.index, l.x, l.y - (l.above ?? 0), i);
       }
     });
+    // a table in a cell: its rows one under another where it sits in the cell (all on that page)
+    for (const { id } of [...nested].reverse()) {
+      const tb = tables.get(id);
+      const at = objects.find((o) => o.id === id);
+      if (!tb || !at) continue;
+      let y = at.y;
+      tb.hs.forEach((h, r) => { placeRow(tb, r, at.page, at.x, y, at.line); y += h; });
+    }
 
     // a bibliography or table is picked by clicking anywhere on it: its box on each page it is on
     const blocks = new Map<string, PlacedObject>();
@@ -664,30 +684,44 @@ export class DocLayouter {
   }
 
   /** A table's cells laid out (each from the cache when nothing about it changed), and its rows' heights. */
-  tableBox(id: number, tb: TableData, N: NamedStyle, inline: (id: number, room: number) => InlineBox | null, objKey: (id: number) => string): TableBox {
+  tableBox(id: number, tb: TableData, N: NamedStyle, inline: (id: number, room: number) => InlineBox | null, objKey: (id: number) => string, depth = 0): TableBox {
     const xs = [0];
     for (const w of tb.cols) xs.push(xs[xs.length - 1] + w);
     const cells: (TextLayout | null)[][] = [];
     const hs: number[] = [];
-    const drop: number[][] = [];
+    const tall = (l: TextLayout | null) => (l ? l.box.y2 - l.box.y1 : 0);
+    // cells merged down several rows: the rows they cover make room for them after
+    const merged: { r: number; c: number; down: number }[] = [];
     tb.rows.forEach((row, r) => {
       const out: (TextLayout | null)[] = [];
+      let h = SINGLE_ROW * N.size;
       for (let c = 0; c < tb.cols.length; c++) {
         if (isCovered(tb, r, c)) { out.push(null); continue; }
         const cell = row[c] ?? { runs: [] };
-        out.push(this.cellText(N, cell.runs, cell.paras, xs[c + spanOf(tb, r, c)] - xs[c], docCellAlign(tb, r, c), inline, objKey));
+        const lay = this.cellText(N, cell.runs, cell.paras, xs[c + spanOf(tb, r, c)] - xs[c], docCellAlign(tb, r, c), inline, objKey);
+        out.push(lay);
+        const down = rowSpanOf(tb, r, c);
+        if (down > 1) merged.push({ r, c, down });
+        else h = Math.max(h, tall(lay));
       }
-      const h = Math.max(SINGLE_ROW * N.size, ...out.map((l) => (l ? l.box.y2 - l.box.y1 : 0))) + 2 * CELL_PAD.y;
-      hs.push(h);
-      drop.push(out.map((l, c) => {
-        if (!l) return 0;
-        const room = h - 2 * CELL_PAD.y - (l.box.y2 - l.box.y1);
-        const v = row[c]?.valign;
-        return v === 'center' ? room / 2 : v === 'bottom' ? room : 0;
-      }));
+      hs.push(h + 2 * CELL_PAD.y);
       cells.push(out);
     });
-    return { id, xs, hs, cells, drop, rows: [] };
+    // a merged cell taller than its rows: the last of them grows (as in Word)
+    merged.sort((a, b) => a.r + a.down - (b.r + b.down));
+    for (const m of merged) {
+      const need = tall(cells[m.r][m.c]) + 2 * CELL_PAD.y;
+      const have = sum(hs.slice(m.r, m.r + m.down));
+      if (need > have) hs[m.r + m.down - 1] += need - have;
+    }
+    const drop = cells.map((out, r) => out.map((l, c) => {
+      if (!l) return 0;
+      const h = sum(hs.slice(r, r + rowSpanOf(tb, r, c)));
+      const room = h - 2 * CELL_PAD.y - tall(l);
+      const v = tb.rows[r]?.[c]?.valign;
+      return v === 'center' ? room / 2 : v === 'bottom' ? room : 0;
+    }));
+    return { id, xs, hs, cells, drop, rows: [], depth };
   }
 
   /** A table cell's text laid out in its width (`w`, the inner margins taken off). */
