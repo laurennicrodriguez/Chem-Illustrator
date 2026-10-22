@@ -14,7 +14,7 @@ export type ChemRequest =
   | { type: 'analyze'; id: number; mols: { molblock: string; map: number[] }[] }
   | { type: 'stereo'; id: number; mols: { molblock: string; skip: number[]; generic: [number, string][] }[] }
   | { type: 'smilesToMol'; id: number; smiles: string }
-  | { type: 'molToSmiles'; id: number; molblock: string }
+  | { type: 'molToSmiles'; id: number; molblock: string; loose?: boolean }
   /** Sheet properties of molecules, each given as a molfile or a SMILES string. */
   | { type: 'props'; id: number; mols: string[] }
   /** Which molecules (molfiles or SMILES) contain the query (a molfile): its atoms and bonds, with anything else attached. */
@@ -117,7 +117,7 @@ self.onmessage = async (e: MessageEvent<ChemRequest>) => {
       mol.delete();
       post({ type: 'smilesToMol', id: m.id, molblock: mb });
     } else if (m.type === 'molToSmiles') {
-      const mol = RDKit.get_mol(m.molblock);
+      const mol = m.loose ? RDKit.get_mol(m.molblock, JSON.stringify({ sanitize: false })) : RDKit.get_mol(m.molblock);
       const smiles = mol && mol.is_valid() ? mol.get_smiles() : null;
       mol?.delete();
       post({ type: 'molToSmiles', id: m.id, smiles });

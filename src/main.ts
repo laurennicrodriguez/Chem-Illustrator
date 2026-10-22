@@ -85,7 +85,7 @@ import { applyRibbonIcons } from './ui/ribbon-icons';
 import { TEMPLATES, Template, templateById, ownTemplates, setOwnTemplates, templateFromAtoms } from './chem/templates';
 import { centreEnd } from './chem/hapto';
 import { countElectrons } from './chem/electrons';
-import { addNicknames, removeNickname, isBuiltInNickname } from './chem/labels';
+import { addNicknames, removeNickname, isBuiltInNickname, builtInNicknames } from './chem/labels';
 import { selectedGroup } from './chem/group-smiles';
 import { templateIcon } from './ui/template-icons';
 import { StructureChecks } from './chem/warnings';
@@ -947,13 +947,39 @@ async function expandLabel(): Promise<void> {
   else if (!n) flash('Nothing to expand.');
 }
 
+/** Canonical SMILES of each built-in nickname with its join point (worked out once). */
+let nicknameKeys: Promise<Map<string, string[]>> | null = null;
+
+async function groupKey(smiles: string): Promise<string | null> {
+  const mb = await chem.smilesToMol('*' + smiles);
+  return mb ? chem.molToSmiles(mb) : null;
+}
+
+/** The built-in nicknames that mean exactly this group (SMILES from where it joins). */
+async function builtInNamesFor(smiles: string): Promise<string[]> {
+  if (!chem.ready) return [];
+  nicknameKeys ??= (async () => {
+    const m = new Map<string, string[]>();
+    for (const [name, smi] of builtInNicknames()) {
+      if (smi.includes('*')) continue;
+      const k = await groupKey(smi);
+      if (k) m.set(k, [...(m.get(k) ?? []), name]);
+    }
+    return m;
+  })();
+  const k = await groupKey(smiles);
+  return (k && (await nicknameKeys).get(k)) || [];
+}
+
 async function contractLabel(): Promise<void> {
   const g = selectedGroup(doc, editor.sel.atoms);
   if ('error' in g) { flash(g.error, 6000); return; }
-  const got = await ask('Contract Label', [{ name: 'name', label: 'Label', value: '' }],
-    { ok: 'Contract', note: 'The selected group becomes one label with this name. The formula and mass still count the whole group, and ChemDraw sees the group inside the label.' });
+  // when the selection is a group the program already has a name for (Ph, TBS, Boc), offer that name
+  const same = await builtInNamesFor(g.smiles);
+  const got = await ask('Contract Label', [{ name: 'name', label: 'Label', value: same[0] ?? '' }],
+    { ok: 'Contract', note: `The selected group becomes one label with this name.${same.length > 1 ? ` It is also known as ${same.slice(1).join(', ')}.` : ''} The formula and mass still count the whole group, and ChemDraw sees the group inside the label.` });
   if (!got) return;
-  const err = editor.contractLabel(got.name);
+  const err = editor.contractLabel(got.name, same);
   if (err) flash(err, 6000);
 }
 
@@ -1027,10 +1053,21 @@ async function nameToStructure(): Promise<void> {
 /** Copy the selected structures (or everything) as SMILES text. */
 async function copySmiles(): Promise<void> {
   if (!chem.ready) { flash('The chemistry engine is still loading.'); return; }
-  const atoms = editor.sel.atoms.size ? editor.sel.atoms : doc.atoms.keys();
+  const atoms = [...(editor.sel.atoms.size ? editor.sel.atoms : doc.atoms.keys())];
   const { molblock } = toMolfile(doc, atoms);
-  const smiles = await chem.molToSmiles(molblock);
-  if (!smiles) { flash('There is no structure to copy.'); return; }
+  let smiles = await chem.molToSmiles(molblock);
+  if (!smiles) {
+    // most often an atom with too many bonds: say which, and offer the SMILES as drawn
+    const ids = new Set(atoms);
+    const bad = checks.list().find((w) => w.kind === 'atom' && ids.has(w.id));
+    if (!bad) { flash('There is no structure to copy.'); return; }
+    editor.reveal('atom', bad.id);
+    const loose = await chem.molToSmiles(molblock, true);
+    if (!loose) { flash(`Not copied: ${bad.text.join(' ')}`, 8000); return; }
+    const go = await ask('Copy as SMILES', [], { ok: 'Copy Anyway', note: `The structure can't be read as drawn (the atom with the problem is now selected). ${bad.text.join(' ')} Copy the SMILES anyway? Other programs may refuse it.` });
+    if (!go) return;
+    smiles = loose;
+  }
   await navigator.clipboard.writeText(smiles).then(() => flash('Copied SMILES: ' + smiles), () => flash('Could not use the clipboard.'));
 }
 
@@ -3604,6 +3641,7 @@ async function openPreferences(): Promise<void> {
     { name: 'methyl', label: 'Terminal methyls written as', value: editor.options.methylStyle, options: [{ value: 'Me', label: 'Me' }, { value: 'CH3', label: 'CH3' }] },
     { name: 'axial', label: 'Axial chirality written as', value: axialStyle.helicity ? 'PM' : 'RaSa', options: [{ value: 'RaSa', label: 'Ra / Sa' }, { value: 'PM', label: 'P / M (helicity)' }] },
     { name: 'charges', label: 'Charges from the + and − keys', value: editor.options.circledCharges ? 'circled' : 'plain', options: [{ value: 'plain', label: 'Plain sign (N+)' }, { value: 'circled', label: 'In a circle (⊕, ⊖)' }] },
+    { name: 'textAtom', label: 'An atom or group typed with the Text tool beside a bond end (Br, OMe) becomes that atom', type: 'checkbox', value: String(editor.options.textToAtom) },
     { name: 'ask', label: 'Ask before changing every structure on the page when nothing is selected', type: 'checkbox', value: String(askWholeDrawing) },
     ...(canUpdate ? [{ name: 'updates', label: 'Check for a newer version when the app starts', type: 'checkbox' as const, value: String(updateCheck) }] : []),
     { name: 'pubchem', label: 'Look up names the name reader can\'t read on PubChem (sends the name typed to PubChem, a free NIH database)', type: 'checkbox', value: String(pubchemNames) },
@@ -3619,6 +3657,7 @@ async function openPreferences(): Promise<void> {
     updateCheck = r.updates === 'true';
   }
   editor.options.circledCharges = r.charges === 'circled';
+  editor.options.textToAtom = r.textAtom === 'true';
   showHelicity(r.axial === 'PM');
   if (r.methyl !== editor.options.methylStyle) chooseMethylStyle(r.methyl as MethylStyle);
   else storeSettings();
@@ -3654,6 +3693,7 @@ function storeSettings(): void {
     methylStyle: editor.options.methylStyle,
     axialStyle: axialStyle.helicity ? 'PM' : 'RaSa',
     circledCharges: editor.options.circledCharges,
+    textToAtom: editor.options.textToAtom,
     slideTemplate,
     askWholeDrawing,
     palettes: getPalettes(),
@@ -3788,6 +3828,7 @@ void loadSettings().then((s) => {
   editor.options.methylStyle = s.methylStyle;
   showHelicity(s.axialStyle === 'PM');
   editor.options.circledCharges = s.circledCharges;
+  editor.options.textToAtom = s.textToAtom;
   slideTemplate = s.slideTemplate;
   askWholeDrawing = s.askWholeDrawing;
   updateCheck = s.updateCheck;
@@ -3863,6 +3904,7 @@ function openHelp(): void {
 }
 
 const nicknames = new NicknameChooser();
+editor.say = (msg) => flash(msg, 6000);
 editor.onNickname = (atomId) => nicknames.open((name) => editor.runAction(`label ${name}`, { kind: 'atom', id: atomId }));
 // / or ? on an atom or bond: select it and show its settings in the Style panel
 editor.onProperties = () => {
@@ -5200,7 +5242,7 @@ requestAnimationFrame(() => {
 });
 
 // Hooks for the automated speed tests.
-(window as any).__app = { doc, editor, renderer, chem, live, command, addMolfile, keeper, cdxml: (name: string) => writeCdxml(doc, { name, textMeasure: measureText }), openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode, docxBytes: () => writeDocx(docMode.file!.t, docFiles),
+(window as any).__app = { doc, editor, renderer, chem, live, command, addMolfile, keeper, cdxml: (name: string) => writeCdxml(doc, { name, textMeasure: measureText }), openText, stressTest, pasteChemistry, smiles: async (loose = false) => chem.molToSmiles(toMolfile(doc, doc.atoms.keys()).molblock, loose), placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode, docxBytes: () => writeDocx(docMode.file!.t, docFiles),
   pptxBytes: () => { const d = deckNow()!; return writePptx({ size: d.size, master: d.master, slides: d.slides.map((s, i) => ({ layout: s.layout, doc: d.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims, comments: s.comments })) }, pptxOptions()); } };
 
 // ---------------------------------------------------------------- desktop self-test

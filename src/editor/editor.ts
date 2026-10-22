@@ -45,7 +45,7 @@ import { attachWhereItIs, defaultGap, placeAttached, refitAttached } from './att
 import { frameAround, frameBox, frameMembers, refitFrames, defaultPad, thingsInside } from './frames';
 import { Align, Measure, POINTS, Snapshot, type TurnText, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, withFrameContents, rotation, mirrorX, mirrorY } from './arrange';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
-import { tokenize, addNicknames, isBuiltInNickname } from '../chem/labels';
+import { tokenize, addNicknames, isBuiltInNickname, labelGraph } from '../chem/labels';
 import {
   Handle, arrowHit, shapeHit, arrowHandles, shapeHandles, dragArrowHandle, dragShapeHandle, dragCropHandle, shapeBox,
   arrowPoints, bracketsAround, bracketLip, unionRect,
@@ -175,7 +175,15 @@ export interface Selection {
   shapes: Set<number>;
 }
 
+/** Text that is only an atom or a group label: Br, OMe, CO2Me, NHBoc (no spaces, not a number). */
+function isAtomText(text: string): boolean {
+  if (!text || text.length > 12 || /\s/.test(text) || /^[\d.,]+$/.test(text) || !/^[A-Z(]/.test(text)) return false;
+  return (elementNumber(text) ?? 0) > 0 || labelGraph(text, 1) !== null;
+}
+
 const emptySel = (): Selection => ({ atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set() });
+/** How quickly a second click must follow for a double-click (the usual system default). */
+const DOUBLE_CLICK_MS = 500;
 
 interface Drag {
   start: Vec; // doc coords
@@ -262,7 +270,11 @@ export class Editor {
     methylStyle: 'Me' as MethylStyle,
     /** + and − on an atom give a charge in a circle (⊕, ⊖) rather than a plain sign in the label (Edit > Preferences). */
     circledCharges: false,
+    /** An atom or group typed with the Text tool beside a bond end (Br, OMe) becomes that atom (Edit > Preferences). */
+    textToAtom: true,
   };
+  /** Tell the person something in the status bar. */
+  say: (msg: string) => void = () => {};
   /** Run a menu command by name; false when it doesn't apply, so the key does nothing. */
   runCommand: (name: string) => boolean = () => false;
   /** The Choose Nickname list, for =. */
@@ -505,6 +517,10 @@ export class Editor {
 
   /** Put the highlight on an atom or bond from the keyboard (it stays until the mouse points elsewhere). */
   setKeyHot(h: Hit): void {
+    if (h && !this.hotHinted) {
+      this.hotHinted = true;
+      this.say('The highlighted atom takes the next key: 1 grows a bond, 2 a C=O, 6 a ring, letters set labels. Arrow keys move the highlight; Space selects the molecule, Enter comes back.');
+    }
     this.keyHot = h;
     this.keyHotHover = this.hover;
     this.requestOverlay();
@@ -542,8 +558,10 @@ export class Editor {
       return;
     }
     // a click on a "+" box above or below a reaction arrow starts the text there
-    const slot = e.button === 0 && !e.shiftKey ? this.helperAt(this.docPoint(e), false) : null;
-    if (slot) {
+    // (Alt+click goes to what is under the box instead)
+    const slot = e.button === 0 && !e.shiftKey && !e.altKey ? this.helperAt(this.docPoint(e), false) : null;
+    const under = slot ? this.hitTest(this.docPoint(e)) : null;
+    if (slot && (!under || under.kind === 'arrow' && under.id === slot.id)) {
       e.preventDefault();
       this.closeCaption();
       this.typeBesideArrow(slot.id, slot.side);
@@ -603,7 +621,9 @@ export class Editor {
         else if (!sameHit(h, this.keyHotHover)) this.keyHot = null;
       }
       this.lastHover = { onRotate, handle, h };
-      const slot = !handle && !onRotate ? this.helperAt(p, true) : null;
+      // the "+" box shows only where nothing else is under the pointer (Alt hides it)
+      const near = !handle && !onRotate && !e.altKey ? this.helperAt(p, true) : null;
+      const slot = near && (!h || h.kind === 'arrow' && h.id === near.id) ? near : null;
       if (slot?.id !== this.helperHover?.id || slot?.side !== this.helperHover?.side) this.helperHover = slot;
       this.showPointer(e.ctrlKey || e.metaKey);
       if (slot) this.r.overlay.style.cursor = 'pointer';
@@ -822,7 +842,7 @@ export class Editor {
       const atom = h.kind === 'atom' ? h.id : this.doc.bonds.get(h.id)!.a1;
       this.selectFragment(atom, e.shiftKey);
     } else if (h && h.kind === 'atom' && this.tool.kind !== 'text') {
-      this.editLabel(h.id);
+      if (this.labelInput?.dataset.atom !== String(h.id)) this.editLabel(h.id);
     } else if (h && h.kind === 'caption') {
       this.editCaption(h.id, { x: e.clientX, y: e.clientY });
     } else if (h && h.kind === 'shape' && this.doc.shapes.get(h.id)?.kind === 'table') {
@@ -886,6 +906,12 @@ export class Editor {
   }
 
   // ------------------------------------------------------------------ clicks
+
+  /** The keyboard highlight's hint has been shown (once a session). */
+  private hotHinted = false;
+
+  /** The last bond-tool click that grew a bond from an atom (a quick second click there is a double-click). */
+  private lastSprout: { atom: number; at: number; p: Vec } | null = null;
 
   private click(d: Drag, p: Vec): void {
     const doc = this.doc;
@@ -978,10 +1004,19 @@ export class Editor {
       }
       case 'bond': {
         if (t.hapto) { this.clickHapto(h, p); return; }
+        // the second click of a double-click on an atom takes back the first click's bond and edits the label
+        const last = this.lastSprout;
+        this.lastSprout = null;
+        if (h?.kind === 'atom' && last?.atom === h.id && performance.now() - last.at < DOUBLE_CLICK_MS && dist(last.p, p) <= this.tol(4)) {
+          this.undo();
+          this.editLabel(h.id);
+          return;
+        }
         if (!this.sel.atoms.size) this.sel = emptySel();
         doc.edit('Bond', () => {
           if (h && h.kind === 'atom') {
             const n = sprout(doc, h.id, t.order, t.display);
+            this.lastSprout = { atom: h.id, at: performance.now(), p };
             this.lastEdited = n.id;
           } else if (h && h.kind === 'bond') {
             this.clickBond(h.id, t, p);
@@ -2624,14 +2659,16 @@ export class Editor {
    * Fold the selected group into one label with this name (it keeps its chemistry: the name
    * becomes a nickname for the group). Returns a problem to tell the person, or null.
    */
-  contractLabel(name: string): string | null {
+  contractLabel(name: string, builtIn: string[] = []): string | null {
     const doc = this.doc;
     const g = selectedGroup(doc, this.sel.atoms);
     if ('error' in g) return g.error;
     const label = name.trim();
     if (!label) return 'Type a name for the label.';
-    if (isBuiltInNickname(label)) return `“${label}” is already a nickname (${label} means something else). Choose another name.`;
-    addNicknames({ [label]: g.smiles });
+    // a built-in nickname is fine when the selection is that group (Ph, TBS, Boc), not otherwise
+    const same = builtIn.includes(label);
+    if (isBuiltInNickname(label) && !same) return `“${label}” is already a nickname for a different group${builtIn.length ? ` (this one is ${builtIn.slice(0, 3).join(', ')})` : ''}. Choose another name.`;
+    if (!same) addNicknames({ [label]: g.smiles });
     const ids = [...this.sel.atoms].filter((id) => id !== g.start && doc.atoms.has(id));
     doc.edit('Contract Label', () => {
       for (const id of ids) doc.removeAtom(id);
@@ -2936,6 +2973,21 @@ export class Editor {
       return;
     }
     const hs = this.hotspot();
+    // Space or Tab: from the keyboard highlight to its whole molecule, selected; Enter: back from
+    // a selected molecule to the highlight on it (the atom last drawn), as on the cheat sheet
+    if ((chord === 'Space' || chord === 'Tab') && this.keyHot && hs && (hs.kind === 'atom' || hs.kind === 'bond')) {
+      e.preventDefault();
+      this.keyHot = null;
+      this.selectFragment(hs.kind === 'atom' ? hs.id : this.doc.bonds.get(hs.id)!.a1, false);
+      return;
+    }
+    if (chord === 'Enter' && !this.keyHot && !this.hover && this.sel.atoms.size) {
+      e.preventDefault();
+      const back = this.lastEdited !== null && this.sel.atoms.has(this.lastEdited) ? this.lastEdited : [...this.sel.atoms][0];
+      this.clearSelection();
+      this.setKeyHot({ kind: 'atom', id: back });
+      return;
+    }
     // Delete with a selection removes the selection, unless pointing at something outside it
     if ((chord === 'Delete' || chord === 'Backspace') && this.hasSelection() && (!hs || this.isSelected(hs))) {
       e.preventDefault();
@@ -3030,6 +3082,14 @@ export class Editor {
           ? { attach: undefined, attachNum: undefined, z: 6 }
           : { attach: 'Unspecified', attachNum: nextNumber(doc, id, (x) => (x.attach ? x.attachNum : undefined)), z: 0, label: null, charge: 0, fileLabel: false }));
         break;
+      case 'cp-hapto':
+      case 'arene-hapto': {
+        // j and J on a metal: an η⁵-Cp or η⁶-benzene, as Add Ligand puts it on
+        if (!isMetalAtom(a)) return false;
+        doc.edit('Add Ligand', () => this.placeTemplateAt(act === 'cp-hapto' ? 'cp' : 'benzene', { kind: 'atom', id }, { x: a.x, y: a.y }, null, false));
+        this.r.invalidate(doc);
+        break;
+      }
       case 'nickname': this.onNickname(id); return true;
       case 'properties': this.selectOnly({ kind: 'atom', id }); this.onProperties(); return true;
       case 'edit-label': this.editLabel(id); return true;
@@ -3086,12 +3146,20 @@ export class Editor {
     if (!b) return false;
     const n = act === 'benzene' ? 6 : act === 'cyclopentadiene' ? 5 : Number(act);
     if (act !== 'chair' && act !== 'chair-2' && !(n >= 3 && n <= 8)) return false;
+    let far: number | undefined;
     doc.edit('Fuse ring', () => {
       if (act === 'chair' || act === 'chair-2') { fuseChair(doc, id, act === 'chair-2'); return; }
       const side = fuseSide(doc, b, n, this.pointer);
       const pts = fusedRing(doc.atoms.get(b.a1)!, doc.atoms.get(b.a2)!, n, side);
-      placeRing(doc, pts, { aromatic: act === 'benzene' || act === 'cyclopentadiene', existing: [b.a1, b.a2], scale: b.s });
+      const ids = placeRing(doc, pts, { aromatic: act === 'benzene' || act === 'cyclopentadiene', existing: [b.a1, b.a2], scale: b.s });
+      // a and z leave the highlight on the bond, so the other key fuses on its other side (a z
+      // gives indene); 3 to 8 move it to the new ring's far bond (on a five-ring, the one on the
+      // first atom's side), ready to change the ring there: both as the cheat sheet's examples need
+      if (act === 'benzene' || act === 'cyclopentadiene') return;
+      const i = Math.ceil(n / 2);
+      far = ids.length === n ? doc.bondBetween(ids[i], ids[(i + 1) % n])?.id : undefined;
     });
+    if (far !== undefined) this.setKeyHot({ kind: 'bond', id: far });
     this.lastEdited = b.a1;
     this.changed();
     return true;
@@ -3139,6 +3207,15 @@ export class Editor {
     } else if (h.kind === 'bond') {
       const b = doc.bonds.get(h.id)!;
       for (const aid of [b.a1, b.a2]) consider({ kind: 'atom', id: aid }, doc.atoms.get(aid)!);
+      // an end of the bond roughly that way (within 45°) is the next step; otherwise a bond
+      // joining this one may be (down from a level bond to the wedge hanging below its end)
+      if (bestScore < Math.SQRT1_2) {
+        for (const aid of [b.a1, b.a2]) for (const bid of doc.adj.get(aid) ?? []) {
+          if (bid === h.id) continue;
+          const o = doc.bonds.get(bid)!;
+          consider({ kind: 'bond', id: bid }, mul(add(doc.atoms.get(o.a1)!, doc.atoms.get(o.a2)!), 0.5));
+        }
+      }
     }
     return best;
   }
@@ -3186,6 +3263,8 @@ export class Editor {
     input.style.top = `${sp.y - size * 0.75}px`;
     input.style.fontSize = `${Math.max(11, size)}px`;
     input.value = a.label ?? (a.z !== 6 ? SYMBOLS[a.z] ?? '' : '');
+    const was = input.value;
+    input.dataset.atom = String(id);
     input.spellcheck = false;
     this.host.appendChild(input);
     input.focus();
@@ -3194,7 +3273,7 @@ export class Editor {
       if (this.labelInput !== input) return;
       this.labelInput = null;
       input.remove();
-      if (ok && doc.atoms.has(id)) {
+      if (ok && doc.atoms.has(id) && input.value !== was) {
         doc.edit('Label', () => this.applyLabel(id, input.value));
         this.lastEdited = id;
         this.changed();
@@ -3203,7 +3282,8 @@ export class Editor {
     };
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); finish(true); }
-      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+      // Esc keeps what was typed, as it does for text boxes (clear the box to leave the atom as it was)
+      else if (e.key === 'Escape') { e.preventDefault(); finish(true); }
       e.stopPropagation();
     });
     input.addEventListener('blur', () => finish(true));
@@ -3412,6 +3492,27 @@ export class Editor {
     if (this.doc.version !== before) this.changed();
   }
 
+  /**
+   * Text typed with the Text tool that is only an atom or group (Br, OMe, CO2Me), started on or
+   * next to the end of a bond, becomes that atom's label, as if typed on the atom. True when it did.
+   */
+  private labelFromText(caption: number, text: string, at: Vec): boolean {
+    if (!this.options.textToAtom || this.textFirst || !isAtomText(text)) return false;
+    const doc = this.doc;
+    let best: Atom | null = null, bestD = Infinity;
+    for (const a of doc.atomsNear(at, doc.style.bondLength * 0.6 * 1.5)) {
+      if (a.label || a.z !== 6 || !doc.degree(a.id) || a.multi || a.attach) continue;
+      const d = dist(a, at);
+      if (d <= doc.style.bondLength * 0.6 * (a.s ?? 1) && d < bestD) { best = a; bestD = d; }
+    }
+    if (!best) return false;
+    const id = best.id;
+    doc.edit('Text to Atom', () => { doc.removeCaption(caption); this.applyLabel(id, text); });
+    this.lastEdited = id;
+    this.say(`${text} is now an atom on the bond. Undo (Ctrl+Z) to keep it as text, or turn this off in Edit > Preferences.`);
+    return true;
+  }
+
   private newCaption(p: Vec): void {
     this.openCaption(null, p);
   }
@@ -3485,7 +3586,10 @@ export class Editor {
           doc.edit('Edit caption', () => doc.updateCaption(cur.id, fields));
         }
       } else if (!empty) {
-        doc.edit('Caption', () => { const nc = doc.addCaption({ ...fields, x: res.x, y: res.y, runs: fields.runs!, justify: res.justify }); opts?.done?.(nc.id); });
+        let made = 0;
+        doc.edit('Caption', () => { const nc = doc.addCaption({ ...fields, x: res.x, y: res.y, runs: fields.runs!, justify: res.justify }); made = nc.id; opts?.done?.(nc.id); });
+        // only an atom label, typed at a bond end: it becomes that atom (Undo brings the text back)
+        if (!wrap && !opts?.done) this.labelFromText(made, plainText(res.runs).trim(), at);
       }
       this.changed();
     }, c?.rot ?? 0);

@@ -100,6 +100,9 @@ const BUILT_IN = new Set(Object.keys(NICKNAMES));
 /** Is this one of the program's own nicknames (Boc, Ph, TBS…)? */
 export const isBuiltInNickname = (name: string): boolean => BUILT_IN.has(name);
 
+/** The program's own nicknames and their SMILES (first atom where it joins). */
+export const builtInNicknames = (): [string, string][] => [...BUILT_IN].map((n) => [n, NICKNAMES[n]]);
+
 /**
  * Add nicknames of the person's own (or ones a drawing brings with it): name → SMILES, the
  * first atom being where it joins. Built-in names are left as they are. Returns the names added.
