@@ -16,6 +16,7 @@ import {
   type CiteStyle, type Piece, type Reference,
 } from '../document/references';
 import { ask } from './ask';
+import { MANAGERS, type CiteManager } from '../document/live-cites';
 
 export interface ReferencesHost {
   file(): DocFile | null;
@@ -370,6 +371,7 @@ export class ReferencesDialog {
   private warning!: HTMLElement;
   private styleSel!: HTMLSelectElement;
   private styleNote!: HTMLElement;
+  private managerSel!: HTMLSelectElement;
   private search!: HTMLInputElement;
   private selected: string | null = null;
   private closed: (() => void) | null = null;
@@ -411,6 +413,14 @@ export class ReferencesDialog {
     for (const [k, p] of Object.entries(CITE_PRESETS)) this.styleSel.add(new Option(`${p.name} (${p.journals})`, k));
     this.styleSel.addEventListener('change', () => this.setStyle(this.styleSel.value, {}));
     this.styleNote = el('span', { className: 'muted' });
+    this.managerSel = el('select', { id: 'refs-manager' });
+    this.managerSel.add(new Option('Chem Illustrator only (numbers Word shows as they are)', ''));
+    for (const [k, name] of Object.entries(MANAGERS)) this.managerSel.add(new Option(name, k));
+    this.managerSel.addEventListener('change', () => {
+      const app = (this.managerSel.value || undefined) as CiteManager | undefined;
+      this.change('Save citations for', (t) => ({ ...t, citeManager: app }));
+      if (app) this.host.flash(`Citations are saved as ${MANAGERS[app]} citations: in Word, ${app === 'endnote' ? 'EndNote\'s Update Citations and Bibliography' : app === 'zotero' ? 'Zotero\'s Refresh' : 'Mendeley\'s refresh'} works on them, and they open here live again.`, 7000);
+    });
     this.search = el('input', { type: 'search', placeholder: 'Find a reference' });
     this.search.setAttribute('aria-label', 'Find a reference');
     this.search.addEventListener('input', () => this.fill());
@@ -432,6 +442,8 @@ export class ReferencesDialog {
       el('div', { className: 'ask-row refs-style' }, el('label', { htmlFor: 'refs-style', textContent: 'Citation style' }), this.styleSel,
         button('Style Options…', 'Change any detail of the style: authors, "and", et al., title, year, volume, issue, article numbers, DOI…', () => void this.styleOptions())),
       el('p', { className: 'refs-style-note' }, this.styleNote),
+      el('div', { className: 'ask-row refs-style', title: 'How citations are saved in the Word file: as this program\'s own fields, or as Zotero\'s, Mendeley\'s or EndNote\'s, so that program can go on managing them in Word. Files from those programs open with their citations live and choose this for you.' },
+        el('label', { htmlFor: 'refs-manager', textContent: 'Save citations for' }), this.managerSel),
       this.warning,
       el('div', { className: 'refs-table-wrap' }, table),
       el('div', { className: 'refs-buttons' },
@@ -459,6 +471,7 @@ export class ReferencesDialog {
     if (!this.d || !t) return;
     const style = this.style();
     this.styleSel.value = style;
+    this.managerSel.value = t.citeManager ?? '';
     const changed = Object.keys(changedOptions(style, this.format())).length;
     this.styleNote.textContent = changed ? `${changed} detail${changed === 1 ? '' : 's'} changed from ${CITE_PRESETS[style].name} (Style Options… to see or reset them).` : '';
     const counts = citeCounts(t);

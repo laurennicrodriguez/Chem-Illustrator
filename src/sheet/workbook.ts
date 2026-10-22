@@ -22,6 +22,8 @@ import { CondFormat, CellLook, workOutLooks } from './conditional';
 import { TableDef, tableCellLook } from './table-styles';
 import { CellNote, copyNote } from './notes';
 import { Validation, ValidationHost, validationAt } from './validation';
+import type { SheetObject } from './sheet-objects';
+import { PageSetup, shiftSetup } from './page-setup';
 
 export type BorderStyle = 'thin' | 'medium' | 'thick' | 'double' | 'dashed' | 'dotted';
 export interface Border { style: BorderStyle; color?: string }
@@ -175,7 +177,7 @@ function patchStyleWith(s: CellStyle | undefined, patch: Partial<CellStyle>): Ce
 // ---------------------------------------------------------------- history
 
 type MapField = 'cells' | 'colWidths' | 'rowHeights' | 'colDefs' | 'colStyles' | 'hiddenRows' | 'hiddenCols' | 'notes';
-type ValueField = 'merges' | 'filter' | 'frozen' | 'name' | 'condFormats' | 'tables' | 'charts' | 'dashboard' | 'validations';
+type ValueField = 'merges' | 'filter' | 'frozen' | 'name' | 'condFormats' | 'tables' | 'charts' | 'dashboard' | 'validations' | 'objects' | 'pageSetup';
 
 interface Change {
   sheet: Sheet | null; // null: the workbook's list of sheets
@@ -228,6 +230,10 @@ export class Sheet {
   notes = new Map<number, CellNote>();
   /** Data validation rules (what may be typed in some cells, and drop-down lists). */
   validations: Validation[] = [];
+  /** Pictures, shapes and text boxes floating over the cells (drawn above the charts, the last on top). */
+  objects: SheetObject[] = [];
+  /** How the sheet prints (null: Excel's defaults). */
+  pageSetup: PageSetup | null = null;
   private looks: { gen: number; rules: CondFormat[]; map: Map<number, CellLook> } | null = null;
   /** Goes up each time the values are worked out again (all of them, or only those an edit changed). */
   valuesGen = 0;
@@ -542,6 +548,14 @@ export class Sheet {
     this.assign('dashboard', d);
   }
 
+  setObjects(list: SheetObject[]): void {
+    this.assign('objects', list);
+  }
+
+  setPageSetup(ps: PageSetup | null): void {
+    this.assign('pageSetup', ps);
+  }
+
   /** Put a note or comment on a cell (undefined takes it off). */
   setNote(row: number, col: number, note: CellNote | undefined): void {
     this.put('notes', this.notes, keyOf(row, col), note);
@@ -791,6 +805,19 @@ export class Sheet {
       });
       if (cs.some((c, i) => c !== this.charts[i])) this.setCharts(cs);
     }
+    if (this.objects.length) {
+      const os = this.objects.map((o) => {
+        if (o.placement === 'absolute') return o;
+        const i = axis === 'row' ? o.at.row : o.at.col;
+        const n = i < at ? i : count > 0 ? i + count : i >= at - count ? i + count : at;
+        return n === i ? o : { ...o, at: axis === 'row' ? { ...o.at, row: n } : { ...o.at, col: n } };
+      });
+      if (os.some((o, i) => o !== this.objects[i])) this.setObjects(os);
+    }
+    if (this.pageSetup) {
+      const ps = shiftSetup(this.pageSetup, axis, at, count);
+      if (JSON.stringify(ps) !== JSON.stringify(this.pageSetup)) this.setPageSetup(Object.keys(ps).length ? ps : null);
+    }
     if (this.filter) {
       const range = moveRange(this.filter.range);
       if (!range) this.assign('filter', null);
@@ -957,7 +984,7 @@ export class Sheet {
 const READER_COLS = 1 << 15;
 
 /** Changes that leave every value as it was. */
-const NO_VALUES = new Set<string>(['colWidths', 'rowHeights', 'colStyles', 'hiddenRows', 'hiddenCols', 'merges', 'filter', 'frozen', 'condFormats', 'tables', 'charts', 'dashboard', 'notes', 'validations']);
+const NO_VALUES = new Set<string>(['colWidths', 'rowHeights', 'colStyles', 'hiddenRows', 'hiddenCols', 'merges', 'filter', 'frozen', 'condFormats', 'tables', 'charts', 'dashboard', 'notes', 'validations', 'objects', 'pageSetup']);
 
 const isFormulaText = (t: string | undefined): boolean => !!t && t.startsWith('=') && t.length > 1;
 
@@ -1111,7 +1138,7 @@ export class Workbook {
       return;
     }
     const s = c.sheet!;
-    if (c.field === 'merges' || c.field === 'filter' || c.field === 'frozen' || c.field === 'name' || c.field === 'condFormats' || c.field === 'tables' || c.field === 'charts' || c.field === 'dashboard' || c.field === 'validations') {
+    if (c.field === 'merges' || c.field === 'filter' || c.field === 'frozen' || c.field === 'name' || c.field === 'condFormats' || c.field === 'tables' || c.field === 'charts' || c.field === 'dashboard' || c.field === 'validations' || c.field === 'objects' || c.field === 'pageSetup') {
       (s as unknown as Record<string, unknown>)[c.field] = v;
       return;
     }
