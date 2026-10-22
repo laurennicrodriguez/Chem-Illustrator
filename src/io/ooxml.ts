@@ -27,6 +27,7 @@ export const REL = {
   slideLayout: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout',
   slideMaster: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster',
   notesMaster: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster',
+  handoutMaster: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/handoutMaster',
   notesSlide: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide',
   theme: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme',
   image: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image',

@@ -710,6 +710,13 @@ export interface Shape {
   shadowOpacity?: number;
   shadowAngle?: number;
   shadowBlur?: number;
+  /** Design shapes: PowerPoint's Shape Effects (a glow round the outside, soft edges, a bevel, a reflection below) and a picture for the fill. */
+  glow?: ShapeGlow;
+  /** How far in from the edge the fill fades away, in points. */
+  softEdge?: number;
+  bevel?: ShapeBevel;
+  reflection?: ShapeReflection;
+  picFill?: PicFill;
   bold?: boolean;
   symbol?: string;
   bracket?: 'square' | 'round' | 'curly';
@@ -850,6 +857,24 @@ export interface PictureLook {
  * How a picture is changed for showing (Picture Format), as PowerPoint and Word keep it: the
  * picture's own data is never changed, so every setting can be changed back.
  */
+/** A glow round a shape: its colour, how far it reaches (points) and how see-through it is (0 solid to 1 clear). */
+export interface ShapeGlow { color: string; size: number; transparency: number }
+
+/** PowerPoint's bevel shapes (its names for them). */
+export type BevelKind = 'circle' | 'relaxedInset' | 'cross' | 'coolSlant' | 'angle' | 'softRound' | 'convex' | 'slope' | 'divot' | 'riblet' | 'hardEdge' | 'artDeco';
+
+/** A raised edge round the top of a shape: which kind, how wide and how high, in points. */
+export interface ShapeBevel { kind: BevelKind; w: number; h: number }
+
+/**
+ * A reflection below a shape: how much of the shape shows (0 to 1 of its height), how solid it
+ * starts (0 to 1), how far below the shape it is and how blurred, in points.
+ */
+export interface ShapeReflection { size: number; opacity: number; dist: number; blur?: number }
+
+/** A picture filling a shape, stretched to the shape's box, and how see-through it is (0 solid to 1 clear). */
+export interface PicFill { src: string; px?: { w: number; h: number }; transparency?: number }
+
 export interface PictureFx {
   /** Brighter (up to 1) or darker (down to -1). */
   bright?: number;
@@ -1373,7 +1398,11 @@ export class Doc {
       this.dirtyRects.push({ x1: Math.min(r.tail.x, r.head.x) - pad, y1: Math.min(r.tail.y, r.head.y) - pad, x2: Math.max(r.tail.x, r.head.x) + pad, y2: Math.max(r.tail.y, r.head.y) + pad });
     } else {
       const sh = e as Shape;
-      this.dirtyRects.push({ x1: Math.min(sh.x1, sh.x2) - 4, y1: Math.min(sh.y1, sh.y2) - 4, x2: Math.max(sh.x1, sh.x2) + 4, y2: Math.max(sh.y1, sh.y2) + 4 });
+      // its glow, shadow and reflection reach past its box (and a turned shape's corners stick out)
+      const w = Math.abs(sh.x2 - sh.x1), h = Math.abs(sh.y2 - sh.y1);
+      const pad = 4 + Math.max(sh.glow?.size ?? 0, sh.shadow ? (sh.shadowSize ?? 4) + (sh.shadowBlur ?? 0) : 0) + (sh.rot ? Math.max(w, h) / 2 : 0);
+      const below = sh.reflection ? h * sh.reflection.size + sh.reflection.dist + (sh.rot ? Math.max(w, h) : 0) : 0;
+      this.dirtyRects.push({ x1: Math.min(sh.x1, sh.x2) - pad, y1: Math.min(sh.y1, sh.y2) - pad, x2: Math.max(sh.x1, sh.x2) + pad, y2: Math.max(sh.y1, sh.y2) + pad + below });
     }
   }
 

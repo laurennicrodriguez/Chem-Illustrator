@@ -85,7 +85,7 @@ const BOND_KEYS = ['color', 'highlight', 'hl'] as const;
 /** An arrow's line and head size, not which heads it has (a fishhook means one electron). */
 const ARROW_KEYS = ['color', 'lineWidth', 'line', 'headType', 'headLength', 'headWidth'] as const;
 const SHAPE_KEYS = ['color', 'fillColor', 'filled', 'fill', 'fill2', 'gradAngle', 'gradRadial', 'pattern', 'patternColor', 'patternSize', 'patternTransparency',
-  'transparency', 'lineWidth', 'dashed', 'bold', 'shadow', 'shadowSize', 'shadowColor', 'shadowOpacity', 'shadowAngle', 'shadowBlur', 'textAlign', 'textValign'] as const;
+  'transparency', 'lineWidth', 'dashed', 'bold', 'shadow', 'shadowSize', 'shadowColor', 'shadowOpacity', 'shadowAngle', 'shadowBlur', 'glow', 'softEdge', 'bevel', 'reflection', 'picFill', 'textAlign', 'textValign'] as const;
 const PICTURE_KEYS = ['look'] as const;
 
 /** Shapes whose outline and fill are their look (not tables, charts, equations, videos, or the invisible frames of diagrams). */
