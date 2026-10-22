@@ -2,7 +2,7 @@
 // pan. The editor changes the document and asks for a repaint; hover and drawing previews
 // only repaint the overlay layer.
 
-import { Doc, Atom, Bond, BondDisplay, PARTIAL, Arrow, Shape, Caption, isMetalAtom, applyBase, captionBase, stripBase, type StepRoles, type Justify, type HighlightStyle } from '../model';
+import { Doc, Atom, Bond, BondDisplay, PARTIAL, Arrow, Shape, Caption, isMetalAtom, applyBase, captionBase, stripBase, type StepRoles, type Justify, type HighlightStyle, type Entity } from '../model';
 import { CaptionEditor } from '../ui/caption-editor';
 import { geoDef, geoShapeStyle, moveSteps, traceSteps } from '../design/geo';
 import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
@@ -37,10 +37,11 @@ import { groupMembers, groupSelection, selectedGroups, ungroupSelection, withGro
 import { circleRing, circleRings, kekulize } from '../chem/aromatic';
 import { bondLayer, crossingBonds } from '../chem/crossing';
 import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
-import { bendSide, cleanUpArrow, headEnd, isAtomSymbol, pushArrow, pushEndAt, pushPins, sameEnd, symbolAt, symbolPin, symbolSpot, tailEnd, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
+import { arrowClash, bendSide, cleanUpArrow, headEnd, isAtomSymbol, pushArrow, pushEndAt, pushPins, sameEnd, symbolAt, symbolPin, symbolSpot, tailEnd, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
 import { followPins, hasPins, mirrorBend } from '../chem/pins';
 import { applyArrange, planArrange, readingOrder, type ArrangeOptions } from '../chem/scheme-arrange';
 import { buildCycle, type CycleLook, type CycleSpec } from '../chem/cycles';
+import { refitTableFigures, tableContents } from './table-figs';
 import { energyFrameOf, plotFromBox, putEnergy, refitEnergy, type EnergyData } from '../design/energy';
 import { attachWhereItIs, defaultGap, placeAttached, refitAttached } from './attached';
 import { frameAround, frameBox, frameMembers, refitFrames, defaultPad, thingsInside } from './frames';
@@ -211,7 +212,7 @@ interface Drag {
   /** Rotating the selection: what it looked like before, the centre, and the angle so far. */
   rot?: { snap: Snapshot; center: Vec; from: number; angle: number };
   /** Moving with smart guides: the selection's box when the move began, and what it lines up with. */
-  guide?: { box: Rect; targets: Rect[] };
+  guide?: { box: Rect; targets: GuideTarget[]; stops?: { xs: number[]; ys: number[] } };
   /** How far the selection has been moved so far. */
   applied?: Vec;
   /** Drawing a template: the ways it can go here, and which one is picked (Tab, or the pointer). */
@@ -283,6 +284,8 @@ export class Editor {
     groupClick: 'group' as 'group' | 'item',
     /** Selecting part of a group outlines the whole group (Edit > Preferences). */
     groupOutline: true,
+    /** Mechanism arrows left running into something by a change find their own way round (Edit > Preferences). */
+    rerouteArrows: true,
   };
   /** Tell the person something in the status bar. */
   say: (msg: string) => void = () => {};
@@ -362,15 +365,19 @@ export class Editor {
     window.addEventListener('keyup', ctrlKey);
     // frames that follow what they surround are refitted as each change finishes
     doc.beforeCommit = (before) => {
-      let frames = false, rings = false, tied = false, energy = false;
-      for (const s of this.doc.shapes.values()) { if (s.frame?.fit) frames = true; if (s.kind === 'ring') rings = true; if (s.energy) energy = true; }
+      let frames = false, rings = false, tied = false, energy = false, tables = false;
+      for (const s of this.doc.shapes.values()) { if (s.frame?.fit) frames = true; if (s.kind === 'ring') rings = true; if (s.energy) energy = true; if (s.kind === 'table') tables = true; }
       for (const c of this.doc.captions.values()) if (c.attach) { tied = true; break; }
       // ring fills first, then labels beside their structures: a frame round a structure takes in both
       if (rings) refitRingFills(this.doc, before);
+      // structures in table cells: room kept for them, and centred there
+      if (tables) refitTableFigures(this.doc, before, this.measure(), (t) => this.r.tableLayout(t));
       if (tied) refitAttached(this.doc, before, this.measure());
       // an energy diagram resized by hand is drawn again to fill its frame, before frames refit
       if (energy) refitEnergy(this.doc, before, this.measure());
       if (frames) refitFrames(this.doc, before, this.measure());
+      // mechanism arrows the change left running into something find their own way round again
+      if (this.options.rerouteArrows) this.rerouteArrows(before);
     };
   }
 
@@ -506,9 +513,31 @@ export class Editor {
     const n = s.arrows.size + s.shapes.size;
     if (!n || n > 4 || s.atoms.size || s.bonds.size) return [];
     const out: Handle[] = [];
-    for (const id of s.arrows) { const r = this.doc.arrows.get(id); if (r) out.push(...arrowHandles(r)); }
+    for (const id of s.arrows) { const r = this.doc.arrows.get(id); if (r) out.push(...arrowHandles(r).map((h) => (h.which === 'mid' ? this.clearOfText(r, h) : h))); }
     for (const id of s.shapes) { const sh = this.doc.shapes.get(id); if (sh) out.push(...shapeHandles(sh)); }
     return out;
+  }
+
+  /**
+   * A straight arrow's bend handle, moved off the shaft to the side without text when its
+   * conditions sit over the middle (so the handle doesn't cover them or get picked instead).
+   */
+  private clearOfText(r: Arrow, h: Handle): Handle {
+    if (r.sweep || r.bez?.length || r.elbow) return h;
+    const len = dist(r.tail, r.head);
+    if (len < 1e-6) return h;
+    const n = perp(mul(sub(r.head, r.tail), 1 / len));
+    const reach = this.tol(14) + 0.3 * this.doc.style.bondLength;
+    let left = false, right = false;
+    for (const c of this.doc.captions.values()) {
+      const b = this.r.captionBox(c);
+      const near = { x: Math.max(b.x1, Math.min(b.x2, h.at.x)), y: Math.max(b.y1, Math.min(b.y2, h.at.y)) };
+      if (dist(near, h.at) > reach) continue;
+      if (dot(sub({ x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 }, h.at), n) > 0) left = true; else right = true;
+    }
+    if (left === right) return h;
+    const off = mul(n, (left ? -1 : 1) * this.tol(9));
+    return { ...h, at: add(h.at, off), off };
   }
 
   private handleAt(p: Vec): Handle | null {
@@ -689,10 +718,11 @@ export class Editor {
         if (!d.guide) {
           // (measured where the drag started: Alt may have moved the selection already)
           const box = this.selBox();
-          if (box) d.guide = { box: { x1: box.x1 - done.x, y1: box.y1 - done.y, x2: box.x2 - done.x, y2: box.y2 - done.y }, targets: this.guideTargets() };
+          const st = this.guideStops();
+          if (box) d.guide = { box: { x1: box.x1 - done.x, y1: box.y1 - done.y, x2: box.x2 - done.x, y2: box.y2 - done.y }, targets: this.guideTargets(), stops: st && { xs: st.xs.map((x) => x - done.x), ys: st.ys.map((y) => y - done.y) } };
         }
         if (d.guide) {
-          const g = guideSnap(d.guide.box, want, d.guide.targets, this.tol(6));
+          const g = guideSnap(d.guide.box, want, d.guide.targets, this.tol(6), d.guide.stops);
           const across = want.y === 0 && e.shiftKey, upDown = want.x === 0 && e.shiftKey;
           to = { x: upDown ? 0 : g.offset.x, y: across ? 0 : g.offset.y };
           // (a straight move keeps only the guides along its way)
@@ -725,9 +755,12 @@ export class Editor {
       if (h.kind === 'arrow') {
         const r = this.doc.arrows.get(h.id);
         if (r) {
-          let patch = dragArrowHandle(r, h.which, p, e.altKey);
+          // (a handle drawn off the shaft bends the arrow as if it were on it)
+          let patch = dragArrowHandle(r, h.which, h.off ? sub(p, h.off) : p, e.altKey);
           // a half head keeps its barb on the outside of an S's last bend
           if (h.which[0] === 'b' && headBend(r) !== headBend({ ...r, ...patch })) Object.assign(patch, { headStyle: swapHalf(r.headStyle), tailStyle: swapHalf(r.tailStyle) });
+          // bent by hand, it keeps that bend from now on (Clean Up Arrow lets it find its own way again)
+          if ((h.which === 'mid' || h.which[0] === 'b') && r.pin) patch = { ...patch, bent: true };
           // a connector's end sticks to the connection point it is dropped on, and comes loose elsewhere
           if ((h.which === 'tail' || h.which === 'head') && (this.glueArrows || r.from || r.to || r.elbow)) {
             const key = h.which === 'tail' ? 'from' : 'to';
@@ -1661,9 +1694,36 @@ export class Editor {
     const to = which === 'head' ? here : headEnd(doc, other, r.head);
     if (sameEnd(from, to)) return null;
     // keep the side it bends to, and its S shape
-    const push = pushArrow(doc, m, from, to, { side: bendSide(r), s: !!r.bez?.length, arcOnly: !r.bez?.length });
+    const push = pushArrow(doc, m, from, to, { side: bendSide(r), s: !!r.bez?.length, arcOnly: !r.bez?.length, self: r.id });
     if (!push) return null;
     return { ...this.pushPatch(r, push), pin: pushPins(doc, push) };
+  }
+
+  /**
+   * Curved arrows stuck to atoms that a change moved (or to the structure round them), which now
+   * run into the structure, a label or another arrow: each redrawn between the same two things
+   * on its clearest way round, unless it was bent by hand or the new way is no clearer.
+   */
+  private rerouteArrows(before: ReadonlyMap<string, Entity | null>): void {
+    const doc = this.doc;
+    let moved = false;
+    for (const k of before.keys()) if (k[0] === 'a' || k[0] === 'b' || k[0] === 'r') { moved = true; break; }
+    if (!moved) return;
+    const m = this.measure();
+    const L = doc.style.bondLength;
+    const touched = (r: Arrow) => before.has('r' + r.id) || [r.pin?.tail, r.pin?.head].some((p) => p?.ref.some((id) => before.has('a' + id)));
+    for (const r of [...doc.arrows.values()]) {
+      if (!r.pin || r.bent || r.equilibrium || r.elbow || !isCurved(r)) continue;
+      // (only near what changed: an arrow elsewhere stays as it is)
+      if (!touched(r) && ![...doc.arrows.values()].some((o) => o.id !== r.id && before.has('r' + o.id) && dist(o.head, r.head) < 1.5 * L)) continue;
+      const now = arrowClash(doc, m, r);
+      if (now < 0.3) continue;
+      const push = cleanUpArrow(doc, m, r);
+      if (!push) continue;
+      const next = { ...r, ...this.pushPatch(r, push) };
+      if (arrowClash(doc, m, next) > now - 0.2) continue;
+      doc.updateArrow(r.id, { ...this.pushPatch(r, push), pin: pushPins(doc, push) });
+    }
   }
 
   /** What redrawing a curved arrow as `push` changes: its ends and bend, keeping a half head's barb outside the curve. */
@@ -1693,7 +1753,7 @@ export class Editor {
     const changed = plans.filter(({ r, push }) => dist(r.tail, push.tail) > 0.01 || dist(r.head, push.head) > 0.01 || Math.abs(r.sweep - push.sweep) > 1e-4 || !sameBez(r.bez, push.bez));
     if (!changed.length) return 0;
     doc.edit('Clean up arrow', () => {
-      for (const { r, push } of changed) doc.updateArrow(r.id, { ...this.pushPatch(r, push), pin: pushPins(doc, push) });
+      for (const { r, push } of changed) doc.updateArrow(r.id, { ...this.pushPatch(r, push), pin: pushPins(doc, push), bent: undefined });
     });
     this.changed();
     return changed.length;
@@ -1714,7 +1774,7 @@ export class Editor {
         const to = headEnd(doc, pushEndAt(doc, m, r.head), r.head);
         const side = bendSide(r);
         // snapped where it is drawn between things; between free points the same two ends
-        const push = !sameEnd(from, to) && (from.kind !== 'point' || to.kind !== 'point') ? pushArrow(doc, m, from, to, { side, s, arcOnly: !s }) : null;
+        const push = !sameEnd(from, to) && (from.kind !== 'point' || to.kind !== 'point') ? pushArrow(doc, m, from, to, { side, s, arcOnly: !s, self: r.id }) : null;
         const patch: Partial<Arrow> = push
           ? { ...this.pushPatch(r, push), ...(r.pin ? { pin: pushPins(doc, push) } : {}) }
           : s ? { sweep: 0, bez: [{ x: 0.25, y: 0.8 * side }, { x: 0.75, y: -0.8 * side }] } : { bez: undefined, sweep: -side * 120 * DEG };
@@ -1971,6 +2031,16 @@ export class Editor {
   }
 
   /** Insert ▸ Energy Diagram: draw one with its middle at `at` (or draw diagram `id` again with new numbers), and select it. */
+  /** An energy diagram drawn on a page of its own, in this drawing's style (the Energy Diagram window's preview). */
+  energyPreview(d: EnergyData): { doc: Doc; box: Rect } {
+    const tmp = new Doc();
+    tmp.style = { ...this.doc.style };
+    tmp.textStyles = this.doc.textStyles;
+    let id = 0;
+    tmp.edit('Preview', () => { id = putEnergy(tmp, this.fullMeasure(), d, { x: 0, y: 0 }); });
+    return { doc: tmp, box: shapeBox(tmp.shapes.get(id)!) };
+  }
+
   putEnergyDiagram(d: EnergyData, at: Vec, id?: number, page?: { w: number; h: number }): void {
     const m = this.fullMeasure();
     let frame = id;
@@ -2334,6 +2404,9 @@ export class Editor {
       // a ring's fill takes its structure along (it sits on the ring's atoms)
       const ring = doc.shapes.get(id)?.ring;
       if (ring?.length && doc.atoms.has(ring[0])) for (const a of doc.fragmentOf(ring[0])) sel.atoms.add(a);
+      // a table takes the structures in its cells along
+      const sh = doc.shapes.get(id);
+      if (sh?.kind === 'table') for (const a of tableContents(doc, sh, (t) => this.r.tableLayout(t))) sel.atoms.add(a);
       const f = doc.shapes.get(id)?.frame;
       if (!f?.fit) continue;
       const m = frameMembers(doc, f);
@@ -2650,12 +2723,13 @@ export class Editor {
    * Number Compounds: a bold number under each selected structure (or every structure), in
    * scheme order. Numbers already under a structure are changed in place. Returns how many.
    */
-  numberCompounds(opts: NumberOptions & { bold?: boolean }): number {
+  numberCompounds(opts: NumberOptions & { bold?: boolean; align?: boolean }): number {
     const doc = this.doc;
     const m = this.fullMeasure();
     const plan = planNumbers(doc, m, this.sel.atoms, opts);
     if (!plan.labels.length) return 0;
     const bold = opts.bold ?? true;
+    const made: number[] = [];
     doc.edit('Number Compounds', () => {
       for (const l of plan.labels) {
         if (l.caption !== undefined) {
@@ -2663,6 +2737,7 @@ export class Editor {
           // changed in place, and tied to its structure from now on
           const attach = c.attach ?? attachWhereItIs(doc, c, new Set(l.item.atoms), m, 'label') ?? undefined;
           doc.updateCaption(c.id, { runs: [{ ...c.runs[0], text: l.text, bold: bold || undefined }], attach });
+          made.push(c.id);
           continue;
         }
         // centred under the structure and tied to it
@@ -2670,6 +2745,7 @@ export class Editor {
           attach: { atoms: [...l.item.atoms], side: 'below', gap: defaultGap(doc), shift: 0, role: 'label' } });
         placeAttached(doc, c, m);
         this.sel.captions.add(c.id);
+        made.push(c.id);
         // an arrow leaving from under the structure starts below the new number instead
         const nb = this.r.captionBox(doc.captions.get(c.id)!);
         const pad = 0.2 * doc.style.bondLength;
@@ -2682,6 +2758,7 @@ export class Editor {
           if ((t > 0 || h > 0) && dist(tail, head) > doc.style.bondLength) doc.updateArrow(r.id, { tail, head });
         }
       }
+      if (opts.align ?? true) alignNumbers(doc, made, m);
     });
     this.changed();
     return plan.labels.length;
@@ -3734,22 +3811,32 @@ export class Editor {
   /** The guide lines shown while moving. */
   private guideLines: GuideLine[] = [];
 
-  /** What a moved selection lines up with: the shapes not being moved, and the page. */
-  private guideTargets(): Rect[] {
-    const out: Rect[] = [];
-    for (const s of this.doc.shapes.values()) if (!this.sel.shapes.has(s.id) && s.kind !== 'line' && s.kind !== 'bracket' && s.kind !== 'symbol') out.push(shapeBox(s));
-    if (this.fitArea) out.push(this.fitArea());
+  /**
+   * What a moved selection lines up with: the shapes not being moved, the page, and the other
+   * structures (by their atom centres), text and arrows.
+   */
+  private guideTargets(): GuideTarget[] {
+    const out: GuideTarget[] = [];
+    for (const s of this.doc.shapes.values()) if (!this.sel.shapes.has(s.id) && s.kind !== 'line' && s.kind !== 'bracket' && s.kind !== 'symbol') out.push(boxStops(shapeBox(s)));
+    if (this.fitArea) out.push({ ...boxStops(this.fitArea()), open: true });
     // structures, text and arrows line up too (worked out once, when the move starts)
     const m = this.measure();
-    const none = () => ({ atoms: new Set<number>(), bonds: new Set<number>(), captions: new Set<number>(), arrows: new Set<number>(), shapes: new Set<number>() });
-    const add = (sel: ReturnType<typeof none>) => { const b = selectionBox(this.doc, sel, m); if (b) out.push(b); };
+    const add = (sel: Selection) => { const b = selectionBox(this.doc, sel, m); if (b) out.push(boxStops(b)); };
     for (const f of this.doc.fragments()) {
       if ([...f].some((id) => this.sel.atoms.has(id))) continue;
-      add({ ...none(), atoms: f });
+      const box = selectionBox(this.doc, { ...emptySel(), atoms: f }, m);
+      if (box) out.push({ box, ...atomStops(this.doc, f) });
     }
-    for (const c of this.doc.captions.values()) if (!this.sel.captions.has(c.id) && (c.runs.length || !c.ph)) add({ ...none(), captions: new Set([c.id]) });
-    for (const r of this.doc.arrows.values()) if (!this.sel.arrows.has(r.id)) add({ ...none(), arrows: new Set([r.id]) });
+    for (const c of this.doc.captions.values()) if (!this.sel.captions.has(c.id) && (c.runs.length || !c.ph)) add({ ...emptySel(), captions: new Set([c.id]) });
+    for (const r of this.doc.arrows.values()) if (!this.sel.arrows.has(r.id)) add({ ...emptySel(), arrows: new Set([r.id]) });
     return out;
+  }
+
+  /** Where a moved selection lines up from: its atom centres when it holds structures and nothing else. */
+  private guideStops(): { xs: number[]; ys: number[] } | undefined {
+    const s = this.sel;
+    if (!s.atoms.size || s.captions.size || s.arrows.size || s.shapes.size) return undefined;
+    return atomStops(this.doc, s.atoms);
   }
 
   /** Arrows drawn or dragged onto a shape's connection point stick to it (Design mode). */
@@ -4448,25 +4535,128 @@ function geoTool(id: string, look: Partial<Shape>): Tool | undefined {
 export interface GuideLine { x1: number; y1: number; x2: number; y2: number }
 
 /**
- * Smart guides: how far to move a box (`raw` is how far the pointer moved) so its left, middle
- * or right lines up with one of the targets' (and its top, middle or bottom), when within `tol`;
- * and the lines that show what it lined up with.
+ * Something a moved selection can line up with: its box, and the places along each axis that
+ * count (for a structure its atom centres, so guides follow atoms and bonds, not label edges).
  */
-export function guideSnap(box: Rect, raw: Vec, targets: Rect[], tol: number): { offset: Vec; lines: GuideLine[] } {
-  const xs = (r: Rect) => [r.x1, (r.x1 + r.x2) / 2, r.x2];
-  const ys = (r: Rect) => [r.y1, (r.y1 + r.y2) / 2, r.y2];
-  let bx: { d: number; at: number; t: Rect } | null = null, by: { d: number; at: number; t: Rect } | null = null;
+export interface GuideTarget { box: Rect; xs: number[]; ys: number[]; /** Never passed over (the page). */ open?: boolean }
+
+const boxStops = (r: Rect): GuideTarget => ({ box: r, xs: [r.x1, (r.x1 + r.x2) / 2, r.x2], ys: [r.y1, (r.y1 + r.y2) / 2, r.y2] });
+const asTarget = (t: Rect | GuideTarget): GuideTarget => ('box' in t ? t : boxStops(t));
+
+/** The gap between two boxes (0 when they overlap). */
+function boxGap(a: Rect, b: Rect): number {
+  const dx = Math.max(0, a.x1 - b.x2, b.x1 - a.x2), dy = Math.max(0, a.y1 - b.y2, b.y1 - a.y2);
+  return Math.hypot(dx, dy);
+}
+
+/** Whether another target's box crosses the guide between the moved box and its target. */
+function blocked(line: GuideLine, from: Rect, to: GuideTarget, all: GuideTarget[]): boolean {
+  if (to.open) return false;
+  const vertical = line.x1 === line.x2;
+  const holds = (b: Rect, r: Rect) => b.x1 <= r.x1 && b.y1 <= r.y1 && b.x2 >= r.x2 && b.y2 >= r.y2;
+  for (const o of all) {
+    const b = o.box;
+    if (o === to || o.open || holds(b, from) || holds(b, to.box)) continue;
+    if (vertical) {
+      if (b.x1 > line.x1 || b.x2 < line.x1) continue;
+      const lo = Math.min(from.y2, to.box.y2), hi = Math.max(from.y1, to.box.y1);
+      if (b.y1 < hi && b.y2 > lo) return true;
+    } else {
+      if (b.y1 > line.y1 || b.y2 < line.y1) continue;
+      const lo = Math.min(from.x2, to.box.x2), hi = Math.max(from.x1, to.box.x1);
+      if (b.x1 < hi && b.x2 > lo) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Smart guides: how far to move a box (`raw` is how far the pointer moved) so one of its stops
+ * (left, middle, right, or the given `stops`) lines up with one of a target's, when within `tol`;
+ * and the lines that show what it lined up with. At most one guide each way: the closest match,
+ * and of equally close ones the nearest target. A target with another thing in between along
+ * the guide is passed over.
+ */
+export function guideSnap(box: Rect, raw: Vec, targets: (Rect | GuideTarget)[], tol: number, stops?: { xs: number[]; ys: number[] }): { offset: Vec; lines: GuideLine[] } {
+  const ts = targets.map(asTarget);
+  const own = stops ?? boxStops(box);
   const moved = { x1: box.x1 + raw.x, y1: box.y1 + raw.y, x2: box.x2 + raw.x, y2: box.y2 + raw.y };
-  for (const t of targets) {
-    for (const a of xs(moved)) for (const b of xs(t)) { const d = b - a; if (Math.abs(d) <= tol && (!bx || Math.abs(d) < Math.abs(bx.d))) bx = { d, at: b, t }; }
-    for (const a of ys(moved)) for (const b of ys(t)) { const d = b - a; if (Math.abs(d) <= tol && (!by || Math.abs(d) < Math.abs(by.d))) by = { d, at: b, t }; }
+  type Best = { d: number; at: number; t: GuideTarget; far: number };
+  const better = (c: Best, b: Best | null) => !b || Math.abs(c.d) < Math.abs(b.d) - 1e-6 || (Math.abs(c.d) <= Math.abs(b.d) + 1e-6 && c.far < b.far);
+  let bx: Best | null = null, by: Best | null = null;
+  for (const t of ts) {
+    const far = boxGap(moved, t.box);
+    for (const a0 of own.xs) for (const b of t.xs) {
+      const d = b - (a0 + raw.x);
+      if (Math.abs(d) > tol) continue;
+      const c = { d, at: b, t, far };
+      if (!better(c, bx)) continue;
+      if (blocked({ x1: b, y1: 0, x2: b, y2: 1 }, moved, t, ts)) continue;
+      bx = c;
+    }
+    for (const a0 of own.ys) for (const b of t.ys) {
+      const d = b - (a0 + raw.y);
+      if (Math.abs(d) > tol) continue;
+      const c = { d, at: b, t, far };
+      if (!better(c, by)) continue;
+      if (blocked({ x1: 0, y1: b, x2: 1, y2: b }, moved, t, ts)) continue;
+      by = c;
+    }
   }
   const offset = { x: raw.x + (bx?.d ?? 0), y: raw.y + (by?.d ?? 0) };
   const end = { x1: box.x1 + offset.x, y1: box.y1 + offset.y, x2: box.x2 + offset.x, y2: box.y2 + offset.y };
   const lines: GuideLine[] = [];
-  if (bx) lines.push({ x1: bx.at, y1: Math.min(end.y1, bx.t.y1), x2: bx.at, y2: Math.max(end.y2, bx.t.y2) });
-  if (by) lines.push({ x1: Math.min(end.x1, by.t.x1), y1: by.at, x2: Math.max(end.x2, by.t.x2), y2: by.at });
+  if (bx) lines.push({ x1: bx.at, y1: Math.min(end.y1, bx.t.box.y1), x2: bx.at, y2: Math.max(end.y2, bx.t.box.y2) });
+  if (by) lines.push({ x1: Math.min(end.x1, by.t.box.x1), y1: by.at, x2: Math.max(end.x2, by.t.box.x2), y2: by.at });
   return { offset, lines };
+}
+
+/**
+ * Compound numbers below structures side by side in one row of a scheme, moved down to one line:
+ * each row's numbers line up with the lowest of them (the structures stay where they are).
+ */
+export function alignNumbers(doc: Doc, ids: number[], m: Measure): void {
+  type Item = { id: number; box: Rect; top: number; bottom: number };
+  const items: Item[] = [];
+  for (const id of ids) {
+    const c = doc.captions.get(id);
+    if (!c?.attach || c.attach.side !== 'below') continue;
+    const s = selectionBox(doc, { ...emptySel(), atoms: new Set(c.attach.atoms) }, m);
+    if (!s) continue;
+    items.push({ id, box: m.captionBox(c), top: s.y1, bottom: s.y2 });
+  }
+  // a row: structures whose heights overlap by half the shorter one, chained left to right
+  items.sort((a, b) => a.box.x1 - b.box.x1);
+  const rows: Item[][] = [];
+  for (const it of items) {
+    const row = rows.find((r) => r.some((o) => Math.min(o.bottom, it.bottom) - Math.max(o.top, it.top) > 0.5 * Math.min(o.bottom - o.top, it.bottom - it.top) || Math.abs((o.top + o.bottom) / 2 - (it.top + it.bottom) / 2) < 0.75 * doc.style.bondLength));
+    if (row) row.push(it); else rows.push([it]);
+  }
+  for (const row of rows) {
+    if (row.length < 2) continue;
+    const y = Math.max(...row.map((it) => it.box.y1));
+    for (const it of row) {
+      const down = y - it.box.y1;
+      if (down < 0.01) continue;
+      const c = doc.captions.get(it.id)!;
+      doc.updateCaption(it.id, { attach: { ...c.attach!, gap: c.attach!.gap + down } });
+      placeAttached(doc, doc.captions.get(it.id)!, m);
+    }
+  }
+}
+
+/** A structure's guide stops: each atom centre across and down, and the middle of them all. */
+function atomStops(doc: Doc, ids: Iterable<number>): { xs: number[]; ys: number[] } {
+  const xs = new Set<number>(), ys = new Set<number>();
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+  for (const id of ids) {
+    const a = doc.atoms.get(id);
+    if (!a) continue;
+    xs.add(a.x); ys.add(a.y);
+    x1 = Math.min(x1, a.x); y1 = Math.min(y1, a.y); x2 = Math.max(x2, a.x); y2 = Math.max(y2, a.y);
+  }
+  if (x1 <= x2) { xs.add((x1 + x2) / 2); ys.add((y1 + y2) / 2); }
+  return { xs: [...xs], ys: [...ys] };
 }
 
 function sameHit(a: Hit, b: Hit): boolean {

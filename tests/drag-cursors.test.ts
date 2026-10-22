@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { lockAxis } from '../src/geom';
 import { resizeBox, dragShapeHandle } from '../src/objects';
-import { pointerFor, handleCursor, MARQUEE, ERASER, type PointerState } from '../src/editor/cursors';
+import { pointerFor, handleCursor, MARQUEE, ERASER, BEND, type PointerState } from '../src/editor/cursors';
 import type { Shape } from '../src/model';
 
 describe('a drag with Shift held', () => {
@@ -77,6 +77,8 @@ describe('the pointer', () => {
     expect(handleCursor('ne')).toBe('nesw-resize');
     expect(handleCursor('se')).toBe('nwse-resize');
     expect(handleCursor('head')).toBe('move');
-    expect(handleCursor('mid')).toBe('grab');
+    // the middle of an arrow bends it: its own pointer, not the hand that moves things
+    expect(handleCursor('mid')).toBe(BEND);
+    expect(handleCursor('b0')).toBe(BEND);
   });
 });
