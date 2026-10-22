@@ -496,6 +496,13 @@ export class Deck {
 
   canUndo(): boolean { return this.undoList.length > 0; }
   canRedo(): boolean { return this.redoList.length > 0; }
+  /** The name of the step Undo (or Redo) would take back: a slide's own step, or the deck change. */
+  get undoLabel(): string { return this.labelOf(this.undoList[this.undoList.length - 1], false); }
+  get redoLabel(): string { return this.labelOf(this.redoList[this.redoList.length - 1], true); }
+  private labelOf(e: HistoryEntry | undefined, redo: boolean): string {
+    if (!e) return '';
+    return e.kind === 'deck' ? e.label : redo ? e.slide.doc.redoLabel : e.slide.doc.undoLabel;
+  }
 
   /** Undo the last change, going to the slide it was on. */
   undo(): boolean {

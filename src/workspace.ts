@@ -127,6 +127,12 @@ function officeNote(tab: Tab, program: 'Word' | 'PowerPoint'): string {
   return `. In ${program} the structures are pictures (their SMILES are in the alt text); open the file here to edit them, or copy them from here into ChemDraw`;
 }
 
+/** What a new, unsaved file of each kind is called ("Drawing 1"). */
+export const MODE_NAMES: Record<Mode, string> = { drawing: 'Drawing', slides: 'Slides', sheet: 'Sheet', document: 'Document', design: 'Design' };
+
+/** Is this the name a new tab was given (not a file's own)? */
+export const isNewName = (name: string): boolean => /^(Drawing|Slides|Sheet|Document|Design) \d+\.[a-z]+$/.test(name) || /^Untitled/.test(name);
+
 export class Workspace {
   tabs: Tab[] = [];
   active!: Tab;
@@ -153,12 +159,12 @@ export class Workspace {
       stamp: null, autoSave: null, changes: 0, savedAt: 0, savedHow: null };
   }
 
-  /** "Untitled", "Untitled 2"… with the right extension, not already used by an open tab. */
-  private untitled(mode: Mode): string {
+  /** "Drawing 1", "Slides 2", "Design 1"… with the right extension, not already used by an open tab. */
+  private untitled(mode: Mode, going?: Tab): string {
     const ext = SAVE_TYPES[mode][0].extension;
     for (let n = 1; ; n++) {
-      const name = `${n === 1 ? 'Untitled' : `Untitled ${n}`}.${ext}`;
-      if (!this.tabs.some((t) => t.name === name)) return name;
+      const name = `${MODE_NAMES[mode]} ${n}.${ext}`;
+      if (!this.tabs.some((t) => t !== going && t.name === name)) return name;
     }
   }
 
@@ -449,7 +455,7 @@ export class Workspace {
   /** The tab showing, when it is new and untouched (an opened file takes its place). */
   private spare(): Tab | null {
     const t = this.active;
-    if (t.dirty || t.ref.kind !== 'none' || !/^Untitled/.test(t.name)) return null;
+    if (t.dirty || t.ref.kind !== 'none' || !isNewName(t.name)) return null;
     if (t.mode === 'drawing') return this.host.atoms.size || this.host.captions.size || this.host.arrows.size || this.host.shapes.size ? null : t;
     if (t.mode === 'sheet') return t.book!.edits === 0 ? t : null;
     if (t.mode === 'document') return t.document!.edits === 0 ? t : null;
@@ -572,7 +578,7 @@ export class Workspace {
       if (next) this.activate(next);
       else {
         // the last tab: a fresh drawing takes its place
-        const t = this.makeTab('drawing', 'Untitled.cdxml');
+        const t = this.makeTab('drawing', this.untitled('drawing', tab));
         this.tabs.push(t);
         this.activate(t, true);
       }

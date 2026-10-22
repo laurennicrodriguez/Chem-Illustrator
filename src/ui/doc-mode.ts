@@ -473,6 +473,14 @@ export class DocumentMode {
     this.setTable(tg.id, t, 'Column alignment');
   }
 
+  /** Is there something for Undo (or Redo) to take back, in the cell being typed in or the document. */
+  canUndo(redo = false): boolean {
+    const f = this.file;
+    if (!f) return false;
+    const has = (ed: { canUndo: boolean; canRedo: boolean }) => (redo ? ed.canRedo : ed.canUndo);
+    return has(this.ed) || (!!f.box?.cell && has(f.ed));
+  }
+
   /** Undo and Redo: in a table cell, its typing first, then the document's changes (rows added…). */
   private undo(redo: boolean): void {
     const f = this.file!;

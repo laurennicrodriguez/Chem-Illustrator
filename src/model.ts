@@ -1012,6 +1012,9 @@ export class Doc {
 
   canUndo(): boolean { return this.undoStack.length > 0; }
   canRedo(): boolean { return this.redoStack.length > 0; }
+  /** The name of the step Undo (or Redo) would take back, such as "Add Ring" ('' with none). */
+  get undoLabel(): string { return this.undoStack[this.undoStack.length - 1]?.label ?? ''; }
+  get redoLabel(): string { return this.redoStack[this.redoStack.length - 1]?.label ?? ''; }
 
   undo(): boolean {
     // not while a step is still being made (a drag): it would be undone half-way and lost
