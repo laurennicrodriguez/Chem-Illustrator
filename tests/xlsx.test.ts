@@ -190,6 +190,24 @@ describe('saving for Excel', () => {
     expect(book.undo()).toBeNull();
   });
 
+  it('keeps a split window, and frozen columns', async () => {
+    const wb = new Workbook(['Split', 'Frozen']);
+    wb.edit('Panes', () => {
+      wb.sheets[0].setColWidth(0, 100);
+      wb.sheets[0].setSplit({ rows: 3, cols: 2 });
+      wb.sheets[1].setFrozen(0, 1);
+    });
+    const bytes = await writeXlsx(wb, pictures);
+    // (100 + 64) pixels across and 3 × 20 down, in twentieths of a point
+    expect(part(bytes, 'xl/worksheets/sheet1.xml')).toContain('<pane xSplit="2460" ySplit="900" topLeftCell="C4" activePane="bottomRight"/>');
+    expect(part(bytes, 'xl/worksheets/sheet2.xml')).toContain('<pane xSplit="1" topLeftCell="B1" activePane="topRight" state="frozen"/>');
+    const { book } = await readXlsx(bytes);
+    expect(book.sheets[0].split).toEqual({ rows: 3, cols: 2 });
+    expect(book.sheets[0].frozen).toEqual({ rows: 0, cols: 0 });
+    expect(book.sheets[1].frozen).toEqual({ rows: 0, cols: 1 });
+    expect(book.sheets[1].split).toBeNull();
+  });
+
   it('keeps the filter and the rows it hides', async () => {
     const wb = new Workbook();
     const s = wb.sheet;
@@ -336,7 +354,7 @@ describe('opening files made in Excel', () => {
       '<row r="1"><c r="A1" t="inlineStr"><is><t>n</t></is></c><c r="B1" t="s"><v>0</v></c></row>' +
       '<row><c r="A2"><v>1</v></c><c r="B2"><f t="shared" ref="B2:B4" si="0">A2*10</f><v>10</v></c></row>' +
       '<row><c><v>2</v></c><c><f t="shared" si="0"/><v>20</v></c></row>' +
-      '<row r="4"><c r="A4"><v>3</v></c><c r="B4"><f t="shared" si="0"/><v>30</v></c><c r="C4"><f>_xlfn.CONCAT("x",A4)</f><v>x3</v></c><c r="D4"><f>_xlfn.SEQUENCE(3)</f><v>1</v></c></row>' +
+      '<row r="4"><c r="A4"><v>3</v></c><c r="B4"><f t="shared" si="0"/><v>30</v></c><c r="C4"><f>_xlfn.CONCAT("x",A4)</f><v>x3</v></c><c r="D4"><f>_xlfn.RANDARRAY(3)</f><v>1</v></c></row>' +
       '</sheetData>';
     const { book, warnings } = await readXlsx(excelFile(sheet, { strings: ['<si><t>ten times</t></si>'] }));
     const s = book.sheet;
@@ -351,7 +369,7 @@ describe('opening files made in Excel', () => {
     expect(s.value(3, 2)).toBe('x3');
     expect(s.colWidths.get(1)).toBe(145);
     expect(s.colWidths.get(2)).toBe(145);
-    // CONCAT is worked out here; SEQUENCE isn't
+    // CONCAT is worked out here; RANDARRAY isn't
     expect(warnings).toEqual(['1 formula uses newer Excel functions this program can\'t work out yet.']);
   });
 

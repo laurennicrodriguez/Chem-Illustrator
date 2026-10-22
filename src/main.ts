@@ -40,7 +40,7 @@ import { cdxToCdxml } from './io/cdx';
 import { writeCdxml } from './io/cdxml-write';
 import { WORKSPACE, folderOf } from './io/workspace-file';
 import { askLink, followLink, setLinkHost, type LinkPlace } from './ui/links-ui';
-import { SHOW_JUMPS, cellOfLink, linkSpans, removeLink, setLink, slideOfLink } from './links';
+import { SHOW_JUMPS, cellOfLink, linkSpans, normalizeLink, removeLink, setLink, slideOfLink } from './links';
 import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, setEmbeddedWriter, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, DOCX, PICTURE_EXTENSIONS, type FileType } from './io/files';
 import { readPptx } from './io/pptx-read';
 import { pickReuseSlides } from './ui/reuse-slides';
@@ -88,6 +88,10 @@ import { askDiagram } from './ui/diagram-dialog';
 import { putDiagram, type DiagramData } from './design/diagrams';
 import type { EnergyData } from './design/energy';
 import { editChart, chartPoints } from './ui/chart-editor';
+import { editMedia } from './ui/media-dialog';
+import { refreshZooms, summaryParts, zoomGrid, zoomShape } from './deck/zoom';
+import { inkShape } from './ui/show-ink';
+import { AUDIO_TYPES, VIDEO_TYPES, mediaMime, probeAudio, probeVideo, speakerPng } from './deck/media';
 import { newChartBox, sizedBox } from './sheet/chart-box';
 import { chartBoxPng } from './render/chart-box-paint';
 import { itemsToSvg } from './render/svg';
@@ -744,6 +748,124 @@ async function editChartShape(id: number): Promise<void> {
   editor.changed();
 }
 editor.onChart = (id) => void editChartShape(id);
+
+/** A video or sound's Playback window (double-click it, or Playback… in the panel). */
+async function editMediaShape(id: number): Promise<void> {
+  finishTyping();
+  const s = doc.shapes.get(id);
+  if (!s?.video) return;
+  const got = await editMedia(s.video);
+  if (!got || !doc.shapes.get(id)?.video) return;
+  doc.edit(s.video.audio ? 'Audio playback' : 'Video playback', () => doc.updateShape(id, { video: got }));
+  editor.changed();
+}
+editor.onMedia = (id) => void editMediaShape(id);
+
+/** Insert > Video or Audio: a file put on the slide, starting when clicked and playing once, as in PowerPoint. */
+async function insertMedia(audio: boolean): Promise<void> {
+  const exts = Object.keys(audio ? AUDIO_TYPES : VIDEO_TYPES);
+  let f;
+  try {
+    f = await openBytesDialog(audio ? 'Sounds' : 'Videos', [], exts);
+  } catch (e) {
+    await showError('Could not open the file: ' + String(e));
+    return;
+  }
+  if (!f) return;
+  const type = mediaMime(f.name);
+  if (!type) { flash(`${f.name} isn't a ${audio ? 'sound' : 'video'} file this takes (${exts.join(', ')}).`); return; }
+  if (f.bytes.length > 200 * 1024 * 1024) flash('This is a big file: it is kept inside the slide file, which grows by as much.', 8000);
+  const src = dataUrl(f.bytes, type.mime);
+  let px = { w: 128, h: 128 }, poster = '', length = 0;
+  if (type.audio) {
+    poster = speakerPng();
+    length = await probeAudio(src);
+  } else {
+    flash('Reading the video…');
+    const got = await probeVideo(src);
+    if (!got) { flash(`This computer can't play ${f.name}. MP4 (H.264) videos play everywhere, PowerPoint too.`, 8000); }
+    if (got) { px = { w: got.w, h: got.h }; poster = got.poster; length = got.length; }
+  }
+  if (!poster) poster = speakerPng();
+  finishTyping();
+  const deck = deckNow();
+  const room = deck ? { w: deck.size.w * 0.6, h: deck.size.h * 0.6 } : { w: (renderer.width * 0.6) / renderer.view.scale, h: (renderer.height * 0.6) / renderer.view.scale };
+  const k = type.audio ? 0.375 : Math.min(0.75, room.w / px.w, room.h / px.h);
+  const w = px.w * k, h = px.h * k;
+  const c = deck && type.audio ? { x: deck.size.w / 2, y: deck.size.h / 2 } : pasteCentre();
+  let made: Shape | null = null;
+  doc.edit(type.audio ? 'Insert audio' : 'Insert video', () => {
+    made = doc.addShape({
+      kind: 'picture', x1: c.x - w / 2, y1: c.y - h / 2, x2: c.x + w / 2, y2: c.y + h / 2, px, src: poster,
+      video: { src, ...(type.audio ? { audio: true } : {}), start: 'click', once: true, ...(length ? { length: +length.toFixed(3) } : {}) },
+    });
+  });
+  editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set([made!.id]) };
+  editor.changed();
+  flash(`${type.audio ? 'Sound' : 'Video'} added: it starts when clicked in the show. Double-click it to trim it or change how it plays.`, 6000);
+}
+
+/**
+ * Insert > Zoom > Slide Zoom: pictures of the slides picked, on this slide; clicked in the show,
+ * each zooms into its slide. Summary Zoom: a new slide before the first one picked, with a zoom
+ * for each part of the deck (from each slide picked to the next), each coming back to it.
+ */
+async function insertZoom(summary: boolean): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') { flash('Zooms go on slides: use File > New Slides, or open a PowerPoint file.'); return; }
+  finishTyping();
+  refreshZooms(d);
+  const pick = await pickReuseSlides('', d, false, summary
+    ? { title: 'Summary Zoom', note: 'Click the first slide of each part of your talk (Shift+click picks a run). A new slide goes in before the first of them, with a zoom for each part: in the show, a click on one plays its part and comes back.', verb: (n) => (n ? `Insert Summary Zoom (${n} part${n === 1 ? '' : 's'})` : 'Insert Summary Zoom') }
+    : { title: 'Slide Zoom', note: 'Click the slides to zoom to (Shift+click picks a run). In the show, a click on a zoom zooms into its slide; turn on Return to Zoom in the panel to come back afterwards.', verb: (n) => (n > 1 ? `Insert ${n} Zooms` : 'Insert Zoom') });
+  if (!pick?.indices.length) return;
+  if (summary) {
+    const parts = summaryParts(pick.indices, d.slides.length);
+    const ids = parts.map((p) => ({ first: d.slides[p.first].id, last: d.slides[p.last].id }));
+    const at = parts[0].first;
+    d.insertSlide(at, 'title-only', (sd) => {
+      const title = [...sd.captions.values()].find((c) => c.ph === 'title');
+      if (title) sd.updateCaption(title.id, { runs: [{ text: 'Summary' }] });
+      const area = { x1: d.size.w * 0.06, y1: d.size.h * 0.26, x2: d.size.w * 0.94, y2: d.size.h * 0.94 };
+      // the slides moved one along: their pictures are drawn from the deck before the new slide goes in
+      zoomGrid(ids.length, d.size, area).forEach((box, k) => {
+        const i = d.slides.findIndex((s) => s.id === ids[k].first);
+        const z = i >= 0 ? zoomShape(d, i, box, { back: true, ...(ids[k].last !== ids[k].first ? { to: `#slide=${ids[k].last}` } : {}) }) : null;
+        if (z) sd.addShape(z);
+      });
+    }, 'Insert Summary Zoom');
+    flash('Summary Zoom added. In the show, click a zoom to play its part; the show comes back here after it.', 7000);
+    return;
+  }
+  const area = { x1: d.size.w * 0.1, y1: d.size.h * 0.3, x2: d.size.w * 0.9, y2: d.size.h * 0.9 };
+  const boxes = zoomGrid(pick.indices.length, d.size, area);
+  const made: number[] = [];
+  doc.edit(pick.indices.length > 1 ? 'Insert slide zooms' : 'Insert slide zoom', () => {
+    pick.indices.forEach((i, k) => { const z = zoomShape(d, i, boxes[k], {}); if (z) made.push(doc.addShape(z).id); });
+  });
+  editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set(made) };
+  editor.changed();
+}
+
+/** What a click does in the slide show (Insert > Action), for the selected shapes or action buttons. */
+async function actionSettings(): Promise<void> {
+  const d = deckNow();
+  const shapes = [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((s): s is Shape => !!s && s.kind === 'geo' && !s.diagram && !s.energy);
+  if (!d || !shapes.length) { flash('Select an action button or a shape on a slide first (Insert > Shapes > Action buttons).'); return; }
+  const cur = shapes[0].link ?? '';
+  const slides = d.slides.map((s, i) => ({ value: `#slide=${s.id}`, label: `Slide ${i + 1}${slideTitle(d, i) ? `: ${slideTitle(d, i)}` : ''}` }));
+  const jumps = Object.entries(SHOW_JUMPS).map(([value, label]) => ({ value, label }));
+  const kind = !cur ? 'none' : cur in SHOW_JUMPS || slideOfLink(cur) !== null ? 'place' : 'url';
+  const got = await ask('Action Settings', [
+    { name: 'kind', label: 'On a click', value: kind, options: [{ value: 'none', label: 'Nothing' }, { value: 'place', label: 'Go to a slide' }, { value: 'url', label: 'Open a web page or file' }] },
+    { name: 'place', label: 'Slide', value: kind === 'place' ? cur : '#next', options: [...jumps, ...slides] },
+    { name: 'url', label: 'Web page or file', value: kind === 'url' ? cur : '', placeholder: 'https://… or a file path' },
+  ], { ok: 'OK', note: 'What happens when this is clicked in the slide show. Saved as PowerPoint\'s own action.' });
+  if (!got) return;
+  const link = got.kind === 'place' ? got.place : got.kind === 'url' ? normalizeLink(got.url) ?? '' : '';
+  doc.edit('Action settings', () => { for (const s of shapes) doc.updateShape(s.id, { link: link || undefined }); });
+  editor.changed();
+}
 
 /**
  * Insert > Equation on a slide or design: typed as LaTeX in the equation window, in the
@@ -2636,9 +2758,23 @@ function present(fromHere: boolean, notes = false): void {
   if (presenter.running || presenterView.running) return;
   finishTyping();
   editor.paused = true;
+  refreshZooms(d);
   // from the start: the first slide that isn't hidden; from here: this slide even when hidden, as in PowerPoint
   void (notes ? presenterView : presenter).start(d, fromHere ? d.index : d.firstShown());
 }
+
+/** Ink drawn in the slide show, kept: shapes on its slides, as one step to undo. */
+presenter.onKeepInk = presenterView.onKeepInk = (ink) => {
+  const d = deckNow();
+  if (!d) return;
+  const indices = [...ink.keys()].filter((i) => i >= 0 && i < d.slides.length);
+  if (!indices.length) return;
+  d.editSlides('Keep ink', indices, (sd, i) => {
+    for (const st of ink.get(i) ?? []) { const sh = inkShape(st); if (sh) sd.addShape(sh); }
+  });
+  editor.requestScene();
+  flash(`Ink kept on ${indices.length} slide${indices.length === 1 ? '' : 's'}. Each line is a shape: move it, recolour it or delete it.`, 6000);
+};
 
 presenter.onEnd = presenterView.onEnd = (i) => {
   editor.paused = false;
@@ -3412,10 +3548,10 @@ function setPictureStyle(look: PictureLook | undefined): boolean {
 
 /** Slide commands that don't apply to a design's single page. */
 const SLIDE_ONLY = new Set(['new-slide', 'duplicate-slide', 'delete-slide', 'cut-slides', 'copy-slides', 'paste-slides', 'paste-slides-keep', 'hide-slide', 'reuse-slides', 'size-wide', 'size-standard', 'slide-master', 'slide-templates',
-  'slide-transitions', 'slide-animations', 'animation-pane', 'preview-slide', 'remove-animation']);
+  'slide-transitions', 'slide-animations', 'animation-pane', 'preview-slide', 'remove-animation', 'insert-slide-zoom', 'insert-summary-zoom', 'action-settings', 'insert-video', 'insert-audio']);
 
 /** The animation commands: an effect for the selected objects (the right-click menu's Animation). */
-const ANIM_COMMANDS: { cmd: string; label: string }[] = [false, true].flatMap((exit) => EFFECTS.map((e) => ({
+const ANIM_COMMANDS: { cmd: string; label: string }[] = [false, true].flatMap((exit) => EFFECTS.filter((e) => !(exit && e.emph)).map((e) => ({
   cmd: `animate-${e.id}${exit ? '-out' : ''}`, label: animName(newAnim({ kind: 'shape', id: 0 }, e.id, exit)),
 })));
 
@@ -3467,6 +3603,12 @@ const COMMANDS: Record<string, () => unknown> = {
   undo: () => undo(),
   redo: () => redo(),
   'insert-picture': () => insertPicture(),
+  'insert-video': () => void insertMedia(false),
+  'insert-slide-zoom': () => void insertZoom(false),
+  'insert-summary-zoom': () => void insertZoom(true),
+  'action-settings': () => void actionSettings(),
+  'insert-audio': () => void insertMedia(true),
+  'media-playback': () => { const id = [...editor.sel.shapes].find((x) => doc.shapes.get(x)?.video); if (id === undefined) { flash('Click a video or sound first.'); return; } void editMediaShape(id); },
   'insert-table': () => { void insertTable(); },
   'insert-chart': () => { void insertChart(); },
   'edit-chart': () => { const id = [...editor.sel.shapes].find((x) => doc.shapes.get(x)?.chart); if (id === undefined) { flash('Click a chart first.'); return; } void editChartShape(id); },
@@ -5650,6 +5792,7 @@ applyRibbonIcons();
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 stylePanel.onEditChart = (id) => void editChartShape(id);
+stylePanel.onEditMedia = (id) => void editMediaShape(id);
 stylePanel.onEditEquation = (id) => void editEquationShape(id);
 stylePanel.onEquationColour = (ids, color) => {
   doc.edit('Equation colour', () => {
