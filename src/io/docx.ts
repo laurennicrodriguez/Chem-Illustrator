@@ -10,6 +10,7 @@ import type { DocStyle } from '../style';
 import type { CiteStyle, Reference } from '../document/references';
 import type { CiteFormat } from '../document/cite-styles';
 import type { ChartBox } from '../sheet/chart-box';
+import type { CiteManager } from '../document/live-cites';
 
 export const W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 export const WP_NS = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
@@ -32,6 +33,7 @@ export const DOCX_CT = {
   footer: 'application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml',
   core: 'application/vnd.openxmlformats-package.core-properties+xml',
   app: 'application/vnd.openxmlformats-officedocument.extended-properties+xml',
+  custom: 'application/vnd.openxmlformats-officedocument.custom-properties+xml',
   itemProps: 'application/vnd.openxmlformats-officedocument.customXmlProperties+xml',
   fontTable: 'application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml',
   font: 'application/vnd.openxmlformats-officedocument.obfuscatedFont',
@@ -94,6 +96,9 @@ export const TABLE_NAME = 'Chem Illustrator table';
 export const FORMULA_STYLE = 'ChemFormula';
 
 /** What our own part holds: what Word can't. */
+/** The format of Word's custom document properties (docProps/custom.xml): where Zotero keeps its document preferences. */
+export const CUSTOM_PROPS_FMTID = '{D5CDD505-2E9C-101B-9397-08002B2CF9AE}';
+
 export interface DocxModel {
   app: 'Chem Illustrator';
   version: 1;
@@ -106,6 +111,8 @@ export interface DocxModel {
   references?: Reference[];
   citeStyle?: CiteStyle;
   citeOptions?: Partial<CiteFormat>;
+  /** The reference manager citations are saved for (Zotero, Mendeley, EndNote), when chosen. */
+  citeManager?: CiteManager;
   /** Each bibliography by its id: the text written (to tell whether Word changed it) and its paragraph's settings. */
   bibliographies?: Record<number, { text: string; ps: ParaStyle }>;
   /** Each chart by its id, as made here (used when Word's copy charts the same numbers). */

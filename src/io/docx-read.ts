@@ -7,8 +7,9 @@
 // lists, tables, pictures, captions and cross-references, page setup, header, footer and page
 // numbers; ChemDraw objects in them become structures that can be edited here. What has no
 // place here yet is noted in warnings (shown to the person, never refused). Citations and the
-// bibliography saved here come back live (the references are in our own part); those of
-// other reference managers keep the text Word showed. Footnotes and endnotes come in as notes
+// bibliography saved here come back live (the references are in our own part), and so do
+// Zotero's, Mendeley's and EndNote's (their items read into the references: live-cites.ts).
+// Footnotes and endnotes come in as notes
 // typed into here, and a table of figures (a TOC field for captions) as one worked out here.
 
 import type { Contents, Justify, ParaStyle, PictureFx, TableCell, TableData, TextRun } from '../model';
@@ -34,7 +35,8 @@ import { cfbStreams, isCfb } from './cfb';
 import { isCdx } from './cdx';
 import { cmtIds, cmtString, type CommentNote, type CommentThread } from '../document/comments';
 import { BIB_MARK, CHART_NAME, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, W14_NS, W15_NS, W16CID_NS, W16CEX_NS, fromWordDate, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
-import { cleanRef } from '../document/references';
+import { cleanRef, type Reference } from '../document/references';
+import { bibFieldApp, placeRef, readCiteField, readMendeleyTag, styleFromCsl, zoteroStyleOf, MANAGERS, type CiteLive, type CiteManager, type ManagerCite } from '../document/live-cites';
 import { retypedDiagram } from '../design/diagrams';
 import { revText } from '../document/revisions';
 import { linkFromTarget } from '../links';
@@ -99,7 +101,7 @@ interface WStyle { id: string; type: string; name: string; basedOn?: string; nex
 interface Level { fmt: string; text: string; p: PProps }
 interface Piece { runs: TextRun[]; pageBreak: boolean; soft: boolean; colBreak?: boolean }
 interface Ctx { base: RProps; pieces: Piece[]; cell: boolean }
-interface Field { instr: string; phase: 'instr' | 'result'; swallow: boolean; text: string; props: RProps; done: boolean; ref?: { id: number; mark: string; text: string }; toc?: boolean; /** A HYPERLINK field: the link open before it, put back at its end. */ before?: { link: string | undefined } }
+interface Field { instr: string; phase: 'instr' | 'result'; swallow: boolean; /** The field's own data (w:fldData, base64): EndNote's citations. */ data?: string; text: string; props: RProps; done: boolean; ref?: { id: number; mark: string; text: string }; toc?: boolean; /** A HYPERLINK field: the link open before it, put back at its end. */ before?: { link: string | undefined } }
 interface OutPara { ps: ParaStyle; runs: TextRun[]; mark: rt.RunStyle; style: string; contextual: boolean; table?: boolean; bib?: string; markRev?: string }
 
 /** Open a Word file. Throws only when the file is not a Word file at all. */
@@ -164,6 +166,10 @@ class DocxReader {
   private part = '';
   /** Bookmarks met since the last paragraph was read: they go on the next one. */
   private pendingMarks: string[] = [];
+  /** The references: those in our part, then those read from Zotero's, Mendeley's and EndNote's citations. */
+  private liveRefs: Reference[] = [];
+  /** The reference manager whose citations or bibliography the file has (the first met). */
+  private manager: CiteManager | undefined;
   /** The notes in footnotes.xml and endnotes.xml, by Word's id (read when first needed). */
   private noteEls: Partial<Record<'foot' | 'end', Map<string, Element>>> = {};
 
@@ -432,6 +438,7 @@ class DocxReader {
         const m = JSON.parse(d.textContent ?? '') as DocxModel;
         if (m?.app !== 'Chem Illustrator') continue;
         this.model = m;
+        if (Array.isArray(m.references)) this.liveRefs = m.references.map((r) => cleanRef(r));
         if (m.drawingStyle) this.drawingStyle = { ...ACS_1996, ...m.drawingStyle };
         return;
       } catch {
@@ -577,13 +584,26 @@ class DocxReader {
       switch (el.localName) {
         case 'p': this.paragraph(el); break;
         case 'tbl': this.table(el); break;
-        case 'sdt': this.blocks(kids(kid(el, 'sdtContent'))); break;
+        case 'sdt':
+          if (this.sdtTag(el) === 'MENDELEY_BIBLIOGRAPHY') { this.managedBibliography(); break; }
+          this.blocks(kids(kid(el, 'sdtContent')));
+          break;
         case 'customXml': case 'ins': case 'moveTo': case 'smartTag': this.blocks(kids(el)); break;
         case 'AlternateContent': this.blocks(kids(this.alternate(el))); break;
         case 'bookmarkStart': this.markStart(el); break;
         case 'bookmarkEnd': this.markEnd(el); break;
       }
     }
+  }
+
+  /** Mendeley Cite's bibliography (a content control of paragraphs): ours, worked out here, in a paragraph of its own. */
+  private managedBibliography(): void {
+    this.manager ??= 'mendeley-cite';
+    const id = this.nextId++;
+    this.objects[id] = { kind: 'bib' };
+    const base = merge<RProps>(this.docDefaults.r, this.chain('paragraph', this.defaultPara).r);
+    const ps = cleanPara({ section: this.takeBreak() });
+    this.out.push({ ps, runs: [{ ...this.runStyle(base), obj: id, text: OBJECT_CHAR }], mark: this.runStyle(base), style: 'Normal', contextual: false });
   }
 
   /** The part of a choice of contents (mc:AlternateContent) to read: the plain one meant for older programs. */
@@ -928,7 +948,13 @@ class DocxReader {
         }
         case 'fldSimple': this.simpleField(el, ctx); break;
         case 'smartTag': case 'customXml': case 'dir': case 'bdo': this.inline(kids(el), ctx); break;
-        case 'sdt': this.inline(kids(kid(el, 'sdtContent')), ctx); break;
+        case 'sdt': {
+          // a Mendeley Cite citation: its content control's tag holds the citation
+          const m = !ctx.cell && !this.swallowing() ? readMendeleyTag(this.sdtTag(el)) : null;
+          if (m && this.managedCite(m, ctx, merge<RProps>(ctx.base, this.readRPr(kid(kid(el, 'sdtContent'), 'r', 'rPr'))))) break;
+          this.inline(kids(kid(el, 'sdtContent')), ctx);
+          break;
+        }
         // tracked changes: the text keeps its mark, to be accepted or rejected here or in Word
         case 'ins': case 'moveTo': case 'del': case 'moveFrom': {
           const before = this.rev;
@@ -1006,7 +1032,10 @@ class DocxReader {
 
   private fieldChar(c: Element, r: RProps, ctx: Ctx): void {
     const type = this.a(c, 'fldCharType');
-    if (type === 'begin') this.fields.push({ instr: '', phase: 'instr', swallow: false, text: '', props: r, done: false });
+    if (type === 'begin') {
+      const data = kid(c, 'fldData')?.textContent?.trim();
+      this.fields.push({ instr: '', phase: 'instr', swallow: false, text: '', props: r, done: false, ...(data ? { data } : {}) });
+    }
     else if (type === 'separate') {
       const f = this.fields[this.fields.length - 1];
       if (!f) return;
@@ -1016,6 +1045,9 @@ class DocxReader {
       const f = this.fields.pop();
       if (!f) return;
       if (f.phase === 'instr') { f.phase = 'result'; this.startField(f, ctx); }
+      // a field inside another's instruction (EndNote's EN.CITE.DATA): its data is the outer field's
+      const outer = this.fields[this.fields.length - 1];
+      if (f.data && outer?.phase === 'instr' && !outer.data) outer.data = f.data;
       if (f.ref) f.ref.text = f.text;
       if (f.before) this.link = f.before.link;
     }
@@ -1058,6 +1090,20 @@ class DocxReader {
       f.swallow = true;
       return;
     }
+    // a citation from Zotero, Mendeley or EndNote: its items become the document's references
+    const managed = /^ADDIN\s/i.test(ins) ? readCiteField(ins, f.data) : null;
+    if (managed && !ctx.cell) {
+      if (this.managedCite(managed, ctx, f.props)) f.swallow = true;
+      return;
+    }
+    // a reference manager's bibliography: ours, worked out here, in its place
+    const bibApp = bibFieldApp(ins);
+    if (bibApp && !ctx.cell) {
+      this.manager ??= bibApp;
+      const id = this.emitObject(ctx, { kind: 'bib' }, f.props);
+      if (id !== null) { f.swallow = true; f.toc = true; }
+      return;
+    }
     // a citation saved here: live again, citing the references in our part
     const cite = new RegExp(`^${CITE_FIELD}\\b(.*)$`).exec(ins);
     if (cite && this.model?.references && !ctx.cell) {
@@ -1090,7 +1136,40 @@ class DocxReader {
       if (link) { f.before = { link: this.link }; this.link = link; }
       return;
     }
-    if (/^ADDIN\s+(EN\.CITE|ZOTERO|CSL|Mendeley|RW)/i.test(ins)) this.warn('citations');
+    if (/^ADDIN\s+(EN\.CITE|ZOTERO|CSL|Mendeley|RW)/i.test(ins) && !/^ADDIN\s+EN\.CITE\.DATA/i.test(ins)) this.warn('citations');
+  }
+
+  /** A reference manager's citation as ours, its items put in the document's references. True when it was put in. */
+  private managedCite(c: ManagerCite, ctx: Ctx, props: RProps): boolean {
+    if (!c.items.length) return false;
+    this.manager ??= c.app;
+    const refs: string[] = [];
+    const items: Record<string, Record<string, unknown>> = {};
+    for (const it of c.items) {
+      const id = placeRef(this.liveRefs, it.ref);
+      refs.push(id);
+      if (Object.keys(it.extra).length) items[id] = it.extra;
+    }
+    const live: CiteLive = { app: c.app, ...(c.id ? { id: c.id } : {}), ...(Object.keys(items).length ? { items } : {}) };
+    return this.emitObject(ctx, { kind: 'cite', refs, live }, props, true) !== null;
+  }
+
+  /** Zotero's document preferences: the ZOTERO_PREF_1, _2… custom document properties joined, or null. */
+  private zoteroPrefs(): string | null {
+    const path = this.pkg.relOfType('', REL.customProps);
+    const root = path ? this.pkg.xml(path)?.documentElement : null;
+    if (!root) return null;
+    const parts: [number, string][] = [];
+    for (const p of Array.from(root.children)) {
+      const n = /^ZOTERO_PREF_(\d+)$/.exec(p.getAttribute('name') ?? '');
+      if (n) parts.push([Number(n[1]), p.textContent ?? '']);
+    }
+    return parts.length ? parts.sort((a, b) => a[0] - b[0]).map((x) => x[1]).join('') : null;
+  }
+
+  /** A content control's tag (w:sdtPr/w:tag), or ''. */
+  private sdtTag(el: Element): string {
+    return this.a(kid(kid(el, 'sdtPr'), 'tag'), 'val') ?? '';
   }
 
   private markStart(el: Element): void {
@@ -1752,6 +1831,10 @@ class DocxReader {
     const objects: Record<number, DocObject> = {};
     for (const [k, v] of Object.entries(this.objects)) if (used.has(Number(k))) objects[Number(k)] = v;
     const m = this.model;
+    // Zotero's document preferences (its style), kept to save back
+    const zoteroPrefs = this.zoteroPrefs();
+    const zoteroStyle = zoteroPrefs ? styleFromCsl(zoteroStyleOf(zoteroPrefs) ?? '') : null;
+    const manager = this.manager ?? (m?.citeManager && m.citeManager in MANAGERS ? m.citeManager : undefined) ?? (zoteroPrefs ? 'zotero' : undefined);
     // comments: the replies' ranges are their comment's; comments with no text go
     const cm = this.readComments();
     let comments: Record<number, CommentThread> | undefined;
@@ -1781,8 +1864,10 @@ class DocxReader {
       ...(this.numFormatOf(sect) !== 'decimal' ? { numFormat: this.numFormatOf(sect) } : {}),
       ...(this.lineNumbersOf(sect) ? { lineNumbers: this.lineNumbersOf(sect) } : {}),
       ...(Object.keys(this.noteFormats).length ? { notes: this.noteFormats } : {}),
-      ...(Array.isArray(m?.references) ? { references: m.references.map((r) => cleanRef(r)) } : {}),
-      ...(typeof m?.citeStyle === 'string' && m.citeStyle in CITE_PRESETS ? { citeStyle: m.citeStyle } : {}),
+      ...(this.liveRefs.length || Array.isArray(m?.references) ? { references: this.liveRefs } : {}),
+      ...(typeof m?.citeStyle === 'string' && m.citeStyle in CITE_PRESETS ? { citeStyle: m.citeStyle } : zoteroStyle ? { citeStyle: zoteroStyle } : {}),
+      ...(manager ? { citeManager: manager } : {}),
+      ...(zoteroPrefs ? { zoteroPrefs } : {}),
       ...(m?.citeOptions && Object.keys(cleanOptions(m.citeOptions)).length ? { citeOptions: cleanOptions(m.citeOptions) } : {}),
     };
   }

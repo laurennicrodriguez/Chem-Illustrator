@@ -201,6 +201,15 @@ export const COMMAND_NAMES: Record<string, string> = {
   'new-note': 'New note on the cell (or change its note)', 'edit-note': 'Change the cell\'s note', 'delete-note': 'Delete the notes and comments in the selection',
   'show-note': 'Show the cell\'s note all the time (or only when pointed at)', 'show-all-notes': 'Show all notes (on or off)', 'convert-notes': 'Convert notes to comments',
   'data-validation': 'Data validation…', 'circle-invalid': 'Circle invalid data (on or off)', 'pick-from-list': 'Pick from the drop-down list',
+  'find-next': 'Find next', 'go-to': 'Go To…', 'go-to-special': 'Go To Special…', 'fill-series': 'Fill a series…', 'flash-fill': 'Flash Fill',
+  'paste-special': 'Paste Special…', 'paste-values': 'Paste values', 'paste-transpose': 'Paste transposed', 'text-to-columns': 'Text to Columns…', 'remove-duplicates': 'Remove Duplicates…',
+  'custom-sort': 'Sort by several columns…', 'advanced-filter': 'Advanced Filter…', 'clear-filter': 'Clear the filter (show every row)',
+  'freeze-panes': 'Freeze panes above and left of the cell', 'freeze-top-row': 'Freeze the top row', 'freeze-first-col': 'Freeze the first column', 'unfreeze-panes': 'Unfreeze panes',
+  'split-window': 'Split the window (on or off)',
+  'insert-picture-sheet': 'Insert a picture over the cells…', 'insert-text-box': 'Insert a text box over the cells', 'format-object': 'Format the picked shape or picture…',
+  'page-setup': 'Page setup…', 'header-footer': 'Header and footer…', 'print-titles': 'Print titles…', 'page-scale': 'Print scale…',
+  'set-print-area': 'Set the print area to the selection', 'clear-print-area': 'Clear the print area', 'insert-page-break': 'Insert a page break',
+  'print-gridlines': 'Print gridlines (on or off)', 'print-headings': 'Print row and column headings (on or off)', 'show-page-breaks': 'Show page breaks (on or off)', 'print-preview': 'Print preview',
   // documents
   'new-document': 'New document', 'doc-align-left': 'Align text left', 'doc-align-center': 'Centre text', 'doc-align-right': 'Align text right',
   'doc-justify': 'Justify text', 'style-normal': 'Normal style', 'style-title': 'Title style', 'style-h1': 'Heading 1 style', 'style-h2': 'Heading 2 style',
@@ -210,7 +219,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   'insert-caption': 'Insert a caption…', 'cross-reference': 'Insert a cross-reference…', 'compound-number': 'Insert a compound number…', 'structure-from-name-doc': 'Insert a structure from a name or SMILES…',
   'insert-citation': 'Insert a citation…', 'insert-bibliography': 'Insert the bibliography', 'manage-references': 'Manage references…',
   'insert-toc': 'Insert a table of contents…', 'insert-tof': 'Insert a table of figures…', 'insert-footnote': 'Insert a footnote', 'insert-link': 'Insert or change a link (web page, DOI, file, place in the file)…', 'remove-link': 'Remove the link', 'open-link': 'Open the link', 'insert-bookmark': 'Insert, go to or delete a bookmark…', 'insert-endnote': 'Insert an endnote', 'note-options': 'Footnote and endnote options…', 'insert-equation': 'Insert an equation…', 'edit-equation': 'Change the equation…', 'track-changes': 'Track changes (on or off)', 'accept-change': 'Accept the change', 'reject-change': 'Reject the change',
-  'accept-all': 'Accept all changes', 'reject-all': 'Reject all changes', 'next-change': 'Next change', 'prev-change': 'Previous change', 'review-name': 'Your name on changes…', 'new-comment': 'New comment', 'delete-comment': 'Delete the comment', 'delete-all-comments': 'Delete all comments', 'resolve-comment': 'Resolve the comment (or reopen it)', 'next-comment': 'Next comment', 'prev-comment': 'Previous comment', 'show-comments': 'Show comments (on or off)',
+  'accept-all': 'Accept all changes', 'reject-all': 'Reject all changes', 'next-change': 'Next change', 'prev-change': 'Previous change', 'review-name': 'Your name on changes…', 'compare-docs': 'Compare two versions of a document…', 'combine-docs': 'Combine reviewers\' copies of a document…', 'new-comment': 'New comment', 'delete-comment': 'Delete the comment', 'delete-all-comments': 'Delete all comments', 'resolve-comment': 'Resolve the comment (or reopen it)', 'next-comment': 'Next comment', 'prev-comment': 'Previous comment', 'show-comments': 'Show comments (on or off)',
   'view-print': 'Print Layout view', 'view-read': 'Read Mode', 'view-web': 'Web Layout view', 'view-outline': 'Outline view', 'view-draft': 'Draft view',
   'view-sideways': 'Pages side to side (on or off)', 'view-multiple': 'Multiple pages (on or off)', 'view-one-page': 'One page', 'view-split': 'Split the window (on or off)',
   'doc-new-window': 'New window on the document', 'outline-promote': 'Promote (outline)', 'outline-demote': 'Demote (outline)', 'outline-heading1': 'Promote to Heading 1',
@@ -351,6 +360,7 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
     'Ctrl+9': 'hide-rows', 'Ctrl+Shift+9': 'unhide-rows', 'Ctrl+0': 'hide-cols', 'Ctrl+Shift+0': 'unhide-cols',
     'Ctrl+Shift+L': 'filter', 'Ctrl+N': 'new-sheet', 'Shift+F11': 'insert-sheet',
     'Ctrl+Shift+N': 'structure-from-name', 'Shift+F2': 'new-note', 'Ctrl+Alt+M': 'new-comment', 'Ctrl+K': 'insert-link',
+    'Ctrl+H': 'replace', 'Shift+F4': 'find-next', 'Ctrl+G': 'go-to', F5: 'go-to', 'Ctrl+E': 'flash-fill', 'Ctrl+Alt+V': 'paste-special',
   }),
   // Word's keys
   document: verbs('command', {

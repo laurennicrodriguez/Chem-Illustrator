@@ -2,6 +2,7 @@
 // #DIV/0!. Also how typed text becomes a value (as Excel reads it), and how values compare.
 
 import { readWithUnit } from './units';
+import { readDateTime, formulaDateFormat } from './dates';
 
 /** An error value. The codes are Excel's, plus #CIRC! for a formula that depends on itself. */
 export class CellError {
@@ -17,12 +18,16 @@ export const ERR = {
   num: (detail = 'A number out of range') => new CellError('#NUM!', detail),
   na: (detail = 'Not available') => new CellError('#N/A', detail),
   circ: () => new CellError('#CIRC!', 'This formula uses its own result (a circular reference)'),
+  /** An array result that can't spill into the cells it needs (something is in the way). */
+  spill: (detail = 'The answer needs more cells, and something is in the way') => new CellError('#SPILL!', detail),
+  /** A calculation Excel can't finish: an empty array, or a LAMBDA left uncalled. */
+  calc: (detail = 'The calculation gives nothing to show') => new CellError('#CALC!', detail),
   /** Still being worked out (structure properties come from the chemistry engine a moment later). */
   busy: () => new CellError('#BUSY!', 'Being worked out'),
 };
 
 /** The error codes Excel itself knows (others are saved as #VALUE!). */
-export const EXCEL_ERRORS = ['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A'];
+export const EXCEL_ERRORS = ['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#SPILL!', '#CALC!'];
 
 export type Value = number | string | boolean | null | CellError;
 
@@ -42,7 +47,7 @@ const GROUPED = /^[+-]?\d{1,3}(?:,\d{3})+(?:\.\d*)?$/;
 /** Read what was typed into a cell. Starting with = makes a formula; with ' keeps it as text. */
 export function readTyped(input: string): Typed {
   if (input === '') return { value: null };
-  if (input.length > 1 && input[0] === '=') return { value: null, formula: input };
+  if (input.length > 1 && input[0] === '=') return { value: null, formula: input, format: formulaDateFormat(input) };
   if (input[0] === "'") return { value: input.slice(1) };
   const s = input.trim();
   if (NUMBER.test(s)) {
@@ -58,6 +63,9 @@ export function readTyped(input: string): Typed {
     const dec = pct[1].includes('.') ? pct[1].split('.')[1].length : 0;
     return { value: Number(pct[1]) / 100, format: dec ? `0.${'0'.repeat(dec)}%` : '0%' };
   }
+  // a date or time (10/22/2026, 2026-10-22, 22-Oct-26, 2:30 PM): its day number, shown as typed
+  const date = readDateTime(s, true);
+  if (date) return { value: date.value, format: date.format };
   // a number with a unit (-78 °C, 5 mol%): the number, shown with the unit
   const unit = readWithUnit(s);
   if (unit) return unit;
@@ -77,6 +85,9 @@ export function toNumber(v: Value): number | CellError {
   const typed = readTyped(t);
   // text with a unit stays text in formulas, as in Excel ("5 M"*2 is #VALUE!); typed into a cell it is a number
   if (typeof typed.value === 'number' && !typed.formula && !readWithUnit(t)) return typed.value;
+  // dates and times written as text work in arithmetic, as in Excel ("2026-10-22"+7)
+  const date = readDateTime(t);
+  if (date) return date.value;
   return ERR.value(`"${v}" is not a number`);
 }
 

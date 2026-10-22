@@ -152,6 +152,14 @@ Pick the **Citation style** in **Manage References…**. Every citation and the 
 
 Journal requirements change, so check the result against a recent issue of your target journal.
 
+### Zotero, Mendeley and EndNote
+
+A Word file with citations made by Zotero, Mendeley (Desktop or Cite) or EndNote opens with them live: their references go into **Manage References…** and the citations and bibliography are numbered and styled here like any others. A Zotero file also keeps its citation style when it is one of the styles above.
+
+Saving writes the citations back as that program's own, with its item ids, so in Word its **Refresh** (Zotero, Mendeley) or **Update Citations and Bibliography** (EndNote) still works on them. References added here go out with their details: Zotero and Mendeley keep them as items in the document, EndNote adds them to the document's travelling library.
+
+To choose the program for a document made here, use **Save citations for** in **Manage References…**. **Chem Illustrator only** saves the numbers as text that Word shows as they are.
+
 ## Pages, columns, headers and footers
 
 On the **Layout** tab:
@@ -211,6 +219,14 @@ The contents keep themselves up to date: page numbers change as text moves, and 
 4. **Accept** or **Reject** decides the change at the caret (or every change in a selection) and moves to the next. **Accept All** and **Reject All** do the whole document. Right-click a change for Accept and Reject too.
 
 Changes made by other people in Word open here as changes, in a different colour for each person.
+
+### Compare and Combine
+
+- **Review** tab ▸ **Compare…** takes an original and a revised version (open tabs, or **Choose a Word file…**) and opens a new document: the revised version with what changed marked as tracked changes, under the name you give in **Label changes with**. Both versions are compared with their own tracked changes accepted.
+- **Combine…** puts two reviewers' copies of the same document together in a new document. Each reviewer's tracked changes keep their name; anything changed in the revised copy without tracking is marked with the label you give.
+- **Show changes at** compares whole words (as Word does by default) or letter by letter.
+
+A structure, picture, table or equation counts as one word: if it changed, the old one shows deleted and the new one inserted. Changes of formatting alone are not marked; the revised version's formatting is kept. Headers, footers and the text inside tables and text boxes come from the revised version (Compare) or the original (Combine) and are not compared.
 
 ## Comments
 
