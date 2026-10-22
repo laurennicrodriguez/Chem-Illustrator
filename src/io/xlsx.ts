@@ -529,10 +529,16 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
 
     const used = s.lastRow >= 0 ? `A1:${cellName(Math.max(s.lastRow, 0), Math.max(s.lastCol, 0))}` : 'A1';
     const fr = s.frozen.rows, fc = s.frozen.cols;
+    // a split window (not frozen): Excel gives where the bars are in twentieths of a point (a pixel is 15)
+    const sp = !fr && !fc ? s.split : null;
+    const paneName = (r: number, c: number) => (r && c ? 'bottomRight' : r ? 'bottomLeft' : 'topRight');
     const pane = fr || fc
-      ? `<pane${fc ? ` xSplit="${fc}"` : ''}${fr ? ` ySplit="${fr}"` : ''} topLeftCell="${cellName(fr, fc)}" activePane="${fr && fc ? 'bottomRight' : fr ? 'bottomLeft' : 'topRight'}" state="frozen"/>` +
-        `<selection pane="${fr && fc ? 'bottomRight' : fr ? 'bottomLeft' : 'topRight'}" activeCell="${cellName(fr, fc)}" sqref="${cellName(fr, fc)}"/>`
-      : '';
+      ? `<pane${fc ? ` xSplit="${fc}"` : ''}${fr ? ` ySplit="${fr}"` : ''} topLeftCell="${cellName(fr, fc)}" activePane="${paneName(fr, fc)}" state="frozen"/>` +
+        `<selection pane="${paneName(fr, fc)}" activeCell="${cellName(fr, fc)}" sqref="${cellName(fr, fc)}"/>`
+      : sp
+        ? `<pane${sp.cols ? ` xSplit="${Math.round(cols.start(sp.cols) * 15)}"` : ''}${sp.rows ? ` ySplit="${Math.round(rows.start(sp.rows) * 15)}"` : ''} topLeftCell="${cellName(sp.rows, sp.cols)}" activePane="${paneName(sp.rows, sp.cols)}"/>` +
+          `<selection pane="${paneName(sp.rows, sp.cols)}" activeCell="${cellName(sp.rows, sp.cols)}" sqref="${cellName(sp.rows, sp.cols)}"/>`
+        : '';
     let filterXml = '';
     // a filter on a table goes in the table's part (Excel allows no sheet filter over a table)
     const filterTable = s.filter ? s.tables.find((t) => rangesOverlap(t.range, s.filter!.range)) : undefined;
@@ -1054,6 +1060,18 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
       if (merges.length) s.setMerges(merges);
       const pane = kid(ws, 'sheetViews', 'sheetView', 'pane');
       if (pane && /frozen/i.test(pane.getAttribute('state') ?? '')) s.setFrozen(Number(pane.getAttribute('ySplit') ?? 0), Number(pane.getAttribute('xSplit') ?? 0));
+      else if (pane) {
+        // a split window: its bars in twentieths of a point, put at the nearest row and column edges
+        const nearest = (twips: number, size: (i: number) => number) => {
+          const px = twips / 15;
+          let i = 0, at = 0;
+          while (i < 5000 && at + size(i) / 2 < px) at += size(i++);
+          return i;
+        };
+        const rowsUp = nearest(Number(pane.getAttribute('ySplit') ?? 0), (r) => (s.hiddenRows.has(r) ? 0 : s.rowHeights.get(r) ?? DEFAULT_ROW_H));
+        const colsLeft = nearest(Number(pane.getAttribute('xSplit') ?? 0), (c) => (s.hiddenCols.has(c) ? 0 : s.colWidths.get(c) ?? DEFAULT_COL_W));
+        if (rowsUp || colsLeft) s.setSplit({ rows: rowsUp, cols: colsLeft });
+      }
       const af = kid(ws, 'autoFilter');
       const afRange = af ? parseRange(af.getAttribute('ref') ?? '') : null;
       if (af && afRange) {

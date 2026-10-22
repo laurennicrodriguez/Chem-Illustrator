@@ -369,6 +369,29 @@ function shiftRef(r: RefToken, dr: number, dc: number): RefToken {
 }
 
 /**
+ * A formula copied from (fromRow, fromCol) to (toRow, toCol) with Paste Special's Transpose: its
+ * relative references turn with the block, so a cell to its left becomes a cell above it.
+ * References with $ in them move as an ordinary copy does.
+ */
+export function transposeFormula(text: string, from: { row: number; col: number }, to: { row: number; col: number }): string {
+  return mapRefs(text, (r) => {
+    if (r.broken) return r;
+    const turn = (c: CellRef, wholeCol: boolean): CellRef | null => {
+      let row: number, col: number;
+      if (!c.absRow && !c.absCol && !wholeCol) { row = to.row + (c.col - from.col); col = to.col + (c.row - from.row); }
+      else { row = c.absRow || wholeCol ? c.row : c.row + to.row - from.row; col = c.absCol ? c.col : c.col + to.col - from.col; }
+      if (row < 0 || row >= MAX_ROWS || col < 0 || col >= MAX_COLS) return null;
+      return { ...c, row, col };
+    };
+    const a = turn(r.a, r.kind === 'cols'), b = r.b ? turn(r.b, r.kind === 'cols') : null;
+    if (!a || (r.b && !b)) return { ...r, broken: true };
+    // a block turned keeps its corners in order (A1:C1 becomes A1:A3)
+    if (b && r.kind === 'range') return { ...r, a: { ...a, row: Math.min(a.row, b.row), col: Math.min(a.col, b.col) }, b: { ...b, row: Math.max(a.row, b.row), col: Math.max(a.col, b.col) } };
+    return { ...r, a, b: b ?? undefined };
+  });
+}
+
+/**
  * A formula's tree as if copied dr rows down and dc columns across: the same as shifting its
  * text and reading it again, without the reading (conditional formatting asks this of every cell).
  */
