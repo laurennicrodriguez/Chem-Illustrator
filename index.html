@@ -134,6 +134,7 @@
     <button data-modes="document" role="menuitemcheckbox" aria-checked="false" data-cmd="view-split" title="Two panes on the document, one above the other, each scrolled on its own"><span>Split Window</span></button>
     <button data-modes="document" role="menuitem" data-cmd="doc-new-window" title="The document in another tab too, with its own view and place">New Window</button>
     <button data-modes="sheet" role="menuitem" data-cmd="freeze-header">Freeze Header Row</button>
+    <button data-modes="sheet" role="menuitemcheckbox" aria-checked="false" data-cmd="show-all-notes"><span>Show All Notes</span></button>
     <button data-modes="slides" role="menuitemcheckbox" aria-checked="false" data-cmd="animation-pane"><span>Animation Pane</span></button>
     <button data-modes="slides" role="menuitemcheckbox" aria-checked="false" data-cmd="show-comments"><span>Show Comments</span></button>
     <div class="submenu" data-modes="slides">
@@ -179,7 +180,8 @@
     <button data-modes="slides" role="menuitem" data-cmd="new-slide">New Slide</button>
     <button data-modes="slides" role="menuitem" data-cmd="duplicate-slide">Duplicate Slide</button>
     <button data-modes="slides" role="menuitem" data-cmd="reuse-slides" title="Slides from another PowerPoint file: see them all, pick the ones you want">Reuse Slides…</button>
-    <button data-modes="slides" role="menuitem" data-cmd="new-comment">New Comment</button>
+    <button data-modes="slides sheet" role="menuitem" data-cmd="new-comment">New Comment</button>
+    <button data-modes="sheet" role="menuitem" data-cmd="new-note">New Note</button>
     <button data-modes="sheet" role="menuitem" data-cmd="property-column">Insert Property Columns…</button>
     <button data-modes="sheet" role="menuitem" data-cmd="isotope-pattern">Isotope Pattern…</button>
     <button data-modes="sheet" role="menuitem" data-cmd="reagent-table">New Reagent Table</button>
@@ -264,6 +266,8 @@
     <button data-modes="slides" role="menuitem" data-cmd="slide-animations">Animations…</button>
     <button data-modes="sheet" role="menuitem" data-cmd="new-rule">New Conditional Formatting Rule…</button>
     <button data-modes="sheet" role="menuitem" data-cmd="manage-rules">Manage Conditional Formatting…</button>
+    <button data-modes="sheet" role="menuitem" data-cmd="data-validation">Data Validation…</button>
+    <button data-modes="sheet" role="menuitemcheckbox" aria-checked="false" data-cmd="circle-invalid"><span>Circle Invalid Data</span></button>
     <button data-modes="sheet" role="menuitem" data-cmd="insert-table">Format as Table</button>
     </div>
     </div>
@@ -424,6 +428,7 @@
       <button role="tab" data-sh-tab="home" aria-selected="true">Home</button>
       <button role="tab" data-sh-tab="dashboard" aria-selected="false" hidden>Dashboard</button>
       <button role="tab" data-sh-tab="insert" aria-selected="false">Insert</button>
+      <button role="tab" data-sh-tab="review" aria-selected="false">Review</button>
       <button role="tab" data-sh-tab="table" aria-selected="false" class="rb-context" hidden>Table Design</button>
       <button role="tab" data-sh-tab="chart" aria-selected="false" class="rb-context" hidden>Chart</button>
     </div>
@@ -544,6 +549,10 @@
             <button data-sh="freeze-header" aria-pressed="false" title="Keep the header row in view while scrolling">Freeze Header</button>
             <button data-sh="autosum" title="Add up the numbers above">Σ AutoSum</button>
           </div>
+          <div class="rb-col">
+            <button data-sh="data-validation" title="Data Validation: what may be typed in the selected cells (numbers within limits, dates, a drop-down list), a message shown when one is selected, and the alert for anything else">Validation…</button>
+            <button data-sh="circle-invalid" aria-pressed="false" title="Circle Invalid Data: red rings round the cells that break their rules (again to clear them)">Circle Invalid</button>
+          </div>
         </div>
         <div class="rb-label">Data</div>
       </div>
@@ -571,6 +580,35 @@
           <button class="rb-big" data-sh="insert-dashboard" title="A new sheet of tiles (charts, headline numbers, tables, slicers, structure galleries) built from the tables in this workbook"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2.5" y="3" width="7" height="6" rx="1"/><rect x="11.5" y="3" width="6" height="3.5" rx="1"/><rect x="11.5" y="8.5" width="6" height="8.5" rx="1"/><rect x="2.5" y="11" width="7" height="6" rx="1"/></svg></span>Dashboard</button>
         </div>
         <div class="rb-label">Dashboards</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-sh-panel="review" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="new-comment" title="New Comment (Ctrl+Alt+M): a conversation on the cell with your name and the time, which others can reply to and resolve"><span class="rb-icon">💬</span>New Comment</button>
+          <div class="rb-col">
+            <button data-sh="prev-comment" title="Go to the note or comment before this cell">◀ Previous</button>
+            <button data-sh="next-comment" title="Go to the next note or comment">Next ▶</button>
+          </div>
+          <div class="rb-col">
+            <button data-sh="delete-note" title="Delete the notes and comments in the selected cells">Delete</button>
+          </div>
+        </div>
+        <div class="rb-label">Comments</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="new-note" title="New Note (Shift+F2): a yellow sticky note on the cell, shown when you point at it"><span class="rb-icon">🗒</span>New Note</button>
+          <div class="rb-col">
+            <button data-sh="edit-note" title="Change the note on the cell">Edit Note</button>
+            <button data-sh="show-note" aria-pressed="false" title="Show the cell's note all the time, or only when you point at the cell">Show/Hide Note</button>
+          </div>
+          <div class="rb-col">
+            <button data-sh="show-all-notes" aria-pressed="false" title="Show every note on the sheet beside its cell">Show All Notes</button>
+            <button data-sh="convert-notes" title="Turn every note on this sheet into a comment that can be replied to">Convert to Comments</button>
+          </div>
+        </div>
+        <div class="rb-label">Notes</div>
       </div>
     </div>
     <div class="rb-panel" data-sh-panel="dashboard" hidden>

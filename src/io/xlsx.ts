@@ -1,9 +1,10 @@
 // Excel workbooks (.xlsx), following the published Office Open XML standard (ECMA-376, part 1,
 // SpreadsheetML). Excel gets everything it can show for itself: values, its own formulas, number
 // formats, fonts, fills, borders, alignment, merged cells, column widths and row heights, frozen
-// header rows and the filter. Structures go in as pictures over their cells, with the SMILES in
-// the cell (in the formula bar, for formulas and copying; the cell's format hides it, since Excel
-// sizes columns a little differently on each screen and would show it at the picture's edge);
+// header rows, the filter, notes and comments, and data validation. Structures go in as pictures
+// over their cells, with the SMILES in the cell (in the formula bar, for formulas and copying; the
+// cell's format hides it, since Excel sizes columns a little differently on each screen and would
+// show it at the picture's edge);
 // property columns and formulas that use chemistry (MW, HRMS…) go in as their values,
 // since Excel can't work those out.
 //
@@ -34,6 +35,7 @@ import { condFormatsXml, dxfXml, tableXml, readDxfs, readCondFormats, readTable,
 import type { CondFormat, CfLook } from '../sheet/conditional';
 import { seenCondFormatId } from '../sheet/conditional';
 import { TableDef, tableColumnNames, seenTableId } from '../sheet/table-styles';
+import { Persons, notesParts, readNotes, shownNotes, validationsXml, readValidations, NOTES_CT, NOTES_REL } from './xlsx-notes';
 export { applyTint };
 
 /** Pictures of structures for Excel (the app draws them; tests use stand-ins). */
@@ -320,7 +322,8 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
   const model: Model = { app: 'Chem Illustrator', version: 1, drawingStyle: book.drawingStyle, sheets: [] };
   const sheetEntries: string[] = [];
   const filterNames: string[] = [];
-  let imageNo = 0, drawingNo = 0, tableNo = 0, chartNo = 0;
+  let imageNo = 0, drawingNo = 0, tableNo = 0, chartNo = 0, notesNo = 0;
+  const persons = new Persons();
   pkg.defaultType('png', 'image/png');
 
   for (let si = 0; si < book.sheets.length; si++) {
@@ -537,13 +540,29 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
       const rid = pkg.relate(sheetRels, RELS.drawing, `../drawings/drawing${drawingNo}.xml`);
       drawingXml = `<drawing r:id="${rid}"/>`;
     }
+    // notes and comments (a dashboard's stand-in has none)
+    const notes = standIn ? null : notesParts(s, si + 1, persons);
+    if (notes) {
+      notesNo++;
+      pkg.add(`xl/comments${notesNo}.xml`, HEAD + notes.comments, NOTES_CT.comments);
+      pkg.relate(sheetRels, NOTES_REL.comments, `../comments${notesNo}.xml`);
+      if (notes.threaded) {
+        pkg.add(`xl/threadedComments/threadedComment${notesNo}.xml`, HEAD + notes.threaded, NOTES_CT.threaded);
+        pkg.relate(sheetRels, NOTES_REL.threaded, `../threadedComments/threadedComment${notesNo}.xml`);
+      }
+      pkg.defaultType('vml', NOTES_CT.vml);
+      pkg.add(`xl/drawings/vmlDrawing${notesNo}.vml`, notes.vml);
+      const vid = pkg.relate(sheetRels, NOTES_REL.vml, `../drawings/vmlDrawing${notesNo}.vml`);
+      drawingXml += `<legacyDrawing r:id="${vid}"/>`;
+    }
+    const dvXml = standIn ? '' : validationsXml(s.validations, excelFunctionNames);
     pkg.add(path,
       `${HEAD}<worksheet xmlns="${MAIN}" xmlns:r="${RNS}">` +
       `${s.filter && !filterTable ? '<sheetPr filterMode="1"/>' : ''}<dimension ref="${used}"/>` +
       `<sheetViews><sheetView${si === book.active ? ' tabSelected="1"' : ''} workbookViewId="0">${pane}</sheetView></sheetViews>` +
       `<sheetFormatPr defaultRowHeight="15"/>` +
       (colXml.length ? `<cols>${colXml.join('')}</cols>` : '') +
-      `<sheetData>${rowXml.join('')}</sheetData>${filterXml}${merges}${cfXml}` +
+      `<sheetData>${rowXml.join('')}</sheetData>${filterXml}${merges}${cfXml}${dvXml}` +
       `<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>${drawingXml}${tableParts}</worksheet>`,
       CT.sheet);
     const rid = pkg.relate('xl/workbook.xml', RELS.worksheet, `worksheets/sheet${si + 1}.xml`);
@@ -555,6 +574,10 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
   pkg.add('xl/styles.xml', styles.toXml(), CT.styles);
   pkg.relate('xl/workbook.xml', RELS.sharedStrings, 'sharedStrings.xml');
   pkg.add('xl/sharedStrings.xml', strings.toXml(), CT.strings);
+  if (persons.size) {
+    pkg.relate('xl/workbook.xml', NOTES_REL.persons, 'persons/person.xml');
+    pkg.add('xl/persons/person.xml', HEAD + persons.toXml(), NOTES_CT.persons);
+  }
 
   // our own part: what Excel can't hold
   pkg.relate('xl/workbook.xml', RELS.customXml, '../customXml/item1.xml');
@@ -764,6 +787,8 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
   const xfs = readStyles(stylesDoc, theme);
   const colourOf = (el: Element | null) => readColour(el, theme);
   const dxfs = readDxfs(stylesDoc, colourOf);
+  const personsPath = relTarget(NOTES_REL.persons);
+  const personsDoc = personsPath ? pkg.xml(personsPath) : null;
   const ssPath = relTarget(RELS.sharedStrings);
   const shared = ssPath ? kids(pkg.xml(ssPath)?.documentElement, 'si').map(stringItem) : [];
 
@@ -1016,9 +1041,17 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
         for (const t of ms.dashboard.tiles) { seenTileId(t.id); if (t.kind === 'chart') seenTileId(t.chart.id); }
         s.setDashboard(ms.dashboard);
       }
-      for (const [tag, what] of [['dataValidations', 'data validation lists'], ['hyperlinks', 'links'], ['legacyDrawing', 'comments']] as const) {
-        if (kid(ws, tag)) notKept.add(what);
+      // notes and comments, and data validation
+      const sheetRelList = [...pkg.rels(path!).values()];
+      const relOf = (type: string) => sheetRelList.find((r) => r.type === type)?.target;
+      const commentsPath = relOf(NOTES_REL.comments), vmlPath = relOf(NOTES_REL.vml), threadedPath = relOf(NOTES_REL.threaded);
+      if (commentsPath || threadedPath) {
+        const notes = readNotes(commentsPath ? pkg.xml(commentsPath) : null, shownNotes(vmlPath ? pkg.text(vmlPath) : null), threadedPath ? pkg.xml(threadedPath) : null, personsDoc);
+        for (const [k, n] of notes) s.setNote(rowOf(k), colOf(k), n);
       }
+      const dv = readValidations(ws);
+      if (dv.length) s.setValidations(dv);
+      if (kid(ws, 'hyperlinks')) notKept.add('links');
     });
   });
   // a filter goes back as it was: the rows it hid are hidden already

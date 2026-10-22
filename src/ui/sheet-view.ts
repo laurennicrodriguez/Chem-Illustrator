@@ -18,6 +18,7 @@ import { Chart, chartData } from '../sheet/chart';
 import { drawChart, ChartHits, Box } from '../render/chart-draw';
 import { DashboardView } from './dashboard-view';
 import { newDashboard, Tile } from '../sheet/dashboard';
+import { Validation, passes, invalidCells } from '../sheet/validation';
 
 const HEADER_W = 44;
 const HEADER_H = 22;
@@ -65,6 +66,14 @@ export interface SheetViewHost {
   flash(msg: string, ms?: number): void;
   /** The typing in a cell (or the formula bar) changed. */
   typing(text: string | null): void;
+  /** The pointer is over a cell with a note or comment (null: over none), at this box on the screen. */
+  hoverNote?(cell: Cursor | null, box: DOMRect | null): void;
+  /** The grid was drawn (notes shown all the time follow it). */
+  drawn?(): void;
+  /** The drop-down of a cell with a list rule was opened, under this point on the screen. */
+  dropDown?(r: number, c: number, at: { x: number; y: number }): void;
+  /** Typing broke a cell's data validation rule: what to do about it. */
+  invalid?(rule: Validation, text: string): Promise<'retry' | 'keep' | 'cancel'>;
 }
 
 /** Sizes of rows or columns, with the position of each worked out once. */
@@ -150,6 +159,17 @@ export class SheetView {
   /** Shows a dashboard sheet in place of the grid. */
   readonly dash: DashboardView;
   private chartCache = new Map<number, { key: string; chart: Chart; canvas: HTMLCanvasElement; hits: ChartHits }>();
+  /** The input message of the selected cell's data validation rule. */
+  private promptBox: HTMLDivElement;
+  /** Notes shown all the time sit in this layer over the cells. */
+  readonly noteLayer: HTMLDivElement;
+  /** Data > Circle Invalid Data: red rings round cells that break their rules, until cleared. */
+  circleInvalid = false;
+  private circles: { gen: number; sheet: Sheet; rules: Validation[]; cells: { row: number; col: number }[] } | null = null;
+  /** The cell with a note the pointer is over. */
+  private hovered: Cursor | null = null;
+  /** An alert about typing that broke a rule is showing. */
+  private alerting = false;
 
   constructor(root: HTMLElement, private host: SheetViewHost) {
     this.el = root as HTMLDivElement;
@@ -169,7 +189,13 @@ export class SheetView {
     this.input.spellcheck = false;
     this.input.hidden = true;
     this.input.setAttribute('aria-label', 'Cell contents');
-    this.scroller.append(this.canvas, this.spacer, this.input);
+    this.promptBox = document.createElement('div');
+    this.promptBox.className = 'sh-prompt';
+    this.promptBox.hidden = true;
+    this.promptBox.setAttribute('role', 'tooltip');
+    this.noteLayer = document.createElement('div');
+    this.noteLayer.className = 'sh-note-layer';
+    this.scroller.append(this.canvas, this.spacer, this.noteLayer, this.input, this.promptBox);
     this.tabsEl = document.createElement('div');
     this.tabsEl.className = 'sh-tabs';
     this.tabsEl.setAttribute('role', 'tablist');
@@ -189,6 +215,7 @@ export class SheetView {
     });
     this.scroller.addEventListener('pointerdown', (e) => this.onDown(e));
     this.scroller.addEventListener('pointermove', (e) => this.onMove(e));
+    this.scroller.addEventListener('pointerleave', () => this.setHovered(null));
     this.scroller.addEventListener('pointerup', (e) => this.onUp(e));
     this.scroller.addEventListener('dblclick', (e) => this.onDouble(e));
     this.scroller.addEventListener('contextmenu', (e) => this.onContext(e));
@@ -495,7 +522,11 @@ export class SheetView {
     ctx.lineWidth = 1;
     if (FH) { ctx.beginPath(); ctx.moveTo(0, HEADER_H + FH + 0.5); ctx.lineTo(vw, HEADER_H + FH + 0.5); ctx.stroke(); }
     if (FW) { ctx.beginPath(); ctx.moveTo(HEADER_W + FW + 0.5, 0); ctx.lineTo(HEADER_W + FW + 0.5, vh); ctx.stroke(); }
+    this.drawCircles(regions);
+    this.drawDropButton();
+    this.placePrompt();
     if (this.editing) this.placeInput();
+    this.host.drawn?.();
     if (this.pendingPictures) this.render();
     budget = { n: 0 };
   }
@@ -813,8 +844,20 @@ export class SheetView {
           ctx.lineTo(x, y + 6 * z);
           ctx.fill();
         }
+        const note = s.notes.size ? s.noteAt(rr, cc) : undefined;
         if (isError(v) && v.code !== '#BUSY!') {
+          // (at the bottom when a note's mark has the top corner)
+          const top = note ? y + h - 1 : y, edge = note ? y + h - 1 - 6 * z : y + 6 * z;
           ctx.fillStyle = '#18794e';
+          ctx.beginPath();
+          ctx.moveTo(x + w - 7 * z, top);
+          ctx.lineTo(x + w - 1, top);
+          ctx.lineTo(x + w - 1, edge);
+          ctx.fill();
+        }
+        // a note: a red triangle in the top right corner; a comment: purple, as in Excel
+        if (note) {
+          ctx.fillStyle = note.kind === 'comment' ? (note.done ? '#a59bb8' : '#7b3fbf') : '#e02020';
           ctx.beginPath();
           ctx.moveTo(x + w - 7 * z, y);
           ctx.lineTo(x + w - 1, y);
@@ -1542,13 +1585,30 @@ export class SheetView {
     inp.style.height = `${inp.scrollHeight}px`;
   }
 
-  /** Put what was typed into the cell. False when nothing was being typed. */
-  commitEdit(dr = 0, dc = 0, allSelected = false): boolean {
+  /**
+   * Put what was typed into the cell. False when nothing was being typed. Typing that breaks the
+   * cell's data validation rule stays in the cell while its alert asks what to do (`force` puts
+   * it in anyway).
+   */
+  commitEdit(dr = 0, dc = 0, allSelected = false, force = false): boolean {
     const e = this.editing;
     const wb = this.wb;
     if (!e || !wb) return false;
     const s = wb.sheet;
     const text = this.input.value;
+    if (this.alerting) return true;
+    const rule = !force && text !== e.original && this.host.invalid ? s.validationAt(e.r, e.c) : undefined;
+    if (rule && !rule.noAlert && !this.typedPasses(s, rule, e.r, e.c, text)) {
+      this.alerting = true;
+      void this.host.invalid!(rule, text).then((what) => {
+        this.alerting = false;
+        if (this.editing !== e) return;
+        if (what === 'keep') this.commitEdit(dr, dc, allSelected, true);
+        else if (what === 'cancel') this.cancelEdit();
+        else { this.input.focus(); this.input.select(); }
+      });
+      return true;
+    }
     this.editing = null;
     this.pointRef = null;
     this.input.hidden = true;
@@ -1573,6 +1633,14 @@ export class SheetView {
     else this.render();
     this.host.changed();
     return true;
+  }
+
+  /** Would typing this into a cell pass its rule? (A formula's answer isn't known yet, so it passes, and Circle Invalid Data finds it.) */
+  private typedPasses(s: Sheet, rule: Validation, r: number, c: number, text: string): boolean {
+    const typed = readTyped(text);
+    if (typed.formula) return true;
+    const shown = formatValue(typed.value, s.styleAt(r, c)?.numFmt ?? typed.format).text;
+    return passes(rule, typed.value, shown, s, this.wb!.validationHost(s), r, c);
   }
 
   /** Typing into a property column puts back its own formula when the typing is that formula, or nothing at all. */
@@ -1693,6 +1761,8 @@ export class SheetView {
     const k = e.key;
     const ctrl = e.ctrlKey || e.metaKey;
     const arrows: Record<string, [number, number]> = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+    // Alt+Down: the cell's drop-down list, as in Excel
+    if (k === 'ArrowDown' && e.altKey && !ctrl) { e.preventDefault(); this.openDropDown(); return; }
     if (arrows[k] && !e.altKey) {
       e.preventDefault();
       this.move(arrows[k][0], arrows[k][1], e.shiftKey, ctrl);
@@ -1722,7 +1792,7 @@ export class SheetView {
       this.scroller.scrollTop += (k === 'PageDown' ? 1 : -1) * (this.scroller.clientHeight - HEADER_H - 40);
       return;
     }
-    if (k === 'F2') { e.preventDefault(); this.editCell(); return; }
+    if (k === 'F2' && !e.shiftKey && !ctrl) { e.preventDefault(); this.editCell(); return; }
     if (k === 'Escape') {
       if (this.copied) { this.copied = null; this.render(); }
       if (!this.findBar.hidden) this.closeFind();
@@ -1813,6 +1883,11 @@ export class SheetView {
     const { x, y } = this.viewPoint(e);
     if (x > this.scroller.clientWidth || y > this.scroller.clientHeight) return; // the scroll bars
     e.preventDefault();
+    if (this.overDrop(x, y)) {
+      this.commitEdit();
+      if (!this.editing) this.openDropDown();
+      return;
+    }
     const fb = this.filterButtonAt(x, y);
     if (fb !== null) {
       this.commitEdit();
@@ -1856,6 +1931,8 @@ export class SheetView {
       return;
     }
     this.commitEdit();
+    // typing that broke its cell's rule stays until its alert is answered
+    if (this.editing) return;
     this.scroller.setPointerCapture(e.pointerId);
     if (h.where === 'corner') { this.select({ r1: 0, c1: 0, r2: MAX_ROWS - 1, c2: MAX_COLS - 1 }, this.sel.active, this.sel.active, false); return; }
     if (h.where === 'col') {
@@ -1894,17 +1971,22 @@ export class SheetView {
         const cur: Record<string, string> = { move: 'move', label: 'move', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', ne: 'nesw-resize', sw: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize' };
         this.scroller.style.cursor = this.chartSel === ch.chart.id ? cur[ch.how] : 'pointer';
         if (this.hoverTip) { this.hoverTip = ''; this.scroller.title = ''; }
+        this.setHovered(null);
         return;
       }
       const border = this.borderAt(x, y);
       const h = this.hit(x, y);
+      this.setHovered(h.where === 'cell' && this.sheet?.noteAt(h.r, h.c) ? { r: h.r, c: h.c } : null);
       this.scroller.style.cursor = border ? (border.kind === 'col' ? 'col-resize' : 'row-resize')
         : this.filterButtonAt(x, y) !== null ? 'pointer'
           : !this.editing && h.where === 'cell' && this.onFillHandle(x, y) ? 'crosshair'
             : h.where === 'col' ? 's-resize' : h.where === 'row' ? 'e-resize'
               // a structure: a hand, since a double-click opens it for drawing
               : h.where === 'cell' && this.sheet?.cell(h.r, h.c)?.structure ? 'pointer' : 'cell';
-      const tip = h.where === 'cell' ? this.tipFor(h.r, h.c) : '';
+      const overDrop = this.overDrop(x, y);
+      if (overDrop) this.scroller.style.cursor = 'pointer';
+      // a note's card says what a tip would (and the drop-down's button what it is)
+      const tip = overDrop ? 'Pick from the list (Alt+Down)' : h.where === 'cell' && !this.sheet?.noteAt(h.r, h.c) ? this.tipFor(h.r, h.c) : '';
       if (tip !== this.hoverTip) { this.hoverTip = tip; this.scroller.title = tip; }
       return;
     }
@@ -2118,6 +2200,130 @@ export class SheetView {
     this.metricsKey = '';
     this.render();
     this.host.flash(`Zoom ${Math.round(this.zoom * 100)}%`, 900);
+  }
+
+  // ---------------------------------------------------------------- notes, drop-downs and input messages
+
+  private setHovered(cell: Cursor | null): void {
+    const was = this.hovered;
+    if (was === cell || (was && cell && was.r === cell.r && was.c === cell.c)) return;
+    this.hovered = cell;
+    this.host.hoverNote?.(cell, cell ? this.screenRect(cell.r, cell.c) : null);
+  }
+
+  /** A cell's box on the screen (for cards and menus beside it), or null when out of sight. */
+  screenRect(r: number, c: number): DOMRect | null {
+    const rect = this.cellRect(r, c);
+    if (!rect) return null;
+    const b = this.scroller.getBoundingClientRect();
+    return new DOMRect(b.left + rect.x, b.top + rect.y, rect.w, rect.h);
+  }
+
+  /** A cell's box within the scrolling area (for boxes laid over the cells there). */
+  layerRect(r: number, c: number): { x: number; y: number; w: number; h: number } | null {
+    const rect = this.cellRect(r, c);
+    return rect ? { x: rect.x + this.scroller.scrollLeft, y: rect.y + this.scroller.scrollTop, w: rect.w, h: rect.h } : null;
+  }
+
+  /** The list rule of the active cell, when it shows a drop-down. */
+  private dropRule(): Validation | undefined {
+    const s = this.sheet;
+    if (!s || s.dashboard || !s.validations.length) return undefined;
+    const v = s.validationAt(this.sel.active.r, this.sel.active.c);
+    return v?.kind === 'list' && !v.noDropDown ? v : undefined;
+  }
+
+  /** The drop-down button beside the active cell (view coordinates), when it has one. */
+  private dropBtn: { x: number; y: number; w: number; h: number } | null = null;
+
+  private overDrop(x: number, y: number): boolean {
+    const b = this.dropBtn;
+    return !!b && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
+  }
+
+  private drawDropButton(): void {
+    this.dropBtn = null;
+    if (!this.dropRule() || this.chartSel !== null) return;
+    const { r, c } = this.sel.active;
+    const rect = this.cellRect(r, c);
+    if (!rect) return;
+    const size = Math.max(12, Math.min(17, rect.h - 1));
+    // just right of the cell, as Excel puts it
+    const x = rect.x + rect.w + 1, y = rect.y + rect.h - size;
+    if (x < HEADER_W || y < HEADER_H) return;
+    const ctx = this.ctx;
+    ctx.fillStyle = '#f3f4f6';
+    ctx.strokeStyle = '#9aa3b5';
+    ctx.lineWidth = 1;
+    ctx.fillRect(x, y, size, size);
+    ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
+    ctx.fillStyle = '#3a414d';
+    ctx.beginPath();
+    ctx.moveTo(x + size * 0.28, y + size * 0.4); ctx.lineTo(x + size * 0.72, y + size * 0.4); ctx.lineTo(x + size * 0.5, y + size * 0.66);
+    ctx.fill();
+    this.dropBtn = { x, y, w: size, h: size };
+  }
+
+  /** Open the active cell's drop-down (its list, or the column's entries, as Excel's Pick From Drop-down List). */
+  openDropDown(): void {
+    const s = this.sheet;
+    if (!s || this.editing) return;
+    const { r, c } = this.sel.active;
+    const rect = this.screenRect(r, c);
+    if (!rect) return;
+    this.host.dropDown?.(r, c, { x: rect.left, y: rect.bottom });
+  }
+
+  private placePrompt(): void {
+    const box = this.promptBox;
+    const s = this.sheet;
+    const v = s && !s.dashboard && s.validations.length && this.chartSel === null ? s.validationAt(this.sel.active.r, this.sel.active.c) : undefined;
+    const text = v && !v.hidePrompt ? (v.prompt ?? '') : '';
+    const title = v && !v.hidePrompt ? (v.promptTitle ?? '') : '';
+    const rect = text || title ? this.cellRect(this.sel.active.r, this.sel.active.c) : null;
+    if (!rect) { box.hidden = true; return; }
+    const key = `${title}\n${text}`;
+    if (box.dataset.key !== key) {
+      box.dataset.key = key;
+      box.replaceChildren();
+      if (title) { const b = document.createElement('b'); b.textContent = title; box.append(b); }
+      if (text) { const p = document.createElement('div'); p.textContent = text; box.append(p); }
+    }
+    box.hidden = false;
+    // under the cell and a little to its right, as Excel shows it
+    box.style.left = `${rect.x + Math.min(rect.w / 2, 40) + this.scroller.scrollLeft}px`;
+    box.style.top = `${rect.y + rect.h + 6 + this.scroller.scrollTop}px`;
+  }
+
+  /** Red rings round the cells that break their rules (Data > Circle Invalid Data). */
+  private drawCircles(regions: Region[]): void {
+    const s = this.sheet!;
+    if (!this.circleInvalid || !s.validations.length || !regions.length) return;
+    if (!this.circles || this.circles.gen !== s.valuesGen || this.circles.sheet !== s || this.circles.rules !== s.validations) {
+      this.circles = { gen: s.valuesGen, sheet: s, rules: s.validations, cells: invalidCells(s, this.wb!.validationHost(s)) };
+    }
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(HEADER_W, HEADER_H, this.scroller.clientWidth, this.scroller.clientHeight);
+    ctx.clip();
+    ctx.strokeStyle = '#e02020';
+    ctx.lineWidth = 1.6;
+    for (const { row, col } of this.circles.cells) {
+      if (s.hiddenRows.has(row) || s.hiddenCols.has(col)) continue;
+      const rect = this.cellRect(row, col);
+      if (!rect) continue;
+      ctx.beginPath();
+      ctx.ellipse(rect.x + rect.w / 2, rect.y + rect.h / 2, rect.w / 2 + 4, rect.h / 2 + 3, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /** How many cells break their rules on the sheet showing. */
+  invalidCount(): number {
+    const s = this.sheet;
+    return s && this.wb ? invalidCells(s, this.wb.validationHost(s)).length : 0;
   }
 
   /** A tip for a cell: an error's reason, or that a value was typed over a calculated one. */
