@@ -32,6 +32,12 @@ export interface LayoutDeps {
   drawingSize(contents: Contents, style: DocStyle): { w: number; h: number };
 }
 
+/** Outline view: paragraphs left out, and those shown by their first line only. */
+export interface ShownParas {
+  hidden?: Set<number>;
+  firstLine?: Set<number>;
+}
+
 export interface PageBox {
   index: number;
   /** Top of the page in the document's coordinates. */
@@ -317,20 +323,20 @@ export class DocLayouter {
    * of the layout before; when a heading turns out to be on another page, it is laid out again
    * (only the contents change, so it settles at once, and the rest comes from the cache).
    */
-  layout(t: DocText): DocLayout {
+  layout(t: DocText, only?: ShownParas): DocLayout {
     const hasToc = Object.values(t.objects).some((o) => o.kind === 'toc');
-    let lay = this.layoutOnce(t);
+    let lay = this.layoutOnce(t, only);
     for (let pass = 0; hasToc && pass < 3; pass++) {
       const now = lay.paraTops.map((pt) => pageNumber(t.hf, pt.page));
       const heads = Object.values(t.objects).filter((o) => o.kind === 'toc').flatMap((o) => tocEntries(t, (o as { levels: number }).levels));
       if (heads.every((e) => this.tocPages[e.para] === now[e.para])) break;
       this.tocPages = now;
-      lay = this.layoutOnce(t);
+      lay = this.layoutOnce(t, only);
     }
     return lay;
   }
 
-  private layoutOnce(t: DocText): DocLayout {
+  private layoutOnce(t: DocText, only?: ShownParas): DocLayout {
     this.used.clear();
     const page = t.page;
     const fullW = Math.max(36, page.w - page.left - page.right);
@@ -538,7 +544,13 @@ export class DocLayouter {
     for (let p = 0; p < n; p++) {
       const ps = paras[p];
       const lay = laid[p];
-      let pl = lay.lines;
+      // a paragraph left out of view (Outline's folded headings): it takes no room
+      if (only?.hidden?.has(p)) {
+        paraTops.push({ y: pageTop(pageIdx) + page.top + cursor, page: pageIdx });
+        paraStart += (paraRuns[p] ?? []).reduce((a, r) => a + r.text.length, 0) + 1;
+        continue;
+      }
+      let pl = only?.firstLine?.has(p) ? lay.lines.slice(0, 1) : lay.lines;
       let hs = pl.map(heightOf);
       if (ps.pageBreak && (hasContent || col > 0)) newPage();
       else if (ps.colBreak && hasContent) nextColumn();
@@ -573,7 +585,7 @@ export class DocLayouter {
         rects.push({ x1: bx - page.left - g, y1: by - page.top - g, x2: bx + bw - page.left + g, y2: by + bh - page.top + g, wrap: fl.wrap });
       }
       const wl = rects.length ? wrapped(p, cursor, rects, colX[col]).lines : pl;
-      if (wl !== pl) { pl = wl; hs = pl.map(heightOf); }
+      if (wl !== pl) { pl = only?.firstLine?.has(p) ? wl.slice(0, 1) : wl; hs = pl.map(heightOf); }
 
       let i = 0;
       let onPage = 0;

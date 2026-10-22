@@ -92,7 +92,7 @@ export class Keeper {
     }
     this.timer = window.setInterval(() => void this.tick(), TICK_MS);
     // files opened before the timer started (a workspace, a file given when starting)
-    for (const t of this.ws.tabs) if (t.ref.kind === 'path') void this.checkLocks(t);
+    for (const t of this.ws.fileTabs) if (t.ref.kind === 'path') void this.checkLocks(t);
     try {
       const left = (await this.recovery.leftOver(this.prefs.recoveryDays)).filter((s) => !s.offered);
       if (left.length) await this.offer(left, true);
@@ -123,7 +123,7 @@ export class Keeper {
     const p = this.prefs;
     // AutoSave, one tab at a time
     if (!this.saving && !this.busy()) {
-      const due = this.auto.due(this.ws.tabs.map((t) => ({ id: t.id, token: this.ws.token(t), dirty: t.dirty, on: this.autoOn(t) })), now, p.autoSaveSeconds * 1000);
+      const due = this.auto.due(this.ws.fileTabs.map((t) => ({ id: t.id, token: this.ws.token(t), dirty: t.dirty, on: this.autoOn(t) })), now, p.autoSaveSeconds * 1000);
       const tab = this.ws.tabs.find((t) => t.id === due[0]);
       if (tab) {
         this.saving = true;
@@ -149,11 +149,11 @@ export class Keeper {
     try {
       if (now - this.lastDisk >= DISK_MS) {
         this.lastDisk = now;
-        for (const t of [...this.ws.tabs]) if (this.ws.tabs.includes(t)) await this.checkDisk(t);
+        for (const t of this.ws.fileTabs) if (this.ws.tabs.includes(t)) await this.checkDisk(t);
       }
       if (desktop && now - this.lastLocks >= LOCK_MS) {
         this.lastLocks = now;
-        for (const t of [...this.ws.tabs]) if (t.ref.kind === 'path') await this.checkLocks(t);
+        for (const t of this.ws.fileTabs) if (t.ref.kind === 'path') await this.checkLocks(t);
       }
     } finally {
       this.checking = false;
@@ -162,7 +162,7 @@ export class Keeper {
 
   /** Copy every tab with unsaved changes now (and delete copies no longer needed). */
   copyNow(): Promise<number> {
-    const tabs: Copyable[] = this.ws.tabs.map((t) => ({
+    const tabs: Copyable[] = this.ws.fileTabs.map((t) => ({
       id: t.id, name: t.name, mode: t.mode, path: t.ref.kind === 'path' ? t.ref.path : null, stamp: t.stamp,
       dirty: t.dirty, token: this.ws.token(t), copy: () => this.ws.copyOf(t),
     }));
@@ -408,7 +408,7 @@ export class Keeper {
     const lock = this.locks.get(t.id);
     if (!lock || ref.kind !== 'path' || lock !== lockPath(ref.path)) return;
     this.locks.delete(t.id);
-    const other = this.ws.tabs.find((o) => o !== t && o.ref.kind === 'path' && o.ref.path === ref.path);
+    const other = this.ws.fileTabs.find((o) => o !== t && o.ref.kind === 'path' && o.ref.path === ref.path);
     if (other) { this.locks.set(other.id, lock); return; }
     await invoke('remove_lock_file', { path: lock }).catch(() => {});
   }
@@ -447,7 +447,7 @@ export class Keeper {
         for (const t of mine) {
           const bytes = await this.recovery.read(s.session, t.file);
           if (!bytes) continue;
-          const taken = t.path && this.ws.tabs.some((o) => o.ref.kind === 'path' && o.ref.path === t.path);
+          const taken = t.path && this.ws.fileTabs.some((o) => o.ref.kind === 'path' && o.ref.path === t.path);
           const ref: FileRef = t.path && desktop && !taken ? { kind: 'path', path: t.path } : { kind: 'none' };
           const stem = t.name.replace(/\.[^.]*$/, ''), ext = t.name.slice(stem.length);
           const tab = await this.ws.openAs(bytes, t.file, { name: taken ? `${stem} (recovered)${ext}` : t.name, ref, dirty: true, stamp: ref.kind === 'path' ? t.stamp : null });

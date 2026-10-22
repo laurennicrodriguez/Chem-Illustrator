@@ -195,6 +195,24 @@ Letters are set in italic as variables. Use `\mathrm{…}` for element symbols, 
 
 The **Make it** buttons change how the replacement looks: formula, bold, italic, underline, subscript, superscript, or plain. Leave "Replace with" empty to change only the look: for example, find `CH2Cl2`, choose the formula look, then **All**, and every CH2Cl2 in the text becomes CH₂Cl₂. Each Replace All is one step to undo. Finding goes by the letters alone, so CH2Cl2 is found however it is formatted.
 
+## Views and windows
+
+The **View** tab has Word's ways of looking at a document. The text is the same in every view; only how it is shown changes. The three main views are also the small buttons beside the zoom, under the pages.
+
+- **Print Layout** shows the pages as they print. This is the usual view.
+- **Read Mode** fills the window with two pages at a time and nothing else. The arrow keys, Page Up and Page Down, Space or the mouse wheel turn the pages. Text can be picked and copied but not changed. **Edit Document** at the top, or Esc, goes back.
+- **Web Layout** wraps the text to the width of the window, with no pages, the way a web page shows it.
+- **Outline** shows the headings indented by level, each with the text under it. A **⊕** beside a heading means there is something under it, **⊖** means there is nothing, and a dot marks body text. Click a **⊕** to pick the heading with everything under it. Double-click it to fold or unfold the heading; a folded heading is underlined in grey. The **Outlining** tab that appears has Promote (Alt+Shift+←) and Demote (Alt+Shift+→), the level of the paragraph, Move Up (Alt+Shift+↑) and Move Down (Alt+Shift+↓), Expand (Alt+Shift++) and Collapse (Alt+Shift+−), **Show Level** (Alt+Shift+1 to 3, or Alt+Shift+A for all), **Show Text Formatting** and **Show First Line Only**. A folded heading moves, promotes and demotes together with everything under it. Headings are paragraphs in the Heading 1, 2 and 3 styles.
+- **Draft** (Ctrl+Alt+N) shows the text on one long page at its printed width, without headers and footers. Page and column breaks show as dotted lines.
+
+**Page Movement** sets how the pages sit in Print Layout: **Vertical**, one under another, or **Side to Side**, two at a time in a row that the mouse wheel scrolls across. Under **Zoom**, **One Page** fits a whole page in the window, **Multiple Pages** puts two pages in each row, and **Page Width** fits the page across the window.
+
+**Split** (Ctrl+Alt+S) divides the window into two panes on the same document, one above the other, each scrolled and zoomed on its own. Drag the bar between them to move it. Double-click the bar, or click Split again, to go back to one pane. You can type in either pane.
+
+**New Window** opens the document in a second tab, named as Word names windows: Report.docx:1 and Report.docx:2. Each tab keeps its own view and place, so one can be in Outline while the other shows the pages. Typing in either shows in both, and Save in either saves the one file. Closing one leaves the document open in the other.
+
+Saving, printing and PDFs always use the pages of Print Layout, whatever view is showing. These views are also under **View ▸ Document Views** in the menu bar.
+
 ## Saving as Word and PDF
 
 - **Save** (Ctrl+S) writes a Word file (.docx). In Word, styles are Word's own, lists are Word lists, and captions, cross-references, compound numbers, page numbers and the table of contents are Word fields. Tracked changes and equations are Word's own too, so they keep working there.

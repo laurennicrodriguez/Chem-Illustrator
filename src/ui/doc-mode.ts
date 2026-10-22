@@ -17,8 +17,12 @@ import { htmlToRich, richToHtml, richToPlain } from '../text/html';
 import { afterTyping, typingPrefs, setTypingPrefs } from '../text/typing';
 import { findIssues, type CharLook, type Issue } from '../text/chemtext';
 import { loadSpeller, type Speller } from '../text/spelling';
-import { paraAt, paraRange, splitParagraphs } from '../text/paragraphs';
+import { fitParas, paraAt, paraCount, paraRange, splitParagraphs } from '../text/paragraphs';
 import { DocView, ACTUAL, type Overlay } from './doc-view';
+import {
+  PRINT_VIEW, VIEW_NAMES as VIEW_LABEL, changeLevel, withHeadings, continuous, foldHeadings, moveParas, newOutline, outlineLevel, shiftFolds, subtreeEnd, toggleFold,
+  type DocViewKind, type OutlineOp, type OutlineState, type ScreenView,
+} from '../document/doc-views';
 import { DocPanel, parseLength, showLength, type DocBoxKey } from './doc-panel';
 import { WORD_HIGHLIGHTS } from '../io/docx';
 import { DocFind } from './doc-find';
@@ -108,11 +112,43 @@ export const WRAPS: [WrapKind | 'inline', string, string][] = [
 
 const lookExtentOf = (o: DocObject) => lookExtent(lookOf(o));
 
+/** A document tab's place while another tab shows: zoom and scroll, its view (View > Views), and the split pane's. */
+interface DocPlace {
+  zoom: number;
+  top: number;
+  left: number;
+  screen?: ScreenView;
+  perRow?: number;
+  sideways?: boolean;
+  split?: { zoom: number; top: number; left: number };
+}
+
+/** The view commands: View > Views. */
+const VIEW_COMMANDS: Record<string, DocViewKind> = {
+  'view-print': 'print', 'view-read': 'read', 'view-web': 'web', 'view-outline': 'outline', 'view-draft': 'draft',
+};
+
 /** Our own copy of document text, figures and all, for pasting back into a document. */
 const OWN_KIND = 'chem-illustrator-document';
 
 export class DocumentMode {
-  readonly view: DocView;
+  /** The pane being worked in: the document's view, or with View > Split, the one clicked last. */
+  view: DocView;
+  /** Every pane on the document (two while split). */
+  private views: DocView[] = [];
+  /** View > Split: the second pane, under the first, and the bar between them. */
+  private split: { view: DocView; host: HTMLDivElement; bar: HTMLDivElement } | null = null;
+  /** Where the caret was last in Outline view (to step over folded text in the direction it went). */
+  private lastFocus = 0;
+  /** How many paragraphs the text had (Outline's folded headings move with the text). */
+  private paraCountWas = 0;
+  /** Read Mode is showing, from this page (the left of the two). */
+  private reading = false;
+  private readPage = 0;
+  /** The arrangement and zoom before Read Mode, to go back to. */
+  private readWas: { zoom: number; perRow: number; sideways: boolean } | null = null;
+  /** The Outlining tab was put in front for Outline view (it goes when Outline does). */
+  private outlineTabFor: DocFile | null = null;
   tab: Tab | null = null;
   private ta: HTMLTextAreaElement;
   private panel: DocPanel;
@@ -145,8 +181,7 @@ export class DocumentMode {
     const $ = <T extends HTMLElement>(s: string) => document.querySelector(s) as T;
     const docHost = $<HTMLDivElement>('#doc-host');
     this.view = new DocView(docHost);
-    this.view.overlay = () => this.overlay();
-    this.view.onMove = () => { this.placeInput(); this.showZoom(); this.comments?.place(); };
+    this.setupView(this.view);
     this.ribbon = $('#doc-ribbon');
     this.ta = document.createElement('textarea');
     this.ta.className = 'text-input doc-input';
@@ -161,7 +196,7 @@ export class DocumentMode {
       file: () => this.file,
       focus: () => this.focus(),
       flash: (msg, ms) => this.host.flash(msg, ms),
-      redraw: () => this.view.redraw(),
+      redraw: () => this.redraw(),
     });
     this.panel = new DocPanel($('#doc-body'), {
       file: () => this.file,
@@ -190,9 +225,9 @@ export class DocumentMode {
       preferredChanged: () => this.host.preferredChanged?.(),
     });
     this.wireInput();
-    this.wirePointer();
+    this.wirePointer(this.view);
     this.wireRibbon();
-    if (typingPrefs.spelling) void loadSpeller().then((sp) => { this.speller = sp; this.checked = null; this.view.redraw(); });
+    if (typingPrefs.spelling) void loadSpeller().then((sp) => { this.speller = sp; this.checked = null; this.redraw(); });
   }
 
   get file(): DocFile | null {
@@ -470,7 +505,7 @@ export class DocumentMode {
     this.tab?.document?.endBox();
     this.tab = tab;
     const f = tab?.document ?? null;
-    this.view.file = f;
+    for (const v of this.views) v.file = f;
     if (!f) {
       if (this.blink) { clearInterval(this.blink); this.blink = null; }
       this.panel.closeBoxes();
@@ -480,16 +515,32 @@ export class DocumentMode {
     f.listener = (kind) => this.changed(kind);
     // chemistry as it's typed: CH2Cl2 becomes a formula, -> an arrow… (Edit > Typing and Spelling)
     f.ed.onTyped = (typed) => afterTyping(f.ed, typed);
+    const st = tab!.sheetState as DocPlace | null;
+    // each tab (each window of a document) has its own view of it
+    f.view = st?.screen ?? PRINT_VIEW;
+    this.activate(this.views[0]);
+    this.view.perRow = st?.perRow ?? 1;
+    this.view.sideways = st?.sideways ?? false;
+    this.setSplit(!!st?.split && f.view.kind !== 'read');
     this.view.resize();
-    const st = tab!.sheetState as { zoom: number; top: number; left: number } | null;
     if (st) {
       this.view.zoom = st.zoom;
       this.view.sizeSpace();
       this.view.scroller.scrollTop = st.top;
       this.view.scroller.scrollLeft = st.left;
+      if (this.split && st.split) {
+        const v = this.split.view;
+        v.zoom = st.split.zoom;
+        v.sizeSpace();
+        v.scroller.scrollTop = st.split.top;
+        v.scroller.scrollLeft = st.split.left;
+      }
     } else if (this.view.scroller.clientWidth < f.layout().pageW * ACTUAL + 48) this.view.fitWidth();
     else this.view.setZoom(ACTUAL);
-    this.blink ??= setInterval(() => { this.caretOn = !this.caretOn; this.view.redraw(); }, 530);
+    this.paraCountWas = paraCount(f.ed.text);
+    this.showViewKind();
+    if (f.view.kind === 'read') this.startReading();
+    this.blink ??= setInterval(() => { this.caretOn = !this.caretOn; this.redraw(); }, 530);
     this.changed('selection');
     requestAnimationFrame(() => this.focus());
   }
@@ -498,7 +549,14 @@ export class DocumentMode {
   leave(): void {
     const t = this.tab;
     if (!t?.document) return;
-    t.sheetState = { zoom: this.view.zoom, top: this.view.scroller.scrollTop, left: this.view.scroller.scrollLeft };
+    const main = this.views[0], sp = this.split?.view;
+    const was = this.readWas;
+    t.sheetState = {
+      zoom: was?.zoom ?? main.zoom, top: main.scroller.scrollTop, left: main.scroller.scrollLeft,
+      screen: t.document.view, perRow: was?.perRow ?? main.perRow, sideways: was?.sideways ?? main.sideways,
+      split: sp ? { zoom: sp.zoom, top: sp.scroller.scrollTop, left: sp.scroller.scrollLeft } : undefined,
+    } satisfies DocPlace;
+    this.stopReading();
     t.document.listener = () => {};
     this.closeMenu();
     this.finder.close(false);
@@ -511,8 +569,8 @@ export class DocumentMode {
   /** Fonts finished loading: measure again. */
   fontsChanged(): void {
     this.file?.relayout();
-    this.view.sizeSpace();
-    this.view.redraw();
+    this.sizeSpaces();
+    this.redraw();
   }
 
   // ---------------------------------------------------------------- changes
@@ -528,8 +586,14 @@ export class DocumentMode {
       if (!ok) f.endBox();
     }
     this.caretOn = true;
+    if (kind === 'text') this.keepFolds();
+    // Outline: off text folded out of sight (this comes back here once moved)
+    if (this.snapShown()) {
+      if (kind === 'text') { this.sizeSpaces(); this.host.changed(); }
+      return;
+    }
     if (kind === 'text') {
-      this.view.sizeSpace();
+      this.sizeSpaces();
       this.host.changed();
       if (this.finder.open) this.finder.refresh();
     } else if (this.finder.open) this.finder.showCount();
@@ -540,7 +604,8 @@ export class DocumentMode {
     this.panel.update();
     this.comments.followCaret();
     this.comments.update();
-    this.view.redraw();
+    this.updateOutlineRibbon();
+    this.redraw();
   }
 
   /** Keep the caret in view after it moves. */
@@ -573,9 +638,17 @@ export class DocumentMode {
     return o && (o.kind === 'drawing' || o.kind === 'picture' || o.kind === 'textbox') ? id! : null;
   }
 
-  private overlay(): Overlay {
+  private overlay(pane: DocView = this.view): Overlay {
     const f = this.file;
     if (!f) return { selection: null, caret: null, squiggles: [], picked: null, found: [], framed: null };
+    const ov = this.overlayNow(f);
+    // the caret shows in the pane being worked in, and not in Read Mode
+    if (pane !== this.view || f.view.kind === 'read') ov.caret = null;
+    if (f.view.kind === 'read') ov.squiggles = [];
+    return ov;
+  }
+
+  private overlayNow(f: DocFile): Overlay {
     if (f.box) {
       // typing into a text box: its caret and selection
       const ed = f.box.ed;
@@ -685,7 +758,7 @@ export class DocumentMode {
     };
     if (issue) {
       item(`${issue.message}: change to ${issue.fixed}`, () => ed.fix(issue.edits, 'fix'));
-      item('Leave as written', () => { ignored.add(ed.text.slice(issue.start, issue.end).toLowerCase()); this.checkCache.clear(); this.checked = null; this.view.redraw(); });
+      item('Leave as written', () => { ignored.add(ed.text.slice(issue.start, issue.end).toLowerCase()); this.checkCache.clear(); this.checked = null; this.redraw(); });
     }
     if (word) {
       if (issue) menu.appendChild(document.createElement('hr'));
@@ -696,7 +769,7 @@ export class DocumentMode {
       if (!sugg.length) item('No suggestions', null);
       menu.appendChild(document.createElement('hr'));
       item('Add to Dictionary', () => setTypingPrefs({ dictionary: [...typingPrefs.dictionary, text] }), 'Accept this word from now on (Edit > Typing and Spelling lists your words)');
-      item('Ignore', () => { ignored.add(text.toLowerCase()); this.speller?.ignore(text); this.checkCache.clear(); this.checked = null; this.view.redraw(); }, 'Accept this word until the program is closed');
+      item('Ignore', () => { ignored.add(text.toLowerCase()); this.speller?.ignore(text); this.checkCache.clear(); this.checked = null; this.redraw(); }, 'Accept this word until the program is closed');
     }
     // the usual commands, as on the ribbon
     if (word || issue) menu.appendChild(document.createElement('hr'));
@@ -862,10 +935,10 @@ export class DocumentMode {
     ta.addEventListener('compositionupdate', (e) => this.ed.compositionUpdate(e.data ?? ''));
     ta.addEventListener('compositionend', (e) => { this.ed.compositionEnd(e.data ?? ''); this.syncInput(); });
     ta.addEventListener('copy', (e) => this.copy(e, false));
-    ta.addEventListener('cut', (e) => this.copy(e, true));
-    ta.addEventListener('paste', (e) => { void this.paste(e); });
-    ta.addEventListener('focus', () => this.view.redraw());
-    ta.addEventListener('blur', () => this.view.redraw());
+    ta.addEventListener('cut', (e) => { if (this.reading) { this.copy(e, false); return; } this.copy(e, true); });
+    ta.addEventListener('paste', (e) => { if (this.reading) { e.preventDefault(); return; } void this.paste(e); });
+    ta.addEventListener('focus', () => this.redraw());
+    ta.addEventListener('blur', () => this.redraw());
   }
 
   /** Keep the selected text in the hidden field, selected, for the system's copy, screen readers and input methods. */
@@ -883,6 +956,7 @@ export class DocumentMode {
     if (e.isComposing || e.keyCode === 229) return;
     if (this.menu && e.key === 'Escape') { e.preventDefault(); this.closeMenu(); return; }
     this.closeMenu();
+    if (this.reading) { this.readingKey(e); return; }
     const ed = this.ed;
     const run = (f: () => void) => { e.preventDefault(); f(); };
     const chord = chordOf(e);
@@ -939,6 +1013,7 @@ export class DocumentMode {
 
   private beforeInput(e: InputEvent): void {
     if (!this.file || e.isComposing) return;
+    if (this.reading) { e.preventDefault(); return; }
     const t = e.inputType;
     const ed = this.ed;
     if (t === 'insertCompositionText') return;
@@ -1132,12 +1207,406 @@ export class DocumentMode {
     ed.replace(ed.start, ed.end, runs, own.paras.length > 1 ? own.paras : undefined, null);
   }
 
+  // ---------------------------------------------------------------- views (View > Views, Split, Read Mode)
+
+  private setupView(v: DocView): void {
+    v.overlay = () => this.overlay(v);
+    v.onMove = () => {
+      if (v === this.view) this.placeInput();
+      this.showZoom();
+      if (v === this.views[0]) this.comments?.place();
+      if (this.reading) this.showReadPages();
+    };
+    v.onResize = () => { if (v === this.views[0]) this.fitSheet(); };
+    this.views.push(v);
+  }
+
+  /** Work in this pane (the other one of a split keeps its place). */
+  private activate(v: DocView): void {
+    if (this.view === v) return;
+    this.view = v;
+    // the hidden text field goes with the caret
+    const focused = document.activeElement === this.ta;
+    v.host.append(this.ta);
+    if (focused) this.focus();
+    this.placeInput();
+    this.showZoom();
+    this.redraw();
+  }
+
+  /** Draw every pane again. */
+  redraw(): void {
+    for (const v of this.views) v.redraw();
+  }
+
+  private sizeSpaces(): void {
+    for (const v of this.views) v.sizeSpace();
+  }
+
+  /** Web Layout and Outline wrap the text to the window: keep the width they wrap to the window's. */
+  private fitSheet(): void {
+    const f = this.file;
+    if (!f) return;
+    const v = f.view;
+    if (v.kind !== 'web' && v.kind !== 'outline') return;
+    const w = this.views[0].sheetWidth();
+    if (Math.abs((v.width ?? 0) - w) < 1) return;
+    f.view = { ...v, width: w };
+  }
+
+  /** View > Views: show the document another way (the text is the same in every view). */
+  private setViewKind(kind: DocViewKind): void {
+    const f = this.file;
+    if (!f) return;
+    this.stopBox();
+    const was = f.view;
+    if (was.kind === 'read' && kind !== 'read') this.stopReading();
+    if (was.kind === kind) {
+      // Read Mode's button again: back to Print Layout
+      if (kind === 'read') this.setViewKind('print');
+      return;
+    }
+    f.view = { kind, outline: was.outline ?? (kind === 'outline' ? newOutline() : undefined) };
+    this.fitSheet();
+    if (kind === 'read') this.startReading();
+    else {
+      for (const v of this.views) {
+        // the views without pages start at a size to read (Multiple Pages may have left the zoom small)
+        if (continuous(kind) && v.zoom < ACTUAL * 0.75) v.setZoom(ACTUAL);
+        v.sizeSpace();
+        v.redraw();
+      }
+      if (continuous(kind)) this.view.scroller.scrollLeft = 0;
+    }
+    this.lastFocus = f.ed.focus;
+    this.showViewKind();
+    this.changed('selection');
+  }
+
+  /** The view buttons and menu items show the view and the page arrangement; the Outlining tab shows in Outline. */
+  private showViewKind(): void {
+    const f = this.file;
+    if (!f) return;
+    const kind = f.view.kind;
+    const set = (cmd: string, on: boolean) => {
+      for (const b of document.querySelectorAll<HTMLElement>(`[data-doc="${cmd}"]`)) if (b.hasAttribute('aria-pressed')) b.setAttribute('aria-pressed', String(on));
+      for (const b of document.querySelectorAll<HTMLElement>(`[data-cmd="${cmd}"]`)) b.setAttribute('aria-checked', String(on));
+    };
+    for (const [cmd, k] of Object.entries(VIEW_COMMANDS)) set(cmd, k === kind);
+    const pages = !continuous(kind) && kind !== 'read';
+    set('view-vertical', pages && !this.view.sideways);
+    set('view-sideways', pages && this.view.sideways);
+    set('view-multiple', pages && this.view.perRow > 1);
+    set('view-split', !!this.split);
+    const tab = this.ribbon.querySelector<HTMLButtonElement>('[data-doc-tab="outlining"]');
+    if (tab) {
+      tab.hidden = kind !== 'outline';
+      if (kind === 'outline' && this.outlineTabFor !== f) { this.outlineTabFor = f; tab.click(); }
+      if (kind !== 'outline') {
+        if (this.outlineTabFor && tab.getAttribute('aria-selected') === 'true') this.ribbon.querySelector<HTMLButtonElement>('[data-doc-tab="home"]')?.click();
+        this.outlineTabFor = null;
+      }
+    }
+    for (const x of this.views) x.host.classList.toggle('doc-endless', continuous(kind));
+    this.updateOutlineRibbon();
+  }
+
+  /** Vertical, Side to Side, Multiple Pages and One Page: how the pages are laid out (in Print Layout). */
+  private arrange(sideways: boolean, perRow: number, fit: boolean): void {
+    const f = this.file;
+    if (!f) return;
+    if (f.view.kind !== 'print') this.setViewKind('print');
+    const v = this.view;
+    const page = v.currentPage();
+    v.sideways = sideways;
+    v.perRow = sideways ? 1 : perRow;
+    v.sizeSpace();
+    if (fit) v.fitPages();
+    v.scrollToPage(sideways ? page - (page % 2) : page);
+    v.redraw();
+    this.showViewKind();
+    this.changed('selection');
+  }
+
+  /** View > Split: a second pane under the first, on the same document, scrolled on its own. */
+  private setSplit(on: boolean): void {
+    if (on === !!this.split) return;
+    const main = this.views[0];
+    if (on) {
+      const bar = document.createElement('div');
+      bar.className = 'doc-split-bar';
+      bar.title = 'Drag to move the split; double-click to remove it';
+      const host = document.createElement('div');
+      host.className = 'doc-host doc-host-2';
+      main.host.after(bar, host);
+      const v = new DocView(host);
+      v.file = this.file;
+      this.setupView(v);
+      this.wirePointer(v);
+      this.split = { view: v, host, bar };
+      bar.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        bar.setPointerCapture(e.pointerId);
+        const pane = bar.parentElement!.getBoundingClientRect();
+        const move = (ev: PointerEvent) => {
+          const below = Math.max(60, Math.min(pane.height - 100, pane.bottom - ev.clientY - 28));
+          host.style.flexBasis = `${below}px`;
+        };
+        const up = () => { bar.removeEventListener('pointermove', move); bar.removeEventListener('pointerup', up); this.focus(); };
+        bar.addEventListener('pointermove', move);
+        bar.addEventListener('pointerup', up);
+      });
+      bar.addEventListener('dblclick', () => this.setSplit(false));
+      main.resize();
+      v.resize();
+      v.zoom = main.zoom;
+      v.sizeSpace();
+      v.scroller.scrollTop = main.scroller.scrollTop;
+      v.scroller.scrollLeft = main.scroller.scrollLeft;
+      v.redraw();
+    } else {
+      const sp = this.split!;
+      if (this.view === sp.view) this.activate(main);
+      this.views = this.views.filter((x) => x !== sp.view);
+      sp.view.file = null;
+      sp.bar.remove();
+      sp.host.remove();
+      this.split = null;
+      main.resize();
+    }
+    this.showViewKind();
+  }
+
+  // Read Mode: the pages two at a time, filling the window with nothing else, turned with the keys or the wheel
+
+  private startReading(): void {
+    const f = this.file;
+    if (!f) return;
+    this.setSplit(false);
+    const v = this.views[0];
+    this.activate(v);
+    this.readWas ??= { zoom: v.zoom, perRow: v.perRow, sideways: v.sideways };
+    const page = v.currentPage();
+    this.reading = true;
+    document.body.classList.add('doc-reading');
+    document.querySelector<HTMLElement>('#doc-readbar')!.hidden = false;
+    v.scroller.classList.add('doc-turning');
+    v.sideways = true;
+    v.perRow = 1;
+    v.turnPages = (dir) => this.turn(dir);
+    v.resize();
+    v.fitPages();
+    this.readPage = page - (page % 2);
+    v.scrollToPage(this.readPage);
+    this.showReadPages();
+    this.focus();
+  }
+
+  private stopReading(): void {
+    if (!this.reading) return;
+    const v = this.views[0];
+    this.reading = false;
+    document.body.classList.remove('doc-reading');
+    document.querySelector<HTMLElement>('#doc-readbar')!.hidden = true;
+    v.scroller.classList.remove('doc-turning');
+    v.turnPages = null;
+    const w = this.readWas;
+    this.readWas = null;
+    const page = this.readPage;
+    if (w) {
+      v.perRow = w.perRow;
+      v.sideways = w.sideways;
+      v.resize();
+      v.setZoom(w.zoom);
+    }
+    v.scrollToPage(page);
+  }
+
+  /** Read Mode: the next two pages, or the two before (-1). */
+  private turn(dir: 1 | -1 | 'first' | 'last'): void {
+    const lay = this.file?.layout();
+    if (!lay) return;
+    const n = lay.pages.length;
+    const step = n > 1 ? 2 : 1;
+    let p = dir === 'first' ? 0 : dir === 'last' ? n - 1 : this.readPage + dir * step;
+    p = Math.max(0, Math.min(n - 1, p));
+    p -= p % step;
+    this.readPage = p;
+    this.views[0].scrollToPage(p);
+    this.showReadPages();
+  }
+
+  private showReadPages(): void {
+    const lay = this.file?.layout();
+    const el = document.querySelector<HTMLElement>('#doc-read-pages');
+    if (!lay || !el) return;
+    const n = lay.pages.length;
+    const a = this.readPage + 1, b = Math.min(n, this.readPage + 2);
+    el.textContent = n > 1 && b > a ? `Pages ${a}–${b} of ${n}` : `Page ${a} of ${n}`;
+  }
+
+  /** Read Mode's keys: the arrows, Page Up and Down, Space, Home and End turn the pages; Esc goes back to Print Layout. */
+  private readingKey(e: KeyboardEvent): void {
+    const ctrl = isMac ? e.metaKey : e.ctrlKey;
+    const k = e.key;
+    if (ctrl && (k.toLowerCase() === 'c' || k.toLowerCase() === 'a')) {
+      if (k.toLowerCase() === 'a') { e.preventDefault(); this.ed.selectAll(); }
+      return;
+    }
+    if (k === 'Escape') { e.preventDefault(); this.setViewKind('print'); return; }
+    if (['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(k)) { e.preventDefault(); this.turn(1); return; }
+    if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(k)) { e.preventDefault(); this.turn(-1); return; }
+    if (k === 'Home' || k === 'End') { e.preventDefault(); this.turn(k === 'Home' ? 'first' : 'last'); return; }
+    // the app's own keys (Save, Print…) still work; typing doesn't
+    if ((e.ctrlKey || e.metaKey || e.altKey || /^F\d+$/.test(k)) && this.host.key(e)) { e.preventDefault(); return; }
+    if (k.length === 1 || k === 'Enter' || k === 'Backspace' || k === 'Delete' || k === 'Tab') e.preventDefault();
+  }
+
+  // Outline: headings by level, folded and moved as blocks
+
+  private outline(): OutlineState {
+    return this.file?.view.outline ?? newOutline();
+  }
+
+  private setOutline(o: OutlineState): void {
+    const f = this.file;
+    if (!f) return;
+    f.view = { ...f.view, outline: o };
+    this.sizeSpaces();
+    this.changed('selection');
+  }
+
+  private levels(): number[] {
+    const t = this.file!.t;
+    return fitParas(t.paras, paraCount(rt.plainText(t.runs))).map((ps) => outlineLevel(t, ps));
+  }
+
+  /** A click on a heading's mark: the heading and everything under it picked; on body text, its paragraph. */
+  private pickOutline(p: number): void {
+    const f = this.file!;
+    const text = f.ed.text;
+    const last = Math.max(p, subtreeEnd(this.levels(), p) - 1);
+    f.ed.select(paraRange(text, p).start, paraRange(text, last).end);
+  }
+
+  /** A double-click on a heading's mark: fold it, or unfold it. */
+  private outlineFold(p: number): void {
+    const levels = this.levels();
+    if (!levels[p] || subtreeEnd(levels, p) <= p + 1) return;
+    const text = this.file!.ed.text;
+    this.file!.ed.setCaret(paraRange(text, p).end);
+    this.setOutline(toggleFold(this.outline(), p));
+  }
+
+  /** The Outlining tab's Level: the paragraphs picked become headings of a level, or body text (0). */
+  private setOutlineLevel(L: number): void {
+    const f = this.file;
+    if (!f) return;
+    const [a, b] = this.ed.selectedParas();
+    const id = L ? `Heading${L}` : 'Normal';
+    this.ed.update(setParaStyle(withHeadings(f.t), a, b, id), 'Outline level');
+  }
+
+  private outlineCommand(cmd: string): void {
+    const f = this.file;
+    if (!f) return;
+    this.stopBox();
+    const ed = f.ed;
+    const [a, b] = ed.selectedParas();
+    const o = this.outline();
+    const level = /^outline-level-(\d)$/.exec(cmd);
+    if (level) { this.setOutline({ ...o, level: Number(level[1]) }); return; }
+    switch (cmd) {
+      case 'outline-promote': case 'outline-demote': case 'outline-heading1': case 'outline-body': {
+        const op = cmd.slice('outline-'.length) as OutlineOp;
+        const names: Record<OutlineOp, string> = { promote: 'Promote', demote: 'Demote', heading1: 'Promote to Heading 1', body: 'Demote to Body Text' };
+        ed.update(changeLevel(f.t, o, a, b, op), names[op]);
+        break;
+      }
+      case 'outline-up': case 'outline-down': {
+        const r = moveParas(f.t, o, a, b, cmd === 'outline-up' ? -1 : 1);
+        if (!r) break;
+        const before = paraRange(ed.text, a).start;
+        const anchor = ed.anchor - before, focus = ed.focus - before;
+        const text = rt.plainText(r.t.runs);
+        const start = paraRange(text, r.first).start;
+        // the folded headings move with their paragraphs
+        f.view = { ...f.view, outline: { ...o, collapsed: o.collapsed.map(r.moved).sort((x, y) => x - y) } };
+        ed.update(r.t, cmd === 'outline-up' ? 'Move Up' : 'Move Down', start + anchor, start + focus);
+        break;
+      }
+      case 'outline-expand': case 'outline-collapse':
+        this.setOutline(foldHeadings(f.t, o, a, b, cmd === 'outline-collapse'));
+        break;
+      case 'outline-all': this.setOutline({ ...o, level: 0, collapsed: [] }); break;
+      case 'outline-first': this.setOutline({ ...o, firstLine: !o.firstLine }); break;
+      case 'outline-format': this.setOutline({ ...o, formatting: !o.formatting }); break;
+    }
+  }
+
+  private updateOutlineRibbon(): void {
+    const f = this.file;
+    if (!f || f.view.kind !== 'outline') return;
+    const o = this.outline();
+    const r = this.ribbon;
+    const level = r.querySelector<HTMLSelectElement>('#doc-outline-level');
+    const L = outlineLevel(f.t, f.ed.currentPara());
+    if (level && document.activeElement !== level) level.value = String(L);
+    const show = r.querySelector<HTMLSelectElement>('#doc-outline-show');
+    if (show && document.activeElement !== show) show.value = String(o.level);
+    const fmt = r.querySelector<HTMLInputElement>('#doc-outline-format');
+    if (fmt) fmt.checked = o.formatting;
+    const first = r.querySelector<HTMLInputElement>('#doc-outline-first');
+    if (first) first.checked = o.firstLine;
+  }
+
+  /**
+   * Outline: the caret never stays in text folded out of sight. It steps over it in the
+   * direction it was going (to the next paragraph shown, or the end of the one before).
+   * True when it moved.
+   */
+  private snapShown(): boolean {
+    const f = this.file;
+    if (!f || f.box || f.view.kind !== 'outline') return false;
+    const ed = f.ed;
+    if (ed.composing !== null) return false;
+    const lines = f.layout().text.lines;
+    const at = ed.focus;
+    if (!lines.length || lines.some((l) => at >= l.start && at <= l.end)) { this.lastFocus = at; return false; }
+    const fwd = at >= this.lastFocus;
+    let to: number;
+    if (fwd) { const l = lines.find((x) => x.start > at); to = l ? l.start : lines[lines.length - 1].end; }
+    else { const l = [...lines].reverse().find((x) => x.end < at); to = l ? l.end : lines[0].start; }
+    this.lastFocus = to;
+    ed.select(ed.collapsed ? to : ed.anchor, to);
+    return true;
+  }
+
+  /** Outline: folded headings stay on their paragraphs when paragraphs are added or taken away before them. */
+  private keepFolds(): void {
+    const f = this.file;
+    if (!f) return;
+    const n = paraCount(f.ed.text);
+    const d = n - this.paraCountWas;
+    this.paraCountWas = n;
+    const o = f.view.outline;
+    if (!d || !o?.collapsed.length) return;
+    const at = paraAt(f.ed.text, f.ed.start) - Math.max(d, 0);
+    f.view = { ...f.view, outline: shiftFolds(o, at, d) };
+  }
+
   // ---------------------------------------------------------------- the mouse
 
-  private wirePointer(): void {
-    const s = this.view.scroller;
-    s.addEventListener('pointerdown', (e) => this.pointerDown(e));
-    s.addEventListener('pointermove', (e) => this.pointerMove(e));
+  private wirePointer(v: DocView): void {
+    const s = v.scroller;
+    s.addEventListener('pointerdown', (e) => { if (e.button === 0) this.activate(v); this.pointerDown(e); });
+    s.addEventListener('pointermove', (e) => {
+      // the mouse over the other pane: its own cursor (the pane being worked in stays the same)
+      if (this.dragging || v === this.view) { this.pointerMove(e); return; }
+      const was = this.view;
+      this.view = v;
+      try { this.pointerMove(e); } finally { this.view = was; }
+    });
     s.addEventListener('pointerup', (e) => {
       const d = this.dragging;
       this.dragging = null;
@@ -1147,7 +1616,8 @@ export class DocumentMode {
     });
     s.addEventListener('dblclick', (e) => {
       const f = this.file;
-      if (!f) return;
+      if (!f || this.reading) return;
+      this.activate(v);
       const id = this.objectAt(e.clientX, e.clientY);
       if (id !== null && f.t.objects[id]?.kind === 'bib') { e.preventDefault(); void this.manageReferences(); return; }
       if (id !== null && f.t.objects[id]?.kind === 'toc') { e.preventDefault(); void this.tocOptions(id); return; }
@@ -1171,6 +1641,8 @@ export class DocumentMode {
     });
     s.addEventListener('contextmenu', (e) => {
       if (!this.file) return;
+      this.activate(v);
+      if (this.reading) return;
       const p = this.view.toDoc(e.clientX, e.clientY);
       // in a table: into the cell clicked (unless a structure in the cell typed into is picked)
       const cell = this.cellAt(p);
@@ -1217,6 +1689,26 @@ export class DocumentMode {
     const now0 = performance.now();
     const c0 = this.clicks;
     const n = now0 - c0.time < 450 && Math.hypot(e.clientX - c0.at.x, e.clientY - c0.at.y) < 4 ? c0.n + 1 : 1;
+    // Outline: a heading's mark picks it with everything under it; a double-click folds or unfolds it
+    const mark = this.view.markAt(e.clientX, e.clientY);
+    if (mark !== null) {
+      Object.assign(c0, { n, time: now0, at: { x: e.clientX, y: e.clientY } });
+      this.stopBox();
+      if (n === 2) this.outlineFold(mark);
+      else this.pickOutline(mark);
+      return;
+    }
+    // Read Mode: text can be picked (to copy) but nothing is moved or typed into
+    if (this.reading) {
+      Object.assign(c0, { n, time: now0, at: { x: e.clientX, y: e.clientY } });
+      const o = offsetAt(f.layout().text, p.x, p.y);
+      if (n === 2) f.ed.selectWord(o);
+      else if (n >= 3) f.ed.selectParagraph(o);
+      else f.ed.setCaret(o, e.shiftKey);
+      this.dragging = { kind: 'text' };
+      s.setPointerCapture(e.pointerId);
+      return;
+    }
     // the picked figure's corner handle resizes it (one in a table cell too)
     const picked = this.pickedObject();
     if (picked !== null) {
@@ -1414,7 +1906,7 @@ export class DocumentMode {
     const room = this.view.scroller.clientWidth - 48, page = f.layout().pageW;
     if (room < page * this.view.zoom) this.view.fitWidth();
     else if (this.view.zoom < ACTUAL) { if (room >= page * ACTUAL) this.view.setZoom(ACTUAL); else this.view.fitWidth(); }
-    else this.view.redraw();
+    else this.redraw();
   }
 
   /** Open a figure in the drawing tools; the document gets the changed drawing on Done. */
@@ -1591,6 +2083,9 @@ export class DocumentMode {
     // in a text box, the text buttons work on its text; other commands leave it first
     if (f.box && !BOX_COMMANDS.test(cmd) && !(f.box.cell && CELL_COMMANDS.test(cmd))) this.stopBox();
     if (/^table-/.test(cmd)) { this.tableCommand(cmd); return true; }
+    if (/^outline-/.test(cmd)) { this.outlineCommand(cmd); return true; }
+    const kind = VIEW_COMMANDS[cmd];
+    if (kind) { this.setViewKind(kind); return true; }
     const ed = this.ed;
     const style = (id: string) => {
       const [a, b] = ed.selectedParas();
@@ -1672,6 +2167,13 @@ export class DocumentMode {
       case 'next-change': case 'prev-change': this.goToChange(cmd === 'next-change'); break;
       case 'manage-references': void this.manageReferences(); break;
       case 'edit-figure': { const id = this.pickedObject(); if (id === null) { this.host.flash('Click a structure or scheme first, then Edit Drawing (or double-click it).'); break; } this.editFigure(id); break; }
+      case 'view-vertical': this.arrange(false, 1, false); break;
+      case 'view-sideways': if (this.view.sideways) this.arrange(false, 1, false); else this.arrange(true, 1, true); break;
+      case 'view-multiple': this.arrange(false, this.view.perRow > 1 ? 1 : 2, true); break;
+      case 'view-one-page': this.arrange(this.view.sideways, 1, true); break;
+      case 'view-split': this.setSplit(!this.split); this.focus(); break;
+      case 'read-next': this.turn(1); break;
+      case 'read-prev': this.turn(-1); break;
       case 'zoom-in': this.view.setZoom(this.view.zoom * 1.25); this.showZoom(); break;
       case 'zoom-out': this.view.setZoom(this.view.zoom * 0.8); this.showZoom(); break;
       case 'zoom-fit': this.view.fitWidth(); this.showZoom(); break;
@@ -2212,8 +2714,15 @@ export class DocumentMode {
     for (const sel of r.querySelectorAll<HTMLSelectElement>('select[data-doc-prefix]')) {
       sel.addEventListener('change', () => { const v = sel.value; this.run(`${sel.dataset.docPrefix}-${v}`); if (v !== 'custom' && v !== 'more') this.focus(); });
     }
-    // zoom, under the pages
-    for (const b of document.querySelectorAll<HTMLButtonElement>('#doc-statusbar [data-doc]')) {
+    // Outlining: the paragraph's level, the levels shown, and how body text shows
+    const level = r.querySelector<HTMLSelectElement>('#doc-outline-level')!;
+    level.addEventListener('change', () => { this.setOutlineLevel(Number(level.value)); this.focus(); });
+    const show = r.querySelector<HTMLSelectElement>('#doc-outline-show')!;
+    show.addEventListener('change', () => { this.run(show.value === '0' ? 'outline-all' : `outline-level-${show.value}`); this.focus(); });
+    r.querySelector<HTMLInputElement>('#doc-outline-format')!.addEventListener('change', () => { this.run('outline-format'); this.focus(); });
+    r.querySelector<HTMLInputElement>('#doc-outline-first')!.addEventListener('change', () => { this.run('outline-first'); this.focus(); });
+    // zoom and the views, under the pages; turning the pages in Read Mode
+    for (const b of document.querySelectorAll<HTMLButtonElement>('#doc-statusbar [data-doc], #doc-readbar [data-doc]')) {
       b.addEventListener('mousedown', (e) => e.preventDefault());
       b.addEventListener('click', () => this.run(b.dataset.doc!));
     }
@@ -2361,7 +2870,9 @@ export class DocumentMode {
       const c = f.ed.caret();
       const page = lay.pages.findIndex((p) => c.line >= p.first && c.line < p.end);
       const words = f.ed.text.split(/[\s￼]+/).filter((w) => /\p{L}|\p{N}/u.test(w)).length;
-      status.textContent = `Page ${page + 1} of ${lay.pages.length}  ·  ${words.toLocaleString()} word${words === 1 ? '' : 's'}`;
+      const wordCount = `${words.toLocaleString()} word${words === 1 ? '' : 's'}`;
+      // the views without pages have no page numbers to show
+      status.textContent = continuous(f.view.kind) ? `${VIEW_LABEL[f.view.kind]}  ·  ${wordCount}` : `Page ${page + 1} of ${lay.pages.length}  ·  ${wordCount}`;
     }
   }
 }

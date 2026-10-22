@@ -206,6 +206,13 @@ export const COMMAND_NAMES: Record<string, string> = {
   'insert-citation': 'Insert a citation…', 'insert-bibliography': 'Insert the bibliography', 'manage-references': 'Manage references…',
   'insert-toc': 'Insert a table of contents…', 'insert-equation': 'Insert an equation…', 'edit-equation': 'Change the equation…', 'track-changes': 'Track changes (on or off)', 'accept-change': 'Accept the change', 'reject-change': 'Reject the change',
   'accept-all': 'Accept all changes', 'reject-all': 'Reject all changes', 'next-change': 'Next change', 'prev-change': 'Previous change', 'review-name': 'Your name on changes…', 'new-comment': 'New comment', 'delete-comment': 'Delete the comment', 'delete-all-comments': 'Delete all comments', 'resolve-comment': 'Resolve the comment (or reopen it)', 'next-comment': 'Next comment', 'prev-comment': 'Previous comment', 'show-comments': 'Show comments (on or off)',
+  'view-print': 'Print Layout view', 'view-read': 'Read Mode', 'view-web': 'Web Layout view', 'view-outline': 'Outline view', 'view-draft': 'Draft view',
+  'view-sideways': 'Pages side to side (on or off)', 'view-multiple': 'Multiple pages (on or off)', 'view-one-page': 'One page', 'view-split': 'Split the window (on or off)',
+  'doc-new-window': 'New window on the document', 'outline-promote': 'Promote (outline)', 'outline-demote': 'Demote (outline)', 'outline-heading1': 'Promote to Heading 1',
+  'outline-body': 'Demote to body text', 'outline-up': 'Move the paragraph up (outline)', 'outline-down': 'Move the paragraph down (outline)',
+  'outline-expand': 'Expand the heading (outline)', 'outline-collapse': 'Collapse the heading (outline)', 'outline-all': 'Show all levels (outline)',
+  'outline-level-1': 'Show level 1 (outline)', 'outline-level-2': 'Show levels 1 and 2 (outline)', 'outline-level-3': 'Show levels 1 to 3 (outline)',
+  'outline-first': 'Show the first line only (outline, on or off)', 'outline-format': 'Show text formatting (outline, on or off)',
 };
 
 const TEXT_ACTIONS: Record<string, string> = {
@@ -347,6 +354,10 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
     'Ctrl+Enter': 'page-break', 'Ctrl+Shift+Enter': 'col-break', 'Ctrl+1': 'line-single', 'Ctrl+5': 'line-1-5', 'Ctrl+2': 'line-double',
     'Ctrl+]': 'font-bigger', 'Ctrl+[': 'font-smaller', 'Ctrl+Shift+L': 'doc-bullets',
     'Ctrl+F': 'find', 'Ctrl+H': 'replace', 'Ctrl+N': 'new-document', 'Ctrl+Shift+E': 'track-changes', 'Ctrl+Alt+M': 'new-comment', 'Alt+=': 'insert-equation',
+    'Ctrl+Alt+N': 'view-draft', 'Ctrl+Alt+S': 'view-split',
+    'Alt+Shift+ArrowLeft': 'outline-promote', 'Alt+Shift+ArrowRight': 'outline-demote', 'Alt+Shift+ArrowUp': 'outline-up', 'Alt+Shift+ArrowDown': 'outline-down',
+    'Alt+Shift+=': 'outline-expand', 'Alt+Shift+-': 'outline-collapse', 'Alt+Shift+A': 'outline-all',
+    'Alt+Shift+1': 'outline-level-1', 'Alt+Shift+2': 'outline-level-2', 'Alt+Shift+3': 'outline-level-3',
   }),
   text: verbs('text', {
     'Ctrl+B': 'bold', 'Ctrl+I': 'italic', 'Ctrl+U': 'underline', 'Ctrl+=': 'sub', 'Ctrl+Shift+=': 'sup', 'Ctrl++': 'sup',

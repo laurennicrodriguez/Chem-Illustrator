@@ -1043,6 +1043,24 @@ dialog.prop-dialog { width: min(94vw, 520px); }
 #doc-pane { grid-area: host; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surround); }
 #doc-pane[hidden] { display: none; }
 #doc-host { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+/* View > Split: a second pane under the first, the bar between them dragged to move the split */
+.doc-host-2 { position: relative; flex: 0 0 42%; min-height: 60px; overflow: hidden; }
+.doc-split-bar { flex: none; height: 7px; cursor: row-resize; background: color-mix(in srgb, var(--line) 70%, var(--panel)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.doc-split-bar:hover { background: color-mix(in srgb, var(--accent) 25%, var(--panel)); }
+/* Web Layout, Outline and Draft: white right across */
+#doc-host.doc-endless, .doc-host-2.doc-endless { background: #fff; }
+/* Read Mode: nothing but the pages and a bar to turn them */
+.doc-turning { overflow: hidden; cursor: default; }
+#doc-readbar { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 12px; font-size: 13px; background: var(--panel); border-bottom: 1px solid var(--line); color: var(--text); }
+#doc-readbar[hidden] { display: none; }
+#doc-readbar .grow { flex: 1 1 auto; }
+#doc-readbar .doc-read-title { font-weight: 600; }
+#doc-readbar button { padding: 2px 10px; }
+#doc-read-pages { min-width: 110px; text-align: center; color: var(--muted); }
+body.doc-reading header, body.doc-reading #tabs, body.doc-reading #doc-ribbon, body.doc-reading aside,
+body.doc-reading #hint, body.doc-reading #doc-statusbar, body.doc-reading .dock { display: none !important; }
+#doc-statusbar .doc-viewbtn { padding: 0 5px; }
+#doc-statusbar .doc-viewbtn[aria-pressed='true'] { color: var(--text); border-color: var(--line); background: var(--bg); }
 .doc-canvas { position: absolute; left: 0; top: 0; display: block; pointer-events: none; }
 .doc-scroll { position: absolute; inset: 0; overflow: auto; outline: none; cursor: text; }
 .doc-space { pointer-events: none; }
