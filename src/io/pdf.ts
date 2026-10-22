@@ -344,7 +344,13 @@ export async function writePdf(pages: PdfPage[], opts: PdfOptions): Promise<Uint
         const n = await imageRef(it.src);
         const c = it.crop ?? { l: 0, t: 0, r: 0, b: 0 };
         const W = it.w / Math.max(0.01, 1 - c.l - c.r), H = it.h / Math.max(0.01, 1 - c.t - c.b);
-        ops.push('q', `${num(it.x)} ${num(it.y)} ${num(it.w)} ${num(it.h)} re W n`);
+        ops.push('q');
+        if (it.rot) {
+          // turned about its middle (in the page's points from the top left, as recorded)
+          const a = (it.rot * Math.PI) / 180, cx = it.x + it.w / 2, cy = it.y + it.h / 2;
+          ops.push(`1 0 0 1 ${num(cx)} ${num(cy)} cm ${num(Math.cos(a))} ${num(Math.sin(a))} ${num(-Math.sin(a))} ${num(Math.cos(a))} 0 0 cm 1 0 0 1 ${num(-cx)} ${num(-cy)} cm`);
+        }
+        ops.push(`${num(it.x)} ${num(it.y)} ${num(it.w)} ${num(it.h)} re W n`);
         if (n) {
           usedImages.add(n);
           // the picture's top row goes at the top

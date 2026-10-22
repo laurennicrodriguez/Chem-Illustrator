@@ -3,7 +3,7 @@
 // bond (label, charge, atom number; order and style).
 // Anything the drawing tools set automatically can be changed here by hand.
 
-import { Doc, Arrow, Shape, Caption, Atom, Bond, PICTURE_STYLES, type PictureLook, type StepRoles, type Pattern, type AttachSide, type Attachment, type DescriptorKey, type HighlightEnds, type HighlightFill, type HighlightLine, type HighlightShape, type HighlightSoftSide, type HighlightStyle } from '../model';
+import { Doc, Arrow, Shape, Caption, Atom, Bond, PICTURE_STYLES, turnsFreely, type PictureLook, type StepRoles, type Pattern, type AttachSide, type Attachment, type DescriptorKey, type HighlightEnds, type HighlightFill, type HighlightLine, type HighlightShape, type HighlightSoftSide, type HighlightStyle } from '../model';
 import { fullStyle, tidyStyle } from '../render/highlight';
 import type { HighlightLookPreset } from './highlight-looks';
 
@@ -15,7 +15,7 @@ import type { Role } from '../chem/reaction';
 import { setStereoShown, setStereoText } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
 import { Selection } from '../editor/editor';
-import { DEG } from '../geom';
+import { DEG, normDegrees } from '../geom';
 import { isCircle, cropTo, isCurved, headBend, swapHalf } from '../objects';
 import { GEOS, geoDef } from '../design/geo';
 import { nextNumber } from '../chem/sprouts';
@@ -128,6 +128,8 @@ export class StylePanel {
   /** Open an equation in the equation window (Edit equation…), and colour equations. */
   onEditEquation: (id: number) => void = () => {};
   onEquationColour: (ids: number[], colour: string) => void = () => {};
+  /** Pictures and shapes turn to any angle here (Slides and Design), so the panel offers a Rotation box. */
+  turnable: () => boolean = () => false;
 
   constructor(private section: HTMLElement, private body: HTMLElement, private doc: Doc, private sel: () => Selection, private changed: () => void) {}
 
@@ -340,6 +342,7 @@ export class StylePanel {
     const any = (f: (x: Shape) => boolean) => shapes.find(f);
     const names: Record<Shape['kind'], string> = { line: 'Line', rect: 'Box', oval: 'Oval', symbol: 'Symbol', bracket: 'Bracket', picture: 'Picture', table: 'Table', geo: 'Shape', ring: 'Ring fill' };
     this.heading(title ?? (shapes.length > 1 ? `${shapes.length} shapes` : isCircle(s) ? 'Circle' : s.kind === 'geo' ? geoDef(s.geo).name : names[s.kind]));
+    this.rotation(shapes);
     const geo = any((x) => x.kind === 'geo');
     const isGeo = (x: Shape) => x.kind === 'geo';
     if (geo) {
@@ -516,6 +519,17 @@ export class StylePanel {
 
   // ------------------------------------------------------------------ pictures
 
+  /** Rotation in degrees clockwise (Slides and Design), as PowerPoint's Size and Position box: the shapes turn about their middles. */
+  private rotation(list: Shape[]): void {
+    const turning = list.filter((x) => turnsFreely(x));
+    if (!this.turnable() || !turning.length) return;
+    const now = ((turning[0].rot ?? 0) % 360 + 360) % 360;
+    this.number('Rotation (°)', round(now, 10), 1, -360, 360, (v) => this.edit('Rotate', () => {
+      const rot = normDegrees(v);
+      for (const x of turning) this.doc.updateShape(x.id, { rot: Math.abs(rot) < 1e-9 ? undefined : rot });
+    }), 'Turns it about its middle, clockwise, as PowerPoint’s Rotation box. Drag the round handle above a selection to turn it by hand.');
+  }
+
   private pictureControls(pics: Shape[]): void {
     const p = pics[0];
     const set = (label: string, patch: (x: Shape) => Partial<Shape>) => this.edit(label, () => { for (const x of pics) this.doc.updateShape(x.id, patch(x)); });
@@ -539,6 +553,7 @@ export class StylePanel {
     this.number('Width (pt)', round(b.w, 10), 1, 1, 20000, (v) => size(v, null));
     this.number('Height (pt)', round(b.h, 10), 1, 1, 20000, (v) => size(null, v));
     this.check('Keep proportions', this.keepProportions, (v) => { this.keepProportions = v; });
+    this.rotation(pics);
     if (charts) {
       this.pictureLook(pics);
       if (pics.length === 1) {

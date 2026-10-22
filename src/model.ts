@@ -338,6 +338,10 @@ export interface Caption {
   ignoreWarnings?: boolean;
   /** Turned this many degrees clockwise about (x, y), the start of its first line. */
   rot?: number;
+  /** Its name in the Selection Pane (Slides), when given one. */
+  name?: string;
+  /** Hidden (Selection Pane): not drawn, printed or picked, but kept and saved. */
+  hidden?: boolean;
 }
 
 /**
@@ -584,6 +588,11 @@ export interface Shape {
   y1: number;
   x2: number;
   y2: number;
+  /**
+   * Boxes, ovals, design shapes and pictures (see turnsFreely): turned this many degrees
+   * clockwise about the middle of x1..y2, as PowerPoint turns shapes. x1..y2 stay the box before it is turned.
+   */
+  rot?: number;
   dashed?: boolean;
   filled?: boolean;
   /**
@@ -681,6 +690,11 @@ export interface Shape {
   energy?: EnergyData;
   /** A SmartArt-style diagram's text and look, kept on the invisible frame round its shapes (design/diagrams.ts). */
   diagram?: DiagramData;
+}
+
+/** Can this shape be turned to any angle (Slides and Design), keeping its box and turning it as a whole? */
+export function turnsFreely(s: Pick<Shape, 'kind' | 'chart' | 'table' | 'ring' | 'frame' | 'pin'>): boolean {
+  return (s.kind === 'rect' || s.kind === 'oval' || s.kind === 'geo' || s.kind === 'picture') && !s.chart && !s.frame && !s.pin;
 }
 
 /** An equation on a slide or design: LaTeX, its text size in points, colour and font. */

@@ -14,7 +14,8 @@ import { COMMENT_REL, readCommentAuthors, readLegacyComments, readModernComments
 import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureLook, type Frame, type ShapeMath } from '../model';
 import { layoutTable, NOTE_SCALE } from '../table';
 import { linesFromBorders, type Borders } from './cdxml-table';
-import { turnAbout, normDegrees, type Vec, type Rect } from '../geom';
+import { turnAbout, normDegrees, DEG, type Vec, type Rect } from '../geom';
+import { POINTS, rotation, snapshot, transform } from '../editor/arrange';
 import { PackageReader, NS, REL, kids, kid, rAttr, fromEmu } from './ooxml';
 import { linkFromTarget } from '../links';
 import { readCdxml } from './cdxml';
@@ -510,10 +511,12 @@ class Reader {
   }
 
   private element(s: Part, layout: Part | null, el: Element, t: Xf, doc: Doc): void {
-    if (!this.spidTargets || el.localName === 'AlternateContent') { this.elementOnly(s, layout, el, t, doc); return; }
+    if (el.localName === 'AlternateContent') { this.elementOnly(s, layout, el, t, doc); return; }
     // note what each PowerPoint shape became, for the slide's animations
     const mark = doc.idMark, tables = this.tables.length;
     this.elementOnly(s, layout, el, t, doc);
+    this.nameNew(el, doc, mark);
+    if (!this.spidTargets) return;
     const spid = Number(el.getElementsByTagNameNS(NS.p, 'cNvPr')[0]?.getAttribute('id'));
     if (!Number.isFinite(spid)) return;
     if (this.tables.length > tables) { this.tableSpids.set(tables, spid); return; }
@@ -541,12 +544,14 @@ class Reader {
           const o = apply(t, fromEmu(off.getAttribute('x')), fromEmu(off.getAttribute('y')));
           inner = { sx, sy, tx: o.x - sx * fromEmu(chOff.getAttribute('x')), ty: o.y - sy * fromEmu(chOff.getAttribute('y')) };
         }
-        if (Number(x?.getAttribute('rot') ?? 0)) this.warnings.add('Rotated groups came in unrotated.');
+        const turned = Number(x?.getAttribute('rot') ?? 0) / 60000, gb = boxOf(x, t), before = doc.idMark;
         // one of our diagrams: its shapes come in as they are, then the frame that keeps its text goes round them
         const diagramTag = this.tagsOf(s.path, kid(el, 'nvGrpSpPr', 'nvPr'))[TAG.diagram];
         const hadShapes = new Set(doc.shapes.keys()), hadArrows = new Set(doc.arrows.keys());
         this.tree(s, layout, el, inner, doc);
         if (diagramTag && off && ext) this.diagramFrame(diagramTag, off, ext, t, doc, hadShapes, hadArrows);
+        // a turned group: everything in it turned together about the group's middle
+        if (turned && gb) turnNew(doc, before, { x: (gb.x1 + gb.x2) / 2, y: (gb.y1 + gb.y2) / 2 }, turned);
         break;
       }
       case 'graphicFrame': this.frame(s, el, t, doc); break;
@@ -566,6 +571,27 @@ class Reader {
   }
 
   /**
+   * The name PowerPoint's Selection Pane shows for a shape (when it isn't one PowerPoint made up,
+   * "Picture 3"), and whether it is hidden, given to what the shape became here.
+   */
+  private nameNew(el: Element, doc: Doc, mark: number): void {
+    const nv = kids(el).find((k) => /^nv/.test(k.localName));
+    const c = kid(nv ?? null, 'cNvPr');
+    if (!c) return;
+    const name = c.getAttribute('name')?.trim() ?? '';
+    const hidden = c.getAttribute('hidden') === '1' || c.getAttribute('hidden') === 'true';
+    const shapes = [...doc.shapes.values()].filter((x) => x.id >= mark);
+    const caps = [...doc.captions.values()].filter((x) => x.id >= mark);
+    if (hidden) {
+      for (const x of shapes) doc.updateShape(x.id, { hidden: true });
+      for (const x of caps) doc.updateCaption(x.id, { hidden: true });
+    }
+    if (!name || el.localName === 'grpSp' || PPT_NAME.test(name)) return;
+    if (shapes.length === 1) doc.updateShape(shapes[0].id, { name });
+    else if (!shapes.length && caps.length === 1) doc.updateCaption(caps[0].id, { name });
+  }
+
+  /**
    * An equation (PowerPoint's Office Math in a text box): one to change in the equation window,
    * its LaTeX as typed here when PowerPoint has not changed it. Its box is the equation's own size,
    * where PowerPoint shows it in the text box. False when the text box holds no equation.
@@ -577,7 +603,6 @@ class Reader {
     if (!maths.length || !frame) return false;
     const fromFile = maths.map((x) => ommlToTex(x)).join(' \\quad ');
     if (!fromFile.trim()) return false;
-    if (frame.rot) this.warnings.add('Rotated pictures and shapes came in unrotated.');
     const rPr = m.getElementsByTagNameNS(NS.a, 'rPr')[0] ?? null;
     const sz = Number(rPr?.getAttribute('sz'));
 
@@ -599,7 +624,7 @@ class Reader {
     const k = sz > 0 ? sz / 100 / math.size : 1;
     const cx = (frame.x1 + frame.x2) / 2, cy = (frame.y1 + frame.y2) / 2;
     const box: Rect = same ? frame : { x1: cx - (nat.w * k) / 2, y1: cy - (nat.h * k) / 2, x2: cx + (nat.w * k) / 2, y2: cy + (nat.h * k) / 2 };
-    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: shapeMathPicture(math, arialMeasure), px: { w: Math.round(nat.w), h: Math.round(nat.h) }, math });
+    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: shapeMathPicture(math, arialMeasure), px: { w: Math.round(nat.w), h: Math.round(nat.h) }, math, ...turn(frame) });
     return true;
   }
 
@@ -642,7 +667,7 @@ class Reader {
     const img = this.image(s.path, pic);
     if (!img || !box) return;
     if (/ChemDraw/i.test(ole?.getAttribute('progId') ?? '')) this.warnings.add('ChemDraw objects came in as pictures.');
-    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}) });
+    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...turn(box) });
   }
 
   /** A chart: PowerPoint's own (its numbers from what PowerPoint cached), or ours when it charts the same numbers. */
@@ -710,7 +735,6 @@ class Reader {
   private pictureEl(s: Part, el: Element, t: Xf, doc: Doc): void {
     const box = boxOf(kid(el, 'spPr', 'xfrm'), t);
     if (!box) return;
-    if (box.rot) this.warnings.add('Rotated pictures and shapes came in unrotated.');
     const tags = this.tagsOf(s.path, kid(el, 'nvPicPr', 'nvPr'));
     if (tags[TAG.highlight]) {
       // a highlight's own picture: the structure's drawing has the highlight, so only its animation is wanted
@@ -729,7 +753,7 @@ class Reader {
     if (!img) return;
     const look = this.pictureLook(kid(el, 'spPr'));
     const video = this.videoOf(s.path, kid(el, 'nvPicPr', 'nvPr'));
-    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...(look ? { look } : {}), ...(video ? { video } : {}) });
+    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...(look ? { look } : {}), ...(video ? { video } : {}), ...turn(box) });
   }
 
   /** The MP4 video a picture stands for (PowerPoint's media link, else its video link), if it is in the file. */
@@ -848,9 +872,6 @@ class Reader {
     const xfrm = kid(spPr, 'xfrm') ?? from.map((e) => kid(e, 'spPr', 'xfrm')).find((x) => x) ?? null;
     const box = boxOf(xfrm, xfrm && kid(spPr, 'xfrm') ? t : IDENTITY);
     if (!box) return;
-    // (text boxes and placeholders turn; other shapes don't yet)
-    const textBox = !!ph || kid(sp, 'nvSpPr', 'cNvSpPr')?.getAttribute('txBox') === '1';
-    if (box.rot && !textBox) this.warnings.add('Rotated pictures and shapes came in unrotated.');
     const prst = kid(spPr, 'prstGeom')?.getAttribute('prst') ?? (kid(spPr, 'custGeom') ? 'cust' : 'rect');
     if (!ph && /line|Connector/i.test(prst)) { this.line(sp, spPr, t, doc); return; }
     if (!ph) {
@@ -867,7 +888,7 @@ class Reader {
         if (!['rect', 'roundRect', 'ellipse', 'snip1Rect', 'flowChartProcess', 'flowChartAlternateProcess'].includes(prst)) this.warnings.add('Some PowerPoint shapes came in as boxes.');
         const sh: Omit<Shape, 'id'> = {
           kind: prst === 'ellipse' ? 'oval' : 'rect', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2,
-          color: look.fill ?? look.line ?? '#000000',
+          color: look.fill ?? look.line ?? '#000000', ...turn(box),
         };
         if (look.fill) sh.filled = true;
         if (look.fill && look.shaded) sh.fill = 'shaded';
@@ -948,10 +969,10 @@ class Reader {
     return true;
   }
 
-  private geoShape(sp: Element, spPr: Element | null, prst: string, box: Rect, tag: string | undefined, doc: Doc): boolean {
+  private geoShape(sp: Element, spPr: Element | null, prst: string, box: Rect & { rot: number }, tag: string | undefined, doc: Doc): boolean {
     let saved: { s: Partial<Shape>; plain: string } | null = null;
     try { saved = tag ? JSON.parse(tag) : null; } catch { saved = null; }
-    const where = { x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2 };
+    const where = { x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, rot: turn(box).rot };
     const now = this.plain(sp);
     const theirText = () => {
       if (!now.trim()) return undefined;
@@ -1187,8 +1208,10 @@ class Reader {
     if (!look.line) return;
     const prst = kid(spPr, 'prstGeom')?.getAttribute('prst') ?? 'line';
     if (!/^(line|straightConnector1)$/.test(prst)) this.warnings.add('Bent and curved connectors came in straight.');
-    const a = { x: box.flipH ? box.x2 : box.x1, y: box.flipV ? box.y2 : box.y1 };
-    const b = { x: box.flipH ? box.x1 : box.x2, y: box.flipV ? box.y1 : box.y2 };
+    const mid = { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 };
+    // a turned line: its ends turned about the middle of its box
+    const a = turnAbout({ x: box.flipH ? box.x2 : box.x1, y: box.flipV ? box.y2 : box.y1 }, mid, box.rot);
+    const b = turnAbout({ x: box.flipH ? box.x1 : box.x2, y: box.flipV ? box.y1 : box.y2 }, mid, box.rot);
     const ln = kid(spPr, 'ln');
     const end = (n: string) => {
       const e = kid(ln, n);
@@ -1434,6 +1457,23 @@ function texOfOmml(tex: string): string {
 
 export function readPptx(bytes: Uint8Array): PptxRead {
   return new Reader(bytes).read();
+}
+
+/** The names PowerPoint (and this program) give shapes on their own: "Picture 3", "TextBox 12". */
+const PPT_NAME = /^(Picture|Rectangle|Oval|Line|TextBox|Text Box|Title|Text Placeholder|Content Placeholder|Subtitle|Table|Chart|Equation|Animation|Straight Connector|Straight Arrow Connector|Elbow Connector|Curved Arrow|Connector|Freeform|Group|Diagram|Structure|Highlight|Graphic|Object|Shape|Google Shape|Footer|Slide Number|Date|Rounded Rectangle|Ellipse|Isosceles Triangle|Right Arrow|Arrow)( Placeholder)? \d+$/i;
+
+/** Everything added to a drawing since `mark` turned `deg` degrees clockwise about `c`, text and shapes included. */
+function turnNew(doc: Doc, mark: number, c: Vec, deg: number): void {
+  const ids = <T extends { id: number }>(m: Map<number, T>) => new Set([...m.values()].filter((x) => x.id >= mark).map((x) => x.id));
+  const sel = { atoms: ids(doc.atoms), bonds: ids(doc.bonds), captions: ids(doc.captions), arrows: ids(doc.arrows), shapes: ids(doc.shapes) };
+  const snap = snapshot(doc, sel, POINTS);
+  transform(doc, snap, rotation(c, deg * DEG), false, { deg, which: () => true, shapes: true });
+}
+
+/** A shape's turn as ours keeps it (left out when it isn't turned). */
+function turn(box: { rot: number }): { rot?: number } {
+  const rot = normDegrees(box.rot);
+  return Math.abs(rot) > 1e-6 ? { rot } : {};
 }
 
 /** A PowerPoint text box turned in its box: the text starts where the turn takes its first line. */

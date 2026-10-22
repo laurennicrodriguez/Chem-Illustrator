@@ -54,7 +54,7 @@ export function itemsToSvg(items: Item[], box: EmfBox): string {
         out.push(`<path d="${pathData(it.segs)}" fill="none" ${paint('stroke', st.color)} stroke-width="${n(st.width)}" stroke-linecap="${st.cap}" stroke-linejoin="${st.join}"/>`);
       }
     } else if (it.kind === 'image') {
-      out.push(svgImage(it));
+      out.push(it.rot ? `<g transform="rotate(${n(it.rot)} ${n(it.x + it.w / 2)} ${n(it.y + it.h / 2)})">${svgImage(it)}</g>` : svgImage(it));
     } else {
       const family = /^(sans-serif|system-ui|helvetica)$/i.test(it.family) ? 'Arial' : it.family;
       out.push(

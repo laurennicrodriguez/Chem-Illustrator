@@ -53,7 +53,7 @@ import { Align, Measure, POINTS, Snapshot, type TurnText, units, alignOffsets, d
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { tokenize, addNicknames, isBuiltInNickname, labelGraph, labelPieces, labelLook, CAP, SUB_SCALE } from '../chem/labels';
 import {
-  Handle, arrowHit, shapeHit, arrowHandles, shapeHandles, dragArrowHandle, dragShapeHandle, dragCropHandle, shapeBox,
+  Handle, arrowHit, shapeHit, arrowHandles, shapeHandles, dragArrowHandle, dragShapeHandle, dragCropHandle, shapeBox, shapeMid, shapeTurn,
   arrowPoints, bracketHalves, type BracketForm, bracketLip, unionRect,
   shapeOrder, portNear, shapePorts, isCurved, headBend, swapHalf, bezPoints,
 } from '../objects';
@@ -462,7 +462,7 @@ export class Editor {
   /** The link under a point of a caption (not one being typed), if any. */
   captionLinkAt(p: Vec): string | null {
     for (const c of this.doc.captions.values()) {
-      if (!c.runs.some((r) => r.link)) continue;
+      if (c.hidden || !c.runs.some((r) => r.link)) continue;
       const q = c.rot ? turnAbout(p, c, -c.rot) : p;
       const span = linkAtPoint(this.r.captionLayout(c), c.runs, q.x - c.x, q.y - c.y);
       if (span) return span.link;
@@ -514,6 +514,7 @@ export class Editor {
     }
     if (bb) return { kind: 'bond', id: bb.id };
     for (const c of doc.captions.values()) {
+      if (c.hidden) continue;
       // turned text: the point turned back, against the text's own box
       const r = c.rot ? this.r.captionFrame(c) : this.r.captionBox(c);
       const q = c.rot ? turnAbout(p, c, -c.rot) : p;
@@ -2341,7 +2342,7 @@ export class Editor {
       }
     }
     const inside = (x: number, y: number) => x >= r.x1 && x <= r.x2 && y >= r.y1 && y <= r.y2;
-    for (const c of doc.captions.values()) { const bx = this.r.captionBox(c); if (inside(bx.x1, bx.y1) && inside(bx.x2, bx.y2)) this.sel.captions.add(c.id); }
+    for (const c of doc.captions.values()) { if (c.hidden) continue; const bx = this.r.captionBox(c); if (inside(bx.x1, bx.y1) && inside(bx.x2, bx.y2)) this.sel.captions.add(c.id); }
     const within = (b: Rect) => inside(b.x1, b.y1) && inside(b.x2, b.y2);
     for (const ar of doc.arrows.values()) if (arrowPoints(ar).every((q) => inside(q.x, q.y))) this.sel.arrows.add(ar.id);
     for (const s of doc.shapes.values()) if (!s.hidden && !s.locked && within(s.kind === 'bracket' ? { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) } : shapeBox(s))) this.sel.shapes.add(s.id);
@@ -2608,7 +2609,7 @@ export class Editor {
     const s = this.sel;
     const onlyText = !s.atoms.size && !s.arrows.size && !s.shapes.size;
     const turns = this.textFirst || onlyText;
-    return { deg, which: (c) => turns && !c.attach };
+    return { deg, which: (c) => turns && !c.attach, shapes: this.textFirst };
   }
 
     private rotateHandle(): Vec | null {
@@ -4168,7 +4169,9 @@ export class Editor {
       around: () => shapeBox(doc.shapes.get(id) ?? s),
     };
     const wrap = Math.max(4, g.area.x2 - g.area.x1);
-    const ed = new CaptionEditor(host, { x: g.x, y: g.y }, { runs: s.text?.runs ?? [], paras: s.text?.paras, justify: s.textAlign ?? 'center', wrap }, {}, (res) => {
+    // a turned shape's text is typed turned with it
+    const rot = shapeTurn(s), mid = shapeMid(s);
+    const ed = new CaptionEditor(host, turnAbout({ x: g.x, y: g.y }, mid, rot), { runs: s.text?.runs ?? [], paras: s.text?.paras, justify: s.textAlign ?? 'center', wrap }, {}, (res) => {
       if (this.captionEd === ed) this.captionEd = null;
       this.r.geoEdit = null;
       const cur = doc.shapes.get(id);
@@ -4181,9 +4184,9 @@ export class Editor {
       }
       this.requestScene();
       this.changed();
-    });
+    }, rot);
     this.captionEd = ed;
-    if (click) ed.ed.setCaret(ed.ed.offsetAt(click.x - g.x, click.y - g.y));
+    if (click) { const q = turnAbout(click, mid, -rot); ed.ed.setCaret(ed.ed.offsetAt(q.x - g.x, q.y - g.y)); }
   }
 
   // ------------------------------------------------------------------ tables
@@ -4432,6 +4435,8 @@ export class Editor {
       const W = w / Math.max(0.01, 1 - c.l - c.r), H = hh / Math.max(0.01, 1 - c.t - c.b);
       const img = imageFor(crop.src);
       ctx.save();
+      const turn = shapeTurn(crop);
+      if (turn) { const m = shapeMid(crop); ctx.translate(m.x, m.y); ctx.rotate(turn * DEG); ctx.translate(-m.x, -m.y); }
       ctx.globalAlpha = 0.35;
       if (img) ctx.drawImage(img, x1 - c.l * W, y1 - c.t * H, W, H);
       ctx.globalAlpha = 1;
@@ -4764,6 +4769,19 @@ function strokeAlong(ctx: CanvasRenderingContext2D, pts: Vec[]): void {
 
 /** Trace a shape's outline (or fill it, when the shape is filled) with the current style. */
 function outlineShape(ctx: CanvasRenderingContext2D, s: Shape): void {
+  const rot = shapeTurn(s);
+  if (!rot) { outlineFlat(ctx, s); return; }
+  // a turned shape's outline turns with it
+  const c = shapeMid(s), a = rot * DEG;
+  ctx.save();
+  ctx.translate(c.x, c.y);
+  ctx.rotate(a);
+  ctx.translate(-c.x, -c.y);
+  outlineFlat(ctx, s);
+  ctx.restore();
+}
+
+function outlineFlat(ctx: CanvasRenderingContext2D, s: Shape): void {
   const x = Math.min(s.x1, s.x2), y = Math.min(s.y1, s.y2), w = Math.abs(s.x2 - s.x1), h = Math.abs(s.y2 - s.y1);
   ctx.beginPath();
   switch (s.kind) {
