@@ -786,7 +786,17 @@ dialog.typing-dialog p { margin: 2px 0 6px; }
 .dl-shape { display: flex; align-items: center; justify-content: center; padding: 2px; aspect-ratio: 1; border: 1px solid transparent; border-radius: 4px; background: var(--tile); cursor: grab; }
 .dl-shape:hover { border-color: var(--accent); }
 .dl-shape.active { border-color: var(--tab-design); background: color-mix(in srgb, var(--tab-design) 14%, transparent); }
-.dl-shape canvas { pointer-events: none; }
+.dl-shape canvas, .dl-shape svg { pointer-events: none; }
+.dl-tabs { display: flex; gap: 2px; margin: 0 0 6px; border-bottom: 1px solid var(--line); }
+.dl-tabs button { font: inherit; font-size: 12px; font-weight: 600; padding: 3px 10px 4px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; color: var(--muted, #666); cursor: pointer; }
+.dl-tabs button.active { color: var(--fg); border-bottom-color: var(--tab-design); }
+.dl-head select.dl-group { width: 100%; box-sizing: border-box; font: inherit; margin-top: 4px; }
+.dl-head select.dl-group[hidden] { display: none; }
+.dl-grid.dl-icons { grid-template-columns: repeat(auto-fill, minmax(36px, 1fr)); }
+.dl-icons .dl-shape { color: var(--fg); }
+.dl-more { display: block; margin: 8px 0 0; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; color: var(--accent); cursor: pointer; text-align: left; }
+.dl-more:hover { text-decoration: underline; }
+.dl-credit { margin: 10px 0 0; font-size: 10px; }
 #dz-size { white-space: nowrap; }
 
 /* the Layers panel (Design mode) */
@@ -1589,7 +1599,7 @@ dialog.equation-dialog textarea { width: 100%; box-sizing: border-box; font: 14p
 .eq-preview canvas { display: block; }
 
 /* Insert > Shapes in Slides and Documents: the shape library as a drop-down */
-.shape-pop { position: fixed; z-index: 60; width: 300px; max-height: min(70vh, 520px); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18); }
+.shape-pop { position: fixed; z-index: 60; width: 340px; max-height: min(70vh, 520px); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18); }
 .shape-pop[hidden] { display: none; }
 .shape-pop > .design-lib { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
 .shape-pop .dl-shape { cursor: pointer; }

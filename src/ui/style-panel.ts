@@ -326,7 +326,10 @@ export class StylePanel {
     const isGeo = (x: Shape) => x.kind === 'geo';
     if (geo) {
       // another shape from the library, keeping the size, colours and text
-      this.select('Shape', GEOS.map((g): Opt<string> => [g.id, `${g.name} (${g.group.toLowerCase()})`]), geoDef(geo.geo).id, (v) => set('Change shape', isGeo, () => ({ geo: v })));
+      // (an icon is listed too, so it can be swapped for a shape and back)
+      const own = geoDef(geo.geo);
+      const opts = [...(own.icon ? [own] : []), ...GEOS].map((g): Opt<string> => [g.id, `${g.name} (${g.group.toLowerCase()})`]);
+      this.select('Shape', opts, own.id, (v) => set('Change shape', isGeo, () => ({ geo: v })));
     }
     const lined = (x: Shape) => x.kind !== 'symbol' && x.kind !== 'ring';
     const l = any(lined);
