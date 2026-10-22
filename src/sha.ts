@@ -9,7 +9,8 @@ for (let n = 2; PRIMES.length < 80; n++) if (PRIMES.every((p) => n % p)) PRIMES.
 
 /** The whole part of the k-th root of n (n a BigInt). */
 function iroot(n: bigint, k: 2n | 3n): bigint {
-  let x = BigInt(Math.floor(Math.pow(Number(n), 1 / Number(k)))) + 1n;
+  // start above the root (a power of two of about the right size) so Newton's steps only come down
+  let x = 1n << BigInt(Math.ceil(n.toString(2).length / Number(k)));
   for (;;) {
     const y = ((k - 1n) * x + n / x ** (k - 1n)) / k;
     if (y >= x) break;

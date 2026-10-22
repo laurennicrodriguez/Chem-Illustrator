@@ -175,3 +175,18 @@ describe('the bitmap for programs that cannot take EMF', () => {
     expect(row(1)).toEqual([0, 0, 255, 0, 255, 0, 255, 255, 255]);
   });
 });
+
+describe('pasting things that point at atoms', () => {
+  it('ties a pasted caption and a pinned arrow to the copy, not the original', () => {
+    const { doc, first } = sample();
+    doc.bulk(() => doc.addCaption({ x: 90, y: 160, runs: [{ text: 'C7' }], justify: 'left', attach: { atoms: [first[0]], side: 'below', gap: 4, shift: 0, role: 'caption' } }));
+    const sel = emptySel();
+    for (const id of first) sel.atoms.add(id);
+    for (const c of doc.captions.values()) sel.captions.add(c.id);
+    const part = extractDrawing(doc, sel);
+    const made = insertDrawing(doc, part, { x: 400, y: 400 });
+    const tied = [...made.captions].map((id) => doc.captions.get(id)!).find((c) => c.attach);
+    expect(tied).toBeTruthy();
+    expect(tied!.attach!.atoms.every((a) => made.atoms.has(a))).toBe(true);
+  });
+});

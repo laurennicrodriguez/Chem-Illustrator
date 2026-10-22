@@ -736,6 +736,9 @@ function indirectRef(argNodes: Node[], host: EvalHost): RefToken | CellError {
   return blockRef(sheet, Math.min(r1, r2), Math.min(c1, c2), Math.max(r1, r2), Math.max(c1, c2));
 }
 
+/** The functions that add up, average, rank or spread the numbers they are given. */
+const BY_REFERENCE = new Set(['SUM', 'PRODUCT', 'AVERAGE', 'MIN', 'MAX', 'MEDIAN', 'SKEW', 'KURT', 'MODE', 'STDEV', 'STDEVP', 'VAR', 'VARP', 'STDEV.S', 'STDEV.P', 'VAR.S', 'VAR.P']);
+
 function call(name: string, argNodes: Node[], host: EvalHost): Arg {
   // a LAMBDA named by LET
   const local = host.vars?.get(name);
@@ -756,7 +759,12 @@ function call(name: string, argNodes: Node[], host: EvalHost): Arg {
   if (argNodes.length < def.min || argNodes.length > def.max) {
     return ERR.value(def.min === def.max ? `${name} needs ${def.min} argument${def.min === 1 ? '' : 's'}` : `${name} needs ${def.min} to ${def.max} arguments`);
   }
-  const args = argNodes.map((a) => evalNode(a, host));
+  const args = argNodes.map((a) => {
+    const v = evalNode(a, host);
+    // text in a single cell that is named is left out of a sum, as in a range (only typed text is read as a number)
+    if (BY_REFERENCE.has(name) && a.t === 'ref' && a.v.kind === 'cell' && !isBlock(v) && !isError(v)) return { block: [[v]], h: 1, w: 1 } as Block;
+    return v;
+  });
   const k = Math.min(LIFTED[name] ?? 0, args.length);
   if (k && args.slice(0, k).some(isMulti)) {
     const rest = args.slice(k);

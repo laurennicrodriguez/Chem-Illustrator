@@ -187,3 +187,12 @@ describe('numbers too wide for their column', () => {
     expect(generalFitting(0.0456, upTo(4))).toBe('0.05');
   });
 });
+
+describe('opening text files that start like a zip', () => {
+  it('opens a CSV whose first column is PK', async () => {
+    const deps = { pictures: undefined as never, settled: async () => {} } as never;
+    const { readSheetFile } = await import('../src/io/sheet-files');
+    const { book } = await readSheetFile(new TextEncoder().encode('PK,Dose,Conc\n1,5,0.2\n'), 'pk.csv', deps);
+    expect(book.sheets[0].cell(0, 0)?.input).toBe('PK');
+  });
+});

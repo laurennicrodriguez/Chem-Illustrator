@@ -60,6 +60,8 @@ export class Keeper {
   private told = new Map<number, string>();
   private saving = false;
   private pointerDown = false;
+  /** When the last key, wheel turn or pointer press came: a big drawing takes a moment to save, so not in the middle of typing or panning. */
+  private lastInput = 0;
   private lastCopy = 0;
   private lastBeat = 0;
   private lastDisk = 0;
@@ -83,6 +85,7 @@ export class Keeper {
 
   /** Once settings are read: start the timer, offer any left-over copies, tidy old versions. */
   async start(): Promise<void> {
+    for (const type of ['keydown', 'wheel', 'pointerdown']) window.addEventListener(type, () => { this.lastInput = Date.now(); }, true);
     window.addEventListener('pointerdown', () => { this.pointerDown = true; }, true);
     window.addEventListener('pointerup', () => { this.pointerDown = false; }, true);
     window.addEventListener('pointercancel', () => { this.pointerDown = false; }, true);
@@ -114,7 +117,7 @@ export class Keeper {
 
   /** Something is being dragged, or a window is open: not the moment to save. */
   private busy(): boolean {
-    return this.pointerDown || !!document.querySelector('dialog[open]');
+    return this.pointerDown || Date.now() - this.lastInput < 400 || !!document.querySelector('dialog[open]');
   }
 
   private async tick(): Promise<void> {
