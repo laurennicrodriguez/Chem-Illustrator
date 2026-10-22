@@ -2,6 +2,8 @@
 // toolbar, the drawing area (with the slide list and notes in Slides mode, or the grid in Sheet
 // mode), and the panels on the right.
 
+import { fieldEnv } from './document/fields';
+import type { QuickPart } from './document/quick-parts';
 import { SLIDE_TABLE_STYLES, DEFAULT_SLIDE_TABLE_STYLE } from './deck/table-styles';
 import { commandIcon } from './ui/command-icons';
 import './app.css';
@@ -1870,6 +1872,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   showSheetParts();
   editor.paused = sheet || words;
   sheetMode.show(sheet ? tab : null);
+  if (words) fieldEnv.fileName = ws.mainOf(tab).name;
   docMode.show(words ? tab : null);
   renderer.screen = !!deck;
   renderer.page = deck ? slidePage : drawingPage;
@@ -3975,6 +3978,9 @@ function docActive(): boolean {
 }
 
 /** The style structures in the document showing are drawn in. */
+/** Insert > Quick Parts: saved pieces of text (kept with the settings). */
+let docQuickParts: QuickPart[] = [];
+
 const docStyle = (): DocStyle => ws.active.document?.t.drawingStyle ?? ACS_1996;
 
 const docMode = new DocumentMode({
@@ -3995,6 +4001,8 @@ const docMode = new DocumentMode({
   pickReferenceFile: () => pickReferenceFile(),
   preferredChanged: () => storeSettings(),
   reviewNameChanged: () => storeSettings(),
+  quickParts: () => docQuickParts,
+  setQuickParts: (list) => { docQuickParts = list; storeSettings(); },
   openDocuments: () => {
     const seen = new Set<unknown>();
     return ws.tabs.filter((t) => t.mode === 'document' && t.document && !seen.has(t.document) && seen.add(t.document)).map((t) => ({ name: ws.label(t), t: t.document!.t }));
@@ -5793,6 +5801,7 @@ function storeSettings(): void {
     scheme: { ...schemePrefs },
     keep: keepPrefs,
     highlightLooks: ownLooks,
+    quickParts: docQuickParts,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -5928,6 +5937,7 @@ void loadSettings().then((s) => {
   fileTypesOffered = s.fileTypesOffered;
   wordObjectsOffered = s.wordObjectsOffered;
   setReviewAuthor(s.reviewName);
+  docQuickParts = s.quickParts;
   skipVersion = s.skipVersion;
   recentFiles = s.recentFiles;
   recentSymbols = s.recentSymbols;

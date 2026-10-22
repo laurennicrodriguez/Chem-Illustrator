@@ -12,13 +12,14 @@
 // Footnotes and endnotes come in as notes
 // typed into here, and a table of figures (a TOC field for captions) as one worked out here.
 
-import type { AuthorityMark, CellBorders, Contents, IndexMark, Justify, ParaStyle, PictureFx, TabStop, TableCell, TableData, TextRun } from '../model';
+import type { AuthorityMark, CellBorders, Contents, IndexMark, Justify, ParaBorders, ParaStyle, PictureFx, TabStop, TableCell, TableData, TextRun } from '../model';
 import { parseIndex, parseTa, parseToa, parseXe } from '../document/index-toa';
 import { ALG_SIDS, type ProtectKind, type Protection } from '../document/protect';
 import { tidyFx } from '../render/picture-fx';
 import { readPictureFx } from './picture-xml';
 import { DEFAULT_MARGINS, builtInStyle, type TableStyleDef } from '../document/table-styles';
-import { keepDirectBorders, readBorders, readLook as readTableLook, readMargins, readTableStyle, sameStyle, styleIsRich } from './docx-table-styles';
+import { keepDirectBorders, readBorder, readBorders, readLook as readTableLook, readMargins, readTableStyle, sameStyle, styleIsRich } from './docx-table-styles';
+import { cleanBorders } from '../document/para-borders';
 import { ACS_1996, type DocStyle } from '../style';
 import * as rt from '../richtext';
 import { PackageReader, REL, kid, kids, rAttr, fromEmu } from './ooxml';
@@ -33,6 +34,7 @@ import {
   COL_GAP, FLOAT_GAP, columnsOf, lookExtent, usedObjects,
   type BreakKind, type CharStyle, type DocObject, type DocText, type Embedded, type PageBorder, type Watermark, type FigureLook, type Float, type HeaderFooter, type LineNumbers, type NamedStyle, type NoteFormat, type NoteFormats, type NumberPlace, type PageNumFormat, type PageSetup, type SectionBreak,
 } from '../document/document';
+import { parseFieldInstr, type DocProps } from '../document/fields';
 import { shownSize } from '../document/doc-layout';
 import { coveringCell, layoutTable } from '../table';
 import { cfbStreams, isCfb } from './cfb';
@@ -109,8 +111,10 @@ interface RProps { font?: string; size?: number; bold?: boolean; italic?: boolea
 /** Paragraph formatting as a file gives it, in points. */
 interface PProps {
   align?: Justify; before?: number; after?: number; line?: { v: number; rule: string };
-  left?: number; right?: number; first?: number; keepNext?: boolean; pageBreak?: boolean; outline?: number; noLineNumbers?: boolean;
+  left?: number; right?: number; first?: number; keepNext?: boolean; pageBreak?: boolean; outline?: number; noLineNumbers?: boolean; noHyphen?: boolean;
   numId?: string; ilvl?: number; contextual?: boolean;
+  /** Paragraph borders (w:pBdr) and shading (w:shd's fill). */
+  border?: ParaBorders; shade?: string | null;
   /** Tab stops set (and cleared: kind null) here, added to those of the style it is based on. */
   tabs?: { pos: number; kind: TabStop['kind'] | null; leader?: TabStop['leader'] }[];
 }
@@ -138,7 +142,7 @@ interface WStyle { id: string; type: string; name: string; basedOn?: string; nex
 interface Level { fmt: string; text: string; p: PProps }
 interface Piece { runs: TextRun[]; pageBreak: boolean; soft: boolean; colBreak?: boolean; /** Index entries and marked citations in it (XE and TA fields). */ xe?: IndexMark[]; ta?: AuthorityMark[] }
 interface Ctx { base: RProps; pieces: Piece[]; cell: boolean }
-interface Field { instr: string; phase: 'instr' | 'result'; swallow: boolean; /** The field's own data (w:fldData, base64): EndNote's citations. */ data?: string; text: string; props: RProps; done: boolean; ref?: { id: number; mark: string; text: string }; toc?: boolean; /** A form field's settings (w:ffData), and the form field made of it. */ ff?: Element; form?: number; /** A HYPERLINK field: the link open before it, put back at its end. */ before?: { link: string | undefined } }
+interface Field { instr: string; phase: 'instr' | 'result'; swallow: boolean; /** The field's own data (w:fldData, base64): EndNote's citations. */ data?: string; text: string; props: RProps; done: boolean; ref?: { id: number; mark: string; text: string; above?: boolean; page?: boolean }; toc?: boolean; /** A form field's settings (w:ffData), and the form field made of it. */ ff?: Element; form?: number; /** A HYPERLINK field: the link open before it, put back at its end. */ before?: { link: string | undefined } }
 interface OutPara { ps: ParaStyle; runs: TextRun[]; mark: rt.RunStyle; style: string; contextual: boolean; table?: boolean; bib?: string; markRev?: string }
 
 /** Open a Word file. Throws only when the file is not a Word file at all. */
@@ -181,8 +185,10 @@ class DocxReader {
   /** The paragraph being read holds a display equation (Word's equation paragraph): centred here. */
   private displayMath = false;
   private openMarks = new Map<string, string>();
+  /** Every bookmark's name (lower case), for fields that refer to them. */
+  private allMarks = new Set<string>();
   private markSeq = new Map<string, number>();
-  private refs: { id: number; mark: string; text: string }[] = [];
+  private refs: { id: number; mark: string; text: string; above?: boolean; page?: boolean }[] = [];
   /** The section the next paragraph starts (after a section break). */
   private breakNext: SectionBreak | null = null;
   /** The file's section properties in order (the last is the body's own, for the last section). */
@@ -242,7 +248,29 @@ class DocxReader {
     const out = this.assemble(hf, first);
     this.readPageLook(out, root, first);
     keepUsedMarks(out);
+    const props = this.readProps();
+    if (props) out.props = props;
     return { doc: out, warnings: [...this.warnings] };
+  }
+
+  /** The document's properties: title, subject, author and keywords (docProps/core.xml), and company (docProps/app.xml). */
+  private readProps(): DocProps | null {
+    const out: DocProps = {};
+    const text = (root: Element | null | undefined, name: string) => {
+      const el = root ? Array.from(root.getElementsByTagNameNS('*', name))[0] : undefined;
+      const v = el?.textContent?.trim();
+      return v || undefined;
+    };
+    const corePath = this.pkg.relOfType('', REL.coreProps);
+    const core = corePath ? this.pkg.xml(corePath)?.documentElement : null;
+    const appPath = this.pkg.relOfType('', REL.extendedProps);
+    const app = appPath ? this.pkg.xml(appPath)?.documentElement : null;
+    const got: [keyof DocProps, string | undefined][] = [
+      ['title', text(core, 'title')], ['subject', text(core, 'subject')], ['author', text(core, 'creator')],
+      ['keywords', text(core, 'keywords')], ['created', text(core, 'created')], ['saved', text(core, 'modified')], ['company', text(app, 'Company')],
+    ];
+    for (const [k, v] of got) if (v) out[k] = v;
+    return Object.keys(out).length ? out : null;
   }
 
   /** Word was set to track changes in this document (settings.xml's w:trackRevisions). */
@@ -251,6 +279,21 @@ class DocxReader {
     const st = path ? this.pkg.xml(path) : null;
     const el = st?.getElementsByTagNameNS('*', 'trackRevisions')[0];
     return !!el && this.on(el);
+  }
+
+  /** Word's hyphenation settings (settings.xml), or null when it has none. */
+  private hyphenRead(): DocText['hyphen'] | null {
+    const path = this.pkg.relOfType(this.main, DOCX_REL.settings);
+    const st = path ? this.pkg.xml(path) : null;
+    if (!st) return null;
+    const el = (n: string) => st.getElementsByTagNameNS('*', n)[0];
+    const val = (n: string) => { const v = Number(el(n)?.getAttributeNS(this.W, 'val') ?? el(n)?.getAttribute('w:val') ?? undefined); return Number.isFinite(v) ? v : undefined; };
+    const auto = !!el('autoHyphenation') && this.on(el('autoHyphenation'));
+    const limit = val('consecutiveHyphenLimit');
+    const zone = val('hyphenationZone');
+    const caps = el('doNotHyphenateCaps') ? !this.on(el('doNotHyphenateCaps')) : undefined;
+    if (!auto && !limit && zone === undefined && caps === undefined) return null;
+    return { auto, ...(limit ? { limit } : {}), ...(zone !== undefined ? { zone: zone / 20 } : {}), ...(caps === false ? { caps } : {}) };
   }
 
   /** Restrict Editing (settings.xml's w:documentProtection, when enforced), with the password's hash as Word keeps it. */
@@ -382,8 +425,25 @@ class DocxReader {
         case 'keepNext': out.keepNext = this.on(c); break;
         case 'pageBreakBefore': out.pageBreak = this.on(c); break;
         case 'suppressLineNumbers': out.noLineNumbers = this.on(c); break;
+        case 'suppressAutoHyphens': out.noHyphen = this.on(c); break;
         case 'outlineLvl': { const v = Number(this.a(c)); if (v >= 0 && v < 9) out.outline = v + 1; break; }
         case 'contextualSpacing': out.contextual = this.on(c); break;
+        case 'pBdr': {
+          const b: ParaBorders = {};
+          for (const side of kids(c)) {
+            const name = side.localName === 'start' ? 'left' : side.localName === 'end' ? 'right' : side.localName;
+            if (!['top', 'bottom', 'left', 'right', 'between'].includes(name)) continue;
+            const line = readBorder(side, (e, n) => this.a(e, n));
+            if (line) b[name as keyof ParaBorders] = line;
+          }
+          out.border = b;
+          break;
+        }
+        case 'shd': {
+          const fill = this.a(c, 'fill');
+          out.shade = fill && /^[0-9a-f]{6}$/i.test(fill) ? `#${fill.toLowerCase()}` : null;
+          break;
+        }
         case 'tabs': {
           const tabs: NonNullable<PProps['tabs']> = [];
           for (const t of kids(c, 'tab')) {
@@ -855,8 +915,9 @@ class DocxReader {
       // spacing in points stays in points for the paragraph (its style takes the nearest multiple)
       ...(p.line && p.line.rule !== 'auto' ? { linePt: round(p.line.v / 20), lineRule: p.line.rule === 'exact' ? 'exact' as const : 'atLeast' as const } : { line: this.lineOf(p, size) }),
       indent: round(indent), indentRight: p.right ? round(Math.max(0, p.right)) : undefined, firstLine: list ? undefined : round(p.first ?? 0), keepNext: p.keepNext,
-      pageBreak: p.pageBreak, section: brk, list, level: list ? ilvl : undefined, noLineNumbers: p.noLineNumbers,
+      pageBreak: p.pageBreak, section: brk, list, level: list ? ilvl : undefined, noLineNumbers: p.noLineNumbers, noHyphen: p.noHyphen || undefined,
       tabs: finalTabs(p), scheme, bullet,
+      border: cleanBorders(p.border), shade: p.shade && p.shade !== '#ffffff' ? p.shade : undefined,
     };
     const markStyle = this.runStyle({ ...mark, cstyle: undefined });
     const mrEl = kid(kid(pPr, 'rPr'), 'ins') ?? kid(kid(pPr, 'rPr'), 'del');
@@ -1248,13 +1309,19 @@ class DocxReader {
       if (id !== null) { f.swallow = true; if (type === 'text') f.form = id; }
       return;
     }
-    const ref = /^REF\s+(\S+)/i.exec(ins);
+    const ref = /^(PAGE)?REF\s+(\S+)/i.exec(ins);
     if (ref && !ctx.cell) {
       const id = this.emitObject(ctx, { kind: 'ref', target: -1 }, f.props);
       if (id === null) return;
-      f.ref = { id, mark: ref[1], text: '' };
+      f.ref = { id, mark: ref[2], text: '', ...(ref[1] ? { page: true } : /\\p\b/i.test(ins) && !/\\[nrw]\b/i.test(ins) ? { above: true } : {}) };
       this.refs.push(f.ref);
       f.swallow = true;
+      return;
+    }
+    // the date, a document property, the file's name, a page number, a bookmark's page: fields of ours
+    const fo = /^(PAGE)?REF\b/i.test(ins) ? null : parseFieldInstr(ins);
+    if (fo && !ctx.cell) {
+      if (this.emitObject(ctx, fo, f.props) !== null) f.swallow = true;
       return;
     }
     // a citation from Zotero, Mendeley or EndNote: its items become the document's references
@@ -1350,6 +1417,7 @@ class DocxReader {
   private markStart(el: Element): void {
     const name = this.a(el, 'name');
     if (name && name !== '_GoBack') this.openMarks.set(this.a(el, 'id') ?? name, name);
+    if (name) this.allMarks.add(name.toLowerCase());
     // a bookmark links can go to: kept on its paragraph (hidden ones only if a link uses them: see keepUsedMarks)
     if (name && name !== '_GoBack' && !name.startsWith(BIB_MARK) && !this.pendingMarks.includes(name)) this.pendingMarks.push(name);
     if (name?.startsWith(BIB_MARK)) this.bibOpen = this.bibMet = name;
@@ -1390,9 +1458,17 @@ class DocxReader {
   /** References point to the caption number inside their bookmark; one pointing elsewhere keeps the text Word showed. */
   private resolveRefs(): void {
     const plain = new Map<number, string>();
+    // the text of the paragraph each bookmark is on (a REF field here shows a whole paragraph's)
+    const markText = new Map<string, string>();
+    for (const p of this.out) for (const m of p.ps.marks ?? []) if (!markText.has(m.toLowerCase())) markText.set(m.toLowerCase(), p.runs.filter((r) => r.obj === undefined).map((r) => r.text).join('').trim());
     for (const ref of this.refs) {
       const target = this.markSeq.get(ref.mark);
-      if (target !== undefined) this.objects[ref.id] = { kind: 'ref', target };
+      const marked = this.allMarks.has(ref.mark.toLowerCase());
+      if (target !== undefined && !ref.above && !ref.page) this.objects[ref.id] = { kind: 'ref', target };
+      // a bookmark's page, or "above" or "below" it: a field showing it
+      else if (marked && (ref.page || ref.above)) this.objects[ref.id] = { kind: 'field', code: ref.page ? 'pageref' : 'abovebelow', target: ref.mark };
+      // a bookmark's text, when it is its whole paragraph (else Word's text, as a bookmark here is a paragraph)
+      else if (marked && markText.get(ref.mark.toLowerCase()) === ref.text.trim() && ref.text.trim()) this.objects[ref.id] = { kind: 'field', code: 'ref', target: ref.mark };
       else { plain.set(ref.id, ref.text); delete this.objects[ref.id]; }
     }
     if (!plain.size) return;
@@ -2157,6 +2233,7 @@ class DocxReader {
       objects,
       drawingStyle: this.drawingStyle,
       ...(this.trackOn() ? { track: true } : {}),
+      ...(this.hyphenRead() ? { hyphen: this.hyphenRead()! } : {}),
       ...(this.protection() ? { protect: this.protection()! } : {}),
       ...(this.charStylesRead() ? { charStyles: this.charStylesRead() } : {}),
       ...(this.numFormatOf(sect) !== 'decimal' ? { numFormat: this.numFormatOf(sect) } : {}),
@@ -2227,6 +2304,7 @@ function keepUsedMarks(t: DocText): void {
   const note = (runs: TextRun[]) => { for (const r of runs) if (r.link?.startsWith('#')) used.add(r.link.slice(1).toLowerCase()); };
   note(t.runs);
   for (const o of Object.values(t.objects)) {
+    if (o.kind === 'field' && o.target) used.add(o.target.toLowerCase());
     if (o.kind === 'note' || o.kind === 'textbox') note(o.runs);
     if (o.kind === 'table') for (const row of o.table.rows) for (const c of row) note(c.runs);
   }

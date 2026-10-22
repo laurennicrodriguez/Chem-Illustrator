@@ -319,6 +319,8 @@ export interface ParaStyle {
   section?: SectionBreak;
   /** Documents: this paragraph's lines get no line numbers (Word's Suppress Line Numbers). */
   noLineNumbers?: boolean;
+  /** Don't hyphenate this paragraph (Word's Don't hyphenate, under Line and Page Breaks). */
+  noHyphen?: boolean;
   /** Documents: bookmarks at this paragraph (Insert > Bookmark), by name, for links to point at. */
   marks?: string[];
   /** Documents: tab stops, in points from the left margin, in order (Word's default every half inch past the last). */
@@ -327,6 +329,13 @@ export interface ParaStyle {
   scheme?: string;
   /** Documents: a bulleted list item's own bullet (from the bullet library), in place of its level's. */
   bullet?: string;
+  /**
+   * Documents: lines round the paragraph (Home > Borders), as Word's paragraph borders. Paragraphs
+   * one after another with the same borders share one box, with `between` drawn between them.
+   */
+  border?: ParaBorders;
+  /** Documents: the paragraph's background colour (Home > Shading), behind its text and up to its borders. */
+  shade?: string;
   /** Documents: index entries marked in this paragraph (References > Mark Entry; Word's XE fields). */
   xe?: IndexMark[];
   /** Documents: citations marked here for a table of authorities (References > Mark Citation; Word's TA fields). */
@@ -356,6 +365,9 @@ export interface AuthorityMark {
   long?: string;
   cat?: number;
 }
+
+/** A paragraph's borders: any of its four sides, and a line between paragraphs that share a box. */
+export type ParaBorders = Partial<Record<'top' | 'bottom' | 'left' | 'right' | 'between', BorderLine>>;
 
 /** A tab stop: where text after a tab lines up, and how (Word's left, centre, right and decimal tabs), with dots or a line leading to it. */
 export interface TabStop {
