@@ -2588,15 +2588,47 @@ export class Editor {
     return true;
   }
 
-  /** Mirror the selection left-to-right ('h') or top-to-bottom ('v'). This turns stereocentres over, as in ChemDraw. */
-  flip(axis: 'h' | 'v'): boolean {
+  /**
+   * Mirror the selection left-to-right ('h') or top-to-bottom ('v'). A plain flip turns
+   * stereocentres over (the mirror image, as in ChemDraw); with `keep`, wedges and hashes swap
+   * too, so each centre keeps its configuration (the same molecule, turned over).
+   * Returns false with nothing selected, 'stereo' when a plain flip changed wedged bonds.
+   */
+  flip(axis: 'h' | 'v', keep = false): boolean | 'stereo' {
     const b = this.selBox();
     if (!b || !this.hasSelection()) return false;
-    const snap = snapshot(this.doc, this.sel, this.measure());
+    const doc = this.doc;
+    const snap = snapshot(doc, this.sel, this.measure());
     const f = axis === 'h' ? mirrorX((b.x1 + b.x2) / 2) : mirrorY((b.y1 + b.y2) / 2);
-    this.doc.edit(axis === 'h' ? 'Flip horizontal' : 'Flip vertical', () => transform(this.doc, snap, f, true));
+    const swap: Partial<Record<BondDisplay, BondDisplay>> = { wedge: 'hashWedge', hashWedge: 'wedge', bold: 'hash', hash: 'bold' };
+    // the bonds flipped: those selected, and those between selected atoms
+    const wedged = [...doc.bonds.values()].filter((x) => swap[x.display] && (this.sel.bonds.has(x.id) || (this.sel.atoms.has(x.a1) && this.sel.atoms.has(x.a2))));
+    const name = `Flip ${axis === 'h' ? 'horizontal' : 'vertical'}${keep ? ', keeping configuration' : ''}`;
+    doc.edit(name, () => {
+      transform(doc, snap, f, true);
+      if (keep) for (const x of wedged) doc.updateBond(x.id, { display: swap[x.display]! });
+    });
     this.changed();
-    return true;
+    return !keep && wedged.length ? 'stereo' : true;
+  }
+
+  /**
+   * Move whole structures by point maps (Orient Like): each is turned, and turned over when
+   * `mirror` is set, with its wedges and hashes swapped so its configuration is kept. One undo.
+   */
+  reorient(moves: { atoms: Iterable<number>; f: (p: Vec) => Vec; mirror: boolean }[], name = 'Orient Like'): void {
+    const doc = this.doc;
+    const swap: Partial<Record<BondDisplay, BondDisplay>> = { wedge: 'hashWedge', hashWedge: 'wedge', bold: 'hash', hash: 'bold' };
+    doc.edit(name, () => {
+      for (const m of moves) {
+        const atoms = new Set(m.atoms);
+        const bonds = new Set([...doc.bonds.values()].filter((b) => atoms.has(b.a1) && atoms.has(b.a2)).map((b) => b.id));
+        const snap = snapshot(doc, { atoms, bonds, captions: new Set(), arrows: new Set(), shapes: new Set() }, this.measure());
+        transform(doc, snap, m.f, m.mirror);
+        if (m.mirror) for (const id of bonds) { const b = doc.bonds.get(id)!; const to = swap[b.display]; if (to) doc.updateBond(id, { display: to }); }
+      }
+    });
+    this.changed();
   }
 
   /** Turn the selection about its centre; positive is clockwise. */

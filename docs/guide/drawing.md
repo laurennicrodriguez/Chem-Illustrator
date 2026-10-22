@@ -170,7 +170,8 @@ The **Format** menu has:
 
 - **Align Left Edges**, **Align Centres Across**, **Align Right Edges**, **Align Top Edges**, **Align Middles Down**, **Align Bottom Edges**;
 - **Space Evenly Across** and **Space Evenly Down** (three or more things);
-- **Flip Left to Right** (Ctrl+Shift+H), **Flip Top to Bottom** (Ctrl+Shift+V);
+- **Flip Left to Right** (Ctrl+Shift+H), **Flip Top to Bottom** (Ctrl+Shift+V). A flip makes the mirror image: wedged stereocentres turn over (S becomes R). When that happens a note says so, with an **Undo** button;
+- **Flip Left to Right, Keeping Configuration** and **Flip Top to Bottom, Keeping Configuration**: the structure is turned over and its wedges and hashes swap, so every stereocentre keeps its R or S;
 - **Rotate 90° Clockwise**, **Rotate 90° Anticlockwise**, **Rotate 180°** and **Rotate…** (Ctrl+R, any angle);
 - **Scale…** (Ctrl+K): by a percentage, or to a bond length in points;
 - **Join** (Ctrl+J): joins two selected atoms, or two selected bonds, into one;
@@ -199,7 +200,7 @@ To start a reaction quickly, select a structure and press Ctrl+→ (or Ctrl+←,
 - **Contract Label…**: turns a selected group into one label (such as PMP) that keeps its chemistry. ChemDraw opens it as a contracted label.
 - **Expand Label**: the other way round: the selected labels drawn out as atoms and bonds (ligands on a metal from their templates). See [Metal complexes](#metal-complexes).
 - **Define Nickname…**: select a group that hangs off a structure by one bond and give it a name. Typing that name as a label anywhere then counts as the full group for formula and mass. **Delete Nickname…** removes one.
-- **Name to Structure…** (Ctrl+Shift+N): type a systematic, CAS-style or common name and the structure is drawn. Select a caption holding a name first to turn the caption into the structure. Names are read on your computer, so this works offline; names it can't read (DMAP, DIPEA) can be looked up on PubChem if you allow it in **Edit ▸ Preferences**.
+- **Name to Structure…** (Ctrl+Shift+N): type a systematic, CAS-style or common name and the structure is drawn. Select a caption holding a name first to turn the caption into the structure. Names are read on your computer, so this works offline; names it can't read (DMAP, DIPEA) can be looked up on PubChem if you allow it in **Edit ▸ Preferences**. When a name can't be read, the window says so, underlines the part the name reader stopped at, and keeps the reader's own explanation under **Details**.
 
 ### Frames, highlights and fills
 
@@ -246,6 +247,8 @@ R/S and E/Z are worked out for every structure as you draw.
 ## Reactions and schemes
 
 - **Clean Up Reaction** (Ctrl+Shift+R): lines up the structures on the arrow, centres the reagents over and under it, and spaces everything evenly.
+- **Clean Up Reaction, Orienting Like the Start** does the same, first turning each structure so the part it shares with the starting material lies the same way round (see Orient Like First).
+- **Orient Like First**: select two or more structures. Each is turned so the part it shares with the first one (top left, as a scheme is read) lies the same way round. The shared part is the largest common substructure, with whole rings only. A structure that has to be turned over to match has its wedges and hashes swapped, so its configuration is kept. Structures that share less than a third of their atoms with the first are left alone.
 - **Arrange Scheme…**: lays out a multi-step scheme. Click the layouts to try each one: **Line**, **Rows**, **Snake**, **Down the page**, **Catalytic cycle** (select a caption such as the catalyst's name too, and it goes in the middle) and **Branching**. **Done** keeps it; **Cancel** puts it back.
 - **Number Compounds…**: puts numbers under the structures in scheme order. Choose 1, 2, 3; 1a, 1b; a, b; A, B; i, ii or I, II; where to start; text before and after (S for S1, S2); bold; whether copies of one structure share a number (**Same structure, same ID**); whether to renumber or keep existing numbers; whether reagents over arrows get numbers; and whether the numbers in each row of a scheme line up on one line (on unless you turn it off). Each number is an ordinary caption you can retype. If two different structures end up with the same number, the Warnings panel says so.
 - **Catalytic Cycle…**: draws a catalytic cycle. Start from a ready-made one (Suzuki, Heck, Buchwald–Hartwig, Wilkinson hydrogenation, olefin metathesis, Monsanto, or two loops: Sonogashira's Pd and Cu cycles, Wacker's Pd and Cu cycles, Ni/Ir metallaphotoredox, neutral and cationic Heck sharing Pd(0), Pd(0)/Pd(II) beside Pd(II)/Pd(IV) C–H activation) or a blank one, and change the table: each species, the step to the next (oxidative addition, transmetalation…), what comes in and what goes out, and what sits in the middle. Two loops can turn together where two steps meet, share one species (drawn once, between them) or sit side by side. Choose clockwise or anticlockwise, short step names (OA, TM, RE), names in full or none, and whether reagents go on small curved arrows or are written outside the loop. Type `_` for a subscript and `^` for a superscript (L_nPd^0, Pd^{II}); formula digits drop by themselves. Select structures first and they become the first loop's species. Everything drawn is ordinary text and arrows, so you can retype it, swap text for a drawn structure, then tidy it again with **Chemistry ▸ Reactions and Schemes ▸ Arrange Scheme…** (Catalytic cycle). The step names are remembered as sitting inside the loop, in CDXML too.
@@ -329,6 +332,10 @@ Buttons put text under the structure:
 - **Anal. text**: an ACS-style elemental analysis line.
 
 Everything they insert is ordinary text you can change.
+
+A structure with R groups (R1, R2, X, Ar, also inside labels such as OR1) shows only its core: the formula is written C7H5O·R (core only), with no masses, since R could be anything. **R-Group Table…** works out each compound.
+
+With nothing selected, the panel shows the structure you last drew on. Clearing the selection (clicking empty space, or Undo back to nothing selected) clears the panel until you draw again.
 
 **Look up on PubChem** (needs the internet) sends the structure to PubChem, the free NIH database, and shows its common and IUPAC names, CAS number(s), its CID (click it to open the PubChem page), GHS hazards (signal word, pictograms and H statements) and measured physical data. **Name caption**, **CAS caption** and **Hazards caption** put that information under the structure. A structure is only sent when you click the button; nothing is looked up on its own.
 

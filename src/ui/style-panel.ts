@@ -156,11 +156,19 @@ export class StylePanel {
     // one atom or one bond on its own (as after / or ? over it)
     const atom = s.atoms.size === 1 && !s.bonds.size ? this.doc.atoms.get([...s.atoms][0]) : undefined;
     const bond = s.bonds.size === 1 && s.atoms.size <= 2 ? this.doc.bonds.get([...s.bonds][0]) : undefined;
-    this.section.hidden = !arrows.length && !shapes.length && !rings.length && !pictures.length && !tables.length && !caps.length && !centres.length && !dbls.length && !atom && !bond;
     const selAtoms = [...s.atoms].map((id) => this.doc.atoms.get(id)).filter((a): a is Atom => !!a);
     const selBonds = [...s.bonds].map((id) => this.doc.bonds.get(id)).filter((b): b is Bond => !!b);
     const several = !atom && !bond && selAtoms.length + selBonds.length > 1;
-    if (several) this.section.hidden = false;
+    // the section stays in its place with nothing selected, so Warnings and Analysis don't jump
+    const empty = !arrows.length && !shapes.length && !rings.length && !pictures.length && !tables.length && !caps.length && !centres.length && !dbls.length && !atom && !bond && !several;
+    this.section.hidden = false;
+    this.section.classList.toggle('empty', empty);
+    if (empty) {
+      const p = document.createElement('p');
+      p.className = 'muted';
+      p.textContent = 'Select something to change how it looks.';
+      this.body.append(p);
+    }
     if (atom) this.atomControls(atom);
     if (bond) this.bondControls(bond);
     if (several) this.structureControls(selAtoms, selBonds);
@@ -178,7 +186,7 @@ export class StylePanel {
     const boxes = shapes.filter((x) => x.kind === 'rect' || x.kind === 'oval' || x.kind === 'geo');
     if (diagram) { /* the diagram keeps its own frame fitted */ }
     else if (boxes.length === 1 && all.length === 1 && !caps.length && !arrows.length && !s.atoms.size) this.frameControls(boxes[0]);
-    else if (!this.section.hidden && this.frames) {
+    else if (!empty && this.frames) {
       const row = document.createElement('div');
       row.className = 'style-buttons';
       const b = document.createElement('button');
