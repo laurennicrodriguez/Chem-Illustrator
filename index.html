@@ -61,6 +61,10 @@
     <button role="menuitem" data-cmd="select-all">Select All</button>
     <button hidden role="menuitem" data-cmd="clipboard-formats">Show Clipboard Formats</button>
     <button data-modes="slides" role="menuitem" data-cmd="delete-slide">Delete Slide</button>
+    <button data-modes="slides" role="menuitem" data-cmd="cut-slides" title="Cut the slides picked in the slide list, to paste into this deck or another">Cut Slides</button>
+    <button data-modes="slides" role="menuitem" data-cmd="copy-slides" title="Copy the slides picked in the slide list, to paste into this deck or another (Ctrl+C in the slide list)">Copy Slides</button>
+    <button data-modes="slides" role="menuitem" data-cmd="paste-slides" title="Paste the slides copied, after the slide picked, in this deck's look (Ctrl+V in the slide list)">Paste Slides</button>
+    <button data-modes="slides" role="menuitem" data-cmd="paste-slides-keep" title="Paste the slides copied, each keeping its own background, fonts and colours">Paste Slides (Keep Source Formatting)</button>
     <button data-modes="sheet" role="menuitem" data-cmd="delete-cells">Delete Rows or Columns</button>
     <div class="submenu" data-modes="sheet">
     <button role="menuitem" class="has-sub" aria-haspopup="menu" aria-expanded="false">Fill</button>
@@ -174,6 +178,7 @@
     <hr />
     <button data-modes="slides" role="menuitem" data-cmd="new-slide">New Slide</button>
     <button data-modes="slides" role="menuitem" data-cmd="duplicate-slide">Duplicate Slide</button>
+    <button data-modes="slides" role="menuitem" data-cmd="reuse-slides" title="Slides from another PowerPoint file: see them all, pick the ones you want">Reuse Slides…</button>
     <button data-modes="slides" role="menuitem" data-cmd="new-comment">New Comment</button>
     <button data-modes="sheet" role="menuitem" data-cmd="property-column">Insert Property Columns…</button>
     <button data-modes="sheet" role="menuitem" data-cmd="isotope-pattern">Isotope Pattern…</button>
@@ -188,7 +193,7 @@
     <button data-modes="document" role="menuitem" data-cmd="compound-number" title="A bold compound number that renumbers itself">Compound Number…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-citation" title="Cite references: superscript numbers in order of first citation">Citation…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-bibliography" title="The references cited, numbered, in the journal style">Bibliography</button>
-    <button data-modes="document" role="menuitem" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha), shown as maths; a Word equation in .docx files">Equation…</button>
+    <button data-modes="slides design document" role="menuitem" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha), shown as maths; a Word or PowerPoint equation in .docx and .pptx files">Equation…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-toc" title="The headings (Heading 1, 2, 3) with their page numbers; it updates by itself">Table of Contents…</button>
     <button data-modes="document" role="menuitem" data-cmd="page-break">Page Break</button>
     </div>
@@ -254,6 +259,7 @@
     <button data-modes="slides" role="menuitem" data-cmd="slide-templates">Slide Templates…</button>
     <button data-modes="slides" role="menuitem" data-cmd="slide-master">Slide Master…</button>
     <button data-modes="slides" role="menuitem" data-cmd="format-background" title="This slide's background (or every slide's): a colour, gradient, picture or pattern">Format Background…</button>
+    <button data-modes="slides" role="menuitemcheckbox" aria-checked="false" data-cmd="hide-slide" title="The slide show skips the slides picked; they stay in the deck and in the PowerPoint file. Again to show them"><span>Hide Slide</span></button>
     <button data-modes="slides" role="menuitem" data-cmd="slide-transitions">Transitions…</button>
     <button data-modes="slides" role="menuitem" data-cmd="slide-animations">Animations…</button>
     <button data-modes="sheet" role="menuitem" data-cmd="new-rule">New Conditional Formatting Rule…</button>
@@ -1147,6 +1153,10 @@
               <button data-cmd="duplicate-slide" title="Copy the picked slides">Duplicate</button>
               <button data-cmd="delete-slide" title="Delete the picked slides">Delete</button>
             </div>
+            <div class="rb-pair">
+              <button data-cmd="reuse-slides" title="Slides from another PowerPoint file: see them all, pick the ones you want">Reuse…</button>
+              <button data-cmd="hide-slide" aria-pressed="false" title="The slide show skips the slides picked; they stay in the deck and in the PowerPoint file. Again to show them">Hide</button>
+            </div>
           </div>
         </div>
         <div class="rb-label">Slides</div>
@@ -1219,6 +1229,7 @@
           <button class="rb-big" data-cmd="slide-shapes" aria-haspopup="true" title="Basic shapes, block arrows, flowchart shapes, callouts and lab glassware: pick one, then click or drag on the slide"><span class="rb-icon">◇</span>Shapes ▾</button>
           <button class="rb-big" data-cmd="slide-icons" aria-haspopup="true" title="About 7,000 icons, lab and science ones first (glassware, molecules, hazard signs): pick one, then click or drag on the slide"><span class="rb-icon">⚗</span>Icons ▾</button>
           <button class="rb-big" data-cmd="insert-diagram" title="Lists, processes, cycles, hierarchies, Venn diagrams, matrices and pyramids drawn from lines of text, like PowerPoint's SmartArt. Double-click one to type into it"><span class="rb-icon">⧉</span>Diagram</button>
+          <button class="rb-big" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha) and shown as maths, or one of the usual ones (Arrhenius, Eyring…). Double-click it to change it. Saved as a PowerPoint equation (Alt+=)"><span class="rb-icon">π</span>Equation</button>
           <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
         </div>
         <div class="rb-label">Pictures, Text and Shapes</div>
@@ -1256,6 +1267,12 @@
           <button class="rb-big" data-cmd="presenter-view" title="Slides full screen on the projector; your notes, the next slide and a timer on your own screen"><span class="rb-icon">▣</span>Presenter View</button>
         </div>
         <div class="rb-label">Present</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="hide-slide" aria-pressed="false" title="The slide show skips the slides picked; they stay in the deck and in the PowerPoint file. Again to show them"><span class="rb-icon">⊘</span>Hide Slide</button>
+        </div>
+        <div class="rb-label">Set Up</div>
       </div>
     </div>
     <div class="rb-panel" data-sl-panel="review" hidden>

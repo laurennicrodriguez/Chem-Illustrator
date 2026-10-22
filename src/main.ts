@@ -9,7 +9,7 @@ import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
 import { Toolboxes, lockIcon, sideFolded, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
-import { Doc, Atom, Caption, Shape, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle, PAPER, keepOnPage } from './model';
+import { Doc, Atom, Caption, Shape, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle, type ShapeMath, PAPER, keepOnPage } from './model';
 import { Renderer, measureText, forgetTextWidths } from './render/renderer';
 import { Editor, TOOLS, type HighlightToggle, type Selection } from './editor/editor';
 import { BUILT_IN_LOOKS, type HighlightLookPreset } from './ui/highlight-looks';
@@ -39,11 +39,15 @@ import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, r
 import { cdxToCdxml } from './io/cdx';
 import { writeCdxml } from './io/cdxml-write';
 import { WORKSPACE } from './io/workspace-file';
-import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PICTURE_EXTENSIONS, type FileType } from './io/files';
+import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, PICTURE_EXTENSIONS, type FileType } from './io/files';
+import { readPptx } from './io/pptx-read';
+import { pickReuseSlides } from './ui/reuse-slides';
 import { writeTiff } from './render/tiff';
 import { itemsToEps } from './render/eps';
 import { Workspace, Tab } from './workspace';
-import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize, slideBackground } from './deck/deck';
+import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize, slideBackground, slideColours, type SlideSource } from './deck/deck';
+import { shapeMathPicture, shapeMathScale, shapeMathSize } from './deck/equation';
+import { askEquation } from './ui/equation-dialog';
 import { solid } from './deck/background';
 import { formatBackground } from './ui/background-dialog';
 import { drawSlidePage, recordSlide, paintSlide, drawDrawing, SURROUND } from './deck/slide-view';
@@ -712,6 +716,46 @@ async function editChartShape(id: number): Promise<void> {
   editor.changed();
 }
 editor.onChart = (id) => void editChartShape(id);
+
+/**
+ * Insert > Equation on a slide or design: typed as LaTeX in the equation window, in the
+ * master's body text (its font, colour and size), in the middle of the slide.
+ */
+async function insertEquation(): Promise<void> {
+  const deck = deckNow();
+  if (!deck) { flash('Equations go on slides, designs and documents.'); return; }
+  finishTyping();
+  const m = deck.master;
+  const font = m.bodyFont;
+  const got = await askEquation({ tex: '', font, ok: 'Insert', app: 'PowerPoint' });
+  if (!got || deckNow() !== deck) return;
+  const math: ShapeMath = { tex: got.tex, size: m.bodySize, color: slideColours(m, deck.current?.layout ?? 'blank').textColor, font };
+  const { w, h } = shapeMathSize(math, measureText);
+  const c = pasteCentre();
+  let made: Shape | null = null;
+  doc.edit('Insert equation', () => {
+    made = doc.addShape({ kind: 'picture', x1: c.x - w / 2, y1: c.y - h / 2, x2: c.x + w / 2, y2: c.y + h / 2, src: shapeMathPicture(math, measureText), px: { w: Math.round(w), h: Math.round(h) }, math });
+  });
+  editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set([made!.id]) };
+  editor.changed();
+}
+
+/** Double-clicking an equation: change it in the equation window. Its box keeps its top left corner and how much it was enlarged. */
+async function editEquationShape(id: number): Promise<void> {
+  finishTyping();
+  const s = doc.shapes.get(id);
+  if (!s?.math) return;
+  const k = shapeMathScale(s.math, s.x2 - s.x1, s.y2 - s.y1, measureText);
+  const got = await askEquation({ tex: s.math.tex, font: s.math.font ?? 'Arial', ok: 'Apply', app: 'PowerPoint' });
+  const now = doc.shapes.get(id);
+  if (!got || !now?.math || got.tex === now.math.tex) return;
+  const math = { ...now.math, tex: got.tex };
+  const { w, h } = shapeMathSize(math, measureText);
+  const x = Math.min(now.x1, now.x2), y = Math.min(now.y1, now.y2);
+  doc.edit('Change equation', () => doc.updateShape(id, { math, src: shapeMathPicture(math, measureText), px: { w: Math.round(w), h: Math.round(h) }, x1: x, y1: y, x2: x + w * k, y2: y + h * k }));
+  editor.changed();
+}
+editor.onEquation = (id) => void editEquationShape(id);
 
 /** Select just these (new) atoms and their bonds. */
 function selectNewAtoms(ids: number[]): void {
@@ -1555,7 +1599,7 @@ const slidePage = {
 let listKey = '';
 let masterSeen: unknown = null;
 let indexSeen = -1;
-const slideListKey = (d: Deck) => `${d.slides.map((s) => s.id + (s.notes.trim() ? 'n' : '')).join(',')}|${d.size.w}x${d.size.h}|${d.looks}`;
+const slideListKey = (d: Deck) => `${d.slides.map((s) => s.id + (s.notes.trim() ? 'n' : '') + (s.hidden ? 'h' : '')).join(',')}|${d.size.w}x${d.size.h}|${d.looks}`;
 
 function deckChanged(deck: Deck): void {
   const key = slideListKey(deck);
@@ -1600,6 +1644,8 @@ function showSlideState(): void {
   for (const l of LAYOUTS) $(`[data-cmd="layout-${l.id}"]`)?.setAttribute('aria-checked', String(l.id === deck.current.layout));
   $('[data-cmd="size-wide"]')?.setAttribute('aria-checked', String(named === 'wide'));
   $('[data-cmd="size-standard"]')?.setAttribute('aria-checked', String(named === 'standard'));
+  const hidden = String(!!deck.current.hidden);
+  for (const b of document.querySelectorAll('[data-cmd="hide-slide"]')) b.setAttribute(b.getAttribute('role') === 'menuitemcheckbox' ? 'aria-checked' : 'aria-pressed', hidden);
 }
 
 // ---------------------------------------------------------------- transitions and animations (Slides mode)
@@ -1725,7 +1771,113 @@ const slideList = new SlideList($('#slide-list'), {
   remove: (ix) => removeSlides(ix),
   duplicate: (ix) => { const d = deckNow(); if (d) { finishTyping(); d.duplicate(ix); } },
   add: () => newSlide(),
+  copy: (ix) => copySlides(ix, false),
+  cut: (ix) => copySlides(ix, true),
+  paste: () => pasteSlides(),
+  menu: (x, y) => showContextMenu(x, y, slideListMenu(), { run: (cmd) => void command(cmd), key: commandKey }),
 });
+
+/** Right-click in the slide list: what PowerPoint offers there. */
+function slideListMenu(): MenuItem[] {
+  return [
+    { cmd: 'cut-slides', label: 'Cut' }, { cmd: 'copy-slides', label: 'Copy' }, { cmd: 'paste-slides', label: 'Paste' },
+    { cmd: 'paste-slides-keep', label: 'Paste (Keep Source Formatting)' },
+    null,
+    { cmd: 'new-slide' }, { cmd: 'duplicate-slide' }, { cmd: 'delete-slide' },
+    null,
+    { label: 'Layout', items: LAYOUTS.map((l) => ({ cmd: `layout-${l.id}` })) },
+    { cmd: 'format-background' },
+    { cmd: 'hide-slide' },
+    null,
+    { cmd: 'reuse-slides' },
+  ];
+}
+
+/**
+ * Slides copied or cut (in the slide list, or Edit > Copy Slides), with the deck they came from,
+ * for pasting into any deck that is open.
+ */
+let slideClip: SlideSource | null = null;
+
+function copySlides(ix: number[], cut: boolean): void {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  slideClip = d.copySlides(ix);
+  const n = slideClip.slides.length;
+  const what = `${n} slide${n === 1 ? '' : 's'}`;
+  if (cut && !d.remove(ix)) { flash(`Copied ${what}: a presentation needs at least one slide, so nothing was cut.`); return; }
+  flash(`${cut ? 'Cut' : 'Copied'} ${what}. Click in the slide list of this deck or another and press Ctrl+V to paste.`);
+}
+
+/**
+ * Paste the slides copied after the last slide picked, in this deck's look; `keep` keeps each
+ * slide's own background, fonts and colours. When the look would change, a button offers the
+ * other way, as PowerPoint's Paste Options do.
+ */
+function pasteSlides(keep?: boolean): void {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  if (!slideClip) { flash('Copy slides first: pick them in the slide list and press Ctrl+C (or Edit > Copy Slides).'); return; }
+  finishTyping();
+  const src = slideClip;
+  const after = slideList.pickedList().at(-1) ?? d.index;
+  const n = d.pasteSlides(src, !!keep, after);
+  const what = `${n} slide${n === 1 ? '' : 's'}`;
+  const sameLook = JSON.stringify(src.master) === JSON.stringify(d.master);
+  if (keep !== undefined || sameLook) { flash(`Pasted ${what}.`); return; }
+  const edits = d.edits;
+  flash(`Pasted ${what} in this deck's look.`, 8000, {
+    label: 'Keep source formatting',
+    run: () => {
+      // put them in again their own way, in place of the ones just pasted (if nothing has changed since)
+      if (deckNow() !== d || d.edits !== edits) { flash('Use Edit > Paste Slides (Keep Source Formatting) to paste them with their own look.'); return; }
+      d.undo();
+      d.pasteSlides(src, true, after);
+      flash(`Pasted ${what} with their own look.`);
+    },
+  });
+}
+
+/** Keep Source Formatting, as last chosen in Reuse Slides. */
+let reuseKeep = false;
+
+/** Reuse Slides: pick slides from another PowerPoint file to put in after this one. */
+async function reuseSlides(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const f = await openBytesDialog('PowerPoint presentations', [PPTX]).catch(async (e) => { await showError(String(e)); return null; });
+  if (!f) return;
+  let got: ReturnType<typeof readPptx>;
+  try {
+    got = readPptx(f.bytes);
+  } catch (e) {
+    flash(`Could not read ${f.name}: ${e instanceof Error ? e.message : String(e)}`, 8000);
+    return;
+  }
+  if (!got.slides.length) { flash(`${f.name} has no slides.`); return; }
+  // the file's slides in a deck of their own, to show and copy from
+  const from = new Deck(new Doc());
+  from.load(got.slides.map((s) => from.makeSlide(s.layout, s.contents, s.notes, s)), got.size, got.master);
+  const pick = await pickReuseSlides(f.name, from, reuseKeep);
+  if (!pick || deckNow() !== d) return;
+  reuseKeep = pick.keep;
+  const n = d.pasteSlides(from.copySlides(pick.indices), pick.keep, slideList.pickedList().at(-1) ?? d.index);
+  flash(`Inserted ${n} slide${n === 1 ? '' : 's'} from ${f.name}.${got.warnings.length ? ' ' + got.warnings.join(' ') : ''}`, got.warnings.length ? 12000 : 3500);
+}
+
+function hideSlides(): void {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const ix = slideList.pickedList();
+  // as in PowerPoint: hide them all unless they are all hidden already
+  const hide = !ix.every((i) => d.slides[i]?.hidden);
+  d.setHidden(hide, ix);
+  const n = ix.length;
+  flash(hide ? `${n > 1 ? `${n} slides are` : 'The slide is'} hidden: the slide show skips ${n > 1 ? 'them' : 'it'}, and PowerPoint will too.` : `${n > 1 ? `${n} slides` : 'The slide'} will show in the slide show again.`);
+}
 
 function goSlide(i: number): void {
   const d = deckNow();
@@ -2255,7 +2407,8 @@ function present(fromHere: boolean, notes = false): void {
   if (presenter.running || presenterView.running) return;
   finishTyping();
   editor.paused = true;
-  void (notes ? presenterView : presenter).start(d, fromHere ? d.index : 0);
+  // from the start: the first slide that isn't hidden; from here: this slide even when hidden, as in PowerPoint
+  void (notes ? presenterView : presenter).start(d, fromHere ? d.index : d.firstShown());
 }
 
 presenter.onEnd = presenterView.onEnd = (i) => {
@@ -3005,7 +3158,7 @@ function setPictureStyle(look: PictureLook | undefined): boolean {
 }
 
 /** Slide commands that don't apply to a design's single page. */
-const SLIDE_ONLY = new Set(['new-slide', 'duplicate-slide', 'delete-slide', 'size-wide', 'size-standard', 'slide-master', 'slide-templates',
+const SLIDE_ONLY = new Set(['new-slide', 'duplicate-slide', 'delete-slide', 'cut-slides', 'copy-slides', 'paste-slides', 'paste-slides-keep', 'hide-slide', 'reuse-slides', 'size-wide', 'size-standard', 'slide-master', 'slide-templates',
   'slide-transitions', 'slide-animations', 'animation-pane', 'preview-slide', 'remove-animation']);
 
 /** The animation commands: an effect for the selected objects (the right-click menu's Animation). */
@@ -3069,6 +3222,14 @@ const COMMANDS: Record<string, () => unknown> = {
   'new-slide': () => newSlide(),
   'duplicate-slide': () => { const d = deckNow(); if (d) { finishTyping(); d.duplicate(slideList.pickedList()); } },
   'delete-slide': () => removeSlides(slideList.pickedList()),
+  'cut-slides': () => copySlides(slideList.pickedList(), true),
+  'copy-slides': () => copySlides(slideList.pickedList(), false),
+  'paste-slides': () => pasteSlides(),
+  'paste-slides-keep': () => pasteSlides(true),
+  'hide-slide': () => hideSlides(),
+  'reuse-slides': () => reuseSlides(),
+  'insert-equation': () => insertEquation(),
+  'edit-equation': () => { const id = [...editor.sel.shapes].find((x) => doc.shapes.get(x)?.math); if (id === undefined) { flash('Click an equation first (or double-click it).'); return; } void editEquationShape(id); },
   'next-slide': () => { const d = deckNow(); if (!d) return false; goSlide(d.index + 1); },
   'prev-slide': () => { const d = deckNow(); if (!d) return false; goSlide(d.index - 1); },
   ...Object.fromEntries(LAYOUTS.map((l) => [`layout-${l.id}`, () => setLayout(l.id)])),
@@ -5101,6 +5262,18 @@ applyRibbonIcons();
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 stylePanel.onEditChart = (id) => void editChartShape(id);
+stylePanel.onEditEquation = (id) => void editEquationShape(id);
+stylePanel.onEquationColour = (ids, color) => {
+  doc.edit('Equation colour', () => {
+    for (const id of ids) {
+      const s = doc.shapes.get(id);
+      if (!s?.math) continue;
+      const math = { ...s.math, color };
+      doc.updateShape(id, { math, src: shapeMathPicture(math, measureText) });
+    }
+  });
+  editor.changed();
+};
 stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
 stylePanel.tie = (ids) => tieCaptions(ids);
 

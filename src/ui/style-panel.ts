@@ -125,6 +125,9 @@ export class StylePanel {
 
   /** Open a chart's data and settings (Edit chart…). */
   onEditChart: (id: number) => void = () => {};
+  /** Open an equation in the equation window (Edit equation…), and colour equations. */
+  onEditEquation: (id: number) => void = () => {};
+  onEquationColour: (ids: number[], colour: string) => void = () => {};
 
   constructor(private section: HTMLElement, private body: HTMLElement, private doc: Doc, private sel: () => Selection, private changed: () => void) {}
 
@@ -518,6 +521,7 @@ export class StylePanel {
     const set = (label: string, patch: (x: Shape) => Partial<Shape>) => this.edit(label, () => { for (const x of pics) this.doc.updateShape(x.id, patch(x)); });
     const box = (x: Shape) => ({ x1: Math.min(x.x1, x.x2), y1: Math.min(x.y1, x.y2), w: Math.abs(x.x2 - x.x1), h: Math.abs(x.y2 - x.y1) });
     const charts = pics.every((x) => x.chart);
+    if (pics.every((x) => x.math)) { this.equationControls(pics); return; }
     this.heading(charts ? (pics.length > 1 ? `${pics.length} charts` : 'Chart') : pics.length > 1 ? `${pics.length} pictures` : 'Picture');
     // vector pictures (SVG, Windows metafiles) have no pixels to count
     if (charts) this.note('A chart with its own data. Double-click it to change the data, the kind of chart and its look; resizing it lays it out again.');
@@ -578,6 +582,22 @@ export class StylePanel {
   }
 
   /** A picture's frame, corners and shadow: a ready-made style, then each part on its own. */
+  /** Equations on slides: their colour, and the equation window. Resizing one makes its text larger or smaller. */
+  private equationControls(maths: Shape[]): void {
+    const p = maths[0];
+    this.heading(maths.length > 1 ? `${maths.length} equations` : 'Equation');
+    this.note('Double-click it to change it in the equation window. Drag a corner to make it larger or smaller. PowerPoint opens it as its own equation.');
+    this.color('Colour', p.math!.color ?? '#000000', (v) => this.onEquationColour(maths.map((x) => x.id), v ?? '#000000'));
+    if (maths.length === 1) {
+      const buttons = document.createElement('div');
+      buttons.className = 'style-buttons';
+      const btn = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Edit equation…', title: 'Change it in the equation window (or double-click it)' });
+      btn.addEventListener('click', () => this.onEditEquation(p.id));
+      buttons.append(btn);
+      this.body.appendChild(buttons);
+    }
+  }
+
   private pictureLook(pics: Shape[]): void {
     const look = pics[0].look ?? {};
     const setLook = (label: string, patch: (l: PictureLook) => PictureLook | undefined) => this.edit(label, () => {

@@ -7,7 +7,7 @@ import { ATTACH_TAG, IGNORE_TAG, attachFromTag, fillAttachments } from '../edito
 import { highlightStyleFromTag } from '../render/highlight';
 import { attachRingFills } from '../chem/ring-fill';
 import { lipDirection } from '../chem/polymer';
-import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, MorphStep, CHIRAL_FLAGS, PARTIAL, PAPER, type Pin } from '../model';
+import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, MorphStep, CHIRAL_FLAGS, PARTIAL, PAPER, type Pin, type ShapeMath } from '../model';
 import { TEXT_TAG, parseTextTag, runsFromChemDraw } from '../text/chemdraw-text';
 import { DocStyle } from '../style';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
@@ -789,8 +789,14 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
               const got = tag ? JSON.parse(tag) as ChartBox : undefined;
               if (got?.chart && Array.isArray(got.cells)) chart = freshBox(got);
             } catch { chart = undefined; }
+            let math: ShapeMath | undefined;
+            try {
+              const tag = kids(ch).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === MATH_TAG)?.getAttribute('Value');
+              const got = tag ? JSON.parse(tag) as ShapeMath : undefined;
+              if (typeof got?.tex === 'string' && got.size > 0) math = got;
+            } catch { math = undefined; }
             const sh = pic
-              ? doc.addShape({ id: idFor(ch), kind: 'picture', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], src: pic.src, px: pic.px, ...(pic.crop ? { crop: pic.crop } : {}), ...(chart ? { chart } : {}) })
+              ? doc.addShape({ id: idFor(ch), kind: 'picture', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], src: pic.src, px: pic.px, ...(pic.crop ? { crop: pic.crop } : {}), ...(chart ? { chart } : {}), ...(math ? { math } : {}) })
               // only pictures this program can't show: mark where they sit, and keep them as they are
               : doc.addShape({ id: idFor(ch), kind: 'rect', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], dashed: true, color: '#9aa4b2', picture: true });
             from('s', sh.id, ch);
@@ -1047,6 +1053,8 @@ export const CURVE_ARROW_TAG = 'Chem Illustrator arrow';
 export const GEO_BOX_ATTR = 'ChemIllustratorBox';
 /** A chart (Insert > Chart on slides): the chart and its data, on the picture standing for it. */
 export const CHART_TAG = 'Chem Illustrator chart';
+/** An equation (Insert > Equation on slides): its LaTeX, size, colour and font, on the picture standing for it. */
+export const MATH_TAG = 'Chem Illustrator equation';
 export const OWN_PICTURE = 'ChemIllustratorPicture';
 export const OWN_CROP = 'ChemIllustratorCrop';
 

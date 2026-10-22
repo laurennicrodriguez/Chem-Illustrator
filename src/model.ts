@@ -654,6 +654,12 @@ export interface Shape {
    */
   chart?: ChartBox;
   /**
+   * A picture that is an equation (Insert > Equation on slides and designs): its LaTeX, laid out
+   * live to fit the picture's box; `size` is its text size at its own size, in points. `src` is a
+   * copy of it as an SVG for exports and for programs that can't lay out equations.
+   */
+  math?: ShapeMath;
+  /**
    * A frame round other things (Chemistry > Labels and Numbers > Add Frame): what it surrounds (whole structures for
    * the atoms), the gap it keeps round them in points, and whether it follows them (grows,
    * shrinks and moves as they change). Moving or resizing the frame by hand stops it following.
@@ -664,6 +670,9 @@ export interface Shape {
   /** A SmartArt-style diagram's text and look, kept on the invisible frame round its shapes (design/diagrams.ts). */
   diagram?: DiagramData;
 }
+
+/** An equation on a slide or design: LaTeX, its text size in points, colour and font. */
+export interface ShapeMath { tex: string; size: number; color?: string; font?: string }
 
 /**
  * A picture's frame, corners and shadow. The line is drawn centred on the picture's edge, as

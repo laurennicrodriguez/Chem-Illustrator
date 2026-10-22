@@ -180,6 +180,8 @@ export const COMMAND_NAMES: Record<string, string> = {
   'new-slides': 'New slides', 'close-tab': 'Close the file', 'next-tab': 'Next file', 'prev-tab': 'Previous file',
   'export-pdf': 'Export PDF…', 'insert-picture': 'Insert a picture…', crop: 'Crop the selected picture',
   'new-slide': 'New slide', 'duplicate-slide': 'Duplicate slide', 'delete-slide': 'Delete slide',
+  'cut-slides': 'Cut slides', 'copy-slides': 'Copy slides', 'paste-slides': 'Paste slides', 'paste-slides-keep': 'Paste slides keeping their own look',
+  'hide-slide': 'Hide slide (or show it again)', 'reuse-slides': 'Reuse slides from another PowerPoint file…',
   'next-slide': 'Next slide', 'prev-slide': 'Previous slide', 'slide-master': 'Slide Master…', 'format-background': 'Format Background… (colour, gradient, picture or pattern)',
   present: 'Present from the first slide', 'present-current': 'Present from this slide', 'presenter-view': 'Presenter View (notes, next slide and timer)',
   'dev-tools': 'Developer tools on or off (speed panel, stress test)',
@@ -334,7 +336,7 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
   // PowerPoint's keys
   slides: verbs('command', {
     F5: 'present', 'Shift+F5': 'present-current', 'Alt+F5': 'presenter-view', 'Ctrl+M': 'new-slide', 'Ctrl+N': 'new-slides',
-    PageDown: 'next-slide', PageUp: 'prev-slide', 'Ctrl+Alt+M': 'new-comment',
+    PageDown: 'next-slide', PageUp: 'prev-slide', 'Ctrl+Alt+M': 'new-comment', 'Alt+=': 'insert-equation',
   }),
   // Excel's keys
   sheet: verbs('command', {

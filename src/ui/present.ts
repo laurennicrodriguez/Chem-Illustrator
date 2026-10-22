@@ -134,8 +134,8 @@ export class Presenter {
     if (k === 'Escape') this.stop();
     else if (['ArrowRight', 'ArrowDown', ' ', 'Enter', 'PageDown', 'n', 'N'].includes(k)) this.next();
     else if (['ArrowLeft', 'ArrowUp', 'Backspace', 'PageUp', 'p', 'P'].includes(k)) this.prev();
-    else if (k === 'Home') this.go(0);
-    else if (k === 'End') this.go(this.deck!.slides.length - 1);
+    else if (k === 'Home') this.go(this.deck!.firstShown());
+    else if (k === 'End') this.go(Math.max(0, this.deck!.shownBefore(this.deck!.slides.length)));
     else if (k === 'b' || k === 'B' || k === '.') { this.blank = this.blank === 'black' ? null : 'black'; this.paint(); }
     else if (k === 'w' || k === 'W' || k === ',') { this.blank = this.blank === 'white' ? null : 'white'; this.paint(); }
   }
