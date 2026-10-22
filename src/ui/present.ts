@@ -3,13 +3,17 @@
 // Enter, Page Down or N. Back: ←, ↑, Backspace, Page Up or P.
 // Home and End go to the first and last slide; a number then Enter goes to that slide.
 // B (or .) makes the screen black and W (or ,) white until a key is pressed. Esc ends the show.
+// The laser pointer, pen and highlighter are on the bar at the bottom left (show-ink.ts); links,
+// action buttons, zooms, videos and sounds take clicks on them (show-actions.ts).
 
 import { isTauri } from '@tauri-apps/api/core';
 import type { Deck } from '../deck/deck';
 import { Player } from '../deck/playback';
 import { onImageReady } from '../render/images';
 import { followLink } from './links-ui';
-import { SHOW_JUMPS, slideOfLink } from '../links';
+import { ShowActions } from './show-actions';
+import { ShowInk, type Stroke } from './show-ink';
+import { ask } from './ask';
 
 export class Presenter {
   private root: HTMLDivElement | null = null;
@@ -24,8 +28,13 @@ export class Presenter {
   private wasFullscreen = false;
   private hideCursorTimer = 0;
 
+  private actions: ShowActions | null = null;
+  private ink: ShowInk | null = null;
+
   /** Called when the show ends (with the slide it ended on, to edit next). */
   onEnd: (index: number) => void = () => {};
+  /** Called with the ink drawn in the show, by slide, when the presenter keeps it. */
+  onKeepInk: (ink: Map<number, Stroke[]>) => void = () => {};
 
   constructor() {
     onImageReady(() => { if (this.root) this.player?.refresh(); });
@@ -50,9 +59,14 @@ export class Presenter {
     const player = new Player(canvas, deck);
     player.onPastEnd = () => { this.blank = 'end'; this.paint(); };
     this.player = player;
-    // a click on a link follows it, as in PowerPoint's slide show; anywhere else goes on
-    root.addEventListener('click', (e) => { if (!this.clickLink(e)) this.next(); });
-    root.addEventListener('pointermove', (e) => { if (this.canvas) this.canvas.style.cursor = this.linkUnder(e) ? 'pointer' : ''; });
+    const actions = (this.actions = new ShowActions(deck, player, canvas, {
+      go: (i) => this.go(i, false), next: () => this.next(), prev: () => this.prev(), end: () => this.stop(), open: (link) => void followLink(link),
+    }));
+    const ink = (this.ink = new ShowInk(root, canvas, { slide: () => player.i, place: () => player.slidePlace }));
+    player.onChange = () => { actions.noteSlide(player.i); ink.paint(); };
+    // a click on a link, action button, zoom, video or sound acts on it, as in PowerPoint's slide show; anywhere else goes on
+    root.addEventListener('click', (e) => { if (!this.clickThing(e)) this.next(); });
+    root.addEventListener('pointermove', (e) => { if (this.canvas) this.canvas.style.cursor = this.thingUnder(e) ? 'pointer' : ''; });
     root.addEventListener('contextmenu', (e) => { e.preventDefault(); this.prev(); });
     root.addEventListener('wheel', (e) => { if (e.deltaY > 0) this.next(); else if (e.deltaY < 0) this.prev(); }, { passive: true });
     root.addEventListener('pointermove', () => this.showCursor());
@@ -71,6 +85,10 @@ export class Presenter {
 
   stop(): void {
     if (!this.root) return;
+    const ink = this.ink?.any ? this.ink.all() : null;
+    this.ink?.remove();
+    this.ink = null;
+    this.actions = null;
     window.removeEventListener('keydown', this.keyHandler, true);
     window.removeEventListener('resize', this.resizeHandler);
     clearTimeout(this.hideCursorTimer);
@@ -82,6 +100,7 @@ export class Presenter {
     this.canvas = null;
     void this.fullscreen(false);
     this.onEnd(i);
+    if (ink) void askKeepInk().then((keep) => { if (keep) this.onKeepInk(ink); });
   }
 
   private async fullscreen(on: boolean): Promise<void> {
@@ -110,33 +129,22 @@ export class Presenter {
     this.hideCursorTimer = window.setTimeout(() => this.root?.classList.add('no-cursor'), 2500);
   }
 
-  private linkUnder(e: MouseEvent): string | null {
-    if (!this.canvas || this.blank) return null;
-    const r = this.canvas.getBoundingClientRect();
-    return this.player?.linkAt(e.clientX - r.left, e.clientY - r.top) ?? null;
+  private point(e: MouseEvent): { x: number; y: number } {
+    const r = this.canvas!.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
-  /** Follow the link clicked on, if any: a slide of this deck, or anything else outside the show. */
-  private clickLink(e: MouseEvent): boolean {
-    const link = this.linkUnder(e);
-    if (!link || !this.deck) return false;
-    const deck = this.deck;
-    const id = slideOfLink(link);
-    if (id !== null) {
-      const i = deck.slides.findIndex((s) => s.id === id);
-      if (i >= 0) this.go(i);
-      return true;
-    }
-    if (link in SHOW_JUMPS) {
-      const cur = this.player?.i ?? 0;
-      if (link === '#next') this.go(Math.min(deck.slides.length - 1, cur + 1));
-      else if (link === '#prev') this.go(Math.max(0, cur - 1));
-      else if (link === '#first') this.go(deck.firstShown());
-      else this.go(Math.max(0, deck.shownBefore(deck.slides.length)));
-      return true;
-    }
-    void followLink(link);
-    return true;
+  private thingUnder(e: MouseEvent): boolean {
+    if (!this.canvas || this.blank || !this.actions) return false;
+    const p = this.point(e);
+    return this.actions.clickable(p.x, p.y);
+  }
+
+  /** Act on what was clicked, if anything takes a click there. */
+  private clickThing(e: MouseEvent): boolean {
+    if (!this.canvas || this.blank || !this.actions) return false;
+    const p = this.point(e);
+    return this.actions.click(p.x, p.y);
   }
 
   private next(): void {
@@ -150,8 +158,10 @@ export class Presenter {
     this.player?.prev();
   }
 
-  private go(i: number): void {
+  /** Go to a slide; `jump` (a number typed, Home, End) forgets zooms to come back from. */
+  private go(i: number, jump = true): void {
     this.blank = null;
+    if (jump) this.actions?.forgetReturns();
     this.player?.show(Math.max(0, Math.min(this.deck!.slides.length - 1, i)));
   }
 
@@ -160,6 +170,7 @@ export class Presenter {
     // every key belongs to the show while it runs
     e.preventDefault();
     e.stopPropagation();
+    if (this.ink?.key(e)) return;
     const k = e.key;
     if (/^[0-9]$/.test(k)) { this.typed += k; return; }
     if (k === 'Enter' && this.typed) { this.go(Number(this.typed) - 1); this.typed = ''; return; }
@@ -178,6 +189,7 @@ export class Presenter {
     if (!root) return;
     const w = root.clientWidth || window.innerWidth, h = root.clientHeight || window.innerHeight;
     this.player?.resize(w, h, window.devicePixelRatio || 1);
+    this.ink?.paint();
   }
 
   private paint(): void {
@@ -196,4 +208,10 @@ export class Presenter {
       ctx.fillText('End of slide show. Click or press a key to finish.', 24, 36);
     }
   }
+}
+
+/** At the end of a show with ink: keep it on the slides, or throw it away (as PowerPoint asks). */
+export async function askKeepInk(): Promise<boolean> {
+  const got = await ask('Keep Ink?', [], { ok: 'Keep', note: 'Do you want to keep your ink annotations? Kept, they go on the slides as shapes you can move, recolour or delete (and they go to PowerPoint). Cancel discards them.' });
+  return !!got;
 }

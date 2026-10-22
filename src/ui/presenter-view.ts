@@ -11,6 +11,10 @@ import { Player } from '../deck/playback';
 import { paintSlide } from '../deck/slide-view';
 import { ShowLink, AUDIENCE, deckData, clockText, type ShowMessage } from '../deck/show-link';
 import { onImageReady } from '../render/images';
+import { followLink } from './links-ui';
+import { ShowActions } from './show-actions';
+import { ShowInk, type Stroke } from './show-ink';
+import { askKeepInk } from './present';
 
 /** Where the audience's slides went. */
 type Audience = 'other-screen' | 'window' | 'none';
@@ -53,8 +57,13 @@ export class PresenterView {
   private sizer = new ResizeObserver(() => this.layout());
   private wasFullscreen = false;
 
+  private actions: ShowActions | null = null;
+  private ink: ShowInk | null = null;
+
   /** Called when the show ends (with the slide it ended on, to edit next). */
   onEnd: (index: number) => void = () => {};
+  /** Called with the ink drawn in the show, by slide, when the presenter keeps it. */
+  onKeepInk: (ink: Map<number, Stroke[]>) => void = () => {};
 
   constructor() {
     onImageReady(() => { if (this.root) { this.player?.refresh(); this.paintNext(); } });
@@ -112,12 +121,35 @@ export class PresenterView {
     root.addEventListener('click', (e) => {
       const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-pv]');
       if (b) { this.button(b.dataset.pv!); return; }
-      if ((e.target as HTMLElement).closest('.pv-cur')) this.next();
+      if ((e.target as HTMLElement).closest('.show-tools')) return;
+      if ((e.target as HTMLElement).closest('.pv-cur')) {
+        const r = this.els.canvas.getBoundingClientRect();
+        if (!this.blank && this.actions?.click(e.clientX - r.left, e.clientY - r.top)) return;
+        this.next();
+      }
+    });
+    this.els.cur.addEventListener('pointermove', (e) => {
+      const r = this.els.canvas.getBoundingClientRect();
+      this.els.canvas.style.cursor = !this.blank && this.actions?.clickable(e.clientX - r.left, e.clientY - r.top) ? 'pointer' : '';
     });
     this.els.cur.addEventListener('contextmenu', (e) => { e.preventDefault(); this.prev(); });
     const player = (this.player = new Player(this.els.canvas, deck, '#111317'));
     player.onPastEnd = () => this.setBlank('end');
-    player.onChange = () => this.update();
+    const frac = (r: { x1: number; y1: number; x2: number; y2: number }) => {
+      const w = this.els.canvas.clientWidth || 1, h = this.els.canvas.clientHeight || 1;
+      return { x1: r.x1 / w, y1: r.y1 / h, x2: r.x2 / w, y2: r.y2 / h };
+    };
+    const actions = (this.actions = new ShowActions(deck, player, this.els.canvas, {
+      go: (i) => this.go(i, false), next: () => this.next(), prev: () => this.prev(), end: () => this.stop(), open: (link) => void followLink(link),
+      zoomed: (i, rect, out) => this.link?.send({ kind: 'zoom', i, rect: frac(rect), out }),
+      tapped: (fx, fy) => this.link?.send({ kind: 'tap', fx, fy }),
+    }));
+    const ink = (this.ink = new ShowInk(this.els.cur, this.els.canvas, {
+      slide: () => player.i, place: () => player.slidePlace,
+      changed: (i, strokes) => this.link?.send({ kind: 'ink', i, strokes }),
+      laser: (p) => this.link?.send({ kind: 'laser', p }),
+    }));
+    player.onChange = () => { actions.noteSlide(player.i); ink.paint(); this.update(); };
     window.addEventListener('keydown', this.keyHandler, true);
     this.sizer.observe(this.els.cur);
     this.sizer.observe(this.els.nextBox);
@@ -141,6 +173,10 @@ export class PresenterView {
 
   stop(): void {
     if (!this.root) return;
+    const ink = this.ink?.any ? this.ink.all() : null;
+    this.ink?.remove();
+    this.ink = null;
+    this.actions = null;
     window.removeEventListener('keydown', this.keyHandler, true);
     this.sizer.disconnect();
     clearInterval(this.tick);
@@ -155,6 +191,7 @@ export class PresenterView {
     this.root = null;
     void this.fullscreen(false);
     this.onEnd(i);
+    if (ink) void askKeepInk().then((keep) => { if (keep) this.onKeepInk(ink); });
   }
 
   private closeAudience(): void {
@@ -168,6 +205,8 @@ export class PresenterView {
       const got = await openAudience();
       this.audience = got.where;
       this.audienceWin = got.win;
+      // the sound of videos comes from the audience's window
+      if (this.player) this.player.quiet = got.where !== 'none';
     } catch {
       this.audience = 'none';
     }
@@ -180,6 +219,7 @@ export class PresenterView {
     if (m.kind === 'hello') {
       this.link?.send({ kind: 'deck', deck: deckData(this.deck), i: this.player.i, done: this.player.done });
       if (this.blank) this.link?.send({ kind: 'blank', how: this.blank });
+      for (const [i, strokes] of this.ink?.all() ?? []) this.link?.send({ kind: 'ink', i, strokes });
     } else if (m.kind === 'key') {
       if (m.key === 'click') this.next();
       else this.onKey(new KeyboardEvent('keydown', { key: m.key }));
@@ -219,6 +259,8 @@ export class PresenterView {
   private next(): void {
     if (this.blank === 'black' || this.blank === 'white') { this.setBlank(null); return; }
     if (this.blank === 'end') { this.stop(); return; }
+    // coming back out of a zoom: the audience is told of the zoom itself
+    if (this.actions?.returnDue) { this.player?.next(); return; }
     this.link?.send({ kind: 'next' });
     this.player?.next();
   }
@@ -229,7 +271,9 @@ export class PresenterView {
     this.player?.prev();
   }
 
-  private go(i: number): void {
+  /** Go to a slide; `jump` (a number typed, Home, End) forgets zooms to come back from. */
+  private go(i: number, jump = true): void {
+    if (jump) this.actions?.forgetReturns();
     const n = this.deck!.slides.length;
     i = Math.max(0, Math.min(n - 1, i));
     if (this.blank) this.setBlank(null);
@@ -241,6 +285,7 @@ export class PresenterView {
     if (!this.root) return;
     e.preventDefault();
     e.stopPropagation();
+    if (this.ink?.key(e)) return;
     const k = e.key;
     if (/^[0-9]$/.test(k)) { this.typed += k; return; }
     if (k === 'Enter' && this.typed) { this.go(Number(this.typed) - 1); this.typed = ''; return; }
@@ -285,6 +330,7 @@ export class PresenterView {
     if (!this.root || !this.deck) return;
     const r = this.els.cur.getBoundingClientRect();
     this.player?.resize(Math.max(1, r.width), Math.max(1, r.height), window.devicePixelRatio || 1);
+    this.ink?.paint();
     this.paintNext();
   }
 

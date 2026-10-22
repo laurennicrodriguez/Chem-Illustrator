@@ -198,6 +198,11 @@
     <button data-modes="document" role="menuitem" data-cmd="compound-number" title="A bold compound number that renumbers itself">Compound Number…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-citation" title="Cite references: superscript numbers in order of first citation">Citation…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-bibliography" title="The references cited, numbered, in the journal style">Bibliography</button>
+    <button data-modes="slides" role="menuitem" data-cmd="insert-slide-zoom" title="Pictures of other slides that zoom into them in the slide show">Slide Zoom…</button>
+    <button data-modes="slides" role="menuitem" data-cmd="insert-summary-zoom" title="A slide of zooms, one for each part of the talk">Summary Zoom…</button>
+    <button data-modes="slides" role="menuitem" data-cmd="action-settings" title="What a click on the selected shape or action button does in the slide show">Action…</button>
+    <button data-modes="slides" role="menuitem" data-cmd="insert-video" title="A video from a file that plays in the slide show and in PowerPoint">Video…</button>
+    <button data-modes="slides" role="menuitem" data-cmd="insert-audio" title="A sound from a file that plays in the slide show and in PowerPoint">Audio…</button>
     <button data-modes="slides design document" role="menuitem" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha), shown as maths; a Word or PowerPoint equation in .docx and .pptx files">Equation…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-toc" title="The headings (Heading 1, 2, 3) with their page numbers; it updates by itself">Table of Contents…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-tof" title="The Figure, Scheme, Table or Chart captions with their page numbers; it updates by itself">Table of Figures…</button>
@@ -1402,6 +1407,23 @@
         </div>
         <div class="rb-label">Links</div>
       </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <button data-cmd="insert-slide-zoom" title="Slide Zoom: pictures of slides you pick, on this slide. In the show a click zooms into that slide (and, with Return to Zoom, back here after). Saved as PowerPoint's own zoom">⊕ Slide Zoom</button>
+            <button data-cmd="insert-summary-zoom" title="Summary Zoom: a new slide of zooms, one for each part of your talk; in the show a click plays that part and comes back. Pick the first slide of each part">⊞ Summary Zoom</button>
+            <button data-cmd="action-settings" title="Action: what a click on the selected shape or action button does in the show (next slide, a slide, the last one viewed, end the show, a web page). Action buttons are under Shapes">↪ Action…</button>
+          </div>
+        </div>
+        <div class="rb-label">Zoom and Actions</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="insert-video" title="A video from a file (MP4 plays everywhere, PowerPoint too; MOV and WebM here). It starts when clicked in the show; double-click it to trim it, fade it or set how it plays"><span class="rb-icon">▶</span>Video</button>
+          <button class="rb-big" data-cmd="insert-audio" title="A sound from a file (MP3, M4A, WAV, AAC or OGG), shown as a loudspeaker. Double-click it to trim it, fade it, hide it in the show or play it across slides"><span class="rb-icon">♪</span>Audio</button>
+        </div>
+        <div class="rb-label">Media</div>
+      </div>
     </div>
     <div class="rb-panel" data-sl-panel="design" hidden>
       <div class="rb-group">
@@ -1512,6 +1534,8 @@
         <div class="rb-row">
           <div class="rb-col">
             <label class="rb-field" title="Wipe and Fly: the side it comes in from (or goes out to)">Effect <select id="an-from"></select></label>
+            <label class="rb-field" id="an-amount-box" style="display: none">Amount <input id="an-amount" type="number" step="5" style="width: 60px" /> <span id="an-amount-unit"></span></label>
+            <label class="rb-field" id="an-colour-box" style="display: none" title="Colour Change: the colour it changes to">Colour <input id="an-colour" type="color" /></label>
             <button data-an="remove" title="Take the selected animation off">Remove</button>
           </div>
         </div>
