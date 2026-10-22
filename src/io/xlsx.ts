@@ -25,8 +25,8 @@ import { DEFAULT_COL_W, DEFAULT_ROW_H, MAX_AUTO_ROW, structureHeight } from '../
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
 import { applyTint } from '../colours';
-import { chartXml, chartAnchorXml, readChartXml, CT_CHART, REL_CHART, C_NS } from './xlsx-chart';
-import { Chart, chartData, seenChartId, newChartId, sameChartData } from '../sheet/chart';
+import { chartXml, chartAnchorXml, readChartXml, CT_CHART, REL_CHART, C_NS, CX_NS, CT_CHARTEX, REL_CHARTEX } from './xlsx-chart';
+import { Chart, chartData, seenChartId, newChartId, sameChartData, isChartEx } from '../sheet/chart';
 import { dashboardStandIn } from './xlsx-dashboard';
 import { Dashboard, seenTileId } from '../sheet/dashboard';
 import { condFormatsXml, dxfXml, tableXml, readDxfs, readCondFormats, readTable, sameRules } from './xlsx-format';
@@ -511,9 +511,11 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
     // charts: Excel's own chart parts, anchored at their corner cell
     for (const ch of s.charts) {
       chartNo++;
-      const cpath = `xl/charts/chart${chartNo}.xml`;
-      pkg.add(cpath, HEAD + chartXml(ch, standIn?.data.get(ch.id) ?? chartData(book, s, ch)), CT_CHART);
-      const rid = pkg.relate(drawingPath, REL_CHART, `../charts/chart${chartNo}.xml`);
+      // histograms and box charts go in Excel 2016's newer chart part
+      const ex = isChartEx(ch.kind);
+      const cname = `${ex ? 'chartEx' : 'chart'}${chartNo}.xml`;
+      pkg.add(`xl/charts/${cname}`, HEAD + chartXml(ch, standIn?.data.get(ch.id) ?? chartData(book, s, ch)), ex ? CT_CHARTEX : CT_CHART);
+      const rid = pkg.relate(drawingPath, ex ? REL_CHARTEX : REL_CHART, `../charts/${cname}`);
       const x = cols.start(ch.at.col) + ch.at.dx, y = rows.start(ch.at.row) + ch.at.dy;
       const end = cols.at(x + ch.w, ch.at.col), endR = rows.at(y + ch.h, ch.at.row);
       anchors.push(chartAnchorXml(ch, { col: end.i, colOff: end.off, row: endR.i, rowOff: endR.off }, anchors.length + 2, rid));
@@ -965,14 +967,16 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
           const name = kid(pic, 'nvPicPr', 'cNvPr')?.getAttribute('name') ?? '';
           if (!(ms && name.startsWith('Structure '))) foreignPictures++;
         }
-        foreignPictures += dr.getElementsByTagNameNS(XDR, 'sp').length;
+        // (the note Excel puts in place of a newer chart, for older programs, is not a shape of its own)
+        foreignPictures += Array.from(dr.getElementsByTagNameNS(XDR, 'sp')).filter((e) => e.parentElement?.localName !== 'Fallback').length;
         // charts: Excel's, or ours (our own copy where the data it charts is unchanged)
         const charts: Chart[] = [];
         const colPx = (c: number) => (s.hiddenCols.has(c) ? 0 : s.colWidths.get(c) ?? DEFAULT_COL_W);
         const rowPx = (r: number) => (s.hiddenRows.has(r) ? 0 : s.rowHeights.get(r) ?? DEFAULT_ROW_H);
         for (const gf of Array.from(dr.getElementsByTagNameNS(XDR, 'graphicFrame'))) {
-          const anchor = gf.parentElement;
-          const cref = gf.getElementsByTagNameNS(C_NS, 'chart')[0];
+          let anchor = gf.parentElement;
+          while (anchor && !/Anchor$/.test(anchor.localName)) anchor = anchor.parentElement;
+          const cref = gf.getElementsByTagNameNS(C_NS, 'chart')[0] ?? gf.getElementsByTagNameNS(CX_NS, 'chart')[0];
           const target = cref ? pkg.rels(drawingPath!).get(rAttr(cref, 'id') ?? '')?.target : undefined;
           const cdoc = target ? pkg.xml(target) : null;
           const from = kid(anchor, 'from'), to = kid(anchor, 'to');

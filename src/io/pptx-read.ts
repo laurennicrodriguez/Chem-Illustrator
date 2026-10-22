@@ -540,7 +540,10 @@ class Reader {
       case 'AlternateContent': {
         // the version for programs that don't know the newer form, else the newer one
         const fb = kids(el, 'Fallback')[0];
-        const branch = fb && kids(fb).length ? fb : kids(el, 'Choice')[0];
+        const choice = kids(el, 'Choice')[0];
+        // PowerPoint 2016's newer charts (histograms, box charts): their fallback is only a picture
+        const newerChart = !!choice && Array.from(choice.getElementsByTagNameNS('*', 'graphicData')).some((g) => /chartex/.test(g.getAttribute('uri') ?? ''));
+        const branch = fb && kids(fb).length && !newerChart ? fb : choice;
         for (const k of kids(branch)) this.element(s, layout, k, t, doc);
         break;
       }

@@ -1,4 +1,5 @@
-// Charts of sheet data, as Excel makes them: scatter (x–y), line, column, bar, area and pie.
+// Charts of sheet data, as Excel makes them: scatter (x–y), line, column, bar, area, pie, combo
+// (columns and lines, with a second value axis), histogram, box and whisker, bubble and radar.
 // Each series reads its numbers from cells, so the chart follows the sheet as it changes. A
 // scatter series can carry a fitted line (with its equation and R²) and error bars, for kinetics,
 // calibration curves and the like. Data in rows hidden by a filter is left out, as Excel does by
@@ -11,7 +12,7 @@ import type { Value } from './values';
 import { isError } from './values';
 import type { FitKind } from './fit';
 
-export type ChartKind = 'scatter' | 'line' | 'column' | 'bar' | 'area' | 'pie';
+export type ChartKind = 'scatter' | 'line' | 'column' | 'bar' | 'area' | 'pie' | 'combo' | 'histogram' | 'box' | 'bubble' | 'radar';
 export type MarkerShape = 'circle' | 'square' | 'diamond' | 'triangle' | 'cross' | 'none';
 
 export interface SeriesFit {
@@ -66,6 +67,12 @@ export interface Series {
    * for Excel as error bars running from each point to zero.
    */
   sticks?: boolean;
+  /** Combo charts: drawn as columns or as a line (unset: the first series columns, the rest lines). */
+  as?: 'column' | 'line';
+  /** Combo charts: measured on the second value axis, on the right (unset: every series but the first). */
+  secondary?: boolean;
+  /** Bubble charts: the bubble sizes, as a reference (each bubble's area goes with its number). */
+  size?: string;
 }
 
 export interface ChartAxis {
@@ -101,11 +108,53 @@ export interface Chart {
   border?: boolean;
   /** Include data from hidden rows and columns (off: a filtered table charts what shows). */
   showHidden?: boolean;
+  /** Combo charts: the second value axis, on the right. */
+  y2?: ChartAxis;
+  /** Histograms: how the numbers are put into bins (unset: Excel's automatic width, Scott's rule). */
+  bins?: Bins;
+  /** Box and whisker charts: what is shown and how the quartiles are worked out. */
+  boxes?: BoxOptions;
+  /** Radar charts: filled shapes in place of lines with markers. */
+  filled?: boolean;
   /** Where it sits: its top-left corner in a cell, and its size, in pixels at 100%. */
   at: { row: number; col: number; dx: number; dy: number };
   w: number;
   h: number;
 }
+
+export interface Bins {
+  /** The width of each bin. */
+  width?: number;
+  /** The number of bins (used when no width is set). */
+  count?: number;
+  /** Everything above this goes in one last bin ("> 90"). */
+  overflow?: number;
+  /** Everything at or below this goes in one first bin ("≤ 10"). */
+  underflow?: number;
+}
+
+export interface BoxOptions {
+  /** The mean as a cross (on unless turned off). */
+  mean?: boolean;
+  /** A line joining the means of each category. */
+  meanLine?: boolean;
+  /** Points beyond 1.5 × the box's height drawn on their own (on unless turned off). */
+  outliers?: boolean;
+  /** Every other point drawn too. */
+  points?: boolean;
+  /** How the quartiles are worked out: Excel's exclusive median (QUARTILE.EXC, its default) or inclusive (QUARTILE.INC). */
+  quartiles?: 'exclusive' | 'inclusive';
+}
+
+/** Combo charts: how a series is drawn, and whether on the second axis. */
+export const comboAs = (s: Series, i: number): 'column' | 'line' => s.as ?? (i === 0 ? 'column' : 'line');
+export const onSecondAxis = (s: Series, i: number): boolean => s.secondary ?? i > 0;
+
+/** Charts Excel keeps in its newer chart part (chartEx, Excel 2016 and later). */
+export const isChartEx = (k: ChartKind): boolean => k === 'histogram' || k === 'box';
+
+/** Charts whose x values are numbers (an axis of values, not of categories). */
+export const isXY = (k: ChartKind): boolean => k === 'scatter' || k === 'bubble';
 
 /** Colour sets for series, the first as Excel's Office colours. */
 export const CHART_PALETTES: Record<string, { name: string; colors: string[] }> = {
@@ -121,6 +170,7 @@ export const MARKERS: MarkerShape[] = ['circle', 'square', 'diamond', 'triangle'
 
 export const CHART_NAMES: Record<ChartKind, string> = {
   scatter: 'Scatter (x–y)', line: 'Line', column: 'Column', bar: 'Bar', area: 'Area', pie: 'Pie',
+  combo: 'Combo (columns and lines)', histogram: 'Histogram', box: 'Box and whisker', bubble: 'Bubble', radar: 'Radar',
 };
 
 let nextChartId = 1;
@@ -134,7 +184,7 @@ export function sameChartData(a: Chart, b: Chart): boolean {
   const kindOf = (k: ChartKind) => (k === 'bar' ? 'column' : k);
   if (kindOf(a.kind) !== kindOf(b.kind) || a.series.length !== b.series.length) return false;
   const norm = (t: string | undefined) => (t ?? '').replace(/^=/, '').replace(/'/g, '').toUpperCase();
-  return a.series.every((s, i) => norm(s.y) === norm(b.series[i].y) && norm(s.x) === norm(b.series[i].x) && !!s.fit === !!b.series[i].fit && (s.fit?.kind ?? '') === (b.series[i].fit?.kind ?? ''));
+  return a.series.every((s, i) => norm(s.y) === norm(b.series[i].y) && norm(s.x) === norm(b.series[i].x) && norm(s.size) === norm(b.series[i].size) && !!s.fit === !!b.series[i].fit && (s.fit?.kind ?? '') === (b.series[i].fit?.kind ?? ''));
 }
 
 /** A reference to a block of cells on a sheet, as a chart keeps it ("=Sheet1!$B$2:$B$9"). */
@@ -187,6 +237,8 @@ export interface SeriesData {
   ys: number[];
   plus?: number[];
   minus?: number[];
+  /** Bubble sizes (bubble charts). */
+  sizes?: number[];
   color: string;
   index: number;
 }
@@ -206,6 +258,10 @@ export function chartData(wb: Workbook, home: Sheet, chart: Chart, leaveOut?: Ma
     let name = s.name ?? '';
     if (name.startsWith('=')) name = (refValues(wb, name, home, true) ?? []).map(toLabel).join(' ');
     const d: SeriesData = { name: name || `Series ${i + 1}`, xs, cats, ys, color: s.color ?? palette[i % palette.length], index: i };
+    if (chart.kind === 'bubble') {
+      const sz = s.size ? (refValues(wb, s.size, home, chart.showHidden, leaveOut) ?? []).map(toNum) : [];
+      d.sizes = ys.map((_, j) => (s.size ? sz[j] ?? NaN : 1));
+    }
     const e = s.errors;
     if (e) {
       if (e.kind === 'cells') {
@@ -240,27 +296,32 @@ export function chartFromRange(sheet: Sheet, r: Range, kind: ChartKind): Chart {
   for (let c = r.c1; c <= r.c2; c++) if (isText(r.r1, c) && r.r2 > r.r1 && (isNum(r.r1 + 1, c) || c > r.c1)) header = true;
   const first = header ? r.r1 + 1 : r.r1;
   const textCats = r.c2 > r.c1 && !isNum(first, r.c1) && isText(first, r.c1);
-  const firstIsX = r.c2 > r.c1 && (kind === 'scatter' || textCats);
+  const firstIsX = r.c2 > r.c1 && (isXY(kind) || textCats) && kind !== 'histogram';
   const ref = (c1: number, rr1: number, rr2: number) => refText(sheet.name, { r1: rr1, c1, r2: rr2, c2: c1 });
   const series: Series[] = [];
-  for (let c = firstIsX ? r.c1 + 1 : r.c1; c <= r.c2; c++) {
+  // a bubble chart takes its columns in pairs: the heights, then the sizes
+  const stride = kind === 'bubble' ? 2 : 1;
+  for (let c = firstIsX || (kind === 'histogram' && textCats) ? r.c1 + 1 : r.c1; c <= r.c2; c += stride) {
     series.push({
       ...(header ? { name: ref(c, r.r1, r.r1) } : {}),
       ...(firstIsX ? { x: ref(r.c1, first, r.r2) } : {}),
       y: ref(c, first, r.r2),
+      ...(stride === 2 && c + 1 <= r.c2 ? { size: ref(c + 1, first, r.r2) } : {}),
     });
   }
-  if (kind === 'pie') series.splice(1);
-  const xTitle = kind === 'scatter' && header && firstIsX ? String(sheet.value(r.r1, r.c1) ?? '') : undefined;
-  const yTitle = kind === 'scatter' && header && series.length === 1 ? String(sheet.value(r.r1, r.c1 + 1) ?? '') : undefined;
+  // a pie and a histogram chart one column of numbers
+  if (kind === 'pie' || kind === 'histogram') series.splice(1);
+  const xTitle = isXY(kind) && header && firstIsX ? String(sheet.value(r.r1, r.c1) ?? '') : undefined;
+  const yTitle = isXY(kind) && header && series.length === 1 ? String(sheet.value(r.r1, r.c1 + 1) ?? '') : undefined;
+  const yCol = firstIsX || (kind === 'histogram' && textCats) ? r.c1 + 1 : r.c1;
   return {
     id: nextChartId++,
     kind,
-    ...(series.length === 1 && header && kind !== 'scatter' ? { title: String(sheet.value(r.r1, firstIsX ? r.c1 + 1 : r.c1) ?? '') } : {}),
+    ...(series.length === 1 && header && !isXY(kind) ? { title: String(sheet.value(r.r1, yCol) ?? '') } : {}),
     series,
     x: { ...(xTitle ? { title: xTitle } : {}), grid: false },
     y: { ...(yTitle ? { title: yTitle } : {}), grid: kind !== 'pie' },
-    legend: series.length > 1 || kind === 'pie' ? 'right' : 'none',
+    legend: (series.length > 1 && kind !== 'combo') || kind === 'pie' ? 'right' : kind === 'combo' && series.length > 1 ? 'bottom' : 'none',
     at: { row: r.r1, col: r.c2 + 2, dx: 0, dy: 0 },
     w: 480,
     h: 290,
@@ -277,6 +338,7 @@ export function mapChartRefs(c: Chart, fn: (formula: string) => string): Chart {
       name: m(s.name),
       x: m(s.x),
       y: m(s.y)!,
+      ...(s.size ? { size: m(s.size) } : {}),
       ...(s.errors ? { errors: { ...s.errors, plus: m(s.errors.plus), minus: m(s.errors.minus) } } : {}),
     })),
   };

@@ -4,12 +4,12 @@
 // puts the numbers it cached back into cells.
 
 import { Package, PackageReader, kids } from './ooxml';
-import { chartXml, readChartXml, CT_CHART, REL_CHART } from './xlsx-chart';
+import { chartXml, readChartXml, CT_CHART, REL_CHART, CT_CHARTEX, REL_CHARTEX, CX_NS } from './xlsx-chart';
 import { writeXlsx, type XlsxPictures } from './xlsx';
 import { ChartBox, boxBook, boxData, boxFromCaches, PX_PER_PT } from '../sheet/chart-box';
-import { newChartId } from '../sheet/chart';
+import { newChartId, isChartEx } from '../sheet/chart';
 
-export { CT_CHART, REL_CHART };
+export { CT_CHART, REL_CHART, CX_NS };
 export const C_NS = 'http://schemas.openxmlformats.org/drawingml/2006/chart';
 const REL_PACKAGE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/package';
 const CT_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -27,23 +27,48 @@ function relative(from: string, to: string): string {
 
 /**
  * Add a chart to a package being written: its part (in `dir`/charts) and its data as a workbook
- * (in `dir`/embeddings). Returns the relationship id from `from` to the chart.
+ * (in `dir`/embeddings). Returns the relationship id from `from` to the chart. Histograms and box
+ * charts go in the newer chart part of Office 2016 (chartEx), which the caller wraps for older
+ * programs.
  */
 export async function addChart(pkg: Package, from: string, dir: string, n: number, box: ChartBox, w: number, h: number): Promise<string> {
-  const path = `${dir}/charts/chart${n}.xml`;
+  const ex = isChartEx(box.chart.kind);
+  const path = `${dir}/charts/${ex ? 'chartEx' : 'chart'}${n}.xml`;
   const book = `${dir}/embeddings/Microsoft_Excel_Worksheet${n}.xlsx`;
   pkg.add(book, await writeXlsx(boxBook(box).wb, NO_PICTURES));
   pkg.defaultType('xlsx', CT_XLSX);
   const rid = pkg.relate(path, REL_PACKAGE, relative(path, book));
   const sized = { ...box.chart, w: Math.round(w * PX_PER_PT), h: Math.round(h * PX_PER_PT) };
-  const body = chartXml(sized, boxData(box)).replace(/<\/c:chartSpace>$/, `<c:externalData r:id="${rid}"><c:autoUpdate val="0"/></c:externalData></c:chartSpace>`);
-  pkg.add(path, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${body}`, CT_CHART);
-  return pkg.relate(from, REL_CHART, relative(from, path));
+  const body = ex
+    ? chartXml(sized, boxData(box)).replace('<cx:chartData>', `<cx:chartData><cx:externalData r:id="${rid}" cx:autoUpdate="0"/>`)
+    : chartXml(sized, boxData(box)).replace(/<\/c:chartSpace>$/, `<c:externalData r:id="${rid}"><c:autoUpdate val="0"/></c:externalData></c:chartSpace>`);
+  pkg.add(path, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${body}`, ex ? CT_CHARTEX : CT_CHART);
+  return pkg.relate(from, ex ? REL_CHARTEX : REL_CHART, relative(from, path));
 }
 
 /** The numbers and labels a chart part cached beside each of its references. */
 function cachesOf(doc: Document): { ref: string; values: string[] }[] {
   const out: { ref: string; values: string[] }[] = [];
+  // a newer chart: each block of data's numbers and labels, with their references
+  for (const dim of Array.from(doc.getElementsByTagNameNS(CX_NS, 'numDim')).concat(Array.from(doc.getElementsByTagNameNS(CX_NS, 'strDim')))) {
+    const f = kids(dim, 'f')[0]?.textContent?.trim();
+    const lvl = kids(dim, 'lvl')[0];
+    if (!f || !lvl) continue;
+    const n = Number(lvl.getAttribute('ptCount') ?? 0);
+    const values: string[] = Array(Math.max(0, Math.min(100000, n))).fill('');
+    const text = dim.localName === 'strDim';
+    for (const pt of kids(lvl, 'pt')) {
+      const i = Number(pt.getAttribute('idx'));
+      const v = pt.textContent ?? '';
+      if (Number.isInteger(i) && i >= 0 && i < values.length) values[i] = text && v.trim() !== '' && Number.isFinite(Number(v)) ? `'${v}` : v;
+    }
+    out.push({ ref: f, values });
+  }
+  // a name given by reference
+  for (const td of Array.from(doc.getElementsByTagNameNS(CX_NS, 'txData'))) {
+    const f = kids(td, 'f')[0]?.textContent?.trim();
+    if (f) out.push({ ref: f, values: [kids(td, 'v')[0]?.textContent ?? ''] });
+  }
   for (const tag of ['numRef', 'strRef']) {
     for (const el of Array.from(doc.getElementsByTagNameNS(C_NS, tag))) {
       const f = kids(el, 'f')[0]?.textContent?.trim();

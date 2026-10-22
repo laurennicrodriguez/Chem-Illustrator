@@ -29,6 +29,8 @@ import { connectorSpPr, geoSpPr, xfrm } from './pptx-write';
 import { geoDef } from '../design/geo';
 import { shapeOrder } from '../objects';
 import { addChart, C_NS } from './office-chart';
+import { CX_NS, CX1_NS } from './xlsx-chart';
+import { isChartEx } from '../sheet/chart';
 import type { ChartBox } from '../sheet/chart-box';
 import {
   BIB_MARK, CHART_NAME, CITE_FIELD, DOCX_CT, W14_NS, W15_NS, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, MC_NS, M_NS, PIC_NS, TABLE_NAME, W_NS, WORD_HIGHLIGHTS, WP_NS, WPS_NS, WPG_NS, twips, toWordDate, type DocxModel,
@@ -502,9 +504,30 @@ class DocxWriter {
     const rid = await addChart(this.pkg, main, 'word', ++this.chartNo, box, size.w, size.h);
     (this.model.charts ??= {})[id] = box;
     const n = this.docPr++;
-    return `<w:r>${rPr ? `<w:rPr>${rPr}</w:rPr>` : ''}<w:drawing>` + this.placed(o, emu(size.w), emu(size.h),
+    const ex = isChartEx(box.chart.kind);
+    const uri = ex ? CX_NS : C_NS;
+    const tag = ex ? 'cx' : 'c';
+    const chart = '<w:drawing>' + this.placed(o, emu(size.w), emu(size.h),
       `<wp:docPr id="${n}" name="${CHART_NAME} ${id}"/><wp:cNvGraphicFramePr/>` +
-      `<a:graphic><a:graphicData uri="${C_NS}"><c:chart xmlns:c="${C_NS}" r:id="${rid}"/></a:graphicData></a:graphic>`) + '</w:drawing></w:r>';
+      `<a:graphic><a:graphicData uri="${uri}"><${tag}:chart xmlns:${tag}="${uri}" r:id="${rid}"/></a:graphicData></a:graphic>`) + '</w:drawing>';
+    const r = rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
+    if (!ex) return `<w:r>${r}${chart}</w:r>`;
+    // Word 2016's newer chart, with a picture of it for older programs
+    let fallback = '';
+    try {
+      const { mime, bytes } = fromDataUrl(o.src);
+      const ext = MIME_EXT[mime];
+      if (ext && ext !== 'svg') {
+        const blip = this.media(main, bytes, ext);
+        const cx = emu(size.w), cy = emu(size.h), m = this.docPr++;
+        fallback = '<w:drawing>' + this.placed(o, cx, cy,
+          `<wp:docPr id="${m}" name="${CHART_NAME} ${id}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>` +
+          `<a:graphic><a:graphicData uri="${PIC_NS}"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="Chart"/><pic:cNvPicPr/></pic:nvPicPr>` +
+          `<pic:blipFill><a:blip r:embed="${blip}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
+          `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic>`) + '</w:drawing>';
+      }
+    } catch { /* no picture: older programs show nothing */ }
+    return `<w:r>${r}<mc:AlternateContent><mc:Choice xmlns:cx1="${CX1_NS}" Requires="cx1">${chart}</mc:Choice><mc:Fallback>${fallback}</mc:Fallback></mc:AlternateContent></w:r>`;
   }
 
   private async picture(main: string, id: number, o: DocObject, rPr: string): Promise<string> {
