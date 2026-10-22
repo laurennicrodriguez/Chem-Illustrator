@@ -1773,7 +1773,7 @@ function renderTabs(): void {
     icon.title = TAB_ICONS[t.mode][1];
     const name = document.createElement('span');
     name.className = 'tab-name';
-    name.textContent = t.name;
+    name.textContent = ws.label(t);
     const close = document.createElement('button');
     close.className = 'tab-close';
     close.type = 'button';
@@ -2159,7 +2159,7 @@ async function exportPdf(): Promise<void> {
   const docFile = docActive() ? tab.document : null;
   if (docFile) {
     // the pages as laid out on screen, figures as shapes and text so they stay sharp
-    pages = recordPages(docFile.t, docFile.layout(), (c, style) => figures.record(c, style).pic);
+    pages = recordPages(docFile.t, docFile.printLayout(), (c, style) => figures.record(c, style).pic);
   } else if (deck) {
     pages = deck.slides.map((s, i) => ({
       w: deck.size.w, h: deck.size.h,
@@ -2214,7 +2214,7 @@ async function printNow(): Promise<void> {
   const docFile = docActive() ? tab.document : null;
   if (docFile) {
     // the pages as laid out on screen
-    const pages = recordPages(docFile.t, docFile.layout(), (c, style) => figures.record(c, style).pic);
+    const pages = recordPages(docFile.t, docFile.printLayout(), (c, style) => figures.record(c, style).pic);
     if (!pages.length) return;
     printPages({ pages: pages.map(pageSvgOf), w: pages[0].w, h: pages[0].h });
     return;
@@ -2798,6 +2798,8 @@ const DOC_COMMANDS: Record<string, () => unknown> = {
     docMode.insertObject({ kind: 'drawing', contents: r.contents }, 'Paste SMILES');
   },
   'name-to-structure': () => docMode.run('structure-from-name-doc'),
+  // View > New Window: the document in another tab too, with its own view and place
+  'doc-new-window': () => { ws.newWindow(); },
 };
 
 /** Menu commands from the drawing's list that also work while a document shows. */
