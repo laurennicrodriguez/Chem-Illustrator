@@ -1652,6 +1652,16 @@ function deckNow(): Deck | null {
   return ws.active.deck ?? null;
 }
 
+/** Slides' Selection Pane is open (Home > Selection Pane, Alt+F10). */
+let selectionPane = false;
+
+/** Design's Layers panel, or Slides' Selection Pane when it is open, in the right-hand panel. */
+function showLayers(tab = ws.active): void {
+  const design = tab.mode === 'design', slides = !!tab.deck && !design;
+  layers?.show(design || (slides && selectionPane) ? doc : null, slides);
+  for (const b of document.querySelectorAll('[data-cmd="selection-pane"]')) b.setAttribute('aria-pressed', String(slides && selectionPane));
+}
+
 /** Finish typing in a caption or the notes (and drawing a structure for a cell), before the slide or tab changes. */
 function finishTyping(): void {
   finishCellStructure(true);
@@ -1671,7 +1681,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   document.body.classList.toggle('slides-mode', slides);
   document.body.classList.toggle('design-mode', design);
   editor.glueArrows = design;
-  layers?.show(design ? doc : null);
+  showLayers(tab);
   showGuides();
   if (deck) deck.onMotion = () => { animUi?.refresh(); ws.noteChange(); renderer.repaintAll(); editor.requestScene(); };
   if (deck) deck.onComments = () => { slideCmts?.update(); ws.noteChange(); };
@@ -1829,7 +1839,10 @@ layers = new LayersPanel($('#layers-section'), {
   select: (ids) => editor.selectShapes(ids),
   selected: () => editor.selectedShapes(),
   edit: (label, f) => { finishTyping(); doc.edit(label, f); editor.changed(); },
+  pick: (w) => { finishTyping(); editor.selectThese({ atoms: new Set(w.atoms), bonds: new Set(), captions: new Set(w.captions), arrows: new Set(w.arrows), shapes: new Set(w.shapes) }); },
+  picked: () => ({ shapes: [...editor.sel.shapes], captions: [...editor.sel.captions], atoms: [...editor.sel.atoms], arrows: [...editor.sel.arrows] }),
 });
+layers.onClose = () => { selectionPane = false; showLayers(); };
 const lib = (designLib = new DesignLibrary($('#design-lib'), (id) => { finishTyping(); editor.setTool(`geo:${id}`); }));
 const designGrid = { on: false, step: 18 };
 const dzBg = $<HTMLInputElement>('#dz-bg');
@@ -3456,6 +3469,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'paste-slides': () => pasteSlides(),
   'paste-slides-keep': () => pasteSlides(true),
   'hide-slide': () => hideSlides(),
+  'selection-pane': () => { selectionPane = !selectionPane; showLayers(); },
   'reuse-slides': () => reuseSlides(),
   'insert-equation': () => insertEquation(),
   'insert-link': () => insertLink(),
