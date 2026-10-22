@@ -168,6 +168,7 @@ import { emptyTable, tableFromCells } from './table';
 import type { TableData } from './model';
 import { checkDrawing, checkDocument, checkWorkbook, repeatedTitles, structureAlt, setStructureAlt, type Issue, type IssuePlace } from './accessibility';
 import { AccessibilityPane, askAltText } from './ui/accessibility-pane';
+import { SlideComparePane } from './ui/slide-compare';
 import type { PastedRows } from './io/table-clip';
 import { Keeper } from './keep/keeper';
 import { DEFAULT_KEEP, type KeepPrefs } from './keep/prefs';
@@ -3814,6 +3815,51 @@ const accessibility = new AccessibilityPane({
   },
 });
 
+const slideCompare = new SlideComparePane({
+  deck: () => (ws.active.mode === 'slides' ? deckNow() : null),
+  flash: (m, ms) => flash(m, ms),
+  changed: () => { const d = deckNow(); if (d) deckChanged(d); },
+});
+
+/** Review > Compare (slides): another version of this deck, from an open tab or a PowerPoint file, to review slide by slide. */
+async function compareSlides(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const others = ws.tabs.filter((t) => t !== ws.active && t.mode === 'slides' && t.deck);
+  let pick = 'file';
+  if (others.length) {
+    const got = await ask('Compare Presentations', [{
+      name: 'with', label: 'Compare with', value: 'file',
+      options: [{ value: 'file', label: 'A PowerPoint file…' }, ...others.map((t, i) => ({ value: String(i), label: t.name }))],
+    }], { ok: 'Compare', note: 'Each slide that differs in the other version is listed, to accept into this deck or reject.' });
+    if (!got) return;
+    pick = got.with;
+  }
+  const theirs = new Deck(new Doc());
+  let name: string;
+  if (pick === 'file') {
+    const f = await openBytesDialog('PowerPoint presentations', [PPTX]).catch(async (e) => { await showError(String(e)); return null; });
+    if (!f) return;
+    try {
+      const got = readPptx(f.bytes);
+      theirs.load(got.slides.map((s) => theirs.makeSlide(s.layout, s.contents, s.notes, s, got.master)), got.size, got.master);
+    } catch (e) {
+      flash(`Could not read ${f.name}: ${e instanceof Error ? e.message : String(e)}`, 8000);
+      return;
+    }
+    name = f.name;
+  } else {
+    const t = others[Number(pick)];
+    const src = t.deck!.copySlides(t.deck!.slides.map((_, i) => i));
+    theirs.load(src.slides.map((s) => theirs.makeSlide(s.layout, s.contents, s.notes, s.motion, src.master)), src.size, src.master);
+    name = t.name;
+  }
+  if (deckNow() !== d) return;
+  const n = slideCompare.start(d, theirs, name, document.querySelector<HTMLElement>('[data-cmd="compare-slides"]:not([hidden])'));
+  flash(n ? `${n} change${n === 1 ? '' : 's'} from ${name} to review.` : `${name} has the same slides as this deck.`);
+}
+
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
   if (sheetActive()) {
@@ -3855,7 +3901,7 @@ function setPictureStyle(look: PictureLook | undefined): boolean {
 }
 
 /** Slide commands that don't apply to a design's single page. */
-const SLIDE_ONLY = new Set(['section-menu', 'new-slide', 'duplicate-slide', 'delete-slide', 'cut-slides', 'copy-slides', 'paste-slides', 'paste-slides-keep', 'hide-slide', 'reuse-slides', 'size-wide', 'size-standard', 'size-custom', 'slide-master', 'slide-templates',
+const SLIDE_ONLY = new Set(['compare-slides', 'section-menu', 'new-slide', 'duplicate-slide', 'delete-slide', 'cut-slides', 'copy-slides', 'paste-slides', 'paste-slides-keep', 'hide-slide', 'reuse-slides', 'size-wide', 'size-standard', 'size-custom', 'slide-master', 'slide-templates',
   'edit-layouts', 'view-sorter', 'add-section', 'rename-section', 'remove-section', 'remove-section-slides', 'remove-all-sections', 'section-up', 'section-down', 'collapse-sections', 'expand-sections',
   'slide-transitions', 'slide-animations', 'animation-pane', 'preview-slide', 'remove-animation', 'insert-slide-zoom', 'insert-summary-zoom', 'action-settings', 'insert-video', 'insert-audio']);
 
@@ -3938,6 +3984,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'hide-slide': () => hideSlides(),
   'selection-pane': () => { selectionPane = !selectionPane; showLayers(); },
   'reuse-slides': () => reuseSlides(),
+  'compare-slides': () => compareSlides(),
   'insert-equation': () => insertEquation(),
   'insert-link': () => insertLink(),
   'remove-link': () => removeLinks(),

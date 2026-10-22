@@ -2194,12 +2194,16 @@ button.sym:hover, button.sym:focus-visible { border-color: var(--accent); backgr
 /* Review > Compare (slides) */
 .sc-pane { width: 380px; }
 .sc-item { border-top: 1px solid var(--line); padding: 6px 0; }
-.sc-item h4 { margin: 0 0 2px; font-size: 13px; cursor: pointer; }
+.sc-head { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 0; font-weight: 600; font-size: 13px; cursor: pointer; color: inherit; }
+.sc-head:hover { text-decoration: underline; }
 .sc-item ul { margin: 2px 0 4px 18px; padding: 0; }
 .sc-item li { margin: 0; }
 .sc-thumbs { display: flex; gap: 6px; margin: 4px 0; }
 .sc-thumbs figure { margin: 0; flex: 1; }
 .sc-thumbs figcaption { font-size: 11px; color: var(--muted); }
-.sc-thumbs canvas { width: 100%; border: 1px solid var(--line); background: #fff; }
-.sc-buttons { display: flex; gap: 6px; }
-.sc-done { color: var(--muted); font-style: italic; }
+.sc-thumbs canvas { max-width: 100%; border: 1px solid var(--line); background: #fff; }
+.sc-none { display: grid; place-items: center; aspect-ratio: 16 / 9; border: 1px dashed var(--line); color: var(--muted); font-size: 11px; }
+.sc-bar, .sc-act { display: flex; gap: 6px; flex-wrap: wrap; }
+.sc-bar { margin-bottom: 6px; }
+.sc-accepted, .sc-rejected { opacity: 0.6; }
+.sc-list { max-height: 60vh; overflow: auto; }
