@@ -1172,6 +1172,8 @@ def bicyclics():
                     pass
             if cis:
                 smi = cis[0]
+        if (x, y, z) in NAMED_SYSTEMS:
+            continue  # drawn with the named scaffolds, first in the palette (cages())
         try:
             atoms, bonds, xyz = mol3d(smi)
         except RuntimeError:
@@ -1185,6 +1187,74 @@ def bicyclics():
             # on the diamond lattice (bicyclo[3.3.1]nonane, two chairs): drawn as chairs are
             pic = lattice_pics(xyz, bonds, prefer=wide_pic)[0] if off_lattice(xyz, bonds) < 16 else bridged_pic(xyz, bonds, bh1, bh2, bridges)
         add(G, f'bicyclo{x}{y}{z}', name, smi, atoms, bonds, pic, stereo3d=z == 0)
+
+
+# bicyclo[x.y.z] systems drawn among the named scaffolds instead
+NAMED_SYSTEMS = {(1, 1, 1), (2, 1, 1), (2, 2, 1), (2, 2, 2), (3, 1, 1), (3, 2, 1), (3, 3, 1)}
+
+# The bridged and spiro scaffolds chemists draw most, first in the Bicyclic rings palette:
+# the classics (with the pictures their Wikipedia pages use: norbornane and camphor with the
+# one-atom bridge on top, bicyclo[2.2.2]octane and DABCO as the open box), then the saturated
+# bioisosteres of benzene, pyridine, piperidine and morpholine from Enamine's and Mykhailiuk's
+# work (bicyclo[1.1.1]pentanes, bicyclo[2.1.1]hexanes, 2-oxabicyclo[2.1.1]hexanes and
+# [2.2.2]octanes, bicyclo[3.1.1]heptanes, spiro[3.3]heptanes), bare and with their exit
+# vectors (two methyls, to be relabelled). (id, name, SMILES)
+CAGES = [
+    ('bicyclo221', 'Norbornane, bicyclo[2.2.1]heptane', 'C1CC2CCC1C2'),
+    ('bicyclo222', 'Bicyclo[2.2.2]octane', 'C1CC2CCC1CC2'),
+    ('camphor', 'Camphor', 'CC1(C)C2CCC1(C)C(=O)C2'),
+    ('bornane', 'Bornane', 'CC1(C)C2CCC1(C)CC2'),
+    ('bicyclo311', 'Bicyclo[3.1.1]heptane (pinane ring system)', 'C1CC2CC(C1)C2'),
+    ('pinane', 'Pinane', 'CC1CCC2CC1C2(C)C'),
+    ('bicyclo321', 'Bicyclo[3.2.1]octane (tropane ring system)', 'C1CC2CCC(C1)C2'),
+    ('tropane', 'Tropane', 'CN1C2CCC1CCC2'),
+    ('bicyclo331', 'Bicyclo[3.3.1]nonane', 'C1CC2CCCC(C1)C2'),
+    ('quinuclidine', 'Quinuclidine', 'C1CN2CCC1CC2'),
+    ('dabco', 'DABCO, 1,4-diazabicyclo[2.2.2]octane', 'C1CN2CCN1CC2'),
+    ('bicyclo111', 'Bicyclo[1.1.1]pentane (BCP)', 'C1C2CC1C2'),
+    ('bcp-13', '1,3-Disubstituted BCP (para-benzene isostere)', 'CC12CC(C)(C1)C2'),
+    ('bicyclo211', 'Bicyclo[2.1.1]hexane', 'C1CC2CC1C2'),
+    ('bch-12', '1,2-Disubstituted bicyclo[2.1.1]hexane (ortho-benzene isostere)', 'CC12C(C)CC(C1)C2'),
+    ('bch-14', '1,4-Disubstituted bicyclo[2.1.1]hexane', 'CC12CCC(C)(C1)C2'),
+    ('oxabch', '2-Oxabicyclo[2.1.1]hexane', 'C12OCC(C1)C2'),
+    ('oxabch-14', '1,4-Disubstituted 2-oxabicyclo[2.1.1]hexane (ortho-benzene isostere)', 'CC12OCC(C)(C1)C2'),
+    ('azabch', '2-Azabicyclo[2.1.1]hexane (pyrrolidine isostere)', 'C12NCC(C1)C2'),
+    ('bco-14', '1,4-Disubstituted bicyclo[2.2.2]octane (para-benzene isostere)', 'CC12CCC(C)(CC1)CC2'),
+    ('oxabco', '2-Oxabicyclo[2.2.2]octane', 'C12OCC(CC1)CC2'),
+    ('oxabco-14', '1,4-Disubstituted 2-oxabicyclo[2.2.2]octane (para-benzene isostere)', 'CC12OCC(C)(CC1)CC2'),
+    ('bicyclo311-15', '1,5-Disubstituted bicyclo[3.1.1]heptane (meta-benzene isostere)', 'CC12CCCC(C)(C1)C2'),
+    ('oxabcheptane', '3-Oxabicyclo[3.1.1]heptane (meta-pyridine isostere)', 'C12COCC(C1)C2'),
+    ('azabcheptane', '3-Azabicyclo[3.1.1]heptane (meta-pyridine isostere)', 'C12CNCC(C1)C2'),
+    ('azabchexane', '3-Azabicyclo[3.1.0]hexane', 'C1NCC2CC12'),
+    ('spiro33', 'Spiro[3.3]heptane (benzene isostere)', 'C1CC2(C1)CCC2'),
+    ('spiro33-26', '2,6-Disubstituted spiro[3.3]heptane', 'CC1CC2(C1)CC(C)C2'),
+    ('azaspiro33', '2-Azaspiro[3.3]heptane (piperidine isostere)', 'C1CC2(C1)CNC2'),
+    ('azaspiro33-1', '1-Azaspiro[3.3]heptane (piperidine isostere)', 'N1CCC12CCC2'),
+    ('oxaazaspiro33', '2-Oxa-6-azaspiro[3.3]heptane (morpholine isostere)', 'C1OCC12CNC2'),
+]
+
+
+def cages():
+    """The named bridged and spiro scaffolds (CAGES): a bicyclic as the usual picture of its
+    kind (bridged_pic, or on the lattice for bicyclo[3.3.1]nonane), anything else (spiro, a
+    cyclopropane fused on) seen along the page, its rings level."""
+    G = 'bicyclics'
+    for tid, name, smi in CAGES:
+        atoms, bonds, xyz = mol3d(smi)
+        n = len(atoms)
+        ring = [i for i in range(n) if any(i in r for r in rings_of(n, bonds))]
+        core = [b for b in bonds if b[0] in ring and b[1] in ring]
+        deg = {i: sum(1 for b in core if i in b[:2]) for i in ring}
+        heads = [i for i in ring if deg[i] == 3]
+        if len(heads) == 2 and not any(b[:2] in ([heads[0], heads[1]], [heads[1], heads[0]]) for b in core):
+            # bridges between the two bridgeheads, along the ring bonds
+            idx = {a: k for k, a in enumerate(ring)}
+            b1, b2, br = bridges_of(len(ring), [[idx[i], idx[j]] for i, j, *_ in core])
+            bh1, bh2, bridges = ring[b1], ring[b2], [[ring[k] for k in b] for b in br]
+            pic = lattice_pics(xyz, bonds, prefer=wide_pic)[0] if tid == 'bicyclo331' else bridged_pic(xyz, bonds, bh1, bh2, bridges)
+        else:
+            pic = oblique_pics(xyz, bonds, ring, prefer=wide_pic, tilts=(0, 10, 20))[0]
+        add(G, tid, name, smi, atoms, bonds, pic)
 
 
 def off_lattice(xyz, bonds):
@@ -1228,7 +1298,10 @@ def bridged_pic(xyz, bonds, bh1, bh2, bridges):
     c = (xyz[bh1] + xyz[bh2]) / 2
     ex = xyz[bh2] - xyz[bh1]
     ex /= np.linalg.norm(ex)
-    small, big = min(bridges, key=len), max(bridges, key=len)
+    # the shortest bridge on top (of two, the one carrying substituents: pinane's gem-dimethyl)
+    deg = lambda i: sum(1 for b in bonds if i in b[:2])
+    small = min(bridges, key=lambda br: (len(br), -sum(deg(i) for i in br)))
+    big = max(bridges, key=len)
     up = xyz[small].mean(axis=0) - c
     ez = up - np.dot(up, ex) * ex
     ez /= np.linalg.norm(ez)
@@ -1539,7 +1612,7 @@ def main():
         draw_all(Path(sys.argv[sys.argv.index('--png') + 1]))
 
 
-FAMILIES = [cyclohexanes, small_rings, medium_rings, fused, bicyclics, projections, stereocentres, cycloalkanes, aromatics, perspective, sugar_chairs]
+FAMILIES = [cyclohexanes, small_rings, medium_rings, fused, cages, bicyclics, projections, stereocentres, cycloalkanes, aromatics, perspective, sugar_chairs]
 
 
 def draw_all(folder):

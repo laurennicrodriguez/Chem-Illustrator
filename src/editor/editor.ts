@@ -48,7 +48,7 @@ import { circleRing, circleRings, kekulize } from '../chem/aromatic';
 import { bondLayer, crossingBonds } from '../chem/crossing';
 import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
 import { arrowClash, bendSide, cleanUpArrow, headEnd, isAtomSymbol, pushArrow, pushEndAt, pushPins, sameEnd, symbolAt, symbolPin, symbolSpot, tailEnd, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
-import { followPins, hasPins, mirrorBend } from '../chem/pins';
+import { followPins, hasPins, makePin, mirrorBend } from '../chem/pins';
 import { applyArrange, planArrange, readingOrder, type ArrangeOptions } from '../chem/scheme-arrange';
 import { buildCycle, type CycleLook, type CycleSpec } from '../chem/cycles';
 import { refitTableFigures, tableContents } from './table-figs';
@@ -233,6 +233,8 @@ interface Drag {
   tpl?: { key: string; choices: TemplateChoice[]; index: number; manual: Vec | null };
   /** Format Painter: the click or box paints what it lands on. */
   paint?: boolean;
+  /** Pressed on the charge sign an atom shows: dragging takes it off the atom's label as a sign of its own (freeCharge). */
+  charge?: number;
 }
 
 /** One way a template can go: where its atoms land, and which are shared with the drawing. */
@@ -244,6 +246,9 @@ interface TemplateChoice {
   noMerge?: boolean;
   /** Drawn bond ends the template moves (see PlaceOptions.move). */
   move?: Set<number>;
+  /** Depths for a 3-D fusion (see PlaceOptions.depth, atomDepth). */
+  depth?: number[];
+  atomDepth?: Map<number, number>;
   /** Shown while choosing (trans-fused, cis-fused). */
   note?: string;
 }
@@ -689,6 +694,11 @@ export class Editor {
       ...(painting ? { paint: true } : {}),
     };
     if (handle) this.drag.handle = handle;
+    // the selection tool on a charge sign: it can be dragged anywhere round its atom
+    if (e.button === 0 && !handle && !rotating && !painting && this.tool.kind === 'select') {
+      const c = this.chargeSignAt(p);
+      if (c !== null) this.drag.charge = c;
+    }
     if (rotating) {
       const b = this.selBox()!;
       const center = { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 };
@@ -746,7 +756,13 @@ export class Editor {
       if (d.mode === 'rotate') this.doc.begin('Rotate');
       if (d.mode === 'move') {
         this.r.overlay.style.cursor = d.ctrl ? 'copy' : 'grabbing';
-        this.doc.begin(d.ctrl ? 'Copy' : 'Move');
+        this.doc.begin(d.charge !== undefined ? 'Move Charge' : d.ctrl ? 'Copy' : 'Move');
+        if (d.charge !== undefined) {
+          const id = freeCharge(this.doc, d.charge, this.r.chargeBox(this.doc, this.doc.atoms.get(d.charge)!)!);
+          d.hit = { kind: 'shape', id };
+          d.ctrl = false;
+          this.sel = emptySel();
+        }
         if (d.hit && !this.isSelected(d.hit)) {
           // dragging an unselected atom or object moves just that (a copy takes its whole structure)
           this.sel = emptySel();
@@ -863,6 +879,7 @@ export class Editor {
 
   private dragModeFor(d: Drag): Drag['mode'] {
     if (d.paint) return 'marquee';
+    if (d.charge !== undefined) return 'move';
     // with any drawing tool, dragging what is already selected moves it (as in ChemDraw)
     if (d.hit && this.tool.kind !== 'eraser' && this.isSelected(d.hit)) return 'move';
     switch (this.tool.kind) {
@@ -1323,7 +1340,7 @@ export class Editor {
       const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
       const in3d = fusions3d(doc, t, h.id);
       if (in3d?.length) {
-        return in3d.map((f) => ({ pl: { origin: { x: 0, y: 0 }, scale: f.len, angle: 0, mirror: false, pts: f.pts }, existing: f.existing, move: f.move, scale: b.s, noMerge: true, ...(f.join ? { note: `${f.join}-fused` } : {}) }));
+        return in3d.map((f) => ({ pl: { origin: { x: 0, y: 0 }, scale: f.len, angle: 0, mirror: false, pts: f.pts }, existing: f.existing, move: f.move, depth: f.depth, atomDepth: f.atomDepth, scale: b.s, noMerge: true, ...(f.join ? { note: `${f.join}-fused` } : {}) }));
       }
       if (!t.fuse) return [];
       const n = perp(sub(q, p)), mid = mul(add(p, q), 0.5);
@@ -1431,7 +1448,7 @@ export class Editor {
     const f = t && b && fusions3d(this.doc, t, bondId)?.[index];
     if (!t || !b || !f) return false;
     this.doc.edit('Fuse ring', () => {
-      const ids = placeTemplate(this.doc, t, { origin: { x: 0, y: 0 }, scale: f.len, angle: 0, mirror: false, pts: f.pts }, { existing: f.existing, move: f.move, scale: b.s, noMerge: true });
+      const ids = placeTemplate(this.doc, t, { origin: { x: 0, y: 0 }, scale: f.len, angle: 0, mirror: false, pts: f.pts }, { existing: f.existing, move: f.move, depth: f.depth, atomDepth: f.atomDepth, scale: b.s, noMerge: true });
       this.lastEdited = ids[t.attach];
     });
     this.changed();
@@ -1442,7 +1459,7 @@ export class Editor {
     const t = templateById(id);
     const place = t && this.templatePlacement(t, h, start, cursor, alt, d);
     if (!t || !place) return;
-    const ids = placeTemplate(this.doc, t, place.pl, { existing: place.existing, bondFrom: place.bondFrom, scale: place.scale, noMerge: place.noMerge, move: place.move });
+    const ids = placeTemplate(this.doc, t, place.pl, { existing: place.existing, bondFrom: place.bondFrom, scale: place.scale, noMerge: place.noMerge, move: place.move, depth: place.depth, atomDepth: place.atomDepth });
     this.lastEdited = ids[t.attach];
   }
 
@@ -2066,6 +2083,17 @@ export class Editor {
       if (atom && circled) doc.updateAtom(atom.id, { charge: atom.charge + (kind === 'CirclePlus' ? 1 : -1), hideCharge: true });
     });
     this.changed();
+  }
+
+  /** The atom whose charge sign (beside a carbon, or in a label) is under the pointer, or null. */
+  private chargeSignAt(p: Vec): number | null {
+    const doc = this.doc;
+    const pad = this.tol(2);
+    for (const a of doc.atomsNear(p, doc.style.bondLength)) {
+      const b = a.charge && Math.abs(a.charge) === 1 && !a.hideCharge ? this.r.chargeBox(doc, a) : null;
+      if (b && p.x >= b.x1 - pad && p.x <= b.x2 + pad && p.y >= b.y1 - pad && p.y <= b.y2 + pad) return a.id;
+    }
+    return null;
   }
 
   /** The most open place round an atom for a symbol this big, clear of other symbols and short captions near it. */
@@ -5079,14 +5107,32 @@ export function applyCharge(doc: Doc, id: number, charge: number, circled: boole
   if (ring && Math.abs(charge) === 1) {
     const size = 4.5;
     const at = spot(doc.atoms.get(id)!, size);
-    doc.addShape({ kind: 'symbol', symbol: charge > 0 ? 'CirclePlus' : 'CircleMinus', x1: at.x - size / 2, y1: at.y - size / 2, x2: at.x + size / 2, y2: at.y + size / 2 });
+    // a sign already moved off the label stays a plain sign
+    const plain = near.some((s) => s.symbol === 'Plus' || s.symbol === 'Minus');
+    doc.addShape({ kind: 'symbol', symbol: plain ? (charge > 0 ? 'Plus' : 'Minus') : charge > 0 ? 'CirclePlus' : 'CircleMinus', x1: at.x - size / 2, y1: at.y - size / 2, x2: at.x + size / 2, y2: at.y + size / 2 });
     doc.updateAtom(id, { charge, hideCharge: true });
   } else doc.updateAtom(id, { charge, hideCharge: undefined });
 }
 
-/** The circled charges (⊕, ⊖) beside an atom: within most of a bond length of it. */
+/**
+ * Take an atom's charge of one out of its label (or from beside its carbon) as a + or − sign of
+ * its own, where it was drawn, stuck to the atom so it can be moved round it: the same as
+ * ChemDraw's charge drawn with the charge tool. Inside an edit; returns the sign's shape.
+ */
+export function freeCharge(doc: Doc, id: number, box: Rect): number {
+  const a = doc.atoms.get(id)!;
+  const size = Math.max(3, Math.min(box.x2 - box.x1, box.y2 - box.y1) * 0.8);
+  const c = { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 };
+  const pin = makePin(doc, 'atom', [id], c) ?? undefined;
+  const s = doc.addShape({ kind: 'symbol', symbol: a.charge > 0 ? 'Plus' : 'Minus', x1: c.x - size / 2, y1: c.y - size / 2, x2: c.x + size / 2, y2: c.y + size / 2, ...(a.color ? { color: a.color } : {}), ...(pin ? { pin } : {}) });
+  doc.updateAtom(id, { hideCharge: true });
+  return s.id;
+}
+
+/** The charge signs (⊕, ⊖, or + and − moved off a label) beside an atom: within most of a bond length of it. */
 export function circledChargesOf(doc: Doc, a: Atom): Shape[] {
   const L = doc.style.bondLength;
-  return [...doc.shapes.values()].filter((s) => s.kind === 'symbol' && (s.symbol === 'CirclePlus' || s.symbol === 'CircleMinus')
-    && dist({ x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 }, a) < 0.8 * L);
+  // stuck to this atom, or (not stuck to any) beside it
+  return [...doc.shapes.values()].filter((s) => s.kind === 'symbol' && ['CirclePlus', 'CircleMinus', 'Plus', 'Minus'].includes(s.symbol ?? '')
+    && (s.pin ? s.pin.on === 'atom' && s.pin.ref[0] === a.id : dist({ x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 }, a) < 0.8 * L));
 }

@@ -49,6 +49,12 @@ export interface Atom {
   s?: number;
   /** A 3-D position kept from a file (ChemDraw's xyz on a structure built from a crystal file). */
   xyz?: [number, number, number];
+  /**
+   * How far towards the reader the atom lies, in drawing units, for an atom placed from a
+   * drawing in perspective (a conformer template or a ring fused onto one): where two bonds
+   * cross, it decides which is in front (crossing.ts layerByDepth).
+   */
+  depth?: number;
   /** A contracted label: the group it stands for, as SMILES from the atom where it joins (Chemistry > Contract Label). */
   group?: string;
   /**

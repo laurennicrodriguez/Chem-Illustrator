@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { Doc } from '../src/model';
 import { recordSlide } from '../src/deck/slide-view';
 import { defaultMaster, WIDE } from '../src/deck/deck';
-import { applyCharge } from '../src/editor/editor';
+import { applyCharge, freeCharge } from '../src/editor/editor';
 
 function signs(charge: number, hideCharge = false): string[] {
   const d = new Doc();
@@ -72,6 +72,32 @@ describe('charges from the + and − keys', () => {
     expect(circles(d)).toEqual([]);
     d.edit('-', () => applyCharge(d, id, -1, false, spot));
     expect(circles(d)).toEqual([]);
+    expect(d.atoms.get(id)!.hideCharge).toBeUndefined();
+  });
+});
+
+describe('moving a charge off its atom', () => {
+  it('takes the sign off as a + of its own, stuck to the atom, and keeps it plain when the charge changes', () => {
+    const d = new Doc();
+    let id = 0;
+    d.edit('Draw', () => {
+      const a = d.addAtom(100, 100), b = d.addAtom(114, 100);
+      d.addBond(a.id, b.id);
+      d.updateAtom(b.id, { charge: 1 });
+      id = b.id;
+    });
+    let s = 0;
+    d.edit('Move Charge', () => { s = freeCharge(d, id, { x1: 117, y1: 97, x2: 123, y2: 103 }); });
+    expect(d.shapes.get(s)!.symbol).toBe('Plus');
+    expect(d.shapes.get(s)!.pin?.ref[0]).toBe(id);
+    expect(d.atoms.get(id)!.hideCharge).toBe(true);
+    // no sign drawn by the atom any more, only the symbol
+    expect(signs(1, true)).not.toContain('+');
+    d.edit('Charge', () => applyCharge(d, id, -1, false, (a) => ({ x: a.x + 5, y: a.y })));
+    const left = [...d.shapes.values()].filter((x) => x.kind === 'symbol');
+    expect(left.map((x) => x.symbol)).toEqual(['Minus']);
+    d.edit('Charge', () => applyCharge(d, id, 0, false, (a) => ({ x: a.x + 5, y: a.y })));
+    expect([...d.shapes.values()].filter((x) => x.kind === 'symbol')).toHaveLength(0);
     expect(d.atoms.get(id)!.hideCharge).toBeUndefined();
   });
 });

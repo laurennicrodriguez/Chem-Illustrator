@@ -129,6 +129,16 @@ const patternPaths = new WeakMap<Shape, { make: () => Path2D; path: Path2D }>();
 /** Design shapes' effects, worked out once for each shape as it is. */
 const geoFx = new WeakMap<Shape, ShapeFxPaints>();
 
+/** Where a carbon drawn without a label shows its charge: its text and size, and the sign's middle (away from its bonds). */
+export function carbonCharge(doc: Doc, a: Atom): { text: string; size: number; at: Vec } {
+  let sx = 0, sy = 0;
+  for (const n of doc.neighbors(a.id)) { const d = norm(sub(n, a)); sx += d.x; sy += d.y; }
+  const away = len({ x: sx, y: sy }) > 0.1 ? norm({ x: -sx, y: -sy }) : { x: 0.7, y: -0.7 };
+  const size = doc.style.labelSize * 0.8;
+  const text = (Math.abs(a.charge) > 1 ? String(Math.abs(a.charge)) : '') + (a.charge > 0 ? '+' : '−');
+  return { text, size, at: { x: a.x + away.x * size * 0.8, y: a.y + away.y * size * 0.8 } };
+}
+
 export class Renderer {
   view: View = { scale: 2, ox: 40, oy: 40 };
   dpr = 1;
@@ -816,14 +826,17 @@ export class Renderer {
       }
       let from = 0;
       const at = (t: number) => add(a, mul(sub(c, a), t));
+      // a scrap left between a gap and the bond's end (or between two gaps) would show as a dot
+      const scrap = (2 * st.lineWidth) / (len(sub(c, a)) || 1);
+      const piece = (t0: number, t1: number) => { if (t1 - t0 < scrap) return; const u = at(t0), v = at(t1); path.moveTo(u.x, u.y); path.lineTo(v.x, v.y); };
       for (const [g0, g1] of gaps) {
         let t0 = (g0 - fa) / (fc - fa), t1 = (g1 - fa) / (fc - fa);
         if (t0 > t1) [t0, t1] = [t1, t0];
         if (t1 <= from || t0 >= 1) continue;
-        if (t0 > from) { const u = at(from), v = at(t0); path.moveTo(u.x, u.y); path.lineTo(v.x, v.y); }
+        if (t0 > from) piece(from, t0);
         from = Math.max(from, t1);
       }
-      if (from < 1) { const u = at(from); path.moveTo(u.x, u.y); path.lineTo(c.x, c.y); }
+      if (from < 1) piece(from, 1);
     };
     // a line of a double or triple bond set off to one side can still run under a charge
     const offLine = (path: Path2D, a: Vec, c: Vec) => { const [u, v] = this.clearCharges(doc, p, q, a, c); line(path, u, v); };
@@ -951,17 +964,28 @@ export class Renderer {
 
   /** A charge beside a carbon drawn without a label. Returns the font it leaves set. */
   private drawCarbonCharge(ctx: CanvasRenderingContext2D, doc: Doc, a: Atom): string {
-    let sx = 0, sy = 0;
-    for (const n of doc.neighbors(a.id)) { const d = norm(sub(n, a)); sx += d.x; sy += d.y; }
-    const away = len({ x: sx, y: sy }) > 0.1 ? norm({ x: -sx, y: -sy }) : { x: 0.7, y: -0.7 };
-    const size = doc.style.labelSize * 0.8;
-    const t = (Math.abs(a.charge) > 1 ? String(Math.abs(a.charge)) : '') + (a.charge > 0 ? '+' : '−');
+    const { text: t, size, at } = carbonCharge(doc, a);
     const font = `${size}px ${FONT_STACK}`;
     ctx.font = font;
     ctx.fillStyle = a.color ?? '#000';
     const w = measureText(t, size);
-    ctx.fillText(t, a.x + away.x * size * 0.8 - w / 2, a.y + away.y * size * 0.8 + size * 0.35);
+    ctx.fillText(t, at.x - w / 2, at.y + size * 0.35);
     return font;
+  }
+
+  /**
+   * The box of the charge sign an atom shows (beside a carbon, or in its label), so that it can
+   * be picked up and moved; null when it shows none (no charge, or one drawn as a symbol).
+   */
+  chargeBox(doc: Doc, a: Atom): Rect | null {
+    if (!a.charge || a.hideCharge) return null;
+    if (a.z === 6 && !a.label && !a.attach && !a.multi) {
+      const { size, at } = carbonCharge(doc, a);
+      const h = size * 0.45;
+      return { x1: at.x - h, y1: at.y - h, x2: at.x + h, y2: at.y + h };
+    }
+    const info = this.atomInfo(doc, a);
+    return info.charge ? info.boxes[info.charge.index] ?? null : null;
   }
 
   private drawShape(ctx: CanvasRenderingContext2D, s: Shape, lw: number, labelSize = 10): void {
