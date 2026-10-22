@@ -1,0 +1,64 @@
+name: Mark Stable
+
+# Makes a published version the one the app's Stable update channel offers (Edit > Settings >
+# Online > Updates). Run it by hand (Actions > Mark Stable > Run workflow) once a version has been
+# tried on a real computer and works. The Latest channel is unchanged: it keeps getting every build
+# of main (desktop.yml).
+#
+# How: the version's latest.json (its signed installers for each platform) is copied as
+# stable.json onto a release tagged "stable", which the app reads from
+# releases/download/stable/stable.json (src-tauri/src/lib.rs). That release is a pre-release, so
+# it never becomes "latest" and desktop.yml's "Mark the highest version as latest" passes over it.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to mark stable, such as 0.1.120 (leave empty for the newest release)
+        type: string
+        default: ''
+
+permissions:
+  contents: write # to publish the stable release
+
+concurrency:
+  group: mark-stable
+  cancel-in-progress: false
+
+jobs:
+  mark:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      WANTED: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find the version
+        id: pick
+        run: |
+          if [ -n "$WANTED" ]; then
+            tag="v${WANTED#v}"
+          else
+            gh release list --limit 100 --exclude-drafts --exclude-pre-releases --json tagName > "$RUNNER_TEMP/releases.json"
+            tag=$(node scripts/release.mjs newest 0.0.0 "$RUNNER_TEMP/releases.json")
+          fi
+          gh release view "$tag" --json tagName > /dev/null || { echo "There is no release $tag"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Marking $tag stable"
+      - name: Copy its installer list as stable.json
+        env:
+          TAG: ${{ steps.pick.outputs.tag }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/s" && cd "$RUNNER_TEMP/s"
+          gh release download "$TAG" --pattern latest.json
+          mv latest.json stable.json
+          notes="Stable is $TAG ($(date -u +%Y-%m-%d)): a version tried on a real computer before it was offered. The app's Stable update channel installs this one; the Latest channel gets every build."
+          if ! gh release view stable --json tagName > /dev/null 2>&1; then
+            gh release create stable --prerelease --latest=false --target "$GITHUB_SHA" --title "Stable channel" --notes "$notes"
+          fi
+          gh release upload stable stable.json --clobber
+          gh release edit stable --notes "$notes"
+      - name: Note it on the version's release
+        env:
+          TAG: ${{ steps.pick.outputs.tag }}
+        run: gh release edit "$TAG" --title "Chem Illustrator ${TAG#v} (beta, stable)"

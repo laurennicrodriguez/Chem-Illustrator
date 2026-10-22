@@ -3,6 +3,7 @@
 // %APPDATA%\io.github.nathanohare.chemillustrator); in a browser, the browser's storage for
 // this page. Drawings never go here.
 
+import type { UpdateChannel } from './updates';
 import { parseLooks, type HighlightLookPreset } from './ui/highlight-looks';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { KeyOverrides } from './editor/keymap';
@@ -125,6 +126,8 @@ export interface Settings {
   sheetFormulaBar: boolean;
   /** Look for a newer version when the desktop app starts (Edit > Settings). */
   updateCheck: boolean;
+  /** Stable (versions tried on a real computer first) or Latest (every build) (Edit > Settings > Online). */
+  updateChannel: UpdateChannel;
   /** Names the name reader can't read are looked up on PubChem (Edit > Settings). */
   pubchemNames: boolean;
   /** The Windows app has offered to open the chemistry file types (once, at its first start). */
@@ -157,7 +160,7 @@ export const DEFAULT_SETTINGS: Settings = {
   docPins: [],
   docRuler: false,
   sheetFormulaBar: true,
-  updateCheck: true, pubchemNames: true, fileTypesOffered: false, wordObjectsOffered: false, reviewName: '', skipVersion: null, recentFiles: [], recentSymbols: [], highlightLooks: [],
+  updateCheck: true, updateChannel: 'latest', pubchemNames: true, fileTypesOffered: false, wordObjectsOffered: false, reviewName: '', skipVersion: null, recentFiles: [], recentSymbols: [], highlightLooks: [],
   scheme: DEFAULT_SCHEME_PREFS,
   keep: DEFAULT_KEEP,
 };
@@ -179,6 +182,7 @@ export function parseSettings(text: string | null | undefined): Settings {
     const p = r.page as Record<string, unknown>;
     if (typeof p.w === 'number' && typeof p.h === 'number' && p.w > 10 && p.h > 10) s.page = { w: p.w, h: p.h, grow: p.grow !== false, ...(typeof p.name === 'string' ? { name: p.name } : {}) };
   }
+  if (r.updateChannel === 'stable' || r.updateChannel === 'latest') s.updateChannel = r.updateChannel;
   if (typeof r.textBar === 'string' && ['docked', 'floating', 'hidden'].includes(r.textBar)) s.textBar = r.textBar as Settings['textBar'];
   if (typeof r.linkSide === 'string' && ['keep', 'below', 'above', 'left', 'right'].includes(r.linkSide)) s.linkSide = r.linkSide as Settings['linkSide'];
   if (Array.isArray(r.replacements)) {
