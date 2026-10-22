@@ -3,6 +3,7 @@
 // the file that was opened; other browsers open through an upload box and save as a download.
 
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import type { FileStamp } from '../keep/recovery';
 
 /** Where a drawing lives, so Save can write back to it. */
 export type FileRef =
@@ -184,6 +185,27 @@ export async function writeFile(ref: FileRef, name: string, data: string | Uint8
 /** Read a file by its path (desktop app only). */
 export async function readPath(path: string): Promise<Uint8Array> {
   return new Uint8Array(await invoke<ArrayBuffer>('read_binary_file', { path }));
+}
+
+/** When a file was last changed, and its size (null when it isn't there or can't be checked). */
+export async function stampOf(ref: FileRef): Promise<FileStamp | null> {
+  try {
+    if (ref.kind === 'path') return (await invoke<FileStamp | null>('file_stamp', { path: ref.path })) ?? null;
+    if (ref.kind === 'handle') {
+      const f = await ref.handle.getFile();
+      return { modified: f.lastModified, size: f.size };
+    }
+  } catch { /* gone, or no way to tell */ }
+  return null;
+}
+
+/** What a file holds on disk now (null when it can't be read). */
+export async function readRef(ref: FileRef): Promise<Uint8Array | null> {
+  try {
+    if (ref.kind === 'path') return await readPath(ref.path);
+    if (ref.kind === 'handle') return new Uint8Array(await (await ref.handle.getFile()).arrayBuffer());
+  } catch { /* gone */ }
+  return null;
 }
 
 /** Whether a file is there already (desktop app only). */

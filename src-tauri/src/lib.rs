@@ -3,6 +3,7 @@
 // self-test used by the automatic Windows build.
 
 mod clipboard;
+mod keep;
 mod portable;
 
 use std::path::PathBuf;
@@ -237,6 +238,15 @@ pub fn run() {
             settings_write,
             portable_info,
             portable_install_update,
+            keep::keep_folder,
+            keep::keep_put,
+            keep::keep_get,
+            keep::keep_list,
+            keep::keep_remove,
+            keep::file_stamp,
+            keep::who_am_i,
+            keep::write_lock_file,
+            keep::remove_lock_file,
             clipboard::clipboard_write,
             clipboard::clipboard_read,
             clipboard::clipboard_formats

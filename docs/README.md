@@ -21,6 +21,6 @@ Structures stay editable in every kind of file: double-click one in a slide, cel
 
 ## Everything else
 
-- **[Files and sharing](guide/files-and-sharing.md)**: every file type it opens and saves, copying to and from ChemDraw, Word and PowerPoint, Split View, workspaces, printing and fonts.
+- **[Files and sharing](guide/files-and-sharing.md)**: every file type it opens and saves, copying to and from ChemDraw, Word and PowerPoint, Split View, workspaces, AutoSave, recovery after a crash, Version History, shared folders, printing and fonts.
 - **[Feedback, problems and ideas](guide/feedback.md)**: how to send a feature request or report a problem from inside the program (**Help ▸ Send Feedback**).
 - **[For developers](developers.md)**: running it from the source code, how releases are made, and where things are in the code.

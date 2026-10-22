@@ -20,6 +20,10 @@
         <div id="recent-files" class="recent-files" hidden></div>
         <button role="menuitem" data-cmd="save">Save</button>
         <button role="menuitem" data-cmd="save-as">Save As…</button>
+        <button role="menuitemcheckbox" aria-checked="false" data-cmd="autosave" title="Save this file by itself a few seconds after each change (a file never saved is saved first). The default for all files is in AutoSave and Recovery Options"><span>AutoSave</span></button>
+        <button role="menuitem" data-cmd="version-history" title="Earlier versions of this file, kept each time it was saved: open one as a copy, or restore it">Version History…</button>
+        <button role="menuitem" data-cmd="recover-work" title="Reopen copies of unsaved work left when the app closed unexpectedly">Recover Unsaved Work…</button>
+        <button role="menuitem" data-cmd="keep-options" title="AutoSave, how often unsaved work is copied for recovery, how many versions are kept, and files changed or open elsewhere (shared folders, OneDrive)">AutoSave and Recovery Options…</button>
         <hr class="desktop-only" hidden />
         <button role="menuitem" class="desktop-only" data-cmd="open-workspace" title="Open every tab of a saved workspace" hidden>Open Workspace…</button>
         <button role="menuitem" class="desktop-only" data-cmd="save-workspace" title="Save all the open tabs together, in a folder with a list of them, to open again in one go" hidden>Save Workspace</button>

@@ -1623,3 +1623,22 @@ dialog.animate-dialog .animate-credit { margin: 0 0 8px; font-size: 0.85em; }
 .animate-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .animate-actions .spacer, .animate-pairing .spacer { flex: 1; }
 @media (max-width: 760px) { .animate-body { grid-template-columns: 1fr; } }
+
+/* AutoSave, recovery and shared files (src/ui/keep-ui.ts): notices about files changed or open
+   elsewhere stack in the bottom-left corner, clear of the update notice on the right */
+.keep-notices { position: fixed; left: 16px; bottom: 16px; z-index: 61; display: flex; flex-direction: column; gap: 8px; width: min(380px, calc(100vw - 32px)); }
+.keep-notices .keep-notice { position: static; width: auto; }
+dialog.keep-recover, dialog.keep-versions { width: min(92vw, 520px); }
+dialog.keep-choose { width: min(92vw, 460px); }
+.keep-list { max-height: min(50vh, 360px); overflow-y: auto; border: 1px solid var(--line); border-radius: 5px; padding: 4px; margin: 8px 0; }
+.keep-list-head { font-size: 11px; font-weight: 600; color: var(--muted); padding: 6px 6px 2px; }
+.keep-row { display: flex; align-items: flex-start; gap: 8px; padding: 5px 6px; border-radius: 4px; cursor: default; }
+.keep-row:hover { background: var(--accent-soft); }
+.keep-row input { margin-top: 3px; }
+.keep-name { min-width: 0; overflow-wrap: anywhere; }
+.keep-version { justify-content: space-between; align-items: baseline; }
+.keep-version[aria-selected='true'] { background: var(--accent-soft); outline: 1px solid var(--accent); }
+.keep-recover .ask-buttons .spacer, .keep-versions .ask-buttons .spacer { flex: 1; }
+dialog.keep-options .ask-row { grid-template-columns: 16em 1fr auto; }
+dialog.keep-options .ask-row.ask-check { grid-template-columns: auto 1fr; max-width: 36em; }
+dialog.keep-options .ask-row input[type='number'] { width: 6em; justify-self: start; }
