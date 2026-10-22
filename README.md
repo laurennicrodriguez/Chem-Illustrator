@@ -39,7 +39,7 @@ Fill rings with a colour, a gradient, hatching or dots (patterns can be see-thro
 
 | Metal complexes, from templates | Lone pairs where you want them |
 |---|---|
-| ![Placing an arene chromium tricarbonyl from the Metal complexes palette, typing Cr and CO onto it, and moving the benzene ring: the η⁶ bond follows the ring's middle, and the side panel shows C9H6CrO3](docs/images/metal-complex.gif) | ![Adding lone pairs to acetate's oxygens by pressing on each oxygen and sweeping round it to aim the pair](docs/images/lone-pairs.gif) |
+| ![Placing an arene chromium tricarbonyl from the Metallocenes palette, typing Cr and CO onto it, and moving the benzene ring: the η⁶ bond follows the ring's middle, and the side panel shows C9H6CrO3](docs/images/metal-complex.gif) | ![Adding lone pairs to acetate's oxygens by pressing on each oxygen and sweeping round it to aim the pair](docs/images/lone-pairs.gif) |
 | Coordination geometries, metallocenes, piano stools and 26 ligands are a click away. Hapto (η) bonds go to the middle of a ring or π-bond and follow it, and formulas count metal carbonyls, Cp and phosphines the way a chemist would. | Press on an atom with the lone pair, radical or circled charge tool and drag round it to put the symbol exactly where it should go. Charges keep clear of the bonds beside them. |
 
 ## It knows the chemistry

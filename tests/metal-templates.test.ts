@@ -6,7 +6,8 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { createRequire } from 'node:module';
 import { Doc } from '../src/model';
-import { TEMPLATES, freePlacement, placeTemplate, templateById, templateFromAtoms, parseOwnTemplates, type Template } from '../src/chem/templates';
+import { TEMPLATES, atomPlacements, freePlacement, placeTemplate, templateById, templateFromAtoms, templatePoints, parseOwnTemplates, type Template } from '../src/chem/templates';
+import { countElectrons } from '../src/chem/electrons';
 import { StructureChecks } from '../src/chem/warnings';
 import { writeCdxml } from '../src/io/cdxml-write';
 import { readCdxml } from '../src/io/cdxml';
@@ -15,7 +16,7 @@ import { expandLigand, expandWithMolblock, labelSmiles, miniSmiles } from '../sr
 import { labelGraph } from '../src/chem/labels';
 import { toMolfile } from '../src/chem/molfile';
 
-const METAL = TEMPLATES.filter((t) => t.group === 'geometries' || t.group === 'organometallic' || t.group === 'ligands');
+const METAL = TEMPLATES.filter((t) => t.group === 'geometries' || t.group === 'organometallic' || t.group === 'metallocenes' || t.group === 'ligands');
 
 function place(t: Template, doc = new Doc()) {
   const ids = doc.edit('Template', () => placeTemplate(doc, t, freePlacement({ x: 200, y: 200 }, doc.style.bondLength)));
@@ -187,5 +188,65 @@ describe('Expand Label', () => {
     expect(smiles(templateById('imes')!)).toContain('[C]');
     // dppf's phosphorus atoms give the metal their lone pairs: no P–H
     expect(smiles(templateById('dppf')!)).not.toContain('PH');
+  });
+});
+
+describe('metallocene templates', () => {
+  const META = TEMPLATES.filter((t) => t.group === 'metallocenes');
+
+  it('cover sandwich, bent, ansa and half-sandwich complexes', () => {
+    const ids = new Set(META.map((t) => t.id));
+    for (const id of ['ferrocene', 'ferrocene-eclipsed', 'decamethylferrocene', 'cobaltocenium', 'bis-benzene-cr', 'uranocene', 'ferrocenyl',
+      'ferrocene-11', 'ferrocene-12', 'bent-metallocene', 'cp2ticl2', 'cp2zrcl2', 'schwartz', 'petasis', 'tebbe', 'ansa-sime2', 'ebi-zrcl2',
+      'cgc', 'cpml3', 'cpstarml3', 'arene-cr-co3', 'cpstar-rh-dimer', 'cymene-ru-dimer']) expect(ids).toContain(id);
+  });
+
+  it('electron counting works on every one with a real metal', () => {
+    const count = (id: string) => {
+      const { doc } = place(templateById(id)!);
+      const m = [...doc.atoms.values()].find((a) => a.z !== 6 && a.z !== 1 && a.z !== 17 && a.z !== 7 && a.z !== 8 && a.z !== 14 && a.z !== 13 && !a.multi && !a.label)!;
+      return countElectrons(doc, m.id).filter((c) => c.symbol !== 'Al').map((c) => [c.symbol, c.oxidation, c.dn, c.electrons]);
+    };
+    expect(count('ferrocene')).toEqual([['Fe', 2, 6, 18]]);
+    expect(count('decamethylferrocene')).toEqual([['Fe', 2, 6, 18]]);
+    expect(count('ferrocenium')).toEqual([['Fe', 3, 5, 17]]);
+    expect(count('cobaltocenium')).toEqual([['Co', 3, 6, 18]]);
+    expect(count('bis-benzene-cr')).toEqual([['Cr', 0, 6, 18]]);
+    expect(count('cp2ticl2')).toEqual([['Ti', 4, 0, 16]]);
+    expect(count('cp2zrcl2')).toEqual([['Zr', 4, 0, 16]]);
+    expect(count('schwartz')).toEqual([['Zr', 4, 0, 16]]);
+    expect(count('petasis')).toEqual([['Ti', 4, 0, 16]]);
+    expect(count('tebbe')).toEqual([['Ti', 4, 0, 16]]);
+    expect(count('cp2ticl')).toEqual([['Ti', 3, 1, 15]]);
+    expect(count('ebi-zrcl2')).toEqual([['Zr', 4, 0, 16]]);
+    expect(count('cgc')).toEqual([['Ti', 4, 0, 12]]);
+    expect(count('arene-cr-co3')).toEqual([['Cr', 0, 6, 18]]);
+    expect(count('cpmn-co3')).toEqual([['Mn', 1, 6, 18]]);
+    expect(count('fp-r')).toEqual([['Fe', 2, 6, 18]]);
+    expect(count('cpstar-rh-dimer')).toEqual([['Rh', 3, 6, 18], ['Rh', 3, 6, 18]]);
+    expect(count('cymene-ru-dimer')).toEqual([['Ru', 2, 6, 18], ['Ru', 2, 6, 18]]);
+  });
+
+  it('the Tebbe reagent reads as chemistry: its Al–Cl–Ti bridge is written as an ate complex', () => {
+    const { doc } = place(templateById('tebbe')!);
+    const mb = toMolfile(doc, [...doc.atoms.keys()]).molblock;
+    expect(mb).toMatch(/M {2}CHG/);
+    expect(mb.split('\n').filter((l) => /^ *\d+ +\d+ +9 /.test(l))).toEqual([]);
+  });
+
+  it('a ferrocenyl group joins a clicked atom upright, flipped to face the other way rather than turned', () => {
+    const t = templateById('ferrocenyl')!;
+    expect(t.join).toBe('bond');
+    expect(t.upright).toBe(true);
+    for (const dir of [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0.87, y: -0.5 }]) {
+      const [best, other] = atomPlacements(t, { x: 0, y: 0 }, dir, 14.4, true);
+      for (const pl of [best, other]) expect([0, Math.PI]).toContain(pl.angle);
+      // the iron stays below the ring the group joins by
+      const pts = templatePoints(t, best);
+      const fe = t.atoms.findIndex((a) => a[2] === 'Fe');
+      expect(pts[fe].y).toBeGreaterThan(pts[t.attach].y);
+      // and the rest of the group lies the way the bond goes
+      expect(Math.sign(pts[fe].x - pts[t.attach].x)).toBe(Math.sign(dir.x));
+    }
   });
 });

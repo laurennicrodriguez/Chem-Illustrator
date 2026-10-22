@@ -48,6 +48,11 @@ export interface Template {
   hapto?: TemplateHapto[];
   /** The attach atom is a stand-in for a metal (a ligand on M): put on a clicked atom, never joined to it by a bond. */
   onMetal?: boolean;
+  /**
+   * Drawn in perspective with up meaning up (ferrocenyl): put on a clicked atom without being
+   * turned, only flipped left to right to face the other way.
+   */
+  upright?: boolean;
 }
 
 export type TemplateHapto = [number, number[], BondDisplay?];
@@ -56,7 +61,7 @@ export type TemplateShape = ['line' | 'oval', number, number, number, number];
 
 export type TemplateGroup = 'rings' | 'heterocycles' | 'amino' | 'sugars' | 'own'
   | 'conformers' | 'fused' | 'projections' | 'stereo' | 'bicyclics' | 'cycloalkanes' | 'aromatics' | 'perspective'
-  | 'geometries' | 'organometallic' | 'ligands';
+  | 'geometries' | 'organometallic' | 'metallocenes' | 'ligands';
 
 export const TEMPLATES = [...(data as Template[]), ...(conformerData as Template[]), ...(metalData as Template[])];
 const BY_ID = new Map(TEMPLATES.map((t) => [t.id, t]));
@@ -191,6 +196,17 @@ export function atomPlacements(t: Template, a: Vec, dir: Vec, L: number, byBond:
   const [px, py] = t.atoms[t.attach];
   const at = byBond ? add(a, mul(dir, L)) : a;
   const out: Placement[] = [];
+  if (t.upright) {
+    // as drawn, or mirrored left to right (mirrored top to bottom, turned round), whichever
+    // has the template lying towards `dir` first
+    const flips: [boolean, number][] = [[false, 0], [true, Math.PI]];
+    if ((-px >= 0) !== (dir.x >= 0)) flips.reverse();
+    for (const [mirror, angle] of flips) {
+      const P = placePoint({ origin: { x: 0, y: 0 }, scale: 1, angle, mirror }, px, py);
+      out.push({ origin: sub(at, mul(P, L)), scale: L, angle, mirror });
+    }
+    return out;
+  }
   for (const mirror of [false, true]) {
     const P = placePoint({ origin: { x: 0, y: 0 }, scale: 1, angle: 0, mirror }, px, py);
     // from the attach atom towards the middle of the template
