@@ -1786,3 +1786,33 @@ dialog.diagram-dialog { width: min(96vw, 1060px); max-height: 94vh; }
 .dg-look { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); column-gap: 16px; }
 .dg-look .ask-row { margin: 4px 0; }
 @media (max-width: 760px) { .dg-body { grid-template-columns: 1fr; } .dg-layouts { max-height: 30vh; } }
+
+/* Sheet mode: notes and comments on cells, and data validation */
+.sh-note-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 1; }
+.sh-note { width: 200px; min-height: 40px; padding: 5px 7px; background: #ffffe1; color: #1a1a1a; border: 1px solid #8a8a6a; box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.25); font: 12px/1.35 Tahoma, 'Segoe UI', Arial, sans-serif; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sh-note-shown { position: absolute; max-height: 140px; overflow: hidden; cursor: text; }
+.sh-note-who { font-weight: 700; }
+.sh-note-input { display: block; width: 100%; box-sizing: border-box; margin-top: 2px; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; resize: vertical; outline: none; }
+.sh-note-card { position: fixed; z-index: 60; }
+.cmt-card.sh-note-card { width: 270px; max-height: min(420px, 70vh); overflow-y: auto; box-sizing: border-box; }
+.sh-prompt { position: absolute; z-index: 3; max-width: 240px; padding: 5px 8px; background: #ffffe1; color: #1a1a1a; border: 1px solid #8a8a6a; box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2); font: 12px/1.35 Tahoma, 'Segoe UI', Arial, sans-serif; white-space: pre-wrap; pointer-events: none; }
+.sh-prompt[hidden] { display: none; }
+.popup-menu.sh-drop { max-height: 260px; overflow-y: auto; }
+.popup-menu.sh-drop button.picked { font-weight: 600; }
+.dv-dialog { width: min(92vw, 480px); }
+.dv-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin: 4px 0 6px; }
+.dv-tabs button { border: 1px solid transparent; border-bottom: 0; border-radius: 5px 5px 0 0; background: transparent; padding: 4px 12px; color: var(--muted); }
+.dv-tabs button[aria-selected='true'] { border-color: var(--line); background: var(--panel); color: var(--text); margin-bottom: -1px; }
+.dv-page { min-height: 220px; }
+.dv-page .ask-row textarea { width: auto; font-family: inherit; }
+.dv-problem { color: var(--warn, #b45309); margin: 6px 0 0; }
+.dv-problem[hidden] { display: none; }
+.dv-clear { margin-right: auto; }
+.sh-alert h2 { display: flex; align-items: center; gap: 8px; }
+.sh-alert-icon { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; color: #fff; font-size: 13px; font-weight: 700; flex: none; }
+.sh-alert-icon.stop { background: #c42b1c; }
+.sh-alert-icon.warning { background: #d89614; border-radius: 3px; }
+.sh-alert-icon.information { background: #2f6fdf; font-style: italic; font-family: Georgia, serif; }
+.sh-alert-text { max-width: 380px; white-space: pre-wrap; }
+.cp-note-line { white-space: pre-wrap; overflow-wrap: anywhere; }
+.dv-dialog .ask-row[hidden], .dv-dialog p[hidden] { display: none; }

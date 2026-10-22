@@ -196,6 +196,9 @@ export const COMMAND_NAMES: Record<string, string> = {
   'property-column': 'Insert property column…', 'isotope-pattern': 'Isotope pattern…', 'structure-from-name': 'Structure from name or SMILES…',
   'draw-structure': 'Draw a structure in the cell', 'reset-calculated': 'Reset to the calculated value',
   'merge-cells': 'Merge and centre',
+  'new-note': 'New note on the cell (or change its note)', 'edit-note': 'Change the cell\'s note', 'delete-note': 'Delete the notes and comments in the selection',
+  'show-note': 'Show the cell\'s note all the time (or only when pointed at)', 'show-all-notes': 'Show all notes (on or off)', 'convert-notes': 'Convert notes to comments',
+  'data-validation': 'Data validation…', 'circle-invalid': 'Circle invalid data (on or off)', 'pick-from-list': 'Pick from the drop-down list',
   // documents
   'new-document': 'New document', 'doc-align-left': 'Align text left', 'doc-align-center': 'Centre text', 'doc-align-right': 'Align text right',
   'doc-justify': 'Justify text', 'style-normal': 'Normal style', 'style-title': 'Title style', 'style-h1': 'Heading 1 style', 'style-h2': 'Heading 2 style',
@@ -345,7 +348,7 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
     'Ctrl+Shift+=': 'insert-cells', 'Ctrl++': 'insert-cells', 'Ctrl+-': 'delete-cells',
     'Ctrl+9': 'hide-rows', 'Ctrl+Shift+9': 'unhide-rows', 'Ctrl+0': 'hide-cols', 'Ctrl+Shift+0': 'unhide-cols',
     'Ctrl+Shift+L': 'filter', 'Ctrl+N': 'new-sheet', 'Shift+F11': 'insert-sheet',
-    'Ctrl+Shift+N': 'structure-from-name',
+    'Ctrl+Shift+N': 'structure-from-name', 'Shift+F2': 'new-note', 'Ctrl+Alt+M': 'new-comment',
   }),
   // Word's keys
   document: verbs('command', {

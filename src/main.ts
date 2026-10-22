@@ -2546,6 +2546,7 @@ const sheetMode = new SheetMode({
   writeCells: (own, text, html) => writeCells(own, text, html),
   copyStructure: async (contents, style) => (await copyDrawing(structureDoc(contents, style), null)).replace(/^Copied the whole drawing/, 'Copied the structure'),
   readCells: (e) => readCells(e),
+  askName: () => docMode.askReviewName(),
 }, sheetChem);
 
 /** The style structures in the sheet showing are drawn in. */
