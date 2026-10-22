@@ -17,7 +17,7 @@ import { paraAt, paraRange } from './text/paragraphs';
 // ------------------------------------------------------------------ text
 
 /** What of a run is its look (not its words, figures, links, comments or tracked changes). */
-export const RUN_LOOK_KEYS = ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'size', 'font', 'color', 'highlight', 'strike', 'smallCaps', 'allCaps', 'cstyle'] as const;
+export const RUN_LOOK_KEYS = ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'size', 'font', 'color', 'highlight', 'strike', 'spacing', 'smallCaps', 'allCaps', 'cstyle'] as const;
 /** What of a paragraph is its look (not its breaks, section or bookmarks). */
 export const PARA_LOOK_KEYS = ['list', 'level', 'align', 'spaceBefore', 'spaceAfter', 'indent', 'style', 'firstLine', 'line', 'keepNext', 'indentRight', 'linePt', 'lineRule', 'tabs', 'scheme', 'bullet'] as const;
 

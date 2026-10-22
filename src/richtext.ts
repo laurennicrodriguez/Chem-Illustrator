@@ -10,7 +10,7 @@ const LINK_COLOUR = '#0563c1';
 export type RunStyle = Omit<TextRun, 'text'>;
 export type Toggle = 'bold' | 'italic' | 'underline' | 'sub' | 'sup' | 'formula' | 'strike' | 'smallCaps' | 'allCaps';
 
-const KEYS = ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'size', 'font', 'color', 'highlight', 'obj', 'strike', 'rev', 'cmt', 'link', 'smallCaps', 'allCaps', 'cstyle'] as const;
+const KEYS = ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'size', 'font', 'color', 'highlight', 'obj', 'strike', 'rev', 'cmt', 'link', 'smallCaps', 'allCaps', 'cstyle', 'spacing'] as const;
 /** Subscript, superscript and formula style change where characters sit, so only one applies. */
 const POSITION: Toggle[] = ['sub', 'sup', 'formula'];
 
@@ -145,6 +145,14 @@ export function togglePatch(current: RunStyle, key: Toggle, base: RunStyle = {})
 
 export function toggleStyle(runs: TextRun[], start: number, end: number, key: Toggle, base: RunStyle = {}): TextRun[] {
   return applyStyle(runs, start, end, togglePatch(commonStyle(runs, start, end), key, base));
+}
+
+/** The character formatting Clear Formatting takes off (links, comments and tracked changes stay). */
+export const CLEARED: (keyof RunStyle)[] = ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'size', 'font', 'color', 'highlight', 'strike', 'spacing', 'smallCaps', 'allCaps', 'cstyle'];
+
+/** Clear Formatting: the text between two offsets back to plain text in the text's own font and size. */
+export function clearFormatting(runs: TextRun[], start: number, end: number): TextRun[] {
+  return applyStyle(runs, start, end, Object.fromEntries(CLEARED.map((k) => [k, undefined])));
 }
 
 /** A style from ChemDraw's face bits. */

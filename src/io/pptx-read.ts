@@ -13,8 +13,10 @@ import type { PinnedComment } from '../document/comments';
 import { COMMENT_REL, readCommentAuthors, readLegacyComments, readModernComments } from './pptx-comments';
 import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureFx, type PictureLook, type Frame, type ShapeMath, type Media } from '../model';
 import { layoutTable, NOTE_SCALE } from '../table';
+import { PPT_STYLE_IDS, slideCellLook, unstyledRuns } from '../deck/table-styles';
 import { linesFromBorders, type Borders } from './cdxml-table';
-import { turnAbout, normDegrees, type Vec, type Rect } from '../geom';
+import { turnAbout, normDegrees, DEG, type Vec, type Rect } from '../geom';
+import { POINTS, rotation, snapshot, transform } from '../editor/arrange';
 import { PackageReader, NS, REL, kids, kid, rAttr, fromEmu } from './ooxml';
 import { linkFromTarget } from '../links';
 import { readCdxml } from './cdxml';
@@ -26,7 +28,7 @@ import { layoutText, ASCENT } from '../text/layout';
 import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle, slideBackground, slideColours, hasLayout, newLayoutId, deckLayouts, type LayoutDef, type PlaceholderBox, type SectionCount } from '../deck/deck';
 import { backgroundColour, isPlain, sameBackground, type Background } from '../deck/background';
 import { readFill, readOneFill, type FillContext } from './pptx-background';
-import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure, NS_A14, NS_M } from './pptx-write';
+import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure, NS_A14, NS_M, swapBox } from './pptx-write';
 import { ommlToTex, toOmml } from '../document/math';
 import { shapeMathPicture, shapeMathSize } from '../deck/equation';
 import { GEOS } from '../design/geo';
@@ -150,6 +152,18 @@ function colorIn(el: Element | null, theme: Theme, clrMap: Record<string, string
     }
   }
   return rgbHex(r, g, b);
+}
+
+/** A styled table read back: cell fills and text colours that only repeat its style are dropped. */
+function unstyle(t: TableData): TableData {
+  if (!slideCellLook(t, 0, 0)) return t;
+  const rows = t.rows.map((row, r) => row.map((cell, c) => {
+    const look = slideCellLook(t, r, c);
+    const out: TableCell = { ...cell, runs: unstyledRuns(cell.runs, look) };
+    if (out.fill && look?.fill && out.fill.toLowerCase() === look.fill.toLowerCase()) delete out.fill;
+    return out;
+  }));
+  return { ...t, rows };
 }
 
 // ---------------------------------------------------------------- text formatting, as PowerPoint inherits it
@@ -571,10 +585,12 @@ class Reader {
   }
 
   private element(s: Part, layout: Part | null, el: Element, t: Xf, doc: Doc): void {
-    if (!this.spidTargets || el.localName === 'AlternateContent') { this.elementOnly(s, layout, el, t, doc); return; }
+    if (el.localName === 'AlternateContent') { this.elementOnly(s, layout, el, t, doc); return; }
     // note what each PowerPoint shape became, for the slide's animations
     const mark = doc.idMark, tables = this.tables.length;
     this.elementOnly(s, layout, el, t, doc);
+    this.nameNew(el, doc, mark);
+    if (!this.spidTargets) return;
     const spid = Number(el.getElementsByTagNameNS(NS.p, 'cNvPr')[0]?.getAttribute('id'));
     if (!Number.isFinite(spid)) return;
     if (this.tables.length > tables) { this.tableSpids.set(tables, spid); return; }
@@ -602,12 +618,14 @@ class Reader {
           const o = apply(t, fromEmu(off.getAttribute('x')), fromEmu(off.getAttribute('y')));
           inner = { sx, sy, tx: o.x - sx * fromEmu(chOff.getAttribute('x')), ty: o.y - sy * fromEmu(chOff.getAttribute('y')) };
         }
-        if (Number(x?.getAttribute('rot') ?? 0)) this.warnings.add('Rotated groups came in unrotated.');
+        const turned = Number(x?.getAttribute('rot') ?? 0) / 60000, gb = boxOf(x, t), before = doc.idMark;
         // one of our diagrams: its shapes come in as they are, then the frame that keeps its text goes round them
         const diagramTag = this.tagsOf(s.path, kid(el, 'nvGrpSpPr', 'nvPr'))[TAG.diagram];
         const hadShapes = new Set(doc.shapes.keys()), hadArrows = new Set(doc.arrows.keys());
         this.tree(s, layout, el, inner, doc);
         if (diagramTag && off && ext) this.diagramFrame(diagramTag, off, ext, t, doc, hadShapes, hadArrows);
+        // a turned group: everything in it turned together about the group's middle
+        if (turned && gb) turnNew(doc, before, { x: (gb.x1 + gb.x2) / 2, y: (gb.y1 + gb.y2) / 2 }, turned);
         break;
       }
       case 'graphicFrame': this.frame(s, el, t, doc); break;
@@ -632,6 +650,27 @@ class Reader {
   }
 
   /**
+   * The name PowerPoint's Selection Pane shows for a shape (when it isn't one PowerPoint made up,
+   * "Picture 3"), and whether it is hidden, given to what the shape became here.
+   */
+  private nameNew(el: Element, doc: Doc, mark: number): void {
+    const nv = kids(el).find((k) => /^nv/.test(k.localName));
+    const c = kid(nv ?? null, 'cNvPr');
+    if (!c) return;
+    const name = c.getAttribute('name')?.trim() ?? '';
+    const hidden = c.getAttribute('hidden') === '1' || c.getAttribute('hidden') === 'true';
+    const shapes = [...doc.shapes.values()].filter((x) => x.id >= mark);
+    const caps = [...doc.captions.values()].filter((x) => x.id >= mark);
+    if (hidden) {
+      for (const x of shapes) doc.updateShape(x.id, { hidden: true });
+      for (const x of caps) doc.updateCaption(x.id, { hidden: true });
+    }
+    if (!name || el.localName === 'grpSp' || PPT_NAME.test(name)) return;
+    if (shapes.length === 1) doc.updateShape(shapes[0].id, { name });
+    else if (!shapes.length && caps.length === 1) doc.updateCaption(caps[0].id, { name });
+  }
+
+  /**
    * An equation (PowerPoint's Office Math in a text box): one to change in the equation window,
    * its LaTeX as typed here when PowerPoint has not changed it. Its box is the equation's own size,
    * where PowerPoint shows it in the text box. False when the text box holds no equation.
@@ -643,7 +682,6 @@ class Reader {
     if (!maths.length || !frame) return false;
     const fromFile = maths.map((x) => ommlToTex(x)).join(' \\quad ');
     if (!fromFile.trim()) return false;
-    if (frame.rot) this.warnings.add('Rotated pictures and shapes came in unrotated.');
     const rPr = m.getElementsByTagNameNS(NS.a, 'rPr')[0] ?? null;
     const sz = Number(rPr?.getAttribute('sz'));
 
@@ -665,7 +703,7 @@ class Reader {
     const k = sz > 0 ? sz / 100 / math.size : 1;
     const cx = (frame.x1 + frame.x2) / 2, cy = (frame.y1 + frame.y2) / 2;
     const box: Rect = same ? frame : { x1: cx - (nat.w * k) / 2, y1: cy - (nat.h * k) / 2, x2: cx + (nat.w * k) / 2, y2: cy + (nat.h * k) / 2 };
-    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: shapeMathPicture(math, arialMeasure), px: { w: Math.round(nat.w), h: Math.round(nat.h) }, math });
+    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: shapeMathPicture(math, arialMeasure), px: { w: Math.round(nat.w), h: Math.round(nat.h) }, math, ...turn(frame) });
     return true;
   }
 
@@ -708,7 +746,7 @@ class Reader {
     const img = this.image(s.path, pic);
     if (!img || !box) return;
     if (/ChemDraw/i.test(ole?.getAttribute('progId') ?? '')) this.warnings.add('ChemDraw objects came in as pictures.');
-    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}) });
+    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...turn(box) });
   }
 
   /** A chart: PowerPoint's own (its numbers from what PowerPoint cached), or ours when it charts the same numbers. */
@@ -776,7 +814,6 @@ class Reader {
   private pictureEl(s: Part, el: Element, t: Xf, doc: Doc): void {
     const box = boxOf(kid(el, 'spPr', 'xfrm'), t);
     if (!box) return;
-    if (box.rot) this.warnings.add('Rotated pictures and shapes came in unrotated.');
     const tags = this.tagsOf(s.path, kid(el, 'nvPicPr', 'nvPr'));
     if (tags[TAG.highlight]) {
       // a highlight's own picture: the structure's drawing has the highlight, so only its animation is wanted
@@ -806,7 +843,7 @@ class Reader {
     } else if (this.zoomBack !== null && click) zoom = this.zoomBack ? { back: true } : {};
     doc.addShape({
       kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...(look && Object.keys(look).length ? { look } : {}), ...(fx ? { fx } : {}), ...(video ? { video } : {}),
-      ...(click ? { link: click } : {}), ...(zoom && click ? { zoom } : {}),
+      ...(click ? { link: click } : {}), ...(zoom && click ? { zoom } : {}), ...turn(box),
     });
   }
 
@@ -970,9 +1007,6 @@ class Reader {
     const xfrm = kid(spPr, 'xfrm') ?? from.map((e) => kid(e, 'spPr', 'xfrm')).find((x) => x) ?? null;
     const box = boxOf(xfrm, xfrm && kid(spPr, 'xfrm') ? t : IDENTITY);
     if (!box) return;
-    // (text boxes and placeholders turn; other shapes don't yet)
-    const textBox = !!ph || kid(sp, 'nvSpPr', 'cNvSpPr')?.getAttribute('txBox') === '1';
-    if (box.rot && !textBox) this.warnings.add('Rotated pictures and shapes came in unrotated.');
     const prst = kid(spPr, 'prstGeom')?.getAttribute('prst') ?? (kid(spPr, 'custGeom') ? 'cust' : 'rect');
     if (!ph && /line|Connector/i.test(prst)) { this.line(sp, spPr, t, doc); return; }
     if (!ph) {
@@ -989,7 +1023,7 @@ class Reader {
         if (!['rect', 'roundRect', 'ellipse', 'snip1Rect', 'flowChartProcess', 'flowChartAlternateProcess'].includes(prst)) this.warnings.add('Some PowerPoint shapes came in as boxes.');
         const sh: Omit<Shape, 'id'> = {
           kind: prst === 'ellipse' ? 'oval' : 'rect', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2,
-          color: look.fill ?? look.line ?? '#000000',
+          color: look.fill ?? look.line ?? '#000000', ...turn(box),
         };
         if (look.fill) sh.filled = true;
         if (look.fill && look.shaded) sh.fill = 'shaded';
@@ -1007,7 +1041,12 @@ class Reader {
       if (!hasText) return;
     }
     const tags = this.tagsOf(s.path, kid(sp, 'nvSpPr', 'nvPr'));
-    const c = this.ourText(tags[TAG.text], sp, box) ?? turned(this.text(sp, box, ph, from), box);
+    // text running down or up: read as text in the box the other way round, turned a quarter more
+    const vert = kid(sp, 'txBody', 'bodyPr')?.getAttribute('vert');
+    const quarter = vert === 'vert' || vert === 'eaVert' ? 90 : vert === 'vert270' ? -90 : 0;
+    const tbox = quarter ? { ...box, ...swapBox(box), rot: box.rot + quarter } : box;
+    let c = this.ourText(tags[TAG.text], sp, tbox) ?? turned(this.text(sp, tbox, ph, from), tbox);
+    if (c && quarter) c = { ...c, dir: quarter > 0 ? 'vert' : 'vert270' };
     // a table's title or footnotes, saved here as a text box beside it
     const part = (() => {
       try { return tags[TAG.tablePart] ? JSON.parse(tags[TAG.tablePart]) as { key: string; part: 'title' | 'notes' } : null; } catch { return null; }
@@ -1072,10 +1111,10 @@ class Reader {
     return true;
   }
 
-  private geoShape(sp: Element, spPr: Element | null, prst: string, box: Rect, tag: string | undefined, doc: Doc): boolean {
+  private geoShape(sp: Element, spPr: Element | null, prst: string, box: Rect & { rot: number }, tag: string | undefined, doc: Doc): boolean {
     let saved: { s: Partial<Shape>; plain: string } | null = null;
     try { saved = tag ? JSON.parse(tag) : null; } catch { saved = null; }
-    const where = { x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2 };
+    const where = { x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, rot: turn(box).rot };
     const now = this.plain(sp);
     const theirText = () => {
       if (!now.trim()) return undefined;
@@ -1130,7 +1169,7 @@ class Reader {
     if (!m) return;
     const rows: TableCell[][] = [];
     const borders: Borders[][] = [];
-    let lines = false, down = false;
+    let lines = false;
     let color: string | undefined;
     const width = (tcPr: Element | null, side: string): number => {
       const e = kid(tcPr, side);
@@ -1150,9 +1189,12 @@ class Reader {
         const tcPr = kid(tc ?? null, 'tcPr');
         bs.push({ left: width(tcPr, 'lnL'), top: width(tcPr, 'lnT'), bottom: width(tcPr, 'lnB'), right: width(tcPr, 'lnR') });
         if (!tc || tc.getAttribute('hMerge') === '1' || tc.getAttribute('vMerge') === '1') { row.push({ runs: [] }); continue; }
-        if (Number(tc.getAttribute('rowSpan') ?? 1) > 1) down = true;
         const cap = this.text(tc, { x1: 0, y1: 0, x2: cols[c], y2: 100 }, null, []);
         const cell: TableCell = { runs: cap?.runs ?? [] };
+        const down = Number(tc.getAttribute('rowSpan') ?? 1);
+        if (down > 1) cell.rowSpan = down;
+        const fill = this.color(kid(tcPr, 'solidFill'));
+        if (fill) cell.fill = fill;
         if (cap?.paras) cell.paras = cap.paras;
         if (cap && kid(kid(tc, 'txBody'), 'p', 'pPr')?.getAttribute('algn')) cell.align = cap.justify;
         const span = Number(tc.getAttribute('gridSpan') ?? 1);
@@ -1163,19 +1205,25 @@ class Reader {
       borders.push(bs);
     }
     if (!rows.length) return;
-    if (down) this.warnings.add('Table cells joined down several rows came in as separate cells.');
+    rows.forEach((row, r) => row.forEach((c) => { if (c.rowSpan !== undefined) { if (c.rowSpan > rows.length - r) c.rowSpan = rows.length - r; if (c.rowSpan < 2) delete c.rowSpan; } }));
     // the size most of the text is in becomes the table's
     const sizes = new Map<number, number>();
     for (const row of rows) for (const c of row) for (const r of c.runs) if (r.size !== undefined && r.text.trim()) sizes.set(r.size, (sizes.get(r.size) ?? 0) + r.text.length);
     const size = [...sizes].sort((a, b) => b[1] - a[1])[0]?.[0];
     const plainRows = rows.map((row) => row.map((c) => ({ ...c, runs: c.runs.map((r) => { if (r.size !== size) return r; const { size: _, ...rest } = r; return rest; }) })));
     const style = kid(tbl, 'tblPr', 'tableStyleId')?.textContent?.trim() ?? '';
-    const head = kid(tbl, 'tblPr')?.getAttribute('firstRow') === '1' ? 1 : 0;
+    const pr = kid(tbl, 'tblPr');
+    const flag = (k: string) => pr?.getAttribute(k) === '1' || pr?.getAttribute(k) === 'true';
+    const head = flag('firstRow') ? 1 : 0;
     let read: TableData = { cols, rows: plainRows, head, lines: 'acs' };
     if (size !== undefined) read.size = size;
-    if (lines) read = { ...read, ...linesFromBorders(borders) };
+    const ours = PPT_STYLE_IDS[style];
+    if (ours) {
+      // one of the styles kept here: the cells' fills and text colours that only repeat it go
+      read = unstyle({ ...read, style: ours, look: { total: flag('lastRow'), bandRows: flag('bandRow'), firstCol: flag('firstCol'), lastCol: flag('lastCol'), bandCols: flag('bandCol') } });
+    } else if (lines) read = { ...read, ...linesFromBorders(borders) };
     else if (style === '{5940675A-B579-460E-94D1-54222C63F5DA}') read.lines = 'grid';
-    else if (style && style !== '{2D5ABB26-0587-4C30-8999-92F81FD0307C}') this.warnings.add('PowerPoint\'s table colours were left out; tables use the ACS style (change it in the Style panel).');
+    else if (style && style !== '{2D5ABB26-0587-4C30-8999-92F81FD0307C}') read = this.bakeStyle(read, style, { firstRow: !!head, lastRow: flag('lastRow'), band1H: flag('bandRow'), band1V: flag('bandCol'), firstCol: flag('firstCol'), lastCol: flag('lastCol') });
     // what was saved here, when the table still has its rows and columns (and its text, for its formatting)
     const tags = this.tagsOf(s.path, kid(el, 'nvGraphicFramePr', 'nvPr'));
     let saved: { key: string; table: TableData; plain: string[][] } | null = null;
@@ -1186,10 +1234,63 @@ class Reader {
       const widths = saved.table.cols.map((w, k) => (Math.abs(w - cols[k]) > 0.5 ? cols[k] : w));
       const own = same ? saved.table.rows : rows.map((row) => row.map((c) => ({ ...c, runs: c.runs.map((r) => { if (r.size !== (saved!.table.size ?? undefined)) return r; const { size: _, ...rest } = r; return rest; }) })));
       const { title: _t, notes: _n, ...rest } = saved.table;
-      this.tables.push({ key: String(saved.key), table: { ...rest, cols: widths, rows: own }, frame, color });
+      const table = { ...rest, cols: widths, rows: own };
+      // text changed in PowerPoint carries the style's colours written out on it
+      this.tables.push({ key: String(saved.key), table: same ? table : unstyle(table), frame, color });
       return;
     }
     this.tables.push({ key: saved ? String(saved.key) : null, table: read, frame, color });
+  }
+
+  /**
+   * A table in a PowerPoint style not kept here: the style's fills and text colours (from the
+   * file's table styles) written onto the cells, and its inside lines as a grid.
+   */
+  private bakeStyle(t: TableData, id: string, on: Record<string, boolean>): TableData {
+    const def = kids(this.r.xml(this.r.relOfType(this.r.relOfType('', REL.officeDocument) ?? '', REL.tableStyles) ?? '')?.documentElement ?? null, 'tblStyle')
+      .find((e) => e.getAttribute('styleId') === id);
+    if (!def) {
+      this.warnings.add('A table\'s PowerPoint style wasn\'t in the file, so its colours were left out (pick a style in the Style panel).');
+      return t;
+    }
+    const n = t.rows.length, m = t.cols.length;
+    const head = on.firstRow ? 1 : 0;
+    // PowerPoint's order: the whole table, bands, then the marked-out columns and rows on top
+    const partsAt = (r: number, c: number): string[] => {
+      const out = ['wholeTbl'];
+      const body = r >= head && !(on.lastRow && r === n - 1);
+      if (on.band1H && body) out.push((r - head) % 2 === 0 ? 'band1H' : 'band2H');
+      const k = c - (on.firstCol ? 1 : 0);
+      if (on.band1V && body && !(on.firstCol && c === 0) && !(on.lastCol && c === m - 1)) out.push(k % 2 === 0 ? 'band1V' : 'band2V');
+      if (on.lastCol && c === m - 1) out.push('lastCol');
+      if (on.firstCol && c === 0) out.push('firstCol');
+      if (on.lastRow && r === n - 1) out.push('lastRow');
+      if (head && r === 0) out.push('firstRow');
+      return out;
+    };
+    const inside = kid(def, 'wholeTbl', 'tcStyle', 'tcBdr');
+    const grid = ['insideH', 'insideV'].some((k) => { const l = kid(inside, k, 'ln'); return !!l && !kid(l, 'noFill') && !!kid(l, 'solidFill'); });
+    const rows = t.rows.map((row, r) => row.map((cell, c) => {
+      let fill: string | undefined, color: string | undefined, bold: boolean | undefined;
+      for (const name of partsAt(r, c)) {
+        const p = kid(def, name);
+        if (!p) continue;
+        const f = this.color(kid(p, 'tcStyle', 'fill', 'solidFill'));
+        if (f) fill = f;
+        const tx = kid(p, 'tcTxStyle');
+        if (tx) {
+          const tc = this.color(tx);
+          if (tc) color = tc;
+          if (tx.getAttribute('b') === 'on') bold = true;
+          else if (tx.getAttribute('b') === 'off') bold = undefined;
+        }
+      }
+      const out: TableCell = { ...cell };
+      if (fill && out.fill === undefined) out.fill = fill;
+      if (color || bold) out.runs = cell.runs.map((x) => ({ ...x, ...(color && x.color === undefined ? { color } : {}), ...(bold && x.bold === undefined ? { bold: true } : {}) }));
+      return out;
+    }));
+    return { ...t, rows, lines: grid ? 'grid' : 'none' };
   }
 
   /** Put the slide's tables on it, with the titles and footnotes saved beside them. */
@@ -1264,14 +1365,14 @@ class Reader {
       if (rot) c.rot = rot; else delete c.rot;
       const nw = box.x2 - box.x1, nh = box.y2 - box.y1;
       if (c.wrap !== undefined && Math.abs(nw - w) > 0.5) c.wrap = nw;
-      if (c.ph && Math.abs(nh - h) > 0.5) c.boxH = nh;
+      if ((c.ph || c.fit) && Math.abs(nh - h) > 0.5) c.boxH = nh;
     } else if (saved.at?.length === 4) {
       const [x, y, w, h] = saved.at;
       c.x += box.x1 - x;
       c.y += box.y1 - y;
       const nw = box.x2 - box.x1, nh = box.y2 - box.y1;
       if (c.wrap !== undefined && Math.abs(nw - w) > 0.5) c.wrap = nw;
-      if (c.ph && Math.abs(nh - h) > 0.5) c.boxH = nh;
+      if ((c.ph || c.fit) && Math.abs(nh - h) > 0.5) c.boxH = nh;
     }
     return c;
   }
@@ -1314,8 +1415,10 @@ class Reader {
     if (!look.line) return;
     const prst = kid(spPr, 'prstGeom')?.getAttribute('prst') ?? 'line';
     if (!/^(line|straightConnector1)$/.test(prst)) this.warnings.add('Bent and curved connectors came in straight.');
-    const a = { x: box.flipH ? box.x2 : box.x1, y: box.flipV ? box.y2 : box.y1 };
-    const b = { x: box.flipH ? box.x1 : box.x2, y: box.flipV ? box.y1 : box.y2 };
+    const mid = { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 };
+    // a turned line: its ends turned about the middle of its box
+    const a = turnAbout({ x: box.flipH ? box.x2 : box.x1, y: box.flipV ? box.y2 : box.y1 }, mid, box.rot);
+    const b = turnAbout({ x: box.flipH ? box.x1 : box.x2, y: box.flipV ? box.y1 : box.y2 }, mid, box.rot);
     const ln = kid(spPr, 'ln');
     const end = (n: string) => {
       const e = kid(ln, n);
@@ -1358,7 +1461,10 @@ class Reader {
     else chain.push(this.defaultText, kid(txStyles, 'otherStyle'));
     const bodyPrs = [kid(body, 'bodyPr'), ...from.map((e) => kid(e, 'txBody', 'bodyPr'))];
     const bp = (k: string) => bodyPrs.map((b) => b?.getAttribute(k) ?? null).find((v) => v !== null) ?? null;
-    const scale = Number(kid(bodyPrs[0], 'normAutofit')?.getAttribute('fontScale') ?? 100000) / 100000;
+    // a text box that shrinks its text to fit keeps its own sizes (it is shrunk here as there);
+    // a placeholder's text comes in at the size PowerPoint shrank it to
+    const shrinks = !ph && !!kid(bodyPrs[0], 'normAutofit');
+    const scale = shrinks ? 1 : Number(kid(bodyPrs[0], 'normAutofit')?.getAttribute('fontScale') ?? 100000) / 100000;
     const kind = ph ? phKind(ph.type) : null;
     const base = kind ? textStyles(this.masterOut, this.curLayout)[kind] : undefined;
 
@@ -1392,7 +1498,7 @@ class Reader {
         const pct = kid(ls, 'spcPct')?.getAttribute('val'), fixed = kid(ls, 'spcPts')?.getAttribute('val');
         if (fixed) lineHeight = Number(fixed) / 100;
         else if (pct && Number(pct) !== 100000) lineSpacing = Number(pct) / 100000;
-        const red = Number(kid(bodyPrs[0], 'normAutofit')?.getAttribute('lnSpcReduction') ?? 0) / 100000;
+        const red = shrinks ? 0 : Number(kid(bodyPrs[0], 'normAutofit')?.getAttribute('lnSpcReduction') ?? 0) / 100000;
         if (red) lineSpacing = (lineSpacing ?? 1) * (1 - red);
       }
       const marL = fromEmu(inherit(pPr, chain, lvl, (e) => e.getAttribute('marL')));
@@ -1424,6 +1530,10 @@ class Reader {
         if (get('i') === '1' || get('i') === 'true') r.italic = true;
         const u = get('u');
         if (u && u !== 'none') r.underline = true;
+        const strike = get('strike');
+        if (strike && strike !== 'noStrike') r.strike = true;
+        const spc = Number(get('spc') ?? 0);
+        if (spc) r.spacing = spc / 100;
         const bl = Number(get('baseline') ?? 0);
         if (bl < 0) r.sub = true;
         else if (bl > 0) r.sup = true;
@@ -1465,6 +1575,17 @@ class Reader {
     else {
       const natural = layoutText(full, sizeFor, arialMeasure).boxWidth;
       if (justify !== 'left' || natural > w) c.wrap = Math.max(w, natural);
+    }
+    const numCol = Number(bp('numCol') ?? 1);
+    if (numCol > 1 && c.wrap !== undefined) {
+      c.cols = Math.min(16, Math.round(numCol));
+      const gap = fromEmu(bp('spcCol') ?? 0);
+      if (gap > 0) c.colGap = +gap.toFixed(2);
+    }
+    if (!kind) {
+      if (shrinks) c.fit = 'shrink';
+      else if (kid(bodyPrs[0], 'noAutofit')) c.fit = 'fixed';
+      if (c.fit) c.boxH = Math.max(1, box.y2 - box.y1 - tI - bI);
     }
     if (kind) {
       c.ph = kind;
@@ -1561,6 +1682,23 @@ function texOfOmml(tex: string): string {
 
 export function readPptx(bytes: Uint8Array): PptxRead {
   return new Reader(bytes).read();
+}
+
+/** The names PowerPoint (and this program) give shapes on their own: "Picture 3", "TextBox 12". */
+const PPT_NAME = /^(Picture|Rectangle|Oval|Line|TextBox|Text Box|Title|Text Placeholder|Content Placeholder|Subtitle|Table|Chart|Equation|Animation|Straight Connector|Straight Arrow Connector|Elbow Connector|Curved Arrow|Connector|Freeform|Group|Diagram|Structure|Highlight|Graphic|Object|Shape|Google Shape|Footer|Slide Number|Date|Rounded Rectangle|Ellipse|Isosceles Triangle|Right Arrow|Arrow)( Placeholder)? \d+$/i;
+
+/** Everything added to a drawing since `mark` turned `deg` degrees clockwise about `c`, text and shapes included. */
+function turnNew(doc: Doc, mark: number, c: Vec, deg: number): void {
+  const ids = <T extends { id: number }>(m: Map<number, T>) => new Set([...m.values()].filter((x) => x.id >= mark).map((x) => x.id));
+  const sel = { atoms: ids(doc.atoms), bonds: ids(doc.bonds), captions: ids(doc.captions), arrows: ids(doc.arrows), shapes: ids(doc.shapes) };
+  const snap = snapshot(doc, sel, POINTS);
+  transform(doc, snap, rotation(c, deg * DEG), false, { deg, which: () => true, shapes: true });
+}
+
+/** A shape's turn as ours keeps it (left out when it isn't turned). */
+function turn(box: { rot: number }): { rot?: number } {
+  const rot = normDegrees(box.rot);
+  return Math.abs(rot) > 1e-6 ? { rot } : {};
 }
 
 /** A PowerPoint text box turned in its box: the text starts where the turn takes its first line. */

@@ -181,7 +181,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   'export-pdf': 'Export PDF…', 'insert-picture': 'Insert a picture…', crop: 'Crop the selected picture',
   'new-slide': 'New slide', 'duplicate-slide': 'Duplicate slide', 'delete-slide': 'Delete slide',
   'cut-slides': 'Cut slides', 'copy-slides': 'Copy slides', 'paste-slides': 'Paste slides', 'paste-slides-keep': 'Paste slides keeping their own look',
-  'hide-slide': 'Hide slide (or show it again)', 'reuse-slides': 'Reuse slides from another PowerPoint file…',
+  'hide-slide': 'Hide slide (or show it again)', 'selection-pane': 'Selection Pane: every object on the slide, to pick, hide or rename', 'reuse-slides': 'Reuse slides from another PowerPoint file…',
   'next-slide': 'Next slide', 'prev-slide': 'Previous slide', 'slide-master': 'Slide Master…',
   'edit-layouts': 'Edit slide layouts… (placeholders, your own layouts)', 'size-custom': 'Custom slide size…', 'view-normal': 'Normal view (slides)', 'view-sorter': 'Slide Sorter view',
   'add-section': 'Add section', 'rename-section': 'Rename section…', 'remove-section': 'Remove section', 'remove-section-slides': 'Remove section and its slides', 'remove-all-sections': 'Remove all sections',
@@ -355,7 +355,7 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
   }),
   // PowerPoint's keys
   slides: verbs('command', {
-    F5: 'present', 'Shift+F5': 'present-current', 'Alt+F5': 'presenter-view', 'Ctrl+M': 'new-slide', 'Ctrl+N': 'new-slides',
+    'Alt+F10': 'selection-pane', F5: 'present', 'Shift+F5': 'present-current', 'Alt+F5': 'presenter-view', 'Ctrl+M': 'new-slide', 'Ctrl+N': 'new-slides',
     PageDown: 'next-slide', PageUp: 'prev-slide', 'Ctrl+Alt+M': 'new-comment', 'Alt+=': 'insert-equation', 'Ctrl+K': 'insert-link',
   }),
   // Excel's keys

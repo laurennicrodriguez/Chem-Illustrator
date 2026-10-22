@@ -1682,6 +1682,10 @@
               <datalist id="sl-size-list"><option>8</option><option>9</option><option>10</option><option>10.5</option><option>11</option><option>12</option><option>14</option><option>16</option><option>18</option><option>20</option><option>24</option><option>28</option><option>32</option><option>36</option><option>40</option><option>44</option><option>48</option><option>54</option><option>60</option><option>66</option><option>72</option><option>80</option><option>88</option><option>96</option></datalist>
               <button class="rb-sq" data-sl-fmt="grow" title="Increase font size">A<sup>+</sup></button>
               <button class="rb-sq" data-sl-fmt="shrink" title="Decrease font size">A<sup>−</sup></button>
+              <select id="sl-case" title="Change Case" aria-label="Change Case">
+                <option value="" hidden selected>Aa</option><option value="sentence">Sentence case.</option><option value="lower">lowercase</option><option value="upper">UPPERCASE</option><option value="title">Capitalize Each Word</option><option value="toggle">tOGGLE cASE</option>
+              </select>
+              <button class="rb-sq" data-sl-fmt="clear" title="Clear All Formatting: back to plain text in the box's own font and size">A<sub>⌫</sub></button>
             </div>
             <div class="rb-pair">
               <button class="rb-sq" data-sl-fmt="bold" aria-pressed="false" title="Bold (Ctrl+B)"><b>B</b></button>
@@ -1689,7 +1693,11 @@
               <button class="rb-sq" data-sl-fmt="underline" aria-pressed="false" title="Underline (Ctrl+U)"><u>U</u></button>
               <button class="rb-sq" data-sl-fmt="sub" aria-pressed="false" title="Subscript (Ctrl+=)">x<sub>2</sub></button>
               <button class="rb-sq" data-sl-fmt="sup" aria-pressed="false" title="Superscript (Ctrl+Shift+=)">x<sup>2</sup></button>
+              <button class="rb-sq" data-sl-fmt="strike" aria-pressed="false" title="Strikethrough"><s>abc</s></button>
               <button class="rb-sq" data-sl-fmt="formula" aria-pressed="false" title="Formula style: numbers lowered (CH₂Cl₂), charges raised">C₉H₈</button>
+              <select id="sl-spacing" title="Character spacing" aria-label="Character spacing">
+                <option value="-3">Very Tight</option><option value="-1.5">Tight</option><option value="0">Normal</option><option value="3">Loose</option><option value="6">Very Loose</option><option value="more">More Spacing…</option><option value="" hidden>Other</option>
+              </select>
               <label class="rb-sq rb-colour" title="Text colour"><span>A</span><input id="sl-colour" type="color" aria-label="Text colour" /></label>
             </div>
           </div>
@@ -1713,10 +1721,35 @@
               <button class="rb-sq" data-sl-fmt="align-center" aria-pressed="false" title="Centre">Centre</button>
               <button class="rb-sq" data-sl-fmt="align-right" aria-pressed="false" title="Align right">Right</button>
               <button class="rb-sq" data-sl-fmt="justify" aria-pressed="false" title="Justify (both edges straight)">Justify</button>
+              <select id="sl-dir" title="Text Direction (of each picked text box)" aria-label="Text direction">
+                <option value="horz">Horizontal</option><option value="vert">Rotate all text 90°</option><option value="vert270">Rotate all text 270°</option>
+              </select>
+              <select id="sl-cols" title="Columns in the text box" aria-label="Columns">
+                <option value="1">1 column</option><option value="2">2 columns</option><option value="3">3 columns</option><option value="more">More Columns…</option><option value="" hidden>Other</option>
+              </select>
+              <select id="sl-fit" title="AutoFit: what happens when the text is longer than its box" aria-label="AutoFit">
+                <option value="grow">Resize shape to fit text</option><option value="shrink">Shrink text on overflow</option><option value="fixed">Do not Autofit</option>
+              </select>
             </div>
           </div>
         </div>
         <div class="rb-label">Paragraph</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="selection-pane" aria-pressed="false" title="Selection Pane (Alt+F10): every text box, structure, picture and shape on the slide, front to back. Pick, hide, rename or reorder them there"><span class="rb-icon">☰</span>Selection Pane</button>
+          <div class="rb-col">
+            <button data-cmd="rotate-cw" title="Turn the selection 90° clockwise">Rotate Right 90°</button>
+            <button data-cmd="rotate-ccw" title="Turn the selection 90° anticlockwise">Rotate Left 90°</button>
+            <button data-cmd="rotate-dialog" title="Turn the selection by any angle (Ctrl+R), or drag the round handle above it; the Rotation box in the panel sets a picture's or shape's own angle">Rotate by…</button>
+          </div>
+          <div class="rb-col">
+            <button data-cmd="flip-h" title="Flip the selection left to right">Flip Horizontal</button>
+            <button data-cmd="shape-front" title="Put the selected pictures and shapes in front of the others">Bring to Front</button>
+            <button data-cmd="shape-back" title="Put the selected pictures and shapes behind the others">Send to Back</button>
+          </div>
+        </div>
+        <div class="rb-label">Arrange</div>
       </div>
       <div class="rb-group">
         <div class="rb-row">

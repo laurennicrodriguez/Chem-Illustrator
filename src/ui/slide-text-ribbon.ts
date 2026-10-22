@@ -5,6 +5,8 @@
 import type { Justify } from '../model';
 import type * as rt from '../richtext';
 import type { TextFormat } from '../text/format';
+import type { TextBoxChange } from '../editor/editor';
+import { ask } from './ask';
 
 export interface TextLook {
   style: rt.RunStyle;
@@ -23,6 +25,9 @@ export interface SlideTextHooks {
   refocus(): void;
   /** Nothing to change: tell the person what to pick. */
   nothing(): void;
+  /** Text Direction, Columns or AutoFit on the picked text boxes; false when none is picked. */
+  box(change: TextBoxChange): boolean;
+  boxLook(): { dir: 'horz' | 'vert' | 'vert270'; cols: number; fit: 'grow' | 'shrink' | 'fixed'; ph: boolean } | null;
 }
 
 const FORMATS: Record<string, TextFormat> = {
@@ -34,6 +39,8 @@ const FORMATS: Record<string, TextFormat> = {
   sub: { kind: 'toggle', key: 'sub' },
   sup: { kind: 'toggle', key: 'sup' },
   formula: { kind: 'toggle', key: 'formula' },
+  strike: { kind: 'toggle', key: 'strike' },
+  clear: { kind: 'clear' },
   bullets: { kind: 'list', list: 'bullet' },
   numbering: { kind: 'list', list: 'number' },
   outdent: { kind: 'indent', by: -1 },
@@ -51,6 +58,10 @@ export class SlideTextRibbon {
   private size: HTMLInputElement;
   private colour: HTMLInputElement;
   private line: HTMLSelectElement;
+  private spacing: HTMLSelectElement;
+  private dir: HTMLSelectElement;
+  private cols: HTMLSelectElement;
+  private fit: HTMLSelectElement;
 
   constructor(private root: HTMLElement, private hooks: SlideTextHooks) {
     const q = <T extends HTMLElement>(s: string) => root.querySelector<T>(s)!;
@@ -58,6 +69,10 @@ export class SlideTextRibbon {
     this.size = q('#sl-size');
     this.colour = q('#sl-colour');
     this.line = q('#sl-line');
+    this.spacing = q('#sl-spacing');
+    this.dir = q('#sl-dir');
+    this.cols = q('#sl-cols');
+    this.fit = q('#sl-fit');
     const run = (f: TextFormat) => {
       if (!hooks.format(f)) hooks.nothing();
       hooks.refocus();
@@ -88,6 +103,34 @@ export class SlideTextRibbon {
     });
     this.colour.addEventListener('change', () => run({ kind: 'style', patch: { color: this.colour.value.toLowerCase() === '#000000' ? undefined : this.colour.value } }));
     this.line.addEventListener('change', () => { const v = parseFloat(this.line.value); if (v > 0) run({ kind: 'line', v }); });
+    const kase = q<HTMLSelectElement>('#sl-case');
+    kase.addEventListener('change', () => { const mode = kase.value as rt.CaseMode; kase.value = ''; if (mode) run({ kind: 'case', mode }); });
+    this.spacing.addEventListener('change', async () => {
+      let v = this.spacing.value;
+      if (v === 'more') {
+        const now = this.hooks.look()?.style.spacing ?? 0;
+        const got = await ask('Character Spacing', [{ name: 'by', label: 'Spacing by', value: String(now), type: 'number', unit: 'pt', help: 'More than 0 spreads the letters out (expanded); less than 0 draws them closer (condensed).' }], { ok: 'OK' });
+        if (!got) { this.refresh(); hooks.refocus(); return; }
+        v = got.by;
+      }
+      const by = Math.max(-50, Math.min(200, parseFloat(v) || 0));
+      run({ kind: 'style', patch: { spacing: by || undefined } });
+    });
+    const boxRun = (c: TextBoxChange) => {
+      if (!hooks.box(c)) hooks.nothing();
+      this.refresh();
+    };
+    this.dir.addEventListener('change', () => boxRun({ kind: 'dir', dir: this.dir.value === 'horz' ? undefined : this.dir.value as 'vert' | 'vert270' }));
+    this.cols.addEventListener('change', async () => {
+      if (this.cols.value !== 'more') { boxRun({ kind: 'cols', cols: Number(this.cols.value) || 1 }); return; }
+      const got = await ask('Columns', [
+        { name: 'n', label: 'Number', value: String(hooks.boxLook()?.cols ?? 2), type: 'number' },
+        { name: 'gap', label: 'Spacing', value: '18', type: 'number', unit: 'pt' },
+      ], { ok: 'OK' });
+      if (!got) { this.refresh(); return; }
+      boxRun({ kind: 'cols', cols: Number(got.n) || 1, gap: Math.max(0, Number(got.gap) || 0) });
+    });
+    this.fit.addEventListener('change', () => boxRun({ kind: 'fit', fit: this.fit.value as 'grow' | 'shrink' | 'fixed' }));
   }
 
   /** Show how the text looks now (call after the selection or the text changes). */
@@ -99,7 +142,7 @@ export class SlideTextRibbon {
       b?.setAttribute('aria-pressed', String(on));
       b?.classList.toggle('on', on);
     };
-    for (const k of ['bold', 'italic', 'underline', 'sub', 'sup', 'formula'] as const) press(k, !!look && !!s[k]);
+    for (const k of ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'strike'] as const) press(k, !!look && !!s[k]);
     for (const j of ['left', 'center', 'right'] as const) press(`align-${j}`, look?.align === j);
     press('justify', look?.align === 'justify');
     press('bullets', look?.list === 'bullet');
@@ -116,6 +159,15 @@ export class SlideTextRibbon {
     this.colour.value = s.color ?? '#000000';
     const line = look ? r2(look.line) : '1';
     this.line.value = [...this.line.options].some((o) => o.value === line) ? line : '';
+    const sp = String(s.spacing ?? 0);
+    this.spacing.value = [...this.spacing.options].some((o) => o.value === sp) ? sp : '';
+    const box = this.hooks.boxLook();
+    this.dir.value = box?.dir ?? 'horz';
+    const cols = String(box?.cols ?? 1);
+    this.cols.value = [...this.cols.options].some((o) => o.value === cols) ? cols : '';
+    this.fit.value = box?.fit ?? 'grow';
+    // a placeholder's AutoFit is the slide master's
+    this.fit.disabled = !!box?.ph;
     for (const g of this.root.querySelectorAll<HTMLElement>('[data-sl-text]')) g.classList.toggle('rb-idle', !look);
   }
 }

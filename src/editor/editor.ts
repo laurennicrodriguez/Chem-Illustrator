@@ -20,7 +20,14 @@ import { Renderer, measureText } from '../render/renderer';
 import { tidyStyle } from '../render/highlight';
 import { ASCENT } from '../text/layout';
 import { cellAlign, insertRow, nextCell, partAt, partRuns, setColumnWidth, setPart, spanOf, NOTE_SCALE, type TablePart } from '../table';
-import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG, exitParam, lockAxis, turnAbout, turnedCorners } from '../geom';
+import { slideCellLook, styledRuns, unstyledRuns } from '../deck/table-styles';
+import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG, exitParam, lockAxis, turnAbout, turnedCorners, normDegrees } from '../geom';
+
+/** A change to a text box's settings from the ribbon (see Editor.setTextBox). */
+export type TextBoxChange =
+  | { kind: 'dir'; dir: 'vert' | 'vert270' | undefined }
+  | { kind: 'cols'; cols: number; gap?: number }
+  | { kind: 'fit'; fit: 'grow' | 'shrink' | 'fixed' };
 import {
   sproutDir, sprout, bondTo, bondLength, atomAt, freeRing, fusedRing, fuseSide, ringOnAtom, ringDir,
   placeRing, chainPoints, chainFrom, MERGE_FRACTION,
@@ -53,7 +60,7 @@ import { Align, Measure, POINTS, Snapshot, type TurnText, units, alignOffsets, d
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { tokenize, addNicknames, isBuiltInNickname, labelGraph, labelPieces, labelLook, CAP, SUB_SCALE } from '../chem/labels';
 import {
-  Handle, arrowHit, shapeHit, arrowHandles, shapeHandles, dragArrowHandle, dragShapeHandle, dragCropHandle, shapeBox,
+  Handle, arrowHit, shapeHit, arrowHandles, shapeHandles, dragArrowHandle, dragShapeHandle, dragCropHandle, shapeBox, shapeMid, shapeTurn,
   arrowPoints, bracketHalves, type BracketForm, bracketLip, unionRect,
   shapeOrder, portNear, shapePorts, isCurved, headBend, swapHalf, bezPoints,
 } from '../objects';
@@ -473,7 +480,7 @@ export class Editor {
   /** The link under a point of a caption (not one being typed), if any. */
   captionLinkAt(p: Vec): string | null {
     for (const c of this.doc.captions.values()) {
-      if (!c.runs.some((r) => r.link)) continue;
+      if (c.hidden || !c.runs.some((r) => r.link)) continue;
       const q = c.rot ? turnAbout(p, c, -c.rot) : p;
       const span = linkAtPoint(this.r.captionLayout(c), c.runs, q.x - c.x, q.y - c.y);
       if (span) return span.link;
@@ -525,6 +532,7 @@ export class Editor {
     }
     if (bb) return { kind: 'bond', id: bb.id };
     for (const c of doc.captions.values()) {
+      if (c.hidden) continue;
       // turned text: the point turned back, against the text's own box
       const r = c.rot ? this.r.captionFrame(c) : this.r.captionBox(c);
       const q = c.rot ? turnAbout(p, c, -c.rot) : p;
@@ -2372,7 +2380,7 @@ export class Editor {
       }
     }
     const inside = (x: number, y: number) => x >= r.x1 && x <= r.x2 && y >= r.y1 && y <= r.y2;
-    for (const c of doc.captions.values()) { const bx = this.r.captionBox(c); if (inside(bx.x1, bx.y1) && inside(bx.x2, bx.y2)) this.sel.captions.add(c.id); }
+    for (const c of doc.captions.values()) { if (c.hidden) continue; const bx = this.r.captionBox(c); if (inside(bx.x1, bx.y1) && inside(bx.x2, bx.y2)) this.sel.captions.add(c.id); }
     const within = (b: Rect) => inside(b.x1, b.y1) && inside(b.x2, b.y2);
     for (const ar of doc.arrows.values()) if (arrowPoints(ar).every((q) => inside(q.x, q.y))) this.sel.arrows.add(ar.id);
     for (const s of doc.shapes.values()) if (!s.hidden && !s.locked && within(s.kind === 'bracket' ? { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) } : shapeBox(s))) this.sel.shapes.add(s.id);
@@ -2639,7 +2647,7 @@ export class Editor {
     const s = this.sel;
     const onlyText = !s.atoms.size && !s.arrows.size && !s.shapes.size;
     const turns = this.textFirst || onlyText;
-    return { deg, which: (c) => turns && !c.attach };
+    return { deg, which: (c) => turns && !c.attach, shapes: this.textFirst };
   }
 
     private rotateHandle(): Vec | null {
@@ -3739,6 +3747,8 @@ export class Editor {
   }
 
   private captionEd: CaptionEditor | null = null;
+  /** The caption being typed in (null for a new one). */
+  private captionEdId: number | null = null;
   /** The text being typed, if any. */
   get typingCaption(): CaptionEditor | null { return this.captionEd?.isOpen ? this.captionEd : null; }
 
@@ -3790,6 +3800,56 @@ export class Editor {
     this.requestScene();
     this.changed();
     return true;
+  }
+
+  /**
+   * The text box settings on the ribbon (Text Direction, Columns, AutoFit) for each picked text
+   * box, or the one being typed in (finished first). False when no text box is picked.
+   */
+  setTextBox(change: TextBoxChange): boolean {
+    const typing = this.captionEd ? this.captionEdId : null;
+    if (this.captionEd) this.closeCaption();
+    const doc = this.doc;
+    const ids = typing !== null ? [typing] : [...this.sel.captions];
+    const caps = ids.map((id) => doc.captions.get(id)).filter((c): c is Caption => !!c);
+    if (!caps.length) return false;
+    doc.edit(change.kind === 'dir' ? 'Text direction' : change.kind === 'cols' ? 'Columns' : 'AutoFit', () => {
+      for (const c of caps) {
+        const frame = this.r.captionFrame(c);
+        doc.dirtyRects.push(this.r.captionBox(c));
+        if (change.kind === 'dir') {
+          // the box turns a quarter about its middle for each step, so it stays where it was
+          const q = (d?: Caption['dir']) => (d === 'vert' ? 90 : d === 'vert270' ? -90 : 0);
+          const by = q(change.dir) - q(c.dir);
+          if (!by) continue;
+          const box = this.r.captionBox(c);
+          const mid = { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 };
+          const at = turnAbout(c, mid, by);
+          const rot = normDegrees((c.rot ?? 0) + by);
+          doc.updateCaption(c.id, { x: at.x, y: at.y, rot: rot || undefined, dir: change.dir });
+        } else if (change.kind === 'cols') {
+          const n = Math.max(1, Math.min(16, Math.round(change.cols)));
+          if (n === 1) { doc.updateCaption(c.id, { cols: undefined, colGap: undefined }); continue; }
+          doc.updateCaption(c.id, { cols: n, colGap: change.gap ?? c.colGap ?? 18, wrap: c.wrap ?? Math.max(36, frame.x2 - frame.x1) });
+        } else if (!c.ph) {
+          // AutoFit: a box that grows with its text, or one that keeps the height it has now
+          if (change.fit === 'grow') doc.updateCaption(c.id, { fit: undefined, boxH: undefined });
+          else doc.updateCaption(c.id, { fit: change.fit, boxH: c.boxH ?? frame.y2 - frame.y1, wrap: c.wrap ?? Math.max(36, frame.x2 - frame.x1) });
+        }
+      }
+    });
+    if (typing === null) this.requestOverlay();
+    this.requestScene();
+    this.changed();
+    return true;
+  }
+
+  /** The text box settings of the first picked text box (or the one being typed in). */
+  textBoxLook(): { dir: 'horz' | 'vert' | 'vert270'; cols: number; fit: 'grow' | 'shrink' | 'fixed'; ph: boolean } | null {
+    const id = this.captionEd ? this.captionEdId : [...this.sel.captions][0];
+    const c = id !== null && id !== undefined ? this.doc.captions.get(id) : undefined;
+    if (!c) return null;
+    return { dir: c.dir ?? 'horz', cols: c.cols ?? 1, fit: c.fit ?? 'grow', ph: !!c.ph };
   }
 
   /** How the text the ribbon's Font and Paragraph buttons would change looks now (for showing which are on). */
@@ -4018,7 +4078,7 @@ export class Editor {
       redraw: () => this.requestOverlay(),
     };
     const initial = c
-      ? { runs: applyBase(c.runs, base), paras: c.paras, justify: c.justify, wrap: c.wrap, width: c.width, lineHeight: c.lineHeight, lineSpacing: c.lineSpacing }
+      ? { runs: applyBase(c.runs, base), paras: c.paras, justify: c.justify, wrap: c.wrap, width: c.width, lineHeight: c.lineHeight, lineSpacing: c.lineSpacing, cols: c.cols, colGap: c.colGap, boxH: c.boxH, fit: c.fit }
       : { runs: [], justify: opts?.justify ?? 'left' as const, wrap };
     const ed = new CaptionEditor(host, at, initial, defaults, (res) => {
       if (this.captionEd === ed) this.captionEd = null;
@@ -4047,6 +4107,7 @@ export class Editor {
       this.changed();
     }, c?.rot ?? 0);
     this.captionEd = ed;
+    this.captionEdId = id;
     if (click) {
       const q = c?.rot ? turnAbout(click, at, -c.rot) : click;
       ed.ed.setCaret(ed.ed.offsetAt(q.x - at.x, q.y - at.y));
@@ -4207,7 +4268,9 @@ export class Editor {
       around: () => shapeBox(doc.shapes.get(id) ?? s),
     };
     const wrap = Math.max(4, g.area.x2 - g.area.x1);
-    const ed = new CaptionEditor(host, { x: g.x, y: g.y }, { runs: s.text?.runs ?? [], paras: s.text?.paras, justify: s.textAlign ?? 'center', wrap }, {}, (res) => {
+    // a turned shape's text is typed turned with it
+    const rot = shapeTurn(s), mid = shapeMid(s);
+    const ed = new CaptionEditor(host, turnAbout({ x: g.x, y: g.y }, mid, rot), { runs: s.text?.runs ?? [], paras: s.text?.paras, justify: s.textAlign ?? 'center', wrap }, {}, (res) => {
       if (this.captionEd === ed) this.captionEd = null;
       this.r.geoEdit = null;
       const cur = doc.shapes.get(id);
@@ -4220,9 +4283,9 @@ export class Editor {
       }
       this.requestScene();
       this.changed();
-    });
+    }, rot);
     this.captionEd = ed;
-    if (click) ed.ed.setCaret(ed.ed.offsetAt(click.x - g.x, click.y - g.y));
+    if (click) { const q = turnAbout(click, mid, -rot); ed.ed.setCaret(ed.ed.offsetAt(q.x - g.x, q.y - g.y)); }
   }
 
   // ------------------------------------------------------------------ tables
@@ -4277,7 +4340,10 @@ export class Editor {
       wrap = lay.xs[part.c + spanOf(t0, part.r, part.c)] - lay.xs[part.c] - 2 * lay.padX;
       justify = cellAlign(t0, part.r, part.c);
     }
-    const shown = partRuns(t0, part);
+    // a cell's text is typed in its table style's colours, which are left off again when it is stored
+    const look = typeof part === 'string' ? null : slideCellLook(t0, part.r, part.c);
+    const own = partRuns(t0, part);
+    const shown = { ...own, runs: styledRuns(own.runs, look) };
     this.tablePart = { id, part };
     // the table stays selected, so the Style panel shows its commands
     this.sel = emptySel();
@@ -4303,7 +4369,7 @@ export class Editor {
         const cur = doc.shapes.get(id)?.table;
         if (!cur || this.r.tableEdit?.id !== id) return;
         const before = this.r.tableEdit.table;
-        const draft = setPart(cur, part, rich);
+        const draft = setPart(cur, part, { ...rich, runs: unstyledRuns(rich.runs, look) });
         this.r.tableEdit = { id, table: draft, part };
         repaint(before);
         repaint(draft);
@@ -4334,7 +4400,7 @@ export class Editor {
         repaint(before);
       }
       if (!cur?.table) { this.changed(); return; }
-      let t = setPart(cur.table, part, { runs: res.runs, paras: res.paras });
+      let t = setPart(cur.table, part, { runs: unstyledRuns(res.runs, look), paras: res.paras });
       // the text box's handle sets the width of the cell's column (or of the last column a spanning cell covers)
       if (typeof part !== 'string' && res.wrap !== undefined && Math.abs(res.wrap - wrap) > 0.01) {
         const last = part.c + spanOf(t, part.r, part.c) - 1;
@@ -4471,6 +4537,8 @@ export class Editor {
       const W = w / Math.max(0.01, 1 - c.l - c.r), H = hh / Math.max(0.01, 1 - c.t - c.b);
       const img = imageFor(crop.src);
       ctx.save();
+      const turn = shapeTurn(crop);
+      if (turn) { const m = shapeMid(crop); ctx.translate(m.x, m.y); ctx.rotate(turn * DEG); ctx.translate(-m.x, -m.y); }
       ctx.globalAlpha = 0.35;
       if (img) ctx.drawImage(img, x1 - c.l * W, y1 - c.t * H, W, H);
       ctx.globalAlpha = 1;
@@ -4803,6 +4871,19 @@ function strokeAlong(ctx: CanvasRenderingContext2D, pts: Vec[]): void {
 
 /** Trace a shape's outline (or fill it, when the shape is filled) with the current style. */
 function outlineShape(ctx: CanvasRenderingContext2D, s: Shape): void {
+  const rot = shapeTurn(s);
+  if (!rot) { outlineFlat(ctx, s); return; }
+  // a turned shape's outline turns with it
+  const c = shapeMid(s), a = rot * DEG;
+  ctx.save();
+  ctx.translate(c.x, c.y);
+  ctx.rotate(a);
+  ctx.translate(-c.x, -c.y);
+  outlineFlat(ctx, s);
+  ctx.restore();
+}
+
+function outlineFlat(ctx: CanvasRenderingContext2D, s: Shape): void {
   const x = Math.min(s.x1, s.x2), y = Math.min(s.y1, s.y2), w = Math.abs(s.x2 - s.x1), h = Math.abs(s.y2 - s.y1);
   ctx.beginPath();
   switch (s.kind) {
