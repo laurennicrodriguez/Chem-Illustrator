@@ -52,6 +52,8 @@ import { shapeMathPicture, shapeMathScale, shapeMathSize } from './deck/equation
 import { askEquation } from './ui/equation-dialog';
 import { solid } from './deck/background';
 import { formatBackground } from './ui/background-dialog';
+import { pictureFormat } from './ui/picture-dialog';
+import { fxPng } from './render/picture-fx';
 import { drawSlidePage, recordSlide, paintSlide, drawDrawing, SURROUND } from './deck/slide-view';
 import { writePdf, jpegInfo, PdfPage, PdfImage } from './io/pdf';
 import { SlideList } from './ui/slide-list';
@@ -1549,6 +1551,7 @@ const docFiles: DocxDeps = {
     return { png, svg: pictureSvg(pic), w: pic.box.x2 - pic.box.x1, h: pic.box.y2 - pic.box.y1, x: pic.box.x1, y: pic.box.y1 };
   },
   svgToPng,
+  bakePicture: (p) => fxPng(p, 'baked'),
   fonts: bundledFaces,
   smiles: (contents, style) => drawingSmiles(structureDoc(contents, style)),
 };
@@ -1635,6 +1638,7 @@ function pptxOptions(): PptxOptions {
       return { svg: pictureSvg(pic), png, box: pic.box };
     },
     svgToPng,
+    bakePicture: (p) => fxPng(p, 'baked'),
     fonts: bundledFaces,
     smiles: drawingSmiles,
   };
@@ -2450,6 +2454,28 @@ function cropPicture(): void {
   editor.requestOverlay();
   stylePanel.refresh();
   if (editor.cropping !== null) flash('Drag the black handles to cut the edges off. Press Esc or click elsewhere when you are done.', 6000);
+}
+
+/**
+ * Picture Format…: the selected pictures' corrections, colours, see-through, Remove Background
+ * and shape; the first one's crop too (cropping to proportions keeps its width).
+ */
+async function formatPicture(): Promise<void> {
+  const pics = [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => x?.kind === 'picture' && !!x.src && !x.chart && !x.math && !x.video);
+  if (!pics.length) { flash('Select a picture first.'); return; }
+  const p = pics[0];
+  const got = await pictureFormat({ src: p.src!, fx: p.fx, crop: p.crop, w: Math.abs(p.x2 - p.x1), h: Math.abs(p.y2 - p.y1), count: pics.length });
+  if (!got) return;
+  doc.edit('Picture format', () => {
+    for (const x of pics) doc.updateShape(x.id, { fx: got.fx && structuredClone(got.fx) });
+    if (got.crop) {
+      const c = got.crop;
+      const x1 = Math.min(p.x1, p.x2), y1 = Math.min(p.y1, p.y2), w = Math.abs(p.x2 - p.x1);
+      doc.updateShape(p.id, { crop: c.l || c.t || c.r || c.b ? c : undefined, ...(got.aspect ? { x1, y1, x2: x1 + w, y2: y1 + w / got.aspect } : {}) });
+    }
+  });
+  editor.requestScene();
+  stylePanel.refresh();
 }
 
 /** Picture > Remove white: near-white pixels become see-through (the picture becomes a PNG). */
@@ -3447,6 +3473,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'insert-chart': () => { void insertChart(); },
   'edit-chart': () => { const id = [...editor.sel.shapes].find((x) => doc.shapes.get(x)?.chart); if (id === undefined) { flash('Click a chart first.'); return; } void editChartShape(id); },
   crop: () => cropPicture(),
+  'picture-format': () => { void formatPicture(); },
   'text-box': () => { editor.setTool('text'); flash('Click to type, or drag across to make a text box that wraps.'); },
   'new-slide': () => newSlide(),
   'duplicate-slide': () => { const d = deckNow(); if (d) { finishTyping(); d.duplicate(slideList.pickedList()); } },
@@ -5795,7 +5822,7 @@ function drawingMenu(): MenuItem[] {
     { label: 'Rotate or Flip', items: turn },
     ...(order.length ? [{ label: 'Order', items: order }] : []),
     ...(shapes.some((x) => x.chart) ? [{ cmd: 'edit-chart', label: 'Edit Chart…' }] : []),
-    ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }, { label: 'Picture Style', items: PICTURE_STYLES.map((p) => ({ cmd: `picture-style-${p.id}`, label: p.name })) }] : []),
+    ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }, { cmd: 'picture-format' }, { label: 'Picture Style', items: PICTURE_STYLES.map((p) => ({ cmd: `picture-style-${p.id}`, label: p.name })) }] : []),
     ...(ws.active.mode === 'slides' ? [{ label: 'Animation', items: [
       ...ANIM_COMMANDS.slice(0, EFFECTS.length), null, ...ANIM_COMMANDS.slice(EFFECTS.length), null,
       { cmd: 'remove-animation', label: 'Remove Animation' }, { cmd: 'animation-pane', label: 'Animation Pane' }, { cmd: 'preview-slide', label: 'Preview Slide' },
@@ -5901,6 +5928,7 @@ editor.onContextMenu = (e) => {
 };
 
 stylePanel.cropWithMouse = () => cropPicture();
+stylePanel.formatPicture = () => void formatPicture();
 stylePanel.removeWhite = (ids) => void removeWhite(ids);
 stylePanel.frames = { add: () => void command('add-frame'), fit: (id) => editor.fitFrame(id) };
 stylePanel.diagram = {

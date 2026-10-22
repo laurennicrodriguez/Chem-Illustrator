@@ -12,7 +12,9 @@
 
 import type { PinnedComment } from '../document/comments';
 import { COMMENT_CT, COMMENT_REL, writeSlideComments } from './pptx-comments';
-import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, applyBase, PICTURE_SHADOWS, type Pattern, type PictureLook } from '../model';
+import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, applyBase, PICTURE_SHADOWS, type Pattern, type PictureFx, type PictureLook } from '../model';
+import { bakedPart, tidyFx } from '../render/picture-fx';
+import { blipEffectsXml, imgPropsXml, pictureGeomXml } from './picture-xml';
 import { turnAbout, type Rect } from '../geom';
 import { layoutText, ASCENT, FONT_STACK, type Measure } from '../text/layout';
 import { fitParas, listMarkers, splitParagraphs } from '../text/paragraphs';
@@ -71,6 +73,8 @@ export const TAG = {
   diagram: 'CHEMILLUSTRATOR_DIAGRAM',
   /** A chart: the chart and its data as made here. */
   chart: 'CHEMILLUSTRATOR_CHART',
+  /** A picture's Picture Format settings PowerPoint has no place for (how near a colour Remove Background takes). */
+  picture: 'CHEMILLUSTRATOR_PICTURE',
   /** An equation: its LaTeX, size, colour and font as made here, used when PowerPoint has not changed it. */
   math: 'CHEMILLUSTRATOR_MATH',
 };
@@ -93,6 +97,11 @@ export interface PptxOptions {
   picture(doc: Doc): Promise<DrawingPicture | null>;
   /** A PNG of an SVG picture, for programs that can't show SVG (w × h pixels). */
   svgToPng(svg: string, w: number, h: number): Promise<Uint8Array>;
+  /**
+   * A picture with its sharpening and Remove Background worked in, as PNG (PowerPoint keeps
+   * those worked in, with the original beside it). Without it they are left off.
+   */
+  bakePicture?(p: Pick<Shape, 'src' | 'fx' | 'crop' | 'px'>): Promise<Uint8Array | null>;
   /** A drawing's structures as SMILES, for the picture's alt text (null when there are none, or no chemistry engine). */
   smiles?(doc: Doc): Promise<string | null>;
   /** Text widths, for laying out text boxes (Arial's widths by default). */
@@ -664,7 +673,7 @@ class Writer {
       if (p.math) { out.push(await this.equation(path, p, box, id++)); continue; }
       const v = p.video ? this.video(path, p.video.src, p.src!, box, id) : '';
       if (v) { videos.push({ spid: id, once: !!p.video!.once }); out.push(v); id++; continue; }
-      out.push(await this.picture(path, p.src!, box, `Picture ${id - 1}`, id++, p.crop ?? null, p.look));
+      out.push(await this.picture(path, p.src!, box, `Picture ${id - 1}`, id++, p.crop ?? null, p.look, p));
     }
     for (const sh of parts.shapes) {
       mark({ shapes: new Set([sh.id]) }, id);
@@ -860,8 +869,8 @@ class Writer {
       `<p:spPr>${frame}${geom}${ln}</p:spPr></p:cxnSp>`;
   }
 
-  /** A picture from image data, cropped as given. */
-  private async picture(from: string, src: string, box: Rect, name: string, id: number, crop: Shape['crop'] | null, look?: PictureLook): Promise<string> {
+  /** A picture from image data, cropped as given, with its Picture Format settings (`pic`) as PowerPoint's. */
+  private async picture(from: string, src: string, box: Rect, name: string, id: number, crop: Shape['crop'] | null, look?: PictureLook, pic?: Shape): Promise<string> {
     let mime: string, bytes: Uint8Array;
     try {
       ({ mime, bytes } = fromDataUrl(src));
@@ -870,13 +879,21 @@ class Writer {
     }
     const ext = MIME_EXT[mime];
     if (!ext) return '';
+    const fx = tidyFx(pic?.fx);
+    // what Office can't show live goes in worked in, with the original as the picture's layer
+    let baked: Uint8Array | null = null;
+    if (pic && bakedPart(fx) && this.opts.bakePicture) baked = await this.opts.bakePicture(pic).catch(() => null);
+    const tags = fx?.bg?.tol !== undefined ? this.addTags(from, { [TAG.picture]: JSON.stringify({ v: 1, tol: fx.bg.tol }) }) : null;
     if (ext === 'svg') {
       // PowerPoint shows the SVG; older programs the PNG beside it (300 dots per inch)
       const k = 300 / 72;
       const png = await this.opts.svgToPng(new TextDecoder().decode(bytes), Math.max(1, Math.round((box.x2 - box.x1) * k)), Math.max(1, Math.round((box.y2 - box.y1) * k)));
-      return picXml(id, name, this.addMedia(from, png, 'png'), this.addMedia(from, bytes, 'svg'), box, crop, null, look);
+      if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, undefined, fx, this.addMedia(from, png, 'png'));
+      return picXml(id, name, this.addMedia(from, png, 'png'), this.addMedia(from, bytes, 'svg'), box, crop, tags, look, undefined, fx);
     }
-    return picXml(id, name, this.addMedia(from, bytes, ext), null, box, crop, null, look);
+    const own = this.addMedia(from, bytes, ext);
+    if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, undefined, fx, own);
+    return picXml(id, name, own, null, box, crop, tags, look, undefined, fx);
   }
 
   /** A title, text placeholder or text box. */
@@ -1098,27 +1115,32 @@ function decorXml(sh: DecorShape, id: number): string {
   return `<p:sp>${nv('Rectangle')}<p:spPr>${xfrm(sh)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${fill}${ln}</p:spPr></p:sp>`;
 }
 
-/** A picture element: PNG (or another bitmap), optionally with an SVG PowerPoint shows instead. */
-function picXml(id: number, name: string, blipId: string, svgId: string | null, box: Rect, crop: Shape['crop'] | null, tagsId: string | null, look?: PictureLook, descr?: string): string {
-  const ext = svgId ? `<a:extLst><a:ext uri="${SVG_EXT}"><asvg:svgBlip xmlns:asvg="${NS_SVG}" r:embed="${svgId}"/></a:ext></a:extLst>` : '';
+/**
+ * A picture element: PNG (or another bitmap), optionally with an SVG PowerPoint shows instead,
+ * and its Picture Format settings; with `layerId`, the blip has sharpening or Remove Background
+ * worked in and the layer is the original.
+ */
+function picXml(id: number, name: string, blipId: string, svgId: string | null, box: Rect, crop: Shape['crop'] | null, tagsId: string | null, look?: PictureLook, descr?: string, fx?: PictureFx, layerId?: string): string {
+  const exts = (svgId ? `<a:ext uri="${SVG_EXT}"><asvg:svgBlip xmlns:asvg="${NS_SVG}" r:embed="${svgId}"/></a:ext>` : '') + (layerId ? imgPropsXml(fx, layerId, crop) : '');
+  const ext = exts ? `<a:extLst>${exts}</a:extLst>` : '';
   const src = crop && (crop.l || crop.t || crop.r || crop.b)
     ? `<a:srcRect l="${Math.round(crop.l * 100000)}" t="${Math.round(crop.t * 100000)}" r="${Math.round(crop.r * 100000)}" b="${Math.round(crop.b * 100000)}"/>` : '';
   const nvPr = tagsId ? `<p:nvPr><p:custDataLst><p:tags r:id="${tagsId}"/></p:custDataLst></p:nvPr>` : '<p:nvPr/>';
   return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${xml(name)}"${descr ? ` descr="${xml(descr)}"` : ''}/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>${nvPr}</p:nvPicPr>` +
-    `<p:blipFill><a:blip r:embed="${blipId}">${ext}</a:blip>${src}<a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
-    `<p:spPr>${xfrm(box)}${pictureLookXml(look)}</p:spPr></p:pic>`;
+    `<p:blipFill><a:blip r:embed="${blipId}">${blipEffectsXml(fx)}${ext}</a:blip>${src}<a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
+    `<p:spPr>${xfrm(box)}${pictureLookXml(look, fx)}</p:spPr></p:pic>`;
 }
 
-/** A picture's outline (rounded or not), border line and shadow, as PowerPoint's picture formatting. */
-export function pictureLookXml(look: PictureLook | undefined): string {
+/** A picture's outline (rounded, or the shape it is cut to), border line and shadow, as PowerPoint's picture formatting. */
+export function pictureLookXml(look: PictureLook | undefined, fx?: PictureFx): string {
   const round = Math.max(0, Math.min(0.5, look?.round ?? 0));
   // PowerPoint's roundRect corner: its adjustment is the radius over the shorter side, in 1/100000ths
-  const geom = round ? `<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val ${Math.round(round * 100000)}"/></a:avLst></a:prstGeom>` : '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>';
+  const geom = pictureGeomXml(fx, round ? `<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val ${Math.round(round * 100000)}"/></a:avLst></a:prstGeom>` : '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>');
   const ln = look?.line ? `<a:ln w="${emu(look.line)}"><a:solidFill><a:srgbClr val="${hex6(look.lineColor ?? '#000000')}"/></a:solidFill></a:ln>` : '';
   const sh = look?.shadow ? PICTURE_SHADOWS[look.shadow] : null;
   // down and to the right: the distance along 45 degrees
-  const fx = sh ? `<a:effectLst><a:outerShdw blurRad="${emu(sh.blur)}" dist="${emu(sh.off * Math.SQRT2)}" dir="2700000" algn="tl" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="${Math.round(sh.alpha * 100000)}"/></a:srgbClr></a:outerShdw></a:effectLst>` : '';
-  return geom + ln + fx;
+  const fxl = sh ? `<a:effectLst><a:outerShdw blurRad="${emu(sh.blur)}" dist="${emu(sh.off * Math.SQRT2)}" dir="2700000" algn="tl" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="${Math.round(sh.alpha * 100000)}"/></a:srgbClr></a:outerShdw></a:effectLst>` : '';
+  return geom + ln + fxl;
 }
 
 /** A design shape's outline as a PowerPoint path, in its own box (w × h points). */

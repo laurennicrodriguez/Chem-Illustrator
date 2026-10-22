@@ -7,7 +7,7 @@ import { ATTACH_TAG, IGNORE_TAG, attachFromTag, fillAttachments } from '../edito
 import { highlightStyleFromTag } from '../render/highlight';
 import { attachRingFills } from '../chem/ring-fill';
 import { lipDirection } from '../chem/polymer';
-import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, MorphStep, CHIRAL_FLAGS, PARTIAL, PAPER, type Pin, type ShapeMath } from '../model';
+import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, MorphStep, CHIRAL_FLAGS, PARTIAL, PAPER, type Pin, type PictureFx, type ShapeMath } from '../model';
 import { TEXT_TAG, parseTextTag, runsFromChemDraw } from '../text/chemdraw-text';
 import { DocStyle } from '../style';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
@@ -20,6 +20,7 @@ import { kids, descendants } from './xml';
 import { styleFromFace, isSymbolFont, fromSymbolFont } from '../richtext';
 import { dataUrl, fromDataUrl, imageSize } from '../render/images';
 import { emfToSvg } from '../render/emf-read';
+import { tidyFx } from '../render/picture-fx';
 import { TABLE_TAG, TABLE_PART_TAG, applyTableTag, gridOf, linesFromBorders, parseTableTag, type ReadCell } from './cdxml-table';
 import { layoutTable, NOTE_SCALE } from '../table';
 import { arialWidth } from '../text-metrics';
@@ -795,8 +796,13 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
               const got = tag ? JSON.parse(tag) as ShapeMath : undefined;
               if (typeof got?.tex === 'string' && got.size > 0) math = got;
             } catch { math = undefined; }
+            let fx: PictureFx | undefined;
+            try {
+              const tag = kids(ch).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === PICTURE_FX_TAG)?.getAttribute('Value');
+              fx = tag ? tidyFx(JSON.parse(tag) as PictureFx) : undefined;
+            } catch { fx = undefined; }
             const sh = pic
-              ? doc.addShape({ id: idFor(ch), kind: 'picture', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], src: pic.src, px: pic.px, ...(pic.crop ? { crop: pic.crop } : {}), ...(chart ? { chart } : {}), ...(math ? { math } : {}) })
+              ? doc.addShape({ id: idFor(ch), kind: 'picture', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], src: pic.src, px: pic.px, ...(pic.crop ? { crop: pic.crop } : {}), ...(chart ? { chart } : {}), ...(math ? { math } : {}), ...(fx ? { fx } : {}) })
               // only pictures this program can't show: mark where they sit, and keep them as they are
               : doc.addShape({ id: idFor(ch), kind: 'rect', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], dashed: true, color: '#9aa4b2', picture: true });
             from('s', sh.id, ch);
@@ -1055,6 +1061,8 @@ export const GEO_BOX_ATTR = 'ChemIllustratorBox';
 export const CHART_TAG = 'Chem Illustrator chart';
 /** An equation (Insert > Equation on slides): its LaTeX, size, colour and font, on the picture standing for it. */
 export const MATH_TAG = 'Chem Illustrator equation';
+/** A picture's Picture Format settings (brightness, recolouring, background removed, shape…), which ChemDraw doesn't have. */
+export const PICTURE_FX_TAG = 'Chem Illustrator picture format';
 export const OWN_PICTURE = 'ChemIllustratorPicture';
 export const OWN_CROP = 'ChemIllustratorCrop';
 

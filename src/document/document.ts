@@ -11,7 +11,7 @@
 // own) keeps its own look.
 
 import type { CommentThread } from './comments';
-import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
+import type { Contents, Justify, ParaStyle, PictureFx, TableData, TextRun } from '../model';
 import type { RichText } from '../text/editing';
 import { ACS_1996, type DocStyle } from '../style';
 import * as rt from '../richtext';
@@ -199,8 +199,10 @@ export type DocObject =
   /**
    * A picture: its own size is w × h points (`px` its pixels); `scale` 1 is that size. A chart
    * (Insert > Chart) is a picture with its chart and data: drawn from them, saved as Word's chart.
+   * `crop` cuts parts off (fractions of the whole image from each side; w × h is the part left),
+   * and `fx` is its Picture Format settings (corrections, colour, background, shape).
    */
-  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float; chart?: ChartBox }
+  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float; chart?: ChartBox; crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx }
   /**
    * A text box: text of its own (typed into in place), `w` wide; it grows to fit its text, and is
    * at least `h` tall when that is set. Always placed on the page. `fill` is its background.

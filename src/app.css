@@ -1918,3 +1918,11 @@ body.sheet-mode:not(.floating-drawing):not(.split-view) #tools::before {
 body.sheet-mode:not(.floating-drawing):not(.split-view) #tools::before { content: 'Draw a structure: pick a tool to draw in the selected cell, or to change its structure.'; }
 body.doc-mode:not(.floating-drawing):not(.split-view) #tools > :not(:hover):not(:focus-within),
 body.sheet-mode:not(.floating-drawing):not(.split-view) #tools > :not(:hover):not(:focus-within) { opacity: 0.55; }
+/* Picture Format */
+.pic-dialog .md-grid { max-height: 46vh; }
+.pic-dialog .pic-preview { background: #fff; }
+.pic-dialog .pic-hint { min-height: 1.2em; margin: 0 0 4px; text-align: center; }
+.pic-dialog .md-controls button[aria-pressed='true'] { outline: 2px solid var(--accent, #2f6fdf); outline-offset: 1px; }
+.pic-swatch { display: inline-block; width: 22px; height: 22px; border: 1px solid var(--line); border-radius: 3px; }
+.pic-swatch.pic-none { background: linear-gradient(135deg, transparent 45%, #d23c3c 45%, #d23c3c 55%, transparent 55%) !important; }
+.md-row[hidden] { display: none; }

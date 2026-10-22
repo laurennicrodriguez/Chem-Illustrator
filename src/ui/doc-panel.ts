@@ -306,6 +306,7 @@ export class DocPanel {
     this.figButtons = this.buttons(s, [
       ['Edit Drawing', 'Change it with the drawing tools (or double-click it)', () => { const id = this.host.picked(); if (id !== null) this.host.editFigure(id); }],
       ['Own Size', 'Back to 100%', () => { const id = this.host.picked(); if (id !== null) this.host.setScale(id, 1); }],
+      ['Picture Format…', 'Brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions', () => this.host.run('picture-format')],
     ]);
   }
 
@@ -594,8 +595,9 @@ export class DocPanel {
       put('fig-shadow', lk?.shadow ?? 'none');
       this.figureInfo.textContent = (isBox ? 'A text box: click inside it to type, drag its edge to move it. ' : o?.kind === 'picture' ? 'A picture. ' : o?.kind === 'drawing' && o.contents.shapes.some((x) => x.diagram) ? 'A diagram: double-click it to change its text, layout or colours (Edit Drawing opens the drawing tools on it). ' : 'A drawing: double-click it to change it with the drawing tools. ')
         + (sz ? `Shown ${showLength(sz.w, 'in')} × ${showLength(sz.h, 'in')} in${fitted ? ', made smaller to fit between the margins' : ''}.` : '');
-      const [edit, own] = this.figButtons.querySelectorAll('button');
+      const [edit, own, format] = this.figButtons.querySelectorAll('button');
       edit.style.display = o?.kind === 'drawing' ? '' : 'none';
+      format.style.display = o?.kind === 'picture' && !o.chart ? '' : 'none';
       own.style.display = isBox ? 'none' : '';
     }
     // the paragraph
