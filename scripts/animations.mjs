@@ -2,10 +2,10 @@
 // Start the program first (npm run dev), then: node scripts/animations.mjs [address] [name …]
 // Needs Playwright with Chromium (as scripts/screenshots.mjs does) and ffmpeg. Give names
 // (smart-arrows, frames, catalytic-cycle, id-labels, spelling, name-to-structure, dark-mode,
-// metal-complex, lone-pairs, reaction-animation) to
+// metal-complex, reaction-animation) to
 // record only those.
 
-import { open, pointer, glide, look, addSmiles, record, canvasBox, screenOf, helperSpot, tool, drag, keys, newestAtom, atomAt, wordSpot, select, paletteTool, sweep } from './shot-lib.mjs';
+import { open, pointer, glide, look, addSmiles, record, canvasBox, screenOf, helperSpot, tool, drag, keys, newestAtom, atomAt, wordSpot, select, paletteTool } from './shot-lib.mjs';
 
 const args = process.argv.slice(2);
 const url = args[0]?.startsWith('http') ? args.shift() : 'http://localhost:5173/';
@@ -360,29 +360,6 @@ if (want('metal-complex')) {
     await glide(page, c.x + c.width * 0.4, c.y + c.height * 0.9, 15);
     await page.mouse.click(c.x + c.width * 0.4, c.y + c.height * 0.9);
   }, { clip: { x: 0, y: 0, width: 1180, height: 820 }, width: 1000, hold: 2500 });
-  await browser.close();
-}
-
-// ---------------------------------------------------------------- lone pairs aimed by dragging
-if (want('lone-pairs')) {
-  const { browser, page } = await open(url);
-  const ids = await addSmiles(page, 'CC(=O)[O-]', 300, 250);
-  await look(page, 6, 300, 250);
-  await pointer(page);
-  const c = await canvasBox(page);
-  await page.mouse.move(c.x + c.width * 0.8, c.y + c.height * 0.85);
-  const clip = { x: c.x + c.width / 2 - 360, y: c.y + c.height / 2 - 260, width: 720, height: 520 };
-  await record(page, 'lone-pairs', async () => {
-    await tool(page, 'sym-lonepair');
-    await page.waitForTimeout(400);
-    // each oxygen: press on it and sweep round to where the pair should sit
-    const pairs = [[ids[2], [[200, 250], [300, 330]]], [ids[3], [[30, 90], [130, 200], [330, 270]]]];
-    const centres = await Promise.all(pairs.map(([id]) => atomAt(page, id)));
-    for (const [k, [, aims]] of pairs.entries()) {
-      for (const [from, to] of aims) { await sweep(page, centres[k], 45, from, to, 22); await page.waitForTimeout(350); }
-    }
-    await glide(page, c.x + c.width * 0.8, c.y + c.height * 0.85, 15);
-  }, { clip, width: 620, hold: 2200 });
   await browser.close();
 }
 

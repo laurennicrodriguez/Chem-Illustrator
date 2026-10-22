@@ -291,14 +291,3 @@ export async function paletteTool(page, first, label) {
   await page.waitForTimeout(350);
   await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
 }
-
-/** Press at `from`, then sweep the mouse round `centre` to the angle `to` (degrees, clockwise from east) and let go. */
-export async function sweep(page, centre, r, from, to, steps = 30) {
-  const at = (d) => ({ x: centre.x + r * Math.cos(d * Math.PI / 180), y: centre.y + r * Math.sin(d * Math.PI / 180) });
-  await page.mouse.move(centre.x, centre.y, { steps: 10 });
-  await page.mouse.down();
-  const s = at(from); await page.mouse.move(s.x, s.y, { steps: 8 });
-  for (let i = 1; i <= steps; i++) { const p = at(from + (to - from) * i / steps); await page.mouse.move(p.x, p.y); await page.waitForTimeout(16); }
-  await page.waitForTimeout(250);
-  await page.mouse.up();
-}
