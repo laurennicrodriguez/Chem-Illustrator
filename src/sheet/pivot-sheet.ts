@@ -8,6 +8,7 @@ import { nameTarget, resolveName, refersTo } from './names';
 import { PivotTable, PivotSource, PivotReport, layoutPivot, sourceOf, pivotChartSeries } from './pivot';
 import type { Value } from './values';
 import type { Chart } from './chart';
+import { DEFAULT_COL_W } from './layout';
 
 /** The sheet and block a PivotTable's source names (a reference, a table's name or a defined name). */
 export function sourceRange(wb: Workbook, source: string, home: Sheet): { sheet: Sheet; range: Range } | string {
@@ -115,6 +116,19 @@ export function writePivot(s: Sheet, pt: PivotTable): PivotTable | string {
     if (input === undefined && !style) return;
     s.setCell(pt.at.row + r, pt.at.col + c, { input: input || undefined, style: style && Object.keys(style).length ? style : undefined });
   }));
+  // columns wide enough for the labels and numbers (Excel's "Autofit column widths on update"; never narrower)
+  for (let c = 0; c <= R.c2 - R.c1; c++) {
+    let chars = 0;
+    rep.cells.forEach((row, r) => {
+      const v = row[c];
+      if (v === null || v === undefined || r < rep.filterRows - 1) return;
+      const indent = rep.styles.find((st) => st.style.indent && r >= st.r1 && r <= st.r2 && c >= st.c1 && c <= st.c2)?.style.indent ?? 0;
+      chars = Math.max(chars, (typeof v === 'number' ? Math.min(11, String(Math.round(v * 100) / 100).length) : String(v).length) + indent * 1.3);
+    });
+    const want = Math.min(300, Math.ceil(chars * 7.5 + 14));
+    const col = R.c1 + c;
+    if (want > (s.colWidths.get(col) ?? DEFAULT_COL_W)) s.setColWidth(col, want);
+  }
   const kept: PivotTable = { ...pt, last: R };
   s.setPivots(s.pivots.some((p) => p.id === pt.id) ? s.pivots.map((p) => (p.id === pt.id ? kept : p)) : [...s.pivots, kept]);
   // PivotCharts on any sheet that chart this report (PivotTable ids are the workbook's own)

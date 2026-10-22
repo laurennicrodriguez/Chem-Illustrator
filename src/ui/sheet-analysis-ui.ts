@@ -643,10 +643,17 @@ export class SheetAnalysis {
       st.note(`Target value: ${formatValue(target).text}`, '');
       st.note(`Current value: ${formatValue(res.y, sh.styleAt(a.range.r1, a.range.c1)?.numFmt).text}`, '');
       st.note(`${cellName(b.range.r1, b.range.c1)} = ${+res.x.toPrecision(15)}`, 'muted');
-      st.actions('OK', () => {
-        this.wb.edit('Goal Seek', () => { const c = sh.cell(b.range.r1, b.range.c1); sh.setCell(b.range.r1, b.range.c1, { ...c, input: String(+res.x.toPrecision(15)) }); }, this.view.place());
+      // as in Excel, the sheet shows the answer while the status shows; Cancel puts the cell back
+      const was = sh.cell(b.range.r1, b.range.c1);
+      this.wb.edit('Goal Seek', () => sh.setCell(b.range.r1, b.range.c1, { ...was, input: String(+res.x.toPrecision(15)) }), this.view.place());
+      this.view.refresh();
+      let kept = false;
+      st.onClose = () => {
+        if (kept) return;
+        this.wb.edit('Goal Seek (cancelled)', () => sh.setCell(b.range.r1, b.range.c1, { ...was }), this.view.place());
         this.view.refresh();
-      });
+      };
+      st.actions('OK', () => { kept = true; });
       setTimeout(() => st.show());
       return null;
     });
@@ -787,12 +794,25 @@ export class SheetAnalysis {
     const objKey = run.built.objective;
     const found = run.result.f * (run.built.sign === -1 ? -1 : 1);
     if (run.ok && m.goal !== 'value') w.note(`Objective ${cellName(rowOf(objKey), colOf(objKey))}: ${formatValue(found).text}`, 'muted');
+    // as in Excel, the sheet shows the answer while this window is open; Restore or Cancel puts the cells back
+    const wb = this.wb, v = this.view;
+    const was = run.built.vars.map((k) => ({ k, cell: s.cells.get(k) }));
+    let showing = false, kept = false;
+    const show = (answer: boolean) => {
+      if (answer === showing) return;
+      wb.edit(answer ? 'Solver' : 'Restore Original Values', () => {
+        if (answer) keepAnswer(s, run);
+        else for (const { k, cell } of was) s.setCell(rowOf(k), colOf(k), { ...cell });
+      }, v.place());
+      showing = answer;
+      v.refresh();
+    };
+    show(keep.get() === 'keep');
+    for (const inp of keep.inputs) inp.addEventListener('change', () => show(keep.get() === 'keep'));
+    w.onClose = () => { if (!kept) show(false); };
     w.actions('OK', () => {
-      const wb = this.wb;
-      const v = this.view;
-      if (keep.get() === 'keep') {
-        wb.edit('Solver', () => keepAnswer(s, run), v.place());
-      }
+      kept = true;
+      show(keep.get() === 'keep');
       if (report.checked) {
         const when = new Date();
         const rows = answerReport(s, m, run, when);

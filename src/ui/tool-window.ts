@@ -77,7 +77,7 @@ export class ToolWindow {
 
   /** A titled group (Input, Output options). */
   group(title: string): HTMLFieldSetElement {
-    const f = el('fieldset', 'tool-group');
+    const f = el('fieldset', 'tw-group');
     f.append(el('legend', undefined, title));
     this.body.append(f);
     return f;

@@ -302,7 +302,7 @@ export class SheetPivots {
   /** One area of the Fields window: its fields in order, each with a menu, taking dropped fields. */
   private areaBox(area: Area, pt: PivotTable, src: PivotSource): HTMLElement {
     const box = document.createElement('fieldset');
-    box.className = 'tool-group pivot-area';
+    box.className = 'tw-group pivot-area';
     const legend = document.createElement('legend');
     legend.textContent = area === 'cols' ? 'Columns' : AREA_NAMES[area];
     box.append(legend);

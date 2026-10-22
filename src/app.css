@@ -1981,11 +1981,11 @@ body.sheet-mode:not(.floating-drawing):not(.split-view) #tools > :not(:hover):no
 /* Data tools' windows (ToolPak, Goal Seek, Data Table, Solver, PivotTable): non-modal, beside the sheet, so cells can be picked */
 dialog.tool-window { position: fixed; inset: 96px 16px auto auto; margin: 0; z-index: 40; width: min(92vw, 430px); overflow: auto; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22); }
 dialog.tool-window h2 { cursor: move; user-select: none; }
-dialog.tool-window .ask-row { grid-template-columns: 10em 1fr auto; margin: 5px 0; }
+dialog.tool-window .ask-row { grid-template-columns: 10em minmax(0, 1fr) auto; margin: 5px 0; }
 dialog.tool-window .ask-row.ask-check { grid-template-columns: auto 1fr; }
 .tool-window .ref-box { font-family: ui-monospace, Consolas, monospace; }
-.tool-group { border: 1px solid var(--line); border-radius: 6px; margin: 8px 0; padding: 4px 10px 6px; }
-.tool-group legend { font-size: 12px; padding: 0 4px; opacity: 0.8; }
+.tw-group { border: 1px solid var(--line); border-radius: 6px; margin: 8px 0; padding: 4px 10px 6px; min-width: 0; }
+.tw-group legend { font-size: 12px; padding: 0 4px; opacity: 0.8; }
 .tool-list { width: 100%; font: inherit; }
 .tool-error { color: #c62828; margin: 8px 0 0; }
 .tool-radios { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 4px 0; }
