@@ -210,6 +210,7 @@
     <button data-modes="sheet" role="menuitem" data-cmd="draw-structure">Structure in Cell</button>
     <button data-modes="drawing slides design document" role="menuitem" data-cmd="insert-picture">Picture…</button>
     <button data-modes="drawing slides design" role="menuitem" data-cmd="crop" title="Cut the edges off the selected picture">Crop Picture</button>
+    <button data-modes="drawing slides design document" role="menuitem" data-cmd="picture-format" title="Brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions">Picture Format…</button>
     <button data-modes="drawing slides design" role="menuitem" data-cmd="text-box">Text Box</button>
     <button data-modes="drawing slides design document" role="menuitem" data-cmd="insert-table" title="A table in the ACS style; or paste cells from Excel or a sheet">Table…</button>
     <button data-modes="drawing slides design document" role="menuitem" data-cmd="insert-chart" title="A chart with its own data (type or paste it in a grid), saved as a Word or PowerPoint chart">Chart…</button>
@@ -1134,6 +1135,7 @@
           <button class="rb-big" data-doc="insert-table" title="An ACS-style table"><span class="rb-icon">▦</span>Table</button>
           <button class="rb-big" data-doc="text-to-table" title="Convert Text to Table: the paragraphs selected become a table, each one a row, cut into cells at tabs, commas or another character"><span class="rb-icon">⇶</span>Text to Table</button>
           <button class="rb-big" data-doc="insert-picture" title="A picture from a file (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
+          <button class="rb-big" data-doc="picture-format" title="Picture Format for the picture picked: brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions. Saved as Word's own picture settings"><span class="rb-icon">◐</span>Picture Format</button>
           <button class="rb-big" data-doc="insert-chart" title="A chart with its own data, as in Word: type or paste the numbers, pick the kind of chart. Double-click it to change it"><span class="rb-icon">▥</span>Chart</button>
           <button class="rb-big" data-doc="insert-text-box" title="A box of text on the page, with the page's text wrapping round it. Drag its edge to move it"><span class="rb-icon">▭</span>Text Box</button>
           <button class="rb-big" data-doc="insert-shapes" aria-haspopup="true" title="Basic shapes, block arrows, flowchart shapes, callouts and lab glassware: the one you pick goes in the text at the caret. Double-click it to change it with the drawing tools"><span class="rb-icon">◇</span>Shapes ▾</button>
@@ -1671,6 +1673,7 @@
           <button class="rb-big" data-cmd="insert-diagram" title="Lists, processes, cycles, hierarchies, Venn diagrams, matrices and pyramids drawn from lines of text, like PowerPoint's SmartArt. Double-click one to type into it"><span class="rb-icon">⧉</span>Diagram</button>
           <button class="rb-big" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha) and shown as maths, or one of the usual ones (Arrhenius, Eyring…). Double-click it to change it. Saved as a PowerPoint equation (Alt+=)"><span class="rb-icon">π</span>Equation</button>
           <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
+          <button class="rb-big" data-cmd="picture-format" title="Picture Format for the selected picture: brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions. Saved as PowerPoint's own picture settings"><span class="rb-icon">◐</span>Picture Format</button>
         </div>
         <div class="rb-label">Pictures, Text and Shapes</div>
       </div>
@@ -1908,6 +1911,7 @@
         <button class="rb-big" data-cmd="insert-table" title="Put a table on the page (or paste cells from Excel or a sheet)"><span class="rb-icon">▦</span>Table</button>
         <button class="rb-big" data-cmd="insert-chart" title="A chart with its own data: type or paste the numbers, pick the kind of chart. Double-click it to change it"><span class="rb-icon">▥</span>Chart</button>
         <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
+        <button class="rb-big" data-cmd="picture-format" title="Picture Format for the selected picture: brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions. Saved as PowerPoint's own picture settings"><span class="rb-icon">◐</span>Picture Format</button>
       </div>
       <div class="rb-label">Insert</div>
     </div>

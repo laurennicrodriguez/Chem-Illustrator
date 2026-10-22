@@ -168,6 +168,17 @@ An animated reaction can go on a slide as a video: in Slides mode, open **Chemis
 
 Select a picture, then use the **Style** panel: **Frame style**, frame line and colour, **Rounded corners (%)** and **Shadow** (None, Soft or Hard). For a ready-made look, right-click the picture and choose **Picture Style**. These looks are kept when you save to PowerPoint.
 
+### Picture Format
+
+Select a picture and click **Picture Format** (**Insert** tab, the **Style** panel, or right-click). The window shows the picture as it will look while you change it:
+
+- **Corrections:** brightness, contrast, and sharpen (above 0) or soften (below 0).
+- **Colour:** recolour as greyscale, sepia, washout, black and white (with where black stops), or two colours of your own running dark to light. **See-through colour** makes one colour clear: click **Pick in the picture**, then click the colour in the preview. **Transparency** makes the whole picture see-through.
+- **Remove background:** takes out the background joined to the picture's edges. **How near counts** says how close a colour must be to go. If the subject loses parts, click **Mark to keep** and click them in the preview; if background is left, **Mark to remove** and click it.
+- **Crop:** **Crop to shape** cuts the picture to an oval, triangle, star, heart and other shapes (a frame and shadow follow the shape). **Crop to proportions** crops to 1:1, 4:3, 16:9 and others, centred.
+
+The picture itself is never changed, so **Reset Picture** (or setting a value back to 0) takes any of it off again. Saved as PowerPoint's own picture settings, so PowerPoint can change them too.
+
 ## Tables
 
 **Insert** tab ▸ **Table** (or **Insert ▸ Table…**) puts an ACS-style table on the slide. Double-click a cell to type; Tab moves to the next cell. The **Style** panel adds and removes rows and columns, sets heading rows, lines, column widths, a title and footnotes. Cells copied from Excel, Word or a sheet paste as a new table.

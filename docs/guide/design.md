@@ -72,6 +72,8 @@ All the drawing tools and hotkeys work on a design page, so you can draw structu
 
 Insert a PNG or JPEG (a logo, say), select it, and click **Remove white…** in the **Style** panel. You can remove only the white joined to the edges, or all white, and set how near to white counts. Undo puts the white back.
 
+**Picture Format** (on the ribbon, in the panel or on right-click) does more: it removes a background of any colour, recolours, corrects and crops pictures to shapes, and keeps the picture itself as it was, so you can change your mind later. See [Slides: Picture Format](slides.md#picture-format).
+
 ## Diagrams
 
 **Insert** ▸ **Diagram…** (a **Diagram** button on the Design, Slides and Document ribbons) draws a diagram from lines of text, as PowerPoint's SmartArt does. Type one item per line; press <kbd>Tab</kbd> to move a line a level down (under the line above it) and <kbd>Shift+Tab</kbd> to move it back up. The picture on the right shows how it will look as you type.

@@ -661,6 +661,8 @@ export interface Shape {
   crop?: { l: number; t: number; r: number; b: number };
   /** A picture's frame, corners and shadow (PowerPoint's Picture Styles). */
   look?: PictureLook;
+  /** A picture's corrections, colour, see-through amount, background taken out and the shape it is cut to (Picture Format). */
+  fx?: PictureFx;
   color?: string;
   z?: number;
   /** Its name in the Layers panel (Design mode). */
@@ -744,6 +746,51 @@ export interface PictureLook {
   round?: number;
   /** A shadow down and to the right: soft (blurred) or hard (sharp). */
   shadow?: 'soft' | 'hard';
+}
+
+/**
+ * How a picture is changed for showing (Picture Format), as PowerPoint and Word keep it: the
+ * picture's own data is never changed, so every setting can be changed back.
+ */
+export interface PictureFx {
+  /** Brighter (up to 1) or darker (down to -1). */
+  bright?: number;
+  /** More contrast (up to 1) or less (down to -1). */
+  contrast?: number;
+  /** Sharper (up to 1) or softer (down to -1). */
+  sharpen?: number;
+  /** Shown in other colours: greys, sepia, washed out, black and white, or two colours of one's own. */
+  recolor?: Recolor;
+  /** See-through amount of the whole picture, 0 (solid) to 1 (clear). */
+  alpha?: number;
+  /** One colour made see-through (PowerPoint's Set Transparent Color), as #rrggbb. */
+  clear?: string;
+  /** The background taken out (Remove Background). */
+  bg?: BackgroundRemoval;
+  /** The shape the picture is cut to, by PowerPoint's name for it (design/geo.ts); a rectangle when not set. */
+  shape?: string;
+}
+
+/**
+ * A picture shown in other colours. `bw` is black and white, split at `level` (0 to 1, a half
+ * when not set); `tint` runs from `dark` in the shadows to `light` in the highlights.
+ */
+export type Recolor =
+  | { kind: 'grey' }
+  | { kind: 'sepia' }
+  | { kind: 'washout' }
+  | { kind: 'bw'; level?: number }
+  | { kind: 'tint'; dark: string; light: string };
+
+/**
+ * Remove Background: what touches the picture's edges (and the `drop` marks), and is near in
+ * colour, goes; what touches a `keep` mark stays. Marks are points as fractions of the whole
+ * picture's width and height (before cropping). `tol` is how near a colour counts (0 to 1, 0.12 when not set).
+ */
+export interface BackgroundRemoval {
+  tol?: number;
+  keep?: [number, number][];
+  drop?: [number, number][];
 }
 
 /** The two picture shadows: how far down and right, how blurred and how dark, in points (as in Document mode). */

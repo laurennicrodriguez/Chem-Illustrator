@@ -39,6 +39,7 @@ import { ReferencesDialog, chooseReferences } from './references-dialog';
 import { citeSuper, formatOf, type Reference } from '../document/references';
 import { dataUrl, imageSize } from '../render/images';
 import { editChart, chartPoints } from './chart-editor';
+import { pictureFormat } from './picture-dialog';
 import { newChartBox, sizedBox } from '../sheet/chart-box';
 import { chartBoxPng } from '../render/chart-box-paint';
 import type { DocFile } from '../document/doc-file';
@@ -1041,6 +1042,7 @@ export class DocumentMode {
       if (this.file?.t.objects[picked]?.kind === 'drawing') cmd('Edit Drawing', 'edit-figure');
       const po = this.file?.t.objects[picked];
       if (po?.kind === 'picture' && po.chart) cmd('Edit Chart…', 'edit-chart');
+      if (po?.kind === 'picture' && !po.chart) cmd('Picture Format…', 'picture-format', 'Brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions');
       cmd('Insert Caption…', 'insert-caption');
       const look = this.lookOf(picked);
       item(look?.frame ? 'Remove Frame' : 'Add Frame', () => this.setLook(picked, { frame: look?.frame ? undefined : 0.75, frameColor: undefined }), 'A thin black line round it (Format in the panel sets its width and colour)');
@@ -2391,6 +2393,32 @@ export class DocumentMode {
     this.focus();
   }
 
+  /**
+   * Picture Format…: a picture's corrections, colours, see-through, Remove Background and crop
+   * (to a shape or proportions). Cropping to proportions keeps its width and changes its height.
+   */
+  async formatPicture(id: number): Promise<void> {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'picture' || o.chart) return;
+    const spot = this.cellSpot();
+    const got = await pictureFormat({ src: o.src, fx: o.fx, crop: o.crop, w: o.w, h: o.h });
+    if (this.file !== f) return;
+    this.backToCell(spot);
+    const cur = f.t.objects[id];
+    if (!got || cur?.kind !== 'picture') { this.focus(); return; }
+    if (f.box?.cell) f.box.recorded = false;
+    const next: DocObject = { ...cur, fx: got.fx };
+    if (!got.fx) delete next.fx;
+    if (got.crop) {
+      const c = got.crop;
+      if (c.l || c.t || c.r || c.b) next.crop = c; else delete next.crop;
+      if (got.aspect) next.h = Math.round((cur.w / got.aspect) * 100) / 100;
+    }
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, 'Picture format');
+    this.focus();
+  }
+
   /** Make a figure or picture bigger or smaller (1 is its own size). */
   setScale(id: number, scale: number, record = true): void {
     const f = this.file!;
@@ -2617,6 +2645,7 @@ export class DocumentMode {
       case 'insert-table': void this.insertTable(); break;
       case 'insert-chart': void this.insertChart(); break;
       case 'edit-chart': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || !o.chart) { this.host.flash('Click a chart first (or double-click it).'); break; } void this.editChart(id); break; }
+      case 'picture-format': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || o.chart) { this.host.flash('Click a picture first.'); break; } void this.formatPicture(id); break; }
       case 'insert-caption': void this.insertCaption(); break;
       case 'cross-reference': void this.crossReference(); break;
       case 'compound-number': void this.compoundNumber(); break;

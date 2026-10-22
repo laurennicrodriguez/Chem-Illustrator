@@ -11,7 +11,7 @@
 
 import type { PinnedComment } from '../document/comments';
 import { COMMENT_REL, readCommentAuthors, readLegacyComments, readModernComments } from './pptx-comments';
-import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureLook, type Frame, type ShapeMath, type Media } from '../model';
+import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureFx, type PictureLook, type Frame, type ShapeMath, type Media } from '../model';
 import { layoutTable, NOTE_SCALE } from '../table';
 import { linesFromBorders, type Borders } from './cdxml-table';
 import { turnAbout, normDegrees, type Vec, type Rect } from '../geom';
@@ -20,6 +20,8 @@ import { linkFromTarget } from '../links';
 import { readCdxml } from './cdxml';
 import { drawingInEmf } from '../render/emf';
 import { dataUrl, imageSize } from '../render/images';
+import { knownShape, tidyFx } from '../render/picture-fx';
+import { readPictureFx } from './picture-xml';
 import { layoutText, ASCENT } from '../text/layout';
 import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle, slideBackground, slideColours, hasLayout, newLayoutId, deckLayouts, type LayoutDef, type PlaceholderBox, type SectionCount } from '../deck/deck';
 import { backgroundColour, isPlain, sameBackground, type Background } from '../deck/background';
@@ -793,6 +795,9 @@ class Reader {
     if (!img) return;
     const look = this.pictureLook(kid(el, 'spPr'));
     const video = this.videoOf(s.path, kid(el, 'nvPicPr', 'nvPr'));
+    const fx = this.pictureFx(s.path, el, img, tags[TAG.picture]);
+    // a picture cut to a shape has the shape's outline, not rounded corners
+    if (fx?.shape && look) delete look.round;
     // a click on it in the show: a zoom (ours, or PowerPoint's, from its fallback picture) or a link
     const click = video ? null : this.hlinkOf(kid(el, 'nvPicPr', 'cNvPr', 'hlinkClick'));
     let zoom: Shape['zoom'] | undefined;
@@ -800,9 +805,40 @@ class Reader {
       try { const z = JSON.parse(tags[TAG.zoom]); if (z && typeof z === 'object' && z.zoom) zoom = { ...(z.zoom.back ? { back: true } : {}), ...(typeof z.zoom.to === 'string' ? { to: z.zoom.to } : {}) }; } catch { /* a plain link */ }
     } else if (this.zoomBack !== null && click) zoom = this.zoomBack ? { back: true } : {};
     doc.addShape({
-      kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...(look ? { look } : {}), ...(video ? { video } : {}),
+      kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...(look && Object.keys(look).length ? { look } : {}), ...(fx ? { fx } : {}), ...(video ? { video } : {}),
       ...(click ? { link: click } : {}), ...(zoom && click ? { zoom } : {}),
     });
+  }
+
+  /**
+   * A picture's Picture Format settings. When PowerPoint worked sharpening or Remove Background
+   * into the picture and kept the original as its layer, the original comes in (`img` changed to
+   * it) with the settings; without the original they stay worked in, and are not done again.
+   */
+  private pictureFx(from: string, pic: Element, img: { src: string; px: { w: number; h: number }; mime: string }, tag: string | undefined): PictureFx | undefined {
+    const blip = kid(pic, 'blipFill', 'blip');
+    const got = readPictureFx(blip, kid(pic, 'spPr'));
+    if (got.dropped) this.warnings.add('Some picture effects (artistic effects, saturation, colour temperature) were left off.');
+    const fx = got.fx;
+    if (!fx) return undefined;
+    const target = got.layer ? this.r.rels(from).get(got.layer)?.target : undefined;
+    const bytes = target ? this.r.bytes(target) : null;
+    const mime = target ? EXT_MIME[target.split('.').pop()!.toLowerCase()] : undefined;
+    if (bytes && mime && SHOWABLE.has(mime) && !img.mime.includes('svg')) {
+      img.src = dataUrl(bytes, mime);
+      img.px = imageSize(bytes, mime) ?? img.px;
+      img.mime = mime;
+    } else {
+      delete fx.sharpen;
+      delete fx.bg;
+    }
+    if (fx.bg && tag) {
+      try {
+        const t = JSON.parse(tag) as { tol?: unknown };
+        if (typeof t.tol === 'number' && t.tol > 0 && t.tol <= 1) fx.bg.tol = t.tol;
+      } catch { /* not ours */ }
+    }
+    return tidyFx(fx);
   }
 
   /**
@@ -846,7 +882,7 @@ class Reader {
       const gd = kids(kid(geom, 'avLst')).find((g) => g.getAttribute('name') === 'adj');
       const v = /val\s+(-?\d+)/.exec(gd?.getAttribute('fmla') ?? '');
       look.round = Math.max(0, Math.min(0.5, (v ? Number(v[1]) : 16667) / 100000));
-    } else if (geom && geom.getAttribute('prst') !== 'rect') this.warnings.add('Pictures cut to shapes other than rectangles came in as rectangles.');
+    } else if (geom && geom.getAttribute('prst') !== 'rect' && !knownShape(geom.getAttribute('prst') ?? '')) this.warnings.add('Pictures cut to shapes other than the usual ones came in as rectangles.');
     const ln = kid(spPr, 'ln');
     if (ln && !kid(ln, 'noFill')) {
       const c = this.color(kid(ln, 'solidFill'));
