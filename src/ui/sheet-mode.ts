@@ -30,6 +30,8 @@ import { DASH_CHART_KINDS } from './dashboard-ui';
 import { SheetNotes } from './sheet-notes-ui';
 import { SheetValidation } from './sheet-validation-ui';
 import { SheetFormulas } from './sheet-formulas-ui';
+import { SheetAnalysis } from './sheet-analysis-ui';
+import { SheetPivots } from './sheet-pivot-ui';
 import { CATEGORIES, type Category } from '../sheet/fn-help';
 import { askLink, followLink, type LinkPlace } from './links-ui';
 import { LINK_COLOUR, cellLink, cellOfLink, describeLink } from '../links';
@@ -113,8 +115,12 @@ export class SheetMode {
   readonly page: SheetPage;
   /** The Formulas tab: Insert Function and the defined names. */
   readonly formulas: SheetFormulas;
+  readonly analysis: SheetAnalysis;
+  readonly pivots: SheetPivots;
   /** The chart the panel and Chart tab showed last (the tab opens when a chart is first picked). */
   private chartShown: number | null = null;
+  /** The PivotTable the ribbon last brought its tab forward for. */
+  private pivotShown: number | null = null;
   /** The dashboard sheet the ribbon was last set up for. */
   private dashShown: Sheet | null = null;
   /** The last cells copied here: pasting the same text back uses these (formulas, structures and formats kept). */
@@ -202,6 +208,12 @@ export class SheetMode {
       edit: (label, fn) => this.edit(label, fn),
       flash: (m, ms) => this.host.flash(m, ms),
     });
+    this.analysis = new SheetAnalysis({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+    });
+    this.pivots = new SheetPivots({ view: this.view, flash: (m, ms) => this.host.flash(m, ms) });
     this.dashUi = new DashboardUi({ view: this.view, charts: this.charts, flash: (m, ms) => this.host.flash(m, ms) });
     this.wireFormulaBar();
     this.wireRibbon();
@@ -481,6 +493,10 @@ export class SheetMode {
       case 'chart-legend': this.charts.legendMenu(b.left, b.bottom + 2); return;
       case 'chart-palette': this.charts.paletteMenu(b.left, b.bottom + 2); return;
       case 'chart-errors': this.charts.errorsMenu(b.left, b.bottom + 2); return;
+      case 'what-if': this.analysis.whatIfMenu(b.left, b.bottom + 2); return;
+      case 'pivot-layout': this.pivots.layoutMenu(b.left, b.bottom + 2); return;
+      case 'pivot-subtotals': this.pivots.subtotalsMenu(b.left, b.bottom + 2); return;
+      case 'pivot-grand': this.pivots.grandMenu(b.left, b.bottom + 2); return;
       case 'table-style': {
         const t = this.tableHere();
         if (t) this.formatting.tableMenu(b.left, b.bottom + 2, (style) => this.formatting.setTable(t, { style }, 'Table style'));
@@ -607,6 +623,19 @@ export class SheetMode {
       case 'set-print-area': this.page.setPrintArea(false); break;
       case 'clear-print-area': this.page.set('Clear print area', { printArea: undefined }); break;
       case 'print-preview': this.printPreview(); break;
+      case 'data-analysis': this.analysis.dataAnalysis(); break;
+      case 'goal-seek': this.analysis.goalSeekWindow(); break;
+      case 'data-table': this.analysis.dataTableWindow(); break;
+      case 'solver': this.analysis.solverWindow(); break;
+      case 'insert-pivot': this.pivots.insertWindow(); break;
+      case 'insert-pivot-chart': this.pivots.pivotChart(); break;
+      case 'pivot-fields': this.pivots.fieldsWindow(); break;
+      case 'pivot-refresh': this.pivots.refresh(); break;
+      case 'refresh-all': this.pivots.refreshAll(); break;
+      case 'pivot-source': this.pivots.changeSource(); break;
+      case 'pivot-clear': this.pivots.clear(); break;
+      case 'pivot-select': this.pivots.selectReport(); break;
+      case 'pivot-details': this.pivots.showDetails(); break;
       default: return false;
     }
     return true;
@@ -1740,6 +1769,9 @@ export class SheetMode {
         ['Column width…', () => void this.askSize('col')], ['Fit width to contents', () => { for (let c = R.c1; c <= Math.min(R.c2, s.lastCol + 1); c++) v.autoFit('col', c); }]);
       if (s.colDefs.has(R.c1)) items.push(['Change the column\'s formula…', () => void this.editColumnFormula(R.c1)], ['Stop calculating this column (keep the values)', () => this.freezeColumn(R.c1)]);
     } else {
+      // in a PivotTable, its own commands first, as Excel's menu has them
+      const pivot = this.pivots.contextItems(x, y);
+      if (pivot) items.push(...pivot, null);
       items.push(['Insert…', () => this.insertCells()], ['Delete…', () => this.deleteCells()], ['Clear contents', () => v.clearSelection()]);
       // notes and comments, as Excel's right-click menu has them
       const note = s.noteAt(v.sel.active.r, v.sel.active.c);
@@ -1831,6 +1863,8 @@ export class SheetMode {
 
   private selectionChanged(): void {
     this.showActive();
+    this.analysis.selectionChanged();
+    this.pivots.selectionChanged();
     this.schedulePanel();
   }
 
@@ -1853,6 +1887,7 @@ export class SheetMode {
     document.querySelector<HTMLElement>('#formula-bar')!.hidden = on;
     tab('home').hidden = on;
     tab('formulas').hidden = on;
+    tab('data').hidden = on;
     tab('dashboard').hidden = !on;
     if (!on) {
       if (selected === 'dashboard') this.showRibbonTab('home');
@@ -1860,10 +1895,11 @@ export class SheetMode {
       return false;
     }
     tab('table').hidden = true;
+    tab('pivot').hidden = true;
     const t = this.view.dash.pickedTile;
     const chart = t?.kind === 'chart';
     tab('chart').hidden = !chart;
-    if (this.dashShown !== s || selected === 'home' || selected === 'formulas' || selected === 'table' || (selected === 'chart' && !chart)) this.showRibbonTab('dashboard');
+    if (this.dashShown !== s || selected === 'home' || selected === 'formulas' || selected === 'data' || selected === 'pivot' || selected === 'table' || (selected === 'chart' && !chart)) this.showRibbonTab('dashboard');
     if (chart && this.chartShown !== t.id) this.showRibbonTab('chart');
     this.chartShown = chart ? t.id : null;
     this.dashShown = s;
@@ -1928,6 +1964,15 @@ export class SheetMode {
     ctab.hidden = !chart;
     if (chart && chart.id !== this.chartShown) this.showRibbonTab('chart');
     this.chartShown = chart?.id ?? null;
+    // PivotTable Analyze shows while the active cell is in a PivotTable
+    const pt = chart ? undefined : this.pivots.here();
+    const ptab = this.ribbon.querySelector<HTMLButtonElement>('[data-sh-tab=pivot]');
+    if (ptab) {
+      if (!pt && ptab.getAttribute('aria-selected') === 'true') this.showRibbonTab('home');
+      ptab.hidden = !pt;
+      if (pt && pt.id !== this.pivotShown) this.showRibbonTab('pivot');
+      this.pivotShown = pt?.id ?? null;
+    }
     // Table Design shows while the active cell is in a table
     const t = chart ? undefined : s.tableAt(r, c);
     const tab = this.ribbon.querySelector<HTMLButtonElement>('[data-sh-tab=table]')!;

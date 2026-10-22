@@ -196,6 +196,14 @@ const VALUES = 'Σ Values';
  */
 export function layoutPivot(pt: PivotTable, src: PivotSource): PivotReport | string {
   const idx = (f: string) => src.fields.indexOf(f);
+  // no fields yet: Excel's placeholder, until fields are picked
+  if (!pt.rows.length && !pt.cols.length && !pt.values.length && !pt.filters.length) {
+    return {
+      cells: [[pt.name, null, null], ['Pick fields in the', null, null], ['PivotTable Fields window', null, null]],
+      styles: [{ r1: 0, c1: 0, r2: 2, c2: 2, style: { fill: '#f2f2f2', color: '#595959' } }, { r1: 0, c1: 0, r2: 0, c2: 2, style: { bold: true } }],
+      body: { row: 3, col: 0, rows: 0, cols: 0 }, rowLines: [], colLines: [], filterRows: 0, headRows: 0, labelCols: 1,
+    };
+  }
   for (const f of [...pt.rows, ...pt.cols, ...pt.filters, ...pt.values.map((v) => v.field)]) {
     if (idx(f) < 0) return `The source has no field called "${f}" any more.`;
   }
@@ -345,7 +353,7 @@ export function layoutPivot(pt: PivotTable, src: PivotSource): PivotReport | str
       if (!same) put(levelRow(lvl), c, t);
     });
     if (onCols) put(levelRow(colFields.length), c, valueCaption(pt.values[cl.value ?? 0]));
-    else if (!colFields.length) put(levelRow(0), c, valueCaption(pt.values[0]));
+    else if (!colFields.length && nv) put(levelRow(0), c, valueCaption(pt.values[0]));
   });
   styles.push({ r1: labelRow, c1: 0, r2: labelRow, c2: bodyCol + colLines.length - 1, style: { ...headerFill, borders: { bottom: { style: 'thin', color: '#8ea9db' } } } });
   // the rows: labels, then numbers
@@ -424,4 +432,18 @@ export function pivotChartSeries(rep: PivotReport, at: { row: number; col: numbe
     out.push({ name, x: `=${q}!$${col(labelCol)}$${r1 + 1}:$${col(labelCol)}$${r2 + 1}`, y: `=${q}!$${col(c)}$${r1 + 1}:$${col(c)}$${r2 + 1}` });
   });
   return out;
+}
+
+/**
+ * The records behind one number of a report (Excel's Show Details): those that pass the hidden
+ * lists and fall under the number's row and column items. Returned with the header row first.
+ */
+export function detailRecords(pt: PivotTable, src: PivotSource, rep: PivotReport, i: number, j: number): Value[][] | null {
+  const rl = rep.rowLines[i], cl = rep.colLines[j];
+  if (!rl || !cl || rl.kind === 'header' || cl.kind === 'header') return null;
+  const idx = (f: string) => src.fields.indexOf(f);
+  const hidden = Object.entries(pt.hidden).filter(([, list]) => list.length).map(([f, list]) => [idx(f), new Set(list)] as const).filter(([k]) => k >= 0);
+  const under = (path: string[], fields: string[]) => (r: Value[]) => path.every((t, k) => itemText(r[idx(fields[k])] ?? null) === t);
+  const rows = src.records.filter((r) => hidden.every(([k, set]) => !set.has(itemText(r[k] ?? null)))).filter(under(rl.path, pt.rows)).filter(under(cl.path, pt.cols));
+  return [src.fields, ...rows];
 }

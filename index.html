@@ -85,6 +85,16 @@
     <button role="menuitem" data-cmd="reset-calculated">Reset to Calculated</button>
     </div>
     </div>
+    <div class="submenu" data-modes="sheet">
+    <button role="menuitem" class="has-sub" aria-haspopup="menu" aria-expanded="false">Analysis</button>
+    <div class="menu sub" role="menu" hidden>
+    <button role="menuitem" data-cmd="data-analysis">Data Analysis…</button>
+    <button role="menuitem" data-cmd="goal-seek">Goal Seek…</button>
+    <button role="menuitem" data-cmd="data-table">Data Table…</button>
+    <button role="menuitem" data-cmd="solver">Solver…</button>
+    <button role="menuitem" data-cmd="refresh-all">Refresh All PivotTables</button>
+    </div>
+    </div>
     <button data-modes="sheet document" role="menuitem" data-cmd="find">Find…</button>
     <hr />
     <button role="menuitem" data-cmd="command-search" title="Find any command by typing part of its name">Search Commands…</button>
@@ -188,6 +198,8 @@
     <button data-modes="sheet" role="menuitem" data-cmd="reagent-table">New Reagent Table</button>
     <button data-modes="sheet" role="menuitem" data-cmd="chart-scatter">Insert Scatter Chart</button>
     <button data-modes="sheet" role="menuitem" data-cmd="chart-column">Insert Column Chart</button>
+    <button data-modes="sheet" role="menuitem" data-cmd="insert-pivot">Insert PivotTable…</button>
+    <button data-modes="sheet" role="menuitem" data-cmd="insert-pivot-chart">Insert PivotChart…</button>
     <button data-modes="sheet" role="menuitem" data-cmd="insert-dashboard">Insert Dashboard</button>
     <button data-modes="sheet" role="menuitem" data-cmd="insert-picture-sheet">Insert Picture…</button>
     <button data-modes="sheet" role="menuitem" data-cmd="insert-text-box">Insert Text Box</button>
@@ -452,9 +464,11 @@
       <button role="tab" data-sh-tab="insert" aria-selected="false">Insert</button>
       <button role="tab" data-sh-tab="page" aria-selected="false">Page Layout</button>
       <button role="tab" data-sh-tab="formulas" aria-selected="false">Formulas</button>
+      <button role="tab" data-sh-tab="data" aria-selected="false">Data</button>
       <button role="tab" data-sh-tab="review" aria-selected="false">Review</button>
       <button role="tab" data-sh-tab="table" aria-selected="false" class="rb-context" hidden>Table Design</button>
       <button role="tab" data-sh-tab="chart" aria-selected="false" class="rb-context" hidden>Chart</button>
+      <button role="tab" data-sh-tab="pivot" aria-selected="false" class="rb-context" hidden>PivotTable</button>
     </div>
     <div class="rb-panel" data-sh-panel="home">
       <div class="rb-group">
@@ -588,6 +602,7 @@
     <div class="rb-panel" data-sh-panel="insert" hidden>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-sh="insert-pivot" title="PivotTable: sum, count or average a table of records by the items of its columns (yield by catalyst and solvent), with subtotals and grand totals. Saved as Excel's own PivotTable"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2.5" y="3" width="15" height="14" rx="1"/><path d="M2.5 7h15M7 3v14"/><path d="M10 10.5h5M12.5 13.5h2.5" stroke-opacity="0.6"/></svg></span>PivotTable</button>
           <button class="rb-big" data-sh="insert-table" title="Format the table around the selection as a table (header row, banded rows, filter buttons)"><span class="rb-icon">▦</span>Table</button>
         </div>
         <div class="rb-label">Tables</div>
@@ -615,6 +630,12 @@
           <button class="rb-big" data-sh="chart-radar" title="Radar: one spoke for each row label, each column a shape round them (comparing ligands or conditions on several measures)"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M10 2.5l7 5-2.7 8.5H5.7L3 7.5z" stroke-opacity="0.6"/><path d="M10 5l4.5 3.3-2 5.2H7.6L6 8.5z" fill="currentColor" fill-opacity="0.35"/></svg></span>Radar</button>
         </div>
         <div class="rb-label">Charts (of the selected cells)</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="insert-pivot-chart" title="PivotChart: a chart of a PivotTable that follows it when its fields change or it is refreshed (makes the PivotTable too when the active cell isn't in one)"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 2v15h15" stroke-opacity="0.6"/><path d="M6 16v-6M10 16V6M14 16v-4" stroke-width="2.6"/><path d="M13 3.5h4v4" stroke-width="1.3"/></svg></span>PivotChart</button>
+        </div>
+        <div class="rb-label">PivotCharts</div>
       </div>
       <div class="rb-group">
         <div class="rb-row">
@@ -706,6 +727,27 @@
         <div class="rb-label">Defined Names</div>
       </div>
     </div>
+    <div class="rb-panel" data-sh-panel="data" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="refresh-all" title="Refresh All: every PivotTable in the workbook reads its records again (formulas and data tables recalculate by themselves)"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M15.5 7.5A6 6 0 1 0 16 12"/><path d="M16 3.5v4h-4"/></svg></span>Refresh All</button>
+        </div>
+        <div class="rb-label">Queries</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="what-if" title="What-If Analysis: Goal Seek (find the input that gives a result, such as the loading for 95% conversion) and Data Table (a formula worked out for a row or column of inputs, or a grid of two)"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2.5" y="3" width="15" height="14" rx="1"/><path d="M2.5 7.5h15M7.5 3v14"/><path d="M10.5 11.2a1.8 1.8 0 1 1 2.4 1.7c-.5.2-.6.6-.6 1.1M12.3 15.6v.1" stroke-linecap="round"/></svg></span>What-If Analysis ▾</button>
+        </div>
+        <div class="rb-label">Forecast</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="data-analysis" title="Data Analysis: the Analysis ToolPak's tools (descriptive statistics, histograms, regression, ANOVA, t-tests, F-test, z-test, correlation, covariance, moving averages, smoothing, sampling, random numbers, rank and percentile, Fourier analysis), with results written as Excel writes them"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 2v15h15" stroke-opacity="0.6"/><path d="M4.5 16.5v-3h2.5v3M7 16.5v-7h2.5v7M9.5 16.5V6H12v10.5" fill="currentColor" fill-opacity="0.35"/><path d="M4 12l5-5 4 2 4.5-5"/></svg></span>Data Analysis</button>
+          <button class="rb-big" data-sh="solver" title="Solver: make a cell as large or small as it can be, or equal a value, by changing other cells, within limits you set (whole numbers, binary, all different). Simplex LP for linear models, GRG Nonlinear and Evolutionary for the rest. Saved in .xlsx as Excel's Solver model"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="2.5"/><path d="M10 1.5v3M10 15.5v3M1.5 10h3M15.5 10h3"/></svg></span>Solver</button>
+        </div>
+        <div class="rb-label">Analyze</div>
+      </div>
+    </div>
     <div class="rb-panel" data-sh-panel="review" hidden>
       <div class="rb-group">
         <div class="rb-row">
@@ -792,6 +834,45 @@
           </div>
         </div>
         <div class="rb-label">Table Styles</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-sh-panel="pivot" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="pivot-fields" title="Field List: tick fields, or drag them to Filters, Columns, Rows and Values"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2.5" y="3" width="6" height="14" rx="1"/><rect x="11" y="3" width="6.5" height="6" rx="1"/><rect x="11" y="11" width="6.5" height="6" rx="1"/><path d="M4.5 6.5h2M4.5 10h2M4.5 13.5h2"/></svg></span>Field List</button>
+        </div>
+        <div class="rb-label">Show</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="pivot-refresh" title="Refresh: read the records again (after they change)"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M15.5 7.5A6 6 0 1 0 16 12"/><path d="M16 3.5v4h-4"/></svg></span>Refresh</button>
+          <div class="rb-col">
+            <button data-sh="refresh-all" title="Refresh every PivotTable in the workbook">Refresh All</button>
+            <button data-sh="pivot-source" title="Change Data Source: the block of records, or table, the PivotTable reads">Change Data Source…</button>
+          </div>
+        </div>
+        <div class="rb-label">Data</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <button data-sh="pivot-layout" title="Report Layout: Compact (row fields indented in one column), Outline or Tabular (a column for each row field)">Report Layout ▾</button>
+            <button data-sh="pivot-subtotals" title="Subtotals for each group of an outer row or column field">Subtotals ▾</button>
+            <button data-sh="pivot-grand" title="Grand Totals: a row at the bottom, a column at the right, both or neither">Grand Totals ▾</button>
+          </div>
+        </div>
+        <div class="rb-label">Layout</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="insert-pivot-chart" title="PivotChart: a chart of this PivotTable that follows it"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 2v15h15" stroke-opacity="0.6"/><path d="M6 16v-6M10 16V6M14 16v-4" stroke-width="2.6"/></svg></span>PivotChart</button>
+          <div class="rb-col">
+            <button data-sh="pivot-details" title="Show Details: the records behind the number in the active cell, on a new sheet">Show Details</button>
+            <button data-sh="pivot-select" title="Select the whole PivotTable report">Select</button>
+            <button data-sh="pivot-clear" title="Clear All: take the PivotTable away (its PivotCharts become ordinary charts)">Clear</button>
+          </div>
+        </div>
+        <div class="rb-label">Tools</div>
       </div>
     </div>
     <div class="rb-panel" data-sh-panel="chart" hidden>
