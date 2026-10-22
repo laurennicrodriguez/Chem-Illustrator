@@ -1765,6 +1765,8 @@ const ws: Workspace = new Workspace(doc, {
     if (tab.deck) { tab.deck.onChange = () => {}; tab.deck.onSwitch = () => {}; tab.deck.onMotion = () => {}; }
   },
   enter: (tab, opened) => enterTab(tab, opened),
+  // every way of closing a tab (×, middle-click, Delete, Ctrl+W) finishes a figure or cell structure first
+  closing: () => finishTyping(),
   changed: () => { renderTabs(); updateTitle(); layoutSplit(); tickAutoSave(); },
   flash,
   pptx: pptxOptions(),
@@ -3873,7 +3875,7 @@ function activeStructureDoc(): Doc | null {
 // Drawing a structure for a cell: the drawing area floats over the sheet, with Done and Cancel.
 // The cell's drawing is swapped into the editor's document while it's drawn (the sheet's tab
 // leaves that document empty), so every drawing tool, key and check works on it as usual.
-let cellEdit: { done: (c: Contents | null) => void; saved: Doc } | null = null;
+let cellEdit: { done: (c: Contents | null) => void; saved: Doc; view: typeof renderer.view } | null = null;
 
 function editCellStructure(contents: Contents | null, title: string, done: (c: Contents | null) => void, style: DocStyle = sheetStyle()): void {
   finishCellStructure(true);
@@ -3881,7 +3883,9 @@ function editCellStructure(contents: Contents | null, title: string, done: (c: C
   const drawing = structureDoc(contents ?? blank, style);
   editor.clearSelection();
   doc.swap(drawing);
-  cellEdit = { done, saved: drawing };
+  // the drawing beside (split view) waits in `drawing`, its zoom kept for after
+  cellEdit = { done, saved: drawing, view: { ...renderer.view } };
+  ws.aside = ws.pane ? drawing : null;
   document.body.classList.add('floating-drawing');
   layoutSplit();
   $('#structure-title').textContent = title;
@@ -3923,6 +3927,10 @@ function finishCellStructure(keep: boolean): void {
   editor.lastEdited = null;
   editor.cropping = null;
   doc.swap(e.saved);
+  ws.aside = null;
+  // the drawing beside is back as it was: not changed, at its own zoom
+  if (ws.pane) ws.pane.seen = doc.version;
+  renderer.view = e.view;
   document.body.classList.remove('floating-drawing');
   $('#structure-bar').hidden = true;
   const sheet = ws.active.mode === 'sheet';
@@ -5150,6 +5158,8 @@ function layoutSplit(): void {
   opts.push(new Option('New drawing', 'new'));
   splitPick.replaceChildren(...opts);
   $('#split-insert').textContent = st.main.mode === 'document' ? 'Insert into Document' : st.main.mode === 'sheet' ? 'Insert into Cell' : 'Insert into Slide';
+  // while a figure's or cell's structure is drawn, Done puts that in; the drawing beside waits
+  $<HTMLButtonElement>('#split-insert').disabled = !!cellEdit;
   if (live) $('#split-empty').hidden = true;
   else drawSplitSnap(st.drawing);
 }
@@ -5315,7 +5325,7 @@ splitPick.addEventListener('change', () => {
 /** The bar's Insert: the selected structures (or the whole drawing) into the document, cell or slide. */
 $('#split-insert').addEventListener('click', () => {
   const st = splitState();
-  if (!st) return;
+  if (!st || cellEdit) return;
   editor.closeCaption();
   const live = !!ws.pane || ws.active === st.drawing;
   const part = extractDrawing(ws.docOf(st.drawing), live && editor.hasSelection() ? editor.sel : null);
