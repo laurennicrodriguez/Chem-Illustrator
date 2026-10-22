@@ -6,7 +6,8 @@
 // an animation on a layer of its own. A frame of the show is then those pictures put together
 // (faded, wiped or moved as the animations say), so even big slides play smoothly.
 
-import { Doc, applyBase, captionBase } from '../model';
+import { Doc, applyBase, captionBase, type Media, type Shape } from '../model';
+import { playWindow, volumeAt } from './media';
 import { layoutText } from '../text/layout';
 import { measureText } from '../render/renderer';
 import { linkAtPoint } from '../links';
@@ -53,6 +54,9 @@ export function highlightDoc(doc: Doc, h: Selection): Doc {
 const inPart = (part: Part, kind: 'atom' | 'caption' | 'arrow' | 'shape', id: number) =>
   part.kind !== 'highlight' && (kind === 'atom' ? part.sel.atoms : kind === 'caption' ? part.sel.captions : kind === 'arrow' ? part.sel.arrows : part.sel.shapes).has(id);
 
+/** A video or sound on the slide in the show: its picture's place on the canvas, in CSS pixels. */
+export interface MediaSpot { id: number; media: Media; x: number; y: number; w: number; h: number }
+
 /** One slide, painted ready to play at one size. */
 export class SlideFrames {
   readonly steps: Step[];
@@ -63,6 +67,13 @@ export class SlideFrames {
   private at = { x: 0, y: 0, k: 1 };
 
   constructor(private page: SlidePage, private doc: Doc, private anims: Anim[], private w: number, private h: number, private dpr: number, fill: string | null) {
+    // a sound's icon hidden during the show isn't painted (it still plays)
+    const hidden = [...doc.shapes.values()].filter((x) => x.video?.audio && x.video.hide);
+    if (hidden.length) {
+      const ids = new Set(hidden.map((x) => x.id));
+      this.hiddenMedia = hidden;
+      doc = this.doc = subDoc(doc, (kind, id) => !(kind === 'shape' && ids.has(id)));
+    }
     const live = anims.length ? (() => {
       this.parts = slideParts(doc);
       return anims.filter((a) => partOf(this.parts, a.target));
@@ -95,25 +106,54 @@ export class SlideFrames {
     }
   }
 
-  /** Videos on the slide, showing with `done` steps played: where they go, in CSS pixels on the canvas. */
-  videoSpots(done: number): { id: number; src: string; once: boolean; x: number; y: number; w: number; h: number }[] {
+  /**
+   * Videos and sounds on the slide, showing with `done` steps played: where they go, in CSS
+   * pixels on the canvas (a hidden sound's icon still has its place, to be clicked).
+   */
+  videoSpots(done: number): MediaSpot[] {
     const states = this.layers.length ? partStates(this.parts, this.anims, done, -1) : null;
     const { x, y, k } = this.at;
-    const out: { id: number; src: string; once: boolean; x: number; y: number; w: number; h: number }[] = [];
+    const out: MediaSpot[] = [];
     for (const sh of this.doc.shapes.values()) {
       if (sh.kind !== 'picture' || !sh.video) continue;
       const L = states && this.layers.find((l) => l.part.sel.shapes.has(sh.id));
       if (L && !(states!.get(L.part)?.visible ?? true)) continue;
       out.push({
-        id: sh.id, src: sh.video.src, once: !!sh.video.once,
+        id: sh.id, media: sh.video,
         x: x + Math.min(sh.x1, sh.x2) * k, y: y + Math.min(sh.y1, sh.y2) * k, w: Math.abs(sh.x2 - sh.x1) * k, h: Math.abs(sh.y2 - sh.y1) * k,
       });
     }
     return out;
   }
 
+  /** Sounds whose icons are hidden in the show (they play all the same). */
+  private hiddenMedia: Shape[] = [];
+
+  /** Media on the slide whose pictures aren't painted (hidden sounds), so they still play. */
+  get hiddenSpots(): MediaSpot[] {
+    const { x, y, k } = this.at;
+    return this.hiddenMedia.map((sh) => ({ id: sh.id, media: sh.video!, x: x + Math.min(sh.x1, sh.x2) * k, y: y + Math.min(sh.y1, sh.y2) * k, w: 0, h: 0 }));
+  }
+
   /** Number of animation steps (an automatic first one included). */
   get stepCount(): number { return this.steps.length; }
+
+  /** Where the slide sits on the canvas: its corner and scale (CSS pixels per point). */
+  get place(): { x: number; y: number; k: number } { return { ...this.at }; }
+
+  /**
+   * What a click at a point on the canvas (CSS pixels) does: a shape's or zoom's action (the top
+   * one there), and the box of what was clicked, in CSS pixels.
+   */
+  shapeActionAt(px: number, py: number): { link: string; zoom?: Shape['zoom']; rect: Rect } | null {
+    const { x, y, k } = this.at;
+    const p = { x: (px - x) / k, y: (py - y) / k };
+    const hits = [...this.doc.shapes.values()].filter((s) => s.link && !s.hidden && p.x >= Math.min(s.x1, s.x2) && p.x <= Math.max(s.x1, s.x2) && p.y >= Math.min(s.y1, s.y2) && p.y <= Math.max(s.y1, s.y2));
+    const top = hits.sort((a, b) => (a.z ?? 0) - (b.z ?? 0)).pop();
+    if (!top) return null;
+    const r = { x1: x + Math.min(top.x1, top.x2) * k, y1: y + Math.min(top.y1, top.y2) * k, x2: x + Math.max(top.x1, top.x2) * k, y2: y + Math.max(top.y1, top.y2) * k };
+    return { link: top.link!, ...(top.zoom ? { zoom: top.zoom } : {}), rect: r };
+  }
 
   /** The link in the slide's text at a point on the canvas (CSS pixels), if any. */
   linkAt(px: number, py: number): string | null {
@@ -379,6 +419,27 @@ export class MorphFrames {
   }
 }
 
+/**
+ * One frame of a zoom, `p` of the way: in, the old slide grows about the box (CSS pixels × dpr)
+ * until the new slide, drawn in the box as it grows, fills the screen; out, the reverse.
+ */
+export function drawZoom(ctx: CanvasRenderingContext2D, from: CanvasImageSource, to: CanvasImageSource, box: Rect, p: number, out: boolean, W: number, H: number): void {
+  const e = ease(out ? 1 - p : p);
+  const lerp = (a: number, b: number) => a + (b - a) * e;
+  // the box now: from the zoom's box to the whole screen
+  const r = { x1: lerp(box.x1, 0), y1: lerp(box.y1, 0), x2: lerp(box.x2, W), y2: lerp(box.y2, H) };
+  const k = (r.x2 - r.x1) / Math.max(1, box.x2 - box.x1);
+  // the slide the zoom is on, moved and grown with its box, then the zoomed slide in the box
+  const outer = out ? to : from, inner = out ? from : to;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  ctx.setTransform(k, 0, 0, k, r.x1 - box.x1 * k, r.y1 - box.y1 * k);
+  ctx.drawImage(outer, 0, 0);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(inner, r.x1, r.y1, r.x2 - r.x1, r.y2 - r.y1);
+}
+
 const DIR_VEC = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] } as const;
 
 /** One frame of a transition, `p` of the way from the old slide to the new (whole canvases). */
@@ -432,7 +493,7 @@ export class Player {
   /** Steps of the slide's animations played so far. */
   done = 0;
   private frames: SlideFrames | null = null;
-  private moving: { kind: 'transition'; from: HTMLCanvasElement | null; to?: HTMLCanvasElement; t: Transition; t0: number; morph?: MorphFrames | null; was?: number } | { kind: 'step'; t0: number } | null = null;
+  private moving: { kind: 'transition'; from: HTMLCanvasElement | null; to?: HTMLCanvasElement; t: Transition; t0: number; morph?: MorphFrames | null; was?: number; zoom?: { rect: Rect; out: boolean } } | { kind: 'step'; t0: number } | null = null;
   private raf = 0;
   private loops = 0;
   private timer = 0;
@@ -453,10 +514,49 @@ export class Player {
   get busy(): boolean { return this.moving !== null; }
   /** Steps of animations the slide has. */
   get stepCount(): number { return this.current.stepCount; }
+  /** Where the slide showing sits on the canvas (CSS pixels; k is pixels per point). */
+  get slidePlace(): { x: number; y: number; k: number } { return this.current.place; }
 
   /** The link at a point on the canvas (CSS pixels from its corner), if any. */
   linkAt(px: number, py: number): string | null {
     return this.moving ? null : this.current.linkAt(px, py);
+  }
+
+  /** What a click at a point does: a shape's action or zoom (with its box), else a link in the text. */
+  actionAt(px: number, py: number): { link: string; zoom?: Shape['zoom']; rect?: Rect } | null {
+    if (this.moving) return null;
+    const sh = this.current.shapeActionAt(px, py);
+    if (sh) return sh;
+    const link = this.current.linkAt(px, py);
+    return link ? { link } : null;
+  }
+
+  /**
+   * Called when a click would go on to the next slide: true when the show has dealt with it
+   * (coming back from a zoom).
+   */
+  beforeNextSlide: () => boolean = () => false;
+
+  /**
+   * Zoom into slide i from a box on the canvas (CSS pixels), or (`out`) back out of the slide
+   * showing to slide i, shrinking into its box there.
+   */
+  zoom(i: number, rect: Rect, out = false): void {
+    this.stop();
+    const from = document.createElement('canvas');
+    from.width = this.canvas.width;
+    from.height = this.canvas.height;
+    from.getContext('2d')?.drawImage(this.canvas, 0, 0);
+    this.wasDone = this.done;
+    this.i = i;
+    this.frames = null;
+    this.done = out ? this.current.stepCount : 0;
+    this.timeUp = false;
+    const d = this.dpr;
+    this.moving = { kind: 'transition', from, t: { kind: 'fade', dur: 1 }, t0: performance.now(), zoom: { rect: { x1: rect.x1 * d, y1: rect.y1 * d, x2: rect.x2 * d, y2: rect.y2 * d }, out } };
+    this.paint();
+    this.loop();
+    this.onChange();
   }
 
   constructor(private canvas: HTMLCanvasElement, private deck: Deck, private fill = '#000') {}
@@ -484,39 +584,125 @@ export class Player {
     this.videos(false);
   }
 
-  private vids = new Map<number, HTMLVideoElement>();
+  private vids = new Map<number, { el: HTMLMediaElement; media: Media; tick: number }>();
+  /** Sounds playing on from slides before (Play Across Slides). */
+  private carried: { el: HTMLMediaElement; media: Media; tick: number }[] = [];
+  /** Media on the slides play without sound (presenter view: the audience's window has it). */
+  quiet = false;
 
   /**
-   * Videos play over the canvas, each in its picture's place, while the slide is shown (not
-   * during a transition). They are muted and let clicks through to the show.
+   * Videos play over the canvas, each in its picture's place (or the whole screen when it plays
+   * full screen), and sounds unseen, while the slide is shown (not during a transition). They let
+   * clicks through to the show; a click on one starts or pauses it (clickMedia). Each plays the
+   * part of its file between its trims, at its volume, faded in and out, round and round unless
+   * it plays once.
    */
   private videos(on: boolean): void {
     const host = this.canvas.parentElement;
-    const spots = on && host ? this.current.videoSpots(this.done) : [];
+    const spots = on && host ? [...this.current.videoSpots(this.done), ...this.current.hiddenSpots] : [];
     const keep = new Set(spots.map((s) => s.id));
-    for (const [id, v] of this.vids) if (!keep.has(id)) { v.pause(); v.remove(); this.vids.delete(id); }
+    for (const [id, v] of this.vids) {
+      if (keep.has(id)) continue;
+      this.vids.delete(id);
+      // a sound playing across slides goes on (not when the show stops)
+      if (on && v.media.audio && v.media.across && !v.el.paused) { this.carried.push(v); continue; }
+      this.drop(v);
+    }
+    if (!on) { for (const v of this.carried) this.drop(v); this.carried = []; }
     if (!host || !spots.length) return;
     if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
     for (const s of spots) {
       let v = this.vids.get(s.id);
       if (!v) {
-        v = document.createElement('video');
-        v.muted = true;
-        v.playsInline = true;
-        v.loop = !s.once;
-        v.src = s.src;
-        v.style.position = 'absolute';
-        v.style.pointerEvents = 'none';
-        v.style.objectFit = 'fill';
-        host.append(v);
+        const m = s.media;
+        const el = document.createElement(m.audio ? 'audio' : 'video');
+        if (el instanceof HTMLVideoElement) el.playsInline = true;
+        el.muted = this.quiet || !!m.mute;
+        el.preload = 'auto';
+        el.src = m.src;
+        el.style.position = 'absolute';
+        el.style.pointerEvents = 'none';
+        el.style.objectFit = 'fill';
+        if (m.audio) el.style.display = 'none';
+        host.append(el);
+        const win = () => playWindow(m, Number.isFinite(el.duration) ? el.duration : m.length);
+        el.addEventListener('loadedmetadata', () => { if (el.currentTime < win().start) el.currentTime = win().start; });
+        // trims, fades and looping, checked often while it plays
+        const tick = window.setInterval(() => {
+          if (el.paused) return;
+          const w = win();
+          if (el.currentTime < w.start - 0.05) el.currentTime = w.start;
+          if (el.currentTime >= w.end - 0.03 || el.ended) {
+            if (!m.once) { el.currentTime = w.start; void el.play().catch(() => {}); }
+            else { el.pause(); if (m.rewind) el.currentTime = w.start; this.fullScreen(v!, false); }
+          }
+          if (!el.muted) el.volume = volumeAt(m, el.currentTime, Number.isFinite(el.duration) ? el.duration : m.length);
+        }, 40);
+        el.addEventListener('ended', () => { if (m.once) { if (m.rewind) el.currentTime = win().start; this.fullScreen(v!, false); } });
+        v = { el, media: m, tick };
         this.vids.set(s.id, v);
-        void v.play().catch(() => { /* the still picture under it shows instead */ });
+        if (m.start !== 'click') this.play(v);
       }
-      v.style.left = `${this.canvas.offsetLeft + s.x}px`;
-      v.style.top = `${this.canvas.offsetTop + s.y}px`;
-      v.style.width = `${s.w}px`;
-      v.style.height = `${s.h}px`;
+      if (!v.media.audio) this.place(v.el, s);
     }
+  }
+
+  private place(el: HTMLMediaElement, s: { x: number; y: number; w: number; h: number }): void {
+    const full = el.dataset.full === '1';
+    el.style.left = `${this.canvas.offsetLeft + (full ? 0 : s.x)}px`;
+    el.style.top = `${this.canvas.offsetTop + (full ? 0 : s.y)}px`;
+    el.style.width = `${full ? this.w : s.w}px`;
+    el.style.height = `${full ? this.h : s.h}px`;
+    el.style.objectFit = full ? 'contain' : 'fill';
+    el.style.background = full ? '#000' : '';
+  }
+
+  private play(v: { el: HTMLMediaElement; media: Media }): void {
+    const el = v.el;
+    if (!el.muted) el.volume = volumeAt(v.media, Math.max(el.currentTime, playWindow(v.media).start));
+    this.fullScreen(v, true);
+    void el.play().catch(() => {
+      // sound may not play without a click in this window: play it silently instead
+      if (el.muted) return;
+      el.muted = true;
+      void el.play().catch(() => { /* the still picture under it shows instead */ });
+    });
+  }
+
+  /** A video that plays full screen fills the show while it plays. */
+  private fullScreen(v: { el: HTMLMediaElement; media: Media }, on: boolean): void {
+    if (v.media.audio || !v.media.full) return;
+    v.el.dataset.full = on ? '1' : '';
+    const s = this.current.videoSpots(this.done).find((x) => this.vids.get(x.id) === v);
+    if (s) this.place(v.el, s);
+  }
+
+  private drop(v: { el: HTMLMediaElement; tick: number }): void {
+    clearInterval(v.tick);
+    v.el.pause();
+    v.el.remove();
+  }
+
+  /** A click in the show on a video or a sound's icon starts or pauses it; false when there is none there. */
+  clickMedia(px: number, py: number): boolean {
+    if (this.moving) return false;
+    for (const s of this.current.videoSpots(this.done)) {
+      if (px < s.x || px > s.x + s.w || py < s.y || py > s.y + s.h) continue;
+      const v = this.vids.get(s.id);
+      if (!v) continue;
+      if (v.el.paused) {
+        const w = playWindow(v.media, Number.isFinite(v.el.duration) ? v.el.duration : v.media.length);
+        if (v.el.currentTime >= w.end - 0.05) v.el.currentTime = w.start;
+        this.play(v);
+      } else { v.el.pause(); this.fullScreen(v, false); }
+      return true;
+    }
+    return false;
+  }
+
+  /** Whether there is a video or sound to click at a point (for the pointer). */
+  mediaAt(px: number, py: number): boolean {
+    return !this.moving && this.current.videoSpots(this.done).some((s) => px >= s.x && px <= s.x + s.w && py >= s.y && py <= s.y + s.h);
   }
 
   /** A morph from slide `was` (as it was left) to the slide now showing. */
@@ -598,6 +784,7 @@ export class Player {
   next(): void {
     if (this.moving) { this.finish(); return; }
     if (this.done < this.current.stepCount) { this.playStep(); return; }
+    if (this.beforeNextSlide()) return;
     // hidden slides (Hide Slide) are skipped
     const j = this.deck.shownAfter(this.i);
     if (j >= 0) this.show(j, { transition: true });
@@ -656,7 +843,8 @@ export class Player {
         this.current.draw(m.to.getContext('2d')!, this.done);
       }
       if (m.morph === null && m.was !== undefined) m.morph = this.morphFrom(m.was);
-      if (m.morph) m.morph.draw(ctx, p);
+      if (m.zoom) drawZoom(ctx, m.from!, m.to, m.zoom.rect, p, m.zoom.out, this.canvas.width, this.canvas.height);
+      else if (m.morph) m.morph.draw(ctx, p);
       else drawTransition(ctx, m.from, m.to, m.t, p, this.canvas.width, this.canvas.height);
       if (p >= 1) {
         this.moving = null;

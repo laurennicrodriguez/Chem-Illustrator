@@ -13,7 +13,10 @@
 // Both are saved in the PowerPoint file as PowerPoint's own transitions and animations, so they
 // play there too, and they are read back from PowerPoint files (other kinds come in as Fade).
 
-import type { Doc } from '../model';
+import type { Doc, Media } from '../model';
+
+/** A video or sound on a slide, for the slide's timing: its PowerPoint shape and how it plays. */
+export interface MediaTiming { spid: number; media: Media }
 import type { Selection } from '../editor/editor';
 import { splitSlide } from '../io/pptx-write';
 import { plainText } from '../richtext';
@@ -449,9 +452,9 @@ const WIPE_FILTER: Record<Side, string> = { bottom: 'wipe(up)', left: 'wipe(righ
  * `spidsOf` gives the PowerPoint shapes each animation moves (a table can be three: its title,
  * the table and its footnotes); animations of objects that weren't saved are left out.
  */
-export function timingXml(anims: Anim[], spidsOf: (a: Anim) => number[]): string {
+export function timingXml(anims: Anim[], spidsOf: (a: Anim) => number[], media: MediaTiming[] = []): string {
   const live = anims.filter((a) => spidsOf(a).length);
-  if (!live.length) return '';
+  if (!live.length && !media.length) return '';
   let id = 3;
   const ms = (s: number) => Math.max(0, Math.round(s * 1000));
   const steps = buildSteps(live);
@@ -528,12 +531,38 @@ export function timingXml(anims: Anim[], spidsOf: (a: Anim) => number[]): string
     }).join('');
     return `<p:par><p:cTn id="${id++}" fill="hold"><p:stCondLst>${cond}</p:stCondLst><p:childTnLst>${inner}</p:childTnLst></p:cTn></p:par>`;
   }).join('');
+  // videos and sounds that start by themselves: played as the slide comes in, before its animations
+  const auto = media.filter((m) => m.media.start !== 'click');
+  const call = (m: MediaTiming, k: number, node: string, cmd: string, preset: number) =>
+    `<p:par><p:cTn id="${id++}" presetID="${preset}" presetClass="mediacall" presetSubtype="0" fill="hold" nodeType="${k ? 'withEffect' : node}"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+    `<p:cmd type="call" cmd="${cmd}"><p:cBhvr><p:cTn id="${id++}" dur="1" fill="hold"/>${target(m.spid)}</p:cBhvr></p:cmd></p:childTnLst></p:cTn></p:par>`;
+  let main = clicks;
+  if (auto.length) {
+    const group = `<p:par><p:cTn id="${id++}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${auto.map((m, k) => call(m, k, 'afterEffect', 'playFrom(0.0)', 1)).join('')}</p:childTnLst></p:cTn></p:par>`;
+    if (steps[0]?.auto) main = clicks.replace(/^(<p:par><p:cTn id="\d+" fill="hold"><p:stCondLst>.*?<\/p:stCondLst><p:childTnLst>)/, `$1${group}`);
+    else main = `<p:par><p:cTn id="${id++}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond></p:stCondLst><p:childTnLst>${group}</p:childTnLst></p:cTn></p:par>` + clicks;
+  }
+  const mainSeq = main ? `<p:seq concurrent="1" nextAc="seek"><p:cTn id="${id++}" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${main}</p:childTnLst></p:cTn>` +
+    `<p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst>` +
+    `<p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq>` : '';
+  // ones that start when clicked: a sequence of their own, set off by a click on them (play, or pause)
+  const clicked = media.filter((m) => m.media.start === 'click').map((m) =>
+    `<p:seq concurrent="1" nextAc="seek"><p:cTn id="${id++}" restart="whenNotActive" fill="hold" evtFilter="cancelBubble" nodeType="interactiveSeq">` +
+    `<p:stCondLst><p:cond evt="onClick" delay="0">${target(m.spid)}</p:cond></p:stCondLst><p:endSync evt="end" delay="0"><p:rtn val="all"/></p:endSync><p:childTnLst>` +
+    `<p:par><p:cTn id="${id++}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="${id++}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+    `${call(m, 0, 'clickEffect', 'togglePause', 2)}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn>` +
+    `<p:nextCondLst><p:cond evt="onNext" delay="0">${target(m.spid)}</p:cond></p:nextCondLst></p:seq>`).join('');
+  // each one's own settings: volume, looping, across slides, hidden when stopped, full screen
+  const nodes = media.map((m) => {
+    const v = m.media;
+    const vol = v.vol === undefined ? 80000 : Math.round(Math.max(0, Math.min(1, v.vol)) * 100000);
+    const attrs = `vol="${vol}"${v.mute ? ' mute="1"' : ''}${v.audio && v.across ? ' numSld="999"' : ''}${v.audio && v.hide ? ' showWhenStopped="0"' : ''}`;
+    const node = `<p:cMediaNode ${attrs}><p:cTn id="${id++}"${v.once ? '' : ' repeatCount="indefinite"'} fill="hold" display="0"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst></p:cTn>${target(m.spid)}</p:cMediaNode>`;
+    return v.audio ? `<p:audio>${node}</p:audio>` : `<p:video${v.full ? ' fullScrn="1"' : ''}>${node}</p:video>`;
+  }).join('');
   const spids = [...new Set(live.flatMap((a) => spidsOf(a)))];
   const xml = `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>` +
-    `<p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${clicks}</p:childTnLst></p:cTn>` +
-    `<p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst>` +
-    `<p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq>` +
-    `</p:childTnLst></p:cTn></p:par></p:tnLst><p:bldLst>${spids.map((s) => `<p:bldP spid="${s}" grpId="0"/>`).join('')}</p:bldLst></p:timing>`;
+    `${mainSeq}${clicked}${nodes}</p:childTnLst></p:cTn></p:par></p:tnLst>${spids.length ? `<p:bldLst>${spids.map((s) => `<p:bldP spid="${s}" grpId="0"/>`).join('')}</p:bldLst>` : ''}</p:timing>`;
   // number the timing nodes in the order they are written, as PowerPoint does
   let n = 0;
   return xml.replace(/<p:cTn id="\d+"/g, () => `<p:cTn id="${++n}"`);
@@ -635,4 +664,46 @@ function readEmphasis(tn: Element, preset: number, warn: (s: string) => void): P
   }
   if (preset !== 26) warn('Emphasis effects other than Pulse, Grow/Shrink, Spin, Transparency and colour changes came in as Pulse.');
   return { effect: 'pulse' };
+}
+
+/**
+ * How each video and sound on a slide plays, from PowerPoint's timing tree, by PowerPoint shape:
+ * when it starts (by itself, or when clicked: one started by a click of the show counts as
+ * clicked), its volume, looping, across slides, hidden when stopped and full screen.
+ */
+export function readMediaTiming(sld: Element): Map<number, Partial<Media>> {
+  const P = 'http://schemas.openxmlformats.org/presentationml/2006/main';
+  const out = new Map<number, Partial<Media>>();
+  const timing = Array.from(sld.children).find((c) => c.localName === 'timing');
+  if (!timing) return out;
+  const spidIn = (el: Element | null | undefined) => Number(el?.getElementsByTagNameNS(P, 'spTgt')[0]?.getAttribute('spid'));
+  const got = (spid: number) => { let m = out.get(spid); if (!m) out.set(spid, (m = {})); return m; };
+  for (const node of Array.from(timing.getElementsByTagNameNS(P, 'cMediaNode'))) {
+    const spid = spidIn(node);
+    if (!Number.isFinite(spid)) continue;
+    const m = got(spid);
+    const vol = node.getAttribute('vol');
+    if (vol !== null && Number(vol) !== 80000) m.vol = Math.max(0, Math.min(1, Number(vol) / 100000));
+    if (/^(1|true)$/.test(node.getAttribute('mute') ?? '')) m.mute = true;
+    if (Number(node.getAttribute('numSld') ?? 1) > 1) m.across = true;
+    if (/^(0|false)$/.test(node.getAttribute('showWhenStopped') ?? '')) m.hide = true;
+    const tn = Array.from(node.children).find((c) => c.localName === 'cTn');
+    m.once = tn?.getAttribute('repeatCount') !== 'indefinite';
+    if (/^(1|true)$/.test(node.parentElement?.getAttribute('fullScrn') ?? '')) m.full = true;
+  }
+  for (const cmd of Array.from(timing.getElementsByTagNameNS(P, 'cmd'))) {
+    const spid = spidIn(cmd);
+    if (!Number.isFinite(spid)) continue;
+    // in a sequence set off by a click on the shape, or played when the slide comes in
+    let el: Element | null = cmd, inter = false, node = '';
+    while (el && el !== timing) {
+      if (el.localName === 'cTn' && el.getAttribute('presetClass') === 'mediacall') node = el.getAttribute('nodeType') ?? '';
+      if (el.localName === 'cTn' && el.getAttribute('nodeType') === 'interactiveSeq') inter = true;
+      el = el.parentElement;
+    }
+    const m = got(spid);
+    if (inter || node === 'clickEffect') m.start = 'click';
+    else if (m.start !== 'click') m.start = 'auto';
+  }
+  return out;
 }

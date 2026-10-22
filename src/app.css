@@ -1918,3 +1918,21 @@ body.sheet-mode:not(.floating-drawing):not(.split-view) #tools::before {
 body.sheet-mode:not(.floating-drawing):not(.split-view) #tools::before { content: 'Draw a structure: pick a tool to draw in the selected cell, or to change its structure.'; }
 body.doc-mode:not(.floating-drawing):not(.split-view) #tools > :not(:hover):not(:focus-within),
 body.sheet-mode:not(.floating-drawing):not(.split-view) #tools > :not(:hover):not(:focus-within) { opacity: 0.55; }
+
+/* Playback window for videos and sounds */
+.media-dialog .md-player { display: block; width: min(560px, 80vw); max-height: 320px; margin: 0 0 8px; background: #000; }
+.media-dialog audio.md-player { background: none; height: 40px; }
+
+/* Pointer tools in the slide show: the bar at the bottom left, faint until the mouse is on it */
+.show-tools { position: absolute; left: 12px; bottom: 12px; z-index: 3; display: flex; gap: 2px; align-items: center; padding: 3px; border-radius: 6px; background: rgba(30, 32, 36, 0.72); opacity: 0.28; transition: opacity 0.15s; }
+.show-tools:hover, .show-tools:focus-within { opacity: 1; }
+.show-tools button { width: 30px; height: 28px; border: 0; border-radius: 4px; background: transparent; color: #f2f2f2; font-size: 15px; cursor: pointer; padding: 0; }
+.show-tools button:hover { background: rgba(255, 255, 255, 0.14); }
+.show-tools button[aria-pressed="true"] { background: rgba(255, 255, 255, 0.28); }
+.show-swatches { display: flex; gap: 3px; margin-left: 4px; }
+.show-swatches[hidden] { display: none; }
+.show-tools .show-swatch { width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.6); }
+.show-tools .show-swatch[aria-pressed="true"] { outline: 2px solid #fff; outline-offset: 1px; }
+.present.no-cursor .show-tools { opacity: 0; }
+.present.laser-on canvas, .pv-cur.laser-on canvas { cursor: none !important; }
+.show-ink { z-index: 2; }
