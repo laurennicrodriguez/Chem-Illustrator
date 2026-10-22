@@ -9,6 +9,8 @@
 // caret, selection and arrow keys run across pages without knowing about them.
 
 import { hyphenation } from '../text/hyphenate';
+import { hfFieldText, hfKeyFor } from './hf-bodies';
+import type { FieldObj } from './fields';
 import type { CellMargins, Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
 import type { DocStyle } from '../style';
 import { withStack, layoutText, type Glyphs, type InlineBox, type LaidLine, type Measure, type Narrow, type TextFrame, type TextLayout } from '../text/layout';
@@ -20,7 +22,7 @@ import { pageNumText, samePaper, sectionOfParas, sectionsOf } from './sections';
 import { bibliography, type BibEntry } from './references';
 import { emptyTof, tocEntries, tocLines, tofEntries, type TocEntry } from './toc';
 import { EMPTY_INDEX, emptyToa, indexItems, listLines, toaItems, type ListItem } from './index-toa';
-import { authorColours, hasChanges, markedRuns } from './revisions';
+import { ALL_MARKUP, authorColours, changesIn, hasChanges, showChanges, type ReviewView } from './revisions';
 import { layoutMath, type MathBox } from './math';
 import { needsPages } from './fields';
 import { borderRoom, paraFrames, type ParaFrame, type ParaSpan } from './para-borders';
@@ -80,6 +82,21 @@ export interface PageBox {
   hf: HeaderFooter;
   /** That section's index. */
   section: number;
+  /** The first page of its section, its page number as a number, and that number as written (no prefix), for headers and footers. */
+  starts?: boolean;
+  n?: number;
+  num?: string;
+}
+
+/** A page's header or footer with more than plain text, laid out where it goes on the page. */
+export interface PlacedHf {
+  page: number;
+  /** Its paragraphs' text (in the document's coordinates). */
+  texts: TextLayout[];
+  /** Its tables, each with its rows placed on this page. */
+  tables: { id: number; tb: TableBox }[];
+  /** Its pictures and drawings (in its text or its tables' cells). */
+  objects: PlacedObject[];
 }
 
 /** A line's number in the margin: its text, right-aligned to end `distance` left of the text (`x` is its left edge), on the line's baseline. */
@@ -222,6 +239,10 @@ export interface DocLayout {
   lineNums: LineNumber[];
   /** Paragraph borders and shading (Home > Borders, Shading), page by page. */
   frames: ParaFrame[];
+  /** Headers and footers with pictures, tables or formatted text, page by page. */
+  hfs: PlacedHf[];
+  /** Bars in the left margin by lines with tracked changes (All and Simple Markup), page by page; `simple` in Simple Markup's red. */
+  changeBars: { page: number; x: number; y1: number; y2: number; simple: boolean }[];
 }
 
 /** A page setup's text area: the width between the margins, the columns, and the height. */
@@ -243,6 +264,19 @@ export function pageLabel(hf: HeaderFooter, index: number): string {
   return pageNumber(hf, index);
 }
 
+/** The floating figures put in the order they are drawn (Bring Forward, Send Backward), each in a place a floating one had. */
+function stackFloats(objects: PlacedObject[], t: DocText): void {
+  const slots: number[] = [];
+  objects.forEach((o, i) => { if (o.wrap) slots.push(i); });
+  if (slots.length < 2 || !slots.some((i) => floatOf(t.objects[objects[i].id])?.z !== undefined)) return;
+  const z = (o: PlacedObject, k: number) => floatOf(t.objects[o.id])?.z ?? k;
+  const sorted = slots.map((i, k) => ({ o: objects[i], z: z(objects[i], k), k })).sort((a, b) => a.z - b.z || a.k - b.k);
+  slots.forEach((i, k) => { objects[i] = sorted[k].o; });
+}
+
+/** How far left of the text the bar by a changed line is (Word's is in the margin, about a fifth of an inch out). */
+const CHANGE_BAR_GAP = 14;
+
 /** A page's number as a table of contents lists it, shown on the page or not (S1 on a first page whose number is hidden). */
 export function pageNumber(hf: HeaderFooter, index: number): string {
   return `${hf.prefix ?? ''}${(hf.start ?? 1) + index}`;
@@ -258,6 +292,8 @@ export function shownSize(own: { w: number; h: number }, scale: number, textW: n
 export class DocLayouter {
   private cache = new Map<string, TextLayout>();
   private used = new Set<string>();
+  /** How tracked changes show (Review > Display for Review). */
+  review: ReviewView = ALL_MARKUP;
 
   constructor(private deps: LayoutDeps) {}
 
@@ -578,7 +614,7 @@ export class DocLayouter {
       const st = styleOf(t, ps);
       // runs without a font or size of their own take their paragraph style's
       // tracked changes: inserted text underlined, deleted text struck through, in each author's colour
-      const shownRuns = colours ? markedRuns(runs, colours) : runs;
+      const shownRuns = colours ? showChanges(runs, this.review, colours) : runs;
       const resolved = shownRuns.map((r) => {
         // form fields are shaded, as Word shows them
         if (r.obj !== undefined && !r.highlight && t.objects[r.obj]?.kind === 'form') r = { ...r, highlight: FORM_SHADE };
@@ -690,7 +726,7 @@ export class DocLayouter {
       const hf = secs[sec].hf;
       const number = `${hf.prefix ?? ''}${pageNumText(num, secs[sec].format)}`;
       const label = hf.numbers === 'none' || (starts && !hf.onFirst) ? '' : number;
-      return { index, top, first: lines.length, end: lines.length, label, number, x: ox, w: page.w, h: page.h, setup: page, hf, section: sec };
+      return { index, top, first: lines.length, end: lines.length, label, number, x: ox, w: page.w, h: page.h, setup: page, hf, section: sec, starts, n: num, num: pageNumText(num, secs[sec].format) };
     };
     pages.push(makePage(0, 0, true));
     /** The next page, in section `to` when given (its first page). */
@@ -819,7 +855,8 @@ export class DocLayouter {
       for (const r of paraRuns[p] ?? []) {
         const fl = r.obj !== undefined ? floatOf(t.objects[r.obj]) : undefined;
         const s = r.obj !== undefined ? sizes.get(r.obj) : undefined;
-        if (!fl || !s) continue;
+        // (hidden in the Selection Pane: not on the page, and the text doesn't go round it)
+        if (!fl || !s || fl.hidden) continue;
         const [el, et, er, eb] = extentOf(r.obj!);
         const bw = s.w + el + er, bh = s.h + et + eb;
         let bx = (fl.xFrom === 'page' ? 0 : page.left) + fl.x;
@@ -945,7 +982,91 @@ export class DocLayouter {
     const box = { x1: 0, y1: 0, x2: maxW, y2: last.top + last.h };
     const g0 = geoms[0];
     const textLayout: TextLayout = { lines, boxWidth: g0.textW, box, length: text.length, measure: this.deps.measure };
-    return { text: textLayout, pages, objects, fields, sizes, boxes, tables, maths, paraTops, pageW: maxW, pageH: maxH, textW: g0.textW, cols: { n: g0.cs.n, w: g0.textW, x: g0.colX }, notes, noteRules, lineNums, frames };
+    const hfs = this.hfBodies(t, pages, sizes, inline, objKey, N, extentOf);
+    const changeBars = colours ? this.changeBars(t, lines, pages) : [];
+    stackFloats(objects, t);
+    return { text: textLayout, pages, objects, fields, sizes, boxes, tables, maths, paraTops, pageW: maxW, pageH: maxH, textW: g0.textW, cols: { n: g0.cs.n, w: g0.textW, x: g0.colX }, notes, noteRules, lineNums, frames, hfs, changeBars };
+  }
+
+  /**
+   * The headers and footers that are more than plain text, laid out on each page: the header's
+   * top at the header distance from the top of the page, the footer's bottom at the footer
+   * distance from the bottom, between the margins. Tables in them are placed row by row, and
+   * pictures where their lines (or cells) put them.
+   */
+  private hfBodies(t: DocText, pages: PageBox[], sizes: Map<number, { w: number; h: number }>, inline: (id: number, room: number) => InlineBox | null, objKey: (id: number) => string, N: NamedStyle, extentOf: (id: number) => number[]): PlacedHf[] {
+    const out: PlacedHf[] = [];
+    if (!pages.some((p) => p.hf.bodies)) return out;
+    for (const pg of pages) {
+      const bodies = pg.hf.bodies;
+      if (!bodies) continue;
+      for (const kind of ['header', 'footer'] as const) {
+        const key = hfKeyFor(pg.hf, kind, !!pg.starts, pg.n ?? pg.index + 1);
+        const body = bodies[key];
+        if (!body) continue;
+        const W = Math.max(36, pg.w - pg.setup.left - pg.setup.right);
+        // fields show this page's number (none on a first page left unnumbered)
+        const num = pg.starts && !pg.hf.onFirst && !pg.hf.firstPage && pg.hf.numbers !== 'none' ? '' : pg.num ?? pg.number;
+        const own = (id: number, room: number): InlineBox | null => {
+          const o = t.objects[id];
+          if (o?.kind === 'field') return { text: hfFieldText(o, t, num, pages.length) };
+          return inline(id, room);
+        };
+        const ownKey = (id: number) => (t.objects[id]?.kind === 'field' ? `=${hfFieldText(t.objects[id] as FieldObj, t, num, pages.length)}` : objKey(id));
+        const parts: ({ lay: TextLayout } | { id: number; tb: TableBox; align: Justify })[] = [];
+        const runsOf = splitParagraphs(body.runs);
+        const ps = fitParas(body.paras, runsOf.length);
+        let h = 0;
+        runsOf.forEach((runs, p) => {
+          const solo = runs.filter((r) => r.obj !== undefined || r.text);
+          const tbo = solo.length === 1 && solo[0].obj !== undefined ? t.objects[solo[0].obj] : undefined;
+          if (tbo?.kind === 'table') {
+            const tb = this.tableBox(solo[0].obj!, tbo.table, N, own, ownKey, 0, t.tableStyles);
+            parts.push({ id: solo[0].obj!, tb, align: ps[p].align ?? 'left' });
+            h += sum(tb.hs);
+            return;
+          }
+          const st = styleOf(t, ps[p]);
+          const resolved = runs.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? st.font, size: r.size ?? st.size }));
+          const lay = layoutText({ runs: resolved.length ? resolved : [{ font: st.font, size: st.size, text: '' }], paras: [{ ...ps[p], spaceBefore: ps[p].spaceBefore ?? 0, spaceAfter: ps[p].spaceAfter ?? 0 }], justify: 'left', wrap: W, boxes: true, inline: own }, st.size, this.deps.measure);
+          parts.push({ lay });
+          h += lay.box.y2 - lay.box.y1 + (ps[p].spaceAfter ?? 0);
+        });
+        const x0 = pg.x + pg.setup.left;
+        let y = kind === 'header' ? pg.top + pg.setup.header : pg.top + pg.h - pg.setup.footer - h;
+        const placed: PlacedHf = { page: pg.index, texts: [], tables: [], objects: [] };
+        const picsIn = (lay: TextLayout, dx: number, dy: number) => {
+          for (const l of lay.lines) for (const g of l.pieces) {
+            const s = g.obj !== undefined ? sizes.get(g.obj) : undefined;
+            if (!s || t.objects[g.obj!]?.kind === 'field') continue;
+            placed.objects.push({ id: g.obj!, page: pg.index, x: dx + g.x + (extentOf(g.obj!)[0] ?? 0), y: dy + l.y - s.h, w: s.w, h: s.h, line: -1 });
+          }
+        };
+        for (const part of parts) {
+          if ('lay' in part) {
+            const moved = movedLayout(part.lay, x0, y - part.lay.box.y1);
+            placed.texts.push(moved);
+            picsIn(part.lay, x0, y - part.lay.box.y1);
+            y += part.lay.box.y2 - part.lay.box.y1;
+            continue;
+          }
+          const { tb } = part;
+          const tw = tb.xs[tb.xs.length - 1];
+          const tx = x0 + (part.align === 'center' ? (W - tw) / 2 : part.align === 'right' ? W - tw : 0);
+          const rows = tb.hs.map((rh, r) => { const at = { page: pg.index, x: tx, y: y + sum(tb.hs.slice(0, r)) }; return at; });
+          const box: TableBox = { ...tb, rows };
+          placed.tables.push({ id: part.id, tb: box });
+          tb.cells.forEach((row, r) => row.forEach((cl, c) => {
+            if (!cl) return;
+            const m = tb.pads[r][c];
+            picsIn(cl, rows[r].x + tb.xs[c] + m.left, rows[r].y + m.top + tb.drop[r][c] - cl.box.y1);
+          }));
+          y += sum(tb.hs);
+        }
+        out.push(placed);
+      }
+    }
+    return out;
   }
 
   /**
@@ -953,6 +1074,31 @@ export class DocLayouter {
    * tables, contents or bibliographies, nor paragraphs that turn them off), starting again on
    * each page, in each section, or never; every nth shown, at the left of its column.
    */
+  /** A bar in the left margin by each line holding a tracked change (a reviewer's hidden or not), as Word marks them. */
+  private changeBars(t: DocText, lines: LaidLine[], pages: PageBox[]): DocLayout['changeBars'] {
+    const mode = this.review.mode;
+    if (mode !== 'all' && mode !== 'simple') return [];
+    const changes = changesIn(t.runs);
+    if (!changes.length) return [];
+    const out: DocLayout['changeBars'] = [];
+    for (const pg of pages) {
+      let k = 0;
+      for (let i = pg.first; i < pg.end; i++) {
+        const l = lines[i];
+        while (k < changes.length && changes[k].end < l.start) k++;
+        // a change ending at the line's start belongs to the line before (unless it is empty, a paragraph mark)
+        const hit = changes.slice(k).some((c) => c.start < l.end + (l.last ? 1 : 0) && (c.end > l.start || (c.start === c.end && c.start === l.start)));
+        if (!hit) continue;
+        const left = (l.band?.[0] ?? pg.x + pg.setup.left) - CHANGE_BAR_GAP;
+        const y1 = l.y - (l.above ?? l.ascent), y2 = l.y + (l.below ?? l.descent);
+        const prev = out[out.length - 1];
+        if (prev && prev.page === pg.index && Math.abs(prev.x - left) < 0.5 && y1 - prev.y2 < 0.5) prev.y2 = y2;
+        else out.push({ page: pg.index, x: left, y1, y2, simple: mode === 'simple' });
+      }
+    }
+    return out;
+  }
+
   private lineNumbers(t: DocText, lines: LaidLine[], pages: PageBox[], paras: ParaStyle[], secs: ReturnType<typeof sectionsOf>, secOf: number[]): LineNumber[] {
     if (!secs.some((s) => s.lines)) return [];
     const N = t.styles.Normal ?? styleOf(t, {});
@@ -1033,7 +1179,7 @@ export class DocLayouter {
 
   /** A table cell's text laid out in its width (`w`, the inner margins taken off). */
   cellText(N: NamedStyle, runs: TextRun[], paras: ParaStyle[] | undefined, w: number, align: Justify, inline: (id: number, room: number) => InlineBox | null, objKey: (id: number) => string, pad: CellMargins = { top: CELL_PAD.y, bottom: CELL_PAD.y, left: CELL_PAD.x, right: CELL_PAD.x }, look?: CellText): TextLayout {
-    if (hasChanges(runs)) runs = markedRuns(runs);
+    if (hasChanges(runs)) runs = showChanges(runs, this.review);
     // the table style's bold, italic and colour, where the text has none of its own
     if (look) runs = runs.map((r) => ({ ...r, bold: r.bold ?? look.bold, italic: r.italic ?? look.italic, color: r.color ?? look.color }));
     const resolved = runs.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? N.font, size: r.size ?? N.size }));
@@ -1057,7 +1203,7 @@ export class DocLayouter {
    */
   noteText(t: DocText, runs: TextRun[], paras: ParaStyle[] | undefined, label: string, w: number): TextLayout {
     const st = noteStyle(t);
-    if (hasChanges(runs)) runs = markedRuns(runs);
+    if (hasChanges(runs)) runs = showChanges(runs, this.review);
     const resolved = runs.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? st.font, size: r.size ?? st.size }));
     const ps = fitParas(paras, paraCount(rt.plainText(runs)));
     const family = withStack(st.font);
@@ -1082,7 +1228,7 @@ export class DocLayouter {
   /** A text box's text laid out inside it (`w` the box's width), from the top left of its inner margins. */
   boxText(t: DocText, runs: TextRun[], paras: ParaStyle[] | undefined, w: number): TextLayout {
     const N = t.styles.Normal ?? styleOf(t, {});
-    if (hasChanges(runs)) runs = markedRuns(runs);
+    if (hasChanges(runs)) runs = showChanges(runs, this.review);
     const resolved = runs.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? N.font, size: r.size ?? N.size }));
     const n = paraCount(rt.plainText(runs));
     const ps = fitParas(paras, n);

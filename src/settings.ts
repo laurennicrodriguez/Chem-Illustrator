@@ -4,6 +4,7 @@
 // this page. Drawings never go here.
 
 import { parseQuickParts, type QuickPart } from './document/quick-parts';
+import { parseDesign, type DocDesign } from './document/themes';
 import type { UpdateChannel } from './updates';
 import { parseLooks, type HighlightLookPreset } from './ui/highlight-looks';
 import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -13,6 +14,7 @@ import { ModeColours, DEFAULT_MODE_COLOURS, parseModeColours } from './ui/mode-c
 import { parseOwnTemplates, type Template } from './chem/templates';
 import { parsePalettes, type Palette } from './palettes';
 import { defaultToolboxes, parseToolboxes, type ToolboxState } from './ui/toolboxes';
+import { parseRibbons, type RibbonsPrefs } from './ui/ribbon-custom';
 import { parseOwnStyles, parseModeStyles, type StyleMode } from './drawing-styles';
 import type { DocStyle } from './style';
 import { parseDarkPalettes, type DarkPalette } from './dark-page';
@@ -111,6 +113,8 @@ export interface Settings {
   palettes: Palette[];
   /** Which toolboxes show and where (View > Toolboxes), and what is in your own. */
   toolboxes: ToolboxState;
+  /** Each ribbon's tabs and groups as you put them (View > Customize the Ribbon). */
+  ribbons: RibbonsPrefs;
   /** Your own drawing styles (File > Drawing Style > Save as My Style). */
   myStyles: DocStyle[];
   /** The style each kind of new tab starts with, by name (File > Drawing Style > Use for new…). */
@@ -156,6 +160,8 @@ export interface Settings {
   highlightLooks: HighlightLookPreset[];
   /** Saved pieces of text for documents (Insert > Quick Parts). */
   quickParts: QuickPart[];
+  /** The Design (theme, style set, spacing) new documents start with (Design > Set as Default). */
+  docDesign: DocDesign | null;
   /** Spacing in schemes and the text above and below arrows (Chemistry > Reactions and Schemes > Scheme Settings). */
   scheme: SchemePrefs;
   /** AutoSave, recovery copies, Version History and shared folders (File > AutoSave and Recovery Options). */
@@ -166,13 +172,13 @@ export const DEFAULT_SETTINGS: Settings = {
   hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false, showRoles: true,
   chemTyping: true, stereoItalic: true, boldNumbers: false, autoLinks: true, linkCtrlClick: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
   modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true, ribbonCollapsed: false, titleBar: typeof navigator !== 'undefined' && /Mac/.test(navigator.platform || navigator.userAgent) ? 'system' : 'app', page: { name: 'letter', w: 540, h: 720, grow: true }, pageEdge: true, welcomed: false, textBar: 'docked', groupTips: true,
-  citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', circledCharges: false, textToAtom: true, groupClick: 'group', groupOutline: true, rerouteArrows: true, superscriptR: true, linkSide: 'keep', slideTemplate: null, slideThemes: [], askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(),
+  citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', circledCharges: false, textToAtom: true, groupClick: 'group', groupOutline: true, rerouteArrows: true, superscriptR: true, linkSide: 'keep', slideTemplate: null, slideThemes: [], askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(), ribbons: {},
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
   guides: { drawing: false, slides: true, design: true },
   docPins: [],
   docRuler: false,
   sheetFormulaBar: true,
-  updateCheck: true, updateChannel: 'latest', pubchemNames: true, fileTypesOffered: false, wordObjectsOffered: false, reviewName: '', skipVersion: null, recentFiles: [], recentSymbols: [], highlightLooks: [], quickParts: [],
+  updateCheck: true, updateChannel: 'latest', pubchemNames: true, fileTypesOffered: false, wordObjectsOffered: false, reviewName: '', skipVersion: null, recentFiles: [], recentSymbols: [], highlightLooks: [], quickParts: [], docDesign: null,
   slideRuler: false,
   slideGrid: false,
   rulerUnits: typeof navigator !== 'undefined' && /^[a-z]{2,3}-(US|LR|MM)\b/i.test(navigator.language) ? 'in' : 'cm',
@@ -185,7 +191,7 @@ const STORAGE_KEY = 'chem-illustrator.settings';
 
 /** Read settings saved as text, keeping only what makes sense. */
 export function parseSettings(text: string | null | undefined): Settings {
-  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), myStyles: [], modeStyles: {}, darkPalettes: [], guides: { ...DEFAULT_SETTINGS.guides }, docPins: [], recentFiles: [], recentSymbols: [], highlightLooks: [], quickParts: [], scheme: { ...DEFAULT_SCHEME_PREFS }, keep: { ...DEFAULT_KEEP } };
+  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), ribbons: {}, myStyles: [], modeStyles: {}, darkPalettes: [], guides: { ...DEFAULT_SETTINGS.guides }, docPins: [], recentFiles: [], recentSymbols: [], highlightLooks: [], quickParts: [], scheme: { ...DEFAULT_SCHEME_PREFS }, keep: { ...DEFAULT_KEEP } };
   if (!text) return s;
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { return s; }
@@ -211,12 +217,14 @@ export function parseSettings(text: string | null | undefined): Settings {
   }
   if (typeof r.reviewName === 'string') s.reviewName = r.reviewName.trim().slice(0, 80);
   s.quickParts = parseQuickParts(r.quickParts);
+  s.docDesign = parseDesign(r.docDesign);
   s.templates = parseOwnTemplates(r.templates);
   if (typeof r.splitWidth === 'number' && isFinite(r.splitWidth)) s.splitWidth = Math.min(0.8, Math.max(0.2, r.splitWidth));
   if (typeof r.citeStyle === 'string' && r.citeStyle in CITE_PRESETS) s.citeStyle = r.citeStyle;
   s.citeOptions = cleanOptions(r.citeOptions);
   s.palettes = parsePalettes(r.palettes);
   s.toolboxes = parseToolboxes(r.toolboxes);
+  s.ribbons = parseRibbons(r.ribbons);
   s.myStyles = parseOwnStyles(r.myStyles);
   s.modeStyles = parseModeStyles(r.modeStyles);
   if (typeof r.darkPalette === 'string' && r.darkPalette.trim()) s.darkPalette = r.darkPalette.trim();
@@ -250,6 +258,39 @@ export function parseSettings(text: string | null | undefined): Settings {
 /** Settings as the text saved in the file. */
 export function settingsText(s: Settings): string {
   return JSON.stringify({ app: 'Chem Illustrator', version: 1, ...s }, null, 2) + '\n';
+}
+
+/** Settings that belong to this computer: left out of an export, and kept as they are by an import. */
+export const THIS_COMPUTER = ['recentFiles', 'fileTypesOffered', 'wordObjectsOffered', 'skipVersion', 'welcomed'] as const;
+
+/**
+ * Every setting in one file to keep or take to another computer (Edit > Export Settings): keys,
+ * toolboxes, preferences, your own templates, nicknames, styles, palettes, themes and looks.
+ */
+export function exportText(s: Settings, date = new Date()): string {
+  const out: Record<string, unknown> = { app: 'Chem Illustrator', kind: 'settings', version: 1, exported: date.toISOString().slice(0, 10), ...s };
+  for (const k of THIS_COMPUTER) delete out[k];
+  return JSON.stringify(out, null, 2) + '\n';
+}
+
+/**
+ * The settings in a file saved with Export Settings (or a copy of settings.json), over the ones in
+ * use now: what the file leaves out stays as it is, and so does what belongs to this computer.
+ * A file saved from the Hotkeys window changes the keys only. Null when the file is neither.
+ */
+export function importSettings(text: string, now: Settings): { settings: Settings; only?: 'hotkeys' } | null {
+  let raw: unknown;
+  try { raw = JSON.parse(text); } catch { return null; }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.kind === 'hotkeys') {
+    if (!r.hotkeys || typeof r.hotkeys !== 'object' || Array.isArray(r.hotkeys)) return null;
+    return { settings: { ...now, hotkeys: r.hotkeys as KeyOverrides }, only: 'hotkeys' };
+  }
+  if (r.app !== 'Chem Illustrator' || (r.kind !== undefined && r.kind !== 'settings')) return null;
+  const merged: Record<string, unknown> = { ...JSON.parse(settingsText(now)), ...r };
+  for (const k of THIS_COMPUTER) merged[k] = now[k];
+  return { settings: parseSettings(JSON.stringify(merged)) };
 }
 
 export async function loadSettings(): Promise<Settings> {

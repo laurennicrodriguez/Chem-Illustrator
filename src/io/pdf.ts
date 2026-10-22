@@ -350,6 +350,10 @@ export async function writePdf(pages: PdfPage[], opts: PdfOptions): Promise<Uint
           const a = (it.rot * Math.PI) / 180, cx = it.x + it.w / 2, cy = it.y + it.h / 2;
           ops.push(`1 0 0 1 ${num(cx)} ${num(cy)} cm ${num(Math.cos(a))} ${num(Math.sin(a))} ${num(-Math.sin(a))} ${num(Math.cos(a))} 0 0 cm 1 0 0 1 ${num(-cx)} ${num(-cy)} cm`);
         }
+        if (it.flipH || it.flipV) {
+          const cx = it.x + it.w / 2, cy = it.y + it.h / 2;
+          ops.push(`1 0 0 1 ${num(cx)} ${num(cy)} cm ${it.flipH ? -1 : 1} 0 0 ${it.flipV ? -1 : 1} 0 0 cm 1 0 0 1 ${num(-cx)} ${num(-cy)} cm`);
+        }
         ops.push(`${num(it.x)} ${num(it.y)} ${num(it.w)} ${num(it.h)} re W n`);
         if (n) {
           usedImages.add(n);

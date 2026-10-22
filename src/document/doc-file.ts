@@ -7,7 +7,7 @@ import { TextEditing, type ChangeKind } from '../text/editing';
 import { documentMeasure } from '../text/font-measure';
 import { cellMargins } from './table-styles';
 import { DocLayouter, movedLayout, type DocLayout } from './doc-layout';
-import { reviewAuthor, revisionDate } from './revisions';
+import { reviewAuthor, revisionDate, type ReviewView } from './revisions';
 import { setPart } from '../table';
 import { FigurePictures } from './figures';
 import { BOX_PAD, newDocument, noteStyle, runStyleOf, styleOf, type DocObject, type DocText } from './document';
@@ -72,6 +72,17 @@ export class DocFile {
       if (kind === 'text') this.edits++;
       this.listener(kind);
     };
+  }
+
+  /** How tracked changes show (Review > Display for Review), on the screen and when printed. */
+  get review(): ReviewView {
+    return this.layouter.review;
+  }
+  set review(v: ReviewView) {
+    this.layouter.review = v;
+    if (this.printer) { this.printer.layouter.review = v; this.printer.memo = null; }
+    this.memo = null;
+    this.ed.relayout();
   }
 
   /** Where typing and the text buttons go: the text box being typed into, or the document. */
@@ -254,6 +265,7 @@ export class DocFile {
   printLayout(): DocLayout {
     if (!continuous(this.shown.kind)) return this.layout();
     this.printer ??= { layouter: new DocLayouter({ measure: docMeasure, drawingSize: (c, s) => figures.size(c, s) }), memo: null };
+    this.printer.layouter.review = this.layouter.review;
     const t = this.t;
     if (this.printer.memo?.t !== t) {
       const lay = this.printer.layouter.layout(t);

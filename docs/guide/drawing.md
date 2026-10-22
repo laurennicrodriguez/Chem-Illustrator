@@ -359,7 +359,7 @@ Every colour button opens a palette: Automatic, the standard colours, the colour
 
 **Edit ▸ Colour Palettes…** makes rows of your own colours, which show in every colour menu in every mode. Start a **New palette**, add a ready-made row (colour-blind safe, greys, blues or warm), or make one from the drawing's colours.
 
-## Toolboxes and My Toolbox
+## Toolboxes
 
 The **View** menu can show more toolboxes besides the drawing tools:
 
@@ -368,7 +368,22 @@ The **View** menu can show more toolboxes besides the drawing tools:
 - **Toolbox: Templates**: every template in one scrolling grid, under the names of their palettes.
 - **Toolbox: Colours**: pick **Colour**, **Highlight** or **Fill**, then click a swatch to apply it to the selection. Your palettes are there too, and in Highlight mode your highlight looks.
 - **Toolbox: Highlight**: Smooth, Centre, Soft, Outline only, Shadow and Glow switches for the selected highlight, **Save look…**, and every look, ready to click.
-- **Toolbox: My Toolbox**: the tools and commands you choose with **View ▸ Choose What Is in My Toolbox…**, which lists every tool and menu command with a search box.
+- **Toolbox: My Toolbox**: the tools and commands you choose yourself (see below).
+
+### Customize Toolboxes
+
+**View ▸ Customize Toolboxes…** (or right-click a toolbox ▸ **Customize This Toolbox…**) changes what is in any toolbox, much as you rearrange apps on a phone's home screen. On the left is every drawing tool, fly-out palette and menu command, each with its icon, with a search box. On the right, pick a toolbox from the list: its buttons show as icons that jiggle while you work on them.
+
+- **Rearrange**: drag an icon to a new place; the others slide aside to make room. With the keyboard, Ctrl+arrow keys move the icon that has the focus.
+- **Add**: drag a tool or command in from the left and drop it where you want it, or click its **+** to put it at the end. A **Divider** puts a line between groups.
+- **Take out**: drag an icon out of the toolbox, click its **×**, or press Delete.
+- **Fly-outs**: a palette (the buttons with a small corner arrow, such as Arrows or Brackets) shows as a folder of its first tools. Click it to open it and rearrange, add or take out its tools the same way; drop a tool on a folder to put it inside.
+- **Your own toolboxes**: **New** makes one (it floats over the drawing; dock it like any other). Type a **Name** to rename any toolbox, untick **Shown** to hide it, use ↑ and ↓ to move it up or down the View menu (and its place in a dock), and **Delete** to delete it. The Drawing Tools and the side panel can't be deleted. **Restore Deleted Toolboxes** brings back the app's own toolboxes and names.
+- A tool or command can be in as many toolboxes as you like.
+- Every change shows at once in the toolbox itself. **Undo** (or Ctrl+Z) takes changes back one at a time, and **Reset This Toolbox** puts a toolbox back as it came.
+- Untick **Jiggle icons** to keep them still. They never jiggle when Windows is set to show fewer animations (Settings ▸ Accessibility ▸ Visual effects ▸ Animation effects off), or the same setting on a Mac.
+
+The Templates, Colours and side panel toolboxes are laid out by the app; they can be renamed, hidden, moved in the list and (except the side panel) deleted.
 
 To move a toolbox, unlock it first: click the padlock on its title bar (or right-click the toolbox and choose **Unlock**). Each toolbox locks on its own. **Locked** in the top bar (or **View ▸ Lock Toolboxes**) locks or unlocks them all at once. Then drag a toolbox by its title to the left, right, top or bottom edge of the drawing to dock it there, or anywhere else to float it. Right-click a toolbox's title for **Dock Left**, **Dock Right**, **Dock at the Top**, **Dock at the Bottom**, **Float** and more. The side panel (Style, Warnings, Analysis) is a toolbox too: it starts docked at the right, and moves, floats and locks like the others. Its arrow (or **View ▸ Fold Side Panel**) folds it to a strip, separately in each mode. The app remembers where you left them.
 

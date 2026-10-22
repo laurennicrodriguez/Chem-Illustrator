@@ -135,6 +135,8 @@
     <button role="menuitem" data-cmd="typing-spelling" title="Chemistry formatting as you type, replacements, spelling check and your dictionary">Typing and Spelling…</button>
     <button role="menuitem" data-cmd="edit-palettes" title="Your own rows of colours, in every colour menu and every mode">Colour Palettes…</button>
     <button role="menuitem" data-cmd="preferences" title="Every setting in one window: drawing, drawing style, hotkeys, text and spelling, colours, schemes, AutoSave, online lookups">Settings…</button>
+    <button role="menuitem" data-cmd="export-settings" title="Save every setting (hotkeys, toolboxes, preferences, your templates, styles and palettes) in one file, to keep or to set up another computer">Export Settings…</button>
+    <button role="menuitem" data-cmd="import-settings" title="Use the settings saved in a file with Export Settings">Import Settings…</button>
     </div>
     </div>
     <div class="menu-wrap">
@@ -152,6 +154,7 @@
     <button role="menuitemcheckbox" aria-checked="true" data-cmd="group-tips" title="Rest the mouse on an abbreviation such as OTBS, Boc or CO2Me to see the group written out, with its name and formula"><span>Group Tooltips</span></button>
     <button role="menuitemcheckbox" aria-checked="true" data-modes="drawing" data-cmd="page-edge" title="Show the edge of the page in drawings (File ▸ Page Setup sets its size)"><span>Page Edge</span></button>
     <button role="menuitemcheckbox" aria-checked="false" data-cmd="collapse-ribbon" title="Show the ribbon's tabs only, for more room; click a tab to use its buttons (Ctrl+F1, or double-click a tab)"><span>Collapse the Ribbon</span><kbd>Ctrl+F1</kbd></button>
+    <button role="menuitem" data-cmd="customize-ribbon" title="Put the ribbon's tabs and groups in your order, rename or hide them, and make groups of your own commands (Slides, Documents, Sheets and Designs)">Customize the Ribbon…</button>
     <button role="menuitemcheckbox" aria-checked="true" data-cmd="title-bar-in-menu" class="desktop-only" hidden title="Desktop app: the window's minimise, maximise and close buttons at the right of this menu bar, in place of the system's title bar, to give the work a row more room. Drag an empty part of the menu bar to move the window"><span>Title Bar in Menu Row</span></button>
     <button role="menuitemcheckbox" aria-checked="true" data-cmd="scroll-bars" title="Scroll bars along the bottom and right of the drawing, showing where you are"><span>Scroll Bars</span></button>
     <div class="submenu">
@@ -231,7 +234,7 @@
     <button role="menuitemcheckbox" aria-checked="false" data-cmd="toolbox-colours" title="One click colours or highlights what is selected, from the standard colours and your palettes"><span>Toolbox: Colours</span></button>
     <button role="menuitemcheckbox" aria-checked="false" data-cmd="toolbox-highlight" title="Highlight the selection, turn its soft edges, outline, shadow and glow on or off, and give it a ready-made or saved look"><span>Toolbox: Highlight</span></button>
     <button role="menuitemcheckbox" aria-checked="false" data-cmd="toolbox-custom" title="Your own toolbox: any tools and commands you choose"><span>Toolbox: My Toolbox</span></button>
-    <button role="menuitem" data-cmd="customize-toolbox" title="Choose the tools and commands in My Toolbox">Choose What Is in My Toolbox…</button>
+    <button role="menuitem" data-cmd="customize-toolbox" title="Rearrange any toolbox's buttons by dragging them, put tools and commands in or take them out, change the fly-outs, and make, rename or delete toolboxes">Customize Toolboxes…</button>
     <button role="menuitemcheckbox" aria-checked="false" data-cmd="fold-side" title="Fold the side panel to a strip at the right, to give the drawing more room"><span>Fold Side Panel</span></button>
     <button role="menuitemcheckbox" aria-checked="true" data-cmd="lock-toolboxes" title="Unlock to drag toolboxes by their titles: to an edge of the drawing to dock them, anywhere else to float"><span>Lock Toolboxes</span></button>
     <hr />
@@ -1402,6 +1405,23 @@
       <div class="rb-group">
         <div class="rb-row">
           <div class="rb-col">
+            <label class="rb-field" title="Themes: fonts for the headings and the text, and colours for the headings, all at once. Every paragraph in a style changes (not what you formatted by hand)">Theme <select id="doc-theme" data-doc-prefix="design-theme"></select></label>
+            <label class="rb-field" title="Style Set: how the title, headings and text are laid out (sizes, bold, alignment, spacing), keeping the theme's fonts and colours">Style Set <select id="doc-styleset" data-doc-prefix="design-styleset"></select></label>
+          </div>
+          <div class="rb-col">
+            <label class="rb-field" title="Colors: the headings' and title's colour">Colors <select id="doc-theme-colors" data-doc-prefix="design-colors"></select></label>
+            <label class="rb-field" title="Fonts: one for the headings and title, one for the text">Fonts <select id="doc-theme-fonts" data-doc-prefix="design-fonts"></select></label>
+          </div>
+          <div class="rb-col">
+            <label class="rb-field" title="Paragraph Spacing: the text's space between paragraphs and between lines">Paragraph Spacing <select id="doc-para-spacing" data-doc-prefix="design-spacing"></select></label>
+            <button data-doc="design-default" title="Set as Default: new documents start with this document's theme, style set and spacing">Set as Default</button>
+          </div>
+        </div>
+        <div class="rb-label">Document Formatting</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
             <label class="rb-field" title="Words across every page behind the text (saved as Word's watermark)">Watermark <select id="doc-watermark" data-doc-prefix="watermark">
               <option value="" hidden>None</option>
               <option value="0">CONFIDENTIAL</option><option value="1">DRAFT</option><option value="2">DO NOT COPY</option><option value="3">SAMPLE</option><option value="4">PRELIMINARY</option><option value="5">NOT FOR DISTRIBUTION</option><option value="6">ASAP</option><option value="7">URGENT</option>
@@ -1531,6 +1551,16 @@
             </select></label>
             <button data-doc="insert-text-box" title="A box of text on the page, with the page's text wrapping round it">Text Box</button>
           </div>
+          <div class="rb-col">
+            <button data-doc="arrange-position" aria-haspopup="true" title="Position: put the structure, picture or text box picked at the top, middle or bottom of the page, left, centre or right, with the text wrapping round it">Position ▾</button>
+            <button data-doc="arrange-forward" aria-haspopup="true" title="Bring Forward: the figure picked over the one in front of it, or to the front of all">Bring Forward ▾</button>
+            <button data-doc="arrange-backward" aria-haspopup="true" title="Send Backward: the figure picked under the one behind it, or to the back of all">Send Backward ▾</button>
+          </div>
+          <div class="rb-col">
+            <button data-doc="selection-pane" title="Selection Pane: every figure floating on the pages, front first, to pick, rename, hide or group">Selection Pane</button>
+            <button data-doc="arrange-group" aria-haspopup="true" title="Group: figures picked in the Selection Pane (Ctrl+click) move together; Ungroup parts them again">Group ▾</button>
+            <button data-doc="arrange-rotate" aria-haspopup="true" title="Rotate: turn the picture picked a quarter right or left, flip it, or turn it by any angle">Rotate ▾</button>
+          </div>
         </div>
         <div class="rb-label">Arrange</div>
       </div>
@@ -1609,6 +1639,15 @@
         <div class="rb-row">
           <button class="rb-big" data-doc="track-changes" aria-pressed="false" title="Track Changes (Ctrl+Shift+E): while on, what you type is marked as inserted and what you delete stays, struck through, until it is accepted or rejected. Each change shows who made it and when"><span class="rb-icon">✎</span>Track Changes</button>
           <button class="rb-big" data-doc="review-name" title="The name put on your changes"><span class="rb-icon">👤</span>Your Name…</button>
+          <div class="rb-col">
+            <label class="rb-field" title="Display for Review: All Markup marks every change in its reviewer's colour; Simple Markup shows the text as it will read, with a red bar by each changed line; No Markup shows it as it will read; Original shows it as it was before the changes">Display <select id="doc-markup" data-doc-prefix="markup">
+              <option value="all">All Markup</option>
+              <option value="simple">Simple Markup</option>
+              <option value="none">No Markup</option>
+              <option value="original">Original</option>
+            </select></label>
+            <button data-doc="show-markup" aria-haspopup="true" title="Show Markup: which changes are marked (insertions and deletions, formatting), whose (each reviewer, or all), and whether formatting changes are tracked">Show Markup ▾</button>
+          </div>
         </div>
         <div class="rb-label">Tracking</div>
       </div>

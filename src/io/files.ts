@@ -34,6 +34,8 @@ export const XLSM: FileType = { description: 'Excel macro-enabled workbook', ext
 export const SHEET_OPEN_ONLY = ['xls', 'ods'];
 export const CSV: FileType = { description: 'CSV (comma-separated values)', extension: 'csv', mime: 'text/csv' };
 export const DOCX: FileType = { description: 'Word document', extension: 'docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
+export const RTF: FileType = { description: 'Rich Text Format', extension: 'rtf', mime: 'application/rtf' };
+export const ODT: FileType = { description: 'OpenDocument text', extension: 'odt', mime: 'application/vnd.oasis.opendocument.text' };
 export const SDF: FileType = { description: 'SD file (structures with data)', extension: 'sdf', mime: 'chemical/x-mdl-sdfile' };
 /** Text tables that open as sheets (tab-separated as well as CSV). */
 export const TABLE_TEXT_EXTENSIONS = ['csv', 'tsv', 'txt'];
@@ -47,6 +49,7 @@ export const EPS: FileType = { description: 'EPS picture', extension: 'eps', mim
 export const PICTURE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'emf', 'bmp', 'webp'];
 export const MOL: FileType = { description: 'MDL molfile', extension: 'mol', mime: 'chemical/x-mdl-molfile' };
 export const KEYMAP_FILE: FileType = { description: 'Chem Illustrator hotkeys', extension: 'json', mime: 'application/json' };
+export const SETTINGS_FILE: FileType = { description: 'Chem Illustrator settings', extension: 'json', mime: 'application/json' };
 
 // The parts of the File System Access API used here (Chrome and Edge only).
 interface FileHandle {

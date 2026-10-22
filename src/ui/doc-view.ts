@@ -9,7 +9,8 @@ import { SHEET_MARGIN, breaksIn, continuous, outlineMarks, type DocViewKind } fr
 import type { LaidLine } from '../text/layout';
 import type { DocFile } from '../document/doc-file';
 import { figures } from '../document/doc-file';
-import { drawDocTable, drawHeaderFooter, drawLineNumbers, drawNoteRules, drawPageLook } from '../document/doc-paint';
+import { turnOf } from '../document/arrange';
+import { drawChangeBars, turnAbout, drawDocTable, drawHeaderFooter, drawHfBodies, drawLineNumbers, drawNoteRules, drawPageLook } from '../document/doc-paint';
 import { BOX_PAD, SHADOWS, lookOf, type DocText } from '../document/document';
 import { BREAK_NAMES } from '../document/sections';
 import { drawLayout } from '../text/draw';
@@ -397,7 +398,7 @@ export class DocView {
     if (!endless) for (const p of visible) { at(p); this.paper(ctx, p, lay); }
     for (const p of visible) {
       at(p);
-      if (!endless) { drawHeaderFooter(ctx, t, p); drawLineNumbers(ctx, lay, p.index, '#555'); }
+      if (!endless) { drawHeaderFooter(ctx, t, p); drawHfBodies(ctx, t, lay, p.index, (o) => this.object(ctx, t, o, lay)); drawLineNumbers(ctx, lay, p.index, '#555'); drawChangeBars(ctx, lay, p.index); }
       drawParaShading(ctx, lay.frames, p.index);
       // the found text and the selection, under the text
       const from = lay.text.lines[p.first]?.start ?? 0;
@@ -603,6 +604,16 @@ export class DocView {
   }
 
   private object(ctx: CanvasRenderingContext2D, t: DocText, o: PlacedObject, lay: DocLayout): void {
+    // a picture turned or flipped (Arrange > Rotate) is drawn so about its middle
+    const turn = turnOf(t.objects[o.id]);
+    if (!turn) { this.objectBody(ctx, t, o, lay); return; }
+    ctx.save();
+    turnAbout(ctx, o, turn);
+    this.objectBody(ctx, t, o, lay);
+    ctx.restore();
+  }
+
+  private objectBody(ctx: CanvasRenderingContext2D, t: DocText, o: PlacedObject, lay: DocLayout): void {
     const obj = t.objects[o.id];
     if (!obj) return;
     const look = lookOf(obj);

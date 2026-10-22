@@ -24,6 +24,7 @@ import type { CiteFormat } from './cite-styles';
 import type { CiteLive, CiteManager } from './live-cites';
 import type { ChartBox } from '../sheet/chart-box';
 import type { DocHyphenation } from '../text/hyphenate';
+import { allHf, hfObjectIds } from './hf-bodies';
 import { fieldText, needsPages, type DocProps, type FieldObj } from './fields';
 
 /** The character that stands for a figure, table or field in the text (Unicode's object replacement character). */
@@ -175,7 +176,24 @@ export interface HeaderFooter {
   start: number;
   /** Shown on the first page (often left off a cover or title page). */
   onFirst: boolean;
+  /** Different First Page (Word's titlePg): the section's first page has its own header and footer (`first`). */
+  firstPage?: boolean;
+  first?: HfZones;
+  /** Different Odd & Even Pages: even pages have their own header and footer (`even`), the page number on the other side. */
+  oddEven?: boolean;
+  even?: HfZones;
+  /** Headers and footers with more than plain text (pictures, tables, formatted text, fields): each in place of the plain text of its place. */
+  bodies?: Partial<Record<HfKey, HfBody>>;
 }
+
+/** The plain text of a first or even page's header and footer: left, centre and right. */
+export interface HfZones { header: [string, string, string]; footer: [string, string, string] }
+
+/** Which header or footer: the usual one, the first page's, or even pages'. */
+export type HfKey = 'header' | 'footer' | 'firstHeader' | 'firstFooter' | 'evenHeader' | 'evenFooter';
+
+/** A header or footer as Word has it: paragraphs of formatted text, with fields, pictures and tables (objects in the document's objects). */
+export interface HfBody { runs: TextRun[]; paras?: ParaStyle[] }
 
 /** How a section starts: on a new page (Next Page), on the same page (Continuous), or on the next even or odd page. */
 export type BreakKind = 'nextPage' | 'continuous' | 'evenPage' | 'oddPage';
@@ -259,6 +277,14 @@ export interface Float {
   yFrom?: 'para' | 'margin' | 'page';
   /** Room kept between the figure and the text round it, in points (Word's is 0.13 in). */
   gap?: number;
+  /** Which is drawn over which (Bring Forward, Send Backward): higher on top; unset, in the order of the text. */
+  z?: number;
+  /** Figures grouped together (Arrange > Group) share a number, and move together. */
+  group?: number;
+  /** Its name in the Selection Pane (unset: "Picture 3", "Text Box 2"). */
+  name?: string;
+  /** Hidden from the page in the Selection Pane (still in the document). */
+  hidden?: boolean;
 }
 
 /** The room text keeps from a floating figure unless set (Word's 0.13 inch). */
@@ -308,7 +334,7 @@ export type DocObject =
    * embedded object (Insert > Object) is a picture with another program's file in `embed`. `alt` is
    * its alt text (a structure without it is described by its SMILES).
    */
-  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float; chart?: ChartBox; crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx; embed?: Embedded; alt?: string }
+  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float; chart?: ChartBox; crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx; embed?: Embedded; alt?: string; /** Turned clockwise about its middle, in degrees, and flipped (Arrange > Rotate). */ rot?: number; flipH?: boolean; flipV?: boolean }
   /**
    * A text box: text of its own (typed into in place), `w` wide; it grows to fit its text, and is
    * at least `h` tall when that is set. Always placed on the page. `fill` is its background.
@@ -411,7 +437,12 @@ export interface DocText extends RichText {
   hyphen?: DocHyphenation;
   /** Review > Restrict Editing: what can still be changed, and the password that stops it (see protect.ts). */
   protect?: Protection;
+  /** Design > Document Formatting: the theme, style set and paragraph spacing chosen (by name; see themes.ts). */
+  design?: DocDesign;
 }
+
+/** What Design has set: names of the choices made (kept with the document, so the galleries show them). */
+export interface DocDesign { theme?: string; fonts?: string; colors?: string; styleSet?: string; spacing?: string }
 
 /** How footnotes or endnotes are numbered, by Word's names: 1, 2, 3; i, ii, iii; a, b, c; *, †, ‡ (chicago). */
 export type NoteFormat = 'decimal' | 'lowerRoman' | 'upperRoman' | 'lowerLetter' | 'upperLetter' | 'chicago';
@@ -874,8 +905,11 @@ export function cellHolding(t: Pick<DocText, 'objects'>, id: number): { id: numb
 }
 
 /** Every object the text uses, with those inside tables. */
-export function usedObjects(t: Pick<DocText, 'runs' | 'objects'>): Set<number> {
-  return new Set(objectsInText(flatRuns(t)));
+export function usedObjects(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'hf' | 'paras'>>): Set<number> {
+  const used = new Set(objectsInText(flatRuns(t)));
+  // with those in the headers and footers
+  if (t.hf) for (const id of hfObjectIds(allHf({ hf: t.hf, paras: t.paras }), t.objects)) used.add(id);
+  return used;
 }
 
 /** Keep only the objects the text still uses (before saving). */

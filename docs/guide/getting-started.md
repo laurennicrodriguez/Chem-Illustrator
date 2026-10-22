@@ -89,7 +89,7 @@ Along the top are the menus: **File**, **Edit**, **View** and **Insert**, then t
 To the right of the menus are:
 
 - **Undo**, **Redo** and **Fit** (fit the whole drawing in the window). Undo and Redo are greyed out when there is nothing to take back, and resting the mouse on one names the step it would undo (**Undo Add Ring**); the Edit menu names it too;
-- **Locked**, which locks or unlocks all the toolboxes at once so they can be moved (each toolbox also has its own padlock; see [Drawing](drawing.md#toolboxes-and-my-toolbox));
+- **Locked**, which locks or unlocks all the toolboxes at once so they can be moved (each toolbox also has its own padlock; see [Drawing](drawing.md#toolboxes));
 - the **eye button**, which turns the dark page on and off;
 - the **Search** box;
 - **Help**, with this **User Guide** built in (it works without an internet connection), the hotkeys, and short notes on each part of the program. **F1** opens the guide at the part about the tool or kind of tab in use: with the ring tool, for example, it opens at Rings.
@@ -219,6 +219,17 @@ Slides, sheets, documents and designs save in their own formats; see their pages
 | **Online** | Looking up names on PubChem (sends the name typed to PubChem; untick it to keep everything on your computer) and the update check and whether to get Stable or Latest updates (desktop app only). |
 
 Your preferences, hotkeys, own templates, nicknames, palettes and toolbox layout are kept in a small settings file, `settings.json`. **Edit ▸ Hotkeys…** shows where it is on your computer.
+
+### Customize the Ribbon
+
+**View ▸ Customize the Ribbon…** (or right-click a ribbon's tabs or a group's name) rearranges the ribbons of Slides, Documents, Sheets and Designs, with the same jiggling icons as Customize Toolboxes. Pick the ribbon at the top; its tabs show as a row:
+
+- Drag a tab to put the tabs in your order, type a new **Tab** name, or untick **Shown** to hide it.
+- Click a tab to see its groups. Drag a group to move it, drop it on another tab to move it there, or drag it out (or click its **×**) to hide it. Hidden groups are listed on the left, to drag back in.
+- Click a group to rename it. **New Group** makes a group of your own: drag commands into it from the list on the left (every button of that ribbon, and every menu command), or click **+**.
+- **Undo** (Ctrl+Z) takes changes back one at a time; **Reset This Ribbon** puts a ribbon back as it came.
+
+To set up a new install or another computer the same way, use **Edit ▸ Export Settings…** to save every setting in one file (hotkeys, toolboxes and what is in them, preferences, your templates, nicknames, drawing styles, colour palettes, slide themes and highlight looks), then **Edit ▸ Import Settings…** on the other one. The same two buttons are on the **Import and Export** page of the Settings window. Recent files stay on each computer. A file saved from the Hotkeys window's Export imports too, and changes only the keys.
 
 ---
 

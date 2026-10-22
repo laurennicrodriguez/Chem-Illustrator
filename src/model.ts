@@ -223,6 +223,10 @@ export interface TextRun {
   strike?: boolean;
   /** Documents with tracked changes: this text was inserted or deleted, by whom and when ("ins|Nate|2026-10-14T21:00:00Z"; see document/revisions). */
   rev?: string;
+  /** Documents with tracked changes: this text's formatting was changed, by whom and when, and how it looked before ("Nate|2026-10-14T21:00:00Z|{\"bold\":true}"; see document/revisions). */
+  fmt?: string;
+  /** Not shown: laid out with no width (tracked changes hidden by a markup view). Only ever on runs being laid out, never in a file. */
+  hide?: boolean;
   /** Documents: the comments this text is under, by id, joined by commas ("2,5"; see document/comments). */
   cmt?: string;
   /** Where the text links to: a web page, a DOI, an e-mail address, a file or a place in the file (see links.ts). */
