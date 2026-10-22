@@ -188,6 +188,14 @@ Each new tile asks which table or block of cells to read. For a gallery, the str
 - Excel's `=HYPERLINK("https://…", "shown text")` works too.
 - Excel files keep cell links as Excel's own, both ways.
 
+## Pictures, shapes and text boxes
+
+**Insert > Pictures** puts a picture from a file (PNG, JPEG, GIF, SVG and others) over the cells: a TLC plate, a photo of a reaction, a spectrum. **Shapes** adds lines, arrows, rectangles, ovals, stars and block arrows, and **Text Box** a box of notes. Drag one to move it and its handles to size it (a picture keeps its shape from a corner; hold Shift for a shape to do the same). Arrow keys nudge it, Delete removes it. Type while a shape is picked, or double-click it, to put text in it. Right-click for **Format Shape** (fill, line, text look, size, rotation, and whether it moves and sizes with the cells), **Alt Text**, **Bring to Front**, **Send to Back** and **Duplicate**. They are saved in .xlsx files as Excel's own pictures and shapes, and pictures and shapes drawn in Excel open here.
+
+## Printing
+
+The **Page Layout** tab sets how a sheet prints, as in Excel: **Margins**, **Orientation**, paper **Size**, the **Print Area** (Set, Add another block on pages of its own, or Clear), **Breaks** (Insert Page Break starts a new page above and to the left of the active cell), **Print Titles** (rows repeated at the top of every page, columns at the left), **Header & Footer** (left, centre and right parts; type &[Page], &[Pages], &[Date], &[Time], &[File] or &[Tab]), and **Scale to Fit** (a percentage, or so many pages wide and tall; fitting ignores breaks put in by hand, as Excel does). **Print Gridlines** and **Print Headings** print them; **Page Breaks** shows where pages end on the grid (dashed for automatic breaks, solid for your own). **Page Setup…** has everything in one window, with centring and page order too. **Print Preview** shows each page before printing, and **File > Print** prints the print area, the whole sheet or the selected cells. All of it is saved in .xlsx files as Excel's own page setup, so the sheet prints the same from Excel.
+
 ## Saving and sharing
 
 - **Save** (Ctrl+S) writes an Excel workbook (.xlsx). In Excel, structures are pictures with their SMILES in the cell, properties are plain numbers, and charts, trendlines, conditional formatting, tables, notes, comments and data validation are Excel's own. Stick spectra show as sticks in Excel too.
