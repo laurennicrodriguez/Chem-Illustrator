@@ -18,7 +18,7 @@ import { blipEffectsXml, imgPropsXml, pictureGeomXml } from './picture-xml';
 import { turnAbout, type Rect } from '../geom';
 import { layoutText, ASCENT, FONT_STACK, type Measure } from '../text/layout';
 import { fitParas, listMarkers, splitParagraphs } from '../text/paragraphs';
-import { formulaParts } from '../richtext';
+import { formulaParts, plainText } from '../richtext';
 import { officeTarget, slideOfLink } from '../links';
 import { arialWidth } from '../text-metrics';
 import { arrowPoints, shapeBox, boxOf, shapeOrder, elbowRoute } from '../objects';
@@ -34,10 +34,11 @@ import { facesToEmbed, toEot, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
 import { patternClear, patternInk, shadowLook } from '../render/fills';
 import { FADE, tint } from '../colours';
-import { transitionXml, timingXml, highlightParts, partHolds, type Transition, type Anim, type MediaTiming } from '../deck/animation';
+import { transitionXml, timingXml, highlightParts, partHolds, expandParas, targetKey, type Transition, type Anim, type MediaTiming } from '../deck/animation';
 import { MEDIA_EXT } from '../deck/media';
+import { showPrXml, custShowsXml } from '../deck/show-setup';
 import {
-  Master, SlideSize, LayoutId, layoutFrames, deckLayouts, layoutDef, titleLook, isBuiltinLayout, type LayoutDef, type SectionCount, decorFrames, showsNumber, textStyles, isEmptyText, slideColours, slideBackground, decorShapes, type DecorShape,
+  Master, SlideSize, LayoutId, layoutFrames, deckLayouts, layoutDef, titleLook, isBuiltinLayout, type LayoutDef, type SectionCount, decorFrames, showsNumber, showsFooter, showsDate, dateText, type SlideHF, type DeckSettings, textStyles, isEmptyText, slideColours, slideBackground, decorShapes, type DecorShape,
 } from '../deck/deck';
 import { sameBackground, type Background } from '../deck/background';
 import { bgXml, type BlipIds } from './pptx-background';
@@ -119,11 +120,13 @@ export interface DeckData {
   size: SlideSize;
   master: Master;
   /** `id` is the slide's id in the deck, for links to it (#slide=id). */
-  slides: { id?: number; layout: LayoutId; doc: Doc; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean; hidden?: boolean }[];
+  slides: { id?: number; layout: LayoutId; doc: Doc; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean; hidden?: boolean; hf?: SlideHF }[];
   /** A design (Design mode): marked so it opens in Design mode again. */
   design?: boolean;
   /** The deck's sections, in order (none when left out). */
   sections?: SectionCount[];
+  /** Set Up Show and custom shows. */
+  settings?: DeckSettings;
 }
 
 /**
@@ -582,7 +585,7 @@ class Writer {
         pkg.relate(path, REL.notesSlide, `../notesSlides/notesSlide${i + 1}.xml`);
       }
     }
-    pkg.add('ppt/presProps.xml', `${HEAD}<p:presentationPr ${XMLNS}/>`, CT.presProps);
+    pkg.add('ppt/presProps.xml', `${HEAD}<p:presentationPr ${XMLNS}>${showPrXml(deck.settings?.show, deck.settings?.customShows ?? [])}</p:presentationPr>`, CT.presProps);
     pkg.relate(P, REL.presProps, 'presProps.xml');
     pkg.add('ppt/tableStyles.xml', `${HEAD}<a:tblStyleLst xmlns:a="${NS.a}" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"/>`, CT.tableStyles);
     pkg.relate(P, REL.tableStyles, 'tableStyles.xml');
@@ -612,6 +615,7 @@ class Writer {
       `<p:sldIdLst>${slideRels.map((r, i) => `<p:sldId id="${256 + i}" r:id="${r}"/>`).join('')}</p:sldIdLst>` +
       `<p:sldSz cx="${emu(w)}" cy="${emu(h)}"${w === 720 && h === 540 ? ' type="screen4x3"' : ''}/>` +
       `<p:notesSz cx="6858000" cy="9144000"/>` + fontList +
+      custShowsXml(deck.settings?.customShows ?? [], (sid) => slideRels[deck.slides.findIndex((x) => x.id === sid)], xml) +
       `<p:custDataLst><p:tags r:id="${masterTags}"/></p:custDataLst>` +
       `<p:defaultTextStyle>${defaultLevels(this.deck.master)}</p:defaultTextStyle>` +
       sectionsXml(deck.sections, n) +
@@ -640,6 +644,7 @@ class Writer {
       phShape(3, 'Text Placeholder 2', '<p:ph type="body" idx="1"/>', frames[1], 'Click to edit Master text styles', 'anchor="t"'),
       footerShape(4, 'Footer Placeholder 3', '<p:ph type="ftr" sz="quarter" idx="3"/>', d.footer, m, ''),
       footerShape(5, 'Slide Number Placeholder 4', '<p:ph type="sldNum" sz="quarter" idx="4"/>', d.number, m, '‹#›'),
+      footerShape(6, 'Date Placeholder 5', '<p:ph type="dt" sz="half" idx="2"/>', d.date, m, dateText(m)),
       logo,
     ].join('');
     const bg = await this.background(P, m.fill ?? { kind: 'solid', color: m.background });
@@ -679,6 +684,7 @@ class Writer {
     const fm = { ...m, footerColor: c.footerColor };
     shapes.push(footerShape(frames.length + 2, `Footer Placeholder ${frames.length + 1}`, '<p:ph type="ftr" sz="quarter" idx="11"/>', d.footer, fm, ''));
     shapes.push(footerShape(frames.length + 3, `Slide Number Placeholder ${frames.length + 2}`, '<p:ph type="sldNum" sz="quarter" idx="12"/>', d.number, fm, '‹#›'));
+    shapes.push(footerShape(first + decor.length, `Date Placeholder ${frames.length + 3}`, '<p:ph type="dt" sz="half" idx="10"/>', d.date, fm, dateText(m)));
     // a title slide's own background goes on its layout
     const ownBg = slideBackground(m, id), base: Background = m.fill ?? { kind: 'solid', color: m.background };
     const bg = own && !sameBackground(ownBg, base) ? await this.background(path, ownBg) : '';
@@ -791,12 +797,13 @@ class Writer {
     // slide number and footer, when the master shows them
     const m = this.deck.master;
     const d = decorFrames(this.deck.size, m);
-    if (showsNumber(m, s.layout)) out.push(footerShape(id++, 'Slide Number', '<p:ph type="sldNum" sz="quarter" idx="12"/>', d.number, m, String(index + 1), true));
-    if (m.footer.trim()) out.push(footerShape(id++, 'Footer', '<p:ph type="ftr" sz="quarter" idx="11"/>', d.footer, m, m.footer, true));
+    if (showsNumber(m, s.layout, s.hf)) out.push(footerShape(id++, 'Slide Number', '<p:ph type="sldNum" sz="quarter" idx="12"/>', d.number, m, String(index + 1), true));
+    if (showsFooter(m, s.layout, s.hf)) out.push(footerShape(id++, 'Footer', '<p:ph type="ftr" sz="quarter" idx="11"/>', d.footer, m, m.footer, true));
+    if (showsDate(m, s.layout, s.hf)) out.push(footerShape(id++, 'Date', '<p:ph type="dt" sz="half" idx="10"/>', d.date, m, dateText(m), true));
     const tags = this.addTags(path, { [TAG.layout]: s.layout, ...(s.id !== undefined ? { [TAG.slideId]: String(s.id) } : {}) });
     const bg = s.background ? await this.background(path, s.background) : '';
     return `${HEAD}<p:sld ${XMLNS}${s.hideGraphics ? ' showMasterSp="0"' : ''}${s.hidden ? ' show="0"' : ''}><p:cSld>${bg}<p:spTree>${GROUP}${out.join('')}</p:spTree><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:cSld>` +
-      `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(s.transition)}${timingXml(s.anims ?? [], (a) => spids.get(`${a.target.kind} ${a.target.bond ? 'b' : ''}${a.target.id}`) ?? [], videos)}` +
+      `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(s.transition)}${timingXml(expandParas(s.anims ?? [], (cid) => { const c = doc.captions.get(cid); return c ? plainText(c.runs).split('\n') : null; }), (a) => spids.get(targetKey(a.target)) ?? [], videos, (t) => spids.get(targetKey(t))?.[0])}` +
       // the slide's creation number, which zooms name it by
       `<p:extLst><p:ext uri="{BB962C8B-B14F-4D97-AF65-F5344CB8AC3E}"><p14:creationId xmlns:p14="${NS_P14}" val="${creationId(index)}"/></p:ext></p:extLst></p:sld>`;
   }
@@ -1355,11 +1362,13 @@ function phShape(id: number, name: string, ph: string, f: { x: number; y: number
 
 /** The footer or slide number box (in the master and layouts, and on each slide that shows it). */
 function footerShape(id: number, name: string, ph: string, r: Rect, m: Master, text: string, onSlide = false): string {
-  const isNum = ph.includes('sldNum');
+  const isNum = ph.includes('sldNum'), isDate = ph.includes('type="dt"');
+  // today's date as a field PowerPoint keeps up to date, in the form picked; a fixed date as text
   const run = isNum
     ? `<a:fld id="{B6F15528-21DE-4FAA-801E-634DDDAF4B2B}" type="slidenum"><a:rPr ${lang}/><a:t>${xml(text || '‹#›')}</a:t></a:fld>`
-    : text ? `<a:r><a:rPr ${lang}/><a:t>${xml(text)}</a:t></a:r>` : '';
-  const algn = isNum ? 'r' : 'ctr';
+    : isDate && !m.dateFixed?.trim() ? `<a:fld id="{3E1A4C2B-7D9F-4B8E-9C61-2F0A5D7E8B13}" type="${m.dateFormat ?? 'datetime1'}"><a:rPr ${lang}/><a:t>${xml(text)}</a:t></a:fld>`
+      : text ? `<a:r><a:rPr ${lang}/><a:t>${xml(text)}</a:t></a:r>` : '';
+  const algn = isNum ? 'r' : isDate ? 'l' : 'ctr';
   const lst = onSlide ? '' : `<a:lvl1pPr algn="${algn}"><a:defRPr sz="${Math.round(m.footerSize * 100)}"><a:solidFill><a:srgbClr val="${hex6(m.footerColor)}"/></a:solidFill></a:defRPr></a:lvl1pPr>`;
   return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${xml(name)}"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr>${ph}</p:nvPr></p:nvSpPr>` +
     `<p:spPr>${onSlide ? '' : xfrm(r)}</p:spPr>` +

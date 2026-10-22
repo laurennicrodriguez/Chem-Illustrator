@@ -45,7 +45,7 @@ export class ShowActions {
 
   /** Whether something there takes a click (for the pointer). */
   clickable(px: number, py: number): boolean {
-    return !!this.player.actionAt(px, py) || this.player.mediaAt(px, py);
+    return !!this.player.actionAt(px, py) || this.player.mediaAt(px, py) || this.player.triggerAt(px, py);
   }
 
   /** A click at a point on the canvas (CSS pixels): true when something there took it. */
@@ -53,6 +53,12 @@ export class ShowActions {
     const a = this.player.actionAt(px, py);
     if (a) { this.follow(a.link, a.zoom ? { back: !!a.zoom.back, to: a.zoom.to, rect: a.rect } : undefined); return true; }
     if (this.player.clickMedia(px, py)) {
+      const w = this.canvas.clientWidth || 1, h = this.canvas.clientHeight || 1;
+      this.hooks.tapped?.(px / w, py / h);
+      return true;
+    }
+    // an object with a trigger plays its animations (in the audience's window too)
+    if (this.player.fireTrigger(px, py)) {
       const w = this.canvas.clientWidth || 1, h = this.canvas.clientHeight || 1;
       this.hooks.tapped?.(px / w, py / h);
       return true;
@@ -81,8 +87,8 @@ export class ShowActions {
     if (link in SHOW_JUMPS) {
       if (link === '#next') this.hooks.next();
       else if (link === '#prev') this.hooks.prev();
-      else if (link === '#first') this.hooks.go(d.firstShown());
-      else if (link === '#last') this.hooks.go(Math.max(0, d.shownBefore(d.slides.length)));
+      else if (link === '#first') this.hooks.go(this.player.first);
+      else if (link === '#last') this.hooks.go(this.player.last);
       else if (link === '#end') this.hooks.end();
       else if (link === '#return') {
         // the slide before this one in the order they were shown
