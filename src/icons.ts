@@ -62,6 +62,8 @@ export const ICONS: Record<string, string> = {
   'arrow-nogo': svg('<line x1="3" y1="12" x2="18" y2="12"/><path d="M15 8.5l5 3.5-5 3.5z" fill="currentColor"/><path d="M8.5 8.5l4 7M12.5 8.5l-4 7"/>'),
   'arrow-curved': svg('<path d="M4 17A8 8 0 0 1 20 16"/><path d="M20 19.5l-2.9-5.6h5.8z" fill="currentColor" stroke="none"/>'),
   'arrow-fishhook': svg('<path d="M4 17A8 8 0 0 1 20 16"/><path d="M20 19.5l2.9-5.6H20z" fill="currentColor" stroke="none"/>'),
+  'arrow-s': svg('<path d="M3 16C4.5 6 10.5 6 12 12S19.6 19 20 10.6"/><path d="M20 5l2.9 5.6h-5.8z" fill="currentColor" stroke="none"/>'),
+  'arrow-s-fishhook': svg('<path d="M3 16C4.5 6 10.5 6 12 12S19.6 19 20 10.6"/><path d="M20 5l2.9 5.6H20z" fill="currentColor" stroke="none"/>'),
   'shape-rect': svg('<rect x="4" y="6" width="16" height="12"/>'),
   'shape-rect-rounded': svg('<rect x="4" y="6" width="16" height="12" rx="3.5"/>'),
   'shape-rect-shadow': svg('<rect x="3.5" y="5" width="15" height="12"/><path d="M20 7.2v11.8H6" stroke-width="2.4" opacity="0.45" stroke-linecap="butt"/>'),

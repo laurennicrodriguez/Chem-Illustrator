@@ -11,6 +11,7 @@ import { interpretArrow, isReactionArrow, isStep, plainMeasure, schemeItems, typ
 import { SYMBOLS } from '../chem/elements';
 import { labelBonds, labelSpec, layoutLabel, labelDir, labelGraph, tokenize, isGenericLabel, Measure, MiniGraph, kekulize } from '../chem/labels';
 import { Vec, DEG, arcCenter, norm, sub, Rect } from '../geom';
+import { bezPoints } from '../objects';
 import { kids, descendants } from './xml';
 import { arialWidth } from '../text-metrics';
 import { toSymbolPieces, isSymbolFont, faceFromStyle } from '../richtext';
@@ -19,7 +20,7 @@ import { runsForChemDraw, TEXT_TAG } from '../text/chemdraw-text';
 import { ATTACH_TAG, IGNORE_TAG, attachTag } from '../editor/attached';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { fromDataUrl } from '../render/images';
-import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, INSIDE_TAG, GROUP_TAG, GEO_TAG, MORPH_TAG, TURN_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG, HIGHLIGHT_LOOK_TAG, SPOKES_TAG } from './cdxml';
+import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, INSIDE_TAG, GROUP_TAG, GEO_TAG, MORPH_TAG, PIN_TAG, CURVE_ARROW_TAG, TURN_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG, HIGHLIGHT_LOOK_TAG, SPOKES_TAG } from './cdxml';
 import { frameTag } from '../editor/frames';
 import { geoDef, moveSteps, textArea, type GeoStep } from '../design/geo';
 import { FADE, tint } from '../colours';
@@ -1023,14 +1024,17 @@ class CdxmlWriter {
   }
 
   private writeArrow(r: Arrow): void {
-    const e = this.source('r', r.id, ['arrow']);
+    const e = this.source('r', r.id, ['arrow', 'curve']);
     const o = this.orig<Arrow>('r', r.id);
+    // an S-shaped arrow is a ChemDraw curve (and one made back into an arc, an arrow again)
+    if (r.bez?.length || e?.nodeName === 'curve') { this.writeCurveArrow(r, e, o); return; }
     if (e && o) {
       if (!deepEqual(r.morph, o.morph)) { this.writeMorph(e, r); this.changed = true; }
-      if (sameExcept(r, o, ['step', 'reagentFor', 'morph'])) return;
+      if (this.pinValue(r) !== this.pinValue(o)) { this.writePin(e, r); this.changed = true; }
+      if (sameExcept(r, o, ['step', 'reagentFor', 'morph', 'pin'])) return;
       const d = { x: r.tail.x - o.tail.x, y: r.tail.y - o.tail.y };
       const moved = { ...o, tail: r.tail, head: { x: o.head.x + d.x, y: o.head.y + d.y } };
-      if (sameExcept(r, moved, ['step', 'reagentFor', 'morph'])) {
+      if (sameExcept(r, moved, ['step', 'reagentFor', 'morph', 'pin'])) {
         shift(e, d.x, d.y);
         for (const g of this.legacyOf(e)) shift(g, d.x, d.y);
       } else {
@@ -1041,9 +1045,64 @@ class CdxmlWriter {
       const a = this.el('arrow', { id: r.id });
       this.fillArrow(a, r);
       this.writeMorph(a, r);
+      this.writePin(a, r);
       this.page.appendChild(a);
     }
     this.changed = true;
+  }
+
+  /**
+   * An S-shaped arrow as a ChemDraw curve with arrowheads (each point with its handles either
+   * side), its heads kept as they are here in a tag. An arrow saved as a curve and now a plain
+   * arc becomes an arrow again, in the curve's place.
+   */
+  private writeCurveArrow(r: Arrow, e: Element | null, o: Arrow | null): void {
+    if (e && o && sameExcept(r, o, ['step', 'reagentFor', 'morph', 'pin']) && this.pinValue(r) === this.pinValue(o)) return;
+    const pts = bezPoints(r);
+    const el = this.el(pts ? 'curve' : 'arrow', { id: r.id });
+    if (pts) {
+      const n = (pts.length - 1) / 3;
+      const knots: Vec[] = [];
+      for (let i = 0; i <= n; i++) knots.push(i ? pts[3 * i - 1] : pts[0], pts[3 * i], i < n ? pts[3 * i + 1] : pts[3 * i]);
+      const head = r.headStyle === 'full' ? 8 : r.headStyle !== 'none' ? 32 : 0;
+      const tail = r.tailStyle === 'full' ? 16 : r.tailStyle !== 'none' ? 64 : 0;
+      const kinds = head | tail | (r.line === 'dashed' ? 2 : r.line === 'bold' ? 4 : 0);
+      const xs = knots.map((p) => p.x), ys = knots.map((p) => p.y);
+      for (const [k, v] of Object.entries({
+        BoundingBox: box({ x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) }),
+        color: this.colorAttr(r.color), LineWidth: r.lineWidth !== undefined ? f2(r.lineWidth) : null,
+        CurvePoints: knots.map((p) => `${f2(p.x)} ${f2(p.y)}`).join(' '), CurveType: String(kinds),
+      })) this.set(el, k, v);
+      const look = { headStyle: r.headStyle, tailStyle: r.tailStyle, headType: r.headType, line: r.line, headLength: r.headLength, headWidth: r.headWidth };
+      el.appendChild(this.el('objecttag', { TagType: 'String', Name: CURVE_ARROW_TAG, Value: JSON.stringify(look), Visible: 'no' }));
+    } else {
+      this.fillArrow(el, r);
+      this.writeMorph(el, r);
+    }
+    this.writePin(el, r);
+    if (e?.parentNode) {
+      if (e.nodeName === 'arrow') this.removeLegacyArrow(e);
+      e.parentNode.replaceChild(el, e);
+    } else this.page.appendChild(el);
+    this.changed = true;
+  }
+
+  /** An arrow's pins as saved (atoms by node id), or '' when it has none: to see whether they changed. */
+  private pinValue(r: Arrow): string {
+    if (!r.pin) return '';
+    const v: Record<string, unknown> = {};
+    for (const end of ['tail', 'head'] as const) {
+      const p = r.pin[end];
+      if (p) v[end] = { on: p.on, ref: p.ref.map((id) => this.nodeId(id)), at: [Math.round(p.at.x * 1e4) / 1e4, Math.round(p.at.y * 1e4) / 1e4], hand: p.hand };
+    }
+    return JSON.stringify(v);
+  }
+
+  /** What an arrow's ends are stuck to, so they still follow their structure when the file is opened here again. */
+  private writePin(e: Element, r: Arrow): void {
+    for (const c of kids(e)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === PIN_TAG) e.removeChild(c);
+    const v = this.pinValue(r);
+    if (v) e.appendChild(this.el('objecttag', { TagType: 'String', Name: PIN_TAG, Value: v, Visible: 'no' }));
   }
 
   /** The step's animation settings, with atoms named by their nodes' ids in this file. */
@@ -1110,9 +1169,10 @@ class CdxmlWriter {
     const e = this.source('s', s.id, names);
     const o = this.orig<Shape>('s', s.id);
     if (e && o) {
-      if (sameExcept(s, o, [])) return;
+      // (a lone pair's pin is worked out again when the file is opened)
+      if (sameExcept(s, o, ['pin'])) return;
       const dx = s.x1 - o.x1, dy = s.y1 - o.y1;
-      if (sameExcept(s, { ...o, x1: o.x1 + dx, y1: o.y1 + dy, x2: o.x2 + dx, y2: o.y2 + dy }, [])) shift(e, dx, dy);
+      if (sameExcept(s, { ...o, x1: o.x1 + dx, y1: o.y1 + dy, x2: o.x2 + dx, y2: o.y2 + dy }, ['pin'])) shift(e, dx, dy);
       else if (s.kind === 'picture') this.fillPicture(e, s, o.src !== s.src);
       else if (!s.picture) this.fillShape(e, s);
     } else if (pic) {

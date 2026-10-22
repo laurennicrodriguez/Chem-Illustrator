@@ -9,7 +9,105 @@ import { geoDef, flatten, moveSteps, insideOutline, distToOutline, ports } from 
 
 // ------------------------------------------------------------------ arrows
 
-type Curve = Pick<Arrow, 'tail' | 'head' | 'sweep'> & Partial<Pick<Arrow, 'elbow' | 'from' | 'to'>>;
+type Curve = Pick<Arrow, 'tail' | 'head' | 'sweep'> & Partial<Pick<Arrow, 'elbow' | 'from' | 'to' | 'bez'>>;
+
+/** Is this a curved arrow: an arc, or Bézier curves (an S-shaped arrow)? */
+export const isCurved = (r: Pick<Arrow, 'sweep'> & Partial<Pick<Arrow, 'bez'>>): boolean => !!r.sweep || !!r.bez?.length;
+
+/**
+ * Which way a curved arrow turns as it comes into its head: +1 as an arc with a positive sweep
+ * does, −1 the other way. A half head (fishhook) has its barb on the outside of that turn:
+ * halfLeft for +1.
+ */
+export function headBend(r: Pick<Arrow, 'sweep'> & Partial<Pick<Arrow, 'bez'>>): number {
+  if (r.bez?.length) return r.bez[r.bez.length - 1].y > 0 ? -1 : 1;
+  return r.sweep < 0 ? -1 : 1;
+}
+
+/** A half head on the other side. */
+export const swapHalf = (h: Arrow['headStyle']): Arrow['headStyle'] => (h === 'halfLeft' ? 'halfRight' : h === 'halfRight' ? 'halfLeft' : h);
+
+/** A point given in the frame of the line from tail to head (as an arrow's `bez` points are), on the page. */
+export function chordPoint(tail: Vec, head: Vec, q: Vec): Vec {
+  const u = sub(head, tail);
+  return add(tail, add(mul(u, q.x), mul(perp(u), q.y)));
+}
+
+/** A point on the page in the frame of the line from tail to head (the inverse of chordPoint). */
+export function chordLocal(tail: Vec, head: Vec, p: Vec): Vec {
+  const u = sub(head, tail);
+  const l2 = dot(u, u) || 1;
+  const d = sub(p, tail);
+  return { x: dot(d, u) / l2, y: dot(d, perp(u)) / l2 };
+}
+
+/** A Bézier arrow's control points on the page: the tail, then two controls and an end for each curve (3n + 1 points). */
+export function bezPoints(r: Pick<Arrow, 'tail' | 'head'> & Partial<Pick<Arrow, 'bez'>>): Vec[] | null {
+  if (!r.bez?.length || (r.bez.length + 1) % 3) return null;
+  return [r.tail, ...r.bez.map((q) => chordPoint(r.tail, r.head, q)), r.head];
+}
+
+/** The point at t (0 to 1) on one cubic Bézier curve. */
+export function bezAt(p: Vec[], t: number, i = 0): Vec {
+  const [a, b, c, d] = [p[i], p[i + 1], p[i + 2], p[i + 3]];
+  const u = 1 - t;
+  return {
+    x: u * u * u * a.x + 3 * u * u * t * b.x + 3 * u * t * t * c.x + t * t * t * d.x,
+    y: u * u * u * a.y + 3 * u * u * t * b.y + 3 * u * t * t * c.y + t * t * t * d.y,
+  };
+}
+
+/** One cubic curve (four points) cut at t: the part before and the part after. */
+export function splitBez(p: Vec[], t: number): [Vec[], Vec[]] {
+  const lerp = (a: Vec, b: Vec) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+  const ab = lerp(p[0], p[1]), bc = lerp(p[1], p[2]), cd = lerp(p[2], p[3]);
+  const abc = lerp(ab, bc), bcd = lerp(bc, cd), m = lerp(abc, bcd);
+  return [[p[0], ab, abc, m], [m, bcd, cd, p[3]]];
+}
+
+/**
+ * Where along a run of curves (as bezPathAt counts) an arrow head `reach` long has its base:
+ * the last point (or, from the tail, the first) that far from the end, but no further in than
+ * half way.
+ */
+export function bezHeadBack(pts: Vec[], reach: number, atTail: boolean): number {
+  const n = (pts.length - 1) / 3;
+  const tip = atTail ? pts[0] : pts[pts.length - 1];
+  const at = (k: number) => (atTail ? k : n - k);
+  const steps = 48 * n;
+  let lo = 0, hi = n / 2;
+  for (let i = 1; i <= steps / 2; i++) {
+    const k = (n * i) / steps;
+    if (dist(bezPathAt(pts, at(k)), tip) >= reach) { hi = k; lo = (n * (i - 1)) / steps; break; }
+  }
+  for (let j = 0; j < 20 && hi - lo > 1e-5; j++) {
+    const mid = (lo + hi) / 2;
+    if (dist(bezPathAt(pts, at(mid)), tip) >= reach) hi = mid; else lo = mid;
+  }
+  return at(hi);
+}
+
+/** The part of a run of cubic curves from t0 to t1 (as bezPathAt counts), as a run of curves. */
+export function bezSlice(pts: Vec[], t0: number, t1: number): Vec[] {
+  const n = (pts.length - 1) / 3;
+  const out: Vec[] = [];
+  for (let k = 0; k < n; k++) {
+    const a = Math.max(0, t0 - k), b = Math.min(1, t1 - k);
+    if (b <= a) continue;
+    let seg = pts.slice(3 * k, 3 * k + 4);
+    if (b < 1) seg = splitBez(seg, b)[0];
+    if (a > 0) seg = splitBez(seg, a / b)[1];
+    out.push(...(out.length ? seg.slice(1) : seg));
+  }
+  return out;
+}
+
+/** The point at `t` along a run of cubic curves (0 at the start, the number of curves at the end). */
+export function bezPathAt(pts: Vec[], t: number): Vec {
+  const n = (pts.length - 1) / 3;
+  const k = Math.min(n - 1, Math.max(0, Math.floor(t)));
+  return bezAt(pts, Math.min(1, Math.max(0, t - k)), 3 * k);
+}
 
 // ------------------------------------------------------------------ connectors
 
@@ -78,6 +176,8 @@ export function elbowRoute(r: Curve): Vec[] {
 
 /** Point halfway along an arrow (on the arc, for curved arrows). */
 export function arrowMid(r: Curve): Vec {
+  const bz = bezPoints(r);
+  if (bz) return bezPathAt(bz, (bz.length - 1) / 6);
   if (!r.sweep) return mul(add(r.tail, r.head), 0.5);
   const { center, radius } = arcCenter(r.tail, r.head, r.sweep);
   return add(center, fromAngle(angleOf(sub(r.tail, center)) + r.sweep / 2, radius));
@@ -100,6 +200,11 @@ export function sweepThrough(tail: Vec, head: Vec, p: Vec): number {
 /** Points along an arrow's line (two for a straight arrow), for highlighting and bounds. */
 export function arrowPoints(r: Curve, steps = 24): Vec[] {
   if (r.elbow) return elbowRoute(r);
+  const bz = bezPoints(r);
+  if (bz) {
+    const n = (bz.length - 1) / 3;
+    return Array.from({ length: steps + 1 }, (_, i) => bezPathAt(bz, (n * i) / steps));
+  }
   if (!r.sweep) return [r.tail, r.head];
   const { center, radius } = arcCenter(r.tail, r.head, r.sweep);
   const a0 = angleOf(sub(r.tail, center));
@@ -121,6 +226,11 @@ export function arrowBox(r: Arrow): Rect {
 export function arrowHit(r: Arrow, p: Vec, tol: number): boolean {
   if (r.elbow) {
     const pts = elbowRoute(r);
+    for (let i = 1; i < pts.length; i++) if (distToSegment(p, pts[i - 1], pts[i]) <= tol) return true;
+    return false;
+  }
+  if (r.bez?.length) {
+    const pts = arrowPoints(r, 48);
     for (let i = 1; i < pts.length; i++) if (distToSegment(p, pts[i - 1], pts[i]) <= tol) return true;
     return false;
   }
@@ -252,7 +362,7 @@ export function shapeHit(s: Shape, p: Vec, tol: number): boolean {
 
 // ------------------------------------------------------------------ handles
 
-export type HandleId = 'tail' | 'head' | 'mid' | 'p1' | 'p2' | 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
+export type HandleId = 'tail' | 'head' | 'mid' | `b${number}` | 'p1' | 'p2' | 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
 
 export interface Handle {
   kind: 'arrow' | 'shape';
@@ -263,6 +373,9 @@ export interface Handle {
 
 export function arrowHandles(r: Arrow): Handle[] {
   const h = (which: HandleId, at: Vec): Handle => ({ kind: 'arrow', id: r.id, which, at });
+  // an S-shaped (Bézier) arrow: a handle on each control point (and join) instead of the middle
+  const bz = bezPoints(r);
+  if (bz) return [h('tail', r.tail), h('head', r.head), ...bz.slice(1, -1).map((p, i) => h(`b${i}`, p))];
   // an elbow connector's bends follow its ends, so it has no middle handle
   return r.elbow ? [h('tail', r.tail), h('head', r.head)] : [h('tail', r.tail), h('head', r.head), h('mid', arrowMid(r))];
 }
@@ -369,6 +482,11 @@ export function dragArrowHandle(r: Arrow, which: HandleId, p: Vec, free: boolean
     let q = snapEnd(other, p, free);
     if (dist(q, other) < 2) q = add(other, mul(sub(which === 'tail' ? r.tail : r.head, other), 2 / Math.max(dist(r.tail, r.head), 1e-6)));
     return which === 'tail' ? { tail: q } : { head: q };
+  }
+  // a control point of an S-shaped arrow goes where it is dragged
+  if (which[0] === 'b' && r.bez) {
+    const k = Number(which.slice(1));
+    return { bez: r.bez.map((q, i) => (i === k ? chordLocal(r.tail, r.head, p) : q)) };
   }
   // dragging the middle bends the arrow into an arc through the pointer, in 15° steps
   let sweep = sweepThrough(r.tail, r.head, p);

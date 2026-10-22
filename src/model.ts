@@ -5,6 +5,7 @@
 import { Vec, Rect } from './geom';
 import { DocStyle, ACS_1996 } from './style';
 import { arrowPoints, gluePoint } from './objects';
+import { followPins } from './chem/pins';
 import type { EnergyData } from './design/energy';
 import { isMetal, isMetalLabel, lowestValence } from './chem/elements';
 import { NICKNAMES } from './chem/labels';
@@ -462,6 +463,34 @@ export interface Arrow {
   elbow?: boolean;
   /** How this step animates (Scheme > Animate Reaction): the atom pairing and moves chosen for it. */
   morph?: MorphStep;
+  /**
+   * A curved arrow drawn along Bézier curves instead of an arc (an S-shaped arrow: one curve
+   * whose two control points lie on opposite sides). The control points (and the joins between
+   * curves) after the tail, in the frame of the line from tail to head: x along it, y across it
+   * (towards perp of that line), both as fractions of its length. Two per curve plus a join
+   * between curves; the arrow follows its ends this way, as an arc does with its sweep.
+   */
+  bez?: Vec[];
+  /** What an electron-pushing arrow's ends are stuck to, so they follow the structure when it moves. */
+  pin?: { tail?: Pin; head?: Pin };
+}
+
+/**
+ * Where something is stuck to a structure (an arrow's end, a lone pair or charge on an atom):
+ * a point held in the frame of up to three atoms (the one it is on, one that sets the direction
+ * and one that tells a mirror image apart), so it moves, turns and flips with them.
+ */
+export interface Pin {
+  /** What it sits on: an atom (or the lone pair drawn on it), a bond, or the gap where a bond will form. */
+  on: 'atom' | 'bond' | 'gap';
+  /** The atoms whose places frame it: the atom (or a bond's or gap's two ends), then the ones that set direction and handedness. */
+  ref: number[];
+  /** The point in that frame, in lengths of the line from the first atom to the second (points when there is no second). */
+  at: Vec;
+  /** Which side the third atom was on when it was stuck (+1 or −1), to see a mirror image. */
+  hand: number;
+  /** Where the point was when it was last put in place: when it is elsewhere, it was moved by hand. */
+  was: Vec;
 }
 
 /**
@@ -510,6 +539,8 @@ export interface Shape {
    */
   ring?: number[];
   poly?: { x: number; y: number }[];
+  /** A lone pair, radical dot or circled charge stuck to its atom: it goes where the atom goes. */
+  pin?: Pin;
   /** A design shape (kind 'geo'): which one, from the shape library (design/geo.ts). */
   geo?: string;
   /** Text inside a design shape: wraps to the shape's text area and moves with it. */
@@ -844,6 +875,8 @@ export class Doc {
     const tx = this.tx;
     if (!tx) return;
     this.dropLoneCentres(tx.before);
+    // arrow ends, lone pairs and charges stuck to atoms that moved go with them
+    if (tx.before.size) followPins(this, tx.before);
     if (tx.before.size && this.beforeCommit) this.beforeCommit(new Map(tx.before));
     this.tx = null;
     if (tx.before.size === 0) return;
@@ -891,6 +924,7 @@ export class Doc {
     const tx = this.tx!;
     try {
       fn();
+      if (tx.before.size) followPins(this, tx.before);
       if (tx.before.size && this.beforeCommit) this.beforeCommit(new Map(tx.before));
     } finally {
       this.tx = null;
@@ -1011,7 +1045,7 @@ export class Doc {
     } else if (kind === 'c') this.dirtyCaptions.push(e as Caption);
     else if (kind === 'r') {
       const r = e as Arrow;
-      const pad = r.sweep ? Math.hypot(r.head.x - r.tail.x, r.head.y - r.tail.y) : r.headWidth + 2;
+      const pad = r.sweep || r.bez ? Math.hypot(r.head.x - r.tail.x, r.head.y - r.tail.y) * (r.bez ? 1.5 : 1) : r.headWidth + 2;
       this.dirtyRects.push({ x1: Math.min(r.tail.x, r.head.x) - pad, y1: Math.min(r.tail.y, r.head.y) - pad, x2: Math.max(r.tail.x, r.head.x) + pad, y2: Math.max(r.tail.y, r.head.y) + pad });
     } else {
       const sh = e as Shape;

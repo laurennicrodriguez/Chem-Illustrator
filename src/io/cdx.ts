@@ -30,7 +30,7 @@ const OBJECT_NAMES = new Map(Object.entries(OBJECTS).map(([k, v]) => [v, k]));
 
 type Kind =
   | 'i8' | 'u8' | 'i16' | 'u16' | 'i32' | 'u32' | 'f64'
-  | 'coord' | 'pt2' | 'pt3' | 'rect' | 'str' | 'id' | 'ids' | 'idsCounted' | 'i16list'
+  | 'coord' | 'pt2' | 'pt3' | 'rect' | 'str' | 'id' | 'ids' | 'idsCounted' | 'i16list' | 'curvepts'
   | 'bool' | 'implied' | 'hex'
   | 'x10' | 'deg65536' // INT16 stored ×10 (bond spacing, arc angles); INT32 angle × 65536
   | 'x20' // line heights: UINT16 in 1/20 pt, with 0 and 1 kept for "variable" and "auto"
@@ -216,6 +216,8 @@ const P: Record<string, Prop> = {
   SymbolType: { tag: 0x0a07, kind: 'enum16', values: list('LonePair', 'Electron', 'RadicalCation', 'RadicalAnion', 'CirclePlus', 'CircleMinus', 'Dagger', 'DoubleDagger', 'Plus', 'Minus', 'Racemic', 'Absolute', 'Relative') },
   OrbitalType: { tag: 0x0a05, kind: 'enum16', values: { s: 0 } }, // only "s" (0) is confirmed
   CurveType: { tag: 0x0a08, kind: 'i16' },
+  // a count, then each point y first (as 2D points are)
+  CurvePoints: { tag: 0x0a23, kind: 'curvepts' },
   HeadSize: { tag: 0x0a20, kind: 'i16' },
   AngularSize: { tag: 0x0a21, kind: 'x10' },
   LipSize: { tag: 0x0a22, kind: 'i16' },
@@ -398,6 +400,7 @@ function encodeValue(p: Prop, v: string): Uint8Array | null {
     case 'ids': for (const x of n) b.u32(x); break;
     case 'idsCounted': b.u16(n.length); for (const x of n) b.u32(x); break;
     case 'i16list': b.u16(n.length); for (const x of n) b.u16(x); break;
+    case 'curvepts': b.u16(n.length >> 1); for (let i = 0; i + 1 < n.length; i += 2) { b.i32(fix(n[i + 1])); b.i32(fix(n[i])); } break;
     case 'bool': if (v !== 'yes' && v !== 'no') return null; b.u8(v === 'yes' ? 1 : 0); break;
     case 'implied': if (v !== 'yes') return null; break;
     case 'hex': for (let i = 0; i + 1 < v.length; i += 2) b.u8(parseInt(v.slice(i, i + 2), 16)); break;
@@ -597,6 +600,15 @@ function decodeValue(p: Prop, d: Uint8Array): string | null {
     case 'x20': { const x = int(false); return x === null ? null : name(x) ?? fmt(x / 20); }
     case 'deg65536': case 'coord': return len >= 4 ? fmt(i32(0)) : null;
     case 'pt2': return len >= 8 ? `${fmt(i32(1))} ${fmt(i32(0))}` : null;
+    case 'curvepts': {
+      const count = len >= 2 ? v.getUint16(0, true) : 0;
+      const out: string[] = [];
+      for (let i = 0; i < count && 2 + 8 * i + 8 <= len; i++) {
+        const at = (k: number) => v.getInt32(2 + 8 * i + 4 * k, true) / 65536;
+        out.push(`${fmt(at(1))} ${fmt(at(0))}`);
+      }
+      return out.length ? out.join(' ') : null;
+    }
     case 'pt3': return len >= 12 ? `${fmt(i32(0))} ${fmt(i32(1))} ${fmt(i32(2))}` : null;
     case 'rect': return len >= 16 ? `${fmt(i32(1))} ${fmt(i32(0))} ${fmt(i32(3))} ${fmt(i32(2))}` : null;
     case 'str': {
