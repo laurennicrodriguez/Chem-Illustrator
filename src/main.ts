@@ -12,7 +12,8 @@ import './app.css';
 import type { MethylStyle } from './chem/hydrogens';
 import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
-import { Toolboxes, lockIcon, sideFolded, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
+import { Toolboxes, lockIcon, sideFolded, commandButton, defaultToolboxes, menuCommands, boxIds, boxItems, boxTitle, isEditable, isOwnBox, type Pickable, type ToolboxDef, type ToolboxState } from './ui/toolboxes';
+import { ToolboxEditor } from './ui/toolbox-editor';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
 import { Doc, Atom, Caption, Shape, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle, type ShapeMath, PAPER, keepOnPage } from './model';
 import { Renderer, measureText, forgetTextWidths } from './render/renderer';
@@ -46,7 +47,7 @@ import { writeCdxml } from './io/cdxml-write';
 import { WORKSPACE, folderOf } from './io/workspace-file';
 import { askLink, followLink, setLinkHost, type LinkPlace } from './ui/links-ui';
 import { SHOW_JUMPS, cellOfLink, linkSpans, normalizeLink, removeLink, setLink, slideOfLink } from './links';
-import { openFileDialog, openBytesDialog, openAnyBytesDialog, stampOf, readRef, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, setEmbeddedWriter, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, DOCX, PICTURE_EXTENSIONS, type FileType } from './io/files';
+import { openFileDialog, openBytesDialog, openAnyBytesDialog, stampOf, readRef, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, setEmbeddedWriter, KEYMAP_FILE, SETTINGS_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, DOCX, PICTURE_EXTENSIONS, type FileType } from './io/files';
 import { readPptx } from './io/pptx-read';
 import { pickReuseSlides } from './ui/reuse-slides';
 import { writeTiff } from './render/tiff';
@@ -121,7 +122,7 @@ import { PAPERS, defaultPaper, orient, placeIn, inside, placeSvg, pageSvg } from
 import { printPages } from './ui/print';
 import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc, webpToPng } from './render/images';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, ringDir } from './chem/chemgeom';
-import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
+import { Toolbar, ToolbarItem, PaletteDef, type ToolDef } from './ui/toolbar';
 import { StylePanel, tidyStyle } from './ui/style-panel';
 import { installCombos } from './ui/combo';
 import { installFontList, registerBundledFonts, bundledFaces, pdfFonts } from './fonts';
@@ -140,7 +141,8 @@ import { plainText, savableChar } from './richtext';
 import { LiveStereo } from './chem/live-stereo';
 import { setStereoShown, shownDescriptor, axialStyle } from './chem/stereo';
 import { keymap, registerToolNames, displayChord, actionName, chordOf, parseAction, KeyContext, KeyOverrides } from './editor/keymap';
-import { loadSettings, saveSettings, settingsLocation, Settings } from './settings';
+import { loadSettings, saveSettings, settingsLocation, exportText, importSettings, Settings } from './settings';
+import { showDialog } from './ui/dialog-host';
 import { HotkeysDialog } from './ui/hotkeys-dialog';
 import { TypingDialog } from './ui/typing-dialog';
 import { ModeColoursDialog, ModeColours, DEFAULT_MODE_COLOURS, applyModeColours } from './ui/mode-colours';
@@ -436,6 +438,17 @@ for (const group of [...TOOL_GROUPS, OFF_BAR]) {
 }
 registerToolNames(toolNames);
 
+/** Each fly-out palette by name, and the palette each tool in one comes in (for its picture). */
+const PALETTES = new Map<string, PaletteDef>();
+const TOOL_PALETTE = new Map<string, PaletteDef>();
+for (const group of TOOL_GROUPS) for (const item of group) {
+  if (!('palette' in item)) continue;
+  PALETTES.set(item.palette, item);
+  for (const t of item.items) TOOL_PALETTE.set(t.name, item);
+}
+/** What the Drawing Tools toolbox comes with: the tool bar's groups, a divider between each. */
+const MAIN_ITEMS: string[] = TOOL_GROUPS.flatMap((g, i) => [...(i ? ['sep'] : []), ...g.map((it) => ('palette' in it ? `pal:${it.palette}` : `tool:${it.name}`))]);
+
 const periodicTable = new PeriodicTable((z) => editor.pickElement(z), () => editor.element);
 const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => {
   if (name === OWN_ADD) { void saveTemplate(); return; }
@@ -443,7 +456,7 @@ const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => 
 }, (name) => {
   const keys = keysOf('space', `tool ${name}`);
   return keys.length ? ` (${keys.join(', ')})` : '';
-});
+}, (name, size) => TOOL_PALETTE.get(name)?.icon?.(name, size));
 
 const HINTS: Record<string, string> = {
   connector: 'Drag from one shape\'s blue dot to another\'s: the connector sticks to both and follows them when they move.',
@@ -4182,7 +4195,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['new-from-template', 'check-accessibility', 'format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+const ANY_TAB = new Set(['new-from-template', 'check-accessibility', 'format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'export-settings', 'import-settings', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'title-bar-in-menu', 'collapse-ribbon', 'page-edge', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
   'help', 'about', 'user-guide', 'help-here', 'send-feedback', 'report-problem', 'check-updates']);
 
@@ -4314,6 +4327,8 @@ async function compareSlides(): Promise<void> {
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
+  // View > Toolboxes: one of your own
+  if (name.startsWith('toolbox-own-')) { toolboxes.toggle(name.slice('toolbox-'.length)); return true; }
   if (sheetActive()) {
     const own = SHEET_COMMANDS[name];
     if (own) return own() !== false;
@@ -4712,6 +4727,8 @@ const COMMANDS: Record<string, () => unknown> = {
   // the panel taken out as a toolbox folds up to its title bar; at the right it folds to a strip
   'fold-side': () => foldSide(!sideIsFolded()),
   'customize-toolbox': () => openCustomToolbox(),
+  'export-settings': () => void exportSettings(),
+  'import-settings': () => void importSettingsFile(),
   'lock-toolboxes': () => { toolboxes.setLocked(!toolboxState.locked); flash(toolboxState.locked ? 'Toolboxes locked.' : 'Toolboxes unlocked: drag one by its title to an edge of the drawing to dock it, or anywhere else to float.', 6000); },
   'add-frame': () => editor.addFrame() || flash('Select what to frame: structures, text, arrows or shapes.'),
   'fill-rings': () => flash(editor.fillRings(), 6000),
@@ -5765,7 +5782,12 @@ onPalettes(() => storeSettings());
 /** Save the key map and preferences (after the saved ones have been read, so they aren't lost). */
 function storeSettings(): void {
   if (!settingsLoaded) return;
-  const s: Settings = {
+  saveSettings(currentSettings(), (msg) => flash(msg, 10000));
+}
+
+/** Every setting as it is now. */
+function currentSettings(): Settings {
+  return {
     hotkeys: keymap.overrides(),
     keepHotspotOnBond: editor.options.keepHotspotOnBond,
     fixedLength: editor.options.fixedLength,
@@ -5836,7 +5858,45 @@ function storeSettings(): void {
     quickParts: docQuickParts,
     docDesign: newDocDesign(),
   };
-  saveSettings(s, (msg) => flash(msg, 10000));
+}
+
+// ---------------------------------------------------------------- Edit > Export Settings and Import Settings
+
+/** Save every setting in one file, to keep or to use on another computer. */
+async function exportSettings(say: (text: string) => void = flash): Promise<void> {
+  const target = await saveFileDialog('Chem Illustrator settings.json', SETTINGS_FILE).catch((e) => { say(String(e)); return null; });
+  if (!target) return;
+  await writeFile(target.ref, target.name, exportText(currentSettings()), SETTINGS_FILE).then(
+    () => say(`Saved every setting in ${target.name}. Import it on another computer (Edit > Import Settings) to set that one up the same.`),
+    (e) => say(`Could not save the settings: ${e}`),
+  );
+}
+
+/** Use the settings saved in a file with Export Settings (or the keys from a hotkeys file). */
+async function importSettingsFile(say: (text: string) => void = flash): Promise<void> {
+  const got = await openFileDialog([SETTINGS_FILE]).catch((e) => { say(String(e)); return null; });
+  if (!got) return;
+  const read = importSettings(got.text, currentSettings());
+  if (!read) { say(`${got.name} isn't a Chem Illustrator settings file (use one saved with Export Settings).`); return; }
+  applySettings(read.settings);
+  storeSettings();
+  say(read.only === 'hotkeys' ? `Using the keys from ${got.name}.` : `Using the settings from ${got.name}: keys, toolboxes, preferences, templates, nicknames, styles and palettes. Your recent files stay as they were.`);
+}
+
+/** Settings > Import and Export: both, with a word on what goes in the file. */
+function settingsTransfer(): void {
+  const d = document.createElement('dialog');
+  d.className = 'ask settings-transfer';
+  d.innerHTML = `<h2>Import and Export Settings</h2>
+    <p class="muted">One file holds every setting: hotkeys, toolboxes (and what is in them), preferences, your templates, nicknames, drawing styles, colour palettes, slide themes and highlight looks. Export it to keep a copy, or to set up another computer or a new install the same way; Import uses one. Recent files stay on each computer.</p>
+    <div class="ask-buttons"><button type="button" data-act="export">Export Settings…</button><button type="button" data-act="import">Import Settings…</button><button type="button" class="primary" data-act="close">Close</button></div>
+    <p class="muted small" aria-live="polite"></p>`;
+  const say = (t: string) => { d.querySelector('p.small')!.textContent = t; };
+  d.querySelector('[data-act=export]')!.addEventListener('click', () => void exportSettings(say));
+  d.querySelector('[data-act=import]')!.addEventListener('click', () => void importSettingsFile(say));
+  d.querySelector('[data-act=close]')!.addEventListener('click', () => d.close());
+  d.addEventListener('close', () => d.remove());
+  showDialog(d);
 }
 
 /** The key for a menu command as things are now (in Slides mode PowerPoint's keys come first, in sheets Excel's). */
@@ -5926,7 +5986,8 @@ const hotkeysDialog = new HotkeysDialog({
   },
 });
 
-void loadSettings().then((s) => {
+/** Use these settings: at start, and when settings are imported (Edit > Import Settings). */
+function applySettings(s: Settings): void {
   editor.options.keepHotspotOnBond = s.keepHotspotOnBond;
   editor.options.fixedLength = s.fixedLength;
   editor.options.fixedAngles = s.fixedAngles;
@@ -6011,6 +6072,11 @@ void loadSettings().then((s) => {
   tickToolboxes();
   placeSidePanel();
   tickMethylStyle();
+  refreshKeys();
+}
+
+void loadSettings().then((s) => {
+  applySettings(s);
   settingsLoaded = true;
   void keeper.start();
   void openOutsideFiles();
@@ -7229,9 +7295,6 @@ function toolButton(name: string): HTMLButtonElement | null {
 
 const runFromToolbox = (cmd: string) => { finishTyping(); command(cmd); };
 const sep = () => { const d = document.createElement('div'); d.className = 'tb-sep'; return d; };
-const cmdRow = (body: HTMLElement, cmds: (string | [string, string] | null)[]) => {
-  for (const c of cmds) body.append(!c ? sep() : typeof c === 'string' ? commandButton(c, runFromToolbox) : commandButton(c[0], runFromToolbox, c[1]));
-};
 
 /** What the Colours toolbox's swatches do: colour the lines and text, highlight, or fill. */
 let colourMode: 'line' | 'highlight' | 'fill' = 'line';
@@ -7263,110 +7326,151 @@ function looksList(vertical: boolean): HTMLElement {
   return box;
 }
 
-const TOOLBOX_DEFS: ToolboxDef[] = [
-  { id: 'main', title: 'Drawing Tools', build: (body) => body.append(toolsNav) },
-  {
-    id: 'structure', title: 'Structure',
-    build: (body) => cmdRow(body, ['clean-up', 'add-frame', 'fill-rings', 'highlight', 'remove-highlight', null, 'chain-ends', 'explicit-h', 'aromatic-circles', 'stereo-labels', null, 'add-id-label', 'add-caption', 'attach-descriptors', 'number-compounds', null, 'contract-label', 'expand-label', 'hapto-bond', 'name-to-structure']),
-  },
-  {
-    id: 'arrange', title: 'Object',
-    build: (body) => cmdRow(body, ['align-left', 'align-hcenter', 'align-right', 'align-top', 'align-vcenter', 'align-bottom', null, 'distribute-h', 'distribute-v', null, 'flip-h', 'flip-v', 'rotate-cw', 'rotate-ccw', null, 'shape-front', 'shape-back']),
-  },
-  {
-    id: 'templates', title: 'Templates',
-    build: (body, vertical) => {
-      // (many templates: the box scrolls rather than run off the window)
-      body.classList.add('tb-grid', 'tb-scroll');
-      body.style.setProperty('--cols', vertical ? '2' : '12');
-      for (const group of TOOL_GROUPS) for (const item of group) {
-        if (!('palette' in item) || !item.palette.startsWith('tpl-') || item.palette === 'tpl-own') continue;
-        // a heading over each palette's buttons, so the families are easy to find
-        const head = document.createElement('div');
-        head.className = 'tb-heading';
-        head.textContent = head.title = item.title;
-        body.append(head);
-        for (const t of item.items) { const b = toolButton(t.name); if (b) body.append(b); }
-      }
-    },
-  },
-  {
-    id: 'colours', title: 'Colours',
-    build: (body, vertical) => {
-      const modes = document.createElement('div');
-      modes.className = 'tb-modes';
-      // in Highlight mode, the saved looks too
-      const looks = looksList(vertical);
-      looks.hidden = colourMode !== 'highlight';
-      for (const [m, label, title] of [['line', 'Colour', 'Colour the lines and text'], ['highlight', 'Highlight', 'A band of colour behind atoms and bonds'], ['fill', 'Fill', 'Fill shapes and ring fills']] as const) {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.textContent = label;
-        b.title = title;
-        b.setAttribute('aria-pressed', String(colourMode === m));
-        b.addEventListener('click', () => { colourMode = m; for (const o of modes.children) o.setAttribute('aria-pressed', String(o === b)); looks.hidden = m !== 'highlight'; });
-        modes.append(b);
-      }
-      const grid = document.createElement('div');
-      grid.className = 'tb-swatches';
-      const swatch = (c: string | undefined) => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'tb-swatch';
-        if (c) b.style.background = c; else { b.textContent = '∅'; b.style.fontSize = '11px'; }
-        b.title = c ? c.toUpperCase() : 'None: take the colour, highlight or fill off';
-        b.setAttribute('aria-label', b.title);
-        b.addEventListener('click', () => {
-          if (!editor.colourSelection(c, colourMode)) flash('Select what to colour first.');
-          else if (colourMode === 'highlight' && c) highlightColour = c;
-        });
-        return b;
-      };
-      grid.append(swatch(undefined));
-      for (const c of [...STANDARD_COLOURS, '#ffffff']) grid.append(swatch(c));
-      for (const p of getPalettes()) {
-        if (!p.colors.length) continue;
-        const n = document.createElement('div');
-        n.className = 'tb-swatch-name';
-        n.textContent = p.name;
-        grid.append(n, ...p.colors.map((c) => swatch(c)));
-      }
-      body.append(modes, grid, looks);
-      if (vertical) body.style.maxWidth = '110px';
-    },
-  },
-  {
-    id: 'highlight', title: 'Highlight',
-    build: (body, vertical) => {
-      cmdRow(body, ['highlight', 'remove-highlight', null, ['smooth-highlight', 'Smooth'], ['centre-highlight', 'Centre'], ['soft-highlight', 'Soft'], ['outline-highlight', 'Outline only'], ['shadow-highlight', 'Shadow'], ['glow-highlight', 'Glow'], null, ['save-highlight-look', 'Save look…']]);
-      body.append(looksList(vertical));
-    },
-  },
-  {
-    id: 'custom', title: 'My Toolbox',
-    build: (body) => {
-      for (const k of toolboxState.custom) {
-        const [kind, name] = [k.slice(0, k.indexOf(':')), k.slice(k.indexOf(':') + 1)];
-        const b = kind === 'tool' ? toolButton(name) : commandButton(name, runFromToolbox);
-        if (b) body.append(b);
-      }
-      const edit = commandButton('customize-toolbox', runFromToolbox, toolboxState.custom.length ? '…' : 'Choose what goes here…');
-      edit.title = 'Choose What Is in My Toolbox';
-      body.append(edit);
-    },
-  },
-];
+/** The toolboxes' names, as they come. */
+const BOX_TITLES: Record<string, string> = {
+  main: 'Drawing Tools', structure: 'Structure', arrange: 'Object', templates: 'Templates', colours: 'Colours', highlight: 'Highlight', custom: 'My Toolbox', details: 'Side Panel',
+};
+/** What the toolboxes of buttons come with ("cmd:", "tool:", "pal:", "w:looks", "sep"). */
+const cmds = (list: (string | null)[]) => list.map((c) => (c ? `cmd:${c}` : 'sep'));
+const BOX_ITEMS: Record<string, readonly string[]> = {
+  main: MAIN_ITEMS,
+  structure: cmds(['clean-up', 'add-frame', 'fill-rings', 'highlight', 'remove-highlight', null, 'chain-ends', 'explicit-h', 'aromatic-circles', 'stereo-labels', null, 'add-id-label', 'add-caption', 'attach-descriptors', 'number-compounds', null, 'contract-label', 'expand-label', 'hapto-bond', 'name-to-structure']),
+  arrange: cmds(['align-left', 'align-hcenter', 'align-right', 'align-top', 'align-vcenter', 'align-bottom', null, 'distribute-h', 'distribute-v', null, 'flip-h', 'flip-v', 'rotate-cw', 'rotate-ccw', null, 'shape-front', 'shape-back']),
+  highlight: [...cmds(['highlight', 'remove-highlight', null, 'smooth-highlight', 'centre-highlight', 'soft-highlight', 'outline-highlight', 'shadow-highlight', 'glow-highlight', null, 'save-highlight-look']), 'w:looks'],
+  custom: defaultToolboxes().custom,
+};
+/** Short names on toolbox buttons for commands with no icon. */
+const SHORT_LABEL: Record<string, string> = {
+  'smooth-highlight': 'Smooth', 'centre-highlight': 'Centre', 'soft-highlight': 'Soft', 'outline-highlight': 'Outline only',
+  'shadow-highlight': 'Shadow', 'glow-highlight': 'Glow', 'save-highlight-look': 'Save look…',
+};
 
-// The side panel (Style, Warnings, Analysis; Format in documents, Cell in sheets) is a toolbox,
-// docked at the right to start with. Its arrow goes with it, so it shows even when the title bar is
-// locked away.
-TOOLBOX_DEFS.push({ id: 'details', title: 'Side Panel', build: (body) => { body.before($('#side-fold')); body.append(sideContent); } });
+/** A fly-out palette with the tools Customize Toolboxes gave it (null when it has none). */
+function paletteNow(name: string): PaletteDef | null {
+  const base = PALETTES.get(name);
+  if (!base) return null;
+  const own = toolboxState.flyouts?.[name];
+  // (My templates holds what you save, so its tools aren't chosen)
+  if (!own || name === 'tpl-own') return base.items.length ? base : null;
+  const items = own.map((n) => base.items.find((i) => i.name === n) ?? (ALL_TOOLS.has(n) ? { name: n, title: ALL_TOOLS.get(n)!.title } : null)).filter((x): x is { name: string; title: string } => !!x);
+  return items.length ? { ...base, items } : null;
+}
 
-const toolboxes = new Toolboxes(TOOLBOX_DEFS, {
+/** A toolbox's buttons, as Customize Toolboxes has them: tools, palettes, commands, dividers and the highlight looks. */
+function buildBox(body: HTMLElement, id: string, vertical: boolean): void {
+  const items = boxItems(toolboxState, id, BOX_ITEMS[id]);
+  if (id === 'main') {
+    // the tool bar, in groups between the dividers
+    const groups: (ToolbarItem | HTMLElement)[][] = [[]];
+    for (const k of items) {
+      if (k === 'sep') { groups.push([]); continue; }
+      const name = k.slice(k.indexOf(':') + 1);
+      const g = groups[groups.length - 1];
+      if (k.startsWith('tool:')) { const t = ALL_TOOLS.get(name); if (t) g.push({ name, title: t.title }); }
+      else if (k.startsWith('pal:')) { const p = paletteNow(name); if (p) g.push(p); }
+      else if (k.startsWith('cmd:')) g.push(commandButton(name, runFromToolbox, SHORT_LABEL[name]));
+      else if (k === 'w:looks') g.push(looksList(true));
+    }
+    toolbar.fill(groups);
+    body.append(toolsNav);
+    return;
+  }
+  for (const k of items) {
+    const name = k.slice(k.indexOf(':') + 1);
+    let b: HTMLElement | null = null;
+    if (k === 'sep') b = sep();
+    else if (k.startsWith('tool:')) b = toolButton(name);
+    else if (k.startsWith('pal:')) { const p = paletteNow(name); b = p && toolbar.paletteButton(p); }
+    else if (k.startsWith('cmd:')) b = commandButton(name, runFromToolbox, SHORT_LABEL[name]);
+    else if (k === 'w:looks') b = looksList(vertical);
+    if (b) body.append(b);
+  }
+  if (!items.length) {
+    const edit = commandButton('customize-toolbox', () => openCustomToolbox(id), 'Choose what goes here…');
+    edit.title = 'Customize Toolboxes: drag tools and commands into this one';
+    body.append(edit);
+  }
+}
+
+/** The toolboxes laid out by the app itself (the rest show buttons chosen in Customize Toolboxes). */
+const SPECIAL_BOXES: Record<string, (body: HTMLElement, vertical: boolean) => void> = {
+  templates: (body, vertical) => {
+    // (many templates: the box scrolls rather than run off the window)
+    body.classList.add('tb-grid', 'tb-scroll');
+    body.style.setProperty('--cols', vertical ? '2' : '12');
+    for (const group of TOOL_GROUPS) for (const item of group) {
+      if (!('palette' in item) || !item.palette.startsWith('tpl-') || item.palette === 'tpl-own') continue;
+      // a heading over each palette's buttons, so the families are easy to find
+      const head = document.createElement('div');
+      head.className = 'tb-heading';
+      head.textContent = head.title = item.title;
+      body.append(head);
+      for (const t of item.items) { const b = toolButton(t.name); if (b) body.append(b); }
+    }
+  },
+  colours: (body, vertical) => {
+    const modes = document.createElement('div');
+    modes.className = 'tb-modes';
+    // in Highlight mode, the saved looks too
+    const looks = looksList(vertical);
+    looks.hidden = colourMode !== 'highlight';
+    for (const [m, label, title] of [['line', 'Colour', 'Colour the lines and text'], ['highlight', 'Highlight', 'A band of colour behind atoms and bonds'], ['fill', 'Fill', 'Fill shapes and ring fills']] as const) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.title = title;
+      b.setAttribute('aria-pressed', String(colourMode === m));
+      b.addEventListener('click', () => { colourMode = m; for (const o of modes.children) o.setAttribute('aria-pressed', String(o === b)); looks.hidden = m !== 'highlight'; });
+      modes.append(b);
+    }
+    const grid = document.createElement('div');
+    grid.className = 'tb-swatches';
+    const swatch = (c: string | undefined) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tb-swatch';
+      if (c) b.style.background = c; else { b.textContent = '∅'; b.style.fontSize = '11px'; }
+      b.title = c ? c.toUpperCase() : 'None: take the colour, highlight or fill off';
+      b.setAttribute('aria-label', b.title);
+      b.addEventListener('click', () => {
+        if (!editor.colourSelection(c, colourMode)) flash('Select what to colour first.');
+        else if (colourMode === 'highlight' && c) highlightColour = c;
+      });
+      return b;
+    };
+    grid.append(swatch(undefined));
+    for (const c of [...STANDARD_COLOURS, '#ffffff']) grid.append(swatch(c));
+    for (const p of getPalettes()) {
+      if (!p.colors.length) continue;
+      const n = document.createElement('div');
+      n.className = 'tb-swatch-name';
+      n.textContent = p.name;
+      grid.append(n, ...p.colors.map((c) => swatch(c)));
+    }
+    body.append(modes, grid, looks);
+    if (vertical) body.style.maxWidth = '110px';
+  },
+  // The side panel (Style, Warnings, Analysis; Format in documents, Cell in sheets) is a toolbox,
+  // docked at the right to start with. Its arrow goes with it, so it shows even when the title bar is
+  // locked away.
+  details: (body) => { body.before($('#side-fold')); body.append(sideContent); },
+};
+
+/** The toolboxes there are now (the drawing tools first, as the others' buttons may come from its bar). */
+function toolboxDefs(): ToolboxDef[] {
+  const ids = boxIds(toolboxState);
+  return ['main', ...ids.filter((id) => id !== 'main')].map((id) => ({
+    id,
+    title: boxTitle(toolboxState, id, BOX_TITLES[id]),
+    build: (body: HTMLElement, vertical: boolean) => (SPECIAL_BOXES[id] && !isEditable(id) ? SPECIAL_BOXES[id](body, vertical) : buildBox(body, id, vertical)),
+  }));
+}
+
+const toolboxes = new Toolboxes(toolboxDefs, {
   get: () => toolboxState,
   set: (st) => { toolboxState = st; tickToolboxes(); storeSettings(); placeSidePanel(); },
   work: () => $('#work'),
-  customize: () => openCustomToolbox(),
+  customize: (id) => openCustomToolbox(id),
   // each mode keeps the side panel folded or open on its own
   folded: (id) => (id === 'details' ? sideIsFolded() : undefined),
   fold: (id) => { if (id !== 'details') return false; command('fold-side'); return true; },
@@ -7392,7 +7496,7 @@ addEventListener('resize', () => fitTools());
 
 /** Tick the shown toolboxes and the lock in the View menu, and show the lock on its button. */
 function tickToolboxes(): void {
-  for (const id of ['main', 'structure', 'arrange', 'templates', 'colours', 'highlight', 'custom'] as ToolboxId[]) $(`[data-cmd="toolbox-${id}"]`)?.setAttribute('aria-checked', String(!!toolboxState.places[id]?.shown));
+  fillToolboxMenu();
   $('[data-cmd="lock-toolboxes"]')?.setAttribute('aria-checked', String(toolboxState.locked));
   $('[data-cmd="fold-side"]')?.setAttribute('aria-checked', String(sideIsFolded()));
   const lock = $('#btn-lock');
@@ -7448,15 +7552,78 @@ addEventListener('resize', () => {
 });
 $('#btn-lock').addEventListener('click', () => command('lock-toolboxes'));
 
-function openCustomToolbox(): void {
-  const tools: Pickable[] = [...ALL_TOOLS].map(([name, t]) => ({ key: `tool:${name}`, label: t.title.split(/[.:] /)[0], icon: t.icon }));
-  const groups = [{ name: 'Drawing tools', items: tools }, ...menuCommands().filter((g) => g.items.length).map((g) => ({ name: `${g.menu} menu`, items: g.items.map((c) => ({ key: `cmd:${c.cmd}`, label: c.label })) }))];
-  customizeToolbox(groups, () => toolboxState.custom, (items) => {
-    toolboxState = { ...toolboxState, custom: items, places: { ...toolboxState.places, custom: { ...toolboxState.places.custom, shown: true } } };
-    tickToolboxes();
-    storeSettings();
-    toolboxes.render();
-  });
+/** Where View > Toolboxes' entries start (the line above them). */
+let toolboxMenuTop: Element | null = null;
+
+/** View > Toolboxes: a ticked entry for each toolbox there is now, named and in the order Customize Toolboxes has them. */
+function fillToolboxMenu(): void {
+  const first = document.querySelector<HTMLElement>('header .menu [data-cmd^="toolbox-"]');
+  if (!first) return;
+  toolboxMenuTop ??= first.previousElementSibling;
+  const menu = first.parentElement!;
+  const have = new Map([...menu.querySelectorAll<HTMLElement>(':scope > [data-cmd^="toolbox-"]')].map((b) => [b.dataset.cmd!.slice('toolbox-'.length), b]));
+  let at = toolboxMenuTop;
+  for (const id of boxIds(toolboxState)) {
+    if (id === 'details') continue;
+    let b = have.get(id);
+    if (!b) {
+      b = document.createElement('button');
+      b.setAttribute('role', 'menuitemcheckbox');
+      b.dataset.cmd = `toolbox-${id}`;
+      b.title = 'A toolbox of your own (View > Toolboxes > Customize Toolboxes changes it)';
+      b.append(document.createElement('span'));
+    }
+    have.delete(id);
+    b.hidden = false;
+    b.querySelector('span')!.textContent = `Toolbox: ${boxTitle(toolboxState, id, BOX_TITLES[id])}`;
+    b.setAttribute('aria-checked', String(!!toolboxState.places[id]?.shown));
+    if (at) at.after(b); else menu.prepend(b);
+    at = b;
+  }
+  // deleted ones: your own go, the app's wait for Restore
+  for (const [id, b] of have) { if (isOwnBox(id)) b.remove(); else b.hidden = true; }
+}
+
+/** A tool's or command's name and icon in Customize Toolboxes. */
+function describeItem(key: string): Pickable {
+  const name = key.slice(key.indexOf(':') + 1);
+  if (key === 'sep') return { key, label: 'Divider', icon: undefined };
+  if (key === 'w:looks') return { key, label: 'Highlight looks', icon: LOOKS_ICON };
+  if (key.startsWith('tool:')) { const t = ALL_TOOLS.get(name); return { key, label: t ? t.title.split(/[.:] /)[0] : name, icon: t?.icon }; }
+  if (key.startsWith('pal:')) { const p = PALETTES.get(name); return { key, label: p?.title ?? name, icon: p?.items[0] && (ALL_TOOLS.get(p.items[0].name)?.icon) }; }
+  return { key, label: topMenuEntry(name)?.label ?? SHORT_LABEL[name] ?? name, icon: commandIcon(name) };
+}
+const LOOKS_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="7" r="2.2" fill="currentColor" fill-opacity="0.35"/><circle cx="6" cy="12" r="2.2"/><circle cx="6" cy="17" r="2.2" fill="currentColor" fill-opacity="0.6"/><line x1="11" y1="7" x2="20" y2="7"/><line x1="11" y1="12" x2="20" y2="12"/><line x1="11" y1="17" x2="18" y2="17"/></svg>';
+
+/** Everything that can go in a toolbox, for Customize Toolboxes' list. */
+function toolboxCatalogue(): { name: string; items: Pickable[] }[] {
+  const d = (key: string) => describeItem(key);
+  const loose = [...TOOL_GROUPS.flat(), ...OFF_BAR].filter((it): it is ToolDef => !('palette' in it)).map((t) => d(`tool:${t.name}`));
+  const groups: { name: string; items: Pickable[] }[] = [
+    { name: 'Drawing tools', items: loose },
+    { name: 'Fly-out palettes', items: [...PALETTES.keys()].map((p) => d(`pal:${p}`)) },
+    { name: 'Dividers and lists', items: [d('sep'), d('w:looks')] },
+  ];
+  for (const p of PALETTES.values()) if (p.palette !== 'tpl-own' || p.items.length > 1) groups.push({ name: p.title, items: p.items.filter((t) => ALL_TOOLS.has(t.name)).map((t) => d(`tool:${t.name}`)) });
+  for (const g of menuCommands()) if (g.items.length) groups.push({ name: `${g.menu} menu`, items: g.items.filter((c) => !c.cmd.startsWith('toolbox-')).map((c) => ({ key: `cmd:${c.cmd}`, label: c.label, icon: commandIcon(c.cmd) })) });
+  return groups;
+}
+
+const toolboxEditor = new ToolboxEditor({
+  get: () => toolboxState,
+  set: (st) => { toolboxState = st; tickToolboxes(); storeSettings(); toolboxes.render(); placeSidePanel(); },
+  catalogue: toolboxCatalogue,
+  describe: describeItem,
+  title: (id) => BOX_TITLES[id] ?? 'My Toolbox',
+  given: (id) => BOX_ITEMS[id] ?? [],
+  palette: (name) => { const p = PALETTES.get(name); return p && name !== 'tpl-own' ? { title: p.title, given: p.items.map((t) => t.name) } : null; },
+  flyout: (name) => toolboxState.flyouts?.[name] ?? PALETTES.get(name)?.items.filter((t) => ALL_TOOLS.has(t.name)).map((t) => t.name) ?? [],
+  newPlace: () => { const w = $('#work').getBoundingClientRect(); return { x: Math.round(Math.max(w.left + 8, w.right - 300)), y: Math.round(w.top + 40) }; },
+});
+
+/** View > Toolboxes > Customize Toolboxes, at a toolbox (My Toolbox unless one is named). */
+function openCustomToolbox(id?: string): void {
+  toolboxEditor.open(id);
 }
 
 toolboxes.render();
@@ -7558,6 +7725,7 @@ const settingsWindow = new SettingsWindow([
   { id: 'schemes', title: 'Schemes', words: 'scheme arrow gap plus text size reagents conditions boxes', open: schemeSettings },
   { id: 'autosave', title: 'AutoSave and Recovery', words: 'autosave recovery versions backup copies shared folders onedrive', open: () => keeper.optionsCommand() },
   { id: 'online', title: 'Online', words: 'pubchem internet names lookup updates check version privacy stable latest channel beta', open: onlinePreferences },
+  { id: 'transfer', title: 'Import and Export', words: 'backup back up copy move settings file new computer install reinstall export import toolboxes hotkeys', open: settingsTransfer },
   { id: 'files', title: 'File Types', words: 'open with default app explorer finder associations cdxml cdx mol sdf docx pptx xlsx double-click', open: () => fileTypesPage(fileTypesHost) },
 ]);
 $('#btn-search').addEventListener('click', () => commandSearch.open());
