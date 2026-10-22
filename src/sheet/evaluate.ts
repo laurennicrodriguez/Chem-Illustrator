@@ -13,6 +13,7 @@ import { CRITERIA_FUNCTIONS } from './fn-criteria';
 import { LOOKUP_FUNCTIONS, chooseIndex } from './fn-lookup';
 import { TEXT_FUNCTIONS } from './fn-text';
 import { STATS_FUNCTIONS } from './fn-stats';
+import { ANALYSIS_FUNCTIONS } from './fn-analysis';
 import { MolProps, PROPERTIES, propertyValue } from './properties';
 import { ISOTOPE_FUNCTIONS, isotopeValue, readsAsFormula, type IsotopeSource } from './isotopes';
 
@@ -417,6 +418,7 @@ const FUNCTIONS: Record<string, FnDef> = {
   ...LOOKUP_FUNCTIONS,
   ...TEXT_FUNCTIONS,
   ...STATS_FUNCTIONS,
+  ...ANALYSIS_FUNCTIONS,
   ...DATE_FUNCTIONS,
   ...ARRAY_FUNCTIONS,
   // LAMBDA helpers: the LAMBDA comes last
