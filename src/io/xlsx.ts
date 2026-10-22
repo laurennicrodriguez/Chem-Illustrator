@@ -17,6 +17,7 @@ import { Package, PackageReader, xml, hex6, REL, kids, kid, rAttr } from './ooxm
 import { Workbook, Sheet, Structure, CellStyle, ColumnDef, Filter, Condition, CompareOp, Border, BorderStyle, Side, makeStructure } from '../sheet/workbook';
 import { keyOf, rowOf, colOf, colName, cellName, parseRange, quoteSheet, Range, MAX_COLS, rangesOverlap } from '../sheet/refs';
 import { normalizeFormula, shiftFormula } from '../sheet/formula';
+import { FUNCTION_NAMES } from '../sheet/evaluate';
 import { readTyped, isError, CellError, Value, EXCEL_ERRORS } from '../sheet/values';
 import { PROPERTIES } from '../sheet/properties';
 import { ISOTOPE_FUNCTIONS } from '../sheet/isotopes';
@@ -115,7 +116,7 @@ const XLFN = new Set(['AGGREGATE', 'BETA.DIST', 'BETA.INV', 'BINOM.DIST', 'BINOM
   'GAMMA.INV', 'GAMMALN.PRECISE', 'GAUSS', 'IFNA', 'IFS', 'ISOWEEKNUM', 'LET', 'LOGNORM.DIST', 'LOGNORM.INV', 'MAXIFS', 'MINIFS',
   'MODE.MULT', 'MODE.SNGL', 'NORM.DIST', 'NORM.INV', 'NORM.S.DIST', 'NORM.S.INV', 'PERCENTILE.EXC', 'PERCENTILE.INC',
   'PERCENTRANK.EXC', 'PERCENTRANK.INC', 'POISSON.DIST', 'QUARTILE.EXC', 'QUARTILE.INC', 'RANK.AVG', 'RANK.EQ', 'SEQUENCE',
-  'STDEV.P', 'STDEV.S', 'SWITCH', 'T.DIST', 'T.DIST.2T', 'T.DIST.RT', 'T.INV', 'T.INV.2T', 'T.TEST', 'TEXTJOIN', 'UNIQUE',
+  'STDEV.P', 'STDEV.S', 'SWITCH', 'T.DIST', 'T.DIST.2T', 'T.DIST.RT', 'T.INV', 'T.INV.2T', 'T.TEST', 'TEXTJOIN', 'TEXTSPLIT', 'UNIQUE',
   'VAR.P', 'VAR.S', 'WEIBULL.DIST', 'XLOOKUP', 'XMATCH', 'XOR', 'Z.TEST']);
 const XLWS = new Set(['FILTER', 'SORT', 'SORTBY']);
 
@@ -125,6 +126,15 @@ export function excelFunctionNames(f: string): string {
     const up = name.toUpperCase();
     return XLWS.has(up) ? `${before}_xlfn._xlws.${name}` : XLFN.has(up) ? `${before}_xlfn.${name}` : m;
   }))).join('');
+}
+
+const KNOWN = new Set(FUNCTION_NAMES);
+
+/** Does a formula from Excel use something this program can't work out (a newer function it lacks, or a table reference)? */
+function usesUnknownFunction(text: string): boolean {
+  if (/\[/.test(text.replace(/"(?:[^"]|"")*"/g, ''))) return true;
+  for (const m of text.matchAll(/_xlfn\.(?:_xlws\.)?([A-Za-z0-9.]+)\(/g)) if (!KNOWN.has(m[1].toUpperCase())) return true;
+  return false;
 }
 
 /** Does a formula use a chemistry function (which Excel can't work out)? */
@@ -867,7 +877,7 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
               }
             }
             if (text) {
-              if (/_xlfn\.|_xlws\.|\[/.test(text)) unknownFormulas++;
+              if (usesUnknownFunction(text)) unknownFormulas++;
               input = normalizeFormula('=' + text.replace(/_xlfn\.|_xlws\./g, ''));
             }
           }
