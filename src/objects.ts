@@ -522,6 +522,15 @@ export function dragShapeHandle(s: Shape, which: HandleId, p: Vec, free: boolean
 }
 
 /** Two brackets, facing each other, on the left and right edges of a box. */
+/** A bracket tool's shape: a pair (also for a transition state), or only the left or right half. */
+export type BracketForm = 'ts' | 'left' | 'right';
+
+/** The brackets a bracket tool puts round a box. */
+export function bracketHalves(r: Rect, bracket: NonNullable<Shape['bracket']>, form?: BracketForm): Omit<Shape, 'id'>[] {
+  const [left, right] = bracketsAround(r, bracket);
+  return form === 'left' ? [left] : form === 'right' ? [right] : [left, right];
+}
+
 export function bracketsAround(r: Rect, bracket: NonNullable<Shape['bracket']>): Omit<Shape, 'id'>[] {
   // a bracket's lips point to the right of the direction from (x1,y1) to (x2,y2), as ChemDraw stores them
   return [

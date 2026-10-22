@@ -48,7 +48,7 @@ import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem
 import { tokenize, addNicknames, isBuiltInNickname, labelGraph } from '../chem/labels';
 import {
   Handle, arrowHit, shapeHit, arrowHandles, shapeHandles, dragArrowHandle, dragShapeHandle, dragCropHandle, shapeBox,
-  arrowPoints, bracketsAround, bracketLip, unionRect,
+  arrowPoints, bracketHalves, type BracketForm, bracketLip, unionRect,
   shapeOrder, portNear, shapePorts, isCurved, headBend, swapHalf, bezPoints,
 } from '../objects';
 import { isEmptyText } from '../deck/deck';
@@ -66,9 +66,11 @@ export type Tool =
   | { kind: 'text' }
   | { kind: 'arrow'; style: ArrowStyle }
   | { kind: 'shape'; shape: ShapeStyle; from: 'corner' | 'center' }
-  | { kind: 'bracket'; bracket: NonNullable<Shape['bracket']> }
+  | { kind: 'bracket'; bracket: NonNullable<Shape['bracket']>; /** One half only, or a transition state's pair with ‡. */ form?: BracketForm }
   | { kind: 'template'; id: string }
   | { kind: 'symbol'; symbol: SymbolKind }
+  /** A sign set as a caption where clicked (‡ for a transition state). */
+  | { kind: 'mark'; text: string }
   /** Puts the element picked in the periodic table on atoms (or new atoms in empty space). */
   | { kind: 'element' }
   /** Mass fragmentation: a line dragged across bonds (or a click on one) breaks them, and each piece gets its formula and mass. */
@@ -145,12 +147,16 @@ export const TOOLS: Record<string, Tool> = {
   'bracket-square': { kind: 'bracket', bracket: 'square' },
   'bracket-round': { kind: 'bracket', bracket: 'round' },
   'bracket-curly': { kind: 'bracket', bracket: 'curly' },
+  'bracket-ts': { kind: 'bracket', bracket: 'square', form: 'ts' },
+  'bracket-left': { kind: 'bracket', bracket: 'square', form: 'left' },
+  'bracket-right': { kind: 'bracket', bracket: 'square', form: 'right' },
   'sym-lonepair': { kind: 'symbol', symbol: 'LonePair' },
   'sym-radical': { kind: 'symbol', symbol: 'Electron' },
   'sym-plus': { kind: 'symbol', symbol: 'CirclePlus' },
   'sym-minus': { kind: 'symbol', symbol: 'CircleMinus' },
   'sym-delta-plus': { kind: 'symbol', symbol: 'DeltaPlus' },
   'sym-delta-minus': { kind: 'symbol', symbol: 'DeltaMinus' },
+  'sym-ddagger': { kind: 'mark', text: '‡' },
 };
 for (const t of TEMPLATES) TOOLS[`tpl-${t.id}`] = { kind: 'template', id: t.id };
 
@@ -750,6 +756,7 @@ export class Editor {
         return d.hit?.kind === 'atom' && this.symbolAims(this.tool.symbol) ? 'draw' : 'none';
       case 'eraser':
       case 'element':
+      case 'mark':
         return 'none';
       case 'bond':
       case 'chain':
@@ -943,6 +950,17 @@ export class Editor {
         this.placeSymbol(t.symbol, h, p);
         return;
       }
+      case 'mark': {
+        doc.edit('Add ' + t.text, () => {
+          const c = doc.addCaption({ x: 0, y: 0, runs: [{ text: t.text }], justify: 'left' });
+          const cb = this.measure().captionBox(c);
+          // centred on the click
+          doc.updateCaption(c.id, { x: p.x - (cb.x1 + cb.x2) / 2, y: p.y - (cb.y1 + cb.y2) / 2 });
+          this.selectOnly({ kind: 'caption', id: c.id });
+        });
+        this.changed();
+        return;
+      }
       case 'element': {
         const sym = SYMBOLS[this.element];
         if (h && h.kind === 'atom') doc.edit(`Make ${sym}`, () => this.applyLabel(h.id, sym));
@@ -990,7 +1008,7 @@ export class Editor {
             const L = doc.style.bondLength;
             const box = this.structureBox(doc.fragmentOf(atom));
             const r = { x1: box.x1 - L * 0.45, y1: box.y1 - L * 0.3, x2: box.x2 + L * 0.45, y2: box.y2 + L * 0.3 };
-            this.addBrackets(r, t.bracket);
+            this.addBrackets(r, t.bracket, t.form);
           }
           return;
         }
@@ -1535,7 +1553,7 @@ export class Editor {
       if (g && t.shape.kind === 'geo') this.afterGeo();
     } else if (t.kind === 'bracket') {
       const r = { x1: Math.min(d.start.x, p.x), y1: Math.min(d.start.y, p.y), x2: Math.max(d.start.x, p.x), y2: Math.max(d.start.y, p.y) };
-      if (r.y2 - r.y1 >= 4) this.addBrackets(r, t.bracket);
+      if (r.y2 - r.y1 >= 4) this.addBrackets(r, t.bracket, t.form);
     } else if (t.kind === 'template') {
       doc.edit('Template', () => this.placeTemplateAt(t.id, h, d.start, p, d.alt, d));
     } else if (t.kind === 'fragment') {
@@ -1881,25 +1899,28 @@ export class Editor {
     if (!box) return false;
     const L = doc.style.bondLength;
     const r = { x1: box.x1 - L * 0.45, y1: box.y1 - L * 0.3, x2: box.x2 + L * 0.45, y2: box.y2 + L * 0.3 };
-    doc.edit('Transition State Brackets', () => {
-      const ids = bracketsAround(r, 'square').map((b) => doc.addShape(b).id);
-      const c = doc.addCaption({ x: 0, y: 0, runs: [{ text: '‡' }], justify: 'left' });
-      const cb = m.captionBox(c);
-      // just past the right bracket, its middle level with the bracket's top
-      doc.updateCaption(c.id, { x: r.x2 + 0.15 * L - cb.x1, y: r.y1 - (cb.y2 - cb.y1) / 2 - cb.y1 });
-      for (const id of ids) this.sel.shapes.add(id);
-      this.sel.captions.add(c.id);
-    });
+    doc.edit('Transition State Brackets', () => this.putBrackets(r, 'square', 'ts', false));
     this.changed();
     return true;
   }
 
-  private addBrackets(r: Rect, bracket: NonNullable<Shape['bracket']>): void {
-    this.doc.edit('Brackets', () => {
-      this.sel = emptySel();
-      for (const b of bracketsAround(r, bracket)) this.sel.shapes.add(this.doc.addShape(b).id);
-    });
+  private addBrackets(r: Rect, bracket: NonNullable<Shape['bracket']>, form?: BracketForm): void {
+    this.doc.edit(form === 'ts' ? 'Transition State Brackets' : form ? 'Bracket' : 'Brackets', () => this.putBrackets(r, bracket, form, true));
     this.changed();
+  }
+
+  /** Brackets round a box (inside an edit), selected; a transition state's get ‡ at the upper right. */
+  private putBrackets(r: Rect, bracket: NonNullable<Shape['bracket']>, form: BracketForm | undefined, fresh: boolean): void {
+    const doc = this.doc;
+    if (fresh) this.sel = emptySel();
+    for (const b of bracketHalves(r, bracket, form)) this.sel.shapes.add(doc.addShape(b).id);
+    if (form !== 'ts') return;
+    const L = doc.style.bondLength;
+    const c = doc.addCaption({ x: 0, y: 0, runs: [{ text: '‡' }], justify: 'left' });
+    const cb = this.measure().captionBox(c);
+    // just past the right bracket, its middle level with the bracket's top
+    doc.updateCaption(c.id, { x: r.x2 + 0.15 * L - cb.x1, y: r.y1 - (cb.y2 - cb.y1) / 2 - cb.y1 });
+    this.sel.captions.add(c.id);
   }
 
   /** Box round some atoms and their labels. */
@@ -4258,7 +4279,8 @@ export class Editor {
       ctx.restore();
     } else if (t.kind === 'bracket') {
       const r = { x1: Math.min(d.start.x, d.last.x), y1: Math.min(d.start.y, d.last.y), x2: Math.max(d.start.x, d.last.x), y2: Math.max(d.start.y, d.last.y) };
-      for (const b of bracketsAround(r, t.bracket)) outlineShape(ctx, { id: 0, ...b });    } else if (t.kind === 'template') {
+      for (const b of bracketHalves(r, t.bracket, t.form)) outlineShape(ctx, { id: 0, ...b });
+    } else if (t.kind === 'template') {
       const tp = templateById(t.id);
       const place = tp && this.templatePlacement(tp, h, d.start, d.moved ? d.last : null, d.alt, d);
       if (tp && place) {

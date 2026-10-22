@@ -103,7 +103,7 @@ The same commands are in the **File** menu (**New Drawing**, **New Slides**, **N
 
 ### The toolbox on the left
 
-In a drawing, the drawing tools run down the left side: select, eraser, bonds, rings, templates, text, the periodic table, mass fragmentation, arrows, mechanism symbols, shapes and brackets. A button with a small arrow holds a set of related tools: click the arrow (or right-click the button) to see them all. Rest the mouse on any button to see its name and hotkey. [Drawing](drawing.md) explains each tool.
+In a drawing, the drawing tools run down the left side: select, eraser, bonds, then text, arrows, mechanism symbols, brackets, shapes and mass fragmentation, then rings and templates. A button with a small arrow in its corner holds a set of related tools: click the corner, click the button a second time, or right-click it to see them all. Rest the mouse on any button to see its name and hotkey. [Drawing](drawing.md) explains each tool.
 
 ### The side panel on the right
 
