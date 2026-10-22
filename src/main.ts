@@ -42,7 +42,7 @@ import { writeCdxml } from './io/cdxml-write';
 import { WORKSPACE, folderOf } from './io/workspace-file';
 import { askLink, followLink, setLinkHost, type LinkPlace } from './ui/links-ui';
 import { SHOW_JUMPS, cellOfLink, linkSpans, normalizeLink, removeLink, setLink, slideOfLink } from './links';
-import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, setEmbeddedWriter, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, DOCX, PICTURE_EXTENSIONS, type FileType } from './io/files';
+import { openFileDialog, openBytesDialog, openAnyBytesDialog, stampOf, readRef, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, setEmbeddedWriter, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, DOCX, PICTURE_EXTENSIONS, type FileType } from './io/files';
 import { readPptx } from './io/pptx-read';
 import { pickReuseSlides } from './ui/reuse-slides';
 import { writeTiff } from './render/tiff';
@@ -168,6 +168,8 @@ import { LabelTooltip } from './ui/label-tooltip';
 import { starAtoms } from './chem/label-tip';
 import { structurePlace } from './sheet/layout';
 import { readSheetFile, writeSheetFile, SheetFileDeps } from './io/sheet-files';
+import { fromEmbedSource, type Embedded } from './io/ole-object';
+import { objectPicture, type ObjectPicture } from './render/object-picture';
 import { ACS_1996, DocStyle } from './style';
 import { emptyTable, tableFromCells } from './table';
 import type { TableData } from './model';
@@ -2697,6 +2699,76 @@ async function pickPicture(): Promise<{ bytes: Uint8Array; mime: string; name: s
   return { bytes: f.bytes, mime, name: f.name };
 }
 
+// ---------------------------------------------------------------- embedded objects (Insert > Object)
+
+/** Ask for a file of any kind, to put in a document as an object. */
+async function pickObjectFile(): Promise<{ name: string; bytes: Uint8Array } | null> {
+  try {
+    return await openAnyBytesDialog();
+  } catch (e) {
+    await showError('Could not open the file: ' + String(e));
+    return null;
+  }
+}
+
+/** The picture an object shows: a workbook's cells, a PDF's first page, a picture, or an icon. */
+function objectPictureOf(name: string, bytes: Uint8Array, icon: boolean): Promise<ObjectPicture> {
+  return objectPicture(name, bytes, icon, {
+    readBook: async (b) => (await readSheetFile(b, name, sheetFiles)).book,
+    pdfPage: (b) => import('./render/pdf-page').then((m) => m.pdfFirstPage(b)),
+  });
+}
+
+/**
+ * Open an object's file in its own program: written to a folder of its own in the temporary
+ * folder and opened as a double-click in Explorer would. While it is open (up to a working day)
+ * the file is checked every couple of seconds, and each save there is handed to `changed` once
+ * the file has stopped changing. In a browser the file is downloaded instead.
+ */
+async function openObjectFile(file: { name: string; bytes: Uint8Array }, changed: (bytes: Uint8Array) => void): Promise<string | null> {
+  const ext = /\.([^.\\/]+)$/.exec(file.name)?.[1] ?? 'bin';
+  if (!isTauri()) {
+    await writeFile({ kind: 'none' }, file.name, file.bytes, { description: file.name, extension: ext, mime: 'application/octet-stream' });
+    return `${file.name} was downloaded: in a browser it can't open in its program or bring changes back here (the desktop app does both).`;
+  }
+  let path: string;
+  try {
+    const dir = await invoke<string>('ole_object_folder');
+    path = `${dir}${/Windows/i.test(navigator.userAgent) ? '\\' : '/'}${file.name.replace(/[\\/:*?"<>|]/g, '_')}`;
+    await writeFile({ kind: 'path', path }, file.name, file.bytes, { description: file.name, extension: ext, mime: 'application/octet-stream' });
+    const { openPath } = await import('@tauri-apps/plugin-opener');
+    await openPath(path);
+  } catch (e) {
+    return `Could not open ${file.name}: ${String(e)}`;
+  }
+  const stamp = async () => { const s = await stampOf({ kind: 'path', path }); return s ? `${s.modified}:${s.size}` : ''; };
+  let seen = await stamp(), pending = '';
+  const until = Date.now() + 10 * 3600e3;
+  const timer = window.setInterval(() => {
+    if (Date.now() > until) { window.clearInterval(timer); return; }
+    void stamp().then(async (now) => {
+      if (!now || now === seen) { pending = ''; return; }
+      // wait for one more look at the same stamp: the program may still be writing
+      if (now !== pending) { pending = now; return; }
+      const bytes = await readRef({ kind: 'path', path });
+      if (!bytes?.length) return;
+      seen = now;
+      pending = '';
+      changed(bytes);
+    });
+  }, 1500);
+  return null;
+}
+
+/** Another program's object on the Windows clipboard (Excel's cells, for one), with the picture it came with. */
+async function clipboardObject(): Promise<{ embed: Embedded; picture: { bytes: Uint8Array; mime: string } | null } | null> {
+  const got = await nativeFirst(['Embedded Object']).catch(() => null);
+  const embed = got ? fromEmbedSource(got[1]) : null;
+  if (!embed) return null;
+  const pic = await nativeFirst(['PNG', 'CF_ENHMETAFILE']).catch(() => null);
+  return { embed, picture: pic ? { bytes: pic[1], mime: pic[0] === 'PNG' ? 'image/png' : 'image/x-emf' } : null };
+}
+
 /** Ask for a BibTeX or RIS file of references, and read its text. */
 async function pickReferenceFile(): Promise<{ name: string; text: string } | null> {
   const f = await openBytesDialog('BibTeX or RIS references', [], ['bib', 'ris', 'txt']);
@@ -3691,6 +3763,10 @@ const docMode = new DocumentMode({
   readPaste: (e) => readDocPaste(e),
   toStructure: (text, style) => textToStructure(text, style),
   pickPicture: () => pickPicture(),
+  pickObjectFile: () => pickObjectFile(),
+  objectPicture: (name, bytes, icon) => objectPictureOf(name, bytes, icon),
+  openObjectFile: (file, changed) => openObjectFile(file, changed),
+  clipboardObject: nativeClipboard ? () => clipboardObject() : undefined,
   pickReferenceFile: () => pickReferenceFile(),
   preferredChanged: () => storeSettings(),
   reviewNameChanged: () => storeSettings(),

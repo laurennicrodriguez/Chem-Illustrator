@@ -89,6 +89,8 @@ mod win {
             "CF_DIB" => CF_DIB,
             "CF_UNICODETEXT" => CF_UNICODETEXT,
             "CF_ENHMETAFILE" => CF_ENHMETAFILE,
+            // another program's object as it is (a compound file), for Paste as Object
+            "Embedded Object" => unsafe { RegisterClipboardFormatW(wide("Embed Source").as_ptr()) },
             _ => unsafe { RegisterClipboardFormatW(wide(name).as_ptr()) },
         }
     }
