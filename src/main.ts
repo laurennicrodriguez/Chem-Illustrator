@@ -320,6 +320,7 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     templatePalette('aromatics', 'tpl-aromatics', 'Aromatics', 6, 56),
     templatePalette('perspective', 'tpl-perspective', 'Rings in perspective', 6, 56),
     templatePalette(['geometries', 'organometallic'], 'tpl-metal', 'Metal complexes', 6, 64),
+    templatePalette('metallocenes', 'tpl-metallocenes', 'Metallocenes and half-sandwich complexes', 6, 64),
     templatePalette('ligands', 'tpl-ligands', 'Ligands', 6, 64),
     OWN_PALETTE,
   ],

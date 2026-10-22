@@ -42,6 +42,9 @@ interface MBond { a: number; b: number; order: number; stereo: number }
 const f = (v: number, w: number, d = 4) => v.toFixed(d).padStart(w);
 const i3 = (v: number) => String(v).padStart(3);
 
+/** Group 13 elements (B, Al, Ga, In, Tl), which the chemistry engine gives no fourth bond as a dative one. */
+const ATE = new Set([5, 13, 31, 49, 81]);
+
 export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = '', opts: MolfileOptions = {}): MolExport {
   // a ring's middle, where a metal is bonded (η⁵), is not an atom: it and its bonds are left out
   const ids = [...atomIds].filter((id) => doc.atoms.has(id) && !doc.atoms.get(id)!.multi);
@@ -143,6 +146,19 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = '', opts: 
     let keep = doc.valenceSum(id) - own - radicalElectrons(a);
     for (const b of mb) { if (keep >= b.order) keep -= b.order; else dative.add(b.id); }
   }
+  // Boron, aluminium, gallium and indium take no dative bond past their three bonds in the
+  // engine: a pair given to one (the chloride bridging to the aluminium of the Tebbe reagent) is
+  // written as an ordinary bond with the charges of an ate complex, Cl⁺–Al⁻
+  for (const bid of [...dative]) {
+    const b = doc.bonds.get(bid)!;
+    const donor = isMetalAtom(doc.atoms.get(b.a1)) ? b.a2 : b.a1;
+    const acceptor = donor === b.a1 ? b.a2 : b.a1;
+    const d = doc.atoms.get(donor)!;
+    if (!ATE.has(doc.atoms.get(acceptor)!.z) || d.label || isMetalAtom(d)) continue;
+    dative.delete(bid);
+    charged.set(donor, (charged.get(donor) ?? 0) + 1);
+    charged.set(acceptor, (charged.get(acceptor) ?? 0) - 1);
+  }
   for (const id of ids) {
     const a = doc.atoms.get(id)!;
     const x = (a.x - first.x) / L, y = -(a.y - first.y) / L;
@@ -169,7 +185,7 @@ export function toMolfile(doc: Doc, atomIds: Iterable<number>, name = '', opts: 
       const r = k === 0 ? 0 : 0.35 + 0.05 * k;
       const sym = ga.dummy ? generic : SYMBOLS[ga.z] || generic;
       if (sym === generic) genericAt.push([atoms.length, `${a.label}/${k}`]);
-      atoms.push({ sym, x: x + r * Math.cos(ang), y: y + r * Math.sin(ang), charge: ga.charge + (k === 0 ? a.charge : 0), iso: ga.iso ?? 0 });
+      atoms.push({ sym, x: x + r * Math.cos(ang), y: y + r * Math.sin(ang), charge: ga.charge + (k === 0 ? a.charge + (charged.get(id) ?? 0) : 0), iso: ga.iso ?? 0 });
       map.push(k === 0 ? id : -1);
       if (g!.atoms.length > 1) inLabel.push(base + k);
     });
