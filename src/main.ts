@@ -5157,7 +5157,7 @@ function layoutSplit(): void {
   const opts = ws.tabs.filter((t) => t.mode === 'drawing').map((t) => new Option(t.name.replace(/\.(cdxml|cdx)$/i, ''), String(t.id), false, t === st.drawing));
   opts.push(new Option('New drawing', 'new'));
   splitPick.replaceChildren(...opts);
-  $('#split-insert').textContent = st.main.mode === 'document' ? 'Insert into Document' : st.main.mode === 'sheet' ? 'Insert into Cell' : 'Insert into Slide';
+  $('#split-insert').textContent = st.main.mode === 'document' ? 'Insert into Document' : st.main.mode === 'sheet' ? 'Insert into Cell' : st.main.mode === 'design' ? 'Insert into Design' : 'Insert into Slide';
   // while a figure's or cell's structure is drawn, Done puts that in; the drawing beside waits
   $<HTMLButtonElement>('#split-insert').disabled = !!cellEdit;
   if (live) $('#split-empty').hidden = true;
@@ -5230,7 +5230,7 @@ function setSplitSide(drawing: boolean): void {
 /** Beside slides: work on the drawing (true; the slide becomes a picture) or on the slide. */
 function focusSlideDrawing(on: boolean): void {
   const st = splitState();
-  if (!st || st.main.mode !== 'slides') return;
+  if (!st || !st.main.deck) return;
   if (on === (ws.active === st.drawing)) return;
   if (on) {
     // the slide as it looks now, kept as a picture on its side
@@ -5253,7 +5253,7 @@ function toggleSplit(): void {
   if (splitState()) { closeSplit(); return; }
   const t = ws.active;
   if (t.mode === 'drawing') {
-    flash('Split view puts a drawing beside a document, sheet or slides: show one of those (or start one with the + tabs) and choose View > Split View there.', 8000);
+    flash('Split view puts a drawing beside a document, sheet, slides or design: show one of those (or start one with the + tabs) and choose View > Split View there.', 8000);
     return;
   }
   finishTyping();
@@ -5265,7 +5265,7 @@ function toggleSplit(): void {
   if (ws.pane) paneEntered(true);
   else layoutSplit();
   mainResized();
-  flash(`${drawing.name} is beside the ${t.mode === 'document' ? 'document' : t.mode === 'sheet' ? 'sheet' : 'slides'}. Click a side to work on it; the bar above the drawing picks another drawing and puts structures in.`, 7000);
+  flash(`${drawing.name} is beside the ${t.mode === 'document' ? 'document' : t.mode === 'sheet' ? 'sheet' : t.mode === 'design' ? 'design' : 'slides'}. Click a side to work on it; the bar above the drawing picks another drawing and puts structures in.`, 7000);
 }
 
 function closeSplit(): void {
