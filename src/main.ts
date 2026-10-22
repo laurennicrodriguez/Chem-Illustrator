@@ -26,6 +26,7 @@ import { attachedAtoms, attachWhereItIs, defaultGap, nearestStructure, placeAtta
 import { repeatGroups, lipDirection } from './chem/polymer';
 import { rGroupsOf, substituted, rowNumbers, parseRows, rGroupCells, type RowMass } from './chem/rgroup';
 import type { Vec } from './geom';
+import { isCurved } from './objects';
 import { captionPlaces, fragmentRuns } from './chem/fragments';
 import { toMolfile, addMolfile } from './chem/molfile';
 import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -207,6 +208,8 @@ const ARROWS: PaletteDef = {
     { name: 'arrow-nogo', title: 'Crossed-out arrow (reaction does not go)' },
     { name: 'arrow-curved', title: 'Curved arrow (electron pair). Drag from an atom or bond to an atom or bond and it snaps like a mechanism arrow; hold Alt to draw freely' },
     { name: 'arrow-fishhook', title: 'Curved half-headed arrow (one electron). Snaps between atoms and bonds like the curved arrow; hold Alt to draw freely' },
+    { name: 'arrow-s', title: 'S-shaped curved arrow (two bends), for electrons that have to go round something. Snaps like the curved arrow; hold Alt to draw freely' },
+    { name: 'arrow-s-fishhook', title: 'S-shaped half-headed arrow (one electron, two bends). Snaps like the curved arrow; hold Alt to draw freely' },
   ],
 };
 
@@ -317,6 +320,7 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     templatePalette('aromatics', 'tpl-aromatics', 'Aromatics', 6, 56),
     templatePalette('perspective', 'tpl-perspective', 'Rings in perspective', 6, 56),
     templatePalette(['geometries', 'organometallic'], 'tpl-metal', 'Metal complexes', 6, 64),
+    templatePalette('metallocenes', 'tpl-metallocenes', 'Metallocenes and half-sandwich complexes', 6, 64),
     templatePalette('ligands', 'tpl-ligands', 'Ligands', 6, 64),
     OWN_PALETTE,
   ],
@@ -368,7 +372,7 @@ const HINTS: Record<string, string> = {
   fragment: 'Drag a line across the bonds to break (or click one bond). Each piece gets a caption with its formula and exact mass, which you can edit.',
 };
 const ARROW_HINT = 'Drag to draw an arrow (Alt: any angle); click for a standard one. Drag the ends to move them, the middle to bend it.';
-const CURVE_HINT = 'Drag from where the electrons start to where they go; swing out to one side to bend that way. Drag the middle dot to change the curve.';
+const CURVE_HINT = 'Drag from where the electrons start (lone pair, bond, radical, charge) to where they go (atom, bond, or the gap where a new bond forms); swing out to one side to bend that way. The arrow sticks to the structure. Drag the middle dot (an S: its diamonds) to change the curve.';
 const SHAPE_HINT = 'Drag to draw. Drag the corner squares to resize; the Style panel changes dashes, fill, corners and shadow.';
 const BRACKET_HINT = 'Drag a box to put brackets round it, or click a structure to bracket it.';
 const BOND_HINT = 'Click empty space or an atom to draw; drag to aim. Point at an atom or bond and press a hotkey (Edit > Hotkeys lists them).';
@@ -961,6 +965,8 @@ const animateDialog = new AnimateDialog({
   putOnSlide: (v) => placeClip(v),
 });
 /** The reaction arrow picked (for Animate This Step), if one is. */
+/** Is a curved (mechanism) arrow among the selection? */
+const pickedCurved = (): boolean => [...editor.sel.arrows].some((id) => { const r = doc.arrows.get(id); return !!r && isCurved(r); });
 const pickedReactionArrow = (): number | undefined => [...editor.sel.arrows].find((id) => { const r = doc.arrows.get(id); return !!r && isReactionArrow(r); });
 const nameDialog = new NameDialog(async (name) => {
   const got = await nameToMolfile(name);
@@ -2861,10 +2867,32 @@ const COMMANDS: Record<string, () => unknown> = {
   'delete-highlight-look': () => void deleteHighlightLook(),
   'clean-up': () => editor.cleanUp() || flash('Nothing to clean up: the structures are already tidy.'),
   'clean-up-arrow': () => {
-    const curved = [...editor.sel.arrows].some((id) => doc.arrows.get(id)?.sweep);
-    if (!curved) { flash('Select one or more curved (mechanism) arrows first.'); return; }
+    if (!pickedCurved()) { flash('Select one or more curved (mechanism) arrows first.'); return; }
     const n = editor.cleanUpArrows();
     flash(n ? `Tidied ${n} arrow${n === 1 ? '' : 's'}.` : 'The arrows are already as tidy as they can be.');
+  },
+  'arrow-s-shape': () => {
+    if (!pickedCurved()) { flash('Select one or more curved (mechanism) arrows first.'); return; }
+    if (!editor.setArrowS(true)) flash('The selected arrows are S-shaped already.');
+  },
+  'arrow-single-curve': () => {
+    if (!pickedCurved()) { flash('Select one or more curved (mechanism) arrows first.'); return; }
+    if (!editor.setArrowS(false)) flash('The selected arrows are single curves already.');
+  },
+  'flip-arrow-bend': () => { if (!editor.flipArrowBend()) flash('Select one or more curved (mechanism) arrows first.'); },
+  'homolysis-arrows': () => {
+    const n = editor.sel.bonds.size;
+    if (!n) flash('Select the bond that breaks first (click it with the selection tool).');
+    else if (n > 4) flash('Select just the bond (or bonds) that break: click one with the selection tool, Shift+click for more.', 5000);
+    else editor.addHomolysisArrows();
+  },
+  'attach-arrow': () => {
+    const n = editor.attachArrows();
+    flash(n ? `${n === 1 ? 'It follows' : `${n} things follow`} the structure now.` : 'Select curved arrows whose ends sit on atoms, bonds or lone pairs (or lone pairs and charges) first.');
+  },
+  'detach-arrow': () => {
+    const n = editor.detachSelection();
+    flash(n ? `${n === 1 ? 'It stays' : `${n} things stay`} put when the structure moves now.` : 'Nothing selected is stuck to a structure.');
   },
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
   'arrange-scheme': () => arrangeDialog.open(),
@@ -4541,7 +4569,10 @@ function drawingMenu(): MenuItem[] {
         { cmd: 'pubchem-lookup' },
       ] },
     ] : []),
-    ...([...s.arrows].some((id) => doc.arrows.get(id)?.sweep) ? [{ cmd: 'clean-up-arrow' }] : []),
+    ...(pickedCurved() ? [{ cmd: 'clean-up-arrow' }, { label: 'Mechanism Arrow', items: [
+      { cmd: 'arrow-s-shape' }, { cmd: 'arrow-single-curve' }, { cmd: 'flip-arrow-bend' }, null, { cmd: 'attach-arrow' }, { cmd: 'detach-arrow' },
+    ] }] : []),
+    ...(s.bonds.size && s.bonds.size <= 2 && !s.arrows.size ? [{ cmd: 'homolysis-arrows' }] : []),
     ...(pickedReactionArrow() !== undefined ? [{ cmd: 'animate-step' }] : []),
     ...(s.arrows.size || atoms ? [{ label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'clean-up-arrow' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }, { cmd: 'catalytic-cycle' }, { cmd: 'energy-diagram' }, { cmd: 'ts-brackets' }, null, { cmd: 'animate-reaction' }, ...(pickedReactionArrow() !== undefined ? [{ cmd: 'animate-step' }] : [])] }] : []),
     null,

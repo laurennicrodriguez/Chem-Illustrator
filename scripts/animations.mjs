@@ -325,8 +325,8 @@ if (want('metal-complex')) {
   const c = await canvasBox(page);
   await page.mouse.move(c.x + c.width * 0.5, c.y + c.height * 0.85);
   await record(page, 'metal-complex', async () => {
-    // (η⁶-arene)ML₃ from the Metal complexes palette, placed with a click
-    await paletteTool(page, 'tpl-linear', '(η⁶-Arene)ML₃');
+    // (η⁶-arene)ML₃ from the Metallocenes palette, placed with a click
+    await paletteTool(page, 'tpl-ferrocene', '(η⁶-Arene)ML₃');
     const at = await screenOf(page, { x: 180, y: 133 });
     await glide(page, at.x, at.y, 25); await page.waitForTimeout(300);
     await page.mouse.click(at.x, at.y);

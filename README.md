@@ -45,7 +45,7 @@ Fill rings with a colour, a gradient, hatching or dots (patterns can be see-thro
 
 Coordination geometries, metallocenes, piano stools and 26 ligands are a click away. Hapto (η) bonds go to the middle of a ring or π-bond and follow it, and formulas count metal carbonyls, Cp and phosphines the way a chemist would.
 
-![Placing an arene chromium tricarbonyl from the Metal complexes palette, typing Cr and CO onto it, and moving the benzene ring: the η⁶ bond follows the ring's middle, and the side panel shows C9H6CrO3](docs/images/metal-complex.gif)
+![Placing an arene chromium tricarbonyl from the Metallocenes palette, typing Cr and CO onto it, and moving the benzene ring: the η⁶ bond follows the ring's middle, and the side panel shows C9H6CrO3](docs/images/metal-complex.gif)
 
 ## It knows the chemistry
 

@@ -64,7 +64,7 @@ export function itemFinder(items: Item[]): (ref: string) => Item | undefined {
 
 /** Can this arrow be a reaction step? Straight, with a head, and not a resonance arrow. */
 export function isReactionArrow(r: Arrow): boolean {
-  if (r.sweep && !r.step) return false;
+  if ((r.sweep || r.bez?.length) && !r.step) return false;
   const h = r.headStyle !== 'none', t = r.tailStyle !== 'none';
   if (!h && !t) return false;
   // heads at both ends: resonance (but two half-headed shafts are an equilibrium)

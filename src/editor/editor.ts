@@ -36,7 +36,8 @@ import { selectedGroup } from '../chem/group-smiles';
 import { circleRing, circleRings, kekulize } from '../chem/aromatic';
 import { bondLayer, crossingBonds } from '../chem/crossing';
 import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
-import { bendSide, cleanUpArrow, isLonePair, pairOwner, pushArrow, pushEndAt, symbolAt, symbolSpot, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
+import { bendSide, cleanUpArrow, headEnd, isAtomSymbol, pushArrow, pushEndAt, pushPins, sameEnd, symbolAt, symbolPin, symbolSpot, tailEnd, SMALL_HEAD, type PushArrow, type PushEnd } from '../chem/mechanism';
+import { followPins, hasPins, mirrorBend } from '../chem/pins';
 import { applyArrange, planArrange, readingOrder, type ArrangeOptions } from '../chem/scheme-arrange';
 import { buildCycle, type CycleLook, type CycleSpec } from '../chem/cycles';
 import { energyFrameOf, plotFromBox, putEnergy, refitEnergy, type EnergyData } from '../design/energy';
@@ -48,7 +49,7 @@ import { tokenize, addNicknames, isBuiltInNickname } from '../chem/labels';
 import {
   Handle, arrowHit, shapeHit, arrowHandles, shapeHandles, dragArrowHandle, dragShapeHandle, dragCropHandle, shapeBox,
   arrowPoints, bracketsAround, bracketLip, unionRect,
-  shapeOrder, portNear, shapePorts,
+  shapeOrder, portNear, shapePorts, isCurved, headBend, swapHalf, bezPoints,
 } from '../objects';
 import { isEmptyText } from '../deck/deck';
 import { crossedBonds, lineAcross } from '../chem/fragments';
@@ -77,7 +78,9 @@ export type Tool =
 export type SymbolKind = 'LonePair' | 'Electron' | 'CirclePlus' | 'CircleMinus' | 'DeltaPlus' | 'DeltaMinus';
 
 /** How a new arrow looks (everything else is the document's default). */
-export type ArrowStyle = Partial<Pick<Arrow, 'headStyle' | 'tailStyle' | 'headType' | 'line' | 'noGo' | 'equilibrium' | 'sweep' | 'elbow' | 'from' | 'to'>> & {
+export type ArrowStyle = Partial<Pick<Arrow, 'headStyle' | 'tailStyle' | 'headType' | 'line' | 'noGo' | 'equilibrium' | 'sweep' | 'elbow' | 'from' | 'to' | 'bez' | 'pin'>> & {
+  /** An S-shaped curved arrow (two bends). */
+  s?: boolean;
   /** Two shafts and an open head (⇒). */
   retro?: boolean;
   /** A connector: its ends stick to shapes' connection points, and it isn't snapped to 15° steps. */
@@ -124,6 +127,8 @@ export const TOOLS: Record<string, Tool> = {
   'arrow-nogo': { kind: 'arrow', style: { noGo: true } },
   'arrow-curved': { kind: 'arrow', style: { sweep: 120 * DEG } },
   'arrow-fishhook': { kind: 'arrow', style: { sweep: 120 * DEG, headStyle: 'halfLeft' } },
+  'arrow-s': { kind: 'arrow', style: { sweep: 120 * DEG, s: true } },
+  'arrow-s-fishhook': { kind: 'arrow', style: { sweep: 120 * DEG, s: true, headStyle: 'halfLeft' } },
   connector: { kind: 'arrow', style: { connector: true } },
   'connector-elbow': { kind: 'arrow', style: { connector: true, elbow: true } },
   'shape-rect': { kind: 'shape', shape: { kind: 'rect' }, from: 'corner' },
@@ -610,7 +615,7 @@ export class Editor {
     if (!d.moved && Math.hypot(sp.x - d.startScreen.x, sp.y - d.startScreen.y) > 3) {
       d.moved = true;
       if (d.mode === 'none') d.mode = this.dragModeFor(d);
-      if (d.mode === 'handle') this.doc.begin(d.handle!.which === 'mid' ? 'Bend arrow' : this.cropping === d.handle!.id ? 'Crop picture' : 'Resize');
+      if (d.mode === 'handle') this.doc.begin(d.handle!.which === 'mid' || d.handle!.which[0] === 'b' ? 'Bend arrow' : this.cropping === d.handle!.id ? 'Crop picture' : 'Resize');
       if (d.mode === 'rotate') this.doc.begin('Rotate');
       if (d.mode === 'move') {
         this.r.overlay.style.cursor = d.ctrl ? 'copy' : 'grabbing';
@@ -659,6 +664,8 @@ export class Editor {
         }
       }
       this.moveSelection(to.x - done.x, to.y - done.y);
+      // arrows and lone pairs stuck to what moves go along with it as it goes
+      if (hasPins(this.doc)) followPins(this.doc);
       d.applied = to;
       d.last = p;
       this.requestScene(e.timeStamp);
@@ -672,6 +679,7 @@ export class Editor {
       ang = e.shiftKey || e.altKey ? snapAngle(ang) : Math.round(ang / DEG) * DEG;
       r.angle = ang;
       transform(this.doc, r.snap, rotation(r.center, ang), false, this.textTurn(ang / DEG));
+      if (hasPins(this.doc)) followPins(this.doc);
       d.last = p;
       this.requestScene(e.timeStamp);
       return;
@@ -682,12 +690,14 @@ export class Editor {
         const r = this.doc.arrows.get(h.id);
         if (r) {
           let patch = dragArrowHandle(r, h.which, p, e.altKey);
+          // a half head keeps its barb on the outside of an S's last bend
+          if (h.which[0] === 'b' && headBend(r) !== headBend({ ...r, ...patch })) Object.assign(patch, { headStyle: swapHalf(r.headStyle), tailStyle: swapHalf(r.tailStyle) });
           // a connector's end sticks to the connection point it is dropped on, and comes loose elsewhere
           if ((h.which === 'tail' || h.which === 'head') && (this.glueArrows || r.from || r.to || r.elbow)) {
             const key = h.which === 'tail' ? 'from' : 'to';
             const port = this.portAt(p);
             patch = port ? { [h.which]: port.at, [key]: { shape: port.shape, port: port.port } } : { [h.which]: p, [key]: undefined };
-          } else if ((h.which === 'tail' || h.which === 'head') && r.sweep && !r.equilibrium && !e.altKey) {
+          } else if ((h.which === 'tail' || h.which === 'head') && isCurved(r) && !r.equilibrium && !e.altKey) {
             // a curved arrow's end dropped on a lone pair, atom or bond snaps to it (Alt: anywhere)
             const snap = this.snapPushEnd(r, h.which, p);
             if (snap) patch = snap;
@@ -1471,8 +1481,7 @@ export class Editor {
     } else if (t.kind === 'arrow') {
       const push = this.pushFor(d, p);
       if (push) {
-        const lw = doc.style.lineWidth;
-        doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(push.tail, push.head, { ...t.style, sweep: Math.abs(push.sweep), ...(push.small ? { headLength: lw * SMALL_HEAD.length, headWidth: lw * SMALL_HEAD.width } : {}) }, Math.sign(push.sweep)).id }));
+        doc.edit('Arrow', () => this.selectOnly({ kind: 'arrow', id: this.addPushArrow(push, t.style).id }));
         return;
       }
       const c = this.connectorEnds(t.style, d.start, p);
@@ -1517,7 +1526,7 @@ export class Editor {
     if (d.hit?.kind !== 'arrow' || !d.shift) return d.start;
     const r = this.doc.arrows.get(d.hit.id);
     if (!r) return d.start;
-    const mid = r.sweep ? arrowPoints(r)[12] : { x: (r.tail.x + r.head.x) / 2, y: (r.tail.y + r.head.y) / 2 };
+    const mid = isCurved(r) ? arrowPoints(r)[12] : { x: (r.tail.x + r.head.x) / 2, y: (r.tail.y + r.head.y) / 2 };
     const spots = [r.tail, r.head, mid];
     return spots.reduce((a, b) => (dist(b, d.start) < dist(a, d.start) ? b : a));
   }
@@ -1542,21 +1551,33 @@ export class Editor {
   private pushFor(d: Drag, p: Vec): PushArrow | null {
     const t = this.tool;
     if (t.kind !== 'arrow' || !t.style.sweep || d.alt) return null;
+    const doc = this.doc, m = this.measure();
     const endOf = (h: Hit, at: Vec): PushEnd => {
       if (h && (h.kind === 'atom' || h.kind === 'bond')) return { kind: h.kind, id: h.id };
-      // a drawn lone pair: the arrow starts from it (and one ending on it points at its atom)
-      if (h?.kind === 'shape' && isLonePair(this.doc.shapes.get(h.id))) return { kind: 'pair', id: h.id };
-      return { kind: 'point', p: at };
+      // a drawn lone pair, radical dot or charge: the arrow starts from it (and one ending on it points at its atom)
+      if (h?.kind === 'shape' && isAtomSymbol(doc.shapes.get(h.id))) return { kind: 'pair', id: h.id };
+      // on empty paper: perhaps the gap between two atoms where a new bond will form
+      return h ? { kind: 'point', p: at } : pushEndAt(doc, m, at).kind === 'gap' ? pushEndAt(doc, m, at) : { kind: 'point', p: at };
     };
-    const from = endOf(d.hit, d.start);
-    let to = endOf(this.hitTest(p), p);
-    if (to.kind === 'pair') { const o = pairOwner(this.doc, this.doc.shapes.get(to.id)!); to = o !== null ? { kind: 'atom', id: o } : { kind: 'point', p }; }
+    const from = tailEnd(doc, endOf(d.hit, d.start), d.start);
+    let to = headEnd(doc, endOf(this.hitTest(p), p), p);
     if (from.kind === 'point' && to.kind === 'point') return null;
-    if (to.kind !== 'point' && from.kind === to.kind && (from as { id: number }).id === to.id) to = { kind: 'point', p };
+    if (sameEnd(from, to)) to = { kind: 'point', p };
     if (to.kind === 'point' && dist(p, d.start) < this.tol(6)) return null;
     // a swing of the pointer chooses the bend; otherwise it bends away from the structure
     const a = from.kind === 'point' ? from.p : d.start;
-    return pushArrow(this.doc, this.measure(), from, to, this.swing(d, a, p));
+    return pushArrow(doc, m, from, to, { side: this.swing(d, a, p), s: !!t.style.s });
+  }
+
+  /** Add an electron-pushing arrow as pushArrow worked it out, in the tool's style, its ends pinned to what they are on. */
+  private addPushArrow(push: PushArrow, style: ArrowStyle): Arrow {
+    const lw = this.doc.style.lineWidth;
+    const { s: _, ...rest } = style;
+    const look: ArrowStyle = push.bez
+      ? { ...rest, sweep: 0, bez: push.bez }
+      : { ...rest, sweep: Math.abs(push.sweep), ...(push.small ? { headLength: lw * SMALL_HEAD.length, headWidth: lw * SMALL_HEAD.width } : {}) };
+    const pin = pushPins(this.doc, push);
+    return this.addArrow(push.tail, push.head, { ...look, ...(pin ? { pin } : {}) }, push.bez ? 1 : Math.sign(push.sweep));
   }
 
   /** A curved arrow with one end dragged to `p`: snapped to the lone pair, atom or bond there, keeping its bend; null when there is nothing there. */
@@ -1565,21 +1586,28 @@ export class Editor {
     const m = this.measure();
     let here = pushEndAt(doc, m, p);
     if (here.kind === 'point') return null;
-    if (which === 'head' && here.kind === 'pair') { const o = pairOwner(doc, doc.shapes.get(here.id)!); if (o === null) return null; here = { kind: 'atom', id: o }; }
+    here = which === 'head' ? headEnd(doc, here, p) : tailEnd(doc, here, p);
+    if (here.kind === 'point') return null;
     const other = pushEndAt(doc, m, which === 'tail' ? r.head : r.tail);
-    const from = which === 'tail' ? here : other;
-    let to = which === 'head' ? here : other;
-    if (to.kind === 'pair') { const o = pairOwner(doc, doc.shapes.get(to.id)!); to = o !== null ? { kind: 'atom', id: o } : { kind: 'point', p: r.head }; }
-    if (to.kind !== 'point' && from.kind === to.kind && (from as { id: number }).id === to.id) return null;
-    // keep the side it bends to
-    const push = pushArrow(doc, m, from, to, bendSide(r));
+    const from = which === 'tail' ? here : tailEnd(doc, other, r.tail);
+    const to = which === 'head' ? here : headEnd(doc, other, r.head);
+    if (sameEnd(from, to)) return null;
+    // keep the side it bends to, and its S shape
+    const push = pushArrow(doc, m, from, to, { side: bendSide(r), s: !!r.bez?.length, arcOnly: !r.bez?.length });
     if (!push) return null;
-    const patch: Partial<Arrow> = { tail: push.tail, head: push.head, sweep: push.sweep };
-    if (Math.sign(push.sweep) !== Math.sign(r.sweep)) {
-      const swap = (x: Arrow['headStyle']) => (x === 'halfLeft' ? 'halfRight' : x === 'halfRight' ? 'halfLeft' : x);
+    return { ...this.pushPatch(r, push), pin: pushPins(doc, push) };
+  }
+
+  /** What redrawing a curved arrow as `push` changes: its ends and bend, keeping a half head's barb outside the curve. */
+  private pushPatch(r: Arrow, push: PushArrow): Partial<Arrow> {
+    const lw = this.doc.style.lineWidth;
+    const patch: Partial<Arrow> = { tail: push.tail, head: push.head, sweep: push.sweep, bez: push.bez };
+    if (headBend(r) !== headBend({ ...r, ...patch })) {
+      const swap = (h: Arrow['headStyle']) => (h === 'halfLeft' ? 'halfRight' : h === 'halfRight' ? 'halfLeft' : h);
       patch.headStyle = swap(r.headStyle);
       patch.tailStyle = swap(r.tailStyle);
     }
+    if (push.small) Object.assign(patch, { headLength: lw * SMALL_HEAD.length, headWidth: lw * SMALL_HEAD.width });
     return patch;
   }
 
@@ -1590,27 +1618,122 @@ export class Editor {
    */
   cleanUpArrows(): number {
     const doc = this.doc;
-    const lw = doc.style.lineWidth;
     const m = this.measure();
-    const arrows = [...this.sel.arrows].map((id) => doc.arrows.get(id)).filter((r): r is Arrow => !!r && !!r.sweep && !r.equilibrium && !r.elbow);
+    const arrows = [...this.sel.arrows].map((id) => doc.arrows.get(id)).filter((r): r is Arrow => !!r && isCurved(r) && !r.equilibrium && !r.elbow);
     const plans = arrows.map((r) => ({ r, push: cleanUpArrow(doc, m, r) })).filter((x): x is { r: Arrow; push: PushArrow } => !!x.push);
-    const changed = plans.filter(({ r, push }) => dist(r.tail, push.tail) > 0.01 || dist(r.head, push.head) > 0.01 || Math.abs(r.sweep - push.sweep) > 1e-4);
+    const sameBez = (a?: Vec[], b?: Vec[]) => (a?.length ?? 0) === (b?.length ?? 0) && (a ?? []).every((p, i) => dist(p, b![i]) < 1e-4);
+    const changed = plans.filter(({ r, push }) => dist(r.tail, push.tail) > 0.01 || dist(r.head, push.head) > 0.01 || Math.abs(r.sweep - push.sweep) > 1e-4 || !sameBez(r.bez, push.bez));
     if (!changed.length) return 0;
     doc.edit('Clean up arrow', () => {
-      for (const { r, push } of changed) {
-        const patch: Partial<Arrow> = { tail: push.tail, head: push.head, sweep: push.sweep };
-        // a half head (fishhook) keeps its barb on the outside of the curve
-        if (Math.sign(push.sweep) !== Math.sign(r.sweep)) {
-          const swap = (h: Arrow['headStyle']) => (h === 'halfLeft' ? 'halfRight' : h === 'halfRight' ? 'halfLeft' : h);
-          patch.headStyle = swap(r.headStyle);
-          patch.tailStyle = swap(r.tailStyle);
-        }
-        if (push.small) Object.assign(patch, { headLength: lw * SMALL_HEAD.length, headWidth: lw * SMALL_HEAD.width });
+      for (const { r, push } of changed) doc.updateArrow(r.id, { ...this.pushPatch(r, push), pin: pushPins(doc, push) });
+    });
+    this.changed();
+    return changed.length;
+  }
+
+  /**
+   * Turn each picked curved arrow into an S (two bends) or back into a single curve, from and to
+   * the same places. Gives how many changed.
+   */
+  setArrowS(s: boolean): number {
+    const doc = this.doc;
+    const m = this.measure();
+    const arrows = [...this.sel.arrows].map((id) => doc.arrows.get(id)).filter((r): r is Arrow => !!r && isCurved(r) && !r.equilibrium && !r.elbow && !!r.bez?.length !== s);
+    if (!arrows.length) return 0;
+    doc.edit(s ? 'S-shaped arrow' : 'Single-curve arrow', () => {
+      for (const r of arrows) {
+        const from = tailEnd(doc, pushEndAt(doc, m, r.tail), r.tail);
+        const to = headEnd(doc, pushEndAt(doc, m, r.head), r.head);
+        const side = bendSide(r);
+        // snapped where it is drawn between things; between free points the same two ends
+        const push = !sameEnd(from, to) && (from.kind !== 'point' || to.kind !== 'point') ? pushArrow(doc, m, from, to, { side, s, arcOnly: !s }) : null;
+        const patch: Partial<Arrow> = push
+          ? { ...this.pushPatch(r, push), ...(r.pin ? { pin: pushPins(doc, push) } : {}) }
+          : s ? { sweep: 0, bez: [{ x: 0.25, y: 0.8 * side }, { x: 0.75, y: -0.8 * side }] } : { bez: undefined, sweep: -side * 120 * DEG };
+        if (!push && headBend(r) !== headBend({ ...r, ...patch })) Object.assign(patch, { headStyle: swapHalf(r.headStyle), tailStyle: swapHalf(r.tailStyle) });
         doc.updateArrow(r.id, patch);
       }
     });
     this.changed();
-    return changed.length;
+    return arrows.length;
+  }
+
+  /** Bend each picked curved arrow the other way (a mirror image about the line between its ends). */
+  flipArrowBend(): number {
+    const doc = this.doc;
+    const arrows = [...this.sel.arrows].map((id) => doc.arrows.get(id)).filter((r): r is Arrow => !!r && isCurved(r) && !r.elbow);
+    if (!arrows.length) return 0;
+    doc.edit('Flip arrow bend', () => { for (const r of arrows) doc.updateArrow(r.id, mirrorBend(r)); });
+    this.changed();
+    return arrows.length;
+  }
+
+  /** Free each picked arrow (and lone pair or charge) from the structure it is stuck to. */
+  detachSelection(): number {
+    const doc = this.doc;
+    const arrows = [...this.sel.arrows].filter((id) => doc.arrows.get(id)?.pin);
+    const shapes = [...this.sel.shapes].filter((id) => doc.shapes.get(id)?.pin);
+    if (!arrows.length && !shapes.length) return 0;
+    doc.edit('Detach', () => {
+      for (const id of arrows) doc.updateArrow(id, { pin: undefined });
+      for (const id of shapes) doc.updateShape(id, { pin: undefined });
+    });
+    this.changed();
+    return arrows.length + shapes.length;
+  }
+
+  /** Stick each picked curved arrow's ends to what they sit on, so they follow the structure. */
+  attachArrows(): number {
+    const doc = this.doc;
+    const m = this.measure();
+    let n = 0;
+    doc.edit('Attach to structure', () => {
+      for (const id of this.sel.arrows) {
+        const r = doc.arrows.get(id);
+        if (!r || !isCurved(r) || r.elbow) continue;
+        const pin = pushPins(doc, { tail: r.tail, head: r.head, start: tailEnd(doc, pushEndAt(doc, m, r.tail), r.tail), end: headEnd(doc, pushEndAt(doc, m, r.head), r.head) });
+        if (pin) { doc.updateArrow(id, { pin }); n++; }
+      }
+      for (const id of this.sel.shapes) {
+        const sh = doc.shapes.get(id);
+        const pin = sh && symbolPin(doc, sh);
+        if (pin) { doc.updateShape(id, { pin }); n++; }
+      }
+    });
+    this.changed();
+    return n;
+  }
+
+  /**
+   * Homolysis: two fishhook arrows from the middle of each picked bond, one to each of its atoms
+   * (each takes one of the bond's electrons). Gives how many bonds got them.
+   */
+  addHomolysisArrows(): number {
+    const doc = this.doc;
+    const m = this.measure();
+    const bonds = [...this.sel.bonds].filter((id) => doc.bonds.has(id));
+    if (!bonds.length) return 0;
+    const made: number[] = [];
+    doc.edit('Homolysis arrows', () => {
+      for (const id of bonds) {
+        const b = doc.bonds.get(id)!;
+        const p1 = doc.atoms.get(b.a1)!, p2 = doc.atoms.get(b.a2)!;
+        const u = norm(sub(p2, p1)), mid = mul(add(p1, p2), 0.5);
+        // both fishhooks on the open side of the bond (away from the rest of the structure), curling out to each atom
+        let n = perp(u);
+        const others = [...doc.atomsNear(mid, 1.8 * doc.style.bondLength)].filter((a) => a.id !== b.a1 && a.id !== b.a2);
+        const pull = others.reduce((t, a) => t + dot(sub(a, mid), n), 0);
+        if (others.length ? pull > 0 : n.y > 0) n = mul(n, -1);
+        for (const atom of [b.a1, b.a2]) {
+          const toward = norm(sub(doc.atoms.get(atom)!, mid));
+          const push = pushArrow(doc, m, { kind: 'bond', id }, { kind: 'atom', id: atom }, { side: dot(perp(toward), n) >= 0 ? 1 : -1 });
+          if (push) made.push(this.addPushArrow(push, { sweep: 120 * DEG, headStyle: 'halfLeft' }).id);
+        }
+      }
+    });
+    if (made.length) { this.sel = emptySel(); for (const id of made) this.sel.arrows.add(id); }
+    this.changed();
+    return bonds.length;
   }
 
   /** The box, circle or line a shape tool draws for a drag from a to b (Shift: square or circle). */
@@ -1850,17 +1973,22 @@ export class Editor {
   /** Add an arrow from tail to head in the given style; `side` −1 bends a curved arrow the other way. */
   private addArrow(tail: Vec, head: Vec, style: ArrowStyle = {}, side = 1): Arrow {
     const lw = this.doc.style.lineWidth;
-    const { retro, connector: _, ...rest } = style;
+    const { retro, connector: _, s: sShape, ...rest } = style;
     // ChemDraw's defaults: heads ten line widths long and 2.5 wide
     const a: Omit<Arrow, 'id'> = {
       tail, head, headStyle: 'full', tailStyle: 'none', headType: 'solid', line: 'solid', noGo: false,
       equilibrium: false, sweep: 0, headLength: lw * 10, headWidth: lw * 2.5, ...rest,
     };
-    if (a.sweep && side < 0) {
+    // an S drawn freely: its first bend to the side the pointer swung out to
+    if (sShape && !a.bez) { a.bez = [{ x: 0.25, y: -0.8 * side }, { x: 0.75, y: 0.8 * side }]; a.sweep = 0; }
+    if (a.bez) {
+      a.sweep = 0;
+      // a half head's barb goes on the outside of the last bend
+      if (headBend(a) < 0) { a.headStyle = swapHalf(a.headStyle); a.tailStyle = swapHalf(a.tailStyle); }
+    } else if (a.sweep && side < 0) {
       a.sweep = -a.sweep;
-      const swap = (x: Arrow['headStyle']) => (x === 'halfLeft' ? 'halfRight' : x === 'halfRight' ? 'halfLeft' : x);
-      a.headStyle = swap(a.headStyle);
-      a.tailStyle = swap(a.tailStyle);
+      a.headStyle = swapHalf(a.headStyle);
+      a.tailStyle = swapHalf(a.tailStyle);
     }
     // a retrosynthetic arrow, with the sizes ChemDraw gives one
     if (retro) Object.assign(a, { shaftSpacing: lw * 6, headLength: lw * 6, headWidth: lw * 1.5 });
@@ -2476,7 +2604,7 @@ export class Editor {
         const pad = 0.2 * doc.style.bondLength;
         const room = { x1: nb.x1 - pad, y1: nb.y1 - pad, x2: nb.x2 + pad, y2: nb.y2 + pad };
         for (const r of doc.arrows.values()) {
-          if (r.sweep) continue;
+          if (isCurved(r)) continue;
           const t = exitParam(r.tail, r.head, room), h = exitParam(r.head, r.tail, room);
           const cut = (from: Vec, to: Vec, k: number) => ({ x: from.x + (to.x - from.x) * k, y: from.y + (to.y - from.y) * k });
           const tail = t > 0 ? cut(r.tail, r.head, t) : r.tail, head = h > 0 ? cut(r.head, r.tail, h) : r.head;
@@ -3790,6 +3918,22 @@ export class Editor {
       ctx.lineWidth = px;
       ctx.strokeStyle = PREVIEW;
       ctx.fillStyle = '#fff';
+      // an S-shaped arrow's control points, tied to the ends (and joins) they pull on
+      ctx.save();
+      ctx.setLineDash([2 * px, 2 * px]);
+      ctx.beginPath();
+      for (const hd of handles) {
+        if (hd.kind !== 'arrow' || hd.which[0] !== 'b') continue;
+        const r = doc.arrows.get(hd.id);
+        const pts = r && bezPoints(r);
+        if (!pts) continue;
+        const k = Number(hd.which.slice(1)) + 1;
+        // a control point hangs off the point next to it (a join has none of its own)
+        const to = k % 3 === 1 ? pts[k - 1] : k % 3 === 2 ? pts[k + 1] : null;
+        if (to) { ctx.moveTo(hd.at.x, hd.at.y); ctx.lineTo(to.x, to.y); }
+      }
+      ctx.stroke();
+      ctx.restore();
       for (const hd of handles) {
         ctx.beginPath();
         if (hd.kind === 'shape' && hd.id === this.cropping) {
@@ -3804,6 +3948,7 @@ export class Editor {
           continue;
         }
         if (hd.which === 'mid') ctx.arc(hd.at.x, hd.at.y, k * 1.1, 0, Math.PI * 2);
+        else if (hd.which[0] === 'b') { ctx.moveTo(hd.at.x, hd.at.y - k * 1.2); ctx.lineTo(hd.at.x + k * 1.2, hd.at.y); ctx.lineTo(hd.at.x, hd.at.y + k * 1.2); ctx.lineTo(hd.at.x - k * 1.2, hd.at.y); ctx.closePath(); }
         else ctx.rect(hd.at.x - k, hd.at.y - k, 2 * k, 2 * k);
         ctx.fill();
         ctx.stroke();
@@ -3988,8 +4133,9 @@ export class Editor {
       if (c) { poly(arrowPoints({ tail: c.tail, head: c.head, sweep: 0, elbow: t.style.elbow, ...c.glue }), false); return; }
       const start = this.branchStart(d);
       const end = this.arrowEnd(start, d.last, d.alt);
-      const sweep = (t.style.sweep ?? 0) * this.bendSide(d, end);
-      poly(arrowPoints({ tail: start, head: end, sweep }), false);
+      const side = this.bendSide(d, end);
+      const sweep = (t.style.sweep ?? 0) * side;
+      poly(arrowPoints({ tail: start, head: end, sweep, ...(t.style.s ? { bez: [{ x: 0.25, y: -0.8 * side }, { x: 0.75, y: 0.8 * side }] } : {}) }), false);
     } else if (t.kind === 'shape') {
       const g = this.shapeGeometry(t, d.start, d.last, d.shift, d.alt);
       if (g) outlineShape(ctx, { id: 0, ...t.shape, ...g });
