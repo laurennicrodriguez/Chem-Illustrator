@@ -36,7 +36,10 @@ export function handleCursor(which: HandleId): string {
     case 'ne': case 'sw': return 'nesw-resize';
     case 'nw': case 'se': return 'nwse-resize';
     case 'mid': return 'grab';
-    default: return 'move'; // an arrow's or line's end: it goes wherever it is dragged
+    default:
+      // a control point of an S-shaped arrow bends it, as its middle does an arc
+      if (which[0] === 'b') return 'grab';
+      return 'move'; // an arrow's or line's end: it goes wherever it is dragged
   }
 }
 

@@ -7,13 +7,15 @@ import { ATTACH_TAG, IGNORE_TAG, attachFromTag, fillAttachments } from '../edito
 import { highlightStyleFromTag } from '../render/highlight';
 import { attachRingFills } from '../chem/ring-fill';
 import { lipDirection } from '../chem/polymer';
-import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, MorphStep, CHIRAL_FLAGS, PARTIAL } from '../model';
+import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, MorphStep, CHIRAL_FLAGS, PARTIAL, type Pin } from '../model';
 import { TEXT_TAG, parseTextTag, runsFromChemDraw } from '../text/chemdraw-text';
 import { DocStyle } from '../style';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
 import { addNicknames } from '../chem/labels';
 import { ringBonds, ringsThroughBond } from '../chem/aromatic';
 import { DEG } from '../geom';
+import { chordLocal, headBend, swapHalf } from '../objects';
+import { pinSymbols } from '../chem/pins';
 import { kids, descendants } from './xml';
 import { styleFromFace, isSymbolFont, fromSymbolFont } from '../richtext';
 import { dataUrl, fromDataUrl, imageSize } from '../render/images';
@@ -67,6 +69,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   /** Which entity each element became (kind + id), for the references in reaction steps. */
   const refOf = new Map<Element, string>();
   const morphTags: [number, string][] = [];
+  const pinTags: [number, string][] = [];
   const from = (kind: Kind, id: number, el: Element) => { ord.set(kind + id, ordOf.get(el)!); refOf.set(el, kind + id); };
   const stats: ReadStats = { atoms: 0, bonds: 0, captions: 0, arrows: 0, shapes: 0, skipped: {}, parseMs: t1 - t0, buildMs: 0 };
   const skip = (what: string) => { stats.skipped[what] = (stats.skipped[what] ?? 0) + 1; };
@@ -532,6 +535,49 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     from('r', arrow.id, a);
     const mt = kids(a).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === MORPH_TAG);
     if (mt) morphTags.push([arrow.id, mt.getAttribute('Value') ?? '']);
+    const pt = kids(a).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === PIN_TAG);
+    if (pt) pinTags.push([arrow.id, pt.getAttribute('Value') ?? '']);
+    stats.arrows++;
+  };
+
+  /**
+   * A ChemDraw curve with an arrowhead (a freehand arrow, or an S-shaped arrow saved here): an
+   * arrow along its Bézier curves. Curves without heads are skipped.
+   */
+  const readCurve = (c: Element) => {
+    const type = num(c, 'CurveType', 0);
+    const own = kids(c).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === CURVE_ARROW_TAG)?.getAttribute('Value');
+    // CurveType bits: closed 1, dashed 2, bold 4, arrow at end 8, at start 16, half-arrow at end 32, at start 64
+    if (!own && !(type & 0x78)) { skip('curve'); return; }
+    if (type & 1) { skip('closed curve'); return; }
+    const n = pts(c.getAttribute('CurvePoints'));
+    const knots: { x: number; y: number }[] = [];
+    for (let i = 0; i + 1 < n.length; i += 2) knots.push({ x: n[i], y: n[i + 1] });
+    if (knots.length < 6 || knots.length % 3) { skip('curve'); return; }
+    // each point comes with its handle in before it and its handle out after it
+    const path = [knots[1]];
+    for (let k = 1; 3 * k + 1 < knots.length; k++) path.push(knots[3 * k - 1], knots[3 * k], knots[3 * k + 1]);
+    const tail = path[0], head = path[path.length - 1];
+    if (Math.hypot(head.x - tail.x, head.y - tail.y) < 1e-6) { skip('curve'); return; }
+    const lw = num(c, 'LineWidth', st.lineWidth);
+    let look: Partial<Arrow> = {};
+    try { look = own ? JSON.parse(own) : {}; } catch { look = {}; }
+    const arrow: Omit<Arrow, 'id'> & { id: number } = {
+      id: idFor(c), tail, head,
+      headStyle: type & 8 ? 'full' : type & 32 ? 'halfLeft' : 'none',
+      tailStyle: type & 16 ? 'full' : type & 64 ? 'halfLeft' : 'none',
+      headType: 'solid', line: type & 2 ? 'dashed' : type & 4 ? 'bold' : 'solid', noGo: false, equilibrium: false, sweep: 0,
+      headLength: lw * 10, headWidth: lw * 2.5, color: color(c),
+      bez: path.slice(1, -1).map((p) => chordLocal(tail, head, p)),
+    };
+    // a half head's barb goes on the outside of the last bend (ChemDraw's own side isn't stored)
+    if (!own && headBend(arrow) < 0) { arrow.headStyle = swapHalf(arrow.headStyle); arrow.tailStyle = swapHalf(arrow.tailStyle); }
+    for (const k of ['headStyle', 'tailStyle', 'headType', 'line', 'headLength', 'headWidth'] as const) if (look[k] !== undefined) (arrow as Record<string, unknown>)[k] = look[k];
+    if (lw !== st.lineWidth) arrow.lineWidth = lw;
+    doc.addArrow(arrow);
+    from('r', arrow.id, c);
+    const pt = kids(c).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === PIN_TAG);
+    if (pt) pinTags.push([arrow.id, pt.getAttribute('Value') ?? '']);
     stats.arrows++;
   };
 
@@ -694,6 +740,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
         case 'fragment': readFragment(ch); break;
         case 't': readCaption(ch); break;
         case 'arrow': readArrow(ch); break;
+        case 'curve': readCurve(ch); break;
         case 'graphic': readGraphic(ch); break;
         case 'embeddedobject': {
           // pictures: ChemDraw keeps a PNG copy of each (with Windows metafiles beside it)
@@ -721,6 +768,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     walk(root);
     readSteps(all, refOf, doc);
     readMorphTags(morphTags, refOf, doc);
+    readPinTags(pinTags, refOf, doc);
     readRepeats();
     for (const c of pendingCircles) if (!ringOfCircle(doc, c)) c.oval();
     // Element labels like "OH", "H2N" or "N" become automatic labels (so they re-justify
@@ -741,6 +789,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       }
     }
     attachRingFills(doc);
+    // lone pairs, radical dots and circled charges go with their atoms
+    pinSymbols(doc);
     fillFrameMembers(doc);
     fillAttachments(doc);
   });
@@ -796,6 +846,29 @@ function readMorphTags(tags: [number, string][], refOf: Map<Element, string>, do
       if (v.slides?.length) m.slides = v.slides.map(([[a, b], [c, d]]) => [[at(a), at(b)], [at(c), at(d)]]);
       r.morph = m;
     } catch { /* a pairing naming atoms that are not there is no pairing */ }
+  }
+}
+
+/** Pins on arrows' ends, with the file's node ids turned back into atoms (a pin naming an atom that is gone is dropped). */
+function readPinTags(tags: [number, string][], refOf: Map<Element, string>, doc: Doc): void {
+  if (!tags.length) return;
+  const atomOf = new Map<string, number>();
+  for (const [el, ref] of refOf) if (ref[0] === 'a') atomOf.set(el.getAttribute('id') ?? '', Number(ref.slice(1)));
+  for (const [id, json] of tags) {
+    const r = doc.arrows.get(id);
+    if (!r) continue;
+    try {
+      const v = JSON.parse(json) as Record<'tail' | 'head', { on: Pin['on']; ref: string[]; at: [number, number]; hand: number } | undefined>;
+      const pin: Arrow['pin'] = {};
+      for (const end of ['tail', 'head'] as const) {
+        const p = v[end];
+        if (!p) continue;
+        const ref = p.ref.map((k) => atomOf.get(String(k)));
+        if (ref.some((x) => x === undefined) || !['atom', 'bond', 'gap'].includes(p.on)) continue;
+        pin[end] = { on: p.on, ref: ref as number[], at: { x: p.at[0], y: p.at[1] }, hand: p.hand < 0 ? -1 : 1, was: { ...r[end] } };
+      }
+      if (pin.tail || pin.head) r.pin = pin;
+    } catch { /* not a pin */ }
   }
 }
 
@@ -923,6 +996,10 @@ export const TURN_TAG = 'Chem Illustrator turn';
 export const GEO_TAG = 'Chem Illustrator shape';
 /** A reaction arrow's animation settings (MorphStep as JSON, atoms by the file's node ids). */
 export const MORPH_TAG = 'Chem Illustrator animation';
+/** An electron-pushing arrow's pins (what its ends are stuck to: Pin as JSON without `was`, atoms by node id). */
+export const PIN_TAG = 'Chem Illustrator pin';
+/** An S-shaped arrow saved as a ChemDraw curve: its heads as they are here (JSON). */
+export const CURVE_ARROW_TAG = 'Chem Illustrator arrow';
 /** The group's box when saved here (ChemDraw rewrites BoundingBox when the group is moved). */
 export const GEO_BOX_ATTR = 'ChemIllustratorBox';
 export const OWN_PICTURE = 'ChemIllustratorPicture';

@@ -16,7 +16,7 @@ import { setStereoShown, setStereoText } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
 import { Selection } from '../editor/editor';
 import { DEG } from '../geom';
-import { isCircle, cropTo } from '../objects';
+import { isCircle, cropTo, isCurved, headBend, swapHalf } from '../objects';
 import { GEOS, geoDef } from '../design/geo';
 import { nextNumber } from '../chem/sprouts';
 import { ringFillsOn } from '../chem/ring-fill';
@@ -195,8 +195,8 @@ export class StylePanel {
     const shafts = r.equilibrium ? 'equilibrium' : r.shaftSpacing ? 'retro' : 'one';
     this.select('Shafts', SHAFTS, shafts, (v) => set('Arrow shafts', (a) => {
       const w = a.lineWidth ?? lw;
-      if (v === 'equilibrium') return { equilibrium: true, shaftSpacing: undefined, headStyle: 'halfLeft', tailStyle: 'halfLeft', headType: 'solid', sweep: 0 };
-      if (v === 'retro') return { equilibrium: false, shaftSpacing: w * 6, headStyle: 'full', tailStyle: 'none', headType: 'angle', headLength: w * 6, headWidth: w * 1.5, sweep: 0 };
+      if (v === 'equilibrium') return { equilibrium: true, shaftSpacing: undefined, headStyle: 'halfLeft', tailStyle: 'halfLeft', headType: 'solid', sweep: 0, bez: undefined };
+      if (v === 'retro') return { equilibrium: false, shaftSpacing: w * 6, headStyle: 'full', tailStyle: 'none', headType: 'angle', headLength: w * 6, headWidth: w * 1.5, sweep: 0, bez: undefined };
       return { equilibrium: false, shaftSpacing: undefined, ...(a.equilibrium ? { headStyle: 'full', tailStyle: 'none' } : {}), ...(a.shaftSpacing ? { headType: 'solid', headLength: w * 10, headWidth: w * 2.5 } : {}) };
     }));
     if (!r.equilibrium) {
@@ -207,7 +207,7 @@ export class StylePanel {
     this.select('Line', LINES, r.line, (v) => set('Arrow line', () => ({ line: v })));
     this.check('Crossed out (no reaction)', r.noGo, (v) => set('Crossed-out arrow', () => ({ noGo: v })));
     if (!r.equilibrium && !r.shaftSpacing) {
-      this.check('Square bends (elbow)', !!r.elbow, (v) => set('Elbow connector', () => ({ elbow: v || undefined, sweep: 0 })));
+      this.check('Square bends (elbow)', !!r.elbow, (v) => set('Elbow connector', () => ({ elbow: v || undefined, sweep: 0, bez: undefined })));
     }
     if (r.from || r.to) {
       const loose = (a: Arrow) => ({ from: undefined, to: undefined } as Partial<Arrow>);
@@ -219,7 +219,25 @@ export class StylePanel {
       b.addEventListener('click', () => set('Unstick connector', loose));
       this.body.append(b);
     }
-    if (!r.equilibrium && !r.shaftSpacing && !r.elbow) {
+    if (r.pin) {
+      this.note('Stuck to the structure: it follows it when it moves.');
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = 'Unstick from structure';
+      b.title = 'Let the ends stay where they are when the structure moves';
+      b.addEventListener('click', () => set('Detach', () => ({ pin: undefined })));
+      this.body.append(b);
+    }
+    if (!r.equilibrium && !r.shaftSpacing && !r.elbow && isCurved(r)) {
+      // an S bends one way and then the other; its diamonds on the page shape it
+      this.check('S-shaped (two bends)', !!r.bez?.length, (v) => set(v ? 'S-shaped arrow' : 'Single-curve arrow', (a) => {
+        const side = a.bez?.length ? (a.bez[0].y >= 0 ? 1 : -1) : a.sweep > 0 ? -1 : 1;
+        const patch: Partial<Arrow> = v ? { sweep: 0, bez: [{ x: 0.25, y: 0.8 * side }, { x: 0.75, y: -0.8 * side }] } : { bez: undefined, sweep: -side * 120 * DEG };
+        if (headBend(a) !== headBend({ ...a, ...patch })) Object.assign(patch, { headStyle: swapHalf(a.headStyle), tailStyle: swapHalf(a.tailStyle) });
+        return patch;
+      }));
+    }
+    if (!r.equilibrium && !r.shaftSpacing && !r.elbow && !r.bez?.length) {
       this.number('Curve (°)', round(r.sweep / DEG, 1), 5, -330, 330, (v) => set('Bend arrow', () => ({ sweep: v * DEG })),
         'Positive bends to the left of the arrow’s direction, negative to the right; 0 is straight.');
     }

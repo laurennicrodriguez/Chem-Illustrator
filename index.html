@@ -256,7 +256,13 @@
       <button id="btn-scheme" aria-haspopup="menu" aria-expanded="false" aria-controls="scheme-menu">Scheme</button>
       <div id="scheme-menu" class="menu" role="menu" hidden>
         <button role="menuitem" data-cmd="clean-up-reaction">Clean Up Reaction</button>
-        <button role="menuitem" data-cmd="clean-up-arrow" title="Redraw the selected curved arrows from their lone pair, bond or atom to what they point at, clear of the structure">Clean Up Arrow</button>
+        <button role="menuitem" data-cmd="clean-up-arrow" title="Redraw the selected curved arrows from their lone pair, bond or atom to what they point at, clear of the structure (as an S where one curve can't get round it)">Clean Up Arrow</button>
+        <button role="menuitem" data-cmd="arrow-s-shape" title="Redraw the selected curved arrows as S shapes (two bends), from and to the same places">Make S-Shaped Arrow</button>
+        <button role="menuitem" data-cmd="arrow-single-curve" title="Redraw the selected S-shaped arrows as a single curve">Make Single-Curve Arrow</button>
+        <button role="menuitem" data-cmd="flip-arrow-bend" title="Bend the selected curved arrows the other way round">Flip Arrow Bend</button>
+        <button role="menuitem" data-cmd="homolysis-arrows" title="Two fishhook arrows from the middle of each selected bond, one to each atom (the bond breaking evenly)">Homolysis Arrows</button>
+        <button role="menuitem" data-cmd="attach-arrow" title="Stick the selected curved arrows' ends to the lone pairs, atoms and bonds they sit on, so they move with the structure">Attach Arrows to Structure</button>
+        <button role="menuitem" data-cmd="detach-arrow" title="Free the selected arrows (and lone pairs or charges) from the structure, so they stay put when it moves">Detach from Structure</button>
         <button role="menuitem" data-cmd="arrange-scheme">Arrange Scheme…</button>
         <button role="menuitem" data-cmd="catalytic-cycle" title="Draw a catalytic cycle: a ready-made one from the list (Suzuki, Heck, Sonogashira's two loops…) or a blank one, or the selected structures put round a loop, with step names and what comes in and goes out">Catalytic Cycle…</button>
         <button role="menuitem" data-cmd="ts-brackets" title="Put square brackets round the selected transition state with ‡ at the upper right. Draw its forming and breaking bonds as partial bonds (P over a bond)">Transition State Brackets ‡</button>

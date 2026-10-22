@@ -208,6 +208,7 @@ export function transform(doc: Doc, snap: Snapshot, f: (p: Vec) => Vec, mirror: 
     const patch: Partial<Arrow> = { tail: f(r.tail), head: f(r.head) };
     if (mirror) {
       patch.sweep = -r.sweep || 0;
+      if (r.bez) patch.bez = r.bez.map((q) => ({ x: q.x, y: -q.y }));
       if (!r.equilibrium) { patch.headStyle = half(r.headStyle); patch.tailStyle = half(r.tailStyle); }
     }
     doc.updateArrow(r.id, patch);

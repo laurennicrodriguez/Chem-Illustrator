@@ -16,7 +16,7 @@ import { doubleBondGap, wedgeWidth } from '../style';
 import { chargeInk, labelBonds, labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
 import type { StructureChecks } from '../chem/warnings';
 import { isGenericLabel } from '../chem/labels';
-import { bracketPath, shaftOffset, shapeOrder, elbowRoute, boxOf, type PathStep } from '../objects';
+import { bracketPath, shaftOffset, shapeOrder, elbowRoute, boxOf, bezPoints, bezHeadBack, bezPathAt, bezSlice, type PathStep } from '../objects';
 import { atomStereoText, bondStereoText, shownDescriptor, axialStyle, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
 import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
@@ -698,7 +698,7 @@ export class Renderer {
     for (const r of doc.arrows.values()) {
       const lo = Math.min(r.tail.x, r.head.x), hi = Math.max(r.tail.x, r.head.x);
       const top = Math.min(r.tail.y, r.head.y), bot = Math.max(r.tail.y, r.head.y);
-      const pad = r.sweep ? Math.hypot(hi - lo, bot - top) : 10;
+      const pad = r.sweep || r.bez ? Math.hypot(hi - lo, bot - top) * (r.bez ? 1.5 : 1) : 10;
       if (hi + pad < vis.x1 || lo - pad > vis.x2 || bot + pad < vis.y1 || top - pad > vis.y2) continue;
       this.drawArrow(ctx, r, r.lineWidth ?? st.lineWidth);
     }
@@ -1160,6 +1160,7 @@ export class Renderer {
       const d = sub(head, tail);
       const l = len(d);
       if (l < 0.1) return;
+      if (r.bez?.length && this.bezArrow(ctx, r)) return;
       if (r.sweep) { this.arcArrow(ctx, r, tail, head); return; }
       const dir = mul(d, 1 / l);
       const hl = Math.min(r.headLength, l * 0.6);
@@ -1267,13 +1268,49 @@ export class Renderer {
     const start = hasTail ? sub(tail, mul(tDir, into)) : tail;
     const end = hasHead ? sub(head, mul(hDir, into)) : head;
     ctx.lineJoin = 'round';
+    ctx.setLineDash(r.line === 'dashed' ? [ctx.lineWidth * 4, ctx.lineWidth * 3] : []);
     ctx.beginPath();
     ctx.moveTo(start.x, start.y);
     ctx.arc(center.x, center.y, radius, a0 + (hasTail ? s * back : 0), a1 - (hasHead ? s * back : 0), sweep < 0);
     ctx.lineTo(end.x, end.y);
     ctx.stroke();
+    ctx.setLineDash([]);
     this.arrowHead(ctx, head, hDir, r.headStyle, r);
     this.arrowHead(ctx, tail, tDir, r.tailStyle, r);
+  }
+
+  /**
+   * An S-shaped arrow (Bézier curves). As on an arc, each head points from where its base meets
+   * the curve to its tip, and the line runs along the curve to there and then straight into the
+   * head, so it can't show past its point. False when its curves don't add up (drawn as an arc then).
+   */
+  private bezArrow(ctx: CanvasRenderingContext2D, r: Arrow): boolean {
+    const pts = bezPoints(r);
+    if (!pts) return false;
+    const n = (pts.length - 1) / 3;
+    const hasHead = r.headStyle !== 'none', hasTail = r.tailStyle !== 'none';
+    const reach = r.headLength * 0.8;
+    const tH = hasHead ? bezHeadBack(pts, reach, false) : n;
+    const tT = hasTail ? bezHeadBack(pts, reach, true) : 0;
+    const hDir = norm(sub(r.head, bezPathAt(pts, tH))), tDir = norm(sub(r.tail, bezPathAt(pts, tT)));
+    const into = shaftInto(r.headLength, r.headType, ctx.lineWidth);
+    const start = hasTail ? sub(r.tail, mul(tDir, into)) : r.tail;
+    const end = hasHead ? sub(r.head, mul(hDir, into)) : r.head;
+    const path = bezSlice(pts, tT, tH);
+    ctx.lineJoin = 'round';
+    ctx.setLineDash(r.line === 'dashed' ? [ctx.lineWidth * 4, ctx.lineWidth * 3] : []);
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    if (path.length) {
+      ctx.lineTo(path[0].x, path[0].y);
+      for (let i = 1; i + 2 < path.length; i += 3) ctx.bezierCurveTo(path[i].x, path[i].y, path[i + 1].x, path[i + 1].y, path[i + 2].x, path[i + 2].y);
+    }
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    this.arrowHead(ctx, r.head, hDir, r.headStyle, r);
+    this.arrowHead(ctx, r.tail, tDir, r.tailStyle, r);
+    return true;
   }
 
   private arrowHead(ctx: CanvasRenderingContext2D, tip: Vec, dir: Vec, style: Arrow['headStyle'], r: Arrow): void {
