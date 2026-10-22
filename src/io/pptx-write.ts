@@ -21,7 +21,8 @@ import { officeTarget, slideOfLink } from '../links';
 import { arialWidth } from '../text-metrics';
 import { arrowPoints, shapeBox, boxOf, shapeOrder, elbowRoute } from '../objects';
 import { geoDef, textArea, type GeoStep } from '../design/geo';
-import { layoutTable, cellAlign, spanOf, isCovered, tableText, NOTE_SCALE } from '../table';
+import { layoutTable, cellAlign, spanOf, rowSpanOf, coveringCell, tableText, NOTE_SCALE } from '../table';
+import { PPT_STYLE_IDS, lookOf, slideCellLook, styledRuns, type CellLine, type Side } from '../deck/table-styles';
 import { tableBorders } from './cdxml-table';
 import { writeCdxml } from './cdxml-write';
 import { extractDrawing } from './clipboard';
@@ -954,34 +955,53 @@ class Writer {
     const n = t.rows.length, m = t.cols.length;
     const lw = doc.style.lineWidth;
     const b = tableBorders(t, lw);
-    const color = hex6(s.color ?? '#000000');
+    const color = s.color ?? '#000000';
     // PowerPoint puts the first baseline its font's ascent below the cell's top margin
     const marT = Math.max(0, lay.padY - (PPT_ASCENT - ASCENT) * size), marB = Math.max(0, lay.padY - 0.05 * size);
-    const ln = (side: string, w: number) => w > 0
-      ? `<a:${side} w="${emu(w)}" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:prstDash val="solid"/><a:round/></a:${side}>`
+    const solid = (c: string) => `<a:solidFill><a:srgbClr val="${hex6(c)}"/></a:solidFill>`;
+    const ln = (side: string, l: CellLine | undefined) => l && l.w > 0
+      ? `<a:${side} w="${emu(l.w)}" cap="flat" cmpd="sng" algn="ctr">${solid(l.color)}<a:prstDash val="solid"/><a:round/></a:${side}>`
       : `<a:${side} w="${emu(lw)}" cmpd="sng"><a:noFill/></a:${side}>`;
     const empty = (algn: string) => `<a:p><a:pPr algn="${algn}"/><a:endParaRPr ${lang} sz="${Math.round(size * 100)}" dirty="0"/></a:p>`;
     const algnOf = (j: string) => (j === 'center' ? 'ctr' : j === 'right' ? 'r' : j === 'justify' ? 'just' : 'l');
+    // each cell's lines: the table style's (with their colours), or the rules in the drawing's colour
+    const styled = !!slideCellLook(t, 0, 0);
+    const linesAt = (r: number, c: number): Partial<Record<Side, CellLine>> => {
+      const o = coveringCell(t, r, c);
+      if (styled) return slideCellLook(t, o.r, o.c)!.lines;
+      const x = b[r][c];
+      const out: Partial<Record<Side, CellLine>> = {};
+      for (const k of ['left', 'right', 'top', 'bottom'] as Side[]) if (x[k] > 0) out[k] = { w: x[k], color };
+      return out;
+    };
+    const lines = t.rows.map((_, r) => t.cols.map((__, c) => linesAt(r, c)));
+    const heavier = (a?: CellLine, z?: CellLine) => (!a ? z : !z ? a : z.w > a.w ? z : a);
     const rows: string[] = [];
     for (let r = 0; r < n; r++) {
       const tcs: string[] = [];
       for (let c = 0; c < m; c++) {
-        const x = b[r][c];
+        const x = lines[r][c];
         // a line between two cells shows when either cell has it, so both say so
-        const left = x.left || (c > 0 ? b[r][c - 1].right : 0), right = x.right || (c < m - 1 ? b[r][c + 1].left : 0);
-        const top = x.top || (r > 0 ? b[r - 1][c].bottom : 0), bottom = x.bottom || (r < n - 1 ? b[r + 1][c].top : 0);
-        const tcPr = `<a:tcPr marL="${emu(lay.padX)}" marR="${emu(lay.padX)}" marT="${emu(marT)}" marB="${emu(marB)}" anchor="t">${ln('lnL', left)}${ln('lnR', right)}${ln('lnT', top)}${ln('lnB', bottom)}<a:noFill/></a:tcPr>`;
+        const left = heavier(x.left, c > 0 ? lines[r][c - 1].right : undefined), right = heavier(x.right, c < m - 1 ? lines[r][c + 1].left : undefined);
+        const top = heavier(x.top, r > 0 ? lines[r - 1][c].bottom : undefined), bottom = heavier(x.bottom, r < n - 1 ? lines[r + 1][c].top : undefined);
+        const o = coveringCell(t, r, c);
+        const look = styled ? slideCellLook(t, o.r, o.c) : null;
+        const fill = t.rows[o.r][o.c]?.fill ?? look?.fill;
+        const tcPr = `<a:tcPr marL="${emu(lay.padX)}" marR="${emu(lay.padX)}" marT="${emu(marT)}" marB="${emu(marB)}" anchor="t">${ln('lnL', left)}${ln('lnR', right)}${ln('lnT', top)}${ln('lnB', bottom)}${fill ? solid(fill) : '<a:noFill/>'}</a:tcPr>`;
         const align = cellAlign(t, r, c);
-        if (isCovered(t, r, c)) {
-          tcs.push(`<a:tc hMerge="1"><a:txBody><a:bodyPr/><a:lstStyle/>${empty(algnOf(align))}</a:txBody>${tcPr}</a:tc>`);
+        if (o.r !== r || o.c !== c) {
+          // a place covered by a joined cell: across (hMerge), down (vMerge) or both
+          tcs.push(`<a:tc${o.c !== c ? ' hMerge="1"' : ''}${o.r !== r ? ' vMerge="1"' : ''}><a:txBody><a:bodyPr/><a:lstStyle/>${empty(algnOf(align))}</a:txBody>${tcPr}</a:tc>`);
           continue;
         }
         const cell = t.rows[r][c] ?? { runs: [] };
-        const span = spanOf(t, r, c);
-        const body = cell.runs.some((x) => x.text)
-          ? paragraphsXml({ id: 0, x: 0, y: 0, runs: cell.runs, paras: cell.paras, justify: align }, { size, font }, size, this.measure, this.hlink)
+        const span = spanOf(t, r, c), down = rowSpanOf(t, r, c);
+        // the style's text colour and bold are written on the runs, as PowerPoint shows them
+        const runs = styledRuns(cell.runs, look);
+        const body = runs.some((x) => x.text)
+          ? paragraphsXml({ id: 0, x: 0, y: 0, runs, paras: cell.paras, justify: align }, { size, font }, size, this.measure, this.hlink)
           : empty(algnOf(align));
-        tcs.push(`<a:tc${span > 1 ? ` gridSpan="${span}"` : ''}><a:txBody><a:bodyPr/><a:lstStyle/>${body}</a:txBody>${tcPr}</a:tc>`);
+        tcs.push(`<a:tc${down > 1 ? ` rowSpan="${down}"` : ''}${span > 1 ? ` gridSpan="${span}"` : ''}><a:txBody><a:bodyPr/><a:lstStyle/>${body}</a:txBody>${tcPr}</a:tc>`);
       }
       rows.push(`<a:tr h="${emu(lay.ys[r + 1] - lay.ys[r])}">${tcs.join('')}</a:tr>`);
     }
@@ -989,11 +1009,18 @@ class Writer {
     const id = next();
     const tag = this.addTags(path, { [TAG.table]: JSON.stringify({ v: 1, key, table: t, plain: tableText(t) }) });
     const frame = { x1: s.x1, y1: s.y1 + lay.ys[0], x2: s.x1 + lay.width, y2: s.y1 + lay.ys[n] };
-    // "No Style, No Grid": the cells show only the rules given here
+    // the cells carry every fill and line themselves, so PowerPoint shows the same whatever the
+    // style id; a style PowerPoint knows by id is named so its gallery and options show it,
+    // otherwise "No Style, No Grid"
+    const look = lookOf(t);
+    const styleId = Object.keys(PPT_STYLE_IDS).find((g) => PPT_STYLE_IDS[g] === t.style) ?? '{2D5ABB26-0587-4C30-8999-92F81FD0307C}';
+    const flags = styled
+      ? `${look.header ? ' firstRow="1"' : ''}${look.firstCol ? ' firstCol="1"' : ''}${look.lastCol ? ' lastCol="1"' : ''}${look.total ? ' lastRow="1"' : ''}${look.bandRows ? ' bandRow="1"' : ''}${look.bandCols ? ' bandCol="1"' : ''}`
+      : t.head > 0 ? ' firstRow="1"' : '';
     out.push(`<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}"${nameAttrs(s.name?.trim() || `Table ${id - 1}`, s.hidden)}/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>` +
       `<p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvGraphicFramePr>` +
       `<p:xfrm><a:off x="${emu(frame.x1)}" y="${emu(frame.y1)}"/><a:ext cx="${emu(frame.x2 - frame.x1)}" cy="${emu(frame.y2 - frame.y1)}"/></p:xfrm>` +
-      `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr${t.head > 0 ? ' firstRow="1"' : ''}><a:tableStyleId>{2D5ABB26-0587-4C30-8999-92F81FD0307C}</a:tableStyleId></a:tblPr>` +
+      `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr${flags}><a:tableStyleId>${styleId}</a:tableStyleId></a:tblPr>` +
       `<a:tblGrid>${grid}</a:tblGrid>${rows.join('')}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>`);
     if (lay.notes) part('notes', lay.notes, t.notes!, size * NOTE_SCALE);
     return out.join('');

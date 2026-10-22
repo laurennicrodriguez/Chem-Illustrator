@@ -23,7 +23,8 @@ import { ringFillsOn } from '../chem/ring-fill';
 import { frameMembers } from '../editor/frames';
 import { methylState, writeTerminalMethyls, type MethylStyle } from '../chem/hydrogens';
 import type { TableData } from '../model';
-import { deleteColumn, deleteRow, fitColumns, insertColumn, insertRow, setColumnAlign, setColumnWidth, setSpan, spanOf, type TablePart } from '../table';
+import { canMerge, deleteColumn, deleteRow, fitColumns, insertColumn, insertRow, mergeDown, mergeRight, rowSpanOf, setColumnAlign, setColumnWidth, setRowSpan, setSpan, spanOf, splitCell, type TablePart } from '../table';
+import { SLIDE_TABLE_STYLES, lookOf, slideCellLook, slideTableStyle } from '../deck/table-styles';
 import type { Measure } from '../text/layout';
 import { colourButton } from './colour-picker';
 import { centreEnd, haptoText, splitHapto } from '../chem/hapto';
@@ -682,7 +683,25 @@ export class StylePanel {
     ]);
     this.number('Heading rows', t.head, 1, 0, t.rows.length, (v) => set('Table headings', { ...t, head: Math.round(v) }),
       'How many rows at the top are headings; in the ACS style a rule goes under them.');
-    this.select('Lines', TABLE_LINES, t.lines, (v) => set('Table lines', { ...t, lines: v }));
+    // a PowerPoint table style, or plain rules (ACS, a grid or none)
+    const styleNow = slideTableStyle(t.style)?.id ?? `lines-${t.lines}`;
+    const styles: Opt<string>[] = [...TABLE_LINES.map(([k, label]): Opt<string> => [`lines-${k}`, `No style: ${label.charAt(0).toLowerCase()}${label.slice(1)}`]), ...SLIDE_TABLE_STYLES.map((x): Opt<string> => [x.id, x.name])];
+    this.select('Table style', styles, styleNow, (v) => {
+      if (v.startsWith('lines-')) { const { style: _, ...rest } = t; set('Table style', { ...rest, lines: v.slice(6) as TableData['lines'] }); }
+      else set('Table style', { ...t, style: v });
+    });
+    if (slideTableStyle(t.style)) {
+      // PowerPoint's Table Style Options
+      const o = lookOf(t);
+      const opt = (label: string, on: boolean, f: (v: boolean) => TableData, help: string) => this.check(label, on, (v) => set('Table style options', f(v)), help);
+      const flag = (k: 'total' | 'bandRows' | 'firstCol' | 'lastCol' | 'bandCols') => (v: boolean): TableData => ({ ...t, look: { ...t.look, [k]: v } });
+      opt('Header row', o.header, (v) => ({ ...t, head: v ? Math.max(1, t.head) : 0 }), 'The first row in the style’s strong colour, its text bold');
+      opt('Total row', o.total, flag('total'), 'The last row set off with a line above it, its text bold');
+      opt('Banded rows', o.bandRows, flag('bandRows'), 'Every other row shaded, for reading across');
+      opt('First column', o.firstCol, flag('firstCol'), 'The first column in bold (or the strong colour)');
+      opt('Last column', o.lastCol, flag('lastCol'), 'The last column in bold (or the strong colour)');
+      opt('Banded columns', o.bandCols, flag('bandCols'), 'Every other column shaded');
+    }
     if (cell) {
       const colAlign = t.align?.[cell.c] ?? (cell.c === 0 ? 'left' : 'center');
       this.select('Column lines up', JUSTIFY, colAlign === 'justify' ? 'left' : colAlign, (v) => set('Column alignment', setColumnAlign(t, cell.c, v)));
@@ -690,6 +709,16 @@ export class StylePanel {
         'You can also drag the handle at the right of the text box while typing in a cell.');
       this.number('Cell spans (columns)', spanOf(t, cell.r, cell.c), 1, 1, t.cols.length - cell.c, (v) => set('Join table cells', setSpan(t, cell.r, cell.c, v)),
         'Join this cell with the ones to its right, for a heading over several columns.');
+      this.number('Cell spans (rows)', rowSpanOf(t, cell.r, cell.c), 1, 1, t.rows.length - cell.r, (v) => set('Join table cells', setRowSpan(t, cell.r, cell.c, v)),
+        'Join this cell with the ones under it (a vertical merge), for a label beside several rows.');
+      buttons([
+        ['Merge right', 'Join this cell with the one to its right; their text goes together', canMerge(t, cell.r, cell.c, 'right') ? () => set('Merge cells', mergeRight(t, cell.r, cell.c), cell) : null],
+        ['Merge down', 'Join this cell with the one below it; their text goes together', canMerge(t, cell.r, cell.c, 'down') ? () => set('Merge cells', mergeDown(t, cell.r, cell.c), cell) : null],
+        ['Split cell', 'Split a joined cell back into single cells', spanOf(t, cell.r, cell.c) > 1 || rowSpanOf(t, cell.r, cell.c) > 1 ? () => set('Split cell', splitCell(t, cell.r, cell.c), cell) : null],
+      ]);
+      const own = t.rows[cell.r][cell.c]?.fill;
+      this.color('Cell colour', own, (v) => set('Cell colour', { ...t, rows: t.rows.map((row, rr) => rr !== cell.r ? row : row.map((x, cc) => { if (cc !== cell.c) return x; const { fill: _, ...rest } = x; return v ? { ...rest, fill: v } : rest; })) }),
+        undefined, slideCellLook(t, cell.r, cell.c)?.fill);
     }
     const size = t.size ?? this.doc.style.captionSize;
     this.number('Text size (pt)', round(size, 10), 0.5, 1, 200, (v) => set('Table text size', resizeTableText(t, v)),

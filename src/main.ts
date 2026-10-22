@@ -2,6 +2,7 @@
 // toolbar, the drawing area (with the slide list and notes in Slides mode, or the grid in Sheet
 // mode), and the panels on the right.
 
+import { SLIDE_TABLE_STYLES, DEFAULT_SLIDE_TABLE_STYLE } from './deck/table-styles';
 import { commandIcon } from './ui/command-icons';
 import './app.css';
 import type { MethylStyle } from './chem/hydrogens';
@@ -604,18 +605,26 @@ function placeTable(t: TableData, label: string, top?: Vec): number {
   return id;
 }
 
+/** The table style last picked for a slide table (PowerPoint's default, Medium Style 2 – Accent 1, at first). */
+let lastTableStyle = DEFAULT_SLIDE_TABLE_STYLE;
+
 /** Insert > Table: an empty table of the rows and columns asked for, ready to type into. */
 async function insertTable(): Promise<void> {
   finishTyping();
+  // on slides the look is a choice: a journal's ACS rules, or a PowerPoint style
+  const onSlide = !!deckNow();
   const got = await ask('Insert Table', [
     { name: 'rows', label: 'Rows', value: '4', type: 'number' },
     { name: 'cols', label: 'Columns', value: '3', type: 'number' },
-  ], { ok: 'Insert', note: 'An ACS-style table: a rule above and below the heading row and under the last row. The Style panel changes the lines, headings, rows and columns.' });
+    ...(onSlide ? [{ name: 'style', label: 'Style', value: lastTableStyle, options: [{ value: '', label: 'ACS rules' }, ...SLIDE_TABLE_STYLES.map((st) => ({ value: st.id, label: st.name }))] }] : []),
+  ], { ok: 'Insert', note: onSlide ? 'The Style panel changes the style, its options, the cells\' colours and which cells are merged.' : 'An ACS-style table: a rule above and below the heading row and under the last row. The Style panel changes the lines, headings, rows and columns.' });
   if (!got) return;
   const rows = Math.max(1, Math.min(500, Math.round(Number(got.rows) || 4)));
   const cols = Math.max(1, Math.min(60, Math.round(Number(got.cols) || 3)));
+  if (onSlide) lastTableStyle = got.style ?? '';
   // columns centred (the Style panel lines up each column its own way)
-  const id = placeTable({ ...emptyTable(rows, cols, doc.style.captionSize), align: Array(cols).fill('center') }, 'Insert table');
+  const t0 = { ...emptyTable(rows, cols, doc.style.captionSize), align: Array(cols).fill('center') };
+  const id = placeTable(onSlide && got.style ? { ...t0, style: got.style } : t0, 'Insert table');
   editor.editTable(id, { r: 0, c: 0 });
 }
 

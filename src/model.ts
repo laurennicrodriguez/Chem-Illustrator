@@ -748,9 +748,9 @@ export interface TableCell {
   align?: Justify;
   /** Number of columns the cell spans (the cells it covers are left empty). */
   span?: number;
-  /** Documents: number of rows the cell is merged down over (the cells it covers below are left empty). */
+  /** Number of rows the cell is merged down over (the cells it covers below are left empty). */
   rowSpan?: number;
-  /** Documents: the cell's background colour (Word's shading). */
+  /** The cell's background colour (Word's shading; on slides, over the table style's own). */
   fill?: string;
   /** Documents: where the text sits up and down in a cell taller than it (top when left out). */
   valign?: 'center' | 'bottom';
@@ -778,6 +778,23 @@ export interface TableData {
   /** The title above the table ("Table 1. Optimization of…") and the footnotes below it. */
   title?: TextRun[];
   notes?: TextRun[];
+  /**
+   * A table style: on slides and drawings one of PowerPoint's ("pp-medium2-1", see
+   * deck/table-styles.ts), drawn in place of `lines`; in documents Word's (document/table-styles.ts).
+   */
+  style?: string;
+  /** Which parts of the table its style marks out (PowerPoint's and Word's Table Style Options). */
+  look?: TableLook;
+}
+
+/** Table Style Options: which rows and columns the table style marks out. */
+export interface TableLook {
+  header?: boolean;
+  total?: boolean;
+  bandRows?: boolean;
+  firstCol?: boolean;
+  lastCol?: boolean;
+  bandCols?: boolean;
 }
 
 /** A drawing's page: the drawing area of one sheet of paper (inside its margins), in points. */

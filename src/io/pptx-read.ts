@@ -13,6 +13,7 @@ import type { PinnedComment } from '../document/comments';
 import { COMMENT_REL, readCommentAuthors, readLegacyComments, readModernComments } from './pptx-comments';
 import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureLook, type Frame, type ShapeMath } from '../model';
 import { layoutTable, NOTE_SCALE } from '../table';
+import { PPT_STYLE_IDS, slideCellLook, unstyledRuns } from '../deck/table-styles';
 import { linesFromBorders, type Borders } from './cdxml-table';
 import { turnAbout, normDegrees, DEG, type Vec, type Rect } from '../geom';
 import { POINTS, rotation, snapshot, transform } from '../editor/arrange';
@@ -146,6 +147,18 @@ function colorIn(el: Element | null, theme: Theme, clrMap: Record<string, string
     }
   }
   return rgbHex(r, g, b);
+}
+
+/** A styled table read back: cell fills and text colours that only repeat its style are dropped. */
+function unstyle(t: TableData): TableData {
+  if (!slideCellLook(t, 0, 0)) return t;
+  const rows = t.rows.map((row, r) => row.map((cell, c) => {
+    const look = slideCellLook(t, r, c);
+    const out: TableCell = { ...cell, runs: unstyledRuns(cell.runs, look) };
+    if (out.fill && look?.fill && out.fill.toLowerCase() === look.fill.toLowerCase()) delete out.fill;
+    return out;
+  }));
+  return { ...t, rows };
 }
 
 // ---------------------------------------------------------------- text formatting, as PowerPoint inherits it
@@ -1024,7 +1037,7 @@ class Reader {
     if (!m) return;
     const rows: TableCell[][] = [];
     const borders: Borders[][] = [];
-    let lines = false, down = false;
+    let lines = false;
     let color: string | undefined;
     const width = (tcPr: Element | null, side: string): number => {
       const e = kid(tcPr, side);
@@ -1044,9 +1057,12 @@ class Reader {
         const tcPr = kid(tc ?? null, 'tcPr');
         bs.push({ left: width(tcPr, 'lnL'), top: width(tcPr, 'lnT'), bottom: width(tcPr, 'lnB'), right: width(tcPr, 'lnR') });
         if (!tc || tc.getAttribute('hMerge') === '1' || tc.getAttribute('vMerge') === '1') { row.push({ runs: [] }); continue; }
-        if (Number(tc.getAttribute('rowSpan') ?? 1) > 1) down = true;
         const cap = this.text(tc, { x1: 0, y1: 0, x2: cols[c], y2: 100 }, null, []);
         const cell: TableCell = { runs: cap?.runs ?? [] };
+        const down = Number(tc.getAttribute('rowSpan') ?? 1);
+        if (down > 1) cell.rowSpan = down;
+        const fill = this.color(kid(tcPr, 'solidFill'));
+        if (fill) cell.fill = fill;
         if (cap?.paras) cell.paras = cap.paras;
         if (cap && kid(kid(tc, 'txBody'), 'p', 'pPr')?.getAttribute('algn')) cell.align = cap.justify;
         const span = Number(tc.getAttribute('gridSpan') ?? 1);
@@ -1057,19 +1073,25 @@ class Reader {
       borders.push(bs);
     }
     if (!rows.length) return;
-    if (down) this.warnings.add('Table cells joined down several rows came in as separate cells.');
+    rows.forEach((row, r) => row.forEach((c) => { if (c.rowSpan !== undefined) { if (c.rowSpan > rows.length - r) c.rowSpan = rows.length - r; if (c.rowSpan < 2) delete c.rowSpan; } }));
     // the size most of the text is in becomes the table's
     const sizes = new Map<number, number>();
     for (const row of rows) for (const c of row) for (const r of c.runs) if (r.size !== undefined && r.text.trim()) sizes.set(r.size, (sizes.get(r.size) ?? 0) + r.text.length);
     const size = [...sizes].sort((a, b) => b[1] - a[1])[0]?.[0];
     const plainRows = rows.map((row) => row.map((c) => ({ ...c, runs: c.runs.map((r) => { if (r.size !== size) return r; const { size: _, ...rest } = r; return rest; }) })));
     const style = kid(tbl, 'tblPr', 'tableStyleId')?.textContent?.trim() ?? '';
-    const head = kid(tbl, 'tblPr')?.getAttribute('firstRow') === '1' ? 1 : 0;
+    const pr = kid(tbl, 'tblPr');
+    const flag = (k: string) => pr?.getAttribute(k) === '1' || pr?.getAttribute(k) === 'true';
+    const head = flag('firstRow') ? 1 : 0;
     let read: TableData = { cols, rows: plainRows, head, lines: 'acs' };
     if (size !== undefined) read.size = size;
-    if (lines) read = { ...read, ...linesFromBorders(borders) };
+    const ours = PPT_STYLE_IDS[style];
+    if (ours) {
+      // one of the styles kept here: the cells' fills and text colours that only repeat it go
+      read = unstyle({ ...read, style: ours, look: { total: flag('lastRow'), bandRows: flag('bandRow'), firstCol: flag('firstCol'), lastCol: flag('lastCol'), bandCols: flag('bandCol') } });
+    } else if (lines) read = { ...read, ...linesFromBorders(borders) };
     else if (style === '{5940675A-B579-460E-94D1-54222C63F5DA}') read.lines = 'grid';
-    else if (style && style !== '{2D5ABB26-0587-4C30-8999-92F81FD0307C}') this.warnings.add('PowerPoint\'s table colours were left out; tables use the ACS style (change it in the Style panel).');
+    else if (style && style !== '{2D5ABB26-0587-4C30-8999-92F81FD0307C}') read = this.bakeStyle(read, style, { firstRow: !!head, lastRow: flag('lastRow'), band1H: flag('bandRow'), band1V: flag('bandCol'), firstCol: flag('firstCol'), lastCol: flag('lastCol') });
     // what was saved here, when the table still has its rows and columns (and its text, for its formatting)
     const tags = this.tagsOf(s.path, kid(el, 'nvGraphicFramePr', 'nvPr'));
     let saved: { key: string; table: TableData; plain: string[][] } | null = null;
@@ -1080,10 +1102,63 @@ class Reader {
       const widths = saved.table.cols.map((w, k) => (Math.abs(w - cols[k]) > 0.5 ? cols[k] : w));
       const own = same ? saved.table.rows : rows.map((row) => row.map((c) => ({ ...c, runs: c.runs.map((r) => { if (r.size !== (saved!.table.size ?? undefined)) return r; const { size: _, ...rest } = r; return rest; }) })));
       const { title: _t, notes: _n, ...rest } = saved.table;
-      this.tables.push({ key: String(saved.key), table: { ...rest, cols: widths, rows: own }, frame, color });
+      const table = { ...rest, cols: widths, rows: own };
+      // text changed in PowerPoint carries the style's colours written out on it
+      this.tables.push({ key: String(saved.key), table: same ? table : unstyle(table), frame, color });
       return;
     }
     this.tables.push({ key: saved ? String(saved.key) : null, table: read, frame, color });
+  }
+
+  /**
+   * A table in a PowerPoint style not kept here: the style's fills and text colours (from the
+   * file's table styles) written onto the cells, and its inside lines as a grid.
+   */
+  private bakeStyle(t: TableData, id: string, on: Record<string, boolean>): TableData {
+    const def = kids(this.r.xml(this.r.relOfType(this.r.relOfType('', REL.officeDocument) ?? '', REL.tableStyles) ?? '')?.documentElement ?? null, 'tblStyle')
+      .find((e) => e.getAttribute('styleId') === id);
+    if (!def) {
+      this.warnings.add('A table\'s PowerPoint style wasn\'t in the file, so its colours were left out (pick a style in the Style panel).');
+      return t;
+    }
+    const n = t.rows.length, m = t.cols.length;
+    const head = on.firstRow ? 1 : 0;
+    // PowerPoint's order: the whole table, bands, then the marked-out columns and rows on top
+    const partsAt = (r: number, c: number): string[] => {
+      const out = ['wholeTbl'];
+      const body = r >= head && !(on.lastRow && r === n - 1);
+      if (on.band1H && body) out.push((r - head) % 2 === 0 ? 'band1H' : 'band2H');
+      const k = c - (on.firstCol ? 1 : 0);
+      if (on.band1V && body && !(on.firstCol && c === 0) && !(on.lastCol && c === m - 1)) out.push(k % 2 === 0 ? 'band1V' : 'band2V');
+      if (on.lastCol && c === m - 1) out.push('lastCol');
+      if (on.firstCol && c === 0) out.push('firstCol');
+      if (on.lastRow && r === n - 1) out.push('lastRow');
+      if (head && r === 0) out.push('firstRow');
+      return out;
+    };
+    const inside = kid(def, 'wholeTbl', 'tcStyle', 'tcBdr');
+    const grid = ['insideH', 'insideV'].some((k) => { const l = kid(inside, k, 'ln'); return !!l && !kid(l, 'noFill') && !!kid(l, 'solidFill'); });
+    const rows = t.rows.map((row, r) => row.map((cell, c) => {
+      let fill: string | undefined, color: string | undefined, bold: boolean | undefined;
+      for (const name of partsAt(r, c)) {
+        const p = kid(def, name);
+        if (!p) continue;
+        const f = this.color(kid(p, 'tcStyle', 'fill', 'solidFill'));
+        if (f) fill = f;
+        const tx = kid(p, 'tcTxStyle');
+        if (tx) {
+          const tc = this.color(tx);
+          if (tc) color = tc;
+          if (tx.getAttribute('b') === 'on') bold = true;
+          else if (tx.getAttribute('b') === 'off') bold = undefined;
+        }
+      }
+      const out: TableCell = { ...cell };
+      if (fill && out.fill === undefined) out.fill = fill;
+      if (color || bold) out.runs = cell.runs.map((x) => ({ ...x, ...(color && x.color === undefined ? { color } : {}), ...(bold && x.bold === undefined ? { bold: true } : {}) }));
+      return out;
+    }));
+    return { ...t, rows, lines: grid ? 'grid' : 'none' };
   }
 
   /** Put the slide's tables on it, with the titles and footnotes saved beside them. */

@@ -20,6 +20,7 @@ import { Renderer, measureText } from '../render/renderer';
 import { tidyStyle } from '../render/highlight';
 import { ASCENT } from '../text/layout';
 import { cellAlign, insertRow, nextCell, partAt, partRuns, setColumnWidth, setPart, spanOf, NOTE_SCALE, type TablePart } from '../table';
+import { slideCellLook, styledRuns, unstyledRuns } from '../deck/table-styles';
 import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG, exitParam, lockAxis, turnAbout, turnedCorners } from '../geom';
 import {
   sproutDir, sprout, bondTo, bondLength, atomAt, freeRing, fusedRing, fuseSide, ringOnAtom, ringDir,
@@ -4241,7 +4242,10 @@ export class Editor {
       wrap = lay.xs[part.c + spanOf(t0, part.r, part.c)] - lay.xs[part.c] - 2 * lay.padX;
       justify = cellAlign(t0, part.r, part.c);
     }
-    const shown = partRuns(t0, part);
+    // a cell's text is typed in its table style's colours, which are left off again when it is stored
+    const look = typeof part === 'string' ? null : slideCellLook(t0, part.r, part.c);
+    const own = partRuns(t0, part);
+    const shown = { ...own, runs: styledRuns(own.runs, look) };
     this.tablePart = { id, part };
     // the table stays selected, so the Style panel shows its commands
     this.sel = emptySel();
@@ -4267,7 +4271,7 @@ export class Editor {
         const cur = doc.shapes.get(id)?.table;
         if (!cur || this.r.tableEdit?.id !== id) return;
         const before = this.r.tableEdit.table;
-        const draft = setPart(cur, part, rich);
+        const draft = setPart(cur, part, { ...rich, runs: unstyledRuns(rich.runs, look) });
         this.r.tableEdit = { id, table: draft, part };
         repaint(before);
         repaint(draft);
@@ -4298,7 +4302,7 @@ export class Editor {
         repaint(before);
       }
       if (!cur?.table) { this.changed(); return; }
-      let t = setPart(cur.table, part, { runs: res.runs, paras: res.paras });
+      let t = setPart(cur.table, part, { runs: unstyledRuns(res.runs, look), paras: res.paras });
       // the text box's handle sets the width of the cell's column (or of the last column a spanning cell covers)
       if (typeof part !== 'string' && res.wrap !== undefined && Math.abs(res.wrap - wrap) > 0.01) {
         const last = part.c + spanOf(t, part.r, part.c) - 1;
