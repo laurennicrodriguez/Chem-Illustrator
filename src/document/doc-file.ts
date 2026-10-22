@@ -5,7 +5,8 @@
 import type { Measure, TextFrame } from '../text/layout';
 import { TextEditing, type ChangeKind } from '../text/editing';
 import { documentMeasure } from '../text/font-measure';
-import { CELL_PAD, DocLayouter, movedLayout, type DocLayout } from './doc-layout';
+import { cellMargins } from './table-styles';
+import { DocLayouter, movedLayout, type DocLayout } from './doc-layout';
 import { reviewAuthor, revisionDate } from './revisions';
 import { setPart } from '../table';
 import { FigurePictures } from './figures';
@@ -164,7 +165,8 @@ export class DocFile {
       const cl = this.layouter.cellNow(tab, r, c, frame.runs, frame.paras) ?? tb?.cells[r]?.[c];
       const at = tb?.rows[r];
       if (!cl) return this.layouter.boxText(this.t, frame.runs, frame.paras, 100);
-      return at && tb ? movedLayout(cl, at.x + tb.xs[c] + CELL_PAD.x, at.y + CELL_PAD.y + (tb.drop[r]?.[c] ?? 0) - cl.box.y1) : cl;
+      const m = cellMargins(tab, r, c);
+      return at && tb ? movedLayout(cl, at.x + tb.xs[c] + m.left, at.y + m.top + (tb.drop[r]?.[c] ?? 0) - cl.box.y1) : cl;
     };
     // tracked like the document's own text
     ed.track = this.ed.track;

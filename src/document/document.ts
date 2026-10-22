@@ -10,6 +10,7 @@
 // document, while anything formatted by hand (an italic word, a paragraph centred on its
 // own) keeps its own look.
 
+import type { TableStyleDef } from './table-styles';
 import type { CommentThread } from './comments';
 import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
 import type { RichText } from '../text/editing';
@@ -266,6 +267,8 @@ export interface DocText extends RichText {
   numFormat?: PageNumFormat;
   /** The first section's line numbers (none unless chosen). */
   lineNumbers?: LineNumbers;
+  /** Table styles read from a Word file that aren't built in, by style id (see table-styles). */
+  tableStyles?: Record<string, TableStyleDef>;
 }
 
 /** How footnotes or endnotes are numbered, by Word's names: 1, 2, 3; i, ii, iii; a, b, c; *, †, ‡ (chicago). */

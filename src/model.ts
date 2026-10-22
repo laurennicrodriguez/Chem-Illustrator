@@ -814,6 +814,36 @@ export interface TableCell {
   valign?: 'center' | 'bottom';
   /** Drawings: room kept at the top of the cell for a structure dropped into it (its width and height, in points). */
   fig?: { w: number; h: number };
+  /** Documents: the cell's own borders (Word's cell borders), over the table style's. */
+  borders?: CellBorders;
+  /** Documents: the cell's own margins, in place of the table's (left out sides keep the table's). */
+  pad?: Partial<CellMargins>;
+}
+
+/** A border line in a document's table: Word's line kinds, its width in points and its colour. 'none' takes a line away. */
+export interface BorderLine {
+  style: 'none' | 'single' | 'double' | 'dotted' | 'dashed';
+  w: number;
+  color: string;
+}
+
+export type BorderSide = 'top' | 'bottom' | 'left' | 'right';
+export type CellBorders = Partial<Record<BorderSide, BorderLine>>;
+
+/** Room inside a cell round its text, in points (Word's cell margins). */
+export interface CellMargins { top: number; bottom: number; left: number; right: number }
+
+/** Which parts of a table its style picks out (Word's Table Style Options). */
+export interface TableLook {
+  /** The heading rows (on unless turned off). */
+  header?: boolean;
+  /** The last row, as a total row. */
+  total?: boolean;
+  /** Every other row shaded (on unless turned off). */
+  bandRows?: boolean;
+  firstCol?: boolean;
+  lastCol?: boolean;
+  bandCols?: boolean;
 }
 
 /**
@@ -837,22 +867,14 @@ export interface TableData {
   title?: TextRun[];
   notes?: TextRun[];
   /**
-   * A table style: on slides and drawings one of PowerPoint's ("pp-medium2-1", see
-   * deck/table-styles.ts), drawn in place of `lines`; in documents Word's (document/table-styles.ts).
+   * A table style, in place of `lines`: on slides and drawings one of PowerPoint's ("pp-medium2-1",
+   * see deck/table-styles.ts); in documents Word's, by its style id (document/table-styles.ts).
    */
   style?: string;
-  /** Which parts of the table its style marks out (PowerPoint's and Word's Table Style Options). */
+  /** Which parts the style picks out (PowerPoint's and Word's Table Style Options). */
   look?: TableLook;
-}
-
-/** Table Style Options: which rows and columns the table style marks out. */
-export interface TableLook {
-  header?: boolean;
-  total?: boolean;
-  bandRows?: boolean;
-  firstCol?: boolean;
-  lastCol?: boolean;
-  bandCols?: boolean;
+  /** Documents: the margins of every cell (Word's default cell margins), when not the standard ones. */
+  pad?: CellMargins;
 }
 
 /** A drawing's page: the drawing area of one sheet of paper (inside its margins), in points. */
