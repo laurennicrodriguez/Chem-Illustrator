@@ -2178,6 +2178,41 @@ button.sym:hover, button.sym:focus-visible { border-color: var(--accent); backgr
 .sym-big { font-size: 28px; min-width: 32px; text-align: center; color: var(--text); }
 .sym-warn { color: var(--warn); flex-basis: 100%; font-size: 12px; }
 .fp-icon { vertical-align: -2px; }
+/* drawing a custom motion path over the slide */
+.an-path-draw { position: absolute; inset: 0; z-index: 30; cursor: crosshair; outline: none; }
+.an-path-draw svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.an-path-draw polyline { fill: none; stroke: #2f6fdf; stroke-width: 1.6; stroke-dasharray: 5 3; }
+/* the slide show in the window (Reading View, a show browsed by one person), and Rehearse Timings' bar */
+.present.windowed { position: fixed; inset: 0; z-index: 90; background: #2b2e33; }
+.show-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 40px; display: flex; align-items: center; justify-content: center; gap: 10px; background: #1d2024; color: #e6e8ec; font: 13px var(--ui-font, system-ui), sans-serif; }
+.show-bar button, .rehearse-bar button { background: #30343b; color: #e6e8ec; border: 1px solid #454b55; border-radius: 5px; padding: 4px 12px; font: inherit; cursor: pointer; }
+.show-bar button:hover, .rehearse-bar button:hover { background: #3a3f48; }
+.show-bar button:last-child { position: absolute; right: 10px; }
+.show-count { min-width: 9em; text-align: center; font-variant-numeric: tabular-nums; }
+.rehearse-bar { position: absolute; top: 10px; left: 10px; z-index: 3; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; background: #1d2024ee; color: #e6e8ec; font: 13px var(--ui-font, system-ui), sans-serif; box-shadow: 0 2px 10px #0008; }
+.rehearse-bar .rh-what { font-weight: 600; }
+.rehearse-bar .rh-slide, .rehearse-bar .rh-total { font: 600 15px var(--mono-font, monospace); font-variant-numeric: tabular-nums; min-width: 3.6em; text-align: center; }
+.rehearse-bar .rh-total { opacity: 0.7; }
+/* Header and Footer, Set Up Show, Custom Shows */
+dialog.hf-dialog { width: min(94vw, 520px); }
+.hf-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line, #ccd); margin-bottom: 10px; }
+.hf-tabs button { border: 1px solid transparent; border-bottom: 0; background: transparent; padding: 4px 12px; border-radius: 5px 5px 0 0; }
+.hf-tabs button[aria-selected="true"] { border-color: var(--line, #ccd); background: var(--panel, #fff); font-weight: 600; }
+.hf-block { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 8px; }
+.hf-block > input[type="text"] { margin-left: 22px; }
+.hf-check, .hf-radio { display: flex; align-items: center; gap: 4px; margin: 3px 0; }
+.hf-radio { margin-left: 22px; }
+.hf-radio input[type="text"] { flex: 1; min-width: 0; }
+.hf-note { margin-top: 8px; }
+dialog.show-setup { width: min(94vw, 600px); }
+.ss-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; }
+.ss-grid fieldset { border: 1px solid var(--line, #ccd); border-radius: 6px; padding: 4px 10px 8px; margin: 0; }
+.ss-grid .hf-radio { margin-left: 0; }
+.cs-body, .cs-pick { display: flex; gap: 8px; align-items: stretch; margin: 6px 0; }
+.cs-list { flex: 1; min-width: 160px; min-height: 160px; }
+.cs-col { display: flex; flex-direction: column; flex: 1; gap: 2px; }
+.cs-side { display: flex; flex-direction: column; gap: 4px; justify-content: center; }
+@media (max-width: 560px) { .ss-grid { grid-template-columns: 1fr; } .cs-pick { flex-wrap: wrap; } }
 
 /* Review > Check Accessibility */
 .a11y-pane { width: 340px; }

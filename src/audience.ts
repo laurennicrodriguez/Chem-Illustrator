@@ -47,6 +47,8 @@ const link = new ShowLink('audience', (m: ShowMessage) => {
   if (m.kind === 'deck') {
     player?.stop();
     const p = (player = new Player(canvas, deckFromData(m.deck)));
+    // the show's order and settings, as the presenter's (Set Up Show)
+    if (m.deck.play) Object.assign(p, m.deck.play);
     ink?.remove();
     ink = new ShowInk(document.body, canvas, { slide: () => p.i, place: () => p.slidePlace }, false);
     p.onChange = () => ink?.paint();
@@ -61,7 +63,10 @@ const link = new ShowLink('audience', (m: ShowMessage) => {
   else if (m.kind === 'zoom' && player) {
     const w = canvas.clientWidth, h = canvas.clientHeight;
     player.zoom(m.i, { x1: m.rect.x1 * w, y1: m.rect.y1 * h, x2: m.rect.x2 * w, y2: m.rect.y2 * h }, m.out);
-  } else if (m.kind === 'tap') player?.clickMedia(m.fx * canvas.clientWidth, m.fy * canvas.clientHeight);
+  } else if (m.kind === 'tap' && player) {
+    const x = m.fx * canvas.clientWidth, y = m.fy * canvas.clientHeight;
+    if (!player.clickMedia(x, y)) player.fireTrigger(x, y);
+  }
   else if (m.kind === 'ink') ink?.setSlideInk(m.i, m.strokes);
   else if (m.kind === 'laser') ink?.showLaser(m.p);
   else if (m.kind === 'bye') void end();

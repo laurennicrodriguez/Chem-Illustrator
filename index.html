@@ -189,6 +189,11 @@
     <button role="menuitem" data-cmd="present-current">Present from This Slide</button>
     <button role="menuitem" data-cmd="presenter-view" title="Slides full screen on the projector; your notes, the next slide and a timer on your own screen">Presenter View</button>
     <button role="menuitem" data-cmd="preview-slide">Preview Slide</button>
+    <button role="menuitem" data-cmd="reading-view" title="The slide show in this window, with Back and Next below">Reading View</button>
+    <button role="menuitem" data-cmd="custom-shows" title="Named lists of the deck's slides, played as shows of their own">Custom Shows…</button>
+    <button role="menuitem" data-cmd="set-up-show" title="How the show runs, which slides it plays, looping, narration, animations and timings">Set Up Show…</button>
+    <button role="menuitem" data-cmd="rehearse-timings" title="Play the show timing each slide, and keep the times">Rehearse Timings</button>
+    <button role="menuitem" data-cmd="record-show" title="Play the show recording narration and timing each slide">Record…</button>
     </div>
     </div>
     <hr />
@@ -252,6 +257,7 @@
     <button data-modes="slides" role="menuitem" data-cmd="action-settings" title="What a click on the selected shape or action button does in the slide show">Action…</button>
     <button data-modes="slides" role="menuitem" data-cmd="insert-video" title="A video from a file that plays in the slide show and in PowerPoint">Video…</button>
     <button data-modes="slides" role="menuitem" data-cmd="insert-audio" title="A sound from a file that plays in the slide show and in PowerPoint">Audio…</button>
+    <button data-modes="slides" role="menuitem" data-cmd="header-footer" title="The date, slide number and footer on the slides, and the header and footer of notes pages and handouts">Header &amp; Footer…</button>
     <button data-modes="slides design document" role="menuitem" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha), shown as maths; a Word or PowerPoint equation in .docx and .pptx files">Equation…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-toc" title="The headings (Heading 1, 2, 3) with their page numbers; it updates by itself">Table of Contents…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-tof" title="The Figure, Scheme, Table or Chart captions with their page numbers; it updates by itself">Table of Figures…</button>
@@ -1947,6 +1953,11 @@
           <button class="rb-big" data-cmd="slide-icons" aria-haspopup="true" title="About 7,000 icons, lab and science ones first (glassware, molecules, hazard signs): pick one, then click or drag on the slide"><span class="rb-icon">⚗</span>Icons ▾</button>
           <button class="rb-big" data-cmd="insert-diagram" title="Lists, processes, cycles, hierarchies, Venn diagrams, matrices and pyramids drawn from lines of text, like PowerPoint's SmartArt. Double-click one to type into it"><span class="rb-icon">⧉</span>Diagram</button>
           <button class="rb-big" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha) and shown as maths, or one of the usual ones (Arrhenius, Eyring…). Double-click it to change it. Saved as a PowerPoint equation (Alt+=)"><span class="rb-icon">π</span>Equation</button>
+          <button class="rb-big" data-cmd="header-footer" title="Header &amp; Footer: the date (today's, kept up to date, or fixed), slide number and footer on the slides picked or every slide; and the header and footer of notes pages and handouts. Saved as PowerPoint's own"><span class="rb-icon">▭</span>Header &amp; Footer</button>
+          <div class="rb-col">
+            <button data-cmd="insert-date-time" title="Date &amp; Time: the date on the slides, today's in the form you pick or fixed text (in Header &amp; Footer)">📅 Date &amp; Time</button>
+            <button data-cmd="insert-slide-number" title="Slide Number: the slides' numbers at the bottom right (in Header &amp; Footer)"># Slide Number</button>
+          </div>
           <button class="rb-big" data-cmd="insert-symbol" title="Symbol: Greek letters, arrows, maths and chemistry signs, accented letters, typed into the text being edited (or a new text box). Find one by name or code; the ones you used lately come first"><span class="rb-icon">Ω</span>Symbol</button>
           <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
           <button class="rb-big" data-cmd="picture-format" title="Picture Format for the selected picture: brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions. Saved as PowerPoint's own picture settings"><span class="rb-icon">◐</span>Picture Format</button>
@@ -2012,12 +2023,20 @@
           <button class="rb-big" data-cmd="present" title="Show the slides full screen from the first"><span class="rb-icon">▶</span>From Beginning</button>
           <button class="rb-big" data-cmd="present-current" title="Show the slides full screen from this one"><span class="rb-icon">▷</span>From This Slide</button>
           <button class="rb-big" data-cmd="presenter-view" title="Slides full screen on the projector; your notes, the next slide and a timer on your own screen"><span class="rb-icon">▣</span>Presenter View</button>
+          <button class="rb-big" data-cmd="custom-show-menu" aria-haspopup="true" title="Custom Slide Show: play one of the deck's custom shows (named lists of its slides, in any order), or make and change them"><span class="rb-icon">☷</span>Custom Slide Show ▾</button>
         </div>
-        <div class="rb-label">Present</div>
+        <div class="rb-label">Start Slide Show</div>
       </div>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-cmd="set-up-show" title="Set Up Show: full screen with a speaker, in a window for one person, or at a kiosk going round by itself; which slides; loop; narration, animations and timings. Saved with the PowerPoint file"><span class="rb-icon">⚙</span>Set Up Slide Show</button>
           <button class="rb-big" data-cmd="hide-slide" aria-pressed="false" title="The slide show skips the slides picked; they stay in the deck and in the PowerPoint file. Again to show them"><span class="rb-icon">⊘</span>Hide Slide</button>
+          <button class="rb-big" data-cmd="rehearse-timings" title="Rehearse Timings: play the show with a clock for each slide and the whole talk; at the end keep the times, so the show can go on by itself"><span class="rb-icon">⏱</span>Rehearse Timings</button>
+          <button class="rb-big" data-cmd="record-show" title="Record: play the show recording your narration from the microphone, slide by slide, and timing each slide; at the end keep them (narration goes on each slide as a sound that plays as it comes in, PowerPoint too)"><span class="rb-icon">●</span>Record</button>
+          <div class="rb-col">
+            <label class="rb-field check" title="Play the narration recorded with Record (off: Show without narration)"><input type="checkbox" data-cmd="play-narrations" checked /> Play Narrations</label>
+            <label class="rb-field check" title="Each slide goes on by itself after its time (off: only clicks go on)"><input type="checkbox" data-cmd="use-timings" checked /> Use Timings</label>
+          </div>
         </div>
         <div class="rb-label">Set Up</div>
       </div>
@@ -2027,6 +2046,7 @@
         <div class="rb-row">
           <button class="rb-big" data-cmd="view-normal" aria-pressed="true" title="The slide list beside the slide you are working on"><span class="rb-icon">▭</span>Normal</button>
           <button class="rb-big" data-cmd="view-sorter" aria-pressed="false" title="Every slide in rows of larger pictures, by section: drag to reorder, double-click one to open it"><span class="rb-icon">▦</span>Slide Sorter</button>
+          <button class="rb-big" data-cmd="reading-view" title="Reading View: the slide show in this window, from this slide, with Back and Next below (Esc to come back)"><span class="rb-icon">▢</span>Reading View</button>
         </div>
         <div class="rb-label">Presentation Views</div>
       </div>
@@ -2129,9 +2149,22 @@
       <div class="rb-group">
         <div class="rb-row">
           <div class="rb-col">
+            <label class="rb-field" title="Motion path: the selected objects move along a line, an arc, a turn, a shape or a path you click out on the slide, and stay where it ends. The path shows on the slide while this tab is open: green where it starts, red where it ends">Path <select id="an-path"><option value="">Pick a path…</option></select></label>
+            <button data-an="reverse-path" title="Reverse Path Direction: the selected motion path runs the other way, from where it ended back to the start">⇄ Reverse Path</button>
+          </div>
+        </div>
+        <div class="rb-label">Motion Paths</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
             <label class="rb-field" title="Wipe and Fly: the side it comes in from (or goes out to)">Effect <select id="an-from"></select></label>
             <label class="rb-field" id="an-amount-box" style="display: none">Amount <input id="an-amount" type="number" step="5" style="width: 60px" /> <span id="an-amount-unit"></span></label>
             <label class="rb-field" id="an-colour-box" style="display: none" title="Colour Change: the colour it changes to">Colour <input id="an-colour" type="color" /></label>
+            <label class="rb-field" title="Text: comes in (or goes, or is emphasised) as one object, or one paragraph at a time (each starting as the first does: on its own click, with or after the one before)">Sequence <select id="an-seq">
+              <option value="one">As One Object</option>
+              <option value="para">By Paragraph</option>
+            </select></label>
             <button data-an="remove" title="Take the selected animation off">Remove</button>
           </div>
         </div>
@@ -2140,6 +2173,10 @@
       <div class="rb-group">
         <div class="rb-row">
           <button class="rb-big" data-an="pane" aria-pressed="false" title="List this slide's animations in the right-hand panel"><span class="rb-icon" data-icon="pane"></span>Animation Pane</button>
+          <button class="rb-big" data-an="painter" aria-pressed="false" title="Animation Painter: copy the selected object's animations, then click another object to give it the same ones. Double-click to keep painting until you press Esc or click this again"><span class="rb-icon" data-icon="painter"></span>Animation Painter</button>
+          <div class="rb-col">
+            <label class="rb-field" title="Trigger: the selected animations play in the slide's own order of clicks, or when an object on the slide is clicked in the show (a button, a picture, a label…)">Trigger <select id="an-trigger"><option value="">On Click Sequence</option></select></label>
+          </div>
         </div>
         <div class="rb-label">Advanced Animation</div>
       </div>

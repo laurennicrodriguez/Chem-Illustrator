@@ -809,6 +809,8 @@ export interface Media {
   hide?: boolean;
   /** A sound keeps playing when the show goes on to the next slides (Play Across Slides). */
   across?: boolean;
+  /** Narration recorded for the slide (Slide Show > Record): left silent when the show is set up without narration. */
+  narration?: boolean;
   /** A video fills the screen while it plays (Play Full Screen). */
   full?: boolean;
   /** How long it is, in seconds, when known. */
