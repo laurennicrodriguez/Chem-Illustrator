@@ -1245,6 +1245,38 @@ export class Deck {
    */
   pasteSlides(from: SlideSource, keep = false, after = this.index): number {
     if (!from.slides.length) return 0;
+    const { slides, master } = this.adopt(from, keep);
+    const at = Math.max(0, Math.min(this.slides.length, after + 1));
+    this.insert(at, slides, slides.length > 1 ? 'Paste slides' : 'Paste slide', master);
+    return slides.length;
+  }
+
+  /**
+   * Put a copy of a slide from another deck in place of slide i (Compare's Accept on a changed
+   * slide), as pasteSlides would make it, keeping slide i's section. One undo step.
+   */
+  replaceSlide(i: number, from: SlideSource, label = 'Accept change'): boolean {
+    const old = this.slides[i];
+    if (!old || from.slides.length !== 1) return false;
+    const { slides: [made], master } = this.adopt(from, false);
+    if (old.section !== undefined) made.section = old.section;
+    const beforeMaster = this.master;
+    const beforeIndex = this.index;
+    const useMaster = (m: Master) => { if (this.master !== m) { this.master = m; this.restyleAll(); } };
+    const put = (s: Slide, m: Master, go: number) => {
+      this.detachKeep(() => { const k = this.slides.indexOf(s === made ? old : made); if (k >= 0) this.slides[k] = s; });
+      useMaster(m);
+      this.goFresh(go);
+    };
+    const doIt = () => put(made, master ?? beforeMaster, i);
+    const undoIt = () => put(old, beforeMaster, beforeIndex);
+    doIt();
+    this.record(label, undoIt, doIt, made);
+    return true;
+  }
+
+  /** Slides made from copies out of a deck, for this one (and this deck's master with any layouts they bring). */
+  private adopt(from: SlideSource, keep: boolean): { slides: Slide[]; master: Master | undefined } {
     // layouts made in the other deck's master come with its slides, as in PowerPoint
     const missing = [...new Set(from.slides.map((c) => c.layout))].filter((id) => !hasLayout(this.master, id) && hasLayout(from.master, id));
     const master: Master | undefined = missing.length
@@ -1277,9 +1309,7 @@ export class Deck {
       if (resized) made.doc.bulk(() => this.fitPlaceholders(made.doc, lay, target));
       return made;
     });
-    const at = Math.max(0, Math.min(this.slides.length, after + 1));
-    this.insert(at, slides, slides.length > 1 ? 'Paste slides' : 'Paste slide', master);
-    return slides.length;
+    return { slides, master };
   }
 
   /** Change a slide's speaker notes. */

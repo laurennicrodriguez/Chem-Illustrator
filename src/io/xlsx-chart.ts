@@ -343,7 +343,8 @@ export function readChartExXml(doc: Document, at: Chart['at'], w: number, h: num
 export function chartAnchorXml(c: Chart, to: { col: number; colOff: number; row: number; rowOff: number }, n: number, rid: string): string {
   const PX = 9525;
   const ex = isChartEx(c.kind);
-  const frame = `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${n}" name="Chart ${c.id}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>` +
+  const descr = c.alt?.trim() ? ` descr="${xml(c.alt.trim())}"` : '';
+  const frame = `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${n}" name="Chart ${c.id}"${descr}/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>` +
     `<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>` +
     (ex ? `<a:graphic><a:graphicData uri="${CX_NS}"><cx:chart xmlns:cx="${CX_NS}" r:id="${rid}"/></a:graphicData></a:graphic></xdr:graphicFrame>`
       : `<a:graphic><a:graphicData uri="${C_NS}"><c:chart xmlns:c="${C_NS}" r:id="${rid}"/></a:graphicData></a:graphic></xdr:graphicFrame>`);

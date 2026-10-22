@@ -11,6 +11,7 @@ import { geoDef, geoShapeStyle } from '../design/geo';
 import type { DocStyle } from '../style';
 import type { Tab } from '../workspace';
 import type { Measure } from '../text/layout';
+import { askAltText } from './accessibility-pane';
 import { keymap, chordOf, parseAction, type KeyContext } from '../editor/keymap';
 import * as rt from '../richtext';
 import type { Move, TextEditing } from '../text/editing';
@@ -657,6 +658,59 @@ export class DocumentMode {
     this.changed('selection');
   }
 
+  /** Go to a paragraph of the document's text (an accessibility issue in it). */
+  revealPara(p: number): void {
+    this.goToPara(p);
+  }
+
+  /** Pick a structure, picture, chart or table (an accessibility issue about it), in the text or in a table cell. */
+  goToObject(id: number): boolean {
+    const f = this.file;
+    if (!f) return false;
+    const offsetIn = (runs: TextRun[]) => {
+      let at = 0;
+      for (const r of runs) { if (r.obj === id) return at; at += r.text.length; }
+      return -1;
+    };
+    const cell = cellHolding(f.t, id);
+    if (cell) {
+      const tb = f.t.objects[cell.id];
+      const runs = tb?.kind === 'table' ? tb.table.rows[cell.r]?.[cell.c]?.runs ?? [] : [];
+      const at = offsetIn(runs);
+      if (at < 0 || !this.startCell(cell.id, cell.r, cell.c, 'start')) return false;
+      f.box?.ed.select(at, at + 1);
+    } else {
+      const at = offsetIn(f.ed.t.runs);
+      if (at < 0) return false;
+      this.stopBox();
+      f.ed.select(at, at + 1);
+      const c = f.ed.caret();
+      this.view.revealTop({ x1: c.x, y1: c.y1, x2: c.x, y2: c.y2 });
+    }
+    this.focus();
+    this.changed('selection');
+    return true;
+  }
+
+  /** Alt Text… for the structure, picture or chart picked (or `id`). True when it was changed. */
+  async altText(id = this.pickedObject()): Promise<boolean> {
+    const f = this.file;
+    const o = id !== null ? f?.t.objects[id] : undefined;
+    if (!f || id === null || !o || (o.kind !== 'drawing' && o.kind !== 'picture')) {
+      this.host.flash('Click a structure, picture or chart first, then Alt Text.');
+      return false;
+    }
+    const what = o.kind === 'drawing' ? 'structure or scheme' : o.chart ? 'chart' : 'picture';
+    const note = o.kind === 'drawing' ? 'Screen readers read this out in place of the drawing, and Word keeps it as the picture\'s alt text. Left empty, the drawing is described by its SMILES.' : undefined;
+    const got = await askAltText(what, o.alt, note);
+    const cur = this.file?.t.objects[id];
+    if (got === null || !cur || (cur.kind !== 'drawing' && cur.kind !== 'picture') || this.file !== f) return false;
+    const next = { ...cur, alt: got || undefined } as DocObject;
+    if (!got) delete (next as { alt?: string }).alt;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, 'Alt text');
+    return true;
+  }
+
   /** Go to a place the Navigation pane's search found (in the text, or in a table cell). */
   private goToHit(hit: { cell?: { id: number; r: number; c: number }; start: number; end: number }): void {
     const f = this.file;
@@ -1117,6 +1171,7 @@ export class DocumentMode {
         item(po.embed.icon ? 'Show Contents' : 'Display as Icon', () => void this.embeddedIcon(picked, !po.embed?.icon), po.embed.icon ? 'Show what the object holds instead of its icon' : 'Show an icon with the file\'s name instead of what it holds');
       }
       if (po?.kind === 'picture' && !po.chart && !po.embed) cmd('Picture Format…', 'picture-format', 'Brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions');
+      if (po?.kind === 'drawing' || po?.kind === 'picture') cmd('Alt Text…', 'alt-text', 'What it shows, for people who can\'t see it (screen readers); kept as its alt text in Word');
       cmd('Insert Caption…', 'insert-caption');
       const look = this.lookOf(picked);
       item(look?.frame ? 'Remove Frame' : 'Add Frame', () => this.setLook(picked, { frame: look?.frame ? undefined : 0.75, frameColor: undefined }), 'A thin black line round it (Format in the panel sets its width and colour)');
@@ -2779,6 +2834,7 @@ export class DocumentMode {
       case 'insert-chart': void this.insertChart(); break;
       case 'edit-chart': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || !o.chart) { this.host.flash('Click a chart first (or double-click it).'); break; } void this.editChart(id); break; }
       case 'picture-format': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || o.chart || o.embed) { this.host.flash(o?.kind === 'picture' && o.embed ? 'An embedded object shows its program\'s picture: change it by opening the object.' : 'Click a picture first.'); break; } void this.formatPicture(id); break; }
+      case 'alt-text': void this.altText(); break;
       case 'insert-caption': void this.insertCaption(); break;
       case 'cross-reference': void this.crossReference(); break;
       case 'compound-number': void this.compoundNumber(); break;

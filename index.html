@@ -16,6 +16,7 @@
         <button role="menuitem" data-cmd="new-design">New Design…</button>
         <button role="menuitem" data-cmd="new-sheet">New Sheet</button>
         <button role="menuitem" data-cmd="new-document">New Document</button>
+        <button role="menuitem" data-cmd="new-from-template" title="A new document or sheet from a ready-made template: lab report, supporting information, thesis chapter, reaction table, reagent sheet">New from Template…</button>
         <button role="menuitem" data-cmd="open">Open…</button>
         <div id="recent-files" class="recent-files" hidden></div>
         <button role="menuitem" data-cmd="save">Save</button>
@@ -35,6 +36,8 @@
         <button role="menuitem" data-modes="drawing slides design document" data-cmd="export-pdf">Export PDF…</button>
         <button role="menuitem" data-modes="drawing slides design" data-cmd="export-picture">Export Picture…</button>
         <button role="menuitem" data-modes="drawing slides design" data-cmd="export-mol">Export Molfile…</button>
+        <hr />
+        <button role="menuitem" data-cmd="check-accessibility" title="Look for what makes this file hard to use with a screen reader or to read: missing alt text, low-contrast text, slides without titles, headings that skip a level, things read out of order">Check Accessibility</button>
         <hr />
         <button role="menuitem" data-cmd="print" title="Print the drawing, slides (or handouts), document or sheet">Print…</button>
         <button data-modes="sheet" role="menuitem" data-cmd="print-preview" title="Every page of the sheet as it will print">Print Preview</button>
@@ -214,6 +217,7 @@
     <button data-modes="document" role="menuitem" data-cmd="insert-object" title="Another program's file kept whole in the document (an Excel workbook, a PDF, anything): shown as its cells, first page or an icon; double-click it to open it in its program">Object…</button>
     <button data-modes="drawing slides design" role="menuitem" data-cmd="crop" title="Cut the edges off the selected picture">Crop Picture</button>
     <button data-modes="drawing slides design document" role="menuitem" data-cmd="picture-format" title="Brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions">Picture Format…</button>
+    <button role="menuitem" data-cmd="alt-text" title="Alt text for the picture, chart or structure picked: what it shows, for people who can't see it (screen readers). Kept as its alt text in Word, PowerPoint and Excel">Alt Text…</button>
     <button data-modes="drawing slides design" role="menuitem" data-cmd="text-box">Text Box</button>
     <button data-modes="drawing slides design document" role="menuitem" data-cmd="insert-table" title="A table in the ACS style; or paste cells from Excel or a sheet">Table…</button>
     <button data-modes="drawing slides design document" role="menuitem" data-cmd="insert-chart" title="A chart with its own data (type or paste it in a grid), saved as a Word or PowerPoint chart">Chart…</button>
@@ -941,6 +945,13 @@
     <div class="rb-panel" data-sh-panel="review" hidden>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-cmd="check-accessibility" title="Check Accessibility: missing alt text, low-contrast text, merged cells, sheets without names. Click an item to go to it"><span class="rb-icon">♿</span>Check Accessibility</button>
+          <button class="rb-big" data-cmd="alt-text" title="Alt Text: what the picture, chart or structure picked shows, for people who can't see it (screen readers)"><span class="rb-icon">🏷</span>Alt Text…</button>
+        </div>
+        <div class="rb-label">Accessibility</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-sh="new-comment" title="New Comment (Ctrl+Alt+M): a conversation on the cell with your name and the time, which others can reply to and resolve"><span class="rb-icon">💬</span>New Comment</button>
           <div class="rb-col">
             <button data-sh="prev-comment" title="Go to the note or comment before this cell">◀ Previous</button>
@@ -1509,6 +1520,13 @@
     <div class="rb-panel" data-doc-panel="review" hidden>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-cmd="check-accessibility" title="Check Accessibility: missing alt text, low-contrast text, headings that skip a level, tables without header rows. Click an item to go to it"><span class="rb-icon">♿</span>Check Accessibility</button>
+          <button class="rb-big" data-cmd="alt-text" title="Alt Text: what the picture, chart or structure picked shows, for people who can't see it (screen readers)"><span class="rb-icon">🏷</span>Alt Text…</button>
+        </div>
+        <div class="rb-label">Accessibility</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-doc="track-changes" aria-pressed="false" title="Track Changes (Ctrl+Shift+E): while on, what you type is marked as inserted and what you delete stays, struck through, until it is accepted or rejected. Each change shows who made it and when"><span class="rb-icon">✎</span>Track Changes</button>
           <button class="rb-big" data-doc="review-name" title="The name put on your changes"><span class="rb-icon">👤</span>Your Name…</button>
         </div>
@@ -2031,6 +2049,19 @@
       </div>
     </div>
     <div class="rb-panel" data-sl-panel="review" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="check-accessibility" title="Check Accessibility: missing alt text, low-contrast text, slides without titles, reading order. Click an item to go to it"><span class="rb-icon">♿</span>Check Accessibility</button>
+          <button class="rb-big" data-cmd="alt-text" title="Alt Text: what the picture, chart or structure picked shows, for people who can't see it (screen readers)"><span class="rb-icon">🏷</span>Alt Text…</button>
+        </div>
+        <div class="rb-label">Accessibility</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="compare-slides" title="Compare Presentations: pick another version of this deck (a reviewer's copy, say). Each slide that differs is listed, with what changed, to accept into this deck or reject"><span class="rb-icon">⇆</span>Compare…</button>
+        </div>
+        <div class="rb-label">Compare</div>
+      </div>
       <div class="rb-group">
         <div class="rb-row">
           <button class="rb-big" data-cmd="new-comment" title="New Comment (Ctrl+Alt+M): a note pinned to the slide beside what is selected, with your name and the time"><span class="rb-icon">💬</span>New Comment</button>

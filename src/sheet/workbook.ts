@@ -67,6 +67,16 @@ export interface CellStyle {
   cellStyle?: string;
 }
 
+/** The macros of an .xlsm workbook, as its file held them. */
+export interface Macros {
+  /** xl/vbaProject.bin. */
+  project: Uint8Array;
+  /** Its digital signatures (vbaProjectSignature.bin and the agile and V3 ones), by file name, when signed. */
+  signatures: Record<string, Uint8Array>;
+  /** The workbook's own codeName (ThisWorkbook). */
+  codeName?: string;
+}
+
 /** A drawing in a cell. Never changed once made: a new drawing gets a new id, so pictures and properties can be kept by id. */
 export interface Structure {
   id: number;
@@ -236,6 +246,8 @@ const SMALL_BLOCK = 10000;
 
 export class Sheet {
   readonly uid = nextSheetUid++;
+  /** The name a macro-enabled workbook's code knows the sheet by (Excel's codeName), kept for its macros. */
+  codeName?: string;
   cells = new Map<number, Cell>();
   /** Column widths and row heights set by hand, in pixels at 100% zoom. */
   colWidths = new Map<number, number>();
@@ -1187,6 +1199,11 @@ export class Workbook {
   chem: ChemHost | null = null;
   /** Names defined for cells, values and formulas (Formulas > Name Manager). */
   names: DefinedName[] = [];
+  /**
+   * A macro-enabled workbook's (.xlsm) VBA project, kept byte for byte and saved back into .xlsm
+   * files. It is never run or changed here; null when the workbook has no macros.
+   */
+  macros: Macros | null = null;
   /** Page Layout > Themes: the colours and fonts of the workbook (null: Excel's default theme). */
   theme: WorkbookTheme | null = null;
   /** View > Custom Views: named views of the workbook to go back to. */

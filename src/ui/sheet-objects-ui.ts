@@ -3,6 +3,7 @@
 
 import { popupMenu } from './sheet-view';
 import type { SheetView } from './sheet-view';
+import { askAltText } from './accessibility-pane';
 import { ask } from './ask';
 import type { Sheet } from '../sheet/workbook';
 import { SheetObject, ShapeKind, SHAPE_NAMES, newObjectId, objectLook, isLine } from '../sheet/sheet-objects';
@@ -222,10 +223,10 @@ export class SheetObjects {
 
   async altText(o = this.picked): Promise<void> {
     if (!o) return;
-    const got = await ask('Alt Text', [{ name: 'descr', label: 'Description', value: o.descr ?? '', type: 'textarea', placeholder: 'What it shows, for people who can\'t see it' }], { ok: 'Save' });
+    const got = await askAltText(o.kind === 'picture' ? 'picture' : 'shape', o.descr);
     const cur = this.view.sheet?.objects.find((x) => x.id === o.id);
-    if (!got || !cur) return;
-    this.view.replaceObject({ ...cur, descr: got.descr.trim() || undefined }, 'Alt text');
+    if (got === null || !cur) return;
+    this.view.replaceObject({ ...cur, descr: got || undefined }, 'Alt text');
   }
 
   /** Bring to Front (+1) or Send to Back (−1). */
