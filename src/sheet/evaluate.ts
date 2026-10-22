@@ -47,6 +47,11 @@ export interface EvalHost {
   home?: { row: number; col: number };
   /** Names given by LET, and a LAMBDA's parameters, upper case. */
   vars?: Map<string, Arg>;
+  /**
+   * Is a cell left out of SUBTOTAL: one holding SUBTOTAL or AGGREGATE itself (so subtotals
+   * aren't counted twice), a row a filter hides, or with `hidden` any hidden row (109 and so on)?
+   */
+  subtotalSkip?(sheet: string | undefined, row: number, col: number, hidden: boolean): boolean;
 }
 
 /** A number as a cell holds it: −0 is 0, infinities and NaN are #NUM!. */
@@ -106,7 +111,7 @@ function evalNode(n: Node, host: EvalHost): Arg {
 
 /** The cells of a block, as a function is given them. */
 function blockOf(host: EvalHost, sheet: string | undefined, range: Range): Block {
-  return { block: host.block(sheet, range), h: range.r2 - range.r1 + 1, w: range.c2 - range.c1 + 1, at: { r: range.r1, c: range.c1 } };
+  return { block: host.block(sheet, range), h: range.r2 - range.r1 + 1, w: range.c2 - range.c1 + 1, at: { r: range.r1, c: range.c1 }, ...(sheet !== undefined ? { sheet } : {}) };
 }
 
 /** A leading minus or a trailing %, for each value of an array too. */
@@ -334,7 +339,12 @@ const FUNCTIONS: Record<string, FnDef> = {
       const k = toNumber(scalar(args[0]));
       if (isError(k)) return k;
       const name = ({ 1: 'AVERAGE', 2: 'COUNT', 3: 'COUNTA', 4: 'MAX', 5: 'MIN', 6: 'PRODUCT', 7: 'STDEV', 8: 'STDEVP', 9: 'SUM', 10: 'VAR', 11: 'VARP' } as Record<number, string>)[Math.trunc(k) % 100];
-      return name ? scalar(FUNCTIONS[name].fn(args.slice(1), host)) : ERR.value('SUBTOTAL works out 1 to 11 (101 to 111)');
+      if (!name) return ERR.value('SUBTOTAL works out 1 to 11 (101 to 111)');
+      // other subtotals in the block, and rows filtered out (any hidden row, for 101 to 111), are left out
+      const hidden = Math.trunc(k) > 100;
+      const skip = host.subtotalSkip;
+      const cells = skip ? args.slice(1).map((a) => (isBlock(a) && a.at ? { ...a, block: a.block.map((row, i) => row.map((v, j) => (skip(a.sheet, a.at!.r + i, a.at!.c + j, hidden) ? null : v))) } : a)) : args.slice(1);
+      return scalar(FUNCTIONS[name].fn(cells, host));
     },
   },
   ROUND: { min: 1, max: 2, fn: roundFn('near') },

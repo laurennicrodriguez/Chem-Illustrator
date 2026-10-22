@@ -49,6 +49,12 @@ import type { Contents } from '../model';
 import type { DocStyle } from '../style';
 import type { Tab } from '../workspace';
 import { paintCells } from '../format-painter';
+import { SheetLook, themeColourGrid } from './sheet-look-ui';
+import { SheetOutline } from './sheet-outline-ui';
+import { SheetSparklines } from './sheet-sparkline-ui';
+import { SheetViews, formulaBarPrefs } from './sheet-views-ui';
+import type { SparkKind } from '../sheet/sparklines';
+import { themeOf } from '../sheet/themes';
 
 /** What a paste found on the clipboard, as far as a sheet cares. */
 export interface ClipboardCells {
@@ -124,6 +130,15 @@ export class SheetMode {
   readonly formulas: SheetFormulas;
   readonly analysis: SheetAnalysis;
   readonly pivots: SheetPivots;
+  /** Fonts, orientation, indents, cell styles and themes. */
+  readonly look: SheetLook;
+  /** Group, Ungroup, Subtotal and the outline's buttons. */
+  readonly outline: SheetOutline;
+  readonly sparks: SheetSparklines;
+  /** Normal, Page Layout and Page Break Preview; gridlines, headings, the formula bar; Custom Views. */
+  readonly views: SheetViews;
+  /** The sparkline group the Sparkline tab was last brought forward for. */
+  private sparkShown: number | null = null;
   /** The chart the panel and Chart tab showed last (the tab opens when a chart is first picked). */
   private chartShown: number | null = null;
   /** The PivotTable the ribbon last brought its tab forward for. */
@@ -146,7 +161,8 @@ export class SheetMode {
       structureBox: (s) => this.pictures.box(s),
       structureBitmap: (s, scale) => this.pictures.bitmap(s, Math.abs(scale), scale < 0),
       editStructure: (r, c) => this.drawStructure(r, c),
-      key: (e) => this.host.key(e),
+      key: (e) => this.outlineKey(e) || this.host.key(e),
+      headerFooter: () => void this.page.headerFooter(),
       f3: (e) => this.f3(e),
       changed: () => this.selectionChanged(),
       contextMenu: (x, y, where) => (where === 'chart' ? this.charts.contextMenu(x, y) : where === 'tile' ? this.dashUi.contextMenu(x, y) : where === 'object' ? this.objects.contextMenu(x, y) : this.contextMenu(x, y, where)),
@@ -229,6 +245,11 @@ export class SheetMode {
       flash: (m, ms) => this.host.flash(m, ms),
     });
     this.pivots = new SheetPivots({ view: this.view, flash: (m, ms) => this.host.flash(m, ms) });
+    const basic = { view: this.view, edit: (label: string, fn: (s: Sheet) => void) => this.edit(label, fn), flash: (m: string, ms?: number) => this.host.flash(m, ms) };
+    this.look = new SheetLook(basic);
+    this.outline = new SheetOutline({ ...basic, edit: (label, fn, after) => this.edit(label, fn, after), table: () => (this.view.sheet ? this.tableAt() : null) });
+    this.sparks = new SheetSparklines(basic);
+    this.views = new SheetViews({ ...basic, formulaBar: () => { this.showFormulaBar(); this.showRibbonState(); } });
     this.dashUi = new DashboardUi({ view: this.view, charts: this.charts, flash: (m, ms) => this.host.flash(m, ms) });
     this.wireFormulaBar();
     this.wireRibbon();
@@ -358,6 +379,21 @@ export class SheetMode {
   }
 
   /** F3 pastes a name, Shift+F3 opens Insert Function, Ctrl+F3 the Name Manager, Ctrl+Shift+F3 Create from Selection. */
+  /** Shift+Alt+Right groups the selected rows or columns, Shift+Alt+Left ungroups them (Excel's keys). */
+  private outlineKey(e: KeyboardEvent): boolean {
+    if (!e.shiftKey || !e.altKey || e.ctrlKey || e.metaKey || (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft')) return false;
+    e.preventDefault();
+    if (e.key === 'ArrowRight') this.outline.group();
+    else this.outline.ungroup();
+    return true;
+  }
+
+  /** Show or hide the formula bar (View > Formula Bar; dashboards have none). */
+  showFormulaBar(): void {
+    document.querySelector<HTMLElement>('#formula-bar')!.hidden = !!this.view.sheet?.dashboard || !formulaBarPrefs.shown;
+    this.view.refresh();
+  }
+
   private f3(e: KeyboardEvent): void {
     const ctrl = e.ctrlKey || e.metaKey;
     if (ctrl && e.shiftKey) this.formulas.createFromSelection();
@@ -431,6 +467,18 @@ export class SheetMode {
       sel.blur();
       this.view.focus();
     });
+    const font = rb.querySelector<HTMLInputElement>('#sh-font')!;
+    font.addEventListener('change', () => { this.look.setFont(font.value); });
+    font.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); this.look.setFont(font.value); this.view.focus(); }
+      if (e.key === 'Escape') { e.preventDefault(); this.showRibbonState(); this.view.focus(); }
+    });
+    for (const box of rb.querySelectorAll<HTMLInputElement>('[data-spark-opt]')) {
+      box.addEventListener('change', () => {
+        this.sparks.setOption(box.dataset.sparkOpt as Parameters<SheetSparklines['setOption']>[0], box.checked);
+        this.view.focus();
+      });
+    }
     // the ribbon's buttons keep the grid's focus, so keys go on working
     rb.addEventListener('pointerdown', (e) => {
       if ((e.target as HTMLElement).closest('button')) e.preventDefault();
@@ -513,6 +561,20 @@ export class SheetMode {
       case 'fill-menu': this.fillMenu(b.left, b.bottom + 2); return;
       case 'paste-menu': this.pasteMenu(b.left, b.bottom + 2); return;
       case 'what-if': this.analysis.whatIfMenu(b.left, b.bottom + 2); return;
+      case 'orientation': this.look.orientationMenu(b.left, b.bottom + 2); return;
+      case 'cell-styles': this.look.cellStylesMenu(b.left, b.bottom + 2); return;
+      case 'themes': this.look.themesMenu(b.left, b.bottom + 2); return;
+      case 'theme-colours': this.look.coloursMenu(b.left, b.bottom + 2); return;
+      case 'theme-fonts': this.look.fontsMenu(b.left, b.bottom + 2); return;
+      case 'group-menu': this.outline.groupMenu(b.left, b.bottom + 2); return;
+      case 'ungroup-menu': this.outline.ungroupMenu(b.left, b.bottom + 2); return;
+      case 'spark-edit': this.sparks.editMenu(b.left, b.bottom + 2); return;
+      case 'spark-style': this.sparks.styleMenu(b.left, b.bottom + 2); return;
+      case 'spark-colour': this.sparks.colourMenu(b.left, b.bottom + 2); return;
+      case 'spark-marker-colour': this.sparks.markerColourMenu(b.left, b.bottom + 2); return;
+      case 'spark-axis': this.sparks.axisMenu(b.left, b.bottom + 2); return;
+      case 'spark-empty': this.sparks.emptyMenu(b.left, b.bottom + 2); return;
+      case 'spark-clear': this.sparks.clearMenu(b.left, b.bottom + 2); return;
       case 'pivot-layout': this.pivots.layoutMenu(b.left, b.bottom + 2); return;
       case 'pivot-subtotals': this.pivots.subtotalsMenu(b.left, b.bottom + 2); return;
       case 'pivot-grand': this.pivots.grandMenu(b.left, b.bottom + 2); return;
@@ -662,6 +724,23 @@ export class SheetMode {
       case 'clear-print-area': this.page.set('Clear print area', { printArea: undefined }); break;
       case 'print-preview': this.printPreview(); break;
       case 'data-analysis': this.analysis.dataAnalysis(); break;
+      case 'indent-more': case 'indent-less': this.look.indent(name === 'indent-more' ? 1 : -1); break;
+      case 'subtotal': this.outline.subtotal(); break;
+      case 'group': this.outline.group(); break;
+      case 'ungroup': this.outline.ungroup(); break;
+      case 'auto-outline': this.outline.autoOutline(); break;
+      case 'clear-outline': this.outline.clear(); break;
+      case 'show-detail': case 'hide-detail': this.outline.detail(name === 'show-detail'); break;
+      case 'outline-settings': this.outline.settings(); break;
+      case 'view-normal': this.views.layout('normal'); break;
+      case 'view-page-layout': this.views.layout('pageLayout'); break;
+      case 'view-break-preview': this.views.layout('pageBreakPreview'); break;
+      case 'custom-views': this.views.customViews(); break;
+      case 'view-gridlines': this.views.toggle('gridlines'); break;
+      case 'view-headings': this.views.toggle('headings'); break;
+      case 'view-formula-bar': this.views.toggleFormulaBar(); break;
+      case 'spark-line': case 'spark-column': case 'spark-winloss': this.sparks.insert(name.slice(6) as SparkKind); break;
+      case 'spark-type-line': case 'spark-type-column': case 'spark-type-winloss': this.sparks.setKind(name.slice(11) as SparkKind); break;
       case 'goal-seek': this.analysis.goalSeekWindow(); break;
       case 'data-table': this.analysis.dataTableWindow(); break;
       case 'solver': this.analysis.solverWindow(); break;
@@ -837,7 +916,7 @@ export class SheetMode {
     input.dataset.systemPicker = '';
     input.addEventListener('change', () => pick(input.value));
     more.append('More colours ', input);
-    m.append(grid, paletteRows(undefined, pick, () => m.remove()), none, more);
+    m.append(themeColourGrid(this.look.theme, pick), grid, paletteRows(undefined, pick, () => m.remove()), none, more);
     document.body.append(m);
     m.style.left = `${Math.min(x, innerWidth - m.offsetWidth - 4)}px`;
     m.style.top = `${y}px`;
@@ -2012,7 +2091,7 @@ export class SheetMode {
     const tab = (n: string) => this.ribbon.querySelector<HTMLButtonElement>(`[data-sh-tab=${n}]`)!;
     const selected = this.ribbon.querySelector<HTMLButtonElement>('[data-sh-tab][aria-selected=true]')?.dataset.shTab;
     const on = !!s.dashboard;
-    document.querySelector<HTMLElement>('#formula-bar')!.hidden = on;
+    document.querySelector<HTMLElement>('#formula-bar')!.hidden = on || !formulaBarPrefs.shown;
     tab('home').hidden = on;
     tab('formulas').hidden = on;
     tab('data').hidden = on;
@@ -2061,6 +2140,37 @@ export class SheetMode {
     press('show-page-breaks', this.view.showPageBreaks);
     press('print-gridlines', !!s.pageSetup?.gridlines);
     press('print-headings', !!s.pageSetup?.headings);
+    const layout = s.viewOpts?.layout ?? 'normal';
+    press('view-normal', layout === 'normal');
+    press('view-page-layout', layout === 'pageLayout');
+    press('view-break-preview', layout === 'pageBreakPreview');
+    press('view-gridlines', s.viewOpts?.gridlines !== false);
+    press('view-headings', s.viewOpts?.headings !== false);
+    press('view-formula-bar', formulaBarPrefs.shown);
+    const fontBox = this.ribbon.querySelector<HTMLInputElement>('#sh-font');
+    if (fontBox && document.activeElement !== fontBox) {
+      const minor = themeOf(this.book?.theme).minor;
+      fontBox.value = st.font ?? minor;
+      fontBox.placeholder = minor;
+    }
+    // the Sparkline tab shows while the active cell has a sparkline
+    const spark = this.sparks.here();
+    const stab = this.ribbon.querySelector<HTMLButtonElement>('[data-sh-tab=sparkline]');
+    if (stab) {
+      if (!spark && stab.getAttribute('aria-selected') === 'true') this.showRibbonTab('insert');
+      stab.hidden = !spark;
+      if (spark && spark.group.id !== this.sparkShown) this.showRibbonTab('sparkline');
+      this.sparkShown = spark?.group.id ?? null;
+      if (spark) {
+        const g = spark.group;
+        for (const k of ['line', 'column', 'winloss'] as const) press(`spark-type-${k}`, g.kind === k);
+        for (const box of this.ribbon.querySelectorAll<HTMLInputElement>('[data-spark-opt]')) {
+          const opt = box.dataset.sparkOpt as 'high' | 'low' | 'negative' | 'first' | 'last' | 'markers';
+          box.checked = !!g[opt];
+          box.disabled = opt === 'markers' && g.kind !== 'line';
+        }
+      }
+    }
     const note = s.noteAt(r, c);
     press('show-note', !!note?.shown);
     for (const [name, on] of [['edit-note', note?.kind === 'note'], ['show-note', note?.kind === 'note'], ['delete-note', !!note]] as const) {
