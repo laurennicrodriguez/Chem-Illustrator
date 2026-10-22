@@ -119,6 +119,8 @@ export interface DocxModel {
   charts?: Record<number, ChartBox>;
   /** How near a colour Remove Background takes, for each picture by its id ("Picture 4"), which Word has no place for. */
   pictureTol?: Record<number, number>;
+  /** Floating figures' groups and Selection Pane names, by their wp:docPr id. */
+  floats?: Record<number, { group?: number; name?: string }>;
 }
 
 /** The name of a chart's frame in Word ("Chart 4", 4 its id in our part). */

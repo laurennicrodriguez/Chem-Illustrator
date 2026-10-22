@@ -749,12 +749,16 @@ class DocxWriter {
     const ext = `<wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="${el}" t="${et}" r="${er}" b="${eb}"/>`;
     const fl = floatOf(o);
     if (!fl) return `<wp:inline distT="0" distB="0" distL="0" distR="0">${ext}${inner}</wp:inline>`;
+    // hidden in the Selection Pane (Word's own mark); its group and name kept with our data, by its id
+    const pr = /<wp:docPr id="(\d+)"/.exec(inner);
+    if (fl.hidden) inner = inner.replace(/<wp:docPr ([^>]*?)(\/?)>/, '<wp:docPr $1 hidden="1"$2>');
+    if (pr && (fl.group !== undefined || fl.name)) (this.model.floats ??= {})[Number(pr[1])] = { ...(fl.group !== undefined ? { group: fl.group } : {}), ...(fl.name ? { name: fl.name } : {}) };
     const gap = emu(fl.gap ?? FLOAT_GAP);
     const [l, t] = lookExtent(lookOf(o));
     const h = fl.xFrom === 'page' ? 'page' : 'margin';
     const v = fl.yFrom === 'page' ? 'page' : fl.yFrom === 'margin' ? 'margin' : 'paragraph';
     const wrap = fl.wrap === 'square' ? '<wp:wrapSquare wrapText="largest"/>' : fl.wrap === 'topBottom' ? '<wp:wrapTopAndBottom/>' : '<wp:wrapNone/>';
-    return `<wp:anchor distT="${gap}" distB="${gap}" distL="${gap}" distR="${gap}" simplePos="0" relativeHeight="${251659264 + this.docPr * 1024}" behindDoc="${fl.wrap === 'behind' ? 1 : 0}" locked="0" layoutInCell="1" allowOverlap="1">` +
+    return `<wp:anchor distT="${gap}" distB="${gap}" distL="${gap}" distR="${gap}" simplePos="0" relativeHeight="${251659264 + (fl.z !== undefined ? fl.z + 1 : this.docPr) * 1024}" behindDoc="${fl.wrap === 'behind' ? 1 : 0}" locked="0" layoutInCell="1" allowOverlap="1">` +
       `<wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="${h}"><wp:posOffset>${emu(fl.x + l)}</wp:posOffset></wp:positionH>` +
       `<wp:positionV relativeFrom="${v}"><wp:posOffset>${emu(fl.y + t)}</wp:posOffset></wp:positionV>${ext}${wrap}${inner}</wp:anchor>`;
   }
@@ -929,7 +933,7 @@ class DocxWriter {
       `${docPr}<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>` +
       `<a:graphic><a:graphicData uri="${PIC_NS}"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="${xml(name)}"/><pic:cNvPicPr/></pic:nvPicPr>` +
       `<pic:blipFill><a:blip r:embed="${blip}">${ext}</a:blip>${srcRect}<a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
-      `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>${pictureGeomXml(fx, '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>')}${lookXml(look)}</pic:spPr></pic:pic></a:graphicData></a:graphic>`) + '</w:drawing>';
+      `<pic:spPr><a:xfrm${turnAttrs(o)}><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>${pictureGeomXml(fx, '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>')}${lookXml(look)}</pic:spPr></pic:pic></a:graphicData></a:graphic>`) + '</w:drawing>';
     const r = rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
     if (group) return `<w:r>${r}<mc:AlternateContent><mc:Choice Requires="wpg"><w:drawing>${this.placed(o, cx, cy, group(docPr))}</w:drawing></mc:Choice><mc:Fallback>${picture}</mc:Fallback></mc:AlternateContent></w:r>`;
     return `<w:r>${r}${picture}</w:r>`;
@@ -1371,6 +1375,12 @@ function runProps(r: TextRun, st: NamedStyle, x: { formula?: boolean; pos?: 'bas
   const pos = x.pos ?? (r.sub ? 'sub' : r.sup ? 'sup' : 'base');
   if (pos !== 'base') out.push(`<w:vertAlign w:val="${pos === 'sub' ? 'subscript' : 'superscript'}"/>`);
   return out.join('');
+}
+
+/** A picture's turn and flips, as DrawingML's a:xfrm has them (rot in 60000ths of a degree). */
+function turnAttrs(o: DocObject): string {
+  if (o.kind !== 'picture') return '';
+  return `${o.rot ? ` rot="${Math.round(o.rot * 60000)}"` : ''}${o.flipH ? ' flipH="1"' : ''}${o.flipV ? ' flipV="1"' : ''}`;
 }
 
 /** A table cell's run: its font and size always given (tables are set in the drawing's font). */

@@ -277,6 +277,14 @@ export interface Float {
   yFrom?: 'para' | 'margin' | 'page';
   /** Room kept between the figure and the text round it, in points (Word's is 0.13 in). */
   gap?: number;
+  /** Which is drawn over which (Bring Forward, Send Backward): higher on top; unset, in the order of the text. */
+  z?: number;
+  /** Figures grouped together (Arrange > Group) share a number, and move together. */
+  group?: number;
+  /** Its name in the Selection Pane (unset: "Picture 3", "Text Box 2"). */
+  name?: string;
+  /** Hidden from the page in the Selection Pane (still in the document). */
+  hidden?: boolean;
 }
 
 /** The room text keeps from a floating figure unless set (Word's 0.13 inch). */
@@ -326,7 +334,7 @@ export type DocObject =
    * embedded object (Insert > Object) is a picture with another program's file in `embed`. `alt` is
    * its alt text (a structure without it is described by its SMILES).
    */
-  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float; chart?: ChartBox; crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx; embed?: Embedded; alt?: string }
+  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float; chart?: ChartBox; crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx; embed?: Embedded; alt?: string; /** Turned clockwise about its middle, in degrees, and flipped (Arrange > Rotate). */ rot?: number; flipH?: boolean; flipV?: boolean }
   /**
    * A text box: text of its own (typed into in place), `w` wide; it grows to fit its text, and is
    * at least `h` tall when that is set. Always placed on the page. `fill` is its background.

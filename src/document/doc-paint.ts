@@ -138,6 +138,15 @@ export function drawLineNumbers(ctx: CanvasRenderingContext2D, lay: DocLayout, p
   }
 }
 
+/** Turn a canvas about a figure's middle: `rot` degrees clockwise, flipped across or up and down. */
+export function turnAbout(ctx: CanvasRenderingContext2D, o: { x: number; y: number; w: number; h: number }, turn: { rot: number; flipH: boolean; flipV: boolean }): void {
+  const cx = o.x + o.w / 2, cy = o.y + o.h / 2;
+  ctx.translate(cx, cy);
+  if (turn.rot) ctx.rotate((turn.rot * Math.PI) / 180);
+  if (turn.flipH || turn.flipV) ctx.scale(turn.flipH ? -1 : 1, turn.flipV ? -1 : 1);
+  ctx.translate(-cx, -cy);
+}
+
 /** The bars in the left margin by lines with tracked changes: grey in All Markup, red in Simple Markup (as Word's). */
 export function drawChangeBars(ctx: CanvasRenderingContext2D, lay: DocLayout, page: number): void {
   for (const b of lay.changeBars) {
@@ -213,7 +222,7 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
       } else if (obj?.kind === 'math') {
         const m = lay.maths.get(o.id);
         if (m) drawMath(c, m, o.x, o.y + m.ascent, m.family, m.color);
-      } else if (obj?.kind === 'picture') ctx.items.push({ kind: 'image', src: fxSrc(obj) ?? obj.src, x: o.x, y: o.y, w: o.w, h: o.h, px: obj.px, ...(obj.crop ? { crop: obj.crop } : {}) });
+      } else if (obj?.kind === 'picture') ctx.items.push({ kind: 'image', src: fxSrc(obj) ?? obj.src, x: o.x, y: o.y, w: o.w, h: o.h, px: obj.px, ...(obj.crop ? { crop: obj.crop } : {}), ...(obj.rot ? { rot: obj.rot } : {}), ...(obj.flipH ? { flipH: true } : {}), ...(obj.flipV ? { flipV: true } : {}) });
       else if (obj?.kind === 'drawing') {
         const pic = drawing(obj.contents, t.drawingStyle);
         if (pic) ctx.items.push(...placeItems(pic, o));

@@ -9,7 +9,8 @@ import { SHEET_MARGIN, breaksIn, continuous, outlineMarks, type DocViewKind } fr
 import type { LaidLine } from '../text/layout';
 import type { DocFile } from '../document/doc-file';
 import { figures } from '../document/doc-file';
-import { drawChangeBars, drawDocTable, drawHeaderFooter, drawHfBodies, drawLineNumbers, drawNoteRules, drawPageLook } from '../document/doc-paint';
+import { turnOf } from '../document/arrange';
+import { drawChangeBars, turnAbout, drawDocTable, drawHeaderFooter, drawHfBodies, drawLineNumbers, drawNoteRules, drawPageLook } from '../document/doc-paint';
 import { BOX_PAD, SHADOWS, lookOf, type DocText } from '../document/document';
 import { BREAK_NAMES } from '../document/sections';
 import { drawLayout } from '../text/draw';
@@ -603,6 +604,16 @@ export class DocView {
   }
 
   private object(ctx: CanvasRenderingContext2D, t: DocText, o: PlacedObject, lay: DocLayout): void {
+    // a picture turned or flipped (Arrange > Rotate) is drawn so about its middle
+    const turn = turnOf(t.objects[o.id]);
+    if (!turn) { this.objectBody(ctx, t, o, lay); return; }
+    ctx.save();
+    turnAbout(ctx, o, turn);
+    this.objectBody(ctx, t, o, lay);
+    ctx.restore();
+  }
+
+  private objectBody(ctx: CanvasRenderingContext2D, t: DocText, o: PlacedObject, lay: DocLayout): void {
     const obj = t.objects[o.id];
     if (!obj) return;
     const look = lookOf(obj);

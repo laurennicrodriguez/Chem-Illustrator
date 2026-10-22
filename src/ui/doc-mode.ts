@@ -62,6 +62,8 @@ import { BORDER_STYLES, BORDER_WIDTHS, DocTablesUI, LOOK_OPTIONS, penSwatch } fr
 import { DocNav } from './doc-nav';
 import { DocInsertUI } from './doc-insert-ui';
 import { DocParagraphUI } from './doc-paragraph-ui';
+import { DocArrangeUI } from './doc-arrange-ui';
+import { groupOf, withFloats } from '../document/arrange';
 import { DocProofingUI } from './doc-proofing-ui';
 import { DEFAULT_ZONE } from '../text/hyphenate';
 import { bodyFromZones, insertInZone, numbersFor, zonesFor } from '../document/hf-bodies';
@@ -218,7 +220,7 @@ export class DocumentMode {
     | { kind: 'text' }
     | { kind: 'box' }
     | { kind: 'resize'; id: number; w0: number; scale0: number; x0: number }
-    | { kind: 'move'; id: number; from: { x: number; y: number }; float: Float; moved: boolean }
+    | { kind: 'move'; id: number; from: { x: number; y: number }; float: Float; moved: boolean; others: [number, Float][] }
     | { kind: 'inline'; id: number; from: { x: number; y: number }; to: number | null }
     | { kind: 'paint'; done: Set<string> }
     | null = null;
@@ -238,6 +240,7 @@ export class DocumentMode {
   /** Home > Borders, Shading and Sort. */
   readonly paragraphs: DocParagraphUI;
   readonly proofing: DocProofingUI;
+  readonly arranging: DocArrangeUI;
   private speller: Speller | null = null;
   private dictSeen: string[] | null = null;
   private checkCache = new Map<string, { spell: [number, number][]; issues: Issue[] }>();
@@ -371,6 +374,22 @@ export class DocumentMode {
       setTable: (id, t, kind) => this.setTable(id, t, kind),
       flash: (msg, ms) => this.host.flash(msg, ms),
       focus: () => this.focus(),
+    });
+    this.arranging = new DocArrangeUI({
+      file: () => this.file,
+      picked: () => this.pickedObject(),
+      pick: (id) => {
+        const f = this.file;
+        const at = f ? objectOffsets(f.t.runs).get(id) : undefined;
+        if (!f || at === undefined) return;
+        this.stopBox();
+        f.ed.select(at, at + 1);
+        const c = f.ed.caret();
+        this.view.revealTop({ x1: c.x, y1: c.y1, x2: c.x, y2: c.y2 });
+        this.changed('selection');
+      },
+      float: (id) => this.setWrap(id, 'square'),
+      flash: (msg, ms) => this.host.flash(msg, ms),
     });
     this.proofing = new DocProofingUI({
       file: () => this.file,
@@ -996,6 +1015,7 @@ export class DocumentMode {
     this.ruler.update();
     this.stylesPane.refresh();
     this.nav.refresh();
+    if (this.arranging.paneOpen) this.arranging.refresh();
     this.redraw();
   }
 
@@ -1132,6 +1152,7 @@ export class DocumentMode {
     popupMenu(x, y, [
       ['Select All (Ctrl+A)', () => { this.run('select-all'); }],
       ['Select Text with Similar Formatting', () => this.selectSimilar()],
+      ['Selection Pane…', () => this.arranging.selectionPane()],
       null,
       ['Go To… (Ctrl+G)', () => void this.goToDialog()],
     ]);
@@ -2458,7 +2479,8 @@ export class DocumentMode {
         ed.select(at, at + 1);
         // a floating figure is moved by dragging it
         const fl = floatOf(obj);
-        if (fl) { this.dragging = { kind: 'move', id, from: p, float: fl, moved: false }; s.setPointerCapture(e.pointerId); }
+        // (a group moves together)
+        if (fl) { this.dragging = { kind: 'move', id, from: p, float: fl, moved: false, others: groupOf(f.t, id).filter((x) => x !== id).map((x) => [x, floatOf(f.t.objects[x])!]) }; s.setPointerCapture(e.pointerId); }
         // one in line with the text is dragged to another place in the text, as in Word
         else if (obj?.kind !== 'table' && !f.box) { this.dragging = { kind: 'inline', id, from: p, to: null }; s.setPointerCapture(e.pointerId); }
         return;
@@ -2513,7 +2535,11 @@ export class DocumentMode {
     if (d.kind === 'move') {
       const dx = p.x - d.from.x, dy = p.y - d.from.y;
       if (!d.moved && Math.hypot(dx, dy) * this.view.zoom < 3) return;
-      this.setFloat(d.id, { ...d.float, x: d.float.x + dx, y: d.float.y + dy }, d.moved ? null : 'Move');
+      if (d.others.length) {
+        const f2 = this.file!;
+        const moved = withFloats(f2.t, [[d.id, { x: d.float.x + dx, y: d.float.y + dy }], ...d.others.map(([x, fl]): [number, Partial<Float>] => [x, { x: fl.x + dx, y: fl.y + dy }])]);
+        f2.ed.update(moved, d.moved ? null : 'Move');
+      } else this.setFloat(d.id, { ...d.float, x: d.float.x + dx, y: d.float.y + dy }, d.moved ? null : 'Move');
       d.moved = true;
       return;
     }
@@ -3053,6 +3079,7 @@ export class DocumentMode {
       case 'edit-equation': { const m = this.pickedMath(); if (m === null) { this.host.flash('Click an equation first (or double-click it).'); break; } void this.editEquation(m); break; }
       case 'track-changes': void this.toggleTracking(); break;
       case 'review-name': void this.askReviewName(); break;
+      case 'selection-pane': this.arranging.selectionPane(this.ribbon.querySelector<HTMLElement>('[data-doc="selection-pane"]')); return true;
       case 'markup-all': case 'markup-simple': case 'markup-none': case 'markup-original': {
         const f = this.file;
         if (!f) return true;
@@ -4311,6 +4338,11 @@ export class DocumentMode {
         'cover-page': (x, y) => this.inserts.coverMenu(x, y),
         'doc-select': (x, y) => this.selectMenu(x, y),
         'show-markup': (x, y) => this.showMarkupMenu(x, y),
+        'arrange-position': (x, y) => this.arranging.positionMenu(x, y),
+        'arrange-rotate': (x, y) => this.arranging.rotateMenu(x, y),
+        'arrange-forward': (x, y) => this.arranging.orderMenu(x, y, true),
+        'arrange-backward': (x, y) => this.arranging.orderMenu(x, y, false),
+        'arrange-group': (x, y) => this.arranging.groupMenu(x, y, b),
       };
       if (menus[cmd] && this.file) {
         const br = b.getBoundingClientRect();

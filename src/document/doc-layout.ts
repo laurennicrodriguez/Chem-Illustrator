@@ -264,6 +264,16 @@ export function pageLabel(hf: HeaderFooter, index: number): string {
   return pageNumber(hf, index);
 }
 
+/** The floating figures put in the order they are drawn (Bring Forward, Send Backward), each in a place a floating one had. */
+function stackFloats(objects: PlacedObject[], t: DocText): void {
+  const slots: number[] = [];
+  objects.forEach((o, i) => { if (o.wrap) slots.push(i); });
+  if (slots.length < 2 || !slots.some((i) => floatOf(t.objects[objects[i].id])?.z !== undefined)) return;
+  const z = (o: PlacedObject, k: number) => floatOf(t.objects[o.id])?.z ?? k;
+  const sorted = slots.map((i, k) => ({ o: objects[i], z: z(objects[i], k), k })).sort((a, b) => a.z - b.z || a.k - b.k);
+  slots.forEach((i, k) => { objects[i] = sorted[k].o; });
+}
+
 /** How far left of the text the bar by a changed line is (Word's is in the margin, about a fifth of an inch out). */
 const CHANGE_BAR_GAP = 14;
 
@@ -845,7 +855,8 @@ export class DocLayouter {
       for (const r of paraRuns[p] ?? []) {
         const fl = r.obj !== undefined ? floatOf(t.objects[r.obj]) : undefined;
         const s = r.obj !== undefined ? sizes.get(r.obj) : undefined;
-        if (!fl || !s) continue;
+        // (hidden in the Selection Pane: not on the page, and the text doesn't go round it)
+        if (!fl || !s || fl.hidden) continue;
         const [el, et, er, eb] = extentOf(r.obj!);
         const bw = s.w + el + er, bh = s.h + et + eb;
         let bx = (fl.xFrom === 'page' ? 0 : page.left) + fl.x;
@@ -973,6 +984,7 @@ export class DocLayouter {
     const textLayout: TextLayout = { lines, boxWidth: g0.textW, box, length: text.length, measure: this.deps.measure };
     const hfs = this.hfBodies(t, pages, sizes, inline, objKey, N, extentOf);
     const changeBars = colours ? this.changeBars(t, lines, pages) : [];
+    stackFloats(objects, t);
     return { text: textLayout, pages, objects, fields, sizes, boxes, tables, maths, paraTops, pageW: maxW, pageH: maxH, textW: g0.textW, cols: { n: g0.cs.n, w: g0.textW, x: g0.colX }, notes, noteRules, lineNums, frames, hfs, changeBars };
   }
 

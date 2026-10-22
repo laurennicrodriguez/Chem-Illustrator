@@ -828,7 +828,26 @@ class DocxReader {
     if (xFrom) fl.xFrom = xFrom;
     if (yFrom) fl.yFrom = yFrom;
     if (Math.abs(dist - FLOAT_GAP) > 0.5) fl.gap = round(dist);
+    // hidden in the Selection Pane; its group and name, kept with our data
+    const pr = kid(anchor, 'docPr');
+    if (yes(pr?.getAttribute('hidden') ?? null)) fl.hidden = true;
+    const kept = this.model?.floats?.[Number(pr?.getAttribute('id'))];
+    if (kept?.group !== undefined) fl.group = kept.group;
+    if (kept?.name) fl.name = kept.name;
+    // which is drawn over which: worked out once every figure is read
+    const rh = Number(anchor.getAttribute('relativeHeight'));
+    if (Number.isFinite(rh)) this.stack.push({ fl, rh });
     return fl;
+  }
+
+  /** The floating figures read, with their place in Word's stack (wp:anchor's relativeHeight). */
+  private stack: { fl: Float; rh: number }[] = [];
+
+  /** The floating figures' order in the stack, kept only where it isn't the order of the text. */
+  private restack(): void {
+    const s = this.stack;
+    if (s.every((x, i) => i === 0 || x.rh >= s[i - 1].rh)) return;
+    [...s].sort((a, b) => a.rh - b.rh).forEach((x, z) => { x.fl.z = z; });
   }
 
   /** A text box's paragraphs, read as the document's are. */
@@ -1563,7 +1582,11 @@ class DocxReader {
     const sr = kid(kid(pic, 'blipFill'), 'srcRect');
     const f = (k: string) => Math.max(0, Number(sr?.getAttribute(k) ?? 0) / 100000 || 0);
     const crop = sr ? { l: f('l'), t: f('t'), r: f('r'), b: f('b') } : null;
-    const more = { ...(crop && (crop.l || crop.t || crop.r || crop.b) && crop.l + crop.r < 0.99 && crop.t + crop.b < 0.99 ? { crop } : {}), ...(tidyFx(fx) ? { fx: tidyFx(fx) } : {}), ...alt };
+    // turned and flipped (a:xfrm's rot in 60000ths of a degree)
+    const xf = kid(kid(pic, 'spPr'), 'xfrm');
+    const rot = (((Number(xf?.getAttribute('rot') ?? 0) / 60000 || 0) % 360) + 360) % 360;
+    const turn = { ...(rot ? { rot: round(rot) } : {}), ...(yes(xf?.getAttribute('flipH') ?? null) ? { flipH: true } : {}), ...(yes(xf?.getAttribute('flipV') ?? null) ? { flipV: true } : {}) };
+    const more = { ...(crop && (crop.l || crop.t || crop.r || crop.b) && crop.l + crop.r < 0.99 && crop.t + crop.b < 0.99 ? { crop } : {}), ...(tidyFx(fx) ? { fx: tidyFx(fx) } : {}), ...alt, ...turn };
     this.picture(target, shown, r, ctx, look, float, more);
   }
 
@@ -1574,7 +1597,7 @@ class DocxReader {
     return rel && !rel.external ? rel.target : null;
   }
 
-  private picture(path: string | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx, look?: FigureLook | null, float?: Float | null, more: { crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx; embed?: Embedded; alt?: string } = {}): void {
+  private picture(path: string | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx, look?: FigureLook | null, float?: Float | null, more: { crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx; embed?: Embedded; alt?: string; rot?: number; flipH?: boolean; flipV?: boolean } = {}): void {
     const bytes = path ? this.pkg.bytes(path) : null;
     if (!bytes || shown.w <= 0 || shown.h <= 0) return;
     const ext = (path ?? '').split('.').pop()?.toLowerCase() ?? '';
@@ -2278,6 +2301,7 @@ class DocxReader {
       runs.push(...p.runs);
     });
     // (with the structures in tables' cells)
+    this.restack();
     const used = usedObjects({ runs, objects: this.objects, hf, paras: out.map((p) => p.ps) });
     const objects: Record<number, DocObject> = {};
     for (const [k, v] of Object.entries(this.objects)) if (used.has(Number(k))) objects[Number(k)] = v;
