@@ -17,8 +17,10 @@
 import { Package, PackageReader, xml, xmlAttr, hex6, REL, kids, kid, rAttr } from './ooxml';
 import { officeTarget, linkFromTarget } from '../links';
 import { Workbook, Sheet, Structure, CellStyle, ColumnDef, Filter, Condition, CompareOp, Border, BorderStyle, Side, makeStructure } from '../sheet/workbook';
-import { keyOf, rowOf, colOf, colName, cellName, parseRange, quoteSheet, Range, MAX_COLS, rangesOverlap } from '../sheet/refs';
+import { keyOf, rowOf, colOf, colName, cellName, parseRange, quoteSheet, Range, MAX_COLS, rangesOverlap, rangeName, inRange } from '../sheet/refs';
 import { normalizeFormula, shiftFormula } from '../sheet/formula';
+import { fileFormula, legacyFormula, needsDynamic, readFileFormula } from '../sheet/array-formulas';
+import { DefinedName, isBuiltInName } from '../sheet/names';
 import { FUNCTION_NAMES } from '../sheet/evaluate';
 import { readTyped, isError, CellError, Value, EXCEL_ERRORS } from '../sheet/values';
 import { PROPERTIES } from '../sheet/properties';
@@ -38,6 +40,9 @@ import { seenCondFormatId } from '../sheet/conditional';
 import { TableDef, tableColumnNames, seenTableId } from '../sheet/table-styles';
 import { pageSetupXml, printNames, readPageSetup, objectAnchorXml, readObjects, ReadAnchor } from './xlsx-print';
 import { dataUrlBytes, bytesDataUrl, seenObjectId } from '../sheet/sheet-objects';
+import { dataTableXml, readDataTable, pivotParts, readPivot, samePivot, PIVOT_CT, PIVOT_REL } from './xlsx-pivot';
+import { type DataTable, seenDataTableId } from '../sheet/what-if';
+import { type PivotTable, seenPivotId } from '../sheet/pivot';
 import { Persons, notesParts, readNotes, shownNotes, validationsXml, readValidations, NOTES_CT, NOTES_REL } from './xlsx-notes';
 export { applyTint };
 
@@ -72,6 +77,7 @@ const CT = {
   core: 'application/vnd.openxmlformats-package.core-properties+xml',
   app: 'application/vnd.openxmlformats-officedocument.extended-properties+xml',
   itemProps: 'application/vnd.openxmlformats-officedocument.customXmlProperties+xml',
+  metadata: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml',
 };
 
 const RELS = {
@@ -83,7 +89,17 @@ const RELS = {
   theme: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme',
   customXml: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml',
   customXmlProps: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps',
+  metadata: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata',
 };
+
+/**
+ * The cell metadata that marks a formula as a dynamic array formula (cm="1" on its cell), as
+ * Excel writes it: without it Excel works a formula out the old way, one value per cell.
+ */
+const DYNAMIC_ARRAY_METADATA = `<metadata xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xda="http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray">` +
+  `<metadataTypes count="1"><metadataType name="XLDAPR" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/></metadataTypes>` +
+  `<futureMetadata name="XLDAPR" count="1"><bk><extLst><ext uri="{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"><xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/></ext></extLst></bk></futureMetadata>` +
+  `<cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata></metadata>`;
 
 /** Pixels to Office's drawing units (EMU): 9525 to the pixel at 96 to the inch. */
 const PX = 9525;
@@ -117,12 +133,14 @@ const CHEM_FUNCTION = new RegExp(`\\b(${[...Object.keys(PROPERTIES), ...Object.k
 // needs to know them; reading a file takes the prefix off, so saving puts it back.
 const XLFN = new Set(['AGGREGATE', 'BETA.DIST', 'BETA.INV', 'BINOM.DIST', 'BINOM.INV', 'CEILING.MATH', 'CHISQ.DIST', 'CHISQ.DIST.RT',
   'CHISQ.INV', 'CHISQ.INV.RT', 'CHISQ.TEST', 'CONCAT', 'CONFIDENCE.NORM', 'CONFIDENCE.T', 'COVARIANCE.P', 'COVARIANCE.S', 'DAYS',
-  'ERF.PRECISE', 'ERFC.PRECISE', 'EXPON.DIST', 'F.DIST', 'F.INV', 'F.TEST', 'FLOOR.MATH', 'FORECAST.LINEAR', 'GAMMA', 'GAMMA.DIST',
+  'ERF.PRECISE', 'ERFC.PRECISE', 'EXPON.DIST', 'F.DIST', 'F.DIST.RT', 'F.INV', 'F.INV.RT', 'F.TEST', 'FLOOR.MATH', 'FORECAST.LINEAR', 'GAMMA', 'GAMMA.DIST',
   'GAMMA.INV', 'GAMMALN.PRECISE', 'GAUSS', 'IFNA', 'IFS', 'ISOWEEKNUM', 'LET', 'LOGNORM.DIST', 'LOGNORM.INV', 'MAXIFS', 'MINIFS',
   'MODE.MULT', 'MODE.SNGL', 'NORM.DIST', 'NORM.INV', 'NORM.S.DIST', 'NORM.S.INV', 'PERCENTILE.EXC', 'PERCENTILE.INC',
   'PERCENTRANK.EXC', 'PERCENTRANK.INC', 'POISSON.DIST', 'QUARTILE.EXC', 'QUARTILE.INC', 'RANK.AVG', 'RANK.EQ', 'SEQUENCE',
   'STDEV.P', 'STDEV.S', 'SWITCH', 'T.DIST', 'T.DIST.2T', 'T.DIST.RT', 'T.INV', 'T.INV.2T', 'T.TEST', 'TEXTJOIN', 'TEXTSPLIT', 'UNIQUE',
-  'VAR.P', 'VAR.S', 'WEIBULL.DIST', 'XLOOKUP', 'XMATCH', 'XOR', 'Z.TEST']);
+  'VAR.P', 'VAR.S', 'WEIBULL.DIST', 'XLOOKUP', 'XMATCH', 'XOR', 'Z.TEST', 'NETWORKDAYS.INTL', 'WORKDAY.INTL', 'LAMBDA', 'MAP', 'REDUCE',
+  'SCAN', 'BYROW', 'BYCOL', 'MAKEARRAY', 'ISOMITTED', 'VSTACK', 'HSTACK', 'TAKE', 'DROP', 'CHOOSEROWS', 'CHOOSECOLS', 'TOCOL', 'TOROW',
+  'RANDARRAY', 'EXPAND', 'WRAPROWS', 'WRAPCOLS']);
 const XLWS = new Set(['FILTER', 'SORT', 'SORTBY']);
 
 /** A formula (without its =) with Excel's prefixes on the newer functions, leaving text in quotes alone. */
@@ -165,6 +183,8 @@ interface ModelCell {
   structure?: Contents;
   /** A formula using chemistry, saved as its value. */
   formula?: string;
+  /** The last row and column of the array it spilled (its other cells were saved as values). */
+  spill?: [number, number];
   /** Worked out by its property column. */
   computed?: true;
 }
@@ -184,6 +204,9 @@ interface ModelSheet {
   charts?: Chart[];
   /** A dashboard sheet: Excel was given a stand-in (charts and cells), this is the dashboard itself. */
   dashboard?: Dashboard;
+  /** Data tables and PivotTables as this program holds them (with their ids, which charts point at). */
+  dataTables?: DataTable[];
+  pivots?: PivotTable[];
 }
 
 interface Model {
@@ -227,7 +250,7 @@ class Styles {
   /** The style index for a cell's formatting. */
   xf(st: CellStyle | undefined): number {
     const s = st ?? {};
-    const key = JSON.stringify([s.bold, s.italic, s.underline, s.color, s.fill, s.font, s.size, s.align, s.valign, s.wrap, s.numFmt, s.borders]);
+    const key = JSON.stringify([s.bold, s.italic, s.underline, s.color, s.fill, s.font, s.size, s.align, s.valign, s.wrap, s.numFmt, s.borders, s.indent]);
     const got = this.byKey.get(key);
     if (got !== undefined) return got;
     const font = s.bold || s.italic || s.underline || s.color || s.font || s.size
@@ -243,8 +266,10 @@ class Styles {
       ? this.index(this.borders, `<border>${side('left')}${side('right')}${side('top')}${side('bottom')}<diagonal/></border>`)
       : 0;
     const fmt = this.numFmt(s.numFmt);
-    const align = s.align || s.valign || s.wrap
-      ? `<alignment${s.align ? ` horizontal="${s.align}"` : ''}${s.valign && s.valign !== 'bottom' ? ` vertical="${s.valign === 'middle' ? 'center' : 'top'}"` : ''}${s.wrap ? ' wrapText="1"' : ''}/>`
+    // an indent needs the text aligned to a side (left when it isn't set)
+    const horizontal = s.align ?? (s.indent ? 'left' : undefined);
+    const align = horizontal || s.valign || s.wrap
+      ? `<alignment${horizontal ? ` horizontal="${horizontal}"` : ''}${s.valign && s.valign !== 'bottom' ? ` vertical="${s.valign === 'middle' ? 'center' : 'top'}"` : ''}${s.wrap ? ' wrapText="1"' : ''}${s.indent && horizontal !== 'center' ? ` indent="${s.indent}"` : ''}/>`
       : '';
     const x = `<xf numFmtId="${fmt}" fontId="${font}" fillId="${fill}" borderId="${border}" xfId="0"` +
       `${fmt ? ' applyNumberFormat="1"' : ''}${font ? ' applyFont="1"' : ''}${fill ? ' applyFill="1"' : ''}${border ? ' applyBorder="1"' : ''}` +
@@ -326,7 +351,9 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
   const sheetEntries: string[] = [];
   const filterNames: string[] = [];
   const printTitleNames: string[] = [];
-  let imageNo = 0, drawingNo = 0, tableNo = 0, chartNo = 0, notesNo = 0;
+  let imageNo = 0, drawingNo = 0, tableNo = 0, chartNo = 0, notesNo = 0, pivotNo = 0;
+  const pivotCaches: string[] = [];
+  let anyDynamic = false;
   const persons = new Persons();
   pkg.defaultType('png', 'image/png');
 
@@ -341,6 +368,10 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
     if (s.tables.length) ms.tables = s.tables;
     if (s.charts.length && !own.dashboard) ms.charts = s.charts;
     if (own.dashboard) ms.dashboard = own.dashboard;
+    if (s.dataTables.length) ms.dataTables = s.dataTables;
+    if (s.pivots.length && !own.dashboard) ms.pivots = s.pivots;
+    // a data table's TABLE() formula sits on its first result cell
+    const dataTableAt = new Map(s.dataTables.map((t) => [keyOf(t.ref.r1, t.ref.c1), t]));
     // a table's header cells hold its column names, as Excel needs them (filled in and all different)
     const headerName = new Map<number, string>();
     const tableNames = new Map<TableDef, string[]>();
@@ -393,6 +424,8 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
         const own = cell?.style;
         const chem = showsChem(style?.chem, v);
         let formula: string | null = null;
+        /** The block a dynamic array formula fills (its own cell when it doesn't spill). */
+        let arrayRef: string | null = null;
         let wrote: Wrote = null;
         // what only this program reads, kept for the cell
         let entry: ModelCell | null = null;
@@ -401,14 +434,24 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
         const input = s.effectiveInput(r, c);
         if (cell?.structure) entry = { r, c, wrote: null, fix, structure: cell.structure.contents };
         else if (s.defAt(r, c)) entry = { r, c, wrote: null, fix, computed: true };
-        else if (input?.startsWith('=') && usesChemistry(input)) entry = { r, c, wrote: null, fix, formula: input };
-        else if (input?.startsWith('=') && header === undefined) formula = excelFunctionNames(input.slice(1));
+        else if (input?.startsWith('=') && usesChemistry(input)) {
+          const sp = s.spills.get(k);
+          entry = { r, c, wrote: null, fix, formula: input, ...(sp ? { spill: [sp.r2, sp.c2] as [number, number] } : {}) };
+        } else if (input?.startsWith('=') && header === undefined) {
+          const sp = s.spills.get(k);
+          const dynamic = !!sp || s.spillWanted.has(k) || needsDynamic(input);
+          formula = excelFunctionNames(fileFormula(input, dynamic));
+          if (dynamic) { arrayRef = sp ? rangeName(sp) : ref; anyDynamic = true; }
+        }
         if (!entry && fix) entry = { r, c, wrote: null, fix };
         if (entry) ms.cells.push(entry);
         // a structure's SMILES is in its cell, hidden under the picture (the format ;;; shows nothing)
         const xf = styles.xf(cell?.structure ? { ...style, numFmt: HIDDEN } : style);
-        const sAttr = xf ? ` s="${xf}"` : '';
-        const f = formula !== null ? `<f>${xml(formula)}</f>` : '';
+        const sAttr0 = xf ? ` s="${xf}"` : '';
+        const dt = dataTableAt.get(k);
+        const f = dt ? dataTableXml(dt) : formula === null ? '' : arrayRef ? `<f t="array" ref="${arrayRef}">${xml(formula)}</f>` : `<f>${xml(formula)}</f>`;
+        // a dynamic array formula's cell points at the metadata that says so
+        const sAttr = arrayRef ? `${sAttr0} cm="1"` : sAttr0;
         let body = '';
         if (v === null || v === '') {
           body = f ? `<c r="${ref}"${sAttr}>${f}</c>` : sAttr ? `<c r="${ref}"${sAttr}/>` : '';
@@ -529,6 +572,20 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
       pkg.add(tpath, HEAD + tableXml(t, tableNo, tableNames.get(t)!, totals, af), CT.table);
       tableIds.push(pkg.relate(path, RELS.table, `../tables/table${tableNo}.xml`));
     }
+    // PivotTables: a cache (the records) and a pivot table part for each, refreshed when Excel opens them
+    for (const pt of standIn ? [] : s.pivots) {
+      const parts = pivotParts(book, s, pt, pivotNo + 1);
+      if (!parts) continue;
+      pivotNo++;
+      const cachePath = `xl/pivotCache/pivotCacheDefinition${pivotNo}.xml`, tablePath = `xl/pivotTables/pivotTable${pivotNo}.xml`;
+      const recordsRid = pkg.relate(cachePath, PIVOT_REL.records, `pivotCacheRecords${pivotNo}.xml`);
+      pkg.add(cachePath, HEAD + parts.cache(recordsRid), PIVOT_CT.cache);
+      pkg.add(`xl/pivotCache/pivotCacheRecords${pivotNo}.xml`, HEAD + parts.records, PIVOT_CT.records);
+      pkg.add(tablePath, HEAD + parts.table, PIVOT_CT.table);
+      pkg.relate(tablePath, PIVOT_REL.cache, `../pivotCache/pivotCacheDefinition${pivotNo}.xml`);
+      pkg.relate(path, PIVOT_REL.table, `../pivotTables/pivotTable${pivotNo}.xml`);
+      pivotCaches.push(`<pivotCache cacheId="${pivotNo}" r:id="${pkg.relate('xl/workbook.xml', PIVOT_REL.cache, `pivotCache/pivotCacheDefinition${pivotNo}.xml`)}"/>`);
+    }
     const tableParts = tableIds.length ? `<tableParts count="${tableIds.length}">${tableIds.map((id) => `<tablePart r:id="${id}"/>`).join('')}</tableParts>` : '';
     const merges = s.merges.length ? `<mergeCells count="${s.merges.length}">${s.merges.map((m) => `<mergeCell ref="${cellName(m.r1, m.c1)}:${cellName(m.r2, m.c2)}"/>`).join('')}</mergeCells>` : '';
     // charts: Excel's own chart parts, anchored at their corner cell
@@ -628,13 +685,26 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
   pkg.relate('customXml/item1.xml', RELS.customXmlProps, 'itemProps1.xml');
   pkg.add('customXml/itemProps1.xml', `${HEAD}<ds:datastoreItem ds:itemID="{6D1F3A52-6C1B-4D5E-9A57-3C0B1E0C1A01}" xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml"><ds:schemaRefs><ds:schemaRef ds:uri="${MODEL_NS}"/></ds:schemaRefs></ds:datastoreItem>`, CT.itemProps);
 
+  if (anyDynamic) {
+    pkg.relate('xl/workbook.xml', RELS.metadata, 'metadata.xml');
+    pkg.add('xl/metadata.xml', HEAD + DYNAMIC_ARRAY_METADATA, CT.metadata);
+  }
+
+  // defined names (Name Manager): a sheet's own carry its place in the list of sheets
+  const nameXml = book.liveNames().map((n) => {
+    const local = n.sheet ? ` localSheetId="${book.sheets.indexOf(n.sheet)}"` : '';
+    const f = n.formula.startsWith('=') ? n.formula : '=' + n.formula;
+    return `<definedName name="${xmlAttr(n.name)}"${local}${n.comment ? ` comment="${xmlAttr(n.comment)}"` : ''}${n.hidden ? ' hidden="1"' : ''}>${xml(excelFunctionNames(fileFormula(f, true)))}</definedName>`;
+  });
+  const allNames = [...filterNames, ...printTitleNames, ...nameXml];
   pkg.add('xl/workbook.xml',
     `${HEAD}<workbook xmlns="${MAIN}" xmlns:r="${RNS}"><workbookPr/>` +
     `<bookViews><workbookView activeTab="${book.active}"/></bookViews>` +
     `<sheets>${sheetEntries.join('')}</sheets>` +
-    (filterNames.length || printTitleNames.length ? `<definedNames>${filterNames.join('')}${printTitleNames.join('')}</definedNames>` : '') +
+    (allNames.length ? `<definedNames>${allNames.join('')}</definedNames>` : '') +
     // formulas are worked out again when Excel opens the file
-    `<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`,
+    `<calcPr calcId="191029" fullCalcOnLoad="1"/>` +
+    (pivotCaches.length ? `<pivotCaches>${pivotCaches.join('')}</pivotCaches>` : '') + '</workbook>',
     CT.workbook);
   pkg.relate('', REL.officeDocument, 'xl/workbook.xml');
   pkg.relate('', REL.coreProps, 'docProps/core.xml');
@@ -755,6 +825,8 @@ function readStyles(doc: Document | null, theme: string[]): (CellStyle | undefin
       if (v === 'top') st.valign = 'top';
       else if (v === 'center' || v === 'justify' || v === 'distributed') st.valign = 'middle';
       if (isOn(a.getAttribute('wrapText'))) st.wrap = true;
+      const ind = Number(a.getAttribute('indent') ?? 0);
+      if (ind > 0) st.indent = ind;
     }
     return Object.keys(st).some((k) => (st as Record<string, unknown>)[k] !== undefined) ? st : undefined;
   });
@@ -842,7 +914,6 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
   const activeTab = Number(kid(root, 'bookViews', 'workbookView')?.getAttribute('activeTab') ?? 0);
   if (sheetEls.some((s) => s.getAttribute('state') === 'hidden' || s.getAttribute('state') === 'veryHidden')) notKept.add('hidden sheets (shown here)');
   const definedNames = kids(kid(root, 'definedNames'), 'definedName');
-  if (definedNames.some((d) => !(d.getAttribute('name') ?? '').startsWith('_xlnm.'))) notKept.add('named ranges');
 
   // our own part, if this file was saved here (found by name: programs that keep it don't all keep its link)
   let model: Model | null = null;
@@ -900,6 +971,9 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
 
       // cells
       const sharedF = new Map<string, { r: number; c: number; text: string }>();
+      // blocks filled by array formulas: their other cells hold only what the array put there
+      const arrays: { R: Range; r: number; c: number }[] = [];
+      const dataTables: DataTable[] = [];
       let rowNo = -1;
       let maxCol = -1;
       for (const row of kids(kid(ws, 'sheetData'), 'row')) {
@@ -935,6 +1009,14 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
           else if (t === 'd' && v) value = Date.parse(v) / 86400000 + 25569;
           else if (v !== null && v !== '') value = Number(v);
           raw.set(keyOf(r, col), value);
+          // a data table: its results are worked out again here (its formula is on the first of them)
+          const dt = f ? readDataTable(f) : null;
+          if (dt) {
+            dataTables.push(dt);
+            arrays.push({ R: dt.ref, r: -1, c: -1 });
+            if (style) s.setCell(r, col, { style });
+            continue;
+          }
           if (f) {
             let text = f.textContent ?? '';
             const si = f.getAttribute('si');
@@ -947,8 +1029,16 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
             }
             if (text) {
               if (usesUnknownFunction(text)) unknownFormulas++;
-              input = normalizeFormula('=' + text.replace(/_xlfn\.|_xlws\./g, ''));
+              const isArray = f.getAttribute('t') === 'array';
+              // a formula from before arrays spilled keeps working out one value (Excel shows it with @)
+              input = normalizeFormula(isArray ? readFileFormula(text) : legacyFormula(readFileFormula(text)));
+              const R = isArray ? parseRange(f.getAttribute('ref') ?? '') : null;
+              if (R && (R.r2 > R.r1 || R.c2 > R.c1)) arrays.push({ R, r, c: col });
             }
+          } else if (arrays.some((a) => inRange(a.R, r, col) && !(a.r === r && a.c === col))) {
+            // spilled there: the formula fills it again
+            if (style) s.setCell(r, col, { style });
+            continue;
           }
           if (input === undefined) {
             if (typeof value === 'number') input = Number.isFinite(value) ? String(value) : undefined;
@@ -1010,7 +1100,14 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
             s.setCell(m.r, m.c, { structure: makeStructure(m.structure), style });
             restored.structures++;
           } else if (m.computed) s.setCell(m.r, m.c, { style });
-          else if (m.formula) s.setCell(m.r, m.c, { input: m.formula, style });
+          else if (m.formula) {
+            s.setCell(m.r, m.c, { input: m.formula, style });
+            // the array it spilled was saved as values: the formula fills those cells again
+            if (m.spill) for (let r = m.r; r <= m.spill[0]; r++) for (let c = m.c; c <= m.spill[1]; c++) {
+              const x = s.cell(r, c);
+              if ((r !== m.r || c !== m.c) && x?.input && !x.input.startsWith('=')) s.setCell(r, c, { style: x.style });
+            }
+          }
           else s.setCell(m.r, m.c, { input: cur?.input, style });
         }
         if (ms.filter && afRange && sameRange(ms.filter.range, afRange)) {
@@ -1047,6 +1144,25 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
         }
       }
       if (tables.length) s.setTables(tables);
+      // data tables and PivotTables: our own copy where it says the same as Excel's
+      if (dataTables.length) {
+        s.setDataTables(dataTables.map((t) => {
+          const mine = ms?.dataTables?.find((x) => sameRange(x.ref, t.ref) && x.ref.r2 === t.ref.r2);
+          if (mine) seenDataTableId(mine.id);
+          return mine ?? t;
+        }));
+      }
+      const pivots: PivotTable[] = [];
+      for (const r of pkg.rels(path!).values()) {
+        if (r.type !== PIVOT_REL.table) continue;
+        const td = pkg.xml(r.target);
+        const cacheTarget = [...pkg.rels(r.target).values()].find((x) => x.type === PIVOT_REL.cache)?.target;
+        const got = td ? readPivot(td, cacheTarget ? pkg.xml(cacheTarget) : null, s.name) : null;
+        if (!got) { notKept.add('some PivotTables (their cells are kept)'); continue; }
+        const mine = ms?.pivots?.find((p) => p.name === got.name);
+        if (mine && samePivot(mine, got)) { seenPivotId(mine.id); pivots.push({ ...mine, last: mine.last ?? got.last }); } else pivots.push(got);
+      }
+      if (pivots.length) s.setPivots(pivots);
 
       // pictures and charts that aren't structures saved here
       const drawingPath = [...pkg.rels(path!).values()].find((r) => r.type === RELS.drawing)?.target;
@@ -1125,6 +1241,24 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
         for (let r = R.r1; r <= Math.min(R.r2, R.r1 + 999); r++) for (let c = R.c1; c <= Math.min(R.c2, R.c1 + 99); c++) s.setLink(r, c, link);
       }
     });
+    // defined names (Excel's own, for print areas and filters, are its business)
+    const names: DefinedName[] = [];
+    for (const d of kids(kid(root, 'definedNames'), 'definedName')) {
+      const name = d.getAttribute('name') ?? '';
+      const text = d.textContent ?? '';
+      if (!name || isBuiltInName(name) || !text) continue;
+      const local = d.getAttribute('localSheetId');
+      const sheet = local !== null ? book.sheets[Number(local)] : undefined;
+      if (local !== null && !sheet) continue;
+      if (usesUnknownFunction(text)) unknownFormulas++;
+      names.push({
+        name, formula: normalizeFormula(readFileFormula(text)),
+        ...(sheet ? { sheet } : {}),
+        ...(d.getAttribute('comment') ? { comment: d.getAttribute('comment')! } : {}),
+        ...(isOn(d.getAttribute('hidden')) ? { hidden: true } : {}),
+      });
+    }
+    if (names.length) book.setNames(names);
   });
   // a filter goes back as it was: the rows it hid are hidden already
   if (filters.length) book.build(() => { for (const { s, f } of filters) s.restoreFilter(f); });

@@ -2,6 +2,8 @@
 // another function (LINEST, TEXTSPLIT…). Shared by the formula engine and its function tables.
 
 import type { EvalHost } from './evaluate';
+import type { Node } from './formula';
+import { MAX_COLS, MAX_ROWS } from './refs';
 import { CellError, ERR, Value, isError, toBool, toNumber, toText } from './values';
 
 /**
@@ -13,8 +15,10 @@ export interface Block {
   block: Value[][];
   h: number;
   w: number;
-  /** Worked out by a function rather than read from cells: one cell shows its first value, as Excel does without spilling. */
+  /** Worked out by a function rather than read from cells: where one value is wanted, its first is taken. */
   array?: boolean;
+  /** Read from cells: the row and column of its top left cell (for @, which picks the cell in the formula's own row or column). */
+  at?: { r: number; c: number };
 }
 export type Arg = Value | Block;
 
@@ -27,6 +31,73 @@ export interface FnDef {
 }
 
 export const isBlock = (a: Arg): a is Block => typeof a === 'object' && a !== null && 'block' in a;
+
+/**
+ * A LAMBDA: its parameters' names, the calculation, and the names it can see where it was
+ * written. Carried as an error value, so a LAMBDA that ends up in a cell without being called
+ * shows #CALC!, as in Excel, and anything that isn't expecting one passes it on as an error.
+ */
+export class LambdaValue extends CellError {
+  constructor(public params: string[], public body: Node, public host: EvalHost) {
+    super('#CALC!', 'A LAMBDA needs calling with its values, as in LAMBDA(x, x*2)(5)');
+  }
+}
+
+/** More than one value: a block of cells, or an array. */
+export const isMulti = (a: Arg): a is Block => isBlock(a) && (a.h > 1 || a.w > 1);
+
+/** The size a block is worked over at: a whole column (or row) stops at the cells in use. */
+export function extent(b: Block): { h: number; w: number } {
+  return {
+    h: b.h >= MAX_ROWS ? Math.max(1, b.block.length) : b.h,
+    w: b.w >= MAX_COLS ? Math.max(1, ...b.block.map((r) => r.length)) : b.w,
+  };
+}
+
+/** Every row of a block, filled out to its full size (empty past the cells it holds). */
+export function rowsOf(a: Arg): Value[][] {
+  if (!isBlock(a)) return [[a]];
+  const { h, w } = extent(a);
+  const out: Value[][] = [];
+  for (let i = 0; i < h; i++) {
+    const src = a.block[i];
+    const row: Value[] = new Array<Value>(w);
+    for (let j = 0; j < w; j++) row[j] = src?.[j] ?? null;
+    out.push(row);
+  }
+  return out;
+}
+
+/** The most values an array worked out in a formula may hold. */
+export const MAX_ARRAY = 4_000_000;
+
+/**
+ * Work `f` out for each value of the arrays among `args`, as Excel does when an array is given
+ * where one value is wanted (=A1:A5*2, =LEN(B2:B9)): an array of one row or column stretches
+ * to fit the others, and past the end of a smaller one the answer is #N/A.
+ */
+export function lift(args: Arg[], f: (vals: Value[]) => Value): Arg {
+  const ext = args.map((a) => (isBlock(a) ? extent(a) : null));
+  let H = 1, W = 1;
+  ext.forEach((e) => { if (e) { H = Math.max(H, e.h); W = Math.max(W, e.w); } });
+  if (H * W > MAX_ARRAY) return ERR.num('The array would be too large');
+  const rows: Value[][] = [];
+  const vals = new Array<Value>(args.length);
+  for (let i = 0; i < H; i++) {
+    const row: Value[] = new Array<Value>(W);
+    for (let j = 0; j < W; j++) {
+      for (let k = 0; k < args.length; k++) {
+        const a = args[k], e = ext[k];
+        if (!e) { vals[k] = a as Value; continue; }
+        const ii = e.h === 1 ? 0 : i, jj = e.w === 1 ? 0 : j;
+        vals[k] = ii < e.h && jj < e.w ? at(a as Block, ii, jj) : ERR.na('Outside the smaller array');
+      }
+      row[j] = f(vals);
+    }
+    rows.push(row);
+  }
+  return array(rows);
+}
 
 /** An array worked out by a function, from its rows. */
 export const array = (rows: Value[][]): Block => ({ block: rows, h: rows.length, w: rows[0]?.length ?? 0, array: true });

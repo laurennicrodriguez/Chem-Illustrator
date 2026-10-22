@@ -8,7 +8,7 @@ import { valueInput } from './workbook';
 import { Range, keyOf, rowOf, colOf, inRange, MAX_ROWS, MAX_COLS } from './refs';
 import { shiftFormula, transposeFormula, formulaRefs, type RefToken } from './formula';
 import { Value, isError, readTyped, compareValues, sigFigs15, CellError } from './values';
-import { serialToDate } from './numfmt';
+import { serialParts, dateSerial, daysInMonth } from './dates';
 import { copyNote } from './notes';
 
 // ---------------------------------------------------------------- areas
@@ -349,27 +349,22 @@ export interface SeriesOptions {
   trend?: boolean;
 }
 
-/** Excel's date number for a day. */
-const dateSerial = (y: number, m: number, d: number) => (Date.UTC(y, m, d) - Date.UTC(1899, 11, 30)) / 86400000;
-
 /** A date number moved on by some days, weekdays, months or years (the time of day kept). */
 export function addDate(serial: number, n: number, unit: SeriesOptions['unit'] = 'day'): number {
   const whole = Math.floor(serial), time = serial - whole;
-  const d = serialToDate(whole);
-  const y = d.getUTCFullYear(), m = d.getUTCMonth(), day = d.getUTCDate();
+  const { y, m, d: day } = serialParts(whole);
   if (unit === 'month' || unit === 'year') {
-    const months = unit === 'year' ? n * 12 : n;
-    const ty = y + Math.floor((m + months) / 12), tm = ((m + months) % 12 + 12) % 12;
+    const months = (m - 1) + (unit === 'year' ? n * 12 : n);
+    const ty = y + Math.floor(months / 12), tm = ((months % 12) + 12) % 12 + 1;
     // the 31st becomes the last day of a shorter month, as Excel's EDATE
-    const last = new Date(Date.UTC(ty, tm + 1, 0)).getUTCDate();
-    return dateSerial(ty, tm, Math.min(day, last)) + time;
+    return (dateSerial(ty, tm, Math.min(day, daysInMonth(ty, tm))) ?? whole) + time;
   }
   if (unit === 'weekday') {
     let out = whole;
     const dir = Math.sign(n);
     for (let left = Math.abs(Math.round(n)); left > 0; ) {
       out += dir;
-      const wd = serialToDate(out).getUTCDay();
+      const wd = serialParts(out).weekday;
       if (wd !== 0 && wd !== 6) left--;
     }
     return out + time;

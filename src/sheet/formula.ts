@@ -14,6 +14,8 @@ export interface RefToken {
   b?: CellRef;
   /** Set when a rewrite left this reference pointing at cells that are gone. */
   broken?: boolean;
+  /** A1#: the whole array spilled from A1. */
+  spill?: boolean;
 }
 
 export type Token =
@@ -28,16 +30,21 @@ export type Token =
   | { t: 'ws'; s: string }
   | { t: '('; s: string }
   | { t: ')'; s: string }
-  | { t: ','; s: string };
+  | { t: ','; s: string }
+  /** An array written out: {1,2;3,4} (; starts a new row inside the braces). */
+  | { t: '{'; s: string }
+  | { t: '}'; s: string }
+  | { t: ';'; s: string };
 
 export class FormulaSyntaxError extends Error {}
 
-const ERRORS = ['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#CIRC!', '#BUSY!'];
+const ERRORS = ['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#SPILL!', '#CALC!', '#CIRC!', '#BUSY!'];
 
 /** Split a formula (without its leading =) into tokens. Throws FormulaSyntaxError on text it can't read. */
 export function tokenize(src: string): Token[] {
   const out: Token[] = [];
   let i = 0;
+  let braces = 0;
   const rest = () => src.slice(i);
   while (i < src.length) {
     const ch = src[i];
@@ -89,7 +96,7 @@ export function tokenize(src: string): Token[] {
       i += word.length;
       continue;
     }
-    if ((m = /^(<>|<=|>=|[-+*/^&=<>%])/.exec(rest()))) {
+    if ((m = /^(<>|<=|>=|[-+*/^&=<>%@])/.exec(rest()))) {
       out.push({ t: 'op', v: m[0], s: m[0] });
       i += m[0].length;
       continue;
@@ -99,9 +106,15 @@ export function tokenize(src: string): Token[] {
       i++;
       continue;
     }
-    // Excel in some countries separates arguments with ;
+    if (ch === '{' || ch === '}') {
+      braces += ch === '{' ? 1 : -1;
+      out.push({ t: ch, s: ch } as Token);
+      i++;
+      continue;
+    }
+    // inside {…} a ; starts a new row; elsewhere it separates arguments, as Excel in some countries writes them
     if (ch === ';') {
-      out.push({ t: ',', s: ';' });
+      out.push(braces > 0 ? { t: ';', s: ';' } : { t: ',', s: ';' });
       i++;
       continue;
     }
@@ -152,7 +165,11 @@ function readRef(src: string, i: number): { ref: RefToken; end: number } | null 
   m = /^\$?[A-Za-z]{1,3}\$?\d{1,7}/.exec(s);
   if (m && ends(m[0].length)) {
     const a = parseCellRef(m[0]);
-    if (a) return { ref: { sheet, kind: 'cell', a }, end: j + m[0].length };
+    if (!a) return null;
+    // A1#: the array spilled from A1 (but A1#N/A is no such thing)
+    const after = j + m[0].length;
+    if (src[after] === '#' && !ERRORS.some((e) => src.slice(after, after + e.length).toUpperCase() === e)) return { ref: { sheet, kind: 'cell', a, spill: true }, end: after + 1 };
+    return { ref: { sheet, kind: 'cell', a }, end: after };
   }
   return null;
 }
@@ -161,7 +178,7 @@ function readRef(src: string, i: number): { ref: RefToken; end: number } | null 
 export function refText(r: RefToken): string {
   const pre = r.sheet !== undefined ? `${quoteSheet(r.sheet)}!` : '';
   if (r.broken) return `${pre}#REF!`;
-  if (r.kind === 'cell') return pre + formatCellRef(r.a);
+  if (r.kind === 'cell') return pre + formatCellRef(r.a) + (r.spill ? '#' : '');
   if (r.kind === 'cols') return `${pre}${r.a.absCol ? '$' : ''}${colName(r.a.col)}:${r.b!.absCol ? '$' : ''}${colName(r.b!.col)}`;
   return `${pre}${formatCellRef(r.a)}:${formatCellRef(r.b!)}`;
 }
@@ -178,12 +195,18 @@ export type Node =
   | { t: 'str'; v: string }
   | { t: 'bool'; v: boolean }
   | { t: 'err'; v: string }
-  | { t: 'ref'; v: RefToken }
+  | { t: 'ref'; v: RefToken; i?: number }
   | { t: 'name'; v: string }
   | { t: 'neg'; x: Node }
   | { t: 'pct'; x: Node }
   | { t: 'bin'; op: string; l: Node; r: Node }
-  | { t: 'fn'; name: string; args: Node[] };
+  | { t: 'fn'; name: string; args: Node[] }
+  /** @x: one value where x could give several (Excel's implicit intersection). */
+  | { t: 'at'; x: Node }
+  /** An array written out, {1,2;3,4}: rows of values. */
+  | { t: 'arr'; rows: Node[][] }
+  /** A LAMBDA called where it is written: LAMBDA(x, x*2)(5). */
+  | { t: 'call'; f: Node; args: Node[] };
 
 // Excel's order: comparisons, then &, then + −, then × ÷, then ^, then %, then a leading minus
 const BINARY: Record<string, number> = { '=': 1, '<>': 1, '<': 1, '>': 1, '<=': 1, '>=': 1, '&': 2, '+': 3, '-': 3, '*': 4, '/': 4, '^': 5 };
@@ -215,11 +238,52 @@ export function parseFormula(text: string): Node {
       const x = unary();
       return t.v === '-' ? { t: 'neg', x } : x;
     }
+    if (t && t.t === 'op' && t.v === '@') {
+      p++;
+      return { t: 'at', x: unary() };
+    }
     return postfix(primary());
   };
   const postfix = (n: Node): Node => {
+    // a LAMBDA (or a bracketed one) called straight away: LAMBDA(x, x+1)(2)
+    while (peek()?.t === '(' && (n.t === 'fn' || n.t === 'call')) { p++; n = { t: 'call', f: n, args: argList('the LAMBDA') }; }
     while (peek()?.t === 'op' && (peek() as { v: string }).v === '%') { p++; n = { t: 'pct', x: n }; }
     return n;
+  };
+  /** Arguments after the ( up to the closing ). */
+  const argList = (of: string): Node[] => {
+    const args: Node[] = [];
+    if (peek()?.t === ')') { p++; return args; }
+    for (;;) {
+      // an empty argument (as in ROUND(A1,)) counts as nothing
+      if (peek()?.t === ',' || peek()?.t === ')') args.push({ t: 'str', v: '' });
+      else args.push(expr(1));
+      const sep = toks[p++];
+      if (sep?.t === ')') break;
+      if (sep?.t !== ',') throw new FormulaSyntaxError(`Add a comma or ) after an argument of ${of}`);
+    }
+    return args;
+  };
+  /** {1,2;3,4}: numbers, text, TRUE/FALSE and errors; commas between columns, semicolons between rows. */
+  const arrayConst = (): Node => {
+    const rows: Node[][] = [[]];
+    for (;;) {
+      let t = toks[p++];
+      let neg = false;
+      if (t?.t === 'op' && (t.v === '-' || t.v === '+')) { neg = t.v === '-'; t = toks[p++]; }
+      if (!t) throw new FormulaSyntaxError('An array in {} is not closed: add }');
+      if (t.t === 'num') rows[rows.length - 1].push({ t: 'num', v: neg ? -t.v : t.v });
+      else if (!neg && t.t === 'str') rows[rows.length - 1].push({ t: 'str', v: t.v });
+      else if (!neg && t.t === 'bool') rows[rows.length - 1].push({ t: 'bool', v: t.v });
+      else if (!neg && t.t === 'err') rows[rows.length - 1].push({ t: 'err', v: t.v });
+      else throw new FormulaSyntaxError('An array in {} holds only numbers, text in quotes, TRUE/FALSE and errors');
+      const sep = toks[p++];
+      if (sep?.t === '}') break;
+      if (sep?.t === ';') { rows.push([]); continue; }
+      if (sep?.t !== ',') throw new FormulaSyntaxError('Separate an array\'s values with commas, and its rows with semicolons: {1,2;3,4}');
+    }
+    if (rows.some((r) => r.length !== rows[0].length)) throw new FormulaSyntaxError('Every row of an array in {} needs the same number of values');
+    return { t: 'arr', rows };
   };
   const primary = (): Node => {
     const t = toks[p++];
@@ -229,7 +293,8 @@ export function parseFormula(text: string): Node {
       case 'str': return { t: 'str', v: t.v };
       case 'bool': return { t: 'bool', v: t.v };
       case 'err': return { t: 'err', v: t.v };
-      case 'ref': return { t: 'ref', v: t.v };
+      // (i: where it was written, counting tokens other than spaces)
+      case 'ref': return { t: 'ref', v: t.v, i: p - 1 };
       case 'name': return { t: 'name', v: t.v };
       case '(': {
         const e = expr(1);
@@ -238,18 +303,9 @@ export function parseFormula(text: string): Node {
       }
       case 'fn': {
         if (toks[p++]?.t !== '(') throw new FormulaSyntaxError(`${t.v} needs (`);
-        const args: Node[] = [];
-        if (peek()?.t === ')') { p++; return { t: 'fn', name: t.v, args }; }
-        for (;;) {
-          // an empty argument (as in ROUND(A1,)) counts as nothing
-          if (peek()?.t === ',' || peek()?.t === ')') args.push({ t: 'str', v: '' });
-          else args.push(expr(1));
-          const sep = toks[p++];
-          if (sep?.t === ')') break;
-          if (sep?.t !== ',') throw new FormulaSyntaxError(`Add a comma or ) after an argument of ${t.v}`);
-        }
-        return { t: 'fn', name: t.v, args };
+        return { t: 'fn', name: t.v, args: argList(t.v) };
       }
+      case '{': return arrayConst();
       default:
         throw new FormulaSyntaxError(`"${t.s}" can't be used here`);
     }
@@ -344,11 +400,12 @@ export function shiftTree(n: Node, dr: number, dc: number): Node {
   switch (n.t) {
     case 'ref': {
       const r = shiftRef(n.v, dr, dc);
-      return r.broken ? { t: 'err', v: '#REF!' } : { t: 'ref', v: r };
+      return r.broken ? { t: 'err', v: '#REF!' } : { ...n, v: r };
     }
-    case 'neg': case 'pct': return { t: n.t, x: shiftTree(n.x, dr, dc) };
+    case 'neg': case 'pct': case 'at': return { t: n.t, x: shiftTree(n.x, dr, dc) };
     case 'bin': return { t: 'bin', op: n.op, l: shiftTree(n.l, dr, dc), r: shiftTree(n.r, dr, dc) };
     case 'fn': return { t: 'fn', name: n.name, args: n.args.map((x) => shiftTree(x, dr, dc)) };
+    case 'call': return { t: 'call', f: shiftTree(n.f, dr, dc), args: n.args.map((x) => shiftTree(x, dr, dc)) };
     default: return n;
   }
 }

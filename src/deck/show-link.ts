@@ -23,6 +23,10 @@ export type ShowMessage =
   | { kind: 'prev' }
   | { kind: 'go'; i: number; atEnd?: boolean }
   | { kind: 'blank'; how: 'black' | 'white' | 'end' | null }
+  | { kind: 'zoom'; i: number; rect: { x1: number; y1: number; x2: number; y2: number }; out: boolean } // a zoom, its box as fractions of the slide canvas
+  | { kind: 'tap'; fx: number; fy: number } // a click on a video or sound, as fractions of the canvas
+  | { kind: 'ink'; i: number; strokes: { tool: 'pen' | 'highlighter'; color: string; width: number; pts: { x: number; y: number }[] }[] }
+  | { kind: 'laser'; p: { x: number; y: number } | null }
   | { kind: 'key'; key: string } // audience → presenter: a key pressed or a click there
   | { kind: 'bye' }; // either way: the show is over, or the window was closed
 

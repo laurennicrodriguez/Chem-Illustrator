@@ -12,7 +12,7 @@
 
 import type { PinnedComment } from '../document/comments';
 import { COMMENT_CT, COMMENT_REL, writeSlideComments } from './pptx-comments';
-import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, applyBase, PICTURE_SHADOWS, type Pattern, type PictureLook } from '../model';
+import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, applyBase, PICTURE_SHADOWS, type Pattern, type PictureLook, type Media } from '../model';
 import { turnAbout, type Rect } from '../geom';
 import { layoutText, ASCENT, FONT_STACK, type Measure } from '../text/layout';
 import { fitParas, listMarkers, splitParagraphs } from '../text/paragraphs';
@@ -31,7 +31,8 @@ import { facesToEmbed, toEot, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
 import { patternClear, patternInk, shadowLook } from '../render/fills';
 import { FADE, tint } from '../colours';
-import { transitionXml, timingXml, highlightParts, partHolds, type Transition, type Anim } from '../deck/animation';
+import { transitionXml, timingXml, highlightParts, partHolds, type Transition, type Anim, type MediaTiming } from '../deck/animation';
+import { MEDIA_EXT } from '../deck/media';
 import {
   Master, SlideSize, LayoutId, LAYOUTS, layoutFrames, decorFrames, showsNumber, textStyles, isEmptyText, slideColours, slideBackground, decorShapes, type DecorShape,
 } from '../deck/deck';
@@ -65,6 +66,8 @@ export const TAG = {
    * bond middles) was, and the structure picture's box tag, so it finds its highlight again.
    */
   highlight: 'CHEMILLUSTRATOR_HIGHLIGHT',
+  /** A Slide Zoom or a Summary Zoom's part: whether the show comes back, and where the part ends. */
+  zoom: 'CHEMILLUSTRATOR_ZOOM',
   /** The slide's id here, so links kept in our own tags find their slide again. */
   slideId: 'CHEMILLUSTRATOR_SLIDE_ID',
   /** A SmartArt-style diagram (a group of shapes): its text and look, kept on the group. */
@@ -122,6 +125,7 @@ const SVG_EXT = '{96DAC541-7B7A-43D3-8B79-37D633B846F1}';
 const NS_SVG = 'http://schemas.microsoft.com/office/drawing/2016/SVG/main';
 const REL_MEDIA = 'http://schemas.microsoft.com/office/2007/relationships/media';
 const REL_VIDEO = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/video';
+const REL_AUDIO = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/audio';
 const NS_P14 = 'http://schemas.microsoft.com/office/powerpoint/2010/main';
 /** Markup compatibility (a newer form with a fallback), Office 2010's drawing additions (equations in text), and Office Math. */
 export const NS_MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
@@ -130,27 +134,17 @@ export const NS_M = 'http://schemas.openxmlformats.org/officeDocument/2006/math'
 
 /**
  * A slide's videos starting by themselves when the slide comes in (PowerPoint's "Start:
- * Automatically"), and repeating unless they play once. Only for slides without animations; with
- * them, PowerPoint plays a video when it is clicked.
+ * Automatically"), and repeating unless they play once (a slide without animations).
  */
 export function videoTimingXml(videos: { spid: number; once: boolean }[]): string {
-  if (!videos.length) return '';
-  const calls = videos.map((v, k) =>
-    `<p:par><p:cTn id="0" presetID="1" presetClass="mediacall" presetSubtype="0" fill="hold" nodeType="${k ? 'withEffect' : 'afterEffect'}"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
-    `<p:cmd type="call" cmd="playFrom(0.0)"><p:cBhvr><p:cTn id="0" dur="1" fill="hold"/><p:tgtEl><p:spTgt spid="${v.spid}"/></p:tgtEl></p:cBhvr></p:cmd></p:childTnLst></p:cTn></p:par>`).join('');
-  const nodes = videos.map((v) =>
-    `<p:video><p:cMediaNode vol="80000"><p:cTn id="0"${v.once ? '' : ' repeatCount="indefinite"'} fill="hold" display="0"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${v.spid}"/></p:tgtEl></p:cMediaNode></p:video>`).join('');
-  const xml = `<p:timing><p:tnLst><p:par><p:cTn id="0" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>` +
-    `<p:seq concurrent="1" nextAc="seek"><p:cTn id="0" dur="indefinite" nodeType="mainSeq"><p:childTnLst>` +
-    `<p:par><p:cTn id="0" fill="hold"><p:stCondLst><p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond></p:stCondLst><p:childTnLst>` +
-    `<p:par><p:cTn id="0" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${calls}</p:childTnLst></p:cTn></p:par>` +
-    `</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn>` +
-    `<p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst>` +
-    `<p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq>` +
-    `${nodes}</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`;
-  let n = 0;
-  return xml.replace(/<p:cTn id="0"/g, () => `<p:cTn id="${++n}"`);
+  return timingXml([], () => [], videos.map((v) => ({ spid: v.spid, media: { src: '', ...(v.once ? { once: true } : {}) } })));
 }
+
+/** PowerPoint's zooms. */
+export const NS_SLIDEZOOM = 'http://schemas.microsoft.com/office/powerpoint/2016/slidezoom';
+
+/** A slide's creation number in the file (PowerPoint's p14:creationId), by its place. */
+export const creationId = (i: number): number => 1000000000 + i * 7919;
 
 const XMLNS = `xmlns:a="${NS.a}" xmlns:r="${NS.r}" xmlns:p="${NS.p}"`;
 const HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
@@ -468,7 +462,7 @@ class Writer {
   private hlink: LinkXml = (link) => {
     const from = this.curPath;
     if (!from) return '';
-    const jump = { '#first': 'firstslide', '#last': 'lastslide', '#next': 'nextslide', '#prev': 'previousslide' }[link];
+    const jump = ({ '#first': 'firstslide', '#last': 'lastslide', '#next': 'nextslide', '#prev': 'previousslide', '#return': 'lastslideviewed', '#end': 'endshow' } as Record<string, string>)[link];
     if (jump) return `<a:hlinkClick r:id="" action="ppaction://hlinkshowjump?jump=${jump}"/>`;
     const id = slideOfLink(link);
     if (id !== null) {
@@ -656,14 +650,15 @@ class Writer {
     };
     const styles = textStyles(this.deck.master, s.layout);
     // pictures and shapes at the back, as on screen
-    const videos: { spid: number; once: boolean }[] = [];
+    const videos: MediaTiming[] = [];
     for (const p of parts.pictures) {
       mark({ shapes: new Set([p.id]) }, id);
       const box = { x1: Math.min(p.x1, p.x2), y1: Math.min(p.y1, p.y2), x2: Math.max(p.x1, p.x2), y2: Math.max(p.y1, p.y2) };
       if (p.chart) { out.push(await this.chart(path, p.chart, box, id++, p.src)); continue; }
       if (p.math) { out.push(await this.equation(path, p, box, id++)); continue; }
-      const v = p.video ? this.video(path, p.video.src, p.src!, box, id) : '';
-      if (v) { videos.push({ spid: id, once: !!p.video!.once }); out.push(v); id++; continue; }
+      if (p.zoom && p.link) { const z = this.zoomXml(path, p, box, id); if (z) { out.push(z); id++; continue; } }
+      const v = p.video ? this.video(path, p.video, p.src!, box, id) : '';
+      if (v) { videos.push({ spid: id, media: p.video! }); out.push(v); id++; continue; }
       out.push(await this.picture(path, p.src!, box, `Picture ${id - 1}`, id++, p.crop ?? null, p.look));
     }
     for (const sh of parts.shapes) {
@@ -744,7 +739,9 @@ class Writer {
     const tags = this.addTags(path, { [TAG.layout]: s.layout, ...(s.id !== undefined ? { [TAG.slideId]: String(s.id) } : {}) });
     const bg = s.background ? await this.background(path, s.background) : '';
     return `${HEAD}<p:sld ${XMLNS}${s.hideGraphics ? ' showMasterSp="0"' : ''}${s.hidden ? ' show="0"' : ''}><p:cSld>${bg}<p:spTree>${GROUP}${out.join('')}</p:spTree><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:cSld>` +
-      `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(s.transition)}${timingXml(s.anims ?? [], (a) => spids.get(`${a.target.kind} ${a.target.bond ? 'b' : ''}${a.target.id}`) ?? []) || videoTimingXml(videos)}</p:sld>`;
+      `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(s.transition)}${timingXml(s.anims ?? [], (a) => spids.get(`${a.target.kind} ${a.target.bond ? 'b' : ''}${a.target.id}`) ?? [], videos)}` +
+      // the slide's creation number, which zooms name it by
+      `<p:extLst><p:ext uri="{BB962C8B-B14F-4D97-AF65-F5344CB8AC3E}"><p14:creationId xmlns:p14="${NS_P14}" val="${creationId(index)}"/></p:ext></p:extLst></p:sld>`;
   }
 
   /**
@@ -798,26 +795,70 @@ class Writer {
   }
 
   /**
-   * A video (MP4) with its first frame as the picture PowerPoint shows until it plays: the file is
-   * linked both ways PowerPoint looks for it (PowerPoint 2010's media link and the older video link).
+   * A Slide Zoom: PowerPoint 2019 and 365's own zoom, with a picture that goes to the slide when
+   * clicked for older ones (and other programs). A tag keeps how it comes back and where a
+   * Summary Zoom's part ends.
    */
-  private video(from: string, src: string, poster: string, box: Rect, id: number): string {
-    let mp4: Uint8Array, still: { mime: string; bytes: Uint8Array };
+  private zoomXml(from: string, p: Shape, box: Rect, id: number): string {
+    const target = slideOfLink(p.link ?? '');
+    const i = target === null ? -1 : this.deck.slides.findIndex((s) => s.id === target);
+    if (i < 0 || !p.src) return '';
+    let still: { mime: string; bytes: Uint8Array };
+    try { still = fromDataUrl(p.src); } catch { return ''; }
+    const ext = MIME_EXT[still.mime];
+    if (!ext || ext === 'svg') return '';
+    const blip = this.addMedia(from, still.bytes, ext);
+    const rel = this.pkg.relate(from, REL.slide, `slide${i + 1}.xml`);
+    const tags = this.addTags(from, { [TAG.zoom]: JSON.stringify({ v: 1, zoom: p.zoom, link: p.link }) });
+    const w = box.x2 - box.x1, h = box.y2 - box.y1;
+    const name = `Slide Zoom ${id - 1}`;
+    const guid = `{${(0x5a00 + id).toString(16).padStart(8, '0').toUpperCase()}-0000-4000-8000-${(1000000 + i).toString(16).padStart(12, '0').toUpperCase()}}`;
+    const line = '<a:ln w="3175"><a:solidFill><a:prstClr val="ltGray"/></a:solidFill></a:ln>';
+    const P166 = 'http://schemas.microsoft.com/office/powerpoint/2016/6/main';
+    const choice = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="${name}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></p:cNvGraphicFramePr>` +
+      `<p:nvPr><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:nvPr></p:nvGraphicFramePr>` +
+      `<p:xfrm><a:off x="${emu(box.x1)}" y="${emu(box.y1)}"/><a:ext cx="${emu(w)}" cy="${emu(h)}"/></p:xfrm>` +
+      `<a:graphic><a:graphicData uri="${NS_SLIDEZOOM}"><pslz:sldZm><pslz:sldZmObj sldId="${256 + i}" cId="${creationId(i)}">` +
+      `<pslz:zmPr id="${guid}" returnToParent="${p.zoom?.back ? 1 : 0}" transitionDur="1000">` +
+      `<p166:blipFill xmlns:p166="${P166}"><a:blip r:embed="${blip}"/><a:stretch><a:fillRect/></a:stretch></p166:blipFill>` +
+      `<p166:spPr xmlns:p166="${P166}"><a:xfrm><a:off x="0" y="0"/><a:ext cx="${emu(w)}" cy="${emu(h)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${line}</p166:spPr>` +
+      `</pslz:zmPr></pslz:sldZmObj></pslz:sldZm></a:graphicData></a:graphic></p:graphicFrame>`;
+    const fallback = `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${name}"><a:hlinkClick r:id="${rel}" action="ppaction://hlinksldjump"/></p:cNvPr><p:cNvPicPr><a:picLocks noGrp="1" noRot="1" noChangeAspect="1"/></p:cNvPicPr>` +
+      `<p:nvPr><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:nvPr></p:nvPicPr>` +
+      `<p:blipFill><a:blip r:embed="${blip}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
+      `<p:spPr>${xfrm(box)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${line}</p:spPr></p:pic>`;
+    return `<mc:AlternateContent xmlns:mc="${NS_MC}"><mc:Choice xmlns:pslz="${NS_SLIDEZOOM}" Requires="pslz">${choice}</mc:Choice><mc:Fallback>${fallback}</mc:Fallback></mc:AlternateContent>`;
+  }
+
+  /**
+   * A video or sound with the picture PowerPoint shows until it plays (a video's first frame, a
+   * sound's loudspeaker): the file is linked both ways PowerPoint looks for it (PowerPoint 2010's
+   * media link, with its trim and fades, and the older video or audio link).
+   */
+  private video(from: string, m: Media, poster: string, box: Rect, id: number): string {
+    let file: { mime: string; bytes: Uint8Array }, still: { mime: string; bytes: Uint8Array };
     try {
-      mp4 = fromDataUrl(src).bytes;
+      file = fromDataUrl(m.src);
       still = fromDataUrl(poster);
     } catch {
       return '';
     }
     const ext = MIME_EXT[still.mime];
-    if (!ext || ext === 'svg') return '';
-    const path = `ppt/media/media${++this.media}.mp4`;
-    this.pkg.add(path, mp4);
+    const mext = MEDIA_EXT[file.mime];
+    if (!ext || ext === 'svg' || !mext) return '';
+    const path = `ppt/media/media${++this.media}.${mext}`;
+    this.pkg.add(path, file.bytes);
+    this.pkg.defaultType(mext, file.mime);
     const media = this.pkg.relate(from, REL_MEDIA, fromPpt(from, path));
-    const link = this.pkg.relate(from, REL_VIDEO, fromPpt(from, path));
+    const link = this.pkg.relate(from, m.audio ? REL_AUDIO : REL_VIDEO, fromPpt(from, path));
     const blip = this.addMedia(from, still.bytes, ext);
-    return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="Animation ${id - 1}"><a:hlinkClick r:id="" action="ppaction://media"/></p:cNvPr><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>` +
-      `<p:nvPr><a:videoFile r:link="${link}"/><p:extLst><p:ext uri="{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}"><p14:media xmlns:p14="${NS_P14}" r:embed="${media}"/></p:ext></p:extLst></p:nvPr></p:nvPicPr>` +
+    const ms = (v: number | undefined) => String(Math.round(Math.max(0, v ?? 0) * 1000 * 10) / 10);
+    const trim = m.trimStart || m.trimEnd ? `<p14:trim${m.trimStart ? ` st="${ms(m.trimStart)}"` : ''}${m.trimEnd ? ` end="${ms(m.trimEnd)}"` : ''}/>` : '';
+    const fade = m.fadeIn || m.fadeOut ? `<p14:fade${m.fadeIn ? ` inDur="${ms(m.fadeIn)}"` : ''}${m.fadeOut ? ` outDur="${ms(m.fadeOut)}"` : ''}/>` : '';
+    const p14 = trim || fade ? `<p14:media xmlns:p14="${NS_P14}" r:embed="${media}">${trim}${fade}</p14:media>` : `<p14:media xmlns:p14="${NS_P14}" r:embed="${media}"/>`;
+    const name = m.audio ? `Audio ${id - 1}` : `Video ${id - 1}`;
+    return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${name}"><a:hlinkClick r:id="" action="ppaction://media"/></p:cNvPr><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>` +
+      `<p:nvPr>${m.audio ? `<a:audioFile r:link="${link}"/>` : `<a:videoFile r:link="${link}"/>`}<p:extLst><p:ext uri="{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}">${p14}</p:ext></p:extLst></p:nvPr></p:nvPicPr>` +
       `<p:blipFill><a:blip r:embed="${blip}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
       `<p:spPr>${xfrm(box)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`;
   }
@@ -841,7 +882,8 @@ class Writer {
     const { id: _, x1: _a, y1: _b, x2: _c, y2: _d, ...look } = s;
     const plain = s.text?.runs.map((r) => r.text).join('') ?? '';
     const tag = this.addTags(path, { [TAG.geo]: JSON.stringify({ v: 1, s: look, plain, sid: s.id }) });
-    return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${xml(def.name)} ${id - 1}"/><p:cNvSpPr/><p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvSpPr>` +
+    const click = s.link ? this.hlink(s.link) : '';
+    return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${xml(def.name)} ${id - 1}"${click ? `>${click}</p:cNvPr>` : '/>'}<p:cNvSpPr/><p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvSpPr>` +
       `<p:spPr>${xfrm(box)}${geom}${fill}${ln}${shadow}</p:spPr><p:txBody>${bodyPr}<a:lstStyle/>${body}</p:txBody></p:sp>`;
   }
 

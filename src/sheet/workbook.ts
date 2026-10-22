@@ -12,18 +12,22 @@ import type { DocStyle } from '../style';
 import { ACS_1996 } from '../style';
 import { Chart, mapChartRefs } from './chart';
 import { Dashboard, mapDashboardRefs } from './dashboard';
-import { type RefToken, Node, parseFormula, shiftFormula, shiftTree, adjustFormula, renameSheetInFormula, formulaRefs, SheetChange, normalizeFormula, FormulaSyntaxError, moveRefs } from './formula';
-import { evaluate, EvalHost, VOLATILE_FUNCTIONS } from './evaluate';
+import { type RefToken, Node, parseFormula, shiftFormula, shiftTree, adjustFormula, renameSheetInFormula, formulaRefs, SheetChange, normalizeFormula, FormulaSyntaxError, moveRefs, tokenize, type Token } from './formula';
+import { evaluate, evaluateArg, tidyValue, EvalHost, VOLATILE_FUNCTIONS } from './evaluate';
+import { Arg, isBlock, isMulti, rowsOf } from './args';
+import { DefinedName, resolveName } from './names';
 import { CellError, ERR, Value, readTyped, compareValues, isError } from './values';
 import { MolProps } from './properties';
 import { formatValue } from './numfmt';
-import { MAX_COLS, MAX_ROWS, Range, colOf, keyOf, normRange, rowOf, inRange, rangesOverlap } from './refs';
+import { MAX_COLS, MAX_ROWS, Range, cellName, colOf, keyOf, normRange, rowOf, inRange, rangesOverlap, rangeName, parseRange } from './refs';
 import { CondFormat, CellLook, workOutLooks } from './conditional';
 import { TableDef, tableCellLook } from './table-styles';
 import { CellNote, copyNote } from './notes';
 import { Validation, ValidationHost, validationAt } from './validation';
 import type { SheetObject } from './sheet-objects';
 import { PageSetup, shiftSetup } from './page-setup';
+import { DataTable, dataTableCell } from './what-if';
+import { PivotTable } from './pivot';
 
 export type BorderStyle = 'thin' | 'medium' | 'thick' | 'double' | 'dashed' | 'dotted';
 export interface Border { style: BorderStyle; color?: string }
@@ -43,6 +47,8 @@ export interface CellStyle {
   align?: 'left' | 'center' | 'right';
   valign?: 'top' | 'middle' | 'bottom';
   wrap?: boolean;
+  /** Indent levels from the side the text is aligned to (PivotTable labels; Excel's Increase Indent). */
+  indent?: number;
   /** An Excel number format ("0.00", "0%", "0.00E+00"). */
   numFmt?: string;
   borders?: Partial<Record<Side, Border>>;
@@ -190,11 +196,11 @@ function patchStyleWith(s: CellStyle | undefined, patch: Partial<CellStyle>): Ce
 // ---------------------------------------------------------------- history
 
 type MapField = 'cells' | 'colWidths' | 'rowHeights' | 'colDefs' | 'colStyles' | 'hiddenRows' | 'hiddenCols' | 'notes';
-type ValueField = 'merges' | 'filter' | 'frozen' | 'split' | 'name' | 'condFormats' | 'tables' | 'charts' | 'dashboard' | 'validations' | 'objects' | 'pageSetup';
+type ValueField = 'merges' | 'filter' | 'frozen' | 'split' | 'name' | 'condFormats' | 'tables' | 'charts' | 'dashboard' | 'validations' | 'objects' | 'pageSetup' | 'dataTables' | 'pivots';
 
 interface Change {
-  sheet: Sheet | null; // null: the workbook's list of sheets
-  field: MapField | ValueField | 'sheets';
+  sheet: Sheet | null; // null: the workbook's list of sheets, or its names
+  field: MapField | ValueField | 'sheets' | 'names';
   key: number;
   before: unknown;
   after: unknown;
@@ -249,6 +255,10 @@ export class Sheet {
   objects: SheetObject[] = [];
   /** How the sheet prints (null: Excel's defaults). */
   pageSetup: PageSetup | null = null;
+  /** What-If data tables: blocks of results worked out by trying values in an input cell. */
+  dataTables: DataTable[] = [];
+  /** PivotTables whose reports are in this sheet's cells. */
+  pivots: PivotTable[] = [];
   private looks: { gen: number; rules: CondFormat[]; map: Map<number, CellLook> } | null = null;
   /** Goes up each time the values are worked out again (all of them, or only those an edit changed). */
   valuesGen = 0;
@@ -262,6 +272,12 @@ export class Sheet {
   lastCol = -1;
   /** The last row with data outside property columns: property columns reach down to here. */
   lastDataRow = -1;
+  /** Arrays spilled from formulas: the block each fills, by its formula's cell. */
+  spills = new Map<number, Range>();
+  /** The formula's cell that each spilled cell's value comes from. */
+  spillOwner = new Map<number, number>();
+  /** Arrays that couldn't spill (#SPILL!), and the cells they need. */
+  spillWanted = new Map<number, Range>();
 
   constructor(public wb: Workbook, public name: string) {}
 
@@ -351,6 +367,15 @@ export class Sheet {
       st = mergeStyle(st, { fill: cf.fill, color: cf.color, bold: cf.bold, italic: cf.italic, underline: cf.underline });
     }
     return st;
+  }
+
+  /** The array a cell is part of (its formula's cell, or one it spilled into), with the block it fills. */
+  spillAt(row: number, col: number): { row: number; col: number; range: Range; blocked?: true } | null {
+    const k = keyOf(row, col);
+    const anchor = this.spills.has(k) ? k : this.spillOwner.get(k);
+    if (anchor !== undefined) return { row: rowOf(anchor), col: colOf(anchor), range: this.spills.get(anchor)! };
+    const want = this.spillWanted.get(k);
+    return want ? { row, col, range: want, blocked: true } : null;
   }
 
   /** The text a cell shows (numbers in its format). */
@@ -571,6 +596,19 @@ export class Sheet {
     this.assign('pageSetup', ps);
   }
 
+  setDataTables(list: DataTable[]): void {
+    this.assign('dataTables', list);
+  }
+
+  setPivots(list: PivotTable[]): void {
+    this.assign('pivots', list);
+  }
+
+  /** The data table whose results include this cell. */
+  dataTableAt(row: number, col: number): DataTable | undefined {
+    return this.dataTables.find((t) => inRange(t.ref, row, col));
+  }
+
   /** Put a note or comment on a cell (undefined takes it off). */
   setNote(row: number, col: number, note: CellNote | undefined): void {
     this.put('notes', this.notes, keyOf(row, col), note);
@@ -668,7 +706,8 @@ export class Sheet {
       const seen: (string | undefined)[] = [];
       for (let col = r.c1; col <= r.c2; col++) {
         const c = this.cell(row, col);
-        const input = this.effectiveInput(row, col);
+        // a cell an array spilled into is copied as its value, as in Excel
+        const input = this.effectiveInput(row, col) ?? (this.spillOwner.has(keyOf(row, col)) ? valueInput(this.value(row, col)) || undefined : undefined);
         const style = this.styleAt(row, col);
         line.push(input || c?.structure || style || c?.link ? { input, structure: c?.structure, style, ...(c?.link ? { link: c.link } : {}) } : undefined);
         if (input?.startsWith('=')) { formulas = true; seen.push(valueInput(this.value(row, col))); } else seen.push(undefined);
@@ -834,6 +873,20 @@ export class Sheet {
         return n === i ? o : { ...o, at: axis === 'row' ? { ...o.at, row: n } : { ...o.at, col: n } };
       });
       if (os.some((o, i) => o !== this.objects[i])) this.setObjects(os);
+    }
+    if (this.dataTables.length) {
+      const ts = this.dataTables.map((t) => ({ ...t, ref: moveRange(t.ref)! })).filter((t) => t.ref);
+      if (JSON.stringify(ts) !== JSON.stringify(this.dataTables)) this.setDataTables(ts);
+    }
+    // a PivotTable's report sits where its corner cell goes (its source follows in rewriteAllFormulas)
+    if (this.pivots.length) {
+      const ps = this.pivots.map((p) => {
+        const i = axis === 'row' ? p.at.row : p.at.col;
+        const n = i < at ? i : count > 0 ? i + count : i >= at - count ? i + count : at;
+        const last = p.last ? moveRange(p.last) ?? undefined : undefined;
+        return n === i && last === p.last ? p : { ...p, at: axis === 'row' ? { ...p.at, row: n } : { ...p.at, col: n }, last };
+      });
+      if (ps.some((p, i) => p !== this.pivots[i])) this.setPivots(ps);
     }
     if (this.pageSetup) {
       const ps = shiftSetup(this.pageSetup, axis, at, count);
@@ -1020,7 +1073,7 @@ export class Sheet {
 const READER_COLS = 1 << 15;
 
 /** Changes that leave every value as it was. */
-const NO_VALUES = new Set<string>(['colWidths', 'rowHeights', 'colStyles', 'hiddenRows', 'hiddenCols', 'merges', 'filter', 'frozen', 'split', 'condFormats', 'tables', 'charts', 'dashboard', 'notes', 'validations', 'objects', 'pageSetup']);
+const NO_VALUES = new Set<string>(['colWidths', 'rowHeights', 'colStyles', 'hiddenRows', 'hiddenCols', 'merges', 'filter', 'frozen', 'split', 'condFormats', 'tables', 'charts', 'dashboard', 'notes', 'validations', 'objects', 'pageSetup', 'pivots']);
 
 const isFormulaText = (t: string | undefined): boolean => !!t && t.startsWith('=') && t.length > 1;
 
@@ -1029,10 +1082,37 @@ const VOLATILE = new RegExp(`\\b(?:${VOLATILE_FUNCTIONS.join('|')})\\s*\\(`, 'i'
 /** How many times formulas using INDIRECT or OFFSET are worked out again, to catch up with the cells they turned out to read. */
 const VOLATILE_PASSES = 4;
 
+const GONE = Symbol('gone');
+
+/** Keep what a map held before each change from now on; the function returned puts it all back. */
+function journal<V>(m: Map<number, V>): () => void {
+  const log = new Map<number, V | typeof GONE>();
+  const set = m.set, del = m.delete;
+  const note = (k: number) => { if (!log.has(k)) log.set(k, m.has(k) ? m.get(k)! : GONE); };
+  m.set = (k, v) => { note(k); return set.call(m, k, v); };
+  m.delete = (k) => { note(k); return del.call(m, k); };
+  return () => {
+    delete (m as { set?: unknown }).set;
+    delete (m as { delete?: unknown }).delete;
+    for (const [k, v] of log) if (v === GONE) m.delete(k); else m.set(k, v);
+  };
+}
+
+/** Where a formula's array spills ("" when it doesn't), to tell when that changes. */
+function spillState(s: Sheet, key: number): string {
+  const R = s.spills.get(key);
+  if (R) return `spills ${R.r2} ${R.c2}`;
+  const W = s.spillWanted.get(key);
+  return W ? `blocked ${W.r2} ${W.c2}` : '';
+}
+
+/** A formula to work out: a cell's own (which can spill an array), or a property column's in one of its rows. */
+interface FormulaNode { s: Sheet; key: number; text: string; def?: true }
+
 /** The formulas of a workbook and the order they are worked out in, as the last full recalculation found them. */
 interface Graph {
   sheets: Sheet[];
-  nodes: { s: Sheet; key: number; text: string }[];
+  nodes: FormulaNode[];
   /** For each formula, the formulas that read it. */
   dependents: number[][];
   /** For each sheet and column (sheet × READER_COLS + column): first row, last row and formula of each reference into it. */
@@ -1053,6 +1133,8 @@ export class Workbook {
   /** How structures in cells are drawn: bond length, line widths, label size. */
   drawingStyle: DocStyle = { ...ACS_1996 };
   chem: ChemHost | null = null;
+  /** Names defined for cells, values and formulas (Formulas > Name Manager). */
+  names: DefinedName[] = [];
   /** Counts changes (edits, undos and redos), so the file knows when it has unsaved changes. */
   edits = 0;
   /** Called after every change, undo and redo. */
@@ -1173,8 +1255,13 @@ export class Workbook {
       this.active = Math.min(this.active, this.sheets.length - 1);
       return;
     }
+    if (c.field === 'names') {
+      this.names = (v as DefinedName[]).slice();
+      this.refsByText.clear();
+      return;
+    }
     const s = c.sheet!;
-    if (c.field === 'merges' || c.field === 'filter' || c.field === 'frozen' || c.field === 'split' || c.field === 'name' || c.field === 'condFormats' || c.field === 'tables' || c.field === 'charts' || c.field === 'dashboard' || c.field === 'validations' || c.field === 'objects' || c.field === 'pageSetup') {
+    if (c.field === 'merges' || c.field === 'filter' || c.field === 'frozen' || c.field === 'split' || c.field === 'name' || c.field === 'condFormats' || c.field === 'tables' || c.field === 'charts' || c.field === 'dashboard' || c.field === 'validations' || c.field === 'objects' || c.field === 'pageSetup' || c.field === 'dataTables' || c.field === 'pivots') {
       (s as unknown as Record<string, unknown>)[c.field] = v;
       return;
     }
@@ -1188,6 +1275,19 @@ export class Workbook {
     const before = this.sheets;
     this.sheets = list.slice();
     this.record({ sheet: null, field: 'sheets', key: 0, before, after: this.sheets });
+  }
+
+  /** Change the defined names, as one recorded change. */
+  setNames(list: DefinedName[]): void {
+    const before = this.names;
+    this.names = list.slice();
+    this.refsByText.clear();
+    this.record({ sheet: null, field: 'names', key: 0, before, after: this.names });
+  }
+
+  /** The names that apply (a deleted sheet's own names are gone with it). */
+  liveNames(): DefinedName[] {
+    return this.names.filter((n) => !n.sheet || this.sheets.includes(n.sheet));
   }
 
   addSheet(name = this.newSheetName(), at = this.sheets.length): Sheet {
@@ -1243,6 +1343,19 @@ export class Workbook {
         const d = mapDashboardRefs(s.dashboard, (f) => fn(f, s.name));
         if (JSON.stringify(d) !== JSON.stringify(s.dashboard)) s.setDashboard(d);
       }
+      // data tables' input cells, and the cells PivotTables report on
+      if (s.dataTables.length) {
+        const f = (t: string | undefined) => (t ? fn(t, s.name) : t);
+        const ts = s.dataTables.map((t) => {
+          const rowInput = f(t.rowInput), colInput = f(t.colInput);
+          return rowInput === t.rowInput && colInput === t.colInput ? t : { ...t, rowInput, colInput };
+        });
+        if (ts.some((t, i) => t !== s.dataTables[i])) s.setDataTables(ts);
+      }
+      if (s.pivots.length) {
+        const ps = s.pivots.map((p) => { const source = fn(p.source, s.name); return source === p.source ? p : { ...p, source }; });
+        if (ps.some((p, i) => p !== s.pivots[i])) s.setPivots(ps);
+      }
       // data validation limits and lists that are formulas or references
       if (s.validations.some((v) => v.value1?.startsWith('=') || v.value2?.startsWith('='))) {
         const f = (t: string | undefined) => (t?.startsWith('=') && t.length > 1 ? fn(t, s.name) : t);
@@ -1252,6 +1365,14 @@ export class Workbook {
         });
         if (vs.some((v, i) => v !== s.validations[i])) s.setValidations(vs);
       }
+    }
+    // defined names (theirs is the sheet they belong to, or the first)
+    if (this.names.length) {
+      const next = this.names.map((n) => {
+        const f = fn(n.formula, (n.sheet ?? this.sheets[0]).name);
+        return f === n.formula ? n : { ...n, formula: f };
+      });
+      if (next.some((n, i) => n !== this.names[i])) this.setNames(next);
     }
   }
 
@@ -1294,13 +1415,55 @@ export class Workbook {
     return isError(p) ? p : p.smiles;
   }
 
-  /** Work out every cell of every sheet. */
+  /**
+   * Work out every cell of every sheet. Formulas reading cells an array spills into are worked
+   * out after it, by where the arrays spilled last time; when an array's size changes, once more.
+   */
   recalc(): void {
+    for (let pass = 0; pass < 3; pass++) {
+      const before = this.spillSignature();
+      this.recalcOnce();
+      if (this.spillSignature() === before) break;
+    }
+    this.workOutDataTables();
+  }
+
+  /** Where every array spills (and where those that can't would), to tell when that changed. */
+  private spillSignature(): string {
+    return this.sheets.map((s) => [...s.spills, ...[...s.spillWanted].map(([k, r]) => [-k - 1, r] as const)]
+      .map(([k, r]) => `${k}:${r.r2}:${r.c2}`).join(',')).join('|');
+  }
+
+  /** The references a formula reads, with those of the defined names it uses. */
+  private refsIn(text: string): RefToken[] {
+    let refs = this.refsByText.get(text);
+    if (refs) return refs;
+    refs = formulaRefs(text);
+    if (this.names.length) {
+      let toks: Token[];
+      try { toks = tokenize(text.startsWith('=') ? text.slice(1) : text); } catch { toks = []; }
+      const seen = new Set<string>();
+      for (const t of toks) {
+        if (t.t !== 'name' && t.t !== 'fn') continue;
+        const low = t.v.toLowerCase();
+        if (seen.has(low)) continue;
+        seen.add(low);
+        for (const n of this.names) if (n.name.toLowerCase() === low && n.formula !== text) refs = [...refs, ...this.refsIn(n.formula)];
+      }
+    }
+    if (this.refsByText.size > 500000) this.refsByText.clear();
+    this.refsByText.set(text, refs);
+    return refs;
+  }
+
+  private recalcOnce(): void {
     this.identityCache.clear();
     this.graph = null;
     const sheetIndex = new Map(this.sheets.map((s, i) => [s, i] as const));
+    // where arrays spilled last time
+    const lastSpills = new Map<Sheet, Map<number, Range>>();
     // 1. what each cell holds; formulas (own and property columns) found
-    const nodes: { s: Sheet; key: number; text: string }[] = [];
+    const nodes: FormulaNode[] = [];
     const byId = new Map<number, number>(); // global id → index in nodes
     const gid = (si: number, key: number) => si * 2 ** 35 + key;
     for (const s of this.sheets) {
@@ -1308,6 +1471,10 @@ export class Workbook {
       s.values = new Map();
       s.valuesGen++;
       s.formulas = new Map();
+      lastSpills.set(s, s.spills);
+      s.spills = new Map();
+      s.spillOwner = new Map();
+      s.spillWanted = new Map();
       let lastRow = -1, lastCol = -1, lastData = -1;
       for (const [k, c] of s.cells) {
         const r = rowOf(k), col = colOf(k);
@@ -1343,7 +1510,7 @@ export class Workbook {
           }
           s.formulas.set(k, text);
           byId.set(gid(si, k), nodes.length);
-          nodes.push({ s, key: k, text });
+          nodes.push({ s, key: k, text, def: true });
         }
       }
     }
@@ -1364,20 +1531,27 @@ export class Workbook {
     const readers = new Map<number, number[]>();
     nodes.forEach((n, i) => {
       const seen = new Set<number>();
-      let refs = this.refsByText.get(n.text);
-      if (!refs) {
-        refs = formulaRefs(n.text);
-        if (this.refsByText.size > 500000) this.refsByText.clear();
-        this.refsByText.set(n.text, refs);
-      }
+      const refs = this.refsIn(n.text);
       for (const ref of refs) {
         if (ref.broken) continue;
         const s = ref.sheet !== undefined ? this.sheetNamed(ref.sheet) : n.s;
         if (!s) continue;
         const si = sheetIndex.get(s)!;
         const b = ref.b ?? ref.a;
-        const r1 = Math.min(ref.a.row, b.row), r2 = Math.max(ref.a.row, b.row);
-        const c1 = Math.min(ref.a.col, b.col), c2 = Math.max(ref.a.col, b.col);
+        let r1 = Math.min(ref.a.row, b.row), r2 = Math.max(ref.a.row, b.row);
+        let c1 = Math.min(ref.a.col, b.col), c2 = Math.max(ref.a.col, b.col);
+        // A1#: the cells A1's array spilled into last time
+        const sp = ref.spill ? lastSpills.get(s)?.get(keyOf(ref.a.row, ref.a.col)) : undefined;
+        if (sp) { r2 = sp.r2; c2 = sp.c2; }
+        // cells filled by an array are read after its formula
+        for (const [anchor, R] of lastSpills.get(s) ?? []) {
+          if (R.r1 > r2 || R.r2 < r1 || R.c1 > c2 || R.c2 < c1) continue;
+          const dep = byId.get(gid(si, anchor));
+          if (dep === undefined || dep === i || seen.has(dep)) continue;
+          seen.add(dep);
+          dependents[dep].push(i);
+          indeg[i]++;
+        }
         for (let col = c1; col <= Math.min(c2, s.lastCol); col++) {
           const k = si * READER_COLS + col;
           let list = readers.get(k);
@@ -1415,7 +1589,7 @@ export class Workbook {
       for (let i = 0; i < nodes.length; i++) if (!done[i]) nodes[i].s.values.set(nodes[i].key, ERR.circ());
     }
     const volatile: number[] = [];
-    nodes.forEach((n, i) => { if (done[i] && VOLATILE.test(n.text)) volatile.push(i); });
+    nodes.forEach((n, i) => { if (done[i] && (VOLATILE.test(n.text) || this.usesVolatileName(n.text))) volatile.push(i); });
     this.graph = {
       sheets: [...this.sheets], nodes, dependents, readers, loop: done.map((x) => !x), order: queue, volatile,
       bounds: this.sheets.map((s) => ({ lastRow: s.lastRow, lastCol: s.lastCol, lastData: s.lastDataRow })),
@@ -1463,6 +1637,7 @@ export class Workbook {
    */
   private recalcAfter(changes: Change[], now: 'before' | 'after' = 'after'): void {
     if (!this.recalcChanged(changes, now)) this.recalc();
+    else if (changes.some((c) => c.field === 'cells')) this.workOutDataTables();
   }
 
   /** `now`: which side of each change is in place (undo puts back 'before'). */
@@ -1470,6 +1645,7 @@ export class Workbook {
     const g = this.graph;
     if (!g || g.sheets.length !== this.sheets.length || g.sheets.some((s, i) => s !== this.sheets[i])) return false;
     const typed: { s: Sheet; si: number; key: number; cell: Cell | undefined }[] = [];
+    this.spillsMoved = false;
     for (const c of changes) {
       if (c.field !== 'cells') {
         // formatting, sizes, hidden rows, rules and charts change no value
@@ -1482,6 +1658,8 @@ export class Workbook {
       const s = c.sheet!, si = this.sheets.indexOf(s);
       if (si < 0) return false;
       const r = rowOf(c.key), col = colOf(c.key), b = g.bounds[si];
+      // typing where an array spills (or would) changes where it can
+      if (s.spillOwner.has(c.key) || [...s.spillWanted.values()].some((R) => inRange(R, r, col))) return false;
       // a value typed into a property column takes the place of its formula
       const def = s.colDefs.get(col);
       if (def && r >= def.firstRow) return false;
@@ -1531,7 +1709,140 @@ export class Workbook {
     for (const s of new Set(typed.map((t) => t.s))) s.valuesGen++;
     for (const i of todo) g.nodes[i].s.valuesGen++;
     this.settleVolatile(g);
-    return true;
+    // an array now a different size: what reads the cells around it needs the full order again
+    return !this.spillsMoved;
+  }
+
+  // ---------------------------------------------------------------- trying values (What-If Analysis)
+
+  /**
+   * What cells would show if some cells held other values, without changing anything: the values
+   * are put in for the moment, the formulas that read them (and those that read those) worked
+   * out again, `read` called, and every value put back as it was. Goal Seek, data tables and
+   * Solver try values this way. Nothing is recorded and nothing is unsaved.
+   */
+  whatIf<T>(inputs: { s: Sheet; key: number; value: Value }[], read: () => T): T {
+    const g0 = this.graph;
+    if (!g0 || g0.sheets.length !== this.sheets.length || g0.sheets.some((s, i) => s !== this.sheets[i])) this.recalc();
+    const g = this.graph!;
+    const plan = this.trialPlan(g, inputs);
+    const sheets = new Set<Sheet>(inputs.map((i) => i.s));
+    for (const i of plan) sheets.add(g.nodes[i].s);
+    const undo: (() => void)[] = [];
+    const moved = this.spillsMoved;
+    for (const s of sheets) {
+      undo.push(journal(s.values));
+      const spills = new Map(s.spills), owner = new Map(s.spillOwner), wanted = new Map(s.spillWanted);
+      undo.push(() => { s.spills = spills; s.spillOwner = owner; s.spillWanted = wanted; });
+    }
+    this.identityCache.clear();
+    try {
+      for (const i of inputs) {
+        if (i.value === null) i.s.values.delete(i.key);
+        else i.s.values.set(i.key, i.value);
+      }
+      for (const i of plan) this.evaluateNode(g.nodes[i]);
+      return read();
+    } finally {
+      for (let i = undo.length - 1; i >= 0; i--) undo[i]();
+      this.spillsMoved = moved;
+      this.identityCache.clear();
+    }
+  }
+
+  /** The formulas to work out again, in order, when values are tried in some cells. */
+  private trialPlan(g: Graph, inputs: { s: Sheet; key: number }[]): number[] {
+    const id = inputs.map((i) => `${g.sheets.indexOf(i.s)}:${i.key}`).join(',');
+    let plans = this.plans.get(g);
+    if (!plans) this.plans.set(g, (plans = new Map()));
+    const had = plans.get(id);
+    if (had) return had;
+    const start = new Set<number>(g.volatile);
+    let all = false;
+    for (const inp of inputs) {
+      const si = g.sheets.indexOf(inp.s);
+      const col = colOf(inp.key), r = rowOf(inp.key);
+      // the index of readers covers the columns in use; anything further out could be read by any formula
+      if (si < 0 || col > g.bounds[si].lastCol) { all = true; break; }
+      const list = g.readers.get(si * READER_COLS + col);
+      if (list) for (let j = 0; j < list.length; j += 3) if (list[j] <= r && r <= list[j + 1]) start.add(list[j + 2]);
+    }
+    const inputKeys = new Set(inputs.map((i) => `${i.s.uid}|${i.key}`));
+    const todo = new Set<number>();
+    if (all) g.order.forEach((i) => todo.add(i));
+    const stack = [...start];
+    while (stack.length) {
+      const i = stack.pop()!;
+      if (todo.has(i) || g.loop[i]) continue;
+      todo.add(i);
+      for (const j of g.dependents[i]) if (!todo.has(j)) stack.push(j);
+    }
+    // the cells being tried keep the values put in them, even when they hold formulas
+    const plan = g.order.filter((i) => todo.has(i) && !inputKeys.has(`${g.nodes[i].s.uid}|${g.nodes[i].key}`));
+    if (plans.size > 200) plans.clear();
+    plans.set(id, plan);
+    return plan;
+  }
+
+  private plans = new WeakMap<Graph, Map<string, number[]>>();
+
+  /**
+   * Fill every data table's results: for each result cell, its input values tried in the input
+   * cells and its formula's answer read. Then the formulas that read the results are worked out
+   * again.
+   */
+  private workOutDataTables(): void {
+    if (!this.sheets.some((s) => s.dataTables.length)) return;
+    const results: { s: Sheet; key: number; v: Value }[] = [];
+    for (const s of this.sheets) {
+      for (const t of s.dataTables) {
+        const input = (ref: string | undefined) => {
+          if (!ref) return null;
+          const R = parseRange(ref.replace(/^=/, '').replace(/\$/g, '').toUpperCase());
+          return R && R.r1 === R.r2 && R.c1 === R.c2 ? keyOf(R.r1, R.c1) : -1;
+        };
+        const rowIn = input(t.rowInput), colIn = input(t.colInput);
+        const R = t.ref;
+        for (let r = R.r1; r <= R.r2; r++) for (let c = R.c1; c <= R.c2; c++) {
+          const key = keyOf(r, c);
+          if (s.cells.get(key)?.input) continue;
+          if (rowIn === -1 || colIn === -1 || (rowIn === null && colIn === null)) { results.push({ s, key, v: ERR.ref('The data table\'s input cell is missing') }); continue; }
+          const dc = dataTableCell(t, r, c);
+          const fk = keyOf(dc.formula.row, dc.formula.col);
+          const inputs: { s: Sheet; key: number; value: Value }[] = [];
+          if (rowIn !== null && dc.rowValue) inputs.push({ s, key: rowIn, value: s.values.get(keyOf(dc.rowValue.row, dc.rowValue.col)) ?? null });
+          if (colIn !== null && dc.colValue) inputs.push({ s, key: colIn, value: s.values.get(keyOf(dc.colValue.row, dc.colValue.col)) ?? null });
+          results.push({ s, key, v: this.whatIf(inputs, () => s.values.get(fk) ?? 0) });
+        }
+      }
+    }
+    for (const x of results) x.s.values.set(x.key, x.v);
+    this.workOutReaders(results);
+    for (const s of new Set(results.map((x) => x.s))) s.valuesGen++;
+  }
+
+  /** Work out again the formulas that read some cells whose values changed (and those that read those). */
+  private workOutReaders(cells: { s: Sheet; key: number }[]): void {
+    const g = this.graph;
+    if (!g || !cells.length) return;
+    const start = new Set<number>();
+    for (const t of cells) {
+      const si = g.sheets.indexOf(t.s);
+      const list = si < 0 ? undefined : g.readers.get(si * READER_COLS + colOf(t.key));
+      if (!list) continue;
+      const r = rowOf(t.key);
+      for (let j = 0; j < list.length; j += 3) if (list[j] <= r && r <= list[j + 1]) start.add(list[j + 2]);
+    }
+    if (!start.size) return;
+    const todo = new Set<number>();
+    const stack = [...start];
+    while (stack.length) {
+      const i = stack.pop()!;
+      if (todo.has(i) || g.loop[i]) continue;
+      todo.add(i);
+      for (const j of g.dependents[i]) if (!todo.has(j)) stack.push(j);
+    }
+    for (const i of g.order) if (todo.has(i)) { this.evaluateNode(g.nodes[i]); g.nodes[i].s.valuesGen++; }
   }
 
   /** A formula written for cell `home`, worked out as if moved to (row, col) of a sheet (conditional formatting's formula rules). */
@@ -1539,7 +1850,22 @@ export class Workbook {
     // read once, then moved as a tree for each cell
     const tree = this.parse(formula.startsWith('=') ? formula : '=' + formula);
     try {
-      return tree instanceof CellError ? tree : evaluate(shiftTree(tree, row - home.row, col - home.col), this.hostFor(s));
+      const host = this.hostFor(s);
+      host.home = { row, col };
+      return tree instanceof CellError ? tree : evaluate(shiftTree(tree, row - home.row, col - home.col), host);
+    } catch (e) {
+      return ERR.value(`This formula could not be worked out (${(e as Error).message})`);
+    }
+  }
+
+  /** A formula worked out in a cell of a sheet with arrays and blocks kept whole (the Function Arguments and Name Manager previews). */
+  formulaArg(s: Sheet, formula: string, row: number, col: number): Arg {
+    const tree = this.parse(formula.startsWith('=') ? formula : '=' + formula);
+    if (tree instanceof CellError) return tree;
+    try {
+      const host = this.hostFor(s);
+      host.home = { row, col };
+      return evaluateArg(tree, host);
     } catch (e) {
       return ERR.value(`This formula could not be worked out (${(e as Error).message})`);
     }
@@ -1553,19 +1879,101 @@ export class Workbook {
     };
   }
 
-  private evaluateNode(n: { s: Sheet; key: number; text: string }): void {
+  /** Set when working out a formula moved where its array spills. */
+  private spillsMoved = false;
+
+  private evaluateNode(n: FormulaNode): void {
     const tree = this.parse(n.text);
+    const s = n.s;
+    const host = this.hostFor(s);
+    host.home = { row: rowOf(n.key), col: colOf(n.key) };
     let v: Value | CellError;
+    const had = spillState(s, n.key);
+    if (had) this.unspill(s, n.key);
     try {
-      v = tree instanceof CellError ? tree : evaluate(tree, this.hostFor(n.s));
+      if (tree instanceof CellError) v = tree;
+      else if (n.def) v = evaluate(tree, host);
+      else {
+        const a = evaluateArg(tree, host);
+        v = isMulti(a) ? this.spill(s, n.key, a) : tidyValue(isBlock(a) ? rowsOf(a)[0][0] : a);
+      }
     } catch (e) {
       // one formula that fails outright shows an error in its cell rather than stopping every other
       v = ERR.value(`This formula could not be worked out (${(e as Error).message})`);
     }
-    n.s.values.set(n.key, v === null ? 0 : v);
+    if (spillState(s, n.key) !== had) this.spillsMoved = true;
+    s.values.set(n.key, v === null ? 0 : v);
+  }
+
+  /** Take an array's values out of the cells it spilled into. */
+  private unspill(s: Sheet, key: number): void {
+    const R = s.spills.get(key);
+    if (R) {
+      for (let r = R.r1; r <= R.r2; r++) for (let c = R.c1; c <= R.c2; c++) {
+        const k = keyOf(r, c);
+        if (k === key || s.spillOwner.get(k) !== key) continue;
+        s.spillOwner.delete(k);
+        s.values.delete(k);
+      }
+    }
+    s.spills.delete(key);
+    s.spillWanted.delete(key);
+  }
+
+  /**
+   * Spill an array from a formula's cell into the cells below and to the right, as Excel does:
+   * the formula's cell shows the first value. When anything is in the way (a typed value, another
+   * formula, a merged block, another array) or the array runs off the sheet, the cell shows #SPILL!.
+   */
+  private spill(s: Sheet, key: number, a: Arg): Value {
+    const rows = rowsOf(a);
+    const h = rows.length, w = rows[0]?.length ?? 0;
+    const r0 = rowOf(key), c0 = colOf(key);
+    const R: Range = { r1: r0, c1: c0, r2: Math.min(r0 + h - 1, MAX_ROWS - 1), c2: Math.min(c0 + w - 1, MAX_COLS - 1) };
+    if (r0 + h > MAX_ROWS || c0 + w > MAX_COLS) {
+      s.spillWanted.set(key, R);
+      return ERR.spill('The array runs off the edge of the sheet');
+    }
+    const inTheWay = (k: number): boolean => {
+      if (k === key) return false;
+      const c = s.cells.get(k);
+      return !!(c?.input || c?.structure) || s.formulas.has(k) || s.spillOwner.has(k);
+    };
+    let blocked = s.merges.some((m) => rangesOverlap(m, R));
+    if (!blocked) {
+      if (h * w > s.cells.size + s.spillOwner.size + s.formulas.size) {
+        for (const k of [...s.cells.keys(), ...s.formulas.keys(), ...s.spillOwner.keys()]) if (inRange(R, rowOf(k), colOf(k)) && inTheWay(k)) { blocked = true; break; }
+      } else {
+        for (let r = R.r1; r <= R.r2 && !blocked; r++) for (let c = R.c1; c <= R.c2; c++) if (inTheWay(keyOf(r, c))) { blocked = true; break; }
+      }
+    }
+    if (blocked) {
+      s.spillWanted.set(key, R);
+      return ERR.spill(`The array needs ${rangeName(R)} (${h} × ${w}), and something is in the way`);
+    }
+    // empty cells come out as 0, as Excel spills them
+    const cell = (v: Value): Value => { const t = tidyValue(v); return t === null ? 0 : t; };
+    for (let i = 0; i < h; i++) for (let j = 0; j < w; j++) {
+      if (!i && !j) continue;
+      const k = keyOf(r0 + i, c0 + j);
+      s.values.set(k, cell(rows[i][j]));
+      s.spillOwner.set(k, key);
+    }
+    s.spills.set(key, R);
+    s.lastRow = Math.max(s.lastRow, R.r2);
+    s.lastCol = Math.max(s.lastCol, R.c2);
+    return cell(rows[0][0]);
+  }
+
+  /** Does a formula use a defined name whose formula is worked out again after every change (TODAY, INDIRECT…)? */
+  private usesVolatileName(text: string): boolean {
+    for (const n of this.names) if (VOLATILE.test(n.formula) && new RegExp(`\\b${n.name.replace(/\./g, '\\.')}\\b`, 'i').test(text)) return true;
+    return false;
   }
 
   private hosts = new WeakMap<Sheet, EvalHost>();
+  /** Names being worked out (a name that uses itself is an error, not a hang). */
+  private namesBusy = new Set<DefinedName>();
   /** Which molecule each cell of a block holds, kept while the sheets are worked out (DUPLICATE asks once per row). */
   private identityCache = new Map<string, (string | CellError | null)[][]>();
 
@@ -1588,6 +1996,29 @@ export class Workbook {
         return out.length ? out : [[null]];
       },
       hasSheet: (name) => !!this.sheetNamed(name),
+      name: (nm) => {
+        const d = resolveName(this.liveNames(), nm, home);
+        if (!d) return undefined;
+        if (this.namesBusy.has(d)) return ERR.ref(`The name ${d.name} refers to itself`);
+        const tree = this.parse(d.formula.startsWith('=') ? d.formula : '=' + d.formula);
+        if (tree instanceof CellError) return tree;
+        this.namesBusy.add(d);
+        try {
+          return evaluateArg(tree, h!);
+        } finally {
+          this.namesBusy.delete(d);
+        }
+      },
+      nameRef: (nm) => {
+        const d = resolveName(this.liveNames(), nm, home);
+        const tree = d ? this.parse(d.formula.startsWith('=') ? d.formula : '=' + d.formula) : null;
+        return tree && !(tree instanceof CellError) && tree.t === 'ref' ? tree.v : undefined;
+      },
+      spill: (sheet, row, col) => {
+        const s = sheetOf(sheet);
+        if (!s) return ERR.ref();
+        return s.spills.get(keyOf(row, col)) ?? ERR.ref(`${cellName(row, col)} has no array spilling from it`);
+      },
       molecule: (src) => {
         if (!this.chem) return ERR.busy();
         if ('smiles' in src) return src.smiles.trim() ? this.chem.smiles(src.smiles.trim()) : null;
