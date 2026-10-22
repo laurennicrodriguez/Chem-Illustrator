@@ -60,6 +60,8 @@ export interface Cell {
   /** A structure drawn in the cell. */
   structure?: Structure;
   style?: CellStyle;
+  /** Where the cell links to (Insert > Link): a web page, a DOI, a file or a place (#Sheet1!A1); see links.ts. */
+  link?: string;
 }
 
 /** A property column: every row from `firstRow` down to the end of the table works out this formula. */
@@ -132,7 +134,7 @@ export function makeStructure(contents: Contents): Structure {
 }
 
 /** A cell with nothing in it and no formatting. */
-const isBlankCell = (c: Cell | undefined): boolean => !c || (!c.input && !c.structure && !hasStyle(c.style));
+const isBlankCell = (c: Cell | undefined): boolean => !c || (!c.input && !c.structure && !c.link && !hasStyle(c.style));
 const hasStyle = (s: CellStyle | undefined): boolean => !!s && Object.values(s).some((v) => v !== undefined);
 
 const sameStyle = (a: CellStyle | undefined, b: CellStyle | undefined): boolean =>
@@ -142,7 +144,7 @@ const sameStyle = (a: CellStyle | undefined, b: CellStyle | undefined): boolean 
 function sameCell(a: Cell | undefined, b: Cell | undefined): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  return (a.input || undefined) === (b.input || undefined) && a.structure === b.structure && sameStyle(a.style, b.style);
+  return (a.input || undefined) === (b.input || undefined) && a.structure === b.structure && a.link === b.link && sameStyle(a.style, b.style);
 }
 
 /** Two styles merged, the second's settings winning. */
@@ -422,14 +424,20 @@ export class Sheet {
     const text = input.startsWith('=') ? normalizeFormula(input) : input;
     const typed = readTyped(text);
     if (typed.format && !this.styleAt(row, col)?.numFmt) style = patchStyleWith(style, { numFmt: typed.format });
-    this.setCell(row, col, { input: text || undefined, style });
+    this.setCell(row, col, { input: text || undefined, style, link: old?.link });
+  }
+
+  /** Link a cell somewhere (undefined takes its link off); its text and formatting stay. */
+  setLink(row: number, col: number, link: string | undefined): void {
+    const old = this.cell(row, col);
+    this.setCell(row, col, { ...old, style: old ? old.style : this.colStyles.get(col), link });
   }
 
   /** Put a drawing in a cell (null takes it out). */
   setStructure(row: number, col: number, contents: Contents | null): void {
     const old = this.cell(row, col);
     const empty = !contents || !contents.atoms.length && !contents.captions.length && !contents.arrows.length && !contents.shapes.length;
-    this.setCell(row, col, { style: old ? old.style : this.colStyles.get(col), structure: empty ? undefined : makeStructure(contents!) });
+    this.setCell(row, col, { style: old ? old.style : this.colStyles.get(col), structure: empty ? undefined : makeStructure(contents!), link: old?.link });
   }
 
   /** Change some formatting of every cell in a range (whole columns change the column's formatting too). */
@@ -567,7 +575,7 @@ export class Sheet {
       const c = this.cells.get(k)!;
       if (what === 'all') this.setCell(rowOf(k), colOf(k), undefined);
       else if (what === 'contents') this.setCell(rowOf(k), colOf(k), { style: c.style });
-      else this.setCell(rowOf(k), colOf(k), { input: c.input, structure: c.structure });
+      else this.setCell(rowOf(k), colOf(k), { input: c.input, structure: c.structure, link: c.link });
     }
     // clearing a property column's header and cells together takes the property column away
     if (what !== 'formats') {
@@ -590,7 +598,7 @@ export class Sheet {
         if (what === 'values' && input?.startsWith('=') && block.shown?.[i]?.[j] !== undefined) input = block.shown[i][j];
         else if (input?.startsWith('=') && block.origin) input = shiftFormula(input, row - (block.origin.row + i), col - (block.origin.col + j));
         const style = what === 'values' ? old?.style : src?.style;
-        this.setCell(row, col, { input, structure: src?.structure, style });
+        this.setCell(row, col, { input, structure: src?.structure, style, link: what === 'values' ? old?.link : src?.link });
         const note = block.notes?.[i]?.[j];
         if (what === 'all' && note) this.setNote(row, col, copyNote(note));
       }
@@ -627,7 +635,7 @@ export class Sheet {
         const c = this.cell(row, col);
         const input = this.effectiveInput(row, col);
         const style = this.styleAt(row, col);
-        line.push(input || c?.structure || style ? { input, structure: c?.structure, style } : undefined);
+        line.push(input || c?.structure || style || c?.link ? { input, structure: c?.structure, style, ...(c?.link ? { link: c.link } : {}) } : undefined);
         if (input?.startsWith('=')) { formulas = true; seen.push(valueInput(this.value(row, col))); } else seen.push(undefined);
       }
       cells.push(line);
@@ -689,7 +697,7 @@ export class Sheet {
           input = textStep !== null ? countOn(srcCells[0].input!, textStep * pos) : countOn(input, Math.floor(pos / srcLen));
         }
         const keepsDef = !s.cell?.input && this.defAt(r, c) && input === this.effectiveInput(r, c);
-        this.setCell(r, c, { input: keepsDef ? undefined : input, structure: s.cell?.structure, style: s.cell?.style });
+        this.setCell(r, c, { input: keepsDef ? undefined : input, structure: s.cell?.structure, style: s.cell?.style, link: s.cell?.link });
       }
     }
   }

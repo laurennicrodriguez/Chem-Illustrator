@@ -8,6 +8,8 @@ import { isTauri } from '@tauri-apps/api/core';
 import type { Deck } from '../deck/deck';
 import { Player } from '../deck/playback';
 import { onImageReady } from '../render/images';
+import { followLink } from './links-ui';
+import { SHOW_JUMPS, slideOfLink } from '../links';
 
 export class Presenter {
   private root: HTMLDivElement | null = null;
@@ -48,7 +50,9 @@ export class Presenter {
     const player = new Player(canvas, deck);
     player.onPastEnd = () => { this.blank = 'end'; this.paint(); };
     this.player = player;
-    root.addEventListener('click', () => this.next());
+    // a click on a link follows it, as in PowerPoint's slide show; anywhere else goes on
+    root.addEventListener('click', (e) => { if (!this.clickLink(e)) this.next(); });
+    root.addEventListener('pointermove', (e) => { if (this.canvas) this.canvas.style.cursor = this.linkUnder(e) ? 'pointer' : ''; });
     root.addEventListener('contextmenu', (e) => { e.preventDefault(); this.prev(); });
     root.addEventListener('wheel', (e) => { if (e.deltaY > 0) this.next(); else if (e.deltaY < 0) this.prev(); }, { passive: true });
     root.addEventListener('pointermove', () => this.showCursor());
@@ -104,6 +108,35 @@ export class Presenter {
     this.root.classList.remove('no-cursor');
     clearTimeout(this.hideCursorTimer);
     this.hideCursorTimer = window.setTimeout(() => this.root?.classList.add('no-cursor'), 2500);
+  }
+
+  private linkUnder(e: MouseEvent): string | null {
+    if (!this.canvas || this.blank) return null;
+    const r = this.canvas.getBoundingClientRect();
+    return this.player?.linkAt(e.clientX - r.left, e.clientY - r.top) ?? null;
+  }
+
+  /** Follow the link clicked on, if any: a slide of this deck, or anything else outside the show. */
+  private clickLink(e: MouseEvent): boolean {
+    const link = this.linkUnder(e);
+    if (!link || !this.deck) return false;
+    const deck = this.deck;
+    const id = slideOfLink(link);
+    if (id !== null) {
+      const i = deck.slides.findIndex((s) => s.id === id);
+      if (i >= 0) this.go(i);
+      return true;
+    }
+    if (link in SHOW_JUMPS) {
+      const cur = this.player?.i ?? 0;
+      if (link === '#next') this.go(Math.min(deck.slides.length - 1, cur + 1));
+      else if (link === '#prev') this.go(Math.max(0, cur - 1));
+      else if (link === '#first') this.go(deck.firstShown());
+      else this.go(Math.max(0, deck.shownBefore(deck.slides.length)));
+      return true;
+    }
+    void followLink(link);
+    return true;
   }
 
   private next(): void {

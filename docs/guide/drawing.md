@@ -149,6 +149,10 @@ As you type, common chemistry is tidied for you: CH2Cl2 gets its subscripts, `0 
 
 You can paste formatted text from Word into a text box; bold, italic, subscripts, colours and lists come across.
 
+### Links in text
+
+While typing a caption or text box, **Ctrl+K** (or the link button on the text bar) links the selected words to a web page, a DOI, a file or an e-mail address. With the text selected but not being typed, **Insert ▸ Link…** or right-click ▸ **Link…** links the whole caption. **Ctrl+click** a link to follow it. Right-click a link for **Edit Link…**, **Open Link**, **Copy Link** and **Remove Link**. ChemDraw shows linked text as plain text; open the file here again and the links are back.
+
 ### Linking text to a structure
 
 Select a caption and a structure and choose **Format ▸ Link Text to Structure** (also on the right-click menu). The text then moves, turns and copies with its structure. With only text selected, it links to the nearest structure. While either one is selected, a dotted grey line shows the link. **Format ▸ Unlink Text** lets it go again. **Edit ▸ Settings** chooses where linked text goes: where it already is, or below, above, left or right of the structure.

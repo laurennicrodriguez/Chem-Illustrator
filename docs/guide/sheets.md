@@ -181,6 +181,13 @@ Each new tile asks which table or block of cells to read. For a gallery, the str
 - **Settings:** click a tile for its settings in the right-hand panel; click an empty spot, or **Dashboard Settings**, for the dashboard's columns, row height, gap and background.
 - **Slicers:** click more buttons to pick several, and click a picked one again to drop it. Several slicers apply together. The ✕ on a slicer, or **Clear Filters**, shows everything again.
 
+## Links
+
+- **Insert ▸ Link…** (Ctrl+K, also on the **Insert** tab) links the selected cells to a web page or DOI, a file, an e-mail address, or a cell in this workbook (pick the sheet and type the cell). The cell's text turns blue and underlined and keeps its value.
+- **Ctrl+click** a linked cell to follow it; pointing at it shows where it goes. Right-click for **Edit Link…**, **Open Link**, **Copy Link** and **Remove Link**.
+- Excel's `=HYPERLINK("https://…", "shown text")` works too.
+- Excel files keep cell links as Excel's own, both ways.
+
 ## Saving and sharing
 
 - **Save** (Ctrl+S) writes an Excel workbook (.xlsx). In Excel, structures are pictures with their SMILES in the cell, properties are plain numbers, and charts, trendlines, conditional formatting, tables, notes, comments and data validation are Excel's own. Stick spectra show as sticks in Excel too.

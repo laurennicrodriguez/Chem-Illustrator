@@ -4,10 +4,13 @@
 
 import type { TextRun } from './model';
 
+/** The colour Office gives links (kept here too, as links.ts builds on these functions). */
+const LINK_COLOUR = '#0563c1';
+
 export type RunStyle = Omit<TextRun, 'text'>;
 export type Toggle = 'bold' | 'italic' | 'underline' | 'sub' | 'sup' | 'formula';
 
-const KEYS = ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'size', 'font', 'color', 'highlight', 'obj', 'strike', 'rev', 'cmt'] as const;
+const KEYS = ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'size', 'font', 'color', 'highlight', 'obj', 'strike', 'rev', 'cmt', 'link'] as const;
 /** Subscript, superscript and formula style change where characters sit, so only one applies. */
 const POSITION: Toggle[] = ['sub', 'sup', 'formula'];
 
@@ -99,6 +102,11 @@ export function typingStyle(runs: TextRun[], start: number, end: number, fallbac
     const after = start < text.length ? charStyle(runs, start)?.cmt : undefined;
     const keep = s.cmt.split(',').filter((id) => after?.split(',').includes(id));
     s = { ...s, cmt: keep.length ? keep.join(',') : undefined };
+  }
+  // typing just after a link isn't part of it (inside it, it is), as in Word
+  if (s.link !== undefined && end === start && (start >= text.length || charStyle(runs, start)?.link !== s.link)) {
+    const { link: _l, ...rest } = s;
+    s = rest.color?.toLowerCase() === LINK_COLOUR ? { ...rest, color: undefined, underline: undefined } : rest;
   }
   if (s.obj === undefined && s.rev === undefined) return cleanStyle(s);
   const { obj: _, rev: _r, ...rest } = s;

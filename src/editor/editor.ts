@@ -4,6 +4,9 @@
 
 import { Doc, Atom, Bond, BondDisplay, PARTIAL, Arrow, Shape, Caption, isMetalAtom, applyBase, captionBase, stripBase, type StepRoles, type Justify, type HighlightStyle, type Entity } from '../model';
 import { CaptionEditor } from '../ui/caption-editor';
+import { followLink, linkTip } from '../ui/links-ui';
+import { linkAtPoint } from '../links';
+import { typingPrefs } from '../text/typing';
 import { geoDef, geoShapeStyle, moveSteps, traceSteps } from '../design/geo';
 import { TEMPLATES, Template, Placement, templateById, templatePoints, placePoint, fusePlacements, atomPlacements, freePlacement, crowdingOf, placeTemplate, snap15 } from '../chem/templates';
 import { fusions3d } from '../chem/fuse3d';
@@ -456,6 +459,24 @@ export class Editor {
   /** The last hit test, as a pointer move asks twice for the same place (the hover and the group tooltip). */
   private lastHit: { x: number; y: number; doc: Doc; version: number; scale: number; locked: boolean; hit: Hit } | null = null;
 
+  /** The link under a point of a caption (not one being typed), if any. */
+  captionLinkAt(p: Vec): string | null {
+    for (const c of this.doc.captions.values()) {
+      if (!c.runs.some((r) => r.link)) continue;
+      const q = c.rot ? turnAbout(p, c, -c.rot) : p;
+      const span = linkAtPoint(this.r.captionLayout(c), c.runs, q.x - c.x, q.y - c.y);
+      if (span) return span.link;
+    }
+    return null;
+  }
+
+  /** Where the link under the pointer goes, as the drawing's tooltip. */
+  private linkTitle(p: Vec): void {
+    const link = this.captionEd?.isOpen ? this.captionEd.linkAt(p) : this.captionLinkAt(p);
+    const tip = link ? linkTip(link, !!this.captionEd?.isOpen || typingPrefs.linkCtrlClick) : '';
+    if (this.r.overlay.title !== tip) this.r.overlay.title = tip;
+  }
+
   hitTest(p: Vec): Hit {
     const lh = this.lastHit, scale = this.r.view.scale;
     if (lh && lh.x === p.x && lh.y === p.y && lh.doc === this.doc && lh.version === this.doc.version && lh.scale === scale && lh.locked === this.structuresLocked) return lh.hit;
@@ -600,11 +621,24 @@ export class Editor {
     }
     if (cap && e.button === 0 && cap.hit(this.docPoint(e))) {
       const p = this.docPoint(e);
+      // Ctrl+click on a link in the text being typed follows it, as in Word
+      if (cap.pointerDown(p, e.shiftKey, e.ctrlKey || e.metaKey)) return;
       const rect = this.r.overlay.getBoundingClientRect();
       this.r.overlay.setPointerCapture(e.pointerId);
       this.drag = { start: p, startScreen: { x: e.clientX - rect.left, y: e.clientY - rect.top }, hit: null, button: 0, moved: false, shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey, mode: 'text', last: p };
-      cap.pointerDown(p, e.shiftKey);
       return;
+    }
+    // a link in a caption: Ctrl+click follows it (or a plain click with the Select tool, when
+    // Edit > Typing and Spelling says so)
+    if (e.button === 0 && !e.shiftKey && !e.altKey) {
+      const ctrl = e.ctrlKey || e.metaKey;
+      const link = ctrl || (!typingPrefs.linkCtrlClick && this.tool.kind === 'select') ? this.captionLinkAt(this.docPoint(e)) : null;
+      if (link) {
+        e.preventDefault();
+        this.closeCaption();
+        void followLink(link);
+        return;
+      }
     }
     // a click on a "+" box above or below a reaction arrow starts the text there
     // (Alt+click goes to what is under the box instead)
@@ -654,6 +688,7 @@ export class Editor {
       this.captionEd?.pointerMove(p);
       return;
     }
+    if (!d) this.linkTitle(p);
     if (!d && this.captionEd?.hit(p)) {
       this.r.overlay.style.cursor = this.captionEd.cursor(p);
       return;
@@ -3673,6 +3708,8 @@ export class Editor {
   }
 
   private captionEd: CaptionEditor | null = null;
+  /** The text being typed, if any. */
+  get typingCaption(): CaptionEditor | null { return this.captionEd?.isOpen ? this.captionEd : null; }
 
   /** Finish typing in a caption, if one is open. */
   closeCaption(): void {

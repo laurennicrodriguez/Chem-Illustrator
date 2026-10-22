@@ -213,6 +213,8 @@ export interface TextRun {
   rev?: string;
   /** Documents: the comments this text is under, by id, joined by commas ("2,5"; see document/comments). */
   cmt?: string;
+  /** Where the text links to: a web page, a DOI, an e-mail address, a file or a place in the file (see links.ts). */
+  link?: string;
 }
 
 /**
@@ -303,6 +305,8 @@ export interface ParaStyle {
   section?: SectionBreak;
   /** Documents: this paragraph's lines get no line numbers (Word's Suppress Line Numbers). */
   noLineNumbers?: boolean;
+  /** Documents: bookmarks at this paragraph (Insert > Bookmark), by name, for links to point at. */
+  marks?: string[];
 }
 
 export interface Caption {

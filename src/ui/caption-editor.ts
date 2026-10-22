@@ -15,6 +15,8 @@ import { htmlToRich, richToHtml, richToPlain } from '../text/html';
 import { afterTyping, finishWord, setTypingPrefs, typingPrefs } from '../text/typing';
 import { findIssues, type Issue } from '../text/chemtext';
 import { loadSpeller, type Speller } from '../text/spelling';
+import { linkAtPoint } from '../links';
+import { askLink, followLink, linkTip, type LinkPlace } from './links-ui';
 
 /** What the editor needs from the drawing it sits on. */
 export interface EditorHost {
@@ -83,6 +85,10 @@ export class CaptionEditor {
   private dictSeen: string[] | null = null;
   private checked: { t: RichText; spell: [number, number][]; issues: Issue[] } | null = null;
   private menu: HTMLDivElement | null = null;
+  /** The link window is open: the text stays open while it is. */
+  private asking = false;
+  /** Places in the file a link can go to (slides in a deck), set up by the app. */
+  static linkPlaces: (() => { places: LinkPlace[]; title?: string } | null) | null = null;
   private readonly closeMenuOutside = (e: Event) => { if (this.menu && !this.menu.contains(e.target as Node)) this.closeMenu(); };
 
   constructor(
@@ -138,9 +144,9 @@ export class CaptionEditor {
     for (const el of [ta, this.bar] as HTMLElement[]) {
       el.addEventListener('focusout', (e) => {
         const to = e.relatedTarget as Node | null;
-        if (to && (to === ta || this.bar.contains(to))) return;
+        if (this.asking || (to && (to === ta || this.bar.contains(to)))) return;
         // a click on the bar keeps the focus; anything else outside ends the editing
-        setTimeout(() => { if (!this.closed && d.activeElement !== ta && !this.bar.contains(d.activeElement)) this.finish(); }, 0);
+        setTimeout(() => { if (!this.closed && !this.asking && d.activeElement !== ta && !this.bar.contains(d.activeElement)) this.finish(); }, 0);
       });
     }
     this.blink = setInterval(() => { this.caretOn = !this.caretOn; this.h.redraw(); }, 530);
@@ -184,13 +190,32 @@ export class CaptionEditor {
     return p.x >= b.x1 - pad && p.x <= b.x2 + pad && p.y >= b.y1 - pad && p.y <= b.y2 + pad ? 'text' : null;
   }
 
-  /** A press on the text (put the caret there, or select a word or paragraph) or on the handle. */
-  pointerDown(p: Vec, shift: boolean): void {
+  /** The link under a point of the page, if any. */
+  linkAt(p: Vec): string | null {
+    p = this.local(p);
+    return linkAtPoint(this.ed.layout(), this.ed.t.runs, p.x - this.at.x, p.y - this.at.y)?.link ?? null;
+  }
+
+  /** What to show when the mouse rests on a point: where a link goes. */
+  tip(p: Vec): string {
+    const link = this.linkAt(p);
+    return link ? linkTip(link, true) : '';
+  }
+
+  /**
+   * A press on the text (put the caret there, or select a word or paragraph) or on the handle.
+   * Ctrl+click on a link follows it (true), as in Word.
+   */
+  pointerDown(p: Vec, shift: boolean, ctrl = false): boolean {
     const where = this.hit(p);
-    if (!where) return;
+    if (!where) return false;
+    if (ctrl && where === 'text') {
+      const link = this.linkAt(p);
+      if (link) { void followLink(link); return true; }
+    }
     p = this.local(p);
     this.ta.focus({ preventScroll: true });
-    if (where === 'wrap') { this.dragging = 'wrap'; this.wrapDragged = false; return; }
+    if (where === 'wrap') { this.dragging = 'wrap'; this.wrapDragged = false; return false; }
     this.dragging = 'text';
     const now = performance.now();
     const c = this.clicks;
@@ -202,6 +227,35 @@ export class CaptionEditor {
     if (c.n === 2) this.ed.selectWord(o);
     else if (c.n >= 3) this.ed.selectParagraph(o);
     else this.ed.setCaret(o, shift);
+    return false;
+  }
+
+  // ------------------------------------------------------------------ links
+
+  /** Insert > Link (Ctrl+K): link the selection, change the link the caret is in, or type a new one. */
+  async editLink(): Promise<void> {
+    if (this.closed || this.asking) return;
+    const ed = this.ed;
+    const here = ed.linkHere();
+    const range = here && ed.collapsed ? here : { start: ed.start, end: ed.end };
+    const shown = ed.text.slice(range.start, range.end);
+    const places = CaptionEditor.linkPlaces?.();
+    this.asking = true;
+    try {
+      const got = await askLink({ text: shown.includes('\n') ? null : shown, link: here?.link, places: places?.places, placeTitle: places?.title });
+      if (this.closed) return;
+      if (!got) return;
+      if ('remove' in got) ed.removeLink();
+      else ed.setLink(got.link, got.text);
+    } finally {
+      this.asking = false;
+      if (!this.closed) this.ta.focus({ preventScroll: true });
+    }
+  }
+
+  /** Copy where the link the caret is in goes. */
+  private copyLink(link: string): void {
+    void navigator.clipboard?.writeText(link).catch(() => {});
   }
 
   pointerMove(p: Vec): void {
@@ -311,7 +365,8 @@ export class CaptionEditor {
     const near = (a: number, b: number) => o >= a && o <= b;
     const word = c.spell.find(([a, b]) => near(a, b));
     const issue = c.issues.find((i) => near(i.start, i.end));
-    if (!word && !issue) return;
+    const link = this.linkAt(p) ?? (this.ed.collapsed ? null : this.ed.linkHere()?.link ?? null);
+    if (!word && !issue && !link) return;
     const d = this.h.host.ownerDocument;
     const menu = d.createElement('div');
     menu.className = 'text-menu';
@@ -341,6 +396,15 @@ export class CaptionEditor {
       menu.appendChild(d.createElement('hr'));
       item('Add to Dictionary', () => setTypingPrefs({ dictionary: [...typingPrefs.dictionary, text] }), 'Accept this word from now on (Edit > Typing and Spelling lists your words)');
       item('Ignore', () => { ignored.add(text.toLowerCase()); this.speller?.ignore(text); this.checked = null; this.h.redraw(); }, 'Accept this word until the program is closed');
+    }
+    if (link) {
+      if (word || issue) menu.appendChild(d.createElement('hr'));
+      // the caret goes into the link, so the commands below act on all of it
+      if (this.ed.collapsed || !this.ed.linkHere()) this.ed.setCaret(o);
+      item('Edit Link…', () => void this.editLink());
+      item('Open Link', () => void followLink(link));
+      item('Copy Link', () => this.copyLink(link));
+      item('Remove Link', () => this.ed.removeLink());
     }
     this.h.host.appendChild(menu);
     const host = this.h.host.getBoundingClientRect();
@@ -453,6 +517,7 @@ export class CaptionEditor {
     // styling keys come from the key map (Edit > Hotkeys), so they can be changed
     const chord = chordOf(e);
     const action = chord ? keymap.lookup('text', chord) : undefined;
+    if (action && parseAction(action).arg === 'link') return run(() => void this.editLink());
     if (action) return run(() => ed.toggle(parseAction(action).arg as rt.Toggle));
     const shift = e.shiftKey;
     const word = isMac ? e.altKey : e.ctrlKey;
@@ -652,6 +717,8 @@ export class CaptionEditor {
       'Line and paragraph spacing, text box width', () => { this.spacing.hidden = !this.spacing.hidden; this.symbols.hidden = true; this.updateBar(); this.place(); });
 
     g = group();
+    button(g, 'link', svg('<path d="M6.6 9.4a.8.8 0 0 1 0-1.1l1.7-1.7a.8.8 0 1 1 1.1 1.1L7.7 9.4a.8.8 0 0 1-1.1 0z"/><path d="M8.9 3.2a3 3 0 0 1 4.2 4.2l-1.6 1.6a.8.8 0 1 1-1.1-1.1L12 6.3a1.4 1.4 0 0 0-2-2L8.4 5.9a.8.8 0 1 1-1.1-1.1zM4 9.7l1.6-1.6a.8.8 0 1 1 1.1 1.1L5.1 10.8a1.4 1.4 0 0 0 2 2l1.6-1.6a.8.8 0 1 1 1.1 1.1l-1.6 1.6a3 3 0 0 1-4.2-4.2z"/>'),
+      'Link to a web page, DOI, file or slide (Ctrl+K)', () => void this.editLink());
     button(g, 'symbols', 'αΩ', 'Greek letters and symbols', () => { this.symbols.hidden = !this.symbols.hidden; this.spacing.hidden = true; this.updateBar(); this.place(); });
     for (const row of SYMBOLS) {
       const r = d.createElement('div');
@@ -695,6 +762,7 @@ export class CaptionEditor {
     const ed = this.ed;
     const s = ed.currentStyle();
     for (const k of ['bold', 'italic', 'underline', 'sub', 'sup', 'formula'] as const) this.press(k, !!s[k]);
+    this.press('link', !!ed.linkHere());
     const align = ed.currentAlign();
     for (const j of ['left', 'center', 'right', 'justify'] as const) this.press(j, align === j);
     const p = ed.currentPara();

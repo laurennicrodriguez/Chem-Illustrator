@@ -374,9 +374,9 @@ describe('opening files made in Excel', () => {
   });
 
   it('says what it could not keep', async () => {
-    const sheet = '<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData><conditionalFormatting sqref="A1"><cfRule type="timePeriod" timePeriod="today" priority="1"/></conditionalFormatting><hyperlinks/>';
+    const sheet = '<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData><conditionalFormatting sqref="A1"><cfRule type="timePeriod" timePeriod="today" priority="1"/></conditionalFormatting>';
     const { warnings } = await readXlsx(excelFile(sheet));
-    expect(warnings).toEqual(['Not shown here, and left out if you save over this file: some conditional formatting rules, links.']);
+    expect(warnings).toEqual(['Not shown here, and left out if you save over this file: some conditional formatting rules.']);
   });
 
   it('refuses files that are not workbooks', async () => {
@@ -413,5 +413,38 @@ describe('a file to check in other programs', () => {
       return w;
     })();
     writeFileSync(out, await writeXlsx(wb, pictures));
+  });
+});
+
+describe('links in Excel files', () => {
+  it('saves cell links as Excel\'s own and reads them back: web pages, files and places in the workbook', async () => {
+    const wb = new Workbook(['Data', 'My runs']);
+    const s = wb.sheets[0];
+    wb.edit('Type', () => {
+      s.setInput(0, 0, 'paper');
+      s.setLink(0, 0, 'https://doi.org/10.1021/ja00001');
+      s.setInput(1, 0, 'spectrum');
+      s.setLink(1, 0, 'spectra/run 4.mnova');
+      s.setInput(2, 0, 'runs');
+      s.setLink(2, 0, "#'My runs'!B4");
+    });
+    const bytes = await writeXlsx(wb, pictures);
+    const sheet1 = part(bytes, 'xl/worksheets/sheet1.xml');
+    expect(sheet1).toMatch(/<hyperlinks><hyperlink ref="A1" r:id="rId\d+"\/><hyperlink ref="A2" r:id="rId\d+"\/><hyperlink ref="A3" location="'My runs'!B4" display="runs"\/><\/hyperlinks><pageMargins/);
+    const rels = part(bytes, 'xl/worksheets/_rels/sheet1.xml.rels');
+    expect(rels).toContain('Target="https://doi.org/10.1021/ja00001" TargetMode="External"');
+    expect(rels).toContain('Target="spectra/run%204.mnova" TargetMode="External"');
+
+    const { book, warnings } = await readXlsx(bytes);
+    expect(warnings.join(' ')).not.toMatch(/link/i);
+    const r = book.sheets[0];
+    expect([0, 1, 2].map((i) => r.cell(i, 0)?.link)).toEqual(['https://doi.org/10.1021/ja00001', 'spectra/run 4.mnova', "#'My runs'!B4"]);
+    expect(r.value(2, 0)).toBe('runs');
+  });
+
+  it('reads a link Excel put on a range of cells onto each of them', async () => {
+    const bytes = excelFile('<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>a</t></is></c><c r="B1" t="inlineStr"><is><t>b</t></is></c></row></sheetData><hyperlinks><hyperlink ref="A1:B1" location="Data!C9"/></hyperlinks>');
+    const { book } = await readXlsx(bytes);
+    expect([book.sheets[0].cell(0, 0)?.link, book.sheets[0].cell(0, 1)?.link]).toEqual(['#Data!C9', '#Data!C9']);
   });
 });

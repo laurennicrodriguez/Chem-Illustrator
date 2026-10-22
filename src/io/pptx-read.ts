@@ -16,6 +16,7 @@ import { layoutTable, NOTE_SCALE } from '../table';
 import { linesFromBorders, type Borders } from './cdxml-table';
 import { turnAbout, normDegrees, type Vec, type Rect } from '../geom';
 import { PackageReader, NS, REL, kids, kid, rAttr, fromEmu } from './ooxml';
+import { linkFromTarget } from '../links';
 import { readCdxml } from './cdxml';
 import { drawingInEmf } from '../render/emf';
 import { dataUrl, imageSize } from '../render/images';
@@ -211,6 +212,10 @@ class Reader {
   /** The layout of the slide being read, when the file says (files saved here). */
   private curLayout: LayoutId | undefined;
   private design = false;
+  /** The slides' parts, the one being read, and the ids slides had here (files saved here), for links. */
+  private slidePaths: string[] = [];
+  private curPath = '';
+  private slideIds = new Map<number, number>();
   private masterOut!: Master;
   private size: SlideSize = { w: 960, h: 540 };
   /** The slide's tables, placed once their titles and footnotes (separate text boxes) are known. */
@@ -272,7 +277,9 @@ class Reader {
     this.master = master;
     this.readTheme();
     this.masterOut = this.readMaster(slidePaths);
+    this.slidePaths = slidePaths;
     const slides = slidePaths.map((p) => this.slide(p));
+    placeSlideLinks(slides, this.slideIds);
     return { size: this.size, master: this.masterOut, slides, warnings: [...this.warnings], design: this.design };
   }
 
@@ -410,6 +417,8 @@ class Reader {
     const layoutPath = this.r.relOfType(path, REL.slideLayout);
     const layout = this.part(layoutPath);
     const tags = this.tagsOf(path, kid(s.doc.documentElement, 'cSld'));
+    this.curPath = path;
+    if (tags[TAG.slideId]) this.slideIds.set(Number(tags[TAG.slideId]), this.slidePaths.indexOf(path));
     const doc = new Doc();
     doc.style = { ...this.masterOut.drawing };
     // files saved here say which layout each slide has; a title slide can have its own colours
@@ -1082,6 +1091,29 @@ class Reader {
   }
 
   /** Text saved here, when PowerPoint has not changed it, moved to where its box now is. */
+  /**
+   * A PowerPoint link as ours: a web page, e-mail or file; a jump to a slide (as #slide-n=its
+   * place, made into the slide's id once the deck has its slides); first/last/next/previous.
+   * Links that run programs or macros are left out.
+   */
+  private hlinkOf(el: Element | null): string | null {
+    if (!el) return null;
+    const action = el.getAttribute('action') ?? '';
+    const jump = /^ppaction:\/\/hlinkshowjump\?jump=(\w+)/.exec(action)?.[1];
+    if (jump) return ({ firstslide: '#first', lastslide: '#last', nextslide: '#next', previousslide: '#prev' } as Record<string, string>)[jump] ?? null;
+    const rel = this.r.rels(this.curPath).get(rAttr(el, 'id') ?? '');
+    if (!rel) return null;
+    if (action.startsWith('ppaction://hlinksldjump')) {
+      const i = this.slidePaths.indexOf(rel.target);
+      return i < 0 ? null : `#slide-n=${i}`;
+    }
+    if (action && !action.startsWith('ppaction://hlinkfile')) {
+      this.warnings.add('Links that run programs or macros were left out.');
+      return null;
+    }
+    return rel.external ? linkFromTarget(rel.target) : null;
+  }
+
   private ourText(tag: string | undefined, sp: Element, box: Rect & { rot?: number }): Omit<Caption, 'id'> | null {
     if (!tag) return null;
     let saved: { c: Caption; plain: string; at?: number[]; o?: number[] };
@@ -1271,6 +1303,8 @@ class Reader {
         const fillEl = inheritEl(rPr, chain, lvl, ['solidFill'], true);
         r.color = this.color(fillEl) ?? '#000000';
         r.font = this.font(inheritEl(rPr, chain, lvl, ['latin'], true)?.getAttribute('typeface') ?? null, title);
+        const link = this.hlinkOf(kid(rPr, 'hlinkClick'));
+        if (link) r.link = link;
         runs.push(r);
       }
     });
@@ -1328,6 +1362,21 @@ class Reader {
 const dropUndefined = (r: TextRun): Partial<TextRun> => Object.fromEntries(Object.entries(r).filter(([, v]) => v !== undefined));
 
 /** Join neighbouring runs formatted alike (a paragraph break joins the run before it). */
+/**
+ * Links to slides as their places (#slide-n=2): links PowerPoint made are read that way, and links
+ * kept in our own tags name the slide's id when it was saved (#slide=7), turned into its place here.
+ */
+function placeSlideLinks(slides: PptxSlide[], ids: Map<number, number>): void {
+  for (const s of slides) {
+    const json = JSON.stringify(s.contents);
+    if (!json.includes('"#slide=')) continue;
+    s.contents = JSON.parse(json.replace(/"#slide=(\d+)"/g, (all, id) => {
+      const i = ids.get(Number(id));
+      return i === undefined || i < 0 ? all : `"#slide-n=${i}"`;
+    }));
+  }
+}
+
 function merge(runs: TextRun[]): TextRun[] {
   const same = (a: TextRun, b: TextRun) => {
     const ka = Object.keys(a).filter((k) => k !== 'text'), kb = Object.keys(b).filter((k) => k !== 'text');

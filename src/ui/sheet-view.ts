@@ -19,6 +19,9 @@ import { drawChart, ChartHits, Box } from '../render/chart-draw';
 import { DashboardView } from './dashboard-view';
 import { newDashboard, Tile } from '../sheet/dashboard';
 import { Validation, passes, invalidCells } from '../sheet/validation';
+import { followLink, linkTip } from './links-ui';
+import { linkOfFormula } from '../links';
+import { typingPrefs } from '../text/typing';
 
 const HEADER_W = 44;
 const HEADER_H = 22;
@@ -1942,6 +1945,15 @@ export class SheetView {
     this.commitEdit();
     // typing that broke its cell's rule stays until its alert is answered
     if (this.editing) return;
+    // a cell's link: Ctrl+click follows it (or a plain click, if Edit > Typing and Spelling says so)
+    if (h.where === 'cell' && !e.shiftKey && !e.altKey) {
+      const link = this.linkOf(h.r, h.c);
+      if (link && (e.ctrlKey || e.metaKey || !typingPrefs.linkCtrlClick)) {
+        this.selectCell(h.r, h.c);
+        void followLink(link);
+        return;
+      }
+    }
     this.scroller.setPointerCapture(e.pointerId);
     if (h.where === 'corner') { this.select({ r1: 0, c1: 0, r2: MAX_ROWS - 1, c2: MAX_COLS - 1 }, this.sel.active, this.sel.active, false); return; }
     if (h.where === 'col') {
@@ -2338,8 +2350,16 @@ export class SheetView {
   }
 
   /** A tip for a cell: an error's reason, or that a value was typed over a calculated one. */
+  /** Where a cell links to: its own link, or the address in its HYPERLINK formula. */
+  linkOf(r: number, c: number): string | null {
+    const cell = this.sheet?.cell(r, c);
+    return cell?.link ?? linkOfFormula(cell?.input);
+  }
+
   private tipFor(r: number, c: number): string {
     const s = this.sheet!;
+    const link = this.linkOf(r, c);
+    if (link) return linkTip(link, typingPrefs.linkCtrlClick);
     const v = s.values.get(keyOf(r, c));
     if (isError(v)) {
       const f = s.formulas.get(keyOf(r, c));

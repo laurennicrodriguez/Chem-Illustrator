@@ -17,6 +17,7 @@ import { turnAbout, type Rect } from '../geom';
 import { layoutText, ASCENT, FONT_STACK, type Measure } from '../text/layout';
 import { fitParas, listMarkers, splitParagraphs } from '../text/paragraphs';
 import { formulaParts } from '../richtext';
+import { officeTarget, slideOfLink } from '../links';
 import { arialWidth } from '../text-metrics';
 import { arrowPoints, shapeBox, boxOf, shapeOrder, elbowRoute } from '../objects';
 import { geoDef, textArea, type GeoStep } from '../design/geo';
@@ -64,6 +65,8 @@ export const TAG = {
    * bond middles) was, and the structure picture's box tag, so it finds its highlight again.
    */
   highlight: 'CHEMILLUSTRATOR_HIGHLIGHT',
+  /** The slide's id here, so links kept in our own tags find their slide again. */
+  slideId: 'CHEMILLUSTRATOR_SLIDE_ID',
   /** A SmartArt-style diagram (a group of shapes): its text and look, kept on the group. */
   diagram: 'CHEMILLUSTRATOR_DIAGRAM',
   /** A chart: the chart and its data as made here. */
@@ -102,7 +105,8 @@ export interface PptxOptions {
 export interface DeckData {
   size: SlideSize;
   master: Master;
-  slides: { layout: LayoutId; doc: Doc; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean; hidden?: boolean }[];
+  /** `id` is the slide's id in the deck, for links to it (#slide=id). */
+  slides: { id?: number; layout: LayoutId; doc: Doc; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean; hidden?: boolean }[];
   /** A design (Design mode): marked so it opens in Design mode again. */
   design?: boolean;
 }
@@ -300,8 +304,12 @@ export const arialMeasure: Measure = (t, size, _family, style) => arialWidth(t, 
 
 const lang = 'lang="en-US"';
 
+/** A link as PowerPoint's own (a:hlinkClick), or '' when it can't be kept. */
+export type LinkXml = (link: string) => string;
+
 /** One run as PowerPoint runs (formula style turns into subscripts and superscripts). */
-function runXml(r: TextRun, explicit: { size: number; font: string } | null): string {
+function runXml(r: TextRun, explicit: { size: number; font: string } | null, hlink?: LinkXml): string {
+  const click = r.link && hlink ? hlink(r.link) : '';
   const parts = r.formula && !r.sub && !r.sup ? formulaParts(r.text) : [{ text: r.text, pos: r.sub ? 'sub' : r.sup ? 'sup' : 'base' }];
   return parts.map((p) => {
     const size = r.size ?? explicit?.size;
@@ -317,14 +325,14 @@ function runXml(r: TextRun, explicit: { size: number; font: string } | null): st
     const color = r.color ?? (explicit ? '#000000' : undefined);
     const fill = color ? `<a:solidFill><a:srgbClr val="${hex6(color)}"/></a:solidFill>` : '';
     const latin = font ? `<a:latin typeface="${xml(font)}"/><a:cs typeface="${xml(font)}"/>` : '';
-    return `<a:r><a:rPr ${attrs.join(' ')}>${fill}${latin}</a:rPr><a:t>${xml(p.text)}</a:t></a:r>`;
+    return `<a:r><a:rPr ${attrs.join(' ')}>${fill}${latin}${click}</a:rPr><a:t>${xml(p.text)}</a:t></a:r>`;
   }).join('');
 }
 
 const NUMBER_TYPES = ['arabicPeriod', 'alphaLcPeriod', 'romanLcPeriod'];
 
 /** A caption's paragraphs as PowerPoint paragraphs. */
-export function paragraphsXml(c: Caption, explicit: { size: number; font: string } | null, defaultSize: number, measure: Measure): string {
+export function paragraphsXml(c: Caption, explicit: { size: number; font: string } | null, defaultSize: number, measure: Measure, hlink?: LinkXml): string {
   const paras = splitParagraphs(c.runs);
   const styles = fitParas(c.paras, paras.length);
   const markers = listMarkers(styles);
@@ -360,7 +368,7 @@ export function paragraphsXml(c: Caption, explicit: { size: number; font: string
       attrs.push(`marL="${emu(indent)}"`, 'indent="0"');
       inner += '<a:buNone/>';
     }
-    const body = runs.map((r) => runXml(r, explicit)).join('');
+    const body = runs.map((r) => runXml(r, explicit, hlink)).join('');
     const end = `<a:endParaRPr ${lang}${explicit ? ` sz="${Math.round(em * 100)}"` : ''} dirty="0"/>`;
     return `<a:p><a:pPr ${attrs.join(' ')}>${inner}</a:pPr>${body}${end}</a:p>`;
   }).join('');
@@ -408,6 +416,8 @@ class Writer {
   private tags = 0;
   private tableKeys = 0;
   private measure: Measure;
+  /** The slide being written (links are related from it). */
+  private curPath = '';
 
   constructor(private deck: DeckData, private opts: PptxOptions) {
     this.measure = opts.measure ?? arialMeasure;
@@ -450,6 +460,24 @@ class Writer {
     this.pkg.add(path, `${HEAD}<p:tagLst ${XMLNS}>${list}</p:tagLst>`, CT.tags);
     return this.pkg.relate(from, REL.tags, fromPpt(from, path));
   }
+
+  /**
+   * A link as PowerPoint's: web pages, e-mail and files through a relationship, a slide as a
+   * jump to that slide's part, and first/last/next/previous as PowerPoint's show jumps.
+   */
+  private hlink: LinkXml = (link) => {
+    const from = this.curPath;
+    if (!from) return '';
+    const jump = { '#first': 'firstslide', '#last': 'lastslide', '#next': 'nextslide', '#prev': 'previousslide' }[link];
+    if (jump) return `<a:hlinkClick r:id="" action="ppaction://hlinkshowjump?jump=${jump}"/>`;
+    const id = slideOfLink(link);
+    if (id !== null) {
+      const i = this.deck.slides.findIndex((s) => s.id === id);
+      return i < 0 ? '' : `<a:hlinkClick r:id="${this.pkg.relate(from, REL.slide, `slide${i + 1}.xml`)}" action="ppaction://hlinksldjump"/>`;
+    }
+    if (link.startsWith('#')) return '';
+    return `<a:hlinkClick r:id="${this.pkg.relate(from, REL.hyperlink, officeTarget(link), true)}"/>`;
+  };
 
   async build(): Promise<Uint8Array> {
     const { pkg, deck } = this;
@@ -613,6 +641,7 @@ class Writer {
   private async slide(path: string, index: number): Promise<string> {
     const s = this.deck.slides[index];
     const doc = s.doc;
+    this.curPath = path;
     const parts = splitSlide(doc, this.measure);
     const out: string[] = [];
     let id = 2;
@@ -712,7 +741,7 @@ class Writer {
     const d = decorFrames(this.deck.size, m);
     if (showsNumber(m, s.layout)) out.push(footerShape(id++, 'Slide Number', '<p:ph type="sldNum" sz="quarter" idx="12"/>', d.number, m, String(index + 1), true));
     if (m.footer.trim()) out.push(footerShape(id++, 'Footer', '<p:ph type="ftr" sz="quarter" idx="11"/>', d.footer, m, m.footer, true));
-    const tags = this.addTags(path, { [TAG.layout]: s.layout });
+    const tags = this.addTags(path, { [TAG.layout]: s.layout, ...(s.id !== undefined ? { [TAG.slideId]: String(s.id) } : {}) });
     const bg = s.background ? await this.background(path, s.background) : '';
     return `${HEAD}<p:sld ${XMLNS}${s.hideGraphics ? ' showMasterSp="0"' : ''}${s.hidden ? ' show="0"' : ''}><p:cSld>${bg}<p:spTree>${GROUP}${out.join('')}</p:spTree><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:cSld>` +
       `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(s.transition)}${timingXml(s.anims ?? [], (a) => spids.get(`${a.target.kind} ${a.target.bond ? 'b' : ''}${a.target.id}`) ?? []) || videoTimingXml(videos)}</p:sld>`;
@@ -804,7 +833,7 @@ class Writer {
     const algn = justify === 'center' ? 'ctr' : justify === 'right' ? 'r' : justify === 'justify' ? 'just' : 'l';
     const hasText = !!s.text?.runs.some((r) => r.text);
     const body = hasText
-      ? paragraphsXml({ id: 0, x: 0, y: 0, runs: s.text!.runs, paras: s.text!.paras, justify }, { size: textSize, font: doc.style.captionFont || 'Arial' }, textSize, this.measure)
+      ? paragraphsXml({ id: 0, x: 0, y: 0, runs: s.text!.runs, paras: s.text!.paras, justify }, { size: textSize, font: doc.style.captionFont || 'Arial' }, textSize, this.measure, this.hlink)
       : `<a:p><a:pPr algn="${algn}"/><a:endParaRPr ${lang} sz="${Math.round(textSize * 100)}" dirty="0"/></a:p>`;
     const anchor = s.textValign === 'top' ? 't' : s.textValign === 'bottom' ? 'b' : 'ctr';
     const ins = def.prst ? 3.6 : 0;
@@ -870,7 +899,7 @@ class Writer {
       box = { x1: box.x1 + to.x - mid.x, y1: box.y1 + to.y - mid.y, x2: box.x2 + to.x - mid.x, y2: box.y2 + to.y - mid.y };
     }
     const explicit = c.ph ? null : { size: doc.style.captionSize, font: doc.style.captionFont || 'Arial' };
-    const body = isEmptyText(c) && c.ph ? `<a:p><a:endParaRPr ${lang} dirty="0"/></a:p>` : paragraphsXml(c, explicit, base?.size ?? doc.style.captionSize, this.measure);
+    const body = isEmptyText(c) && c.ph ? `<a:p><a:endParaRPr ${lang} dirty="0"/></a:p>` : paragraphsXml(c, explicit, base?.size ?? doc.style.captionSize, this.measure, this.hlink);
     const wrap = c.wrap !== undefined || c.ph ? 'square' : 'none';
     const fit = c.ph ? '<a:noAutofit/>' : '<a:spAutoFit/>';
     const bodyPr = `<a:bodyPr wrap="${wrap}" lIns="0" tIns="0" rIns="0" bIns="0" rtlCol="0" anchor="t">${fit}</a:bodyPr>`;
@@ -943,7 +972,7 @@ class Writer {
         const cell = t.rows[r][c] ?? { runs: [] };
         const span = spanOf(t, r, c);
         const body = cell.runs.some((x) => x.text)
-          ? paragraphsXml({ id: 0, x: 0, y: 0, runs: cell.runs, paras: cell.paras, justify: align }, { size, font }, size, this.measure)
+          ? paragraphsXml({ id: 0, x: 0, y: 0, runs: cell.runs, paras: cell.paras, justify: align }, { size, font }, size, this.measure, this.hlink)
           : empty(algnOf(align));
         tcs.push(`<a:tc${span > 1 ? ` gridSpan="${span}"` : ''}><a:txBody><a:bodyPr/><a:lstStyle/>${body}</a:txBody>${tcPr}</a:tc>`);
       }

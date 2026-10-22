@@ -229,6 +229,12 @@ With only one screen, the audience's slides open in a window of their own. Drag 
 
 For handouts you can also pick the paper and **Frame the slides**. The system's Print window then picks the printer and copies, and can save a PDF.
 
+## Links
+
+- **Insert ▸ Link…** (Ctrl+K in slides, as in PowerPoint; Scale… stays on the Format menu) links the selected text to a web page or DOI, a file, an e-mail address, another **slide in this deck**, or the first, last, next or previous slide of the show.
+- **Ctrl+click** a link while editing; in the slide show a click on a link follows it (slides jump within the show, web pages and files open outside it).
+- A link to a slide keeps going to that slide when slides are moved. PowerPoint files keep links as PowerPoint's own, both ways.
+
 ## Saving and sharing
 
 - **Save** (Ctrl+S) writes a PowerPoint file (.pptx).
