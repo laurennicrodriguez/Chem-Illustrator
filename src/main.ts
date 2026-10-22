@@ -133,7 +133,7 @@ import { typingPrefs, setTypingPrefs, onTypingPrefs } from './text/typing';
 import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
 import { UpdateUI } from './ui/update-ui';
-import { canUpdate, appVersion, portableInfo } from './updates';
+import { canUpdate, appVersion, portableInfo, STAGE, STAGE_NOTE, UPDATE_CHANNELS, type UpdateChannel } from './updates';
 import { computerName } from './feedback';
 import { GuideWindow, guideSpot } from './ui/guide-window';
 import { SettingsWindow } from './ui/settings-window';
@@ -4067,7 +4067,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'send-feedback': () => feedback.open(),
   about: () => void appVersion().then((v) => ask('About Chem Illustrator', [], {
     noCancel: true,
-    note: `Version ${v === 'web' ? 'for the browser' : v}. Free software under the GNU General Public License, version 3: `
+    note: `${STAGE_NOTE} Version ${v === 'web' ? 'for the browser' : v} (${STAGE.toLowerCase()}). Free software under the GNU General Public License, version 3: `
       + 'see the licence and the source on GitHub (github.com/nathanohare/Chem-Illustrator). ChemDraw is a trademark of Revvity Signals; '
       + 'Chem Illustrator is not made by or affiliated with Revvity Signals.',
   })),
@@ -4939,16 +4939,18 @@ async function openWorkspace(): Promise<void> {
 
 // Newer versions of the desktop app (File > Check for Updates…, Edit > Settings)
 let updateCheck = true;
+let updateChannel: UpdateChannel = 'latest';
 let skipVersion: string | null = null;
 const updates = new UpdateUI({
   unsaved: () => ws.tabs.filter((t) => t.dirty).map((t) => t.name),
   skipped: () => skipVersion,
   skip: (v) => { skipVersion = v; storeSettings(); },
+  channel: () => updateChannel,
 });
 for (const el of document.querySelectorAll<HTMLElement>('.desktop-only')) el.hidden = !canUpdate;
 let versionText = canUpdate ? '' : 'Web version';
 void Promise.all([appVersion(), portableInfo()]).then(([v, portable]) => {
-  versionText = canUpdate ? `Version ${v}${portable ? ' (portable)' : ''}` : 'Web version';
+  versionText = canUpdate ? `Version ${v} ${STAGE.toLowerCase()}${portable ? ' (portable)' : ''}` : `Web version (${STAGE.toLowerCase()})`;
   if (portable && !portable.writable) flash(`This portable copy can’t write to its “Chem Illustrator Data” folder (a locked or read-only drive), so settings are kept on this computer instead.`, 8000);
   const el = document.querySelector('#app-version');
   if (el) el.textContent = versionText;
@@ -5112,7 +5114,9 @@ async function onlinePreferences(): Promise<void> {
     { name: 'pubchem', label: 'Look up names the name reader can\'t read on PubChem', type: 'checkbox', value: String(pubchemNames),
       help: 'Sends the name typed to PubChem, a free NIH database. Names the program can read itself never leave this computer.' },
     ...(canUpdate ? [{ name: 'updates', label: 'Check for a newer version when the app starts', type: 'checkbox' as const, value: String(updateCheck),
-      help: 'Asks GitHub for the latest release number; nothing about you or your files is sent.' }] : []),
+      help: 'Asks GitHub for the latest release number; nothing about you or your files is sent.' },
+    { name: 'channel', label: 'Updates', options: UPDATE_CHANNELS, value: updateChannel,
+      help: 'Stable versions have been tried out on a real computer before they are offered, so they change less often and have fewer surprises. Latest gets every new feature and fix the day it is made.' }] : []),
   ], { ok: 'Save' });
   if (!r) return;
   pubchemNames = r.pubchem === 'true';
@@ -5120,6 +5124,8 @@ async function onlinePreferences(): Promise<void> {
     // turning the check back on also forgets a skipped version
     if (r.updates === 'true' && !updateCheck) skipVersion = null;
     updateCheck = r.updates === 'true';
+    // the other channel's versions are new to you: forget a skipped one
+    if ((r.channel === 'stable' || r.channel === 'latest') && r.channel !== updateChannel) { updateChannel = r.channel; skipVersion = null; }
   }
   storeSettings();
 }
@@ -5182,6 +5188,7 @@ function storeSettings(): void {
     docPins: [...docBoxPrefs.pinned],
     docRuler: docRulerPrefs.shown,
     updateCheck,
+    updateChannel,
     pubchemNames,
     fileTypesOffered,
     wordObjectsOffered,
@@ -5322,6 +5329,7 @@ void loadSettings().then((s) => {
   slideThemes = s.slideThemes;
   askWholeDrawing = s.askWholeDrawing;
   updateCheck = s.updateCheck;
+  updateChannel = s.updateChannel;
   pubchemNames = s.pubchemNames;
   fileTypesOffered = s.fileTypesOffered;
   wordObjectsOffered = s.wordObjectsOffered;
@@ -6896,7 +6904,7 @@ const settingsWindow = new SettingsWindow([
   { id: 'dark', title: 'Dark Page', words: 'dark mode night paper ink graphite slate appearance colours', open: darkColours },
   { id: 'schemes', title: 'Schemes', words: 'scheme arrow gap plus text size reagents conditions boxes', open: schemeSettings },
   { id: 'autosave', title: 'AutoSave and Recovery', words: 'autosave recovery versions backup copies shared folders onedrive', open: () => keeper.optionsCommand() },
-  { id: 'online', title: 'Online', words: 'pubchem internet names lookup updates check version privacy', open: onlinePreferences },
+  { id: 'online', title: 'Online', words: 'pubchem internet names lookup updates check version privacy stable latest channel beta', open: onlinePreferences },
   { id: 'files', title: 'File Types', words: 'open with default app explorer finder associations cdxml cdx mol sdf docx pptx xlsx double-click', open: () => fileTypesPage(fileTypesHost) },
 ]);
 $('#btn-search').addEventListener('click', () => commandSearch.open());
@@ -7112,6 +7120,9 @@ for (const id of ['#ribbon', '#design-ribbon']) {
     if (cmd) command(cmd);
   });
 }
+// the Beta mark beside the program's name says what beta means here
+$('#stage-badge').addEventListener('click', () => command('about'));
+
 renderTabs();
 updateTitle();
 

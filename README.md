@@ -6,6 +6,8 @@ Chem Illustrator draws structures and reaction schemes the way ChemDraw does, wi
 
 It is free and open source (GPL v3), and runs on Windows, macOS and Linux.
 
+> **Beta.** Chem Illustrator is under active development: new features arrive every few days and some things may not work as they should yet. Save often, and please [report anything that goes wrong](docs/guide/feedback.md). If you would rather update less often, choose **Stable** updates in **Edit ▸ Settings ▸ Online**: those versions are tried out on a real computer before they are offered.
+
 **[Download the latest version](https://github.com/nathanohare/Chem-Illustrator/releases/latest)** · **[User guide](docs/README.md)** · **[Send feedback](docs/guide/feedback.md)**
 
 ![A two-step reaction scheme in Drawing mode, with the Analysis panel showing the product's formula and masses](docs/images/drawing.png)
