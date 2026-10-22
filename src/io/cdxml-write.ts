@@ -7,7 +7,7 @@
 // the same form ChemDraw uses, so ChemDraw opens both.
 
 import { Doc, Atom, Bond, Caption, Arrow, Shape, TextRun, Entity, Kind, StepRoles, enhancedText, CHIRAL_FLAGS, flagTextSize, type HighlightStyle } from '../model';
-import { interpretArrow, isReactionArrow, isStep, plainMeasure, schemeItems, type Item } from '../chem/reaction';
+import { interpretArrow, isReactionArrow, linkRows, isStep, plainMeasure, schemeItems, type Item } from '../chem/reaction';
 import { SYMBOLS } from '../chem/elements';
 import { labelBonds, labelSpec, layoutLabel, labelDir, labelGraph, tokenize, isGenericLabel, Measure, MiniGraph, kekulize } from '../chem/labels';
 import { Vec, DEG, arcCenter, norm, sub, Rect } from '../geom';
@@ -1343,12 +1343,15 @@ class CdxmlWriter {
     if (t.size !== undefined) tag.size = t.size;
     const spans: [number, number, number][] = [];
     const aligns: [number, number, string][] = [];
+    const figs: [number, number, number, number][] = [];
     t.rows.forEach((row, r) => row.forEach((cell, c) => {
       if ((cell.span ?? 1) > 1) spans.push([r, c, cell.span!]);
       if (cell.align) aligns.push([r, c, cell.align]);
+      if (cell.fig) figs.push([r, c, cell.fig.w, cell.fig.h]);
     }));
     if (spans.length) tag.spans = spans;
     if (aligns.length) tag.cellAlign = aligns;
+    if (figs.length) tag.figs = figs;
     table.appendChild(this.el('objecttag', { TagType: 'String', Name: TABLE_TAG, Value: JSON.stringify(tag), Visible: 'no' }));
     if (!hasParts) return table;
     // the title and footnotes go with the table in a group, so they move together in ChemDraw too
@@ -1558,6 +1561,17 @@ class CdxmlWriter {
     }
     const rewriting = !src || this.changed;
     let items: Item[] | null = null;
+    /** Every reaction arrow's roles as worked out, a row's first arrow going on from the row above. */
+    let linked: Map<number, StepRoles> | null = null;
+    const worked = (r: Arrow): StepRoles => {
+      if (!linked) {
+        items ??= schemeItems(doc, plainMeasure(doc));
+        const all = [...doc.arrows.values()].filter(isReactionArrow).map((a) => ({ arrow: a, roles: a.step ?? interpretArrow(a, items!, doc.style.bondLength) }));
+        linkRows(all, items);
+        linked = new Map(all.map((x) => [x.arrow.id, x.roles]));
+      }
+      return linked.get(r.id) ?? interpretArrow(r, items!, doc.style.bondLength);
+    };
     const steps: { arrow: Element; roles: StepRoles }[] = [];
     for (const r of doc.arrows.values()) {
       const e = this.source('r', r.id, ['arrow']) ?? this.findArrow(r.id);
@@ -1567,8 +1581,7 @@ class CdxmlWriter {
       // a step from the file whose roles weren't changed stays exactly as ChemDraw wrote it
       if (old && o && r.step && deepEqual(r.step, o.step)) { this.fixStepArrow(old, e); continue; }
       if (!r.step && !rewriting && !old) continue;
-      items ??= schemeItems(doc, plainMeasure(doc));
-      const roles = r.step ?? interpretArrow(r, items, doc.style.bondLength);
+      const roles = worked(r);
       if (!isStep(roles) && !r.step) {
         if (old) { old.parentNode?.removeChild(old); this.changed = true; }
         continue;

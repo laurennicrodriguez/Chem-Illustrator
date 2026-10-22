@@ -43,7 +43,7 @@ import { Workspace, Tab } from './workspace';
 import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize, slideBackground } from './deck/deck';
 import { solid } from './deck/background';
 import { formatBackground } from './ui/background-dialog';
-import { drawSlidePage, recordSlide, paintSlide, SURROUND } from './deck/slide-view';
+import { drawSlidePage, recordSlide, paintSlide, drawDrawing, SURROUND } from './deck/slide-view';
 import { writePdf, jpegInfo, PdfPage, PdfImage } from './io/pdf';
 import { SlideList } from './ui/slide-list';
 import { DesignLibrary, GEO_DRAG_TYPE, pickDesignSize, sizeLabel } from './ui/design-panel';
@@ -77,6 +77,7 @@ import { askCycle } from './ui/cycle-dialog';
 import { askEnergy } from './ui/energy-dialog';
 import { askDiagram } from './ui/diagram-dialog';
 import { putDiagram, type DiagramData } from './design/diagrams';
+import type { EnergyData } from './design/energy';
 import { editChart, chartPoints } from './ui/chart-editor';
 import { newChartBox, sizedBox } from './sheet/chart-box';
 import { chartBoxPng } from './render/chart-box-paint';
@@ -581,7 +582,8 @@ async function insertTable(): Promise<void> {
   if (!got) return;
   const rows = Math.max(1, Math.min(500, Math.round(Number(got.rows) || 4)));
   const cols = Math.max(1, Math.min(60, Math.round(Number(got.cols) || 3)));
-  const id = placeTable(emptyTable(rows, cols, doc.style.captionSize), 'Insert table');
+  // columns centred (the Style panel lines up each column its own way)
+  const id = placeTable({ ...emptyTable(rows, cols, doc.style.captionSize), align: Array(cols).fill('center') }, 'Insert table');
   editor.editTable(id, { r: 0, c: 0 });
 }
 
@@ -614,12 +616,29 @@ async function insertCycle(): Promise<void> {
   if (got) editor.insertCycle(got.spec, got.look, pasteCentre(), deckNow()?.size);
 }
 
+/** The Energy Diagram window's preview: the diagram as it will be drawn, fitted to the canvas. */
+function paintEnergyPreview(d: EnergyData, canvas: HTMLCanvasElement): void {
+  const { doc: tmp, box } = editor.energyPreview(d);
+  const w = canvas.clientWidth || 360, h = canvas.clientHeight || 200, dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const bw = box.x2 - box.x1, bh = box.y2 - box.y1, pad = 8;
+  const k = Math.min((w - 2 * pad) / bw, (h - 2 * pad) / bh);
+  ctx.setTransform(k * dpr, 0, 0, k * dpr, (w / 2 - (box.x1 + bw / 2) * k) * dpr, (h / 2 - (box.y1 + bh / 2) * k) * dpr);
+  drawDrawing(ctx, tmp);
+}
+
 /** Insert ▸ Energy Diagram…, or the selected diagram's numbers to change (`id`, its frame). */
 async function energyDiagram(id: number | null): Promise<void> {
   finishTyping();
   const L = doc.style.bondLength;
   const now = id !== null ? doc.shapes.get(id)?.energy ?? null : null;
-  const got = await askEnergy(now, { w: Math.round(18 * L), h: Math.round(12 * L) });
+  const got = await askEnergy(now, { w: Math.round(18 * L), h: Math.round(12 * L) }, paintEnergyPreview);
   if (got) editor.putEnergyDiagram(got, pasteCentre(), now ? id! : undefined, deckNow()?.size);
 }
 editor.onEnergy = (id) => void energyDiagram(id);
@@ -758,7 +777,7 @@ function toggleStructureLock(): void {
 }
 
 /** How Number Compounds counted last time (offered again). */
-const numbering = { style: 'numbers' as IdStyle, prefix: '', suffix: '', bold: true, same: true };
+const numbering = { style: 'numbers' as IdStyle, prefix: '', suffix: '', bold: true, same: true, align: true };
 
 /**
  * Each structure's key for "the same structure, the same ID": its canonical SMILES (with
@@ -829,6 +848,7 @@ async function numberCompounds(): Promise<void> {
     { name: 'suffix', label: 'After each', value: numbering.suffix, type: 'text', placeholder: 'e.g. ′' },
     { name: 'bold', label: 'Bold', value: String(numbering.bold), type: 'checkbox' },
     { name: 'same', label: 'Same structure, same ID', value: String(numbering.same), type: 'checkbox' },
+    { name: 'align', label: 'Line up the numbers in each row', value: String(numbering.align), type: 'checkbox' },
     { name: 'old', label: 'IDs already there', value: 'renumber', options: [{ value: 'renumber', label: 'Number again' }, { value: 'keep', label: 'Keep' }] },
     { name: 'reagents', label: 'Reagents over arrows', value: 'skip', options: [{ value: 'skip', label: 'Leave unnumbered' }, { value: 'number', label: 'Number them too' }] },
   ], { ok: 'Number', note: 'Puts an ID under each selected structure (or every structure), following the arrows of a scheme, else left to right and top to bottom. Each is tied to its structure and is ordinary text you can change. For 1a, 1b, “Start at” is the number.' });
@@ -836,13 +856,13 @@ async function numberCompounds(): Promise<void> {
   const style = got.style as IdStyle;
   const start = parseIdStart(got.start, style);
   if (start === null) { flash(`“${got.start}” isn't a place to start counting ${style === 'roman' || style === 'ROMAN' ? 'in roman numerals' : style === 'lower' || style === 'upper' ? 'in letters' : 'from'}.`); return; }
-  Object.assign(numbering, { style, prefix: got.prefix, suffix: got.suffix, bold: got.bold === 'true', same: got.same === 'true' });
+  Object.assign(numbering, { style, prefix: got.prefix, suffix: got.suffix, bold: got.bold === 'true', same: got.same === 'true', align: got.align === 'true' });
   let keyOf: ((atoms: number[]) => string | undefined) | undefined;
   if (numbering.same) {
     const keys = await structureKeys();
     keyOf = (atoms) => keys.get(atoms[0]);
   }
-  const n = editor.numberCompounds({ start: Math.max(0, start), style, prefix: got.prefix, suffix: got.suffix, bold: numbering.bold, keep: got.old === 'keep', reagents: got.reagents === 'number', keyOf });
+  const n = editor.numberCompounds({ start: Math.max(0, start), style, prefix: got.prefix, suffix: got.suffix, bold: numbering.bold, align: numbering.align, keep: got.old === 'keep', reagents: got.reagents === 'number', keyOf });
   if (!n) flash('No structures to number.');
 }
 
@@ -3955,6 +3975,7 @@ async function openPreferences(): Promise<void> {
     { name: 'textAtom', label: 'An atom or group typed with the Text tool beside a bond end (Br, OMe) becomes that atom', type: 'checkbox', value: String(editor.options.textToAtom) },
     { name: 'groupClick', label: 'Clicking something in a group selects', value: editor.options.groupClick, options: [{ value: 'group', label: 'The whole group' }, { value: 'item', label: 'Just that thing' }] },
     { name: 'groupOutline', label: 'Outline the rest of a group when part of it is selected', type: 'checkbox', value: String(editor.options.groupOutline) },
+    { name: 'reroute', label: 'Mechanism arrows find their own way round again when a change leaves them running into a structure, a label or another arrow (not ones you bent by hand)', type: 'checkbox', value: String(editor.options.rerouteArrows) },
     { name: 'linkSide', label: 'Text linked to a structure goes', value: linkSide, options: [{ value: 'keep', label: 'Where it is' }, { value: 'below', label: 'Below' }, { value: 'above', label: 'Above' }, { value: 'left', label: 'Left' }, { value: 'right', label: 'Right' }] },
     { name: 'ask', label: 'Ask before changing every structure on the page when nothing is selected', type: 'checkbox', value: String(askWholeDrawing) },
     ...(canUpdate ? [{ name: 'updates', label: 'Check for a newer version when the app starts', type: 'checkbox' as const, value: String(updateCheck) }] : []),
@@ -3974,6 +3995,7 @@ async function openPreferences(): Promise<void> {
   editor.options.textToAtom = r.textAtom === 'true';
   editor.options.groupClick = r.groupClick === 'item' ? 'item' : 'group';
   editor.options.groupOutline = r.groupOutline === 'true';
+  editor.options.rerouteArrows = r.reroute === 'true';
   linkSide = (['below', 'above', 'left', 'right'].includes(r.linkSide) ? r.linkSide : 'keep') as Settings['linkSide'];
   showHelicity(r.axial === 'PM');
   if (r.methyl !== editor.options.methylStyle) chooseMethylStyle(r.methyl as MethylStyle);
@@ -4014,6 +4036,7 @@ function storeSettings(): void {
     textToAtom: editor.options.textToAtom,
     groupClick: editor.options.groupClick,
     groupOutline: editor.options.groupOutline,
+    rerouteArrows: editor.options.rerouteArrows,
     linkSide,
     slideTemplate,
     askWholeDrawing,
@@ -4153,6 +4176,7 @@ void loadSettings().then((s) => {
   editor.options.textToAtom = s.textToAtom;
   editor.options.groupClick = s.groupClick;
   editor.options.groupOutline = s.groupOutline;
+  editor.options.rerouteArrows = s.rerouteArrows;
   linkSide = s.linkSide;
   slideTemplate = s.slideTemplate;
   askWholeDrawing = s.askWholeDrawing;

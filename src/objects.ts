@@ -369,6 +369,8 @@ export interface Handle {
   id: number;
   which: HandleId;
   at: Vec;
+  /** How far it is drawn off the point it stands for (an arrow's middle moved clear of its conditions). */
+  off?: Vec;
 }
 
 export function arrowHandles(r: Arrow): Handle[] {

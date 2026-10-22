@@ -481,6 +481,8 @@ export interface Arrow {
   bez?: Vec[];
   /** What an electron-pushing arrow's ends are stuck to, so they follow the structure when it moves. */
   pin?: { tail?: Pin; head?: Pin };
+  /** Bent by hand: it keeps its curve when the structure changes, rather than finding its own way round. */
+  bent?: boolean;
 }
 
 /**
@@ -713,6 +715,8 @@ export interface TableCell {
   fill?: string;
   /** Documents: where the text sits up and down in a cell taller than it (top when left out). */
   valign?: 'center' | 'bottom';
+  /** Drawings: room kept at the top of the cell for a structure dropped into it (its width and height, in points). */
+  fig?: { w: number; h: number };
 }
 
 /**

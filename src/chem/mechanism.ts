@@ -45,6 +45,8 @@ export interface PushOpts {
   s?: boolean;
   /** Never an S (a single curve, even through the structure). */
   arcOnly?: boolean;
+  /** The arrow being redrawn, which keeps clear of every other arrow but not of itself. */
+  self?: number;
 }
 
 /** How far past an atom's label (or from a bare carbon) an arrow stops, in bond lengths. */
@@ -298,7 +300,7 @@ function pushArrowAt(doc: Doc, m: Measure, from: PushEnd, to: PushEnd, o: PushOp
         const sweep0 = dot(sub(arcMid(t0, end, size), t0), ob) > 0 ? size : -size;
         const arc = to.kind === 'atom' ? trimHead(doc, m, t0, c1, sweep0, to.id) : { head: end, sweep: sweep0 };
         if (!arc) continue;
-        const clash = arcClash(doc, m, t0, arc.head, arc.sweep, skip);
+        const clash = arcClash(doc, m, t0, arc.head, arc.sweep, skip, o.self);
         const score = clash + 0.35 * Math.abs(size - prefer) / (90 * DEG) + (sd !== usual ? 0.25 : 0);
         if (score < bestScore) { bestScore = score; bestClash = clash; best = { tail: t0, head: arc.head, sweep: arc.sweep, start: from }; }
       }
@@ -313,7 +315,7 @@ function pushArrowAt(doc: Doc, m: Measure, from: PushEnd, to: PushEnd, o: PushOp
         const shaped = to.kind === 'atom' ? sToAtom(doc, m, t0, c1, c, to.id) : { head: end, bez: c };
         if (!shaped) continue;
         const pts = bezPoints({ tail: t0, head: shaped.head, bez: shaped.bez })!;
-        const clash = pathClash(doc, m, sampleBez(pts), t0, shaped.head, skip);
+        const clash = pathClash(doc, m, sampleBez(pts), t0, shaped.head, skip, o.self);
         // coming in along one of the atom's bonds hides the head in the bond
         const along = to.kind === 'atom' ? bondDirs(doc, to.id).reduce((t, b) => t + Math.max(0, dot(norm(sub(shaped.head, c1)), b) - Math.cos(55 * DEG)), 0) : 0;
         const score = clash + 3 * along + (sd !== usual ? 0.25 : 0) + 0.1 * Math.abs(Math.abs(shaped.bez[0].y) - 0.8);
@@ -421,16 +423,40 @@ function endAtoms(doc: Doc, ...ends: PushEnd[]): Set<number> {
  * How badly an arc runs into things: atoms (and their labels), bonds and lone pairs and other
  * symbols it passes too close to, away from its own two ends. 0 when it is clear of everything.
  */
-export function arcClash(doc: Doc, m: Measure, tail: Vec, head: Vec, sweep: number, own: Set<number> = new Set()): number {
-  const { center, radius } = arcCenter(tail, head, sweep);
-  const a0 = angleOf(sub(tail, center));
-  const N = 28;
-  const pts = Array.from({ length: N - 1 }, (_, i) => add(center, fromAngle(a0 + (sweep * (i + 1)) / N, radius)));
-  return pathClash(doc, m, pts, tail, head, own);
+export function arcClash(doc: Doc, m: Measure, tail: Vec, head: Vec, sweep: number, own: Set<number> = new Set(), self?: number): number {
+  return pathClash(doc, m, arcPoints(tail, head, sweep), tail, head, own, self);
 }
 
-/** How badly a line through `pts` (from tail to head) runs into things, as arcClash counts it. */
-export function pathClash(doc: Doc, m: Measure, pts: Vec[], tail: Vec, head: Vec, own: Set<number> = new Set()): number {
+/** Points along an arc, without its two ends. */
+function arcPoints(tail: Vec, head: Vec, sweep: number, N = 28): Vec[] {
+  if (!sweep) return Array.from({ length: N - 1 }, (_, i) => add(tail, mul(sub(head, tail), (i + 1) / N)));
+  const { center, radius } = arcCenter(tail, head, sweep);
+  const a0 = angleOf(sub(tail, center));
+  return Array.from({ length: N - 1 }, (_, i) => add(center, fromAngle(a0 + (sweep * (i + 1)) / N, radius)));
+}
+
+/** Points along an arrow's line, ends included. */
+export function arrowPath(r: Pick<Arrow, 'tail' | 'head' | 'sweep'> & Partial<Pick<Arrow, 'bez'>>, n = 20): Vec[] {
+  const bz = bezPoints(r);
+  return [r.tail, ...(bz ? sampleBez(bz, n) : arcPoints(r.tail, r.head, r.sweep, n)), r.head];
+}
+
+/** Every arrow's line and head (worked out once for each version of the drawing). */
+const arrowLines = new WeakMap<Doc, { version: number; lines: { id: number; pts: Vec[]; head: Vec; heads: boolean }[] }>();
+function otherArrows(doc: Doc): { id: number; pts: Vec[]; head: Vec; heads: boolean }[] {
+  const got = arrowLines.get(doc);
+  if (got && got.version === doc.version) return got.lines;
+  const lines = [...doc.arrows.values()].filter((r) => !r.elbow).map((r) => ({ id: r.id, pts: arrowPath(r), head: r.head, heads: r.headStyle !== 'none' }));
+  arrowLines.set(doc, { version: doc.version, lines });
+  return lines;
+}
+
+/**
+ * How badly a line through `pts` (from tail to head) runs into things, as arcClash counts it:
+ * also other arrows (except `self`, the arrow being redrawn), whose lines it shouldn't run
+ * along and whose heads its own head shouldn't sit on, and labels its head shouldn't hide under.
+ */
+export function pathClash(doc: Doc, m: Measure, pts: Vec[], tail: Vec, head: Vec, own: Set<number> = new Set(), self?: number): number {
   const L = doc.style.bondLength;
   let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
   for (const p of [tail, head, ...pts]) { x1 = Math.min(x1, p.x); y1 = Math.min(y1, p.y); x2 = Math.max(x2, p.x); y2 = Math.max(y2, p.y); }
@@ -459,6 +485,22 @@ export function pathClash(doc: Doc, m: Measure, pts: Vec[], tail: Vec, head: Vec
       hurt(distToSegment(p, p1, p2), 0.1 * L);
     }
     for (const c of symbols) hurt(dist(p, c), 0.1 * L);
+  }
+  // other arrows: keep off their lines, and keep the head off their heads (where two would show as one)
+  const hurt = (gap: number, want: number, k = 1) => { if (gap < want) bad += k * ((want - gap) / want) ** 2; };
+  for (const o of otherArrows(doc)) {
+    if (o.id === self || !o.pts.some(near)) continue;
+    for (const p of pts) {
+      if (Math.min(dist(p, tail), dist(p, head)) < 0.16 * L) continue;
+      for (const q of o.pts) hurt(dist(p, q), 0.07 * L, 0.3);
+    }
+    if (o.heads) hurt(dist(head, o.head), 0.4 * L, 3);
+    for (const q of o.pts) hurt(dist(head, q), 0.1 * L, 0.5);
+  }
+  // the head out in the open, not under another atom's label (its own atom's is seen to as it is drawn)
+  for (const a of atoms) if (!own.has(a.id)) for (const b of labelled.get(a.id)!) {
+    const g = Math.hypot(Math.max(b.x1 - head.x, 0, head.x - b.x2), Math.max(b.y1 - head.y, 0, head.y - b.y2));
+    hurt(g, 0.03 * L, 3);
   }
   return bad;
 }
@@ -546,16 +588,29 @@ export function sameEnd(a: PushEnd, b: PushEnd): boolean {
  * structure (as an S where one curve can't; an S-shaped arrow stays one). Null when it can't
  * tell what the arrow is drawn between.
  */
-export function cleanUpArrow(doc: Doc, m: Measure, r: Pick<Arrow, 'tail' | 'head' | 'sweep'> & Partial<Pick<Arrow, 'bez'>>): PushArrow | null {
+export function cleanUpArrow(doc: Doc, m: Measure, r: Pick<Arrow, 'tail' | 'head' | 'sweep'> & Partial<Pick<Arrow, 'bez' | 'id'>>): PushArrow | null {
   const from = tailEnd(doc, pushEndAt(doc, m, r.tail), r.tail);
   let to = headEnd(doc, pushEndAt(doc, m, r.head), r.head);
   if (sameEnd(from, to)) to = { kind: 'point', p: r.head };
   if (from.kind === 'point' && to.kind === 'point') return freeArc(doc, m, r);
-  return pushArrow(doc, m, from, to, { s: !!r.bez?.length });
+  return pushArrow(doc, m, from, to, { s: !!r.bez?.length, self: r.id });
+}
+
+/** How badly an arrow as drawn now runs into the structure, labels and other arrows (0 when clear). */
+export function arrowClash(doc: Doc, m: Measure, r: Arrow): number {
+  // what its ends are on: the atoms they are stuck to, else what lies under them
+  const own = new Set<number>();
+  for (const end of ['tail', 'head'] as const) {
+    const pin = r.pin?.[end];
+    if (pin) for (const id of pin.on === 'atom' ? pin.ref.slice(0, 1) : pin.ref.slice(0, 2)) own.add(id);
+    else for (const id of endAtoms(doc, pushEndAt(doc, m, r[end]))) own.add(id);
+  }
+  const pts = arrowPath(r, 28);
+  return pathClash(doc, m, pts.slice(1, -1), r.tail, r.head, own, r.id);
 }
 
 /** An arrow between two free points: the same ends, on the side and curl that keep it clear (an S if that's the only way). */
-function freeArc(doc: Doc, m: Measure, r: Pick<Arrow, 'tail' | 'head' | 'sweep'> & Partial<Pick<Arrow, 'bez'>>): PushArrow | null {
+function freeArc(doc: Doc, m: Measure, r: Pick<Arrow, 'tail' | 'head' | 'sweep'> & Partial<Pick<Arrow, 'bez' | 'id'>>): PushArrow | null {
   if (dist(r.tail, r.head) < 1e-6) return null;
   let best: PushArrow | null = null, bestScore = Infinity, bestClash = Infinity;
   const usual = r.bez?.length ? Math.sign(r.bez[0].y) || 1 : -Math.sign(r.sweep) || 1;
@@ -564,7 +619,7 @@ function freeArc(doc: Doc, m: Measure, r: Pick<Arrow, 'tail' | 'head' | 'sweep'>
       for (const deg of [45, 60, 75, 90, 105, 120, 135]) {
         // (a sweep the other way round bends to side sd)
         const sweep = -sd * deg * DEG;
-        const clash = arcClash(doc, m, r.tail, r.head, sweep);
+        const clash = arcClash(doc, m, r.tail, r.head, sweep, undefined, r.id);
         const score = clash + 0.35 * Math.abs(deg - 90) / 90 + (sd !== usual ? 0.25 : 0);
         if (score < bestScore) { bestScore = score; bestClash = clash; best = { tail: r.tail, head: r.head, sweep }; }
       }
@@ -574,7 +629,7 @@ function freeArc(doc: Doc, m: Measure, r: Pick<Arrow, 'tail' | 'head' | 'sweep'>
     let bestS: PushArrow | null = null, sScore = Infinity, sClash = Infinity;
     for (const sd of [usual, -usual]) {
       for (const bez of sCandidates(r.tail, r.head, sd, null)) {
-        const clash = pathClash(doc, m, sampleBez(bezPoints({ tail: r.tail, head: r.head, bez })!), r.tail, r.head);
+        const clash = pathClash(doc, m, sampleBez(bezPoints({ tail: r.tail, head: r.head, bez })!), r.tail, r.head, undefined, r.id);
         const score = clash + (sd !== usual ? 0.25 : 0) + 0.1 * Math.abs(Math.abs(bez[0].y) - 0.8);
         if (score < sScore) { sScore = score; sClash = clash; bestS = { tail: r.tail, head: r.head, sweep: 0, bez }; }
       }

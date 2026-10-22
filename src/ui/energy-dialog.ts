@@ -8,7 +8,7 @@ import { ENERGY_DEFAULTS, ENERGY_PRESETS, PATH_COLOURS, type EnergyData, type En
 let lastLook: Pick<EnergyData, 'style' | 'values' | 'digits' | 'axis' | 'barrier' | 'quantity' | 'unit'> = { ...ENERGY_DEFAULTS, quantity: 'ΔG', unit: 'kcal/mol' };
 
 /** Ask for a diagram: a new one (from a preset), or `editing` with its numbers to change. */
-export function askEnergy(editing: EnergyData | null, size: { w: number; h: number }): Promise<EnergyData | null> {
+export function askEnergy(editing: EnergyData | null, size: { w: number; h: number }, preview?: (d: EnergyData, canvas: HTMLCanvasElement) => void): Promise<EnergyData | null> {
   return new Promise((resolve) => {
     const d = document.createElement('dialog');
     d.className = 'ask energy-dialog';
@@ -18,10 +18,12 @@ export function askEnergy(editing: EnergyData | null, size: { w: number; h: numb
     form.innerHTML = `<h2>${editing ? 'Edit Energy Diagram' : 'Energy Diagram'}</h2>
       <label class="ask-row"${editing ? ' hidden' : ''}><span>Start from</span><select name="preset"></select></label>
       <p class="muted energy-blurb"${editing ? ' hidden' : ''}></p>
+      <canvas class="energy-preview" aria-label="Preview of the diagram" role="img"></canvas>
       <div class="energy-table-wrap"><table class="energy-table"><thead></thead><tbody></tbody></table></div>
       <p class="energy-rows"><button type="button" data-act="row" title="Another species along the reaction coordinate">+ Species</button>
-        <button type="button" data-act="path" title="Another pathway drawn on the same diagram, in its own colour">+ Pathway</button></p>
-      <p class="muted small">Leave an energy empty where a pathway has nothing (so a one-step route can sit beside a two-step one). Name transition states with ‡ (TS1‡).</p>
+        <button type="button" data-act="path" title="Another pathway drawn on the same diagram, in its own colour">+ Pathway</button>
+        <button type="button" data-act="ddagger" title="Put a double dagger (‡) at the end of the species name you were last in, for a transition state">‡</button></p>
+      <p class="muted small">Leave an energy empty where a pathway has nothing (so a one-step route can sit beside a two-step one). Name transition states with ‡ (TS1‡): the ‡ button adds one to the name box you were last in.</p>
       <label class="ask-row"><span>Axis</span><span class="energy-pair"><select name="quantity"><option>ΔG</option><option>ΔG°</option><option>ΔH</option><option>E</option><option>ΔE</option></select>
         <select name="unit"><option>kcal/mol</option><option>kJ/mol</option><option>eV</option></select></span></label>
       <label class="ask-row"><span>Joined by</span><select name="style"><option value="levels">Levels and dashed lines</option><option value="curve">A smooth curve</option></select></label>
@@ -130,12 +132,12 @@ export function askEnergy(editing: EnergyData | null, size: { w: number; h: numb
     form.querySelector('[data-act=cancel]')!.addEventListener('click', () => { d.close(); finish(null); });
     d.addEventListener('cancel', () => finish(null));
     d.addEventListener('keydown', (e) => { if (e.key !== 'Escape') e.stopPropagation(); });
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
+    // a minus sign typed as − or – counts too
+    const num = (t: string) => { const v = parseFloat(t.replace(/[−–]/g, '-').replace(',', '.')); return t.trim() && isFinite(v) ? v : null; };
+    /** The diagram as the window has it now. */
+    const gather = (): EnergyData => {
       read();
-      // a minus sign typed as − or – counts too
-      const num = (t: string) => { const v = parseFloat(t.replace(/[−–]/g, '-').replace(',', '.')); return t.trim() && isFinite(v) ? v : null; };
-      const out: EnergyData = {
+      return {
         paths: paths.map((p, j) => ({ name: p.name.trim(), color: p.color, points: rows.map((r) => ({ label: r[j].label.trim(), g: num(r[j].g) })) })),
         quantity: $<HTMLSelectElement>('select[name=quantity]').value,
         unit: $<HTMLSelectElement>('select[name=unit]').value,
@@ -148,6 +150,36 @@ export function askEnergy(editing: EnergyData | null, size: { w: number; h: numb
         h: Math.max(40, Number($<HTMLInputElement>('input[name=h]').value) || size.h),
         ...(editing?.margins ? { margins: editing.margins } : {}),
       };
+    };
+    // the preview redraws as anything changes (a moment after typing stops)
+    const canvas = $<HTMLCanvasElement>('.energy-preview');
+    canvas.hidden = !preview;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const redraw = () => {
+      if (!preview) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        const out = gather();
+        if (out.paths.some((p) => p.points.some((q) => q.g !== null))) { try { preview(out, canvas); } catch { /* a half-typed table */ } }
+      }, 120);
+    };
+    form.addEventListener('input', redraw);
+    form.addEventListener('change', redraw);
+    form.addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('button')) redraw(); });
+    // ‡ goes on the species name last typed in
+    let lastName: HTMLInputElement | null = null;
+    table.addEventListener('focusin', (e) => { const t = e.target as HTMLInputElement; if (t.dataset?.l !== undefined) lastName = t; });
+    form.querySelector('[data-act=ddagger]')!.addEventListener('click', () => {
+      const t = lastName && lastName.isConnected ? lastName : table.querySelector<HTMLInputElement>('input[data-l]');
+      if (!t) return;
+      if (!t.value.endsWith('‡')) t.value += '‡';
+      t.focus();
+      redraw();
+    });
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const out = gather();
       if (!out.paths.some((p) => p.points.some((q) => q.g !== null))) return;
       const { style, values, digits, axis, barrier, quantity, unit } = out;
       lastLook = { style, values, digits, axis, barrier, quantity, unit };
@@ -155,5 +187,6 @@ export function askEnergy(editing: EnergyData | null, size: { w: number; h: numb
       finish(out);
     });
     d.showModal();
+    redraw();
   });
 }
