@@ -111,11 +111,13 @@ export class Toolbar {
 
   /** Mark the tool in use (and show it on its palette's button). */
   setActive(name: string): void {
-    for (const [n, b] of this.buttons) b.classList.toggle('active', n === name);
+    // (pressed or not, for screen readers)
+    for (const [n, b] of this.buttons) { b.classList.toggle('active', n === name); b.setAttribute('aria-pressed', String(n === name)); }
     for (const pal of this.palettes) {
       const has = pal.def.items.some((i) => i.name === name);
       if (has && pal.current !== name) { pal.current = name; this.show(pal); }
       pal.button.classList.toggle('active', has);
+      pal.button.setAttribute('aria-pressed', String(has));
     }
     // the tool in use stays in sight when the bar scrolls (picked from Search or by a key)
     const on = this.buttons.get(name) ?? this.palettes.find((p) => p.current === name && p.button.classList.contains('active'))?.button;
