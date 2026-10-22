@@ -265,6 +265,18 @@ const FRAMES: Record<LayoutId, [Placeholder, number, number, number, number, Cap
   blank: [],
 };
 
+/**
+ * Where pasted and inserted things go on a slide of this layout: below the title (the body
+ * text's area) on slides with a title, the middle of a title slide, and inside the margins of a
+ * blank one.
+ */
+export function contentArea(layout: LayoutId, size: SlideSize): Rect {
+  const box = (x: number, y: number, w: number, h: number): Rect => ({ x1: x * size.w, y1: y * size.h, x2: (x + w) * size.w, y2: (y + h) * size.h });
+  if (layout === 'blank') return box(0.05, 0.05, 0.9, 0.9);
+  if (layout === 'title') return box(0.08, 0.08, 0.84, 0.84);
+  return box(0.05, 0.22, 0.9, 0.68);
+}
+
 export function layoutFrames(layout: LayoutId, size: SlideSize): Frame[] {
   return FRAMES[layout].map(([ph, x, y, w, h, justify]) => ({ ph, x: x * size.w, y: y * size.h, w: w * size.w, h: h * size.h, justify }));
 }

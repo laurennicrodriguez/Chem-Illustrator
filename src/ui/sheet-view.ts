@@ -11,7 +11,7 @@ import { Workbook, Sheet, Structure, CellStyle, Side, growToMerges, countOn } fr
 import { Range, MAX_ROWS, MAX_COLS, colName, rangeName, normRange, inRange, keyOf, rowOf, colOf, cellName } from '../sheet/refs';
 import { formatValue, generalFitting } from '../sheet/numfmt';
 import { readTyped, isError, CellError } from '../sheet/values';
-import { chemPieces } from '../sheet/cell-text';
+import { chemPieces, showsChem } from '../sheet/cell-text';
 import { DEFAULT_COL_W, DEFAULT_ROW_H, STRUCTURE_SCALE, STRUCTURE_PAD, MAX_AUTO_ROW, structureHeight, structurePlace } from '../sheet/layout';
 import { formulaRefs, normalizeFormula } from '../sheet/formula';
 import { Chart, chartData } from '../sheet/chart';
@@ -66,6 +66,8 @@ export interface SheetViewHost {
   flash(msg: string, ms?: number): void;
   /** The typing in a cell (or the formula bar) changed. */
   typing(text: string | null): void;
+  /** Text was typed into one cell and kept (not a formula). */
+  typed?(row: number, col: number, text: string): void;
   /** The pointer is over a cell with a note or comment (null: over none), at this box on the screen. */
   hoverNote?(cell: Cursor | null, box: DOMRect | null): void;
   /** The grid was drawn (notes shown all the time follow it). */
@@ -1056,6 +1058,7 @@ export class SheetView {
     const s = this.sheet!;
     const ctx = this.ctx;
     const v = s.values.get(keyOf(r, c)) ?? null;
+    style = this.chemLook(style, v);
     const shown = formatValue(v, style?.numFmt);
     let text = shown.text;
     const align = style?.align ?? shown.align;
@@ -1121,6 +1124,11 @@ export class SheetView {
       ctx.fillRect(lx, baseline + 2, lw, Math.max(1, this.zoom));
     }
     return last;
+  }
+
+  /** The cell's look with chemistry on where its text has a formula in it (see showsChem). */
+  private chemLook(style: CellStyle | undefined, v: unknown): CellStyle | undefined {
+    return style?.chem === undefined && showsChem(undefined, v) ? { ...style, chem: true } : style;
   }
 
   private piecesWidth(text: string, style: CellStyle | undefined): number {
@@ -1626,6 +1634,7 @@ export class SheetView {
         } else this.typeInto(s, e.r, e.c, text);
       }, this.place());
       this.metricsKey = '';
+      if (!allSelected && text.trim() && !text.startsWith('=')) this.host.typed?.(e.r, e.c, text.trim());
     }
     this.host.typing(null);
     this.scroller.focus({ preventScroll: true });
@@ -2157,7 +2166,9 @@ export class SheetView {
       const c = s.cells.get(k)!;
       const style = s.styleAt(r, index);
       if (c.structure) w = Math.max(w, this.host.structureBox(c.structure).w * STRUCTURE_SCALE + 2 * PAD);
-      else w = Math.max(w, (style?.chem ? this.piecesWidth(s.shownText(r, index), style) / this.zoom : this.textWidth(s.shownText(r, index), this.font(style, 1))) + 10);
+      const look = this.chemLook(style, s.values.get(k) ?? null);
+      if (c.structure) continue;
+      w = Math.max(w, (look?.chem ? this.piecesWidth(s.shownText(r, index), look) / this.zoom : this.textWidth(s.shownText(r, index), this.font(style, 1))) + 10);
     }
     // property columns: their worked-out values count too
     if (s.colDefs.has(index)) for (let r = 0; r <= s.lastDataRow; r++) {
