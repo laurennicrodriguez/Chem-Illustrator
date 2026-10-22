@@ -163,8 +163,8 @@ export class DocArrangeUI {
       this.pane.el.classList.add('doc-sel-pane');
       this.pane.el.querySelector<HTMLElement>('.fb-pin')?.style.setProperty('display', 'none');
     }
-    this.refresh();
     this.pane.show(shown(near));
+    this.refresh();
   }
 
   get paneOpen(): boolean {
@@ -175,8 +175,7 @@ export class DocArrangeUI {
   refresh(): void {
     const pane = this.pane;
     const f = this.host.file();
-    if (!pane?.open && pane) return;
-    if (!pane) return;
+    if (!pane?.open) return;
     const body = pane.body;
     body.replaceChildren();
     if (!f) return;
