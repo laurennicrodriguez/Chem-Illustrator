@@ -3,6 +3,7 @@
 // colour changes (buttons, highlights, tab icons); "Whole window" also colours the menu bar.
 // Every colour can be changed, and the choice is saved in the settings file.
 
+import { showDialog } from './dialog-host';
 export type ColourMode = 'drawing' | 'slides' | 'sheet' | 'document' | 'design';
 export type ModeColourStyle = 'accent' | 'window' | 'off';
 export interface ModeColours {
@@ -191,7 +192,7 @@ export class ModeColoursDialog {
 
   open(): void {
     this.fill();
-    this.d.showModal();
+    showDialog(this.d);
   }
 
   private change(part: Partial<ModeColours>): void {

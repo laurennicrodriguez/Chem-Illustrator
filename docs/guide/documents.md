@@ -168,7 +168,7 @@ The contents keep themselves up to date: page numbers change as text moves, and 
 
 ## Tracked changes
 
-1. **Review** tab ▸ **Track Changes** (Ctrl+Shift+E). The first time, it asks for the name to put on your changes; change it later with **Your Name…** or in **Edit ▸ Preferences…**.
+1. **Review** tab ▸ **Track Changes** (Ctrl+Shift+E). The first time, it asks for the name to put on your changes; change it later with **Your Name…** or in **Edit ▸ Settings…**.
 2. Text you type is underlined in your colour; text you delete stays, struck through.
 3. **◀ Previous** and **Next ▶** step through the changes; the bar at the bottom says who made each one and when.
 4. **Accept** or **Reject** decides the change at the caret (or every change in a selection) and moves to the next. **Accept All** and **Reject All** do the whole document. Right-click a change for Accept and Reject too.

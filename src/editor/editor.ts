@@ -277,15 +277,15 @@ export class Editor {
     fixedAngles: true,
     /** Show Terminal Methyls writes them as CH3 or as Me (Chemistry > Terminal Methyls as …). */
     methylStyle: 'Me' as MethylStyle,
-    /** + and − on an atom give a charge in a circle (⊕, ⊖) rather than a plain sign in the label (Edit > Preferences). */
+    /** + and − on an atom give a charge in a circle (⊕, ⊖) rather than a plain sign in the label (Edit > Settings). */
     circledCharges: false,
-    /** An atom or group typed with the Text tool beside a bond end (Br, OMe) becomes that atom (Edit > Preferences). */
+    /** An atom or group typed with the Text tool beside a bond end (Br, OMe) becomes that atom (Edit > Settings). */
     textToAtom: true,
-    /** A click on something in a group selects the whole group, or just that thing (Edit > Preferences). */
+    /** A click on something in a group selects the whole group, or just that thing (Edit > Settings). */
     groupClick: 'group' as 'group' | 'item',
-    /** Selecting part of a group outlines the whole group (Edit > Preferences). */
+    /** Selecting part of a group outlines the whole group (Edit > Settings). */
     groupOutline: true,
-    /** Mechanism arrows left running into something by a change find their own way round (Edit > Preferences). */
+    /** Mechanism arrows left running into something by a change find their own way round (Edit > Settings). */
     rerouteArrows: true,
   };
   /** Tell the person something in the status bar. */
@@ -975,7 +975,17 @@ export class Editor {
     this.r.view.scale = s;
     this.r.view.ox = w / 2 - ((b.x1 + b.x2) / 2) * s;
     this.r.view.oy = h / 2 - ((b.y1 + b.y2) / 2) * s;
+    this.fitted = { ...this.r.view };
     this.requestScene();
+  }
+
+  /** The view as the last fit left it (unzoomed and unscrolled since). */
+  private fitted: { scale: number; ox: number; oy: number } | null = null;
+
+  /** Is a slide or page view still where the last fit put it: then a change of window size fits it again. */
+  get stillFitted(): boolean {
+    const f = this.fitted, v = this.r.view;
+    return !!f && !!this.fitArea && Math.abs(f.scale - v.scale) < 1e-9 && Math.abs(f.ox - v.ox) < 0.5 && Math.abs(f.oy - v.oy) < 0.5;
   }
 
   // ------------------------------------------------------------------ clicks
@@ -1977,7 +1987,7 @@ export class Editor {
 
   /**
    * Give an atom a charge (the + and − keys), inside an edit. A charge of one is shown in a
-   * circle when circled charges are chosen (Edit > Preferences) or the atom's charge is already
+   * circle when circled charges are chosen (Edit > Settings) or the atom's charge is already
    * circled; otherwise, and for larger charges, as a plain sign by the atom.
    */
   setCharge(id: number, charge: number): void {
@@ -3877,7 +3887,7 @@ export class Editor {
     const id = best.id;
     doc.edit('Text to Atom', () => { doc.removeCaption(caption); this.applyLabel(id, text); });
     this.lastEdited = id;
-    this.say(`${text} is now an atom on the bond. Undo (Ctrl+Z) to keep it as text, or turn this off in Edit > Preferences.`);
+    this.say(`${text} is now an atom on the bond. Undo (Ctrl+Z) to keep it as text, or turn this off in Edit > Settings.`);
     return true;
   }
 

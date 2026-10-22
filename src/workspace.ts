@@ -41,6 +41,8 @@ export interface Tab {
   document: DocFile | null;
   /** Zoom and scroll, kept while another tab shows. */
   view: View | null;
+  /** The view was a slide or page fitted to the window: fit it again on coming back (the window may have changed size). */
+  fitted?: boolean;
   /** Sheets and documents: the selection and scroll, kept while another tab shows. */
   sheetState: unknown;
   dirty: boolean;
