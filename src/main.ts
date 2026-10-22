@@ -4444,6 +4444,8 @@ function storeSettings(): void {
     welcomed,
     groupTips: labelTips.enabled,
     chemTyping: typingPrefs.chemistry,
+    stereoItalic: typingPrefs.stereoItalic,
+    boldNumbers: typingPrefs.boldNumbers,
     spellCheck: typingPrefs.spelling,
     replacements: typingPrefs.replacements,
     dictionary: typingPrefs.dictionary,
@@ -4592,7 +4594,7 @@ void loadSettings().then((s) => {
   modeColours = s.modeColours;
   applyModeColours(ws.active.mode, modeColours);
   keymap.setOverrides(s.hotkeys);
-  setTypingPrefs({ chemistry: s.chemTyping, spelling: s.spellCheck, replacements: s.replacements, dictionary: s.dictionary });
+  setTypingPrefs({ chemistry: s.chemTyping, stereoItalic: s.stereoItalic, boldNumbers: s.boldNumbers, spelling: s.spellCheck, replacements: s.replacements, dictionary: s.dictionary });
   ownNicknames = s.nicknames;
   addNicknames(ownNicknames);
   useOwnTemplates(s.templates);

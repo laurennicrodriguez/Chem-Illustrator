@@ -114,14 +114,14 @@ For a substrate-scope or screening table, put the caret in a cell and use **Inse
 
 On the **References** tab:
 
-- **Insert Caption** adds a numbered caption: Figure, Scheme, Table, Chart or Equation. Choose **S** under "Before the number" for Supporting Information numbering (Scheme S1).
+- **Insert Caption** adds a numbered caption: Figure, Scheme, Table, Chart or Equation. Choose **S** under "Before the number" for Supporting Information numbering (Scheme S1). **Position** puts it above or below the selected item; left as it is, schemes and tables get their caption above and figures below, as journals set them.
 - **Cross-reference** puts "Scheme S1" in the text.
 
 Add, delete or move captions and every number and reference follows.
 
 ## Compound numbers
 
-**References** tab ▸ **Compound Number** puts a bold compound number in the text. Choose **A new compound** for the next number, or pick one already numbered to mention it again. Numbers follow the order compounds are first mentioned, so adding one earlier in the text renumbers the rest. Type a letter after a number for a series (2a, 2b).
+**References** tab ▸ **Compound Number** (Alt+Shift+N) puts a bold compound number in the text. Choose **A new compound** for the next number, or pick one already numbered to mention it again. Numbers follow the order compounds are first mentioned, so adding one earlier in the text renumbers the rest. Type a letter after a number for a series (2a, 2b).
 
 ## References and bibliography
 

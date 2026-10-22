@@ -1900,3 +1900,13 @@ dialog.settings-window[open] { display: flex; }
 .rb-group.rb-folded.rb-popped > .rb-row { display: flex; position: fixed; z-index: 60; left: var(--pop-x); top: var(--pop-y); max-width: calc(100vw - 8px); padding: 6px 8px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 20px rgb(0 0 0 / 0.18); }
 .rb-group.rb-folded > .rb-launch { display: none; }
+
+/* The drawing tools beside a document or sheet: they say what a click does, and stay dimmed until a structure is being drawn */
+body.doc-mode:not(.floating-drawing):not(.split-view) #tools::before,
+body.sheet-mode:not(.floating-drawing):not(.split-view) #tools::before {
+  flex-basis: 100%; max-width: 116px; margin: 0 0 2px; font-size: 11px; line-height: 1.3; color: var(--muted);
+  content: 'Draw a structure: pick a tool to start one at the cursor, or to change the structure selected.';
+}
+body.sheet-mode:not(.floating-drawing):not(.split-view) #tools::before { content: 'Draw a structure: pick a tool to draw in the selected cell, or to change its structure.'; }
+body.doc-mode:not(.floating-drawing):not(.split-view) #tools > :not(:hover):not(:focus-within),
+body.sheet-mode:not(.floating-drawing):not(.split-view) #tools > :not(:hover):not(:focus-within) { opacity: 0.55; }

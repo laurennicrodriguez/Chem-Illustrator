@@ -2522,13 +2522,18 @@ export class DocumentMode {
 
   /**
    * References > Insert Caption: a numbered caption paragraph ("Figure 2. ") under the
-   * paragraph the caret is in (above it for a table, as journals set them), ready to type into.
+   * paragraph the caret is in, or above it (for a scheme or table, as journals set them, or
+   * when asked), ready to type into.
    */
+  /** Where the last caption went (kept while the program is open). */
+  private captionPlace: 'usual' | 'above' | 'below' = 'usual';
+
   private async insertCaption(): Promise<void> {
     const f = this.file!;
     const got = await ask('Insert Caption', [
       { name: 'name', label: 'Label', value: 'Figure', options: CAPTION_NAMES.map((n) => ({ value: n, label: n })) },
       { name: 'prefix', label: 'Before the number', value: '', options: [{ value: '', label: 'Nothing (Figure 1)' }, { value: 'S', label: 'S (Figure S1, for Supporting Information)' }] },
+      { name: 'place', label: 'Position', value: this.captionPlace, options: [{ value: 'usual', label: 'As journals set them (Scheme and Table above, others below)' }, { value: 'above', label: 'Above the selected item' }, { value: 'below', label: 'Below the selected item' }] },
     ], { ok: 'Insert', note: 'Captions number themselves in order, and references to them follow when they move.' });
     this.focus();
     if (!got || this.file !== f) return;
@@ -2538,7 +2543,8 @@ export class DocumentMode {
     const text = ed.text;
     const p = paraAt(text, ed.focus);
     const r = paraRange(text, p);
-    const above = got.name === 'Table';
+    this.captionPlace = got.place === 'above' || got.place === 'below' ? got.place : 'usual';
+    const above = got.place === 'above' || (got.place !== 'below' && (got.name === 'Table' || got.name === 'Scheme'));
     const cap = runStyleOf(f.t.styles.Caption);
     const runs = captionRuns(got.name, got.prefix, id, cap);
     const len = runs.reduce((a, x) => a + x.text.length, 0);
