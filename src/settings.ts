@@ -252,6 +252,39 @@ export function settingsText(s: Settings): string {
   return JSON.stringify({ app: 'Chem Illustrator', version: 1, ...s }, null, 2) + '\n';
 }
 
+/** Settings that belong to this computer: left out of an export, and kept as they are by an import. */
+export const THIS_COMPUTER = ['recentFiles', 'fileTypesOffered', 'wordObjectsOffered', 'skipVersion', 'welcomed'] as const;
+
+/**
+ * Every setting in one file to keep or take to another computer (Edit > Export Settings): keys,
+ * toolboxes, preferences, your own templates, nicknames, styles, palettes, themes and looks.
+ */
+export function exportText(s: Settings, date = new Date()): string {
+  const out: Record<string, unknown> = { app: 'Chem Illustrator', kind: 'settings', version: 1, exported: date.toISOString().slice(0, 10), ...s };
+  for (const k of THIS_COMPUTER) delete out[k];
+  return JSON.stringify(out, null, 2) + '\n';
+}
+
+/**
+ * The settings in a file saved with Export Settings (or a copy of settings.json), over the ones in
+ * use now: what the file leaves out stays as it is, and so does what belongs to this computer.
+ * A file saved from the Hotkeys window changes the keys only. Null when the file is neither.
+ */
+export function importSettings(text: string, now: Settings): { settings: Settings; only?: 'hotkeys' } | null {
+  let raw: unknown;
+  try { raw = JSON.parse(text); } catch { return null; }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.kind === 'hotkeys') {
+    if (!r.hotkeys || typeof r.hotkeys !== 'object' || Array.isArray(r.hotkeys)) return null;
+    return { settings: { ...now, hotkeys: r.hotkeys as KeyOverrides }, only: 'hotkeys' };
+  }
+  if (r.app !== 'Chem Illustrator' || (r.kind !== undefined && r.kind !== 'settings')) return null;
+  const merged: Record<string, unknown> = { ...JSON.parse(settingsText(now)), ...r };
+  for (const k of THIS_COMPUTER) merged[k] = now[k];
+  return { settings: parseSettings(JSON.stringify(merged)) };
+}
+
 export async function loadSettings(): Promise<Settings> {
   try {
     if (isTauri()) return parseSettings(await invoke<string | null>('settings_read'));

@@ -47,6 +47,7 @@ export const EPS: FileType = { description: 'EPS picture', extension: 'eps', mim
 export const PICTURE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'emf', 'bmp', 'webp'];
 export const MOL: FileType = { description: 'MDL molfile', extension: 'mol', mime: 'chemical/x-mdl-molfile' };
 export const KEYMAP_FILE: FileType = { description: 'Chem Illustrator hotkeys', extension: 'json', mime: 'application/json' };
+export const SETTINGS_FILE: FileType = { description: 'Chem Illustrator settings', extension: 'json', mime: 'application/json' };
 
 // The parts of the File System Access API used here (Chrome and Edge only).
 interface FileHandle {
