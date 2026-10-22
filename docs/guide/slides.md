@@ -133,7 +133,9 @@ The **Font** and **Paragraph** groups on the **Home** tab work as in PowerPoint.
 - **Font:** font, size, **A+** and **A−** (bigger and smaller in PowerPoint's steps), bold, italic, underline, subscript, superscript, formula style (CH₂Cl₂ with the numbers lowered) and colour.
 - **Paragraph:** bullets, numbering, list level (or indent), line spacing, and lining up left, centre, right or both edges.
 
-The small bar that appears above text while you type has the same buttons, plus Greek letters and symbols and the paragraph spacing.
+The small bar that appears above text while you type has the same buttons, plus Greek letters and symbols and the paragraph spacing. **Insert** tab ▸ **Symbol** has many more, found by name.
+
+**Format Painter** (Home tab, beside **Copy**) copies the look of the selected text, text box, shape or arrow to the next one you click; double-click it to keep painting until Esc. See [Getting started](getting-started.md#format-painter-every-mode).
 
 ## Shapes
 

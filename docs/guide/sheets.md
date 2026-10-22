@@ -106,6 +106,7 @@ You can combine them as usual: `=1000*D2/MW(B2)` turns mg into mmol.
 ## Formatting
 
 - **Home** tab: font size, bold, italic, underline, borders, fill and text colour, alignment, **Wrap**, **Merge**, and the number format with **+.0** and **−.0** for decimal places. **Other…** in the number format list takes your own Excel-style format, such as `0.00 "mg"`.
+- **Format Painter** (beside **Paste**) copies the formats of the selected cells to the cells you click or drag over next; double-click it to keep painting until Esc. **Insert** tab ▸ **Symbol** types °, µ, Å and other signs into the cell.
 - **C₉H₈** sets formulas with proper subscripts. Formulas typed into text cells (Pd(PPh3)4, CH2Cl2) show this way on their own; click **C₉H₈** on such a cell to show it as typed.
 - **Units:** the number format list has a **Units** group for reaction conditions: temperature (°C), catalyst loading (mol%), equivalents, concentration (M), density (g/mL), amount (mmol), mass (mg), volume (mL and µL), time (h and min), pressure (atm) and % ee. The cell keeps the plain number, so it still sorts and works in formulas. Typing "-78 °C" or "5 mol%" into a cell sets the unit for you.
 

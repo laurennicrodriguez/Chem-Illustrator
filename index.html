@@ -53,6 +53,7 @@
     <button role="menuitem" data-cmd="cut">Cut</button>
     <button role="menuitem" data-cmd="copy">Copy</button>
     <button role="menuitem" data-cmd="paste">Paste</button>
+    <button role="menuitem" data-cmd="format-painter" title="Format Painter: copy the look of what is selected to the next thing you click or drag over. Double-click to keep painting until Esc">Format Painter</button>
     <hr />
     <button role="menuitem" data-cmd="copy-smiles">Copy as SMILES</button>
     <button role="menuitem" data-cmd="copy-mol">Copy as Molfile Text</button>
@@ -248,6 +249,7 @@
     <button data-modes="slides design document" role="menuitem" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha), shown as maths; a Word or PowerPoint equation in .docx and .pptx files">Equation…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-toc" title="The headings (Heading 1, 2, 3) with their page numbers; it updates by itself">Table of Contents…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-tof" title="The Figure, Scheme, Table or Chart captions with their page numbers; it updates by itself">Table of Figures…</button>
+    <button role="menuitem" data-cmd="insert-symbol" title="Greek letters, arrows, maths and chemistry signs, accented letters: find one by name (degree, angstrom) or code, with the ones you used lately first">Symbol…</button>
     <button role="menuitem" data-cmd="insert-link" title="Link the selected text to a web page, a DOI, a file or a place in this file (Ctrl+K while typing). Ctrl+click a link to follow it">Link…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-bookmark" title="Name the paragraph the caret is in, so links can go to it (Ctrl+Shift+F5)">Bookmark…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-footnote" title="A footnote at the foot of the page (Ctrl+Alt+F)">Footnote</button>
@@ -529,6 +531,7 @@
             <button data-sh="cut" title="Cut (paste to move the cells)">Cut</button>
             <button data-sh="copy" title="Copy: one structure goes as a drawing for ChemDraw and Word; cells go as a table for Excel">Copy</button>
             <button data-sh="paste-menu" title="Paste Values, Formulas, Formatting, Transpose, or Paste Special… (Ctrl+Alt+V): operations, skip blanks, column widths">Paste ▾</button>
+            <button data-sh="format-painter" aria-pressed="false" title="Format Painter: copy the formats of the selected cells to the cells you click or drag over next. Double-click to keep painting until Esc"><svg class="fp-icon" viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="2.5" width="12" height="5" rx="1"/><path d="M15 5h2v4.5h-7V12"/><rect x="8.5" y="12" width="3" height="6" rx="0.8"/></svg> Format Painter</button>
           </div>
         </div>
         <div class="rb-label">Clipboard</div>
@@ -741,6 +744,12 @@
           <button class="rb-big" data-sh="insert-text-box" title="A box of text floating over the cells, for notes beside a table"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13"/><path d="M6.5 7h7M10 7v6.5"/></svg></span>Text Box</button>
         </div>
         <div class="rb-label">Illustrations</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="insert-symbol" title="Symbol: Greek letters, arrows, maths and chemistry signs, accented letters, typed into the cell (°C, Å, ±). Find one by name or code; the ones you used lately come first"><span class="rb-icon">Ω</span>Symbol</button>
+        </div>
+        <div class="rb-label">Symbols</div>
       </div>
       <div class="rb-group">
         <div class="rb-row">
@@ -1040,6 +1049,7 @@
           <div class="rb-col">
             <button data-doc="cut" title="Cut">Cut</button>
             <button data-doc="copy" title="Copy: a structure picked on its own goes as a drawing, for ChemDraw">Copy</button>
+            <button data-doc="format-painter" aria-pressed="false" title="Format Painter: copy the look of the selected text (and its paragraph, when you pick a whole paragraph or just put the caret in it) to the text you click or drag over next. Double-click to keep painting until Esc"><svg class="fp-icon" viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="2.5" width="12" height="5" rx="1"/><path d="M15 5h2v4.5h-7V12"/><rect x="8.5" y="12" width="3" height="6" rx="0.8"/></svg> Format Painter</button>
           </div>
         </div>
         <div class="rb-label">Clipboard</div>
@@ -1166,6 +1176,7 @@
       <div class="rb-group">
         <div class="rb-row">
           <button class="rb-big" data-doc="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha) and shown as maths, or one of the usual ones (Arrhenius, Eyring…). Double-click it to change it. Saved as a Word equation (Alt+=)"><span class="rb-icon">π</span>Equation</button>
+          <button class="rb-big" data-doc="insert-symbol" title="Symbol: Greek letters, arrows, maths and chemistry signs, accented letters. Find one by name (degree, angstrom, equilibrium) or code (U+00B0); the ones you used lately come first"><span class="rb-icon">Ω</span>Symbol</button>
         </div>
         <div class="rb-label">Symbols</div>
       </div>
@@ -1627,6 +1638,17 @@
     <div class="rb-panel" data-sl-panel="home">
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-cmd="paste" title="Paste text, a structure from ChemDraw, or a picture"><span class="rb-icon">⎘</span>Paste</button>
+          <div class="rb-col">
+            <button data-cmd="cut" title="Cut">Cut</button>
+            <button data-cmd="copy" title="Copy">Copy</button>
+            <button data-cmd="format-painter" aria-pressed="false" title="Format Painter: copy the look of what is selected to the next thing you click or drag over. Double-click to keep painting until Esc"><svg class="fp-icon" viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="2.5" width="12" height="5" rx="1"/><path d="M15 5h2v4.5h-7V12"/><rect x="8.5" y="12" width="3" height="6" rx="0.8"/></svg> Format Painter</button>
+          </div>
+        </div>
+        <div class="rb-label">Clipboard</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-cmd="new-slide" title="New slide after this one"><span class="rb-icon">＋</span>New Slide</button>
           <div class="rb-col">
             <label class="rb-field">Layout <select id="rb-layout">
@@ -1720,6 +1742,7 @@
           <button class="rb-big" data-cmd="slide-icons" aria-haspopup="true" title="About 7,000 icons, lab and science ones first (glassware, molecules, hazard signs): pick one, then click or drag on the slide"><span class="rb-icon">⚗</span>Icons ▾</button>
           <button class="rb-big" data-cmd="insert-diagram" title="Lists, processes, cycles, hierarchies, Venn diagrams, matrices and pyramids drawn from lines of text, like PowerPoint's SmartArt. Double-click one to type into it"><span class="rb-icon">⧉</span>Diagram</button>
           <button class="rb-big" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha) and shown as maths, or one of the usual ones (Arrhenius, Eyring…). Double-click it to change it. Saved as a PowerPoint equation (Alt+=)"><span class="rb-icon">π</span>Equation</button>
+          <button class="rb-big" data-cmd="insert-symbol" title="Symbol: Greek letters, arrows, maths and chemistry signs, accented letters, typed into the text being edited (or a new text box). Find one by name or code; the ones you used lately come first"><span class="rb-icon">Ω</span>Symbol</button>
           <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
           <button class="rb-big" data-cmd="picture-format" title="Picture Format for the selected picture: brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions. Saved as PowerPoint's own picture settings"><span class="rb-icon">◐</span>Picture Format</button>
         </div>
@@ -1929,6 +1952,16 @@
   <div id="design-ribbon" class="ribbon design-only" role="toolbar" aria-label="Design" hidden>
     <div class="rb-group">
       <div class="rb-row">
+        <div class="rb-col">
+          <button data-cmd="paste" title="Paste">Paste</button>
+          <button data-cmd="copy" title="Copy">Copy</button>
+          <button data-cmd="format-painter" aria-pressed="false" title="Format Painter: copy the look of what is selected to the next thing you click or drag over. Double-click to keep painting until Esc"><svg class="fp-icon" viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="2.5" width="12" height="5" rx="1"/><path d="M15 5h2v4.5h-7V12"/><rect x="8.5" y="12" width="3" height="6" rx="0.8"/></svg> Format Painter</button>
+        </div>
+      </div>
+      <div class="rb-label">Clipboard</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-row">
         <button class="rb-big" data-cmd="design-size" title="Change the page size: journal TOC graphics, graphical abstracts, posters, slides, paper or your own size"><span class="rb-icon">▭</span>Page Size</button>
         <div class="rb-col">
           <span id="dz-size" class="muted small"></span>
@@ -1958,6 +1991,7 @@
         <button class="rb-big" data-cmd="insert-picture" title="Put a picture on the page (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
         <button class="rb-big" data-cmd="insert-table" title="Put a table on the page (or paste cells from Excel or a sheet)"><span class="rb-icon">▦</span>Table</button>
         <button class="rb-big" data-cmd="insert-chart" title="A chart with its own data: type or paste the numbers, pick the kind of chart. Double-click it to change it"><span class="rb-icon">▥</span>Chart</button>
+        <button class="rb-big" data-cmd="insert-symbol" title="Symbol: Greek letters, arrows, maths and chemistry signs, accented letters, typed into the text being edited (or a new text box). Find one by name or code"><span class="rb-icon">Ω</span>Symbol</button>
         <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
         <button class="rb-big" data-cmd="picture-format" title="Picture Format for the selected picture: brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions. Saved as PowerPoint's own picture settings"><span class="rb-icon">◐</span>Picture Format</button>
       </div>

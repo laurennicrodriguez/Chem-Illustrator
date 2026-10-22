@@ -13,6 +13,7 @@ import { cleanPara, editParas, fitParas, paraAt, paraCount, paraRange, storedPar
 import type { CharLook, FixEdit } from './chemtext';
 import { trackedReplace } from '../document/revisions';
 import { linkAt, removeLink as removeLinkRuns, setLink as setLinkRuns, type LinkSpan } from '../links';
+import { paintParas, paintRange, paintRuns, paraLook, picksParagraph, runLook, type TextLook } from '../format-painter';
 
 /** A styled text with its paragraph formatting: what a caption, a text box or a slide holds. */
 export interface RichText {
@@ -410,6 +411,25 @@ export class TextEditing {
     if (a === b) [a, b] = wordAt(this.text, a);
     if (a === b) return;
     this.commit('case', { ...this.t, runs: rt.changeCase(this.t.runs, a, b, mode) }, this.anchor, this.focus);
+  }
+
+  /** Format Painter: the look of the selection (and of its paragraph, for a caret or whole paragraphs). */
+  pickLook(): TextLook {
+    const text = this.text;
+    const look: TextLook = { run: runLook(this.currentStyle()) };
+    if (picksParagraph(text, this.start, this.end)) look.para = paraLook(this.t.paras[paraAt(text, this.start)] ?? {});
+    return look;
+  }
+
+  /** Format Painter: give the selection (or the word at the caret) a look picked up. False when there was nothing to paint. */
+  paintLook(look: TextLook): boolean {
+    const text = this.text;
+    const [a, b] = paintRange(text, this.start, this.end);
+    if (a === b && !look.para) return false;
+    const t: RichText = { ...this.t, runs: paintRuns(this.t.runs, a, b, look.run) };
+    if (look.para) t.paras = paintParas(this.t.paras, paraAt(text, a), paraAt(text, b), look.para);
+    this.commit('Format Painter', t, this.anchor, this.focus);
+    return true;
   }
 
   // ------------------------------------------------------------------ links

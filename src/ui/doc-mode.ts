@@ -13,7 +13,9 @@ import type { Tab } from '../workspace';
 import type { Measure } from '../text/layout';
 import { keymap, chordOf, parseAction, type KeyContext } from '../editor/keymap';
 import * as rt from '../richtext';
-import type { Move } from '../text/editing';
+import type { Move, TextEditing } from '../text/editing';
+import type { TextLook } from '../format-painter';
+import { BRUSH } from '../editor/cursors';
 import { offsetAt, caretPos, selectionRects } from '../text/layout';
 import { htmlToRich, richToHtml, richToPlain } from '../text/html';
 import { afterTyping, typingPrefs, setTypingPrefs } from '../text/typing';
@@ -117,7 +119,7 @@ const ignored = new Set<string>();
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
 /** Commands that, in a text box, work on its text (others leave the box first). */
-const BOX_COMMANDS = /^(doc-(align-|justify|bold|italic|underline|sub|sup|formula|highlight|bullets|numbering|indent|outdent)|line-|font-|select-all$|undo$|redo$|zoom-|copy$|cut$|paste$|box-|find$|replace$|wrap-)/;
+const BOX_COMMANDS = /^(format-painter$|insert-symbol$|doc-(align-|justify|bold|italic|underline|sub|sup|formula|highlight|bullets|numbering|indent|outdent)|line-|font-|select-all$|undo$|redo$|zoom-|copy$|cut$|paste$|box-|find$|replace$|wrap-)/;
 
 /** Commands that, in a table cell, work there too (others leave the cell first). */
 const CELL_COMMANDS = /^(table-|tbl-|insert-table$|insert-structure$|structure-from-name-doc$|name-to-structure$|insert-picture$|edit-figure$|compound-number$|cross-reference$|insert-citation$)/;
@@ -324,6 +326,21 @@ export class DocumentMode {
   /** Where typing goes: the text box being typed into, or the document. */
   private get ed() {
     return this.file!.textEd;
+  }
+
+  /** Format Painter, while the brush is held (set by the app): a click or drag in the text paints it. */
+  painter: ((ed: TextEditing) => void) | null = null;
+
+  /** Format Painter: the look of the selection (or of the text at the caret) where typing goes. */
+  pickLook(): TextLook | null {
+    return this.file && !this.reading ? this.ed.pickLook() : null;
+  }
+
+  /** Insert > Symbol: type a character where the caret is. False when the text can't be typed in (Read Mode). */
+  insertText(text: string): boolean {
+    if (!this.file || this.reading) return false;
+    this.ed.type(text);
+    return true;
   }
 
   /** Start typing into a text box (the caret at the end of its text, or at a point on it). */
@@ -1044,6 +1061,7 @@ export class DocumentMode {
     cmd('Cut', 'cut');
     cmd('Copy', 'copy');
     cmd('Paste', 'paste');
+    cmd('Format Painter', 'format-painter', 'Copy the look of the text here (or of the selection) to the text you click or drag over next');
     menu.appendChild(document.createElement('hr'));
     // a footnote's number, or typing in a note: to the other end, or the other kind
     const fb = this.file?.box && !this.file.box.cell && this.file.t.objects[this.file.box.id]?.kind === 'note' ? this.file.box.id : null;
@@ -1982,6 +2000,7 @@ export class DocumentMode {
       try { s.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
       if (d?.kind === 'move' && d.moved) this.reanchor(d.id);
       if (d?.kind === 'inline') this.dropInline(d.id, d.to);
+      if ((d?.kind === 'text' || d?.kind === 'box') && this.painter && this.file && !this.reading) this.painter(this.ed);
     });
     s.addEventListener('dblclick', (e) => {
       const f = this.file;
@@ -2196,6 +2215,7 @@ export class DocumentMode {
       if (this.view.scroller.title !== tip) this.view.scroller.title = tip;
       if (link && (this.reading || (isMac ? e.metaKey : e.ctrlKey))) { this.view.scroller.style.cursor = 'pointer'; return; }
       if (this.tables.painting && this.cellAt(p)) { this.view.scroller.style.cursor = 'crosshair'; return; }
+      if (this.painter && !this.reading) { this.view.scroller.style.cursor = BRUSH; return; }
       this.view.scroller.style.cursor = corner ? 'nwse-resize' : id === null || o?.kind === 'table' ? 'text'
         : o?.kind === 'textbox' ? (this.nearEdge(id, p) ? 'move' : 'text') : o?.kind === 'note' ? 'text'
         : floatOf(o) ? 'move' : o?.kind === 'drawing' ? 'pointer' : 'default';

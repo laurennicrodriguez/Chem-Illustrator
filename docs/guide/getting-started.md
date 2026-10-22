@@ -133,6 +133,33 @@ The first time you open the app, a small card on the empty page lists the tips m
 
 Click **Search** at the top, or press Alt+Q, and type a few letters of what you want to do: `wedge`, `number comp`, `bold`, `dark`. The list shows each matching menu command, ribbon button and drawing tool, where it lives and its key. Press Enter for the top match, or use the arrow keys to pick another. With nothing typed, the commands you used lately come first. **Edit ▸ Search Commands…** opens the same box.
 
+### Format Painter (every mode)
+
+**Format Painter** copies a look from one thing to another, as in Word, PowerPoint and Excel. It is on the **Home** tab in Documents, Slides and Sheets (beside **Paste**), on the Design ribbon, under **Edit ▸ Format Painter** and in the right-click menu.
+
+1. Select what has the look you want (or just put the caret in the text).
+2. Click **Format Painter**. The pointer becomes a brush.
+3. Click or drag over what should take the look. The brush is then put away.
+
+Double-click **Format Painter** to keep the brush: paint as many things as you like, then press **Esc** or click the button again.
+
+What goes across is only the look, never the content or its meaning:
+
+- **Text:** font, size, colour, bold, italic, underline, sub- and superscript, formula style, highlight, strikethrough, small caps and the character style. A click on a word paints the whole word. When you pick up from just a caret, or from whole paragraphs, the paragraph's look (alignment, spacing, indents, list and paragraph style) goes too, as in Word.
+- **Drawings, slides and designs:** a shape's outline, fill, pattern, see-through amount and shadow; an arrow's colour, line and head size; the colour and highlight of atoms and bonds; the text look of a caption or of the text in a shape. A bond's order or wedge, an arrow's kind of head (one or two electrons) and a shape's kind never change. Something of another kind takes just the colour. Click one thing, or drag a box to paint everything in it.
+- **Sheets:** the cells' formats (number format, font, fill, borders, alignment). Click one cell to paint a block the size of the one you picked up, or drag over a range to fill it, the pattern repeated across it.
+
+### Insert ▸ Symbol (every mode)
+
+**Insert ▸ Symbol…** (and **Symbol** on the **Insert** tab) opens a small window of characters: Greek letters, arrows, maths, chemistry signs and units (°, ‡, ⦵, Å, ⇌), superscripts and subscripts, fractions, punctuation, accented letters for authors' names, currency, and marks such as ✓.
+
+- Type in the box to find one by name: `degree`, `angstrom`, `equilibrium`, `plus minus`, `arrow right`. A code works too: `U+00B0`, `00B0` or `&#176;`.
+- Or pick a group from the list beside the box.
+- Click a character to type it where the caret is; the window stays open for the next one. Enter types the first one found.
+- The ones you used lately are along the top, newest first, and are kept between sessions.
+
+It types into the text you are editing: a document, a caption or text box, a slide's text, or a cell (it starts typing in the active cell if you weren't already). On a drawing, slide or design with nothing being typed, it starts a new text in the middle of the view. In a drawing, the window warns about the few characters a ChemDraw file may not show.
+
 ## Opening your first ChemDraw file
 
 1. Choose **File ▸ Open…** (Ctrl+O).
