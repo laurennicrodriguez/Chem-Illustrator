@@ -169,7 +169,7 @@ export class Toolboxes {
       const fold = f.querySelector<HTMLElement>('.tb-fold');
       if (fold) { fold.textContent = place.collapsed ? '▸' : '▾'; fold.title = place.collapsed ? `Open ${def.title} out` : `Fold ${def.title} up to its title`; }
       const lock = f.querySelector<HTMLElement>('.tb-lock');
-      if (lock) { lock.innerHTML = lockIcon(locked, 14); lock.title = locked ? `${def.title} is locked: click to unlock it, then drag it by its title` : `${def.title} is unlocked: click to lock it where it is`; lock.setAttribute('aria-pressed', String(locked)); }
+      if (lock) { lock.innerHTML = lockIcon(locked, 14); lock.title = locked ? `Lock this toolbox's place (locked). Click to unlock it, then drag it by its title. The drawing itself is never locked.` : `Lock this toolbox's place (unlocked: drag it by its title). Click to lock it where it is.`; lock.setAttribute('aria-pressed', String(locked)); }
       f.dataset.dock = place.dock;
       const body = f.querySelector<HTMLElement>('.tb-body')!;
       body.replaceChildren();

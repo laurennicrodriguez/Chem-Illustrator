@@ -2,6 +2,7 @@
 // toolbar, the drawing area (with the slide list and notes in Slides mode, or the grid in Sheet
 // mode), and the panels on the right.
 
+import { commandIcon } from './ui/command-icons';
 import './app.css';
 import type { MethylStyle } from './chem/hydrogens';
 import { STANDARD_COLOURS, usedColours } from './colours';
@@ -699,7 +700,7 @@ async function structureKeys(): Promise<Map<number, string>> {
 }
 
 /**
- * Scheme > Scheme Settings: spacing between structures and + signs, and the text above and below
+ * Chemistry > Reactions and Schemes > Scheme Settings: spacing between structures and + signs, and the text above and below
  * arrows (size, alignment, gap, the + boxes, fitting the arrow to it). A blank distance follows
  * the drawing's bond length.
  */
@@ -734,7 +735,7 @@ async function schemeSettings(): Promise<void> {
 }
 
 /**
- * Scheme > Number Compounds: ID labels under the selected structures (or all), in scheme order,
+ * Chemistry > Labels and Numbers > Number Compounds: ID labels under the selected structures (or all), in scheme order,
  * counted as chosen; copies of one structure share an ID. Labels are tied to their structures.
  */
 async function numberCompounds(): Promise<void> {
@@ -767,7 +768,7 @@ async function numberCompounds(): Promise<void> {
 }
 
 /**
- * Structure > Add ID Label and Add Caption: text centred under each chosen structure, tied to
+ * Chemistry > Labels and Numbers > Add ID Label and Add Caption: text centred under each chosen structure, tied to
  * it, then typing straight away. An ID label is the next compound number (or the ID a copy of
  * the structure already has).
  */
@@ -869,7 +870,7 @@ function useOwnTemplates(list: Template[]): void {
   toolbar.refreshTitles();
 }
 
-/** Structure > Save as Template: the selected structure goes into My templates. */
+/** Chemistry > Nicknames and Templates > Save as Template: the selected structure goes into My templates. */
 async function saveTemplate(): Promise<void> {
   const ids = [...editor.sel.atoms];
   if (!ids.length) { flash('Select a structure first, then save it as a template.'); return; }
@@ -885,10 +886,10 @@ async function saveTemplate(): Promise<void> {
   flash(`Saved “${name}” in My templates. Click to place it, a bond to fuse it, or an atom to join it.`, 6000);
 }
 
-/** Structure > Delete Template…: take one of your own templates away. */
+/** Chemistry > Nicknames and Templates > Delete Template…: take one of your own templates away. */
 async function deleteTemplate(): Promise<void> {
   const list = ownTemplates();
-  if (!list.length) { flash('You have no templates of your own yet (Structure > Save as Template).'); return; }
+  if (!list.length) { flash('You have no templates of your own yet (Chemistry > Nicknames and Templates > Save as Template).'); return; }
   const got = await ask('Delete Template', [{ name: 'id', label: 'Template', value: list[list.length - 1].id, options: list.map((t) => ({ value: t.id, label: t.name })) }], { ok: 'Delete' });
   if (!got) return;
   useOwnTemplates(list.filter((t) => t.id !== got.id));
@@ -896,7 +897,7 @@ async function deleteTemplate(): Promise<void> {
   storeSettings();
 }
 
-/** Structure > Define Nickname…: the selected group gets a name that can be typed as a label. */
+/** Chemistry > Nicknames and Templates > Define Nickname…: the selected group gets a name that can be typed as a label. */
 async function defineNickname(): Promise<void> {
   const g = selectedGroup(doc, editor.sel.atoms);
   if ('error' in g) { flash(g.error, 6000); return; }
@@ -912,10 +913,10 @@ async function defineNickname(): Promise<void> {
   flash(`“${name}” can now be typed as a label.`, 5000);
 }
 
-/** Structure > Delete Nickname…: take one of your own nicknames away. */
+/** Chemistry > Nicknames and Templates > Delete Nickname…: take one of your own nicknames away. */
 async function deleteNickname(): Promise<void> {
   const names = Object.keys(ownNicknames);
-  if (!names.length) { flash('You have no nicknames of your own yet (Structure > Define Nickname).'); return; }
+  if (!names.length) { flash('You have no nicknames of your own yet (Chemistry > Nicknames and Templates > Define Nickname).'); return; }
   const got = await ask('Delete Nickname', [{ name: 'name', label: 'Nickname', value: names[0], options: names.map((n) => ({ value: n, label: `${n}  (${ownNicknames[n]})` })) }], { ok: 'Delete' });
   if (!got) return;
   const { [got.name]: _, ...rest } = ownNicknames;
@@ -926,9 +927,9 @@ async function deleteNickname(): Promise<void> {
   storeSettings();
 }
 
-/** Structure > Contract Label…: fold the selected group into one label (Undo opens it again). */
+/** Chemistry > Contract Label…: fold the selected group into one label (Undo opens it again). */
 /**
- * Structure > Expand Label: the selected labels drawn out as atoms and bonds. Ligands on a
+ * Chemistry > Expand Label: the selected labels drawn out as atoms and bonds. Ligands on a
  * metal come from their templates; other abbreviations are laid out by the chemistry engine.
  */
 async function expandLabel(): Promise<void> {
@@ -1014,7 +1015,7 @@ const nameDialog = new NameDialog(async (name) => {
 }, () => !namesReady);
 
 /**
- * Structure > Name to Structure. Selected captions are read as names and replaced by their
+ * Chemistry > Name to Structure. Selected captions are read as names and replaced by their
  * structures (Undo puts them back); with no caption selected, a window asks for a name.
  */
 async function nameToStructure(): Promise<void> {
@@ -1457,7 +1458,7 @@ function slideSwitched(deck: Deck): void {
   slideCmts?.slideChanged();
 }
 
-/** The layout and size boxes and the Slide menu show the slide being edited. */
+/** The layout and size boxes and the Format menu show the slide being edited. */
 function showSlideState(): void {
   const deck = deckNow();
   if (!deck?.current) return;
@@ -1851,7 +1852,7 @@ function placePicture(bytes: Uint8Array, mime: string, at: { x: number; y: numbe
 }
 
 /**
- * An animation from Scheme > Animate Reaction on the slide: a video (its first frame shown while
+ * An animation from Chemistry > Animate > Animate Reaction on the slide: a video (its first frame shown while
  * editing) or an animated GIF, in the middle of the slide, at most 80% of it.
  */
 function placeClip(v: { mp4?: Uint8Array; still: Uint8Array; gif?: Uint8Array; w: number; h: number }): void {
@@ -2318,7 +2319,7 @@ async function pdfImage(src: string): Promise<PdfImage | null> {
 
 // ---------------------------------------------------------------- sheets: the grid, and structures drawn for cells
 
-const SHEET_HINT = 'Type in a cell, or double-click to change it. Sheet > Draw Structure puts a structure in a cell; Insert Property Columns works out formula, MW, HRMS m/z and more.';
+const SHEET_HINT = 'Type in a cell, or double-click to change it. Insert > Structure in Cell puts a structure in a cell; Insert > Insert Property Columns works out formula, MW, HRMS m/z and more.';
 
 /** True when a sheet is showing (and no structure is being drawn for one of its cells). */
 function sheetActive(): boolean {
@@ -2356,7 +2357,7 @@ function showSheetParts(): void {
     el.hidden = (c.contains('sheet-only') && !sheet) || (c.contains('no-sheet') && sheet) || (c.contains('doc-only') && !words)
       || (c.contains('no-doc') && words) || (c.contains('draw-only') && (sheet || words) && !drawingOnTop());
   }
-  $('#sheet-menu-wrap').hidden = !sheet || drawingOnTop();
+  tickMenuModes();
 }
 
 /** A key pressed in a sheet: Excel's keys first, then the menu keys that use Ctrl, Alt or a function key. */
@@ -2747,7 +2748,7 @@ window.addEventListener('keydown', (e) => {
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'print',
-  'help', 'user-guide', 'send-feedback', 'report-problem', 'check-updates']);
+  'help', 'about', 'user-guide', 'send-feedback', 'report-problem', 'check-updates']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
@@ -2942,6 +2943,12 @@ const COMMANDS: Record<string, () => unknown> = {
   help: () => openHelp(),
   'user-guide': () => openWebPage(GUIDE_URL),
   'send-feedback': () => feedback.open(),
+  about: () => void appVersion().then((v) => ask('About Chem Illustrator', [], {
+    noCancel: true,
+    note: `Version ${v === 'web' ? 'for the browser' : v}. Free software under the GNU General Public License, version 3: `
+      + 'see the licence and the source on GitHub (github.com/nathanohare/Chem-Illustrator). ChemDraw is a trademark of Revvity Signals; '
+      + 'Chem Illustrator is not made by or affiliated with Revvity Signals.',
+  })),
   'report-problem': () => feedback.open('problem'),
   'command-search': () => commandSearch.open(),
   'toolbox-main': () => toolboxes.toggle('main'),
@@ -3068,44 +3075,114 @@ for (const [i, a] of ANIM_COMMANDS.entries()) {
 }
 
 // The menus: click a name to open its menu; with one open, pointing at another name opens that.
-const menus = [...document.querySelectorAll<HTMLDivElement>('.menu-wrap')].map((w) => ({
+// A submenu opens when pointed at, clicked or entered with the right arrow key, and sits on the
+// screen beside its item (fixed, so a menu that scrolls doesn't cut it off).
+const menus = [...document.querySelectorAll<HTMLDivElement>('header > .menu-wrap')].map((w) => ({
   btn: w.querySelector<HTMLButtonElement>(':scope > button')!,
-  list: w.querySelector<HTMLDivElement>('.menu')!,
+  list: w.querySelector<HTMLDivElement>(':scope > .menu')!,
 }));
 type Menu = (typeof menus)[number];
 let openMenu: Menu | null = null;
+/** The items arrow keys move through in one menu or submenu: not hidden, not greyed out. */
+const menuItems = (list: HTMLElement) =>
+  [...list.querySelectorAll<HTMLButtonElement>(':scope > button, :scope > .submenu > button, :scope > .recent-files > button')]
+    .filter((b) => !b.hidden && !b.disabled && b.getClientRects().length > 0);
+function closeSubs(inside: HTMLElement): void {
+  for (const sub of inside.querySelectorAll<HTMLElement>('.menu.sub')) {
+    sub.hidden = true;
+    sub.parentElement!.querySelector(':scope > button')!.setAttribute('aria-expanded', 'false');
+  }
+}
+function openSub(item: HTMLButtonElement, focus: boolean): void {
+  const list = item.parentElement!.parentElement as HTMLElement;
+  closeSubs(list);
+  const sub = item.nextElementSibling as HTMLElement;
+  sub.hidden = false;
+  item.setAttribute('aria-expanded', 'true');
+  const r = item.getBoundingClientRect(), w = sub.offsetWidth, h = sub.offsetHeight;
+  const left = r.right + w + 4 <= innerWidth ? r.right + 2 : Math.max(4, r.left - w - 2);
+  sub.style.left = `${left}px`;
+  sub.style.top = `${Math.max(4, Math.min(r.top - 5, innerHeight - h - 4))}px`;
+  if (focus) menuItems(sub)[0]?.focus();
+}
 function showMenu(m: Menu | null, focus = true): void {
   openMenu = m;
   for (const x of menus) {
+    if (x !== m) closeSubs(x.list);
     x.list.hidden = x !== m;
     x.btn.setAttribute('aria-expanded', String(x === m));
   }
-  if (m && focus) m.list.querySelector<HTMLButtonElement>('button:not([hidden])')?.focus();
+  if (!m) return;
+  m.list.style.setProperty('--menu-top', `${m.btn.getBoundingClientRect().bottom}px`);
+  if (focus) menuItems(m.list)[0]?.focus();
 }
 for (const m of menus) {
   m.btn.addEventListener('click', () => showMenu(openMenu === m ? null : m));
   m.btn.addEventListener('pointerenter', () => { if (openMenu && openMenu !== m) showMenu(m, false); });
+  m.list.addEventListener('scroll', () => closeSubs(m.list));
+  m.list.addEventListener('pointerover', (e) => {
+    const item = (e.target as HTMLElement).closest<HTMLButtonElement>('button');
+    if (!item || item.disabled) return;
+    if (item.classList.contains('has-sub')) { if (item.getAttribute('aria-expanded') !== 'true') openSub(item, false); }
+    else closeSubs(item.parentElement!.closest('.menu')!);
+  });
   m.list.addEventListener('click', (e) => {
-    const recent = (e.target as HTMLElement).closest<HTMLButtonElement>('button')?.dataset.recent;
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button');
+    if (!b || b.disabled) return;
+    if (b.classList.contains('has-sub')) { openSub(b, false); return; }
+    const recent = b.dataset.recent;
     if (recent !== undefined) { showMenu(null); void openRecent(recent); return; }
-    const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button')?.dataset.cmd;
+    const cmd = b.dataset.cmd;
     if (!cmd) return;
     showMenu(null);
     command(cmd);
   });
   m.list.addEventListener('keydown', (e) => {
-    const items = [...m.list.querySelectorAll<HTMLButtonElement>('button:not([hidden])')];
-    const i = items.indexOf(document.activeElement as HTMLButtonElement);
+    const here = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>('.menu') ?? m.list;
+    const items = menuItems(here);
+    const now = document.activeElement as HTMLButtonElement;
+    const i = items.indexOf(now);
     const j = menus.indexOf(m);
-    if (e.key === 'Escape') { showMenu(null); m.btn.focus(); }
-    else if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus(); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+    const parentItem = here === m.list ? null : here.parentElement!.querySelector<HTMLButtonElement>(':scope > button');
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      if (parentItem) { closeSubs(parentItem.parentElement!.parentElement as HTMLElement); parentItem.focus(); }
+      else { showMenu(null); m.btn.focus(); }
+    }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length]?.focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus(); }
+    else if (e.key === 'ArrowRight' && now.classList.contains('has-sub')) { e.preventDefault(); openSub(now, true); }
+    else if (e.key === 'ArrowLeft' && parentItem) {
+      e.preventDefault();
+      closeSubs(parentItem.parentElement!.parentElement as HTMLElement);
+      parentItem.focus();
+    }
     else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
       e.preventDefault();
       showMenu(menus[(j + (e.key === 'ArrowRight' ? 1 : -1) + menus.length) % menus.length]);
     }
   });
 }
+addEventListener('resize', () => { if (openMenu) showMenu(null); });
+
+/** The mode the menus serve: drawing a structure for a cell or a document counts as Drawing. */
+function menuMode(): string { return drawingOnTop() ? 'drawing' : ws.active.mode; }
+
+/**
+ * Every mode has the same menus; an item that only works in some modes (data-modes, or the
+ * data-item-modes of its menu) is greyed out in the others, so the menus never change shape.
+ */
+function tickMenuModes(): void {
+  const mode = menuMode();
+  for (const el of document.querySelectorAll<HTMLElement>('header .menu > button, header .menu > .submenu, header .menu.sub > button')) {
+    const modes = el.dataset.modes ?? el.closest<HTMLElement>('[data-item-modes]')?.dataset.itemModes;
+    if (!modes) continue;
+    const on = modes.split(' ').includes(mode);
+    const b = el instanceof HTMLButtonElement ? el : el.querySelector<HTMLButtonElement>(':scope > button');
+    if (b) b.disabled = !on;
+  }
+}
+tickMenuModes();
 document.addEventListener('pointerdown', (e) => {
   if (openMenu && !(e.target as HTMLElement).closest('.menu-wrap')) showMenu(null);
 });
@@ -3407,7 +3484,7 @@ applySplitWidth();
 
 // ---------------------------------------------------------------- settings and the Hotkeys window
 
-/** The colour Structure > Highlight uses: the one last chosen in the Style panel (a soft yellow at first). */
+/** The colour Chemistry > Highlight and Fill > Highlight uses: the one last chosen in the Style panel (a soft yellow at first). */
 let highlightColour = '#ffe680';
 /** The look new highlights take: the one last chosen in the Style panel. */
 let highlightStyle: HighlightStyle | undefined;
@@ -3435,12 +3512,12 @@ function applyHighlightLook(look: HighlightLookPreset): void {
   if (look.colour) highlightColour = look.colour;
 }
 
-/** Structure > Highlight Look…: pick a look for the selection. */
+/** Chemistry > Highlight and Fill > Highlight Look…: pick a look for the selection. */
 async function chooseHighlightLook(): Promise<void> {
   const looks = allLooks();
   const got = await ask('Highlight look', [
     { name: 'look', label: 'Look', value: '0', options: looks.map((l, i) => ({ value: String(i), label: i >= BUILT_IN_LOOKS.length ? `${l.name} (yours)` : l.name })) },
-  ], { ok: 'Use', note: 'The ready-made looks keep the highlight\'s colour; your own looks have their colour too. Save the look of a highlight you have set up with Structure > Save Highlight Look.' });
+  ], { ok: 'Use', note: 'The ready-made looks keep the highlight\'s colour; your own looks have their colour too. Save the look of a highlight you have set up with Chemistry > Highlight and Fill > Save Highlight Look.' });
   const look = got && looks[Number(got.look)];
   if (look) applyHighlightLook(look);
 }
@@ -3452,14 +3529,14 @@ function selectedHighlight(): { colour: string; style: HighlightStyle } | null {
   return null;
 }
 
-/** Structure > Save Highlight Look…: keep the selected highlight's look under a name. */
+/** Chemistry > Highlight and Fill > Save Highlight Look…: keep the selected highlight's look under a name. */
 async function saveHighlightLook(): Promise<void> {
   const h = selectedHighlight();
   if (!h) { flash('Select a highlight that looks the way you want first.'); return; }
   const got = await ask('Save highlight look', [
     { name: 'name', label: 'Name', value: '', placeholder: 'for example Reacting bonds' },
     { name: 'colour', label: 'Keep its colour too', value: 'true', type: 'checkbox' },
-  ], { ok: 'Save', note: 'It is offered in Structure > Highlight Look, in the Style panel and in the Highlight toolbox, in every drawing.' });
+  ], { ok: 'Save', note: 'It is offered in Chemistry > Highlight and Fill > Highlight Look, in the Style panel and in the Highlight toolbox, in every drawing.' });
   const name = got?.name.trim();
   if (!got || !name) return;
   const look: HighlightLookPreset = { name, ...(got.colour === 'true' ? { colour: h.colour } : {}), style: tidyStyle(h.style) ?? {} };
@@ -3469,9 +3546,9 @@ async function saveHighlightLook(): Promise<void> {
   flash(`Saved the look “${name}”.`);
 }
 
-/** Structure > Delete Highlight Look…: forget one of your own looks. */
+/** Chemistry > Highlight and Fill > Delete Highlight Look…: forget one of your own looks. */
 async function deleteHighlightLook(): Promise<void> {
-  if (!ownLooks.length) { flash('You have no saved highlight looks yet (Structure > Save Highlight Look).'); return; }
+  if (!ownLooks.length) { flash('You have no saved highlight looks yet (Chemistry > Highlight and Fill > Save Highlight Look).'); return; }
   const got = await ask('Delete highlight look', [{ name: 'look', label: 'Look', value: ownLooks[0].name, options: ownLooks.map((l) => ({ value: l.name, label: l.name })) }], { ok: 'Delete' });
   if (!got) return;
   ownLooks = ownLooks.filter((l) => l.name !== got.look);
@@ -3485,7 +3562,7 @@ function looksChanged(): void {
   stylePanel.refresh(true);
 }
 
-/** Tick the chosen way of writing terminal methyls in the Structure menu. */
+/** Tick the chosen way of writing terminal methyls in the Chemistry menu. */
 function tickMethylStyle(): void {
   $('[data-cmd="methyls-ch3"]')?.setAttribute('aria-checked', String(editor.options.methylStyle === 'CH3'));
   $('[data-cmd="methyls-me"]')?.setAttribute('aria-checked', String(editor.options.methylStyle === 'Me'));
@@ -4059,7 +4136,7 @@ async function lookUpOnPubChem(smiles: string): Promise<void> {
   scheduleAnalysis(true);
 }
 
-/** Structure > Look Up on PubChem (and the right-click menu): the structure picked, shown in the Analysis panel. */
+/** Chemistry > Look Up > Look Up on PubChem (and the right-click menu): the structure picked, shown in the Analysis panel. */
 async function lookUpChosen(): Promise<void> {
   const f = chosenStructures()[0];
   if (!f) { flash('Select a structure first.'); return; }
@@ -4146,7 +4223,7 @@ async function weigh(atoms: Set<number>): Promise<FragmentResult | null> {
 }
 
 /**
- * Structure > Attach Descriptors (and the Analysis panel's button): the formula and masses under
+ * Chemistry > Attach Descriptors (and the Analysis panel's button): the formula and masses under
  * each structure, tied to it. They follow it, and are worked out again when it changes; the Style
  * panel chooses what they show and where they sit.
  */
@@ -4269,7 +4346,7 @@ async function runAnalysis(force: boolean): Promise<void> {
 }
 
 /**
- * Structure > Stereo Group: puts the selected stereocentres in an enhanced stereo group (abs, &n
+ * Chemistry > Stereo Group: puts the selected stereocentres in an enhanced stereo group (abs, &n
  * or orn), as in ChemDraw and V3000 molfiles, or takes them out of one.
  */
 async function setStereoGroup(): Promise<void> {
@@ -4303,7 +4380,7 @@ async function setStereoGroup(): Promise<void> {
 }
 
 /**
- * Structure > Polymer or Repeat Brackets: labels the selected brackets n (a polymer's repeat unit)
+ * Chemistry > Polymer or Repeat Brackets: labels the selected brackets n (a polymer's repeat unit)
  * or a number (a group repeated that many times). The atoms between the brackets are the unit.
  */
 async function setRepeatGroup(): Promise<void> {
@@ -4333,7 +4410,7 @@ async function setRepeatGroup(): Promise<void> {
 let rGroupLast = { rows: '', prefix: '', cols: 'formula-mw', extra: 'Yield (%)' };
 
 /**
- * Structure > R-Group Table: a table under a core structure with R groups (R1, R2…) listing what
+ * Chemistry > Polymers and R-Groups > R-Group Table: a table under a core structure with R groups (R1, R2…) listing what
  * each group is in each compound, with each compound's number, formula and mass worked out by
  * putting its groups in place. The result is an ordinary table, so anything in it can be typed over.
  */
@@ -4382,7 +4459,7 @@ async function rGroupTable(): Promise<void> {
 }
 
 /**
- * Structure > Chiral Flag: the boxed Abs, Rel or Rac below the selected structure (or the one
+ * Chemistry > Chiral Flag: the boxed Abs, Rel or Rac below the selected structure (or the one
  * last drawn on), replacing a flag already there.
  */
 async function setChiralFlag(): Promise<void> {
@@ -4411,7 +4488,7 @@ async function setChiralFlag(): Promise<void> {
 }
 
 /**
- * Structure > Show Stereo Labels: shows the R/S and E/Z labels of the selected structures (or of
+ * Chemistry > Show Stereo Labels: shows the R/S and E/Z labels of the selected structures (or of
  * all of them) as part of the drawing, or hides them when they are all showing already.
  */
 function toggleStereoLabels(): void {
@@ -4530,7 +4607,7 @@ function updateWarnings(): void {
   });
 }
 
-/** Structure > Check Structure: go to the next problem after the one selected. */
+/** Chemistry > Check Structure: go to the next problem after the one selected. */
 function checkStructure(): void {
   const list = checks.list();
   if (!list.length) {
@@ -5040,6 +5117,9 @@ function tickToolboxes(): void {
   lock.setAttribute('aria-pressed', String(toolboxState.locked));
   lock.querySelector('.lock-icon')!.innerHTML = lockIcon(toolboxState.locked);
   lock.querySelector('.lock-text')!.textContent = toolboxState.locked ? 'Locked' : 'Unlocked';
+  lock.title = toolboxState.locked
+    ? 'Toolbox layout locked: the toolboxes stay where they are. Click to unlock every toolbox, then drag one by its title to move it. This locks the layout only, never the drawing.'
+    : 'Toolbox layout unlocked: drag a toolbox by its title to an edge to dock it, or anywhere to float it. Click to lock every toolbox where it is.';
 }
 
 /** Show the side panel folded or open as the mode showing has it, and its arrow to match. */
@@ -5086,6 +5166,18 @@ function ribbonLabel(b: HTMLElement): string {
   return own.length > 2 ? own : tip || own;
 }
 
+/** A command's picture for the search list: the one drawn for it, or the one on its ribbon button. */
+function searchIcon(cmd: string | undefined, b?: HTMLElement): string | undefined {
+  const from = (el: Element | null | undefined) => {
+    if (!el) return undefined;
+    const svg = el.querySelector('svg');
+    if (svg) return svg.outerHTML;
+    const glyph = el.querySelector('.rb-icon')?.textContent?.trim();
+    return glyph && glyph.length <= 2 ? `<span>${glyph.replace(/[<&]/g, '')}</span>` : undefined;
+  };
+  return from(b) ?? (cmd ? commandIcon(cmd) ?? from(document.querySelector(`.ribbon [data-cmd="${cmd}"]`)) : undefined);
+}
+
 function commandItems(): CommandItem[] {
   const out: CommandItem[] = [];
   const runCmd = (cmd: string, label: string) => () => {
@@ -5094,11 +5186,14 @@ function commandItems(): CommandItem[] {
   };
   for (const wrap of document.querySelectorAll<HTMLElement>('header .menu-wrap')) {
     const menu = wrap.querySelector<HTMLElement>(':scope > button')?.textContent?.trim() ?? '';
-    for (const b of wrap.querySelectorAll<HTMLElement>('[data-cmd]')) {
-      if (b.hidden || getComputedStyle(b).display === 'none') continue;
+    for (const b of wrap.querySelectorAll<HTMLButtonElement>('[data-cmd]')) {
+      if (b.hidden || b.disabled || getComputedStyle(b).display === 'none') continue;
+      const sub = b.closest('.submenu')?.querySelector<HTMLButtonElement>(':scope > button');
+      if (sub?.disabled) continue; // a submenu for another mode
       const cmd = b.dataset.cmd!, e = topMenuEntry(cmd);
       const label = e?.label ?? cmd;
-      out.push({ id: `cmd:${cmd}`, label, place: `${menu} menu`, more: b.title, key: commandKey(cmd), checked: e?.checked, run: runCmd(cmd, label) });
+      out.push({ id: `cmd:${cmd}`, label, place: sub ? `${menu} ▸ ${sub.textContent!.trim()}` : `${menu} menu`, more: b.title, key: commandKey(cmd),
+        checked: e?.checked, icon: searchIcon(cmd), run: runCmd(cmd, label) });
     }
   }
   for (const rib of document.querySelectorAll<HTMLElement>('.ribbon')) {
@@ -5116,6 +5211,7 @@ function commandItems(): CommandItem[] {
       out.push({
         id: name, label, place: tab ? `${tab.textContent!.trim()} tab` : `${rib.getAttribute('aria-label')} ribbon`, more: b.dataset.tip ?? b.title,
         key: code ? commandKey(code) : undefined,
+        icon: searchIcon(b.dataset.cmd, b),
         run: () => {
           if (tab && tab.getAttribute('aria-selected') !== 'true') tab.click();
           b.click();
@@ -5126,7 +5222,9 @@ function commandItems(): CommandItem[] {
   if (onScreen($('#tools'))) {
     for (const [name] of ALL_TOOLS) {
       const label = toolNames[name] ?? ALL_TOOLS.get(name)!.title.split(/[.:] /)[0];
+      const icon = ALL_TOOLS.get(name)!.icon;
       out.push({ id: `tool:${name}`, label, place: 'Drawing tools', more: ALL_TOOLS.get(name)!.title, key: keysOf('space', `tool ${name}`)[0],
+        icon: icon.startsWith('<') ? icon : undefined,
         run: () => { editor.setTool(name); if (name === 'element') periodicTable.open(); } });
     }
   }

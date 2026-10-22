@@ -20,7 +20,7 @@ export type TemplateBond = [number, number, number, BondDisplay?];
 export interface Template {
   id: string;
   name: string;
-  /** 'own': saved by the person (Structure > Save as Template). */
+  /** 'own': saved by the person (Chemistry > Nicknames and Templates > Save as Template). */
   group: TemplateGroup;
   atoms: TemplateAtom[];
   bonds: TemplateBond[];

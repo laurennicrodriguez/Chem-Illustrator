@@ -1,4 +1,4 @@
-// Sheet > Insert Property Column…: pick the properties to work out from a column of structures
+// Chemistry > Insert Property Column…: pick the properties to work out from a column of structures
 // (or SMILES). Each becomes a column of its own that fills itself in for every row.
 
 import { PROPERTIES } from '../sheet/properties';

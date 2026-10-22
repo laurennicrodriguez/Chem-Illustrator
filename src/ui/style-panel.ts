@@ -99,7 +99,7 @@ export class StylePanel {
   cropWithMouse: (shapeId: number) => void = () => {};
   /** Frames (set up by the app): add one round the selection, or fit a box round what is inside it. */
   frames: { add(): void; fit(shapeId: number): void } | null = null;
-  /** A highlight colour was chosen (the app remembers it for Structure > Highlight). */
+  /** A highlight colour was chosen (the app remembers it for Chemistry > Highlight and Fill > Highlight). */
   highlightUsed: (colour: string) => void = () => {};
   /** The look last chosen for highlights (new highlights take it). */
   highlightStyleUsed: (style: HighlightStyle) => void = () => {};
@@ -177,7 +177,7 @@ export class StylePanel {
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = 'Add frame';
-      b.title = 'Draw a box round the selection that grows and moves with it (Structure > Add Frame)';
+      b.title = 'Draw a box round the selection that grows and moves with it (Chemistry > Labels and Numbers > Add Frame)';
       b.addEventListener('click', () => this.frames?.add());
       row.append(b);
       this.body.append(row);
@@ -779,14 +779,14 @@ export class StylePanel {
     this.select<HighlightShape>('Highlight shape', HL_SHAPES, st.shape, (v) => set('Highlight shape', { shape: v }));
     // straight highlights are always one even band; round ones can have a disc on each atom
     if (st.shape === 'round') this.check('Smooth outline', st.smooth, (v) => set(v ? 'Smooth highlight' : 'Highlight with discs', { smooth: v }),
-      'One even band along the bonds, with no disc bulging out at each atom (Structure > Smooth Highlight).');
+      'One even band along the bonds, with no disc bulging out at each atom (Chemistry > Highlight and Fill > Smooth Highlight).');
     else this.select<HighlightEnds>('Highlight ends', HL_ENDS, st.ends, (v) => set('Highlight ends', { ends: v }));
     this.number('Highlight size (%)', pct(st.size), 10, 20, 400, (v) => set('Highlight size', { size: v / 100 }),
       '100% is the usual size; larger for a bolder highlight.');
 
     this.group('Placement', [st.centre && 'centred', !st.fit && 'labels not held'].filter(Boolean).join(', ') || 'on the bonds', () => {
       this.check('Centre on double bonds', st.centre, (v) => set(v ? 'Centre highlight on double bonds' : 'Highlight on the bonds', { centre: v }),
-        'Run the highlight midway between a double bond\'s two lines, and round a ring midway between the ring and its inner double-bond lines (Structure > Centre Highlight on Double Bonds).');
+        'Run the highlight midway between a double bond\'s two lines, and round a ring midway between the ring and its inner double-bond lines (Chemistry > Highlight and Fill > Centre Highlight on Double Bonds).');
       this.check('Grow round atom labels', st.fit, (v) => set(v ? 'Highlight round labels' : 'Highlight not round labels', { fit: v }),
         'Make the highlight under a labelled atom (Me, OTBS, CO2Et) big enough to hold its whole label.');
     });
@@ -815,11 +815,11 @@ export class StylePanel {
         this.color('Line colour', st.lineColour || undefined, (v) => set('Highlight outline colour', { lineColour: v ?? '' }), 'A darker shade', '#808080');
         this.number('Line width (pt)', st.lineWidth, 0.25, 0.25, 10, (v) => set('Highlight outline width', { lineWidth: v }));
       }
-      if (st.fill !== 'none') this.note('For an outline on its own, set Fill to None (Structure > Outline-Only Highlight).');
+      if (st.fill !== 'none') this.note('For an outline on its own, set Fill to None (Chemistry > Highlight and Fill > Outline-Only Highlight).');
     });
 
     this.group('Soft edges', st.soft ? `${pct(st.softAmount)}%, ${HL_SOFT_SIDES.find(([v]) => v === st.softSide)![1].split(' (')[0].toLowerCase()}` : 'off', () => {
-      this.check('Soft edges', st.soft, (v) => set(v ? 'Soft highlight' : 'Sharp highlight', { soft: v }), 'Fade the highlight out instead of a sharp edge (Structure > Soft Highlight Edges).');
+      this.check('Soft edges', st.soft, (v) => set(v ? 'Soft highlight' : 'Sharp highlight', { soft: v }), 'Fade the highlight out instead of a sharp edge (Chemistry > Highlight and Fill > Soft Highlight Edges).');
       if (st.soft) {
         this.number('How much fades (%)', pct(st.softAmount), 5, 5, 100, (v) => set('Soft edge amount', { softAmount: v / 100 }),
           'How much of the band fades, measured from its edge in to its middle: 25% fades only the outer quarter');
@@ -828,7 +828,7 @@ export class StylePanel {
     });
 
     this.group('Shadow', st.shadow ? `${pct(st.shadowOpacity)}%${st.shadowBlur > 0 ? ', blurred' : ''}` : 'off', () => {
-      this.check('Shadow', st.shadow, (v) => set(v ? 'Highlight shadow' : 'No highlight shadow', { shadow: v }), 'A drop shadow under the highlight (Structure > Highlight Shadow).');
+      this.check('Shadow', st.shadow, (v) => set(v ? 'Highlight shadow' : 'No highlight shadow', { shadow: v }), 'A drop shadow under the highlight (Chemistry > Highlight and Fill > Highlight Shadow).');
       if (st.shadow) this.shadowRows(
         { colour: st.shadowColour, opacity: st.shadowOpacity, angle: st.shadowAngle, distance: pct(st.shadowDistance), blur: pct(st.shadowBlur) }, '% of a bond',
         (p) => set('Highlight shadow', {
@@ -838,7 +838,7 @@ export class StylePanel {
     });
 
     this.group('Glow', st.glow ? `${pct(st.glowSize)}%` : 'off', () => {
-      this.check('Glow', st.glow, (v) => set(v ? 'Highlight glow' : 'No highlight glow', { glow: v }), 'A soft halo of colour round the outside (Structure > Highlight Glow).');
+      this.check('Glow', st.glow, (v) => set(v ? 'Highlight glow' : 'No highlight glow', { glow: v }), 'A soft halo of colour round the outside (Chemistry > Highlight and Fill > Highlight Glow).');
       if (st.glow) {
         this.color('Glow colour', st.glowColour || undefined, (v) => set('Glow colour', { glowColour: v ?? '' }), 'The highlight\'s', '#ffe680');
         this.number('Glow size (% of a bond)', pct(st.glowSize), 1, 1, 200, (v) => set('Glow size', { glowSize: v / 100 }));
@@ -851,7 +851,7 @@ export class StylePanel {
     const save = document.createElement('button');
     save.type = 'button';
     save.textContent = 'Save look…';
-    save.title = 'Keep this highlight\'s look (and colour) under a name, to use again in any drawing (Structure > Save Highlight Look)';
+    save.title = 'Keep this highlight\'s look (and colour) under a name, to use again in any drawing (Chemistry > Highlight and Fill > Save Highlight Look)';
     save.addEventListener('click', () => this.highlightLooks.save());
     row.append(save);
     this.body.append(row);
@@ -913,7 +913,7 @@ export class StylePanel {
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = 'Fill rings';
-      b.title = 'Colour in, shade or hatch the rings in the selection (Structure > Fill Rings)';
+      b.title = 'Colour in, shade or hatch the rings in the selection (Chemistry > Highlight and Fill > Fill Rings)';
       b.addEventListener('click', () => this.ringFill?.());
       row.append(b);
       this.body.append(row);
@@ -921,7 +921,7 @@ export class StylePanel {
     this.methylControls(atoms.map((a) => a.id));
   }
 
-  /** Terminal methyls among these atoms: not written out, CH3 or Me (Structure > Show Terminal Methyls). */
+  /** Terminal methyls among these atoms: not written out, CH3 or Me (Chemistry > Show Terminal Methyls). */
   private methylControls(ids: number[]): void {
     // (no atoms would mean the whole drawing to the methyl commands)
     const now = ids.length ? methylState(this.doc, ids) : 'none';

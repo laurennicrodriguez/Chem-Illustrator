@@ -5,7 +5,7 @@
 //
 // A template changes only the look: fonts, colours, background and shapes. The logo, footer,
 // slide numbers and the drawing style of structures stay as they are, and every value can be
-// changed afterwards in Slide > Slide Master.
+// changed afterwards in Format > Slide Master.
 
 import type { Master, Decor } from './deck';
 
