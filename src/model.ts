@@ -217,6 +217,12 @@ export interface TextRun {
   link?: string;
   /** Character spacing: points added after each character (less than 0 is condensed), as PowerPoint's Character Spacing. */
   spacing?: number;
+  /** Small capitals: lower-case letters shown as smaller capitals (documents). */
+  smallCaps?: boolean;
+  /** All capitals: letters shown as capitals, the text itself unchanged (documents). */
+  allCaps?: boolean;
+  /** Documents: the character style the text is in (Emphasis, Strong…), by id; its look is in the run itself. */
+  cstyle?: string;
 }
 
 /**
@@ -309,6 +315,19 @@ export interface ParaStyle {
   noLineNumbers?: boolean;
   /** Documents: bookmarks at this paragraph (Insert > Bookmark), by name, for links to point at. */
   marks?: string[];
+  /** Documents: tab stops, in points from the left margin, in order (Word's default every half inch past the last). */
+  tabs?: TabStop[];
+  /** Documents: a numbered list's multilevel scheme (1. a. i. when left out; see paragraphs.ts LIST_SCHEMES). */
+  scheme?: string;
+  /** Documents: a bulleted list item's own bullet (from the bullet library), in place of its level's. */
+  bullet?: string;
+}
+
+/** A tab stop: where text after a tab lines up, and how (Word's left, centre, right and decimal tabs), with dots or a line leading to it. */
+export interface TabStop {
+  pos: number;
+  kind: 'left' | 'center' | 'right' | 'decimal';
+  leader?: 'dot' | 'hyphen' | 'underscore';
 }
 
 export interface Caption {

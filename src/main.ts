@@ -149,6 +149,7 @@ import { PeriodicTable } from './ui/periodic-table';
 import { SheetMode, ClipboardCells } from './ui/sheet-mode';
 import { DocumentMode, DocPaste } from './ui/doc-mode';
 import { docBoxPrefs, parseDocPins } from './ui/doc-panel';
+import { docRulerPrefs } from './ui/ruler';
 import { setScreenMeasure, figures } from './document/doc-file';
 import { readDocx, writeDocx, type DocxDeps, type DocxReadDeps } from './io/docx';
 import { FIGURE_MARGIN } from './document/figures';
@@ -3603,6 +3604,7 @@ const docMode = new DocumentMode({
   measure: measureText,
 });
 docBoxPrefs.changed = () => storeSettings();
+docRulerPrefs.changed = () => storeSettings();
 // documents measure fonts they have no published widths for on the screen
 setScreenMeasure(measureText);
 void document.fonts?.ready.then(() => docMode.fontsChanged());
@@ -5093,6 +5095,7 @@ function storeSettings(): void {
     darkPalettes: dark.own,
     guides: { ...guidesOn },
     docPins: [...docBoxPrefs.pinned],
+    docRuler: docRulerPrefs.shown,
     updateCheck,
     pubchemNames,
     fileTypesOffered,
@@ -5252,6 +5255,8 @@ void loadSettings().then((s) => {
   showDark(s.darkPage);
   Object.assign(guidesOn, s.guides);
   docBoxPrefs.pinned = parseDocPins(s.docPins);
+  docRulerPrefs.shown = !!s.docRuler;
+  docMode.showRuler();
   docMode.boxesChanged();
   showGuides();
   // the drawing the app opened with takes your default style, if nothing has been drawn yet

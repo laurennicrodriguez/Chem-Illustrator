@@ -1977,6 +1977,30 @@ body.sheet-mode:not(.floating-drawing):not(.split-view) #tools::before {
 body.sheet-mode:not(.floating-drawing):not(.split-view) #tools::before { content: 'Draw a structure: pick a tool to draw in the selected cell, or to change its structure.'; }
 body.doc-mode:not(.floating-drawing):not(.split-view) #tools > :not(:hover):not(:focus-within),
 body.sheet-mode:not(.floating-drawing):not(.split-view) #tools > :not(:hover):not(:focus-within) { opacity: 0.55; }
+/* Document mode: Change Case, the list libraries, Clear Formatting and More Styles */
+.ribbon select.rb-mini { width: auto; max-width: 52px; padding: 2px 1px; font-size: 11px; }
+.ribbon select.rb-mini.rb-drop { width: 15px; max-width: 15px; padding: 0; font-size: 9px; text-align: center; appearance: none; -webkit-appearance: none; border: 1px solid transparent; background: transparent; color: inherit; cursor: pointer; }
+.ribbon select.rb-mini.rb-drop:hover { border-color: var(--line); }
+.rb-eraser { font-size: 9px; margin-left: 1px; color: #c0392b; }
+.ribbon button.rb-style.rb-styles-more { width: 52px; align-items: center; }
+.ribbon button.rb-style.rb-styles-more span { font: 18px/1 var(--ui-font); color: var(--muted); }
+/* the ruler above the pages (View > Ruler): margins grey, indent markers and tab stops to drag */
+#doc-ruler { position: relative; flex: none; height: 24px; background: var(--surround); border-bottom: 1px solid var(--line); user-select: none; touch-action: none; }
+#doc-ruler[hidden] { display: none; }
+#doc-ruler canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+#doc-ruler .ruler-tab-kind { position: absolute; left: 4px; top: 3px; width: 18px; height: 18px; padding: 0; border: 1px solid var(--line); border-radius: 3px; background: var(--panel); color: var(--text); font: 600 11px/16px var(--ui-font); cursor: pointer; z-index: 1; }
+/* the Styles pane */
+.styles-pane { min-width: 240px; max-width: 300px; font-size: 12px; }
+.styles-pane .sp-list { max-height: 46vh; overflow: auto; border: 1px solid var(--line); border-radius: 4px; margin: 4px 0 6px; }
+.styles-pane .sp-head { padding: 4px 6px 2px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.styles-pane .sp-item { display: flex; align-items: center; gap: 6px; width: 100%; padding: 3px 6px; border: 0; border-radius: 0; background: none; color: var(--text); text-align: left; cursor: pointer; }
+.styles-pane .sp-item:hover { background: var(--accent-soft); }
+.styles-pane .sp-item[aria-pressed='true'] { background: var(--accent-soft); outline: 1px solid var(--accent); outline-offset: -1px; }
+.styles-pane .sp-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.styles-pane .sp-kind { flex: none; width: 14px; color: var(--muted); font-size: 11px; text-align: center; }
+.styles-pane .sp-buttons { display: flex; flex-wrap: wrap; gap: 4px; }
+.styles-pane .sp-buttons button { padding: 3px 8px; }
+.styles-pane label.sp-preview { display: flex; align-items: center; gap: 5px; margin-top: 6px; color: var(--muted); }
 
 /* ------------------------------------------------------------------ Slide Layouts (Edit Layouts…) */
 dialog.layout-editor { width: min(96vw, 900px); }

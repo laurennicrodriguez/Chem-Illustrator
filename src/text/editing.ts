@@ -404,12 +404,12 @@ export class TextEditing {
     this.commit('style', { ...this.t, runs: rt.toggleStyle(this.t.runs, this.start, this.end, key, this.defaults) }, this.anchor, this.focus);
   }
 
-  /** Change Case on the selection (or the word the caret is in), keeping the selection. */
+  /** Home > Change Case: the selection (or the word at the caret) in another case. */
   changeCase(mode: rt.CaseMode): void {
     let a = this.start, b = this.end;
     if (a === b) [a, b] = wordAt(this.text, a);
     if (a === b) return;
-    this.commit('style', { ...this.t, runs: rt.changeCase(this.t.runs, a, b, mode) }, this.anchor, this.focus);
+    this.commit('case', { ...this.t, runs: rt.changeCase(this.t.runs, a, b, mode) }, this.anchor, this.focus);
   }
 
   /** Clear Formatting: the selection back to plain text (or what is typed next, with nothing selected). */
