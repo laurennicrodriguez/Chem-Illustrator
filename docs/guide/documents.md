@@ -192,6 +192,15 @@ The contents keep themselves up to date: page numbers change as text moves, and 
 - A line and its footnote stay on the same page. In Draft, Web Layout and Outline the footnotes show after the text.
 - Word files keep them as Word's own footnotes and endnotes, both ways.
 
+## Links and bookmarks
+
+- **Insert ▸ Link…** (Ctrl+K, also on the **Insert** tab and the right-click menu) links the selected text. Pick what it goes to: a **web page or DOI** (type `10.1021/…` or `doi:10.1021/…` and it links through doi.org, so the link finds the paper wherever the journal moves it), a **place in this document** (the top, a heading or a bookmark), a **file** (**Browse…** picks one), or an **e-mail address**. With nothing selected, the link goes in at the caret, showing its address or the text you type.
+- Links show blue and underlined. **Ctrl+click** a link to follow it; pointing at one shows where it goes. In Reading view a plain click follows it.
+- Right-click a link for **Edit Link…**, **Open Link**, **Copy Link** and **Remove Link**. Ctrl+K on a link edits it.
+- Web addresses, `doi:10.…` and e-mail addresses become links as you type them, once a space or a new line ends them. Ctrl+Z straight after keeps one as plain text. **Edit ▸ Typing and Spelling…** turns this off, and can make a plain click follow links in drawings, slides and sheets.
+- **Insert ▸ Bookmark…** (Ctrl+Shift+F5) names the paragraph the caret is in, so links can go to it; the same window goes to or deletes bookmarks. A link to a heading keeps finding the heading after its words change.
+- Word files keep links and bookmarks as Word's own, both ways, including links in footnotes. Copying text to Word or a web page carries its web links with it.
+
 ## Tracked changes
 
 1. **Review** tab ▸ **Track Changes** (Ctrl+Shift+E). The first time, it asks for the name to put on your changes; change it later with **Your Name…** or in **Edit ▸ Settings…**.

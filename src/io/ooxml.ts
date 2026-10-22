@@ -18,6 +18,7 @@ export const NS = {
 
 /** Relationship types. */
 export const REL = {
+  hyperlink: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink',
   officeDocument: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument',
   coreProps: 'http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties',
   extendedProps: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties',

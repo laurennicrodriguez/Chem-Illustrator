@@ -279,7 +279,7 @@ function wordFile(body: string, opts: { styles?: string; numbering?: string; rel
   const files: Record<string, Uint8Array> = {
     '[Content_Types].xml': u8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>'),
     '_rels/.rels': u8(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${R}officeDocument" Target="word/document.xml"/></Relationships>`),
-    'word/_rels/document.xml.rels': u8(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.map(([id, type, target]) => `<Relationship Id="${id}" Type="${R}${type}" Target="${target}"/>`).join('')}</Relationships>`),
+    'word/_rels/document.xml.rels': u8(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.map(([id, type, target]) => `<Relationship Id="${id}" Type="${R}${type}" Target="${target}"${type === 'hyperlink' ? ' TargetMode="External"' : ''}/>`).join('')}</Relationships>`),
     'word/document.xml': u8(`<?xml version="1.0"?><w:document ${W} ${NSV} xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>${body}${opts.sect ?? '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>'}</w:body></w:document>`),
     'word/styles.xml': u8(`<?xml version="1.0"?><w:styles ${W}>${opts.styles ?? WORD_STYLES}</w:styles>`),
     'word/numbering.xml': u8(`<?xml version="1.0"?><w:numbering ${W}>${opts.numbering ?? ''}</w:numbering>`),
@@ -435,7 +435,9 @@ describe('opening files made by Word', () => {
     // tracked changes stay tracked (see revisions.test.ts)
     expect(documentPlainText(doc)).toBe('link addedgone');
     expect(doc.runs.filter((r) => r.rev).map((r) => r.rev!.split('|')[0])).toEqual(['ins', 'del']);
-    expect(warnings).toEqual(expect.arrayContaining(['Links were kept as plain text.']));
+    // a link whose address is missing stays as its text
+    expect(doc.runs[0].link).toBeUndefined();
+    expect(warnings.join(' ')).not.toMatch(/Links/);
     expect(warnings.join(' ')).not.toMatch(/Tracked/);
   });
 
@@ -462,6 +464,56 @@ describe('opening files made by Word', () => {
 
   it('says so when a file is not a Word document', async () => {
     await expect(readDocx(zip({ 'a.txt': u8('hello') }))).rejects.toThrow(/not a Word document/);
+  });
+});
+
+
+describe('links in Word files', () => {
+  it('saves links as Word\'s own and reads them back: web pages, bookmarks, links in footnotes', async () => {
+    const d = newDocument();
+    const n = runStyleOf(d.styles.Normal), h = runStyleOf(d.styles.Heading1);
+    d.objects = { 1: { kind: 'note', runs: [{ ...n, text: 'See ' }, { ...n, text: 'the paper', link: 'https://doi.org/10.1021/ja00001' }, { ...n, text: '.' }] } };
+    const runs: TextRun[] = [
+      { ...h, text: 'Results' }, { ...n, text: '\n' },
+      { ...n, text: 'Read ' }, { ...n, text: 'the site', link: 'https://example.com/a?b=1&c=2', color: '#0563c1', underline: true },
+      { ...n, text: ' or ' }, { ...n, text: 'results', link: '#_Heading1' }, { ...n, text: ' or ' }, { ...n, text: 'the file', link: 'data/run 1.cdxml' },
+      objectRun(1, n),
+    ];
+    d.runs = rt.normalizeRuns(runs);
+    d.paras = [{ ...paraFromStyle(d.styles.Heading1, {}), marks: ['_Heading1'] }, paraFromStyle(d.styles.Normal, {})];
+    const bytes = await writeDocx(d, deps);
+    const files = unzipSync(bytes);
+    const xml = strFromU8(files['word/document.xml']);
+    const rels = strFromU8(files['word/_rels/document.xml.rels']);
+    expect(xml).toMatch(/<w:hyperlink r:id="[^"]+"[^>]*>.*the site/);
+    expect(xml).toMatch(/<w:hyperlink w:anchor="_Heading1"/);
+    expect(xml).toMatch(/<w:bookmarkStart w:id="\d+" w:name="_Heading1"\/>/);
+    expect(rels).toMatch(/Target="https:\/\/example.com\/a\?b=1&amp;c=2" TargetMode="External"/);
+    expect(rels).toMatch(/Target="data\/run%201.cdxml" TargetMode="External"/);
+    const notes = strFromU8(files['word/footnotes.xml']);
+    expect(notes).toMatch(/<w:hyperlink r:id=/);
+    expect(strFromU8(files['word/_rels/footnotes.xml.rels'])).toMatch(/doi.org\/10.1021/);
+
+    const { doc } = await readDocx(bytes);
+    const linked = doc.runs.filter((r) => r.link).map((r) => [r.text, r.link]);
+    expect(linked).toEqual([['the site', 'https://example.com/a?b=1&c=2'], ['results', '#_Heading1'], ['the file', 'data/run 1.cdxml']]);
+    expect(doc.paras[0].marks).toEqual(['_Heading1']);
+    const note = Object.values(doc.objects).find((o) => o.kind === 'note');
+    expect(note?.kind === 'note' && note.runs.find((r) => r.link)?.link).toBe('https://doi.org/10.1021/ja00001');
+  });
+
+  it('reads Word\'s links, HYPERLINK fields and bookmarks, and drops hidden bookmarks nothing uses', async () => {
+    const { doc } = await readDocx(wordFile(
+      '<w:p><w:bookmarkStart w:id="0" w:name="Intro"/><w:bookmarkStart w:id="1" w:name="_Toc123"/><w:r><w:t>Intro</w:t></w:r><w:bookmarkEnd w:id="0"/><w:bookmarkEnd w:id="1"/></w:p>' +
+      '<w:p><w:hyperlink r:id="rIdL" w:history="1"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr><w:t>web</w:t></w:r></w:hyperlink><w:r><w:t xml:space="preserve"> </w:t></w:r>' +
+      '<w:hyperlink w:anchor="Intro"><w:r><w:t>back</w:t></w:r></w:hyperlink><w:r><w:t xml:space="preserve"> </w:t></w:r>' +
+      '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> HYPERLINK "mailto:a@b.org" </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>mail</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>' +
+      '<w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>',
+      { rels: [['rIdL', 'hyperlink', 'https://www.rsc.org/']] },
+    ));
+    expect(doc.runs.filter((r) => r.link).map((r) => [r.text, r.link])).toEqual([['web', 'https://www.rsc.org/'], ['back', '#Intro'], ['mail', 'mailto:a@b.org']]);
+    expect(doc.runs.find((r) => r.text.includes('after'))?.link).toBeUndefined();
+    expect(doc.paras[0].marks).toEqual(['Intro']);
   });
 });
 

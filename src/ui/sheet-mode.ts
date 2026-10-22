@@ -7,7 +7,7 @@
 import { paletteRows } from './palette-ui';
 import { SheetView, popupMenu, selectionName } from './sheet-view';
 import { Workbook, Sheet, Structure, CellStyle, CellBlock, Cell, Condition, CompareOp, makeStructure, growToMerges } from '../sheet/workbook';
-import { Range, MAX_ROWS, MAX_COLS, colName, colIndex, cellName, parseRange, keyOf, rowOf, colOf, inRange } from '../sheet/refs';
+import { Range, MAX_ROWS, MAX_COLS, colName, colIndex, cellName, parseRange, parseCellRef, keyOf, rowOf, colOf, inRange } from '../sheet/refs';
 import { showsChem } from '../sheet/cell-text';
 import { fillReagentTable } from '../sheet/reagents';
 import { shiftFormula } from '../sheet/formula';
@@ -30,6 +30,8 @@ import { SheetCharts } from './sheet-chart-ui';
 import { DASH_CHART_KINDS } from './dashboard-ui';
 import { SheetNotes } from './sheet-notes-ui';
 import { SheetValidation } from './sheet-validation-ui';
+import { askLink, followLink, type LinkPlace } from './links-ui';
+import { LINK_COLOUR, cellLink, cellOfLink, describeLink } from '../links';
 import { describeValidation, KIND_NAMES } from '../sheet/validation';
 import type { ChartKind } from '../sheet/chart';
 import { DashboardUi } from './dashboard-ui';
@@ -527,6 +529,9 @@ export class SheetMode {
       case 'new-comment': void this.notes.newComment(); break;
       case 'edit-note': this.notes.edit(); break;
       case 'delete-note': case 'delete-comment': this.notes.remove(); break;
+      case 'insert-link': void this.editLink(); break;
+      case 'remove-link': this.removeLinks(); break;
+      case 'open-link': { const l = v.linkOf(v.sel.active.r, v.sel.active.c); if (l) void followLink(l); else this.host.flash('The cell has no link.'); break; }
       case 'show-note': this.notes.toggleShown(); break;
       case 'show-all-notes': this.notes.toggleShowAll(); this.showRibbonState(); break;
       case 'convert-notes': this.notes.convertNotes(); break;
@@ -543,6 +548,71 @@ export class SheetMode {
   private style(label: string, patch: Partial<CellStyle>): void {
     const v = this.view;
     this.edit(label, (s) => s.patchStyle(growToMerges(s, v.sel.range), patch));
+  }
+
+  // ---------------------------------------------------------------- links
+
+  /** Insert > Link (Ctrl+K): link the selected cells to a web page, DOI, file, e-mail address or cell. */
+  private async editLink(): Promise<void> {
+    const v = this.view, wb = this.book, s = v.sheet;
+    if (!wb || !s) return;
+    v.commitEdit();
+    const { r, c } = v.sel.active;
+    const cell = s.cell(r, c);
+    const formula = !!cell?.input?.startsWith('=');
+    const shown = formula ? null : s.shownText(r, c);
+    const places: LinkPlace[] = wb.sheets.filter((x) => !x.dashboard).map((x) => ({ link: `#${x.name}`, label: x.name }));
+    const old = cell?.link ? cellOfLink(cell.link) : null;
+    const got = await askLink({
+      text: shown, link: cell?.link && old ? `#${old.sheet ?? s.name}` : cell?.link, places, placeTitle: 'Cell in this workbook',
+      placeTyped: { label: 'Cell', value: old?.cell ?? 'A1', make: (sheet, ref) => { const at = ref.trim().replace(/\$/g, '').toUpperCase(); return parseCellRef(at) ? cellLink(sheet.slice(1), at) : null; } },
+    });
+    v.focus();
+    if (!got || this.view.sheet !== s) return;
+    if ('remove' in got) { this.removeLinks(); return; }
+    const range = growToMerges(s, v.sel.range);
+    this.edit(cell?.link ? 'Edit Link' : 'Insert Link', (sh) => {
+      for (let row = range.r1; row <= Math.min(range.r2, range.r1 + 999); row++) {
+        for (let col = range.c1; col <= Math.min(range.c2, range.c1 + 99); col++) {
+          sh.setLink(row, col, got.link);
+          // the text shown: what was typed in the window (the active cell), or the address in an empty cell
+          if (row === r && col === c && got.text !== undefined && got.text !== shown) sh.setInput(row, col, got.text || describeLink(got.link));
+          else if (!sh.cell(row, col)?.input && !sh.cell(row, col)?.structure) sh.setInput(row, col, describeLink(got.link));
+        }
+      }
+      // Excel's Hyperlink look: blue and underlined
+      sh.patchStyle(range, { color: LINK_COLOUR, underline: true });
+    });
+  }
+
+  /** Remove Link (Excel's Clear Hyperlinks): the selected cells keep their text, without the blue and the underline. */
+  private removeLinks(): void {
+    const v = this.view, s = v.sheet;
+    if (!s) return;
+    const range = growToMerges(s, v.sel.range);
+    const keys = s.keysIn(range).filter((k) => s.cells.get(k)?.link);
+    if (!keys.length) { this.host.flash('No links in the selected cells.'); return; }
+    this.edit('Remove Link', (sh) => {
+      for (const k of keys) {
+        const c = sh.cells.get(k)!;
+        const st = c.style && c.style.color?.toLowerCase() === LINK_COLOUR ? { ...c.style, color: undefined, underline: undefined } : c.style;
+        sh.setCell(rowOf(k), colOf(k), { ...c, link: undefined, style: st });
+      }
+    });
+  }
+
+  /** Go to a cell a link points to (#Sheet1!B4); false when there is no such sheet or cell. */
+  goToPlace(link: string): boolean {
+    const wb = this.book, v = this.view;
+    const at = cellOfLink(link);
+    if (!wb || !at) return false;
+    const i = at.sheet === null ? wb.active : wb.sheets.findIndex((x) => x.name.toLowerCase() === at.sheet!.toLowerCase());
+    const ref = parseCellRef(at.cell);
+    if (i < 0 || !ref) return false;
+    v.goSheet(i);
+    v.selectCell(ref.row, ref.col);
+    v.focus();
+    return true;
   }
 
   /** One undoable change to the sheet showing, remembering the selection for undo. */
@@ -1573,6 +1643,11 @@ export class SheetMode {
       else if (note.kind === 'comment') items.push(['Show Comment', () => this.notes.edit()], ['Delete Comment', () => this.notes.remove()]);
       else items.push(['Edit Note', () => this.notes.edit()], ['Delete Note', () => this.notes.remove()], [note.shown ? 'Hide Note' : 'Show Note', () => this.notes.toggleShown()]);
       items.push(['Pick From Drop-down List…', () => v.openDropDown()]);
+      // links, as Excel's right-click menu has them
+      const link = v.linkOf(v.sel.active.r, v.sel.active.c);
+      items.push(null);
+      if (link) items.push(['Edit Link…', () => void this.run('insert-link')], ['Open Link', () => void followLink(link)], ['Copy Link', () => void navigator.clipboard?.writeText(link).catch(() => {})], ['Remove Link', () => this.run('remove-link')]);
+      else items.push(['Link…', () => void this.run('insert-link')]);
     }
     items.push(null,
       ['Sort smallest to largest', () => void this.sort(false)],

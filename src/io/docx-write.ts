@@ -23,6 +23,7 @@ import { sectionsOf, type Section } from '../document/sections';
 import { bibliography, piecesText } from '../document/references';
 import { TOC_INDENT, tocEntries, tofEntries } from '../document/toc';
 import { parseRev } from '../document/revisions';
+import { officeTarget } from '../links';
 import { cmtIds, initials, placedComments, type CommentThread } from '../document/comments';
 import { toOmml } from '../document/math';
 import { documentMeasure } from '../text/font-measure';
@@ -376,10 +377,22 @@ class DocxWriter {
       open = { id: this.bookmarkId++, seq: seqs[0] };
       out.push(`<w:bookmarkStart w:id="${open.id}" w:name="${this.bookmarks.get(seqs[0])}"/>`);
     }
+    // the paragraph's bookmarks (Insert > Bookmark), round the whole paragraph
+    const marks = (ps.marks ?? []).map((name) => ({ name, id: this.bookmarkId++ }));
+    for (const m of marks) out.push(`<w:bookmarkStart w:id="${m.id}" w:name="${xml(m.name)}"/>`);
+    // links: each stretch of text with one link is a Word link round its runs
+    let linked: string | undefined;
+    const linkTo = (l: string | undefined) => {
+      if (l === linked) return;
+      if (linked !== undefined) out.push('</w:hyperlink>');
+      linked = l;
+      if (l !== undefined) out.push(this.hyperlinkStart(main, l));
+    };
     // an equation on its own in its paragraph is a display equation (Word's equation paragraph)
     const shownRuns = runs.filter((r) => r.obj !== undefined || r.text.trim());
     const display = shownRuns.length === 1 && shownRuns[0].obj !== undefined && this.t.objects[shownRuns[0].obj]?.kind === 'math';
     for (const r of runs) {
+      linkTo(r.link);
       out.push(this.cmtBefore(r));
       if (r.obj === undefined) { out.push(this.tracked(r.rev, this.textRuns(r, st)), this.cmtAfter(r)); continue; }
       const o = this.t.objects[r.obj];
@@ -395,7 +408,30 @@ class DocxWriter {
       if (open && r.obj === open.seq) { out.push(`<w:bookmarkEnd w:id="${open.id}"/>`); open = null; }
       out.push(this.cmtAfter(r));
     }
+    linkTo(undefined);
+    for (const m of marks) out.push(`<w:bookmarkEnd w:id="${m.id}"/>`);
     return `<w:p>${pPr.length ? `<w:pPr>${pPr.join('')}</w:pPr>` : ''}${colBreak}${out.join('')}</w:p>`;
+  }
+
+  /** The start of a Word link: to a bookmark here (w:anchor), or through a relationship of the part it is in. */
+  private hyperlinkStart(part: string, link: string): string {
+    if (link.startsWith('#')) return `<w:hyperlink w:anchor="${xml(link.slice(1))}" w:history="1">`;
+    const id = this.pkg.relate(part, REL.hyperlink, officeTarget(link), true);
+    return `<w:hyperlink r:id="${id}" w:history="1">`;
+  }
+
+  /** Runs written one by one, with Word links round the ones that link somewhere. */
+  private linkedRuns(part: string, runs: TextRun[], write: (r: TextRun) => string): string {
+    let out = '', linked: string | undefined;
+    for (const r of runs) {
+      if (r.link !== linked) {
+        if (linked !== undefined) out += '</w:hyperlink>';
+        linked = r.link;
+        if (linked !== undefined) out += this.hyperlinkStart(part, linked);
+      }
+      out += write(r);
+    }
+    return linked !== undefined ? `${out}</w:hyperlink>` : out;
   }
 
   /**
@@ -497,14 +533,14 @@ class DocxWriter {
           const align = p.align ?? 'left';
           if (align !== st.align) pPr.push(`<w:jc w:val="${JC[align]}"/>`);
           const mark = i === 0 ? `<w:r><w:rPr><w:rStyle w:val="${ref}"/></w:rPr><w:${tag}Ref/></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r>` : '';
-          const body = (runsOf[i] ?? []).filter((r) => r.obj === undefined).map((r) => this.tracked(r.rev, this.textRuns(r, st))).join('');
+          const body = this.linkedRuns(`word/${tag}s.xml`, (runsOf[i] ?? []).filter((r) => r.obj === undefined), (r) => this.tracked(r.rev, this.textRuns(r, st)));
           return `<w:p><w:pPr>${pPr.join('')}</w:pPr>${mark}${body}</w:p>`;
         });
         out.push(`<w:${tag} w:id="${n}">${ps.join('')}</w:${tag}>`);
       }
       const name = `${tag}s.xml`;
       this.pkg.relate(main, end ? DOCX_REL.endnotes : DOCX_REL.footnotes, name);
-      this.pkg.add(`word/${name}`, `${HEAD}<w:${tag}s xmlns:w="${W_NS}">${out.join('')}</w:${tag}s>`, end ? DOCX_CT.endnotes : DOCX_CT.footnotes);
+      this.pkg.add(`word/${name}`, `${HEAD}<w:${tag}s xmlns:w="${W_NS}" xmlns:r="${NS.r}">${out.join('')}</w:${tag}s>`, end ? DOCX_CT.endnotes : DOCX_CT.footnotes);
       settings += `<w:${tag}Pr><w:${tag} w:id="-1"/><w:${tag} w:id="0"/></w:${tag}Pr>`;
     }
     return settings;

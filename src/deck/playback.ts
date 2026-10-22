@@ -6,7 +6,11 @@
 // an animation on a layer of its own. A frame of the show is then those pictures put together
 // (faded, wiped or moved as the animations say), so even big slides play smoothly.
 
-import { Doc } from '../model';
+import { Doc, applyBase, captionBase } from '../model';
+import { layoutText } from '../text/layout';
+import { measureText } from '../render/renderer';
+import { linkAtPoint } from '../links';
+import { turnAbout } from '../geom';
 import type { Deck } from './deck';
 import { paintSlide, type SlidePage } from './slide-view';
 import { selectionBox, POINTS } from '../editor/arrange';
@@ -109,6 +113,22 @@ export class SlideFrames {
 
   /** Number of animation steps (an automatic first one included). */
   get stepCount(): number { return this.steps.length; }
+
+  /** The link in the slide's text at a point on the canvas (CSS pixels), if any. */
+  linkAt(px: number, py: number): string | null {
+    const { x, y, k } = this.at;
+    const p = { x: (px - x) / k, y: (py - y) / k };
+    const doc = this.doc;
+    for (const c of doc.captions.values()) {
+      if (!c.runs.some((r) => r.link)) continue;
+      const base = c.ph ? doc.textStyles?.[c.ph] : captionBase(doc.style);
+      const lay = layoutText(base ? { ...c, runs: applyBase(c.runs, base) } : c, base?.size ?? doc.style.captionSize, (t, s, family, style) => measureText(t, s, family, style));
+      const q = c.rot ? turnAbout(p, c, -c.rot) : p;
+      const span = linkAtPoint(lay, c.runs, q.x - c.x, q.y - c.y);
+      if (span) return span.link;
+    }
+    return null;
+  }
 
   /** Draw the slide with `done` steps played and `t` seconds into the next (t < 0: not started). */
   draw(ctx: CanvasRenderingContext2D, done: number, t = -1): void {
@@ -240,6 +260,11 @@ export class Player {
   get busy(): boolean { return this.moving !== null; }
   /** Steps of animations the slide has. */
   get stepCount(): number { return this.current.stepCount; }
+
+  /** The link at a point on the canvas (CSS pixels from its corner), if any. */
+  linkAt(px: number, py: number): string | null {
+    return this.moving ? null : this.current.linkAt(px, py);
+  }
 
   constructor(private canvas: HTMLCanvasElement, private deck: Deck, private fill = '#000') {}
 

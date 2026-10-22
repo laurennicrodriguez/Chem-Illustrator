@@ -221,7 +221,7 @@ describe('the settings file', () => {
   it('reads back what it writes', () => {
     const s = {
       hotkeys: { command: { 'Ctrl+M': 'command zoom-in' } }, keepHotspotOnBond: false, fixedLength: true, fixedAngles: false, devTools: true, showRoles: false,
-      chemTyping: false, stereoItalic: false, boldNumbers: true, spellCheck: true, replacements: [['oC', '°C'], ['rxn', 'reaction']] as [string, string][], dictionary: ['Fooxane'],
+      chemTyping: false, stereoItalic: false, boldNumbers: true, autoLinks: false, linkCtrlClick: false, spellCheck: true, replacements: [['oC', '°C'], ['rxn', 'reaction']] as [string, string][], dictionary: ['Fooxane'],
       modeColours: { style: 'off' as const, drawing: '#2f6fdf', slides: '#00aa00', sheet: '#1e8a50', document: '#2647a8', design: '#7b3fbf' },
       nicknames: { Qq: 'CC' }, templates: [], splitWidth: 0.6, scrollBars: false, page: { w: 523, h: 770, grow: false, name: 'a4' }, pageEdge: false, welcomed: true, textBar: 'floating' as const, groupTips: false, citeStyle: 'rsc', citeOptions: { lastAuthor: 'none', etAlOver: 5 }, methylStyle: 'Me' as const, axialStyle: 'PM' as const, circledCharges: true, textToAtom: false, groupClick: 'item' as const, groupOutline: false, rerouteArrows: false, superscriptR: false, linkSide: 'left' as const, slideTemplate: 'harbor', askWholeDrawing: false,
       palettes: [{ name: 'Group colours', colors: ['#1f5fbf', '#e69f00'] }],

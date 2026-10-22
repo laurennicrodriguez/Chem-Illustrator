@@ -142,6 +142,14 @@ export const TEXT_FUNCTIONS: Record<string, FnDef> = {
     },
   },
   VALUE: { min: 1, max: 1, fn: (args) => textValue(scalar(args[0])) },
+  // HYPERLINK(where, [shown]): the cell shows its text and Ctrl+click follows it (see linkOfFormula)
+  HYPERLINK: {
+    min: 1, max: 2,
+    fn: (args) => {
+      const shown = args.length > 1 ? scalar(args[1]) : scalar(args[0]);
+      return isError(shown) ? shown : shown === null ? toText(scalar(args[0])) : shown;
+    },
+  },
   CONCAT: {
     min: 1, max: 253,
     fn: (args) => {

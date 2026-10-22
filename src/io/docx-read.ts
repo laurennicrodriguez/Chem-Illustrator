@@ -35,6 +35,7 @@ import { BIB_MARK, CHART_NAME, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, W14_NS, W1
 import { cleanRef } from '../document/references';
 import { retypedDiagram } from '../design/diagrams';
 import { revText } from '../document/revisions';
+import { linkFromTarget } from '../links';
 import { mathText, ommlToTex } from '../document/math';
 import { CITE_PRESETS, cleanOptions } from '../document/cite-styles';
 import { listIndent, tableText } from './docx-write';
@@ -96,7 +97,7 @@ interface WStyle { id: string; type: string; name: string; basedOn?: string; nex
 interface Level { fmt: string; text: string; p: PProps }
 interface Piece { runs: TextRun[]; pageBreak: boolean; soft: boolean; colBreak?: boolean }
 interface Ctx { base: RProps; pieces: Piece[]; cell: boolean }
-interface Field { instr: string; phase: 'instr' | 'result'; swallow: boolean; text: string; props: RProps; done: boolean; ref?: { id: number; mark: string; text: string }; toc?: boolean }
+interface Field { instr: string; phase: 'instr' | 'result'; swallow: boolean; text: string; props: RProps; done: boolean; ref?: { id: number; mark: string; text: string }; toc?: boolean; /** A HYPERLINK field: the link open before it, put back at its end. */ before?: { link: string | undefined } }
 interface OutPara { ps: ParaStyle; runs: TextRun[]; mark: rt.RunStyle; style: string; contextual: boolean; table?: boolean; bib?: string; markRev?: string }
 
 /** Open a Word file. Throws only when the file is not a Word file at all. */
@@ -155,6 +156,12 @@ class DocxReader {
   private measure: Measure = documentMeasure((t, size, _f, style) => arialWidth(t, size, /bold/.test(style)));
   /** How the footnotes and endnotes are numbered, where not Word's own way. */
   private noteFormats: NoteFormats = {};
+  /** The link the text being read is in (a w:hyperlink or a HYPERLINK field). */
+  private link: string | undefined;
+  /** The part whose relationships links are looked up in (the document, or the notes being read). */
+  private part = '';
+  /** Bookmarks met since the last paragraph was read: they go on the next one. */
+  private pendingMarks: string[] = [];
   /** The notes in footnotes.xml and endnotes.xml, by Word's id (read when first needed). */
   private noteEls: Partial<Record<'foot' | 'end', Map<string, Element>>> = {};
 
@@ -165,6 +172,7 @@ class DocxReader {
   read(): { doc: DocText; warnings: string[] } {
     const pkg = this.pkg;
     this.main = pkg.relOfType('', REL.officeDocument) ?? 'word/document.xml';
+    this.part = this.main;
     const doc = pkg.xml(this.main);
     const root = doc?.documentElement;
     const body = root && kid(root, 'body');
@@ -186,7 +194,9 @@ class DocxReader {
     this.blocks(kids(body));
     this.resolveRefs();
     this.joinBibliographies();
-    return { doc: this.assemble(hf, first), warnings: [...this.warnings] };
+    const out = this.assemble(hf, first);
+    keepUsedMarks(out);
+    return { doc: out, warnings: [...this.warnings] };
   }
 
   /** Word was set to track changes in this document (settings.xml's w:trackRevisions). */
@@ -535,13 +545,17 @@ class DocxReader {
     const note = this.noteEl(end, this.a(el, 'id'));
     if (!note) return;
     // the note is read apart from the paragraph it is in (its own fields and comments)
-    const fields = this.fields, cmt = this.cmtOpen, math = this.displayMath;
+    const fields = this.fields, cmt = this.cmtOpen, math = this.displayMath, part = this.part, link = this.link;
     this.fields = [];
     this.cmtOpen = new Set();
+    this.part = this.pkg.relOfType(this.main, end ? DOCX_REL.endnotes : DOCX_REL.footnotes) ?? part;
+    this.link = undefined;
     const got = this.boxText(note);
     this.fields = fields;
     this.cmtOpen = cmt;
     this.displayMath = math;
+    this.part = part;
+    this.link = link;
     // text only (citations, captions and pictures in notes keep no place here)
     const runs = got.runs.filter((x) => x.obj === undefined).map(({ cmt: _c, ...x }) => x);
     while (runs.length && /^[ \t]/.test(runs[0].text)) {
@@ -719,6 +733,7 @@ class DocxReader {
       } else {
         if (pc.pageBreak) q.pageBreak = true;
         if (pc.colBreak) q.colBreak = true;
+        if (this.pendingMarks.length) { q.marks = this.pendingMarks; this.pendingMarks = []; }
       }
       q = cleanPara(q);
       // the paragraph mark inserted or deleted while Word tracked changes (on the last piece: the real mark)
@@ -780,7 +795,16 @@ class DocxReader {
       text = rt.fromSymbolFont(plain);
       props = { ...r, font: ctx.base.font };
     }
-    this.piece(ctx).runs.push({ ...this.runStyle(props), ...(this.rev ? { rev: this.rev } : {}), ...this.cmtMark(ctx), text });
+    this.piece(ctx).runs.push({ ...this.runStyle(props), ...(this.rev ? { rev: this.rev } : {}), ...this.cmtMark(ctx), ...(this.link ? { link: this.link } : {}), text });
+  }
+
+  /** Where a Word link goes: a web page or file (through the part's relationships), or a bookmark here. */
+  private hyperlinkOf(el: Element): string | undefined {
+    const anchor = this.a(el, 'anchor');
+    const id = rAttr(el, 'id');
+    const rel = id ? this.pkg.rels(this.part).get(id) : undefined;
+    if (rel) return linkFromTarget(rel.target) + (anchor ? `#${anchor}` : '');
+    return anchor ? `#${anchor}` : undefined;
   }
 
   // ---------------------------------------------------------------- comments
@@ -872,7 +896,7 @@ class DocxReader {
     this.objects[id] = o;
     const { formula: _f, sub, sup, ...style } = this.runStyle(r);
     // a citation keeps its superscript; caption numbers and references take the text's position
-    this.piece(ctx).runs.push({ ...style, ...(keepPos ? rt.cleanStyle({ sub, sup }) : {}), ...(this.rev ? { rev: this.rev } : {}), ...this.cmtMark(ctx), obj: id, text: OBJECT_CHAR });
+    this.piece(ctx).runs.push({ ...style, ...(keepPos ? rt.cleanStyle({ sub, sup }) : {}), ...(this.rev ? { rev: this.rev } : {}), ...this.cmtMark(ctx), ...(this.link ? { link: this.link } : {}), obj: id, text: OBJECT_CHAR });
     return id;
   }
 
@@ -893,7 +917,13 @@ class DocxReader {
     for (const el of els) {
       switch (el.localName) {
         case 'r': this.run(el, ctx); break;
-        case 'hyperlink': this.warn('links'); this.inline(kids(el), ctx); break;
+        case 'hyperlink': {
+          const before = this.link;
+          this.link = this.hyperlinkOf(el) ?? before;
+          this.inline(kids(el), ctx);
+          this.link = before;
+          break;
+        }
         case 'fldSimple': this.simpleField(el, ctx); break;
         case 'smartTag': case 'customXml': case 'dir': case 'bdo': this.inline(kids(el), ctx); break;
         case 'sdt': this.inline(kids(kid(el, 'sdtContent')), ctx); break;
@@ -985,6 +1015,7 @@ class DocxReader {
       if (!f) return;
       if (f.phase === 'instr') { f.phase = 'result'; this.startField(f, ctx); }
       if (f.ref) f.ref.text = f.text;
+      if (f.before) this.link = f.before.link;
     }
   }
 
@@ -997,6 +1028,7 @@ class DocxReader {
     this.inline(kids(el), ctx);
     this.fields.pop();
     if (f.ref) f.ref.text = f.text;
+    if (f.before) this.link = f.before.link;
   }
 
   /** A field's instruction is known: caption numbers and references become ours; other fields keep the text Word showed. */
@@ -1047,12 +1079,23 @@ class DocxReader {
       if (id !== null) { f.swallow = true; f.toc = true; }
       return;
     }
+    // an older Word's link: HYPERLINK "address" (or \l "bookmark"); the text it shows is the link's
+    const hl = /^HYPERLINK\b(.*)$/i.exec(ins);
+    if (hl) {
+      const url = /^\s*"([^"]*)"/.exec(hl[1])?.[1] ?? /^\s*([^\s\\"]+)/.exec(hl[1])?.[1];
+      const anchor = /\\l\s+"([^"]*)"/i.exec(hl[1])?.[1];
+      const link = url ? linkFromTarget(url) + (anchor ? `#${anchor}` : '') : anchor ? `#${anchor}` : undefined;
+      if (link) { f.before = { link: this.link }; this.link = link; }
+      return;
+    }
     if (/^ADDIN\s+(EN\.CITE|ZOTERO|CSL|Mendeley|RW)/i.test(ins)) this.warn('citations');
   }
 
   private markStart(el: Element): void {
     const name = this.a(el, 'name');
     if (name && name !== '_GoBack') this.openMarks.set(this.a(el, 'id') ?? name, name);
+    // a bookmark links can go to: kept on its paragraph (hidden ones only if a link uses them: see keepUsedMarks)
+    if (name && name !== '_GoBack' && !name.startsWith(BIB_MARK) && !this.pendingMarks.includes(name)) this.pendingMarks.push(name);
     if (name?.startsWith(BIB_MARK)) this.bibOpen = this.bibMet = name;
   }
 
@@ -1773,4 +1816,25 @@ function groupTexts(group: Element): Map<string, string> {
     out.set(name, paras.join('\n'));
   }
   return out;
+}
+
+/**
+ * Bookmarks kept on paragraphs: those named by people, and Word's hidden ones (_Toc…, _Ref…)
+ * only where a link here goes to them, so a document's every heading doesn't carry Word's own.
+ */
+function keepUsedMarks(t: DocText): void {
+  if (!t.paras.some((p) => p?.marks)) return;
+  const used = new Set<string>();
+  const note = (runs: TextRun[]) => { for (const r of runs) if (r.link?.startsWith('#')) used.add(r.link.slice(1).toLowerCase()); };
+  note(t.runs);
+  for (const o of Object.values(t.objects)) {
+    if (o.kind === 'note' || o.kind === 'textbox') note(o.runs);
+    if (o.kind === 'table') for (const row of o.table.rows) for (const c of row) note(c.runs);
+  }
+  t.paras = t.paras.map((p) => {
+    if (!p?.marks) return p;
+    const marks = p.marks.filter((m) => !m.startsWith('_') || used.has(m.toLowerCase()));
+    const { marks: _m, ...rest } = p;
+    return marks.length ? { ...rest, marks } : rest;
+  });
 }

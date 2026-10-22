@@ -32,7 +32,9 @@ export function richToHtml(text: ClipText, opts: { justify?: Justify; defaultSiz
     if (r.color) css.push(`color:${r.color}`);
     const body = esc(t).replace(/ {2}/g, ' &nbsp;');
     const inner = `<span style="${css.join(';')}">${body}</span>`;
-    return pos === 'sub' ? `<sub>${inner}</sub>` : pos === 'sup' ? `<sup>${inner}</sup>` : inner;
+    const shown = pos === 'sub' ? `<sub>${inner}</sub>` : pos === 'sup' ? `<sup>${inner}</sup>` : inner;
+    // a link other programs can follow (places in this file mean nothing there)
+    return r.link && !r.link.startsWith('#') ? `<a href="${esc(r.link)}">${shown}</a>` : shown;
   };
   const paraHtml = (runs: TextRun[]): string => {
     let out = '';
@@ -174,6 +176,7 @@ export function htmlToRich(html: string, opts: { keepFonts?: boolean } = {}): Cl
     if (c.color) r.color = c.color;
     if (c.pos === 'sub') r.sub = true;
     if (c.pos === 'sup') r.sup = true;
+    if (c.link) r.link = c.link;
     if (opts.keepFonts) {
       if (c.size) r.size = c.size;
       if (c.font && !rt.isSymbolFont(c.font)) r.font = c.font;
@@ -189,6 +192,9 @@ export function htmlToRich(html: string, opts: { keepFonts?: boolean } = {}): Cl
     if (tag === 'U' || tag === 'INS') n.underline = true;
     if (tag === 'SUB') n.pos = 'sub';
     if (tag === 'SUP') n.pos = 'sup';
+    // links to web pages, e-mail and files (never scripts)
+    const href = tag === 'A' ? el.getAttribute('href')?.trim() : null;
+    if (href && /^(https?|ftp|mailto|file):/i.test(href)) n.link = href;
     if (/^H[1-6]$/.test(tag)) n.bold = true;
     const fw = styleDecl(el, 'font-weight');
     if (fw) n.bold = fw === 'bold' || fw === 'bolder' || Number(fw) >= 600;

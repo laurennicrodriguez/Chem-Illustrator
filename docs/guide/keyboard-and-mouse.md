@@ -128,7 +128,7 @@ Keys typed one after another build whole molecules. From a phenyl's highlighted 
 | Alt+← / Alt+→ | Turn 1° anticlockwise / clockwise |
 | Alt+↑ / Alt+↓ | Turn 15° anticlockwise / clockwise |
 | Ctrl+R | Rotate by an angle… |
-| Ctrl+K | Scale… |
+| Ctrl+K | Scale… (in documents, slides, sheets and text being typed: Insert Link…) |
 | Ctrl+Shift+H, Ctrl+Shift+V | Flip left to right, flip top to bottom |
 | Ctrl+Alt+Shift+L, C, R | Align left edges, centres across, right edges |
 | Ctrl+Alt+Shift+T, M, B | Align top edges, middles down, bottom edges |
