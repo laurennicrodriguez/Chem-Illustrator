@@ -37,6 +37,8 @@ export const DOCX_CT = {
   font: 'application/vnd.openxmlformats-officedocument.obfuscatedFont',
   comments: 'application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml',
   commentsExtended: 'application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml',
+  footnotes: 'application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml',
+  endnotes: 'application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml',
 };
 
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/';
@@ -54,6 +56,8 @@ export const DOCX_REL = {
   fontTable: R + 'fontTable',
   font: R + 'font',
   comments: R + 'comments',
+  footnotes: R + 'footnotes',
+  endnotes: R + 'endnotes',
   /** Word 2013's part saying which comments are replies, and which are resolved. */
   commentsExtended: 'http://schemas.microsoft.com/office/2011/relationships/commentsExtended',
   /** Word 365's parts giving each comment a lasting id, and that id its time in UTC. */

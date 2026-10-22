@@ -8,7 +8,8 @@
 // numbers; ChemDraw objects in them become structures that can be edited here. What has no
 // place here yet is noted in warnings (shown to the person, never refused). Citations and the
 // bibliography saved here come back live (the references are in our own part); those of
-// other reference managers keep the text Word showed.
+// other reference managers keep the text Word showed. Footnotes and endnotes come in as notes
+// typed into here, and a table of figures (a TOC field for captions) as one worked out here.
 
 import type { Contents, Justify, ParaStyle, TableCell, TableData, TextRun } from '../model';
 import { ACS_1996, type DocStyle } from '../style';
@@ -23,7 +24,7 @@ import { documentMeasure } from '../text/font-measure';
 import {
   OBJECT_CHAR, defaultHeaderFooter, defaultPage, defaultStyles,
   COL_GAP, FLOAT_GAP, columnsOf, lookExtent, usedObjects,
-  type DocObject, type DocText, type FigureLook, type Float, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
+  type DocObject, type DocText, type FigureLook, type Float, type HeaderFooter, type NamedStyle, type NoteFormat, type NoteFormats, type NumberPlace, type PageSetup,
 } from '../document/document';
 import { shownSize } from '../document/doc-layout';
 import { layoutTable } from '../table';
@@ -63,7 +64,7 @@ const EXT_MIME: Record<string, string> = { wmf: 'image/x-wmf', emf: 'image/x-emf
 
 const WARN = {
   links: 'Links were kept as plain text.',
-  notes: 'Footnotes and endnotes were left out.',
+  notes: 'Footnotes and endnotes inside table cells were left out.',
   equations: 'Equations in table cells were kept as plain text.',
   shapes: 'SmartArt and drawn shapes were left out.',
   chartParts: 'Some charts mix chart types (a line over columns, a second axis): they show as one type.',
@@ -149,6 +150,10 @@ class DocxReader {
   /** A table's notes, written after it as a paragraph, to leave out when the table comes from our own part. */
   private pendingNotes: string | null = null;
   private measure: Measure = documentMeasure((t, size, _f, style) => arialWidth(t, size, /bold/.test(style)));
+  /** How the footnotes and endnotes are numbered, where not Word's own way. */
+  private noteFormats: NoteFormats = {};
+  /** The notes in footnotes.xml and endnotes.xml, by Word's id (read when first needed). */
+  private noteEls: Partial<Record<'foot' | 'end', Map<string, Element>>> = {};
 
   constructor(bytes: Uint8Array, private deps: DocxReadDeps) {
     this.pkg = new PackageReader(bytes);
@@ -436,6 +441,59 @@ class DocxReader {
       if (gap !== undefined && Math.abs(gap - COL_GAP) > 0.5) this.page.colGap = gap;
     }
     this.textW = columnsOf(this.page, Math.max(36, this.page.w - this.page.left - this.page.right)).w;
+    // the notes' numbering: the section's, else the document's (settings.xml)
+    const sp = this.pkg.relOfType(this.main, DOCX_REL.settings);
+    const settings = sp ? this.pkg.xml(sp)?.documentElement ?? null : null;
+    const FORMATS = ['decimal', 'lowerRoman', 'upperRoman', 'lowerLetter', 'upperLetter', 'chicago'];
+    for (const [tag, key, def] of [['footnotePr', 'foot', 'decimal'], ['endnotePr', 'end', 'lowerRoman']] as const) {
+      const v = this.a(kid(kid(sect, tag), 'numFmt')) ?? this.a(kid(kid(settings, tag), 'numFmt'));
+      if (v && v !== def && FORMATS.includes(v)) this.noteFormats[key] = v as NoteFormat;
+    }
+  }
+
+  /** A footnote (or endnote) of the file by Word's id. */
+  private noteEl(end: boolean, id: string | null): Element | null {
+    const k = end ? 'end' : 'foot';
+    let m = this.noteEls[k];
+    if (!m) {
+      m = new Map();
+      const path = this.pkg.relOfType(this.main, end ? DOCX_REL.endnotes : DOCX_REL.footnotes);
+      const root = path ? this.pkg.xml(path)?.documentElement : null;
+      for (const n of root ? kids(root, end ? 'endnote' : 'footnote') : []) {
+        const t = this.a(n, 'type');
+        if (!t || t === 'normal') m.set(this.a(n, 'id') ?? '', n);
+      }
+      this.noteEls[k] = m;
+    }
+    return id === null ? null : m.get(id) ?? null;
+  }
+
+  /**
+   * A footnote's or endnote's number in the text: a note here, with the note's text (read as a
+   * text box's is, its paragraphs in their own look), less Word's number mark and the space after it.
+   */
+  private noteRef(el: Element, r: RProps, ctx: Ctx, end: boolean): void {
+    if (this.swallowing()) return;
+    if (ctx.cell) { this.warn('notes'); return; }
+    const note = this.noteEl(end, this.a(el, 'id'));
+    if (!note) return;
+    // the note is read apart from the paragraph it is in (its own fields and comments)
+    const fields = this.fields, cmt = this.cmtOpen, math = this.displayMath;
+    this.fields = [];
+    this.cmtOpen = new Set();
+    const got = this.boxText(note);
+    this.fields = fields;
+    this.cmtOpen = cmt;
+    this.displayMath = math;
+    // text only (citations, captions and pictures in notes keep no place here)
+    const runs = got.runs.filter((x) => x.obj === undefined).map(({ cmt: _c, ...x }) => x);
+    while (runs.length && /^[ \t]/.test(runs[0].text)) {
+      const text = runs[0].text.replace(/^[ \t]+/, '');
+      if (text) { runs[0] = { ...runs[0], text }; break; }
+      if (runs.length === 1) { runs[0] = { ...runs[0], text: '' }; break; }
+      runs.shift();
+    }
+    this.emitObject(ctx, { kind: 'note', ...(end ? { end: true } : {}), runs: rt.normalizeRuns(runs), paras: got.paras }, { ...r, pos: 'sup' }, true);
   }
 
   // ---------------------------------------------------------------- the text
@@ -835,7 +893,7 @@ class DocxReader {
         case 'drawing': if (!this.swallowing()) this.drawing(c, r, ctx); break;
         case 'pict': if (!this.swallowing()) this.vml(c, r, ctx, null); break;
         case 'object': if (!this.swallowing()) this.vml(c, r, ctx, c); break;
-        case 'footnoteReference': case 'endnoteReference': this.warn('notes'); break;
+        case 'footnoteReference': case 'endnoteReference': this.noteRef(c, r, ctx, c.localName === 'endnoteReference'); break;
         case 'commentReference': this.cmtPoint(c, ctx); break;
         case 'AlternateContent': {
           const alt = this.alternate(c);
@@ -915,6 +973,13 @@ class DocxReader {
     }
     // a table of contents: ours again, its lines (Word's last update) left out, as they are worked out here
     const toc = /^TOC\b(.*)$/i.exec(ins);
+    // a table of figures: the captions of one label (\c "Figure"), or those in the Caption style
+    const fig = toc ? /\\c\s+"?([^"\\]+?)"?\s*(\\|$)/i.exec(toc[1]) ?? (/\\t\s+"?caption\b/i.test(toc[1]) ? ['', ''] : null) : null;
+    if (toc && fig && !ctx.cell) {
+      const id = this.emitObject(ctx, { kind: 'tof', name: fig[1].trim() }, f.props);
+      if (id !== null) { f.swallow = true; f.toc = true; }
+      return;
+    }
     if (toc && !ctx.cell) {
       const depth = /\\o\s*"?\s*\d+\s*-\s*(\d+)/i.exec(toc[1]);
       const id = this.emitObject(ctx, { kind: 'toc', levels: Math.max(1, Math.min(3, depth ? Number(depth[1]) : 3)) }, f.props);
@@ -1584,6 +1649,7 @@ class DocxReader {
       objects,
       drawingStyle: this.drawingStyle,
       ...(this.trackOn() ? { track: true } : {}),
+      ...(Object.keys(this.noteFormats).length ? { notes: this.noteFormats } : {}),
       ...(Array.isArray(m?.references) ? { references: m.references.map((r) => cleanRef(r)) } : {}),
       ...(typeof m?.citeStyle === 'string' && m.citeStyle in CITE_PRESETS ? { citeStyle: m.citeStyle } : {}),
       ...(m?.citeOptions && Object.keys(cleanOptions(m.citeOptions)).length ? { citeOptions: cleanOptions(m.citeOptions) } : {}),

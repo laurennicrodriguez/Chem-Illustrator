@@ -8,7 +8,7 @@ import type { ParaStyle, TextRun } from '../model';
 import * as rt from '../richtext';
 import { withStack, layoutText, type Glyphs, type LaidLine, type Measure } from '../text/layout';
 import { fitParas, paraCount, splitParagraphs } from '../text/paragraphs';
-import { styleOf, type DocText, type NamedStyle } from './document';
+import { COMPOUND, fieldTexts, styleOf, type DocText, type NamedStyle } from './document';
 
 export interface TocEntry {
   /** 1 for Heading 1, and so on. */
@@ -43,11 +43,11 @@ export const TOC_INDENT = 11;
  * The contents' lines, laid out `wrap` wide from the origin: each heading's text (wrapping short
  * of the page numbers), then dots and its page number at the right of its last line.
  */
-export function tocLines(entries: TocEntry[], pageOf: (para: number) => string, st: NamedStyle, line: number | undefined, wrap: number, measure: Measure): LaidLine[] {
+export function tocLines(entries: TocEntry[], pageOf: (para: number) => string, st: NamedStyle, line: number | undefined, wrap: number, measure: Measure, empty = EMPTY_TOC, spaced = true): LaidLine[] {
   const base = { font: st.font, size: st.size };
   const family = withStack(st.font);
   if (!entries.length) {
-    return layoutText({ runs: [{ ...base, italic: true, color: '#8a8f98', text: EMPTY_TOC }], paras: [{ line }], justify: 'left', wrap, boxes: true }, st.size, measure).lines;
+    return layoutText({ runs: [{ ...base, italic: true, color: '#8a8f98', text: empty }], paras: [{ line }], justify: 'left', wrap, boxes: true }, st.size, measure).lines;
   }
   const labels = entries.map((e) => pageOf(e.para));
   const numW = Math.max(0, ...labels.map((l) => measure(l, st.size, family, '')));
@@ -58,7 +58,7 @@ export function tocLines(entries: TocEntry[], pageOf: (para: number) => string, 
     if (i) runs.push({ ...base, text: '\n' });
     runs.push({ ...base, text: e.text });
   });
-  const paras: ParaStyle[] = entries.map((e) => ({ indent: (e.level - 1) * TOC_INDENT, indentRight: keep, line, spaceBefore: e.level === 1 && entries.length > 1 ? 0.25 * st.size : 0 }));
+  const paras: ParaStyle[] = entries.map((e) => ({ indent: (e.level - 1) * TOC_INDENT, indentRight: keep, line, spaceBefore: spaced && e.level === 1 && entries.length > 1 ? 0.25 * st.size : 0 }));
   const lay = layoutText({ runs, paras, justify: 'left', wrap, boxes: true }, st.size, measure);
   const unit = '. ';
   const unitW = measure(unit, st.size, family, '');
@@ -91,3 +91,38 @@ export function tocText(entries: TocEntry[], pageOf: (para: number) => string): 
 /** Is this run the contents? */
 export const isToc = (t: Pick<DocText, 'objects'>, r: { obj?: number }): boolean => r.obj !== undefined && t.objects[r.obj]?.kind === 'toc';
 
+
+// ---------------------------------------------------------------- table of figures
+
+/** What a table of figures shows when there are no captions of its kind yet (on screen and in the PDF only). */
+export function emptyTof(name: string): string {
+  return `Table of figures: no ${name ? `${name} ` : ''}captions yet. Add them with References > Insert Caption and they appear here with their page numbers.`;
+}
+
+/** The labels a table of figures can list, as References > Insert Table of Figures offers them ('' is every caption). */
+export const TOF_NAMES = ['Figure', 'Scheme', 'Table', 'Chart', ''] as const;
+
+/**
+ * A table of figures' entries (References > Insert Table of Figures, as in Word): each caption
+ * of the label `name` (every caption when '') in the order they come, as its whole caption
+ * paragraph ("Figure 2. Synthesis of 3."), with the paragraph it is in for its page number.
+ * Captions inside table cells are left out, as are compound numbers.
+ */
+export function tofEntries(t: DocText, name: string, shown: Map<number, string> = fieldTexts(t)): TocEntry[] {
+  const runs = splitParagraphs(t.runs);
+  const out: TocEntry[] = [];
+  runs.forEach((pr, p) => {
+    const seq = pr.find((r) => {
+      const o = r.obj !== undefined ? t.objects[r.obj] : undefined;
+      return o?.kind === 'seq' && o.name !== COMPOUND && (!name || o.name === name);
+    });
+    if (!seq) return;
+    // fields show what they show in the text; figures in the paragraph are left out
+    const text = pr.map((r) => (r.obj === undefined ? r.text : (shown.get(r.obj!) ?? '').repeat(r.text.length))).join('').replace(/\s+/g, ' ').trim();
+    if (text) out.push({ level: 1, text, para: p });
+  });
+  return out;
+}
+
+/** Is this run a table of figures? */
+export const isTof = (t: Pick<DocText, 'objects'>, r: { obj?: number }): boolean => r.obj !== undefined && t.objects[r.obj]?.kind === 'tof';
