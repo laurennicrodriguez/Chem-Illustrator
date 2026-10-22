@@ -4,7 +4,9 @@
 // spelling check knows chemistry words. The panel on the right shows the paragraph's formatting,
 // its style, the page and the figure picked, every value of which can be typed in.
 
-import { Doc, type Contents, type ParaStyle, type Shape, type TextRun } from '../model';
+import { Doc, type Contents, type ParaStyle, type Shape, type TabStop, type TextRun } from '../model';
+
+type TabStopKind = TabStop['kind'];
 import { geoDef, geoShapeStyle } from '../design/geo';
 import type { DocStyle } from '../style';
 import type { Tab } from '../workspace';
@@ -17,7 +19,7 @@ import { htmlToRich, richToHtml, richToPlain } from '../text/html';
 import { afterTyping, typingPrefs, setTypingPrefs } from '../text/typing';
 import { findIssues, type CharLook, type Issue } from '../text/chemtext';
 import { loadSpeller, type Speller } from '../text/spelling';
-import { fitParas, paraAt, paraCount, paraRange, splitParagraphs } from '../text/paragraphs';
+import { BULLET_LIBRARY, LIST_SCHEMES, fitParas, paraAt, paraCount, paraRange, splitParagraphs } from '../text/paragraphs';
 import { DocView, ACTUAL, type Overlay } from './doc-view';
 import {
   PRINT_VIEW, VIEW_NAMES as VIEW_LABEL, changeLevel, withHeadings, continuous, foldHeadings, moveParas, newOutline, outlineLevel, shiftFolds, subtreeEnd, toggleFold,
@@ -30,6 +32,8 @@ import { askLink, followLink, linkTip } from './links-ui';
 import { bookmarkName, linkAtPoint } from '../links';
 import { addBookmark, bookmarkPara, bookmarksOf, docPlaces, placeLink, placeName, removeBookmark } from '../document/bookmarks';
 import { DocComments } from './doc-comments';
+import { Ruler, docRulerPrefs, type RulerGeometry } from './ruler';
+import { StylesPane } from './styles-pane';
 import { TOF_NAMES, tocEntries, tofEntries } from '../document/toc';
 import { changesIn, countChanges, decide, decideEverywhere, reviewAuthor, setReviewAuthor } from '../document/revisions';
 import { combineDocuments, compareDocuments } from '../document/compare';
@@ -57,6 +61,8 @@ import { BREAK_NAMES, changeSection, newBreak, pageNumText, sectionAt, sectionsO
 import {
   A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, END_FORMAT, FOOT_FORMAT, captionRuns, noteLabel, noteStyle, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets, inlineMove,
   floatOf, lookExtent, lookOf, cellHolding, innerObjects,
+  WATERMARKS, applyCharStyle, charStylesOf, clearCharStyle, clearFormatting, defaultPageBorder, defaultWatermark, deleteStyle, modifyCharStyle, newCharStyle, newParaStyle, withStyle,
+  type CharStyle, type PageBorder, type Watermark,
   type BreakKind, type DocObject, type DocText, type FigureLook, type Float, type LineNumbers, type NoteFormat, type NumberPlace, type PageNumFormat, type PageSetup, type WrapKind,
 } from '../document/document';
 
@@ -207,6 +213,10 @@ export class DocumentMode {
   private refs: ReferencesDialog;
   /** Review > New Comment: comments beside the page. */
   readonly comments: DocComments;
+  /** View > Ruler: the paragraph's indents and tab stops above the pages. */
+  private ruler: Ruler;
+  /** Home > Styles > More Styles: every style, to apply, change and make. */
+  private stylesPane: StylesPane;
   private readonly closeMenuOutside = (e: Event) => { if (this.menu && !this.menu.contains(e.target as Node)) this.closeMenu(); };
 
   constructor(private host: DocModeHost) {
@@ -255,6 +265,20 @@ export class DocumentMode {
       flash: (msg, ms) => this.host.flash(msg, ms),
       pickFile: () => this.host.pickReferenceFile(),
       preferredChanged: () => this.host.preferredChanged?.(),
+    });
+    this.ruler = new Ruler($('#doc-ruler'), {
+      geometry: () => this.rulerGeometry(),
+      setParas: (patch, what) => { if (this.file && !this.file.box) this.ed.setSelectedParas(patch, what); },
+      focus: () => this.focus(),
+    });
+    this.stylesPane = new StylesPane({
+      doc: () => { const f = this.file; return f && !f.box ? { t: f.t, para: this.ed.currentPara(), look: this.ed.currentStyle() } : null; },
+      applyPara: (id) => { if (this.file) { this.run(`style-id:${id}`); } },
+      applyChar: (id) => this.applyCharStyle(id),
+      newStyle: () => void this.newStyle(),
+      modify: (kind, id) => void this.modifyStyle(kind, id),
+      remove: (kind, id) => this.removeStyle(kind, id),
+      focus: () => this.focus(),
     });
     this.tables = new DocTablesUI({
       file: () => this.file,
@@ -721,6 +745,8 @@ export class DocumentMode {
     if (!f) {
       if (this.blink) { clearInterval(this.blink); this.blink = null; }
       this.panel.closeBoxes();
+      this.stylesPane.close();
+      this.ruler.shown = false;
       this.comments.update();
       return;
     }
@@ -817,6 +843,8 @@ export class DocumentMode {
     this.comments.followCaret();
     this.comments.update();
     this.updateOutlineRibbon();
+    this.ruler.update();
+    this.stylesPane.refresh();
     this.nav.refresh();
     this.redraw();
   }
@@ -1246,7 +1274,7 @@ export class DocumentMode {
         case 'Enter': return run(() => this.enter(shift));
         case 'Backspace': return run(() => ed.backspace(word));
         case 'Delete': return run(() => ed.deleteForward(word));
-        case 'Tab': return run(() => (this.file?.box?.cell ? this.tabCell(shift) : ed.indent(shift ? -1 : 1)));
+        case 'Tab': return run(() => (this.file?.box?.cell ? this.tabCell(shift) : this.tabKey(shift)));
         case 'Escape': return run(() => { if (this.file?.box) this.stopBox(true); else if (!ed.collapsed) ed.setCaret(ed.focus); });
       }
     }
@@ -1469,7 +1497,7 @@ export class DocumentMode {
     v.onMove = () => {
       if (v === this.view) this.placeInput();
       this.showZoom();
-      if (v === this.views[0]) this.comments?.place();
+      if (v === this.views[0]) { this.comments?.place(); this.ruler?.update(); }
       if (this.reading) this.showReadPages();
     };
     v.onResize = () => { if (v === this.views[0]) this.fitSheet(); };
@@ -1540,6 +1568,7 @@ export class DocumentMode {
 
   /** The view buttons and menu items show the view and the page arrangement; the Outlining tab shows in Outline. */
   private showViewKind(): void {
+    this.showRuler();
     const f = this.file;
     if (!f) return;
     const kind = f.view.kind;
@@ -2584,9 +2613,12 @@ export class DocumentMode {
     const ed = this.ed;
     const style = (id: string) => {
       const [a, b] = ed.selectedParas();
-      ed.update(setParaStyle(f.t, a, b, id), 'Style');
+      ed.update(setParaStyle(withStyle(f.t, id), a, b, id), 'Style');
     };
     const line = (v: number) => ed.setSelectedParas({ line: Math.abs(v - 1) < 1e-6 ? undefined : v }, 'spacing');
+    if (cmd.startsWith('style-id:')) { style(cmd.slice(9)); this.focus(); return true; }
+    const pick = /^(case|multilevel|bulletlib|watermark)-(.*)$/.exec(cmd);
+    if (pick) { this.pickCommand(pick[1], pick[2]); this.focus(); return true; }
     const align = (j: 'left' | 'center' | 'right' | 'justify') => ed.setSelectedParas({ align: j === 'left' ? undefined : j }, 'align');
     switch (cmd) {
       case 'text-to-table': void this.tables.textToTableDialog(); break;
@@ -2601,6 +2633,29 @@ export class DocumentMode {
       case 'style-h2': style('Heading2'); break;
       case 'style-h3': style('Heading3'); break;
       case 'style-caption': style('Caption'); break;
+      case 'style-h4': case 'style-h5': case 'style-h6': case 'style-h7': case 'style-h8': case 'style-h9': style(`Heading${cmd.slice(7)}`); break;
+      case 'styles-pane': this.stylesPane.toggle(this.ribbon.querySelector<HTMLElement>('[data-doc="styles-pane"]')); return true;
+      case 'doc-strike': ed.toggle('strike'); break;
+      case 'doc-small-caps': ed.toggle('smallCaps'); break;
+      case 'doc-all-caps': ed.toggle('allCaps'); break;
+      case 'change-case': {
+        // Word's Shift+F3: UPPERCASE, then lowercase, then Capitalize Each Word
+        const [a, b] = ed.collapsed ? [ed.start, ed.start] : [ed.start, ed.end];
+        const text = ed.text.slice(a, b || a);
+        const letters = text.replace(/[^\p{L}]/gu, '');
+        ed.changeCase(letters && letters === letters.toUpperCase() ? 'lower' : letters && letters === letters.toLowerCase() ? 'title' : 'upper');
+        break;
+      }
+      case 'clear-formatting': case 'clear-char-formatting': {
+        if (f.box) { ed.setStyle({ bold: undefined, italic: undefined, underline: undefined, strike: undefined, smallCaps: undefined, allCaps: undefined, highlight: undefined, color: undefined, sub: undefined, sup: undefined, cstyle: undefined }); break; }
+        const [a, b] = ed.selectedParas();
+        ed.update(clearFormatting(f.t, ed.start, ed.end, a, b, cmd === 'clear-char-formatting'), cmd === 'clear-formatting' ? 'Clear Formatting' : 'Clear text formatting');
+        break;
+      }
+      case 'para-tabs': void this.tabsDialog(); return true;
+      case 'view-ruler': this.setRuler(!this.ruler.shown); return true;
+      case 'page-color-none': this.setPageLook({ pageColor: undefined }, 'Page Color'); break;
+      case 'page-borders': void this.pageBorders(); return true;
       case 'line-single': line(1); break;
       case 'line-1-5': line(1.5); break;
       case 'line-double': line(2); break;
@@ -3482,6 +3537,243 @@ export class DocumentMode {
     this.host.flash(`${c.kind === 'ins' ? 'Inserted' : 'Deleted'} by ${c.author || 'unknown'}${when && !isNaN(+when) ? `, ${when.toLocaleString()}` : ''}.`, 5000);
   }
 
+  // ---------------------------------------------------------------- text, lists, styles, tabs and the page's look
+
+  /**
+   * Tab, as in Word: at the start of a list item (or with several paragraphs picked) the level
+   * or indent changes; anywhere else a tab goes in the text, up to the next tab stop.
+   */
+  private tabKey(shift: boolean): void {
+    const ed = this.ed;
+    const [a, b] = ed.selectedParas();
+    const para = ed.currentPara();
+    const atStart = ed.collapsed && ed.start === paraRange(ed.text, a).start;
+    if (shift || a !== b || (para.list && (atStart || !ed.collapsed))) ed.indent(shift ? -1 : 1);
+    else ed.type('\t');
+  }
+
+  /** The ribbon's lists of choices: Change Case, the bullet library, Multilevel List and Watermark. */
+  private pickCommand(what: string, v: string): void {
+    const f = this.file!;
+    const ed = this.ed;
+    if (what === 'case') {
+      if (v === 'allcaps') ed.toggle('allCaps');
+      else if (['sentence', 'lower', 'upper', 'title', 'toggle'].includes(v)) ed.changeCase(v as rt.CaseMode);
+    } else if (what === 'bulletlib') {
+      const bullet = v === 'default' ? undefined : BULLET_LIBRARY[Number(v)];
+      ed.setSelectedParas({ list: 'bullet', bullet, cont: undefined }, 'list');
+    } else if (what === 'multilevel') {
+      const scheme = LIST_SCHEMES.find((x) => x.id === v)?.id;
+      // a scheme is for the whole list: every item of the numbered lists picked takes it
+      const [a, b] = ed.selectedParas();
+      const paras = fitParas(f.t.paras, paraCount(ed.text));
+      let first = a, last = b;
+      while (first > 0 && paras[first - 1]?.list === 'number' && paras[a]?.list === 'number') first--;
+      while (last + 1 < paras.length && paras[last + 1]?.list === 'number' && paras[b]?.list === 'number') last++;
+      const box = !!f.box;
+      if (box) ed.setSelectedParas({ list: 'number', scheme: scheme || undefined, cont: undefined }, 'list');
+      else ed.setParas(first, last, { list: 'number', scheme: scheme || undefined }, 'list');
+    } else if (what === 'watermark') {
+      if (v === 'remove') this.setPageLook({ watermark: undefined }, 'Remove Watermark');
+      else if (v === 'custom') void this.customWatermark();
+      else if (WATERMARKS[Number(v)]) this.setPageLook({ watermark: { ...(f.t.watermark ?? defaultWatermark()), text: WATERMARKS[Number(v)] } }, 'Watermark');
+    }
+  }
+
+  /** Change the whole document's look (watermark, page colour, page borders): one undo step. */
+  private setPageLook(patch: Partial<Pick<DocText, 'watermark' | 'pageColor' | 'pageBorder'>>, label: string): void {
+    const f = this.file;
+    if (!f) return;
+    const t = { ...f.t, ...patch };
+    for (const k of ['watermark', 'pageColor', 'pageBorder'] as const) if (t[k] === undefined) delete t[k];
+    f.ed.update(t, label);
+  }
+
+  /** Design > Watermark > Custom Watermark: the words, font, colour and layout. */
+  private async customWatermark(): Promise<void> {
+    const f = this.file!;
+    const w: Watermark = f.t.watermark ?? defaultWatermark();
+    const got = await ask('Watermark', [
+      { name: 'text', label: 'Text', value: w.text, suggestions: WATERMARKS },
+      { name: 'font', label: 'Font', value: w.font, suggestions: ['Calibri', 'Arial', 'Times New Roman', 'Inter', 'IBM Plex Sans'] },
+      { name: 'color', label: 'Colour', value: w.color, type: 'color' },
+      { name: 'layout', label: 'Layout', value: w.layout, options: [{ value: 'diagonal', label: 'Diagonal' }, { value: 'horizontal', label: 'Horizontal' }] },
+      { name: 'faded', label: 'Semitransparent', value: String(w.faded), type: 'checkbox' },
+    ], { ok: 'Apply', note: 'Words across every page, behind the text. Saved in Word files as Word’s own watermark, so Word shows and edits it too.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    if (!got.text.trim()) { this.setPageLook({ watermark: undefined }, 'Remove Watermark'); return; }
+    this.setPageLook({ watermark: { text: got.text.trim(), font: got.font.trim() || 'Calibri', color: got.color || '#c0c0c0', layout: got.layout === 'horizontal' ? 'horizontal' : 'diagonal', faded: got.faded === 'true' } }, 'Watermark');
+  }
+
+  /** Design > Page Borders: a line round every page. */
+  private async pageBorders(): Promise<void> {
+    const f = this.file!;
+    const b: PageBorder = f.t.pageBorder ?? defaultPageBorder();
+    const got = await ask('Page Borders', [
+      { name: 'on', label: 'A border round every page', value: String(!!f.t.pageBorder), type: 'checkbox' },
+      { name: 'style', label: 'Style', value: b.style, options: [{ value: 'single', label: 'Single line' }, { value: 'double', label: 'Double line' }, { value: 'thick', label: 'Thick and thin' }, { value: 'dotted', label: 'Dotted' }, { value: 'dashed', label: 'Dashed' }] },
+      { name: 'width', label: 'Width', value: String(b.width), unit: 'pt', options: ['0.25', '0.5', '0.75', '1', '1.5', '2.25', '3', '4.5', '6'].map((x) => ({ value: x, label: `${x} pt` })) },
+      { name: 'color', label: 'Colour', value: b.color, type: 'color' },
+      { name: 'from', label: 'Measure from', value: b.from, options: [{ value: 'page', label: 'Edge of page' }, { value: 'text', label: 'Text' }] },
+      { name: 'space', label: 'Distance', value: String(b.space), unit: 'pt', type: 'number' },
+    ], { ok: 'OK', note: 'Saved in Word files as Word’s own page border. From the edge of the page, Word allows up to 31 pt; from the text, up to 31 pt outside the margins.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    if (got.on !== 'true') { this.setPageLook({ pageBorder: undefined }, 'Page Borders'); return; }
+    const style = (['single', 'double', 'thick', 'dotted', 'dashed'] as const).find((x) => x === got.style) ?? 'single';
+    const space = Math.max(0, Math.min(31, Number(got.space) || 0));
+    this.setPageLook({ pageBorder: { style, width: Math.max(0.25, Math.min(6, Number(got.width) || 0.5)), color: got.color || '#000000', from: got.from === 'text' ? 'text' : 'page', space } }, 'Page Borders');
+  }
+
+  /** Paragraph > Tabs: the tab stops of the paragraphs picked, typed in (as the ruler sets them). */
+  private async tabsDialog(): Promise<void> {
+    const f = this.file!;
+    const cur = this.ed.currentPara().tabs ?? [];
+    const KIND: Record<string, TabStopKind> = { left: 'left', l: 'left', centre: 'center', center: 'center', c: 'center', right: 'right', r: 'right', decimal: 'decimal', d: 'decimal' };
+    const LEAD: Record<string, 'dot' | 'hyphen' | 'underscore'> = { dot: 'dot', dots: 'dot', '.': 'dot', hyphen: 'hyphen', dash: 'hyphen', '-': 'hyphen', line: 'underscore', underscore: 'underscore', _: 'underscore' };
+    const shown = cur.map((t) => `${showLength(t.pos, 'in')} in ${t.kind === 'center' ? 'centre' : t.kind}${t.leader ? ` ${t.leader === 'underscore' ? 'line' : t.leader}` : ''}`).join('\n');
+    const got = await ask('Tabs', [
+      { name: 'tabs', label: 'Tab stops, one per line', value: shown, type: 'textarea', placeholder: '1 in left\n3.25 in decimal\n6.5 in right dot' },
+    ], { ok: 'OK', note: 'Each line: where (from the left margin, in inches unless you give cm, mm or pt), then left, centre, right or decimal, then dot, hyphen or line for a leader. Past the last one, tabs stop every half inch. The ruler (View > Ruler) sets them by clicking too.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const tabs: TabStop[] = [];
+    for (const line of got.tabs.split('\n')) {
+      const m = /^\s*(-?[\d.]+\s*(?:in|inch|inches|"|cm|mm|pt)?)\s*(\w+)?\s*(\S+)?\s*$/i.exec(line);
+      if (!m) continue;
+      const pos = parseLength(m[1], 'in');
+      if (pos === null || pos <= 0) continue;
+      const kind = KIND[(m[2] ?? 'left').toLowerCase()] ?? 'left';
+      const leader = m[3] ? LEAD[m[3].toLowerCase()] : undefined;
+      tabs.push(leader ? { pos, kind, leader } : { pos, kind });
+    }
+    tabs.sort((a, b) => a.pos - b.pos);
+    this.ed.setSelectedParas({ tabs: tabs.length ? tabs : undefined }, 'tabs');
+  }
+
+  /** View > Ruler on or off (remembered). */
+  private setRuler(on: boolean): void {
+    docRulerPrefs.shown = on;
+    docRulerPrefs.changed?.();
+    this.showRuler();
+    this.focus();
+  }
+
+  /** Show the ruler as the settings say (not in Read Mode, which has no editing). */
+  showRuler(): void {
+    const on = docRulerPrefs.shown && !!this.file && this.file.view.kind !== 'read';
+    this.ruler.shown = on;
+    for (const b of this.ribbon.querySelectorAll<HTMLButtonElement>('[data-doc="view-ruler"]')) b.setAttribute('aria-pressed', String(docRulerPrefs.shown));
+  }
+
+  /** Where the paragraph the caret is in sits on screen, for the ruler (none while typing in a text box or cell). */
+  private rulerGeometry(): RulerGeometry | null {
+    const f = this.file;
+    if (!f || f.box) return null;
+    const lay = f.layout();
+    const c = f.ed.caret();
+    const l = lay.text.lines[c.line];
+    const p = lay.pages.find((pg) => c.line >= pg.first && c.line < pg.end) ?? lay.pages[0];
+    if (!p) return null;
+    const pg = p.setup;
+    const y = l?.y ?? p.top;
+    const sx = (x: number) => this.view.toScreen(x, y).x;
+    const colL = l?.band?.[0] ?? p.x + pg.left;
+    const colR = l?.band?.[1] ?? p.x + p.w - pg.right;
+    return { colLeft: sx(colL), colRight: sx(colR), pageLeft: sx(p.x), pageRight: sx(p.x + p.w), zoom: this.view.zoom, para: f.ed.currentPara() };
+  }
+
+  /** The Styles pane's character styles: the selection (or the word at the caret) in one, or out of them all (null). */
+  private applyCharStyle(id: string | null): void {
+    const f = this.file;
+    if (!f || f.box) return;
+    const ed = this.ed;
+    let a = ed.start, b = ed.end;
+    if (a === b) {
+      const w = /[\p{L}\p{N}]/u;
+      while (a > 0 && w.test(ed.text[a - 1])) a--;
+      while (b < ed.text.length && w.test(ed.text[b])) b++;
+    }
+    if (a === b) { this.host.flash('Select the words to put in the character style first.'); return; }
+    ed.update(id ? applyCharStyle(f.t, a, b, id) : clearCharStyle(f.t, a, b), id ? 'Character style' : 'Clear character style');
+    this.focus();
+  }
+
+  /** Styles pane > New Style: a paragraph style from the paragraph the caret is in, or a character style from the words picked. */
+  private async newStyle(): Promise<void> {
+    const f = this.file;
+    if (!f || f.box) return;
+    const ed = this.ed;
+    const got = await ask('New Style', [
+      { name: 'name', label: 'Name', value: '' , placeholder: 'Experimental heading' },
+      { name: 'kind', label: 'Style type', value: ed.collapsed ? 'para' : 'char', options: [{ value: 'para', label: 'Paragraph (the whole paragraph’s look and spacing)' }, { value: 'char', label: 'Character (the look of the words picked)' }] },
+    ], { ok: 'Make Style', note: 'The new style takes the look of the text the caret is in, and is given to it. Change it later with Modify; every paragraph or word in it follows.' });
+    this.focus();
+    if (!got || this.file !== f || !got.name.trim()) return;
+    const look = ed.currentStyle();
+    const [a] = ed.selectedParas();
+    const made = got.kind === 'char' ? newCharStyle(f.t, got.name, ed.start, ed.end, look, ed.currentPara()) : newParaStyle(f.t, got.name, a, look);
+    ed.update(made.t, 'New style');
+    this.host.flash(`Made the style “${got.name.trim()}”. It is saved with the document, and in Word files as a Word style.`);
+  }
+
+  /** Styles pane > Modify: a paragraph style in the Style box; a character style here. */
+  private async modifyStyle(kind: 'para' | 'char', id: string): Promise<void> {
+    const f = this.file;
+    if (!f) return;
+    if (kind === 'para') {
+      // the Style box changes the caret's paragraph style: put the caret in one of its paragraphs first, if any
+      const paras = fitParas(f.t.paras, paraCount(rt.plainText(f.t.runs)));
+      const cur = (this.ed.currentPara().style ?? 'Normal') === id;
+      const at = cur ? -1 : paras.findIndex((p) => (p.style ?? 'Normal') === id);
+      if (!cur && at < 0) { this.host.flash('Give a paragraph this style first (click it in the list), then Modify changes how it looks.'); return; }
+      if (at >= 0) f.ed.setCaret(paraRange(f.ed.text, at).start);
+      this.panel.open('style', this.ribbon.querySelector<HTMLElement>('[data-doc="styles-pane"]'));
+      return;
+    }
+    const s: CharStyle = charStylesOf(f.t)[id];
+    if (!s) return;
+    const yesNo = (v: boolean | undefined) => (v === undefined ? 'same' : v ? 'on' : 'off');
+    const tri = [{ value: 'same', label: 'As the paragraph' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }];
+    const got = await ask(`Modify Style: ${s.name}`, [
+      { name: 'name', label: 'Name', value: s.name },
+      { name: 'font', label: 'Font', value: s.font ?? '', placeholder: 'As the paragraph' },
+      { name: 'size', label: 'Size', value: s.size ? String(s.size) : '', unit: 'pt', placeholder: 'As the paragraph' },
+      { name: 'bold', label: 'Bold', value: yesNo(s.bold), options: tri },
+      { name: 'italic', label: 'Italic', value: yesNo(s.italic), options: tri },
+      { name: 'underline', label: 'Underline', value: String(!!s.underline), type: 'checkbox' },
+      { name: 'smallCaps', label: 'Small caps', value: String(!!s.smallCaps), type: 'checkbox' },
+      { name: 'colorOn', label: 'Own colour', value: String(!!s.color), type: 'checkbox' },
+      { name: 'color', label: 'Colour', value: s.color ?? '#000000', type: 'color' },
+    ], { ok: 'OK', note: 'Every word in this style changes with it (except what was formatted by hand).' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const tv = (v: string) => (v === 'on' ? true : v === 'off' ? false : undefined);
+    const next: CharStyle = { id: s.id, name: got.name.trim() || s.name, custom: s.custom };
+    if (got.font.trim()) next.font = got.font.trim();
+    const size = Number(got.size);
+    if (got.size.trim() && size > 0) next.size = size;
+    const bold = tv(got.bold), italic = tv(got.italic);
+    if (bold !== undefined) next.bold = bold;
+    if (italic !== undefined) next.italic = italic;
+    if (got.underline === 'true') next.underline = true;
+    if (got.smallCaps === 'true') next.smallCaps = true;
+    if (s.allCaps) next.allCaps = true;
+    if (s.strike) next.strike = true;
+    if (got.colorOn === 'true') next.color = got.color;
+    f.ed.update(modifyCharStyle(f.t, next), 'Change style');
+  }
+
+  /** Styles pane > Delete (only styles made here). */
+  private removeStyle(_kind: 'para' | 'char', id: string): void {
+    const f = this.file;
+    if (!f) return;
+    const next = deleteStyle(f.t, id);
+    if (next === f.t) { this.host.flash('Only styles you made can be deleted (the standard ones can be changed with Modify).'); return; }
+    f.ed.update(next, 'Delete style');
+  }
+
   // ---------------------------------------------------------------- the ribbon
 
   private wireRibbon(): void {
@@ -3543,6 +3835,8 @@ export class DocumentMode {
     go(font, () => { if (font.value.trim() && this.file) this.ed.setStyle({ font: font.value.trim() }); });
     go(size, () => { const v = Number(size.value); if (v > 0 && v <= 1638 && this.file) this.ed.setStyle({ size: v }); });
     colour.addEventListener('change', () => { if (this.file) this.ed.setStyle({ color: colour.value.toLowerCase() === '#000000' ? undefined : colour.value }); this.focus(); });
+    const pageCol = r.querySelector<HTMLInputElement>('#doc-page-colour')!;
+    pageCol.addEventListener('change', () => { this.setPageLook({ pageColor: pageCol.value.toLowerCase() === '#ffffff' ? undefined : pageCol.value }, 'Page Color'); this.focus(); });
     // Layout > Paragraph: indents (inches) and spacing (points); any unit can be typed
     const para = (id: string, unit: 'in' | 'pt', patch: (n: number) => Partial<ParaStyle>) => {
       const el = r.querySelector<HTMLInputElement>(id)!;
@@ -3606,6 +3900,8 @@ export class DocumentMode {
     press('doc-sub', !!s.sub);
     press('doc-sup', !!s.sup);
     press('doc-formula', !!s.formula);
+    press('doc-strike', !!s.strike);
+    press('doc-small-caps', !!s.smallCaps);
     press('doc-highlight', !!s.highlight);
     const align = para.align ?? 'left';
     press('doc-align-left', align === 'left');
@@ -3651,6 +3947,16 @@ export class DocumentMode {
     press('numbers-s', sec.hf.prefix === 'S');
     const breaks = this.ribbon.querySelector<HTMLSelectElement>('#doc-breaks');
     if (breaks && breaks !== active) breaks.value = '';
+    // the lists of choices show their name again after a choice
+    for (const id of ['#doc-case', '#doc-bulletlib', '#doc-multilevel']) {
+      const el = this.ribbon.querySelector<HTMLSelectElement>(id);
+      if (el && el !== active) el.value = '';
+    }
+    const wm = f.t.watermark;
+    const wmAt = wm ? WATERMARKS.indexOf(wm.text) : -1;
+    pick('#doc-watermark', !wm ? '' : wmAt >= 0 ? String(wmAt) : 'other');
+    const pageCol = this.ribbon.querySelector<HTMLInputElement>('#doc-page-colour');
+    if (pageCol && pageCol !== active) pageCol.value = f.t.pageColor ?? '#ffffff';
     pick('#doc-linenums', sec.lines?.restart ?? 'none');
     press('track-changes', !!f.t.track);
     press('show-comments', this.comments.shown);

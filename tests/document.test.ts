@@ -71,9 +71,10 @@ describe('published font widths', () => {
 });
 
 describe('named styles', () => {
-  it('starts with Normal, Title, three headings and Caption, in Times New Roman', () => {
+  it('starts with Normal, Title, nine headings and Caption, in Times New Roman', () => {
     const d = newDocument();
-    expect(Object.keys(d.styles)).toEqual(['Normal', 'Title', 'Heading1', 'Heading2', 'Heading3', 'Caption']);
+    expect(Object.keys(d.styles)).toEqual(['Normal', 'Title', 'Heading1', 'Heading2', 'Heading3', 'Heading4', 'Heading5', 'Heading6', 'Heading7', 'Heading8', 'Heading9', 'Caption']);
+    expect(d.styles.Heading9.outline).toBe(9);
     expect(d.styles.Normal.font).toBe('Times New Roman');
     expect(d.paras).toEqual([{ align: 'justify', spaceAfter: 8 }]);
   });

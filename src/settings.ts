@@ -118,6 +118,8 @@ export interface Settings {
   guides: { drawing: boolean; slides: boolean; design: boolean };
   /** Document settings boxes pinned in the panel on the right ('para', 'style', 'page', 'hf'). */
   docPins: string[];
+  /** Document mode's ruler shown (View > Ruler). */
+  docRuler: boolean;
   /** Look for a newer version when the desktop app starts (Edit > Settings). */
   updateCheck: boolean;
   /** Names the name reader can't read are looked up on PubChem (Edit > Settings). */
@@ -148,6 +150,7 @@ export const DEFAULT_SETTINGS: Settings = {
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
   guides: { drawing: false, slides: true, design: true },
   docPins: [],
+  docRuler: false,
   updateCheck: true, pubchemNames: true, fileTypesOffered: false, wordObjectsOffered: false, reviewName: '', skipVersion: null, recentFiles: [], highlightLooks: [],
   scheme: DEFAULT_SCHEME_PREFS,
   keep: DEFAULT_KEEP,
@@ -194,6 +197,7 @@ export function parseSettings(text: string | null | undefined): Settings {
     const g = r.guides as Record<string, unknown>;
     for (const k of ['drawing', 'slides', 'design'] as const) if (typeof g[k] === 'boolean') s.guides[k] = g[k] as boolean;
   }
+  if (typeof r.docRuler === 'boolean') s.docRuler = r.docRuler;
   if (Array.isArray(r.docPins)) s.docPins = ['para', 'style', 'page', 'hf'].filter((k) => (r.docPins as unknown[]).includes(k));
   if (r.methylStyle === 'Me' || r.methylStyle === 'CH3') s.methylStyle = r.methylStyle;
   if (r.groupClick === 'group' || r.groupClick === 'item') s.groupClick = r.groupClick;
