@@ -41,7 +41,7 @@ import { writeCdxml } from './io/cdxml-write';
 import { WORKSPACE, folderOf } from './io/workspace-file';
 import { askLink, followLink, setLinkHost, type LinkPlace } from './ui/links-ui';
 import { SHOW_JUMPS, cellOfLink, linkSpans, removeLink, setLink, slideOfLink } from './links';
-import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, setEmbeddedWriter, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, PICTURE_EXTENSIONS, type FileType } from './io/files';
+import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, setEmbeddedWriter, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, DOCX, PICTURE_EXTENSIONS, type FileType } from './io/files';
 import { readPptx } from './io/pptx-read';
 import { pickReuseSlides } from './ui/reuse-slides';
 import { writeTiff } from './render/tiff';
@@ -3211,6 +3211,23 @@ const docMode = new DocumentMode({
   pickReferenceFile: () => pickReferenceFile(),
   preferredChanged: () => storeSettings(),
   reviewNameChanged: () => storeSettings(),
+  openDocuments: () => {
+    const seen = new Set<unknown>();
+    return ws.tabs.filter((t) => t.mode === 'document' && t.document && !seen.has(t.document) && seen.add(t.document)).map((t) => ({ name: ws.label(t), t: t.document!.t }));
+  },
+  pickDocument: async () => {
+    const f = await openBytesDialog('Word documents', [DOCX]).catch(async (e) => { await showError(String(e)); return null; });
+    if (!f) return null;
+    try {
+      const { doc, warnings } = await readDocx(f.bytes, docRead);
+      if (warnings.length) flash(`${f.name}: ${warnings.join(' ')}`, 8000);
+      return { name: f.name, t: doc };
+    } catch (e) {
+      await showError(`Could not open ${f.name}: ${String(e)}`);
+      return null;
+    }
+  },
+  showDocument: (t, name) => { ws.showDocument(t, name); },
   newTable: (rows, cols, style) => tableDrawing(emptyTable(rows, cols, style.captionSize), style),
   measure: measureText,
 });
