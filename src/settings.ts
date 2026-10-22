@@ -37,6 +37,10 @@ export interface Settings {
   showRoles: boolean;
   /** Format chemistry as words are finished (CH2Cl2, 1H NMR, DMSO-d6). Edit > Typing and Spelling. */
   chemTyping: boolean;
+  /** Stereodescriptors in front of a name in italics as it is typed: (S)-proline. Edit > Typing and Spelling. */
+  stereoItalic: boolean;
+  /** Compound numbers in bold as they are typed: (4), compound 4a. Edit > Typing and Spelling. */
+  boldNumbers: boolean;
   /** Underline misspelled words (red) and chemistry formatting slips (blue) while typing. */
   spellCheck: boolean;
   /** Replacements made as you type: [typed, replaced by] (oC → °C). */
@@ -129,7 +133,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false, showRoles: true,
-  chemTyping: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
+  chemTyping: true, stereoItalic: true, boldNumbers: false, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
   modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true, page: { name: 'letter', w: 540, h: 720, grow: true }, pageEdge: true, welcomed: false, textBar: 'docked', groupTips: true,
   citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', circledCharges: false, textToAtom: true, groupClick: 'group', groupOutline: true, rerouteArrows: true, superscriptR: true, linkSide: 'keep', slideTemplate: null, askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(),
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
@@ -151,7 +155,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (!raw || typeof raw !== 'object') return s;
   const r = raw as Record<string, unknown>;
   if (r.hotkeys && typeof r.hotkeys === 'object' && !Array.isArray(r.hotkeys)) s.hotkeys = r.hotkeys as KeyOverrides;
-  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'spellCheck', 'scrollBars', 'pageEdge', 'welcomed', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'textToAtom', 'groupOutline', 'rerouteArrows', 'superscriptR', 'updateCheck', 'pubchemNames', 'fileTypesOffered'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
+  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'stereoItalic', 'boldNumbers', 'spellCheck', 'scrollBars', 'pageEdge', 'welcomed', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'textToAtom', 'groupOutline', 'rerouteArrows', 'superscriptR', 'updateCheck', 'pubchemNames', 'fileTypesOffered'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
   if (r.page === null) s.page = null;
   else if (r.page && typeof r.page === 'object') {
     const p = r.page as Record<string, unknown>;

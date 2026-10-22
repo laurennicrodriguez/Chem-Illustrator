@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { Speller, checkSpans, isAbbreviation } from '../src/text/spelling';
 
 const read = (f: string) => readFileSync(new URL(`../public/dict/${f}`, import.meta.url), 'utf8');
-const speller = () => new Speller({ english: read('english.txt'), chemistry: read('chemistry.txt'), lab: read('lab-words.txt') });
+const speller = () => new Speller({ english: read('english.txt'), chemistry: read('chemistry.txt'), lab: `${read('lab-words.txt')}\n${read('name-reactions.txt')}` });
 const s = speller();
 const words = (text: string) => checkSpans(text).map(([a, b]) => text.slice(a, b));
 const wrong = (sp: Speller, text: string) => sp.misspelled(text).map(([a, b]) => text.slice(a, b));
@@ -62,5 +62,13 @@ describe('the speller', () => {
     sp.ignore('Quxone');
     expect(sp.known('quxone')).toBe(true);
     expect(sp.suggestions('fooxame')).toContain('fooxane');
+  });
+});
+
+describe('everyday chemistry words', () => {
+  it('knows name reactions and the words of synthesis', () => {
+    const text = 'The Wieland–Miescher ketone came from the Hajos–Parrish reaction of the triketone; a Horner–Wadsworth–Emmons step gave the ynone, and a Mukaiyama aldol the enone diastereoselectively.';
+    expect(wrong(s, text)).toEqual([]);
+    expect(wrong(s, 'the Wielandd step')).toEqual(['Wielandd']);
   });
 });

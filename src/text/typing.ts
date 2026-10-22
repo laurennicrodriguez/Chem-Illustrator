@@ -4,7 +4,7 @@
 // Edit > Typing and Spelling.
 
 import type { TextEditing } from './editing';
-import { DEFAULT_REPLACEMENTS, WORD_ENDS, replacementAt, typingFormats } from './chemtext';
+import { DEFAULT_REPLACEMENTS, WORD_ENDS, nameFormats, replacementAt, typingFormats } from './chemtext';
 
 export interface TypingPrefs {
   /** Format chemistry as words are finished. */
@@ -15,9 +15,13 @@ export interface TypingPrefs {
   spelling: boolean;
   /** The person's own words for the spelling check. */
   dictionary: string[];
+  /** Stereodescriptors in front of a name in italics as it is typed: (S)-proline. */
+  stereoItalic: boolean;
+  /** Compound numbers in bold as they are typed: (4), compound 4a. */
+  boldNumbers: boolean;
 }
 
-export const DEFAULT_TYPING: TypingPrefs = { chemistry: true, replacements: DEFAULT_REPLACEMENTS.map(([a, b]) => [a, b]), spelling: true, dictionary: [] };
+export const DEFAULT_TYPING: TypingPrefs = { chemistry: true, replacements: DEFAULT_REPLACEMENTS.map(([a, b]) => [a, b]), spelling: true, dictionary: [], stereoItalic: true, boldNumbers: false };
 
 /** The current preferences (main.ts fills these in from the settings file). */
 export const typingPrefs: TypingPrefs = { ...DEFAULT_TYPING, replacements: [...DEFAULT_TYPING.replacements], dictionary: [] };
@@ -34,6 +38,12 @@ export function afterTyping(ed: TextEditing, typed: string, prefs: TypingPrefs =
     }
   }
   if (prefs.chemistry) formatWord(ed, end);
+  if (prefs.stereoItalic || prefs.boldNumbers) {
+    // its own undo step, so Ctrl+Z straight after takes back just this
+    const from = Math.max(0, ed.text.lastIndexOf('\n', end - 1) + 1, end - 40);
+    const edits = nameFormats(ed.text.slice(from, end + 1), end - from, { stereo: prefs.stereoItalic, numbers: prefs.boldNumbers });
+    if (edits.length) ed.fix(edits.map((e) => ({ ...e, start: e.start + from, end: e.end + from })), 'format');
+  }
 }
 
 /** How far back the chemistry rules look for the word just finished: they need it and the word before. */

@@ -4,10 +4,11 @@
 
 import { showDialog } from './dialog-host';
 import { DEFAULT_REPLACEMENTS } from '../text/chemtext';
+import type { TypingPrefs } from '../text/typing';
 
 export interface TypingDialogOptions {
-  get(): { chemistry: boolean; spelling: boolean; replacements: [string, string][]; dictionary: string[] };
-  set(v: Partial<{ chemistry: boolean; spelling: boolean; replacements: [string, string][]; dictionary: string[] }>): void;
+  get(): TypingPrefs;
+  set(v: Partial<TypingPrefs>): void;
   location(): Promise<string>;
 }
 
@@ -17,6 +18,8 @@ export class TypingDialog {
   private words: HTMLTextAreaElement;
   private chem: HTMLInputElement;
   private spell: HTMLInputElement;
+  private stereo: HTMLInputElement;
+  private numbers: HTMLInputElement;
 
   constructor(private opts: TypingDialogOptions) {
     const d = (this.d = document.createElement('dialog'));
@@ -25,6 +28,8 @@ export class TypingDialog {
     d.innerHTML = `
       <h2>Typing and Spelling</h2>
       <label class="hk-opt"><input type="checkbox" data-opt="chem" /><span>Format chemistry as I type: CH2Cl2 → CH<sub>2</sub>Cl<sub>2</sub>, 1H NMR → <sup>1</sup>H NMR, DMSO-d6 → DMSO-<i>d</i><sub>6</sub>. Press <kbd>Ctrl+Z</kbd> straight after to take one back. (Text in formula style already shows its subscripts.)</span></label>
+      <label class="hk-opt"><input type="checkbox" data-opt="stereo" /><span>Stereodescriptors in italics as I type a name: (S)-proline → (<i>S</i>)-proline, (2E,4Z)- → (2<i>E</i>,4<i>Z</i>)-.</span></label>
+      <label class="hk-opt"><input type="checkbox" data-opt="numbers" /><span>Compound numbers in bold as I type: (4) → (<b>4</b>), compound 4a → compound <b>4a</b>. Press <kbd>Ctrl+Z</kbd> straight after to keep a number plain (a list item, an equation). References ▸ Compound Number (<kbd>Alt+Shift+N</kbd> in documents) numbers compounds for you.</span></label>
       <label class="hk-opt"><input type="checkbox" data-opt="spell" /><span>Check spelling, with chemistry words (red underlines), and chemistry formatting (blue underlines) in text being typed. Right-click an underlined word for suggestions.</span></label>
       <h3>Replacements as you type</h3>
       <p class="muted small">When you finish a word with a space or punctuation, text on the left becomes text on the right. A replacement that starts with a letter only applies as a whole word (65 oC, not ZnoC).</p>
@@ -41,6 +46,10 @@ export class TypingDialog {
     this.words = d.querySelector('.ty-words')!;
     this.chem = d.querySelector('input[data-opt=chem]')!;
     this.spell = d.querySelector('input[data-opt=spell]')!;
+    this.stereo = d.querySelector('input[data-opt=stereo]')!;
+    this.numbers = d.querySelector('input[data-opt=numbers]')!;
+    this.stereo.addEventListener('change', () => opts.set({ stereoItalic: this.stereo.checked }));
+    this.numbers.addEventListener('change', () => opts.set({ boldNumbers: this.numbers.checked }));
     this.chem.addEventListener('change', () => opts.set({ chemistry: this.chem.checked }));
     this.spell.addEventListener('change', () => opts.set({ spelling: this.spell.checked }));
     this.words.addEventListener('input', () => opts.set({ dictionary: this.words.value.split(/\r?\n/).map((w) => w.trim()).filter(Boolean) }));
@@ -56,6 +65,8 @@ export class TypingDialog {
     const v = this.opts.get();
     this.chem.checked = v.chemistry;
     this.spell.checked = v.spelling;
+    this.stereo.checked = v.stereoItalic;
+    this.numbers.checked = v.boldNumbers;
     this.fill(v.replacements);
     this.words.value = v.dictionary.join('\n');
     void this.opts.location().then((w) => { this.d.querySelector('.ty-where')!.textContent = w; });

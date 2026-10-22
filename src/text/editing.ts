@@ -537,6 +537,7 @@ export class TextEditing {
       const patch: Partial<rt.RunStyle> = {};
       if (e.pos) Object.assign(patch, { sub: e.pos === 'sub' || undefined, sup: e.pos === 'sup' || undefined, formula: undefined });
       if (e.italic !== undefined) patch.italic = e.italic || undefined;
+      if (e.bold !== undefined) patch.bold = e.bold || undefined;
       if (Object.keys(patch).length) runs = rt.applyStyle(runs, e.start, e.end, patch);
     }
     let anchor = this.anchor, focus = this.focus;

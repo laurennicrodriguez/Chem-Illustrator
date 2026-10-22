@@ -362,7 +362,7 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
     'Ctrl+Alt+F': 'insert-footnote', 'Ctrl+Alt+D': 'insert-endnote',
     'Ctrl+Alt+N': 'view-draft', 'Ctrl+Alt+S': 'view-split',
     'Alt+Shift+ArrowLeft': 'outline-promote', 'Alt+Shift+ArrowRight': 'outline-demote', 'Alt+Shift+ArrowUp': 'outline-up', 'Alt+Shift+ArrowDown': 'outline-down',
-    'Alt+Shift+=': 'outline-expand', 'Alt+Shift+-': 'outline-collapse', 'Alt+Shift+A': 'outline-all',
+    'Alt+Shift+=': 'outline-expand', 'Alt+Shift+-': 'outline-collapse', 'Alt+Shift+A': 'outline-all', 'Alt+Shift+N': 'compound-number',
     'Alt+Shift+1': 'outline-level-1', 'Alt+Shift+2': 'outline-level-2', 'Alt+Shift+3': 'outline-level-3',
   }),
   text: verbs('text', {
