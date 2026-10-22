@@ -37,6 +37,7 @@
         <button role="menuitem" data-modes="drawing slides design" data-cmd="export-mol">Export Molfile…</button>
         <hr />
         <button role="menuitem" data-cmd="print" title="Print the drawing, slides (or handouts), document or sheet">Print…</button>
+        <button data-modes="sheet" role="menuitem" data-cmd="print-preview" title="Every page of the sheet as it will print">Print Preview</button>
         <hr />
         <button role="menuitem" data-cmd="close-tab">Close</button>
         <hr class="desktop-only" hidden />
@@ -215,6 +216,8 @@
     <button data-modes="sheet" role="menuitem" data-cmd="chart-scatter">Insert Scatter Chart</button>
     <button data-modes="sheet" role="menuitem" data-cmd="chart-column">Insert Column Chart</button>
     <button data-modes="sheet" role="menuitem" data-cmd="insert-dashboard">Insert Dashboard</button>
+    <button data-modes="sheet" role="menuitem" data-cmd="insert-picture-sheet">Insert Picture…</button>
+    <button data-modes="sheet" role="menuitem" data-cmd="insert-text-box">Insert Text Box</button>
     <button data-modes="sheet" role="menuitem" data-cmd="insert-cells">Insert Rows or Columns</button>
     <button data-modes="sheet" role="menuitem" data-cmd="insert-sheet">Insert Worksheet</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-caption" title="A numbered caption: Figure 1, Scheme 2, Table S1…">Caption…</button>
@@ -303,6 +306,13 @@
     <button data-modes="sheet" role="menuitem" data-cmd="data-validation">Data Validation…</button>
     <button data-modes="sheet" role="menuitemcheckbox" aria-checked="false" data-cmd="circle-invalid"><span>Circle Invalid Data</span></button>
     <button data-modes="sheet" role="menuitem" data-cmd="insert-table">Format as Table</button>
+    <button data-modes="sheet" role="menuitem" data-cmd="page-setup">Page Setup…</button>
+    <button data-modes="sheet" role="menuitem" data-cmd="header-footer">Header and Footer…</button>
+    <button data-modes="sheet" role="menuitem" data-cmd="print-titles">Print Titles…</button>
+    <button data-modes="sheet" role="menuitem" data-cmd="set-print-area">Set Print Area</button>
+    <button data-modes="sheet" role="menuitem" data-cmd="clear-print-area">Clear Print Area</button>
+    <button data-modes="sheet" role="menuitem" data-cmd="insert-page-break">Insert Page Break</button>
+    <button data-modes="sheet" role="menuitemcheckbox" aria-checked="false" data-cmd="show-page-breaks"><span>Show Page Breaks</span></button>
     </div>
     </div>
     <div class="menu-wrap">
@@ -462,6 +472,7 @@
       <button role="tab" data-sh-tab="home" aria-selected="true">Home</button>
       <button role="tab" data-sh-tab="dashboard" aria-selected="false" hidden>Dashboard</button>
       <button role="tab" data-sh-tab="insert" aria-selected="false">Insert</button>
+      <button role="tab" data-sh-tab="page" aria-selected="false">Page Layout</button>
       <button role="tab" data-sh-tab="data" aria-selected="false">Data</button>
       <button role="tab" data-sh-tab="review" aria-selected="false">Review</button>
       <button role="tab" data-sh-tab="view" aria-selected="false">View</button>
@@ -659,6 +670,14 @@
       </div>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-sh="insert-picture-sheet" title="A picture from a file (PNG, JPEG, GIF, SVG…) floating over the cells: a TLC plate, a photo of a reaction, a spectrum. Saved in .xlsx as Excel's own picture"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="15" height="12" rx="1"/><path d="M2.5 13.5l4-4 3 3 2.5-2.5 5.5 5.5"/><circle cx="13" cy="7.5" r="1.3"/></svg></span>Pictures</button>
+          <button class="rb-big" data-sh="insert-shapes" title="Lines, arrows, rectangles, ovals and block arrows over the cells, with text in them if you like"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="9" width="8" height="8"/><circle cx="13" cy="7" r="4.5"/></svg></span>Shapes ▾</button>
+          <button class="rb-big" data-sh="insert-text-box" title="A box of text floating over the cells, for notes beside a table"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13"/><path d="M6.5 7h7M10 7v6.5"/></svg></span>Text Box</button>
+        </div>
+        <div class="rb-label">Illustrations</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-sh="chart-scatter" title="X–Y points (kinetics, calibration curves): first column x, the others y. Add a fitted line from the Chart tab"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 2v15h15" stroke-opacity="0.6"/><circle cx="7" cy="12" r="1.3" fill="currentColor"/><circle cx="10" cy="9" r="1.3" fill="currentColor"/><circle cx="13" cy="8" r="1.3" fill="currentColor"/><circle cx="16" cy="4.5" r="1.3" fill="currentColor"/><path d="M5 14L18 3" stroke-dasharray="2 1.5"/></svg></span>Scatter</button>
           <button class="rb-big" data-sh="chart-line" title="Values joined by lines, one line per column"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 2v15h15" stroke-opacity="0.6"/><path d="M4 13l4-4 3 2 6-7"/></svg></span>Line</button>
           <button class="rb-big" data-sh="chart-column" title="Upright bars, one colour per column"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 2v15h15" stroke-opacity="0.6"/><path d="M6 16V9M10 16V5M14 16v-5" stroke-width="2.6"/></svg></span>Column</button>
@@ -684,6 +703,49 @@
           <button class="rb-big" data-sh="insert-dashboard" title="A new sheet of tiles (charts, headline numbers, tables, slicers, structure galleries) built from the tables in this workbook"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2.5" y="3" width="7" height="6" rx="1"/><rect x="11.5" y="3" width="6" height="3.5" rx="1"/><rect x="11.5" y="8.5" width="6" height="8.5" rx="1"/><rect x="2.5" y="11" width="7" height="6" rx="1"/></svg></span>Dashboard</button>
         </div>
         <div class="rb-label">Dashboards</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-sh-panel="page" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="page-margins" title="Margins: Normal, Wide, Narrow, or your own"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="2.5" width="12" height="15"/><path d="M4 5.5h12M4 14.5h12M7 2.5v15M13 2.5v15" stroke-dasharray="1.5 1.5"/></svg></span>Margins ▾</button>
+          <button class="rb-big" data-sh="page-orientation" title="Portrait or landscape pages"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="6" width="15" height="10"/><path d="M6 3h7l-1.5-1.5M13 3l-1.5 1.5"/></svg></span>Orientation ▾</button>
+          <button class="rb-big" data-sh="page-size" title="Paper size: Letter, A4, Legal…"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M5 2.5h7l3.5 3.5v11.5H5z"/><path d="M12 2.5V6h3.5"/></svg></span>Size ▾</button>
+          <button class="rb-big" data-sh="print-area" title="Print Area: print only the selected cells (Set), more blocks on pages of their own (Add), or everything in use again (Clear). Saved in .xlsx"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="14" height="14"/><rect x="6" y="6" width="8" height="6" stroke-dasharray="2 1.5"/></svg></span>Print Area ▾</button>
+          <button class="rb-big" data-sh="page-breaks" title="Breaks: start a new page above and to the left of the active cell, take one away, or reset them all"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M4 2.5h12v6M4 2.5v6M4 11.5v6h12v-6"/><path d="M2 10h16" stroke-dasharray="2 1.5"/></svg></span>Breaks ▾</button>
+          <button class="rb-big" data-sh="print-titles" title="Print Titles: rows printed at the top of every page (a header row) and columns at the left (compound numbers)"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="14" height="14"/><path d="M3 7h14" stroke-width="3"/></svg></span>Print Titles</button>
+          <div class="rb-col">
+            <button data-sh="header-footer" title="Header and Footer: text at the top and bottom of every page, with the page number, date, file and sheet name">Header &amp; Footer…</button>
+            <button data-sh="page-setup" title="Page Setup: paper, orientation, scaling, margins, centring, print area, titles and page order in one window">Page Setup…</button>
+          </div>
+        </div>
+        <div class="rb-label">Page Setup</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <button data-sh="fit-wide" title="Shrink the printout to this many pages wide">Width ▾</button>
+            <button data-sh="fit-tall" title="Shrink the printout to this many pages tall">Height ▾</button>
+            <button data-sh="page-scale" title="Print larger or smaller, as a percentage">Scale…</button>
+          </div>
+        </div>
+        <div class="rb-label">Scale to Fit</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <button data-sh="print-gridlines" aria-pressed="false" title="Print the gridlines between cells">Print Gridlines</button>
+            <button data-sh="print-headings" aria-pressed="false" title="Print the row numbers and column letters">Print Headings</button>
+            <button data-sh="show-page-breaks" aria-pressed="false" title="Show where pages end on the grid: dashed lines for Excel's own breaks, solid ones for breaks put in by hand">Page Breaks</button>
+          </div>
+        </div>
+        <div class="rb-label">Sheet Options</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="print-preview" title="Print Preview: every page as it will print, with its header and footer"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M5 2.5h7l3.5 3.5v5"/><path d="M5 2.5v15h5"/><circle cx="13.5" cy="14" r="2.8"/><path d="M15.5 16l2.2 2.2"/></svg></span>Print Preview</button>
+        </div>
+        <div class="rb-label">Print</div>
       </div>
     </div>
     <div class="rb-panel" data-sh-panel="review" hidden>
@@ -1125,6 +1187,13 @@
           </div>
         </div>
         <div class="rb-label">Changes</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="compare-docs" title="Compare two versions of a document: a new document shows what changed between them as tracked changes, to accept or reject"><span class="rb-icon">⇆</span>Compare…</button>
+          <button class="rb-big" data-doc="combine-docs" title="Combine two reviewers' copies of a document: a new document with the tracked changes of both, each under its reviewer's name"><span class="rb-icon">⧉</span>Combine…</button>
+        </div>
+        <div class="rb-label">Compare</div>
       </div>
       <div class="rb-group">
         <div class="rb-row">
