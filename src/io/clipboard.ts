@@ -395,9 +395,7 @@ export async function copyDrawing(doc: Doc, sel: Selection | null): Promise<stri
  * so Word and PowerPoint paste it sharp at any size; elsewhere as a PNG.
  */
 export async function copyPictureItems(items: Item[], box: EmfBox, canvas: HTMLCanvasElement, dpi: number): Promise<string> {
-  lastCopy = null;
-  lastTableText = null;
-  lastPictureSize = null;
+  forgetCopy();
   if (nativeClipboard) {
     await invoke('clipboard_write', packFormats([['CF_ENHMETAFILE', itemsToEmf(items, box)], ['CF_DIB', canvasDib(canvas, dpi)]]));
     return 'Copied as a picture. Paste into Word, PowerPoint or a slide here.';
@@ -408,6 +406,46 @@ export async function copyPictureItems(items: Item[], box: EmfBox, canvas: HTMLC
     return 'This browser would not take the picture. Use Save as Picture instead.';
   }
   return 'Copied as a picture.';
+}
+
+/**
+ * Something other than a drawing was copied here (cells, a document's text, a picture): the last
+ * drawing copied is forgotten, so a paste that finds nothing it can read doesn't bring it back.
+ */
+export function forgetCopy(): void {
+  lastCopy = null;
+  lastTableText = null;
+  lastPictureSize = null;
+}
+
+/** Copy a picture (any image a browser can show, as a URL) as a PNG; on Windows as a PNG and a bitmap. */
+export async function copyImage(src: string): Promise<string> {
+  forgetCopy();
+  const canvas = new Promise<HTMLCanvasElement>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, img.naturalWidth);
+      c.height = Math.max(1, img.naturalHeight);
+      c.getContext('2d')!.drawImage(img, 0, 0);
+      resolve(c);
+    };
+    img.onerror = () => reject(new Error('this picture can\'t be shown'));
+    img.src = src;
+  });
+  if (nativeClipboard) {
+    const c = await canvas;
+    const png = new Uint8Array(await (await canvasPng(c)).arrayBuffer());
+    await invoke('clipboard_write', packFormats([['PNG', png], ['CF_DIB', canvasDib(c, 96)]]));
+    return 'Copied the picture.';
+  }
+  try {
+    // (the PNG goes in as a promise, so the clipboard is asked while the key press still counts)
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': canvas.then(canvasPng) })]);
+  } catch {
+    return 'This browser would not take the picture.';
+  }
+  return 'Copied the picture.';
 }
 
 /** Is this the table last copied here (so the copy with its title and column widths can be pasted)? */
@@ -457,7 +495,7 @@ function picturePasted(bytes: Uint8Array, mime: string): Pasted {
 /** What a paste found on the clipboard. */
 export type Pasted =
   | { kind: 'drawing'; doc: Doc }
-  | { kind: 'text'; text: string }
+  | { kind: 'text'; text: string; html?: string }
   | { kind: 'picture'; mime: string; bytes: Uint8Array }
   | { kind: 'table'; rows: PastedRows }
   | { kind: 'nothing' };
@@ -491,9 +529,10 @@ export function looksLikeCdxml(text: string): boolean {
   return /^\s*(<\?xml[^>]*>\s*)?(<!DOCTYPE[^>]*>\s*)?<CDXML[\s>]/i.test(text);
 }
 
-function fromText(text: string): Pasted {
+/** Text from the clipboard (with its HTML, for its bold, italics and so on, when it came with some). */
+function fromText(text: string, html?: string | null): Pasted {
   if (looksLikeCdxml(text)) return { kind: 'drawing', doc: readCdxml(text).doc };
-  return { kind: 'text', text: text.trim() };
+  return html ? { kind: 'text', text: text.trim(), html } : { kind: 'text', text: text.trim() };
 }
 
 /** The first of these formats on the Windows clipboard. */
@@ -536,7 +575,7 @@ export async function readNativeClipboard(): Promise<Pasted> {
     if (name === 'CF_ENHMETAFILE') return { kind: 'picture', mime: 'image/x-emf', bytes: data };
     return { kind: 'picture', mime: 'image/bmp', bytes: dibToBmp(data) };
   }
-  return text.trim() ? fromText(text) : { kind: 'nothing' };
+  return text.trim() ? fromText(text, html ? fromCfHtml(html[1]) : null) : { kind: 'nothing' };
 }
 
 /**
@@ -551,7 +590,7 @@ export async function readPasteEvent(e: ClipboardEvent): Promise<Pasted> {
   if (table) return { kind: 'table', rows: table };
   const file = [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'));
   if (file) return picturePasted(new Uint8Array(await file.arrayBuffer()), file.type);
-  if (text.trim()) return fromText(text);
+  if (text.trim()) return fromText(text, e.clipboardData?.getData('text/html'));
   return lastCopy ? { kind: 'drawing', doc: readCdxml(lastCopy).doc } : { kind: 'nothing' };
 }
 
@@ -574,7 +613,7 @@ export async function readWebClipboard(): Promise<Pasted> {
     const type = it.types.find((t) => t.startsWith('image/'));
     if (type) return picturePasted(new Uint8Array(await (await it.getType(type)).arrayBuffer()), type);
   }
-  if (text.trim()) return fromText(text);
+  if (text.trim()) return fromText(text, html);
   return lastCopy ? { kind: 'drawing', doc: readCdxml(lastCopy).doc } : { kind: 'nothing' };
 }
 

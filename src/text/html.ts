@@ -158,6 +158,8 @@ export function htmlToRich(html: string, opts: { keepFonts?: boolean } = {}): Cl
   let breakWanted = false;
   let nextStyle: ParaStyle = {};
   let skipping = false;
+  // a table's next cell in its row: its text starts after a tab (not a new paragraph)
+  let cellTab = false;
   const listStack: ('bullet' | 'number')[] = [];
 
   const ensurePara = () => {
@@ -169,6 +171,7 @@ export function htmlToRich(html: string, opts: { keepFonts?: boolean } = {}): Cl
   const addText = (t: string, c: Ctx) => {
     if (!t) return;
     ensurePara();
+    if (cellTab) { runs.push({ text: '\t' }); cellTab = false; }
     const r: TextRun = { text: t };
     if (c.bold) r.bold = true;
     if (c.italic) r.italic = true;
@@ -254,7 +257,9 @@ export function htmlToRich(html: string, opts: { keepFonts?: boolean } = {}): Cl
       if (ch.nodeType === 3) {
         if (skipping) continue;
         let t = (ch as Text).data.replace(/[\r\n\t ]+/g, ' ').replace(/\u00a0/g, ' ');
-        if (!started || breakWanted) t = t.replace(/^ +/, '');
+        // (spaces between a table's tags aren't text, nor are those that start a cell)
+        if (/^(TABLE|TBODY|THEAD|TFOOT|TR)$/.test(node.nodeName.toUpperCase()) && !t.trim()) continue;
+        if (!started || breakWanted || cellTab) t = t.replace(/^ +/, '');
         if (c.font && rt.isSymbolFont(c.font)) t = rt.fromSymbolFont(t);
         addText(t, c);
         continue;
@@ -273,6 +278,14 @@ export function htmlToRich(html: string, opts: { keepFonts?: boolean } = {}): Cl
         continue;
       }
       const cc = styleOf(el, c);
+      if ((tag === 'TD' || tag === 'TH') && el.previousElementSibling) {
+        // an empty cell before this one still takes its tab
+        if (cellTab) { ensurePara(); runs.push({ text: '\t' }); }
+        cellTab = started;
+        breakWanted = false;
+        walk(el, cc);
+        continue;
+      }
       if (tag === 'UL' || tag === 'OL') {
         listStack.push(tag === 'UL' ? 'bullet' : 'number');
         breakWanted = started;
@@ -283,7 +296,9 @@ export function htmlToRich(html: string, opts: { keepFonts?: boolean } = {}): Cl
       }
       if (BLOCKS.has(tag)) {
         const p = blockPara(el, tag);
-        breakWanted = started;
+        if (tag === 'TR') cellTab = false;
+        // (a paragraph that starts a table's cell carries on the row's line)
+        breakWanted = started && !cellTab;
         nextStyle = p;
         const before = runs.length;
         walk(el, cc);
