@@ -13,7 +13,7 @@ import { ACS_1996 } from '../style';
 import { Chart, mapChartRefs } from './chart';
 import { Dashboard, mapDashboardRefs } from './dashboard';
 import { type RefToken, Node, parseFormula, shiftFormula, shiftTree, adjustFormula, renameSheetInFormula, formulaRefs, SheetChange, normalizeFormula, FormulaSyntaxError, moveRefs } from './formula';
-import { evaluate, EvalHost } from './evaluate';
+import { evaluate, EvalHost, VOLATILE_FUNCTIONS } from './evaluate';
 import { CellError, ERR, Value, readTyped, compareValues, isError } from './values';
 import { MolProps } from './properties';
 import { formatValue } from './numfmt';
@@ -900,6 +900,11 @@ const NO_VALUES = new Set<string>(['colWidths', 'rowHeights', 'colStyles', 'hidd
 
 const isFormulaText = (t: string | undefined): boolean => !!t && t.startsWith('=') && t.length > 1;
 
+/** A formula using INDIRECT or OFFSET, whose cells can't be known from its text. */
+const VOLATILE = new RegExp(`\\b(?:${VOLATILE_FUNCTIONS.join('|')})\\s*\\(`, 'i');
+/** How many times formulas using INDIRECT or OFFSET are worked out again, to catch up with the cells they turned out to read. */
+const VOLATILE_PASSES = 4;
+
 /** The formulas of a workbook and the order they are worked out in, as the last full recalculation found them. */
 interface Graph {
   sheets: Sheet[];
@@ -910,6 +915,10 @@ interface Graph {
   readers: Map<number, number[]>;
   /** Formulas in a loop, or reading one: they stay #CIRC! until the formulas change. */
   loop: boolean[];
+  /** The formulas in the order they were worked out (each after those it reads). */
+  order: number[];
+  /** Formulas using INDIRECT or OFFSET. */
+  volatile: number[];
   bounds: { lastRow: number; lastCol: number; lastData: number }[];
 }
 
@@ -1272,10 +1281,45 @@ export class Workbook {
     if (queue.length < nodes.length) {
       for (let i = 0; i < nodes.length; i++) if (!done[i]) nodes[i].s.values.set(nodes[i].key, ERR.circ());
     }
+    const volatile: number[] = [];
+    nodes.forEach((n, i) => { if (done[i] && VOLATILE.test(n.text)) volatile.push(i); });
     this.graph = {
-      sheets: [...this.sheets], nodes, dependents, readers, loop: done.map((x) => !x),
+      sheets: [...this.sheets], nodes, dependents, readers, loop: done.map((x) => !x), order: queue, volatile,
       bounds: this.sheets.map((s) => ({ lastRow: s.lastRow, lastCol: s.lastCol, lastData: s.lastDataRow })),
     };
+    this.settleVolatile(this.graph);
+  }
+
+  /**
+   * INDIRECT and OFFSET read cells their formula's text doesn't name, so they may have been
+   * worked out before those cells were. Work them out again, with the formulas that read them, in
+   * the same order, until nothing changes.
+   */
+  private settleVolatile(g: Graph): void {
+    if (!g.volatile.length) return;
+    const pos = new Map<number, number>();
+    g.order.forEach((i, k) => pos.set(i, k));
+    const todo = new Set<number>();
+    const stack = [...g.volatile];
+    while (stack.length) {
+      const i = stack.pop()!;
+      if (todo.has(i) || g.loop[i]) continue;
+      todo.add(i);
+      for (const j of g.dependents[i]) if (!todo.has(j)) stack.push(j);
+    }
+    const list = [...todo].sort((a, b) => pos.get(a)! - pos.get(b)!);
+    for (let pass = 0; pass < VOLATILE_PASSES; pass++) {
+      let changed = false;
+      for (const i of list) {
+        const n = g.nodes[i];
+        const before = n.s.values.get(n.key);
+        this.evaluateNode(n);
+        const after = n.s.values.get(n.key);
+        if (!(before === after || (isError(before) && isError(after) && before.code === after.code))) changed = true;
+      }
+      if (!changed) break;
+    }
+    for (const i of list) g.nodes[i].s.valuesGen++;
   }
 
   /**
@@ -1321,6 +1365,8 @@ export class Workbook {
       const r = rowOf(t.key);
       for (let j = 0; j < list.length; j += 3) if (list[j] <= r && r <= list[j + 1]) start.add(list[j + 2]);
     }
+    // formulas using INDIRECT or OFFSET might read any cell
+    for (const i of g.volatile) start.add(i);
     // and those that read those, and so on
     const todo = new Set<number>();
     const stack = [...start];
@@ -1351,6 +1397,7 @@ export class Workbook {
     if (worked < todo.size) for (const i of todo) if (indeg.get(i)) g.nodes[i].s.values.set(g.nodes[i].key, ERR.circ());
     for (const s of new Set(typed.map((t) => t.s))) s.valuesGen++;
     for (const i of todo) g.nodes[i].s.valuesGen++;
+    this.settleVolatile(g);
     return true;
   }
 

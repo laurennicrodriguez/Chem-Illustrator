@@ -336,7 +336,7 @@ describe('opening files made in Excel', () => {
       '<row r="1"><c r="A1" t="inlineStr"><is><t>n</t></is></c><c r="B1" t="s"><v>0</v></c></row>' +
       '<row><c r="A2"><v>1</v></c><c r="B2"><f t="shared" ref="B2:B4" si="0">A2*10</f><v>10</v></c></row>' +
       '<row><c><v>2</v></c><c><f t="shared" si="0"/><v>20</v></c></row>' +
-      '<row r="4"><c r="A4"><v>3</v></c><c r="B4"><f t="shared" si="0"/><v>30</v></c><c r="C4"><f>_xlfn.CONCAT("x",A4)</f><v>x3</v></c></row>' +
+      '<row r="4"><c r="A4"><v>3</v></c><c r="B4"><f t="shared" si="0"/><v>30</v></c><c r="C4"><f>_xlfn.CONCAT("x",A4)</f><v>x3</v></c><c r="D4"><f>_xlfn.SEQUENCE(3)</f><v>1</v></c></row>' +
       '</sheetData>';
     const { book, warnings } = await readXlsx(excelFile(sheet, { strings: ['<si><t>ten times</t></si>'] }));
     const s = book.sheet;
@@ -348,8 +348,10 @@ describe('opening files made in Excel', () => {
     expect(s.cell(3, 1)?.input).toBe('=A4*10');
     expect(s.value(3, 1)).toBe(30);
     expect(s.cell(3, 2)?.input).toBe('=CONCAT("x",A4)');
+    expect(s.value(3, 2)).toBe('x3');
     expect(s.colWidths.get(1)).toBe(145);
     expect(s.colWidths.get(2)).toBe(145);
+    // CONCAT is worked out here; SEQUENCE isn't
     expect(warnings).toEqual(['1 formula uses newer Excel functions this program can\'t work out yet.']);
   });
 

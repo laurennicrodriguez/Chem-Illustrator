@@ -50,7 +50,14 @@ Any calculated value can be typed over, for example with a measured mass. The ce
 
 Type `=` to start a formula. References with `$`, references to other sheets and **Σ AutoSum** (Alt+=) work as in Excel.
 
-Common functions include `SUM`, `AVERAGE`, `MIN`, `MAX`, `MEDIAN`, `STDEV`, `COUNT`, `COUNTA`, `ROUND`, `IF`, `IFERROR`, `AND`, `OR`, `CONCATENATE`, `LN`, `LOG10`, `EXP`, `SQRT`, and the line-fit functions `SLOPE`, `INTERCEPT`, `RSQ`, `STEYX` and `FORECAST`. Not every Excel function is available; one that isn't shows an error in its cell.
+Common functions include `SUM`, `AVERAGE`, `MIN`, `MAX`, `MEDIAN`, `STDEV`, `COUNT`, `COUNTA`, `ROUND`, `IF`, `IFERROR`, `AND`, `OR`, `CONCATENATE`, `LN`, `LOG10`, `EXP`, `SQRT`, and the line-fit functions `SLOPE`, `INTERCEPT`, `RSQ`, `STEYX` and `FORECAST`. These Excel functions work too, with the same results as Excel:
+
+- **Looking things up:** `VLOOKUP`, `HLOOKUP`, `XLOOKUP`, `INDEX`, `MATCH`, `XMATCH`, `CHOOSE`, `OFFSET`, `INDIRECT`, `ROWS`, `COLUMNS`.
+- **Conditions:** `SUMIF`, `SUMIFS`, `COUNTIF`, `COUNTIFS`, `AVERAGEIF`, `AVERAGEIFS`, `MAXIFS`, `MINIFS`, `IFS`, `SWITCH`, `IFNA`. Conditions are written as in Excel: `">5"`, `"<>done"`, `"Pd*"` (`*` and `?` are wildcards; `~*` is a real star).
+- **Text:** `LEFT`, `RIGHT`, `MID`, `FIND`, `SEARCH`, `SUBSTITUTE`, `REPLACE`, `TEXT`, `VALUE`, `CONCAT`, `TEXTJOIN`, `TEXTSPLIT`.
+- **Statistics:** `STDEV.S`, `STDEV.P`, `VAR.S`, `VAR.P` (and the older `VAR`, `VARP`, `STDEVP`), `T.TEST`, `T.INV`, `T.INV.2T`, `T.DIST` (with `.2T` and `.RT`), `CONFIDENCE.NORM`, `CONFIDENCE.T`, `NORM.DIST`, `NORM.INV`, `NORM.S.DIST`, `NORM.S.INV`, `LINEST`, `LOGEST`, `PERCENTILE` (`.INC`, `.EXC`), `QUARTILE` (`.INC`, `.EXC`), `RANK` (`.EQ`, `.AVG`), `LARGE`, `SMALL`.
+
+Functions that give a block of results (`LINEST`, `LOGEST`, `TEXTSPLIT`, and `INDEX` or `XLOOKUP` returning a whole row) show their first result in the cell; pick out another with `INDEX`, for example `=INDEX(LINEST(B2:B9,A2:A9),1,2)` for the intercept. Not every Excel function is available; one that isn't shows an error in its cell.
 
 ### Chemistry functions
 
