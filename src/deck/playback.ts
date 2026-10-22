@@ -265,14 +265,16 @@ export class SlideFrames {
 /** A shape's fill, or a text box's text, in another colour: the part on its own, ready to paint. */
 function recoloured(doc: Doc, part: Part, colour: string): Doc {
   const d = subDoc(doc, (kind, id) => inPart(part, kind, id));
-  if (part.kind === 'shape') {
-    for (const sh of [...d.shapes.values()]) {
-      if (sh.kind === 'picture' || sh.kind === 'table') continue;
-      d.updateShape(sh.id, { filled: true, fillColor: colour, fill: undefined });
+  d.bulk(() => {
+    if (part.kind === 'shape') {
+      for (const sh of [...d.shapes.values()]) {
+        if (sh.kind === 'picture' || sh.kind === 'table') continue;
+        d.updateShape(sh.id, { filled: true, fillColor: colour, fill: undefined });
+      }
+    } else {
+      for (const c of [...d.captions.values()]) d.updateCaption(c.id, { runs: c.runs.map((r) => ({ ...r, color: colour })) });
     }
-  } else {
-    for (const c of [...d.captions.values()]) d.updateCaption(c.id, { runs: c.runs.map((r) => ({ ...r, color: colour })) });
-  }
+  });
   return d;
 }
 

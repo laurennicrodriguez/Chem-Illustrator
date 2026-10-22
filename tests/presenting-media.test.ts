@@ -130,3 +130,146 @@ describe('Morph', () => {
     expect(readTransition(doc.documentElement, () => {})).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------- media, zooms, actions, ink
+
+import { playWindow, volumeAt, mediaMime } from '../src/deck/media';
+import { zoomGrid, summaryParts } from '../src/deck/zoom';
+import { geoDef, inkId, isInkId, geoShapeStyle } from '../src/design/geo';
+import { inkShape, strokeNear } from '../src/ui/show-ink';
+import type { Shape } from '../src/model';
+
+const MP4 = 'data:video/mp4;base64,AAAAIGZ0eXBpc29t';
+const MP3 = 'data:audio/mpeg;base64,SUQzBAAAAAAA';
+
+/** A deck of slides filled by `fill`, through PowerPoint and back: the slides' contents and the slide XML. */
+async function deckTrip(fill: ((doc: Doc, ids: number[]) => void)[]) {
+  const host = new Doc();
+  const d = Deck.blank(host);
+  d.attach();
+  d.setLayout('blank');
+  for (let i = 1; i < fill.length; i++) d.addSlide('blank');
+  const ids = d.slides.map((s) => s.id);
+  d.slides.forEach((_, i) => { const doc = d.docOf(i); doc.edit('Fill', () => fill[i](doc, ids)); });
+  const bytes = await writePptx({ size: d.size, master: d.master, slides: d.slides.map((s, i) => ({ id: s.id, layout: s.layout, doc: d.docOf(i), notes: s.notes })) }, opts);
+  const files = unzipSync(bytes);
+  const back = readPptx(bytes);
+  const deck = new Deck(new Doc());
+  deck.load(back.slides.map((s) => deck.makeSlide(s.layout, s.contents, s.notes)), back.size, back.master);
+  const shapes = (i: number) => [...deck.docOf(i).shapes.values()];
+  return { files, xml: (i: number) => strFromU8(files[`ppt/slides/slide${i + 1}.xml`]), shapes, deck, warnings: back.warnings };
+}
+
+describe('video and audio', () => {
+  it('plays the part between the trims, faded in and out', () => {
+    const m = { src: MP4, trimStart: 2, trimEnd: 3, fadeIn: 1, fadeOut: 2, vol: 0.5 };
+    expect(playWindow(m, 20)).toEqual({ start: 2, end: 17 });
+    expect(volumeAt(m, 2, 20)).toBe(0);
+    expect(volumeAt(m, 2.5, 20)).toBeCloseTo(0.25);
+    expect(volumeAt(m, 10, 20)).toBeCloseTo(0.5);
+    expect(volumeAt(m, 16, 20)).toBeCloseTo(0.25);
+    expect(volumeAt({ ...m, mute: true }, 10, 20)).toBe(0);
+    expect(mediaMime('talk.MP4')).toEqual({ mime: 'video/mp4', audio: false });
+    expect(mediaMime('intro.mp3')).toEqual({ mime: 'audio/mpeg', audio: true });
+    expect(mediaMime('notes.txt')).toBeNull();
+  });
+
+  it('keeps a video and a sound, with how they play, through PowerPoint and back', async () => {
+    const t = await deckTrip([(doc) => {
+      doc.addShape({ kind: 'picture', x1: 100, y1: 100, x2: 420, y2: 280, src: DOT, px: { w: 640, h: 360 }, video: { src: MP4, start: 'click', once: true, trimStart: 1.5, trimEnd: 2, fadeIn: 0.5, vol: 0.66, full: true } });
+      doc.addShape({ kind: 'picture', x1: 600, y1: 400, x2: 648, y2: 448, src: DOT, px: { w: 128, h: 128 }, video: { src: MP3, audio: true, hide: true, across: true, fadeOut: 3 } });
+    }]);
+    const xml = t.xml(0);
+    expect(xml).toContain('<p14:trim st="1500" end="2000"/>');
+    expect(xml).toContain('<a:audioFile r:link=');
+    expect(xml).toContain('nodeType="interactiveSeq"');
+    expect(xml).toContain('cmd="togglePause"');
+    expect(xml).toContain('<p:video fullScrn="1">');
+    expect(xml).toContain('showWhenStopped="0"');
+    expect(Object.keys(t.files).some((f) => /ppt\/media\/media\d+\.mp3$/.test(f))).toBe(true);
+    expect(strFromU8(t.files['[Content_Types].xml'])).toContain('Extension="mp3" ContentType="audio/mpeg"');
+    const [video, sound] = t.shapes(0).filter((s) => s.video).map((s) => s.video!);
+    expect(video).toMatchObject({ start: 'click', once: true, trimStart: 1.5, trimEnd: 2, fadeIn: 0.5, full: true });
+    expect(video.vol).toBeCloseTo(0.66);
+    expect(video.audio).toBeUndefined();
+    expect(sound).toMatchObject({ audio: true, hide: true, across: true, fadeOut: 3, start: 'auto' });
+    expect(sound.once).toBeUndefined();
+  });
+
+  it('starts an animation put on a slide by itself, round and round, as before', async () => {
+    const t = await deckTrip([(doc) => { doc.addShape({ kind: 'picture', x1: 100, y1: 100, x2: 420, y2: 280, src: DOT, px: { w: 40, h: 30 }, video: { src: MP4 } }); }]);
+    expect(t.xml(0)).toContain('cmd="playFrom(0.0)"');
+    const v = t.shapes(0).find((s) => s.video)!.video!;
+    expect(v.start).toBe('auto');
+    expect(v.once).toBeUndefined();
+  });
+});
+
+describe('action buttons and zooms', () => {
+  it('gives an action button its jump, saved as PowerPoint\'s action', async () => {
+    expect(geoShapeStyle('actNext')!.link).toBe('#next');
+    const t = await deckTrip([
+      (doc) => {
+        doc.addShape({ ...(geoShapeStyle('actNext') as Shape), x1: 860, y1: 470, x2: 910, y2: 520 });
+        doc.addShape({ ...(geoShapeStyle('actReturn') as Shape), x1: 800, y1: 470, x2: 850, y2: 520 });
+      },
+      () => {},
+    ]);
+    const xml = t.xml(0);
+    expect(xml).toContain('prst="actionButtonForwardNext"');
+    expect(xml).toContain('action="ppaction://hlinkshowjump?jump=nextslide"');
+    expect(xml).toContain('jump=lastslideviewed');
+    const links = t.shapes(0).map((s) => s.link).sort();
+    expect(links).toEqual(['#next', '#return']);
+    expect(t.shapes(0)[0].geo).toBe('actNext');
+  });
+
+  it('keeps a Slide Zoom, coming back, through PowerPoint and back', async () => {
+    const t = await deckTrip([
+      (doc, ids) => { doc.addShape({ kind: 'picture', x1: 100, y1: 200, x2: 260, y2: 290, src: DOT, px: { w: 1, h: 1 }, link: `#slide=${ids[2]}`, zoom: { back: true, to: `#slide=${ids[3]}` } }); },
+      () => {}, () => {}, () => {},
+    ]);
+    const xml = t.xml(0);
+    expect(xml).toContain('<pslz:sldZmObj sldId="258"');
+    expect(xml).toContain('returnToParent="1"');
+    expect(xml).toContain('action="ppaction://hlinksldjump"');
+    expect(t.xml(2)).toContain('<p14:creationId');
+    const z = t.shapes(0).find((s) => s.zoom)!;
+    const ids = t.deck.slides.map((s) => s.id);
+    expect(z.link).toBe(`#slide=${ids[2]}`);
+    expect(z.zoom).toEqual({ back: true, to: `#slide=${ids[3]}` });
+  });
+
+  it('lays zooms out in a grid of slide-shaped boxes, and splits a deck into parts', () => {
+    const boxes = zoomGrid(4, { w: 960, h: 540 }, { x1: 0, y1: 100, x2: 960, y2: 540 });
+    expect(boxes.length).toBe(4);
+    for (const b of boxes) expect((b.y2 - b.y1) / (b.x2 - b.x1)).toBeCloseTo(540 / 960);
+    expect(boxes.every((b, i) => i === 0 || b.x1 >= boxes[i - 1].x2 || b.y1 >= boxes[i - 1].y2)).toBe(true);
+    expect(summaryParts([5, 1, 3], 8)).toEqual([{ first: 1, last: 2 }, { first: 3, last: 4 }, { first: 5, last: 7 }]);
+  });
+});
+
+describe('ink from the slide show', () => {
+  const stroke = { tool: 'pen' as const, color: '#e53935', width: 3, pts: [{ x: 100, y: 100 }, { x: 150, y: 120 }, { x: 200, y: 100 }] };
+
+  it('keeps a stroke as a shape that holds its line, and stretches with its box', () => {
+    const sh = inkShape(stroke)!;
+    expect(isInkId(sh.geo)).toBe(true);
+    expect(sh.x1).toBeCloseTo(98);
+    expect(sh.x2).toBeCloseTo(202);
+    const out = geoDef(sh.geo).draw(sh.x2 - sh.x1, sh.y2 - sh.y1).body;
+    expect(out.length).toBeGreaterThan(6);
+    expect(inkShape({ ...stroke, tool: 'highlighter' })!.transparency).toBe(0.5);
+    expect(inkId(2, [{ x: 5, y: 5 }], { x1: 0, y1: 0, x2: 10, y2: 10 })).toBe('ink:2:5000,5000');
+    expect(strokeNear(stroke, { x: 150, y: 123 }, 2)).toBe(true);
+    expect(strokeNear(stroke, { x: 150, y: 140 }, 2)).toBe(false);
+  });
+
+  it('goes to PowerPoint as a freeform and comes back as ink', async () => {
+    const t = await deckTrip([(doc) => { doc.addShape(inkShape(stroke)!); }]);
+    expect(t.xml(0)).toContain('<a:custGeom>');
+    const back = t.shapes(0)[0];
+    expect(isInkId(back.geo)).toBe(true);
+    expect(back.fillColor).toBe('#e53935');
+  });
+});

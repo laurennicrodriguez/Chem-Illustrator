@@ -392,15 +392,15 @@ export class AnimationUI {
     const amt = a?.effect === 'grow' ? { v: Math.round((a.scale ?? EMPH_DEFAULTS.scale) * 100), u: '% size', tip: 'The size it grows or shrinks to: 150 is half as big again, 50 half the size' }
       : a?.effect === 'spin' ? { v: a.turn ?? EMPH_DEFAULTS.turn, u: '°', tip: 'How far it turns, in degrees (negative turns anticlockwise)' }
         : a?.effect === 'transparency' ? { v: Math.round((a.opacity ?? EMPH_DEFAULTS.opacity) * 100), u: '% clear', tip: 'How see-through it becomes: 0 solid, 100 gone' } : null;
-    amountBox.hidden = !amt;
+    amountBox.style.display = amt ? '' : 'none';
     if (amt) {
       amountBox.title = amt.tip;
       unit.textContent = amt.u;
       if (document.activeElement !== amount) amount.value = String(amt.v);
     }
-    colourBox.hidden = a?.effect !== 'colour';
+    colourBox.style.display = a?.effect === 'colour' ? '' : 'none';
     if (a?.effect === 'colour' && document.activeElement !== colour) colour.value = a.color ?? EMPH_DEFAULTS.color;
-    from.hidden = !!a && isEmphasis(a.effect);
+    (from.closest('label') ?? from).style.display = a && isEmphasis(a.effect) ? 'none' : '';
     const start = this.$<HTMLSelectElement>('#an-start');
     start.disabled = !a;
     start.value = a?.start ?? 'click';
