@@ -14,7 +14,7 @@ const HILL = /^((?:[A-Z][a-z]?\d*)+)((?:\s\d+)?[+\-−])?$/;
 
 /** The text split into pieces that sit on the line, below it or above it. */
 export function chemPieces(text: string): Piece[] {
-  const looks: CharLook[] = Array.from(text, () => ({ pos: 'base' as const, italic: false }));
+  const looks: CharLook[] = Array.from({ length: text.length }, () => ({ pos: 'base' as const, italic: false }));
   const hill = HILL.exec(text);
   if (hill) {
     // a formula as the FORMULA function writes it, charge and all

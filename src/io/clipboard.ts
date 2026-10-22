@@ -215,10 +215,28 @@ export function insertDrawing(doc: Doc, src: Doc, center: Vec, label = 'Paste'):
     }
     for (const c of src.captions.values()) {
       const { id: _id, ...rest } = structuredClone(c);
+      // a tied caption follows the copy of its structure, not the original
+      if (rest.attach) {
+        const atoms = rest.attach.atoms.map((x) => ids.get(x)).filter((x): x is number => x !== undefined);
+        if (atoms.length) rest.attach.atoms = atoms; else rest.attach = undefined;
+      }
       sel.captions.add(doc.addCaption({ ...rest, x: c.x + dx, y: c.y + dy }).id);
     }
     for (const r of src.arrows.values()) {
       const { id: _id, ...rest } = structuredClone(r);
+      // pins and animation pairs point at the copies of the atoms, or are let go
+      if (rest.pin) {
+        for (const end of ['tail', 'head'] as const) {
+          const pin = rest.pin[end];
+          const ref = pin?.ref.map((x) => ids.get(x));
+          if (pin && ref) { if (ref.every((x) => x !== undefined)) pin.ref = ref as number[]; else delete rest.pin[end]; }
+        }
+        if (!rest.pin.tail && !rest.pin.head) rest.pin = undefined;
+      }
+      if (rest.morph) {
+        const pairs = rest.morph.pairs?.map(([a, b]) => [ids.get(a), ids.get(b)]).filter(([a, b]) => a !== undefined && b !== undefined) as [number, number][] | undefined;
+        rest.morph = pairs?.length ? { pairs, exact: rest.morph.exact } : undefined;
+      }
       sel.arrows.add(doc.addArrow({ ...rest, tail: { x: r.tail.x + dx, y: r.tail.y + dy }, head: { x: r.head.x + dx, y: r.head.y + dy } }).id);
     }
     for (const s of src.shapes.values()) {
@@ -226,6 +244,10 @@ export function insertDrawing(doc: Doc, src: Doc, center: Vec, label = 'Paste'):
       // a ring fill sits on the new copies of its ring's atoms
       const ring = rest.ring?.map((a) => ids.get(a));
       if (rest.ring) rest.ring = ring!.every((a) => a !== undefined) ? (ring as number[]) : undefined;
+      if (rest.pin) {
+        const ref = rest.pin.ref.map((x) => ids.get(x));
+        rest.pin = ref.every((x) => x !== undefined) ? { ...rest.pin, ref: ref as number[] } : undefined;
+      }
       if (rest.poly) rest.poly = rest.poly.map((p) => ({ x: p.x + dx, y: p.y + dy }));
       sel.shapes.add(doc.addShape({ ...rest, x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy }).id);
     }

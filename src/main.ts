@@ -6164,7 +6164,7 @@ function openText(text: string, name: string): ReadStats | null {
   const t0 = performance.now();
   try {
     const { doc: loaded, stats } = readCdxml(text);
-    doc.loadFrom(loaded);
+    doc.loadFrom(loaded, true);
     editor.clearSelection();
     editor.lastEdited = null;
     editor.fit();

@@ -21,6 +21,8 @@ export interface SheetFileDeps extends XlsxPictures {
   settled(): Promise<void>;
 }
 
+/** The start of a zip file (PK, then 3 and 4): two letters alone could be the head of a CSV column. */
+const isZip = (b: Uint8Array) => b[0] === 0x50 && b[1] === 0x4b && b[2] === 3 && b[3] === 4;
 const extOf = (name: string) => (/\.([^.\\/]+)$/.exec(name)?.[1] ?? '').toLowerCase();
 const baseOf = (name: string) => name.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '');
 
@@ -28,7 +30,7 @@ const baseOf = (name: string) => name.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/
 export async function readSheetFile(bytes: Uint8Array, name: string, deps: SheetFileDeps): Promise<{ book: Workbook; warnings: string[] }> {
   const ext = extOf(name);
   if (ext === 'ods' || isOds(bytes)) return readOds(bytes);
-  if (ext === 'xlsx' || ext === 'xlsm' || (bytes[0] === 0x50 && bytes[1] === 0x4b)) return withMacroNote(await readXlsx(bytes, deps), ext);
+  if (ext === 'xlsx' || ext === 'xlsm' || (isZip(bytes) && !['csv', 'tsv', 'txt', 'sdf', 'sd'].includes(ext))) return withMacroNote(await readXlsx(bytes, deps), ext);
   if (ext === 'xls' || isXls(bytes)) return readXls(bytes);
   const text = decodeText(bytes);
   if (ext === 'sdf' || ext === 'sd') return readSdf(text, baseOf(name));

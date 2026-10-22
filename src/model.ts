@@ -1429,9 +1429,14 @@ export class Doc {
     if (kind === 'a') {
       this.dirtyAtoms.add(id);
       this.noteAtom(id);
-      // a moved or removed atom may have shortened the longest bond
       const was = this.atoms.get(id);
-      if (was && (!e || (e as Atom).x !== was.x || (e as Atom).y !== was.y) && this.adj.get(id)?.length) this.bondLenStale = true;
+      // a moved or removed atom shortens the longest bond only if one of its bonds was that long
+      if (was && !this.bondLenStale && (!e || (e as Atom).x !== was.x || (e as Atom).y !== was.y)) {
+        for (const bid of this.adj.get(id) ?? []) {
+          const bd = this.bonds.get(bid), other = bd && this.atoms.get(bd.a1 === id ? bd.a2 : bd.a1);
+          if (other && Math.hypot(other.x - was.x, other.y - was.y) >= this.maxBondLen - 1e-6) { this.bondLenStale = true; break; }
+        }
+      }
       if (was?.multi) this.unlinkCentre(was);
       if (e) {
         this.atoms.set(id, e as Atom);
@@ -1751,7 +1756,9 @@ export class Doc {
   }
 
   /** Replace the whole document (e.g. after opening a file). Clears undo history. */
-  loadFrom(other: Doc): void {
+  loadFrom(other: Doc, own = false): void {
+    // `own`: `other` is thrown away afterwards, so its things are taken rather than copied
+    const take = <T>(e: T): T => (own ? e : clone(e));
     this.style = { ...other.style };
     this.background = other.background;
     this.page = other.page && { ...other.page };
@@ -1759,11 +1766,11 @@ export class Doc {
     this.nextId = Math.max(this.nextId, other.nextId);
     this.atoms.clear(); this.bonds.clear(); this.captions.clear(); this.arrows.clear(); this.shapes.clear();
     this.adj.clear(); this.centresOf.clear(); this.grid.clear(); this.atomCell.clear(); this.maxBondLen = 0; this.bondLenStale = false;
-    for (const a of other.atoms.values()) this.rawSet('a', a.id, clone(a));
-    for (const b of other.bonds.values()) this.rawSet('b', b.id, clone(b));
-    for (const c of other.captions.values()) this.rawSet('c', c.id, clone(c));
-    for (const r of other.arrows.values()) this.rawSet('r', r.id, clone(r));
-    for (const s of other.shapes.values()) this.rawSet('s', s.id, clone(s));
+    for (const a of other.atoms.values()) this.rawSet('a', a.id, take(a));
+    for (const b of other.bonds.values()) this.rawSet('b', b.id, take(b));
+    for (const c of other.captions.values()) this.rawSet('c', c.id, take(c));
+    for (const r of other.arrows.values()) this.rawSet('r', r.id, take(r));
+    for (const s of other.shapes.values()) this.rawSet('s', s.id, take(s));
     this.undoStack.length = 0;
     this.redoStack.length = 0;
     this.allDirty = true;

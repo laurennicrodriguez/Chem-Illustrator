@@ -417,7 +417,11 @@ class CdxmlWriter {
     const now = this.doc.neighbors(a.id);
     if (now.length !== was.size) return true;
     for (const n of now) if (!was.has(n.id)) return true;
-    for (const bid of this.doc.adj.get(a.id) ?? []) if (!this.orig('b', bid)) return true;
+    for (const bid of this.doc.adj.get(a.id) ?? []) {
+      const ob = this.orig<Bond>('b', bid);
+      // a bond that is new, or of another order, changes the hydrogens the label shows
+      if (!ob || ob.order !== this.doc.bonds.get(bid)?.order) return true;
+    }
     return false;
   }
 
