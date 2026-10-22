@@ -17,8 +17,9 @@ import { Package, REL, NS, xml, hex6, emu, MediaFiles, structureAltText } from '
 import { facesToEmbed, newGuid, obfuscate, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
-import { BOX_PAD, COL_GAP, COMPOUND, END_FORMAT, FLOAT_GAP, FOOT_FORMAT, columnsOf, OBJECT_CHAR, SHADOWS, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, pruneObjects, styleOf, runStyleOf, type DocObject, type DocText, type FigureLook, type NamedStyle, type PageSetup } from '../document/document';
+import { BOX_PAD, COL_GAP, COMPOUND, END_FORMAT, FLOAT_GAP, FOOT_FORMAT, columnsOf, OBJECT_CHAR, SHADOWS, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, pruneObjects, styleOf, runStyleOf, type DocObject, type DocText, type FigureLook, type HeaderFooter, type NamedStyle, type PageSetup } from '../document/document';
 import { ACS_LINE, CELL_PAD, GRID_LINE, bibHang, docCellAlign, shownSize } from '../document/doc-layout';
+import { sectionsOf, type Section } from '../document/sections';
 import { bibliography, piecesText } from '../document/references';
 import { TOC_INDENT, tocEntries, tofEntries } from '../document/toc';
 import { parseRev } from '../document/revisions';
@@ -124,7 +125,8 @@ class DocxWriter {
     for (const [ext, type] of Object.entries(EXT_TYPE)) pkg.defaultType(ext, type);
     const main = 'word/document.xml';
     const body = await this.body(main);
-    const sect = this.section(main);
+    const secs = sectionsOf(this.t);
+    const sect = this.section(main, secs[secs.length - 1]);
     pkg.add(main, `${HEAD}<w:document xmlns:w="${W_NS}" xmlns:r="${NS.r}" xmlns:wp="${WP_NS}" xmlns:a="${NS.a}" xmlns:pic="${PIC_NS}" xmlns:wps="${WPS_NS}" xmlns:wpg="${WPG_NS}" xmlns:mc="${MC_NS}" xmlns:m="${M_NS}"><w:body>${body}${sect}</w:body></w:document>`, DOCX_CT.document);
     pkg.relate(main, DOCX_REL.styles, 'styles.xml');
     pkg.add('word/styles.xml', this.styles(), DOCX_CT.styles);
@@ -189,15 +191,25 @@ class DocxWriter {
     const out: string[] = [];
     let lastWasTable = false;
     let listNum = 0;
+    // each section but the last ends with its section properties in its last paragraph (Word's way)
+    const secs = sectionsOf({ ...t, paras });
+    const endsSection = new Map<number, Section>();
+    for (const s of secs.slice(0, -1)) endsSection.set(s.end - 1, s);
     for (let p = 0; p < n; p++) {
       const runs = runsOf[p] ?? [];
       const ps = paras[p];
+      const ending = endsSection.get(p);
+      const sectXml = ending ? this.section(main, ending) : '';
+      // a section ending with a table, contents or bibliography: an empty paragraph after it holds the section's properties
+      const before = out.length;
+      const close = () => { if (sectXml && out.length > before) out.push(`<w:p><w:pPr>${sectXml}</w:pPr></w:p>`); if (sectXml) lastWasTable = false; };
       // a paragraph holding just a table: Word's own table
       const only = runs.length === 1 && runs[0].obj !== undefined && runs[0].text === OBJECT_CHAR ? t.objects[runs[0].obj] : undefined;
       if (only?.kind === 'table') {
         if (lastWasTable) out.push('<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p>');
         out.push(await this.docTable(main, only.table, ps.align ?? styleOf(t, ps).align));
         lastWasTable = true;
+        close();
         continue;
       }
       const table = only?.kind === 'drawing' ? soleTable(only.contents) : null;
@@ -205,6 +217,7 @@ class DocxWriter {
         if (lastWasTable) out.push('<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p>');
         out.push(this.table(runs[0].obj!, table, ps.align ?? styleOf(t, ps).align));
         lastWasTable = true;
+        close();
         continue;
       }
       // numbered lists: a new Word list where our numbers start again
@@ -221,7 +234,8 @@ class DocxWriter {
           out.push(o?.kind === 'toc' ? this.contents(o.levels, ps) : o?.kind === 'tof' ? this.figureList(o.name, ps) : this.bibliography(r.obj!, ps));
         }
         if (part.some((x) => x.text)) out.push(await this.paragraph(main, ps, part, listNum));
-      } else out.push(await this.paragraph(main, ps, runs, listNum, p));
+        close();
+      } else out.push(await this.paragraph(main, ps, runs, listNum, p, sectXml));
       lastWasTable = false;
     }
     // comments still open (on a table, say) close in a paragraph of their own
@@ -312,7 +326,7 @@ class DocxWriter {
     this.pkg.add('word/commentsExtended.xml', `${HEAD}<w15:commentsEx xmlns:w15="${W15_NS}" xmlns:mc="${MC_NS}">${ex.join('')}</w15:commentsEx>`, DOCX_CT.commentsExtended);
   }
 
-  private async paragraph(main: string, ps: ParaStyle, runs: TextRun[], listNum: number, index = -1): Promise<string> {
+  private async paragraph(main: string, ps: ParaStyle, runs: TextRun[], listNum: number, index = -1, sectXml = ''): Promise<string> {
     const t = this.t;
     const st = styleOf(t, ps);
     const pPr: string[] = [];
@@ -326,6 +340,7 @@ class DocxWriter {
       const id = ps.list === 'bullet' ? 1 : Math.max(2, listNum);
       pPr.push(`<w:numPr><w:ilvl w:val="${Math.max(0, Math.min(8, ps.level ?? 0))}"/><w:numId w:val="${id}"/></w:numPr>`);
     }
+    if (ps.noLineNumbers) pPr.push('<w:suppressLineNumbers/>');
     const sp: string[] = [];
     const before = ps.spaceBefore ?? 0, after = ps.spaceAfter ?? 0, line = ps.line ?? 1;
     if (before !== st.spaceBefore) sp.push(`w:before="${twips(before)}"`);
@@ -348,6 +363,8 @@ class DocxWriter {
     // the paragraph mark itself inserted or deleted while tracking
     const mr = parseRev(index >= 0 ? this.markRev[index] : undefined);
     if (mr) pPr.push(`<w:rPr><w:${mr.kind} ${this.revAttrs(this.markRev[index]!)}/></w:rPr>`);
+    // the section ending with this paragraph
+    if (sectXml) pPr.push(sectXml);
 
     // a caption that references point to: a bookmark round its label and number; a compound
     // number's bookmark is round just the number
@@ -799,15 +816,25 @@ class DocxWriter {
 
   // ---------------------------------------------------------------- page, header and footer
 
-  private section(main: string): string {
+  /** Header and footer parts written so far (each section with its own gets its own). */
+  private hfParts = { header: 0, footer: 0 };
+
+  /**
+   * A section's properties: how it starts, its paper, margins, columns, page numbering and line
+   * numbers, and its own header and footer (a section linked to the one before has none, and
+   * Word shows the one before's).
+   */
+  private section(main: string, sec: Section): string {
     const t = this.t;
-    const pg = t.page;
-    const hf = t.hf;
+    const pg = sec.page;
+    const hf = sec.hf;
+    const fullW = Math.max(36, pg.w - pg.left - pg.right);
     const refs: string[] = [];
     const add = (kind: 'header' | 'footer', type: 'default' | 'first', numbered: boolean) => {
-      const xmlText = this.headerFooter(kind, numbered);
+      if (sec.linked) return;
+      const xmlText = this.headerFooter(kind, numbered, hf, fullW);
       if (!xmlText) return;
-      const name = `${kind}${type === 'first' ? '2' : '1'}.xml`;
+      const name = `${kind}${++this.hfParts[kind]}.xml`;
       this.pkg.add(`word/${name}`, xmlText, kind === 'header' ? DOCX_CT.header : DOCX_CT.footer);
       const rid = this.pkg.relate(main, kind === 'header' ? DOCX_REL.header : DOCX_REL.footer, name);
       refs.push(`<w:${kind}Reference w:type="${type}" r:id="${rid}"/>`);
@@ -823,15 +850,21 @@ class DocxWriter {
     // the notes' numbering, where it isn't Word's own (1, 2, 3 and i, ii, iii)
     const fmt = (tag: string, v: string | undefined, def: string) => (v && v !== def ? `<w:${tag}Pr><w:numFmt w:val="${v}"/></w:${tag}Pr>` : '');
     refs.push(fmt('footnote', t.notes?.foot, FOOT_FORMAT), fmt('endnote', t.notes?.end, END_FORMAT));
+    // how it starts (the first section starts the document)
+    if (sec.index > 0 && sec.kind !== 'nextPage') refs.push(`<w:type w:val="${sec.kind}"/>`);
+    // Word counts line numbers' start from 0 (start="4" numbers from 5)
+    const L = sec.lines;
+    const lines = L ? `<w:lnNumType w:countBy="${Math.max(1, Math.round(L.countBy))}"${L.start !== 1 ? ` w:start="${Math.max(0, Math.round(L.start) - 1)}"` : ''}${L.distance !== undefined ? ` w:distance="${twips(L.distance)}"` : ''} w:restart="${L.restart === 'page' ? 'newPage' : L.restart === 'section' ? 'newSection' : 'continuous'}"/>` : '';
+    const numFmt = sec.format !== 'decimal' ? ` w:fmt="${sec.format}"` : '';
+    const start = sec.restart !== undefined ? ` w:start="${Math.round(sec.restart)}"` : '';
     return `<w:sectPr>${refs.join('')}<w:pgSz w:w="${twips(pg.w)}" w:h="${twips(pg.h)}"${land ? ' w:orient="landscape"' : ''}/>` +
       `<w:pgMar w:top="${twips(pg.top)}" w:right="${twips(pg.right)}" w:bottom="${twips(pg.bottom)}" w:left="${twips(pg.left)}" w:header="${twips(pg.header)}" w:footer="${twips(pg.footer)}" w:gutter="0"/>` +
-      `<w:pgNumType w:start="${Math.round(hf.start)}"/>${colsXml(pg)}${titlePg ? '<w:titlePg/>' : ''}<w:docGrid w:linePitch="360"/></w:sectPr>`;
+      `${lines}${numFmt || start ? `<w:pgNumType${numFmt}${start}/>` : ''}${colsXml(pg)}${titlePg ? '<w:titlePg/>' : ''}<w:docGrid w:linePitch="360"/></w:sectPr>`;
   }
 
   /** A header or footer part: its left, centre and right text on one line (with tab stops), and the page number. Null when empty. */
-  private headerFooter(kind: 'header' | 'footer', numbered: boolean): string | null {
+  private headerFooter(kind: 'header' | 'footer', numbered: boolean, hf: HeaderFooter, fullW: number): string | null {
     const t = this.t;
-    const hf = t.hf;
     const zones = hf[kind];
     const place = hf.numbers === 'none' || !numbered ? null : hf.numbers;
     const at = place && place.startsWith(kind) ? ['left', 'center', 'right'].indexOf(place.split('-')[1]) : -1;
@@ -847,12 +880,12 @@ class DocxWriter {
       if (i === at) {
         const lead = (text ? ' ' : '') + hf.prefix;
         if (lead) parts.push(run(rPr, lead));
-        parts.push(field(rPr, ' PAGE \\* CHARFORMAT ', String(hf.start)));
+        parts.push(field(rPr, ' PAGE \\* CHARFORMAT ', String(hf.start ?? 1)));
       }
     }
     // drop the tabs after the last zone with something in it
     while (parts.length && parts[parts.length - 1].includes('<w:tab/>')) parts.pop();
-    const pPr = `<w:pPr><w:tabs><w:tab w:val="center" w:pos="${twips(this.fullW / 2)}"/><w:tab w:val="right" w:pos="${twips(this.fullW)}"/></w:tabs>` +
+    const pPr = `<w:pPr><w:tabs><w:tab w:val="center" w:pos="${twips(fullW / 2)}"/><w:tab w:val="right" w:pos="${twips(fullW)}"/></w:tabs>` +
       `<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/><w:ind w:left="0" w:firstLine="0"/><w:jc w:val="left"/></w:pPr>`;
     return `${HEAD}<w:${kind === 'header' ? 'hdr' : 'ftr'} xmlns:w="${W_NS}" xmlns:r="${NS.r}"><w:p>${pPr}${parts.join('')}</w:p></w:${kind === 'header' ? 'hdr' : 'ftr'}>`;
   }

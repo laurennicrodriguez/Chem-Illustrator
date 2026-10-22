@@ -201,6 +201,8 @@
     <button data-modes="document" role="menuitem" data-cmd="insert-footnote" title="A footnote at the foot of the page (Ctrl+Alt+F)">Footnote</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-endnote" title="An endnote after the text (Ctrl+Alt+D)">Endnote</button>
     <button data-modes="document" role="menuitem" data-cmd="page-break">Page Break</button>
+    <button data-modes="document" role="menuitem" data-cmd="breaks-nextPage" title="A new section on a new page: it can have its own paper, margins, columns, header and footer, page numbers and line numbers">Section Break (Next Page)</button>
+    <button data-modes="document" role="menuitem" data-cmd="breaks-continuous" title="A new section on the same page (one column of title and abstract, then two columns of text)">Section Break (Continuous)</button>
     </div>
     </div>
     <div class="menu-wrap">
@@ -885,8 +887,23 @@
             </select></label>
           </div>
           <div class="rb-col">
-            <button data-doc="page-break" title="Start a new page here (Ctrl+Enter)">Page Break</button>
-            <button data-doc="col-break" title="Start the next column here (Ctrl+Shift+Enter)">Column Break</button>
+            <label class="rb-field" title="Page and column breaks, and section breaks: a new section can have its own paper, margins, columns, header and footer, page numbering and line numbers">Breaks <select id="doc-breaks" data-doc-prefix="breaks">
+              <option value="" hidden>Insert…</option>
+              <option value="page">Page (Ctrl+Enter)</option>
+              <option value="column">Column (Ctrl+Shift+Enter)</option>
+              <option value="nextPage">Section: Next Page</option>
+              <option value="continuous">Section: Continuous</option>
+              <option value="evenPage">Section: Even Page</option>
+              <option value="oddPage">Section: Odd Page</option>
+            </select></label>
+            <label class="rb-field" title="Numbers down the margin beside each line of text (for manuscripts under review), in this section">Line Numbers <select id="doc-linenums" data-doc-prefix="linenums">
+              <option value="none">None</option>
+              <option value="continuous">Continuous</option>
+              <option value="page">Restart Each Page</option>
+              <option value="section">Restart Each Section</option>
+              <option value="suppress">Suppress for Current Paragraph</option>
+              <option value="options">Line Numbering Options…</option>
+            </select></label>
           </div>
         </div>
         <div class="rb-label">Page Setup</div>
@@ -923,8 +940,9 @@
             <button data-doc="numbers-s" aria-pressed="false" title="Number pages S1, S2… as Supporting Information is">S1, S2… numbering</button>
           </div>
           <div class="rb-col">
-            <button data-doc="header-edit" title="Text at the top of every page (left, centre, right)">Header…</button>
-            <button data-doc="footer-edit" title="Text at the bottom of every page (left, centre, right)">Footer…</button>
+            <button data-doc="header-edit" title="Text at the top of every page in this section (left, centre, right)">Header…</button>
+            <button data-doc="footer-edit" title="Text at the bottom of every page in this section (left, centre, right)">Footer…</button>
+            <button data-doc="page-number-format" title="Page numbers as 1, 2, 3 or i, ii, iii, and where this section's numbering starts">Number Format…</button>
           </div>
         </div>
         <div class="rb-label">Header and Footer</div>

@@ -92,6 +92,45 @@ export interface HeaderFooter {
   onFirst: boolean;
 }
 
+/** How a section starts: on a new page (Next Page), on the same page (Continuous), or on the next even or odd page. */
+export type BreakKind = 'nextPage' | 'continuous' | 'evenPage' | 'oddPage';
+
+/** How page numbers are written, by Word's names: 1, 2, 3; i, ii, iii; I, II, III; a, b, c; A, B, C. */
+export type PageNumFormat = 'decimal' | 'lowerRoman' | 'upperRoman' | 'lowerLetter' | 'upperLetter';
+
+/** Line numbers in the margin beside the text (Layout > Line Numbers), as in Word. */
+export interface LineNumbers {
+  /** The first number. */
+  start: number;
+  /** Show every nth number (1: every line; 5: 5, 10, 15…). Every line is still counted. */
+  countBy: number;
+  /** From the text to the numbers, in points (Word's Auto, a quarter inch, when left out). */
+  distance?: number;
+  /** Count from the start again on each page, in each section, or never. */
+  restart: 'page' | 'section' | 'continuous';
+}
+
+/** Word's Auto distance from the text to the line numbers (a quarter inch). */
+export const LINE_NUMBER_GAP = 18;
+
+/**
+ * A section break: the paragraph holding it starts a new section, with its own page setup,
+ * header and footer, page numbering and line numbers (the first section's are the document's).
+ */
+export interface SectionBreak {
+  kind: BreakKind;
+  /** Its paper, margins and columns (the section before's when left out). */
+  page?: PageSetup;
+  /** Its own header and footer; left out, the section before's (Word's Link to Previous). */
+  hf?: HeaderFooter;
+  /** Page numbers start again here, from this; left out, they carry on from the section before. */
+  restart?: number;
+  /** How its page numbers are written (1, 2, 3 when left out). */
+  format?: PageNumFormat;
+  /** Its line numbers (none when left out). */
+  lines?: LineNumbers;
+}
+
 /** A figure's or picture's frame and shadow (Word's Picture Format). */
 export interface FigureLook {
   /** A line round it, this many points wide, in `frameColor` (black when not set). */
@@ -215,6 +254,10 @@ export interface DocText extends RichText {
   comments?: Record<number, CommentThread>;
   /** How footnotes and endnotes are numbered (1, 2, 3 and i, ii, iii unless chosen). */
   notes?: NoteFormats;
+  /** How the first section's page numbers are written (1, 2, 3 unless chosen; later sections have their own). */
+  numFormat?: PageNumFormat;
+  /** The first section's line numbers (none unless chosen). */
+  lineNumbers?: LineNumbers;
 }
 
 /** How footnotes or endnotes are numbered, by Word's names: 1, 2, 3; i, ii, iii; a, b, c; *, †, ‡ (chicago). */
@@ -321,7 +364,7 @@ export function runStyleOf(s: NamedStyle): rt.RunStyle {
 /** A paragraph in a style: the style's spacing, indents and alignment, keeping its list, level and page break. */
 export function paraFromStyle(s: NamedStyle, keep: ParaStyle): ParaStyle {
   return cleanPara({
-    list: keep.list, level: keep.level, cont: keep.cont, pageBreak: keep.pageBreak, colBreak: keep.colBreak,
+    list: keep.list, level: keep.level, cont: keep.cont, pageBreak: keep.pageBreak, colBreak: keep.colBreak, section: keep.section, noLineNumbers: keep.noLineNumbers,
     style: s.id === 'Normal' ? undefined : s.id,
     align: s.align === 'left' ? undefined : s.align,
     spaceBefore: s.spaceBefore, spaceAfter: s.spaceAfter,

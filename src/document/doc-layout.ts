@@ -14,7 +14,8 @@ import { withStack, layoutText, type Glyphs, type InlineBox, type LaidLine, type
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
 import { isCovered, rowSpanOf, spanOf } from '../table';
 import * as rt from '../richtext';
-import { nestedTables, BOX_PAD, FLOAT_GAP, OBJECT_CHAR, columnsOf, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, styleOf, type DocText, type HeaderFooter, type NamedStyle, type WrapKind } from './document';
+import { nestedTables, BOX_PAD, FLOAT_GAP, LINE_NUMBER_GAP, OBJECT_CHAR, columnsOf, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, styleOf, type DocText, type HeaderFooter, type NamedStyle, type PageSetup, type WrapKind } from './document';
+import { pageNumText, samePaper, sectionOfParas, sectionsOf } from './sections';
 import { bibliography, type BibEntry } from './references';
 import { emptyTof, tocEntries, tocLines, tofEntries, type TocEntry } from './toc';
 import { authorColours, hasChanges, markedRuns } from './revisions';
@@ -64,7 +65,21 @@ export interface PageBox {
   end: number;
   /** The page number as shown ("S3"), or '' where none is shown. */
   label: string;
+  /** Its number whether shown or not, as a table of contents lists it. */
+  number: string;
+  /** Its left edge (narrower pages sit in the middle of wider ones), width and height. */
+  x: number;
+  w: number;
+  h: number;
+  /** Its paper and margins, and its header and footer: those of the section it starts in. */
+  setup: PageSetup;
+  hf: HeaderFooter;
+  /** That section's index. */
+  section: number;
 }
+
+/** A line's number in the margin: its text, right-aligned to end `distance` left of the text (`x` is its left edge), on the line's baseline. */
+export interface LineNumber { page: number; x: number; y: number; text: string; size: number; family: string }
 
 /** What the bibliography shows when nothing is cited yet (on screen and in the PDF only). */
 export const EMPTY_BIBLIOGRAPHY = 'Bibliography: no references are cited yet. Cite one with References > Insert Citation.';
@@ -201,6 +216,18 @@ export interface DocLayout {
   notes: Map<number, PlacedNote>;
   /** The short line above each page's footnotes, and above the endnotes. */
   noteRules: { page: number; x: number; y: number; w: number }[];
+  /** Line numbers in the margins (Layout > Line Numbers). */
+  lineNums: LineNumber[];
+}
+
+/** A page setup's text area: the width between the margins, the columns, and the height. */
+interface Geometry { page: PageSetup; fullW: number; textW: number; cs: { n: number; gap: number; w: number }; colX: number[]; textH: number }
+
+function geometry(page: PageSetup): Geometry {
+  const fullW = Math.max(36, page.w - page.left - page.right);
+  const cs = columnsOf(page, fullW);
+  const colX = Array.from({ length: cs.n }, (_, c) => c * (cs.w + cs.gap));
+  return { page, fullW, textW: cs.w, cs, colX, textH: Math.max(36, page.h - page.top - page.bottom) };
 }
 
 /** An equation as laid out: drawn with its baseline `ascent` below the top of its box. */
@@ -350,7 +377,7 @@ export class DocLayouter {
     const hasToc = Object.values(t.objects).some((o) => o.kind === 'toc' || o.kind === 'tof');
     let lay = this.layoutOnce(t, only);
     for (let pass = 0; hasToc && pass < 3; pass++) {
-      const now = lay.paraTops.map((pt) => pageNumber(t.hf, pt.page));
+      const now = lay.paraTops.map((pt) => lay.pages[pt.page]?.number ?? '');
       const heads = Object.values(t.objects).flatMap((o) => (o.kind === 'toc' ? tocEntries(t, o.levels) : o.kind === 'tof' ? tofEntries(t, o.name, lay.fields) : []));
       if (heads.every((e) => this.tocPages[e.para] === now[e.para])) break;
       this.tocPages = now;
@@ -361,13 +388,6 @@ export class DocLayouter {
 
   private layoutOnce(t: DocText, only?: ShownParas): DocLayout {
     this.used.clear();
-    const page = t.page;
-    const fullW = Math.max(36, page.w - page.left - page.right);
-    // in columns, text is set in a column's width
-    const cs = columnsOf(page, fullW);
-    const textW = cs.w;
-    const colX = Array.from({ length: cs.n }, (_, c) => c * (cs.w + cs.gap));
-    const textH = Math.max(36, page.h - page.top - page.bottom);
     const text = rt.plainText(t.runs);
     const n = paraCount(text);
     const paras = fitParas(t.paras, n);
@@ -375,12 +395,33 @@ export class DocLayouter {
     const fields = fieldTexts(t);
     const paraRuns = splitParagraphs(t.runs);
     const colours = hasChanges(t.runs) ? authorColours(t.runs) : null;
+    // the sections, each with its own paper, margins and columns (in columns, text is set in a column's width)
+    const secs = sectionsOf({ ...t, paras });
+    const secOf = sectionOfParas(secs);
+    const geoms = secs.map((x) => geometry(x.page));
+    const widthOf = (p: number) => geoms[secOf[p] ?? 0].textW;
+    // pages of different sizes sit one under another, each in the middle of the widest
+    const maxW = Math.max(...secs.map((x) => x.page.w));
+    const maxH = Math.max(...secs.map((x) => x.page.h));
+    let G = geoms[0];
+    let page = G.page, fullW = G.fullW, cs = G.cs, textW = G.textW, colX = G.colX, textH = G.textH;
+    let ox = (maxW - page.w) / 2;
+    let sec = 0;
+    const useSection = (i: number) => {
+      sec = i;
+      G = geoms[i];
+      ({ page, fullW, cs, textW, colX, textH } = G);
+      ox = (maxW - page.w) / 2;
+    };
 
-    // sizes of figures and pictures
+    // sizes of figures and pictures (fitting the width of the section each is in)
+    const objWidth = new Map<number, number>();
+    paraRuns.forEach((runs, p) => { for (const r of runs) if (r.obj !== undefined) objWidth.set(r.obj, widthOf(p)); });
     const sizes = new Map<number, { w: number; h: number }>();
     for (const [k, o] of Object.entries(t.objects)) {
-      if (o.kind === 'drawing') sizes.set(Number(k), shownSize(this.deps.drawingSize(o.contents, t.drawingStyle), o.scale ?? 1, textW));
-      else if (o.kind === 'picture') sizes.set(Number(k), shownSize({ w: o.w, h: o.h }, o.scale ?? 1, textW));
+      const room = objWidth.get(Number(k)) ?? textW;
+      if (o.kind === 'drawing') sizes.set(Number(k), shownSize(this.deps.drawingSize(o.contents, t.drawingStyle), o.scale ?? 1, room));
+      else if (o.kind === 'picture') sizes.set(Number(k), shownSize({ w: o.w, h: o.h }, o.scale ?? 1, room));
     }
     // equations: laid out in the font and size of the text round them
     const maths = new Map<number, PlacedMath>();
@@ -513,18 +554,19 @@ export class DocLayouter {
       });
       const tabs = runs.filter(isTable).map((r) => tableOf(r.obj!)!);
       const bib = runs.some(isBib) || tabs.length > 0;
-      const key = JSON.stringify([resolved, ps, markers[p], textW, objs, st.size, bib ? [t.citeStyle, t.citeOptions, entries.map((e) => [e.label, e.pieces]), st.font, tocKey] : 0, tabs.map((x) => [x.xs, x.hs])]);
+      const W = widthOf(p);
+      const key = JSON.stringify([resolved, ps, markers[p], W, objs, st.size, bib ? [t.citeStyle, t.citeOptions, entries.map((e) => [e.label, e.pieces]), st.font, tocKey] : 0, tabs.map((x) => [x.xs, x.hs])]);
       let lay = this.cache.get(key);
       if (!lay) {
         const frame: TextFrame = {
-          runs: resolved, paras: [ps], justify: 'left', wrap: textW, boxes: true, markers: [markers[p]], inline,
+          runs: resolved, paras: [ps], justify: 'left', wrap: W, boxes: true, markers: [markers[p]], inline,
         };
         lay = bib ? this.withBlocks(frame, st, blockLines, tableOf) : layoutText(frame, st.size, this.deps.measure);
         this.cache.set(key, lay);
       }
       this.used.add(key);
       laid.push(lay);
-      again.push(bib ? null : { key, frame: { runs: resolved, paras: [ps], justify: 'left', wrap: textW, boxes: true, markers: [markers[p]], inline }, size: st.size });
+      again.push(bib ? null : { key, frame: { runs: resolved, paras: [ps], justify: 'left', wrap: W, boxes: true, markers: [markers[p]], inline }, size: st.size });
     }
     // a paragraph laid out again round the floating figures beside it (`y` its top on the page)
     const wrapped = (p: number, y: number, all: WrapRect[], dx: number): TextLayout => {
@@ -555,9 +597,14 @@ export class DocLayouter {
     let cursor = 0;
     let hasContent = false;
     let col = 0;
+    // where the columns start on the page (lower after a Continuous section break), and the lowest any column reached
+    let regionTop = 0;
+    let low = 0;
+    // the first line of the section (for evening up its columns at a Continuous break)
+    let secLine = 0;
     // the floating figures on the page so far
     let rects: WrapRect[] = [];
-    const pageTop = (i: number) => i * (page.h + PAGE_GAP);
+    const pageTop = (i: number) => pages[i].top;
 
     // footnotes: those whose numbers are on the page so far (with the line each is on) take room
     // at its foot, below a short line; a line goes to the next page when it and its notes don't fit
@@ -591,36 +638,117 @@ export class DocLayouter {
     const placeFeet = () => {
       if (!feet.length) return;
       let y = pageTop(pageIdx) + page.top + textH - footArea();
-      noteRules.push({ page: pageIdx, x: page.left, y: y + sep / 2, w: Math.min(NOTE_RULE, fullW) });
+      noteRules.push({ page: pageIdx, x: ox + page.left, y: y + sep / 2, w: Math.min(NOTE_RULE, fullW) });
       y += sep;
-      for (const f of feet) y += putNote(f.id, page.left, y, fullW, f.line);
+      for (const f of feet) y += putNote(f.id, ox + page.left, y, fullW, f.line);
       feet = [];
     };
 
-    pages.push({ index: 0, top: 0, first: 0, end: 0, label: pageLabel(t.hf, 0) });
-    const newPage = () => {
+    // page numbers: carried on from page to page, started again where a section says
+    let num = secs[0].restart ?? 1;
+    let restartAt: number | undefined;
+    const makePage = (index: number, top: number, starts: boolean): PageBox => {
+      const hf = secs[sec].hf;
+      const number = `${hf.prefix ?? ''}${pageNumText(num, secs[sec].format)}`;
+      const label = hf.numbers === 'none' || (starts && !hf.onFirst) ? '' : number;
+      return { index, top, first: lines.length, end: lines.length, label, number, x: ox, w: page.w, h: page.h, setup: page, hf, section: sec };
+    };
+    pages.push(makePage(0, 0, true));
+    /** The next page, in section `to` when given (its first page). */
+    const newPage = (to?: number) => {
       placeFeet();
       pages[pageIdx].end = lines.length;
+      const prev = pages[pageIdx];
+      if (to !== undefined) {
+        useSection(to);
+        if (secs[to].restart !== undefined) restartAt = secs[to].restart;
+      }
+      num = restartAt ?? num + 1;
+      restartAt = undefined;
       pageIdx++;
-      pages.push({ index: pageIdx, top: pageTop(pageIdx), first: lines.length, end: lines.length, label: pageLabel(t.hf, pageIdx) });
+      pages.push(makePage(pageIdx, prev.top + prev.h + PAGE_GAP, to !== undefined));
       cursor = 0;
       hasContent = false;
       rects = [];
       col = 0;
+      regionTop = 0;
+      low = 0;
     };
     // the next column, or the next page after the last column
     const nextColumn = () => {
       if (col + 1 >= cs.n) { newPage(); return; }
+      low = Math.max(low, cursor);
       col++;
-      cursor = 0;
+      cursor = regionTop;
       hasContent = false;
     };
-    const heightOf = (l: LaidLine) => (l.above ?? l.ascent) + (l.below ?? l.descent);
+    const heightOf0 = (l: LaidLine) => (l.above ?? l.ascent) + (l.below ?? l.descent);
+    /**
+     * At a Continuous section break, the section's lines on this page shared out evenly between
+     * its columns (as Word does), and the page's lowest point after them, for the next section to start at.
+     */
+    const evenColumns = () => {
+      const from = Math.max(secLine, pages[pageIdx].first);
+      const top0 = pageTop(pageIdx) + page.top + regionTop;
+      if (cs.n > 1 && lines.length - from > 1) {
+        const run = lines.slice(from);
+        const hs = run.map(heightOf0);
+        // space between paragraphs (none at the top of a column)
+        const gaps = run.map((l, i) => (i > 0 && l.para !== run[i - 1].para ? (paras[run[i - 1].para]?.spaceAfter ?? 0) + (paras[l.para]?.spaceBefore ?? 0) : 0));
+        const fill = (T: number, place?: (i: number, c: number, y: number) => void): number => {
+          let c = 0, y = 0;
+          for (let i = 0; i < run.length; i++) {
+            if (y > 0 && y + gaps[i] + hs[i] > T + 0.01) { c++; y = 0; }
+            const at = y > 0 ? y + gaps[i] : 0;
+            place?.(i, c, at);
+            y = at + hs[i];
+          }
+          return c + 1;
+        };
+        let lo = Math.max(...hs), hi = sum(hs) + sum(gaps);
+        for (let k = 0; k < 30 && hi - lo > 0.25; k++) { const mid = (lo + hi) / 2; if (fill(mid) <= cs.n) hi = mid; else lo = mid; }
+        let bottom = 0;
+        fill(hi, (i, c, y) => {
+          const l = run[i];
+          const above = l.above ?? l.ascent;
+          const x0 = ox + page.left + colX[c];
+          const dx = x0 - (l.band?.[0] ?? ox + page.left);
+          const dy = top0 + y + above - l.y;
+          const moved = shiftLine(l, dx, dy, 0, l.para);
+          moved.band = [x0, x0 + textW];
+          lines[from + i] = moved;
+          for (const o of objects) if (o.line === from + i && !o.wrap) { o.x += dx; o.y += dy; }
+          if (i === 0 || l.para !== run[i - 1].para) { const pt = paraTops[l.para]; if (pt && pt.page === pageIdx) pt.y = top0 + y; }
+          bottom = Math.max(bottom, y + hs[i]);
+        });
+        cursor = regionTop + bottom;
+      } else cursor = Math.max(low, cursor);
+      low = cursor;
+    };
+    const heightOf = heightOf0;
 
     let paraStart = 0;
     for (let p = 0; p < n; p++) {
       const ps = paras[p];
       const lay = laid[p];
+      // a new section: on a new page (in its page setup), or on this one below what is there
+      const si = secOf[p] ?? 0;
+      if (si !== sec) {
+        const s = secs[si];
+        if (s.kind === 'continuous' && samePaper(s.page, page)) {
+          evenColumns();
+          useSection(si);
+          if (s.restart !== undefined) restartAt = s.restart;
+          regionTop = cursor;
+          col = 0;
+        } else {
+          // an Even Page or Odd Page break leaves a blank page when the next would be the wrong one
+          const next = s.restart ?? num + 1;
+          if ((s.kind === 'evenPage' && next % 2 === 1) || (s.kind === 'oddPage' && next % 2 === 0)) newPage();
+          newPage(si);
+        }
+        secLine = lines.length;
+      }
       // a paragraph left out of view (Outline's folded headings): it takes no room
       if (only?.hidden?.has(p)) {
         paraTops.push({ y: pageTop(pageIdx) + page.top + cursor, page: pageIdx });
@@ -657,7 +785,7 @@ export class DocLayouter {
         let by = (fl.yFrom === 'page' ? 0 : fl.yFrom === 'margin' ? page.top : page.top + cursor) + fl.y;
         bx = Math.max(0, Math.min(bx, page.w - bw));
         by = Math.max(0, Math.min(by, page.h - bh));
-        objects.push({ id: r.obj!, page: pageIdx, x: bx + el, y: pageTop(pageIdx) + by + et, w: s.w, h: s.h, line: lines.length, wrap: fl.wrap });
+        objects.push({ id: r.obj!, page: pageIdx, x: ox + bx + el, y: pageTop(pageIdx) + by + et, w: s.w, h: s.h, line: lines.length, wrap: fl.wrap });
         const g = fl.gap ?? FLOAT_GAP;
         rects.push({ x1: bx - page.left - g, y1: by - page.top - g, x2: bx + bw - page.left + g, y2: by + bh - page.top + g, wrap: fl.wrap });
       }
@@ -682,8 +810,8 @@ export class DocLayouter {
         const l = pl[i];
         const above = l.above ?? l.ascent;
         const top = pageTop(pageIdx) + page.top + cursor;
-        const placed = shiftLine(l, page.left + colX[col], top + above - l.y, paraStart, p);
-        if (cs.n > 1) placed.band = [page.left + colX[col], page.left + colX[col] + textW];
+        const placed = shiftLine(l, ox + page.left + colX[col], top + above - l.y, paraStart, p);
+        if (cs.n > 1) placed.band = [ox + page.left + colX[col], ox + page.left + colX[col] + textW];
         lines.push(placed);
         for (const id of ft) feet.push({ id, line: lines.length - 1 });
         for (const g of placed.pieces) {
@@ -712,11 +840,11 @@ export class DocLayouter {
         const need = (first ? sep : 0) + l.box.y2 - l.box.y1;
         if (hasContent && cursor + need > room() + 0.01) nextColumn();
         if (first) {
-          noteRules.push({ page: pageIdx, x: page.left + colX[col], y: pageTop(pageIdx) + page.top + cursor + sep / 2, w: Math.min(NOTE_RULE, textW) });
+          noteRules.push({ page: pageIdx, x: ox + page.left + colX[col], y: pageTop(pageIdx) + page.top + cursor + sep / 2, w: Math.min(NOTE_RULE, textW) });
           cursor += sep;
           first = false;
         }
-        cursor += putNote(id, page.left + colX[col], pageTop(pageIdx) + page.top + cursor, textW, lastLine);
+        cursor += putNote(id, ox + page.left + colX[col], pageTop(pageIdx) + page.top + cursor, textW, lastLine);
         hasContent = true;
       }
     }
@@ -763,16 +891,51 @@ export class DocLayouter {
         const y1 = l.y - (l.above ?? l.ascent), y2 = l.y + (l.below ?? l.descent);
         const got = blocks.get(k);
         const tb = tables.get(l.block);
-        if (!got) blocks.set(k, tb ? { id: l.block, page: pg.index, x: l.x, y: y1, w: l.width, h: y2 - y1, line: i } : { id: l.block, page: pg.index, x: l.band?.[0] ?? page.left, y: y1, w: textW, h: y2 - y1, line: i });
+        if (!got) blocks.set(k, tb ? { id: l.block, page: pg.index, x: l.x, y: y1, w: l.width, h: y2 - y1, line: i } : { id: l.block, page: pg.index, x: l.band?.[0] ?? pg.x + pg.setup.left, y: y1, w: l.band ? l.band[1] - l.band[0] : geometry(pg.setup).textW, h: y2 - y1, line: i });
         else got.h = y2 - got.y;
       }
     });
     objects.push(...blocks.values());
 
+    const lineNums = this.lineNumbers(t, lines, pages, paras, secs, secOf);
     const last = pages[pages.length - 1];
-    const box = { x1: 0, y1: 0, x2: page.w, y2: last.top + page.h };
-    const textLayout: TextLayout = { lines, boxWidth: textW, box, length: text.length, measure: this.deps.measure };
-    return { text: textLayout, pages, objects, fields, sizes, boxes, tables, maths, paraTops, pageW: page.w, pageH: page.h, textW, cols: { n: cs.n, w: textW, x: colX }, notes, noteRules };
+    const box = { x1: 0, y1: 0, x2: maxW, y2: last.top + last.h };
+    const g0 = geoms[0];
+    const textLayout: TextLayout = { lines, boxWidth: g0.textW, box, length: text.length, measure: this.deps.measure };
+    return { text: textLayout, pages, objects, fields, sizes, boxes, tables, maths, paraTops, pageW: maxW, pageH: maxH, textW: g0.textW, cols: { n: g0.cs.n, w: g0.textW, x: g0.colX }, notes, noteRules, lineNums };
+  }
+
+  /**
+   * Line numbers, as Word counts them: every line of text in a section that has them (not
+   * tables, contents or bibliographies, nor paragraphs that turn them off), starting again on
+   * each page, in each section, or never; every nth shown, at the left of its column.
+   */
+  private lineNumbers(t: DocText, lines: LaidLine[], pages: PageBox[], paras: ParaStyle[], secs: ReturnType<typeof sectionsOf>, secOf: number[]): LineNumber[] {
+    if (!secs.some((s) => s.lines)) return [];
+    const N = t.styles.Normal ?? styleOf(t, {});
+    const family = withStack(N.font), size = N.size;
+    const out: LineNumber[] = [];
+    let count: number | null = null;
+    let lastPage = -1, lastSec = -1;
+    for (const pg of pages) {
+      for (let i = pg.first; i < pg.end; i++) {
+        const l = lines[i];
+        const si = secOf[l.para] ?? 0;
+        const L = secs[si]?.lines;
+        if (!L || l.block !== undefined || paras[l.para]?.noLineNumbers) continue;
+        if (count === null || (L.restart === 'page' && pg.index !== lastPage) || (L.restart === 'section' && si !== lastSec)) count = Math.max(0, Math.round(L.start));
+        lastPage = pg.index;
+        lastSec = si;
+        const n = count++;
+        const every = Math.max(1, Math.round(L.countBy));
+        if (n % every !== 0) continue;
+        const text = String(n);
+        const w = this.deps.measure(text, size, family, '');
+        const left = l.band?.[0] ?? pg.x + pg.setup.left;
+        out.push({ page: pg.index, x: left - (L.distance ?? LINE_NUMBER_GAP) - w, y: l.y, text, size, family });
+      }
+    }
+    return out;
   }
 
   /** A table's cells laid out (each from the cache when nothing about it changed), and its rows' heights. */

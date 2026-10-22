@@ -2,6 +2,7 @@
 // spatial index for fast hit-testing. Every change goes through a transaction so it can
 // be undone as one step.
 
+import type { SectionBreak } from './document/document';
 import { Vec, Rect } from './geom';
 import { DocStyle, ACS_1996 } from './style';
 import { arrowPoints, gluePoint } from './objects';
@@ -295,6 +296,13 @@ export interface ParaStyle {
   /** Documents: line spacing in points instead of a multiple: exactly this, or at least this. */
   linePt?: number;
   lineRule?: 'exact' | 'atLeast';
+  /**
+   * Documents: a new section starts with this paragraph (a section break before it), with how
+   * it starts and its own page setup, header and footer, page numbering and line numbers.
+   */
+  section?: SectionBreak;
+  /** Documents: this paragraph's lines get no line numbers (Word's Suppress Line Numbers). */
+  noLineNumbers?: boolean;
 }
 
 export interface Caption {

@@ -10,6 +10,8 @@ import {
   A4, CM, COL_GAP, INCH, LETTER, FLOAT_GAP, defaultStyles, floatOf, modifyStyle, setParaStyle, styleOf,
   type DocText, type FigureLook, type Float, type WrapKind, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
 } from '../document/document';
+import { changeAllSections, changeSection, pageNumText, sectionAt, sectionsOf, type Section, type SectionPatch } from '../document/sections';
+import { paraAt } from '../text/paragraphs';
 
 export interface DocPanelHost {
   file(): DocFile | null;
@@ -452,20 +454,48 @@ export class DocPanel {
     this.change('Change style', (t) => modifyStyle(t, next));
   }
 
+  /** The section the caret is in (sections have their own page setup, header and footer). */
+  private section(t: DocText): Section {
+    const f = this.host.file();
+    return sectionAt(sectionsOf(t), f ? paraAt(f.ed.text, f.ed.focus) : 0);
+  }
+
+  /** Change the section the caret is in (or, for the page setup, every section when Apply to says so). */
+  private changeSec(kind: string, patch: (s: Section) => SectionPatch, all = false): void {
+    this.change(kind, (t) => (all ? changeAllSections(t, patch) : changeSection(t, this.section(t).index, patch(this.section(t)))));
+  }
+
+  /** Notes saying which section the page setup and the header and footer are for (when there are several). */
+  private secNotes: HTMLElement[] = [];
+
+  private secNote(s: HTMLElement): void {
+    const p = document.createElement('p');
+    p.className = 'muted small dp-note';
+    p.hidden = true;
+    s.append(p);
+    this.secNotes.push(p);
+  }
+
   private buildPage(): void {
     const s = this.sections.page;
-    const page = (patch: Partial<PageSetup>) => this.change('Page setup', (t) => ({ ...t, page: { ...t.page, ...patch } }));
+    this.secNote(s);
+    this.row(s, 'Apply to', this.select('pg-apply', [['section', 'This section'], ['all', 'Whole document']], () => {}), 'With section breaks, each section has its own paper, margins and columns');
+    const all = () => (this.fields.get('pg-apply') as HTMLSelectElement | undefined)?.value === 'all';
+    const page = (patch: Partial<PageSetup>) => this.changeSec('Page setup', (x) => ({ page: { ...x.page, ...patch } }), all());
     this.row(s, 'Paper', this.select('pg-size', [['letter', 'Letter (8.5 × 11 in)'], ['a4', 'A4 (21 × 29.7 cm)'], ['custom', 'Other size']], (v) => {
       const f = this.host.file();
       if (!f) return;
-      const land = f.t.page.w > f.t.page.h;
+      const pg = this.section(f.t).page;
+      const land = pg.w > pg.h;
       const size = v === 'a4' ? A4 : v === 'letter' ? LETTER : null;
       if (size) page(land ? { w: size.h, h: size.w } : { ...size });
     }));
     this.row(s, 'Orientation', this.select('pg-orient', [['portrait', 'Portrait'], ['landscape', 'Landscape']], (v) => {
       const f = this.host.file();
       if (!f) return;
-      const { w, h } = f.t.page;
+      // (each section turned its own way, when applied to them all)
+      if (all()) { this.changeSec('Page setup', (x) => ((v === 'landscape') !== (x.page.w > x.page.h) ? { page: { ...x.page, w: x.page.h, h: x.page.w } } : {}), true); return; }
+      const { w, h } = this.section(f.t).page;
       if ((v === 'landscape') !== (w > h)) page({ w: h, h: w });
     }));
     const len = (key: keyof PageSetup, label: string, title?: string) =>
@@ -486,10 +516,17 @@ export class DocPanel {
 
   private buildHeaderFooter(): void {
     const s = this.sections.hf;
-    const hf = (f: (h: HeaderFooter) => HeaderFooter) => this.change('Header and footer', (t) => ({ ...t, hf: f(t.hf) }));
+    this.secNote(s);
+    const hf = (f: (h: HeaderFooter) => HeaderFooter) => this.changeSec('Header and footer', (x) => ({ hf: f(x.hf) }));
+    this.check(s, 'hf-link', 'Same as previous section', (v) => this.changeSec('Header and footer', (x) => ({ linked: v })),
+      'Word\'s Link to Previous: this section shows the header and footer of the one before. Turn it off to give this section its own');
     this.row(s, 'Page numbers', this.select('hf-numbers', PLACES, (v) => hf((h) => ({ ...h, numbers: v as NumberPlace }))));
     this.row(s, 'Before the number', this.input('hf-prefix', (v) => hf((h) => ({ ...h, prefix: v })), { placeholder: 'S for S1, S2…' }), 'Supporting Information pages are numbered S1, S2…: type S here');
-    this.row(s, 'First page number', this.input('hf-start', (v) => { const n = Math.round(Number(v)); if (Number.isFinite(n)) hf((h) => ({ ...h, start: n })); }));
+    const FORMATS = ['decimal', 'lowerRoman', 'upperRoman', 'lowerLetter', 'upperLetter'] as const;
+    this.row(s, 'Number format', this.select('hf-format', FORMATS.map((v) => [v, [1, 2, 3].map((n) => pageNumText(n, v)).join(', ')]), (v) => this.changeSec('Page numbers', () => ({ format: v as Section['format'] }))),
+      'Front matter is often numbered i, ii, iii, and the text after a section break 1, 2, 3');
+    this.check(s, 'hf-continue', 'Continue from previous section', (v) => this.changeSec('Page numbers', (x) => ({ restart: v ? undefined : x.restart ?? 1 })));
+    this.row(s, 'First page number', this.input('hf-start', (v) => { const n = Math.round(Number(v)); if (Number.isFinite(n)) this.changeSec('Page numbers', () => ({ restart: n })); }));
     this.check(s, 'hf-first', 'Number the first page', (v) => hf((h) => ({ ...h, onFirst: v })), 'Leave off for a title page');
     const zone = (part: 'header' | 'footer', i: number, label: string) =>
       this.row(s, label, this.input(`hf-${part}${i}`, (v) => hf((h) => {
@@ -594,8 +631,19 @@ export class DocPanel {
     put('s-indent', showLength(st.indent, 'in'));
     put('s-first', showLength(st.firstLine, 'in'));
     put('s-keep', st.keepNext);
-    // the page
-    const pg = t.page;
+    // the section the caret is in: its page and its header and footer
+    const secs = sectionsOf(t);
+    const sec = sectionAt(secs, paraAt(ed === f.ed ? ed.text : f.ed.text, f.ed.focus));
+    for (const n of this.secNotes) {
+      n.hidden = secs.length < 2;
+      n.textContent = `Section ${sec.index + 1} of ${secs.length} (the one the caret is in).`;
+    }
+    const showRow = (key: string, on: boolean) => { const row = this.fields.get(key)?.closest('label'); if (row) (row as HTMLElement).style.display = on ? '' : 'none'; };
+    showRow('pg-apply', secs.length > 1);
+    showRow('hf-link', sec.index > 0);
+    showRow('hf-continue', sec.index > 0);
+    showRow('hf-start', sec.index === 0 || sec.restart !== undefined);
+    const pg = sec.page;
     const same = (a: { w: number; h: number }) => (Math.abs(pg.w - a.w) < 0.5 && Math.abs(pg.h - a.h) < 0.5) || (Math.abs(pg.w - a.h) < 0.5 && Math.abs(pg.h - a.w) < 0.5);
     put('pg-size', same(LETTER) ? 'letter' : same(A4) ? 'a4' : 'custom');
     put('pg-orient', pg.w > pg.h ? 'landscape' : 'portrait');
@@ -603,10 +651,13 @@ export class DocPanel {
     put('pg-cols', String(pg.cols ?? 1));
     put('pg-colGap', showLength(pg.colGap ?? COL_GAP, 'in'));
     // header and footer
-    const hf = t.hf;
+    const hf = sec.hf;
+    put('hf-link', sec.linked);
+    put('hf-format', sec.format);
+    put('hf-continue', sec.restart === undefined);
     put('hf-numbers', hf.numbers);
     put('hf-prefix', hf.prefix);
-    put('hf-start', String(hf.start));
+    put('hf-start', String(sec.restart ?? 1));
     put('hf-first', hf.onFirst);
     for (let i = 0; i < 3; i++) { put(`hf-header${i}`, hf.header[i]); put(`hf-footer${i}`, hf.footer[i]); }
   }
