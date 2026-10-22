@@ -23,13 +23,15 @@ import { Package, REL, NS, xml, hex6, emu, MediaFiles, structureAltText } from '
 import { facesToEmbed, newGuid, obfuscate, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
 import { BULLETS, fitParas, listInfo, paraCount, schemeOf, splitParagraphs } from '../text/paragraphs';
-import { BOX_PAD, COL_GAP, COMPOUND, END_FORMAT, FLOAT_GAP, FOOT_FORMAT, columnsOf, OBJECT_CHAR, SHADOWS, charStylesOf, watermarkPlace, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, pruneObjects, styleOf, runStyleOf, type CharStyle, type DocObject, type DocText, type FigureLook, type HeaderFooter, type NamedStyle, type PageBorder, type PageSetup, type Watermark } from '../document/document';
+import { BOX_PAD, COL_GAP, COMPOUND, END_FORMAT, FLOAT_GAP, FOOT_FORMAT, columnsOf, OBJECT_CHAR, SHADOWS, charStylesOf, watermarkPlace, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, pruneObjects, EMPTY_FORM, styleOf, runStyleOf, type CharStyle, type DocObject, type DocText, type FigureLook, type HeaderFooter, type NamedStyle, type PageBorder, type PageSetup, type Watermark } from '../document/document';
 import { ACS_LINE, GRID_LINE, bibHang, docCellAlign, shownSize } from '../document/doc-layout';
 import { sectionsOf, type Section } from '../document/sections';
 import { bibliography, piecesText, type Reference } from '../document/references';
 import { preferredStyle } from '../document/cite-styles';
 import { bibInstr, newZoteroPrefs, splitPrefs, writeCite } from '../document/live-cites';
 import { TOC_INDENT, tocEntries, tofEntries } from '../document/toc';
+import { INDEX_INDENT, authorities, indexInstr, indexItems, taInstr, toaInstr, toaItems, xeInstr, type ListItem } from '../document/index-toa';
+import { ALG_SIDS, type Protection } from '../document/protect';
 import { parseRev } from '../document/revisions';
 import { officeTarget } from '../links';
 import { cmtIds, initials, placedComments, type CommentThread } from '../document/comments';
@@ -97,6 +99,8 @@ class DocxWriter {
   private bookmarkId = 0;
   /** Content controls' ids (Mendeley Cite's citations). */
   private sdtId = 1;
+  /** Form fields' names (each is a bookmark in Word, so each must differ). */
+  private formNames = new Map<string, number>();
   private shown: Map<number, string>;
   /** Bookmark names of the captions that references point to, by the caption's number field. */
   private bookmarks = new Map<number, string>();
@@ -186,7 +190,7 @@ class DocxWriter {
     pkg.relate(main, DOCX_REL.numbering, 'numbering.xml');
     pkg.add('word/numbering.xml', this.numbering(), DOCX_CT.numbering);
     pkg.relate(main, DOCX_REL.settings, 'settings.xml');
-    const settings = (embed: boolean) => `${HEAD}<w:settings xmlns:w="${W_NS}"><w:zoom w:percent="100"/>${this.t.pageColor ? '<w:displayBackgroundShape/>' : ''}${embed ? '<w:embedTrueTypeFonts/><w:saveSubsetFonts/>' : ''}${this.t.track ? '<w:trackRevisions/>' : ''}<w:defaultTabStop w:val="720"/>` +
+    const settings = (embed: boolean) => `${HEAD}<w:settings xmlns:w="${W_NS}"><w:zoom w:percent="100"/>${this.t.pageColor ? '<w:displayBackgroundShape/>' : ''}${embed ? '<w:embedTrueTypeFonts/><w:saveSubsetFonts/>' : ''}${this.t.track ? '<w:trackRevisions/>' : ''}${protectionXml(this.t.protect)}<w:defaultTabStop w:val="720"/>` +
       `<w:characterSpacingControl w:val="doNotCompress"/>${notes}` +
       `<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`;
     pkg.add('word/settings.xml', settings(false), DOCX_CT.settings);
@@ -281,17 +285,21 @@ class DocxWriter {
       // numbered lists: a new Word list where our numbers start again
       if (ps.list === 'number' && lists[p].start) listNum = this.newList(`n${ps.scheme ?? ''}`);
       // a bibliography: its entries as paragraphs of their own, with any text round it in paragraphs before and after
-      const isBib = (r: TextRun) => r.obj !== undefined && ['bib', 'toc', 'tof'].includes(t.objects[r.obj]?.kind ?? '');
+      const isBib = (r: TextRun) => r.obj !== undefined && ['bib', 'toc', 'tof', 'index', 'toa'].includes(t.objects[r.obj]?.kind ?? '');
       if (runs.some(isBib)) {
         let part: TextRun[] = [];
+        // the paragraph's index entries and marked citations go with its first part
+        let own = ps;
+        const partPara = async () => { const x = await this.paragraph(main, own, part, listNum); own = { ...ps, xe: undefined, ta: undefined }; return x; };
         for (const r of runs) {
           if (!isBib(r)) { part.push(r); continue; }
-          if (part.some((x) => x.text)) out.push(await this.paragraph(main, ps, part, listNum));
+          if (part.some((x) => x.text)) out.push(await partPara());
           part = [];
           const o = t.objects[r.obj!];
-          out.push(o?.kind === 'toc' ? this.contents(o.levels, ps) : o?.kind === 'tof' ? this.figureList(o.name, ps) : this.bibliography(r.obj!, ps));
+          out.push(o?.kind === 'toc' ? this.contents(o.levels, ps) : o?.kind === 'tof' ? this.figureList(o.name, ps)
+            : o?.kind === 'index' ? this.indexField(o, ps) : o?.kind === 'toa' ? this.toaField(o, ps) : this.bibliography(r.obj!, ps));
         }
-        if (part.some((x) => x.text)) out.push(await this.paragraph(main, ps, part, listNum));
+        if (part.some((x) => x.text) || own.xe || own.ta) out.push(await partPara());
         close();
       } else out.push(await this.paragraph(main, ps, runs, listNum, p, sectXml));
       lastWasTable = false;
@@ -440,6 +448,9 @@ class DocxWriter {
     // the paragraph's bookmarks (Insert > Bookmark), round the whole paragraph
     const marks = (ps.marks ?? []).map((name) => ({ name, id: this.bookmarkId++ }));
     for (const m of marks) out.push(`<w:bookmarkStart w:id="${m.id}" w:name="${xml(m.name)}"/>`);
+    // index entries and marked citations (Word's XE and TA fields, hidden text with no result)
+    for (const m of ps.xe ?? []) out.push(markField(xeInstr(m)));
+    for (const m of ps.ta ?? []) out.push(markField(taInstr(m)));
     // links: each stretch of text with one link is a Word link round its runs
     let linked: string | undefined;
     const linkTo = (l: string | undefined) => {
@@ -576,6 +587,47 @@ class DocxWriter {
   }
 
   /**
+   * An index as Word's INDEX field: its lines as worked out here (Index 1 and Index 2 paragraphs,
+   * letter headings in Index Heading), which Word works out again with Update Field. Columns are
+   * the index's own section's (Insert Index puts it in one).
+   */
+  private indexField(o: Extract<DocObject, { kind: 'index' }>, ps: ParaStyle): string {
+    const pages = this.pages;
+    const items = indexItems(this.t, (p) => pages?.[p] ?? '', o.letters);
+    return this.listField(indexInstr(o), items, ps, !!o.right, (it) => (it.level === 0 ? 'IndexHeading' : it.level === 1 ? 'Index1' : 'Index2'));
+  }
+
+  /** A table of authorities as Word's TOA fields: one for each category listed (Word's way), each with its heading. */
+  private toaField(o: Extract<DocObject, { kind: 'toa' }>, ps: ParaStyle): string {
+    const pages = this.pages;
+    const cats = o.cat ? [o.cat] : [...new Set(authorities(this.t).map((a) => a.cat))].sort((a, b) => a - b);
+    if (!cats.length) cats.push(1);
+    return cats.map((c) => this.listField(toaInstr(c, o.passim), toaItems(this.t, c, (p) => pages?.[p] ?? '', o.passim), ps, true, (it) => (it.level === 0 ? 'TOAHeading' : 'TableofAuthorities'))).join('');
+  }
+
+  /** A field whose result is lines of paragraphs (an index, a table of authorities), each in its style, the pages after a comma or a tab. */
+  private listField(instr: string, items: ListItem[], ps: ParaStyle, right: boolean, style: (it: ListItem) => string): string {
+    const t = this.t;
+    const textW = Math.max(36, t.page.w - t.page.left - t.page.right);
+    const dirty = this.pages ? '' : ' w:dirty="true"';
+    const begin = `<w:r><w:fldChar w:fldCharType="begin"${dirty}/></w:r><w:r><w:instrText xml:space="preserve">${xml(instr)}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>`;
+    const end = '<w:r><w:fldChar w:fldCharType="end"/></w:r>';
+    const line = ps.line && ps.line !== 1 ? ` w:line="${Math.round(240 * ps.line)}" w:lineRule="auto"` : '';
+    const paras = items.map((it, i) => {
+      const tabs = right && it.level ? `<w:tabs><w:tab w:val="right" w:leader="dot" w:pos="${twips(textW)}"/></w:tabs>` : '';
+      const pPr = `<w:pPr><w:pStyle w:val="${style(it)}"/>${tabs}<w:spacing w:before="0" w:after="0"${line}/></w:pPr>`;
+      let body = it.level === 0 ? run('<w:b/>', it.text) : run('', it.text);
+      if (it.level) {
+        it.pages.forEach((pg, k) => { body += run('', k === 0 ? (right ? '\t' : ', ') : ', ') + run(`${pg.bold ? '<w:b/>' : ''}${pg.italic ? '<w:i/>' : ''}`, pg.label); });
+        if (it.see) body += run('', it.pages.length || !right ? '. ' : '\t') + run('<w:i/>', it.see.split(/\s+/)[0]) + run('', it.see.slice(it.see.split(/\s+/)[0].length));
+      }
+      return `<w:p>${pPr}${i === 0 ? begin : ''}${body}${i === items.length - 1 ? end : ''}</w:p>`;
+    });
+    if (!paras.length) paras.push(`<w:p>${begin}${end}</w:p>`);
+    return paras.join('');
+  }
+
+  /**
    * Word's footnotes and endnotes parts: the lines Word draws above the notes (its separators),
    * then each note's paragraphs in the Footnote Text (or Endnote Text) style, its number first.
    * Gives the settings that name the separators (empty when there are no notes).
@@ -660,7 +712,8 @@ class DocxWriter {
       const tag = o.end ? 'endnote' : 'footnote';
       return n === undefined ? '' : `<w:r><w:rPr><w:rStyle w:val="${o.end ? 'EndnoteReference' : 'FootnoteReference'}"/>${runProps({ ...r, sup: undefined }, st, {})}</w:rPr><w:${tag}Reference w:id="${n}"/></w:r>`;
     }
-    if (o.kind === 'bib' || o.kind === 'toc' || o.kind === 'tof' || o.kind === 'math') return '';
+    if (o.kind === 'form') return formField(o, rPr, this.formNames, this.bookmarkId++);
+    if (o.kind === 'bib' || o.kind === 'toc' || o.kind === 'tof' || o.kind === 'index' || o.kind === 'toa' || o.kind === 'math') return '';
     if (o.kind === 'textbox') return this.textBox(main, id, o, rPr);
     return this.picture(main, id, o, rPr);
   }
@@ -1054,6 +1107,15 @@ class DocxWriter {
     if (Object.values(t.objects).some((o) => o.kind === 'tof')) {
       out.push(`<w:style w:type="paragraph" w:styleId="TableofFigures"><w:name w:val="table of figures"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="99"/><w:unhideWhenUsed/><w:pPr><w:spacing w:after="0"/><w:jc w:val="left"/></w:pPr></w:style>`);
     }
+    // the index's and table of authorities' lines (Word's own "index 1", "index 2", "index heading", "table of authorities", "toa heading")
+    if (Object.values(t.objects).some((o) => o.kind === 'index')) {
+      for (const n of [1, 2]) out.push(`<w:style w:type="paragraph" w:styleId="Index${n}"><w:name w:val="index ${n}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:autoRedefine/><w:uiPriority w:val="99"/><w:unhideWhenUsed/><w:pPr><w:spacing w:after="0"/><w:ind w:left="${twips(n * INDEX_INDENT)}" w:hanging="${twips(INDEX_INDENT)}"/><w:jc w:val="left"/></w:pPr></w:style>`);
+      out.push(`<w:style w:type="paragraph" w:styleId="IndexHeading"><w:name w:val="index heading"/><w:basedOn w:val="Normal"/><w:next w:val="Index1"/><w:uiPriority w:val="99"/><w:unhideWhenUsed/><w:pPr><w:keepNext/><w:spacing w:before="${twips(normal.size)}" w:after="${twips(normal.size / 4)}"/><w:jc w:val="left"/></w:pPr><w:rPr><w:b/><w:bCs/></w:rPr></w:style>`);
+    }
+    if (Object.values(t.objects).some((o) => o.kind === 'toa')) {
+      out.push(`<w:style w:type="paragraph" w:styleId="TableofAuthorities"><w:name w:val="table of authorities"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="99"/><w:unhideWhenUsed/><w:pPr><w:spacing w:after="0"/><w:ind w:left="${twips(INDEX_INDENT)}" w:hanging="${twips(INDEX_INDENT)}"/><w:jc w:val="left"/></w:pPr></w:style>`);
+      out.push(`<w:style w:type="paragraph" w:styleId="TOAHeading"><w:name w:val="toa heading"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="99"/><w:unhideWhenUsed/><w:pPr><w:keepNext/><w:spacing w:before="${twips(normal.size)}" w:after="${twips(normal.size / 4)}"/><w:jc w:val="left"/></w:pPr><w:rPr><w:b/><w:bCs/></w:rPr></w:style>`);
+    }
     // footnotes and endnotes: Word's own styles for their text and their numbers
     if (Object.values(t.objects).some((o) => o.kind === 'note')) {
       const ns = noteStyle(t);
@@ -1242,6 +1304,53 @@ function fieldStart(rPr: string, instr: string, data?: string): string {
   const pieces = instr.match(/(?:&[a-z#0-9]+;|[^&]){1,255}/gi) ?? [instr];
   const text = pieces.map((p) => `<w:r>${pr}<w:instrText xml:space="preserve">${p}</w:instrText></w:r>`).join('');
   return `<w:r>${pr}${begin}</w:r>${text}${inner}<w:r>${pr}<w:fldChar w:fldCharType="separate"/></w:r>`;
+}
+
+/** A field with no result (an index entry, a marked citation): Word keeps it as hidden text. */
+function markField(instr: string): string {
+  return `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve">${xml(instr)}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>`;
+}
+
+/**
+ * Restrict Editing as Word's w:documentProtection: what can be changed, enforced, and the
+ * password's hash in the attributes Word writes (its hash algorithm by number: 14 is SHA-512).
+ */
+function protectionXml(p: Protection | undefined): string {
+  if (!p) return '';
+  const pw = p.hash && p.salt
+    ? ` w:cryptProviderType="rsaAES" w:cryptAlgorithmClass="hash" w:cryptAlgorithmType="typeAny" w:cryptAlgorithmSid="${ALG_SIDS[p.alg ?? 'SHA-512'] ?? 14}" w:cryptSpinCount="${p.spin ?? 100000}" w:hash="${xml(p.hash)}" w:salt="${xml(p.salt)}"`
+    : '';
+  return `<w:documentProtection w:edit="${p.edit}" w:enforcement="1"${pw}/>`;
+}
+
+/**
+ * A form field as Word's legacy form field: its settings (w:ffData) on the field's start, its
+ * name, and a text field's entry or a drop-down's choice as the result.
+ */
+function formField(o: Extract<DocObject, { kind: 'form' }>, rPr: string, names: Map<string, number>, mark: number): string {
+  const base = o.type === 'check' ? 'Check' : o.type === 'drop' ? 'Dropdown' : 'Text';
+  let name = (o.name ?? '').replace(/[^\w]/g, '').slice(0, 20);
+  if (!name || names.has(name)) { let n = names.size + 1; while (names.has(`${base}${n}`)) n++; name = `${base}${n}`; }
+  names.set(name, 1);
+  const help = o.help ? `<w:helpText w:type="text" w:val="${xml(o.help.slice(0, 255))}"/><w:statusText w:type="text" w:val="${xml(o.help.slice(0, 138))}"/>` : '';
+  let kindXml: string, instr: string, result = '';
+  if (o.type === 'check') {
+    kindXml = `<w:checkBox><w:sizeAuto/><w:default w:val="0"/>${o.checked ? '<w:checked/>' : ''}</w:checkBox>`;
+    instr = ' FORMCHECKBOX ';
+  } else if (o.type === 'drop') {
+    const items = (o.items ?? []).slice(0, 25);
+    const at = Math.max(0, items.indexOf(o.value ?? ''));
+    kindXml = `<w:ddList>${at ? `<w:result w:val="${at}"/>` : ''}${items.map((x) => `<w:listEntry w:val="${xml(x)}"/>`).join('')}</w:ddList>`;
+    instr = ' FORMDROPDOWN ';
+  } else {
+    kindXml = '<w:textInput/>';
+    instr = ' FORMTEXT ';
+    result = o.value || EMPTY_FORM;
+  }
+  const pr = rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
+  const ff = `<w:ffData><w:name w:val="${xml(name)}"/><w:enabled/><w:calcOnExit w:val="0"/>${help}${kindXml}</w:ffData>`;
+  return `<w:bookmarkStart w:id="${mark}" w:name="${xml(name)}"/><w:r>${pr}<w:fldChar w:fldCharType="begin">${ff}</w:fldChar></w:r><w:r>${pr}<w:instrText xml:space="preserve">${instr}</w:instrText></w:r>` +
+    `${result ? `<w:r>${pr}<w:fldChar w:fldCharType="separate"/></w:r>${run(rPr, result)}` : ''}<w:r>${pr}<w:fldChar w:fldCharType="end"/></w:r><w:bookmarkEnd w:id="${mark}"/>`;
 }
 
 /** A run of text (tabs as Word's tabs). */

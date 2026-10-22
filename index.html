@@ -249,6 +249,13 @@
     <button data-modes="slides design document" role="menuitem" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha), shown as maths; a Word or PowerPoint equation in .docx and .pptx files">Equation…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-toc" title="The headings (Heading 1, 2, 3) with their page numbers; it updates by itself">Table of Contents…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-tof" title="The Figure, Scheme, Table or Chart captions with their page numbers; it updates by itself">Table of Figures…</button>
+    <button data-modes="document" role="menuitem" data-cmd="mark-entry" title="Mark the selected word or phrase as an index entry (Alt+Shift+X)">Mark Index Entry…</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-index" title="The entries marked, A to Z, with their page numbers; it updates by itself">Index…</button>
+    <button data-modes="document" role="menuitem" data-cmd="mark-citation" title="Mark the selected authority for the table of authorities (Alt+Shift+I)">Mark Citation…</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-toa" title="The authorities marked, by category, with their pages; it updates by itself">Table of Authorities…</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-form-text" title="A text form field to fill in">Text Form Field…</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-form-check" title="A check box form field">Check Box Form Field…</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-form-drop" title="A drop-down form field">Drop-Down Form Field…</button>
     <button role="menuitem" data-cmd="insert-symbol" title="Greek letters, arrows, maths and chemistry signs, accented letters: find one by name (degree, angstrom) or code, with the ones you used lately first">Symbol…</button>
     <button role="menuitem" data-cmd="insert-link" title="Link the selected text to a web page, a DOI, a file or a place in this file (Ctrl+K while typing). Ctrl+click a link to follow it">Link…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-bookmark" title="Name the paragraph the caret is in, so links can go to it (Ctrl+Shift+F5)">Bookmark…</button>
@@ -1350,6 +1357,20 @@
       </div>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-doc="mark-entry" title="Mark Entry (Alt+Shift+X): the selected word or phrase as an index entry (or a subentry), here or wherever it comes up (Mark All)"><span class="rb-icon">✓≡</span>Mark Entry</button>
+          <button class="rb-big" data-doc="insert-index" title="Insert Index: the entries marked, A to Z, with their page numbers, in columns. It updates by itself; double-click it to change its columns and look"><span class="rb-icon">A–Z</span>Insert Index</button>
+        </div>
+        <div class="rb-label">Index</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="mark-citation" title="Mark Citation (Alt+Shift+I): the selected case, statute, rule or other authority for the table of authorities, with its long and short forms and its category"><span class="rb-icon">§✓</span>Mark Citation</button>
+          <button class="rb-big" data-doc="insert-toa" title="Insert Table of Authorities: the citations marked, by category, each with the pages it is cited on (or passim). It updates by itself; double-click it to change it"><span class="rb-icon">§≡</span>Table of Authorities</button>
+        </div>
+        <div class="rb-label">Table of Authorities</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-doc="compound-number" title="A bold compound number: a new compound gets the next number, and mentions of it follow when numbers change"><span class="rb-icon"><b>1</b></span>Compound Number</button>
         </div>
         <div class="rb-label">Compounds</div>
@@ -1408,6 +1429,17 @@
           <button class="rb-big" data-doc="show-comments" aria-pressed="true" title="Show the comments beside the page, or hide them"><span class="rb-icon">☰</span>Show Comments</button>
         </div>
         <div class="rb-label">Comments</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="restrict-editing" aria-pressed="false" title="Restrict Editing: let the document be read but changed only by adding comments, only with changes tracked, only by filling in its form fields, or not at all, with a password if wanted (kept as Word keeps it). Click again to stop the protection"><span class="rb-icon">🔒</span>Restrict Editing</button>
+          <div class="rb-col">
+            <button data-doc="insert-form-text" title="A text form field: a shaded box to type an entry into, also when the document is protected for filling in forms (Word's legacy form field)">▭ Text Field</button>
+            <button data-doc="insert-form-check" title="A check box form field, ticked or not with a click">☐ Check Box</button>
+            <button data-doc="insert-form-drop" title="A drop-down form field: one of a list of items">▾ Drop-Down</button>
+          </div>
+        </div>
+        <div class="rb-label">Protect</div>
       </div>
     </div>
     <div class="rb-panel" data-doc-panel="view" hidden>

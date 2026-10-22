@@ -321,6 +321,34 @@ export interface ParaStyle {
   scheme?: string;
   /** Documents: a bulleted list item's own bullet (from the bullet library), in place of its level's. */
   bullet?: string;
+  /** Documents: index entries marked in this paragraph (References > Mark Entry; Word's XE fields). */
+  xe?: IndexMark[];
+  /** Documents: citations marked here for a table of authorities (References > Mark Citation; Word's TA fields). */
+  ta?: AuthorityMark[];
+}
+
+/**
+ * An index entry (Word's XE field): the word or phrase listed, and the entry under it when it is a
+ * subentry ("Aldol reaction: asymmetric"); its page number, in bold or italic if chosen, or
+ * instead a cross-reference ("See Enolates") in place of the page.
+ */
+export interface IndexMark {
+  main: string;
+  sub?: string;
+  see?: string;
+  bold?: boolean;
+  italic?: boolean;
+}
+
+/**
+ * A citation in a table of authorities (Word's TA field): its short form, which every mention
+ * of it shares, and, on the one marked first, its long form (as listed) and its category (1
+ * Cases, 2 Statutes and so on: see index-toa.ts).
+ */
+export interface AuthorityMark {
+  short: string;
+  long?: string;
+  cat?: number;
 }
 
 /** A tab stop: where text after a tab lines up, and how (Word's left, centre, right and decimal tabs), with dots or a line leading to it. */
