@@ -50,6 +50,8 @@ import type { WorkbookTheme } from '../sheet/themes';
 import { themeOf } from '../sheet/themes';
 import type { CustomView } from '../sheet/views';
 import { seenSparkId } from '../sheet/sparklines';
+import { type CompoundCard, isCard } from '../sheet/compound';
+import { type Query, seenQueryId } from '../sheet/query';
 export { applyTint };
 
 /** Pictures of structures for Excel (the app draws them; tests use stand-ins). */
@@ -145,7 +147,8 @@ export const BUILTIN_FORMATS: Record<number, string> = {
   45: 'mm:ss', 46: '[h]:mm:ss', 47: 'mmss.0', 48: '##0.0E+0', 49: '@',
 };
 
-const CHEM_FUNCTION = new RegExp(`\\b(${[...Object.keys(PROPERTIES), ...Object.keys(ISOTOPE_FUNCTIONS)].join('|')})\\s*\\(`, 'i');
+// FIELDVALUE too: Excel has it, but for its own data types, and would find no compound here
+const CHEM_FUNCTION = new RegExp(`\\b(${[...Object.keys(PROPERTIES), ...Object.keys(ISOTOPE_FUNCTIONS), 'FIELDVALUE'].join('|')})\\s*\\(`, 'i');
 // Functions newer than Excel 2007 are written in the file with a prefix (_xlfn.), which Excel
 // needs to know them; reading a file takes the prefix off, so saving puts it back.
 const XLFN = new Set(['AGGREGATE', 'BETA.DIST', 'BETA.INV', 'BINOM.DIST', 'BINOM.INV', 'CEILING.MATH', 'CHISQ.DIST', 'CHISQ.DIST.RT',
@@ -204,6 +207,8 @@ interface ModelCell {
   spill?: [number, number];
   /** Worked out by its property column. */
   computed?: true;
+  /** Data > Data Types > Compound: the cell's card (Excel is given the compound's name). */
+  compound?: CompoundCard;
 }
 
 interface ModelSheet {
@@ -233,6 +238,8 @@ interface Model {
   sheets: ModelSheet[];
   /** Custom views as this program holds them (Excel's copy can't say which rows each hides, or its print settings). */
   customViews?: CustomView[];
+  /** Data > Get Data: the queries and their steps (Excel is given the tables they loaded). */
+  queries?: Query[];
 }
 
 // ---------------------------------------------------------------- writing: styles
@@ -404,7 +411,7 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures, opts: { macr
   const vba = opts.macros ? book.macros : null;
   const styles = new Styles(book.theme);
   const strings = new Strings();
-  const model: Model = { app: 'Chem Illustrator', version: 1, drawingStyle: book.drawingStyle, sheets: [], ...(book.customViews.length ? { customViews: book.customViews } : {}) };
+  const model: Model = { app: 'Chem Illustrator', version: 1, drawingStyle: book.drawingStyle, sheets: [], ...(book.customViews.length ? { customViews: book.customViews } : {}), ...(book.queries.length ? { queries: book.queries } : {}) };
   const sheetEntries: string[] = [];
   const filterNames: string[] = [];
   const printTitleNames: string[] = [];
@@ -501,6 +508,7 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures, opts: { macr
           if (dynamic) { arrayRef = sp ? rangeName(sp) : ref; anyDynamic = true; }
         }
         if (!entry && fix) entry = { r, c, wrote: null, fix };
+        if (cell?.compound) entry = { ...(entry ?? { r, c, wrote: null }), compound: cell.compound };
         if (entry) ms.cells.push(entry);
         // a structure's SMILES is in its cell, hidden under the picture (the format ;;; shows nothing)
         const xf = styles.xf(cell?.structure ? { ...style, numFmt: HIDDEN } : style);
@@ -1224,6 +1232,7 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
             }
           }
           else s.setCell(m.r, m.c, { input: cur?.input, style });
+          if (m.compound && isCard(m.compound)) { const x = s.cell(m.r, m.c); s.setCell(m.r, m.c, { ...x, compound: m.compound }); }
         }
         if (ms.filter && afRange && sameRange(ms.filter.range, afRange)) {
           const i = filters.findIndex((x) => x.s === s);
@@ -1379,6 +1388,11 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
       });
     }
     if (names.length) book.setNames(names);
+    if (Array.isArray(model?.queries)) {
+      const qs = model.queries.filter((q) => q && typeof q.id === 'number' && typeof q.name === 'string' && q.source && Array.isArray(q.steps));
+      for (const q of qs) seenQueryId(q.id);
+      if (qs.length) book.setQueries(qs);
+    }
     if (workbookTheme) book.setTheme(workbookTheme);
     // custom views: our own copy where Excel's list still names the same ones
     const views = readCustomViews(root, sheetDocs);

@@ -109,7 +109,18 @@
     <button role="menuitem" data-cmd="goal-seek">Goal Seek…</button>
     <button role="menuitem" data-cmd="data-table">Data Table…</button>
     <button role="menuitem" data-cmd="solver">Solver…</button>
-    <button role="menuitem" data-cmd="refresh-all">Refresh All PivotTables</button>
+    <button role="menuitem" data-cmd="refresh-all">Refresh All</button>
+    </div>
+    </div>
+    <div class="submenu" data-modes="sheet">
+    <button role="menuitem" class="has-sub" aria-haspopup="menu" aria-expanded="false">Get Data</button>
+    <div class="menu sub" role="menu" hidden>
+    <button role="menuitem" data-cmd="from-text">From Text/CSV…</button>
+    <button role="menuitem" data-cmd="from-json">From JSON…</button>
+    <button role="menuitem" data-cmd="from-web">From Web…</button>
+    <button role="menuitem" data-cmd="from-workbook">From Workbook…</button>
+    <button role="menuitem" data-cmd="queries-pane">Queries &amp; Connections</button>
+    <button role="menuitem" data-cmd="compound" title="Look the names in the cells picked up on PubChem and make them compounds">Data Type: Compound</button>
     </div>
     </div>
     <button data-modes="sheet document" role="menuitem" data-cmd="find">Find…</button>
@@ -686,9 +697,23 @@
     <div class="rb-panel" data-sh-panel="data" hidden>
       <div class="rb-group">
         <div class="rb-row">
-          <button class="rb-big" data-sh="refresh-all" title="Refresh All: every PivotTable in the workbook reads its records again (formulas and data tables recalculate by themselves)"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M15.5 7.5A6 6 0 1 0 16 12"/><path d="M16 3.5v4h-4"/></svg></span>Refresh All</button>
+          <button class="rb-big" data-sh="get-data" title="Get Data: read a CSV or text file, a JSON file, a web page's tables or another workbook into a table, through the Query Editor's steps (remove columns, split, filter, change type, unpivot…), which Refresh runs again"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><ellipse cx="7.5" cy="4.5" rx="5" ry="2"/><path d="M2.5 4.5v8c0 1.1 2.2 2 5 2"/><path d="M12.5 4.5v4"/><rect x="10.5" y="10.5" width="7" height="6.5" rx="0.8"/><path d="M10.5 13h7M13 10.5v6.5"/></svg></span>Get Data ▾</button>
+          <button class="rb-big" data-sh="refresh-all" title="Refresh All: every query reads its source again and runs its steps, then every PivotTable reads its records again (formulas and data tables recalculate by themselves)"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M15.5 7.5A6 6 0 1 0 16 12"/><path d="M16 3.5v4h-4"/></svg></span>Refresh All</button>
+          <div class="rb-col">
+            <button data-sh="queries-pane" title="Queries &amp; Connections: the workbook's queries, each with Edit, Refresh, Go to and Delete">Queries &amp; Connections</button>
+          </div>
         </div>
-        <div class="rb-label">Queries</div>
+        <div class="rb-label">Get &amp; Transform Data</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="compound" title="Compound: the names (or drawn structures) in the cells picked are looked up on PubChem and become compounds, each with a card of its properties (formula, MW, CAS, SMILES, logP, melting and boiling points, density, hazards…) shown in the side panel. FIELDVALUE(A2,&quot;Molecular weight&quot;) reads a field. Only the name or SMILES is sent"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M10 2.5l6.5 3.75v7.5L10 17.5l-6.5-3.75v-7.5z"/><path d="M10 5.5l4 2.3v4.4l-4 2.3-4-2.3V7.8z" stroke-opacity="0.55"/></svg></span>Compound</button>
+          <div class="rb-col">
+            <button data-sh="data-types" title="Data Types: Compound with or without measured properties (faster), Insert Data, Refresh Compound Data and Convert to Text">Data Types ▾</button>
+            <button data-sh="insert-data" title="Insert Data: a column of one of the compound's fields (MW, CAS, density…) beside the compounds, as FIELDVALUE formulas">Insert Data ▾</button>
+          </div>
+        </div>
+        <div class="rb-label">Data Types</div>
       </div>
       <div class="rb-group">
         <div class="rb-row">

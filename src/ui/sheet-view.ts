@@ -1406,7 +1406,9 @@ export class SheetView {
         if (cell?.structure) this.drawStructure(cell.structure, x, y, w, h, style, budget);
         else if (look?.hideValue) { /* only the bar or icon shows */ }
         else if (v !== undefined && v !== null && v !== '' && c > spillUntil) {
-          const last = this.drawText(rr, cc, x, y, w, h, style, g, X);
+          // a compound (Data > Data Types): its mark before the name, as Excel marks its data types
+          const mark = cell?.compound ? this.drawCompoundMark(x, y, h) : 0;
+          const last = this.drawText(rr, cc, x + mark, y, w - mark, h, style, g, X);
           if (last > c) spillUntil = last;
         }
         if (style?.borders) borders.push(() => this.drawBorders(style.borders!, x, y, w, h));
@@ -1797,6 +1799,28 @@ export class SheetView {
   }
 
   /** Draw a cell's text; returns the last column its text spills into. */
+  /** A compound cell's mark: a small ring at the left of the cell. Returns the room it takes. */
+  private drawCompoundMark(x: number, y: number, h: number): number {
+    const ctx = this.ctx, z = this.zoom;
+    const r = 4.2 * z, cx = x + 3 * z + r, cy = y + h - Math.min(h, 20 * z) / 2 - 0.5;
+    ctx.save();
+    ctx.strokeStyle = '#2b6cb0';
+    ctx.lineWidth = Math.max(1, 1.1 * z);
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = Math.PI / 6 + (i * Math.PI) / 3;
+      const px = cx + r * Math.cos(a), py = cy + r * Math.sin(a);
+      if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    return 2 * r + 4 * z;
+  }
+
   private drawText(r: number, c: number, x: number, y: number, w: number, h: number, style: CellStyle | undefined, g: Region, X: (c: number) => number): number {
     const s = this.sheet!;
     const ctx = this.ctx;

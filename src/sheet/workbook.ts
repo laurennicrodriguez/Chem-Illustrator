@@ -32,6 +32,8 @@ import { SparklineGroup, moveSparklines } from './sparklines';
 import type { OutlineSettings } from './outline';
 import { type SheetViewOpts, type CustomView, renameInViews } from './views';
 import type { WorkbookTheme } from './themes';
+import { type CompoundCard, fieldValue } from './compound';
+import type { Query } from './query';
 
 export type BorderStyle = 'thin' | 'medium' | 'thick' | 'double' | 'dashed' | 'dotted';
 export interface Border { style: BorderStyle; color?: string }
@@ -91,6 +93,8 @@ export interface Cell {
   style?: CellStyle;
   /** Where the cell links to (Insert > Link): a web page, a DOI, a file or a place (#Sheet1!A1); see links.ts. */
   link?: string;
+  /** Data > Data Types > Compound: what PubChem knows about the compound named in the cell. */
+  compound?: CompoundCard;
 }
 
 /** A property column: every row from `firstRow` down to the end of the table works out this formula. */
@@ -176,7 +180,7 @@ export function makeStructure(contents: Contents): Structure {
 }
 
 /** A cell with nothing in it and no formatting. */
-const isBlankCell = (c: Cell | undefined): boolean => !c || (!c.input && !c.structure && !c.link && !hasStyle(c.style));
+const isBlankCell = (c: Cell | undefined): boolean => !c || (!c.input && !c.structure && !c.link && !c.compound && !hasStyle(c.style));
 const hasStyle = (s: CellStyle | undefined): boolean => !!s && Object.values(s).some((v) => v !== undefined);
 
 const sameStyle = (a: CellStyle | undefined, b: CellStyle | undefined): boolean =>
@@ -186,7 +190,7 @@ const sameStyle = (a: CellStyle | undefined, b: CellStyle | undefined): boolean 
 function sameCell(a: Cell | undefined, b: Cell | undefined): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  return (a.input || undefined) === (b.input || undefined) && a.structure === b.structure && a.link === b.link && sameStyle(a.style, b.style);
+  return (a.input || undefined) === (b.input || undefined) && a.structure === b.structure && a.link === b.link && a.compound === b.compound && sameStyle(a.style, b.style);
 }
 
 /** Two styles merged, the second's settings winning. */
@@ -223,7 +227,7 @@ const VALUE_FIELDS = new Set<string>(['merges', 'filter', 'frozen', 'split', 'na
 
 interface Change {
   sheet: Sheet | null; // null: the workbook's list of sheets, its names, theme or custom views
-  field: MapField | ValueField | 'sheets' | 'names' | 'theme' | 'customViews';
+  field: MapField | ValueField | 'sheets' | 'names' | 'theme' | 'customViews' | 'queries';
   key: number;
   before: unknown;
   after: unknown;
@@ -511,6 +515,13 @@ export class Sheet {
   setLink(row: number, col: number, link: string | undefined): void {
     const old = this.cell(row, col);
     this.setCell(row, col, { ...old, style: old ? old.style : this.colStyles.get(col), link });
+  }
+
+  /** Make a cell a compound (Data > Data Types > Compound), showing its name; undefined makes it plain text again. */
+  setCompound(row: number, col: number, card: CompoundCard | undefined): void {
+    const old = this.cell(row, col);
+    if (card) this.setCell(row, col, { input: valueInput(card.name), style: old ? old.style : this.colStyles.get(col), link: old?.link, structure: old?.structure, compound: card });
+    else if (old?.compound) this.setCell(row, col, { ...old, compound: undefined });
   }
 
   /** Put a drawing in a cell (null takes it out). */
@@ -1137,7 +1148,7 @@ const READER_COLS = 1 << 15;
 
 /** Changes that leave every value as it was. */
 const NO_VALUES = new Set<string>(['colWidths', 'rowHeights', 'colStyles', 'hiddenRows', 'hiddenCols', 'merges', 'filter', 'frozen', 'split', 'condFormats', 'tables', 'charts', 'dashboard', 'notes', 'validations', 'objects', 'pageSetup', 'pivots',
-  'rowLevels', 'colLevels', 'sparklines', 'viewOpts', 'outline', 'theme', 'customViews']);
+  'rowLevels', 'colLevels', 'sparklines', 'viewOpts', 'outline', 'theme', 'customViews', 'queries']);
 
 const isFormulaText = (t: string | undefined): boolean => !!t && t.startsWith('=') && t.length > 1;
 
@@ -1208,6 +1219,8 @@ export class Workbook {
   theme: WorkbookTheme | null = null;
   /** View > Custom Views: named views of the workbook to go back to. */
   customViews: CustomView[] = [];
+  /** Data > Get Data: the queries that read data from files and the web into tables, with their steps. */
+  queries: Query[] = [];
   /** Counts changes (edits, undos and redos), so the file knows when it has unsaved changes. */
   edits = 0;
   /** Called after every change, undo and redo. */
@@ -1335,6 +1348,7 @@ export class Workbook {
     }
     if (c.field === 'theme') { this.theme = v as WorkbookTheme | null; return; }
     if (c.field === 'customViews') { this.customViews = v as CustomView[]; return; }
+    if (c.field === 'queries') { this.queries = v as Query[]; return; }
     const s = c.sheet!;
     if (VALUE_FIELDS.has(c.field)) {
       (s as unknown as Record<string, unknown>)[c.field] = v;
@@ -1372,6 +1386,13 @@ export class Workbook {
     const before = this.customViews;
     this.customViews = list.slice();
     this.record({ sheet: null, field: 'customViews', key: 0, before, after: this.customViews });
+  }
+
+  /** Change the queries (Data > Get Data), as one recorded change. */
+  setQueries(list: Query[]): void {
+    const before = this.queries;
+    this.queries = list.slice();
+    this.record({ sheet: null, field: 'queries', key: 0, before, after: this.queries });
   }
 
   /** The names that apply (a deleted sheet's own names are gone with it). */
@@ -1752,11 +1773,12 @@ export class Workbook {
       if (c.field !== 'cells') {
         // formatting, sizes, hidden rows, rules and charts change no value (but SUBTOTAL leaves out hidden rows)
         if (c.field === 'hiddenRows' && this.usesSubtotal()) return false;
-        if ((c.sheet || c.field === 'theme' || c.field === 'customViews') && NO_VALUES.has(c.field)) continue;
+        if ((c.sheet || c.field === 'theme' || c.field === 'customViews' || c.field === 'queries') && NO_VALUES.has(c.field)) continue;
         return false;
       }
       const before = c[now === 'after' ? 'before' : 'after'] as Cell | undefined, after = c[now] as Cell | undefined;
-      if (before?.input === after?.input && before?.structure === after?.structure) continue;
+      if (before?.input === after?.input && before?.structure === after?.structure && before?.compound === after?.compound) continue;
+      if (before?.compound !== after?.compound) return false;
       if (before?.structure || after?.structure || isFormulaText(before?.input) || isFormulaText(after?.input)) return false;
       const s = c.sheet!, si = this.sheets.indexOf(s);
       if (si < 0) return false;
@@ -2132,6 +2154,11 @@ export class Workbook {
         const s = sheetOf(sheet);
         if (!s) return ERR.ref();
         return s.spills.get(keyOf(row, col)) ?? ERR.ref(`${cellName(row, col)} has no array spilling from it`);
+      },
+      field: (sheet, row, col, name) => {
+        const card = sheetOf(sheet)?.cell(row, col)?.compound;
+        if (!card) return undefined;
+        return fieldValue(card, name) ?? null;
       },
       molecule: (src) => {
         if (!this.chem) return ERR.busy();
