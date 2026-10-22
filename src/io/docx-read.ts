@@ -15,6 +15,7 @@ import { ACS_1996, type DocStyle } from '../style';
 import * as rt from '../richtext';
 import { PackageReader, REL, kid, kids, rAttr, fromEmu } from './ooxml';
 import { dataUrl, imageSize, pictureMime } from '../render/images';
+import { drawingInEmf } from '../render/emf';
 import { cleanPara } from '../text/paragraphs';
 import { SINGLE, type Measure } from '../text/layout';
 import { arialWidth } from '../text-metrics';
@@ -39,6 +40,8 @@ import { listIndent, tableText } from './docx-write';
 export interface DocxReadDeps {
   /** A ChemDraw drawing (CDX data) as a drawing in the document's style; null when it can't be read. */
   chemdraw?(cdx: Uint8Array, style: DocStyle): Contents | null;
+  /** A drawing saved as CDXML (from inside a picture copied out of Chem Illustrator) in the document's style. */
+  cdxml?(text: string, style: DocStyle): Contents | null;
   /** A drawing's own size in points (so it keeps the size it had in Word). */
   drawingSize?(contents: Contents, style: DocStyle): { w: number; h: number } | null;
   /** A table as a drawing, laid out with the fonts on screen (else with published font widths). */
@@ -1017,6 +1020,9 @@ class DocxReader {
     const mime = EXT_MIME[ext] ?? pictureMime(path ?? '', bytes);
     if (!mime) return;
     if (mime === 'image/x-wmf') this.warn('wmf');
+    // a picture pasted into Word from Chem Illustrator: the drawing rides inside it
+    const inside = mime === 'image/x-emf' ? drawingInEmf(bytes) : null;
+    if (inside && this.drawingAt(this.deps.cdxml?.(inside, this.drawingStyle) ?? null, shown, r, ctx, look, float)) return;
     const px = imageSize(bytes, mime) ?? undefined;
     this.emitObject(ctx, { kind: 'picture', src: dataUrl(bytes, mime), w: round(shown.w), h: round(shown.h), px, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r);
   }
@@ -1061,6 +1067,11 @@ class DocxReader {
     } catch {
       contents = null;
     }
+    return this.drawingAt(contents, shown, r, ctx);
+  }
+
+  /** A drawing in place of a picture, kept at the size the picture had. False when there is none. */
+  private drawingAt(contents: Contents | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx, look?: FigureLook | null, float?: Float | null): boolean {
     if (!contents) return false;
     const own = this.deps.drawingSize?.(contents, this.drawingStyle);
     let scale: number | undefined;
@@ -1068,7 +1079,7 @@ class DocxReader {
       const natural = shownSize(own, 1, this.textW);
       if (Math.abs(natural.w - shown.w) > 0.01 * shown.w) scale = round(shown.w / own.w, 1e4);
     }
-    return this.emitObject(ctx, { kind: 'drawing', contents, scale }, r) !== null || ctx.cell;
+    return this.emitObject(ctx, { kind: 'drawing', contents, scale, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r) !== null || ctx.cell;
   }
 
   // ---------------------------------------------------------------- tables

@@ -25,7 +25,7 @@ import { tableBorders } from './cdxml-table';
 import { writeCdxml } from './cdxml-write';
 import { extractDrawing } from './clipboard';
 import type { Selection } from '../editor/editor';
-import { Package, NS, REL, emu, xml, xmlAttr, hex6, MediaFiles } from './ooxml';
+import { Package, NS, REL, emu, xml, xmlAttr, hex6, MediaFiles, structureAltText } from './ooxml';
 import { facesToEmbed, toEot, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
 import { patternClear, patternInk, shadowLook } from '../render/fills';
@@ -77,6 +77,8 @@ export interface PptxOptions {
   picture(doc: Doc): Promise<DrawingPicture | null>;
   /** A PNG of an SVG picture, for programs that can't show SVG (w × h pixels). */
   svgToPng(svg: string, w: number, h: number): Promise<Uint8Array>;
+  /** A drawing's structures as SMILES, for the picture's alt text (null when there are none, or no chemistry engine). */
+  smiles?(doc: Doc): Promise<string | null>;
   /** Text widths, for laying out text boxes (Arial's widths by default). */
   measure?: Measure;
   title?: string;
@@ -643,7 +645,8 @@ class Writer {
       const png = this.addMedia(path, pic.png, 'png');
       const svg = this.addMedia(path, new TextEncoder().encode(pic.svg), 'svg');
       mark(sel, id);
-      out.push(picXml(id, `Structure ${id - 1}`, png, svg, pic.box, null, tags));
+      const smiles = await this.opts.smiles?.(part).catch(() => null) ?? null;
+      out.push(picXml(id, `Structure ${id - 1}`, png, svg, pic.box, null, tags, undefined, structureAltText(smiles)));
       id++;
     }
     // text on top
@@ -939,12 +942,12 @@ function decorXml(sh: DecorShape, id: number): string {
 }
 
 /** A picture element: PNG (or another bitmap), optionally with an SVG PowerPoint shows instead. */
-function picXml(id: number, name: string, blipId: string, svgId: string | null, box: Rect, crop: Shape['crop'] | null, tagsId: string | null, look?: PictureLook): string {
+function picXml(id: number, name: string, blipId: string, svgId: string | null, box: Rect, crop: Shape['crop'] | null, tagsId: string | null, look?: PictureLook, descr?: string): string {
   const ext = svgId ? `<a:extLst><a:ext uri="${SVG_EXT}"><asvg:svgBlip xmlns:asvg="${NS_SVG}" r:embed="${svgId}"/></a:ext></a:extLst>` : '';
   const src = crop && (crop.l || crop.t || crop.r || crop.b)
     ? `<a:srcRect l="${Math.round(crop.l * 100000)}" t="${Math.round(crop.t * 100000)}" r="${Math.round(crop.r * 100000)}" b="${Math.round(crop.b * 100000)}"/>` : '';
   const nvPr = tagsId ? `<p:nvPr><p:custDataLst><p:tags r:id="${tagsId}"/></p:custDataLst></p:nvPr>` : '<p:nvPr/>';
-  return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${xml(name)}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>${nvPr}</p:nvPicPr>` +
+  return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${xml(name)}"${descr ? ` descr="${xml(descr)}"` : ''}/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>${nvPr}</p:nvPicPr>` +
     `<p:blipFill><a:blip r:embed="${blipId}">${ext}</a:blip>${src}<a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
     `<p:spPr>${xfrm(box)}${pictureLookXml(look)}</p:spPr></p:pic>`;
 }
