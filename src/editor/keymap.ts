@@ -201,6 +201,10 @@ export const COMMAND_NAMES: Record<string, string> = {
   'new-note': 'New note on the cell (or change its note)', 'edit-note': 'Change the cell\'s note', 'delete-note': 'Delete the notes and comments in the selection',
   'show-note': 'Show the cell\'s note all the time (or only when pointed at)', 'show-all-notes': 'Show all notes (on or off)', 'convert-notes': 'Convert notes to comments',
   'data-validation': 'Data validation…', 'circle-invalid': 'Circle invalid data (on or off)', 'pick-from-list': 'Pick from the drop-down list',
+  'insert-picture-sheet': 'Insert a picture over the cells…', 'insert-text-box': 'Insert a text box over the cells', 'format-object': 'Format the picked shape or picture…',
+  'page-setup': 'Page setup…', 'header-footer': 'Header and footer…', 'print-titles': 'Print titles…', 'page-scale': 'Print scale…',
+  'set-print-area': 'Set the print area to the selection', 'clear-print-area': 'Clear the print area', 'insert-page-break': 'Insert a page break',
+  'print-gridlines': 'Print gridlines (on or off)', 'print-headings': 'Print row and column headings (on or off)', 'show-page-breaks': 'Show page breaks (on or off)', 'print-preview': 'Print preview',
   // documents
   'new-document': 'New document', 'doc-align-left': 'Align text left', 'doc-align-center': 'Centre text', 'doc-align-right': 'Align text right',
   'doc-justify': 'Justify text', 'style-normal': 'Normal style', 'style-title': 'Title style', 'style-h1': 'Heading 1 style', 'style-h2': 'Heading 2 style',

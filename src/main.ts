@@ -2698,7 +2698,7 @@ async function exportPdf(): Promise<void> {
 // ---------------------------------------------------------------- printing
 
 /** The choices made in the Print window, kept while the app is open. */
-const printChoices = { paper: defaultPaper(navigator.language) as string, orient: 'auto', size: 'actual', handout: '1', frame: 'true', sheet: 'all', sheetOrient: 'portrait', grid: 'false' };
+const printChoices = { paper: defaultPaper(navigator.language) as string, orient: 'auto', size: 'actual', handout: '1', frame: 'true', sheet: 'all' };
 const PAPER_OPTIONS = Object.entries(PAPERS).map(([value, p]) => ({ value, label: p.name }));
 
 const pageSvgOf = (p: PdfPage) => {
@@ -2711,16 +2711,19 @@ async function printNow(): Promise<void> {
   finishTyping();
   const tab = ws.active, deck = tab.deck;
   if (sheetActive()) {
+    const area = !!sheetMode.view.sheet?.pageSetup?.printArea?.length;
     const v = await ask('Print', [
-      { name: 'sheet', label: 'Print', value: printChoices.sheet, options: [{ value: 'all', label: 'The whole sheet' }, { value: 'sel', label: 'The selected cells' }] },
-      { name: 'sheetOrient', label: 'Orientation', value: printChoices.sheetOrient, options: [{ value: 'portrait', label: 'Portrait' }, { value: 'landscape', label: 'Landscape' }] },
-      { name: 'grid', label: 'Gridlines', value: printChoices.grid, type: 'checkbox' },
-    ], { ok: 'Print…', note: 'The paper size, copies and pages are chosen in the next window.' });
+      { name: 'sheet', label: 'Print', value: printChoices.sheet, options: [
+        { value: 'all', label: area ? 'The print area' : 'The whole sheet' },
+        ...(area ? [{ value: 'used', label: 'The whole sheet (ignore the print area)' }] : []),
+        { value: 'sel', label: 'The selected cells' },
+      ] },
+    ], { ok: 'Print…', note: 'Paper, orientation, margins, scaling, titles, headers and footers come from the Page Layout tab (Page Setup…). Copies and the printer are chosen in the next window: set its paper to match.' });
     if (!v) return;
     Object.assign(printChoices, v);
-    const html = sheetMode.printTable(v.sheet === 'sel');
-    if (!html) { flash('There is nothing in this sheet to print.'); return; }
-    printPages({ html: `<div class="${v.grid === 'true' ? 'grid' : ''}">${html}</div>`, landscape: v.sheetOrient === 'landscape' });
+    const got = sheetMode.printedSheet({ selection: v.sheet === 'sel', ignoreArea: v.sheet === 'used', file: tab.name });
+    if (!got) { flash('There is nothing in this sheet to print.'); return; }
+    printPages({ pages: got.pages, w: got.w, h: got.h });
     return;
   }
   const docFile = docActive() ? tab.document : null;
@@ -2928,6 +2931,8 @@ const sheetMode = new SheetMode({
   copyStructure: async (contents, style) => (await copyDrawing(structureDoc(contents, style), null)).replace(/^Copied the whole drawing/, 'Copied the structure'),
   readCells: (e) => readCells(e),
   askName: () => docMode.askReviewName(),
+  pickPicture: () => pickPicture(),
+  print: () => void printNow(),
 }, sheetChem);
 
 /** The style structures in the sheet showing are drawn in. */
