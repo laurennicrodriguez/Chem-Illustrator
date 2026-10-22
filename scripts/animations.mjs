@@ -2,10 +2,10 @@
 // Start the program first (npm run dev), then: node scripts/animations.mjs [address] [name …]
 // Needs Playwright with Chromium (as scripts/screenshots.mjs does) and ffmpeg. Give names
 // (smart-arrows, frames, catalytic-cycle, id-labels, spelling, name-to-structure, dark-mode,
-// metal-complex, reaction-animation) to
+// metal-complex, mechanism, reaction-animation) to
 // record only those.
 
-import { open, pointer, glide, look, addSmiles, record, canvasBox, screenOf, helperSpot, tool, drag, keys, newestAtom, atomAt, wordSpot, select, paletteTool } from './shot-lib.mjs';
+import { open, pointer, glide, look, addSmiles, record, canvasBox, screenOf, helperSpot, tool, drag, keys, newestAtom, atomAt, wordSpot, select, paletteTool, paletteItem } from './shot-lib.mjs';
 
 const args = process.argv.slice(2);
 const url = args[0]?.startsWith('http') ? args.shift() : 'http://localhost:5173/';
@@ -360,6 +360,77 @@ if (want('metal-complex')) {
     await glide(page, c.x + c.width * 0.4, c.y + c.height * 0.9, 15);
     await page.mouse.click(c.x + c.width * 0.4, c.y + c.height * 0.9);
   }, { clip: { x: 0, y: 0, width: 1180, height: 820 }, width: 1000, hold: 2500 });
+  await browser.close();
+}
+
+// ---------------------------------------------------------------- an aldol arrow-push: lone pairs, curved arrows that snap, arrows that follow the structure
+if (want('mechanism')) {
+  const { browser, page } = await open(url, { width: 1180, height: 960 });
+  const en = await addSmiles(page, 'C=C([O-])C', 150, 130);
+  const al = await addSmiles(page, 'O=Cc1ccccc1', 260, 130);
+  // the enolate's CH2 points at the aldehyde carbon, whose C=O points up and phenyl off to the right
+  await page.evaluate(([en, al]) => {
+    const a = window.__app, doc = a.doc, P = (id) => doc.atoms.get(id);
+    const L = Math.hypot(P(en[0]).x - P(en[1]).x, P(en[0]).y - P(en[1]).y);
+    const place = (ids, pivot, from, angle, at, mirror) => {
+      const p = P(pivot), f = P(from), rot = angle - Math.atan2(f.y - p.y, f.x - p.x), c = Math.cos(rot), s = Math.sin(rot);
+      const pts = ids.map((id) => { const t = P(id), dx = t.x - p.x, dy = t.y - p.y; return { id, x: dx * c - dy * s, y: dx * s + dy * c }; });
+      if (mirror?.(pts)) for (const q of pts) q.x = -q.x;
+      for (const q of pts) doc.updateAtom(q.id, { x: at.x + q.x, y: at.y + q.y });
+    };
+    doc.edit('Arrange', () => {
+      place(en, en[1], en[0], 0, { x: 150, y: 140 });
+      const ch2 = P(en[0]);
+      place(al, al[1], al[0], -Math.PI / 2, { x: ch2.x + 1.6 * L, y: ch2.y - 0.3 * L }, (pts) => pts.find((q) => q.id === al[2]).x < 0);
+    });
+    a.editor.changed?.();
+  }, [en, al]);
+  // zoom in and centre the two structures in the canvas
+  await page.evaluate(() => {
+    const a = window.__app, r = a.renderer, b = a.doc.bounds(), box = document.querySelector('#overlay').getBoundingClientRect();
+    const mid = { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 };
+    r.view.scale = 6.5;
+    const p = r.toScreen(mid);
+    r.view.ox += 1; r.view.oy += 1;
+    const q = r.toScreen(mid);
+    r.view.ox += (box.width / 2 - p.x) / (q.x - p.x) - 1;
+    r.view.oy += (box.height * 0.45 - p.y) / (q.y - p.y) - 1;
+    a.editor.requestScene();
+  });
+  await pointer(page);
+  const c = await canvasBox(page);
+  await page.mouse.move(c.x + c.width * 0.5, c.y + c.height * 0.85);
+  const mid = async (i, j) => { const p = await atomAt(page, i), q = await atomAt(page, j); return { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 }; };
+  await record(page, 'mechanism', async () => {
+    // three lone pairs on the enolate oxygen, each click putting one in the most open space
+    await tool(page, 'sym-lonepair');
+    await page.waitForTimeout(300);
+    const o = await atomAt(page, en[2]);
+    await glide(page, o.x, o.y, 20);
+    for (let i = 0; i < 3; i++) { await page.mouse.click(o.x, o.y); await page.waitForTimeout(450); }
+    // curved arrows: oxygen to the C–O bond (from the lone pair facing it), C=C to where the new C–C bond goes, C=O onto oxygen
+    await paletteItem(page, 'arrow', 7);
+    await page.waitForTimeout(300);
+    for (const [from, to] of [[o, await mid(en[2], en[1])], [await mid(en[1], en[0]), await mid(en[0], al[1])], [await mid(al[1], al[0]), await atomAt(page, al[0])]]) {
+      await glide(page, from.x, from.y, 14); await page.waitForTimeout(200);
+      await drag(page, from, to, 28);
+      await page.waitForTimeout(600);
+    }
+    // the aldehyde moved and turned: the arrows stay on their atoms and bonds
+    await tool(page, 'select');
+    await page.waitForTimeout(300);
+    const pts = await Promise.all(al.map((id) => atomAt(page, id)));
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    await drag(page, { x: Math.min(...xs) - 18, y: Math.min(...ys) - 40 }, { x: Math.max(...xs) + 40, y: Math.max(...ys) + 40 }, 20);
+    await page.waitForTimeout(400);
+    const ring = pts[4];
+    await drag(page, ring, { x: ring.x + 90, y: ring.y + 70 }, 35);
+    await page.waitForTimeout(900);
+    await drag(page, { x: ring.x + 90, y: ring.y + 70 }, ring, 35);
+    await page.waitForTimeout(400);
+    await glide(page, c.x + c.width * 0.4, c.y + c.height * 0.9, 15);
+    await page.mouse.click(c.x + c.width * 0.4, c.y + c.height * 0.9);
+  }, { clip: { x: 0, y: 0, width: 1180, height: 960 }, width: 1000, hold: 2500 });
   await browser.close();
 }
 

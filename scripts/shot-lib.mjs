@@ -291,3 +291,15 @@ export async function paletteTool(page, first, label) {
   await page.waitForTimeout(350);
   await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
 }
+
+/** Pick the n-th tool (from 0) in a palette's flyout, for palettes whose items share one long title style. */
+export async function paletteItem(page, first, n) {
+  const m = await page.locator(`.palette-wrap:has([data-tool="${first}"]) .more`).boundingBox();
+  await glide(page, m.x + m.width / 2, m.y + m.height / 2, 20);
+  await page.mouse.click(m.x + m.width / 2, m.y + m.height / 2);
+  await page.waitForTimeout(450);
+  const b = await page.locator('.flyout button').nth(n).boundingBox();
+  await glide(page, b.x + b.width / 2, b.y + b.height / 2, 15);
+  await page.waitForTimeout(350);
+  await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+}

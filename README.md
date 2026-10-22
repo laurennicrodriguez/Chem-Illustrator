@@ -41,11 +41,12 @@ Fill rings with a colour, a gradient, hatching or dots (patterns can be see-thro
 
 ![Estrone with each ring filled differently (gradient, hatching, dots, solid), and a kinase inhibitor with its parts highlighted in round, diamond and square shapes](docs/images/ring-fills.png)
 
-## Metal complexes
+## Metals and mechanisms
 
-Coordination geometries, metallocenes, piano stools and 26 ligands are a click away. Hapto (η) bonds go to the middle of a ring or π-bond and follow it, and formulas count metal carbonyls, Cp and phosphines the way a chemist would.
-
-![Placing an arene chromium tricarbonyl from the Metallocenes palette, typing Cr and CO onto it, and moving the benzene ring: the η⁶ bond follows the ring's middle, and the side panel shows C9H6CrO3](docs/images/metal-complex.gif)
+| Metal complexes, from templates | Arrow pushing that snaps into place |
+|---|---|
+| ![Placing an arene chromium tricarbonyl from the Metallocenes palette, typing Cr and CO onto it, and moving the benzene ring: the η⁶ bond follows the ring's middle, and the side panel shows C9H6CrO3](docs/images/metal-complex.gif) | ![An aldol addition drawn with curved arrows: lone pairs clicked onto an enolate oxygen, an arrow from a lone pair into the C–O bond, one from the C=C bond to where the new C–C bond forms, one from the C=O bond onto oxygen, then the aldehyde dragged away and back while the arrows follow it](docs/images/mechanism.gif) |
+| Coordination geometries, metallocenes, piano stools and 26 ligands are a click away. Hapto (η) bonds go to the middle of a ring or π-bond and follow it, and formulas count metal carbonyls, Cp and phosphines the way a chemist would. | Drag from a lone pair, bond or atom to where the electrons go and the arrow snaps on, bending (or turning S-shaped) to stay clear of the structure. Arrows and lone pairs stay stuck to their atoms when you move, turn or flip the structure. |
 
 ## It knows the chemistry
 
