@@ -763,6 +763,26 @@ export class Deck {
     this.insert(this.index + 1, [s], 'New slide');
   }
 
+  /**
+   * A new slide of a layout at place `at` (0 is first), filled in by `fill` (Insert > Summary
+   * Zoom), as one step of the history.
+   */
+  insertSlide(at: number, layout: LayoutId, fill: (doc: Doc) => void, label = 'New slide'): Slide {
+    const doc = this.newSlideDoc(layout);
+    doc.bulk(() => fill(doc));
+    const s: Slide = { id: this.nextSlideId++, layout, doc, notes: '' };
+    this.insert(Math.max(0, Math.min(this.slides.length, at)), [s], label);
+    return s;
+  }
+
+  /**
+   * Change the drawings of slides (other than through their own undo), as one step of the deck's
+   * history: ink kept from the slide show, say.
+   */
+  editSlides(label: string, indices: number[], fn: (doc: Doc, i: number) => void): void {
+    this.contentEdit(label, indices, () => { for (const i of indices) { const d = this.docOf(i); d.bulk(() => fn(d, i)); } }, () => {}, () => {});
+  }
+
   /** Copies of slides (the current one by default), after the last of them. */
   duplicate(indices: number[] = [this.index]): void {
     const sorted = [...new Set(indices)].filter((i) => i >= 0 && i < this.slides.length).sort((a, b) => a - b);

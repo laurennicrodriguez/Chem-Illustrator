@@ -11,7 +11,7 @@
 
 import type { PinnedComment } from '../document/comments';
 import { COMMENT_REL, readCommentAuthors, readLegacyComments, readModernComments } from './pptx-comments';
-import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureLook, type Frame, type ShapeMath } from '../model';
+import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureLook, type Frame, type ShapeMath, type Media } from '../model';
 import { layoutTable, NOTE_SCALE } from '../table';
 import { linesFromBorders, type Borders } from './cdxml-table';
 import { turnAbout, normDegrees, type Vec, type Rect } from '../geom';
@@ -30,7 +30,8 @@ import { shapeMathPicture, shapeMathSize } from '../deck/equation';
 import { GEOS } from '../design/geo';
 import { cleanDiagram, textFromShapes } from '../design/diagrams';
 import { gluePoint, arrowPoints, boxOf as pointsBox } from '../objects';
-import { readTransition, readTiming, type Transition, type Anim, type AnimTarget } from '../deck/animation';
+import { readTransition, readTiming, readMediaTiming, type Transition, type Anim, type AnimTarget } from '../deck/animation';
+import { mediaMime } from '../deck/media';
 import { readChart } from './office-chart';
 import { freshBox, sameBoxData, sizedBox, type ChartBox } from '../sheet/chart-box';
 import { chartBoxPng } from '../render/chart-box-paint';
@@ -444,7 +445,21 @@ class Reader {
     const warn = (w: string) => this.warnings.add(w);
     const transition = readTransition(root, warn);
     const targets = this.spidTargets;
-    if (targets) this.findHighlights(doc, targets);
+    if (targets) {
+      this.findHighlights(doc, targets);
+      // how the videos and sounds play
+      const how = readMediaTiming(root);
+      doc.bulk(() => {
+        for (const [spid, m] of how) {
+          const t = targets.get(spid);
+          const sh = t?.kind === 'shape' ? doc.shapes.get(t.id) : undefined;
+          if (!sh?.video) continue;
+          const next: Media = { ...sh.video, ...m };
+          if (next.once === false) delete next.once;
+          doc.updateShape(sh.id, { video: next });
+        }
+      });
+    }
     const anims = targets ? readTiming(root, (spid) => targets.get(spid) ?? null, warn) : [];
     this.spidTargets = null;
     const comments = this.comments(path);
@@ -602,7 +617,12 @@ class Reader {
         // an equation (a14:m) and PowerPoint 2016's newer charts (histograms, box charts) are read from their choice: their fallback is only a picture
         const choice = choices.find((c) => c.getElementsByTagNameNS(NS_A14, 'm').length || Array.from(c.getElementsByTagNameNS('*', 'graphicData')).some((g) => /chartex/.test(g.getAttribute('uri') ?? '')));
         const branch = choice ?? (fb && kids(fb).length ? fb : choices[0]);
+        // a zoom PowerPoint made: its picture (the fallback) is read as a zoom, coming back or not
+        const zm = choices.map((c) => c.getElementsByTagNameNS('*', 'zmPr')[0]).find((z) => z);
+        this.zoomBack = zm ? /^(1|true)$/.test(zm.getAttribute('returnToParent') ?? '') : null;
+        if (choices.some((c) => c.getElementsByTagNameNS('*', 'sumZm').length || c.getElementsByTagNameNS('*', 'secZm').length)) this.warnings.add('Summary and section zooms came in as pictures that go to their first slides.');
         for (const k of kids(branch)) this.element(s, layout, k, t, doc);
+        this.zoomBack = null;
         break;
       }
       default: break;
@@ -773,23 +793,45 @@ class Reader {
     if (!img) return;
     const look = this.pictureLook(kid(el, 'spPr'));
     const video = this.videoOf(s.path, kid(el, 'nvPicPr', 'nvPr'));
-    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...(look ? { look } : {}), ...(video ? { video } : {}) });
+    // a click on it in the show: a zoom (ours, or PowerPoint's, from its fallback picture) or a link
+    const click = video ? null : this.hlinkOf(kid(el, 'nvPicPr', 'cNvPr', 'hlinkClick'));
+    let zoom: Shape['zoom'] | undefined;
+    if (tags[TAG.zoom]) {
+      try { const z = JSON.parse(tags[TAG.zoom]); if (z && typeof z === 'object' && z.zoom) zoom = { ...(z.zoom.back ? { back: true } : {}), ...(typeof z.zoom.to === 'string' ? { to: z.zoom.to } : {}) }; } catch { /* a plain link */ }
+    } else if (this.zoomBack !== null && click) zoom = this.zoomBack ? { back: true } : {};
+    doc.addShape({
+      kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...(look ? { look } : {}), ...(video ? { video } : {}),
+      ...(click ? { link: click } : {}), ...(zoom && click ? { zoom } : {}),
+    });
   }
 
-  /** The MP4 video a picture stands for (PowerPoint's media link, else its video link), if it is in the file. */
+  /**
+   * The video or sound a picture stands for (PowerPoint's media link, else its video or audio
+   * link), with its trim and fades, if the file is inside the PowerPoint file and plays here.
+   * Until the slide's timing says otherwise it starts when clicked and plays once, as
+   * PowerPoint's own.
+   */
   private videoOf(from: string, nvPr: Element | null): Shape['video'] | undefined {
     if (!nvPr) return undefined;
     const media = nvPr.getElementsByTagNameNS('http://schemas.microsoft.com/office/powerpoint/2010/main', 'media')[0];
-    const vf = kid(nvPr, 'videoFile');
-    if (!media && !vf) return undefined;
+    const vf = kid(nvPr, 'videoFile'), af = kid(nvPr, 'audioFile');
+    if (!media && !vf && !af) return undefined;
+    const audio = !!af && !vf;
     const rels = this.r.rels(from);
-    const target = (media && rels.get(rAttr(media, 'embed') ?? '')?.target) || (vf && rels.get(rAttr(vf, 'link') ?? '')?.target);
+    const target = (media && rels.get(rAttr(media, 'embed') ?? '')?.target) || (vf && rels.get(rAttr(vf, 'link') ?? '')?.target) || (af && rels.get(rAttr(af, 'link') ?? '')?.target);
     const bytes = target ? this.r.bytes(target) : null;
-    if (!target || !bytes || !/\.mp4$/i.test(target)) {
-      this.warnings.add('Videos other than MP4 files inside the PowerPoint file came in as their first picture.');
+    const type = target ? mediaMime(target) : null;
+    if (!target || !bytes || !type) {
+      this.warnings.add(audio ? 'Sounds other than MP3, M4A, WAV, AAC and OGG files inside the PowerPoint file came in as their icons.' : 'Videos other than MP4, MOV and WebM files inside the PowerPoint file came in as their first picture.');
       return undefined;
     }
-    return { src: dataUrl(bytes, 'video/mp4') };
+    const m: Media = { src: dataUrl(bytes, type.mime), ...(type.audio ? { audio: true } : {}), start: 'click', once: true };
+    const P14 = 'http://schemas.microsoft.com/office/powerpoint/2010/main';
+    const trim = media?.getElementsByTagNameNS(P14, 'trim')[0], fade = media?.getElementsByTagNameNS(P14, 'fade')[0];
+    const sec = (el: Element | undefined, a: string) => { const v = Number(el?.getAttribute(a)); return Number.isFinite(v) && v > 0 ? +(v / 1000).toFixed(3) : undefined; };
+    const parts = { trimStart: sec(trim, 'st'), trimEnd: sec(trim, 'end'), fadeIn: sec(fade, 'inDur'), fadeOut: sec(fade, 'outDur') };
+    for (const [k, v] of Object.entries(parts)) if (v !== undefined) (m as unknown as Record<string, number>)[k] = v;
+    return m;
   }
 
   /**
@@ -949,6 +991,8 @@ class Reader {
    */
   /** The design shapes read on this slide: their number when saved → their number now (for connectors). */
   private geoIds = new Map<number, number>();
+  /** Reading a zoom PowerPoint made: whether the show comes back from it (null: not a zoom). */
+  private zoomBack: boolean | null = null;
 
   /** A connector saved here: the arrow, stuck to the same shapes, where PowerPoint now has it. */
   private ourConnector(s: Part, el: Element, t: Xf, doc: Doc): boolean {
@@ -1017,6 +1061,9 @@ class Reader {
     if (!geo) return false;
     const look = this.look(sp, spPr);
     const sh: Omit<Shape, 'id'> = { kind: 'geo', geo, ...where, color: look.line ?? look.fill ?? '#000000' };
+    // an action button, or any shape with an action on a click
+    const click = this.hlinkOf(kid(sp, 'nvSpPr', 'cNvPr', 'hlinkClick'));
+    if (click) sh.link = click;
     if (look.fill) { sh.filled = true; sh.fillColor = look.fill; }
     if (look.shaded) sh.fill = 'shaded';
     sh.lineWidth = look.line ? +look.width.toFixed(2) : 0;
@@ -1144,7 +1191,7 @@ class Reader {
     if (!el) return null;
     const action = el.getAttribute('action') ?? '';
     const jump = /^ppaction:\/\/hlinkshowjump\?jump=(\w+)/.exec(action)?.[1];
-    if (jump) return ({ firstslide: '#first', lastslide: '#last', nextslide: '#next', previousslide: '#prev' } as Record<string, string>)[jump] ?? null;
+    if (jump) return ({ firstslide: '#first', lastslide: '#last', nextslide: '#next', previousslide: '#prev', lastslideviewed: '#return', endshow: '#end' } as Record<string, string>)[jump] ?? null;
     const rel = this.r.rels(this.curPath).get(rAttr(el, 'id') ?? '');
     if (!rel) return null;
     if (action.startsWith('ppaction://hlinksldjump')) {

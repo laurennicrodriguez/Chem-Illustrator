@@ -18,6 +18,7 @@ import * as rt from '../richtext';
 import { cleanPara, fitParas, paraCount, paraRange } from '../text/paragraphs';
 import { citationTexts, type CiteStyle, type Reference } from './references';
 import type { CiteFormat } from './cite-styles';
+import type { CiteLive, CiteManager } from './live-cites';
 import type { ChartBox } from '../sheet/chart-box';
 
 /** The character that stands for a figure, table or field in the text (Unicode's object replacement character). */
@@ -217,7 +218,7 @@ export type DocObject =
   /** A reference to a caption ("see Figure 2"), which follows its number. */
   | { kind: 'ref'; target: number }
   /** A citation of references in the document's list (by their ids): numbers in order of first citation. */
-  | { kind: 'cite'; refs: string[] }
+  | { kind: 'cite'; refs: string[]; live?: CiteLive }
   /** The bibliography: the references cited, in citation order, in the citation style (a block of its own). */
   | { kind: 'bib' }
   /** A table of contents: the headings down to `levels` (1 to 3) deep with their page numbers (a block of its own). */
@@ -248,6 +249,13 @@ export interface DocText extends RichText {
   citeStyle?: CiteStyle;
   /** Details of that style changed for this document (References > Manage References > Style Options). */
   citeOptions?: Partial<CiteFormat>;
+  /**
+   * The reference manager whose fields citations are saved as in Word files (Zotero, Mendeley,
+   * EndNote: see live-cites.ts), so it can go on managing them; our own fields when not set.
+   */
+  citeManager?: CiteManager;
+  /** Zotero's document preferences as the file had them (its style and settings), saved back with it. */
+  zoteroPrefs?: string;
   /** Changes are being tracked (Review > Track Changes): edits are marked, not made outright. */
   track?: boolean;
   /** Comments (Review > New Comment), by id; the text they are on carries the id (see comments.ts). */

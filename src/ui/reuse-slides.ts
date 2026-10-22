@@ -10,30 +10,34 @@ export interface ReuseChoice { indices: number[]; keep: boolean }
 const W = 168;
 
 /** Resolves with the slides picked (by index in `from`) and whether they keep their own look, or null when cancelled. */
-export function pickReuseSlides(name: string, from: Deck, keep: boolean): Promise<ReuseChoice | null> {
+/** Other uses of the slide picker (Insert > Zoom): its title, the note under it and what its button says. */
+export interface PickWording { title: string; note: string; verb: (n: number) => string; preset?: number[] }
+
+export function pickReuseSlides(name: string, from: Deck, keep: boolean, wording?: PickWording): Promise<ReuseChoice | null> {
   return new Promise((resolve) => {
     const d = document.createElement('dialog');
     d.className = 'ask template-gallery reuse-slides';
     d.setAttribute('aria-label', 'Reuse Slides');
     const h = document.createElement('h2');
-    h.textContent = 'Reuse Slides';
+    h.textContent = wording?.title ?? 'Reuse Slides';
+    if (wording) d.setAttribute('aria-label', wording.title);
     const note = document.createElement('p');
     note.className = 'muted';
     const n = from.slides.length;
-    note.textContent = `${name}: ${n} slide${n === 1 ? '' : 's'}. Click the slides you want (Shift+click picks a run of them); they go in after the slide you are on.`;
+    note.textContent = wording?.note ?? `${name}: ${n} slide${n === 1 ? '' : 's'}. Click the slides you want (Shift+click picks a run of them); they go in after the slide you are on.`;
     const grid = document.createElement('div');
     grid.className = 'tg-grid rs-grid';
     grid.setAttribute('role', 'listbox');
     grid.setAttribute('aria-multiselectable', 'true');
     grid.setAttribute('aria-label', 'Slides in the file');
-    const picked = new Set<number>();
+    const picked = new Set<number>(wording?.preset ?? []);
     let anchor = 0;
     const cards: HTMLButtonElement[] = [];
     const insert = document.createElement('button');
     const mark = () => {
       cards.forEach((c, i) => { c.classList.toggle('current', picked.has(i)); c.setAttribute('aria-selected', String(picked.has(i))); });
       insert.disabled = !picked.size;
-      insert.textContent = picked.size > 1 ? `Insert ${picked.size} Slides` : 'Insert Slide';
+      insert.textContent = wording ? wording.verb(picked.size) : picked.size > 1 ? `Insert ${picked.size} Slides` : 'Insert Slide';
     };
     const hgt = Math.round((W * from.size.h) / from.size.w);
     for (let i = 0; i < n; i++) {
@@ -81,13 +85,13 @@ export function pickReuseSlides(name: string, from: Deck, keep: boolean): Promis
     all.textContent = 'Insert All';
     insert.type = 'button';
     insert.className = 'primary';
-    buttons.append(cancel, ' ', all, ' ', insert);
+    buttons.append(cancel, ' ', ...(wording ? [] : [all, ' ']), insert);
     let result: ReuseChoice | null = null;
     const finish = () => { if (picked.size) result = { indices: [...picked].sort((a, b) => a - b), keep: keepBox.checked }; d.close(); };
     cancel.addEventListener('click', () => d.close());
     all.addEventListener('click', () => { for (let i = 0; i < n; i++) picked.add(i); finish(); });
     insert.addEventListener('click', finish);
-    d.append(h, note, grid, opt, buttons);
+    d.append(h, note, grid, ...(wording ? [] : [opt]), buttons);
     d.addEventListener('close', () => { d.remove(); resolve(result); });
     document.body.append(d);
     mark();

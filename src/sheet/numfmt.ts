@@ -5,6 +5,7 @@
 import { CellError, Value, isError } from './values';
 import { roundTo } from './evaluate';
 import { unitOfFormat } from './units';
+import { serialParts } from './dates';
 
 export interface Shown {
   text: string;
@@ -255,15 +256,14 @@ function formatNumber(v: number, sec: Section): string {
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-/** Excel's date numbers count days from 30 December 1899 (so 1 is 1 January 1900, with its 1900 leap-year slip). */
-export function serialToDate(serial: number): Date {
-  return new Date(Date.UTC(1899, 11, 30) + Math.round(serial * 86400000));
-}
 
 function formatDate(v: number, sec: Section): string {
-  const d = serialToDate(v);
-  const Y = d.getUTCFullYear(), M = d.getUTCMonth(), D = d.getUTCDate(), wd = d.getUTCDay();
-  const h = d.getUTCHours(), mi = d.getUTCMinutes(), s = d.getUTCSeconds();
+  if (v < 0 || v >= 2958466) return '#'.repeat(10);
+  // (rounded to the millisecond, so 0.9999999 of a second shows as the next)
+  const ms = Math.round(v * 86400000) % 1000;
+  const p = serialParts(Math.round(v * 86400000) / 86400000 - ms / 86400000);
+  const Y = p.y, M = p.m - 1, D = p.d, wd = p.weekday;
+  const h = Math.floor(p.secs / 3600), mi = Math.floor(p.secs / 60) % 60, s = p.secs % 60;
   const ampm = sec.parts.some((p) => p.k === 'code' && /AM\/PM|A\/P/i.test(p.s));
   let out = '';
   for (const p of sec.parts) {
@@ -286,7 +286,7 @@ function formatDate(v: number, sec: Section): string {
       else if (/^\[s+\]$/.test(low)) out += String(Math.floor(v * 86400));
       else if (low === 'am/pm') out += h < 12 ? (t[0] === 'a' ? 'am' : 'AM') : (t[0] === 'a' ? 'pm' : 'PM');
       else if (low === 'a/p') out += h < 12 ? 'A' : 'P';
-      else if (/^\.0+$/.test(low)) out += (d.getUTCMilliseconds() / 1000).toFixed(low.length - 1).slice(1);
+      else if (/^\.0+$/.test(low)) out += (ms / 1000).toFixed(low.length - 1).slice(1);
       else out += t;
     });
   }
