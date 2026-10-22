@@ -35,11 +35,11 @@ import { bestFit, fitMove, fitMatters } from './chem/orient';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, fitPasted, typicalBondLength, Pasted,
-  nativeFirst, writeNativeFormats, looksLikeCdxml, cfHtml, fromCfHtml, CELLS_FORMAT, OWN_FORMAT, CDX_FORMAT } from './io/clipboard';
+  nativeFirst, writeNativeFormats, looksLikeCdxml, cfHtml, fromCfHtml, CELLS_FORMAT, OWN_FORMAT, CDX_FORMAT, setWordObjects, embeddedPicture, packFormats } from './io/clipboard';
 import { cdxToCdxml } from './io/cdx';
 import { writeCdxml } from './io/cdxml-write';
 import { WORKSPACE } from './io/workspace-file';
-import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, PICTURE_EXTENSIONS, type FileType } from './io/files';
+import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, setEmbeddedWriter, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, PICTURE_EXTENSIONS, type FileType } from './io/files';
 import { readPptx } from './io/pptx-read';
 import { pickReuseSlides } from './ui/reuse-slides';
 import { writeTiff } from './render/tiff';
@@ -1487,7 +1487,12 @@ const ws: Workspace = new Workspace(doc, {
   saved: (tab, data, how, was) => keeper.saved(tab, data, how, was),
   autoSaveFailed: (tab, msg) => keeper.autoSaveFailed(tab, msg),
   opened: (tab) => keeper.opened(tab),
-  dropped: (tab) => keeper.dropped(tab),
+  dropped: (tab) => {
+    keeper.dropped(tab);
+    // a drawing being edited for Word: Word hears that the editing is over
+    const id = embeddedTabs.get(tab);
+    if (id !== undefined) { embeddedTabs.delete(tab); void invoke('ole_close', { id }).catch(() => {}); }
+  },
 });
 
 // AutoSave, recovery copies, Version History and shared folders (File > AutoSave and Recovery Options)
@@ -4355,9 +4360,74 @@ const fileTypesHost = {
   get: () => invoke<string[]>('file_types_get'),
   set: (types: string[]) => invoke<void>('file_types_set', { types }),
   openDefaults: () => invoke<void>('file_types_defaults'),
+  objects: {
+    get: () => invoke<boolean>('ole_registered'),
+    set: async (on: boolean) => { await invoke<void>('ole_register', { on }); setWordObjects(on); },
+  },
   flash: (msg: string) => flash(msg, 7000),
 };
 let fileTypesOffered = false;
+let wordObjectsOffered = false;
+
+/** A drawing Word, PowerPoint or Excel asked to edit here (src-tauri/src/ole.rs). */
+interface EmbeddedEdit { id: number; cdxml: string; app: string; doc: string }
+/** Tabs editing drawings for other programs, by tab (a Save As to a file still ends the editing when the tab closes). */
+const embeddedTabs = new Map<Tab, number>();
+const embeddedTab = (id: number): Tab | undefined => [...embeddedTabs].find(([, i]) => i === id)?.[0];
+
+async function openEmbedded(e: EmbeddedEdit): Promise<void> {
+  const ref = { kind: 'embedded' as const, id: e.id, app: e.app, doc: e.doc };
+  const from = e.doc || e.app || 'another program';
+  const name = `Drawing in ${from}`;
+  let t: Tab | null;
+  if (e.cdxml.trim()) t = await ws.openAs(new TextEncoder().encode(e.cdxml), 'drawing.cdxml', { name, ref, dirty: false, stamp: null });
+  else {
+    // a new drawing (Insert ▸ Object in Word)
+    t = ws.newDrawing();
+    t.ref = ref;
+    t.name = name;
+    renderTabs();
+  }
+  if (!t) { void invoke('ole_close', { id: e.id }).catch(() => {}); return; }
+  embeddedTabs.set(t, e.id);
+  flash(`Editing the drawing from ${from}. Save (Ctrl+S) puts it back there; close this tab when you're done.`, 9000);
+}
+
+/**
+ * Windows: drawings in Word, PowerPoint and Excel that open here when double-clicked. The first
+ * time the app starts it registers them (a portable copy leaves the computer alone); after that it
+ * keeps the registration pointing at this copy of the app. Settings ▸ File Types turns it off.
+ */
+async function startWordObjects(): Promise<void> {
+  if (platform !== 'windows') return;
+  const { listen } = await import('@tauri-apps/api/event');
+  setEmbeddedWriter(async (ref, cdxml) => {
+    const block = packFormats([['CDXML', new TextEncoder().encode(cdxml)], ['EMF', embeddedPicture(readCdxml(cdxml).doc, cdxml)]]);
+    await invoke('ole_save', block, { headers: { 'ole-id': String(ref.id) } });
+  });
+  await listen<EmbeddedEdit>('ole-edit', (e) => void openEmbedded(e.payload));
+  await listen<number>('ole-show', (e) => { const t = embeddedTab(e.payload); if (t) ws.activate(t); });
+  // the document was closed in Word: the drawing stays here as an unsaved drawing
+  await listen<number>('ole-closed', (e) => {
+    const t = embeddedTab(e.payload);
+    if (!t) return;
+    embeddedTabs.delete(t);
+    if (t.ref.kind === 'embedded') {
+      flash(`${t.ref.doc || t.ref.app} was closed, so this drawing can't go back into it. It stays here; save it as a file to keep it.`, 9000);
+      t.ref = { kind: 'none' };
+      t.name = withExtension(t.name, 'cdxml');
+      renderTabs();
+    }
+  });
+  for (const e of await invoke<EmbeddedEdit[]>('ole_pending').catch(() => [])) await openEmbedded(e);
+  let on = await invoke<boolean>('ole_registered').catch(() => false);
+  if (on) await invoke('ole_register', { on: true }).catch(() => {});
+  else if (!wordObjectsOffered && !(await portableInfo())) {
+    on = await invoke('ole_register', { on: true }).then(() => true, () => false);
+  }
+  if (!wordObjectsOffered) { wordObjectsOffered = true; storeSettings(); }
+  setWordObjects(on);
+}
 
 /** The files the desktop app was opened with (double-clicked, or Open with), and any opened while it runs. */
 async function openOutsideFiles(): Promise<void> {
@@ -4497,6 +4567,7 @@ function storeSettings(): void {
     updateCheck,
     pubchemNames,
     fileTypesOffered,
+    wordObjectsOffered,
     reviewName: reviewAuthor(),
     skipVersion,
     recentFiles,
@@ -4634,6 +4705,7 @@ void loadSettings().then((s) => {
   updateCheck = s.updateCheck;
   pubchemNames = s.pubchemNames;
   fileTypesOffered = s.fileTypesOffered;
+  wordObjectsOffered = s.wordObjectsOffered;
   setReviewAuthor(s.reviewName);
   skipVersion = s.skipVersion;
   recentFiles = s.recentFiles;
@@ -4666,6 +4738,7 @@ void loadSettings().then((s) => {
   settingsLoaded = true;
   void keeper.start();
   void openOutsideFiles();
+  void startWordObjects();
   // (a moment after starting, once a file opened with the app has had time to load)
   setTimeout(showWelcome, 800);
   // a few seconds after starting, so the check doesn't slow down opening the window

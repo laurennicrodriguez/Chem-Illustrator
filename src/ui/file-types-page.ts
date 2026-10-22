@@ -21,6 +21,8 @@ export interface FileTypesHost {
   get(): Promise<string[]>;
   set(types: string[]): Promise<void>;
   openDefaults(): Promise<void>;
+  /** Drawings in Word, PowerPoint and Excel that open here when double-clicked (Windows). */
+  objects: { get(): Promise<boolean>; set(on: boolean): Promise<void> };
   flash(msg: string): void;
 }
 
@@ -79,6 +81,19 @@ export async function fileTypesPage(host: FileTypesHost): Promise<void> {
     open.textContent = 'Choose Defaults in Windows Settings…';
     open.addEventListener('click', () => void host.openDefaults().catch((e) => host.flash(String(e))));
     form.append(defaults, open);
+    const objRow = document.createElement('label');
+    objRow.className = 'ask-row ask-check';
+    const objBox = document.createElement('input');
+    objBox.type = 'checkbox';
+    const objWas = await host.objects.get().catch(() => false);
+    objBox.checked = objWas;
+    const objName = document.createElement('span');
+    objName.textContent = 'Drawings pasted into Word, PowerPoint and Excel open here when double-clicked';
+    objRow.append(objBox, objName);
+    const objHelp = document.createElement('p');
+    objHelp.className = 'ask-help muted';
+    objHelp.textContent = 'Copied drawings paste as Chem Illustrator objects: double-click one in Word to edit it here, and Save puts it back. Without this they paste as pictures (they still hold the drawing, so copying one back here keeps it editable). Also in Word under Insert ▸ Object.';
+    form.append(objRow, objHelp);
     const cancel = document.createElement('button');
     cancel.type = 'button';
     cancel.textContent = 'Cancel';
@@ -93,6 +108,7 @@ export async function fileTypesPage(host: FileTypesHost): Promise<void> {
       e.preventDefault();
       const types = [...boxes].filter(([, b]) => b.checked).map(([ext]) => ext);
       try {
+        if (objBox.checked !== objWas) await host.objects.set(objBox.checked);
         await host.set(types);
         host.flash(types.length ? `Chem Illustrator is now under "Open with" for ${types.map((t) => `.${t}`).join(', ')}.` : 'Chem Illustrator is off every "Open with" list.');
       } catch (err) {

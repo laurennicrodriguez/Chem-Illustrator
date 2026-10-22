@@ -124,7 +124,7 @@ pub fn refresh() {
 }
 
 #[cfg(windows)]
-mod win {
+pub(crate) mod win {
     use super::TYPES;
     use std::ffi::c_void;
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
@@ -144,7 +144,7 @@ mod win {
         format!("ChemIllustrator.{ext}")
     }
 
-    fn set_string(key: &str, name: Option<&str>, value: &str) -> Result<(), String> {
+    pub(crate) fn set_string(key: &str, name: Option<&str>, value: &str) -> Result<(), String> {
         let k = wide(key);
         let n = name.map(wide);
         let v = wide(value);
@@ -165,7 +165,7 @@ mod win {
         }
     }
 
-    fn exists(key: &str, name: Option<&str>) -> bool {
+    pub(crate) fn exists(key: &str, name: Option<&str>) -> bool {
         let k = wide(key);
         let n = name.map(wide);
         let r = unsafe {
@@ -182,7 +182,7 @@ mod win {
         r == ERROR_SUCCESS
     }
 
-    fn delete_tree(key: &str) {
+    pub(crate) fn delete_tree(key: &str) {
         let k = wide(key);
         unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, k.as_ptr()) };
     }

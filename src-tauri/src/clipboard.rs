@@ -119,7 +119,13 @@ mod win {
                 continue;
             }
             unsafe {
-                if id == CF_ENHMETAFILE {
+                if name == "Embed Source" {
+                    // our own object, made from the drawing (see ole.rs)
+                    let h = crate::ole::win::embed_source(data)?;
+                    if SetClipboardData(id, h.0).is_null() {
+                        GlobalFree(h.0);
+                    }
+                } else if id == CF_ENHMETAFILE {
                     let emf = SetEnhMetaFileBits(data.len() as u32, data.as_ptr());
                     if emf.is_null() {
                         return Err("The picture could not be copied".into());
@@ -128,7 +134,11 @@ mod win {
                         DeleteEnhMetaFile(emf);
                     }
                 } else {
-                    let bytes: Vec<u8> = if id == CF_UNICODETEXT {
+                    let bytes: Vec<u8> = if name == "Object Descriptor" {
+                        // sent as the picture's width and height in hundredths of a millimetre
+                        let at = |i: usize| data.get(i..i + 4).map_or(0, |b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+                        crate::ole::win::object_descriptor(windows::Win32::Foundation::SIZE { cx: at(0), cy: at(4) })
+                    } else if id == CF_UNICODETEXT {
                         let text = String::from_utf8_lossy(data);
                         wide(&text).iter().flat_map(|u| u.to_le_bytes()).collect()
                     } else {
@@ -168,6 +178,13 @@ mod win {
                         continue;
                     }
                     return Ok(Some((name.clone(), bytes)));
+                }
+                if name == "Embed Source" {
+                    // the drawing inside one of our objects (copied from Word); other programs' objects are skipped
+                    match crate::ole::win::drawing_in(windows::Win32::Foundation::HGLOBAL(h)) {
+                        Some(cdxml) => return Ok(Some((name.clone(), cdxml))),
+                        None => continue,
+                    }
                 }
                 let p = GlobalLock(h) as *const u8;
                 if p.is_null() {

@@ -5,6 +5,7 @@
 mod clipboard;
 mod file_types;
 mod keep;
+mod ole;
 mod open_dialog;
 mod portable;
 
@@ -224,6 +225,8 @@ pub fn run() {
             // the files the app was opened with (double-clicked, or "Open with")
             file_types::open_files(app.handle(), file_types::files_in(std::env::args(), None));
             file_types::refresh();
+            // Word and PowerPoint reach the app here to edit drawings embedded in their documents
+            ole::start(app.handle());
             // A self-test that never reports (the page failed to load) still ends.
             if let Some(path) = selftest_path() {
                 let handle = app.handle().clone();
@@ -264,7 +267,12 @@ pub fn run() {
             file_types::launch_files,
             file_types::file_types_get,
             file_types::file_types_set,
-            file_types::file_types_defaults
+            file_types::file_types_defaults,
+            ole::ole_pending,
+            ole::ole_save,
+            ole::ole_close,
+            ole::ole_registered,
+            ole::ole_register
         ])
         .build(tauri::generate_context!())
         .expect("error while running Chem Illustrator")
