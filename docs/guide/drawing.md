@@ -123,6 +123,13 @@ Pick the text tool (`t` over empty space) and:
 
 Double-click a caption to edit it again. Press Esc to finish.
 
+### Typing an atom label
+
+The label box opens right on the atom: its first letter sits where the atom is, in the label font, and the box grows as you type. Counts drop and charges rise as you type them (CH₂CO₂Me, NH₃⁺), just as the label will show. Press Enter or click away to finish.
+
+- To raise or lower other characters, select them in the box and press **Ctrl+Shift+=** (raise) or **Ctrl+=** (lower). Press it again to put them back. The marks are saved in the .cdxml file, so ChemDraw shows them too.
+- A label that is just R and a number (R1, R12) shows the number raised: R¹, R¹². Longer labels such as OR1 or CO2R1 keep their numbers lowered, and labels from files keep the look they were saved with. **Edit ▸ Preferences** turns raised R numbers off.
+
 While you type, a bar along the top of the drawing has bold, italic and underline, subscript and superscript, **formula style**, font, size and colour, alignment, bullets and numbering, indents, line and paragraph spacing, and a set of Greek letters and symbols (**αΩ**). It sits along the top so it never covers what you have drawn; **View ▸ Text Formatting Bar** can float it just above the text instead, or hide it (the keys below still work).
 
 Useful keys while typing:

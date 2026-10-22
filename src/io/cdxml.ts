@@ -259,7 +259,9 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
           const n = Math.abs(atom.charge);
           txt = txt.replace(new RegExp(`${n > 1 ? n : ''}[${atom.charge > 0 ? '+' : '\\-−'}]$`), '');
         }
-        if (runs.some((r) => r.sup && /^\d+$/.test(r.text))) atom.supDigits = true;
+        const look = labelLookOf(runs, txt);
+        if (look.supDigits !== undefined) atom.supDigits = look.supDigits;
+        if (look.marks) atom.labelMarks = look.marks;
         const size = runs[0]?.size;
         if (size && ls === null) atom.s = size / st.labelSize;
         const lj = t.getAttribute('LabelJustification');
@@ -1078,4 +1080,26 @@ function pictureOf(el: Element): { src: string; px: { w: number; h: number }; cr
     if (bytes) return picture(bytes, mime);
   }
   return emf && drawn ? picture(emf, 'image/x-emf') : null;
+}
+
+/**
+ * How a label from a file raises its characters: R numbers written raised (or, for R1, R12…,
+ * written on the line or lowered) and any other characters raised, lowered by hand.
+ */
+export function labelLookOf(runs: TextRun[], text: string): { supDigits?: boolean; marks?: string } {
+  const out: { supDigits?: boolean; marks?: string } = {};
+  const raisedDigits = runs.length > 1 && runs[runs.length - 1].sup && /^\d+$/.test(runs[runs.length - 1].text);
+  if (raisedDigits) out.supDigits = true;
+  else if (/^R\d+$/.test(text)) out.supDigits = false;
+  let marks = '', any = false;
+  runs.forEach((r, k) => {
+    for (const _ of r.text) {
+      const raisedR = raisedDigits && k === runs.length - 1;
+      const m = r.sup && !raisedR ? '^' : r.sub ? '_' : '.';
+      if (m !== '.') any = true;
+      marks += m;
+    }
+  });
+  if (any) out.marks = marks.slice(0, text.length);
+  return out;
 }

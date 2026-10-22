@@ -48,7 +48,7 @@ import { attachWhereItIs, defaultGap, placeAttached, refitAttached } from './att
 import { frameAround, frameBox, frameMembers, refitFrames, defaultPad, thingsInside } from './frames';
 import { Align, Measure, POINTS, Snapshot, type TurnText, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, withFrameContents, rotation, mirrorX, mirrorY } from './arrange';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
-import { tokenize, addNicknames, isBuiltInNickname, labelGraph } from '../chem/labels';
+import { tokenize, addNicknames, isBuiltInNickname, labelGraph, labelPieces, labelLook, CAP, SUB_SCALE } from '../chem/labels';
 import {
   Handle, arrowHit, shapeHit, arrowHandles, shapeHandles, dragArrowHandle, dragShapeHandle, dragCropHandle, shapeBox,
   arrowPoints, bracketHalves, type BracketForm, bracketLip, unionRect,
@@ -322,7 +322,7 @@ export class Editor {
   onFragment: (p: Vec, q: Vec, bonds: number[]) => void = () => {};
   /** The atom most recently drawn or changed (its structure is analysed when nothing is selected). */
   lastEdited: number | null = null;
-  private labelInput: HTMLInputElement | null = null;
+  private labelInput: HTMLElement | null = null;
   /** The mouse is over the drawing, so keys are for the drawing even if a button has the focus. */
   private pointerInside = false;
   /** Keys don't reach the drawing (while presenting slides). */
@@ -3460,44 +3460,165 @@ export class Editor {
     doc.updateAtom(id, { label: t, z: hz, fileLabel: false });
   }
 
+  /**
+   * Type an atom's label in a box over it: the first letter sits on the atom, in the label font,
+   * counts drop and charges rise as you type, and the box grows with the text. Select characters
+   * and press Ctrl+Shift+= to raise them or Ctrl+= to lower them (again to undo); the marks are
+   * kept with the label.
+   */
   editLabel(id: number): void {
     const doc = this.doc;
     const a = doc.atoms.get(id);
     if (!a) return;
     this.commitLabel();
-    const input = document.createElement('input');
-    input.className = 'label-input';
+    const box = document.createElement('div');
+    box.className = 'label-input';
+    box.contentEditable = 'true';
+    box.spellcheck = false;
+    box.setAttribute('role', 'textbox');
+    box.setAttribute('aria-label', 'Atom label');
     const sp = this.r.toScreen(a);
-    const size = doc.style.labelSize * (a.s ?? 1) * this.r.view.scale;
-    input.style.left = `${sp.x - size * 0.4}px`;
-    input.style.top = `${sp.y - size * 0.75}px`;
-    input.style.fontSize = `${Math.max(11, size)}px`;
-    input.value = a.label ?? (a.z !== 6 ? SYMBOLS[a.z] ?? '' : '');
-    const was = input.value;
-    input.dataset.atom = String(id);
-    input.spellcheck = false;
-    this.host.appendChild(input);
-    input.focus();
-    input.select();
+    const real = doc.style.labelSize * (a.s ?? 1) * this.r.view.scale;
+    const size = Math.max(11, real);
+    const font = doc.style.labelFont || 'Arial';
+    box.style.fontFamily = `"${font}", Arial, 'Liberation Sans', Helvetica, sans-serif`;
+    box.style.fontSize = `${size}px`;
+    let text = a.label ?? (a.z !== 6 ? SYMBOLS[a.z] ?? '' : '');
+    const was = text;
+    let marks = a.label && a.labelMarks ? a.labelMarks.padEnd(text.length, '.').slice(0, text.length) : '.'.repeat(text.length);
+    const wasMarks = marks;
+    const look = () => labelLook({ label: text, supDigits: a.supDigits, labelMarks: marks });
+    // the first letter's middle on the atom, the baseline where the label's is
+    const g = document.createElement('canvas').getContext('2d')!;
+    g.font = `${size}px "${font}", Arial, sans-serif`;
+    const firstW = text ? g.measureText([...text][0]).width : size * 0.6;
+    box.style.left = `${sp.x - firstW / 2 - 3}px`;
+    box.style.top = `${sp.y + (CAP * size) / 2 - 0.92 * size - 2}px`;
+    box.dataset.atom = String(id);
+    /** Where the caret or selection is, as character offsets into the text. */
+    const caret = (): [number, number] | null => {
+      const sel = getSelection();
+      if (!sel || !sel.rangeCount || !box.contains(sel.anchorNode)) return null;
+      const r = sel.getRangeAt(0);
+      const at = (node: Node, off: number) => {
+        const pre = document.createRange();
+        pre.selectNodeContents(box);
+        pre.setEnd(node, off);
+        return [...pre.toString()].length;
+      };
+      return [at(r.startContainer, r.startOffset), at(r.endContainer, r.endOffset)];
+    };
+    const place = (s: number, e: number) => {
+      const find = (k: number): [Node, number] => {
+        const walk = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+        let n: Node | null, left = k;
+        let last: Node | null = null;
+        while ((n = walk.nextNode())) {
+          const len = [...(n.textContent ?? '')].length;
+          if (left <= len) return [n, [...(n.textContent ?? '')].slice(0, left).join('').length];
+          left -= len;
+          last = n;
+        }
+        return last ? [last, (last.textContent ?? '').length] : [box, 0];
+      };
+      const r = document.createRange();
+      const [sn, so] = find(s), [en, eo] = find(e);
+      r.setStart(sn, so);
+      r.setEnd(en, eo);
+      const sel = getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(r);
+    };
+    // the text drawn as the label will show it: counts lowered, charges and marked characters raised
+    const show = () => {
+      box.textContent = '';
+      const l = look();
+      for (const p of text ? labelPieces(text, l.supDigits, l.marks) : []) {
+        const span = document.createElement('span');
+        span.textContent = p.text.replace(/−/g, '-');
+        if (p.sub || p.sup) { span.className = p.sub ? 'sub' : 'sup'; span.style.fontSize = `${SUB_SCALE * 100}%`; }
+        box.appendChild(span);
+      }
+      // what the label shows can differ from what was typed (a minus for a hyphen): keep the typed text
+      if (box.textContent !== text) { box.textContent = ''; box.append(text); }
+    };
+    show();
+    // the label drawn on the page hides while the box shows it
+    const hide = (on: boolean) => {
+      const len = Math.max(text.length, (a.label ?? '').length, 2) * doc.style.labelSize * (a.s ?? 1);
+      doc.dirtyRects.push({ x1: a.x - len - 4, y1: a.y - 2 * len, x2: a.x + len + 4, y2: a.y + 2 * len });
+      this.r.hiddenLabel = on ? id : null;
+      this.requestScene();
+    };
+    hide(true);
+    this.host.appendChild(box);
+    box.focus();
+    place(0, [...text].length);
+    box.addEventListener('beforeinput', (e) => {
+      // only plain typing: no bold, no pasted pictures or formatting
+      if (/^format/.test(e.inputType) || e.inputType === 'insertParagraph' || e.inputType === 'insertLineBreak') e.preventDefault();
+    });
+    box.addEventListener('paste', (e) => {
+      e.preventDefault();
+      const t = (e.clipboardData?.getData('text/plain') ?? '').replace(/\s+/g, ' ').trim();
+      if (t) document.execCommand('insertText', false, t);
+    });
+    box.addEventListener('compositionend', () => box.dispatchEvent(new Event('input')));
+    box.addEventListener('input', (ev) => {
+      // leave an input method's unfinished text alone until it is done
+      if ((ev as InputEvent).isComposing) return;
+      const now = [...(box.textContent ?? '')];
+      const old = [...text];
+      // keep the marks of the characters that stayed; new ones are unmarked
+      let p = 0;
+      while (p < now.length && p < old.length && now[p] === old[p]) p++;
+      let q = 0;
+      while (q < now.length - p && q < old.length - p && now[now.length - 1 - q] === old[old.length - 1 - q]) q++;
+      marks = marks.slice(0, p) + '.'.repeat(now.length - p - q) + marks.slice(old.length - q);
+      text = now.join('');
+      const c = caret();
+      show();
+      if (c) place(c[0], c[1]);
+    });
     const finish = (ok: boolean) => {
-      if (this.labelInput !== input) return;
+      if (this.labelInput !== box) return;
       this.labelInput = null;
-      input.remove();
-      if (ok && doc.atoms.has(id) && input.value !== was) {
-        doc.edit('Label', () => this.applyLabel(id, input.value));
+      box.remove();
+      hide(false);
+      if (ok && doc.atoms.has(id) && (text !== was || marks !== wasMarks)) {
+        const lead = text.length - text.trimStart().length;
+        const kept = marks.slice(lead, lead + text.trim().length);
+        doc.edit('Label', () => {
+          this.applyLabel(id, text);
+          const now = doc.atoms.get(id)!;
+          const m = now.label !== null && /[\^_=]/.test(kept) ? kept : undefined;
+          if (now.labelMarks !== m) doc.updateAtom(id, { labelMarks: m });
+        });
         this.lastEdited = id;
         this.changed();
       }
       this.r.overlay.focus();
     };
-    input.addEventListener('keydown', (e) => {
+    box.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); finish(true); }
       // Esc keeps what was typed, as it does for text boxes (clear the box to leave the atom as it was)
       else if (e.key === 'Escape') { e.preventDefault(); finish(true); }
+      else if ((e.ctrlKey || e.metaKey) && (e.code === 'Equal' || e.key === '=' || e.key === '+')) {
+        // Ctrl+Shift+= raises the selected characters, Ctrl+= lowers them; again puts them back
+        e.preventDefault();
+        const c = caret();
+        if (c && c[1] > c[0]) {
+          const want = e.shiftKey ? '^' : '_';
+          const all = [...marks.slice(c[0], c[1])].every((m) => m === want);
+          marks = marks.slice(0, c[0]) + (all ? '.' : want).repeat(c[1] - c[0]) + marks.slice(c[1]);
+          show();
+          place(c[0], c[1]);
+        }
+      } else if ((e.ctrlKey || e.metaKey) && /^[biu]$/i.test(e.key)) e.preventDefault();
       e.stopPropagation();
     });
-    input.addEventListener('blur', () => finish(true));
-    this.labelInput = input;
+    box.addEventListener('blur', () => finish(true));
+    this.labelInput = box;
   }
 
   private commitLabel(): void {
