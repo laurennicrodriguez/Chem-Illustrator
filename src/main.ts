@@ -67,7 +67,12 @@ import { SlideTextRibbon } from './ui/slide-text-ribbon';
 import { CaptionEditor } from './ui/caption-editor';
 import { LayersPanel } from './ui/layers-panel';
 import { Scrollbars } from './ui/scrollbars';
-import { Presenter } from './ui/present';
+import { Presenter, type ShowOptions } from './ui/present';
+import { editHeaderFooter } from './ui/header-footer-dialog';
+import { setUpShow, editCustomShows } from './ui/show-setup-dialog';
+import { defaultShow, showOrder } from './deck/show-setup';
+import { recordingToWav, NARRATION_NAME } from './deck/narration';
+import { clockText } from './deck/show-link';
 import { PresenterView } from './ui/presenter-view';
 import { editMaster } from './ui/master-dialog';
 import { editDrawingStyle } from './ui/style-dialog';
@@ -2001,6 +2006,10 @@ function showSlideState(): void {
   $('[data-cmd="size-standard"]')?.setAttribute('aria-checked', String(named === 'standard'));
   const hidden = String(!!deck.current.hidden);
   for (const b of document.querySelectorAll('[data-cmd="hide-slide"]')) b.setAttribute(b.getAttribute('role') === 'menuitemcheckbox' ? 'aria-checked' : 'aria-pressed', hidden);
+  // Set Up Show's two the ribbon shows as ticks
+  const show = deck.settings.show;
+  for (const b of document.querySelectorAll<HTMLInputElement>('[data-cmd="use-timings"]')) b.checked = !show?.manual;
+  for (const b of document.querySelectorAll<HTMLInputElement>('[data-cmd="play-narrations"]')) b.checked = !show?.noNarration;
 }
 
 // ---------------------------------------------------------------- transitions and animations (Slides mode)
@@ -2017,6 +2026,8 @@ animUi = new AnimationUI($('#ribbon'), $('#anim-section'), {
   finishTyping,
   flash,
   repaint: () => { renderer.repaintAll(); editor.requestScene(); },
+  host: () => $('#canvas-host'),
+  view: () => renderer.view,
 });
 
 slideCmts = new SlideComments($('#cmt-section'), $('#canvas-host'), {
@@ -3067,15 +3078,110 @@ async function customSlideSize(): Promise<void> {
   if (got && deckNow() === d) setSlideSize(got.size, got.fit);
 }
 
-function present(fromHere: boolean, notes = false): void {
+function present(fromHere: boolean, notes = false, how: { custom?: number; windowed?: boolean; rehearse?: boolean; record?: boolean } = {}): void {
   const d = deckNow();
   if (!d) { flash('Present shows slides: use File > New Slides, or open a PowerPoint file.'); return; }
   if (presenter.running || presenterView.running) return;
   finishTyping();
+  // Set Up Show: the slides it plays, how it goes on, and the rest
+  const setup = d.settings.show ?? defaultShow();
+  const order = showOrder(d.slides, setup, d.settings.customShows ?? [], how.custom ?? setup.custom);
+  if (order && !order.length) { flash('The show has no slides to play: every slide it names is hidden or gone (Slide Show > Set Up Show).'); return; }
+  const kiosk = setup.type === 'kiosk' && !how.rehearse && !how.windowed;
+  if (kiosk && !d.slides.some((s) => s.transition?.advanceAfter)) flash('At a kiosk the show goes on only by the slides\' times: give them times with Rehearse Timings (or Transitions > After). Esc ends the show.', 9000);
+  const opts: ShowOptions = {
+    order, noAnimation: setup.noAnimation, noNarration: setup.noNarration, manual: setup.manual, loop: setup.loop, kiosk,
+    windowed: how.windowed || (setup.type === 'window' && !notes && !how.rehearse), rehearse: how.rehearse, record: how.record,
+  };
   editor.paused = true;
   refreshZooms(d);
   // from the start: the first slide that isn't hidden; from here: this slide even when hidden, as in PowerPoint
-  void (notes ? presenterView : presenter).start(d, fromHere ? d.index : d.firstShown());
+  const from = fromHere ? d.index : order ? order[0] : d.firstShown();
+  void (notes ? presenterView.start(d, from, opts) : presenter.start(d, from, opts));
+}
+
+/** Rehearse Timings and Record, kept: each slide's time, and its narration as a sound on it. */
+presenter.onRehearsed = (r) => {
+  const d = deckNow();
+  if (!d) return;
+  void (async () => {
+    if (r.recordings.size) {
+      const sounds = new Map<number, { src: string; seconds: number }>();
+      for (const [i, blob] of r.recordings) {
+        try {
+          const w = await recordingToWav(blob);
+          if (w.seconds > 0.2) sounds.set(i, { src: dataUrl(w.bytes, 'audio/wav'), seconds: w.seconds });
+        } catch { /* a recording this computer can't read is left out */ }
+      }
+      const ix = [...sounds.keys()].filter((i) => i >= 0 && i < d.slides.length);
+      if (ix.length) {
+        const poster = speakerPng(), s = 24;
+        d.editSlides('Record narration', ix, (sd, i) => {
+          // a new recording takes the place of the slide's old one
+          for (const sh of [...sd.shapes.values()]) if (sh.video?.narration) sd.removeShape(sh.id);
+          const n = sounds.get(i)!;
+          sd.addShape({
+            kind: 'picture', x1: d.size.w - s - 12, y1: d.size.h - s - 12, x2: d.size.w - 12, y2: d.size.h - 12, px: { w: 128, h: 128 }, src: poster, name: NARRATION_NAME,
+            video: { src: n.src, audio: true, start: 'auto', once: true, hide: true, narration: true, length: +n.seconds.toFixed(3) },
+          });
+        });
+      } else flash('Nothing was recorded (the microphone gave no sound).');
+    }
+    d.setTimings(r.times, r.recordings.size ? 'Record slide show timings' : 'Rehearse timings');
+    flash(`Kept: the show takes ${clockText(r.total)}${r.recordings.size ? ', with narration on the slides' : ''}. Set Up Show > Advance slides can turn the times off.`, 8000);
+  })();
+};
+
+/** Insert > Header & Footer (Date & Time, Slide Number): the slides', notes pages' and handouts' header and footer. */
+async function headerFooter(tab: 'slide' | 'notes' = 'slide'): Promise<void> {
+  const d = deckNow();
+  if (!d?.current || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const ix = pickedSlides();
+  const got = await editHeaderFooter(d.master, d.current, ix.length, tab);
+  if (!got || deckNow() !== d) return;
+  d.setHeaderFooter(got.master, got.show, got.scope === 'picked' ? ix : undefined);
+}
+
+/** Slide Show > Set Up Show. */
+async function setUpShowCmd(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const got = await setUpShow(d.settings.show, d.settings.customShows ?? [], d.slides.length);
+  if (got && deckNow() === d) d.setSettings({ ...d.settings, show: got }, 'Set up show');
+  showSlideState();
+}
+
+/** Custom Slide Show > Custom Shows: make and change them (and play one). */
+async function customShowsCmd(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const names = d.slides.map((s, i) => {
+    const t = [...d.docOf(i).captions.values()].find((c) => c.ph === 'title');
+    const words = t ? t.runs.map((r) => r.text).join('').replace(/\s+/g, ' ').trim() : '';
+    return { id: s.id, name: `${i + 1}. ${words || 'Slide ' + (i + 1)}${s.hidden ? ' (hidden)' : ''}` };
+  });
+  const got = await editCustomShows(d.settings.customShows ?? [], names);
+  if (!got || deckNow() !== d) return;
+  const show = d.settings.show && d.settings.show.custom !== undefined && !got.shows.some((c) => c.id === d.settings.show!.custom) ? { ...d.settings.show, custom: undefined } : d.settings.show;
+  if (show && show.custom === undefined) delete show.custom;
+  d.setSettings({ ...d.settings, customShows: got.shows, ...(show ? { show } : {}) }, 'Custom shows');
+  if (got.play !== undefined) present(false, false, { custom: got.play });
+}
+
+/** Custom Slide Show: the deck's custom shows to play, and Custom Shows… */
+function customShowMenu(anchor: HTMLElement): void {
+  const d = deckNow();
+  if (!d) return;
+  const r = anchor.getBoundingClientRect();
+  const shows = d.settings.customShows ?? [];
+  showContextMenu(r.left, r.bottom, [
+    ...shows.map((c) => ({ cmd: `custom-show:${c.id}`, label: c.name })),
+    ...(shows.length ? [null] : []),
+    { cmd: 'custom-shows', label: 'Custom Shows…' },
+  ], { run: (cmd) => (cmd.startsWith('custom-show:') ? present(false, false, { custom: Number(cmd.slice(12)) }) : void command(cmd)), key: commandKey });
 }
 
 /** Ink drawn in the slide show, kept: shapes on its slides, as one step to undo. */
@@ -4003,7 +4109,8 @@ function setPictureStyle(look: PictureLook | undefined): boolean {
 /** Slide commands that don't apply to a design's single page. */
 const SLIDE_ONLY = new Set(['compare-slides', 'section-menu', 'new-slide', 'duplicate-slide', 'delete-slide', 'cut-slides', 'copy-slides', 'paste-slides', 'paste-slides-keep', 'hide-slide', 'reuse-slides', 'size-wide', 'size-standard', 'size-custom', 'slide-master', 'slide-templates',
   'edit-layouts', 'view-sorter', 'add-section', 'rename-section', 'remove-section', 'remove-section-slides', 'remove-all-sections', 'section-up', 'section-down', 'collapse-sections', 'expand-sections',
-  'slide-transitions', 'slide-animations', 'animation-pane', 'preview-slide', 'remove-animation', 'insert-slide-zoom', 'insert-summary-zoom', 'action-settings', 'insert-video', 'insert-audio']);
+  'slide-transitions', 'slide-animations', 'animation-pane', 'preview-slide', 'remove-animation', 'insert-slide-zoom', 'insert-summary-zoom', 'action-settings', 'insert-video', 'insert-audio',
+  'reading-view', 'rehearse-timings', 'record-show', 'set-up-show', 'custom-shows', 'custom-show-menu', 'use-timings', 'play-narrations', 'header-footer', 'insert-date-time', 'insert-slide-number']);
 
 /** The animation commands: an effect for the selected objects (the right-click menu's Animation). */
 const ANIM_COMMANDS: { cmd: string; label: string }[] = [false, true].flatMap((exit) => EFFECTS.filter((e) => !(exit && e.emph)).map((e) => ({
@@ -4128,6 +4235,32 @@ const COMMANDS: Record<string, () => unknown> = {
   present: () => present(false),
   'present-current': () => present(true),
   'presenter-view': () => present(false, true),
+  'reading-view': () => present(true, false, { windowed: true }),
+  'rehearse-timings': () => present(false, false, { rehearse: true }),
+  'record-show': () => present(false, false, { rehearse: true, record: true }),
+  'set-up-show': () => void setUpShowCmd(),
+  'custom-shows': () => void customShowsCmd(),
+  'custom-show-menu': () => {
+    const b = document.querySelector<HTMLElement>('#ribbon [data-cmd="custom-show-menu"]');
+    customShowMenu(b && b.offsetParent ? b : document.querySelector<HTMLElement>('#ribbon .rb-tabs')!);
+  },
+  'use-timings': () => {
+    const d = deckNow();
+    if (!d) return;
+    const s = d.settings.show ?? defaultShow();
+    d.setSettings({ ...d.settings, show: { ...s, manual: s.manual ? undefined : true } }, s.manual ? 'Use timings' : 'Advance manually');
+    showSlideState();
+  },
+  'play-narrations': () => {
+    const d = deckNow();
+    if (!d) return;
+    const s = d.settings.show ?? defaultShow();
+    d.setSettings({ ...d.settings, show: { ...s, noNarration: s.noNarration ? undefined : true } }, s.noNarration ? 'Play narrations' : 'Show without narration');
+    showSlideState();
+  },
+  'header-footer': () => void headerFooter(),
+  'insert-date-time': () => void headerFooter(),
+  'insert-slide-number': () => void headerFooter(),
   cut: () => cut(),
   copy: () => copy(),
   paste: () => paste(),
@@ -7269,6 +7402,11 @@ function sampleMolecule(): void {
 for (const id of ['#ribbon', '#design-ribbon']) {
   $(id).addEventListener('click', (e) => {
     const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-cmd]')?.dataset.cmd;
+    if (cmd) command(cmd);
+  });
+  // (ticks in the ribbon too)
+  $(id).addEventListener('change', (e) => {
+    const cmd = (e.target as HTMLElement).closest<HTMLInputElement>('input[type="checkbox"][data-cmd]')?.dataset.cmd;
     if (cmd) command(cmd);
   });
 }
