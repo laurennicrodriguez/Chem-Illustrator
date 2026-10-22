@@ -52,6 +52,8 @@ export interface EvalHost {
    * aren't counted twice), a row a filter hides, or with `hidden` any hidden row (109 and so on)?
    */
   subtotalSkip?(sheet: string | undefined, row: number, col: number, hidden: boolean): boolean;
+  /** A field of the compound card in a cell (Data > Data Types > Compound): undefined for a cell with no card, null for a field it doesn't have. */
+  field?(sheet: string | undefined, row: number, col: number, name: string): Value | null | undefined;
 }
 
 /** A number as a cell holds it: −0 is 0, infinities and NaN are #NUM!. */
@@ -512,6 +514,7 @@ const LIFTED: Record<string, number> = {
 
 /** Functions that only work out the arguments they need, or need a reference rather than the values in it. */
 const LAZY: Record<string, (argNodes: Node[], host: EvalHost) => Arg> = {
+  FIELDVALUE: (argNodes, host) => fieldValue(argNodes, host),
   IF: (argNodes, host) => {
     if (argNodes.length < 2 || argNodes.length > 3) return ERR.value('IF needs 2 or 3 arguments: IF(test, if true, if false)');
     const test = evalNode(argNodes[0], host);
@@ -601,6 +604,29 @@ const LAZY: Record<string, (argNodes: Node[], host: EvalHost) => Arg> = {
     return isError(r) ? r : evalNode({ t: 'ref', v: r }, host);
   },
 };
+
+/**
+ * FIELDVALUE(A2,"Molecular weight"): a field of the compound card in A2, or of each cell of a
+ * block (an array). #FIELD! for a cell that isn't a compound, or a field its card doesn't have.
+ */
+function fieldValue(argNodes: Node[], host: EvalHost): Arg {
+  if (argNodes.length !== 2) return ERR.value('FIELDVALUE needs a compound cell and a field: FIELDVALUE(A2,"Molecular weight")');
+  const name = scalar(evalNode(argNodes[1], host));
+  if (isError(name)) return name;
+  const r = refOf(argNodes[0], host);
+  if (isError(r)) return ERR.field('FIELDVALUE needs a cell holding a compound (Data > Data Types > Compound)');
+  if (r.sheet !== undefined && !host.hasSheet(r.sheet)) return ERR.ref(`There is no sheet called "${r.sheet}"`);
+  const one = (row: number, col: number): Value => {
+    const v = host.field?.(r.sheet, row, col, String(name ?? ''));
+    if (v === undefined) return ERR.field('The cell isn\'t a compound (Data > Data Types > Compound)');
+    if (v === null) return ERR.field(`The compound has no field "${String(name ?? '')}"`);
+    return v;
+  };
+  const R = refRange(r);
+  if (R.r1 === R.r2 && R.c1 === R.c2) return one(R.r1, R.c1);
+  if ((R.r2 - R.r1 + 1) * (R.c2 - R.c1 + 1) > 100000) return ERR.value('FIELDVALUE takes a block of up to 100,000 cells');
+  return array(Array.from({ length: R.r2 - R.r1 + 1 }, (_, i) => Array.from({ length: R.c2 - R.c1 + 1 }, (_, j) => one(R.r1 + i, R.c1 + j))));
+}
 
 /** ROW and COLUMN. */
 function rowCol(argNodes: Node[], host: EvalHost, row: boolean): Arg {

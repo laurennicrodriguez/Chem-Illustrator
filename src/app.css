@@ -2154,6 +2154,61 @@ dialog.pivot-fields { width: min(92vw, 380px); max-height: calc(100vh - 120px); 
 .pivot-chip { text-align: left; padding: 2px 6px; border-radius: 4px; font-size: 12px; cursor: grab; }
 .pivot-empty { font-size: 12px; margin: 6px 0; }
 
+/* Data > Get Data: the Query Editor, Navigator and Queries & Connections */
+dialog.query-editor { inset: 72px 16px auto 16px; width: auto; max-width: 1180px; margin: 0 auto; max-height: calc(100vh - 96px); display: flex; flex-direction: column; }
+dialog.query-editor form { display: flex; flex-direction: column; min-height: 0; }
+dialog.query-editor .tool-body { display: flex; flex-direction: column; min-height: 0; }
+.qe-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 6px; }
+.qe-name { display: inline-flex; align-items: center; gap: 6px; }
+.qe-name input { width: 16em; }
+.qe-source { overflow-wrap: anywhere; min-width: 0; }
+.qe-settings { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.qe-settings label { display: inline-flex; align-items: center; gap: 4px; }
+.qe-settings select { max-width: 22em; }
+.qe-tools { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.qe-tools button { font-size: 12px; padding: 3px 8px; }
+.qe-main { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 10px; min-height: 0; margin-top: 8px; }
+.qe-grid { min-width: 0; min-height: 0; }
+.qe-table-box { overflow: auto; max-height: calc(100vh - 360px); min-height: 160px; border: 1px solid var(--line); border-radius: 4px; }
+.qn-preview .qe-table-box { max-height: 320px; }
+.qe-table { border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+.qe-table th, .qe-table td { border: 1px solid var(--line); padding: 2px 6px; text-align: left; max-width: 22em; overflow: hidden; text-overflow: ellipsis; }
+.qe-table thead th { position: sticky; top: 0; background: var(--panel); cursor: pointer; user-select: none; }
+.qe-table th.on, .qe-table td.on { background: color-mix(in srgb, var(--accent, #2f6fdf) 16%, transparent); }
+.qe-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.qe-table td.null { color: var(--muted); font-style: italic; }
+.qe-table td.err { color: #c62828; }
+.qe-table .qe-rn { color: var(--muted); text-align: right; cursor: default; }
+.qe-type { display: inline-block; font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; margin-right: 5px; font-weight: normal; }
+.qe-steps h3 { font-size: 13px; margin: 0 0 4px; }
+.qe-step-list { list-style: none; margin: 0; padding: 0; max-height: calc(100vh - 380px); overflow: auto; border: 1px solid var(--line); border-radius: 4px; }
+.qe-step-list li { display: flex; align-items: center; border-bottom: 1px solid var(--line); }
+.qe-step-list li:last-child { border-bottom: 0; }
+.qe-step-list li.on { background: color-mix(in srgb, var(--accent, #2f6fdf) 16%, transparent); }
+.qe-step-list li.bad .qe-step { color: #c62828; }
+.qe-step { flex: 1 1 auto; min-width: 0; text-align: left; border: 0; background: none; padding: 4px 6px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; }
+.qe-x { border: 0; background: none; padding: 2px 6px; font-size: 14px; color: var(--muted); }
+.qe-error { color: #c62828; margin: 8px 0; }
+.qe-status { margin: 6px 0 0; font-size: 12px; }
+@media (max-width: 700px) { .qe-main { grid-template-columns: 1fr; } }
+dialog.query-nav { width: min(calc(100vw - 32px), 760px); }
+.qn-box { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 10px; }
+.qn-list { display: flex; flex-direction: column; gap: 2px; max-height: 340px; overflow: auto; }
+.qn-list button { text-align: left; font-size: 12px; padding: 4px 6px; }
+.qn-list button.on { outline: 2px solid var(--accent, #2f6fdf); outline-offset: -2px; }
+@media (max-width: 600px) { .qn-box { grid-template-columns: 1fr; } }
+dialog.query-pane { width: min(calc(100vw - 32px), 420px); max-height: calc(100vh - 120px); }
+.qp-item { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin: 6px 0; font-size: 12px; }
+.qp-item strong { font-size: 13px; }
+/* Data > Data Types > Compound: the card in the side panel */
+.cp-compound { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin: 4px 0 8px; }
+.cp-compound-title { margin: 0 0 4px; overflow-wrap: anywhere; }
+.cp-compound-fields { border-collapse: collapse; width: 100%; font-size: 12px; }
+.cp-compound-fields th { text-align: left; font-weight: normal; color: var(--muted); padding: 1px 6px 1px 0; vertical-align: top; white-space: nowrap; }
+.cp-compound-fields .cp-val { overflow-wrap: anywhere; word-break: break-word; }
+.cp-compound-fields td:last-child { width: 1.6em; }
+.cp-add { font-size: 12px; padding: 0 5px; line-height: 1.4; }
+
 /* Picture Format */
 .pic-dialog .md-grid { max-height: 46vh; }
 .pic-dialog .pic-preview { background: #fff; }

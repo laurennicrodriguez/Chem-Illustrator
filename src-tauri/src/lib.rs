@@ -8,6 +8,7 @@ mod keep;
 mod ole;
 mod open_dialog;
 mod portable;
+mod web;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -324,7 +325,8 @@ pub fn run() {
             ole::ole_close,
             ole::ole_registered,
             ole::ole_register,
-            ole::ole_object_folder
+            ole::ole_object_folder,
+            web::web_get
         ])
         .build(tauri::generate_context!())
         .expect("error while running Chem Illustrator")
