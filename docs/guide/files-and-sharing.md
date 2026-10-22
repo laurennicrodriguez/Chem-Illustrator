@@ -8,9 +8,9 @@ Each kind of tab saves to its own file type. **Save** (Ctrl+S) uses the first ty
 
 | Tab | Opens | Saves | Also exports |
 |---|---|---|---|
-| Drawing | .cdxml, .cdx | .cdxml (the default), .cdx | Molfile (.mol), PDF, PNG, SVG |
-| Slides | .pptx | .pptx | PDF (one page per slide), PNG or SVG of the current slide |
-| Design | .pptx | .pptx (one slide) | PDF, PNG, SVG |
+| Drawing | .cdxml, .cdx | .cdxml (the default), .cdx | Molfile (.mol), PDF, PNG, TIFF, SVG, EMF, EPS |
+| Slides | .pptx | .pptx | PDF (one page per slide), PNG, TIFF, SVG, EMF or EPS of the current slide |
+| Design | .pptx | .pptx (one slide) | PDF, PNG, TIFF, SVG, EMF, EPS |
 | Document | .docx | .docx | PDF |
 | Sheet | .xlsx, .csv, .tsv, .txt, .sdf | .xlsx, .csv, .sdf | Charts as PNG or SVG |
 | Workspace | .ciworkspace | .ciworkspace | |
@@ -34,8 +34,10 @@ Open files with **File ▸ Open…** (Ctrl+O), or drop them onto the window. Pic
 - **Molfile:** **File ▸ Export Molfile…** saves the selected structures (or all of them) as a .mol file; **Edit ▸ Copy as Molfile Text** copies them as text. A molfile pasted with Ctrl+V is drawn.
 - **CDXML text:** **Edit ▸ Copy as CDXML Text** copies the drawing as ChemDraw XML.
 - **SD files (.sdf):** open in a sheet with one row per structure and its data fields as columns.
-- **PDF:** **File ▸ Export PDF…** for drawings, slides, designs and documents. Structures and text stay sharp at any zoom.
-- **PNG and SVG:** **File ▸ Export Picture…** for a drawing, the current slide or a design page. Type the dpi for a PNG (300 for colour, 600 to 1200 for line art), and pick a white or page-coloured background or a see-through one.
+- **PDF:** **File ▸ Export PDF…** for drawings, slides, designs and documents. Structures and text stay sharp at any zoom. The fonts go inside the file, so it looks the same everywhere and passes journals' "all fonts embedded" checks. Arial, Helvetica and similar fonts are drawn with Arimo, Times with Tinos and Courier with Cousine: free fonts with exactly the same letter widths. A character none of those has (an arrow such as →) uses the reader's Symbol font.
+- **Pictures:** **File ▸ Export Picture…** for a drawing, the current slide or a design page. Pick a white or page-coloured background or a see-through one.
+  - **PNG** and **TIFF** are pictures made of dots. Type the dpi (300 for colour, 600 to 1200 for line art). TIFF files are LZW-compressed, the kind many journals ask for.
+  - **SVG**, **EMF** and **EPS** keep shapes and text sharp at any size. SVG suits Illustrator, Inkscape and web pages; EMF suits Word and PowerPoint on Windows; EPS suits older journal systems. EPS uses the standard PostScript fonts (Helvetica, Times, Courier and Symbol), and has no see-through colours, so those are mixed with white.
 
 ## Copy and paste
 

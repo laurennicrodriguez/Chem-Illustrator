@@ -217,7 +217,7 @@ For handouts you can also pick the paper and **Frame the slides**. The system's 
 - Open the same .pptx here again (Ctrl+O) and the structures are editable drawings again, even after PowerPoint has saved the file.
 - The free fonts that come with the app are saved inside the file when you use them, so the deck looks the same on a computer that doesn't have them.
 - **File ▸ Export PDF…** makes a PDF with one page per slide.
-- **File ▸ Export Picture…** saves the current slide as a PNG at the dpi you choose, or as an SVG.
+- **File ▸ Export Picture…** saves the current slide as a PNG or TIFF at the dpi you choose, or as an SVG, EMF or EPS.
 
 Opening a deck made in PowerPoint works too. A ChemDraw object embedded in a PowerPoint slide comes in as a picture, not an editable structure. More on file types in [Files and sharing](files-and-sharing.md).
 

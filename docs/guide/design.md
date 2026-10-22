@@ -124,7 +124,7 @@ The **Layers** panel on the right lists everything on the page, front first.
 ## Saving and exporting
 
 - **Save** (Ctrl+S) writes a one-slide PowerPoint file (.pptx). In PowerPoint the shapes look the same and connectors are PowerPoint connectors. Open it here again and everything is editable, with connectors still attached to their shapes.
-- **Export Picture** (ribbon **Share** group, or **File ▸ Export Picture…**) saves a PNG at the resolution you type, or an SVG. Choose the page colour or a see-through background. Journals usually ask for 300 dpi for colour pictures and 600 to 1200 dpi for line art. A very large page at a very high dpi is reduced to what fits in memory, and a message says which dpi was used.
+- **Export Picture** (ribbon **Share** group, or **File ▸ Export Picture…**) saves a PNG or TIFF at the resolution you type, or an SVG, EMF or EPS. Choose the page colour or a see-through background. Journals usually ask for 300 dpi for colour pictures and 600 to 1200 dpi for line art. A very large page at a very high dpi is reduced to what fits in memory, and a message says which dpi was used.
 - **Export PDF** (ribbon **Share** group, or **File ▸ Export PDF…**) saves the page at its exact size.
 - **File ▸ Print…** (Ctrl+P) prints the page at its own size.
 

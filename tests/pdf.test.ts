@@ -5,6 +5,9 @@ import { describe, it, expect } from 'vitest';
 import { unzlibSync } from 'fflate';
 import { writePdf, textPieces, standardFont, jpegInfo, PdfPage } from '../src/io/pdf';
 import { VecPath } from '../src/render/vector';
+import { TrueType } from '../src/io/pdf-fonts';
+import { woffToSfnt } from '../src/io/font-embed';
+import { readFileSync } from 'node:fs';
 
 const latin1 = (b: Uint8Array) => Array.from(b, (c) => String.fromCharCode(c)).join('');
 
@@ -103,5 +106,40 @@ describe('PDF files', () => {
     expect(c1).toContain('400 0 0 -100 300 200 cm');
     // a picture that can't be read shows as a grey box
     expect(content(objs, pageObjs[1])).toContain('0.85 0.85 0.85 rg 50 50 10 10 re f');
+  });
+
+  it('keeps the fonts inside the file, with widths and a map back to the characters', async () => {
+    const file = (sub: string) => woffToSfnt(new Uint8Array(readFileSync(`node_modules/@fontsource/arimo/files/arimo-${sub}-700-normal.woff`)));
+    const asked: string[] = [];
+    const pdf = await writePdf([{ w: 200, h: 100, items: [
+      { kind: 'text', text: 'Yield (β) → 80%', x: 10, y: 50, size: 12, family: 'Arial', bold: true, italic: false, color: '#000000', widths: Array(15).fill(6) },
+    ] }], { image: async () => null, fonts: async (family, bold) => { asked.push(`${family}/${bold}`); return [file('latin'), file('greek')]; } });
+    expect(asked).toEqual(['Arial/true']);
+    const objs = objects(pdf);
+    const all = [...objs.values()];
+    const type0 = all.filter((b) => b.includes('/Subtype /Type0'));
+    // the Latin letters and the Greek one each come from their own file
+    expect(type0).toHaveLength(2);
+    expect(type0[0]).toMatch(/\/BaseFont \/CI[A-Z]{4}\+Arimo-Bold/);
+    expect(all.filter((b) => b.includes('/FontFile2'))).toHaveLength(2);
+    expect(all.some((b) => /\/CIDFontType2[^]*\/W \[\d+ \[\d+/.test(b))).toBe(true);
+    const c = content(objs, all.find((b) => b.includes('/Type /Page '))!);
+    expect(c).toMatch(/Tf .* Tm <[0-9A-F]{4,}> Tj ET/);
+    // the arrow is in neither file, so it falls back to Symbol
+    expect(all.some((b) => b.includes('/BaseFont /Symbol'))).toBe(true);
+    expect(all.some((b) => b.includes('/BaseFont /Helvetica'))).toBe(false);
+    // the ToUnicode map gives β back for searching and copying
+    const tu = all.filter((b) => b.includes('stream\n') && !b.includes('/Length1') && !b.includes('/Type'));
+    const maps = tu.map((b) => latin1(unzlibSync(Uint8Array.from(b.slice(b.indexOf('stream\n') + 7, b.lastIndexOf('\nendstream')), (ch) => ch.charCodeAt(0))))).filter((t) => t.includes('beginbfchar'));
+    expect(maps.some((m) => m.includes('<03B2>'))).toBe(true);
+  });
+
+  it('reads a TrueType file\'s glyphs and widths', () => {
+    const tt = new TrueType(woffToSfnt(new Uint8Array(readFileSync('node_modules/@fontsource/arimo/files/arimo-latin-400-normal.woff'))));
+    expect(tt.postScriptName).toBe('Arimo-Regular');
+    expect(tt.glyph(0x41)).toBeGreaterThan(0);
+    // Arimo has Arial's widths: "A" is 667 thousandths of the size
+    expect(tt.width(tt.glyph(0x41))).toBe(667);
+    expect(tt.embeddable).toBe(true);
   });
 });

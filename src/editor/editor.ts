@@ -965,7 +965,8 @@ export class Editor {
     const b = { x1: raw.x1 - m, y1: raw.y1 - m, x2: raw.x2 + m, y2: raw.y2 + m };
     const w = this.r.width, h = this.r.height;
     const bw = Math.max(20, b.x2 - b.x1), bh = Math.max(20, b.y2 - b.y1);
-    const s = Math.min(8, 0.92 * Math.min(w / bw, h / bh));
+    // (never past 400%, so one small structure isn't blown up to fill the window)
+    const s = Math.min(4 * (96 / 72), 0.92 * Math.min(w / bw, h / bh));
     this.r.view.scale = s;
     this.r.view.ox = w / 2 - ((b.x1 + b.x2) / 2) * s;
     this.r.view.oy = h / 2 - ((b.y1 + b.y2) / 2) * s;

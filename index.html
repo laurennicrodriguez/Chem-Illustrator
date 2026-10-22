@@ -30,6 +30,7 @@
         <button role="menuitem" class="desktop-only" data-cmd="save-workspace-as" title="Save the open tabs as a new workspace somewhere else" hidden>Save Workspace As…</button>
         <hr />
         <button role="menuitem" data-cmd="drawing-style" title="How structures are drawn: a journal's style (ACS, RSC, Nature…) or your own, with every number changeable">Drawing Style…</button>
+        <button role="menuitem" data-modes="drawing" data-cmd="page-setup" title="The drawing's paper size (Letter, A4… or your own) and way up, whether it adds pages as it grows, and the default for new drawings">Page Setup…</button>
         <hr />
         <button role="menuitem" data-modes="drawing slides design document" data-cmd="export-pdf">Export PDF…</button>
         <button role="menuitem" data-modes="drawing slides design" data-cmd="export-picture">Export Picture…</button>
@@ -101,6 +102,7 @@
     <button role="menuitemcheckbox" aria-checked="false" data-cmd="dark-page" title="Show the page dark on screen only: files, printing, copying and exports are not changed"><span>Dark Page</span></button>
     <button role="menuitem" data-cmd="dark-colours" title="Choose the dark page's colours (Graphite, Slate, Warm dark) or make your own">Dark Page Colours…</button>
     <button role="menuitemcheckbox" aria-checked="true" data-cmd="group-tips" title="Rest the mouse on an abbreviation such as OTBS, Boc or CO2Me to see the group written out, with its name and formula"><span>Group Tooltips</span></button>
+    <button role="menuitemcheckbox" aria-checked="true" data-modes="drawing" data-cmd="page-edge" title="Show the edge of the page in drawings (File ▸ Page Setup sets its size)"><span>Page Edge</span></button>
     <button role="menuitemcheckbox" aria-checked="true" data-cmd="scroll-bars" title="Scroll bars along the bottom and right of the drawing, showing where you are"><span>Scroll Bars</span></button>
     <div class="submenu">
     <button role="menuitem" class="has-sub" aria-haspopup="menu" aria-expanded="false">Text Formatting Bar</button>
@@ -1494,6 +1496,18 @@
       <canvas id="scene"></canvas>
       <canvas id="overlay" tabindex="0" role="application" aria-roledescription="drawing" aria-label="Drawing"></canvas>
       <div id="warn-tip" role="tooltip" hidden></div>
+      <section id="welcome" class="welcome-card" aria-labelledby="welcome-title" hidden>
+        <h2 id="welcome-title">Welcome to Chem Illustrator</h2>
+        <ul>
+          <li><b>Draw</b>: pick a bond or ring on the left and click the page; drag to aim. Click an atom to grow from it.</li>
+          <li><b>Type atoms</b>: point at an atom and press a key (O, N, Cl as <kbd>l</kbd>…). <b>Edit ▸ Hotkeys</b> lists them all.</li>
+          <li><b>Paste</b> a SMILES or a molfile to get the structure, or type a name in <b>Insert ▸ Structure from Name or SMILES</b>.</li>
+          <li><b>Find any command</b> with the search box at the top (<kbd>Alt</kbd>+<kbd>Q</kbd>).</li>
+          <li><b>Right-click</b> anything for what you can do with it; the panel on the right shows its style and analysis.</li>
+          <li>Tabs at the top add <b>Slides</b>, <b>Sheets</b>, <b>Documents</b> and <b>Designs</b>, each with the drawing tools.</li>
+        </ul>
+        <p class="welcome-buttons"><a href="#" data-cmd="user-guide">Open the user guide</a><span class="grow"></span><button type="button" class="primary" id="welcome-close">Start drawing</button></p>
+      </section>
     </div>
     <div id="main-snap" hidden title="Click to work on the slide again"><canvas></canvas></div>
     <div id="split-pane" hidden>
@@ -1549,7 +1563,10 @@
     </div>
   </aside>
 
-  <footer id="hint"></footer>
+  <footer id="status"><span id="hint"></span><label class="zoom-pick canvas-only" title="Zoom (Ctrl+= and Ctrl+− also zoom; F6 fits the window)"><span class="sr-only">Zoom</span><select id="zoom-pick">
+    <option value="fit">Fit</option><option value="actual">Actual size</option><option disabled>──</option>
+    <option value="25">25%</option><option value="50">50%</option><option value="75">75%</option><option value="100">100%</option><option value="150">150%</option><option value="200">200%</option><option value="300">300%</option><option value="400">400%</option><option value="800">800%</option>
+    <option value="now" hidden></option></select></label></footer>
   <div id="flash" role="status" aria-live="polite"></div>
   <div id="sr-say" class="sr-only" aria-live="polite"></div>
 

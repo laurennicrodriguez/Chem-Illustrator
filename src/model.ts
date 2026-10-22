@@ -741,6 +741,44 @@ export interface TableData {
   notes?: TextRun[];
 }
 
+/** A drawing's page: the drawing area of one sheet of paper (inside its margins), in points. */
+export interface PageSetup {
+  w: number;
+  h: number;
+  /** The paper's name (Letter, A4…), for the Page Setup window. */
+  name?: string;
+  /** More pages are added when the drawing goes past the page; otherwise it is kept on the page when saved. */
+  grow: boolean;
+}
+
+/** Paper sizes, as the area ChemDraw draws on (the paper less half-inch margins). */
+export const PAPER: { name: string; label: string; w: number; h: number }[] = [
+  { name: 'letter', label: 'US Letter (8.5 × 11 in)', w: 540, h: 720 },
+  { name: 'a4', label: 'A4 (210 × 297 mm)', w: 523, h: 770 },
+  { name: 'legal', label: 'US Legal (8.5 × 14 in)', w: 540, h: 936 },
+  { name: 'a3', label: 'A3 (297 × 420 mm)', w: 770, h: 1118 },
+  { name: 'tabloid', label: 'Tabloid (11 × 17 in)', w: 720, h: 1152 },
+];
+
+/**
+ * A drawing kept on its page (File > Page Setup without "add pages"): moved back onto the page
+ * where it has gone past it and fits, as one undoable step. False when it is too big to fit.
+ */
+export function keepOnPage(doc: Doc): boolean {
+  const p = doc.page, b = doc.bounds();
+  if (!p || p.grow || !b) return true;
+  if (b.x2 - b.x1 > p.w || b.y2 - b.y1 > p.h) return false;
+  const dx = b.x1 < 0 ? -b.x1 : b.x2 > p.w ? p.w - b.x2 : 0, dy = b.y1 < 0 ? -b.y1 : b.y2 > p.h ? p.h - b.y2 : 0;
+  if (!dx && !dy) return true;
+  doc.edit('Keep on page', () => {
+    doc.moveAtoms(new Set(doc.atoms.keys()), dx, dy);
+    for (const c of [...doc.captions.values()]) doc.updateCaption(c.id, { x: c.x + dx, y: c.y + dy });
+    for (const r of [...doc.arrows.values()]) doc.updateArrow(r.id, { tail: { x: r.tail.x + dx, y: r.tail.y + dy }, head: { x: r.head.x + dx, y: r.head.y + dy } });
+    for (const s of [...doc.shapes.values()]) doc.updateShape(s.id, { x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy, ...(s.poly ? { poly: s.poly.map((q) => ({ x: q.x + dx, y: q.y + dy })) } : {}) });
+  });
+  return true;
+}
+
 export type Entity = Atom | Bond | Caption | Arrow | Shape;
 /** One letter per entity type: atom, bond, caption, arrow (r), shape. */
 /** What an undo step can hold: atoms, bonds, captions, arrows, shapes, and 'y' the drawing style. */
@@ -799,6 +837,8 @@ export class Doc {
   style: DocStyle = { ...ACS_1996 };
   /** Page colour. */
   background = '#ffffff';
+  /** The page the drawing is on (File > Page Setup): its size in points, and whether it grows to hold the drawing. Null: no page shown. */
+  page: PageSetup | null = null;
   /**
    * Draw only the highlights (a highlight animated on its own in a slide show, or saved to
    * PowerPoint as its own picture behind its structure). Not saved.
@@ -1417,6 +1457,7 @@ export class Doc {
   loadFrom(other: Doc): void {
     this.style = { ...other.style };
     this.background = other.background;
+    this.page = other.page && { ...other.page };
     this.source = other.source;
     this.nextId = Math.max(this.nextId, other.nextId);
     this.atoms.clear(); this.bonds.clear(); this.captions.clear(); this.arrows.clear(); this.shapes.clear();
@@ -1441,7 +1482,7 @@ export class Doc {
    */
   swap(other: Doc): void {
     if (this.tx || other.tx) throw new Error('Cannot swap documents in the middle of an edit');
-    const fields = ['style', 'background', 'source', 'textStyles', 'atoms', 'bonds', 'captions', 'arrows', 'shapes', 'adj', 'centresOf',
+    const fields = ['style', 'background', 'page', 'source', 'textStyles', 'atoms', 'bonds', 'captions', 'arrows', 'shapes', 'adj', 'centresOf',
       'grid', 'atomCell', 'maxBondLen', 'bondLenStale', 'undoStack', 'redoStack'] as const;
     const a = this as unknown as Record<string, unknown>, b = other as unknown as Record<string, unknown>;
     for (const f of fields) { const t = a[f]; a[f] = b[f]; b[f] = t; }
