@@ -2,6 +2,8 @@
 // toolbar, the drawing area (with the slide list and notes in Slides mode, or the grid in Sheet
 // mode), and the panels on the right.
 
+import { readDocumentFile, writeDocumentFile } from './io/doc-files';
+import { newDocDesign, setNewDocDesign } from './document/themes';
 import { fieldEnv } from './document/fields';
 import type { QuickPart } from './document/quick-parts';
 import { SLIDE_TABLE_STYLES, DEFAULT_SLIDE_TABLE_STYLE } from './deck/table-styles';
@@ -1757,8 +1759,8 @@ const ws: Workspace = new Workspace(doc, {
     write: (book, name) => writeSheetFile(book, name, sheetFiles),
   },
   documents: {
-    read: (bytes) => readDocx(bytes, docRead),
-    write: (d) => writeDocx(d, docFiles),
+    read: (bytes, name) => readDocumentFile(bytes, name, docRead),
+    write: (d, name) => writeDocumentFile(d, name, docFiles),
   },
   newStyle: (mode) => { const n = modeStyleFor(mode); return n ? styleNamed(n, ownStyles) ?? null : null; },
   newPage: () => (defaultPage ? { ...defaultPage } : null),
@@ -4028,6 +4030,7 @@ const docMode = new DocumentMode({
   reviewNameChanged: () => storeSettings(),
   quickParts: () => docQuickParts,
   setQuickParts: (list) => { docQuickParts = list; storeSettings(); },
+  setNewDesign: (d) => { setNewDocDesign(d); storeSettings(); },
   openDocuments: () => {
     const seen = new Set<unknown>();
     return ws.tabs.filter((t) => t.mode === 'document' && t.document && !seen.has(t.document) && seen.add(t.document)).map((t) => ({ name: ws.label(t), t: t.document!.t }));
@@ -5831,6 +5834,7 @@ function storeSettings(): void {
     keep: keepPrefs,
     highlightLooks: ownLooks,
     quickParts: docQuickParts,
+    docDesign: newDocDesign(),
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -5969,6 +5973,7 @@ void loadSettings().then((s) => {
   wordObjectsOffered = s.wordObjectsOffered;
   setReviewAuthor(s.reviewName);
   docQuickParts = s.quickParts;
+  setNewDocDesign(s.docDesign);
   skipVersion = s.skipVersion;
   recentFiles = s.recentFiles;
   recentSymbols = s.recentSymbols;

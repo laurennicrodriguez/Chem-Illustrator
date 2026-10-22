@@ -38,7 +38,7 @@ import { DocComments } from './doc-comments';
 import { Ruler, docRulerPrefs, type RulerGeometry } from './ruler';
 import { StylesPane } from './styles-pane';
 import { TOF_NAMES, tocEntries, tofEntries } from '../document/toc';
-import { changesIn, countChanges, decide, decideEverywhere, reviewAuthor, setReviewAuthor } from '../document/revisions';
+import { changeName, changesIn, countChanges, decide, decideEverywhere, reviewAuthor, reviewers, setReviewAuthor, setTrackFormatting, trackingFormatting, type MarkupView, type ReviewView } from '../document/revisions';
 import { combineDocuments, compareDocuments } from '../document/compare';
 import { ask } from './ask';
 import { askEquation } from './equation-dialog';
@@ -62,8 +62,13 @@ import { BORDER_STYLES, BORDER_WIDTHS, DocTablesUI, LOOK_OPTIONS, penSwatch } fr
 import { DocNav } from './doc-nav';
 import { DocInsertUI } from './doc-insert-ui';
 import { DocParagraphUI } from './doc-paragraph-ui';
+import { DocArrangeUI } from './doc-arrange-ui';
+import type { DocDesign } from '../document/document';
+import { setParaSpacing, setStyleSet, setTheme, setThemeColors, setThemeFonts, PARA_SPACINGS, STYLE_SETS, THEMES, THEME_COLORS, THEME_FONTS } from '../document/themes';
+import { groupOf, withFloats } from '../document/arrange';
 import { DocProofingUI } from './doc-proofing-ui';
 import { DEFAULT_ZONE } from '../text/hyphenate';
+import { bodyFromZones, insertInZone, numbersFor, zonesFor } from '../document/hf-bodies';
 import { popupMenu } from './sheet-view';
 import type { BorderChoice } from '../document/para-borders';
 import type { QuickPart } from '../document/quick-parts';
@@ -73,7 +78,7 @@ import { lookOfTable } from '../document/table-styles';
 import type { BorderLine, BorderSide, TableLook } from '../model';
 import { BREAK_NAMES, changeSection, newBreak, pageNumText, sectionAt, sectionsOf, type Section, type SectionPatch } from '../document/sections';
 import {
-  A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, END_FORMAT, FOOT_FORMAT, captionRuns, noteLabel, noteStyle, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets, inlineMove,
+  type HfKey, A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, END_FORMAT, FOOT_FORMAT, captionRuns, noteLabel, noteStyle, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets, inlineMove,
   floatOf, lookExtent, lookOf, cellHolding, innerObjects,
   WATERMARKS, applyCharStyle, charStylesOf, clearCharStyle, clearFormatting, defaultPageBorder, defaultWatermark, deleteStyle, modifyCharStyle, newCharStyle, newParaStyle, withStyle,
   type CharStyle, type PageBorder, type Watermark,
@@ -128,6 +133,8 @@ export interface DocModeHost {
   /** The person's saved Quick Parts (Insert > Quick Parts), and saving them with the settings. */
   quickParts?(): QuickPart[];
   setQuickParts?(list: QuickPart[]): void;
+  /** Design > Set as Default: the look new documents start with (kept in the settings). */
+  setNewDesign?(d: DocDesign | null): void;
   measure: Measure;
 }
 
@@ -217,7 +224,7 @@ export class DocumentMode {
     | { kind: 'text' }
     | { kind: 'box' }
     | { kind: 'resize'; id: number; w0: number; scale0: number; x0: number }
-    | { kind: 'move'; id: number; from: { x: number; y: number }; float: Float; moved: boolean }
+    | { kind: 'move'; id: number; from: { x: number; y: number }; float: Float; moved: boolean; others: [number, Float][] }
     | { kind: 'inline'; id: number; from: { x: number; y: number }; to: number | null }
     | { kind: 'paint'; done: Set<string> }
     | null = null;
@@ -237,6 +244,7 @@ export class DocumentMode {
   /** Home > Borders, Shading and Sort. */
   readonly paragraphs: DocParagraphUI;
   readonly proofing: DocProofingUI;
+  readonly arranging: DocArrangeUI;
   private speller: Speller | null = null;
   private dictSeen: string[] | null = null;
   private checkCache = new Map<string, { spell: [number, number][]; issues: Issue[] }>();
@@ -370,6 +378,22 @@ export class DocumentMode {
       setTable: (id, t, kind) => this.setTable(id, t, kind),
       flash: (msg, ms) => this.host.flash(msg, ms),
       focus: () => this.focus(),
+    });
+    this.arranging = new DocArrangeUI({
+      file: () => this.file,
+      picked: () => this.pickedObject(),
+      pick: (id) => {
+        const f = this.file;
+        const at = f ? objectOffsets(f.t.runs).get(id) : undefined;
+        if (!f || at === undefined) return;
+        this.stopBox();
+        f.ed.select(at, at + 1);
+        const c = f.ed.caret();
+        this.view.revealTop({ x1: c.x, y1: c.y1, x2: c.x, y2: c.y2 });
+        this.changed('selection');
+      },
+      float: (id) => this.setWrap(id, 'square'),
+      flash: (msg, ms) => this.host.flash(msg, ms),
     });
     this.proofing = new DocProofingUI({
       file: () => this.file,
@@ -995,6 +1019,7 @@ export class DocumentMode {
     this.ruler.update();
     this.stylesPane.refresh();
     this.nav.refresh();
+    if (this.arranging.paneOpen) this.arranging.refresh();
     this.redraw();
   }
 
@@ -1131,8 +1156,29 @@ export class DocumentMode {
     popupMenu(x, y, [
       ['Select All (Ctrl+A)', () => { this.run('select-all'); }],
       ['Select Text with Similar Formatting', () => this.selectSimilar()],
+      ['Selection Pane…', () => this.arranging.selectionPane()],
       null,
       ['Go To… (Ctrl+G)', () => void this.goToDialog()],
+    ]);
+  }
+
+  /** Review > Show Markup: which changes are marked, whose, and whether formatting is tracked. */
+  private showMarkupMenu(x: number, y: number): void {
+    const f = this.file;
+    if (!f) return;
+    const v = f.review;
+    const tick = (on: boolean, label: string) => `${on ? '✓' : '\u2003'} ${label}`;
+    const set = (patch: Partial<ReviewView>) => { f.review = { ...f.review, ...patch }; this.view.paint(); };
+    const people = reviewers(f.t.runs);
+    const hidden = v.hidden ?? [];
+    popupMenu(x, y, [
+      [tick(v.insDel !== false, 'Insertions and Deletions'), () => set({ insDel: v.insDel === false })],
+      [tick(v.formatting !== false, 'Formatting'), () => set({ formatting: v.formatting === false })],
+      null,
+      [tick(!hidden.length, 'All Reviewers'), () => set({ hidden: hidden.length ? [] : people })],
+      ...people.map((p): [string, () => void] => [tick(!hidden.includes(p), p || 'Unknown'), () => set({ hidden: hidden.includes(p) ? hidden.filter((h) => h !== p) : [...hidden, p] })]),
+      null,
+      [tick(trackingFormatting(), 'Track Formatting Changes'), () => { setTrackFormatting(!trackingFormatting()); this.host.flash(trackingFormatting() ? 'Formatting changes will be tracked (bold, fonts, sizes, colours).' : 'Formatting changes won\'t be tracked; only text typed and deleted.'); }],
     ]);
   }
 
@@ -1281,7 +1327,7 @@ export class DocumentMode {
     // a tracked change here (Review tab)
     const change = this.file ? changesIn(this.file.t.runs).find((x) => x.start <= offset && offset <= x.end) : undefined;
     if (change) {
-      const what = `${change.kind === 'ins' ? 'Insertion' : 'Deletion'} by ${change.author || 'unknown'}`;
+      const what = `${changeName(change.kind)} by ${change.author || 'unknown'}`;
       const pick = (accept: boolean) => () => { if (ed.collapsed || ed.end <= change.start || ed.start >= change.end) ed.select(change.start, change.start); this.decideChange(accept); };
       item(`Accept ${what}`, pick(true));
       item(`Reject ${what}`, pick(false));
@@ -2437,7 +2483,8 @@ export class DocumentMode {
         ed.select(at, at + 1);
         // a floating figure is moved by dragging it
         const fl = floatOf(obj);
-        if (fl) { this.dragging = { kind: 'move', id, from: p, float: fl, moved: false }; s.setPointerCapture(e.pointerId); }
+        // (a group moves together)
+        if (fl) { this.dragging = { kind: 'move', id, from: p, float: fl, moved: false, others: groupOf(f.t, id).filter((x) => x !== id).map((x) => [x, floatOf(f.t.objects[x])!]) }; s.setPointerCapture(e.pointerId); }
         // one in line with the text is dragged to another place in the text, as in Word
         else if (obj?.kind !== 'table' && !f.box) { this.dragging = { kind: 'inline', id, from: p, to: null }; s.setPointerCapture(e.pointerId); }
         return;
@@ -2492,7 +2539,11 @@ export class DocumentMode {
     if (d.kind === 'move') {
       const dx = p.x - d.from.x, dy = p.y - d.from.y;
       if (!d.moved && Math.hypot(dx, dy) * this.view.zoom < 3) return;
-      this.setFloat(d.id, { ...d.float, x: d.float.x + dx, y: d.float.y + dy }, d.moved ? null : 'Move');
+      if (d.others.length) {
+        const f2 = this.file!;
+        const moved = withFloats(f2.t, [[d.id, { x: d.float.x + dx, y: d.float.y + dy }], ...d.others.map(([x, fl]): [number, Partial<Float>] => [x, { x: fl.x + dx, y: fl.y + dy }])]);
+        f2.ed.update(moved, d.moved ? null : 'Move');
+      } else this.setFloat(d.id, { ...d.float, x: d.float.x + dx, y: d.float.y + dy }, d.moved ? null : 'Move');
       d.moved = true;
       return;
     }
@@ -2904,6 +2955,8 @@ export class DocumentMode {
     if (bd) { this.paragraphs.border(bd[1] as BorderChoice); return true; }
     const cover = /^cover-(.+)$/.exec(cmd);
     if (cover) { void this.inserts.cover(cover[1]); return true; }
+    const design = /^design-(theme|fonts|colors|styleset|spacing)-(.+)$/.exec(cmd);
+    if (design) { this.design(design[1], design[2]); this.focus(); return true; }
     const pick = /^(case|multilevel|bulletlib|watermark)-(.*)$/.exec(cmd);
     if (pick) { this.pickCommand(pick[1], pick[2]); this.focus(); return true; }
     const align = (j: 'left' | 'center' | 'right' | 'justify') => ed.setSelectedParas({ align: j === 'left' ? undefined : j }, 'align');
@@ -3032,6 +3085,15 @@ export class DocumentMode {
       case 'edit-equation': { const m = this.pickedMath(); if (m === null) { this.host.flash('Click an equation first (or double-click it).'); break; } void this.editEquation(m); break; }
       case 'track-changes': void this.toggleTracking(); break;
       case 'review-name': void this.askReviewName(); break;
+      case 'design-default': void this.designDefault(); return true;
+      case 'selection-pane': this.arranging.selectionPane(this.ribbon.querySelector<HTMLElement>('[data-doc="selection-pane"]')); return true;
+      case 'markup-all': case 'markup-simple': case 'markup-none': case 'markup-original': {
+        const f = this.file;
+        if (!f) return true;
+        f.review = { ...f.review, mode: cmd.slice(7) as MarkupView };
+        this.view.paint();
+        break;
+      }
       case 'compare-docs': case 'combine-docs': void this.compare(cmd === 'combine-docs'); break;
       case 'new-comment': void this.comments.add(); return true;
       case 'delete-comment': this.comments.remove(); break;
@@ -3066,6 +3128,8 @@ export class DocumentMode {
         this.updateRibbon();
         return true;
       case 'header-edit': this.panel.open('hf', null, 'hf-header0'); return true;
+      case 'hf-picture': void this.headerPicture(); return true;
+      case 'hf-plain': this.headerPlain(); return true;
       case 'footer-edit': this.panel.open('hf', null, 'hf-footer1'); return true;
       case 'numbers-s': {
         const hf = this.section().hf;
@@ -3167,6 +3231,59 @@ export class DocumentMode {
       this.updateRibbon();
     } else return false;
     return true;
+  }
+
+  /**
+   * A picture (a logo or crest) in the header or footer of the section the caret is in, at its
+   * left, centre or right: the header becomes Word's paragraphs (its text and page number kept),
+   * with the picture at the start of that part.
+   */
+  private async headerPicture(): Promise<void> {
+    const f = this.file;
+    if (!f) return;
+    const sec = this.section();
+    const hf = sec.hf;
+    const got = await ask('Picture in Header or Footer', [
+      { name: 'where', label: 'Put it in the', value: 'header', options: [{ value: 'header', label: 'Header' }, { value: 'footer', label: 'Footer' }] },
+      { name: 'which', label: 'On', value: '', options: [{ value: '', label: hf.oddEven ? 'Odd pages' : 'Every page' }, ...(hf.firstPage ? [{ value: 'first', label: 'The first page' }] : []), ...(hf.oddEven ? [{ value: 'even', label: 'Even pages' }] : [])] },
+      { name: 'zone', label: 'At the', value: '0', options: [{ value: '0', label: 'Left' }, { value: '1', label: 'Centre' }, { value: '2', label: 'Right' }] },
+      { name: 'height', label: 'Height', value: '0.5', unit: 'in' },
+    ], { ok: 'Choose Picture…', note: 'For this section. Saved as a picture in Word\'s header or footer. Plain Text (in the Header and Footer settings) takes it out again.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const pic = await this.host.pickPicture();
+    if (!pic || this.file !== f) return;
+    const px = imageSize(pic.bytes, pic.mime) ?? { w: 400, h: 300 };
+    const h = Math.max(6, parseLength(got.height, 'in') ?? 36);
+    const w = (h * px.w) / Math.max(1, px.h);
+    const kind = got.where === 'footer' ? 'footer' : 'header';
+    const key = (got.which ? `${got.which}${kind === 'header' ? 'Header' : 'Footer'}` : kind) as HfKey;
+    const objects = { ...f.t.objects };
+    let next = nextObjectId(f.t);
+    const pid = next++;
+    objects[pid] = { kind: 'picture', src: dataUrl(pic.bytes, pic.mime), w, h, px };
+    const N = styleOf(f.t, undefined);
+    const look: rt.RunStyle = { font: N.font, size: Math.min(10, N.size) };
+    let body = hf.bodies?.[key];
+    if (!body) {
+      const numbers = numbersFor(hf, key);
+      const at = numbers !== 'none' && numbers.startsWith(kind) && (!key.startsWith('first') || hf.onFirst) ? ['left', 'center', 'right'].indexOf(numbers.split('-')[1]) : -1;
+      const W = Math.max(36, sec.page.w - sec.page.left - sec.page.right);
+      body = bodyFromZones(zonesFor(hf, key), at, hf.prefix, look, W, () => { const id = next++; objects[id] = { kind: 'field', code: 'page' }; return id; });
+    }
+    body = insertInZone(body, Number(got.zone) || 0, { ...look, obj: pid, text: OBJECT_CHAR });
+    f.ed.update(changeSection({ ...f.t, objects }, sec.index, { hf: { ...hf, bodies: { ...hf.bodies, [key]: body } } }), 'Header picture');
+    this.updateRibbon();
+  }
+
+  /** Header and footer > Plain Text: the section's headers and footers back to their plain text (pictures, tables and formatting taken out). */
+  private headerPlain(): void {
+    const f = this.file;
+    if (!f) return;
+    const sec = this.section();
+    if (!sec.hf.bodies) { this.host.flash('This section\'s header and footer are plain text already.'); return; }
+    const { bodies: _b, ...hf } = sec.hf;
+    this.setSection({ hf }, 'Plain header and footer');
   }
 
   /** Layout > Hyphenation > Hyphenation Options: on or off, the hyphenation zone, how many hyphens in a row, and words in capitals. */
@@ -3958,7 +4075,7 @@ export class DocumentMode {
     ed.select(c.start, c.end);
     this.revealCaret();
     const when = c.date ? new Date(c.date) : null;
-    this.host.flash(`${c.kind === 'ins' ? 'Inserted' : 'Deleted'} by ${c.author || 'unknown'}${when && !isNaN(+when) ? `, ${when.toLocaleString()}` : ''}.`, 5000);
+    this.host.flash(`${c.kind === 'ins' ? 'Inserted' : c.kind === 'del' ? 'Deleted' : 'Formatting changed'} by ${c.author || 'unknown'}${when && !isNaN(+when) ? `, ${when.toLocaleString()}` : ''}.`, 5000);
   }
 
   // ---------------------------------------------------------------- text, lists, styles, tabs and the page's look
@@ -4002,6 +4119,28 @@ export class DocumentMode {
       else if (v === 'custom') void this.customWatermark();
       else if (WATERMARKS[Number(v)]) this.setPageLook({ watermark: { ...(f.t.watermark ?? defaultWatermark()), text: WATERMARKS[Number(v)] } }, 'Watermark');
     }
+  }
+
+  /** Design > Document Formatting: a theme, its fonts or colours, a style set, or paragraph spacing. */
+  private design(what: string, v: string): void {
+    const f = this.file;
+    if (!f) return;
+    if (f.box) this.stopBox();
+    const t = f.t;
+    const next = what === 'theme' ? setTheme(t, v) : what === 'fonts' ? setThemeFonts(t, v) : what === 'colors' ? setThemeColors(t, v)
+      : what === 'styleset' ? setStyleSet(t, v) : setParaSpacing(t, v === 'default' ? null : v);
+    if (next === t) return;
+    f.ed.update(next, what === 'styleset' ? 'Style Set' : what === 'spacing' ? 'Paragraph Spacing' : 'Theme');
+  }
+
+  /** Design > Set as Default: new documents start with this one's theme, style set and spacing. */
+  private async designDefault(): Promise<void> {
+    const d = this.file?.t.design;
+    const what = d ? [d.theme && `the ${d.theme} theme`, !d.theme && d.fonts && `${d.fonts} fonts`, !d.theme && d.colors && `${d.colors} colours`, d.styleSet && `the ${d.styleSet} style set`, d.spacing && `${d.spacing} spacing`].filter(Boolean).join(', ') : '';
+    const got = await ask('Set as Default', [], { ok: what ? 'Set as Default' : 'Use the Standard Look', note: what ? `New documents will start with ${what}. (Documents already made keep their own look.)` : 'This document uses the standard look, so new documents will too.' });
+    if (!got) return;
+    this.host.setNewDesign?.(d && Object.keys(d).length ? d : null);
+    this.host.flash(what ? 'New documents will start with this design.' : 'New documents will start with the standard look.');
   }
 
   /** Change the whole document's look (watermark, page colour, page borders): one undo step. */
@@ -4227,6 +4366,12 @@ export class DocumentMode {
         'quick-parts': (x, y) => this.inserts.quickPartsMenu(x, y),
         'cover-page': (x, y) => this.inserts.coverMenu(x, y),
         'doc-select': (x, y) => this.selectMenu(x, y),
+        'show-markup': (x, y) => this.showMarkupMenu(x, y),
+        'arrange-position': (x, y) => this.arranging.positionMenu(x, y),
+        'arrange-rotate': (x, y) => this.arranging.rotateMenu(x, y),
+        'arrange-forward': (x, y) => this.arranging.orderMenu(x, y, true),
+        'arrange-backward': (x, y) => this.arranging.orderMenu(x, y, false),
+        'arrange-group': (x, y) => this.arranging.groupMenu(x, y, b),
       };
       if (menus[cmd] && this.file) {
         const br = b.getBoundingClientRect();
@@ -4241,6 +4386,25 @@ export class DocumentMode {
       }
       if (!this.run(cmd)) this.host.command(cmd);
     });
+    // Design's galleries, from the themes and style sets
+    const fill = (id: string, names: string[], extra: [string, string][] = []) => {
+      const sel = r.querySelector<HTMLSelectElement>(id);
+      if (!sel) return;
+      for (const [v, label] of [...extra, ...names.map((n): [string, string] => [n, n])]) {
+        const o = document.createElement('option');
+        o.value = v;
+        o.textContent = label;
+        if (!v) o.hidden = true;
+        sel.append(o);
+      }
+    };
+    fill('#doc-theme', THEMES.map((x) => x.name), [['', 'Mixed']]);
+    fill('#doc-styleset', STYLE_SETS.map((x) => x.name));
+    fill('#doc-theme-colors', THEME_COLORS.map((x) => x.name), [['', 'Theme\'s']]);
+    fill('#doc-theme-fonts', THEME_FONTS.map((x) => x.name), [['', 'Theme\'s']]);
+    fill('#doc-para-spacing', PARA_SPACINGS.map((x) => x.name), [['default', 'Style Set\'s']]);
+    for (const o of r.querySelectorAll<HTMLOptionElement>('#doc-styleset option')) o.title = STYLE_SETS.find((x) => x.name === o.value)?.description ?? '';
+    for (const o of r.querySelectorAll<HTMLOptionElement>('#doc-theme-fonts option')) { const tf = THEME_FONTS.find((x) => x.name === o.value); if (tf) o.textContent = `${tf.name} (${tf.heading}${tf.body !== tf.heading ? ` / ${tf.body}` : ''})`; }
     // selects that run a command: margins, paper, orientation, page numbers
     for (const sel of r.querySelectorAll<HTMLSelectElement>('select[data-doc-prefix]')) {
       sel.addEventListener('change', () => { const v = sel.value; this.run(`${sel.dataset.docPrefix}-${v}`); if (v !== 'custom' && v !== 'more') this.focus(); });
@@ -4398,6 +4562,13 @@ export class DocumentMode {
     pick('#doc-linenums', sec.lines?.restart ?? 'none');
     pick('#doc-hyphen', f.t.hyphen?.auto ? 'auto' : 'none');
     press('track-changes', !!f.t.track);
+    pick('#doc-markup', f.review.mode);
+    const des = f.t.design ?? {};
+    pick('#doc-theme', des.theme ?? (des.fonts || des.colors ? '' : 'Journal'));
+    pick('#doc-styleset', des.styleSet ?? 'Journal');
+    pick('#doc-theme-fonts', des.fonts ?? '');
+    pick('#doc-theme-colors', des.colors ?? '');
+    pick('#doc-para-spacing', des.spacing ?? 'default');
     press('restrict-editing', !!f.t.protect);
     press('show-comments', this.comments.shown);
     const fig = this.pickedObject() ?? f.box?.id ?? null;

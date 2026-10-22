@@ -34,6 +34,8 @@ export const XLSM: FileType = { description: 'Excel macro-enabled workbook', ext
 export const SHEET_OPEN_ONLY = ['xls', 'ods'];
 export const CSV: FileType = { description: 'CSV (comma-separated values)', extension: 'csv', mime: 'text/csv' };
 export const DOCX: FileType = { description: 'Word document', extension: 'docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
+export const RTF: FileType = { description: 'Rich Text Format', extension: 'rtf', mime: 'application/rtf' };
+export const ODT: FileType = { description: 'OpenDocument text', extension: 'odt', mime: 'application/vnd.oasis.opendocument.text' };
 export const SDF: FileType = { description: 'SD file (structures with data)', extension: 'sdf', mime: 'chemical/x-mdl-sdfile' };
 /** Text tables that open as sheets (tab-separated as well as CSV). */
 export const TABLE_TEXT_EXTENSIONS = ['csv', 'tsv', 'txt'];

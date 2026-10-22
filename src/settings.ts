@@ -4,6 +4,7 @@
 // this page. Drawings never go here.
 
 import { parseQuickParts, type QuickPart } from './document/quick-parts';
+import { parseDesign, type DocDesign } from './document/themes';
 import type { UpdateChannel } from './updates';
 import { parseLooks, type HighlightLookPreset } from './ui/highlight-looks';
 import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -156,6 +157,8 @@ export interface Settings {
   highlightLooks: HighlightLookPreset[];
   /** Saved pieces of text for documents (Insert > Quick Parts). */
   quickParts: QuickPart[];
+  /** The Design (theme, style set, spacing) new documents start with (Design > Set as Default). */
+  docDesign: DocDesign | null;
   /** Spacing in schemes and the text above and below arrows (Chemistry > Reactions and Schemes > Scheme Settings). */
   scheme: SchemePrefs;
   /** AutoSave, recovery copies, Version History and shared folders (File > AutoSave and Recovery Options). */
@@ -172,7 +175,7 @@ export const DEFAULT_SETTINGS: Settings = {
   docPins: [],
   docRuler: false,
   sheetFormulaBar: true,
-  updateCheck: true, updateChannel: 'latest', pubchemNames: true, fileTypesOffered: false, wordObjectsOffered: false, reviewName: '', skipVersion: null, recentFiles: [], recentSymbols: [], highlightLooks: [], quickParts: [],
+  updateCheck: true, updateChannel: 'latest', pubchemNames: true, fileTypesOffered: false, wordObjectsOffered: false, reviewName: '', skipVersion: null, recentFiles: [], recentSymbols: [], highlightLooks: [], quickParts: [], docDesign: null,
   slideRuler: false,
   slideGrid: false,
   rulerUnits: typeof navigator !== 'undefined' && /^[a-z]{2,3}-(US|LR|MM)\b/i.test(navigator.language) ? 'in' : 'cm',
@@ -211,6 +214,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   }
   if (typeof r.reviewName === 'string') s.reviewName = r.reviewName.trim().slice(0, 80);
   s.quickParts = parseQuickParts(r.quickParts);
+  s.docDesign = parseDesign(r.docDesign);
   s.templates = parseOwnTemplates(r.templates);
   if (typeof r.splitWidth === 'number' && isFinite(r.splitWidth)) s.splitWidth = Math.min(0.8, Math.max(0.2, r.splitWidth));
   if (typeof r.citeStyle === 'string' && r.citeStyle in CITE_PRESETS) s.citeStyle = r.citeStyle;

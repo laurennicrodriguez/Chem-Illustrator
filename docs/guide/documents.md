@@ -47,6 +47,18 @@ To change a style, open the ⬊ in the corner of **Styles** (or the **Format** p
 - **Match This Paragraph** makes the style look like the paragraph the caret is in.
 - **Reset Style** puts the style back as it first was.
 
+## Themes and style sets
+
+The **Design** tab changes the look of the whole document at once, as Word's Document Formatting does:
+
+- **Theme** sets the fonts and colours together: Journal (Times New Roman, black), Report, Technical, Clean, Classic, Field Notes and Poster. All of them use free fonts that come with the app.
+- **Style Set** changes the styles' layout: Journal (justified 11 pt text, bold headings), Simple, Centered, Compact, Open and Thesis (double-spaced, for a thesis or dissertation).
+- **Colors** and **Fonts** change one half of the theme on its own: the heading colour and the accents in the colour boxes, or the heading and body fonts.
+- **Paragraph Spacing** sets the space between paragraphs and lines for every style: No Paragraph Space, Compact, Tight, Open, Relaxed or Double.
+- **Set as Default** makes the current theme, style set and spacing the start of every new document.
+
+Formatting you set by hand stays as it is. The theme and style set are saved in the Word file, and its styles are Word's own, so Word shows the same look.
+
 ## Structures and pictures in the text
 
 - **Insert** tab ▸ **Structure** opens the drawing tools. Draw, press **Done**, and the structure sits in the text at the caret.
@@ -75,6 +87,18 @@ Pick a structure, picture or text box, then use **Layout** tab ▸ **Wrap Text**
 A floating item can be dragged anywhere and moves with the paragraph it is dropped beside. One in line with the text is dragged to another place in the text, as in Word: the caret shows where it will land (Ctrl+Z puts it back).
 
 **Insert** tab ▸ **Text Box** (also on the **Layout** tab) puts a box at the left margin with the text wrapping round it. Type in it, then press Esc to pick the box. Drag its edge to move it and its corner to make it wider. Fill colour, frame and wrapping are in the panel.
+
+### Position, order, rotate and group
+
+On the **Layout** tab, **Arrange** (folded into one **Arrange ▾** button when the window is narrow):
+
+- **Position ▾** puts the figure picked at one of nine places on the page (top, middle or bottom; left, centre or right) with **Square** wrapping. **In Line with Text** puts it back in the line.
+- **Bring Forward ▾** and **Send Backward ▾** put one floating figure over or under another, a step at a time or to the front or back of all.
+- **Rotate ▾** turns a picture 90° right or left, flips it, or turns it by any angle (**More Rotation Options…**).
+- **Selection Pane** lists every floating figure, front first. Click a name to pick it, Ctrl+click to pick more, double-click to rename it. The eye hides a figure from its page (it stays in the document); **Show All** and **Hide All** do every one; ▲ and ▼ change the order.
+- **Group ▾** joins the figures picked in the Selection Pane so they move together; **Ungroup** parts them.
+
+Word gets the position, order, rotation, names and hidden figures as its own; groups come back as groups when the file opens here again.
 
 ## Tables
 
@@ -189,6 +213,15 @@ On the **Layout** tab:
 - **Hyphenation**: **Automatic** breaks long words at the ends of lines, with a hyphen, where English allows (US English patterns). **Don't Hyphenate This Paragraph** keeps the selected paragraphs whole. **Hyphenation Options…** sets the hyphenation zone (a word is broken only if leaving it whole would leave more room than this at the end of the line), a limit on hyphens in a row, and whether words in capitals are broken. Words with digits and formulas are never broken.
 - **Insert ▸ Cover Page** puts a first page in front: the title, subtitle, author, institution and date in one of five looks (Plain, Banded, Ruled, Lab Report, Supporting Information). They are fields, so they follow **Document Properties** (Insert ▸ Quick Parts). The cover page has no page number; **Remove Cover Page** on the same menu takes it out. **Blank Page** puts an empty page at the caret.
 
+### Headers and footers on odd, even and first pages
+
+In the Header and Footer settings (the ⬊ in the corner of the group, or **Header…**):
+
+- **Different first page** gives the first page of the section its own header and footer (or none), as a title page has.
+- **Different odd and even pages** gives even pages their own header and footer, and puts the page number on the outside edge, as a bound thesis has.
+- **Picture…** puts a picture (a logo or a crest) at the left, centre or right of the header or footer, on every page, the first page or even pages, at the height you give.
+- Headers and footers from Word with pictures, tables or formatting are shown and saved as they are. The settings say which ones; **Plain Text** turns them back into plain text you can type in the boxes.
+
 ### Sections
 
 A section break starts a new section, which can have its own paper size, orientation, margins, columns, header and footer, page numbering and line numbers. Choose one from **Layout** ▸ **Breaks** (or **Insert ▸ Section Break**):
@@ -265,6 +298,17 @@ For legal writing (cases, statutes, rules and other authorities), as Word does i
 4. **Accept** or **Reject** decides the change at the caret (or every change in a selection) and moves to the next. **Accept All** and **Reject All** do the whole document. Right-click a change for Accept and Reject too.
 
 Changes made by other people in Word open here as changes, in a different colour for each person.
+
+### Markup views and reviewers
+
+**Review** tab ▸ **Tracking** chooses how changes show:
+
+- **All Markup**: insertions and deletions in each reviewer's colour, a grey bar in the margin beside every changed line.
+- **Simple Markup**: the text as it will read once the changes are accepted, with a red bar in the margin where something changed.
+- **No Markup**: the text with the changes accepted (nothing is accepted until you say so).
+- **Original**: the text as it was before the changes.
+
+**Show Markup ▾** shows or hides **Insertions and Deletions** and **Formatting**, and the changes of each reviewer (or **All Reviewers**). **Track Formatting Changes** (on by default) marks bold, italic, font, size, colour and the like changed while tracking: they show with a bar in the margin, the bar at the bottom says what changed, and **Accept** keeps the new look while **Reject** puts the old one back. Formatting changes are Word's own, so Word shows and decides them too.
 
 ### Compare and Combine
 
@@ -348,12 +392,14 @@ The **View** tab has Word's ways of looking at a document. The text is the same 
 
 Saving, printing and PDFs always use the pages of Print Layout, whatever view is showing. These views are also under **View ▸ Document Views** in the menu bar.
 
-## Saving as Word and PDF
+## Saving as Word, RTF, OpenDocument and PDF
 
 - **Save** (Ctrl+S) writes a Word file (.docx). In Word, styles are Word's own, lists are Word lists, and captions, cross-references, compound numbers, page numbers, the table of contents, the table of figures, index entries, the index, marked citations and the table of authorities are Word fields, form fields are Word's legacy form fields, Restrict Editing is Word's own protection, and footnotes and endnotes are Word's own. Tracked changes and equations are Word's own too, so they keep working there.
 - Structures show as pictures in Word. Open the file here again and they are editable drawings, even after Word has saved it.
 - The free fonts that come with the app are saved inside the file when you use them.
 - Opening a Word file made in Word brings in its text, styles, lists, tables, pictures, captions and cross-references. ChemDraw drawings embedded in it become editable structures. Anything left out is listed in a note.
+- **File ▸ Save As…** can also write **Rich Text (.rtf)**, which every word processor opens, or **OpenDocument Text (.odt)** for LibreOffice and Google Docs. Both keep the text and its look, headings, lists, tables, pictures, footnotes and the page size. Structures go as pictures. Live fields, citations, comments and tracked changes are kept only as their text (the save note says so); save as .docx to keep everything.
+- **File ▸ Open** opens .rtf, .odt and old Word files (.doc, Word 97–2003) too. An old .doc brings in its text, formatting, headings, tables, links and footnotes; its pictures are left out (a note says so; open and save it in Word as .docx to keep them). Saving it again writes a .docx.
 - **File ▸ Export PDF…** saves the pages exactly as they look on screen, with sharp structures, text and equations.
 - **File ▸ Print…** (Ctrl+P) prints every page as laid out.
 

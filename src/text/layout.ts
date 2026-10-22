@@ -121,6 +121,8 @@ export interface Glyphs {
   /** A tab (its one character isn't drawn), with the dots or line that lead across it to its tab stop. */
   tab?: boolean;
   leader?: TabStop['leader'];
+  /** Not drawn and no width: text a markup view hides (deleted text in Simple Markup). The caret still passes through it. */
+  hidden?: boolean;
 }
 
 export interface LaidLine {
@@ -192,6 +194,8 @@ interface Seg {
   obj?: number; w?: number; shown?: string; objAscent?: number; objDescent?: number;
   /** A tab: its width (`w`) is worked out from where it starts and its tab stop. */
   tab?: boolean; leader?: TabStop['leader'];
+  /** Not shown, and taking no room (tracked changes a markup view hides). */
+  hide?: boolean;
 }
 
 /**
@@ -220,6 +224,14 @@ function segments(runs: TextRun[], defaultSize: number, n: number): { segs: Seg[
   let p = 0, off = 0;
   if (runs.length) sizes[0] = runs[0].size ?? defaultSize;
   for (const r of runs) {
+    const from0 = { p, k: segs[p]?.length ?? 0 };
+    collect(r);
+    // hidden text (a markup view's): every piece the run made
+    if (r.hide) for (let q = from0.p; q <= Math.min(p, n - 1); q++) for (const sg of segs[q].slice(q === from0.p ? from0.k : 0)) sg.hide = true;
+  }
+  return { segs, sizes };
+
+  function collect(r: TextRun): void {
     const base = r.size ?? defaultSize;
     const style = `${r.italic ? 'italic ' : ''}${r.bold ? 'bold ' : ''}`;
     const family = r.font ? withStack(r.font) : FONT_STACK;
@@ -232,7 +244,7 @@ function segments(runs: TextRun[], defaultSize: number, n: number): { segs: Seg[
         if (p < n) segs[p].push({ text: ch, start: off, size, base, dy, family, style, color: r.color, underline: r.underline, strike: r.strike, highlight: r.highlight, obj: r.obj });
         off += ch.length;
       }
-      continue;
+      return;
     }
     const from = { p, k: segs[p]?.length ?? 0 };
     const parts = r.formula && !r.sub && !r.sup ? formulaParts(r.text) : [{ text: r.text, pos: r.sub ? 'sub' : r.sup ? 'sup' : 'base' }];
@@ -266,7 +278,6 @@ function segments(runs: TextRun[], defaultSize: number, n: number): { segs: Seg[
     // character spacing goes on every piece the run made
     if (r.spacing) for (let q = from.p; q <= Math.min(p, n - 1); q++) for (const sg of segs[q].slice(q === from.p ? from.k : 0)) sg.spacing = r.spacing;
   }
-  return { segs, sizes };
 }
 
 /**
@@ -405,7 +416,7 @@ function layoutPlain(f: TextFrame, defaultSize: number, measure: Measure): TextL
       }
     }
     const segWidth = (s: Seg, a: number, b: number): number =>
-      s.obj !== undefined || s.tab ? (b > a ? s.w ?? 0 : 0) : measure(s.text.slice(a, b), s.size, s.family, s.style) + (s.spacing ? s.spacing * (b - a) : 0);
+      s.hide ? 0 : s.obj !== undefined || s.tab ? (b > a ? s.w ?? 0 : 0) : measure(s.text.slice(a, b), s.size, s.family, s.style) + (s.spacing ? s.spacing * (b - a) : 0);
 
     // the width of part of the paragraph (offsets within it), piece by piece
     const widthOf = (a: number, b: number): number => {
@@ -560,6 +571,7 @@ function layoutPlain(f: TextFrame, defaultSize: number, measure: Measure): TextL
         if (s.strike) g.strike = true;
         if (s.spacing) g.spacing = s.spacing;
         if (s.tab) { g.tab = true; if (s.leader) g.leader = s.leader; }
+        if (s.hide) { g.hidden = true; pieces.push(g); continue; }
         if (s.obj !== undefined) {
           g.obj = s.obj;
           if (s.shown !== undefined) g.shown = s.shown;
@@ -648,11 +660,14 @@ function spread(l: LaidLine, room: number, text: string): void {
   let inner = 0;
   const end = l.end - trailingSpaces(text, l.start, l.end);
   for (let i = l.start; i < end; i++) if (text[i] === ' ') inner++;
+  // spaces in hidden text (a markup view's) don't widen
+  for (const g of l.pieces) if (g.hidden) for (let i = 0; i < g.text.length; i++) if (g.text[i] === ' ' && g.start + i < end) inner--;
   if (!inner) return;
   const each = extra / inner;
   let added = 0;
   for (const g of l.pieces) {
     g.x += added;
+    if (g.hidden) continue;
     let k = 0;
     for (let i = 0; i < g.text.length; i++) if (g.text[i] === ' ' && g.start + i < end) k++;
     if (k) { g.spread = each; g.w += each * k; added += each * k; }
@@ -664,7 +679,7 @@ function spread(l: LaidLine, room: number, text: string): void {
 
 /** Distance from a piece's left end to the place before its k-th character. */
 export function pieceX(lay: TextLayout, g: Glyphs, k: number): number {
-  if (k <= 0) return 0;
+  if (k <= 0 || g.hidden) return 0;
   if (k >= g.text.length) return g.w;
   const t = g.text.slice(0, k);
   let w = lay.measure(t, g.size, g.family, g.style);

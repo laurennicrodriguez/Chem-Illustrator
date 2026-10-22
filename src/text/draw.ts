@@ -12,7 +12,7 @@ export function drawLayout(ctx: CanvasRenderingContext2D, lay: TextLayout, ox: n
     const l = lay.lines[i];
     // highlighter colours go under all the line's text
     for (const g of l.pieces) {
-      if (!g.highlight) continue;
+      if (!g.highlight || g.hidden) continue;
       ctx.fillStyle = g.highlight;
       const h = l.above !== undefined ? Math.min(l.above, l.ascent * 1.12) : l.ascent;
       ctx.fillRect(ox + g.x, oy + l.y - h, g.w, h + l.descent);
@@ -25,7 +25,7 @@ export function drawLayout(ctx: CanvasRenderingContext2D, lay: TextLayout, ox: n
 
 function drawGlyphs(ctx: CanvasRenderingContext2D, lay: TextLayout, l: LaidLine, g: Glyphs, ox: number, oy: number): void {
   // figures are drawn by the document itself; a field shows its text
-  if (g.obj !== undefined && g.shown === undefined) return;
+  if ((g.obj !== undefined && g.shown === undefined) || g.hidden) return;
   ctx.font = fontOf(g);
   ctx.fillStyle = g.color ?? '#000';
   const y = oy + l.y + g.dy;
