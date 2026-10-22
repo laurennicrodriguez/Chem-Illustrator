@@ -36,6 +36,12 @@ export const ERASER = drawn(
   '<path d="M4 17 L8.5 11.7 L15.5 17.7 L12.5 21 L7.5 21 Z" fill="#e88a9a" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/>',
   5, 19, 'crosshair');
 
+/** Format Painter: a paintbrush, painting at its lower left tip. */
+export const BRUSH = drawn(
+  '<path d="M3 21 C3 17 5 15.5 7.5 15.5 L9.5 17.5 C9.5 20 7.5 21.5 3 21 Z" fill="#f2c94c" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/>' +
+  '<path d="M8.5 14.5 L18.5 4.5 A1.6 1.6 0 0 1 20.8 6.8 L10.5 16.5 Z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/>',
+  3, 21, 'copy');
+
 /** What a resize or end handle shows: arrows along the way it drags. */
 export function handleCursor(which: HandleId): string {
   switch (which) {

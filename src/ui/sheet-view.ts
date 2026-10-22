@@ -26,6 +26,7 @@ import { SheetObject, objectLook, shapePath, arrowHead, lineEnds, isLine } from 
 import { sheetPages, sheetSizes } from '../sheet/print-range';
 import { breakLines } from '../sheet/page-setup';
 import { defaultPaper } from '../print-layout';
+import { BRUSH } from '../editor/cursors';
 
 const HEADER_W = 44;
 const HEADER_H = 22;
@@ -152,6 +153,8 @@ export class SheetView {
   zoom = 1;
   /** The cell being typed in, if any. 'enter': arrows finish typing (Excel's Enter mode); 'edit': arrows move in the text. */
   editing: { r: number; c: number; mode: 'enter' | 'edit'; original: string } | null = null;
+  /** Format Painter, while the brush is held (set by the app): called when a click or drag has picked the cells to paint. */
+  painter: (() => void) | null = null;
   /** Cells copied (shown with a dashed border until Esc or the next edit). */
   copied: { sheet: Sheet; range: Range } | null = null;
   /** Called with the reference to put in a formula being typed (pointing at cells). */
@@ -1940,6 +1943,18 @@ export class SheetView {
 
   // ---------------------------------------------------------------- typing in a cell
 
+  /** Insert > Symbol: type text at the caret in the cell being typed in, or start typing in the active cell (keeping what is there). */
+  typeText(text: string): boolean {
+    if (!this.sheet) return false;
+    if (!this.editing) this.editCell();
+    if (!this.editing) return false;
+    const inp = this.input;
+    inp.setRangeText(text, inp.selectionStart ?? inp.value.length, inp.selectionEnd ?? inp.value.length, 'end');
+    this.host.typing(inp.value);
+    this.fitInput();
+    return true;
+  }
+
   /** Start typing in the active cell: `text` replaces it (typing), or undefined keeps it (F2, double-click). */
   editCell(text?: string): void {
     const s = this.sheet;
@@ -2497,7 +2512,8 @@ export class SheetView {
           : !this.editing && h.where === 'cell' && this.onFillHandle(x, y) ? 'crosshair'
             : h.where === 'col' ? 's-resize' : h.where === 'row' ? 'e-resize'
               // a structure: a hand, since a double-click opens it for drawing
-              : h.where === 'cell' && this.sheet?.cell(h.r, h.c)?.structure ? 'pointer' : 'cell';
+              : h.where === 'cell' && this.painter ? BRUSH
+                : h.where === 'cell' && this.sheet?.cell(h.r, h.c)?.structure ? 'pointer' : 'cell';
       const overDrop = this.overDrop(x, y);
       if (overDrop) this.scroller.style.cursor = 'pointer';
       // a note's card says what a tip would (and the drop-down's button what it is)
@@ -2622,6 +2638,8 @@ export class SheetView {
       this.select(d.to, this.sel.active, this.sel.anchor, false);
     } else if (d.kind === 'point') {
       this.input.focus();
+    } else if ((d.kind === 'select' || d.kind === 'rows' || d.kind === 'cols') && this.painter) {
+      this.painter();
     }
     this.render();
   }

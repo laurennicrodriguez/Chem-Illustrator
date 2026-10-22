@@ -58,6 +58,9 @@ const SYMBOLS = [
   '°±×÷·•→←↑↓↔⇒≤≥≠≈≡∞′″…–—‡†‰Å',
 ].map((row) => [...row].filter(rt.savableChar));
 
+/** In a window marked to type into the text being edited (Insert > Symbol): moving there doesn't end the editing. */
+const keepsTyping = (n: Node | null): boolean => !!(n instanceof Element && n.closest('[data-keeps-typing]'));
+
 const SELECTION = 'rgba(40, 120, 255, 0.25)';
 const MISSPELLED = '#e0302f';
 const FORMATTING = '#2f6fdf';
@@ -144,9 +147,9 @@ export class CaptionEditor {
     for (const el of [ta, this.bar] as HTMLElement[]) {
       el.addEventListener('focusout', (e) => {
         const to = e.relatedTarget as Node | null;
-        if (this.asking || (to && (to === ta || this.bar.contains(to)))) return;
-        // a click on the bar keeps the focus; anything else outside ends the editing
-        setTimeout(() => { if (!this.closed && !this.asking && d.activeElement !== ta && !this.bar.contains(d.activeElement)) this.finish(); }, 0);
+        if (this.asking || (to && (to === ta || this.bar.contains(to) || keepsTyping(to)))) return;
+        // a click on the bar (or in a window that types here, such as Insert Symbol) keeps the text open; anything else outside ends the editing
+        setTimeout(() => { if (!this.closed && !this.asking && d.activeElement !== ta && !this.bar.contains(d.activeElement) && !keepsTyping(d.activeElement)) this.finish(); }, 0);
       });
     }
     this.blink = setInterval(() => { this.caretOn = !this.caretOn; this.h.redraw(); }, 530);

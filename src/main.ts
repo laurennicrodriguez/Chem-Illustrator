@@ -121,7 +121,7 @@ import { StructureChecks } from './chem/warnings';
 import { idText, labelClashes, parseIdStart, type IdStyle } from './chem/compound-numbers';
 import { schemeItems, isReactionArrow } from './chem/reaction';
 import { labelsOf, schemePrefs, setSchemePrefs, SPACING, type SchemePrefs } from './chem/scheme-layout';
-import { plainText } from './richtext';
+import { plainText, savableChar } from './richtext';
 import { LiveStereo } from './chem/live-stereo';
 import { setStereoShown, shownDescriptor, axialStyle } from './chem/stereo';
 import { keymap, registerToolNames, displayChord, actionName, chordOf, parseAction, KeyContext, KeyOverrides } from './editor/keymap';
@@ -169,6 +169,10 @@ import type { TableData } from './model';
 import type { PastedRows } from './io/table-clip';
 import { Keeper } from './keep/keeper';
 import { DEFAULT_KEEP, type KeepPrefs } from './keep/prefs';
+import { Brush, paintObjects, pickObjectLook, type ObjectLook, type TextLook } from './format-painter';
+import { SymbolWindow } from './ui/symbol-window';
+import { addRecent as addRecentSymbol } from './text/symbols';
+import type { CellBlock } from './sheet/workbook';
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -3292,6 +3296,7 @@ const sheetMode = new SheetMode({
   flash,
   editStructure: (contents, title, done) => editCellStructure(contents, title, done),
   key: (e) => sheetKey(e),
+  command: (name) => command(name),
   changed: () => ws.noteChange(),
   toStructure: (text, style) => textToStructure(text, style),
   writeCells: (own, text, html) => writeCells(own, text, html),
@@ -3733,7 +3738,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+const ANY_TAB = new Set(['format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'page-edge', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
   'help', 'about', 'user-guide', 'help-here', 'send-feedback', 'report-problem', 'check-updates']);
 
@@ -3847,6 +3852,8 @@ const COMMANDS: Record<string, () => unknown> = {
   crop: () => cropPicture(),
   'picture-format': () => { void formatPicture(); },
   'text-box': () => { editor.setTool('text'); flash('Click to type, or drag across to make a text box that wraps.'); },
+  'format-painter': () => formatPainter(),
+  'insert-symbol': () => symbolWindow.open(),
   'new-slide': () => newSlide(),
   'duplicate-slide': () => { const d = deckNow(); if (d) { finishTyping(); d.duplicate(pickedSlides()); } },
   'delete-slide': () => removeSlides(pickedSlides()),
@@ -4773,6 +4780,8 @@ function showHelicity(on: boolean): void {
 
 // File > Recent (desktop app): files and workspaces opened or saved lately
 let recentFiles: string[] = [];
+/** Characters typed from Insert > Symbol lately, newest first (saved in the settings). */
+let recentSymbols: string[] = [];
 function rememberFile(path: string): void {
   recentFiles = addRecent(recentFiles, path);
   renderRecent();
@@ -5103,6 +5112,7 @@ function storeSettings(): void {
     reviewName: reviewAuthor(),
     skipVersion,
     recentFiles,
+    recentSymbols,
     scheme: { ...schemePrefs },
     keep: keepPrefs,
     highlightLooks: ownLooks,
@@ -5242,6 +5252,7 @@ void loadSettings().then((s) => {
   setReviewAuthor(s.reviewName);
   skipVersion = s.skipVersion;
   recentFiles = s.recentFiles;
+  recentSymbols = s.recentSymbols;
   keepPrefs = s.keep;
   tickAutoSave();
   ownLooks = s.highlightLooks;
@@ -6155,7 +6166,7 @@ function drawingMenu(): MenuItem[] {
       { cmd: 'undo' }, { cmd: 'redo' }, null,
       ...(ws.active.mode === 'slides' ? [{ cmd: 'new-comment', label: 'New Comment' }, { cmd: 'show-comments', label: 'Show Comments' }, null] : []),
       ...(ws.active.mode === 'slides' || design ? [{ cmd: 'format-background', label: 'Format Background…' }, null] : []),
-      { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'design-icons', label: 'Icon…' }, { cmd: 'connector-tool' }] : []), ...(ws.active.mode === 'slides' ? [{ cmd: 'slide-shapes', label: 'Shape…' }, { cmd: 'slide-icons', label: 'Icon…' }] : [])] },
+      { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, { cmd: 'insert-symbol' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'design-icons', label: 'Icon…' }, { cmd: 'connector-tool' }] : []), ...(ws.active.mode === 'slides' ? [{ cmd: 'slide-shapes', label: 'Shape…' }, { cmd: 'slide-icons', label: 'Icon…' }] : [])] },
       { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }, { cmd: 'catalytic-cycle' }, { cmd: 'energy-diagram' }, { cmd: 'ts-brackets' }, null, { cmd: 'animate-reaction' }] },
       { cmd: 'drawing-style' },
       view,
@@ -6174,7 +6185,7 @@ function drawingMenu(): MenuItem[] {
     ? [{ cmd: 'shape-front', label: 'Bring to Front' }, { cmd: 'shape-forward', label: 'Bring Forward' }, { cmd: 'shape-backward', label: 'Send Backward' }, { cmd: 'shape-back', label: 'Send to Back' }]
     : [];
   return [
-    { cmd: 'cut' }, { cmd: 'copy' }, { cmd: 'paste' }, { cmd: 'delete', label: 'Delete' }, null,
+    { cmd: 'cut' }, { cmd: 'copy' }, { cmd: 'paste' }, { cmd: 'delete', label: 'Delete' }, { cmd: 'format-painter' }, null,
     ...(editor.selectedEnergy() !== null ? [{ cmd: 'edit-energy' }, null] : []),
     ...(editor.selectedDiagram() !== null ? [{ cmd: 'edit-diagram' }, { cmd: 'diagram-to-shapes' }, null] : []),
     ...(atoms ? [{ label: 'Copy As', items: [{ cmd: 'copy-smiles' }, { cmd: 'copy-mol' }, { cmd: 'copy-cdxml' }] }, null] : []),
@@ -6334,6 +6345,97 @@ stylePanel.energy = {
 stylePanel.ringFill = () => void command('fill-rings');
 stylePanel.highlightUsed = (c) => { highlightColour = c; };
 stylePanel.highlightStyleUsed = (st) => { highlightStyle = tidyStyle(st); };
+// ---------------------------------------------------------------- Format Painter
+
+/** What the brush holds: the look of some text, of things on a drawing, or the formats of cells. */
+type HeldLook = { kind: 'text'; look: TextLook } | { kind: 'things'; look: ObjectLook } | { kind: 'cells'; block: CellBlock };
+const brush = new Brush<HeldLook>();
+const PAINTER_BUTTONS = '[data-cmd="format-painter"]:not([role="menuitem"]), [data-doc="format-painter"], [data-sh="format-painter"]';
+
+/** Home > Format Painter (every mode): pick up the look of the selection; a double-click keeps the brush. */
+function formatPainter(): void {
+  const where = sheetActive() ? 'sheet' : docActive() ? 'document' : 'drawing';
+  const got = brush.press(where, (): HeldLook | null => {
+    if (where === 'sheet') { const block = sheetMode.pickFormats(); return block && { kind: 'cells', block }; }
+    if (where === 'document') { const look = docMode.pickLook(); return look && { kind: 'text', look }; }
+    const cap = editor.typingCaption;
+    if (cap) return { kind: 'text', look: cap.ed.pickLook() };
+    const look = pickObjectLook(editor.doc, editor.sel);
+    return look && { kind: 'things', look };
+  });
+  if (got === 'picked') flash(where === 'sheet' ? 'Format Painter: click or drag over the cells to give them these formats. Double-click the button to keep painting; Esc stops.' : 'Format Painter: click or drag over what should take this look. Double-click the button to keep painting; Esc stops.', 6000);
+  else if (got === 'sticky') flash('Format Painter stays on: paint as many things as you like, then press Esc or click Format Painter again.', 6000);
+  else if (got === 'nothing') flash(where === 'sheet' ? 'Select the cells whose formats you want to copy, then click Format Painter.' : 'Select what has the look you want to copy (or put the caret in the text), then click Format Painter.');
+  else if (got === 'dropped') flash('Format Painter off.');
+}
+
+/** The text look the brush holds (text picked up, or the text of a caption or shape picked up). */
+function heldText(): TextLook | undefined {
+  const l = brush.look;
+  return l?.kind === 'text' ? l.look : l?.kind === 'things' ? l.look.text : undefined;
+}
+
+/** Paint text being typed in (a document, a caption, a text box or a cell of a table). */
+function paintText(ed: import('./text/editing').TextEditing): void {
+  const look = heldText();
+  if (look && ed.paintLook(look)) brush.used();
+}
+
+/** Paint things clicked or boxed on a drawing, slide or design. A click on empty space puts a one-off brush down. */
+function paintThings(sel: { atoms: Set<number>; bonds: Set<number>; captions: Set<number>; arrows: Set<number>; shapes: Set<number> }): void {
+  const l = brush.look;
+  if (!l || l.kind === 'cells') return;
+  const look: ObjectLook = l.kind === 'things' ? l.look : { text: l.look, colour: { color: l.look.run.color } };
+  const any = sel.atoms.size + sel.bonds.size + sel.captions.size + sel.arrows.size + sel.shapes.size > 0;
+  let n = 0;
+  if (any) editor.doc.edit('Format Painter', () => { n = paintObjects(editor.doc, sel, look); });
+  if (n) { editor.changed(); brush.used(); }
+  else if (!any) brush.used();
+  else flash('That has no look to take from what was picked up (a table or chart keeps its own).');
+}
+
+brush.onChange = () => {
+  const l = brush.look;
+  editor.painter = l && l.kind !== 'cells' ? { things: paintThings, text: paintText } : null;
+  docMode.painter = heldText() ? paintText : null;
+  sheetMode.view.painter = l?.kind === 'cells' ? () => { sheetMode.paintFormats(l.block); brush.used(); } : null;
+  for (const b of document.querySelectorAll(PAINTER_BUTTONS)) b.setAttribute('aria-pressed', String(!!l));
+  editor.requestOverlay();
+};
+
+// Escape puts the brush down (before anything else sees the key; a window's own Escape comes first)
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !brush.held || (e.target as Element | null)?.closest?.('dialog')) return;
+  e.preventDefault();
+  e.stopPropagation();
+  brush.drop();
+  flash('Format Painter off.');
+}, true);
+
+// ---------------------------------------------------------------- Insert > Symbol
+
+const symbolWindow = new SymbolWindow({
+  insert: (ch) => {
+    if (sheetActive()) {
+      if (sheetMode.view.typeText(ch)) return true;
+      flash('Pick a cell to type the symbol into.');
+      return false;
+    }
+    if (docActive()) {
+      if (docMode.insertText(ch)) return true;
+      flash('Symbols can\'t be typed in Read Mode: go back to Print Layout (View).');
+      return false;
+    }
+    const cap = editor.typingCaption;
+    if (cap) cap.ed.type(ch);
+    else editor.typeNew(ch);
+    return true;
+  },
+  recent: () => recentSymbols,
+  used: (ch) => { recentSymbols = addRecentSymbol(recentSymbols, ch); storeSettings(); },
+  warn: (ch) => (ws.active.mode === 'drawing' && !savableChar(ch) ? 'ChemDraw may not show this character in a ChemDraw file (it isn\'t in its usual fonts or the Symbol font).' : ''),
+});
+
 stylePanel.highlightLooks = { list: allLooks, apply: (l) => applyHighlightLook(l), save: () => void saveHighlightLook() };
 
 // ---------------------------------------------------------------- toolboxes (View > Toolboxes)

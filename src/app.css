@@ -2158,3 +2158,19 @@ dialog.pivot-fields { width: min(92vw, 380px); max-height: calc(100vh - 120px); 
 .pic-swatch { display: inline-block; width: 22px; height: 22px; border: 1px solid var(--line); border-radius: 3px; }
 .pic-swatch.pic-none { background: linear-gradient(135deg, transparent 45%, #d23c3c 45%, #d23c3c 55%, transparent 55%) !important; }
 .md-row[hidden] { display: none; }
+
+/* Insert > Symbol: a non-modal window that types into the text being edited */
+dialog.symbol-window { width: min(calc(100vw - 32px), 460px); max-height: calc(100vh - 120px); }
+.sym-top { display: flex; gap: 6px; margin: 4px 0 8px; }
+.sym-top input { flex: 1 1 auto; min-width: 0; }
+.sym-top select { flex: 0 1 auto; min-width: 0; max-width: 45%; }
+.sym-head { font-size: 12px; color: var(--muted); margin: 2px 0; }
+.sym-row, .sym-grid { display: flex; flex-wrap: wrap; gap: 2px; }
+.sym-row { min-height: 32px; padding-bottom: 6px; border-bottom: 1px solid var(--line); margin-bottom: 6px; align-items: center; }
+.sym-grid { max-height: 248px; overflow-y: auto; align-content: flex-start; }
+button.sym { width: 32px; height: 32px; padding: 0; font-size: 18px; line-height: 1; font-family: 'Arimo', 'Segoe UI Symbol', 'Cambria Math', var(--ui-font); border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--text); cursor: pointer; }
+button.sym:hover, button.sym:focus-visible { border-color: var(--accent); background: var(--accent-soft); outline: none; }
+.sym-info { display: flex; align-items: center; gap: 10px; min-height: 40px; margin: 8px 0 0; flex-wrap: wrap; }
+.sym-big { font-size: 28px; min-width: 32px; text-align: center; color: var(--text); }
+.sym-warn { color: var(--warn); flex-basis: 100%; font-size: 12px; }
+.fp-icon { vertical-align: -2px; }

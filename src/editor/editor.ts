@@ -67,7 +67,8 @@ import {
 import { isEmptyText } from '../deck/deck';
 import { crossedBonds, lineAcross } from '../chem/fragments';
 import { imageFor } from '../render/images';
-import { ROTATE, handleCursor, pointerFor } from './cursors';
+import { BRUSH, ROTATE, handleCursor, pointerFor } from './cursors';
+import type { TextEditing } from '../text/editing';
 
 export type Tool =
   | { kind: 'select' }
@@ -228,6 +229,8 @@ interface Drag {
   applied?: Vec;
   /** Drawing a template: the ways it can go here, and which one is picked (Tab, or the pointer). */
   tpl?: { key: string; choices: TemplateChoice[]; index: number; manual: Vec | null };
+  /** Format Painter: the click or box paints what it lands on. */
+  paint?: boolean;
 }
 
 /** One way a template can go: where its atoms land, and which are shared with the drawing. */
@@ -345,6 +348,12 @@ export class Editor {
   slideKeys = false;
   /** The picture being cropped: its handles cut the picture instead of resizing it. */
   cropping: number | null = null;
+  /**
+   * Format Painter: while set, a click paints the thing clicked and a drag paints what the box
+   * takes in, instead of selecting, moving or drawing; a drag in the text being typed paints the
+   * words dragged over.
+   */
+  painter: { things: (sel: Selection) => void; text: (ed: TextEditing) => void } | null = null;
 
   constructor(public doc: Doc, public r: Renderer, public host: HTMLElement) {
     const el = r.overlay;
@@ -665,15 +674,17 @@ export class Editor {
     this.r.overlay.setPointerCapture(e.pointerId);
     const p = this.docPoint(e);
     const rect = this.r.overlay.getBoundingClientRect();
-    const rh = e.button === 0 ? this.rotateHandle() : null;
+    const painting = !!this.painter && e.button === 0;
+    const rh = e.button === 0 && !painting ? this.rotateHandle() : null;
     const rotating = !!rh && dist(rh, p) <= this.tol(7);
     // Shift+drag from an arrow with an arrow tool branches a new arrow off it (not its handles)
     const branching = e.shiftKey && this.tool.kind === 'arrow';
-    const handle = e.button === 0 && !rotating && !branching ? this.handleAt(p) : null;
+    const handle = e.button === 0 && !rotating && !branching && !painting ? this.handleAt(p) : null;
     const hit = handle || rotating ? null : this.hitTest(p);
     this.drag = {
       start: p, startScreen: { x: e.clientX - rect.left, y: e.clientY - rect.top }, hit, button: e.button, moved: false,
       shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey, mode: handle ? 'handle' : rotating ? 'rotate' : 'none', last: p, path: [p],
+      ...(painting ? { paint: true } : {}),
     };
     if (handle) this.drag.handle = handle;
     if (rotating) {
@@ -841,6 +852,7 @@ export class Editor {
   }
 
   private dragModeFor(d: Drag): Drag['mode'] {
+    if (d.paint) return 'marquee';
     // with any drawing tool, dragging what is already selected moves it (as in ChemDraw)
     if (d.hit && this.tool.kind !== 'eraser' && this.isSelected(d.hit)) return 'move';
     switch (this.tool.kind) {
@@ -874,7 +886,11 @@ export class Editor {
     if (!d) return;
     if (d.moved) this.showPointer(e.ctrlKey || e.metaKey);
     const p = this.docPoint(e);
-    if (d.mode === 'text') { this.captionEd?.pointerUp(); return; }
+    if (d.mode === 'text') {
+      this.captionEd?.pointerUp();
+      if (this.painter && this.captionEd) this.painter.text(this.captionEd.ed);
+      return;
+    }
     if (d.button === 2) {
       this.rightDragged = d.moved;
       const ctx = this.pendingContext;
@@ -894,7 +910,17 @@ export class Editor {
     }
     if (d.mode === 'marquee') {
       this.selectRect(d.start, p, d.shift);
-      this.requestOverlay(e.timeStamp);
+      if (d.paint) this.painter?.things(this.sel);
+      this.requestScene(e.timeStamp);
+      this.onChange();
+      return;
+    }
+    if (!d.moved && d.paint) {
+      // the thing clicked, on its own (a bond, not its atoms too)
+      this.sel = emptySel();
+      if (d.hit) this.selSet(d.hit.kind).add(d.hit.id);
+      this.painter?.things(this.sel);
+      this.requestScene(e.timeStamp);
       this.onChange();
       return;
     }
@@ -3997,6 +4023,13 @@ export class Editor {
     this.openCaption(null, p);
   }
 
+  /** Insert > Symbol with nothing being typed: a new text in the middle of the view, holding what is typed, still open for more (as PowerPoint makes a text box). */
+  typeNew(text: string): void {
+    const rect = this.r.overlay.getBoundingClientRect();
+    this.openCaption(null, this.r.toDoc(rect.width / 2, rect.height / 2));
+    this.captionEd?.ed.type(text);
+  }
+
   /** Start typing into a caption (Add Caption, Add ID Label). */
   typeInto(id: number): void {
     this.editCaption(id);
@@ -4120,6 +4153,7 @@ export class Editor {
   private showPointer(ctrl: boolean): void {
     const o = this.lastHover;
     if (!o || this.drag) return;
+    if (this.painter) { this.r.overlay.style.cursor = BRUSH; return; }
     const { onRotate, handle, h } = o;
     this.r.overlay.style.cursor = onRotate ? ROTATE : handle ? handleCursor(handle.which) : pointerFor({
       tool: this.tool.kind,

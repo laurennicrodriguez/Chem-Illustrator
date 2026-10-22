@@ -20,6 +20,8 @@ When the pointer turns into a pointing hand over a structure, it is a drawing yo
 
 - **Home** tab: font, size, colour, bold (Ctrl+B), italic (Ctrl+I), underline (Ctrl+U), subscript (Ctrl+=), superscript (Ctrl+Shift+=), bigger and smaller (Ctrl+] and Ctrl+[).
 - **C₉H₈** sets the selection in formula style: numbers lowered, charges raised.
+- **Format Painter** (beside **Copy**) copies the look of the selected text, or of the paragraph the caret is in, to the next text you click or drag over; double-click it to keep painting until Esc. See [Getting started](getting-started.md#format-painter-every-mode).
+- **Insert** tab ▸ **Symbol** types Greek letters, arrows, °, Å and other signs, found by name; see [Insert ▸ Symbol](getting-started.md#insert--symbol-every-mode).
 - **Highlight:** the **ab** button highlights the selected text; the arrow beside it picks the colour.
 - The chemistry typing helpers work as in the other modes: type CH2Cl2 or CDCl3 and the numbers drop down once you type a space or punctuation after it.
 - Misspelt words get a red line, and right-click offers corrections. Chemistry words are in the dictionary; add your own with right-click ▸ **Add to Dictionary**. **Edit ▸ Typing and Spelling…** has the settings.

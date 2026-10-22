@@ -48,6 +48,7 @@ import type { TableDef } from '../sheet/table-styles';
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
 import type { Tab } from '../workspace';
+import { paintCells } from '../format-painter';
 
 /** What a paste found on the clipboard, as far as a sheet cares. */
 export interface ClipboardCells {
@@ -66,6 +67,8 @@ export interface SheetModeHost {
   editStructure(contents: Contents | null, title: string, done: (c: Contents | null) => void): void;
   /** A key the sheet doesn't use itself (menu commands, hotkeys). True when it did something. */
   key(e: KeyboardEvent): boolean;
+  /** A ribbon command the sheet doesn't run itself (Format Painter, Insert Symbol: the same in every mode). */
+  command?(name: string): boolean;
   /** The workbook changed (for the unsaved mark on the tab). */
   changed(): void;
   /** A name or SMILES as a drawing in this style. */
@@ -519,7 +522,7 @@ export class SheetMode {
         return;
       }
     }
-    this.run(name);
+    if (!this.run(name)) this.host.command?.(name);
   }
 
   /** Sheet commands (from the ribbon, the menus and keys). False when the name isn't one. */
@@ -756,6 +759,21 @@ export class SheetMode {
     wb.edit(label, () => fn(s), this.view.place(), after ? () => ({ sheet: s, sel: after() }) : undefined);
     this.view.refresh();
     this.schedulePanel();
+  }
+
+  /** Format Painter: the formats of the cells selected (null with no sheet). */
+  pickFormats(): CellBlock | null {
+    const s = this.view.sheet;
+    if (!s) return null;
+    this.view.commitEdit();
+    return s.copy(this.view.sel.range);
+  }
+
+  /** Format Painter: give the cells just clicked or dragged over the formats picked up. */
+  paintFormats(block: CellBlock): void {
+    let target = this.view.sel.range;
+    this.edit('Format Painter', (sh) => { target = paintCells(sh, block, target); }, () => target);
+    this.view.select(target, { r: target.r1, c: target.c1 });
   }
 
   private decimals(delta: 1 | -1): void {
