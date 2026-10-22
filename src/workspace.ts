@@ -20,9 +20,10 @@ import { writePptx, PptxOptions } from './io/pptx-write';
 import { zipHas } from './io/ooxml';
 import { isXls } from './io/xls';
 import { isOds } from './io/ods';
+import { DOC_OPEN_ONLY, documentSaveNote, isOtherDocument } from './io/doc-files';
 import { adoptSaved } from './io/document-file';
 import {
-  FileRef, FileType, CDXML, CDX, PPTX, XLSX, XLSM, SHEET_OPEN_ONLY, CSV, SDF, DOCX, TABLE_TEXT_EXTENSIONS, openBytesDialog, saveFileDialog, writeFile, canSaveInPlace, askSaveChanges,
+  FileRef, FileType, CDXML, CDX, PPTX, XLSX, XLSM, SHEET_OPEN_ONLY, CSV, SDF, DOCX, RTF, ODT, TABLE_TEXT_EXTENSIONS, openBytesDialog, saveFileDialog, writeFile, canSaveInPlace, askSaveChanges,
   showError, withExtension, extensionOf, baseName, readPath, pathExists, stampOf,
 } from './io/files';
 import type { FileStamp } from './keep/recovery';
@@ -120,7 +121,7 @@ export interface WorkspaceHooks {
 const NO_AUTOSAVE = new Set(['csv', 'tsv', 'txt', 'sdf', 'sd']);
 
 /** What each kind of tab saves as (the first is the default). */
-const SAVE_TYPES: Record<Mode, FileType[]> = { drawing: [CDXML, CDX], slides: [PPTX], design: [PPTX], sheet: [XLSX, XLSM, CSV, SDF], document: [DOCX] };
+const SAVE_TYPES: Record<Mode, FileType[]> = { drawing: [CDXML, CDX], slides: [PPTX], design: [PPTX], sheet: [XLSX, XLSM, CSV, SDF], document: [DOCX, RTF, ODT] };
 
 /** Tabs already told, this session, how their structures look in Office (said once, not on every save). */
 const officeNoted = new WeakSet<Tab>();
@@ -440,7 +441,7 @@ export class Workspace {
   async open(): Promise<void> {
     let f;
     try {
-      f = await openBytesDialog('Drawings, slides, sheets and documents', [CDXML, CDX, PPTX, XLSX, XLSM, DOCX, CSV, SDF], ['sd', ...SHEET_OPEN_ONLY, ...TABLE_TEXT_EXTENSIONS]);
+      f = await openBytesDialog('Drawings, slides, sheets and documents', [CDXML, CDX, PPTX, XLSX, XLSM, DOCX, RTF, ODT, CSV, SDF], ['sd', ...SHEET_OPEN_ONLY, ...DOC_OPEN_ONLY, ...TABLE_TEXT_EXTENSIONS]);
     } catch (e) {
       await showError('Could not open the file: ' + String(e));
       return;
@@ -467,7 +468,8 @@ export class Workspace {
     const zip = bytes[0] === 0x50 && bytes[1] === 0x4b;
     try {
       let ok: boolean;
-      if (ext === 'xlsx' || ext === 'xlsm' || SHEET_OPEN_ONLY.includes(ext) || (zip && (zipHas(bytes, 'xl/workbook.xml') || isOds(bytes))) || isXls(bytes) || ext === 'sdf' || ext === 'sd' || TABLE_TEXT_EXTENSIONS.includes(ext)) ok = await this.openSheet(bytes, name, ref, file);
+      if (isOtherDocument(bytes, file) && !TABLE_TEXT_EXTENSIONS.includes(ext)) ok = await this.openDocument(bytes, name, ref, file);
+      else if (ext === 'xlsx' || ext === 'xlsm' || SHEET_OPEN_ONLY.includes(ext) || (zip && (zipHas(bytes, 'xl/workbook.xml') || isOds(bytes))) || isXls(bytes) || ext === 'sdf' || ext === 'sd' || TABLE_TEXT_EXTENSIONS.includes(ext)) ok = await this.openSheet(bytes, name, ref, file);
       else if (ext === 'docx' || (zip && zipHas(bytes, 'word/document.xml'))) ok = await this.openDocument(bytes, name, ref, file);
       else if (ext === 'pptx' || zip) ok = this.openSlides(bytes, name, ref);
       else ok = this.openDrawing(isCdx(bytes) ? cdxToCdxml(bytes) : new TextDecoder().decode(bytes), name, ref);
@@ -700,7 +702,7 @@ export class Workspace {
     if (tab.mode === 'document') {
       // the contents' page numbers come from the printed pages, whatever view shows
       tab.document!.printLayout();
-      return { data: await this.hooks.documents.write(tab.document!.t, name), type: DOCX, note: '' };
+      return { data: await this.hooks.documents.write(tab.document!.t, name), type: ext === 'rtf' ? RTF : ext === 'odt' ? ODT : DOCX, note: documentSaveNote(name) };
     }
     keepOnPage(this.docOf(tab));
     const text = writeCdxml(this.docOf(tab), { name, textMeasure: this.hooks.measure });

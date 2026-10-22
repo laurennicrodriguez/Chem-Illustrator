@@ -2,6 +2,7 @@
 // toolbar, the drawing area (with the slide list and notes in Slides mode, or the grid in Sheet
 // mode), and the panels on the right.
 
+import { readDocumentFile, writeDocumentFile } from './io/doc-files';
 import { newDocDesign, setNewDocDesign } from './document/themes';
 import { fieldEnv } from './document/fields';
 import type { QuickPart } from './document/quick-parts';
@@ -1746,8 +1747,8 @@ const ws: Workspace = new Workspace(doc, {
     write: (book, name) => writeSheetFile(book, name, sheetFiles),
   },
   documents: {
-    read: (bytes) => readDocx(bytes, docRead),
-    write: (d) => writeDocx(d, docFiles),
+    read: (bytes, name) => readDocumentFile(bytes, name, docRead),
+    write: (d, name) => writeDocumentFile(d, name, docFiles),
   },
   newStyle: (mode) => { const n = modeStyleFor(mode); return n ? styleNamed(n, ownStyles) ?? null : null; },
   newPage: () => (defaultPage ? { ...defaultPage } : null),
