@@ -53,6 +53,7 @@
     "@tauri-apps/plugin-process": "~2.4.0",
     "@tauri-apps/plugin-updater": "~2.13.3",
     "fflate": "^0.8.2",
+    "hyphen": "^1.14.1",
     "marked": "^18.1.1",
     "polygon-clipping": "^0.15.7"
   },

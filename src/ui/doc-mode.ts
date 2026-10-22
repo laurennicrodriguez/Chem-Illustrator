@@ -57,6 +57,14 @@ import { cellMargins, paintEdge, type CellBlock } from '../document/table-styles
 import { blockOf, canMergeBlock, mergeBlock } from '../document/table-convert';
 import { BORDER_STYLES, BORDER_WIDTHS, DocTablesUI, LOOK_OPTIONS, penSwatch } from './doc-tables-ui';
 import { DocNav } from './doc-nav';
+import { DocInsertUI } from './doc-insert-ui';
+import { DocParagraphUI } from './doc-paragraph-ui';
+import { DocProofingUI } from './doc-proofing-ui';
+import { DEFAULT_ZONE } from '../text/hyphenate';
+import { popupMenu } from './sheet-view';
+import type { BorderChoice } from '../document/para-borders';
+import type { QuickPart } from '../document/quick-parts';
+import { GO_TO_KINDS, goToOffset, similarRanges, type GoToKind } from '../document/goto';
 import { lookOfTable } from '../document/table-styles';
 import type { BorderLine, BorderSide, TableLook } from '../model';
 import { BREAK_NAMES, changeSection, newBreak, pageNumText, sectionAt, sectionsOf, type Section, type SectionPatch } from '../document/sections';
@@ -102,6 +110,9 @@ export interface DocModeHost {
   pickDocument?(): Promise<{ name: string; t: DocText } | null>;
   /** Show a document made here (Compare's result) in a new tab, unsaved. */
   showDocument?(t: DocText, name: string): void;
+  /** The person's saved Quick Parts (Insert > Quick Parts), and saving them with the settings. */
+  quickParts?(): QuickPart[];
+  setQuickParts?(list: QuickPart[]): void;
   measure: Measure;
 }
 
@@ -204,6 +215,11 @@ export class DocumentMode {
   readonly tables: DocTablesUI;
   /** View > Navigation Pane. */
   readonly nav: DocNav;
+  /** Insert > Cover Page, Blank Page, Quick Parts, Date and Time, and cross-references. */
+  readonly inserts: DocInsertUI;
+  /** Home > Borders, Shading and Sort. */
+  readonly paragraphs: DocParagraphUI;
+  readonly proofing: DocProofingUI;
   private speller: Speller | null = null;
   private dictSeen: string[] | null = null;
   private checkCache = new Map<string, { spell: [number, number][]; issues: Issue[] }>();
@@ -311,6 +327,43 @@ export class DocumentMode {
       deleteBlock: (para) => this.navDelete(para),
       showFound: () => this.redraw(),
       resized: () => { for (const v of this.views) v.resize(); this.redraw(); },
+      focus: () => this.focus(),
+    });
+    this.inserts = new DocInsertUI({
+      file: () => this.file,
+      ed: () => this.ed,
+      insertObject: (o, kind) => this.insertObject(o, kind),
+      stopBox: () => this.stopBox(),
+      flash: (msg, ms) => this.host.flash(msg, ms),
+      focus: () => this.focus(),
+      quickParts: () => this.host.quickParts?.() ?? [],
+      setQuickParts: (list) => this.host.setQuickParts?.(list),
+      author: () => reviewAuthor(),
+    });
+    this.paragraphs = new DocParagraphUI({
+      file: () => this.file,
+      ed: () => this.ed,
+      table: () => { const tg = this.tableTarget(); return tg ? { id: tg.id, t: tg.t } : null; },
+      setTable: (id, t, kind) => this.setTable(id, t, kind),
+      flash: (msg, ms) => this.host.flash(msg, ms),
+      focus: () => this.focus(),
+    });
+    this.proofing = new DocProofingUI({
+      file: () => this.file,
+      speller: () => this.speller,
+      checks: () => this.checksAll(),
+      addWord: (w) => setTypingPrefs({ dictionary: [...typingPrefs.dictionary, w] }),
+      ignoreWord: (w) => { ignored.add(w.toLowerCase()); this.speller?.ignore(w); this.checkCache.clear(); this.checked = null; this.redraw(); },
+      show: (a, b) => {
+        const f = this.file;
+        if (!f) return;
+        this.stopBox();
+        f.ed.select(a, b);
+        const c = f.ed.caret();
+        this.view.revealTop({ x1: c.x, y1: c.y1, x2: c.x, y2: c.y2 });
+        this.changed('selection');
+      },
+      flash: (msg, ms) => this.host.flash(msg, ms),
       focus: () => this.focus(),
     });
     this.wireInput();
@@ -833,6 +886,8 @@ export class DocumentMode {
   private changed(kind: 'text' | 'selection'): void {
     const f = this.file;
     if (!f) return;
+    // text with similar formatting stays selected until the caret moves or the text changes another way
+    if (this.similar && (this.similar.t !== f.t || f.ed.start !== this.similar.at[0] || f.ed.end !== this.similar.at[1])) this.similar = null;
     // the text box being typed into was taken away (Undo, Cut)
     if (f.box) {
       const bo = f.t.objects[f.box.id];
@@ -939,7 +994,93 @@ export class DocumentMode {
       found: this.finder.open ? this.finder.hits : [],
       framed,
       comments: this.comments.shading(),
+      ...(this.similar ? { also: this.similar.ranges } : {}),
     };
+  }
+
+  // ---------------------------------------------------------------- Select and Go To
+
+  /** Home > Select > Select Text with Similar Formatting: every stretch that looks like the text at the caret, until the caret moves. */
+  private similar: { t: DocText; ranges: [number, number][]; at: [number, number] } | null = null;
+
+  private selectSimilar(): void {
+    const f = this.file;
+    if (!f) return;
+    this.stopBox();
+    const ed = f.ed;
+    const paras = fitParas(f.t.paras, paraCount(ed.text));
+    const ranges = similarRanges(f.t.runs, ed.start, (p) => { const st = styleOf(f.t, paras[p]); return { font: st.font, size: st.size }; });
+    if (!ranges.length) { this.host.flash('There is no text here to match.'); return; }
+    ed.select(ranges[0][0], ranges[0][1]);
+    this.similar = { t: f.t, ranges, at: [ed.start, ed.end] };
+    this.host.flash(`${ranges.length} place${ranges.length === 1 ? '' : 's'} with this formatting selected: bold, italic, the font, size, colour, highlight or a style now changes them all.`, 6000);
+    this.redraw();
+  }
+
+  /** A text formatting change for every stretch of text with similar formatting. True when it was done here. */
+  private applySimilar(cmd: string, patch?: Partial<rt.RunStyle>): boolean {
+    const f = this.file;
+    const sim = this.similar;
+    if (!f || !sim || sim.t !== f.t || f.box) return false;
+    const toggles: Record<string, rt.Toggle> = { 'doc-bold': 'bold', 'doc-italic': 'italic', 'doc-underline': 'underline', 'doc-strike': 'strike', 'doc-sub': 'sub', 'doc-sup': 'sup', 'doc-small-caps': 'smallCaps', 'doc-all-caps': 'allCaps' };
+    const styles: Record<string, string> = { 'style-normal': 'Normal', 'style-title': 'Title', 'style-h1': 'Heading1', 'style-h2': 'Heading2', 'style-h3': 'Heading3', 'style-caption': 'Caption' };
+    let t = f.t;
+    if (patch) {
+      for (const [a, b] of sim.ranges) t = { ...t, runs: rt.applyStyle(t.runs, a, b, patch) };
+    } else if (toggles[cmd]) {
+      const key = toggles[cmd];
+      const p = rt.togglePatch(rt.commonStyle(t.runs, sim.ranges[0][0], sim.ranges[0][1]), key);
+      for (const [a, b] of sim.ranges) t = { ...t, runs: rt.applyStyle(t.runs, a, b, p) };
+    } else if (styles[cmd] || cmd.startsWith('style-id:')) {
+      const id = styles[cmd] ?? cmd.slice(9);
+      t = withStyle(t, id);
+      const done = new Set<number>();
+      for (const [a] of sim.ranges) { const p = paraAt(f.ed.text, a); if (!done.has(p)) { done.add(p); t = setParaStyle(t, p, p, id); } }
+    } else return false;
+    const ranges = sim.ranges;
+    f.ed.update(t, 'Format');
+    this.similar = { t: f.t, ranges, at: [f.ed.start, f.ed.end] };
+    this.redraw();
+    return true;
+  }
+
+  /** Text formatting from the ribbon's font, size and colour boxes: for the similar text when that is selected. */
+  private setTextStyle(patch: Partial<rt.RunStyle>): void {
+    if (!this.applySimilar('', patch)) this.ed.setStyle(patch);
+  }
+
+  /** Home > Select: Select All, Select Text with Similar Formatting, and the Selection Pane. */
+  private selectMenu(x: number, y: number): void {
+    popupMenu(x, y, [
+      ['Select All (Ctrl+A)', () => { this.run('select-all'); }],
+      ['Select Text with Similar Formatting', () => this.selectSimilar()],
+      null,
+      ['Go To… (Ctrl+G)', () => void this.goToDialog()],
+    ]);
+  }
+
+  /** Home > Find > Go To (Ctrl+G, F5): a page, section, line, bookmark, comment, note, field, table, picture, equation or heading. */
+  private goToKind: GoToKind = 'page';
+  private async goToDialog(): Promise<void> {
+    const f = this.file;
+    if (!f) return;
+    this.stopBox();
+    const marks = bookmarksOf(f.t).filter((b) => !b.name.startsWith('_')).map((b) => b.name);
+    const got = await ask('Go To', [
+      { name: 'what', label: 'Go to what', value: this.goToKind, options: GO_TO_KINDS.map(([v, label]) => ({ value: v, label })) },
+      { name: 'n', label: 'Enter a number or name', value: '', placeholder: '3, +1 (the next), −2, or a bookmark\'s name', suggestions: marks },
+    ], { ok: 'Go To', note: 'A number goes to that one; + and − go on or back from where the caret is (just + is the next one). Bookmarks go by name.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const kind = got.what as GoToKind;
+    this.goToKind = kind;
+    const at = goToOffset(kind, kind === 'bookmark' ? got.n : got.n.replace('−', '-'), f.t, f.layout(), f.ed.start);
+    const name = GO_TO_KINDS.find(([k]) => k === kind)?.[1].toLowerCase() ?? kind;
+    if (at === null) { this.host.flash(kind === 'bookmark' ? `There is no bookmark called ${got.n.trim()}.` : `There is no such ${name} in this document.`); return; }
+    f.ed.setCaret(at);
+    const c = f.ed.caret();
+    this.view.revealTop({ x1: c.x, y1: c.y1, x2: c.x, y2: c.y2 });
+    this.changed('selection');
   }
 
   /** A citation or bibliography picked on its own (a selection of just its character). */
@@ -987,11 +1128,22 @@ export class DocumentMode {
       if (this.checkCache.size > used.size * 2 + 500) for (const k of [...this.checkCache.keys()]) if (!used.has(k)) this.checkCache.delete(k);
       this.checked = { t: f.t, spell, issues };
     }
-    // the word the caret is at the end of is still being typed
+    return this.typedOut(this.checked);
+  }
+
+  /** Every misspelled word and chemistry slip, the word being typed too (for the Spelling and Grammar pane). */
+  private checksAll(): { spell: [number, number][]; issues: Issue[] } {
+    this.checks();
+    return this.checked ? { spell: this.checked.spell, issues: this.checked.issues } : { spell: [], issues: [] };
+  }
+
+  /** The checks without the word the caret is at the end of (it is still being typed). */
+  private typedOut(checked: { spell: [number, number][]; issues: Issue[] }): { spell: [number, number][]; issues: Issue[] } {
+    const f = this.file!;
     const ed = f.ed;
     const at = ed.collapsed ? ed.focus : -1;
     const typing = ([a, b]: [number, number]) => at > a && at <= b;
-    return { spell: this.checked.spell.filter((s) => !typing(s)), issues: this.checked.issues.filter((i) => !typing([i.start, i.end])) };
+    return { spell: checked.spell.filter((s) => !typing(s)), issues: checked.issues.filter((i) => !typing([i.start, i.end])) };
   }
 
   private contextMenu(offset: number, clientX: number, clientY: number): boolean {
@@ -2630,6 +2782,7 @@ export class DocumentMode {
     if (/^outline-/.test(cmd)) { this.outlineCommand(cmd); return true; }
     const kind = VIEW_COMMANDS[cmd];
     if (kind) { this.setViewKind(kind); return true; }
+    if (this.applySimilar(cmd)) { this.focus(); return true; }
     const ed = this.ed;
     const style = (id: string) => {
       const [a, b] = ed.selectedParas();
@@ -2637,6 +2790,10 @@ export class DocumentMode {
     };
     const line = (v: number) => ed.setSelectedParas({ line: Math.abs(v - 1) < 1e-6 ? undefined : v }, 'spacing');
     if (cmd.startsWith('style-id:')) { style(cmd.slice(9)); this.focus(); return true; }
+    const bd = /^border-(bottom|top|left|right|none|all|outside|inside|horizontal)$/.exec(cmd);
+    if (bd) { this.paragraphs.border(bd[1] as BorderChoice); return true; }
+    const cover = /^cover-(.+)$/.exec(cmd);
+    if (cover) { void this.inserts.cover(cover[1]); return true; }
     const pick = /^(case|multilevel|bulletlib|watermark)-(.*)$/.exec(cmd);
     if (pick) { this.pickCommand(pick[1], pick[2]); this.focus(); return true; }
     const align = (j: 'left' | 'center' | 'right' | 'justify') => ed.setSelectedParas({ align: j === 'left' ? undefined : j }, 'align');
@@ -2736,6 +2893,20 @@ export class DocumentMode {
       case 'remove-link': if (!ed.linkHere()) { this.host.flash('Put the caret in a link first.'); break; } ed.removeLink(); break;
       case 'open-link': { const l = ed.linkHere(); if (!l) { this.host.flash('Put the caret in a link first.'); break; } void followLink(l.link); break; }
       case 'insert-bookmark': void this.bookmarkDialog(); break;
+      case 'insert-date': void this.inserts.dateTime(); return true;
+      case 'doc-go-to': void this.goToDialog(); return true;
+      case 'select-similar': this.selectSimilar(); return true;
+      case 'insert-field': void this.inserts.field(); return true;
+      case 'doc-property': void this.inserts.property(); return true;
+      case 'doc-properties': void this.inserts.properties(); return true;
+      case 'blank-page': this.inserts.blankPage(); break;
+      case 'remove-cover': this.inserts.removeCover(); break;
+      case 'borders-shading': void this.paragraphs.bordersDialog(); return true;
+      case 'shading-none': this.paragraphs.shade(undefined); break;
+      case 'para-sort': void this.paragraphs.sortDialog(); return true;
+      case 'spelling-grammar': this.proofing.spelling(this.ribbon.querySelector<HTMLElement>('[data-doc="spelling-grammar"]')); return true;
+      case 'thesaurus': void this.proofing.lookUp(this.ribbon.querySelector<HTMLElement>('[data-doc="thesaurus"]')); return true;
+      case 'word-count': { const f = this.file; if (!f) return true; const lay = f.layout(); this.proofing.wordCount(lay.pages.length, lay.text.lines.length, this.ribbon.querySelector<HTMLElement>('[data-doc="word-count"]')); return true; }
       case 'edit-equation': { const m = this.pickedMath(); if (m === null) { this.host.flash('Click an equation first (or double-click it).'); break; } void this.editEquation(m); break; }
       case 'track-changes': void this.toggleTracking(); break;
       case 'review-name': void this.askReviewName(); break;
@@ -2782,7 +2953,7 @@ export class DocumentMode {
       }
       case 'page-number-format': void this.pageNumberFormat(); return true;
       default: {
-        const m = /^(margins|paper|orient|numbers|columns|breaks|linenums)-(.*)$/.exec(cmd);
+        const m = /^(margins|paper|orient|numbers|columns|breaks|linenums|hyphen)-(.*)$/.exec(cmd);
         if (!m || !this.layoutCommand(m[1], m[2])) return false;
       }
     }
@@ -2862,8 +3033,37 @@ export class DocumentMode {
         this.updateRibbon();
       } else if (v === 'options') { void this.lineNumberOptions(); return true; }
       else return false;
+    } else if (what === 'hyphen') {
+      if (v === 'none' || v === 'auto') f.ed.update({ ...f.t, hyphen: { ...f.t.hyphen, auto: v === 'auto' } } as DocText, 'Hyphenation');
+      else if (v === 'para') {
+        const [a, b] = f.ed.selectedParas();
+        const off = !fitParas(f.t.paras, paraCount(f.ed.text))[a]?.noHyphen;
+        f.ed.setParas(a, b, { noHyphen: off || undefined }, 'Hyphenation');
+        this.updateRibbon();
+      } else if (v === 'options') { void this.hyphenOptions(); return true; }
+      else return false;
+      this.updateRibbon();
     } else return false;
     return true;
+  }
+
+  /** Layout > Hyphenation > Hyphenation Options: on or off, the hyphenation zone, how many hyphens in a row, and words in capitals. */
+  private async hyphenOptions(): Promise<void> {
+    const f = this.file;
+    if (!f) return;
+    const h = f.t.hyphen ?? { auto: false };
+    const got = await ask('Hyphenation', [
+      { name: 'auto', label: 'Automatically hyphenate the document', value: String(!!h.auto), type: 'checkbox' },
+      { name: 'caps', label: 'Hyphenate words in CAPS', value: String(h.caps !== false), type: 'checkbox' },
+      { name: 'zone', label: 'Hyphenation zone', value: showLength(h.zone ?? DEFAULT_ZONE, 'in'), unit: 'in', placeholder: '0.25 in' },
+      { name: 'limit', label: 'Limit consecutive hyphens to', value: h.limit ? String(h.limit) : 'No limit', suggestions: ['No limit', '1', '2', '3', '4'] },
+    ], { ok: 'OK', note: 'A word is broken only where English allows (US English patterns) and only when leaving it whole would leave more room at the end of the line than the zone. Words with digits, formulas and words under 5 letters are never broken. Saved as Word\'s hyphenation settings.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const zone = parseLength(got.zone, 'in');
+    const limit = Number.parseInt(got.limit, 10);
+    f.ed.update({ ...f.t, hyphen: { auto: got.auto === 'true', ...(zone !== null && zone >= 0 ? { zone } : {}), ...(limit > 0 ? { limit } : {}), ...(got.caps === 'true' ? {} : { caps: false }) } } as DocText, 'Hyphenation');
+    this.updateRibbon();
   }
 
   /**
@@ -3098,24 +3298,7 @@ export class DocumentMode {
 
   /** References > Cross-reference: "Figure 2" in the text, following that caption's number. */
   private async crossReference(): Promise<void> {
-    const f = this.file!;
-    const shown = fieldTexts(f.t);
-    const at = objectOffsets(f.t.runs);
-    const text = f.ed.text;
-    const isCaption = (id: number) => { const o = f.t.objects[id]; return o?.kind === 'seq' && o.name !== COMPOUND; };
-    const caps = [...at.entries()].filter(([id]) => isCaption(id)).sort((a, b) => a[1] - b[1]).map(([id, off]) => {
-      const start = text.lastIndexOf('\n', off - 1) + 1;
-      const end = text.indexOf('\n', off);
-      const words = text.slice(start, end < 0 ? text.length : end).replace(OBJECT_CHAR, shown.get(id) ?? '');
-      return { id, label: words.length > 70 ? words.slice(0, 68) + '…' : words };
-    });
-    if (!caps.length) { this.host.flash('There are no captions to refer to yet: References > Insert Caption adds one.', 6000); return; }
-    const got = await ask('Cross-reference', [{ name: 'target', label: 'Refer to', value: String(caps[0].id), options: caps.map((c) => ({ value: String(c.id), label: c.label })) }], {
-      ok: 'Insert', note: 'Puts the caption\'s label and number in the text ("Figure 2"). It changes by itself when captions are added, removed or moved.',
-    });
-    this.focus();
-    if (!got || this.file !== f) return;
-    this.insertObject({ kind: 'ref', target: Number(got.target) }, 'Insert cross-reference');
+    await this.inserts.crossReference();
   }
 
   /**
@@ -3817,6 +4000,18 @@ export class DocumentMode {
       const box = /^box-(para|style|page|hf)$/.exec(cmd);
       if (box) { this.panel.open(box[1] as DocBoxKey, b); return; }
       // the table galleries open under their buttons
+      // the menus that open under their buttons
+      const menus: Record<string, (x: number, y: number) => void> = {
+        'para-borders': (x, y) => this.paragraphs.bordersMenu(x, y),
+        'quick-parts': (x, y) => this.inserts.quickPartsMenu(x, y),
+        'cover-page': (x, y) => this.inserts.coverMenu(x, y),
+        'doc-select': (x, y) => this.selectMenu(x, y),
+      };
+      if (menus[cmd] && this.file) {
+        const br = b.getBoundingClientRect();
+        menus[cmd](br.left, br.bottom + 2);
+        return;
+      }
       if (cmd === 'table-styles' || cmd === 'table-borders') {
         const br = b.getBoundingClientRect();
         if (cmd === 'table-styles') this.tables.styleGallery(br.left, br.bottom + 2);
@@ -3852,9 +4047,11 @@ export class DocumentMode {
         if (e.key === 'Escape') { e.preventDefault(); this.focus(); }
       });
     };
-    go(font, () => { if (font.value.trim() && this.file) this.ed.setStyle({ font: font.value.trim() }); });
-    go(size, () => { const v = Number(size.value); if (v > 0 && v <= 1638 && this.file) this.ed.setStyle({ size: v }); });
-    colour.addEventListener('change', () => { if (this.file) this.ed.setStyle({ color: colour.value.toLowerCase() === '#000000' ? undefined : colour.value }); this.focus(); });
+    go(font, () => { if (font.value.trim() && this.file) this.setTextStyle({ font: font.value.trim() }); });
+    go(size, () => { const v = Number(size.value); if (v > 0 && v <= 1638 && this.file) this.setTextStyle({ size: v }); });
+    colour.addEventListener('change', () => { if (this.file) this.setTextStyle({ color: colour.value.toLowerCase() === '#000000' ? undefined : colour.value }); this.focus(); });
+    const shading = r.querySelector<HTMLInputElement>('#doc-shading');
+    shading?.addEventListener('change', () => { this.paragraphs.shade(shading.value); });
     const pageCol = r.querySelector<HTMLInputElement>('#doc-page-colour')!;
     pageCol.addEventListener('change', () => { this.setPageLook({ pageColor: pageCol.value.toLowerCase() === '#ffffff' ? undefined : pageCol.value }, 'Page Color'); this.focus(); });
     // Layout > Paragraph: indents (inches) and spacing (points); any unit can be typed
@@ -3978,6 +4175,7 @@ export class DocumentMode {
     const pageCol = this.ribbon.querySelector<HTMLInputElement>('#doc-page-colour');
     if (pageCol && pageCol !== active) pageCol.value = f.t.pageColor ?? '#ffffff';
     pick('#doc-linenums', sec.lines?.restart ?? 'none');
+    pick('#doc-hyphen', f.t.hyphen?.auto ? 'auto' : 'none');
     press('track-changes', !!f.t.track);
     press('show-comments', this.comments.shown);
     const fig = this.pickedObject() ?? f.box?.id ?? null;

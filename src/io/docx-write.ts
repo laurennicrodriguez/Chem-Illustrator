@@ -16,7 +16,9 @@ import type { CellBorders, Contents, Justify, ParaStyle, PictureFx, TableData, T
 import { bakedPart } from '../render/picture-fx';
 import { blipEffectsXml, imgPropsXml, pictureGeomXml } from './picture-xml';
 import { DEFAULT_MARGINS, builtInStyle } from '../document/table-styles';
-import { bordersXml, lookXml as tableLookXml, marginsXml, tableStyleXml } from './docx-table-styles';
+import { borderXml, bordersXml, lookXml as tableLookXml, marginsXml, tableStyleXml } from './docx-table-styles';
+import { BORDER_SPACE, cleanBorders } from '../document/para-borders';
+import { fieldInstr } from '../document/fields';
 import type { DocStyle } from '../style';
 import * as rt from '../richtext';
 import { Package, REL, NS, xml, hex6, emu, MediaFiles, structureAltText } from './ooxml';
@@ -140,7 +142,7 @@ class DocxWriter {
   }
 
   constructor(private t: DocText, private deps: DocxDeps, private pages?: string[]) {
-    this.shown = fieldTexts(t);
+    this.shown = fieldTexts(t, pages ? (p) => pages[p] ?? '' : undefined, pages ? Math.max(1, ...pages.map((x) => Number(x) || 0)) : undefined);
     this.charStyles = charStylesOf(t);
     let foot = 0, end = 0;
     for (const id of objectsInText(t.runs)) {
@@ -186,7 +188,7 @@ class DocxWriter {
     pkg.relate(main, DOCX_REL.numbering, 'numbering.xml');
     pkg.add('word/numbering.xml', this.numbering(), DOCX_CT.numbering);
     pkg.relate(main, DOCX_REL.settings, 'settings.xml');
-    const settings = (embed: boolean) => `${HEAD}<w:settings xmlns:w="${W_NS}"><w:zoom w:percent="100"/>${this.t.pageColor ? '<w:displayBackgroundShape/>' : ''}${embed ? '<w:embedTrueTypeFonts/><w:saveSubsetFonts/>' : ''}${this.t.track ? '<w:trackRevisions/>' : ''}<w:defaultTabStop w:val="720"/>` +
+    const settings = (embed: boolean) => `${HEAD}<w:settings xmlns:w="${W_NS}"><w:zoom w:percent="100"/>${this.t.pageColor ? '<w:displayBackgroundShape/>' : ''}${embed ? '<w:embedTrueTypeFonts/><w:saveSubsetFonts/>' : ''}${this.t.track ? '<w:trackRevisions/>' : ''}<w:defaultTabStop w:val="720"/>${hyphenXml(this.t.hyphen)}` +
       `<w:characterSpacingControl w:val="doNotCompress"/>${notes}` +
       `<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`;
     pkg.add('word/settings.xml', settings(false), DOCX_CT.settings);
@@ -199,9 +201,14 @@ class DocxWriter {
     pkg.relate('', REL.coreProps, 'docProps/core.xml');
     pkg.relate('', REL.extendedProps, 'docProps/app.xml');
     const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+    // the document's properties (File > Properties), which fields and Word show
+    const pr = this.t.props ?? {};
+    const name = pr.title || title;
+    const tag = (k: string, v: string | undefined) => (v ? `<${k}>${xml(v)}</${k}>` : '');
     pkg.add('docProps/core.xml', `${HEAD}<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">` +
-      `${title ? `<dc:title>${xml(title)}</dc:title>` : ''}<dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`, DOCX_CT.core);
-    pkg.add('docProps/app.xml', `${HEAD}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Chem Illustrator</Application></Properties>`, DOCX_CT.app);
+      `${tag('dc:title', name)}${tag('dc:subject', pr.subject)}${tag('dc:creator', pr.author)}${tag('cp:keywords', pr.keywords)}${pr.author ? `<cp:lastModifiedBy>${xml(pr.author)}</cp:lastModifiedBy>` : ''}` +
+      `<dcterms:created xsi:type="dcterms:W3CDTF">${xml(pr.created ?? now)}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`, DOCX_CT.core);
+    pkg.add('docProps/app.xml', `${HEAD}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Chem Illustrator</Application>${tag('Company', pr.company)}</Properties>`, DOCX_CT.app);
     // Zotero's document preferences (its style and settings), as custom document properties
     if (this.t.citeManager === 'zotero') {
       const prefs = splitPrefs(this.t.zoteroPrefs ?? newZoteroPrefs(this.t.citeStyle ?? preferredStyle().style));
@@ -401,7 +408,9 @@ class DocxWriter {
       pPr.push(`<w:numPr><w:ilvl w:val="${Math.max(0, Math.min(8, ps.level ?? 0))}"/><w:numId w:val="${id}"/></w:numPr>`);
     }
     if (ps.noLineNumbers) pPr.push('<w:suppressLineNumbers/>');
+    pPr.push(paraBorderXml(ps));
     if (ps.tabs?.length) pPr.push(`<w:tabs>${ps.tabs.map((x) => `<w:tab w:val="${x.kind}"${x.leader ? ` w:leader="${x.leader}"` : ''} w:pos="${twips(x.pos)}"/>`).join('')}</w:tabs>`);
+    if (ps.noHyphen) pPr.push('<w:suppressAutoHyphens/>');
     const sp: string[] = [];
     const before = ps.spaceBefore ?? 0, after = ps.spaceAfter ?? 0, line = ps.line ?? 1;
     if (before !== st.spaceBefore) sp.push(`w:before="${twips(before)}"`);
@@ -638,6 +647,7 @@ class DocxWriter {
       const name = /\s/.test(o.name) ? `"${o.name}"` : o.name;
       return field(rPr, ` SEQ ${xml(name)} \\* ARABIC \\* CHARFORMAT `, shown);
     }
+    if (o.kind === 'field') return field(rPr, xml(fieldInstr(o)), shown);
     if (o.kind === 'ref') {
       const bm = this.bookmarks.get(o.target);
       return bm ? field(rPr, ` REF ${bm} \\h \\* CHARFORMAT `, shown) : run(rPr, shown);
@@ -1244,6 +1254,23 @@ function fieldStart(rPr: string, instr: string, data?: string): string {
   return `<w:r>${pr}${begin}</w:r>${text}${inner}<w:r>${pr}<w:fldChar w:fldCharType="separate"/></w:r>`;
 }
 
+/** A paragraph's borders (w:pBdr, Word's spacing from the text) and shading (w:shd). */
+export function paraBorderXml(ps: ParaStyle): string {
+  let out = '';
+  const b = cleanBorders(ps.border);
+  if (b) {
+    const side = (name: 'top' | 'left' | 'bottom' | 'right' | 'between') => {
+      const l = b[name];
+      if (!l) return '';
+      const space = name === 'left' || name === 'right' ? BORDER_SPACE.x : BORDER_SPACE.y;
+      return borderXml(name, l).replace('w:space="0"', `w:space="${space}"`);
+    };
+    out += `<w:pBdr>${side('top')}${side('left')}${side('bottom')}${side('right')}${side('between')}</w:pBdr>`;
+  }
+  if (ps.shade) out += `<w:shd w:val="clear" w:color="auto" w:fill="${hex6(ps.shade)}"/>`;
+  return out;
+}
+
 /** A run of text (tabs as Word's tabs). */
 function run(rPr: string, text: string): string {
   if (!text) return '';
@@ -1361,4 +1388,14 @@ function shapeParagraphs(runs: TextRun[], paras: ParaStyle[] | undefined, align:
     const bullet = p.list ? tableRun({ text: '• ', size: rs[0]?.size, color: rs[0]?.color }, font, size) : '';
     return `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>${ind}<w:jc w:val="${jc}"/></w:pPr>${bullet}${rs.filter((r) => r.text).map((r) => tableRun(r, font, size)).join('')}</w:p>`;
   }).join('') || '<w:p/>';
+}
+
+/** Word's hyphenation settings (settings.xml), in its order. */
+export function hyphenXml(h: DocText['hyphen']): string {
+  if (!h) return '';
+  let out = h.auto ? '<w:autoHyphenation/>' : '';
+  if (h.limit) out += `<w:consecutiveHyphenLimit w:val="${Math.round(h.limit)}"/>`;
+  if (h.zone !== undefined) out += `<w:hyphenationZone w:val="${twips(h.zone)}"/>`;
+  if (h.caps === false) out += '<w:doNotHyphenateCaps/>';
+  return out;
 }

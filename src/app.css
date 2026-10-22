@@ -2174,3 +2174,27 @@ button.sym:hover, button.sym:focus-visible { border-color: var(--accent); backgr
 .sym-big { font-size: 28px; min-width: 32px; text-align: center; color: var(--text); }
 .sym-warn { color: var(--warn); flex-basis: 100%; font-size: 12px; }
 .fp-icon { vertical-align: -2px; }
+
+/* Review > Proofing: the Spelling and Grammar pane, the Thesaurus and Word Count */
+.proof-pane { width: 320px; }
+.proof-pane .pp-kind { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.proof-pane .pp-spelling { color: #c62828; }
+.proof-pane .pp-grammar { color: #1d5fc4; }
+.proof-pane .pp-chemistry { color: #7b3fb5; }
+.proof-pane .pp-message { margin: 2px 0 6px; }
+.proof-pane .pp-context { padding: 6px 8px; border: 1px solid var(--line); background: var(--bg); border-radius: 3px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+.proof-pane .pp-context mark { background: #ffe08a; color: #000; padding: 0 1px; }
+.proof-pane .pp-choices { display: flex; flex-direction: column; gap: 2px; margin: 8px 0; max-height: 160px; overflow: auto; }
+.proof-pane .pp-choices button { text-align: left; }
+.proof-pane .pp-none, .proof-pane .pp-done { color: var(--muted); }
+.proof-pane .pp-buttons, .word-count .wc-buttons { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.proof-pane .pp-opts { display: block; margin-top: 8px; font-size: 12px; }
+.word-count .wc-table { border-collapse: collapse; min-width: 240px; }
+.word-count .wc-table th { text-align: left; font-weight: normal; padding: 2px 16px 2px 0; }
+.word-count .wc-table td { text-align: right; font-variant-numeric: tabular-nums; }
+.word-count .wc-extras { display: block; margin-top: 8px; }
+.thesaurus { width: 260px; }
+.thesaurus .th-word { font-weight: 600; margin-bottom: 4px; }
+.thesaurus .th-head { margin-top: 6px; font-size: 12px; color: var(--muted); }
+.thesaurus .th-list { display: flex; flex-wrap: wrap; gap: 3px; max-height: 200px; overflow: auto; }
+.thesaurus .th-note { font-size: 11px; color: var(--muted); margin: 8px 0 0; }

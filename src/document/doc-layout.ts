@@ -8,6 +8,7 @@
 // points), and the lines of every page together make one text layout, so the text editing's
 // caret, selection and arrow keys run across pages without knowing about them.
 
+import { hyphenation } from '../text/hyphenate';
 import type { CellMargins, Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
 import type { DocStyle } from '../style';
 import { withStack, layoutText, type Glyphs, type InlineBox, type LaidLine, type Measure, type Narrow, type TextFrame, type TextLayout } from '../text/layout';
@@ -20,6 +21,8 @@ import { bibliography, type BibEntry } from './references';
 import { emptyTof, tocEntries, tocLines, tofEntries, type TocEntry } from './toc';
 import { authorColours, hasChanges, markedRuns } from './revisions';
 import { layoutMath, type MathBox } from './math';
+import { needsPages } from './fields';
+import { borderRoom, paraFrames, type ParaFrame, type ParaSpan } from './para-borders';
 
 /** A table row is at least one line of Normal text tall. */
 export const SINGLE_ROW = 1.15;
@@ -216,6 +219,8 @@ export interface DocLayout {
   noteRules: { page: number; x: number; y: number; w: number }[];
   /** Line numbers in the margins (Layout > Line Numbers). */
   lineNums: LineNumber[];
+  /** Paragraph borders and shading (Home > Borders, Shading), page by page. */
+  frames: ParaFrame[];
 }
 
 /** A page setup's text area: the width between the margins, the columns, and the height. */
@@ -382,16 +387,23 @@ export class DocLayouter {
    */
   layout(t: DocText, only?: ShownParas): DocLayout {
     const hasToc = Object.values(t.objects).some((o) => o.kind === 'toc' || o.kind === 'tof');
+    // fields that show page numbers (a bookmark's page, the page, the number of pages) settle the same way
+    const paged = Object.values(t.objects).some((o) => o.kind === 'field' && needsPages(o));
     let lay = this.layoutOnce(t, only);
-    for (let pass = 0; hasToc && pass < 3; pass++) {
+    for (let pass = 0; (hasToc || paged) && pass < 3; pass++) {
       const now = lay.paraTops.map((pt) => lay.pages[pt.page]?.number ?? '');
       const heads = Object.values(t.objects).flatMap((o) => (o.kind === 'toc' ? tocEntries(t, o.levels) : o.kind === 'tof' ? tofEntries(t, o.name, lay.fields) : []));
-      if (heads.every((e) => this.tocPages[e.para] === now[e.para])) break;
+      const settled = heads.every((e) => this.tocPages[e.para] === now[e.para]) && (!paged || (now.every((x, i) => this.tocPages[i] === x) && this.pageCount === lay.pages.length));
+      if (settled) break;
       this.tocPages = now;
+      this.pageCount = lay.pages.length;
       lay = this.layoutOnce(t, only);
     }
     return lay;
   }
+
+  /** How many pages the last layout had (for the Number of Pages field). */
+  private pageCount = 1;
 
   private layoutOnce(t: DocText, only?: ShownParas): DocLayout {
     this.used.clear();
@@ -399,7 +411,8 @@ export class DocLayouter {
     const n = paraCount(text);
     const paras = fitParas(t.paras, n);
     const markers = listMarkers(paras);
-    const fields = fieldTexts(t);
+    const fields = fieldTexts(t, (p) => this.tocPages[p] ?? '', this.pageCount);
+    const hyph = hyphenation(t.hyphen);
     const paraRuns = splitParagraphs(t.runs);
     const colours = hasChanges(t.runs) ? authorColours(t.runs) : null;
     // the sections, each with its own paper, margins and columns (in columns, text is set in a column's width)
@@ -562,18 +575,19 @@ export class DocLayouter {
       const tabs = runs.filter(isTable).map((r) => tableOf(r.obj!)!);
       const bib = runs.some(isBib) || tabs.length > 0;
       const W = widthOf(p);
-      const key = JSON.stringify([resolved, ps, markers[p], W, objs, st.size, bib ? [t.citeStyle, t.citeOptions, entries.map((e) => [e.label, e.pieces]), st.font, tocKey] : 0, tabs.map((x) => [x.xs, x.hs])]);
+      const key = JSON.stringify([resolved, ps, markers[p], W, objs, st.size, bib ? [t.citeStyle, t.citeOptions, entries.map((e) => [e.label, e.pieces]), st.font, tocKey] : 0, tabs.map((x) => [x.xs, x.hs]), hyph && !ps.noHyphen ? t.hyphen : 0]);
+      const hy = hyph && !ps.noHyphen ? { hyphenate: hyph } : {};
       let lay = this.cache.get(key);
       if (!lay) {
         const frame: TextFrame = {
-          runs: resolved, paras: [ps], justify: 'left', wrap: W, boxes: true, markers: [markers[p]], inline,
+          runs: resolved, paras: [ps], justify: 'left', wrap: W, boxes: true, markers: [markers[p]], inline, ...hy,
         };
         lay = bib ? this.withBlocks(frame, st, blockLines, tableOf) : layoutText(frame, st.size, this.deps.measure);
         this.cache.set(key, lay);
       }
       this.used.add(key);
       laid.push(lay);
-      again.push(bib ? null : { key, frame: { runs: resolved, paras: [ps], justify: 'left', wrap: W, boxes: true, markers: [markers[p]], inline }, size: st.size });
+      again.push(bib ? null : { key, frame: { runs: resolved, paras: [ps], justify: 'left', wrap: W, boxes: true, markers: [markers[p]], inline, ...hy }, size: st.size });
     }
     // a paragraph laid out again round the floating figures beside it (`y` its top on the page)
     const wrapped = (p: number, y: number, all: WrapRect[], dx: number): TextLayout => {
@@ -734,6 +748,8 @@ export class DocLayouter {
     };
     const heightOf = heightOf0;
 
+    // room for paragraph borders above and below the text
+    const bRoom = paras.some((q) => q.border) ? borderRoom(paras) : null;
     let paraStart = 0;
     for (let p = 0; p < n; p++) {
       const ps = paras[p];
@@ -767,7 +783,7 @@ export class DocLayouter {
       if (ps.pageBreak && (hasContent || col > 0)) newPage();
       else if (ps.colBreak && hasContent) nextColumn();
       // space above a paragraph isn't kept at the top of a page, except on the first page
-      const before = () => (hasContent || pageIdx === 0 ? ps.spaceBefore ?? 0 : 0);
+      const before = () => (hasContent || pageIdx === 0 ? ps.spaceBefore ?? 0 : 0) + (bRoom?.above[p] ?? 0);
       // a heading moves to the next page when the start of the paragraph after it won't fit beside it
       if (ps.keepNext && hasContent && p + 1 < n) {
         const next = laid[p + 1].lines;
@@ -830,7 +846,7 @@ export class DocLayouter {
         onPage++;
         i++;
       }
-      cursor += ps.spaceAfter ?? 0;
+      cursor += (ps.spaceAfter ?? 0) + (bRoom?.below[p] ?? 0);
       paraStart += (paraRuns[p] ?? []).reduce((a, r) => a + r.text.length, 0) + 1;
     }
 
@@ -906,11 +922,12 @@ export class DocLayouter {
     objects.push(...blocks.values());
 
     const lineNums = this.lineNumbers(t, lines, pages, paras, secs, secOf);
+    const frames = paras.some((q) => q.border || q.shade) ? paraFrames(paraSpans(lines, pages, paras, bRoom), paras) : [];
     const last = pages[pages.length - 1];
     const box = { x1: 0, y1: 0, x2: maxW, y2: last.top + last.h };
     const g0 = geoms[0];
     const textLayout: TextLayout = { lines, boxWidth: g0.textW, box, length: text.length, measure: this.deps.measure };
-    return { text: textLayout, pages, objects, fields, sizes, boxes, tables, maths, paraTops, pageW: maxW, pageH: maxH, textW: g0.textW, cols: { n: g0.cs.n, w: g0.textW, x: g0.colX }, notes, noteRules, lineNums };
+    return { text: textLayout, pages, objects, fields, sizes, boxes, tables, maths, paraTops, pageW: maxW, pageH: maxH, textW: g0.textW, cols: { n: g0.cs.n, w: g0.textW, x: g0.colX }, notes, noteRules, lineNums, frames };
   }
 
   /**
@@ -1064,6 +1081,34 @@ export class DocLayouter {
 }
 
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+
+/**
+ * Where the text of each paragraph with borders or shading went, page by page and column by
+ * column: from the top of its first line there to the bottom of its last (with the borders' room
+ * above and below), and from its left indent to its right one.
+ */
+function paraSpans(lines: LaidLine[], pages: PageBox[], paras: ParaStyle[], bRoom: { above: number[]; below: number[] } | null): ParaSpan[] {
+  const out: ParaSpan[] = [];
+  for (const pg of pages) {
+    let cur: ParaSpan | null = null;
+    for (let i = pg.first; i < pg.end; i++) {
+      const l = lines[i];
+      const ps = paras[l.para];
+      if (!ps?.border && !ps?.shade) { cur = null; continue; }
+      const col = l.band ? Math.round(l.band[0]) : 0;
+      const firstOfPara = lines[i - 1]?.para !== l.para;
+      const lastOfPara = lines[i + 1]?.para !== l.para;
+      const y1 = l.y - (l.above ?? l.ascent) - (firstOfPara ? bRoom?.above[l.para] ?? 0 : 0);
+      const y2 = l.y + (l.below ?? l.descent) + (lastOfPara ? bRoom?.below[l.para] ?? 0 : 0);
+      const left = Math.min(firstOfPara ? l.left - Math.max(0, ps.firstLine ?? 0) : l.left, l.marker?.x ?? Infinity);
+      const right = (l.band?.[1] ?? pg.x + pg.w - pg.setup.right) - (ps.indentRight ?? 0);
+      if (cur && cur.para === l.para && cur.col === col) { cur.y2 = y2; cur.x1 = Math.min(cur.x1, left); continue; }
+      cur = { para: l.para, page: pg.index, col, y1, y2, x1: left, x2: right };
+      out.push(cur);
+    }
+  }
+  return out;
+}
 
 /** A paragraph's line moved onto its page: shifted across and down, with offsets in the whole text. */
 function shiftLine(l: LaidLine, dx: number, dy: number, offset: number, para: number): LaidLine {

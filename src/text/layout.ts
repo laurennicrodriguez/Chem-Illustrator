@@ -65,6 +65,20 @@ export interface TextFrame {
   boxH?: number;
   /** AutoFit: 'shrink' makes the text smaller until it fits in boxH; otherwise it doesn't change size. */
   fit?: 'shrink' | 'fixed';
+  /** Automatic hyphenation (documents): words that don't fit are broken where the hyphenation patterns allow. */
+  hyphenate?: Hyphenation;
+}
+
+/** How words are hyphenated at the ends of lines, as Word's Hyphenation Options. */
+export interface Hyphenation {
+  /** Where a word may be broken: offsets into it (after the first letters, before the last). */
+  points: (word: string) => number[];
+  /** Hyphenation zone: a word is broken only if leaving it whole would leave more than this much room (points). */
+  zone: number;
+  /** At most this many lines one after another ending in a hyphen (0: no limit). */
+  limit: number;
+  /** Words in capitals are broken too. */
+  caps: boolean;
 }
 
 /** Room a line gives up to a figure beside it, or how far it moves down past one. */
@@ -458,7 +472,7 @@ function layoutPlain(f: TextFrame, defaultSize: number, measure: Measure): TextL
 
     // fill lines word by word (the first line has the first-line indent taken off its room);
     // beside a figure a line gives up room to it, or moves down past it
-    type PLine = { start: number; end: number; width: number; cut: Narrow };
+    type PLine = { start: number; end: number; width: number; cut: Narrow; hyphen?: Glyphs };
     const pLines: PLine[] = [];
     const step = SINGLE * pSpacing * em;
     const lineGuess = ps.linePt && ps.linePt > 0 ? (ps.lineRule === 'exact' ? ps.linePt : Math.max(ps.linePt, step)) : step;
@@ -477,19 +491,50 @@ function layoutPlain(f: TextFrame, defaultSize: number, measure: Measure): TextL
     let cut = cutAt();
     if (cut.down) top += cut.down;
     let cur: { start: number; end: number; width: number; full: number } | null = null;
-    const emit = () => {
+    let hyphensInRow = 0;
+    const emit = (hyphen?: Glyphs) => {
       if (cur) {
-        pLines.push({ start: cur.start, end: cur.end, width: cur.width, cut });
+        pLines.push({ start: cur.start, end: cur.end, width: cur.width, cut, ...(hyphen ? { hyphen } : {}) });
+        hyphensInRow = hyphen ? hyphensInRow + 1 : 0;
         top += lineGuess;
         cut = cutAt();
         if (cut.down) top += cut.down;
       }
       cur = null;
     };
-    for (const w of words) {
+    const segAt = (at: number): Seg | undefined => pSegs.find((s) => s.start - paraStart <= at && at < s.start - paraStart + s.text.length);
+    /** Where to break a word that doesn't fit on the line (`room` left after the line so far), with the hyphen to draw; null to leave it whole. */
+    const hyphenBreak = (w: Word, room: number): { at: number; width: number; hyphen: Glyphs } | null => {
+      const hy = f.hyphenate;
+      if (!hy || room <= hy.zone || (hy.limit > 0 && hyphensInRow >= hy.limit)) return null;
+      const m = /^(\p{L}+)([^\p{L}\d\s]*)\s*$/u.exec(pText.slice(w.start, w.end));
+      if (!m || m[1].length < 5 || (!hy.caps && m[1] === m[1].toUpperCase())) return null;
+      // the word in one plain piece of text (not a formula, figure or field)
+      const s = segAt(w.start);
+      if (!s || s.obj !== undefined || s.tab || s.start - paraStart + s.text.length < w.start + m[1].length) return null;
+      const points = hy.points(m[1]).filter((k) => k >= 2 && k <= m[1].length - 2).sort((a, b) => b - a);
+      for (const k of points) {
+        const hw = measure('-', s.size, s.family, s.style);
+        const width = widthOf(w.start, w.start + k) + hw;
+        if (width <= room + 1e-6) return { at: w.start + k, width, hyphen: { text: '-', start: 0, x: 0, w: hw, dy: s.dy, size: s.size, family: s.family, style: s.style, color: s.color, decor: true } };
+      }
+      return null;
+    };
+    for (let w of words) {
       const lineRoom = (pLines.length ? room : room - firstLine) - cut.left - cut.right;
       // a word fits when it and the space after it do (ChemDraw counts that space too)
-      if (cur && cur.full + w.body + w.spaces > lineRoom + 1e-6) emit();
+      if (cur && cur.full + w.body + w.spaces > lineRoom + 1e-6) {
+        const hb = hyphenBreak(w, lineRoom - cur.full);
+        if (hb) {
+          // the start of the word, and a hyphen, end this line; the rest starts the next
+          cur.end = hb.at;
+          cur.width = cur.full + hb.width;
+          emit(hb.hyphen);
+          let be = w.end;
+          while (be > hb.at && pText[be - 1] === ' ') be--;
+          w = { start: hb.at, end: w.end, body: widthOf(hb.at, be), spaces: w.spaces };
+        } else emit();
+      }
       if (!cur) cur = { start: w.start, end: w.end, width: w.body, full: w.body + w.spaces };
       else { cur.end = w.end; cur.width = cur.full + w.body; cur.full += w.body + w.spaces; }
     }
@@ -525,6 +570,7 @@ function layoutPlain(f: TextFrame, defaultSize: number, measure: Measure): TextL
         x += w;
         size = Math.max(size, s.base);
       }
+      if (pl.hyphen) pieces.push({ ...pl.hyphen, start: paraStart + pl.end, x });
       if (!size) size = em;
       const last = li === pLines.length - 1;
       const lineLeft = (li === 0 ? left + firstLine : left) + pl.cut.left;

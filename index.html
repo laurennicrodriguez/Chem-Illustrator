@@ -781,6 +781,13 @@
       </div>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-doc="quick-parts" aria-haspopup="true" title="Quick Parts: text you saved to use again (Save Selection to Quick Part Gallery), the document's properties (title, author…) and fields"><span class="rb-icon">⧉</span>Quick Parts ▾</button>
+          <button class="rb-big" data-doc="insert-date" title="Date and Time: today's date or the time, in a format you pick, as text or a field that keeps itself up to date"><span class="rb-icon">📅</span>Date &amp; Time</button>
+        </div>
+        <div class="rb-label">Text</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-sh="insert-dashboard" title="A new sheet of tiles (charts, headline numbers, tables, slicers, structure galleries) built from the tables in this workbook"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2.5" y="3" width="7" height="6" rx="1"/><rect x="11.5" y="3" width="6" height="3.5" rx="1"/><rect x="11.5" y="8.5" width="6" height="8.5" rx="1"/><rect x="2.5" y="11" width="7" height="6" rx="1"/></svg></span>Dashboard</button>
         </div>
         <div class="rb-label">Dashboards</div>
@@ -1115,6 +1122,9 @@
               <button class="rb-sq" data-doc="doc-align-right" aria-pressed="false" title="Align right">Right</button>
               <button class="rb-sq" data-doc="doc-justify" aria-pressed="false" title="Justify (both edges straight)">Justify</button>
               <button class="rb-sq" data-doc="para-tabs" title="Tabs: the tab stops of the paragraphs picked (left, centre, right or decimal, with dot leaders), typed in; or click the ruler (View > Ruler)">Tabs…</button>
+              <button class="rb-sq" data-doc="para-sort" title="Sort: put the selected paragraphs (or the rows of the table the caret is in) in order, by text, number or date">A↓Z</button>
+              <label class="rb-sq rb-colour" title="Shading: a background colour behind the selected paragraphs (Borders and Shading takes it off)"><span>▧</span><input id="doc-shading" type="color" value="#d9e2f3" aria-label="Paragraph shading" /></label>
+              <button class="rb-sq rb-drop" data-doc="para-borders" aria-haspopup="true" title="Borders: lines above, below or round the selected paragraphs; Borders and Shading for the line and the shading">▦ ▾</button>
             </div>
           </div>
         </div>
@@ -1140,6 +1150,10 @@
             <button data-doc="find" title="Find words in the document">Find</button>
             <button data-doc="replace" title="Replace words, or change how they look (make every CH2Cl2 a formula)">Replace</button>
           </div>
+          <div class="rb-col">
+            <button data-doc="doc-go-to" title="Go To (Ctrl+G): a page, section, line, bookmark, comment, note, table, figure, equation or heading">Go To</button>
+            <button data-doc="doc-select" aria-haspopup="true" title="Select: everything, the objects, or text with the same formatting as here">Select ▾</button>
+          </div>
         </div>
         <div class="rb-label">Editing</div>
       </div>
@@ -1147,6 +1161,8 @@
     <div class="rb-panel" data-doc-panel="insert" hidden>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-doc="cover-page" aria-haspopup="true" title="Cover Page: a first page with the document's title, subtitle, author, institution and date, in one of several looks"><span class="rb-icon">▤</span>Cover Page ▾</button>
+          <button class="rb-big" data-doc="blank-page" title="Blank Page: an empty page at the caret"><span class="rb-icon">▯</span>Blank Page</button>
           <button class="rb-big" data-doc="page-break" title="Start a new page here"><span class="rb-icon">⤓</span>Page Break</button>
         </div>
         <div class="rb-label">Pages</div>
@@ -1265,6 +1281,12 @@
               <option value="suppress">Suppress for Current Paragraph</option>
               <option value="options">Line Numbering Options…</option>
             </select></label>
+            <label class="rb-field" title="Hyphenation: break words at the ends of lines where English allows (whole document), or keep this paragraph unbroken">Hyphenation <select id="doc-hyphen" data-doc-prefix="hyphen">
+              <option value="none">None</option>
+              <option value="auto">Automatic</option>
+              <option value="para">Don't Hyphenate This Paragraph</option>
+              <option value="options">Hyphenation Options…</option>
+            </select></label>
           </div>
         </div>
         <div class="rb-label">Page Setup</div>
@@ -1364,6 +1386,16 @@
       </div>
     </div>
     <div class="rb-panel" data-doc-panel="review" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="spelling-grammar" title="Spelling &amp; Grammar (F7): go through the misspelled words, grammar slips and chemistry formatting slips one by one"><span class="rb-icon">ABC✓</span>Spelling &amp; Grammar</button>
+          <div class="rb-col">
+            <button data-doc="thesaurus" title="Thesaurus (Shift+F7): words with the same meaning as the word at the caret, to put in its place (looked up online)">Thesaurus</button>
+            <button data-doc="word-count" title="Word Count (Ctrl+Shift+G): pages, words, characters, paragraphs and lines, of the document or the selection">Word Count</button>
+          </div>
+        </div>
+        <div class="rb-label">Proofing</div>
+      </div>
       <div class="rb-group">
         <div class="rb-row">
           <button class="rb-big" data-doc="track-changes" aria-pressed="false" title="Track Changes (Ctrl+Shift+E): while on, what you type is marked as inserted and what you delete stays, struck through, until it is accepted or rejected. Each change shows who made it and when"><span class="rb-icon">✎</span>Track Changes</button>

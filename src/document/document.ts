@@ -22,6 +22,8 @@ import { citationTexts, type CiteStyle, type Reference } from './references';
 import type { CiteFormat } from './cite-styles';
 import type { CiteLive, CiteManager } from './live-cites';
 import type { ChartBox } from '../sheet/chart-box';
+import type { DocHyphenation } from '../text/hyphenate';
+import { fieldText, needsPages, type DocProps, type FieldObj } from './fields';
 
 /** The character that stands for a figure, table or field in the text (Unicode's object replacement character). */
 export const OBJECT_CHAR = '￼';
@@ -317,7 +319,9 @@ export type DocObject =
    */
   | { kind: 'note'; end?: boolean; runs: TextRun[]; paras?: ParaStyle[] }
   /** An equation, typed as LaTeX and shown laid out as maths (see math.ts); a Word equation in .docx files. */
-  | { kind: 'math'; tex: string };
+  | { kind: 'math'; tex: string }
+  /** A field: the date, a document property, the file's name, a page number, a bookmark's text or page (see fields.ts). */
+  | FieldObj;
 
 export interface DocText extends RichText {
   styles: Record<string, NamedStyle>;
@@ -357,6 +361,10 @@ export interface DocText extends RichText {
   pageBorder?: PageBorder;
   /** Table styles read from a Word file that aren't built in, by style id (see table-styles). */
   tableStyles?: Record<string, TableStyleDef>;
+  /** The document's properties: title, author and the rest (File > Properties), shown by fields and cover pages. */
+  props?: DocProps;
+  /** Layout > Hyphenation: words broken at the ends of lines (settings.xml's autoHyphenation and its options). */
+  hyphen?: DocHyphenation;
 }
 
 /** How footnotes or endnotes are numbered, by Word's names: 1, 2, 3; i, ii, iii; a, b, c; *, †, ‡ (chicago). */
@@ -468,7 +476,7 @@ export function runStyleOf(s: NamedStyle): rt.RunStyle {
 export function paraFromStyle(s: NamedStyle, keep: ParaStyle): ParaStyle {
   return cleanPara({
     list: keep.list, level: keep.level, cont: keep.cont, pageBreak: keep.pageBreak, colBreak: keep.colBreak, section: keep.section, noLineNumbers: keep.noLineNumbers,
-    marks: keep.marks, tabs: keep.tabs, scheme: keep.scheme, bullet: keep.bullet,
+    marks: keep.marks, tabs: keep.tabs, scheme: keep.scheme, bullet: keep.bullet, border: keep.border, shade: keep.shade,
     style: s.id === 'Normal' ? undefined : s.id,
     align: s.align === 'left' ? undefined : s.align,
     spaceBefore: s.spaceBefore, spaceAfter: s.spaceAfter,
@@ -727,7 +735,7 @@ export function clearFormatting(t: DocText, start: number, end: number, first: n
   }
   let next: DocText = { ...t, runs: rt.normalizeRuns(out) };
   if (!keepStyle) {
-    const ps = fitParas(next.paras, paras.length).map((q, i) => (i < first || i > last ? q : paraFromStyle(styleOf(t, undefined), { ...q, list: undefined, level: undefined, cont: undefined, tabs: undefined } as ParaStyle)));
+    const ps = fitParas(next.paras, paras.length).map((q, i) => (i < first || i > last ? q : paraFromStyle(styleOf(t, undefined), { ...q, list: undefined, level: undefined, cont: undefined, tabs: undefined, border: undefined, shade: undefined } as ParaStyle)));
     next = { ...next, paras: ps.map((q, i) => (i < first || i > last ? q : cleanPara({ ...q, pageBreak: paras[i].pageBreak, colBreak: paras[i].colBreak, section: paras[i].section, marks: paras[i].marks }))) };
   }
   return next;
@@ -862,9 +870,10 @@ export const COMPOUND = 'Compound';
  * A reference to a compound shows just its number. A citation shows the numbers of the
  * references it cites (in the order references are first cited).
  */
-export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions' | 'notes'>>): Map<number, string> {
+export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions' | 'notes' | 'paras' | 'props'>>, pages?: (para: number) => string, pageCount?: number): Map<number, string> {
   const shown = new Map<number, string>();
   const counts = new Map<string, number>();
+  const top = t.runs;
   // numbers inside tables count in their place too
   t = { ...t, runs: flatRuns(t) };
   const order = objectsInText(t.runs);
@@ -895,7 +904,29 @@ export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<D
     }
   }
   if (order.some((id) => t.objects[id]?.kind === 'cite')) for (const [id, s] of citationTexts(t)) shown.set(id, s);
+  if (order.some((id) => t.objects[id]?.kind === 'field')) {
+    const at = objectParas({ runs: top, objects: t.objects });
+    const doc = { runs: top, paras: t.paras ?? [], props: t.props };
+    const cache = {};
+    for (const id of order) {
+      const o = t.objects[id];
+      if (o?.kind === 'field') shown.set(id, fieldText(o, doc, at.get(id) ?? 0, pages, pageCount, cache) || (needsPages(o) ? '1' : ''));
+    }
+  }
   return shown;
+}
+
+/** The paragraph each object is in (an object in a table's cell: the table's paragraph). */
+export function objectParas(t: Pick<DocText, 'runs' | 'objects'>): Map<number, number> {
+  const out = new Map<number, number>();
+  let p = 0;
+  for (const r of t.runs) {
+    if (r.obj !== undefined) {
+      out.set(r.obj, p);
+      for (const inner of innerObjects(t.objects[r.obj])) if (!out.has(inner)) out.set(inner, p);
+    } else for (const ch of r.text) if (ch === '\n') p++;
+  }
+  return out;
 }
 
 /** The object whose character is at an offset. */

@@ -33,6 +33,8 @@ When the pointer turns into a pointing hand over a structure, it is a drawing yo
 - Indents and space before and after: **Layout** tab ▸ **Paragraph** group. Lengths are in inches; type `cm`, `mm` or `pt` after a number to use those instead.
 - **Bullets** and **Numbering** on the **Home** tab make lists. Tab and Shift+Tab change the level.
 - The small ⬊ in the corner of a ribbon group opens all of that group's settings. Its pin button docks the box in the right-hand panel so it stays open while you work.
+- **Borders** (the ▦ ▾ button on the **Home** tab) puts lines above, below, beside or round the selected paragraphs, as Word's Borders menu. Choosing a side again takes it off. **Borders and Shading…** sets the kind of line, its width and colour, and a shading colour; the shading button beside it shades paragraphs quickly. Paragraphs one after another with the same borders share one box.
+- **Sort** (A↓Z) puts the selected paragraphs in order (as text, numbers or dates, by the whole paragraph or by a field cut at tabs or commas), or, with the caret in a table, the table's rows by a column. A heading row stays at the top; rows with cells merged down can't be sorted.
 
 ## Styles
 
@@ -172,6 +174,8 @@ On the **Layout** tab:
 - **Page numbers**: top or bottom, left, centre or right. **S1, S2… numbering** numbers the pages as Supporting Information is numbered. **Number Format…** writes them 1, 2, 3 or i, ii, iii (or I, II; a, b; A, B) and sets where the numbering starts.
 - **Header…** and **Footer…** set the text at the top and bottom of every page. The ⬊ in the corner of the group sets where they sit, the first page number and whether the first page is numbered.
 - **Line Numbers**: numbers down the left margin, as journals ask for in manuscripts under review: **Continuous**, **Restart Each Page** or **Restart Each Section**. **Suppress for Current Paragraph** leaves the selected paragraphs out (a title, say). **Line Numbering Options…** sets the first number, shows only every 5th (or any nth) number, and sets how far they sit from the text.
+- **Hyphenation**: **Automatic** breaks long words at the ends of lines, with a hyphen, where English allows (US English patterns). **Don't Hyphenate This Paragraph** keeps the selected paragraphs whole. **Hyphenation Options…** sets the hyphenation zone (a word is broken only if leaving it whole would leave more room than this at the end of the line), a limit on hyphens in a row, and whether words in capitals are broken. Words with digits and formulas are never broken.
+- **Insert ▸ Cover Page** puts a first page in front: the title, subtitle, author, institution and date in one of five looks (Plain, Banded, Ruled, Lab Report, Supporting Information). They are fields, so they follow **Document Properties** (Insert ▸ Quick Parts). The cover page has no page number; **Remove Cover Page** on the same menu takes it out. **Blank Page** puts an empty page at the caret.
 
 ### Sections
 
@@ -184,6 +188,13 @@ A section break starts a new section, which can have its own paper size, orienta
 The margins, paper, orientation, columns, page numbers and line numbers on the ribbon and in the ⬊ settings are for the section the caret is in (the status bar says which). In the Page Setup settings, **Apply to: Whole document** changes every section at once. A new section's header and footer are **Same as previous section** (Word's Link to Previous) until you type a header or footer of its own or untick it; its page numbers carry on from the section before unless you untick **Continue from previous section** and give a first page number.
 
 To remove a section break, put the caret at the start of the paragraph after it and press **Backspace** (the text joins the section before). **Draft** view shows section breaks as double dotted lines, labelled with their kind. Sections, their headers and footers, page numbering and line numbers are saved in Word files as Word's own and open again here as they were.
+
+## Fields, dates and Quick Parts
+
+- **Insert ▸ Date & Time** (Alt+Shift+D) puts in today's date or the time in one of Word's formats, as text or as a field that updates.
+- **Insert ▸ Quick Parts** saves the selected text (an affiliation, a standard experimental paragraph) to use again in any document; Quick Parts are kept with your settings. The same menu inserts **Fields** (dates, the author, title, file name, page number, number of pages, a bookmark's text or page, or "above"/"below" it) and **Document Properties**, and sets the document's title, subject, author, company and keywords.
+- **References ▸ Cross-reference** also points at headings and bookmarks: their text, their page, or "above"/"below".
+- Fields are saved as Word's own fields, so Word updates them too; Word's come back as fields.
 
 ## Table of contents
 
@@ -262,6 +273,16 @@ Letters are set in italic as variables. Use `\mathrm{…}` for element symbols, 
 **Home** tab ▸ **Find** (Ctrl+F) opens a box at the top right of the pages. Every match is lit up; Enter and Shift+Enter step through them, and **Match case** and **Whole words** narrow the search. **Replace** (Ctrl+H) adds the replace part, with **Replace** for one at a time and **All** for every match.
 
 The **Make it** buttons change how the replacement looks: formula, bold, italic, underline, subscript, superscript, or plain. Leave "Replace with" empty to change only the look: for example, find `CH2Cl2`, choose the formula look, then **All**, and every CH2Cl2 in the text becomes CH₂Cl₂. Each Replace All is one step to undo. Finding goes by the letters alone, so CH2Cl2 is found however it is formatted.
+
+**Go To** (Ctrl+G or F5) goes to a page, section, line, bookmark, comment, footnote, endnote, field, table, figure, equation or heading: type its number, `+` or `-` with a number to go on or back from the caret, or a bookmark's name. **Select ▾** selects everything, the figures, or all the text formatted like the text at the caret (then change its look in one go).
+
+## Spelling, grammar and word count
+
+On the **Review** tab:
+
+- **Spelling & Grammar** (F7) goes through the document from the caret: misspelled words, chemistry formatting slips (formulas without subscripts, solvents, units, ranges) and a few grammar slips (a word written twice, two spaces, a space before a comma or full stop, "a" or "an" before the wrong sound, a sentence starting with a small letter). For each: **Ignore Once**, **Ignore All**, **Add to Dictionary**, **Change** or **Change All**. Untick **Check grammar as well** to look at spelling only.
+- **Thesaurus** (Shift+F7) gives words with the same meaning as the word at the caret, and related words; click one to put it in. It looks the word up online (Datamuse), sending only that word.
+- **Word Count** (Ctrl+Shift+G) shows pages, words, characters with and without spaces, paragraphs and lines, of the document or the selection, with or without text boxes, footnotes and endnotes. The status bar shows the word count all the time.
 
 ## Views and windows
 
