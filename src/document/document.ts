@@ -275,6 +275,25 @@ export function floatOf(o: DocObject | undefined): Float | undefined {
 }
 
 /** Something that sits in the text in place of one character. */
+/**
+ * Another program's file kept whole in the document, shown as its picture (Insert > Object, or
+ * an object in a Word file): double-clicking it opens the file in its program.
+ */
+export interface Embedded {
+  /** The program's name for the kind of object, as Word records it (Excel.Sheet.12, Package). */
+  prog: string;
+  /** Kept as Word keeps it: an OLE compound file, or an Office file as a part of its own. */
+  part: 'ole' | 'package';
+  /** The part's extension in a Word file (bin, xlsx, docx, pptx). */
+  ext: string;
+  /** The part's bytes, as a data URL. */
+  data: string;
+  /** The name of the file it was made from, when known. */
+  name?: string;
+  /** Shown as an icon with its name, rather than its contents. */
+  icon?: boolean;
+}
+
 export type DocObject =
   /** A structure, scheme or table: a drawing, edited with the drawing tools. `scale` 1 is the drawing's own size. */
   | { kind: 'drawing'; contents: Contents; scale?: number; look?: FigureLook; float?: Float; alt?: string }
@@ -282,10 +301,11 @@ export type DocObject =
    * A picture: its own size is w × h points (`px` its pixels); `scale` 1 is that size. A chart
    * (Insert > Chart) is a picture with its chart and data: drawn from them, saved as Word's chart.
    * `crop` cuts parts off (fractions of the whole image from each side; w × h is the part left),
-   * and `fx` is its Picture Format settings (corrections, colour, background, shape). `alt` is
+   * and `fx` is its Picture Format settings (corrections, colour, background, shape). An
+   * embedded object (Insert > Object) is a picture with another program's file in `embed`. `alt` is
    * its alt text (a structure without it is described by its SMILES).
    */
-  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float; chart?: ChartBox; crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx; alt?: string }
+  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float; chart?: ChartBox; crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx; embed?: Embedded; alt?: string }
   /**
    * A text box: text of its own (typed into in place), `w` wide; it grows to fit its text, and is
    * at least `h` tall when that is set. Always placed on the page. `fill` is its background.

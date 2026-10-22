@@ -116,6 +116,16 @@ For a substrate-scope or screening table, put the caret in a cell and use **Inse
 
 **Insert** ▸ **Chart** puts a chart in the text at the caret, as Word's Insert Chart does. The chart window shows the chart's own data in a grid: type over the sample numbers or paste from Excel or a sheet, pick the kind of chart along the top, and change titles, axes, colours, error bars and fitted lines in the panel on the right. Double-click the chart to change it again. Charts sit in the text like pictures (wrap, frame, captions), and are saved in Word files as Word charts with their data inside, so **Edit Data** works in Word. Charts made in Word open here as charts.
 
+## Objects from other programs
+
+**Insert** ▸ **Object** puts another program's file in the document whole, as Word's Insert Object does: an Excel workbook, a PDF, a Word file or a presentation, or any other file. It shows what it holds where it can (a workbook's cells as Excel shows them, a PDF's first page, a picture), or an icon with the file's name: tick **Display as icon** for that. Right-click it to switch between the two.
+
+Double-click the object (or right-click ▸ **Open Object**) to open the file in its own program. Each time you save it there, the document takes the changes and a new picture of them, so a table of results can be kept up to date in Excel. This needs the desktop app; in a browser the file is downloaded instead.
+
+To embed cells from Excel, copy them in Excel and choose **Edit** ▸ **Paste as Object** (or right-click ▸ Paste as Object) in the Windows app, as Word's Paste Special does.
+
+Objects are saved in Word files as Word's own embedded objects, so double-clicking one in Word opens it in its program too (Office files as Word keeps them; other files as Windows packages). Objects in Word files you open here are kept as they are and saved back unchanged; ChemDraw objects still become structures. Objects stay in line with the text.
+
 ## Captions and cross-references
 
 On the **References** tab:

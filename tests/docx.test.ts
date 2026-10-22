@@ -396,7 +396,7 @@ describe('opening files made by Word', () => {
     expect(Object.values(doc.objects)[0]).toMatchObject({ kind: 'picture', w: 100, h: 50, px: { w: 2, h: 1 } });
   });
 
-  it('turns a ChemDraw object into a structure, and keeps other embedded objects as their pictures', async () => {
+  it('turns a ChemDraw object into a structure, and keeps other embedded objects whole with their pictures', async () => {
     const cdx = cdxmlToCdx('<CDXML><page id="1"><fragment id="2"><n id="3" p="10 20"/><n id="4" p="24.4 20" Element="8"/><b id="5" B="3" E="4"/></fragment></page></CDXML>');
     const ole = makeCfb([['\u0001CompObj', new Uint8Array(40)], ['CONTENTS', cdx]]);
     const obj = (prog: string, rel: string) => `<w:p><w:r><w:object><v:shape style="width:60pt;height:30pt"><v:imagedata r:id="rIdE"/></v:shape><o:OLEObject Type="Embed" ProgID="${prog}" r:id="${rel}"/></w:object></w:r></w:p>`;
@@ -414,8 +414,8 @@ describe('opening files made by Word', () => {
     expect(chem.kind).toBe('drawing');
     expect(chem.kind === 'drawing' && chem.contents.atoms.length).toBe(2);
     expect(chem.kind === 'drawing' && chem.scale).toBe(2);
-    expect(other).toMatchObject({ kind: 'picture', w: 60, h: 30 });
-    expect(warnings.join(' ')).toMatch(/Embedded objects other than ChemDraw/);
+    expect(other).toMatchObject({ kind: 'picture', w: 60, h: 30, embed: { prog: 'Excel.Sheet.12', part: 'ole', ext: 'bin' } });
+    expect(warnings.join(' ')).not.toMatch(/came in as pictures/);
   });
 
   it('reads the header, footer and page numbers', async () => {

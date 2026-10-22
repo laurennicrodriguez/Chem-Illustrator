@@ -120,6 +120,27 @@ export async function openFileDialog(types: FileType[]): Promise<{ name: string;
   return file ? { name: file.name, text: await file.text(), ref: { kind: 'none' } } : null;
 }
 
+/** Ask for a file of any kind and read its bytes (Insert > Object). Null when the user cancels. */
+export async function openAnyBytesDialog(): Promise<{ name: string; bytes: Uint8Array } | null> {
+  if (desktop) {
+    const path = await pickPath(/Windows/i.test(navigator.userAgent) ? [{ name: 'All files', extensions: ['*'] }] : []);
+    if (!path) return null;
+    return { name: baseName(path), bytes: new Uint8Array(await invoke<ArrayBuffer>('read_binary_file', { path })) };
+  }
+  if (pw.showOpenFilePicker) {
+    try {
+      const [handle] = await pw.showOpenFilePicker({});
+      const file = await handle.getFile();
+      return { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) };
+    } catch (e) {
+      if (isAbort(e)) return null;
+      throw e;
+    }
+  }
+  const file = await uploadBox([]);
+  return file ? { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) } : null;
+}
+
 /** The extension of a file name, in lower case ("" if none). */
 export function extensionOf(name: string): string {
   const m = /\.([^.\\/]+)$/.exec(name);

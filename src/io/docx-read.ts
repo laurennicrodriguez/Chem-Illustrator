@@ -29,11 +29,12 @@ import { documentMeasure } from '../text/font-measure';
 import {
   OBJECT_CHAR, defaultCharStyles, defaultHeaderFooter, defaultPage, defaultStyles,
   COL_GAP, FLOAT_GAP, columnsOf, lookExtent, usedObjects,
-  type BreakKind, type CharStyle, type DocObject, type DocText, type PageBorder, type Watermark, type FigureLook, type Float, type HeaderFooter, type LineNumbers, type NamedStyle, type NoteFormat, type NoteFormats, type NumberPlace, type PageNumFormat, type PageSetup, type SectionBreak,
+  type BreakKind, type CharStyle, type DocObject, type DocText, type Embedded, type PageBorder, type Watermark, type FigureLook, type Float, type HeaderFooter, type LineNumbers, type NamedStyle, type NoteFormat, type NoteFormats, type NumberPlace, type PageNumFormat, type PageSetup, type SectionBreak,
 } from '../document/document';
 import { shownSize } from '../document/doc-layout';
 import { coveringCell, layoutTable } from '../table';
 import { cfbStreams, isCfb } from './cfb';
+import { readEmbedded } from './ole-object';
 import { isCdx } from './cdx';
 import { cmtIds, cmtString, type CommentNote, type CommentThread } from '../document/comments';
 import { BIB_MARK, CHART_NAME, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, W14_NS, W15_NS, W16CID_NS, W16CEX_NS, fromWordDate, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
@@ -93,7 +94,7 @@ const WARN = {
   numbering: 'Some numbered lists use numbering that shows here as 1., a., i.',
   citations: 'Citations from a reference manager were kept as plain text.',
   pageText: 'Text after the page number in the header or footer was left out.',
-  ole: 'Embedded objects other than ChemDraw drawings came in as pictures.',
+  ole: 'Linked objects (and embedded ones that could not be read) came in as pictures.',
   restart: 'Caption numbers that were set to start again were numbered straight through.',
   hfPictures: 'Pictures and tables in the header and footer were left out.',
   pictureWatermark: 'A picture watermark was left out (text watermarks are kept).',
@@ -1411,7 +1412,7 @@ class DocxReader {
     return rel && !rel.external ? rel.target : null;
   }
 
-  private picture(path: string | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx, look?: FigureLook | null, float?: Float | null, more: { crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx; alt?: string } = {}): void {
+  private picture(path: string | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx, look?: FigureLook | null, float?: Float | null, more: { crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx; embed?: Embedded; alt?: string } = {}): void {
     const bytes = path ? this.pkg.bytes(path) : null;
     if (!bytes || shown.w <= 0 || shown.h <= 0) return;
     const ext = (path ?? '').split('.').pop()?.toLowerCase() ?? '';
@@ -1419,7 +1420,7 @@ class DocxReader {
     if (!mime) return;
     if (mime === 'image/x-wmf') this.warn('wmf');
     // a picture pasted into Word from Chem Illustrator: the drawing rides inside it
-    const inside = mime === 'image/x-emf' ? drawingInEmf(bytes) : null;
+    const inside = mime === 'image/x-emf' && !more.embed ? drawingInEmf(bytes) : null;
     if (inside && this.drawingAt(this.deps.cdxml?.(inside, this.drawingStyle) ?? null, shown, r, ctx, look, float)) return;
     const px = imageSize(bytes, mime) ?? undefined;
     this.emitObject(ctx, { kind: 'picture', src: dataUrl(bytes, mime), w: round(shown.w), h: round(shown.h), px, ...more, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r);
@@ -1430,17 +1431,31 @@ class DocxReader {
     const shape = Array.from(el.getElementsByTagNameNS('*', 'shape'))[0];
     const img = shape ? Array.from(shape.getElementsByTagNameNS('*', 'imagedata'))[0] : undefined;
     const shown = vmlSize(shape?.getAttribute('style') ?? '');
+    let embed: Embedded | null = null;
     if (object) {
       const ole = Array.from(object.getElementsByTagNameNS('*', 'OLEObject'))[0];
       const prog = ole?.getAttribute('ProgID') ?? '';
       if (/^ChemDraw/i.test(prog) && this.chemdraw(ole, shown, r, ctx)) return;
-      if (ole && !/^ChemDraw/i.test(prog)) this.warn('ole');
+      // anything else is kept whole with its picture, and goes back into the Word file as it came
+      embed = ole && img ? this.embedded(ole, prog) : null;
+      if (ole && !embed) this.warn('ole');
     }
     if (!img) {
       if (shape || Array.from(el.getElementsByTagNameNS('*', 'textbox')).length) this.warn('shapes');
       return;
     }
-    this.picture(this.relTarget(rAttr(img, 'id')), shown, r, ctx);
+    this.picture(this.relTarget(rAttr(img, 'id')), shown, r, ctx, null, null, embed ? { embed } : {});
+  }
+
+  /** An embedded (not linked) object's part, kept as it is. */
+  private embedded(ole: Element, prog: string): Embedded | null {
+    if ((ole.getAttribute('Type') ?? 'Embed') !== 'Embed') return null;
+    const id = rAttr(ole, 'id');
+    const rel = id ? this.pkg.rels(this.main).get(id) : undefined;
+    if (!rel || rel.external) return null;
+    const bytes = this.pkg.bytes(rel.target);
+    if (!bytes?.length) return null;
+    return readEmbedded(prog, bytes, rel.target, rel.type, ole.getAttribute('DrawAspect') === 'Icon');
   }
 
   private chemdraw(ole: Element, shown: { w: number; h: number }, r: RProps, ctx: Ctx): boolean {

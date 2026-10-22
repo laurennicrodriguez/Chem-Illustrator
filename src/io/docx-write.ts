@@ -23,8 +23,9 @@ import { Package, REL, NS, xml, hex6, emu, MediaFiles, structureAltText } from '
 import { contentsAlt } from '../accessibility';
 import { facesToEmbed, newGuid, obfuscate, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
+import { embeddedPart } from './ole-object';
 import { BULLETS, fitParas, listInfo, paraCount, schemeOf, splitParagraphs } from '../text/paragraphs';
-import { BOX_PAD, COL_GAP, COMPOUND, END_FORMAT, FLOAT_GAP, FOOT_FORMAT, columnsOf, OBJECT_CHAR, SHADOWS, charStylesOf, watermarkPlace, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, pruneObjects, styleOf, runStyleOf, type CharStyle, type DocObject, type DocText, type FigureLook, type HeaderFooter, type NamedStyle, type PageBorder, type PageSetup, type Watermark } from '../document/document';
+import { BOX_PAD, COL_GAP, COMPOUND, END_FORMAT, FLOAT_GAP, FOOT_FORMAT, columnsOf, OBJECT_CHAR, SHADOWS, charStylesOf, watermarkPlace, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, pruneObjects, styleOf, runStyleOf, type CharStyle, type DocObject, type DocText, type Embedded, type FigureLook, type HeaderFooter, type NamedStyle, type PageBorder, type PageSetup, type Watermark } from '../document/document';
 import { ACS_LINE, GRID_LINE, bibHang, docCellAlign, shownSize } from '../document/doc-layout';
 import { sectionsOf, type Section } from '../document/sections';
 import { bibliography, piecesText, type Reference } from '../document/references';
@@ -745,8 +746,54 @@ class DocxWriter {
     return `<w:r>${r}<mc:AlternateContent><mc:Choice xmlns:cx1="${CX1_NS}" Requires="cx1">${chart}</mc:Choice><mc:Fallback>${fallback}</mc:Fallback></mc:AlternateContent></w:r>`;
   }
 
+  /**
+   * An embedded object, as Word writes one: its picture in a VML shape and the object's part
+   * (an OLE compound file, or an Office file of its own) named by its program, so Word opens it
+   * in that program on a double-click. Always in line with the text.
+   */
+  private async embedded(main: string, o: Extract<DocObject, { kind: 'picture' }>, e: Embedded, rPr: string): Promise<string> {
+    let mime: string, bytes: Uint8Array;
+    try {
+      ({ mime, bytes } = fromDataUrl(o.src));
+    } catch {
+      return '';
+    }
+    const size = shownSize({ w: o.w, h: o.h }, o.scale ?? 1, this.textW);
+    let ext = MIME_EXT[mime];
+    if (!ext || ext === 'svg') {
+      if (mime !== 'image/svg+xml' || !this.deps.svgToPng) return '';
+      const k = 300 / 72;
+      bytes = await this.deps.svgToPng(new TextDecoder().decode(bytes), Math.max(1, Math.round(size.w * k)), Math.max(1, Math.round(size.h * k)));
+      ext = 'png';
+    }
+    let part: ReturnType<typeof embeddedPart>;
+    try {
+      part = embeddedPart(e);
+    } catch {
+      return '';
+    }
+    const img = this.media(main, bytes, ext);
+    const n = ++this.oleCount;
+    const path = `embeddings/${part.base}${n}.${part.ext}`;
+    this.pkg.add(`word/${path}`, part.bytes, part.type);
+    const rel = this.pkg.relate(main, part.rel, path);
+    const shape = `_x0000_i${1024 + n}`;
+    // the picture frame's shape type, once in each part (the standard one, from the VML part of Office Open XML)
+    const type = this.oleTypes.has(main) ? '' : T75;
+    this.oleTypes.add(main);
+    const pt = (v: number) => Math.round(v * 100) / 100;
+    const r = rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
+    return `<w:r>${r}<w:object xmlns:v="${V_NS}" xmlns:o="${O_NS}" w:dxaOrig="${twips(o.w)}" w:dyaOrig="${twips(o.h)}">${type}` +
+      `<v:shape id="${shape}" type="#_x0000_t75" style="width:${pt(size.w)}pt;height:${pt(size.h)}pt" o:ole=""><v:imagedata r:id="${img}" o:title=""/></v:shape>` +
+      `<o:OLEObject Type="Embed" ProgID="${xml(e.prog)}" ShapeID="${shape}" DrawAspect="${e.icon ? 'Icon' : 'Content'}" ObjectID="_${1800000000 + n}" r:id="${rel}"/></w:object></w:r>`;
+  }
+
+  private oleCount = 0;
+  private oleTypes = new Set<string>();
+
   private async picture(main: string, id: number, o: DocObject, rPr: string): Promise<string> {
     if (o.kind === 'picture' && o.chart) return this.chart(main, id, o, o.chart, rPr);
+    if (o.kind === 'picture' && o.embed) return this.embedded(main, o, o.embed, rPr);
     const t = this.t;
     let blip: string, svgId: string | null = null, size: { w: number; h: number }, name: string, smiles: string | null = null;
     // a picture's Picture Format settings, its cropping, and its original when the blip has effects worked in
@@ -1254,6 +1301,11 @@ function run(rPr: string, text: string): string {
 }
 
 const V_NS = 'urn:schemas-microsoft-com:vml';
+/** VML's picture frame shape type (number 75), which embedded objects' pictures use. */
+const T75 = '<v:shapetype id="_x0000_t75" coordsize="21600,21600" o:spt="75" o:preferrelative="t" path="m@4@5l@4@11@9@11@9@5xe" filled="f" stroked="f"><v:stroke joinstyle="miter"/><v:formulas>' +
+  ['if lineDrawn pixelLineWidth 0', 'sum @0 1 0', 'sum 0 0 @1', 'prod @2 1 2', 'prod @3 21600 pixelWidth', 'prod @3 21600 pixelHeight', 'sum @0 0 1', 'prod @6 1 2', 'prod @7 21600 pixelWidth', 'sum @8 21600 0', 'prod @7 21600 pixelHeight', 'sum @10 21600 0']
+    .map((f) => `<v:f eqn="${f}"/>`).join('') +
+  '</v:formulas><v:path o:extrusionok="f" gradientshapeok="t" o:connecttype="rect"/><o:lock v:ext="edit" aspectratio="t"/></v:shapetype>';
 const O_NS = 'urn:schemas-microsoft-com:office:office';
 const W10_NS = 'urn:schemas-microsoft-com:office:word';
 /** The prefix Word's own watermarks' shapes are named with (Design > Watermark finds them by it). */

@@ -272,7 +272,8 @@ pub fn run() {
             ole::ole_save,
             ole::ole_close,
             ole::ole_registered,
-            ole::ole_register
+            ole::ole_register,
+            ole::ole_object_folder
         ])
         .build(tauri::generate_context!())
         .expect("error while running Chem Illustrator")

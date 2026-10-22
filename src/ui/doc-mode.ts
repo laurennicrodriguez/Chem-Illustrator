@@ -47,6 +47,8 @@ import { citeSuper, formatOf, type Reference } from '../document/references';
 import { dataUrl, imageSize } from '../render/images';
 import { editChart, chartPoints } from './chart-editor';
 import { pictureFormat } from './picture-dialog';
+import { embedFile, fileInside, objectKind, withFile } from '../io/ole-object';
+import { showsContents, type ObjectPicture } from '../render/object-picture';
 import { newChartBox, sizedBox } from '../sheet/chart-box';
 import { chartBoxPng } from '../render/chart-box-paint';
 import type { DocFile } from '../document/doc-file';
@@ -66,7 +68,7 @@ import {
   floatOf, lookExtent, lookOf, cellHolding, innerObjects,
   WATERMARKS, applyCharStyle, charStylesOf, clearCharStyle, clearFormatting, defaultPageBorder, defaultWatermark, deleteStyle, modifyCharStyle, newCharStyle, newParaStyle, withStyle,
   type CharStyle, type PageBorder, type Watermark,
-  type BreakKind, type DocObject, type DocText, type FigureLook, type Float, type LineNumbers, type NoteFormat, type NumberPlace, type PageNumFormat, type PageSetup, type WrapKind,
+  type BreakKind, type DocObject, type DocText, type Embedded, type FigureLook, type Float, type LineNumbers, type NoteFormat, type NumberPlace, type PageNumFormat, type PageSetup, type WrapKind,
 } from '../document/document';
 
 export interface DocModeHost {
@@ -89,6 +91,17 @@ export interface DocModeHost {
   toStructure(text: string, style: DocStyle): Promise<{ contents: Contents; notes: string[] } | { error: string }>;
   /** Choose a picture file. */
   pickPicture(): Promise<{ bytes: Uint8Array; mime: string; name: string } | null>;
+  /** Choose any file, to put in as an object (Insert > Object). */
+  pickObjectFile?(): Promise<{ name: string; bytes: Uint8Array } | null>;
+  /** The picture a file put in as an object shows: its contents where they can be shown, else its icon. */
+  objectPicture?(name: string, bytes: Uint8Array, icon: boolean): Promise<ObjectPicture>;
+  /**
+   * Open an object's file in its own program (the desktop app; a browser saves it instead).
+   * `changed` gets the file each time it is saved there. Resolves to a message when it can't.
+   */
+  openObjectFile?(file: { name: string; bytes: Uint8Array }, changed: (bytes: Uint8Array) => void): Promise<string | null>;
+  /** Another program's object copied to the clipboard (Excel cells, for one), with its picture (the Windows app). */
+  clipboardObject?(): Promise<{ embed: Embedded; picture: { bytes: Uint8Array; mime: string } | null } | null>;
   /** An empty ACS-style table as a drawing. */
   newTable(rows: number, cols: number, style: DocStyle): Contents;
   /** Choose a BibTeX or RIS file and read its text (References > Manage References > Import). */
@@ -123,7 +136,7 @@ const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigat
 const BOX_COMMANDS = /^(format-painter$|insert-symbol$|doc-(align-|justify|bold|italic|underline|sub|sup|formula|highlight|bullets|numbering|indent|outdent)|line-|font-|select-all$|undo$|redo$|zoom-|copy$|cut$|paste$|box-|find$|replace$|wrap-)/;
 
 /** Commands that, in a table cell, work there too (others leave the cell first). */
-const CELL_COMMANDS = /^(table-|tbl-|insert-table$|insert-structure$|structure-from-name-doc$|name-to-structure$|insert-picture$|edit-figure$|compound-number$|cross-reference$|insert-citation$)/;
+const CELL_COMMANDS = /^(table-|tbl-|insert-table$|insert-structure$|structure-from-name-doc$|name-to-structure$|insert-picture$|insert-object$|paste-object$|edit-figure$|compound-number$|cross-reference$|insert-citation$)/;
 
 /** A new table's look: Word's grid, the ACS rules in the text, or the ACS table drawn as a figure. */
 export const TABLE_KINDS: [string, string][] = [
@@ -1115,6 +1128,7 @@ export class DocumentMode {
     cmd('Cut', 'cut');
     cmd('Copy', 'copy');
     cmd('Paste', 'paste');
+    if (this.host.clipboardObject) cmd('Paste as Object', 'paste-object', 'Cells copied in Excel (or another program\'s object) kept whole: double-click to change them in their program');
     cmd('Format Painter', 'format-painter', 'Copy the look of the text here (or of the selection) to the text you click or drag over next');
     menu.appendChild(document.createElement('hr'));
     // a footnote's number, or typing in a note: to the other end, or the other kind
@@ -1142,7 +1156,11 @@ export class DocumentMode {
       if (this.file?.t.objects[picked]?.kind === 'drawing') cmd('Edit Drawing', 'edit-figure');
       const po = this.file?.t.objects[picked];
       if (po?.kind === 'picture' && po.chart) cmd('Edit Chart…', 'edit-chart');
-      if (po?.kind === 'picture' && !po.chart) cmd('Picture Format…', 'picture-format', 'Brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions');
+      if (po?.kind === 'picture' && po.embed) {
+        cmd('Open Object', 'open-object', `Open the ${objectKind(po.embed)} in its own program; save it there to change it here`);
+        item(po.embed.icon ? 'Show Contents' : 'Display as Icon', () => void this.embeddedIcon(picked, !po.embed?.icon), po.embed.icon ? 'Show what the object holds instead of its icon' : 'Show an icon with the file\'s name instead of what it holds');
+      }
+      if (po?.kind === 'picture' && !po.chart && !po.embed) cmd('Picture Format…', 'picture-format', 'Brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions');
       if (po?.kind === 'drawing' || po?.kind === 'picture') cmd('Alt Text…', 'alt-text', 'What it shows, for people who can\'t see it (screen readers); kept as its alt text in Word');
       cmd('Insert Caption…', 'insert-caption');
       const look = this.lookOf(picked);
@@ -2433,6 +2451,7 @@ export class DocumentMode {
     const f = this.file;
     const o = f?.t.objects[id];
     if (o?.kind === 'picture' && o.chart) { void this.editChart(id); return; }
+    if (o?.kind === 'picture' && o.embed) { void this.openEmbedded(id); return; }
     if (!f || !o || o.kind !== 'drawing') return;
     // a diagram opens its text and look (Edit Drawing still opens the drawing tools on it)
     if (!tools && this.host.editDiagram && o.contents.shapes.some((s) => s.diagram)) {
@@ -2585,6 +2604,7 @@ export class DocumentMode {
     if (!o) return;
     const cur = floatOf(o);
     if (wrap === 'inline') { if (cur) this.setFloat(id, null); return; }
+    if (o.kind === 'picture' && o.embed) { this.host.flash('Embedded objects stay in line with the text, as Word keeps them.'); return; }
     if (cur) { this.setFloat(id, { ...cur, wrap }); return; }
     // from its line: keep it where it is, measured from the top of its paragraph and the left margin
     const lay = f.layout();
@@ -2765,6 +2785,9 @@ export class DocumentMode {
       case 'insert-structure': this.drawNew(); break;
       case 'structure-from-name-doc': case 'name-to-structure': void this.fromName(); break;
       case 'insert-picture': void this.insertPicture(); break;
+      case 'insert-object': void this.insertEmbedded(); break;
+      case 'paste-object': void this.pasteObject(); break;
+      case 'open-object': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || !o.embed) { this.host.flash('Click an embedded object first (or double-click it).'); break; } void this.openEmbedded(id); break; }
       case 'insert-text-box': this.insertTextBox(); break;
       case 'wrap-inline': case 'wrap-square': case 'wrap-topBottom': case 'wrap-behind': case 'wrap-front': {
         const id = this.pickedObject() ?? f.box?.id ?? null;
@@ -2775,7 +2798,7 @@ export class DocumentMode {
       case 'insert-table': void this.insertTable(); break;
       case 'insert-chart': void this.insertChart(); break;
       case 'edit-chart': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || !o.chart) { this.host.flash('Click a chart first (or double-click it).'); break; } void this.editChart(id); break; }
-      case 'picture-format': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || o.chart) { this.host.flash('Click a picture first.'); break; } void this.formatPicture(id); break; }
+      case 'picture-format': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || o.chart || o.embed) { this.host.flash(o?.kind === 'picture' && o.embed ? 'An embedded object shows its program\'s picture: change it by opening the object.' : 'Click a picture first.'); break; } void this.formatPicture(id); break; }
       case 'alt-text': void this.altText(); break;
       case 'insert-caption': void this.insertCaption(); break;
       case 'cross-reference': void this.crossReference(); break;
@@ -3020,6 +3043,105 @@ export class DocumentMode {
     this.backToCell(spot);
     // pictures come in at 96 pixels to the inch, as in Word
     this.dropPicture(pic.bytes, pic.mime);
+  }
+
+  /**
+   * Insert > Object: another program's file kept whole in the document, shown as its contents
+   * (a workbook's cells, a PDF's first page, a picture) or as an icon. Double-clicking it opens
+   * the file in its program, and saving it there changes it here; Word does the same with it.
+   */
+  private async insertEmbedded(): Promise<void> {
+    const f = this.file!;
+    if (!this.host.pickObjectFile || !this.host.objectPicture) { this.host.flash('Objects can only be put in from the app.'); return; }
+    const spot = this.cellSpot();
+    const file = await this.host.pickObjectFile();
+    this.focus();
+    if (!file || this.file !== f) return;
+    const shows = showsContents(file.name);
+    const got = await ask('Insert Object', [{ name: 'icon', label: 'Display as icon', type: 'checkbox', value: String(!shows) }], {
+      ok: 'Insert',
+      note: `${file.name} goes in the document whole, shown as ${shows ? 'what it holds' : 'an icon'}. Double-click it to open it in its own program (the Windows app): what you save there comes back here. Word opens it the same way.`,
+    });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const icon = got.icon === 'true';
+    const pic = await this.host.objectPicture(file.name, file.bytes, icon);
+    if (this.file !== f) return;
+    this.backToCell(spot);
+    this.insertObject({ kind: 'picture', src: pic.src, w: pic.w, h: pic.h, ...(pic.px ? { px: pic.px } : {}), embed: embedFile(file.name, file.bytes, icon) }, 'Insert object');
+    this.focus();
+  }
+
+  /** Paste as Object: another program's object on the clipboard (cells copied in Excel), kept whole as Word's Paste Special keeps it. */
+  private async pasteObject(): Promise<void> {
+    const f = this.file!;
+    if (!this.host.clipboardObject) { this.host.flash('Pasting objects from other programs needs the Windows app.'); return; }
+    const spot = this.cellSpot();
+    const got = await this.host.clipboardObject();
+    if (this.file !== f) return;
+    if (!got) { this.host.flash('There is no object on the clipboard: copy cells in Excel (or an object in another program) first.'); return; }
+    this.backToCell(spot);
+    let pic: ObjectPicture | null = null;
+    if (got.picture) {
+      const px = imageSize(got.picture.bytes, got.picture.mime);
+      if (px) pic = { src: dataUrl(got.picture.bytes, got.picture.mime), w: px.w * 0.75, h: px.h * 0.75, ...(got.picture.mime === 'image/x-emf' || got.picture.mime === 'image/svg+xml' ? {} : { px }) };
+    }
+    if (!pic) {
+      const inside = fileInside(got.embed);
+      pic = this.host.objectPicture && inside ? await this.host.objectPicture(inside.name, inside.bytes, false) : null;
+    }
+    if (!pic || this.file !== f) { this.host.flash('The object came with no picture to show.'); return; }
+    this.insertObject({ kind: 'picture', src: pic.src, w: pic.w, h: pic.h, ...(pic.px ? { px: pic.px } : {}), embed: got.embed }, 'Paste object');
+    this.focus();
+  }
+
+  /**
+   * Open an embedded object's file in its program. Each time it is saved there the object takes
+   * the new file and, unless it shows as an icon, a new picture of it.
+   */
+  private async openEmbedded(id: number): Promise<void> {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'picture' || !o.embed) return;
+    const file = fileInside(o.embed);
+    if (!file) { this.host.flash(`This ${objectKind(o.embed)} can't be opened here; it is kept as it is, and Word opens it.`, 8000); return; }
+    if (!this.host.openObjectFile) { this.host.flash('Objects open in their programs from the app.'); return; }
+    const err = await this.host.openObjectFile(file, (bytes) => void this.objectSaved(f, id, file.name, bytes));
+    if (err) this.host.flash(err, 8000);
+  }
+
+  /** An embedded object's file was saved in its program: take it back, with a new picture. */
+  private async objectSaved(f: DocFile, id: number, name: string, bytes: Uint8Array): Promise<void> {
+    const cur = f.t.objects[id];
+    if (cur?.kind !== 'picture' || !cur.embed) return;
+    const embed = withFile(cur.embed, { name, bytes });
+    if (!embed) { this.host.flash(`The changes to ${name} can't be put back in this kind of object.`); return; }
+    const pic = this.host.objectPicture && !embed.icon ? await this.host.objectPicture(name, bytes, !!embed.icon) : null;
+    const now = f.t.objects[id];
+    if (now?.kind !== 'picture' || !now.embed) return;
+    const next: DocObject = pic ? { ...now, embed, src: pic.src, w: pic.w, h: pic.h, px: pic.px, scale: undefined } : { ...now, embed };
+    if (!pic || !pic.px) delete (next as { px?: unknown }).px;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, 'Edit object');
+    this.host.flash(`${name} was saved: the document has its changes.`);
+  }
+
+  /** Show an embedded object as its icon, or as what it holds. */
+  private async embeddedIcon(id: number, icon: boolean): Promise<void> {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'picture' || !o.embed || !this.host.objectPicture) return;
+    const inside = fileInside(o.embed);
+    const name = inside?.name ?? o.embed.name ?? `${objectKind(o.embed)}.${o.embed.ext}`;
+    if (!icon && !inside) { this.host.flash(`What this ${objectKind(o.embed)} holds can't be shown here.`); return; }
+    const pic = await this.host.objectPicture(name, inside?.bytes ?? new Uint8Array(0), icon);
+    const cur = f.t.objects[id];
+    if (cur?.kind !== 'picture' || !cur.embed) return;
+    const embed = { ...cur.embed };
+    if (icon) embed.icon = true; else delete embed.icon;
+    const next: DocObject = { ...cur, embed, src: pic.src, w: pic.w, h: pic.h, scale: undefined };
+    if (pic.px) next.px = pic.px; else delete next.px;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, icon ? 'Display as icon' : 'Show contents');
+    this.focus();
   }
 
   private async insertTable(nest = false): Promise<void> {
