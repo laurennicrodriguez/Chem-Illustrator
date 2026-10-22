@@ -38,7 +38,7 @@ If several atoms are selected and you point at one of them, a label key labels t
 | `e` | Et | Shift+E | CO2Me |
 | Shift+A | Ac | Shift+Z | N3 |
 | Shift+M | MgBr | Shift+L | Li |
-| Shift+Y | Boc | Shift+H | Cbz |
+| `y` or Shift+Y | Boc | Shift+H | Cbz |
 | Shift+Q | Fmoc | | |
 
 ### Growing and changing
@@ -47,17 +47,18 @@ If several atoms are selected and you point at one of them, a label key labels t
 |---|---|
 | `1` | Grow a bond (zig-zag) |
 | `0` | Grow a bond, ring style (the other side; longer on busy atoms) |
-| `2` | C=O, or acetyl on an end atom |
+| `2` | C=O (an end atom becomes the C=O and the chain carries on past it) |
 | `3` or `a` | Phenyl |
 | `4` | Wedge (plus Me on an end atom) |
 | `5` | Hashed wedge (plus Me on an end atom) |
 | `6` | Cyclohexyl, or a spiro ring on a ring atom |
 | `7` | Cyclopentyl, or a spiro ring on a ring atom |
-| `u` | Cyclobutyl |
-| `v` | Cyclopropyl |
+| `u` | Cyclobutyl, or a spiro ring on a CH2 |
+| `v` | Cyclopropyl, or a spiro ring on a CH2 |
 | `8` | =CH2 (then `1` for E, `0` for Z) |
 | `9` | Two methyls (iPr, gem-dimethyl) |
-| Shift+K | t-Bu |
+| Shift+K | t-Bu (on a CH2 in a chain: a wedged and a plain methyl) |
+| `j` / Shift+J | On a metal: η⁵-Cp / η⁶-benzene |
 | `k` | Sulfonyl (SO2) |
 | `z` | Alkyne |
 | `+` / `-` | Charge +1 / −1 |
@@ -70,6 +71,10 @@ If several atoms are selected and you point at one of them, a label key labels t
 | `g` | Select the atom |
 | Arrow keys | Move the highlight to the next atom that way |
 | Shift+arrow keys | Move the highlight about three bonds that way |
+| Space or Tab | Select the whole molecule the highlight is on |
+| Enter (molecule selected) | Back to the highlight on it, ready for more keys |
+
+Keys typed one after another build whole molecules. From a phenyl's highlighted atom, `1B79←←←←o↓↓↓↓o→→9` makes the pinacol boronate; from a bond end, `2o1n1←5←2↓↓→→2` makes the NHS ester of acetic acid. After `3` to `8` on a bond the highlight moves to the new ring's far bond; after `a` or `z` it stays, so `a` then `z` makes indene.
 
 ## Pointing at a bond
 
@@ -80,10 +85,10 @@ If several atoms are selected and you point at one of them, a label key labels t
 | `p` | Partial bond (transition state) | | |
 | `3` | Triple | `b` | Bold |
 | `w` | Wedge (again to reverse) | Shift+B | Bold double |
-| `h` | Hashed wedge (again to reverse) | `y` | Wavy |
+| `h` or Shift+W | Hashed wedge (again to reverse) | `y` | Wavy |
 | Shift+H | Hashed | `l` / `c` / `r` | Double bond: second line left, centred, right |
 | `a` | Fuse benzene | `z` | Fuse cyclopentadiene |
-| `4` to `8` | Fuse a 4- to 8-membered ring | `9` / `0` | Fuse a chair cyclohexane (trans / cis on a chair) |
+| `v`, `4` to `8` | Fuse a 3-membered, or a 4- to 8-membered ring | `9` / `0` | Fuse a chair cyclohexane (trans / cis on a chair) |
 | `/` or `?` | The bond's settings in the Style panel | `g` | Select the bond |
 | Delete or Backspace | Delete the bond | Arrow keys | Move the highlight |
 

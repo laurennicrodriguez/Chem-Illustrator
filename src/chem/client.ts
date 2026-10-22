@@ -79,8 +79,9 @@ export class ChemClient {
     return r.molblock;
   }
 
-  async molToSmiles(molblock: string): Promise<string | null> {
-    const r = await this.request<Extract<ChemResponse, { type: 'molToSmiles' }>>((id) => ({ type: 'molToSmiles', id, molblock }));
+  /** SMILES for a molfile; `loose` writes it as drawn, without checking valences. */
+  async molToSmiles(molblock: string, loose = false): Promise<string | null> {
+    const r = await this.request<Extract<ChemResponse, { type: 'molToSmiles' }>>((id) => ({ type: 'molToSmiles', id, molblock, ...(loose ? { loose } : {}) }));
     return r.smiles;
   }
 

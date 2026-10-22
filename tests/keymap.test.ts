@@ -223,7 +223,7 @@ describe('the settings file', () => {
       hotkeys: { command: { 'Ctrl+M': 'command zoom-in' } }, keepHotspotOnBond: false, fixedLength: true, fixedAngles: false, devTools: true, showRoles: false,
       chemTyping: false, spellCheck: true, replacements: [['oC', '°C'], ['rxn', 'reaction']] as [string, string][], dictionary: ['Fooxane'],
       modeColours: { style: 'off' as const, drawing: '#2f6fdf', slides: '#00aa00', sheet: '#1e8a50', document: '#2647a8', design: '#7b3fbf' },
-      nicknames: { Qq: 'CC' }, templates: [], splitWidth: 0.6, scrollBars: false, groupTips: false, citeStyle: 'rsc', citeOptions: { lastAuthor: 'none', etAlOver: 5 }, methylStyle: 'Me' as const, axialStyle: 'PM' as const, circledCharges: true, slideTemplate: 'harbor', askWholeDrawing: false,
+      nicknames: { Qq: 'CC' }, templates: [], splitWidth: 0.6, scrollBars: false, groupTips: false, citeStyle: 'rsc', citeOptions: { lastAuthor: 'none', etAlOver: 5 }, methylStyle: 'Me' as const, axialStyle: 'PM' as const, circledCharges: true, textToAtom: false, slideTemplate: 'harbor', askWholeDrawing: false,
       palettes: [{ name: 'Group colours', colors: ['#1f5fbf', '#e69f00'] }],
       toolboxes: { ...defaultToolboxes(), locked: false, custom: ['tool:chain', 'cmd:clean-up'] },
       myStyles: [], modeStyles: { document: 'RSC' }, darkPage: true, darkPalette: 'Slate', darkPalettes: [], guides: { drawing: true, slides: false, design: true }, highlightLooks: [{ name: 'Mine', colour: '#abcdef', style: { glow: true } }], docPins: ['style', 'hf'], updateCheck: false, pubchemNames: false, reviewName: 'Nate O.', skipVersion: '0.1.80', recentFiles: ['C:\\Work\\a.cdxml'],
