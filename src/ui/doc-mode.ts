@@ -40,8 +40,9 @@ import { chartBoxPng } from '../render/chart-box-paint';
 import type { DocFile } from '../document/doc-file';
 import type { TableData } from '../model';
 import {
-  coveringCell, deleteColumn, deleteRow, emptyTable, insertColumn, insertRow, isCovered, mergeRight, nextCell, setColumnAlign, setColumnWidth, setSpan, spanOf,
+  canMerge, coveringCell, deleteColumn, deleteRow, emptyTable, insertColumn, insertRow, isCovered, mergeDown, mergeRight, nextCell, rowSpanOf, setColumnAlign, setColumnWidth, setPart, splitCell, spanOf,
 } from '../table';
+import { CELL_PAD } from '../document/doc-layout';
 import {
   A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, captionRuns, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets, inlineMove,
   floatOf, lookExtent, lookOf, cellHolding, innerObjects,
@@ -96,7 +97,7 @@ const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigat
 const BOX_COMMANDS = /^(doc-(align-|justify|bold|italic|underline|sub|sup|formula|highlight|bullets|numbering|indent|outdent)|line-|font-|select-all$|undo$|redo$|zoom-|copy$|cut$|paste$|box-|find$|replace$|wrap-)/;
 
 /** Commands that, in a table cell, work there too (others leave the cell first). */
-const CELL_COMMANDS = /^(table-|tbl-|insert-structure$|structure-from-name-doc$|name-to-structure$|insert-picture$|edit-figure$|compound-number$|cross-reference$|insert-citation$)/;
+const CELL_COMMANDS = /^(table-|tbl-|insert-table$|insert-structure$|structure-from-name-doc$|name-to-structure$|insert-picture$|edit-figure$|compound-number$|cross-reference$|insert-citation$)/;
 
 /** A new table's look: Word's grid, the ACS rules in the text, or the ACS table drawn as a figure. */
 export const TABLE_KINDS: [string, string][] = [
@@ -277,9 +278,11 @@ export class DocumentMode {
     const f = this.file;
     if (!f) return null;
     const lay = f.layout();
+    // (in a table inside a cell, its own cell)
+    let best: { id: number; r: number; c: number; depth: number } | null = null;
     for (const [id, tb] of lay.tables) {
       const o = f.t.objects[id];
-      if (o?.kind !== 'table') continue;
+      if (o?.kind !== 'table' || (best && best.depth >= tb.depth)) continue;
       const W = tb.xs[tb.xs.length - 1];
       for (let r = 0; r < tb.rows.length; r++) {
         const at = tb.rows[r];
@@ -287,10 +290,11 @@ export class DocumentMode {
         let c = 0;
         while (c < tb.xs.length - 2 && p.x > at.x + tb.xs[c + 1]) c++;
         const cv = coveringCell(o.table, r, c);
-        return { id, r: cv.r, c: cv.c };
+        best = { id, r: cv.r, c: cv.c, depth: tb.depth };
+        break;
       }
     }
-    return null;
+    return best && { id: best.id, r: best.r, c: best.c };
   }
 
   /** The table picked on its own (a selection of just its character), if any. */
@@ -343,10 +347,19 @@ export class DocumentMode {
     let to: { r: number; c: number } | null;
     if (dir === 'left' || dir === 'right') to = nextCell(tg.t, tg.r, tg.c, back);
     else {
-      const r = tg.r + (back ? -1 : spanRows(tg.t, tg.r));
+      const r = tg.r + (back ? -1 : rowSpanOf(tg.t, tg.r, tg.c));
       to = r >= 0 && r < tg.t.rows.length ? coveringCell(tg.t, r, tg.c) : null;
     }
     if (to) { this.startCell(tg.id, to.r, to.c, back ? 'end' : 'start'); return; }
+    // out of a table inside a cell: into that cell, before or after the table
+    const holder = cellHolding(f.t, tg.id);
+    const ho = holder ? f.t.objects[holder.id] : undefined;
+    if (holder && ho?.kind === 'table' && this.startCell(holder.id, holder.r, holder.c)) {
+      const k = objectOffsets(ho.table.rows[holder.r][holder.c].runs).get(tg.id);
+      if (k !== undefined) f.box?.ed.setCaret(back ? k : k + 1);
+      this.changed('selection');
+      return;
+    }
     this.stopBox();
     const at = objectOffsets(f.t.runs).get(tg.id);
     if (at !== undefined) f.ed.setCaret(back ? at : at + 1);
@@ -394,7 +407,7 @@ export class DocumentMode {
     const lay = f.layout();
     switch (cmd) {
       case 'table-row-above': this.setTable(id, insertRow(t, r), 'Insert row', { r, c }); break;
-      case 'table-row-below': this.setTable(id, insertRow(t, r + 1), 'Insert row', { r: r + 1, c }); break;
+      case 'table-row-below': this.setTable(id, insertRow(t, r + rowSpanOf(t, r, c)), 'Insert row', { r: r + rowSpanOf(t, r, c), c }); break;
       case 'table-col-left': this.setTable(id, insertColumn(t, c), 'Insert column', { r, c }); break;
       case 'table-col-right': this.setTable(id, insertColumn(t, c + span), 'Insert column', { r, c: c + span }); break;
       case 'table-del-row':
@@ -406,6 +419,15 @@ export class DocumentMode {
         this.setTable(id, deleteColumn(t, c), 'Delete column', { r, c: Math.min(c, t.cols.length - 2) });
         break;
       case 'table-delete': {
+        // a table inside a cell: out of the cell's text
+        const holder = cellHolding(f.t, id);
+        const ho = holder ? f.t.objects[holder.id] : undefined;
+        if (holder && ho?.kind === 'table') {
+          const cell = ho.table.rows[holder.r][holder.c];
+          this.stopBox();
+          this.setTable(holder.id, setPart(ho.table, holder, { runs: cell.runs.filter((x) => x.obj !== id), paras: cell.paras }), 'Delete table', holder);
+          break;
+        }
         this.stopBox();
         const at = objectOffsets(f.t.runs).get(id);
         if (at !== undefined) { f.ed.select(at, at + 1); f.ed.replaceSelection([], undefined, 'Delete table'); }
@@ -413,10 +435,15 @@ export class DocumentMode {
       }
       case 'table-select': this.stopBox(true); break;
       case 'table-merge':
-        if (c + span >= t.cols.length) { this.host.flash('There is no cell to the right to join.'); return; }
+        if (!canMerge(t, r, c, 'right')) { this.host.flash(c + span >= t.cols.length ? 'There is no cell to the right to merge with.' : 'The cell to the right covers other rows: merge cells that line up.'); return; }
         this.setTable(id, mergeRight(t, r, c), 'Merge cells', { r, c });
         break;
-      case 'table-split': this.setTable(id, setSpan(t, r, c, 1), 'Split cells', { r, c }); break;
+      case 'table-merge-down':
+        if (!canMerge(t, r, c, 'down')) { this.host.flash(r + rowSpanOf(t, r, c) >= t.rows.length ? 'There is no cell below to merge with.' : 'The cell below is a different width: merge cells that line up.'); return; }
+        this.setTable(id, mergeDown(t, r, c), 'Merge cells', { r, c });
+        break;
+      case 'table-split': this.setTable(id, splitCell(t, r, c), 'Split cells', { r, c }); break;
+      case 'table-nest': void this.insertTable(true); break;
       case 'table-lines-grid': case 'table-lines-acs': case 'table-lines-none':
         this.setTable(id, { ...t, lines: cmd.slice(12) as TableData['lines'] }, 'Table lines');
         break;
@@ -850,8 +877,10 @@ export class DocumentMode {
       cmd('Delete Row', 'table-del-row');
       cmd('Delete Column', 'table-del-col');
       cmd('Delete Table', 'table-delete');
-      if (spanOf(tg.t, tg.r, tg.c) > 1) cmd('Split Cells', 'table-split', 'Undo a merge: the cell goes back to one column');
-      else cmd('Merge with Cell to the Right', 'table-merge');
+      if (canMerge(tg.t, tg.r, tg.c, 'right')) cmd('Merge with Cell to the Right', 'table-merge');
+      if (canMerge(tg.t, tg.r, tg.c, 'down')) cmd('Merge with Cell Below', 'table-merge-down', 'Join the cell with the one under it (down a column)');
+      if (spanOf(tg.t, tg.r, tg.c) > 1 || rowSpanOf(tg.t, tg.r, tg.c) > 1) cmd('Split Cells', 'table-split', 'Undo a merge: the cell goes back to single cells');
+      cmd('Insert Table in Cell…', 'table-nest', 'A table inside this cell (a nested table, kept as one in Word)');
       cmd('Fit Columns to Contents', 'table-fit', 'Each column as wide as its widest cell (structures at their own size)');
       for (const [v, label] of [['grid', 'Grid Lines'], ['acs', 'ACS Rules'], ['none', 'No Lines']] as const) cmd(`${tg.t.lines === v ? '✓ ' : '   '}${label}`, `table-lines-${v}`);
       cmd('Select Table', 'table-select', 'Pick the whole table (to copy, cut or delete it)');
@@ -1206,8 +1235,8 @@ export class DocumentMode {
       if (o.kind === 'table') objects[id] = { ...o, table: { ...o.table, rows: o.table.rows.map((row) => row.map((cell) => ({ ...cell, runs: remap(cell.runs) }))) } };
     }
     const b = f.box?.cell ? f.box : null;
-    // into a table cell: no tables, text boxes or bibliographies inside it
-    const runs = remap(own.runs).filter((r) => !b || r.obj === undefined || !['table', 'textbox', 'bib', 'toc'].includes(objects[r.obj]?.kind));
+    // into a table cell: no text boxes or bibliographies inside it (a table goes in as a table in the cell)
+    const runs = remap(own.runs).filter((r) => !b || r.obj === undefined || !['textbox', 'bib', 'toc'].includes(objects[r.obj]?.kind));
     // references cited by pasted citations join the list (unless it has them)
     const have = new Set((f.t.references ?? []).map((r) => r.id));
     const adding = (own.references ?? []).filter((r) => !have.has(r.id));
@@ -2374,8 +2403,12 @@ export class DocumentMode {
     this.dropPicture(pic.bytes, pic.mime);
   }
 
-  private async insertTable(): Promise<void> {
+  private async insertTable(nest = false): Promise<void> {
     const f = this.file!;
+    // typing in a table cell: the new table goes inside the cell
+    const host = this.tableTarget();
+    const inCell = !!(f.box?.cell && host) || nest;
+    if (nest && !f.box?.cell) { this.host.flash('Click in a table cell first.'); return; }
     const got = await ask('Insert Table', [
       { name: 'rows', label: 'Rows', value: '4', type: 'number' },
       { name: 'cols', label: 'Columns', value: '3', type: 'number' },
@@ -2386,6 +2419,16 @@ export class DocumentMode {
     const rows = Math.max(1, Math.min(500, Math.round(Number(got.rows) || 4)));
     const cols = Math.max(1, Math.min(60, Math.round(Number(got.cols) || 3)));
     this.lastTableKind = got.kind;
+    if (inCell && host && got.kind !== 'drawing' && f.box?.cell) {
+      // as wide as the cell inside its margins, the columns sharing it
+      const room = host.t.cols.slice(host.c, host.c + spanOf(host.t, host.r, host.c)).reduce((a, b) => a + b, 0) - 2 * CELL_PAD.x;
+      const N = styleOf(f.t, {});
+      const lines = got.kind === 'acs' ? 'acs' : got.kind === 'none' ? 'none' : 'grid';
+      const t0 = emptyTable(rows, cols, N.size);
+      const w = Math.max(6, Math.floor((room / cols) * 100) / 100);
+      this.insertNestedTable({ ...t0, cols: Array(cols).fill(w), lines, head: lines === 'grid' ? 0 : t0.head, align: Array(cols).fill('left') });
+      return;
+    }
     if (got.kind === 'drawing') {
       const id = this.insertObject({ kind: 'drawing', contents: this.host.newTable(rows, cols, f.t.drawingStyle) }, 'Insert table');
       this.editFigure(id);
@@ -2400,6 +2443,24 @@ export class DocumentMode {
     const w = Math.floor((lay.textW / cols) * 100) / 100;
     const table: TableData = { ...t0, cols: Array(cols).fill(w), lines, head: lines === 'grid' ? 0 : t0.head, align: Array(cols).fill('left') };
     this.insertTableObject(table);
+  }
+
+  /** Put a table into the cell typed into, as a paragraph of its own in the cell, and type into its first cell. */
+  private insertNestedTable(table: TableData): void {
+    const f = this.file!;
+    const b = f.box;
+    if (!b?.cell) return;
+    const id = nextObjectId(f.t);
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'table', table } } } as DocText, 'Insert table');
+    const bed = b.ed;
+    const style = bed.typingStyle();
+    const text = bed.text;
+    const nl = { ...style, text: '\n' };
+    const runs = [...(bed.start > 0 && text[bed.start - 1] !== '\n' ? [nl] : []), objectRun(id, style), ...(bed.end < text.length && text[bed.end] !== '\n' ? [nl] : [])];
+    b.recorded = true;
+    bed.replace(bed.start, bed.end, runs, undefined, 'edit');
+    b.recorded = false;
+    this.startCell(id, 0, 0, 'start');
   }
 
   /** Put a table in the text as a paragraph of its own (after the caret's paragraph text), and type into its first cell. */
@@ -2972,10 +3033,6 @@ function runLooks(runs: TextRun[]): CharLook[] {
 }
 
 /** How many rows a cell reaches down (always one: cells join across, not down). */
-function spanRows(_t: TableData, _r: number): number {
-  return 1;
-}
-
 /** A table with each cell changed by a function. */
 function mapCells(t: TableData, f: (cell: TableData['rows'][number][number], r: number, c: number) => TableData['rows'][number][number]): TableData {
   return { ...t, rows: t.rows.map((row, r) => row.map((cell, c) => f(cell, r, c))) };

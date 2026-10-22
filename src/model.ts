@@ -713,6 +713,8 @@ export interface TableCell {
   align?: Justify;
   /** Number of columns the cell spans (the cells it covers are left empty). */
   span?: number;
+  /** Documents: number of rows the cell is merged down over (the cells it covers below are left empty). */
+  rowSpan?: number;
   /** Documents: the cell's background colour (Word's shading). */
   fill?: string;
   /** Documents: where the text sits up and down in a cell taller than it (top when left out). */

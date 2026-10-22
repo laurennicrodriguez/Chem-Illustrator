@@ -82,13 +82,21 @@ The first three go straight into the text with the caret in the first cell. Type
 While you are in a table, the **Table** tab offers:
 
 - **Insert Above**, **Below**, **Left**, **Right**; **Delete Row**, **Delete Column**, **Delete Table**;
-- **Merge Right**, **Split Cell**, **Select Table**;
+- **Merge Right**, **Merge Down**, **Split Cell**, **Table in Cell**, **Select Table**;
 - **Lines** (grid, ACS rules or none) and **Heading rows**;
 - **Shading** and **No Shading**;
 - alignment **Across** (Left, Centre, Right, for the column) and **Down** (Top, Middle, Bottom, for the cell);
 - **Column width**, **Fit to Contents**, **Fit to Page** and **Even Columns**.
 
 The same commands are on the right-click menu. Esc picks the whole table, and Delete then removes it.
+
+### Merged cells and tables in cells
+
+**Merge Right** joins a cell with the one beside it; **Merge Down** joins it with the one below, so one cell runs down a column (a catalyst used for several entries, say). Merge again to take in more cells. Cells only merge when they line up: a cell two columns wide merges down into another cell two columns wide. The text of the cell taken in goes after the first cell's as a new paragraph. **Split Cell** puts a merged cell back into single cells, its text staying in the first. Inserting or deleting a row inside a merged cell makes it longer or shorter, and Tab and the arrow keys skip the cells it covers.
+
+**Table in Cell** (or **Insert** ▸ **Table** while you are typing in a cell) puts a table inside the cell, as wide as the cell, for conditions or results that need their own small grid. Click into its cells to type in them; the arrow keys take you out of it, back into the cell holding it. Its own Table tab commands (rows, merging, lines) work as for any table.
+
+Word files keep both: merged cells are saved and opened as Word's merged cells, and a table in a cell as Word's nested table.
 
 ### Structures in table cells
 
