@@ -144,6 +144,35 @@ Notes and comments move with their cells when you sort, insert or delete rows, a
 
 A cell with a list shows a drop-down button beside it while selected; click it or press **Alt+Down** to pick. In any cell, **Pick From Drop-down List…** on the right-click menu (or Alt+Down) lists the entries already above and below it in its column. **Circle Invalid** rings the cells that break their rules in red (pasted values and formulas aren't checked as they go in, as in Excel). The rules are saved as Excel's own, so the drop-downs and alerts work in Excel too.
 
+## Analysis: PivotTables, What-If and the Analysis ToolPak
+
+The **Data** tab has Excel's analysis tools. Their windows float at the right of the sheet without blocking it, so you can click or drag over cells to fill the box that last had the cursor (cells on another sheet carry the sheet's name). Drag a window by its title.
+
+### PivotTables
+
+Click in a table of records with a header row (one row per run: catalyst, solvent, temperature, yield…) and choose **Insert** tab ▸ **PivotTable**. Pick the records and where the report goes (a new sheet, or a cell on this one). The **PivotTable Fields** window then builds it:
+
+- Tick a field to add it: numbers go to **Values** (summed), anything else to **Rows**. Or drag fields into **Filters**, **Columns**, **Rows** and **Values**, and between them.
+- Click a field in an area for its menu: move it, **Filter Items…** (untick items to leave out), **Sort A to Z** or **Z to A**, **Value Field Settings…** (Sum, Count, Average, Max, Min, Product, StdDev, Var…; show as % of the grand total, of the row or of the column; its name and number format), or **Remove Field**.
+- **Layout**: Compact, Outline or Tabular form; subtotals; grand totals for rows and columns; Σ Values down the rows; text for empty cells; the PivotTable's name.
+
+Click in a report to show the **PivotTable** tab: **Field List**, **Refresh** (after the records change), **Refresh All**, **Change Data Source…**, **Report Layout**, **Subtotals**, **Grand Totals**, **PivotChart**, **Show Details** (the records behind the number in the active cell, on a new sheet), **Select** and **Clear**. The right-click menu on a report has the same, with **Summarize Values By** and **Show Values As**.
+
+A **PivotChart** (Insert tab, or the PivotTable tab) charts the report and changes with it. PivotTables are saved as Excel's own, set to refresh when Excel opens the file.
+
+### What-If Analysis
+
+- **Goal Seek…**: the value of one cell that makes a formula give a target (the catalyst loading for 95% predicted conversion). The sheet shows the answer while the status window is open; **Cancel** puts the cell back.
+- **Data Table…**: select a table with the values to try down its left column (or along its top row) and formulas along the top (or down the left), or a grid of values with one formula in its top-left corner, then give the input cell(s). The results are worked out again whenever the sheet changes, and are saved as Excel's own TABLE() data table.
+
+### Solver
+
+**Solver** makes the objective cell as large or small as it can be, or equal to a value, by changing the variable cells, subject to constraints (`<=`, `=`, `>=`, whole number, binary, all different). **Simplex LP** solves linear models exactly, **GRG Nonlinear** smooth ones (curve fitting to a rate law), and **Evolutionary** models with jumps (IF, LOOKUP, rounding; it needs limits on every variable). The results window keeps the solution or restores the original values, and can write an **Answer Report** sheet. The model is saved with the sheet as Excel's Solver saves it, so Excel's Solver opens it too.
+
+### Data Analysis (the Analysis ToolPak)
+
+**Data Analysis** lists Excel's nineteen tools: Anova (single factor, two-factor with and without replication), Correlation, Covariance, Descriptive Statistics, Exponential Smoothing, F-Test, Fourier Analysis, Histogram (with Pareto order, cumulative percentages and a chart), Moving Average, Random Number Generation, Rank and Percentile, Regression (with residuals, standardized residuals and normal probability), Sampling, the three t-Tests and the z-Test. Each writes its results as Excel does, to a range or a new sheet. New functions for these: F.DIST, F.DIST.RT, F.INV, F.INV.RT, F.TEST, SKEW, KURT, MODE.SNGL, COVARIANCE.P/S, PERCENTRANK.INC/EXC, SUMXMY2, SUMX2MY2 and SUMX2PY2.
+
 ## Charts
 
 Select a block of cells and choose **Insert** tab ▸ **Scatter**, **Line**, **Column**, **Bar**, **Area** or **Pie**. Click a chart to open the **Chart** tab; double-click it, or click **All Settings**, for every setting in the panel on the right.
