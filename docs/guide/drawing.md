@@ -1,6 +1,6 @@
 # Drawing
 
-This page covers Drawing mode in depth: the tools, hotkeys on atoms and bonds, text, arrows and shapes, the Structure, Scheme and Object menus, drawing styles, the dark page, the Analysis panel and the other chemistry tools.
+This page covers Drawing mode in depth: the tools, hotkeys on atoms and bonds, text, arrows and shapes, the Chemistry and Format menus, drawing styles, the dark page, the Analysis panel and the other chemistry tools.
 
 If you use ChemDraw, most of this will feel familiar: the hotkeys are ChemDraw's, new drawings use the ACS Document 1996 style, and files are saved as `.cdxml` or `.cdx`. Mac users: read Cmd for Ctrl and Option for Alt.
 
@@ -8,7 +8,7 @@ If you use ChemDraw, most of this will feel familiar: the hotkeys are ChemDraw's
 
 ## The toolbox
 
-The drawing tools run down the left side, in groups. A button with a small arrow beside it holds a set of tools; click the arrow, right-click the button, or press and hold it to open the set. The button then shows the tool you used last. Rest the mouse on any tool to see its name and hotkey, and watch the hint line at the bottom of the window for how to use it.
+The drawing tools run down the left side, in groups. A button with a small arrow in its corner holds a set of tools; click the corner, click the button again once it is in use, right-click it, or press and hold it to open the set. The button then shows the tool you used last. Text, arrows and the mechanism symbols sit just under the bonds so they show without scrolling; on a short window the tools take three columns, and the toolbox fades at the bottom while there is more below. Rest the mouse on any tool to see its name and hotkey, and watch the hint line at the bottom of the window for how to use it.
 
 ### Select and eraser
 
@@ -17,12 +17,12 @@ The drawing tools run down the left side, in groups. A button with a small arrow
 
 ### Bonds and chains
 
-Single, double, triple and quadruple bonds; wedge, hashed wedge, hashed, bold, dashed and wavy bonds; a partial bond; a dative bond; a hapto (η) bond; and the chain tool.
+Single, double and triple bonds (a quadruple bond has its hotkey and Search, off the toolbox); wedge, hashed wedge, hashed, bold, dashed and wavy bonds; a partial bond; a dative bond; a hapto (η) bond; and the chain tool.
 
-- Click empty space or an atom to draw a bond; drag to aim it. New bonds point in 15° steps and are a standard length. Hold Alt while drawing to draw at any angle, or turn off **Structure ▸ Fixed Bond Lengths** (Ctrl+L) and **Fixed Angles** (Ctrl+E).
+- Click empty space or an atom to draw a bond; drag to aim it. New bonds point in 15° steps and are a standard length. Hold Alt while drawing to draw at any angle, or turn off **Chemistry ▸ Fixed Bond Lengths** (Ctrl+L) and **Fixed Angles** (Ctrl+E).
 - Click an existing bond with the single bond tool to step it through single, double and triple. Click a double bond again with the double bond tool to move its second line. Click a wedge or dative bond again to reverse it.
 - Draw a dative bond from the donor atom to the acceptor (H3N→BF3). Neither atom loses a hydrogen for it.
-- **Partial bond**: a bond forming or breaking in a transition state, drawn dashed (press `P` over any bond to make it one). Like a dative bond it leaves both atoms' hydrogens as they were, it gets no valence warning, and the formula and SMILES leave it out. It saves to CDXML as a half bond (Order 0.5). **Scheme ▸ Transition State Brackets ‡** then puts square brackets round the selected transition state with ‡ at the upper right.
+- **Partial bond**: a bond forming or breaking in a transition state, drawn dashed (press `P` over any bond to make it one). Like a dative bond it leaves both atoms' hydrogens as they were, it gets no valence warning, and the formula and SMILES leave it out. It saves to CDXML as a half bond (Order 0.5). **Chemistry ▸ Reactions and Schemes ▸ Transition State Brackets ‡** then puts square brackets round the selected transition state with ‡ at the upper right.
 - **Hapto (η) bond**: drag from a metal into a ring, or onto a C=C, to bond the metal to its middle (η⁵-Cp, η⁶-arene, η³-allyl, η²-alkene; the η number is how many atoms it holds). Drag the other way, from the ring to empty space, for a new metal M. Click inside a ring or on a bond for a new metal there. The bond stays in the middle when you move or reshape the ring. Click a hapto bond to draw it as a line to each atom instead (some draw ferrocene that way). In ChemDraw the bond opens as a multicentre attachment.
 - **Chain**: drag from empty space or an atom; a number shows how many bonds you have. Or click and type how many atoms you want. Alt+click draws the same number again.
 
@@ -73,31 +73,32 @@ This is enough to build decalins, hydrindanes, steroids (5α and 5β), triterpen
 Metals know they are metals: a metal gets no hydrogens and no valence warning however many ligands it holds, and a phosphine, amine, pyridine, bridging chloride or carbonyl on a metal keeps the hydrogens and charges it had (PPh₃ stays P, not PH; M–C≡O needs no charges). Ligand labels work too: type PPh3, dppe, BINAP, XPhos, bpy, IMes, Cp*, COD, acac, THF and so on as labels on a metal. The formula and masses in the Analysis panel count them all, ferrocene included.
 
 - Right-click a metal: **Add Ligand** puts a ligand from the list on it.
-- **Structure ▸ Bond Metal to Ring (η)**: select a metal and the ring or π-bond atoms; their bonds become one hapto bond to the middle. **Split Hapto Bond** goes back to a bond to each atom.
-- **Structure ▸ Expand Label**: draws a label out as atoms. A ligand on a metal comes from its template (dppe gives both P atoms bonded to the metal); other abbreviations (OMe, Boc, CO₂Et) are laid out along the bond they hung from.
+- **Chemistry ▸ Metals ▸ Bond Metal to Ring (η)**: select a metal and the ring or π-bond atoms; their bonds become one hapto bond to the middle. **Split Hapto Bond** goes back to a bond to each atom.
+- **Chemistry ▸ Expand Label**: draws a label out as atoms. A ligand on a metal comes from its template (dppe gives both P atoms bonded to the metal); other abbreviations (OMe, Boc, CO₂Et) are laid out along the bond they hung from.
 
-To make your own template, select a structure and click the first button on the **My templates** palette, or use **Structure ▸ Save as Template…**. Give it a name and it appears in the palette. **Structure ▸ Delete Template…** removes one.
+To make your own template, select a structure and click the first button on the **My templates** palette, or use **Chemistry ▸ Nicknames and Templates ▸ Save as Template…**. Give it a name and it appears in the palette. **Chemistry ▸ Nicknames and Templates ▸ Delete Template…** removes one.
 
 ### Text, periodic table and fragmentation
 
 - **Text**: click an atom to type a label, or empty space for a caption. See [Text and captions](#text-and-captions).
-- **Periodic table**: pick an element, then click atoms to change them, or empty space to add a lone atom. Atoms already selected change at once. You can type a symbol in its box and press Enter. **Structure ▸ Periodic Table…** opens it too.
+- **Periodic table**: pick an element, then click atoms to change them, or empty space to add a lone atom. Atoms already selected change at once. You can type a symbol in its box and press Enter. Open it from **Chemistry ▸ Look Up ▸ Periodic Table…** or Search (it is no longer a toolbox button).
 - **Mass fragmentation**: see [Mass fragmentation](#mass-fragmentation).
 
 ### Arrows, mechanism symbols, shapes and brackets
 
 - **Arrows**: reaction, dashed, hollow-headed, resonance (heads at both ends), equilibrium, retrosynthetic and crossed-out (reaction does not go). Drag to draw one, or click for a standard length. Drag an end to move it and drag the middle to bend the arrow into an arc. With the arrow tool, Shift+drag from an arrow's end or middle to branch a second arrow off it (one starting material, two products).
 - **Curved arrows** (electron pair) and **fishhook arrows** (one electron): drag from a lone pair, radical dot, circled charge, atom or bond to an atom or bond, and the arrow snaps into place as in a mechanism. If you have drawn lone pairs on the atom, the arrow starts from the one facing where it goes. A bond's arrow starts from the middle of the bond. Let go between two atoms that are not bonded (the C and C that will join in an aldol or Diels–Alder) and the head points at the new bond's place. The arrow picks the side and curl that keep it clear of the other atoms and bonds, and switches to an S shape when no single bend gets round the structure; swing out to one side as you drag to bend it that way instead. Drag the middle dot to change the curve. Hold Alt to draw freely.
-- **S-shaped arrows**: the **S-shaped curved arrow** and **S-shaped fishhook** tools (in the curved arrow set) always draw two bends, for an arrow that has to go round something or come in from behind. Drag the two diamond handles to shape it. **Scheme ▸ Make S-Shaped Arrow** turns a selected curved arrow into an S, and **Scheme ▸ Make Single-Curve Arrow** turns it back. **Scheme ▸ Flip Arrow Bend** bends a curved arrow the other way round, half head and all.
-- **Arrows stay on the structure:** a curved arrow drawn onto a lone pair, atom, bond or new bond's place is stuck there. Move, turn, flip or clean up the structure and the arrow goes with it, stretching if the atoms move apart; undo puts both back. Lone pairs, radical dots and circled charges stay on their atoms the same way. Drag an arrow's end a little and it stays stuck at the new place; drag it right off and it comes loose. **Scheme ▸ Detach from Structure** (or **Unstick from structure** in the Style panel) frees a selected arrow, and **Scheme ▸ Attach Arrows to Structure** sticks it to whatever its ends are on.
-- **Homolysis**: select one or more bonds and choose **Scheme ▸ Homolysis Arrows** (or right-click the bond) for the two fishhooks that split each bond, one to each atom, on the open side.
+- **S-shaped arrows**: the **S-shaped curved arrow** and **S-shaped fishhook** tools (in the curved arrow set) always draw two bends, for an arrow that has to go round something or come in from behind. Drag the two diamond handles to shape it. **Chemistry ▸ Mechanism Arrows ▸ Make S-Shaped Arrow** turns a selected curved arrow into an S, and **Chemistry ▸ Mechanism Arrows ▸ Make Single-Curve Arrow** turns it back. **Chemistry ▸ Mechanism Arrows ▸ Flip Arrow Bend** bends a curved arrow the other way round, half head and all.
+- **Arrows stay on the structure:** a curved arrow drawn onto a lone pair, atom, bond or new bond's place is stuck there. Move, turn, flip or clean up the structure and the arrow goes with it, stretching if the atoms move apart; undo puts both back. Lone pairs, radical dots and circled charges stay on their atoms the same way. Drag an arrow's end a little and it stays stuck at the new place; drag it right off and it comes loose. **Chemistry ▸ Mechanism Arrows ▸ Detach from Structure** (or **Unstick from structure** in the Style panel) frees a selected arrow, and **Chemistry ▸ Mechanism Arrows ▸ Attach Arrows to Structure** sticks it to whatever its ends are on.
+- **Homolysis**: select one or more bonds and choose **Chemistry ▸ Mechanism Arrows ▸ Homolysis Arrows** (or right-click the bond) for the two fishhooks that split each bond, one to each atom, on the open side.
 - **Moving an arrow's end:** drag the end of a curved arrow onto a lone pair, atom or bond and it snaps there, keeping the side it bends to. Hold Alt to put the end anywhere.
-- **Clean Up Arrow** (**Scheme ▸ Clean Up Arrow**, or right-click a curved arrow): redraws the selected curved arrows from the lone pair, bond or atom their tail is on to what their head points at, starting and ending at a sensible angle and clear of the structure. S-shaped arrows stay S-shaped. Undo puts them back. It has no key to start with; give it one in **Edit ▸ Hotkeys…**. Right-click a curved arrow for the **Mechanism Arrow** menu with all of these.
+- **Clean Up Arrow** (**Chemistry ▸ Mechanism Arrows ▸ Clean Up Arrow**, or right-click a curved arrow): redraws the selected curved arrows from the lone pair, bond or atom their tail is on to what their head points at, starting and ending at a sensible angle and clear of the structure. S-shaped arrows stay S-shaped. Undo puts them back. It has no key to start with; give it one in **Edit ▸ Hotkeys…**. Right-click a curved arrow for the **Mechanism Arrow** menu with all of these.
+- Curved arrows find their own way: a new arrow keeps clear of atoms, labels, bonds and other arrows, and never puts its head on another arrow's head or under a label. When you move or change a structure so that an arrow stuck to it would run into something, the arrow finds a clear way round again. An arrow you have bent by hand (by its middle handle, which shows a bend pointer) keeps its bend; Clean Up Arrow lets it find its own way again. **Edit ▸ Preferences** turns the re-routing off.
 - **Files:** S-shaped arrows are saved in .cdxml and .cdx as ChemDraw curves with arrowheads, so ChemDraw shows them. What an arrow is stuck to is saved too, for Chem Illustrator; ChemDraw ignores it.
-- **Mechanism symbols**: lone pair, radical dot, circled plus and minus, δ+ and δ−. Click an atom and the symbol goes in the most open space round it. To put a lone pair (or radical dot or circled charge) somewhere else, press on the atom and drag: the symbol goes round the atom after the pointer, and lands where you let go. Hold Alt (or Shift) while dragging to turn it in 15° steps, as when turning a structure. A radical dot makes the atom a radical (one H fewer); a circled charge sets the atom's charge.
+- **Mechanism symbols**: lone pair, radical dot, circled plus and minus, δ+ and δ−, and ‡ (click where it goes). Click an atom and the symbol goes in the most open space round it. To put a lone pair (or radical dot or circled charge) somewhere else, press on the atom and drag: the symbol goes round the atom after the pointer, and lands where you let go. Hold Alt (or Shift) while dragging to turn it in 15° steps, as when turning a structure. A radical dot makes the atom a radical (one H fewer); a circled charge sets the atom's charge.
 - **Charges by labels** sit raised after the label (N⁺). A bond that runs under the sign stops short of it, as in ChemDraw; if that would leave almost nothing of a short bond, the charge moves to a free spot round the label instead.
 - **Shapes**: boxes (plain, round-cornered, with a shadow, dashed), ovals, circles drawn from the centre, a filled circle, and plain, dashed and bold lines. Drag to draw; Shift while drawing an oval makes a circle. Drag the corner squares to resize.
-- **Brackets**: square, round and curly. Drag a box to put a pair of brackets round it, or click a structure to bracket it.
+- **Brackets**: square, round and curly, transition-state brackets (square, with ‡ at the upper right), and a single left or right bracket. Drag a box to put brackets round it, or click a structure to bracket it.
 
 Select any arrow, shape or bracket to change its line width, colour, dashes, fill, corners and shadow in the **Style** panel.
 
@@ -122,7 +123,14 @@ Pick the text tool (`t` over empty space) and:
 
 Double-click a caption to edit it again. Press Esc to finish.
 
-While you type, a bar above the text has bold, italic and underline, subscript and superscript, **formula style**, font, size and colour, alignment, bullets and numbering, indents, line and paragraph spacing, and a set of Greek letters and symbols (**αΩ**).
+### Typing an atom label
+
+The label box opens right on the atom: its first letter sits where the atom is, in the label font, and the box grows as you type. Counts drop and charges rise as you type them (CH₂CO₂Me, NH₃⁺), just as the label will show. Press Enter or click away to finish.
+
+- To raise or lower other characters, select them in the box and press **Ctrl+Shift+=** (raise) or **Ctrl+=** (lower). Press it again to put them back. The marks are saved in the .cdxml file, so ChemDraw shows them too.
+- A label that is just R and a number (R1, R12) shows the number raised: R¹, R¹². Longer labels such as OR1 or CO2R1 keep their numbers lowered, and labels from files keep the look they were saved with. **Edit ▸ Preferences** turns raised R numbers off.
+
+While you type, a bar along the top of the drawing has bold, italic and underline, subscript and superscript, **formula style**, font, size and colour, alignment, bullets and numbering, indents, line and paragraph spacing, and a set of Greek letters and symbols (**αΩ**). It sits along the top so it never covers what you have drawn; **View ▸ Text Formatting Bar** can float it just above the text instead, or hide it (the keys below still work).
 
 Useful keys while typing:
 
@@ -141,11 +149,15 @@ As you type, common chemistry is tidied for you: CH2Cl2 gets its subscripts, `0 
 
 You can paste formatted text from Word into a text box; bold, italic, subscripts, colours and lists come across.
 
+### Linking text to a structure
+
+Select a caption and a structure and choose **Format ▸ Link Text to Structure** (also on the right-click menu). The text then moves, turns and copies with its structure. With only text selected, it links to the nearest structure. While either one is selected, a dotted grey line shows the link. **Format ▸ Unlink Text** lets it go again. **Edit ▸ Preferences** chooses where linked text goes: where it already is, or below, above, left or right of the structure.
+
 ### Turning text
 
 Select a caption or text box on its own with the select tool, and a round handle appears above it. Drag the handle to turn the text; hold Shift or Alt to turn in 15° steps. When you turn a structure that has captions with it, the captions move round with the structure but stay upright. Labels attached to a structure (ID labels, descriptors) also stay upright.
 
-## Moving, turning and the Object menu
+## Moving, turning and the Format menu
 
 Select something and:
 
@@ -154,21 +166,26 @@ Select something and:
 - use the arrow keys to nudge it 1 pt, or Shift+arrow for 10 pt;
 - press Alt+← or Alt+→ to turn it 1°, Alt+↑ or Alt+↓ for 15°.
 
-The **Object** menu has:
+The **Format** menu has:
 
 - **Align Left Edges**, **Align Centres Across**, **Align Right Edges**, **Align Top Edges**, **Align Middles Down**, **Align Bottom Edges**;
 - **Space Evenly Across** and **Space Evenly Down** (three or more things);
-- **Flip Left to Right** (Ctrl+Shift+H), **Flip Top to Bottom** (Ctrl+Shift+V);
+- **Flip Left to Right** (Ctrl+Shift+H), **Flip Top to Bottom** (Ctrl+Shift+V). A flip makes the mirror image: wedged stereocentres turn over (S becomes R). When that happens a note says so, with an **Undo** button;
+- **Flip Left to Right, Keeping Configuration** and **Flip Top to Bottom, Keeping Configuration**: the structure is turned over and its wedges and hashes swap, so every stereocentre keeps its R or S;
 - **Rotate 90° Clockwise**, **Rotate 90° Anticlockwise**, **Rotate 180°** and **Rotate…** (Ctrl+R, any angle);
 - **Scale…** (Ctrl+K): by a percentage, or to a bond length in points;
 - **Join** (Ctrl+J): joins two selected atoms, or two selected bonds, into one;
+- **Group** (Ctrl+G) and **Ungroup** (Ctrl+Shift+G): grouped structures, text, arrows and shapes select and move as one. Clicking any part selects the whole group, and a grey dashed box shows it; **Edit ▸ Preferences** can make a click pick just the one thing instead. Groups are kept in CDXML files, so ChemDraw opens them as groups too;
+- **Bring to Front** and **Send to Back** for shapes and pictures;
 - **Bring Bond to Front** and **Send Bond to Back**: where two bonds cross, the one behind gets a small gap.
 
-**View ▸ Alignment Guides** makes things you move snap into line with other structures, text, arrows, shapes and the page edges, with pink guide lines. It starts off in drawings. Hold Alt while dragging to move freely.
+**View ▸ Alignment Guides** makes things you move snap into line with other structures, text, arrows, shapes and the page edges, with pink guide lines. Structures line up by their atoms and bonds, not the edges of their labels. A guide only shows to something with nothing in between, and only the closest match each way. It starts off in drawings. Hold Alt while dragging to move freely.
+
+Undo (Ctrl+Z) and Redo (Ctrl+Y) select what they changed, so you can see what came back and move it straight away.
 
 To start a reaction quickly, select a structure and press Ctrl+→ (or Ctrl+←, Ctrl+↑, Ctrl+↓): you get a reaction arrow and a copy of the structure to edit into the product.
 
-## The Structure menu
+## The Chemistry menu
 
 ### Tidying and checking
 
@@ -183,20 +200,20 @@ To start a reaction quickly, select a structure and press Ctrl+→ (or Ctrl+←,
 - **Contract Label…**: turns a selected group into one label (such as PMP) that keeps its chemistry. ChemDraw opens it as a contracted label.
 - **Expand Label**: the other way round: the selected labels drawn out as atoms and bonds (ligands on a metal from their templates). See [Metal complexes](#metal-complexes).
 - **Define Nickname…**: select a group that hangs off a structure by one bond and give it a name. Typing that name as a label anywhere then counts as the full group for formula and mass. **Delete Nickname…** removes one.
-- **Name to Structure…** (Ctrl+Shift+N): type a systematic, CAS-style or common name and the structure is drawn. Select a caption holding a name first to turn the caption into the structure. Names are read on your computer, so this works offline; names it can't read (DMAP, DIPEA) can be looked up on PubChem if you allow it in **Edit ▸ Preferences**.
+- **Name to Structure…** (Ctrl+Shift+N): type a systematic, CAS-style or common name and the structure is drawn. Select a caption holding a name first to turn the caption into the structure. Names are read on your computer, so this works offline; names it can't read (DMAP, DIPEA) can be looked up on PubChem if you allow it in **Edit ▸ Preferences**. When a name can't be read, the window says so, underlines the part the name reader stopped at, and keeps the reader's own explanation under **Details**.
 
 ### Frames, highlights and fills
 
 - **Add Frame**: draws a box round the selection that grows, shrinks and moves with what is inside. Click the frame to set the gap across and up and down in the Style panel, untick **Fit round its contents** to stop it following, or click **Fit now**. Dragging a corner by hand also stops it following.
 - **Highlight**: a soft band of colour (yellow to start) behind the selected atoms and bonds. With highlighted atoms selected, the Style panel sets the colour, **Highlight shape** (round or straight), **Smooth outline** (round) or **Highlight ends** (straight), **Centre on double bonds**, **Highlight size (%)**, **Grow round atom labels**, a shadow and soft edges. **Remove Highlight** takes it off.
-  - Round highlights put a disc on each atom unless **Smooth outline** is on (or **Structure > Smooth Highlight**, also on the right-click menu), which makes them one even band with round corners. Straight highlights are one even band with sharp corners where bonds meet, round, square or pointed ends, and a disc round each atom label. An atom with no highlighted bond gets a disc. Files with the older square or diamond highlights open as straight ones with square or pointed ends.
-  - **Centre on double bonds** (or **Structure > Centre Highlight on Double Bonds**) runs the highlight midway between a double bond's two lines. A ring drawn with its double bonds inside is highlighted midway between the ring and those inner lines, all the way round, so the highlight doesn't have to be made huge to cover both lines. Single bonds between double bonds (a chain such as a hexatriene) keep the highlight on their own line, so its corners follow the bonds' angles.
+  - Round highlights put a disc on each atom unless **Smooth outline** is on (or **Chemistry > Highlight and Fill > Smooth Highlight**, also on the right-click menu), which makes them one even band with round corners. Straight highlights are one even band with sharp corners where bonds meet, round, square or pointed ends, and a disc round each atom label. An atom with no highlighted bond gets a disc. Files with the older square or diamond highlights open as straight ones with square or pointed ends.
+  - **Centre on double bonds** (or **Chemistry > Highlight and Fill > Centre Highlight on Double Bonds**) runs the highlight midway between a double bond's two lines. A ring drawn with its double bonds inside is highlighted midway between the ring and those inner lines, all the way round, so the highlight doesn't have to be made huge to cover both lines. Single bonds between double bonds (a chain such as a hexatriene) keep the highlight on their own line, so its corners follow the bonds' angles.
   - The Style panel keeps the everyday settings (colour, **Look**, shape, smoothing, size) at the top and the rest in groups that fold open: **Placement**, **Fill and texture**, **Outline**, **Soft edges**, **Shadow** and **Glow**. Each closed group shows what it is set to.
   - **Soft edges**: **How much fades (%)** sets how much of the highlight fades (25 % fades a quarter of it), and **Fades** picks where: the outer part, the inner part (next to the bonds), or half at each side.
   - **Fill and texture**: **Transparency**; one colour, a **Gradient across** (two colours at an angle), a **Gradient out from the bonds**, or no fill; and a **Texture** (lines, cross-hatch, grid or dots) with its own colour and spacing.
-  - **Outline**: a solid, dashed or dotted line round the highlight, with its colour and width. **Outline Only** (Structure menu, right-click or the Highlight toolbox) switches between an outline with no fill and a filled highlight.
+  - **Outline**: a solid, dashed or dotted line round the highlight, with its colour and width. **Outline Only** (Chemistry ▸ Highlight and Fill, right-click or the Highlight toolbox) switches between an outline with no fill and a filled highlight.
   - **Shadow**: colour, opacity, direction, distance and blur. **Glow**: a soft halo round the highlight, with its colour, size and transparency.
-  - **Looks**: **Look** picks a ready-made look (Classic, Soft marker, Hollow, Neon, Lifted, Gradient across and more) or one of your own. **Save look…** keeps the selected highlight's settings under a name, with or without its colour; **Structure > Delete Highlight Look…** removes one. Your looks are kept with your settings.
+  - **Looks**: **Look** picks a ready-made look (Classic, Soft marker, Hollow, Neon, Lifted, Gradient across and more) or one of your own. **Save look…** keeps the selected highlight's settings under a name, with or without its colour; **Chemistry > Highlight and Fill > Delete Highlight Look…** removes one. Your looks are kept with your settings.
 - **Fill Rings**: colours in the selected rings. The fills move with the structure. In the Style panel, a fill can be solid, faded, shaded or a two-colour **Gradient**, and can have a **Pattern** (diagonal lines, cross-hatch, horizontal or vertical lines, grid, dots), with its own colour and spacing. **Pattern see-through** lets what is behind show through the lines or dots, and **Pattern under double bonds** decides whether the pattern runs under the inner line of a double bond. The **Shadow** group gives a filled ring a drop shadow (with or without a highlight), with its colour, opacity, direction, distance and blur (design shapes have the same group); right-click a structure and choose **Highlight and Fill > Ring Fill Shadow** to turn it on or off. Copies of a structure (Ctrl+drag, or copy and paste) keep their ring fills. Boxes and ovals take the same fills and patterns.
 
 ### Labelling a structure
@@ -212,7 +229,7 @@ These follow the structure when it moves. Several stack up: ID label first, then
 R/S and E/Z are worked out for every structure as you draw.
 
 - **View ▸ Show R/S Preview** shows every label in red, on screen only.
-- **Structure ▸ Show Stereo Labels (R/S, E/Z)** adds them to the selected structures (or all) as part of the drawing; they update themselves after edits. Select a stereocentre to hide its label or type your own, such as (R*).
+- **Chemistry ▸ Stereo ▸ Show Stereo Labels (R/S, E/Z)** adds them to the selected structures (or all) as part of the drawing; they update themselves after edits. Select a stereocentre to hide its label or type your own, such as (R*).
 - Plain bold bonds count as wedges and plain hashed bonds as hashed wedges, as in ChemDraw. Where R or S would depend on what an R or Ar group is, no label is given.
 - **Axial chirality** (biaryls, allenes, alkylidenecycloalkanes) is labelled Ra or Sa by IUPAC rule P-93.5.1. Draw the groups on one end of the axis with a wedge and a hash (or one wedge) to show which way round it is. Without that, or when one end has two of the same group, no label is shown. **Edit ▸ Preferences** writes them as P/M instead (Ra = M, Sa = P).
 - **Stereo Group (abs, &, or)…**: marks selected stereocentres as abs (known as drawn), &1 (a mixture of both forms) or or1 (one form, not known which).
@@ -225,17 +242,19 @@ R/S and E/Z are worked out for every structure as you draw.
 
 ### PubChem
 
-**Structure ▸ Look Up on PubChem** (also in the Analysis panel and the right-click menu) sends the selected structure to PubChem and shows its names, CAS number, a link to its PubChem page, GHS hazards, and measured melting point, boiling point and density where known. See [The Analysis panel](#the-analysis-panel).
+**Chemistry ▸ Look Up ▸ Look Up on PubChem** (also in the Analysis panel and the right-click menu) sends the selected structure to PubChem and shows its names, CAS number, a link to its PubChem page, GHS hazards, and measured melting point, boiling point and density where known. See [The Analysis panel](#the-analysis-panel).
 
-## The Scheme menu
+## Reactions and schemes
 
 - **Clean Up Reaction** (Ctrl+Shift+R): lines up the structures on the arrow, centres the reagents over and under it, and spaces everything evenly.
+- **Clean Up Reaction, Orienting Like the Start** does the same, first turning each structure so the part it shares with the starting material lies the same way round (see Orient Like First).
+- **Orient Like First**: select two or more structures. Each is turned so the part it shares with the first one (top left, as a scheme is read) lies the same way round. The shared part is the largest common substructure, with whole rings only. A structure that has to be turned over to match has its wedges and hashes swapped, so its configuration is kept. Structures that share less than a third of their atoms with the first are left alone.
 - **Arrange Scheme…**: lays out a multi-step scheme. Click the layouts to try each one: **Line**, **Rows**, **Snake**, **Down the page**, **Catalytic cycle** (select a caption such as the catalyst's name too, and it goes in the middle) and **Branching**. **Done** keeps it; **Cancel** puts it back.
-- **Number Compounds…**: puts numbers under the structures in scheme order. Choose 1, 2, 3; 1a, 1b; a, b; A, B; i, ii or I, II; where to start; text before and after (S for S1, S2); bold; whether copies of one structure share a number (**Same structure, same ID**); whether to renumber or keep existing numbers; and whether reagents over arrows get numbers. Each number is an ordinary caption you can retype. If two different structures end up with the same number, the Warnings panel says so.
-- **Catalytic Cycle…**: draws a catalytic cycle. Start from a ready-made one (Suzuki, Heck, Buchwald–Hartwig, Wilkinson hydrogenation, olefin metathesis, Monsanto, or two loops: Sonogashira's Pd and Cu cycles, Wacker's Pd and Cu cycles, Ni/Ir metallaphotoredox, neutral and cationic Heck sharing Pd(0), Pd(0)/Pd(II) beside Pd(II)/Pd(IV) C–H activation) or a blank one, and change the table: each species, the step to the next (oxidative addition, transmetalation…), what comes in and what goes out, and what sits in the middle. Two loops can turn together where two steps meet, share one species (drawn once, between them) or sit side by side. Choose clockwise or anticlockwise, short step names (OA, TM, RE), names in full or none, and whether reagents go on small curved arrows or are written outside the loop. Type `_` for a subscript and `^` for a superscript (L_nPd^0, Pd^{II}); formula digits drop by themselves. Select structures first and they become the first loop's species. Everything drawn is ordinary text and arrows, so you can retype it, swap text for a drawn structure, then tidy it again with **Arrange Scheme ▸ Catalytic cycle**. The step names are remembered as sitting inside the loop, in CDXML too.
-- **Energy Diagram…**: draws a reaction energy diagram from a table: one row per species along the reaction coordinate, and a name and an energy column for each pathway (add pathways to compare routes, each in its own colour; leave an energy empty where a pathway has nothing). Choose levels joined by dashed lines or a smooth curve, the axis quantity and unit (ΔG, ΔG°, ΔH, E, ΔE; kcal/mol, kJ/mol, eV), decimal places, the size, whether energies show, the axis, and marking the largest barrier on each pathway (ΔG‡ from the lowest point up to the highest after it). A species two pathways share is drawn once, in black. Double-click the diagram (or **Edit Energy Diagram…** in the Style panel or right-click menu) to change the numbers; the Style panel also switches the style and the extras straight away. Drag a corner to resize it and it is drawn again to fill the box. Structures you draw on it stay when it is redrawn.
+- **Number Compounds…**: puts numbers under the structures in scheme order. Choose 1, 2, 3; 1a, 1b; a, b; A, B; i, ii or I, II; where to start; text before and after (S for S1, S2); bold; whether copies of one structure share a number (**Same structure, same ID**); whether to renumber or keep existing numbers; whether reagents over arrows get numbers; and whether the numbers in each row of a scheme line up on one line (on unless you turn it off). Each number is an ordinary caption you can retype. If two different structures end up with the same number, the Warnings panel says so.
+- **Catalytic Cycle…**: draws a catalytic cycle. Start from a ready-made one (Suzuki, Heck, Buchwald–Hartwig, Wilkinson hydrogenation, olefin metathesis, Monsanto, or two loops: Sonogashira's Pd and Cu cycles, Wacker's Pd and Cu cycles, Ni/Ir metallaphotoredox, neutral and cationic Heck sharing Pd(0), Pd(0)/Pd(II) beside Pd(II)/Pd(IV) C–H activation) or a blank one, and change the table: each species, the step to the next (oxidative addition, transmetalation…), what comes in and what goes out, and what sits in the middle. Two loops can turn together where two steps meet, share one species (drawn once, between them) or sit side by side. Choose clockwise or anticlockwise, short step names (OA, TM, RE), names in full or none, and whether reagents go on small curved arrows or are written outside the loop. Type `_` for a subscript and `^` for a superscript (L_nPd^0, Pd^{II}); formula digits drop by themselves. Select structures first and they become the first loop's species. Everything drawn is ordinary text and arrows, so you can retype it, swap text for a drawn structure, then tidy it again with **Chemistry ▸ Reactions and Schemes ▸ Arrange Scheme…** (Catalytic cycle). The step names are remembered as sitting inside the loop, in CDXML too.
+- **Energy Diagram…**: draws a reaction energy diagram from a table: one row per species along the reaction coordinate, and a name and an energy column for each pathway (add pathways to compare routes, each in its own colour; leave an energy empty where a pathway has nothing). Choose levels joined by dashed lines or a smooth curve, the axis quantity and unit (ΔG, ΔG°, ΔH, E, ΔE; kcal/mol, kJ/mol, eV), decimal places, the size, whether energies show, the axis, and marking the largest barrier on each pathway (ΔG‡ from the lowest point up to the highest after it). A species two pathways share is drawn once, in black. Double-click the diagram (or **Edit Energy Diagram…** in the Style panel or right-click menu) to change the numbers; the Style panel also switches the style and the extras straight away. Drag a corner to resize it and it is drawn again to fill the box. Structures you draw on it stay when it is redrawn. The window shows a preview that redraws as you type, and its **‡** button adds a double dagger to the species name you were last in.
 - **Transition State Brackets ‡**: square brackets round the selection with ‡ at the upper right.
-- **Show Reaction Roles**: marks how the program reads the scheme (starting materials, products, above and below the arrow).
+- **Show Reaction Roles**: marks how the program reads the scheme (starting materials, products, above and below the arrow). A scheme that wraps onto a second row is read as one: the first arrow of a row goes on from the last product of the row above, and it is saved to CDXML as one scheme.
 - **Scheme Settings…**: your defaults for schemes, kept between sessions. Distances are in points; leave one blank to scale it with the bond length (the grey number shows what that comes to).
   - **Gap between arrow and structures** and **Space either side of +**, used by Clean Up Reaction and Arrange Scheme.
   - **Show + boxes above and below new arrows**.
@@ -244,7 +263,7 @@ R/S and E/Z are worked out for every structure as you draw.
 
 ### Animating a reaction
 
-**Scheme ▸ Animate Reaction…** turns each structure of the scheme into the next as a short animation: atoms move to where they are in the product, bonds that break fade out and bonds that form fade in. It follows the arrows from the first step to the last; with structures selected it keeps to those, and with no arrows it takes the structures from left to right. Right-click a reaction arrow (or pick it and use **Scheme ▸ Animate This Step…**) to animate just that step. The animation is based on [cdxmorph](https://github.com/rshenvi/cdxmorph) by Ryan Shenvi (Shenvi Lab), used with permission.
+**Chemistry ▸ Animate ▸ Animate Reaction…** turns each structure of the scheme into the next as a short animation: atoms move to where they are in the product, bonds that break fade out and bonds that form fade in. It follows the arrows from the first step to the last; with structures selected it keeps to those, and with no arrows it takes the structures from left to right. Right-click a reaction arrow (or pick it and use **Chemistry ▸ Animate ▸ Animate This Step…**) to animate just that step. The animation is based on [cdxmorph](https://github.com/rshenvi/cdxmorph) by Ryan Shenvi (Shenvi Lab), used with permission.
 
 - The window shows a preview with **Play**, a slider to step through the frames, and the timing: seconds of movement, frames per second, how long it holds on the first and last structures and pauses on the ones in between, smooth or steady movement, and **Play back to the start** for a loop that never jumps. These are remembered.
 - **Steps** lists what each step does: how many atoms are paired and which bonds break and form, numbered as ChemDraw numbers the atoms.
@@ -274,13 +293,19 @@ Rest the mouse on an abbreviation or condensed label (OTBS, NHBoc, CO2Me, CH2OH)
 
 **File ▸ Drawing Style…** sets how structures are drawn in the tab showing: bond length, line, bold and margin widths, hash spacing, double bond spacing, chain angle, and the fonts and sizes of atom labels and captions.
 
-- **Start from** picks a built-in style: **ACS Document 1996** (every ACS journal), **RSC**, **Nature journals**, or **Slides (ACS 1996 × 2)**. The line under it says where the numbers come from.
+- **Start from** picks a built-in style: **ACS Document 1996** (every ACS journal), **RSC**, **Nature journals**, **Thieme (Synthesis, Synlett)**, **Wiley (Angewandte, Chemistry Europe)**, **Elsevier (Tetrahedron and others)**, or **Slides (ACS 1996 × 2)**. The line under it says where the numbers come from. Wiley and Elsevier publish only the text size and font, so their bonds are ACS 1996 scaled to 7 pt text; the note under the style says so.
 - Every number can be typed over. With **Change widths and font sizes with it** ticked, changing the bond length scales the rest in proportion.
 - **Save as My Style** keeps your settings under a name, in every mode. **Delete** removes one of your own.
 - When there are structures already, choose **Redraw the structures already there in the new style** or **Keep their look; only new structures use it**.
 - Tick **Use this style for new drawings** to make every new drawing start in it.
 
 Press **Apply**. One Undo puts everything back.
+
+## The page
+
+A drawing sits on a page, a sheet of paper whose edge shows as a thin line. **View ▸ Page Edge** hides or shows it.
+
+**File ▸ Page Setup…** picks the paper: Letter, A4, Legal, A3, Tabloid, your own size in inches, or no page (an endless drawing). The page drawn on is half an inch in from each edge of the paper. Choose **Portrait** or **Landscape**, and what happens when the drawing goes past the edge: **Add pages** adds more sheets (shown with dashed edges), and **Keep it on the page when saving** moves things back inside it when you save. Tick **Use this for new drawings** to make it the default. The page size is saved in the .cdxml file, so ChemDraw opens it on the same paper.
 
 ## Dark page
 
@@ -308,6 +333,10 @@ Buttons put text under the structure:
 
 Everything they insert is ordinary text you can change.
 
+A structure with R groups (R1, R2, X, Ar, also inside labels such as OR1) shows only its core: the formula is written C7H5O·R (core only), with no masses, since R could be anything. **R-Group Table…** works out each compound.
+
+With nothing selected, the panel shows the structure you last drew on. Clearing the selection (clicking empty space, or Undo back to nothing selected) clears the panel until you draw again.
+
 **Look up on PubChem** (needs the internet) sends the structure to PubChem, the free NIH database, and shows its common and IUPAC names, CAS number(s), its CID (click it to open the PubChem page), GHS hazards (signal word, pictograms and H statements) and measured physical data. **Name caption**, **CAS caption** and **Hazards caption** put that information under the structure. A structure is only sent when you click the button; nothing is looked up on its own.
 
 ## Mass fragmentation
@@ -316,7 +345,7 @@ Pick the mass fragmentation tool (the dashed line through a bond) and drag a lin
 
 ## Pictures and tables
 
-**Insert ▸ Picture…** puts a picture on the drawing (or drop a picture file on it). Drag a corner to resize it; it keeps its proportions unless you hold Alt. **Insert ▸ Crop Picture** crops it. **Insert ▸ Table…** adds an ACS-style table (rules above and below the heading row and under the last row) of the rows and columns you ask for; double-click a cell to type in it, and use the Style panel to change its lines, rows and columns.
+**Insert ▸ Picture…** puts a picture on the drawing (or drop a picture file on it). Drag a corner to resize it; it keeps its proportions unless you hold Alt. **Insert ▸ Crop Picture** crops it. **Insert ▸ Table…** adds an ACS-style table (rules above and below the heading row and under the last row) of the rows and columns you ask for; double-click a cell to type in it, and use the Style panel to change its lines, rows and columns (each column can line up left, centred or right; new tables start centred). Drag a structure into a cell to put it there: the cell grows to fit it, it sits centred at the top of the cell with any text under it, and it moves with the table. Drag it out to take it out of the cell.
 
 ## Colours and palettes
 

@@ -1,9 +1,13 @@
 // Design mode's own parts: the window that picks a page size, and the shape library on the left
-// (searchable, in groups, each shape drawn as a small picture). Clicking a shape picks it as the
+// (shapes and icons, searchable, in groups, each drawn as a small picture). Clicking a shape picks it as the
 // tool (click or drag on the page to place it); a shape can also be dragged straight onto the page.
 
 import { DESIGN_SIZES, SlideSize } from '../deck/deck';
 import { GEOS, GEO_GROUPS, GeoDef, traceSteps } from '../design/geo';
+import { ICON_CREDIT, findIcons, iconGroups, iconSvg, iconsLoaded, loadIcons, whenIconsLoaded } from '../design/icons';
+
+/** The library's two tabs. */
+export type LibraryTab = 'shapes' | 'icons';
 
 /** The type a library shape is dragged as. */
 export const GEO_DRAG_TYPE = 'application/x-chem-illustrator-geo';
@@ -185,30 +189,78 @@ export function drawGeoIcon(c: HTMLCanvasElement, def: GeoDef, px: number, colou
   }
 }
 
-/** The shape library on the left of Design mode. */
+/** How many icons are shown at a time (more with "Show more"). */
+const ICON_PAGE = 160;
+
+/**
+ * The shape library: on the left of Design mode, and under Insert > Shapes and Insert > Icons in
+ * Slides and Documents. Two tabs: the shapes (in groups) and the icons (a group at a time, or
+ * found by name). Both are searched from the same box.
+ */
 export class DesignLibrary {
   private search: HTMLInputElement;
   private body: HTMLDivElement;
+  private tabs: Record<LibraryTab, HTMLButtonElement>;
+  private groupPick: HTMLSelectElement;
   private active = '';
+  private tab: LibraryTab = 'shapes';
+  /** The icon group chosen in the list ('' for all); searches look in it only once one is chosen. */
+  private iconGroup = '';
+  private groupChosen = false;
+  private iconCount = ICON_PAGE;
 
   constructor(private el: HTMLElement, private pick: (id: string) => void) {
     el.classList.add('design-lib');
     const head = document.createElement('div');
     head.className = 'dl-head';
-    const h = document.createElement('h2');
-    h.textContent = 'Shapes';
+    const bar = document.createElement('div');
+    bar.className = 'dl-tabs';
+    bar.setAttribute('role', 'tablist');
+    const tab = (id: LibraryTab, label: string) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.setAttribute('role', 'tab');
+      b.textContent = label;
+      b.addEventListener('click', () => this.showTab(id));
+      bar.append(b);
+      return b;
+    };
+    this.tabs = { shapes: tab('shapes', 'Shapes'), icons: tab('icons', 'Icons') };
     this.search = document.createElement('input');
     this.search.type = 'search';
-    this.search.placeholder = 'Find a shape (e.g. flask, decision)';
-    this.search.setAttribute('aria-label', 'Find a shape');
-    this.search.addEventListener('input', () => this.build());
+    this.search.addEventListener('input', () => { this.iconCount = ICON_PAGE; this.build(); });
+    this.groupPick = document.createElement('select');
+    this.groupPick.className = 'dl-group';
+    this.groupPick.setAttribute('aria-label', 'Icon group');
+    this.groupPick.addEventListener('change', () => {
+      this.iconGroup = this.groupPick.value;
+      this.groupChosen = true;
+      this.iconCount = ICON_PAGE;
+      this.build();
+    });
     const tip = document.createElement('p');
     tip.className = 'muted small';
     tip.textContent = 'Click a shape, then click or drag on the page. Or drag it onto the page.';
-    head.append(h, this.search, tip);
+    head.append(bar, this.search, this.groupPick, tip);
     this.body = document.createElement('div');
     this.body.className = 'dl-body';
     el.replaceChildren(head, this.body);
+    whenIconsLoaded(() => this.fillGroups());
+    this.showTab('shapes');
+  }
+
+  /** Show the shapes or the icons. */
+  showTab(tab: LibraryTab): void {
+    this.tab = tab;
+    for (const [id, b] of Object.entries(this.tabs)) {
+      b.setAttribute('aria-selected', String(id === tab));
+      b.classList.toggle('active', id === tab);
+    }
+    const what = tab === 'icons' ? 'an icon (e.g. flask, atom, hazard)' : 'a shape (e.g. flask, decision)';
+    this.search.placeholder = `Find ${what}`;
+    this.search.setAttribute('aria-label', tab === 'icons' ? 'Find an icon' : 'Find a shape');
+    this.groupPick.hidden = tab !== 'icons';
+    if (tab === 'icons' && !iconsLoaded()) void loadIcons().then(() => this.build(), () => this.build());
     this.build();
   }
 
@@ -223,8 +275,45 @@ export class DesignLibrary {
     this.search.select();
   }
 
+  private fillGroups(): void {
+    const groups = iconGroups();
+    this.groupPick.replaceChildren(new Option('All icons', ''), ...groups.map((g) => new Option(g, g)));
+    if (!this.groupChosen) this.iconGroup = groups[0] ?? '';
+    this.groupPick.value = this.iconGroup;
+    if (this.tab === 'icons') this.build();
+  }
+
+  private words(): string[] {
+    return this.search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  }
+
   private build(): void {
-    const words = this.search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    this.body.replaceChildren(...(this.tab === 'icons' ? this.iconParts() : this.shapeParts()));
+  }
+
+  /** A button for a shape or icon: click to pick it, or drag it onto the page. */
+  private tile(id: string, name: string, picture: HTMLElement | string): HTMLButtonElement {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'dl-shape';
+    b.dataset.geo = id;
+    b.title = name;
+    b.setAttribute('aria-label', name);
+    b.draggable = true;
+    b.classList.toggle('active', id === this.active);
+    if (typeof picture === 'string') b.innerHTML = picture;
+    else b.append(picture);
+    b.addEventListener('click', () => this.pick(id));
+    b.addEventListener('dragstart', (e) => {
+      e.dataTransfer?.setData(GEO_DRAG_TYPE, id);
+      e.dataTransfer?.setData('text/plain', name);
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy';
+    });
+    return b;
+  }
+
+  private shapeParts(): HTMLElement[] {
+    const words = this.words();
     const found = GEOS.filter((g) => {
       const text = `${g.name} ${g.group} ${g.keywords ?? ''} ${g.id}`.toLowerCase();
       return words.every((w) => text.includes(w));
@@ -239,33 +328,63 @@ export class DesignLibrary {
       const grid = document.createElement('div');
       grid.className = 'dl-grid';
       for (const def of inGroup) {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'dl-shape';
-        b.dataset.geo = def.id;
-        b.title = def.name;
-        b.setAttribute('aria-label', def.name);
-        b.draggable = true;
-        b.classList.toggle('active', def.id === this.active);
         const c = document.createElement('canvas');
         drawGeoIcon(c, def, 34, colour);
-        b.append(c);
-        b.addEventListener('click', () => this.pick(def.id));
-        b.addEventListener('dragstart', (e) => {
-          e.dataTransfer?.setData(GEO_DRAG_TYPE, def.id);
-          e.dataTransfer?.setData('text/plain', def.name);
-          if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy';
-        });
-        grid.append(b);
+        grid.append(this.tile(def.id, def.name, c));
       }
       parts.push(h, grid);
     }
-    if (!parts.length) {
-      const p = document.createElement('p');
-      p.className = 'muted';
-      p.textContent = 'No shape has that name.';
-      parts.push(p);
+    // the icons that match too, a click away
+    const icons = words.length ? findIcons(words.join(' ')) : [];
+    if (icons.length) parts.push(this.link(`${icons.length === 1 ? 'An icon matches' : `${icons.length.toLocaleString()} icons match`} too: show ${icons.length === 1 ? 'it' : 'them'}`, () => {
+      this.iconGroup = '';
+      this.groupChosen = false;
+      this.groupPick.value = '';
+      this.showTab('icons');
+    }));
+    if (!parts.length) parts.push(this.note('No shape has that name.'));
+    return parts;
+  }
+
+  private iconParts(): HTMLElement[] {
+    if (!iconsLoaded()) return [this.note('Loading the icons…')];
+    const words = this.words();
+    // typing looks through every icon, unless a group was chosen from the list
+    const group = words.length && !this.groupChosen ? '' : this.iconGroup;
+    if (group !== this.groupPick.value) this.groupPick.value = group;
+    const found = findIcons(words.join(' '), group || undefined);
+    const parts: HTMLElement[] = [];
+    const h = document.createElement('h3');
+    h.textContent = `${group || (words.length ? 'Found' : 'All icons')} · ${found.length.toLocaleString()}`;
+    parts.push(h);
+    if (!found.length) parts.push(this.note(group ? `No icon in ${group} has that name.` : 'No icon has that name.'));
+    else {
+      const grid = document.createElement('div');
+      grid.className = 'dl-grid dl-icons';
+      for (const i of found.slice(0, this.iconCount)) grid.append(this.tile(i.id, i.name, iconSvg(i.id, 26)));
+      parts.push(grid);
+      if (found.length > this.iconCount) parts.push(this.link(`Show more (${(found.length - this.iconCount).toLocaleString()} left)`, () => { this.iconCount += ICON_PAGE * 2; this.build(); }));
     }
-    this.body.replaceChildren(...parts);
+    if (words.length && group) parts.push(this.link('Look in all the icons', () => { this.iconGroup = ''; this.groupChosen = true; this.build(); }));
+    const credit = this.note(ICON_CREDIT);
+    credit.classList.add('dl-credit');
+    parts.push(credit);
+    return parts;
+  }
+
+  private note(text: string): HTMLParagraphElement {
+    const p = document.createElement('p');
+    p.className = 'muted';
+    p.textContent = text;
+    return p;
+  }
+
+  private link(text: string, go: () => void): HTMLButtonElement {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'dl-more';
+    b.textContent = text;
+    b.addEventListener('click', go);
+    return b;
   }
 }

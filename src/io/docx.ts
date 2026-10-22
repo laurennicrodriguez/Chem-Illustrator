@@ -9,12 +9,15 @@ import type { Contents, ParaStyle, TableData } from '../model';
 import type { DocStyle } from '../style';
 import type { CiteStyle, Reference } from '../document/references';
 import type { CiteFormat } from '../document/cite-styles';
+import type { ChartBox } from '../sheet/chart-box';
 
 export const W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 export const WP_NS = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
 export const PIC_NS = 'http://schemas.openxmlformats.org/drawingml/2006/picture';
 /** Word 2010's shapes (text boxes), and the markup that lets older programs skip them. */
 export const WPS_NS = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape';
+/** Word 2010's groups of shapes. */
+export const WPG_NS = 'http://schemas.microsoft.com/office/word/2010/wordprocessingGroup';
 export const MC_NS = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
 /** Office Math: Word's equations. */
 export const M_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/math';
@@ -53,11 +56,31 @@ export const DOCX_REL = {
   comments: R + 'comments',
   /** Word 2013's part saying which comments are replies, and which are resolved. */
   commentsExtended: 'http://schemas.microsoft.com/office/2011/relationships/commentsExtended',
+  /** Word 365's parts giving each comment a lasting id, and that id its time in UTC. */
+  commentsIds: 'http://schemas.microsoft.com/office/2016/09/relationships/commentsIds',
+  commentsExtensible: 'http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible',
 };
 
 /** Word 2010's and 2013's additions (paragraph ids, and the comments' replies and Resolved marks). */
 export const W14_NS = 'http://schemas.microsoft.com/office/word/2010/wordml';
 export const W15_NS = 'http://schemas.microsoft.com/office/word/2012/wordml';
+export const W16CID_NS = 'http://schemas.microsoft.com/office/word/2016/wordml/cid';
+export const W16CEX_NS = 'http://schemas.microsoft.com/office/word/2018/wordml/cex';
+
+/**
+ * Word's w:date is the writer's local clock time, though it ends in Z (the real UTC time, when
+ * there is one, is in commentsExtensible.xml). These convert between that and an ISO date.
+ */
+export function toWordDate(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}Z`;
+}
+export function fromWordDate(s: string): string {
+  const d = new Date(s.replace(/Z$/i, ''));
+  return isNaN(d.getTime()) ? s : d.toISOString();
+}
 
 /** Names Word's pictures of our drawings carry (kept by Word), so each can be found again. */
 export const DRAWING_NAME = 'Chem Illustrator drawing';
@@ -81,7 +104,12 @@ export interface DocxModel {
   citeOptions?: Partial<CiteFormat>;
   /** Each bibliography by its id: the text written (to tell whether Word changed it) and its paragraph's settings. */
   bibliographies?: Record<number, { text: string; ps: ParaStyle }>;
+  /** Each chart by its id, as made here (used when Word's copy charts the same numbers). */
+  charts?: Record<number, ChartBox>;
 }
+
+/** The name of a chart's frame in Word ("Chart 4", 4 its id in our part). */
+export const CHART_NAME = 'Chart';
 
 /** The field instruction of a citation: Word shows the numbers written as its result and leaves them alone. */
 export const CITE_FIELD = 'ADDIN CHEMILLUSTRATOR_CITE';

@@ -28,6 +28,7 @@ import type { Measure } from '../text/layout';
 import { colourButton } from './colour-picker';
 import { centreEnd, haptoText, splitHapto } from '../chem/hapto';
 import type { EnergyData } from '../design/energy';
+import { DIAGRAM_COLOURS, DIAGRAM_LAYOUTS, type DiagramData } from '../design/diagrams';
 
 /** What the table controls need from the editor. */
 export interface TableHooks {
@@ -99,7 +100,7 @@ export class StylePanel {
   cropWithMouse: (shapeId: number) => void = () => {};
   /** Frames (set up by the app): add one round the selection, or fit a box round what is inside it. */
   frames: { add(): void; fit(shapeId: number): void } | null = null;
-  /** A highlight colour was chosen (the app remembers it for Structure > Highlight). */
+  /** A highlight colour was chosen (the app remembers it for Chemistry > Highlight and Fill > Highlight). */
   highlightUsed: (colour: string) => void = () => {};
   /** The look last chosen for highlights (new highlights take it). */
   highlightStyleUsed: (style: HighlightStyle) => void = () => {};
@@ -117,8 +118,13 @@ export class StylePanel {
   reaction: ReactionHooks | null = null;
   /** Energy diagrams (set up by the app): open the window, or redraw with some settings changed. */
   energy: { edit(shapeId: number): void; restyle(shapeId: number, patch: Partial<EnergyData>): void } | null = null;
+  /** SmartArt-style diagrams: the window with their text, a change of layout or look, and Convert to Shapes. */
+  diagram: { edit(shapeId: number): void; restyle(shapeId: number, patch: Partial<DiagramData>): void; ungroup(shapeId: number): void } | null = null;
   /** Tie captions to the structure nearest each (Tie to Structure). */
   tie: ((captionIds: number[]) => void) | null = null;
+
+  /** Open a chart's data and settings (Edit chart…). */
+  onEditChart: (id: number) => void = () => {};
 
   constructor(private section: HTMLElement, private body: HTMLElement, private doc: Doc, private sel: () => Selection, private changed: () => void) {}
 
@@ -150,18 +156,27 @@ export class StylePanel {
     // one atom or one bond on its own (as after / or ? over it)
     const atom = s.atoms.size === 1 && !s.bonds.size ? this.doc.atoms.get([...s.atoms][0]) : undefined;
     const bond = s.bonds.size === 1 && s.atoms.size <= 2 ? this.doc.bonds.get([...s.bonds][0]) : undefined;
-    this.section.hidden = !arrows.length && !shapes.length && !rings.length && !pictures.length && !tables.length && !caps.length && !centres.length && !dbls.length && !atom && !bond;
     const selAtoms = [...s.atoms].map((id) => this.doc.atoms.get(id)).filter((a): a is Atom => !!a);
     const selBonds = [...s.bonds].map((id) => this.doc.bonds.get(id)).filter((b): b is Bond => !!b);
     const several = !atom && !bond && selAtoms.length + selBonds.length > 1;
-    if (several) this.section.hidden = false;
+    // the section stays in its place with nothing selected, so Warnings and Analysis don't jump
+    const empty = !arrows.length && !shapes.length && !rings.length && !pictures.length && !tables.length && !caps.length && !centres.length && !dbls.length && !atom && !bond && !several;
+    this.section.hidden = false;
+    this.section.classList.toggle('empty', empty);
+    if (empty) {
+      const p = document.createElement('p');
+      p.className = 'muted';
+      p.textContent = 'Select something to change how it looks.';
+      this.body.append(p);
+    }
     if (atom) this.atomControls(atom);
     if (bond) this.bondControls(bond);
     if (several) this.structureControls(selAtoms, selBonds);
     if (arrows.length) this.arrowControls(arrows);
     // an energy diagram is a frame drawn from its numbers: its own section, not a rectangle's
-    const diagram = all.length === 1 && all[0].energy ? all[0] : undefined;
-    if (diagram) this.energyControls(diagram);
+    const diagram = all.length === 1 && (all[0].energy || all[0].diagram) ? all[0] : undefined;
+    if (diagram?.energy) this.energyControls(diagram);
+    else if (diagram?.diagram) this.diagramControls(diagram);
     else if (shapes.length) this.shapeControls(shapes);
     if (rings.length) this.shapeControls(rings, rings.length > 1 ? `${rings.length} ring fills` : 'Ring fill');
     if (pictures.length) this.pictureControls(pictures);
@@ -171,13 +186,13 @@ export class StylePanel {
     const boxes = shapes.filter((x) => x.kind === 'rect' || x.kind === 'oval' || x.kind === 'geo');
     if (diagram) { /* the diagram keeps its own frame fitted */ }
     else if (boxes.length === 1 && all.length === 1 && !caps.length && !arrows.length && !s.atoms.size) this.frameControls(boxes[0]);
-    else if (!this.section.hidden && this.frames) {
+    else if (!empty && this.frames) {
       const row = document.createElement('div');
       row.className = 'style-buttons';
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = 'Add frame';
-      b.title = 'Draw a box round the selection that grows and moves with it (Structure > Add Frame)';
+      b.title = 'Draw a box round the selection that grows and moves with it (Chemistry > Labels and Numbers > Add Frame)';
       b.addEventListener('click', () => this.frames?.add());
       row.append(b);
       this.body.append(row);
@@ -326,7 +341,10 @@ export class StylePanel {
     const isGeo = (x: Shape) => x.kind === 'geo';
     if (geo) {
       // another shape from the library, keeping the size, colours and text
-      this.select('Shape', GEOS.map((g): Opt<string> => [g.id, `${g.name} (${g.group.toLowerCase()})`]), geoDef(geo.geo).id, (v) => set('Change shape', isGeo, () => ({ geo: v })));
+      // (an icon is listed too, so it can be swapped for a shape and back)
+      const own = geoDef(geo.geo);
+      const opts = [...(own.icon ? [own] : []), ...GEOS].map((g): Opt<string> => [g.id, `${g.name} (${g.group.toLowerCase()})`]);
+      this.select('Shape', opts, own.id, (v) => set('Change shape', isGeo, () => ({ geo: v })));
     }
     const lined = (x: Shape) => x.kind !== 'symbol' && x.kind !== 'ring';
     const l = any(lined);
@@ -426,6 +444,37 @@ export class StylePanel {
     this.body.append(row);
   }
 
+  // ------------------------------------------------------------------ SmartArt-style diagrams
+
+  /** A diagram: its layout and look, the window with its text, and Convert to Shapes. */
+  private diagramControls(sh: Shape): void {
+    const d = sh.diagram!;
+    this.heading('Diagram');
+    const set = (patch: Partial<DiagramData>) => this.diagram?.restyle(sh.id, patch);
+    this.select('Layout', DIAGRAM_LAYOUTS.map((l) => [l.id, `${l.category}: ${l.name}`] as [string, string]), d.layout, (v) => set({ layout: v }));
+    this.select('Colours', DIAGRAM_COLOURS, d.colours, (v) => set({ colours: v }));
+    if (d.colours !== 'colourful' && d.colours !== 'mono' && d.colours !== 'grey') this.color('Accent colour', d.accent, (v) => set({ accent: v ?? '#4472c4' }), 'Blue', '#4472c4');
+    this.check('Rounded corners', d.rounded, (v) => set({ rounded: v }));
+    this.check('Shadow', d.shadow, (v) => set({ shadow: v }));
+    this.check('Fit the text', d.size === undefined, (v) => set({ size: v ? undefined : 14 }), 'The text as big as fits, the same size in every shape; off, a size of your own');
+    if (d.size !== undefined) this.number('Text size', d.size, 1, 4, 96, (v) => set({ size: v }));
+    this.note('Double-click a shape to type in it, or change all the text in the window. Drag a corner to resize it: it is drawn again to fill the box.');
+    const row = document.createElement('div');
+    row.className = 'style-buttons';
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = 'Edit Diagram…';
+    b.title = 'Change the text, one item per line (or double-click away from the words)';
+    b.addEventListener('click', () => this.diagram?.edit(sh.id));
+    const u = document.createElement('button');
+    u.type = 'button';
+    u.textContent = 'Convert to Shapes';
+    u.title = 'Make it ordinary shapes and connectors, to change one by one (it is no longer drawn from its text)';
+    u.addEventListener('click', () => this.diagram?.ungroup(sh.id));
+    row.append(b, u);
+    this.body.append(row);
+  }
+
   // ------------------------------------------------------------------ frames
 
   /** A box: as a frame, the gap it keeps round what it surrounds and whether it follows them. */
@@ -468,9 +517,11 @@ export class StylePanel {
     const p = pics[0];
     const set = (label: string, patch: (x: Shape) => Partial<Shape>) => this.edit(label, () => { for (const x of pics) this.doc.updateShape(x.id, patch(x)); });
     const box = (x: Shape) => ({ x1: Math.min(x.x1, x.x2), y1: Math.min(x.y1, x.y2), w: Math.abs(x.x2 - x.x1), h: Math.abs(x.y2 - x.y1) });
-    this.heading(pics.length > 1 ? `${pics.length} pictures` : 'Picture');
+    const charts = pics.every((x) => x.chart);
+    this.heading(charts ? (pics.length > 1 ? `${pics.length} charts` : 'Chart') : pics.length > 1 ? `${pics.length} pictures` : 'Picture');
     // vector pictures (SVG, Windows metafiles) have no pixels to count
-    if (pics.length === 1 && p.video && p.px) this.note(`MP4 video, ${p.px.w} × ${p.px.h} pixels. It plays in the slide show and in PowerPoint.`);
+    if (charts) this.note('A chart with its own data. Double-click it to change the data, the kind of chart and its look; resizing it lays it out again.');
+    else if (pics.length === 1 && p.video && p.px) this.note(`MP4 video, ${p.px.w} × ${p.px.h} pixels. It plays in the slide show and in PowerPoint.`);
     else if (pics.length === 1 && p.px) this.note(/^data:image\/(svg|x-emf)/.test(p.src ?? '') ? pictureType(p.src) : `${pictureType(p.src)}, ${p.px.w} × ${p.px.h} pixels`);
     // sizes change from the top left corner, as in PowerPoint's size boxes
     const size = (w: number | null, h: number | null) => set('Resize picture', (x) => {
@@ -484,6 +535,18 @@ export class StylePanel {
     this.number('Width (pt)', round(b.w, 10), 1, 1, 20000, (v) => size(v, null));
     this.number('Height (pt)', round(b.h, 10), 1, 1, 20000, (v) => size(null, v));
     this.check('Keep proportions', this.keepProportions, (v) => { this.keepProportions = v; });
+    if (charts) {
+      this.pictureLook(pics);
+      if (pics.length === 1) {
+        const buttons = document.createElement('div');
+        buttons.className = 'style-buttons';
+        const btn = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Edit chart…', title: 'Its data, the kind of chart, titles, axes, colours and fitted lines' });
+        btn.addEventListener('click', () => this.onEditChart(p.id));
+        buttons.append(btn);
+        this.body.appendChild(buttons);
+      }
+      return;
+    }
     const c = p.crop ?? { l: 0, t: 0, r: 0, b: 0 };
     const sides: [keyof typeof c, string][] = [['l', 'Crop left (%)'], ['t', 'Crop top (%)'], ['r', 'Crop right (%)'], ['b', 'Crop bottom (%)']];
     for (const [k, label] of sides) {
@@ -779,14 +842,14 @@ export class StylePanel {
     this.select<HighlightShape>('Highlight shape', HL_SHAPES, st.shape, (v) => set('Highlight shape', { shape: v }));
     // straight highlights are always one even band; round ones can have a disc on each atom
     if (st.shape === 'round') this.check('Smooth outline', st.smooth, (v) => set(v ? 'Smooth highlight' : 'Highlight with discs', { smooth: v }),
-      'One even band along the bonds, with no disc bulging out at each atom (Structure > Smooth Highlight).');
+      'One even band along the bonds, with no disc bulging out at each atom (Chemistry > Highlight and Fill > Smooth Highlight).');
     else this.select<HighlightEnds>('Highlight ends', HL_ENDS, st.ends, (v) => set('Highlight ends', { ends: v }));
     this.number('Highlight size (%)', pct(st.size), 10, 20, 400, (v) => set('Highlight size', { size: v / 100 }),
       '100% is the usual size; larger for a bolder highlight.');
 
     this.group('Placement', [st.centre && 'centred', !st.fit && 'labels not held'].filter(Boolean).join(', ') || 'on the bonds', () => {
       this.check('Centre on double bonds', st.centre, (v) => set(v ? 'Centre highlight on double bonds' : 'Highlight on the bonds', { centre: v }),
-        'Run the highlight midway between a double bond\'s two lines, and round a ring midway between the ring and its inner double-bond lines (Structure > Centre Highlight on Double Bonds).');
+        'Run the highlight midway between a double bond\'s two lines, and round a ring midway between the ring and its inner double-bond lines (Chemistry > Highlight and Fill > Centre Highlight on Double Bonds).');
       this.check('Grow round atom labels', st.fit, (v) => set(v ? 'Highlight round labels' : 'Highlight not round labels', { fit: v }),
         'Make the highlight under a labelled atom (Me, OTBS, CO2Et) big enough to hold its whole label.');
     });
@@ -815,11 +878,11 @@ export class StylePanel {
         this.color('Line colour', st.lineColour || undefined, (v) => set('Highlight outline colour', { lineColour: v ?? '' }), 'A darker shade', '#808080');
         this.number('Line width (pt)', st.lineWidth, 0.25, 0.25, 10, (v) => set('Highlight outline width', { lineWidth: v }));
       }
-      if (st.fill !== 'none') this.note('For an outline on its own, set Fill to None (Structure > Outline-Only Highlight).');
+      if (st.fill !== 'none') this.note('For an outline on its own, set Fill to None (Chemistry > Highlight and Fill > Outline-Only Highlight).');
     });
 
     this.group('Soft edges', st.soft ? `${pct(st.softAmount)}%, ${HL_SOFT_SIDES.find(([v]) => v === st.softSide)![1].split(' (')[0].toLowerCase()}` : 'off', () => {
-      this.check('Soft edges', st.soft, (v) => set(v ? 'Soft highlight' : 'Sharp highlight', { soft: v }), 'Fade the highlight out instead of a sharp edge (Structure > Soft Highlight Edges).');
+      this.check('Soft edges', st.soft, (v) => set(v ? 'Soft highlight' : 'Sharp highlight', { soft: v }), 'Fade the highlight out instead of a sharp edge (Chemistry > Highlight and Fill > Soft Highlight Edges).');
       if (st.soft) {
         this.number('How much fades (%)', pct(st.softAmount), 5, 5, 100, (v) => set('Soft edge amount', { softAmount: v / 100 }),
           'How much of the band fades, measured from its edge in to its middle: 25% fades only the outer quarter');
@@ -828,7 +891,7 @@ export class StylePanel {
     });
 
     this.group('Shadow', st.shadow ? `${pct(st.shadowOpacity)}%${st.shadowBlur > 0 ? ', blurred' : ''}` : 'off', () => {
-      this.check('Shadow', st.shadow, (v) => set(v ? 'Highlight shadow' : 'No highlight shadow', { shadow: v }), 'A drop shadow under the highlight (Structure > Highlight Shadow).');
+      this.check('Shadow', st.shadow, (v) => set(v ? 'Highlight shadow' : 'No highlight shadow', { shadow: v }), 'A drop shadow under the highlight (Chemistry > Highlight and Fill > Highlight Shadow).');
       if (st.shadow) this.shadowRows(
         { colour: st.shadowColour, opacity: st.shadowOpacity, angle: st.shadowAngle, distance: pct(st.shadowDistance), blur: pct(st.shadowBlur) }, '% of a bond',
         (p) => set('Highlight shadow', {
@@ -838,7 +901,7 @@ export class StylePanel {
     });
 
     this.group('Glow', st.glow ? `${pct(st.glowSize)}%` : 'off', () => {
-      this.check('Glow', st.glow, (v) => set(v ? 'Highlight glow' : 'No highlight glow', { glow: v }), 'A soft halo of colour round the outside (Structure > Highlight Glow).');
+      this.check('Glow', st.glow, (v) => set(v ? 'Highlight glow' : 'No highlight glow', { glow: v }), 'A soft halo of colour round the outside (Chemistry > Highlight and Fill > Highlight Glow).');
       if (st.glow) {
         this.color('Glow colour', st.glowColour || undefined, (v) => set('Glow colour', { glowColour: v ?? '' }), 'The highlight\'s', '#ffe680');
         this.number('Glow size (% of a bond)', pct(st.glowSize), 1, 1, 200, (v) => set('Glow size', { glowSize: v / 100 }));
@@ -851,7 +914,7 @@ export class StylePanel {
     const save = document.createElement('button');
     save.type = 'button';
     save.textContent = 'Save look…';
-    save.title = 'Keep this highlight\'s look (and colour) under a name, to use again in any drawing (Structure > Save Highlight Look)';
+    save.title = 'Keep this highlight\'s look (and colour) under a name, to use again in any drawing (Chemistry > Highlight and Fill > Save Highlight Look)';
     save.addEventListener('click', () => this.highlightLooks.save());
     row.append(save);
     this.body.append(row);
@@ -913,7 +976,7 @@ export class StylePanel {
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = 'Fill rings';
-      b.title = 'Colour in, shade or hatch the rings in the selection (Structure > Fill Rings)';
+      b.title = 'Colour in, shade or hatch the rings in the selection (Chemistry > Highlight and Fill > Fill Rings)';
       b.addEventListener('click', () => this.ringFill?.());
       row.append(b);
       this.body.append(row);
@@ -921,7 +984,7 @@ export class StylePanel {
     this.methylControls(atoms.map((a) => a.id));
   }
 
-  /** Terminal methyls among these atoms: not written out, CH3 or Me (Structure > Show Terminal Methyls). */
+  /** Terminal methyls among these atoms: not written out, CH3 or Me (Chemistry > Show Terminal Methyls). */
   private methylControls(ids: number[]): void {
     // (no atoms would mean the whole drawing to the methyl commands)
     const now = ids.length ? methylState(this.doc, ids) : 'none';

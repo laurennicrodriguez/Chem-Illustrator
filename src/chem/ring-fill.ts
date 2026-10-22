@@ -1,4 +1,4 @@
-// Ring fills (Structure > Fill Rings): a ring coloured in, shaded, hatched or stippled behind its
+// Ring fills (Chemistry > Highlight and Fill > Fill Rings): a ring coloured in, shaded, hatched or stippled behind its
 // bonds. The fill is a shape tied to the ring's atoms: it follows them when they move, and goes
 // when one of them is deleted.
 

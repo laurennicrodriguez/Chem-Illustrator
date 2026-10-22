@@ -22,6 +22,14 @@ export const ROTATE = drawn(
   '<path d="M19.6 3.6 L19.4 9.6 L13.6 8.6 Z" fill="#000" stroke="#fff" stroke-width="1" stroke-linejoin="round"/>',
   12, 12, 'grab');
 
+/** Over the handle in the middle of an arrow (or an S-arrow's control point): an arc with arrows to bend it either way. */
+export const BEND = drawn(
+  '<path d="M4 17 Q12 5 20 17" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"/>' +
+  '<path d="M4 17 Q12 5 20 17" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round"/>' +
+  '<path d="M12 2.5 L12 15.5 M9.5 5 L12 2.5 L14.5 5 M9.5 13 L12 15.5 L14.5 13" fill="none" stroke="#fff" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>' +
+  '<path d="M12 2.5 L12 15.5 M9.5 5 L12 2.5 L14.5 5 M9.5 13 L12 15.5 L14.5 13" fill="none" stroke="#2f6fdf" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+  12, 11, 'grab');
+
 /** The eraser: a rubber block, rubbing out at its lower left tip. */
 export const ERASER = drawn(
   '<path d="M4 17 L13 6.5 L20 12.5 L12.5 21 L7.5 21 Z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/>' +
@@ -35,10 +43,10 @@ export function handleCursor(which: HandleId): string {
     case 'e': case 'w': return 'ew-resize';
     case 'ne': case 'sw': return 'nesw-resize';
     case 'nw': case 'se': return 'nwse-resize';
-    case 'mid': return 'grab';
+    case 'mid': return BEND;
     default:
       // a control point of an S-shaped arrow bends it, as its middle does an arc
-      if (which[0] === 'b') return 'grab';
+      if (which[0] === 'b') return BEND;
       return 'move'; // an arrow's or line's end: it goes wherever it is dragged
   }
 }

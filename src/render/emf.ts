@@ -5,6 +5,7 @@
 // Coordinates are kept in hundredths of a point, so the picture is exactly the drawing's size
 // (ChemDraw's 14.4 pt bonds come out 14.4 pt long in Word).
 
+import { deflateSync, inflateSync } from 'fflate';
 import { Item, Seg, parseColor } from './vector';
 
 const UNIT = 100; // logical units per point
@@ -249,4 +250,64 @@ function colorRef(css: string): number | null {
 function fontName(family: string): string {
   const f = family.trim();
   return !f || /^(sans-serif|system-ui|helvetica)$/i.test(f) ? 'Arial' : f.slice(0, 31);
+}
+
+// ---------------------------------------------------------------- the drawing inside the picture
+
+const EMR_COMMENT = 70;
+/** Starts our comment record's data; then a format number, the packed text's length and the packed text. */
+const DRAWING_MARK = new TextEncoder().encode('ChemIllustrator CDXML');
+
+/**
+ * The picture with the drawing it shows tucked inside, as a private comment record ([MS-EMF]
+ * 2.3.3.1: programs that show the picture skip it). Word and PowerPoint keep the picture as it
+ * was pasted, so the structure can come back when the picture is copied out of them again.
+ */
+export function withDrawing(emf: Uint8Array, cdxml: string): Uint8Array {
+  const v = new DataView(emf.buffer, emf.byteOffset, emf.byteLength);
+  if (emf.length < 88 || v.getUint32(0, true) !== 1 || v.getUint32(40, true) !== 0x464d4520) return emf;
+  const packed = deflateSync(new TextEncoder().encode(cdxml), { level: 9 });
+  const dataSize = DRAWING_MARK.length + 8 + packed.length;
+  const size = 12 + Math.ceil(dataSize / 4) * 4;
+  const headerSize = v.getUint32(4, true);
+  const out = new Uint8Array(emf.length + size);
+  const o = new DataView(out.buffer);
+  out.set(emf.subarray(0, headerSize), 0);
+  o.setUint32(headerSize, EMR_COMMENT, true);
+  o.setUint32(headerSize + 4, size, true);
+  o.setUint32(headerSize + 8, dataSize, true);
+  out.set(DRAWING_MARK, headerSize + 12);
+  o.setUint32(headerSize + 12 + DRAWING_MARK.length, 1, true);
+  o.setUint32(headerSize + 16 + DRAWING_MARK.length, packed.length, true);
+  out.set(packed, headerSize + 20 + DRAWING_MARK.length);
+  out.set(emf.subarray(headerSize), headerSize + size);
+  // the header's file size and record count
+  o.setUint32(48, out.length, true);
+  o.setUint32(52, v.getUint32(52, true) + 1, true);
+  return out;
+}
+
+/** The drawing tucked inside a picture by withDrawing (as CDXML text), or null when there is none. */
+export function drawingInEmf(emf: Uint8Array): string | null {
+  try {
+    const v = new DataView(emf.buffer, emf.byteOffset, emf.byteLength);
+    if (emf.length < 88 || v.getUint32(0, true) !== 1 || v.getUint32(40, true) !== 0x464d4520) return null;
+    for (let at = 0; at + 12 <= emf.length;) {
+      const type = v.getUint32(at, true), size = v.getUint32(at + 4, true);
+      if (size < 8 || at + size > emf.length || type === 14) return null;
+      if (type === EMR_COMMENT) {
+        const data = emf.subarray(at + 12, at + 12 + Math.min(v.getUint32(at + 8, true), size - 12));
+        if (data.length > DRAWING_MARK.length + 8 && DRAWING_MARK.every((b, i) => data[i] === b)) {
+          const d = new DataView(data.buffer, data.byteOffset, data.byteLength);
+          const n = d.getUint32(DRAWING_MARK.length + 4, true);
+          const packed = data.subarray(DRAWING_MARK.length + 8, DRAWING_MARK.length + 8 + n);
+          return new TextDecoder().decode(inflateSync(packed));
+        }
+      }
+      at += size;
+    }
+  } catch {
+    // damaged or cut short: just a picture
+  }
+  return null;
 }

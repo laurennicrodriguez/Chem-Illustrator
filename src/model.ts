@@ -7,6 +7,8 @@ import { DocStyle, ACS_1996 } from './style';
 import { arrowPoints, gluePoint } from './objects';
 import { followPins } from './chem/pins';
 import type { EnergyData } from './design/energy';
+import type { DiagramData } from './design/diagrams';
+import type { ChartBox } from './sheet/chart-box';
 import { isMetal, isMetalLabel, lowestValence } from './chem/elements';
 import { NICKNAMES } from './chem/labels';
 
@@ -27,6 +29,8 @@ export type DoublePos = 'auto' | 'left' | 'right' | 'center';
 
 export interface Atom {
   id: number;
+  /** The group it belongs to (Format > Group); things with the same number move and select together. */
+  grp?: number;
   x: number;
   y: number;
   /** Atomic number; 6 for carbon. Ignored for display when `label` is set. */
@@ -44,14 +48,16 @@ export interface Atom {
   s?: number;
   /** A 3-D position kept from a file (ChemDraw's xyz on a structure built from a crystal file). */
   xyz?: [number, number, number];
-  /** A contracted label: the group it stands for, as SMILES from the atom where it joins (Structure > Contract Label). */
+  /** A contracted label: the group it stands for, as SMILES from the atom where it joins (Chemistry > Contract Label). */
   group?: string;
   /** A carbon shown with its letter and hydrogens (CH3 at a chain end; ChemDraw's ShowTerminalCarbonLabels). */
   showCarbon?: boolean;
   /** The charge is drawn by a separate circled-charge symbol, so the label leaves it out. */
   hideCharge?: boolean;
-  /** Numbers after R groups are superscripts (R¹ rather than R₁). */
+  /** Numbers after R groups are superscripts (R¹ rather than R₁); false keeps them down. Not set: R1, R12… go up, as the preferences say. */
   supDigits?: boolean;
+  /** Characters of the label raised or lowered by hand, one mark per character ("^" up, "_" down, "=" on the line). */
+  labelMarks?: string;
   /** Show this atom's R/S label when it has one (ChemDraw's "Show Stereochemistry"). */
   showStereo?: boolean;
   /** Where the stereo label sits (relative to the atom), and its text as saved or typed by hand. */
@@ -293,6 +299,8 @@ export interface ParaStyle {
 
 export interface Caption {
   id: number;
+  /** The group it belongs to (Format > Group); things with the same number move and select together. */
+  grp?: number;
   /** Left end of the first line's baseline (for centred/right text, of the line box). */
   x: number;
   y: number;
@@ -430,6 +438,8 @@ export type ArrowHead = 'none' | 'full' | 'halfLeft' | 'halfRight';
 
 export interface Arrow {
   id: number;
+  /** The group it belongs to (Format > Group); things with the same number move and select together. */
+  grp?: number;
   tail: Vec;
   head: Vec;
   headStyle: ArrowHead;
@@ -461,7 +471,7 @@ export interface Arrow {
   to?: Glue;
   /** Drawn with right-angled bends (an elbow connector). */
   elbow?: boolean;
-  /** How this step animates (Scheme > Animate Reaction): the atom pairing and moves chosen for it. */
+  /** How this step animates (Chemistry > Animate > Animate Reaction): the atom pairing and moves chosen for it. */
   morph?: MorphStep;
   /**
    * A curved arrow drawn along Bézier curves instead of an arc (an S-shaped arrow: one curve
@@ -473,6 +483,8 @@ export interface Arrow {
   bez?: Vec[];
   /** What an electron-pushing arrow's ends are stuck to, so they follow the structure when it moves. */
   pin?: { tail?: Pin; head?: Pin };
+  /** Bent by hand: it keeps its curve when the structure changes, rather than finding its own way round. */
+  bent?: boolean;
 }
 
 /**
@@ -532,9 +544,11 @@ export type Pattern = 'hatch' | 'backhatch' | 'crosshatch' | 'horizontal' | 'ver
 
 export interface Shape {
   id: number;
+  /** The group it belongs to (Format > Group); things with the same number move and select together. */
+  grp?: number;
   kind: 'line' | 'rect' | 'oval' | 'symbol' | 'bracket' | 'picture' | 'table' | 'geo' | 'ring';
   /**
-   * A ring's fill (Structure > Fill Rings): the ring's atoms in order. The fill follows them, and
+   * A ring's fill (Chemistry > Highlight and Fill > Fill Rings): the ring's atoms in order. The fill follows them, and
    * goes when one of them goes. `poly` is where their centres were at the last change.
    */
   ring?: number[];
@@ -635,13 +649,20 @@ export interface Shape {
   /** A table: its cells, column widths and rules (see table.ts). */
   table?: TableData;
   /**
-   * A frame round other things (Structure > Add Frame): what it surrounds (whole structures for
+   * A picture that is a chart (Insert > Chart): the chart and its data, drawn live in the
+   * picture's box; `src` is a copy of it as a bitmap for programs that can't draw charts.
+   */
+  chart?: ChartBox;
+  /**
+   * A frame round other things (Chemistry > Labels and Numbers > Add Frame): what it surrounds (whole structures for
    * the atoms), the gap it keeps round them in points, and whether it follows them (grows,
    * shrinks and moves as they change). Moving or resizing the frame by hand stops it following.
    */
   frame?: Frame;
   /** An energy diagram's numbers and look, kept on the invisible frame round its drawing (design/energy.ts). */
   energy?: EnergyData;
+  /** A SmartArt-style diagram's text and look, kept on the invisible frame round its shapes (design/diagrams.ts). */
+  diagram?: DiagramData;
 }
 
 /**
@@ -696,6 +717,8 @@ export interface TableCell {
   fill?: string;
   /** Documents: where the text sits up and down in a cell taller than it (top when left out). */
   valign?: 'center' | 'bottom';
+  /** Drawings: room kept at the top of the cell for a structure dropped into it (its width and height, in points). */
+  fig?: { w: number; h: number };
 }
 
 /**
@@ -718,6 +741,44 @@ export interface TableData {
   /** The title above the table ("Table 1. Optimization of…") and the footnotes below it. */
   title?: TextRun[];
   notes?: TextRun[];
+}
+
+/** A drawing's page: the drawing area of one sheet of paper (inside its margins), in points. */
+export interface PageSetup {
+  w: number;
+  h: number;
+  /** The paper's name (Letter, A4…), for the Page Setup window. */
+  name?: string;
+  /** More pages are added when the drawing goes past the page; otherwise it is kept on the page when saved. */
+  grow: boolean;
+}
+
+/** Paper sizes, as the area ChemDraw draws on (the paper less half-inch margins). */
+export const PAPER: { name: string; label: string; w: number; h: number }[] = [
+  { name: 'letter', label: 'US Letter (8.5 × 11 in)', w: 540, h: 720 },
+  { name: 'a4', label: 'A4 (210 × 297 mm)', w: 523, h: 770 },
+  { name: 'legal', label: 'US Legal (8.5 × 14 in)', w: 540, h: 936 },
+  { name: 'a3', label: 'A3 (297 × 420 mm)', w: 770, h: 1118 },
+  { name: 'tabloid', label: 'Tabloid (11 × 17 in)', w: 720, h: 1152 },
+];
+
+/**
+ * A drawing kept on its page (File > Page Setup without "add pages"): moved back onto the page
+ * where it has gone past it and fits, as one undoable step. False when it is too big to fit.
+ */
+export function keepOnPage(doc: Doc): boolean {
+  const p = doc.page, b = doc.bounds();
+  if (!p || p.grow || !b) return true;
+  if (b.x2 - b.x1 > p.w || b.y2 - b.y1 > p.h) return false;
+  const dx = b.x1 < 0 ? -b.x1 : b.x2 > p.w ? p.w - b.x2 : 0, dy = b.y1 < 0 ? -b.y1 : b.y2 > p.h ? p.h - b.y2 : 0;
+  if (!dx && !dy) return true;
+  doc.edit('Keep on page', () => {
+    doc.moveAtoms(new Set(doc.atoms.keys()), dx, dy);
+    for (const c of [...doc.captions.values()]) doc.updateCaption(c.id, { x: c.x + dx, y: c.y + dy });
+    for (const r of [...doc.arrows.values()]) doc.updateArrow(r.id, { tail: { x: r.tail.x + dx, y: r.tail.y + dy }, head: { x: r.head.x + dx, y: r.head.y + dy } });
+    for (const s of [...doc.shapes.values()]) doc.updateShape(s.id, { x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy, ...(s.poly ? { poly: s.poly.map((q) => ({ x: q.x + dx, y: q.y + dy })) } : {}) });
+  });
+  return true;
 }
 
 export type Entity = Atom | Bond | Caption | Arrow | Shape;
@@ -778,6 +839,8 @@ export class Doc {
   style: DocStyle = { ...ACS_1996 };
   /** Page colour. */
   background = '#ffffff';
+  /** The page the drawing is on (File > Page Setup): its size in points, and whether it grows to hold the drawing. Null: no page shown. */
+  page: PageSetup | null = null;
   /**
    * Draw only the highlights (a highlight animated on its own in a slide show, or saved to
    * PowerPoint as its own picture behind its structure). Not saved.
@@ -944,6 +1007,9 @@ export class Doc {
     }
   }
 
+  /** The things the last undo or redo put back (keys such as "a12"), for selecting them. */
+  lastApplied: string[] = [];
+
   canUndo(): boolean { return this.undoStack.length > 0; }
   canRedo(): boolean { return this.redoStack.length > 0; }
 
@@ -953,6 +1019,7 @@ export class Doc {
     const e = this.undoStack.pop();
     if (!e) return false;
     this.apply(e.before);
+    this.lastApplied = [...e.before.keys()];
     this.redoStack.push(e);
     return true;
   }
@@ -962,6 +1029,7 @@ export class Doc {
     const e = this.redoStack.pop();
     if (!e) return false;
     this.apply(e.after);
+    this.lastApplied = [...e.after.keys()];
     this.undoStack.push(e);
     return true;
   }
@@ -1391,6 +1459,7 @@ export class Doc {
   loadFrom(other: Doc): void {
     this.style = { ...other.style };
     this.background = other.background;
+    this.page = other.page && { ...other.page };
     this.source = other.source;
     this.nextId = Math.max(this.nextId, other.nextId);
     this.atoms.clear(); this.bonds.clear(); this.captions.clear(); this.arrows.clear(); this.shapes.clear();
@@ -1415,7 +1484,7 @@ export class Doc {
    */
   swap(other: Doc): void {
     if (this.tx || other.tx) throw new Error('Cannot swap documents in the middle of an edit');
-    const fields = ['style', 'background', 'source', 'textStyles', 'atoms', 'bonds', 'captions', 'arrows', 'shapes', 'adj', 'centresOf',
+    const fields = ['style', 'background', 'page', 'source', 'textStyles', 'atoms', 'bonds', 'captions', 'arrows', 'shapes', 'adj', 'centresOf',
       'grid', 'atomCell', 'maxBondLen', 'bondLenStale', 'undoStack', 'redoStack'] as const;
     const a = this as unknown as Record<string, unknown>, b = other as unknown as Record<string, unknown>;
     for (const f of fields) { const t = a[f]; a[f] = b[f]; b[f] = t; }

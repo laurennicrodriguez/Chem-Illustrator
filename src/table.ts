@@ -27,6 +27,8 @@ export interface TableLayout {
   ys: number[];
   /** Each cell's text (null for the cells a spanning cell covers). */
   cells: (PlacedText | null)[][];
+  /** The room kept for structures in cells, centred across each cell above its text. */
+  figs: { r: number; c: number; box: Rect }[];
   title: PlacedText | null;
   notes: PlacedText | null;
   width: number;
@@ -99,20 +101,28 @@ export function layoutTable(t: TableData, defaultSize: number, measure: Measure)
   }
   const ys = [y];
   const cells: (PlacedText | null)[][] = [];
+  const figs: TableLayout['figs'] = [];
   t.rows.forEach((row, r) => {
     const out: (PlacedText | null)[] = [];
+    const above: number[] = [];
     let h = 1.05 * size;
     for (let c = 0; c < t.cols.length; c++) {
-      if (isCovered(t, r, c)) { out.push(null); continue; }
+      if (isCovered(t, r, c)) { out.push(null); above.push(0); continue; }
       const cell = row[c] ?? { runs: [] };
       const span = spanOf(t, r, c);
       const wrap = Math.max(1, xs[c + span] - xs[c] - 2 * padX);
       const lay = layoutText({ runs: cell.runs, paras: cell.paras, justify: cellAlign(t, r, c), wrap }, size, measure);
       out.push({ lay, x: xs[c] + padX, y: 0 });
-      h = Math.max(h, lay.box.y2 - lay.box.y1);
+      // a structure in the cell sits at its top, with any text under it
+      const fig = cell.fig;
+      const hasText = cell.runs.some((x) => x.text);
+      const top = fig ? fig.h + (hasText ? padY : 0) : 0;
+      above.push(top);
+      if (fig) figs.push({ r, c, box: { x1: (xs[c] + xs[c + span]) / 2 - fig.w / 2, y1: y + padY, x2: (xs[c] + xs[c + span]) / 2 + fig.w / 2, y2: y + padY + fig.h } });
+      h = Math.max(h, top + (hasText || !fig ? lay.box.y2 - lay.box.y1 : 0));
     }
-    // every cell's first line starts at the top of its row
-    for (const p of out) if (p) p.y = y + padY - p.lay.box.y1;
+    // every cell's first line starts at the top of its row (under its structure, if it has one)
+    out.forEach((p, c) => { if (p) p.y = y + padY + above[c] - p.lay.box.y1; });
     cells.push(out);
     y += h + 2 * padY;
     ys.push(y);
@@ -124,7 +134,7 @@ export function layoutTable(t: TableData, defaultSize: number, measure: Measure)
     notes = { lay, x: 0, y: y - lay.box.y1 };
     y += lay.box.y2 - lay.box.y1;
   }
-  return { size, padX, padY, xs, ys, cells, title, notes, width, height: y };
+  return { size, padX, padY, xs, ys, cells, figs, title, notes, width, height: y };
 }
 
 /** The rules of a table, as lines from (x1, y) to (x2, y) or (x, y1) to (x, y2), in layout points. */

@@ -9,11 +9,12 @@ Chem Illustrator is licensed under the GNU General Public License, version 3 or 
 | [dk.brics.automaton](https://www.brics.dk/automaton/) 1.12-4 (part of the OPSIN build) | OPSIN's name grammar | BSD-3-Clause (full text below) |
 | [TeaVM](https://teavm.org) 0.16.0 runtime and class library (part of the OPSIN build) | Runs OPSIN's Java code as JavaScript | Apache-2.0; includes code from Apache Harmony (Apache-2.0). Notice: "This product includes software developed by Alexey Andreev (http://teavm.org). This product includes software developed by The Apache Software Foundation (http://www.apache.org/)." |
 | StAX API 1.0.1 (`stax:stax-api`, interfaces only, part of the OPSIN build) | Lets OPSIN read its XML word lists | Apache-2.0 |
-| [cdxmorph](https://github.com/rshenvi/cdxmorph) 1.47.0 by Ryan Shenvi (Shenvi Lab), ported from Python to TypeScript (`src/morph/`), with its example schemes in `tests/morph/` | Scheme ▸ Animate Reaction: pairing the atoms of each step and drawing the frames between the structures | MIT (full text below). Used with the author's permission, which Ryan Shenvi gave Nathan O'Hare in October 2026. |
+| [cdxmorph](https://github.com/rshenvi/cdxmorph) 1.47.0 by Ryan Shenvi (Shenvi Lab), ported from Python to TypeScript (`src/morph/`), with its example schemes in `tests/morph/` | Chemistry ▸ Animate ▸ Animate Reaction: pairing the atoms of each step and drawing the frames between the structures | MIT (full text below). Used with the author's permission, which Ryan Shenvi gave Nathan O'Hare in October 2026. |
 | [polygon-clipping](https://github.com/mfogel/polygon-clipping) 0.15.7 by Mike Fogel (forked from martinez by Alexander Milevski), with [splaytree](https://github.com/w8r/splay-tree) 3.2.3 by Alexander Milevski | Highlight effects (soft edges, shadows, glow, textures) and ring fill shadows in saved files and copied pictures: the exact shape of each step of a fade | MIT (full text below) |
 | [robust-predicates](https://github.com/mourner/robust-predicates) 3.0.3 by Vladimir Agafonkin (part of polygon-clipping) | Exact geometry tests for polygon-clipping | Unlicense (public domain; text below) |
 | [fflate](https://github.com/101arrowz/fflate) 0.8.2 | Packing and unpacking PowerPoint, Excel and Word files (.pptx, .xlsx, .docx), and compressing PDF pages | MIT (full text below) |
 | Free fonts from [Google Fonts](https://fonts.google.com), packaged by [Fontsource](https://fontsource.org) 5.3 (`@fontsource/*`): Inter, Source Sans 3, IBM Plex Sans, Lato, Source Serif 4, Merriweather, Libre Baskerville, Montserrat, Oswald, Bebas Neue, Archivo Black, Barlow Condensed, JetBrains Mono, IBM Plex Mono (Latin, Latin-extended and Greek letters, regular and bold) | The font boxes in every mode; put inside saved Word and PowerPoint files that use them | SIL Open Font License 1.1 (copyright lines and full text below) |
+| [Material Design Icons](https://pictogrammers.com/library/mdi/) 7.4.47 by Pictogrammers (`@mdi/svg`; the icons' outlines are copied into the app by `scripts/build-icons.mjs`, company and product logos left out) | Insert ▸ Icons in Design, Slides and Document modes | Apache-2.0 (the Pictogrammers Free License: icons under Apache-2.0, code under MIT). Some icons were contributed by other authors under Apache-2.0, as listed in the package's `meta.json`. |
 | [Tauri](https://tauri.app) (`tauri` crate, `@tauri-apps/api`) | Desktop app shell | MIT or Apache-2.0 |
 | Tauri dialog plugin (`tauri-plugin-dialog` crate, `@tauri-apps/plugin-dialog`) | The desktop app's Open and Save dialogs | MIT or Apache-2.0 |
 | Tauri updater and process plugins (`tauri-plugin-updater`, `tauri-plugin-process` crates, `@tauri-apps/plugin-updater`, `@tauri-apps/plugin-process`) | File ▸ Check for Updates: downloading a newer version, checking its signature, installing it and restarting | MIT or Apache-2.0 |
@@ -152,6 +153,35 @@ DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
 ```
+
+## Material Design Icons licence
+
+The icons are from Material Design Icons 7.4.47 (https://github.com/Templarian/MaterialDesign), by Pictogrammers and the icons' authors. Its licence file reads:
+
+```
+Pictogrammers Free License
+--------------------------
+
+This icon collection is released as free, open source, and GPL friendly by
+the [Pictogrammers](http://pictogrammers.com/) icon group. You may use it
+for commercial projects, open source projects, or anything really.
+
+# Icons: Apache 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+Some of the icons are redistributed under the Apache 2.0 license. All other
+icons are either redistributed under their respective licenses or are
+distributed under the Apache 2.0 license.
+
+# Fonts: Apache 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+All web and desktop fonts are distributed under the Apache 2.0 license. Web
+and desktop fonts contain some icons that are redistributed under the Apache
+2.0 license. All other icons are either redistributed under their respective
+licenses or are distributed under the Apache 2.0 license.
+
+# Code: MIT (https://opensource.org/licenses/MIT)
+The MIT license applies to all non-font and non-icon files.
+```
+
+The Apache License 2.0 is in `opsin-js/licences/Apache-2.0.txt`.
 
 ## RDKit licence
 

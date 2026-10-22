@@ -100,6 +100,9 @@ const BUILT_IN = new Set(Object.keys(NICKNAMES));
 /** Is this one of the program's own nicknames (Boc, Ph, TBS…)? */
 export const isBuiltInNickname = (name: string): boolean => BUILT_IN.has(name);
 
+/** The program's own nicknames and their SMILES (first atom where it joins). */
+export const builtInNicknames = (): [string, string][] => [...BUILT_IN].map((n) => [n, NICKNAMES[n]]);
+
 /**
  * Add nicknames of the person's own (or ones a drawing brings with it): name → SMILES, the
  * first atom being where it joins. Built-in names are left as they are. Returns the names added.
@@ -134,6 +137,10 @@ export interface Token {
   charge: string;
   /** The count was written out (so "Ar1" keeps its 1). */
   explicit?: boolean;
+  /** Where the token, its count and its charge start in the label text. */
+  at?: number;
+  countAt?: number;
+  chargeAt?: number;
 }
 
 /**
@@ -145,6 +152,7 @@ export function tokenize(label: string): Token[] {
   let i = 0;
   while (i < label.length) {
     const rest = label.slice(i);
+    const start = i;
     let tok: Token | null = null;
     let g = [...GENERIC].filter((x) => rest.startsWith(x) && !/[a-z]/.test(rest[x.length] ?? '')).sort((a, b) => b.length - a.length)[0];
     const num = NUMBERED_GENERIC.exec(rest)?.[0];
@@ -174,6 +182,7 @@ export function tokenize(label: string): Token[] {
       // a sign is a charge only at the end of the label ("N+", "CO2−"), not a hyphen ("(3,4)-MDP")
       if (prev && /[+\-−]/.test(label[i]) && /^[+\-−]*$/.test(label.slice(i + 1))) {
         let m = label[i];
+        if (!prev.charge) prev.chargeAt = i;
         i++;
         prev.charge += m;
         continue;
@@ -185,33 +194,77 @@ export function tokenize(label: string): Token[] {
         if (/[+\-−]/.test(label[j] ?? '') && (j + 1 === label.length) && out.length === 1 && prev.kind === 'el' && i === prev.text.length) {
           // a lone element: Fe3+ is iron(III); otherwise digits count atoms, as in NH3+ and SO3−
           prev.charge = label.slice(i, j + 1);
+          prev.chargeAt = i;
           i = j + 1;
           continue;
         }
         prev.count = Number(label.slice(i, j));
         prev.explicit = true;
+        prev.countAt = i;
         i = j;
         continue;
       }
       tok = { kind: 'other', text: label[i], count: 1, charge: '' };
       i += 1;
     }
+    tok.at = start;
     out.push(tok);
   }
   return out;
 }
 
 /** Text of one token as displayed, split into normal, subscript and superscript parts. */
-export interface Piece { text: string; sub?: boolean; sup?: boolean }
+export interface Piece { text: string; sub?: boolean; sup?: boolean; /** Where it starts in the label text. */ at?: number }
 
-function tokenPieces(t: Token, supDigits = false): Piece[] {
+/**
+ * Raised and lowered characters set by hand in a label, one mark per character of its text:
+ * "^" superscript, "_" subscript, "=" on the line, anything else as the label would show it.
+ */
+export type LabelMarks = string;
+
+function tokenPieces(t: Token, supDigits = false, marks?: LabelMarks): Piece[] {
   // Numbers after R groups and abbreviations (R1, Ar2) can be superscripts; element counts are subscripts.
   const up = supDigits && t.kind !== 'el';
   const m = t.kind === 'generic' ? /^(.*?\D)(\d+)$/.exec(t.text) : null;
-  const p: Piece[] = m ? [{ text: m[1] }, { text: m[2], sub: !up, sup: up }] : [{ text: t.text }];
-  if (t.count > 1 || t.explicit) p.push({ text: String(t.count), sub: !up, sup: up });
-  if (t.charge) p.push({ text: t.charge.replace('-', '−'), sup: true });
-  return p;
+  const at = t.at;
+  const p: Piece[] = m ? [{ text: m[1], at }, { text: m[2], sub: !up, sup: up, at: at === undefined ? undefined : at + m[1].length }] : [{ text: t.text, at }];
+  if (t.count > 1 || t.explicit) p.push({ text: String(t.count), sub: !up, sup: up, at: t.countAt });
+  if (t.charge) p.push({ text: t.charge.replace('-', '−'), sup: true, at: t.chargeAt });
+  return marks ? markPieces(p, marks) : p;
+}
+
+/** Pieces with the hand-set marks applied, split where a mark changes how a character sits. */
+export function markPieces(pieces: Piece[], marks: LabelMarks): Piece[] {
+  const out: Piece[] = [];
+  for (const p of pieces) {
+    if (p.at === undefined) { out.push(p); continue; }
+    [...p.text].forEach((ch, k) => {
+      const m = marks[p.at! + k];
+      const sup = m === '^' ? true : m === '_' || m === '=' ? false : !!p.sup;
+      const sub = m === '_' ? true : m === '^' || m === '=' ? false : !!p.sub;
+      const last = out[out.length - 1];
+      if (k > 0 && last && !!last.sup === sup && !!last.sub === sub) last.text += ch;
+      else out.push({ text: ch, at: p.at! + k, ...(sup ? { sup } : {}), ...(sub ? { sub } : {}) });
+    });
+  }
+  return out;
+}
+
+/** Whether a typed label shows R numbers raised (R¹, R¹²): set from the preferences. */
+export const labelPrefs = { superscriptR: true };
+
+/** Is this label one whose number goes up by itself (a single R and a number, as R1 or R12)? */
+export const isNumberedR = (label: string | null): boolean => !!label && /^R\d+$/.test(label);
+
+/** How an atom's label raises its characters: R numbers (from the file, or by the preference) and marks set by hand. */
+export function labelLook(a: { label: string | null; supDigits?: boolean; labelMarks?: string }): { supDigits: boolean; marks?: LabelMarks } {
+  const supDigits = a.supDigits ?? (labelPrefs.superscriptR && isNumberedR(a.label));
+  return a.labelMarks && a.label ? { supDigits, marks: a.labelMarks } : { supDigits };
+}
+
+/** The label's pieces in reading order, as `layoutLabel` shows them (for the typing box). */
+export function labelPieces(label: string, supDigits: boolean, marks?: LabelMarks): Piece[] {
+  return tokenize(label).flatMap((t) => tokenPieces(t, supDigits, marks));
 }
 
 export interface LabelSpec {
@@ -222,6 +275,8 @@ export interface LabelSpec {
   charge: number;
   /** Show numbers after R groups as superscripts (R¹), as in the file the label came from. */
   supDigits?: boolean;
+  /** Characters raised or lowered by hand. */
+  marks?: LabelMarks;
 }
 
 /** Tokens to show for an atom: its custom label, or element + hydrogens. Null = no label (plain carbon). */
@@ -277,8 +332,8 @@ export interface LabelLayout {
 
 export type Measure = (text: string, size: number) => number;
 
-const SUB_SCALE = 0.75;
-const CAP = 0.716; // Arial cap height as a fraction of the font size
+export const SUB_SCALE = 0.75;
+export const CAP = 0.716; // Arial cap height as a fraction of the font size
 
 /**
  * Which way a label runs from its atom: to the right (OH), to the left (HO), or with the
@@ -343,15 +398,15 @@ export function layoutLabel(spec: LabelSpec, bondDirs: LabelBond[], size: number
   };
 
   // Head token: its first character is centred on the atom.
-  const sd = !!spec.supDigits;
-  const headPieces = tokenPieces(head, sd);
+  const sd = !!spec.supDigits, mk = spec.marks;
+  const headPieces = tokenPieces(head, sd, mk);
   const firstCharW = measure(head.text[0], size);
   const headX = -firstCharW / 2;
 
   if (dir === 'right' || dir === 'up' || dir === 'down') {
     let x = pushPieces(headPieces, headX);
     if (dir === 'right' && hTok) x = pushPieces(tokenPieces(hTok), x);
-    for (const t of tail) x = pushPieces(tokenPieces(t, sd), x);
+    for (const t of tail) x = pushPieces(tokenPieces(t, sd, mk), x);
     if (chargeText) pushCharge(x);
     if (hTok && dir !== 'right') {
       // stacked H above or below the atom (e.g. the NH of a ring)
@@ -366,7 +421,7 @@ export function layoutLabel(spec: LabelSpec, bondDirs: LabelBond[], size: number
     // Text that is not a formula ("(3,4)-MDP", "Aryl") is never reversed: ChemDraw keeps its
     // reading order and puts the last letter or digit on the atom.
     const pieces: Piece[] = [];
-    for (const t of spec.tokens) pieces.push(...tokenPieces(t, sd));
+    for (const t of spec.tokens) pieces.push(...tokenPieces(t, sd, mk));
     let x = 0, anchor = 0;
     for (const p of pieces) {
       const i = p.sub || p.sup ? -1 : p.text.search(/[A-Za-z0-9](?![\s\S]*[A-Za-z0-9])/);
@@ -379,7 +434,7 @@ export function layoutLabel(spec: LabelSpec, bondDirs: LabelBond[], size: number
     // Reversed: rest of the label to the left, abbreviations kept whole (THPO, not PHTO).
     const leftTokens: Token[] = [...tail].reverse();
     const leftPieces: Piece[] = [];
-    for (const t of leftTokens) leftPieces.push(...tokenPieces(t, sd));
+    for (const t of leftTokens) leftPieces.push(...tokenPieces(t, sd, mk));
     if (hTok) leftPieces.push(...tokenPieces(hTok));
     let w = 0;
     for (const p of leftPieces) w += pieceWidth(p);

@@ -1,7 +1,7 @@
-// Insert > Shapes in Slides and Documents: the Design mode's shape library (basic shapes, block
-// arrows, flowchart, callouts, lab glassware) in a drop-down under the button.
+// Insert > Shapes and Insert > Icons in Slides and Documents: the Design mode's library (basic
+// shapes, block arrows, flowchart, callouts, lab glassware; and the icons) in a drop-down under the button.
 
-import { DesignLibrary } from './design-panel';
+import { DesignLibrary, type LibraryTab } from './design-panel';
 
 export class ShapeMenu {
   private pop: HTMLDivElement;
@@ -16,7 +16,7 @@ export class ShapeMenu {
     this.pop.className = 'shape-pop';
     this.pop.hidden = true;
     this.pop.setAttribute('role', 'dialog');
-    this.pop.setAttribute('aria-label', 'Shapes');
+    this.pop.setAttribute('aria-label', 'Shapes and icons');
     const body = document.createElement('div');
     this.pop.append(body);
     document.body.append(this.pop);
@@ -25,10 +25,11 @@ export class ShapeMenu {
 
   get shown(): boolean { return !this.pop.hidden; }
 
-  /** Show the shapes under `button`; `pick` gets the one clicked. `tip` says what happens next. */
-  show(button: HTMLElement, tip: string, pick: (id: string) => void): void {
+  /** Show the shapes (or the icons) under `button`; `pick` gets the one clicked. `tip` says what happens next. */
+  show(button: HTMLElement, tip: string, pick: (id: string) => void, tab: LibraryTab = 'shapes'): void {
     if (this.shown) { this.hide(); return; }
     this.pick = pick;
+    this.lib.showTab(tab);
     const p = this.pop.querySelector('.dl-head p');
     if (p) p.textContent = tip;
     this.pop.hidden = false;

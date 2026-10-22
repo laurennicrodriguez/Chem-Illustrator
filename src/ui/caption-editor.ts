@@ -119,6 +119,10 @@ export class CaptionEditor {
     this.spacing.className = 'caption-spacing';
     this.spacing.hidden = true;
     this.buildBar();
+    // View > Text Formatting Bar: along the top of the drawing (so it never covers what is
+    // drawn), floating by the text, or hidden (the keys still work)
+    this.bar.classList.toggle('docked', CaptionEditor.barPlace === 'docked');
+    this.bar.hidden = CaptionEditor.barPlace === 'hidden';
     h.host.append(this.ta, this.bar);
 
     const ta = this.ta;
@@ -368,6 +372,7 @@ export class CaptionEditor {
     ts.left = `${cp.x}px`;
     ts.top = `${cp.y}px`;
     ts.height = `${Math.max(8, (c.y2 - c.y1) * this.h.view.scale)}px`;
+    if (CaptionEditor.barPlace !== 'floating') return;
     // the bar sits above the text, or below it near the top of the window
     const hb = this.bar.offsetHeight || 32;
     const below = tl.y - hb - 8 < 0;
@@ -375,6 +380,9 @@ export class CaptionEditor {
     this.bar.style.left = `${left}px`;
     this.bar.style.top = `${below ? br.y + 8 : tl.y - hb - 8}px`;
   }
+
+  /** Where the bar goes (View > Text Formatting Bar). */
+  static barPlace: 'docked' | 'floating' | 'hidden' = 'docked';
 
   /** Called whenever the text or the selection changes (the Slides ribbon shows how it looks). */
   static onState: (() => void) | null = null;

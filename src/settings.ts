@@ -27,13 +27,13 @@ export interface Settings {
    * draws a chain.
    */
   keepHotspotOnBond: boolean;
-  /** New bonds are one bond length long unless Alt is held (Structure > Fixed Bond Lengths, Ctrl+L). */
+  /** New bonds are one bond length long unless Alt is held (Chemistry > Fixed Bond Lengths, Ctrl+L). */
   fixedLength: boolean;
-  /** New bonds point in 15° steps unless Alt is held (Structure > Fixed Angles, Ctrl+E). */
+  /** New bonds point in 15° steps unless Alt is held (Chemistry > Fixed Angles, Ctrl+E). */
   fixedAngles: boolean;
   /** View > Developer Tools: the Speed panel and the stress test. Off unless switched on. */
   devTools: boolean;
-  /** Scheme > Show Reaction Roles: with a reaction arrow selected, outline its starting materials, products and conditions. */
+  /** Chemistry > Reactions and Schemes > Show Reaction Roles: with a reaction arrow selected, outline its starting materials, products and conditions. */
   showRoles: boolean;
   /** Format chemistry as words are finished (CH2Cl2, 1H NMR, DMSO-d6). Edit > Typing and Spelling. */
   chemTyping: boolean;
@@ -45,14 +45,22 @@ export interface Settings {
   dictionary: string[];
   /** Each mode's colour and how much of the window it colours (View > Mode Colours). */
   modeColours: ModeColours;
-  /** Nicknames of the person's own: name → SMILES, first atom where it joins (Structure > Define Nickname). */
+  /** Nicknames of the person's own: name → SMILES, first atom where it joins (Chemistry > Nicknames and Templates > Define Nickname). */
   nicknames: Record<string, string>;
-  /** Drawings saved as templates (Structure > Save as Template), in the "My templates" palette. */
+  /** Drawings saved as templates (Chemistry > Nicknames and Templates > Save as Template), in the "My templates" palette. */
   templates: Template[];
   /** Split view: the share of the window's width the drawing beside a document, sheet or slides takes (0.2 to 0.8). */
   splitWidth: number;
   /** Scroll bars along the drawing's bottom and right (View > Scroll Bars). */
   scrollBars: boolean;
+  /** The page new drawings start on (File > Page Setup's default); null for no page. */
+  page: { name?: string; w: number; h: number; grow: boolean } | null;
+  /** The welcome card has been closed (it shows once, on a first empty drawing). */
+  welcomed: boolean;
+  /** Show the page's edge in drawings (View > Page Edge). */
+  pageEdge: boolean;
+  /** Where the text formatting bar goes while typing text (View > Text Formatting Bar). */
+  textBar: 'docked' | 'floating' | 'hidden';
   /** Resting the mouse on an abbreviation shows the group written out (View > Group Tooltips). */
   groupTips: boolean;
   /** The reference style new documents use (References > Manage References > Style options > Use for new documents). */
@@ -67,6 +75,18 @@ export interface Settings {
   axialStyle: 'RaSa' | 'PM';
   /** The + and − keys put charges in circles (⊕, ⊖) rather than plain signs. */
   circledCharges: boolean;
+  /** An atom or group typed with the Text tool beside a bond end becomes that atom. */
+  textToAtom: boolean;
+  /** A click on something grouped selects the whole group, or just that thing. */
+  groupClick: 'group' | 'item';
+  /** Selecting part of a group outlines the rest of it. */
+  groupOutline: boolean;
+  /** Mechanism arrows left running into something by a change find their own way round. */
+  rerouteArrows: boolean;
+  /** Labels that are R and a number (R1, R12) show the number raised (R¹). */
+  superscriptR: boolean;
+  /** Where Format > Link Text to Structure puts the text: where it is, or a side of the structure. */
+  linkSide: 'keep' | 'below' | 'above' | 'left' | 'right';
   /** Ask before a command with nothing selected changes every structure on the page (Edit > Preferences). */
   askWholeDrawing: boolean;
   /** Your own colour rows, in every colour menu and every mode (Edit > Colour Palettes). */
@@ -97,9 +117,9 @@ export interface Settings {
   skipVersion: string | null;
   /** Files and workspaces opened or saved lately, newest first (File menu, desktop app). */
   recentFiles: string[];
-  /** Your own saved highlight looks (Structure > Save Highlight Look). */
+  /** Your own saved highlight looks (Chemistry > Highlight and Fill > Save Highlight Look). */
   highlightLooks: HighlightLookPreset[];
-  /** Spacing in schemes and the text above and below arrows (Scheme > Scheme Settings). */
+  /** Spacing in schemes and the text above and below arrows (Chemistry > Reactions and Schemes > Scheme Settings). */
   scheme: SchemePrefs;
   /** AutoSave, recovery copies, Version History and shared folders (File > AutoSave and Recovery Options). */
   keep: KeepPrefs;
@@ -108,8 +128,8 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false, showRoles: true,
   chemTyping: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
-  modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true, groupTips: true,
-  citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', circledCharges: false, slideTemplate: null, askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(),
+  modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true, page: { name: 'letter', w: 540, h: 720, grow: true }, pageEdge: true, welcomed: false, textBar: 'docked', groupTips: true,
+  citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', circledCharges: false, textToAtom: true, groupClick: 'group', groupOutline: true, rerouteArrows: true, superscriptR: true, linkSide: 'keep', slideTemplate: null, askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(),
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
   guides: { drawing: false, slides: true, design: true },
   docPins: [],
@@ -129,7 +149,14 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (!raw || typeof raw !== 'object') return s;
   const r = raw as Record<string, unknown>;
   if (r.hotkeys && typeof r.hotkeys === 'object' && !Array.isArray(r.hotkeys)) s.hotkeys = r.hotkeys as KeyOverrides;
-  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'spellCheck', 'scrollBars', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'updateCheck', 'pubchemNames'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
+  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'spellCheck', 'scrollBars', 'pageEdge', 'welcomed', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'textToAtom', 'groupOutline', 'rerouteArrows', 'superscriptR', 'updateCheck', 'pubchemNames'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
+  if (r.page === null) s.page = null;
+  else if (r.page && typeof r.page === 'object') {
+    const p = r.page as Record<string, unknown>;
+    if (typeof p.w === 'number' && typeof p.h === 'number' && p.w > 10 && p.h > 10) s.page = { w: p.w, h: p.h, grow: p.grow !== false, ...(typeof p.name === 'string' ? { name: p.name } : {}) };
+  }
+  if (typeof r.textBar === 'string' && ['docked', 'floating', 'hidden'].includes(r.textBar)) s.textBar = r.textBar as Settings['textBar'];
+  if (typeof r.linkSide === 'string' && ['keep', 'below', 'above', 'left', 'right'].includes(r.linkSide)) s.linkSide = r.linkSide as Settings['linkSide'];
   if (Array.isArray(r.replacements)) {
     s.replacements = r.replacements.filter((x): x is [string, string] => Array.isArray(x) && typeof x[0] === 'string' && typeof x[1] === 'string' && x[0] !== '').map(([a, b]) => [a, b]);
   }
@@ -154,6 +181,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   }
   if (Array.isArray(r.docPins)) s.docPins = ['para', 'style', 'page', 'hf'].filter((k) => (r.docPins as unknown[]).includes(k));
   if (r.methylStyle === 'Me' || r.methylStyle === 'CH3') s.methylStyle = r.methylStyle;
+  if (r.groupClick === 'group' || r.groupClick === 'item') s.groupClick = r.groupClick;
   if (r.axialStyle === 'RaSa' || r.axialStyle === 'PM') s.axialStyle = r.axialStyle;
   if (typeof r.slideTemplate === 'string' || r.slideTemplate === null) s.slideTemplate = r.slideTemplate as string | null;
   s.highlightLooks = parseLooks(r.highlightLooks);

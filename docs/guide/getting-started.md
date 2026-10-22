@@ -103,7 +103,7 @@ The same commands are in the **File** menu (**New Drawing**, **New Slides**, **N
 
 ### The toolbox on the left
 
-In a drawing, the drawing tools run down the left side: select, eraser, bonds, rings, templates, text, the periodic table, mass fragmentation, arrows, mechanism symbols, shapes and brackets. A button with a small arrow holds a set of related tools: click the arrow (or right-click the button) to see them all. Rest the mouse on any button to see its name and hotkey. [Drawing](drawing.md) explains each tool.
+In a drawing, the drawing tools run down the left side: select, eraser, bonds, then text, arrows, mechanism symbols, brackets, shapes and mass fragmentation, then rings and templates. A button with a small arrow in its corner holds a set of related tools: click the corner, click the button a second time, or right-click it to see them all. Rest the mouse on any button to see its name and hotkey. [Drawing](drawing.md) explains each tool.
 
 ### The side panel on the right
 
@@ -118,6 +118,12 @@ The **›** arrow at the top of the panel folds it away to give the drawing more
 ### The hint line at the bottom
 
 The line along the bottom of the window tells you what the tool you have picked does, and which keys change it. For example, with the select tool it says that Shift or Ctrl+click adds to the selection and Ctrl+drag copies. Look there when you try a tool for the first time.
+
+The **zoom box** at the right end of that line shows how big the drawing is shown. Pick **Fit**, **Actual size** or a size from 25% to 800%. It is there in drawings, slides and designs.
+
+### The welcome card
+
+The first time you open the app, a small card on the empty page lists the tips most people need first: drawing bonds and rings, typing atom labels, pasting SMILES or names, Search and the right-click menu. Close it with its **×**; it doesn't come back.
 
 ### Search (Alt+Q)
 
@@ -146,7 +152,7 @@ When you save a ChemDraw file you opened here, only the parts you changed are re
 Other ways to get a drawing out:
 
 - **File ▸ Export PDF…** saves a PDF.
-- **File ▸ Export Picture…** saves a PNG at the resolution you choose (300 or 600 dpi for journals) or an SVG, on the page colour or see-through.
+- **File ▸ Export Picture…** saves a PNG or TIFF at the resolution you choose (300 or 600 dpi for journals), or an SVG, EMF or EPS, on the page colour or see-through.
 - **File ▸ Export Molfile…** saves the selected structures (or all of them) as a `.mol` file.
 - **File ▸ Print…** (Ctrl+P) prints on Letter or A4, at actual size or as large as fits.
 - **Edit ▸ Copy** (Ctrl+C) copies the selection, or the whole drawing when nothing is selected. In the Windows app it pastes into Word and PowerPoint as a sharp picture. **Edit ▸ Copy as SMILES** (Ctrl+Alt+C), **Copy as Molfile Text** (Ctrl+Alt+O) and **Copy as CDXML Text** (Ctrl+D) copy text instead.
@@ -159,7 +165,7 @@ Slides, sheets, documents and designs save in their own formats; see their pages
 
 | Setting | What it does |
 |---|---|
-| **Terminal methyls written as** | Me or CH3, for **Structure ▸ Show Terminal Methyls**. Methyls already written out in the selection change too. |
+| **Terminal methyls written as** | Me or CH3, for **Chemistry ▸ Labels and Numbers ▸ Show Terminal Methyls**. Methyls already written out in the selection change too. |
 | **Axial chirality written as** | Ra / Sa, or P / M (helicity). Ra is the same as M, and Sa as P. |
 | **Charges from the + and − keys** | A plain sign (N+) or a circled one (⊕, ⊖). Charges already drawn keep their look. |
 | **Ask before changing every structure on the page when nothing is selected** | Some commands, such as Show Terminal Methyls, act on the whole page when nothing is selected. With this ticked, they ask first. |

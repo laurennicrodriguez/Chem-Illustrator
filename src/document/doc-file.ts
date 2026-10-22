@@ -10,7 +10,9 @@ import { reviewAuthor, revisionDate } from './revisions';
 import { setPart } from '../table';
 import { FigurePictures } from './figures';
 import { BOX_PAD, newDocument, runStyleOf, styleOf, type DocText } from './document';
-import { storedParas } from '../text/paragraphs';
+import { fitParas, paraCount, storedParas } from '../text/paragraphs';
+import { PRINT_VIEW, continuous, hiddenParas, outlineLevel, screenText, type ScreenView } from './doc-views';
+import * as rt from '../richtext';
 
 let screenMeasure: Measure = (t, s) => t.length * s * 0.5;
 
@@ -38,7 +40,11 @@ export class DocFile {
   edits = 0;
   /** Called after every change to the text or the selection. */
   listener: (kind: ChangeKind) => void = () => {};
-  private memo: { frame: TextFrame; lay: DocLayout } | null = null;
+  private memo: { frame: TextFrame; view: ScreenView; lay: DocLayout } | null = null;
+  /** Print Layout's pages while another view shows (for printing, PDFs and the contents' page numbers). */
+  private printer: { layouter: DocLayouter; memo: { t: DocText; lay: DocLayout } | null } | null = null;
+  /** How the document is shown (View > Views): Print Layout unless another view is chosen. */
+  private shown: ScreenView = PRINT_VIEW;
   /**
    * The text box or table cell being typed into, if any: its own editing, whose changes go back
    * into the document.
@@ -161,15 +167,55 @@ export class DocFile {
   /** Lay out again from scratch (fonts finished loading). */
   relayout(): void {
     this.layouter.clear();
+    this.printer?.layouter.clear();
+    if (this.printer) this.printer.memo = null;
     this.memo = null;
     this.ed.relayout();
   }
 
+  /** The view the document is shown in (View > Views). */
+  get view(): ScreenView {
+    return this.shown;
+  }
+
+  /** Show the document in another view, or the same view changed (Outline's folds, Web Layout's width). */
+  set view(v: ScreenView) {
+    if (v === this.shown) return;
+    this.shown = v;
+    this.ed.relayout();
+  }
+
+  /** The pages as they print, whatever view shows (printing, PDFs, the contents' page numbers in Word files). */
+  printLayout(): DocLayout {
+    if (!continuous(this.shown.kind)) return this.layout();
+    this.printer ??= { layouter: new DocLayouter({ measure: docMeasure, drawingSize: (c, s) => figures.size(c, s) }), memo: null };
+    const t = this.t;
+    if (this.printer.memo?.t !== t) {
+      const lay = this.printer.layouter.layout(t);
+      this.printer.memo = { t, lay };
+      paragraphPages.set(t, lay.paraTops.map((pt) => pageNumber(t.hf, pt.page)));
+    }
+    return this.printer.memo.lay;
+  }
+
   private layoutOf(frame: TextFrame): DocLayout {
-    if (this.memo?.frame !== frame) {
-      const lay = this.layouter.layout(frame as DocText);
-      this.memo = { frame, lay };
-      paragraphPages.set(frame as DocText, lay.paraTops.map((pt) => pageNumber((frame as DocText).hf, pt.page)));
+    const v = this.shown;
+    if (this.memo?.frame !== frame || this.memo.view !== v) {
+      const t = frame as DocText;
+      let lay: DocLayout;
+      if (!continuous(v.kind)) {
+        lay = this.layouter.layout(t);
+        paragraphPages.set(t, lay.paraTops.map((pt) => pageNumber(t.hf, pt.page)));
+      } else if (v.kind === 'outline' && v.outline) {
+        const hidden = hiddenParas(t, v.outline);
+        let firstLine: Set<number> | undefined;
+        if (v.outline.firstLine) {
+          firstLine = new Set();
+          fitParas(t.paras, paraCount(rt.plainText(t.runs))).forEach((ps, p) => { if (!outlineLevel(t, ps)) firstLine!.add(p); });
+        }
+        lay = this.layouter.layout(screenText(t, v), { hidden, firstLine });
+      } else lay = this.layouter.layout(screenText(t, v));
+      this.memo = { frame, view: v, lay };
     }
     return this.memo.lay;
   }

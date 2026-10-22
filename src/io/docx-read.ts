@@ -15,6 +15,7 @@ import { ACS_1996, type DocStyle } from '../style';
 import * as rt from '../richtext';
 import { PackageReader, REL, kid, kids, rAttr, fromEmu } from './ooxml';
 import { dataUrl, imageSize, pictureMime } from '../render/images';
+import { drawingInEmf } from '../render/emf';
 import { cleanPara } from '../text/paragraphs';
 import { SINGLE, type Measure } from '../text/layout';
 import { arialWidth } from '../text-metrics';
@@ -29,16 +30,22 @@ import { layoutTable } from '../table';
 import { cfbStreams, isCfb } from './cfb';
 import { isCdx } from './cdx';
 import { cmtIds, cmtString, type CommentNote, type CommentThread } from '../document/comments';
-import { BIB_MARK, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, W14_NS, W15_NS, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
+import { BIB_MARK, CHART_NAME, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, W14_NS, W15_NS, W16CID_NS, W16CEX_NS, fromWordDate, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
 import { cleanRef } from '../document/references';
+import { retypedDiagram } from '../design/diagrams';
 import { revText } from '../document/revisions';
 import { mathText, ommlToTex } from '../document/math';
 import { CITE_PRESETS, cleanOptions } from '../document/cite-styles';
 import { listIndent, tableText } from './docx-write';
+import { readChart } from './office-chart';
+import { freshBox, sameBoxData, sizedBox } from '../sheet/chart-box';
+import { chartBoxPng } from '../render/chart-box-paint';
 
 export interface DocxReadDeps {
   /** A ChemDraw drawing (CDX data) as a drawing in the document's style; null when it can't be read. */
   chemdraw?(cdx: Uint8Array, style: DocStyle): Contents | null;
+  /** A drawing saved as CDXML (from inside a picture copied out of Chem Illustrator) in the document's style. */
+  cdxml?(text: string, style: DocStyle): Contents | null;
   /** A drawing's own size in points (so it keeps the size it had in Word). */
   drawingSize?(contents: Contents, style: DocStyle): { w: number; h: number } | null;
   /** A table as a drawing, laid out with the fonts on screen (else with published font widths). */
@@ -58,7 +65,8 @@ const WARN = {
   links: 'Links were kept as plain text.',
   notes: 'Footnotes and endnotes were left out.',
   equations: 'Equations in table cells were kept as plain text.',
-  shapes: 'Charts, SmartArt and drawn shapes were left out.',
+  shapes: 'SmartArt and drawn shapes were left out.',
+  chartParts: 'Some charts mix chart types (a line over columns, a second axis): they show as one type.',
   sections: 'This file has several sections: the last one\'s page size, margins, header and footer are used for the whole document.',
   vmerge: 'Table cells merged down a column were split (merging across a row is kept).',
   nested: 'A table inside a table cell was kept as text.',
@@ -452,6 +460,8 @@ class DocxReader {
     // Word 2010's text boxes (wps) are read from the choice itself; their fallback is an older shape
     const choice = kid(el, 'Choice');
     if (choice && /(^|\s)wps(\s|$)/.test(choice.getAttribute('Requires') ?? '') && choice.getElementsByTagNameNS('*', 'txbx').length) return choice;
+    // one of our diagrams as a group of shapes (Word puts an older shape in place of our picture when it saves)
+    if (choice && /(^|\s)wpg(\s|$)/.test(choice.getAttribute('Requires') ?? '') && Array.from(choice.getElementsByTagNameNS('*', 'docPr')).some((d) => new RegExp(`^${DRAWING_NAME} \\d+$`).test(d.getAttribute('name') ?? ''))) return choice;
     return kid(el, 'Fallback') ?? choice;
   }
 
@@ -696,7 +706,16 @@ class DocxReader {
       const text = paras.map((p) => [...p.getElementsByTagNameNS(this.W, '*')]
         .map((e) => (e.localName === 't' ? e.textContent ?? '' : e.localName === 'tab' ? '\t' : e.localName === 'br' ? '\n' : '')).join('')).join('\n');
       const last = paras[paras.length - 1];
-      notes.set(id, { author: this.a(c, 'author') ?? '', date: this.a(c, 'date') ?? '', text, para: last?.getAttributeNS(W14_NS, 'paraId') ?? '' });
+      notes.set(id, { author: this.a(c, 'author') ?? '', date: fromWordDate(this.a(c, 'date') ?? ''), text, para: last?.getAttributeNS(W14_NS, 'paraId') ?? '' });
+    }
+    // Word 365 keeps each comment's time in UTC too, by a lasting id found from its paragraph id
+    const part = (rel: string) => { const at = this.pkg.relOfType(this.main, rel); return at ? this.pkg.xml(at)?.documentElement ?? null : null; };
+    const durable = new Map<string, string>(), utc = new Map<string, string>();
+    for (const e of [...(part(DOCX_REL.commentsIds)?.getElementsByTagNameNS(W16CID_NS, 'commentId') ?? [])]) durable.set(e.getAttributeNS(W16CID_NS, 'paraId') ?? '', e.getAttributeNS(W16CID_NS, 'durableId') ?? '');
+    for (const e of [...(part(DOCX_REL.commentsExtensible)?.getElementsByTagNameNS(W16CEX_NS, 'commentExtensible') ?? [])]) utc.set(e.getAttributeNS(W16CEX_NS, 'durableId') ?? '', e.getAttributeNS(W16CEX_NS, 'dateUtc') ?? '');
+    for (const n of notes.values()) {
+      const at = new Date(utc.get(durable.get(n.para) ?? '') ?? '');
+      if (!isNaN(at.getTime())) n.date = at.toISOString();
     }
     // which comment each reply answers, and which are resolved
     const parent = new Map<string, string>(), done = new Set<string>();
@@ -985,18 +1004,36 @@ class DocxReader {
       this.emitObject(ctx, o, r);
       return;
     }
-    if (!pic) { this.warn('shapes'); return; }
-    const float = box.localName === 'anchor' ? this.floatOf(box, readLook(kid(pic, 'spPr')), shown.w) : null;
-    // one of our structures: its drawing from our part
+    const chartEl = kid(data, 'chart');
+    if (!pic && chartEl) {
+      // a chart: Word's own (its numbers come from what Word cached), or ours when it charts the same numbers
+      const path = this.relTarget(rAttr(chartEl, 'id'));
+      const got = path ? readChart(this.pkg, path, shown.w, shown.h) : null;
+      if (!got) { this.warn('shapes'); return; }
+      const mine = new RegExp(`^${CHART_NAME} (\\d+)$`).exec(name);
+      const kept = mine ? this.model?.charts?.[Number(mine[1])] : undefined;
+      const chosen = sizedBox(kept && sameBoxData(kept, got.box) ? freshBox(kept) : got.box, shown.w, shown.h);
+      if (chosen === got.box && got.partial) this.warn('chartParts');
+      const float = box.localName === 'anchor' ? this.floatOf(box, null, shown.w) : null;
+      this.emitObject(ctx, { kind: 'picture', src: chartBoxPng(chosen, shown.w, shown.h), w: round(shown.w), h: round(shown.h), px: { w: chosen.chart.w, h: chosen.chart.h }, chart: chosen, ...(float ? { float } : {}) }, r);
+      return;
+    }
+    const group = kid(data, 'wgp');
+    if (!pic && !group) { this.warn('shapes'); return; }
+    const float = box.localName === 'anchor' ? this.floatOf(box, pic ? readLook(kid(pic, 'spPr')) : null, shown.w) : null;
+    // one of our structures (or diagrams): its drawing from our part
     const ours = new RegExp(`^${DRAWING_NAME} (\\d+)$`).exec(name);
     const m = ours ? this.model?.drawings?.[Number(ours[1])] : undefined;
-    const look = readLook(kid(pic, 'spPr'));
+    const look = pic ? readLook(kid(pic, 'spPr')) : null;
     if (m?.contents) {
       const natural = shownSize({ w: m.w, h: m.h }, 1, this.textW);
       const scale = Math.abs(natural.w - shown.w) < 0.75 || m.w <= 0 ? undefined : round(shown.w / m.w, 1e4);
-      this.emitObject(ctx, { kind: 'drawing', contents: structuredClone(m.contents), scale, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r);
+      // a diagram's shapes may have been typed into in Word: their words go back into its text
+      const contents = group ? retypedDiagram(structuredClone(m.contents), groupTexts(group)) : structuredClone(m.contents);
+      this.emitObject(ctx, { kind: 'drawing', contents, scale, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r);
       return;
     }
+    if (!pic) { this.warn('shapes'); return; }
     const blip = kid(pic, 'blipFill', 'blip');
     if (kid(kid(pic, 'blipFill'), 'srcRect')?.attributes.length) this.warn('crop');
     const svg = blip ? Array.from(blip.getElementsByTagNameNS('*', 'svgBlip'))[0] : undefined;
@@ -1017,6 +1054,9 @@ class DocxReader {
     const mime = EXT_MIME[ext] ?? pictureMime(path ?? '', bytes);
     if (!mime) return;
     if (mime === 'image/x-wmf') this.warn('wmf');
+    // a picture pasted into Word from Chem Illustrator: the drawing rides inside it
+    const inside = mime === 'image/x-emf' ? drawingInEmf(bytes) : null;
+    if (inside && this.drawingAt(this.deps.cdxml?.(inside, this.drawingStyle) ?? null, shown, r, ctx, look, float)) return;
     const px = imageSize(bytes, mime) ?? undefined;
     this.emitObject(ctx, { kind: 'picture', src: dataUrl(bytes, mime), w: round(shown.w), h: round(shown.h), px, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r);
   }
@@ -1061,6 +1101,11 @@ class DocxReader {
     } catch {
       contents = null;
     }
+    return this.drawingAt(contents, shown, r, ctx);
+  }
+
+  /** A drawing in place of a picture, kept at the size the picture had. False when there is none. */
+  private drawingAt(contents: Contents | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx, look?: FigureLook | null, float?: Float | null): boolean {
     if (!contents) return false;
     const own = this.deps.drawingSize?.(contents, this.drawingStyle);
     let scale: number | undefined;
@@ -1068,7 +1113,7 @@ class DocxReader {
       const natural = shownSize(own, 1, this.textW);
       if (Math.abs(natural.w - shown.w) > 0.01 * shown.w) scale = round(shown.w / own.w, 1e4);
     }
-    return this.emitObject(ctx, { kind: 'drawing', contents, scale }, r) !== null || ctx.cell;
+    return this.emitObject(ctx, { kind: 'drawing', contents, scale, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r) !== null || ctx.cell;
   }
 
   // ---------------------------------------------------------------- tables
@@ -1560,4 +1605,17 @@ export function readLook(spPr: Element | null): FigureLook | null {
   const sh = kid(spPr, 'effectLst', 'outerShdw');
   if (sh) look.shadow = fromEmu(sh.getAttribute('blurRad') ?? '0') >= 1.5 ? 'soft' : 'hard';
   return look.frame || look.shadow ? look : null;
+}
+
+/** The words in each named shape of a Word group (its paragraphs joined by line breaks), by name. */
+function groupTexts(group: Element): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const sp of Array.from(group.getElementsByTagNameNS('*', 'wsp'))) {
+    const name = kid(sp, 'cNvPr')?.getAttribute('name');
+    const content = kid(sp, 'txbx', 'txbxContent');
+    if (!name || !content) continue;
+    const paras = kids(content, 'p').map((p) => Array.from(p.getElementsByTagNameNS('*', 't')).map((t) => t.textContent ?? '').join('').replace(/^•\s*/, ''));
+    out.set(name, paras.join('\n'));
+  }
+  return out;
 }

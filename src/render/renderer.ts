@@ -13,7 +13,7 @@ import { crossingGapsCached } from '../chem/crossing';
 import { FADE, tint } from '../colours';
 import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, passParam, angleOf, arcCenter, fromAngle, turnedCorners, DEG } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
-import { chargeInk, labelBonds, labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
+import { chargeInk, labelBonds, labelSpec, layoutLabel, LabelLayout, labelLook } from '../chem/labels';
 import type { StructureChecks } from '../chem/warnings';
 import { isGenericLabel } from '../chem/labels';
 import { bracketPath, shaftOffset, shapeOrder, elbowRoute, boxOf, bezPoints, bezHeadBack, bezPathAt, bezSlice, type PathStep } from '../objects';
@@ -29,6 +29,7 @@ import { imageFor } from './images';
 import { layoutTable, drawTable, type TableLayout, type TablePart } from '../table';
 import type { TableData } from '../model';
 import { repeatLabelPlace } from '../chem/polymer';
+import { paintChartBox } from './chart-box-paint';
 
 export { FONT_STACK };
 
@@ -162,6 +163,8 @@ export class Renderer {
   private labelStack = FONT_STACK;
   /** A caption being typed into: the text box shows it, so the page doesn't. */
   hiddenCaption: number | null = null;
+  /** An atom whose label is being typed (the typing box shows it instead). */
+  hiddenLabel: number | null = null;
   /** A table being typed into: drawn as this draft (so rows grow as the text does), without the part the text editor shows. */
   tableEdit: { id: number; table: TableData; part: TablePart } | null = null;
   private tableLayouts = new WeakMap<TableData, TableLayout>();
@@ -291,7 +294,7 @@ export class Renderer {
     const k = a.s ?? 1;
     const size = doc.style.labelSize * k;
     if (spec) {
-      if (a.supDigits) spec.supDigits = true;
+      Object.assign(spec, labelLook(a));
       layout = layoutLabel(spec, labelBonds(doc, a), size, (t, s) => measureText(t, s, this.labelStack), a.just);
       const m = doc.style.marginWidth * k;
       for (const b of layout.boxes) boxes.push({ x1: a.x + b.x1 - m, y1: a.y + b.y1 - m, x2: a.x + b.x2 + m, y2: a.y + b.y2 + m });
@@ -678,7 +681,7 @@ export class Renderer {
     ctx.textBaseline = 'alphabetic';
     for (const a of atoms) {
       const info = this.atomInfo(doc, a);
-      if (info.layout) {
+      if (info.layout && a.id !== this.hiddenLabel) {
         ctx.fillStyle = a.color ?? '#000';
         for (const r of info.layout.runs) {
           const f = `${r.size}px ${this.labelStack}`;
@@ -1116,7 +1119,7 @@ export class Renderer {
       edge();
       return;
     }
-    const img = s.src ? imageFor(s.src) : null;
+    const img = s.src && !s.chart ? imageFor(s.src) : null;
     ctx.save();
     if (look?.shadow) {
       // canvas shadows ignore the zoom, so they are scaled by it here
@@ -1138,7 +1141,10 @@ export class Renderer {
       ctx.roundRect(x, y, w, h, r);
       ctx.clip();
     }
-    if (!img) {
+    if (s.chart) {
+      // a chart is drawn from its data, sharp at any zoom
+      paintChartBox(ctx, s.chart, x, y, w, h);
+    } else if (!img) {
       ctx.fillStyle = '#eef1f5';
       ctx.fillRect(x, y, w, h);
     } else {

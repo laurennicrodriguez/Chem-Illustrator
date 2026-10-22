@@ -7,6 +7,7 @@
 
 import type { Rect, Vec } from '../geom';
 import type { Shape } from '../model';
+import { iconDef, isIconId } from './icons';
 
 export type GeoStep =
   | ['M', number, number]
@@ -14,7 +15,7 @@ export type GeoStep =
   | ['C', number, number, number, number, number, number]
   | ['Z'];
 
-export type GeoGroup = 'Basic shapes' | 'Block arrows' | 'Flowchart' | 'Callouts' | 'Lab equipment';
+export type GeoGroup = 'Basic shapes' | 'Block arrows' | 'Flowchart' | 'Callouts' | 'Lab equipment' | 'Icons';
 
 export const GEO_GROUPS: GeoGroup[] = ['Basic shapes', 'Block arrows', 'Flowchart', 'Callouts', 'Lab equipment'];
 
@@ -35,6 +36,8 @@ export interface GeoDef {
   size: [number, number];
   /** Drawn as an outline with no fill unless one is chosen (glassware). */
   outline?: boolean;
+  /** An icon (design/icons.ts): filled in one colour with no outline unless one is chosen. */
+  icon?: boolean;
   /** Words to find it by in the library's search box. */
   keywords?: string;
   draw(w: number, h: number): GeoOutline;
@@ -349,10 +352,41 @@ function fitSteps(steps: GeoStep[], w: number, h: number): GeoStep[] {
   });
 }
 
+// ---------------------------------------------------------------- pyramid layers (diagrams)
+
+const SLICE = 'slice:';
+
+/** A pyramid's layer: a trapezium cut in from each side by `a` of its width (at its narrow end: the top when a > 0, the bottom when a < 0). */
+export function sliceId(a: number): string {
+  return SLICE + (Math.round(a * 10000) / 10000);
+}
+
+export const isSliceId = (id: string | undefined): id is string => !!id && id.startsWith(SLICE);
+
+/** The library shape for a layer of a pyramid. */
+export function sliceDef(id: string): GeoDef {
+  const v = Number(id.slice(SLICE.length));
+  const a = Math.max(0, Math.min(0.5, Math.abs(isFinite(v) ? v : 0)));
+  const up = !(v < 0);
+  // the text where the layer is widest enough: lower down in a narrow top layer
+  // (a pointed layer, the top of a pyramid, has its words in its lower half, a little past its sloping sides)
+  const t = a > 0.45 ? 0.5 : a > 0.3 ? 0.4 : 0.08;
+  const side = a > 0.45 ? 0.2 : a * (1 - t) + 0.03;
+  return {
+    id, name: 'Pyramid layer', group: 'Basic shapes', size: [120, 40],
+    draw: (w, h) => ({
+      body: up
+        ? [['M', a * w, 0], ['L', (1 - a) * w, 0], ['L', w, h], ['L', 0, h], ['Z']]
+        : [['M', 0, 0], ['L', w, 0], ['L', (1 - a) * w, h], ['L', a * w, h], ['Z']],
+    }),
+    text: up ? [side, t, 1 - side, 0.94] : [side, 0.06, 1 - side, 1 - t],
+  };
+}
+
 export const GEO_BY_ID = new Map(GEOS.map((g) => [g.id, g]));
 
-/** The shape with this id, or the rectangle for one not known (from a newer version). */
-export const geoDef = (id: string | undefined): GeoDef => GEO_BY_ID.get(id ?? '') ?? GEO_BY_ID.get('rect')!;
+/** The shape with this id (an icon for "icon:…"), or the rectangle for one not known (from a newer version). */
+export const geoDef = (id: string | undefined): GeoDef => (isIconId(id) ? iconDef(id) : isSliceId(id) ? sliceDef(id) : GEO_BY_ID.get(id ?? '')) ?? GEO_BY_ID.get('rect')!;
 
 /** The box of an outline's points (control points included: a little generous on curves). */
 export function stepsBox(steps: GeoStep[]): Rect {
@@ -398,6 +432,29 @@ export function insideOutline(polys: Vec[][], p: Vec): boolean {
     }
   }
   return inside;
+}
+
+/**
+ * An outline's separate parts (each from a move to the next), outermost first, with how many
+ * other parts each lies inside: an even count is filled, an odd one is a hole (even-odd). For
+ * formats that fill each part on its own (ChemDraw curves), holes are painted over in white.
+ * Each part comes back closed.
+ */
+export function outlineParts(steps: GeoStep[]): { steps: GeoStep[]; depth: number }[] {
+  const parts: GeoStep[][] = [];
+  for (const s of steps) {
+    if (s[0] === 'M' || !parts.length) parts.push([]);
+    parts[parts.length - 1].push(s);
+  }
+  // filled parts are closed
+  for (const p of parts) if (p[p.length - 1][0] !== 'Z') p.push(['Z']);
+  const polys = parts.map((p) => flatten(p, 6)[0] ?? []);
+  const depth = polys.map((poly, i) => {
+    if (!poly.length) return 0;
+    // (the parts don't cross, so any point of this one will do)
+    return polys.filter((o, j) => j !== i && o.length > 2 && insideOutline([o], poly[0])).length;
+  });
+  return parts.map((p, i) => ({ steps: p, depth: depth[i] })).sort((a, b) => a.depth - b.depth);
 }
 
 /** How far p is from the outline's lines. */
@@ -451,8 +508,10 @@ export const CLIP_ART_LINE = 1.75, SHAPE_LINE = 1;
 
 /** How a new shape from the library looks (null for a shape that isn't in it). */
 export function geoShapeStyle(id: string, look: Partial<Shape> = {}): Partial<Shape> | null {
-  const def = GEO_BY_ID.get(id);
+  const def = isIconId(id) ? iconDef(id) : GEO_BY_ID.get(id);
   if (!def) return null;
+  // icons in the outline colour of new shapes (or black), with no outline
+  if (def.icon) return { kind: 'geo', geo: id, filled: true, color: look.color ?? '#000000', lineWidth: 0 };
   // lines in proportion to the shape: clip art (glassware…) at 1.75 pt, as it is drawn about 60 pt
   // across; other shapes at PowerPoint's 1 pt. Change it in the Style panel.
   const base: Partial<Shape> = def.outline ? { color: '#000000', lineWidth: CLIP_ART_LINE } : { filled: true, fillColor: '#dae3f3', color: '#2f5597', lineWidth: SHAPE_LINE, ...look };

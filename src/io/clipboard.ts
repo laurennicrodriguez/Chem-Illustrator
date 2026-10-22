@@ -4,12 +4,15 @@
 // each program takes the best one it understands:
 //   - our own CDXML text, so pasting back into Chem Illustrator keeps everything;
 //   - the same drawing as CDX, ChemDraw's format, for pasting into ChemDraw;
-//   - an EMF picture, which Word and PowerPoint paste as a sharp, scalable picture;
+//   - an EMF picture, which Word and PowerPoint paste as a sharp, scalable picture; the drawing
+//     rides inside it, so copying the picture back out of Word brings back the structure;
 //   - a bitmap, for programs that take neither (Paint, chat programs).
 // Web pages can only put PNG pictures and text on the clipboard, so on Windows the desktop app
 // hands the data to its own clipboard commands (src-tauri/src/clipboard.rs). Elsewhere the
-// page's clipboard gets a PNG, and the drawing itself is kept in memory for pasting here.
+// page's clipboard gets a PNG (and the drawing in a web format where the browser takes one),
+// and the drawing itself is kept in memory: pasting that same picture back here gives the drawing.
 
+import { freshGroups } from '../editor/groups';
 import { pastedTable, tableHtml, tableTsv, type PastedRows } from './table-clip';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { Doc, TextRun, applyBase, type TableData } from '../model';
@@ -23,12 +26,15 @@ import { measureText } from '../render/renderer';
 import { recordPicture, pictureEmf, pictureCanvas, canvasPng, canvasDib } from '../render/picture';
 import { emfToSvg } from '../render/emf-read';
 import type { Item } from '../render/vector';
-import { itemsToEmf, type EmfBox } from '../render/emf';
+import { itemsToEmf, withDrawing, drawingInEmf, type EmfBox } from '../render/emf';
+import { imageSize } from '../render/images';
 
 /** Our own clipboard format: the drawing as CDXML text. */
 export const OWN_FORMAT = 'Chem Illustrator CDXML';
 /** ChemDraw's clipboard format (a CDX file). */
 export const CDX_FORMAT = 'ChemDraw Interchange Format';
+/** Our drawing on a web page's clipboard, where the browser takes formats of the page's own (Chrome, Edge). */
+export const WEB_FORMAT = 'web application/x-chem-illustrator-cdxml';
 
 /** True in the Windows desktop app, where the app's own clipboard commands are used. */
 export const nativeClipboard = isTauri() && /Windows/i.test(navigator.userAgent);
@@ -223,6 +229,8 @@ export function insertDrawing(doc: Doc, src: Doc, center: Vec, label = 'Paste'):
       if (rest.poly) rest.poly = rest.poly.map((p) => ({ x: p.x + dx, y: p.y + dy }));
       sel.shapes.add(doc.addShape({ ...rest, x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy }).id);
     }
+    // a pasted group is a new group, not part of the one it was copied from
+    freshGroups(doc, sel);
   });
   return sel;
 }
@@ -275,6 +283,8 @@ export function unpackFormats(block: Uint8Array): [string, Uint8Array][] {
 let lastCopy: string | null = null;
 /** A table copied here as tab-separated text, to know it again when it is pasted back (web pages). */
 let lastTableText: string | null = null;
+/** The size in pixels of the picture of the last drawing copied (web pages), to know it again when it is pasted back. */
+let lastPictureSize: { w: number; h: number } | null = null;
 
 /**
  * Put the selection (everything when nothing is selected) on the clipboard. Returns a short
@@ -302,7 +312,7 @@ export async function copyDrawing(doc: Doc, sel: Selection | null): Promise<stri
       [OWN_FORMAT, enc.encode(own)],
       [CDX_FORMAT, cdxmlToCdx(cdxml)],
       ...(table ? [['HTML Format', cfHtml(tableHtml(table))], ['CF_UNICODETEXT', enc.encode(tsv!)]] as [string, Uint8Array][] : []),
-      ['CF_ENHMETAFILE', pictureEmf(pic)],
+      ['CF_ENHMETAFILE', withDrawing(pictureEmf(pic), own)],
       ['CF_DIB', canvasDib(canvas, dpi)],
     ]);
     await invoke('clipboard_write', block);
@@ -310,18 +320,21 @@ export async function copyDrawing(doc: Doc, sel: Selection | null): Promise<stri
   }
   // The PNG goes in as a promise so the clipboard is asked straight away, while the key press
   // still counts (Safari insists on this).
-  const png = canvasPng(pictureCanvas(part, pic).canvas);
+  const { canvas } = pictureCanvas(part, pic);
+  lastPictureSize = { w: canvas.width, h: canvas.height };
+  const png = canvasPng(canvas);
   try {
     const formats: Record<string, Blob | Promise<Blob>> = { 'image/png': png };
     if (table) {
       formats['text/html'] = new Blob([tableHtml(table)], { type: 'text/html' });
       formats['text/plain'] = new Blob([tsv!], { type: 'text/plain' });
     }
+    if (webFormatOk()) formats[WEB_FORMAT] = new Blob([own], { type: WEB_FORMAT.slice(4) });
     await navigator.clipboard.write([new ClipboardItem(formats)]);
   } catch {
     return `${what} for pasting here. This browser would not take the picture.`;
   }
-  return table ? `${what} as a table and a picture.` : `${what} as a picture.`;
+  return table ? `${what} as a table and a picture.` : `${what}. Paste here for the drawing, or elsewhere for a picture.`;
 }
 
 /**
@@ -331,6 +344,7 @@ export async function copyDrawing(doc: Doc, sel: Selection | null): Promise<stri
 export async function copyPictureItems(items: Item[], box: EmfBox, canvas: HTMLCanvasElement, dpi: number): Promise<string> {
   lastCopy = null;
   lastTableText = null;
+  lastPictureSize = null;
   if (nativeClipboard) {
     await invoke('clipboard_write', packFormats([['CF_ENHMETAFILE', itemsToEmf(items, box)], ['CF_DIB', canvasDib(canvas, dpi)]]));
     return 'Copied as a picture. Paste into Word, PowerPoint or a slide here.';
@@ -347,6 +361,45 @@ export async function copyPictureItems(items: Item[], box: EmfBox, canvas: HTMLC
 const ownTable = (text: string) => !!lastCopy && lastTableText !== null && text.replace(/\r\n/g, '\n').trim() === lastTableText.replace(/\r\n/g, '\n').trim();
 
 const hasPictures = (d: Doc) => [...d.shapes.values()].some((s) => s.kind === 'picture');
+
+/** Whether this browser takes a format of the page's own on the clipboard. */
+function webFormatOk(): boolean {
+  try {
+    return typeof ClipboardItem !== 'undefined' && !!(ClipboardItem as unknown as { supports?: (t: string) => boolean }).supports?.(WEB_FORMAT);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Is this pasted picture the one copied here last? Browsers hand back their own copy of a picture
+ * (the same size, not the same bytes), so the size is what is compared.
+ */
+export function isOwnPicture(bytes: Uint8Array, mime: string): boolean {
+  if (!lastCopy || !lastPictureSize) return false;
+  const px = imageSize(bytes, mime);
+  return !!px && px.w === lastPictureSize.w && px.h === lastPictureSize.h;
+}
+
+/** The drawing inside a picture copied from here (a metafile, as Word and PowerPoint copy it), or null. */
+export function pictureDrawing(bytes: Uint8Array, mime: string): Doc | null {
+  if (mime !== 'image/x-emf') return null;
+  const cdxml = drawingInEmf(bytes);
+  if (!cdxml) return null;
+  try {
+    return readCdxml(cdxml).doc;
+  } catch {
+    return null;
+  }
+}
+
+/** A pasted picture: the drawing it came from, when it is a copy of one made here, else the picture. */
+function picturePasted(bytes: Uint8Array, mime: string): Pasted {
+  const inside = pictureDrawing(bytes, mime);
+  if (inside) return { kind: 'drawing', doc: inside };
+  if (isOwnPicture(bytes, mime)) return { kind: 'drawing', doc: readCdxml(lastCopy!).doc };
+  return { kind: 'picture', mime, bytes };
+}
 
 /** What a paste found on the clipboard. */
 export type Pasted =
@@ -407,6 +460,10 @@ export async function readNativeClipboard(): Promise<Pasted> {
     const [name, data] = drawing;
     return { kind: 'drawing', doc: readCdxml(name === CDX_FORMAT ? cdxToCdxml(data) : new TextDecoder().decode(data)).doc };
   }
+  // a picture of a drawing copied from here, copied back out of Word or PowerPoint: the drawing rides inside it
+  const emf = await nativeFirst(['CF_ENHMETAFILE']);
+  const inside = emf ? pictureDrawing(emf[1], 'image/x-emf') : null;
+  if (inside) return { kind: 'drawing', doc: inside };
   const t = await nativeFirst(['CF_UNICODETEXT']);
   const text = t ? new TextDecoder().decode(t[1]).replace(/\0+$/, '') : '';
   if (looksLikeChemistry(text)) return fromText(text);
@@ -416,7 +473,6 @@ export async function readNativeClipboard(): Promise<Pasted> {
   if (table) return { kind: 'table', rows: table };
   // a metafile with lines and text (a spectrum or chart from MestReNova or Excel) stays sharp, so it
   // beats a PNG of the same thing; a metafile that only wraps a photo, or can't be shown, does not
-  const emf = await nativeFirst(['CF_ENHMETAFILE']);
   if (emf && (emfToSvg(emf[1])?.vectors ?? 0) > 0) return { kind: 'picture', mime: 'image/x-emf', bytes: emf[1] };
   const pic = await nativeFirst(['PNG', 'image/svg+xml', 'CF_ENHMETAFILE', 'CF_DIB']);
   if (pic) {
@@ -440,7 +496,7 @@ export async function readPasteEvent(e: ClipboardEvent): Promise<Pasted> {
   const table = pastedTable(e.clipboardData?.getData('text/html'), text);
   if (table) return { kind: 'table', rows: table };
   const file = [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'));
-  if (file) return { kind: 'picture', mime: file.type, bytes: new Uint8Array(await file.arrayBuffer()) };
+  if (file) return picturePasted(new Uint8Array(await file.arrayBuffer()), file.type);
   if (text.trim()) return fromText(text);
   return lastCopy ? { kind: 'drawing', doc: readCdxml(lastCopy).doc } : { kind: 'nothing' };
 }
@@ -452,13 +508,17 @@ export async function readWebClipboard(): Promise<Pasted> {
   if (ownTable(text)) return { kind: 'drawing', doc: readCdxml(lastCopy!).doc };
   // a picture (when the browser lets the page see it)
   const items = await navigator.clipboard.read?.().catch(() => []) ?? [];
+  // our drawing, where the browser kept a format of our own
+  const own = items.find((it) => it.types.includes(WEB_FORMAT));
+  const ownText = own ? await (await own.getType(WEB_FORMAT)).text().catch(() => '') : '';
+  if (looksLikeCdxml(ownText)) return fromText(ownText);
   const htmlItem = items.find((it) => it.types.includes('text/html'));
   const html = htmlItem ? await (await htmlItem.getType('text/html')).text() : null;
   const table = pastedTable(html, text);
   if (table) return { kind: 'table', rows: table };
   for (const it of items) {
     const type = it.types.find((t) => t.startsWith('image/'));
-    if (type) return { kind: 'picture', mime: type, bytes: new Uint8Array(await (await it.getType(type)).arrayBuffer()) };
+    if (type) return picturePasted(new Uint8Array(await (await it.getType(type)).arrayBuffer()), type);
   }
   if (text.trim()) return fromText(text);
   return lastCopy ? { kind: 'drawing', doc: readCdxml(lastCopy).doc } : { kind: 'nothing' };

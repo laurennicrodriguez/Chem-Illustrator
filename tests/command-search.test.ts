@@ -37,6 +37,16 @@ describe('search commands', () => {
     expect(labels('', ['sh:cell-bold', 'cmd:clean-up'])).toEqual(['Bold', 'Clean Up Structure', 'Save', 'Save As…', 'Save Workspace As…', 'Clean Up Reaction', 'Wedge bond']);
   });
 
+  it('puts a name typed in full, then an everyday command, before rarer ones', () => {
+    const more = [
+      { id: 'cmd:copy-inchi', label: 'Copy as InChI', place: 'Edit menu' },
+      { id: 'cmd:copy', label: 'Copy', place: 'Edit menu' },
+      { id: 'cmd:copy-smiles', label: 'Copy SMILES', place: 'Edit menu' },
+    ];
+    expect(searchCommands(more, 'copy').map((c) => c.label)[0]).toBe('Copy');
+    expect(searchCommands(more, 'copy smiles').map((c) => c.label)[0]).toBe('Copy SMILES');
+  });
+
   it('lists a command once when it is in a menu and on the ribbon', () => {
     expect(uniqueCommands([{ id: 'cmd:a', n: 1 }, { id: 'cmd:b', n: 2 }, { id: 'cmd:a', n: 3 }])).toEqual([{ id: 'cmd:a', n: 1 }, { id: 'cmd:b', n: 2 }]);
   });

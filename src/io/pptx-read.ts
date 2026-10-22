@@ -11,12 +11,13 @@
 
 import type { PinnedComment } from '../document/comments';
 import { COMMENT_REL, readCommentAuthors, readLegacyComments, readModernComments } from './pptx-comments';
-import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureLook } from '../model';
+import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureLook, type Frame } from '../model';
 import { layoutTable, NOTE_SCALE } from '../table';
 import { linesFromBorders, type Borders } from './cdxml-table';
 import { turnAbout, normDegrees, type Vec, type Rect } from '../geom';
 import { PackageReader, NS, REL, kids, kid, rAttr, fromEmu } from './ooxml';
 import { readCdxml } from './cdxml';
+import { drawingInEmf } from '../render/emf';
 import { dataUrl, imageSize } from '../render/images';
 import { layoutText, ASCENT } from '../text/layout';
 import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle, slideBackground } from '../deck/deck';
@@ -24,8 +25,12 @@ import { backgroundColour, isPlain, sameBackground, type Background } from '../d
 import { readFill, readOneFill, type FillContext } from './pptx-background';
 import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure } from './pptx-write';
 import { GEOS } from '../design/geo';
-import { gluePoint } from '../objects';
+import { cleanDiagram, textFromShapes } from '../design/diagrams';
+import { gluePoint, arrowPoints, boxOf as pointsBox } from '../objects';
 import { readTransition, readTiming, type Transition, type Anim, type AnimTarget } from '../deck/animation';
+import { readChart } from './office-chart';
+import { freshBox, sameBoxData, sizedBox, type ChartBox } from '../sheet/chart-box';
+import { chartBoxPng } from '../render/chart-box-paint';
 
 /** PowerPoint's shapes that are shapes in the library, by PowerPoint's name. */
 const GEO_BY_PRST = new Map(GEOS.filter((g) => g.prst).map((g) => [g.prst!, g.id]));
@@ -510,7 +515,7 @@ class Reader {
 
   private elementOnly(s: Part, layout: Part | null, el: Element, t: Xf, doc: Doc): void {
     switch (el.localName) {
-      case 'sp': this.shape(s, layout, el, t, doc); break;
+      case 'sp': if (!this.ourConnector(s, el, t, doc)) this.shape(s, layout, el, t, doc); break;
       case 'pic': this.pictureEl(s, el, t, doc); break;
       case 'cxnSp': if (!this.ourConnector(s, el, t, doc)) this.line(el, kid(el, 'spPr'), t, doc); break;
       case 'grpSp': {
@@ -524,7 +529,11 @@ class Reader {
           inner = { sx, sy, tx: o.x - sx * fromEmu(chOff.getAttribute('x')), ty: o.y - sy * fromEmu(chOff.getAttribute('y')) };
         }
         if (Number(x?.getAttribute('rot') ?? 0)) this.warnings.add('Rotated groups came in unrotated.');
+        // one of our diagrams: its shapes come in as they are, then the frame that keeps its text goes round them
+        const diagramTag = this.tagsOf(s.path, kid(el, 'nvGrpSpPr', 'nvPr'))[TAG.diagram];
+        const hadShapes = new Set(doc.shapes.keys()), hadArrows = new Set(doc.arrows.keys());
         this.tree(s, layout, el, inner, doc);
+        if (diagramTag && off && ext) this.diagramFrame(diagramTag, off, ext, t, doc, hadShapes, hadArrows);
         break;
       }
       case 'graphicFrame': this.frame(s, el, t, doc); break;
@@ -539,12 +548,28 @@ class Reader {
     }
   }
 
+  /** The invisible frame of a diagram saved here, round the shapes its group brought in, keeping its text (with any words changed in PowerPoint). */
+  private diagramFrame(tag: string, off: Element, ext: Element, t: Xf, doc: Doc, hadShapes: Set<number>, hadArrows: Set<number>): void {
+    let saved: { s?: Partial<Shape> } | null;
+    try { saved = JSON.parse(tag); } catch { return; }
+    const diagram = cleanDiagram(saved?.s?.diagram);
+    if (!diagram) return;
+    const shapes = [...doc.shapes.keys()].filter((id) => !hadShapes.has(id));
+    const arrows = [...doc.arrows.keys()].filter((id) => !hadArrows.has(id));
+    const o = apply(t, fromEmu(off.getAttribute('x')), fromEmu(off.getAttribute('y')));
+    const box = { x1: o.x, y1: o.y, x2: o.x + t.sx * fromEmu(ext.getAttribute('cx')), y2: o.y + t.sy * fromEmu(ext.getAttribute('cy')) };
+    const frame: Frame = { atoms: [], captions: [], arrows, shapes, padX: 0, padY: 0, fit: true };
+    const made = doc.addShape({ kind: 'geo', geo: 'rect', ...box, filled: false, lineWidth: 0, color: '#000000', name: 'Diagram', frame, diagram: { ...diagram, w: box.x2 - box.x1, h: box.y2 - box.y1 } });
+    const text = textFromShapes(doc, made);
+    if (text !== diagram.text) doc.updateShape(made.id, { diagram: { ...made.diagram!, text } });
+  }
+
   /** Tables, charts, and objects from other programs (ChemDraw) in PowerPoint. */
   private frame(s: Part, el: Element, t: Xf, doc: Doc): void {
     const data = kid(el, 'graphic', 'graphicData');
     const uri = data?.getAttribute('uri') ?? '';
     if (/table$/.test(uri)) { this.table(s, el, t); return; }
-    if (/chart/.test(uri)) { this.warnings.add('Charts are not brought in.'); return; }
+    if (/chart/.test(uri)) { this.chart(s, el, data!, t, doc); return; }
     // an object from another program: PowerPoint keeps a picture of it, which comes in as a picture
     const find = (e: Element | null): Element | null => {
       if (!e) return null;
@@ -563,6 +588,25 @@ class Reader {
     if (!img || !box) return;
     if (/ChemDraw/i.test(ole?.getAttribute('progId') ?? '')) this.warnings.add('ChemDraw objects came in as pictures.');
     doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}) });
+  }
+
+  /** A chart: PowerPoint's own (its numbers from what PowerPoint cached), or ours when it charts the same numbers. */
+  private chart(s: Part, el: Element, data: Element, t: Xf, doc: Doc): void {
+    const box = boxOf(kid(el, 'xfrm'), t);
+    const ref = kid(data, 'chart');
+    const path = ref ? this.r.rels(s.path).get(rAttr(ref, 'id') ?? '')?.target : undefined;
+    if (!box || !path) return;
+    const w = box.x2 - box.x1, h = box.y2 - box.y1;
+    const got = readChart(this.r, path, w, h);
+    if (!got) { this.warnings.add('Some charts could not be read and were left out.'); return; }
+    let kept: ChartBox | null = null;
+    try {
+      const tag = this.tagsOf(s.path, kid(el, 'nvGraphicFramePr', 'nvPr'))[TAG.chart];
+      kept = tag ? JSON.parse(tag) as ChartBox : null;
+    } catch { kept = null; }
+    const chosen = sizedBox(kept?.chart && Array.isArray(kept.cells) && sameBoxData(kept, got.box) ? freshBox(kept) : got.box, w, h);
+    if (chosen === got.box && got.partial) this.warnings.add('Some charts mix chart types (a line over columns, a second axis): they show as one type.');
+    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: chartBoxPng(chosen, w, h), px: { w: chosen.chart.w, h: chosen.chart.h }, chart: chosen });
   }
 
   /** A picture's image (as a data URL), its size in pixels and its cropping. */
@@ -593,6 +637,21 @@ class Reader {
     return { src: dataUrl(bytes, mime), px: imageSize(bytes, mime) ?? { w: 100, h: 100 }, crop: crop && (crop.l || crop.t || crop.r || crop.b) ? crop : null, mime };
   }
 
+  /** The drawing inside a picture (a metafile) copied from Chem Illustrator, with the area it covered. */
+  private emfDrawing(from: string, pic: Element): { cdxml: string; box: string } | null {
+    const target = this.r.rels(from).get(rAttr(kid(pic, 'blipFill', 'blip'), 'embed') ?? '')?.target;
+    if (!target || !/\.emf$/i.test(target)) return null;
+    const bytes = this.r.bytes(target);
+    const cdxml = bytes ? drawingInEmf(bytes) : null;
+    if (!cdxml) return null;
+    try {
+      const b = readCdxml(cdxml).doc.bounds();
+      return b ? { cdxml, box: [b.x1, b.y1, b.x2, b.y2].join(' ') } : null;
+    } catch {
+      return null;
+    }
+  }
+
   private pictureEl(s: Part, el: Element, t: Xf, doc: Doc): void {
     const box = boxOf(kid(el, 'spPr', 'xfrm'), t);
     if (!box) return;
@@ -608,6 +667,9 @@ class Reader {
       } catch { /* not ours after all: read it as a picture */ }
     }
     if (tags[TAG.cdxml] && this.drawing(tags[TAG.cdxml], tags[TAG.box], box, doc)) return;
+    // a picture pasted into PowerPoint from Chem Illustrator: the drawing rides inside it
+    const inside = this.emfDrawing(s.path, el);
+    if (inside && this.drawing(inside.cdxml, inside.box, box, doc)) return;
     const img = this.image(s.path, el);
     if (!img) return;
     const look = this.pictureLook(kid(el, 'spPr'));
@@ -791,7 +853,7 @@ class Reader {
 
   /** A connector saved here: the arrow, stuck to the same shapes, where PowerPoint now has it. */
   private ourConnector(s: Part, el: Element, t: Xf, doc: Doc): boolean {
-    const tag = this.tagsOf(s.path, kid(el, 'nvCxnSpPr', 'nvPr'))[TAG.connector];
+    const tag = this.tagsOf(s.path, kid(el, el.localName === 'sp' ? 'nvSpPr' : 'nvCxnSpPr', 'nvPr'))[TAG.connector];
     if (!tag) return false;
     let saved: { a?: Omit<Arrow, 'id'> } | null;
     try { saved = JSON.parse(tag); } catch { return false; }
@@ -800,7 +862,16 @@ class Reader {
     const arrow: Omit<Arrow, 'id'> = { ...a };
     // a straight one moved in PowerPoint goes where it is now
     const box = boxOf(kid(kid(el, 'spPr'), 'xfrm'), t);
-    if (box && !a.elbow) {
+    if (box && a.sweep && !a.elbow) {
+      // a curved one: its ends go where the curve's box now is
+      const was = pointsBox(arrowPoints(a, 32));
+      const at = (p: { x: number; y: number }) => ({
+        x: box.x1 + (was.x2 > was.x1 ? ((p.x - was.x1) / (was.x2 - was.x1)) * (box.x2 - box.x1) : 0),
+        y: box.y1 + (was.y2 > was.y1 ? ((p.y - was.y1) / (was.y2 - was.y1)) * (box.y2 - box.y1) : 0),
+      });
+      arrow.tail = at(a.tail);
+      arrow.head = at(a.head);
+    } else if (box && !a.elbow) {
       arrow.tail = { x: box.flipH ? box.x2 : box.x1, y: box.flipV ? box.y2 : box.y1 };
       arrow.head = { x: box.flipH ? box.x1 : box.x2, y: box.flipV ? box.y1 : box.y2 };
     }

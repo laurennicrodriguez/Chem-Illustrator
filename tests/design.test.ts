@@ -260,6 +260,23 @@ describe('smart guides', () => {
   it('leave it where it is when nothing is close', () => {
     expect(guideSnap(box, { x: 30, y: 40 }, [other], 5)).toEqual({ offset: { x: 30, y: 40 }, lines: [] });
   });
+
+  it('pass over a far target with something in between, and prefer the nearer of two', () => {
+    const near = { x1: 100, y1: 60, x2: 140, y2: 80 };
+    // left edges: box moved to x 101 lines up with both; the near one wins
+    const g = guideSnap(box, { x: 101, y: 0 }, [other, near], 5);
+    expect(g.lines[0].y2).toBe(80);
+    // a far target hidden behind a third thing straddling the guide is ignored
+    const wall = { x1: 90, y1: 50, x2: 200, y2: 60 };
+    expect(guideSnap(box, { x: 101, y: 0 }, [other, wall], 5).offset.x).toBe(101);
+  });
+
+  it('line up a structure by its atom centres, not its label edges', () => {
+    const t = { box: { x1: 100, y1: 100, x2: 160, y2: 140 }, xs: [112], ys: [120] };
+    const g = guideSnap(box, { x: 0, y: 0 }, [t], 3, { xs: [10], ys: [] });
+    expect(g.offset.x).toBe(0);
+    expect(guideSnap(box, { x: 100, y: 0 }, [t], 3, { xs: [10], ys: [] }).offset.x).toBe(102);
+  });
 });
 
 describe('the Layers panel', () => {

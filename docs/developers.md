@@ -61,7 +61,7 @@ The `bench/` scripts drive the app in a headless browser to measure speed. Start
 | `src/io/files.ts`, `document-file.ts` | Open and Save dialogs, unsaved-changes prompts |
 | `src/io/clipboard.ts`, `src-tauri/src/clipboard.rs` | Cut, copy and paste; the Windows clipboard |
 | `src/ui/context-menu.ts`, `toolboxes.ts`, `palette-ui.ts`, `src/editor/frames.ts`, `src/chem/ring-fill.ts`, `src/render/fills.ts` | The right-click menu, toolboxes, your palettes, frames, ring fills, and hatched and gradient fills |
-| `src/design/`, `src/ui/design-panel.ts`, `layers-panel.ts`, `template-gallery.ts` | Design mode: the shape library, ready-made layouts, the Layers panel |
+| `src/design/`, `src/ui/design-panel.ts`, `layers-panel.ts`, `template-gallery.ts` | Design mode: the shape library, the icon library (`design/icons.ts`, data made by `scripts/build-icons.mjs` from `@mdi/svg`), ready-made layouts, the Layers panel |
 | `src/document/` | Document mode: the document, page layout, captions and fields, references and citations, find and replace, printing |
 | `src/io/docx-write.ts`, `docx-read.ts`, `cfb.ts` | Saving and opening Word files, and the ChemDraw objects embedded in them |
 | `src/worker/` | The RDKit chemistry engine, running in the background |

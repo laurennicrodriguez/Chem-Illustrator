@@ -124,14 +124,21 @@ describe('keys on an atom', () => {
     expect(doc.atoms.size).toBe(4);
   });
 
-  it('2 on a middle atom makes a ketone; on an end atom an acetyl', () => {
+  it('2 on a middle atom makes a ketone; an end atom becomes the C=O and the chain carries on', () => {
     const k = chain(3);
     grow(k.doc, k.ids[1], 'carbonyl');
     expect(k.doc.neighbors(k.ids[1]).filter((a) => a.z === 8)).toHaveLength(1);
     const ac = chain(2);
-    const c = grow(ac.doc, ac.ids[1], 'carbonyl')!;
-    expect(c).not.toBe(ac.ids[1]);
-    expect(ac.doc.neighbors(c).filter((a) => a.z === 8)).toHaveLength(1);
+    const next = grow(ac.doc, ac.ids[1], 'carbonyl')!;
+    // the end atom itself is the carbonyl carbon (as the cheat sheet draws it); the highlight goes past it
+    expect(ac.doc.neighbors(ac.ids[1]).filter((a) => a.z === 8)).toHaveLength(1);
+    expect(ac.doc.neighbors(ac.ids[1]).map((a) => a.id)).toContain(next);
+    // the chain zig-zags on (anti to the first bond); the O takes the other side
+    expect(angleDeg(ac.doc, ac.ids[0], ac.ids[1], next)).toBeCloseTo(120, 0);
+    const c = ac.doc.atoms.get(ac.ids[1])!, n = ac.doc.atoms.get(next)!;
+    const o = ac.doc.neighbors(ac.ids[1]).find((a) => a.z === 8)!;
+    expect(n.x).toBeGreaterThan(c.x);
+    expect(o.y).toBeLessThan(c.y);
   });
 
   it('3 makes a phenyl, 6 a cyclohexyl and v a cyclopropyl', () => {

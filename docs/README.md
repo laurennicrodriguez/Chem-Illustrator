@@ -15,7 +15,7 @@ Chem Illustrator is a free program for drawing chemical structures and putting t
 | <img src="images/slides.png" width="220" alt=""> | **[Slides](guide/slides.md)** | Talks and group meetings: layouts, templates, transitions, animations, presenter view | `.pptx` (PowerPoint) |
 | <img src="images/sheet.png" width="220" alt=""> | **[Sheets](guide/sheets.md)** | Tables of compounds: structures in cells, formula and mass columns, charts, isotope patterns, dashboards | `.xlsx` (Excel) |
 | <img src="images/document.png" width="220" alt=""> | **[Documents](guide/documents.md)** | Reports, theses and experimentals: styles, structures in the text, captions, references, tracked changes, equations | `.docx` (Word) |
-| <img src="images/design.png" width="220" alt=""> | **[Design](guide/design.md)** | TOC graphics, graphical abstracts, posters and flowcharts, with a shape library that includes lab glassware | `.pptx` (one page) |
+| <img src="images/design.png" width="220" alt=""> | **[Design](guide/design.md)** | TOC graphics, graphical abstracts, posters and flowcharts, with a shape library that includes lab glassware, and about 7,000 icons with lab and hazard signs | `.pptx` (one page) |
 
 Structures stay editable in every kind of file: double-click one in a slide, cell or document to change it with the drawing tools.
 

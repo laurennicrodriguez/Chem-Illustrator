@@ -1,7 +1,7 @@
 // Toolboxes (View > Toolboxes): where each one goes when dropped, and reading their settings.
 
 import { describe, expect, it } from 'vitest';
-import { defaultToolboxes, dropTarget, parseToolboxes, boxLocked, withAllLocked, withBoxLocked, sideFolded, withSideFolded } from '../src/ui/toolboxes';
+import { defaultToolboxes, dropTarget, parseToolboxes, boxLocked, withAllLocked, withBoxLocked, sideFolded, withSideFolded, freeSpot } from '../src/ui/toolboxes';
 
 describe('toolboxes', () => {
   const work = { left: 100, top: 100, right: 900, bottom: 700 };
@@ -68,5 +68,18 @@ describe('the side panel toolbox', () => {
     expect(defaultToolboxes().places.details).toMatchObject({ shown: true, dock: 'right' });
     // older settings could put it away
     expect(parseToolboxes({ places: { details: { shown: false, dock: 'float', x: 50, y: 60 } } }).places.details).toMatchObject({ shown: true, dock: 'float', x: 50, y: 60 });
+  });
+
+  it('puts a new floating toolbox in free space from the top right, clear of the others', () => {
+    const work = { left: 100, top: 100, right: 900, bottom: 700 };
+    // the first goes in the top right corner
+    expect(freeSpot(200, 80, work, [])).toEqual({ x: 692, y: 108 });
+    // the next goes below it
+    const first = { left: 692, top: 108, right: 892, bottom: 188 };
+    const next = freeSpot(200, 80, work, [first]);
+    expect(next.x).toBe(692);
+    expect(next.y).toBeGreaterThanOrEqual(196);
+    // too big to fit anywhere: the top right corner
+    expect(freeSpot(1000, 900, work, [])).toEqual({ x: 108, y: 108 });
   });
 });
