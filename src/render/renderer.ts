@@ -29,6 +29,7 @@ import { imageFor } from './images';
 import { layoutTable, drawTable, type TableLayout, type TablePart } from '../table';
 import type { TableData } from '../model';
 import { repeatLabelPlace } from '../chem/polymer';
+import { paintChartBox } from './chart-box-paint';
 
 export { FONT_STACK };
 
@@ -1116,7 +1117,7 @@ export class Renderer {
       edge();
       return;
     }
-    const img = s.src ? imageFor(s.src) : null;
+    const img = s.src && !s.chart ? imageFor(s.src) : null;
     ctx.save();
     if (look?.shadow) {
       // canvas shadows ignore the zoom, so they are scaled by it here
@@ -1138,7 +1139,10 @@ export class Renderer {
       ctx.roundRect(x, y, w, h, r);
       ctx.clip();
     }
-    if (!img) {
+    if (s.chart) {
+      // a chart is drawn from its data, sharp at any zoom
+      paintChartBox(ctx, s.chart, x, y, w, h);
+    } else if (!img) {
       ctx.fillStyle = '#eef1f5';
       ctx.fillRect(x, y, w, h);
     } else {

@@ -7,6 +7,7 @@ import { DocStyle, ACS_1996 } from './style';
 import { arrowPoints, gluePoint } from './objects';
 import { followPins } from './chem/pins';
 import type { EnergyData } from './design/energy';
+import type { ChartBox } from './sheet/chart-box';
 import { isMetal, isMetalLabel, lowestValence } from './chem/elements';
 import { NICKNAMES } from './chem/labels';
 
@@ -634,6 +635,11 @@ export interface Shape {
   locked?: boolean;
   /** A table: its cells, column widths and rules (see table.ts). */
   table?: TableData;
+  /**
+   * A picture that is a chart (Insert > Chart): the chart and its data, drawn live in the
+   * picture's box; `src` is a copy of it as a bitmap for programs that can't draw charts.
+   */
+  chart?: ChartBox;
   /**
    * A frame round other things (Chemistry > Labels and Numbers > Add Frame): what it surrounds (whole structures for
    * the atoms), the gap it keeps round them in points, and whether it follows them (grows,

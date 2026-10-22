@@ -30,6 +30,9 @@ import { askEquation } from './equation-dialog';
 import { ReferencesDialog, chooseReferences } from './references-dialog';
 import { citeSuper, formatOf, type Reference } from '../document/references';
 import { dataUrl, imageSize } from '../render/images';
+import { editChart, chartPoints } from './chart-editor';
+import { newChartBox, sizedBox } from '../sheet/chart-box';
+import { chartBoxPng } from '../render/chart-box-paint';
 import type { DocFile } from '../document/doc-file';
 import type { TableData } from '../model';
 import {
@@ -731,6 +734,8 @@ export class DocumentMode {
     const picked = this.pickedObject();
     if (picked !== null) {
       if (this.file?.t.objects[picked]?.kind === 'drawing') cmd('Edit Drawing', 'edit-figure');
+      const po = this.file?.t.objects[picked];
+      if (po?.kind === 'picture' && po.chart) cmd('Edit Chart…', 'edit-chart');
       cmd('Insert Caption…', 'insert-caption');
       const look = this.lookOf(picked);
       item(look?.frame ? 'Remove Frame' : 'Add Frame', () => this.setLook(picked, { frame: look?.frame ? undefined : 0.75, frameColor: undefined }), 'A thin black line round it (Format in the panel sets its width and colour)');
@@ -1429,6 +1434,7 @@ export class DocumentMode {
   editFigure(id: number): void {
     const f = this.file;
     const o = f?.t.objects[id];
+    if (o?.kind === 'picture' && o.chart) { void this.editChart(id); return; }
     if (!f || !o || o.kind !== 'drawing') return;
     const spot = this.cellSpot();
     this.host.editDrawing(o.contents, 'Figure', (c) => {
@@ -1440,6 +1446,47 @@ export class DocumentMode {
       f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { ...cur, contents: c } } } as DocText, 'Edit figure');
       this.focus();
     });
+  }
+
+  /** Insert > Chart: a chart with its own data, at the caret. */
+  private async insertChart(): Promise<void> {
+    const f = this.file!;
+    const spot = this.cellSpot();
+    const room = f.layout().textW;
+    const w = Math.min(360, room), h = w * 0.6;
+    const got = await editChart(newChartBox('column', w, h), true, (m, ms) => this.host.flash(m, ms));
+    if (this.file !== f) return;
+    this.backToCell(spot);
+    if (!got || got === 'delete') { this.focus(); return; }
+    const size = chartPoints(got.chart);
+    this.insertObject({ kind: 'picture', src: chartBoxPng(got, size.w, size.h), w: size.w, h: size.h, px: { w: got.chart.w, h: got.chart.h }, chart: got }, 'Insert chart');
+    this.focus();
+  }
+
+  /** A chart's data and settings (double-click it); it keeps the size it is shown at unless changed there. */
+  private async editChart(id: number): Promise<void> {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'picture' || !o.chart) return;
+    const spot = this.cellSpot();
+    const k = o.scale ?? 1;
+    const got = await editChart(sizedBox(o.chart, o.w * k, o.h * k), false, (m, ms) => this.host.flash(m, ms));
+    if (this.file !== f) return;
+    this.backToCell(spot);
+    const cur = f.t.objects[id];
+    if (!got || cur?.kind !== 'picture' || !cur.chart) { this.focus(); return; }
+    if (f.box?.cell) f.box.recorded = false;
+    if (got === 'delete') {
+      const at = objectOffsets(f.t.runs).get(id);
+      if (at !== undefined && !f.box) { f.ed.select(at, at + 1); f.ed.replaceSelection([], undefined, 'Delete chart'); }
+      else this.host.flash('Click the chart and press Delete to take it out.');
+      this.focus();
+      return;
+    }
+    const size = chartPoints(got.chart);
+    const next: DocObject = { ...cur, chart: got, src: chartBoxPng(got, size.w, size.h), w: size.w, h: size.h, px: { w: got.chart.w, h: got.chart.h }, scale: undefined };
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, 'Edit chart');
+    this.focus();
   }
 
   /** Make a figure or picture bigger or smaller (1 is its own size). */
@@ -1651,6 +1698,8 @@ export class DocumentMode {
         break;
       }
       case 'insert-table': void this.insertTable(); break;
+      case 'insert-chart': void this.insertChart(); break;
+      case 'edit-chart': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || !o.chart) { this.host.flash('Click a chart first (or double-click it).'); break; } void this.editChart(id); break; }
       case 'insert-caption': void this.insertCaption(); break;
       case 'cross-reference': void this.crossReference(); break;
       case 'compound-number': void this.compoundNumber(); break;

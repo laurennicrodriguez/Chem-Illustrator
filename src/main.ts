@@ -73,6 +73,9 @@ import { CommandSearch, uniqueCommands, type CommandItem } from './ui/command-se
 import { fillTemplate, templateSize } from './design/templates';
 import { askCycle } from './ui/cycle-dialog';
 import { askEnergy } from './ui/energy-dialog';
+import { editChart, chartPoints } from './ui/chart-editor';
+import { newChartBox, sizedBox } from './sheet/chart-box';
+import { chartBoxPng } from './render/chart-box-paint';
 import { itemsToSvg } from './render/svg';
 import { PAPERS, defaultPaper, orient, placeIn, inside, handoutCells, noteLines, placeSvg, pageSvg } from './print-layout';
 import { printPages } from './ui/print';
@@ -607,6 +610,42 @@ async function energyDiagram(id: number | null): Promise<void> {
   if (got) editor.putEnergyDiagram(got, pasteCentre(), now ? id! : undefined, deckNow()?.size);
 }
 editor.onEnergy = (id) => void energyDiagram(id);
+
+/** Insert > Chart: a chart with its own data (sample data to type over), in the middle of the slide or window. */
+async function insertChart(): Promise<void> {
+  finishTyping();
+  const deck = deckNow();
+  // on a slide: most of the slide, with text the size PowerPoint gives a chart's (about 13 pt)
+  const slides = !!deck && ws.active.mode === 'slides';
+  const fit = deck ? Math.min(slides ? 2 : 1, (deck.size.w * 0.7) / 360, (deck.size.h * 0.7) / 216) : 1;
+  const box = newChartBox('column', 360 * fit, 216 * fit);
+  if (slides) box.chart.fontSize = 18;
+  const got = await editChart(box, true, flash);
+  if (!got || got === 'delete') return;
+  const { w, h } = chartPoints(got.chart);
+  const c = pasteCentre();
+  let made: Shape | null = null;
+  doc.edit('Insert chart', () => {
+    made = doc.addShape({ kind: 'picture', x1: c.x - w / 2, y1: c.y - h / 2, x2: c.x + w / 2, y2: c.y + h / 2, src: chartBoxPng(got, w, h), px: { w: got.chart.w, h: got.chart.h }, chart: got });
+  });
+  editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set([made!.id]) };
+  editor.changed();
+}
+
+/** Double-clicking a chart on a slide or drawing: its data and settings. */
+async function editChartShape(id: number): Promise<void> {
+  finishTyping();
+  const s = doc.shapes.get(id);
+  if (!s?.chart) return;
+  const x = Math.min(s.x1, s.x2), y = Math.min(s.y1, s.y2);
+  const got = await editChart(sizedBox(s.chart, Math.abs(s.x2 - s.x1), Math.abs(s.y2 - s.y1)), false, flash);
+  if (!got || !doc.shapes.get(id)?.chart) return;
+  if (got === 'delete') { doc.edit('Delete chart', () => doc.removeShape(id)); editor.changed(); return; }
+  const { w, h } = chartPoints(got.chart);
+  doc.edit('Change chart', () => doc.updateShape(id, { chart: got, src: chartBoxPng(got, w, h), px: { w: got.chart.w, h: got.chart.h }, x1: x, y1: y, x2: x + w, y2: y + h, crop: undefined }));
+  editor.changed();
+}
+editor.onChart = (id) => void editChartShape(id);
 
 /** Select just these (new) atoms and their bonds. */
 function selectNewAtoms(ids: number[]): void {
@@ -2838,6 +2877,8 @@ const COMMANDS: Record<string, () => unknown> = {
   redo: () => redo(),
   'insert-picture': () => insertPicture(),
   'insert-table': () => { void insertTable(); },
+  'insert-chart': () => { void insertChart(); },
+  'edit-chart': () => { const id = [...editor.sel.shapes].find((x) => doc.shapes.get(x)?.chart); if (id === undefined) { flash('Click a chart first.'); return; } void editChartShape(id); },
   crop: () => cropPicture(),
   'text-box': () => { editor.setTool('text'); flash('Click to type, or drag across to make a text box that wraps.'); },
   'new-slide': () => newSlide(),
@@ -4669,6 +4710,7 @@ registerBundledFonts(() => {
 applyRibbonIcons();
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
+stylePanel.onEditChart = (id) => void editChartShape(id);
 stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
 stylePanel.tie = (ids) => tieCaptions(ids);
 
@@ -4794,6 +4836,7 @@ function drawingMenu(): MenuItem[] {
     { label: 'Align', items: arrange },
     { label: 'Rotate or Flip', items: turn },
     ...(order.length ? [{ label: 'Order', items: order }] : []),
+    ...(shapes.some((x) => x.chart) ? [{ cmd: 'edit-chart', label: 'Edit Chart…' }] : []),
     ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }, { label: 'Picture Style', items: PICTURE_STYLES.map((p) => ({ cmd: `picture-style-${p.id}`, label: p.name })) }] : []),
     ...(ws.active.mode === 'slides' ? [{ label: 'Animation', items: [
       ...ANIM_COMMANDS.slice(0, EFFECTS.length), null, ...ANIM_COMMANDS.slice(EFFECTS.length), null,

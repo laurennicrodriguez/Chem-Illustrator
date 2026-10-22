@@ -9,6 +9,7 @@ import type { Contents, ParaStyle, TableData } from '../model';
 import type { DocStyle } from '../style';
 import type { CiteStyle, Reference } from '../document/references';
 import type { CiteFormat } from '../document/cite-styles';
+import type { ChartBox } from '../sheet/chart-box';
 
 export const W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 export const WP_NS = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
@@ -81,7 +82,12 @@ export interface DocxModel {
   citeOptions?: Partial<CiteFormat>;
   /** Each bibliography by its id: the text written (to tell whether Word changed it) and its paragraph's settings. */
   bibliographies?: Record<number, { text: string; ps: ParaStyle }>;
+  /** Each chart by its id, as made here (used when Word's copy charts the same numbers). */
+  charts?: Record<number, ChartBox>;
 }
+
+/** The name of a chart's frame in Word ("Chart 4", 4 its id in our part). */
+export const CHART_NAME = 'Chart';
 
 /** The field instruction of a citation: Word shows the numbers written as its result and leaves them alone. */
 export const CITE_FIELD = 'ADDIN CHEMILLUSTRATOR_CITE';

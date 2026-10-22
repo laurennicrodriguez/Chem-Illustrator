@@ -283,6 +283,8 @@ export class Editor {
   onProperties: () => void = () => {};
   /** A double-click on an energy diagram: open its numbers (the frame's id). */
   onEnergy: (id: number) => void = () => {};
+  /** A chart (on a slide or drawing) was double-clicked: open its data and settings. */
+  onChart: (id: number) => void = () => {};
   private drag: Drag | null = null;
   /** Something is being dragged (moved, rotated or resized) right now. */
   get dragging(): boolean { return !!this.drag?.moved; }
@@ -847,6 +849,9 @@ export class Editor {
       this.editCaption(h.id, { x: e.clientX, y: e.clientY });
     } else if (h && h.kind === 'shape' && this.doc.shapes.get(h.id)?.kind === 'table') {
       this.editTableAt(h.id, p);
+    } else if (h && h.kind === 'shape' && this.doc.shapes.get(h.id)?.chart) {
+      this.selectOnly({ kind: 'shape', id: h.id });
+      this.onChart(h.id);
     } else if (h && h.kind === 'shape' && this.doc.shapes.get(h.id)?.kind === 'geo') {
       this.editGeoText(h.id, p);
     }

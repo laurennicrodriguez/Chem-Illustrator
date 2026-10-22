@@ -579,6 +579,26 @@ dialog.energy-dialog { width: min(96vw, 680px); max-height: 92vh; }
 .energy-rows { display: flex; gap: 8px; margin: 6px 0; }
 .energy-pair { display: flex; align-items: center; gap: 6px; }
 .energy-pair input { width: 5em; }
+/* Insert > Chart (Document, Slides and Design modes) */
+dialog.chart-editor { width: min(98vw, 1120px); max-height: 94vh; display: flex; flex-direction: column; }
+dialog.chart-editor[open] { display: flex; }
+.ce-body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; min-height: 0; flex: 1 1 auto; }
+.ce-left { display: flex; flex-direction: column; gap: 6px; min-width: 0; min-height: 0; }
+.ce-kinds { display: flex; flex-wrap: wrap; gap: 4px; }
+.ce-kinds button { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 3px 8px; }
+.ce-kinds button[aria-checked='true'] { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.ce-kind-icon { font-size: 15px; line-height: 1; }
+.ce-preview { flex: 1 1 260px; min-height: 200px; display: flex; align-items: center; justify-content: center; background: repeating-conic-gradient(var(--bg) 0 25%, var(--panel) 0 50%) 0 0 / 16px 16px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.ce-preview canvas { box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18); }
+.ce-data-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.ce-data-head button { margin-left: auto; font-size: 12px; padding: 2px 8px; }
+.ce-grid { position: relative; display: flex; flex-direction: column; height: 210px; flex: none; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.ce-grid .sh-tabs { display: none; }
+.ce-settings { overflow-y: auto; min-height: 0; max-height: calc(94vh - 120px); padding-right: 4px; font-size: 12px; }
+.ce-settings p { margin: 4px 0; }
+.ce-settings .small { font-size: 11px; }
+.ce-settings .cp-head { margin: 14px 0 2px; font-size: 12px; font-weight: 600; color: var(--text); border-bottom: 1px solid var(--line); padding-bottom: 2px; }
+@media (max-width: 760px) { .ce-body { grid-template-columns: 1fr; } .ce-settings { max-height: 40vh; } }
 /* Help > Send Feedback */
 dialog.feedback-dialog { width: min(92vw, 560px); }
 dialog.feedback-dialog .muted { margin: 4px 0 10px; max-width: 62ch; }
