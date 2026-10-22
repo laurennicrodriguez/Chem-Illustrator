@@ -93,7 +93,20 @@ export interface Filter {
   conditions: Record<number, Condition>;
 }
 
-export interface SortKey { col: number; descending?: boolean }
+export interface SortKey {
+  /** The column sorted by (the row, when sorting left to right). */
+  col: number;
+  descending?: boolean;
+  /** A custom order (Excel's custom lists: Mon, Tue, Wed…); values not in it go after, in the usual order. */
+  custom?: string[];
+}
+
+export interface SortOptions {
+  /** Capitals count: equal text sorts lowercase first, as in Excel. */
+  caseSensitive?: boolean;
+  /** Sort the columns of the block left to right (by rows) instead of its rows. */
+  byColumns?: boolean;
+}
 
 /** What the sheet needs from the chemistry engine. Answers that aren't ready are #BUSY!; `ready` is called when they are. */
 export interface ChemHost {
@@ -175,7 +188,7 @@ function patchStyleWith(s: CellStyle | undefined, patch: Partial<CellStyle>): Ce
 // ---------------------------------------------------------------- history
 
 type MapField = 'cells' | 'colWidths' | 'rowHeights' | 'colDefs' | 'colStyles' | 'hiddenRows' | 'hiddenCols' | 'notes';
-type ValueField = 'merges' | 'filter' | 'frozen' | 'name' | 'condFormats' | 'tables' | 'charts' | 'dashboard' | 'validations';
+type ValueField = 'merges' | 'filter' | 'frozen' | 'split' | 'name' | 'condFormats' | 'tables' | 'charts' | 'dashboard' | 'validations';
 
 interface Change {
   sheet: Sheet | null; // null: the workbook's list of sheets
@@ -216,6 +229,8 @@ export class Sheet {
   filter: Filter | null = null;
   /** Rows and columns that stay put while scrolling. */
   frozen = { rows: 0, cols: 0 };
+  /** View > Split: the window in two or four panes that scroll on their own, split above this row and left of this column (null: none). */
+  split: { rows: number; cols: number } | null = null;
   /** Conditional formatting rules, the first in the list winning. */
   condFormats: CondFormat[] = [];
   /** Blocks formatted as tables (Excel's Format as Table). */
@@ -555,6 +570,12 @@ export class Sheet {
     this.assign('frozen', { rows: Math.max(0, rows), cols: Math.max(0, cols) });
   }
 
+  /** Split the window above a row and left of a column (null, or 0 and 0, takes the split away). */
+  setSplit(split: { rows: number; cols: number } | null): void {
+    const v = split && (split.rows > 0 || split.cols > 0) ? { rows: Math.max(0, split.rows), cols: Math.max(0, split.cols) } : null;
+    if (JSON.stringify(v) !== JSON.stringify(this.split)) this.assign('split', v);
+  }
+
   rename(name: string): void {
     const old = this.name;
     if (old === name) return;
@@ -824,13 +845,16 @@ export class Sheet {
   // ---------------------------------------------------------------- sorting and filtering
 
   /**
-   * Sort the rows of a block by some columns (the first key first). Empty cells go last either
-   * way, as in Excel. Structures sort by molecular weight. Formulas move with their rows.
+   * Sort the rows of a block by some columns (the first key first), or with `byColumns` its
+   * columns by some rows. Empty cells go last either way, as in Excel. Structures sort by
+   * molecular weight. Formulas move with their rows (or columns), and so do notes.
    */
-  sort(r: Range, keys: SortKey[]): void {
-    const rows: number[] = [];
-    for (let row = r.r1; row <= r.r2; row++) rows.push(row);
-    const keyValue = (row: number, col: number): Value => {
+  sort(r: Range, keys: SortKey[], opts: SortOptions = {}): void {
+    const across = !!opts.byColumns;
+    const lines: number[] = [];
+    for (let i = across ? r.c1 : r.r1; i <= (across ? r.c2 : r.r2); i++) lines.push(i);
+    const keyValue = (line: number, at: number): Value => {
+      const [row, col] = across ? [at, line] : [line, at];
       const c = this.cell(row, col);
       if (c?.structure) {
         const p = this.wb.chem?.structure(c.structure);
@@ -838,7 +862,13 @@ export class Sheet {
       }
       return this.value(row, col);
     };
-    const keyed = rows.map((row) => ({ row, k: keys.map((key) => keyValue(row, key.col)) }));
+    const shown = (line: number, at: number): string => (across ? this.shownText(at, line) : this.shownText(line, at)).toLowerCase();
+    const keyed = lines.map((line) => ({
+      line,
+      k: keys.map((key) => keyValue(line, key.col)),
+      // where the value comes in a custom order (past the end when it isn't in it)
+      o: keys.map((key) => (key.custom ? orderIn(key.custom, shown(line, key.col)) : 0)),
+    }));
     keyed.sort((a, b) => {
       for (let i = 0; i < keys.length; i++) {
         const x = a.k[i], y = b.k[i];
@@ -846,29 +876,35 @@ export class Sheet {
         if (ex || ey) { if (ex !== ey) return ex ? 1 : -1; continue; }
         const errx = isError(x), erry = isError(y);
         if (errx || erry) { if (errx !== erry) return errx ? 1 : -1; continue; }
-        const c = compareValues(x, y);
+        let c = keys[i].custom ? a.o[i] - b.o[i] : 0;
+        if (!c) c = compareValues(x, y);
+        // with Case Sensitive, equal text puts lowercase first (as Excel does)
+        if (!c && opts.caseSensitive && typeof x === 'string' && typeof y === 'string') c = caseOrder(x, y);
         if (c) return keys[i].descending ? -c : c;
       }
-      return a.row - b.row;
+      return a.line - b.line;
     });
-    if (keyed.every((x, i) => x.row === rows[i])) return;
-    const blocks = keyed.map(({ row }) => {
-      const line: (Cell | undefined)[] = [];
+    if (keyed.every((x, i) => x.line === lines[i])) return;
+    const width = across ? r.r2 - r.r1 + 1 : r.c2 - r.c1 + 1;
+    const at = (line: number, j: number): [number, number] => (across ? [r.r1 + j, line] : [line, r.c1 + j]);
+    const blocks = keyed.map(({ line }) => {
+      const cells: (Cell | undefined)[] = [];
       const notes: (CellNote | undefined)[] = [];
-      for (let col = r.c1; col <= r.c2; col++) { line.push(this.cell(row, col)); notes.push(this.noteAt(row, col)); }
-      return { row, line, notes };
+      for (let j = 0; j < width; j++) { const [row, col] = at(line, j); cells.push(this.cell(row, col)); notes.push(this.noteAt(row, col)); }
+      return { line, cells, notes };
     });
-    // rows hidden by a filter (or by hand) stay hidden as they move
-    const hidden = keyed.map(({ row }) => this.hiddenRows.has(row));
-    blocks.forEach(({ row: from, line, notes }, i) => {
-      const to = r.r1 + i;
-      if (hidden[i] !== this.hiddenRows.has(to)) this.setRowHidden(to, hidden[i]);
-      line.forEach((c, j) => {
-        const col = r.c1 + j;
-        const input = c?.input?.startsWith('=') ? shiftFormula(c.input, to - from, 0) : c?.input;
-        this.setCell(to, col, c ? { ...c, input } : undefined);
+    // rows (or columns) hidden by a filter or by hand stay hidden as they move
+    const isHidden = (line: number) => (across ? this.hiddenCols.has(line) : this.hiddenRows.has(line));
+    const hidden = keyed.map(({ line }) => isHidden(line));
+    blocks.forEach(({ line: from, cells, notes }, i) => {
+      const to = lines[0] + i;
+      if (hidden[i] !== isHidden(to)) { if (across) this.setColHidden(to, hidden[i]); else this.setRowHidden(to, hidden[i]); }
+      cells.forEach((c, j) => {
+        const [row, col] = at(to, j);
+        const input = c?.input?.startsWith('=') ? shiftFormula(c.input, across ? 0 : to - from, across ? to - from : 0) : c?.input;
+        this.setCell(row, col, c ? { ...c, input } : undefined);
         // notes move with their rows, as in Excel
-        this.setNote(to, col, notes[j]);
+        this.setNote(row, col, notes[j]);
       });
     });
   }
@@ -957,7 +993,7 @@ export class Sheet {
 const READER_COLS = 1 << 15;
 
 /** Changes that leave every value as it was. */
-const NO_VALUES = new Set<string>(['colWidths', 'rowHeights', 'colStyles', 'hiddenRows', 'hiddenCols', 'merges', 'filter', 'frozen', 'condFormats', 'tables', 'charts', 'dashboard', 'notes', 'validations']);
+const NO_VALUES = new Set<string>(['colWidths', 'rowHeights', 'colStyles', 'hiddenRows', 'hiddenCols', 'merges', 'filter', 'frozen', 'split', 'condFormats', 'tables', 'charts', 'dashboard', 'notes', 'validations']);
 
 const isFormulaText = (t: string | undefined): boolean => !!t && t.startsWith('=') && t.length > 1;
 
@@ -1111,7 +1147,7 @@ export class Workbook {
       return;
     }
     const s = c.sheet!;
-    if (c.field === 'merges' || c.field === 'filter' || c.field === 'frozen' || c.field === 'name' || c.field === 'condFormats' || c.field === 'tables' || c.field === 'charts' || c.field === 'dashboard' || c.field === 'validations') {
+    if (c.field === 'merges' || c.field === 'filter' || c.field === 'frozen' || c.field === 'split' || c.field === 'name' || c.field === 'condFormats' || c.field === 'tables' || c.field === 'charts' || c.field === 'dashboard' || c.field === 'validations') {
       (s as unknown as Record<string, unknown>)[c.field] = v;
       return;
     }
@@ -1614,4 +1650,20 @@ export function growToMerges(sheet: Sheet, r: Range): Range {
     }
   }
   return out;
+}
+
+/** Where a text comes in a custom sort order (ignoring capitals), or past the end. */
+function orderIn(list: string[], text: string): number {
+  const i = list.findIndex((x) => x.trim().toLowerCase() === text.trim());
+  return i < 0 ? list.length : i;
+}
+
+/** Two texts equal but for capitals: the one with a lowercase letter first, at the first place they differ, comes first. */
+function caseOrder(a: string, b: string): number {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    if (a[i] === b[i]) continue;
+    const la = a[i] === a[i].toLowerCase(), lb = b[i] === b[i].toLowerCase();
+    if (la !== lb) return la ? -1 : 1;
+  }
+  return 0;
 }

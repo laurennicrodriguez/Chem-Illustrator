@@ -1066,10 +1066,6 @@ button.primary:hover { filter: brightness(1.08); }
 .sh-tab-add { flex: none; padding: 0 10px; border: 0; background: transparent; color: var(--muted); font-size: 15px; }
 .sh-tab-add:hover { color: var(--text); }
 .sh-tab-name { font: inherit; font-size: 12px; width: 120px; padding: 2px 6px; }
-.sh-find { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: var(--panel); border-bottom: 1px solid var(--line); }
-.sh-find[hidden] { display: none; }
-.sh-find input { font: inherit; padding: 2px 6px; width: 220px; }
-.sh-find button { padding: 1px 8px; }
 
 .colour-menu { min-width: 0; padding: 6px; gap: 6px; }
 .colour-grid { display: grid; grid-template-columns: repeat(12, 18px); gap: 3px; }
@@ -1918,3 +1914,42 @@ body.sheet-mode:not(.floating-drawing):not(.split-view) #tools::before {
 body.sheet-mode:not(.floating-drawing):not(.split-view) #tools::before { content: 'Draw a structure: pick a tool to draw in the selected cell, or to change its structure.'; }
 body.doc-mode:not(.floating-drawing):not(.split-view) #tools > :not(:hover):not(:focus-within),
 body.sheet-mode:not(.floating-drawing):not(.split-view) #tools > :not(:hover):not(:focus-within) { opacity: 0.55; }
+
+/* Sheet mode's data tools: Find and Replace, Go To Special, Series, Paste Special, Text to Columns, Remove Duplicates, Sort, Advanced Filter */
+.sd-radios { border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px 8px; margin: 8px 0; }
+.sd-radios legend, .sd-sub legend, .sd-delims legend { padding: 0 4px; color: var(--muted); font-size: 0.92em; }
+.sd-radios label { display: block; margin: 3px 0; }
+.sd-radios.sd-two-cols { display: grid; grid-template-columns: 1fr 1fr; column-gap: 18px; }
+.sd-radios.sd-two-cols legend { grid-column: 1 / -1; }
+.sd-radios[disabled], .sd-sub[disabled], .sd-delims[disabled] { opacity: 0.5; }
+.sd-sub, .sd-delims { border: 1px solid var(--line); border-radius: 6px; padding: 2px 10px 6px; margin: 8px 0; }
+.sd-sub .ask-row, .sd-delims .ask-row { margin: 3px 0; }
+dialog.sd-find { position: fixed; inset: 64px 18px auto auto; margin: 0; width: min(92vw, 470px); z-index: 50; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22); }
+.sd-find-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; }
+.sd-find-head .dv-tabs { flex: 1; margin: 0 0 4px; }
+.sd-close { border: 0; background: transparent; font-size: 18px; line-height: 1; padding: 2px 6px; }
+.sd-find-opts { margin: 4px 0; }
+.sd-find-opts summary { cursor: pointer; color: var(--muted); }
+.sd-find-status { min-height: 1.2em; margin: 4px 0; }
+.sd-find-list { max-height: 220px; overflow: auto; }
+.sd-find-list:empty { display: none; }
+.sd-find-table, .sd-preview-table { border-collapse: collapse; width: 100%; font-size: 0.92em; }
+.sd-find-table th, .sd-find-table td, .sd-preview-table th, .sd-preview-table td { border: 1px solid var(--line); padding: 2px 6px; text-align: left; white-space: nowrap; }
+.sd-find-table tr[tabindex] { cursor: pointer; }
+.sd-find-table tr.on td, .sd-find-table tr:focus td { background: var(--accent-soft, #d8eee2); }
+.sd-find-list > button { margin-top: 6px; }
+.sd-special-body { display: grid; grid-template-columns: 1.5fr 1fr; gap: 10px; align-items: start; }
+.sd-special-side .sd-radios label { font-size: 0.95em; }
+.sd-series-top { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.sd-preview { max-height: 220px; max-width: min(80vw, 640px); overflow: auto; border: 1px solid var(--line); border-radius: 4px; }
+.sd-preview-table th { padding: 2px; background: var(--panel); }
+.sd-preview-table th select { font: inherit; font-size: 0.9em; }
+.sd-preview-table td.skip { color: var(--muted); text-decoration: line-through; }
+.sd-cols { max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; margin: 6px 0; }
+.sd-cols .ask-row { margin: 3px 0; }
+.sd-levels { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; max-height: 280px; overflow: auto; }
+.sd-level { display: grid; grid-template-columns: 5em minmax(9em, 1fr) minmax(12em, 1fr) minmax(8em, 1fr); gap: 6px; align-items: center; padding: 3px 4px; border-radius: 4px; }
+.sd-level.on { background: var(--accent-soft, #d8eee2); }
+.sd-level select, .sd-level input { font: inherit; min-width: 0; }
+.sd-level input[hidden] { display: none; }
+

@@ -201,6 +201,11 @@ export const COMMAND_NAMES: Record<string, string> = {
   'new-note': 'New note on the cell (or change its note)', 'edit-note': 'Change the cell\'s note', 'delete-note': 'Delete the notes and comments in the selection',
   'show-note': 'Show the cell\'s note all the time (or only when pointed at)', 'show-all-notes': 'Show all notes (on or off)', 'convert-notes': 'Convert notes to comments',
   'data-validation': 'Data validation…', 'circle-invalid': 'Circle invalid data (on or off)', 'pick-from-list': 'Pick from the drop-down list',
+  'find-next': 'Find next', 'go-to': 'Go To…', 'go-to-special': 'Go To Special…', 'fill-series': 'Fill a series…', 'flash-fill': 'Flash Fill',
+  'paste-special': 'Paste Special…', 'paste-values': 'Paste values', 'paste-transpose': 'Paste transposed', 'text-to-columns': 'Text to Columns…', 'remove-duplicates': 'Remove Duplicates…',
+  'custom-sort': 'Sort by several columns…', 'advanced-filter': 'Advanced Filter…', 'clear-filter': 'Clear the filter (show every row)',
+  'freeze-panes': 'Freeze panes above and left of the cell', 'freeze-top-row': 'Freeze the top row', 'freeze-first-col': 'Freeze the first column', 'unfreeze-panes': 'Unfreeze panes',
+  'split-window': 'Split the window (on or off)',
   // documents
   'new-document': 'New document', 'doc-align-left': 'Align text left', 'doc-align-center': 'Centre text', 'doc-align-right': 'Align text right',
   'doc-justify': 'Justify text', 'style-normal': 'Normal style', 'style-title': 'Title style', 'style-h1': 'Heading 1 style', 'style-h2': 'Heading 2 style',
@@ -351,6 +356,7 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
     'Ctrl+9': 'hide-rows', 'Ctrl+Shift+9': 'unhide-rows', 'Ctrl+0': 'hide-cols', 'Ctrl+Shift+0': 'unhide-cols',
     'Ctrl+Shift+L': 'filter', 'Ctrl+N': 'new-sheet', 'Shift+F11': 'insert-sheet',
     'Ctrl+Shift+N': 'structure-from-name', 'Shift+F2': 'new-note', 'Ctrl+Alt+M': 'new-comment', 'Ctrl+K': 'insert-link',
+    'Ctrl+H': 'replace', 'Shift+F4': 'find-next', 'Ctrl+G': 'go-to', F5: 'go-to', 'Ctrl+E': 'flash-fill', 'Ctrl+Alt+V': 'paste-special',
   }),
   // Word's keys
   document: verbs('command', {

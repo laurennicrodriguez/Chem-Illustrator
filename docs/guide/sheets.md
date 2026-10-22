@@ -100,6 +100,16 @@ Click in your data and choose **Home** tab ▸ **Format as Table** (or **Insert*
 - **Filter** (Ctrl+Shift+L) puts buttons in the header row. Each one sorts, picks values to show, or keeps rows that match a condition such as "less than 500" or "containing Br".
 - **By Substructure** opens the drawing tools: draw the part to look for, and only rows whose structure contains it stay.
 - **Freeze Header** keeps the header rows in view as you scroll.
+- **Data > Custom Sort…** sorts by several levels (add, copy, delete and reorder them), in a custom order such as "Low, Medium, High", case sensitive or not, or left to right.
+- **Data > Advanced Filter…** uses a block of criteria typed above the table: tests on one row must all pass, and any row of tests may pass. It filters in place or copies the matching rows elsewhere, and can keep unique rows only. **Clear Filter** shows every row again.
+- **View > Freeze Panes ▾** freezes the rows above and the columns left of the selected cell, or just the top row or first column. **View > Split** splits the window into panes that scroll on their own; drag a bar to move it, double-click it to remove it. Both are saved in .xlsx files.
+
+## Finding and changing data
+
+- **Find & Select ▾** (Home tab): **Find** (Ctrl+F) and **Replace** (Ctrl+H) search the selection, the sheet or the whole workbook, in formulas, values or notes, with `?` and `*` wildcards. **Find All** lists every match. **Go To** (Ctrl+G or F5) jumps to a cell or name, and **Go To Special…** selects blanks, constants, formulas, structures, differences, precedents, dependents and more. With blanks selected, type a value and press Ctrl+Enter to fill them all.
+- **Fill ▾ > Series…** fills a linear, growth or date series (days, weekdays, months, years), with a step and a stop value. **Flash Fill** (Ctrl+E) learns from one or two examples typed beside a table (initials, a surname, parts joined with punctuation) and fills the rest of the column.
+- **Paste ▾ > Paste Special…** (Ctrl+Alt+V) pastes values, formulas, formats, notes, validation or column widths only; adds, subtracts, multiplies or divides into the cells below (multiply a column of mmol by 1000 to get µmol); skips blanks; or transposes rows into columns.
+- **Data > Text to Columns…** splits one column by delimiters or fixed widths, with a preview and a format for each new column. **Remove Duplicates…** removes rows whose chosen columns repeat.
 
 ## Notes and comments
 
