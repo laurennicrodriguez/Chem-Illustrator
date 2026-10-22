@@ -32,6 +32,7 @@ import { addBookmark, bookmarkPara, bookmarksOf, docPlaces, placeLink, placeName
 import { DocComments } from './doc-comments';
 import { TOF_NAMES, tocEntries, tofEntries } from '../document/toc';
 import { changesIn, countChanges, decide, decideEverywhere, reviewAuthor, setReviewAuthor } from '../document/revisions';
+import { combineDocuments, compareDocuments } from '../document/compare';
 import { ask } from './ask';
 import { askEquation } from './equation-dialog';
 import { ReferencesDialog, chooseReferences } from './references-dialog';
@@ -86,6 +87,12 @@ export interface DocModeHost {
   preferredChanged?(): void;
   /** The name put on tracked changes was changed (save settings). */
   reviewNameChanged?(): void;
+  /** The documents open in tabs, by name (Review > Compare offers them). */
+  openDocuments?(): { name: string; t: DocText }[];
+  /** Choose a Word file and read it (not opened in a tab). */
+  pickDocument?(): Promise<{ name: string; t: DocText } | null>;
+  /** Show a document made here (Compare's result) in a new tab, unsaved. */
+  showDocument?(t: DocText, name: string): void;
   measure: Measure;
 }
 
@@ -2628,6 +2635,7 @@ export class DocumentMode {
       case 'edit-equation': { const m = this.pickedMath(); if (m === null) { this.host.flash('Click an equation first (or double-click it).'); break; } void this.editEquation(m); break; }
       case 'track-changes': void this.toggleTracking(); break;
       case 'review-name': void this.askReviewName(); break;
+      case 'compare-docs': case 'combine-docs': void this.compare(cmd === 'combine-docs'); break;
       case 'new-comment': void this.comments.add(); return true;
       case 'delete-comment': this.comments.remove(); break;
       case 'delete-all-comments': this.comments.removeAll(); break;
@@ -3354,6 +3362,44 @@ export class DocumentMode {
     const on = !f.t.track;
     f.ed.update({ ...f.t, track: on || undefined } as DocText, on ? 'Track changes on' : 'Track changes off');
     this.host.flash(on ? `Tracking changes as ${reviewAuthor()}: what you type is underlined and what you delete is struck through, until accepted or rejected (Review tab).` : 'Changes are no longer tracked. Changes already marked stay until accepted or rejected.', 7000);
+  }
+
+  /**
+   * Review > Compare (or Combine): two documents, open in tabs or chosen from files, and a new
+   * document with the differences as tracked changes, as Word makes.
+   */
+  private async compare(combine: boolean): Promise<void> {
+    const f = this.file!;
+    const open = this.host.openDocuments?.() ?? [];
+    const here = open.find((d) => d.t === f.t) ?? { name: 'This document', t: f.t };
+    const others = open.filter((d) => d.t !== f.t);
+    const FILE = '__file';
+    const choices = [here, ...others].map((d, i) => ({ value: String(i), label: d.name }));
+    choices.push({ value: FILE, label: 'Choose a Word file…' });
+    const got = await ask(combine ? 'Combine Documents' : 'Compare Documents', [
+      { name: 'a', label: 'Original document', value: '0', options: choices },
+      { name: 'b', label: 'Revised document', value: others.length ? '1' : FILE, options: choices },
+      { name: 'who', label: combine ? 'Label untracked changes in the revised document with' : 'Label changes with', value: reviewAuthor() || 'Revised', help: combine ? 'Changes already tracked in either document keep their own names.' : 'The name shown on each change found.' },
+      { name: 'level', label: 'Show changes at', value: 'word', options: [{ value: 'word', label: 'Word level (whole words)' }, { value: 'char', label: 'Character level (letter by letter)' }] },
+    ], {
+      ok: combine ? 'Combine' : 'Compare',
+      note: combine
+        ? 'Puts two reviewers\' copies of one document together in a new document: each reviewer\'s tracked changes, with their names, ready to accept or reject (Review > Accept and Reject).'
+        : 'Opens a new document: the revised document with what changed since the original marked as tracked changes (deleted text struck through, new text underlined). Both are compared with their own tracked changes accepted. Formatting-only changes are not marked.',
+    });
+    if (!got) return;
+    const list = [here, ...others];
+    const take = async (v: string) => (v === FILE ? (await this.host.pickDocument?.()) ?? null : list[Number(v)] ?? null);
+    const a = await take(got.a);
+    if (!a) return;
+    const b = await take(got.b);
+    if (!b) return;
+    if (a.t === b.t) { this.host.flash('Choose two different documents to compare.'); return; }
+    const opts = { author: got.who.trim() || 'Revised', level: got.level === 'char' ? 'char' as const : 'word' as const };
+    const { doc, changes } = combine ? combineDocuments(a.t, b.t, opts) : compareDocuments(a.t, b.t, opts);
+    const stem = (n: string) => n.replace(/\.docx$/i, '');
+    this.host.showDocument?.(doc, combine ? `Combined ${stem(a.name)}` : `Compared ${stem(b.name)}`);
+    this.host.flash(changes ? `${changes} change${changes === 1 ? '' : 's'} found. Go through them with Review > Next, Accept and Reject.` : 'The documents read the same: no changes found.', 7000);
   }
 
   /** The name put on your changes (kept in your settings). */

@@ -7,6 +7,8 @@
 // Citations are ADDIN fields (as reference managers write them) whose result is the numbers
 // in superscript, which Word shows and leaves alone; the bibliography is ordinary paragraphs
 // inside a hidden bookmark. Our own part keeps the references, so they come back here live.
+// For a document whose citations belong to Zotero, Mendeley or EndNote, citations and the
+// bibliography are that program's own fields instead, so it goes on managing them (live-cites.ts).
 // Footnotes and endnotes are Word's own (footnotes.xml and endnotes.xml), and a table of figures
 // is Word's TOC field for a caption label (\c "Figure").
 
@@ -22,7 +24,9 @@ import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/parag
 import { BOX_PAD, COL_GAP, COMPOUND, END_FORMAT, FLOAT_GAP, FOOT_FORMAT, columnsOf, OBJECT_CHAR, SHADOWS, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, pruneObjects, styleOf, runStyleOf, type DocObject, type DocText, type FigureLook, type HeaderFooter, type NamedStyle, type PageSetup } from '../document/document';
 import { ACS_LINE, GRID_LINE, bibHang, docCellAlign, shownSize } from '../document/doc-layout';
 import { sectionsOf, type Section } from '../document/sections';
-import { bibliography, piecesText } from '../document/references';
+import { bibliography, piecesText, type Reference } from '../document/references';
+import { preferredStyle } from '../document/cite-styles';
+import { bibInstr, newZoteroPrefs, splitPrefs, writeCite } from '../document/live-cites';
 import { TOC_INDENT, tocEntries, tofEntries } from '../document/toc';
 import { parseRev } from '../document/revisions';
 import { officeTarget } from '../links';
@@ -39,7 +43,7 @@ import { CX_NS, CX1_NS } from './xlsx-chart';
 import { isChartEx } from '../sheet/chart';
 import type { ChartBox } from '../sheet/chart-box';
 import {
-  BIB_MARK, CHART_NAME, CITE_FIELD, DOCX_CT, W14_NS, W15_NS, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, MC_NS, M_NS, PIC_NS, TABLE_NAME, W_NS, WORD_HIGHLIGHTS, WP_NS, WPS_NS, WPG_NS, twips, toWordDate, type DocxModel,
+  BIB_MARK, CHART_NAME, CITE_FIELD, CUSTOM_PROPS_FMTID, DOCX_CT, W14_NS, W15_NS, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, MC_NS, M_NS, PIC_NS, TABLE_NAME, W_NS, WORD_HIGHLIGHTS, WP_NS, WPS_NS, WPG_NS, twips, toWordDate, type DocxModel,
 } from './docx';
 
 export interface DocxDeps {
@@ -79,6 +83,8 @@ class DocxWriter {
   private pkg = new Package();
   private docPr = 1;
   private bookmarkId = 0;
+  /** Content controls' ids (Mendeley Cite's citations). */
+  private sdtId = 1;
   private shown: Map<number, string>;
   /** Bookmark names of the captions that references point to, by the caption's number field. */
   private bookmarks = new Map<number, string>();
@@ -110,6 +116,7 @@ class DocxWriter {
     if (t.references?.length || Object.values(t.objects).some((o) => o.kind === 'cite' || o.kind === 'bib')) this.model.references = t.references ?? [];
     if (t.citeStyle) this.model.citeStyle = t.citeStyle;
     if (t.citeOptions && Object.keys(t.citeOptions).length) this.model.citeOptions = t.citeOptions;
+    if (t.citeManager) this.model.citeManager = t.citeManager;
     this.fullW = Math.max(36, t.page.w - t.page.left - t.page.right);
     // figures are made to fit a column's width
     this.textW = columnsOf(t.page, this.fullW).w;
@@ -154,6 +161,13 @@ class DocxWriter {
     pkg.add('docProps/core.xml', `${HEAD}<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">` +
       `${title ? `<dc:title>${xml(title)}</dc:title>` : ''}<dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`, DOCX_CT.core);
     pkg.add('docProps/app.xml', `${HEAD}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Chem Illustrator</Application></Properties>`, DOCX_CT.app);
+    // Zotero's document preferences (its style and settings), as custom document properties
+    if (this.t.citeManager === 'zotero') {
+      const prefs = splitPrefs(this.t.zoteroPrefs ?? newZoteroPrefs(this.t.citeStyle ?? preferredStyle().style));
+      pkg.relate('', REL.customProps, 'docProps/custom.xml');
+      pkg.add('docProps/custom.xml', `${HEAD}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">` +
+        prefs.map((v, i) => `<property fmtid="${CUSTOM_PROPS_FMTID}" pid="${i + 2}" name="ZOTERO_PREF_${i + 1}"><vt:lpwstr>${xml(v)}</vt:lpwstr></property>`).join('') + '</Properties>', DOCX_CT.custom);
+    }
     // the free fonts the document uses go inside it, so it looks the same where they aren't installed
     const embed = await facesToEmbed(pkg.xmlTexts(), this.deps.fonts);
     if (embed.length) {
@@ -454,11 +468,19 @@ class DocxWriter {
     const paras = entries.map((e) => run(runProps({ ...base, text: '' }, st, {}), `${e.label}\t`) +
       e.pieces.map((p) => run(runProps({ ...base, italic: p.italic, bold: p.bold, text: p.text }, st, {}), p.text)).join(''));
     if (!paras.length) paras.push('');
-    paras[0] = `<w:bookmarkStart w:id="${mark}" w:name="${name}"/>${paras[0]}`;
-    paras[paras.length - 1] += `<w:bookmarkEnd w:id="${mark}"/>`;
-    this.model.bibliographies ??= {};
-    this.model.bibliographies[id] = { text: entries.map((e) => `${e.label}\t${piecesText(e.pieces)}`).join('\n'), ps };
-    return paras.map((x) => `<w:p>${entries.length ? pPr : '<w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>'}${x}</w:p>`).join('');
+    const app = t.citeManager;
+    if (app && app !== 'mendeley-cite') {
+      // a reference manager's bibliography field round the entries (worked out again here when opened)
+      paras[0] = fieldStart('', bibInstr(app).instr) + paras[0];
+      paras[paras.length - 1] += '<w:r><w:fldChar w:fldCharType="end"/></w:r>';
+    } else if (!app) {
+      paras[0] = `<w:bookmarkStart w:id="${mark}" w:name="${name}"/>${paras[0]}`;
+      paras[paras.length - 1] += `<w:bookmarkEnd w:id="${mark}"/>`;
+      this.model.bibliographies ??= {};
+      this.model.bibliographies[id] = { text: entries.map((e) => `${e.label}\t${piecesText(e.pieces)}`).join('\n'), ps };
+    }
+    const out = paras.map((x) => `<w:p>${entries.length ? pPr : '<w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>'}${x}</w:p>`).join('');
+    return app === 'mendeley-cite' ? `<w:sdt><w:sdtPr><w:tag w:val="${bibInstr(app).tag}"/><w:id w:val="${this.sdtId++}"/></w:sdtPr><w:sdtContent>${out}</w:sdtContent></w:sdt>` : out;
   }
 
   /**
@@ -572,7 +594,17 @@ class DocxWriter {
       return bm ? field(rPr, ` REF ${bm} \\h \\* CHARFORMAT `, shown) : run(rPr, shown);
     }
     // a citation: its numbers, which Word shows as they are (an ADDIN field is never worked out again by Word)
-    if (o.kind === 'cite') return field(rPr, ` ${CITE_FIELD} ${o.refs.map(xml).join(' ')} `, shown);
+    if (o.kind === 'cite') {
+      // for Zotero, Mendeley or EndNote: in their own form, so they go on managing it
+      const refs = o.refs.map((r) => this.t.references?.find((x) => x.id === r)).filter((r): r is Reference => !!r);
+      const app = this.t.citeManager;
+      if (app && refs.length) {
+        const out = writeCite(app, refs, o.live, shown);
+        if (out.tag) return `<w:sdt><w:sdtPr><w:tag w:val="${xml(out.tag)}"/><w:id w:val="${this.sdtId++}"/></w:sdtPr><w:sdtContent>${run(rPr, shown)}</w:sdtContent></w:sdt>`;
+        return field(rPr, xml(out.instr), shown, out.data);
+      }
+      return field(rPr, ` ${CITE_FIELD} ${o.refs.map(xml).join(' ')} `, shown);
+    }
     // a footnote's or endnote's number: Word's own reference to it (Word numbers it)
     if (o.kind === 'note') {
       const n = this.noteIds.get(id);
@@ -1108,10 +1140,24 @@ function tableRun(r: TextRun, font: string, size: number): string {
  * font as its result: when Word updates it (F9, or printing) the result keeps that formatting
  * (CHARFORMAT), so a bold caption number stays bold and a reference doesn't take on the caption's bold.
  */
-function field(rPr: string, instr: string, result: string): string {
+function field(rPr: string, instr: string, result: string, data?: string): string {
   const pr = rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
-  return `<w:r>${pr}<w:fldChar w:fldCharType="begin"/></w:r><w:r>${pr}<w:instrText xml:space="preserve">${instr}</w:instrText></w:r>` +
-    `<w:r>${pr}<w:fldChar w:fldCharType="separate"/></w:r>${run(rPr, result)}<w:r>${pr}<w:fldChar w:fldCharType="end"/></w:r>`;
+  return fieldStart(rPr, instr, data) + `${run(rPr, result)}<w:r>${pr}<w:fldChar w:fldCharType="end"/></w:r>`;
+}
+
+/**
+ * A field's start: its instruction (escaped already) up to its result. With `data` (EndNote's
+ * citation, in base64) the data rides on the field, and on a field inside the instruction as
+ * EndNote writes it (EN.CITE.DATA).
+ */
+function fieldStart(rPr: string, instr: string, data?: string): string {
+  const pr = rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
+  const begin = data ? `<w:fldChar w:fldCharType="begin"><w:fldData xml:space="preserve">${data}</w:fldData></w:fldChar>` : '<w:fldChar w:fldCharType="begin"/>';
+  const inner = data ? `<w:r>${pr}${begin}</w:r><w:r>${pr}<w:instrText xml:space="preserve"> ADDIN EN.CITE.DATA </w:instrText></w:r><w:r>${pr}<w:fldChar w:fldCharType="end"/></w:r>` : '';
+  // a long instruction (a reference manager's) in pieces, as Word splits one (never inside an escape)
+  const pieces = instr.match(/(?:&[a-z#0-9]+;|[^&]){1,255}/gi) ?? [instr];
+  const text = pieces.map((p) => `<w:r>${pr}<w:instrText xml:space="preserve">${p}</w:instrText></w:r>`).join('');
+  return `<w:r>${pr}${begin}</w:r>${text}${inner}<w:r>${pr}<w:fldChar w:fldCharType="separate"/></w:r>`;
 }
 
 /** A run of text (tabs as Word's tabs). */
