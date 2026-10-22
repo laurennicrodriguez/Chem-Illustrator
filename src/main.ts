@@ -42,7 +42,7 @@ import { writeCdxml } from './io/cdxml-write';
 import { WORKSPACE, folderOf } from './io/workspace-file';
 import { askLink, followLink, setLinkHost, type LinkPlace } from './ui/links-ui';
 import { SHOW_JUMPS, cellOfLink, linkSpans, removeLink, setLink, slideOfLink } from './links';
-import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, setEmbeddedWriter, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, PICTURE_EXTENSIONS, type FileType } from './io/files';
+import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, setEmbeddedWriter, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, DOCX, PICTURE_EXTENSIONS, type FileType } from './io/files';
 import { readPptx } from './io/pptx-read';
 import { pickReuseSlides } from './ui/reuse-slides';
 import { writeTiff } from './render/tiff';
@@ -2720,7 +2720,7 @@ async function exportPdf(): Promise<void> {
 // ---------------------------------------------------------------- printing
 
 /** The choices made in the Print window, kept while the app is open. */
-const printChoices = { paper: defaultPaper(navigator.language) as string, orient: 'auto', size: 'actual', handout: '1', frame: 'true', sheet: 'all', sheetOrient: 'portrait', grid: 'false' };
+const printChoices = { paper: defaultPaper(navigator.language) as string, orient: 'auto', size: 'actual', handout: '1', frame: 'true', sheet: 'all' };
 const PAPER_OPTIONS = Object.entries(PAPERS).map(([value, p]) => ({ value, label: p.name }));
 
 const pageSvgOf = (p: PdfPage) => {
@@ -2733,16 +2733,19 @@ async function printNow(): Promise<void> {
   finishTyping();
   const tab = ws.active, deck = tab.deck;
   if (sheetActive()) {
+    const area = !!sheetMode.view.sheet?.pageSetup?.printArea?.length;
     const v = await ask('Print', [
-      { name: 'sheet', label: 'Print', value: printChoices.sheet, options: [{ value: 'all', label: 'The whole sheet' }, { value: 'sel', label: 'The selected cells' }] },
-      { name: 'sheetOrient', label: 'Orientation', value: printChoices.sheetOrient, options: [{ value: 'portrait', label: 'Portrait' }, { value: 'landscape', label: 'Landscape' }] },
-      { name: 'grid', label: 'Gridlines', value: printChoices.grid, type: 'checkbox' },
-    ], { ok: 'Print…', note: 'The paper size, copies and pages are chosen in the next window.' });
+      { name: 'sheet', label: 'Print', value: printChoices.sheet, options: [
+        { value: 'all', label: area ? 'The print area' : 'The whole sheet' },
+        ...(area ? [{ value: 'used', label: 'The whole sheet (ignore the print area)' }] : []),
+        { value: 'sel', label: 'The selected cells' },
+      ] },
+    ], { ok: 'Print…', note: 'Paper, orientation, margins, scaling, titles, headers and footers come from the Page Layout tab (Page Setup…). Copies and the printer are chosen in the next window: set its paper to match.' });
     if (!v) return;
     Object.assign(printChoices, v);
-    const html = sheetMode.printTable(v.sheet === 'sel');
-    if (!html) { flash('There is nothing in this sheet to print.'); return; }
-    printPages({ html: `<div class="${v.grid === 'true' ? 'grid' : ''}">${html}</div>`, landscape: v.sheetOrient === 'landscape' });
+    const got = sheetMode.printedSheet({ selection: v.sheet === 'sel', ignoreArea: v.sheet === 'used', file: tab.name });
+    if (!got) { flash('There is nothing in this sheet to print.'); return; }
+    printPages({ pages: got.pages, w: got.w, h: got.h });
     return;
   }
   const docFile = docActive() ? tab.document : null;
@@ -2950,6 +2953,8 @@ const sheetMode = new SheetMode({
   copyStructure: async (contents, style) => (await copyDrawing(structureDoc(contents, style), null)).replace(/^Copied the whole drawing/, 'Copied the structure'),
   readCells: (e) => readCells(e),
   askName: () => docMode.askReviewName(),
+  pickPicture: () => pickPicture(),
+  print: () => void printNow(),
 }, sheetChem);
 
 /** The style structures in the sheet showing are drawn in. */
@@ -3233,6 +3238,23 @@ const docMode = new DocumentMode({
   pickReferenceFile: () => pickReferenceFile(),
   preferredChanged: () => storeSettings(),
   reviewNameChanged: () => storeSettings(),
+  openDocuments: () => {
+    const seen = new Set<unknown>();
+    return ws.tabs.filter((t) => t.mode === 'document' && t.document && !seen.has(t.document) && seen.add(t.document)).map((t) => ({ name: ws.label(t), t: t.document!.t }));
+  },
+  pickDocument: async () => {
+    const f = await openBytesDialog('Word documents', [DOCX]).catch(async (e) => { await showError(String(e)); return null; });
+    if (!f) return null;
+    try {
+      const { doc, warnings } = await readDocx(f.bytes, docRead);
+      if (warnings.length) flash(`${f.name}: ${warnings.join(' ')}`, 8000);
+      return { name: f.name, t: doc };
+    } catch (e) {
+      await showError(`Could not open ${f.name}: ${String(e)}`);
+      return null;
+    }
+  },
+  showDocument: (t, name) => { ws.showDocument(t, name); },
   newTable: (rows, cols, style) => tableDrawing(emptyTable(rows, cols, style.captionSize), style),
   measure: measureText,
 });
