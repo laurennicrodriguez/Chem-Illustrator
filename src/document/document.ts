@@ -183,6 +183,16 @@ export type DocObject =
   | { kind: 'bib' }
   /** A table of contents: the headings down to `levels` (1 to 3) deep with their page numbers (a block of its own). */
   | { kind: 'toc'; levels: number }
+  /**
+   * A table of figures: the captions of one label (Figure, Scheme, Table, Chart), or of all of
+   * them when `name` is '', with their page numbers (a block of its own, like the contents).
+   */
+  | { kind: 'tof'; name: string }
+  /**
+   * A footnote (or, with `end`, an endnote): its number in the text, and its own text, typed into
+   * in place at the bottom of the page (or at the end of the document), as in Word.
+   */
+  | { kind: 'note'; end?: boolean; runs: TextRun[]; paras?: ParaStyle[] }
   /** An equation, typed as LaTeX and shown laid out as maths (see math.ts); a Word equation in .docx files. */
   | { kind: 'math'; tex: string };
 
@@ -203,6 +213,47 @@ export interface DocText extends RichText {
   track?: boolean;
   /** Comments (Review > New Comment), by id; the text they are on carries the id (see comments.ts). */
   comments?: Record<number, CommentThread>;
+  /** How footnotes and endnotes are numbered (1, 2, 3 and i, ii, iii unless chosen). */
+  notes?: NoteFormats;
+}
+
+/** How footnotes or endnotes are numbered, by Word's names: 1, 2, 3; i, ii, iii; a, b, c; *, †, ‡ (chicago). */
+export type NoteFormat = 'decimal' | 'lowerRoman' | 'upperRoman' | 'lowerLetter' | 'upperLetter' | 'chicago';
+
+export interface NoteFormats { foot?: NoteFormat; end?: NoteFormat }
+
+/** Word's own numbering: footnotes 1, 2, 3 and endnotes i, ii, iii. */
+export const FOOT_FORMAT: NoteFormat = 'decimal';
+export const END_FORMAT: NoteFormat = 'lowerRoman';
+
+const ROMAN: [number, string][] = [[1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i']];
+const CHICAGO = ['*', '†', '‡', '§'];
+
+/** The `n`th note's mark (from 1) in a numbering format: 3, iii, c, ‡ (then **, ††… as Word goes on). */
+export function noteLabel(n: number, fmt: NoteFormat): string {
+  n = Math.max(1, Math.floor(n));
+  switch (fmt) {
+    case 'lowerRoman': case 'upperRoman': {
+      let out = '', v = n;
+      for (const [k, s] of ROMAN) while (v >= k) { out += s; v -= k; }
+      return fmt === 'upperRoman' ? out.toUpperCase() : out;
+    }
+    case 'lowerLetter': case 'upperLetter': {
+      // a, b … z, then aa, bb … (Word's way)
+      const ch = String.fromCharCode(97 + ((n - 1) % 26)).repeat(Math.floor((n - 1) / 26) + 1);
+      return fmt === 'upperLetter' ? ch.toUpperCase() : ch;
+    }
+    case 'chicago': return CHICAGO[(n - 1) % 4].repeat(Math.floor((n - 1) / 4) + 1);
+    default: return String(n);
+  }
+}
+
+/** The style of footnote and endnote text: the document's Footnote Text style, or Normal a point smaller, single spaced, with no space round paragraphs. */
+export function noteStyle(t: Pick<DocText, 'styles'>): NamedStyle {
+  const own = t.styles.FootnoteText;
+  if (own) return own;
+  const N = styleOf(t, undefined);
+  return { ...N, id: 'FootnoteText', name: 'Footnote Text', size: Math.max(6, N.size - 1), align: 'left', spaceBefore: 0, spaceAfter: 0, line: 1, indent: 0, firstLine: 0, keepNext: false, next: undefined, outline: undefined };
 }
 
 // ---------------------------------------------------------------- defaults
@@ -445,14 +496,20 @@ export const COMPOUND = 'Compound';
  * A reference to a compound shows just its number. A citation shows the numbers of the
  * references it cites (in the order references are first cited).
  */
-export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions'>>): Map<number, string> {
+export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions' | 'notes'>>): Map<number, string> {
   const shown = new Map<number, string>();
   const counts = new Map<string, number>();
   // numbers inside tables count in their place too
   t = { ...t, runs: flatRuns(t) };
   const order = objectsInText(t.runs);
+  let foot = 0, end = 0;
   for (const id of order) {
     const o = t.objects[id];
+    // footnotes and endnotes are numbered apart, each in its own format
+    if (o?.kind === 'note') {
+      shown.set(id, o.end ? noteLabel(++end, t.notes?.end ?? END_FORMAT) : noteLabel(++foot, t.notes?.foot ?? FOOT_FORMAT));
+      continue;
+    }
     if (o?.kind !== 'seq') continue;
     const n = (counts.get(o.name) ?? 0) + 1;
     counts.set(o.name, n);
@@ -526,7 +583,7 @@ export function paragraphAt(t: Pick<RichText, 'runs'>, offset: number): { index:
 }
 
 /** Text of a document without objects (for word counts, searching and plain copies). */
-export function documentPlainText(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions'>>): string {
+export function documentPlainText(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions' | 'notes'>>): string {
   const shown = fieldTexts(t);
   let out = '';
   for (const r of t.runs) {

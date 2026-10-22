@@ -53,6 +53,12 @@ export function drawHeaderFooter(ctx: CanvasRenderingContext2D, t: DocText, p: P
   }
 }
 
+/** The short lines above a page's footnotes and above the endnotes (half a point, as Word's). */
+export function drawNoteRules(ctx: CanvasRenderingContext2D, lay: DocLayout, page: number): void {
+  ctx.fillStyle = '#000';
+  for (const r of lay.noteRules) if (r.page === page) ctx.fillRect(r.x, r.y - 0.25, r.w, 0.5);
+}
+
 /** A page for a PDF: its size, and what is drawn on it with the page's top left corner at `origin`. */
 export interface PrintPage { w: number; h: number; items: Item[]; origin: { x: number; y: number } }
 
@@ -73,8 +79,13 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
     const mine = lay.objects.filter((o) => o.page === p.index).sort((a, b) => Number(t.objects[b.id]?.kind === 'table') - Number(t.objects[a.id]?.kind === 'table'));
     const order = [...mine.filter((o) => o.wrap === 'behind'), null, ...mine.filter((o) => o.wrap !== 'behind')];
     for (const o of order) {
-      if (!o) { drawLayout(c, lay.text, 0, 0, p.first, p.end); continue; }
+      if (!o) { drawLayout(c, lay.text, 0, 0, p.first, p.end); drawNoteRules(c, lay, p.index); continue; }
       const obj = t.objects[o.id];
+      if (obj?.kind === 'note') {
+        const n = lay.notes.get(o.id);
+        if (n) drawLayout(c, n.lay, 0, 0);
+        continue;
+      }
       const look = lookOf(obj);
       if (look?.shadow) {
         // a PDF has no blur: the shadow is a grey box, lighter when soft

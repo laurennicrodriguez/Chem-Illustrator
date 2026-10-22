@@ -9,7 +9,7 @@ import { SHEET_MARGIN, breaksIn, continuous, outlineMarks, type DocViewKind } fr
 import type { LaidLine } from '../text/layout';
 import type { DocFile } from '../document/doc-file';
 import { figures } from '../document/doc-file';
-import { drawDocTable, drawHeaderFooter } from '../document/doc-paint';
+import { drawDocTable, drawHeaderFooter, drawNoteRules } from '../document/doc-paint';
 import { BOX_PAD, SHADOWS, lookOf, type DocText } from '../document/document';
 import { drawLayout } from '../text/draw';
 import { drawMath } from '../document/math';
@@ -397,6 +397,7 @@ export class DocView {
       // figures behind the text first, then the text, then the rest
       for (const o of lay.objects) if (o.page === p.index && o.wrap === 'behind') this.object(ctx, t, o, lay);
       drawLayout(ctx, lay.text, 0, 0, p.first, p.end);
+      drawNoteRules(ctx, lay, p.index);
       // tables, then the figures (some of them in table cells)
       for (const o of lay.objects) {
         const obj = t.objects[o.id];
@@ -573,6 +574,11 @@ export class DocView {
       ctx.fillStyle = '#fff';
       ctx.fillRect(o.x, o.y, o.w, o.h);
       ctx.restore();
+    }
+    if (obj.kind === 'note') {
+      const n = lay.notes.get(o.id);
+      if (n) drawLayout(ctx, n.lay, 0, 0);
+      return;
     }
     if (obj.kind === 'textbox') {
       if (obj.fill) {

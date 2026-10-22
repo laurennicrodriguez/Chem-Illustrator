@@ -14,9 +14,9 @@ import { withStack, layoutText, type Glyphs, type InlineBox, type LaidLine, type
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
 import { isCovered, spanOf } from '../table';
 import * as rt from '../richtext';
-import { BOX_PAD, FLOAT_GAP, OBJECT_CHAR, columnsOf, fieldTexts, floatOf, lookExtent, lookOf, styleOf, type DocText, type HeaderFooter, type NamedStyle, type WrapKind } from './document';
+import { BOX_PAD, FLOAT_GAP, OBJECT_CHAR, columnsOf, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, styleOf, type DocText, type HeaderFooter, type NamedStyle, type WrapKind } from './document';
 import { bibliography, type BibEntry } from './references';
-import { tocEntries, tocLines, type TocEntry } from './toc';
+import { emptyTof, tocEntries, tocLines, tofEntries, type TocEntry } from './toc';
 import { authorColours, hasChanges, markedRuns } from './revisions';
 import { layoutMath, type MathBox } from './math';
 
@@ -36,6 +36,23 @@ export interface LayoutDeps {
 export interface ShownParas {
   hidden?: Set<number>;
   firstLine?: Set<number>;
+  /** The views without pages: footnotes go after the text, with the endnotes. */
+  notesAtEnd?: boolean;
+}
+
+/** The short line between the text and its footnotes (or the endnotes): Word's two inches. */
+export const NOTE_RULE = 144;
+
+/** A footnote or endnote as placed: its text laid out where it is, its number before it. */
+export interface PlacedNote {
+  id: number;
+  page: number;
+  /** Its top left corner and width (the text's lines are in `lay`, already in place). */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  lay: TextLayout;
 }
 
 export interface PageBox {
@@ -178,6 +195,10 @@ export interface DocLayout {
   textW: number;
   /** The columns: how many, and the left edge of each from the left margin. */
   cols: { n: number; w: number; x: number[] };
+  /** Footnotes at the bottom of their pages, and endnotes after the text. */
+  notes: Map<number, PlacedNote>;
+  /** The short line above each page's footnotes, and above the endnotes. */
+  noteRules: { page: number; x: number; y: number; w: number }[];
 }
 
 /** An equation as laid out: drawn with its baseline `ascent` below the top of its box. */
@@ -324,11 +345,11 @@ export class DocLayouter {
    * (only the contents change, so it settles at once, and the rest comes from the cache).
    */
   layout(t: DocText, only?: ShownParas): DocLayout {
-    const hasToc = Object.values(t.objects).some((o) => o.kind === 'toc');
+    const hasToc = Object.values(t.objects).some((o) => o.kind === 'toc' || o.kind === 'tof');
     let lay = this.layoutOnce(t, only);
     for (let pass = 0; hasToc && pass < 3; pass++) {
       const now = lay.paraTops.map((pt) => pageNumber(t.hf, pt.page));
-      const heads = Object.values(t.objects).filter((o) => o.kind === 'toc').flatMap((o) => tocEntries(t, (o as { levels: number }).levels));
+      const heads = Object.values(t.objects).flatMap((o) => (o.kind === 'toc' ? tocEntries(t, o.levels) : o.kind === 'tof' ? tofEntries(t, o.name, lay.fields) : []));
       if (heads.every((e) => this.tocPages[e.para] === now[e.para])) break;
       this.tocPages = now;
       lay = this.layoutOnce(t, only);
@@ -408,12 +429,17 @@ export class DocLayouter {
     // the contents' headings, for each depth asked for, and their page numbers from the last layout
     const tocs = new Map<number, TocEntry[]>();
     for (const o of Object.values(t.objects)) if (o.kind === 'toc' && !tocs.has(o.levels)) tocs.set(o.levels, tocEntries(t, o.levels));
+    // the tables of figures' captions, for each label asked for
+    const tofs = new Map<string, TocEntry[]>();
+    for (const o of Object.values(t.objects)) if (o.kind === 'tof' && !tofs.has(o.name)) tofs.set(o.name, tofEntries(t, o.name, fields));
     const pageOf = (p: number) => this.tocPages[p] ?? '';
-    const tocKey = tocs.size ? JSON.stringify([...tocs].map(([k, es]) => [k, es.map((e) => [e.level, e.text, pageOf(e.para)])])) : 0;
-    const isBib = (r: { obj?: number }) => r.obj !== undefined && (t.objects[r.obj]?.kind === 'bib' || t.objects[r.obj]?.kind === 'toc');
+    const listKey = (m: Map<unknown, TocEntry[]>) => [...m].map(([k, es]) => [k, es.map((e) => [e.level, e.text, pageOf(e.para)])]);
+    const tocKey = tocs.size || tofs.size ? JSON.stringify([listKey(tocs), listKey(tofs)]) : 0;
+    const isBib = (r: { obj?: number }) => r.obj !== undefined && ['bib', 'toc', 'tof'].includes(t.objects[r.obj]?.kind);
     const blockLines = (id: number, st: NamedStyle, ps: ParaStyle, wrap: number): LaidLine[] | null => {
       const o = t.objects[id];
       if (o?.kind === 'toc') return tocLines(tocs.get(o.levels) ?? [], pageOf, st, ps.line, wrap, this.deps.measure);
+      if (o?.kind === 'tof') return tocLines(tofs.get(o.name) ?? [], pageOf, st, ps.line, wrap, this.deps.measure, emptyTof(o.name), false);
       if (o?.kind !== 'bib') return null;
       const bf = bibFrame(entries, st, ps, this.deps.measure);
       return layoutText({
@@ -521,8 +547,48 @@ export class DocLayouter {
     // the floating figures on the page so far
     let rects: WrapRect[] = [];
     const pageTop = (i: number) => i * (page.h + PAGE_GAP);
+
+    // footnotes: those whose numbers are on the page so far (with the line each is on) take room
+    // at its foot, below a short line; a line goes to the next page when it and its notes don't fit
+    const notes = new Map<number, PlacedNote>();
+    const noteRules: DocLayout['noteRules'] = [];
+    const nst = noteStyle(t);
+    const sep = 1.2 * nst.size;
+    const noteLay = (id: number, w: number): TextLayout | null => {
+      const o = t.objects[id];
+      return o?.kind === 'note' ? this.noteText(t, o.runs, o.paras, fields.get(id) ?? '', w) : null;
+    };
+    const noteH = (id: number) => { const l = noteLay(id, fullW); return l ? l.box.y2 - l.box.y1 : 0; };
+    let feet: { id: number; line: number }[] = [];
+    const footArea = (more: number[] = []) => (feet.length || more.length ? sep + sum(feet.map((f) => noteH(f.id))) + sum(more.map(noteH)) : 0);
+    const room = () => textH - footArea();
+    const lineFeet = (l: LaidLine): number[] => {
+      if (only?.notesAtEnd) return [];
+      const out: number[] = [];
+      for (const g of l.pieces) { const o = g.obj !== undefined ? t.objects[g.obj] : undefined; if (o?.kind === 'note' && !o.end && !out.includes(g.obj!)) out.push(g.obj!); }
+      return out;
+    };
+    const putNote = (id: number, x: number, y: number, w: number, line: number) => {
+      const l = noteLay(id, w);
+      if (!l) return 0;
+      const h = l.box.y2 - l.box.y1;
+      notes.set(id, { id, page: pageIdx, x, y, w, h, lay: movedLayout(l, x, y - l.box.y1) });
+      objects.push({ id, page: pageIdx, x, y, w, h, line });
+      return h;
+    };
+    // the page's footnotes, at its foot
+    const placeFeet = () => {
+      if (!feet.length) return;
+      let y = pageTop(pageIdx) + page.top + textH - footArea();
+      noteRules.push({ page: pageIdx, x: page.left, y: y + sep / 2, w: Math.min(NOTE_RULE, fullW) });
+      y += sep;
+      for (const f of feet) y += putNote(f.id, page.left, y, fullW, f.line);
+      feet = [];
+    };
+
     pages.push({ index: 0, top: 0, first: 0, end: 0, label: pageLabel(t.hf, 0) });
     const newPage = () => {
+      placeFeet();
       pages[pageIdx].end = lines.length;
       pageIdx++;
       pages.push({ index: pageIdx, top: pageTop(pageIdx), first: lines.length, end: lines.length, label: pageLabel(t.hf, pageIdx) });
@@ -561,11 +627,11 @@ export class DocLayouter {
         const next = laid[p + 1].lines;
         const nextNeed = (paras[p + 1].spaceBefore ?? 0) + next.slice(0, Math.min(2, next.length)).reduce((a, l) => a + heightOf(l), 0);
         const need = before() + sum(hs) + (ps.spaceAfter ?? 0) + nextNeed;
-        if (cursor + need > textH + 0.01 && need <= textH) nextColumn();
+        if (cursor + need > room() + 0.01 && need <= textH) nextColumn();
       }
       // a paragraph's first line isn't left alone at the bottom of a page
       const firstNeed = sum(hs.slice(0, pl.length >= 2 ? 2 : 1));
-      if (hasContent && cursor + before() + firstNeed > textH + 0.01) nextColumn();
+      if (hasContent && cursor + before() + firstNeed > room() + 0.01) nextColumn();
       cursor += before();
       paraTops.push({ y: pageTop(pageIdx) + page.top + cursor, page: pageIdx });
 
@@ -590,12 +656,14 @@ export class DocLayouter {
       let i = 0;
       let onPage = 0;
       while (i < pl.length) {
-        if (hasContent && cursor + hs[i] > textH + 0.01) {
+        const ft = lineFeet(pl[i]);
+        if (hasContent && cursor + hs[i] > textH - footArea(ft) + 0.01) {
           // its last line isn't left alone at the top of the next page either
           if (pl.length - i === 1 && onPage >= 3) {
             i--;
             lines.pop();
             while (objects.length && objects[objects.length - 1].line === lines.length && !objects[objects.length - 1].wrap) objects.pop();
+            feet = feet.filter((f) => f.line !== lines.length);
           }
           nextColumn();
           onPage = 0;
@@ -606,6 +674,7 @@ export class DocLayouter {
         const placed = shiftLine(l, page.left + colX[col], top + above - l.y, paraStart, p);
         if (cs.n > 1) placed.band = [page.left + colX[col], page.left + colX[col] + textW];
         lines.push(placed);
+        for (const id of ft) feet.push({ id, line: lines.length - 1 });
         for (const g of placed.pieces) {
           const s = g.obj !== undefined ? sizes.get(g.obj) : undefined;
           if (s && !fields.has(g.obj!) && !floating(g.obj!)) objects.push({ id: g.obj!, page: pageIdx, x: g.x + extentOf(g.obj!)[0], y: placed.y - s.h + (maths.get(g.obj!)?.descent ?? 0), w: s.w, h: s.h, line: lines.length - 1 });
@@ -618,6 +687,29 @@ export class DocLayouter {
       cursor += ps.spaceAfter ?? 0;
       paraStart += (paraRuns[p] ?? []).reduce((a, r) => a + r.text.length, 0) + 1;
     }
+
+    // endnotes after the text, in the order of their numbers, each kept whole on a page (in the
+    // views without pages, the footnotes too, before them), under a short line
+    const inText = objectsInText(t.runs);
+    const tail = (end: boolean) => inText.filter((id, i) => { const o = t.objects[id]; return o?.kind === 'note' && !!o.end === end && inText.indexOf(id) === i; });
+    const lastLine = Math.max(0, lines.length - 1);
+    for (const group of [only?.notesAtEnd ? tail(false) : [], tail(true)]) {
+      let first = true;
+      for (const id of group) {
+        const l = noteLay(id, textW);
+        if (!l) continue;
+        const need = (first ? sep : 0) + l.box.y2 - l.box.y1;
+        if (hasContent && cursor + need > room() + 0.01) nextColumn();
+        if (first) {
+          noteRules.push({ page: pageIdx, x: page.left + colX[col], y: pageTop(pageIdx) + page.top + cursor + sep / 2, w: Math.min(NOTE_RULE, textW) });
+          cursor += sep;
+          first = false;
+        }
+        cursor += putNote(id, page.left + colX[col], pageTop(pageIdx) + page.top + cursor, textW, lastLine);
+        hasContent = true;
+      }
+    }
+    placeFeet();
     pages[pageIdx].end = lines.length;
 
     // where each table's rows went, and the structures and pictures in its cells
@@ -660,7 +752,7 @@ export class DocLayouter {
     const last = pages[pages.length - 1];
     const box = { x1: 0, y1: 0, x2: page.w, y2: last.top + page.h };
     const textLayout: TextLayout = { lines, boxWidth: textW, box, length: text.length, measure: this.deps.measure };
-    return { text: textLayout, pages, objects, fields, sizes, boxes, tables, maths, paraTops, pageW: page.w, pageH: page.h, textW, cols: { n: cs.n, w: textW, x: colX } };
+    return { text: textLayout, pages, objects, fields, sizes, boxes, tables, maths, paraTops, pageW: page.w, pageH: page.h, textW, cols: { n: cs.n, w: textW, x: colX }, notes, noteRules };
   }
 
   /** A table's cells laid out (each from the cache when nothing about it changed), and its rows' heights. */
@@ -701,6 +793,34 @@ export class DocLayouter {
     let lay = this.cache.get(key);
     if (!lay) {
       lay = layoutText({ runs: resolved, paras: ps, justify: align, wrap: Math.max(6, w - 2 * CELL_PAD.x), boxes: true, markers: listMarkers(ps), inline }, N.size, this.deps.measure);
+      this.cache.set(key, lay);
+    }
+    this.used.add(key);
+    return lay;
+  }
+
+  /**
+   * A footnote's or endnote's text laid out `w` wide, in the notes' style: its number (`label`)
+   * in superscript before the first line, which starts after it (the number is shown, not typed).
+   */
+  noteText(t: DocText, runs: TextRun[], paras: ParaStyle[] | undefined, label: string, w: number): TextLayout {
+    const st = noteStyle(t);
+    if (hasChanges(runs)) runs = markedRuns(runs);
+    const resolved = runs.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? st.font, size: r.size ?? st.size }));
+    const ps = fitParas(paras, paraCount(rt.plainText(runs)));
+    const family = withStack(st.font);
+    const small = 0.75 * st.size;
+    const lw = this.deps.measure(label, small, family, '') + 0.3 * st.size;
+    const first = ps.map((p, i) => (i === 0 ? { ...p, firstLine: (p.firstLine ?? 0) + lw } : p));
+    const key = `note|${JSON.stringify([resolved, first, w, label])}`;
+    let lay = this.cache.get(key);
+    if (!lay) {
+      lay = layoutText({ runs: resolved, paras: first, justify: 'left', wrap: Math.max(6, w), boxes: true, markers: listMarkers(first) }, st.size, this.deps.measure);
+      const l0 = lay.lines[0];
+      if (l0) {
+        const mark: Glyphs = { text: label, start: 0, x: l0.x - lw, w: lw - 0.3 * st.size, dy: -0.42 * st.size, size: small, family, style: '', decor: true };
+        lay = { ...lay, lines: [{ ...l0, pieces: [mark, ...l0.pieces] }, ...lay.lines.slice(1)] };
+      }
       this.cache.set(key, lay);
     }
     this.used.add(key);

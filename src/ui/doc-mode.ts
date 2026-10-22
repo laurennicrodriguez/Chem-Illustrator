@@ -27,7 +27,7 @@ import { DocPanel, parseLength, showLength, type DocBoxKey } from './doc-panel';
 import { WORD_HIGHLIGHTS } from '../io/docx';
 import { DocFind } from './doc-find';
 import { DocComments } from './doc-comments';
-import { tocEntries } from '../document/toc';
+import { TOF_NAMES, tocEntries, tofEntries } from '../document/toc';
 import { changesIn, countChanges, decide, decideEverywhere, reviewAuthor, setReviewAuthor } from '../document/revisions';
 import { ask } from './ask';
 import { askEquation } from './equation-dialog';
@@ -43,9 +43,9 @@ import {
   coveringCell, deleteColumn, deleteRow, emptyTable, insertColumn, insertRow, isCovered, mergeRight, nextCell, setColumnAlign, setColumnWidth, setSpan, spanOf,
 } from '../table';
 import {
-  A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, captionRuns, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets, inlineMove,
+  A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, END_FORMAT, FOOT_FORMAT, captionRuns, noteLabel, noteStyle, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets, inlineMove,
   floatOf, lookExtent, lookOf, cellHolding, innerObjects,
-  type DocObject, type DocText, type FigureLook, type Float, type NumberPlace, type PageSetup, type WrapKind,
+  type DocObject, type DocText, type FigureLook, type Float, type NoteFormat, type NumberPlace, type PageSetup, type WrapKind,
 } from '../document/document';
 
 export interface DocModeHost {
@@ -497,7 +497,13 @@ export class DocumentMode {
     f.endBox();
     if (pick) {
       const at = objectOffsets(f.t.runs).get(id);
-      if (at !== undefined) f.ed.select(at, at + 1);
+      // a footnote goes back to its number in the text (Word's Shift+F5)
+      if (at !== undefined && f.t.objects[id]?.kind === 'note') {
+        f.ed.setCaret(at + 1);
+        // what is typed after the number isn't raised like it
+        f.ed.setStyle({ sup: undefined });
+      }
+      else if (at !== undefined) f.ed.select(at, at + 1);
     }
     this.changed('selection');
   }
@@ -587,7 +593,7 @@ export class DocumentMode {
     if (f.box) {
       const bo = f.t.objects[f.box.id];
       const cell = f.box.cell;
-      const ok = cell ? bo?.kind === 'table' && !!bo.table.rows[cell.r]?.[cell.c] && !isCovered(bo.table, cell.r, cell.c) : bo?.kind === 'textbox';
+      const ok = cell ? bo?.kind === 'table' && !!bo.table.rows[cell.r]?.[cell.c] && !isCovered(bo.table, cell.r, cell.c) : bo?.kind === 'textbox' || bo?.kind === 'note';
       if (!ok) f.endBox();
     }
     this.caretOn = true;
@@ -668,7 +674,7 @@ export class DocumentMode {
     }
     const ed = f.ed;
     const picked = this.pickedObject();
-    const framed = this.pickedField('bib')?.id ?? this.pickedField('toc')?.id ?? this.pickedTable();
+    const framed = this.pickedField('bib')?.id ?? this.pickedField('toc')?.id ?? this.pickedField('tof')?.id ?? this.pickedTable();
     const showCaret = this.caretOn && (ed.collapsed || ed.composing !== null) && document.activeElement === this.ta;
     const c = showCaret ? ed.caret() : null;
     const squiggles: Overlay['squiggles'] = [];
@@ -689,7 +695,7 @@ export class DocumentMode {
   }
 
   /** A citation or bibliography picked on its own (a selection of just its character). */
-  private pickedField<K extends 'cite' | 'bib' | 'toc'>(kind: K): { id: number; o: Extract<DocObject, { kind: K }> } | null {
+  private pickedField<K extends 'cite' | 'bib' | 'toc' | 'tof' | 'note'>(kind: K): { id: number; o: Extract<DocObject, { kind: K }> } | null {
     const f = this.file;
     if (!f || f.ed.end - f.ed.start !== 1) return null;
     const id = rt.sliceRuns(f.ed.t.runs, f.ed.start, f.ed.end)[0]?.obj;
@@ -798,6 +804,18 @@ export class DocumentMode {
     cmd('Copy', 'copy');
     cmd('Paste', 'paste');
     menu.appendChild(document.createElement('hr'));
+    // a footnote's number, or typing in a note: to the other end, or the other kind
+    const fb = this.file?.box && !this.file.box.cell && this.file.t.objects[this.file.box.id]?.kind === 'note' ? this.file.box.id : null;
+    const note = fb ?? (this.file?.box ? null : this.noteAt(offset));
+    const no = note !== null ? this.file?.t.objects[note] : undefined;
+    if (note !== null && no?.kind === 'note') {
+      const what = no.end ? 'Endnote' : 'Footnote';
+      if (fb !== null) item(`Go to ${what} Reference`, () => this.stopBox(true), 'Back to its number in the text (Escape)');
+      else item(`Go to ${what}`, () => this.startBox(note), 'Its text, to type into');
+      item(no.end ? 'Convert to Footnote' : 'Convert to Endnote', () => { if (fb !== null) this.stopBox(); this.convertNote(note); });
+      cmd('Note Options…', 'note-options', 'How footnotes and endnotes are numbered');
+      menu.appendChild(document.createElement('hr'));
+    }
     cmd('New Comment', 'new-comment', 'A comment on the selection, or on the word here (Review tab)');
     const commented = this.comments.placed().filter((x) => x.start <= offset && offset <= x.end);
     if (commented.length) {
@@ -1199,7 +1217,7 @@ export class DocumentMode {
     }
     const b = f.box?.cell ? f.box : null;
     // into a table cell: no tables, text boxes or bibliographies inside it
-    const runs = remap(own.runs).filter((r) => !b || r.obj === undefined || !['table', 'textbox', 'bib', 'toc'].includes(objects[r.obj]?.kind));
+    const runs = remap(own.runs).filter((r) => !b || r.obj === undefined || !['table', 'textbox', 'bib', 'toc', 'tof', 'note'].includes(objects[r.obj]?.kind));
     // references cited by pasted citations join the list (unless it has them)
     const have = new Set((f.t.references ?? []).map((r) => r.id));
     const adding = (own.references ?? []).filter((r) => !have.has(r.id));
@@ -1628,6 +1646,7 @@ export class DocumentMode {
       const id = this.objectAt(e.clientX, e.clientY);
       if (id !== null && f.t.objects[id]?.kind === 'bib') { e.preventDefault(); void this.manageReferences(); return; }
       if (id !== null && f.t.objects[id]?.kind === 'toc') { e.preventDefault(); void this.tocOptions(id); return; }
+      if (id !== null && f.t.objects[id]?.kind === 'tof') { e.preventDefault(); void this.tofOptions(id); return; }
       if (id !== null && f.t.objects[id]?.kind === 'math') { e.preventDefault(); void this.editEquation(id); return; }
       if (f.box?.cell && id !== null && id !== f.box.id && f.t.objects[id]?.kind === 'drawing') { e.preventDefault(); this.editFigure(id); return; }
       if (f.box) { e.preventDefault(); return; }
@@ -1644,6 +1663,12 @@ export class DocumentMode {
           void this.insertCitation();
           return;
         }
+        // a footnote's number: to its text, as in Word
+        if (obj !== undefined && f.t.objects[obj]?.kind === 'note') {
+          e.preventDefault();
+          this.startBox(obj);
+          return;
+        }
       }
     });
     s.addEventListener('contextmenu', (e) => {
@@ -1655,6 +1680,9 @@ export class DocumentMode {
       const cell = this.cellAt(p);
       const b = this.file.box;
       if (cell && !(b?.cell && b.id === cell.id && b.cell.r === cell.r && b.cell.c === cell.c)) this.startCell(cell.id, cell.r, cell.c, p);
+      // in a footnote: typing there, so the menu is about it
+      const hit = this.objectAt(e.clientX, e.clientY);
+      if (hit !== null && hit !== b?.id && this.file.t.objects[hit]?.kind === 'note') this.startBox(hit, p);
       const o = offsetAt(this.file.layout().text, p.x, p.y);
       if (this.contextMenu(o, e.clientX, e.clientY)) e.preventDefault();
     });
@@ -1677,7 +1705,7 @@ export class DocumentMode {
   /** Near the edge of a placed object (where a text box is picked or moved rather than typed into). */
   private nearEdge(id: number, p: { x: number; y: number }): boolean {
     const o = this.file?.layout().objects.find((x) => x.id === id);
-    if (!o) return false;
+    if (!o || this.file?.t.objects[id]?.kind === 'note') return false;
     const m = 5 / this.view.zoom;
     return p.x - o.x < m || o.x + o.w - p.x < m || p.y - o.y < m || o.y + o.h - p.y < m;
   }
@@ -1765,7 +1793,7 @@ export class DocumentMode {
     if (id !== null && !e.shiftKey) {
       const obj = f.t.objects[id];
       // a click inside a text box types into it; its edge picks it, to move it or change its look
-      if (obj?.kind === 'textbox' && !this.nearEdge(id, p)) { this.startBox(id, p); this.dragging = { kind: 'box' }; s.setPointerCapture(e.pointerId); return; }
+      if ((obj?.kind === 'textbox' || obj?.kind === 'note') && !this.nearEdge(id, p)) { this.startBox(id, p); this.dragging = { kind: 'box' }; s.setPointerCapture(e.pointerId); return; }
       const at = objectOffsets(f.t.runs).get(id);
       if (at !== undefined) {
         ed.select(at, at + 1);
@@ -1805,7 +1833,7 @@ export class DocumentMode {
       const corner = !!box && Math.abs(p.x - (box.x + box.w)) <= hs && Math.abs(p.y - (box.y + box.h)) <= hs;
       // a structure: a hand, since a double-click opens it for drawing (and a click picks it)
       this.view.scroller.style.cursor = corner ? 'nwse-resize' : id === null || o?.kind === 'table' ? 'text'
-        : o?.kind === 'textbox' ? (this.nearEdge(id, p) ? 'move' : 'text')
+        : o?.kind === 'textbox' ? (this.nearEdge(id, p) ? 'move' : 'text') : o?.kind === 'note' ? 'text'
         : floatOf(o) ? 'move' : o?.kind === 'drawing' ? 'pointer' : 'default';
       return;
     }
@@ -1866,7 +1894,7 @@ export class DocumentMode {
   insertObject(o: DocObject, kind = 'Insert', look: Partial<rt.RunStyle> = {}): number {
     const f = this.file!;
     const b = f.box?.cell ? f.box : null;
-    if (b && (o.kind === 'table' || o.kind === 'textbox' || o.kind === 'bib' || o.kind === 'toc')) this.stopBox();
+    if (b && (o.kind === 'table' || o.kind === 'textbox' || o.kind === 'bib' || o.kind === 'toc' || o.kind === 'tof')) this.stopBox();
     else if (b) {
       // into the table cell typed into: the object joins the document, its character the cell's text
       const id = nextObjectId(f.t);
@@ -2223,6 +2251,10 @@ export class DocumentMode {
       case 'insert-citation': void this.insertCitation(); break;
       case 'insert-bibliography': this.insertBibliography(); break;
       case 'insert-toc': void this.insertToc(); break;
+      case 'insert-tof': void this.insertTof(); break;
+      case 'insert-footnote': this.insertNote(false); break;
+      case 'insert-endnote': this.insertNote(true); break;
+      case 'note-options': void this.noteOptions(); break;
       case 'insert-equation': void this.insertEquation(); break;
       case 'edit-equation': { const m = this.pickedMath(); if (m === null) { this.host.flash('Click an equation first (or double-click it).'); break; } void this.editEquation(m); break; }
       case 'track-changes': void this.toggleTracking(); break;
@@ -2633,6 +2665,129 @@ export class DocumentMode {
     const levels = await this.askTocLevels(o.levels, 'Apply');
     if (!levels || levels === o.levels) return;
     f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'toc', levels } } } as DocText, 'Table of contents levels');
+  }
+
+  /**
+   * References > Insert Table of Figures: the captions of one label (Figure, Scheme, Table,
+   * Chart, or all of them) with their page numbers, in a paragraph of its own after the one the
+   * caret is in, with a heading. Like the contents it changes by itself; double-click it to
+   * choose another label.
+   */
+  private async insertTof(): Promise<void> {
+    const f = this.file!;
+    const name = await this.askTofName('Figure', 'Insert');
+    if (name === null || this.file !== f) return;
+    const ed = f.ed;
+    const id = nextObjectId(f.t);
+    const kind = 'Insert table of figures';
+    ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'tof', name } } } as DocText, kind);
+    const text = ed.text;
+    const p = paraAt(text, ed.focus);
+    const r = paraRange(text, p);
+    const head = { ...runStyleOf(f.t.styles.Heading1 ?? styleOf(f.t, undefined)) };
+    const normal = runStyleOf(styleOf(f.t, undefined));
+    const empty = r.start === r.end;
+    const title = name ? `List of ${name === 'Chart' ? 'Charts' : `${name}s`}` : 'List of Figures, Schemes and Tables';
+    const runs: TextRun[] = [...(empty ? [] : [{ ...normal, text: '\n' }]), { ...head, text: title }, { ...head, text: '\n' }, objectRun(id, normal)];
+    ed.replace(empty ? r.start : r.end, empty ? r.start : r.end, runs, undefined, null);
+    const h = empty ? p : p + 1;
+    // the heading looks like a heading but is in Normal, so the contents leave it out
+    let t = setParaStyle(f.t, h, h + 1, 'Normal');
+    const hr = paraRange(rt.plainText(t.runs), h);
+    t = { ...t, runs: rt.applyStyle(t.runs, hr.start, hr.end, head), paras: t.paras.map((x, i) => (i === h ? { ...x, keepNext: true, spaceBefore: 0, spaceAfter: 8 } : x)) };
+    ed.update(t, null);
+    const at = objectOffsets(f.t.runs).get(id);
+    if (at !== undefined) ed.setCaret(at + 1);
+    if (!tofEntries(f.t, name).length) this.host.flash(`The table of figures lists the ${name ? `${name} ` : ''}captions made with References > Insert Caption. Add captions and they appear here with their page numbers.`, 9000);
+  }
+
+  private async askTofName(now: string, ok: string): Promise<string | null> {
+    const got = await ask('Table of Figures', [
+      { name: 'name', label: 'Captions listed', value: now, options: TOF_NAMES.map((n) => ({ value: n, label: n ? `${n} captions` : 'All captions (figures, schemes, tables, charts)' })) },
+    ], { ok, note: 'It lists each caption with its page number and updates by itself as captions change or move. In Word, right-click it and choose Update Field after editing there.' });
+    return got ? got.name : null;
+  }
+
+  /** Double-click on a table of figures: the captions it lists. */
+  private async tofOptions(id: number): Promise<void> {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'tof') return;
+    const name = await this.askTofName(o.name, 'Apply');
+    if (name === null || name === o.name || this.file !== f) return;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'tof', name } } } as DocText, 'Table of figures captions');
+  }
+
+  // ---------------------------------------------------------------- footnotes and endnotes
+
+  /**
+   * References > Insert Footnote (Ctrl+Alt+F) or Insert Endnote (Ctrl+Alt+D): the next number in
+   * superscript at the caret, and the caret in the note's own text (at the foot of the page, or
+   * after the text), as in Word. Escape goes back to the number; deleting the number deletes the note.
+   */
+  private insertNote(end: boolean): void {
+    const f = this.file!;
+    if (f.box) {
+      this.host.flash(`${end ? 'Endnotes' : 'Footnotes'} go in the document's text: click in the text first (not in a text box, table cell or note).`, 6000);
+      return;
+    }
+    const st = noteStyle(f.t);
+    const id = this.insertObject({ kind: 'note', end: end || undefined, runs: [{ ...runStyleOf(st), text: '' }] }, end ? 'Insert endnote' : 'Insert footnote', { sup: true, sub: undefined });
+    // what is typed next in the text isn't in superscript
+    f.ed.setStyle({ sup: undefined });
+    this.startBox(id);
+  }
+
+  /** The footnote or endnote whose number is at an offset in the text (or just before it). */
+  private noteAt(offset: number): number | null {
+    const f = this.file;
+    if (!f) return null;
+    for (const at of [offset, offset - 1]) {
+      const obj = at >= 0 ? rt.sliceRuns(f.t.runs, at, at + 1)[0]?.obj : undefined;
+      if (obj !== undefined && f.t.objects[obj]?.kind === 'note') return obj;
+    }
+    return null;
+  }
+
+  /** A footnote made an endnote, or an endnote a footnote. */
+  private convertNote(id: number): void {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'note') return;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { ...o, end: o.end ? undefined : true } } } as DocText, o.end ? 'Convert to footnote' : 'Convert to endnote');
+  }
+
+  /**
+   * References > Footnote Options (Word's Footnote and Endnote dialog): how footnotes and endnotes
+   * are numbered, and turning all of one kind into the other.
+   */
+  private async noteOptions(): Promise<void> {
+    const f = this.file!;
+    const FORMATS: NoteFormat[] = ['decimal', 'lowerRoman', 'upperRoman', 'lowerLetter', 'upperLetter', 'chicago'];
+    const options = FORMATS.map((v) => ({ value: v, label: [1, 2, 3].map((n) => noteLabel(n, v)).join(', ') }));
+    const notes = Object.values(f.t.objects).filter((o) => o.kind === 'note');
+    const feet = notes.filter((o) => o.kind === 'note' && !o.end).length, ends = notes.length - feet;
+    const got = await ask('Footnotes and Endnotes', [
+      { name: 'foot', label: 'Footnotes numbered', value: f.t.notes?.foot ?? FOOT_FORMAT, options },
+      { name: 'end', label: 'Endnotes numbered', value: f.t.notes?.end ?? END_FORMAT, options },
+      { name: 'convert', label: 'Convert', value: '', options: [
+        { value: '', label: 'Leave them as they are' },
+        { value: 'toEnd', label: `All footnotes to endnotes (${feet})` },
+        { value: 'toFoot', label: `All endnotes to footnotes (${ends})` },
+        { value: 'swap', label: 'Swap footnotes and endnotes' },
+      ] },
+    ], { ok: 'Apply', note: 'Footnotes sit at the foot of their page, endnotes after the text. Insert them with References > Insert Footnote (Ctrl+Alt+F) or Insert Endnote (Ctrl+Alt+D); delete one by deleting its number in the text.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const foot = got.foot as NoteFormat, end = got.end as NoteFormat;
+    const objects = { ...f.t.objects };
+    for (const [k, o] of Object.entries(objects)) {
+      if (o.kind !== 'note') continue;
+      const toEnd = got.convert === 'toEnd' ? true : got.convert === 'toFoot' ? false : got.convert === 'swap' ? !o.end : !!o.end;
+      if (toEnd !== !!o.end) objects[Number(k)] = { ...o, end: toEnd || undefined };
+    }
+    const fmts = { ...(foot !== FOOT_FORMAT ? { foot } : {}), ...(end !== END_FORMAT ? { end } : {}) };
+    f.ed.update({ ...f.t, objects, notes: Object.keys(fmts).length ? fmts : undefined } as DocText, 'Footnote options');
   }
 
   // ---------------------------------------------------------------- equations

@@ -190,6 +190,9 @@
     <button data-modes="document" role="menuitem" data-cmd="insert-bibliography" title="The references cited, numbered, in the journal style">Bibliography</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha), shown as maths; a Word equation in .docx files">Equation…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-toc" title="The headings (Heading 1, 2, 3) with their page numbers; it updates by itself">Table of Contents…</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-tof" title="The Figure, Scheme, Table or Chart captions with their page numbers; it updates by itself">Table of Figures…</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-footnote" title="A footnote at the foot of the page (Ctrl+Alt+F)">Footnote</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-endnote" title="An endnote after the text (Ctrl+Alt+D)">Endnote</button>
     <button data-modes="document" role="menuitem" data-cmd="page-break">Page Break</button>
     </div>
     </div>
@@ -902,7 +905,16 @@
       </div>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-doc="insert-footnote" title="Insert Footnote (Ctrl+Alt+F): a number in the text and its note at the foot of the page, typed into there. Escape goes back to the text; deleting the number deletes the note"><span class="rb-icon">AB<sup>1</sup></span>Insert Footnote</button>
+          <button class="rb-big" data-doc="insert-endnote" title="Insert Endnote (Ctrl+Alt+D): a number in the text and its note after the end of the text"><span class="rb-icon"><sup>i</sup>≡</span>Insert Endnote</button>
+          <button class="rb-big" data-doc="note-options" title="How footnotes and endnotes are numbered (1, 2, 3; i, ii, iii; a, b, c; *, †, ‡), and turning footnotes into endnotes or back"><span class="rb-icon">⚙</span>Note Options…</button>
+        </div>
+        <div class="rb-label">Footnotes</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-doc="insert-caption" title="A numbered caption: Figure 1, Scheme 2, Table S1…"><span class="rb-icon">¶</span>Insert Caption</button>
+          <button class="rb-big" data-doc="insert-tof" title="Insert Table of Figures: the Figure, Scheme, Table or Chart captions (or all of them) with their page numbers. It updates by itself; double-click it to choose the captions listed"><span class="rb-icon">▤</span>Table of Figures</button>
           <button class="rb-big" data-doc="cross-reference" title="&quot;Figure 2&quot; in the text: it follows the caption's number when captions are added or moved"><span class="rb-icon">↪</span>Cross-reference</button>
         </div>
         <div class="rb-label">Captions</div>
