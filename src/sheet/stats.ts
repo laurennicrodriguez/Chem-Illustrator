@@ -86,6 +86,36 @@ export function tInv(p: number, df: number): number {
   return t;
 }
 
+/** The F distribution: the chance of a value above f (the right tail), with d1 and d2 degrees of freedom. */
+export function fTail(f: number, d1: number, d2: number): number {
+  if (f <= 0) return 1;
+  // the right tail as I_x(d2/2, d1/2) with x = d2 / (d2 + d1 f), exact far out
+  return betaInc(d2 / (d2 + d1 * f), d2 / 2, d1 / 2);
+}
+
+/** The F distribution: the chance of a value at or below f. */
+export const fCdf = (f: number, d1: number, d2: number): number => (f <= 0 ? 0 : betaInc((d1 * f) / (d1 * f + d2), d1 / 2, d2 / 2));
+
+/** The F density. */
+export function fPdf(f: number, d1: number, d2: number): number {
+  if (f < 0) return 0;
+  if (f === 0) return d1 < 2 ? Infinity : d1 === 2 ? 1 : 0;
+  return Math.exp(0.5 * d1 * Math.log(d1) + 0.5 * d2 * Math.log(d2) + (0.5 * d1 - 1) * Math.log(f) - 0.5 * (d1 + d2) * Math.log(d2 + d1 * f)
+    - (lnGamma(d1 / 2) + lnGamma(d2 / 2) - lnGamma((d1 + d2) / 2)));
+}
+
+/** The f with a chance p of a value above it (the right tail), 0 < p < 1. */
+export function fInvTail(p: number, d1: number, d2: number): number {
+  let lo = 0, hi = 1;
+  while (fTail(hi, d1, d2) > p) { lo = hi; hi *= 2; if (hi > 1e300) return Infinity; }
+  for (let i = 0; i < 300; i++) {
+    const mid = (lo + hi) / 2;
+    if (fTail(mid, d1, d2) > p) lo = mid; else hi = mid;
+    if (hi - lo <= 1e-15 * hi) break;
+  }
+  return (lo + hi) / 2;
+}
+
 /** The regularised lower incomplete gamma function P(a, x). */
 function gammaP(a: number, x: number): number {
   if (x <= 0) return 0;

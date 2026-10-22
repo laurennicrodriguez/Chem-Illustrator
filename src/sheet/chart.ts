@@ -116,6 +116,8 @@ export interface Chart {
   boxes?: BoxOptions;
   /** Radar charts: filled shapes in place of lines with markers. */
   filled?: boolean;
+  /** A PivotChart: the id of the PivotTable it charts (its series follow the report when it refreshes). */
+  pivot?: number;
   /** Where it sits: its top-left corner in a cell, and its size, in pixels at 100%. */
   at: { row: number; col: number; dx: number; dy: number };
   w: number;
