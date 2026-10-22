@@ -48,11 +48,13 @@ import { pickReuseSlides } from './ui/reuse-slides';
 import { writeTiff } from './render/tiff';
 import { itemsToEps } from './render/eps';
 import { Workspace, Tab } from './workspace';
-import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize, slideBackground, slideColours, type SlideSource, contentArea } from './deck/deck';
+import { Deck, LayoutId, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize, slideBackground, slideColours, type SlideSource, contentArea, deckLayouts, type SizeFit } from './deck/deck';
 import { shapeMathPicture, shapeMathScale, shapeMathSize } from './deck/equation';
 import { askEquation } from './ui/equation-dialog';
 import { solid } from './deck/background';
 import { formatBackground } from './ui/background-dialog';
+import { pictureFormat } from './ui/picture-dialog';
+import { fxPng } from './render/picture-fx';
 import { drawSlidePage, recordSlide, paintSlide, drawDrawing, SURROUND } from './deck/slide-view';
 import { writePdf, jpegInfo, PdfPage, PdfImage } from './io/pdf';
 import { SlideList } from './ui/slide-list';
@@ -79,7 +81,9 @@ import { AnimationUI } from './ui/animation-ui';
 import { SlideComments } from './ui/slide-comments';
 import { writePptx, type PptxOptions } from './io/pptx-write';
 import { EFFECTS, animName, newAnim, highlightParts } from './deck/animation';
-import { SLIDE_TEMPLATES, applyTemplate } from './deck/templates';import { pickTemplate } from './ui/template-gallery';
+import { SLIDE_TEMPLATES, applyTemplate, type SlideTemplate } from './deck/templates';
+import { editLayouts } from './ui/layout-editor';
+import { pickSlideSize } from './ui/slide-size-dialog';import { pickTemplate } from './ui/template-gallery';
 import { showContextMenu, topMenuEntry, type MenuItem } from './ui/context-menu';
 import { CommandSearch, uniqueCommands, type CommandItem } from './ui/command-search';
 import { fillTemplate, templateSize } from './design/templates';
@@ -635,7 +639,7 @@ async function insertTable(): Promise<void> {
 /** The part of the slide showing that pasted things go in (below the title), in Slides mode. */
 function slideContentArea(): Rect | null {
   const deck = deckNow();
-  return deck ? contentArea(deck.current?.layout ?? 'blank', deck.size) : null;
+  return deck ? contentArea(deck.current?.layout ?? 'blank', deck.size, deck.master) : null;
 }
 
 /** Where pasted things go: the middle of the slide's content area in Slides mode, else the middle of the window. */
@@ -1680,6 +1684,7 @@ const docFiles: DocxDeps = {
     return { png, svg: pictureSvg(pic), w: pic.box.x2 - pic.box.x1, h: pic.box.y2 - pic.box.y1, x: pic.box.x1, y: pic.box.y1 };
   },
   svgToPng,
+  bakePicture: (p) => fxPng(p, 'baked'),
   fonts: bundledFaces,
   smiles: (contents, style) => drawingSmiles(structureDoc(contents, style)),
 };
@@ -1726,7 +1731,7 @@ const ws: Workspace = new Workspace(doc, {
   },
   newStyle: (mode) => { const n = modeStyleFor(mode); return n ? styleNamed(n, ownStyles) ?? null : null; },
   newPage: () => (defaultPage ? { ...defaultPage } : null),
-  newMaster: (m) => { const t = SLIDE_TEMPLATES.find((x) => x.id === slideTemplate); return t && t.id !== 'plain' ? applyTemplate(m, t) : null; },
+  newMaster: (m) => { const t = themeById(slideTemplate); return t && t.id !== 'plain' ? applyTemplate(m, t) : null; },
   beforeWrite: (tab, ref, name, how) => keeper.beforeWrite(tab, ref, name, how),
   saved: (tab, data, how, was) => keeper.saved(tab, data, how, was),
   autoSaveFailed: (tab, msg) => keeper.autoSaveFailed(tab, msg),
@@ -1766,6 +1771,7 @@ function pptxOptions(): PptxOptions {
       return { svg: pictureSvg(pic), png, box: pic.box };
     },
     svgToPng,
+    bakePicture: (p) => fxPng(p, 'baked'),
     fonts: bundledFaces,
     smiles: drawingSmiles,
   };
@@ -1825,6 +1831,12 @@ function enterTab(tab: Tab, opened: boolean): void {
   tickToolboxes();
   applyModeColours(tab.mode, modeColours);
   for (const el of document.querySelectorAll<HTMLElement>('.slides-only')) el.hidden = !slides;
+  // another tab: back to Normal view
+  if (sorterOn) {
+    sorterOn = false;
+    sorterEl.hidden = true;
+    sorterList.show(null);
+  }
   showSheetParts();
   editor.paused = sheet || words;
   sheetMode.show(sheet ? tab : null);
@@ -1886,7 +1898,7 @@ const slidePage = {
 let listKey = '';
 let masterSeen: unknown = null;
 let indexSeen = -1;
-const slideListKey = (d: Deck) => `${d.slides.map((s) => s.id + (s.notes.trim() ? 'n' : '') + (s.hidden ? 'h' : '')).join(',')}|${d.size.w}x${d.size.h}|${d.looks}`;
+const slideListKey = (d: Deck) => `${d.slides.map((s) => s.id + (s.notes.trim() ? 'n' : '') + (s.hidden ? 'h' : '') + (s.section !== undefined ? `s${s.section}` : '')).join(',')}|${d.sections.map((x) => `${x.id}:${x.name}`).join('/')}|${d.size.w}x${d.size.h}|${d.looks}`;
 
 function deckChanged(deck: Deck): void {
   const key = slideListKey(deck);
@@ -1895,11 +1907,16 @@ function deckChanged(deck: Deck): void {
     masterSeen = deck.master;
     indexSeen = deck.index;
     slideList.rebuild();
+    if (sorterOn) sorterList.rebuild();
   } else if (deck.index !== indexSeen) {
     // going to another slide moves the highlight; no picture needs drawing again
     indexSeen = deck.index;
     slideList.switched();
-  } else slideList.refresh();
+    if (sorterOn) sorterList.switched();
+  } else {
+    slideList.refresh();
+    if (sorterOn) sorterList.refresh();
+  }
   showSlideState();
   if (ws.active.mode === 'design') showDesignState();
   ws.noteChange();
@@ -1916,10 +1933,42 @@ function slideSwitched(deck: Deck): void {
   slideCmts?.slideChanged();
 }
 
+/** The layouts last put in the Layout box and the Format menu (they change with the slide master). */
+let layoutsShown = '';
+
+/** The Layout box and Format > Slide Layout list the deck's layouts: the five built in, as edited, then the ones made here. */
+function showLayoutMenus(deck: Deck): void {
+  const list = deckLayouts(deck.master);
+  const key = JSON.stringify(list.map((l) => [l.id, l.name]));
+  if (key === layoutsShown) return;
+  layoutsShown = key;
+  layoutSel.replaceChildren(...list.map((l) => new Option(l.name, l.id)));
+  const sub = document.querySelector<HTMLElement>('#layout-menu');
+  if (sub) {
+    const items: HTMLElement[] = list.map((l) => {
+      const b = document.createElement('button');
+      b.setAttribute('role', 'menuitemradio');
+      b.setAttribute('aria-checked', 'false');
+      b.dataset.cmd = `layout-${l.id}`;
+      const span = document.createElement('span');
+      span.textContent = l.name;
+      b.append(span);
+      return b;
+    });
+    const hr = document.createElement('hr');
+    const edit = document.createElement('button');
+    edit.setAttribute('role', 'menuitem');
+    edit.dataset.cmd = 'edit-layouts';
+    edit.textContent = 'Edit Layouts…';
+    sub.replaceChildren(...items, hr, edit);
+  }
+}
+
 /** The layout and size boxes and the Format menu show the slide being edited. */
 function showSlideState(): void {
   const deck = deckNow();
   if (!deck?.current) return;
+  showLayoutMenus(deck);
   layoutSel.value = deck.current.layout;
   const named = deck.size.w === WIDE.w && deck.size.h === WIDE.h ? 'wide' : deck.size.w === STANDARD.w && deck.size.h === STANDARD.h ? 'standard' : 'custom';
   let custom = sizeSel.querySelector<HTMLOptionElement>('option[value="custom"]');
@@ -1928,7 +1977,11 @@ function showSlideState(): void {
     custom.text = sizeName(deck.size);
   } else custom?.remove();
   sizeSel.value = named;
-  for (const l of LAYOUTS) $(`[data-cmd="layout-${l.id}"]`)?.setAttribute('aria-checked', String(l.id === deck.current.layout));
+  for (const b of document.querySelectorAll<HTMLElement>('[data-cmd^="layout-"]')) b.setAttribute('aria-checked', String(b.dataset.cmd === `layout-${deck.current.layout}`));
+  for (const b of document.querySelectorAll<HTMLElement>('[data-cmd="view-normal"], [data-cmd="view-sorter"]')) {
+    const on = (b.dataset.cmd === 'view-sorter') === sorterOn;
+    b.setAttribute(b.getAttribute('role') === 'menuitemradio' ? 'aria-checked' : 'aria-pressed', String(on));
+  }
   $('[data-cmd="size-wide"]')?.setAttribute('aria-checked', String(named === 'wide'));
   $('[data-cmd="size-standard"]')?.setAttribute('aria-checked', String(named === 'standard'));
   const hidden = String(!!deck.current.hidden);
@@ -2056,16 +2109,58 @@ host.addEventListener('drop', (e) => {
   overlay.focus();
 });
 
-const slideList = new SlideList($('#slide-list'), {
-  go: (i) => goSlide(i),
-  remove: (ix) => removeSlides(ix),
-  duplicate: (ix) => { const d = deckNow(); if (d) { finishTyping(); d.duplicate(ix); } },
+const slideListHooks = {
+  go: (i: number) => goSlide(i),
+  remove: (ix: number[]) => removeSlides(ix),
+  duplicate: (ix: number[]) => { const d = deckNow(); if (d) { finishTyping(); d.duplicate(ix); } },
   add: () => newSlide(),
-  copy: (ix) => copySlides(ix, false),
-  cut: (ix) => copySlides(ix, true),
+  copy: (ix: number[]) => copySlides(ix, false),
+  cut: (ix: number[]) => copySlides(ix, true),
   paste: () => pasteSlides(),
-  menu: (x, y) => showContextMenu(x, y, slideListMenu(), { run: (cmd) => void command(cmd), key: commandKey }),
-});
+  menu: (x: number, y: number) => showContextMenu(x, y, slideListMenu(), { run: (cmd) => void command(cmd), key: commandKey }),
+  sectionMenu: (x: number, y: number, id: number) => {
+    showContextMenu(x, y, [...sectionItems(), null, { cmd: 'add-section' }], {
+      run: (cmd) => { sectionPicked = id; void command(cmd); },
+      key: commandKey,
+    });
+  },
+  renameSection: (id: number) => void renameSection(id),
+};
+const slideList = new SlideList($('#slide-list'), slideListHooks);
+
+// View > Slide Sorter: every slide in rows of larger pictures, over the slide being edited.
+// Double-click a slide (or press Enter) to go back to Normal view on it.
+let sorterOn = false;
+const sorterEl = $('#slide-sorter');
+const sorterList = new SlideList(sorterEl, { ...slideListHooks, open: (i) => { goSlide(i); setSorter(false); } }, { grid: true, thumbW: 220 });
+
+/** Slide Sorter on or off (Normal view). */
+function setSorter(on: boolean): void {
+  const d = deckNow();
+  if (on && (!d || ws.active.mode !== 'slides')) { flash('Slide Sorter is for slides: use File > New Slides, or open a PowerPoint file.'); return; }
+  if (on === sorterOn) { if (on) sorterList.focus(); return; }
+  finishTyping();
+  sorterOn = on;
+  sorterEl.hidden = !on;
+  $('#slide-list').hidden = on || ws.active.mode !== 'slides';
+  sorterList.show(on ? d : null);
+  if (on) {
+    sorterList.picked = new Set(slideList.pickedList());
+    sorterList.rebuild();
+    sorterList.focus();
+  } else {
+    if (d) slideList.show(d);
+    overlay.focus();
+  }
+  editor.paused = on;
+  resize();
+  showSlideState();
+}
+
+/** The slides picked in the list showing: Slide Sorter's, or the slide list's. */
+function pickedSlides(): number[] {
+  return (sorterOn ? sorterList : slideList).pickedList();
+}
 
 /** Right-click in the slide list: what PowerPoint offers there. */
 function slideListMenu(): MenuItem[] {
@@ -2075,12 +2170,71 @@ function slideListMenu(): MenuItem[] {
     null,
     { cmd: 'new-slide' }, { cmd: 'duplicate-slide' }, { cmd: 'delete-slide' },
     null,
-    { label: 'Layout', items: LAYOUTS.map((l) => ({ cmd: `layout-${l.id}` })) },
+    { label: 'Layout', items: deckLayouts(deckNow()?.master).map((l) => ({ cmd: `layout-${l.id}`, label: l.name })) },
     { cmd: 'format-background' },
     { cmd: 'hide-slide' },
     null,
+    { cmd: 'add-section' },
+    ...(deckNow()?.sections.length ? [{ label: 'Section', items: sectionItems() }] : []),
+    null,
     { cmd: 'reuse-slides' },
+    ...(sorterOn ? [null, { cmd: 'view-normal', label: 'Open in Normal View' }] : []),
   ];
+}
+
+/** The section commands, as in PowerPoint's right-click on a section. */
+function sectionItems(): MenuItem[] {
+  return [
+    { cmd: 'rename-section' }, { cmd: 'remove-section' }, { cmd: 'remove-section-slides' }, { cmd: 'remove-all-sections' },
+    null,
+    { cmd: 'section-up' }, { cmd: 'section-down' },
+    null,
+    { cmd: 'collapse-sections' }, { cmd: 'expand-sections' },
+  ];
+}
+
+/** The section a section command works on: the one whose heading was right-clicked, else the slide being edited's. */
+let sectionPicked: number | null = null;
+function pickedSection(d: Deck): number | null {
+  const id = sectionPicked;
+  sectionPicked = null;
+  if (id !== null && d.sections.some((x) => x.id === id)) return id;
+  return d.current?.section ?? null;
+}
+
+async function renameSection(id?: number): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const sid = id ?? pickedSection(d);
+  const sec = d.sections.find((x) => x.id === sid);
+  if (!sec) { flash('This deck has no sections yet: use Add Section.'); return; }
+  const got = await ask('Rename Section', [{ name: 'name', label: 'Section name', value: sec.name }], { ok: 'Rename' });
+  if (got && deckNow() === d) d.renameSection(sec.id, got.name);
+}
+
+/** The section commands, by name. */
+function sectionCommand(cmd: string): void {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  if (cmd === 'add-section') {
+    const first = (sorterOn ? sorterList : slideList).pickedList()[0] ?? d.index;
+    const id = d.addSection(first);
+    void renameSection(id);
+    return;
+  }
+  if (cmd === 'collapse-sections' || cmd === 'expand-sections') { d.foldAll(cmd === 'collapse-sections'); return; }
+  if (cmd === 'remove-all-sections') { d.removeAllSections(); return; }
+  const id = pickedSection(d);
+  if (id === null) { flash('This deck has no sections yet: use Add Section.'); return; }
+  if (cmd === 'rename-section') { void renameSection(id); return; }
+  if (cmd === 'remove-section') d.removeSection(id);
+  else if (cmd === 'remove-section-slides') { if (!d.removeSection(id, true)) flash('A presentation needs at least one slide, so this section\'s slides were kept.'); }
+  else if (cmd === 'section-up' || cmd === 'section-down') {
+    const k = d.sections.findIndex((x) => x.id === id);
+    d.moveSection(id, k + (cmd === 'section-up' ? -1 : 1));
+  }
 }
 
 /**
@@ -2111,7 +2265,7 @@ function pasteSlides(keep?: boolean): void {
   if (!slideClip) { flash('Copy slides first: pick them in the slide list and press Ctrl+C (or Edit > Copy Slides).'); return; }
   finishTyping();
   const src = slideClip;
-  const after = slideList.pickedList().at(-1) ?? d.index;
+  const after = pickedSlides().at(-1) ?? d.index;
   const n = d.pasteSlides(src, !!keep, after);
   const what = `${n} slide${n === 1 ? '' : 's'}`;
   const sameLook = JSON.stringify(src.master) === JSON.stringify(d.master);
@@ -2153,7 +2307,7 @@ async function reuseSlides(): Promise<void> {
   const pick = await pickReuseSlides(f.name, from, reuseKeep);
   if (!pick || deckNow() !== d) return;
   reuseKeep = pick.keep;
-  const n = d.pasteSlides(from.copySlides(pick.indices), pick.keep, slideList.pickedList().at(-1) ?? d.index);
+  const n = d.pasteSlides(from.copySlides(pick.indices), pick.keep, pickedSlides().at(-1) ?? d.index);
   flash(`Inserted ${n} slide${n === 1 ? '' : 's'} from ${f.name}.${got.warnings.length ? ' ' + got.warnings.join(' ') : ''}`, got.warnings.length ? 12000 : 3500);
 }
 
@@ -2161,7 +2315,7 @@ function hideSlides(): void {
   const d = deckNow();
   if (!d || ws.active.mode !== 'slides') return;
   finishTyping();
-  const ix = slideList.pickedList();
+  const ix = pickedSlides();
   // as in PowerPoint: hide them all unless they are all hidden already
   const hide = !ix.every((i) => d.slides[i]?.hidden);
   d.setHidden(hide, ix);
@@ -2197,11 +2351,11 @@ function setLayout(l: LayoutId): void {
   d.setLayout(l);
 }
 
-function setSlideSize(size: { w: number; h: number }): void {
+function setSlideSize(size: { w: number; h: number }, fit: SizeFit = 'centre'): void {
   const d = deckNow();
   if (!d) return;
   finishTyping();
-  d.setSize(size);
+  d.setSize(size, fit);
   editor.fit();
 }
 
@@ -2209,6 +2363,7 @@ layoutSel.addEventListener('change', () => { setLayout(layoutSel.value as Layout
 sizeSel.addEventListener('change', () => {
   if (sizeSel.value === 'wide') setSlideSize(WIDE);
   else if (sizeSel.value === 'standard') setSlideSize(STANDARD);
+  else if (sizeSel.value === 'pick') { showSlideState(); void customSlideSize(); }
   sizeSel.blur();
 });
 
@@ -2596,6 +2751,28 @@ function cropPicture(): void {
   if (editor.cropping !== null) flash('Drag the black handles to cut the edges off. Press Esc or click elsewhere when you are done.', 6000);
 }
 
+/**
+ * Picture Format…: the selected pictures' corrections, colours, see-through, Remove Background
+ * and shape; the first one's crop too (cropping to proportions keeps its width).
+ */
+async function formatPicture(): Promise<void> {
+  const pics = [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => x?.kind === 'picture' && !!x.src && !x.chart && !x.math && !x.video);
+  if (!pics.length) { flash('Select a picture first.'); return; }
+  const p = pics[0];
+  const got = await pictureFormat({ src: p.src!, fx: p.fx, crop: p.crop, w: Math.abs(p.x2 - p.x1), h: Math.abs(p.y2 - p.y1), count: pics.length });
+  if (!got) return;
+  doc.edit('Picture format', () => {
+    for (const x of pics) doc.updateShape(x.id, { fx: got.fx && structuredClone(got.fx) });
+    if (got.crop) {
+      const c = got.crop;
+      const x1 = Math.min(p.x1, p.x2), y1 = Math.min(p.y1, p.y2), w = Math.abs(p.x2 - p.x1);
+      doc.updateShape(p.id, { crop: c.l || c.t || c.r || c.b ? c : undefined, ...(got.aspect ? { x1, y1, x2: x1 + w, y2: y1 + w / got.aspect } : {}) });
+    }
+  });
+  editor.requestScene();
+  stylePanel.refresh();
+}
+
 /** Picture > Remove white: near-white pixels become see-through (the picture becomes a PNG). */
 async function removeWhite(ids: number[]): Promise<void> {
   const v = await ask('Remove White Background', [
@@ -2730,7 +2907,7 @@ async function backgroundDialog(): Promise<void> {
   if (!d?.current) return;
   finishTyping();
   const design = ws.active.mode === 'design';
-  const picked = design ? [d.index] : slideList.pickedList();
+  const picked = design ? [d.index] : pickedSlides();
   const first = d.slides[picked[0]] ?? d.current;
   const page = d.page(d.slides.indexOf(first));
   const got = await formatBackground({
@@ -2759,18 +2936,49 @@ async function backgroundDialog(): Promise<void> {
 
 /** Design > Templates: a ready-made look for every slide, and optionally for new decks too. */
 let slideTemplate: string | null = null;
+/** Your own slide themes (made in Design > Templates), kept in the settings. */
+let slideThemes: SlideTemplate[] = [];
+const themeById = (id: string | null) => [...SLIDE_TEMPLATES, ...slideThemes].find((x) => x.id === id);
 async function slideTemplates(): Promise<void> {
   const d = deckNow();
   if (!d) return;
   finishTyping();
-  const got = await pickSlideTemplate(d.master, d.size, slideTemplate);
+  const got = await pickSlideTemplate(d.master, d.size, slideTemplate, slideThemes);
   if (!got) return;
-  if (deckNow() === d) d.setMaster(applyTemplate(d.master, got.template));
-  if (got.forNew) {
-    slideTemplate = got.template.id;
+  if (JSON.stringify(got.mine) !== JSON.stringify(slideThemes)) {
+    slideThemes = got.mine;
+    // a theme for new decks that has been deleted: back to the plain look
+    if (slideTemplate && !themeById(slideTemplate)) slideTemplate = null;
     storeSettings();
-    flash(`New slide decks will start with ${got.template.name}. Pick Plain to go back.`);
   }
+  const t = got.template;
+  if (!t) return;
+  if (deckNow() === d) d.setMaster(applyTemplate(d.master, t));
+  if (got.forNew) {
+    slideTemplate = t.id;
+    storeSettings();
+    flash(`New slide decks will start with ${t.name}. Pick Plain to go back.`);
+  }
+}
+
+/** Slide Master > Edit Layouts: the deck's layouts and their placeholders. */
+async function editSlideLayouts(): Promise<void> {
+  const d = deckNow();
+  if (!d?.current || ws.active.mode !== 'slides') { flash('Layouts are for slides: use File > New Slides, or open a PowerPoint file.'); return; }
+  finishTyping();
+  const used = new Map<LayoutId, number>();
+  for (const s of d.slides) used.set(s.layout, (used.get(s.layout) ?? 0) + 1);
+  const got = await editLayouts({ master: d.master, size: d.size, current: d.current.layout, used });
+  if (got && deckNow() === d) d.setLayouts(got);
+}
+
+/** Design > Slide Size > Custom Slide Size: any size, with what is on the slides scaled to fit or kept as it is. */
+async function customSlideSize(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const got = await pickSlideSize(d.size);
+  if (got && deckNow() === d) setSlideSize(got.size, got.fit);
 }
 
 function present(fromHere: boolean, notes = false): void {
@@ -3554,6 +3762,7 @@ function command(name: string): boolean {
     const [, id, index] = name.split(':');
     return contextBond !== null && editor.fuseRing(contextBond, id, Number(index));
   }
+  if (name.startsWith('layout-') && ws.active.mode === 'slides') { setLayout(name.slice('layout-'.length)); return true; }
   const run = COMMANDS[name];
   return !!run && run() !== false;
 }
@@ -3567,7 +3776,8 @@ function setPictureStyle(look: PictureLook | undefined): boolean {
 }
 
 /** Slide commands that don't apply to a design's single page. */
-const SLIDE_ONLY = new Set(['new-slide', 'duplicate-slide', 'delete-slide', 'cut-slides', 'copy-slides', 'paste-slides', 'paste-slides-keep', 'hide-slide', 'reuse-slides', 'size-wide', 'size-standard', 'slide-master', 'slide-templates',
+const SLIDE_ONLY = new Set(['section-menu', 'new-slide', 'duplicate-slide', 'delete-slide', 'cut-slides', 'copy-slides', 'paste-slides', 'paste-slides-keep', 'hide-slide', 'reuse-slides', 'size-wide', 'size-standard', 'size-custom', 'slide-master', 'slide-templates',
+  'edit-layouts', 'view-sorter', 'add-section', 'rename-section', 'remove-section', 'remove-section-slides', 'remove-all-sections', 'section-up', 'section-down', 'collapse-sections', 'expand-sections',
   'slide-transitions', 'slide-animations', 'animation-pane', 'preview-slide', 'remove-animation', 'insert-slide-zoom', 'insert-summary-zoom', 'action-settings', 'insert-video', 'insert-audio']);
 
 /** The animation commands: an effect for the selected objects (the right-click menu's Animation). */
@@ -3633,12 +3843,13 @@ const COMMANDS: Record<string, () => unknown> = {
   'insert-chart': () => { void insertChart(); },
   'edit-chart': () => { const id = [...editor.sel.shapes].find((x) => doc.shapes.get(x)?.chart); if (id === undefined) { flash('Click a chart first.'); return; } void editChartShape(id); },
   crop: () => cropPicture(),
+  'picture-format': () => { void formatPicture(); },
   'text-box': () => { editor.setTool('text'); flash('Click to type, or drag across to make a text box that wraps.'); },
   'new-slide': () => newSlide(),
-  'duplicate-slide': () => { const d = deckNow(); if (d) { finishTyping(); d.duplicate(slideList.pickedList()); } },
-  'delete-slide': () => removeSlides(slideList.pickedList()),
-  'cut-slides': () => copySlides(slideList.pickedList(), true),
-  'copy-slides': () => copySlides(slideList.pickedList(), false),
+  'duplicate-slide': () => { const d = deckNow(); if (d) { finishTyping(); d.duplicate(pickedSlides()); } },
+  'delete-slide': () => removeSlides(pickedSlides()),
+  'cut-slides': () => copySlides(pickedSlides(), true),
+  'copy-slides': () => copySlides(pickedSlides(), false),
   'paste-slides': () => pasteSlides(),
   'paste-slides-keep': () => pasteSlides(true),
   'hide-slide': () => hideSlides(),
@@ -3652,9 +3863,20 @@ const COMMANDS: Record<string, () => unknown> = {
   'edit-equation': () => { const id = [...editor.sel.shapes].find((x) => doc.shapes.get(x)?.math); if (id === undefined) { flash('Click an equation first (or double-click it).'); return; } void editEquationShape(id); },
   'next-slide': () => { const d = deckNow(); if (!d) return false; goSlide(d.index + 1); },
   'prev-slide': () => { const d = deckNow(); if (!d) return false; goSlide(d.index - 1); },
-  ...Object.fromEntries(LAYOUTS.map((l) => [`layout-${l.id}`, () => setLayout(l.id)])),
   'size-wide': () => setSlideSize(WIDE),
   'size-standard': () => setSlideSize(STANDARD),
+  'size-custom': () => customSlideSize(),
+  'edit-layouts': () => editSlideLayouts(),
+  'section-menu': () => {
+    const b = document.querySelector<HTMLElement>('#ribbon [data-cmd="section-menu"]');
+    const r = b?.getBoundingClientRect();
+    const d = deckNow();
+    const items: MenuItem[] = d?.sections.length ? [{ cmd: 'add-section' }, null, ...sectionItems()] : [{ cmd: 'add-section' }];
+    showContextMenu(r ? r.left : 200, r ? r.bottom + 2 : 120, items, { run: (cmd) => void command(cmd), key: commandKey });
+  },
+  'view-normal': () => setSorter(false),
+  'view-sorter': () => setSorter(true),
+  ...Object.fromEntries(['add-section', 'rename-section', 'remove-section', 'remove-section-slides', 'remove-all-sections', 'section-up', 'section-down', 'collapse-sections', 'expand-sections'].map((c) => [c, () => sectionCommand(c)])),
   'slide-master': () => slideMaster(),
   'format-background': () => backgroundDialog(),
   'slide-templates': () => slideTemplates(),
@@ -4860,6 +5082,7 @@ function storeSettings(): void {
     superscriptR: labelPrefs.superscriptR,
     linkSide,
     slideTemplate,
+    slideThemes,
     askWholeDrawing,
     palettes: getPalettes(),
     toolboxes: toolboxState,
@@ -5007,6 +5230,7 @@ void loadSettings().then((s) => {
   labelPrefs.superscriptR = s.superscriptR;
   linkSide = s.linkSide;
   slideTemplate = s.slideTemplate;
+  slideThemes = s.slideThemes;
   askWholeDrawing = s.askWholeDrawing;
   updateCheck = s.updateCheck;
   pubchemNames = s.pubchemNames;
@@ -5984,7 +6208,7 @@ function drawingMenu(): MenuItem[] {
     { label: 'Rotate or Flip', items: turn },
     ...(order.length ? [{ label: 'Order', items: order }] : []),
     ...(shapes.some((x) => x.chart) ? [{ cmd: 'edit-chart', label: 'Edit Chart…' }] : []),
-    ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }, { label: 'Picture Style', items: PICTURE_STYLES.map((p) => ({ cmd: `picture-style-${p.id}`, label: p.name })) }] : []),
+    ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }, { cmd: 'picture-format' }, { label: 'Picture Style', items: PICTURE_STYLES.map((p) => ({ cmd: `picture-style-${p.id}`, label: p.name })) }] : []),
     ...(ws.active.mode === 'slides' ? [{ label: 'Animation', items: [
       ...ANIM_COMMANDS.slice(0, EFFECTS.length), null, ...ANIM_COMMANDS.slice(EFFECTS.length), null,
       { cmd: 'remove-animation', label: 'Remove Animation' }, { cmd: 'animation-pane', label: 'Animation Pane' }, { cmd: 'preview-slide', label: 'Preview Slide' },
@@ -6090,6 +6314,7 @@ editor.onContextMenu = (e) => {
 };
 
 stylePanel.cropWithMouse = () => cropPicture();
+stylePanel.formatPicture = () => void formatPicture();
 stylePanel.removeWhite = (ids) => void removeWhite(ids);
 stylePanel.frames = { add: () => void command('add-frame'), fit: (id) => editor.fitFrame(id) };
 stylePanel.diagram = {

@@ -12,7 +12,9 @@
 
 import type { PinnedComment } from '../document/comments';
 import { COMMENT_CT, COMMENT_REL, writeSlideComments } from './pptx-comments';
-import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, applyBase, PICTURE_SHADOWS, type Pattern, type PictureLook, type Media } from '../model';
+import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, applyBase, PICTURE_SHADOWS, type Pattern, type PictureFx, type PictureLook, type Media } from '../model';
+import { bakedPart, tidyFx } from '../render/picture-fx';
+import { blipEffectsXml, imgPropsXml, pictureGeomXml } from './picture-xml';
 import { turnAbout, type Rect } from '../geom';
 import { layoutText, ASCENT, FONT_STACK, type Measure } from '../text/layout';
 import { fitParas, listMarkers, splitParagraphs } from '../text/paragraphs';
@@ -35,7 +37,7 @@ import { FADE, tint } from '../colours';
 import { transitionXml, timingXml, highlightParts, partHolds, type Transition, type Anim, type MediaTiming } from '../deck/animation';
 import { MEDIA_EXT } from '../deck/media';
 import {
-  Master, SlideSize, LayoutId, LAYOUTS, layoutFrames, decorFrames, showsNumber, textStyles, isEmptyText, slideColours, slideBackground, decorShapes, type DecorShape,
+  Master, SlideSize, LayoutId, layoutFrames, deckLayouts, layoutDef, titleLook, isBuiltinLayout, type LayoutDef, type SectionCount, decorFrames, showsNumber, textStyles, isEmptyText, slideColours, slideBackground, decorShapes, type DecorShape,
 } from '../deck/deck';
 import { sameBackground, type Background } from '../deck/background';
 import { bgXml, type BlipIds } from './pptx-background';
@@ -75,6 +77,8 @@ export const TAG = {
   diagram: 'CHEMILLUSTRATOR_DIAGRAM',
   /** A chart: the chart and its data as made here. */
   chart: 'CHEMILLUSTRATOR_CHART',
+  /** A picture's Picture Format settings PowerPoint has no place for (how near a colour Remove Background takes). */
+  picture: 'CHEMILLUSTRATOR_PICTURE',
   /** An equation: its LaTeX, size, colour and font as made here, used when PowerPoint has not changed it. */
   math: 'CHEMILLUSTRATOR_MATH',
 };
@@ -97,6 +101,11 @@ export interface PptxOptions {
   picture(doc: Doc): Promise<DrawingPicture | null>;
   /** A PNG of an SVG picture, for programs that can't show SVG (w × h pixels). */
   svgToPng(svg: string, w: number, h: number): Promise<Uint8Array>;
+  /**
+   * A picture with its sharpening and Remove Background worked in, as PNG (PowerPoint keeps
+   * those worked in, with the original beside it). Without it they are left off.
+   */
+  bakePicture?(p: Pick<Shape, 'src' | 'fx' | 'crop' | 'px'>): Promise<Uint8Array | null>;
   /** A drawing's structures as SMILES, for the picture's alt text (null when there are none, or no chemistry engine). */
   smiles?(doc: Doc): Promise<string | null>;
   /** Text widths, for laying out text boxes (Arial's widths by default). */
@@ -113,6 +122,8 @@ export interface DeckData {
   slides: { id?: number; layout: LayoutId; doc: Doc; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean; hidden?: boolean }[];
   /** A design (Design mode): marked so it opens in Design mode again. */
   design?: boolean;
+  /** The deck's sections, in order (none when left out). */
+  sections?: SectionCount[];
 }
 
 /**
@@ -398,15 +409,40 @@ function romanValue(m: string): number {
 
 // ---------------------------------------------------------------- the file
 
-const PH_XML: Record<LayoutId, ((i: number) => string)[]> = {
-  title: [() => '<p:ph type="ctrTitle"/>', () => '<p:ph type="subTitle" idx="1"/>'],
-  'title-content': [() => '<p:ph type="title"/>', () => '<p:ph idx="1"/>'],
-  'two-content': [() => '<p:ph type="title"/>', () => '<p:ph sz="half" idx="1"/>', () => '<p:ph sz="half" idx="2"/>'],
-  'title-only': [() => '<p:ph type="title"/>'],
-  blank: [],
-};
+/**
+ * How a layout's placeholders are named in PowerPoint: its title (a centred title on Title
+ * Slide), then its other boxes by number (subtitles as subtitles; halves on Two Content).
+ */
+function layoutPh(def: LayoutDef): { title: string | null; bodies: string[] } {
+  const others = def.boxes.filter((b) => b.ph !== 'title');
+  const half = def.id === 'two-content' && others.length === 2;
+  return {
+    title: def.boxes.some((b) => b.ph === 'title') ? (def.id === 'title' ? '<p:ph type="ctrTitle"/>' : '<p:ph type="title"/>') : null,
+    bodies: others.map((b, i) => (b.ph === 'subtitle' ? `<p:ph type="subTitle" idx="${i + 1}"/>` : `<p:ph${half ? ' sz="half"' : ''} idx="${i + 1}"/>`)),
+  };
+}
 
-const LAYOUT_TYPE: Record<LayoutId, string> = { title: 'title', 'title-content': 'obj', 'two-content': 'twoObj', 'title-only': 'titleOnly', blank: 'blank' };
+/** PowerPoint's kind of layout for each built-in one; layouts made here are its custom ones. */
+const LAYOUT_TYPE: Record<string, string> = { title: 'title', 'title-content': 'obj', 'two-content': 'twoObj', 'title-only': 'titleOnly', blank: 'blank' };
+const layoutType = (id: LayoutId) => (isBuiltinLayout(id) ? LAYOUT_TYPE[id] : 'cust');
+
+/** The id PowerPoint 2010 gives its sections' list in presentation.xml. */
+const SECTIONS_EXT = '{521415D9-36F7-43E2-AB2F-B90AF26B5E84}';
+
+/** A section's id as PowerPoint writes one: a GUID (made from its place, so the same deck saves the same). */
+const sectionGuid = (i: number) => `{${(0x5ec70000 + i).toString(16).toUpperCase().padStart(8, '0')}-0000-4000-8000-${(i + 1).toString(16).toUpperCase().padStart(12, '0')}}`;
+
+/** The deck's sections as PowerPoint's own (p14:sectionLst), naming the slides by their ids in sldIdLst. */
+export function sectionsXml(sections: SectionCount[] | undefined, n: number): string {
+  if (!sections?.length) return '';
+  let at = 0;
+  const list = sections.map((sec, k) => {
+    const ids = Array.from({ length: Math.max(0, Math.min(sec.count, n - at)) }, (_, j) => `<p14:sldId id="${256 + at + j}"/>`).join('');
+    at += Math.max(0, sec.count);
+    return `<p14:section name="${xmlAttr(sec.name)}" id="${sectionGuid(k)}"><p14:sldIdLst>${ids}</p14:sldIdLst></p14:section>`;
+  }).join('');
+  return `<p:extLst><p:ext uri="${SECTIONS_EXT}"><p14:sectionLst xmlns:p14="${NS_P14}">${list}</p14:sectionLst></p:ext></p:extLst>`;
+}
 
 /** A part in ppt/ as seen from another part in ppt/ or a folder in it. */
 const fromPpt = (from: string, path: string) => (from.split('/').length > 2 ? '../' : '') + path.slice(4);
@@ -497,17 +533,18 @@ class Writer {
     pkg.relate('', REL.coreProps, 'docProps/core.xml');
     pkg.relate('', REL.extendedProps, 'docProps/app.xml');
     pkg.add('docProps/core.xml', this.core(), CT.core);
-    pkg.add('docProps/app.xml', `${HEAD}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Chem Illustrator</Application><Slides>${n}</Slides><Notes>${deck.slides.filter((s) => s.notes.trim()).length}</Notes><PresentationFormat>${deck.size.w === 960 ? 'Widescreen' : 'On-screen Show (4:3)'}</PresentationFormat></Properties>`, CT.app);
+    pkg.add('docProps/app.xml', `${HEAD}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Chem Illustrator</Application><Slides>${n}</Slides><Notes>${deck.slides.filter((s) => s.notes.trim()).length}</Notes><PresentationFormat>${deck.size.w === 960 && deck.size.h === 540 ? 'Widescreen' : deck.size.w === 720 && deck.size.h === 540 ? 'On-screen Show (4:3)' : 'Custom'}</PresentationFormat></Properties>`, CT.app);
 
     const P = 'ppt/presentation.xml';
     const masterRel = pkg.relate(P, REL.slideMaster, 'slideMasters/slideMaster1.xml');
-    pkg.add('ppt/theme/theme1.xml', theme(deck.master, 'Chem Illustrator'), CT.theme);
+    pkg.add('ppt/theme/theme1.xml', theme(deck.master, deck.master.template || 'Chem Illustrator'), CT.theme);
     pkg.relate('ppt/slideMasters/slideMaster1.xml', REL.theme, '../theme/theme1.xml');
     // layouts first, so the master can list them
     const layoutRels: string[] = [];
-    for (const [i, l] of LAYOUTS.entries()) {
+    const layouts = deckLayouts(deck.master);
+    for (const [i, l] of layouts.entries()) {
       const path = `ppt/slideLayouts/slideLayout${i + 1}.xml`;
-      pkg.add(path, await this.layout(path, l.id, l.name), CT.layout);
+      pkg.add(path, await this.layout(path, l), CT.layout);
       pkg.relate(path, REL.slideMaster, '../slideMasters/slideMaster1.xml');
       layoutRels.push(pkg.relate('ppt/slideMasters/slideMaster1.xml', REL.slideLayout, `../slideLayouts/slideLayout${i + 1}.xml`));
     }
@@ -530,7 +567,7 @@ class Writer {
       const path = `ppt/slides/slide${i + 1}.xml`;
       slideRels.push(pkg.relate(P, REL.slide, `slides/slide${i + 1}.xml`));
       const s = deck.slides[i];
-      pkg.relate(path, REL.slideLayout, `../slideLayouts/slideLayout${LAYOUTS.findIndex((l) => l.id === s.layout) + 1}.xml`);
+      pkg.relate(path, REL.slideLayout, `../slideLayouts/slideLayout${Math.max(0, layouts.findIndex((l) => l.id === s.layout)) + 1}.xml`);
       pkg.add(path, await this.slide(path, i), CT.slide);
       const cm = cmts.slides[i];
       if (cm) {
@@ -577,6 +614,7 @@ class Writer {
       `<p:notesSz cx="6858000" cy="9144000"/>` + fontList +
       `<p:custDataLst><p:tags r:id="${masterTags}"/></p:custDataLst>` +
       `<p:defaultTextStyle>${defaultLevels(this.deck.master)}</p:defaultTextStyle>` +
+      sectionsXml(deck.sections, n) +
       `</p:presentation>`, CT.presentation);
     return pkg.build();
   }
@@ -613,14 +651,17 @@ class Writer {
       `</p:sldMaster>`;
   }
 
-  private async layout(path: string, id: LayoutId, name: string): Promise<string> {
+  private async layout(path: string, def: LayoutDef): Promise<string> {
+    const { id, name } = def;
     const size = this.deck.size;
     const m = this.deck.master;
-    const frames = layoutFrames(id, size);
+    const frames = layoutFrames(id, size, m);
+    const phs = layoutPh(def);
+    let other = 0;
     const d = decorFrames(size, m);
     const c = slideColours(m, id);
     // a title slide with its own colours: they go in its layout's text styles and background
-    const own = id === 'title' && !!m.titleSlide;
+    const own = titleLook(m, id) && !!m.titleSlide;
     const fill = (col: string) => own ? `<a:solidFill><a:srgbClr val="${hex6(col)}"/></a:solidFill>` : '';
     // the template's shapes first, behind the placeholders
     const decor = decorShapes(size, m, id);
@@ -632,7 +673,7 @@ class Writer {
       const lst = f.ph === 'subtitle'
         ? `<a:lvl1pPr marL="0" indent="0" algn="ctr"><a:buNone/><a:defRPr sz="${Math.round(m.subtitleSize * 100)}">${fill(c.textColor)}</a:defRPr></a:lvl1pPr>`
         : f.ph === 'title' ? `<a:lvl1pPr algn="${algn}"><a:defRPr>${fill(c.titleColor)}</a:defRPr></a:lvl1pPr>` : '';
-      return phShape(i + 2, `${f.ph === 'title' ? 'Title' : f.ph === 'subtitle' ? 'Subtitle' : 'Content Placeholder'} ${i + 1}`, PH_XML[id][i](i),
+      return phShape(i + 2, `${f.ph === 'title' ? 'Title' : f.ph === 'subtitle' ? 'Subtitle' : 'Content Placeholder'} ${i + 1}`, f.ph === 'title' ? phs.title! : phs.bodies[other++],
         f, prompt, 'anchor="t"', lst);
     }));
     const fm = { ...m, footerColor: c.footerColor };
@@ -640,8 +681,8 @@ class Writer {
     shapes.push(footerShape(frames.length + 3, `Slide Number Placeholder ${frames.length + 2}`, '<p:ph type="sldNum" sz="quarter" idx="12"/>', d.number, fm, '‹#›'));
     // a title slide's own background goes on its layout
     const ownBg = slideBackground(m, id), base: Background = m.fill ?? { kind: 'solid', color: m.background };
-    const bg = id === 'title' && m.titleSlide && !sameBackground(ownBg, base) ? await this.background(path, ownBg) : '';
-    return `${HEAD}<p:sldLayout ${XMLNS} type="${LAYOUT_TYPE[id]}" preserve="1"><p:cSld name="${xml(name)}">${bg}<p:spTree>${GROUP}${shapes.join('')}</p:spTree></p:cSld>` +
+    const bg = own && !sameBackground(ownBg, base) ? await this.background(path, ownBg) : '';
+    return `${HEAD}<p:sldLayout ${XMLNS} type="${layoutType(id)}" preserve="1"><p:cSld name="${xml(name)}">${bg}<p:spTree>${GROUP}${shapes.join('')}</p:spTree></p:cSld>` +
       `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>`;
   }
 
@@ -679,7 +720,7 @@ class Writer {
       if (p.zoom && p.link) { const z = this.zoomXml(path, p, box, id); if (z) { out.push(z); id++; continue; } }
       const v = p.video ? this.video(path, p.video, p.src!, box, id, p) : '';
       if (v) { videos.push({ spid: id, media: p.video! }); out.push(v); id++; continue; }
-      out.push(await this.picture(path, p.src!, box, p.name?.trim() || `Picture ${id - 1}`, id++, p.crop ?? null, p.look, { rot: p.rot, hidden: p.hidden }));
+      out.push(await this.picture(path, p.src!, box, p.name?.trim() || `Picture ${id - 1}`, id++, p.crop ?? null, p.look, p));
     }
     for (const r of parts.connectors) {
       mark({ arrows: new Set([r.id]) }, id);
@@ -805,7 +846,7 @@ class Writer {
       const svg = new TextDecoder().decode(fromDataUrl(shapeMathPicture(m, this.measure)).bytes);
       const k = 300 / 72;
       const png = await this.opts.svgToPng(svg, Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k)));
-      fallback = picXml(id, name, this.addMedia(path, png, 'png'), null, box, null, null, undefined, mathText(m.tex), { rot: s.rot, hidden: s.hidden });
+      fallback = picXml(id, name, this.addMedia(path, png, 'png'), null, box, null, null, undefined, mathText(m.tex), undefined, undefined, { rot: s.rot, hidden: s.hidden });
     } catch { /* PowerPoint shows the equation itself */ }
     return `<mc:AlternateContent xmlns:mc="${NS_MC}"><mc:Choice xmlns:a14="${NS_A14}" Requires="a14">${choice}</mc:Choice><mc:Fallback>${fallback}</mc:Fallback></mc:AlternateContent>`;
   }
@@ -918,8 +959,8 @@ class Writer {
       `<p:spPr>${frame}${geom}${ln}</p:spPr></p:cxnSp>`;
   }
 
-  /** A picture from image data, cropped as given. */
-  private async picture(from: string, src: string, box: Rect, name: string, id: number, crop: Shape['crop'] | null, look?: PictureLook, more: PicMore = {}): Promise<string> {
+  /** A picture from image data, cropped as given, with its Picture Format settings (`pic`) as PowerPoint's. */
+  private async picture(from: string, src: string, box: Rect, name: string, id: number, crop: Shape['crop'] | null, look?: PictureLook, pic?: Shape): Promise<string> {
     let mime: string, bytes: Uint8Array;
     try {
       ({ mime, bytes } = fromDataUrl(src));
@@ -928,13 +969,22 @@ class Writer {
     }
     const ext = MIME_EXT[mime];
     if (!ext) return '';
+    const fx = tidyFx(pic?.fx);
+    const more: PicMore = { rot: pic?.rot, hidden: pic?.hidden };
+    // what Office can't show live goes in worked in, with the original as the picture's layer
+    let baked: Uint8Array | null = null;
+    if (pic && bakedPart(fx) && this.opts.bakePicture) baked = await this.opts.bakePicture(pic).catch(() => null);
+    const tags = fx?.bg?.tol !== undefined ? this.addTags(from, { [TAG.picture]: JSON.stringify({ v: 1, tol: fx.bg.tol }) }) : null;
     if (ext === 'svg') {
       // PowerPoint shows the SVG; older programs the PNG beside it (300 dots per inch)
       const k = 300 / 72;
       const png = await this.opts.svgToPng(new TextDecoder().decode(bytes), Math.max(1, Math.round((box.x2 - box.x1) * k)), Math.max(1, Math.round((box.y2 - box.y1) * k)));
-      return picXml(id, name, this.addMedia(from, png, 'png'), this.addMedia(from, bytes, 'svg'), box, crop, null, look, undefined, more);
+      if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, undefined, fx, this.addMedia(from, png, 'png'), more);
+      return picXml(id, name, this.addMedia(from, png, 'png'), this.addMedia(from, bytes, 'svg'), box, crop, tags, look, undefined, fx, undefined, more);
     }
-    return picXml(id, name, this.addMedia(from, bytes, ext), null, box, crop, null, look, undefined, more);
+    const own = this.addMedia(from, bytes, ext);
+    if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, undefined, fx, own, more);
+    return picXml(id, name, own, null, box, crop, tags, look, undefined, fx, undefined, more);
   }
 
   /** A title, text placeholder or text box. */
@@ -976,10 +1026,8 @@ class Writer {
     if (c.ph) {
       const k = c.ph === 'title' ? 'title' : 'body';
       const i = (phCount[k] = (phCount[k] ?? 0) + 1) - 1;
-      const forms = PH_XML[layout];
-      const which = k === 'title' ? 0 : 1 + i;
-      ph = forms[which] ? forms[which](which) : (c.ph === 'title' ? '<p:ph type="title"/>' : `<p:ph idx="${10 + i}"/>`);
-      if (which >= forms.length && c.ph !== 'title') ph = ''; // more text boxes than the layout has: plain text boxes
+      const forms = layoutPh(layoutDef(this.deck.master, layout));
+      ph = k === 'title' ? (i === 0 && forms.title) || '<p:ph type="title"/>' : forms.bodies[i] ?? ''; // more text boxes than the layout has: plain text boxes
     }
     const name = c.name?.trim() || (c.ph === 'title' ? `Title ${id - 1}` : c.ph ? `Text Placeholder ${id - 1}` : `TextBox ${id - 1}`);
     const nvSp = ph
@@ -1193,30 +1241,35 @@ function decorXml(sh: DecorShape, id: number): string {
   return `<p:sp>${nv('Rectangle')}<p:spPr>${xfrm(sh)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${fill}${ln}</p:spPr></p:sp>`;
 }
 
-/** A picture element: PNG (or another bitmap), optionally with an SVG PowerPoint shows instead. */
 /** A picture's turn and whether it is hidden (Selection Pane). */
 interface PicMore { rot?: number; hidden?: boolean }
 
-function picXml(id: number, name: string, blipId: string, svgId: string | null, box: Rect, crop: Shape['crop'] | null, tagsId: string | null, look?: PictureLook, descr?: string, more: PicMore = {}): string {
-  const ext = svgId ? `<a:extLst><a:ext uri="${SVG_EXT}"><asvg:svgBlip xmlns:asvg="${NS_SVG}" r:embed="${svgId}"/></a:ext></a:extLst>` : '';
+/**
+ * A picture element: PNG (or another bitmap), optionally with an SVG PowerPoint shows instead,
+ * and its Picture Format settings; with `layerId`, the blip has sharpening or Remove Background
+ * worked in and the layer is the original.
+ */
+function picXml(id: number, name: string, blipId: string, svgId: string | null, box: Rect, crop: Shape['crop'] | null, tagsId: string | null, look?: PictureLook, descr?: string, fx?: PictureFx, layerId?: string, more: PicMore = {}): string {
+  const exts = (svgId ? `<a:ext uri="${SVG_EXT}"><asvg:svgBlip xmlns:asvg="${NS_SVG}" r:embed="${svgId}"/></a:ext>` : '') + (layerId ? imgPropsXml(fx, layerId, crop) : '');
+  const ext = exts ? `<a:extLst>${exts}</a:extLst>` : '';
   const src = crop && (crop.l || crop.t || crop.r || crop.b)
     ? `<a:srcRect l="${Math.round(crop.l * 100000)}" t="${Math.round(crop.t * 100000)}" r="${Math.round(crop.r * 100000)}" b="${Math.round(crop.b * 100000)}"/>` : '';
   const nvPr = tagsId ? `<p:nvPr><p:custDataLst><p:tags r:id="${tagsId}"/></p:custDataLst></p:nvPr>` : '<p:nvPr/>';
   return `<p:pic><p:nvPicPr><p:cNvPr id="${id}"${nameAttrs(name, more.hidden)}${descr ? ` descr="${xml(descr)}"` : ''}/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>${nvPr}</p:nvPicPr>` +
-    `<p:blipFill><a:blip r:embed="${blipId}">${ext}</a:blip>${src}<a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
-    `<p:spPr>${xfrm(box, rotAttr(more.rot))}${pictureLookXml(look)}</p:spPr></p:pic>`;
+    `<p:blipFill><a:blip r:embed="${blipId}">${blipEffectsXml(fx)}${ext}</a:blip>${src}<a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
+    `<p:spPr>${xfrm(box, rotAttr(more.rot))}${pictureLookXml(look, fx)}</p:spPr></p:pic>`;
 }
 
-/** A picture's outline (rounded or not), border line and shadow, as PowerPoint's picture formatting. */
-export function pictureLookXml(look: PictureLook | undefined): string {
+/** A picture's outline (rounded, or the shape it is cut to), border line and shadow, as PowerPoint's picture formatting. */
+export function pictureLookXml(look: PictureLook | undefined, fx?: PictureFx): string {
   const round = Math.max(0, Math.min(0.5, look?.round ?? 0));
   // PowerPoint's roundRect corner: its adjustment is the radius over the shorter side, in 1/100000ths
-  const geom = round ? `<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val ${Math.round(round * 100000)}"/></a:avLst></a:prstGeom>` : '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>';
+  const geom = pictureGeomXml(fx, round ? `<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val ${Math.round(round * 100000)}"/></a:avLst></a:prstGeom>` : '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>');
   const ln = look?.line ? `<a:ln w="${emu(look.line)}"><a:solidFill><a:srgbClr val="${hex6(look.lineColor ?? '#000000')}"/></a:solidFill></a:ln>` : '';
   const sh = look?.shadow ? PICTURE_SHADOWS[look.shadow] : null;
   // down and to the right: the distance along 45 degrees
-  const fx = sh ? `<a:effectLst><a:outerShdw blurRad="${emu(sh.blur)}" dist="${emu(sh.off * Math.SQRT2)}" dir="2700000" algn="tl" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="${Math.round(sh.alpha * 100000)}"/></a:srgbClr></a:outerShdw></a:effectLst>` : '';
-  return geom + ln + fx;
+  const fxl = sh ? `<a:effectLst><a:outerShdw blurRad="${emu(sh.blur)}" dist="${emu(sh.off * Math.SQRT2)}" dir="2700000" algn="tl" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="${Math.round(sh.alpha * 100000)}"/></a:srgbClr></a:outerShdw></a:effectLst>` : '';
+  return geom + ln + fxl;
 }
 
 /** A design shape's outline as a PowerPoint path, in its own box (w × h points). */

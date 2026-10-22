@@ -117,6 +117,8 @@ export interface DocxModel {
   bibliographies?: Record<number, { text: string; ps: ParaStyle }>;
   /** Each chart by its id, as made here (used when Word's copy charts the same numbers). */
   charts?: Record<number, ChartBox>;
+  /** How near a colour Remove Background takes, for each picture by its id ("Picture 4"), which Word has no place for. */
+  pictureTol?: Record<number, number>;
 }
 
 /** The name of a chart's frame in Word ("Chart 4", 4 its id in our part). */

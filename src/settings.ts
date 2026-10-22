@@ -17,6 +17,7 @@ import { parseDarkPalettes, type DarkPalette } from './dark-page';
 import { DEFAULT_SCHEME_PREFS, parseSchemePrefs, type SchemePrefs } from './chem/scheme-layout';
 import { CITE_PRESETS, DEFAULT_STYLE, cleanOptions, type CiteFormat } from './document/cite-styles';
 import { DEFAULT_KEEP, parseKeepPrefs, type KeepPrefs } from './keep/prefs';
+import { parseThemes, type SlideTemplate } from './deck/templates';
 
 export interface Settings {
   /** Changes to ChemDraw's default keys. */
@@ -79,6 +80,8 @@ export interface Settings {
   methylStyle: 'CH3' | 'Me';
   /** The template new slide decks start with (Design > Templates), or null for the plain look. */
   slideTemplate: string | null;
+  /** Your own slide themes (Design > Templates > New Theme), shown with the ready-made ones. */
+  slideThemes: SlideTemplate[];
   /** Axial chirality written as Ra/Sa or as helicity P/M (Edit > Settings). */
   axialStyle: 'RaSa' | 'PM';
   /** The + and − keys put charges in circles (⊕, ⊖) rather than plain signs. */
@@ -141,7 +144,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false, showRoles: true,
   chemTyping: true, stereoItalic: true, boldNumbers: false, autoLinks: true, linkCtrlClick: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
   modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true, page: { name: 'letter', w: 540, h: 720, grow: true }, pageEdge: true, welcomed: false, textBar: 'docked', groupTips: true,
-  citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', circledCharges: false, textToAtom: true, groupClick: 'group', groupOutline: true, rerouteArrows: true, superscriptR: true, linkSide: 'keep', slideTemplate: null, askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(),
+  citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', circledCharges: false, textToAtom: true, groupClick: 'group', groupOutline: true, rerouteArrows: true, superscriptR: true, linkSide: 'keep', slideTemplate: null, slideThemes: [], askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(),
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
   guides: { drawing: false, slides: true, design: true },
   docPins: [],
@@ -196,6 +199,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (r.groupClick === 'group' || r.groupClick === 'item') s.groupClick = r.groupClick;
   if (r.axialStyle === 'RaSa' || r.axialStyle === 'PM') s.axialStyle = r.axialStyle;
   if (typeof r.slideTemplate === 'string' || r.slideTemplate === null) s.slideTemplate = r.slideTemplate as string | null;
+  s.slideThemes = parseThemes(r.slideThemes);
   s.highlightLooks = parseLooks(r.highlightLooks);
   if (Array.isArray(r.recentFiles)) s.recentFiles = r.recentFiles.filter((p): p is string => typeof p === 'string' && p.trim() !== '').slice(0, 10);
   if (typeof r.skipVersion === 'string' || r.skipVersion === null) s.skipVersion = r.skipVersion as string | null;

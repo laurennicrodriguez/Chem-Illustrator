@@ -109,6 +109,8 @@ export class StylePanel {
   highlightLooks: { list(): HighlightLookPreset[]; apply(look: HighlightLookPreset): void; save(): void } = { list: () => [], apply: () => {}, save: () => {} };
   /** Fill the rings in the selection (set up by the app). */
   ringFill: (() => void) | null = null;
+  /** Picture Format… for the selected pictures (set up by the app). */
+  formatPicture: () => void = () => {};
   /** Make a picture's white background see-through (set up by the app). */
   removeWhite: (shapeIds: number[]) => void = () => {};
   /** A picture's width and height change together. */
@@ -599,6 +601,8 @@ export class StylePanel {
       btn.addEventListener('click', on);
       buttons.append(btn);
     };
+    const plain = pics.filter((x) => !x.video);
+    if (plain.length) button('Picture Format…', 'Brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions (saved as PowerPoint\'s own settings)', () => this.formatPicture());
     if (pics.length === 1) button('Crop with mouse', 'Drag the black handles to cut the edges off; Esc when done', () => this.cropWithMouse(p.id));
     if (pics.some((x) => x.crop)) button('Uncrop', 'Show the whole picture again', () => set('Uncrop picture', (x) => cropTo(x, { l: 0, t: 0, r: 0, b: 0 })));
     // only pictures made of pixels have a background to take out

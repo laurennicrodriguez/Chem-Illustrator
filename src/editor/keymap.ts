@@ -182,7 +182,10 @@ export const COMMAND_NAMES: Record<string, string> = {
   'new-slide': 'New slide', 'duplicate-slide': 'Duplicate slide', 'delete-slide': 'Delete slide',
   'cut-slides': 'Cut slides', 'copy-slides': 'Copy slides', 'paste-slides': 'Paste slides', 'paste-slides-keep': 'Paste slides keeping their own look',
   'hide-slide': 'Hide slide (or show it again)', 'selection-pane': 'Selection Pane: every object on the slide, to pick, hide or rename', 'reuse-slides': 'Reuse slides from another PowerPoint file…',
-  'next-slide': 'Next slide', 'prev-slide': 'Previous slide', 'slide-master': 'Slide Master…', 'format-background': 'Format Background… (colour, gradient, picture or pattern)',
+  'next-slide': 'Next slide', 'prev-slide': 'Previous slide', 'slide-master': 'Slide Master…',
+  'edit-layouts': 'Edit slide layouts… (placeholders, your own layouts)', 'size-custom': 'Custom slide size…', 'view-normal': 'Normal view (slides)', 'view-sorter': 'Slide Sorter view',
+  'add-section': 'Add section', 'rename-section': 'Rename section…', 'remove-section': 'Remove section', 'remove-section-slides': 'Remove section and its slides', 'remove-all-sections': 'Remove all sections',
+  'section-up': 'Move section up', 'section-down': 'Move section down', 'collapse-sections': 'Collapse all sections', 'expand-sections': 'Expand all sections', 'format-background': 'Format Background… (colour, gradient, picture or pattern)',
   present: 'Present from the first slide', 'present-current': 'Present from this slide', 'presenter-view': 'Presenter View (notes, next slide and timer)',
   'dev-tools': 'Developer tools on or off (speed panel, stress test)',
   // sheets

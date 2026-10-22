@@ -7,12 +7,13 @@
 // slide numbers and the drawing style of structures stay as they are, and every value can be
 // changed afterwards in Format > Slide Master.
 
-import type { Master, Decor } from './deck';
+import { DECORS, type Master, type Decor } from './deck';
 
 export interface SlideTemplate {
   id: string;
   name: string;
-  group: 'Light' | 'Dark title slide' | 'Bright';
+  /** Where it shows in the gallery: the ready-made groups, or your own themes. */
+  group: 'Light' | 'Dark title slide' | 'Bright' | 'Mine';
   background: string;
   titleFont: string;
   bodyFont: string;
@@ -72,4 +73,49 @@ export function applyTemplate(m: Master, t: SlideTemplate): Master {
     fill: undefined,
     template: t.name,
   };
+}
+
+/** A theme of your own from a deck's look (New Theme from This Deck), named `name`. */
+export function themeFromMaster(m: Master, name: string, id: string): SlideTemplate {
+  return {
+    id, name, group: 'Mine',
+    background: m.background, titleFont: m.titleFont, bodyFont: m.bodyFont,
+    titleColor: m.titleColor, textColor: m.textColor, footerColor: m.footerColor,
+    accent: m.accent, accent2: m.accent2, decor: m.decor, titleBold: m.titleBold,
+    ...(m.titleSlide ? { titleSlide: { background: m.titleSlide.background, titleColor: m.titleSlide.titleColor, textColor: m.titleSlide.textColor, ...(m.titleSlide.footerColor ? { footerColor: m.titleSlide.footerColor } : {}) } } : {}),
+  };
+}
+
+/** An id for a new theme of your own, not yet used. */
+export function newThemeId(mine: SlideTemplate[]): string {
+  let n = 1;
+  while (mine.some((t) => t.id === `mine-${n}`)) n++;
+  return `mine-${n}`;
+}
+
+const HEX = /^#[0-9a-f]{6}$/i;
+
+/** Your own themes from the settings file (anything unreadable is left out). */
+export function parseThemes(v: unknown): SlideTemplate[] {
+  if (!Array.isArray(v)) return [];
+  const out: SlideTemplate[] = [];
+  for (const x of v) {
+    if (!x || typeof x !== 'object') continue;
+    const r = x as Record<string, unknown>;
+    const str = (k: string) => (typeof r[k] === 'string' ? (r[k] as string) : '');
+    const col = (k: string, d: string) => (HEX.test(str(k)) ? str(k) : d);
+    if (!str('id') || !str('name')) continue;
+    const ts = r.titleSlide && typeof r.titleSlide === 'object' ? r.titleSlide as Record<string, unknown> : null;
+    const tcol = (k: string, d: string) => (typeof ts?.[k] === 'string' && HEX.test(ts[k] as string) ? ts[k] as string : d);
+    out.push({
+      id: str('id'), name: str('name'), group: 'Mine',
+      background: col('background', '#ffffff'), titleFont: str('titleFont') || 'Arial', bodyFont: str('bodyFont') || 'Arial',
+      titleColor: col('titleColor', '#000000'), textColor: col('textColor', '#000000'), footerColor: col('footerColor', '#7f7f7f'),
+      accent: col('accent', '#2f6fdf'), accent2: col('accent2', '#9aa5b1'),
+      decor: DECORS.some((d) => d.id === r.decor) ? r.decor as Decor : 'none',
+      titleBold: r.titleBold !== false,
+      ...(ts ? { titleSlide: { background: tcol('background', '#1d3557'), titleColor: tcol('titleColor', '#ffffff'), textColor: tcol('textColor', '#d9e2ec') } } : {}),
+    });
+  }
+  return out;
 }

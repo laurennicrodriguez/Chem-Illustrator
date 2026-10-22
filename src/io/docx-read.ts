@@ -12,7 +12,9 @@
 // Footnotes and endnotes come in as notes
 // typed into here, and a table of figures (a TOC field for captions) as one worked out here.
 
-import type { CellBorders, Contents, Justify, ParaStyle, TableCell, TableData, TextRun } from '../model';
+import type { CellBorders, Contents, Justify, ParaStyle, PictureFx, TableCell, TableData, TextRun } from '../model';
+import { tidyFx } from '../render/picture-fx';
+import { readPictureFx } from './picture-xml';
 import { DEFAULT_MARGINS, builtInStyle, type TableStyleDef } from '../document/table-styles';
 import { keepDirectBorders, readBorders, readLook as readTableLook, readMargins, readTableStyle, sameStyle, styleIsRich } from './docx-table-styles';
 import { ACS_1996, type DocStyle } from '../style';
@@ -78,7 +80,7 @@ const WARN = {
   cellObjects: 'Pictures and structures inside table cells were left out.',
   cellBoxes: 'Text boxes inside table cells were left out.',
   wmf: 'Some pictures are in the older Windows Metafile (WMF) format, which can\'t be shown here yet. They are kept, and saved back to Word unchanged.',
-  crop: 'Cropped pictures show uncropped.',
+  pictureFx: 'Some picture effects (artistic effects, saturation, colour temperature) were left off.',
   numbering: 'Some numbered lists use numbering that shows here as 1., a., i.',
   looks: 'Strikethrough, highlighting and small capitals were left out.',
   citations: 'Citations from a reference manager were kept as plain text.',
@@ -1285,10 +1287,23 @@ class DocxReader {
     }
     if (!pic) { this.warn('shapes'); return; }
     const blip = kid(pic, 'blipFill', 'blip');
-    if (kid(kid(pic, 'blipFill'), 'srcRect')?.attributes.length) this.warn('crop');
     const svg = blip ? Array.from(blip.getElementsByTagNameNS('*', 'svgBlip'))[0] : undefined;
-    const target = this.relTarget(rAttr(svg, 'embed')) ?? this.relTarget(rAttr(blip, 'embed'));
-    this.picture(target, shown, r, ctx, look, float);
+    let target = this.relTarget(rAttr(svg, 'embed')) ?? this.relTarget(rAttr(blip, 'embed'));
+    // Picture Format: Word's effects, and the original when sharpening or Remove Background is worked into the blip
+    const got = readPictureFx(blip, kid(pic, 'spPr'));
+    if (got.dropped) this.warn('pictureFx');
+    const fx = got.fx;
+    const layer = got.layer && !svg ? this.relTarget(got.layer) : null;
+    if (fx && layer && this.pkg.bytes(layer)) target = layer;
+    else if (fx) { delete fx.sharpen; delete fx.bg; }
+    const mine = /^Picture (\d+)$/.exec(name);
+    const tol = mine ? this.model?.pictureTol?.[Number(mine[1])] : undefined;
+    if (fx?.bg && typeof tol === 'number' && tol > 0 && tol <= 1) fx.bg.tol = tol;
+    const sr = kid(kid(pic, 'blipFill'), 'srcRect');
+    const f = (k: string) => Math.max(0, Number(sr?.getAttribute(k) ?? 0) / 100000 || 0);
+    const crop = sr ? { l: f('l'), t: f('t'), r: f('r'), b: f('b') } : null;
+    const more = { ...(crop && (crop.l || crop.t || crop.r || crop.b) && crop.l + crop.r < 0.99 && crop.t + crop.b < 0.99 ? { crop } : {}), ...(tidyFx(fx) ? { fx: tidyFx(fx) } : {}) };
+    this.picture(target, shown, r, ctx, look, float, more);
   }
 
   private relTarget(id: string | null): string | null {
@@ -1297,7 +1312,7 @@ class DocxReader {
     return rel && !rel.external ? rel.target : null;
   }
 
-  private picture(path: string | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx, look?: FigureLook | null, float?: Float | null): void {
+  private picture(path: string | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx, look?: FigureLook | null, float?: Float | null, more: { crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx } = {}): void {
     const bytes = path ? this.pkg.bytes(path) : null;
     if (!bytes || shown.w <= 0 || shown.h <= 0) return;
     const ext = (path ?? '').split('.').pop()?.toLowerCase() ?? '';
@@ -1308,7 +1323,7 @@ class DocxReader {
     const inside = mime === 'image/x-emf' ? drawingInEmf(bytes) : null;
     if (inside && this.drawingAt(this.deps.cdxml?.(inside, this.drawingStyle) ?? null, shown, r, ctx, look, float)) return;
     const px = imageSize(bytes, mime) ?? undefined;
-    this.emitObject(ctx, { kind: 'picture', src: dataUrl(bytes, mime), w: round(shown.w), h: round(shown.h), px, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r);
+    this.emitObject(ctx, { kind: 'picture', src: dataUrl(bytes, mime), w: round(shown.w), h: round(shown.h), px, ...more, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r);
   }
 
   /** Older (VML) pictures, and embedded objects with their picture: ChemDraw's become structures. */
