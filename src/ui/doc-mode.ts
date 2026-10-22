@@ -43,10 +43,11 @@ import {
   canMerge, coveringCell, deleteColumn, deleteRow, emptyTable, insertColumn, insertRow, isCovered, mergeDown, mergeRight, nextCell, rowSpanOf, setColumnAlign, setColumnWidth, setPart, splitCell, spanOf,
 } from '../table';
 import { CELL_PAD } from '../document/doc-layout';
+import { BREAK_NAMES, changeSection, newBreak, pageNumText, sectionAt, sectionsOf, type Section, type SectionPatch } from '../document/sections';
 import {
   A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, END_FORMAT, FOOT_FORMAT, captionRuns, noteLabel, noteStyle, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets, inlineMove,
   floatOf, lookExtent, lookOf, cellHolding, innerObjects,
-  type DocObject, type DocText, type FigureLook, type Float, type NoteFormat, type NumberPlace, type PageSetup, type WrapKind,
+  type BreakKind, type DocObject, type DocText, type FigureLook, type Float, type LineNumbers, type NoteFormat, type NumberPlace, type PageNumFormat, type PageSetup, type WrapKind,
 } from '../document/document';
 
 export interface DocModeHost {
@@ -2331,12 +2332,14 @@ export class DocumentMode {
       case 'header-edit': this.panel.open('hf', null, 'hf-header0'); return true;
       case 'footer-edit': this.panel.open('hf', null, 'hf-footer1'); return true;
       case 'numbers-s': {
-        const s = f.t.hf.prefix === 'S';
-        ed.update({ ...f.t, hf: { ...f.t.hf, prefix: s ? '' : 'S', numbers: f.t.hf.numbers === 'none' ? 'footer-center' : f.t.hf.numbers } } as DocText, 'Page numbers');
+        const hf = this.section().hf;
+        const s = hf.prefix === 'S';
+        this.setSection({ hf: { ...hf, prefix: s ? '' : 'S', numbers: hf.numbers === 'none' ? 'footer-center' : hf.numbers } }, 'Page numbers');
         break;
       }
+      case 'page-number-format': void this.pageNumberFormat(); return true;
       default: {
-        const m = /^(margins|paper|orient|numbers|columns)-(.+)$/.exec(cmd);
+        const m = /^(margins|paper|orient|numbers|columns|breaks|linenums)-(.*)$/.exec(cmd);
         if (!m || !this.layoutCommand(m[1], m[2])) return false;
       }
     }
@@ -2364,12 +2367,25 @@ export class DocumentMode {
     this.focus();
   }
 
-  /** Layout tab: margins, paper, orientation and page numbers. */
+  /** The section the caret is in (its page setup, header and footer, numbering and line numbers). */
+  private section(): Section {
+    const f = this.file!;
+    return sectionAt(sectionsOf(f.t), paraAt(f.ed.text, f.ed.focus));
+  }
+
+  /** Change the section the caret is in. */
+  private setSection(patch: SectionPatch, label: string): void {
+    const f = this.file!;
+    f.ed.update(changeSection(f.t, this.section().index, patch), label);
+  }
+
+  /** Layout tab: margins, paper, orientation, columns and page numbers (of the section the caret is in), breaks and line numbers. */
   private layoutCommand(what: string, v: string): boolean {
     const f = this.file!;
-    const t = f.t;
-    const page = (p: Partial<PageSetup>) => f.ed.update({ ...t, page: { ...t.page, ...p } } as DocText, 'Page setup');
-    const land = t.page.w > t.page.h;
+    const sec = this.section();
+    const pg = sec.page;
+    const page = (p: Partial<PageSetup>) => this.setSection({ page: { ...pg, ...p } }, 'Page setup');
+    const land = pg.w > pg.h;
     if (what === 'margins') {
       const m: Record<string, [number, number]> = { normal: [1, 1], narrow: [0.5, 0.5], moderate: [1, 0.75], wide: [1, 2] };
       if (!m[v]) return false;
@@ -2379,16 +2395,88 @@ export class DocumentMode {
       if (!size) return false;
       page(land ? { w: size.h, h: size.w } : { ...size });
     } else if (what === 'orient') {
-      if ((v === 'landscape') !== land) page({ w: t.page.h, h: t.page.w });
+      if ((v === 'landscape') !== land) page({ w: pg.h, h: pg.w });
     } else if (what === 'columns') {
       if (v === 'more') { this.panel.open('page', this.ribbon.querySelector<HTMLElement>('#doc-columns'), 'pg-cols'); return true; }
       const n = Number(v);
       if (!(n >= 1 && n <= 4)) return false;
       page({ cols: n > 1 ? n : undefined });
     } else if (what === 'numbers') {
-      f.ed.update({ ...t, hf: { ...t.hf, numbers: v as NumberPlace } } as DocText, 'Page numbers');
+      this.setSection({ hf: { ...sec.hf, numbers: v as NumberPlace } }, 'Page numbers');
+    } else if (what === 'breaks') {
+      if (v === 'page' || v === 'column') this.pageBreak(v === 'column');
+      else if (v in BREAK_NAMES) this.sectionBreak(v as BreakKind);
+      else if (v !== '') return false;
+      this.updateRibbon();
+    } else if (what === 'linenums') {
+      const L = sec.lines;
+      if (v === 'none') this.setSection({ lines: undefined }, 'Line numbers');
+      else if (v === 'continuous' || v === 'page' || v === 'section') this.setSection({ lines: { start: 1, countBy: 1, ...L, restart: v } }, 'Line numbers');
+      else if (v === 'suppress') {
+        const [a, b] = f.ed.selectedParas();
+        const off = !fitParas(f.t.paras, paraCount(f.ed.text))[a]?.noLineNumbers;
+        f.ed.setParas(a, b, { noLineNumbers: off || undefined }, 'spacing');
+        this.updateRibbon();
+      } else if (v === 'options') { void this.lineNumberOptions(); return true; }
+      else return false;
     } else return false;
     return true;
+  }
+
+  /**
+   * A section break at the caret: what follows starts a new section (on a new page, the next
+   * even or odd page, or the same page), with this section's page setup and line numbers, its
+   * header and footer linked to this one's and its page numbers carrying on, as in Word.
+   */
+  private sectionBreak(kind: BreakKind): void {
+    const ed = this.ed;
+    const s = this.section();
+    ed.enter(false);
+    const p = paraAt(ed.text, ed.focus);
+    ed.setParas(p, p, { section: newBreak(s, kind), pageBreak: undefined, colBreak: undefined }, 'break');
+    this.host.flash(`Section break (${BREAK_NAMES[kind]}): the text after it is section ${s.index + 2}, with its own page setup, header and footer, and page and line numbers.`);
+  }
+
+  /** Line Numbers > Line Numbering Options: where they start, every how many, how far from the text, and when they start again. */
+  private async lineNumberOptions(): Promise<void> {
+    const f = this.file!;
+    const sec = this.section();
+    const L = sec.lines;
+    const got = await ask('Line Numbers', [
+      { name: 'on', label: 'Add line numbering', type: 'checkbox', value: 'true' },
+      { name: 'start', label: 'Start at', type: 'number', value: String(L?.start ?? 1) },
+      { name: 'countBy', label: 'Count by', type: 'number', value: String(L?.countBy ?? 1), help: 'Show every nth number (5: 5, 10, 15…); every line is still counted' },
+      { name: 'distance', label: 'From text', value: L?.distance !== undefined ? showLength(L.distance, 'in') : '', placeholder: 'Auto (0.25 in)', unit: 'in' },
+      { name: 'restart', label: 'Numbering', value: L?.restart ?? 'page', options: [
+        { value: 'page', label: 'Restart each page' }, { value: 'section', label: 'Restart each section' }, { value: 'continuous', label: 'Continuous' },
+      ] },
+    ], { ok: 'Apply', note: sectionsOf(f.t).length > 1 ? `For section ${sec.index + 1} (the one the caret is in). Turn them off for a paragraph with Line Numbers > Suppress for Current Paragraph.` : 'Numbers down the left margin, as journals ask for in manuscripts under review. Turn them off for a paragraph with Line Numbers > Suppress for Current Paragraph.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    if (got.on !== 'true') { this.setSection({ lines: undefined }, 'Line numbers'); return; }
+    const num = (v: string, d: number, min: number) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n >= min ? n : d; };
+    const dist = got.distance.trim() ? parseLength(got.distance, 'in') : null;
+    const lines: LineNumbers = { start: num(got.start, 1, 0), countBy: num(got.countBy, 1, 1), restart: got.restart as LineNumbers['restart'] };
+    if (dist !== null && dist >= 0) lines.distance = dist;
+    this.setSection({ lines }, 'Line numbers');
+  }
+
+  /** Insert > Page Number > Format: 1, 2, 3 or i, ii, iii, and where this section's numbering starts. */
+  private async pageNumberFormat(): Promise<void> {
+    const f = this.file!;
+    const sec = this.section();
+    const FORMATS: PageNumFormat[] = ['decimal', 'lowerRoman', 'upperRoman', 'lowerLetter', 'upperLetter'];
+    const first = sec.index === 0;
+    const got = await ask('Page Number Format', [
+      { name: 'format', label: 'Number format', value: sec.format, options: FORMATS.map((v) => ({ value: v, label: [1, 2, 3].map((n) => pageNumText(n, v)).join(', ') })) },
+      ...(first ? [] : [{ name: 'cont', label: 'Continue from previous section', type: 'checkbox' as const, value: String(sec.restart === undefined) }]),
+      { name: 'start', label: first ? 'Start at' : 'Or start at', type: 'number', value: String(sec.restart ?? 1) },
+    ], { ok: 'Apply', note: first ? (sectionsOf(f.t).length > 1 ? 'For the first section. Front matter is often numbered i, ii, iii, with a section break (Layout > Breaks) before the text, numbered 1, 2, 3 from its first page.' : 'Front matter is often numbered i, ii, iii: put a section break (Layout > Breaks > Next Page) before the text and number that section 1, 2, 3 from its first page.') : `For section ${sec.index + 1} (the one the caret is in).` });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const n = Math.round(Number(got.start));
+    const start = Number.isFinite(n) ? n : 1;
+    this.setSection({ format: got.format as PageNumFormat, restart: first || got.cont !== 'true' ? start : undefined }, 'Page numbers');
   }
 
   /** Ctrl+Enter: what follows the caret starts a new page. */
@@ -3117,7 +3205,8 @@ export class DocumentMode {
       const el = this.ribbon.querySelector<HTMLSelectElement>(id);
       if (el && el !== active) el.value = [...el.options].some((o) => o.value === v) ? v : 'other';
     };
-    const pg = f.t.page;
+    const sec = this.section();
+    const pg = sec.page;
     const near = (a: number, b: number) => Math.abs(a - b) < 0.5;
     const margins = Object.entries({ normal: [1, 1], narrow: [0.5, 0.5], moderate: [1, 0.75], wide: [1, 2] })
       .find(([, [tb, lr]]) => near(pg.top, tb * INCH) && near(pg.bottom, tb * INCH) && near(pg.left, lr * INCH) && near(pg.right, lr * INCH));
@@ -3125,9 +3214,12 @@ export class DocumentMode {
     const short = Math.min(pg.w, pg.h), long = Math.max(pg.w, pg.h);
     pick('#doc-paper', near(short, LETTER.w) && near(long, LETTER.h) ? 'letter' : near(short, A4.w) && near(long, A4.h) ? 'a4' : 'other');
     pick('#doc-orient', pg.w > pg.h ? 'landscape' : 'portrait');
-    pick('#doc-numbers', f.t.hf.numbers);
-    pick('#doc-columns', String(f.t.page.cols ?? 1));
-    press('numbers-s', f.t.hf.prefix === 'S');
+    pick('#doc-numbers', sec.hf.numbers);
+    pick('#doc-columns', String(pg.cols ?? 1));
+    press('numbers-s', sec.hf.prefix === 'S');
+    const breaks = this.ribbon.querySelector<HTMLSelectElement>('#doc-breaks');
+    if (breaks && breaks !== active) breaks.value = '';
+    pick('#doc-linenums', sec.lines?.restart ?? 'none');
     press('track-changes', !!f.t.track);
     press('show-comments', this.comments.shown);
     const fig = this.pickedObject() ?? f.box?.id ?? null;
@@ -3167,7 +3259,8 @@ export class DocumentMode {
       const words = f.ed.text.split(/[\s￼]+/).filter((w) => /\p{L}|\p{N}/u.test(w)).length;
       const wordCount = `${words.toLocaleString()} word${words === 1 ? '' : 's'}`;
       // the views without pages have no page numbers to show
-      status.textContent = continuous(f.view.kind) ? `${VIEW_LABEL[f.view.kind]}  ·  ${wordCount}` : `Page ${page + 1} of ${lay.pages.length}  ·  ${wordCount}`;
+      const where = lay.pages.some((p) => p.section > 0) ? `  ·  Section ${(lay.pages[page]?.section ?? 0) + 1}` : '';
+      status.textContent = continuous(f.view.kind) ? `${VIEW_LABEL[f.view.kind]}  ·  ${wordCount}` : `Page ${page + 1} of ${lay.pages.length}${where}  ·  ${wordCount}`;
     }
   }
 }

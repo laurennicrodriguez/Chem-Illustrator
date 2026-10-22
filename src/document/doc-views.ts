@@ -11,7 +11,7 @@
 import type { ParaStyle, TextRun } from '../model';
 import * as rt from '../richtext';
 import { fitParas, paraCount, paraRange } from '../text/paragraphs';
-import { defaultStyles, setParaStyle, styleOf, type DocText } from './document';
+import { defaultStyles, setParaStyle, styleOf, type BreakKind, type DocText } from './document';
 
 export type DocViewKind = 'print' | 'read' | 'web' | 'outline' | 'draft';
 
@@ -108,7 +108,7 @@ export function screenText(t: DocText, v: ScreenView): DocText {
   const page = { ...t.page, w: Math.max(w, left + m + 36), h: ENDLESS, top: m, bottom: m, left, right: m, cols: 1 };
   const hf = { ...t.hf, header: ['', '', ''] as [string, string, string], footer: ['', '', ''] as [string, string, string], numbers: 'none' as const };
   let paras = allParas(t).map((ps) => {
-    const { pageBreak: _p, colBreak: _c, keepNext: _k, ...rest } = ps;
+    const { pageBreak: _p, colBreak: _c, keepNext: _k, section: _s, ...rest } = ps;
     return rest as ParaStyle;
   });
   let runs = t.runs;
@@ -124,7 +124,9 @@ export function screenText(t: DocText, v: ScreenView): DocText {
     });
     if (!o.formatting) runs = runs.map((r) => plainRun(r));
   }
-  return { ...t, page, hf, paras, runs };
+  // (one endless page: no sections, and no line numbers, which Word shows only in Print Layout)
+  const { lineNumbers: _l, ...rest } = t;
+  return { ...rest, page, hf, paras, runs };
 }
 
 /** A run with its look taken away (Outline without text formatting), keeping what it is. */
@@ -316,11 +318,12 @@ export function outlineMarks(t: DocText, o: OutlineState): OutlineMark[] {
   return out;
 }
 
-/** Paragraphs that start a new page or column in print (shown as dotted lines in Draft). */
-export function breaksIn(t: DocText): { para: number; kind: 'page' | 'column' }[] {
-  const out: { para: number; kind: 'page' | 'column' }[] = [];
+/** Paragraphs that start a new section, page or column in print (shown as dotted lines in Draft). */
+export function breaksIn(t: DocText): { para: number; kind: 'page' | 'column' | BreakKind }[] {
+  const out: { para: number; kind: 'page' | 'column' | BreakKind }[] = [];
   allParas(t).forEach((ps, p) => {
-    if (p > 0 && ps.pageBreak) out.push({ para: p, kind: 'page' });
+    if (p > 0 && ps.section) out.push({ para: p, kind: ps.section.kind });
+    else if (p > 0 && ps.pageBreak) out.push({ para: p, kind: 'page' });
     else if (p > 0 && ps.colBreak) out.push({ para: p, kind: 'column' });
   });
   return out;

@@ -155,10 +155,23 @@ Journal requirements change, so check the result against a recent issue of your 
 On the **Layout** tab:
 
 - **Margins**, **Paper** (Letter, A4 or your own size), **Orientation**.
-- **Page Break** (Ctrl+Enter).
-- **Columns**: One, Two, Three or Four; **More Columns…** sets the gap. **Column Break** (Ctrl+Shift+Enter) starts the next column.
-- **Page numbers**: top or bottom, left, centre or right. **S1, S2… numbering** numbers the pages as Supporting Information is numbered.
+- **Breaks**: **Page** (Ctrl+Enter), **Column** (Ctrl+Shift+Enter) and the section breaks (below).
+- **Columns**: One, Two, Three or Four; **More Columns…** sets the gap.
+- **Page numbers**: top or bottom, left, centre or right. **S1, S2… numbering** numbers the pages as Supporting Information is numbered. **Number Format…** writes them 1, 2, 3 or i, ii, iii (or I, II; a, b; A, B) and sets where the numbering starts.
 - **Header…** and **Footer…** set the text at the top and bottom of every page. The ⬊ in the corner of the group sets where they sit, the first page number and whether the first page is numbered.
+- **Line Numbers**: numbers down the left margin, as journals ask for in manuscripts under review: **Continuous**, **Restart Each Page** or **Restart Each Section**. **Suppress for Current Paragraph** leaves the selected paragraphs out (a title, say). **Line Numbering Options…** sets the first number, shows only every 5th (or any nth) number, and sets how far they sit from the text.
+
+### Sections
+
+A section break starts a new section, which can have its own paper size, orientation, margins, columns, header and footer, page numbering and line numbers. Choose one from **Layout** ▸ **Breaks** (or **Insert ▸ Section Break**):
+
+- **Next Page**: the new section starts on a new page. Use it for a landscape page with a wide table, or to number the front matter i, ii, iii and the text 1, 2, 3.
+- **Continuous**: the new section starts on the same page. Use it for a title and abstract across the page with two columns of text under them. Columns before a continuous break are evened up, as in Word.
+- **Even Page** and **Odd Page**: the new section starts on the next even or odd page (a blank page is left when needed), as chapters of a thesis do.
+
+The margins, paper, orientation, columns, page numbers and line numbers on the ribbon and in the ⬊ settings are for the section the caret is in (the status bar says which). In the Page Setup settings, **Apply to: Whole document** changes every section at once. A new section's header and footer are **Same as previous section** (Word's Link to Previous) until you type a header or footer of its own or untick it; its page numbers carry on from the section before unless you untick **Continue from previous section** and give a first page number.
+
+To remove a section break, put the caret at the start of the paragraph after it and press **Backspace** (the text joins the section before). **Draft** view shows section breaks as double dotted lines, labelled with their kind. Sections, their headers and footers, page numbering and line numbers are saved in Word files as Word's own and open again here as they were.
 
 ## Table of contents
 

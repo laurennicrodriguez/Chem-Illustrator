@@ -280,6 +280,8 @@ export class TextEditing {
     const p = paraAt(text, at);
     if (paraRange(text, p).start === at) {
       const ps = this.t.paras[p] ?? {};
+      // (a section break first: the text joins the section before)
+      if (ps.section) { this.setParas(p, p, { section: undefined }, 'break'); return; }
       if (ps.pageBreak || ps.colBreak) { this.setParas(p, p, { pageBreak: undefined, colBreak: undefined }, 'break'); return; }
       if (ps.list) { this.setParas(p, p, { list: undefined, level: undefined, cont: undefined }, 'list'); return; }
       if (ps.firstLine && ps.firstLine > 0) { this.setParas(p, p, { firstLine: undefined }, 'indent'); return; }

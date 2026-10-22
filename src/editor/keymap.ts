@@ -204,7 +204,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   // documents
   'new-document': 'New document', 'doc-align-left': 'Align text left', 'doc-align-center': 'Centre text', 'doc-align-right': 'Align text right',
   'doc-justify': 'Justify text', 'style-normal': 'Normal style', 'style-title': 'Title style', 'style-h1': 'Heading 1 style', 'style-h2': 'Heading 2 style',
-  'style-h3': 'Heading 3 style', 'style-caption': 'Caption style', 'page-break': 'Page break', 'col-break': 'Column break', 'line-single': 'Single line spacing',
+  'style-h3': 'Heading 3 style', 'style-caption': 'Caption style', 'page-break': 'Page break', 'col-break': 'Column break', 'breaks-nextPage': 'Section break (next page)', 'breaks-continuous': 'Section break (continuous)', 'breaks-evenPage': 'Section break (even page)', 'breaks-oddPage': 'Section break (odd page)', 'linenums-continuous': 'Line numbers', 'linenums-none': 'No line numbers', 'linenums-options': 'Line numbering options…', 'page-number-format': 'Page number format…', 'line-single': 'Single line spacing',
   'line-1-5': '1.5 line spacing', 'line-double': 'Double line spacing', 'font-bigger': 'Larger text', 'font-smaller': 'Smaller text',
   'doc-bullets': 'Bullets', 'doc-numbering': 'Numbering', replace: 'Find and replace…', 'insert-structure': 'Insert a structure (draw it)',
   'insert-caption': 'Insert a caption…', 'cross-reference': 'Insert a cross-reference…', 'compound-number': 'Insert a compound number…', 'structure-from-name-doc': 'Insert a structure from a name or SMILES…',

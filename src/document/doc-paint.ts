@@ -8,7 +8,7 @@ import type { Picture } from '../render/picture';
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
 import { drawLayout } from '../text/draw';
-import { BOX_PAD, SHADOWS, lookOf, styleOf, type DocText, type NumberPlace } from './document';
+import { BOX_PAD, SHADOWS, lookOf, styleOf, type DocText, type HeaderFooter, type NumberPlace } from './document';
 import type { DocLayout, PageBox, TableBox } from './doc-layout';
 import { ACS_LINE, CELL_PAD, GRID_LINE } from './doc-layout';
 import type { TableData } from '../model';
@@ -24,16 +24,16 @@ const PLACES: Record<Exclude<NumberPlace, 'none'>, ['header' | 'footer', 'left' 
   'footer-left': ['footer', 'left'], 'footer-center': ['footer', 'center'], 'footer-right': ['footer', 'right'],
 };
 
-/** The header and footer text of a page, with its number put in its place (after any text there). */
-export function headerFooterText(t: DocText, label: string): HfPart[] {
+/** The header and footer text of a page, with its number put in its place (after any text there). `hf` is the page's section's (the document's when left out). */
+export function headerFooterText(t: DocText, label: string, hf: HeaderFooter = t.hf): HfPart[] {
   const st = styleOf(t, undefined);
   const font = st.font, size = Math.min(10, st.size);
   const out: HfPart[] = [];
   const aligns = ['left', 'center', 'right'] as const;
-  const where = t.hf.numbers !== 'none' ? PLACES[t.hf.numbers] : null;
+  const where = hf.numbers !== 'none' ? PLACES[hf.numbers] : null;
   for (const w of ['header', 'footer'] as const) {
     aligns.forEach((a, i) => {
-      let text = t.hf[w][i] ?? '';
+      let text = hf[w][i] ?? '';
       if (where && where[0] === w && where[1] === a && label) text = text ? `${text} ${label}` : label;
       if (!text) return;
       out.push({ where: w, align: a, text, font, size, w: docMeasure(text, size, font, '') });
@@ -42,14 +42,25 @@ export function headerFooterText(t: DocText, label: string): HfPart[] {
   return out;
 }
 
-/** Draw a page's header and footer (the page's top is at `p.top`). */
-export function drawHeaderFooter(ctx: CanvasRenderingContext2D, t: DocText, p: PageBox, lay: DocLayout): void {
-  for (const part of headerFooterText(t, p.label)) {
-    const y = part.where === 'header' ? p.top + t.page.header + part.size * 0.8 : p.top + lay.pageH - t.page.footer - part.size * 0.25;
-    const x = part.align === 'left' ? t.page.left : part.align === 'center' ? (t.page.left + lay.pageW - t.page.right) / 2 - part.w / 2 : lay.pageW - t.page.right - part.w;
+/** Draw a page's header and footer (the page's top left corner is at `p.x`, `p.top`), in its section's margins. */
+export function drawHeaderFooter(ctx: CanvasRenderingContext2D, t: DocText, p: PageBox): void {
+  const pg = p.setup;
+  for (const part of headerFooterText(t, p.label, p.hf)) {
+    const y = part.where === 'header' ? p.top + pg.header + part.size * 0.8 : p.top + p.h - pg.footer - part.size * 0.25;
+    const x = p.x + (part.align === 'left' ? pg.left : part.align === 'center' ? (pg.left + p.w - pg.right) / 2 - part.w / 2 : p.w - pg.right - part.w);
     ctx.font = `${part.size}px ${part.font}`;
     ctx.fillStyle = '#000';
     ctx.fillText(part.text, x, y);
+  }
+}
+
+/** Draw a page's line numbers (Layout > Line Numbers), in grey on screen and black in print. */
+export function drawLineNumbers(ctx: CanvasRenderingContext2D, lay: DocLayout, page: number, color = '#000'): void {
+  ctx.fillStyle = color;
+  for (const n of lay.lineNums) {
+    if (n.page !== page) continue;
+    ctx.font = `${n.size}px ${n.family}`;
+    ctx.fillText(n.text, n.x, n.y);
   }
 }
 
@@ -73,7 +84,8 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
   return lay.pages.map((p) => {
     const ctx = new VectorContext(width);
     const c = ctx as unknown as CanvasRenderingContext2D;
-    drawHeaderFooter(c, t, p, lay);
+    drawHeaderFooter(c, t, p);
+    drawLineNumbers(c, lay, p.index);
     // figures behind the text first
     // tables go under the figures in their cells
     // (a table in a cell after the table holding it)
@@ -118,7 +130,7 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
         c.strokeRect(o.x, o.y, o.w, o.h);
       }
     }
-    return { w: lay.pageW, h: lay.pageH, items: ctx.items, origin: { x: 0, y: p.top } };
+    return { w: p.w, h: p.h, items: ctx.items, origin: { x: p.x, y: p.top } };
   });
 }
 

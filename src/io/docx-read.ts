@@ -24,7 +24,7 @@ import { documentMeasure } from '../text/font-measure';
 import {
   OBJECT_CHAR, defaultHeaderFooter, defaultPage, defaultStyles,
   COL_GAP, FLOAT_GAP, columnsOf, lookExtent, usedObjects,
-  type DocObject, type DocText, type FigureLook, type Float, type HeaderFooter, type NamedStyle, type NoteFormat, type NoteFormats, type NumberPlace, type PageSetup,
+  type BreakKind, type DocObject, type DocText, type FigureLook, type Float, type HeaderFooter, type LineNumbers, type NamedStyle, type NoteFormat, type NoteFormats, type NumberPlace, type PageNumFormat, type PageSetup, type SectionBreak,
 } from '../document/document';
 import { shownSize } from '../document/doc-layout';
 import { layoutTable } from '../table';
@@ -68,7 +68,6 @@ const WARN = {
   equations: 'Equations in table cells were kept as plain text.',
   shapes: 'SmartArt and drawn shapes were left out.',
   chartParts: 'Some charts mix chart types (a line over columns, a second axis): they show as one type.',
-  sections: 'This file has several sections: the last one\'s page size, margins, header and footer are used for the whole document.',
   vmerge: 'Table cells merged down a column were split (merging across a row is kept).',
   nested: 'A table inside a table cell was kept as text.',
   cellObjects: 'Pictures and structures inside table cells were left out.',
@@ -90,7 +89,7 @@ interface RProps { font?: string; size?: number; bold?: boolean; italic?: boolea
 /** Paragraph formatting as a file gives it, in points. */
 interface PProps {
   align?: Justify; before?: number; after?: number; line?: { v: number; rule: string };
-  left?: number; right?: number; first?: number; keepNext?: boolean; pageBreak?: boolean; outline?: number;
+  left?: number; right?: number; first?: number; keepNext?: boolean; pageBreak?: boolean; outline?: number; noLineNumbers?: boolean;
   numId?: string; ilvl?: number; contextual?: boolean;
 }
 interface WStyle { id: string; type: string; name: string; basedOn?: string; next?: string; isDefault: boolean; p: PProps; r: RProps; el: Element }
@@ -142,8 +141,12 @@ class DocxReader {
   private openMarks = new Map<string, string>();
   private markSeq = new Map<string, number>();
   private refs: { id: number; mark: string; text: string }[] = [];
-  /** The next paragraph starts a new page (after a section break). */
-  private breakNext = false;
+  /** The section the next paragraph starts (after a section break). */
+  private breakNext: SectionBreak | null = null;
+  /** The file's section properties in order (the last is the body's own, for the last section). */
+  private sects: Element[] = [];
+  /** The header and footer of the section read last (a section without its own links to it). */
+  private lastHf: HeaderFooter = defaultHeaderFooter();
   /** The bibliography bookmark open, and the one met in the paragraph being read. */
   private bibOpen: string | null = null;
   private bibMet: string | null = null;
@@ -171,15 +174,19 @@ class DocxReader {
     this.readStyles();
     this.readNumbering();
     this.readModel();
-    const sects = Array.from(root.getElementsByTagNameNS(this.W, 'sectPr'));
-    const last = kids(body, 'sectPr')[0] ?? sects[sects.length - 1] ?? null;
-    if (sects.length > 1) this.warn('sections');
-    this.readPage(last);
+    // the sections: each paragraph's section properties end a section, the body's the last
+    // (not those kept in a tracked change's record of what they were)
+    const sects = Array.from(root.getElementsByTagNameNS(this.W, 'sectPr')).filter((e) => e.parentElement?.localName !== 'sectPrChange');
+    const last = kids(body, 'sectPr')[0] ?? null;
+    this.sects = [...sects.filter((e) => e !== last), ...(last ? [last] : [])];
+    const first = this.sects[0] ?? null;
+    this.readPage(first);
+    const hf = this.readHeaderFooter(first).hf;
+    this.lastHf = hf;
     this.blocks(kids(body));
     this.resolveRefs();
     this.joinBibliographies();
-    const hf = this.readHeaderFooter(last);
-    return { doc: this.assemble(hf), warnings: [...this.warnings] };
+    return { doc: this.assemble(hf, first), warnings: [...this.warnings] };
   }
 
   /** Word was set to track changes in this document (settings.xml's w:trackRevisions). */
@@ -291,6 +298,7 @@ class DocxReader {
         }
         case 'keepNext': out.keepNext = this.on(c); break;
         case 'pageBreakBefore': out.pageBreak = this.on(c); break;
+        case 'suppressLineNumbers': out.noLineNumbers = this.on(c); break;
         case 'outlineLvl': { const v = Number(this.a(c)); if (v >= 0 && v < 9) out.outline = v + 1; break; }
         case 'contextualSpacing': out.contextual = this.on(c); break;
         case 'numPr': {
@@ -422,24 +430,73 @@ class DocxReader {
 
   // ---------------------------------------------------------------- page
 
-  private readPage(sect: Element | null): void {
+  /** A section's paper, margins and columns. */
+  private pageOf(sect: Element | null): PageSetup {
     const sz = kid(sect, 'pgSz'), mar = kid(sect, 'pgMar');
     const d = defaultPage();
     const get = (el: Element | null, n: string, dflt: number) => Math.abs(this.tw(el, n) ?? dflt);
-    this.page = {
+    let page: PageSetup = {
       w: get(sz, 'w', d.w), h: get(sz, 'h', d.h),
       top: get(mar, 'top', d.top), bottom: get(mar, 'bottom', d.bottom), left: get(mar, 'left', d.left), right: get(mar, 'right', d.right),
       header: get(mar, 'header', d.header), footer: get(mar, 'footer', d.footer),
     };
-    if (this.page.w < 72 || this.page.h < 72) this.page = d;
+    if (page.w < 72 || page.h < 72) page = d;
     // columns (Word's equal columns; columns of their own widths are read as equal ones)
     const cols = kid(sect, 'cols');
     const n = Number(this.a(cols, 'num') ?? 1);
     if (n > 1 && n <= 4) {
-      this.page.cols = Math.round(n);
+      page.cols = Math.round(n);
       const gap = this.tw(cols, 'space');
-      if (gap !== undefined && Math.abs(gap - COL_GAP) > 0.5) this.page.colGap = gap;
+      if (gap !== undefined && Math.abs(gap - COL_GAP) > 0.5) page.colGap = gap;
     }
+    return page;
+  }
+
+  /** How a section starts: Word's section type (Next Page when not said). */
+  private kindOf(sect: Element | null): BreakKind {
+    const v = this.a(kid(sect, 'type')) ?? 'nextPage';
+    return v === 'continuous' ? 'continuous' : v === 'evenPage' ? 'evenPage' : v === 'oddPage' ? 'oddPage' : 'nextPage';
+  }
+
+  /** A section's page number format (1, 2, 3 for those not kept here, such as 1-1 or Chinese numbers). */
+  private numFormatOf(sect: Element | null): PageNumFormat {
+    const v = this.a(kid(sect, 'pgNumType'), 'fmt');
+    return v === 'lowerRoman' || v === 'upperRoman' || v === 'lowerLetter' || v === 'upperLetter' ? v : 'decimal';
+  }
+
+  /** A section's line numbers: Word counts its start from 0 (start="4" is numbered from 5). */
+  private lineNumbersOf(sect: Element | null): LineNumbers | undefined {
+    const el = kid(sect, 'lnNumType');
+    const by = Number(this.a(el, 'countBy') ?? 0);
+    if (!el || !(by >= 1)) return undefined;
+    const start = Number(this.a(el, 'start') ?? 0);
+    const r = this.a(el, 'restart');
+    const out: LineNumbers = { start: Number.isFinite(start) ? Math.max(0, Math.round(start)) + 1 : 1, countBy: Math.round(by), restart: r === 'continuous' ? 'continuous' : r === 'newSection' ? 'section' : 'page' };
+    const d = this.tw(el, 'distance');
+    if (d !== undefined && d > 0) out.distance = round(d);
+    return out;
+  }
+
+  /** The section after a paragraph's section properties: how it starts and its own settings. */
+  private sectionAfter(sect: Element): SectionBreak | null {
+    const at = this.sects.indexOf(sect);
+    const next = at >= 0 ? this.sects[at + 1] : undefined;
+    if (!next) return null;
+    const out: SectionBreak = { kind: this.kindOf(next), page: this.pageOf(next) };
+    const { hf, linked } = this.readHeaderFooter(next, this.lastHf);
+    if (!linked) out.hf = hf;
+    this.lastHf = hf;
+    const start = Number(this.a(kid(next, 'pgNumType'), 'start'));
+    if (this.a(kid(next, 'pgNumType'), 'start') !== null && Number.isFinite(start)) out.restart = Math.round(start);
+    const fmt = this.numFormatOf(next);
+    if (fmt !== 'decimal') out.format = fmt;
+    const lines = this.lineNumbersOf(next);
+    if (lines) out.lines = lines;
+    return out;
+  }
+
+  private readPage(sect: Element | null): void {
+    this.page = this.pageOf(sect);
     this.textW = columnsOf(this.page, Math.max(36, this.page.w - this.page.left - this.page.right)).w;
     // the notes' numbering: the section's, else the document's (settings.xml)
     const sp = this.pkg.relOfType(this.main, DOCX_REL.settings);
@@ -575,7 +632,7 @@ class DocxReader {
       runs.push(...p.runs);
     });
     if (!runs.length) runs.push({ ...(got[0]?.mark ?? {}), text: '' });
-    return { runs: rt.normalizeRuns(runs), paras: got.map((p) => { const q = cleanPara(p.ps); delete q.style; delete q.pageBreak; return q; }) };
+    return { runs: rt.normalizeRuns(runs), paras: got.map((p) => { const q = cleanPara(p.ps); delete q.style; delete q.pageBreak; delete q.section; return q; }) };
   }
 
   /** A paragraph's own and its style's formatting. */
@@ -602,10 +659,12 @@ class DocxReader {
     this.displayMath = false;
     this.inline(kids(el), ctx);
     // the contents' own lines (and the paragraph its field ends in): left out
-    if (inToc && ctx.pieces.every((pc) => !pc.runs.length)) { if (kid(pPr, 'sectPr')) this.breakNext = !/^continuous$/i.test(this.a(kid(kid(pPr, 'sectPr'), 'type')) ?? 'nextPage'); return; }
+    const sectionBreak = () => { if (sect) this.breakNext = this.sectionAfter(sect); };
+    if (inToc && ctx.pieces.every((pc) => !pc.runs.length)) { sectionBreak(); return; }
     const bib = bibBefore ?? this.bibMet ?? undefined;
-    const sectionBreak = () => { if (sect) this.breakNext = !/^continuous$/i.test(this.a(kid(sect, 'type')) ?? 'nextPage'); };
     const text = ctx.pieces.map((pc) => rt.plainText(pc.runs)).join('\n');
+    // the empty paragraph Word needs after a table to hold a section break: the break is kept, the paragraph isn't
+    if (sect && !text && this.out[this.out.length - 1]?.table && ctx.pieces.length === 1) { this.breakNext = null; sectionBreak(); return; }
     // a table's notes written after it (by this program): the table has them already
     if (this.pendingNotes !== null) {
       const notes = this.pendingNotes;
@@ -637,7 +696,7 @@ class DocxReader {
       // spacing in points stays in points for the paragraph (its style takes the nearest multiple)
       ...(p.line && p.line.rule !== 'auto' ? { linePt: round(p.line.v / 20), lineRule: p.line.rule === 'exact' ? 'exact' as const : 'atLeast' as const } : { line: this.lineOf(p, size) }),
       indent: round(indent), indentRight: p.right ? round(Math.max(0, p.right)) : undefined, firstLine: list ? undefined : round(p.first ?? 0), keepNext: p.keepNext,
-      pageBreak: p.pageBreak || brk, list, level: list ? ilvl : undefined,
+      pageBreak: p.pageBreak, section: brk, list, level: list ? ilvl : undefined, noLineNumbers: p.noLineNumbers,
     };
     const markStyle = this.runStyle(mark);
     const mrEl = kid(kid(pPr, 'rPr'), 'ins') ?? kid(kid(pPr, 'rPr'), 'del');
@@ -667,10 +726,10 @@ class DocxReader {
     sectionBreak();
   }
 
-  private takeBreak(): boolean | undefined {
+  private takeBreak(): SectionBreak | undefined {
     const b = this.breakNext;
-    this.breakNext = false;
-    return b || undefined;
+    this.breakNext = null;
+    return b ?? undefined;
   }
 
   /** Line spacing as a multiple of single (Word's "exactly" and "at least" turned into the nearest multiple). */
@@ -1290,7 +1349,7 @@ class DocxReader {
     const np = merge<PProps>(this.docDefaults.p, this.chain('paragraph', this.defaultPara).p);
     this.used.add(this.defaultPara);
     this.out.push({
-      ps: cleanPara({ align: jc === 'left' ? undefined : jc, spaceBefore: np.before, spaceAfter: np.after, pageBreak: this.takeBreak() }),
+      ps: cleanPara({ align: jc === 'left' ? undefined : jc, spaceBefore: np.before, spaceAfter: np.after, section: this.takeBreak() }),
       runs: ctx.pieces[0].runs, mark: this.runStyle(normal), style: 'Normal', contextual: false, table: true,
     });
   }
@@ -1383,7 +1442,7 @@ class DocxReader {
     this.emitObject(ctx, { kind: 'table', table }, normal);
     this.used.add(this.defaultPara);
     this.out.push({
-      ps: cleanPara({ align: jc === 'left' ? undefined : jc, spaceBefore: 0, spaceAfter: 0, pageBreak: this.takeBreak() }),
+      ps: cleanPara({ align: jc === 'left' ? undefined : jc, spaceBefore: 0, spaceAfter: 0, section: this.takeBreak() }),
       runs: ctx.pieces[0].runs, mark: this.runStyle(normal), style: 'Normal', contextual: false, table: true,
     });
   }
@@ -1487,18 +1546,28 @@ class DocxReader {
 
   // ---------------------------------------------------------------- header and footer
 
-  private readHeaderFooter(sect: Element | null): HeaderFooter {
+  /**
+   * A section's header and footer. A later section (`prev` the one before's) with no header or
+   * footer of its own takes the one before's (Word's Link to Previous: `linked`); one with only
+   * a header of its own takes the footer before, and the other way round.
+   */
+  private readHeaderFooter(sect: Element | null, prev?: HeaderFooter): { hf: HeaderFooter; linked: boolean } {
     const hf = defaultHeaderFooter();
     hf.numbers = 'none';
     const start = Number(this.a(kid(sect, 'pgNumType'), 'start'));
     if (Number.isFinite(start) && start > 0) hf.start = Math.round(start);
     const titlePg = kid(sect, 'titlePg') !== null && this.on(kid(sect, 'titlePg'));
-    const refOf = (kind: 'header' | 'footer', type: string) => {
-      const ref = kids(sect, `${kind}Reference`).find((e) => (this.a(e, 'type') ?? 'default') === type);
-      return this.relTarget(rAttr(ref, 'id'));
-    };
+    const refEl = (kind: 'header' | 'footer', type: string) => kids(sect, `${kind}Reference`).find((e) => (this.a(e, 'type') ?? 'default') === type);
+    const refOf = (kind: 'header' | 'footer', type: string) => this.relTarget(rAttr(refEl(kind, type), 'id'));
+    const own = (kind: 'header' | 'footer') => !!refEl(kind, 'default');
+    if (prev && !own('header') && !own('footer')) return { hf: { ...prev, onFirst: prev.onFirst || !titlePg }, linked: true };
     let numberedFirst = false;
     for (const kind of ['header', 'footer'] as const) {
+      if (prev && !own(kind)) {
+        hf[kind] = prev[kind];
+        if (prev.numbers.startsWith(kind)) { hf.numbers = prev.numbers; hf.prefix = prev.prefix; }
+        continue;
+      }
       const part = this.hfPart(refOf(kind, 'default'));
       hf[kind] = part.zones;
       if (part.page) {
@@ -1508,7 +1577,7 @@ class DocxReader {
       if (titlePg && this.hfPart(refOf(kind, 'first')).page) numberedFirst = true;
     }
     if (titlePg && hf.numbers !== 'none' && !numberedFirst) hf.onFirst = false;
-    return hf;
+    return { hf, linked: false };
   }
 
   /** A header or footer: its text at the left, centre and right, and where its page number is. */
@@ -1595,7 +1664,7 @@ class DocxReader {
     };
   }
 
-  private assemble(hf: HeaderFooter): DocText {
+  private assemble(hf: HeaderFooter, sect: Element | null): DocText {
     // the empty paragraphs Word needs between tables and after a table at the end
     const out = this.out.filter((p, i, all) => {
       if (p.runs.length || p.table) return true;
@@ -1649,6 +1718,8 @@ class DocxReader {
       objects,
       drawingStyle: this.drawingStyle,
       ...(this.trackOn() ? { track: true } : {}),
+      ...(this.numFormatOf(sect) !== 'decimal' ? { numFormat: this.numFormatOf(sect) } : {}),
+      ...(this.lineNumbersOf(sect) ? { lineNumbers: this.lineNumbersOf(sect) } : {}),
       ...(Object.keys(this.noteFormats).length ? { notes: this.noteFormats } : {}),
       ...(Array.isArray(m?.references) ? { references: m.references.map((r) => cleanRef(r)) } : {}),
       ...(typeof m?.citeStyle === 'string' && m.citeStyle in CITE_PRESETS ? { citeStyle: m.citeStyle } : {}),

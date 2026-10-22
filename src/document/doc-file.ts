@@ -5,7 +5,7 @@
 import type { Measure, TextFrame } from '../text/layout';
 import { TextEditing, type ChangeKind } from '../text/editing';
 import { documentMeasure } from '../text/font-measure';
-import { CELL_PAD, DocLayouter, movedLayout, pageNumber, type DocLayout } from './doc-layout';
+import { CELL_PAD, DocLayouter, movedLayout, type DocLayout } from './doc-layout';
 import { reviewAuthor, revisionDate } from './revisions';
 import { setPart } from '../table';
 import { FigurePictures } from './figures';
@@ -229,7 +229,7 @@ export class DocFile {
     if (this.printer.memo?.t !== t) {
       const lay = this.printer.layouter.layout(t);
       this.printer.memo = { t, lay };
-      paragraphPages.set(t, lay.paraTops.map((pt) => pageNumber(t.hf, pt.page)));
+      paragraphPages.set(t, lay.paraTops.map((pt) => lay.pages[pt.page]?.number ?? ''));
     }
     return this.printer.memo.lay;
   }
@@ -241,7 +241,7 @@ export class DocFile {
       let lay: DocLayout;
       if (!continuous(v.kind)) {
         lay = this.layouter.layout(t);
-        paragraphPages.set(t, lay.paraTops.map((pt) => pageNumber(t.hf, pt.page)));
+        paragraphPages.set(t, lay.paraTops.map((pt) => lay.pages[pt.page]?.number ?? ''));
       } else if (v.kind === 'outline' && v.outline) {
         const hidden = hiddenParas(t, v.outline);
         let firstLine: Set<number> | undefined;
