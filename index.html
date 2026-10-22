@@ -114,6 +114,7 @@
     <button data-modes="sheet" role="menuitem" data-cmd="go-to">Go To…</button>
     <button data-modes="sheet" role="menuitem" data-cmd="go-to-special">Go To Special…</button>
     <button data-modes="sheet" role="menuitem" data-cmd="paste-special">Paste Special…</button>
+    <button data-modes="document" role="menuitem" data-cmd="paste-object" title="Cells copied in Excel, or another program's object, kept whole as Word's Paste Special keeps them: double-click to change them in their program (Windows app)">Paste as Object</button>
     <hr />
     <button role="menuitem" data-cmd="command-search" title="Find any command by typing part of its name">Search Commands…</button>
     <button role="menuitem" data-cmd="hotkeys">Hotkeys…</button>
@@ -210,6 +211,7 @@
     <button data-modes="document" role="menuitem" data-cmd="insert-structure" title="Draw a structure or scheme to put in the text at the caret">Structure</button>
     <button data-modes="sheet" role="menuitem" data-cmd="draw-structure">Structure in Cell</button>
     <button data-modes="drawing slides design document" role="menuitem" data-cmd="insert-picture">Picture…</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-object" title="Another program's file kept whole in the document (an Excel workbook, a PDF, anything): shown as its cells, first page or an icon; double-click it to open it in its program">Object…</button>
     <button data-modes="drawing slides design" role="menuitem" data-cmd="crop" title="Cut the edges off the selected picture">Crop Picture</button>
     <button data-modes="drawing slides design document" role="menuitem" data-cmd="picture-format" title="Brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions">Picture Format…</button>
     <button data-modes="drawing slides design" role="menuitem" data-cmd="text-box">Text Box</button>
@@ -1284,6 +1286,7 @@
           <button class="rb-big" data-doc="insert-picture" title="A picture from a file (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
           <button class="rb-big" data-doc="picture-format" title="Picture Format for the picture picked: brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions. Saved as Word's own picture settings"><span class="rb-icon">◐</span>Picture Format</button>
           <button class="rb-big" data-doc="insert-chart" title="A chart with its own data, as in Word: type or paste the numbers, pick the kind of chart. Double-click it to change it"><span class="rb-icon">▥</span>Chart</button>
+          <button class="rb-big" data-doc="insert-object" title="Object: another program's file kept whole in the document, as in Word (an Excel workbook, a PDF, anything). It shows its cells, first page or an icon; double-click it to open it in its program, and what you save there comes back here. Paste as Object (Edit menu) does the same with cells copied in Excel"><span class="rb-icon">⧈</span>Object</button>
           <button class="rb-big" data-doc="insert-text-box" title="A box of text on the page, with the page's text wrapping round it. Drag its edge to move it"><span class="rb-icon">▭</span>Text Box</button>
           <button class="rb-big" data-doc="insert-shapes" aria-haspopup="true" title="Basic shapes, block arrows, flowchart shapes, callouts and lab glassware: the one you pick goes in the text at the caret. Double-click it to change it with the drawing tools"><span class="rb-icon">◇</span>Shapes ▾</button>
           <button class="rb-big" data-doc="insert-icons" aria-haspopup="true" title="About 7,000 icons, lab and science ones first (glassware, molecules, hazard signs): the one you pick goes in the text at the caret. Find one by name"><span class="rb-icon">⚗</span>Icons ▾</button>
