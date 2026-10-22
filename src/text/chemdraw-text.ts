@@ -4,9 +4,11 @@
 // paragraph formatting goes in a hidden object tag beside the text. Reading the file back, the
 // tag puts everything back as it was, provided the text still matches it; if the text was
 // changed in ChemDraw, the tag no longer fits and the text is read just as ChemDraw shows it.
+// Links (Insert > Link) go in the same tag, ChemDraw having none: they show there as their text.
 
 import type { ParaStyle, TextRun } from '../model';
-import { normalizeRuns, plainText, replaceRange, styleOf } from '../richtext';
+import { applyStyle, normalizeRuns, plainText, replaceRange, styleOf } from '../richtext';
+import { linkSpans } from '../links';
 import { fitParas, listMarkers, paraCount, paraRange, splitParagraphs, storedParas } from './paragraphs';
 
 /** Name of the hidden object tag that carries the paragraph formatting. */
@@ -16,6 +18,8 @@ export interface TextTag {
   v: 1;
   paras?: ParaStyle[];
   lineSpacing?: number;
+  /** Links, as [start, end, link] in the text as saved. */
+  links?: [number, number, string][];
   /** Checksum of the text as saved, so a text edited elsewhere is recognised. */
   sum: string;
 }
@@ -46,7 +50,8 @@ export function runsForChemDraw(c: { runs: TextRun[]; paras?: ParaStyle[]; lineS
   const paras = fitParas(c.paras, paraCount(text));
   const stored = storedParas(paras);
   const spacing = c.lineSpacing && c.lineSpacing !== 1 ? c.lineSpacing : undefined;
-  if (!stored && !spacing) return { runs: c.runs, tag: null };
+  const linked = c.runs.some((r) => r.link);
+  if (!stored && !spacing && !linked) return { runs: c.runs, tag: null };
   const markers = listMarkers(paras);
   const out: TextRun[] = [];
   splitParagraphs(c.runs).forEach((pr, i) => {
@@ -59,10 +64,13 @@ export function runsForChemDraw(c: { runs: TextRun[]; paras?: ParaStyle[]; lineS
     }
     out.push(...pr.map((r) => ({ ...r })));
   });
-  const runs = normalizeRuns(out);
+  const all = normalizeRuns(out);
+  const links = linkSpans(all).map((l): [number, number, string] => [l.start, l.end, l.link]);
+  const runs = linked ? normalizeRuns(all.map((r) => { if (!r.link) return r; const { link: _l, ...rest } = r; return rest; })) : all;
   const tag: TextTag = { v: 1, sum: textSum(plainText(runs)) };
   if (stored) tag.paras = stored;
   if (spacing) tag.lineSpacing = spacing;
+  if (links.length) tag.links = links;
   return { runs, tag };
 }
 
@@ -84,6 +92,7 @@ export function runsFromChemDraw(runs: TextRun[], tag: TextTag | null): { runs: 
   const paras = fitParas(tag.paras, paraCount(text));
   const markers = listMarkers(paras);
   let out = runs;
+  for (const [a, b, link] of tag.links ?? []) if (typeof link === 'string' && a >= 0 && b > a && b <= text.length) out = applyStyle(out, a, b, { link });
   for (let i = paras.length - 1; i >= 0; i--) {
     const prefix = markerPrefix(paras[i], markers[i]);
     if (!prefix) continue;

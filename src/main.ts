@@ -38,7 +38,9 @@ import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, r
   nativeFirst, writeNativeFormats, looksLikeCdxml, cfHtml, fromCfHtml, CELLS_FORMAT, OWN_FORMAT, CDX_FORMAT, setWordObjects, embeddedPicture, packFormats } from './io/clipboard';
 import { cdxToCdxml } from './io/cdx';
 import { writeCdxml } from './io/cdxml-write';
-import { WORKSPACE } from './io/workspace-file';
+import { WORKSPACE, folderOf } from './io/workspace-file';
+import { askLink, followLink, setLinkHost, type LinkPlace } from './ui/links-ui';
+import { SHOW_JUMPS, cellOfLink, linkSpans, removeLink, setLink, slideOfLink } from './links';
 import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, setEmbeddedWriter, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, PICTURE_EXTENSIONS, type FileType } from './io/files';
 import { readPptx } from './io/pptx-read';
 import { pickReuseSlides } from './ui/reuse-slides';
@@ -746,6 +748,117 @@ editor.onChart = (id) => void editChartShape(id);
  * Insert > Equation on a slide or design: typed as LaTeX in the equation window, in the
  * master's body text (its font, colour and size), in the middle of the slide.
  */
+// ------------------------------------------------------------------ links
+
+/** A slide's title (its title placeholder's text), for the link window's list. */
+function slideTitle(d: Deck, i: number): string {
+  for (const c of d.docOf(i).captions.values()) if (c.ph === 'title') return plainText(c.runs).replace(/\s+/g, ' ').trim();
+  return '';
+}
+
+/** The places in the deck a link can go to: each slide (by its title), and the slide show's own jumps. */
+function slidePlaces(): { places: LinkPlace[]; title: string } | null {
+  const d = deckNow();
+  if (!d || ws.active.mode === 'design') return null;
+  const places: LinkPlace[] = d.slides.map((s, i) => ({ link: `#slide=${s.id}`, label: `${i + 1}. ${slideTitle(d, i) || `Slide ${i + 1}`}` }));
+  places.push({ link: '', label: 'In the slide show' }, ...Object.entries(SHOW_JUMPS).map(([link, label]) => ({ link, label, depth: 1 })));
+  return { places, title: 'Slide in this deck' };
+}
+
+/** The selected captions (not one being typed). */
+function pickedCaptions(): Caption[] {
+  return [...editor.sel.captions].map((id) => doc.captions.get(id)).filter((c): c is Caption => !!c);
+}
+
+/**
+ * Insert > Link (Ctrl+K) in drawings and slides: the text being typed (its selection), or the
+ * whole text of the selected captions and text boxes, as PowerPoint links a whole shape.
+ */
+async function insertLink(): Promise<void> {
+  const typing = editor.typingCaption;
+  if (typing) { await typing.editLink(); return; }
+  const caps = pickedCaptions();
+  if (!caps.length) { flash('Select the text to link (or a text box or caption), then choose Link. Ctrl+K while typing links the selected words.'); return; }
+  const first = caps[0];
+  const old = linkSpans(first.runs)[0]?.link;
+  const text = caps.length === 1 ? plainText(first.runs) : '';
+  const p = slidePlaces();
+  const got = await askLink({ text: caps.length === 1 && !text.includes('\n') ? text : null, link: old, places: p?.places, placeTitle: p?.title });
+  if (!got) return;
+  doc.edit('remove' in got ? 'Remove Link' : old ? 'Edit Link' : 'Insert Link', () => {
+    for (const c of caps) {
+      const n = plainText(c.runs).length;
+      const runs = 'remove' in got ? removeLink(c.runs, 0, n) : setLink(c.runs, 0, n, got.link, caps.length === 1 ? got.text : undefined).runs;
+      doc.updateCaption(c.id, { runs });
+    }
+  });
+  editor.changed();
+}
+
+/** Remove Link on the text being typed, or on the selected captions. */
+function removeLinks(): boolean {
+  const typing = editor.typingCaption;
+  if (typing) { typing.ed.removeLink(); return true; }
+  const caps = pickedCaptions().filter((c) => c.runs.some((r) => r.link));
+  if (!caps.length) { flash('Select text with a link first.'); return false; }
+  doc.edit('Remove Link', () => { for (const c of caps) doc.updateCaption(c.id, { runs: removeLink(c.runs, 0, plainText(c.runs).length) }); });
+  editor.changed();
+  return true;
+}
+
+/** Open Link: the link in the text being typed, or the first in the selected captions. */
+function openLink(): boolean {
+  const link = editor.typingCaption?.ed.linkHere()?.link ?? pickedCaptions().map((c) => linkSpans(c.runs)[0]?.link).find(Boolean);
+  if (!link) { flash('Select text with a link first.'); return false; }
+  void followLink(link);
+  return true;
+}
+
+CaptionEditor.linkPlaces = () => slidePlaces();
+
+setLinkHost({
+  goTo(place) {
+    if (docActive()) return docMode.goToPlace(place);
+    if (sheetActive()) return sheetMode.goToPlace(place);
+    const d = deckNow();
+    const id = slideOfLink(place);
+    if (d && id !== null) {
+      const i = d.slides.findIndex((s) => s.id === id);
+      if (i < 0) return false;
+      goSlide(i);
+      return true;
+    }
+    if (d && place in SHOW_JUMPS) {
+      // outside the slide show, the jumps go to the slide they would show
+      const i = place === '#first' ? 0 : place === '#last' ? d.slides.length - 1 : place === '#next' ? d.index + 1 : d.index - 1;
+      goSlide(Math.max(0, Math.min(d.slides.length - 1, i)));
+      return true;
+    }
+    return false;
+  },
+  placeName(place) {
+    if (docActive()) return docMode.placeName(place);
+    const d = deckNow();
+    const id = slideOfLink(place);
+    if (d && id !== null) {
+      const i = d.slides.findIndex((s) => s.id === id);
+      return i < 0 ? null : `Slide ${i + 1}${slideTitle(d, i) ? `: ${slideTitle(d, i)}` : ''}`;
+    }
+    if (place in SHOW_JUMPS) return SHOW_JUMPS[place];
+    const cell = cellOfLink(place);
+    return cell ? `Cell ${cell.sheet ? `${cell.sheet}!` : ''}${cell.cell}` : null;
+  },
+  async openHere(path) {
+    // drawings, documents, slides, sheets and workspaces open in a tab here
+    if (!/\.(cdxml|cdx|docx|pptx|xlsx|csv|tsv|sdf|sd)$/i.test(path) && !path.toLowerCase().endsWith(`.${WORKSPACE.extension}`)) return false;
+    if (!isTauri()) return false;
+    await openRecent(path);
+    return true;
+  },
+  folder: () => (ws.active.ref.kind === 'path' ? folderOf(ws.active.ref.path) : null),
+  flash: (text) => flash(text, 6000),
+});
+
 async function insertEquation(): Promise<void> {
   const deck = deckNow();
   if (!deck) { flash('Equations go on slides, designs and documents.'); return; }
@@ -3345,6 +3458,10 @@ const COMMANDS: Record<string, () => unknown> = {
   'hide-slide': () => hideSlides(),
   'reuse-slides': () => reuseSlides(),
   'insert-equation': () => insertEquation(),
+  'insert-link': () => insertLink(),
+  'remove-link': () => removeLinks(),
+  'open-link': () => openLink(),
+  'insert-bookmark': () => { flash('Bookmarks are for documents: they name a place in the text for links to go to.'); return false; },
   'edit-equation': () => { const id = [...editor.sel.shapes].find((x) => doc.shapes.get(x)?.math); if (id === undefined) { flash('Click an equation first (or double-click it).'); return; } void editEquationShape(id); },
   'next-slide': () => { const d = deckNow(); if (!d) return false; goSlide(d.index + 1); },
   'prev-slide': () => { const d = deckNow(); if (!d) return false; goSlide(d.index - 1); },
@@ -4535,6 +4652,8 @@ function storeSettings(): void {
     chemTyping: typingPrefs.chemistry,
     stereoItalic: typingPrefs.stereoItalic,
     boldNumbers: typingPrefs.boldNumbers,
+    autoLinks: typingPrefs.links,
+    linkCtrlClick: typingPrefs.linkCtrlClick,
     spellCheck: typingPrefs.spelling,
     replacements: typingPrefs.replacements,
     dictionary: typingPrefs.dictionary,
@@ -4684,7 +4803,7 @@ void loadSettings().then((s) => {
   modeColours = s.modeColours;
   applyModeColours(ws.active.mode, modeColours);
   keymap.setOverrides(s.hotkeys);
-  setTypingPrefs({ chemistry: s.chemTyping, stereoItalic: s.stereoItalic, boldNumbers: s.boldNumbers, spelling: s.spellCheck, replacements: s.replacements, dictionary: s.dictionary });
+  setTypingPrefs({ chemistry: s.chemTyping, stereoItalic: s.stereoItalic, boldNumbers: s.boldNumbers, links: s.autoLinks, linkCtrlClick: s.linkCtrlClick, spelling: s.spellCheck, replacements: s.replacements, dictionary: s.dictionary });
   ownNicknames = s.nicknames;
   addNicknames(ownNicknames);
   useOwnTemplates(s.templates);
@@ -5666,6 +5785,9 @@ function drawingMenu(): MenuItem[] {
     { cmd: 'scale' },
     ...(atoms || shapes.some((x) => x.kind === 'ring') ? [{ label: 'Highlight and Fill', items: [{ cmd: 'highlight' }, { cmd: 'remove-highlight' }, { cmd: 'highlight-look' }, { cmd: 'select-highlight' }, null, { cmd: 'smooth-highlight' }, { cmd: 'centre-highlight' }, { cmd: 'soft-highlight' }, { cmd: 'outline-highlight' }, { cmd: 'shadow-highlight' }, { cmd: 'glow-highlight' }, { cmd: 'save-highlight-look' }, null, { cmd: 'fill-rings' }, { cmd: 'ring-shadow' }] }] : []),
     ...(s.captions.size ? [{ cmd: 'link-text' }] : []),
+    ...([...s.captions].some((id) => doc.captions.get(id)?.runs.some((r) => r.link))
+      ? [{ cmd: 'open-link', label: 'Open Link' }, { cmd: 'insert-link', label: 'Edit Link…' }, { cmd: 'remove-link', label: 'Remove Link' }]
+      : s.captions.size ? [{ cmd: 'insert-link', label: 'Link…' }] : []),
     ...([...s.captions].some((id) => doc.captions.get(id)?.attach) ? [{ cmd: 'unlink-text' }] : []),
     ...(selectedGroups(doc, s).size ? [{ cmd: 'ungroup' }] : []),
     ...(s.atoms.size + s.captions.size + s.arrows.size + s.shapes.size > 1 ? [{ cmd: 'group' }] : []),
@@ -6405,7 +6527,7 @@ requestAnimationFrame(() => {
 
 // Hooks for the automated speed tests.
 (window as any).__app = { doc, editor, renderer, chem, live, command, addMolfile, keeper, cdxml: (name: string) => writeCdxml(doc, { name, textMeasure: measureText }), openText, stressTest, pasteChemistry, smiles: async (loose = false) => chem.molToSmiles(toMolfile(doc, doc.atoms.keys()).molblock, loose), placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode, docxBytes: () => writeDocx(docMode.file!.t, docFiles),
-  pptxBytes: () => { const d = deckNow()!; return writePptx({ size: d.size, master: d.master, slides: d.slides.map((s, i) => ({ layout: s.layout, doc: d.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims, comments: s.comments })) }, pptxOptions()); } };
+  pptxBytes: () => { const d = deckNow()!; return writePptx({ size: d.size, master: d.master, slides: d.slides.map((s, i) => ({ id: s.id, layout: s.layout, doc: d.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims, comments: s.comments })) }, pptxOptions()); } };
 
 // ---------------------------------------------------------------- desktop self-test
 

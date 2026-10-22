@@ -14,7 +14,8 @@
 // a structure whose SMILES was changed in Excel, or a calculated value typed over there, stays
 // as Excel left it.
 
-import { Package, PackageReader, xml, hex6, REL, kids, kid, rAttr } from './ooxml';
+import { Package, PackageReader, xml, xmlAttr, hex6, REL, kids, kid, rAttr } from './ooxml';
+import { officeTarget, linkFromTarget } from '../links';
 import { Workbook, Sheet, Structure, CellStyle, ColumnDef, Filter, Condition, CompareOp, Border, BorderStyle, Side, makeStructure } from '../sheet/workbook';
 import { keyOf, rowOf, colOf, colName, cellName, parseRange, quoteSheet, Range, MAX_COLS, rangesOverlap } from '../sheet/refs';
 import { normalizeFormula, shiftFormula } from '../sheet/formula';
@@ -558,13 +559,22 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
       drawingXml += `<legacyDrawing r:id="${vid}"/>`;
     }
     const dvXml = standIn ? '' : validationsXml(s.validations, excelFunctionNames);
+    // links (Insert > Link): a place in the workbook as Excel's location, anything else through a relationship
+    const linkXml: string[] = [];
+    for (const [k, c] of s.cells) {
+      if (!c.link) continue;
+      const ref = cellName(rowOf(k), colOf(k));
+      if (c.link.startsWith('#')) linkXml.push(`<hyperlink ref="${ref}" location="${xmlAttr(c.link.slice(1))}" display="${xmlAttr(s.shownText(rowOf(k), colOf(k)))}"/>`);
+      else linkXml.push(`<hyperlink ref="${ref}" r:id="${pkg.relate(path, REL.hyperlink, officeTarget(c.link), true)}"/>`);
+    }
+    const hyperlinks = linkXml.length ? `<hyperlinks>${linkXml.join('')}</hyperlinks>` : '';
     pkg.add(path,
       `${HEAD}<worksheet xmlns="${MAIN}" xmlns:r="${RNS}">` +
       `${s.filter && !filterTable ? '<sheetPr filterMode="1"/>' : ''}<dimension ref="${used}"/>` +
       `<sheetViews><sheetView${si === book.active ? ' tabSelected="1"' : ''} workbookViewId="0">${pane}</sheetView></sheetViews>` +
       `<sheetFormatPr defaultRowHeight="15"/>` +
       (colXml.length ? `<cols>${colXml.join('')}</cols>` : '') +
-      `<sheetData>${rowXml.join('')}</sheetData>${filterXml}${merges}${cfXml}${dvXml}` +
+      `<sheetData>${rowXml.join('')}</sheetData>${filterXml}${merges}${cfXml}${dvXml}${hyperlinks}` +
       `<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>${drawingXml}${tableParts}</worksheet>`,
       CT.sheet);
     const rid = pkg.relate('xl/workbook.xml', RELS.worksheet, `worksheets/sheet${si + 1}.xml`);
@@ -1055,7 +1065,16 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
       }
       const dv = readValidations(ws);
       if (dv.length) s.setValidations(dv);
-      if (kid(ws, 'hyperlinks')) notKept.add('links');
+      // links: Excel's own (a cell range takes its link on each of its cells)
+      const linkRels = pkg.rels(path!);
+      for (const h of kids(kid(ws, 'hyperlinks'), 'hyperlink')) {
+        const R = parseRange(h.getAttribute('ref') ?? '');
+        const rel = linkRels.get(rAttr(h, 'id') ?? '');
+        const loc = h.getAttribute('location');
+        const link = rel?.external ? linkFromTarget(rel.target) + (loc ? `#${loc}` : '') : loc ? `#${loc}` : null;
+        if (!R || !link) continue;
+        for (let r = R.r1; r <= Math.min(R.r2, R.r1 + 999); r++) for (let c = R.c1; c <= Math.min(R.c2, R.c1 + 99); c++) s.setLink(r, c, link);
+      }
     });
   });
   // a filter goes back as it was: the rows it hid are hidden already

@@ -12,6 +12,7 @@ import { caretPos, layoutText, lineOf, offsetAt, offsetInLine, selectionRects, w
 import { cleanPara, editParas, fitParas, paraAt, paraCount, paraRange, storedParas } from './paragraphs';
 import type { CharLook, FixEdit } from './chemtext';
 import { trackedReplace } from '../document/revisions';
+import { linkAt, removeLink as removeLinkRuns, setLink as setLinkRuns, type LinkSpan } from '../links';
 
 /** A styled text with its paragraph formatting: what a caption, a text box or a slide holds. */
 export interface RichText {
@@ -401,6 +402,49 @@ export class TextEditing {
       return;
     }
     this.commit('style', { ...this.t, runs: rt.toggleStyle(this.t.runs, this.start, this.end, key, this.defaults) }, this.anchor, this.focus);
+  }
+
+  // ------------------------------------------------------------------ links
+
+  /** The link the selection or caret is on (see links.linkAt). */
+  linkHere(): LinkSpan | null {
+    return linkAt(this.t.runs, this.start, this.end);
+  }
+
+  /**
+   * Insert > Link: the selection (or the link the caret is in, when nothing is selected) links
+   * to `link`, its text replaced by `text` when that is given and different. With nothing
+   * selected and no link here, `text` (or the address) is typed at the caret as the link.
+   */
+  setLink(link: string, text?: string): void {
+    let start = this.start, end = this.end;
+    const here = this.collapsed ? this.linkHere() : null;
+    if (here) { start = here.start; end = here.end; }
+    if (start === end) {
+      const shown = text || link.replace(/^mailto:/i, '');
+      const style = { ...this.typingStyle(), link: undefined };
+      const runs = rt.replaceRange(this.t.runs, start, end, [{ ...style, text: shown }]);
+      const got = setLinkRuns(runs, start, start + shown.length, link);
+      const t: RichText = { ...this.t, runs: got.runs, paras: editParas(this.t.paras, this.text, start, end, shown) };
+      this.commit('link', t, got.end);
+      return;
+    }
+    const before = this.text;
+    const got = setLinkRuns(this.t.runs, start, end, link, text);
+    const inserted = rt.plainText(got.runs).slice(start, got.end);
+    const t: RichText = { ...this.t, runs: got.runs, paras: text !== undefined ? editParas(this.t.paras, before, start, end, inserted) : this.t.paras };
+    this.commit('link', t, this.collapsed ? got.end : start, got.end);
+  }
+
+  /** Remove Link: on the selection, or on the whole link the caret is in. */
+  removeLink(): void {
+    let start = this.start, end = this.end;
+    if (this.collapsed) {
+      const here = this.linkHere();
+      if (!here) return;
+      start = here.start; end = here.end;
+    }
+    this.commit('link', { ...this.t, runs: removeLinkRuns(this.t.runs, start, end) }, this.anchor, this.focus);
   }
 
   /** Size, font or colour: on the selection, or for what is typed next. */

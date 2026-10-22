@@ -209,7 +209,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   'doc-bullets': 'Bullets', 'doc-numbering': 'Numbering', replace: 'Find and replace…', 'insert-structure': 'Insert a structure (draw it)',
   'insert-caption': 'Insert a caption…', 'cross-reference': 'Insert a cross-reference…', 'compound-number': 'Insert a compound number…', 'structure-from-name-doc': 'Insert a structure from a name or SMILES…',
   'insert-citation': 'Insert a citation…', 'insert-bibliography': 'Insert the bibliography', 'manage-references': 'Manage references…',
-  'insert-toc': 'Insert a table of contents…', 'insert-tof': 'Insert a table of figures…', 'insert-footnote': 'Insert a footnote', 'insert-endnote': 'Insert an endnote', 'note-options': 'Footnote and endnote options…', 'insert-equation': 'Insert an equation…', 'edit-equation': 'Change the equation…', 'track-changes': 'Track changes (on or off)', 'accept-change': 'Accept the change', 'reject-change': 'Reject the change',
+  'insert-toc': 'Insert a table of contents…', 'insert-tof': 'Insert a table of figures…', 'insert-footnote': 'Insert a footnote', 'insert-link': 'Insert or change a link (web page, DOI, file, place in the file)…', 'remove-link': 'Remove the link', 'open-link': 'Open the link', 'insert-bookmark': 'Insert, go to or delete a bookmark…', 'insert-endnote': 'Insert an endnote', 'note-options': 'Footnote and endnote options…', 'insert-equation': 'Insert an equation…', 'edit-equation': 'Change the equation…', 'track-changes': 'Track changes (on or off)', 'accept-change': 'Accept the change', 'reject-change': 'Reject the change',
   'accept-all': 'Accept all changes', 'reject-all': 'Reject all changes', 'next-change': 'Next change', 'prev-change': 'Previous change', 'review-name': 'Your name on changes…', 'new-comment': 'New comment', 'delete-comment': 'Delete the comment', 'delete-all-comments': 'Delete all comments', 'resolve-comment': 'Resolve the comment (or reopen it)', 'next-comment': 'Next comment', 'prev-comment': 'Previous comment', 'show-comments': 'Show comments (on or off)',
   'view-print': 'Print Layout view', 'view-read': 'Read Mode', 'view-web': 'Web Layout view', 'view-outline': 'Outline view', 'view-draft': 'Draft view',
   'view-sideways': 'Pages side to side (on or off)', 'view-multiple': 'Multiple pages (on or off)', 'view-one-page': 'One page', 'view-split': 'Split the window (on or off)',
@@ -221,7 +221,7 @@ export const COMMAND_NAMES: Record<string, string> = {
 };
 
 const TEXT_ACTIONS: Record<string, string> = {
-  bold: 'Bold', italic: 'Italic', underline: 'Underline', sub: 'Subscript', sup: 'Superscript', formula: 'Formula style',
+  bold: 'Bold', italic: 'Italic', underline: 'Underline', sub: 'Subscript', sup: 'Superscript', formula: 'Formula style', link: 'Insert or change a link…',
 };
 
 /** Tool names, filled in by the app (the tool bar knows what each tool is called). */
@@ -339,7 +339,7 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
   // PowerPoint's keys
   slides: verbs('command', {
     F5: 'present', 'Shift+F5': 'present-current', 'Alt+F5': 'presenter-view', 'Ctrl+M': 'new-slide', 'Ctrl+N': 'new-slides',
-    PageDown: 'next-slide', PageUp: 'prev-slide', 'Ctrl+Alt+M': 'new-comment', 'Alt+=': 'insert-equation',
+    PageDown: 'next-slide', PageUp: 'prev-slide', 'Ctrl+Alt+M': 'new-comment', 'Alt+=': 'insert-equation', 'Ctrl+K': 'insert-link',
   }),
   // Excel's keys
   sheet: verbs('command', {
@@ -350,7 +350,7 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
     'Ctrl+Shift+=': 'insert-cells', 'Ctrl++': 'insert-cells', 'Ctrl+-': 'delete-cells',
     'Ctrl+9': 'hide-rows', 'Ctrl+Shift+9': 'unhide-rows', 'Ctrl+0': 'hide-cols', 'Ctrl+Shift+0': 'unhide-cols',
     'Ctrl+Shift+L': 'filter', 'Ctrl+N': 'new-sheet', 'Shift+F11': 'insert-sheet',
-    'Ctrl+Shift+N': 'structure-from-name', 'Shift+F2': 'new-note', 'Ctrl+Alt+M': 'new-comment',
+    'Ctrl+Shift+N': 'structure-from-name', 'Shift+F2': 'new-note', 'Ctrl+Alt+M': 'new-comment', 'Ctrl+K': 'insert-link',
   }),
   // Word's keys
   document: verbs('command', {
@@ -359,7 +359,7 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
     'Ctrl+Enter': 'page-break', 'Ctrl+Shift+Enter': 'col-break', 'Ctrl+1': 'line-single', 'Ctrl+5': 'line-1-5', 'Ctrl+2': 'line-double',
     'Ctrl+]': 'font-bigger', 'Ctrl+[': 'font-smaller', 'Ctrl+Shift+L': 'doc-bullets',
     'Ctrl+F': 'find', 'Ctrl+H': 'replace', 'Ctrl+N': 'new-document', 'Ctrl+Shift+E': 'track-changes', 'Ctrl+Alt+M': 'new-comment', 'Alt+=': 'insert-equation',
-    'Ctrl+Alt+F': 'insert-footnote', 'Ctrl+Alt+D': 'insert-endnote',
+    'Ctrl+Alt+F': 'insert-footnote', 'Ctrl+Alt+D': 'insert-endnote', 'Ctrl+K': 'insert-link', 'Ctrl+Shift+F5': 'insert-bookmark',
     'Ctrl+Alt+N': 'view-draft', 'Ctrl+Alt+S': 'view-split',
     'Alt+Shift+ArrowLeft': 'outline-promote', 'Alt+Shift+ArrowRight': 'outline-demote', 'Alt+Shift+ArrowUp': 'outline-up', 'Alt+Shift+ArrowDown': 'outline-down',
     'Alt+Shift+=': 'outline-expand', 'Alt+Shift+-': 'outline-collapse', 'Alt+Shift+A': 'outline-all', 'Alt+Shift+N': 'compound-number',
@@ -367,7 +367,7 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
   }),
   text: verbs('text', {
     'Ctrl+B': 'bold', 'Ctrl+I': 'italic', 'Ctrl+U': 'underline', 'Ctrl+=': 'sub', 'Ctrl+Shift+=': 'sup', 'Ctrl++': 'sup',
-    F9: 'sub', F10: 'sup', 'Ctrl+F': 'formula',
+    F9: 'sub', F10: 'sup', 'Ctrl+F': 'formula', 'Ctrl+K': 'link',
   }),
 };
 

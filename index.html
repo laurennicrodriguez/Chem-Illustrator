@@ -198,6 +198,8 @@
     <button data-modes="slides design document" role="menuitem" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha), shown as maths; a Word or PowerPoint equation in .docx and .pptx files">Equation…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-toc" title="The headings (Heading 1, 2, 3) with their page numbers; it updates by itself">Table of Contents…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-tof" title="The Figure, Scheme, Table or Chart captions with their page numbers; it updates by itself">Table of Figures…</button>
+    <button role="menuitem" data-cmd="insert-link" title="Link the selected text to a web page, a DOI, a file or a place in this file (Ctrl+K while typing). Ctrl+click a link to follow it">Link…</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-bookmark" title="Name the paragraph the caret is in, so links can go to it (Ctrl+Shift+F5)">Bookmark…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-footnote" title="A footnote at the foot of the page (Ctrl+Alt+F)">Footnote</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-endnote" title="An endnote after the text (Ctrl+Alt+D)">Endnote</button>
     <button data-modes="document" role="menuitem" data-cmd="page-break">Page Break</button>
@@ -587,6 +589,12 @@
       </div>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-sh="insert-link" title="Link (Ctrl+K): the selected cell links to a web page, a DOI, a file, an e-mail address or a cell in this workbook. Saved as Excel's own links. Ctrl+click the cell to follow it"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M8.5 11.5l3-3"/><path d="M10.5 5.5l1.2-1.2a3 3 0 0 1 4.2 4.2l-1.6 1.6a3 3 0 0 1-3.6.5"/><path d="M9.5 14.5l-1.2 1.2a3 3 0 0 1-4.2-4.2l1.6-1.6a3 3 0 0 1 3.6-.5"/></svg></span>Link</button>
+        </div>
+        <div class="rb-label">Links</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-sh="insert-dashboard" title="A new sheet of tiles (charts, headline numbers, tables, slicers, structure galleries) built from the tables in this workbook"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2.5" y="3" width="7" height="6" rx="1"/><rect x="11.5" y="3" width="6" height="3.5" rx="1"/><rect x="11.5" y="8.5" width="6" height="8.5" rx="1"/><rect x="2.5" y="11" width="7" height="6" rx="1"/></svg></span>Dashboard</button>
         </div>
         <div class="rb-label">Dashboards</div>
@@ -846,6 +854,13 @@
           <button class="rb-big" data-doc="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha) and shown as maths, or one of the usual ones (Arrhenius, Eyring…). Double-click it to change it. Saved as a Word equation (Alt+=)"><span class="rb-icon">π</span>Equation</button>
         </div>
         <div class="rb-label">Symbols</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="insert-link" title="Link (Ctrl+K): the selected text links to a web page, a DOI (through doi.org), a file, an e-mail address or a heading or bookmark in this document. Saved as Word's own links. Ctrl+click a link to follow it; right-click it to change or remove it"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M8.5 11.5l3-3"/><path d="M10.5 5.5l1.2-1.2a3 3 0 0 1 4.2 4.2l-1.6 1.6a3 3 0 0 1-3.6.5"/><path d="M9.5 14.5l-1.2 1.2a3 3 0 0 1-4.2-4.2l1.6-1.6a3 3 0 0 1 3.6-.5"/></svg></span>Link</button>
+          <button class="rb-big" data-doc="insert-bookmark" title="Bookmark (Ctrl+Shift+F5): name the paragraph the caret is in, so links can go to it"><span class="rb-icon">🔖</span>Bookmark</button>
+        </div>
+        <div class="rb-label">Links</div>
       </div>
       <div class="rb-group">
         <div class="rb-row">
@@ -1311,6 +1326,12 @@
           <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
         </div>
         <div class="rb-label">Pictures, Text and Shapes</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="insert-link" title="Link (Ctrl+K): the selected text, or the selected text boxes, link to a web page, a DOI, a file, an e-mail address or another slide. Saved as PowerPoint's own links; in the slide show a click follows one. Ctrl+click a link while editing"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M8.5 11.5l3-3"/><path d="M10.5 5.5l1.2-1.2a3 3 0 0 1 4.2 4.2l-1.6 1.6a3 3 0 0 1-3.6.5"/><path d="M9.5 14.5l-1.2 1.2a3 3 0 0 1-4.2-4.2l1.6-1.6a3 3 0 0 1 3.6-.5"/></svg></span>Link</button>
+        </div>
+        <div class="rb-label">Links</div>
       </div>
     </div>
     <div class="rb-panel" data-sl-panel="design" hidden>

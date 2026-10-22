@@ -14,6 +14,7 @@ import { DocStyle, ACS_1996 } from '../style';
 import { applyStyle, type RestyleHow } from '../drawing-styles';
 import type { Rect } from '../geom';
 import { ASCENT } from '../text/layout';
+import { slideIdLinks } from '../links';
 import type { Transition, Anim } from './animation';
 import { backgroundColour, copyBackground, isPlain, sameBackground, solid, type Background } from './background';
 
@@ -449,9 +450,13 @@ export class Deck {
     this.size = { ...size };
     this.master = master;
     this.slides = slides;
+    const ids = slides.map((s) => s.id);
     for (const s of slides) {
       this.styleDoc(s.doc, s.layout, s.background);
       if (s.id >= this.nextSlideId) this.nextSlideId = s.id + 1;
+      // links read from a file name slides by their place: now by their ids
+      const c = s.doc.contents(), c2 = slideIdLinks(c, ids);
+      if (c2 !== c) s.doc.restoreContents(c2);
     }
     if (!slides.length) this.slides.push(this.makeSlide('title', this.newSlideDoc('title').contents()));
     this.index = 0;

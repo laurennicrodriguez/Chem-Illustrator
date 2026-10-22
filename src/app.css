@@ -588,6 +588,14 @@ dialog.ask { min-width: min(92vw, 340px); }
 .ask-row.ask-wide { grid-template-columns: 1fr; align-items: start; }
 .ask-row textarea { width: 32em; max-width: 70vw; resize: vertical; font-family: ui-monospace, Consolas, monospace; }
 .ask-buttons { display: flex; justify-content: flex-end; gap: 8px; margin: 14px 0 0; }
+dialog.link-dialog { width: min(92vw, 520px); }
+dialog.link-dialog .ask-row { grid-template-columns: 8.5em 1fr auto; }
+dialog.link-dialog .ask-buttons .spacer { flex: 1; }
+.link-kinds { display: flex; flex-wrap: wrap; gap: 4px; margin: 10px 0 4px; }
+.link-kinds button { padding: 4px 10px; border-radius: 4px; }
+.link-kinds button.on { background: var(--accent, #2f6fdf); color: #fff; border-color: transparent; }
+.link-places { width: 100%; }
+.link-error { color: #c0392b; }
 dialog.name-dialog { width: min(92vw, 520px); }
 /* Insert > Catalytic Cycle */
 dialog.cycle-dialog { width: min(96vw, 760px); max-height: 92vh; }

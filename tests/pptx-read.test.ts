@@ -9,7 +9,8 @@ import { Doc, Caption } from '../src/model';
 import { Deck } from '../src/deck/deck';
 import { writePptx, type PptxOptions } from '../src/io/pptx-write';
 import { readPptx, imageSize } from '../src/io/pptx-read';
-import { Package, NS, REL } from '../src/io/ooxml';
+import { Package, PackageReader, NS, REL } from '../src/io/ooxml';
+import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
 import { boxOf } from '../src/objects';
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 40, 0, 0, 0, 30]);
@@ -214,5 +215,59 @@ describe('picture sizes', () => {
     expect(imageSize(PNG, 'image/png')).toEqual({ w: 40, h: 30 });
     expect(imageSize(new Uint8Array([71, 73, 70, 56, 57, 97, 3, 0, 2, 0, 0]), 'image/gif')).toEqual({ w: 3, h: 2 });
     expect(imageSize(new TextEncoder().encode('<svg viewBox="0 0 120 80"></svg>'), 'image/svg+xml')).toEqual({ w: 120, h: 80 });
+  });
+});
+
+describe('links in PowerPoint files', () => {
+  /** A deck of three slides whose first slide links to a web page, to the third slide and to the next. */
+  async function linkedDeck(): Promise<{ bytes: Uint8Array; ids: number[] }> {
+    const host = new Doc();
+    const d = Deck.blank(host);
+    d.attach();
+    d.addSlide('blank');
+    d.addSlide('blank');
+    const ids = d.slides.map((s) => s.id);
+    d.go(0);
+    host.edit('Type', () => host.addCaption({ x: 100, y: 400, justify: 'left', runs: [
+      { text: 'See ' }, { text: 'the paper', link: 'https://doi.org/10.1021/ja00001', underline: true, color: '#0563c1' },
+      { text: ', ' }, { text: 'slide 3', link: `#slide=${ids[2]}` }, { text: ' and ' }, { text: 'on', link: '#next' },
+    ] }));
+    const bytes = await writePptx({ size: d.size, master: d.master, slides: d.slides.map((s, i) => ({ id: s.id, layout: s.layout, doc: d.docOf(i), notes: s.notes })) }, opts);
+    return { bytes, ids };
+  }
+
+  const linksOf = (contents: { captions: Caption[] }) => contents.captions.flatMap((c) => c.runs.filter((r) => r.link).map((r) => [r.text, r.link]));
+
+  it('saves links as PowerPoint\'s own: web pages, jumps to slides and show jumps', async () => {
+    const { bytes } = await linkedDeck();
+    const r = new PackageReader(bytes);
+    const xml = new XMLSerializer().serializeToString(r.xml('ppt/slides/slide1.xml')!);
+    expect(xml).toMatch(/<a:hlinkClick r:id="rId\d+"\/>/);
+    expect(xml).toMatch(/<a:hlinkClick r:id="rId\d+" action="ppaction:\/\/hlinksldjump"\/>/);
+    expect(xml).toMatch(/<a:hlinkClick r:id="" action="ppaction:\/\/hlinkshowjump\?jump=nextslide"\/>/);
+    const rels = [...r.rels('ppt/slides/slide1.xml').values()];
+    expect(rels).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: REL.hyperlink, target: 'https://doi.org/10.1021/ja00001', external: true }),
+      expect.objectContaining({ type: REL.slide, target: 'ppt/slides/slide3.xml' }),
+    ]));
+  });
+
+  it('reads them back, the slide link finding its slide in the deck it opens in', async () => {
+    const { bytes } = await linkedDeck();
+    const back = readPptx(bytes);
+    const deck = new Deck(new Doc());
+    deck.load(back.slides.map((s) => deck.makeSlide(s.layout, s.contents, s.notes, s)), back.size, back.master);
+    expect(linksOf(deck.docOf(0).contents())).toEqual([['the paper', 'https://doi.org/10.1021/ja00001'], ['slide 3', `#slide=${deck.slides[2].id}`], ['on', '#next']]);
+  });
+
+  it('reads links PowerPoint made (without our own copy of the text)', async () => {
+    const { bytes } = await linkedDeck();
+    // PowerPoint's text only: our tags taken away
+    const files = unzipSync(bytes);
+    for (const k of Object.keys(files)) if (k.startsWith('ppt/tags/')) files[k] = strToU8(strFromU8(files[k]).replace(/<p:tag name="CHEMILLUSTRATOR_TEXT"[^>]*\/>/g, ''));
+    const back = readPptx(zipSync(files));
+    const deck = new Deck(new Doc());
+    deck.load(back.slides.map((s) => deck.makeSlide(s.layout, s.contents, s.notes, s)), back.size, back.master);
+    expect(linksOf(deck.docOf(0).contents())).toEqual([['the paper', 'https://doi.org/10.1021/ja00001'], ['slide 3', `#slide=${deck.slides[2].id}`], ['on', '#next']]);
   });
 });

@@ -26,6 +26,9 @@ import {
 import { DocPanel, parseLength, showLength, type DocBoxKey } from './doc-panel';
 import { WORD_HIGHLIGHTS } from '../io/docx';
 import { DocFind } from './doc-find';
+import { askLink, followLink, linkTip } from './links-ui';
+import { bookmarkName, linkAtPoint } from '../links';
+import { addBookmark, bookmarkPara, bookmarksOf, docPlaces, placeLink, placeName, removeBookmark } from '../document/bookmarks';
 import { DocComments } from './doc-comments';
 import { TOF_NAMES, tocEntries, tofEntries } from '../document/toc';
 import { changesIn, countChanges, decide, decideEverywhere, reviewAuthor, setReviewAuthor } from '../document/revisions';
@@ -818,8 +821,18 @@ export class DocumentMode {
       item('Add to Dictionary', () => setTypingPrefs({ dictionary: [...typingPrefs.dictionary, text] }), 'Accept this word from now on (Edit > Typing and Spelling lists your words)');
       item('Ignore', () => { ignored.add(text.toLowerCase()); this.speller?.ignore(text); this.checkCache.clear(); this.checked = null; this.redraw(); }, 'Accept this word until the program is closed');
     }
+    // a link here
+    const linkHere = rt.sliceRuns(ed.t.runs, offset, offset + 1)[0]?.link ?? (offset > 0 ? rt.sliceRuns(ed.t.runs, offset - 1, offset)[0]?.link : undefined);
+    if (linkHere) {
+      if (word || issue) menu.appendChild(document.createElement('hr'));
+      if (ed.collapsed || !ed.linkHere()) ed.setCaret(offset);
+      item('Edit Link…', () => void this.editLink());
+      item('Open Link', () => void followLink(linkHere), 'Or Ctrl+click the link');
+      item('Copy Link', () => void navigator.clipboard?.writeText(linkHere).catch(() => {}));
+      item('Remove Link', () => ed.removeLink());
+    }
     // the usual commands, as on the ribbon
-    if (word || issue) menu.appendChild(document.createElement('hr'));
+    if (word || issue || linkHere) menu.appendChild(document.createElement('hr'));
     const cmd = (label: string, name: string, title?: string) => item(label, () => { if (!this.run(name)) this.host.command(name); }, title);
     // an equation here
     const mathHere = [offset, offset - 1].map((at) => (at >= 0 ? rt.sliceRuns(ed.t.runs, at, at + 1)[0]?.obj : undefined)).find((x) => x !== undefined && this.file?.t.objects[x]?.kind === 'math');
@@ -1031,6 +1044,7 @@ export class DocumentMode {
         if (this.run(cmd) || this.host.command(cmd)) { e.preventDefault(); return; }
       }
       const action = keymap.lookup('text', chord);
+      if (action && parseAction(action).arg === 'link') return run(() => void this.editLink());
       if (action) return run(() => ed.toggle(parseAction(action).arg as rt.Toggle));
     }
     const shift = e.shiftKey;
@@ -1658,6 +1672,91 @@ export class DocumentMode {
     f.view = { ...f.view, outline: shiftFolds(o, at, d) };
   }
 
+  // ---------------------------------------------------------------- links and bookmarks
+
+  /** The link under a point of the page: in the text box or cell being typed into, else in the body. */
+  private linkAtPoint(p: { x: number; y: number }): string | null {
+    const f = this.file;
+    if (!f) return null;
+    if (f.box) {
+      const s = linkAtPoint(f.box.ed.layout(), f.box.ed.t.runs, p.x, p.y);
+      if (s) return s.link;
+    }
+    return linkAtPoint(f.layout().text, f.t.runs, p.x, p.y)?.link ?? null;
+  }
+
+  /** Insert > Link (Ctrl+K): link the selection, change the link the caret is in, or type a new one. */
+  private async editLink(): Promise<void> {
+    const f = this.file;
+    if (!f || this.reading) return;
+    const ed = this.ed;
+    const here = ed.linkHere();
+    const range = here && ed.collapsed ? here : { start: ed.start, end: ed.end };
+    const shown = ed.text.slice(range.start, range.end);
+    const got = await askLink({
+      text: /[\n\uFFFC]/.test(shown) ? null : shown, link: here?.link,
+      places: docPlaces(f.t), placeTitle: 'Place in this document',
+    });
+    this.focus();
+    if (!got || this.file !== f) return;
+    if ('remove' in got) { ed.removeLink(); return; }
+    let link = got.link;
+    // a heading gets a hidden bookmark for the link to find it by
+    if (link.startsWith('#heading:')) {
+      const placed = placeLink(f.t, link);
+      link = placed.link;
+      f.ed.update({ ...f.t, paras: placed.t.paras }, 'Bookmark');
+    }
+    ed.setLink(link, got.text);
+  }
+
+  /** Go to a place in the document a link points to (#name); false when there is no such bookmark. */
+  goToPlace(link: string): boolean {
+    const f = this.file;
+    if (!f || !link.startsWith('#')) return false;
+    const para = bookmarkPara(f.t, link.slice(1));
+    if (para < 0) return false;
+    if (f.box) this.stopBox();
+    const at = paraRange(f.ed.text, para).start;
+    f.ed.setCaret(at);
+    this.revealCaret();
+    this.focus();
+    return true;
+  }
+
+  /** A place's name for a link's tooltip. */
+  placeName(link: string): string | null {
+    return this.file ? placeName(this.file.t, link) : null;
+  }
+
+  /** Insert > Bookmark: name the paragraph the caret is in, or go to or delete a bookmark. */
+  private async bookmarkDialog(): Promise<void> {
+    const f = this.file;
+    if (!f || this.reading) return;
+    if (f.box) { this.host.flash('Bookmarks go in the body of the document: click outside the text box or table first.'); return; }
+    const marks = bookmarksOf(f.t).filter((b) => !b.name.startsWith('_'));
+    const para = paraAt(f.ed.text, f.ed.start);
+    const here = marks.find((b) => b.para === para);
+    const got = await ask('Bookmark', [
+      { name: 'name', label: 'Bookmark name', value: here?.name ?? '', placeholder: 'Results', suggestions: marks.map((b) => b.name),
+        help: 'Names the paragraph the caret is in, so a link (Insert > Link > Place in this document) can go to it. Type a name already used to go to it or delete it.' },
+      { name: 'what', label: 'Then', value: 'add', options: [{ value: 'add', label: 'Add the bookmark here' }, { value: 'go', label: 'Go to the bookmark' }, { value: 'delete', label: 'Delete the bookmark' }] },
+    ], { ok: 'OK' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const name = bookmarkName(got.name);
+    if (!got.name.trim()) return;
+    if (got.what === 'go') { if (!this.goToPlace(`#${name}`)) this.host.flash(`There is no bookmark called ${name}.`); return; }
+    if (got.what === 'delete') {
+      if (bookmarkPara(f.t, name) < 0) { this.host.flash(`There is no bookmark called ${name}.`); return; }
+      f.ed.update(removeBookmark(f.t, name), 'Delete Bookmark');
+      this.host.flash(`Bookmark ${name} deleted (links to it no longer go anywhere).`);
+      return;
+    }
+    f.ed.update(addBookmark(f.t, para, name), 'Bookmark');
+    this.host.flash(name === got.name.trim() ? `Bookmark ${name} added.` : `Bookmark ${name} added (a bookmark's name is letters, digits and underscores).`);
+  }
+
   // ---------------------------------------------------------------- the mouse
 
   private wirePointer(v: DocView): void {
@@ -1759,6 +1858,11 @@ export class DocumentMode {
     this.closeMenu();
     this.focus();
     const p = this.view.toDoc(e.clientX, e.clientY);
+    // a link: Ctrl+click follows it, as in Word (a plain click in Read Mode)
+    if (((isMac ? e.metaKey : e.ctrlKey) || this.reading) && !e.shiftKey && !e.altKey) {
+      const link = this.linkAtPoint(p);
+      if (link) { void followLink(link); return; }
+    }
     const now0 = performance.now();
     const c0 = this.clicks;
     const n = now0 - c0.time < 450 && Math.hypot(e.clientX - c0.at.x, e.clientY - c0.at.y) < 4 ? c0.n + 1 : 1;
@@ -1870,6 +1974,10 @@ export class DocumentMode {
       const hs = 8 / this.view.zoom;
       const corner = !!box && Math.abs(p.x - (box.x + box.w)) <= hs && Math.abs(p.y - (box.y + box.h)) <= hs;
       // a structure: a hand, since a double-click opens it for drawing (and a click picks it)
+      const link = id === null || o?.kind === 'table' || o?.kind === 'textbox' ? this.linkAtPoint(p) : null;
+      const tip = link ? linkTip(link, !this.reading) : '';
+      if (this.view.scroller.title !== tip) this.view.scroller.title = tip;
+      if (link && (this.reading || (isMac ? e.metaKey : e.ctrlKey))) { this.view.scroller.style.cursor = 'pointer'; return; }
       this.view.scroller.style.cursor = corner ? 'nwse-resize' : id === null || o?.kind === 'table' ? 'text'
         : o?.kind === 'textbox' ? (this.nearEdge(id, p) ? 'move' : 'text') : o?.kind === 'note' ? 'text'
         : floatOf(o) ? 'move' : o?.kind === 'drawing' ? 'pointer' : 'default';
@@ -2294,6 +2402,10 @@ export class DocumentMode {
       case 'insert-endnote': this.insertNote(true); break;
       case 'note-options': void this.noteOptions(); break;
       case 'insert-equation': void this.insertEquation(); break;
+      case 'insert-link': void this.editLink(); break;
+      case 'remove-link': if (!ed.linkHere()) { this.host.flash('Put the caret in a link first.'); break; } ed.removeLink(); break;
+      case 'open-link': { const l = ed.linkHere(); if (!l) { this.host.flash('Put the caret in a link first.'); break; } void followLink(l.link); break; }
+      case 'insert-bookmark': void this.bookmarkDialog(); break;
       case 'edit-equation': { const m = this.pickedMath(); if (m === null) { this.host.flash('Click an equation first (or double-click it).'); break; } void this.editEquation(m); break; }
       case 'track-changes': void this.toggleTracking(); break;
       case 'review-name': void this.askReviewName(); break;
