@@ -59,6 +59,7 @@ import { cellMargins, paintEdge, type CellBlock } from '../document/table-styles
 import { blockOf, canMergeBlock, mergeBlock } from '../document/table-convert';
 import { BORDER_STYLES, BORDER_WIDTHS, DocTablesUI, LOOK_OPTIONS, penSwatch } from './doc-tables-ui';
 import { DocNav } from './doc-nav';
+import { DocIndexUI } from './doc-index-ui';
 import { lookOfTable } from '../document/table-styles';
 import type { BorderLine, BorderSide, TableLook } from '../model';
 import { BREAK_NAMES, changeSection, newBreak, pageNumText, sectionAt, sectionsOf, type Section, type SectionPatch } from '../document/sections';
@@ -215,6 +216,8 @@ export class DocumentMode {
   private cellAnchor: { id: number; r: number; c: number } | null = null;
   /** Table Design: styles, borders, margins, and text to table. */
   readonly tables: DocTablesUI;
+  /** Restrict Editing, form fields, the index and the table of authorities. */
+  private indexes: DocIndexUI;
   /** View > Navigation Pane. */
   readonly nav: DocNav;
   private speller: Speller | null = null;
@@ -294,6 +297,12 @@ export class DocumentMode {
       modify: (kind, id) => void this.modifyStyle(kind, id),
       remove: (kind, id) => this.removeStyle(kind, id),
       focus: () => this.focus(),
+    });
+    this.indexes = new DocIndexUI({
+      file: () => this.file,
+      flash: (msg, ms) => this.host.flash(msg, ms),
+      focus: () => this.focus(),
+      insertObject: (o, kind) => this.insertObject(o, kind),
     });
     this.tables = new DocTablesUI({
       file: () => this.file,
@@ -781,6 +790,7 @@ export class DocumentMode {
       return;
     }
     f.listener = (kind) => this.changed(kind);
+    f.onRefused = () => this.indexes.refused(f);
     // chemistry as it's typed: CH2Cl2 becomes a formula, -> an arrow… (Edit > Typing and Spelling)
     f.ed.onTyped = (typed) => afterTyping(f.ed, typed);
     const st = tab!.sheetState as DocPlace | null;
@@ -935,7 +945,7 @@ export class DocumentMode {
     }
     const ed = f.ed;
     const picked = this.pickedObject();
-    const framed = this.pickedField('bib')?.id ?? this.pickedField('toc')?.id ?? this.pickedField('tof')?.id ?? this.pickedTable();
+    const framed = this.pickedField('bib')?.id ?? this.pickedField('toc')?.id ?? this.pickedField('tof')?.id ?? this.pickedField('index')?.id ?? this.pickedField('toa')?.id ?? this.pickedTable();
     const showCaret = this.caretOn && (ed.collapsed || ed.composing !== null) && document.activeElement === this.ta;
     const c = showCaret ? ed.caret() : null;
     const squiggles: Overlay['squiggles'] = [];
@@ -956,7 +966,7 @@ export class DocumentMode {
   }
 
   /** A citation or bibliography picked on its own (a selection of just its character). */
-  private pickedField<K extends 'cite' | 'bib' | 'toc' | 'tof' | 'note'>(kind: K): { id: number; o: Extract<DocObject, { kind: K }> } | null {
+  private pickedField<K extends 'cite' | 'bib' | 'toc' | 'tof' | 'index' | 'toa' | 'note'>(kind: K): { id: number; o: Extract<DocObject, { kind: K }> } | null {
     const f = this.file;
     if (!f || f.ed.end - f.ed.start !== 1) return null;
     const id = rt.sliceRuns(f.ed.t.runs, f.ed.start, f.ed.end)[0]?.obj;
@@ -1305,6 +1315,12 @@ export class DocumentMode {
       });
     }
     if (e.key === 'PageDown' || e.key === 'PageUp') return run(() => this.pageMove(e.key === 'PageDown' ? 1 : -1, shift));
+    // a document protected for filling in forms: Tab goes from field to field, Space or Enter fills one in
+    if (this.file?.t.protect?.edit === 'forms' && !ctrl && !e.altKey) {
+      if (e.key === 'Tab' && this.indexes.nextField(shift)) return run(() => {});
+      const form = this.indexes.pickedForm();
+      if (form !== null && (e.key === ' ' || e.key === 'Enter' || e.key === 'F2')) return run(() => void this.indexes.fill(form));
+    }
     if (!ctrl && !e.altKey) {
       switch (e.key) {
         case 'Enter': return run(() => this.enter(shift));
@@ -1511,7 +1527,7 @@ export class DocumentMode {
     }
     const b = f.box?.cell ? f.box : null;
     // into a table cell: no text boxes, bibliographies or notes inside it (a table goes in as a table in the cell)
-    const runs = remap(own.runs).filter((r) => !b || r.obj === undefined || !['textbox', 'bib', 'toc', 'tof', 'note'].includes(objects[r.obj]?.kind));
+    const runs = remap(own.runs).filter((r) => !b || r.obj === undefined || !['textbox', 'bib', 'toc', 'tof', 'index', 'toa', 'note'].includes(objects[r.obj]?.kind));
     // references cited by pasted citations join the list (unless it has them)
     const have = new Set((f.t.references ?? []).map((r) => r.id));
     const adding = (own.references ?? []).filter((r) => !have.has(r.id));
@@ -2028,6 +2044,8 @@ export class DocumentMode {
       if (id !== null && f.t.objects[id]?.kind === 'bib') { e.preventDefault(); void this.manageReferences(); return; }
       if (id !== null && f.t.objects[id]?.kind === 'toc') { e.preventDefault(); void this.tocOptions(id); return; }
       if (id !== null && f.t.objects[id]?.kind === 'tof') { e.preventDefault(); void this.tofOptions(id); return; }
+      if (id !== null && f.t.objects[id]?.kind === 'index') { e.preventDefault(); void this.indexes.indexOptions(id); return; }
+      if (id !== null && f.t.objects[id]?.kind === 'toa') { e.preventDefault(); void this.indexes.toaOptions(id); return; }
       if (id !== null && f.t.objects[id]?.kind === 'math') { e.preventDefault(); void this.editEquation(id); return; }
       if (f.box?.cell && id !== null && id !== f.box.id && f.t.objects[id]?.kind === 'drawing') { e.preventDefault(); this.editFigure(id); return; }
       if (f.box) { e.preventDefault(); return; }
@@ -2038,6 +2056,12 @@ export class DocumentMode {
       const o = offsetAt(f.layout().text, p.x, p.y);
       for (const at of [o, o - 1]) {
         const obj = at >= 0 ? rt.sliceRuns(f.t.runs, at, at + 1)[0]?.obj : undefined;
+        if (obj !== undefined && f.t.objects[obj]?.kind === 'form') {
+          e.preventDefault();
+          f.ed.select(at, at + 1);
+          void this.indexes.formOptions(obj);
+          return;
+        }
         if (obj !== undefined && f.t.objects[obj]?.kind === 'cite') {
           e.preventDefault();
           f.ed.select(at, at + 1);
@@ -2129,6 +2153,17 @@ export class DocumentMode {
       this.dragging = { kind: 'text' };
       s.setPointerCapture(e.pointerId);
       return;
+    }
+    // a document protected for filling in forms: a click on a form field fills it in
+    if (f.t.protect?.edit === 'forms' && !f.box && !e.shiftKey) {
+      const o = offsetAt(f.layout().text, p.x, p.y);
+      for (const at of [o, o - 1]) {
+        const obj = at >= 0 ? rt.sliceRuns(f.t.runs, at, at + 1)[0]?.obj : undefined;
+        if (obj === undefined || f.t.objects[obj]?.kind !== 'form') continue;
+        f.ed.select(at, at + 1);
+        void this.indexes.fill(obj);
+        return;
+      }
     }
     // the picked figure's corner handle resizes it (one in a table cell too)
     const picked = this.pickedObject();
@@ -2333,7 +2368,7 @@ export class DocumentMode {
   insertObject(o: DocObject, kind = 'Insert', look: Partial<rt.RunStyle> = {}): number {
     const f = this.file!;
     const b = f.box?.cell ? f.box : null;
-    if (b && (o.kind === 'table' || o.kind === 'textbox' || o.kind === 'bib' || o.kind === 'toc' || o.kind === 'tof')) this.stopBox();
+    if (b && (o.kind === 'table' || o.kind === 'textbox' || o.kind === 'bib' || o.kind === 'toc' || o.kind === 'tof' || o.kind === 'index' || o.kind === 'toa')) this.stopBox();
     else if (b) {
       // into the table cell typed into: the object joins the document, its character the cell's text
       const id = nextObjectId(f.t);
@@ -2751,6 +2786,14 @@ export class DocumentMode {
       case 'insert-bibliography': this.insertBibliography(); break;
       case 'insert-toc': void this.insertToc(); break;
       case 'insert-tof': void this.insertTof(); break;
+      case 'mark-entry': void this.indexes.markEntry(); break;
+      case 'insert-index': void this.indexes.insertIndex(); break;
+      case 'mark-citation': void this.indexes.markCitation(); break;
+      case 'insert-toa': void this.indexes.insertToa(); break;
+      case 'restrict-editing': void this.indexes.restrictEditing(); break;
+      case 'insert-form-text': void this.indexes.insertFormField('text'); break;
+      case 'insert-form-check': void this.indexes.insertFormField('check'); break;
+      case 'insert-form-drop': void this.indexes.insertFormField('drop'); break;
       case 'insert-footnote': this.insertNote(false); break;
       case 'insert-endnote': this.insertNote(true); break;
       case 'note-options': void this.noteOptions(); break;
@@ -4101,6 +4144,7 @@ export class DocumentMode {
     if (pageCol && pageCol !== active) pageCol.value = f.t.pageColor ?? '#ffffff';
     pick('#doc-linenums', sec.lines?.restart ?? 'none');
     press('track-changes', !!f.t.track);
+    press('restrict-editing', !!f.t.protect);
     press('show-comments', this.comments.shown);
     const fig = this.pickedObject() ?? f.box?.id ?? null;
     const wrapSel = this.ribbon.querySelector<HTMLSelectElement>('#doc-wrap');

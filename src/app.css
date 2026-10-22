@@ -2178,3 +2178,19 @@ button.sym:hover, button.sym:focus-visible { border-color: var(--accent); backgr
 .sym-big { font-size: 28px; min-width: 32px; text-align: center; color: var(--text); }
 .sym-warn { color: var(--warn); flex-basis: 100%; font-size: 12px; }
 .fp-icon { vertical-align: -2px; }
+
+/* Sheet mode: theme colours, cell styles and themes galleries, sparkline styles */
+.colour-menu .colour-grid { grid-template-columns: repeat(12, 18px); gap: 3px; }
+.colour-menu .colour-grid.theme-grid { grid-template-columns: repeat(10, 18px); gap: 2px 3px; margin-bottom: 4px; }
+.popup-menu .gallery-head { font-size: 11px; font-weight: 600; color: var(--muted, #666); padding: 4px 4px 2px; }
+.cell-styles-menu { max-width: 560px; max-height: 70vh; overflow-y: auto; }
+.cell-style-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 2px 4px 6px; }
+.popup-menu button.cell-style-swatch { font: 12px Calibri, Carlito, Arial, sans-serif; color: #000; background: #fff; border: 1px solid #d0d0d0; border-radius: 2px; padding: 4px 6px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 26px; }
+.popup-menu button.cell-style-swatch:hover { outline: 2px solid var(--accent); outline-offset: 0; }
+.popup-menu button.cell-style-swatch[aria-pressed='true'] { outline: 2px solid var(--text); }
+.popup-menu button.theme-item { display: flex; align-items: center; gap: 8px; width: 100%; }
+.popup-menu button.theme-item[aria-pressed='true'] { background: var(--hover, rgba(0, 0, 0, 0.06)); font-weight: 600; }
+.theme-swatches { display: inline-flex; gap: 1px; flex: none; }
+.theme-swatches span { width: 12px; height: 16px; display: inline-block; }
+.ribbon input.rb-font { width: 130px; }
+.custom-views .cv-list { width: 100%; min-width: 260px; font: inherit; }

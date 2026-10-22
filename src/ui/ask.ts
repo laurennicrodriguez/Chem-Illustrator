@@ -9,7 +9,7 @@ export interface Field {
   /** Text after the box, such as a unit. */
   unit?: string;
   /** A checkbox gives 'true' or 'false'. */
-  type?: 'number' | 'text' | 'textarea' | 'checkbox' | 'color';
+  type?: 'number' | 'text' | 'textarea' | 'checkbox' | 'color' | 'password';
   /** Grey example text shown in an empty box. */
   placeholder?: string;
   /** Pick one of these instead of typing. */

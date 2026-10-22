@@ -122,6 +122,8 @@ export interface Settings {
   docPins: string[];
   /** Document mode's ruler shown (View > Ruler). */
   docRuler: boolean;
+  /** Sheet mode's formula bar shown (View > Formula Bar). */
+  sheetFormulaBar: boolean;
   /** Look for a newer version when the desktop app starts (Edit > Settings). */
   updateCheck: boolean;
   /** Stable (versions tried on a real computer first) or Latest (every build) (Edit > Settings > Online). */
@@ -157,6 +159,7 @@ export const DEFAULT_SETTINGS: Settings = {
   guides: { drawing: false, slides: true, design: true },
   docPins: [],
   docRuler: false,
+  sheetFormulaBar: true,
   updateCheck: true, updateChannel: 'latest', pubchemNames: true, fileTypesOffered: false, wordObjectsOffered: false, reviewName: '', skipVersion: null, recentFiles: [], recentSymbols: [], highlightLooks: [],
   scheme: DEFAULT_SCHEME_PREFS,
   keep: DEFAULT_KEEP,
@@ -205,6 +208,7 @@ export function parseSettings(text: string | null | undefined): Settings {
     for (const k of ['drawing', 'slides', 'design'] as const) if (typeof g[k] === 'boolean') s.guides[k] = g[k] as boolean;
   }
   if (typeof r.docRuler === 'boolean') s.docRuler = r.docRuler;
+  if (typeof r.sheetFormulaBar === 'boolean') s.sheetFormulaBar = r.sheetFormulaBar;
   if (Array.isArray(r.docPins)) s.docPins = ['para', 'style', 'page', 'hf'].filter((k) => (r.docPins as unknown[]).includes(k));
   if (r.methylStyle === 'Me' || r.methylStyle === 'CH3') s.methylStyle = r.methylStyle;
   if (r.groupClick === 'group' || r.groupClick === 'item') s.groupClick = r.groupClick;
