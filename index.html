@@ -183,6 +183,20 @@
     <button data-modes="slides" role="menuitemcheckbox" aria-checked="false" data-cmd="animation-pane"><span>Animation Pane</span></button>
     <button data-modes="slides" role="menuitemcheckbox" aria-checked="false" data-cmd="show-comments"><span>Show Comments</span></button>
     <div class="submenu" data-modes="slides">
+    <button role="menuitem" class="has-sub" aria-haspopup="menu" aria-expanded="false">Slide Views</button>
+    <div class="menu sub" role="menu" hidden>
+    <button role="menuitem" data-cmd="view-outline" title="Every slide's title and bullet points as one outline to type in">Outline View</button>
+    <button role="menuitem" data-cmd="view-notes-page" title="Each slide on a page with its notes under it">Notes Page</button>
+    <button role="menuitem" data-cmd="notes-master" title="How notes pages look and print">Notes Master…</button>
+    <button role="menuitem" data-cmd="handout-master" title="How handouts print">Handout Master…</button>
+    <hr />
+    <button role="menuitem" data-cmd="view-slide-ruler" title="Rulers along the top and left of the slide">Ruler</button>
+    <button role="menuitem" data-cmd="view-gridlines" title="Gridlines over the slide, on screen only">Gridlines</button>
+    <button role="menuitem" data-cmd="view-guides" title="Drawing guides to line things up by">Guides</button>
+    <button role="menuitem" data-cmd="grid-settings" title="Snap to grid, spacing, guides and the rulers' units">Grid and Guides…</button>
+    </div>
+    </div>
+    <div class="submenu" data-modes="slides">
     <button role="menuitem" class="has-sub" aria-haspopup="menu" aria-expanded="false">Slide Show</button>
     <div class="menu sub" role="menu" hidden>
     <button role="menuitem" data-cmd="present">Present from Beginning</button>
@@ -1915,6 +1929,17 @@
       </div>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-cmd="shape-styles" aria-haspopup="dialog" title="Shape Styles: a ready-made fill, outline and effects for the selected shapes, in the deck's colours, from an outline to a raised, shadowed fill"><span class="rb-icon">◩</span>Shape Styles ▾</button>
+          <div class="rb-col">
+            <button data-cmd="shape-effects" aria-haspopup="menu" title="Shape Effects: a shadow, reflection, glow, soft edges or a bevel for the selected shapes. Saved as PowerPoint's own">Shape Effects ▾</button>
+            <button data-cmd="shape-picture-fill" title="Shape Fill > Picture: fill the selected shapes with a picture from a file, stretched to each">Picture Fill…</button>
+            <button data-cmd="slide-shapes" title="Basic shapes, block arrows, flowchart shapes, callouts and lab glassware">Shapes ▾</button>
+          </div>
+        </div>
+        <div class="rb-label">Drawing</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-cmd="selection-pane" aria-pressed="false" title="Selection Pane (Alt+F10): every text box, structure, picture and shape on the slide, front to back. Pick, hide, rename or reorder them there"><span class="rb-icon">☰</span>Selection Pane</button>
           <div class="rb-col">
             <button data-cmd="rotate-cw" title="Turn the selection 90° clockwise">Rotate Right 90°</button>
@@ -2046,15 +2071,36 @@
         <div class="rb-row">
           <button class="rb-big" data-cmd="view-normal" aria-pressed="true" title="The slide list beside the slide you are working on"><span class="rb-icon">▭</span>Normal</button>
           <button class="rb-big" data-cmd="view-sorter" aria-pressed="false" title="Every slide in rows of larger pictures, by section: drag to reorder, double-click one to open it"><span class="rb-icon">▦</span>Slide Sorter</button>
+          <button class="rb-big" data-cmd="view-outline" aria-pressed="false" title="Outline View: every slide's title and bullet points as one outline beside the slide, to type in. Tab and Shift+Tab move a line in and out; a line moved all the way out becomes a new slide"><span class="rb-icon">☰</span>Outline View</button>
+          <button class="rb-big" data-cmd="view-notes-page" aria-pressed="false" title="Notes Page: each slide on a page with its speaker notes under it, as they print, to read and type in"><span class="rb-icon">▤</span>Notes Page</button>
           <button class="rb-big" data-cmd="reading-view" title="Reading View: the slide show in this window, from this slide, with Back and Next below (Esc to come back)"><span class="rb-icon">▢</span>Reading View</button>
         </div>
         <div class="rb-label">Presentation Views</div>
       </div>
       <div class="rb-group">
         <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-field check" title="Rulers along the top and left of the slide, from its middle (Grid Settings changes the units). Drag out of a ruler for a guide"><input type="checkbox" data-cmd="view-slide-ruler" /> Ruler</label>
+            <label class="rb-field check" title="Gridlines over the slide, on screen only (Grid Settings sets the spacing and snapping)"><input type="checkbox" data-cmd="view-gridlines" /> Gridlines</label>
+            <label class="rb-field check" title="Drawing guides: lines to line things up by. Drag one to move it, Ctrl+drag to copy, off the slide to take it away. Saved with the file"><input type="checkbox" data-cmd="view-guides" /> Guides</label>
+          </div>
+          <div class="rb-col">
+            <button data-cmd="grid-settings" title="Grid and Guides: snap to the grid and its spacing, show the gridlines, guides and smart guides, add guides, the rulers' units">Grid Settings…</button>
+            <button data-cmd="add-vertical-guide" title="A guide down the middle of the slide, to drag where you want it">Add Vertical Guide</button>
+            <button data-cmd="add-horizontal-guide" title="A guide across the middle of the slide, to drag where you want it">Add Horizontal Guide</button>
+          </div>
+        </div>
+        <div class="rb-label">Show</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-cmd="slide-master" title="Fonts, colours, background, logo, slide numbers, footer and structure size for every slide"><span class="rb-icon">▤</span>Slide Master</button>
           <button class="rb-big" data-cmd="edit-layouts" title="The deck's layouts: move and size their placeholders, add layouts of your own, rename them"><span class="rb-icon">▥</span>Edit Layouts</button>
           <button class="rb-big" data-cmd="slide-templates" title="Ready-made looks and your own themes: make, change or delete themes"><span class="rb-icon">◧</span>Themes</button>
+          <div class="rb-col">
+            <button data-cmd="notes-master" title="Notes Master: how notes pages look and print: the page's way up, the slide picture's size, the notes' font and size, the header, footer, date and page number">Notes Master…</button>
+            <button data-cmd="handout-master" title="Handout Master: how handouts print: slides to a page, the page's way up, frames round the slides, the header, footer, date and page number">Handout Master…</button>
+          </div>
         </div>
         <div class="rb-label">Master Views</div>
       </div>
@@ -2251,6 +2297,16 @@
         <button class="rb-big" data-cmd="picture-format" title="Picture Format for the selected picture: brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions. Saved as PowerPoint's own picture settings"><span class="rb-icon">◐</span>Picture Format</button>
       </div>
       <div class="rb-label">Insert</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-row">
+        <button class="rb-big" data-cmd="shape-styles" aria-haspopup="dialog" title="Shape Styles: a ready-made fill, outline and effects for the selected shapes"><span class="rb-icon">◩</span>Shape Styles ▾</button>
+        <div class="rb-col">
+          <button data-cmd="shape-effects" aria-haspopup="menu" title="Shape Effects: a shadow, reflection, glow, soft edges or a bevel for the selected shapes">Shape Effects ▾</button>
+          <button data-cmd="shape-picture-fill" title="Fill the selected shapes with a picture from a file, stretched to each">Picture Fill…</button>
+        </div>
+      </div>
+      <div class="rb-label">Shape Styles</div>
     </div>
     <div class="rb-group">
       <div class="rb-row">

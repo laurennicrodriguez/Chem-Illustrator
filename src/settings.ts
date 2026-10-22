@@ -124,6 +124,11 @@ export interface Settings {
   docRuler: boolean;
   /** Sheet mode's formula bar shown (View > Formula Bar). */
   sheetFormulaBar: boolean;
+  /** Slides' View > Ruler and Gridlines, and how the rulers measure. */
+  slideRuler: boolean;
+  slideGrid: boolean;
+  rulerUnits: 'in' | 'cm';
+  rulerFrom: 'centre' | 'corner';
   /** Look for a newer version when the desktop app starts (Edit > Settings). */
   updateCheck: boolean;
   /** Stable (versions tried on a real computer first) or Latest (every build) (Edit > Settings > Online). */
@@ -161,6 +166,10 @@ export const DEFAULT_SETTINGS: Settings = {
   docRuler: false,
   sheetFormulaBar: true,
   updateCheck: true, updateChannel: 'latest', pubchemNames: true, fileTypesOffered: false, wordObjectsOffered: false, reviewName: '', skipVersion: null, recentFiles: [], recentSymbols: [], highlightLooks: [],
+  slideRuler: false,
+  slideGrid: false,
+  rulerUnits: typeof navigator !== 'undefined' && /^[a-z]{2,3}-(US|LR|MM)\b/i.test(navigator.language) ? 'in' : 'cm',
+  rulerFrom: 'centre',
   scheme: DEFAULT_SCHEME_PREFS,
   keep: DEFAULT_KEEP,
 };
@@ -209,6 +218,10 @@ export function parseSettings(text: string | null | undefined): Settings {
   }
   if (typeof r.docRuler === 'boolean') s.docRuler = r.docRuler;
   if (typeof r.sheetFormulaBar === 'boolean') s.sheetFormulaBar = r.sheetFormulaBar;
+  if (typeof r.slideRuler === 'boolean') s.slideRuler = r.slideRuler;
+  if (typeof r.slideGrid === 'boolean') s.slideGrid = r.slideGrid;
+  if (r.rulerUnits === 'in' || r.rulerUnits === 'cm') s.rulerUnits = r.rulerUnits;
+  if (r.rulerFrom === 'centre' || r.rulerFrom === 'corner') s.rulerFrom = r.rulerFrom;
   if (Array.isArray(r.docPins)) s.docPins = ['para', 'style', 'page', 'hf'].filter((k) => (r.docPins as unknown[]).includes(k));
   if (r.methylStyle === 'Me' || r.methylStyle === 'CH3') s.methylStyle = r.methylStyle;
   if (r.groupClick === 'group' || r.groupClick === 'item') s.groupClick = r.groupClick;

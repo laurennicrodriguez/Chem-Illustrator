@@ -22,10 +22,11 @@ import { arialWidth } from '../text-metrics';
 import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
 import { layoutText, FONT_STACK, withStack, type TextLayout } from '../text/layout';
 import { drawLayout } from '../text/draw';
-import { geoDef, moveSteps, textArea, traceSteps } from '../design/geo';
+import { geoDef, moveSteps, textArea, traceSteps, type GeoStep } from '../design/geo';
 import { cutCorners, fillInk, patternClear, patternInk, ringShadowSize, shadowLook, insetPolygon, dotCentres, gradientBands, hatchLines, isDotPattern, patternAngles, patternSpacing, radialBands, shapePolygons } from './fills';
 import { placeholderRect, isEmptyText } from '../deck/deck';
 import { imageFor } from './images';
+import { hasShapeFx, shapeFx, type ShapeFxPaints } from './shape-fx';
 import { fxCanvas, fxSrc, shapeDef, traceShape } from './picture-fx';
 import { layoutTable, drawTable, type TableLayout, type TablePart } from '../table';
 import type { TableData } from '../model';
@@ -125,6 +126,8 @@ export function withMeasure<T>(m: TextMeasure, fn: () => T): T {
 
 /** A patterned shape's dots or hatching, kept with the shape (a changed shape is a new object). */
 const patternPaths = new WeakMap<Shape, { make: () => Path2D; path: Path2D }>();
+/** Design shapes' effects, worked out once for each shape as it is. */
+const geoFx = new WeakMap<Shape, ShapeFxPaints>();
 
 export class Renderer {
   view: View = { scale: 2, ox: 40, oy: 40 };
@@ -1766,6 +1769,40 @@ export class Renderer {
     }
   }
 
+  /** Filled areas, each in its own colour. */
+  private paintRegions(ctx: CanvasRenderingContext2D, paints: FxPaint[]): void {
+    ctx.save();
+    for (const p of paints) {
+      ctx.fillStyle = p.colour;
+      ctx.beginPath();
+      traceRegion(ctx, p.region);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  /**
+   * A design shape filled with a picture, stretched to its box. On screen the picture is cut to
+   * the outline; in pictures and copies it is cut to PowerPoint's shape of that name (a box for
+   * a shape PowerPoint has no name for).
+   */
+  private paintPicFill(ctx: CanvasRenderingContext2D, s: Shape, prst: string | undefined, body: GeoStep[], x: number, y: number, w: number, h: number): void {
+    const f = s.picFill!;
+    const clear = Math.max(0, Math.min(1, f.transparency ?? 0));
+    const vector = 'picture' in ctx;
+    const cut = vector && prst && prst !== 'rect' ? prst : undefined;
+    const pic: Shape = { id: s.id, kind: 'picture', src: f.src, px: f.px, x1: x, y1: y, x2: x + w, y2: y + h, ...(cut || clear ? { fx: { ...(cut ? { shape: cut } : {}), ...(clear ? { alpha: clear } : {}) } } : {}) };
+    ctx.save();
+    if (!vector) {
+      ctx.beginPath();
+      traceSteps(ctx, body);
+      ctx.clip();
+    }
+    ctx.beginPath();
+    this.drawPicture(ctx, pic, x, y, w, h);
+    ctx.restore();
+  }
+
   /** A ring fill's or design shape's shadow, worked out as areas (see shapeShadow). */
   private paintShadow(ctx: CanvasRenderingContext2D, polys: Vec[][], look: ReturnType<typeof shadowLook>, cut: boolean): void {
     ctx.save();
@@ -1799,16 +1836,38 @@ export class Renderer {
       } else this.paintShadow(ctx, shapePolygons(s), look, !s.filled || (s.transparency ?? 0) > 0);
       ctx.beginPath();
     }
+    // Shape Effects: the reflection and glow under the shape, a soft-edged fill, a bevel over it
+    let fx: ShapeFxPaints | null = null;
+    if (hasShapeFx(s)) {
+      fx = geoFx.get(s) ?? null;
+      if (!fx) geoFx.set(s, (fx = shapeFx(s, shapePolygons(s), fillInk(s))));
+      this.paintRegions(ctx, fx.under);
+      ctx.beginPath();
+    }
     traceSteps(ctx, body);
-    if (s.filled) {
+    if (s.picFill) {
+      this.paintPicFill(ctx, s, def.prst, body, x, y, w, h);
+      ctx.beginPath();
+      traceSteps(ctx, body);
+    } else if (fx?.fill) {
+      this.paintRegions(ctx, fx.fill);
+      ctx.beginPath();
+      traceSteps(ctx, body);
+    } else if (s.filled) {
       const c = fillInk(s);
       const clear = Math.max(0, Math.min(1, s.transparency ?? 0));
       if (s.fill) this.paintFill(ctx, { ...s, pattern: undefined }, x, y, w, h);
       else { ctx.fillStyle = clear ? withAlpha(c, 1 - clear) : c; ctx.fill(); }
     }
     if (s.pattern) this.paintFill(ctx, { ...s, filled: false }, x, y, w, h);
+    if (fx?.over.length) {
+      this.paintRegions(ctx, fx.over);
+      ctx.beginPath();
+      traceSteps(ctx, body);
+    }
     ctx.lineWidth = width;
-    if (width > 0) ctx.stroke();
+    // soft edges soften the outline away too
+    if (width > 0 && !s.softEdge) ctx.stroke();
     if (out.lines && width > 0) {
       ctx.beginPath();
       traceSteps(ctx, moveSteps(out.lines, x, y));

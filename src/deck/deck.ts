@@ -8,6 +8,8 @@
 // on a slide is undone on that slide (the deck goes back to it), and adding, deleting or
 // moving slides, or changing the master, are undone too.
 
+import type { SlideView } from './guides';
+import type { HandoutSetup, NotesPageSetup } from './notes-pages';
 import { copyPinned, type PinnedComment } from '../document/comments';
 import { Doc, Caption, Placeholder, TextBase, ParaStyle, Contents, applyBase } from '../model';
 import { DocStyle, ACS_1996 } from '../style';
@@ -26,6 +28,8 @@ import type { ShowSetup, CustomShow } from './show-setup';
 export interface DeckSettings {
   show?: ShowSetup;
   customShows?: CustomShow[];
+  /** The drawing guides and grid (View > Guides, Grid and Guides). */
+  view?: SlideView;
 }
 
 export const copySettings = (s: DeckSettings): DeckSettings => structuredClone(s);
@@ -125,6 +129,9 @@ export interface Master {
   footerOff?: boolean;
   /** Notes pages and handouts: their header, footer, date and page numbers (Header & Footer > Notes and Handouts). */
   notesHF?: NotesHF;
+  /** Notes Master: notes pages' way up, slide picture and type; Handout Master: slides to a page and more. */
+  notesPage?: NotesPageSetup;
+  handout?: HandoutSetup;
   /** Size and colour of the slide numbers and footer. */
   footerSize: number;
   footerColor: string;

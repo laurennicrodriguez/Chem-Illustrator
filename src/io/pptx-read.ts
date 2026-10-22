@@ -34,6 +34,9 @@ import { shapeMathPicture, shapeMathSize } from '../deck/equation';
 import { GEOS } from '../design/geo';
 import { cleanDiagram, textFromShapes } from '../design/diagrams';
 import { gluePoint, arrowPoints, boxOf as pointsBox } from '../objects';
+import { readEffects } from './pptx-effects';
+import { readViewProps } from '../deck/guides';
+import { readMasterHF } from '../deck/notes-pages';
 import { readShowPr, readCustShows } from '../deck/show-setup';
 import { NARRATION_NAME } from '../deck/narration';
 import { readTransition, readTiming, readMediaTiming, type Transition, type Anim, type AnimTarget } from '../deck/animation';
@@ -60,6 +63,11 @@ export interface PptxRead {
   sections?: SectionCount[];
   /** Set Up Show, and custom shows (naming their slides by their places in the deck). */
   settings?: DeckSettings;
+}
+
+/** A plain box or oval that needs a design shape to keep its look: a picture or gradient fill, or effects past a shadow. */
+function fancyFill(spPr: Element | null): boolean {
+  return !!(kid(spPr, 'blipFill') || kid(spPr, 'gradFill') || kid(spPr, 'sp3d', 'bevelT') || kids(kid(spPr, 'effectLst')).some((k) => k.localName !== 'outerShdw'));
 }
 
 const EXT_MIME: Record<string, string> = Object.fromEntries(Object.entries(MIME_EXT).map(([m, e]) => [e, m]));
@@ -300,6 +308,12 @@ class Reader {
     this.master = master;
     this.readTheme();
     this.masterOut = this.readMaster(slidePaths);
+    if (!this.ourMaster) {
+      // notes pages' and handouts' header and footer, as PowerPoint's masters have them
+      const nm = this.r.relOfType(main, REL.notesMaster) ?? this.r.relOfType(main, REL.handoutMaster);
+      const hf = readMasterHF(nm ? this.r.xml(nm)?.documentElement : null);
+      if (hf && (hf.header || hf.footer || hf.date || !hf.pageNumbers)) this.masterOut.notesHF = hf;
+    }
     this.slidePaths = slidePaths;
     const slides = slidePaths.map((p) => this.slide(p));
     placeSlideLinks(slides, this.slideIds);
@@ -310,7 +324,9 @@ class Reader {
     const props = this.r.relOfType(main, REL.presProps);
     const show = readShowPr(props ? this.r.xml(props)?.documentElement ?? null : null);
     const customShows = readCustShows(root, (rid) => { const t = rels.get(rid)?.target; return t ? slidePaths.indexOf(t) : -1; }, (el) => rAttr(el, 'id'));
-    const settings: DeckSettings = { ...(show ? { show } : {}), ...(customShows.length ? { customShows } : {}) };
+    const vp = this.r.relOfType(main, REL.viewProps);
+    const view = readViewProps(vp ? this.r.xml(vp)?.documentElement : null);
+    const settings: DeckSettings = { ...(show ? { show } : {}), ...(customShows.length ? { customShows } : {}), ...(view ? { view } : {}) };
     return { size: this.size, master: this.masterOut, slides, warnings: [...this.warnings], design: this.design, ...(sections ? { sections } : {}), ...(Object.keys(settings).length ? { settings } : {}) };
   }
 
@@ -1043,8 +1059,8 @@ class Reader {
     if (!ph) {
       // a design shape saved here, or a PowerPoint shape that is one (in designs, boxes and ovals too)
       const geoTag = this.tagsOf(s.path, kid(sp, 'nvSpPr', 'nvPr'))[TAG.geo];
-      if (geoTag || (GEO_BY_PRST.has(prst) && (this.design || !PLAIN_PRST.has(prst)))) {
-        if (this.geoShape(sp, spPr, prst, box, geoTag, doc)) return;
+      if (geoTag || (GEO_BY_PRST.has(prst) && (this.design || !PLAIN_PRST.has(prst) || fancyFill(spPr)))) {
+        if (this.geoShape(sp, spPr, prst, box, geoTag, doc, s.path)) return;
       }
     }
     const hasText = !!this.plain(sp).trim();
@@ -1142,7 +1158,7 @@ class Reader {
     return true;
   }
 
-  private geoShape(sp: Element, spPr: Element | null, prst: string, box: Rect & { rot: number }, tag: string | undefined, doc: Doc): boolean {
+  private geoShape(sp: Element, spPr: Element | null, prst: string, box: Rect & { rot: number }, tag: string | undefined, doc: Doc, from: string): boolean {
     let saved: { s: Partial<Shape>; plain: string } | null = null;
     try { saved = tag ? JSON.parse(tag) : null; } catch { saved = null; }
     const where = { x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, rot: turn(box).rot };
@@ -1152,8 +1168,19 @@ class Reader {
       const c = this.text(sp, box, null, []);
       return c ? { runs: c.runs, ...(c.paras ? { paras: c.paras } : {}) } : undefined;
     };
+    // a picture fill's picture is in the file, not the tag
+    const blip = kid(spPr, 'blipFill');
+    const pic = blip ? this.blipImage(from, blip) : null;
+    const picFill = (was?: Shape['picFill']): Shape['picFill'] | undefined => {
+      if (!pic) return undefined;
+      const amt = kid(blip, 'blip', 'alphaModFix')?.getAttribute('amt');
+      const transparency = was?.transparency ?? (amt ? +(1 - Number(amt) / 100000).toFixed(3) : 0);
+      return { src: pic.src, px: pic.px, ...(transparency ? { transparency } : {}) };
+    };
     if (saved?.s && saved.s.kind === 'geo') {
       const sh = { ...saved.s, ...where, kind: 'geo' } as Omit<Shape, 'id'>;
+      const pf = picFill(sh.picFill);
+      if (pf) sh.picFill = pf; else delete sh.picFill;
       if (now !== saved.plain) {
         const t = theirText();
         if (t) sh.text = t; else delete sh.text;
@@ -1171,7 +1198,20 @@ class Reader {
     const click = this.hlinkOf(kid(sp, 'nvSpPr', 'cNvPr', 'hlinkClick'));
     if (click) sh.link = click;
     if (look.fill) { sh.filled = true; sh.fillColor = look.fill; }
-    if (look.shaded) sh.fill = 'shaded';
+    const grad = kid(spPr, 'gradFill');
+    const stops = grad ? kids(kid(grad, 'gsLst'), 'gs').sort((a, b) => Number(a.getAttribute('pos') ?? 0) - Number(b.getAttribute('pos') ?? 0)) : [];
+    if (grad && stops.length >= 2) {
+      // a gradient: its first and last colours, across at its angle or out from the middle
+      sh.fill = 'gradient';
+      sh.fillColor = this.color(stops[0]) ?? sh.fillColor;
+      sh.fill2 = this.color(stops[stops.length - 1]) ?? '#ffffff';
+      const lin = kid(grad, 'lin');
+      if (kid(grad, 'path')) sh.gradRadial = true;
+      else sh.gradAngle = Math.round(Number(lin?.getAttribute('ang') ?? 5400000) / 60000) % 360;
+    } else if (look.shaded) sh.fill = 'shaded';
+    const pf = picFill();
+    if (pf) sh.picFill = pf;
+    Object.assign(sh, this.effects(spPr));
     sh.lineWidth = look.line ? +look.width.toFixed(2) : 0;
     if (look.dashed) sh.dashed = true;
     const t = theirText();
@@ -1185,6 +1225,28 @@ class Reader {
     }
     doc.addShape(sh);
     return true;
+  }
+
+  /** A shape's glow, soft edges, reflection, bevel and shadow, as PowerPoint has them. */
+  private effects(spPr: Element | null): Partial<Shape> {
+    const alphaOf = (el: Element | null) => {
+      const a = el ? Array.from(el.getElementsByTagNameNS(NS.a, 'alpha'))[0] : undefined;
+      return a ? Number(a.getAttribute('val') ?? 100000) / 100000 : 1;
+    };
+    const out: Partial<Shape> = readEffects(spPr, (el) => this.color(el), alphaOf);
+    const sh = kid(spPr, 'effectLst', 'outerShdw');
+    if (sh) {
+      out.shadow = true;
+      const n = (a: string) => Number(sh.getAttribute(a) ?? 0);
+      out.shadowSize = +(fromEmu(String(n('dist'))) || 3).toFixed(2);
+      const blur = fromEmu(String(n('blurRad')));
+      if (blur) out.shadowBlur = +blur.toFixed(2);
+      out.shadowAngle = Math.round(n('dir') / 60000) % 360;
+      const c = this.color(sh);
+      if (c && c.toLowerCase() !== '#000000') out.shadowColor = c;
+      out.shadowOpacity = +alphaOf(Array.from(sh.children)[0] ?? null).toFixed(3);
+    }
+    return out;
   }
 
   /**
