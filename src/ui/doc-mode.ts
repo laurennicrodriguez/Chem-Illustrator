@@ -63,6 +63,8 @@ import { DocNav } from './doc-nav';
 import { DocInsertUI } from './doc-insert-ui';
 import { DocParagraphUI } from './doc-paragraph-ui';
 import { DocArrangeUI } from './doc-arrange-ui';
+import type { DocDesign } from '../document/document';
+import { setParaSpacing, setStyleSet, setTheme, setThemeColors, setThemeFonts, PARA_SPACINGS, STYLE_SETS, THEMES, THEME_COLORS, THEME_FONTS } from '../document/themes';
 import { groupOf, withFloats } from '../document/arrange';
 import { DocProofingUI } from './doc-proofing-ui';
 import { DEFAULT_ZONE } from '../text/hyphenate';
@@ -131,6 +133,8 @@ export interface DocModeHost {
   /** The person's saved Quick Parts (Insert > Quick Parts), and saving them with the settings. */
   quickParts?(): QuickPart[];
   setQuickParts?(list: QuickPart[]): void;
+  /** Design > Set as Default: the look new documents start with (kept in the settings). */
+  setNewDesign?(d: DocDesign | null): void;
   measure: Measure;
 }
 
@@ -2951,6 +2955,8 @@ export class DocumentMode {
     if (bd) { this.paragraphs.border(bd[1] as BorderChoice); return true; }
     const cover = /^cover-(.+)$/.exec(cmd);
     if (cover) { void this.inserts.cover(cover[1]); return true; }
+    const design = /^design-(theme|fonts|colors|styleset|spacing)-(.+)$/.exec(cmd);
+    if (design) { this.design(design[1], design[2]); this.focus(); return true; }
     const pick = /^(case|multilevel|bulletlib|watermark)-(.*)$/.exec(cmd);
     if (pick) { this.pickCommand(pick[1], pick[2]); this.focus(); return true; }
     const align = (j: 'left' | 'center' | 'right' | 'justify') => ed.setSelectedParas({ align: j === 'left' ? undefined : j }, 'align');
@@ -3079,6 +3085,7 @@ export class DocumentMode {
       case 'edit-equation': { const m = this.pickedMath(); if (m === null) { this.host.flash('Click an equation first (or double-click it).'); break; } void this.editEquation(m); break; }
       case 'track-changes': void this.toggleTracking(); break;
       case 'review-name': void this.askReviewName(); break;
+      case 'design-default': void this.designDefault(); return true;
       case 'selection-pane': this.arranging.selectionPane(this.ribbon.querySelector<HTMLElement>('[data-doc="selection-pane"]')); return true;
       case 'markup-all': case 'markup-simple': case 'markup-none': case 'markup-original': {
         const f = this.file;
@@ -4114,6 +4121,28 @@ export class DocumentMode {
     }
   }
 
+  /** Design > Document Formatting: a theme, its fonts or colours, a style set, or paragraph spacing. */
+  private design(what: string, v: string): void {
+    const f = this.file;
+    if (!f) return;
+    if (f.box) this.stopBox();
+    const t = f.t;
+    const next = what === 'theme' ? setTheme(t, v) : what === 'fonts' ? setThemeFonts(t, v) : what === 'colors' ? setThemeColors(t, v)
+      : what === 'styleset' ? setStyleSet(t, v) : setParaSpacing(t, v === 'default' ? null : v);
+    if (next === t) return;
+    f.ed.update(next, what === 'styleset' ? 'Style Set' : what === 'spacing' ? 'Paragraph Spacing' : 'Theme');
+  }
+
+  /** Design > Set as Default: new documents start with this one's theme, style set and spacing. */
+  private async designDefault(): Promise<void> {
+    const d = this.file?.t.design;
+    const what = d ? [d.theme && `the ${d.theme} theme`, !d.theme && d.fonts && `${d.fonts} fonts`, !d.theme && d.colors && `${d.colors} colours`, d.styleSet && `the ${d.styleSet} style set`, d.spacing && `${d.spacing} spacing`].filter(Boolean).join(', ') : '';
+    const got = await ask('Set as Default', [], { ok: what ? 'Set as Default' : 'Use the Standard Look', note: what ? `New documents will start with ${what}. (Documents already made keep their own look.)` : 'This document uses the standard look, so new documents will too.' });
+    if (!got) return;
+    this.host.setNewDesign?.(d && Object.keys(d).length ? d : null);
+    this.host.flash(what ? 'New documents will start with this design.' : 'New documents will start with the standard look.');
+  }
+
   /** Change the whole document's look (watermark, page colour, page borders): one undo step. */
   private setPageLook(patch: Partial<Pick<DocText, 'watermark' | 'pageColor' | 'pageBorder'>>, label: string): void {
     const f = this.file;
@@ -4357,6 +4386,25 @@ export class DocumentMode {
       }
       if (!this.run(cmd)) this.host.command(cmd);
     });
+    // Design's galleries, from the themes and style sets
+    const fill = (id: string, names: string[], extra: [string, string][] = []) => {
+      const sel = r.querySelector<HTMLSelectElement>(id);
+      if (!sel) return;
+      for (const [v, label] of [...extra, ...names.map((n): [string, string] => [n, n])]) {
+        const o = document.createElement('option');
+        o.value = v;
+        o.textContent = label;
+        if (!v) o.hidden = true;
+        sel.append(o);
+      }
+    };
+    fill('#doc-theme', THEMES.map((x) => x.name), [['', 'Mixed']]);
+    fill('#doc-styleset', STYLE_SETS.map((x) => x.name));
+    fill('#doc-theme-colors', THEME_COLORS.map((x) => x.name), [['', 'Theme\'s']]);
+    fill('#doc-theme-fonts', THEME_FONTS.map((x) => x.name), [['', 'Theme\'s']]);
+    fill('#doc-para-spacing', PARA_SPACINGS.map((x) => x.name), [['default', 'Style Set\'s']]);
+    for (const o of r.querySelectorAll<HTMLOptionElement>('#doc-styleset option')) o.title = STYLE_SETS.find((x) => x.name === o.value)?.description ?? '';
+    for (const o of r.querySelectorAll<HTMLOptionElement>('#doc-theme-fonts option')) { const tf = THEME_FONTS.find((x) => x.name === o.value); if (tf) o.textContent = `${tf.name} (${tf.heading}${tf.body !== tf.heading ? ` / ${tf.body}` : ''})`; }
     // selects that run a command: margins, paper, orientation, page numbers
     for (const sel of r.querySelectorAll<HTMLSelectElement>('select[data-doc-prefix]')) {
       sel.addEventListener('change', () => { const v = sel.value; this.run(`${sel.dataset.docPrefix}-${v}`); if (v !== 'custom' && v !== 'more') this.focus(); });
@@ -4515,6 +4563,12 @@ export class DocumentMode {
     pick('#doc-hyphen', f.t.hyphen?.auto ? 'auto' : 'none');
     press('track-changes', !!f.t.track);
     pick('#doc-markup', f.review.mode);
+    const des = f.t.design ?? {};
+    pick('#doc-theme', des.theme ?? (des.fonts || des.colors ? '' : 'Journal'));
+    pick('#doc-styleset', des.styleSet ?? 'Journal');
+    pick('#doc-theme-fonts', des.fonts ?? '');
+    pick('#doc-theme-colors', des.colors ?? '');
+    pick('#doc-para-spacing', des.spacing ?? 'default');
     press('restrict-editing', !!f.t.protect);
     press('show-comments', this.comments.shown);
     const fig = this.pickedObject() ?? f.box?.id ?? null;

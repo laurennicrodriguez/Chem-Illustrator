@@ -4,6 +4,7 @@
 // tool works the same everywhere; the other tabs wait in documents of their own (Doc.swap).
 // New, Open, Save, Save As, Close and the unsaved-changes questions go through here.
 
+import { applyDesign, newDocDesign } from './document/themes';
 import { Doc, keepOnPage, type PageSetup } from './model';
 import { Deck, type SlideSize, type Master } from './deck/deck';
 import { Workbook } from './sheet/workbook';
@@ -409,7 +410,9 @@ export class Workspace {
     const spare = this.active.mode === 'drawing' ? this.spare() : null;
     const t = this.makeTab('document', this.untitled('document'));
     const st = this.hooks.newStyle?.('document');
-    const start = doc ?? (st ? newDocument() : undefined);
+    // (Design > Set as Default: the look new documents start with)
+    const design = doc ? null : newDocDesign();
+    const start = doc ?? (st || design ? applyDesign(newDocument(), design) : undefined);
     t.document = new DocFile(start && st ? { ...start, drawingStyle: { ...st } } : start);
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);

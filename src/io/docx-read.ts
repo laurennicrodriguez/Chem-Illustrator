@@ -46,6 +46,7 @@ import { cleanRef, type Reference } from '../document/references';
 import { bibFieldApp, placeRef, readCiteField, readMendeleyTag, styleFromCsl, zoteroStyleOf, MANAGERS, type CiteLive, type CiteManager, type ManagerCite } from '../document/live-cites';
 import { retypedDiagram } from '../design/diagrams';
 import { fmtText, revText } from '../document/revisions';
+import { parseDesign } from '../document/themes';
 import { linkFromTarget } from '../links';
 import { mathText, ommlToTex } from '../document/math';
 import { CITE_PRESETS, cleanOptions } from '../document/cite-styles';
@@ -2344,6 +2345,7 @@ class DocxReader {
       ...(Object.keys(this.noteFormats).length ? { notes: this.noteFormats } : {}),
       ...(Object.keys(this.tableStyles).length ? { tableStyles: this.tableStyles } : {}),
       ...(this.liveRefs.length || Array.isArray(m?.references) ? { references: this.liveRefs } : {}),
+      ...(parseDesign(m?.design) ? { design: parseDesign(m?.design)! } : {}),
       ...(typeof m?.citeStyle === 'string' && m.citeStyle in CITE_PRESETS ? { citeStyle: m.citeStyle } : zoteroStyle ? { citeStyle: zoteroStyle } : {}),
       ...(manager ? { citeManager: manager } : {}),
       ...(zoteroPrefs ? { zoteroPrefs } : {}),

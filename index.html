@@ -1360,6 +1360,23 @@
       <div class="rb-group">
         <div class="rb-row">
           <div class="rb-col">
+            <label class="rb-field" title="Themes: fonts for the headings and the text, and colours for the headings, all at once. Every paragraph in a style changes (not what you formatted by hand)">Theme <select id="doc-theme" data-doc-prefix="design-theme"></select></label>
+            <label class="rb-field" title="Style Set: how the title, headings and text are laid out (sizes, bold, alignment, spacing), keeping the theme's fonts and colours">Style Set <select id="doc-styleset" data-doc-prefix="design-styleset"></select></label>
+          </div>
+          <div class="rb-col">
+            <label class="rb-field" title="Colors: the headings' and title's colour">Colors <select id="doc-theme-colors" data-doc-prefix="design-colors"></select></label>
+            <label class="rb-field" title="Fonts: one for the headings and title, one for the text">Fonts <select id="doc-theme-fonts" data-doc-prefix="design-fonts"></select></label>
+          </div>
+          <div class="rb-col">
+            <label class="rb-field" title="Paragraph Spacing: the text's space between paragraphs and between lines">Paragraph Spacing <select id="doc-para-spacing" data-doc-prefix="design-spacing"></select></label>
+            <button data-doc="design-default" title="Set as Default: new documents start with this document's theme, style set and spacing">Set as Default</button>
+          </div>
+        </div>
+        <div class="rb-label">Document Formatting</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
             <label class="rb-field" title="Words across every page behind the text (saved as Word's watermark)">Watermark <select id="doc-watermark" data-doc-prefix="watermark">
               <option value="" hidden>None</option>
               <option value="0">CONFIDENTIAL</option><option value="1">DRAFT</option><option value="2">DO NOT COPY</option><option value="3">SAMPLE</option><option value="4">PRELIMINARY</option><option value="5">NOT FOR DISTRIBUTION</option><option value="6">ASAP</option><option value="7">URGENT</option>

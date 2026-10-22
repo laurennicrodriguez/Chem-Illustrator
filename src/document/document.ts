@@ -437,7 +437,12 @@ export interface DocText extends RichText {
   hyphen?: DocHyphenation;
   /** Review > Restrict Editing: what can still be changed, and the password that stops it (see protect.ts). */
   protect?: Protection;
+  /** Design > Document Formatting: the theme, style set and paragraph spacing chosen (by name; see themes.ts). */
+  design?: DocDesign;
 }
+
+/** What Design has set: names of the choices made (kept with the document, so the galleries show them). */
+export interface DocDesign { theme?: string; fonts?: string; colors?: string; styleSet?: string; spacing?: string }
 
 /** How footnotes or endnotes are numbered, by Word's names: 1, 2, 3; i, ii, iii; a, b, c; *, †, ‡ (chicago). */
 export type NoteFormat = 'decimal' | 'lowerRoman' | 'upperRoman' | 'lowerLetter' | 'upperLetter' | 'chicago';
