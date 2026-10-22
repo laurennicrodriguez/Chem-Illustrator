@@ -22,6 +22,7 @@ export const REL = {
   officeDocument: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument',
   coreProps: 'http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties',
   extendedProps: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties',
+  customProps: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties',
   slide: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide',
   slideLayout: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout',
   slideMaster: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster',

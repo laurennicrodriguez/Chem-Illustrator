@@ -36,6 +36,8 @@ import { condFormatsXml, dxfXml, tableXml, readDxfs, readCondFormats, readTable,
 import type { CondFormat, CfLook } from '../sheet/conditional';
 import { seenCondFormatId } from '../sheet/conditional';
 import { TableDef, tableColumnNames, seenTableId } from '../sheet/table-styles';
+import { pageSetupXml, printNames, readPageSetup, objectAnchorXml, readObjects, ReadAnchor } from './xlsx-print';
+import { dataUrlBytes, bytesDataUrl, seenObjectId } from '../sheet/sheet-objects';
 import { Persons, notesParts, readNotes, shownNotes, validationsXml, readValidations, NOTES_CT, NOTES_REL } from './xlsx-notes';
 export { applyTint };
 
@@ -323,6 +325,7 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
   const model: Model = { app: 'Chem Illustrator', version: 1, drawingStyle: book.drawingStyle, sheets: [] };
   const sheetEntries: string[] = [];
   const filterNames: string[] = [];
+  const printTitleNames: string[] = [];
   let imageNo = 0, drawingNo = 0, tableNo = 0, chartNo = 0, notesNo = 0;
   const persons = new Persons();
   pkg.defaultType('png', 'image/png');
@@ -534,6 +537,22 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
       const end = cols.at(x + ch.w, ch.at.col), endR = rows.at(y + ch.h, ch.at.row);
       anchors.push(chartAnchorXml(ch, { col: end.i, colOff: end.off, row: endR.i, rowOff: endR.off }, anchors.length + 2, rid));
     }
+    // pictures, shapes and text boxes, above the charts
+    for (const o of standIn ? [] : s.objects) {
+      let pic: string | undefined;
+      if (o.kind === 'picture') {
+        const img = o.src ? dataUrlBytes(o.src) : null;
+        if (!img) continue;
+        imageNo++;
+        const media = `xl/media/image${imageNo}.${img.ext}`;
+        pkg.defaultType(img.ext, img.mime);
+        pictures.push({ png: img.bytes, key: `object ${o.id}`, name: media });
+        pic = pkg.relate(drawingPath, REL.image, `../media/image${imageNo}.${img.ext}`);
+      }
+      const x = cols.start(o.at.col) + o.at.dx, y = rows.start(o.at.row) + o.at.dy;
+      const end = cols.at(x + o.w, o.at.col), endR = rows.at(y + o.h, o.at.row);
+      anchors.push(objectAnchorXml(o, { col: end.i, colOff: end.off, row: endR.i, rowOff: endR.off }, anchors.length + 2, { x, y }, pic));
+    }
     let drawingXml = '';
     const sheetRels = path;
     if (anchors.length) {
@@ -568,14 +587,20 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
       else linkXml.push(`<hyperlink ref="${ref}" r:id="${pkg.relate(path, REL.hyperlink, officeTarget(c.link), true)}"/>`);
     }
     const hyperlinks = linkXml.length ? `<hyperlinks>${linkXml.join('')}</hyperlinks>` : '';
+    // printing: page setup, and the print area and titles as the workbook's names
+    const page = pageSetupXml(own.pageSetup);
+    printTitleNames.push(...printNames(own.pageSetup, s.name, si));
+    const sheetPr = s.filter && !filterTable || page.fitToPage
+      ? `<sheetPr${s.filter && !filterTable ? ' filterMode="1"' : ''}>${page.fitToPage ? '<pageSetUpPr fitToPage="1"/>' : ''}</sheetPr>`
+      : '';
     pkg.add(path,
       `${HEAD}<worksheet xmlns="${MAIN}" xmlns:r="${RNS}">` +
-      `${s.filter && !filterTable ? '<sheetPr filterMode="1"/>' : ''}<dimension ref="${used}"/>` +
+      `${sheetPr}<dimension ref="${used}"/>` +
       `<sheetViews><sheetView${si === book.active ? ' tabSelected="1"' : ''} workbookViewId="0">${pane}</sheetView></sheetViews>` +
       `<sheetFormatPr defaultRowHeight="15"/>` +
       (colXml.length ? `<cols>${colXml.join('')}</cols>` : '') +
       `<sheetData>${rowXml.join('')}</sheetData>${filterXml}${merges}${cfXml}${dvXml}${hyperlinks}` +
-      `<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>${drawingXml}${tableParts}</worksheet>`,
+      `${page.printOptions}${page.pageMargins}${page.pageSetup}${page.headerFooter}${page.breaks}${drawingXml}${tableParts}</worksheet>`,
       CT.sheet);
     const rid = pkg.relate('xl/workbook.xml', RELS.worksheet, `worksheets/sheet${si + 1}.xml`);
     sheetEntries.push(`<sheet name="${xml(s.name)}" sheetId="${si + 1}" r:id="${rid}"/>`);
@@ -601,7 +626,7 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
     `${HEAD}<workbook xmlns="${MAIN}" xmlns:r="${RNS}"><workbookPr/>` +
     `<bookViews><workbookView activeTab="${book.active}"/></bookViews>` +
     `<sheets>${sheetEntries.join('')}</sheets>` +
-    (filterNames.length ? `<definedNames>${filterNames.join('')}</definedNames>` : '') +
+    (filterNames.length || printTitleNames.length ? `<definedNames>${filterNames.join('')}${printTitleNames.join('')}</definedNames>` : '') +
     // formulas are worked out again when Excel opens the file
     `<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`,
     CT.workbook);
@@ -810,7 +835,8 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
   const book = new Workbook(names);
   const activeTab = Number(kid(root, 'bookViews', 'workbookView')?.getAttribute('activeTab') ?? 0);
   if (sheetEls.some((s) => s.getAttribute('state') === 'hidden' || s.getAttribute('state') === 'veryHidden')) notKept.add('hidden sheets (shown here)');
-  if (kids(kid(root, 'definedNames'), 'definedName').some((d) => !(d.getAttribute('name') ?? '').startsWith('_xlnm.'))) notKept.add('named ranges');
+  const definedNames = kids(kid(root, 'definedNames'), 'definedName');
+  if (definedNames.some((d) => !(d.getAttribute('name') ?? '').startsWith('_xlnm.'))) notKept.add('named ranges');
 
   // our own part, if this file was saved here (found by name: programs that keep it don't all keep its link)
   let model: Model | null = null;
@@ -1008,16 +1034,19 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
       const drawingPath = [...pkg.rels(path!).values()].find((r) => r.type === RELS.drawing)?.target;
       const dr = drawingPath ? pkg.xml(drawingPath) : null;
       if (dr) {
-        for (const pic of Array.from(dr.getElementsByTagNameNS(XDR, 'pic'))) {
-          const name = kid(pic, 'nvPicPr', 'cNvPr')?.getAttribute('name') ?? '';
-          if (!(ms && name.startsWith('Structure '))) foreignPictures++;
-        }
-        // (the note Excel puts in place of a newer chart, for older programs, is not a shape of its own)
-        foreignPictures += Array.from(dr.getElementsByTagNameNS(XDR, 'sp')).filter((e) => e.parentElement?.localName !== 'Fallback').length;
-        // charts: Excel's, or ours (our own copy where the data it charts is unchanged)
-        const charts: Chart[] = [];
         const colPx = (c: number) => (s.hiddenCols.has(c) ? 0 : s.colWidths.get(c) ?? DEFAULT_COL_W);
         const rowPx = (r: number) => (s.hiddenRows.has(r) ? 0 : s.rowHeights.get(r) ?? DEFAULT_ROW_H);
+        // pictures, shapes and text boxes (not our structures' pictures, which are their cells)
+        const drawRels = pkg.rels(drawingPath!);
+        const got = readObjects(dr, (rid) => {
+          const t = drawRels.get(rid)?.target;
+          const bytes = t ? pkg.bytes(t) : null;
+          return bytes ? bytesDataUrl(bytes, t!) : null;
+        }, (a) => anchorPlace(a, colPx, rowPx), theme, (name) => !!ms && name.startsWith('Structure '));
+        foreignPictures += got.skipped;
+        if (got.objects.length) { for (const o of got.objects) seenObjectId(o.id); s.setObjects(got.objects); }
+        // charts: Excel's, or ours (our own copy where the data it charts is unchanged)
+        const charts: Chart[] = [];
         for (const gf of Array.from(dr.getElementsByTagNameNS(XDR, 'graphicFrame'))) {
           let anchor = gf.parentElement;
           while (anchor && !/Anchor$/.test(anchor.localName)) anchor = anchor.parentElement;
@@ -1065,6 +1094,8 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
       }
       const dv = readValidations(ws);
       if (dv.length) s.setValidations(dv);
+      const ps = readPageSetup(ws, definedNames, s.name, si);
+      if (ps) s.setPageSetup(ps);
       // links: Excel's own (a cell range takes its link on each of its cells)
       const linkRels = pkg.rels(path!);
       for (const h of kids(kid(ws, 'hyperlinks'), 'hyperlink')) {
@@ -1086,6 +1117,39 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
   if (restored.changed) warnings.push(`${restored.changed} structure or calculated cell${restored.changed > 1 ? 's were' : ' was'} changed in another program: ${restored.changed > 1 ? 'they show' : 'it shows'} what that program saved.`);
   if (notKept.size) warnings.push(`Not shown here, and left out if you save over this file: ${[...notKept].join(', ')}.`);
   return { book, warnings };
+}
+
+/** Where a drawing's anchor puts its object: the top-left corner in cells and the size in pixels. */
+function anchorPlace(anchor: Element, colPx: (c: number) => number, rowPx: (r: number) => number): ReadAnchor | null {
+  const pos = (el: Element | null) => ({ col: Number(kid(el, 'col')?.textContent ?? 0), colOff: Number(kid(el, 'colOff')?.textContent ?? 0) / PX, row: Number(kid(el, 'row')?.textContent ?? 0), rowOff: Number(kid(el, 'rowOff')?.textContent ?? 0) / PX });
+  const ext = kid(anchor, 'ext');
+  const extSize = ext ? { w: Number(ext.getAttribute('cx') ?? 0) / PX, h: Number(ext.getAttribute('cy') ?? 0) / PX } : null;
+  if (anchor.localName === 'absoluteAnchor') {
+    const p = kid(anchor, 'pos');
+    if (!p || !extSize) return null;
+    // a place on the sheet in pixels, as a cell and an offset into it
+    const find = (px: number, size: (i: number) => number) => {
+      let i = 0, at = 0;
+      while (i < 20000 && at + size(i) <= px) { at += size(i); i++; }
+      return { i, off: px - at };
+    };
+    const c = find(Number(p.getAttribute('x') ?? 0) / PX, colPx), r = find(Number(p.getAttribute('y') ?? 0) / PX, rowPx);
+    return { from: { col: c.i, colOff: c.off, row: r.i, rowOff: r.off }, ...extSize, placement: 'absolute' };
+  }
+  const from = kid(anchor, 'from');
+  if (!from) return null;
+  const a = pos(from);
+  let w: number, h: number;
+  const to = kid(anchor, 'to');
+  if (anchor.localName === 'twoCellAnchor' && to) {
+    const b = pos(to);
+    w = b.colOff - a.colOff; for (let c = a.col; c < b.col; c++) w += colPx(c);
+    h = b.rowOff - a.rowOff; for (let r = a.row; r < b.row; r++) h += rowPx(r);
+  } else if (extSize) ({ w, h } = extSize);
+  else return null;
+  const editAs = anchor.getAttribute('editAs');
+  const placement = anchor.localName === 'oneCellAnchor' ? 'oneCell' : editAs === 'oneCell' || editAs === 'absolute' ? editAs : 'twoCell';
+  return { from: a, w, h, placement };
 }
 
 /** A style without its unset parts (undefined when nothing is set). */
