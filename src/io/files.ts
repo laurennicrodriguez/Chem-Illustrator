@@ -9,7 +9,15 @@ import type { FileStamp } from '../keep/recovery';
 export type FileRef =
   | { kind: 'path'; path: string }
   | { kind: 'handle'; handle: FileHandle }
+  /** A drawing embedded in a Word, PowerPoint or Excel document, being edited here (Windows). */
+  | { kind: 'embedded'; id: number; app: string; doc: string }
   | { kind: 'none' };
+
+/** Puts a saved drawing back in the document it is embedded in (set by the app on Windows). */
+let embeddedWriter: ((ref: Extract<FileRef, { kind: 'embedded' }>, cdxml: string) => Promise<void>) | null = null;
+export function setEmbeddedWriter(w: typeof embeddedWriter): void {
+  embeddedWriter = w;
+}
 
 export interface FileType {
   description: string;
@@ -185,6 +193,9 @@ export async function writeFile(ref: FileRef, name: string, data: string | Uint8
   if (ref.kind === 'path') {
     if (typeof data === 'string') await invoke('write_text_file', { path: ref.path, contents: data });
     else await invoke('write_binary_file', data, { headers: { path: encodeURIComponent(ref.path) } });
+  } else if (ref.kind === 'embedded') {
+    if (!embeddedWriter) throw new Error('drawings in other programs can only be edited in the Windows app');
+    await embeddedWriter(ref, typeof data === 'string' ? data : new TextDecoder().decode(data));
   } else if (ref.kind === 'handle') {
     const w = await ref.handle.createWritable();
     await w.write(data);

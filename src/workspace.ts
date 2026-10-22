@@ -624,13 +624,16 @@ export class Workspace {
 
   /** Whether Save writes straight back to the tab's file. */
   savesInPlace(tab: Tab): boolean {
+    // a drawing from Word goes back into Word
+    if (tab.ref.kind === 'embedded') return tab.mode === 'drawing';
     const ext = extensionOf(tab.name);
     return canSaveInPlace(tab.ref) && SAVE_TYPES[tab.mode].some((t) => t.extension === ext);
   }
 
   /** Whether AutoSave can keep this tab saved: it has a file it saves to without losing anything. */
   canAutoSave(tab: Tab): boolean {
-    return this.savesInPlace(tab) && !NO_AUTOSAVE.has(extensionOf(tab.name));
+    // a drawing from Word is put back when the person says (each save rewrites the Word document's copy)
+    return this.savesInPlace(tab) && tab.ref.kind !== 'embedded' && !NO_AUTOSAVE.has(extensionOf(tab.name));
   }
 
   /** Changes whenever the tab's contents change (for AutoSave and recovery copies). */
@@ -733,7 +736,7 @@ export class Workspace {
     this.hooks.saved?.(tab, typeof enc.data === 'string' ? new TextEncoder().encode(enc.data) : enc.data, how, was);
     if (ref.kind === 'path' && !this.quiet) this.hooks.remember?.(ref.path);
     this.hooks.changed();
-    if (!auto) this.hooks.flash((ref.kind === 'none' ? `Downloaded ${name}` : `Saved ${name}`) + enc.note, enc.note ? 8000 : 3500);
+    if (!auto) this.hooks.flash((ref.kind === 'none' ? `Downloaded ${name}` : ref.kind === 'embedded' ? `Put the drawing back in ${ref.doc || ref.app}` : `Saved ${name}`) + enc.note, enc.note ? 8000 : 3500);
     return true;
   }
 

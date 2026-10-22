@@ -117,6 +117,8 @@ export interface Settings {
   pubchemNames: boolean;
   /** The Windows app has offered to open the chemistry file types (once, at its first start). */
   fileTypesOffered: boolean;
+  /** The Windows app has registered its drawings as objects Word can send back to edit (once, at its first start). */
+  wordObjectsOffered: boolean;
   /** The name put on tracked changes in documents (Review > Your Name, Edit > Settings). */
   reviewName: string;
   /** A version the user chose Skip This Version for, so starting the app doesn't offer it again. */
@@ -139,7 +141,7 @@ export const DEFAULT_SETTINGS: Settings = {
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
   guides: { drawing: false, slides: true, design: true },
   docPins: [],
-  updateCheck: true, pubchemNames: true, fileTypesOffered: false, reviewName: '', skipVersion: null, recentFiles: [], highlightLooks: [],
+  updateCheck: true, pubchemNames: true, fileTypesOffered: false, wordObjectsOffered: false, reviewName: '', skipVersion: null, recentFiles: [], highlightLooks: [],
   scheme: DEFAULT_SCHEME_PREFS,
   keep: DEFAULT_KEEP,
 };
@@ -155,7 +157,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (!raw || typeof raw !== 'object') return s;
   const r = raw as Record<string, unknown>;
   if (r.hotkeys && typeof r.hotkeys === 'object' && !Array.isArray(r.hotkeys)) s.hotkeys = r.hotkeys as KeyOverrides;
-  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'stereoItalic', 'boldNumbers', 'spellCheck', 'scrollBars', 'pageEdge', 'welcomed', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'textToAtom', 'groupOutline', 'rerouteArrows', 'superscriptR', 'updateCheck', 'pubchemNames', 'fileTypesOffered'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
+  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'stereoItalic', 'boldNumbers', 'spellCheck', 'scrollBars', 'pageEdge', 'welcomed', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'textToAtom', 'groupOutline', 'rerouteArrows', 'superscriptR', 'updateCheck', 'pubchemNames', 'fileTypesOffered', 'wordObjectsOffered'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
   if (r.page === null) s.page = null;
   else if (r.page && typeof r.page === 'object') {
     const p = r.page as Record<string, unknown>;

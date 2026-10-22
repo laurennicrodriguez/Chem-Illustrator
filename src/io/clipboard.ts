@@ -283,6 +283,32 @@ export function unpackFormats(block: Uint8Array): [string, Uint8Array][] {
 let lastCopy: string | null = null;
 /** A table copied here as tab-separated text, to know it again when it is pasted back (web pages). */
 let lastTableText: string | null = null;
+
+/**
+ * Whether drawings go on the clipboard as editable objects for Word, PowerPoint and Excel as
+ * well as pictures (Windows, once the object type is registered: see src-tauri/src/ole.rs).
+ */
+let wordObjects = false;
+export function setWordObjects(on: boolean): void {
+  wordObjects = on;
+}
+
+/** "Object Descriptor" data for the Windows app: the picture's size in hundredths of a millimetre (from the EMF's frame). */
+function objectSize(emf: Uint8Array): Uint8Array {
+  const v = new DataView(emf.buffer, emf.byteOffset, emf.byteLength);
+  const out = new DataView(new ArrayBuffer(8));
+  if (emf.byteLength >= 40) {
+    out.setInt32(0, v.getInt32(32, true) - v.getInt32(24, true), true);
+    out.setInt32(4, v.getInt32(36, true) - v.getInt32(28, true), true);
+  }
+  return new Uint8Array(out.buffer);
+}
+
+/** The picture of a whole drawing that Word shows for it, with the drawing inside (for drawings edited for Word). */
+export function embeddedPicture(doc: Doc, cdxml: string): Uint8Array {
+  const pic = recordPicture(doc);
+  return pic ? withDrawing(pictureEmf(pic), cdxml) : new Uint8Array();
+}
 /** The size in pixels of the picture of the last drawing copied (web pages), to know it again when it is pasted back. */
 let lastPictureSize: { w: number; h: number } | null = null;
 
@@ -308,15 +334,20 @@ export async function copyDrawing(doc: Doc, sel: Selection | null): Promise<stri
   if (nativeClipboard) {
     const { canvas, dpi } = pictureCanvas(part, pic);
     const enc = new TextEncoder();
+    const emf = withDrawing(pictureEmf(pic), own);
+    // Word, PowerPoint and Excel paste an object they can send back here to edit (a table stays cells)
+    const object: [string, Uint8Array][] = wordObjects && !table ? [['Embed Source', enc.encode(own)], ['Object Descriptor', objectSize(emf)]] : [];
     const block = packFormats([
       [OWN_FORMAT, enc.encode(own)],
       [CDX_FORMAT, cdxmlToCdx(cdxml)],
+      ...object,
       ...(table ? [['HTML Format', cfHtml(tableHtml(table))], ['CF_UNICODETEXT', enc.encode(tsv!)]] as [string, Uint8Array][] : []),
-      ['CF_ENHMETAFILE', withDrawing(pictureEmf(pic), own)],
+      ['CF_ENHMETAFILE', emf],
       ['CF_DIB', canvasDib(canvas, dpi)],
     ]);
     await invoke('clipboard_write', block);
-    return table ? `${what}. Paste into Word or Excel for a table, or into PowerPoint for a picture.` : `${what}. Paste into Word or PowerPoint for a picture.`;
+    return table ? `${what}. Paste into Word or Excel for a table, or into PowerPoint for a picture.`
+      : wordObjects ? `${what}. In Word or PowerPoint, double-click the pasted drawing to edit it here.` : `${what}. Paste into Word or PowerPoint for a picture.`;
   }
   // The PNG goes in as a promise so the clipboard is asked straight away, while the key press
   // still counts (Safari insists on this).
@@ -455,7 +486,8 @@ export async function nativeFirst(names: string[]): Promise<[string, Uint8Array]
  * MestReNova and Office copy, or a bitmap), then any other text.
  */
 export async function readNativeClipboard(): Promise<Pasted> {
-  const drawing = await nativeFirst([OWN_FORMAT, CDX_FORMAT]);
+  // ("Embed Source" is a drawing from here copied back out of Word: the app reads only its own objects)
+  const drawing = await nativeFirst([OWN_FORMAT, 'Embed Source', CDX_FORMAT]);
   if (drawing) {
     const [name, data] = drawing;
     return { kind: 'drawing', doc: readCdxml(name === CDX_FORMAT ? cdxToCdxml(data) : new TextDecoder().decode(data)).doc };

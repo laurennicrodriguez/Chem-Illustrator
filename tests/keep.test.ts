@@ -28,6 +28,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 import { Doc } from '../src/model';
 import { Workspace, type WorkspaceHooks, type Tab } from '../src/workspace';
+import { setEmbeddedWriter } from '../src/io/files';
 import { writeCdxml } from '../src/io/cdxml-write';
 import { memoryStore } from '../src/keep/store';
 import { Recovery, STALE_MS, BEAT_MS, parseSession, type Copyable } from '../src/keep/recovery';
@@ -360,5 +361,27 @@ describe('the keeper, with AutoSave on', () => {
     expect(ws.active.dirty).toBe(false);
     expect(ws.tabs.length).toBe(1);
     vi.useRealTimers();
+  });
+});
+
+describe('drawings edited for Word', () => {
+  it('saves back into the document they came from, never by AutoSave', async () => {
+    const put: { id: number; cdxml: string }[] = [];
+    setEmbeddedWriter(async (ref, cdxml) => { put.push({ id: ref.id, cdxml }); });
+    const { ws, host, flashes } = workspace();
+    const tab = await ws.openAs(drawing(2), 'drawing.cdxml', { name: 'Drawing in Report.docx', ref: { kind: 'embedded', id: 7, app: 'Microsoft Word', doc: 'Report.docx' }, dirty: false, stamp: null });
+    expect(tab).not.toBeNull();
+    expect(ws.savesInPlace(tab!)).toBe(true);
+    expect(ws.canAutoSave(tab!)).toBe(false);
+    host.edit('add', () => host.addAtom(100, 100, 7));
+    ws.noteChange();
+    expect(await ws.save(tab!)).toBe(true);
+    expect(put).toHaveLength(1);
+    expect(put[0].id).toBe(7);
+    expect(put[0].cdxml).toContain('<CDXML');
+    expect(tab!.dirty).toBe(false);
+    expect(tab!.ref.kind).toBe('embedded');
+    expect(flashes.at(-1)).toBe('Put the drawing back in Report.docx');
+    setEmbeddedWriter(null);
   });
 });
