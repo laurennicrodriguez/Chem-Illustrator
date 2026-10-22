@@ -15,6 +15,7 @@ Chem Illustrator is licensed under the GNU General Public License, version 3 or 
 | [fflate](https://github.com/101arrowz/fflate) 0.8.2 | Packing and unpacking PowerPoint, Excel and Word files (.pptx, .xlsx, .docx), and compressing PDF pages | MIT (full text below) |
 | Free fonts from [Google Fonts](https://fonts.google.com), packaged by [Fontsource](https://fontsource.org) 5.3 (`@fontsource/*`): Inter, Source Sans 3, IBM Plex Sans, Lato, Source Serif 4, Merriweather, Libre Baskerville, Montserrat, Oswald, Bebas Neue, Archivo Black, Barlow Condensed, JetBrains Mono, IBM Plex Mono (Latin, Latin-extended and Greek letters, regular and bold) | The font boxes in every mode; put inside saved Word and PowerPoint files that use them | SIL Open Font License 1.1 (copyright lines and full text below) |
 | [Material Design Icons](https://pictogrammers.com/library/mdi/) 7.4.47 by Pictogrammers (`@mdi/svg`; the icons' outlines are copied into the app by `scripts/build-icons.mjs`, company and product logos left out) | Insert ▸ Icons in Design, Slides and Document modes | Apache-2.0 (the Pictogrammers Free License: icons under Apache-2.0, code under MIT). Some icons were contributed by other authors under Apache-2.0, as listed in the package's `meta.json`. |
+| [PDF.js](https://mozilla.github.io/pdf.js/) 5.7 by Mozilla (`pdfjs-dist`, its "legacy" build) | Document ▸ Insert ▸ Object: the first page of an embedded PDF as its picture | Apache-2.0 |
 | [Tauri](https://tauri.app) (`tauri` crate, `@tauri-apps/api`) | Desktop app shell | MIT or Apache-2.0 |
 | Tauri dialog plugin (`tauri-plugin-dialog` crate, `@tauri-apps/plugin-dialog`) | The desktop app's Open and Save dialogs | MIT or Apache-2.0 |
 | Tauri updater and process plugins (`tauri-plugin-updater`, `tauri-plugin-process` crates, `@tauri-apps/plugin-updater`, `@tauri-apps/plugin-process`) | File ▸ Check for Updates: downloading a newer version, checking its signature, installing it and restarting | MIT or Apache-2.0 |
@@ -229,7 +230,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-The Apache License 2.0, which covers TeaVM and the StAX API, is in `opsin-js/licences/Apache-2.0.txt`.
+The Apache License 2.0, which covers TeaVM, the StAX API and PDF.js, is in `opsin-js/licences/Apache-2.0.txt`.
 
 Chem Illustrator replaces two of OPSIN's classes (`ResourceGetter` and `AutomatonInitialiser`, which load OPSIN's data files) and stands in for the Log4j logging calls; see `opsin-js/README.md`. The rest of OPSIN is unchanged.
 
