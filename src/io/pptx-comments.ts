@@ -63,7 +63,8 @@ export function writeSlideComments(slides: (PinnedComment[] | undefined)[]): { a
         return { authorId: a.id, idx };
       };
       const done = c.done ? `<p:ext uri="${DONE_EXT}"><ci:done xmlns:ci="${CI_NS}"/></p:ext>` : '';
-      const top = note(c, done);
+      // Without a time-zone bias PowerPoint reads dt as local time, so say it is UTC.
+      const top = note(c, `<p:ext uri="${THREADING}"><p15:threadingInfo xmlns:p15="${P15_NS}" timeZoneBias="0"/></p:ext>${done}`);
       for (const r of c.replies ?? []) {
         note(r, `<p:ext uri="${THREADING}"><p15:threadingInfo xmlns:p15="${P15_NS}" timeZoneBias="0"><p15:parentCm authorId="${top.authorId}" idx="${top.idx}"/></p15:threadingInfo></p:ext>`);
       }
@@ -84,10 +85,15 @@ export function readCommentAuthors(doc: Document | null): Map<string, string> {
   return out;
 }
 
-/** A date read from a comment, as an ISO date (PowerPoint's have no time zone: taken as UTC). */
-const isoDate = (s: string | null): string => {
+/**
+ * A date read from a comment, as an ISO date. PowerPoint's have no time zone letter: they are
+ * local time when `bias` (its timeZoneBias, minutes to add to reach UTC) is given, else UTC.
+ */
+const isoDate = (s: string | null, bias = 0): string => {
   if (!s) return '';
-  const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : `${s}Z`);
+  const zoned = /[zZ]|[+-]\d\d:?\d\d$/.test(s);
+  const d = new Date(zoned ? s : `${s}Z`);
+  if (!zoned) d.setTime(d.getTime() + bias * 60000);
   return isNaN(d.getTime()) ? '' : d.toISOString();
 };
 
@@ -99,9 +105,11 @@ export function readLegacyComments(doc: Document | null, authors: Map<string, st
   let id = firstId;
   for (const cm of kids(doc.documentElement, 'cm')) {
     const aid = cm.getAttribute('authorId') ?? '';
-    const note: CommentNote = { author: authors.get(aid) ?? '', date: isoDate(cm.getAttribute('dt')), text: kid(cm, 'text')?.textContent ?? '' };
     const ext = kids(kid(cm, 'extLst'), 'ext');
-    const parent = ext.map((e) => kid(e, 'threadingInfo', 'parentCm')).find(Boolean);
+    const threading = ext.map((e) => kid(e, 'threadingInfo')).find(Boolean);
+    const bias = Number(threading?.getAttribute('timeZoneBias') ?? 0) || 0;
+    const note: CommentNote = { author: authors.get(aid) ?? '', date: isoDate(cm.getAttribute('dt'), bias), text: kid(cm, 'text')?.textContent ?? '' };
+    const parent = threading ? kid(threading, 'parentCm') : null;
     const up = parent ? byKey.get(`${parent.getAttribute('authorId')} ${parent.getAttribute('idx')}`) : undefined;
     if (up) { (up.replies ??= []).push(note); continue; }
     const pos = kid(cm, 'pos');

@@ -47,6 +47,7 @@ import { writePdf, jpegInfo, PdfPage, PdfImage } from './io/pdf';
 import { SlideList } from './ui/slide-list';
 import { DesignLibrary, GEO_DRAG_TYPE, pickDesignSize, sizeLabel } from './ui/design-panel';
 import { ShapeMenu } from './ui/shape-menu';
+import { loadIcons, whenIconsLoaded } from './design/icons';
 import { SlideTextRibbon } from './ui/slide-text-ribbon';
 import { CaptionEditor } from './ui/caption-editor';
 import { LayersPanel } from './ui/layers-panel';
@@ -246,6 +247,9 @@ const BRACKETS: PaletteDef = {
     { name: 'bracket-square', title: 'Square brackets [ ]' },
     { name: 'bracket-round', title: 'Parentheses ( )' },
     { name: 'bracket-curly', title: 'Braces { }' },
+    { name: 'bracket-ts', title: 'Transition-state brackets: square brackets with ‡ at the upper right' },
+    { name: 'bracket-left', title: 'Single bracket [ (left half only)' },
+    { name: 'bracket-right', title: 'Single bracket ] (right half only)' },
   ],
 };
 
@@ -259,6 +263,7 @@ const SYMBOLS: PaletteDef = {
     { name: 'sym-minus', title: 'Circled minus: click an atom to give it a − charge shown in a circle; drag round the atom to aim it' },
     { name: 'sym-delta-plus', title: 'Partial positive charge (δ+): click an atom' },
     { name: 'sym-delta-minus', title: 'Partial negative charge (δ−): click an atom' },
+    { name: 'sym-ddagger', title: 'Double dagger (‡) for a transition state: click where it goes' },
   ],
 };
 
@@ -293,7 +298,6 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     { name: 'bond-single', title: 'Single bond. Click a bond: single, double, triple' },
     { name: 'bond-double', title: 'Double bond. Click again to move the second line' },
     { name: 'bond-triple', title: 'Triple bond' },
-    { name: 'bond-quadruple', title: 'Quadruple bond (metal–metal)' },
     { name: 'bond-wedge', title: 'Wedge. Click again to reverse' },
     { name: 'bond-hashWedge', title: 'Hashed wedge. Click again to reverse' },
     { name: 'bond-hash', title: 'Hashed bond' },
@@ -304,6 +308,15 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     { name: 'bond-dative', title: 'Dative bond: draw from the donor atom to the acceptor. Click again to reverse' },
     { name: 'bond-hapto', title: 'Hapto (η) bond: drag from a metal into a ring or onto a π-bond to bond it to the middle (η⁵-Cp, η⁶-arene, η²-alkene); click inside a ring or on a bond for a new metal there. Click a hapto bond to draw it to each atom' },
     { name: 'chain', title: 'Chain: drag to draw a zig-zag chain, or click to type how many atoms (Alt+click: the same number again)' },
+  ],
+  // the everyday tools next, where they show without scrolling
+  [
+    { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption' },
+    ARROWS,
+    SYMBOLS,
+    BRACKETS,
+    SHAPES,
+    { name: 'fragment', title: 'Mass fragmentation: drag a line across bonds (or click a bond) to break them and label each piece with its formula and mass' },
   ],
   [
     { name: 'ring-3', title: 'Cyclopropane' },
@@ -332,15 +345,12 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     templatePalette('ligands', 'tpl-ligands', 'Ligands', 6, 64),
     OWN_PALETTE,
   ],
-  [
-    { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption' },
-    { name: 'element', title: 'Periodic table: pick an element, then click atoms to change them' },
-    { name: 'fragment', title: 'Mass fragmentation: drag a line across bonds (or click a bond) to break them and label each piece with its formula and mass' },
-    ARROWS,
-    SYMBOLS,
-    SHAPES,
-    BRACKETS,
-  ],
+];
+
+/** Tools kept off the bar, still reached by their keys, Search and the menus (Chemistry > Periodic Table). */
+const OFF_BAR: ToolbarItem[] = [
+  { name: 'bond-quadruple', title: 'Quadruple bond (metal–metal)' },
+  { name: 'element', title: 'Periodic table: pick an element, then click atoms to change them' },
 ];
 
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
@@ -352,7 +362,7 @@ function keysOf(ctx: KeyContext, action: string): string[] {
 
 // Tool names for the Hotkeys window: the tool tip up to its first full stop or colon.
 const toolNames: Record<string, string> = {};
-for (const group of TOOL_GROUPS) {
+for (const group of [...TOOL_GROUPS, OFF_BAR]) {
   for (const item of group) {
     for (const t of 'palette' in item ? item.items : [item]) toolNames[t.name] = t.title.replace(/\s*\(.*?\)/g, '').split(/[.:] /)[0];
   }
@@ -1741,6 +1751,19 @@ function renderTabs(): void {
     el.className = `tab tab-${t.mode}${t === ws.active ? ' active' : ''}${t.dirty ? ' dirty' : ''}`;
     el.setAttribute('role', 'tab');
     el.setAttribute('aria-selected', String(t === ws.active));
+    // the keys reach the tab showing; the arrow keys go along to the others
+    el.tabIndex = t === ws.active ? 0 : -1;
+    el.addEventListener('keydown', (e) => {
+      if (e.target !== el) return;
+      const i = ws.tabs.indexOf(t);
+      const to = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? ws.tabs.length - 1 : null;
+      if (to !== null) {
+        e.preventDefault();
+        const n = ws.tabs[(to + ws.tabs.length) % ws.tabs.length];
+        if (n !== ws.active) ws.activate(n);
+        $('#tabs').querySelector<HTMLElement>('[aria-selected="true"]')?.focus();
+      } else if (e.key === 'Delete') { e.preventDefault(); void ws.close(t); }
+    });
     el.title = (t.ref.kind === 'path' ? t.ref.path : t.name) + (t.dirty ? ' (not saved)' : '')
       + (t.savedAt ? `\n${t.savedHow === 'autosaved' ? 'AutoSaved' : 'Saved'} ${new Date(t.savedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}` : '')
       + (keeper.autoSaveWanted(t) && ws.canAutoSave(t) ? ' (AutoSave on)' : '');
@@ -2737,6 +2760,11 @@ const DOC_COMMANDS: Record<string, () => unknown> = {
     const anchor = b && b.offsetParent ? b : document.querySelector<HTMLElement>('#doc-ribbon .rb-tabs')!;
     shapeMenu.show(anchor, 'Click a shape to put it in the text at the caret. Double-click it there to change its size, colour or text.', (id) => docMode.insertShape(id));
   },
+  'insert-icons': () => {
+    const b = document.querySelector<HTMLElement>('#doc-ribbon [data-doc="insert-icons"]');
+    const anchor = b && b.offsetParent ? b : document.querySelector<HTMLElement>('#doc-ribbon .rb-tabs')!;
+    shapeMenu.show(anchor, 'Click an icon to put it in the text at the caret. Double-click it there to change its size or colour.', (id) => docMode.insertShape(id), 'icons');
+  },
   'copy-smiles': async () => {
     const d = pickedFigureDoc();
     if (!d) { flash('Click a structure first (it gets a blue frame), then Copy as SMILES.'); return; }
@@ -2786,7 +2814,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'print',
+  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
   'help', 'about', 'user-guide', 'send-feedback', 'report-problem', 'check-updates']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
@@ -2849,7 +2877,16 @@ const COMMANDS: Record<string, () => unknown> = {
     const anchor = b && b.offsetParent ? b : document.querySelector<HTMLElement>('#ribbon .rb-tabs')!;
     shapeMenu.show(anchor, 'Click a shape, then click or drag on the slide. Type in it once placed.', (id) => { finishTyping(); editor.setTool(`geo:${id}`); });
   },
-  'design-shapes': () => { if (ws.active.mode === 'design') lib.focusSearch(); else flash('Shapes are in Design mode: use File > New Design.'); },
+  'slide-icons': () => {
+    const b = document.querySelector<HTMLElement>('#ribbon [data-cmd="slide-icons"]:not([hidden])');
+    const anchor = b && b.offsetParent ? b : document.querySelector<HTMLElement>('#ribbon .rb-tabs')!;
+    shapeMenu.show(anchor, 'Click an icon, then click or drag on the slide. Change its colour in the Style panel.', (id) => { finishTyping(); editor.setTool(`geo:${id}`); }, 'icons');
+  },
+  'design-shapes': () => { if (ws.active.mode === 'design') { lib.showTab('shapes'); lib.focusSearch(); } else flash('Shapes are in Design mode: use File > New Design.'); },
+  'design-icons': () => { if (ws.active.mode === 'design') { lib.showTab('icons'); lib.focusSearch(); } else flash('Icons are in Design, Slides and Document modes.'); },
+  // the Insert menu's Shapes and Icons, in whichever mode is showing (Documents have their own)
+  'insert-shapes': () => (ws.active.mode === 'design' ? COMMANDS['design-shapes']() : ws.active.mode === 'slides' ? COMMANDS['slide-shapes']() : flash('Shapes go on slides, designs and documents.')),
+  'insert-icons': () => (ws.active.mode === 'design' ? COMMANDS['design-icons']() : ws.active.mode === 'slides' ? COMMANDS['slide-icons']() : flash('Icons go on slides, designs and documents.')),
   'shape-front': () => editor.setShapeLayer('front') || flash('Select the shapes to bring to the front.'),
   'shape-back': () => editor.setShapeLayer('back') || flash('Select the shapes to send to the back.'),
   'shape-forward': () => editor.setShapeLayer('forward') || flash('Select the shapes to bring forward.'),
@@ -2992,6 +3029,8 @@ const COMMANDS: Record<string, () => unknown> = {
   })),
   'report-problem': () => feedback.open('problem'),
   'command-search': () => commandSearch.open(),
+  'next-region': () => cycleRegion(1),
+  'prev-region': () => cycleRegion(-1),
   'toolbox-main': () => toolboxes.toggle('main'),
   'toolbox-structure': () => toolboxes.toggle('structure'),
   'toolbox-arrange': () => toolboxes.toggle('arrange'),
@@ -3205,6 +3244,114 @@ for (const m of menus) {
   });
 }
 addEventListener('resize', () => { if (openMenu) showMenu(null); });
+
+// ---------------------------------------------------------------- the keyboard round the window
+
+// F10, or Alt pressed and let go on its own, goes to the menu bar (and back); there the arrow
+// keys move along it and Down opens a menu. Alt with a menu's underlined letter opens that menu,
+// as in Office. Ctrl+F6 moves on round the window's parts (the keys can be changed).
+const MNEMONICS = new Map<string, Menu>();
+for (const m of menus) {
+  const letter = m.btn.getAttribute('aria-keyshortcuts')?.match(/^Alt\+(\w)$/)?.[1];
+  if (letter) MNEMONICS.set(letter.toUpperCase(), m);
+  m.btn.addEventListener('keydown', (e) => {
+    const j = menus.indexOf(m);
+    const go = (k: number) => { e.preventDefault(); const n = menus[(k + menus.length) % menus.length]; if (openMenu) showMenu(n); else n.btn.focus(); };
+    if (e.key === 'ArrowRight') go(j + 1);
+    else if (e.key === 'ArrowLeft') go(j - 1);
+    else if (e.key === 'ArrowDown') { e.preventDefault(); showMenu(m); }
+    else if (e.key === 'Home') go(0);
+    else if (e.key === 'End') go(menus.length - 1);
+    else if (e.key === 'Escape' && !openMenu) { e.preventDefault(); leaveMenuBar(); }
+  });
+}
+/** Where the keys were before going to the menu bar, to go back to. */
+let beforeMenus: HTMLElement | null = null;
+function enterMenuBar(): void {
+  const a = document.activeElement as HTMLElement | null;
+  if (!a?.closest('header')) beforeMenus = a;
+  menus[0].btn.focus();
+}
+function leaveMenuBar(): void {
+  showMenu(null);
+  document.body.classList.remove('show-mnemonics');
+  if (beforeMenus?.isConnected && beforeMenus !== document.body) beforeMenus.focus();
+  else focusWork();
+  beforeMenus = null;
+}
+const inMenuBar = () => !!(document.activeElement as HTMLElement | null)?.closest('header > .menu-wrap');
+
+/** The keys to the drawing, sheet or document showing. */
+function focusWork(): void {
+  if (sheetActive()) sheetMode.focus();
+  else if (docActive()) docMode.focus();
+  else $('#overlay').focus();
+}
+
+/**
+ * The parts of the window that Ctrl+F6 goes round, in order: each finds what takes the keys in
+ * it (null when that part isn't showing).
+ */
+const REGIONS: { inside: string; first: () => HTMLElement | null }[] = [
+  { inside: 'header', first: () => menus[0].btn },
+  { inside: '#tabs', first: () => $('#tabs').querySelector<HTMLElement>('[aria-selected="true"]') ?? $('#tabs').querySelector<HTMLElement>('[role="tab"], button') },
+  { inside: '.ribbon', first: () => [...document.querySelectorAll<HTMLElement>('.ribbon')].find(onScreenEl)?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"], button:not([disabled])') ?? null },
+  { inside: '#tools', first: () => onScreenEl($('#tools')) ? $('#tools').querySelector<HTMLElement>('button.tool.active') ?? $('#tools').querySelector<HTMLElement>('button.tool') : null },
+  { inside: '#work', first: () => { focusWork(); return document.activeElement as HTMLElement; } },
+  { inside: '#side-content', first: () => onScreenEl($('#side-content')) ? [...$('#side-content').querySelectorAll<HTMLElement>('button:not([disabled]), input, select, [tabindex="0"]')].find(onScreenEl) ?? null : null },
+];
+function onScreenEl(el: Element): boolean { return el.getClientRects().length > 0; }
+
+/** Move the keys to the next (or previous) part of the window. */
+function cycleRegion(step: 1 | -1): void {
+  showMenu(null);
+  const a = document.activeElement as HTMLElement | null;
+  let at = a ? REGIONS.findIndex((r) => a.closest(r.inside)) : -1;
+  if (at < 0) at = step > 0 ? -1 : REGIONS.length;
+  for (let k = 1; k <= REGIONS.length; k++) {
+    const r = REGIONS[(at + step * k + REGIONS.length * 2) % REGIONS.length];
+    const el = r.first();
+    if (!el || !onScreenEl(el)) continue;
+    if (document.activeElement !== el) el.focus();
+    if (document.activeElement === el || el.contains(document.activeElement)) return;
+  }
+}
+
+let altAlone = false;
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Alt') { altAlone = !e.repeat && !e.ctrlKey && !e.metaKey && !e.shiftKey; if (altAlone) document.body.classList.add('show-mnemonics'); return; }
+  altAlone = false;
+  // Ctrl+F6 works from anywhere, a text box too
+  const chord = chordOf(e);
+  const step = chord && !(e.target as HTMLElement | null)?.closest?.('dialog')
+    ? keymap.keysFor('command', 'command next-region').includes(chord) ? 1 : keymap.keysFor('command', 'command prev-region').includes(chord) ? -1 : 0 : 0;
+  if (step) { e.preventDefault(); e.stopImmediatePropagation(); cycleRegion(step); return; }
+  if (isTyping(e.target) || (e.target as HTMLElement | null)?.closest?.('dialog')) return;
+  if (e.key === 'F10' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+    e.preventDefault();
+    if (inMenuBar() || openMenu) leaveMenuBar();
+    else { document.body.classList.add('show-mnemonics'); enterMenuBar(); }
+    return;
+  }
+  // Alt and a menu's letter (by the key's place, so it works whatever the keyboard writes)
+  if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && /^Key[A-Z]$/.test(e.code)) {
+    const m = MNEMONICS.get(e.code.slice(3));
+    if (m) { e.preventDefault(); e.stopImmediatePropagation(); if (!inMenuBar()) beforeMenus = document.activeElement as HTMLElement | null; showMenu(m); }
+  }
+}, true);
+window.addEventListener('keyup', (e) => {
+  if (e.key !== 'Alt') return;
+  const alone = altAlone;
+  altAlone = false;
+  if (!alone) { if (!inMenuBar()) document.body.classList.remove('show-mnemonics'); return; }
+  if (isTyping(e.target) || (e.target as HTMLElement | null)?.closest?.('dialog')) { document.body.classList.remove('show-mnemonics'); return; }
+  e.preventDefault();
+  if (inMenuBar() || openMenu) leaveMenuBar();
+  else enterMenuBar();
+});
+window.addEventListener('pointerdown', () => { altAlone = false; }, true);
+window.addEventListener('blur', () => { altAlone = false; document.body.classList.remove('show-mnemonics'); });
+document.addEventListener('focusin', () => { if (!inMenuBar() && !openMenu) document.body.classList.remove('show-mnemonics'); });
 
 /** The mode the menus serve: drawing a structure for a cell or a document counts as Drawing. */
 function menuMode(): string { return drawingOnTop() ? 'drawing' : ws.active.mode; }
@@ -4326,6 +4473,18 @@ function scheduleAnalysis(force = false): void {
   analysisTimer = window.setTimeout(() => runAnalysis(force), 30);
 }
 
+let saidSelection = '';
+/** Tell screen readers what is selected: "Selected C6H5Br, 7 atoms". */
+function saySelection(results: FragmentResult[]): void {
+  const n = editor.sel.atoms.size;
+  const key = n ? [...editor.sel.atoms].sort((a, b) => a - b).join(',') + ':' + doc.version : '';
+  if (key === saidSelection) return;
+  saidSelection = key;
+  if (!n) return;
+  const formulas = results.filter((r) => !r.error && r.formula).map((r) => r.formula);
+  $('#sr-say').textContent = `Selected ${formulas.length ? formulas.join(', ') + ', ' : ''}${n} atom${n === 1 ? '' : 's'}`;
+}
+
 async function runAnalysis(force: boolean): Promise<void> {
   if (!chem.ready) return;
   // Analyse the selected structures, or else the one last drawn on.
@@ -4382,6 +4541,7 @@ async function runAnalysis(force: boolean): Promise<void> {
   }
   if (seq !== analysisSeq) return;
   lastAnalysis = { results, frags };
+  saySelection(results);
   panel.innerHTML = results.map((r, i) => polymers[i] ? polymerHtml(r, polymers[i]!) : analysisHtml(r, i, adductSel.value, { stereo: r.error ? '' : stereoSummary(frags[i]), unknown: exports[i].unknownLabels, electrons: electronsHtml(countElectrons(doc, frags[i].values().next().value!)), pubchem: r.error || !r.smiles ? '' : pubchemHtml(pubchemStates.get(r.smiles) ?? { kind: 'idle' }, i) })).join('');
   updatePanels();
 }
@@ -4707,6 +4867,13 @@ registerBundledFonts(() => {
     docMode.fontsChanged();
   }, 50);
 });
+// the icon library loads on its own once the window is up; then anything with icons in it is drawn again
+whenIconsLoaded(() => {
+  doc.allDirty = true;
+  editor.changed();
+  docMode.fontsChanged();
+});
+setTimeout(() => void loadIcons().catch(() => flash('The icon library could not be loaded.')), 0);
 applyRibbonIcons();
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
@@ -4787,7 +4954,7 @@ function drawingMenu(): MenuItem[] {
       { cmd: 'undo' }, { cmd: 'redo' }, null,
       ...(ws.active.mode === 'slides' ? [{ cmd: 'new-comment', label: 'New Comment' }, { cmd: 'show-comments', label: 'Show Comments' }, null] : []),
       ...(ws.active.mode === 'slides' || design ? [{ cmd: 'format-background', label: 'Format Background…' }, null] : []),
-      { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'connector-tool' }] : []), ...(ws.active.mode === 'slides' ? [{ cmd: 'slide-shapes', label: 'Shape…' }] : [])] },
+      { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'design-icons', label: 'Icon…' }, { cmd: 'connector-tool' }] : []), ...(ws.active.mode === 'slides' ? [{ cmd: 'slide-shapes', label: 'Shape…' }, { cmd: 'slide-icons', label: 'Icon…' }] : [])] },
       { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }, { cmd: 'catalytic-cycle' }, { cmd: 'energy-diagram' }, { cmd: 'ts-brackets' }, null, { cmd: 'animate-reaction' }] },
       { cmd: 'drawing-style' },
       view,
@@ -4962,7 +5129,7 @@ const toolsNav = $<HTMLElement>('#tools');
 
 /** Every tool on the tool bar (palette items too), by name, for toolboxes. */
 const ALL_TOOLS = new Map<string, { title: string; icon: string }>();
-for (const group of TOOL_GROUPS) {
+for (const group of [...TOOL_GROUPS, OFF_BAR]) {
   for (const item of group) {
     const pal = 'palette' in item ? item : null;
     for (const t of pal ? pal.items : [item as { name: string; title: string }]) {
@@ -5149,7 +5316,25 @@ const toolboxes = new Toolboxes(TOOLBOX_DEFS, {
   // each mode keeps the side panel folded or open on its own
   folded: (id) => (id === 'details' ? sideIsFolded() : undefined),
   fold: (id) => { if (id !== 'details') return false; command('fold-side'); return true; },
+  say: (text) => flash(text),
+  rendered: () => fitTools(),
 });
+
+/**
+ * In a dock down a side, the drawing tools take three columns when two would run past the
+ * window's foot, and the dock fades at its foot while there is more below to scroll to.
+ */
+function fitTools(): void {
+  const dock = toolsNav.closest<HTMLElement>('.dock-v');
+  toolsNav.classList.remove('cols-3');
+  if (dock && dock.scrollHeight > dock.clientHeight + 1) toolsNav.classList.add('cols-3');
+  fadeDocks();
+}
+function fadeDocks(): void {
+  for (const d of document.querySelectorAll<HTMLElement>('.dock-v')) d.classList.toggle('more-below', d.scrollTop + d.clientHeight < d.scrollHeight - 2);
+}
+for (const d of document.querySelectorAll<HTMLElement>('.dock-v')) d.addEventListener('scroll', fadeDocks, { passive: true });
+addEventListener('resize', () => fitTools());
 
 /** Tick the shown toolboxes and the lock in the View menu, and show the lock on its button. */
 function tickToolboxes(): void {

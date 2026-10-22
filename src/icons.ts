@@ -3,7 +3,26 @@
 const svg = (body: string) =>
   `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 
-function poly(n: number, r = 8, inner = false, flat = false): string {
+/** A ring's size written small in its middle, so the larger rings tell apart at a glance. */
+const ringSize = (n: number) => `<text x="12" y="15.3" font-size="8.5" font-weight="600" text-anchor="middle" fill="currentColor" stroke="none" font-family="system-ui, sans-serif">${n}</text>`;
+
+/**
+ * Hashes across a bond from (x1,y1) to (x2,y2), each `from` long at the start growing to `to`
+ * at the end (equal for a hashed bond, growing for a hashed wedge).
+ */
+function hashes(n: number, from: number, to: number, x1 = 5, y1 = 18.5, x2 = 19, y2 = 5.5): string {
+  const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy);
+  const ux = dx / len, uy = dy / len, px = -uy, py = ux;
+  let out = '';
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1), w = (from + (to - from) * t) / 2;
+    const cx = x1 + dx * t, cy = y1 + dy * t;
+    out += `<line x1="${(cx - px * w).toFixed(2)}" y1="${(cy - py * w).toFixed(2)}" x2="${(cx + px * w).toFixed(2)}" y2="${(cy + py * w).toFixed(2)}"/>`;
+  }
+  return `<g stroke-width="1.4" stroke-linecap="butt">${out}</g>`;
+}
+
+function poly(n: number, r = 8, inner = false, flat = false, label = ''): string {
   const pts: [number, number][] = [];
   const start = flat ? -Math.PI / 2 + Math.PI / n : -Math.PI / 2;
   for (let i = 0; i < n; i++) {
@@ -21,7 +40,7 @@ function poly(n: number, r = 8, inner = false, flat = false): string {
       s += `<line x1="${ia[0].toFixed(2)}" y1="${ia[1].toFixed(2)}" x2="${ib[0].toFixed(2)}" y2="${ib[1].toFixed(2)}"/>`;
     }
   }
-  return svg(s);
+  return svg(s + label);
 }
 
 export const ICONS: Record<string, string> = {
@@ -31,25 +50,31 @@ export const ICONS: Record<string, string> = {
   'bond-double': svg('<line x1="4" y1="16" x2="17" y2="5"/><line x1="7" y1="19" x2="20" y2="8"/>'),
   'bond-triple': svg('<line x1="3.5" y1="15" x2="15.5" y2="4.5"/><line x1="5.5" y1="17.5" x2="18" y2="7"/><line x1="8.5" y1="19.5" x2="20.5" y2="9"/>'),
   'bond-wedge': svg('<path d="M5 18L18.4 4.6 20 6.4z" fill="currentColor"/>'),
-  'bond-hashWedge': svg('<g stroke-width="1.3"><line x1="6" y1="17.4" x2="6.6" y2="18"/><line x1="8.4" y1="14.4" x2="9.8" y2="15.8"/><line x1="10.8" y1="11.4" x2="13" y2="13.6"/><line x1="13.2" y1="8.4" x2="16.2" y2="11.4"/><line x1="15.6" y1="5.4" x2="19.4" y2="9.2"/></g>'),
-  'bond-hash': svg('<g stroke-width="1.3"><line x1="5" y1="15.5" x2="7.5" y2="18"/><line x1="8" y1="12.5" x2="10.5" y2="15"/><line x1="11" y1="9.5" x2="13.5" y2="12"/><line x1="14" y1="6.5" x2="16.5" y2="9"/><line x1="17" y1="3.5" x2="19.5" y2="6"/></g>'),
+  // the hashed wedge widens from a point like the wedge beside it; the hashed bond stays narrow
+  'bond-hashWedge': svg(hashes(6, 0.6, 8.5)),
+  'bond-hash': svg(hashes(6, 3.2, 3.2)),
   'bond-bold': svg('<line x1="5" y1="18" x2="19" y2="6" stroke-width="4" stroke-linecap="butt"/>'),
   'bond-dash': svg('<line x1="5" y1="18" x2="19" y2="6" stroke-dasharray="2 2.2"/>'),
-  'bond-partial': svg('<line x1="4" y1="19" x2="15" y2="9" stroke-dasharray="2 2.2"/><path d="M18 3v8M15.5 5h5M15.5 8.5h5" stroke-width="1.2"/>'),
+  // a bond forming in a transition state: dashed between two atoms, marked ‡
+  'bond-partial': svg('<line x1="5" y1="18.5" x2="15" y2="9.5" stroke-dasharray="2 2"/><circle cx="4.2" cy="19.2" r="1.7" fill="currentColor" stroke="none"/><circle cx="15.8" cy="8.8" r="1.7" fill="currentColor" stroke="none"/><path d="M19.5 2.5v9M17 5h5M17 8.8h5" stroke-width="1.4"/>'),
   'own-template-add': svg('<polygon points="12,3 19,7 19,15 12,19 5,15 5,7" stroke-dasharray="2 2"/><path d="M12 8v7M8.5 11.5h7"/>'),
-  fragment: svg('<polyline points="3,16 7.5,11 12,16 16.5,11 21,14"/><line x1="12.5" y1="3" x2="9" y2="21" stroke-dasharray="2 2"/>'),
+  // a chain cut in two, the pieces moving apart
+  fragment: svg('<polyline points="2.5,17 6,13 9.5,17"/><polyline points="14.5,12 18,8 21.5,12"/><line x1="12" y1="3" x2="12" y2="21" stroke-dasharray="2 2"/><path d="M9 7.5l-2.5 2M15 16.5l2.5-2" stroke-width="1.3"/>'),
   element: svg('<rect x="3" y="4" width="5" height="5"/><rect x="3" y="9" width="5" height="5"/><rect x="8" y="9" width="5" height="5"/><rect x="16" y="4" width="5" height="5"/><rect x="16" y="9" width="5" height="5"/><rect x="8" y="16" width="8" height="4"/>'),
   'bond-quadruple': svg('<line x1="3" y1="14" x2="14" y2="4"/><line x1="5" y1="16.3" x2="16.3" y2="6"/><line x1="7.5" y1="18.5" x2="18.8" y2="8"/><line x1="10" y1="20.5" x2="21" y2="10.5"/>'),
   'bond-dative': svg('<line x1="4" y1="19" x2="17" y2="7"/><path d="M20 4l-7.2 2.3 4.8 5z" fill="currentColor"/>'),
-  'bond-hapto': svg('<polygon points="12.0,5.3 18.7,7.5 16.1,11.1 7.9,11.1 5.3,7.5"/><line x1="12" y1="9" x2="12" y2="20"/><circle cx="12" cy="20.2" r="1.6" fill="currentColor"/>'),
+  // a ring bonded through its middle to a metal, M
+  'bond-hapto': svg('<polygon points="12,2.8 17.4,6.3 15.3,11.5 8.7,11.5 6.6,6.3"/><line x1="12" y1="7.8" x2="12" y2="15"/><text x="12" y="22.2" font-size="8" font-weight="700" text-anchor="middle" fill="currentColor" stroke="none" font-family="system-ui, sans-serif">M</text>'),
   'bond-wavy': svg('<path d="M4 18c2-1 1-3 3-4s2 1 4 0 1-3 3-4 2 1 4 0 1-3 3-4"/>'),
   chain: svg('<polyline points="3,15 7.5,9 12,15 16.5,9 21,15"/>'),
   'ring-3': poly(3),
   'ring-4': poly(4, 8, false, true),
   'ring-5': poly(5),
   'ring-6': poly(6),
-  'ring-7': poly(7),
-  'ring-8': poly(8, 8.5, false, true),
+  'ring-7': poly(7, 8.5, false, false, ringSize(7)),
+  'ring-8': poly(8, 8.5, false, true, ringSize(8)),
+  // the Large rings palette's button, on the same grid as the rings above it
+  'tpl-ring9': poly(9, 8.5, false, false, ringSize(9)),
   'ring-benzene': poly(6, 8, true),
   'ring-cp': poly(5, 8, true),
   text: svg('<path d="M6 19L12 5l6 14"/><path d="M8.4 14h7.2"/>'),
@@ -77,6 +102,10 @@ export const ICONS: Record<string, string> = {
   'shape-line-bold': svg('<line x1="5" y1="18" x2="19" y2="6" stroke-width="3.4"/>'),
   'bracket-square': svg('<path d="M8.5 4H5.5v16h3M15.5 4h3v16h-3"/>'),
   'bracket-round': svg('<path d="M8.5 4c-4.5 4-4.5 12 0 16M15.5 4c4.5 4 4.5 12 0 16"/>'),
+  'bracket-ts': svg('<path d="M7 5H4v15h3M14 5h3v15h-3"/><path d="M20.5 1.5v8M18.3 3.6h4.4M18.3 6.8h4.4" stroke-width="1.3"/>'),
+  'bracket-left': svg('<path d="M14 4H9v16h5"/>'),
+  'bracket-right': svg('<path d="M10 4h5v16h-5"/>'),
+  'sym-ddagger': svg('<path d="M12 3v18M7 7.5h10M7 14h10" stroke-width="1.8"/>'),
   'sym-lonepair': svg('<text x="12" y="19" font-size="13" text-anchor="middle" fill="currentColor" stroke="none" font-family="Arial, sans-serif">O</text><circle cx="9.5" cy="4.5" r="1.3" fill="currentColor" stroke="none"/><circle cx="14.5" cy="4.5" r="1.3" fill="currentColor" stroke="none"/>'),
   'sym-radical': svg('<text x="11" y="19" font-size="13" text-anchor="middle" fill="currentColor" stroke="none" font-family="Arial, sans-serif">C</text><circle cx="18.5" cy="7" r="1.5" fill="currentColor" stroke="none"/>'),
   'sym-plus': svg('<circle cx="12" cy="12" r="6.5"/><path d="M8.5 12h7M12 8.5v7"/>'),

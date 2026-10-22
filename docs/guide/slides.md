@@ -79,6 +79,8 @@ The small bar that appears above text while you type has the same buttons, plus 
 
 **Insert** tab ▸ **Shapes** opens the shape library: basic shapes, block arrows, flowchart shapes, callouts and lab glassware. Type in its box to find one (for example "flask"). Click a shape, then click on the slide to place it at its usual size, or drag to draw it the size you want. Double-click a shape to type in it. Its fill, outline and text are in the **Style** panel, and shapes save to PowerPoint as PowerPoint's own shapes where it has a matching one.
 
+**Insert** tab ▸ **Icons** opens the same library on its **Icons** tab: about 7,000 icons, with a **Lab and science** group first (glassware, molecules, lab equipment, hazard and safety signs). Search by name or by what it means ("hazard", "rbf"). An icon is placed like a shape, filled in one colour; change its colour in the **Style** panel. See [Design: Icons](design.md#icons).
+
 ## Structures on slides
 
 Every drawing tool in the toolbox works on a slide: draw structures, use the ChemDraw-style hotkeys, add reaction arrows, run Clean Up, and see R/S labels and warnings as you would in a drawing. You can also:

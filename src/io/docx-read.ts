@@ -30,7 +30,7 @@ import { layoutTable } from '../table';
 import { cfbStreams, isCfb } from './cfb';
 import { isCdx } from './cdx';
 import { cmtIds, cmtString, type CommentNote, type CommentThread } from '../document/comments';
-import { BIB_MARK, CHART_NAME, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, W14_NS, W15_NS, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
+import { BIB_MARK, CHART_NAME, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, W14_NS, W15_NS, W16CID_NS, W16CEX_NS, fromWordDate, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
 import { cleanRef } from '../document/references';
 import { revText } from '../document/revisions';
 import { mathText, ommlToTex } from '../document/math';
@@ -703,7 +703,16 @@ class DocxReader {
       const text = paras.map((p) => [...p.getElementsByTagNameNS(this.W, '*')]
         .map((e) => (e.localName === 't' ? e.textContent ?? '' : e.localName === 'tab' ? '\t' : e.localName === 'br' ? '\n' : '')).join('')).join('\n');
       const last = paras[paras.length - 1];
-      notes.set(id, { author: this.a(c, 'author') ?? '', date: this.a(c, 'date') ?? '', text, para: last?.getAttributeNS(W14_NS, 'paraId') ?? '' });
+      notes.set(id, { author: this.a(c, 'author') ?? '', date: fromWordDate(this.a(c, 'date') ?? ''), text, para: last?.getAttributeNS(W14_NS, 'paraId') ?? '' });
+    }
+    // Word 365 keeps each comment's time in UTC too, by a lasting id found from its paragraph id
+    const part = (rel: string) => { const at = this.pkg.relOfType(this.main, rel); return at ? this.pkg.xml(at)?.documentElement ?? null : null; };
+    const durable = new Map<string, string>(), utc = new Map<string, string>();
+    for (const e of [...(part(DOCX_REL.commentsIds)?.getElementsByTagNameNS(W16CID_NS, 'commentId') ?? [])]) durable.set(e.getAttributeNS(W16CID_NS, 'paraId') ?? '', e.getAttributeNS(W16CID_NS, 'durableId') ?? '');
+    for (const e of [...(part(DOCX_REL.commentsExtensible)?.getElementsByTagNameNS(W16CEX_NS, 'commentExtensible') ?? [])]) utc.set(e.getAttributeNS(W16CEX_NS, 'durableId') ?? '', e.getAttributeNS(W16CEX_NS, 'dateUtc') ?? '');
+    for (const n of notes.values()) {
+      const at = new Date(utc.get(durable.get(n.para) ?? '') ?? '');
+      if (!isNaN(at.getTime())) n.date = at.toISOString();
     }
     // which comment each reply answers, and which are resolved
     const parent = new Map<string, string>(), done = new Set<string>();

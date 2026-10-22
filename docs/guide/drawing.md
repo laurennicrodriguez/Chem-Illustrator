@@ -8,7 +8,7 @@ If you use ChemDraw, most of this will feel familiar: the hotkeys are ChemDraw's
 
 ## The toolbox
 
-The drawing tools run down the left side, in groups. A button with a small arrow beside it holds a set of tools; click the arrow, right-click the button, or press and hold it to open the set. The button then shows the tool you used last. Rest the mouse on any tool to see its name and hotkey, and watch the hint line at the bottom of the window for how to use it.
+The drawing tools run down the left side, in groups. A button with a small arrow in its corner holds a set of tools; click the corner, click the button again once it is in use, right-click it, or press and hold it to open the set. The button then shows the tool you used last. Text, arrows and the mechanism symbols sit just under the bonds so they show without scrolling; on a short window the tools take three columns, and the toolbox fades at the bottom while there is more below. Rest the mouse on any tool to see its name and hotkey, and watch the hint line at the bottom of the window for how to use it.
 
 ### Select and eraser
 
@@ -17,7 +17,7 @@ The drawing tools run down the left side, in groups. A button with a small arrow
 
 ### Bonds and chains
 
-Single, double, triple and quadruple bonds; wedge, hashed wedge, hashed, bold, dashed and wavy bonds; a partial bond; a dative bond; a hapto (η) bond; and the chain tool.
+Single, double and triple bonds (a quadruple bond has its hotkey and Search, off the toolbox); wedge, hashed wedge, hashed, bold, dashed and wavy bonds; a partial bond; a dative bond; a hapto (η) bond; and the chain tool.
 
 - Click empty space or an atom to draw a bond; drag to aim it. New bonds point in 15° steps and are a standard length. Hold Alt while drawing to draw at any angle, or turn off **Chemistry ▸ Fixed Bond Lengths** (Ctrl+L) and **Fixed Angles** (Ctrl+E).
 - Click an existing bond with the single bond tool to step it through single, double and triple. Click a double bond again with the double bond tool to move its second line. Click a wedge or dative bond again to reverse it.
@@ -81,7 +81,7 @@ To make your own template, select a structure and click the first button on the 
 ### Text, periodic table and fragmentation
 
 - **Text**: click an atom to type a label, or empty space for a caption. See [Text and captions](#text-and-captions).
-- **Periodic table**: pick an element, then click atoms to change them, or empty space to add a lone atom. Atoms already selected change at once. You can type a symbol in its box and press Enter. **Chemistry ▸ Look Up ▸ Periodic Table…** opens it too.
+- **Periodic table**: pick an element, then click atoms to change them, or empty space to add a lone atom. Atoms already selected change at once. You can type a symbol in its box and press Enter. Open it from **Chemistry ▸ Look Up ▸ Periodic Table…** or Search (it is no longer a toolbox button).
 - **Mass fragmentation**: see [Mass fragmentation](#mass-fragmentation).
 
 ### Arrows, mechanism symbols, shapes and brackets
@@ -94,10 +94,10 @@ To make your own template, select a structure and click the first button on the 
 - **Moving an arrow's end:** drag the end of a curved arrow onto a lone pair, atom or bond and it snaps there, keeping the side it bends to. Hold Alt to put the end anywhere.
 - **Clean Up Arrow** (**Chemistry ▸ Mechanism Arrows ▸ Clean Up Arrow**, or right-click a curved arrow): redraws the selected curved arrows from the lone pair, bond or atom their tail is on to what their head points at, starting and ending at a sensible angle and clear of the structure. S-shaped arrows stay S-shaped. Undo puts them back. It has no key to start with; give it one in **Edit ▸ Hotkeys…**. Right-click a curved arrow for the **Mechanism Arrow** menu with all of these.
 - **Files:** S-shaped arrows are saved in .cdxml and .cdx as ChemDraw curves with arrowheads, so ChemDraw shows them. What an arrow is stuck to is saved too, for Chem Illustrator; ChemDraw ignores it.
-- **Mechanism symbols**: lone pair, radical dot, circled plus and minus, δ+ and δ−. Click an atom and the symbol goes in the most open space round it. To put a lone pair (or radical dot or circled charge) somewhere else, press on the atom and drag: the symbol goes round the atom after the pointer, and lands where you let go. Hold Alt (or Shift) while dragging to turn it in 15° steps, as when turning a structure. A radical dot makes the atom a radical (one H fewer); a circled charge sets the atom's charge.
+- **Mechanism symbols**: lone pair, radical dot, circled plus and minus, δ+ and δ−, and ‡ (click where it goes). Click an atom and the symbol goes in the most open space round it. To put a lone pair (or radical dot or circled charge) somewhere else, press on the atom and drag: the symbol goes round the atom after the pointer, and lands where you let go. Hold Alt (or Shift) while dragging to turn it in 15° steps, as when turning a structure. A radical dot makes the atom a radical (one H fewer); a circled charge sets the atom's charge.
 - **Charges by labels** sit raised after the label (N⁺). A bond that runs under the sign stops short of it, as in ChemDraw; if that would leave almost nothing of a short bond, the charge moves to a free spot round the label instead.
 - **Shapes**: boxes (plain, round-cornered, with a shadow, dashed), ovals, circles drawn from the centre, a filled circle, and plain, dashed and bold lines. Drag to draw; Shift while drawing an oval makes a circle. Drag the corner squares to resize.
-- **Brackets**: square, round and curly. Drag a box to put a pair of brackets round it, or click a structure to bracket it.
+- **Brackets**: square, round and curly, transition-state brackets (square, with ‡ at the upper right), and a single left or right bracket. Drag a box to put brackets round it, or click a structure to bracket it.
 
 Select any arrow, shape or bracket to change its line width, colour, dashes, fill, corners and shadow in the **Style** panel.
 

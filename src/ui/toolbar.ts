@@ -1,6 +1,6 @@
 // The tool bar down the left side. Most tools have a button of their own; related tools share a
-// palette button that shows the one last picked, with a small arrow (or a right-click, or a long
-// press) that opens the whole set.
+// palette button that shows the one last picked. Its corner arrow, a second click, a right-click
+// or a long press opens the whole set.
 
 import { ICONS } from '../icons';
 
@@ -46,7 +46,8 @@ export class Toolbar {
   }
 
   private icon(def: PaletteDef | null, name: string, size = 28): string {
-    return ICONS[name] ?? def?.icon?.(name, size) ?? name;
+    // a palette's own pictures in the open palette; the bar's buttons keep to the 24 px icon grid
+    return (size > 28 ? def?.icon?.(name, size) : undefined) ?? ICONS[name] ?? def?.icon?.(name, size) ?? name;
   }
 
   private toolButton(t: ToolDef): HTMLButtonElement {
@@ -80,11 +81,16 @@ export class Toolbar {
     const pal: Palette = { def, button: b, current: def.items[0].name };
     this.palettes.push(pal);
     this.show(pal);
-    b.addEventListener('click', () => this.pick(pal.current));
-    b.addEventListener('contextmenu', (e) => { e.preventDefault(); this.open(pal); });
     // a long press opens the palette too (touch screens have no right-click)
-    let timer = 0;
-    b.addEventListener('pointerdown', () => { timer = window.setTimeout(() => this.open(pal), 450); });
+    let timer = 0, held = false;
+    b.addEventListener('click', () => {
+      if (held) { held = false; return; } // the press that opened it
+      // a second click on the tool in use opens its set
+      if (b.classList.contains('active')) { if (this.flyoutOwner === pal) this.close(); else this.open(pal); return; }
+      this.pick(pal.current);
+    });
+    b.addEventListener('contextmenu', (e) => { e.preventDefault(); this.open(pal); });
+    b.addEventListener('pointerdown', () => { held = false; timer = window.setTimeout(() => { held = true; this.open(pal); }, 450); });
     for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(ev, () => clearTimeout(timer));
     const more = document.createElement('button');
     more.className = 'more';
@@ -99,18 +105,23 @@ export class Toolbar {
   private show(pal: Palette): void {
     const t = pal.def.items.find((i) => i.name === pal.current)!;
     pal.button.innerHTML = this.icon(pal.def, t.name);
-    this.titleTool(pal.button, t, `. Right-click for all ${pal.def.title.toLowerCase()}`);
+    this.titleTool(pal.button, t, `. Click again, or right-click, for all ${pal.def.title.toLowerCase()}`);
     pal.button.dataset.tool = t.name;
   }
 
   /** Mark the tool in use (and show it on its palette's button). */
   setActive(name: string): void {
-    for (const [n, b] of this.buttons) b.classList.toggle('active', n === name);
+    // (pressed or not, for screen readers)
+    for (const [n, b] of this.buttons) { b.classList.toggle('active', n === name); b.setAttribute('aria-pressed', String(n === name)); }
     for (const pal of this.palettes) {
       const has = pal.def.items.some((i) => i.name === name);
       if (has && pal.current !== name) { pal.current = name; this.show(pal); }
       pal.button.classList.toggle('active', has);
+      pal.button.setAttribute('aria-pressed', String(has));
     }
+    // the tool in use stays in sight when the bar scrolls (picked from Search or by a key)
+    const on = this.buttons.get(name) ?? this.palettes.find((p) => p.current === name && p.button.classList.contains('active'))?.button;
+    on?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
 
   private open(pal: Palette): void {

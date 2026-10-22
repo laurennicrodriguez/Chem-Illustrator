@@ -9,7 +9,7 @@
 <body>
   <header>
     <div class="menu-wrap">
-      <button id="btn-file" aria-haspopup="menu" aria-expanded="false" aria-controls="file-menu">File</button>
+      <button id="btn-file" aria-haspopup="menu" aria-expanded="false" aria-controls="file-menu" aria-keyshortcuts="Alt+F"><span class="mn">F</span>ile</button>
       <div id="file-menu" class="menu" role="menu" hidden>
         <button role="menuitem" data-cmd="new">New Drawing</button>
         <button role="menuitem" data-cmd="new-slides">New Slides</button>
@@ -43,7 +43,7 @@
       </div>
     </div>
     <div class="menu-wrap">
-    <button id="btn-edit" aria-haspopup="menu" aria-expanded="false" aria-controls="edit-menu">Edit</button>
+    <button id="btn-edit" aria-haspopup="menu" aria-expanded="false" aria-controls="edit-menu" aria-keyshortcuts="Alt+E"><span class="mn">E</span>dit</button>
     <div id="edit-menu" class="menu" role="menu" hidden>
     <button role="menuitem" data-cmd="undo">Undo</button>
     <button role="menuitem" data-cmd="redo">Redo</button>
@@ -89,7 +89,7 @@
     </div>
     </div>
     <div class="menu-wrap">
-    <button id="btn-view" aria-haspopup="menu" aria-expanded="false" aria-controls="view-menu">View</button>
+    <button id="btn-view" aria-haspopup="menu" aria-expanded="false" aria-controls="view-menu" aria-keyshortcuts="Alt+V"><span class="mn">V</span>iew</button>
     <div id="view-menu" class="menu" role="menu" hidden>
     <button role="menuitem" data-cmd="zoom-in">Zoom In</button>
     <button role="menuitem" data-cmd="zoom-out">Zoom Out</button>
@@ -132,7 +132,7 @@
     </div>
     </div>
     <div class="menu-wrap">
-    <button id="btn-insert" aria-haspopup="menu" aria-expanded="false" aria-controls="insert-menu">Insert</button>
+    <button id="btn-insert" aria-haspopup="menu" aria-expanded="false" aria-controls="insert-menu" aria-keyshortcuts="Alt+I"><span class="mn">I</span>nsert</button>
     <div id="insert-menu" class="menu" role="menu" hidden>
     <button title="A structure from its name or SMILES: in the drawing, in the text at the caret, or in the selected cell" role="menuitem" data-cmd="name-to-structure">Structure from Name or SMILES…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-structure" title="Draw a structure or scheme to put in the text at the caret">Structure</button>
@@ -142,6 +142,8 @@
     <button data-modes="drawing slides design" role="menuitem" data-cmd="text-box">Text Box</button>
     <button data-modes="drawing slides design document" role="menuitem" data-cmd="insert-table" title="A table in the ACS style; or paste cells from Excel or a sheet">Table…</button>
     <button data-modes="drawing slides design document" role="menuitem" data-cmd="insert-chart" title="A chart with its own data (type or paste it in a grid), saved as a Word or PowerPoint chart">Chart…</button>
+    <button data-modes="slides design document" role="menuitem" data-cmd="insert-shapes" title="Basic shapes, block arrows, flowchart shapes, callouts and lab glassware">Shapes…</button>
+    <button data-modes="slides design document" role="menuitem" data-cmd="insert-icons" title="About 7,000 icons, lab and science ones first: glassware, molecules, hazard and safety signs">Icons…</button>
     <hr />
     <button data-modes="slides" role="menuitem" data-cmd="new-slide">New Slide</button>
     <button data-modes="slides" role="menuitem" data-cmd="duplicate-slide">Duplicate Slide</button>
@@ -165,7 +167,7 @@
     </div>
     </div>
     <div class="menu-wrap">
-    <button id="btn-format" aria-haspopup="menu" aria-expanded="false" aria-controls="format-menu">Format</button>
+    <button id="btn-format" aria-haspopup="menu" aria-expanded="false" aria-controls="format-menu" aria-keyshortcuts="Alt+O">F<span class="mn">o</span>rmat</button>
     <div id="format-menu" class="menu" role="menu" hidden>
     <div class="submenu" data-modes="drawing slides design">
     <button role="menuitem" class="has-sub" aria-haspopup="menu" aria-expanded="false">Align</button>
@@ -225,7 +227,7 @@
     </div>
     </div>
     <div class="menu-wrap">
-    <button id="btn-chemistry" aria-haspopup="menu" aria-expanded="false" aria-controls="chemistry-menu">Chemistry</button>
+    <button id="btn-chemistry" aria-haspopup="menu" aria-expanded="false" aria-controls="chemistry-menu" aria-keyshortcuts="Alt+C"><span class="mn">C</span>hemistry</button>
     <div id="chemistry-menu" class="menu" role="menu" data-item-modes="drawing slides design" hidden>
     <button role="menuitem" data-cmd="clean-up">Clean Up Structure</button>
     <button role="menuitem" data-cmd="clean-up-reaction">Clean Up Reaction</button>
@@ -357,7 +359,7 @@
     <button id="btn-dark" type="button" aria-pressed="false" data-cmd="dark-page" title="Dark page: show the page dark on screen only (files, printing and copies are not changed)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12S5.5 4.5 12 4.5 22.5 12 22.5 12 18.5 19.5 12 19.5 1.5 12 1.5 12Z"/><circle cx="12" cy="12" r="3.5"/></svg></button>
     <button id="btn-search" type="button" class="search-box" title="Search for a command by name (Alt+Q)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg><span>Search</span><kbd>Alt+Q</kbd></button>
     <div class="menu-wrap">
-      <button id="btn-help" aria-haspopup="menu" aria-expanded="false" aria-controls="help-menu" title="Hotkeys, the user guide, and sending feedback">Help</button>
+      <button id="btn-help" aria-haspopup="menu" aria-expanded="false" aria-controls="help-menu" title="Hotkeys, the user guide, and sending feedback" aria-keyshortcuts="Alt+H"><span class="mn">H</span>elp</button>
       <div id="help-menu" class="menu right" role="menu" hidden>
         <button role="menuitem" data-cmd="help" title="The most used hotkeys and tips, with a button to change any key">Hotkeys and Tips</button>
         <button role="menuitem" data-cmd="user-guide" title="The user guide, on the project's GitHub page">User Guide</button>
@@ -740,6 +742,7 @@
           <button class="rb-big" data-doc="insert-chart" title="A chart with its own data, as in Word: type or paste the numbers, pick the kind of chart. Double-click it to change it"><span class="rb-icon">▥</span>Chart</button>
           <button class="rb-big" data-doc="insert-text-box" title="A box of text on the page, with the page's text wrapping round it. Drag its edge to move it"><span class="rb-icon">▭</span>Text Box</button>
           <button class="rb-big" data-doc="insert-shapes" aria-haspopup="true" title="Basic shapes, block arrows, flowchart shapes, callouts and lab glassware: the one you pick goes in the text at the caret. Double-click it to change it with the drawing tools"><span class="rb-icon">◇</span>Shapes ▾</button>
+          <button class="rb-big" data-doc="insert-icons" aria-haspopup="true" title="About 7,000 icons, lab and science ones first (glassware, molecules, hazard signs): the one you pick goes in the text at the caret. Find one by name"><span class="rb-icon">⚗</span>Icons ▾</button>
         </div>
         <div class="rb-label">Tables, pictures and shapes</div>
       </div>
@@ -1094,6 +1097,7 @@
           <button class="rb-big" data-cmd="insert-table" title="Put a table on the slide (or paste cells from Excel or a sheet)"><span class="rb-icon">▦</span>Table</button>
           <button class="rb-big" data-cmd="insert-chart" title="A chart with its own data, as in PowerPoint: type or paste the numbers, pick the kind of chart. Double-click it to change it"><span class="rb-icon">▥</span>Chart</button>
           <button class="rb-big" data-cmd="slide-shapes" aria-haspopup="true" title="Basic shapes, block arrows, flowchart shapes, callouts and lab glassware: pick one, then click or drag on the slide"><span class="rb-icon">◇</span>Shapes ▾</button>
+          <button class="rb-big" data-cmd="slide-icons" aria-haspopup="true" title="About 7,000 icons, lab and science ones first (glassware, molecules, hazard signs): pick one, then click or drag on the slide"><span class="rb-icon">⚗</span>Icons ▾</button>
           <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
         </div>
         <div class="rb-label">Pictures, Text and Shapes</div>
@@ -1263,6 +1267,7 @@
     <div class="rb-group">
       <div class="rb-row">
         <button class="rb-big" data-cmd="design-shapes" title="Find a shape in the library on the left"><span class="rb-icon">◇</span>Shapes</button>
+        <button class="rb-big" data-cmd="design-icons" title="Find an icon in the library on the left: about 7,000, lab and science ones first"><span class="rb-icon">⚗</span>Icons</button>
         <button class="rb-big" data-cmd="text-box" title="Click on the page to type, or drag to make a text box that wraps"><span class="rb-icon">T</span>Text Box</button>
         <button class="rb-big" data-cmd="insert-picture" title="Put a picture on the page (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
         <button class="rb-big" data-cmd="insert-table" title="Put a table on the page (or paste cells from Excel or a sheet)"><span class="rb-icon">▦</span>Table</button>
@@ -1325,7 +1330,7 @@
 
   <!-- toolboxes dock along the drawing's edges (View > Toolboxes); the drawing tools start on the left -->
   <div id="dock-top" class="dock dock-h"></div>
-  <div id="dock-left" class="dock dock-v"><nav id="tools" aria-label="Drawing tools"></nav></div>
+  <div id="dock-left" class="dock dock-v"><nav id="tools" role="toolbar" aria-orientation="vertical" aria-label="Drawing tools"></nav></div>
   <div id="dock-right" class="dock dock-v"></div>
   <div id="dock-bottom" class="dock dock-h"></div>
 
@@ -1359,7 +1364,7 @@
     </div>
     <div id="canvas-host">
       <canvas id="scene"></canvas>
-      <canvas id="overlay" tabindex="0"></canvas>
+      <canvas id="overlay" tabindex="0" role="application" aria-roledescription="drawing" aria-label="Drawing"></canvas>
       <div id="warn-tip" role="tooltip" hidden></div>
     </div>
     <div id="main-snap" hidden title="Click to work on the slide again"><canvas></canvas></div>
@@ -1418,6 +1423,7 @@
 
   <footer id="hint"></footer>
   <div id="flash" role="status" aria-live="polite"></div>
+  <div id="sr-say" class="sr-only" aria-live="polite"></div>
 
   <dialog id="help">
     <h2>Hotkeys and Tips</h2>
