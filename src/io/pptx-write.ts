@@ -23,7 +23,8 @@ import { officeTarget, slideOfLink } from '../links';
 import { arialWidth } from '../text-metrics';
 import { arrowPoints, shapeBox, boxOf, shapeOrder, elbowRoute } from '../objects';
 import { geoDef, textArea, type GeoStep } from '../design/geo';
-import { layoutTable, cellAlign, spanOf, isCovered, tableText, NOTE_SCALE } from '../table';
+import { layoutTable, cellAlign, spanOf, rowSpanOf, coveringCell, tableText, NOTE_SCALE } from '../table';
+import { PPT_STYLE_IDS, lookOf, slideCellLook, styledRuns, type CellLine, type Side } from '../deck/table-styles';
 import { tableBorders } from './cdxml-table';
 import { writeCdxml } from './cdxml-write';
 import { extractDrawing } from './clipboard';
@@ -262,11 +263,13 @@ export function splitSlide(doc: Doc, measure: Measure = arialMeasure): SlidePart
     if (sh.kind === 'geo') { geos.push(sh); continue; }
     // ring fills sit under their structure, in its picture
     const chem = sh.kind === 'bracket' || sh.kind === 'symbol' || sh.kind === 'ring';
+    if (sh.hidden && !chem) { geos.push(sh); continue; }
     items.push({ box: shapeBox(sh), chem, add: (s) => s.shapes.add(sh.id), shape: sh });
   }
   for (const c of doc.captions.values()) {
     // titles, text placeholders and text boxes are always PowerPoint text
-    if (c.ph || c.wrap !== undefined) { texts.push(c); continue; }
+    // (and hidden text, kept hidden in PowerPoint rather than left out of a structure's picture)
+    if (c.ph || c.wrap !== undefined || c.hidden) { texts.push(c); continue; }
     const lay = layoutText(c, doc.style.captionSize, measure);
     items.push({ box: { x1: c.x + lay.box.x1, y1: c.y + lay.box.y1, x2: c.x + lay.box.x2, y2: c.y + lay.box.y2 }, chem: false, add: (s) => s.captions.add(c.id), text: c });
   }
@@ -324,6 +327,8 @@ function runXml(r: TextRun, explicit: { size: number; font: string } | null, hli
     if (r.bold !== undefined) attrs.push(`b="${r.bold ? 1 : 0}"`);
     if (r.italic !== undefined) attrs.push(`i="${r.italic ? 1 : 0}"`);
     if (r.underline) attrs.push('u="sng"');
+    if (r.strike) attrs.push('strike="sngStrike"');
+    if (r.spacing) attrs.push(`spc="${Math.round(r.spacing * 100)}"`);
     if (p.pos === 'sub') attrs.push('baseline="-25000"');
     else if (p.pos === 'sup') attrs.push('baseline="30000"');
     attrs.push('dirty="0"');
@@ -335,6 +340,12 @@ function runXml(r: TextRun, explicit: { size: number; font: string } | null, hli
 }
 
 const NUMBER_TYPES = ['arabicPeriod', 'alphaLcPeriod', 'romanLcPeriod'];
+
+/** A box turned a quarter about its middle: as wide as it was high. */
+export function swapBox(b: Rect): Rect {
+  const mx = (b.x1 + b.x2) / 2, my = (b.y1 + b.y2) / 2, hw = (b.y2 - b.y1) / 2, hh = (b.x2 - b.x1) / 2;
+  return { x1: mx - hw, y1: my - hh, x2: mx + hw, y2: my + hh };
+}
 
 /** A caption's paragraphs as PowerPoint paragraphs. */
 export function paragraphsXml(c: Caption, explicit: { size: number; font: string } | null, defaultSize: number, measure: Measure, hlink?: LinkXml): string {
@@ -436,6 +447,10 @@ export function sectionsXml(sections: SectionCount[] | undefined, n: number): st
 /** A part in ppt/ as seen from another part in ppt/ or a folder in it. */
 const fromPpt = (from: string, path: string) => (from.split('/').length > 2 ? '../' : '') + path.slice(4);
 
+/** A turn as PowerPoint's xfrm keeps it (60000ths of a degree, clockwise), or nothing. */
+export const rotAttr = (deg: number | undefined): string => (deg ? ` rot="${Math.round((((deg % 360) + 360) % 360) * 60000)}"` : '');
+/** A shape's name and whether it is hidden, as PowerPoint's Selection Pane shows them (cNvPr attributes after the id). */
+const nameAttrs = (name: string, hidden?: boolean): string => ` name="${xml(name)}"${hidden ? ' hidden="1"' : ''}`;
 export const xfrm = (r: Rect, extra = '') => `<a:xfrm${extra}><a:off x="${emu(r.x1)}" y="${emu(r.y1)}"/><a:ext cx="${Math.max(0, emu(r.x2 - r.x1))}" cy="${Math.max(0, emu(r.y2 - r.y1))}"/></a:xfrm>`;
 const GROUP = '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>';
 
@@ -692,19 +707,20 @@ class Writer {
     const styles = textStyles(this.deck.master, s.layout);
     // pictures and shapes at the back, as on screen
     const videos: MediaTiming[] = [];
-    for (const p of parts.pictures) {
+    // pictures and shapes in their order front to back (the Selection Pane's), back first
+    for (const p of shapeOrder([...parts.pictures, ...parts.shapes])) {
       mark({ shapes: new Set([p.id]) }, id);
+      if (p.kind !== 'picture') {
+        out.push(p.kind === 'geo' ? this.geo(path, p, id++, doc, styles.body?.size ?? doc.style.captionSize) : shapeXml(p, id++, doc.style.lineWidth));
+        continue;
+      }
       const box = { x1: Math.min(p.x1, p.x2), y1: Math.min(p.y1, p.y2), x2: Math.max(p.x1, p.x2), y2: Math.max(p.y1, p.y2) };
       if (p.chart) { out.push(await this.chart(path, p.chart, box, id++, p.src)); continue; }
       if (p.math) { out.push(await this.equation(path, p, box, id++)); continue; }
       if (p.zoom && p.link) { const z = this.zoomXml(path, p, box, id); if (z) { out.push(z); id++; continue; } }
-      const v = p.video ? this.video(path, p.video, p.src!, box, id) : '';
+      const v = p.video ? this.video(path, p.video, p.src!, box, id, p) : '';
       if (v) { videos.push({ spid: id, media: p.video! }); out.push(v); id++; continue; }
-      out.push(await this.picture(path, p.src!, box, `Picture ${id - 1}`, id++, p.crop ?? null, p.look, p));
-    }
-    for (const sh of parts.shapes) {
-      mark({ shapes: new Set([sh.id]) }, id);
-      out.push(sh.kind === 'geo' ? this.geo(path, sh, id++, doc, styles.body?.size ?? doc.style.captionSize) : shapeXml(sh, id++, doc.style.lineWidth));
+      out.push(await this.picture(path, p.src!, box, p.name?.trim() || `Picture ${id - 1}`, id++, p.crop ?? null, p.look, p));
     }
     for (const r of parts.connectors) {
       mark({ arrows: new Set([r.id]) }, id);
@@ -818,9 +834,9 @@ class Writer {
     const sz = Math.max(100, Math.round(size * 100));
     const look = `<a:rPr ${lang} sz="${sz}" dirty="0"><a:solidFill><a:srgbClr val="${hex6(m.color)}"/></a:solidFill><a:latin typeface="Cambria Math" panose="02040503050406030204" pitchFamily="18" charset="0"/></a:rPr>`;
     const tags = this.addTags(path, { [TAG.math]: JSON.stringify(m) });
-    const name = `Equation ${id - 1}`;
-    const choice = `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr txBox="1"/><p:nvPr><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:nvPr></p:nvSpPr>` +
-      `<p:spPr>${xfrm(box)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>` +
+    const name = s.name?.trim() || `Equation ${id - 1}`;
+    const choice = `<p:sp><p:nvSpPr><p:cNvPr id="${id}"${nameAttrs(name, s.hidden)}/><p:cNvSpPr txBox="1"/><p:nvPr><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:nvPr></p:nvSpPr>` +
+      `<p:spPr>${xfrm(box, rotAttr(s.rot))}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>` +
       `<p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" rtlCol="0" anchor="ctr"><a:noAutofit/></a:bodyPr><a:lstStyle/>` +
       `<a:p><a:pPr algn="ctr"/><a14:m><m:oMathPara xmlns:m="${NS_M}"><m:oMathParaPr><m:jc m:val="centerGroup"/></m:oMathParaPr><m:oMath>${toOmml(m.tex, look)}</m:oMath></m:oMathPara></a14:m>` +
       `<a:endParaRPr ${lang} sz="${sz}" dirty="0"/></a:p></p:txBody></p:sp>`;
@@ -830,7 +846,7 @@ class Writer {
       const svg = new TextDecoder().decode(fromDataUrl(shapeMathPicture(m, this.measure)).bytes);
       const k = 300 / 72;
       const png = await this.opts.svgToPng(svg, Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k)));
-      fallback = picXml(id, name, this.addMedia(path, png, 'png'), null, box, null, null, undefined, mathText(m.tex));
+      fallback = picXml(id, name, this.addMedia(path, png, 'png'), null, box, null, null, undefined, mathText(m.tex), undefined, undefined, { rot: s.rot, hidden: s.hidden });
     } catch { /* PowerPoint shows the equation itself */ }
     return `<mc:AlternateContent xmlns:mc="${NS_MC}"><mc:Choice xmlns:a14="${NS_A14}" Requires="a14">${choice}</mc:Choice><mc:Fallback>${fallback}</mc:Fallback></mc:AlternateContent>`;
   }
@@ -876,7 +892,7 @@ class Writer {
    * sound's loudspeaker): the file is linked both ways PowerPoint looks for it (PowerPoint 2010's
    * media link, with its trim and fades, and the older video or audio link).
    */
-  private video(from: string, m: Media, poster: string, box: Rect, id: number): string {
+  private video(from: string, m: Media, poster: string, box: Rect, id: number, s?: Shape): string {
     let file: { mime: string; bytes: Uint8Array }, still: { mime: string; bytes: Uint8Array };
     try {
       file = fromDataUrl(m.src);
@@ -898,10 +914,10 @@ class Writer {
     const fade = m.fadeIn || m.fadeOut ? `<p14:fade${m.fadeIn ? ` inDur="${ms(m.fadeIn)}"` : ''}${m.fadeOut ? ` outDur="${ms(m.fadeOut)}"` : ''}/>` : '';
     const p14 = trim || fade ? `<p14:media xmlns:p14="${NS_P14}" r:embed="${media}">${trim}${fade}</p14:media>` : `<p14:media xmlns:p14="${NS_P14}" r:embed="${media}"/>`;
     const name = m.audio ? `Audio ${id - 1}` : `Video ${id - 1}`;
-    return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${name}"><a:hlinkClick r:id="" action="ppaction://media"/></p:cNvPr><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>` +
+    return `<p:pic><p:nvPicPr><p:cNvPr id="${id}"${nameAttrs(s?.name?.trim() || name, s?.hidden)}><a:hlinkClick r:id="" action="ppaction://media"/></p:cNvPr><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>` +
       `<p:nvPr>${m.audio ? `<a:audioFile r:link="${link}"/>` : `<a:videoFile r:link="${link}"/>`}<p:extLst><p:ext uri="{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}">${p14}</p:ext></p:extLst></p:nvPr></p:nvPicPr>` +
       `<p:blipFill><a:blip r:embed="${blip}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
-      `<p:spPr>${xfrm(box)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`;
+      `<p:spPr>${xfrm(box, rotAttr(s?.rot))}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`;
   }
 
   /**
@@ -924,8 +940,8 @@ class Writer {
     const plain = s.text?.runs.map((r) => r.text).join('') ?? '';
     const tag = this.addTags(path, { [TAG.geo]: JSON.stringify({ v: 1, s: look, plain, sid: s.id }) });
     const click = s.link ? this.hlink(s.link) : '';
-    return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${xml(def.name)} ${id - 1}"${click ? `>${click}</p:cNvPr>` : '/>'}<p:cNvSpPr/><p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvSpPr>` +
-      `<p:spPr>${xfrm(box)}${geom}${fill}${ln}${shadow}</p:spPr><p:txBody>${bodyPr}<a:lstStyle/>${body}</p:txBody></p:sp>`;
+    return `<p:sp><p:nvSpPr><p:cNvPr id="${id}"${nameAttrs(s.name?.trim() || `${def.name} ${id - 1}`, s.hidden)}${click ? `>${click}</p:cNvPr>` : '/>'}<p:cNvSpPr/><p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvSpPr>` +
+      `<p:spPr>${xfrm(box, rotAttr(s.rot))}${geom}${fill}${ln}${shadow}</p:spPr><p:txBody>${bodyPr}<a:lstStyle/>${body}</p:txBody></p:sp>`;
   }
 
   /**
@@ -954,6 +970,7 @@ class Writer {
     const ext = MIME_EXT[mime];
     if (!ext) return '';
     const fx = tidyFx(pic?.fx);
+    const more: PicMore = { rot: pic?.rot, hidden: pic?.hidden };
     // what Office can't show live goes in worked in, with the original as the picture's layer
     let baked: Uint8Array | null = null;
     if (pic && bakedPart(fx) && this.opts.bakePicture) baked = await this.opts.bakePicture(pic).catch(() => null);
@@ -962,12 +979,12 @@ class Writer {
       // PowerPoint shows the SVG; older programs the PNG beside it (300 dots per inch)
       const k = 300 / 72;
       const png = await this.opts.svgToPng(new TextDecoder().decode(bytes), Math.max(1, Math.round((box.x2 - box.x1) * k)), Math.max(1, Math.round((box.y2 - box.y1) * k)));
-      if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, undefined, fx, this.addMedia(from, png, 'png'));
-      return picXml(id, name, this.addMedia(from, png, 'png'), this.addMedia(from, bytes, 'svg'), box, crop, tags, look, undefined, fx);
+      if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, undefined, fx, this.addMedia(from, png, 'png'), more);
+      return picXml(id, name, this.addMedia(from, png, 'png'), this.addMedia(from, bytes, 'svg'), box, crop, tags, look, undefined, fx, undefined, more);
     }
     const own = this.addMedia(from, bytes, ext);
-    if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, undefined, fx, own);
-    return picXml(id, name, own, null, box, crop, tags, look, undefined, fx);
+    if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, undefined, fx, own, more);
+    return picXml(id, name, own, null, box, crop, tags, look, undefined, fx, undefined, more);
   }
 
   /** A title, text placeholder or text box. */
@@ -979,7 +996,8 @@ class Writer {
     // the box: the placeholder's own, or around the text, moved so PowerPoint's first baseline is ours
     const top = c.y - PPT_ASCENT * firstSize;
     const width = c.wrap ?? lay.boxWidth;
-    const height = c.ph && c.boxH ? Math.max(c.boxH, lay.box.y2 - lay.box.y1) : (lay.box.y2 - (lay.lines[0]?.y ?? 0)) + PPT_ASCENT * firstSize + 0.1 * firstSize;
+    const grown = (lay.box.y2 - (lay.lines[0]?.y ?? 0)) + PPT_ASCENT * firstSize + 0.1 * firstSize;
+    const height = c.ph && c.boxH ? Math.max(c.boxH, lay.box.y2 - lay.box.y1) : c.fit && c.boxH ? Math.max(c.boxH, c.fit === 'shrink' ? 0 : grown) : grown;
     let box = { x1: c.x, y1: top, x2: c.x + Math.max(width, 1), y2: top + height };
     // where the text starts in its box; turned text: the box moved so that PowerPoint, turning it
     // about its middle, puts the text where it is here (turned about where it starts)
@@ -992,8 +1010,14 @@ class Writer {
     const explicit = c.ph ? null : { size: doc.style.captionSize, font: doc.style.captionFont || 'Arial' };
     const body = isEmptyText(c) && c.ph ? `<a:p><a:endParaRPr ${lang} dirty="0"/></a:p>` : paragraphsXml(c, explicit, base?.size ?? doc.style.captionSize, this.measure, this.hlink);
     const wrap = c.wrap !== undefined || c.ph ? 'square' : 'none';
-    const fit = c.ph ? '<a:noAutofit/>' : '<a:spAutoFit/>';
-    const bodyPr = `<a:bodyPr wrap="${wrap}" lIns="0" tIns="0" rIns="0" bIns="0" rtlCol="0" anchor="t">${fit}</a:bodyPr>`;
+    // AutoFit: shrink text on overflow (at the size it is shrunk to here), a box that keeps its
+    // size, or one that grows with its text
+    const fit = c.ph || c.fit === 'fixed' ? '<a:noAutofit/>'
+      : c.fit === 'shrink' ? `<a:normAutofit${lay.fontScale && lay.fontScale < 1 ? ` fontScale="${Math.round(lay.fontScale * 100000)}"` : ''}/>`
+      : '<a:spAutoFit/>';
+    const cols = c.cols && c.cols > 1 && c.wrap !== undefined ? ` numCol="${Math.round(c.cols)}"${c.colGap ? ` spcCol="${emu(c.colGap)}"` : ''}` : '';
+    const vert = c.dir ? ` vert="${c.dir}"` : '';
+    const bodyPr = `<a:bodyPr wrap="${wrap}"${vert} lIns="0" tIns="0" rIns="0" bIns="0"${cols} rtlCol="0" anchor="t">${fit}</a:bodyPr>`;
     // the caption's exact settings, used when it comes back unchanged from PowerPoint
     const plain = c.runs.map((r) => r.text).join('');
     const at = [box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1].map((v) => +v.toFixed(2));
@@ -1005,13 +1029,17 @@ class Writer {
       const forms = layoutPh(layoutDef(this.deck.master, layout));
       ph = k === 'title' ? (i === 0 && forms.title) || '<p:ph type="title"/>' : forms.bodies[i] ?? ''; // more text boxes than the layout has: plain text boxes
     }
-    const name = c.ph === 'title' ? `Title ${id - 1}` : c.ph ? `Text Placeholder ${id - 1}` : `TextBox ${id - 1}`;
+    const name = c.name?.trim() || (c.ph === 'title' ? `Title ${id - 1}` : c.ph ? `Text Placeholder ${id - 1}` : `TextBox ${id - 1}`);
     const nvSp = ph
-      ? `<p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr>${ph}<p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvSpPr>`
-      : `<p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr txBox="1"/><p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvSpPr>`;
+      ? `<p:nvSpPr><p:cNvPr id="${id}"${nameAttrs(name, c.hidden)}/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr>${ph}<p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvSpPr>`
+      : `<p:nvSpPr><p:cNvPr id="${id}"${nameAttrs(name, c.hidden)}/><p:cNvSpPr txBox="1"/><p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvSpPr>`;
     const geom = ph ? '' : '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/>';
-    const rot = c.rot ? ` rot="${Math.round((((c.rot % 360) + 360) % 360) * 60000)}"` : '';
-    return `<p:sp>${nvSp}<p:spPr>${xfrm(box, rot)}${geom}</p:spPr><p:txBody>${bodyPr}<a:lstStyle/>${body}</p:txBody></p:sp>`;
+    // text running down or up: PowerPoint's box is the other way round, turned a quarter less,
+    // with the text turned in it
+    const quarter = c.dir === 'vert' ? 90 : c.dir === 'vert270' ? -90 : 0;
+    const shape = quarter ? swapBox(box) : box;
+    const rot = rotAttr((c.rot ?? 0) - quarter);
+    return `<p:sp>${nvSp}<p:spPr>${xfrm(shape, rot)}${geom}</p:spPr><p:txBody>${bodyPr}<a:lstStyle/>${body}</p:txBody></p:sp>`;
   }
 
   /**
@@ -1036,34 +1064,53 @@ class Writer {
     const n = t.rows.length, m = t.cols.length;
     const lw = doc.style.lineWidth;
     const b = tableBorders(t, lw);
-    const color = hex6(s.color ?? '#000000');
+    const color = s.color ?? '#000000';
     // PowerPoint puts the first baseline its font's ascent below the cell's top margin
     const marT = Math.max(0, lay.padY - (PPT_ASCENT - ASCENT) * size), marB = Math.max(0, lay.padY - 0.05 * size);
-    const ln = (side: string, w: number) => w > 0
-      ? `<a:${side} w="${emu(w)}" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:prstDash val="solid"/><a:round/></a:${side}>`
+    const solid = (c: string) => `<a:solidFill><a:srgbClr val="${hex6(c)}"/></a:solidFill>`;
+    const ln = (side: string, l: CellLine | undefined) => l && l.w > 0
+      ? `<a:${side} w="${emu(l.w)}" cap="flat" cmpd="sng" algn="ctr">${solid(l.color)}<a:prstDash val="solid"/><a:round/></a:${side}>`
       : `<a:${side} w="${emu(lw)}" cmpd="sng"><a:noFill/></a:${side}>`;
     const empty = (algn: string) => `<a:p><a:pPr algn="${algn}"/><a:endParaRPr ${lang} sz="${Math.round(size * 100)}" dirty="0"/></a:p>`;
     const algnOf = (j: string) => (j === 'center' ? 'ctr' : j === 'right' ? 'r' : j === 'justify' ? 'just' : 'l');
+    // each cell's lines: the table style's (with their colours), or the rules in the drawing's colour
+    const styled = !!slideCellLook(t, 0, 0);
+    const linesAt = (r: number, c: number): Partial<Record<Side, CellLine>> => {
+      const o = coveringCell(t, r, c);
+      if (styled) return slideCellLook(t, o.r, o.c)!.lines;
+      const x = b[r][c];
+      const out: Partial<Record<Side, CellLine>> = {};
+      for (const k of ['left', 'right', 'top', 'bottom'] as Side[]) if (x[k] > 0) out[k] = { w: x[k], color };
+      return out;
+    };
+    const lines = t.rows.map((_, r) => t.cols.map((__, c) => linesAt(r, c)));
+    const heavier = (a?: CellLine, z?: CellLine) => (!a ? z : !z ? a : z.w > a.w ? z : a);
     const rows: string[] = [];
     for (let r = 0; r < n; r++) {
       const tcs: string[] = [];
       for (let c = 0; c < m; c++) {
-        const x = b[r][c];
+        const x = lines[r][c];
         // a line between two cells shows when either cell has it, so both say so
-        const left = x.left || (c > 0 ? b[r][c - 1].right : 0), right = x.right || (c < m - 1 ? b[r][c + 1].left : 0);
-        const top = x.top || (r > 0 ? b[r - 1][c].bottom : 0), bottom = x.bottom || (r < n - 1 ? b[r + 1][c].top : 0);
-        const tcPr = `<a:tcPr marL="${emu(lay.padX)}" marR="${emu(lay.padX)}" marT="${emu(marT)}" marB="${emu(marB)}" anchor="t">${ln('lnL', left)}${ln('lnR', right)}${ln('lnT', top)}${ln('lnB', bottom)}<a:noFill/></a:tcPr>`;
+        const left = heavier(x.left, c > 0 ? lines[r][c - 1].right : undefined), right = heavier(x.right, c < m - 1 ? lines[r][c + 1].left : undefined);
+        const top = heavier(x.top, r > 0 ? lines[r - 1][c].bottom : undefined), bottom = heavier(x.bottom, r < n - 1 ? lines[r + 1][c].top : undefined);
+        const o = coveringCell(t, r, c);
+        const look = styled ? slideCellLook(t, o.r, o.c) : null;
+        const fill = t.rows[o.r][o.c]?.fill ?? look?.fill;
+        const tcPr = `<a:tcPr marL="${emu(lay.padX)}" marR="${emu(lay.padX)}" marT="${emu(marT)}" marB="${emu(marB)}" anchor="t">${ln('lnL', left)}${ln('lnR', right)}${ln('lnT', top)}${ln('lnB', bottom)}${fill ? solid(fill) : '<a:noFill/>'}</a:tcPr>`;
         const align = cellAlign(t, r, c);
-        if (isCovered(t, r, c)) {
-          tcs.push(`<a:tc hMerge="1"><a:txBody><a:bodyPr/><a:lstStyle/>${empty(algnOf(align))}</a:txBody>${tcPr}</a:tc>`);
+        if (o.r !== r || o.c !== c) {
+          // a place covered by a joined cell: across (hMerge), down (vMerge) or both
+          tcs.push(`<a:tc${o.c !== c ? ' hMerge="1"' : ''}${o.r !== r ? ' vMerge="1"' : ''}><a:txBody><a:bodyPr/><a:lstStyle/>${empty(algnOf(align))}</a:txBody>${tcPr}</a:tc>`);
           continue;
         }
         const cell = t.rows[r][c] ?? { runs: [] };
-        const span = spanOf(t, r, c);
-        const body = cell.runs.some((x) => x.text)
-          ? paragraphsXml({ id: 0, x: 0, y: 0, runs: cell.runs, paras: cell.paras, justify: align }, { size, font }, size, this.measure, this.hlink)
+        const span = spanOf(t, r, c), down = rowSpanOf(t, r, c);
+        // the style's text colour and bold are written on the runs, as PowerPoint shows them
+        const runs = styledRuns(cell.runs, look);
+        const body = runs.some((x) => x.text)
+          ? paragraphsXml({ id: 0, x: 0, y: 0, runs, paras: cell.paras, justify: align }, { size, font }, size, this.measure, this.hlink)
           : empty(algnOf(align));
-        tcs.push(`<a:tc${span > 1 ? ` gridSpan="${span}"` : ''}><a:txBody><a:bodyPr/><a:lstStyle/>${body}</a:txBody>${tcPr}</a:tc>`);
+        tcs.push(`<a:tc${down > 1 ? ` rowSpan="${down}"` : ''}${span > 1 ? ` gridSpan="${span}"` : ''}><a:txBody><a:bodyPr/><a:lstStyle/>${body}</a:txBody>${tcPr}</a:tc>`);
       }
       rows.push(`<a:tr h="${emu(lay.ys[r + 1] - lay.ys[r])}">${tcs.join('')}</a:tr>`);
     }
@@ -1071,11 +1118,18 @@ class Writer {
     const id = next();
     const tag = this.addTags(path, { [TAG.table]: JSON.stringify({ v: 1, key, table: t, plain: tableText(t) }) });
     const frame = { x1: s.x1, y1: s.y1 + lay.ys[0], x2: s.x1 + lay.width, y2: s.y1 + lay.ys[n] };
-    // "No Style, No Grid": the cells show only the rules given here
-    out.push(`<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="Table ${id - 1}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>` +
+    // the cells carry every fill and line themselves, so PowerPoint shows the same whatever the
+    // style id; a style PowerPoint knows by id is named so its gallery and options show it,
+    // otherwise "No Style, No Grid"
+    const look = lookOf(t);
+    const styleId = Object.keys(PPT_STYLE_IDS).find((g) => PPT_STYLE_IDS[g] === t.style) ?? '{2D5ABB26-0587-4C30-8999-92F81FD0307C}';
+    const flags = styled
+      ? `${look.header ? ' firstRow="1"' : ''}${look.firstCol ? ' firstCol="1"' : ''}${look.lastCol ? ' lastCol="1"' : ''}${look.total ? ' lastRow="1"' : ''}${look.bandRows ? ' bandRow="1"' : ''}${look.bandCols ? ' bandCol="1"' : ''}`
+      : t.head > 0 ? ' firstRow="1"' : '';
+    out.push(`<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}"${nameAttrs(s.name?.trim() || `Table ${id - 1}`, s.hidden)}/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>` +
       `<p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvGraphicFramePr>` +
       `<p:xfrm><a:off x="${emu(frame.x1)}" y="${emu(frame.y1)}"/><a:ext cx="${emu(frame.x2 - frame.x1)}" cy="${emu(frame.y2 - frame.y1)}"/></p:xfrm>` +
-      `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr${t.head > 0 ? ' firstRow="1"' : ''}><a:tableStyleId>{2D5ABB26-0587-4C30-8999-92F81FD0307C}</a:tableStyleId></a:tblPr>` +
+      `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr${flags}><a:tableStyleId>${styleId}</a:tableStyleId></a:tblPr>` +
       `<a:tblGrid>${grid}</a:tblGrid>${rows.join('')}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>`);
     if (lay.notes) part('notes', lay.notes, t.notes!, size * NOTE_SCALE);
     return out.join('');
@@ -1187,20 +1241,23 @@ function decorXml(sh: DecorShape, id: number): string {
   return `<p:sp>${nv('Rectangle')}<p:spPr>${xfrm(sh)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${fill}${ln}</p:spPr></p:sp>`;
 }
 
+/** A picture's turn and whether it is hidden (Selection Pane). */
+interface PicMore { rot?: number; hidden?: boolean }
+
 /**
  * A picture element: PNG (or another bitmap), optionally with an SVG PowerPoint shows instead,
  * and its Picture Format settings; with `layerId`, the blip has sharpening or Remove Background
  * worked in and the layer is the original.
  */
-function picXml(id: number, name: string, blipId: string, svgId: string | null, box: Rect, crop: Shape['crop'] | null, tagsId: string | null, look?: PictureLook, descr?: string, fx?: PictureFx, layerId?: string): string {
+function picXml(id: number, name: string, blipId: string, svgId: string | null, box: Rect, crop: Shape['crop'] | null, tagsId: string | null, look?: PictureLook, descr?: string, fx?: PictureFx, layerId?: string, more: PicMore = {}): string {
   const exts = (svgId ? `<a:ext uri="${SVG_EXT}"><asvg:svgBlip xmlns:asvg="${NS_SVG}" r:embed="${svgId}"/></a:ext>` : '') + (layerId ? imgPropsXml(fx, layerId, crop) : '');
   const ext = exts ? `<a:extLst>${exts}</a:extLst>` : '';
   const src = crop && (crop.l || crop.t || crop.r || crop.b)
     ? `<a:srcRect l="${Math.round(crop.l * 100000)}" t="${Math.round(crop.t * 100000)}" r="${Math.round(crop.r * 100000)}" b="${Math.round(crop.b * 100000)}"/>` : '';
   const nvPr = tagsId ? `<p:nvPr><p:custDataLst><p:tags r:id="${tagsId}"/></p:custDataLst></p:nvPr>` : '<p:nvPr/>';
-  return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${xml(name)}"${descr ? ` descr="${xml(descr)}"` : ''}/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>${nvPr}</p:nvPicPr>` +
+  return `<p:pic><p:nvPicPr><p:cNvPr id="${id}"${nameAttrs(name, more.hidden)}${descr ? ` descr="${xml(descr)}"` : ''}/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>${nvPr}</p:nvPicPr>` +
     `<p:blipFill><a:blip r:embed="${blipId}">${blipEffectsXml(fx)}${ext}</a:blip>${src}<a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
-    `<p:spPr>${xfrm(box)}${pictureLookXml(look, fx)}</p:spPr></p:pic>`;
+    `<p:spPr>${xfrm(box, rotAttr(more.rot))}${pictureLookXml(look, fx)}</p:spPr></p:pic>`;
 }
 
 /** A picture's outline (rounded, or the shape it is cut to), border line and shadow, as PowerPoint's picture formatting. */
@@ -1264,7 +1321,7 @@ function shapeXml(s: Shape, id: number, lw: number): string {
   if (s.kind === 'line') {
     const flips = `${s.x2 < s.x1 ? ' flipH="1"' : ''}${s.y2 < s.y1 ? ' flipV="1"' : ''}`;
     const box = { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
-    return `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="${id}" name="Line ${id - 1}"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>` +
+    return `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="${id}"${nameAttrs(s.name?.trim() || `Line ${id - 1}`, s.hidden)}/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>` +
       `<p:spPr>${xfrm(box, flips)}<a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln w="${emu(width)}"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dash}</a:ln></p:spPr></p:cxnSp>`;
   }
   const box = { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
@@ -1284,8 +1341,8 @@ function shapeXml(s: Shape, id: number, lw: number): string {
   const outlined = !s.filled || (!!s.fillColor && s.fillColor.toLowerCase() !== (s.color ?? '#000000').toLowerCase());
   const ln = !outlined ? '<a:ln><a:noFill/></a:ln>' : `<a:ln w="${emu(width)}"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${dash}</a:ln>`;
   const shadow = s.shadow ? `<a:effectLst><a:outerShdw dist="${emu(s.shadowSize ?? 4 * lw)}" dir="2700000" algn="tl" rotWithShape="0"><a:srgbClr val="C0C0C0"/></a:outerShdw></a:effectLst>` : '';
-  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${s.kind === 'oval' ? 'Oval' : 'Rectangle'} ${id - 1}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>` +
-    `<p:spPr>${xfrm(box)}${geom}${fill}${ln}${shadow}</p:spPr></p:sp>`;
+  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}"${nameAttrs(s.name?.trim() || `${s.kind === 'oval' ? 'Oval' : 'Rectangle'} ${id - 1}`, s.hidden)}/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>` +
+    `<p:spPr>${xfrm(box, rotAttr(s.rot))}${geom}${fill}${ln}${shadow}</p:spPr></p:sp>`;
 }
 
 /** A placeholder in a master or layout, with the prompt PowerPoint shows. */

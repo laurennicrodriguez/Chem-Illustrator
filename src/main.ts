@@ -2,6 +2,7 @@
 // toolbar, the drawing area (with the slide list and notes in Slides mode, or the grid in Sheet
 // mode), and the panels on the right.
 
+import { SLIDE_TABLE_STYLES, DEFAULT_SLIDE_TABLE_STYLE } from './deck/table-styles';
 import { commandIcon } from './ui/command-icons';
 import './app.css';
 import type { MethylStyle } from './chem/hydrogens';
@@ -613,18 +614,26 @@ function placeTable(t: TableData, label: string, top?: Vec): number {
   return id;
 }
 
+/** The table style last picked for a slide table (PowerPoint's default, Medium Style 2 – Accent 1, at first). */
+let lastTableStyle = DEFAULT_SLIDE_TABLE_STYLE;
+
 /** Insert > Table: an empty table of the rows and columns asked for, ready to type into. */
 async function insertTable(): Promise<void> {
   finishTyping();
+  // on slides the look is a choice: a journal's ACS rules, or a PowerPoint style
+  const onSlide = !!deckNow();
   const got = await ask('Insert Table', [
     { name: 'rows', label: 'Rows', value: '4', type: 'number' },
     { name: 'cols', label: 'Columns', value: '3', type: 'number' },
-  ], { ok: 'Insert', note: 'An ACS-style table: a rule above and below the heading row and under the last row. The Style panel changes the lines, headings, rows and columns.' });
+    ...(onSlide ? [{ name: 'style', label: 'Style', value: lastTableStyle, options: [{ value: '', label: 'ACS rules' }, ...SLIDE_TABLE_STYLES.map((st) => ({ value: st.id, label: st.name }))] }] : []),
+  ], { ok: 'Insert', note: onSlide ? 'The Style panel changes the style, its options, the cells\' colours and which cells are merged.' : 'An ACS-style table: a rule above and below the heading row and under the last row. The Style panel changes the lines, headings, rows and columns.' });
   if (!got) return;
   const rows = Math.max(1, Math.min(500, Math.round(Number(got.rows) || 4)));
   const cols = Math.max(1, Math.min(60, Math.round(Number(got.cols) || 3)));
+  if (onSlide) lastTableStyle = got.style ?? '';
   // columns centred (the Style panel lines up each column its own way)
-  const id = placeTable({ ...emptyTable(rows, cols, doc.style.captionSize), align: Array(cols).fill('center') }, 'Insert table');
+  const t0 = { ...emptyTable(rows, cols, doc.style.captionSize), align: Array(cols).fill('center') };
+  const id = placeTable(onSlide && got.style ? { ...t0, style: got.style } : t0, 'Insert table');
   editor.editTable(id, { r: 0, c: 0 });
 }
 
@@ -1781,6 +1790,16 @@ function deckNow(): Deck | null {
   return ws.active.deck ?? null;
 }
 
+/** Slides' Selection Pane is open (Home > Selection Pane, Alt+F10). */
+let selectionPane = false;
+
+/** Design's Layers panel, or Slides' Selection Pane when it is open, in the right-hand panel. */
+function showLayers(tab = ws.active): void {
+  const design = tab.mode === 'design', slides = !!tab.deck && !design;
+  layers?.show(design || (slides && selectionPane) ? doc : null, slides);
+  for (const b of document.querySelectorAll('[data-cmd="selection-pane"]')) b.setAttribute('aria-pressed', String(slides && selectionPane));
+}
+
 /** Finish typing in a caption or the notes (and drawing a structure for a cell), before the slide or tab changes. */
 function finishTyping(): void {
   finishCellStructure(true);
@@ -1800,7 +1819,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   document.body.classList.toggle('slides-mode', slides);
   document.body.classList.toggle('design-mode', design);
   editor.glueArrows = design;
-  layers?.show(design ? doc : null);
+  showLayers(tab);
   showGuides();
   if (deck) deck.onMotion = () => { animUi?.refresh(); ws.noteChange(); renderer.repaintAll(); editor.requestScene(); };
   if (deck) deck.onComments = () => { slideCmts?.update(); ws.noteChange(); };
@@ -2005,7 +2024,10 @@ layers = new LayersPanel($('#layers-section'), {
   select: (ids) => editor.selectShapes(ids),
   selected: () => editor.selectedShapes(),
   edit: (label, f) => { finishTyping(); doc.edit(label, f); editor.changed(); },
+  pick: (w) => { finishTyping(); editor.selectThese({ atoms: new Set(w.atoms), bonds: new Set(), captions: new Set(w.captions), arrows: new Set(w.arrows), shapes: new Set(w.shapes) }); },
+  picked: () => ({ shapes: [...editor.sel.shapes], captions: [...editor.sel.captions], atoms: [...editor.sel.atoms], arrows: [...editor.sel.arrows] }),
 });
+layers.onClose = () => { selectionPane = false; showLayers(); };
 const lib = (designLib = new DesignLibrary($('#design-lib'), (id) => { finishTyping(); editor.setTool(`geo:${id}`); }));
 const designGrid = { on: false, step: 18 };
 const dzBg = $<HTMLInputElement>('#dz-bg');
@@ -3833,6 +3855,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'paste-slides': () => pasteSlides(),
   'paste-slides-keep': () => pasteSlides(true),
   'hide-slide': () => hideSlides(),
+  'selection-pane': () => { selectionPane = !selectionPane; showLayers(); },
   'reuse-slides': () => reuseSlides(),
   'insert-equation': () => insertEquation(),
   'insert-link': () => insertLink(),
@@ -6016,6 +6039,7 @@ applyRibbonIcons();
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 stylePanel.onEditChart = (id) => void editChartShape(id);
+stylePanel.turnable = () => editor.textFirst;
 stylePanel.onEditMedia = (id) => void editMediaShape(id);
 stylePanel.onEditEquation = (id) => void editEquationShape(id);
 stylePanel.onEquationColour = (ids, color) => {
@@ -6866,6 +6890,8 @@ const slideText = new SlideTextRibbon($('#ribbon'), {
   look: () => editor.textLook(),
   refocus: () => editor.refocusText(),
   nothing: () => flash('Click into some text, or pick a text box or a shape with text, first.'),
+  box: (c) => editor.setTextBox(c),
+  boxLook: () => editor.textBoxLook(),
 });
 CaptionEditor.onState = () => { if (ws.active.mode === 'slides') slideText.refresh(); };
 editor.onChange = () => { if (ws.active.mode === 'slides') slideText.refresh(); animUi?.selectionChanged(); updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); void refreshDescriptors(); scheduleLabelCheck(); };

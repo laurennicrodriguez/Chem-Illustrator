@@ -412,6 +412,16 @@ export class TextEditing {
     this.commit('case', { ...this.t, runs: rt.changeCase(this.t.runs, a, b, mode) }, this.anchor, this.focus);
   }
 
+  /** Clear Formatting: the selection back to plain text (or what is typed next, with nothing selected). */
+  clearFormatting(): void {
+    if (this.collapsed) {
+      this.pending = Object.fromEntries(rt.CLEARED.map((k) => [k, undefined]));
+      this.onChange('selection');
+      return;
+    }
+    this.commit('style', { ...this.t, runs: rt.clearFormatting(this.t.runs, this.start, this.end) }, this.anchor, this.focus);
+  }
+
   // ------------------------------------------------------------------ links
 
   /** The link the selection or caret is on (see links.linkAt). */

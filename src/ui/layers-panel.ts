@@ -2,8 +2,13 @@
 // page, front to back. Click one to select it (Shift or Ctrl adds), drag it up or down to put it
 // in front of or behind others, hide it, lock it so clicks pass through it, or double-click its
 // name to rename it. Structures, text and arrows always sit above the shapes.
+//
+// In Slides the same panel is PowerPoint's Selection Pane (Home > Selection Pane): it also lists
+// the slide's text boxes (which can be hidden and renamed too), structures and arrows, front
+// to back, with Show All and Hide All.
 
-import type { Doc, Shape } from '../model';
+import type { Caption, Doc, Shape } from '../model';
+import { plainText } from '../richtext';
 import { shapeOrder } from '../objects';
 import { geoDef } from '../design/geo';
 
@@ -20,6 +25,21 @@ export interface LayersHooks {
   selected(): number[];
   /** Change shapes as one undoable step. */
   edit(label: string, f: () => void): void;
+  /** Slides: select text boxes, structures (their atoms) and arrows too. */
+  pick?(what: Picked): void;
+  /** Slides: what is selected now. */
+  picked?(): Picked;
+}
+
+/** What the Selection Pane selects: shapes, text boxes, the atoms of structures, arrows. */
+export interface Picked { shapes: number[]; captions: number[]; atoms: number[]; arrows: number[] }
+
+/** The name a text box shows in the Selection Pane: its own, or what it is and the start of its text. */
+export function textBoxName(c: Caption): string {
+  if (c.name?.trim()) return c.name.trim();
+  const kind = c.ph === 'title' ? 'Title' : c.ph === 'subtitle' ? 'Subtitle' : c.ph ? 'Content Placeholder' : 'Text Box';
+  const text = plainText(c.runs).replace(/\s+/g, ' ').trim();
+  return text ? `${kind}: ${text.length > 24 ? text.slice(0, 23) + '…' : text}` : kind;
 }
 
 /** The name a shape shows in the Layers panel: its own, or what it is (and the start of its text). */
@@ -44,26 +64,66 @@ export class LayersPanel {
   private list: HTMLDivElement;
   private key = '';
   private doc: Doc | null = null;
+  private heading: HTMLHeadingElement;
+  private note: HTMLParagraphElement;
+  private bar: HTMLDivElement;
+  /** Slides' Selection Pane (text boxes, structures and arrows listed too) rather than Design's Layers. */
+  private pane = false;
+  /** Called when the Selection Pane's close button is pressed. */
+  onClose: () => void = () => {};
 
   constructor(private section: HTMLElement, private hooks: LayersHooks) {
-    const h = document.createElement('h2');
-    h.textContent = 'Layers';
-    const note = document.createElement('p');
-    note.className = 'muted small layers-note';
-    note.textContent = 'Front at the top. Drag to reorder; double-click a name to rename.';
+    this.heading = document.createElement('h2');
+    this.heading.textContent = 'Layers';
+    this.note = document.createElement('p');
+    this.note.className = 'muted small layers-note';
+    this.note.textContent = 'Front at the top. Drag to reorder; double-click a name to rename.';
+    this.bar = document.createElement('div');
+    this.bar.className = 'style-buttons layers-bar';
+    const button = (text: string, title: string, f: () => void) => {
+      const b = Object.assign(document.createElement('button'), { type: 'button', textContent: text, title });
+      b.addEventListener('click', f);
+      return b;
+    };
+    this.bar.append(
+      button('Show All', 'Show every hidden object on the slide', () => this.showAll(false)),
+      button('Hide All', 'Hide every picture, shape and text box on the slide (they stay in the file)', () => this.showAll(true)),
+      button('Close', 'Close the Selection Pane', () => this.onClose()),
+    );
     this.list = document.createElement('div');
     this.list.className = 'layers-list';
     this.list.setAttribute('role', 'listbox');
     this.list.setAttribute('aria-label', 'Layers');
     this.list.setAttribute('aria-multiselectable', 'true');
-    section.replaceChildren(h, note, this.list);
+    section.replaceChildren(this.heading, this.note, this.bar, this.list);
   }
 
-  show(doc: Doc | null): void {
+  /** Show the panel for a drawing: Design's Layers, or (with `pane`) Slides' Selection Pane. */
+  show(doc: Doc | null, pane = false): void {
     this.doc = doc;
+    this.pane = pane;
     this.section.hidden = !doc;
+    this.heading.textContent = pane ? 'Selection Pane' : 'Layers';
+    this.list.setAttribute('aria-label', pane ? 'Objects on the slide' : 'Layers');
+    this.note.textContent = pane
+      ? 'Front at the top. Click to select, the eye to hide; drag pictures and shapes to reorder; double-click a name to rename.'
+      : 'Front at the top. Drag to reorder; double-click a name to rename.';
+    this.bar.hidden = !pane;
     this.key = '';
     this.refresh();
+  }
+
+  /** Hide everything that can be hidden, or show it all again. */
+  private showAll(hide: boolean): void {
+    const doc = this.doc;
+    if (!doc) return;
+    const shapes = [...doc.shapes.values()].filter((x) => !!x.hidden !== hide && x.kind !== 'ring' && !x.pin);
+    const caps = [...doc.captions.values()].filter((x) => !!x.hidden !== hide);
+    if (!shapes.length && !caps.length) return;
+    this.hooks.edit(hide ? 'Hide All' : 'Show All', () => {
+      for (const x of shapes) doc.updateShape(x.id, { hidden: hide || undefined });
+      for (const x of caps) doc.updateCaption(x.id, { hidden: hide || undefined });
+    });
   }
 
   /** Rebuild when the shapes or the selection changed (cheap to call every frame). */
@@ -72,22 +132,91 @@ export class LayersPanel {
     if (!doc || this.section.hidden) return;
     if (this.list.querySelector('input')) return; // renaming
     const sel = this.hooks.selected();
-    const key = `${doc.version}|${sel.join(',')}`;
+    const now = this.pane ? this.hooks.picked?.() : undefined;
+    const key = `${doc.version}|${sel.join(',')}|${now ? JSON.stringify(now) : ''}`;
     if (key === this.key) return;
     this.key = key;
     // an energy diagram's own lines are part of it, not layers of their own
     const parts = new Set<number>();
     for (const x of doc.shapes.values()) if (x.energy && x.frame) for (const id of x.frame.shapes) if (doc.shapes.get(id)?.kind === 'line') parts.add(id);
-    const order = shapeOrder([...doc.shapes.values()].filter((x) => !parts.has(x.id))).reverse();
+    // ring fills, lone pairs and charges belong to their structures
+    const order = shapeOrder([...doc.shapes.values()].filter((x) => !parts.has(x.id) && !(this.pane && (x.kind === 'ring' || x.pin)))).reverse();
     const picked = new Set(sel);
-    if (!order.length) {
+    const top = this.pane ? this.topRows(doc, now) : [];
+    if (!order.length && !top.length) {
       const p = document.createElement('p');
       p.className = 'muted';
-      p.textContent = 'Shapes, pictures and tables on the page are listed here.';
+      p.textContent = this.pane ? 'Text boxes, structures, pictures and shapes on the slide are listed here.' : 'Shapes, pictures and tables on the page are listed here.';
       this.list.replaceChildren(p);
       return;
     }
-    this.list.replaceChildren(...order.map((s, i) => this.row(s, i, order, picked)));
+    this.list.replaceChildren(...top, ...order.map((s, i) => this.row(s, i, order, picked)));
+  }
+
+  /**
+   * The Selection Pane's rows above the pictures and shapes (text, structures and arrows are
+   * always drawn over them): text boxes first, as they are frontmost, then structures and arrows.
+   */
+  private topRows(doc: Doc, now: Picked | undefined): HTMLElement[] {
+    const picked = (k: keyof Picked, ids: number[]) => !!now && ids.length > 0 && ids.every((id) => now[k].includes(id));
+    const rows: HTMLElement[] = [];
+    for (const c of doc.captions.values()) {
+      const row = this.plainRow(textBoxName(c), picked('captions', [c.id]), !!c.hidden, (add) => this.pick({ captions: [c.id] }, add));
+      if (!c.hidden) row.dataset.caption = String(c.id);
+      const name = row.querySelector<HTMLElement>('.layer-name')!;
+      name.title = 'Double-click to rename';
+      name.addEventListener('dblclick', () => this.renameText(c, name));
+      row.append(this.toggle(c.hidden ? ICONS.hidden : ICONS.shown, c.hidden ? 'Show' : 'Hide', () => this.hooks.edit(c.hidden ? 'Show' : 'Hide', () => this.doc!.updateCaption(c.id, { hidden: c.hidden ? undefined : true }))));
+      rows.push(row);
+    }
+    // structures, top to bottom as they sit on the slide
+    const frags = doc.fragments().map((f) => [...f]).filter((f) => f.length)
+      .map((f) => ({ ids: f, y: Math.min(...f.map((id) => doc.atoms.get(id)!.y)) })).sort((a, b) => a.y - b.y);
+    frags.forEach((f, i) => rows.push(this.plainRow(`Structure ${i + 1}${f.ids.length > 1 ? '' : ' (one atom)'}`, picked('atoms', f.ids), false, (add) => this.pick({ atoms: f.ids }, add))));
+    let n = 0;
+    for (const r of doc.arrows.values()) rows.push(this.plainRow(`Arrow ${++n}`, picked('arrows', [r.id]), false, (add) => this.pick({ arrows: [r.id] }, add)));
+    return rows;
+  }
+
+  /** A row that is not a picture or shape: no grip (it can't move behind shapes) and no lock. */
+  private plainRow(label: string, on: boolean, hidden: boolean, click: (add: boolean) => void): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'layer';
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-selected', String(on));
+    row.classList.toggle('picked', on);
+    row.classList.toggle('is-hidden', hidden);
+    const grip = document.createElement('span');
+    grip.className = 'layer-grip';
+    grip.setAttribute('aria-hidden', 'true');
+    grip.style.visibility = 'hidden';
+    grip.textContent = '⋮⋮';
+    const name = document.createElement('span');
+    name.className = 'layer-name';
+    name.textContent = label;
+    row.append(grip, name);
+    row.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('button') || hidden) return;
+      click(e.shiftKey || e.ctrlKey || e.metaKey);
+    });
+    return row;
+  }
+
+  /** Select something from a row (adding to what is selected with Shift or Ctrl). */
+  private pick(what: Partial<Picked>, add: boolean): void {
+    const empty: Picked = { shapes: [], captions: [], atoms: [], arrows: [] };
+    const base = add ? this.hooks.picked?.() ?? empty : empty;
+    const out: Picked = { shapes: [...base.shapes], captions: [...base.captions], atoms: [...base.atoms], arrows: [...base.arrows] };
+    for (const k of Object.keys(what) as (keyof Picked)[]) {
+      const ids = what[k]!;
+      const has = ids.every((id) => out[k].includes(id));
+      out[k] = add && has ? out[k].filter((id) => !ids.includes(id)) : [...new Set([...out[k], ...ids])];
+    }
+    this.hooks.pick?.(out);
+  }
+
+  private renameText(c: Caption, name: HTMLElement): void {
+    this.renameWith(c.name ?? textBoxName(c), name, (v) => { if (v !== (c.name ?? '') && !(v === textBoxName(c) && !c.name)) this.hooks.edit('Rename', () => this.doc!.updateCaption(c.id, { name: v || undefined })); else this.refresh(); });
   }
 
   private row(s: Shape, index: number, order: Shape[], picked: Set<number>): HTMLElement {
@@ -113,8 +242,10 @@ export class LayersPanel {
     row.addEventListener('click', (e) => {
       if ((e.target as HTMLElement).closest('button')) return;
       if (s.hidden || s.locked) return;
+      const add = e.shiftKey || e.ctrlKey || e.metaKey;
+      if (this.pane && this.hooks.pick) { this.pick({ shapes: [s.id] }, add); return; }
       const now = this.hooks.selected();
-      if (e.shiftKey || e.ctrlKey || e.metaKey) this.hooks.select(now.includes(s.id) ? now.filter((x) => x !== s.id) : [...now, s.id]);
+      if (add) this.hooks.select(now.includes(s.id) ? now.filter((x) => x !== s.id) : [...now, s.id]);
       else this.hooks.select([s.id]);
     });
     name.addEventListener('dblclick', () => this.rename(s, name));
@@ -134,22 +265,27 @@ export class LayersPanel {
   }
 
   private rename(s: Shape, name: HTMLElement): void {
+    this.renameWith(s.name ?? layerName(s), name, (v) => { if (v !== (s.name ?? '') && !(v === layerName(s) && !s.name)) this.hooks.edit('Rename', () => this.doc!.updateShape(s.id, { name: v || undefined })); else this.refresh(); });
+  }
+
+  /** Rename in place: a box over the name; Enter or leaving it keeps the new name (blank for the usual one), Esc doesn't. */
+  private renameWith(value: string, name: HTMLElement, keep: (v: string) => void): void {
     const input = document.createElement('input');
     input.type = 'text';
     input.className = 'layer-rename';
-    input.value = s.name ?? layerName(s);
+    input.value = value;
     input.setAttribute('aria-label', 'Name');
     name.replaceWith(input);
     input.focus();
     input.select();
     let done = false;
-    const finish = (keep: boolean) => {
+    const finish = (ok: boolean) => {
       if (done) return;
       done = true;
       const v = input.value.trim();
       input.remove();
       this.key = '';
-      if (keep && v !== (s.name ?? '')) this.hooks.edit('Rename', () => this.doc!.updateShape(s.id, { name: v || undefined }));
+      if (ok) keep(v);
       else this.refresh();
     };
     input.addEventListener('keydown', (e) => {

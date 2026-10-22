@@ -215,6 +215,8 @@ export interface TextRun {
   cmt?: string;
   /** Where the text links to: a web page, a DOI, an e-mail address, a file or a place in the file (see links.ts). */
   link?: string;
+  /** Character spacing: points added after each character (less than 0 is condensed), as PowerPoint's Character Spacing. */
+  spacing?: number;
   /** Small capitals: lower-case letters shown as smaller capitals (documents). */
   smallCaps?: boolean;
   /** All capitals: letters shown as capitals, the text itself unchanged (documents). */
@@ -357,6 +359,20 @@ export interface Caption {
   ignoreWarnings?: boolean;
   /** Turned this many degrees clockwise about (x, y), the start of its first line. */
   rot?: number;
+  /** Its name in the Selection Pane (Slides), when given one. */
+  name?: string;
+  /** Hidden (Selection Pane): not drawn, printed or picked, but kept and saved. */
+  hidden?: boolean;
+  /** Columns in a text box (it needs a width, `wrap`), and the room between them in points. */
+  cols?: number;
+  colGap?: number;
+  /**
+   * AutoFit (slides): left out, the box grows with its text; 'shrink' makes the text smaller to
+   * fit a box of height boxH; 'fixed' keeps the box at boxH and lets the text run past it.
+   */
+  fit?: 'shrink' | 'fixed';
+  /** Text direction: the text runs down (rotated 90°) or up (270°). Its turn is in `rot`; this says it is the text's direction, for PowerPoint. */
+  dir?: 'vert' | 'vert270';
 }
 
 /**
@@ -603,6 +619,11 @@ export interface Shape {
   y1: number;
   x2: number;
   y2: number;
+  /**
+   * Boxes, ovals, design shapes and pictures (see turnsFreely): turned this many degrees
+   * clockwise about the middle of x1..y2, as PowerPoint turns shapes. x1..y2 stay the box before it is turned.
+   */
+  rot?: number;
   dashed?: boolean;
   filled?: boolean;
   /**
@@ -713,6 +734,11 @@ export interface Shape {
   energy?: EnergyData;
   /** A SmartArt-style diagram's text and look, kept on the invisible frame round its shapes (design/diagrams.ts). */
   diagram?: DiagramData;
+}
+
+/** Can this shape be turned to any angle (Slides and Design), keeping its box and turning it as a whole? */
+export function turnsFreely(s: Pick<Shape, 'kind' | 'chart' | 'table' | 'ring' | 'frame' | 'pin'>): boolean {
+  return (s.kind === 'rect' || s.kind === 'oval' || s.kind === 'geo' || s.kind === 'picture') && !s.chart && !s.frame && !s.pin;
 }
 
 /**
@@ -846,9 +872,9 @@ export interface TableCell {
   align?: Justify;
   /** Number of columns the cell spans (the cells it covers are left empty). */
   span?: number;
-  /** Documents: number of rows the cell is merged down over (the cells it covers below are left empty). */
+  /** Number of rows the cell is merged down over (the cells it covers below are left empty). */
   rowSpan?: number;
-  /** Documents: the cell's background colour (Word's shading). */
+  /** The cell's background colour (Word's shading; on slides, over the table style's own). */
   fill?: string;
   /** Documents: where the text sits up and down in a cell taller than it (top when left out). */
   valign?: 'center' | 'bottom';
@@ -906,9 +932,12 @@ export interface TableData {
   /** The title above the table ("Table 1. Optimization of…") and the footnotes below it. */
   title?: TextRun[];
   notes?: TextRun[];
-  /** Documents: the table style (Word's, by its style id), in place of `lines`; see document/table-styles. */
+  /**
+   * A table style, in place of `lines`: on slides and drawings one of PowerPoint's ("pp-medium2-1",
+   * see deck/table-styles.ts); in documents Word's, by its style id (document/table-styles.ts).
+   */
   style?: string;
-  /** Documents: which parts the style picks out. */
+  /** Which parts the style picks out (PowerPoint's and Word's Table Style Options). */
   look?: TableLook;
   /** Documents: the margins of every cell (Word's default cell margins), when not the standard ones. */
   pad?: CellMargins;

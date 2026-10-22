@@ -4,6 +4,7 @@
 // so every output format can draw the result with only lines, curves and text.
 
 import { arialWidth } from '../text-metrics';
+import { turnedCorners } from '../geom';
 
 export type Seg =
   | { k: 'M'; x: number; y: number }
@@ -22,6 +23,8 @@ export interface ImageItem {
   px?: { w: number; h: number };
   /** Rounded corners: their radius, in points. */
   radius?: number;
+  /** Turned this many degrees clockwise about its middle (a turned picture on a slide). */
+  rot?: number;
 }
 
 export type Item =
@@ -256,8 +259,12 @@ export class VectorContext {
   /** A picture on the drawing (see Renderer.drawPicture). */
   picture(s: { src?: string; x1: number; y1: number; x2: number; y2: number; crop?: ImageItem['crop']; px?: ImageItem['px'] }, radius = 0): void {
     if (!s.src) return;
-    const x = Math.min(s.x1, s.x2), y = Math.min(s.y1, s.y2);
-    this.items.push({ kind: 'image', src: s.src, x, y, w: Math.abs(s.x2 - s.x1), h: Math.abs(s.y2 - s.y1), crop: s.crop, px: s.px, ...(radius > 0 ? { radius } : {}) });
+    const w = Math.abs(s.x2 - s.x1), h = Math.abs(s.y2 - s.y1);
+    // drawn turned: the picture keeps its size, its middle goes where the turn takes it
+    const m = this.st.m;
+    const mid = this.pt((s.x1 + s.x2) / 2, (s.y1 + s.y2) / 2);
+    const rot = m ? Math.atan2(m[1], m[0]) / (Math.PI / 180) : 0;
+    this.items.push({ kind: 'image', src: s.src, x: mid.x - w / 2, y: mid.y - h / 2, w, h, crop: s.crop, px: s.px, ...(radius > 0 ? { radius } : {}), ...(Math.abs(rot) > 1e-9 ? { rot } : {}) });
   }
 }
 
@@ -363,8 +370,8 @@ export function itemBounds(items: Item[]): { x1: number; y1: number; x2: number;
       grow(it.x, it.y - it.size * 0.8);
       grow(it.x + w, it.y + it.size * 0.25);
     } else if (it.kind === 'image') {
-      grow(it.x, it.y);
-      grow(it.x + it.w, it.y + it.h);
+      if (it.rot) for (const p of turnedCorners({ x1: it.x, y1: it.y, x2: it.x + it.w, y2: it.y + it.h }, { x: it.x + it.w / 2, y: it.y + it.h / 2 }, it.rot)) grow(p.x, p.y);
+      else { grow(it.x, it.y); grow(it.x + it.w, it.y + it.h); }
     } else {
       const pad = it.stroke ? it.stroke.width / 2 : 0;
       for (const s of it.segs) {

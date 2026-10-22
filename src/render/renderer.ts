@@ -16,7 +16,7 @@ import { doubleBondGap, wedgeWidth } from '../style';
 import { chargeInk, labelBonds, labelSpec, layoutLabel, LabelLayout, labelLook } from '../chem/labels';
 import type { StructureChecks } from '../chem/warnings';
 import { isGenericLabel } from '../chem/labels';
-import { bracketPath, shaftOffset, shapeOrder, elbowRoute, boxOf, bezPoints, bezHeadBack, bezPathAt, bezSlice, type PathStep } from '../objects';
+import { bracketPath, shaftOffset, shapeOrder, elbowRoute, boxOf, shapeBox, shapeMid, shapeTurn, bezPoints, bezHeadBack, bezPathAt, bezSlice, type PathStep } from '../objects';
 import { atomStereoText, bondStereoText, shownDescriptor, axialStyle, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
 import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
@@ -632,7 +632,7 @@ export class Renderer {
 
     // Shapes behind the structures (filled boxes first).
     for (const s of doc.onlyHighlights ? [] : this.sortedShapes(doc)) {
-      const b = s.kind === 'table' ? this.tableBox(s) : { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
+      const b = s.kind === 'table' ? this.tableBox(s) : s.rot ? shapeBox(s) : { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
       if (b.x2 < vis.x1 || b.x1 > vis.x2 || b.y2 < vis.y1 || b.y1 > vis.y2) continue;
       this.drawShape(ctx, s, st.lineWidth, st.labelSize);
     }
@@ -708,7 +708,7 @@ export class Renderer {
       this.drawArrow(ctx, r, r.lineWidth ?? st.lineWidth);
     }
     for (const c of doc.captions.values()) {
-      if (c.id === this.hiddenCaption) continue;
+      if (c.id === this.hiddenCaption || c.hidden) continue;
       const r = this.captionBox(c);
       if (r.x1 > vis.x2 || r.x2 < vis.x1 || r.y1 > vis.y2 || r.y2 < vis.y1) continue;
       if (c.ph && isEmptyText(c)) { if (this.screen) this.drawPrompt(ctx, c); continue; }
@@ -962,6 +962,16 @@ export class Renderer {
   }
 
   private drawShape(ctx: CanvasRenderingContext2D, s: Shape, lw: number, labelSize = 10): void {
+    const rot = shapeTurn(s);
+    if (!rot) { this.drawFlatShape(ctx, s, lw, labelSize); return; }
+    // a turned shape (Slides and Design): drawn level, turned about its middle
+    ctx.save();
+    turnAt(ctx, shapeMid(s), rot);
+    this.drawFlatShape(ctx, s, lw, labelSize);
+    ctx.restore();
+  }
+
+  private drawFlatShape(ctx: CanvasRenderingContext2D, s: Shape, lw: number, labelSize = 10): void {
     const x = Math.min(s.x1, s.x2), y = Math.min(s.y1, s.y2);
     const w = Math.abs(s.x2 - s.x1), h = Math.abs(s.y2 - s.y1);
     ctx.lineWidth = s.bold ? lw * 2.5 : lw;
@@ -1903,6 +1913,9 @@ export class Renderer {
     if (c.ph && c.boxH) {
       const f = placeholderRect(c, this.baseOf(c));
       r = { x1: Math.min(r.x1, f.x1), y1: Math.min(r.y1, f.y1), x2: Math.max(r.x2, f.x2), y2: Math.max(r.y2, f.y2) };
+    } else if (c.fit && c.boxH) {
+      // a text box that doesn't grow with its text keeps its height
+      r = { ...r, y2: Math.max(r.y2, r.y1 + c.boxH) };
     }
     this.capBoxes.set(c, r);
     return r;
