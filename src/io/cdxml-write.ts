@@ -9,7 +9,7 @@
 import { Doc, Atom, Bond, Caption, Arrow, Shape, TextRun, Entity, Kind, StepRoles, enhancedText, CHIRAL_FLAGS, flagTextSize, type HighlightStyle } from '../model';
 import { interpretArrow, isReactionArrow, linkRows, isStep, plainMeasure, schemeItems, type Item } from '../chem/reaction';
 import { SYMBOLS } from '../chem/elements';
-import { labelBonds, labelSpec, layoutLabel, labelDir, labelGraph, tokenize, isGenericLabel, Measure, MiniGraph, kekulize } from '../chem/labels';
+import { labelBonds, labelSpec, layoutLabel, labelDir, labelGraph, tokenize, isGenericLabel, Measure, MiniGraph, kekulize, labelLook } from '../chem/labels';
 import { Vec, DEG, arcCenter, norm, sub, Rect } from '../geom';
 import { bezPoints } from '../objects';
 import { kids, descendants } from './xml';
@@ -706,8 +706,7 @@ class CdxmlWriter {
     const size = this.doc.style.labelSize * (a.s ?? 1);
     const t = this.el('t', {});
     const color = this.colorAttr(a.color);
-    const digits = a.supDigits ? /\d+$/.exec(text) : null;
-    const runs: TextRun[] = digits ? [{ text: text.slice(0, digits.index), formula: true }, { text: digits[0], sup: true }] : [{ text, formula: true }];
+    const runs = labelRuns(text, a.label !== null ? labelLook(a) : { supDigits: false });
     for (const r of runs) {
       const s = this.el('s', { font: keepFont ?? this.fontId(this.doc.style.labelFont || 'Arial'), size: f2(size).replace(/\.00$/, ''), color: color ?? '0', face: (faceOf(r) ?? 0) | keepBits });
       s.textContent = r.text;
@@ -781,7 +780,7 @@ class CdxmlWriter {
     const doc = this.doc;
     const spec = labelSpec(a.z, a.label, a.charge, a.isotope, doc.valenceSum(a.id), doc.degree(a.id), !a.hideCharge, !!a.showCarbon);
     if (!spec) return;
-    if (a.supDigits) spec.supDigits = true;
+    Object.assign(spec, labelLook(a));
     const dirs = labelBonds(doc, a);
     const size = doc.style.labelSize * (a.s ?? 1);
     const layout = layoutLabel(spec, dirs, size, this.measure, a.just);
@@ -1807,6 +1806,23 @@ export function lineEnds(text: string): number[] {
 
 function orderAttr(order: number): string | null {
   return order === 1 ? null : String(order);
+}
+
+/**
+ * A label's text as runs: formula style (ChemDraw lowers the counts itself), with R numbers
+ * raised when the label shows them so and characters raised, lowered or kept on the line by hand.
+ */
+export function labelRuns(text: string, look: { supDigits: boolean; marks?: string }): TextRun[] {
+  const digits = look.supDigits ? /\d+$/.exec(text) : null;
+  const out: TextRun[] = [];
+  [...text].forEach((ch, i) => {
+    const m = look.marks?.[i];
+    const r: TextRun = m === '^' ? { text: ch, sup: true } : m === '_' ? { text: ch, sub: true } : m === '=' ? { text: ch } : digits && i >= digits.index ? { text: ch, sup: true } : { text: ch, formula: true };
+    const last = out[out.length - 1];
+    if (last && !!last.sup === !!r.sup && !!last.sub === !!r.sub && !!last.formula === !!r.formula) last.text += ch;
+    else out.push(r);
+  });
+  return out.length ? out : [{ text, formula: true }];
 }
 
 function faceOf(r: TextRun): number | null {

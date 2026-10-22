@@ -98,7 +98,7 @@ import { applyRibbonIcons } from './ui/ribbon-icons';
 import { TEMPLATES, Template, templateById, ownTemplates, setOwnTemplates, templateFromAtoms } from './chem/templates';
 import { centreEnd } from './chem/hapto';
 import { countElectrons } from './chem/electrons';
-import { addNicknames, removeNickname, isBuiltInNickname, builtInNicknames } from './chem/labels';
+import { addNicknames, removeNickname, isBuiltInNickname, builtInNicknames, labelPrefs } from './chem/labels';
 import { selectedGroup } from './chem/group-smiles';
 import { templateIcon } from './ui/template-icons';
 import { StructureChecks } from './chem/warnings';
@@ -3996,6 +3996,7 @@ async function openPreferences(): Promise<void> {
     { name: 'groupClick', label: 'Clicking something in a group selects', value: editor.options.groupClick, options: [{ value: 'group', label: 'The whole group' }, { value: 'item', label: 'Just that thing' }] },
     { name: 'groupOutline', label: 'Outline the rest of a group when part of it is selected', type: 'checkbox', value: String(editor.options.groupOutline) },
     { name: 'reroute', label: 'Mechanism arrows find their own way round again when a change leaves them running into a structure, a label or another arrow (not ones you bent by hand)', type: 'checkbox', value: String(editor.options.rerouteArrows) },
+    { name: 'supR', label: 'R groups numbered R1, R12… show the number raised (R¹, R¹²); longer labels (OR1, CO2R1) and labels from files are left as they are', type: 'checkbox', value: String(labelPrefs.superscriptR) },
     { name: 'linkSide', label: 'Text linked to a structure goes', value: linkSide, options: [{ value: 'keep', label: 'Where it is' }, { value: 'below', label: 'Below' }, { value: 'above', label: 'Above' }, { value: 'left', label: 'Left' }, { value: 'right', label: 'Right' }] },
     { name: 'ask', label: 'Ask before changing every structure on the page when nothing is selected', type: 'checkbox', value: String(askWholeDrawing) },
     ...(canUpdate ? [{ name: 'updates', label: 'Check for a newer version when the app starts', type: 'checkbox' as const, value: String(updateCheck) }] : []),
@@ -4016,6 +4017,11 @@ async function openPreferences(): Promise<void> {
   editor.options.groupClick = r.groupClick === 'item' ? 'item' : 'group';
   editor.options.groupOutline = r.groupOutline === 'true';
   editor.options.rerouteArrows = r.reroute === 'true';
+  if (labelPrefs.superscriptR !== (r.supR === 'true')) {
+    labelPrefs.superscriptR = r.supR === 'true';
+    doc.allDirty = true;
+    editor.requestScene();
+  }
   linkSide = (['below', 'above', 'left', 'right'].includes(r.linkSide) ? r.linkSide : 'keep') as Settings['linkSide'];
   showHelicity(r.axial === 'PM');
   if (r.methyl !== editor.options.methylStyle) chooseMethylStyle(r.methyl as MethylStyle);
@@ -4060,6 +4066,7 @@ function storeSettings(): void {
     groupClick: editor.options.groupClick,
     groupOutline: editor.options.groupOutline,
     rerouteArrows: editor.options.rerouteArrows,
+    superscriptR: labelPrefs.superscriptR,
     linkSide,
     slideTemplate,
     askWholeDrawing,
@@ -4205,6 +4212,7 @@ void loadSettings().then((s) => {
   editor.options.groupClick = s.groupClick;
   editor.options.groupOutline = s.groupOutline;
   editor.options.rerouteArrows = s.rerouteArrows;
+  labelPrefs.superscriptR = s.superscriptR;
   linkSide = s.linkSide;
   slideTemplate = s.slideTemplate;
   askWholeDrawing = s.askWholeDrawing;

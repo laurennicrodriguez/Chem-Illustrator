@@ -54,8 +54,10 @@ export interface Atom {
   showCarbon?: boolean;
   /** The charge is drawn by a separate circled-charge symbol, so the label leaves it out. */
   hideCharge?: boolean;
-  /** Numbers after R groups are superscripts (R¹ rather than R₁). */
+  /** Numbers after R groups are superscripts (R¹ rather than R₁); false keeps them down. Not set: R1, R12… go up, as the preferences say. */
   supDigits?: boolean;
+  /** Characters of the label raised or lowered by hand, one mark per character ("^" up, "_" down, "=" on the line). */
+  labelMarks?: string;
   /** Show this atom's R/S label when it has one (ChemDraw's "Show Stereochemistry"). */
   showStereo?: boolean;
   /** Where the stereo label sits (relative to the atom), and its text as saved or typed by hand. */

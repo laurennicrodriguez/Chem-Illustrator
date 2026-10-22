@@ -324,12 +324,19 @@ body.slides-mode #canvas-host, body.design-mode #canvas-host { background: var(-
   z-index: 5;
   font-family: Arial, 'Liberation Sans', Helvetica, sans-serif;
   border: 1px solid var(--accent);
+  border-radius: 2px;
   outline: none;
-  padding: 0 2px;
+  padding: 1px 2px;
   background: #fff;
   color: #000;
+  line-height: 1.15;
+  white-space: pre;
+  min-width: 0.8em;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
 }
-.label-input { width: 7em; }
+/* counts and marked characters lowered, charges raised, as the label will show them */
+.label-input .sub { vertical-align: -0.22em; }
+.label-input .sup { vertical-align: 0.42em; }
 /* typing a caption: the text is drawn on the drawing; keys and input methods go to this hidden field at the caret */
 .text-input {
   position: absolute;
