@@ -10,6 +10,7 @@
 
 import type { DefinedName } from './names';
 import type { Sheet } from './workbook';
+import { quoteSheet } from './refs';
 
 export type SolverRel = '<=' | '=' | '>=' | 'int' | 'bin' | 'dif';
 export type SolverEngine = 'grg' | 'simplex' | 'evolutionary';
@@ -57,8 +58,31 @@ const CODE_REL: Record<number, SolverRel> = { 1: '<=', 2: '=', 3: '>=', 4: 'int'
 const ENGINE_CODE: Record<SolverEngine, number> = { grg: 1, simplex: 2, evolutionary: 3 };
 
 /** The hidden names Excel's Solver keeps its model in, for one sheet. */
+/** One area of cells ($B$1 or $B$1:$C$4), with no sheet named. */
+const AREA = /^\$?[A-Za-z]{1,3}\$?\d+(?::\$?[A-Za-z]{1,3}\$?\d+)?$/;
+
+/** References with their sheet's name, as Excel's Solver writes them (Model!$B$1); anything else as it is. */
+function withSheet(formula: string, sheet: string): string {
+  const body = formula.replace(/^=/, '');
+  const areas = body.split(',');
+  if (!areas.every((a) => AREA.test(a.trim()))) return formula;
+  return '=' + areas.map((a) => `${quoteSheet(sheet)}!${a.trim()}`).join(',');
+}
+
+/** References on the model's own sheet without its name (as the Solver window shows them). */
+function ownSheet(formula: string, sheet: string): string {
+  const prefix = `${quoteSheet(sheet)}!`.toLowerCase();
+  const body = formula.replace(/^=/, '');
+  const areas = body.split(',');
+  if (!areas.every((a) => a.trim().toLowerCase().startsWith(prefix) && AREA.test(a.trim().slice(prefix.length)))) return formula;
+  return '=' + areas.map((a) => a.trim().slice(prefix.length)).join(',');
+}
+
 export function modelNames(m: SolverModel, sheet: Sheet): DefinedName[] {
-  const name = (n: string, formula: string): DefinedName => ({ name: n, formula: formula.startsWith('=') ? formula : `=${formula}`, sheet, hidden: true });
+  const name = (n: string, formula: string): DefinedName => {
+    const f = formula.startsWith('=') ? formula : `=${formula}`;
+    return { name: n, formula: /^solver_(adj|opt|lhs\d+|rhs\d+)$/.test(n) ? withSheet(f, sheet.name) : f, sheet, hidden: true };
+  };
   const num = (x: number) => String(x);
   const out: DefinedName[] = [
     name('solver_adj', m.vars),
@@ -104,7 +128,10 @@ export const isSolverName = (n: string): boolean => /^solver_/i.test(n);
 
 /** The model kept in a sheet's hidden names (null when there is none). */
 export function modelFromNames(names: readonly DefinedName[], sheet: Sheet): SolverModel | null {
-  const get = (n: string) => names.find((x) => x.sheet === sheet && x.name.toLowerCase() === n)?.formula;
+  const get = (n: string) => {
+    const f = names.find((x) => x.sheet === sheet && x.name.toLowerCase() === n)?.formula;
+    return f === undefined ? f : ownSheet(f, sheet.name);
+  };
   const numOf = (n: string, dflt: number) => {
     const f = get(n);
     const v = f === undefined ? NaN : Number(f.replace(/^=/, ''));

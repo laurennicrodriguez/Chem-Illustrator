@@ -40,6 +40,9 @@ import { seenCondFormatId } from '../sheet/conditional';
 import { TableDef, tableColumnNames, seenTableId } from '../sheet/table-styles';
 import { pageSetupXml, printNames, readPageSetup, objectAnchorXml, readObjects, ReadAnchor } from './xlsx-print';
 import { dataUrlBytes, bytesDataUrl, seenObjectId } from '../sheet/sheet-objects';
+import { dataTableXml, readDataTable, pivotParts, readPivot, samePivot, PIVOT_CT, PIVOT_REL } from './xlsx-pivot';
+import { type DataTable, seenDataTableId } from '../sheet/what-if';
+import { type PivotTable, seenPivotId } from '../sheet/pivot';
 import { Persons, notesParts, readNotes, shownNotes, validationsXml, readValidations, NOTES_CT, NOTES_REL } from './xlsx-notes';
 export { applyTint };
 
@@ -201,6 +204,9 @@ interface ModelSheet {
   charts?: Chart[];
   /** A dashboard sheet: Excel was given a stand-in (charts and cells), this is the dashboard itself. */
   dashboard?: Dashboard;
+  /** Data tables and PivotTables as this program holds them (with their ids, which charts point at). */
+  dataTables?: DataTable[];
+  pivots?: PivotTable[];
 }
 
 interface Model {
@@ -345,7 +351,8 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
   const sheetEntries: string[] = [];
   const filterNames: string[] = [];
   const printTitleNames: string[] = [];
-  let imageNo = 0, drawingNo = 0, tableNo = 0, chartNo = 0, notesNo = 0;
+  let imageNo = 0, drawingNo = 0, tableNo = 0, chartNo = 0, notesNo = 0, pivotNo = 0;
+  const pivotCaches: string[] = [];
   let anyDynamic = false;
   const persons = new Persons();
   pkg.defaultType('png', 'image/png');
@@ -361,6 +368,10 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
     if (s.tables.length) ms.tables = s.tables;
     if (s.charts.length && !own.dashboard) ms.charts = s.charts;
     if (own.dashboard) ms.dashboard = own.dashboard;
+    if (s.dataTables.length) ms.dataTables = s.dataTables;
+    if (s.pivots.length && !own.dashboard) ms.pivots = s.pivots;
+    // a data table's TABLE() formula sits on its first result cell
+    const dataTableAt = new Map(s.dataTables.map((t) => [keyOf(t.ref.r1, t.ref.c1), t]));
     // a table's header cells hold its column names, as Excel needs them (filled in and all different)
     const headerName = new Map<number, string>();
     const tableNames = new Map<TableDef, string[]>();
@@ -437,7 +448,8 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
         // a structure's SMILES is in its cell, hidden under the picture (the format ;;; shows nothing)
         const xf = styles.xf(cell?.structure ? { ...style, numFmt: HIDDEN } : style);
         const sAttr0 = xf ? ` s="${xf}"` : '';
-        const f = formula === null ? '' : arrayRef ? `<f t="array" ref="${arrayRef}">${xml(formula)}</f>` : `<f>${xml(formula)}</f>`;
+        const dt = dataTableAt.get(k);
+        const f = dt ? dataTableXml(dt) : formula === null ? '' : arrayRef ? `<f t="array" ref="${arrayRef}">${xml(formula)}</f>` : `<f>${xml(formula)}</f>`;
         // a dynamic array formula's cell points at the metadata that says so
         const sAttr = arrayRef ? `${sAttr0} cm="1"` : sAttr0;
         let body = '';
@@ -553,6 +565,20 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
       const tpath = `xl/tables/table${tableNo}.xml`;
       pkg.add(tpath, HEAD + tableXml(t, tableNo, tableNames.get(t)!, totals, af), CT.table);
       tableIds.push(pkg.relate(path, RELS.table, `../tables/table${tableNo}.xml`));
+    }
+    // PivotTables: a cache (the records) and a pivot table part for each, refreshed when Excel opens them
+    for (const pt of standIn ? [] : s.pivots) {
+      const parts = pivotParts(book, s, pt, pivotNo + 1);
+      if (!parts) continue;
+      pivotNo++;
+      const cachePath = `xl/pivotCache/pivotCacheDefinition${pivotNo}.xml`, tablePath = `xl/pivotTables/pivotTable${pivotNo}.xml`;
+      const recordsRid = pkg.relate(cachePath, PIVOT_REL.records, `pivotCacheRecords${pivotNo}.xml`);
+      pkg.add(cachePath, HEAD + parts.cache(recordsRid), PIVOT_CT.cache);
+      pkg.add(`xl/pivotCache/pivotCacheRecords${pivotNo}.xml`, HEAD + parts.records, PIVOT_CT.records);
+      pkg.add(tablePath, HEAD + parts.table, PIVOT_CT.table);
+      pkg.relate(tablePath, PIVOT_REL.cache, `../pivotCache/pivotCacheDefinition${pivotNo}.xml`);
+      pkg.relate(path, PIVOT_REL.table, `../pivotTables/pivotTable${pivotNo}.xml`);
+      pivotCaches.push(`<pivotCache cacheId="${pivotNo}" r:id="${pkg.relate('xl/workbook.xml', PIVOT_REL.cache, `pivotCache/pivotCacheDefinition${pivotNo}.xml`)}"/>`);
     }
     const tableParts = tableIds.length ? `<tableParts count="${tableIds.length}">${tableIds.map((id) => `<tablePart r:id="${id}"/>`).join('')}</tableParts>` : '';
     const merges = s.merges.length ? `<mergeCells count="${s.merges.length}">${s.merges.map((m) => `<mergeCell ref="${cellName(m.r1, m.c1)}:${cellName(m.r2, m.c2)}"/>`).join('')}</mergeCells>` : '';
@@ -671,7 +697,8 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
     `<sheets>${sheetEntries.join('')}</sheets>` +
     (allNames.length ? `<definedNames>${allNames.join('')}</definedNames>` : '') +
     // formulas are worked out again when Excel opens the file
-    `<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`,
+    `<calcPr calcId="191029" fullCalcOnLoad="1"/>` +
+    (pivotCaches.length ? `<pivotCaches>${pivotCaches.join('')}</pivotCaches>` : '') + '</workbook>',
     CT.workbook);
   pkg.relate('', REL.officeDocument, 'xl/workbook.xml');
   pkg.relate('', REL.coreProps, 'docProps/core.xml');
@@ -940,6 +967,7 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
       const sharedF = new Map<string, { r: number; c: number; text: string }>();
       // blocks filled by array formulas: their other cells hold only what the array put there
       const arrays: { R: Range; r: number; c: number }[] = [];
+      const dataTables: DataTable[] = [];
       let rowNo = -1;
       let maxCol = -1;
       for (const row of kids(kid(ws, 'sheetData'), 'row')) {
@@ -975,6 +1003,14 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
           else if (t === 'd' && v) value = Date.parse(v) / 86400000 + 25569;
           else if (v !== null && v !== '') value = Number(v);
           raw.set(keyOf(r, col), value);
+          // a data table: its results are worked out again here (its formula is on the first of them)
+          const dt = f ? readDataTable(f) : null;
+          if (dt) {
+            dataTables.push(dt);
+            arrays.push({ R: dt.ref, r: -1, c: -1 });
+            if (style) s.setCell(r, col, { style });
+            continue;
+          }
           if (f) {
             let text = f.textContent ?? '';
             const si = f.getAttribute('si');
@@ -1090,6 +1126,25 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
         }
       }
       if (tables.length) s.setTables(tables);
+      // data tables and PivotTables: our own copy where it says the same as Excel's
+      if (dataTables.length) {
+        s.setDataTables(dataTables.map((t) => {
+          const mine = ms?.dataTables?.find((x) => sameRange(x.ref, t.ref) && x.ref.r2 === t.ref.r2);
+          if (mine) seenDataTableId(mine.id);
+          return mine ?? t;
+        }));
+      }
+      const pivots: PivotTable[] = [];
+      for (const r of pkg.rels(path!).values()) {
+        if (r.type !== PIVOT_REL.table) continue;
+        const td = pkg.xml(r.target);
+        const cacheTarget = [...pkg.rels(r.target).values()].find((x) => x.type === PIVOT_REL.cache)?.target;
+        const got = td ? readPivot(td, cacheTarget ? pkg.xml(cacheTarget) : null, s.name) : null;
+        if (!got) { notKept.add('some PivotTables (their cells are kept)'); continue; }
+        const mine = ms?.pivots?.find((p) => p.name === got.name);
+        if (mine && samePivot(mine, got)) { seenPivotId(mine.id); pivots.push({ ...mine, last: mine.last ?? got.last }); } else pivots.push(got);
+      }
+      if (pivots.length) s.setPivots(pivots);
 
       // pictures and charts that aren't structures saved here
       const drawingPath = [...pkg.rels(path!).values()].find((r) => r.type === RELS.drawing)?.target;
