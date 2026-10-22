@@ -7,9 +7,10 @@
 // shows at once in the toolbox itself, and Undo takes changes back one at a time.
 
 import {
-  boxIds, boxItems, boxTitle, inserted, isEditable, isOwnBox, KEEP, moved, slotAt, withBoxesRestored, withBoxMoved,
+  boxIds, boxItems, boxTitle, inserted, isEditable, isOwnBox, KEEP, moved, withBoxesRestored, withBoxMoved,
   withFlyout, withItems, withItemsReset, withNewBox, withoutBox, withTitle, type Pickable, type ToolboxState,
 } from './toolboxes';
+import { dragTile, inside } from './tile-drag';
 
 export interface ToolboxEditorHooks {
   get(): ToolboxState;
@@ -31,7 +32,6 @@ export interface ToolboxEditorHooks {
   newPlace(): { x: number; y: number };
 }
 
-const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 export class ToolboxEditor {
   private d: HTMLDialogElement | null = null;
@@ -455,146 +455,61 @@ export class ToolboxEditor {
    * grid to take it out. A press that doesn't move is a click (it opens a fly-out).
    */
   private press(e: PointerEvent, key: string, from: number | null, el: HTMLElement): void {
-    if (e.button !== 0) return;
-    const { grid } = this.els;
-    const editable = isEditable(this.box);
-    const x0 = e.clientX, y0 = e.clientY;
-    let ghost: HTMLElement | null = null;
-    /** The icon making room in the grid: the one dragged, or a stand-in for one from the list. */
-    let hole: HTMLElement | null = from !== null ? el : null;
-    let into: HTMLElement | null = null;
-    let out = false;
-    const tiles = () => [...grid.querySelectorAll<HTMLElement>('.tbe-tile')];
-    const start = () => {
-      ghost = document.createElement('div');
-      ghost.className = 'tbe-ghost';
-      const it = this.hooks.describe(key);
-      const ic = document.createElement('div');
-      ic.className = 'tbe-ic';
-      if (key === 'sep') ic.innerHTML = '<span class="tbe-bar"></span>';
-      else if (key.startsWith('pal:')) ic.append(this.folderIcon(key.slice(4)));
-      else if (it.icon) ic.innerHTML = it.icon;
-      else { ic.classList.add('word'); ic.textContent = initials(it.label); }
-      ghost.append(ic);
-      // (in the window: it is above everything else on the screen)
-      this.d!.append(ghost);
-      this.d!.classList.add('dragging');
-      if (hole) hole.classList.add('hole');
-    };
-    const move = (m: PointerEvent) => {
-      if (!ghost) {
-        if (Math.hypot(m.clientX - x0, m.clientY - y0) < 5) return;
-        if (!editable) { this.say('Pick or make a toolbox you can put buttons in (New makes one).'); up(); return; }
-        start();
-      }
-      m.preventDefault();
-      ghost!.style.left = `${m.clientX}px`;
-      ghost!.style.top = `${m.clientY}px`;
-      const g = grid.getBoundingClientRect();
-      const over = m.clientX > g.left - 16 && m.clientX < g.right + 16 && m.clientY > g.top - 16 && m.clientY < g.bottom + 16;
+    dragTile(e, {
+      grid: this.els.grid, layer: this.d!, from, el,
+      ghost: () => this.icon(key),
+      stand: () => this.tile(key, -1),
+      canStart: () => {
+        if (isEditable(this.box)) return true;
+        this.say('Pick or make a toolbox you can put buttons in (New makes one).');
+        return false;
+      },
       // over a fly-out's middle, a tool goes inside it
-      into?.classList.remove('drop-in');
-      into = null;
-      if (over && !this.folder && key.startsWith('tool:')) {
-        into = tiles().find((t) => t !== hole && t.dataset.key!.startsWith('pal:') && inside(t, m.clientX, m.clientY, 0.22)) ?? null;
-        into?.classList.add('drop-in');
-      }
-      out = !over;
-      ghost!.classList.toggle('removing', out && from !== null);
-      if (into) return;
-      if (out) { if (hole && from === null) { this.flip(() => { hole!.remove(); hole = null; }); } else if (hole && !hole.hidden) this.flip(() => { hole!.hidden = true; }); return; }
-      if (!hole) {
-        hole = this.tile(key, -1);
-        hole.classList.add('hole');
-        hole.hidden = true;
-        grid.querySelector('.tbe-empty')?.remove();
-      }
-      const h = hole;
-      // where it would go, among the icons showing (the hole too, so it holds still over itself)
-      const others = tiles().filter((t) => t !== h && !t.hidden);
-      const showing = h.isConnected && !h.hidden;
-      const all = showing ? tiles().filter((t) => !t.hidden) : others;
-      let at = slotAt(all.map((t) => t.getBoundingClientRect()), m.clientX, m.clientY);
-      if (showing && at > all.indexOf(h)) at--;
-      const before = others[at] ?? null;
-      let next = h.nextElementSibling as HTMLElement | null;
-      while (next && (next.hidden || !next.classList.contains('tbe-tile'))) next = next.nextElementSibling as HTMLElement | null;
-      if (showing && next === before) return;
-      this.flip(() => { h.hidden = false; grid.insertBefore(h, before); });
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      window.removeEventListener('pointercancel', up);
-      this.d?.classList.remove('dragging');
-      into?.classList.remove('drop-in');
-      if (!ghost) {
-        // a click: a fly-out opens like a folder
-        if (from !== null && key.startsWith('pal:')) this.openFolder(key.slice(4));
-        return;
-      }
-      ghost.remove();
-      const keys = this.keys();
-      if (into) {
-        const palette = into.dataset.key!.slice(4);
-        const tools = this.hooks.flyout(palette);
-        const tool = key.slice(5);
-        if (tools.includes(tool)) { this.say(`${this.hooks.describe(key).label} is in that fly-out already.`); this.draw(); return; }
-        const pal = this.hooks.palette(palette);
-        if (!pal) { this.say('That fly-out holds your own templates only.'); this.draw(); return; }
-        this.change((s) => {
-          let n = withFlyout(s, palette, [...tools, tool]);
-          // dragged from the toolbox, it leaves it
-          if (from !== null) n = withItems(n, this.box, keys.filter((_, j) => j !== from));
-          return n;
-        });
-        this.say(`Put ${this.hooks.describe(key).label} in the ${pal.title} fly-out.`);
-        return;
-      }
-      if (out) {
-        if (from !== null) this.remove(from);
+      into: (tiles, x, y) => (!this.folder && key.startsWith('tool:') ? tiles.find((t) => t.dataset.key!.startsWith('pal:') && inside(t, x, y, 0.22)) ?? null : null),
+      // (the grid keeps still over a fly-out, so a tool can reach its middle)
+      hold: (tiles, x, y) => !this.folder && key.startsWith('tool:') && tiles.some((t) => t.dataset.key!.startsWith('pal:') && inside(t, x, y)),
+      // a click on a fly-out opens it like a folder
+      click: () => { if (from !== null && key.startsWith('pal:')) this.openFolder(key.slice(4)); },
+      drop: (where) => {
+        const keys = this.keys();
+        if (where.kind === 'into') {
+          const palette = where.el.dataset.key!.slice(4);
+          const tools = this.hooks.flyout(palette);
+          const tool = key.slice(5);
+          if (tools.includes(tool)) { this.say(`${this.hooks.describe(key).label} is in that fly-out already.`); this.draw(); return; }
+          const pal = this.hooks.palette(palette);
+          if (!pal) { this.say('That fly-out holds your own templates only.'); this.draw(); return; }
+          this.change((s) => {
+            let n = withFlyout(s, palette, [...tools, tool]);
+            // dragged from the toolbox, it leaves it
+            if (from !== null) n = withItems(n, this.box, keys.filter((_, j) => j !== from));
+            return n;
+          });
+          this.say(`Put ${this.hooks.describe(key).label} in the ${pal.title} fly-out.`);
+        } else if (where.kind === 'at') {
+          if (from === null) this.addAt(key, where.at);
+          else if (where.at !== from) this.setKeys(moved(keys, from, where.at));
+          else this.draw();
+        } else if (from !== null) this.remove(from);
         else this.draw();
-        return;
-      }
-      const at = hole ? tiles().indexOf(hole) : keys.length;
-      if (from !== null) { if (at !== from) this.setKeys(moved(keys, from, at)); else this.draw(); }
-      else this.addAt(key, at);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', up);
+      },
+    });
   }
 
-  /** Change the grid, the icons sliding from where they were to where they go (no slide with less motion). */
-  private flip(change: () => void): void {
-    const tiles = [...this.els.grid.querySelectorAll<HTMLElement>('.tbe-tile')];
-    const was = new Map(tiles.map((t) => [t, t.getBoundingClientRect()]));
-    change();
-    if (reduceMotion()) return;
-    for (const t of this.els.grid.querySelectorAll<HTMLElement>('.tbe-tile')) {
-      const a = was.get(t);
-      if (!a || t.hidden) continue;
-      const b = t.getBoundingClientRect();
-      const dx = a.left - b.left, dy = a.top - b.top;
-      if (!dx && !dy) continue;
-      t.style.transition = 'none';
-      t.style.transform = `translate(${dx}px, ${dy}px)`;
-      void t.offsetWidth;
-      t.style.transition = 'transform 160ms ease-out';
-      t.style.transform = '';
-    }
+  /** A button's picture, as the grid shows it. */
+  private icon(key: string): HTMLElement {
+    const it = this.hooks.describe(key);
+    const ic = document.createElement('div');
+    ic.className = 'tbe-ic';
+    if (key === 'sep') ic.innerHTML = '<span class="tbe-bar"></span>';
+    else if (key.startsWith('pal:')) ic.append(this.folderIcon(key.slice(4)));
+    else if (it.icon) ic.innerHTML = it.icon;
+    else { ic.classList.add('word'); ic.textContent = initials(it.label); }
+    return ic;
   }
 }
-
-/** Whether a point is inside an element's middle (`inset` of its size in from each side). */
-function inside(el: HTMLElement, x: number, y: number, inset: number): boolean {
-  const r = el.getBoundingClientRect();
-  const ix = r.width * inset, iy = r.height * inset;
-  return x > r.left + ix && x < r.right - ix && y > r.top + iy && y < r.bottom - iy;
-}
-
 /** Up to two letters for a command with no icon of its own. */
-function initials(label: string): string {
+export function initials(label: string): string {
   const words = label.replace(/[^\p{L}\p{N} ]/gu, ' ').trim().split(/\s+/).filter(Boolean);
   return ((words[0]?.[0] ?? '?') + (words[1]?.[0] ?? '')).toUpperCase();
 }

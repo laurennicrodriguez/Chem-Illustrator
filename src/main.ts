@@ -14,6 +14,8 @@ import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
 import { Toolboxes, lockIcon, sideFolded, commandButton, defaultToolboxes, menuCommands, boxIds, boxItems, boxTitle, isEditable, isOwnBox, type Pickable, type ToolboxDef, type ToolboxState } from './ui/toolboxes';
 import { ToolboxEditor } from './ui/toolbox-editor';
+import { RibbonEditor } from './ui/ribbon-editor';
+import { readRibbons, applyRibbon, type RibbonInfo, type RibbonsPrefs } from './ui/ribbon-custom';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
 import { Doc, Atom, Caption, Shape, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle, type ShapeMath, PAPER, keepOnPage } from './model';
 import { Renderer, measureText, forgetTextWidths } from './render/renderer';
@@ -4195,7 +4197,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['new-from-template', 'check-accessibility', 'format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'export-settings', 'import-settings', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+const ANY_TAB = new Set(['new-from-template', 'check-accessibility', 'format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'export-settings', 'import-settings', 'customize-ribbon', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'title-bar-in-menu', 'collapse-ribbon', 'page-edge', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
   'help', 'about', 'user-guide', 'help-here', 'send-feedback', 'report-problem', 'check-updates']);
 
@@ -4727,6 +4729,7 @@ const COMMANDS: Record<string, () => unknown> = {
   // the panel taken out as a toolbox folds up to its title bar; at the right it folds to a strip
   'fold-side': () => foldSide(!sideIsFolded()),
   'customize-toolbox': () => openCustomToolbox(),
+  'customize-ribbon': () => ribbonEditor.open(RIBBON_OF_MODE[ws.active.mode]),
   'export-settings': () => void exportSettings(),
   'import-settings': () => void importSettingsFile(),
   'lock-toolboxes': () => { toolboxes.setLocked(!toolboxState.locked); flash(toolboxState.locked ? 'Toolboxes locked.' : 'Toolboxes unlocked: drag one by its title to an edge of the drawing to dock it, or anywhere else to float.', 6000); },
@@ -5830,6 +5833,7 @@ function currentSettings(): Settings {
     askWholeDrawing,
     palettes: getPalettes(),
     toolboxes: toolboxState,
+    ribbons: ribbonPrefs,
     myStyles: ownStyles,
     modeStyles,
     darkPage: dark.on,
@@ -6044,6 +6048,8 @@ function applySettings(s: Settings): void {
   renderRecent();
   setPalettes(s.palettes);
   toolboxState = s.toolboxes;
+  ribbonPrefs = s.ribbons;
+  applyRibbons();
   ownStyles = s.myStyles;
   modeStyles = s.modeStyles;
   dark.palette = s.darkPalette;
@@ -7620,6 +7626,43 @@ const toolboxEditor = new ToolboxEditor({
   flyout: (name) => toolboxState.flyouts?.[name] ?? PALETTES.get(name)?.items.filter((t) => ALL_TOOLS.has(t.name)).map((t) => t.name) ?? [],
   newPlace: () => { const w = $('#work').getBoundingClientRect(); return { x: Math.round(Math.max(w.left + 8, w.right - 300)), y: Math.round(w.top + 40) }; },
 });
+
+// ---------------------------------------------------------------- View > Customize the Ribbon
+
+/** Each ribbon's tabs and groups as you put them (kept in the settings). */
+let ribbonPrefs: RibbonsPrefs = {};
+/** The ribbons as they came (read the first time they are laid out). */
+let ribbonInfo: RibbonInfo[] | null = null;
+const ribbonsNow = () => (ribbonInfo ??= readRibbons());
+/** The ribbon each mode shows (drawings have none: the Slides one is offered). */
+const RIBBON_OF_MODE: Record<string, string> = { slides: 'slides', document: 'doc', sheet: 'sheet', design: 'design', drawing: 'slides' };
+
+/** Lay every ribbon out with your changes. */
+function applyRibbons(): void {
+  // (nothing changed and nothing laid out yet: the ribbons are as they come)
+  if (!ribbonInfo && !Object.keys(ribbonPrefs).length) return;
+  for (const info of ribbonsNow()) applyRibbon(info, ribbonPrefs[info.id], { run: (cmd) => { finishTyping(); command(cmd); } });
+  fitRibbons();
+}
+
+const ribbonEditor = new RibbonEditor({
+  ribbons: ribbonsNow,
+  get: () => ribbonPrefs,
+  set: (p) => { ribbonPrefs = p; applyRibbons(); storeSettings(); },
+  menus: () => menuCommands().filter((g) => g.items.length).map((g) => ({ name: `${g.menu} menu`, items: g.items.filter((c) => !c.cmd.startsWith('toolbox-')).map((c) => ({ key: `cmd:${c.cmd}`, label: c.label, icon: commandIcon(c.cmd) })) })),
+  jiggle: () => toolboxState.jiggle !== false,
+});
+// right-click a ribbon's tabs (or a group's name) to customize it
+for (const [mode, id] of [['slides', '#ribbon'], ['document', '#doc-ribbon'], ['sheet', '#sheet-ribbon'], ['design', '#design-ribbon']] as const) {
+  $(id).addEventListener('contextmenu', (e) => {
+    if (!(e.target as Element).closest('.rb-tabs, .rb-label')) return;
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY, [
+      { cmd: 'customize-ribbon', label: 'Customize the Ribbon…' },
+      { cmd: 'collapse-ribbon', label: ribbonCollapsed() ? 'Show the Whole Ribbon' : 'Collapse the Ribbon' },
+    ], { key: (c) => commandKey(c), run: (c) => (c === 'customize-ribbon' ? ribbonEditor.open(RIBBON_OF_MODE[mode]) : command(c)) });
+  });
+}
 
 /** View > Toolboxes > Customize Toolboxes, at a toolbox (My Toolbox unless one is named). */
 function openCustomToolbox(id?: string): void {
