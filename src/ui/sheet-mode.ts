@@ -8,7 +8,7 @@ import { paletteRows } from './palette-ui';
 import { SheetView, popupMenu, selectionName } from './sheet-view';
 import { Workbook, Sheet, Structure, CellStyle, CellBlock, Cell, Condition, CompareOp, makeStructure, growToMerges } from '../sheet/workbook';
 import { Range, MAX_ROWS, MAX_COLS, colName, colIndex, cellName, parseRange, parseCellRef, keyOf, rowOf, colOf, inRange } from '../sheet/refs';
-import { showsChem } from '../sheet/cell-text';
+import { showsChem, chemPieces } from '../sheet/cell-text';
 import { fillReagentTable } from '../sheet/reagents';
 import { shiftFormula } from '../sheet/formula';
 import { PROPERTIES, MolProps, propertyValue } from '../sheet/properties';
@@ -36,6 +36,9 @@ import { LINK_COLOUR, cellLink, cellOfLink, describeLink } from '../links';
 import { describeValidation, KIND_NAMES } from '../sheet/validation';
 import type { ChartKind } from '../sheet/chart';
 import { DashboardUi } from './dashboard-ui';
+import { printSheet, previewPages, PrintedSheet } from './sheet-print';
+import { SheetObjects } from './sheet-objects-ui';
+import { SheetPage } from './sheet-page-ui';
 import { TILE_NAMES } from '../sheet/dashboard';
 import type { TableDef } from '../sheet/table-styles';
 import type { Contents } from '../model';
@@ -71,6 +74,10 @@ export interface SheetModeHost {
   readCells(e: ClipboardEvent | null): Promise<ClipboardCells>;
   /** Ask for the name put on notes and comments (true when one was given). */
   askName(): Promise<boolean>;
+  /** Ask for a picture file (Insert > Pictures). */
+  pickPicture?(): Promise<{ bytes: Uint8Array; mime: string; name: string } | null>;
+  /** File > Print, for the Print button in Print Preview. */
+  print?(): void;
 }
 
 const OWN_KIND = 'chem-illustrator-cells';
@@ -100,6 +107,10 @@ export class SheetMode {
   readonly notes: SheetNotes;
   /** Data validation: the window, drop-downs and alerts. */
   readonly validation: SheetValidation;
+  /** Pictures, shapes and text boxes over the cells. */
+  readonly objects: SheetObjects;
+  /** The Page Layout tab: page setup, print area, breaks, headers and footers. */
+  readonly page: SheetPage;
   /** The Formulas tab: Insert Function and the defined names. */
   readonly formulas: SheetFormulas;
   /** The chart the panel and Chart tab showed last (the tab opens when a chart is first picked). */
@@ -125,7 +136,13 @@ export class SheetMode {
       key: (e) => this.host.key(e),
       f3: (e) => this.f3(e),
       changed: () => this.selectionChanged(),
-      contextMenu: (x, y, where) => (where === 'chart' ? this.charts.contextMenu(x, y) : where === 'tile' ? this.dashUi.contextMenu(x, y) : this.contextMenu(x, y, where)),
+      contextMenu: (x, y, where) => (where === 'chart' ? this.charts.contextMenu(x, y) : where === 'tile' ? this.dashUi.contextMenu(x, y) : where === 'object' ? this.objects.contextMenu(x, y) : this.contextMenu(x, y, where)),
+      editObject: (id) => {
+        const o = this.view.sheet?.objects.find((x) => x.id === id);
+        if (o?.kind === 'picture' || o?.shape === 'line' || o?.shape === 'arrow') void this.objects.format(o);
+        else this.objects.editText(id);
+      },
+      typeInObject: (id, key) => { const o = this.view.sheet?.objects.find((x) => x.id === id); return !!o && this.objects.typeInto(o, key); },
       editChart: () => { this.showRibbonTab('chart'); this.renderPanel(); this.charts.focusPanel(); },
       openTile: (t) => {
         if (t.kind === 'chart') { this.dashUi.bindChart(t.id); this.showRibbonTab('chart'); }
@@ -165,6 +182,17 @@ export class SheetMode {
       askName: () => this.host.askName(),
     });
     this.validation = new SheetValidation({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+    });
+    this.objects = new SheetObjects({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+      pickPicture: () => this.host.pickPicture?.() ?? Promise.resolve(null),
+    });
+    this.page = new SheetPage({
       view: this.view,
       edit: (label, fn) => this.edit(label, fn),
       flash: (m, ms) => this.host.flash(m, ms),
@@ -441,6 +469,14 @@ export class SheetMode {
       case 'conditional-formatting': this.formatting.conditionalMenu(b.left, b.bottom + 2); return;
       case 'format-as-table': this.formatting.tableMenu(b.left, b.bottom + 2); return;
       case 'chart-type': this.charts.typeMenu(b.left, b.bottom + 2); return;
+      case 'insert-shapes': this.objects.shapesMenu(b.left, b.bottom + 2); return;
+      case 'page-margins': this.page.marginsMenu(b.left, b.bottom + 2); return;
+      case 'page-orientation': this.page.orientationMenu(b.left, b.bottom + 2); return;
+      case 'page-size': this.page.sizeMenu(b.left, b.bottom + 2); return;
+      case 'print-area': this.page.printAreaMenu(b.left, b.bottom + 2); return;
+      case 'page-breaks': this.page.breaksMenu(b.left, b.bottom + 2); return;
+      case 'fit-wide': this.page.fitMenu(b.left, b.bottom + 2, 'wide'); return;
+      case 'fit-tall': this.page.fitMenu(b.left, b.bottom + 2, 'tall'); return;
       case 'chart-fit': this.charts.fitMenu(b.left, b.bottom + 2); return;
       case 'chart-legend': this.charts.legendMenu(b.left, b.bottom + 2); return;
       case 'chart-palette': this.charts.paletteMenu(b.left, b.bottom + 2); return;
@@ -533,7 +569,7 @@ export class SheetMode {
       case 'chart-copy': void this.charts.copyPicture(); break;
       case 'chart-save': void this.charts.savePicture(); break;
       case 'chart-delete': this.charts.deleteChart(); break;
-      case 'copy': if (this.charts.chart) void this.charts.copyPicture(); else void this.copy(); break;
+      case 'copy': if (this.charts.chart) void this.charts.copyPicture(); else if (v.selectedObject) this.host.flash('Use Duplicate on the right-click menu to copy a picture or shape.'); else void this.copy(); break;
       case 'cut': void this.copy(true); break;
       case 'paste': void this.paste(null); break;
       case 'clear-contents': v.clearSelection(); break;
@@ -557,6 +593,20 @@ export class SheetMode {
       case 'names-from-selection': this.formulas.createFromSelection(); break;
       case 'circle-invalid': this.validation.toggleCircles(); this.showRibbonState(); break;
       case 'pick-from-list': v.openDropDown(); break;
+      case 'insert-picture-sheet': void this.objects.insertPicture(); break;
+      case 'insert-text-box': this.objects.insertTextBox(); break;
+      case 'format-object': void this.objects.format(); break;
+      case 'print-titles': void this.page.printTitles(); break;
+      case 'page-setup': void this.page.pageSetupWindow(); break;
+      case 'header-footer': void this.page.headerFooter(); break;
+      case 'page-scale': void this.page.scaleWindow(); break;
+      case 'print-gridlines': this.page.toggle('gridlines'); break;
+      case 'print-headings': this.page.toggle('headings'); break;
+      case 'show-page-breaks': v.showPageBreaks = !v.showPageBreaks; v.refresh(); this.showRibbonState(); break;
+      case 'insert-page-break': this.page.insertBreak(); break;
+      case 'set-print-area': this.page.setPrintArea(false); break;
+      case 'clear-print-area': this.page.set('Clear print area', { printArea: undefined }); break;
+      case 'print-preview': this.printPreview(); break;
       default: return false;
     }
     return true;
@@ -1436,23 +1486,7 @@ export class SheetMode {
   }
 
   /** The cells as an HTML table, so Word and Excel keep bold, colours and alignment. */
-  /** File > Print: the sheet's cells (or just those selected) as a table, structures as pictures. Null when there is nothing. */
-  printTable(selected: boolean): string | null {
-    const v = this.view, s = v.sheet;
-    if (!s) return null;
-    v.commitEdit();
-    const R = selected ? s.clip(growToMerges(s, v.sel.range)) : s.usedRange();
-    return R ? this.htmlTable(s, R, true) : null;
-  }
-
   private htmlTable(s: Sheet, R: Range, pictures = false): string {
-    const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const picture = (r: number, c: number): string | null => {
-      const st = pictures ? s.cell(r, c)?.structure : undefined;
-      if (!st) return null;
-      const b = this.pictures.box(st), bmp = this.pictures.bitmap(st, 4, true);
-      return bmp ? `<img src="${bmp.toDataURL('image/png')}" style="width:${b.w}pt;height:${b.h}pt" alt="">` : null;
-    };
     const lines: string[] = ['<table border="0" cellspacing="0" cellpadding="0" style="border-collapse:collapse">'];
     for (let r = R.r1; r <= R.r2; r++) {
       if (s.hiddenRows.has(r)) continue;
@@ -1461,30 +1495,83 @@ export class SheetMode {
         if (s.hiddenCols.has(c)) continue;
         const m = s.mergeAt(r, c);
         if (m && (m.r1 !== r || m.c1 !== c)) continue;
-        const st = s.styleAt(r, c);
-        const css: string[] = [];
-        if (st?.bold) css.push('font-weight:700');
-        if (st?.italic) css.push('font-style:italic');
-        if (st?.underline) css.push('text-decoration:underline');
-        if (st?.color) css.push(`color:${st.color}`);
-        if (st?.fill) css.push(`background:${st.fill}`);
-        if (st?.align) css.push(`text-align:${st.align}`);
-        for (const side of ['top', 'right', 'bottom', 'left'] as const) {
-          const b = st?.borders?.[side];
-          if (b) css.push(`border-${side}:${b.style === 'thick' ? '2.25pt' : b.style === 'medium' ? '1.5pt' : '.5pt'} ${b.style === 'double' ? 'double' : b.style === 'dashed' ? 'dashed' : b.style === 'dotted' ? 'dotted' : 'solid'} ${b.color ?? '#000'}`);
-        }
-        const v = s.values.get(keyOf(r, c));
-        const num = typeof v === 'number';
-        // numbers sit on the right unless set otherwise, as on screen
-        if (num && !st?.align) css.push('text-align:right');
         const span = m ? `${m.c2 > m.c1 ? ` colspan="${m.c2 - m.c1 + 1}"` : ''}${m.r2 > m.r1 ? ` rowspan="${m.r2 - m.r1 + 1}"` : ''}` : '';
-        // Excel reads a number with x:num and keeps its full value
-        tds.push(`<td${span}${num ? ` x:num="${v}"` : ''}${css.length ? ` style="${css.join(';')}"` : ''}>${picture(r, c) ?? esc(this.cellText(s, r, c)).replace(/\n/g, '<br>')}</td>`);
+        const cell = this.cellHtml(s, r, c, pictures);
+        tds.push(`<td${span}${cell.attrs}>${cell.body}</td>`);
       }
       lines.push(`<tr>${tds.join('')}</tr>`);
     }
     lines.push('</table>');
     return lines.join('');
+  }
+
+  /** One cell for an HTML table: its look as the <td>'s attributes, and what it shows (a structure as a picture, for printing). */
+  private cellHtml(s: Sheet, r: number, c: number, pictures: boolean, fit?: { w: number; h: number }): { attrs: string; body: string } {
+    const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const picture = (): string | null => {
+      const st = pictures ? s.cell(r, c)?.structure : undefined;
+      if (!st) return null;
+      const b = this.pictures.box(st), bmp = this.pictures.bitmap(st, 4, true);
+      if (!bmp) return null;
+      // printed pages: shrunk to fit the cell, as the grid shows it (points to pixels: 4/3)
+      const k = fit ? Math.min(1, (fit.w - 4) / (b.w * 4 / 3), (fit.h - 4) / (b.h * 4 / 3)) : 1;
+      return `<img src="${bmp.toDataURL('image/png')}" style="width:${b.w * k}pt;height:${b.h * k}pt" alt="">`;
+    };
+    const st = s.styleAt(r, c);
+    const css: string[] = [];
+    if (st?.bold) css.push('font-weight:700');
+    if (st?.italic) css.push('font-style:italic');
+    if (st?.underline) css.push('text-decoration:underline');
+    if (st?.color) css.push(`color:${st.color}`);
+    if (st?.fill) css.push(`background:${st.fill}`);
+    if (st?.align) css.push(`text-align:${st.align}`);
+    for (const side of ['top', 'right', 'bottom', 'left'] as const) {
+      const b = st?.borders?.[side];
+      if (b) css.push(`border-${side}:${b.style === 'thick' ? '2.25pt' : b.style === 'medium' ? '1.5pt' : '.5pt'} ${b.style === 'double' ? 'double' : b.style === 'dashed' ? 'dashed' : b.style === 'dotted' ? 'dotted' : 'solid'} ${b.color ?? '#000'}`);
+    }
+    const v = s.values.get(keyOf(r, c));
+    const num = typeof v === 'number';
+    // numbers sit on the right unless set otherwise, as on screen
+    if (num && !st?.align) css.push('text-align:right');
+    if (fit) {
+      if (st?.valign === 'top' || st?.valign === 'middle') css.push(`vertical-align:${st.valign}`);
+      if (st?.wrap) css.push('white-space:pre-wrap'); else css.push('white-space:pre;overflow:hidden');
+      if (st?.size) css.push(`font-size:${st.size}pt`);
+      if (st?.font) css.push(`font-family:'${st.font}', Calibri, Carlito, Arial, sans-serif`);
+    }
+    // Excel reads a number with x:num and keeps its full value
+    const text = this.cellText(s, r, c);
+    // printed pages: formulas with their numbers lowered and charges raised, as on screen
+    const chem = fit && typeof v === 'string' && showsChem(st?.chem, v)
+      ? chemPieces(text).map((p) => { const t = esc(p.text); const x = p.pos === 'sub' ? `<sub>${t}</sub>` : p.pos === 'sup' ? `<sup>${t}</sup>` : t; return p.italic ? `<i>${x}</i>` : x; }).join('')
+      : null;
+    return { attrs: `${num ? ` x:num="${v}"` : ''}${css.length ? ` style="${css.join(';')}"` : ''}`, body: picture() ?? chem ?? esc(text).replace(/\n/g, '<br>') };
+  }
+
+  /** Page Layout > Print Preview: the pages as they will print. */
+  printPreview(): void {
+    const name = this.tab?.name ?? 'Sheet';
+    const got = this.printedSheet({ selection: false, ignoreArea: false, file: name });
+    if (!got) { this.host.flash('There is nothing in this sheet to print.'); return; }
+    previewPages(got, `${this.view.sheet!.name}`, () => this.host.print?.());
+  }
+
+  /** File > Print and Print Preview: the sheet's pages, as its page setup lays them out. */
+  printedSheet(opts: { selection: boolean; ignoreArea: boolean; file: string }): PrintedSheet | null {
+    const v = this.view, s = v.sheet, wb = this.book;
+    if (!s || !wb) return null;
+    v.commitEdit();
+    const sel = opts.selection ? s.clip(growToMerges(s, v.sel.range)) : null;
+    if (opts.selection && !sel) return null;
+    return printSheet(wb, s, {
+      rowHeight: (r) => v.rowHeight(r),
+      cellHtml: (sh, r, c) => {
+        const m = sh.mergeAt(r, c);
+        const w = m ? Array.from({ length: m.c2 - m.c1 + 1 }, (_, i) => v.colWidth(m.c1 + i)).reduce((a, b) => a + b, 0) : v.colWidth(c);
+        const h = m ? Array.from({ length: m.r2 - m.r1 + 1 }, (_, i) => v.rowHeight(m.r1 + i)).reduce((a, b) => a + b, 0) : v.rowHeight(r);
+        return this.cellHtml(sh, r, c, true, { w, h });
+      },
+    }, { selection: sel ?? undefined, ignoreArea: opts.ignoreArea, file: opts.file });
   }
 
   /** Split view's Insert: a drawing into the selected cell, as pasting one would. */
@@ -1804,6 +1891,9 @@ export class SheetMode {
     press('merge-cells', !!s.mergeAt(r, c));
     press('show-all-notes', this.notes.showAll);
     press('circle-invalid', this.view.circleInvalid);
+    press('show-page-breaks', this.view.showPageBreaks);
+    press('print-gridlines', !!s.pageSetup?.gridlines);
+    press('print-headings', !!s.pageSetup?.headings);
     const note = s.noteAt(r, c);
     press('show-note', !!note?.shown);
     for (const [name, on] of [['edit-note', note?.kind === 'note'], ['show-note', note?.kind === 'note'], ['delete-note', !!note]] as const) {
@@ -1812,6 +1902,7 @@ export class SheetMode {
     }
     for (const m of document.querySelectorAll('[role="menuitemcheckbox"][data-cmd="show-all-notes"]')) m.setAttribute('aria-checked', String(this.notes.showAll));
     for (const m of document.querySelectorAll('[role="menuitemcheckbox"][data-cmd="circle-invalid"]')) m.setAttribute('aria-checked', String(this.view.circleInvalid));
+    for (const m of document.querySelectorAll('[role="menuitemcheckbox"][data-cmd="show-page-breaks"]')) m.setAttribute('aria-checked', String(this.view.showPageBreaks));
     const fmt = this.ribbon.querySelector<HTMLSelectElement>('#sh-numfmt')!;
     const code = st.numFmt ?? 'General';
     let opt = [...fmt.options].find((o) => o.value === code);
@@ -1882,6 +1973,16 @@ export class SheetMode {
       return;
     }
     delete p.dataset.chart;
+    const obj = this.view.selectedObject;
+    if (obj) {
+      const key = JSON.stringify({ ...obj, src: undefined });
+      if (p.dataset.object === key) return;
+      p.dataset.object = key;
+      this.panelTitle.textContent = obj.kind === 'picture' ? 'Picture' : obj.kind === 'text' ? 'Text Box' : 'Shape';
+      p.replaceChildren(...this.objects.panel(obj));
+      return;
+    }
+    delete p.dataset.object;
     const { r, c } = this.view.sel.active;
     this.panelTitle.textContent = cellName(r, c);
     const cell = s.cell(r, c);

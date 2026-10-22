@@ -11,6 +11,7 @@
 
 import type { TextRun } from '../model';
 import { DEFAULT_STYLE, citeFormat, type CiteFormat } from './cite-styles';
+import type { RefLink } from './live-cites';
 
 export type RefType = 'article' | 'book' | 'chapter' | 'thesis' | 'web' | 'misc';
 
@@ -40,6 +41,8 @@ export interface Reference {
   note: string;
   /** The bibliography's text for this reference typed over the automatic one (plain text). */
   typed?: string;
+  /** The item in Zotero's, Mendeley's or EndNote's library it came from (see live-cites.ts). */
+  live?: RefLink;
 }
 
 /** A journal style's id (a key of CITE_PRESETS: 'acs', 'rsc'…). */
@@ -87,6 +90,8 @@ export function cleanRef(r: Partial<Record<keyof Reference, unknown>>): Referenc
   out.doi = normaliseDoi(out.doi);
   out.pages = out.pages.replace(/(?<=\d)\s*-+\s*(?=\d)/g, '–');
   if (typeof r.typed === 'string') out.typed = r.typed;
+  const live = r.live as RefLink | undefined;
+  if (live && typeof live === 'object' && typeof live.app === 'string' && (typeof live.id === 'string' || typeof live.id === 'number')) out.live = { ...live, id: String(live.id) };
   return out;
 }
 
