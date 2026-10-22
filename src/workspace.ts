@@ -233,7 +233,7 @@ export class Workspace {
     const t = this.active;
     let dirty = t.dirty;
     if (t.deck) dirty = t.deck.edits !== t.savedEdits;
-    else if (t.mode === 'sheet') dirty = t.book!.edits !== t.savedEdits;
+    else if (t.mode === 'sheet') dirty = t.book!.edits !== this.mainOf(t).savedEdits;
     else if (t.mode === 'document') dirty = t.document!.edits !== this.mainOf(t).savedEdits;
     else if (this.host.version !== t.seen) {
       t.seen = this.host.version;
@@ -242,8 +242,8 @@ export class Workspace {
     }
     if (dirty !== t.dirty) {
       t.dirty = dirty;
-      if (t.document) {
-        // the other windows of the document, and the tab owning its file
+      if (t.document || t.book) {
+        // the other windows of the document (or workbook), and the tab owning its file
         const main = this.mainOf(t);
         main.dirty = dirty;
         this.syncWindows(main);
@@ -270,28 +270,36 @@ export class Workspace {
     return t.windowOf ?? t;
   }
 
-  /** As Word names the windows of a document: "Report.docx:1", "Report.docx:2"; just the name with one window. */
+  /** What a tab's windows share: its document or workbook. */
+  private shared(t: Tab): object | null {
+    return t.document ?? t.book;
+  }
+
+  /** As Word and Excel name the windows of a file: "Report.docx:1", "Report.docx:2"; just the name with one window. */
   label(t: Tab): string {
-    if (!t.document) return t.name;
-    const all = this.tabs.filter((x) => x.document === t.document);
+    const doc = this.shared(t);
+    if (!doc) return t.name;
+    const all = this.tabs.filter((x) => this.shared(x) === doc);
     return all.length > 1 ? `${this.mainOf(t).name}:${all.indexOf(t) + 1}` : t.name;
   }
 
   /**
-   * View > New Window: the document showing in another tab too, each with its own view and
+   * View > New Window: the document (or workbook) showing in another tab too, each with its own view and
    * place in the text. Typing in either shows in both; Save in either saves the one file.
    */
   newWindow(): Tab | null {
     const from = this.active;
-    if (!from.document) return null;
+    const doc = this.shared(from);
+    if (!doc) return null;
     const main = this.mainOf(from);
-    const t = this.makeTab('document', main.name, main.ref);
+    const t = this.makeTab(from.document ? 'document' : 'sheet', main.name, main.ref);
     t.document = from.document;
+    t.book = from.book;
     t.windowOf = main;
     t.dirty = main.dirty;
     t.savedEdits = main.savedEdits;
     // after the last window of this document
-    const last = Math.max(...this.tabs.map((x, i) => (x.document === from.document ? i : -1)));
+    const last = Math.max(...this.tabs.map((x, i) => (this.shared(x) === doc ? i : -1)));
     this.tabs.splice(last + 1, 0, t);
     this.activate(t, true);
     return t;

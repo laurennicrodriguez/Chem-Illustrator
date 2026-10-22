@@ -150,6 +150,7 @@ import { SheetMode, ClipboardCells } from './ui/sheet-mode';
 import { DocumentMode, DocPaste } from './ui/doc-mode';
 import { docBoxPrefs, parseDocPins } from './ui/doc-panel';
 import { docRulerPrefs } from './ui/ruler';
+import { formulaBarPrefs } from './ui/sheet-views-ui';
 import { setScreenMeasure, figures } from './document/doc-file';
 import { readDocx, writeDocx, type DocxDeps, type DocxReadDeps } from './io/docx';
 import { FIGURE_MARGIN } from './document/figures';
@@ -3595,6 +3596,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work differently while a sheet shows. */
 const SHEET_COMMANDS: Record<string, () => unknown> = {
+  'sheet-new-window': () => { sheetMode.view.commitEdit(); ws.newWindow(); },
   cut: () => sheetMode.copy(true),
   copy: () => sheetMode.copy(),
   paste: () => sheetMode.paste(null),
@@ -3686,6 +3688,7 @@ const docMode = new DocumentMode({
 });
 docBoxPrefs.changed = () => storeSettings();
 docRulerPrefs.changed = () => storeSettings();
+formulaBarPrefs.changed = () => storeSettings();
 // documents measure fonts they have no published widths for on the screen
 setScreenMeasure(measureText);
 void document.fonts?.ready.then(() => docMode.fontsChanged());
@@ -5181,6 +5184,7 @@ function storeSettings(): void {
     guides: { ...guidesOn },
     docPins: [...docBoxPrefs.pinned],
     docRuler: docRulerPrefs.shown,
+    sheetFormulaBar: formulaBarPrefs.shown,
     updateCheck,
     pubchemNames,
     fileTypesOffered,
@@ -5343,6 +5347,8 @@ void loadSettings().then((s) => {
   Object.assign(guidesOn, s.guides);
   docBoxPrefs.pinned = parseDocPins(s.docPins);
   docRulerPrefs.shown = !!s.docRuler;
+  formulaBarPrefs.shown = s.sheetFormulaBar !== false;
+  sheetMode.showFormulaBar();
   docMode.showRuler();
   docMode.boxesChanged();
   showGuides();

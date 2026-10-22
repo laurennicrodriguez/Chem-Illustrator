@@ -28,6 +28,10 @@ import type { SheetObject } from './sheet-objects';
 import { PageSetup, shiftSetup } from './page-setup';
 import { DataTable, dataTableCell } from './what-if';
 import { PivotTable } from './pivot';
+import { SparklineGroup, moveSparklines } from './sparklines';
+import type { OutlineSettings } from './outline';
+import { type SheetViewOpts, type CustomView, renameInViews } from './views';
+import type { WorkbookTheme } from './themes';
 
 export type BorderStyle = 'thin' | 'medium' | 'thick' | 'double' | 'dashed' | 'dotted';
 export interface Border { style: BorderStyle; color?: string }
@@ -54,6 +58,13 @@ export interface CellStyle {
   borders?: Partial<Record<Side, Border>>;
   /** Shown as chemistry: the numbers of CH2Cl2 or C9H8O4 lowered, charges raised. */
   chem?: boolean;
+  /**
+   * Text turned (Format Cells > Alignment > Orientation): degrees anticlockwise from −90 to 90,
+   * or 255 for letters stacked one above the other, as Excel numbers them.
+   */
+  rotate?: number;
+  /** The cell style from the Cell Styles gallery (Good, Heading 1, Total…) the formatting came from. */
+  cellStyle?: string;
 }
 
 /** A drawing in a cell. Never changed once made: a new drawing gets a new id, so pictures and properties can be kept by id. */
@@ -195,12 +206,14 @@ function patchStyleWith(s: CellStyle | undefined, patch: Partial<CellStyle>): Ce
 
 // ---------------------------------------------------------------- history
 
-type MapField = 'cells' | 'colWidths' | 'rowHeights' | 'colDefs' | 'colStyles' | 'hiddenRows' | 'hiddenCols' | 'notes';
-type ValueField = 'merges' | 'filter' | 'frozen' | 'split' | 'name' | 'condFormats' | 'tables' | 'charts' | 'dashboard' | 'validations' | 'objects' | 'pageSetup' | 'dataTables' | 'pivots';
+type MapField = 'cells' | 'colWidths' | 'rowHeights' | 'colDefs' | 'colStyles' | 'hiddenRows' | 'hiddenCols' | 'notes' | 'rowLevels' | 'colLevels';
+type ValueField = 'merges' | 'filter' | 'frozen' | 'split' | 'name' | 'condFormats' | 'tables' | 'charts' | 'dashboard' | 'validations' | 'objects' | 'pageSetup' | 'dataTables' | 'pivots'
+  | 'sparklines' | 'viewOpts' | 'outline';
+const VALUE_FIELDS = new Set<string>(['merges', 'filter', 'frozen', 'split', 'name', 'condFormats', 'tables', 'charts', 'dashboard', 'validations', 'objects', 'pageSetup', 'dataTables', 'pivots', 'sparklines', 'viewOpts', 'outline']);
 
 interface Change {
-  sheet: Sheet | null; // null: the workbook's list of sheets, or its names
-  field: MapField | ValueField | 'sheets' | 'names';
+  sheet: Sheet | null; // null: the workbook's list of sheets, its names, theme or custom views
+  field: MapField | ValueField | 'sheets' | 'names' | 'theme' | 'customViews';
   key: number;
   before: unknown;
   after: unknown;
@@ -259,6 +272,15 @@ export class Sheet {
   dataTables: DataTable[] = [];
   /** PivotTables whose reports are in this sheet's cells. */
   pivots: PivotTable[] = [];
+  /** Data > Group: the outline level of grouped rows and columns (1 to 7). */
+  rowLevels = new Map<number, number>();
+  colLevels = new Map<number, number>();
+  /** Where the summary rows and columns of the outline are (null: below and to the right, Excel's default). */
+  outline: OutlineSettings | null = null;
+  /** Insert > Sparklines: little charts in cells. */
+  sparklines: SparklineGroup[] = [];
+  /** View: Page Layout or Page Break Preview, gridlines and headings shown or hidden (null: Normal, both shown). */
+  viewOpts: SheetViewOpts | null = null;
   private looks: { gen: number; rules: CondFormat[]; map: Map<number, CellLook> } | null = null;
   /** Goes up each time the values are worked out again (all of them, or only those an edit changed). */
   valuesGen = 0;
@@ -600,6 +622,27 @@ export class Sheet {
     this.assign('dataTables', list);
   }
 
+  setSparklines(list: SparklineGroup[]): void {
+    this.assign('sparklines', list);
+  }
+
+  setViewOpts(o: SheetViewOpts | null): void {
+    this.assign('viewOpts', o && Object.values(o).some((v) => v !== undefined) ? o : null);
+  }
+
+  setOutline(o: OutlineSettings | null): void {
+    this.assign('outline', o && Object.values(o).some((v) => v !== undefined) ? o : null);
+  }
+
+  /** A row's outline level (0 takes it out of every group). */
+  setRowLevel(row: number, level: number): void {
+    this.put('rowLevels', this.rowLevels, row, level > 0 ? Math.min(7, level) : undefined);
+  }
+
+  setColLevel(col: number, level: number): void {
+    this.put('colLevels', this.colLevels, col, level > 0 ? Math.min(7, level) : undefined);
+  }
+
   setPivots(list: PivotTable[]): void {
     this.assign('pivots', list);
   }
@@ -634,6 +677,7 @@ export class Sheet {
     this.assign('name', name);
     // formulas that name the sheet follow it
     this.wb.rewriteAllFormulas((f) => renameSheetInFormula(f, old, name));
+    if (this.wb.customViews.length) this.wb.setCustomViews(renameInViews(this.wb.customViews, old, name));
   }
 
   /**
@@ -824,6 +868,8 @@ export class Sheet {
     shiftMap('hiddenCols', this.hiddenCols, axis === 'col');
     shiftMap('colStyles', this.colStyles, axis === 'col');
     shiftMap('colDefs', this.colDefs, axis === 'col');
+    shiftMap('rowLevels', this.rowLevels, axis === 'row');
+    shiftMap('colLevels', this.colLevels, axis === 'col');
     // blocks: merged cells and the filter
     const moveRange = (r: Range): Range | null => {
       const lo = axis === 'row' ? r.r1 : r.c1, hi = axis === 'row' ? r.r2 : r.c2;
@@ -887,6 +933,11 @@ export class Sheet {
         return n === i && last === p.last ? p : { ...p, at: axis === 'row' ? { ...p.at, row: n } : { ...p.at, col: n }, last };
       });
       if (ps.some((p, i) => p !== this.pivots[i])) this.setPivots(ps);
+    }
+    // sparklines sit where their cells go (and go with them when they are deleted)
+    if (this.sparklines.length) {
+      const sl = moveSparklines(this.sparklines, axis, at, count);
+      if (JSON.stringify(sl) !== JSON.stringify(this.sparklines)) this.setSparklines(sl);
     }
     if (this.pageSetup) {
       const ps = shiftSetup(this.pageSetup, axis, at, count);
@@ -1073,7 +1124,8 @@ export class Sheet {
 const READER_COLS = 1 << 15;
 
 /** Changes that leave every value as it was. */
-const NO_VALUES = new Set<string>(['colWidths', 'rowHeights', 'colStyles', 'hiddenRows', 'hiddenCols', 'merges', 'filter', 'frozen', 'split', 'condFormats', 'tables', 'charts', 'dashboard', 'notes', 'validations', 'objects', 'pageSetup', 'pivots']);
+const NO_VALUES = new Set<string>(['colWidths', 'rowHeights', 'colStyles', 'hiddenRows', 'hiddenCols', 'merges', 'filter', 'frozen', 'split', 'condFormats', 'tables', 'charts', 'dashboard', 'notes', 'validations', 'objects', 'pageSetup', 'pivots',
+  'rowLevels', 'colLevels', 'sparklines', 'viewOpts', 'outline', 'theme', 'customViews']);
 
 const isFormulaText = (t: string | undefined): boolean => !!t && t.startsWith('=') && t.length > 1;
 
@@ -1135,6 +1187,10 @@ export class Workbook {
   chem: ChemHost | null = null;
   /** Names defined for cells, values and formulas (Formulas > Name Manager). */
   names: DefinedName[] = [];
+  /** Page Layout > Themes: the colours and fonts of the workbook (null: Excel's default theme). */
+  theme: WorkbookTheme | null = null;
+  /** View > Custom Views: named views of the workbook to go back to. */
+  customViews: CustomView[] = [];
   /** Counts changes (edits, undos and redos), so the file knows when it has unsaved changes. */
   edits = 0;
   /** Called after every change, undo and redo. */
@@ -1260,8 +1316,10 @@ export class Workbook {
       this.refsByText.clear();
       return;
     }
+    if (c.field === 'theme') { this.theme = v as WorkbookTheme | null; return; }
+    if (c.field === 'customViews') { this.customViews = v as CustomView[]; return; }
     const s = c.sheet!;
-    if (c.field === 'merges' || c.field === 'filter' || c.field === 'frozen' || c.field === 'split' || c.field === 'name' || c.field === 'condFormats' || c.field === 'tables' || c.field === 'charts' || c.field === 'dashboard' || c.field === 'validations' || c.field === 'objects' || c.field === 'pageSetup' || c.field === 'dataTables' || c.field === 'pivots') {
+    if (VALUE_FIELDS.has(c.field)) {
       (s as unknown as Record<string, unknown>)[c.field] = v;
       return;
     }
@@ -1283,6 +1341,20 @@ export class Workbook {
     this.names = list.slice();
     this.refsByText.clear();
     this.record({ sheet: null, field: 'names', key: 0, before, after: this.names });
+  }
+
+  /** Change the workbook's theme, as one recorded change. */
+  setTheme(t: WorkbookTheme | null): void {
+    const before = this.theme;
+    if (before === t) return;
+    this.theme = t;
+    this.record({ sheet: null, field: 'theme', key: 0, before, after: t });
+  }
+
+  setCustomViews(list: CustomView[]): void {
+    const before = this.customViews;
+    this.customViews = list.slice();
+    this.record({ sheet: null, field: 'customViews', key: 0, before, after: this.customViews });
   }
 
   /** The names that apply (a deleted sheet's own names are gone with it). */
@@ -1342,6 +1414,13 @@ export class Workbook {
       if (s.dashboard) {
         const d = mapDashboardRefs(s.dashboard, (f) => fn(f, s.name));
         if (JSON.stringify(d) !== JSON.stringify(s.dashboard)) s.setDashboard(d);
+      }
+      if (s.sparklines.length) {
+        const sl = s.sparklines.map((g) => {
+          const items = g.items.map((it) => { const d = fn('=' + it.data, s.name).slice(1); return d === it.data ? it : { ...it, data: d }; });
+          return items.some((it, i) => it !== g.items[i]) ? { ...g, items } : g;
+        });
+        if (sl.some((g, i) => g !== s.sparklines[i])) s.setSparklines(sl);
       }
       // data tables' input cells, and the cells PivotTables report on
       if (s.dataTables.length) {
@@ -1635,6 +1714,12 @@ export class Workbook {
    * formulas that read them, and those that read those, are worked out again; anything else
    * works out the whole workbook, as recalc does.
    */
+  /** Does any formula use SUBTOTAL or AGGREGATE (which leave out hidden rows)? */
+  private usesSubtotal(): boolean {
+    for (const s of this.sheets) for (const f of s.formulas.values()) if (/\b(SUBTOTAL|AGGREGATE)\s*\(/i.test(f)) return true;
+    return false;
+  }
+
   private recalcAfter(changes: Change[], now: 'before' | 'after' = 'after'): void {
     if (!this.recalcChanged(changes, now)) this.recalc();
     else if (changes.some((c) => c.field === 'cells')) this.workOutDataTables();
@@ -1648,8 +1733,9 @@ export class Workbook {
     this.spillsMoved = false;
     for (const c of changes) {
       if (c.field !== 'cells') {
-        // formatting, sizes, hidden rows, rules and charts change no value
-        if (c.sheet && NO_VALUES.has(c.field)) continue;
+        // formatting, sizes, hidden rows, rules and charts change no value (but SUBTOTAL leaves out hidden rows)
+        if (c.field === 'hiddenRows' && this.usesSubtotal()) return false;
+        if ((c.sheet || c.field === 'theme' || c.field === 'customViews') && NO_VALUES.has(c.field)) continue;
         return false;
       }
       const before = c[now === 'after' ? 'before' : 'after'] as Cell | undefined, after = c[now] as Cell | undefined;
@@ -1996,6 +2082,17 @@ export class Workbook {
         return out.length ? out : [[null]];
       },
       hasSheet: (name) => !!this.sheetNamed(name),
+      subtotalSkip: (sheet, row, col, hidden) => {
+        const s = sheetOf(sheet);
+        if (!s) return false;
+        if (s.hiddenRows.has(row)) {
+          if (hidden) return true;
+          const fr = s.filter && Object.keys(s.filter.conditions).length ? s.filterRows() : null;
+          if (fr && row >= fr.r1 && row <= fr.r2) return true;
+        }
+        const f = s.formulas.get(keyOf(row, col));
+        return !!f && /^=\s*(SUBTOTAL|AGGREGATE)\s*\(/i.test(f);
+      },
       name: (nm) => {
         const d = resolveName(this.liveNames(), nm, home);
         if (!d) return undefined;
