@@ -1470,6 +1470,13 @@ export class SheetMode {
 
   // ---------------------------------------------------------------- undo
 
+  /** The name of the step Undo (or Redo) would take back: null with none, '' when it has no name. */
+  history(redo = false): string | null {
+    const wb = this.book;
+    if (!wb || !(redo ? wb.canRedo() : wb.canUndo())) return null;
+    return redo ? wb.redoLabel : wb.undoLabel;
+  }
+
   undo(): void {
     const wb = this.book;
     if (!wb) return;

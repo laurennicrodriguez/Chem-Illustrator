@@ -145,6 +145,7 @@ Keys typed one after another build whole molecules. From a phenyl's highlighted 
 | Ctrl+0 | Fit the drawing in the window |
 | F5, F6, F7, F8 | Actual size, fit, zoom in, zoom out |
 | Alt+Q | Search for a command |
+| F1 | The User Guide, at the part about the tool or kind of tab in use |
 
 ### While typing text
 

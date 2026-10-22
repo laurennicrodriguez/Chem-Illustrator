@@ -382,10 +382,43 @@ export function innerObjects(o: DocObject | undefined): number[] {
 export function flatRuns(t: Pick<DocText, 'runs' | 'objects'>): TextRun[] {
   if (!Object.values(t.objects).some((o) => o.kind === 'table')) return t.runs;
   const out: TextRun[] = [];
-  for (const r of t.runs) {
-    out.push(r);
-    const o = r.obj !== undefined ? t.objects[r.obj] : undefined;
-    if (o?.kind === 'table') for (const row of o.table.rows) for (const c of row) out.push(...c.runs);
+  const seen = new Set<number>();
+  const add = (runs: TextRun[]) => {
+    for (const r of runs) {
+      out.push(r);
+      const o = r.obj !== undefined ? t.objects[r.obj] : undefined;
+      // a table's cells (and those of any table inside them)
+      if (o?.kind === 'table' && !seen.has(r.obj!)) { seen.add(r.obj!); for (const row of o.table.rows) for (const c of row) add(c.runs); }
+    }
+  };
+  add(t.runs);
+  return out;
+}
+
+/**
+ * The tables inside table cells, the innermost first (each laid out before the cell holding
+ * it), with how deep each one is (1 for a table in a cell of a table in the text).
+ */
+export function nestedTables(t: Pick<DocText, 'objects'>): { id: number; depth: number; parent: number }[] {
+  const out: { id: number; depth: number; parent: number }[] = [];
+  const seen = new Set<number>();
+  const held = new Set<number>();
+  for (const o of Object.values(t.objects)) {
+    if (o.kind === 'table') for (const row of o.table.rows) for (const c of row) for (const r of c.runs) if (r.obj !== undefined && t.objects[r.obj]?.kind === 'table') held.add(r.obj);
+  }
+  const visit = (id: number, depth: number) => {
+    const o = t.objects[id];
+    if (o?.kind !== 'table') return;
+    for (const row of o.table.rows) for (const c of row) for (const r of c.runs) {
+      if (r.obj === undefined || t.objects[r.obj]?.kind !== 'table' || seen.has(r.obj)) continue;
+      seen.add(r.obj);
+      visit(r.obj, depth + 1);
+      out.push({ id: r.obj, depth: depth + 1, parent: id });
+    }
+  };
+  for (const [k, o] of Object.entries(t.objects)) {
+    const id = Number(k);
+    if (o.kind === 'table' && !held.has(id)) { seen.add(id); visit(id, 0); }
   }
   return out;
 }

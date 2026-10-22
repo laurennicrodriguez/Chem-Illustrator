@@ -77,11 +77,11 @@ Along the top are the menus: **File**, **Edit**, **View** and **Insert**, then t
 
 To the right of the menus are:
 
-- **Undo**, **Redo** and **Fit** (fit the whole drawing in the window);
+- **Undo**, **Redo** and **Fit** (fit the whole drawing in the window). Undo and Redo are greyed out when there is nothing to take back, and resting the mouse on one names the step it would undo (**Undo Add Ring**); the Edit menu names it too;
 - **Locked**, which locks or unlocks all the toolboxes at once so they can be moved (each toolbox also has its own padlock; see [Drawing](drawing.md#toolboxes-and-my-toolbox));
 - the **eye button**, which turns the dark page on and off;
 - the **Search** box;
-- **Help**, which lists the hotkeys and gives short notes on each part of the program.
+- **Help**, with this **User Guide** built in (it works without an internet connection), the hotkeys, and short notes on each part of the program. **F1** opens the guide at the part about the tool or kind of tab in use: with the ring tool, for example, it opens at Rings.
 
 The menus show each command's key beside it, so they are a good way to learn the shortcuts.
 
@@ -89,15 +89,15 @@ The menus show each command's key beside it, so they are a good way to learn the
 
 Each open file has a tab under the menu bar, with its own icon and colour for its kind (blue for drawings, orange for slides, green for sheets, dark blue for documents, purple for designs). Ctrl+Tab and Ctrl+Shift+Tab move between tabs, and Ctrl+W closes one.
 
-At the end of the tabs are buttons to start something new:
+New files are called **Drawing 1**, **Slides 1**, **Sheet 1** and so on, until they are saved with a name of their own. When there are more tabs than fit, **‹** and **›** scroll them (as does the mouse wheel over the tabs), and **▾** lists every open file to pick one. **+** at the end starts something new:
 
-| Button | Opens | Like |
+| Choice | Opens | Like |
 |---|---|---|
-| **+ Drawing** | A new drawing | ChemDraw |
-| **+ Slides** | A new slide deck | PowerPoint |
-| **+ Sheet** | A new spreadsheet, with chemistry functions | Excel |
-| **+ Document** | A new document with pages, styles and references | Word |
-| **+ Design** | A TOC graphic, graphical abstract, poster or flowchart | a graphics program |
+| **Drawing** | A new drawing (Ctrl+N) | ChemDraw |
+| **Slides** | A new slide deck | PowerPoint |
+| **Sheet** | A new spreadsheet, with chemistry functions | Excel |
+| **Document** | A new document with pages, styles and references | Word |
+| **Design** | A TOC graphic, graphical abstract, poster or flowchart | a graphics program |
 
 The same commands are in the **File** menu (**New Drawing**, **New Slides**, **New Sheet**, **New Document**, **New Design…**). To change the tab colours, use **View ▸ Mode Colours…**.
 

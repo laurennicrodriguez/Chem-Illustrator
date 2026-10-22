@@ -722,18 +722,32 @@ dialog.typing-dialog p { margin: 2px 0 6px; }
   gap: 2px;
   min-width: 0;
   padding: 4px 8px 0;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: hidden;
   background: var(--bg);
   border-bottom: 1px solid var(--line);
-  scrollbar-width: thin;
 }
+.tab-strip {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.tab-strip::-webkit-scrollbar { display: none; }
+/* scroll arrows, the list of open files and the + button: pinned at the right of the tabs */
+.tab-ctl { flex: none; width: 26px; height: 26px; margin: 0 0 2px; padding: 0; border-color: transparent; background: transparent; color: #5a6275; font-size: 15px; line-height: 1; }
+.tab-ctl:hover:not(:disabled) { color: var(--text); border-color: var(--line); background: var(--panel); }
+.tab-ctl:disabled { opacity: 0.35; }
+.tab-add { font-size: 19px; font-weight: 600; margin-left: 2px; }
 .tab {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex: 0 1 220px;
-  min-width: 110px;
+  flex: 0 0 180px;
+  min-width: 150px;
   height: 30px;
   padding: 0 4px 0 8px;
   margin-bottom: -1px;
@@ -765,8 +779,6 @@ dialog.typing-dialog p { margin: 2px 0 6px; }
 .tab.dirty .tab-name::before { content: '• '; color: var(--accent); }
 .tab-close { flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 15px; line-height: 1; }
 .tab-close:hover { background: var(--accent-soft); color: var(--text); }
-.tab-new { flex: none; height: 26px; margin: 0 0 2px 4px; padding: 0 9px; border-color: transparent; background: transparent; color: var(--muted); font-size: 12px; }
-.tab-new:hover { color: var(--text); border-color: var(--line); background: var(--panel); }
 
 /* ------------------------------------------------------------------ the ribbons (Slides and Sheet) */
 
@@ -893,6 +905,10 @@ dialog.design-size { width: min(94vw, 500px); }
 .sl-item.current .sl-num { color: var(--accent); font-weight: 600; }
 .sl-list:focus-visible .sl-item.current .sl-thumb { box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px var(--accent-soft); }
 .sl-has-notes { position: absolute; left: 6px; top: 18px; font-size: 11px; color: var(--muted); }
+/* Hide Slide: greyed, its number struck through and boxed, as PowerPoint marks it */
+.sl-item.is-hidden .sl-thumb { opacity: 0.45; }
+.sl-item.is-hidden .sl-num { text-decoration: line-through; }
+.sl-item.is-hidden .sl-num::after { content: ''; display: block; margin: 2px 0 0 auto; width: 9px; height: 9px; border: 1px solid currentColor; border-radius: 1px; background: linear-gradient(to top right, transparent 45%, currentColor 45%, currentColor 55%, transparent 55%); }
 .sl-drop { position: absolute; left: 26px; right: 8px; height: 3px; margin-top: -2px; border-radius: 2px; background: var(--accent); pointer-events: none; }
 .sl-drop[hidden] { display: none; }
 .sl-add { flex: none; margin: 6px 8px 8px 30px; border-style: dashed; color: var(--muted); }
@@ -1383,6 +1399,11 @@ dialog.slide-templates { width: min(94vw, 840px); }
 .st-body .tg-grid { max-height: none; overflow: visible; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
 .st-body .tg-thumb { background: transparent; }
 .tg-card.current { border-color: var(--accent); }
+/* Reuse Slides: the other file's slides, picked ones marked */
+dialog.reuse-slides { width: min(94vw, 860px); }
+.rs-grid .tg-thumb { background: transparent; border: 1px solid var(--line); }
+.rs-card.current { background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent); }
+.rs-card .tg-size { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .st-option { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
 
 /* right-click menus on the drawing */
@@ -1816,3 +1837,31 @@ dialog.diagram-dialog { width: min(96vw, 1060px); max-height: 94vh; }
 .sh-alert-text { max-width: 380px; white-space: pre-wrap; }
 .cp-note-line { white-space: pre-wrap; overflow-wrap: anywhere; }
 .dv-dialog .ask-row[hidden], .dv-dialog p[hidden] { display: none; }
+
+/* The User Guide window: contents on the left, the page on the right; moved by its title bar, sized from its corner */
+.guide-window { position: fixed; z-index: 45; top: 70px; right: 16px; width: min(860px, calc(100vw - 32px)); height: min(640px, calc(100vh - 90px)); min-width: 360px; min-height: 240px;
+  display: flex; flex-direction: column; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 10px 32px rgb(0 0 0 / 0.22); resize: both; overflow: hidden; }
+.guide-window[hidden] { display: none; }
+.gw-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line); cursor: move; user-select: none; }
+.gw-title { font-weight: 600; margin-right: auto; }
+.gw-head button { height: 26px; padding: 0 8px; border: 0; border-radius: 4px; background: none; color: var(--text); cursor: pointer; }
+.gw-head button:hover:not(:disabled) { background: var(--hover, rgb(0 0 0 / 0.06)); }
+.gw-head button:disabled { color: var(--muted); cursor: default; }
+.gw-close { font-size: 17px; }
+.gw-search { width: 200px; height: 26px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--text); cursor: text; }
+.gw-body { flex: 1; display: flex; min-height: 0; }
+.gw-list { flex: 0 0 180px; overflow: auto; padding: 8px 6px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 1px; }
+.gw-list button { text-align: left; padding: 5px 8px; border: 0; border-radius: 4px; background: none; color: var(--text); cursor: pointer; }
+.gw-list button:hover { background: var(--hover, rgb(0 0 0 / 0.06)); }
+.gw-list button.on { background: var(--accent-soft); font-weight: 600; }
+.gw-page { flex: 1; overflow: auto; padding: 4px 24px 24px; line-height: 1.5; outline: none; user-select: text; }
+.gw-page img { max-width: 100%; height: auto; }
+.gw-page table { border-collapse: collapse; margin: 8px 0; }
+.gw-page th, .gw-page td { border: 1px solid var(--line); padding: 4px 8px; vertical-align: top; text-align: left; }
+.gw-page code { font-family: var(--mono-font); font-size: 0.92em; background: var(--bg); padding: 0 3px; border-radius: 3px; }
+.gw-page kbd { font-family: var(--mono-font); font-size: 0.9em; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; }
+.gw-page a { color: var(--accent); }
+.gw-page .gw-here { scroll-margin-top: 8px; animation: gw-here 2s ease-out; }
+@keyframes gw-here { from { background: var(--accent-soft); } to { background: transparent; } }
+.gw-hits li { margin: 3px 0; }
+@media (max-width: 640px) { .gw-list { display: none; } }

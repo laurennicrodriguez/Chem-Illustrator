@@ -9,7 +9,7 @@ import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
 import { Toolboxes, lockIcon, sideFolded, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
-import { Doc, Atom, Caption, Shape, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle, PAPER, keepOnPage } from './model';
+import { Doc, Atom, Caption, Shape, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle, type ShapeMath, PAPER, keepOnPage } from './model';
 import { Renderer, measureText, forgetTextWidths } from './render/renderer';
 import { Editor, TOOLS, type HighlightToggle, type Selection } from './editor/editor';
 import { BUILT_IN_LOOKS, type HighlightLookPreset } from './ui/highlight-looks';
@@ -39,11 +39,15 @@ import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, r
 import { cdxToCdxml } from './io/cdx';
 import { writeCdxml } from './io/cdxml-write';
 import { WORKSPACE } from './io/workspace-file';
-import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PICTURE_EXTENSIONS, type FileType } from './io/files';
+import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, PICTURE_EXTENSIONS, type FileType } from './io/files';
+import { readPptx } from './io/pptx-read';
+import { pickReuseSlides } from './ui/reuse-slides';
 import { writeTiff } from './render/tiff';
 import { itemsToEps } from './render/eps';
 import { Workspace, Tab } from './workspace';
-import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize, slideBackground } from './deck/deck';
+import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize, slideBackground, slideColours, type SlideSource } from './deck/deck';
+import { shapeMathPicture, shapeMathScale, shapeMathSize } from './deck/equation';
+import { askEquation } from './ui/equation-dialog';
 import { solid } from './deck/background';
 import { formatBackground } from './ui/background-dialog';
 import { drawSlidePage, recordSlide, paintSlide, drawDrawing, SURROUND } from './deck/slide-view';
@@ -119,7 +123,8 @@ import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
 import { UpdateUI } from './ui/update-ui';
 import { canUpdate, appVersion, portableInfo } from './updates';
-import { GUIDE_URL, computerName } from './feedback';
+import { computerName } from './feedback';
+import { GuideWindow, guideSpot } from './ui/guide-window';
 import { FeedbackDialog } from './ui/feedback-dialog';
 import { addRecent, removeRecent, recentLabel } from './recent';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
@@ -712,6 +717,46 @@ async function editChartShape(id: number): Promise<void> {
   editor.changed();
 }
 editor.onChart = (id) => void editChartShape(id);
+
+/**
+ * Insert > Equation on a slide or design: typed as LaTeX in the equation window, in the
+ * master's body text (its font, colour and size), in the middle of the slide.
+ */
+async function insertEquation(): Promise<void> {
+  const deck = deckNow();
+  if (!deck) { flash('Equations go on slides, designs and documents.'); return; }
+  finishTyping();
+  const m = deck.master;
+  const font = m.bodyFont;
+  const got = await askEquation({ tex: '', font, ok: 'Insert', app: 'PowerPoint' });
+  if (!got || deckNow() !== deck) return;
+  const math: ShapeMath = { tex: got.tex, size: m.bodySize, color: slideColours(m, deck.current?.layout ?? 'blank').textColor, font };
+  const { w, h } = shapeMathSize(math, measureText);
+  const c = pasteCentre();
+  let made: Shape | null = null;
+  doc.edit('Insert equation', () => {
+    made = doc.addShape({ kind: 'picture', x1: c.x - w / 2, y1: c.y - h / 2, x2: c.x + w / 2, y2: c.y + h / 2, src: shapeMathPicture(math, measureText), px: { w: Math.round(w), h: Math.round(h) }, math });
+  });
+  editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set([made!.id]) };
+  editor.changed();
+}
+
+/** Double-clicking an equation: change it in the equation window. Its box keeps its top left corner and how much it was enlarged. */
+async function editEquationShape(id: number): Promise<void> {
+  finishTyping();
+  const s = doc.shapes.get(id);
+  if (!s?.math) return;
+  const k = shapeMathScale(s.math, s.x2 - s.x1, s.y2 - s.y1, measureText);
+  const got = await askEquation({ tex: s.math.tex, font: s.math.font ?? 'Arial', ok: 'Apply', app: 'PowerPoint' });
+  const now = doc.shapes.get(id);
+  if (!got || !now?.math || got.tex === now.math.tex) return;
+  const math = { ...now.math, tex: got.tex };
+  const { w, h } = shapeMathSize(math, measureText);
+  const x = Math.min(now.x1, now.x2), y = Math.min(now.y1, now.y2);
+  doc.edit('Change equation', () => doc.updateShape(id, { math, src: shapeMathPicture(math, measureText), px: { w: Math.round(w), h: Math.round(h) }, x1: x, y1: y, x2: x + w * k, y2: y + h * k }));
+  editor.changed();
+}
+editor.onEquation = (id) => void editEquationShape(id);
 
 /** Select just these (new) atoms and their bonds. */
 function selectNewAtoms(ids: number[]): void {
@@ -1527,6 +1572,8 @@ function enterTab(tab: Tab, opened: boolean): void {
   else if (ws.pane || slideSplit) fitSplitDrawing();
   else editor.fit();
   renderer.repaintAll();
+  // (fit leaves an empty drawing alone, so ask for the scene here: else the last tab's drawing stays on screen)
+  editor.requestScene();
   editor.clearSelection();
   editor.frame(true);
   refreshKeys();
@@ -1555,7 +1602,7 @@ const slidePage = {
 let listKey = '';
 let masterSeen: unknown = null;
 let indexSeen = -1;
-const slideListKey = (d: Deck) => `${d.slides.map((s) => s.id + (s.notes.trim() ? 'n' : '')).join(',')}|${d.size.w}x${d.size.h}|${d.looks}`;
+const slideListKey = (d: Deck) => `${d.slides.map((s) => s.id + (s.notes.trim() ? 'n' : '') + (s.hidden ? 'h' : '')).join(',')}|${d.size.w}x${d.size.h}|${d.looks}`;
 
 function deckChanged(deck: Deck): void {
   const key = slideListKey(deck);
@@ -1600,6 +1647,8 @@ function showSlideState(): void {
   for (const l of LAYOUTS) $(`[data-cmd="layout-${l.id}"]`)?.setAttribute('aria-checked', String(l.id === deck.current.layout));
   $('[data-cmd="size-wide"]')?.setAttribute('aria-checked', String(named === 'wide'));
   $('[data-cmd="size-standard"]')?.setAttribute('aria-checked', String(named === 'standard'));
+  const hidden = String(!!deck.current.hidden);
+  for (const b of document.querySelectorAll('[data-cmd="hide-slide"]')) b.setAttribute(b.getAttribute('role') === 'menuitemcheckbox' ? 'aria-checked' : 'aria-pressed', hidden);
 }
 
 // ---------------------------------------------------------------- transitions and animations (Slides mode)
@@ -1725,7 +1774,113 @@ const slideList = new SlideList($('#slide-list'), {
   remove: (ix) => removeSlides(ix),
   duplicate: (ix) => { const d = deckNow(); if (d) { finishTyping(); d.duplicate(ix); } },
   add: () => newSlide(),
+  copy: (ix) => copySlides(ix, false),
+  cut: (ix) => copySlides(ix, true),
+  paste: () => pasteSlides(),
+  menu: (x, y) => showContextMenu(x, y, slideListMenu(), { run: (cmd) => void command(cmd), key: commandKey }),
 });
+
+/** Right-click in the slide list: what PowerPoint offers there. */
+function slideListMenu(): MenuItem[] {
+  return [
+    { cmd: 'cut-slides', label: 'Cut' }, { cmd: 'copy-slides', label: 'Copy' }, { cmd: 'paste-slides', label: 'Paste' },
+    { cmd: 'paste-slides-keep', label: 'Paste (Keep Source Formatting)' },
+    null,
+    { cmd: 'new-slide' }, { cmd: 'duplicate-slide' }, { cmd: 'delete-slide' },
+    null,
+    { label: 'Layout', items: LAYOUTS.map((l) => ({ cmd: `layout-${l.id}` })) },
+    { cmd: 'format-background' },
+    { cmd: 'hide-slide' },
+    null,
+    { cmd: 'reuse-slides' },
+  ];
+}
+
+/**
+ * Slides copied or cut (in the slide list, or Edit > Copy Slides), with the deck they came from,
+ * for pasting into any deck that is open.
+ */
+let slideClip: SlideSource | null = null;
+
+function copySlides(ix: number[], cut: boolean): void {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  slideClip = d.copySlides(ix);
+  const n = slideClip.slides.length;
+  const what = `${n} slide${n === 1 ? '' : 's'}`;
+  if (cut && !d.remove(ix)) { flash(`Copied ${what}: a presentation needs at least one slide, so nothing was cut.`); return; }
+  flash(`${cut ? 'Cut' : 'Copied'} ${what}. Click in the slide list of this deck or another and press Ctrl+V to paste.`);
+}
+
+/**
+ * Paste the slides copied after the last slide picked, in this deck's look; `keep` keeps each
+ * slide's own background, fonts and colours. When the look would change, a button offers the
+ * other way, as PowerPoint's Paste Options do.
+ */
+function pasteSlides(keep?: boolean): void {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  if (!slideClip) { flash('Copy slides first: pick them in the slide list and press Ctrl+C (or Edit > Copy Slides).'); return; }
+  finishTyping();
+  const src = slideClip;
+  const after = slideList.pickedList().at(-1) ?? d.index;
+  const n = d.pasteSlides(src, !!keep, after);
+  const what = `${n} slide${n === 1 ? '' : 's'}`;
+  const sameLook = JSON.stringify(src.master) === JSON.stringify(d.master);
+  if (keep !== undefined || sameLook) { flash(`Pasted ${what}.`); return; }
+  const edits = d.edits;
+  flash(`Pasted ${what} in this deck's look.`, 8000, {
+    label: 'Keep source formatting',
+    run: () => {
+      // put them in again their own way, in place of the ones just pasted (if nothing has changed since)
+      if (deckNow() !== d || d.edits !== edits) { flash('Use Edit > Paste Slides (Keep Source Formatting) to paste them with their own look.'); return; }
+      d.undo();
+      d.pasteSlides(src, true, after);
+      flash(`Pasted ${what} with their own look.`);
+    },
+  });
+}
+
+/** Keep Source Formatting, as last chosen in Reuse Slides. */
+let reuseKeep = false;
+
+/** Reuse Slides: pick slides from another PowerPoint file to put in after this one. */
+async function reuseSlides(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const f = await openBytesDialog('PowerPoint presentations', [PPTX]).catch(async (e) => { await showError(String(e)); return null; });
+  if (!f) return;
+  let got: ReturnType<typeof readPptx>;
+  try {
+    got = readPptx(f.bytes);
+  } catch (e) {
+    flash(`Could not read ${f.name}: ${e instanceof Error ? e.message : String(e)}`, 8000);
+    return;
+  }
+  if (!got.slides.length) { flash(`${f.name} has no slides.`); return; }
+  // the file's slides in a deck of their own, to show and copy from
+  const from = new Deck(new Doc());
+  from.load(got.slides.map((s) => from.makeSlide(s.layout, s.contents, s.notes, s)), got.size, got.master);
+  const pick = await pickReuseSlides(f.name, from, reuseKeep);
+  if (!pick || deckNow() !== d) return;
+  reuseKeep = pick.keep;
+  const n = d.pasteSlides(from.copySlides(pick.indices), pick.keep, slideList.pickedList().at(-1) ?? d.index);
+  flash(`Inserted ${n} slide${n === 1 ? '' : 's'} from ${f.name}.${got.warnings.length ? ' ' + got.warnings.join(' ') : ''}`, got.warnings.length ? 12000 : 3500);
+}
+
+function hideSlides(): void {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const ix = slideList.pickedList();
+  // as in PowerPoint: hide them all unless they are all hidden already
+  const hide = !ix.every((i) => d.slides[i]?.hidden);
+  d.setHidden(hide, ix);
+  const n = ix.length;
+  flash(hide ? `${n > 1 ? `${n} slides are` : 'The slide is'} hidden: the slide show skips ${n > 1 ? 'them' : 'it'}, and PowerPoint will too.` : `${n > 1 ? `${n} slides` : 'The slide'} will show in the slide show again.`);
+}
 
 function goSlide(i: number): void {
   const d = deckNow();
@@ -1852,6 +2007,7 @@ function undo(): void {
   if (!d) { editor.undo(); return; }
   finishTyping();
   if (d.undo()) editor.afterUndo();
+  refreshHistory();
 }
 
 function redo(): void {
@@ -1861,7 +2017,44 @@ function redo(): void {
   if (!d) { editor.redo(); return; }
   finishTyping();
   if (d.redo()) editor.afterUndo();
+  refreshHistory();
 }
+
+/** The name of the step Undo (or Redo) would take back in the tab in front: null with nothing to take back, '' when it has no name. */
+function historyStep(redo: boolean): string | null {
+  if (sheetActive()) return sheetMode.history(redo);
+  if (docActive()) return docMode.canUndo(redo) ? '' : null;
+  const h = deckNow() ?? doc;
+  if (!(redo ? h.canRedo() : h.canUndo())) return null;
+  return redo ? h.redoLabel : h.undoLabel;
+}
+
+/**
+ * Undo and Redo greyed out with nothing to take back, and named after the step they would
+ * (Undo Add Ring), on the toolbar and in the Edit menu. Checked after each click and key press.
+ */
+let historyQueued = false;
+function refreshHistory(): void {
+  if (historyQueued) return;
+  historyQueued = true;
+  requestAnimationFrame(() => {
+    historyQueued = false;
+    for (const [cmd, verb] of [['undo', 'Undo'], ['redo', 'Redo']] as const) {
+      const step = historyStep(cmd === 'redo');
+      const name = step ? `${verb} ${step}` : verb;
+      const k = commandKey(cmd);
+      const btn = $<HTMLButtonElement>(`#btn-${cmd}`);
+      btn.disabled = step === null;
+      btn.title = step === null ? `Nothing to ${verb.toLowerCase()}` : k ? `${name} (${k})` : name;
+      for (const item of document.querySelectorAll<HTMLButtonElement>(`header .menu [data-cmd="${cmd}"]`)) {
+        item.disabled = step === null;
+        const label = item.firstChild;
+        if (label?.nodeType === Node.TEXT_NODE) label.textContent = name;
+      }
+    }
+  });
+}
+for (const ev of ['pointerup', 'keyup'] as const) document.addEventListener(ev, refreshHistory, true);
 
 // ---------------------------------------------------------------- the tab strip
 
@@ -1877,6 +2070,7 @@ const TAB_ICONS: Record<Tab['mode'], [string, string]> = {
 };
 
 function renderTabs(): void {
+  refreshHistory();
   const items = ws.tabs.map((t) => {
     const el = document.createElement('div');
     el.className = `tab tab-${t.mode}${t === ws.active ? ' active' : ''}${t.dirty ? ' dirty' : ''}`;
@@ -1919,17 +2113,55 @@ function renderTabs(): void {
     el.append(icon, name, close);
     return el;
   });
-  const add = (label: string, title: string, cmd: string) => {
-    const b = document.createElement('button');
-    b.className = 'tab-new';
-    b.type = 'button';
-    b.textContent = label;
-    b.title = title;
-    b.addEventListener('click', () => command(cmd));
-    return b;
-  };
-  tabsEl.replaceChildren(...items, add('+ Drawing', 'New drawing', 'new'), add('+ Slides', 'New slides', 'new-slides'), add('+ Sheet', 'New sheet', 'new-sheet'), add('+ Document', 'New document', 'new-document'), add('+ Design', 'New design: a TOC graphic, graphical abstract, poster, flowchart or figure', 'new-design'));
-  tabsEl.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  tabStrip.replaceChildren(...items);
+  tabStrip.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  showTabArrows();
+}
+
+// The tab strip scrolls when the tabs don't fit; arrows at its ends, a list of every open file,
+// and one + button for a new file of any kind stay pinned at the right.
+const tabStrip = document.createElement('div');
+tabStrip.className = 'tab-strip';
+const tabButton = (cls: string, text: string, title: string) => {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = `tab-ctl ${cls}`;
+  b.textContent = text;
+  b.title = title;
+  b.setAttribute('aria-label', title);
+  return b;
+};
+const tabLeft = tabButton('tab-left', '‹', 'Scroll the tabs left');
+const tabRight = tabButton('tab-right', '›', 'Scroll the tabs right');
+const tabList = tabButton('tab-list', '▾', 'List of open files');
+const tabAdd = tabButton('tab-add', '+', 'New file: drawing, slides, sheet, document or design');
+tabLeft.addEventListener('click', () => tabStrip.scrollBy({ left: -tabStrip.clientWidth * 0.7, behavior: 'smooth' }));
+tabRight.addEventListener('click', () => tabStrip.scrollBy({ left: tabStrip.clientWidth * 0.7, behavior: 'smooth' }));
+tabStrip.addEventListener('scroll', () => showTabArrows(), { passive: true });
+tabStrip.addEventListener('wheel', (e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) { tabStrip.scrollLeft += e.deltaY; e.preventDefault(); } }, { passive: false });
+new ResizeObserver(() => showTabArrows()).observe(tabStrip);
+const menuAt = (b: HTMLElement) => { const r = b.getBoundingClientRect(); return [Math.max(4, r.right - 220), r.bottom + 2] as const; };
+tabList.addEventListener('click', () => {
+  const [x, y] = menuAt(tabList);
+  showContextMenu(x, y, ws.tabs.map((t) => ({ cmd: `tab-show:${t.id}`, label: `${t === ws.active ? '✓ ' : ''}${ws.label(t)}${t.dirty ? ' •' : ''}` })), {
+    run: (cmd) => { const t = ws.tabs.find((x) => `tab-show:${x.id}` === cmd); if (t) ws.activate(t); },
+    key: () => undefined,
+  });
+});
+tabAdd.addEventListener('click', () => {
+  const [x, y] = menuAt(tabAdd);
+  showContextMenu(x, y, [
+    { cmd: 'new', label: 'Drawing' }, { cmd: 'new-slides', label: 'Slides' }, { cmd: 'new-sheet', label: 'Sheet' },
+    { cmd: 'new-document', label: 'Document' }, { cmd: 'new-design', label: 'Design (TOC graphic, abstract, poster, figure)' },
+  ], { run: (cmd) => void command(cmd), key: commandKey });
+});
+tabsEl.replaceChildren(tabLeft, tabStrip, tabRight, tabList, tabAdd);
+
+function showTabArrows(): void {
+  const over = tabStrip.scrollWidth > tabStrip.clientWidth + 1;
+  tabLeft.hidden = tabRight.hidden = !over;
+  tabLeft.disabled = tabStrip.scrollLeft <= 0;
+  tabRight.disabled = tabStrip.scrollLeft + tabStrip.clientWidth >= tabStrip.scrollWidth - 1;
 }
 
 // Tabs are dragged along the strip to put them in another order (as in browsers).
@@ -1938,7 +2170,7 @@ function dragTab(e: PointerEvent, el: HTMLElement, t: Tab): void {
   if (e.button !== 0 || (e.target as HTMLElement).closest('.tab-close')) return;
   tabDragged = false;
   const startX = e.clientX;
-  const tabs = [...tabsEl.querySelectorAll<HTMLElement>('.tab')];
+  const tabs = [...tabStrip.querySelectorAll<HTMLElement>('.tab')];
   const from = tabs.indexOf(el);
   let to = from;
   const move = (ev: PointerEvent) => {
@@ -2255,7 +2487,8 @@ function present(fromHere: boolean, notes = false): void {
   if (presenter.running || presenterView.running) return;
   finishTyping();
   editor.paused = true;
-  void (notes ? presenterView : presenter).start(d, fromHere ? d.index : 0);
+  // from the start: the first slide that isn't hidden; from here: this slide even when hidden, as in PowerPoint
+  void (notes ? presenterView : presenter).start(d, fromHere ? d.index : d.firstShown());
 }
 
 presenter.onEnd = presenterView.onEnd = (i) => {
@@ -2964,7 +3197,7 @@ window.addEventListener('keydown', (e) => {
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'page-edge', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
-  'help', 'about', 'user-guide', 'send-feedback', 'report-problem', 'check-updates']);
+  'help', 'about', 'user-guide', 'help-here', 'send-feedback', 'report-problem', 'check-updates']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
@@ -3006,7 +3239,7 @@ function setPictureStyle(look: PictureLook | undefined): boolean {
 }
 
 /** Slide commands that don't apply to a design's single page. */
-const SLIDE_ONLY = new Set(['new-slide', 'duplicate-slide', 'delete-slide', 'size-wide', 'size-standard', 'slide-master', 'slide-templates',
+const SLIDE_ONLY = new Set(['new-slide', 'duplicate-slide', 'delete-slide', 'cut-slides', 'copy-slides', 'paste-slides', 'paste-slides-keep', 'hide-slide', 'reuse-slides', 'size-wide', 'size-standard', 'slide-master', 'slide-templates',
   'slide-transitions', 'slide-animations', 'animation-pane', 'preview-slide', 'remove-animation']);
 
 /** The animation commands: an effect for the selected objects (the right-click menu's Animation). */
@@ -3070,6 +3303,14 @@ const COMMANDS: Record<string, () => unknown> = {
   'new-slide': () => newSlide(),
   'duplicate-slide': () => { const d = deckNow(); if (d) { finishTyping(); d.duplicate(slideList.pickedList()); } },
   'delete-slide': () => removeSlides(slideList.pickedList()),
+  'cut-slides': () => copySlides(slideList.pickedList(), true),
+  'copy-slides': () => copySlides(slideList.pickedList(), false),
+  'paste-slides': () => pasteSlides(),
+  'paste-slides-keep': () => pasteSlides(true),
+  'hide-slide': () => hideSlides(),
+  'reuse-slides': () => reuseSlides(),
+  'insert-equation': () => insertEquation(),
+  'edit-equation': () => { const id = [...editor.sel.shapes].find((x) => doc.shapes.get(x)?.math); if (id === undefined) { flash('Click an equation first (or double-click it).'); return; } void editEquationShape(id); },
   'next-slide': () => { const d = deckNow(); if (!d) return false; goSlide(d.index + 1); },
   'prev-slide': () => { const d = deckNow(); if (!d) return false; goSlide(d.index - 1); },
   ...Object.fromEntries(LAYOUTS.map((l) => [`layout-${l.id}`, () => setLayout(l.id)])),
@@ -3175,7 +3416,8 @@ const COMMANDS: Record<string, () => unknown> = {
   preferences: () => void openPreferences(),
   'check-updates': () => void updates.check(),
   help: () => openHelp(),
-  'user-guide': () => openWebPage(GUIDE_URL),
+  'user-guide': () => void guide.open(),
+  'help-here': () => { const at = guideSpot(menuMode(), editor.tool.kind); void guide.open(at.page, at.anchor); },
   'send-feedback': () => feedback.open(),
   about: () => void appVersion().then((v) => ask('About Chem Illustrator', [], {
     noCancel: true,
@@ -3365,6 +3607,7 @@ function showMenu(m: Menu | null, focus = true): void {
     x.btn.setAttribute('aria-expanded', String(x === m));
   }
   if (!m) return;
+  refreshHistory();
   m.list.style.setProperty('--menu-top', `${m.btn.getBoundingClientRect().bottom}px`);
   if (focus) menuItems(m.list)[0]?.focus();
 }
@@ -4213,8 +4456,7 @@ function refreshKeys(): void {
   const sk = commandKey('command-search');
   $('#btn-search kbd').textContent = sk ?? '';
   $('#btn-search').title = sk ? `Search for a command by name (${sk})` : 'Search for a command by name';
-  tip('#btn-undo', 'Undo', 'undo');
-  tip('#btn-redo', 'Redo', 'redo');
+  refreshHistory();
   tip('#btn-fit', 'Fit drawing to window', 'zoom-fit');
   toolbar.refreshTitles();
 }
@@ -5102,6 +5344,18 @@ applyRibbonIcons();
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
 stylePanel.onEditChart = (id) => void editChartShape(id);
+stylePanel.onEditEquation = (id) => void editEquationShape(id);
+stylePanel.onEquationColour = (ids, color) => {
+  doc.edit('Equation colour', () => {
+    for (const id of ids) {
+      const s = doc.shapes.get(id);
+      if (!s?.math) continue;
+      const math = { ...s.math, color };
+      doc.updateShape(id, { math, src: shapeMathPicture(math, measureText) });
+    }
+  });
+  editor.changed();
+};
 stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
 stylePanel.tie = (ids) => tieCaptions(ids);
 
@@ -5723,6 +5977,7 @@ function commandItems(): CommandItem[] {
   return uniqueCommands(out);
 }
 const commandSearch = new CommandSearch(commandItems);
+const guide = new GuideWindow(openWebPage);
 $('#btn-search').addEventListener('click', () => commandSearch.open());
 placeSidePanel();
 // your palettes show in the Colours toolbox as soon as they change

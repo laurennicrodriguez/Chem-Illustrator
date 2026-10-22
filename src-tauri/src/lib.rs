@@ -4,6 +4,7 @@
 
 mod clipboard;
 mod keep;
+mod open_dialog;
 mod portable;
 
 use std::path::PathBuf;
@@ -249,7 +250,8 @@ pub fn run() {
             keep::remove_lock_file,
             clipboard::clipboard_write,
             clipboard::clipboard_read,
-            clipboard::clipboard_formats
+            clipboard::clipboard_formats,
+            open_dialog::open_shared_dialog
         ])
         .run(tauri::generate_context!())
         .expect("error while running Chem Illustrator");

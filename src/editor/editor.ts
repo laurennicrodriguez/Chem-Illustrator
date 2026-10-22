@@ -302,6 +302,8 @@ export class Editor {
   onDiagram: (id: number) => void = () => {};
   /** A chart (on a slide or drawing) was double-clicked: open its data and settings. */
   onChart: (id: number) => void = () => {};
+  /** An equation (on a slide or design) was double-clicked: open the equation window. */
+  onEquation: (id: number) => void = () => {};
   private drag: Drag | null = null;
   /** Something is being dragged (moved, rotated or resized) right now. */
   get dragging(): boolean { return !!this.drag?.moved; }
@@ -914,6 +916,9 @@ export class Editor {
     } else if (h && h.kind === 'shape' && this.doc.shapes.get(h.id)?.chart) {
       this.selectOnly({ kind: 'shape', id: h.id });
       this.onChart(h.id);
+    } else if (h && h.kind === 'shape' && this.doc.shapes.get(h.id)?.math) {
+      this.selectOnly({ kind: 'shape', id: h.id });
+      this.onEquation(h.id);
     } else if (h && h.kind === 'shape' && this.doc.shapes.get(h.id)?.kind === 'geo') {
       this.editGeoText(h.id, p);
     }

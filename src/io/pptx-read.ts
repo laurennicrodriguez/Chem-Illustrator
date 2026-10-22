@@ -11,7 +11,7 @@
 
 import type { PinnedComment } from '../document/comments';
 import { COMMENT_REL, readCommentAuthors, readLegacyComments, readModernComments } from './pptx-comments';
-import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureLook, type Frame } from '../model';
+import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureLook, type Frame, type ShapeMath } from '../model';
 import { layoutTable, NOTE_SCALE } from '../table';
 import { linesFromBorders, type Borders } from './cdxml-table';
 import { turnAbout, normDegrees, type Vec, type Rect } from '../geom';
@@ -20,10 +20,12 @@ import { readCdxml } from './cdxml';
 import { drawingInEmf } from '../render/emf';
 import { dataUrl, imageSize } from '../render/images';
 import { layoutText, ASCENT } from '../text/layout';
-import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle, slideBackground } from '../deck/deck';
+import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle, slideBackground, slideColours } from '../deck/deck';
 import { backgroundColour, isPlain, sameBackground, type Background } from '../deck/background';
 import { readFill, readOneFill, type FillContext } from './pptx-background';
-import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure } from './pptx-write';
+import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure, NS_A14, NS_M } from './pptx-write';
+import { ommlToTex, toOmml } from '../document/math';
+import { shapeMathPicture, shapeMathSize } from '../deck/equation';
 import { GEOS } from '../design/geo';
 import { cleanDiagram, textFromShapes } from '../design/diagrams';
 import { gluePoint, arrowPoints, boxOf as pointsBox } from '../objects';
@@ -37,7 +39,7 @@ const GEO_BY_PRST = new Map(GEOS.filter((g) => g.prst).map((g) => [g.prst!, g.id
 /** PowerPoint shapes that come into slides as plain boxes and ovals (with their text beside them as text boxes). */
 const PLAIN_PRST = new Set(['rect', 'roundRect', 'ellipse', 'snip1Rect', 'flowChartProcess', 'flowChartAlternateProcess']);
 
-export interface PptxSlide { layout: LayoutId; contents: Contents; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean }
+export interface PptxSlide { layout: LayoutId; contents: Contents; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean; hidden?: boolean }
 export interface PptxRead {
   size: SlideSize;
   master: Master;
@@ -437,9 +439,11 @@ class Reader {
     const shown = this.background(s) ?? (layout ? this.background(layout) : null) ?? slideBackground(this.masterOut, lay);
     const background = sameBackground(shown, slideBackground(this.masterOut, lay)) ? undefined : shown;
     const hideGraphics = /^(0|false)$/.test(root.getAttribute('showMasterSp') ?? '');
+    // Hide Slide: PowerPoint's show="0"
+    const hidden = /^(0|false)$/.test(root.getAttribute('show') ?? '');
     return {
       layout: lay, contents: doc.contents(), notes: this.notes(path),
-      ...(background ? { background } : {}), ...(hideGraphics ? { hideGraphics } : {}),
+      ...(background ? { background } : {}), ...(hideGraphics ? { hideGraphics } : {}), ...(hidden ? { hidden } : {}),
       ...(transition && (transition.kind !== 'none' || transition.advanceAfter) ? { transition } : {}), ...(anims.length ? { anims } : {}),
       ...(comments.length ? { comments } : {}),
     };
@@ -515,7 +519,7 @@ class Reader {
 
   private elementOnly(s: Part, layout: Part | null, el: Element, t: Xf, doc: Doc): void {
     switch (el.localName) {
-      case 'sp': if (!this.ourConnector(s, el, t, doc)) this.shape(s, layout, el, t, doc); break;
+      case 'sp': if (!this.ourConnector(s, el, t, doc) && !this.equation(s, el, t, doc)) this.shape(s, layout, el, t, doc); break;
       case 'pic': this.pictureEl(s, el, t, doc); break;
       case 'cxnSp': if (!this.ourConnector(s, el, t, doc)) this.line(el, kid(el, 'spPr'), t, doc); break;
       case 'grpSp': {
@@ -538,14 +542,54 @@ class Reader {
       }
       case 'graphicFrame': this.frame(s, el, t, doc); break;
       case 'AlternateContent': {
-        // the version for programs that don't know the newer form, else the newer one
+        // the version for programs that don't know the newer form, else the newer one; but an
+        // equation (Office Math in a text box) comes in from the newer form, to edit here
         const fb = kids(el, 'Fallback')[0];
-        const branch = fb && kids(fb).length ? fb : kids(el, 'Choice')[0];
+        const choice = kids(el, 'Choice').find((c) => c.getElementsByTagNameNS(NS_A14, 'm').length);
+        const branch = choice ?? (fb && kids(fb).length ? fb : kids(el, 'Choice')[0]);
         for (const k of kids(branch)) this.element(s, layout, k, t, doc);
         break;
       }
       default: break;
     }
+  }
+
+  /**
+   * An equation (PowerPoint's Office Math in a text box): one to change in the equation window,
+   * its LaTeX as typed here when PowerPoint has not changed it. Its box is the equation's own size,
+   * where PowerPoint shows it in the text box. False when the text box holds no equation.
+   */
+  private equation(s: Part, sp: Element, t: Xf, doc: Doc): boolean {
+    const m = sp.getElementsByTagNameNS(NS_A14, 'm')[0];
+    const maths = m ? Array.from(m.getElementsByTagNameNS(NS_M, 'oMath')) : [];
+    const frame = boxOf(kid(sp, 'spPr', 'xfrm'), t);
+    if (!maths.length || !frame) return false;
+    const fromFile = maths.map((x) => ommlToTex(x)).join(' \\quad ');
+    if (!fromFile.trim()) return false;
+    if (frame.rot) this.warnings.add('Rotated pictures and shapes came in unrotated.');
+    const rPr = m.getElementsByTagNameNS(NS.a, 'rPr')[0] ?? null;
+    const sz = Number(rPr?.getAttribute('sz'));
+
+    let ours: ShapeMath | null = null;
+    try {
+      const tag = this.tagsOf(s.path, kid(sp, 'nvSpPr', 'nvPr'))[TAG.math];
+      ours = tag ? JSON.parse(tag) as ShapeMath : null;
+    } catch { ours = null; }
+    // the LaTeX typed here, unless PowerPoint's copy says something else now
+    const same = !!ours?.tex && texOfOmml(ours.tex) === fromFile;
+    const math: ShapeMath = {
+      tex: same ? ours!.tex : fromFile,
+      size: same ? ours!.size : sz > 0 ? sz / 100 : 18,
+      color: this.color(kid(rPr, 'solidFill')) ?? ours?.color ?? slideColours(this.masterOut, this.curLayout ?? 'title-content').textColor,
+      font: ours?.font ?? this.masterOut.bodyFont,
+    };
+    // saved here: the box it had; made or changed in PowerPoint: the equation's own size at its text size, in the middle of its text box
+    const nat = shapeMathSize(math, arialMeasure);
+    const k = sz > 0 ? sz / 100 / math.size : 1;
+    const cx = (frame.x1 + frame.x2) / 2, cy = (frame.y1 + frame.y2) / 2;
+    const box: Rect = same ? frame : { x1: cx - (nat.w * k) / 2, y1: cy - (nat.h * k) / 2, x2: cx + (nat.w * k) / 2, y2: cy + (nat.h * k) / 2 };
+    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: shapeMathPicture(math, arialMeasure), px: { w: Math.round(nat.w), h: Math.round(nat.h) }, math });
+    return true;
   }
 
   /** The invisible frame of a diagram saved here, round the shapes its group brought in, keeping its text (with any words changed in PowerPoint). */
@@ -1331,6 +1375,12 @@ export function mergeDrawing(doc: Doc, src: Doc, map: (p: Vec) => Vec): void {
 }
 
 /** Read a PowerPoint file. Throws only when the file is not a PowerPoint file at all. */
+/** LaTeX as it comes back from the Office Math written for it (to tell whether PowerPoint has changed an equation). */
+function texOfOmml(tex: string): string {
+  const doc = new DOMParser().parseFromString(`<m:oMath xmlns:m="${NS_M}">${toOmml(tex)}</m:oMath>`, 'application/xml');
+  return ommlToTex(doc.documentElement);
+}
+
 export function readPptx(bytes: Uint8Array): PptxRead {
   return new Reader(bytes).read();
 }
