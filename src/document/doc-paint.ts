@@ -138,6 +138,15 @@ export function drawLineNumbers(ctx: CanvasRenderingContext2D, lay: DocLayout, p
   }
 }
 
+/** The bars in the left margin by lines with tracked changes: grey in All Markup, red in Simple Markup (as Word's). */
+export function drawChangeBars(ctx: CanvasRenderingContext2D, lay: DocLayout, page: number): void {
+  for (const b of lay.changeBars) {
+    if (b.page !== page) continue;
+    ctx.fillStyle = b.simple ? '#c00000' : '#808080';
+    ctx.fillRect(b.x - 0.5, b.y1, 1, b.y2 - b.y1);
+  }
+}
+
 /** The short lines above a page's footnotes and above the endnotes (half a point, as Word's). */
 export function drawNoteRules(ctx: CanvasRenderingContext2D, lay: DocLayout, page: number): void {
   ctx.fillStyle = '#000';
@@ -161,6 +170,7 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
     drawPageLook(c, t, p);
     drawHeaderFooter(c, t, p);
     drawLineNumbers(c, lay, p.index);
+    drawChangeBars(c, lay, p.index);
     drawParaShading(c, lay.frames, p.index);
     // figures behind the text first
     // tables go under the figures in their cells

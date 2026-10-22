@@ -45,7 +45,7 @@ import { BIB_MARK, CHART_NAME, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, W14_NS, W1
 import { cleanRef, type Reference } from '../document/references';
 import { bibFieldApp, placeRef, readCiteField, readMendeleyTag, styleFromCsl, zoteroStyleOf, MANAGERS, type CiteLive, type CiteManager, type ManagerCite } from '../document/live-cites';
 import { retypedDiagram } from '../design/diagrams';
-import { revText } from '../document/revisions';
+import { fmtText, revText } from '../document/revisions';
 import { linkFromTarget } from '../links';
 import { mathText, ommlToTex } from '../document/math';
 import { CITE_PRESETS, cleanOptions } from '../document/cite-styles';
@@ -179,6 +179,8 @@ class DocxReader {
   private fields: Field[] = [];
   /** The tracked change the text being read is in (w:ins or w:del), as stored on runs. */
   private rev: string | undefined;
+  /** The formatting change (w:rPrChange) on the run being read, as stored on runs. */
+  private fmt: string | undefined;
   /** Word's comments whose range the text being read is in, and those met so far. */
   private cmtOpen = new Set<number>();
   private cmtMet = new Set<number>();
@@ -1003,7 +1005,7 @@ class DocxReader {
       text = rt.fromSymbolFont(plain);
       props = { ...r, font: ctx.base.font };
     }
-    this.piece(ctx).runs.push({ ...this.runStyle(props), ...(this.rev ? { rev: this.rev } : {}), ...this.cmtMark(ctx), ...(this.link ? { link: this.link } : {}), text });
+    this.piece(ctx).runs.push({ ...this.runStyle(props), ...(this.rev ? { rev: this.rev } : {}), ...(this.fmt ? { fmt: this.fmt } : {}), ...this.cmtMark(ctx), ...(this.link ? { link: this.link } : {}), text });
   }
 
   /** Where a Word link goes: a web page or file (through the part's relationships), or a bookmark here. */
@@ -1171,6 +1173,13 @@ class DocxReader {
 
   private run(el: Element, ctx: Ctx): void {
     const r = merge<RProps>(ctx.base, this.readRPr(kid(el, 'rPr')));
+    // a tracked formatting change: how the run looked before
+    const change = kid(kid(el, 'rPr'), 'rPrChange');
+    this.fmt = change ? fmtText({ author: this.a(change, 'author') ?? '', date: this.a(change, 'date') ?? '', old: this.runStyle(merge<RProps>(ctx.base, this.readRPr(kid(change, 'rPr')))) }) : undefined;
+    try { this.runKids(el, ctx, r); } finally { this.fmt = undefined; }
+  }
+
+  private runKids(el: Element, ctx: Ctx, r: RProps): void {
     for (const c of kids(el)) {
       switch (c.localName) {
         case 't': case 'delText': this.emitText(ctx, c.textContent ?? '', r); break;

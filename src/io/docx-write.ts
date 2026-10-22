@@ -37,7 +37,7 @@ import { bibInstr, newZoteroPrefs, splitPrefs, writeCite } from '../document/liv
 import { TOC_INDENT, tocEntries, tofEntries } from '../document/toc';
 import { INDEX_INDENT, authorities, indexInstr, indexItems, taInstr, toaInstr, toaItems, xeInstr, type ListItem } from '../document/index-toa';
 import { ALG_SIDS, type Protection } from '../document/protect';
-import { parseRev } from '../document/revisions';
+import { parseFmt, parseRev } from '../document/revisions';
 import { officeTarget } from '../links';
 import { cmtIds, initials, placedComments, type CommentThread } from '../document/comments';
 import { toOmml } from '../document/math';
@@ -682,9 +682,18 @@ class DocxWriter {
   private textRuns(r: TextRun, st: NamedStyle): string {
     if (!r.text) return '';
     if (r.formula && !r.sub && !r.sup) {
-      return rt.formulaParts(r.text).map((part) => run(runProps(r, st, { formula: true, pos: part.pos }), part.text)).join('');
+      return rt.formulaParts(r.text).map((part) => run(runProps(r, st, { formula: true, pos: part.pos }) + this.fmtChange(r, st), part.text)).join('');
     }
-    return run(runProps(r, st, { cs: this.charStyleOf(r) }), r.text);
+    return run(runProps(r, st, { cs: this.charStyleOf(r) }) + this.fmtChange(r, st), r.text);
+  }
+
+  /** A tracked formatting change on a run (Word's w:rPrChange, last in its w:rPr): who, when, and its look before. */
+  private fmtChange(r: TextRun, st: NamedStyle): string {
+    const f = parseFmt(r.fmt);
+    if (!f) return '';
+    const old = { ...f.old, text: '' } as TextRun;
+    const before = old.formula && !old.sub && !old.sup ? runProps(old, st, { formula: true }) : runProps(old, st, { cs: this.charStyleOf(old) });
+    return `<w:rPrChange w:id="${this.revId++}" w:author="${xml(f.author || 'Author')}"${f.date ? ` w:date="${xml(f.date)}"` : ''}><w:rPr>${before}</w:rPr></w:rPrChange>`;
   }
 
   /** The character style a run is in, if the document has it. */

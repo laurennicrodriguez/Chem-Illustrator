@@ -22,7 +22,7 @@ import { pageNumText, samePaper, sectionOfParas, sectionsOf } from './sections';
 import { bibliography, type BibEntry } from './references';
 import { emptyTof, tocEntries, tocLines, tofEntries, type TocEntry } from './toc';
 import { EMPTY_INDEX, emptyToa, indexItems, listLines, toaItems, type ListItem } from './index-toa';
-import { authorColours, hasChanges, markedRuns } from './revisions';
+import { ALL_MARKUP, authorColours, changesIn, hasChanges, showChanges, type ReviewView } from './revisions';
 import { layoutMath, type MathBox } from './math';
 import { needsPages } from './fields';
 import { borderRoom, paraFrames, type ParaFrame, type ParaSpan } from './para-borders';
@@ -241,6 +241,8 @@ export interface DocLayout {
   frames: ParaFrame[];
   /** Headers and footers with pictures, tables or formatted text, page by page. */
   hfs: PlacedHf[];
+  /** Bars in the left margin by lines with tracked changes (All and Simple Markup), page by page; `simple` in Simple Markup's red. */
+  changeBars: { page: number; x: number; y1: number; y2: number; simple: boolean }[];
 }
 
 /** A page setup's text area: the width between the margins, the columns, and the height. */
@@ -262,6 +264,9 @@ export function pageLabel(hf: HeaderFooter, index: number): string {
   return pageNumber(hf, index);
 }
 
+/** How far left of the text the bar by a changed line is (Word's is in the margin, about a fifth of an inch out). */
+const CHANGE_BAR_GAP = 14;
+
 /** A page's number as a table of contents lists it, shown on the page or not (S1 on a first page whose number is hidden). */
 export function pageNumber(hf: HeaderFooter, index: number): string {
   return `${hf.prefix ?? ''}${(hf.start ?? 1) + index}`;
@@ -277,6 +282,8 @@ export function shownSize(own: { w: number; h: number }, scale: number, textW: n
 export class DocLayouter {
   private cache = new Map<string, TextLayout>();
   private used = new Set<string>();
+  /** How tracked changes show (Review > Display for Review). */
+  review: ReviewView = ALL_MARKUP;
 
   constructor(private deps: LayoutDeps) {}
 
@@ -597,7 +604,7 @@ export class DocLayouter {
       const st = styleOf(t, ps);
       // runs without a font or size of their own take their paragraph style's
       // tracked changes: inserted text underlined, deleted text struck through, in each author's colour
-      const shownRuns = colours ? markedRuns(runs, colours) : runs;
+      const shownRuns = colours ? showChanges(runs, this.review, colours) : runs;
       const resolved = shownRuns.map((r) => {
         // form fields are shaded, as Word shows them
         if (r.obj !== undefined && !r.highlight && t.objects[r.obj]?.kind === 'form') r = { ...r, highlight: FORM_SHADE };
@@ -965,7 +972,8 @@ export class DocLayouter {
     const g0 = geoms[0];
     const textLayout: TextLayout = { lines, boxWidth: g0.textW, box, length: text.length, measure: this.deps.measure };
     const hfs = this.hfBodies(t, pages, sizes, inline, objKey, N, extentOf);
-    return { text: textLayout, pages, objects, fields, sizes, boxes, tables, maths, paraTops, pageW: maxW, pageH: maxH, textW: g0.textW, cols: { n: g0.cs.n, w: g0.textW, x: g0.colX }, notes, noteRules, lineNums, frames, hfs };
+    const changeBars = colours ? this.changeBars(t, lines, pages) : [];
+    return { text: textLayout, pages, objects, fields, sizes, boxes, tables, maths, paraTops, pageW: maxW, pageH: maxH, textW: g0.textW, cols: { n: g0.cs.n, w: g0.textW, x: g0.colX }, notes, noteRules, lineNums, frames, hfs, changeBars };
   }
 
   /**
@@ -1054,6 +1062,31 @@ export class DocLayouter {
    * tables, contents or bibliographies, nor paragraphs that turn them off), starting again on
    * each page, in each section, or never; every nth shown, at the left of its column.
    */
+  /** A bar in the left margin by each line holding a tracked change (a reviewer's hidden or not), as Word marks them. */
+  private changeBars(t: DocText, lines: LaidLine[], pages: PageBox[]): DocLayout['changeBars'] {
+    const mode = this.review.mode;
+    if (mode !== 'all' && mode !== 'simple') return [];
+    const changes = changesIn(t.runs);
+    if (!changes.length) return [];
+    const out: DocLayout['changeBars'] = [];
+    for (const pg of pages) {
+      let k = 0;
+      for (let i = pg.first; i < pg.end; i++) {
+        const l = lines[i];
+        while (k < changes.length && changes[k].end < l.start) k++;
+        // a change ending at the line's start belongs to the line before (unless it is empty, a paragraph mark)
+        const hit = changes.slice(k).some((c) => c.start < l.end + (l.last ? 1 : 0) && (c.end > l.start || (c.start === c.end && c.start === l.start)));
+        if (!hit) continue;
+        const left = (l.band?.[0] ?? pg.x + pg.setup.left) - CHANGE_BAR_GAP;
+        const y1 = l.y - (l.above ?? l.ascent), y2 = l.y + (l.below ?? l.descent);
+        const prev = out[out.length - 1];
+        if (prev && prev.page === pg.index && Math.abs(prev.x - left) < 0.5 && y1 - prev.y2 < 0.5) prev.y2 = y2;
+        else out.push({ page: pg.index, x: left, y1, y2, simple: mode === 'simple' });
+      }
+    }
+    return out;
+  }
+
   private lineNumbers(t: DocText, lines: LaidLine[], pages: PageBox[], paras: ParaStyle[], secs: ReturnType<typeof sectionsOf>, secOf: number[]): LineNumber[] {
     if (!secs.some((s) => s.lines)) return [];
     const N = t.styles.Normal ?? styleOf(t, {});
@@ -1134,7 +1167,7 @@ export class DocLayouter {
 
   /** A table cell's text laid out in its width (`w`, the inner margins taken off). */
   cellText(N: NamedStyle, runs: TextRun[], paras: ParaStyle[] | undefined, w: number, align: Justify, inline: (id: number, room: number) => InlineBox | null, objKey: (id: number) => string, pad: CellMargins = { top: CELL_PAD.y, bottom: CELL_PAD.y, left: CELL_PAD.x, right: CELL_PAD.x }, look?: CellText): TextLayout {
-    if (hasChanges(runs)) runs = markedRuns(runs);
+    if (hasChanges(runs)) runs = showChanges(runs, this.review);
     // the table style's bold, italic and colour, where the text has none of its own
     if (look) runs = runs.map((r) => ({ ...r, bold: r.bold ?? look.bold, italic: r.italic ?? look.italic, color: r.color ?? look.color }));
     const resolved = runs.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? N.font, size: r.size ?? N.size }));
@@ -1158,7 +1191,7 @@ export class DocLayouter {
    */
   noteText(t: DocText, runs: TextRun[], paras: ParaStyle[] | undefined, label: string, w: number): TextLayout {
     const st = noteStyle(t);
-    if (hasChanges(runs)) runs = markedRuns(runs);
+    if (hasChanges(runs)) runs = showChanges(runs, this.review);
     const resolved = runs.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? st.font, size: r.size ?? st.size }));
     const ps = fitParas(paras, paraCount(rt.plainText(runs)));
     const family = withStack(st.font);
@@ -1183,7 +1216,7 @@ export class DocLayouter {
   /** A text box's text laid out inside it (`w` the box's width), from the top left of its inner margins. */
   boxText(t: DocText, runs: TextRun[], paras: ParaStyle[] | undefined, w: number): TextLayout {
     const N = t.styles.Normal ?? styleOf(t, {});
-    if (hasChanges(runs)) runs = markedRuns(runs);
+    if (hasChanges(runs)) runs = showChanges(runs, this.review);
     const resolved = runs.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? N.font, size: r.size ?? N.size }));
     const n = paraCount(rt.plainText(runs));
     const ps = fitParas(paras, n);

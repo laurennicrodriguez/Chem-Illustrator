@@ -38,7 +38,7 @@ import { DocComments } from './doc-comments';
 import { Ruler, docRulerPrefs, type RulerGeometry } from './ruler';
 import { StylesPane } from './styles-pane';
 import { TOF_NAMES, tocEntries, tofEntries } from '../document/toc';
-import { changesIn, countChanges, decide, decideEverywhere, reviewAuthor, setReviewAuthor } from '../document/revisions';
+import { changeName, changesIn, countChanges, decide, decideEverywhere, reviewAuthor, reviewers, setReviewAuthor, setTrackFormatting, trackingFormatting, type MarkupView, type ReviewView } from '../document/revisions';
 import { combineDocuments, compareDocuments } from '../document/compare';
 import { ask } from './ask';
 import { askEquation } from './equation-dialog';
@@ -1137,6 +1137,26 @@ export class DocumentMode {
     ]);
   }
 
+  /** Review > Show Markup: which changes are marked, whose, and whether formatting is tracked. */
+  private showMarkupMenu(x: number, y: number): void {
+    const f = this.file;
+    if (!f) return;
+    const v = f.review;
+    const tick = (on: boolean, label: string) => `${on ? '✓' : '\u2003'} ${label}`;
+    const set = (patch: Partial<ReviewView>) => { f.review = { ...f.review, ...patch }; this.view.paint(); };
+    const people = reviewers(f.t.runs);
+    const hidden = v.hidden ?? [];
+    popupMenu(x, y, [
+      [tick(v.insDel !== false, 'Insertions and Deletions'), () => set({ insDel: v.insDel === false })],
+      [tick(v.formatting !== false, 'Formatting'), () => set({ formatting: v.formatting === false })],
+      null,
+      [tick(!hidden.length, 'All Reviewers'), () => set({ hidden: hidden.length ? [] : people })],
+      ...people.map((p): [string, () => void] => [tick(!hidden.includes(p), p || 'Unknown'), () => set({ hidden: hidden.includes(p) ? hidden.filter((h) => h !== p) : [...hidden, p] })]),
+      null,
+      [tick(trackingFormatting(), 'Track Formatting Changes'), () => { setTrackFormatting(!trackingFormatting()); this.host.flash(trackingFormatting() ? 'Formatting changes will be tracked (bold, fonts, sizes, colours).' : 'Formatting changes won\'t be tracked; only text typed and deleted.'); }],
+    ]);
+  }
+
   /** Home > Find > Go To (Ctrl+G, F5): a page, section, line, bookmark, comment, note, field, table, picture, equation or heading. */
   private goToKind: GoToKind = 'page';
   private async goToDialog(): Promise<void> {
@@ -1282,7 +1302,7 @@ export class DocumentMode {
     // a tracked change here (Review tab)
     const change = this.file ? changesIn(this.file.t.runs).find((x) => x.start <= offset && offset <= x.end) : undefined;
     if (change) {
-      const what = `${change.kind === 'ins' ? 'Insertion' : 'Deletion'} by ${change.author || 'unknown'}`;
+      const what = `${changeName(change.kind)} by ${change.author || 'unknown'}`;
       const pick = (accept: boolean) => () => { if (ed.collapsed || ed.end <= change.start || ed.start >= change.end) ed.select(change.start, change.start); this.decideChange(accept); };
       item(`Accept ${what}`, pick(true));
       item(`Reject ${what}`, pick(false));
@@ -3033,6 +3053,13 @@ export class DocumentMode {
       case 'edit-equation': { const m = this.pickedMath(); if (m === null) { this.host.flash('Click an equation first (or double-click it).'); break; } void this.editEquation(m); break; }
       case 'track-changes': void this.toggleTracking(); break;
       case 'review-name': void this.askReviewName(); break;
+      case 'markup-all': case 'markup-simple': case 'markup-none': case 'markup-original': {
+        const f = this.file;
+        if (!f) return true;
+        f.review = { ...f.review, mode: cmd.slice(7) as MarkupView };
+        this.view.paint();
+        break;
+      }
       case 'compare-docs': case 'combine-docs': void this.compare(cmd === 'combine-docs'); break;
       case 'new-comment': void this.comments.add(); return true;
       case 'delete-comment': this.comments.remove(); break;
@@ -4014,7 +4041,7 @@ export class DocumentMode {
     ed.select(c.start, c.end);
     this.revealCaret();
     const when = c.date ? new Date(c.date) : null;
-    this.host.flash(`${c.kind === 'ins' ? 'Inserted' : 'Deleted'} by ${c.author || 'unknown'}${when && !isNaN(+when) ? `, ${when.toLocaleString()}` : ''}.`, 5000);
+    this.host.flash(`${c.kind === 'ins' ? 'Inserted' : c.kind === 'del' ? 'Deleted' : 'Formatting changed'} by ${c.author || 'unknown'}${when && !isNaN(+when) ? `, ${when.toLocaleString()}` : ''}.`, 5000);
   }
 
   // ---------------------------------------------------------------- text, lists, styles, tabs and the page's look
@@ -4283,6 +4310,7 @@ export class DocumentMode {
         'quick-parts': (x, y) => this.inserts.quickPartsMenu(x, y),
         'cover-page': (x, y) => this.inserts.coverMenu(x, y),
         'doc-select': (x, y) => this.selectMenu(x, y),
+        'show-markup': (x, y) => this.showMarkupMenu(x, y),
       };
       if (menus[cmd] && this.file) {
         const br = b.getBoundingClientRect();
@@ -4454,6 +4482,7 @@ export class DocumentMode {
     pick('#doc-linenums', sec.lines?.restart ?? 'none');
     pick('#doc-hyphen', f.t.hyphen?.auto ? 'auto' : 'none');
     press('track-changes', !!f.t.track);
+    pick('#doc-markup', f.review.mode);
     press('restrict-editing', !!f.t.protect);
     press('show-comments', this.comments.shown);
     const fig = this.pickedObject() ?? f.box?.id ?? null;
