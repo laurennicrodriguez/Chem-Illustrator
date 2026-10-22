@@ -12,7 +12,7 @@ Each kind of tab saves to its own file type. **Save** (Ctrl+S) uses the first ty
 | Slides | .pptx | .pptx | PDF (one page per slide), PNG, TIFF, SVG, EMF or EPS of the current slide |
 | Design | .pptx | .pptx (one slide) | PDF, PNG, TIFF, SVG, EMF, EPS |
 | Document | .docx | .docx | PDF |
-| Sheet | .xlsx, .csv, .tsv, .txt, .sdf | .xlsx, .csv, .sdf | Charts as PNG or SVG |
+| Sheet | .xlsx, .xlsm, .xls, .ods, .csv, .tsv, .txt, .sdf | .xlsx, .xlsm, .csv, .sdf | Charts as PNG or SVG |
 | Workspace | .ciworkspace | .ciworkspace | |
 
 Open files with **File ▸ Open…** (Ctrl+O), or drop them onto the window. Picture files (PNG, JPEG, GIF, SVG, EMF, BMP, WebP) dropped on a drawing, slide, design or document are placed as pictures.
@@ -27,6 +27,18 @@ Open files with **File ▸ Open…** (Ctrl+O), or drop them onto the window. Pic
 - **Word (.docx):** structures show as pictures in Word. Open the file here again and they are editable drawings, even after Word has saved it. ChemDraw drawings embedded in a Word file made elsewhere also open as editable structures.
 - **PowerPoint (.pptx):** the same: pictures in PowerPoint, editable drawings when opened here again. A ChemDraw object embedded in a PowerPoint slide comes in as a picture.
 - **Excel (.xlsx):** structures are pictures with their SMILES in the cell, and become editable drawings again when opened here.
+
+### Older Excel files, macro-enabled workbooks and OpenDocument
+
+- **.xls** (Excel 97 to 2003) opens with its values, formulas, number formats, bold and italic, alignment, merged cells and column widths. Save it as .xlsx. A password-protected .xls can't be opened; save it without the password in Excel first. Files from Excel 95 and older open with their values only.
+- **.xlsm** (macro-enabled) opens like an .xlsx. Its macros are never run here, but they are kept: save it as .xlsm again and Excel finds them exactly as they were. Saving as .xlsx leaves them out, and the app says so.
+- **.ods** (LibreOffice Calc and other OpenDocument programs) opens with its values, formulas, styles, merged cells, column widths and row heights. Save it as .xlsx; LibreOffice opens that too.
+
+### Alt text and the accessibility checker
+
+**Alt Text…** (on the right-click menu, the **Review** tab in Slides, Documents and Sheets, and **Format ▸ Alt Text…**) gives a picture, chart or structure a description for people using a screen reader. It is saved where Word, PowerPoint and Excel keep their own alt text, and in .cdxml files. A structure with no alt text of its own is described by its SMILES in Office files, as before.
+
+**File ▸ Check Accessibility** (or **Review** ▸ **Check Accessibility**) lists what makes the file harder to read: pictures, charts and structures with no alt text, text with too little contrast against its background (WCAG 2.2: 4.5:1, or 3:1 for large text), slides with no title or the same title as another, slide titles that a screen reader would not reach first, skipped heading levels, tables with no heading row, floating pictures, merged cells and unnamed sheets. Click an item to go to it; **Add Alt Text…** fixes a missing description there and then. **Check Again** looks again after changes.
 
 ### Other formats
 

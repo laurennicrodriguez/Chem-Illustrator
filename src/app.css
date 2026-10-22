@@ -2207,3 +2207,15 @@ button.sym:hover, button.sym:focus-visible { border-color: var(--accent); backgr
 .sc-bar { margin-bottom: 6px; }
 .sc-accepted, .sc-rejected { opacity: 0.6; }
 .sc-list { max-height: 60vh; overflow: auto; }
+
+/* File > New from Template */
+.file-templates .ft-body { max-height: min(68vh, 620px); overflow-y: auto; }
+.file-templates .ft-body .tg-grid { max-height: none; overflow: visible; }
+.file-templates h3 { margin: 8px 0 6px; font-size: 13px; }
+.ft-page { width: 120px; height: 150px; align-self: center; background: #fff; color: #222; border: 1px solid var(--line); padding: 8px; overflow: hidden; font-family: 'Times New Roman', serif; font-size: 6px; line-height: 1.35; box-sizing: border-box; }
+.ft-title { font-size: 8px; font-weight: 700; text-align: center; margin-bottom: 3px; }
+.ft-h1 { font-weight: 700; margin-top: 2px; }
+.ft-h2 { font-weight: 700; padding-left: 4px; }
+.ft-sheet { display: grid; grid-template-columns: repeat(5, 1fr); width: 168px; height: 96px; align-self: center; background: #fff; border: 1px solid var(--line); box-sizing: border-box; }
+.ft-sheet span { border-right: 1px solid #e3e3e3; border-bottom: 1px solid #e3e3e3; font-size: 7px; color: #222; overflow: hidden; white-space: nowrap; padding: 1px; }
+.ft-sheet .ft-head { font-weight: 700; }

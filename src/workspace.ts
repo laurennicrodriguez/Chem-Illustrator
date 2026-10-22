@@ -383,11 +383,11 @@ export class Workspace {
     return t;
   }
 
-  /** New sheet, in place of an untouched new drawing. */
-  newSheet(): Tab {
+  /** New sheet (empty, or `book`: File > New from Template), in place of an untouched new drawing. */
+  newSheet(book?: Workbook): Tab {
     const spare = this.active.mode === 'drawing' ? this.spare() : null;
     const t = this.makeTab('sheet', this.untitled('sheet'));
-    t.book = new Workbook();
+    t.book = book ?? new Workbook();
     const st = this.hooks.newStyle?.('sheet');
     if (st) t.book.drawingStyle = { ...st };
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
@@ -396,12 +396,13 @@ export class Workspace {
     return t;
   }
 
-  /** New document, in place of an untouched new drawing. */
-  newDocument(): Tab {
+  /** New document (empty, or `doc`: File > New from Template), in place of an untouched new drawing. */
+  newDocument(doc?: DocText): Tab {
     const spare = this.active.mode === 'drawing' ? this.spare() : null;
     const t = this.makeTab('document', this.untitled('document'));
     const st = this.hooks.newStyle?.('document');
-    t.document = new DocFile(st ? { ...newDocument(), drawingStyle: { ...st } } : undefined);
+    const start = doc ?? (st ? newDocument() : undefined);
+    t.document = new DocFile(start && st ? { ...start, drawingStyle: { ...st } } : start);
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
     if (spare) this.drop(spare);

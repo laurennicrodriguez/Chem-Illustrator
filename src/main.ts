@@ -169,6 +169,7 @@ import type { TableData } from './model';
 import { checkDrawing, checkDocument, checkWorkbook, repeatedTitles, structureAlt, setStructureAlt, type Issue, type IssuePlace } from './accessibility';
 import { AccessibilityPane, askAltText } from './ui/accessibility-pane';
 import { SlideComparePane } from './ui/slide-compare';
+import { pickFileTemplate } from './ui/file-templates';
 import type { PastedRows } from './io/table-clip';
 import { Keeper } from './keep/keeper';
 import { DEFAULT_KEEP, type KeepPrefs } from './keep/prefs';
@@ -2604,6 +2605,7 @@ tabAdd.addEventListener('click', () => {
   showContextMenu(x, y, [
     { cmd: 'new', label: 'Drawing' }, { cmd: 'new-slides', label: 'Slides' }, { cmd: 'new-sheet', label: 'Sheet' },
     { cmd: 'new-document', label: 'Document' }, { cmd: 'new-design', label: 'Design (TOC graphic, abstract, poster, figure)' },
+    { cmd: 'new-from-template', label: 'Document or Sheet from Template…' },
   ], { run: (cmd) => void command(cmd), key: commandKey });
 });
 tabsEl.replaceChildren(tabLeft, tabStrip, tabRight, tabList, tabAdd);
@@ -3741,7 +3743,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['check-accessibility', 'format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+const ANY_TAB = new Set(['new-from-template', 'check-accessibility', 'format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'page-edge', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
   'help', 'about', 'user-guide', 'help-here', 'send-feedback', 'report-problem', 'check-updates']);
 
@@ -3820,6 +3822,17 @@ const slideCompare = new SlideComparePane({
   flash: (m, ms) => flash(m, ms),
   changed: () => { const d = deckNow(); if (d) deckChanged(d); },
 });
+
+/** File > New from Template: a document or sheet started from one of our templates. */
+async function newFromTemplate(): Promise<void> {
+  finishTyping();
+  const got = await pickFileTemplate(sheetActive() ? 'sheet' : 'document');
+  if (!got) return;
+  if (got.kind === 'sheet') {
+    ws.newSheet(got.template?.make());
+  } else ws.newDocument(got.template?.make());
+  if (got.template) flash(`New ${got.template.name.toLowerCase()}: type over the text in [brackets].`);
+}
 
 /** Review > Compare (slides): another version of this deck, from an open tab or a PowerPoint file, to review slide by slide. */
 async function compareSlides(): Promise<void> {
@@ -3940,6 +3953,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'shape-backward': () => editor.setShapeLayer('backward') || flash('Select the shapes to send backward.'),
   'new-sheet': () => { finishTyping(); ws.newSheet(); },
   'new-document': () => { finishTyping(); ws.newDocument(); },
+  'new-from-template': () => { void newFromTemplate(); },
   open: () => ws.open(),
   save: () => { finishTyping(); return ws.save(focusTab()); },
   'save-as': () => { finishTyping(); return ws.saveAs(focusTab()); },
