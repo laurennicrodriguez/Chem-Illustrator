@@ -216,6 +216,8 @@
     <div class="menu sub" role="menu" hidden>
     <button role="menuitem" data-cmd="flip-h">Flip Left to Right</button>
     <button role="menuitem" data-cmd="flip-v">Flip Top to Bottom</button>
+    <button role="menuitem" data-cmd="flip-h-keep" title="Turn the structure over left to right: wedges and hashes swap, so every stereocentre keeps its R or S">Flip Left to Right, Keeping Configuration</button>
+    <button role="menuitem" data-cmd="flip-v-keep" title="Turn the structure over top to bottom: wedges and hashes swap, so every stereocentre keeps its R or S">Flip Top to Bottom, Keeping Configuration</button>
     <button role="menuitem" data-cmd="rotate-cw">Rotate 90° Clockwise</button>
     <button role="menuitem" data-cmd="rotate-ccw">Rotate 90° Anticlockwise</button>
     <button role="menuitem" data-cmd="rotate-180">Rotate 180°</button>
@@ -264,6 +266,8 @@
     <div id="chemistry-menu" class="menu" role="menu" data-item-modes="drawing slides design" hidden>
     <button role="menuitem" data-cmd="clean-up">Clean Up Structure</button>
     <button role="menuitem" data-cmd="clean-up-reaction">Clean Up Reaction</button>
+    <button role="menuitem" data-cmd="clean-up-reaction-orient" title="Turn every structure so the part it shares with the starting material lies the same way round (configuration kept), then tidy the scheme">Clean Up Reaction, Orienting Like the Start</button>
+    <button role="menuitem" data-cmd="orient-like" title="Turn each selected structure so the part it shares with the first one (top left) lies the same way round; structures turned over have their wedges swapped, so configuration is kept">Orient Like First</button>
     <button role="menuitem" data-cmd="check-structure">Check Structure (next warning)</button>
     <button role="menuitem" data-cmd="join">Join</button>
     <button role="menuitem" data-cmd="expand-label" title="Draw the selected labels out as atoms and bonds: abbreviations (OMe, Boc, CO2Et) and ligands on a metal (PPh3, dppe, Cp*, COD)">Expand Label</button>

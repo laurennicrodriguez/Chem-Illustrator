@@ -31,6 +31,7 @@ import type { Vec } from './geom';
 import { isCurved } from './objects';
 import { captionPlaces, fragmentRuns } from './chem/fragments';
 import { toMolfile, addMolfile } from './chem/molfile';
+import { bestFit, fitMove, fitMatters } from './chem/orient';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, fitPasted, Pasted,
@@ -98,7 +99,7 @@ import { applyRibbonIcons } from './ui/ribbon-icons';
 import { TEMPLATES, Template, templateById, ownTemplates, setOwnTemplates, templateFromAtoms } from './chem/templates';
 import { centreEnd } from './chem/hapto';
 import { countElectrons } from './chem/electrons';
-import { addNicknames, removeNickname, isBuiltInNickname, builtInNicknames, labelPrefs } from './chem/labels';
+import { addNicknames, removeNickname, isBuiltInNickname, builtInNicknames, labelPrefs, tokenize as tokenizeLabel } from './chem/labels';
 import { selectedGroup } from './chem/group-smiles';
 import { templateIcon } from './ui/template-icons';
 import { StructureChecks } from './chem/warnings';
@@ -177,6 +178,8 @@ live.onChange = (atoms, bonds) => {
   }
   editor.requestScene();
   scheduleAnalysis();
+  // the style panel shows R/S and E/Z of what is selected
+  stylePanel.refresh();
 };
 function updateStereo(): void {
   if (chem.ready) void live.update();
@@ -725,25 +728,37 @@ let namesReady = false;
 /** Names the name reader can't read are looked up on PubChem (Edit > Preferences). */
 let pubchemNames = true;
 
+/** Why a name couldn't be turned into a structure: a plain message, the part that couldn't be read, and the name reader's own words. */
+interface NameError { error: string; bad?: string; details?: string }
+
+/** A short message for a name that couldn't be read, with the part the name reader stopped at. */
+function unreadableName(name: string, parser: string): NameError {
+  const ctx = /not understandable in the context it was used:\s*(.+?)\s*\.?$/m.exec(parser)?.[1];
+  const sect = /following section of the name:\s*(.+?)\s*(?:The following|$)/m.exec(parser)?.[1];
+  const bad = [ctx, sect].find((x) => x && name.includes(x.trim()))?.trim();
+  return { error: `Couldn't read "${name.trim()}". Check the spelling, or try a CAS number, SMILES or a simpler name.`, bad };
+}
+
 /**
  * A name as a laid-out molfile, or why not. Systematic names are read here, on this computer;
  * a name that can't be read (a trade name, an abbreviation) is looked up on PubChem, unless
  * that is turned off in Edit > Preferences.
  */
-async function nameToMolfile(name: string): Promise<{ mb: string; attach: number[]; warnings: string[] } | { error: string }> {
+async function nameToMolfile(name: string): Promise<{ mb: string; attach: number[]; warnings: string[] } | NameError> {
   const r = await names.read(name);
   namesReady = true;
   if (!chem.ready) return { error: 'The chemistry engine is still loading; try again in a moment.' };
   if (!r.ok) {
-    if (!pubchemNames || !name.trim()) return { error: r.message };
     const why = r.message.trim().replace(/([^.])$/, '$1.');
+    const failed = (more: string): NameError => ({ ...unreadableName(name, why), details: `${why}${more ? ' ' + more : ''}` });
+    if (!pubchemNames || !name.trim()) return failed('');
     let found: Awaited<ReturnType<typeof pubchemName>>;
     try {
       found = await pubchemName(name);
     } catch (e) {
-      return { error: `${why} Looking it up on PubChem didn't work either: ${(e as Error).message}` };
+      return failed(`Looking it up on PubChem didn't work: ${(e as Error).message}`);
     }
-    if (!found) return { error: `${why} PubChem doesn't know this name either.` };
+    if (!found) return failed('PubChem doesn\'t know this name either.');
     const mb = await chem.smilesToMol(found.smiles).catch(() => null);
     if (!mb) return { error: `PubChem knows this name, but its structure could not be drawn (${found.smiles}).` };
     const same = found.title.toLowerCase() === name.trim().toLowerCase();
@@ -1104,14 +1119,14 @@ const pickedCurved = (): boolean => [...editor.sel.arrows].some((id) => { const 
 const pickedReactionArrow = (): number | undefined => [...editor.sel.arrows].find((id) => { const r = doc.arrows.get(id); return !!r && isReactionArrow(r); });
 const nameDialog = new NameDialog(async (name) => {
   const got = await nameToMolfile(name);
-  if ('error' in got) return got.error;
+  if ('error' in got) return got;
   const c = renderer.toDoc(renderer.width / 2, renderer.height / 2);
   try {
     let ids: number[] = [];
     doc.edit('Name to Structure', () => { ids = addNamed(got, c.x, c.y); });
     selectNewAtoms(ids);
   } catch (err) {
-    return String(err);
+    return { error: String(err) };
   }
   if (got.warnings.length) flash('Note: ' + got.warnings.join(' '), 9000);
   return null;
@@ -1267,9 +1282,17 @@ function align(how: Align): void {
 }
 
 let flashTimer = 0;
-function flash(msg: string, ms = 3500): void {
+function flash(msg: string, ms = 3500, action?: { label: string; run: () => void }): void {
   const el = $('#flash');
   el.textContent = msg;
+  el.classList.toggle('has-action', !!action);
+  if (action) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = action.label;
+    b.addEventListener('click', () => { el.classList.remove('show'); action.run(); });
+    el.append(' ', b);
+  }
   el.classList.add('show');
   clearTimeout(flashTimer);
   flashTimer = window.setTimeout(() => el.classList.remove('show'), ms);
@@ -1766,6 +1789,59 @@ function flushNotes(): void {
   if (!f) return;
   const i = f.deck.slides.indexOf(f.slide as Deck['slides'][number]);
   if (i >= 0) f.deck.setNotes(notesBox.value, i);
+}
+
+/**
+ * Chemistry > Orient Like First: each selected structure (or, with `scheme`, each structure in
+ * the drawing) is turned, and turned over if need be, so the part it shares with the first
+ * structure (top left, as a scheme is read) lies the same way round. Configuration is kept.
+ * Returns how many structures were turned, or null when there was nothing to compare.
+ */
+async function orientLikeFirst(scheme = false): Promise<number | null> {
+  if (!chem.ready) { flash('The chemistry engine is still loading; try again in a moment.'); return null; }
+  const picked = editor.sel.atoms;
+  const frags = doc.fragments().filter((f) => [...f].some((id) => !doc.atoms.get(id)?.multi) && (scheme || !picked.size ? true : [...f].some((id) => picked.has(id))));
+  if (!scheme && !picked.size) return null;
+  if (frags.length < 2) return null;
+  const box = (f: Set<number>) => {
+    let x1 = Infinity, y1 = Infinity;
+    for (const id of f) { const a = doc.atoms.get(id)!; x1 = Math.min(x1, a.x); y1 = Math.min(y1, a.y); }
+    return { x1, y1 };
+  };
+  // the first structure in reading order: the top row, then the leftmost in it
+  const top = Math.min(...frags.map((f) => box(f).y1));
+  const row = frags.filter((f) => box(f).y1 <= top + doc.style.bondLength * 2);
+  const ref = row.reduce((p, q) => (box(q).x1 < box(p).x1 ? q : p));
+  const others = frags.filter((f) => f !== ref);
+  const refEx = toMolfile(doc, ref);
+  const exs = others.map((f) => toMolfile(doc, f));
+  const pairs = await chem.common(refEx.molblock, exs.map((e) => e.molblock)).catch(() => null);
+  if (!pairs) { flash('Could not compare the structures.'); return 0; }
+  const moves: { atoms: Set<number>; f: (p: Vec) => Vec; mirror: boolean }[] = [];
+  others.forEach((f, i) => {
+    const pr = pairs[i];
+    if (!pr) return;
+    const from: Vec[] = [], to: Vec[] = [];
+    for (const [r, m] of pr) {
+      const ra = doc.atoms.get(refEx.map[r] ?? -1), ma = doc.atoms.get(exs[i].map[m] ?? -1);
+      if (ra && ma) { to.push(ra); from.push(ma); }
+    }
+    // only a real shared part: three atoms or more, and a good share of the structure
+    if (from.length < 3 || from.length < 0.3 * f.size) return;
+    const fit = bestFit(from, to);
+    if (!fit || !fitMatters(fit)) return;
+    let cx = 0, cy = 0;
+    for (const id of f) { const a = doc.atoms.get(id)!; cx += a.x; cy += a.y; }
+    moves.push({ atoms: f, f: fitMove(fit, { x: cx / f.size, y: cy / f.size }), mirror: fit.mirror });
+  });
+  if (moves.length) editor.reorient(moves);
+  return moves.length;
+}
+
+/** After a flip: nothing selected, or a plain flip that made the mirror image of a structure with wedges. */
+function flipped(r: boolean | 'stereo'): void {
+  if (!r) flash('Select something to flip.');
+  else if (r === 'stereo') flash('Flipped: the wedged centres are now the mirror image (the enantiomer). To keep the configuration, undo and use Flip, Keeping Configuration.', 7000, { label: 'Undo', run: () => undo() });
 }
 
 /** Undo and Redo: in Slides mode the deck's history covers every slide and the slide list; a sheet has its own. */
@@ -2524,7 +2600,7 @@ async function textToStructure(text: string, style: DocStyle): Promise<{ content
   }
   if (!got) {
     const named = await nameToMolfile(t);
-    if ('error' in named) return { error: `"${t}" isn't SMILES, and couldn't be read as a name: ${named.error}` };
+    if ('error' in named) return { error: named.bad !== undefined || named.details ? `"${t}" isn't SMILES or a name that could be read. Check the spelling, or try a CAS number or a simpler name.` : named.error };
     got = named;
   }
   const d = new Doc();
@@ -3046,8 +3122,10 @@ const COMMANDS: Record<string, () => unknown> = {
   'align-bottom': () => align('bottom'),
   'distribute-h': () => editor.distribute('h') || flash('Select three or more structures, captions, arrows or shapes to space them evenly.'),
   'distribute-v': () => editor.distribute('v') || flash('Select three or more structures, captions, arrows or shapes to space them evenly.'),
-  'flip-h': () => editor.flip('h') || flash('Select something to flip.'),
-  'flip-v': () => editor.flip('v') || flash('Select something to flip.'),
+  'flip-h': () => flipped(editor.flip('h')),
+  'flip-v': () => flipped(editor.flip('v')),
+  'flip-h-keep': () => flipped(editor.flip('h', true)),
+  'flip-v-keep': () => flipped(editor.flip('v', true)),
   'rotate-cw': () => editor.rotateBy(90) || flash('Select something to rotate.'),
   'rotate-ccw': () => editor.rotateBy(-90) || flash('Select something to rotate.'),
   'rotate-180': () => editor.rotateBy(180) || flash('Select something to rotate.'),
@@ -3174,6 +3252,15 @@ const COMMANDS: Record<string, () => unknown> = {
   'detach-arrow': () => {
     const n = editor.detachSelection();
     flash(n ? `${n === 1 ? 'It stays' : `${n} things stay`} put when the structure moves now.` : 'Nothing selected is stuck to a structure.');
+  },
+  'orient-like': async () => {
+    const n = await orientLikeFirst();
+    if (n === null) flash('Select two or more structures. Each is turned to match the first one (top left), keeping its configuration.', 6000);
+    else if (n === 0) flash('Nothing to turn: the structures already match the first one, or share too little with it.');
+  },
+  'clean-up-reaction-orient': async () => {
+    await orientLikeFirst(true);
+    if (!editor.cleanUpReaction()) flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000);
   },
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
   'arrange-scheme': () => arrangeDialog.open(),
@@ -4298,7 +4385,7 @@ editor.onProperties = () => {
   // after the panel has caught up with the new selection
   setTimeout(() => {
     const sec = $('#style-section');
-    if (sec.hidden) return;
+    if (sec.hidden || sec.classList.contains('empty')) return;
     sec.scrollIntoView({ block: 'nearest' });
     sec.querySelector<HTMLElement>('input, select, button')?.focus();
   }, 60);
@@ -4595,6 +4682,16 @@ function scheduleAnalysis(force = false): void {
   analysisTimer = window.setTimeout(() => runAnalysis(force), 30);
 }
 
+/** The R groups (R1, R2, X, Ar…) written in a structure's labels, alone or inside longer ones (OR1). */
+function rGroupNames(ids: Set<number>): string[] {
+  const out = new Set<string>();
+  for (const id of ids) {
+    const a = doc.atoms.get(id);
+    if (a?.label) for (const t of tokenizeLabel(a.label)) if (t.kind === 'generic') out.add(t.text);
+  }
+  return [...out].sort((p, q) => p.localeCompare(q, undefined, { numeric: true }));
+}
+
 let saidSelection = '';
 /** Tell screen readers what is selected: "Selected C6H5Br, 7 atoms". */
 function saySelection(results: FragmentResult[]): void {
@@ -4607,12 +4704,16 @@ function saySelection(results: FragmentResult[]): void {
   $('#sr-say').textContent = `Selected ${formulas.length ? formulas.join(', ') + ', ' : ''}${n} atom${n === 1 ? '' : 's'}`;
 }
 
+let analysisHadSel = false, clearedAt = -1;
 async function runAnalysis(force: boolean): Promise<void> {
   if (!chem.ready) return;
   // Analyse the selected structures, or else the one last drawn on.
   let roots: number[] = [];
+  // clearing the selection clears the panel, until something is drawn again
+  if (editor.sel.atoms.size) analysisHadSel = true;
+  else if (analysisHadSel) { analysisHadSel = false; clearedAt = doc.version; }
   if (editor.sel.atoms.size) roots = [...editor.sel.atoms];
-  else if (editor.lastEdited !== null && doc.atoms.has(editor.lastEdited)) roots = [editor.lastEdited];
+  else if (editor.lastEdited !== null && doc.atoms.has(editor.lastEdited) && doc.version !== clearedAt) roots = [editor.lastEdited];
   const frags: Set<number>[] = [];
   const seen = new Set<number>();
   for (const r of roots) {
@@ -4664,7 +4765,7 @@ async function runAnalysis(force: boolean): Promise<void> {
   if (seq !== analysisSeq) return;
   lastAnalysis = { results, frags };
   saySelection(results);
-  panel.innerHTML = results.map((r, i) => polymers[i] ? polymerHtml(r, polymers[i]!) : analysisHtml(r, i, adductSel.value, { stereo: r.error ? '' : stereoSummary(frags[i]), unknown: exports[i].unknownLabels, electrons: electronsHtml(countElectrons(doc, frags[i].values().next().value!)), pubchem: r.error || !r.smiles ? '' : pubchemHtml(pubchemStates.get(r.smiles) ?? { kind: 'idle' }, i) })).join('');
+  panel.innerHTML = results.map((r, i) => polymers[i] ? polymerHtml(r, polymers[i]!) : analysisHtml(r, i, adductSel.value, { stereo: r.error ? '' : stereoSummary(frags[i]), unknown: exports[i].unknownLabels, electrons: electronsHtml(countElectrons(doc, frags[i].values().next().value!)), rGroups: rGroupNames(frags[i]), pubchem: r.error || !r.smiles ? '' : pubchemHtml(pubchemStates.get(r.smiles) ?? { kind: 'idle' }, i) })).join('');
   updatePanels();
 }
 
@@ -5114,7 +5215,7 @@ function drawingMenu(): MenuItem[] {
     { cmd: 'distribute-h' }, { cmd: 'distribute-v' },
   ];
   const turn: MenuItem[] = [
-    { cmd: 'flip-h' }, { cmd: 'flip-v' }, null,
+    { cmd: 'flip-h' }, { cmd: 'flip-v' }, { cmd: 'flip-h-keep' }, { cmd: 'flip-v-keep' }, null,
     { cmd: 'rotate-cw' }, { cmd: 'rotate-ccw' }, { cmd: 'rotate-180' }, { cmd: 'rotate-dialog' }, null, { cmd: 'scale' },
   ];
   const order: MenuItem[] = shapes.length

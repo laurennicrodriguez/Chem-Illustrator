@@ -528,6 +528,8 @@ body.sheet-mode .canvas-only, body.doc-mode:not(.split-view) .canvas-only { disp
   z-index: 20;
 }
 #flash.show { opacity: 1; transform: translate(-50%, 0); }
+#flash.has-action.show { pointer-events: auto; }
+#flash button { margin-left: 10px; font: inherit; font-weight: 600; color: var(--panel); background: transparent; border: 1px solid currentColor; border-radius: 5px; padding: 1px 8px; cursor: pointer; }
 
 dialog {
   border: 1px solid var(--line);
@@ -642,6 +644,10 @@ dialog.name-dialog .muted { margin: 4px 0 10px; max-width: 60ch; }
 .name-input { width: 100%; box-sizing: border-box; font: inherit; padding: 5px 8px; }
 .name-status { min-height: 1.4em; margin: 8px 0 0; color: var(--muted); overflow-wrap: anywhere; }
 .name-status.error { color: var(--slow); }
+.name-status .name-shown { color: var(--text); font-family: var(--mono, monospace); }
+.name-status .name-shown u { text-decoration: underline wavy var(--slow); text-underline-offset: 3px; }
+.name-status details { margin-top: 6px; color: var(--muted); font-size: 12px; }
+.name-status details p { margin: 4px 0 0; }
 
 /* the nickname list (=) */
 dialog.nicknames { width: min(92vw, 420px); }

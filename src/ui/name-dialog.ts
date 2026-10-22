@@ -1,11 +1,15 @@
 // The Name to Structure window: type a name, press Insert. If the name can't be read the window
-// stays open with OPSIN's reason, so the name can be corrected.
+// stays open with a short message, the part that couldn't be read underlined, and the name
+// reader's own words under Details, so the name can be corrected.
+
+/** Why a name couldn't be used: the message, the part of the name at fault, and the reader's own text. */
+export interface NameProblem { error: string; bad?: string; details?: string }
 
 export class NameDialog {
   private last = '';
 
   /** `convert` inserts the structure for a name and returns null, or returns why it could not. */
-  constructor(private convert: (name: string) => Promise<string | null>, private starting: () => boolean) {}
+  constructor(private convert: (name: string) => Promise<NameProblem | null>, private starting: () => boolean) {}
 
   open(initial?: string): void {
     const d = document.createElement('dialog');
@@ -56,7 +60,7 @@ export class NameDialog {
       ok.disabled = false;
       this.last = name;
       if (err === null) { close(); return; }
-      status.textContent = err;
+      showProblem(status, name, err);
       status.classList.add('error');
       input.focus();
     });
@@ -67,5 +71,32 @@ export class NameDialog {
     d.showModal();
     input.focus();
     input.select();
+  }
+}
+
+/** The message, with the name shown and the unreadable part underlined, and the details folded away. */
+function showProblem(status: HTMLElement, name: string, p: NameProblem): void {
+  status.textContent = '';
+  const msg = document.createElement('span');
+  msg.textContent = p.error;
+  status.append(msg);
+  const at = p.bad ? name.indexOf(p.bad) : -1;
+  if (at >= 0) {
+    const shown = document.createElement('span');
+    shown.className = 'name-shown';
+    const u = document.createElement('u');
+    u.textContent = p.bad!;
+    u.title = 'The name reader stopped here';
+    shown.append(name.slice(0, at), u, name.slice(at + p.bad!.length));
+    status.append(document.createElement('br'), shown);
+  }
+  if (p.details) {
+    const d = document.createElement('details');
+    const s = document.createElement('summary');
+    s.textContent = 'Details';
+    const t = document.createElement('p');
+    t.textContent = p.details;
+    d.append(s, t);
+    status.append(d);
   }
 }

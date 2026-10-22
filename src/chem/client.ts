@@ -97,6 +97,12 @@ export class ChemClient {
     return { results: r.results, error: r.error };
   }
 
+  /** For each molfile, the atoms it shares with `ref` (largest common substructure) as [ref atom, its atom] pairs, or null. */
+  async common(ref: string, mols: string[]): Promise<([number, number][] | null)[]> {
+    const r = await this.request<Extract<ChemResponse, { type: 'common' }>>((id) => ({ type: 'common', id, ref, mols }));
+    return r.results;
+  }
+
   /** Pieces of a structure (a molfile) when bonds between molfile atoms are broken. */
   async fragments(molblock: string, cuts: [number, number][]): Promise<MassFragment[] | { error: string }> {
     const r = await this.request<Extract<ChemResponse, { type: 'fragments' }>>((id) => ({ type: 'fragments', id, molblock, cuts }));
