@@ -28,13 +28,13 @@ When the pointer turns into a pointing hand over a cell, that cell holds a struc
 
 ## Structures in cells
 
-- **Draw one:** select a cell and click **Home** tab ▸ **Structure** (or **Sheet ▸ Draw Structure in Cell**). The drawing tools open; draw, press **Done**, and the structure sits in the cell.
+- **Draw one:** select a cell and click **Home** tab ▸ **Structure** (or **Insert ▸ Structure in Cell**). The drawing tools open; draw, press **Done**, and the structure sits in the cell.
 - **From names or SMILES:** type a column of names or SMILES, select them and click **From Name** (Ctrl+Shift+N). Each one is drawn in a new column beside it.
 - **Paste:** copy a structure from a drawing tab, or from ChemDraw (Windows app), and paste it into a cell.
 
 ### Property columns
 
-Click in your table and choose **Home** tab ▸ **Properties** (or **Sheet ▸ Insert Property Columns…**). Tick the columns you want:
+Click in your table and choose **Home** tab ▸ **Properties** (or **Insert ▸ Insert Property Columns…**). Tick the columns you want:
 
 Formula, MW, Exact mass, HRMS m/z, cLogP, TPSA, H-bond donors, H-bond acceptors, Rotatable bonds, SMILES, InChIKey and **Duplicate of**.
 
@@ -44,7 +44,7 @@ Any calculated value can be typed over, for example with a measured mass. The ce
 
 ### Reagent tables
 
-**Home** tab ▸ **Reagent Table** (or **Sheet ▸ New Reagent Table**) adds a worksheet set up for a reaction. Type the limiting reagent's mmol, then for each reagent draw its structure (or type its SMILES) and its equivalents. MW, mmol and mass (mg) work themselves out; type a density (g/mL) or a concentration (M) and the volume (µL) appears. Any number can be typed over, for example the MW of a salt or hydrate, and the rest of the row follows.
+**Home** tab ▸ **Reagent Table** (or **Insert ▸ New Reagent Table**) adds a worksheet set up for a reaction. Type the limiting reagent's mmol, then for each reagent draw its structure (or type its SMILES) and its equivalents. MW, mmol and mass (mg) work themselves out; type a density (g/mL) or a concentration (M) and the volume (µL) appears. Any number can be typed over, for example the MW of a salt or hydrate, and the rest of the row follows.
 
 ## Formulas
 
@@ -113,7 +113,7 @@ In the chart panel, each series of a scatter chart has **Sticks** (peaks drawn u
 To compare a measured HRMS isotope pattern with the calculated one:
 
 1. Put the compound in a cell: draw a structure, or type SMILES or a formula such as `C14H12BrNO`.
-2. With that cell selected, choose **Home** tab ▸ **Isotopes** (or **Sheet ▸ Isotope Pattern…**, or the right-click menu).
+2. With that cell selected, choose **Home** tab ▸ **Isotopes** (or **Insert ▸ Isotope Pattern…**, or the right-click menu).
 3. Fill in the window:
    - **Compound:** the cell you are on, or a formula typed in.
    - **Ion:** [M+H]+ to start; pick another or type any adduct ([M+Na]+, [M−H]−, [M+2H]2+…).

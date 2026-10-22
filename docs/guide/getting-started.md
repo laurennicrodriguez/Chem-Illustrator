@@ -159,7 +159,7 @@ Slides, sheets, documents and designs save in their own formats; see their pages
 
 | Setting | What it does |
 |---|---|
-| **Terminal methyls written as** | Me or CH3, for **Structure ▸ Show Terminal Methyls**. Methyls already written out in the selection change too. |
+| **Terminal methyls written as** | Me or CH3, for **Chemistry ▸ Labels and Numbers ▸ Show Terminal Methyls**. Methyls already written out in the selection change too. |
 | **Axial chirality written as** | Ra / Sa, or P / M (helicity). Ra is the same as M, and Sa as P. |
 | **Charges from the + and − keys** | A plain sign (N+) or a circled one (⊕, ⊖). Charges already drawn keep their look. |
 | **Ask before changing every structure on the page when nothing is selected** | Some commands, such as Show Terminal Methyls, act on the whole page when nothing is selected. With this ticked, they ask first. |

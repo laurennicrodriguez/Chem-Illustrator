@@ -27,13 +27,13 @@ export interface Settings {
    * draws a chain.
    */
   keepHotspotOnBond: boolean;
-  /** New bonds are one bond length long unless Alt is held (Structure > Fixed Bond Lengths, Ctrl+L). */
+  /** New bonds are one bond length long unless Alt is held (Chemistry > Fixed Bond Lengths, Ctrl+L). */
   fixedLength: boolean;
-  /** New bonds point in 15° steps unless Alt is held (Structure > Fixed Angles, Ctrl+E). */
+  /** New bonds point in 15° steps unless Alt is held (Chemistry > Fixed Angles, Ctrl+E). */
   fixedAngles: boolean;
   /** View > Developer Tools: the Speed panel and the stress test. Off unless switched on. */
   devTools: boolean;
-  /** Scheme > Show Reaction Roles: with a reaction arrow selected, outline its starting materials, products and conditions. */
+  /** Chemistry > Reactions and Schemes > Show Reaction Roles: with a reaction arrow selected, outline its starting materials, products and conditions. */
   showRoles: boolean;
   /** Format chemistry as words are finished (CH2Cl2, 1H NMR, DMSO-d6). Edit > Typing and Spelling. */
   chemTyping: boolean;
@@ -45,9 +45,9 @@ export interface Settings {
   dictionary: string[];
   /** Each mode's colour and how much of the window it colours (View > Mode Colours). */
   modeColours: ModeColours;
-  /** Nicknames of the person's own: name → SMILES, first atom where it joins (Structure > Define Nickname). */
+  /** Nicknames of the person's own: name → SMILES, first atom where it joins (Chemistry > Nicknames and Templates > Define Nickname). */
   nicknames: Record<string, string>;
-  /** Drawings saved as templates (Structure > Save as Template), in the "My templates" palette. */
+  /** Drawings saved as templates (Chemistry > Nicknames and Templates > Save as Template), in the "My templates" palette. */
   templates: Template[];
   /** Split view: the share of the window's width the drawing beside a document, sheet or slides takes (0.2 to 0.8). */
   splitWidth: number;
@@ -99,9 +99,9 @@ export interface Settings {
   skipVersion: string | null;
   /** Files and workspaces opened or saved lately, newest first (File menu, desktop app). */
   recentFiles: string[];
-  /** Your own saved highlight looks (Structure > Save Highlight Look). */
+  /** Your own saved highlight looks (Chemistry > Highlight and Fill > Save Highlight Look). */
   highlightLooks: HighlightLookPreset[];
-  /** Spacing in schemes and the text above and below arrows (Scheme > Scheme Settings). */
+  /** Spacing in schemes and the text above and below arrows (Chemistry > Reactions and Schemes > Scheme Settings). */
   scheme: SchemePrefs;
   /** AutoSave, recovery copies, Version History and shared folders (File > AutoSave and Recovery Options). */
   keep: KeepPrefs;

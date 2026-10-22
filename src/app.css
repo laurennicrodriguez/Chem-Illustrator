@@ -79,6 +79,9 @@ header {
   background: var(--panel);
   border-bottom: 1px solid var(--line);
   flex-wrap: wrap;
+  /* the same height in every mode, whatever the mode adds to the bar */
+  min-height: 45px;
+  box-sizing: border-box;
 }
 /* the app's name sits at the right, so the menus start at the top left as in other programs */
 header h1.app-name { font-size: 12px; margin: 0 4px 0 auto; font-weight: 600; letter-spacing: 0.01em; color: var(--muted); white-space: nowrap; }
@@ -128,6 +131,17 @@ button:hover { border-color: var(--accent); }
 }
 .menu[hidden] { display: none; }
 .menu.right { left: auto; right: 0; }
+/* a menu taller than the window scrolls; its submenus are placed on the screen by the script */
+.menu { max-height: calc(100vh - var(--menu-top, 48px) - 8px); overflow-y: auto; overscroll-behavior: contain; }
+.menu.sub { position: fixed; top: 0; left: 0; z-index: 31; }
+.submenu { display: contents; }
+.menu button.has-sub::after { content: '›'; color: var(--muted); }
+.menu button.has-sub[aria-expanded='true'] { background: var(--accent-soft); }
+.menu button:disabled { color: var(--muted); opacity: 0.55; cursor: default; }
+.menu button:disabled:hover { background: transparent; }
+/* the menu names keep one height in every mode, so the bar never jumps */
+header > .menu-wrap > button { height: 28px; }
+#btn-lock .lock-text { display: inline-block; min-width: 4.6em; text-align: left; }
 .menu button {
   display: flex;
   justify-content: space-between;
@@ -1506,6 +1520,9 @@ dialog.command-search input { width: 100%; box-sizing: border-box; font: inherit
 dialog.command-search ul { list-style: none; margin: 8px 0 0; padding: 0; max-height: min(60vh, 440px); overflow-y: auto; }
 dialog.command-search li { display: flex; align-items: baseline; gap: 10px; padding: 5px 8px; border-radius: 5px; cursor: default; }
 dialog.command-search li[aria-selected='true'] { background: var(--accent-soft); }
+dialog.command-search li { align-items: center; }
+dialog.command-search .cs-icon { flex: none; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; }
+dialog.command-search .cs-icon svg, dialog.command-search .cs-icon img { width: 20px; height: 20px; }
 dialog.command-search .cs-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 dialog.command-search .cs-place { font-size: 11px; white-space: nowrap; }
 dialog.command-search li.cs-none { display: block; padding: 10px 8px; }

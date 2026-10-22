@@ -237,7 +237,7 @@ const MARKS = {
   dark: { selFill: 'rgba(0, 70, 190, 0.34)', selLine: 'rgba(0, 70, 190, 0.6)', hot: 'rgba(0, 70, 190, 0.5)', box: 'rgba(0, 60, 158, 0.9)', hover: 'rgba(0, 60, 158, 0.95)', marquee: '#000', next: '#0b6b2f' },
 };
 
-/** A highlight setting the Structure menu and Highlight toolbox turn on and off. */
+/** A highlight setting the Chemistry menu and Highlight toolbox turn on and off. */
 export type HighlightToggle = 'smooth' | 'centre' | 'soft' | 'shadow' | 'glow' | 'outline';
 
 export class Editor {
@@ -266,7 +266,7 @@ export class Editor {
     fixedLength: true,
     /** New bonds point in 15° steps, unless Alt is held (Ctrl+E). */
     fixedAngles: true,
-    /** Show Terminal Methyls writes them as CH3 or as Me (Structure > Terminal Methyls as …). */
+    /** Show Terminal Methyls writes them as CH3 or as Me (Chemistry > Terminal Methyls as …). */
     methylStyle: 'Me' as MethylStyle,
     /** + and − on an atom give a charge in a circle (⊕, ⊖) rather than a plain sign in the label (Edit > Preferences). */
     circledCharges: false,
@@ -1260,7 +1260,7 @@ export class Editor {
   // ------------------------------------------------------------------ hapto bonds
 
   /**
-   * Structure > Bond Metal to Ring (η): the selected metal bonded to the middle of the other
+   * Chemistry > Metals > Bond Metal to Ring (η): the selected metal bonded to the middle of the other
    * selected atoms (a ring, an allyl, a C=C) by one hapto bond, in place of any bonds it had to
    * each of them. Says what it did, or what to select.
    */
@@ -1297,7 +1297,7 @@ export class Editor {
     return true;
   }
 
-  /** Structure > Split Hapto Bond: the selected hapto bonds (or those of selected metals) drawn as a bond to each atom. */
+  /** Chemistry > Metals > Split Hapto Bond: the selected hapto bonds (or those of selected metals) drawn as a bond to each atom. */
   splitHaptoBonds(): string {
     const doc = this.doc;
     const ids = new Set<number>();
@@ -1326,7 +1326,7 @@ export class Editor {
   }
 
   /**
-   * Structure > Expand Label: draw out labels as their atoms, given the molfiles the chemistry
+   * Chemistry > Expand Label: draw out labels as their atoms, given the molfiles the chemistry
    * engine laid out for those without a template (by atom id). Returns how many were expanded.
    */
   expandLabels(list: { id: number; template: boolean }[], molblocks: Map<number, string>): number {
@@ -2138,7 +2138,7 @@ export class Editor {
   }
 
   /**
-   * Structure > Add Frame: a box round the selection, with a gap, that follows what it surrounds.
+   * Chemistry > Labels and Numbers > Add Frame: a box round the selection, with a gap, that follows what it surrounds.
    * False when nothing is selected.
    */
   addFrame(): boolean {
@@ -2167,7 +2167,7 @@ export class Editor {
     this.changed();
   }
 
-  /** Fill the rings in the selection (Structure > Fill Rings), and select the fills so the Style panel shows them. */
+  /** Fill the rings in the selection (Chemistry > Highlight and Fill > Fill Rings), and select the fills so the Style panel shows them. */
   fillRings(): string {
     const doc = this.doc;
     const bonds = new Set(this.sel.bonds);
@@ -2219,7 +2219,7 @@ export class Editor {
     return true;
   }
 
-  /** Highlight the selected atoms and bonds in a colour (Structure > Highlight), or take it off (undefined). */
+  /** Highlight the selected atoms and bonds in a colour (Chemistry > Highlight and Fill > Highlight), or take it off (undefined). */
   highlight(colour: string | undefined, hl?: HighlightStyle): boolean {
     const doc = this.doc;
     if (!this.sel.atoms.size && !this.sel.bonds.size) return false;

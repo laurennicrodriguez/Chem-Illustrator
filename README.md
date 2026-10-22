@@ -12,7 +12,7 @@ It is free and open source (GPL v3), and runs on Windows, macOS and Linux.
 
 ## Smart reaction arrows
 
-Draw an arrow between two structures and a **+** box appears above and below it. Click one and type the reagents: formulas get their subscripts as you type, the text sits just clear of the arrow, and the arrow grows to fit it, pushing the products along so nothing overlaps. **Scheme ▸ Scheme Settings** sets the gaps, the text size and alignment, and whether arrows fit their text.
+Draw an arrow between two structures and a **+** box appears above and below it. Click one and type the reagents: formulas get their subscripts as you type, the text sits just clear of the arrow, and the arrow grows to fit it, pushing the products along so nothing overlaps. **Chemistry ▸ Reactions and Schemes ▸ Scheme Settings** sets the gaps, the text size and alignment, and whether arrows fit their text.
 
 ![Typing reagents above and conditions below a new reaction arrow: the arrow lengthens to fit the text and the product moves along](docs/images/smart-arrows.gif)
 
@@ -132,6 +132,6 @@ Chem Illustrator is free software: you can use, share and change it under the te
 
 Everything it uses is free and open source, and keeps its own licence: RDKit (BSD-3-Clause), OPSIN (MIT), cdxmorph (MIT), Tauri (MIT or Apache-2.0), the bundled fonts (SIL Open Font License) and others listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-Reaction animation (Scheme ▸ Animate Reaction) is based on [cdxmorph](https://github.com/rshenvi/cdxmorph) by Ryan Shenvi (Shenvi Lab), used with permission.
+Reaction animation (Chemistry ▸ Animate ▸ Animate Reaction) is based on [cdxmorph](https://github.com/rshenvi/cdxmorph) by Ryan Shenvi (Shenvi Lab), used with permission.
 
 ChemDraw is a trademark of Revvity, Inc. Chem Illustrator is not made by, connected with or endorsed by Revvity; it reads and writes ChemDraw's published CDXML and CDX file formats so that your files work in both.

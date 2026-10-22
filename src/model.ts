@@ -44,7 +44,7 @@ export interface Atom {
   s?: number;
   /** A 3-D position kept from a file (ChemDraw's xyz on a structure built from a crystal file). */
   xyz?: [number, number, number];
-  /** A contracted label: the group it stands for, as SMILES from the atom where it joins (Structure > Contract Label). */
+  /** A contracted label: the group it stands for, as SMILES from the atom where it joins (Chemistry > Contract Label). */
   group?: string;
   /** A carbon shown with its letter and hydrogens (CH3 at a chain end; ChemDraw's ShowTerminalCarbonLabels). */
   showCarbon?: boolean;
@@ -461,7 +461,7 @@ export interface Arrow {
   to?: Glue;
   /** Drawn with right-angled bends (an elbow connector). */
   elbow?: boolean;
-  /** How this step animates (Scheme > Animate Reaction): the atom pairing and moves chosen for it. */
+  /** How this step animates (Chemistry > Animate > Animate Reaction): the atom pairing and moves chosen for it. */
   morph?: MorphStep;
   /**
    * A curved arrow drawn along Bézier curves instead of an arc (an S-shaped arrow: one curve
@@ -534,7 +534,7 @@ export interface Shape {
   id: number;
   kind: 'line' | 'rect' | 'oval' | 'symbol' | 'bracket' | 'picture' | 'table' | 'geo' | 'ring';
   /**
-   * A ring's fill (Structure > Fill Rings): the ring's atoms in order. The fill follows them, and
+   * A ring's fill (Chemistry > Highlight and Fill > Fill Rings): the ring's atoms in order. The fill follows them, and
    * goes when one of them goes. `poly` is where their centres were at the last change.
    */
   ring?: number[];
@@ -635,7 +635,7 @@ export interface Shape {
   /** A table: its cells, column widths and rules (see table.ts). */
   table?: TableData;
   /**
-   * A frame round other things (Structure > Add Frame): what it surrounds (whole structures for
+   * A frame round other things (Chemistry > Labels and Numbers > Add Frame): what it surrounds (whole structures for
    * the atoms), the gap it keeps round them in points, and whether it follows them (grows,
    * shrinks and moves as they change). Moving or resizing the frame by hand stops it following.
    */

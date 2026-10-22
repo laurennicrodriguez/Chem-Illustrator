@@ -411,7 +411,7 @@ export class SheetMode {
     this.run(name);
   }
 
-  /** Sheet commands (from the ribbon, the Sheet menu and keys). False when the name isn't one. */
+  /** Sheet commands (from the ribbon, the menus and keys). False when the name isn't one. */
   run(name: string): boolean {
     const v = this.view;
     if (!this.book || !v.sheet) return false;
@@ -1044,7 +1044,7 @@ export class SheetMode {
   }
 
   /**
-   * Sheet > Isotope Pattern…: a table of an ion's isotope peaks (calculated, with columns for the
+   * Insert > Isotope Pattern…: a table of an ion's isotope peaks (calculated, with columns for the
    * peaks found and their error in ppm) and a chart of them as a mass spectrum.
    */
   private async isotopePattern(): Promise<void> {
@@ -1137,7 +1137,7 @@ export class SheetMode {
     return out;
   }
 
-  /** Sheet > Insert Property Column…: pick properties to work out from a column of structures. */
+  /** Chemistry > Insert Property Column…: pick properties to work out from a column of structures. */
   private async propertyColumns(choice?: { col: number; props: PropertyChoice[] }): Promise<void> {
     const v = this.view;
     const s = v.sheet!;

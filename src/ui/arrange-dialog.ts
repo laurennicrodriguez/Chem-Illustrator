@@ -1,4 +1,4 @@
-// Scheme > Arrange: a gallery of scheme layouts, like SmartArt in Office. Clicking a layout lays
+// Chemistry > Reactions and Schemes > Arrange Scheme: a gallery of scheme layouts, like SmartArt in Office. Clicking a layout lays
 // the selected scheme out that way at once, so layouts can be tried one after another; Cancel
 // puts the scheme back as it was, Done keeps it (one Undo takes it back).
 
