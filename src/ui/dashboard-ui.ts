@@ -18,7 +18,9 @@ export interface DashUiHost {
 }
 
 type MenuItem = [string, () => void, boolean?] | null;
-const KINDS = Object.keys(CHART_NAMES) as ChartKind[];
+/** The kinds of chart a tile takes (the newer kinds need their own data: bin widths, sizes, raw repeat runs). */
+export const DASH_CHART_KINDS: ChartKind[] = ['scatter', 'line', 'column', 'bar', 'area', 'pie'];
+const KINDS = DASH_CHART_KINDS;
 const AGGS = Object.keys(AGGREGATE_NAMES) as Aggregate[];
 const num = (s: string): number | undefined => (s.trim() !== '' && Number.isFinite(Number(s)) ? Number(s) : undefined);
 

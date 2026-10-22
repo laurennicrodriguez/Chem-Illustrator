@@ -545,8 +545,10 @@ class Reader {
         // the version for programs that don't know the newer form, else the newer one; but an
         // equation (Office Math in a text box) comes in from the newer form, to edit here
         const fb = kids(el, 'Fallback')[0];
-        const choice = kids(el, 'Choice').find((c) => c.getElementsByTagNameNS(NS_A14, 'm').length);
-        const branch = choice ?? (fb && kids(fb).length ? fb : kids(el, 'Choice')[0]);
+        const choices = kids(el, 'Choice');
+        // an equation (a14:m) and PowerPoint 2016's newer charts (histograms, box charts) are read from their choice: their fallback is only a picture
+        const choice = choices.find((c) => c.getElementsByTagNameNS(NS_A14, 'm').length || Array.from(c.getElementsByTagNameNS('*', 'graphicData')).some((g) => /chartex/.test(g.getAttribute('uri') ?? '')));
+        const branch = choice ?? (fb && kids(fb).length ? fb : choices[0]);
         for (const k of kids(branch)) this.element(s, layout, k, t, doc);
         break;
       }

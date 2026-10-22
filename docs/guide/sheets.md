@@ -133,6 +133,16 @@ Select a block of cells and choose **Insert** tab ▸ **Scatter**, **Line**, **C
 
 ### Stick spectra
 
+The Insert tab also has **Combo**, **Histogram**, **Box**, **Bubble** and **Radar**:
+
+- **Combo** draws columns and lines together. The first series is columns and the rest are lines on a second axis on the right (yield beside turnover number, say). In the panel, each series has **Drawn as** and **Second axis**, and the second axis has its own title, limits and number format.
+- **Histogram** counts the numbers of one column in bins of equal width. Set **Bin width** or the number of bins in the panel, plus an **Overflow** and **Underflow** bin if you want the tails lumped together. Left on automatic, the width follows Scott's rule, as Excel's does.
+- **Box** (box and whisker) shows the median, quartiles and spread of repeat runs. Put a label in the first column (the catalyst, say) and each different label gets its own box. Whiskers reach the furthest points within 1.5 × the box's height, and points beyond that are drawn as outliers. In the panel you can show or hide the mean (×), a line joining the means, the outliers and all the other points, and choose exclusive or inclusive quartiles (QUARTILE.EXC, Excel's default, or QUARTILE.INC).
+- **Bubble** takes x, y and then a column of bubble sizes. Each bubble's area goes with its number.
+- **Radar** draws one spoke for each row label and one shape for each column of numbers. Tick **Filled** in the panel for filled shapes.
+
+All five are saved as Excel's own chart types. Histograms and box charts use the newer chart format of Excel 2016 and later, so older versions of Excel show a note in their place.
+
 In the chart panel, each series of a scatter chart has **Sticks** (peaks drawn up or down from zero, as in a mass spectrum) and **Show x (m/z)** to label each peak with its value. You can use these for any spectrum you put in a sheet.
 
 ## Isotope patterns

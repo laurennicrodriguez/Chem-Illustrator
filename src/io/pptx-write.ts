@@ -37,6 +37,9 @@ import {
 import { sameBackground, type Background } from '../deck/background';
 import { bgXml, type BlipIds } from './pptx-background';
 import { addChart, C_NS } from './office-chart';
+import { CX_NS, CX1_NS } from './xlsx-chart';
+import { isChartEx } from '../sheet/chart';
+const MC_NS = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
 import type { ChartBox } from '../sheet/chart-box';
 import { toOmml, mathText } from '../document/math';
 import { shapeMathPicture, shapeMathScale } from '../deck/equation';
@@ -628,7 +631,7 @@ class Writer {
     for (const p of parts.pictures) {
       mark({ shapes: new Set([p.id]) }, id);
       const box = { x1: Math.min(p.x1, p.x2), y1: Math.min(p.y1, p.y2), x2: Math.max(p.x1, p.x2), y2: Math.max(p.y1, p.y2) };
-      if (p.chart) { out.push(await this.chart(path, p.chart, box, id++)); continue; }
+      if (p.chart) { out.push(await this.chart(path, p.chart, box, id++, p.src)); continue; }
       if (p.math) { out.push(await this.equation(path, p, box, id++)); continue; }
       const v = p.video ? this.video(path, p.video.src, p.src!, box, id) : '';
       if (v) { videos.push({ spid: id, once: !!p.video!.once }); out.push(v); id++; continue; }
@@ -720,14 +723,20 @@ class Writer {
    * keeps it as made here, used when PowerPoint's copy charts the same numbers.
    */
   private charts = 0;
-  private async chart(path: string, box0: ChartBox, box: Rect, id: number): Promise<string> {
+  private async chart(path: string, box0: ChartBox, box: Rect, id: number, src?: string): Promise<string> {
     const w = box.x2 - box.x1, h = box.y2 - box.y1;
     const rid = await addChart(this.pkg, path, 'ppt', ++this.charts, box0, w, h);
     const tags = this.addTags(path, { [TAG.chart]: JSON.stringify(box0) });
-    return `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="Chart ${id - 1}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>` +
+    const ex = isChartEx(box0.chart.kind);
+    const uri = ex ? CX_NS : C_NS, tag = ex ? 'cx' : 'c';
+    const frame = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="Chart ${id - 1}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>` +
       `<p:nvPr><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:nvPr></p:nvGraphicFramePr>` +
       `<p:xfrm><a:off x="${emu(box.x1)}" y="${emu(box.y1)}"/><a:ext cx="${emu(w)}" cy="${emu(h)}"/></p:xfrm>` +
-      `<a:graphic><a:graphicData uri="${C_NS}"><c:chart xmlns:c="${C_NS}" r:id="${rid}"/></a:graphicData></a:graphic></p:graphicFrame>`;
+      `<a:graphic><a:graphicData uri="${uri}"><${tag}:chart xmlns:${tag}="${uri}" r:id="${rid}"/></a:graphicData></a:graphic></p:graphicFrame>`;
+    if (!ex) return frame;
+    // PowerPoint 2016's newer chart, with a picture of it for older programs
+    const pic = src ? await this.picture(path, src, box, `Chart ${id - 1}`, id, null) : '';
+    return `<mc:AlternateContent xmlns:mc="${MC_NS}"><mc:Choice xmlns:cx1="${CX1_NS}" Requires="cx1">${frame}</mc:Choice><mc:Fallback>${pic}</mc:Fallback></mc:AlternateContent>`;
   }
 
   /**

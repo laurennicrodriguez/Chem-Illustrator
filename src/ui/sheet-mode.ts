@@ -26,6 +26,7 @@ import { askProperties, PropertyChoice } from './property-dialog';
 import { ask } from './ask';
 import { SheetFormatting } from './sheet-format-ui';
 import { SheetCharts } from './sheet-chart-ui';
+import { DASH_CHART_KINDS } from './dashboard-ui';
 import { SheetNotes } from './sheet-notes-ui';
 import { SheetValidation } from './sheet-validation-ui';
 import { describeValidation, KIND_NAMES } from '../sheet/validation';
@@ -490,8 +491,11 @@ export class SheetMode {
       case 'table-convert': { const t = this.tableHere(); if (t) this.formatting.convertToRange(t); break; }
       case 'table-colours-reset': { const t = this.tableHere(); if (t) this.formatting.setTable(t, { custom: undefined }, 'Table colours'); break; }
       case 'chart-scatter': case 'chart-line': case 'chart-column': case 'chart-bar': case 'chart-area': case 'chart-pie':
-        if (v.sheet.dashboard) void this.dashUi.addTile('chart', name.slice(6) as ChartKind);
-        else this.charts.insert(name.slice(6) as ChartKind);
+      case 'chart-combo': case 'chart-histogram': case 'chart-box': case 'chart-bubble': case 'chart-radar':
+        if (v.sheet.dashboard) {
+          if (DASH_CHART_KINDS.includes(name.slice(6) as ChartKind)) void this.dashUi.addTile('chart', name.slice(6) as ChartKind);
+          else this.host.flash('Dashboard tiles take scatter, line, column, bar, area and pie charts: make this one on a sheet.', 5000);
+        } else this.charts.insert(name.slice(6) as ChartKind);
         break;
       case 'dash-add-chart': void this.dashUi.addTile('chart'); break;
       case 'dash-add-kpi': void this.dashUi.addTile('kpi'); break;
