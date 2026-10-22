@@ -51,6 +51,12 @@ export interface Atom {
   xyz?: [number, number, number];
   /** A contracted label: the group it stands for, as SMILES from the atom where it joins (Chemistry > Contract Label). */
   group?: string;
+  /**
+   * Alt text for the whole structure this atom is in (Alt Text…), for people who can't see it:
+   * kept on one of its atoms (see accessibility.ts). Saved as the description of the structure's
+   * picture in Word and PowerPoint; a structure without it is described by its SMILES.
+   */
+  alt?: string;
   /** A carbon shown with its letter and hydrogens (CH3 at a chain end; ChemDraw's ShowTerminalCarbonLabels). */
   showCarbon?: boolean;
   /** The charge is drawn by a separate circled-charge symbol, so the label leaves it out. */
@@ -705,6 +711,11 @@ export interface Shape {
   fx?: PictureFx;
   color?: string;
   z?: number;
+  /**
+   * Alt text (Alt Text…): what a picture, chart or shape shows, for people who can't see it
+   * (screen readers). Saved as its description in Word, PowerPoint and Excel.
+   */
+  alt?: string;
   /** Its name in the Layers panel (Design mode). */
   name?: string;
   /** Hidden (Layers panel): not drawn, printed or picked. */

@@ -277,14 +277,15 @@ export function floatOf(o: DocObject | undefined): Float | undefined {
 /** Something that sits in the text in place of one character. */
 export type DocObject =
   /** A structure, scheme or table: a drawing, edited with the drawing tools. `scale` 1 is the drawing's own size. */
-  | { kind: 'drawing'; contents: Contents; scale?: number; look?: FigureLook; float?: Float }
+  | { kind: 'drawing'; contents: Contents; scale?: number; look?: FigureLook; float?: Float; alt?: string }
   /**
    * A picture: its own size is w × h points (`px` its pixels); `scale` 1 is that size. A chart
    * (Insert > Chart) is a picture with its chart and data: drawn from them, saved as Word's chart.
    * `crop` cuts parts off (fractions of the whole image from each side; w × h is the part left),
-   * and `fx` is its Picture Format settings (corrections, colour, background, shape).
+   * and `fx` is its Picture Format settings (corrections, colour, background, shape). `alt` is
+   * its alt text (a structure without it is described by its SMILES).
    */
-  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float; chart?: ChartBox; crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx }
+  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float; chart?: ChartBox; crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx; alt?: string }
   /**
    * A text box: text of its own (typed into in place), `w` wide; it grows to fit its text, and is
    * at least `h` tall when that is set. Always placed on the page. `fill` is its background.

@@ -166,6 +166,8 @@ import { readSheetFile, writeSheetFile, SheetFileDeps } from './io/sheet-files';
 import { ACS_1996, DocStyle } from './style';
 import { emptyTable, tableFromCells } from './table';
 import type { TableData } from './model';
+import { checkDrawing, checkDocument, checkWorkbook, repeatedTitles, structureAlt, setStructureAlt, type Issue, type IssuePlace } from './accessibility';
+import { AccessibilityPane, askAltText } from './ui/accessibility-pane';
 import type { PastedRows } from './io/table-clip';
 import { Keeper } from './keep/keeper';
 import { DEFAULT_KEEP, type KeepPrefs } from './keep/prefs';
@@ -511,7 +513,7 @@ async function dropFiles(files: File[], at: { x: number; y: number }): Promise<v
   const inside = at.x >= r.left && at.x <= r.right && at.y >= r.top && at.y <= r.bottom;
   for (const f of files) {
     const bytes = new Uint8Array(await f.arrayBuffer());
-    const mime = /\.(cdxml|cdx|pptx|xlsx|docx|csv|tsv|txt|sdf?)$/i.test(f.name) ? null : pictureMime(f.name, bytes);
+    const mime = /\.(cdxml|cdx|pptx|xlsx|xlsm|xls|ods|docx|csv|tsv|txt|sdf?)$/i.test(f.name) ? null : pictureMime(f.name, bytes);
     if (mime && sheetActive()) flash('Pictures can\'t go in a cell yet. Drop sheet files (.xlsx, .csv, .sdf) to open them.');
     else if (mime && docActive()) docMode.dropPicture(bytes, mime);
     else if (mime) placePicture(bytes, mime, inside ? renderer.toDoc(at.x - r.left, at.y - r.top) : null);
@@ -990,7 +992,7 @@ setLinkHost({
   },
   async openHere(path) {
     // drawings, documents, slides, sheets and workspaces open in a tab here
-    if (!/\.(cdxml|cdx|docx|pptx|xlsx|csv|tsv|sdf|sd)$/i.test(path) && !path.toLowerCase().endsWith(`.${WORKSPACE.extension}`)) return false;
+    if (!/\.(cdxml|cdx|docx|pptx|xlsx|xlsm|xls|ods|csv|tsv|sdf|sd)$/i.test(path) && !path.toLowerCase().endsWith(`.${WORKSPACE.extension}`)) return false;
     if (!isTauri()) return false;
     await openRecent(path);
     return true;
@@ -3738,9 +3740,79 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+const ANY_TAB = new Set(['check-accessibility', 'format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'page-edge', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
   'help', 'about', 'user-guide', 'help-here', 'send-feedback', 'report-problem', 'check-updates']);
+
+// ---------------------------------------------------------------- accessibility (Review > Check Accessibility, Alt Text…)
+
+/** What makes the file showing hard to use with a screen reader or to read. */
+function accessibilityIssues(): Issue[] {
+  if (sheetActive()) return ws.active.book ? checkWorkbook(ws.active.book) : [];
+  if (docActive()) { const t = docMode.file?.t; return t ? checkDocument(t) : []; }
+  const deck = deckNow();
+  if (deck && ws.active.mode === 'slides') {
+    const out: Issue[] = [];
+    const titles: (string | null)[] = [];
+    deck.slides.forEach((_, i) => {
+      const d = deck.docOf(i);
+      out.push(...checkDrawing(d, { slide: i, slideTitle: true, ...(d === doc ? { captionBox: (c: Caption) => renderer.captionBox(c) } : {}) }));
+      const t = [...d.captions.values()].find((c) => c.ph === 'title');
+      titles.push(t ? t.runs.map((r) => r.text).join('') : null);
+    });
+    return [...out, ...repeatedTitles(titles)];
+  }
+  return checkDrawing(doc, { captionBox: (c) => renderer.captionBox(c) });
+}
+
+/** Go to what an accessibility issue is about, and select it. */
+function goToIssue(p: IssuePlace): void {
+  if (sheetActive()) { sheetMode.goToIssue(p); return; }
+  if (docActive()) {
+    if (p.kind === 'doc-object') docMode.goToObject(p.id);
+    else if (p.kind === 'doc-para') docMode.revealPara(p.para);
+    return;
+  }
+  if (p.kind !== 'drawing') return;
+  const deck = deckNow();
+  if (deck && p.slide !== undefined) deck.go(p.slide);
+  // brought into view (zoomed in to it), then picked whole
+  if (p.atoms?.length) editor.reveal('atom', p.atoms[0]);
+  else if (p.captions?.length) editor.reveal('caption', p.captions[0]);
+  editor.selectThese({ atoms: new Set(p.atoms ?? []), bonds: new Set(), captions: new Set(p.captions ?? []), arrows: new Set(), shapes: new Set(p.shapes ?? []) });
+}
+
+/** Alt Text… in a drawing, on a slide or in a design: for the picture or chart picked, or else the structure picked. */
+async function drawingAltText(): Promise<boolean> {
+  const pics = [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => x?.kind === 'picture');
+  if (pics.length === 1) {
+    const p = pics[0];
+    const got = await askAltText(p.chart ? 'chart' : p.math ? 'equation' : p.video ? (p.video.audio ? 'sound' : 'video') : 'picture', p.alt);
+    if (got === null || !doc.shapes.has(p.id)) return false;
+    doc.edit('Alt text', () => doc.updateShape(p.id, { alt: got || undefined }));
+    return true;
+  }
+  const atom = [...editor.sel.atoms].find((id) => doc.atoms.has(id));
+  if (pics.length === 0 && atom !== undefined) {
+    const frag = [...doc.fragmentOf(atom)].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a);
+    const got = await askAltText('structure', structureAlt(frag), 'Screen readers read this out in place of the structure, and PowerPoint and Word keep it as the picture\'s alt text. Left empty, the structure is described by its SMILES.');
+    if (got === null || !doc.atoms.has(atom)) return false;
+    setStructureAlt(doc, atom, got);
+    return true;
+  }
+  flash(pics.length > 1 ? 'Select one picture at a time for Alt Text.' : 'Click a picture, chart or structure first, then Alt Text.');
+  return false;
+}
+
+const accessibility = new AccessibilityPane({
+  check: accessibilityIssues,
+  goTo: goToIssue,
+  fixAlt: async (p) => {
+    if (sheetActive()) return sheetMode.altText();
+    if (docActive()) return p.kind === 'doc-object' ? docMode.altText(p.id) : false;
+    return drawingAltText();
+  },
+});
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
@@ -3794,6 +3866,8 @@ const ANIM_COMMANDS: { cmd: string; label: string }[] = [false, true].flatMap((e
 
 const COMMANDS: Record<string, () => unknown> = {
   new: () => { finishTyping(); ws.newDrawing(); },
+  'check-accessibility': () => { finishTyping(); if (accessibility.open) accessibility.refresh(); else accessibility.show(document.querySelector<HTMLElement>('[data-cmd="check-accessibility"]:not([hidden])')); },
+  'alt-text': () => { finishTyping(); void drawingAltText(); },
   'new-slides': () => { finishTyping(); ws.newSlides(); },
   'new-design': () => newDesign(),
   'design-size': () => designSize(),
@@ -6224,6 +6298,7 @@ function drawingMenu(): MenuItem[] {
     { label: 'Rotate or Flip', items: turn },
     ...(order.length ? [{ label: 'Order', items: order }] : []),
     ...(shapes.some((x) => x.chart) ? [{ cmd: 'edit-chart', label: 'Edit Chart…' }] : []),
+    ...((shapes.length === 1 && shapes[0].kind === 'picture') || (atoms && !shapes.length) ? [{ cmd: 'alt-text', label: 'Alt Text…' }] : []),
     ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }, { cmd: 'picture-format' }, { label: 'Picture Style', items: PICTURE_STYLES.map((p) => ({ cmd: `picture-style-${p.id}`, label: p.name })) }] : []),
     ...(ws.active.mode === 'slides' ? [{ label: 'Animation', items: [
       ...ANIM_COMMANDS.slice(0, EFFECTS.length), null, ...ANIM_COMMANDS.slice(EFFECTS.length), null,

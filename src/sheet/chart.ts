@@ -92,6 +92,8 @@ export interface Chart {
   id: number;
   kind: ChartKind;
   title?: string;
+  /** Alt text: what the chart shows, for people who can't see it (saved as the chart's description). */
+  alt?: string;
   series: Series[];
   x: ChartAxis;
   y: ChartAxis;

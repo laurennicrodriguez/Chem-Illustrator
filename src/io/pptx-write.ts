@@ -28,6 +28,7 @@ import { PPT_STYLE_IDS, lookOf, slideCellLook, styledRuns, type CellLine, type S
 import { tableBorders } from './cdxml-table';
 import { writeCdxml } from './cdxml-write';
 import { extractDrawing } from './clipboard';
+import { contentsAlt, titleOverlaps, roughCaptionBox } from '../accessibility';
 import type { Selection } from '../editor/editor';
 import { Package, NS, REL, emu, xml, xmlAttr, hex6, MediaFiles, structureAltText } from './ooxml';
 import { facesToEmbed, toEot, type FontSource } from './font-embed';
@@ -705,6 +706,15 @@ class Writer {
       for (const x of sel.shapes ?? []) add(`shape ${x}`);
     };
     const styles = textStyles(this.deck.master, s.layout);
+    const phCount: Record<string, number> = {};
+    // the title first, so screen readers read it first (things are read in the order they are
+    // stacked), unless it overlaps something it must stay in front of
+    const title = parts.texts.find((c) => c.ph === 'title' && c.runs.some((r) => r.text.trim()));
+    if (title && !titleOverlaps(doc, title, roughCaptionBox(title, styles.title?.size ?? 32))) {
+      parts.texts.splice(parts.texts.indexOf(title), 1);
+      mark({ captions: new Set([title.id]) }, id);
+      out.push(this.text(path, title, id++, s.layout, styles, phCount, doc));
+    }
     // pictures and shapes at the back, as on screen
     const videos: MediaTiming[] = [];
     // pictures and shapes in their order front to back (the Selection Pane's), back first
@@ -715,7 +725,7 @@ class Writer {
         continue;
       }
       const box = { x1: Math.min(p.x1, p.x2), y1: Math.min(p.y1, p.y2), x2: Math.max(p.x1, p.x2), y2: Math.max(p.y1, p.y2) };
-      if (p.chart) { out.push(await this.chart(path, p.chart, box, id++, p.src)); continue; }
+      if (p.chart) { out.push(await this.chart(path, p.chart, box, id++, p.src, p.alt)); continue; }
       if (p.math) { out.push(await this.equation(path, p, box, id++)); continue; }
       if (p.zoom && p.link) { const z = this.zoomXml(path, p, box, id); if (z) { out.push(z); id++; continue; } }
       const v = p.video ? this.video(path, p.video, p.src!, box, id, p) : '';
@@ -738,7 +748,6 @@ class Writer {
       const tag = this.addTags(path, { [TAG.diagram]: JSON.stringify({ v: 1, s: look }) });
       out.push(groupXml(gid, `Diagram ${gid - 1}`, shapeBox(g.frame), kids.join(''), `<p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst>`));
     }
-    const phCount: Record<string, number> = {};
     for (const tb of parts.tables) {
       const used: number[] = [];
       out.push(this.table(path, tb, () => { used.push(id); return id++; }, s.layout, styles, phCount, doc));
@@ -780,7 +789,7 @@ class Writer {
       const svg = this.addMedia(path, new TextEncoder().encode(pic.svg), 'svg');
       mark(sel, id);
       const smiles = await this.opts.smiles?.(part).catch(() => null) ?? null;
-      out.push(picXml(id, `Structure ${id - 1}`, png, svg, pic.box, null, tags, undefined, structureAltText(smiles)));
+      out.push(picXml(id, `Structure ${id - 1}`, png, svg, pic.box, null, tags, undefined, contentsAlt(part.contents()) ?? structureAltText(smiles)));
       id++;
     }
     // text on top
@@ -806,19 +815,19 @@ class Writer {
    * keeps it as made here, used when PowerPoint's copy charts the same numbers.
    */
   private charts = 0;
-  private async chart(path: string, box0: ChartBox, box: Rect, id: number, src?: string): Promise<string> {
+  private async chart(path: string, box0: ChartBox, box: Rect, id: number, src?: string, alt?: string): Promise<string> {
     const w = box.x2 - box.x1, h = box.y2 - box.y1;
     const rid = await addChart(this.pkg, path, 'ppt', ++this.charts, box0, w, h);
     const tags = this.addTags(path, { [TAG.chart]: JSON.stringify(box0) });
     const ex = isChartEx(box0.chart.kind);
     const uri = ex ? CX_NS : C_NS, tag = ex ? 'cx' : 'c';
-    const frame = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="Chart ${id - 1}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>` +
+    const frame = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="Chart ${id - 1}"${alt?.trim() ? ` descr="${xml(alt.trim())}"` : ''}/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>` +
       `<p:nvPr><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:nvPr></p:nvGraphicFramePr>` +
       `<p:xfrm><a:off x="${emu(box.x1)}" y="${emu(box.y1)}"/><a:ext cx="${emu(w)}" cy="${emu(h)}"/></p:xfrm>` +
       `<a:graphic><a:graphicData uri="${uri}"><${tag}:chart xmlns:${tag}="${uri}" r:id="${rid}"/></a:graphicData></a:graphic></p:graphicFrame>`;
     if (!ex) return frame;
     // PowerPoint 2016's newer chart, with a picture of it for older programs
-    const pic = src ? await this.picture(path, src, box, `Chart ${id - 1}`, id, null) : '';
+    const pic = src ? await this.picture(path, src, box, `Chart ${id - 1}`, id, null, undefined, undefined, alt) : '';
     return `<mc:AlternateContent xmlns:mc="${MC_NS}"><mc:Choice xmlns:cx1="${CX1_NS}" Requires="cx1">${frame}</mc:Choice><mc:Fallback>${pic}</mc:Fallback></mc:AlternateContent>`;
   }
 
@@ -959,8 +968,8 @@ class Writer {
       `<p:spPr>${frame}${geom}${ln}</p:spPr></p:cxnSp>`;
   }
 
-  /** A picture from image data, cropped as given, with its Picture Format settings (`pic`) as PowerPoint's. */
-  private async picture(from: string, src: string, box: Rect, name: string, id: number, crop: Shape['crop'] | null, look?: PictureLook, pic?: Shape): Promise<string> {
+  /** A picture from image data, cropped as given, with its Picture Format settings (`pic`) as PowerPoint's, and its alt text. */
+  private async picture(from: string, src: string, box: Rect, name: string, id: number, crop: Shape['crop'] | null, look?: PictureLook, pic?: Shape, alt = pic?.alt): Promise<string> {
     let mime: string, bytes: Uint8Array;
     try {
       ({ mime, bytes } = fromDataUrl(src));
@@ -971,6 +980,7 @@ class Writer {
     if (!ext) return '';
     const fx = tidyFx(pic?.fx);
     const more: PicMore = { rot: pic?.rot, hidden: pic?.hidden };
+    const descr = alt?.trim() || undefined;
     // what Office can't show live goes in worked in, with the original as the picture's layer
     let baked: Uint8Array | null = null;
     if (pic && bakedPart(fx) && this.opts.bakePicture) baked = await this.opts.bakePicture(pic).catch(() => null);
@@ -979,12 +989,12 @@ class Writer {
       // PowerPoint shows the SVG; older programs the PNG beside it (300 dots per inch)
       const k = 300 / 72;
       const png = await this.opts.svgToPng(new TextDecoder().decode(bytes), Math.max(1, Math.round((box.x2 - box.x1) * k)), Math.max(1, Math.round((box.y2 - box.y1) * k)));
-      if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, undefined, fx, this.addMedia(from, png, 'png'), more);
-      return picXml(id, name, this.addMedia(from, png, 'png'), this.addMedia(from, bytes, 'svg'), box, crop, tags, look, undefined, fx, undefined, more);
+      if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, descr, fx, this.addMedia(from, png, 'png'), more);
+      return picXml(id, name, this.addMedia(from, png, 'png'), this.addMedia(from, bytes, 'svg'), box, crop, tags, look, descr, fx, undefined, more);
     }
     const own = this.addMedia(from, bytes, ext);
-    if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, undefined, fx, own, more);
-    return picXml(id, name, own, null, box, crop, tags, look, undefined, fx, undefined, more);
+    if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, descr, fx, own, more);
+    return picXml(id, name, own, null, box, crop, tags, look, descr, fx, undefined, more);
   }
 
   /** A title, text placeholder or text box. */

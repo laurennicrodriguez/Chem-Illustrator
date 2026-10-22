@@ -48,6 +48,7 @@ import { listIndent, tableText } from './docx-write';
 import { readChart } from './office-chart';
 import { freshBox, sameBoxData, sizedBox } from '../sheet/chart-box';
 import { chartBoxPng } from '../render/chart-box-paint';
+import { contentsAlt } from '../accessibility';
 
 export interface DocxReadDeps {
   /** A ChemDraw drawing (CDX data) as a drawing in the document's style; null when it can't be read. */
@@ -1335,6 +1336,9 @@ class DocxReader {
     const ext = kid(box, 'extent');
     const shown = { w: fromEmu(ext?.getAttribute('cx')), h: fromEmu(ext?.getAttribute('cy')) };
     const name = kid(box, 'docPr')?.getAttribute('name') ?? '';
+    // alt text: a structure's own, not the description by SMILES written when it has none
+    const descr = kid(box, 'docPr')?.getAttribute('descr')?.trim() ?? '';
+    const alt = descr && !/^Chemical structure( \(SMILES\): | or scheme$)/.test(descr) ? { alt: descr } : {};
     const data = kid(box, 'graphic', 'graphicData');
     const pic = kid(data, 'pic');
     const wsp = kid(data, 'wsp');
@@ -1362,7 +1366,7 @@ class DocxReader {
       const chosen = sizedBox(kept && sameBoxData(kept, got.box) ? freshBox(kept) : got.box, shown.w, shown.h);
       if (chosen === got.box && got.partial) this.warn('chartParts');
       const float = box.localName === 'anchor' ? this.floatOf(box, null, shown.w) : null;
-      this.emitObject(ctx, { kind: 'picture', src: chartBoxPng(chosen, shown.w, shown.h), w: round(shown.w), h: round(shown.h), px: { w: chosen.chart.w, h: chosen.chart.h }, chart: chosen, ...(float ? { float } : {}) }, r);
+      this.emitObject(ctx, { kind: 'picture', src: chartBoxPng(chosen, shown.w, shown.h), w: round(shown.w), h: round(shown.h), px: { w: chosen.chart.w, h: chosen.chart.h }, chart: chosen, ...(float ? { float } : {}), ...alt }, r);
       return;
     }
     const group = kid(data, 'wgp');
@@ -1377,7 +1381,7 @@ class DocxReader {
       const scale = Math.abs(natural.w - shown.w) < 0.75 || m.w <= 0 ? undefined : round(shown.w / m.w, 1e4);
       // a diagram's shapes may have been typed into in Word: their words go back into its text
       const contents = group ? retypedDiagram(structuredClone(m.contents), groupTexts(group)) : structuredClone(m.contents);
-      this.emitObject(ctx, { kind: 'drawing', contents, scale, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r);
+      this.emitObject(ctx, { kind: 'drawing', contents, scale, ...(look ? { look } : {}), ...(float ? { float } : {}), ...(contentsAlt(contents) ? {} : alt) }, r);
       return;
     }
     if (!pic) { this.warn('shapes'); return; }
@@ -1397,7 +1401,7 @@ class DocxReader {
     const sr = kid(kid(pic, 'blipFill'), 'srcRect');
     const f = (k: string) => Math.max(0, Number(sr?.getAttribute(k) ?? 0) / 100000 || 0);
     const crop = sr ? { l: f('l'), t: f('t'), r: f('r'), b: f('b') } : null;
-    const more = { ...(crop && (crop.l || crop.t || crop.r || crop.b) && crop.l + crop.r < 0.99 && crop.t + crop.b < 0.99 ? { crop } : {}), ...(tidyFx(fx) ? { fx: tidyFx(fx) } : {}) };
+    const more = { ...(crop && (crop.l || crop.t || crop.r || crop.b) && crop.l + crop.r < 0.99 && crop.t + crop.b < 0.99 ? { crop } : {}), ...(tidyFx(fx) ? { fx: tidyFx(fx) } : {}), ...alt };
     this.picture(target, shown, r, ctx, look, float, more);
   }
 
@@ -1407,7 +1411,7 @@ class DocxReader {
     return rel && !rel.external ? rel.target : null;
   }
 
-  private picture(path: string | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx, look?: FigureLook | null, float?: Float | null, more: { crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx } = {}): void {
+  private picture(path: string | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx, look?: FigureLook | null, float?: Float | null, more: { crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx; alt?: string } = {}): void {
     const bytes = path ? this.pkg.bytes(path) : null;
     if (!bytes || shown.w <= 0 || shown.h <= 0) return;
     const ext = (path ?? '').split('.').pop()?.toLowerCase() ?? '';

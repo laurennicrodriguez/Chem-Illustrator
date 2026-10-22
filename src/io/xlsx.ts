@@ -60,6 +60,13 @@ export interface XlsxPictures {
 }
 
 const HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+
+/** A VBA project's digital signatures, which sit beside it in an .xlsm ([MS-OFFCRYPTO], [MS-OVBA]). */
+const VBA_SIGNATURES = [
+  { file: 'vbaProjectSignature.bin', ct: 'application/vnd.ms-office.vbaProjectSignature', rel: 'http://schemas.microsoft.com/office/2006/relationships/vbaProjectSignature' },
+  { file: 'vbaProjectSignatureAgile.bin', ct: 'application/vnd.ms-office.vbaProjectSignatureAgile', rel: 'http://schemas.microsoft.com/office/2014/relationships/vbaProjectSignatureAgile' },
+  { file: 'vbaProjectSignatureV3.bin', ct: 'application/vnd.ms-office.vbaProjectSignatureV3', rel: 'http://schemas.microsoft.com/office/2020/07/relationships/vbaProjectSignatureV3' },
+];
 const MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const RNS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 const XDR = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing';
@@ -69,6 +76,8 @@ const MODEL_NS = 'urn:chem-illustrator:workbook';
 
 const CT = {
   workbook: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml',
+  workbookMacros: 'application/vnd.ms-excel.sheet.macroEnabled.main+xml',
+  vbaProject: 'application/vnd.ms-office.vbaProject',
   sheet: 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml',
   styles: 'application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml',
   strings: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml',
@@ -82,6 +91,7 @@ const CT = {
 
 const RELS = {
   worksheet: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet',
+  vbaProject: 'http://schemas.microsoft.com/office/2006/relationships/vbaProject',
   styles: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles',
   sharedStrings: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings',
   drawing: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing',
@@ -112,7 +122,7 @@ const widthFromPx = (px: number) => {
   const chars = Math.trunc((Math.max(0, px - 5) / 7) * 100 + 0.5) / 100;
   return Math.trunc(((chars * 7 + 5) / 7) * 256) / 256;
 };
-const pxFromWidth = (w: number) => Math.trunc(((256 * w + Math.trunc(128 / 7)) / 256) * 7);
+export const pxFromWidth = (w: number) => Math.trunc(((256 * w + Math.trunc(128 / 7)) / 256) * 7);
 /** Row heights: points in the file, pixels here. */
 const ptFromPx = (px: number) => Math.round(px * 0.75 * 100) / 100;
 const pxFromPt = (pt: number) => Math.round((pt * 4) / 3);
@@ -121,7 +131,7 @@ const pxFromPt = (pt: number) => Math.round((pt * 4) / 3);
 const HIDDEN = ';;;';
 
 /** Excel's built-in number formats (ECMA-376 part 1, 18.8.30), by id. */
-const BUILTIN_FORMATS: Record<number, string> = {
+export const BUILTIN_FORMATS: Record<number, string> = {
   0: 'General', 1: '0', 2: '0.00', 3: '#,##0', 4: '#,##0.00', 9: '0%', 10: '0.00%', 11: '0.00E+00', 12: '# ?/?', 13: '# ??/??',
   14: 'm/d/yyyy', 15: 'd-mmm-yy', 16: 'd-mmm', 17: 'mmm-yy', 18: 'h:mm AM/PM', 19: 'h:mm:ss AM/PM', 20: 'h:mm', 21: 'h:mm:ss',
   22: 'm/d/yyyy h:mm', 37: '#,##0 ;(#,##0)', 38: '#,##0 ;[Red](#,##0)', 39: '#,##0.00;(#,##0.00)', 40: '#,##0.00;[Red](#,##0.00)',
@@ -343,8 +353,13 @@ class Axis {
 }
 
 /** Save a workbook as an Excel file. */
-export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uint8Array> {
+/**
+ * Save a workbook as Excel's. With `macros` it is a macro-enabled workbook (.xlsm), carrying the
+ * VBA project it was opened with, untouched.
+ */
+export async function writeXlsx(book: Workbook, deps: XlsxPictures, opts: { macros?: boolean } = {}): Promise<Uint8Array> {
   const pkg = new Package();
+  const vba = opts.macros ? book.macros : null;
   const styles = new Styles();
   const strings = new Strings();
   const model: Model = { app: 'Chem Illustrator', version: 1, drawingStyle: book.drawingStyle, sheets: [] };
@@ -653,8 +668,9 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
     // printing: page setup, and the print area and titles as the workbook's names
     const page = pageSetupXml(own.pageSetup);
     printTitleNames.push(...printNames(own.pageSetup, s.name, si));
-    const sheetPr = s.filter && !filterTable || page.fitToPage
-      ? `<sheetPr${s.filter && !filterTable ? ' filterMode="1"' : ''}>${page.fitToPage ? '<pageSetUpPr fitToPage="1"/>' : ''}</sheetPr>`
+    const code = vba && own.codeName ? ` codeName="${xmlAttr(own.codeName)}"` : '';
+    const sheetPr = s.filter && !filterTable || page.fitToPage || code
+      ? `<sheetPr${code}${s.filter && !filterTable ? ' filterMode="1"' : ''}>${page.fitToPage ? '<pageSetUpPr fitToPage="1"/>' : ''}</sheetPr>`
       : '';
     pkg.add(path,
       `${HEAD}<worksheet xmlns="${MAIN}" xmlns:r="${RNS}">` +
@@ -698,14 +714,24 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
   });
   const allNames = [...filterNames, ...printTitleNames, ...nameXml];
   pkg.add('xl/workbook.xml',
-    `${HEAD}<workbook xmlns="${MAIN}" xmlns:r="${RNS}"><workbookPr/>` +
+    `${HEAD}<workbook xmlns="${MAIN}" xmlns:r="${RNS}"><workbookPr${vba?.codeName ? ` codeName="${xmlAttr(vba.codeName)}"` : ''}/>` +
     `<bookViews><workbookView activeTab="${book.active}"/></bookViews>` +
     `<sheets>${sheetEntries.join('')}</sheets>` +
     (allNames.length ? `<definedNames>${allNames.join('')}</definedNames>` : '') +
     // formulas are worked out again when Excel opens the file
     `<calcPr calcId="191029" fullCalcOnLoad="1"/>` +
     (pivotCaches.length ? `<pivotCaches>${pivotCaches.join('')}</pivotCaches>` : '') + '</workbook>',
-    CT.workbook);
+    opts.macros ? CT.workbookMacros : CT.workbook);
+  if (vba) {
+    pkg.add('xl/vbaProject.bin', vba.project, CT.vbaProject);
+    pkg.relate('xl/workbook.xml', RELS.vbaProject, 'vbaProject.bin');
+    for (const [name, bytes] of Object.entries(vba.signatures)) {
+      const kind = VBA_SIGNATURES.find((k) => k.file === name);
+      if (!kind) continue;
+      pkg.add(`xl/${name}`, bytes, kind.ct);
+      pkg.relate('xl/vbaProject.bin', kind.rel, name);
+    }
+  }
   pkg.relate('', REL.officeDocument, 'xl/workbook.xml');
   pkg.relate('', REL.coreProps, 'docProps/core.xml');
   pkg.relate('', REL.extendedProps, 'docProps/app.xml');
@@ -867,7 +893,7 @@ function stringItem(si: Element): { text: string; chem: boolean } {
 }
 
 /** A cell typed as it shows: text that would read as a number is kept as text. */
-function textInput(text: string): string {
+export function textInput(text: string): string {
   if (text === '') return '';
   const t = readTyped(text);
   return t.value === text && !t.formula && !text.startsWith("'") ? text : `'${text}`;
@@ -889,7 +915,7 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
   }
   const wbPath = pkg.relOfType('', REL.officeDocument) ?? 'xl/workbook.xml';
   const wbDoc = pkg.xml(wbPath);
-  if (!wbDoc || wbDoc.documentElement.localName !== 'workbook') throw new Error('This is not an Excel workbook (.xlsx). Old .xls files need saving as .xlsx in Excel first.');
+  if (!wbDoc || wbDoc.documentElement.localName !== 'workbook') throw new Error('This is not an Excel workbook (.xlsx or .xlsm).');
   const root = wbDoc.documentElement;
   const rels = pkg.rels(wbPath);
   const warnings: string[] = [];
@@ -930,6 +956,20 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
   }
   if (model?.drawingStyle) book.drawingStyle = { ...book.drawingStyle, ...model.drawingStyle };
 
+  // macros (.xlsm): kept byte for byte to save back, never run
+  const vbaPath = relTarget(RELS.vbaProject);
+  const vbaBytes = vbaPath ? pkg.bytes(vbaPath) : null;
+  if (vbaPath && vbaBytes) {
+    const signatures: Record<string, Uint8Array> = {};
+    for (const r of pkg.rels(vbaPath).values()) {
+      const kind = VBA_SIGNATURES.find((k) => k.rel === r.type);
+      const b = kind ? pkg.bytes(r.target) : null;
+      if (kind && b) signatures[kind.file] = b;
+    }
+    const codeName = kid(root, 'workbookPr')?.getAttribute('codeName') ?? undefined;
+    book.macros = { project: vbaBytes, signatures, ...(codeName ? { codeName } : {}) };
+  }
+
   const filters: { s: Sheet; f: Filter }[] = [];
   let unknownFormulas = 0;
   let foreignPictures = 0;
@@ -942,6 +982,8 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
       if (!doc) return;
       const ws = doc.documentElement;
       const raw = new Map<number, Wrote>();
+      const codeName = kid(ws, 'sheetPr')?.getAttribute('codeName');
+      if (codeName) s.codeName = codeName;
 
       // columns
       const fmtPr = kid(ws, 'sheetFormatPr');
@@ -1205,9 +1247,12 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
           const mine = ms?.charts?.find((c) => name === `Chart ${c.id}`);
           const got = readChartXml(cdoc, at, w, h, mine?.id ?? newChartId());
           if (!got) { foreignPictures++; continue; }
-          if (mine && sameChartData(mine, got.chart)) { seenChartId(mine.id); charts.push({ ...mine, at }); continue; }
+          // its alt text, as set here or in Excel
+          const descr = kid(gf, 'nvGraphicFramePr', 'cNvPr')?.getAttribute('descr')?.trim();
+          const alt = descr ? { alt: descr } : {};
+          if (mine && sameChartData(mine, got.chart)) { seenChartId(mine.id); const { alt: _was, ...kept } = mine; charts.push({ ...kept, at, ...alt }); continue; }
           if (got.partial) notKept.add('parts of combined charts');
-          charts.push(got.chart);
+          charts.push({ ...got.chart, ...alt });
         }
         if (charts.length) s.setCharts(charts);
       }

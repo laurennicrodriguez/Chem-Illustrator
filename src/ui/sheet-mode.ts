@@ -42,6 +42,8 @@ import type { ChartKind } from '../sheet/chart';
 import { DashboardUi } from './dashboard-ui';
 import { printSheet, previewPages, PrintedSheet } from './sheet-print';
 import { SheetObjects } from './sheet-objects-ui';
+import { askAltText } from './accessibility-pane';
+import type { IssuePlace } from '../accessibility';
 import { SheetPage } from './sheet-page-ui';
 import { TILE_NAMES } from '../sheet/dashboard';
 import type { TableDef } from '../sheet/table-styles';
@@ -674,9 +676,49 @@ export class SheetMode {
       case 'pivot-clear': this.pivots.clear(); break;
       case 'pivot-select': this.pivots.selectReport(); break;
       case 'pivot-details': this.pivots.showDetails(); break;
+      case 'alt-text': void this.altText(); break;
       default: return false;
     }
     return true;
+  }
+
+  /** Alt Text… for the chart or picture picked. */
+  async altText(): Promise<boolean> {
+    const v = this.view;
+    const chart = v.selectedChart;
+    if (chart) {
+      const got = await askAltText(chart.title?.trim() ? `"${chart.title.trim()}"` : 'chart', chart.alt);
+      const cur = v.sheet?.charts.find((c) => c.id === chart.id);
+      if (got === null || !cur) return false;
+      v.replaceChart({ ...cur, alt: got || undefined }, 'Alt text');
+      return true;
+    }
+    const o = v.objSel !== null ? v.sheet?.objects.find((x) => x.id === v.objSel) : undefined;
+    if (o) {
+      const got = await askAltText(o.kind === 'picture' ? 'picture' : 'shape', o.descr);
+      const cur = v.sheet?.objects.find((x) => x.id === o.id);
+      if (got === null || !cur) return false;
+      v.replaceObject({ ...cur, descr: got || undefined }, 'Alt text');
+      return true;
+    }
+    this.host.flash('Click a chart or picture first, then Alt Text.');
+    return false;
+  }
+
+  /** Go to what an accessibility issue is about: a cell, chart, picture or sheet. */
+  goToIssue(p: IssuePlace): void {
+    const v = this.view;
+    if (!this.book || !('sheet' in p)) return;
+    v.goSheet(p.sheet);
+    const s = this.book.sheets[p.sheet];
+    if (p.kind === 'cell') v.selectCell(p.row, p.col);
+    else if (p.kind === 'sheet-chart') {
+      const c = s.charts.find((x) => x.id === p.id);
+      if (c) { v.selectCell(c.at.row, c.at.col); v.pickChart(c.id); }
+    } else if (p.kind === 'sheet-object') {
+      const o = s.objects.find((x) => x.id === p.id);
+      if (o) { v.selectCell(o.at.row, o.at.col); v.pickObject(o.id); }
+    }
   }
 
   /** Change the look of the selected cells. */

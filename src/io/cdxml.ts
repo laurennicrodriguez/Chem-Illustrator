@@ -240,6 +240,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       else if (enh === 'And' || enh === 'Or') extra.enhStereo = { type: enh === 'And' ? 'and' : 'or', group: num(n, 'EnhancedStereoGroupNum', 1) };
       const groupTag = kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === GROUP_TAG)?.getAttribute('Value');
       if (groupTag) extra.group = groupTag;
+      const altTag = kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === ALT_TAG)?.getAttribute('Value');
+      if (altTag) extra.alt = altTag;
       const hlA = kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === HIGHLIGHT_TAG)?.getAttribute('Value');
       if (hlA && /^#[0-9a-f]{6}$/i.test(hlA)) extra.highlight = hlA.toLowerCase();
       const lookA = highlightStyleFromTag(kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === HIGHLIGHT_LOOK_TAG)?.getAttribute('Value'));
@@ -801,8 +803,9 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
               const tag = kids(ch).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === PICTURE_FX_TAG)?.getAttribute('Value');
               fx = tag ? tidyFx(JSON.parse(tag) as PictureFx) : undefined;
             } catch { fx = undefined; }
+            const alt = kids(ch).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === ALT_TAG)?.getAttribute('Value') || undefined;
             const sh = pic
-              ? doc.addShape({ id: idFor(ch), kind: 'picture', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], src: pic.src, px: pic.px, ...(pic.crop ? { crop: pic.crop } : {}), ...(chart ? { chart } : {}), ...(math ? { math } : {}), ...(fx ? { fx } : {}) })
+              ? doc.addShape({ id: idFor(ch), kind: 'picture', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], src: pic.src, px: pic.px, ...(pic.crop ? { crop: pic.crop } : {}), ...(chart ? { chart } : {}), ...(math ? { math } : {}), ...(fx ? { fx } : {}), ...(alt ? { alt } : {}) })
               // only pictures this program can't show: mark where they sit, and keep them as they are
               : doc.addShape({ id: idFor(ch), kind: 'rect', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], dashed: true, color: '#9aa4b2', picture: true });
             from('s', sh.id, ch);
@@ -1063,6 +1066,8 @@ export const CHART_TAG = 'Chem Illustrator chart';
 export const MATH_TAG = 'Chem Illustrator equation';
 /** A picture's Picture Format settings (brightness, recolouring, background removed, shape…), which ChemDraw doesn't have. */
 export const PICTURE_FX_TAG = 'Chem Illustrator picture format';
+/** Alt text written for a structure (on one of its atoms) or a picture, which ChemDraw doesn't have. */
+export const ALT_TAG = 'Chem Illustrator alt text';
 export const OWN_PICTURE = 'ChemIllustratorPicture';
 export const OWN_CROP = 'ChemIllustratorCrop';
 

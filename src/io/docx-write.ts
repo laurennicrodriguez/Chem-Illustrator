@@ -20,6 +20,7 @@ import { bordersXml, lookXml as tableLookXml, marginsXml, tableStyleXml } from '
 import type { DocStyle } from '../style';
 import * as rt from '../richtext';
 import { Package, REL, NS, xml, hex6, emu, MediaFiles, structureAltText } from './ooxml';
+import { contentsAlt } from '../accessibility';
 import { facesToEmbed, newGuid, obfuscate, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
 import { BULLETS, fitParas, listInfo, paraCount, schemeOf, splitParagraphs } from '../text/paragraphs';
@@ -722,7 +723,7 @@ class DocxWriter {
     const uri = ex ? CX_NS : C_NS;
     const tag = ex ? 'cx' : 'c';
     const chart = '<w:drawing>' + this.placed(o, emu(size.w), emu(size.h),
-      `<wp:docPr id="${n}" name="${CHART_NAME} ${id}"/><wp:cNvGraphicFramePr/>` +
+      `<wp:docPr id="${n}" name="${CHART_NAME} ${id}"${o.alt?.trim() ? ` descr="${xml(o.alt.trim())}"` : ''}/><wp:cNvGraphicFramePr/>` +
       `<a:graphic><a:graphicData uri="${uri}"><${tag}:chart xmlns:${tag}="${uri}" r:id="${rid}"/></a:graphicData></a:graphic>`) + '</w:drawing>';
     const r = rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
     if (!ex) return `<w:r>${r}${chart}</w:r>`;
@@ -800,7 +801,8 @@ class DocxWriter {
     const ext = blipEffectsXml(fx) + (exts ? `<a:extLst>${exts}</a:extLst>` : '');
     const srcRect = crop && (crop.l || crop.t || crop.r || crop.b)
       ? `<a:srcRect l="${Math.round(crop.l * 100000)}" t="${Math.round(crop.t * 100000)}" r="${Math.round(crop.r * 100000)}" b="${Math.round(crop.b * 100000)}"/>` : '';
-    const descr = o.kind === 'drawing' ? ` descr="${xml(structureAltText(smiles))}"` : '';
+    const alt = o.kind === 'drawing' ? o.alt?.trim() || contentsAlt(o.contents) || structureAltText(smiles) : o.kind === 'picture' ? o.alt?.trim() : '';
+    const descr = alt ? ` descr="${xml(alt)}"` : '';
     const look = lookOf(o);
     const docPr = `<wp:docPr id="${n}" name="${xml(name)}"${descr}/>`;
     const picture = `<w:drawing>` + this.placed(o, cx, cy,
