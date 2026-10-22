@@ -244,7 +244,7 @@ class Styles {
   /** The style index for a cell's formatting. */
   xf(st: CellStyle | undefined): number {
     const s = st ?? {};
-    const key = JSON.stringify([s.bold, s.italic, s.underline, s.color, s.fill, s.font, s.size, s.align, s.valign, s.wrap, s.numFmt, s.borders]);
+    const key = JSON.stringify([s.bold, s.italic, s.underline, s.color, s.fill, s.font, s.size, s.align, s.valign, s.wrap, s.numFmt, s.borders, s.indent]);
     const got = this.byKey.get(key);
     if (got !== undefined) return got;
     const font = s.bold || s.italic || s.underline || s.color || s.font || s.size
@@ -260,8 +260,10 @@ class Styles {
       ? this.index(this.borders, `<border>${side('left')}${side('right')}${side('top')}${side('bottom')}<diagonal/></border>`)
       : 0;
     const fmt = this.numFmt(s.numFmt);
-    const align = s.align || s.valign || s.wrap
-      ? `<alignment${s.align ? ` horizontal="${s.align}"` : ''}${s.valign && s.valign !== 'bottom' ? ` vertical="${s.valign === 'middle' ? 'center' : 'top'}"` : ''}${s.wrap ? ' wrapText="1"' : ''}/>`
+    // an indent needs the text aligned to a side (left when it isn't set)
+    const horizontal = s.align ?? (s.indent ? 'left' : undefined);
+    const align = horizontal || s.valign || s.wrap
+      ? `<alignment${horizontal ? ` horizontal="${horizontal}"` : ''}${s.valign && s.valign !== 'bottom' ? ` vertical="${s.valign === 'middle' ? 'center' : 'top'}"` : ''}${s.wrap ? ' wrapText="1"' : ''}${s.indent && horizontal !== 'center' ? ` indent="${s.indent}"` : ''}/>`
       : '';
     const x = `<xf numFmtId="${fmt}" fontId="${font}" fillId="${fill}" borderId="${border}" xfId="0"` +
       `${fmt ? ' applyNumberFormat="1"' : ''}${font ? ' applyFont="1"' : ''}${fill ? ' applyFill="1"' : ''}${border ? ' applyBorder="1"' : ''}` +
@@ -790,6 +792,8 @@ function readStyles(doc: Document | null, theme: string[]): (CellStyle | undefin
       if (v === 'top') st.valign = 'top';
       else if (v === 'center' || v === 'justify' || v === 'distributed') st.valign = 'middle';
       if (isOn(a.getAttribute('wrapText'))) st.wrap = true;
+      const ind = Number(a.getAttribute('indent') ?? 0);
+      if (ind > 0) st.indent = ind;
     }
     return Object.keys(st).some((k) => (st as Record<string, unknown>)[k] !== undefined) ? st : undefined;
   });

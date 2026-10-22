@@ -1389,7 +1389,8 @@ export class SheetView {
     const font = this.font(style);
     ctx.font = font;
     ctx.fillStyle = shown.color ?? style?.color ?? (isError(v) ? '#b4232a' : '#000000');
-    const pad = 3 * this.zoom;
+    // an indent moves the text in from the side it is aligned to (about three characters a level)
+    const pad = (3 + (align === 'center' ? 0 : 9 * (style?.indent ?? 0))) * this.zoom;
     const lineH = this.lineHeight(style) * this.zoom;
     const valign = style?.valign ?? 'bottom';
     let last = c;
