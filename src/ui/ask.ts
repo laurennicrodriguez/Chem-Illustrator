@@ -1,6 +1,7 @@
 // Small windows that ask for a value or two (Rotate…, Scale…). The desktop app can't rely on
 // the browser's own prompt boxes, so these are drawn by the page.
 
+import { showDialog } from './dialog-host';
 export interface Field {
   name: string;
   label: string;
@@ -15,6 +16,8 @@ export interface Field {
   options?: { value: string; label: string }[];
   /** Offered in a list under a text box, which can still be typed in. */
   suggestions?: string[];
+  /** A line of help shown under the box. */
+  help?: string;
 }
 
 /** Show the fields; resolves with what was entered, or null if the window was cancelled. */
@@ -81,6 +84,12 @@ export function ask(title: string, fields: Field[], opts: { ok?: string; note?: 
         row.append(u);
       }
       form.append(row);
+      if (f.help) {
+        const help = document.createElement('p');
+        help.className = 'ask-help muted';
+        help.textContent = f.help;
+        form.append(help);
+      }
     }
     const buttons = document.createElement('p');
     buttons.className = 'ask-buttons';
@@ -112,8 +121,7 @@ export function ask(title: string, fields: Field[], opts: { ok?: string; note?: 
     });
     cancel.addEventListener('click', () => done(null));
     d.addEventListener('close', () => done(null));
-    document.body.append(d);
-    d.showModal();
+    showDialog(d);
     const first = form.querySelector<HTMLInputElement | HTMLTextAreaElement>('input:not([type=checkbox]), textarea');
     first?.focus();
     first?.select();

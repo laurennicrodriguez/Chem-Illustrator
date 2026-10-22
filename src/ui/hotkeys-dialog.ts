@@ -2,6 +2,7 @@
 // them by pressing the new key. Changes take effect and are saved straight away. Taking a key
 // that another action had is allowed (the window says what changed), never blocked.
 
+import { showDialog } from './dialog-host';
 import { keymap, CONTEXTS, KeyContext, DEFAULT_KEYS, actionsFor, actionName, displayChord, chordOf, parseAction } from '../editor/keymap';
 
 export interface HotkeysOptions {
@@ -76,7 +77,7 @@ export class HotkeysDialog {
     this.keepBox.checked = this.opts.keepHotspot.get();
     this.render();
     void this.opts.location().then((w) => { this.where.textContent = w; });
-    this.d.showModal();
+    showDialog(this.d);
     this.search.focus();
   }
 

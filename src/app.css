@@ -1826,3 +1826,38 @@ dialog.diagram-dialog { width: min(96vw, 1060px); max-height: 94vh; }
 @keyframes gw-here { from { background: var(--accent-soft); } to { background: transparent; } }
 .gw-hits li { margin: 3px 0; }
 @media (max-width: 640px) { .gw-list { display: none; } }
+
+/* Help under a setting, right below its box */
+.ask-help { margin: -4px 0 10px; font-size: 0.92em; max-width: 34em; }
+.ask-row.ask-check + .ask-help { padding-left: 24px; }
+
+/* The Settings window: a list of pages on the left; each page is a settings window shown inside it */
+dialog.settings-window { width: min(920px, calc(100vw - 32px)); height: min(680px, calc(100vh - 48px)); padding: 0; display: none; flex-direction: column; overflow: hidden; }
+dialog.settings-window[open] { display: flex; }
+.sw-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 18px; border-bottom: 1px solid var(--line); }
+.sw-head h2 { margin: 0 auto 0 0; font-size: 1.15em; }
+.sw-search { width: 220px; height: 28px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--text); }
+.sw-close { width: 28px; height: 28px; border: 0; border-radius: 4px; background: none; color: var(--text); font-size: 18px; cursor: pointer; }
+.sw-close:hover { background: var(--hover, rgb(0 0 0 / 0.06)); }
+.sw-body { flex: 1; display: flex; min-height: 0; }
+.sw-list { flex: 0 0 190px; overflow: auto; padding: 8px 6px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 1px; }
+.sw-list button { text-align: left; padding: 6px 10px; border: 0; border-radius: 4px; background: none; color: var(--text); cursor: pointer; }
+.sw-list button:hover { background: var(--hover, rgb(0 0 0 / 0.06)); }
+.sw-list button.on { background: var(--accent-soft); font-weight: 600; }
+.sw-list p { padding: 6px 10px; margin: 0; }
+.sw-pane { flex: 1; overflow: auto; padding: 4px 22px 18px; }
+.sw-pane > dialog.embedded { position: static; display: block; inset: auto; margin: 0; padding: 0; border: 0; box-shadow: none; background: none; color: inherit;
+  width: auto; height: auto; max-width: none; max-height: none; min-width: 0; overflow: visible; }
+.sw-pane > dialog.embedded > form > h2:first-child, .sw-pane > dialog.embedded > h2:first-child { margin-top: 12px; }
+@media (max-width: 640px) { .sw-list { flex-basis: 130px; } }
+
+/* Ribbons in a narrow window: groups lose their buttons' words (icons only), then fold into one button that drops them down */
+.rb-group.rb-compact button.rb-big:has(.rb-icon, svg) { min-width: 34px; font-size: 0; gap: 0; }
+.rb-group.rb-compact button.rb-big .rb-icon { font-size: 21px; }
+.rb-group.rb-compact button.rb-iconbtn:has(svg) { font-size: 0; }
+.rb-fold-btn { display: none; }
+.rb-group.rb-folded > .rb-fold-btn { display: inline-flex; align-items: center; gap: 4px; align-self: stretch; padding: 4px 8px; font-size: 12px; white-space: nowrap; }
+.rb-group.rb-folded > :not(.rb-fold-btn) { display: none; }
+.rb-group.rb-folded.rb-popped > .rb-row { display: flex; position: fixed; z-index: 60; left: var(--pop-x); top: var(--pop-y); max-width: calc(100vw - 8px); padding: 6px 8px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 20px rgb(0 0 0 / 0.18); }
+.rb-group.rb-folded > .rb-launch { display: none; }

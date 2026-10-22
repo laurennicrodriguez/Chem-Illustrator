@@ -2716,7 +2716,7 @@ export class DocumentMode {
 
   /** The name put on your changes (kept in your settings). */
   async askReviewName(): Promise<boolean> {
-    const got = await ask('Your Name', [{ name: 'name', label: 'Name shown on your changes', value: reviewAuthor() }], { ok: 'Save', note: 'Word shows this name on your changes too. Change it any time here or in Edit > Preferences.' });
+    const got = await ask('Your Name', [{ name: 'name', label: 'Name shown on your changes', value: reviewAuthor() }], { ok: 'Save', note: 'Word shows this name on your changes too. Change it any time here or in Edit > Settings.' });
     if (!got || !got.name.trim()) return false;
     setReviewAuthor(got.name);
     this.host.reviewNameChanged?.();

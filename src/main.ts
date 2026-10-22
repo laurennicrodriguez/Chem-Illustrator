@@ -121,6 +121,8 @@ import { UpdateUI } from './ui/update-ui';
 import { canUpdate, appVersion, portableInfo } from './updates';
 import { computerName } from './feedback';
 import { GuideWindow, guideSpot } from './ui/guide-window';
+import { SettingsWindow } from './ui/settings-window';
+import { watchRibbons, fitRibbons } from './ui/ribbon-fit';
 import { FeedbackDialog } from './ui/feedback-dialog';
 import { addRecent, removeRecent, recentLabel } from './recent';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
@@ -212,7 +214,13 @@ function resize(): boolean {
 }
 // resizing a canvas blanks it: when the window or a panel beside the drawing changes size,
 // paint again at once, before the browser shows the blank canvas (a flicker)
-new ResizeObserver(() => { if (resize()) editor.frame(); }).observe(host);
+// a slide, page or drawing still fitted to the window is fitted again, so a smaller window never cuts it off
+new ResizeObserver(() => {
+  const refit = editor.stillFitted;
+  if (!resize()) return;
+  if (refit) editor.fit();
+  editor.frame();
+}).observe(host);
 
 // ---------------------------------------------------------------- toolbar
 
@@ -726,7 +734,7 @@ function selectNewAtoms(ids: number[]): void {
 const names = new NameReader(new URL('opsin/opsin-data.dat', document.baseURI).href);
 let namesReady = false;
 
-/** Names the name reader can't read are looked up on PubChem (Edit > Preferences). */
+/** Names the name reader can't read are looked up on PubChem (Edit > Settings). */
 let pubchemNames = true;
 
 /** Why a name couldn't be turned into a structure: a plain message, the part that couldn't be read, and the name reader's own words. */
@@ -743,7 +751,7 @@ function unreadableName(name: string, parser: string): NameError {
 /**
  * A name as a laid-out molfile, or why not. Systematic names are read here, on this computer;
  * a name that can't be read (a trade name, an abbreviation) is looked up on PubChem, unless
- * that is turned off in Edit > Preferences.
+ * that is turned off in Edit > Settings.
  */
 async function nameToMolfile(name: string): Promise<{ mb: string; attach: number[]; warnings: string[] } | NameError> {
   const r = await names.read(name);
@@ -1396,6 +1404,7 @@ const ws: Workspace = new Workspace(doc, {
     modeTool[tab.mode] = editor.toolName;
     editor.cropping = null;
     (ws.pane ?? tab).view = { ...renderer.view };
+    (ws.pane ?? tab).fitted = editor.stillFitted;
     if (tab.deck) { tab.deck.onChange = () => {}; tab.deck.onSwitch = () => {}; tab.deck.onMotion = () => {}; }
   },
   enter: (tab, opened) => enterTab(tab, opened),
@@ -1524,7 +1533,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   // the slide list and notes take room from the drawing area
   resize();
   const viewOf = ws.pane ?? tab;
-  if (viewOf.view && (!opened || ws.pane)) renderer.view = { ...viewOf.view };
+  if (viewOf.view && (!opened || ws.pane) && !(viewOf.fitted && !ws.pane && !slideSplit)) renderer.view = { ...viewOf.view };
   else if (ws.pane || slideSplit) fitSplitDrawing();
   else editor.fit();
   renderer.repaintAll();
@@ -1919,6 +1928,7 @@ const TAB_ICONS: Record<Tab['mode'], [string, string]> = {
 
 function renderTabs(): void {
   refreshHistory();
+  fitRibbons();
   const items = ws.tabs.map((t) => {
     const el = document.createElement('div');
     el.className = `tab tab-${t.mode}${t === ws.active ? ' active' : ''}${t.dirty ? ' dirty' : ''}`;
@@ -3127,7 +3137,7 @@ const COMMANDS: Record<string, () => unknown> = {
   autosave: () => { finishTyping(); return keeper.toggleAutoSave(focusTab()); },
   'version-history': () => { finishTyping(); return keeper.historyCommand(focusTab()); },
   'recover-work': () => keeper.recoverCommand(),
-  'keep-options': () => keeper.optionsCommand(),
+  'keep-options': () => settingsWindow.open('autosave'),
   'save-workspace': () => saveWorkspace(false),
   'save-workspace-as': () => saveWorkspace(true),
   'open-workspace': () => openWorkspace(),
@@ -3170,7 +3180,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'delete-comment': () => { if (ws.active.mode !== 'slides') return false; slideCmts?.remove(); },
   'delete-all-comments': () => { if (ws.active.mode !== 'slides') return false; slideCmts?.removeAll(); },
   'show-comments': () => { if (ws.active.mode !== 'slides' || !slideCmts) return false; slideCmts.show(!slideCmts.shown); },
-  'drawing-style': () => drawingStyleDialog(),
+  'drawing-style': () => settingsWindow.open('style'),
   present: () => present(false),
   'present-current': () => present(true),
   'presenter-view': () => present(false, true),
@@ -3241,17 +3251,17 @@ const COMMANDS: Record<string, () => unknown> = {
     storeSettings();
     flash(guidesOn[m] ? 'Alignment guides on: moved things snap into line with structures, text and shapes (hold Alt to move freely).' : 'Alignment guides off.');
   },
-  'dark-colours': () => darkColours(),
+  'dark-colours': () => settingsWindow.open('dark'),
   'zoom-in': () => editor.zoomBy(1.25),
   'zoom-out': () => editor.zoomBy(0.8),
   'zoom-fit': () => editor.fit(),
   // 100%: a point on the page is a point on the screen (96 pixels to the inch)
   'zoom-actual': () => editor.zoomTo(96 / 72),
-  hotkeys: () => hotkeysDialog.open(),
-  'typing-spelling': () => typingDialog.open(),
-  'mode-colours': () => modeDialog.open(),
-  'edit-palettes': () => editPalettes(),
-  preferences: () => void openPreferences(),
+  hotkeys: () => settingsWindow.open('hotkeys'),
+  'typing-spelling': () => settingsWindow.open('typing'),
+  'mode-colours': () => settingsWindow.open('mode-colours'),
+  'edit-palettes': () => settingsWindow.open('palettes'),
+  preferences: () => settingsWindow.open('general'),
   'check-updates': () => void updates.check(),
   help: () => openHelp(),
   'user-guide': () => void guide.open(),
@@ -3275,7 +3285,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'toolbox-highlight': () => toolboxes.toggle('highlight'),
   'toolbox-custom': () => toolboxes.toggle('custom'),
   // the panel taken out as a toolbox folds up to its title bar; at the right it folds to a strip
-  'fold-side': () => toolboxes.setSideCollapsed(ws.active.mode, !sideIsFolded()),
+  'fold-side': () => foldSide(!sideIsFolded()),
   'customize-toolbox': () => openCustomToolbox(),
   'lock-toolboxes': () => { toolboxes.setLocked(!toolboxState.locked); flash(toolboxState.locked ? 'Toolboxes locked.' : 'Toolboxes unlocked: drag one by its title to an edge of the drawing to dock it, or anywhere else to float.', 6000); },
   'add-frame': () => editor.addFrame() || flash('Select what to frame: structures, text, arrows or shapes.'),
@@ -3359,7 +3369,7 @@ const COMMANDS: Record<string, () => unknown> = {
     animateDialog.open({ arrow });
   },
   'number-compounds': () => void numberCompounds(),
-  'scheme-settings': () => void schemeSettings(),
+  'scheme-settings': () => settingsWindow.open('schemes'),
   'attach-descriptors': () => void attachDescriptors(),
   'pubchem-lookup': () => void lookUpChosen(),
   'add-id-label': () => void addTiedText('label'),
@@ -4018,9 +4028,9 @@ function chooseMethylStyle(style: MethylStyle): void {
   flash(n ? `${n} terminal methyl${n > 1 ? 's' : ''} now written ${how}.` : `Show Terminal Methyls will write them as ${how}.`, 5000);
 }
 
-/** Ask before a command with nothing selected changes every structure on the page (Edit > Preferences). */
+/** Ask before a command with nothing selected changes every structure on the page (Edit > Settings). */
 let askWholeDrawing = true;
-/** Where linked text goes (Edit > Preferences). */
+/** Where linked text goes (Edit > Settings). */
 let linkSide: Settings['linkSide'] = 'keep';
 
 /**
@@ -4031,7 +4041,7 @@ async function toggleTerminalMethyls(): Promise<void> {
   const doc = editor.doc;
   if (!editor.sel.atoms.size && askWholeDrawing && doc.fragments().length > 1) {
     const r = await ask('Every structure on the page?', [
-      { name: 'again', label: 'Don\u2019t ask again (Edit > Preferences)', type: 'checkbox', value: 'false' },
+      { name: 'again', label: 'Don\u2019t ask again (Edit > Settings)', type: 'checkbox', value: 'false' },
     ], { ok: 'Change every structure', note: 'Nothing is selected, so this shows or hides the terminal methyls on every structure on the page. To change only some, cancel and select them first.' });
     if (!r) return;
     if (r.again === 'true') { askWholeDrawing = false; storeSettings(); }
@@ -4127,7 +4137,7 @@ async function openWorkspace(): Promise<void> {
   if (f && f.ref.kind === 'path') await ws.openWorkspace(new TextDecoder().decode(f.bytes), f.ref.path);
 }
 
-// Newer versions of the desktop app (File > Check for Updates…, Edit > Preferences)
+// Newer versions of the desktop app (File > Check for Updates…, Edit > Settings)
 let updateCheck = true;
 let skipVersion: string | null = null;
 const updates = new UpdateUI({
@@ -4155,46 +4165,69 @@ const feedback = new FeedbackDialog({
   }),
 });
 
-/** Edit > Preferences: drawing choices that are set once rather than per structure. */
-async function openPreferences(): Promise<void> {
-  const r = await ask('Preferences', [
-    { name: 'methyl', label: 'Terminal methyls written as', value: editor.options.methylStyle, options: [{ value: 'Me', label: 'Me' }, { value: 'CH3', label: 'CH3' }] },
-    { name: 'axial', label: 'Axial chirality written as', value: axialStyle.helicity ? 'PM' : 'RaSa', options: [{ value: 'RaSa', label: 'Ra / Sa' }, { value: 'PM', label: 'P / M (helicity)' }] },
-    { name: 'charges', label: 'Charges from the + and − keys', value: editor.options.circledCharges ? 'circled' : 'plain', options: [{ value: 'plain', label: 'Plain sign (N+)' }, { value: 'circled', label: 'In a circle (⊕, ⊖)' }] },
+/** Settings ▸ Drawing: how structures are written and drawn, set once rather than per structure. */
+async function drawingPreferences(): Promise<void> {
+  const r = await ask('Drawing', [
+    { name: 'methyl', label: 'Terminal methyls written as', value: editor.options.methylStyle, options: [{ value: 'Me', label: 'Me' }, { value: 'CH3', label: 'CH3' }],
+      help: 'Show Terminal Methyls writes them this way; methyls already written out in the selection (or the whole drawing, with nothing selected) change too.' },
+    { name: 'axial', label: 'Axial chirality written as', value: axialStyle.helicity ? 'PM' : 'RaSa', options: [{ value: 'RaSa', label: 'Ra / Sa' }, { value: 'PM', label: 'P / M (helicity)' }],
+      help: 'Labels on biaryls and allenes follow the choice at once. Ra is the same as M, and Sa as P.' },
+    { name: 'charges', label: 'Charges from the + and − keys', value: editor.options.circledCharges ? 'circled' : 'plain', options: [{ value: 'plain', label: 'Plain sign (N+)' }, { value: 'circled', label: 'In a circle (⊕, ⊖)' }],
+      help: 'Charges already drawn keep their look; the circle tools on the Object toolbox always draw a circled charge.' },
     { name: 'textAtom', label: 'An atom or group typed with the Text tool beside a bond end (Br, OMe) becomes that atom', type: 'checkbox', value: String(editor.options.textToAtom) },
-    { name: 'groupClick', label: 'Clicking something in a group selects', value: editor.options.groupClick, options: [{ value: 'group', label: 'The whole group' }, { value: 'item', label: 'Just that thing' }] },
-    { name: 'groupOutline', label: 'Outline the rest of a group when part of it is selected', type: 'checkbox', value: String(editor.options.groupOutline) },
-    { name: 'reroute', label: 'Mechanism arrows find their own way round again when a change leaves them running into a structure, a label or another arrow (not ones you bent by hand)', type: 'checkbox', value: String(editor.options.rerouteArrows) },
-    { name: 'supR', label: 'R groups numbered R1, R12… show the number raised (R¹, R¹²); longer labels (OR1, CO2R1) and labels from files are left as they are', type: 'checkbox', value: String(labelPrefs.superscriptR) },
-    { name: 'linkSide', label: 'Text linked to a structure goes', value: linkSide, options: [{ value: 'keep', label: 'Where it is' }, { value: 'below', label: 'Below' }, { value: 'above', label: 'Above' }, { value: 'left', label: 'Left' }, { value: 'right', label: 'Right' }] },
-    { name: 'ask', label: 'Ask before changing every structure on the page when nothing is selected', type: 'checkbox', value: String(askWholeDrawing) },
-    ...(canUpdate ? [{ name: 'updates', label: 'Check for a newer version when the app starts', type: 'checkbox' as const, value: String(updateCheck) }] : []),
-    { name: 'pubchem', label: 'Look up names the name reader can\'t read on PubChem (sends the name typed to PubChem, a free NIH database)', type: 'checkbox', value: String(pubchemNames) },
-    { name: 'reviewer', label: 'Your name on tracked changes in documents', value: reviewAuthor() },
-  ], { ok: 'Save', note: 'Charges already drawn keep their look; the circle tools on the Object toolbox always draw a circled charge. Show Terminal Methyls writes them this way; methyls already written out in the selection (or the whole drawing, with nothing selected) change too. Axial chirality labels (biaryls, allenes) follow the choice at once; Ra is the same as M, and Sa as P.' });
+    { name: 'supR', label: 'R groups numbered R1, R12… show the number raised (R¹, R¹²)', type: 'checkbox', value: String(labelPrefs.superscriptR),
+      help: 'Longer labels (OR1, CO2R1) and labels from files are left as they are.' },
+    { name: 'reroute', label: 'Mechanism arrows find their own way round again when a change leaves them running into a structure, a label or another arrow', type: 'checkbox', value: String(editor.options.rerouteArrows),
+      help: 'Arrows you bent by hand stay as they are.' },
+  ], { ok: 'Save' });
   if (!r) return;
-  askWholeDrawing = r.ask === 'true';
-  pubchemNames = r.pubchem === 'true';
-  setReviewAuthor(r.reviewer ?? '');
-  if (canUpdate) {
-    // turning the check back on also forgets a skipped version
-    if (r.updates === 'true' && !updateCheck) skipVersion = null;
-    updateCheck = r.updates === 'true';
-  }
   editor.options.circledCharges = r.charges === 'circled';
   editor.options.textToAtom = r.textAtom === 'true';
-  editor.options.groupClick = r.groupClick === 'item' ? 'item' : 'group';
-  editor.options.groupOutline = r.groupOutline === 'true';
   editor.options.rerouteArrows = r.reroute === 'true';
   if (labelPrefs.superscriptR !== (r.supR === 'true')) {
     labelPrefs.superscriptR = r.supR === 'true';
     doc.allDirty = true;
     editor.requestScene();
   }
-  linkSide = (['below', 'above', 'left', 'right'].includes(r.linkSide) ? r.linkSide : 'keep') as Settings['linkSide'];
   showHelicity(r.axial === 'PM');
   if (r.methyl !== editor.options.methylStyle) chooseMethylStyle(r.methyl as MethylStyle);
   else storeSettings();
+}
+
+/** Settings ▸ General: selecting, groups, linked text, and your name on tracked changes. */
+async function generalPreferences(): Promise<void> {
+  const r = await ask('General', [
+    { name: 'groupClick', label: 'Clicking something in a group selects', value: editor.options.groupClick, options: [{ value: 'group', label: 'The whole group' }, { value: 'item', label: 'Just that thing' }] },
+    { name: 'groupOutline', label: 'Outline the rest of a group when part of it is selected', type: 'checkbox', value: String(editor.options.groupOutline) },
+    { name: 'linkSide', label: 'Text linked to a structure goes', value: linkSide, options: [{ value: 'keep', label: 'Where it is' }, { value: 'below', label: 'Below' }, { value: 'above', label: 'Above' }, { value: 'left', label: 'Left' }, { value: 'right', label: 'Right' }] },
+    { name: 'ask', label: 'Ask before changing every structure on the page when nothing is selected', type: 'checkbox', value: String(askWholeDrawing) },
+    { name: 'reviewer', label: 'Your name on tracked changes in documents', value: reviewAuthor() },
+  ], { ok: 'Save' });
+  if (!r) return;
+  editor.options.groupClick = r.groupClick === 'item' ? 'item' : 'group';
+  editor.options.groupOutline = r.groupOutline === 'true';
+  linkSide = (['below', 'above', 'left', 'right'].includes(r.linkSide) ? r.linkSide : 'keep') as Settings['linkSide'];
+  askWholeDrawing = r.ask === 'true';
+  setReviewAuthor(r.reviewer ?? '');
+  storeSettings();
+}
+
+/** Settings ▸ Online: what the program asks the internet for. */
+async function onlinePreferences(): Promise<void> {
+  const r = await ask('Online', [
+    { name: 'pubchem', label: 'Look up names the name reader can\'t read on PubChem', type: 'checkbox', value: String(pubchemNames),
+      help: 'Sends the name typed to PubChem, a free NIH database. Names the program can read itself never leave this computer.' },
+    ...(canUpdate ? [{ name: 'updates', label: 'Check for a newer version when the app starts', type: 'checkbox' as const, value: String(updateCheck),
+      help: 'Asks GitHub for the latest release number; nothing about you or your files is sent.' }] : []),
+  ], { ok: 'Save' });
+  if (!r) return;
+  pubchemNames = r.pubchem === 'true';
+  if (canUpdate) {
+    // turning the check back on also forgets a skipped version
+    if (r.updates === 'true' && !updateCheck) skipVersion = null;
+    updateCheck = r.updates === 'true';
+  }
+  storeSettings();
 }
 
 let settingsLoaded = false;
@@ -5187,7 +5220,7 @@ stylePanel.tie = (ids) => tieCaptions(ids);
 
 /**
  * Tie captions (text boxes) to a structure: `to` (a selected structure's atoms), or else the one
- * nearest each. They stay where they are, or go to the side chosen in Edit > Preferences.
+ * nearest each. They stay where they are, or go to the side chosen in Edit > Settings.
  */
 function tieCaptions(ids: number[], to: Set<number> | null = null): void {
   const m = editor.measure();
@@ -5701,10 +5734,37 @@ function placeSidePanel(): void {
 }
 $('#side-fold').addEventListener('click', () => command('fold-side'));
 
-/** The side panel is folded away in the mode showing (each mode keeps its own choice). */
+/** Below this window width the side panel folds by itself, so the drawing keeps its room. */
+const NARROW_WINDOW = 1200;
+const narrowWindow = () => innerWidth < NARROW_WINDOW;
+/** The side panel opened by hand while the window is narrow (forgotten when it widens). */
+let narrowOpen = false;
+
+/** The side panel is folded away in the mode showing (each mode keeps its own choice), or the window is narrow. */
 function sideIsFolded(): boolean {
-  return sideFolded(toolboxState, ws.active.mode);
+  return sideFolded(toolboxState, ws.active.mode) || (narrowWindow() && !narrowOpen);
 }
+
+/** Fold or open the side panel. In a narrow window that lasts until it widens; otherwise it is kept for the mode. */
+function foldSide(fold: boolean): void {
+  if (narrowWindow()) {
+    narrowOpen = !fold;
+    if (!fold && sideFolded(toolboxState, ws.active.mode)) { toolboxes.setSideCollapsed(ws.active.mode, false); return; }
+    placeSidePanel();
+    tickToolboxes();
+    return;
+  }
+  toolboxes.setSideCollapsed(ws.active.mode, fold);
+}
+let wasNarrow = narrowWindow();
+addEventListener('resize', () => {
+  const now = narrowWindow();
+  if (now === wasNarrow) return;
+  wasNarrow = now;
+  if (!now) narrowOpen = false;
+  placeSidePanel();
+  tickToolboxes();
+});
 $('#btn-lock').addEventListener('click', () => command('lock-toolboxes'));
 
 function openCustomToolbox(): void {
@@ -5804,6 +5864,20 @@ function commandItems(): CommandItem[] {
 }
 const commandSearch = new CommandSearch(commandItems);
 const guide = new GuideWindow(openWebPage);
+watchRibbons();
+const settingsWindow = new SettingsWindow([
+  { id: 'general', title: 'General', words: 'groups selecting click outline linked text above below ask whole page tracked changes reviewer name', open: generalPreferences },
+  { id: 'drawing', title: 'Drawing', words: 'methyl me ch3 axial chirality ra sa helicity charges circled text tool atom r groups superscript mechanism arrows reroute', open: drawingPreferences },
+  { id: 'style', title: 'Drawing Style', words: 'bond length line width font journal acs rsc wiley elsevier thieme hash spacing margin', open: drawingStyleDialog },
+  { id: 'hotkeys', title: 'Hotkeys', words: 'keys keyboard shortcuts import export reset', open: () => hotkeysDialog.open() },
+  { id: 'typing', title: 'Text and Spelling', words: 'typing spelling dictionary autocorrect replacements chemistry formulas subscripts', open: () => typingDialog.open() },
+  { id: 'palettes', title: 'Colour Palettes', words: 'colours colors palette rows', open: () => editPalettes() },
+  { id: 'mode-colours', title: 'Mode Colours', words: 'tab colours accent window drawing slides sheet document design appearance', open: () => modeDialog.open() },
+  { id: 'dark', title: 'Dark Page', words: 'dark mode night paper ink graphite slate appearance colours', open: darkColours },
+  { id: 'schemes', title: 'Schemes', words: 'scheme arrow gap plus text size reagents conditions boxes', open: schemeSettings },
+  { id: 'autosave', title: 'AutoSave and Recovery', words: 'autosave recovery versions backup copies shared folders onedrive', open: () => keeper.optionsCommand() },
+  { id: 'online', title: 'Online', words: 'pubchem internet names lookup updates check version privacy', open: onlinePreferences },
+]);
 $('#btn-search').addEventListener('click', () => commandSearch.open());
 placeSidePanel();
 // your palettes show in the Colours toolbox as soon as they change

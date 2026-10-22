@@ -2,6 +2,7 @@
 // change the replacements made as you type, and edit the words added to the spelling check.
 // Everything takes effect at once and is saved in the settings file.
 
+import { showDialog } from './dialog-host';
 import { DEFAULT_REPLACEMENTS } from '../text/chemtext';
 
 export interface TypingDialogOptions {
@@ -58,7 +59,7 @@ export class TypingDialog {
     this.fill(v.replacements);
     this.words.value = v.dictionary.join('\n');
     void this.opts.location().then((w) => { this.d.querySelector('.ty-where')!.textContent = w; });
-    this.d.showModal();
+    showDialog(this.d);
   }
 
   private fill(list: readonly [string, string][]): void {

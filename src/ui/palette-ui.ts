@@ -2,6 +2,7 @@
 // opens the same small menu: the standard colours, your palette rows, and "More colours…", so
 // the rows you make in a drawing are there in slides, sheets, documents and designs as well.
 
+import { showDialog } from './dialog-host';
 import { PRESET_PALETTES, cleanColour, freshName, withColour, type Palette, PALETTES_MAX } from '../palettes';
 import { STANDARD_COLOURS } from '../colours';
 
@@ -169,7 +170,7 @@ export function editPalettes(): void {
     document.body.append(dialog);
   }
   fillDialog(dialog);
-  if (!dialog.open) dialog.showModal();
+  showDialog(dialog);
 }
 
 function fillDialog(d: HTMLDialogElement): void {

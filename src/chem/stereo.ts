@@ -216,7 +216,7 @@ function readTags(RDKit: any, molblock: string, skip: readonly number[]): Stereo
 
 // ------------------------------------------------------------------ what a label says
 
-/** How axial chirality is written: Ra/Sa, or as helicity P/M (Edit > Preferences). */
+/** How axial chirality is written: Ra/Sa, or as helicity P/M (Edit > Settings). */
 export const axialStyle = { helicity: false };
 
 /** A worked-out descriptor as shown: Ra and Sa become M and P when helicity is chosen (Ra = M, Sa = P). */
