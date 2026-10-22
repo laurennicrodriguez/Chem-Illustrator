@@ -8,13 +8,14 @@ import { Renderer, withMeasure } from '../render/renderer';
 import { imageFor } from '../render/images';
 import { VectorContext, VecPath, Item } from '../render/vector';
 import { arialWidth } from '../text-metrics';
-import { Master, SlideSize, LayoutId, decorFrames, showsNumber, slideColours, decorShapes, type DecorShape } from './deck';
+import { Master, SlideSize, LayoutId, decorFrames, showsNumber, slideColours, slideBackground, decorShapes, type DecorShape } from './deck';
+import { paintBackground, type Background } from './background';
 
 /** Grey around the slide while editing, as in PowerPoint. */
 export const SURROUND = '#d5d8de';
 
-/** What a slide's page needs from its deck. */
-export interface SlidePage { size: SlideSize; master: Master; layout: LayoutId; index: number }
+/** What a slide's page needs from its deck: with the slide's own background, and whether the master's shapes and logo are hidden on it. */
+export interface SlidePage { size: SlideSize; master: Master; layout: LayoutId; index: number; own?: Background; hideGraphics?: boolean }
 
 // Drawing whole slides never draws on screen through the renderer's own canvases.
 const noCanvas = { getContext: () => null } as unknown as HTMLCanvasElement;
@@ -34,11 +35,10 @@ export function drawSlidePage(ctx: CanvasRenderingContext2D, p: SlidePage, surro
     ctx.fillRect(size.w, 0, far, size.h); // right
   }
   const colours = slideColours(m, p.layout);
-  ctx.fillStyle = colours.background;
-  ctx.fillRect(0, 0, size.w, size.h);
-  for (const sh of decorShapes(size, m, p.layout)) drawDecor(ctx, sh);
+  paintBackground(ctx, slideBackground(m, p.layout, p.own), size.w, size.h);
+  if (!p.hideGraphics) for (const sh of decorShapes(size, m, p.layout)) drawDecor(ctx, sh);
   const d = decorFrames(size, m);
-  if (m.logo && d.logo) {
+  if (m.logo && d.logo && !p.hideGraphics) {
     const box = { x1: d.logo.x1, y1: d.logo.y1, x2: d.logo.x2, y2: d.logo.y2 };
     if ('picture' in ctx) (ctx as unknown as { picture(s: object): void }).picture({ src: m.logo.src, px: m.logo.px, ...box });
     else {

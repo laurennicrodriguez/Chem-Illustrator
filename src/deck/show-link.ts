@@ -7,12 +7,13 @@ import { isTauri } from '@tauri-apps/api/core';
 import { Doc, type Contents } from '../model';
 import { Deck, type LayoutId, type Master, type SlideSize } from './deck';
 import type { Anim, Transition } from './animation';
+import type { Background } from './background';
 
 /** Everything the audience window needs to show the slides. */
 export interface DeckData {
   size: SlideSize;
   master: Master;
-  slides: { layout: LayoutId; contents: Contents; transition?: Transition; anims?: Anim[] }[];
+  slides: { layout: LayoutId; contents: Contents; transition?: Transition; anims?: Anim[]; background?: Background; hideGraphics?: boolean }[];
 }
 
 export type ShowMessage =
@@ -34,14 +35,14 @@ export function deckData(deck: Deck): DeckData {
   return {
     size: { ...deck.size },
     master: deck.master,
-    slides: deck.slides.map((s, i) => ({ layout: s.layout, contents: deck.docOf(i).contents(), transition: s.transition, anims: s.anims })),
+    slides: deck.slides.map((s, i) => ({ layout: s.layout, contents: deck.docOf(i).contents(), transition: s.transition, anims: s.anims, background: s.background, hideGraphics: s.hideGraphics })),
   };
 }
 
 /** A deck to play, made from the data sent. */
 export function deckFromData(d: DeckData): Deck {
   const deck = new Deck(new Doc());
-  deck.load(d.slides.map((s) => deck.makeSlide(s.layout, s.contents, '', { transition: s.transition, anims: s.anims })), d.size, d.master);
+  deck.load(d.slides.map((s) => deck.makeSlide(s.layout, s.contents, '', { transition: s.transition, anims: s.anims, background: s.background, hideGraphics: s.hideGraphics })), d.size, d.master);
   return deck;
 }
 

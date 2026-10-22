@@ -68,6 +68,8 @@ export function applyTemplate(m: Master, t: SlideTemplate): Master {
     accent: t.accent, accent2: t.accent2, decor: t.decor,
     titleBold: t.titleBold ?? true,
     titleSlide: t.titleSlide ? { ...t.titleSlide } : undefined,
+    // a template's background is a colour: it takes the place of a picture or gradient on every slide
+    fill: undefined,
     template: t.name,
   };
 }

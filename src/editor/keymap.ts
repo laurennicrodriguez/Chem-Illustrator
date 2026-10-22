@@ -178,7 +178,7 @@ export const COMMAND_NAMES: Record<string, string> = {
   'new-slides': 'New slides', 'close-tab': 'Close the file', 'next-tab': 'Next file', 'prev-tab': 'Previous file',
   'export-pdf': 'Export PDF…', 'insert-picture': 'Insert a picture…', crop: 'Crop the selected picture',
   'new-slide': 'New slide', 'duplicate-slide': 'Duplicate slide', 'delete-slide': 'Delete slide',
-  'next-slide': 'Next slide', 'prev-slide': 'Previous slide', 'slide-master': 'Slide Master…',
+  'next-slide': 'Next slide', 'prev-slide': 'Previous slide', 'slide-master': 'Slide Master…', 'format-background': 'Format Background… (colour, gradient, picture or pattern)',
   present: 'Present from the first slide', 'present-current': 'Present from this slide', 'presenter-view': 'Presenter View (notes, next slide and timer)',
   'dev-tools': 'Developer tools on or off (speed panel, stress test)',
   // sheets

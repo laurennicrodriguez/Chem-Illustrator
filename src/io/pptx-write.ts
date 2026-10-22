@@ -32,8 +32,10 @@ import { patternClear, patternInk, shadowLook } from '../render/fills';
 import { FADE, tint } from '../colours';
 import { transitionXml, timingXml, highlightParts, partHolds, type Transition, type Anim } from '../deck/animation';
 import {
-  Master, SlideSize, LayoutId, LAYOUTS, layoutFrames, decorFrames, showsNumber, textStyles, isEmptyText, slideColours, decorShapes, type DecorShape,
+  Master, SlideSize, LayoutId, LAYOUTS, layoutFrames, decorFrames, showsNumber, textStyles, isEmptyText, slideColours, slideBackground, decorShapes, type DecorShape,
 } from '../deck/deck';
+import { sameBackground, type Background } from '../deck/background';
+import { bgXml, type BlipIds } from './pptx-background';
 
 /** Tag names (PowerPoint keeps tags when it saves). */
 export const TAG = {
@@ -85,7 +87,7 @@ export interface PptxOptions {
 export interface DeckData {
   size: SlideSize;
   master: Master;
-  slides: { layout: LayoutId; doc: Doc; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[] }[];
+  slides: { layout: LayoutId; doc: Doc; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean }[];
   /** A design (Design mode): marked so it opens in Design mode again. */
   design?: boolean;
 }
@@ -382,6 +384,24 @@ class Writer {
     return this.pkg.relate(from, REL.image, fromPpt(from, path));
   }
 
+  /** A background as PowerPoint's own (p:bg), its picture (if any) in the package. */
+  private async background(from: string, bg: Background): Promise<string> {
+    let blip: BlipIds | null = null;
+    if (bg.kind === 'picture') {
+      try {
+        const { mime, bytes } = fromDataUrl(bg.src);
+        const ext = MIME_EXT[mime];
+        if (ext === 'svg') {
+          // PowerPoint shows the SVG; older programs the PNG beside it
+          const k = Math.min(4, 3000 / Math.max(1, bg.px.w, bg.px.h));
+          const png = await this.opts.svgToPng(new TextDecoder().decode(bytes), Math.max(1, Math.round(bg.px.w * k)), Math.max(1, Math.round(bg.px.h * k)));
+          blip = { id: this.addMedia(from, png, 'png'), svg: this.addMedia(from, bytes, 'svg') };
+        } else if (ext) blip = { id: this.addMedia(from, bytes, ext), svg: null };
+      } catch { /* a picture that can't be read: a white background */ }
+    }
+    return bgXml(bg, this.deck.size.w, this.deck.size.h, blip);
+  }
+
   /** A set of tags in ppt/tags; returns its relationship id from `from`. */
   private addTags(from: string, tags: Record<string, string>): string {
     const path = `ppt/tags/tag${++this.tags}.xml`;
@@ -407,12 +427,12 @@ class Writer {
     pkg.relate('ppt/slideMasters/slideMaster1.xml', REL.theme, '../theme/theme1.xml');
     // layouts first, so the master can list them
     const layoutRels: string[] = [];
-    LAYOUTS.forEach((l, i) => {
+    for (const [i, l] of LAYOUTS.entries()) {
       const path = `ppt/slideLayouts/slideLayout${i + 1}.xml`;
-      pkg.add(path, this.layout(l.id, l.name), CT.layout);
+      pkg.add(path, await this.layout(path, l.id, l.name), CT.layout);
       pkg.relate(path, REL.slideMaster, '../slideMasters/slideMaster1.xml');
       layoutRels.push(pkg.relate('ppt/slideMasters/slideMaster1.xml', REL.slideLayout, `../slideLayouts/slideLayout${i + 1}.xml`));
-    });
+    }
     pkg.add('ppt/slideMasters/slideMaster1.xml', await this.master(layoutRels), CT.master);
 
     let notesMasterRel = '';
@@ -506,7 +526,8 @@ class Writer {
       footerShape(5, 'Slide Number Placeholder 4', '<p:ph type="sldNum" sz="quarter" idx="4"/>', d.number, m, '‹#›'),
       logo,
     ].join('');
-    return `${HEAD}<p:sldMaster ${XMLNS}><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="${hex6(m.background)}"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>` +
+    const bg = await this.background(P, m.fill ?? { kind: 'solid', color: m.background });
+    return `${HEAD}<p:sldMaster ${XMLNS}><p:cSld>${bg}` +
       `<p:spTree>${GROUP}${tree}</p:spTree></p:cSld>` +
       `<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>` +
       `<p:sldLayoutIdLst>${layoutRels.map((r, i) => `<p:sldLayoutId id="${2147483649 + i}" r:id="${r}"/>`).join('')}</p:sldLayoutIdLst>` +
@@ -514,7 +535,7 @@ class Writer {
       `</p:sldMaster>`;
   }
 
-  private layout(id: LayoutId, name: string): string {
+  private async layout(path: string, id: LayoutId, name: string): Promise<string> {
     const size = this.deck.size;
     const m = this.deck.master;
     const frames = layoutFrames(id, size);
@@ -539,7 +560,9 @@ class Writer {
     const fm = { ...m, footerColor: c.footerColor };
     shapes.push(footerShape(frames.length + 2, `Footer Placeholder ${frames.length + 1}`, '<p:ph type="ftr" sz="quarter" idx="11"/>', d.footer, fm, ''));
     shapes.push(footerShape(frames.length + 3, `Slide Number Placeholder ${frames.length + 2}`, '<p:ph type="sldNum" sz="quarter" idx="12"/>', d.number, fm, '‹#›'));
-    const bg = c.background !== m.background ? `<p:bg><p:bgPr><a:solidFill><a:srgbClr val="${hex6(c.background)}"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>` : '';
+    // a title slide's own background goes on its layout
+    const ownBg = slideBackground(m, id), base: Background = m.fill ?? { kind: 'solid', color: m.background };
+    const bg = id === 'title' && m.titleSlide && !sameBackground(ownBg, base) ? await this.background(path, ownBg) : '';
     return `${HEAD}<p:sldLayout ${XMLNS} type="${LAYOUT_TYPE[id]}" preserve="1"><p:cSld name="${xml(name)}">${bg}<p:spTree>${GROUP}${shapes.join('')}</p:spTree></p:cSld>` +
       `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>`;
   }
@@ -634,7 +657,8 @@ class Writer {
     if (showsNumber(m, s.layout)) out.push(footerShape(id++, 'Slide Number', '<p:ph type="sldNum" sz="quarter" idx="12"/>', d.number, m, String(index + 1), true));
     if (m.footer.trim()) out.push(footerShape(id++, 'Footer', '<p:ph type="ftr" sz="quarter" idx="11"/>', d.footer, m, m.footer, true));
     const tags = this.addTags(path, { [TAG.layout]: s.layout });
-    return `${HEAD}<p:sld ${XMLNS}><p:cSld><p:spTree>${GROUP}${out.join('')}</p:spTree><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:cSld>` +
+    const bg = s.background ? await this.background(path, s.background) : '';
+    return `${HEAD}<p:sld ${XMLNS}${s.hideGraphics ? ' showMasterSp="0"' : ''}><p:cSld>${bg}<p:spTree>${GROUP}${out.join('')}</p:spTree><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:cSld>` +
       `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(s.transition)}${timingXml(s.anims ?? [], (a) => spids.get(`${a.target.kind} ${a.target.bond ? 'b' : ''}${a.target.id}`) ?? []) || videoTimingXml(videos)}</p:sld>`;
   }
 
@@ -1083,8 +1107,15 @@ function theme(m: Master, name: string): string {
 
 /** Master settings PowerPoint has no place for, kept in a tag (the logo is in the master itself). */
 export function masterSettings(m: Master): Partial<Master> {
-  const { logo: _logo, ...rest } = m;
+  // (backgrounds that are more than a colour are PowerPoint's own, in the master and title layout)
+  const { logo: _logo, fill: _fill, ...rest } = m;
   void _logo;
+  void _fill;
+  if (rest.titleSlide?.fill) {
+    const { fill: _f, ...ts } = rest.titleSlide;
+    void _f;
+    rest.titleSlide = ts;
+  }
   return rest;
 }
 
