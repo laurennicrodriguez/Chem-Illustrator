@@ -8,6 +8,7 @@ import { paletteRows } from './palette-ui';
 import { SheetView, popupMenu, selectionName } from './sheet-view';
 import { Workbook, Sheet, Structure, CellStyle, CellBlock, Cell, Condition, CompareOp, makeStructure, growToMerges } from '../sheet/workbook';
 import { Range, MAX_ROWS, MAX_COLS, colName, colIndex, cellName, parseRange, keyOf, rowOf, colOf, inRange } from '../sheet/refs';
+import { showsChem } from '../sheet/cell-text';
 import { fillReagentTable } from '../sheet/reagents';
 import { shiftFormula } from '../sheet/formula';
 import { PROPERTIES, MolProps, propertyValue } from '../sheet/properties';
@@ -132,6 +133,7 @@ export class SheetMode {
       drawn: () => this.notes.layout(),
       dropDown: (r, c, at) => this.validation.dropDown(r, c, at),
       invalid: (rule, text) => this.validation.alert(rule, text),
+      typed: (r, c, text) => void this.typedStructure(r, c, text),
     });
     chem.onAnswers = () => {
       const wb = this.book;
@@ -456,7 +458,8 @@ export class SheetMode {
         break;
       }
       case 'wrap': this.style('Wrap text', { wrap: !a.wrap || undefined }); break;
-      case 'format-chem': this.style('Formula style', { chem: !a.chem || undefined }); break;
+      // on (as text is anyway, where it has formulas) or off for these cells
+      case 'format-chem': this.style('Formula style', { chem: this.chemShown() ? false : true }); break;
       case 'merge-cells': this.mergeCells(); break;
       case 'format-general': this.style('Number format', { numFmt: undefined }); break;
       case 'format-number': this.style('Number format', { numFmt: FORMATS.number }); break;
@@ -1056,6 +1059,24 @@ export class SheetMode {
     if (res.notes.length) this.host.flash('Note from the name reader: ' + res.notes.join(' '), 9000);
   }
 
+  /**
+   * A SMILES or name typed into a column headed "Structure" (a reagent table's) is drawn there,
+   * in place of the text. Text that can't be read stays as it was typed.
+   */
+  private async typedStructure(r: number, c: number, text: string): Promise<void> {
+    const s = this.view.sheet, wb = this.book;
+    if (!s || !wb || r === 0 || /\s/.test(text) && !/[a-z]{3}/i.test(text)) return;
+    const head = s.values.get(keyOf(0, c));
+    if (typeof head !== 'string' || !/^structures?$/i.test(head.trim())) return;
+    const res = await this.host.toStructure(text, wb.drawingStyle);
+    // still the same text in the same cell (nothing typed over it meanwhile)
+    if ('error' in res || this.book !== wb || s.values.get(keyOf(r, c)) !== text || s.cell(r, c)?.structure) return;
+    // not through edit(): that would end typing begun in the next cell meanwhile
+    wb.edit('Structure from typing', () => s.setStructure(r, c, res.contents), this.view.place());
+    this.view.refresh();
+    this.host.changed();
+  }
+
   /** Edit > Paste SMILES: a SMILES string, molfile or name drawn as a structure in the active cell. */
   async structureFromText(text: string): Promise<void> {
     const v = this.view;
@@ -1249,6 +1270,14 @@ export class SheetMode {
     }, v.place());
     v.goSheet(wb.sheets.indexOf(s));
     this.host.flash('Reagent table: type the limiting reagent\'s mmol in E2, then each reagent\'s structure (draw it, or type SMILES) and equiv. MW, mmol, mass and volume work themselves out; type over any of them to replace it.', 10000);
+  }
+
+  /** Is the active cell shown as chemistry (by its look, or because its text has a formula)? */
+  private chemShown(): boolean {
+    const s = this.view.sheet;
+    if (!s) return false;
+    const { r, c } = this.view.sel.active;
+    return showsChem(s.styleAt(r, c)?.chem, s.values.get(keyOf(r, c)));
   }
 
   /** Put back the calculated values where they were typed over. */
@@ -1675,7 +1704,7 @@ export class SheetMode {
     press('align-center', st.align === 'center');
     press('align-right', st.align === 'right');
     press('wrap', !!st.wrap);
-    press('format-chem', !!st.chem);
+    press('format-chem', this.chemShown());
     press('filter', !!s.filter);
     press('freeze-header', s.frozen.rows > 0);
     press('merge-cells', !!s.mergeAt(r, c));

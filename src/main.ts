@@ -27,14 +27,14 @@ import { analysisHtml, electronsHtml, analysisRuns, withRepeats, polymerHtml, de
 import { attachedAtoms, attachWhereItIs, defaultGap, nearestStructure, placeAttached, structureSig } from './editor/attached';
 import { repeatGroups, lipDirection } from './chem/polymer';
 import { rGroupsOf, substituted, rowNumbers, parseRows, rGroupCells, type RowMass } from './chem/rgroup';
-import type { Vec } from './geom';
+import type { Rect, Vec } from './geom';
 import { isCurved } from './objects';
 import { captionPlaces, fragmentRuns } from './chem/fragments';
 import { toMolfile, addMolfile } from './chem/molfile';
 import { bestFit, fitMove, fitMatters } from './chem/orient';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, fitPasted, Pasted,
+import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, fitPasted, typicalBondLength, Pasted,
   nativeFirst, writeNativeFormats, looksLikeCdxml, cfHtml, fromCfHtml, CELLS_FORMAT, OWN_FORMAT, CDX_FORMAT } from './io/clipboard';
 import { cdxToCdxml } from './io/cdx';
 import { writeCdxml } from './io/cdxml-write';
@@ -45,7 +45,7 @@ import { pickReuseSlides } from './ui/reuse-slides';
 import { writeTiff } from './render/tiff';
 import { itemsToEps } from './render/eps';
 import { Workspace, Tab } from './workspace';
-import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize, slideBackground, slideColours, type SlideSource } from './deck/deck';
+import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize, slideBackground, slideColours, type SlideSource, contentArea } from './deck/deck';
 import { shapeMathPicture, shapeMathScale, shapeMathSize } from './deck/equation';
 import { askEquation } from './ui/equation-dialog';
 import { solid } from './deck/background';
@@ -200,6 +200,9 @@ let splitWidth = 0.38;
 /** Your own drawing styles, and the style each kind of new tab starts with (settings.json). */
 let ownStyles: DocStyle[] = [];
 let modeStyles: Partial<Record<StyleMode, string>> = {};
+/** The style each mode's new tabs take when you haven't chosen one: slides are seen from the back of a room, so their structures are twice ACS size. */
+const MODE_STYLE_DEFAULTS: Partial<Record<StyleMode, string>> = { slides: 'Slides (ACS 1996 × 2)' };
+const modeStyleFor = (mode: StyleMode): string | undefined => modeStyles[mode] ?? MODE_STYLE_DEFAULTS[mode];
 /** View > Dark Page: on or off, which palette, and your own palettes. */
 const dark = { on: false, palette: 'Graphite', own: [] as DarkPalette[] };
 /** Beside slides: the deck whose drawing is being worked on (the drawing's tab shows; the slide is a picture). */
@@ -561,6 +564,12 @@ async function pasteFrom(read: () => Pasted | Promise<Pasted>): Promise<void> {
     // on slides, structures can take the slide master's bond length; elsewhere they keep their size
     const deck = deckNow();
     fitPasted(got.doc, doc.style, deck?.master.fitPasted ? deck.master.drawing.bondLength : undefined);
+    // a scheme too big for the slide's content area is made smaller to fit it, below the title
+    const area = slideContentArea(), b = got.doc.bounds(), L = typicalBondLength(got.doc);
+    if (area && b && L) {
+      const k = Math.min(1, (0.95 * (area.x2 - area.x1)) / Math.max(1, b.x2 - b.x1), (0.95 * (area.y2 - area.y1)) / Math.max(1, b.y2 - b.y1));
+      if (k < 0.999) fitPasted(got.doc, doc.style, L * k);
+    }
     editor.sel = insertDrawing(doc, got.doc, pasteCentre());
     editor.changed();
   } else if (got.kind === 'text') await pasteChemistry(got.text);
@@ -608,10 +617,16 @@ async function insertTable(): Promise<void> {
   editor.editTable(id, { r: 0, c: 0 });
 }
 
-/** Where pasted things go: the middle of the slide in Slides mode, else the middle of the window. */
-function pasteCentre(): { x: number; y: number } {
+/** The part of the slide showing that pasted things go in (below the title), in Slides mode. */
+function slideContentArea(): Rect | null {
   const deck = deckNow();
-  return deck ? { x: deck.size.w / 2, y: deck.size.h / 2 } : renderer.toDoc(renderer.width / 2, renderer.height / 2);
+  return deck ? contentArea(deck.current?.layout ?? 'blank', deck.size) : null;
+}
+
+/** Where pasted things go: the middle of the slide's content area in Slides mode, else the middle of the window. */
+function pasteCentre(): { x: number; y: number } {
+  const a = slideContentArea();
+  return a ? { x: (a.x1 + a.x2) / 2, y: (a.y1 + a.y2) / 2 } : renderer.toDoc(renderer.width / 2, renderer.height / 2);
 }
 
 /** Paste a SMILES string or a molfile as a structure. */
@@ -1465,7 +1480,7 @@ const ws: Workspace = new Workspace(doc, {
     read: (bytes) => readDocx(bytes, docRead),
     write: (d) => writeDocx(d, docFiles),
   },
-  newStyle: (mode) => { const n = modeStyles[mode]; return n ? styleNamed(n, ownStyles) ?? null : null; },
+  newStyle: (mode) => { const n = modeStyleFor(mode); return n ? styleNamed(n, ownStyles) ?? null : null; },
   newPage: () => (defaultPage ? { ...defaultPage } : null),
   newMaster: (m) => { const t = SLIDE_TEMPLATES.find((x) => x.id === slideTemplate); return t && t.id !== 'plain' ? applyTemplate(m, t) : null; },
   beforeWrite: (tab, ref, name, how) => keeper.beforeWrite(tab, ref, name, how),
@@ -2395,12 +2410,16 @@ async function drawingStyleDialog(): Promise<void> {
     : book ? false : doc.atoms.size > 0 || doc.captions.size > 0;
   const got = await editDrawingStyle({
     current, own: ownStyles, kindPlural: STYLE_KINDS[mode].plural, where: STYLE_KINDS[mode].where,
-    isDefault: modeStyles[mode] !== undefined && modeStyles[mode] === current.name, hasStructures,
+    isDefault: modeStyleFor(mode) === current.name, hasStructures,
   });
   if (!got || ws.active !== tab) return;
   ownStyles = got.own;
   if (got.forNew) modeStyles[mode] = got.style.name;
-  else if (modeStyles[mode] === current.name || modeStyles[mode] === got.style.name) delete modeStyles[mode];
+  else if (modeStyleFor(mode) === current.name || modeStyleFor(mode) === got.style.name) {
+    // no longer the default for new tabs: back to the standard one (or, where that is this style, plain ACS)
+    delete modeStyles[mode];
+    if (modeStyleFor(mode) === got.style.name) modeStyles[mode] = 'ACS Document 1996';
+  }
   if (modeStyles[mode] && !styleNamed(modeStyles[mode]!, ownStyles)) {
     // a default that isn't a built-in style is kept as one of your own, so new tabs can find it
     ownStyles = [...ownStyles, { ...got.style }];

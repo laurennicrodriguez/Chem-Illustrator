@@ -22,7 +22,7 @@ import { FUNCTION_NAMES } from '../sheet/evaluate';
 import { readTyped, isError, CellError, Value, EXCEL_ERRORS } from '../sheet/values';
 import { PROPERTIES } from '../sheet/properties';
 import { ISOTOPE_FUNCTIONS } from '../sheet/isotopes';
-import { chemPieces } from '../sheet/cell-text';
+import { chemPieces, showsChem } from '../sheet/cell-text';
 import { DEFAULT_COL_W, DEFAULT_ROW_H, MAX_AUTO_ROW, structureHeight } from '../sheet/layout';
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
@@ -387,7 +387,7 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
         const style = s.styleAt(r, c);
         const ref = cellName(r, c);
         const own = cell?.style;
-        const chem = !!style?.chem;
+        const chem = showsChem(style?.chem, v);
         let formula: string | null = null;
         let wrote: Wrote = null;
         // what only this program reads, kept for the cell

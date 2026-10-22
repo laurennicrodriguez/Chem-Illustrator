@@ -8,7 +8,8 @@
 import type { Sheet } from './workbook';
 
 export const REAGENT_HEADS = ['Reagent', 'Structure', 'MW (g/mol)', 'equiv', 'mmol', 'mass (mg)', 'density (g/mL)', 'conc. (M)', 'volume (µL)'];
-const WIDTHS = [140, 160, 80, 60, 70, 80, 104, 70, 84];
+// wide enough for each heading in the sheet's bold 11 pt (MW (g/mol), density (g/mL))
+const WIDTHS = [140, 160, 96, 60, 70, 88, 112, 76, 96];
 
 /** Lay out a reagent table on an empty sheet, with the limiting reagent (1 equiv, 1 mmol) in row 2. */
 export function fillReagentTable(sh: Sheet): void {

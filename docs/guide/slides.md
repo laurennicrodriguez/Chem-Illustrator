@@ -102,8 +102,8 @@ The small bar that appears above text while you type has the same buttons, plus 
 
 Every drawing tool in the toolbox works on a slide: draw structures, use the ChemDraw-style hotkeys, add reaction arrows, run Clean Up, and see R/S labels and warnings as you would in a drawing. You can also:
 
-- copy a scheme from a drawing tab (or from ChemDraw, in the Windows app) and paste it onto a slide, or the other way round;
-- choose how structures look on every slide with **Design** tab ▸ **Drawing Style…** (a journal's style, or your own);
+- copy a scheme from a drawing tab (or from ChemDraw, in the Windows app) and paste it onto a slide, or the other way round. It lands in the middle of the space below the title, and a scheme too wide or tall for that space is made smaller to fit;
+- choose how structures look on every slide with **Design** tab ▸ **Drawing Style…** (a journal's style, or your own). New decks start in **Slides (ACS 1996 × 2)**, the ACS style at twice the size so structures read from the back of a room. To start new decks in another style, pick it in **Drawing Style…** and tick **Use this style for new slide decks**;
 - click **Home** tab ▸ **Lock Structures** so clicks pass through structures, which makes text and pictures near them easier to pick. Click it again to edit structures.
 
 To put a drawing beside your slides while you work, see Split View in [Files and sharing](files-and-sharing.md).
