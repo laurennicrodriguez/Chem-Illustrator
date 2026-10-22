@@ -24,6 +24,8 @@ export interface TableTag {
   spans?: [number, number, number][];
   /** Cells with their own alignment: row, column and alignment. */
   cellAlign?: [number, number, string][];
+  /** Room kept for structures in cells: row, column, width and height. */
+  figs?: [number, number, number, number][];
 }
 
 export interface Borders { left: number; top: number; bottom: number; right: number }
@@ -108,6 +110,9 @@ export function applyTableTag(t: TableData, tag: TableTag | null, fromBorders: {
   }
   for (const [r, c, a] of tag.cellAlign ?? []) {
     if (rows[r]?.[c] && (a === 'left' || a === 'center' || a === 'right' || a === 'justify')) rows[r][c] = { ...rows[r][c], align: a };
+  }
+  for (const [r, c, w, h] of tag.figs ?? []) {
+    if (rows[r]?.[c] && w > 0 && h > 0) rows[r][c] = { ...rows[r][c], fig: { w, h } };
   }
   out.rows = rows;
   return out;
