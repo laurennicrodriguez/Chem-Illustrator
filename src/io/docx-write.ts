@@ -12,7 +12,9 @@
 // Footnotes and endnotes are Word's own (footnotes.xml and endnotes.xml), and a table of figures
 // is Word's TOC field for a caption label (\c "Figure").
 
-import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
+import type { CellBorders, Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
+import { DEFAULT_MARGINS, builtInStyle } from '../document/table-styles';
+import { bordersXml, lookXml as tableLookXml, marginsXml, tableStyleXml } from './docx-table-styles';
 import type { DocStyle } from '../style';
 import * as rt from '../richtext';
 import { Package, REL, NS, xml, hex6, emu, MediaFiles, structureAltText } from './ooxml';
@@ -20,7 +22,7 @@ import { facesToEmbed, newGuid, obfuscate, type FontSource } from './font-embed'
 import { fromDataUrl } from '../render/images';
 import { BULLETS, fitParas, listInfo, paraCount, schemeOf, splitParagraphs } from '../text/paragraphs';
 import { BOX_PAD, COL_GAP, COMPOUND, END_FORMAT, FLOAT_GAP, FOOT_FORMAT, columnsOf, OBJECT_CHAR, SHADOWS, charStylesOf, watermarkPlace, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, pruneObjects, styleOf, runStyleOf, type CharStyle, type DocObject, type DocText, type FigureLook, type HeaderFooter, type NamedStyle, type PageBorder, type PageSetup, type Watermark } from '../document/document';
-import { ACS_LINE, CELL_PAD, GRID_LINE, bibHang, docCellAlign, shownSize } from '../document/doc-layout';
+import { ACS_LINE, GRID_LINE, bibHang, docCellAlign, shownSize } from '../document/doc-layout';
 import { sectionsOf, type Section } from '../document/sections';
 import { bibliography, piecesText, type Reference } from '../document/references';
 import { preferredStyle } from '../document/cite-styles';
@@ -869,11 +871,12 @@ class DocxWriter {
       : tab.lines === 'acs' ? `<w:top ${rule}/><w:left ${none}/><w:bottom ${rule}/><w:right ${none}/><w:insideH ${none}/><w:insideV ${none}/>`
         : `<w:top ${none}/><w:left ${none}/><w:bottom ${none}/><w:right ${none}/><w:insideH ${none}/><w:insideV ${none}/>`;
     const width = tab.cols.reduce((a, b) => a + b, 0);
-    const padX = twips(CELL_PAD.x), padY = twips(CELL_PAD.y);
-    const tblPr = `<w:tblPr><w:tblW w:w="${twips(width)}" w:type="dxa"/><w:jc w:val="${align === 'right' ? 'right' : align === 'center' ? 'center' : 'left'}"/>` +
-      `<w:tblBorders>${borders}</w:tblBorders><w:tblLayout w:type="fixed"/>` +
-      `<w:tblCellMar><w:top w:w="${padY}" w:type="dxa"/><w:left w:w="${padX}" w:type="dxa"/><w:bottom w:w="${padY}" w:type="dxa"/><w:right w:w="${padX}" w:type="dxa"/></w:tblCellMar>` +
-      `<w:tblLook w:val="0000" w:firstRow="0" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="1" w:noVBand="1"/></w:tblPr>`;
+    // a table style: Word's own (written in styles.xml), with the parts it picks out; else the lines themselves
+    const styled = !!tab.style && !!(this.t.tableStyles?.[tab.style] ?? builtInStyle(tab.style));
+    const tblPr = `<w:tblPr>${styled ? `<w:tblStyle w:val="${tab.style}"/>` : ''}<w:tblW w:w="${twips(width)}" w:type="dxa"/><w:jc w:val="${align === 'right' ? 'right' : align === 'center' ? 'center' : 'left'}"/>` +
+      `${styled ? '' : `<w:tblBorders>${borders}</w:tblBorders>`}<w:tblLayout w:type="fixed"/>` +
+      marginsXml('tblCellMar', tab.pad ?? DEFAULT_MARGINS) +
+      `${styled ? tableLookXml(tab) : '<w:tblLook w:val="0000" w:firstRow="0" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="1" w:noVBand="1"/>'}</w:tblPr>`;
     const gridXml = `<w:tblGrid>${tab.cols.map((w) => `<w:gridCol w:w="${twips(w)}"/>`).join('')}</w:tblGrid>`;
     const rows: string[] = [];
     for (let r = 0; r < tab.rows.length; r++) {
@@ -892,8 +895,15 @@ class DocxWriter {
         if (span > 1) tcPr.push(`<w:gridSpan w:val="${span}"/>`);
         if (under) tcPr.push('<w:vMerge/>');
         else if (rowSpanOf(tab, r, c) > 1) tcPr.push('<w:vMerge w:val="restart"/>');
-        if (tab.lines === 'acs' && lastHead) tcPr.push(`<w:tcBorders><w:bottom ${grid}/></w:tcBorders>`);
+        // the cell's own lines (with the ACS rule under the headings, when the table has no style)
+        const lines: CellBorders = { ...(!styled && tab.lines === 'acs' && lastHead ? { bottom: { style: 'single', w: GRID_LINE, color: '#000000' } } : {}), ...cell.borders };
+        // a cell merged down: its top line on its first row, its bottom line on its last
+        const down = rowSpanOf(tab, own.r, own.c);
+        if (under) delete lines.top;
+        if (own.r + down - 1 > r) delete lines.bottom;
+        tcPr.push(bordersXml('tcBorders', lines));
         if (cell.fill) tcPr.push(`<w:shd w:val="clear" w:color="auto" w:fill="${hex6(cell.fill)}"/>`);
+        if (cell.pad) tcPr.push(marginsXml('tcMar', cell.pad));
         if (cell.valign) tcPr.push(`<w:vAlign w:val="${cell.valign}"/>`);
         if (under) { cells.push(`<w:tc><w:tcPr>${tcPr.join('')}</w:tcPr><w:p/></w:tc>`); continue; }
         // the cell's paragraphs, set as the text is, lined up as the cell is; a table in the cell as Word's table in it
@@ -1042,6 +1052,13 @@ class DocxWriter {
     for (const cs of Object.values(this.charStyles)) out.push(charStyleXml(cs));
     // formulas look like any other text in Word: the style only marks them, so they stay formulas when opened here
     out.push(`<w:style w:type="character" w:customStyle="1" w:styleId="${FORMULA_STYLE}"><w:name w:val="Chemical Formula"/><w:basedOn w:val="DefaultParagraphFont"/><w:uiPriority w:val="1"/></w:style>`);
+    // the table styles the tables use, as Word's own (so Word draws them as they are drawn here)
+    const tstyles = new Set<string>();
+    for (const o of Object.values(t.objects)) if (o.kind === 'table' && o.table.style) tstyles.add(o.table.style);
+    for (const id of tstyles) {
+      const def = t.tableStyles?.[id] ?? builtInStyle(id);
+      if (def) out.push(tableStyleXml(def));
+    }
     out.push(`<w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:uiPriority w:val="99"/><w:semiHidden/><w:unhideWhenUsed/>` +
       `<w:tblPr><w:tblInd w:w="0" w:type="dxa"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>`);
     out.push(`<w:style w:type="numbering" w:default="1" w:styleId="NoList"><w:name w:val="No List"/><w:uiPriority w:val="99"/><w:semiHidden/><w:unhideWhenUsed/></w:style>`);

@@ -8,7 +8,7 @@
 // points), and the lines of every page together make one text layout, so the text editing's
 // caret, selection and arrow keys run across pages without knowing about them.
 
-import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
+import type { CellMargins, Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
 import type { DocStyle } from '../style';
 import { withStack, layoutText, type Glyphs, type InlineBox, type LaidLine, type Measure, type Narrow, type TextFrame, type TextLayout } from '../text/layout';
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
@@ -141,18 +141,16 @@ export interface TableBox {
   cells: (TextLayout | null)[][];
   /** How far each cell's text is moved down to sit in the middle or at the bottom of its row. */
   drop: number[][];
+  /** Each cell's margins (its text starts at its left and top margin). */
+  pads: CellMargins[][];
   /** Each row's page and top left corner (in the document's coordinates), as placed. */
   rows: { page: number; x: number; y: number }[];
   /** 0 for a table in the text, 1 for one in a cell of such a table, and so on. */
   depth: number;
 }
 
-/** Room inside a table cell at the sides and above and below the text (Word's 0.075 in at the sides). */
-export const CELL_PAD = { x: 5.4, y: 1.5 };
-
-/** Width of a table's lines: Word's half-point grid; the ACS rules a little heavier at the top and bottom. */
-export const GRID_LINE = 0.5;
-export const ACS_LINE = 0.75;
+export { CELL_PAD, GRID_LINE, ACS_LINE } from './table-styles';
+import { CELL_PAD, cellMargins, resolveTable, type CellText } from './table-styles';
 
 /** How a cell's text lines up across: its own choice, its column's, or left. */
 export function docCellAlign(t: TableData, r: number, c: number): Justify {
@@ -326,7 +324,7 @@ export class DocLayouter {
   }
 
   /** What a table cell's text is laid out with, from the last layout (for typing into a cell). */
-  cellCtx: { N: NamedStyle; inline: (id: number) => InlineBox | null; objKey: (id: number) => string } | null = null;
+  cellCtx: { N: NamedStyle; inline: (id: number) => InlineBox | null; objKey: (id: number) => string; t: DocText } | null = null;
 
   /** A table cell's text as it would be laid out in the document now (typing into the cell). */
   cellNow(tb: TableData, r: number, c: number, runs: TextRun[], paras: ParaStyle[] | undefined): TextLayout | null {
@@ -334,7 +332,8 @@ export class DocLayouter {
     if (!cx) return null;
     const xs = [0];
     for (const w of tb.cols) xs.push(xs[xs.length - 1] + w);
-    return this.cellText(cx.N, runs, paras, xs[c + spanOf(tb, r, c)] - xs[c], docCellAlign(tb, r, c), cx.inline, cx.objKey);
+    const look = resolveTable(tb, cx.t.tableStyles).text[r]?.[c];
+    return this.cellText(cx.N, runs, paras, xs[c + spanOf(tb, r, c)] - xs[c], docCellAlign(tb, r, c), cx.inline, cx.objKey, cellMargins(tb, r, c), look);
   }
 
   /**
@@ -358,6 +357,14 @@ export class DocLayouter {
     const ps = fitParas(paras, paraCount(rt.plainText(runs)));
     const lay = layoutText({ runs: resolved, paras: ps, justify: 'left', boxes: true, markers: listMarkers(ps), inline }, N.size, this.deps.measure);
     return Math.max(0, ...lay.lines.map((l) => l.x + l.width)) + 2 * CELL_PAD.x;
+  }
+
+  /** naturalWidth with a cell's own margins. */
+  naturalCellWidth(t: DocText, tb: TableData, r: number, c: number): number {
+    const cell = tb.rows[r]?.[c];
+    if (!cell) return 0;
+    const m = cellMargins(tb, r, c);
+    return this.naturalWidth(t, cell.runs, cell.paras) - 2 * CELL_PAD.x + m.left + m.right;
   }
 
   /** Forget every paragraph's layout (fonts were loaded, measurements changed). */
@@ -450,7 +457,6 @@ export class DocLayouter {
       sizes.set(Number(k), { w: o.w, h: Math.max(o.h ?? 0, lay.box.y2 - lay.box.y1 + 2 * BOX_PAD.y) });
     }
     // tables: structures and pictures in a cell fit its width
-    const CP = CELL_PAD;
     for (const o of Object.values(t.objects)) {
       if (o.kind !== 'table') continue;
       const tb = o.table;
@@ -458,7 +464,8 @@ export class DocLayouter {
       for (const w of tb.cols) xs.push(xs[xs.length - 1] + w);
       tb.rows.forEach((row, r) => row.forEach((cell, c) => {
         if (isCovered(tb, r, c)) return;
-        const room = Math.max(6, xs[c + spanOf(tb, r, c)] - xs[c] - 2 * CP.x);
+        const m = cellMargins(tb, r, c);
+        const room = Math.max(6, xs[c + spanOf(tb, r, c)] - xs[c] - m.left - m.right);
         for (const x of cell.runs) {
           const n = x.obj !== undefined ? t.objects[x.obj] : undefined;
           if (n?.kind === 'drawing') sizes.set(x.obj!, shownSize(this.deps.drawingSize(n.contents, t.drawingStyle), n.scale ?? 1, room));
@@ -513,13 +520,13 @@ export class DocLayouter {
       const f = fields.get(x), s = sizes.get(x);
       return f !== undefined ? `=${f}` : s ? `${s.w.toFixed(3)}x${s.h.toFixed(3)}/${extentOf(x).join(',')}` : '?';
     };
-    this.cellCtx = { N, inline, objKey };
+    this.cellCtx = { N, inline, objKey, t };
     const tableOf = (id: number): TableBox | null => {
       const o = t.objects[id];
       if (o?.kind !== 'table') return null;
       let tb = tables.get(id);
       if (!tb) {
-        tb = this.tableBox(id, o.table, N, inline, objKey);
+        tb = this.tableBox(id, o.table, N, inline, objKey, 0, t.tableStyles);
         tables.set(id, tb);
       }
       return tb;
@@ -529,7 +536,7 @@ export class DocLayouter {
     for (const { id, depth } of nested) {
       const o = t.objects[id];
       if (o?.kind !== 'table') continue;
-      const tb = this.tableBox(id, o.table, N, inline, objKey, depth);
+      const tb = this.tableBox(id, o.table, N, inline, objKey, depth, t.tableStyles);
       tables.set(id, tb);
       sizes.set(id, { w: tb.xs[tb.xs.length - 1], h: sum(tb.hs) });
     }
@@ -857,7 +864,8 @@ export class DocLayouter {
       tb.rows.push({ page, x, y: top });
       tb.cells[r]?.forEach((cl, c) => {
         if (!cl) return;
-        const ox = x + tb.xs[c] + CP.x, oy = top + CP.y + tb.drop[r][c] - cl.box.y1;
+        const m = tb.pads[r][c];
+        const ox = x + tb.xs[c] + m.left, oy = top + m.top + tb.drop[r][c] - cl.box.y1;
         for (const cline of cl.lines) for (const g of cline.pieces) {
           const s = g.obj !== undefined ? sizes.get(g.obj) : undefined;
           if (s && !fields.has(g.obj!)) objects.push({ id: g.obj!, page, x: ox + g.x + extentOf(g.obj!)[0], y: oy + cline.y - s.h + (maths.get(g.obj!)?.descent ?? 0), w: s.w, h: s.h, line });
@@ -939,57 +947,69 @@ export class DocLayouter {
   }
 
   /** A table's cells laid out (each from the cache when nothing about it changed), and its rows' heights. */
-  tableBox(id: number, tb: TableData, N: NamedStyle, inline: (id: number, room: number) => InlineBox | null, objKey: (id: number) => string, depth = 0): TableBox {
+  tableBox(id: number, tb: TableData, N: NamedStyle, inline: (id: number, room: number) => InlineBox | null, objKey: (id: number) => string, depth = 0, kept?: DocText['tableStyles']): TableBox {
     const xs = [0];
     for (const w of tb.cols) xs.push(xs[xs.length - 1] + w);
     const cells: (TextLayout | null)[][] = [];
     const hs: number[] = [];
+    const pads: CellMargins[][] = [];
     const tall = (l: TextLayout | null) => (l ? l.box.y2 - l.box.y1 : 0);
+    const looks = resolveTable(tb, kept).text;
     // cells merged down several rows: the rows they cover make room for them after
     const merged: { r: number; c: number; down: number }[] = [];
     tb.rows.forEach((row, r) => {
       const out: (TextLayout | null)[] = [];
-      let h = SINGLE_ROW * N.size;
+      const ms: CellMargins[] = [];
+      let h = SINGLE_ROW * N.size + 2 * CELL_PAD.y;
       for (let c = 0; c < tb.cols.length; c++) {
+        const m = cellMargins(tb, r, c);
+        ms.push(m);
         if (isCovered(tb, r, c)) { out.push(null); continue; }
+        h = Math.max(h, SINGLE_ROW * N.size + m.top + m.bottom);
         const cell = row[c] ?? { runs: [] };
-        const lay = this.cellText(N, cell.runs, cell.paras, xs[c + spanOf(tb, r, c)] - xs[c], docCellAlign(tb, r, c), inline, objKey);
+        const lay = this.cellText(N, cell.runs, cell.paras, xs[c + spanOf(tb, r, c)] - xs[c], docCellAlign(tb, r, c), inline, objKey, m, looks[r]?.[c]);
         out.push(lay);
         const down = rowSpanOf(tb, r, c);
         if (down > 1) merged.push({ r, c, down });
-        else h = Math.max(h, tall(lay));
+        else h = Math.max(h, tall(lay) + m.top + m.bottom);
       }
-      hs.push(h + 2 * CELL_PAD.y);
+      hs.push(h);
       cells.push(out);
+      pads.push(ms);
     });
     // a merged cell taller than its rows: the last of them grows (as in Word)
     merged.sort((a, b) => a.r + a.down - (b.r + b.down));
     for (const m of merged) {
-      const need = tall(cells[m.r][m.c]) + 2 * CELL_PAD.y;
+      const p = pads[m.r][m.c];
+      const need = tall(cells[m.r][m.c]) + p.top + p.bottom;
       const have = sum(hs.slice(m.r, m.r + m.down));
       if (need > have) hs[m.r + m.down - 1] += need - have;
     }
     const drop = cells.map((out, r) => out.map((l, c) => {
       if (!l) return 0;
+      const p = pads[r][c];
       const h = sum(hs.slice(r, r + rowSpanOf(tb, r, c)));
-      const room = h - 2 * CELL_PAD.y - tall(l);
+      const room = h - p.top - p.bottom - tall(l);
       const v = tb.rows[r]?.[c]?.valign;
       return v === 'center' ? room / 2 : v === 'bottom' ? room : 0;
     }));
-    return { id, xs, hs, cells, drop, rows: [], depth };
+    return { id, xs, hs, cells, drop, pads, rows: [], depth };
   }
 
   /** A table cell's text laid out in its width (`w`, the inner margins taken off). */
-  cellText(N: NamedStyle, runs: TextRun[], paras: ParaStyle[] | undefined, w: number, align: Justify, inline: (id: number, room: number) => InlineBox | null, objKey: (id: number) => string): TextLayout {
+  cellText(N: NamedStyle, runs: TextRun[], paras: ParaStyle[] | undefined, w: number, align: Justify, inline: (id: number, room: number) => InlineBox | null, objKey: (id: number) => string, pad: CellMargins = { top: CELL_PAD.y, bottom: CELL_PAD.y, left: CELL_PAD.x, right: CELL_PAD.x }, look?: CellText): TextLayout {
     if (hasChanges(runs)) runs = markedRuns(runs);
+    // the table style's bold, italic and colour, where the text has none of its own
+    if (look) runs = runs.map((r) => ({ ...r, bold: r.bold ?? look.bold, italic: r.italic ?? look.italic, color: r.color ?? look.color }));
     const resolved = runs.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? N.font, size: r.size ?? N.size }));
     const n = paraCount(rt.plainText(runs));
     const ps = fitParas(paras, n);
     const objs = runs.filter((r) => r.obj !== undefined).map((r) => `${r.obj}${objKey(r.obj!)}`);
-    const key = `cell|${JSON.stringify([resolved, ps, w, align, objs])}`;
+    const room = w - pad.left - pad.right;
+    const key = `cell|${JSON.stringify([resolved, ps, room, align, objs])}`;
     let lay = this.cache.get(key);
     if (!lay) {
-      lay = layoutText({ runs: resolved, paras: ps, justify: align, wrap: Math.max(6, w - 2 * CELL_PAD.x), boxes: true, markers: listMarkers(ps), inline }, N.size, this.deps.measure);
+      lay = layoutText({ runs: resolved, paras: ps, justify: align, wrap: Math.max(6, room), boxes: true, markers: listMarkers(ps), inline }, N.size, this.deps.measure);
       this.cache.set(key, lay);
     }
     this.used.add(key);
