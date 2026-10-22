@@ -1,6 +1,6 @@
 # Files and sharing
 
-This page covers the files Chem Illustrator opens and saves, copying and pasting with ChemDraw and Office, Split View, workspaces, recent files, printing and fonts.
+This page covers the files Chem Illustrator opens and saves, copying and pasting with ChemDraw and Office, Split View, workspaces, AutoSave and recovery, Version History, shared folders, recent files, printing and fonts.
 
 ## File types
 
@@ -83,6 +83,42 @@ The folder then holds your files plus a small `.ciworkspace` file listing the ta
 To open it again, use **File ▸ Open Workspace…** or **File ▸ Open**, and pick the `.ciworkspace` file. **Save Workspace** then saves back to the same place, and **Save Workspace As…** saves a new one.
 
 Files inside the workspace folder are listed by name, so you can move or copy the whole folder (to another computer through a cloud drive, say) and it still opens. If a file has been moved or deleted, the rest open and a message names the missing ones.
+
+## AutoSave, recovery and Version History
+
+Every kind of tab (drawings, slides, sheets, documents and designs) is kept safe in three ways. Set them all in **File ▸ AutoSave and Recovery Options…**.
+
+### Recovery copies
+
+While you work, each tab with unsaved changes is copied every 2 minutes (choose 1 to 30 minutes, or never) to the app's own data folder. Closing the app normally deletes the copies. If it stops without closing (a crash, a power cut, Windows restarting for updates), the next start shows **Recover Unsaved Work**: tick the files to reopen and click **Reopen**. Reopened files come back unsaved, under their own names; Save puts a file that had been saved back where it was. **Not Now** keeps the copies for later in **File ▸ Recover Unsaved Work…**, and they are deleted after 7 days (you can change this).
+
+### AutoSave
+
+With AutoSave on, a file that has been saved saves itself a few seconds after your last change (30 seconds unless you change it), and every two minutes or so during long stretches of work. Switch it on for every file in AutoSave and Recovery Options, or for the file showing with **File ▸ AutoSave** (a file never saved is saved first). It is off unless you switch it on.
+
+- AutoSave never writes CSV, TSV or SD files, which keep only one sheet's values.
+- If AutoSave can't write a file (a full disk, a network drive gone), a notice says so and AutoSave waits until you save it with Ctrl+S. Your changes are still in the tab and in the recovery copies.
+- In a browser, AutoSave works in Chrome and Edge for files opened from or saved to your computer.
+
+### Version History
+
+**File ▸ Version History…** lists earlier versions of the file showing, newest first. A version is kept each time you save, and the file as it was before your first save in each session is kept too, so AutoSave can never lose what was there. While AutoSave is on, it adds a version at most every 10 minutes.
+
+- **Open a Copy** opens a version in a new tab to look at or copy from. The file isn't changed.
+- **Restore** puts the version in the tab in place of what it has now. What it had is kept as a version first, so a restore can be undone.
+- **Delete** removes a kept version.
+
+Up to 30 versions of each file are kept, for 60 days; both can be changed (0 versions switches Version History off).
+
+### Shared folders and OneDrive (desktop app)
+
+For files kept in OneDrive, SharePoint or a shared lab drive:
+
+- **Changed on disk.** If a file you have open is changed outside Chem Illustrator (by another program, by someone else, or by OneDrive bringing in their changes), a notice offers **Reload**, **Keep Mine** (your next save replaces theirs) or **Open Theirs** (their version in a new tab, to compare). AutoSave waits until you choose. Saving over a changed file asks first. You can choose to reload such files automatically when they have no unsaved changes here, or to ignore changes.
+- **Open somewhere else.** While a file is open, a small hidden lock file named `.~lock.<file name>#` sits beside it, in the format LibreOffice uses. When you open a file that someone else has open (in Chem Illustrator, LibreOffice, Word, Excel or PowerPoint), a notice says who and where, and offers **Work on a Copy**. You're told when they close it. The lock file is deleted when you close the file, and can be switched off.
+- **OneDrive conflict copies.** When a file changes in two places at once, OneDrive keeps the clashing changes in a copy named with your computer's name (for example `Scheme 1-LAB-PC.cdxml`). A notice offers to open it, so you can copy across what you need.
+
+Recovery copies and versions are kept in a folder named `Kept` in the app's local data folder (on Windows `%LOCALAPPDATA%\io.github.nathanohare.chemillustrator\Kept`), or in the `Chem Illustrator Data` folder of a portable copy. The browser version keeps them in the browser's storage for the page.
 
 ## Recent files
 

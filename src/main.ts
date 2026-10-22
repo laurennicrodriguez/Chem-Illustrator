@@ -133,6 +133,8 @@ import { ACS_1996, DocStyle } from './style';
 import { emptyTable, tableFromCells } from './table';
 import type { TableData } from './model';
 import type { PastedRows } from './io/table-clip';
+import { Keeper } from './keep/keeper';
+import { DEFAULT_KEEP, type KeepPrefs } from './keep/prefs';
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -1230,7 +1232,7 @@ const ws: Workspace = new Workspace(doc, {
     if (tab.deck) { tab.deck.onChange = () => {}; tab.deck.onSwitch = () => {}; tab.deck.onMotion = () => {}; }
   },
   enter: (tab, opened) => enterTab(tab, opened),
-  changed: () => { renderTabs(); updateTitle(); layoutSplit(); },
+  changed: () => { renderTabs(); updateTitle(); layoutSplit(); tickAutoSave(); },
   flash,
   pptx: pptxOptions(),
   measure: measureText,
@@ -1244,7 +1246,29 @@ const ws: Workspace = new Workspace(doc, {
   },
   newStyle: (mode) => { const n = modeStyles[mode]; return n ? styleNamed(n, ownStyles) ?? null : null; },
   newMaster: (m) => { const t = SLIDE_TEMPLATES.find((x) => x.id === slideTemplate); return t && t.id !== 'plain' ? applyTemplate(m, t) : null; },
+  beforeWrite: (tab, ref, name, how) => keeper.beforeWrite(tab, ref, name, how),
+  saved: (tab, data, how, was) => keeper.saved(tab, data, how, was),
+  autoSaveFailed: (tab, msg) => keeper.autoSaveFailed(tab, msg),
+  opened: (tab) => keeper.opened(tab),
+  dropped: (tab) => keeper.dropped(tab),
 });
+
+// AutoSave, recovery copies, Version History and shared folders (File > AutoSave and Recovery Options)
+let keepPrefs: KeepPrefs = { ...DEFAULT_KEEP };
+const keeper = new Keeper({
+  ws,
+  prefs: () => keepPrefs,
+  setPrefs: (p) => { keepPrefs = p; tickAutoSave(); renderTabs(); storeSettings(); },
+  flash,
+  refresh: () => { renderTabs(); updateTitle(); tickAutoSave(); },
+});
+/** File > AutoSave shows whether the tab showing saves itself. */
+function tickAutoSave(): void {
+  const b = document.querySelector<HTMLElement>('[data-cmd="autosave"]');
+  if (!b) return;
+  const t = ws.active;
+  b.setAttribute('aria-checked', String(keeper.autoSaveWanted(t) && ws.canAutoSave(t)));
+}
 
 /** How slides are saved for PowerPoint: structures as pictures (PNG and SVG), the bundled fonts inside. */
 function pptxOptions(): PptxOptions {
@@ -1630,7 +1654,9 @@ function renderTabs(): void {
     el.className = `tab tab-${t.mode}${t === ws.active ? ' active' : ''}${t.dirty ? ' dirty' : ''}`;
     el.setAttribute('role', 'tab');
     el.setAttribute('aria-selected', String(t === ws.active));
-    el.title = (t.ref.kind === 'path' ? t.ref.path : t.name) + (t.dirty ? ' (not saved)' : '');
+    el.title = (t.ref.kind === 'path' ? t.ref.path : t.name) + (t.dirty ? ' (not saved)' : '')
+      + (t.savedAt ? `\n${t.savedHow === 'autosaved' ? 'AutoSaved' : 'Saved'} ${new Date(t.savedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}` : '')
+      + (keeper.autoSaveWanted(t) && ws.canAutoSave(t) ? ' (AutoSave on)' : '');
     const icon = document.createElement('span');
     icon.className = 'tab-icon';
     icon.innerHTML = TAB_ICONS[t.mode][0];
@@ -2672,7 +2698,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'print',
   'help', 'user-guide', 'send-feedback', 'report-problem', 'check-updates']);
 
@@ -2746,6 +2772,10 @@ const COMMANDS: Record<string, () => unknown> = {
   open: () => ws.open(),
   save: () => { finishTyping(); return ws.save(focusTab()); },
   'save-as': () => { finishTyping(); return ws.saveAs(focusTab()); },
+  autosave: () => { finishTyping(); return keeper.toggleAutoSave(focusTab()); },
+  'version-history': () => { finishTyping(); return keeper.historyCommand(focusTab()); },
+  'recover-work': () => keeper.recoverCommand(),
+  'keep-options': () => keeper.optionsCommand(),
   'save-workspace': () => saveWorkspace(false),
   'save-workspace-as': () => saveWorkspace(true),
   'open-workspace': () => openWorkspace(),
@@ -3631,6 +3661,7 @@ function storeSettings(): void {
     skipVersion,
     recentFiles,
     scheme: { ...schemePrefs },
+    keep: keepPrefs,
     highlightLooks: ownLooks,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
@@ -3754,6 +3785,8 @@ void loadSettings().then((s) => {
   setReviewAuthor(s.reviewName);
   skipVersion = s.skipVersion;
   recentFiles = s.recentFiles;
+  keepPrefs = s.keep;
+  tickAutoSave();
   ownLooks = s.highlightLooks;
   renderRecent();
   setPalettes(s.palettes);
@@ -3779,6 +3812,7 @@ void loadSettings().then((s) => {
   placeSidePanel();
   tickMethylStyle();
   settingsLoaded = true;
+  void keeper.start();
   // a few seconds after starting, so the check doesn't slow down opening the window
   if (canUpdate && updateCheck) setTimeout(() => void updates.quietCheck(), 4000);
   refreshKeys();
@@ -3836,9 +3870,16 @@ if (isTauri()) {
   getCurrentWindow().onCloseRequested(async (e) => {
     finishTyping();
     if (!(await ws.closeAll())) e.preventDefault();
+    // closing normally: the recovery copies and lock files aren't needed
+    else await keeper.end();
   }).catch(() => {});
 } else {
-  window.addEventListener('beforeunload', (e) => { finishTyping(); if (ws.anyDirty) e.preventDefault(); });
+  window.addEventListener('beforeunload', (e) => {
+    finishTyping();
+    if (ws.anyDirty) e.preventDefault();
+    // with nothing unsaved the copies can go; otherwise they stay, in case the page is left
+    else void keeper.end();
+  });
 }
 
 /** For the speed tests: a ChemDraw file's text into the drawing showing, timed. */
@@ -5149,7 +5190,7 @@ requestAnimationFrame(() => {
 });
 
 // Hooks for the automated speed tests.
-(window as any).__app = { doc, editor, renderer, chem, live, command, addMolfile, cdxml: (name: string) => writeCdxml(doc, { name, textMeasure: measureText }), openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode, docxBytes: () => writeDocx(docMode.file!.t, docFiles),
+(window as any).__app = { doc, editor, renderer, chem, live, command, addMolfile, keeper, cdxml: (name: string) => writeCdxml(doc, { name, textMeasure: measureText }), openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode, docxBytes: () => writeDocx(docMode.file!.t, docFiles),
   pptxBytes: () => { const d = deckNow()!; return writePptx({ size: d.size, master: d.master, slides: d.slides.map((s, i) => ({ layout: s.layout, doc: d.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims, comments: s.comments })) }, pptxOptions()); } };
 
 // ---------------------------------------------------------------- desktop self-test

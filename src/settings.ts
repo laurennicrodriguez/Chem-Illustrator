@@ -16,6 +16,7 @@ import type { DocStyle } from './style';
 import { parseDarkPalettes, type DarkPalette } from './dark-page';
 import { DEFAULT_SCHEME_PREFS, parseSchemePrefs, type SchemePrefs } from './chem/scheme-layout';
 import { CITE_PRESETS, DEFAULT_STYLE, cleanOptions, type CiteFormat } from './document/cite-styles';
+import { DEFAULT_KEEP, parseKeepPrefs, type KeepPrefs } from './keep/prefs';
 
 export interface Settings {
   /** Changes to ChemDraw's default keys. */
@@ -100,6 +101,8 @@ export interface Settings {
   highlightLooks: HighlightLookPreset[];
   /** Spacing in schemes and the text above and below arrows (Scheme > Scheme Settings). */
   scheme: SchemePrefs;
+  /** AutoSave, recovery copies, Version History and shared folders (File > AutoSave and Recovery Options). */
+  keep: KeepPrefs;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -112,13 +115,14 @@ export const DEFAULT_SETTINGS: Settings = {
   docPins: [],
   updateCheck: true, pubchemNames: true, reviewName: '', skipVersion: null, recentFiles: [], highlightLooks: [],
   scheme: DEFAULT_SCHEME_PREFS,
+  keep: DEFAULT_KEEP,
 };
 
 const STORAGE_KEY = 'chem-illustrator.settings';
 
 /** Read settings saved as text, keeping only what makes sense. */
 export function parseSettings(text: string | null | undefined): Settings {
-  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), myStyles: [], modeStyles: {}, darkPalettes: [], guides: { ...DEFAULT_SETTINGS.guides }, docPins: [], recentFiles: [], highlightLooks: [], scheme: { ...DEFAULT_SCHEME_PREFS } };
+  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), myStyles: [], modeStyles: {}, darkPalettes: [], guides: { ...DEFAULT_SETTINGS.guides }, docPins: [], recentFiles: [], highlightLooks: [], scheme: { ...DEFAULT_SCHEME_PREFS }, keep: { ...DEFAULT_KEEP } };
   if (!text) return s;
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { return s; }
@@ -156,6 +160,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (Array.isArray(r.recentFiles)) s.recentFiles = r.recentFiles.filter((p): p is string => typeof p === 'string' && p.trim() !== '').slice(0, 10);
   if (typeof r.skipVersion === 'string' || r.skipVersion === null) s.skipVersion = r.skipVersion as string | null;
   s.scheme = parseSchemePrefs(r.scheme);
+  s.keep = parseKeepPrefs(r.keep);
   if (Array.isArray(r.dictionary)) s.dictionary = r.dictionary.filter((w): w is string => typeof w === 'string' && w.trim() !== '').map((w) => w.trim());
   return s;
 }

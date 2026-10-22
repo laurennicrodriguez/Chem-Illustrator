@@ -1,6 +1,7 @@
 // The key map: how key presses are named, ChemDraw's default keys, and the person's changes
 // (which are saved, so they must survive bad input).
 
+import { DEFAULT_KEEP } from '../src/keep/prefs';
 import { defaultToolboxes } from '../src/ui/toolboxes';
 import { DEFAULT_SCHEME_PREFS } from '../src/chem/scheme-layout';
 import { describe, it, expect } from 'vitest';
@@ -227,6 +228,7 @@ describe('the settings file', () => {
       toolboxes: { ...defaultToolboxes(), locked: false, custom: ['tool:chain', 'cmd:clean-up'] },
       myStyles: [], modeStyles: { document: 'RSC' }, darkPage: true, darkPalette: 'Slate', darkPalettes: [], guides: { drawing: true, slides: false, design: true }, highlightLooks: [{ name: 'Mine', colour: '#abcdef', style: { glow: true } }], docPins: ['style', 'hf'], updateCheck: false, pubchemNames: false, reviewName: 'Nate O.', skipVersion: '0.1.80', recentFiles: ['C:\\Work\\a.cdxml'],
       scheme: { ...DEFAULT_SCHEME_PREFS, structGap: 14, textAlign: 'left', fit: false },
+      keep: { ...DEFAULT_KEEP, autoSave: true, recoveryMinutes: 5, changedOnDisk: 'reload' as const, lockFiles: false },
     };
     const text = settingsText(s);
     expect(text).toContain('"app": "Chem Illustrator"');
