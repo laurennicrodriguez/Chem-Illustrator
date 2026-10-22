@@ -42,6 +42,8 @@ export interface Overlay {
   editing?: { id: number; cell?: boolean; selection: Rect[] } | null;
   /** Text with comments on it, shaded (more strongly for the comment being looked at). */
   comments?: { start: number; end: number; active: boolean }[];
+  /** A block of table cells chosen together (dragged across), shaded. */
+  cells?: { id: number; r0: number; c0: number; r1: number; c1: number } | null;
 }
 
 export class DocView {
@@ -63,6 +65,8 @@ export class DocView {
   onResize: () => void = () => {};
   /** Pages in rows of this many (View > Multiple Pages), or 1. */
   perRow = 1;
+  /** Table > View Gridlines: faint lines on every table edge with no border (else only in tables with none). */
+  gridlines = false;
   /** Pages side by side in one row, scrolled across (View > Side to Side, and Read Mode). */
   sideways = false;
   /** Read Mode: the wheel turns the pages two at a time instead of scrolling. */
@@ -286,6 +290,16 @@ export class DocView {
     else if (right + margin > s.scrollLeft + s.clientWidth) s.scrollLeft = right + margin - s.clientWidth;
   }
 
+  /** Scroll so a part of the document is at the top of the window (going to a heading). */
+  revealTop(r: Rect, margin = 24): void {
+    const lay = this.layout;
+    const p = lay ? this.pageAt(lay, r.y1) : null;
+    const pos = lay && p ? this.place(p, lay) : { x: 0, y: 0 };
+    const dy = pos.y - (p?.top ?? 0);
+    this.scroller.scrollTop = Math.max(0, this.oy + (r.y1 + dy) * this.zoom - margin);
+    this.reveal(r, margin);
+  }
+
   /** Scroll to the top of a page (pages side by side: its left edge). */
   scrollToPage(i: number): void {
     const lay = this.layout;
@@ -405,7 +419,7 @@ export class DocView {
       for (const o of tabs) {
         const obj = t.objects[o.id];
         const tb = lay.tables.get(o.id);
-        if (obj?.kind === 'table' && tb) drawDocTable(ctx, obj.table, tb, p.index, { color: '#9fb4d8', px: 1 / k });
+        if (obj?.kind === 'table' && tb) drawDocTable(ctx, obj.table, tb, p.index, { color: '#9fb4d8', px: 1 / k, always: this.gridlines }, t.tableStyles);
       }
       for (const o of lay.objects) if (o.page === p.index && o.wrap !== 'behind' && t.objects[o.id]?.kind !== 'table') this.object(ctx, t, o, lay);
       const px = 1 / k;
@@ -441,6 +455,17 @@ export class DocView {
       ctx.strokeStyle = OBJECT_FRAME;
       ctx.lineWidth = 1.2 / k;
       for (const o of lay.objects) if (o.id === ov.framed) { onPageOf(o); ctx.strokeRect(o.x - 2, o.y - 1, o.w + 4, o.h + 2); }
+    }
+    if (ov.cells) {
+      const tb = lay.tables.get(ov.cells.id);
+      const b = ov.cells;
+      ctx.fillStyle = SELECTION;
+      if (tb) for (let r = b.r0; r <= b.r1; r++) {
+        const row = tb.rows[r];
+        if (!row) continue;
+        at(lay.pages[row.page] ?? lay.pages[0]);
+        ctx.fillRect(row.x + tb.xs[b.c0], row.y, tb.xs[b.c1 + 1] - tb.xs[b.c0], tb.hs[r]);
+      }
     }
     if (ov.editing) {
       const o = lay.objects.find((x) => x.id === ov.editing!.id);

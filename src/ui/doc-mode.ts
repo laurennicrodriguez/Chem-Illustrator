@@ -45,7 +45,12 @@ import type { TableData } from '../model';
 import {
   canMerge, coveringCell, deleteColumn, deleteRow, emptyTable, insertColumn, insertRow, isCovered, mergeDown, mergeRight, nextCell, rowSpanOf, setColumnAlign, setColumnWidth, setPart, splitCell, spanOf,
 } from '../table';
-import { CELL_PAD } from '../document/doc-layout';
+import { cellMargins, paintEdge, type CellBlock } from '../document/table-styles';
+import { blockOf, canMergeBlock, mergeBlock } from '../document/table-convert';
+import { BORDER_STYLES, BORDER_WIDTHS, DocTablesUI, LOOK_OPTIONS, penSwatch } from './doc-tables-ui';
+import { DocNav } from './doc-nav';
+import { lookOfTable } from '../document/table-styles';
+import type { BorderLine, BorderSide, TableLook } from '../model';
 import { BREAK_NAMES, changeSection, newBreak, pageNumText, sectionAt, sectionsOf, type Section, type SectionPatch } from '../document/sections';
 import {
   A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, END_FORMAT, FOOT_FORMAT, captionRuns, noteLabel, noteStyle, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets, inlineMove,
@@ -172,8 +177,17 @@ export class DocumentMode {
     | { kind: 'resize'; id: number; w0: number; scale0: number; x0: number }
     | { kind: 'move'; id: number; from: { x: number; y: number }; float: Float; moved: boolean }
     | { kind: 'inline'; id: number; from: { x: number; y: number }; to: number | null }
+    | { kind: 'paint'; done: Set<string> }
     | null = null;
   private plainPaste = false;
+  /** Cells chosen together by dragging across them (Table commands work on all of them). */
+  private cellRange: ({ id: number } & CellBlock) | null = null;
+  /** The cell a drag across cells started in. */
+  private cellAnchor: { id: number; r: number; c: number } | null = null;
+  /** Table Design: styles, borders, margins, and text to table. */
+  readonly tables: DocTablesUI;
+  /** View > Navigation Pane. */
+  readonly nav: DocNav;
   private speller: Speller | null = null;
   private dictSeen: string[] | null = null;
   private checkCache = new Map<string, { spell: [number, number][]; issues: Issue[] }>();
@@ -233,6 +247,37 @@ export class DocumentMode {
       flash: (msg, ms) => this.host.flash(msg, ms),
       pickFile: () => this.host.pickReferenceFile(),
       preferredChanged: () => this.host.preferredChanged?.(),
+    });
+    this.tables = new DocTablesUI({
+      file: () => this.file,
+      target: () => this.tableTarget(),
+      block: () => this.chosenBlock(),
+      setTable: (id, t, kind) => this.setTable(id, t, kind),
+      textW: () => this.file?.layout().textW ?? 468,
+      flash: (msg, ms) => this.host.flash(msg, ms),
+      focus: () => this.focus(),
+      leaveCell: () => this.stopBox(),
+      startCell: (id, r, c) => { this.startCell(id, r, c); },
+      changed: () => { this.updateRibbon(); this.redraw(); },
+    });
+    this.nav = new DocNav($('#doc-pane'), {
+      text: () => this.file?.t ?? null,
+      caretPara: () => { const f = this.file; return f ? paraAt(f.ed.text, f.ed.start) : 0; },
+      goToPara: (p) => this.goToPara(p),
+      goToHit: (hit) => this.goToHit(hit),
+      apply: (t, kind, para) => {
+        const f = this.file;
+        if (!f) return;
+        this.stopBox();
+        const at = paraRange(rt.plainText(t.runs), para).start;
+        f.ed.update(t, kind, at, at);
+        this.goToPara(para);
+      },
+      level: (para, op) => this.navLevel(para, op),
+      deleteBlock: (para) => this.navDelete(para),
+      showFound: () => this.redraw(),
+      resized: () => { for (const v of this.views) v.resize(); this.redraw(); },
+      focus: () => this.focus(),
     });
     this.wireInput();
     this.wirePointer(this.view);
@@ -449,7 +494,7 @@ export class DocumentMode {
       case 'table-split': this.setTable(id, splitCell(t, r, c), 'Split cells', { r, c }); break;
       case 'table-nest': void this.insertTable(true); break;
       case 'table-lines-grid': case 'table-lines-acs': case 'table-lines-none':
-        this.setTable(id, { ...t, lines: cmd.slice(12) as TableData['lines'] }, 'Table lines');
+        this.setTable(id, { ...t, lines: cmd.slice(12) as TableData['lines'], style: undefined }, 'Table lines');
         break;
       case 'table-valign-top': case 'table-valign-center': case 'table-valign-bottom': {
         const v = cmd.slice(13);
@@ -463,13 +508,121 @@ export class DocumentMode {
       case 'table-fill-width': this.setTable(id, { ...t, cols: t.cols.map((w) => (w * lay.textW) / t.cols.reduce((a, b) => a + b, 0)) }, 'Fit to page'); break;
       case 'table-head-more': this.setTable(id, { ...t, head: Math.min(t.rows.length, t.head + 1) }, 'Heading rows'); break;
       case 'table-head-less': this.setTable(id, { ...t, head: Math.max(0, t.head - 1) }, 'Heading rows'); break;
-      default: this.host.flash(`Unknown table command ${cmd}`);
+      case 'table-styles': {
+        const r0 = this.view.host.getBoundingClientRect();
+        this.tables.styleGallery(r0.left + 40, r0.top + 8);
+        break;
+      }
+      case 'table-borders': {
+        const r0 = this.view.host.getBoundingClientRect();
+        this.tables.bordersMenu(r0.left + 40, r0.top + 8);
+        break;
+      }
+      case 'table-painter': this.tables.setPainting(!this.tables.painting); break;
+      case 'table-gridlines':
+        this.view.gridlines = !this.view.gridlines;
+        if (this.split) this.split.view.gridlines = this.view.gridlines;
+        this.updateRibbon();
+        this.redraw();
+        break;
+      case 'table-margins': void this.tables.cellMarginsDialog(); break;
+      case 'table-to-text': void this.tables.tableToTextDialog(); break;
+      case 'table-split-table': this.tables.splitTable(); break;
+      case 'table-merge-cells': {
+        const b = this.rangeNow();
+        if (!b || !canMergeBlock(t, b)) { this.host.flash('Drag across the cells to merge first (a block that doesn\'t cut through a merged cell).'); return; }
+        this.cellRange = null;
+        this.setTable(id, mergeBlock(t, b), 'Merge cells', { r: b.r0, c: b.c0 });
+        break;
+      }
+      default: {
+        const look = /^table-look-(\w+)$/.exec(cmd);
+        if (look && LOOK_OPTIONS.some(([k]) => k === look[1])) { this.tables.toggleLook(look[1] as keyof TableLook); break; }
+        const border = /^table-border-(\w+)$/.exec(cmd);
+        if (border) { this.tables.borders(border[1] as Parameters<DocTablesUI['borders']>[0]); break; }
+        this.host.flash(`Unknown table command ${cmd}`);
+      }
     }
   }
 
-  /** Whether a cell is one the cell commands change: the cell typed into, or every cell of a picked table. */
+  /** Whether a cell is one the cell commands change: the cells dragged across, the cell typed into, or every cell of a picked table. */
   private inChosen(tg: { r: number; c: number }, r: number, c: number): boolean {
+    const b = this.rangeNow();
+    if (b) return r >= b.r0 && r <= b.r1 && c >= b.c0 && c <= b.c1;
     return !this.file?.box?.cell || (r === tg.r && c === tg.c);
+  }
+
+  /** The cells dragged across, while they are still in the table being worked on. */
+  private rangeNow(): CellBlock | null {
+    const b = this.cellRange;
+    const tg = this.tableTarget();
+    if (!b || !tg || tg.id !== b.id || b.r1 >= tg.t.rows.length || b.c1 >= tg.t.cols.length) return null;
+    return b;
+  }
+
+  /** The cells the border and margin commands work on: those dragged across, the cell typed into, or the whole table. */
+  private chosenBlock(): CellBlock | null {
+    const tg = this.tableTarget();
+    if (!tg) return null;
+    const b = this.rangeNow();
+    if (b) return b;
+    if (this.file?.box?.cell) return { r0: tg.r, c0: tg.c, r1: tg.r + rowSpanOf(tg.t, tg.r, tg.c) - 1, c1: tg.c + spanOf(tg.t, tg.r, tg.c) - 1 };
+    return { r0: 0, c0: 0, r1: tg.t.rows.length - 1, c1: tg.t.cols.length - 1 };
+  }
+
+  // ---------------------------------------------------------------- the Navigation pane
+
+  /** Go to a paragraph (a heading picked in the Navigation pane): the caret at its start, scrolled to the top. */
+  private goToPara(p: number): void {
+    const f = this.file;
+    if (!f) return;
+    this.stopBox();
+    const text = f.ed.text;
+    const at = paraRange(text, Math.min(p, paraCount(text) - 1)).start;
+    f.ed.setCaret(at);
+    const c = f.ed.caret();
+    this.view.revealTop({ x1: c.x, y1: c.y1, x2: c.x, y2: c.y2 });
+    this.focus();
+    this.changed('selection');
+  }
+
+  /** Go to a place the Navigation pane's search found (in the text, or in a table cell). */
+  private goToHit(hit: { cell?: { id: number; r: number; c: number }; start: number; end: number }): void {
+    const f = this.file;
+    if (!f) return;
+    if (hit.cell) {
+      if (!this.startCell(hit.cell.id, hit.cell.r, hit.cell.c, 'start')) return;
+      f.box?.ed.select(hit.start, hit.end);
+    } else {
+      this.stopBox();
+      f.ed.select(hit.start, hit.end);
+    }
+    this.focus();
+    this.changed('selection');
+  }
+
+  /** Promote or demote a heading picked in the Navigation pane, with the headings under it. */
+  private navLevel(para: number, op: 'promote' | 'demote'): void {
+    const f = this.file;
+    if (!f) return;
+    this.stopBox();
+    f.ed.update(changeLevel(f.t, { ...newOutline(), collapsed: [para] }, para, para, op), op === 'promote' ? 'Promote' : 'Demote');
+  }
+
+  /** Delete a heading with everything under it (the Navigation pane's right-click menu). */
+  private navDelete(para: number): void {
+    const f = this.file;
+    if (!f) return;
+    this.stopBox();
+    const levels = fitParas(f.t.paras, paraCount(f.ed.text)).map((ps) => outlineLevel(f.t, ps));
+    const end = subtreeEnd(levels, para);
+    const text = f.ed.text;
+    let a = paraRange(text, para).start;
+    let b = end < levels.length ? paraRange(text, end).start : text.length;
+    // the last paragraphs: the break before them goes instead
+    if (end >= levels.length && a > 0) { a -= 1; b = text.length; }
+    f.ed.select(a, b);
+    f.ed.replaceSelection([], undefined, 'Delete heading');
   }
 
   /** Shade the cell typed into (or the whole table picked) with a colour, or take the shading off. */
@@ -531,6 +684,7 @@ export class DocumentMode {
   /** Stop typing into the text box (`pick`: and pick the box, as Escape does in Word). */
   private stopBox(pick = false): void {
     const f = this.file;
+    this.cellRange = null;
     if (!f?.box) return;
     const id = f.box.id;
     f.endBox();
@@ -655,6 +809,7 @@ export class DocumentMode {
     this.comments.followCaret();
     this.comments.update();
     this.updateOutlineRibbon();
+    this.nav.refresh();
     this.redraw();
   }
 
@@ -708,7 +863,8 @@ export class DocumentMode {
       return {
         selection: null, caret: showCaret ? ed.caret() : null, squiggles: [], picked, framed: null,
         found: this.finder.open ? this.finder.hits : [],
-        editing: { id: f.box.id, cell: !!f.box.cell, selection: ed.collapsed || ed.composing || picked !== null ? [] : selectionRects(lay, ed.start, ed.end) },
+        editing: { id: f.box.id, cell: !!f.box.cell, selection: ed.collapsed || ed.composing || picked !== null || this.rangeNow() ? [] : selectionRects(lay, ed.start, ed.end) },
+        cells: this.rangeNow() ? this.cellRange : null,
       };
     }
     const ed = f.ed;
@@ -914,9 +1070,19 @@ export class DocumentMode {
       if (spanOf(tg.t, tg.r, tg.c) > 1 || rowSpanOf(tg.t, tg.r, tg.c) > 1) cmd('Split Cells', 'table-split', 'Undo a merge: the cell goes back to single cells');
       cmd('Insert Table in Cell…', 'table-nest', 'A table inside this cell (a nested table, kept as one in Word)');
       cmd('Fit Columns to Contents', 'table-fit', 'Each column as wide as its widest cell (structures at their own size)');
-      for (const [v, label] of [['grid', 'Grid Lines'], ['acs', 'ACS Rules'], ['none', 'No Lines']] as const) cmd(`${tg.t.lines === v ? '✓ ' : '   '}${label}`, `table-lines-${v}`);
+      for (const [v, label] of [['grid', 'Grid Lines'], ['acs', 'ACS Rules'], ['none', 'No Lines']] as const) cmd(`${!tg.t.style && tg.t.lines === v ? '✓ ' : '   '}${label}`, `table-lines-${v}`);
+      if (this.rangeNow() && canMergeBlock(tg.t, this.rangeNow()!)) cmd('Merge Cells', 'table-merge-cells', 'Join the cells chosen into one');
+      item('Table Styles…', () => this.tables.styleGallery(clientX, clientY), 'Lines, shading and bold headings as one look (Word\'s table styles)');
+      item('Borders…', () => this.tables.bordersMenu(clientX, clientY), 'Lines on the edges of the cells chosen');
+      cmd('Cell Margins…', 'table-margins', 'Room between the cells\' edges and their text');
+      cmd('Split Table', 'table-split-table', 'A new table from this row down');
+      cmd('Convert to Text…', 'table-to-text', 'The table\'s rows back into paragraphs');
       cmd('Select Table', 'table-select', 'Pick the whole table (to copy, cut or delete it)');
       menu.appendChild(document.createElement('hr'));
+    }
+    if (!tg && this.file && !this.file.box) {
+      const [pa, pb] = this.file.ed.selectedParas();
+      if (pb > pa) { cmd('Convert Text to Table…', 'text-to-table', 'The paragraphs chosen as a table, cut into cells at tabs or commas'); menu.appendChild(document.createElement('hr')); }
     }
     cmd('Paragraph…', 'box-para', 'Indents, spacing and line spacing');
     cmd('Style…', 'box-style', 'Change how this paragraph\'s style looks');
@@ -1032,6 +1198,9 @@ export class DocumentMode {
     if (e.isComposing || e.keyCode === 229) return;
     if (this.menu && e.key === 'Escape') { e.preventDefault(); this.closeMenu(); return; }
     this.closeMenu();
+    if (e.key === 'Escape' && this.tables.painting) { e.preventDefault(); this.tables.setPainting(false); return; }
+    if (e.key === 'Escape' && this.cellRange) { e.preventDefault(); this.cellRange = null; this.redraw(); return; }
+    if (this.cellRange && !['Shift', 'Control', 'Alt', 'Meta'].includes(e.key) && !(e.ctrlKey || e.metaKey)) { this.cellRange = null; this.redraw(); }
     if (this.reading) { this.readingKey(e); return; }
     const ed = this.ed;
     const run = (f: () => void) => { e.preventDefault(); f(); };
@@ -1914,6 +2083,16 @@ export class DocumentMode {
       s.setPointerCapture(e.pointerId);
     };
     const cell = e.shiftKey ? null : this.cellAt(p);
+    this.cellRange = null;
+    this.cellAnchor = cell;
+    // Border Painter: a click on a cell's edge gives it the pen's line
+    if (this.tables.painting && cell) {
+      const d = { kind: 'paint' as const, done: new Set<string>() };
+      this.paintAt(p, d.done);
+      this.dragging = d;
+      s.setPointerCapture(e.pointerId);
+      return;
+    }
     if (f.box) {
       const id = f.box.id;
       if (f.box.cell && cell?.id === id) {
@@ -1978,6 +2157,7 @@ export class DocumentMode {
       const tip = link ? linkTip(link, !this.reading) : '';
       if (this.view.scroller.title !== tip) this.view.scroller.title = tip;
       if (link && (this.reading || (isMac ? e.metaKey : e.ctrlKey))) { this.view.scroller.style.cursor = 'pointer'; return; }
+      if (this.tables.painting && this.cellAt(p)) { this.view.scroller.style.cursor = 'crosshair'; return; }
       this.view.scroller.style.cursor = corner ? 'nwse-resize' : id === null || o?.kind === 'table' ? 'text'
         : o?.kind === 'textbox' ? (this.nearEdge(id, p) ? 'move' : 'text') : o?.kind === 'note' ? 'text'
         : floatOf(o) ? 'move' : o?.kind === 'drawing' ? 'pointer' : 'default';
@@ -2006,8 +2186,21 @@ export class DocumentMode {
       this.view.scroller.style.cursor = 'move';
       return;
     }
+    if (d.kind === 'paint') { this.paintAt(p, d.done); return; }
     if (d.kind === 'box') {
       if (this.clicks.n !== 1 || !f.box) return;
+      // dragged out of the cell into others of its table: those cells are chosen together
+      const a = this.cellAnchor;
+      const here = a && f.box.cell ? this.cellAt(p) : null;
+      const o = a ? f.t.objects[a.id] : undefined;
+      if (a && here && here.id === a.id && (here.r !== a.r || here.c !== a.c) && o?.kind === 'table') {
+        const b = blockOf(o.table, a, here);
+        const was = this.cellRange;
+        this.cellRange = { id: a.id, ...b };
+        if (!was || was.r0 !== b.r0 || was.r1 !== b.r1 || was.c0 !== b.c0 || was.c1 !== b.c1) { this.updateRibbon(); this.redraw(); }
+        return;
+      }
+      if (this.cellRange && here && a && here.r === a.r && here.c === a.c) { this.cellRange = null; this.redraw(); }
       f.box.ed.setCaret(offsetAt(f.box.ed.layout(), p.x, p.y), true);
       return;
     }
@@ -2017,6 +2210,30 @@ export class DocumentMode {
     if (e.clientY < r.top + 10) this.view.scroller.scrollTop -= 20;
     else if (e.clientY > r.bottom - 10) this.view.scroller.scrollTop += 20;
     f.ed.setCaret(offsetAt(f.layout().text, p.x, p.y), true);
+  }
+
+  /** Border Painter: the edge of the cell under a point nearest it gets the pen's line (each edge once a drag). */
+  private paintAt(p: { x: number; y: number }, done: Set<string>): void {
+    const f = this.file;
+    const cell = this.cellAt(p);
+    if (!f || !cell) return;
+    const o = f.t.objects[cell.id];
+    const tb = f.layout().tables.get(cell.id);
+    if (o?.kind !== 'table' || !tb) return;
+    const t = o.table;
+    const at = tb.rows[cell.r];
+    if (!at) return;
+    const x1 = at.x + tb.xs[cell.c], x2 = at.x + tb.xs[cell.c + spanOf(t, cell.r, cell.c)];
+    const y1 = at.y;
+    let y2 = at.y;
+    for (let r = cell.r; r < cell.r + rowSpanOf(t, cell.r, cell.c); r++) y2 += tb.hs[r] ?? 0;
+    const sides: [BorderSide, number][] = [['top', p.y - y1], ['bottom', y2 - p.y], ['left', p.x - x1], ['right', x2 - p.x]];
+    sides.sort((a, b) => a[1] - b[1]);
+    const side = sides[0][0];
+    const key = `${cell.id}:${cell.r}:${cell.c}:${side}`;
+    if (done.has(key)) return;
+    done.add(key);
+    this.setTable(cell.id, paintEdge(t, cell.r, cell.c, side, this.tables.pen), 'Border Painter');
   }
 
   /** An in-line figure dragged to another place in the text: move it there (one undo step) and keep it picked. */
@@ -2337,6 +2554,8 @@ export class DocumentMode {
     const line = (v: number) => ed.setSelectedParas({ line: Math.abs(v - 1) < 1e-6 ? undefined : v }, 'spacing');
     const align = (j: 'left' | 'center' | 'right' | 'justify') => ed.setSelectedParas({ align: j === 'left' ? undefined : j }, 'align');
     switch (cmd) {
+      case 'text-to-table': void this.tables.textToTableDialog(); break;
+      case 'nav-pane': this.nav.toggle(); this.updateRibbon(); break;
       case 'doc-align-left': align('left'); break;
       case 'doc-align-center': align('center'); break;
       case 'doc-align-right': align('right'); break;
@@ -2653,7 +2872,8 @@ export class DocumentMode {
     this.lastTableKind = got.kind;
     if (inCell && host && got.kind !== 'drawing' && f.box?.cell) {
       // as wide as the cell inside its margins, the columns sharing it
-      const room = host.t.cols.slice(host.c, host.c + spanOf(host.t, host.r, host.c)).reduce((a, b) => a + b, 0) - 2 * CELL_PAD.x;
+      const hm = cellMargins(host.t, host.r, host.c);
+      const room = host.t.cols.slice(host.c, host.c + spanOf(host.t, host.r, host.c)).reduce((a, b) => a + b, 0) - hm.left - hm.right;
       const N = styleOf(f.t, {});
       const lines = got.kind === 'acs' ? 'acs' : got.kind === 'none' ? 'none' : 'grid';
       const t0 = emptyTable(rows, cols, N.size);
@@ -3209,6 +3429,13 @@ export class DocumentMode {
       const cmd = b.dataset.doc!;
       const box = /^box-(para|style|page|hf)$/.exec(cmd);
       if (box) { this.panel.open(box[1] as DocBoxKey, b); return; }
+      // the table galleries open under their buttons
+      if (cmd === 'table-styles' || cmd === 'table-borders') {
+        const br = b.getBoundingClientRect();
+        if (cmd === 'table-styles') this.tables.styleGallery(br.left, br.bottom + 2);
+        else this.tables.bordersMenu(br.left, br.bottom + 2);
+        return;
+      }
       if (!this.run(cmd)) this.host.command(cmd);
     });
     // selects that run a command: margins, paper, orientation, page numbers
@@ -3257,6 +3484,18 @@ export class DocumentMode {
       const n = Math.round(Number(head.value));
       if (tg && Number.isFinite(n)) this.setTable(tg.id, { ...tg.t, head: Math.max(0, Math.min(tg.t.rows.length, n)) }, 'Heading rows');
     });
+    // Table Design: the style options, and the pen the borders are drawn with
+    for (const box of r.querySelectorAll<HTMLInputElement>('[data-tbl-look]')) {
+      box.addEventListener('change', () => { this.tables.toggleLook(box.dataset.tblLook as keyof TableLook); this.focus(); });
+    }
+    const penStyle = r.querySelector<HTMLSelectElement>('#doc-pen-style')!;
+    for (const [v, label] of BORDER_STYLES) penStyle.append(new Option(label, v));
+    penStyle.addEventListener('change', () => { this.tables.setPen({ style: penStyle.value as BorderLine['style'] }); this.focus(); });
+    const penWidth = r.querySelector<HTMLSelectElement>('#doc-pen-width')!;
+    for (const w of BORDER_WIDTHS) penWidth.append(new Option(`${w} pt`, String(w)));
+    penWidth.addEventListener('change', () => { this.tables.setPen({ w: Number(penWidth.value) }); this.focus(); });
+    const penColour = r.querySelector<HTMLInputElement>('#doc-pen-colour')!;
+    penColour.addEventListener('change', () => { this.tables.setPen({ color: penColour.value.toLowerCase() }); this.focus(); });
     const shade = r.querySelector<HTMLInputElement>('#doc-tbl-shade')!;
     shade.addEventListener('change', () => { this.shade(shade.value.toLowerCase() === '#ffffff' ? undefined : shade.value); this.focus(); });
     const width = r.querySelector<HTMLInputElement>('#doc-tbl-width')!;
@@ -3367,7 +3606,24 @@ export class DocumentMode {
       for (const a of ['left', 'center', 'right']) press(`table-align-${a}`, al === a);
       const v = tg.t.rows[tg.r]?.[tg.c]?.valign ?? 'top';
       for (const a of ['top', 'center', 'bottom']) press(`table-valign-${a}`, v === a);
+      // the style's options: off for a table with no style (they change nothing there)
+      const look = lookOfTable(tg.t);
+      for (const box of this.ribbon.querySelectorAll<HTMLInputElement>('[data-tbl-look]')) {
+        const k = box.dataset.tblLook as keyof TableLook;
+        box.checked = k === 'header' ? look.header && (tg.t.head > 0 || !!tg.t.style) : look[k];
+        box.disabled = !tg.t.style && k !== 'header';
+      }
     }
+    press('table-painter', this.tables.painting);
+    press('table-gridlines', this.view.gridlines);
+    press('nav-pane', this.nav.open);
+    const pen = this.tables.pen;
+    pick('#doc-pen-style', pen.style);
+    pick('#doc-pen-width', String(pen.w));
+    const penColour = this.ribbon.querySelector<HTMLInputElement>('#doc-pen-colour');
+    if (penColour && penColour !== active) penColour.value = pen.color;
+    const sw = this.ribbon.querySelector<HTMLElement>('#doc-pen-swatch');
+    if (sw) { const svg = penSwatch(pen); if (sw.innerHTML !== svg) sw.innerHTML = svg; }
     this.showZoom();
     const status = document.querySelector<HTMLElement>('#doc-status');
     if (status) {
@@ -3413,7 +3669,7 @@ export function fitDocColumns(t: TableData, f: DocFile, textW: number): TableDat
     let w = 18;
     t.rows.forEach((row, r) => {
       if (!row[c] || isCovered(t, r, c) || spanOf(t, r, c) > 1) return;
-      w = Math.max(w, f.layouter.naturalWidth(f.t, row[c].runs, row[c].paras));
+      w = Math.max(w, f.layouter.naturalCellWidth(f.t, t, r, c));
     });
     return Math.ceil(w);
   });
