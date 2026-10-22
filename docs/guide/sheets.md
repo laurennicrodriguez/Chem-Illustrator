@@ -57,7 +57,30 @@ Common functions include `SUM`, `AVERAGE`, `MIN`, `MAX`, `MEDIAN`, `STDEV`, `COU
 - **Text:** `LEFT`, `RIGHT`, `MID`, `FIND`, `SEARCH`, `SUBSTITUTE`, `REPLACE`, `TEXT`, `VALUE`, `CONCAT`, `TEXTJOIN`, `TEXTSPLIT`.
 - **Statistics:** `STDEV.S`, `STDEV.P`, `VAR.S`, `VAR.P` (and the older `VAR`, `VARP`, `STDEVP`), `T.TEST`, `T.INV`, `T.INV.2T`, `T.DIST` (with `.2T` and `.RT`), `CONFIDENCE.NORM`, `CONFIDENCE.T`, `NORM.DIST`, `NORM.INV`, `NORM.S.DIST`, `NORM.S.INV`, `LINEST`, `LOGEST`, `PERCENTILE` (`.INC`, `.EXC`), `QUARTILE` (`.INC`, `.EXC`), `RANK` (`.EQ`, `.AVG`), `LARGE`, `SMALL`.
 
-Functions that give a block of results (`LINEST`, `LOGEST`, `TEXTSPLIT`, and `INDEX` or `XLOOKUP` returning a whole row) show their first result in the cell; pick out another with `INDEX`, for example `=INDEX(LINEST(B2:B9,A2:A9),1,2)` for the intercept. Not every Excel function is available; one that isn't shows an error in its cell.
+- **Dates and times:** `TODAY`, `NOW`, `DATE`, `TIME`, `YEAR`, `MONTH`, `DAY`, `HOUR`, `MINUTE`, `SECOND`, `WEEKDAY`, `WEEKNUM`, `ISOWEEKNUM`, `DATEDIF`, `DAYS`, `EDATE`, `EOMONTH`, `NETWORKDAYS`, `WORKDAY` (and their `.INTL` forms), `DATEVALUE`, `TIMEVALUE`. Dates are numbered as in Excel, so they copy both ways. Typing `2026-10-22`, `10/22/2026`, `22-Oct-26` or `13:30` makes a date or time, and the column widens to show it.
+
+### Arrays that spill
+
+A formula that gives several results fills the cells below and to the right of it, as in Excel 365: `=SORT(A2:B20, 2, -1)`, `=FILTER(A2:C40, C2:C40>80)`, `=UNIQUE(B2:B40)`, `=SEQUENCE(10)`, and `VSTACK`, `HSTACK`, `TAKE`, `DROP`, `CHOOSEROWS`, `CHOOSECOLS`, `TOCOL`, `TOROW`, `SORTBY` and `TRANSPOSE`. `LINEST`, `LOGEST` and `TEXTSPLIT` spill their whole result too. A blue outline shows the spilled cells when one is picked; the formula is typed in its first cell only. When something is in the way the formula shows `#SPILL!` until the cells are cleared. `A2#` refers to everything spilled from A2, and `@` takes one value where a block would spill.
+
+`LET` names parts of a formula (`=LET(n, B2/MW(A2), n*1000)`), and `LAMBDA` makes a function of your own. Give a LAMBDA a name in the Name Manager (for example `Mmol` for `=LAMBDA(mg, mw, mg/mw)`) and use it like any function: `=Mmol(C2, D2)`. `MAP`, `REDUCE`, `SCAN`, `BYROW`, `BYCOL` and `MAKEARRAY` take a LAMBDA too.
+
+Not every Excel function is available; one that isn't shows an error in its cell.
+
+### Insert Function and the Formulas tab
+
+**Formulas > Insert Function** (or the **fx** button by the formula bar, or Shift+F3) finds a function by name or by what it does ("working days", "molar mass"). Pick one to get a box for each of its arguments, with a line of help for the one you are in, what each argument works out to, and the formula's result before you press OK. On a cell that already holds one function, fx opens its arguments to change them. The Function Library buttons list the functions by category.
+
+### Names
+
+A name stands for cells, a number or a formula, so `=SUM(Yields)` can replace `=SUM($C$2:$C$40)`.
+
+- **Define Name** names the selected cells (it suggests the column's heading). Typing a new name in the name box, left of the formula bar, does the same; typing an existing name there goes to its cells.
+- **Create from Selection** names each column (or row) of the selection by its heading.
+- **Name Manager** (Ctrl+F3) lists the names with their values, and adds, changes or deletes them. A name belongs to the workbook or to one sheet. Renaming one changes the formulas that use it.
+- **Use in Formula** (or F3 while typing) puts a name into the formula.
+
+Names, spilling formulas and LAMBDAs are saved in .xlsx files the way Excel saves them, and read back from Excel's files.
 
 ### Chemistry functions
 

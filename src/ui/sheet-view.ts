@@ -56,6 +56,8 @@ export interface SheetViewHost {
   editStructure(row: number, col: number): void;
   /** A key not handled by the grid (menus, hotkeys). True when it did something. */
   key(e: KeyboardEvent): boolean;
+  /** F3 and its variants (names and Insert Function), in a cell or while typing. */
+  f3?(e: KeyboardEvent): void;
   /** The selection, the sheet showing or the cell being typed in changed. */
   changed(): void;
   /** A right-click: what was clicked. */
@@ -884,6 +886,17 @@ export class SheetView {
       ctx.strokeRect(x1 + 0.5, y1 + 0.5, x2 - x1 - 2, y2 - y1 - 2);
       ctx.restore();
     }
+    // the array the active cell spilled into (or would, dashed, when something is in the way)
+    const sp = s.spillAt(this.sel.active.r, this.sel.active.c);
+    if (sp) {
+      const x1 = X(sp.range.c1), y1 = Y(sp.range.r1), x2 = X(sp.range.c2 + 1), y2 = Y(sp.range.r2 + 1);
+      ctx.save();
+      if (sp.blocked) ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = '#4a7fd6';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x1 + 1.5, y1 + 1.5, x2 - x1 - 3, y2 - y1 - 3);
+      ctx.restore();
+    }
   }
 
   /** A data bar across a cell (conditional formatting). */
@@ -1634,7 +1647,10 @@ export class SheetView {
             if (text.startsWith('=')) s.paste({ row: r, col: c }, block, 'values');
             else s.setInput(r, c, text);
           }
-        } else this.typeInto(s, e.r, e.c, text);
+        } else {
+          this.typeInto(s, e.r, e.c, text);
+          this.widenForDate(s, e.r, e.c, text);
+        }
       }, this.place());
       this.metricsKey = '';
       if (!allSelected && text.trim() && !text.startsWith('=')) this.host.typed?.(e.r, e.c, text.trim());
@@ -1645,6 +1661,19 @@ export class SheetView {
     else this.render();
     this.host.changed();
     return true;
+  }
+
+  /** Excel widens a column still at its first width to fit a date or time typed in it, rather than show ####. */
+  private widenForDate(s: Sheet, r: number, c: number, text: string): void {
+    if (s.colWidths.has(c) || !text.trim()) return;
+    const typed = readTyped(text);
+    const style = s.styleAt(r, c);
+    const fmt = style?.numFmt ?? typed.format;
+    if (!fmt || !/[dmyh]/i.test(fmt.replace(/"[^"]*"|\[[^\]]*\]/g, '')) || /[0#?]/.test(fmt)) return;
+    const v = typed.formula ? this.wb!.formulaAt(s, text, { row: r, col: c }, r, c) : typed.value;
+    if (typeof v !== 'number') return;
+    const w = this.textWidth(formatValue(v, fmt).text, this.font(style, 1)) + 10;
+    if (w > DEFAULT_COL_W) s.setColWidth(c, Math.min(600, Math.ceil(w)));
   }
 
   /** Would typing this into a cell pass its rule? (A formula's answer isn't known yet, so it passes, and Circle Invalid Data finds it.) */
@@ -1757,6 +1786,7 @@ export class SheetView {
     if (k === 'Tab') { e.preventDefault(); this.commitEdit(0, e.shiftKey ? -1 : 1); return; }
     if (k === 'Escape') { e.preventDefault(); this.cancelEdit(); return; }
     if (k === 'F2') { e.preventDefault(); ed.mode = ed.mode === 'enter' ? 'edit' : 'enter'; return; }
+    if (k === 'F3' && this.host.f3) { e.preventDefault(); this.host.f3(e); return; }
     if (ed.mode === 'enter' && /^Arrow/.test(k) && !this.pointing()) {
       e.preventDefault();
       const [dr, dc] = k === 'ArrowUp' ? [-1, 0] : k === 'ArrowDown' ? [1, 0] : k === 'ArrowLeft' ? [0, -1] : [0, 1];
@@ -1805,6 +1835,7 @@ export class SheetView {
       return;
     }
     if (k === 'F2' && !e.shiftKey && !ctrl) { e.preventDefault(); this.editCell(); return; }
+    if (k === 'F3' && this.host.f3) { e.preventDefault(); this.host.f3(e); return; }
     if (k === 'Escape') {
       if (this.copied) { this.copied = null; this.render(); }
       if (!this.findBar.hidden) this.closeFind();

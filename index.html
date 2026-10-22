@@ -435,6 +435,7 @@
       <button role="tab" data-sh-tab="home" aria-selected="true">Home</button>
       <button role="tab" data-sh-tab="dashboard" aria-selected="false" hidden>Dashboard</button>
       <button role="tab" data-sh-tab="insert" aria-selected="false">Insert</button>
+      <button role="tab" data-sh-tab="formulas" aria-selected="false">Formulas</button>
       <button role="tab" data-sh-tab="review" aria-selected="false">Review</button>
       <button role="tab" data-sh-tab="table" aria-selected="false" class="rb-context" hidden>Table Design</button>
       <button role="tab" data-sh-tab="chart" aria-selected="false" class="rb-context" hidden>Chart</button>
@@ -498,6 +499,10 @@
               <option value="0%">Percentage</option>
               <option value="0.00E+00">Scientific</option>
               <option value="#,##0">Thousands (1,234)</option>
+              <option value="m/d/yyyy">Short Date</option>
+              <option value="dddd, mmmm d, yyyy">Long Date</option>
+              <option value="yyyy-mm-dd">Date (2026-10-22)</option>
+              <option value="h:mm:ss AM/PM">Time</option>
               <option value="@">Text</option>
               <option value="custom">Other…</option>
             </select>
@@ -598,6 +603,40 @@
           <button class="rb-big" data-sh="insert-dashboard" title="A new sheet of tiles (charts, headline numbers, tables, slicers, structure galleries) built from the tables in this workbook"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2.5" y="3" width="7" height="6" rx="1"/><rect x="11.5" y="3" width="6" height="3.5" rx="1"/><rect x="11.5" y="8.5" width="6" height="8.5" rx="1"/><rect x="2.5" y="11" width="7" height="6" rx="1"/></svg></span>Dashboard</button>
         </div>
         <div class="rb-label">Dashboards</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-sh-panel="formulas" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="insert-function" title="Find a function by what it works out, then fill in its arguments with help for each (Shift+F3)"><span class="rb-icon"><i>fx</i></span>Insert Function</button>
+          <div class="rb-col">
+            <button data-sh="autosum" title="Add up the numbers above or to the left (Alt+=)">AutoSum</button>
+            <button data-sh="fn-cat" data-cat="Chemistry" title="Chemistry functions: molar mass, formulas, HRMS, isotopes…">Chemistry ▾</button>
+            <button data-sh="fn-cat" data-cat="Math &amp; Trig" title="Math and trigonometry functions">Math &amp; Trig ▾</button>
+          </div>
+          <div class="rb-col">
+            <button data-sh="fn-cat" data-cat="Statistical" title="Statistical functions">Statistical ▾</button>
+            <button data-sh="fn-cat" data-cat="Logical" title="Logical functions: IF, AND, IFS…">Logical ▾</button>
+            <button data-sh="fn-cat" data-cat="Text" title="Text functions">Text ▾</button>
+          </div>
+          <div class="rb-col">
+            <button data-sh="fn-cat" data-cat="Date &amp; Time" title="Date and time functions: TODAY, DATEDIF, NETWORKDAYS…">Date &amp; Time ▾</button>
+            <button data-sh="fn-cat" data-cat="Lookup &amp; Reference" title="Lookup and reference functions: XLOOKUP, INDEX, MATCH…">Lookup &amp; Reference ▾</button>
+            <button data-sh="fn-cat" data-cat="Arrays &amp; LAMBDA" title="Functions that spill arrays, and LET and LAMBDA">Arrays &amp; LAMBDA ▾</button>
+          </div>
+        </div>
+        <div class="rb-label">Function Library</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="name-manager" title="See, add, change and delete the workbook's names (Ctrl+F3)"><span class="rb-icon">🏷</span>Name Manager</button>
+          <div class="rb-col">
+            <button data-sh="define-name" title="Give the selected cells, a number or a formula a name to use in formulas">Define Name…</button>
+            <button data-sh="use-in-formula" title="Put a name into the formula">Use in Formula ▾</button>
+            <button data-sh="names-from-selection" title="Name each column or row of the selection by its heading (Ctrl+Shift+F3)">Create from Selection…</button>
+          </div>
+        </div>
+        <div class="rb-label">Defined Names</div>
       </div>
     </div>
     <div class="rb-panel" data-sh-panel="review" hidden>
@@ -1577,8 +1616,8 @@
     <div id="design-lib" class="design-only" hidden></div>
     <div id="sheet-pane" class="sheet-only" hidden>
       <div id="formula-bar">
-        <input id="sh-name" spellcheck="false" aria-label="Cell name (type a cell such as B5 and press Enter to go there)" title="The selected cell. Type a cell such as B5, a block such as A1:C9, or a sheet name, and press Enter to go there" />
-        <button id="sh-fx" type="button" title="Insert a function (chemistry functions first)">fx</button>
+        <input id="sh-name" spellcheck="false" aria-label="Cell name (type a cell such as B5 and press Enter to go there)" title="The selected cell, or its name. Type a cell such as B5, a block such as A1:C9, a sheet or a defined name and press Enter to go there; type a new name to give it to the selected cells" />
+        <button id="sh-fx" type="button" title="Insert Function: find a function and fill in its arguments (Shift+F3)">fx</button>
         <textarea id="sh-formula" rows="1" spellcheck="false" aria-label="Cell contents"></textarea>
       </div>
       <div id="sheet-host"></div>

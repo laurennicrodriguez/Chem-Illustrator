@@ -4,7 +4,8 @@
 // A name belongs to the whole workbook or to one sheet; a sheet's own name wins on that sheet.
 
 import type { Sheet } from './workbook';
-import { tokenize } from './formula';
+import { tokenize, untokenize } from './formula';
+import { Range, parseRange, quoteSheet, colName } from './refs';
 
 export interface DefinedName {
   name: string;
@@ -48,4 +49,40 @@ export function findName(list: readonly DefinedName[], name: string, sheet: Shee
 /** The name a formula on `home` means: the sheet's own, else the workbook's. */
 export function resolveName(list: readonly DefinedName[], name: string, home: Sheet | undefined): DefinedName | undefined {
   return (home && findName(list, name, home)) || findName(list, name, undefined);
+}
+
+/** The cells a name stands for, when it is just a block of cells (=Sheet1!$C$2:$C$40); null otherwise. */
+export function nameTarget(formula: string): { sheet: string | null; range: Range } | null {
+  const m = /^=?(?:'((?:[^']|'')+)'|([A-Za-z_][\w.]*))?(!?)(\$?[A-Za-z]{1,3}\$?\d+(?::\$?[A-Za-z]{1,3}\$?\d+)?)$/.exec(formula.trim());
+  if (!m || (!m[3] && (m[1] || m[2]))) return null;
+  const range = parseRange(m[4].toUpperCase());
+  return range ? { sheet: m[3] ? (m[1] ?? m[2]).replace(/''/g, "'") : null, range } : null;
+}
+
+/** What a name for some cells refers to, as Excel writes it: =Sheet1!$A$1:$C$9. */
+export function refersTo(sheet: string, r: Range): string {
+  const cell = (row: number, col: number) => `$${colName(col)}$${row + 1}`;
+  const a = cell(r.r1, r.c1), b = cell(r.r2, r.c2);
+  return `=${quoteSheet(sheet)}!${a === b ? a : `${a}:${b}`}`;
+}
+
+/** A formula with a name changed (renaming in the Name Manager): LAMBDA names called as functions too. */
+export function renameInFormula(formula: string, from: string, to: string): string {
+  let toks;
+  try { toks = tokenize(formula.startsWith('=') ? formula.slice(1) : formula); } catch { return formula; }
+  const low = from.toLowerCase();
+  let changed = false;
+  const out = toks.map((t) => {
+    if ((t.t === 'name' || t.t === 'fn') && t.v.toLowerCase() === low) { changed = true; return to; }
+    return t.t === 'ref' ? untokenize([t]) : t.s;
+  });
+  return changed ? (formula.startsWith('=') ? '=' : '') + out.join('') : formula;
+}
+
+/** A label from a cell made into a name, as Create from Selection does: "Yield (%)" → Yield__. */
+export function nameFromLabel(label: string): string | null {
+  let n = label.trim().replace(/[^A-Za-z0-9_.]/g, '_');
+  if (!n) return null;
+  if (!/^[A-Za-z_]/.test(n)) n = '_' + n;
+  return nameProblem(n) ? (nameProblem(n + '_') ? null : n + '_') : n;
 }

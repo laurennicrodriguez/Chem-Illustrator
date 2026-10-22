@@ -1597,6 +1597,19 @@ export class Workbook {
     }
   }
 
+  /** A formula worked out in a cell of a sheet with arrays and blocks kept whole (the Function Arguments and Name Manager previews). */
+  formulaArg(s: Sheet, formula: string, row: number, col: number): Arg {
+    const tree = this.parse(formula.startsWith('=') ? formula : '=' + formula);
+    if (tree instanceof CellError) return tree;
+    try {
+      const host = this.hostFor(s);
+      host.home = { row, col };
+      return evaluateArg(tree, host);
+    } catch (e) {
+      return ERR.value(`This formula could not be worked out (${(e as Error).message})`);
+    }
+  }
+
   /** What data validation needs to work out its limits and lists on a sheet. */
   validationHost(s: Sheet): ValidationHost {
     return {
