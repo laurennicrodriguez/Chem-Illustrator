@@ -4,7 +4,7 @@
 // editing, and how they are saved in Word files and opened again.
 
 import { describe, it, expect } from 'vitest';
-import { unzipSync, zipSync, strFromU8 } from 'fflate';
+import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
 import { writeDocx, readDocx, type DocxDeps } from '../src/io/docx';
 import { newDocument, paraFromStyle, runStyleOf, type DocText } from '../src/document/document';
 import { cmtIds, cmtString, commentRanges, commentSpan, initials, markComment, nextCommentId, placedComments, unmarkComment, type CommentThread } from '../src/document/comments';
@@ -14,7 +14,7 @@ import { Deck } from '../src/deck/deck';
 import { writePptx, type PptxOptions } from '../src/io/pptx-write';
 import { readPptx } from '../src/io/pptx-read';
 import { NS } from '../src/io/ooxml';
-import { readModernComments, readCommentAuthors } from '../src/io/pptx-comments';
+import { readModernComments, readCommentAuthors, readLegacyComments } from '../src/io/pptx-comments';
 import type { PinnedComment } from '../src/document/comments';
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -136,9 +136,36 @@ describe('comments in Word files', () => {
     expect(byText['Reword?']).toBe('stirred for 2 h.\nThen');
     expect(placed.length).toBe(2);
     const first = placed.find((p) => p.c.author === 'Nate')!.c;
-    expect(first.replies).toEqual([{ author: 'Ana', date: '2026-10-14T22:00:00Z', text: 'It was 16 h.' }]);
+    expect(first.replies).toEqual([{ author: 'Ana', date: '2026-10-14T22:00:00.000Z', text: 'It was 16 h.' }]);
     expect(placed.find((p) => p.c.text === 'Reword?')!.c.done).toBe(true);
     expect(first.done).toBeFalsy();
+  });
+
+  it('writes and reads Word\'s comment times as local clock time, preferring Word 365\'s UTC time', async () => {
+    const tz = process.env.TZ;
+    process.env.TZ = 'America/Chicago';
+    try {
+      const files = unzipSync(await writeDocx(sample(), deps));
+      // 21:00 UTC is 16:00 in Chicago in October; Word shows w:date as it stands
+      expect(strFromU8(files['word/comments.xml'])).toContain('w:date="2026-10-14T16:00:00Z"');
+      const back = (await readDocx(zipSync(files))).doc;
+      expect(Object.values(back.comments ?? {}).map((c) => c.date)).toContain('2026-10-14T21:00:00.000Z');
+      // a file from Word 365: its UTC time wins over w:date
+      // (copied so the zip library takes them as files)
+      const u8 = (t: string) => { const b = strToU8(t), out = new Uint8Array(b.length); out.set(b); return out; };
+      // (a comment is known by its last paragraph)
+      const first = /<w:comment w:id="0"[^]*?<\/w:comment>/.exec(strFromU8(files['word/comments.xml']))![0];
+      const para = [...first.matchAll(/w14:paraId="([0-9A-F]+)"/g)].pop()![1];
+      files['word/commentsIds.xml'] = u8(`<w16cid:commentsIds xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid"><w16cid:commentId w16cid:paraId="${para}" w16cid:durableId="1257A547"/></w16cid:commentsIds>`);
+      files['word/commentsExtensible.xml'] = u8('<w16cex:commentsExtensible xmlns:w16cex="http://schemas.microsoft.com/office/word/2018/wordml/cex"><w16cex:commentExtensible w16cex:durableId="1257A547" w16cex:dateUtc="2026-10-14T21:30:00Z"/></w16cex:commentsExtensible>');
+      files['word/_rels/document.xml.rels'] = u8(strFromU8(files['word/_rels/document.xml.rels']).replace('</Relationships>',
+        '<Relationship Id="rIdX1" Type="http://schemas.microsoft.com/office/2016/09/relationships/commentsIds" Target="commentsIds.xml"/>' +
+        '<Relationship Id="rIdX2" Type="http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible" Target="commentsExtensible.xml"/></Relationships>'));
+      const word365 = (await readDocx(zipSync(files))).doc;
+      expect(Object.values(word365.comments ?? {}).find((c) => c.author === 'Nate')?.date).toBe('2026-10-14T21:30:00.000Z');
+    } finally {
+      if (tz === undefined) delete process.env.TZ; else process.env.TZ = tz;
+    }
   });
 
   it('writes no comment parts for a document without comments', async () => {
@@ -195,6 +222,8 @@ describe('comments on slides', () => {
     expect(cm).toContain('<p:pos x="800" y="400"/>');
     expect(cm).toContain('dt="2026-10-14T21:00:00.000"');
     expect(cm).toContain('<p15:parentCm authorId="0" idx="1"/>');
+    // every comment says its time is UTC, else PowerPoint takes it as local time
+    expect(cm.match(/timeZoneBias="0"/g)).toHaveLength(3);
     expect(files['ppt/comments/comment1.xml']).toBeUndefined();
     expect(strFromU8(files['ppt/slides/_rels/slide2.xml.rels'])).toContain('../comments/comment2.xml');
     const back = readPptx(bytes);
@@ -203,6 +232,15 @@ describe('comments on slides', () => {
     expect(got.map((c) => [c.author, c.text, c.x, c.y, !!c.done])).toEqual([['Nate', 'Bigger structure?', 100, 50, false], ['Ana', 'Typo in title', 300.5, 200, true]]);
     expect(got[0].replies).toEqual([{ author: 'Ana', date: '2026-10-14T22:00:00.000Z', text: 'Agreed.\nWill fix.' }]);
     expect(got[0].date).toBe('2026-10-14T21:00:00.000Z');
+  });
+
+  it('reads PowerPoint\'s local comment times with their time-zone bias', () => {
+    const parse = (x: string) => new DOMParser().parseFromString(x, 'application/xml');
+    const P15 = 'http://schemas.microsoft.com/office/powerpoint/2012/main';
+    const authors = readCommentAuthors(parse(`<p:cmAuthorLst xmlns:p="${NS.p}"><p:cmAuthor id="1" name="Nate" initials="N" lastIdx="1" clrIdx="0"/></p:cmAuthorLst>`));
+    const list = readLegacyComments(parse(`<p:cmLst xmlns:p="${NS.p}"><p:cm authorId="1" dt="2026-10-22T02:36:30.459" idx="1"><p:pos x="10" y="10"/><p:text>Hi</p:text>` +
+      `<p:extLst><p:ext uri="{C676402C-5697-4E1C-873F-D02D1690AC5C}"><p15:threadingInfo xmlns:p15="${P15}" timeZoneBias="300"/></p:ext></p:extLst></p:cm></p:cmLst>`), authors);
+    expect(list[0].date).toBe('2026-10-22T07:36:30.459Z');
   });
 
   it('reads PowerPoint 365\'s newer comments', () => {
@@ -222,7 +260,7 @@ describe('comments on slides', () => {
     d.attach();
     const bytes = await writePptx({ size: d.size, master: d.master, slides: d.slides.map((s, i) => ({ layout: s.layout, doc: d.docOf(i), notes: '', comments: [pinned()] })) }, opts);
     const files = unzipSync(bytes);
-    files['ppt/comments/comment1.xml'] = new TextEncoder().encode('<p:cmLst');
+    files['ppt/comments/comment1.xml'] = strToU8('<p:cmLst');
     const back = readPptx(zipSync(files));
     expect(back.slides).toHaveLength(1);
     expect(back.slides[0].comments).toBeUndefined();

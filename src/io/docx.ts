@@ -53,11 +53,31 @@ export const DOCX_REL = {
   comments: R + 'comments',
   /** Word 2013's part saying which comments are replies, and which are resolved. */
   commentsExtended: 'http://schemas.microsoft.com/office/2011/relationships/commentsExtended',
+  /** Word 365's parts giving each comment a lasting id, and that id its time in UTC. */
+  commentsIds: 'http://schemas.microsoft.com/office/2016/09/relationships/commentsIds',
+  commentsExtensible: 'http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible',
 };
 
 /** Word 2010's and 2013's additions (paragraph ids, and the comments' replies and Resolved marks). */
 export const W14_NS = 'http://schemas.microsoft.com/office/word/2010/wordml';
 export const W15_NS = 'http://schemas.microsoft.com/office/word/2012/wordml';
+export const W16CID_NS = 'http://schemas.microsoft.com/office/word/2016/wordml/cid';
+export const W16CEX_NS = 'http://schemas.microsoft.com/office/word/2018/wordml/cex';
+
+/**
+ * Word's w:date is the writer's local clock time, though it ends in Z (the real UTC time, when
+ * there is one, is in commentsExtensible.xml). These convert between that and an ISO date.
+ */
+export function toWordDate(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}Z`;
+}
+export function fromWordDate(s: string): string {
+  const d = new Date(s.replace(/Z$/i, ''));
+  return isNaN(d.getTime()) ? s : d.toISOString();
+}
 
 /** Names Word's pictures of our drawings carry (kept by Word), so each can be found again. */
 export const DRAWING_NAME = 'Chem Illustrator drawing';

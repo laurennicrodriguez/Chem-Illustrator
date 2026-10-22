@@ -685,7 +685,7 @@ class Writer {
     const link = this.pkg.relate(from, REL_VIDEO, fromPpt(from, path));
     const blip = this.addMedia(from, still.bytes, ext);
     return `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="Animation ${id - 1}"><a:hlinkClick r:id="" action="ppaction://media"/></p:cNvPr><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>` +
-      `<p:nvPr><a:videoFile r:link="${link}"/><p:extLst><p:ext uri="{DAA4B4D4-6D71-4841-9C94-3DA1D7DE2C6F}"><p14:media xmlns:p14="${NS_P14}" r:embed="${media}"/></p:ext></p:extLst></p:nvPr></p:nvPicPr>` +
+      `<p:nvPr><a:videoFile r:link="${link}"/><p:extLst><p:ext uri="{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}"><p14:media xmlns:p14="${NS_P14}" r:embed="${media}"/></p:ext></p:extLst></p:nvPr></p:nvPicPr>` +
       `<p:blipFill><a:blip r:embed="${blip}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
       `<p:spPr>${xfrm(box)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`;
   }
