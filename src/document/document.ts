@@ -13,6 +13,7 @@
 import type { CommentThread } from './comments';
 import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
 import type { RichText } from '../text/editing';
+import type { Measure } from '../text/layout';
 import { ACS_1996, type DocStyle } from '../style';
 import * as rt from '../richtext';
 import { cleanPara, fitParas, paraCount, paraRange } from '../text/paragraphs';
@@ -47,9 +48,88 @@ export interface NamedStyle {
   keepNext: boolean;
   /** The style a new paragraph gets after Enter at the end of one of these (Normal after a heading). */
   next?: string;
-  /** A heading's level (1 to 3). */
+  /** A heading's level (1 to 9). */
   outline?: number;
+  /** Made by the person (Styles pane > New Style), so it can be deleted. */
+  custom?: boolean;
 }
+
+/**
+ * A character style (Emphasis, Strong…): a look for words rather than whole paragraphs. It sets
+ * only what it gives; the rest comes from the paragraph. Text in it carries its id (TextRun.cstyle).
+ */
+export interface CharStyle {
+  id: string;
+  name: string;
+  font?: string;
+  size?: number;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  color?: string;
+  smallCaps?: boolean;
+  allCaps?: boolean;
+  strike?: boolean;
+  custom?: boolean;
+}
+
+/** A watermark (Design > Watermark): words across every page, behind the text, as Word's text watermarks. */
+export interface Watermark {
+  text: string;
+  font: string;
+  color: string;
+  /** Across the page corner to corner, or straight across. */
+  layout: 'diagonal' | 'horizontal';
+  /** Faded half way into the paper (Word's Semitransparent). */
+  faded: boolean;
+}
+
+/** A line round every page (Design > Page Borders), as Word's box border. */
+export interface PageBorder {
+  style: 'single' | 'double' | 'dotted' | 'dashed' | 'thick';
+  /** Its width, in points. */
+  width: number;
+  color: string;
+  /** Measured from the edge of the paper or from the text (the margins), and how far from it, in points. */
+  from: 'page' | 'text';
+  space: number;
+}
+
+/** Word's watermark presets. */
+export const WATERMARKS = ['CONFIDENTIAL', 'DRAFT', 'DO NOT COPY', 'SAMPLE', 'PRELIMINARY', 'NOT FOR DISTRIBUTION', 'ASAP', 'URGENT'];
+
+export function defaultWatermark(text = 'DRAFT'): Watermark {
+  return { text, font: 'Calibri', color: '#c0c0c0', layout: 'diagonal', faded: true };
+}
+
+export function defaultPageBorder(): PageBorder {
+  return { style: 'single', width: 0.5, color: '#000000', from: 'page', space: 24 };
+}
+
+/** A page as placed: its top left corner, size and setup (a laid-out page, or a page of a Word file). */
+export interface PagePlace { x: number; top: number; w: number; h: number; setup: PageSetup }
+
+/** The size and place of a watermark's words on a page: their font size, the middle of the margins, and how far they are turned. */
+export function watermarkPlace(w: Watermark, p: PagePlace, measure: Measure): { size: number; cx: number; cy: number; angle: number; width: number } {
+  const pg = p.setup;
+  const tw = Math.max(36, p.w - pg.left - pg.right), th = Math.max(36, p.h - pg.top - pg.bottom);
+  const k = Math.max(0.1, measure(w.text, 100, w.font, 'bold ') / 100);
+  const diag = w.layout === 'diagonal';
+  const size = diag ? (Math.min(tw, th) * Math.SQRT2) / (k + 1) : Math.min((tw * 0.95) / k, th / 2);
+  return { size, cx: p.x + pg.left + tw / 2, cy: p.top + pg.top + th / 2, angle: diag ? -Math.PI / 4 : 0, width: size * k };
+}
+
+/** The rectangle a page border is drawn on (the middle of its line). */
+export function borderRect(b: PageBorder, p: PagePlace): { x: number; y: number; w: number; h: number } {
+  const pg = p.setup;
+  const half = b.width / 2;
+  if (b.from === 'text') {
+    const x = p.x + pg.left - b.space - half, y = p.top + pg.top - b.space - half;
+    return { x, y, w: p.w - pg.left - pg.right + 2 * (b.space + half), h: p.h - pg.top - pg.bottom + 2 * (b.space + half) };
+  }
+  return { x: p.x + b.space + half, y: p.top + b.space + half, w: p.w - 2 * (b.space + half), h: p.h - 2 * (b.space + half) };
+}
+
 
 /** Page size and margins, in points. */
 export interface PageSetup {
@@ -258,6 +338,12 @@ export interface DocText extends RichText {
   numFormat?: PageNumFormat;
   /** The first section's line numbers (none unless chosen). */
   lineNumbers?: LineNumbers;
+  /** Character styles changed or made here (the standard ones are used where none is given; see charStylesOf). */
+  charStyles?: Record<string, CharStyle>;
+  /** Design > Watermark, Page Color and Page Borders. */
+  watermark?: Watermark;
+  pageColor?: string;
+  pageBorder?: PageBorder;
 }
 
 /** How footnotes or endnotes are numbered, by Word's names: 1, 2, 3; i, ii, iii; a, b, c; *, †, ‡ (chicago). */
@@ -309,6 +395,9 @@ export const CM = 72 / 2.54;
 
 const FONT = 'Times New Roman';
 
+/** Headings 4 to 9: size, bold and italic, each a little quieter than the one above. */
+const LOWER_HEADINGS: [number, boolean, boolean][] = [[11, false, true], [11, false, false], [10.5, false, true], [10.5, false, false], [10, false, true], [10, false, false]];
+
 /**
  * The standard styles, as in a journal's Supporting Information (taken from SI Assistant's ACS
  * style): Times New Roman 11 pt, justified, headings in bold, captions 10 pt. All can be changed.
@@ -321,6 +410,7 @@ export function defaultStyles(): Record<string, NamedStyle> {
     { ...base, id: 'Heading1', name: 'Heading 1', size: 13, bold: true, align: 'left', spaceBefore: 18, spaceAfter: 8, keepNext: true, next: 'Normal', outline: 1 },
     { ...base, id: 'Heading2', name: 'Heading 2', size: 11.5, bold: true, align: 'left', spaceBefore: 12, spaceAfter: 6, keepNext: true, next: 'Normal', outline: 2 },
     { ...base, id: 'Heading3', name: 'Heading 3', size: 11, bold: true, italic: true, align: 'left', spaceBefore: 10, spaceAfter: 4, keepNext: true, next: 'Normal', outline: 3 },
+    ...LOWER_HEADINGS.map(([size, bold, italic], i) => ({ ...base, id: `Heading${i + 4}`, name: `Heading ${i + 4}`, size, bold, italic, align: 'left' as const, spaceBefore: 8, spaceAfter: 4, keepNext: true, next: 'Normal', outline: i + 4 })),
     { ...base, id: 'Caption', name: 'Caption', size: 10, align: 'justify', spaceBefore: 4, spaceAfter: 12, next: 'Normal' },
   ];
   return Object.fromEntries(list.map((s) => [s.id, s]));
@@ -365,6 +455,7 @@ export function runStyleOf(s: NamedStyle): rt.RunStyle {
 export function paraFromStyle(s: NamedStyle, keep: ParaStyle): ParaStyle {
   return cleanPara({
     list: keep.list, level: keep.level, cont: keep.cont, pageBreak: keep.pageBreak, colBreak: keep.colBreak, section: keep.section, noLineNumbers: keep.noLineNumbers,
+    marks: keep.marks, tabs: keep.tabs, scheme: keep.scheme, bullet: keep.bullet,
     style: s.id === 'Normal' ? undefined : s.id,
     align: s.align === 'left' ? undefined : s.align,
     spaceBefore: s.spaceBefore, spaceAfter: s.spaceAfter,
@@ -441,6 +532,192 @@ export function modifyStyle(t: DocText, s: NamedStyle): DocText {
   const mine = paras.map((p) => (p.style ?? 'Normal') === s.id);
   const runs = mapParagraphRuns(t.runs, (r, p) => (mine[p] ? restyleRun(r, old, s) : r));
   return { ...t, styles, runs, paras: paras.map((p, i) => (mine[i] ? restylePara(p, old, s) : p)) };
+}
+
+/** The standard paragraph styles' ids (they can be changed but not deleted). */
+export const STANDARD_STYLES = new Set(Object.keys(defaultStyles()));
+
+/** A document with a standard style it may lack (one read from a file, or made before Heading 4 to 9 were added). */
+export function withStyle(t: DocText, id: string): DocText {
+  if (t.styles[id]) return t;
+  const d = defaultStyles()[id];
+  return d ? { ...t, styles: { ...t.styles, [id]: d } } : t;
+}
+
+/** A style id from a name: its letters and digits (Word's way), unlike any id the document has. */
+export function styleIdFor(name: string, taken: (id: string) => boolean): string {
+  const base = name.replace(/[^\p{L}\p{N}]/gu, '') || 'Style';
+  let id = base;
+  for (let k = 2; taken(id); k++) id = `${base}${k}`;
+  return id;
+}
+
+/**
+ * Styles pane > New Style: a paragraph style that looks like the paragraph the caret is in (its
+ * text's look and its spacing), given to that paragraph.
+ */
+export function newParaStyle(t: DocText, name: string, para: number, look: rt.RunStyle): { t: DocText; id: string } {
+  const paras = fitParas(t.paras, paraCount(rt.plainText(t.runs)));
+  const p = paras[para] ?? {};
+  const from = styleOf(t, p);
+  const id = styleIdFor(name, (x) => !!t.styles[x] || !!charStylesOf(t)[x]);
+  const s: NamedStyle = {
+    ...from, id, name: name.trim() || id, custom: true, outline: undefined,
+    font: look.font ?? from.font, size: look.size ?? from.size, bold: !!look.bold, italic: !!look.italic, color: look.color,
+    align: p.align ?? 'left', spaceBefore: p.spaceBefore ?? 0, spaceAfter: p.spaceAfter ?? 0, line: p.line ?? 1,
+    indent: p.indent ?? 0, firstLine: p.firstLine ?? 0, keepNext: !!p.keepNext, next: undefined,
+  };
+  const withIt = { ...t, styles: { ...t.styles, [id]: s } };
+  return { t: setParaStyle(withIt, para, para, id), id };
+}
+
+/** Delete a style made here: its paragraphs go back to Normal (and its text to the paragraph's look). */
+export function deleteStyle(t: DocText, id: string): DocText {
+  if (t.styles[id] && !STANDARD_STYLES.has(id)) {
+    const paras = fitParas(t.paras, paraCount(rt.plainText(t.runs)));
+    let out = t;
+    paras.forEach((p, i) => { if (p.style === id) out = setParaStyle(out, i, i, 'Normal'); });
+    const { [id]: _, ...styles } = out.styles;
+    return { ...out, styles };
+  }
+  const cs = t.charStyles?.[id];
+  if (cs?.custom) {
+    const { [id]: _, ...charStyles } = t.charStyles!;
+    return { ...clearCharStyle(t, 0, rt.plainText(t.runs).length, id), charStyles };
+  }
+  return t;
+}
+
+// ---------------------------------------------------------------- character styles
+
+/** Word's own character styles (and one for compound numbers, which journals set in bold). */
+export function defaultCharStyles(): Record<string, CharStyle> {
+  const list: CharStyle[] = [
+    { id: 'Emphasis', name: 'Emphasis', italic: true },
+    { id: 'Strong', name: 'Strong', bold: true },
+    { id: 'SubtleEmphasis', name: 'Subtle Emphasis', italic: true, color: '#404040' },
+    { id: 'IntenseEmphasis', name: 'Intense Emphasis', italic: true, color: '#2f5496' },
+    { id: 'CompoundNumber', name: 'Compound Number', bold: true, custom: false },
+  ];
+  return Object.fromEntries(list.map((s) => [s.id, s]));
+}
+
+/** The document's character styles: the standard ones, with any changed or made here. */
+export function charStylesOf(t: Pick<DocText, 'charStyles'>): Record<string, CharStyle> {
+  return { ...defaultCharStyles(), ...(t.charStyles ?? {}) };
+}
+
+const CHAR_KEYS = ['font', 'size', 'bold', 'italic', 'underline', 'color', 'smallCaps', 'allCaps', 'strike'] as const;
+
+/** The text formatting a character style gives (only what it sets; off-switches included, so Strong on bold text stays bold). */
+export function charStyleLook(s: CharStyle): Partial<rt.RunStyle> {
+  const o: Partial<rt.RunStyle> = {};
+  for (const k of CHAR_KEYS) if (s[k] !== undefined) (o as Record<string, unknown>)[k] = s[k];
+  return o;
+}
+
+/** Put the text between two offsets in a character style. */
+export function applyCharStyle(t: DocText, start: number, end: number, id: string): DocText {
+  const s = charStylesOf(t)[id];
+  if (!s || end <= start) return t;
+  return { ...t, runs: rt.applyStyle(t.runs, start, end, { ...charStyleLook(s), cstyle: id }) };
+}
+
+/**
+ * Take text out of a character style (all of them when `id` isn't given): what the style gave
+ * goes back to the look of the paragraph's style.
+ */
+export function clearCharStyle(t: DocText, start: number, end: number, id?: string): DocText {
+  const all = charStylesOf(t);
+  const paras = fitParas(t.paras, paraCount(rt.plainText(t.runs)));
+  let at = 0, p = 0;
+  const out: TextRun[] = [];
+  for (const r of t.runs) {
+    for (const piece of r.text.split(/(\n)/)) {
+      if (!piece) continue;
+      const a = Math.max(start, at), b = Math.min(end, at + piece.length);
+      const cs = r.cstyle ? all[r.cstyle] : undefined;
+      if (b > a && r.cstyle && (!id || r.cstyle === id)) {
+        const back = runStyleOf(styleOf(t, paras[p]));
+        const patch: Partial<rt.RunStyle> = { cstyle: undefined };
+        for (const k of CHAR_KEYS) if (cs && cs[k] !== undefined) (patch as Record<string, unknown>)[k] = back[k];
+        const fixed = rt.applyStyle([{ ...r, text: piece }], a - at, b - at, patch);
+        out.push(...fixed);
+      } else out.push({ ...r, text: piece });
+      if (piece === '\n') p++;
+      at += piece.length;
+    }
+  }
+  return { ...t, runs: rt.normalizeRuns(out) };
+}
+
+/** Change a character style: text in it changes too, where it still looked the way the style did. */
+export function modifyCharStyle(t: DocText, s: CharStyle): DocText {
+  const old = charStylesOf(t)[s.id];
+  const charStyles = { ...(t.charStyles ?? {}), [s.id]: s };
+  if (!old) return { ...t, charStyles };
+  const runs = t.runs.map((r) => {
+    if (r.cstyle !== s.id) return r;
+    const out: Record<string, unknown> = { ...r };
+    for (const k of CHAR_KEYS) {
+      if (s[k] === old[k]) continue;
+      // what the style gave changes; what was changed by hand stays
+      if (old[k] === undefined || (r[k] ?? undefined) === (old[k] || undefined)) out[k] = s[k] === false ? undefined : s[k];
+    }
+    return out as unknown as TextRun;
+  });
+  return { ...t, charStyles, runs: rt.normalizeRuns(runs) };
+}
+
+/** Styles pane > New Style (character): a character style with the look of the selected text, given to it. */
+export function newCharStyle(t: DocText, name: string, start: number, end: number, look: rt.RunStyle, para: ParaStyle): { t: DocText; id: string } {
+  const N = styleOf(t, para);
+  const id = styleIdFor(name, (x) => !!t.styles[x] || !!charStylesOf(t)[x]);
+  const s: CharStyle = { id, name: name.trim() || id, custom: true };
+  if (look.font && look.font !== N.font) s.font = look.font;
+  if (look.size && look.size !== N.size) s.size = look.size;
+  if (!!look.bold !== N.bold) s.bold = !!look.bold;
+  if (!!look.italic !== N.italic) s.italic = !!look.italic;
+  if (look.color && look.color !== N.color) s.color = look.color;
+  for (const k of ['underline', 'smallCaps', 'allCaps', 'strike'] as const) if (look[k]) s[k] = true;
+  const withIt = { ...t, charStyles: { ...(t.charStyles ?? {}), [id]: s } };
+  return { t: end > start ? applyCharStyle(withIt, start, end, id) : withIt, id };
+}
+
+// ---------------------------------------------------------------- clear formatting
+
+/**
+ * Home > Clear All Formatting: the selected text goes back to the plain look of Normal (or of
+ * its paragraph's style, `keepStyle`), and its paragraphs to Normal. What the text is (links,
+ * comments, tracked changes, figures) stays; a formula stays a formula.
+ */
+export function clearFormatting(t: DocText, start: number, end: number, first: number, last: number, keepStyle = false): DocText {
+  const paras = fitParas(t.paras, paraCount(rt.plainText(t.runs)));
+  const out: TextRun[] = [];
+  let at = 0, p = 0;
+  for (const r of t.runs) {
+    for (const piece of r.text.split(/(\n)/)) {
+      if (!piece) continue;
+      const a = Math.max(start, at), b = Math.min(end, at + piece.length);
+      if (b > a || (start === end && p >= first && p <= last)) {
+        const st = keepStyle ? styleOf(t, paras[p]) : styleOf(t, undefined);
+        const plain: TextRun = { ...runStyleOf(st), text: '' } as TextRun;
+        for (const k of ['obj', 'rev', 'cmt', 'link', 'formula'] as const) if (r[k] !== undefined) (plain as unknown as Record<string, unknown>)[k] = r[k];
+        // a link keeps its link look
+        if (r.link) { plain.color = r.color; plain.underline = r.underline; }
+        const lo = start === end ? 0 : a - at, hi = start === end ? piece.length : b - at;
+        out.push({ ...r, text: piece.slice(0, lo) }, { ...plain, text: piece.slice(lo, hi) }, { ...r, text: piece.slice(hi) });
+      } else out.push({ ...r, text: piece });
+      if (piece === '\n') p++;
+      at += piece.length;
+    }
+  }
+  let next: DocText = { ...t, runs: rt.normalizeRuns(out) };
+  if (!keepStyle) {
+    const ps = fitParas(next.paras, paras.length).map((q, i) => (i < first || i > last ? q : paraFromStyle(styleOf(t, undefined), { ...q, list: undefined, level: undefined, cont: undefined, tabs: undefined } as ParaStyle)));
+    next = { ...next, paras: ps.map((q, i) => (i < first || i > last ? q : cleanPara({ ...q, pageBreak: paras[i].pageBreak, colBreak: paras[i].colBreak, section: paras[i].section, marks: paras[i].marks }))) };
+  }
+  return next;
 }
 
 // ---------------------------------------------------------------- objects and fields

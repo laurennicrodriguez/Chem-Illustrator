@@ -8,7 +8,8 @@ import type { Picture } from '../render/picture';
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
 import { drawLayout } from '../text/draw';
-import { BOX_PAD, SHADOWS, lookOf, styleOf, type DocText, type HeaderFooter, type NumberPlace } from './document';
+import { BOX_PAD, SHADOWS, borderRect, lookOf, styleOf, watermarkPlace, type DocText, type HeaderFooter, type NumberPlace, type PageBorder, type Watermark } from './document';
+import { withStack } from '../text/layout';
 import type { DocLayout, PageBox, TableBox } from './doc-layout';
 import { ACS_LINE, CELL_PAD, GRID_LINE } from './doc-layout';
 import type { TableData } from '../model';
@@ -54,6 +55,55 @@ export function drawHeaderFooter(ctx: CanvasRenderingContext2D, t: DocText, p: P
   }
 }
 
+/** A colour mixed part of the way into another (`k` 0: the first, 1: the second). */
+function mix(a: string, b: string, k: number): string {
+  const rgb = (c: string) => { const h = c.replace('#', ''); const f = h.length === 3 ? h.split('').map((x) => x + x).join('') : h.padEnd(6, '0'); return [0, 2, 4].map((i) => parseInt(f.slice(i, i + 2), 16) || 0); };
+  const x = rgb(a), y = rgb(b);
+  return '#' + x.map((v, i) => Math.round(v + (y[i] - v) * k).toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Design > Page Color, Watermark and Page Borders on a page (its top left corner at `p.x`,
+ * `p.top`), under the text. The watermark is as Word lays one out: in the middle of the
+ * margins, as big as fits, corner to corner (turned 45°) or straight across.
+ */
+export function drawPageLook(ctx: CanvasRenderingContext2D, t: DocText, p: PageBox): void {
+  if (t.pageColor) {
+    ctx.fillStyle = t.pageColor;
+    ctx.fillRect(p.x, p.top, p.w, p.h);
+  }
+  if (t.watermark?.text) drawWatermark(ctx, t.watermark, p, t.pageColor ?? '#ffffff');
+  if (t.pageBorder) drawPageBorder(ctx, t.pageBorder, p);
+}
+
+function drawWatermark(ctx: CanvasRenderingContext2D, w: Watermark, p: PageBox, paper: string): void {
+  const at = watermarkPlace(w, p, docMeasure);
+  ctx.save();
+  ctx.translate(at.cx, at.cy);
+  if (at.angle) ctx.rotate(at.angle);
+  ctx.font = `bold ${at.size}px ${withStack(w.font)}`;
+  // semitransparent: half way into the paper (printed pages can't be see-through)
+  ctx.fillStyle = w.faded ? mix(w.color, paper, 0.5) : w.color;
+  ctx.fillText(w.text, -at.width / 2, at.size * 0.35);
+  ctx.restore();
+}
+
+function drawPageBorder(ctx: CanvasRenderingContext2D, b: PageBorder, p: PageBox): void {
+  const r = borderRect(b, p);
+  ctx.save();
+  ctx.strokeStyle = b.color;
+  ctx.lineCap = b.style === 'dotted' ? 'round' : 'butt';
+  const box = (inset: number, lw: number) => { ctx.lineWidth = lw; ctx.strokeRect(r.x + inset, r.y + inset, r.w - 2 * inset, r.h - 2 * inset); };
+  if (b.style === 'double') { box(-b.width, b.width * 0.6); box(b.width, b.width * 0.6); }
+  else if (b.style === 'thick') { box(-b.width * 0.6, b.width * 1.4); box(b.width * 1.2, Math.max(0.25, b.width * 0.4)); }
+  else {
+    if (b.style === 'dotted') ctx.setLineDash([0.01, b.width * 2.5]);
+    if (b.style === 'dashed') ctx.setLineDash([b.width * 4, b.width * 2.5]);
+    box(0, b.width);
+  }
+  ctx.restore();
+}
+
 /** Draw a page's line numbers (Layout > Line Numbers), in grey on screen and black in print. */
 export function drawLineNumbers(ctx: CanvasRenderingContext2D, lay: DocLayout, page: number, color = '#000'): void {
   ctx.fillStyle = color;
@@ -84,6 +134,7 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
   return lay.pages.map((p) => {
     const ctx = new VectorContext(width);
     const c = ctx as unknown as CanvasRenderingContext2D;
+    drawPageLook(c, t, p);
     drawHeaderFooter(c, t, p);
     drawLineNumbers(c, lay, p.index);
     // figures behind the text first

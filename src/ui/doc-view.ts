@@ -9,7 +9,7 @@ import { SHEET_MARGIN, breaksIn, continuous, outlineMarks, type DocViewKind } fr
 import type { LaidLine } from '../text/layout';
 import type { DocFile } from '../document/doc-file';
 import { figures } from '../document/doc-file';
-import { drawDocTable, drawHeaderFooter, drawLineNumbers, drawNoteRules } from '../document/doc-paint';
+import { drawDocTable, drawHeaderFooter, drawLineNumbers, drawNoteRules, drawPageLook } from '../document/doc-paint';
 import { BOX_PAD, SHADOWS, lookOf, type DocText } from '../document/document';
 import { BREAK_NAMES } from '../document/sections';
 import { drawLayout } from '../text/draw';
@@ -551,6 +551,8 @@ export class DocView {
     ctx.fillStyle = '#fff';
     ctx.fillRect(p.x, p.top, p.w, p.h);
     ctx.restore();
+    // Design > Page Color, Watermark and Page Borders
+    if (this.file) drawPageLook(ctx, this.file.t, p);
     const pg = p.setup;
     const x1 = p.x + pg.left, x2 = p.x + p.w - pg.right, y1 = p.top + pg.top, y2 = p.top + p.h - pg.bottom;
     const m = 12;

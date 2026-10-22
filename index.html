@@ -733,6 +733,7 @@
       <button role="tab" data-doc-tab="outlining" aria-selected="false" class="rb-context" hidden title="Shown in Outline view">Outlining</button>
       <button role="tab" data-doc-tab="home" aria-selected="true">Home</button>
       <button role="tab" data-doc-tab="insert" aria-selected="false">Insert</button>
+      <button role="tab" data-doc-tab="design" aria-selected="false">Design</button>
       <button role="tab" data-doc-tab="layout" aria-selected="false">Layout</button>
       <button role="tab" data-doc-tab="references" aria-selected="false">References</button>
       <button role="tab" data-doc-tab="review" aria-selected="false">Review</button>
@@ -767,11 +768,17 @@
               <button class="rb-sq" data-doc="doc-sub" aria-pressed="false" title="Subscript">x<sub>2</sub></button>
               <button class="rb-sq" data-doc="doc-sup" aria-pressed="false" title="Superscript">x<sup>2</sup></button>
               <button class="rb-sq" data-doc="doc-formula" aria-pressed="false" title="Formula style: numbers lowered (CH₂Cl₂), charges raised">C₉H₈</button>
+              <button class="rb-sq" data-doc="doc-strike" aria-pressed="false" title="Strikethrough: a line through the selected text"><s>abc</s></button>
+              <button class="rb-sq" data-doc="doc-small-caps" aria-pressed="false" title="Small Caps (Ctrl+Shift+K): lower-case letters as smaller capitals">A<small>BC</small></button>
               <label class="rb-sq rb-colour" title="Text colour"><span>A</span><input id="doc-colour" type="color" aria-label="Text colour" /></label>
               <span class="rb-split">
                 <button class="rb-sq rb-hl" data-doc="doc-highlight" aria-pressed="false" title="Highlight the selected text in the colour under the letters (click again to take it off)"><span class="hl-ab">ab</span><span id="doc-hl-bar" class="hl-bar"></span></button>
                 <button class="rb-sq rb-drop" data-doc="doc-highlight-menu" title="Highlight colours">▾</button>
               </span>
+              <select id="doc-case" class="rb-mini" data-doc-prefix="case" title="Change Case (Shift+F3 goes through UPPERCASE, lowercase and Capitalize Each Word). Chemical formulas keep their case" aria-label="Change Case">
+                <option value="" hidden>Aa</option><option value="sentence">Sentence case.</option><option value="lower">lowercase</option><option value="upper">UPPERCASE</option><option value="title">Capitalize Each Word</option><option value="toggle">tOGGLE cASE</option><option value="allcaps">All Caps (shown, text kept) on/off</option>
+              </select>
+              <button class="rb-sq" data-doc="clear-formatting" title="Clear All Formatting: the selected text and its paragraphs go back to plain Normal text (links, comments and formulas stay)">A<span class="rb-eraser">⌫</span></button>
             </div>
           </div>
         </div>
@@ -781,8 +788,18 @@
         <div class="rb-row">
           <div class="rb-col">
             <div class="rb-pair">
-              <button class="rb-sq" data-doc="doc-bullets" aria-pressed="false" title="Bullets">• ≡</button>
-              <button class="rb-sq" data-doc="doc-numbering" aria-pressed="false" title="Numbering">1. ≡</button>
+              <span class="rb-split">
+                <button class="rb-sq" data-doc="doc-bullets" aria-pressed="false" title="Bullets">• ≡</button>
+                <select class="rb-mini rb-drop" id="doc-bulletlib" data-doc-prefix="bulletlib" title="Bullet Library: the bullet for the selected list items" aria-label="Bullet Library">
+                  <option value="" hidden>▾</option><option value="default">Default (• – • –)</option><option value="0">•  Round</option><option value="1">○  Hollow</option><option value="2">■  Square</option><option value="3">◆  Diamond</option><option value="4">➢  Arrow</option><option value="5">✓  Tick</option><option value="6">–  Dash</option><option value="7">★  Star</option>
+                </select>
+              </span>
+              <span class="rb-split">
+                <button class="rb-sq" data-doc="doc-numbering" aria-pressed="false" title="Numbering">1. ≡</button>
+                <select class="rb-mini rb-drop" id="doc-multilevel" data-doc-prefix="multilevel" title="Multilevel List: how each level of the selected numbered list is numbered (Tab and Shift+Tab change the level)" aria-label="Multilevel List">
+                  <option value="" hidden>▾</option><option value="default">1. a. i.</option><option value="outline">1. 1.1. 1.1.1.</option><option value="legal">1 1.1 1.1.1</option><option value="roman">I. A. 1. a. i.</option><option value="paren">1) a) i)</option><option value="brackets">(1) (a) (i)</option><option value="steps">Step 1. a. i.</option>
+                </select>
+              </span>
               <button class="rb-sq" data-doc="doc-outdent" title="Less indent (Shift+Tab)">⇤</button>
               <button class="rb-sq" data-doc="doc-indent" title="More indent (Tab)">⇥</button>
               <select id="doc-line" title="Line spacing" aria-label="Line spacing">
@@ -794,6 +811,7 @@
               <button class="rb-sq" data-doc="doc-align-center" aria-pressed="false" title="Centre">Centre</button>
               <button class="rb-sq" data-doc="doc-align-right" aria-pressed="false" title="Align right">Right</button>
               <button class="rb-sq" data-doc="doc-justify" aria-pressed="false" title="Justify (both edges straight)">Justify</button>
+              <button class="rb-sq" data-doc="para-tabs" title="Tabs: the tab stops of the paragraphs picked (left, centre, right or decimal, with dot leaders), typed in; or click the ruler (View > Ruler)">Tabs…</button>
             </div>
           </div>
         </div>
@@ -808,6 +826,7 @@
           <button class="rb-style" data-doc="style-h2" aria-pressed="false" title="Heading 2"><span class="s-h2">AaBbCc</span>Heading 2</button>
           <button class="rb-style" data-doc="style-h3" aria-pressed="false" title="Heading 3"><span class="s-h3">AaBbCc</span>Heading 3</button>
           <button class="rb-style" data-doc="style-caption" aria-pressed="false" title="Caption"><span class="s-cap">AaBbCcDd</span>Caption</button>
+          <button class="rb-style rb-styles-more" data-doc="styles-pane" title="Styles pane (Ctrl+Alt+Shift+S): every paragraph and character style, Heading 4 to 9 and your own; apply, change, make new ones"><span>⋯</span>More Styles</button>
         </div>
         <div class="rb-label">Styles</div>
         <button class="rb-launch" data-doc="box-style" title="Change how the style the caret is in looks (font, size, spacing…); every paragraph in it follows">⬊</button>
@@ -867,6 +886,27 @@
           <button class="rb-big" data-doc="insert-caption" title="A numbered caption: Figure 1, Scheme 2, Table S1…"><span class="rb-icon">¶</span>Caption</button>
         </div>
         <div class="rb-label">Captions</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-doc-panel="design" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-field" title="Words across every page behind the text (saved as Word's watermark)">Watermark <select id="doc-watermark" data-doc-prefix="watermark">
+              <option value="" hidden>None</option>
+              <option value="0">CONFIDENTIAL</option><option value="1">DRAFT</option><option value="2">DO NOT COPY</option><option value="3">SAMPLE</option><option value="4">PRELIMINARY</option><option value="5">NOT FOR DISTRIBUTION</option><option value="6">ASAP</option><option value="7">URGENT</option>
+              <option value="other" hidden>Your own</option>
+              <option value="custom">Custom Watermark…</option>
+              <option value="remove">Remove Watermark</option>
+            </select></label>
+            <div class="rb-pair">
+              <label class="rb-field" title="Page Color: the colour of the paper on screen and in print (Word prints it only when set to)">Page Color <input id="doc-page-colour" type="color" aria-label="Page colour" /></label>
+              <button data-doc="page-color-none" title="No page colour (white paper)">No Color</button>
+            </div>
+            <button data-doc="page-borders" title="Page Borders: a line round every page, from the edge of the paper or round the text">▢ Page Borders…</button>
+          </div>
+        </div>
+        <div class="rb-label">Page Background</div>
       </div>
     </div>
     <div class="rb-panel" data-doc-panel="layout" hidden>
@@ -1081,6 +1121,14 @@
       </div>
       <div class="rb-group">
         <div class="rb-row">
+          <div class="rb-col">
+            <button data-doc="view-ruler" aria-pressed="false" title="Ruler: the paragraph's indents and tab stops above the page, to drag and click">📏 Ruler</button>
+          </div>
+        </div>
+        <div class="rb-label">Show</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-doc="zoom-actual" title="Zoom to 100%"><span class="rb-icon">1:1</span>100%</button>
           <div class="rb-col">
             <button data-doc="view-one-page" aria-pressed="false" title="One Page: a whole page in the window">▯ One Page</button>
@@ -1106,7 +1154,7 @@
               <button class="rb-sq" data-doc="outline-heading1" title="Promote to Heading 1">«</button>
               <button class="rb-sq" data-doc="outline-promote" title="Promote (Alt+Shift+←): a level up; body text becomes a heading">←</button>
               <select id="doc-outline-level" aria-label="Outline level" title="The outline level of the paragraph">
-                <option value="1">Level 1</option><option value="2">Level 2</option><option value="3">Level 3</option><option value="0">Body Text</option>
+                <option value="1">Level 1</option><option value="2">Level 2</option><option value="3">Level 3</option><option value="4">Level 4</option><option value="5">Level 5</option><option value="6">Level 6</option><option value="7">Level 7</option><option value="8">Level 8</option><option value="9">Level 9</option><option value="0">Body Text</option>
               </select>
               <button class="rb-sq" data-doc="outline-demote" title="Demote (Alt+Shift+→): a level down">→</button>
               <button class="rb-sq" data-doc="outline-body" title="Demote to Body Text">»</button>
@@ -1120,8 +1168,8 @@
           </div>
           <div class="rb-col">
             <label class="rb-field">Show Level
-              <select id="doc-outline-show" aria-label="Show level" title="Show the headings down to this level (Alt+Shift+1 to 3), or everything (Alt+Shift+A)">
-                <option value="0">All Levels</option><option value="1">Level 1</option><option value="2">Level 2</option><option value="3">Level 3</option>
+              <select id="doc-outline-show" aria-label="Show level" title="Show the headings down to this level (Alt+Shift+1 to 9), or everything (Alt+Shift+A)">
+                <option value="0">All Levels</option><option value="1">Level 1</option><option value="2">Level 2</option><option value="3">Level 3</option><option value="4">Level 4</option><option value="5">Level 5</option><option value="6">Level 6</option><option value="7">Level 7</option><option value="8">Level 8</option><option value="9">Level 9</option>
               </select>
             </label>
             <label class="rb-check"><input type="checkbox" id="doc-outline-format" checked /> Show Text Formatting</label>
@@ -1593,6 +1641,7 @@
         <span class="grow"></span>
         <button type="button" data-doc="view-print" title="Back to Print Layout to edit (Esc)">Edit Document</button>
       </div>
+      <div id="doc-ruler" hidden></div>
       <div id="doc-host"></div>
       <div id="doc-statusbar">
         <span id="doc-status"></span>

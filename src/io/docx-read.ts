@@ -11,20 +11,20 @@
 // other reference managers keep the text Word showed. Footnotes and endnotes come in as notes
 // typed into here, and a table of figures (a TOC field for captions) as one worked out here.
 
-import type { Contents, Justify, ParaStyle, TableCell, TableData, TextRun } from '../model';
+import type { Contents, Justify, ParaStyle, TabStop, TableCell, TableData, TextRun } from '../model';
 import { ACS_1996, type DocStyle } from '../style';
 import * as rt from '../richtext';
 import { PackageReader, REL, kid, kids, rAttr, fromEmu } from './ooxml';
 import { dataUrl, imageSize, pictureMime } from '../render/images';
 import { drawingInEmf } from '../render/emf';
-import { cleanPara } from '../text/paragraphs';
+import { BULLETS, BULLET_LIBRARY, LIST_SCHEMES, cleanPara } from '../text/paragraphs';
 import { SINGLE, type Measure } from '../text/layout';
 import { arialWidth } from '../text-metrics';
 import { documentMeasure } from '../text/font-measure';
 import {
-  OBJECT_CHAR, defaultHeaderFooter, defaultPage, defaultStyles,
+  OBJECT_CHAR, defaultCharStyles, defaultHeaderFooter, defaultPage, defaultStyles,
   COL_GAP, FLOAT_GAP, columnsOf, lookExtent, usedObjects,
-  type BreakKind, type DocObject, type DocText, type FigureLook, type Float, type HeaderFooter, type LineNumbers, type NamedStyle, type NoteFormat, type NoteFormats, type NumberPlace, type PageNumFormat, type PageSetup, type SectionBreak,
+  type BreakKind, type CharStyle, type DocObject, type DocText, type PageBorder, type Watermark, type FigureLook, type Float, type HeaderFooter, type LineNumbers, type NamedStyle, type NoteFormat, type NoteFormats, type NumberPlace, type PageNumFormat, type PageSetup, type SectionBreak,
 } from '../document/document';
 import { shownSize } from '../document/doc-layout';
 import { layoutTable } from '../table';
@@ -58,8 +58,16 @@ export interface DocxReadDeps {
 const WORD_FONT = 'Times New Roman';
 const WORD_SIZE = 10;
 /** The standard styles, by the names Word gives them (in every language). */
-const BUILT_IN: Record<string, string> = { normal: 'Normal', title: 'Title', 'heading 1': 'Heading1', 'heading 2': 'Heading2', 'heading 3': 'Heading3', caption: 'Caption' };
-const OUTLINE: Record<string, number> = { Heading1: 1, Heading2: 2, Heading3: 3 };
+const BUILT_IN: Record<string, string> = { normal: 'Normal', title: 'Title', caption: 'Caption', ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`heading ${n}`, `Heading${n}`])) };
+const OUTLINE: Record<string, number> = Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`Heading${n}`, n]));
+/** Word's character styles that are part of how something works (not a look to keep as a style here; our formula style neither). */
+const WORD_INNER_CHAR = new Set(['DefaultParagraphFont', 'FootnoteReference', 'EndnoteReference', 'Hyperlink', 'FollowedHyperlink', 'CommentReference', 'PageNumber', 'LineNumber', 'PlaceholderText']);
+const TAB_KINDS: Record<string, TabStop['kind']> = { left: 'left', start: 'left', center: 'center', right: 'right', end: 'right', decimal: 'decimal' };
+const TAB_LEADERS: Record<string, TabStop['leader']> = { dot: 'dot', middleDot: 'dot', hyphen: 'hyphen', underscore: 'underscore', heavy: 'underscore' };
+/** Word's bullets written in symbol fonts (Symbol, Wingdings, Courier New's o), as the characters they show. */
+const SYMBOL_BULLETS: Record<string, string> = { '\uf0b7': '•', '\uf0a7': '■', '\uf0d8': '➢', '\uf0fc': '✓', '\uf076': '◆', '\uf0a8': '◆', '\uf06f': '○', o: '○', '\uf0ab': '★', '\uf02d': '–' };
+/** VML's named colours a watermark may use. */
+const VML_COLOURS: Record<string, string> = { silver: '#c0c0c0', gray: '#808080', grey: '#808080', black: '#000000', white: '#ffffff', red: '#ff0000', blue: '#0000ff', green: '#008000', yellow: '#ffff00', navy: '#000080', maroon: '#800000', teal: '#008080', purple: '#800080', olive: '#808000', lime: '#00ff00', aqua: '#00ffff', fuchsia: '#ff00ff' };
 const JUSTIFY: Record<string, Justify> = { left: 'left', start: 'left', center: 'center', right: 'right', end: 'right', both: 'justify', distribute: 'justify' };
 const EXT_MIME: Record<string, string> = { wmf: 'image/x-wmf', emf: 'image/x-emf', tif: 'image/tiff', tiff: 'image/tiff' };
 
@@ -76,22 +84,44 @@ const WARN = {
   wmf: 'Some pictures are in the older Windows Metafile (WMF) format, which can\'t be shown here yet. They are kept, and saved back to Word unchanged.',
   crop: 'Cropped pictures show uncropped.',
   numbering: 'Some numbered lists use numbering that shows here as 1., a., i.',
-  looks: 'Strikethrough, highlighting and small capitals were left out.',
   citations: 'Citations from a reference manager were kept as plain text.',
   pageText: 'Text after the page number in the header or footer was left out.',
   ole: 'Embedded objects other than ChemDraw drawings came in as pictures.',
   restart: 'Caption numbers that were set to start again were numbered straight through.',
   hfPictures: 'Pictures and tables in the header and footer were left out.',
+  pictureWatermark: 'A picture watermark was left out (text watermarks are kept).',
 };
 
 type Pos = 'base' | 'sub' | 'sup';
 /** Text formatting as a file gives it (only what it gives). `color` null is "automatic". */
-interface RProps { font?: string; size?: number; bold?: boolean; italic?: boolean; underline?: boolean; color?: string | null; highlight?: string | null; pos?: Pos; hidden?: boolean; formula?: boolean }
+interface RProps { font?: string; size?: number; bold?: boolean; italic?: boolean; underline?: boolean; color?: string | null; highlight?: string | null; pos?: Pos; hidden?: boolean; formula?: boolean; strike?: boolean; smallCaps?: boolean; allCaps?: boolean; cstyle?: string }
 /** Paragraph formatting as a file gives it, in points. */
 interface PProps {
   align?: Justify; before?: number; after?: number; line?: { v: number; rule: string };
   left?: number; right?: number; first?: number; keepNext?: boolean; pageBreak?: boolean; outline?: number; noLineNumbers?: boolean;
   numId?: string; ilvl?: number; contextual?: boolean;
+  /** Tab stops set (and cleared: kind null) here, added to those of the style it is based on. */
+  tabs?: { pos: number; kind: TabStop['kind'] | null; leader?: TabStop['leader'] }[];
+}
+
+/** Paragraph settings one over another (later ones win), their tab stops added up. */
+function mergeP(...ps: (PProps | undefined)[]): PProps {
+  const out = merge<PProps>(...ps);
+  const tabs = ps.flatMap((p) => p?.tabs ?? []);
+  if (tabs.length) out.tabs = tabs; else delete out.tabs;
+  return out;
+}
+
+/** The tab stops a paragraph ends up with: each set in turn, a cleared one taken away. */
+function finalTabs(p: PProps): TabStop[] | undefined {
+  const out: TabStop[] = [];
+  for (const t of p.tabs ?? []) {
+    const at = out.findIndex((x) => Math.abs(x.pos - t.pos) < 0.5);
+    if (at >= 0) out.splice(at, 1);
+    if (t.kind) out.push(t.leader ? { pos: t.pos, kind: t.kind, leader: t.leader } : { pos: t.pos, kind: t.kind });
+  }
+  out.sort((a, b) => a.pos - b.pos);
+  return out.length ? out : undefined;
 }
 interface WStyle { id: string; type: string; name: string; basedOn?: string; next?: string; isDefault: boolean; p: PProps; r: RProps; el: Element }
 interface Level { fmt: string; text: string; p: PProps }
@@ -195,6 +225,7 @@ class DocxReader {
     this.resolveRefs();
     this.joinBibliographies();
     const out = this.assemble(hf, first);
+    this.readPageLook(out, root, first);
     keepUsedMarks(out);
     return { doc: out, warnings: [...this.warnings] };
   }
@@ -265,7 +296,13 @@ class DocxReader {
         }
         case 'vertAlign': { const v = this.a(c); out.pos = v === 'subscript' ? 'sub' : v === 'superscript' ? 'sup' : 'base'; break; }
         case 'vanish': out.hidden = this.on(c); break;
-        case 'rStyle': Object.assign(out, this.charStyle(this.a(c) ?? '')); break;
+        case 'rStyle': {
+          const id = this.a(c) ?? '';
+          Object.assign(out, this.charStyle(id));
+          // a character style of the person's (or Word's Emphasis, Strong…) is kept as one
+          if (direct && this.keptCharStyle(id)) { out.cstyle = id; this.usedChar.add(id); }
+          break;
+        }
         case 'highlight': { const v = this.a(c) ?? 'none'; out.highlight = WORD_HIGHLIGHTS[v] ?? null; break; }
         case 'shd': {
           // shading behind the text: kept as a highlight unless a real highlight is set too
@@ -273,9 +310,9 @@ class DocxReader {
           if (out.highlight === undefined || out.highlight === null) out.highlight = /^[0-9a-f]{6}$/i.test(v) && this.a(c) !== 'nil' ? `#${v.toLowerCase()}` : null;
           break;
         }
-        case 'strike': case 'dstrike': case 'smallCaps': case 'caps':
-          if (direct && this.on(c) && this.a(c) !== 'none') this.warn('looks');
-          break;
+        case 'strike': case 'dstrike': out.strike = this.on(c); break;
+        case 'smallCaps': out.smallCaps = this.on(c); break;
+        case 'caps': out.allCaps = this.on(c); break;
       }
     }
     return out;
@@ -311,6 +348,21 @@ class DocxReader {
         case 'suppressLineNumbers': out.noLineNumbers = this.on(c); break;
         case 'outlineLvl': { const v = Number(this.a(c)); if (v >= 0 && v < 9) out.outline = v + 1; break; }
         case 'contextualSpacing': out.contextual = this.on(c); break;
+        case 'tabs': {
+          const tabs: NonNullable<PProps['tabs']> = [];
+          for (const t of kids(c, 'tab')) {
+            const pos = this.tw(t, 'pos');
+            const v = this.a(t) ?? 'left';
+            if (pos === undefined) continue;
+            if (v === 'clear') { tabs.push({ pos, kind: null }); continue; }
+            const kind = TAB_KINDS[v];
+            if (!kind || pos <= 0) continue;
+            const leader = TAB_LEADERS[this.a(t, 'leader') ?? ''];
+            tabs.push(leader ? { pos: round(pos), kind, leader } : { pos: round(pos), kind });
+          }
+          if (tabs.length) out.tabs = tabs;
+          break;
+        }
         case 'numPr': {
           const id = this.a(kid(c, 'numId'));
           if (id !== null) out.numId = id;
@@ -379,7 +431,40 @@ class DocxReader {
       seen.add(s.id);
       list.unshift(s);
     }
-    return { p: merge<PProps>(...list.map((s) => s.p)), r: merge<RProps>(...list.map((s) => s.r)) };
+    return { p: mergeP(...list.map((s) => s.p)), r: merge<RProps>(...list.map((s) => s.r)) };
+  }
+
+  /** Character styles kept as styles here, met in the text. */
+  private usedChar = new Set<string>();
+
+  /** A character style to keep as one (not Word's working ones, nor those linked to a paragraph style). */
+  private keptCharStyle(id: string): boolean {
+    const ws = this.wstyles.get(`character:${id}`);
+    return !!ws && !WORD_INNER_CHAR.has(id) && id !== FORMULA_STYLE && ws.name !== 'Chemical Formula' && !kid(ws.el, 'link');
+  }
+
+  /** The character styles met, as styles here: what each sets. */
+  private charStylesRead(): Record<string, CharStyle> | undefined {
+    if (!this.usedChar.size) return undefined;
+    const own = defaultCharStyles();
+    const out: Record<string, CharStyle> = {};
+    for (const id of this.usedChar) {
+      const ws = this.wstyles.get(`character:${id}`);
+      const r = this.chain('character', id).r;
+      const cs: CharStyle = { id, name: own[id]?.name ?? ws?.name ?? id };
+      if (!own[id]) cs.custom = true;
+      if (r.font) cs.font = r.font;
+      if (r.size) cs.size = r.size;
+      if (r.bold !== undefined) cs.bold = r.bold;
+      if (r.italic !== undefined) cs.italic = r.italic;
+      if (r.underline) cs.underline = true;
+      if (r.color) cs.color = r.color;
+      if (r.smallCaps) cs.smallCaps = true;
+      if (r.allCaps) cs.allCaps = true;
+      if (r.strike) cs.strike = true;
+      out[id] = cs;
+    }
+    return out;
   }
 
   private charCache = new Map<string, RProps>();
@@ -657,7 +742,7 @@ class DocxReader {
     const style = this.wstyles.has(`paragraph:${sid}`) ? sid : this.defaultPara;
     const ch = this.chain('paragraph', style);
     const direct = this.readPPr(pPr);
-    const p = merge<PProps>(this.docDefaults.p, ch.p, direct);
+    const p = mergeP(this.docDefaults.p, ch.p, direct);
     const base = merge<RProps>(this.docDefaults.r, ch.r);
     const mark = merge<RProps>(base, this.readRPr(kid(pPr, 'rPr')));
     return { style, p, direct, base, mark };
@@ -695,11 +780,19 @@ class DocxReader {
     const levels = numId && numId !== '0' ? this.abstracts.get(this.nums.get(numId) ?? '') : undefined;
     const ilvl = Math.max(0, Math.min(8, own.ilvl ?? 0));
     const level = levels?.[ilvl];
-    const p = level ? merge<PProps>(this.docDefaults.p, this.chain('paragraph', style).p, level.p, direct) : own;
+    const p = level ? mergeP(this.docDefaults.p, this.chain('paragraph', style).p, level.p, direct) : own;
     let list: 'bullet' | 'number' | undefined;
-    if (level && level.fmt !== 'none') {
+    let scheme: string | undefined, bullet: string | undefined;
+    if (level && levels && level.fmt !== 'none') {
       list = level.fmt === 'bullet' ? 'bullet' : 'number';
-      if (list === 'number' && (level.fmt !== ['decimal', 'lowerLetter', 'lowerRoman'][ilvl % 3] || !new RegExp(`^%${ilvl + 1}\\.$`).test(level.text))) this.warn('numbering');
+      if (list === 'number') {
+        const sc = schemeFor(levels, ilvl);
+        if (sc === null) this.warn('numbering');
+        else if (sc) scheme = sc;
+      } else {
+        const b = SYMBOL_BULLETS[level.text] ?? level.text;
+        if (b !== BULLETS[ilvl % BULLETS.length] && BULLET_LIBRARY.includes(b)) bullet = b;
+      }
     }
     const firstSize = ctx.pieces[0].runs.find((r) => r.obj === undefined)?.size ?? size;
     let indent = Math.max(0, p.left ?? 0);
@@ -713,8 +806,9 @@ class DocxReader {
       ...(p.line && p.line.rule !== 'auto' ? { linePt: round(p.line.v / 20), lineRule: p.line.rule === 'exact' ? 'exact' as const : 'atLeast' as const } : { line: this.lineOf(p, size) }),
       indent: round(indent), indentRight: p.right ? round(Math.max(0, p.right)) : undefined, firstLine: list ? undefined : round(p.first ?? 0), keepNext: p.keepNext,
       pageBreak: p.pageBreak, section: brk, list, level: list ? ilvl : undefined, noLineNumbers: p.noLineNumbers,
+      tabs: finalTabs(p), scheme, bullet,
     };
-    const markStyle = this.runStyle(mark);
+    const markStyle = this.runStyle({ ...mark, cstyle: undefined });
     const mrEl = kid(kid(pPr, 'rPr'), 'ins') ?? kid(kid(pPr, 'rPr'), 'del');
     const markRevOf = mrEl ? revText({ kind: mrEl.localName === 'ins' ? 'ins' : 'del', author: this.a(mrEl, 'author') ?? '', date: this.a(mrEl, 'date') ?? '' }) : undefined;
     ctx.pieces.forEach((pc, i) => {
@@ -767,6 +861,7 @@ class DocxReader {
     const formula = !!r.formula;
     return rt.cleanStyle({
       font: r.font ?? WORD_FONT, size: r.size ?? WORD_SIZE, bold: r.bold, italic: r.italic, underline: r.underline,
+      strike: r.strike, smallCaps: r.smallCaps, allCaps: r.allCaps, cstyle: r.cstyle,
       color: r.color ?? undefined, highlight: r.highlight ?? undefined, formula: formula || undefined,
       sub: (!formula && r.pos === 'sub') || undefined, sup: (!formula && r.pos === 'sup') || undefined,
     });
@@ -1391,7 +1486,7 @@ class DocxReader {
     const normal = merge<RProps>(this.docDefaults.r, this.chain('paragraph', this.defaultPara).r);
     const ctx: Ctx = { base: normal, pieces: [{ runs: [], pageBreak: false, soft: false }], cell: false };
     this.emitObject(ctx, { kind: 'drawing', contents }, normal);
-    const np = merge<PProps>(this.docDefaults.p, this.chain('paragraph', this.defaultPara).p);
+    const np = mergeP(this.docDefaults.p, this.chain('paragraph', this.defaultPara).p);
     this.used.add(this.defaultPara);
     this.out.push({
       ps: cleanPara({ align: jc === 'left' ? undefined : jc, spaceBefore: np.before, spaceAfter: np.after, section: this.takeBreak() }),
@@ -1675,7 +1770,14 @@ class DocxReader {
               break;
             }
             case 'instrText': { const f = fields[fields.length - 1]; if (f && !f.result) f.instr += c.textContent ?? ''; break; }
-            case 'drawing': case 'pict': case 'object': this.warn('hfPictures'); break;
+            case 'pict': {
+              // Word's watermarks: a text one is read with the page's look, a picture one is lost
+              const id = Array.from(c.getElementsByTagNameNS('*', 'shape')).map((e) => e.getAttribute('id') ?? '').join(' ');
+              if (/PowerPlusWaterMarkObject/.test(id)) break;
+              this.warn(/WordPictureWatermark/.test(id) ? 'pictureWatermark' : 'hfPictures');
+              break;
+            }
+            case 'drawing': case 'object': this.warn('hfPictures'); break;
             default: visit(c);
           }
         }
@@ -1693,7 +1795,7 @@ class DocxReader {
   private named(wordId: string, ours: string): NamedStyle {
     const ws = this.wstyles.get(`paragraph:${wordId}`);
     const ch = this.chain('paragraph', wordId);
-    const p = merge<PProps>(this.docDefaults.p, ch.p);
+    const p = mergeP(this.docDefaults.p, ch.p);
     const r = merge<RProps>(this.docDefaults.r, ch.r);
     const size = r.size ?? WORD_SIZE;
     const dflt = defaultStyles()[ours];
@@ -1705,8 +1807,41 @@ class DocxReader {
       align: p.align ?? 'left', spaceBefore: round(p.before ?? 0), spaceAfter: round(p.after ?? 0), line: this.lineOf(p, size) ?? 1,
       indent: round(Math.max(0, p.left ?? 0)), firstLine: round(p.first ?? 0), keepNext: !!p.keepNext,
       next: next && next !== ours ? next : ours === 'Normal' ? undefined : dflt?.next,
-      outline: OUTLINE[ours] ?? (p.outline && p.outline <= 3 && ours !== 'Normal' ? p.outline : undefined),
+      outline: OUTLINE[ours] ?? (p.outline && p.outline <= 9 && ours !== 'Normal' ? p.outline : undefined),
     };
+  }
+
+  /** Design > Page Background: the page colour, the first section's page border and its header's text watermark. */
+  private readPageLook(t: DocText, root: Element, sect: Element | null): void {
+    const bg = colourOf(this.a(kid(root, 'background'), 'color'));
+    if (bg && bg !== '#ffffff') t.pageColor = bg;
+    const pb = kid(sect, 'pgBorders');
+    const side = pb && (kid(pb, 'top') ?? kid(pb, 'left') ?? kid(pb, 'bottom') ?? kid(pb, 'right'));
+    const val = this.a(side);
+    if (side && val && val !== 'none' && val !== 'nil') {
+      const style: PageBorder['style'] = /^thi(ck|n)Thi/.test(val) || val === 'thick' ? 'thick' : val === 'double' || val === 'triple' ? 'double' : /dot/i.test(val) && !/dash/i.test(val) ? 'dotted' : /dash/i.test(val) ? 'dashed' : 'single';
+      t.pageBorder = {
+        style,
+        width: Math.max(0.25, Number(this.a(side, 'sz') ?? 4) / 8),
+        color: colourOf(this.a(side, 'color')) ?? '#000000',
+        from: this.a(pb, 'offsetFrom') === 'page' ? 'page' : 'text',
+        space: Math.max(0, Number(this.a(side, 'space') ?? 0) || 0),
+      };
+    }
+    const head = this.relTarget(rAttr(kids(sect, 'headerReference').find((e) => (this.a(e, 'type') ?? 'default') === 'default'), 'id'));
+    const hroot = head ? this.pkg.xml(head)?.documentElement : null;
+    const shape = hroot ? Array.from(hroot.getElementsByTagNameNS('*', 'shape')).find((e) => /^PowerPlusWaterMarkObject/.test(e.getAttribute('id') ?? '')) : undefined;
+    const tp = shape && Array.from(shape.getElementsByTagNameNS('*', 'textpath'))[0];
+    const text = tp?.getAttribute('string');
+    if (shape && tp && text) {
+      const style = shape.getAttribute('style') ?? '';
+      const font = /font-family:\s*"?([^";]+)"?/.exec(tp.getAttribute('style') ?? '')?.[1]?.trim();
+      const fill = (shape.getAttribute('fillcolor') ?? 'silver').trim().toLowerCase();
+      const color = colourOf(fill.replace(/^#/, '')) ?? VML_COLOURS[fill.split(/\s/)[0]] ?? '#c0c0c0';
+      const op = Array.from(shape.getElementsByTagNameNS('*', 'fill'))[0]?.getAttribute('opacity');
+      const wm: Watermark = { text, font: font || 'Calibri', color, layout: /rotation:\s*-?\d/.test(style) && !/rotation:\s*0\b/.test(style) ? 'diagonal' : 'horizontal', faded: !!op && parseFloat(op.replace(/f$/, '')) < (op.endsWith('f') ? 65536 : 1) };
+      t.watermark = wm;
+    }
   }
 
   private assemble(hf: HeaderFooter, sect: Element | null): DocText {
@@ -1763,6 +1898,7 @@ class DocxReader {
       objects,
       drawingStyle: this.drawingStyle,
       ...(this.trackOn() ? { track: true } : {}),
+      ...(this.charStylesRead() ? { charStyles: this.charStylesRead() } : {}),
       ...(this.numFormatOf(sect) !== 'decimal' ? { numFormat: this.numFormatOf(sect) } : {}),
       ...(this.lineNumbersOf(sect) ? { lineNumbers: this.lineNumbersOf(sect) } : {}),
       ...(Object.keys(this.noteFormats).length ? { notes: this.noteFormats } : {}),
@@ -1773,7 +1909,7 @@ class DocxReader {
   }
 }
 
-const BUILT_IN_IDS: Record<string, true> = { Normal: true, Title: true, Heading1: true, Heading2: true, Heading3: true, Caption: true };
+const BUILT_IN_IDS: Record<string, true> = { Normal: true, Title: true, Caption: true, ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`Heading${n}`, true as const])) };
 
 /** A VML shape's size from its style ("width:120pt;height:36.5pt"), in points. */
 function vmlSize(style: string): { w: number; h: number } {
@@ -1837,4 +1973,21 @@ function keepUsedMarks(t: DocText): void {
     const { marks: _m, ...rest } = p;
     return marks.length ? { ...rest, marks } : rest;
   });
+}
+
+/** A Word colour ("FF0000", "auto") as ours (null for automatic or none). */
+function colourOf(v: string | null | undefined): string | null {
+  return v && /^[0-9a-f]{6}$/i.test(v) ? `#${v.toLowerCase()}` : null;
+}
+
+/**
+ * The multilevel scheme a numbered list's levels are (its id), '' for the usual 1. a. i., or
+ * null when none here writes its numbers the way the file does. Levels the file leaves out
+ * don't count; the level the paragraph is at must match.
+ */
+function schemeFor(levels: Level[], ilvl: number): string | null {
+  const same = (l: Level | undefined, i: number, s: (typeof LIST_SCHEMES)[number]) => !!l && l.fmt === s.levels[i].fmt && l.text === s.levels[i].text;
+  const fits = LIST_SCHEMES.filter((s) => same(levels[ilvl], ilvl, s));
+  if (!fits.length) return null;
+  return (fits.find((s) => levels.every((l, i) => !l || l.fmt === 'bullet' || l.fmt === 'none' || i > 8 || same(l, i, s))) ?? fits[0]).id;
 }

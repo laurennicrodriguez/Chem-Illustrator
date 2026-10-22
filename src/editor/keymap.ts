@@ -217,6 +217,11 @@ export const COMMAND_NAMES: Record<string, string> = {
   'outline-body': 'Demote to body text', 'outline-up': 'Move the paragraph up (outline)', 'outline-down': 'Move the paragraph down (outline)',
   'outline-expand': 'Expand the heading (outline)', 'outline-collapse': 'Collapse the heading (outline)', 'outline-all': 'Show all levels (outline)',
   'outline-level-1': 'Show level 1 (outline)', 'outline-level-2': 'Show levels 1 and 2 (outline)', 'outline-level-3': 'Show levels 1 to 3 (outline)',
+  'outline-level-4': 'Show levels 1 to 4 (outline)', 'outline-level-5': 'Show levels 1 to 5 (outline)', 'outline-level-6': 'Show levels 1 to 6 (outline)',
+  'outline-level-7': 'Show levels 1 to 7 (outline)', 'outline-level-8': 'Show levels 1 to 8 (outline)', 'outline-level-9': 'Show levels 1 to 9 (outline)',
+  'doc-strike': 'Strikethrough', 'doc-small-caps': 'Small capitals', 'doc-all-caps': 'All capitals', 'change-case': 'Change case (UPPERCASE, lowercase, Capitalize Each Word in turn)',
+  'clear-char-formatting': 'Clear the text formatting (back to the paragraph style)', 'clear-formatting': 'Clear all formatting (back to Normal)', 'styles-pane': 'Show the Styles pane',
+  'style-h4': 'Heading 4 style', 'style-h5': 'Heading 5 style', 'style-h6': 'Heading 6 style',
   'outline-first': 'Show the first line only (outline, on or off)', 'outline-format': 'Show text formatting (outline, on or off)',
 };
 
@@ -363,7 +368,10 @@ export const DEFAULT_KEYS: Record<KeyContext, Record<string, string>> = {
     'Ctrl+Alt+N': 'view-draft', 'Ctrl+Alt+S': 'view-split',
     'Alt+Shift+ArrowLeft': 'outline-promote', 'Alt+Shift+ArrowRight': 'outline-demote', 'Alt+Shift+ArrowUp': 'outline-up', 'Alt+Shift+ArrowDown': 'outline-down',
     'Alt+Shift+=': 'outline-expand', 'Alt+Shift+-': 'outline-collapse', 'Alt+Shift+A': 'outline-all', 'Alt+Shift+N': 'compound-number',
-    'Alt+Shift+1': 'outline-level-1', 'Alt+Shift+2': 'outline-level-2', 'Alt+Shift+3': 'outline-level-3',
+    'Alt+Shift+1': 'outline-level-1', 'Alt+Shift+2': 'outline-level-2', 'Alt+Shift+3': 'outline-level-3', 'Alt+Shift+4': 'outline-level-4', 'Alt+Shift+5': 'outline-level-5',
+    'Alt+Shift+6': 'outline-level-6', 'Alt+Shift+7': 'outline-level-7', 'Alt+Shift+8': 'outline-level-8', 'Alt+Shift+9': 'outline-level-9',
+    'Ctrl+Shift+K': 'doc-small-caps', 'Ctrl+Shift+A': 'doc-all-caps', 'Shift+F3': 'change-case', 'Ctrl+Space': 'clear-char-formatting',
+    'Ctrl+Alt+Shift+S': 'styles-pane',
   }),
   text: verbs('text', {
     'Ctrl+B': 'bold', 'Ctrl+I': 'italic', 'Ctrl+U': 'underline', 'Ctrl+=': 'sub', 'Ctrl+Shift+=': 'sup', 'Ctrl++': 'sup',
