@@ -12,7 +12,9 @@
 // Footnotes and endnotes come in as notes
 // typed into here, and a table of figures (a TOC field for captions) as one worked out here.
 
-import type { CellBorders, Contents, Justify, ParaStyle, PictureFx, TabStop, TableCell, TableData, TextRun } from '../model';
+import type { AuthorityMark, CellBorders, Contents, IndexMark, Justify, ParaStyle, PictureFx, TabStop, TableCell, TableData, TextRun } from '../model';
+import { parseIndex, parseTa, parseToa, parseXe } from '../document/index-toa';
+import { ALG_SIDS, type ProtectKind, type Protection } from '../document/protect';
 import { tidyFx } from '../render/picture-fx';
 import { readPictureFx } from './picture-xml';
 import { DEFAULT_MARGINS, builtInStyle, type TableStyleDef } from '../document/table-styles';
@@ -49,6 +51,7 @@ import { listIndent, tableText } from './docx-write';
 import { readChart } from './office-chart';
 import { freshBox, sameBoxData, sizedBox } from '../sheet/chart-box';
 import { chartBoxPng } from '../render/chart-box-paint';
+import { contentsAlt } from '../accessibility';
 
 export interface DocxReadDeps {
   /** A ChemDraw drawing (CDX data) as a drawing in the document's style; null when it can't be read. */
@@ -80,6 +83,7 @@ const EXT_MIME: Record<string, string> = { wmf: 'image/x-wmf', emf: 'image/x-emf
 
 const WARN = {
   links: 'Links were kept as plain text.',
+  cellMarks: 'Index entries and marked citations inside table cells were left out.',
   notes: 'Footnotes and endnotes inside table cells were left out.',
   equations: 'Equations in table cells were kept as plain text.',
   shapes: 'SmartArt and drawn shapes were left out.',
@@ -132,9 +136,9 @@ function finalTabs(p: PProps): TabStop[] | undefined {
 }
 interface WStyle { id: string; type: string; name: string; basedOn?: string; next?: string; isDefault: boolean; p: PProps; r: RProps; el: Element }
 interface Level { fmt: string; text: string; p: PProps }
-interface Piece { runs: TextRun[]; pageBreak: boolean; soft: boolean; colBreak?: boolean }
+interface Piece { runs: TextRun[]; pageBreak: boolean; soft: boolean; colBreak?: boolean; /** Index entries and marked citations in it (XE and TA fields). */ xe?: IndexMark[]; ta?: AuthorityMark[] }
 interface Ctx { base: RProps; pieces: Piece[]; cell: boolean }
-interface Field { instr: string; phase: 'instr' | 'result'; swallow: boolean; /** The field's own data (w:fldData, base64): EndNote's citations. */ data?: string; text: string; props: RProps; done: boolean; ref?: { id: number; mark: string; text: string }; toc?: boolean; /** A HYPERLINK field: the link open before it, put back at its end. */ before?: { link: string | undefined } }
+interface Field { instr: string; phase: 'instr' | 'result'; swallow: boolean; /** The field's own data (w:fldData, base64): EndNote's citations. */ data?: string; text: string; props: RProps; done: boolean; ref?: { id: number; mark: string; text: string }; toc?: boolean; /** A form field's settings (w:ffData), and the form field made of it. */ ff?: Element; form?: number; /** A HYPERLINK field: the link open before it, put back at its end. */ before?: { link: string | undefined } }
 interface OutPara { ps: ParaStyle; runs: TextRun[]; mark: rt.RunStyle; style: string; contextual: boolean; table?: boolean; bib?: string; markRev?: string }
 
 /** Open a Word file. Throws only when the file is not a Word file at all. */
@@ -247,6 +251,27 @@ class DocxReader {
     const st = path ? this.pkg.xml(path) : null;
     const el = st?.getElementsByTagNameNS('*', 'trackRevisions')[0];
     return !!el && this.on(el);
+  }
+
+  /** Restrict Editing (settings.xml's w:documentProtection, when enforced), with the password's hash as Word keeps it. */
+  private protection(): Protection | null {
+    const path = this.pkg.relOfType(this.main, DOCX_REL.settings);
+    const el = path ? this.pkg.xml(path)?.getElementsByTagNameNS('*', 'documentProtection')[0] : null;
+    if (!el) return null;
+    const edit = this.a(el, 'edit');
+    const enforced = this.a(el, 'enforcement');
+    if (!enforced || !['1', 'true', 'on'].includes(enforced) || !edit || !(['readOnly', 'comments', 'trackedChanges', 'forms'] as string[]).includes(edit)) return null;
+    const p: Protection = { edit: edit as ProtectKind };
+    // Word 2010's attribute names, or those of the standard's second edition
+    const hash = this.a(el, 'hash') ?? this.a(el, 'hashValue');
+    const salt = this.a(el, 'salt') ?? this.a(el, 'saltValue');
+    if (hash && salt) {
+      const sid = Number(this.a(el, 'cryptAlgorithmSid'));
+      const named = this.a(el, 'algorithmName');
+      const alg = named ?? Object.keys(ALG_SIDS).find((k) => ALG_SIDS[k] === sid) ?? 'SHA-1';
+      Object.assign(p, { hash, salt, alg, spin: Number(this.a(el, 'cryptSpinCount') ?? this.a(el, 'spinCount')) || 100000 });
+    }
+    return p;
   }
 
   private warn(k: keyof typeof WARN): void {
@@ -854,6 +879,8 @@ class DocxReader {
         if (pc.colBreak) q.colBreak = true;
         if (this.pendingMarks.length) { q.marks = this.pendingMarks; this.pendingMarks = []; }
       }
+      if (pc.xe) q.xe = pc.xe;
+      if (pc.ta) q.ta = pc.ta;
       q = cleanPara(q);
       // the paragraph mark inserted or deleted while Word tracked changes (on the last piece: the real mark)
       const mr = i === ctx.pieces.length - 1 ? markRevOf : undefined;
@@ -906,7 +933,7 @@ class DocxReader {
   private emitText(ctx: Ctx, text: string, r: RProps): void {
     if (!text || r.hidden) return;
     const top = this.fields[this.fields.length - 1];
-    if (top?.ref && top.phase === 'result') top.text += text;
+    if ((top?.ref || top?.form !== undefined) && top.phase === 'result') top.text += text;
     if (this.swallowing()) return;
     let props = r;
     if (r.font && /^symbol$/i.test(r.font)) {
@@ -1132,7 +1159,8 @@ class DocxReader {
     const type = this.a(c, 'fldCharType');
     if (type === 'begin') {
       const data = kid(c, 'fldData')?.textContent?.trim();
-      this.fields.push({ instr: '', phase: 'instr', swallow: false, text: '', props: r, done: false, ...(data ? { data } : {}) });
+      const ff = kid(c, 'ffData');
+      this.fields.push({ instr: '', phase: 'instr', swallow: false, text: '', props: r, done: false, ...(data ? { data } : {}), ...(ff ? { ff } : {}) });
     }
     else if (type === 'separate') {
       const f = this.fields[this.fields.length - 1];
@@ -1147,6 +1175,7 @@ class DocxReader {
       const outer = this.fields[this.fields.length - 1];
       if (f.data && outer?.phase === 'instr' && !outer.data) outer.data = f.data;
       if (f.ref) f.ref.text = f.text;
+      if (f.form !== undefined) this.formEnded(f);
       if (f.before) this.link = f.before.link;
     }
   }
@@ -1177,6 +1206,46 @@ class DocxReader {
       if (id === null) return;
       for (const name of this.openMarks.values()) if (!this.markSeq.has(name)) this.markSeq.set(name, id);
       f.swallow = true;
+      return;
+    }
+    // an index entry or a citation marked for a table of authorities: kept on its paragraph
+    const xe = /^XE\b/i.test(ins) ? parseXe(ins) : null;
+    if (xe || /^TA\b/i.test(ins)) {
+      const ta = xe ? null : parseTa(ins);
+      if (ctx.cell) { if (xe || ta) this.warn('cellMarks'); return; }
+      const pc = this.piece(ctx);
+      if (xe) (pc.xe ??= []).push(xe);
+      if (ta) (pc.ta ??= []).push(ta);
+      return;
+    }
+    // an index or a table of authorities: ours again, its lines (Word's last update) left out, as they are worked out here
+    const index = parseIndex(ins), toa = index ? null : parseToa(ins);
+    if ((index || toa) && !ctx.cell) {
+      const id = this.emitObject(ctx, index ? { kind: 'index', ...index } : { kind: 'toa', ...toa! }, f.props);
+      if (id !== null) { f.swallow = true; f.toc = true; }
+      return;
+    }
+    // a form field (a text box, check box or drop-down): its entry is its result
+    const form = /^FORM(TEXT|CHECKBOX|DROPDOWN)\b/i.exec(ins);
+    if (form && !ctx.cell) {
+      const ff = f.ff;
+      const type = form[1].toUpperCase() === 'TEXT' ? 'text' : form[1].toUpperCase() === 'CHECKBOX' ? 'check' : 'drop';
+      const name = this.a(kid(ff, 'name')) ?? undefined;
+      const help = this.a(kid(ff, 'helpText')) ?? this.a(kid(ff, 'statusText')) ?? undefined;
+      const o: DocObject = { kind: 'form', type, ...(name ? { name } : {}), ...(help ? { help } : {}) };
+      if (type === 'check') {
+        const cb = kid(ff, 'checkBox');
+        const checked = kid(cb, 'checked') ?? kid(cb, 'default');
+        if (checked && this.on(checked)) o.checked = true;
+      } else if (type === 'drop') {
+        const dd = kid(ff, 'ddList');
+        const items = kids(dd, 'listEntry').map((x) => this.a(x) ?? '').filter(Boolean);
+        const at = Number(this.a(kid(dd, 'result')) ?? this.a(kid(dd, 'default')) ?? 0) || 0;
+        o.items = items;
+        if (items[at]) o.value = items[at];
+      }
+      const id = this.emitObject(ctx, o, f.props);
+      if (id !== null) { f.swallow = true; if (type === 'text') f.form = id; }
       return;
     }
     const ref = /^REF\s+(\S+)/i.exec(ins);
@@ -1235,6 +1304,14 @@ class DocxReader {
       return;
     }
     if (/^ADDIN\s+(EN\.CITE|ZOTERO|CSL|Mendeley|RW)/i.test(ins) && !/^ADDIN\s+EN\.CITE\.DATA/i.test(ins)) this.warn('citations');
+  }
+
+  /** A text form field's end: what it showed is its entry (Word's five spaces for none). */
+  private formEnded(f: Field): void {
+    const o = this.objects[f.form!];
+    if (o?.kind !== 'form') return;
+    const v = f.text.replace(/^[\u2002\u00a0 ]+$/, '');
+    if (v) o.value = v;
   }
 
   /** A reference manager's citation as ours, its items put in the document's references. True when it was put in. */
@@ -1336,6 +1413,9 @@ class DocxReader {
     const ext = kid(box, 'extent');
     const shown = { w: fromEmu(ext?.getAttribute('cx')), h: fromEmu(ext?.getAttribute('cy')) };
     const name = kid(box, 'docPr')?.getAttribute('name') ?? '';
+    // alt text: a structure's own, not the description by SMILES written when it has none
+    const descr = kid(box, 'docPr')?.getAttribute('descr')?.trim() ?? '';
+    const alt = descr && !/^Chemical structure( \(SMILES\): | or scheme$)/.test(descr) ? { alt: descr } : {};
     const data = kid(box, 'graphic', 'graphicData');
     const pic = kid(data, 'pic');
     const wsp = kid(data, 'wsp');
@@ -1363,7 +1443,7 @@ class DocxReader {
       const chosen = sizedBox(kept && sameBoxData(kept, got.box) ? freshBox(kept) : got.box, shown.w, shown.h);
       if (chosen === got.box && got.partial) this.warn('chartParts');
       const float = box.localName === 'anchor' ? this.floatOf(box, null, shown.w) : null;
-      this.emitObject(ctx, { kind: 'picture', src: chartBoxPng(chosen, shown.w, shown.h), w: round(shown.w), h: round(shown.h), px: { w: chosen.chart.w, h: chosen.chart.h }, chart: chosen, ...(float ? { float } : {}) }, r);
+      this.emitObject(ctx, { kind: 'picture', src: chartBoxPng(chosen, shown.w, shown.h), w: round(shown.w), h: round(shown.h), px: { w: chosen.chart.w, h: chosen.chart.h }, chart: chosen, ...(float ? { float } : {}), ...alt }, r);
       return;
     }
     const group = kid(data, 'wgp');
@@ -1378,7 +1458,7 @@ class DocxReader {
       const scale = Math.abs(natural.w - shown.w) < 0.75 || m.w <= 0 ? undefined : round(shown.w / m.w, 1e4);
       // a diagram's shapes may have been typed into in Word: their words go back into its text
       const contents = group ? retypedDiagram(structuredClone(m.contents), groupTexts(group)) : structuredClone(m.contents);
-      this.emitObject(ctx, { kind: 'drawing', contents, scale, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r);
+      this.emitObject(ctx, { kind: 'drawing', contents, scale, ...(look ? { look } : {}), ...(float ? { float } : {}), ...(contentsAlt(contents) ? {} : alt) }, r);
       return;
     }
     if (!pic) { this.warn('shapes'); return; }
@@ -1398,7 +1478,7 @@ class DocxReader {
     const sr = kid(kid(pic, 'blipFill'), 'srcRect');
     const f = (k: string) => Math.max(0, Number(sr?.getAttribute(k) ?? 0) / 100000 || 0);
     const crop = sr ? { l: f('l'), t: f('t'), r: f('r'), b: f('b') } : null;
-    const more = { ...(crop && (crop.l || crop.t || crop.r || crop.b) && crop.l + crop.r < 0.99 && crop.t + crop.b < 0.99 ? { crop } : {}), ...(tidyFx(fx) ? { fx: tidyFx(fx) } : {}) };
+    const more = { ...(crop && (crop.l || crop.t || crop.r || crop.b) && crop.l + crop.r < 0.99 && crop.t + crop.b < 0.99 ? { crop } : {}), ...(tidyFx(fx) ? { fx: tidyFx(fx) } : {}), ...alt };
     this.picture(target, shown, r, ctx, look, float, more);
   }
 
@@ -1408,7 +1488,7 @@ class DocxReader {
     return rel && !rel.external ? rel.target : null;
   }
 
-  private picture(path: string | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx, look?: FigureLook | null, float?: Float | null, more: { crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx; embed?: Embedded } = {}): void {
+  private picture(path: string | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx, look?: FigureLook | null, float?: Float | null, more: { crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx; embed?: Embedded; alt?: string } = {}): void {
     const bytes = path ? this.pkg.bytes(path) : null;
     if (!bytes || shown.w <= 0 || shown.h <= 0) return;
     const ext = (path ?? '').split('.').pop()?.toLowerCase() ?? '';
@@ -2077,6 +2157,7 @@ class DocxReader {
       objects,
       drawingStyle: this.drawingStyle,
       ...(this.trackOn() ? { track: true } : {}),
+      ...(this.protection() ? { protect: this.protection()! } : {}),
       ...(this.charStylesRead() ? { charStyles: this.charStylesRead() } : {}),
       ...(this.numFormatOf(sect) !== 'decimal' ? { numFormat: this.numFormatOf(sect) } : {}),
       ...(this.lineNumbersOf(sect) ? { lineNumbers: this.lineNumbersOf(sect) } : {}),

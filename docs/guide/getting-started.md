@@ -67,6 +67,17 @@ A few seconds after it starts, the desktop app checks whether a newer version ha
 
 Each update is checked against the project's signing key before it installs, so only genuine releases are accepted. You can look for an update at any time with **File ▸ Check for Updates…**, and turn the automatic check off in **Edit ▸ Settings ▸ Online**.
 
+**Edit ▸ Settings ▸ Online ▸ Updates** chooses which versions you are offered:
+
+- **Latest** (the default): every new version, the day it is built. You get new features and fixes first.
+- **Stable**: only versions that have been tried out on a real computer and found to work. They come less often and have fewer surprises, which suits people who mainly want to draw.
+
+Switching from Latest to Stable never installs an older version: you keep the one you have until a newer stable version comes out.
+
+### Beta
+
+Chem Illustrator is in **beta**: it is still being built, new features arrive often, and some things may not work as they should yet. The **Beta** mark beside the program's name in the menu bar says so; click it for more. Save your work often, and please tell us about anything that goes wrong with **Help ▸ Report a Problem**.
+
 ## A tour of the window
 
 ![The Chem Illustrator window with a drawing open](../images/drawing.png)
@@ -205,7 +216,7 @@ Slides, sheets, documents and designs save in their own formats; see their pages
 | **Schemes** | Gaps round arrows and + signs, text size above and below arrows, and the + boxes on new arrows. |
 | **AutoSave and Recovery** | AutoSave, how often unsaved work is copied for recovery, and how many versions are kept. |
 | **File Types** | Which kinds of file Chem Illustrator is offered for under **Open with** in Explorer, and a button to Windows' Default apps page (see [Files and sharing](files-and-sharing.md#opening-files-from-explorer-or-finder-desktop-app)). |
-| **Online** | Looking up names on PubChem (sends the name typed to PubChem; untick it to keep everything on your computer) and the update check (desktop app only). |
+| **Online** | Looking up names on PubChem (sends the name typed to PubChem; untick it to keep everything on your computer) and the update check and whether to get Stable or Latest updates (desktop app only). |
 
 Your preferences, hotkeys, own templates, nicknames, palettes and toolbox layout are kept in a small settings file, `settings.json`. **Edit ▸ Hotkeys…** shows where it is on your computer.
 

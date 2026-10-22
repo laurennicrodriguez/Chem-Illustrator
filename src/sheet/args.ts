@@ -19,6 +19,8 @@ export interface Block {
   array?: boolean;
   /** Read from cells: the row and column of its top left cell (for @, which picks the cell in the formula's own row or column). */
   at?: { r: number; c: number };
+  /** Read from cells on another sheet: its name (unset: the formula's own sheet). */
+  sheet?: string;
 }
 export type Arg = Value | Block;
 

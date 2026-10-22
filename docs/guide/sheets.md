@@ -8,6 +8,10 @@ This page covers Sheet mode: cells and formulas, structures in cells, the chemis
 
 Click **+ Sheet** at the end of the tab strip, or choose **File ▸ New Sheet**. While a sheet is showing, Ctrl+N starts another one.
 
+**File ▸ New from Template…** offers a **Reaction table** (one row per entry: catalyst, loading, solvent, temperature, time, conversion, yield, ee and dr, with the best yield and its entry found for you) and a **Reagent sheet** (the reagent table below, and a Yield sheet that works out the percent yield from the product's structure and its isolated mass).
+
+Sheets open from .xlsx, .xlsm, .xls and .ods files as well as text and SD files; see [File types](files-and-sharing.md#file-types).
+
 The ribbon has **Home** and **Insert** tabs. **Table Design**, **Chart** and **Dashboard** tabs appear when you click in a table, a chart or a dashboard. The **Sheet** menu at the top holds most of the same commands.
 
 ## Working with cells
@@ -107,6 +111,9 @@ You can combine them as usual: `=1000*D2/MW(B2)` turns mg into mmol.
 
 - **Home** tab: font size, bold, italic, underline, borders, fill and text colour, alignment, **Wrap**, **Merge**, and the number format with **+.0** and **−.0** for decimal places. **Other…** in the number format list takes your own Excel-style format, such as `0.00 "mg"`.
 - **Format Painter** (beside **Paste**) copies the formats of the selected cells to the cells you click or drag over next; double-click it to keep painting until Esc. **Insert** tab ▸ **Symbol** types °, µ, Å and other signs into the cell.
+- The **font box** takes any installed font; cells with no font of their own use the theme's body font. **Orientation** (ab↗) turns text up, down or to 45°, or stacks its letters, which suits narrow column headings. **⇤** and **⇥** indent text from the cell's edge.
+- **Cell Styles** puts one of Excel's named styles on the selected cells: Good, Bad and Neutral; Input, Output, Calculation, Note and the rest; Title, Heading 1 to 4 and Total; the Accent colours; and the Comma, Currency and Percent number styles. Excel shows them under the same names.
+- **Page Layout** tab ▸ **Themes** sets the workbook's colours and fonts together, with **Colours** and **Fonts** to change one part only. The colour menus offer the theme's colours, and cells styled with Heading, Title, Total or Accent styles take the new theme's colours. The themes are Office (Excel's default) and a few of our own, including a colour-blind safe one.
 - **C₉H₈** sets formulas with proper subscripts. Formulas typed into text cells (Pd(PPh3)4, CH2Cl2) show this way on their own; click **C₉H₈** on such a cell to show it as typed.
 - **Units:** the number format list has a **Units** group for reaction conditions: temperature (°C), catalyst loading (mol%), equivalents, concentration (M), density (g/mL), amount (mmol), mass (mg), volume (mL and µL), time (h and min), pressure (atm) and % ee. The cell keeps the plain number, so it still sorts and works in formulas. Typing "-78 °C" or "5 mol%" into a cell sets the unit for you.
 
@@ -117,6 +124,18 @@ Select some numbers and open **Home** tab ▸ **Conditional Formatting**. Choose
 ### Table styles
 
 Click in your data and choose **Home** tab ▸ **Format as Table** (or **Insert** tab ▸ **Table**). The **Table Design** tab then offers the table's name, **Header Row**, **Totals Row**, **Banded Rows**, first and last column, banded columns, the **Table Style**, its colours, and **Convert to Range** to make it plain cells again.
+
+### Sparklines
+
+Select a block of numbers, such as yields across five runs, and choose **Insert** tab ▸ **Sparklines** ▸ **Line**, **Column** or **Win/Loss**. Give the cells to put them in (one cell for each row of data), then click OK. Click a sparkline to open the **Sparkline** tab. It changes the type, marks the high, low, first, last or negative points, sets the colours and line width, sets the axis (each sparkline its own, the same for all, or a number you choose), sets how empty cells show, changes the data, and clears them. Sparklines are saved as Excel's own.
+
+## Outlines and subtotals
+
+**Data** tab ▸ **Outline**: **Group** (Shift+Alt+Right) puts the selected rows or columns in a group that folds away, up to seven levels deep, and **Ungroup** (Shift+Alt+Left) takes them out. **Auto Outline** groups rows that a SUM just below adds up. The buttons beside the row numbers fold and open each group (− and +), and **1 2 3** show the outline to a level. **Subtotal…** adds a total row under each change in a column (each catalyst, each solvent) worked out with SUBTOTAL, plus a Grand Total, all grouped. SUBTOTAL leaves out other subtotals and, with function numbers 101 to 111, hidden rows. **Settings…** puts the summary rows above their details instead of below.
+
+## Views
+
+The **View** tab has **Normal**, **Page Break Preview** (what prints, page by page, with the breaks as blue lines you can drag) and **Page Layout** (the cells on sheets of paper with their margins, headers and footers; double-click a header to change it). **Gridlines**, **Headings** and **Formula Bar** show or hide those parts of the screen. **New Window** opens the workbook in a second tab (Book.xlsx:2), with its own sheet and place, and typing in either shows in both. **Custom Views…** saves how you are looking at the workbook under a name (the sheet, the view, and, if you like, hidden rows and columns, the filter and print settings) to go back to it in one step. All of these are saved in the .xlsx file.
 
 ## Sort, filter and freeze
 

@@ -51,6 +51,12 @@ export interface Atom {
   xyz?: [number, number, number];
   /** A contracted label: the group it stands for, as SMILES from the atom where it joins (Chemistry > Contract Label). */
   group?: string;
+  /**
+   * Alt text for the whole structure this atom is in (Alt Text…), for people who can't see it:
+   * kept on one of its atoms (see accessibility.ts). Saved as the description of the structure's
+   * picture in Word and PowerPoint; a structure without it is described by its SMILES.
+   */
+  alt?: string;
   /** A carbon shown with its letter and hydrogens (CH3 at a chain end; ChemDraw's ShowTerminalCarbonLabels). */
   showCarbon?: boolean;
   /** The charge is drawn by a separate circled-charge symbol, so the label leaves it out. */
@@ -321,6 +327,34 @@ export interface ParaStyle {
   scheme?: string;
   /** Documents: a bulleted list item's own bullet (from the bullet library), in place of its level's. */
   bullet?: string;
+  /** Documents: index entries marked in this paragraph (References > Mark Entry; Word's XE fields). */
+  xe?: IndexMark[];
+  /** Documents: citations marked here for a table of authorities (References > Mark Citation; Word's TA fields). */
+  ta?: AuthorityMark[];
+}
+
+/**
+ * An index entry (Word's XE field): the word or phrase listed, and the entry under it when it is a
+ * subentry ("Aldol reaction: asymmetric"); its page number, in bold or italic if chosen, or
+ * instead a cross-reference ("See Enolates") in place of the page.
+ */
+export interface IndexMark {
+  main: string;
+  sub?: string;
+  see?: string;
+  bold?: boolean;
+  italic?: boolean;
+}
+
+/**
+ * A citation in a table of authorities (Word's TA field): its short form, which every mention
+ * of it shares, and, on the one marked first, its long form (as listed) and its category (1
+ * Cases, 2 Statutes and so on: see index-toa.ts).
+ */
+export interface AuthorityMark {
+  short: string;
+  long?: string;
+  cat?: number;
 }
 
 /** A tab stop: where text after a tab lines up, and how (Word's left, centre, right and decimal tabs), with dots or a line leading to it. */
@@ -705,6 +739,11 @@ export interface Shape {
   fx?: PictureFx;
   color?: string;
   z?: number;
+  /**
+   * Alt text (Alt Text…): what a picture, chart or shape shows, for people who can't see it
+   * (screen readers). Saved as its description in Word, PowerPoint and Excel.
+   */
+  alt?: string;
   /** Its name in the Layers panel (Design mode). */
   name?: string;
   /** Hidden (Layers panel): not drawn, printed or picked. */

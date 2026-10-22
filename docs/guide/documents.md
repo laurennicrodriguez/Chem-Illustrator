@@ -8,6 +8,8 @@ This page covers Document mode: writing and formatting text, putting structures,
 
 Click **+ Document** at the end of the tab strip, or choose **File ▸ New Document**. While a document is showing, Ctrl+N starts another one.
 
+**File ▸ New from Template…** starts from one of our own templates: a **Lab report** (aim, scheme, reagent table, procedure, observations, results, safety), **Supporting Information** (title block, contents, general information, procedures with a characterization line to fill in, spectra) or a **Thesis chapter** (numbered sections, a wide binding margin and 1.5 line spacing). Text in [brackets] says what goes there; type over it. The headings are in the Heading styles, so the Navigation pane and Table of Contents pick them up.
+
 The ribbon has Word's tabs: **Home**, **Insert**, **Layout**, **References** and **Review**, plus a **Table** tab that appears while the caret is in a table. Text flows on to the next page by itself. The status bar at the bottom shows the page and word count; Ctrl+mouse wheel or the − and + buttons zoom, and **Page Width** fits the page to the window.
 
 ## The chemistry toolbox
@@ -205,6 +207,27 @@ The contents keep themselves up to date: page numbers change as text moves, and 
 
 **References** tab ▸ **Table of Figures** (also **Insert ▸ Table of Figures…**) lists the captions made with Insert Caption, each with its page number after a line of dots. Choose Figure, Scheme, Table or Chart captions, or all of them. Like the contents, it keeps itself up to date; double-click it to list other captions. In Word it is Word's own table of figures.
 
+## Index
+
+1. Select a word or phrase (or just click in a word) and choose **References** tab ▸ **Mark Entry** (Alt+Shift+X, also **Insert ▸ Mark Index Entry…**).
+2. Check the **Main entry**, and type a **Subentry** to list it under the main one (Aldol reaction ▸ asymmetric).
+3. Leave **Current page** for its page number (in bold or italic if you tick them), or choose **Cross-reference** and type "See Enolates" to send readers elsewhere instead.
+4. Tick **Mark All** to mark every paragraph where the text comes up, once each, as Word does.
+
+Each entry is kept on its paragraph, so it moves with the text. Open Mark Entry in a marked paragraph to see its entries, and tick **Take this paragraph's entries off** to remove them.
+
+**References** tab ▸ **Insert Index** (also **Insert ▸ Index…**) puts an Index heading and the index after the caret's paragraph: the entries A to Z, ignoring case and accents, with the subentries indented under them and each page once. It is set in two columns unless you choose another number (it gets a section of its own, with continuous section breaks before and after, as Word does). **Right align page numbers** puts them at the right after dots, and **A letter over each letter's entries** adds A, B, C headings. Like the contents, it keeps itself up to date; double-click it to change it. In Word, entries are Word's XE fields and the index is Word's own INDEX field.
+
+## Table of authorities
+
+For legal writing (cases, statutes, rules and other authorities), as Word does it:
+
+1. Select a citation and choose **References** tab ▸ **Mark Citation** (Alt+Shift+I).
+2. Check the **Long citation** (as the table lists it) and the **Short citation** (later mentions are marked by it), and pick the **Category**: Cases, Statutes, Other Authorities, Rules, Treatises, Regulations or Constitutional Provisions.
+3. **Mark All** marks every paragraph where the short citation comes up. Mark a later mention by itself by picking its short form from the list.
+
+**References** tab ▸ **Table of Authorities** lists the citations marked, each category under its heading, A to Z, with its pages after dots. Choose one category or **All**; **Use passim** prints "passim" in place of the pages for a citation on five pages or more. Double-click it to change it. In Word, citations are Word's TA fields and the table is Word's TOA field (one for each category).
+
 ## Footnotes and endnotes
 
 - **References** tab ▸ **Insert Footnote** (Ctrl+Alt+F) puts the next number in the text and the caret in the note at the foot of the page. Type the note, then press **Escape** to go back to the text.
@@ -239,6 +262,19 @@ Changes made by other people in Word open here as changes, in a different colour
 - **Show changes at** compares whole words (as Word does by default) or letter by letter.
 
 A structure, picture, table or equation counts as one word: if it changed, the old one shows deleted and the new one inserted. Changes of formatting alone are not marked; the revised version's formatting is kept. Headers, footers and the text inside tables and text boxes come from the revised version (Compare) or the original (Combine) and are not compared.
+
+## Restrict Editing and form fields
+
+**Review** tab ▸ **Restrict Editing** protects a document so others can read it but change it only one way:
+
+- **No changes (Read only)**: nothing can be changed.
+- **Comments**: only comments can be added (and replied to).
+- **Tracked changes**: everything typed or deleted is tracked; changes can't be accepted or rejected and formatting can't be changed, so the author decides later.
+- **Filling in forms**: only the document's form fields can be filled in.
+
+Give a password if you want one: it is needed to stop the protection. Click **Restrict Editing** again to stop it. The protection and password are saved in the .docx the way Word keeps them, so the document is protected in Word too, with the same password, and a document protected in Word opens protected here. As in Word, this stops changes made by mistake; it does not encrypt the file, and the text can still be read.
+
+**Form fields** (Word's legacy form fields) go in from the same group, or from **Insert**: **Text Field** (a shaded box to type into), **Check Box** and **Drop-Down** (one of a list of items). Each has a name, a default and an optional line of help. Double-click a field to change its settings. In a document protected for filling in forms, click a field to fill it in (a check box ticks at once), press **Tab** to go to the next field and **Space** or **Enter** to fill in the one picked.
 
 ## Comments
 
@@ -293,7 +329,7 @@ Saving, printing and PDFs always use the pages of Print Layout, whatever view is
 
 ## Saving as Word and PDF
 
-- **Save** (Ctrl+S) writes a Word file (.docx). In Word, styles are Word's own, lists are Word lists, and captions, cross-references, compound numbers, page numbers, the table of contents and the table of figures are Word fields, and footnotes and endnotes are Word's own. Tracked changes and equations are Word's own too, so they keep working there.
+- **Save** (Ctrl+S) writes a Word file (.docx). In Word, styles are Word's own, lists are Word lists, and captions, cross-references, compound numbers, page numbers, the table of contents, the table of figures, index entries, the index, marked citations and the table of authorities are Word fields, form fields are Word's legacy form fields, Restrict Editing is Word's own protection, and footnotes and endnotes are Word's own. Tracked changes and equations are Word's own too, so they keep working there.
 - Structures show as pictures in Word. Open the file here again and they are editable drawings, even after Word has saved it.
 - The free fonts that come with the app are saved inside the file when you use them.
 - Opening a Word file made in Word brings in its text, styles, lists, tables, pictures, captions and cross-references. ChemDraw drawings embedded in it become editable structures. Anything left out is listed in a note.

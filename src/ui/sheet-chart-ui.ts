@@ -2,6 +2,7 @@
 // and the panel on the right where every setting can be changed by hand, down to each series'
 // cell references, axis limits and fitted-line options.
 
+import { askAltText } from './accessibility-pane';
 import { popupMenu } from './sheet-view';
 import type { SheetView } from './sheet-view';
 import { ask, Field } from './ask';
@@ -356,8 +357,20 @@ export class SheetCharts {
       ['Bring to Front', () => this.restack(1), !this.target && this.sheet.charts.length > 1],
       ['Send to Back', () => this.restack(-1), !this.target && this.sheet.charts.length > 1],
       ['All Settings…', () => this.focusPanel()],
+      // a chart on a slide or in a document has its alt text on its picture
+      ...(this.target ? [] : [['Alt Text…', () => void this.altText()] as MenuItem]),
       ['Delete Chart', () => this.deleteChart()],
     ];
+  }
+
+  /** Alt Text… for the chart picked on the sheet. */
+  async altText(): Promise<void> {
+    const c = this.chart;
+    if (!c) return;
+    const got = await askAltText(c.title?.trim() ? `"${c.title.trim()}"` : 'chart', c.alt);
+    const cur = this.chart;
+    if (got === null || !cur || cur.id !== c.id) return;
+    this.change({ ...cur, alt: got || undefined }, 'Alt text');
   }
 
   contextMenu(x: number, y: number): void {
