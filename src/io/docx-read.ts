@@ -32,7 +32,7 @@ import { documentMeasure } from '../text/font-measure';
 import {
   OBJECT_CHAR, defaultCharStyles, defaultHeaderFooter, defaultPage, defaultStyles,
   COL_GAP, FLOAT_GAP, columnsOf, lookExtent, usedObjects,
-  type BreakKind, type CharStyle, type DocObject, type DocText, type Embedded, type PageBorder, type Watermark, type FigureLook, type Float, type HeaderFooter, type LineNumbers, type NamedStyle, type NoteFormat, type NoteFormats, type NumberPlace, type PageNumFormat, type PageSetup, type SectionBreak,
+  type BreakKind, type CharStyle, type DocObject, type DocText, type Embedded, type PageBorder, type Watermark, type FigureLook, type Float, type HeaderFooter, type HfBody, type HfZones, type LineNumbers, type NamedStyle, type NoteFormat, type NoteFormats, type NumberPlace, type PageNumFormat, type PageSetup, type SectionBreak,
 } from '../document/document';
 import { parseFieldInstr, type DocProps } from '../document/fields';
 import { shownSize } from '../document/doc-layout';
@@ -1560,7 +1560,8 @@ class DocxReader {
 
   private relTarget(id: string | null): string | null {
     if (!id) return null;
-    const rel = this.pkg.rels(this.main).get(id);
+    // (relative to the part being read: the document, a header or footer, the notes)
+    const rel = this.pkg.rels(this.part).get(id);
     return rel && !rel.external ? rel.target : null;
   }
 
@@ -1603,7 +1604,7 @@ class DocxReader {
   private embedded(ole: Element, prog: string): Embedded | null {
     if ((ole.getAttribute('Type') ?? 'Embed') !== 'Embed') return null;
     const id = rAttr(ole, 'id');
-    const rel = id ? this.pkg.rels(this.main).get(id) : undefined;
+    const rel = id ? this.pkg.rels(this.part).get(id) : undefined;
     if (!rel || rel.external) return null;
     const bytes = this.pkg.bytes(rel.target);
     if (!bytes?.length) return null;
@@ -2033,29 +2034,97 @@ class DocxReader {
     const own = (kind: 'header' | 'footer') => !!refEl(kind, 'default');
     if (prev && !own('header') && !own('footer')) return { hf: { ...prev, onFirst: prev.onFirst || !titlePg }, linked: true };
     let numberedFirst = false;
+    const oddEven = this.evenAndOdd();
+    const bodies: NonNullable<HeaderFooter['bodies']> = {};
+    const first: HfZones = { header: ['', '', ''], footer: ['', '', ''] }, even: HfZones = { header: ['', '', ''], footer: ['', '', ''] };
+    let firstUsed = false, evenUsed = false;
     for (const kind of ['header', 'footer'] as const) {
+      const Kind = kind === 'header' ? 'Header' : 'Footer';
       if (prev && !own(kind)) {
         hf[kind] = prev[kind];
         if (prev.numbers.startsWith(kind)) { hf.numbers = prev.numbers; hf.prefix = prev.prefix; }
+        for (const k of [kind, `first${Kind}`, `even${Kind}`] as const) if (prev.bodies?.[k]) bodies[k] = prev.bodies[k];
+        if (prev.first) first[kind] = prev.first[kind];
+        if (prev.even) even[kind] = prev.even[kind];
+        firstUsed ||= !!prev.firstPage;
+        evenUsed ||= !!prev.oddEven;
         continue;
       }
-      const part = this.hfPart(refOf(kind, 'default'));
+      const path = refOf(kind, 'default');
+      const part = this.hfPart(path);
       hf[kind] = part.zones;
       if (part.page) {
         hf.numbers = `${kind}-${['left', 'center', 'right'][part.page.zone]}` as NumberPlace;
         hf.prefix = part.page.prefix;
       }
-      if (titlePg && this.hfPart(refOf(kind, 'first')).page) numberedFirst = true;
+      // a logo, a table or formatted text: kept as Word's paragraphs
+      if (part.rich) bodies[kind] = this.hfBody(path!);
+      if (titlePg) {
+        const fp = refOf(kind, 'first');
+        const f = this.hfPart(fp);
+        if (f.page) numberedFirst = true;
+        if (f.rich) { bodies[`first${Kind}`] = this.hfBody(fp!); firstUsed = true; }
+        else if (f.zones.some((z) => z)) { first[kind] = f.zones; firstUsed = true; }
+      }
+      if (oddEven) {
+        const ep = refOf(kind, 'even');
+        if (ep) {
+          const e = this.hfPart(ep);
+          evenUsed = true;
+          // plain text, with the page number (if any) on the other side from odd pages', as here
+          const mirrored = (!e.page && !part.page) || (!!e.page && !!part.page && e.page.zone === 2 - part.page.zone && e.page.prefix === part.page.prefix);
+          if (e.rich || !mirrored) bodies[`even${Kind}`] = this.hfBody(ep);
+          else even[kind] = e.zones;
+        }
+      }
     }
     if (titlePg && hf.numbers !== 'none' && !numberedFirst) hf.onFirst = false;
+    // a first page with a header or footer of its own (not just an empty one, which is a page without its number)
+    if (titlePg && firstUsed) { hf.firstPage = true; hf.first = first; hf.onFirst = numberedFirst; }
+    if (evenUsed) { hf.oddEven = true; hf.even = even; }
+    if (Object.keys(bodies).length) hf.bodies = bodies;
     return { hf, linked: false };
   }
 
+  /** Word's Different Odd & Even Pages (settings.xml's w:evenAndOddHeaders, for the whole document). */
+  private evenAndOdd(): boolean {
+    const path = this.pkg.relOfType(this.main, DOCX_REL.settings);
+    const el = path ? this.pkg.xml(path)?.getElementsByTagNameNS('*', 'evenAndOddHeaders')[0] : null;
+    return !!el && this.on(el);
+  }
+
+  /** A header or footer read as paragraphs, with its pictures, tables and fields (its pictures from its own part). */
+  private hfBody(path: string): HfBody {
+    const root = this.pkg.xml(path)?.documentElement;
+    if (!root) return { runs: [{ text: '' }] };
+    // Word's watermark shapes are the page's look, not the header's
+    for (const pict of Array.from(root.getElementsByTagNameNS(this.W, 'pict'))) {
+      const id = Array.from(pict.getElementsByTagNameNS('*', 'shape')).map((e) => e.getAttribute('id') ?? '').join(' ');
+      if (/PowerPlusWaterMarkObject|WordPictureWatermark/.test(id)) pict.parentNode?.removeChild(pict);
+    }
+    const fields = this.fields, cmt = this.cmtOpen, math = this.displayMath, part = this.part, link = this.link, marks = this.pendingMarks;
+    this.fields = [];
+    this.cmtOpen = new Set();
+    this.part = path;
+    this.link = undefined;
+    this.pendingMarks = [];
+    const got = this.boxText(root);
+    this.fields = fields;
+    this.cmtOpen = cmt;
+    this.displayMath = math;
+    this.part = part;
+    this.link = link;
+    this.pendingMarks = marks;
+    const paras = got.paras.map((q) => { const { marks: _m, ...rest } = q; return rest; });
+    return { runs: got.runs, ...(paras.some((q) => Object.keys(q).length) ? { paras } : {}) };
+  }
+
   /** A header or footer: its text at the left, centre and right, and where its page number is. */
-  private hfPart(path: string | null): { zones: [string, string, string]; page: { zone: number; prefix: string } | null } {
+  private hfPart(path: string | null): { zones: [string, string, string]; page: { zone: number; prefix: string } | null; rich: boolean } {
     const zones: [string, string, string] = ['', '', ''];
     const root = path ? this.pkg.xml(path)?.documentElement : null;
-    if (!root) return { zones, page: null };
+    if (!root) return { zones, page: null, rich: false };
+    let rich = false;
     let page: { zone: number; prefix: string } | null = null;
     let after = '';
     for (const p of Array.from(root.getElementsByTagNameNS(this.W, 'p'))) {
@@ -2105,10 +2174,11 @@ class DocxReader {
               // Word's watermarks: a text one is read with the page's look, a picture one is lost
               const id = Array.from(c.getElementsByTagNameNS('*', 'shape')).map((e) => e.getAttribute('id') ?? '').join(' ');
               if (/PowerPlusWaterMarkObject/.test(id)) break;
-              this.warn(/WordPictureWatermark/.test(id) ? 'pictureWatermark' : 'hfPictures');
+              if (/WordPictureWatermark/.test(id)) this.warn('pictureWatermark');
+              else rich = true;
               break;
             }
-            case 'drawing': case 'object': this.warn('hfPictures'); break;
+            case 'drawing': case 'object': rich = true; break;
             default: visit(c);
           }
         }
@@ -2116,9 +2186,9 @@ class DocxReader {
       visit(p);
       texts.forEach((t, i) => { const s = t.trim(); if (s) zones[i] = zones[i] ? `${zones[i]} ${s}` : s; });
     }
-    if (root.getElementsByTagNameNS(this.W, 'tbl').length) this.warn('hfPictures');
-    if (after.trim()) this.warn('pageText');
-    return { zones, page };
+    if (root.getElementsByTagNameNS(this.W, 'tbl').length) rich = true;
+    if (after.trim() && !rich) this.warn('pageText');
+    return { zones, page, rich };
   }
 
   // ---------------------------------------------------------------- the document
@@ -2199,7 +2269,7 @@ class DocxReader {
       runs.push(...p.runs);
     });
     // (with the structures in tables' cells)
-    const used = usedObjects({ runs, objects: this.objects });
+    const used = usedObjects({ runs, objects: this.objects, hf, paras: out.map((p) => p.ps) });
     const objects: Record<number, DocObject> = {};
     for (const [k, v] of Object.entries(this.objects)) if (used.has(Number(k))) objects[Number(k)] = v;
     const m = this.model;

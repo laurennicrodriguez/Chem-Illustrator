@@ -24,6 +24,7 @@ import type { CiteFormat } from './cite-styles';
 import type { CiteLive, CiteManager } from './live-cites';
 import type { ChartBox } from '../sheet/chart-box';
 import type { DocHyphenation } from '../text/hyphenate';
+import { allHf, hfObjectIds } from './hf-bodies';
 import { fieldText, needsPages, type DocProps, type FieldObj } from './fields';
 
 /** The character that stands for a figure, table or field in the text (Unicode's object replacement character). */
@@ -175,7 +176,24 @@ export interface HeaderFooter {
   start: number;
   /** Shown on the first page (often left off a cover or title page). */
   onFirst: boolean;
+  /** Different First Page (Word's titlePg): the section's first page has its own header and footer (`first`). */
+  firstPage?: boolean;
+  first?: HfZones;
+  /** Different Odd & Even Pages: even pages have their own header and footer (`even`), the page number on the other side. */
+  oddEven?: boolean;
+  even?: HfZones;
+  /** Headers and footers with more than plain text (pictures, tables, formatted text, fields): each in place of the plain text of its place. */
+  bodies?: Partial<Record<HfKey, HfBody>>;
 }
+
+/** The plain text of a first or even page's header and footer: left, centre and right. */
+export interface HfZones { header: [string, string, string]; footer: [string, string, string] }
+
+/** Which header or footer: the usual one, the first page's, or even pages'. */
+export type HfKey = 'header' | 'footer' | 'firstHeader' | 'firstFooter' | 'evenHeader' | 'evenFooter';
+
+/** A header or footer as Word has it: paragraphs of formatted text, with fields, pictures and tables (objects in the document's objects). */
+export interface HfBody { runs: TextRun[]; paras?: ParaStyle[] }
 
 /** How a section starts: on a new page (Next Page), on the same page (Continuous), or on the next even or odd page. */
 export type BreakKind = 'nextPage' | 'continuous' | 'evenPage' | 'oddPage';
@@ -874,8 +892,11 @@ export function cellHolding(t: Pick<DocText, 'objects'>, id: number): { id: numb
 }
 
 /** Every object the text uses, with those inside tables. */
-export function usedObjects(t: Pick<DocText, 'runs' | 'objects'>): Set<number> {
-  return new Set(objectsInText(flatRuns(t)));
+export function usedObjects(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'hf' | 'paras'>>): Set<number> {
+  const used = new Set(objectsInText(flatRuns(t)));
+  // with those in the headers and footers
+  if (t.hf) for (const id of hfObjectIds(allHf({ hf: t.hf, paras: t.paras }), t.objects)) used.add(id);
+  return used;
 }
 
 /** Keep only the objects the text still uses (before saving). */

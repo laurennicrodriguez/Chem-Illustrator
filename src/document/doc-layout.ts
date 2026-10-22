@@ -9,6 +9,8 @@
 // caret, selection and arrow keys run across pages without knowing about them.
 
 import { hyphenation } from '../text/hyphenate';
+import { hfFieldText, hfKeyFor } from './hf-bodies';
+import type { FieldObj } from './fields';
 import type { CellMargins, Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
 import type { DocStyle } from '../style';
 import { withStack, layoutText, type Glyphs, type InlineBox, type LaidLine, type Measure, type Narrow, type TextFrame, type TextLayout } from '../text/layout';
@@ -80,6 +82,21 @@ export interface PageBox {
   hf: HeaderFooter;
   /** That section's index. */
   section: number;
+  /** The first page of its section, its page number as a number, and that number as written (no prefix), for headers and footers. */
+  starts?: boolean;
+  n?: number;
+  num?: string;
+}
+
+/** A page's header or footer with more than plain text, laid out where it goes on the page. */
+export interface PlacedHf {
+  page: number;
+  /** Its paragraphs' text (in the document's coordinates). */
+  texts: TextLayout[];
+  /** Its tables, each with its rows placed on this page. */
+  tables: { id: number; tb: TableBox }[];
+  /** Its pictures and drawings (in its text or its tables' cells). */
+  objects: PlacedObject[];
 }
 
 /** A line's number in the margin: its text, right-aligned to end `distance` left of the text (`x` is its left edge), on the line's baseline. */
@@ -222,6 +239,8 @@ export interface DocLayout {
   lineNums: LineNumber[];
   /** Paragraph borders and shading (Home > Borders, Shading), page by page. */
   frames: ParaFrame[];
+  /** Headers and footers with pictures, tables or formatted text, page by page. */
+  hfs: PlacedHf[];
 }
 
 /** A page setup's text area: the width between the margins, the columns, and the height. */
@@ -690,7 +709,7 @@ export class DocLayouter {
       const hf = secs[sec].hf;
       const number = `${hf.prefix ?? ''}${pageNumText(num, secs[sec].format)}`;
       const label = hf.numbers === 'none' || (starts && !hf.onFirst) ? '' : number;
-      return { index, top, first: lines.length, end: lines.length, label, number, x: ox, w: page.w, h: page.h, setup: page, hf, section: sec };
+      return { index, top, first: lines.length, end: lines.length, label, number, x: ox, w: page.w, h: page.h, setup: page, hf, section: sec, starts, n: num, num: pageNumText(num, secs[sec].format) };
     };
     pages.push(makePage(0, 0, true));
     /** The next page, in section `to` when given (its first page). */
@@ -945,7 +964,89 @@ export class DocLayouter {
     const box = { x1: 0, y1: 0, x2: maxW, y2: last.top + last.h };
     const g0 = geoms[0];
     const textLayout: TextLayout = { lines, boxWidth: g0.textW, box, length: text.length, measure: this.deps.measure };
-    return { text: textLayout, pages, objects, fields, sizes, boxes, tables, maths, paraTops, pageW: maxW, pageH: maxH, textW: g0.textW, cols: { n: g0.cs.n, w: g0.textW, x: g0.colX }, notes, noteRules, lineNums, frames };
+    const hfs = this.hfBodies(t, pages, sizes, inline, objKey, N, extentOf);
+    return { text: textLayout, pages, objects, fields, sizes, boxes, tables, maths, paraTops, pageW: maxW, pageH: maxH, textW: g0.textW, cols: { n: g0.cs.n, w: g0.textW, x: g0.colX }, notes, noteRules, lineNums, frames, hfs };
+  }
+
+  /**
+   * The headers and footers that are more than plain text, laid out on each page: the header's
+   * top at the header distance from the top of the page, the footer's bottom at the footer
+   * distance from the bottom, between the margins. Tables in them are placed row by row, and
+   * pictures where their lines (or cells) put them.
+   */
+  private hfBodies(t: DocText, pages: PageBox[], sizes: Map<number, { w: number; h: number }>, inline: (id: number, room: number) => InlineBox | null, objKey: (id: number) => string, N: NamedStyle, extentOf: (id: number) => number[]): PlacedHf[] {
+    const out: PlacedHf[] = [];
+    if (!pages.some((p) => p.hf.bodies)) return out;
+    for (const pg of pages) {
+      const bodies = pg.hf.bodies;
+      if (!bodies) continue;
+      for (const kind of ['header', 'footer'] as const) {
+        const key = hfKeyFor(pg.hf, kind, !!pg.starts, pg.n ?? pg.index + 1);
+        const body = bodies[key];
+        if (!body) continue;
+        const W = Math.max(36, pg.w - pg.setup.left - pg.setup.right);
+        // fields show this page's number (none on a first page left unnumbered)
+        const num = pg.starts && !pg.hf.onFirst && !pg.hf.firstPage && pg.hf.numbers !== 'none' ? '' : pg.num ?? pg.number;
+        const own = (id: number, room: number): InlineBox | null => {
+          const o = t.objects[id];
+          if (o?.kind === 'field') return { text: hfFieldText(o, t, num, pages.length) };
+          return inline(id, room);
+        };
+        const ownKey = (id: number) => (t.objects[id]?.kind === 'field' ? `=${hfFieldText(t.objects[id] as FieldObj, t, num, pages.length)}` : objKey(id));
+        const parts: ({ lay: TextLayout } | { id: number; tb: TableBox; align: Justify })[] = [];
+        const runsOf = splitParagraphs(body.runs);
+        const ps = fitParas(body.paras, runsOf.length);
+        let h = 0;
+        runsOf.forEach((runs, p) => {
+          const solo = runs.filter((r) => r.obj !== undefined || r.text);
+          const tbo = solo.length === 1 && solo[0].obj !== undefined ? t.objects[solo[0].obj] : undefined;
+          if (tbo?.kind === 'table') {
+            const tb = this.tableBox(solo[0].obj!, tbo.table, N, own, ownKey, 0, t.tableStyles);
+            parts.push({ id: solo[0].obj!, tb, align: ps[p].align ?? 'left' });
+            h += sum(tb.hs);
+            return;
+          }
+          const st = styleOf(t, ps[p]);
+          const resolved = runs.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? st.font, size: r.size ?? st.size }));
+          const lay = layoutText({ runs: resolved.length ? resolved : [{ font: st.font, size: st.size, text: '' }], paras: [{ ...ps[p], spaceBefore: ps[p].spaceBefore ?? 0, spaceAfter: ps[p].spaceAfter ?? 0 }], justify: 'left', wrap: W, boxes: true, inline: own }, st.size, this.deps.measure);
+          parts.push({ lay });
+          h += lay.box.y2 - lay.box.y1 + (ps[p].spaceAfter ?? 0);
+        });
+        const x0 = pg.x + pg.setup.left;
+        let y = kind === 'header' ? pg.top + pg.setup.header : pg.top + pg.h - pg.setup.footer - h;
+        const placed: PlacedHf = { page: pg.index, texts: [], tables: [], objects: [] };
+        const picsIn = (lay: TextLayout, dx: number, dy: number) => {
+          for (const l of lay.lines) for (const g of l.pieces) {
+            const s = g.obj !== undefined ? sizes.get(g.obj) : undefined;
+            if (!s || t.objects[g.obj!]?.kind === 'field') continue;
+            placed.objects.push({ id: g.obj!, page: pg.index, x: dx + g.x + (extentOf(g.obj!)[0] ?? 0), y: dy + l.y - s.h, w: s.w, h: s.h, line: -1 });
+          }
+        };
+        for (const part of parts) {
+          if ('lay' in part) {
+            const moved = movedLayout(part.lay, x0, y - part.lay.box.y1);
+            placed.texts.push(moved);
+            picsIn(part.lay, x0, y - part.lay.box.y1);
+            y += part.lay.box.y2 - part.lay.box.y1;
+            continue;
+          }
+          const { tb } = part;
+          const tw = tb.xs[tb.xs.length - 1];
+          const tx = x0 + (part.align === 'center' ? (W - tw) / 2 : part.align === 'right' ? W - tw : 0);
+          const rows = tb.hs.map((rh, r) => { const at = { page: pg.index, x: tx, y: y + sum(tb.hs.slice(0, r)) }; return at; });
+          const box: TableBox = { ...tb, rows };
+          placed.tables.push({ id: part.id, tb: box });
+          tb.cells.forEach((row, r) => row.forEach((cl, c) => {
+            if (!cl) return;
+            const m = tb.pads[r][c];
+            picsIn(cl, rows[r].x + tb.xs[c] + m.left, rows[r].y + m.top + tb.drop[r][c] - cl.box.y1);
+          }));
+          y += sum(tb.hs);
+        }
+        out.push(placed);
+      }
+    }
+    return out;
   }
 
   /**

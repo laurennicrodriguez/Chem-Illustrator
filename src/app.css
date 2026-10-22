@@ -2263,3 +2263,8 @@ button.sym:hover, button.sym:focus-visible { border-color: var(--accent); backgr
 .theme-swatches span { width: 12px; height: 16px; display: inline-block; }
 .ribbon input.rb-font { width: 130px; }
 .custom-views .cv-list { width: 100%; min-width: 260px; font: inherit; }
+
+/* Header and footer: a first or even page's left, centre and right text in one row */
+.dp-three { display: flex; gap: 3px; min-width: 0; }
+.dp-three .dp-input { flex: 1 1 0; min-width: 0; }
+.dp-note[hidden] { display: none; }

@@ -64,6 +64,7 @@ import { DocInsertUI } from './doc-insert-ui';
 import { DocParagraphUI } from './doc-paragraph-ui';
 import { DocProofingUI } from './doc-proofing-ui';
 import { DEFAULT_ZONE } from '../text/hyphenate';
+import { bodyFromZones, insertInZone, numbersFor, zonesFor } from '../document/hf-bodies';
 import { popupMenu } from './sheet-view';
 import type { BorderChoice } from '../document/para-borders';
 import type { QuickPart } from '../document/quick-parts';
@@ -73,7 +74,7 @@ import { lookOfTable } from '../document/table-styles';
 import type { BorderLine, BorderSide, TableLook } from '../model';
 import { BREAK_NAMES, changeSection, newBreak, pageNumText, sectionAt, sectionsOf, type Section, type SectionPatch } from '../document/sections';
 import {
-  A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, END_FORMAT, FOOT_FORMAT, captionRuns, noteLabel, noteStyle, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets, inlineMove,
+  type HfKey, A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, END_FORMAT, FOOT_FORMAT, captionRuns, noteLabel, noteStyle, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets, inlineMove,
   floatOf, lookExtent, lookOf, cellHolding, innerObjects,
   WATERMARKS, applyCharStyle, charStylesOf, clearCharStyle, clearFormatting, defaultPageBorder, defaultWatermark, deleteStyle, modifyCharStyle, newCharStyle, newParaStyle, withStyle,
   type CharStyle, type PageBorder, type Watermark,
@@ -3066,6 +3067,8 @@ export class DocumentMode {
         this.updateRibbon();
         return true;
       case 'header-edit': this.panel.open('hf', null, 'hf-header0'); return true;
+      case 'hf-picture': void this.headerPicture(); return true;
+      case 'hf-plain': this.headerPlain(); return true;
       case 'footer-edit': this.panel.open('hf', null, 'hf-footer1'); return true;
       case 'numbers-s': {
         const hf = this.section().hf;
@@ -3167,6 +3170,59 @@ export class DocumentMode {
       this.updateRibbon();
     } else return false;
     return true;
+  }
+
+  /**
+   * A picture (a logo or crest) in the header or footer of the section the caret is in, at its
+   * left, centre or right: the header becomes Word's paragraphs (its text and page number kept),
+   * with the picture at the start of that part.
+   */
+  private async headerPicture(): Promise<void> {
+    const f = this.file;
+    if (!f) return;
+    const sec = this.section();
+    const hf = sec.hf;
+    const got = await ask('Picture in Header or Footer', [
+      { name: 'where', label: 'Put it in the', value: 'header', options: [{ value: 'header', label: 'Header' }, { value: 'footer', label: 'Footer' }] },
+      { name: 'which', label: 'On', value: '', options: [{ value: '', label: hf.oddEven ? 'Odd pages' : 'Every page' }, ...(hf.firstPage ? [{ value: 'first', label: 'The first page' }] : []), ...(hf.oddEven ? [{ value: 'even', label: 'Even pages' }] : [])] },
+      { name: 'zone', label: 'At the', value: '0', options: [{ value: '0', label: 'Left' }, { value: '1', label: 'Centre' }, { value: '2', label: 'Right' }] },
+      { name: 'height', label: 'Height', value: '0.5', unit: 'in' },
+    ], { ok: 'Choose Picture…', note: 'For this section. Saved as a picture in Word\'s header or footer. Plain Text (in the Header and Footer settings) takes it out again.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const pic = await this.host.pickPicture();
+    if (!pic || this.file !== f) return;
+    const px = imageSize(pic.bytes, pic.mime) ?? { w: 400, h: 300 };
+    const h = Math.max(6, parseLength(got.height, 'in') ?? 36);
+    const w = (h * px.w) / Math.max(1, px.h);
+    const kind = got.where === 'footer' ? 'footer' : 'header';
+    const key = (got.which ? `${got.which}${kind === 'header' ? 'Header' : 'Footer'}` : kind) as HfKey;
+    const objects = { ...f.t.objects };
+    let next = nextObjectId(f.t);
+    const pid = next++;
+    objects[pid] = { kind: 'picture', src: dataUrl(pic.bytes, pic.mime), w, h, px };
+    const N = styleOf(f.t, undefined);
+    const look: rt.RunStyle = { font: N.font, size: Math.min(10, N.size) };
+    let body = hf.bodies?.[key];
+    if (!body) {
+      const numbers = numbersFor(hf, key);
+      const at = numbers !== 'none' && numbers.startsWith(kind) && (!key.startsWith('first') || hf.onFirst) ? ['left', 'center', 'right'].indexOf(numbers.split('-')[1]) : -1;
+      const W = Math.max(36, sec.page.w - sec.page.left - sec.page.right);
+      body = bodyFromZones(zonesFor(hf, key), at, hf.prefix, look, W, () => { const id = next++; objects[id] = { kind: 'field', code: 'page' }; return id; });
+    }
+    body = insertInZone(body, Number(got.zone) || 0, { ...look, obj: pid, text: OBJECT_CHAR });
+    f.ed.update(changeSection({ ...f.t, objects }, sec.index, { hf: { ...hf, bodies: { ...hf.bodies, [key]: body } } }), 'Header picture');
+    this.updateRibbon();
+  }
+
+  /** Header and footer > Plain Text: the section's headers and footers back to their plain text (pictures, tables and formatting taken out). */
+  private headerPlain(): void {
+    const f = this.file;
+    if (!f) return;
+    const sec = this.section();
+    if (!sec.hf.bodies) { this.host.flash('This section\'s header and footer are plain text already.'); return; }
+    const { bodies: _b, ...hf } = sec.hf;
+    this.setSection({ hf }, 'Plain header and footer');
   }
 
   /** Layout > Hyphenation > Hyphenation Options: on or off, the hyphenation zone, how many hyphens in a row, and words in capitals. */

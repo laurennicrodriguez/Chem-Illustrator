@@ -12,6 +12,7 @@
 // Footnotes and endnotes are Word's own (footnotes.xml and endnotes.xml), and a table of figures
 // is Word's TOC field for a caption label (\c "Figure").
 
+import { allHf, hfFieldText, numbersFor, zonesFor } from '../document/hf-bodies';
 import type { CellBorders, Contents, Justify, ParaStyle, PictureFx, TableData, TextRun } from '../model';
 import { bakedPart } from '../render/picture-fx';
 import { blipEffectsXml, imgPropsXml, pictureGeomXml } from './picture-xml';
@@ -27,7 +28,7 @@ import { facesToEmbed, newGuid, obfuscate, type FontSource } from './font-embed'
 import { fromDataUrl } from '../render/images';
 import { embeddedPart } from './ole-object';
 import { BULLETS, fitParas, listInfo, paraCount, schemeOf, splitParagraphs } from '../text/paragraphs';
-import { BOX_PAD, COL_GAP, COMPOUND, END_FORMAT, FLOAT_GAP, FOOT_FORMAT, columnsOf, OBJECT_CHAR, SHADOWS, charStylesOf, watermarkPlace, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, pruneObjects, EMPTY_FORM, styleOf, runStyleOf, type CharStyle, type DocObject, type DocText, type Embedded, type FigureLook, type HeaderFooter, type NamedStyle, type PageBorder, type PageSetup, type Watermark } from '../document/document';
+import { BOX_PAD, COL_GAP, COMPOUND, END_FORMAT, FLOAT_GAP, FOOT_FORMAT, columnsOf, OBJECT_CHAR, SHADOWS, charStylesOf, watermarkPlace, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, pruneObjects, EMPTY_FORM, styleOf, runStyleOf, type CharStyle, type DocObject, type DocText, type Embedded, type FigureLook, type HeaderFooter, type HfBody, type HfKey, type NamedStyle, type PageBorder, type PageSetup, type Watermark } from '../document/document';
 import { ACS_LINE, GRID_LINE, bibHang, docCellAlign, shownSize } from '../document/doc-layout';
 import { sectionsOf, type Section } from '../document/sections';
 import { bibliography, piecesText, type Reference } from '../document/references';
@@ -183,7 +184,7 @@ class DocxWriter {
     const main = 'word/document.xml';
     const body = await this.body(main);
     const secs = sectionsOf(this.t);
-    const sect = this.section(main, secs[secs.length - 1]);
+    const sect = await this.section(main, secs[secs.length - 1]);
     // Design > Page Color: Word's background (shown once settings say so)
     const bg = this.t.pageColor ? `<w:background w:color="${hex6(this.t.pageColor)}"/>` : '';
     pkg.add(main, `${HEAD}<w:document xmlns:w="${W_NS}" xmlns:r="${NS.r}" xmlns:wp="${WP_NS}" xmlns:a="${NS.a}" xmlns:pic="${PIC_NS}" xmlns:wps="${WPS_NS}" xmlns:wpg="${WPG_NS}" xmlns:mc="${MC_NS}" xmlns:m="${M_NS}">${bg}<w:body>${body}${sect}</w:body></w:document>`, DOCX_CT.document);
@@ -194,7 +195,7 @@ class DocxWriter {
     pkg.relate(main, DOCX_REL.numbering, 'numbering.xml');
     pkg.add('word/numbering.xml', this.numbering(), DOCX_CT.numbering);
     pkg.relate(main, DOCX_REL.settings, 'settings.xml');
-    const settings = (embed: boolean) => `${HEAD}<w:settings xmlns:w="${W_NS}"><w:zoom w:percent="100"/>${this.t.pageColor ? '<w:displayBackgroundShape/>' : ''}${embed ? '<w:embedTrueTypeFonts/><w:saveSubsetFonts/>' : ''}${this.t.track ? '<w:trackRevisions/>' : ''}${protectionXml(this.t.protect)}<w:defaultTabStop w:val="720"/>${hyphenXml(this.t.hyphen)}` +
+    const settings = (embed: boolean) => `${HEAD}<w:settings xmlns:w="${W_NS}"><w:zoom w:percent="100"/>${this.t.pageColor ? '<w:displayBackgroundShape/>' : ''}${embed ? '<w:embedTrueTypeFonts/><w:saveSubsetFonts/>' : ''}${this.t.track ? '<w:trackRevisions/>' : ''}${protectionXml(this.t.protect)}<w:defaultTabStop w:val="720"/>${hyphenXml(this.t.hyphen)}${allHf(this.t).some((h) => h.oddEven) ? '<w:evenAndOddHeaders/>' : ''}` +
       `<w:characterSpacingControl w:val="doNotCompress"/>${notes}` +
       `<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`;
     pkg.add('word/settings.xml', settings(false), DOCX_CT.settings);
@@ -270,7 +271,7 @@ class DocxWriter {
       const runs = runsOf[p] ?? [];
       const ps = paras[p];
       const ending = endsSection.get(p);
-      const sectXml = ending ? this.section(main, ending) : '';
+      const sectXml = ending ? await this.section(main, ending) : '';
       // a section ending with a table, contents or bibliography: an empty paragraph after it holds the section's properties
       const before = out.length;
       const close = () => { if (sectXml && out.length > before) out.push(`<w:p><w:pPr>${sectXml}</w:pPr></w:p>`); if (sectXml) lastWasTable = false; };
@@ -1076,26 +1077,31 @@ class DocxWriter {
    * numbers, and its own header and footer (a section linked to the one before has none, and
    * Word shows the one before's).
    */
-  private section(main: string, sec: Section): string {
+  private async section(main: string, sec: Section): Promise<string> {
     const t = this.t;
     const pg = sec.page;
     const hf = sec.hf;
     const fullW = Math.max(36, pg.w - pg.left - pg.right);
     const refs: string[] = [];
-    const add = (kind: 'header' | 'footer', type: 'default' | 'first', numbered: boolean) => {
+    const add = async (kind: 'header' | 'footer', type: 'default' | 'first' | 'even', numbered: boolean) => {
       if (sec.linked) return;
-      const xmlText = this.headerFooter(kind, numbered, hf, fullW, pg);
+      const key: HfKey = type === 'default' ? kind : `${type}${kind === 'header' ? 'Header' : 'Footer'}`;
+      const name = `${kind}${this.hfParts[kind] + 1}.xml`;
+      const body = hf.bodies?.[key];
+      const xmlText = body ? await this.hfBodyXml(`word/${name}`, kind, body, pg)
+        : this.headerFooter(kind, numbered, hf, fullW, pg, zonesFor(hf, key), numbersFor(hf, key));
       if (!xmlText) return;
-      const name = `${kind}${++this.hfParts[kind]}.xml`;
+      this.hfParts[kind]++;
       this.pkg.add(`word/${name}`, xmlText, kind === 'header' ? DOCX_CT.header : DOCX_CT.footer);
       const rid = this.pkg.relate(main, kind === 'header' ? DOCX_REL.header : DOCX_REL.footer, name);
       refs.push(`<w:${kind}Reference w:type="${type}" r:id="${rid}"/>`);
     };
-    add('header', 'default', true);
-    add('footer', 'default', true);
-    // a first page without its number (the header and footer text stay)
-    const titlePg = hf.numbers !== 'none' && !hf.onFirst;
-    if (titlePg) { add('header', 'first', false); add('footer', 'first', false); }
+    await add('header', 'default', true);
+    await add('footer', 'default', true);
+    // a first page of its own (Different First Page), or one without its number (the header and footer text stay)
+    const titlePg = !!hf.firstPage || (hf.numbers !== 'none' && !hf.onFirst);
+    if (titlePg) { await add('header', 'first', !!hf.firstPage && hf.onFirst); await add('footer', 'first', !!hf.firstPage && hf.onFirst); }
+    if (hf.oddEven) { await add('header', 'even', true); await add('footer', 'even', true); }
     // header references come before footer references
     refs.sort((a, b) => Number(b.startsWith('<w:header')) - Number(a.startsWith('<w:header')));
     const land = pg.w > pg.h;
@@ -1115,10 +1121,9 @@ class DocxWriter {
   }
 
   /** A header or footer part: its left, centre and right text on one line (with tab stops), and the page number. Null when empty. */
-  private headerFooter(kind: 'header' | 'footer', numbered: boolean, hf: HeaderFooter, fullW: number, pg: PageSetup): string | null {
+  private headerFooter(kind: 'header' | 'footer', numbered: boolean, hf: HeaderFooter, fullW: number, pg: PageSetup, zones = hf[kind], numbers = hf.numbers): string | null {
     const t = this.t;
-    const zones = hf[kind];
-    const place = hf.numbers === 'none' || !numbered ? null : hf.numbers;
+    const place = numbers === 'none' || !numbered ? null : numbers;
     const at = place && place.startsWith(kind) ? ['left', 'center', 'right'].indexOf(place.split('-')[1]) : -1;
     // a watermark is Word's: a shape in the header, behind the text
     const wm = kind === 'header' && t.watermark?.text ? watermarkXml(t.watermark, pg, this.watermarks++) : '';
@@ -1143,6 +1148,41 @@ class DocxWriter {
       `<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/><w:ind w:left="0" w:firstLine="0"/><w:jc w:val="left"/></w:pPr>`;
     const vml = wm ? ` xmlns:v="${V_NS}" xmlns:o="${O_NS}" xmlns:w10="${W10_NS}"` : '';
     return `${HEAD}<w:${kind === 'header' ? 'hdr' : 'ftr'} xmlns:w="${W_NS}" xmlns:r="${NS.r}"${vml}><w:p>${pPr}${wm}${parts.join('')}</w:p></w:${kind === 'header' ? 'hdr' : 'ftr'}>`;
+  }
+
+  /** A header or footer with pictures, tables or formatted text: its paragraphs as Word's (its pictures related from its own part), with the watermark. */
+  private async hfBodyXml(part: string, kind: 'header' | 'footer', body: HfBody, pg: PageSetup): Promise<string> {
+    const t = this.t;
+    const runsOf = splitParagraphs(body.runs);
+    const ps = fitParas(body.paras, runsOf.length);
+    const out: string[] = [];
+    for (let p = 0; p < runsOf.length; p++) {
+      const runs = runsOf[p];
+      // what its fields show when saved (Word works them out again on each page)
+      for (const r of runs) {
+        const o = r.obj !== undefined ? t.objects[r.obj] : undefined;
+        if (o?.kind === 'field' && !this.shown.has(r.obj!)) this.shown.set(r.obj!, hfFieldText(o, t, String(t.hf.start ?? 1), 1));
+      }
+      const solo = runs.filter((r) => r.obj !== undefined || r.text);
+      const tbo = solo.length === 1 && solo[0].obj !== undefined ? t.objects[solo[0].obj] : undefined;
+      if (tbo?.kind === 'table') {
+        out.push(await this.docTable(part, tbo.table, ps[p].align ?? 'left'));
+        // Word ends a header with a paragraph
+        if (p === runsOf.length - 1) out.push('<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p>');
+        continue;
+      }
+      out.push(await this.paragraph(part, ps[p], runs, 0));
+    }
+    const wm = kind === 'header' && t.watermark?.text ? watermarkXml(t.watermark, pg, this.watermarks++) : '';
+    // the watermark goes in the first paragraph, behind the text
+    if (wm) {
+      const first = out[0] ?? '';
+      if (!first.startsWith('<w:p')) out.unshift(`<w:p>${wm}</w:p>`);
+      else out[0] = first.includes('</w:pPr>') ? first.replace('</w:pPr>', `</w:pPr>${wm}`) : first.replace(/^<w:p( [^>]*)?>/, (m) => m + wm);
+    }
+    const tag = kind === 'header' ? 'hdr' : 'ftr';
+    const vml = wm ? ` xmlns:v="${V_NS}" xmlns:o="${O_NS}" xmlns:w10="${W10_NS}"` : '';
+    return `${HEAD}<w:${tag} xmlns:w="${W_NS}" xmlns:r="${NS.r}" xmlns:wp="${WP_NS}" xmlns:a="${NS.a}" xmlns:pic="${PIC_NS}" xmlns:wps="${WPS_NS}" xmlns:wpg="${WPG_NS}" xmlns:mc="${MC_NS}" xmlns:m="${M_NS}"${vml}>${out.join('')}</w:${tag}>`;
   }
 
   // ---------------------------------------------------------------- styles and lists
