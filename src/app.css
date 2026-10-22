@@ -245,6 +245,10 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
 .tb-modes button[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); }
 
 .tool-group { display: grid; grid-template-columns: repeat(2, 34px); gap: 3px; }
+/* a short window: three columns, so the tools fit without scrolling */
+.dock-v #tools.cols-3 .tool-group { grid-template-columns: repeat(3, 34px); }
+/* more tools below: the dock fades out at its foot */
+.dock-v.more-below { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent); }
 .tool { width: 34px; height: 32px; padding: 0; display: grid; place-items: center; border-color: transparent; background: transparent; }
 .tool:hover { background: var(--accent-soft); border-color: transparent; }
 .tool.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
@@ -255,8 +259,9 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
   position: absolute;
   right: 0;
   bottom: 0;
-  width: 13px;
-  height: 13px;
+  /* the button's bottom right quarter, so it is easy to hit */
+  width: 17px;
+  height: 16px;
   padding: 0;
   border: 0;
   border-radius: 0 0 6px 0;

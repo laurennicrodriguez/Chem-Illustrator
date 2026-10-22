@@ -243,6 +243,9 @@ const BRACKETS: PaletteDef = {
     { name: 'bracket-square', title: 'Square brackets [ ]' },
     { name: 'bracket-round', title: 'Parentheses ( )' },
     { name: 'bracket-curly', title: 'Braces { }' },
+    { name: 'bracket-ts', title: 'Transition-state brackets: square brackets with ‡ at the upper right' },
+    { name: 'bracket-left', title: 'Single bracket [ (left half only)' },
+    { name: 'bracket-right', title: 'Single bracket ] (right half only)' },
   ],
 };
 
@@ -256,6 +259,7 @@ const SYMBOLS: PaletteDef = {
     { name: 'sym-minus', title: 'Circled minus: click an atom to give it a − charge shown in a circle; drag round the atom to aim it' },
     { name: 'sym-delta-plus', title: 'Partial positive charge (δ+): click an atom' },
     { name: 'sym-delta-minus', title: 'Partial negative charge (δ−): click an atom' },
+    { name: 'sym-ddagger', title: 'Double dagger (‡) for a transition state: click where it goes' },
   ],
 };
 
@@ -290,7 +294,6 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     { name: 'bond-single', title: 'Single bond. Click a bond: single, double, triple' },
     { name: 'bond-double', title: 'Double bond. Click again to move the second line' },
     { name: 'bond-triple', title: 'Triple bond' },
-    { name: 'bond-quadruple', title: 'Quadruple bond (metal–metal)' },
     { name: 'bond-wedge', title: 'Wedge. Click again to reverse' },
     { name: 'bond-hashWedge', title: 'Hashed wedge. Click again to reverse' },
     { name: 'bond-hash', title: 'Hashed bond' },
@@ -301,6 +304,15 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     { name: 'bond-dative', title: 'Dative bond: draw from the donor atom to the acceptor. Click again to reverse' },
     { name: 'bond-hapto', title: 'Hapto (η) bond: drag from a metal into a ring or onto a π-bond to bond it to the middle (η⁵-Cp, η⁶-arene, η²-alkene); click inside a ring or on a bond for a new metal there. Click a hapto bond to draw it to each atom' },
     { name: 'chain', title: 'Chain: drag to draw a zig-zag chain, or click to type how many atoms (Alt+click: the same number again)' },
+  ],
+  // the everyday tools next, where they show without scrolling
+  [
+    { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption' },
+    ARROWS,
+    SYMBOLS,
+    BRACKETS,
+    SHAPES,
+    { name: 'fragment', title: 'Mass fragmentation: drag a line across bonds (or click a bond) to break them and label each piece with its formula and mass' },
   ],
   [
     { name: 'ring-3', title: 'Cyclopropane' },
@@ -329,15 +341,12 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     templatePalette('ligands', 'tpl-ligands', 'Ligands', 6, 64),
     OWN_PALETTE,
   ],
-  [
-    { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption' },
-    { name: 'element', title: 'Periodic table: pick an element, then click atoms to change them' },
-    { name: 'fragment', title: 'Mass fragmentation: drag a line across bonds (or click a bond) to break them and label each piece with its formula and mass' },
-    ARROWS,
-    SYMBOLS,
-    SHAPES,
-    BRACKETS,
-  ],
+];
+
+/** Tools kept off the bar, still reached by their keys, Search and the menus (Chemistry > Periodic Table). */
+const OFF_BAR: ToolbarItem[] = [
+  { name: 'bond-quadruple', title: 'Quadruple bond (metal–metal)' },
+  { name: 'element', title: 'Periodic table: pick an element, then click atoms to change them' },
 ];
 
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
@@ -349,7 +358,7 @@ function keysOf(ctx: KeyContext, action: string): string[] {
 
 // Tool names for the Hotkeys window: the tool tip up to its first full stop or colon.
 const toolNames: Record<string, string> = {};
-for (const group of TOOL_GROUPS) {
+for (const group of [...TOOL_GROUPS, OFF_BAR]) {
   for (const item of group) {
     for (const t of 'palette' in item ? item.items : [item]) toolNames[t.name] = t.title.replace(/\s*\(.*?\)/g, '').split(/[.:] /)[0];
   }
@@ -4919,7 +4928,7 @@ const toolsNav = $<HTMLElement>('#tools');
 
 /** Every tool on the tool bar (palette items too), by name, for toolboxes. */
 const ALL_TOOLS = new Map<string, { title: string; icon: string }>();
-for (const group of TOOL_GROUPS) {
+for (const group of [...TOOL_GROUPS, OFF_BAR]) {
   for (const item of group) {
     const pal = 'palette' in item ? item : null;
     for (const t of pal ? pal.items : [item as { name: string; title: string }]) {
@@ -5106,7 +5115,25 @@ const toolboxes = new Toolboxes(TOOLBOX_DEFS, {
   // each mode keeps the side panel folded or open on its own
   folded: (id) => (id === 'details' ? sideIsFolded() : undefined),
   fold: (id) => { if (id !== 'details') return false; command('fold-side'); return true; },
+  say: (text) => flash(text),
+  rendered: () => fitTools(),
 });
+
+/**
+ * In a dock down a side, the drawing tools take three columns when two would run past the
+ * window's foot, and the dock fades at its foot while there is more below to scroll to.
+ */
+function fitTools(): void {
+  const dock = toolsNav.closest<HTMLElement>('.dock-v');
+  toolsNav.classList.remove('cols-3');
+  if (dock && dock.scrollHeight > dock.clientHeight + 1) toolsNav.classList.add('cols-3');
+  fadeDocks();
+}
+function fadeDocks(): void {
+  for (const d of document.querySelectorAll<HTMLElement>('.dock-v')) d.classList.toggle('more-below', d.scrollTop + d.clientHeight < d.scrollHeight - 2);
+}
+for (const d of document.querySelectorAll<HTMLElement>('.dock-v')) d.addEventListener('scroll', fadeDocks, { passive: true });
+addEventListener('resize', () => fitTools());
 
 /** Tick the shown toolboxes and the lock in the View menu, and show the lock on its button. */
 function tickToolboxes(): void {

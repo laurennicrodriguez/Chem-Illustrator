@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { Arrow, Shape } from '../src/model';
 import {
   arrowMid, sweepThrough, arrowHit, arrowPoints, arrowBox, shapeHit, shapeBox, dragArrowHandle, dragShapeHandle,
-  shapeHandles, arrowHandles, bracketsAround, bracketLip, bracketPath,
+  shapeHandles, arrowHandles, bracketsAround, bracketHalves, bracketLip, bracketPath,
 } from '../src/objects';
 import { arcCenter, dist, DEG } from '../src/geom';
 
@@ -157,5 +157,13 @@ describe('shapes', () => {
     expect(tip.y).toBeCloseTo(40);
     // short brackets keep visible lips
     expect(bracketLip(10)).toBe(1.5);
+  });
+
+  it('gives a bracket tool both brackets, or only the left or right one', () => {
+    const r = { x1: 0, y1: 0, x2: 50, y2: 30 };
+    expect(bracketHalves(r, 'square')).toHaveLength(2);
+    expect(bracketHalves(r, 'square', 'ts')).toHaveLength(2);
+    expect(bracketHalves(r, 'square', 'left').map((b) => b.x1)).toEqual([0]);
+    expect(bracketHalves(r, 'square', 'right').map((b) => b.x1)).toEqual([50]);
   });
 });

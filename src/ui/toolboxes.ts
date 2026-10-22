@@ -136,12 +136,33 @@ export interface ToolboxHooks {
   folded?(id: string): boolean | undefined;
   /** Fold or open a toolbox the app folds itself; true when it did. */
   fold?(id: string): boolean;
+  /** Show a short message in the status bar. */
+  say?(text: string): void;
+  /** After the toolboxes are laid out again. */
+  rendered?(): void;
+}
+
+type Box = { left: number; top: number; right: number; bottom: number };
+
+/**
+ * Where a newly shown floating toolbox of size w × h goes: the first place inside the area,
+ * scanning down from the top right corner (structures are usually drawn in the middle) and then
+ * leftwards, that overlaps none of the boxes already there. The top right corner when none is free.
+ */
+export function freeSpot(w: number, h: number, area: Box, taken: Box[], gap = 8, step = 16): { x: number; y: number } {
+  const clear = (x: number, y: number) => taken.every((t) => x + w + gap <= t.left || x >= t.right + gap || y + h + gap <= t.top || y >= t.bottom + gap);
+  const right = area.right - w - gap, bottom = area.bottom - h - gap;
+  for (let x = right; x >= area.left + gap; x -= step) {
+    for (let y = area.top + gap; y <= bottom; y += step) if (clear(x, y)) return { x: Math.round(x), y: Math.round(y) };
+  }
+  return { x: Math.round(Math.max(area.left + gap, right)), y: Math.round(area.top + gap) };
 }
 
 const DOCK_LABEL: Record<Dock, string> = { left: 'Dock Left', right: 'Dock Right', top: 'Dock at the Top', bottom: 'Dock at the Bottom', float: 'Float' };
 
 export class Toolboxes {
   private frames = new Map<string, HTMLElement>();
+  private toldLocked = false;
   private docks: Record<Exclude<Dock, 'float'>, HTMLElement>;
 
   constructor(private defs: ToolboxDef[], private hooks: ToolboxHooks) {
@@ -189,13 +210,26 @@ export class Toolboxes {
       kids.sort((a, b) => TOOLBOX_IDS.indexOf(a.dataset.id as ToolboxId) - TOOLBOX_IDS.indexOf(b.dataset.id as ToolboxId)).forEach((k) => d.append(k));
     }
     this.keepOnScreen();
+    this.hooks.rendered?.();
   }
 
   /** Show or hide a toolbox (View > Toolboxes). */
   toggle(id: ToolboxId, show?: boolean): void {
     const st = this.hooks.get();
     const p = st.places[id];
-    this.change({ ...st, places: { ...st.places, [id]: { ...p, shown: show ?? !p.shown } } });
+    const shown = show ?? !p.shown;
+    this.change({ ...st, places: { ...st.places, [id]: { ...p, shown } } });
+    if (shown && !p.shown && p.dock === 'float') this.findRoom(id);
+  }
+
+  /** Move a floating toolbox just shown to free space over the drawing, clear of the other toolboxes. */
+  private findRoom(id: string): void {
+    const f = this.frames.get(id);
+    if (!f?.isConnected) return;
+    const r = f.getBoundingClientRect();
+    const taken = [...this.frames.entries()].filter(([k, g]) => k !== id && g.isConnected && g.classList.contains('floating')).map(([, g]) => g.getBoundingClientRect());
+    const { x, y } = freeSpot(r.width, r.height, this.hooks.work().getBoundingClientRect(), taken);
+    this.place(id, { x, y });
   }
 
   isShown(id: ToolboxId): boolean {
@@ -308,7 +342,12 @@ export class Toolboxes {
 
   /** Drag a toolbox by its title: it follows the pointer, and the dock it would go to lights up. */
   private drag(id: string, f: HTMLElement, e: PointerEvent): void {
-    if (boxLocked(this.hooks.get(), id)) return;
+    if (boxLocked(this.hooks.get(), id)) {
+      // say once why nothing moves
+      if (!this.toldLocked) this.hooks.say?.('This toolbox is locked in place. Click its padlock, or the Locked button at the top, to move it.');
+      this.toldLocked = true;
+      return;
+    }
     e.preventDefault();
     const r = f.getBoundingClientRect();
     const dx = e.clientX - r.left, dy = e.clientY - r.top;
