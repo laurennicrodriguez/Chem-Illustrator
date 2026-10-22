@@ -16,6 +16,7 @@ import { paintSlide, type SlidePage } from './slide-view';
 import { selectionBox, POINTS } from '../editor/arrange';
 import type { Rect } from '../geom';
 import type { Selection } from '../editor/editor';
+import { plainText } from '../richtext';
 import { buildSteps, partStates, slideParts, partOf, hostOf, type Anim, type Part, type Step, type Transition, type Side } from './animation';
 
 const ease = (p: number) => 1 - (1 - p) ** 3;
@@ -61,7 +62,7 @@ export class SlideFrames {
   /** Where the slide sits on the canvas: its corner and scale (CSS pixels per point). */
   private at = { x: 0, y: 0, k: 1 };
 
-  constructor(private page: SlidePage, private doc: Doc, private anims: Anim[], w: number, h: number, private dpr: number, fill: string | null) {
+  constructor(private page: SlidePage, private doc: Doc, private anims: Anim[], private w: number, private h: number, private dpr: number, fill: string | null) {
     const live = anims.length ? (() => {
       this.parts = slideParts(doc);
       return anims.filter((a) => partOf(this.parts, a.target));
@@ -146,7 +147,29 @@ export class SlideFrames {
       const st = states.get(L.part) ?? { visible: true };
       if (!st.visible) continue;
       const run = st.running;
-      if (!run) { ctx.drawImage(L.canvas, 0, 0); continue; }
+      const e = st.emph;
+      ctx.save();
+      if (e) {
+        // grown, turned and see-through about the middle of the part
+        const cx = px((L.box.x1 + L.box.x2) / 2, x), cy = px((L.box.y1 + L.box.y2) / 2, y);
+        ctx.translate(cx, cy);
+        if (e.rot) ctx.rotate((e.rot * Math.PI) / 180);
+        if (e.scale !== 1) ctx.scale(e.scale, e.scale);
+        ctx.translate(-cx, -cy);
+        ctx.globalAlpha *= Math.max(0, Math.min(1, e.alpha));
+      }
+      const paint = () => {
+        if (!e?.color || (e.mix <= 0 && !e.was)) { ctx.drawImage(L.canvas, 0, 0); return; }
+        // changing colour: the colour it had (or its own), the new one over it
+        const a0 = ctx.globalAlpha;
+        ctx.drawImage(e.was && e.mix < 1 ? this.tinted(L, e.was) : L.canvas, 0, 0);
+        if (e.mix > 0) {
+          ctx.globalAlpha = a0 * Math.min(1, e.mix);
+          ctx.drawImage(this.tinted(L, e.color), 0, 0);
+          ctx.globalAlpha = a0;
+        }
+      };
+      if (!run) { paint(); ctx.restore(); continue; }
       const a = run.anim, p = a.exit ? 1 - run.p : run.p;
       ctx.save();
       if (a.effect === 'appear') { if (a.exit) { ctx.restore(); continue; } }
@@ -162,11 +185,55 @@ export class SlideFrames {
         const f = a.exit ? ease(run.p) : 1 - ease(run.p);
         ctx.translate(off.x * f * s, off.y * f * s);
       }
-      ctx.drawImage(L.canvas, 0, 0);
+      paint();
+      ctx.restore();
       ctx.restore();
     }
     ctx.restore();
   }
+
+  private tints = new Map<string, HTMLCanvasElement>();
+
+  /**
+   * A part in another colour (Colour Change): a shape's fill, text's colour, and anything else
+   * (structures, pictures) coloured all over, as a stamp.
+   */
+  private tinted(L: { part: Part; canvas: HTMLCanvasElement }, colour: string): HTMLCanvasElement {
+    const key = `${this.layers.indexOf(L as never)}|${colour}`;
+    let c = this.tints.get(key);
+    if (c) return c;
+    c = document.createElement('canvas');
+    c.width = L.canvas.width;
+    c.height = L.canvas.height;
+    const part = L.part;
+    const own = part.kind === 'shape' || part.kind === 'text' ? recoloured(this.doc, part, colour) : null;
+    if (own) paintSlide(c, this.w, this.h, this.dpr, this.page, own, null, false);
+    else {
+      const g = c.getContext('2d');
+      if (g) {
+        g.drawImage(L.canvas, 0, 0);
+        g.globalCompositeOperation = 'source-atop';
+        g.fillStyle = colour;
+        g.fillRect(0, 0, c.width, c.height);
+      }
+    }
+    this.tints.set(key, c);
+    return c;
+  }
+}
+
+/** A shape's fill, or a text box's text, in another colour: the part on its own, ready to paint. */
+function recoloured(doc: Doc, part: Part, colour: string): Doc {
+  const d = subDoc(doc, (kind, id) => inPart(part, kind, id));
+  if (part.kind === 'shape') {
+    for (const sh of [...d.shapes.values()]) {
+      if (sh.kind === 'picture' || sh.kind === 'table') continue;
+      d.updateShape(sh.id, { filled: true, fillColor: colour, fill: undefined });
+    }
+  } else {
+    for (const c of [...d.captions.values()]) d.updateCaption(c.id, { runs: c.runs.map((r) => ({ ...r, color: colour })) });
+  }
+  return d;
 }
 
 /** The part of a box shown `p` of the way through a wipe that starts at `side`. */
@@ -190,6 +257,128 @@ export function flyOffset(b: Rect, side: Side, size: { w: number; h: number }): 
   }
 }
 
+// ---------------------------------------------------------------- Morph
+
+/** A part painted on its own, cut to its box: where it is (points) and its pixels. */
+interface Piece { part: Part; key: string; kind: string; box: Rect; canvas: HTMLCanvasElement }
+
+/** What a part is, to find the same thing on the next slide: its kind and what it holds. */
+export function morphKey(doc: Doc, part: Part): { kind: string; key: string; role: string } {
+  const s = part.sel;
+  switch (part.kind) {
+    case 'text': {
+      const c = doc.captions.get(Math.min(...s.captions));
+      return { kind: 'text', key: c ? plainText(c.runs).trim() : '', role: c?.ph ?? '' };
+    }
+    case 'picture': {
+      const sh = doc.shapes.get(Math.min(...s.shapes));
+      return { kind: 'picture', key: (sh?.src ?? '').slice(-64), role: '' };
+    }
+    case 'shape': {
+      const sh = doc.shapes.get(Math.min(...s.shapes));
+      return { kind: `shape ${sh?.kind}${sh?.geo ? ` ${sh.geo.slice(0, 24)}` : ''}`, key: sh?.text ? plainText(sh.text.runs).trim() : '', role: '' };
+    }
+    case 'drawing': {
+      // a structure: its atoms (by element) and bonds
+      const zs = [...s.atoms].map((id) => { const a = doc.atoms.get(id); return a ? `${a.z}${a.label ?? ''}` : ''; }).sort();
+      return { kind: 'drawing', key: `${zs.join(',')}|${s.bonds.size}|${s.arrows.size}|${s.captions.size}`, role: '' };
+    }
+    default: return { kind: part.kind, key: '', role: '' };
+  }
+}
+
+/**
+ * Pairs of the same thing on two slides, for Morph: the same text, picture, structure or shape
+ * (the same placeholder for titles and text), else the nearest of the same kind for shapes and
+ * pictures. Returns [index on the first slide, index on the second] pairs.
+ */
+export function morphPairs(a: { kind: string; key: string; role: string; box: Rect }[], b: { kind: string; key: string; role: string; box: Rect }[]): [number, number][] {
+  const used = new Set<number>();
+  const out: [number, number][] = [];
+  const centre = (r: Rect) => ({ x: (r.x1 + r.x2) / 2, y: (r.y1 + r.y2) / 2 });
+  const dist = (p: Rect, q: Rect) => { const u = centre(p), v = centre(q); return Math.hypot(u.x - v.x, u.y - v.y); };
+  const pass = (ok: (x: typeof a[0], y: typeof b[0]) => boolean) => {
+    b.forEach((y, j) => {
+      if (out.some((pr) => pr[1] === j)) return;
+      let best = -1, bd = Infinity;
+      a.forEach((x, i) => {
+        if (used.has(i) || x.kind !== y.kind || !ok(x, y)) return;
+        const d = dist(x.box, y.box);
+        if (d < bd) { bd = d; best = i; }
+      });
+      if (best >= 0) { used.add(best); out.push([best, j]); }
+    });
+  };
+  pass((x, y) => x.key === y.key && x.role === y.role);
+  pass((x, y) => x.key === y.key);
+  pass((x, y) => !!x.role && x.role === y.role);
+  pass((x) => x.kind.startsWith('shape') || x.kind === 'picture' || x.kind === 'table' || x.kind === 'connector');
+  return out;
+}
+
+/** Two slides ready to morph from one to the other at one size. */
+export class MorphFrames {
+  private base0 = document.createElement('canvas');
+  private base1 = document.createElement('canvas');
+  private from: Piece[];
+  private to: Piece[];
+  private pairs: [number, number][];
+  private at = { x: 0, y: 0, k: 1 };
+
+  /** `gone`: parts of the first slide its animations took off by its end. */
+  constructor(page0: SlidePage, doc0: Doc, gone: Set<Part>, page1: SlidePage, doc1: Doc, w: number, h: number, private dpr: number, fill: string | null) {
+    const scratch = document.createElement('canvas');
+    const empty = (d: Doc) => subDoc(d, () => false);
+    paintSlide(this.base0, w, h, dpr, page0, empty(doc0), fill);
+    this.at = paintSlide(this.base1, w, h, dpr, page1, empty(doc1), fill);
+    const pieces = (page: SlidePage, doc: Doc, skip: Set<Part>): Piece[] =>
+      slideParts(doc).filter((p) => p.kind !== 'highlight' && !skip.has(p)).map((part) => {
+        const one = subDoc(doc, (kind, id) => inPart(part, kind, id));
+        const at = paintSlide(scratch, w, h, dpr, page, one, null, false);
+        const b0 = selectionBox(doc, part.sel, POINTS) ?? { x1: 0, y1: 0, x2: page.size.w, y2: page.size.h };
+        const pad = 8;
+        const box = { x1: b0.x1 - pad, y1: b0.y1 - pad, x2: b0.x2 + pad, y2: b0.y2 + pad };
+        const c = document.createElement('canvas');
+        const sx = Math.floor((at.x + box.x1 * at.k) * dpr), sy = Math.floor((at.y + box.y1 * at.k) * dpr);
+        const sw = Math.max(1, Math.ceil((box.x2 - box.x1) * at.k * dpr)), sh = Math.max(1, Math.ceil((box.y2 - box.y1) * at.k * dpr));
+        c.width = sw; c.height = sh;
+        c.getContext('2d')?.drawImage(scratch, sx, sy, sw, sh, 0, 0, sw, sh);
+        const k = morphKey(doc, part);
+        return { part, key: k.key + '\u0000' + k.role, kind: k.kind, box, canvas: c };
+      });
+    this.from = pieces(page0, doc0, gone);
+    this.to = pieces(page1, doc1, new Set());
+    const info = (ps: Piece[]) => ps.map((p) => { const [key, role] = p.key.split('\u0000'); return { kind: p.kind, key, role, box: p.box }; });
+    this.pairs = morphPairs(info(this.from), info(this.to));
+  }
+
+  /** One frame, `p` of the way from the first slide to the second. */
+  draw(ctx: CanvasRenderingContext2D, p: number): void {
+    const e = ease(p) * 0.5 + p * 0.5;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.drawImage(this.base0, 0, 0);
+    ctx.globalAlpha = e;
+    ctx.drawImage(this.base1, 0, 0);
+    const { x, y, k } = this.at, d = this.dpr;
+    const put = (c: HTMLCanvasElement, r: Rect, alpha: number) => {
+      if (alpha <= 0) return;
+      ctx.globalAlpha = Math.min(1, alpha);
+      ctx.drawImage(c, (x + r.x1 * k) * d, (y + r.y1 * k) * d, Math.max(1e-3, (r.x2 - r.x1) * k * d), Math.max(1e-3, (r.y2 - r.y1) * k * d));
+    };
+    const pairedA = new Set(this.pairs.map((q) => q[0])), pairedB = new Set(this.pairs.map((q) => q[1]));
+    this.from.forEach((pc, i) => { if (!pairedA.has(i)) put(pc.canvas, pc.box, 1 - e); });
+    for (const [i, j] of this.pairs) {
+      const A = this.from[i], B = this.to[j];
+      const r = { x1: A.box.x1 + (B.box.x1 - A.box.x1) * e, y1: A.box.y1 + (B.box.y1 - A.box.y1) * e, x2: A.box.x2 + (B.box.x2 - A.box.x2) * e, y2: A.box.y2 + (B.box.y2 - A.box.y2) * e };
+      if (A.key === B.key) put(e < 0.5 ? A.canvas : B.canvas, r, 1);
+      else { put(A.canvas, r, 1 - e); put(B.canvas, r, e); }
+    }
+    this.to.forEach((pc, j) => { if (!pairedB.has(j)) put(pc.canvas, pc.box, e); });
+    ctx.globalAlpha = 1;
+  }
+}
+
 const DIR_VEC = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] } as const;
 
 /** One frame of a transition, `p` of the way from the old slide to the new (whole canvases). */
@@ -200,6 +389,8 @@ export function drawTransition(ctx: CanvasRenderingContext2D, from: CanvasImageS
   const e = ease(p);
   switch (t.kind) {
     case 'none': ctx.drawImage(to, 0, 0); return;
+    // Morph without a slide before it (the first slide of the show) fades in
+    case 'morph':
     case 'fade':
       old();
       ctx.globalAlpha = p;
@@ -241,7 +432,7 @@ export class Player {
   /** Steps of the slide's animations played so far. */
   done = 0;
   private frames: SlideFrames | null = null;
-  private moving: { kind: 'transition'; from: HTMLCanvasElement | null; to?: HTMLCanvasElement; t: Transition; t0: number } | { kind: 'step'; t0: number } | null = null;
+  private moving: { kind: 'transition'; from: HTMLCanvasElement | null; to?: HTMLCanvasElement; t: Transition; t0: number; morph?: MorphFrames | null; was?: number } | { kind: 'step'; t0: number } | null = null;
   private raf = 0;
   private loops = 0;
   private timer = 0;
@@ -249,6 +440,8 @@ export class Player {
   private w = 1;
   private h = 1;
   private dpr = 1;
+  /** Steps played on the slide before a change of slide (what a morph starts from). */
+  private wasDone = 0;
   /** Called when a click goes past the last slide. */
   onPastEnd: () => void = () => {};
   /** Called after each change of slide or step (to update a counter, say). */
@@ -326,6 +519,21 @@ export class Player {
     }
   }
 
+  /** A morph from slide `was` (as it was left) to the slide now showing. */
+  private morphFrom(was: number): MorphFrames | undefined {
+    const s = this.deck.slides[was];
+    if (!s) return undefined;
+    const doc0 = this.deck.docOf(was), anims = s.anims ?? [];
+    const parts = anims.length ? slideParts(doc0) : [];
+    const states = anims.length ? partStates(parts, anims, this.wasDone, -1) : new Map();
+    const gone = new Set<Part>([...states].filter(([, st]) => !st.visible).map(([p]) => p));
+    try {
+      return new MorphFrames(this.deck.page(was), doc0, gone, this.deck.page(this.i), this.deck.docOf(this.i), this.w, this.h, this.dpr, this.fill);
+    } catch {
+      return undefined;
+    }
+  }
+
   private framesFor(i: number): SlideFrames {
     const s = this.deck.slides[i];
     const page: SlidePage = this.deck.page(i);
@@ -348,11 +556,13 @@ export class Player {
       from.height = this.canvas.height;
       from.getContext('2d')?.drawImage(this.canvas, 0, 0);
     }
+    const was = this.frames && this.i !== i ? this.i : undefined;
+    this.wasDone = this.done;
     this.i = i;
     this.frames = null;
     this.done = how.atEnd ? this.current.stepCount : 0;
     this.timeUp = false;
-    if (from && t) this.moving = { kind: 'transition', from, t, t0: performance.now() };
+    if (from && t) this.moving = { kind: 'transition', from, t, t0: performance.now(), ...(t.kind === 'morph' && was !== undefined ? { was, morph: null } : {}) };
     else this.arrived();
     this.paint();
     if (this.moving) this.loop();
@@ -445,7 +655,9 @@ export class Player {
         m.to.height = this.canvas.height;
         this.current.draw(m.to.getContext('2d')!, this.done);
       }
-      drawTransition(ctx, m.from, m.to, m.t, p, this.canvas.width, this.canvas.height);
+      if (m.morph === null && m.was !== undefined) m.morph = this.morphFrom(m.was);
+      if (m.morph) m.morph.draw(ctx, p);
+      else drawTransition(ctx, m.from, m.to, m.t, p, this.canvas.width, this.canvas.height);
       if (p >= 1) {
         this.moving = null;
         this.arrived();

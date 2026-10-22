@@ -1576,7 +1576,7 @@ dialog.cf-manage { width: min(92vw, 640px); }
 
 /* ---------------------------------------------------------------- slide transitions and animations */
 #tr-kinds { gap: 2px; }
-.an-gallery { display: grid; grid-template-columns: repeat(4, auto); gap: 1px 2px; align-content: start; }
+.an-gallery { display: grid; grid-template-columns: repeat(5, auto); gap: 1px 2px; align-content: start; }
 .ribbon button.an-effect { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px 1px 4px; white-space: nowrap; }
 .ribbon button.an-effect svg { width: 18px; height: 18px; }
 #anim-section h2, #cmt-section h2 { display: flex; align-items: center; }

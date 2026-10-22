@@ -11,7 +11,7 @@ import type { Deck } from '../deck/deck';
 import type { Selection } from '../editor/editor';
 import { selectionBox, POINTS } from '../editor/arrange';
 import {
-  TRANSITIONS, DIRS, SPEEDS, EFFECTS, SIDES, DEFAULT_TRANSITION_DUR, newAnim, animName, slideParts, partOf, partName, targetOf, buildSteps,
+  TRANSITIONS, DIRS, SPEEDS, EFFECTS, SIDES, DEFAULT_TRANSITION_DUR, EMPH_DEFAULTS, isEmphasis, newAnim, animName, slideParts, partOf, partName, targetOf, buildSteps,
   type Anim, type Effect, type Part, type Transition, type TransitionKind,
 } from '../deck/animation';
 import { Player } from '../deck/playback';
@@ -39,6 +39,7 @@ const TRANSITION_ICONS: Record<TransitionKind, string> = {
   push: svg('<rect x="2" y="6" width="8" height="10" rx="1" opacity=".5"/><rect x="11" y="6" width="9" height="10" rx="1" fill="currentColor" opacity=".8"/><path d="M8 3h7m-2-2l2 2-2 2"/>'),
   wipe: svg('<rect x="3" y="5" width="16" height="12" rx="1"/><path d="M11 5v12" stroke-width="2"/><rect x="11" y="5" width="8" height="12" fill="currentColor" opacity=".8"/>'),
   cover: svg('<rect x="2" y="5" width="13" height="12" rx="1" opacity=".5"/><rect x="8" y="5" width="12" height="12" rx="1" fill="currentColor" opacity=".8"/>'),
+  morph: svg('<circle cx="7" cy="9" r="3.5" opacity=".45" fill="currentColor"/><rect x="11" y="9" width="8" height="8" rx="1" fill="currentColor" opacity=".85"/><path d="M9.5 7.5c3-3 6-2 7 1m0 0l.3-2.4M16.5 8.5l-2.3-.6"/>'),
 };
 
 const EFFECT_ICONS: Record<Effect, string> = {
@@ -46,6 +47,11 @@ const EFFECT_ICONS: Record<Effect, string> = {
   fade: svg('<path d="M11 3l2 5.5 5.5.5-4.2 3.6 1.4 5.4L11 15l-4.7 3 1.4-5.4L3.5 9l5.5-.5z" fill="currentColor" opacity=".45"/>'),
   wipe: svg('<path d="M11 3l2 5.5 5.5.5-4.2 3.6 1.4 5.4L11 15l-4.7 3 1.4-5.4L3.5 9l5.5-.5z"/><path d="M3 12h16v7H3z" fill="currentColor" stroke="none" opacity=".75"/>'),
   fly: svg('<path d="M13 3l1.6 4.5 4.4.4-3.4 2.9 1.1 4.3L13 12.7l-3.7 2.4 1.1-4.3L7 7.9l4.4-.4z" fill="currentColor"/><path d="M2 17h7M3 20h6M5 14h3"/>'),
+  pulse: svg('<path d="M11 5l1.5 4 4 .4-3 2.6 1 4L11 13.8 7.5 16l1-4-3-2.6 4-.4z" fill="currentColor"/><path d="M11 1.5v1.5M3 11H1.5M20.5 11H19M4.5 4.5l1 1M17.5 4.5l-1 1"/>'),
+  grow: svg('<path d="M11 6l1.2 3.2 3.3.3-2.5 2.2.8 3.3L11 13.2 8.2 15l.8-3.3-2.5-2.2 3.3-.3z" fill="currentColor"/><path d="M2 2h5M2 2v5M20 2h-5M20 2v5M2 20h5M2 20v-5M20 20h-5M20 20v-5"/>'),
+  spin: svg('<path d="M11 6l1.2 3.2 3.3.3-2.5 2.2.8 3.3L11 13.2 8.2 15l.8-3.3-2.5-2.2 3.3-.3z" fill="currentColor"/><path d="M18.5 8A8 8 0 1 0 19 13m-.5-5l.4-3.2M18.5 8l-3.1-.6"/>'),
+  transparency: svg('<path d="M11 3l2 5.5 5.5.5-4.2 3.6 1.4 5.4L11 15l-4.7 3 1.4-5.4L3.5 9l5.5-.5z" fill="currentColor" opacity=".25"/><path d="M11 3l2 5.5 5.5.5-4.2 3.6 1.4 5.4L11 15l-4.7 3 1.4-5.4L3.5 9l5.5-.5z"/>'),
+  colour: svg('<path d="M11 3l2 5.5 5.5.5-4.2 3.6 1.4 5.4L11 15l-4.7 3 1.4-5.4L3.5 9l5.5-.5z" fill="currentColor"/><path d="M3 20h16" stroke-width="2.5" stroke="#e53935"/>'),
 };
 
 const ICONS = {
@@ -55,7 +61,7 @@ const ICONS = {
   after: svg('<circle cx="11" cy="11" r="7"/><path d="M11 6v5l3 2"/>', 14),
 };
 
-const ENTRANCE = '#2e8b57', EXIT = '#c0392b';
+const ENTRANCE = '#2e8b57', EXIT = '#c0392b', EMPHASIS = '#c99700';
 
 /**
  * The parts of the slide the selection touches. A selection of highlighted atoms and bonds only
@@ -108,7 +114,7 @@ export class AnimationUI {
       b.className = 'rb-big';
       b.type = 'button';
       b.setAttribute('aria-pressed', 'false');
-      b.title = t.id === 'none' ? 'No transition: the slide just appears' : `${t.name}: ${t.id === 'fade' ? 'the new slide fades in over the old one' : t.id === 'push' ? 'the new slide pushes the old one off' : t.id === 'wipe' ? 'the new slide is uncovered across the old one' : 'the new slide slides in over the old one'}`;
+      b.title = t.id === 'none' ? 'No transition: the slide just appears' : `${t.name}: ${t.id === 'fade' ? 'the new slide fades in over the old one' : t.id === 'push' ? 'the new slide pushes the old one off' : t.id === 'wipe' ? 'the new slide is uncovered across the old one' : t.id === 'morph' ? 'things on both slides glide, grow and shrink to their new places; the rest fade (give the next slide the same title, structures, shapes or pictures, moved or resized)' : 'the new slide slides in over the old one'}`;
       b.innerHTML = `<span class="rb-icon">${TRANSITION_ICONS[t.id]}</span>${t.name}`;
       b.addEventListener('click', () => this.setTransition({ kind: t.id, ...(t.dirs ? { dir: this.transition()?.dir ?? 'left' } : {}) }));
       this.kinds.set(t.id, b);
@@ -140,25 +146,48 @@ export class AnimationUI {
     const effects = this.$('#an-effects');
     const gallery = document.createElement('div');
     gallery.className = 'an-gallery';
-    for (const exit of [false, true]) {
+    const EMPH_TIPS: Record<string, string> = {
+      pulse: 'the selected objects swell a little and back, to draw the eye',
+      grow: 'the selected objects grow (or shrink) and stay that size; set the size in Effect Options',
+      spin: 'the selected objects turn round; set how far in Effect Options',
+      transparency: 'the selected objects become see-through and stay so; set how much in Effect Options',
+      colour: 'a shape\'s fill, or text\'s colour, changes (a structure or picture is coloured all over); pick the colour in Effect Options. PowerPoint can\'t recolour a structure or picture',
+    };
+    for (const exit of [false, true, null]) {
       for (const e of EFFECTS) {
+        // entrance and exit effects, then emphasis (null) in a row of its own
+        if ((exit === null) !== !!e.emph) continue;
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'an-effect';
-        const name = animName(newAnim({ kind: 'shape', id: 0 }, e.id, exit));
-        b.innerHTML = `<span style="color: ${exit ? EXIT : ENTRANCE}">${EFFECT_ICONS[e.id]}</span>${name}`;
-        b.title = `${name}: ${exit ? 'the selected objects go' : 'the selected objects come in'}${e.id === 'appear' ? ' at once' : e.id === 'fade' ? ' by fading' : e.id === 'wipe' ? ', uncovered from one side' : exit ? ' off the slide' : ' from off the slide'}`;
+        const name = animName(newAnim({ kind: 'shape', id: 0 }, e.id, !!exit));
+        b.innerHTML = `<span style="color: ${exit === null ? EMPHASIS : exit ? EXIT : ENTRANCE}">${EFFECT_ICONS[e.id]}</span>${name}`;
+        b.title = exit === null ? `${name} (emphasis): ${EMPH_TIPS[e.id]}` : `${name}: ${exit ? 'the selected objects go' : 'the selected objects come in'}${e.id === 'appear' ? ' at once' : e.id === 'fade' ? ' by fading' : e.id === 'wipe' ? ', uncovered from one side' : exit ? ' off the slide' : ' from off the slide'}`;
         b.dataset.effect = e.id;
-        b.dataset.exit = String(exit);
-        b.addEventListener('click', () => this.applyEffect(e.id, exit));
+        b.dataset.exit = String(!!exit);
+        b.addEventListener('click', () => this.applyEffect(e.id, !!exit));
         this.effectBtns.push(b);
         gallery.append(b);
       }
+      if (exit !== null) gallery.append(document.createElement('span'));
     }
     effects.append(gallery);
     const from = this.$<HTMLSelectElement>('#an-from');
     for (const sd of SIDES) from.add(new Option(sd.name, sd.id));
     from.addEventListener('change', () => this.changePicked({ from: from.value as Anim['from'] }, 'Effect options'));
+    // emphasis settings: how big, how far round, how see-through, what colour
+    const amount = this.$<HTMLInputElement>('#an-amount');
+    amount.addEventListener('change', () => {
+      const v = Number(amount.value);
+      const a = this.anims()[this.current()[0]];
+      if (!a || !Number.isFinite(v)) { this.refresh(); return; }
+      if (a.effect === 'grow' && v > 0) this.changePicked({ scale: v / 100 }, 'Grow/Shrink size');
+      else if (a.effect === 'spin') this.changePicked({ turn: v }, 'Spin amount');
+      else if (a.effect === 'transparency' && v >= 0 && v <= 100) this.changePicked({ opacity: v / 100 }, 'Transparency amount');
+      else this.refresh();
+    });
+    const colour = this.$<HTMLInputElement>('#an-colour');
+    colour.addEventListener('change', () => this.changePicked({ color: colour.value }, 'Colour Change colour'));
     const start = this.$<HTMLSelectElement>('#an-start');
     start.addEventListener('change', () => this.changePicked({ start: start.value as Anim['start'] }, 'Animation start'));
     const anSpeed = this.$<HTMLSelectElement>('#an-speed');
@@ -358,6 +387,20 @@ export class AnimationUI {
     const from = this.$<HTMLSelectElement>('#an-from');
     from.disabled = !a || !(a.effect === 'wipe' || a.effect === 'fly');
     from.value = a?.from ?? 'bottom';
+    const amount = this.$<HTMLInputElement>('#an-amount'), unit = this.$<HTMLElement>('#an-amount-unit'), amountBox = this.$<HTMLElement>('#an-amount-box');
+    const colour = this.$<HTMLInputElement>('#an-colour'), colourBox = this.$<HTMLElement>('#an-colour-box');
+    const amt = a?.effect === 'grow' ? { v: Math.round((a.scale ?? EMPH_DEFAULTS.scale) * 100), u: '% size', tip: 'The size it grows or shrinks to: 150 is half as big again, 50 half the size' }
+      : a?.effect === 'spin' ? { v: a.turn ?? EMPH_DEFAULTS.turn, u: '°', tip: 'How far it turns, in degrees (negative turns anticlockwise)' }
+        : a?.effect === 'transparency' ? { v: Math.round((a.opacity ?? EMPH_DEFAULTS.opacity) * 100), u: '% clear', tip: 'How see-through it becomes: 0 solid, 100 gone' } : null;
+    amountBox.hidden = !amt;
+    if (amt) {
+      amountBox.title = amt.tip;
+      unit.textContent = amt.u;
+      if (document.activeElement !== amount) amount.value = String(amt.v);
+    }
+    colourBox.hidden = a?.effect !== 'colour';
+    if (a?.effect === 'colour' && document.activeElement !== colour) colour.value = a.color ?? EMPH_DEFAULTS.color;
+    from.hidden = !!a && isEmphasis(a.effect);
     const start = this.$<HTMLSelectElement>('#an-start');
     start.disabled = !a;
     start.value = a?.start ?? 'click';
@@ -513,7 +556,7 @@ export class AnimationUI {
       when.title = a.start === 'click' ? 'On Click' : a.start === 'after' ? 'After Previous' : 'With Previous';
       const icon = document.createElement('span');
       icon.className = 'an-icon';
-      icon.style.color = a.exit ? EXIT : ENTRANCE;
+      icon.style.color = isEmphasis(a.effect) ? EMPHASIS : a.exit ? EXIT : ENTRANCE;
       icon.innerHTML = EFFECT_ICONS[a.effect].replace(/width="22" height="22"/, 'width="16" height="16"');
       const name = document.createElement('span');
       name.className = 'an-name';
