@@ -17,6 +17,8 @@ import { parseDarkPalettes, type DarkPalette } from './dark-page';
 import { DEFAULT_SCHEME_PREFS, parseSchemePrefs, type SchemePrefs } from './chem/scheme-layout';
 import { CITE_PRESETS, DEFAULT_STYLE, cleanOptions, type CiteFormat } from './document/cite-styles';
 import { DEFAULT_KEEP, parseKeepPrefs, type KeepPrefs } from './keep/prefs';
+import { parseThemes, type SlideTemplate } from './deck/templates';
+import { parseRecent } from './text/symbols';
 
 export interface Settings {
   /** Changes to ChemDraw's default keys. */
@@ -79,6 +81,8 @@ export interface Settings {
   methylStyle: 'CH3' | 'Me';
   /** The template new slide decks start with (Design > Templates), or null for the plain look. */
   slideTemplate: string | null;
+  /** Your own slide themes (Design > Templates > New Theme), shown with the ready-made ones. */
+  slideThemes: SlideTemplate[];
   /** Axial chirality written as Ra/Sa or as helicity P/M (Edit > Settings). */
   axialStyle: 'RaSa' | 'PM';
   /** The + and − keys put charges in circles (⊕, ⊖) rather than plain signs. */
@@ -115,6 +119,8 @@ export interface Settings {
   guides: { drawing: boolean; slides: boolean; design: boolean };
   /** Document settings boxes pinned in the panel on the right ('para', 'style', 'page', 'hf'). */
   docPins: string[];
+  /** Document mode's ruler shown (View > Ruler). */
+  docRuler: boolean;
   /** Look for a newer version when the desktop app starts (Edit > Settings). */
   updateCheck: boolean;
   /** Names the name reader can't read are looked up on PubChem (Edit > Settings). */
@@ -129,6 +135,8 @@ export interface Settings {
   skipVersion: string | null;
   /** Files and workspaces opened or saved lately, newest first (File menu, desktop app). */
   recentFiles: string[];
+  /** Characters typed from Insert > Symbol lately, newest first. */
+  recentSymbols: string[];
   /** Your own saved highlight looks (Chemistry > Highlight and Fill > Save Highlight Look). */
   highlightLooks: HighlightLookPreset[];
   /** Spacing in schemes and the text above and below arrows (Chemistry > Reactions and Schemes > Scheme Settings). */
@@ -141,11 +149,12 @@ export const DEFAULT_SETTINGS: Settings = {
   hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false, showRoles: true,
   chemTyping: true, stereoItalic: true, boldNumbers: false, autoLinks: true, linkCtrlClick: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
   modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true, page: { name: 'letter', w: 540, h: 720, grow: true }, pageEdge: true, welcomed: false, textBar: 'docked', groupTips: true,
-  citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', circledCharges: false, textToAtom: true, groupClick: 'group', groupOutline: true, rerouteArrows: true, superscriptR: true, linkSide: 'keep', slideTemplate: null, askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(),
+  citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', circledCharges: false, textToAtom: true, groupClick: 'group', groupOutline: true, rerouteArrows: true, superscriptR: true, linkSide: 'keep', slideTemplate: null, slideThemes: [], askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(),
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
   guides: { drawing: false, slides: true, design: true },
   docPins: [],
-  updateCheck: true, pubchemNames: true, fileTypesOffered: false, wordObjectsOffered: false, reviewName: '', skipVersion: null, recentFiles: [], highlightLooks: [],
+  docRuler: false,
+  updateCheck: true, pubchemNames: true, fileTypesOffered: false, wordObjectsOffered: false, reviewName: '', skipVersion: null, recentFiles: [], recentSymbols: [], highlightLooks: [],
   scheme: DEFAULT_SCHEME_PREFS,
   keep: DEFAULT_KEEP,
 };
@@ -154,7 +163,7 @@ const STORAGE_KEY = 'chem-illustrator.settings';
 
 /** Read settings saved as text, keeping only what makes sense. */
 export function parseSettings(text: string | null | undefined): Settings {
-  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), myStyles: [], modeStyles: {}, darkPalettes: [], guides: { ...DEFAULT_SETTINGS.guides }, docPins: [], recentFiles: [], highlightLooks: [], scheme: { ...DEFAULT_SCHEME_PREFS }, keep: { ...DEFAULT_KEEP } };
+  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), myStyles: [], modeStyles: {}, darkPalettes: [], guides: { ...DEFAULT_SETTINGS.guides }, docPins: [], recentFiles: [], recentSymbols: [], highlightLooks: [], scheme: { ...DEFAULT_SCHEME_PREFS }, keep: { ...DEFAULT_KEEP } };
   if (!text) return s;
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { return s; }
@@ -191,13 +200,16 @@ export function parseSettings(text: string | null | undefined): Settings {
     const g = r.guides as Record<string, unknown>;
     for (const k of ['drawing', 'slides', 'design'] as const) if (typeof g[k] === 'boolean') s.guides[k] = g[k] as boolean;
   }
+  if (typeof r.docRuler === 'boolean') s.docRuler = r.docRuler;
   if (Array.isArray(r.docPins)) s.docPins = ['para', 'style', 'page', 'hf'].filter((k) => (r.docPins as unknown[]).includes(k));
   if (r.methylStyle === 'Me' || r.methylStyle === 'CH3') s.methylStyle = r.methylStyle;
   if (r.groupClick === 'group' || r.groupClick === 'item') s.groupClick = r.groupClick;
   if (r.axialStyle === 'RaSa' || r.axialStyle === 'PM') s.axialStyle = r.axialStyle;
   if (typeof r.slideTemplate === 'string' || r.slideTemplate === null) s.slideTemplate = r.slideTemplate as string | null;
+  s.slideThemes = parseThemes(r.slideThemes);
   s.highlightLooks = parseLooks(r.highlightLooks);
   if (Array.isArray(r.recentFiles)) s.recentFiles = r.recentFiles.filter((p): p is string => typeof p === 'string' && p.trim() !== '').slice(0, 10);
+  s.recentSymbols = parseRecent(r.recentSymbols);
   if (typeof r.skipVersion === 'string' || r.skipVersion === null) s.skipVersion = r.skipVersion as string | null;
   s.scheme = parseSchemePrefs(r.scheme);
   s.keep = parseKeepPrefs(r.keep);

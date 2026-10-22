@@ -29,8 +29,20 @@ function drawGlyphs(ctx: CanvasRenderingContext2D, lay: TextLayout, l: LaidLine,
   ctx.font = fontOf(g);
   ctx.fillStyle = g.color ?? '#000';
   const y = oy + l.y + g.dy;
-  if (g.shown !== undefined) ctx.fillText(g.shown, ox + g.x, y);
-  else if (g.spread) {
+  if (g.tab) {
+    // a tab shows nothing but its leader: dots, a dashed or a solid line along the baseline
+    if (g.leader === 'underscore') ctx.fillRect(ox + g.x, oy + l.y + Math.max(1, g.size * 0.1), g.w, Math.max(0.5, g.size * 0.05));
+    else if (g.leader) {
+      const mark = g.leader === 'dot' ? '.' : '-';
+      const step = Math.max(1, lay.measure(mark, g.size, g.family, g.style) * (g.leader === 'dot' ? 1.6 : 1.3));
+      // dots line up from one line to the next (on a grid from the margin), as Word's do
+      for (let x = Math.ceil((g.x + 0.5) / step) * step; x + step <= g.x + g.w + 0.01; x += step) ctx.fillText(mark, ox + x, y);
+    }
+  } else if (g.shown !== undefined) ctx.fillText(g.shown, ox + g.x, y);
+  else if (g.spacing) {
+    // spaced out (or condensed): each character where the spacing puts it
+    for (let k = 0; k < g.text.length; k++) if (g.text[k] !== ' ') ctx.fillText(g.text[k], ox + g.x + pieceX(lay, g, k), y);
+  } else if (g.spread) {
     // justified: each word goes where the stretched spaces put it
     let k = 0;
     for (const word of g.text.split(' ')) {

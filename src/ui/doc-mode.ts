@@ -4,20 +4,24 @@
 // spelling check knows chemistry words. The panel on the right shows the paragraph's formatting,
 // its style, the page and the figure picked, every value of which can be typed in.
 
-import { Doc, type Contents, type ParaStyle, type Shape, type TextRun } from '../model';
+import { Doc, type Contents, type ParaStyle, type Shape, type TabStop, type TextRun } from '../model';
+
+type TabStopKind = TabStop['kind'];
 import { geoDef, geoShapeStyle } from '../design/geo';
 import type { DocStyle } from '../style';
 import type { Tab } from '../workspace';
 import type { Measure } from '../text/layout';
 import { keymap, chordOf, parseAction, type KeyContext } from '../editor/keymap';
 import * as rt from '../richtext';
-import type { Move } from '../text/editing';
+import type { Move, TextEditing } from '../text/editing';
+import type { TextLook } from '../format-painter';
+import { BRUSH } from '../editor/cursors';
 import { offsetAt, caretPos, selectionRects } from '../text/layout';
 import { htmlToRich, richToHtml, richToPlain } from '../text/html';
 import { afterTyping, typingPrefs, setTypingPrefs } from '../text/typing';
 import { findIssues, type CharLook, type Issue } from '../text/chemtext';
 import { loadSpeller, type Speller } from '../text/spelling';
-import { fitParas, paraAt, paraCount, paraRange, splitParagraphs } from '../text/paragraphs';
+import { BULLET_LIBRARY, LIST_SCHEMES, fitParas, paraAt, paraCount, paraRange, splitParagraphs } from '../text/paragraphs';
 import { DocView, ACTUAL, type Overlay } from './doc-view';
 import {
   PRINT_VIEW, VIEW_NAMES as VIEW_LABEL, changeLevel, withHeadings, continuous, foldHeadings, moveParas, newOutline, outlineLevel, shiftFolds, subtreeEnd, toggleFold,
@@ -30,14 +34,18 @@ import { askLink, followLink, linkTip } from './links-ui';
 import { bookmarkName, linkAtPoint } from '../links';
 import { addBookmark, bookmarkPara, bookmarksOf, docPlaces, placeLink, placeName, removeBookmark } from '../document/bookmarks';
 import { DocComments } from './doc-comments';
+import { Ruler, docRulerPrefs, type RulerGeometry } from './ruler';
+import { StylesPane } from './styles-pane';
 import { TOF_NAMES, tocEntries, tofEntries } from '../document/toc';
 import { changesIn, countChanges, decide, decideEverywhere, reviewAuthor, setReviewAuthor } from '../document/revisions';
+import { combineDocuments, compareDocuments } from '../document/compare';
 import { ask } from './ask';
 import { askEquation } from './equation-dialog';
 import { ReferencesDialog, chooseReferences } from './references-dialog';
 import { citeSuper, formatOf, type Reference } from '../document/references';
 import { dataUrl, imageSize } from '../render/images';
 import { editChart, chartPoints } from './chart-editor';
+import { pictureFormat } from './picture-dialog';
 import { newChartBox, sizedBox } from '../sheet/chart-box';
 import { chartBoxPng } from '../render/chart-box-paint';
 import type { DocFile } from '../document/doc-file';
@@ -45,11 +53,18 @@ import type { TableData } from '../model';
 import {
   canMerge, coveringCell, deleteColumn, deleteRow, emptyTable, insertColumn, insertRow, isCovered, mergeDown, mergeRight, nextCell, rowSpanOf, setColumnAlign, setColumnWidth, setPart, splitCell, spanOf,
 } from '../table';
-import { CELL_PAD } from '../document/doc-layout';
+import { cellMargins, paintEdge, type CellBlock } from '../document/table-styles';
+import { blockOf, canMergeBlock, mergeBlock } from '../document/table-convert';
+import { BORDER_STYLES, BORDER_WIDTHS, DocTablesUI, LOOK_OPTIONS, penSwatch } from './doc-tables-ui';
+import { DocNav } from './doc-nav';
+import { lookOfTable } from '../document/table-styles';
+import type { BorderLine, BorderSide, TableLook } from '../model';
 import { BREAK_NAMES, changeSection, newBreak, pageNumText, sectionAt, sectionsOf, type Section, type SectionPatch } from '../document/sections';
 import {
   A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, END_FORMAT, FOOT_FORMAT, captionRuns, noteLabel, noteStyle, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets, inlineMove,
   floatOf, lookExtent, lookOf, cellHolding, innerObjects,
+  WATERMARKS, applyCharStyle, charStylesOf, clearCharStyle, clearFormatting, defaultPageBorder, defaultWatermark, deleteStyle, modifyCharStyle, newCharStyle, newParaStyle, withStyle,
+  type CharStyle, type PageBorder, type Watermark,
   type BreakKind, type DocObject, type DocText, type FigureLook, type Float, type LineNumbers, type NoteFormat, type NumberPlace, type PageNumFormat, type PageSetup, type WrapKind,
 } from '../document/document';
 
@@ -81,6 +96,12 @@ export interface DocModeHost {
   preferredChanged?(): void;
   /** The name put on tracked changes was changed (save settings). */
   reviewNameChanged?(): void;
+  /** The documents open in tabs, by name (Review > Compare offers them). */
+  openDocuments?(): { name: string; t: DocText }[];
+  /** Choose a Word file and read it (not opened in a tab). */
+  pickDocument?(): Promise<{ name: string; t: DocText } | null>;
+  /** Show a document made here (Compare's result) in a new tab, unsaved. */
+  showDocument?(t: DocText, name: string): void;
   measure: Measure;
 }
 
@@ -98,7 +119,7 @@ const ignored = new Set<string>();
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
 /** Commands that, in a text box, work on its text (others leave the box first). */
-const BOX_COMMANDS = /^(doc-(align-|justify|bold|italic|underline|sub|sup|formula|highlight|bullets|numbering|indent|outdent)|line-|font-|select-all$|undo$|redo$|zoom-|copy$|cut$|paste$|box-|find$|replace$|wrap-)/;
+const BOX_COMMANDS = /^(format-painter$|insert-symbol$|doc-(align-|justify|bold|italic|underline|sub|sup|formula|highlight|bullets|numbering|indent|outdent)|line-|font-|select-all$|undo$|redo$|zoom-|copy$|cut$|paste$|box-|find$|replace$|wrap-)/;
 
 /** Commands that, in a table cell, work there too (others leave the cell first). */
 const CELL_COMMANDS = /^(table-|tbl-|insert-table$|insert-structure$|structure-from-name-doc$|name-to-structure$|insert-picture$|edit-figure$|compound-number$|cross-reference$|insert-citation$)/;
@@ -172,8 +193,17 @@ export class DocumentMode {
     | { kind: 'resize'; id: number; w0: number; scale0: number; x0: number }
     | { kind: 'move'; id: number; from: { x: number; y: number }; float: Float; moved: boolean }
     | { kind: 'inline'; id: number; from: { x: number; y: number }; to: number | null }
+    | { kind: 'paint'; done: Set<string> }
     | null = null;
   private plainPaste = false;
+  /** Cells chosen together by dragging across them (Table commands work on all of them). */
+  private cellRange: ({ id: number } & CellBlock) | null = null;
+  /** The cell a drag across cells started in. */
+  private cellAnchor: { id: number; r: number; c: number } | null = null;
+  /** Table Design: styles, borders, margins, and text to table. */
+  readonly tables: DocTablesUI;
+  /** View > Navigation Pane. */
+  readonly nav: DocNav;
   private speller: Speller | null = null;
   private dictSeen: string[] | null = null;
   private checkCache = new Map<string, { spell: [number, number][]; issues: Issue[] }>();
@@ -185,6 +215,10 @@ export class DocumentMode {
   private refs: ReferencesDialog;
   /** Review > New Comment: comments beside the page. */
   readonly comments: DocComments;
+  /** View > Ruler: the paragraph's indents and tab stops above the pages. */
+  private ruler: Ruler;
+  /** Home > Styles > More Styles: every style, to apply, change and make. */
+  private stylesPane: StylesPane;
   private readonly closeMenuOutside = (e: Event) => { if (this.menu && !this.menu.contains(e.target as Node)) this.closeMenu(); };
 
   constructor(private host: DocModeHost) {
@@ -234,6 +268,51 @@ export class DocumentMode {
       pickFile: () => this.host.pickReferenceFile(),
       preferredChanged: () => this.host.preferredChanged?.(),
     });
+    this.ruler = new Ruler($('#doc-ruler'), {
+      geometry: () => this.rulerGeometry(),
+      setParas: (patch, what) => { if (this.file && !this.file.box) this.ed.setSelectedParas(patch, what); },
+      focus: () => this.focus(),
+    });
+    this.stylesPane = new StylesPane({
+      doc: () => { const f = this.file; return f && !f.box ? { t: f.t, para: this.ed.currentPara(), look: this.ed.currentStyle() } : null; },
+      applyPara: (id) => { if (this.file) { this.run(`style-id:${id}`); } },
+      applyChar: (id) => this.applyCharStyle(id),
+      newStyle: () => void this.newStyle(),
+      modify: (kind, id) => void this.modifyStyle(kind, id),
+      remove: (kind, id) => this.removeStyle(kind, id),
+      focus: () => this.focus(),
+    });
+    this.tables = new DocTablesUI({
+      file: () => this.file,
+      target: () => this.tableTarget(),
+      block: () => this.chosenBlock(),
+      setTable: (id, t, kind) => this.setTable(id, t, kind),
+      textW: () => this.file?.layout().textW ?? 468,
+      flash: (msg, ms) => this.host.flash(msg, ms),
+      focus: () => this.focus(),
+      leaveCell: () => this.stopBox(),
+      startCell: (id, r, c) => { this.startCell(id, r, c); },
+      changed: () => { this.updateRibbon(); this.redraw(); },
+    });
+    this.nav = new DocNav($('#doc-pane'), {
+      text: () => this.file?.t ?? null,
+      caretPara: () => { const f = this.file; return f ? paraAt(f.ed.text, f.ed.start) : 0; },
+      goToPara: (p) => this.goToPara(p),
+      goToHit: (hit) => this.goToHit(hit),
+      apply: (t, kind, para) => {
+        const f = this.file;
+        if (!f) return;
+        this.stopBox();
+        const at = paraRange(rt.plainText(t.runs), para).start;
+        f.ed.update(t, kind, at, at);
+        this.goToPara(para);
+      },
+      level: (para, op) => this.navLevel(para, op),
+      deleteBlock: (para) => this.navDelete(para),
+      showFound: () => this.redraw(),
+      resized: () => { for (const v of this.views) v.resize(); this.redraw(); },
+      focus: () => this.focus(),
+    });
     this.wireInput();
     this.wirePointer(this.view);
     this.wireRibbon();
@@ -247,6 +326,21 @@ export class DocumentMode {
   /** Where typing goes: the text box being typed into, or the document. */
   private get ed() {
     return this.file!.textEd;
+  }
+
+  /** Format Painter, while the brush is held (set by the app): a click or drag in the text paints it. */
+  painter: ((ed: TextEditing) => void) | null = null;
+
+  /** Format Painter: the look of the selection (or of the text at the caret) where typing goes. */
+  pickLook(): TextLook | null {
+    return this.file && !this.reading ? this.ed.pickLook() : null;
+  }
+
+  /** Insert > Symbol: type a character where the caret is. False when the text can't be typed in (Read Mode). */
+  insertText(text: string): boolean {
+    if (!this.file || this.reading) return false;
+    this.ed.type(text);
+    return true;
   }
 
   /** Start typing into a text box (the caret at the end of its text, or at a point on it). */
@@ -449,7 +543,7 @@ export class DocumentMode {
       case 'table-split': this.setTable(id, splitCell(t, r, c), 'Split cells', { r, c }); break;
       case 'table-nest': void this.insertTable(true); break;
       case 'table-lines-grid': case 'table-lines-acs': case 'table-lines-none':
-        this.setTable(id, { ...t, lines: cmd.slice(12) as TableData['lines'] }, 'Table lines');
+        this.setTable(id, { ...t, lines: cmd.slice(12) as TableData['lines'], style: undefined }, 'Table lines');
         break;
       case 'table-valign-top': case 'table-valign-center': case 'table-valign-bottom': {
         const v = cmd.slice(13);
@@ -463,13 +557,121 @@ export class DocumentMode {
       case 'table-fill-width': this.setTable(id, { ...t, cols: t.cols.map((w) => (w * lay.textW) / t.cols.reduce((a, b) => a + b, 0)) }, 'Fit to page'); break;
       case 'table-head-more': this.setTable(id, { ...t, head: Math.min(t.rows.length, t.head + 1) }, 'Heading rows'); break;
       case 'table-head-less': this.setTable(id, { ...t, head: Math.max(0, t.head - 1) }, 'Heading rows'); break;
-      default: this.host.flash(`Unknown table command ${cmd}`);
+      case 'table-styles': {
+        const r0 = this.view.host.getBoundingClientRect();
+        this.tables.styleGallery(r0.left + 40, r0.top + 8);
+        break;
+      }
+      case 'table-borders': {
+        const r0 = this.view.host.getBoundingClientRect();
+        this.tables.bordersMenu(r0.left + 40, r0.top + 8);
+        break;
+      }
+      case 'table-painter': this.tables.setPainting(!this.tables.painting); break;
+      case 'table-gridlines':
+        this.view.gridlines = !this.view.gridlines;
+        if (this.split) this.split.view.gridlines = this.view.gridlines;
+        this.updateRibbon();
+        this.redraw();
+        break;
+      case 'table-margins': void this.tables.cellMarginsDialog(); break;
+      case 'table-to-text': void this.tables.tableToTextDialog(); break;
+      case 'table-split-table': this.tables.splitTable(); break;
+      case 'table-merge-cells': {
+        const b = this.rangeNow();
+        if (!b || !canMergeBlock(t, b)) { this.host.flash('Drag across the cells to merge first (a block that doesn\'t cut through a merged cell).'); return; }
+        this.cellRange = null;
+        this.setTable(id, mergeBlock(t, b), 'Merge cells', { r: b.r0, c: b.c0 });
+        break;
+      }
+      default: {
+        const look = /^table-look-(\w+)$/.exec(cmd);
+        if (look && LOOK_OPTIONS.some(([k]) => k === look[1])) { this.tables.toggleLook(look[1] as keyof TableLook); break; }
+        const border = /^table-border-(\w+)$/.exec(cmd);
+        if (border) { this.tables.borders(border[1] as Parameters<DocTablesUI['borders']>[0]); break; }
+        this.host.flash(`Unknown table command ${cmd}`);
+      }
     }
   }
 
-  /** Whether a cell is one the cell commands change: the cell typed into, or every cell of a picked table. */
+  /** Whether a cell is one the cell commands change: the cells dragged across, the cell typed into, or every cell of a picked table. */
   private inChosen(tg: { r: number; c: number }, r: number, c: number): boolean {
+    const b = this.rangeNow();
+    if (b) return r >= b.r0 && r <= b.r1 && c >= b.c0 && c <= b.c1;
     return !this.file?.box?.cell || (r === tg.r && c === tg.c);
+  }
+
+  /** The cells dragged across, while they are still in the table being worked on. */
+  private rangeNow(): CellBlock | null {
+    const b = this.cellRange;
+    const tg = this.tableTarget();
+    if (!b || !tg || tg.id !== b.id || b.r1 >= tg.t.rows.length || b.c1 >= tg.t.cols.length) return null;
+    return b;
+  }
+
+  /** The cells the border and margin commands work on: those dragged across, the cell typed into, or the whole table. */
+  private chosenBlock(): CellBlock | null {
+    const tg = this.tableTarget();
+    if (!tg) return null;
+    const b = this.rangeNow();
+    if (b) return b;
+    if (this.file?.box?.cell) return { r0: tg.r, c0: tg.c, r1: tg.r + rowSpanOf(tg.t, tg.r, tg.c) - 1, c1: tg.c + spanOf(tg.t, tg.r, tg.c) - 1 };
+    return { r0: 0, c0: 0, r1: tg.t.rows.length - 1, c1: tg.t.cols.length - 1 };
+  }
+
+  // ---------------------------------------------------------------- the Navigation pane
+
+  /** Go to a paragraph (a heading picked in the Navigation pane): the caret at its start, scrolled to the top. */
+  private goToPara(p: number): void {
+    const f = this.file;
+    if (!f) return;
+    this.stopBox();
+    const text = f.ed.text;
+    const at = paraRange(text, Math.min(p, paraCount(text) - 1)).start;
+    f.ed.setCaret(at);
+    const c = f.ed.caret();
+    this.view.revealTop({ x1: c.x, y1: c.y1, x2: c.x, y2: c.y2 });
+    this.focus();
+    this.changed('selection');
+  }
+
+  /** Go to a place the Navigation pane's search found (in the text, or in a table cell). */
+  private goToHit(hit: { cell?: { id: number; r: number; c: number }; start: number; end: number }): void {
+    const f = this.file;
+    if (!f) return;
+    if (hit.cell) {
+      if (!this.startCell(hit.cell.id, hit.cell.r, hit.cell.c, 'start')) return;
+      f.box?.ed.select(hit.start, hit.end);
+    } else {
+      this.stopBox();
+      f.ed.select(hit.start, hit.end);
+    }
+    this.focus();
+    this.changed('selection');
+  }
+
+  /** Promote or demote a heading picked in the Navigation pane, with the headings under it. */
+  private navLevel(para: number, op: 'promote' | 'demote'): void {
+    const f = this.file;
+    if (!f) return;
+    this.stopBox();
+    f.ed.update(changeLevel(f.t, { ...newOutline(), collapsed: [para] }, para, para, op), op === 'promote' ? 'Promote' : 'Demote');
+  }
+
+  /** Delete a heading with everything under it (the Navigation pane's right-click menu). */
+  private navDelete(para: number): void {
+    const f = this.file;
+    if (!f) return;
+    this.stopBox();
+    const levels = fitParas(f.t.paras, paraCount(f.ed.text)).map((ps) => outlineLevel(f.t, ps));
+    const end = subtreeEnd(levels, para);
+    const text = f.ed.text;
+    let a = paraRange(text, para).start;
+    let b = end < levels.length ? paraRange(text, end).start : text.length;
+    // the last paragraphs: the break before them goes instead
+    if (end >= levels.length && a > 0) { a -= 1; b = text.length; }
+    f.ed.select(a, b);
+    f.ed.replaceSelection([], undefined, 'Delete heading');
   }
 
   /** Shade the cell typed into (or the whole table picked) with a colour, or take the shading off. */
@@ -531,6 +733,7 @@ export class DocumentMode {
   /** Stop typing into the text box (`pick`: and pick the box, as Escape does in Word). */
   private stopBox(pick = false): void {
     const f = this.file;
+    this.cellRange = null;
     if (!f?.box) return;
     const id = f.box.id;
     f.endBox();
@@ -559,6 +762,8 @@ export class DocumentMode {
     if (!f) {
       if (this.blink) { clearInterval(this.blink); this.blink = null; }
       this.panel.closeBoxes();
+      this.stylesPane.close();
+      this.ruler.shown = false;
       this.comments.update();
       return;
     }
@@ -655,6 +860,9 @@ export class DocumentMode {
     this.comments.followCaret();
     this.comments.update();
     this.updateOutlineRibbon();
+    this.ruler.update();
+    this.stylesPane.refresh();
+    this.nav.refresh();
     this.redraw();
   }
 
@@ -708,7 +916,8 @@ export class DocumentMode {
       return {
         selection: null, caret: showCaret ? ed.caret() : null, squiggles: [], picked, framed: null,
         found: this.finder.open ? this.finder.hits : [],
-        editing: { id: f.box.id, cell: !!f.box.cell, selection: ed.collapsed || ed.composing || picked !== null ? [] : selectionRects(lay, ed.start, ed.end) },
+        editing: { id: f.box.id, cell: !!f.box.cell, selection: ed.collapsed || ed.composing || picked !== null || this.rangeNow() ? [] : selectionRects(lay, ed.start, ed.end) },
+        cells: this.rangeNow() ? this.cellRange : null,
       };
     }
     const ed = f.ed;
@@ -852,6 +1061,7 @@ export class DocumentMode {
     cmd('Cut', 'cut');
     cmd('Copy', 'copy');
     cmd('Paste', 'paste');
+    cmd('Format Painter', 'format-painter', 'Copy the look of the text here (or of the selection) to the text you click or drag over next');
     menu.appendChild(document.createElement('hr'));
     // a footnote's number, or typing in a note: to the other end, or the other kind
     const fb = this.file?.box && !this.file.box.cell && this.file.t.objects[this.file.box.id]?.kind === 'note' ? this.file.box.id : null;
@@ -878,6 +1088,7 @@ export class DocumentMode {
       if (this.file?.t.objects[picked]?.kind === 'drawing') cmd('Edit Drawing', 'edit-figure');
       const po = this.file?.t.objects[picked];
       if (po?.kind === 'picture' && po.chart) cmd('Edit Chart…', 'edit-chart');
+      if (po?.kind === 'picture' && !po.chart) cmd('Picture Format…', 'picture-format', 'Brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions');
       cmd('Insert Caption…', 'insert-caption');
       const look = this.lookOf(picked);
       item(look?.frame ? 'Remove Frame' : 'Add Frame', () => this.setLook(picked, { frame: look?.frame ? undefined : 0.75, frameColor: undefined }), 'A thin black line round it (Format in the panel sets its width and colour)');
@@ -914,9 +1125,19 @@ export class DocumentMode {
       if (spanOf(tg.t, tg.r, tg.c) > 1 || rowSpanOf(tg.t, tg.r, tg.c) > 1) cmd('Split Cells', 'table-split', 'Undo a merge: the cell goes back to single cells');
       cmd('Insert Table in Cell…', 'table-nest', 'A table inside this cell (a nested table, kept as one in Word)');
       cmd('Fit Columns to Contents', 'table-fit', 'Each column as wide as its widest cell (structures at their own size)');
-      for (const [v, label] of [['grid', 'Grid Lines'], ['acs', 'ACS Rules'], ['none', 'No Lines']] as const) cmd(`${tg.t.lines === v ? '✓ ' : '   '}${label}`, `table-lines-${v}`);
+      for (const [v, label] of [['grid', 'Grid Lines'], ['acs', 'ACS Rules'], ['none', 'No Lines']] as const) cmd(`${!tg.t.style && tg.t.lines === v ? '✓ ' : '   '}${label}`, `table-lines-${v}`);
+      if (this.rangeNow() && canMergeBlock(tg.t, this.rangeNow()!)) cmd('Merge Cells', 'table-merge-cells', 'Join the cells chosen into one');
+      item('Table Styles…', () => this.tables.styleGallery(clientX, clientY), 'Lines, shading and bold headings as one look (Word\'s table styles)');
+      item('Borders…', () => this.tables.bordersMenu(clientX, clientY), 'Lines on the edges of the cells chosen');
+      cmd('Cell Margins…', 'table-margins', 'Room between the cells\' edges and their text');
+      cmd('Split Table', 'table-split-table', 'A new table from this row down');
+      cmd('Convert to Text…', 'table-to-text', 'The table\'s rows back into paragraphs');
       cmd('Select Table', 'table-select', 'Pick the whole table (to copy, cut or delete it)');
       menu.appendChild(document.createElement('hr'));
+    }
+    if (!tg && this.file && !this.file.box) {
+      const [pa, pb] = this.file.ed.selectedParas();
+      if (pb > pa) { cmd('Convert Text to Table…', 'text-to-table', 'The paragraphs chosen as a table, cut into cells at tabs or commas'); menu.appendChild(document.createElement('hr')); }
     }
     cmd('Paragraph…', 'box-para', 'Indents, spacing and line spacing');
     cmd('Style…', 'box-style', 'Change how this paragraph\'s style looks');
@@ -1032,6 +1253,9 @@ export class DocumentMode {
     if (e.isComposing || e.keyCode === 229) return;
     if (this.menu && e.key === 'Escape') { e.preventDefault(); this.closeMenu(); return; }
     this.closeMenu();
+    if (e.key === 'Escape' && this.tables.painting) { e.preventDefault(); this.tables.setPainting(false); return; }
+    if (e.key === 'Escape' && this.cellRange) { e.preventDefault(); this.cellRange = null; this.redraw(); return; }
+    if (this.cellRange && !['Shift', 'Control', 'Alt', 'Meta'].includes(e.key) && !(e.ctrlKey || e.metaKey)) { this.cellRange = null; this.redraw(); }
     if (this.reading) { this.readingKey(e); return; }
     const ed = this.ed;
     const run = (f: () => void) => { e.preventDefault(); f(); };
@@ -1068,7 +1292,7 @@ export class DocumentMode {
         case 'Enter': return run(() => this.enter(shift));
         case 'Backspace': return run(() => ed.backspace(word));
         case 'Delete': return run(() => ed.deleteForward(word));
-        case 'Tab': return run(() => (this.file?.box?.cell ? this.tabCell(shift) : ed.indent(shift ? -1 : 1)));
+        case 'Tab': return run(() => (this.file?.box?.cell ? this.tabCell(shift) : this.tabKey(shift)));
         case 'Escape': return run(() => { if (this.file?.box) this.stopBox(true); else if (!ed.collapsed) ed.setCaret(ed.focus); });
       }
     }
@@ -1291,7 +1515,7 @@ export class DocumentMode {
     v.onMove = () => {
       if (v === this.view) this.placeInput();
       this.showZoom();
-      if (v === this.views[0]) this.comments?.place();
+      if (v === this.views[0]) { this.comments?.place(); this.ruler?.update(); }
       if (this.reading) this.showReadPages();
     };
     v.onResize = () => { if (v === this.views[0]) this.fitSheet(); };
@@ -1362,6 +1586,7 @@ export class DocumentMode {
 
   /** The view buttons and menu items show the view and the page arrangement; the Outlining tab shows in Outline. */
   private showViewKind(): void {
+    this.showRuler();
     const f = this.file;
     if (!f) return;
     const kind = f.view.kind;
@@ -1775,6 +2000,7 @@ export class DocumentMode {
       try { s.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
       if (d?.kind === 'move' && d.moved) this.reanchor(d.id);
       if (d?.kind === 'inline') this.dropInline(d.id, d.to);
+      if ((d?.kind === 'text' || d?.kind === 'box') && this.painter && this.file && !this.reading) this.painter(this.ed);
     });
     s.addEventListener('dblclick', (e) => {
       const f = this.file;
@@ -1914,6 +2140,16 @@ export class DocumentMode {
       s.setPointerCapture(e.pointerId);
     };
     const cell = e.shiftKey ? null : this.cellAt(p);
+    this.cellRange = null;
+    this.cellAnchor = cell;
+    // Border Painter: a click on a cell's edge gives it the pen's line
+    if (this.tables.painting && cell) {
+      const d = { kind: 'paint' as const, done: new Set<string>() };
+      this.paintAt(p, d.done);
+      this.dragging = d;
+      s.setPointerCapture(e.pointerId);
+      return;
+    }
     if (f.box) {
       const id = f.box.id;
       if (f.box.cell && cell?.id === id) {
@@ -1978,6 +2214,8 @@ export class DocumentMode {
       const tip = link ? linkTip(link, !this.reading) : '';
       if (this.view.scroller.title !== tip) this.view.scroller.title = tip;
       if (link && (this.reading || (isMac ? e.metaKey : e.ctrlKey))) { this.view.scroller.style.cursor = 'pointer'; return; }
+      if (this.tables.painting && this.cellAt(p)) { this.view.scroller.style.cursor = 'crosshair'; return; }
+      if (this.painter && !this.reading) { this.view.scroller.style.cursor = BRUSH; return; }
       this.view.scroller.style.cursor = corner ? 'nwse-resize' : id === null || o?.kind === 'table' ? 'text'
         : o?.kind === 'textbox' ? (this.nearEdge(id, p) ? 'move' : 'text') : o?.kind === 'note' ? 'text'
         : floatOf(o) ? 'move' : o?.kind === 'drawing' ? 'pointer' : 'default';
@@ -2006,8 +2244,21 @@ export class DocumentMode {
       this.view.scroller.style.cursor = 'move';
       return;
     }
+    if (d.kind === 'paint') { this.paintAt(p, d.done); return; }
     if (d.kind === 'box') {
       if (this.clicks.n !== 1 || !f.box) return;
+      // dragged out of the cell into others of its table: those cells are chosen together
+      const a = this.cellAnchor;
+      const here = a && f.box.cell ? this.cellAt(p) : null;
+      const o = a ? f.t.objects[a.id] : undefined;
+      if (a && here && here.id === a.id && (here.r !== a.r || here.c !== a.c) && o?.kind === 'table') {
+        const b = blockOf(o.table, a, here);
+        const was = this.cellRange;
+        this.cellRange = { id: a.id, ...b };
+        if (!was || was.r0 !== b.r0 || was.r1 !== b.r1 || was.c0 !== b.c0 || was.c1 !== b.c1) { this.updateRibbon(); this.redraw(); }
+        return;
+      }
+      if (this.cellRange && here && a && here.r === a.r && here.c === a.c) { this.cellRange = null; this.redraw(); }
       f.box.ed.setCaret(offsetAt(f.box.ed.layout(), p.x, p.y), true);
       return;
     }
@@ -2017,6 +2268,30 @@ export class DocumentMode {
     if (e.clientY < r.top + 10) this.view.scroller.scrollTop -= 20;
     else if (e.clientY > r.bottom - 10) this.view.scroller.scrollTop += 20;
     f.ed.setCaret(offsetAt(f.layout().text, p.x, p.y), true);
+  }
+
+  /** Border Painter: the edge of the cell under a point nearest it gets the pen's line (each edge once a drag). */
+  private paintAt(p: { x: number; y: number }, done: Set<string>): void {
+    const f = this.file;
+    const cell = this.cellAt(p);
+    if (!f || !cell) return;
+    const o = f.t.objects[cell.id];
+    const tb = f.layout().tables.get(cell.id);
+    if (o?.kind !== 'table' || !tb) return;
+    const t = o.table;
+    const at = tb.rows[cell.r];
+    if (!at) return;
+    const x1 = at.x + tb.xs[cell.c], x2 = at.x + tb.xs[cell.c + spanOf(t, cell.r, cell.c)];
+    const y1 = at.y;
+    let y2 = at.y;
+    for (let r = cell.r; r < cell.r + rowSpanOf(t, cell.r, cell.c); r++) y2 += tb.hs[r] ?? 0;
+    const sides: [BorderSide, number][] = [['top', p.y - y1], ['bottom', y2 - p.y], ['left', p.x - x1], ['right', x2 - p.x]];
+    sides.sort((a, b) => a[1] - b[1]);
+    const side = sides[0][0];
+    const key = `${cell.id}:${cell.r}:${cell.c}:${side}`;
+    if (done.has(key)) return;
+    done.add(key);
+    this.setTable(cell.id, paintEdge(t, cell.r, cell.c, side, this.tables.pen), 'Border Painter');
   }
 
   /** An in-line figure dragged to another place in the text: move it there (one undo step) and keep it picked. */
@@ -2164,6 +2439,32 @@ export class DocumentMode {
     const size = chartPoints(got.chart);
     const next: DocObject = { ...cur, chart: got, src: chartBoxPng(got, size.w, size.h), w: size.w, h: size.h, px: { w: got.chart.w, h: got.chart.h }, scale: undefined };
     f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, 'Edit chart');
+    this.focus();
+  }
+
+  /**
+   * Picture Format…: a picture's corrections, colours, see-through, Remove Background and crop
+   * (to a shape or proportions). Cropping to proportions keeps its width and changes its height.
+   */
+  async formatPicture(id: number): Promise<void> {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'picture' || o.chart) return;
+    const spot = this.cellSpot();
+    const got = await pictureFormat({ src: o.src, fx: o.fx, crop: o.crop, w: o.w, h: o.h });
+    if (this.file !== f) return;
+    this.backToCell(spot);
+    const cur = f.t.objects[id];
+    if (!got || cur?.kind !== 'picture') { this.focus(); return; }
+    if (f.box?.cell) f.box.recorded = false;
+    const next: DocObject = { ...cur, fx: got.fx };
+    if (!got.fx) delete next.fx;
+    if (got.crop) {
+      const c = got.crop;
+      if (c.l || c.t || c.r || c.b) next.crop = c; else delete next.crop;
+      if (got.aspect) next.h = Math.round((cur.w / got.aspect) * 100) / 100;
+    }
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, 'Picture format');
     this.focus();
   }
 
@@ -2332,11 +2633,16 @@ export class DocumentMode {
     const ed = this.ed;
     const style = (id: string) => {
       const [a, b] = ed.selectedParas();
-      ed.update(setParaStyle(f.t, a, b, id), 'Style');
+      ed.update(setParaStyle(withStyle(f.t, id), a, b, id), 'Style');
     };
     const line = (v: number) => ed.setSelectedParas({ line: Math.abs(v - 1) < 1e-6 ? undefined : v }, 'spacing');
+    if (cmd.startsWith('style-id:')) { style(cmd.slice(9)); this.focus(); return true; }
+    const pick = /^(case|multilevel|bulletlib|watermark)-(.*)$/.exec(cmd);
+    if (pick) { this.pickCommand(pick[1], pick[2]); this.focus(); return true; }
     const align = (j: 'left' | 'center' | 'right' | 'justify') => ed.setSelectedParas({ align: j === 'left' ? undefined : j }, 'align');
     switch (cmd) {
+      case 'text-to-table': void this.tables.textToTableDialog(); break;
+      case 'nav-pane': this.nav.toggle(); this.updateRibbon(); break;
       case 'doc-align-left': align('left'); break;
       case 'doc-align-center': align('center'); break;
       case 'doc-align-right': align('right'); break;
@@ -2347,6 +2653,29 @@ export class DocumentMode {
       case 'style-h2': style('Heading2'); break;
       case 'style-h3': style('Heading3'); break;
       case 'style-caption': style('Caption'); break;
+      case 'style-h4': case 'style-h5': case 'style-h6': case 'style-h7': case 'style-h8': case 'style-h9': style(`Heading${cmd.slice(7)}`); break;
+      case 'styles-pane': this.stylesPane.toggle(this.ribbon.querySelector<HTMLElement>('[data-doc="styles-pane"]')); return true;
+      case 'doc-strike': ed.toggle('strike'); break;
+      case 'doc-small-caps': ed.toggle('smallCaps'); break;
+      case 'doc-all-caps': ed.toggle('allCaps'); break;
+      case 'change-case': {
+        // Word's Shift+F3: UPPERCASE, then lowercase, then Capitalize Each Word
+        const [a, b] = ed.collapsed ? [ed.start, ed.start] : [ed.start, ed.end];
+        const text = ed.text.slice(a, b || a);
+        const letters = text.replace(/[^\p{L}]/gu, '');
+        ed.changeCase(letters && letters === letters.toUpperCase() ? 'lower' : letters && letters === letters.toLowerCase() ? 'title' : 'upper');
+        break;
+      }
+      case 'clear-formatting': case 'clear-char-formatting': {
+        if (f.box) { ed.setStyle({ bold: undefined, italic: undefined, underline: undefined, strike: undefined, smallCaps: undefined, allCaps: undefined, highlight: undefined, color: undefined, sub: undefined, sup: undefined, cstyle: undefined }); break; }
+        const [a, b] = ed.selectedParas();
+        ed.update(clearFormatting(f.t, ed.start, ed.end, a, b, cmd === 'clear-char-formatting'), cmd === 'clear-formatting' ? 'Clear Formatting' : 'Clear text formatting');
+        break;
+      }
+      case 'para-tabs': void this.tabsDialog(); return true;
+      case 'view-ruler': this.setRuler(!this.ruler.shown); return true;
+      case 'page-color-none': this.setPageLook({ pageColor: undefined }, 'Page Color'); break;
+      case 'page-borders': void this.pageBorders(); return true;
       case 'line-single': line(1); break;
       case 'line-1-5': line(1.5); break;
       case 'line-double': line(2); break;
@@ -2391,6 +2720,7 @@ export class DocumentMode {
       case 'insert-table': void this.insertTable(); break;
       case 'insert-chart': void this.insertChart(); break;
       case 'edit-chart': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || !o.chart) { this.host.flash('Click a chart first (or double-click it).'); break; } void this.editChart(id); break; }
+      case 'picture-format': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || o.chart) { this.host.flash('Click a picture first.'); break; } void this.formatPicture(id); break; }
       case 'insert-caption': void this.insertCaption(); break;
       case 'cross-reference': void this.crossReference(); break;
       case 'compound-number': void this.compoundNumber(); break;
@@ -2409,6 +2739,7 @@ export class DocumentMode {
       case 'edit-equation': { const m = this.pickedMath(); if (m === null) { this.host.flash('Click an equation first (or double-click it).'); break; } void this.editEquation(m); break; }
       case 'track-changes': void this.toggleTracking(); break;
       case 'review-name': void this.askReviewName(); break;
+      case 'compare-docs': case 'combine-docs': void this.compare(cmd === 'combine-docs'); break;
       case 'new-comment': void this.comments.add(); return true;
       case 'delete-comment': this.comments.remove(); break;
       case 'delete-all-comments': this.comments.removeAll(); break;
@@ -2653,7 +2984,8 @@ export class DocumentMode {
     this.lastTableKind = got.kind;
     if (inCell && host && got.kind !== 'drawing' && f.box?.cell) {
       // as wide as the cell inside its margins, the columns sharing it
-      const room = host.t.cols.slice(host.c, host.c + spanOf(host.t, host.r, host.c)).reduce((a, b) => a + b, 0) - 2 * CELL_PAD.x;
+      const hm = cellMargins(host.t, host.r, host.c);
+      const room = host.t.cols.slice(host.c, host.c + spanOf(host.t, host.r, host.c)).reduce((a, b) => a + b, 0) - hm.left - hm.right;
       const N = styleOf(f.t, {});
       const lines = got.kind === 'acs' ? 'acs' : got.kind === 'none' ? 'none' : 'grid';
       const t0 = emptyTable(rows, cols, N.size);
@@ -3136,6 +3468,44 @@ export class DocumentMode {
     this.host.flash(on ? `Tracking changes as ${reviewAuthor()}: what you type is underlined and what you delete is struck through, until accepted or rejected (Review tab).` : 'Changes are no longer tracked. Changes already marked stay until accepted or rejected.', 7000);
   }
 
+  /**
+   * Review > Compare (or Combine): two documents, open in tabs or chosen from files, and a new
+   * document with the differences as tracked changes, as Word makes.
+   */
+  private async compare(combine: boolean): Promise<void> {
+    const f = this.file!;
+    const open = this.host.openDocuments?.() ?? [];
+    const here = open.find((d) => d.t === f.t) ?? { name: 'This document', t: f.t };
+    const others = open.filter((d) => d.t !== f.t);
+    const FILE = '__file';
+    const choices = [here, ...others].map((d, i) => ({ value: String(i), label: d.name }));
+    choices.push({ value: FILE, label: 'Choose a Word file…' });
+    const got = await ask(combine ? 'Combine Documents' : 'Compare Documents', [
+      { name: 'a', label: 'Original document', value: '0', options: choices },
+      { name: 'b', label: 'Revised document', value: others.length ? '1' : FILE, options: choices },
+      { name: 'who', label: combine ? 'Label untracked changes in the revised document with' : 'Label changes with', value: reviewAuthor() || 'Revised', help: combine ? 'Changes already tracked in either document keep their own names.' : 'The name shown on each change found.' },
+      { name: 'level', label: 'Show changes at', value: 'word', options: [{ value: 'word', label: 'Word level (whole words)' }, { value: 'char', label: 'Character level (letter by letter)' }] },
+    ], {
+      ok: combine ? 'Combine' : 'Compare',
+      note: combine
+        ? 'Puts two reviewers\' copies of one document together in a new document: each reviewer\'s tracked changes, with their names, ready to accept or reject (Review > Accept and Reject).'
+        : 'Opens a new document: the revised document with what changed since the original marked as tracked changes (deleted text struck through, new text underlined). Both are compared with their own tracked changes accepted. Formatting-only changes are not marked.',
+    });
+    if (!got) return;
+    const list = [here, ...others];
+    const take = async (v: string) => (v === FILE ? (await this.host.pickDocument?.()) ?? null : list[Number(v)] ?? null);
+    const a = await take(got.a);
+    if (!a) return;
+    const b = await take(got.b);
+    if (!b) return;
+    if (a.t === b.t) { this.host.flash('Choose two different documents to compare.'); return; }
+    const opts = { author: got.who.trim() || 'Revised', level: got.level === 'char' ? 'char' as const : 'word' as const };
+    const { doc, changes } = combine ? combineDocuments(a.t, b.t, opts) : compareDocuments(a.t, b.t, opts);
+    const stem = (n: string) => n.replace(/\.docx$/i, '');
+    this.host.showDocument?.(doc, combine ? `Combined ${stem(a.name)}` : `Compared ${stem(b.name)}`);
+    this.host.flash(changes ? `${changes} change${changes === 1 ? '' : 's'} found. Go through them with Review > Next, Accept and Reject.` : 'The documents read the same: no changes found.', 7000);
+  }
+
   /** The name put on your changes (kept in your settings). */
   async askReviewName(): Promise<boolean> {
     const got = await ask('Your Name', [{ name: 'name', label: 'Name shown on your changes', value: reviewAuthor() }], { ok: 'Save', note: 'Word shows this name on your changes too. Change it any time here or in Edit > Settings.' });
@@ -3187,6 +3557,243 @@ export class DocumentMode {
     this.host.flash(`${c.kind === 'ins' ? 'Inserted' : 'Deleted'} by ${c.author || 'unknown'}${when && !isNaN(+when) ? `, ${when.toLocaleString()}` : ''}.`, 5000);
   }
 
+  // ---------------------------------------------------------------- text, lists, styles, tabs and the page's look
+
+  /**
+   * Tab, as in Word: at the start of a list item (or with several paragraphs picked) the level
+   * or indent changes; anywhere else a tab goes in the text, up to the next tab stop.
+   */
+  private tabKey(shift: boolean): void {
+    const ed = this.ed;
+    const [a, b] = ed.selectedParas();
+    const para = ed.currentPara();
+    const atStart = ed.collapsed && ed.start === paraRange(ed.text, a).start;
+    if (shift || a !== b || (para.list && (atStart || !ed.collapsed))) ed.indent(shift ? -1 : 1);
+    else ed.type('\t');
+  }
+
+  /** The ribbon's lists of choices: Change Case, the bullet library, Multilevel List and Watermark. */
+  private pickCommand(what: string, v: string): void {
+    const f = this.file!;
+    const ed = this.ed;
+    if (what === 'case') {
+      if (v === 'allcaps') ed.toggle('allCaps');
+      else if (['sentence', 'lower', 'upper', 'title', 'toggle'].includes(v)) ed.changeCase(v as rt.CaseMode);
+    } else if (what === 'bulletlib') {
+      const bullet = v === 'default' ? undefined : BULLET_LIBRARY[Number(v)];
+      ed.setSelectedParas({ list: 'bullet', bullet, cont: undefined }, 'list');
+    } else if (what === 'multilevel') {
+      const scheme = LIST_SCHEMES.find((x) => x.id === v)?.id;
+      // a scheme is for the whole list: every item of the numbered lists picked takes it
+      const [a, b] = ed.selectedParas();
+      const paras = fitParas(f.t.paras, paraCount(ed.text));
+      let first = a, last = b;
+      while (first > 0 && paras[first - 1]?.list === 'number' && paras[a]?.list === 'number') first--;
+      while (last + 1 < paras.length && paras[last + 1]?.list === 'number' && paras[b]?.list === 'number') last++;
+      const box = !!f.box;
+      if (box) ed.setSelectedParas({ list: 'number', scheme: scheme || undefined, cont: undefined }, 'list');
+      else ed.setParas(first, last, { list: 'number', scheme: scheme || undefined }, 'list');
+    } else if (what === 'watermark') {
+      if (v === 'remove') this.setPageLook({ watermark: undefined }, 'Remove Watermark');
+      else if (v === 'custom') void this.customWatermark();
+      else if (WATERMARKS[Number(v)]) this.setPageLook({ watermark: { ...(f.t.watermark ?? defaultWatermark()), text: WATERMARKS[Number(v)] } }, 'Watermark');
+    }
+  }
+
+  /** Change the whole document's look (watermark, page colour, page borders): one undo step. */
+  private setPageLook(patch: Partial<Pick<DocText, 'watermark' | 'pageColor' | 'pageBorder'>>, label: string): void {
+    const f = this.file;
+    if (!f) return;
+    const t = { ...f.t, ...patch };
+    for (const k of ['watermark', 'pageColor', 'pageBorder'] as const) if (t[k] === undefined) delete t[k];
+    f.ed.update(t, label);
+  }
+
+  /** Design > Watermark > Custom Watermark: the words, font, colour and layout. */
+  private async customWatermark(): Promise<void> {
+    const f = this.file!;
+    const w: Watermark = f.t.watermark ?? defaultWatermark();
+    const got = await ask('Watermark', [
+      { name: 'text', label: 'Text', value: w.text, suggestions: WATERMARKS },
+      { name: 'font', label: 'Font', value: w.font, suggestions: ['Calibri', 'Arial', 'Times New Roman', 'Inter', 'IBM Plex Sans'] },
+      { name: 'color', label: 'Colour', value: w.color, type: 'color' },
+      { name: 'layout', label: 'Layout', value: w.layout, options: [{ value: 'diagonal', label: 'Diagonal' }, { value: 'horizontal', label: 'Horizontal' }] },
+      { name: 'faded', label: 'Semitransparent', value: String(w.faded), type: 'checkbox' },
+    ], { ok: 'Apply', note: 'Words across every page, behind the text. Saved in Word files as Word’s own watermark, so Word shows and edits it too.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    if (!got.text.trim()) { this.setPageLook({ watermark: undefined }, 'Remove Watermark'); return; }
+    this.setPageLook({ watermark: { text: got.text.trim(), font: got.font.trim() || 'Calibri', color: got.color || '#c0c0c0', layout: got.layout === 'horizontal' ? 'horizontal' : 'diagonal', faded: got.faded === 'true' } }, 'Watermark');
+  }
+
+  /** Design > Page Borders: a line round every page. */
+  private async pageBorders(): Promise<void> {
+    const f = this.file!;
+    const b: PageBorder = f.t.pageBorder ?? defaultPageBorder();
+    const got = await ask('Page Borders', [
+      { name: 'on', label: 'A border round every page', value: String(!!f.t.pageBorder), type: 'checkbox' },
+      { name: 'style', label: 'Style', value: b.style, options: [{ value: 'single', label: 'Single line' }, { value: 'double', label: 'Double line' }, { value: 'thick', label: 'Thick and thin' }, { value: 'dotted', label: 'Dotted' }, { value: 'dashed', label: 'Dashed' }] },
+      { name: 'width', label: 'Width', value: String(b.width), unit: 'pt', options: ['0.25', '0.5', '0.75', '1', '1.5', '2.25', '3', '4.5', '6'].map((x) => ({ value: x, label: `${x} pt` })) },
+      { name: 'color', label: 'Colour', value: b.color, type: 'color' },
+      { name: 'from', label: 'Measure from', value: b.from, options: [{ value: 'page', label: 'Edge of page' }, { value: 'text', label: 'Text' }] },
+      { name: 'space', label: 'Distance', value: String(b.space), unit: 'pt', type: 'number' },
+    ], { ok: 'OK', note: 'Saved in Word files as Word’s own page border. From the edge of the page, Word allows up to 31 pt; from the text, up to 31 pt outside the margins.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    if (got.on !== 'true') { this.setPageLook({ pageBorder: undefined }, 'Page Borders'); return; }
+    const style = (['single', 'double', 'thick', 'dotted', 'dashed'] as const).find((x) => x === got.style) ?? 'single';
+    const space = Math.max(0, Math.min(31, Number(got.space) || 0));
+    this.setPageLook({ pageBorder: { style, width: Math.max(0.25, Math.min(6, Number(got.width) || 0.5)), color: got.color || '#000000', from: got.from === 'text' ? 'text' : 'page', space } }, 'Page Borders');
+  }
+
+  /** Paragraph > Tabs: the tab stops of the paragraphs picked, typed in (as the ruler sets them). */
+  private async tabsDialog(): Promise<void> {
+    const f = this.file!;
+    const cur = this.ed.currentPara().tabs ?? [];
+    const KIND: Record<string, TabStopKind> = { left: 'left', l: 'left', centre: 'center', center: 'center', c: 'center', right: 'right', r: 'right', decimal: 'decimal', d: 'decimal' };
+    const LEAD: Record<string, 'dot' | 'hyphen' | 'underscore'> = { dot: 'dot', dots: 'dot', '.': 'dot', hyphen: 'hyphen', dash: 'hyphen', '-': 'hyphen', line: 'underscore', underscore: 'underscore', _: 'underscore' };
+    const shown = cur.map((t) => `${showLength(t.pos, 'in')} in ${t.kind === 'center' ? 'centre' : t.kind}${t.leader ? ` ${t.leader === 'underscore' ? 'line' : t.leader}` : ''}`).join('\n');
+    const got = await ask('Tabs', [
+      { name: 'tabs', label: 'Tab stops, one per line', value: shown, type: 'textarea', placeholder: '1 in left\n3.25 in decimal\n6.5 in right dot' },
+    ], { ok: 'OK', note: 'Each line: where (from the left margin, in inches unless you give cm, mm or pt), then left, centre, right or decimal, then dot, hyphen or line for a leader. Past the last one, tabs stop every half inch. The ruler (View > Ruler) sets them by clicking too.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const tabs: TabStop[] = [];
+    for (const line of got.tabs.split('\n')) {
+      const m = /^\s*(-?[\d.]+\s*(?:in|inch|inches|"|cm|mm|pt)?)\s*(\w+)?\s*(\S+)?\s*$/i.exec(line);
+      if (!m) continue;
+      const pos = parseLength(m[1], 'in');
+      if (pos === null || pos <= 0) continue;
+      const kind = KIND[(m[2] ?? 'left').toLowerCase()] ?? 'left';
+      const leader = m[3] ? LEAD[m[3].toLowerCase()] : undefined;
+      tabs.push(leader ? { pos, kind, leader } : { pos, kind });
+    }
+    tabs.sort((a, b) => a.pos - b.pos);
+    this.ed.setSelectedParas({ tabs: tabs.length ? tabs : undefined }, 'tabs');
+  }
+
+  /** View > Ruler on or off (remembered). */
+  private setRuler(on: boolean): void {
+    docRulerPrefs.shown = on;
+    docRulerPrefs.changed?.();
+    this.showRuler();
+    this.focus();
+  }
+
+  /** Show the ruler as the settings say (not in Read Mode, which has no editing). */
+  showRuler(): void {
+    const on = docRulerPrefs.shown && !!this.file && this.file.view.kind !== 'read';
+    this.ruler.shown = on;
+    for (const b of this.ribbon.querySelectorAll<HTMLButtonElement>('[data-doc="view-ruler"]')) b.setAttribute('aria-pressed', String(docRulerPrefs.shown));
+  }
+
+  /** Where the paragraph the caret is in sits on screen, for the ruler (none while typing in a text box or cell). */
+  private rulerGeometry(): RulerGeometry | null {
+    const f = this.file;
+    if (!f || f.box) return null;
+    const lay = f.layout();
+    const c = f.ed.caret();
+    const l = lay.text.lines[c.line];
+    const p = lay.pages.find((pg) => c.line >= pg.first && c.line < pg.end) ?? lay.pages[0];
+    if (!p) return null;
+    const pg = p.setup;
+    const y = l?.y ?? p.top;
+    const sx = (x: number) => this.view.toScreen(x, y).x;
+    const colL = l?.band?.[0] ?? p.x + pg.left;
+    const colR = l?.band?.[1] ?? p.x + p.w - pg.right;
+    return { colLeft: sx(colL), colRight: sx(colR), pageLeft: sx(p.x), pageRight: sx(p.x + p.w), zoom: this.view.zoom, para: f.ed.currentPara() };
+  }
+
+  /** The Styles pane's character styles: the selection (or the word at the caret) in one, or out of them all (null). */
+  private applyCharStyle(id: string | null): void {
+    const f = this.file;
+    if (!f || f.box) return;
+    const ed = this.ed;
+    let a = ed.start, b = ed.end;
+    if (a === b) {
+      const w = /[\p{L}\p{N}]/u;
+      while (a > 0 && w.test(ed.text[a - 1])) a--;
+      while (b < ed.text.length && w.test(ed.text[b])) b++;
+    }
+    if (a === b) { this.host.flash('Select the words to put in the character style first.'); return; }
+    ed.update(id ? applyCharStyle(f.t, a, b, id) : clearCharStyle(f.t, a, b), id ? 'Character style' : 'Clear character style');
+    this.focus();
+  }
+
+  /** Styles pane > New Style: a paragraph style from the paragraph the caret is in, or a character style from the words picked. */
+  private async newStyle(): Promise<void> {
+    const f = this.file;
+    if (!f || f.box) return;
+    const ed = this.ed;
+    const got = await ask('New Style', [
+      { name: 'name', label: 'Name', value: '' , placeholder: 'Experimental heading' },
+      { name: 'kind', label: 'Style type', value: ed.collapsed ? 'para' : 'char', options: [{ value: 'para', label: 'Paragraph (the whole paragraph’s look and spacing)' }, { value: 'char', label: 'Character (the look of the words picked)' }] },
+    ], { ok: 'Make Style', note: 'The new style takes the look of the text the caret is in, and is given to it. Change it later with Modify; every paragraph or word in it follows.' });
+    this.focus();
+    if (!got || this.file !== f || !got.name.trim()) return;
+    const look = ed.currentStyle();
+    const [a] = ed.selectedParas();
+    const made = got.kind === 'char' ? newCharStyle(f.t, got.name, ed.start, ed.end, look, ed.currentPara()) : newParaStyle(f.t, got.name, a, look);
+    ed.update(made.t, 'New style');
+    this.host.flash(`Made the style “${got.name.trim()}”. It is saved with the document, and in Word files as a Word style.`);
+  }
+
+  /** Styles pane > Modify: a paragraph style in the Style box; a character style here. */
+  private async modifyStyle(kind: 'para' | 'char', id: string): Promise<void> {
+    const f = this.file;
+    if (!f) return;
+    if (kind === 'para') {
+      // the Style box changes the caret's paragraph style: put the caret in one of its paragraphs first, if any
+      const paras = fitParas(f.t.paras, paraCount(rt.plainText(f.t.runs)));
+      const cur = (this.ed.currentPara().style ?? 'Normal') === id;
+      const at = cur ? -1 : paras.findIndex((p) => (p.style ?? 'Normal') === id);
+      if (!cur && at < 0) { this.host.flash('Give a paragraph this style first (click it in the list), then Modify changes how it looks.'); return; }
+      if (at >= 0) f.ed.setCaret(paraRange(f.ed.text, at).start);
+      this.panel.open('style', this.ribbon.querySelector<HTMLElement>('[data-doc="styles-pane"]'));
+      return;
+    }
+    const s: CharStyle = charStylesOf(f.t)[id];
+    if (!s) return;
+    const yesNo = (v: boolean | undefined) => (v === undefined ? 'same' : v ? 'on' : 'off');
+    const tri = [{ value: 'same', label: 'As the paragraph' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }];
+    const got = await ask(`Modify Style: ${s.name}`, [
+      { name: 'name', label: 'Name', value: s.name },
+      { name: 'font', label: 'Font', value: s.font ?? '', placeholder: 'As the paragraph' },
+      { name: 'size', label: 'Size', value: s.size ? String(s.size) : '', unit: 'pt', placeholder: 'As the paragraph' },
+      { name: 'bold', label: 'Bold', value: yesNo(s.bold), options: tri },
+      { name: 'italic', label: 'Italic', value: yesNo(s.italic), options: tri },
+      { name: 'underline', label: 'Underline', value: String(!!s.underline), type: 'checkbox' },
+      { name: 'smallCaps', label: 'Small caps', value: String(!!s.smallCaps), type: 'checkbox' },
+      { name: 'colorOn', label: 'Own colour', value: String(!!s.color), type: 'checkbox' },
+      { name: 'color', label: 'Colour', value: s.color ?? '#000000', type: 'color' },
+    ], { ok: 'OK', note: 'Every word in this style changes with it (except what was formatted by hand).' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const tv = (v: string) => (v === 'on' ? true : v === 'off' ? false : undefined);
+    const next: CharStyle = { id: s.id, name: got.name.trim() || s.name, custom: s.custom };
+    if (got.font.trim()) next.font = got.font.trim();
+    const size = Number(got.size);
+    if (got.size.trim() && size > 0) next.size = size;
+    const bold = tv(got.bold), italic = tv(got.italic);
+    if (bold !== undefined) next.bold = bold;
+    if (italic !== undefined) next.italic = italic;
+    if (got.underline === 'true') next.underline = true;
+    if (got.smallCaps === 'true') next.smallCaps = true;
+    if (s.allCaps) next.allCaps = true;
+    if (s.strike) next.strike = true;
+    if (got.colorOn === 'true') next.color = got.color;
+    f.ed.update(modifyCharStyle(f.t, next), 'Change style');
+  }
+
+  /** Styles pane > Delete (only styles made here). */
+  private removeStyle(_kind: 'para' | 'char', id: string): void {
+    const f = this.file;
+    if (!f) return;
+    const next = deleteStyle(f.t, id);
+    if (next === f.t) { this.host.flash('Only styles you made can be deleted (the standard ones can be changed with Modify).'); return; }
+    f.ed.update(next, 'Delete style');
+  }
+
   // ---------------------------------------------------------------- the ribbon
 
   private wireRibbon(): void {
@@ -3209,6 +3816,13 @@ export class DocumentMode {
       const cmd = b.dataset.doc!;
       const box = /^box-(para|style|page|hf)$/.exec(cmd);
       if (box) { this.panel.open(box[1] as DocBoxKey, b); return; }
+      // the table galleries open under their buttons
+      if (cmd === 'table-styles' || cmd === 'table-borders') {
+        const br = b.getBoundingClientRect();
+        if (cmd === 'table-styles') this.tables.styleGallery(br.left, br.bottom + 2);
+        else this.tables.bordersMenu(br.left, br.bottom + 2);
+        return;
+      }
       if (!this.run(cmd)) this.host.command(cmd);
     });
     // selects that run a command: margins, paper, orientation, page numbers
@@ -3241,6 +3855,8 @@ export class DocumentMode {
     go(font, () => { if (font.value.trim() && this.file) this.ed.setStyle({ font: font.value.trim() }); });
     go(size, () => { const v = Number(size.value); if (v > 0 && v <= 1638 && this.file) this.ed.setStyle({ size: v }); });
     colour.addEventListener('change', () => { if (this.file) this.ed.setStyle({ color: colour.value.toLowerCase() === '#000000' ? undefined : colour.value }); this.focus(); });
+    const pageCol = r.querySelector<HTMLInputElement>('#doc-page-colour')!;
+    pageCol.addEventListener('change', () => { this.setPageLook({ pageColor: pageCol.value.toLowerCase() === '#ffffff' ? undefined : pageCol.value }, 'Page Color'); this.focus(); });
     // Layout > Paragraph: indents (inches) and spacing (points); any unit can be typed
     const para = (id: string, unit: 'in' | 'pt', patch: (n: number) => Partial<ParaStyle>) => {
       const el = r.querySelector<HTMLInputElement>(id)!;
@@ -3257,6 +3873,18 @@ export class DocumentMode {
       const n = Math.round(Number(head.value));
       if (tg && Number.isFinite(n)) this.setTable(tg.id, { ...tg.t, head: Math.max(0, Math.min(tg.t.rows.length, n)) }, 'Heading rows');
     });
+    // Table Design: the style options, and the pen the borders are drawn with
+    for (const box of r.querySelectorAll<HTMLInputElement>('[data-tbl-look]')) {
+      box.addEventListener('change', () => { this.tables.toggleLook(box.dataset.tblLook as keyof TableLook); this.focus(); });
+    }
+    const penStyle = r.querySelector<HTMLSelectElement>('#doc-pen-style')!;
+    for (const [v, label] of BORDER_STYLES) penStyle.append(new Option(label, v));
+    penStyle.addEventListener('change', () => { this.tables.setPen({ style: penStyle.value as BorderLine['style'] }); this.focus(); });
+    const penWidth = r.querySelector<HTMLSelectElement>('#doc-pen-width')!;
+    for (const w of BORDER_WIDTHS) penWidth.append(new Option(`${w} pt`, String(w)));
+    penWidth.addEventListener('change', () => { this.tables.setPen({ w: Number(penWidth.value) }); this.focus(); });
+    const penColour = r.querySelector<HTMLInputElement>('#doc-pen-colour')!;
+    penColour.addEventListener('change', () => { this.tables.setPen({ color: penColour.value.toLowerCase() }); this.focus(); });
     const shade = r.querySelector<HTMLInputElement>('#doc-tbl-shade')!;
     shade.addEventListener('change', () => { this.shade(shade.value.toLowerCase() === '#ffffff' ? undefined : shade.value); this.focus(); });
     const width = r.querySelector<HTMLInputElement>('#doc-tbl-width')!;
@@ -3292,6 +3920,8 @@ export class DocumentMode {
     press('doc-sub', !!s.sub);
     press('doc-sup', !!s.sup);
     press('doc-formula', !!s.formula);
+    press('doc-strike', !!s.strike);
+    press('doc-small-caps', !!s.smallCaps);
     press('doc-highlight', !!s.highlight);
     const align = para.align ?? 'left';
     press('doc-align-left', align === 'left');
@@ -3337,6 +3967,16 @@ export class DocumentMode {
     press('numbers-s', sec.hf.prefix === 'S');
     const breaks = this.ribbon.querySelector<HTMLSelectElement>('#doc-breaks');
     if (breaks && breaks !== active) breaks.value = '';
+    // the lists of choices show their name again after a choice
+    for (const id of ['#doc-case', '#doc-bulletlib', '#doc-multilevel']) {
+      const el = this.ribbon.querySelector<HTMLSelectElement>(id);
+      if (el && el !== active) el.value = '';
+    }
+    const wm = f.t.watermark;
+    const wmAt = wm ? WATERMARKS.indexOf(wm.text) : -1;
+    pick('#doc-watermark', !wm ? '' : wmAt >= 0 ? String(wmAt) : 'other');
+    const pageCol = this.ribbon.querySelector<HTMLInputElement>('#doc-page-colour');
+    if (pageCol && pageCol !== active) pageCol.value = f.t.pageColor ?? '#ffffff';
     pick('#doc-linenums', sec.lines?.restart ?? 'none');
     press('track-changes', !!f.t.track);
     press('show-comments', this.comments.shown);
@@ -3367,7 +4007,24 @@ export class DocumentMode {
       for (const a of ['left', 'center', 'right']) press(`table-align-${a}`, al === a);
       const v = tg.t.rows[tg.r]?.[tg.c]?.valign ?? 'top';
       for (const a of ['top', 'center', 'bottom']) press(`table-valign-${a}`, v === a);
+      // the style's options: off for a table with no style (they change nothing there)
+      const look = lookOfTable(tg.t);
+      for (const box of this.ribbon.querySelectorAll<HTMLInputElement>('[data-tbl-look]')) {
+        const k = box.dataset.tblLook as keyof TableLook;
+        box.checked = k === 'header' ? look.header && (tg.t.head > 0 || !!tg.t.style) : look[k];
+        box.disabled = !tg.t.style && k !== 'header';
+      }
     }
+    press('table-painter', this.tables.painting);
+    press('table-gridlines', this.view.gridlines);
+    press('nav-pane', this.nav.open);
+    const pen = this.tables.pen;
+    pick('#doc-pen-style', pen.style);
+    pick('#doc-pen-width', String(pen.w));
+    const penColour = this.ribbon.querySelector<HTMLInputElement>('#doc-pen-colour');
+    if (penColour && penColour !== active) penColour.value = pen.color;
+    const sw = this.ribbon.querySelector<HTMLElement>('#doc-pen-swatch');
+    if (sw) { const svg = penSwatch(pen); if (sw.innerHTML !== svg) sw.innerHTML = svg; }
     this.showZoom();
     const status = document.querySelector<HTMLElement>('#doc-status');
     if (status) {
@@ -3413,7 +4070,7 @@ export function fitDocColumns(t: TableData, f: DocFile, textW: number): TableDat
     let w = 18;
     t.rows.forEach((row, r) => {
       if (!row[c] || isCovered(t, r, c) || spanOf(t, r, c) > 1) return;
-      w = Math.max(w, f.layouter.naturalWidth(f.t, row[c].runs, row[c].paras));
+      w = Math.max(w, f.layouter.naturalCellWidth(f.t, t, r, c));
     });
     return Math.ceil(w);
   });

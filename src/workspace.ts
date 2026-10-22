@@ -406,6 +406,22 @@ export class Workspace {
     return t;
   }
 
+  /** A document made here (Review > Compare's result) in a new tab, unsaved, named `name` (a .docx name not already open). */
+  showDocument(doc: DocText, name: string): Tab {
+    const base = name.replace(/\.docx$/i, '');
+    let file = `${base}.docx`;
+    for (let n = 2; this.tabs.some((t) => t.name === file); n++) file = `${base} ${n}.docx`;
+    const spare = this.spare();
+    const t = this.makeTab('document', file);
+    t.document = new DocFile(doc);
+    t.savedEdits = -1;
+    this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
+    this.activate(t, true);
+    if (spare) this.drop(spare);
+    this.noteChange();
+    return t;
+  }
+
   /** File > Open: drawings, slide decks, sheets and documents. */
   async open(): Promise<void> {
     let f;
@@ -485,7 +501,7 @@ export class Workspace {
     const deck = new Deck(this.host);
     deck.master = got.master;
     deck.size = got.size;
-    deck.load(got.slides.map((s) => deck.makeSlide(s.layout, s.contents, s.notes, s)), got.size, got.master);
+    deck.load(got.slides.map((s) => deck.makeSlide(s.layout, s.contents, s.notes, s, got.master)), got.size, got.master, got.sections);
     t.deck = deck;
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
@@ -654,7 +670,7 @@ export class Workspace {
     if (tab.deck) {
       const deck = tab.deck;
       const bytes = await writePptx({
-        size: deck.size, master: deck.master, design: tab.mode === 'design',
+        size: deck.size, master: deck.master, design: tab.mode === 'design', sections: deck.sectionCounts(),
         slides: deck.slides.map((s, i) => ({ id: s.id, layout: s.layout, doc: deck.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims, comments: s.comments, background: s.background, hideGraphics: s.hideGraphics, hidden: s.hidden })),
       }, { ...this.hooks.pptx, title: name.replace(/\.[^.]+$/, '') });
       return { data: bytes, type: PPTX, note: '' };

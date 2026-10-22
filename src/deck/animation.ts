@@ -1,7 +1,9 @@
 // Slide transitions and animations, as in PowerPoint but only the calm, basic ones:
-// transitions Fade, Push, Wipe and Cover; animations Appear, Fade, Wipe and Fly In (and the same
-// four going out). Each has its own speed (how long it takes) and delay, and an animation starts
-// on a click, with the one before it, or after the one before it.
+// transitions Fade, Push, Wipe, Cover and Morph; animations Appear, Fade, Wipe and Fly In (and the
+// same four going out), and the emphasis effects Pulse, Grow/Shrink, Spin, Transparency and
+// Colour Change, which act on something already showing and leave it changed. Each has its own
+// speed (how long it takes) and delay, and an animation starts on a click, with the one before
+// it, or after the one before it.
 //
 // What moves is one of the parts a slide is saved to PowerPoint as (see splitSlide): a title or
 // text box, a picture, a shape, a table, or a structure or scheme with everything round it. So an
@@ -11,7 +13,10 @@
 // Both are saved in the PowerPoint file as PowerPoint's own transitions and animations, so they
 // play there too, and they are read back from PowerPoint files (other kinds come in as Fade).
 
-import type { Doc } from '../model';
+import type { Doc, Media } from '../model';
+
+/** A video or sound on a slide, for the slide's timing: its PowerPoint shape and how it plays. */
+export interface MediaTiming { spid: number; media: Media }
 import type { Selection } from '../editor/editor';
 import { splitSlide } from '../io/pptx-write';
 import { plainText } from '../richtext';
@@ -21,7 +26,8 @@ import { plainText } from '../richtext';
 /** Which way a transition moves: the new slide comes in travelling this way (left: in from the right). */
 export type Dir = 'left' | 'right' | 'up' | 'down';
 
-export type TransitionKind = 'none' | 'fade' | 'push' | 'wipe' | 'cover';
+/** Morph: things on both slides move, grow and shrink from where they were to where they are now; the rest fade. */
+export type TransitionKind = 'none' | 'fade' | 'push' | 'wipe' | 'cover' | 'morph';
 
 export interface Transition {
   kind: TransitionKind;
@@ -39,6 +45,7 @@ export const TRANSITIONS: { id: TransitionKind; name: string; dirs: boolean }[] 
   { id: 'push', name: 'Push', dirs: true },
   { id: 'wipe', name: 'Wipe', dirs: true },
   { id: 'cover', name: 'Cover', dirs: true },
+  { id: 'morph', name: 'Morph', dirs: false },
 ];
 
 /** The directions, named as PowerPoint's Effect Options name them (by where the new slide comes from). */
@@ -62,15 +69,27 @@ export const DEFAULT_TRANSITION_DUR = 0.7;
 
 // ---------------------------------------------------------------- animations
 
-export type Effect = 'appear' | 'fade' | 'wipe' | 'fly';
+export type Effect = 'appear' | 'fade' | 'wipe' | 'fly' | Emphasis;
+/** Effects that change something already showing (PowerPoint's Emphasis effects). */
+export type Emphasis = 'pulse' | 'grow' | 'spin' | 'transparency' | 'colour';
 export type Side = 'left' | 'right' | 'top' | 'bottom';
 
-export const EFFECTS: { id: Effect; name: string; sides: boolean }[] = [
+export const EFFECTS: { id: Effect; name: string; sides: boolean; emph?: boolean }[] = [
   { id: 'appear', name: 'Appear', sides: false },
   { id: 'fade', name: 'Fade', sides: false },
   { id: 'wipe', name: 'Wipe', sides: true },
   { id: 'fly', name: 'Fly', sides: true },
+  { id: 'pulse', name: 'Pulse', sides: false, emph: true },
+  { id: 'grow', name: 'Grow/Shrink', sides: false, emph: true },
+  { id: 'spin', name: 'Spin', sides: false, emph: true },
+  { id: 'transparency', name: 'Transparency', sides: false, emph: true },
+  { id: 'colour', name: 'Colour Change', sides: false, emph: true },
 ];
+
+export const isEmphasis = (e: Effect): e is Emphasis => e === 'pulse' || e === 'grow' || e === 'spin' || e === 'transparency' || e === 'colour';
+
+/** What an emphasis effect does when its settings aren't given: half as big again, a whole turn, half see-through, red. */
+export const EMPH_DEFAULTS = { scale: 1.5, turn: 360, opacity: 0.5, color: '#e53935' };
 
 export const SIDES: { id: Side; name: string }[] = [
   { id: 'bottom', name: 'From Bottom' },
@@ -98,17 +117,31 @@ export interface Anim {
   dur: number;
   /** Seconds to wait before it starts. */
   delay: number;
+  /** Grow/Shrink: the size it ends at, as a multiple (1.5 grows by half, 0.5 shrinks to half). */
+  scale?: number;
+  /** Spin: degrees it turns, clockwise (negative: anticlockwise). */
+  turn?: number;
+  /** Transparency: how see-through it ends, 0 (solid) to 1 (gone). */
+  opacity?: number;
+  /** Colour Change: the colour it ends (a shape's fill, text's colour, a structure's lines and labels). */
+  color?: string;
 }
 
 export const DEFAULT_ANIM_DUR = 0.5;
 
 /** A new animation on a target: on a click, half a second, as PowerPoint starts one. */
 export function newAnim(target: AnimTarget, effect: Effect, exit = false): Anim {
+  if (isEmphasis(effect)) {
+    // PowerPoint's own lengths: a quick pulse, two seconds for the rest
+    const extra = effect === 'grow' ? { scale: EMPH_DEFAULTS.scale } : effect === 'spin' ? { turn: EMPH_DEFAULTS.turn } : effect === 'transparency' ? { opacity: EMPH_DEFAULTS.opacity } : effect === 'colour' ? { color: EMPH_DEFAULTS.color } : {};
+    return { target, effect, start: 'click', dur: effect === 'pulse' ? DEFAULT_ANIM_DUR : 2, delay: 0, ...extra };
+  }
   return { target, effect, ...(exit ? { exit } : {}), ...(effect === 'wipe' || effect === 'fly' ? { from: 'bottom' as Side } : {}), start: 'click', dur: effect === 'appear' ? 0 : DEFAULT_ANIM_DUR, delay: 0 };
 }
 
 export function animName(a: Anim): string {
   const e = EFFECTS.find((x) => x.id === a.effect)!.name;
+  if (isEmphasis(a.effect)) return e;
   if (a.exit) return a.effect === 'appear' ? 'Disappear' : a.effect === 'fly' ? 'Fly Out' : `${e} Out`;
   return a.effect === 'fly' ? 'Fly In' : e;
 }
@@ -285,21 +318,53 @@ export function buildSteps(anims: Anim[]): Step[] {
  * (t < 0: the next click hasn't happened). For each part: visible or not, and, while an effect
  * is running, which one and how far through (0 to 1).
  */
-export interface PartState { visible: boolean; running?: { anim: Anim; p: number } }
+export interface PartState { visible: boolean; running?: { anim: Anim; p: number }; emph?: Emph }
+
+/**
+ * What emphasis effects have done to a part so far: its size (a multiple), its turn in degrees,
+ * how solid it is (0 to 1), and a colour it is changing to (`mix` of the way; `was` the colour it
+ * had changed to before, if any).
+ */
+export interface Emph { scale: number; rot: number; alpha: number; color?: string; mix: number; was?: string }
+
+export const NO_EMPH: Emph = { scale: 1, rot: 0, alpha: 1, mix: 0 };
+
+/** An emphasis effect `p` of the way through (1: finished, as it stays), from what came before. */
+export function emphAt(held: Emph, a: Anim, p: number): Emph {
+  switch (a.effect) {
+    case 'pulse': return { ...held, scale: held.scale * (1 + 0.1 * Math.sin(Math.PI * p)) };
+    case 'grow': return { ...held, scale: held.scale * (1 + ((a.scale ?? EMPH_DEFAULTS.scale) - 1) * p) };
+    case 'spin': return { ...held, rot: held.rot + (a.turn ?? EMPH_DEFAULTS.turn) * p };
+    case 'transparency': return { ...held, alpha: held.alpha + (1 - (a.opacity ?? EMPH_DEFAULTS.opacity) - held.alpha) * p };
+    case 'colour': {
+      const was = held.mix >= 1 ? held.color : held.was;
+      return { ...held, color: a.color ?? EMPH_DEFAULTS.color, mix: p, ...(was ? { was } : {}) };
+    }
+    default: return held;
+  }
+}
 
 export function partStates(parts: Part[], anims: Anim[], done: number, t: number): Map<Part, PartState> {
   const steps = buildSteps(anims);
   const out = new Map<Part, PartState>();
-  // before anything plays, parts that first come in are hidden
+  // before anything plays, parts that first come in are hidden (emphasis leaves them showing)
   const firstOf = new Map<Part, Anim>();
   for (const a of anims) {
+    if (isEmphasis(a.effect)) continue;
     const p = partOf(parts, a.target);
     if (p && !firstOf.has(p)) firstOf.set(p, a);
   }
   for (const [p, a] of firstOf) out.set(p, { visible: !!a.exit });
+  const emph = new Map<Part, Emph>();
   const apply = (it: Timed, at: number) => {
     const p = partOf(parts, it.anim.target);
     if (!p || at < it.start) return;
+    if (isEmphasis(it.anim.effect)) {
+      const held = emph.get(p) ?? NO_EMPH;
+      const prog = at >= it.end ? 1 : Math.max(0, Math.min(1, (at - it.start) / Math.max(1e-6, it.end - it.start)));
+      emph.set(p, emphAt(held, it.anim, prog));
+      return;
+    }
     if (at >= it.end && !(it.end === it.start && at === it.start && it.anim.effect !== 'appear')) {
       out.set(p, { visible: !it.anim.exit });
     } else {
@@ -311,6 +376,7 @@ export function partStates(parts: Part[], anims: Anim[], done: number, t: number
     if (k < done) for (const it of st.items) apply(it, Infinity);
     else if (k === done && t >= 0) for (const it of [...st.items].sort((a, b) => a.start - b.start)) apply(it, t);
   });
+  for (const [p, e] of emph) out.set(p, { ...(out.get(p) ?? { visible: true }), emph: e });
   return out;
 }
 
@@ -325,13 +391,20 @@ const P_DIR: Record<Dir, string> = { left: 'l', right: 'r', up: 'u', down: 'd' }
 const DIR_P: Record<string, Dir> = { l: 'left', r: 'right', u: 'up', d: 'down' };
 const NS_MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
 const NS_P14 = 'http://schemas.microsoft.com/office/powerpoint/2010/main';
+const NS_P159 = 'http://schemas.microsoft.com/office/powerpoint/2015/09/main';
 
 /** A slide's transition as PowerPoint writes it: its own duration for PowerPoint 2010 and later, a named speed for older ones. */
 export function transitionXml(t: Transition | undefined): string {
   if (!t || (t.kind === 'none' && !t.advanceAfter)) return '';
   const spd = t.dur <= 0.5 ? 'fast' : t.dur <= 0.75 ? 'med' : 'slow';
-  const body = t.kind === 'none' ? '' : t.kind === 'fade' ? '<p:fade/>' : `<p:${t.kind} dir="${P_DIR[t.dir ?? 'left']}"/>`;
   const adv = t.advanceAfter ? ` advTm="${Math.round(t.advanceAfter * 1000)}"` : '';
+  if (t.kind === 'morph') {
+    // PowerPoint 2019 and 365 morph; older ones fade
+    return `<mc:AlternateContent xmlns:mc="${NS_MC}"><mc:Choice xmlns:p159="${NS_P159}" xmlns:p14="${NS_P14}" Requires="p159">` +
+      `<p:transition spd="${spd}" p14:dur="${Math.round(t.dur * 1000)}"${adv}><p159:morph option="byObject"/></p:transition></mc:Choice>` +
+      `<mc:Fallback><p:transition spd="${spd}"${adv}><p:fade/></p:transition></mc:Fallback></mc:AlternateContent>`;
+  }
+  const body = t.kind === 'none' ? '' : t.kind === 'fade' ? '<p:fade/>' : `<p:${t.kind} dir="${P_DIR[t.dir ?? 'left']}"/>`;
   return `<mc:AlternateContent xmlns:mc="${NS_MC}"><mc:Choice xmlns:p14="${NS_P14}" Requires="p14">` +
     `<p:transition spd="${spd}" p14:dur="${Math.round(t.dur * 1000)}"${adv}>${body}</p:transition></mc:Choice>` +
     `<mc:Fallback><p:transition spd="${spd}"${adv}>${body}</p:transition></mc:Fallback></mc:AlternateContent>`;
@@ -351,12 +424,13 @@ export function readTransition(sld: Element, warn: (s: string) => void): Transit
   let dir: Dir | undefined;
   if (kid) {
     if (kid.localName === 'fade') kind = 'fade';
+    else if (kid.localName === 'morph') kind = 'morph';
     else if (kid.localName === 'push' || kid.localName === 'wipe' || kid.localName === 'cover') {
       kind = kid.localName;
       dir = DIR_P[kid.getAttribute('dir') ?? 'l'] ?? 'left';
     } else {
       kind = 'fade';
-      warn('Slide transitions other than Fade, Push, Wipe and Cover came in as Fade.');
+      warn('Slide transitions other than Fade, Push, Wipe, Cover and Morph came in as Fade.');
     }
   }
   return { kind, ...(dir ? { dir } : {}), dur: +dur.toFixed(3), ...(adv ? { advanceAfter: Number(adv) / 1000 } : {}) };
@@ -364,7 +438,9 @@ export function readTransition(sld: Element, warn: (s: string) => void): Transit
 
 // ---------------------------------------------------------------- PowerPoint: animations
 
-const PRESET: Record<Effect, number> = { appear: 1, fly: 2, fade: 10, wipe: 22 };
+const PRESET: Record<Effect, number> = { appear: 1, fly: 2, fade: 10, wipe: 22, pulse: 26, grow: 6, spin: 8, transparency: 9, colour: 1 };
+/** Colour Change on text is PowerPoint's Font Color (on anything else, its Fill Color). */
+const PRESET_FONT_COLOR = 3;
 const SUBTYPE: Record<Side, number> = { top: 1, right: 2, bottom: 4, left: 8 };
 const SUBTYPE_SIDE: Record<number, Side> = { 1: 'top', 2: 'right', 4: 'bottom', 8: 'left' };
 /** Wipe's filter: it reveals moving away from the side it starts at. */
@@ -376,9 +452,9 @@ const WIPE_FILTER: Record<Side, string> = { bottom: 'wipe(up)', left: 'wipe(righ
  * `spidsOf` gives the PowerPoint shapes each animation moves (a table can be three: its title,
  * the table and its footnotes); animations of objects that weren't saved are left out.
  */
-export function timingXml(anims: Anim[], spidsOf: (a: Anim) => number[]): string {
+export function timingXml(anims: Anim[], spidsOf: (a: Anim) => number[], media: MediaTiming[] = []): string {
   const live = anims.filter((a) => spidsOf(a).length);
-  if (!live.length) return '';
+  if (!live.length && !media.length) return '';
   let id = 3;
   const ms = (s: number) => Math.max(0, Math.round(s * 1000));
   const steps = buildSteps(live);
@@ -386,7 +462,34 @@ export function timingXml(anims: Anim[], spidsOf: (a: Anim) => number[]): string
   const visibility = (spid: number, val: 'visible' | 'hidden', at: number) =>
     `<p:set><p:cBhvr><p:cTn id="${id++}" dur="1" fill="hold"><p:stCondLst><p:cond delay="${at}"/></p:stCondLst></p:cTn>${target(spid)}` +
     `<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="${val}"/></p:to></p:set>`;
+  const bhvr = (spid: number, d: number, attr?: string, extra = '') =>
+    `<p:cBhvr${extra}><p:cTn id="${id++}" dur="${d}" fill="hold"/>${target(spid)}${attr ? `<p:attrNameLst><p:attrName>${attr}</p:attrName></p:attrNameLst>` : ''}</p:cBhvr>`;
+  const emphasis = (a: Anim, spid: number): string => {
+    const d = Math.max(1, ms(a.dur));
+    switch (a.effect) {
+      case 'pulse': return `<p:animScale><p:cBhvr><p:cTn id="${id++}" dur="${Math.max(1, Math.round(d / 2))}" autoRev="1" fill="hold"/>${target(spid)}</p:cBhvr><p:by x="110000" y="110000"/></p:animScale>`;
+      case 'grow': {
+        const k = Math.round((a.scale ?? EMPH_DEFAULTS.scale) * 100000);
+        return `<p:animScale>${bhvr(spid, d)}<p:by x="${k}" y="${k}"/></p:animScale>`;
+      }
+      case 'spin': return `<p:animRot by="${Math.round((a.turn ?? EMPH_DEFAULTS.turn) * 60000)}">${bhvr(spid, d, 'r')}</p:animRot>`;
+      case 'transparency': {
+        const v = +(1 - (a.opacity ?? EMPH_DEFAULTS.opacity)).toFixed(3);
+        return `<p:set>${bhvr(spid, d, 'style.opacity')}<p:to><p:strVal val="${v}"/></p:to></p:set>` +
+          `<p:animEffect filter="image" prLst="opacity: ${v}">${bhvr(spid, d, undefined, ' rctx="IE"')}</p:animEffect>`;
+      }
+      case 'colour': {
+        const c = (a.color ?? EMPH_DEFAULTS.color).replace('#', '').toUpperCase();
+        if (a.target.kind === 'caption') return `<p:animClr clrSpc="rgb" dir="cw">${bhvr(spid, d, 'style.color')}<p:to><a:srgbClr val="${c}"/></p:to></p:animClr>`;
+        return `<p:animClr clrSpc="rgb" dir="cw">${bhvr(spid, d, 'fillcolor')}<p:to><a:srgbClr val="${c}"/></p:to></p:animClr>` +
+          `<p:set>${bhvr(spid, d, 'fill.type')}<p:to><p:strVal val="solid"/></p:to></p:set>` +
+          `<p:set>${bhvr(spid, d, 'fill.on')}<p:to><p:strVal val="true"/></p:to></p:set>`;
+      }
+      default: return '';
+    }
+  };
   const behaviours = (a: Anim, spid: number): string => {
+    if (isEmphasis(a.effect)) return emphasis(a, spid);
     const d = ms(a.dur);
     const out = !!a.exit;
     const parts: string[] = [];
@@ -419,19 +522,47 @@ export function timingXml(anims: Anim[], spidsOf: (a: Anim) => number[]): string
         const first = j === 0 && it.group === 0 ? (st.auto ? (a.start === 'after' ? 'afterEffect' : 'withEffect') : 'clickEffect') : a.start === 'after' ? 'afterEffect' : a.start === 'with' ? 'withEffect' : 'clickEffect';
         const sub = (a.effect === 'wipe' || a.effect === 'fly') ? SUBTYPE[a.from ?? 'bottom'] : 0;
         // more shapes than one: the others move with the first
-        return spidsOf(a).map((spid, k) => `<p:par><p:cTn id="${id++}" presetID="${PRESET[a.effect]}" presetClass="${a.exit ? 'exit' : 'entr'}" presetSubtype="${sub}" fill="hold" grpId="0" nodeType="${k ? 'withEffect' : first}">` +
+        const preset = a.effect === 'colour' && a.target.kind === 'caption' ? PRESET_FONT_COLOR : PRESET[a.effect];
+        const cls = isEmphasis(a.effect) ? 'emph' : a.exit ? 'exit' : 'entr';
+        return spidsOf(a).map((spid, k) => `<p:par><p:cTn id="${id++}" presetID="${preset}" presetClass="${cls}" presetSubtype="${sub}" fill="hold" grpId="0" nodeType="${k ? 'withEffect' : first}">` +
           `<p:stCondLst><p:cond delay="${ms(it.start - g0)}"/></p:stCondLst><p:childTnLst>${behaviours(a, spid)}</p:childTnLst></p:cTn></p:par>`).join('');
       }).join('');
       return `<p:par><p:cTn id="${id++}" fill="hold"><p:stCondLst><p:cond delay="${ms(g0)}"/></p:stCondLst><p:childTnLst>${effects}</p:childTnLst></p:cTn></p:par>`;
     }).join('');
     return `<p:par><p:cTn id="${id++}" fill="hold"><p:stCondLst>${cond}</p:stCondLst><p:childTnLst>${inner}</p:childTnLst></p:cTn></p:par>`;
   }).join('');
+  // videos and sounds that start by themselves: played as the slide comes in, before its animations
+  const auto = media.filter((m) => m.media.start !== 'click');
+  const call = (m: MediaTiming, k: number, node: string, cmd: string, preset: number) =>
+    `<p:par><p:cTn id="${id++}" presetID="${preset}" presetClass="mediacall" presetSubtype="0" fill="hold" nodeType="${k ? 'withEffect' : node}"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+    `<p:cmd type="call" cmd="${cmd}"><p:cBhvr><p:cTn id="${id++}" dur="1" fill="hold"/>${target(m.spid)}</p:cBhvr></p:cmd></p:childTnLst></p:cTn></p:par>`;
+  let main = clicks;
+  if (auto.length) {
+    const group = `<p:par><p:cTn id="${id++}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${auto.map((m, k) => call(m, k, 'afterEffect', 'playFrom(0.0)', 1)).join('')}</p:childTnLst></p:cTn></p:par>`;
+    if (steps[0]?.auto) main = clicks.replace(/^(<p:par><p:cTn id="\d+" fill="hold"><p:stCondLst>.*?<\/p:stCondLst><p:childTnLst>)/, `$1${group}`);
+    else main = `<p:par><p:cTn id="${id++}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond></p:stCondLst><p:childTnLst>${group}</p:childTnLst></p:cTn></p:par>` + clicks;
+  }
+  const mainSeq = main ? `<p:seq concurrent="1" nextAc="seek"><p:cTn id="${id++}" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${main}</p:childTnLst></p:cTn>` +
+    `<p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst>` +
+    `<p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq>` : '';
+  // ones that start when clicked: a sequence of their own, set off by a click on them (play, or pause)
+  const clicked = media.filter((m) => m.media.start === 'click').map((m) =>
+    `<p:seq concurrent="1" nextAc="seek"><p:cTn id="${id++}" restart="whenNotActive" fill="hold" evtFilter="cancelBubble" nodeType="interactiveSeq">` +
+    `<p:stCondLst><p:cond evt="onClick" delay="0">${target(m.spid)}</p:cond></p:stCondLst><p:endSync evt="end" delay="0"><p:rtn val="all"/></p:endSync><p:childTnLst>` +
+    `<p:par><p:cTn id="${id++}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="${id++}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+    `${call(m, 0, 'clickEffect', 'togglePause', 2)}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn>` +
+    `<p:nextCondLst><p:cond evt="onNext" delay="0">${target(m.spid)}</p:cond></p:nextCondLst></p:seq>`).join('');
+  // each one's own settings: volume, looping, across slides, hidden when stopped, full screen
+  const nodes = media.map((m) => {
+    const v = m.media;
+    const vol = v.vol === undefined ? 80000 : Math.round(Math.max(0, Math.min(1, v.vol)) * 100000);
+    const attrs = `vol="${vol}"${v.mute ? ' mute="1"' : ''}${v.audio && v.across ? ' numSld="999"' : ''}${v.audio && v.hide ? ' showWhenStopped="0"' : ''}`;
+    const node = `<p:cMediaNode ${attrs}><p:cTn id="${id++}"${v.once ? '' : ' repeatCount="indefinite"'} fill="hold" display="0"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst></p:cTn>${target(m.spid)}</p:cMediaNode>`;
+    return v.audio ? `<p:audio>${node}</p:audio>` : `<p:video${v.full ? ' fullScrn="1"' : ''}>${node}</p:video>`;
+  }).join('');
   const spids = [...new Set(live.flatMap((a) => spidsOf(a)))];
   const xml = `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>` +
-    `<p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${clicks}</p:childTnLst></p:cTn>` +
-    `<p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst>` +
-    `<p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq>` +
-    `</p:childTnLst></p:cTn></p:par></p:tnLst><p:bldLst>${spids.map((s) => `<p:bldP spid="${s}" grpId="0"/>`).join('')}</p:bldLst></p:timing>`;
+    `${mainSeq}${clicked}${nodes}</p:childTnLst></p:cTn></p:par></p:tnLst>${spids.length ? `<p:bldLst>${spids.map((s) => `<p:bldP spid="${s}" grpId="0"/>`).join('')}</p:bldLst>` : ''}</p:timing>`;
   // number the timing nodes in the order they are written, as PowerPoint does
   let n = 0;
   return xml.replace(/<p:cTn id="\d+"/g, () => `<p:cTn id="${++n}"`);
@@ -467,16 +598,25 @@ export function readTiming(sld: Element, targetOfSpid: (spid: number) => AnimTar
         const tn = kid(eff, 'cTn');
         if (!tn) continue;
         const cls = tn.getAttribute('presetClass');
-        if (cls !== 'entr' && cls !== 'exit') { warn('Emphasis and motion-path animations were left out.'); continue; }
+        if (cls === 'path') { warn('Motion-path animations were left out.'); continue; }
+        if (cls !== 'entr' && cls !== 'exit' && cls !== 'emph') continue; // media calls and the like
         const spTgt = tn.getElementsByTagNameNS(P, 'spTgt')[0];
         const spid = Number(spTgt?.getAttribute('spid'));
         const target = Number.isFinite(spid) ? targetOfSpid(spid) : null;
         if (!target) continue;
         if (spTgt && spTgt.children.length) warn('Animations of single paragraphs now move the whole text box.');
         const preset = Number(tn.getAttribute('presetID'));
+        const node = tn.getAttribute('nodeType');
+        if (cls === 'emph') {
+          const e = readEmphasis(tn, preset, warn);
+          const durs = Array.from(tn.getElementsByTagNameNS(P, 'cTn')).map((c) => Number(c.getAttribute('dur')) * (c.getAttribute('autoRev') === '1' ? 2 : 1)).filter((d) => Number.isFinite(d) && d > 1);
+          const prev = out[out.length - 1];
+          if (prev && node === 'withEffect' && prev.target.kind === target.kind && prev.target.id === target.id && prev.effect === e.effect) continue;
+          out.push({ target, ...e, start: node === 'withEffect' ? 'with' : node === 'afterEffect' ? 'after' : 'click', dur: (durs[0] ?? 2000) / 1000, delay: delayOf(tn) });
+          continue;
+        }
         const effect: Effect = preset === 1 ? 'appear' : preset === 2 ? 'fly' : preset === 22 ? 'wipe' : preset === 10 ? 'fade' : 'fade';
         if (![1, 2, 10, 22].includes(preset)) warn('Animations other than Appear, Fade, Wipe and Fly came in as Fade.');
-        const node = tn.getAttribute('nodeType');
         const start: Anim['start'] = node === 'withEffect' ? 'with' : node === 'afterEffect' ? 'after' : 'click';
         // how long: the first behaviour that takes time
         const durs = Array.from(tn.getElementsByTagNameNS(P, 'cTn')).slice(1).map((c) => Number(c.getAttribute('dur'))).filter((d) => Number.isFinite(d) && d > 1);
@@ -491,6 +631,79 @@ export function readTiming(sld: Element, targetOfSpid: (spid: number) => AnimTar
         });
       }
     }
+  }
+  return out;
+}
+
+/**
+ * An emphasis effect from PowerPoint: Pulse, Grow/Shrink, Spin and Transparency as they are,
+ * any change of colour (fill, text or line) as Colour Change, and the others as Pulse.
+ */
+function readEmphasis(tn: Element, preset: number, warn: (s: string) => void): Pick<Anim, 'effect' | 'scale' | 'turn' | 'opacity' | 'color'> {
+  const P = 'http://schemas.openxmlformats.org/presentationml/2006/main';
+  const first = (name: string) => tn.getElementsByTagNameNS(P, name)[0];
+  const clr = first('animClr');
+  if (clr || [1, 3, 7, 19].includes(preset)) {
+    const rgb = clr?.getElementsByTagNameNS('http://schemas.openxmlformats.org/drawingml/2006/main', 'srgbClr')[0]?.getAttribute('val');
+    return { effect: 'colour', color: rgb && /^[0-9a-f]{6}$/i.test(rgb) ? `#${rgb.toLowerCase()}` : EMPH_DEFAULTS.color };
+  }
+  if (preset === 8 || (first('animRot') && preset !== 26)) {
+    const by = Number(first('animRot')?.getAttribute('by'));
+    return { effect: 'spin', turn: Number.isFinite(by) && by ? +(by / 60000).toFixed(2) : EMPH_DEFAULTS.turn };
+  }
+  if (preset === 9) {
+    const sets = Array.from(tn.getElementsByTagNameNS(P, 'set')).find((x) => x.textContent?.includes('style.opacity') || /opacity/.test(x.getElementsByTagNameNS(P, 'attrName')[0]?.textContent ?? ''));
+    const v = Number(sets?.getElementsByTagNameNS(P, 'strVal')[0]?.getAttribute('val'));
+    return { effect: 'transparency', opacity: Number.isFinite(v) ? +(1 - v).toFixed(3) : EMPH_DEFAULTS.opacity };
+  }
+  if (preset === 6) {
+    const by = first('by');
+    const x = Number(by?.getAttribute('x')), y = Number(by?.getAttribute('y'));
+    const k = Number.isFinite(x) && x ? (Number.isFinite(y) && y ? (x + y) / 2 : x) : NaN;
+    return { effect: 'grow', scale: Number.isFinite(k) ? +(k / 100000).toFixed(3) : EMPH_DEFAULTS.scale };
+  }
+  if (preset !== 26) warn('Emphasis effects other than Pulse, Grow/Shrink, Spin, Transparency and colour changes came in as Pulse.');
+  return { effect: 'pulse' };
+}
+
+/**
+ * How each video and sound on a slide plays, from PowerPoint's timing tree, by PowerPoint shape:
+ * when it starts (by itself, or when clicked: one started by a click of the show counts as
+ * clicked), its volume, looping, across slides, hidden when stopped and full screen.
+ */
+export function readMediaTiming(sld: Element): Map<number, Partial<Media>> {
+  const P = 'http://schemas.openxmlformats.org/presentationml/2006/main';
+  const out = new Map<number, Partial<Media>>();
+  const timing = Array.from(sld.children).find((c) => c.localName === 'timing');
+  if (!timing) return out;
+  const spidIn = (el: Element | null | undefined) => Number(el?.getElementsByTagNameNS(P, 'spTgt')[0]?.getAttribute('spid'));
+  const got = (spid: number) => { let m = out.get(spid); if (!m) out.set(spid, (m = {})); return m; };
+  for (const node of Array.from(timing.getElementsByTagNameNS(P, 'cMediaNode'))) {
+    const spid = spidIn(node);
+    if (!Number.isFinite(spid)) continue;
+    const m = got(spid);
+    const vol = node.getAttribute('vol');
+    if (vol !== null && Number(vol) !== 80000) m.vol = Math.max(0, Math.min(1, Number(vol) / 100000));
+    if (/^(1|true)$/.test(node.getAttribute('mute') ?? '')) m.mute = true;
+    if (Number(node.getAttribute('numSld') ?? 1) > 1) m.across = true;
+    if (/^(0|false)$/.test(node.getAttribute('showWhenStopped') ?? '')) m.hide = true;
+    const tn = Array.from(node.children).find((c) => c.localName === 'cTn');
+    m.once = tn?.getAttribute('repeatCount') !== 'indefinite';
+    if (/^(1|true)$/.test(node.parentElement?.getAttribute('fullScrn') ?? '')) m.full = true;
+  }
+  for (const cmd of Array.from(timing.getElementsByTagNameNS(P, 'cmd'))) {
+    const spid = spidIn(cmd);
+    if (!Number.isFinite(spid)) continue;
+    // in a sequence set off by a click on the shape, or played when the slide comes in
+    let el: Element | null = cmd, inter = false, node = '';
+    while (el && el !== timing) {
+      if (el.localName === 'cTn' && el.getAttribute('presetClass') === 'mediacall') node = el.getAttribute('nodeType') ?? '';
+      if (el.localName === 'cTn' && el.getAttribute('nodeType') === 'interactiveSeq') inter = true;
+      el = el.parentElement;
+    }
+    const m = got(spid);
+    if (inter || node === 'clickEffect') m.start = 'click';
+    else if (m.start !== 'click') m.start = 'auto';
   }
   return out;
 }

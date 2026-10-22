@@ -133,7 +133,65 @@ describe('tables in PowerPoint files', () => {
     expect(table.rows[0][1].span).toBe(2);
     expect(table.size).toBe(18);
     expect(table.head).toBe(1);
-    expect(table.lines).toBe('acs');
-    expect(back.warnings.some((w) => /table colours/.test(w))).toBe(true);
+    expect(table.style).toBe('pp-medium2-1');
+    expect(table.look).toMatchObject({ bandRows: true, total: false, firstCol: false });
+    expect(back.warnings).toEqual([]);
+  });
+
+  it('keeps a table style, cell colours and cells merged down', async () => {
+    const t: TableData = {
+      cols: [60, 60, 60],
+      rows: [
+        [R('a'), R('b'), R('c')],
+        [{ runs: [{ text: 'tall' }], rowSpan: 2 }, { runs: [{ text: 'x' }], fill: '#ff0000' }, R('y')],
+        [R(''), R('z'), R('w')],
+      ],
+      head: 1, lines: 'acs', style: 'pp-medium2-2', look: { bandRows: true, firstCol: true },
+    };
+    const bytes = await save(t);
+    const xml = slideXml(bytes);
+    const dom = new DOMParser().parseFromString(xml, 'application/xml');
+    const rows = [...dom.getElementsByTagName('a:tr')].map((tr) => [...tr.children].filter((e) => e.localName === 'tc'));
+    expect(rows[1][0].getAttribute('rowSpan')).toBe('2');
+    expect(rows[2][0].getAttribute('vMerge')).toBe('1');
+    expect(xml).toContain('{21E4AEA4-8DFA-4A89-87EB-49C32662AFE8}');
+    expect(dom.getElementsByTagName('a:tblPr')[0].getAttribute('firstCol')).toBe('1');
+    // the style's colours are written on the cells, so PowerPoint shows them whatever it knows
+    expect(rows[0][0].getElementsByTagName('a:tcPr')[0].innerHTML).toContain('ED7D31');
+    expect(rows[1][1].getElementsByTagName('a:tcPr')[0].innerHTML).toContain('FF0000');
+    expect(tableOf(bytes).table).toEqual(t);
+    // changed in PowerPoint: the style stays, and the written-out colours don't stick to the cells
+    const { table } = tableOf(withSlide(bytes, xml.replace('>y<', '>v<')));
+    expect(table.style).toBe('pp-medium2-2');
+    expect(table.rows[1][0].rowSpan).toBe(2);
+    expect(table.rows[1][1].fill?.toLowerCase()).toBe('#ff0000');
+    expect(table.rows[1][2].fill).toBeUndefined();
+    expect(table.rows[0][0].runs[0].color).toBeUndefined();
+    expect(table.rows[0][0].runs[0].bold).toBeUndefined();
+  });
+
+  it('writes the colours of a PowerPoint style from the file onto a table made in PowerPoint', async () => {
+    const bytes = await save(sample());
+    const cell = (t: string, extra = '') => `<a:tc${extra}><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US" sz="1800"/><a:t>${t}</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>`;
+    const id = '{9D7B26C5-4107-4FEC-AEDC-1716B250EE53}';
+    const frame = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="9" name="Table 8"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>` +
+      `<p:xfrm><a:off x="1270000" y="1270000"/><a:ext cx="2438400" cy="741680"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">` +
+      `<a:tbl><a:tblPr firstRow="1" bandRow="1"><a:tableStyleId>${id}</a:tableStyleId></a:tblPr><a:tblGrid><a:gridCol w="1219200"/><a:gridCol w="1219200"/></a:tblGrid>` +
+      `<a:tr h="370840">${cell('A')}${cell('B')}</a:tr><a:tr h="370840">${cell('1', ' rowSpan="2"')}${cell('2')}</a:tr><a:tr h="370840">${cell('', ' vMerge="1"')}${cell('3')}</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>`;
+    const xml = slideXml(bytes).replace(/<p:graphicFrame>.*<\/p:graphicFrame>/s, frame).replace(/<p:sp>.*?<\/p:sp>/gs, '');
+    const files = unzipSync(withSlide(bytes, xml));
+    files['ppt/tableStyles.xml'] = new Uint8Array(strToU8(`<?xml version="1.0"?><a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" def="${id}"><a:tblStyle styleId="${id}" styleName="Mine">` +
+      `<a:wholeTbl><a:tcStyle><a:tcBdr/><a:fill><a:solidFill><a:srgbClr val="EEEEEE"/></a:solidFill></a:fill></a:tcStyle></a:wholeTbl>` +
+      `<a:band1H><a:tcStyle><a:tcBdr/><a:fill><a:solidFill><a:srgbClr val="CCCCCC"/></a:solidFill></a:fill></a:tcStyle></a:band1H>` +
+      `<a:firstRow><a:tcTxStyle b="on"><a:srgbClr val="FFFFFF"/></a:tcTxStyle><a:tcStyle><a:tcBdr/><a:fill><a:solidFill><a:srgbClr val="112233"/></a:solidFill></a:fill></a:tcStyle></a:firstRow>` +
+      `</a:tblStyle></a:tblStyleLst>`));
+    const { table, back } = tableOf(zipSync(files));
+    expect(back.warnings).toEqual([]);
+    expect(table.rows[0][0].fill).toBe('#112233');
+    expect(table.rows[0][0].runs[0]).toMatchObject({ text: 'A', bold: true, color: '#ffffff' });
+    expect(table.rows[1][1].fill).toBe('#cccccc');
+    expect(table.rows[2][1].fill).toBe('#eeeeee');
+    expect(table.rows[1][0].rowSpan).toBe(2);
+    expect(table.lines).toBe('none');
   });
 });

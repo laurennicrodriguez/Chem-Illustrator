@@ -7,20 +7,28 @@
 // Citations are ADDIN fields (as reference managers write them) whose result is the numbers
 // in superscript, which Word shows and leaves alone; the bibliography is ordinary paragraphs
 // inside a hidden bookmark. Our own part keeps the references, so they come back here live.
+// For a document whose citations belong to Zotero, Mendeley or EndNote, citations and the
+// bibliography are that program's own fields instead, so it goes on managing them (live-cites.ts).
 // Footnotes and endnotes are Word's own (footnotes.xml and endnotes.xml), and a table of figures
 // is Word's TOC field for a caption label (\c "Figure").
 
-import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
+import type { CellBorders, Contents, Justify, ParaStyle, PictureFx, TableData, TextRun } from '../model';
+import { bakedPart } from '../render/picture-fx';
+import { blipEffectsXml, imgPropsXml, pictureGeomXml } from './picture-xml';
+import { DEFAULT_MARGINS, builtInStyle } from '../document/table-styles';
+import { bordersXml, lookXml as tableLookXml, marginsXml, tableStyleXml } from './docx-table-styles';
 import type { DocStyle } from '../style';
 import * as rt from '../richtext';
 import { Package, REL, NS, xml, hex6, emu, MediaFiles, structureAltText } from './ooxml';
 import { facesToEmbed, newGuid, obfuscate, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
-import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
-import { BOX_PAD, COL_GAP, COMPOUND, END_FORMAT, FLOAT_GAP, FOOT_FORMAT, columnsOf, OBJECT_CHAR, SHADOWS, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, pruneObjects, styleOf, runStyleOf, type DocObject, type DocText, type FigureLook, type HeaderFooter, type NamedStyle, type PageSetup } from '../document/document';
-import { ACS_LINE, CELL_PAD, GRID_LINE, bibHang, docCellAlign, shownSize } from '../document/doc-layout';
+import { BULLETS, fitParas, listInfo, paraCount, schemeOf, splitParagraphs } from '../text/paragraphs';
+import { BOX_PAD, COL_GAP, COMPOUND, END_FORMAT, FLOAT_GAP, FOOT_FORMAT, columnsOf, OBJECT_CHAR, SHADOWS, charStylesOf, watermarkPlace, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, pruneObjects, styleOf, runStyleOf, type CharStyle, type DocObject, type DocText, type FigureLook, type HeaderFooter, type NamedStyle, type PageBorder, type PageSetup, type Watermark } from '../document/document';
+import { ACS_LINE, GRID_LINE, bibHang, docCellAlign, shownSize } from '../document/doc-layout';
 import { sectionsOf, type Section } from '../document/sections';
-import { bibliography, piecesText } from '../document/references';
+import { bibliography, piecesText, type Reference } from '../document/references';
+import { preferredStyle } from '../document/cite-styles';
+import { bibInstr, newZoteroPrefs, splitPrefs, writeCite } from '../document/live-cites';
 import { TOC_INDENT, tocEntries, tofEntries } from '../document/toc';
 import { parseRev } from '../document/revisions';
 import { officeTarget } from '../links';
@@ -37,7 +45,7 @@ import { CX_NS, CX1_NS } from './xlsx-chart';
 import { isChartEx } from '../sheet/chart';
 import type { ChartBox } from '../sheet/chart-box';
 import {
-  BIB_MARK, CHART_NAME, CITE_FIELD, DOCX_CT, W14_NS, W15_NS, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, MC_NS, M_NS, PIC_NS, TABLE_NAME, W_NS, WORD_HIGHLIGHTS, WP_NS, WPS_NS, WPG_NS, twips, toWordDate, type DocxModel,
+  BIB_MARK, CHART_NAME, CITE_FIELD, CUSTOM_PROPS_FMTID, DOCX_CT, W14_NS, W15_NS, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, MC_NS, M_NS, PIC_NS, TABLE_NAME, W_NS, WORD_HIGHLIGHTS, WP_NS, WPS_NS, WPG_NS, twips, toWordDate, type DocxModel,
 } from './docx';
 
 export interface DocxDeps {
@@ -45,6 +53,11 @@ export interface DocxDeps {
   picture(contents: Contents, style: DocStyle): Promise<{ png: Uint8Array; svg?: string; w: number; h: number; x?: number; y?: number } | null>;
   /** A PNG of an SVG picture, for Word versions that can't show SVG (w × h pixels). */
   svgToPng?(svg: string, w: number, h: number): Promise<Uint8Array>;
+  /**
+   * A picture with its sharpening and Remove Background worked in, as PNG (Word keeps those
+   * worked in, with the original beside it). Without it they are left off.
+   */
+  bakePicture?(p: { src: string; fx?: PictureFx; crop?: { l: number; t: number; r: number; b: number }; px?: { w: number; h: number } }): Promise<Uint8Array | null>;
   /** A drawing's structures as SMILES, for the picture's alt text (null when there are none, or no chemistry engine). */
   smiles?(contents: Contents, style: DocStyle): Promise<string | null>;
   /** The free fonts that come with the app, to put inside the file when the document uses them. */
@@ -64,8 +77,13 @@ const EXT_TYPE: Record<string, string> = {
   png: 'image/png', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp', emf: 'image/x-emf', wmf: 'image/x-wmf', svg: 'image/svg+xml', tiff: 'image/tiff',
 };
 /** Word's names for its built-in styles (so Word treats ours as its own: the Navigation Pane, Insert Caption…). */
-const WORD_NAMES: Record<string, string> = { Normal: 'Normal', Title: 'Title', Heading1: 'heading 1', Heading2: 'heading 2', Heading3: 'heading 3', Caption: 'caption' };
-const PRIORITY: Record<string, number> = { Normal: 0, Title: 10, Heading1: 9, Heading2: 9, Heading3: 9, Caption: 35 };
+const WORD_NAMES: Record<string, string> = {
+  Normal: 'Normal', Title: 'Title', Caption: 'caption',
+  ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`Heading${n}`, `heading ${n}`])),
+};
+const PRIORITY: Record<string, number> = { Normal: 0, Title: 10, Caption: 35, ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`Heading${n}`, 9])) };
+/** Word's own character styles, by id: their names, and where Word lists them. */
+const WORD_CHAR: Record<string, [string, number]> = { Emphasis: ['Emphasis', 20], Strong: ['Strong', 22], SubtleEmphasis: ['Subtle Emphasis', 19], IntenseEmphasis: ['Intense Emphasis', 21] };
 const JC: Record<Justify, string> = { left: 'left', center: 'center', right: 'right', justify: 'both' };
 
 /** Save a document as a Word file. */
@@ -77,11 +95,11 @@ class DocxWriter {
   private pkg = new Package();
   private docPr = 1;
   private bookmarkId = 0;
+  /** Content controls' ids (Mendeley Cite's citations). */
+  private sdtId = 1;
   private shown: Map<number, string>;
   /** Bookmark names of the captions that references point to, by the caption's number field. */
   private bookmarks = new Map<number, string>();
-  /** Numbered lists: one Word list each, so each starts at 1. */
-  private numberedLists = 0;
   private model: DocxModel;
   private textW: number;
   private fullW: number;
@@ -92,9 +110,38 @@ class DocxWriter {
   private cmtOpen = new Set<number>();
   /** Word's ids of the footnotes and endnotes, by our object id (each kind from 1, in order). */
   private noteIds = new Map<number, number>();
+  private charStyles: Record<string, CharStyle>;
+  /** Word's lists (numbering.xml): the levels of each kind of list (abstractNum), and each list using them (num, by numId from 1). */
+  private abstractNums = new Map<string, number>();
+  private nums: { abs: number; restart: boolean }[] = [];
+  /** Each list's kind (its key), by numId − 1. */
+  private numKeys: string[] = [];
+  /** The one list each kind of bulleted list (and each numbered list in table cells) shares. */
+  private sharedNums = new Map<string, number>();
+
+  /** A Word list of a kind ('b' and its bullet, or 'n' and its scheme): its numId. */
+  private addNum(key: string, restart: boolean): number {
+    let abs = this.abstractNums.get(key);
+    if (abs === undefined) { abs = this.abstractNums.size; this.abstractNums.set(key, abs); }
+    this.nums.push({ abs, restart });
+    this.numKeys.push(key);
+    return this.nums.length;
+  }
+
+  /** A new numbered list, counting from 1. */
+  private newList(key: string): number {
+    return this.addNum(key, true);
+  }
+
+  private sharedNum(key: string): number {
+    let id = this.sharedNums.get(key);
+    if (id === undefined) { id = this.addNum(key, false); this.sharedNums.set(key, id); }
+    return id;
+  }
 
   constructor(private t: DocText, private deps: DocxDeps, private pages?: string[]) {
     this.shown = fieldTexts(t);
+    this.charStyles = charStylesOf(t);
     let foot = 0, end = 0;
     for (const id of objectsInText(t.runs)) {
       const o = t.objects[id];
@@ -108,6 +155,7 @@ class DocxWriter {
     if (t.references?.length || Object.values(t.objects).some((o) => o.kind === 'cite' || o.kind === 'bib')) this.model.references = t.references ?? [];
     if (t.citeStyle) this.model.citeStyle = t.citeStyle;
     if (t.citeOptions && Object.keys(t.citeOptions).length) this.model.citeOptions = t.citeOptions;
+    if (t.citeManager) this.model.citeManager = t.citeManager;
     this.fullW = Math.max(36, t.page.w - t.page.left - t.page.right);
     // figures are made to fit a column's width
     this.textW = columnsOf(t.page, this.fullW).w;
@@ -128,7 +176,9 @@ class DocxWriter {
     const body = await this.body(main);
     const secs = sectionsOf(this.t);
     const sect = this.section(main, secs[secs.length - 1]);
-    pkg.add(main, `${HEAD}<w:document xmlns:w="${W_NS}" xmlns:r="${NS.r}" xmlns:wp="${WP_NS}" xmlns:a="${NS.a}" xmlns:pic="${PIC_NS}" xmlns:wps="${WPS_NS}" xmlns:wpg="${WPG_NS}" xmlns:mc="${MC_NS}" xmlns:m="${M_NS}"><w:body>${body}${sect}</w:body></w:document>`, DOCX_CT.document);
+    // Design > Page Color: Word's background (shown once settings say so)
+    const bg = this.t.pageColor ? `<w:background w:color="${hex6(this.t.pageColor)}"/>` : '';
+    pkg.add(main, `${HEAD}<w:document xmlns:w="${W_NS}" xmlns:r="${NS.r}" xmlns:wp="${WP_NS}" xmlns:a="${NS.a}" xmlns:pic="${PIC_NS}" xmlns:wps="${WPS_NS}" xmlns:wpg="${WPG_NS}" xmlns:mc="${MC_NS}" xmlns:m="${M_NS}">${bg}<w:body>${body}${sect}</w:body></w:document>`, DOCX_CT.document);
     pkg.relate(main, DOCX_REL.styles, 'styles.xml');
     pkg.add('word/styles.xml', this.styles(), DOCX_CT.styles);
     if (this.cmts.size) this.commentParts(main);
@@ -136,7 +186,7 @@ class DocxWriter {
     pkg.relate(main, DOCX_REL.numbering, 'numbering.xml');
     pkg.add('word/numbering.xml', this.numbering(), DOCX_CT.numbering);
     pkg.relate(main, DOCX_REL.settings, 'settings.xml');
-    const settings = (embed: boolean) => `${HEAD}<w:settings xmlns:w="${W_NS}"><w:zoom w:percent="100"/>${embed ? '<w:embedTrueTypeFonts/><w:saveSubsetFonts/>' : ''}${this.t.track ? '<w:trackRevisions/>' : ''}<w:defaultTabStop w:val="720"/>` +
+    const settings = (embed: boolean) => `${HEAD}<w:settings xmlns:w="${W_NS}"><w:zoom w:percent="100"/>${this.t.pageColor ? '<w:displayBackgroundShape/>' : ''}${embed ? '<w:embedTrueTypeFonts/><w:saveSubsetFonts/>' : ''}${this.t.track ? '<w:trackRevisions/>' : ''}<w:defaultTabStop w:val="720"/>` +
       `<w:characterSpacingControl w:val="doNotCompress"/>${notes}` +
       `<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`;
     pkg.add('word/settings.xml', settings(false), DOCX_CT.settings);
@@ -152,6 +202,13 @@ class DocxWriter {
     pkg.add('docProps/core.xml', `${HEAD}<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">` +
       `${title ? `<dc:title>${xml(title)}</dc:title>` : ''}<dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`, DOCX_CT.core);
     pkg.add('docProps/app.xml', `${HEAD}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Chem Illustrator</Application></Properties>`, DOCX_CT.app);
+    // Zotero's document preferences (its style and settings), as custom document properties
+    if (this.t.citeManager === 'zotero') {
+      const prefs = splitPrefs(this.t.zoteroPrefs ?? newZoteroPrefs(this.t.citeStyle ?? preferredStyle().style));
+      pkg.relate('', REL.customProps, 'docProps/custom.xml');
+      pkg.add('docProps/custom.xml', `${HEAD}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">` +
+        prefs.map((v, i) => `<property fmtid="${CUSTOM_PROPS_FMTID}" pid="${i + 2}" name="ZOTERO_PREF_${i + 1}"><vt:lpwstr>${xml(v)}</vt:lpwstr></property>`).join('') + '</Properties>', DOCX_CT.custom);
+    }
     // the free fonts the document uses go inside it, so it looks the same where they aren't installed
     const embed = await facesToEmbed(pkg.xmlTexts(), this.deps.fonts);
     if (embed.length) {
@@ -184,7 +241,7 @@ class DocxWriter {
     const n = paraCount(rt.plainText(t.runs));
     const paras = fitParas(t.paras, n);
     const runsOf = splitParagraphs(t.runs);
-    const markers = listMarkers(paras);
+    const lists = listInfo(paras);
     // tracked changes on the paragraph marks (a line break typed or deleted while tracking)
     const markRev: (string | undefined)[] = [];
     for (const r of t.runs) for (const ch of r.text) if (ch === '\n') markRev.push(r.rev);
@@ -222,7 +279,7 @@ class DocxWriter {
         continue;
       }
       // numbered lists: a new Word list where our numbers start again
-      if (ps.list === 'number' && !ps.cont && markers[p] === '1.' && (ps.level ?? 0) === 0) listNum = ++this.numberedLists + 1;
+      if (ps.list === 'number' && lists[p].start) listNum = this.newList(`n${ps.scheme ?? ''}`);
       // a bibliography: its entries as paragraphs of their own, with any text round it in paragraphs before and after
       const isBib = (r: TextRun) => r.obj !== undefined && ['bib', 'toc', 'tof'].includes(t.objects[r.obj]?.kind ?? '');
       if (runs.some(isBib)) {
@@ -338,10 +395,13 @@ class DocxWriter {
     const colBreak = ps.colBreak ? '<w:r><w:br w:type="column"/></w:r>' : '';
     const em = runs.find((r) => r.obj === undefined)?.size ?? st.size;
     if (ps.list && !ps.cont) {
-      const id = ps.list === 'bullet' ? 1 : Math.max(2, listNum);
+      const key = ps.list === 'bullet' ? `b${ps.bullet ?? ''}` : `n${ps.scheme ?? ''}`;
+      // a numbered list's own Word list (so it counts from 1), else the one its kind shares
+      const id = ps.list === 'number' && listNum > 0 && this.numKeys[listNum - 1] === key ? listNum : this.sharedNum(key);
       pPr.push(`<w:numPr><w:ilvl w:val="${Math.max(0, Math.min(8, ps.level ?? 0))}"/><w:numId w:val="${id}"/></w:numPr>`);
     }
     if (ps.noLineNumbers) pPr.push('<w:suppressLineNumbers/>');
+    if (ps.tabs?.length) pPr.push(`<w:tabs>${ps.tabs.map((x) => `<w:tab w:val="${x.kind}"${x.leader ? ` w:leader="${x.leader}"` : ''} w:pos="${twips(x.pos)}"/>`).join('')}</w:tabs>`);
     const sp: string[] = [];
     const before = ps.spaceBefore ?? 0, after = ps.spaceAfter ?? 0, line = ps.line ?? 1;
     if (before !== st.spaceBefore) sp.push(`w:before="${twips(before)}"`);
@@ -452,11 +512,19 @@ class DocxWriter {
     const paras = entries.map((e) => run(runProps({ ...base, text: '' }, st, {}), `${e.label}\t`) +
       e.pieces.map((p) => run(runProps({ ...base, italic: p.italic, bold: p.bold, text: p.text }, st, {}), p.text)).join(''));
     if (!paras.length) paras.push('');
-    paras[0] = `<w:bookmarkStart w:id="${mark}" w:name="${name}"/>${paras[0]}`;
-    paras[paras.length - 1] += `<w:bookmarkEnd w:id="${mark}"/>`;
-    this.model.bibliographies ??= {};
-    this.model.bibliographies[id] = { text: entries.map((e) => `${e.label}\t${piecesText(e.pieces)}`).join('\n'), ps };
-    return paras.map((x) => `<w:p>${entries.length ? pPr : '<w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>'}${x}</w:p>`).join('');
+    const app = t.citeManager;
+    if (app && app !== 'mendeley-cite') {
+      // a reference manager's bibliography field round the entries (worked out again here when opened)
+      paras[0] = fieldStart('', bibInstr(app).instr) + paras[0];
+      paras[paras.length - 1] += '<w:r><w:fldChar w:fldCharType="end"/></w:r>';
+    } else if (!app) {
+      paras[0] = `<w:bookmarkStart w:id="${mark}" w:name="${name}"/>${paras[0]}`;
+      paras[paras.length - 1] += `<w:bookmarkEnd w:id="${mark}"/>`;
+      this.model.bibliographies ??= {};
+      this.model.bibliographies[id] = { text: entries.map((e) => `${e.label}\t${piecesText(e.pieces)}`).join('\n'), ps };
+    }
+    const out = paras.map((x) => `<w:p>${entries.length ? pPr : '<w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr>'}${x}</w:p>`).join('');
+    return app === 'mendeley-cite' ? `<w:sdt><w:sdtPr><w:tag w:val="${bibInstr(app).tag}"/><w:id w:val="${this.sdtId++}"/></w:sdtPr><w:sdtContent>${out}</w:sdtContent></w:sdt>` : out;
   }
 
   /**
@@ -552,14 +620,19 @@ class DocxWriter {
     if (r.formula && !r.sub && !r.sup) {
       return rt.formulaParts(r.text).map((part) => run(runProps(r, st, { formula: true, pos: part.pos }), part.text)).join('');
     }
-    return run(runProps(r, st, {}), r.text);
+    return run(runProps(r, st, { cs: this.charStyleOf(r) }), r.text);
+  }
+
+  /** The character style a run is in, if the document has it. */
+  private charStyleOf(r: TextRun): CharStyle | undefined {
+    return r.cstyle ? this.charStyles[r.cstyle] : undefined;
   }
 
   private async objectRun(main: string, r: TextRun, st: NamedStyle): Promise<string> {
     const id = r.obj!;
     const o = this.t.objects[id];
     if (!o) return '';
-    const rPr = runProps(r, st, {});
+    const rPr = runProps(r, st, { cs: this.charStyleOf(r) });
     const shown = this.shown.get(id) ?? '';
     if (o.kind === 'seq') {
       const name = /\s/.test(o.name) ? `"${o.name}"` : o.name;
@@ -570,7 +643,17 @@ class DocxWriter {
       return bm ? field(rPr, ` REF ${bm} \\h \\* CHARFORMAT `, shown) : run(rPr, shown);
     }
     // a citation: its numbers, which Word shows as they are (an ADDIN field is never worked out again by Word)
-    if (o.kind === 'cite') return field(rPr, ` ${CITE_FIELD} ${o.refs.map(xml).join(' ')} `, shown);
+    if (o.kind === 'cite') {
+      // for Zotero, Mendeley or EndNote: in their own form, so they go on managing it
+      const refs = o.refs.map((r) => this.t.references?.find((x) => x.id === r)).filter((r): r is Reference => !!r);
+      const app = this.t.citeManager;
+      if (app && refs.length) {
+        const out = writeCite(app, refs, o.live, shown);
+        if (out.tag) return `<w:sdt><w:sdtPr><w:tag w:val="${xml(out.tag)}"/><w:id w:val="${this.sdtId++}"/></w:sdtPr><w:sdtContent>${run(rPr, shown)}</w:sdtContent></w:sdt>`;
+        return field(rPr, xml(out.instr), shown, out.data);
+      }
+      return field(rPr, ` ${CITE_FIELD} ${o.refs.map(xml).join(' ')} `, shown);
+    }
     // a footnote's or endnote's number: Word's own reference to it (Word numbers it)
     if (o.kind === 'note') {
       const n = this.noteIds.get(id);
@@ -665,6 +748,8 @@ class DocxWriter {
     if (o.kind === 'picture' && o.chart) return this.chart(main, id, o, o.chart, rPr);
     const t = this.t;
     let blip: string, svgId: string | null = null, size: { w: number; h: number }, name: string, smiles: string | null = null;
+    // a picture's Picture Format settings, its cropping, and its original when the blip has effects worked in
+    let fx: PictureFx | undefined, crop: { l: number; t: number; r: number; b: number } | undefined, layer: string | null = null;
     // a diagram in the document's own text: Word gets its shapes as a group (the picture for older Words)
     let group: ((docPr: string) => string) | null = null;
     if (o.kind === 'drawing') {
@@ -693,27 +778,36 @@ class DocxWriter {
       const ext = MIME_EXT[mime];
       if (!ext) return '';
       size = shownSize({ w: o.w, h: o.h }, o.scale ?? 1, this.textW);
+      // what Word can't show live goes in worked in, with the original as the picture's layer
+      const baked = bakedPart(o.fx) && this.deps.bakePicture ? await this.deps.bakePicture(o).catch(() => null) : null;
       if (ext === 'svg') {
         // Word shows the SVG; older versions the PNG beside it
         if (!this.deps.svgToPng) return '';
         const k = 300 / 72;
         const png = await this.deps.svgToPng(new TextDecoder().decode(bytes), Math.max(1, Math.round(size.w * k)), Math.max(1, Math.round(size.h * k)));
         blip = this.media(main, png, 'png');
-        svgId = this.media(main, bytes, 'svg');
+        if (!baked) svgId = this.media(main, bytes, 'svg');
       } else blip = this.media(main, bytes, ext);
+      if (baked) { layer = blip; blip = this.media(main, baked, 'png'); }
+      fx = o.fx;
+      crop = o.crop;
+      if (fx?.bg?.tol !== undefined) (this.model.pictureTol ??= {})[id] = fx.bg.tol;
       name = `Picture ${id}`;
     } else return '';
     const cx = emu(size.w), cy = emu(size.h);
     const n = this.docPr++;
-    const ext = svgId ? `<a:extLst><a:ext uri="${SVG_EXT}"><asvg:svgBlip xmlns:asvg="${NS_SVG}" r:embed="${svgId}"/></a:ext></a:extLst>` : '';
+    const exts = (svgId ? `<a:ext uri="${SVG_EXT}"><asvg:svgBlip xmlns:asvg="${NS_SVG}" r:embed="${svgId}"/></a:ext>` : '') + (layer ? imgPropsXml(fx, layer, crop) : '');
+    const ext = blipEffectsXml(fx) + (exts ? `<a:extLst>${exts}</a:extLst>` : '');
+    const srcRect = crop && (crop.l || crop.t || crop.r || crop.b)
+      ? `<a:srcRect l="${Math.round(crop.l * 100000)}" t="${Math.round(crop.t * 100000)}" r="${Math.round(crop.r * 100000)}" b="${Math.round(crop.b * 100000)}"/>` : '';
     const descr = o.kind === 'drawing' ? ` descr="${xml(structureAltText(smiles))}"` : '';
     const look = lookOf(o);
     const docPr = `<wp:docPr id="${n}" name="${xml(name)}"${descr}/>`;
     const picture = `<w:drawing>` + this.placed(o, cx, cy,
       `${docPr}<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>` +
       `<a:graphic><a:graphicData uri="${PIC_NS}"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="${xml(name)}"/><pic:cNvPicPr/></pic:nvPicPr>` +
-      `<pic:blipFill><a:blip r:embed="${blip}">${ext}</a:blip><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
-      `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${lookXml(look)}</pic:spPr></pic:pic></a:graphicData></a:graphic>`) + '</w:drawing>';
+      `<pic:blipFill><a:blip r:embed="${blip}">${ext}</a:blip>${srcRect}<a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
+      `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>${pictureGeomXml(fx, '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>')}${lookXml(look)}</pic:spPr></pic:pic></a:graphicData></a:graphic>`) + '</w:drawing>';
     const r = rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
     if (group) return `<w:r>${r}<mc:AlternateContent><mc:Choice Requires="wpg"><w:drawing>${this.placed(o, cx, cy, group(docPr))}</w:drawing></mc:Choice><mc:Fallback>${picture}</mc:Fallback></mc:AlternateContent></w:r>`;
     return `<w:r>${r}${picture}</w:r>`;
@@ -795,11 +889,12 @@ class DocxWriter {
       : tab.lines === 'acs' ? `<w:top ${rule}/><w:left ${none}/><w:bottom ${rule}/><w:right ${none}/><w:insideH ${none}/><w:insideV ${none}/>`
         : `<w:top ${none}/><w:left ${none}/><w:bottom ${none}/><w:right ${none}/><w:insideH ${none}/><w:insideV ${none}/>`;
     const width = tab.cols.reduce((a, b) => a + b, 0);
-    const padX = twips(CELL_PAD.x), padY = twips(CELL_PAD.y);
-    const tblPr = `<w:tblPr><w:tblW w:w="${twips(width)}" w:type="dxa"/><w:jc w:val="${align === 'right' ? 'right' : align === 'center' ? 'center' : 'left'}"/>` +
-      `<w:tblBorders>${borders}</w:tblBorders><w:tblLayout w:type="fixed"/>` +
-      `<w:tblCellMar><w:top w:w="${padY}" w:type="dxa"/><w:left w:w="${padX}" w:type="dxa"/><w:bottom w:w="${padY}" w:type="dxa"/><w:right w:w="${padX}" w:type="dxa"/></w:tblCellMar>` +
-      `<w:tblLook w:val="0000" w:firstRow="0" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="1" w:noVBand="1"/></w:tblPr>`;
+    // a table style: Word's own (written in styles.xml), with the parts it picks out; else the lines themselves
+    const styled = !!tab.style && !!(this.t.tableStyles?.[tab.style] ?? builtInStyle(tab.style));
+    const tblPr = `<w:tblPr>${styled ? `<w:tblStyle w:val="${tab.style}"/>` : ''}<w:tblW w:w="${twips(width)}" w:type="dxa"/><w:jc w:val="${align === 'right' ? 'right' : align === 'center' ? 'center' : 'left'}"/>` +
+      `${styled ? '' : `<w:tblBorders>${borders}</w:tblBorders>`}<w:tblLayout w:type="fixed"/>` +
+      marginsXml('tblCellMar', tab.pad ?? DEFAULT_MARGINS) +
+      `${styled ? tableLookXml(tab) : '<w:tblLook w:val="0000" w:firstRow="0" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="1" w:noVBand="1"/>'}</w:tblPr>`;
     const gridXml = `<w:tblGrid>${tab.cols.map((w) => `<w:gridCol w:w="${twips(w)}"/>`).join('')}</w:tblGrid>`;
     const rows: string[] = [];
     for (let r = 0; r < tab.rows.length; r++) {
@@ -818,8 +913,15 @@ class DocxWriter {
         if (span > 1) tcPr.push(`<w:gridSpan w:val="${span}"/>`);
         if (under) tcPr.push('<w:vMerge/>');
         else if (rowSpanOf(tab, r, c) > 1) tcPr.push('<w:vMerge w:val="restart"/>');
-        if (tab.lines === 'acs' && lastHead) tcPr.push(`<w:tcBorders><w:bottom ${grid}/></w:tcBorders>`);
+        // the cell's own lines (with the ACS rule under the headings, when the table has no style)
+        const lines: CellBorders = { ...(!styled && tab.lines === 'acs' && lastHead ? { bottom: { style: 'single', w: GRID_LINE, color: '#000000' } } : {}), ...cell.borders };
+        // a cell merged down: its top line on its first row, its bottom line on its last
+        const down = rowSpanOf(tab, own.r, own.c);
+        if (under) delete lines.top;
+        if (own.r + down - 1 > r) delete lines.bottom;
+        tcPr.push(bordersXml('tcBorders', lines));
         if (cell.fill) tcPr.push(`<w:shd w:val="clear" w:color="auto" w:fill="${hex6(cell.fill)}"/>`);
+        if (cell.pad) tcPr.push(marginsXml('tcMar', cell.pad));
         if (cell.valign) tcPr.push(`<w:vAlign w:val="${cell.valign}"/>`);
         if (under) { cells.push(`<w:tc><w:tcPr>${tcPr.join('')}</w:tcPr><w:p/></w:tc>`); continue; }
         // the cell's paragraphs, set as the text is, lined up as the cell is; a table in the cell as Word's table in it
@@ -854,6 +956,8 @@ class DocxWriter {
 
   /** Header and footer parts written so far (each section with its own gets its own). */
   private hfParts = { header: 0, footer: 0 };
+  /** Watermarks written so far (each shape needs its own id). */
+  private watermarks = 0;
 
   /**
    * A section's properties: how it starts, its paper, margins, columns, page numbering and line
@@ -868,7 +972,7 @@ class DocxWriter {
     const refs: string[] = [];
     const add = (kind: 'header' | 'footer', type: 'default' | 'first', numbered: boolean) => {
       if (sec.linked) return;
-      const xmlText = this.headerFooter(kind, numbered, hf, fullW);
+      const xmlText = this.headerFooter(kind, numbered, hf, fullW, pg);
       if (!xmlText) return;
       const name = `${kind}${++this.hfParts[kind]}.xml`;
       this.pkg.add(`word/${name}`, xmlText, kind === 'header' ? DOCX_CT.header : DOCX_CT.footer);
@@ -895,16 +999,18 @@ class DocxWriter {
     const start = sec.restart !== undefined ? ` w:start="${Math.round(sec.restart)}"` : '';
     return `<w:sectPr>${refs.join('')}<w:pgSz w:w="${twips(pg.w)}" w:h="${twips(pg.h)}"${land ? ' w:orient="landscape"' : ''}/>` +
       `<w:pgMar w:top="${twips(pg.top)}" w:right="${twips(pg.right)}" w:bottom="${twips(pg.bottom)}" w:left="${twips(pg.left)}" w:header="${twips(pg.header)}" w:footer="${twips(pg.footer)}" w:gutter="0"/>` +
-      `${lines}${numFmt || start ? `<w:pgNumType${numFmt}${start}/>` : ''}${colsXml(pg)}${titlePg ? '<w:titlePg/>' : ''}<w:docGrid w:linePitch="360"/></w:sectPr>`;
+      `${t.pageBorder ? pageBordersXml(t.pageBorder) : ''}${lines}${numFmt || start ? `<w:pgNumType${numFmt}${start}/>` : ''}${colsXml(pg)}${titlePg ? '<w:titlePg/>' : ''}<w:docGrid w:linePitch="360"/></w:sectPr>`;
   }
 
   /** A header or footer part: its left, centre and right text on one line (with tab stops), and the page number. Null when empty. */
-  private headerFooter(kind: 'header' | 'footer', numbered: boolean, hf: HeaderFooter, fullW: number): string | null {
+  private headerFooter(kind: 'header' | 'footer', numbered: boolean, hf: HeaderFooter, fullW: number, pg: PageSetup): string | null {
     const t = this.t;
     const zones = hf[kind];
     const place = hf.numbers === 'none' || !numbered ? null : hf.numbers;
     const at = place && place.startsWith(kind) ? ['left', 'center', 'right'].indexOf(place.split('-')[1]) : -1;
-    if (!zones.some((z) => z) && at < 0) return null;
+    // a watermark is Word's: a shape in the header, behind the text
+    const wm = kind === 'header' && t.watermark?.text ? watermarkXml(t.watermark, pg, this.watermarks++) : '';
+    if (!zones.some((z) => z) && at < 0 && !wm) return null;
     const normal = styleOf(t, undefined);
     const size = Math.min(10, normal.size);
     const rPr = `<w:rFonts w:ascii="${xml(normal.font)}" w:hAnsi="${xml(normal.font)}" w:cs="${xml(normal.font)}"/><w:sz w:val="${half(size)}"/><w:szCs w:val="${half(size)}"/>`;
@@ -923,7 +1029,8 @@ class DocxWriter {
     while (parts.length && parts[parts.length - 1].includes('<w:tab/>')) parts.pop();
     const pPr = `<w:pPr><w:tabs><w:tab w:val="center" w:pos="${twips(fullW / 2)}"/><w:tab w:val="right" w:pos="${twips(fullW)}"/></w:tabs>` +
       `<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/><w:ind w:left="0" w:firstLine="0"/><w:jc w:val="left"/></w:pPr>`;
-    return `${HEAD}<w:${kind === 'header' ? 'hdr' : 'ftr'} xmlns:w="${W_NS}" xmlns:r="${NS.r}"><w:p>${pPr}${parts.join('')}</w:p></w:${kind === 'header' ? 'hdr' : 'ftr'}>`;
+    const vml = wm ? ` xmlns:v="${V_NS}" xmlns:o="${O_NS}" xmlns:w10="${W10_NS}"` : '';
+    return `${HEAD}<w:${kind === 'header' ? 'hdr' : 'ftr'} xmlns:w="${W_NS}" xmlns:r="${NS.r}"${vml}><w:p>${pPr}${wm}${parts.join('')}</w:p></w:${kind === 'header' ? 'hdr' : 'ftr'}>`;
   }
 
   // ---------------------------------------------------------------- styles and lists
@@ -959,8 +1066,17 @@ class DocxWriter {
       }
     }
     out.push(`<w:style w:type="character" w:default="1" w:styleId="DefaultParagraphFont"><w:name w:val="Default Paragraph Font"/><w:uiPriority w:val="1"/><w:semiHidden/><w:unhideWhenUsed/></w:style>`);
+    // the character styles (Emphasis, Strong, Compound Number and the person's own)
+    for (const cs of Object.values(this.charStyles)) out.push(charStyleXml(cs));
     // formulas look like any other text in Word: the style only marks them, so they stay formulas when opened here
     out.push(`<w:style w:type="character" w:customStyle="1" w:styleId="${FORMULA_STYLE}"><w:name w:val="Chemical Formula"/><w:basedOn w:val="DefaultParagraphFont"/><w:uiPriority w:val="1"/></w:style>`);
+    // the table styles the tables use, as Word's own (so Word draws them as they are drawn here)
+    const tstyles = new Set<string>();
+    for (const o of Object.values(t.objects)) if (o.kind === 'table' && o.table.style) tstyles.add(o.table.style);
+    for (const id of tstyles) {
+      const def = t.tableStyles?.[id] ?? builtInStyle(id);
+      if (def) out.push(tableStyleXml(def));
+    }
     out.push(`<w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:uiPriority w:val="99"/><w:semiHidden/><w:unhideWhenUsed/>` +
       `<w:tblPr><w:tblInd w:w="0" w:type="dxa"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>`);
     out.push(`<w:style w:type="numbering" w:default="1" w:styleId="NoList"><w:name w:val="No List"/><w:uiPriority w:val="99"/><w:semiHidden/><w:unhideWhenUsed/></w:style>`);
@@ -968,24 +1084,30 @@ class DocxWriter {
     return out.join('');
   }
 
-  /** Bullets and numbers at nine levels; each numbered list its own Word list, so each starts at 1. */
+  /**
+   * Bullets and numbers at nine levels: each kind of list (a bullet of the library, a multilevel
+   * scheme) Word's list levels of its own, and each numbered list its own Word list, so each starts at 1.
+   */
   private numbering(): string {
     const normal = styleOf(this.t, undefined);
     const em = normal.size;
-    const lvls = (bullet: boolean) => Array.from({ length: 9 }, (_, i) => {
+    const lvls = (key: string) => Array.from({ length: 9 }, (_, i) => {
+      const bullet = key.startsWith('b');
       const { left, hang } = listIndent({ list: bullet ? 'bullet' : 'number', level: i }, em);
-      const fmt = bullet ? 'bullet' : ['decimal', 'lowerLetter', 'lowerRoman'][i % 3];
-      const text = bullet ? ['•', '–', '•', '–', '»'][i % 5] : `%${i + 1}.`;
-      return `<w:lvl w:ilvl="${i}"><w:start w:val="1"/><w:numFmt w:val="${fmt}"/><w:lvlText w:val="${text}"/><w:lvlJc w:val="left"/>` +
-        `<w:pPr><w:ind w:left="${twips(left)}" w:hanging="${twips(hang)}"/></w:pPr><w:rPr>${fontsXml(normal.font)}<w:b w:val="0"/><w:i w:val="0"/></w:rPr></w:lvl>`;
+      const sc = schemeOf(key.slice(1));
+      const fmt = bullet ? 'bullet' : sc.levels[i].fmt;
+      const text = bullet ? key.slice(1) || BULLETS[i % BULLETS.length] : sc.levels[i].text;
+      // bullets that ordinary fonts may lack come from a symbol font
+      const font = bullet && /[✓➢★◆]/.test(text) ? 'Segoe UI Symbol' : normal.font;
+      return `<w:lvl w:ilvl="${i}"><w:start w:val="1"/><w:numFmt w:val="${fmt}"/><w:lvlText w:val="${xml(text)}"/><w:lvlJc w:val="left"/>` +
+        `<w:pPr><w:ind w:left="${twips(left)}" w:hanging="${twips(hang)}"/></w:pPr><w:rPr>${fontsXml(font)}<w:b w:val="0"/><w:i w:val="0"/></w:rPr></w:lvl>`;
     }).join('');
-    const out = [HEAD, `<w:numbering xmlns:w="${W_NS}">`,
-      `<w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="hybridMultilevel"/>${lvls(true)}</w:abstractNum>`,
-      `<w:abstractNum w:abstractNumId="1"><w:multiLevelType w:val="hybridMultilevel"/>${lvls(false)}</w:abstractNum>`,
-      `<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>`];
-    for (let k = 0; k <= this.numberedLists; k++) {
-      out.push(`<w:num w:numId="${k + 2}"><w:abstractNumId w:val="1"/>${Array.from({ length: 9 }, (_, i) => `<w:lvlOverride w:ilvl="${i}"><w:startOverride w:val="1"/></w:lvlOverride>`).join('')}</w:num>`);
-    }
+    const out = [HEAD, `<w:numbering xmlns:w="${W_NS}">`];
+    for (const [key, abs] of this.abstractNums) out.push(`<w:abstractNum w:abstractNumId="${abs}"><w:multiLevelType w:val="${key === 'b' || key === 'n' ? 'hybridMultilevel' : 'multilevel'}"/>${lvls(key)}</w:abstractNum>`);
+    this.nums.forEach((n, k) => {
+      const restart = n.restart ? Array.from({ length: 9 }, (_, i) => `<w:lvlOverride w:ilvl="${i}"><w:startOverride w:val="1"/></w:lvlOverride>`).join('') : '';
+      out.push(`<w:num w:numId="${k + 1}"><w:abstractNumId w:val="${n.abs}"/>${restart}</w:num>`);
+    });
     out.push('</w:numbering>');
     return out.join('');
   }
@@ -1048,21 +1170,32 @@ export function highlightName(color: string): string | null {
   return null;
 }
 
-/** A run's formatting where it differs from its paragraph's style. */
-function runProps(r: TextRun, st: NamedStyle, x: { formula?: boolean; pos?: 'base' | 'sub' | 'sup' }): string {
+/**
+ * A run's formatting where it differs from its paragraph's style (and its character style, when
+ * it is in one: Word then gives it that style, so changing the style in Word changes it too).
+ */
+function runProps(r: TextRun, st: NamedStyle, x: { formula?: boolean; pos?: 'base' | 'sub' | 'sup'; cs?: CharStyle }): string {
   const out: string[] = [];
+  // (a run has one character style in Word: a formula's mark wins)
+  const cs = x.formula ? undefined : x.cs;
   if (x.formula) out.push(`<w:rStyle w:val="${FORMULA_STYLE}"/>`);
+  else if (cs) out.push(`<w:rStyle w:val="${xml(cs.id)}"/>`);
+  if (cs) st = { ...st, font: cs.font ?? st.font, size: cs.size ?? st.size, bold: cs.bold ?? st.bold, italic: cs.italic ?? st.italic, color: cs.color ?? st.color };
   const font = r.font ?? st.font;
   if (font !== st.font) out.push(fontsXml(font));
   if (!!r.bold !== st.bold) out.push(r.bold ? '<w:b/><w:bCs/>' : '<w:b w:val="0"/><w:bCs w:val="0"/>');
   if (!!r.italic !== st.italic) out.push(r.italic ? '<w:i/><w:iCs/>' : '<w:i w:val="0"/><w:iCs w:val="0"/>');
+  // capitals and strikethrough (on, or off where the character style has them)
+  if (!!r.allCaps !== !!cs?.allCaps) out.push(r.allCaps ? '<w:caps/>' : '<w:caps w:val="0"/>');
+  if (!!r.smallCaps !== !!cs?.smallCaps) out.push(r.smallCaps ? '<w:smallCaps/>' : '<w:smallCaps w:val="0"/>');
+  if (!!r.strike !== !!cs?.strike) out.push(r.strike ? '<w:strike/>' : '<w:strike w:val="0"/>');
   const color = r.color ?? st.color;
   if ((color ?? '') !== (st.color ?? '')) out.push(`<w:color w:val="${color ? hex6(color) : 'auto'}"/>`);
   const size = r.size ?? st.size;
   if (size !== st.size) out.push(`<w:sz w:val="${half(size)}"/><w:szCs w:val="${half(size)}"/>`);
   const hl = r.highlight ? highlightName(r.highlight) : null;
   if (hl) out.push(`<w:highlight w:val="${hl}"/>`);
-  if (r.underline) out.push('<w:u w:val="single"/>');
+  if (!!r.underline !== !!cs?.underline) out.push(r.underline ? '<w:u w:val="single"/>' : '<w:u w:val="none"/>');
   // any other colour behind the text goes as shading
   if (r.highlight && !hl) out.push(`<w:shd w:val="clear" w:color="auto" w:fill="${hex6(r.highlight)}"/>`);
   const pos = x.pos ?? (r.sub ? 'sub' : r.sup ? 'sup' : 'base');
@@ -1091,10 +1224,24 @@ function tableRun(r: TextRun, font: string, size: number): string {
  * font as its result: when Word updates it (F9, or printing) the result keeps that formatting
  * (CHARFORMAT), so a bold caption number stays bold and a reference doesn't take on the caption's bold.
  */
-function field(rPr: string, instr: string, result: string): string {
+function field(rPr: string, instr: string, result: string, data?: string): string {
   const pr = rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
-  return `<w:r>${pr}<w:fldChar w:fldCharType="begin"/></w:r><w:r>${pr}<w:instrText xml:space="preserve">${instr}</w:instrText></w:r>` +
-    `<w:r>${pr}<w:fldChar w:fldCharType="separate"/></w:r>${run(rPr, result)}<w:r>${pr}<w:fldChar w:fldCharType="end"/></w:r>`;
+  return fieldStart(rPr, instr, data) + `${run(rPr, result)}<w:r>${pr}<w:fldChar w:fldCharType="end"/></w:r>`;
+}
+
+/**
+ * A field's start: its instruction (escaped already) up to its result. With `data` (EndNote's
+ * citation, in base64) the data rides on the field, and on a field inside the instruction as
+ * EndNote writes it (EN.CITE.DATA).
+ */
+function fieldStart(rPr: string, instr: string, data?: string): string {
+  const pr = rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
+  const begin = data ? `<w:fldChar w:fldCharType="begin"><w:fldData xml:space="preserve">${data}</w:fldData></w:fldChar>` : '<w:fldChar w:fldCharType="begin"/>';
+  const inner = data ? `<w:r>${pr}${begin}</w:r><w:r>${pr}<w:instrText xml:space="preserve"> ADDIN EN.CITE.DATA </w:instrText></w:r><w:r>${pr}<w:fldChar w:fldCharType="end"/></w:r>` : '';
+  // a long instruction (a reference manager's) in pieces, as Word splits one (never inside an escape)
+  const pieces = instr.match(/(?:&[a-z#0-9]+;|[^&]){1,255}/gi) ?? [instr];
+  const text = pieces.map((p) => `<w:r>${pr}<w:instrText xml:space="preserve">${p}</w:instrText></w:r>`).join('');
+  return `<w:r>${pr}${begin}</w:r>${text}${inner}<w:r>${pr}<w:fldChar w:fldCharType="separate"/></w:r>`;
 }
 
 /** A run of text (tabs as Word's tabs). */
@@ -1102,6 +1249,55 @@ function run(rPr: string, text: string): string {
   if (!text) return '';
   const body = text.split('\t').map((s, i) => (i > 0 ? '<w:tab/>' : '') + (s ? `<w:t xml:space="preserve">${xml(s)}</w:t>` : '')).join('');
   return `<w:r>${rPr ? `<w:rPr>${rPr}</w:rPr>` : ''}${body}</w:r>`;
+}
+
+const V_NS = 'urn:schemas-microsoft-com:vml';
+const O_NS = 'urn:schemas-microsoft-com:office:office';
+const W10_NS = 'urn:schemas-microsoft-com:office:word';
+/** The prefix Word's own watermarks' shapes are named with (Design > Watermark finds them by it). */
+export const WATERMARK_SHAPE = 'PowerPlusWaterMarkObject';
+const WM_MEASURE = documentMeasure((s, size, _f, style) => arialWidth(s, size, /bold/.test(style)));
+
+/**
+ * A text watermark as Word makes one: a WordArt shape (VML's text path) in the header, in the
+ * middle of the margins, behind the text, turned 315° when diagonal, filled half see-through.
+ */
+export function watermarkXml(w: Watermark, pg: PageSetup, n: number): string {
+  const at = watermarkPlace(w, { x: 0, top: 0, w: pg.w, h: pg.h, setup: pg }, WM_MEASURE);
+  const r = (v: number) => Math.round(v * 100) / 100;
+  const style = `position:absolute;margin-left:0;margin-top:0;width:${r(at.width)}pt;height:${r(at.size)}pt;${at.angle ? 'rotation:315;' : ''}z-index:-251654144;` +
+    'mso-wrap-edited:f;mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical:center;mso-position-vertical-relative:margin';
+  const shapetype = n === 0 ? '<v:shapetype id="_x0000_t136" coordsize="21600,21600" o:spt="136" adj="10800" path="m@7,l@8,m@5,21600l@6,21600e"><v:formulas>' +
+    ['sum #0 0 10800', 'prod #0 2 1', 'sum 21600 0 @1', 'sum 0 0 @2', 'sum 21600 0 @3', 'if @0 @3 0', 'if @0 21600 @1', 'if @0 0 @2', 'if @0 @4 21600', 'mid @5 @6', 'mid @8 @5', 'mid @7 @8', 'mid @6 @7', 'sum @6 0 @5'].map((e) => `<v:f eqn="${e}"/>`).join('') +
+    '</v:formulas><v:path textpathok="t" o:connecttype="custom" o:connectlocs="@9,0;@10,10800;@11,21600;@12,10800" o:connectangles="270,180,90,0"/><v:textpath on="t" fitshape="t"/><v:handles><v:h position="#0,bottomRight" xrange="6629,14971"/></v:handles><o:lock v:ext="edit" text="t" shapetype="t"/></v:shapetype>' : '';
+  return `<w:r><w:rPr><w:noProof/></w:rPr><w:pict>${shapetype}<v:shape id="${WATERMARK_SHAPE}${100000001 + n}" o:spid="_x0000_s${2049 + n}" type="#_x0000_t136" style="${style}" o:allowincell="f" fillcolor="#${hex6(w.color)}" stroked="f">` +
+    `${w.faded ? '<v:fill opacity=".5"/>' : ''}<v:textpath style="font-family:&quot;${xml(w.font)}&quot;;font-size:1pt;font-weight:bold" string="${xml(w.text)}"/><w10:wrap anchorx="margin" anchory="margin"/></v:shape></w:pict></w:r>`;
+}
+
+/** Word's page border (a box, the same on every side), in a section's properties. */
+function pageBordersXml(b: PageBorder): string {
+  const val = b.style === 'thick' ? 'thickThinSmallGap' : b.style;
+  // widths in eighths of a point (2 to 96); the distance in points (0 to 31)
+  const sz = Math.max(2, Math.min(96, Math.round(b.width * 8)));
+  const side = (s: string) => `<w:${s} w:val="${val}" w:sz="${sz}" w:space="${Math.max(0, Math.min(31, Math.round(b.space)))}" w:color="${hex6(b.color)}"/>`;
+  return `<w:pgBorders w:offsetFrom="${b.from}">${['top', 'left', 'bottom', 'right'].map(side).join('')}</w:pgBorders>`;
+}
+
+/** A character style: only what it sets. */
+function charStyleXml(s: CharStyle): string {
+  const own = WORD_CHAR[s.id];
+  const rPr: string[] = [];
+  if (s.font) rPr.push(fontsXml(s.font));
+  if (s.bold !== undefined) rPr.push(s.bold ? '<w:b/><w:bCs/>' : '<w:b w:val="0"/><w:bCs w:val="0"/>');
+  if (s.italic !== undefined) rPr.push(s.italic ? '<w:i/><w:iCs/>' : '<w:i w:val="0"/><w:iCs w:val="0"/>');
+  if (s.allCaps) rPr.push('<w:caps/>');
+  if (s.smallCaps) rPr.push('<w:smallCaps/>');
+  if (s.strike) rPr.push('<w:strike/>');
+  if (s.color) rPr.push(`<w:color w:val="${hex6(s.color)}"/>`);
+  if (s.size) rPr.push(`<w:sz w:val="${half(s.size)}"/><w:szCs w:val="${half(s.size)}"/>`);
+  if (s.underline) rPr.push('<w:u w:val="single"/>');
+  return `<w:style w:type="character"${own ? '' : ' w:customStyle="1"'} w:styleId="${xml(s.id)}"><w:name w:val="${xml(own?.[0] ?? s.name)}"/><w:basedOn w:val="DefaultParagraphFont"/>` +
+    `<w:uiPriority w:val="${own?.[1] ?? 29}"/><w:qFormat/>${rPr.length ? `<w:rPr>${rPr.join('')}</w:rPr>` : ''}</w:style>`;
 }
 
 /** A named style, with all its settings written out. */

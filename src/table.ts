@@ -11,6 +11,7 @@ import type { Justify, TableCell, TableData, TextRun } from './model';
 import { layoutText, type Measure, type TextLayout } from './text/layout';
 import { drawLayout } from './text/draw';
 import type { Rect, Vec } from './geom';
+import { slideCellLook, styledRuns, type CellLine, type Side } from './deck/table-styles';
 
 /** Some text of the table and where its origin (the left end of the first baseline) is. */
 export interface PlacedText { lay: TextLayout; x: number; y: number }
@@ -139,6 +140,8 @@ export function layoutTable(t: TableData, defaultSize: number, measure: Measure)
   const ys = [y];
   const cells: (PlacedText | null)[][] = [];
   const figs: TableLayout['figs'] = [];
+  // cells merged down over several rows: the height they need, by their last row (rows grow to fit them below)
+  const tall: { r: number; last: number; need: number }[] = [];
   t.rows.forEach((row, r) => {
     const out: (PlacedText | null)[] = [];
     const above: number[] = [];
@@ -146,9 +149,11 @@ export function layoutTable(t: TableData, defaultSize: number, measure: Measure)
     for (let c = 0; c < t.cols.length; c++) {
       if (isCovered(t, r, c)) { out.push(null); above.push(0); continue; }
       const cell = row[c] ?? { runs: [] };
-      const span = spanOf(t, r, c);
+      const span = spanOf(t, r, c), down = rowSpanOf(t, r, c);
       const wrap = Math.max(1, xs[c + span] - xs[c] - 2 * padX);
-      const lay = layoutText({ runs: cell.runs, paras: cell.paras, justify: cellAlign(t, r, c), wrap }, size, measure);
+      // a table style colours (and bolds) the text of its header, total row and marked columns
+      const runs = styledRuns(cell.runs, slideCellLook(t, r, c));
+      const lay = layoutText({ runs, paras: cell.paras, justify: cellAlign(t, r, c), wrap }, size, measure);
       out.push({ lay, x: xs[c] + padX, y: 0 });
       // a structure in the cell sits at its top, with any text under it
       const fig = cell.fig;
@@ -156,12 +161,16 @@ export function layoutTable(t: TableData, defaultSize: number, measure: Measure)
       const top = fig ? fig.h + (hasText ? padY : 0) : 0;
       above.push(top);
       if (fig) figs.push({ r, c, box: { x1: (xs[c] + xs[c + span]) / 2 - fig.w / 2, y1: y + padY, x2: (xs[c] + xs[c + span]) / 2 + fig.w / 2, y2: y + padY + fig.h } });
-      h = Math.max(h, top + (hasText || !fig ? lay.box.y2 - lay.box.y1 : 0));
+      const need = top + (hasText || !fig ? lay.box.y2 - lay.box.y1 : 0);
+      if (down > 1) tall.push({ r, last: r + down - 1, need: need + 2 * padY });
+      else h = Math.max(h, need);
     }
     // every cell's first line starts at the top of its row (under its structure, if it has one)
     out.forEach((p, c) => { if (p) p.y = y + padY + above[c] - p.lay.box.y1; });
     cells.push(out);
     y += h + 2 * padY;
+    // the last row a merged cell covers grows if the rows together are too short for it
+    for (const m of tall) if (m.last === r && y - ys[m.r] < m.need) y = ys[m.r] + m.need;
     ys.push(y);
   });
   let notes: PlacedText | null = null;
@@ -183,10 +192,22 @@ export function tableRules(t: TableData, lay: TableLayout): { x1: number; y1: nu
   const h = (y: number, x1 = left, x2 = right) => out.push({ x1, y1: y, x2, y2: y });
   if (t.lines === 'none' || !n) return out;
   if (t.lines === 'grid') {
-    for (let r = 0; r <= n; r++) h(ys[r]);
+    const m = t.cols.length;
+    const same = (a: { r: number; c: number }, b: { r: number; c: number }) => a.r === b.r && a.c === b.c;
+    // no line runs through a joined cell, across or down
+    for (let r = 0; r <= n; r++) {
+      if (r === 0 || r === n) { h(ys[r]); continue; }
+      // a full rule, or pieces of it either side of cells merged down across it
+      let from: number | null = null;
+      for (let c = 0; c <= m; c++) {
+        const open = c < m && !same(coveringCell(t, r - 1, c), coveringCell(t, r, c));
+        if (open && from === null) from = c;
+        if (!open && from !== null) { h(ys[r], xs[from], xs[c]); from = null; }
+      }
+    }
     for (let r = 0; r < n; r++) {
-      for (let c = 0; c <= t.cols.length; c++) {
-        if (c > 0 && c < t.cols.length && isCovered(t, r, c)) continue;
+      for (let c = 0; c <= m; c++) {
+        if (c > 0 && c < m && same(coveringCell(t, r, c - 1), coveringCell(t, r, c))) continue;
         out.push({ x1: xs[c], y1: ys[r], x2: xs[c], y2: ys[r + 1] });
       }
     }
@@ -214,16 +235,37 @@ export function tableRules(t: TableData, lay: TableLayout): { x1: number; y1: nu
  */
 export function drawTable(ctx: CanvasRenderingContext2D, t: TableData, lay: TableLayout, ox: number, oy: number, lw: number, color: string | undefined, hide?: TablePart | null): void {
   ctx.save();
-  ctx.strokeStyle = color ?? '#000';
-  ctx.lineWidth = lw;
+  // cell colours: the table style's, and any cell's own over it
+  const styled = !!slideCellLook(t, 0, 0);
+  t.rows.forEach((row, r) => row.forEach((cell, c) => {
+    if (isCovered(t, r, c)) return;
+    const fill = cell.fill ?? slideCellLook(t, r, c)?.fill;
+    if (!fill) return;
+    const b = cellRect(t, lay, r, c);
+    ctx.fillStyle = fill;
+    ctx.fillRect(ox + b.x1, oy + b.y1, b.x2 - b.x1, b.y2 - b.y1);
+  }));
   ctx.lineCap = 'butt';
   ctx.setLineDash([]);
-  ctx.beginPath();
-  for (const l of tableRules(t, lay)) {
-    ctx.moveTo(ox + l.x1, oy + l.y1);
-    ctx.lineTo(ox + l.x2, oy + l.y2);
+  if (styled) {
+    for (const l of styleRules(t, lay)) {
+      ctx.strokeStyle = l.color;
+      ctx.lineWidth = l.w;
+      ctx.beginPath();
+      ctx.moveTo(ox + l.x1, oy + l.y1);
+      ctx.lineTo(ox + l.x2, oy + l.y2);
+      ctx.stroke();
+    }
+  } else {
+    ctx.strokeStyle = color ?? '#000';
+    ctx.lineWidth = lw;
+    ctx.beginPath();
+    for (const l of tableRules(t, lay)) {
+      ctx.moveTo(ox + l.x1, oy + l.y1);
+      ctx.lineTo(ox + l.x2, oy + l.y2);
+    }
+    ctx.stroke();
   }
-  ctx.stroke();
   ctx.restore();
   const same = (p: TablePart) => hide && (typeof hide === 'string' ? hide === p : typeof p !== 'string' && hide.r === p.r && hide.c === p.c);
   if (lay.title && !same('title')) drawLayout(ctx, lay.title.lay, ox + lay.title.x, oy + lay.title.y);
@@ -231,6 +273,31 @@ export function drawTable(ctx: CanvasRenderingContext2D, t: TableData, lay: Tabl
     if (p && !same({ r, c })) drawLayout(ctx, p.lay, ox + p.x, oy + p.y);
   }));
   if (lay.notes && !same('notes')) drawLayout(ctx, lay.notes.lay, ox + lay.notes.x, oy + lay.notes.y);
+}
+
+/**
+ * The lines a table style draws, as lines in layout points with their widths and colours: each
+ * cell's own sides, the heavier (later) of two cells' lines where they meet.
+ */
+export function styleRules(t: TableData, lay: TableLayout): (CellLine & { x1: number; y1: number; x2: number; y2: number })[] {
+  const out = new Map<string, CellLine & { x1: number; y1: number; x2: number; y2: number }>();
+  t.rows.forEach((row, r) => row.forEach((_, c) => {
+    if (isCovered(t, r, c)) return;
+    const look = slideCellLook(t, r, c);
+    if (!look) return;
+    const b = cellRect(t, lay, r, c);
+    const ends: Record<Side, [number, number, number, number]> = {
+      top: [b.x1, b.y1, b.x2, b.y1], bottom: [b.x1, b.y2, b.x2, b.y2], left: [b.x1, b.y1, b.x1, b.y2], right: [b.x2, b.y1, b.x2, b.y2],
+    };
+    for (const side of Object.keys(look.lines) as Side[]) {
+      const l = look.lines[side]!;
+      const [x1, y1, x2, y2] = ends[side];
+      const key = [x1, y1, x2, y2].map((v) => v.toFixed(2)).join(',');
+      const was = out.get(key);
+      if (!was || l.w >= was.w) out.set(key, { ...l, x1, y1, x2, y2 });
+    }
+  }));
+  return [...out.values()];
 }
 
 /** Which part of the table a point (in layout points) is on, if any. */
@@ -252,7 +319,7 @@ function colAt(xs: number[], x: number): number {
 
 /** The area of a cell (with any columns it spans), in layout points. */
 export function cellRect(t: TableData, lay: TableLayout, r: number, c: number): Rect {
-  return { x1: lay.xs[c], y1: lay.ys[r], x2: lay.xs[c + spanOf(t, r, c)], y2: lay.ys[r + 1] };
+  return { x1: lay.xs[c], y1: lay.ys[r], x2: lay.xs[c + spanOf(t, r, c)], y2: lay.ys[r + rowSpanOf(t, r, c)] };
 }
 
 /** The runs of a part of the table. */

@@ -8,14 +8,14 @@ This page covers Slides mode: building a deck, the slide master and templates, c
 
 Click **+ Slides** at the end of the tab strip, or choose **File ▸ New Slides**. While a deck is showing, Ctrl+N starts another one. Each open file has its own tab: Ctrl+Tab moves between tabs and Ctrl+W closes one.
 
-The Slides ribbon has PowerPoint's tabs: **Home** (slides, font, paragraph), **Insert** (pictures, text boxes, tables, shapes), **Design** (size, templates, slide master, drawing style, format background), **Transitions**, **Animations** and **Slide Show**. The **Slide** menu at the top holds the same commands.
+The Slides ribbon has PowerPoint's tabs: **Home** (slides, sections, font, paragraph), **Insert** (pictures, text boxes, tables, shapes), **Design** (size, templates, slide master, layouts, drawing style, format background), **Transitions**, **Animations**, **Slide Show**, **Review** and **View** (Normal, Slide Sorter, Slide Master, Edit Layouts, Themes). The **Slide** menu at the top holds the same commands.
 
 ## Slides and layouts
 
 - **New slide:** Ctrl+M, **Home** tab ▸ **New Slide**, or **+ New slide** under the slide list. The new slide goes after the current one.
-- **Layout:** pick one from **Layout** on the **Home** tab or the **Slide** menu: Title Slide, Title and Content, Two Content, Title Only or Blank.
+- **Layout:** pick one from **Layout** on the **Home** tab or **Format ▸ Slide Layout**: Title Slide, Title and Content, Two Content, Title Only, Blank, or a layout of your own (see [Layouts](#layouts)).
 - **Text:** click "Click to add title" (or any placeholder) and type. Lists and the chemistry typing helpers work as in any text box, so CH2Cl2 gets its subscripts.
-- **Slide size:** **Design** tab ▸ **Size**, or **Format ▸ Slide Size ▸ Widescreen (16:9)** / **Standard (4:3)**.
+- **Slide size:** **Design** tab ▸ **Size**, or **Format ▸ Slide Size ▸ Widescreen (16:9)** / **Standard (4:3)** / **Custom Slide Size…** (see [Slide size](#slide-size)).
 - **Speaker notes:** type them in the box under the slide. A slide with notes shows a small mark in the slide list.
 
 ### The slide list
@@ -32,6 +32,23 @@ The list down the left shows every slide.
 | Hide a slide from the show | **Home** tab ▸ **Hide**, **Slide Show** tab ▸ **Hide Slide**, or right-click ▸ **Hide Slide** |
 | See every slide command | Right-click in the list |
 | Go to the next or previous slide | Page Down / Page Up |
+
+### Sections
+
+Sections split a long deck into named parts, as in PowerPoint. Pick a slide and choose **Home** tab ▸ **Section ▾** ▸ **Add Section** (or right-click in the slide list ▸ **Add Section**, or **Format ▸ Sections**): a new section starts at that slide and you name it. The slides before the first section go in a **Default Section**.
+
+- **Fold a section:** click the arrow on its heading. **View** tab ▸ **Collapse All** / **Expand All** fold or open them all. Folding is for the screen only.
+- **Move a section with all its slides:** drag its heading up or down, or right-click it ▸ **Move Section Up** / **Move Section Down**.
+- **Move slides into a section:** drag them after a slide in it, or onto its heading (they go at its start).
+- **Rename:** double-click the section's name, or right-click ▸ **Rename Section…**.
+- **Pick all of a section's slides:** click its heading.
+- **Remove Section** keeps its slides (they join the section before); **Remove Section & Slides** deletes them too; **Remove All Sections** keeps every slide.
+
+New slides go in the section of the slide before them. Sections are saved as PowerPoint's own, so PowerPoint shows them, and sections made in PowerPoint come in here.
+
+### Slide Sorter
+
+**View** tab ▸ **Slide Sorter** (or **View ▸ Slide Sorter**) shows every slide in rows of larger pictures, under their section headings. Drag slides (or whole sections) to reorder them, pick several with Ctrl or Shift, and use the same keys and right-click commands as in the slide list. Double-click a slide, or press Enter, to open it in **Normal** view.
 
 ### Copying slides between decks
 
@@ -58,6 +75,18 @@ Pick slides in one deck's list and press Ctrl+C, then click in the list of anoth
 
 Click **Apply to all slides**. Text you formatted by hand keeps its own formatting. Ctrl+Z puts the old settings back in one step.
 
+### Layouts
+
+**View** tab ▸ **Edit Layouts** (or **Design** tab ▸ **Edit Layouts…**, or **Format ▸ Slide Layout ▸ Edit Layouts…**) shows the deck's layouts, as PowerPoint's Slide Master view does. Pick one on the left to see it on the slide.
+
+- **Move or size a placeholder:** drag it, or drag one of its corners. The arrow keys nudge the one picked (Shift for bigger steps); X, Y, W and H set its place and size in per cent of the slide.
+- **Add a placeholder:** **+ Title**, **+ Text** or **+ Subtitle**. A layout has one title. **Delete Placeholder** (or Delete) takes the one picked off.
+- **Line up the text** in the placeholder picked: Left, Centre or Right.
+- **Rename** a layout by typing in **Name**. **Title slide colours and background** gives slides with the layout the title slide's own colours (set in Slide Master).
+- **New Layout** makes a layout with a title and a text box; **Duplicate** copies the one picked, to change. **Delete** removes a layout you made (its slides get Title and Content). The five built-in layouts can be changed and **Reset**, not deleted.
+
+Click **Apply**: slides with a changed layout move their placeholders to its places, keeping their text. Undo puts it all back. Layouts are saved as PowerPoint's own (your layouts as its custom layouts, with their names), so they show in PowerPoint's Layout menu, and PowerPoint's custom layouts come in here. Slides pasted from another deck bring their own layouts with them.
+
 ## Slide backgrounds
 
 **Design** tab ▸ **Format Background** (or **Format ▸ Format Background…**, or right-click an empty part of the slide) gives the slide a background of its own:
@@ -79,6 +108,22 @@ Backgrounds are saved as PowerPoint's own, so PowerPoint (and LibreOffice) shows
 
 Tick **Also start new slide decks with the template I pick** to make it the starting look for new decks. You can change any part of a template afterwards with **Slide Master…**.
 
+### Themes of your own
+
+In the Templates window, **New Theme…** starts a theme of your own from the Plain template, **New Theme from This Deck…** from the deck's own look, and **Copy** (on any ready-made template, shown when you point at it) from that template. The theme window sets its name, the title and text fonts (and bold titles), the background, title, text and footer colours, the shapes behind every slide and their two accent colours, and a title slide with its own dark colours. **Start from** fills it all in from another template. The previews show the title slide and a content slide as you change them; click **Save Theme**.
+
+Your themes appear under **Your themes** at the top of the window, ready to pick for any deck (and for new decks). Point at one for **Edit** and **Delete**; deleting a theme leaves decks that use it as they are. Themes are kept in your settings, and the PowerPoint theme in each saved file is named after the theme used.
+
+## Slide size
+
+**Design** tab ▸ **Size** ▸ **Custom Slide Size…** (or **Format ▸ Slide Size ▸ Custom Slide Size…**) sets any size: pick one of the usual ones (Widescreen, Standard, 16:10, Letter, A4, A3, B4, 35 mm slides, Overhead, Banner, posters) or type the width and height in inches or centimetres, from 1 to 56 inches, and turn it to portrait. Choose how what is on the slides fits the new size:
+
+- **Ensure Fit** makes everything as big as fits on the new slide.
+- **Maximize** makes it as big as the slide allows, which can run off the edges.
+- **Don't scale** keeps everything its size, centred.
+
+Titles and text boxes always move to their layouts' places. Structures scale with their bond lengths and labels. The size is saved in the PowerPoint file.
+
 ## Text
 
 Click a placeholder or a text box to type in it. **Insert** tab ▸ **Text Box** makes a new one: click to type, or drag to make a box that wraps.
@@ -88,7 +133,9 @@ The **Font** and **Paragraph** groups on the **Home** tab work as in PowerPoint.
 - **Font:** font, size, **A+** and **A−** (bigger and smaller in PowerPoint's steps), bold, italic, underline, subscript, superscript, formula style (CH₂Cl₂ with the numbers lowered) and colour.
 - **Paragraph:** bullets, numbering, list level (or indent), line spacing, and lining up left, centre, right or both edges.
 
-The small bar that appears above text while you type has the same buttons, plus Greek letters and symbols and the paragraph spacing.
+The small bar that appears above text while you type has the same buttons, plus Greek letters and symbols and the paragraph spacing. **Insert** tab ▸ **Symbol** has many more, found by name.
+
+**Format Painter** (Home tab, beside **Copy**) copies the look of the selected text, text box, shape or arrow to the next one you click; double-click it to keep painting until Esc. See [Getting started](getting-started.md#format-painter-every-mode).
 
 ## Shapes
 
@@ -122,6 +169,17 @@ An animated reaction can go on a slide as a video: in Slides mode, open **Chemis
 ### Frames, rounded corners and shadows
 
 Select a picture, then use the **Style** panel: **Frame style**, frame line and colour, **Rounded corners (%)** and **Shadow** (None, Soft or Hard). For a ready-made look, right-click the picture and choose **Picture Style**. These looks are kept when you save to PowerPoint.
+
+### Picture Format
+
+Select a picture and click **Picture Format** (**Insert** tab, the **Style** panel, or right-click). The window shows the picture as it will look while you change it:
+
+- **Corrections:** brightness, contrast, and sharpen (above 0) or soften (below 0).
+- **Colour:** recolour as greyscale, sepia, washout, black and white (with where black stops), or two colours of your own running dark to light. **See-through colour** makes one colour clear: click **Pick in the picture**, then click the colour in the preview. **Transparency** makes the whole picture see-through.
+- **Remove background:** takes out the background joined to the picture's edges. **How near counts** says how close a colour must be to go. If the subject loses parts, click **Mark to keep** and click them in the preview; if background is left, **Mark to remove** and click it.
+- **Crop:** **Crop to shape** cuts the picture to an oval, triangle, star, heart and other shapes (a frame and shadow follow the shape). **Crop to proportions** crops to 1:1, 4:3, 16:9 and others, centred.
+
+The picture itself is never changed, so **Reset Picture** (or setting a value back to 0) takes any of it off again. Saved as PowerPoint's own picture settings, so PowerPoint can change them too.
 
 ## Tables
 

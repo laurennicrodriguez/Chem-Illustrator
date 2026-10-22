@@ -215,6 +215,14 @@ export interface TextRun {
   cmt?: string;
   /** Where the text links to: a web page, a DOI, an e-mail address, a file or a place in the file (see links.ts). */
   link?: string;
+  /** Character spacing: points added after each character (less than 0 is condensed), as PowerPoint's Character Spacing. */
+  spacing?: number;
+  /** Small capitals: lower-case letters shown as smaller capitals (documents). */
+  smallCaps?: boolean;
+  /** All capitals: letters shown as capitals, the text itself unchanged (documents). */
+  allCaps?: boolean;
+  /** Documents: the character style the text is in (Emphasis, Strong…), by id; its look is in the run itself. */
+  cstyle?: string;
 }
 
 /**
@@ -307,6 +315,19 @@ export interface ParaStyle {
   noLineNumbers?: boolean;
   /** Documents: bookmarks at this paragraph (Insert > Bookmark), by name, for links to point at. */
   marks?: string[];
+  /** Documents: tab stops, in points from the left margin, in order (Word's default every half inch past the last). */
+  tabs?: TabStop[];
+  /** Documents: a numbered list's multilevel scheme (1. a. i. when left out; see paragraphs.ts LIST_SCHEMES). */
+  scheme?: string;
+  /** Documents: a bulleted list item's own bullet (from the bullet library), in place of its level's. */
+  bullet?: string;
+}
+
+/** A tab stop: where text after a tab lines up, and how (Word's left, centre, right and decimal tabs), with dots or a line leading to it. */
+export interface TabStop {
+  pos: number;
+  kind: 'left' | 'center' | 'right' | 'decimal';
+  leader?: 'dot' | 'hyphen' | 'underscore';
 }
 
 export interface Caption {
@@ -338,6 +359,20 @@ export interface Caption {
   ignoreWarnings?: boolean;
   /** Turned this many degrees clockwise about (x, y), the start of its first line. */
   rot?: number;
+  /** Its name in the Selection Pane (Slides), when given one. */
+  name?: string;
+  /** Hidden (Selection Pane): not drawn, printed or picked, but kept and saved. */
+  hidden?: boolean;
+  /** Columns in a text box (it needs a width, `wrap`), and the room between them in points. */
+  cols?: number;
+  colGap?: number;
+  /**
+   * AutoFit (slides): left out, the box grows with its text; 'shrink' makes the text smaller to
+   * fit a box of height boxH; 'fixed' keeps the box at boxH and lets the text run past it.
+   */
+  fit?: 'shrink' | 'fixed';
+  /** Text direction: the text runs down (rotated 90°) or up (270°). Its turn is in `rot`; this says it is the text's direction, for PowerPoint. */
+  dir?: 'vert' | 'vert270';
 }
 
 /**
@@ -584,6 +619,11 @@ export interface Shape {
   y1: number;
   x2: number;
   y2: number;
+  /**
+   * Boxes, ovals, design shapes and pictures (see turnsFreely): turned this many degrees
+   * clockwise about the middle of x1..y2, as PowerPoint turns shapes. x1..y2 stay the box before it is turned.
+   */
+  rot?: number;
   dashed?: boolean;
   filled?: boolean;
   /**
@@ -641,15 +681,28 @@ export interface Shape {
   /** Picture size in pixels (for the crop and for saving). */
   px?: { w: number; h: number };
   /**
-   * A video shown in the picture's place (an animation put on a slide): the MP4 as a data URL.
-   * `src` is its first frame, shown where a video can't play. It plays by itself in the slide
-   * show, round and round unless `once`.
+   * A video or sound shown in the picture's place (an animation put on a slide, or Insert >
+   * Video or Audio): the file as a data URL. `src` is the video's first frame (a speaker for a
+   * sound), shown where it can't play. See Media for how it plays.
    */
-  video?: { src: string; once?: boolean };
+  video?: Media;
+  /**
+   * What a click on it does in the slide show (an action button, a zoom, any shape): a link as
+   * text links have them (links.ts): a slide, a show jump (#next, #return…), a web page or file.
+   */
+  link?: string;
+  /**
+   * A picture that is a Slide Zoom (Insert > Zoom): a picture of the slide `link` goes to. In
+   * the show a click zooms into that slide; with `back`, the show comes back here after it (a
+   * Summary Zoom's part runs on to the slide `to` first).
+   */
+  zoom?: { back?: boolean; to?: string };
   /** Parts of a picture cut off, as fractions of its width and height from each side. */
   crop?: { l: number; t: number; r: number; b: number };
   /** A picture's frame, corners and shadow (PowerPoint's Picture Styles). */
   look?: PictureLook;
+  /** A picture's corrections, colour, see-through amount, background taken out and the shape it is cut to (Picture Format). */
+  fx?: PictureFx;
   color?: string;
   z?: number;
   /** Its name in the Layers panel (Design mode). */
@@ -683,6 +736,46 @@ export interface Shape {
   diagram?: DiagramData;
 }
 
+/** Can this shape be turned to any angle (Slides and Design), keeping its box and turning it as a whole? */
+export function turnsFreely(s: Pick<Shape, 'kind' | 'chart' | 'table' | 'ring' | 'frame' | 'pin'>): boolean {
+  return (s.kind === 'rect' || s.kind === 'oval' || s.kind === 'geo' || s.kind === 'picture') && !s.chart && !s.frame && !s.pin;
+}
+
+/**
+ * How a video or sound on a slide plays (PowerPoint's Playback tab). Left out, a setting is as an
+ * animation put on a slide has always played: by itself as the slide comes in, round and round,
+ * at full volume.
+ */
+export interface Media {
+  /** The file, as a data URL (video/mp4, audio/mpeg…). */
+  src: string;
+  /** Play once rather than round and round until the slide changes (Loop until Stopped off). */
+  once?: boolean;
+  /** A sound: nothing to see but its icon. */
+  audio?: boolean;
+  /** Seconds cut off its start and its end (Trim). */
+  trimStart?: number;
+  trimEnd?: number;
+  /** Seconds it fades in over at the start, and out over at the end. */
+  fadeIn?: number;
+  fadeOut?: number;
+  /** When it starts: by itself as the slide comes in (absent) or when it is clicked in the show. */
+  start?: 'auto' | 'click';
+  /** Volume, 0 to 1 (absent: full); `mute` silences it. */
+  vol?: number;
+  mute?: boolean;
+  /** Back to its first frame when it has played (Rewind after Playing). */
+  rewind?: boolean;
+  /** A sound's icon isn't shown in the slide show (Hide During Show). */
+  hide?: boolean;
+  /** A sound keeps playing when the show goes on to the next slides (Play Across Slides). */
+  across?: boolean;
+  /** A video fills the screen while it plays (Play Full Screen). */
+  full?: boolean;
+  /** How long it is, in seconds, when known. */
+  length?: number;
+}
+
 /** An equation on a slide or design: LaTeX, its text size in points, colour and font. */
 export interface ShapeMath { tex: string; size: number; color?: string; font?: string }
 
@@ -698,6 +791,51 @@ export interface PictureLook {
   round?: number;
   /** A shadow down and to the right: soft (blurred) or hard (sharp). */
   shadow?: 'soft' | 'hard';
+}
+
+/**
+ * How a picture is changed for showing (Picture Format), as PowerPoint and Word keep it: the
+ * picture's own data is never changed, so every setting can be changed back.
+ */
+export interface PictureFx {
+  /** Brighter (up to 1) or darker (down to -1). */
+  bright?: number;
+  /** More contrast (up to 1) or less (down to -1). */
+  contrast?: number;
+  /** Sharper (up to 1) or softer (down to -1). */
+  sharpen?: number;
+  /** Shown in other colours: greys, sepia, washed out, black and white, or two colours of one's own. */
+  recolor?: Recolor;
+  /** See-through amount of the whole picture, 0 (solid) to 1 (clear). */
+  alpha?: number;
+  /** One colour made see-through (PowerPoint's Set Transparent Color), as #rrggbb. */
+  clear?: string;
+  /** The background taken out (Remove Background). */
+  bg?: BackgroundRemoval;
+  /** The shape the picture is cut to, by PowerPoint's name for it (design/geo.ts); a rectangle when not set. */
+  shape?: string;
+}
+
+/**
+ * A picture shown in other colours. `bw` is black and white, split at `level` (0 to 1, a half
+ * when not set); `tint` runs from `dark` in the shadows to `light` in the highlights.
+ */
+export type Recolor =
+  | { kind: 'grey' }
+  | { kind: 'sepia' }
+  | { kind: 'washout' }
+  | { kind: 'bw'; level?: number }
+  | { kind: 'tint'; dark: string; light: string };
+
+/**
+ * Remove Background: what touches the picture's edges (and the `drop` marks), and is near in
+ * colour, goes; what touches a `keep` mark stays. Marks are points as fractions of the whole
+ * picture's width and height (before cropping). `tol` is how near a colour counts (0 to 1, 0.12 when not set).
+ */
+export interface BackgroundRemoval {
+  tol?: number;
+  keep?: [number, number][];
+  drop?: [number, number][];
 }
 
 /** The two picture shadows: how far down and right, how blurred and how dark, in points (as in Document mode). */
@@ -734,14 +872,44 @@ export interface TableCell {
   align?: Justify;
   /** Number of columns the cell spans (the cells it covers are left empty). */
   span?: number;
-  /** Documents: number of rows the cell is merged down over (the cells it covers below are left empty). */
+  /** Number of rows the cell is merged down over (the cells it covers below are left empty). */
   rowSpan?: number;
-  /** Documents: the cell's background colour (Word's shading). */
+  /** The cell's background colour (Word's shading; on slides, over the table style's own). */
   fill?: string;
   /** Documents: where the text sits up and down in a cell taller than it (top when left out). */
   valign?: 'center' | 'bottom';
   /** Drawings: room kept at the top of the cell for a structure dropped into it (its width and height, in points). */
   fig?: { w: number; h: number };
+  /** Documents: the cell's own borders (Word's cell borders), over the table style's. */
+  borders?: CellBorders;
+  /** Documents: the cell's own margins, in place of the table's (left out sides keep the table's). */
+  pad?: Partial<CellMargins>;
+}
+
+/** A border line in a document's table: Word's line kinds, its width in points and its colour. 'none' takes a line away. */
+export interface BorderLine {
+  style: 'none' | 'single' | 'double' | 'dotted' | 'dashed';
+  w: number;
+  color: string;
+}
+
+export type BorderSide = 'top' | 'bottom' | 'left' | 'right';
+export type CellBorders = Partial<Record<BorderSide, BorderLine>>;
+
+/** Room inside a cell round its text, in points (Word's cell margins). */
+export interface CellMargins { top: number; bottom: number; left: number; right: number }
+
+/** Which parts of a table its style picks out (Word's Table Style Options). */
+export interface TableLook {
+  /** The heading rows (on unless turned off). */
+  header?: boolean;
+  /** The last row, as a total row. */
+  total?: boolean;
+  /** Every other row shaded (on unless turned off). */
+  bandRows?: boolean;
+  firstCol?: boolean;
+  lastCol?: boolean;
+  bandCols?: boolean;
 }
 
 /**
@@ -764,6 +932,15 @@ export interface TableData {
   /** The title above the table ("Table 1. Optimization of…") and the footnotes below it. */
   title?: TextRun[];
   notes?: TextRun[];
+  /**
+   * A table style, in place of `lines`: on slides and drawings one of PowerPoint's ("pp-medium2-1",
+   * see deck/table-styles.ts); in documents Word's, by its style id (document/table-styles.ts).
+   */
+  style?: string;
+  /** Which parts the style picks out (PowerPoint's and Word's Table Style Options). */
+  look?: TableLook;
+  /** Documents: the margins of every cell (Word's default cell margins), when not the standard ones. */
+  pad?: CellMargins;
 }
 
 /** A drawing's page: the drawing area of one sheet of paper (inside its margins), in points. */

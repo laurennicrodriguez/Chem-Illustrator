@@ -7,7 +7,7 @@
 //   mailto:…                       an e-mail address
 //   file:///… or a plain path      a file on this computer (or a path next to the file)
 //   #name                          a bookmark in this document
-//   #slide=7, #next, #prev, #first, #last   a slide in this deck (by its id), or one of the show's own jumps
+//   #slide=7, #next, #prev, #first, #last, #return, #end   a slide in this deck (by its id), or one of the show's own jumps
 //   #Sheet1!A1                     a cell in this workbook
 // Pure functions: no screen, no files, so every rule can be tested on its own.
 
@@ -204,7 +204,7 @@ export function slideIdLinks<T>(contents: T, ids: number[]): T {
 }
 
 /** The slide-show jumps PowerPoint has without naming a slide. */
-export const SHOW_JUMPS: Record<string, string> = { '#first': 'First slide', '#last': 'Last slide', '#next': 'Next slide', '#prev': 'Previous slide' };
+export const SHOW_JUMPS: Record<string, string> = { '#first': 'First slide', '#last': 'Last slide', '#next': 'Next slide', '#prev': 'Previous slide', '#return': 'Last slide viewed', '#end': 'End show' };
 
 /** A link to a cell (#Sheet1!B4 or #'My sheet'!B4): the sheet's name and the cell. */
 export function cellOfLink(link: string): { sheet: string | null; cell: string } | null {

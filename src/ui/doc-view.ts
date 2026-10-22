@@ -9,13 +9,14 @@ import { SHEET_MARGIN, breaksIn, continuous, outlineMarks, type DocViewKind } fr
 import type { LaidLine } from '../text/layout';
 import type { DocFile } from '../document/doc-file';
 import { figures } from '../document/doc-file';
-import { drawDocTable, drawHeaderFooter, drawLineNumbers, drawNoteRules } from '../document/doc-paint';
+import { drawDocTable, drawHeaderFooter, drawLineNumbers, drawNoteRules, drawPageLook } from '../document/doc-paint';
 import { BOX_PAD, SHADOWS, lookOf, type DocText } from '../document/document';
 import { BREAK_NAMES } from '../document/sections';
 import { drawLayout } from '../text/draw';
 import { drawMath } from '../document/math';
 import { selectionRects } from '../text/layout';
 import { imageFor, onImageReady } from '../render/images';
+import { fxCanvas, hasFx, traceShape } from '../render/picture-fx';
 import { paintChartBox } from '../render/chart-box-paint';
 
 /** Grey space round the pages, in pixels. */
@@ -42,6 +43,8 @@ export interface Overlay {
   editing?: { id: number; cell?: boolean; selection: Rect[] } | null;
   /** Text with comments on it, shaded (more strongly for the comment being looked at). */
   comments?: { start: number; end: number; active: boolean }[];
+  /** A block of table cells chosen together (dragged across), shaded. */
+  cells?: { id: number; r0: number; c0: number; r1: number; c1: number } | null;
 }
 
 export class DocView {
@@ -63,6 +66,8 @@ export class DocView {
   onResize: () => void = () => {};
   /** Pages in rows of this many (View > Multiple Pages), or 1. */
   perRow = 1;
+  /** Table > View Gridlines: faint lines on every table edge with no border (else only in tables with none). */
+  gridlines = false;
   /** Pages side by side in one row, scrolled across (View > Side to Side, and Read Mode). */
   sideways = false;
   /** Read Mode: the wheel turns the pages two at a time instead of scrolling. */
@@ -286,6 +291,16 @@ export class DocView {
     else if (right + margin > s.scrollLeft + s.clientWidth) s.scrollLeft = right + margin - s.clientWidth;
   }
 
+  /** Scroll so a part of the document is at the top of the window (going to a heading). */
+  revealTop(r: Rect, margin = 24): void {
+    const lay = this.layout;
+    const p = lay ? this.pageAt(lay, r.y1) : null;
+    const pos = lay && p ? this.place(p, lay) : { x: 0, y: 0 };
+    const dy = pos.y - (p?.top ?? 0);
+    this.scroller.scrollTop = Math.max(0, this.oy + (r.y1 + dy) * this.zoom - margin);
+    this.reveal(r, margin);
+  }
+
   /** Scroll to the top of a page (pages side by side: its left edge). */
   scrollToPage(i: number): void {
     const lay = this.layout;
@@ -405,7 +420,7 @@ export class DocView {
       for (const o of tabs) {
         const obj = t.objects[o.id];
         const tb = lay.tables.get(o.id);
-        if (obj?.kind === 'table' && tb) drawDocTable(ctx, obj.table, tb, p.index, { color: '#9fb4d8', px: 1 / k });
+        if (obj?.kind === 'table' && tb) drawDocTable(ctx, obj.table, tb, p.index, { color: '#9fb4d8', px: 1 / k, always: this.gridlines }, t.tableStyles);
       }
       for (const o of lay.objects) if (o.page === p.index && o.wrap !== 'behind' && t.objects[o.id]?.kind !== 'table') this.object(ctx, t, o, lay);
       const px = 1 / k;
@@ -441,6 +456,17 @@ export class DocView {
       ctx.strokeStyle = OBJECT_FRAME;
       ctx.lineWidth = 1.2 / k;
       for (const o of lay.objects) if (o.id === ov.framed) { onPageOf(o); ctx.strokeRect(o.x - 2, o.y - 1, o.w + 4, o.h + 2); }
+    }
+    if (ov.cells) {
+      const tb = lay.tables.get(ov.cells.id);
+      const b = ov.cells;
+      ctx.fillStyle = SELECTION;
+      if (tb) for (let r = b.r0; r <= b.r1; r++) {
+        const row = tb.rows[r];
+        if (!row) continue;
+        at(lay.pages[row.page] ?? lay.pages[0]);
+        ctx.fillRect(row.x + tb.xs[b.c0], row.y, tb.xs[b.c1 + 1] - tb.xs[b.c0], tb.hs[r]);
+      }
     }
     if (ov.editing) {
       const o = lay.objects.find((x) => x.id === ov.editing!.id);
@@ -551,6 +577,8 @@ export class DocView {
     ctx.fillStyle = '#fff';
     ctx.fillRect(p.x, p.top, p.w, p.h);
     ctx.restore();
+    // Design > Page Color, Watermark and Page Borders
+    if (this.file) drawPageLook(ctx, this.file.t, p);
     const pg = p.setup;
     const x1 = p.x + pg.left, x2 = p.x + p.w - pg.right, y1 = p.top + pg.top, y2 = p.top + p.h - pg.bottom;
     const m = 12;
@@ -569,7 +597,9 @@ export class DocView {
     const obj = t.objects[o.id];
     if (!obj) return;
     const look = lookOf(obj);
-    if (look?.shadow) {
+    // a picture changed in Picture Format (cut to a shape, background out) casts its own shadow
+    const own = obj.kind === 'picture' && !obj.chart && hasFx(obj.fx);
+    if (look?.shadow && !own) {
       // a shadow is a box's: the figure sits on white, and the white casts it
       const s = SHADOWS[look.shadow];
       const k = this.zoom * this.dpr;
@@ -607,7 +637,9 @@ export class DocView {
     if (look?.frame) {
       ctx.strokeStyle = look.frameColor ?? '#000';
       ctx.lineWidth = look.frame;
-      ctx.strokeRect(o.x, o.y, o.w, o.h);
+      ctx.beginPath();
+      if (!(obj.kind === 'picture' && obj.fx?.shape && traceShape(ctx, obj.fx.shape, o.x, o.y, o.w, o.h))) ctx.rect(o.x, o.y, o.w, o.h);
+      ctx.stroke();
     }
   }
 
@@ -622,9 +654,21 @@ export class DocView {
       paintChartBox(ctx, obj.chart, o.x, o.y, o.w, o.h);
     } else if (obj.kind === 'picture') {
       // pictures (EMF spectra from MestReNova too) are decoded once, shared with the drawings
-      const img = imageFor(obj.src);
-      if (img) ctx.drawImage(img, o.x, o.y, o.w, o.h);
-      else {
+      const img = fxCanvas(obj) ?? imageFor(obj.src);
+      const look = obj.look;
+      if (img) {
+        ctx.save();
+        if (look?.shadow && hasFx(obj.fx)) {
+          const s = SHADOWS[look.shadow], k = this.zoom * this.dpr;
+          ctx.shadowColor = `rgba(0, 0, 0, ${s.alpha})`;
+          ctx.shadowBlur = s.blur * k;
+          ctx.shadowOffsetX = ctx.shadowOffsetY = s.off * k;
+        }
+        const c = obj.crop ?? { l: 0, t: 0, r: 0, b: 0 };
+        const iw = (img as HTMLImageElement).naturalWidth || img.width, ih = (img as HTMLImageElement).naturalHeight || img.height;
+        ctx.drawImage(img, c.l * iw, c.t * ih, Math.max(1e-3, (1 - c.l - c.r) * iw), Math.max(1e-3, (1 - c.t - c.b) * ih), o.x, o.y, o.w, o.h);
+        ctx.restore();
+      } else {
         ctx.fillStyle = '#eceef2';
         ctx.fillRect(o.x, o.y, o.w, o.h);
       }

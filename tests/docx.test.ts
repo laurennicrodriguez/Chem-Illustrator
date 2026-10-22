@@ -336,8 +336,9 @@ describe('opening files made by Word', () => {
     expect(doc.paras[0].indent! + listIndent({ list: 'bullet' }, 11).left).toBeCloseTo(36, 1);
     expect(doc.paras[0].spaceAfter ?? 0).toBe(0);
     expect(doc.paras[2].spaceAfter).toBe(8);
-    // "1)" shows here as "1."
-    expect(warnings.join(' ')).toMatch(/numbering/);
+    // "1)" is the 1) a) i) scheme
+    expect(doc.paras[2].scheme).toBe('paren');
+    expect(warnings.join(' ')).not.toMatch(/numbering/);
   });
 
   it('turns caption numbers and cross-references into its own, following the bookmark', async () => {

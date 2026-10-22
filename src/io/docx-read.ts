@@ -7,32 +7,38 @@
 // lists, tables, pictures, captions and cross-references, page setup, header, footer and page
 // numbers; ChemDraw objects in them become structures that can be edited here. What has no
 // place here yet is noted in warnings (shown to the person, never refused). Citations and the
-// bibliography saved here come back live (the references are in our own part); those of
-// other reference managers keep the text Word showed. Footnotes and endnotes come in as notes
+// bibliography saved here come back live (the references are in our own part), and so do
+// Zotero's, Mendeley's and EndNote's (their items read into the references: live-cites.ts).
+// Footnotes and endnotes come in as notes
 // typed into here, and a table of figures (a TOC field for captions) as one worked out here.
 
-import type { Contents, Justify, ParaStyle, TableCell, TableData, TextRun } from '../model';
+import type { CellBorders, Contents, Justify, ParaStyle, PictureFx, TabStop, TableCell, TableData, TextRun } from '../model';
+import { tidyFx } from '../render/picture-fx';
+import { readPictureFx } from './picture-xml';
+import { DEFAULT_MARGINS, builtInStyle, type TableStyleDef } from '../document/table-styles';
+import { keepDirectBorders, readBorders, readLook as readTableLook, readMargins, readTableStyle, sameStyle, styleIsRich } from './docx-table-styles';
 import { ACS_1996, type DocStyle } from '../style';
 import * as rt from '../richtext';
 import { PackageReader, REL, kid, kids, rAttr, fromEmu } from './ooxml';
 import { dataUrl, imageSize, pictureMime } from '../render/images';
 import { drawingInEmf } from '../render/emf';
-import { cleanPara } from '../text/paragraphs';
+import { BULLETS, BULLET_LIBRARY, LIST_SCHEMES, cleanPara } from '../text/paragraphs';
 import { SINGLE, type Measure } from '../text/layout';
 import { arialWidth } from '../text-metrics';
 import { documentMeasure } from '../text/font-measure';
 import {
-  OBJECT_CHAR, defaultHeaderFooter, defaultPage, defaultStyles,
+  OBJECT_CHAR, defaultCharStyles, defaultHeaderFooter, defaultPage, defaultStyles,
   COL_GAP, FLOAT_GAP, columnsOf, lookExtent, usedObjects,
-  type BreakKind, type DocObject, type DocText, type FigureLook, type Float, type HeaderFooter, type LineNumbers, type NamedStyle, type NoteFormat, type NoteFormats, type NumberPlace, type PageNumFormat, type PageSetup, type SectionBreak,
+  type BreakKind, type CharStyle, type DocObject, type DocText, type PageBorder, type Watermark, type FigureLook, type Float, type HeaderFooter, type LineNumbers, type NamedStyle, type NoteFormat, type NoteFormats, type NumberPlace, type PageNumFormat, type PageSetup, type SectionBreak,
 } from '../document/document';
 import { shownSize } from '../document/doc-layout';
-import { layoutTable } from '../table';
+import { coveringCell, layoutTable } from '../table';
 import { cfbStreams, isCfb } from './cfb';
 import { isCdx } from './cdx';
 import { cmtIds, cmtString, type CommentNote, type CommentThread } from '../document/comments';
 import { BIB_MARK, CHART_NAME, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, W14_NS, W15_NS, W16CID_NS, W16CEX_NS, fromWordDate, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
-import { cleanRef } from '../document/references';
+import { cleanRef, type Reference } from '../document/references';
+import { bibFieldApp, placeRef, readCiteField, readMendeleyTag, styleFromCsl, zoteroStyleOf, MANAGERS, type CiteLive, type CiteManager, type ManagerCite } from '../document/live-cites';
 import { retypedDiagram } from '../design/diagrams';
 import { revText } from '../document/revisions';
 import { linkFromTarget } from '../links';
@@ -58,8 +64,16 @@ export interface DocxReadDeps {
 const WORD_FONT = 'Times New Roman';
 const WORD_SIZE = 10;
 /** The standard styles, by the names Word gives them (in every language). */
-const BUILT_IN: Record<string, string> = { normal: 'Normal', title: 'Title', 'heading 1': 'Heading1', 'heading 2': 'Heading2', 'heading 3': 'Heading3', caption: 'Caption' };
-const OUTLINE: Record<string, number> = { Heading1: 1, Heading2: 2, Heading3: 3 };
+const BUILT_IN: Record<string, string> = { normal: 'Normal', title: 'Title', caption: 'Caption', ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`heading ${n}`, `Heading${n}`])) };
+const OUTLINE: Record<string, number> = Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`Heading${n}`, n]));
+/** Word's character styles that are part of how something works (not a look to keep as a style here; our formula style neither). */
+const WORD_INNER_CHAR = new Set(['DefaultParagraphFont', 'FootnoteReference', 'EndnoteReference', 'Hyperlink', 'FollowedHyperlink', 'CommentReference', 'PageNumber', 'LineNumber', 'PlaceholderText']);
+const TAB_KINDS: Record<string, TabStop['kind']> = { left: 'left', start: 'left', center: 'center', right: 'right', end: 'right', decimal: 'decimal' };
+const TAB_LEADERS: Record<string, TabStop['leader']> = { dot: 'dot', middleDot: 'dot', hyphen: 'hyphen', underscore: 'underscore', heavy: 'underscore' };
+/** Word's bullets written in symbol fonts (Symbol, Wingdings, Courier New's o), as the characters they show. */
+const SYMBOL_BULLETS: Record<string, string> = { '\uf0b7': '•', '\uf0a7': '■', '\uf0d8': '➢', '\uf0fc': '✓', '\uf076': '◆', '\uf0a8': '◆', '\uf06f': '○', o: '○', '\uf0ab': '★', '\uf02d': '–' };
+/** VML's named colours a watermark may use. */
+const VML_COLOURS: Record<string, string> = { silver: '#c0c0c0', gray: '#808080', grey: '#808080', black: '#000000', white: '#ffffff', red: '#ff0000', blue: '#0000ff', green: '#008000', yellow: '#ffff00', navy: '#000080', maroon: '#800000', teal: '#008080', purple: '#800080', olive: '#808000', lime: '#00ff00', aqua: '#00ffff', fuchsia: '#ff00ff' };
 const JUSTIFY: Record<string, Justify> = { left: 'left', start: 'left', center: 'center', right: 'right', end: 'right', both: 'justify', distribute: 'justify' };
 const EXT_MIME: Record<string, string> = { wmf: 'image/x-wmf', emf: 'image/x-emf', tif: 'image/tiff', tiff: 'image/tiff' };
 
@@ -74,30 +88,52 @@ const WARN = {
   cellObjects: 'Pictures and structures inside table cells were left out.',
   cellBoxes: 'Text boxes inside table cells were left out.',
   wmf: 'Some pictures are in the older Windows Metafile (WMF) format, which can\'t be shown here yet. They are kept, and saved back to Word unchanged.',
-  crop: 'Cropped pictures show uncropped.',
+  pictureFx: 'Some picture effects (artistic effects, saturation, colour temperature) were left off.',
   numbering: 'Some numbered lists use numbering that shows here as 1., a., i.',
-  looks: 'Strikethrough, highlighting and small capitals were left out.',
   citations: 'Citations from a reference manager were kept as plain text.',
   pageText: 'Text after the page number in the header or footer was left out.',
   ole: 'Embedded objects other than ChemDraw drawings came in as pictures.',
   restart: 'Caption numbers that were set to start again were numbered straight through.',
   hfPictures: 'Pictures and tables in the header and footer were left out.',
+  pictureWatermark: 'A picture watermark was left out (text watermarks are kept).',
 };
 
 type Pos = 'base' | 'sub' | 'sup';
 /** Text formatting as a file gives it (only what it gives). `color` null is "automatic". */
-interface RProps { font?: string; size?: number; bold?: boolean; italic?: boolean; underline?: boolean; color?: string | null; highlight?: string | null; pos?: Pos; hidden?: boolean; formula?: boolean }
+interface RProps { font?: string; size?: number; bold?: boolean; italic?: boolean; underline?: boolean; color?: string | null; highlight?: string | null; pos?: Pos; hidden?: boolean; formula?: boolean; strike?: boolean; smallCaps?: boolean; allCaps?: boolean; cstyle?: string }
 /** Paragraph formatting as a file gives it, in points. */
 interface PProps {
   align?: Justify; before?: number; after?: number; line?: { v: number; rule: string };
   left?: number; right?: number; first?: number; keepNext?: boolean; pageBreak?: boolean; outline?: number; noLineNumbers?: boolean;
   numId?: string; ilvl?: number; contextual?: boolean;
+  /** Tab stops set (and cleared: kind null) here, added to those of the style it is based on. */
+  tabs?: { pos: number; kind: TabStop['kind'] | null; leader?: TabStop['leader'] }[];
+}
+
+/** Paragraph settings one over another (later ones win), their tab stops added up. */
+function mergeP(...ps: (PProps | undefined)[]): PProps {
+  const out = merge<PProps>(...ps);
+  const tabs = ps.flatMap((p) => p?.tabs ?? []);
+  if (tabs.length) out.tabs = tabs; else delete out.tabs;
+  return out;
+}
+
+/** The tab stops a paragraph ends up with: each set in turn, a cleared one taken away. */
+function finalTabs(p: PProps): TabStop[] | undefined {
+  const out: TabStop[] = [];
+  for (const t of p.tabs ?? []) {
+    const at = out.findIndex((x) => Math.abs(x.pos - t.pos) < 0.5);
+    if (at >= 0) out.splice(at, 1);
+    if (t.kind) out.push(t.leader ? { pos: t.pos, kind: t.kind, leader: t.leader } : { pos: t.pos, kind: t.kind });
+  }
+  out.sort((a, b) => a.pos - b.pos);
+  return out.length ? out : undefined;
 }
 interface WStyle { id: string; type: string; name: string; basedOn?: string; next?: string; isDefault: boolean; p: PProps; r: RProps; el: Element }
 interface Level { fmt: string; text: string; p: PProps }
 interface Piece { runs: TextRun[]; pageBreak: boolean; soft: boolean; colBreak?: boolean }
 interface Ctx { base: RProps; pieces: Piece[]; cell: boolean }
-interface Field { instr: string; phase: 'instr' | 'result'; swallow: boolean; text: string; props: RProps; done: boolean; ref?: { id: number; mark: string; text: string }; toc?: boolean; /** A HYPERLINK field: the link open before it, put back at its end. */ before?: { link: string | undefined } }
+interface Field { instr: string; phase: 'instr' | 'result'; swallow: boolean; /** The field's own data (w:fldData, base64): EndNote's citations. */ data?: string; text: string; props: RProps; done: boolean; ref?: { id: number; mark: string; text: string }; toc?: boolean; /** A HYPERLINK field: the link open before it, put back at its end. */ before?: { link: string | undefined } }
 interface OutPara { ps: ParaStyle; runs: TextRun[]; mark: rt.RunStyle; style: string; contextual: boolean; table?: boolean; bib?: string; markRev?: string }
 
 /** Open a Word file. Throws only when the file is not a Word file at all. */
@@ -162,6 +198,10 @@ class DocxReader {
   private part = '';
   /** Bookmarks met since the last paragraph was read: they go on the next one. */
   private pendingMarks: string[] = [];
+  /** The references: those in our part, then those read from Zotero's, Mendeley's and EndNote's citations. */
+  private liveRefs: Reference[] = [];
+  /** The reference manager whose citations or bibliography the file has (the first met). */
+  private manager: CiteManager | undefined;
   /** The notes in footnotes.xml and endnotes.xml, by Word's id (read when first needed). */
   private noteEls: Partial<Record<'foot' | 'end', Map<string, Element>>> = {};
 
@@ -195,6 +235,7 @@ class DocxReader {
     this.resolveRefs();
     this.joinBibliographies();
     const out = this.assemble(hf, first);
+    this.readPageLook(out, root, first);
     keepUsedMarks(out);
     return { doc: out, warnings: [...this.warnings] };
   }
@@ -265,7 +306,13 @@ class DocxReader {
         }
         case 'vertAlign': { const v = this.a(c); out.pos = v === 'subscript' ? 'sub' : v === 'superscript' ? 'sup' : 'base'; break; }
         case 'vanish': out.hidden = this.on(c); break;
-        case 'rStyle': Object.assign(out, this.charStyle(this.a(c) ?? '')); break;
+        case 'rStyle': {
+          const id = this.a(c) ?? '';
+          Object.assign(out, this.charStyle(id));
+          // a character style of the person's (or Word's Emphasis, Strong…) is kept as one
+          if (direct && this.keptCharStyle(id)) { out.cstyle = id; this.usedChar.add(id); }
+          break;
+        }
         case 'highlight': { const v = this.a(c) ?? 'none'; out.highlight = WORD_HIGHLIGHTS[v] ?? null; break; }
         case 'shd': {
           // shading behind the text: kept as a highlight unless a real highlight is set too
@@ -273,9 +320,9 @@ class DocxReader {
           if (out.highlight === undefined || out.highlight === null) out.highlight = /^[0-9a-f]{6}$/i.test(v) && this.a(c) !== 'nil' ? `#${v.toLowerCase()}` : null;
           break;
         }
-        case 'strike': case 'dstrike': case 'smallCaps': case 'caps':
-          if (direct && this.on(c) && this.a(c) !== 'none') this.warn('looks');
-          break;
+        case 'strike': case 'dstrike': out.strike = this.on(c); break;
+        case 'smallCaps': out.smallCaps = this.on(c); break;
+        case 'caps': out.allCaps = this.on(c); break;
       }
     }
     return out;
@@ -311,6 +358,21 @@ class DocxReader {
         case 'suppressLineNumbers': out.noLineNumbers = this.on(c); break;
         case 'outlineLvl': { const v = Number(this.a(c)); if (v >= 0 && v < 9) out.outline = v + 1; break; }
         case 'contextualSpacing': out.contextual = this.on(c); break;
+        case 'tabs': {
+          const tabs: NonNullable<PProps['tabs']> = [];
+          for (const t of kids(c, 'tab')) {
+            const pos = this.tw(t, 'pos');
+            const v = this.a(t) ?? 'left';
+            if (pos === undefined) continue;
+            if (v === 'clear') { tabs.push({ pos, kind: null }); continue; }
+            const kind = TAB_KINDS[v];
+            if (!kind || pos <= 0) continue;
+            const leader = TAB_LEADERS[this.a(t, 'leader') ?? ''];
+            tabs.push(leader ? { pos: round(pos), kind, leader } : { pos: round(pos), kind });
+          }
+          if (tabs.length) out.tabs = tabs;
+          break;
+        }
         case 'numPr': {
           const id = this.a(kid(c, 'numId'));
           if (id !== null) out.numId = id;
@@ -379,7 +441,40 @@ class DocxReader {
       seen.add(s.id);
       list.unshift(s);
     }
-    return { p: merge<PProps>(...list.map((s) => s.p)), r: merge<RProps>(...list.map((s) => s.r)) };
+    return { p: mergeP(...list.map((s) => s.p)), r: merge<RProps>(...list.map((s) => s.r)) };
+  }
+
+  /** Character styles kept as styles here, met in the text. */
+  private usedChar = new Set<string>();
+
+  /** A character style to keep as one (not Word's working ones, nor those linked to a paragraph style). */
+  private keptCharStyle(id: string): boolean {
+    const ws = this.wstyles.get(`character:${id}`);
+    return !!ws && !WORD_INNER_CHAR.has(id) && id !== FORMULA_STYLE && ws.name !== 'Chemical Formula' && !kid(ws.el, 'link');
+  }
+
+  /** The character styles met, as styles here: what each sets. */
+  private charStylesRead(): Record<string, CharStyle> | undefined {
+    if (!this.usedChar.size) return undefined;
+    const own = defaultCharStyles();
+    const out: Record<string, CharStyle> = {};
+    for (const id of this.usedChar) {
+      const ws = this.wstyles.get(`character:${id}`);
+      const r = this.chain('character', id).r;
+      const cs: CharStyle = { id, name: own[id]?.name ?? ws?.name ?? id };
+      if (!own[id]) cs.custom = true;
+      if (r.font) cs.font = r.font;
+      if (r.size) cs.size = r.size;
+      if (r.bold !== undefined) cs.bold = r.bold;
+      if (r.italic !== undefined) cs.italic = r.italic;
+      if (r.underline) cs.underline = true;
+      if (r.color) cs.color = r.color;
+      if (r.smallCaps) cs.smallCaps = true;
+      if (r.allCaps) cs.allCaps = true;
+      if (r.strike) cs.strike = true;
+      out[id] = cs;
+    }
+    return out;
   }
 
   private charCache = new Map<string, RProps>();
@@ -430,6 +525,7 @@ class DocxReader {
         const m = JSON.parse(d.textContent ?? '') as DocxModel;
         if (m?.app !== 'Chem Illustrator') continue;
         this.model = m;
+        if (Array.isArray(m.references)) this.liveRefs = m.references.map((r) => cleanRef(r));
         if (m.drawingStyle) this.drawingStyle = { ...ACS_1996, ...m.drawingStyle };
         return;
       } catch {
@@ -575,13 +671,26 @@ class DocxReader {
       switch (el.localName) {
         case 'p': this.paragraph(el); break;
         case 'tbl': this.table(el); break;
-        case 'sdt': this.blocks(kids(kid(el, 'sdtContent'))); break;
+        case 'sdt':
+          if (this.sdtTag(el) === 'MENDELEY_BIBLIOGRAPHY') { this.managedBibliography(); break; }
+          this.blocks(kids(kid(el, 'sdtContent')));
+          break;
         case 'customXml': case 'ins': case 'moveTo': case 'smartTag': this.blocks(kids(el)); break;
         case 'AlternateContent': this.blocks(kids(this.alternate(el))); break;
         case 'bookmarkStart': this.markStart(el); break;
         case 'bookmarkEnd': this.markEnd(el); break;
       }
     }
+  }
+
+  /** Mendeley Cite's bibliography (a content control of paragraphs): ours, worked out here, in a paragraph of its own. */
+  private managedBibliography(): void {
+    this.manager ??= 'mendeley-cite';
+    const id = this.nextId++;
+    this.objects[id] = { kind: 'bib' };
+    const base = merge<RProps>(this.docDefaults.r, this.chain('paragraph', this.defaultPara).r);
+    const ps = cleanPara({ section: this.takeBreak() });
+    this.out.push({ ps, runs: [{ ...this.runStyle(base), obj: id, text: OBJECT_CHAR }], mark: this.runStyle(base), style: 'Normal', contextual: false });
   }
 
   /** The part of a choice of contents (mc:AlternateContent) to read: the plain one meant for older programs. */
@@ -657,7 +766,7 @@ class DocxReader {
     const style = this.wstyles.has(`paragraph:${sid}`) ? sid : this.defaultPara;
     const ch = this.chain('paragraph', style);
     const direct = this.readPPr(pPr);
-    const p = merge<PProps>(this.docDefaults.p, ch.p, direct);
+    const p = mergeP(this.docDefaults.p, ch.p, direct);
     const base = merge<RProps>(this.docDefaults.r, ch.r);
     const mark = merge<RProps>(base, this.readRPr(kid(pPr, 'rPr')));
     return { style, p, direct, base, mark };
@@ -695,11 +804,19 @@ class DocxReader {
     const levels = numId && numId !== '0' ? this.abstracts.get(this.nums.get(numId) ?? '') : undefined;
     const ilvl = Math.max(0, Math.min(8, own.ilvl ?? 0));
     const level = levels?.[ilvl];
-    const p = level ? merge<PProps>(this.docDefaults.p, this.chain('paragraph', style).p, level.p, direct) : own;
+    const p = level ? mergeP(this.docDefaults.p, this.chain('paragraph', style).p, level.p, direct) : own;
     let list: 'bullet' | 'number' | undefined;
-    if (level && level.fmt !== 'none') {
+    let scheme: string | undefined, bullet: string | undefined;
+    if (level && levels && level.fmt !== 'none') {
       list = level.fmt === 'bullet' ? 'bullet' : 'number';
-      if (list === 'number' && (level.fmt !== ['decimal', 'lowerLetter', 'lowerRoman'][ilvl % 3] || !new RegExp(`^%${ilvl + 1}\\.$`).test(level.text))) this.warn('numbering');
+      if (list === 'number') {
+        const sc = schemeFor(levels, ilvl);
+        if (sc === null) this.warn('numbering');
+        else if (sc) scheme = sc;
+      } else {
+        const b = SYMBOL_BULLETS[level.text] ?? level.text;
+        if (b !== BULLETS[ilvl % BULLETS.length] && BULLET_LIBRARY.includes(b)) bullet = b;
+      }
     }
     const firstSize = ctx.pieces[0].runs.find((r) => r.obj === undefined)?.size ?? size;
     let indent = Math.max(0, p.left ?? 0);
@@ -713,8 +830,9 @@ class DocxReader {
       ...(p.line && p.line.rule !== 'auto' ? { linePt: round(p.line.v / 20), lineRule: p.line.rule === 'exact' ? 'exact' as const : 'atLeast' as const } : { line: this.lineOf(p, size) }),
       indent: round(indent), indentRight: p.right ? round(Math.max(0, p.right)) : undefined, firstLine: list ? undefined : round(p.first ?? 0), keepNext: p.keepNext,
       pageBreak: p.pageBreak, section: brk, list, level: list ? ilvl : undefined, noLineNumbers: p.noLineNumbers,
+      tabs: finalTabs(p), scheme, bullet,
     };
-    const markStyle = this.runStyle(mark);
+    const markStyle = this.runStyle({ ...mark, cstyle: undefined });
     const mrEl = kid(kid(pPr, 'rPr'), 'ins') ?? kid(kid(pPr, 'rPr'), 'del');
     const markRevOf = mrEl ? revText({ kind: mrEl.localName === 'ins' ? 'ins' : 'del', author: this.a(mrEl, 'author') ?? '', date: this.a(mrEl, 'date') ?? '' }) : undefined;
     ctx.pieces.forEach((pc, i) => {
@@ -767,6 +885,7 @@ class DocxReader {
     const formula = !!r.formula;
     return rt.cleanStyle({
       font: r.font ?? WORD_FONT, size: r.size ?? WORD_SIZE, bold: r.bold, italic: r.italic, underline: r.underline,
+      strike: r.strike, smallCaps: r.smallCaps, allCaps: r.allCaps, cstyle: r.cstyle,
       color: r.color ?? undefined, highlight: r.highlight ?? undefined, formula: formula || undefined,
       sub: (!formula && r.pos === 'sub') || undefined, sup: (!formula && r.pos === 'sup') || undefined,
     });
@@ -926,7 +1045,13 @@ class DocxReader {
         }
         case 'fldSimple': this.simpleField(el, ctx); break;
         case 'smartTag': case 'customXml': case 'dir': case 'bdo': this.inline(kids(el), ctx); break;
-        case 'sdt': this.inline(kids(kid(el, 'sdtContent')), ctx); break;
+        case 'sdt': {
+          // a Mendeley Cite citation: its content control's tag holds the citation
+          const m = !ctx.cell && !this.swallowing() ? readMendeleyTag(this.sdtTag(el)) : null;
+          if (m && this.managedCite(m, ctx, merge<RProps>(ctx.base, this.readRPr(kid(kid(el, 'sdtContent'), 'r', 'rPr'))))) break;
+          this.inline(kids(kid(el, 'sdtContent')), ctx);
+          break;
+        }
         // tracked changes: the text keeps its mark, to be accepted or rejected here or in Word
         case 'ins': case 'moveTo': case 'del': case 'moveFrom': {
           const before = this.rev;
@@ -1004,7 +1129,10 @@ class DocxReader {
 
   private fieldChar(c: Element, r: RProps, ctx: Ctx): void {
     const type = this.a(c, 'fldCharType');
-    if (type === 'begin') this.fields.push({ instr: '', phase: 'instr', swallow: false, text: '', props: r, done: false });
+    if (type === 'begin') {
+      const data = kid(c, 'fldData')?.textContent?.trim();
+      this.fields.push({ instr: '', phase: 'instr', swallow: false, text: '', props: r, done: false, ...(data ? { data } : {}) });
+    }
     else if (type === 'separate') {
       const f = this.fields[this.fields.length - 1];
       if (!f) return;
@@ -1014,6 +1142,9 @@ class DocxReader {
       const f = this.fields.pop();
       if (!f) return;
       if (f.phase === 'instr') { f.phase = 'result'; this.startField(f, ctx); }
+      // a field inside another's instruction (EndNote's EN.CITE.DATA): its data is the outer field's
+      const outer = this.fields[this.fields.length - 1];
+      if (f.data && outer?.phase === 'instr' && !outer.data) outer.data = f.data;
       if (f.ref) f.ref.text = f.text;
       if (f.before) this.link = f.before.link;
     }
@@ -1056,6 +1187,20 @@ class DocxReader {
       f.swallow = true;
       return;
     }
+    // a citation from Zotero, Mendeley or EndNote: its items become the document's references
+    const managed = /^ADDIN\s/i.test(ins) ? readCiteField(ins, f.data) : null;
+    if (managed && !ctx.cell) {
+      if (this.managedCite(managed, ctx, f.props)) f.swallow = true;
+      return;
+    }
+    // a reference manager's bibliography: ours, worked out here, in its place
+    const bibApp = bibFieldApp(ins);
+    if (bibApp && !ctx.cell) {
+      this.manager ??= bibApp;
+      const id = this.emitObject(ctx, { kind: 'bib' }, f.props);
+      if (id !== null) { f.swallow = true; f.toc = true; }
+      return;
+    }
     // a citation saved here: live again, citing the references in our part
     const cite = new RegExp(`^${CITE_FIELD}\\b(.*)$`).exec(ins);
     if (cite && this.model?.references && !ctx.cell) {
@@ -1088,7 +1233,40 @@ class DocxReader {
       if (link) { f.before = { link: this.link }; this.link = link; }
       return;
     }
-    if (/^ADDIN\s+(EN\.CITE|ZOTERO|CSL|Mendeley|RW)/i.test(ins)) this.warn('citations');
+    if (/^ADDIN\s+(EN\.CITE|ZOTERO|CSL|Mendeley|RW)/i.test(ins) && !/^ADDIN\s+EN\.CITE\.DATA/i.test(ins)) this.warn('citations');
+  }
+
+  /** A reference manager's citation as ours, its items put in the document's references. True when it was put in. */
+  private managedCite(c: ManagerCite, ctx: Ctx, props: RProps): boolean {
+    if (!c.items.length) return false;
+    this.manager ??= c.app;
+    const refs: string[] = [];
+    const items: Record<string, Record<string, unknown>> = {};
+    for (const it of c.items) {
+      const id = placeRef(this.liveRefs, it.ref);
+      refs.push(id);
+      if (Object.keys(it.extra).length) items[id] = it.extra;
+    }
+    const live: CiteLive = { app: c.app, ...(c.id ? { id: c.id } : {}), ...(Object.keys(items).length ? { items } : {}) };
+    return this.emitObject(ctx, { kind: 'cite', refs, live }, props, true) !== null;
+  }
+
+  /** Zotero's document preferences: the ZOTERO_PREF_1, _2… custom document properties joined, or null. */
+  private zoteroPrefs(): string | null {
+    const path = this.pkg.relOfType('', REL.customProps);
+    const root = path ? this.pkg.xml(path)?.documentElement : null;
+    if (!root) return null;
+    const parts: [number, string][] = [];
+    for (const p of Array.from(root.children)) {
+      const n = /^ZOTERO_PREF_(\d+)$/.exec(p.getAttribute('name') ?? '');
+      if (n) parts.push([Number(n[1]), p.textContent ?? '']);
+    }
+    return parts.length ? parts.sort((a, b) => a[0] - b[0]).map((x) => x[1]).join('') : null;
+  }
+
+  /** A content control's tag (w:sdtPr/w:tag), or ''. */
+  private sdtTag(el: Element): string {
+    return this.a(kid(kid(el, 'sdtPr'), 'tag'), 'val') ?? '';
   }
 
   private markStart(el: Element): void {
@@ -1204,10 +1382,23 @@ class DocxReader {
     }
     if (!pic) { this.warn('shapes'); return; }
     const blip = kid(pic, 'blipFill', 'blip');
-    if (kid(kid(pic, 'blipFill'), 'srcRect')?.attributes.length) this.warn('crop');
     const svg = blip ? Array.from(blip.getElementsByTagNameNS('*', 'svgBlip'))[0] : undefined;
-    const target = this.relTarget(rAttr(svg, 'embed')) ?? this.relTarget(rAttr(blip, 'embed'));
-    this.picture(target, shown, r, ctx, look, float);
+    let target = this.relTarget(rAttr(svg, 'embed')) ?? this.relTarget(rAttr(blip, 'embed'));
+    // Picture Format: Word's effects, and the original when sharpening or Remove Background is worked into the blip
+    const got = readPictureFx(blip, kid(pic, 'spPr'));
+    if (got.dropped) this.warn('pictureFx');
+    const fx = got.fx;
+    const layer = got.layer && !svg ? this.relTarget(got.layer) : null;
+    if (fx && layer && this.pkg.bytes(layer)) target = layer;
+    else if (fx) { delete fx.sharpen; delete fx.bg; }
+    const mine = /^Picture (\d+)$/.exec(name);
+    const tol = mine ? this.model?.pictureTol?.[Number(mine[1])] : undefined;
+    if (fx?.bg && typeof tol === 'number' && tol > 0 && tol <= 1) fx.bg.tol = tol;
+    const sr = kid(kid(pic, 'blipFill'), 'srcRect');
+    const f = (k: string) => Math.max(0, Number(sr?.getAttribute(k) ?? 0) / 100000 || 0);
+    const crop = sr ? { l: f('l'), t: f('t'), r: f('r'), b: f('b') } : null;
+    const more = { ...(crop && (crop.l || crop.t || crop.r || crop.b) && crop.l + crop.r < 0.99 && crop.t + crop.b < 0.99 ? { crop } : {}), ...(tidyFx(fx) ? { fx: tidyFx(fx) } : {}) };
+    this.picture(target, shown, r, ctx, look, float, more);
   }
 
   private relTarget(id: string | null): string | null {
@@ -1216,7 +1407,7 @@ class DocxReader {
     return rel && !rel.external ? rel.target : null;
   }
 
-  private picture(path: string | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx, look?: FigureLook | null, float?: Float | null): void {
+  private picture(path: string | null, shown: { w: number; h: number }, r: RProps, ctx: Ctx, look?: FigureLook | null, float?: Float | null, more: { crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx } = {}): void {
     const bytes = path ? this.pkg.bytes(path) : null;
     if (!bytes || shown.w <= 0 || shown.h <= 0) return;
     const ext = (path ?? '').split('.').pop()?.toLowerCase() ?? '';
@@ -1227,7 +1418,7 @@ class DocxReader {
     const inside = mime === 'image/x-emf' ? drawingInEmf(bytes) : null;
     if (inside && this.drawingAt(this.deps.cdxml?.(inside, this.drawingStyle) ?? null, shown, r, ctx, look, float)) return;
     const px = imageSize(bytes, mime) ?? undefined;
-    this.emitObject(ctx, { kind: 'picture', src: dataUrl(bytes, mime), w: round(shown.w), h: round(shown.h), px, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r);
+    this.emitObject(ctx, { kind: 'picture', src: dataUrl(bytes, mime), w: round(shown.w), h: round(shown.h), px, ...more, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r);
   }
 
   /** Older (VML) pictures, and embedded objects with their picture: ChemDraw's become structures. */
@@ -1391,7 +1582,7 @@ class DocxReader {
     const normal = merge<RProps>(this.docDefaults.r, this.chain('paragraph', this.defaultPara).r);
     const ctx: Ctx = { base: normal, pieces: [{ runs: [], pageBreak: false, soft: false }], cell: false };
     this.emitObject(ctx, { kind: 'drawing', contents }, normal);
-    const np = merge<PProps>(this.docDefaults.p, this.chain('paragraph', this.defaultPara).p);
+    const np = mergeP(this.docDefaults.p, this.chain('paragraph', this.defaultPara).p);
     this.used.add(this.defaultPara);
     this.out.push({
       ps: cleanPara({ align: jc === 'left' ? undefined : jc, spaceBefore: np.before, spaceAfter: np.after, section: this.takeBreak() }),
@@ -1401,6 +1592,30 @@ class DocxReader {
 
   /** Inside a table cell being read (a table in it becomes a drawn table). */
   private inCell = false;
+  /** Word table styles the tables use that aren't built in here (or that Word changed), by id. */
+  private tableStyles: Record<string, TableStyleDef> = {};
+
+  /**
+   * A Word table style the text's tables can be drawn in: one of ours by its id (unless the
+   * file's differs), the file's own kept with the document, or null for a style that only
+   * draws lines round cells (the table's lines then stand for it, as before).
+   */
+  private tableStyleOf(id: string): string | null {
+    const chain: Element[] = [];
+    const seen = new Set<string>();
+    let name = id;
+    for (let st = this.wstyles.get(`table:${id}`); st && !seen.has(st.id); st = st.basedOn ? this.wstyles.get(`table:${st.basedOn}`) : undefined) {
+      seen.add(st.id);
+      if (st.id === id) name = st.name || id;
+      chain.unshift(st.el);
+    }
+    const ours = builtInStyle(id);
+    if (!chain.length) return ours && styleIsRich(ours) ? id : null;
+    const def = readTableStyle(id, name, chain, this.a.bind(this), this.on.bind(this));
+    if (!styleIsRich(def)) return null;
+    if (!(ours && sameStyle(ours, def))) this.tableStyles[id] = def;
+    return id;
+  }
 
   /** A Word table as a table in the text: its cells read as text is (structures and pictures kept). */
   private textTable(tbl: Element): void {
@@ -1431,6 +1646,8 @@ class DocxReader {
           if (fill && /^[0-9a-f]{6}$/i.test(fill) && fill.toLowerCase() !== 'ffffff') cell.fill = `#${fill.toLowerCase()}`;
           const va = this.a(kid(tcPr, 'vAlign'));
           if (va === 'center' || va === 'bottom') cell.valign = va;
+          const mar = readMargins(kid(tcPr, 'tcMar'), this.a.bind(this));
+          if (vm !== 'continue' && Object.keys(mar).length) cell.pad = mar;
           row.push({ cell, span, borders: kid(tcPr, 'tcBorders'), vm });
         }
         grid.push(row);
@@ -1445,11 +1662,20 @@ class DocxReader {
     const table: TableData = { cols, rows: [], head: 0, lines: 'none' };
     // the cell each grid column's merge down started at (while it carries on)
     const open = new Map<number, TableCell>();
+    // each cell's own lines, where it sits in the table (a merged cell's from each of its rows)
+    const own: (CellBorders | undefined)[][] = [];
     for (const row of grid) {
       const out: TableCell[] = [];
+      const lines: (CellBorders | undefined)[] = [];
+      own.push(lines);
       for (const c of row) {
         if (out.length >= cols.length) break;
         const at = out.length;
+        if (c.borders) {
+          const bs = readBorders(c.borders, this.a.bind(this));
+          const cb: CellBorders = { ...(bs.top ? { top: bs.top } : {}), ...(bs.bottom ? { bottom: bs.bottom } : {}), ...(bs.left ? { left: bs.left } : {}), ...(bs.right ? { right: bs.right } : {}) };
+          if (Object.keys(cb).length) lines[at] = cb;
+        }
         const top = c.vm === 'continue' ? open.get(at) : undefined;
         if (top) top.rowSpan = (top.rowSpan ?? 1) + 1;
         else for (let k = 0; k < c.span; k++) open.delete(at + k);
@@ -1472,6 +1698,8 @@ class DocxReader {
       if (cb.get('top') || cb.get('bottom')) cellH = true;
       if (cb.get('bottom') && ri < grid.length - 1 && underRow < 0) underRow = ri;
     }));
+    // the table's own lines say which (the cells' lines only when it has none; they are kept as the cells' own below)
+    if (b.size) cellV = cellH = false;
     table.lines = b.get('insideV') || cellV ? 'grid' : b.get('top') || b.get('bottom') || b.get('insideH') || cellH ? 'acs' : 'none';
     table.head = head || (table.lines === 'acs' && underRow >= 0 && underRow < 3 ? underRow + 1 : 0);
     // each column lines up the way most of its cells do
@@ -1481,6 +1709,33 @@ class DocxReader {
       return [...count.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] ?? 'left';
     });
     table.rows.forEach((row) => row.forEach((c, ci) => { if (c.align === table.align![ci] || (!c.runs.length && c.align)) delete c.align; }));
+    // a Word table style that shades or picks out parts: drawn in it here too
+    const styleId = style ? this.tableStyleOf(style) : null;
+    if (styleId) {
+      table.style = styleId;
+      const look = readTableLook(kid(tblPr, 'tblLook'), this.a.bind(this));
+      if (look) table.look = look;
+      if ((look?.header ?? true) && !table.head) table.head = 1;
+    }
+    // the cell margins, when not the standard ones
+    const mar = readMargins(kid(tblPr, 'tblCellMar'), this.a.bind(this));
+    if (Object.keys(mar).length) {
+      const pad = { ...DEFAULT_MARGINS, ...mar };
+      if (Object.entries(pad).some(([k, v]) => Math.abs(v - DEFAULT_MARGINS[k as keyof typeof DEFAULT_MARGINS]) > 0.01)) table.pad = pad;
+    }
+    // a cell merged down: its bottom line is the last row's
+    for (let r = 0; r < table.rows.length; r++) {
+      for (let c = 0; c < cols.length; c++) {
+        const o = coveringCell(table, r, c);
+        if (o.r === r || o.c !== c) continue;
+        const b = own[r]?.[c]?.bottom;
+        if (b) own[o.r][c] = { ...own[o.r][c], bottom: b };
+        if (own[r]) own[r][c] = undefined;
+      }
+    }
+    // lines Word draws that the style (or the lines chosen) here doesn't: kept as the cells' own
+    const direct = styleId ? {} : readBorders(kid(tblPr, 'tblBorders'), this.a.bind(this));
+    Object.assign(table, keepDirectBorders(table, direct, own, this.tableStyles));
     const jc = JUSTIFY[this.a(kid(tblPr, 'jc')) ?? 'left'] ?? 'left';
     const normal = merge<RProps>(this.docDefaults.r, this.chain('paragraph', this.defaultPara).r);
     const ctx: Ctx = { base: normal, pieces: [{ runs: [], pageBreak: false, soft: false }], cell: false };
@@ -1675,7 +1930,14 @@ class DocxReader {
               break;
             }
             case 'instrText': { const f = fields[fields.length - 1]; if (f && !f.result) f.instr += c.textContent ?? ''; break; }
-            case 'drawing': case 'pict': case 'object': this.warn('hfPictures'); break;
+            case 'pict': {
+              // Word's watermarks: a text one is read with the page's look, a picture one is lost
+              const id = Array.from(c.getElementsByTagNameNS('*', 'shape')).map((e) => e.getAttribute('id') ?? '').join(' ');
+              if (/PowerPlusWaterMarkObject/.test(id)) break;
+              this.warn(/WordPictureWatermark/.test(id) ? 'pictureWatermark' : 'hfPictures');
+              break;
+            }
+            case 'drawing': case 'object': this.warn('hfPictures'); break;
             default: visit(c);
           }
         }
@@ -1693,7 +1955,7 @@ class DocxReader {
   private named(wordId: string, ours: string): NamedStyle {
     const ws = this.wstyles.get(`paragraph:${wordId}`);
     const ch = this.chain('paragraph', wordId);
-    const p = merge<PProps>(this.docDefaults.p, ch.p);
+    const p = mergeP(this.docDefaults.p, ch.p);
     const r = merge<RProps>(this.docDefaults.r, ch.r);
     const size = r.size ?? WORD_SIZE;
     const dflt = defaultStyles()[ours];
@@ -1705,8 +1967,41 @@ class DocxReader {
       align: p.align ?? 'left', spaceBefore: round(p.before ?? 0), spaceAfter: round(p.after ?? 0), line: this.lineOf(p, size) ?? 1,
       indent: round(Math.max(0, p.left ?? 0)), firstLine: round(p.first ?? 0), keepNext: !!p.keepNext,
       next: next && next !== ours ? next : ours === 'Normal' ? undefined : dflt?.next,
-      outline: OUTLINE[ours] ?? (p.outline && p.outline <= 3 && ours !== 'Normal' ? p.outline : undefined),
+      outline: OUTLINE[ours] ?? (p.outline && p.outline <= 9 && ours !== 'Normal' ? p.outline : undefined),
     };
+  }
+
+  /** Design > Page Background: the page colour, the first section's page border and its header's text watermark. */
+  private readPageLook(t: DocText, root: Element, sect: Element | null): void {
+    const bg = colourOf(this.a(kid(root, 'background'), 'color'));
+    if (bg && bg !== '#ffffff') t.pageColor = bg;
+    const pb = kid(sect, 'pgBorders');
+    const side = pb && (kid(pb, 'top') ?? kid(pb, 'left') ?? kid(pb, 'bottom') ?? kid(pb, 'right'));
+    const val = this.a(side);
+    if (side && val && val !== 'none' && val !== 'nil') {
+      const style: PageBorder['style'] = /^thi(ck|n)Thi/.test(val) || val === 'thick' ? 'thick' : val === 'double' || val === 'triple' ? 'double' : /dot/i.test(val) && !/dash/i.test(val) ? 'dotted' : /dash/i.test(val) ? 'dashed' : 'single';
+      t.pageBorder = {
+        style,
+        width: Math.max(0.25, Number(this.a(side, 'sz') ?? 4) / 8),
+        color: colourOf(this.a(side, 'color')) ?? '#000000',
+        from: this.a(pb, 'offsetFrom') === 'page' ? 'page' : 'text',
+        space: Math.max(0, Number(this.a(side, 'space') ?? 0) || 0),
+      };
+    }
+    const head = this.relTarget(rAttr(kids(sect, 'headerReference').find((e) => (this.a(e, 'type') ?? 'default') === 'default'), 'id'));
+    const hroot = head ? this.pkg.xml(head)?.documentElement : null;
+    const shape = hroot ? Array.from(hroot.getElementsByTagNameNS('*', 'shape')).find((e) => /^PowerPlusWaterMarkObject/.test(e.getAttribute('id') ?? '')) : undefined;
+    const tp = shape && Array.from(shape.getElementsByTagNameNS('*', 'textpath'))[0];
+    const text = tp?.getAttribute('string');
+    if (shape && tp && text) {
+      const style = shape.getAttribute('style') ?? '';
+      const font = /font-family:\s*"?([^";]+)"?/.exec(tp.getAttribute('style') ?? '')?.[1]?.trim();
+      const fill = (shape.getAttribute('fillcolor') ?? 'silver').trim().toLowerCase();
+      const color = colourOf(fill.replace(/^#/, '')) ?? VML_COLOURS[fill.split(/\s/)[0]] ?? '#c0c0c0';
+      const op = Array.from(shape.getElementsByTagNameNS('*', 'fill'))[0]?.getAttribute('opacity');
+      const wm: Watermark = { text, font: font || 'Calibri', color, layout: /rotation:\s*-?\d/.test(style) && !/rotation:\s*0\b/.test(style) ? 'diagonal' : 'horizontal', faded: !!op && parseFloat(op.replace(/f$/, '')) < (op.endsWith('f') ? 65536 : 1) };
+      t.watermark = wm;
+    }
   }
 
   private assemble(hf: HeaderFooter, sect: Element | null): DocText {
@@ -1737,6 +2032,10 @@ class DocxReader {
     const objects: Record<number, DocObject> = {};
     for (const [k, v] of Object.entries(this.objects)) if (used.has(Number(k))) objects[Number(k)] = v;
     const m = this.model;
+    // Zotero's document preferences (its style), kept to save back
+    const zoteroPrefs = this.zoteroPrefs();
+    const zoteroStyle = zoteroPrefs ? styleFromCsl(zoteroStyleOf(zoteroPrefs) ?? '') : null;
+    const manager = this.manager ?? (m?.citeManager && m.citeManager in MANAGERS ? m.citeManager : undefined) ?? (zoteroPrefs ? 'zotero' : undefined);
     // comments: the replies' ranges are their comment's; comments with no text go
     const cm = this.readComments();
     let comments: Record<number, CommentThread> | undefined;
@@ -1763,17 +2062,21 @@ class DocxReader {
       objects,
       drawingStyle: this.drawingStyle,
       ...(this.trackOn() ? { track: true } : {}),
+      ...(this.charStylesRead() ? { charStyles: this.charStylesRead() } : {}),
       ...(this.numFormatOf(sect) !== 'decimal' ? { numFormat: this.numFormatOf(sect) } : {}),
       ...(this.lineNumbersOf(sect) ? { lineNumbers: this.lineNumbersOf(sect) } : {}),
       ...(Object.keys(this.noteFormats).length ? { notes: this.noteFormats } : {}),
-      ...(Array.isArray(m?.references) ? { references: m.references.map((r) => cleanRef(r)) } : {}),
-      ...(typeof m?.citeStyle === 'string' && m.citeStyle in CITE_PRESETS ? { citeStyle: m.citeStyle } : {}),
+      ...(Object.keys(this.tableStyles).length ? { tableStyles: this.tableStyles } : {}),
+      ...(this.liveRefs.length || Array.isArray(m?.references) ? { references: this.liveRefs } : {}),
+      ...(typeof m?.citeStyle === 'string' && m.citeStyle in CITE_PRESETS ? { citeStyle: m.citeStyle } : zoteroStyle ? { citeStyle: zoteroStyle } : {}),
+      ...(manager ? { citeManager: manager } : {}),
+      ...(zoteroPrefs ? { zoteroPrefs } : {}),
       ...(m?.citeOptions && Object.keys(cleanOptions(m.citeOptions)).length ? { citeOptions: cleanOptions(m.citeOptions) } : {}),
     };
   }
 }
 
-const BUILT_IN_IDS: Record<string, true> = { Normal: true, Title: true, Heading1: true, Heading2: true, Heading3: true, Caption: true };
+const BUILT_IN_IDS: Record<string, true> = { Normal: true, Title: true, Caption: true, ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`Heading${n}`, true as const])) };
 
 /** A VML shape's size from its style ("width:120pt;height:36.5pt"), in points. */
 function vmlSize(style: string): { w: number; h: number } {
@@ -1837,4 +2140,21 @@ function keepUsedMarks(t: DocText): void {
     const { marks: _m, ...rest } = p;
     return marks.length ? { ...rest, marks } : rest;
   });
+}
+
+/** A Word colour ("FF0000", "auto") as ours (null for automatic or none). */
+function colourOf(v: string | null | undefined): string | null {
+  return v && /^[0-9a-f]{6}$/i.test(v) ? `#${v.toLowerCase()}` : null;
+}
+
+/**
+ * The multilevel scheme a numbered list's levels are (its id), '' for the usual 1. a. i., or
+ * null when none here writes its numbers the way the file does. Levels the file leaves out
+ * don't count; the level the paragraph is at must match.
+ */
+function schemeFor(levels: Level[], ilvl: number): string | null {
+  const same = (l: Level | undefined, i: number, s: (typeof LIST_SCHEMES)[number]) => !!l && l.fmt === s.levels[i].fmt && l.text === s.levels[i].text;
+  const fits = LIST_SCHEMES.filter((s) => same(levels[ilvl], ilvl, s));
+  if (!fits.length) return null;
+  return (fits.find((s) => levels.every((l, i) => !l || l.fmt === 'bullet' || l.fmt === 'none' || i > 8 || same(l, i, s))) ?? fits[0]).id;
 }

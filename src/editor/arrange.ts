@@ -2,7 +2,7 @@
 // selection. Each structure, caption, arrow and shape counts as one object; only the selected
 // part of a structure moves.
 
-import { Doc, Atom, Caption, Bond, Arrow, Shape } from '../model';
+import { Doc, Atom, Caption, Bond, Arrow, Shape, turnsFreely } from '../model';
 import { Vec, Rect, add, sub, normDegrees } from '../geom';
 import { arrowPoints, boxOf, shapeBox, unionRect } from '../objects';
 import { frameMembers } from './frames';
@@ -222,7 +222,13 @@ export function transform(doc: Doc, snap: Snapshot, f: (p: Vec) => Vec, mirror: 
     } else {
       const mid = { x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 };
       const d = sub(f(mid), mid);
-      doc.updateShape(s.id, { x1: s.x1 + d.x, y1: s.y1 + d.y, x2: s.x2 + d.x, y2: s.y2 + d.y });
+      const patch: Partial<Shape> = { x1: s.x1 + d.x, y1: s.y1 + d.y, x2: s.x2 + d.x, y2: s.y2 + d.y };
+      // in Slides and Design pictures and shapes turn with the selection, as in PowerPoint
+      if (turn?.shapes && turnsFreely(s)) {
+        const rot = normDegrees((s.rot ?? 0) + turn.deg);
+        patch.rot = Math.abs(rot) < 1e-9 ? undefined : rot;
+      } else if (mirror && s.rot) patch.rot = -s.rot;
+      doc.updateShape(s.id, patch);
     }
   }
 }
@@ -231,6 +237,8 @@ export function transform(doc: Doc, snap: Snapshot, f: (p: Vec) => Vec, mirror: 
 export interface TurnText {
   deg: number;
   which: (c: Caption) => boolean;
+  /** Pictures, boxes and design shapes turn too (Slides and Design), instead of only moving. */
+  shapes?: boolean;
 }
 
 export const rotation = (c: Vec, ang: number) => (p: Vec): Vec => {

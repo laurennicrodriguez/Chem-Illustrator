@@ -59,7 +59,7 @@ export const OUTLINE_LEFT = 36;
 /** Narrowest text Web Layout and Outline wrap to, in points. */
 const NARROWEST = 144;
 
-/** A paragraph's outline level: 1 to 3 for headings, 0 for body text. */
+/** A paragraph's outline level: 1 to 9 for headings, 0 for body text. */
 export function outlineLevel(t: Pick<DocText, 'styles'>, ps: ParaStyle | undefined): number {
   return styleOf(t, ps).outline ?? 0;
 }
@@ -139,12 +139,14 @@ function plainRun(r: TextRun): TextRun {
 
 const HEADING = (L: number) => `Heading${L}`;
 
-/** A document with Word's three heading styles (one read from a file may lack some). */
+const LEVELS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+/** A document with Word's nine heading styles (one read from a file, or made before there were nine, may lack some). */
 export function withHeadings(t: DocText): DocText {
   const d = defaultStyles();
-  if ([1, 2, 3].every((L) => t.styles[HEADING(L)])) return t;
+  if (LEVELS.every((L) => t.styles[HEADING(L)])) return t;
   const styles = { ...t.styles };
-  for (const L of [1, 2, 3]) styles[HEADING(L)] ??= d[HEADING(L)];
+  for (const L of LEVELS) styles[HEADING(L)] ??= d[HEADING(L)];
   return { ...t, styles };
 }
 
@@ -187,7 +189,7 @@ export function changeLevel(t: DocText, o: OutlineState, first: number, last: nu
         for (let q = p - 1; q >= 0 && !above; q--) above = levels[q];
         to = Math.max(1, above);
       }
-    } else if (op === 'demote' && L && L < 3) to = L + 1;
+    } else if (op === 'demote' && L && L < 9) to = L + 1;
     if (to === null || to === L) continue;
     out = setParaStyle(out, p, p, to ? HEADING(to) : 'Normal');
   }

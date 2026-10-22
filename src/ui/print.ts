@@ -13,28 +13,22 @@ function clear(): void {
 }
 
 /**
- * Print SVG pages of one size (w × h points), or an HTML table (`html`) on the paper the
- * printer is set to. Fonts and pictures are those of the window, so text prints as on screen.
+ * Print pages of one size (w × h points), each an SVG or HTML laid out at that size. Fonts and
+ * pictures are those of the window, so text prints as on screen.
  */
-export function printPages(what: { pages: string[]; w: number; h: number } | { html: string; landscape?: boolean }): void {
+export function printPages(what: { pages: string[]; w: number; h: number }): void {
   clear();
   root = document.createElement('div');
   root.id = 'print-root';
   pageRule = document.createElement('style');
-  if ('pages' in what) {
-    pageRule.textContent = `@page { size: ${what.w}pt ${what.h}pt; margin: 0; }`;
-    for (const svg of what.pages) {
-      const p = document.createElement('div');
-      p.className = 'print-page';
-      p.style.width = `${what.w}pt`;
-      p.style.height = `${what.h}pt`;
-      p.innerHTML = svg;
-      root.append(p);
-    }
-  } else {
-    pageRule.textContent = `@page { ${what.landscape ? 'size: landscape; ' : ''}margin: 0.5in; }`;
-    root.className = 'print-table';
-    root.innerHTML = what.html;
+  pageRule.textContent = `@page { size: ${what.w}pt ${what.h}pt; margin: 0; }`;
+  for (const svg of what.pages) {
+    const p = document.createElement('div');
+    p.className = 'print-page';
+    p.style.width = `${what.w}pt`;
+    p.style.height = `${what.h}pt`;
+    p.innerHTML = svg;
+    root.append(p);
   }
   document.head.append(pageRule);
   document.body.append(root);

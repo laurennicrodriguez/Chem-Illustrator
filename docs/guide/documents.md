@@ -20,6 +20,8 @@ When the pointer turns into a pointing hand over a structure, it is a drawing yo
 
 - **Home** tab: font, size, colour, bold (Ctrl+B), italic (Ctrl+I), underline (Ctrl+U), subscript (Ctrl+=), superscript (Ctrl+Shift+=), bigger and smaller (Ctrl+] and Ctrl+[).
 - **C₉H₈** sets the selection in formula style: numbers lowered, charges raised.
+- **Format Painter** (beside **Copy**) copies the look of the selected text, or of the paragraph the caret is in, to the next text you click or drag over; double-click it to keep painting until Esc. See [Getting started](getting-started.md#format-painter-every-mode).
+- **Insert** tab ▸ **Symbol** types Greek letters, arrows, °, Å and other signs, found by name; see [Insert ▸ Symbol](getting-started.md#insert--symbol-every-mode).
 - **Highlight:** the **ab** button highlights the selected text; the arrow beside it picks the colour.
 - The chemistry typing helpers work as in the other modes: type CH2Cl2 or CDCl3 and the numbers drop down once you type a space or punctuation after it.
 - Misspelt words get a red line, and right-click offers corrections. Chemistry words are in the dictionary; add your own with right-click ▸ **Add to Dictionary**. **Edit ▸ Typing and Spelling…** has the settings.
@@ -52,6 +54,8 @@ To change a style, open the ⬊ in the corner of **Styles** (or the **Format** p
 - **Insert** tab ▸ **Icons** puts an icon in the text the same way: about 7,000, lab and science ones (glassware, molecules, hazard and safety signs) first. See [Design: Icons](design.md#icons).
 
 Click a structure or picture to pick it. Drag its corner handle, or type a **Size (%)** in the panel; **Own Size** puts it back to 100%. Right-click it for **Add Frame** and **Add Shadow**; the panel sets the frame's width and colour and a soft or sharp shadow.
+
+For a picture, **Picture Format** (**Insert** tab, the panel, or right-click) changes its brightness, contrast and sharpness, recolours it (greyscale, sepia, washout, black and white, two colours), makes a colour or the whole picture see-through, removes its background, and crops it to a shape or to proportions (1:1, 4:3, 16:9…). It works as in [Slides: Picture Format](slides.md#picture-format), and is saved as Word's own picture settings.
 
 ### Wrapping and text boxes
 
@@ -150,6 +154,14 @@ Pick the **Citation style** in **Manage References…**. Every citation and the 
 
 Journal requirements change, so check the result against a recent issue of your target journal.
 
+### Zotero, Mendeley and EndNote
+
+A Word file with citations made by Zotero, Mendeley (Desktop or Cite) or EndNote opens with them live: their references go into **Manage References…** and the citations and bibliography are numbered and styled here like any others. A Zotero file also keeps its citation style when it is one of the styles above.
+
+Saving writes the citations back as that program's own, with its item ids, so in Word its **Refresh** (Zotero, Mendeley) or **Update Citations and Bibliography** (EndNote) still works on them. References added here go out with their details: Zotero and Mendeley keep them as items in the document, EndNote adds them to the document's travelling library.
+
+To choose the program for a document made here, use **Save citations for** in **Manage References…**. **Chem Illustrator only** saves the numbers as text that Word shows as they are.
+
 ## Pages, columns, headers and footers
 
 On the **Layout** tab:
@@ -209,6 +221,14 @@ The contents keep themselves up to date: page numbers change as text moves, and 
 4. **Accept** or **Reject** decides the change at the caret (or every change in a selection) and moves to the next. **Accept All** and **Reject All** do the whole document. Right-click a change for Accept and Reject too.
 
 Changes made by other people in Word open here as changes, in a different colour for each person.
+
+### Compare and Combine
+
+- **Review** tab ▸ **Compare…** takes an original and a revised version (open tabs, or **Choose a Word file…**) and opens a new document: the revised version with what changed marked as tracked changes, under the name you give in **Label changes with**. Both versions are compared with their own tracked changes accepted.
+- **Combine…** puts two reviewers' copies of the same document together in a new document. Each reviewer's tracked changes keep their name; anything changed in the revised copy without tracking is marked with the label you give.
+- **Show changes at** compares whole words (as Word does by default) or letter by letter.
+
+A structure, picture, table or equation counts as one word: if it changed, the old one shows deleted and the new one inserted. Changes of formatting alone are not marked; the revised version's formatting is kept. Headers, footers and the text inside tables and text boxes come from the revised version (Compare) or the original (Combine) and are not compared.
 
 ## Comments
 
