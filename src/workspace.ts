@@ -50,6 +50,8 @@ export interface Tab {
   savedEdits: number;
   /** Split view: the drawing shown beside this document, sheet or slide deck. */
   partner: Tab | null;
+  /** View > New Window: the tab whose document this tab shows too (null for the tab that owns its file). */
+  windowOf: Tab | null;
   /** When its file on disk last changed and its size, as last opened or saved here (to notice changes made elsewhere). */
   stamp: FileStamp | null;
   /** AutoSave switched on or off for this tab (File > AutoSave), or null to follow AutoSave and Recovery Options. */
@@ -145,7 +147,7 @@ export class Workspace {
   }
 
   private makeTab(mode: Mode, name: string, ref: FileRef = { kind: 'none' }): Tab {
-    return { id: this.nextId++, mode, name, ref, stash: new Doc(), deck: null, book: null, document: null, view: null, sheetState: null, dirty: false, seen: 0, savedEdits: 0, partner: null,
+    return { id: this.nextId++, mode, name, ref, stash: new Doc(), deck: null, book: null, document: null, view: null, sheetState: null, dirty: false, seen: 0, savedEdits: 0, partner: null, windowOf: null,
       stamp: null, autoSave: null, changes: 0, savedAt: 0, savedHow: null };
   }
 
@@ -222,7 +224,7 @@ export class Workspace {
     let dirty = t.dirty;
     if (t.deck) dirty = t.deck.edits !== t.savedEdits;
     else if (t.mode === 'sheet') dirty = t.book!.edits !== t.savedEdits;
-    else if (t.mode === 'document') dirty = t.document!.edits !== t.savedEdits;
+    else if (t.mode === 'document') dirty = t.document!.edits !== this.mainOf(t).savedEdits;
     else if (this.host.version !== t.seen) {
       t.seen = this.host.version;
       t.changes++;
@@ -230,6 +232,12 @@ export class Workspace {
     }
     if (dirty !== t.dirty) {
       t.dirty = dirty;
+      if (t.document) {
+        // the other windows of the document, and the tab owning its file
+        const main = this.mainOf(t);
+        main.dirty = dirty;
+        this.syncWindows(main);
+      }
       this.hooks.changed();
     }
     const p = this.pane;
@@ -238,6 +246,66 @@ export class Workspace {
       p.changes++;
       if (!p.dirty) { p.dirty = true; this.hooks.changed(); }
     }
+  }
+
+  // ---------------------------------------------------------------- windows of a document
+
+  /** The tabs that own their files (not the extra windows of a document): saved, AutoSaved, kept for recovery. */
+  get fileTabs(): Tab[] {
+    return this.tabs.filter((t) => !t.windowOf);
+  }
+
+  /** The tab that owns the file a tab shows. */
+  mainOf(t: Tab): Tab {
+    return t.windowOf ?? t;
+  }
+
+  /** As Word names the windows of a document: "Report.docx:1", "Report.docx:2"; just the name with one window. */
+  label(t: Tab): string {
+    if (!t.document) return t.name;
+    const all = this.tabs.filter((x) => x.document === t.document);
+    return all.length > 1 ? `${this.mainOf(t).name}:${all.indexOf(t) + 1}` : t.name;
+  }
+
+  /**
+   * View > New Window: the document showing in another tab too, each with its own view and
+   * place in the text. Typing in either shows in both; Save in either saves the one file.
+   */
+  newWindow(): Tab | null {
+    const from = this.active;
+    if (!from.document) return null;
+    const main = this.mainOf(from);
+    const t = this.makeTab('document', main.name, main.ref);
+    t.document = from.document;
+    t.windowOf = main;
+    t.dirty = main.dirty;
+    t.savedEdits = main.savedEdits;
+    // after the last window of this document
+    const last = Math.max(...this.tabs.map((x, i) => (x.document === from.document ? i : -1)));
+    this.tabs.splice(last + 1, 0, t);
+    this.activate(t, true);
+    return t;
+  }
+
+  /** After a save (or a change): every window of the document shows what its file's tab shows. */
+  private syncWindows(main: Tab): void {
+    for (const w of this.tabs) {
+      if (w.windowOf !== main) continue;
+      w.dirty = main.dirty;
+      w.savedEdits = main.savedEdits;
+      w.ref = main.ref;
+      w.name = main.name;
+    }
+  }
+
+  /** The tab owning a file is closing while other windows of its document are open: the next window takes over the file. */
+  private handOver(main: Tab): Tab | null {
+    const next = this.tabs.find((w) => w.windowOf === main);
+    if (!next) return null;
+    next.windowOf = null;
+    Object.assign(next, { ref: main.ref, name: main.name, stamp: main.stamp, autoSave: main.autoSave, savedAt: main.savedAt, savedHow: main.savedHow, savedEdits: main.savedEdits, dirty: main.dirty, partner: next.partner ?? main.partner });
+    for (const w of this.tabs) if (w.windowOf === main) w.windowOf = next;
+    return next;
   }
 
   // ---------------------------------------------------------------- new and open
@@ -475,6 +543,9 @@ export class Workspace {
 
   /** Close a tab, offering to save changes first. False when the user chose to keep it open. */
   async close(tab: Tab = this.active): Promise<boolean> {
+    // another window of a document: closing it closes nothing else (the document stays open in its other tabs)
+    if (tab.windowOf) { this.drop(tab); return true; }
+    if (this.handOver(tab)) { this.drop(tab); return true; }
     if (tab.dirty) {
       if (tab !== this.active && tab !== this.pane) this.activate(tab);
       const answer = await askSaveChanges(tab.name);
@@ -511,7 +582,7 @@ export class Workspace {
   /** Before the window closes: offer to save each tab with changes. False to keep the window open. */
   async closeAll(): Promise<boolean> {
     for (const t of [...this.tabs]) {
-      if (!t.dirty) continue;
+      if (!t.dirty || t.windowOf) continue;
       this.activate(t);
       const answer = await askSaveChanges(t.name);
       if (answer === 'cancel') return false;
@@ -521,7 +592,7 @@ export class Workspace {
   }
 
   get anyDirty(): boolean {
-    return this.tabs.some((t) => t.dirty);
+    return this.fileTabs.some((t) => t.dirty);
   }
 
   // ---------------------------------------------------------------- saving
@@ -532,6 +603,8 @@ export class Workspace {
   }
 
   async save(tab: Tab = this.active, how: SaveHow = 'saved'): Promise<boolean> {
+    // another window of a document saves the document's file
+    tab = this.mainOf(tab);
     // a file of a kind this tab can't write (a drawing opened from an old file) goes through Save As
     if (!this.savesInPlace(tab)) return how === 'autosaved' ? false : this.saveAs(tab);
     return this.writeTo(tab, tab.ref, tab.name, how);
@@ -578,7 +651,11 @@ export class Workspace {
       const note = ext !== 'xlsx' ? ` (${book.sheets.length > 1 ? `only the sheet "${book.sheet.name}", ` : ''}values only: save as .xlsx to keep formulas and formatting)` : '';
       return { data, type: ext === 'csv' ? CSV : ext === 'sdf' || ext === 'sd' ? SDF : XLSX, note };
     }
-    if (tab.mode === 'document') return { data: await this.hooks.documents.write(tab.document!.t, name), type: DOCX, note: '' };
+    if (tab.mode === 'document') {
+      // the contents' page numbers come from the printed pages, whatever view shows
+      tab.document!.printLayout();
+      return { data: await this.hooks.documents.write(tab.document!.t, name), type: DOCX, note: '' };
+    }
     const text = writeCdxml(this.docOf(tab), { name, textMeasure: this.hooks.measure });
     return ext === 'cdx' ? { data: cdxmlToCdx(text), type: CDX, note: '' } : { data: text, type: CDXML, note: '' };
   }
@@ -591,6 +668,7 @@ export class Workspace {
   }
 
   async saveAs(tab: Tab = this.active): Promise<boolean> {
+    tab = this.mainOf(tab);
     const types = SAVE_TYPES[tab.mode];
     const ext = extensionOf(tab.name);
     const first = types.find((t) => t.extension === ext) ?? types[0];
@@ -638,6 +716,7 @@ export class Workspace {
     tab.savedAt = Date.now();
     tab.savedHow = how;
     tab.stamp = await stampOf(ref);
+    this.syncWindows(tab);
     this.hooks.saved?.(tab, typeof enc.data === 'string' ? new TextEncoder().encode(enc.data) : enc.data, how, was);
     if (ref.kind === 'path' && !this.quiet) this.hooks.remember?.(ref.path);
     this.hooks.changed();
@@ -649,7 +728,7 @@ export class Workspace {
 
   /** Tabs with no file on disk yet (new, or downloaded in a browser): Save Workspace puts them in its folder. */
   get unsavedTabs(): Tab[] {
-    return this.tabs.filter((t) => t.ref.kind !== 'path');
+    return this.fileTabs.filter((t) => t.ref.kind !== 'path');
   }
 
   /**
@@ -667,11 +746,12 @@ export class Workspace {
     const folder = folderOf(path);
     this.noteChange();
     const taken = new Set<string>();
-    for (const t of this.tabs) {
+    const own = this.fileTabs;
+    for (const t of own) {
       const inFolder = t.ref.kind === 'path' && !/[\\/]/.test(relativeTo(folder, t.ref.path));
       if (t.ref.kind === 'path' && inFolder) taken.add(baseName(t.ref.path));
     }
-    for (const t of this.tabs) {
+    for (const t of own) {
       const onDisk = t.ref.kind === 'path';
       const outside = onDisk && relativeTo(folder, (t.ref as { path: string }).path) === (t.ref as { path: string }).path;
       if (!onDisk || (opts.copyIn && outside)) {
@@ -685,13 +765,13 @@ export class Workspace {
         if (!(await this.save(t))) return false;
       }
     }
-    const index = new Map(this.tabs.map((t, i) => [t, i]));
-    const tabs: WorkspaceEntry[] = this.tabs.map((t) => {
+    const index = new Map(own.map((t, i) => [t, i]));
+    const tabs: WorkspaceEntry[] = own.map((t) => {
       const p = t.partner && index.has(t.partner) ? index.get(t.partner)! : undefined;
       return { file: relativeTo(folder, (t.ref as { path: string }).path), ...(p !== undefined ? { beside: p } : {}) };
     });
     try {
-      await writeFile({ kind: 'path', path }, baseName(path), workspaceText({ tabs, active: this.tabs.indexOf(this.active) }), WORKSPACE);
+      await writeFile({ kind: 'path', path }, baseName(path), workspaceText({ tabs, active: own.indexOf(this.mainOf(this.active)) }), WORKSPACE);
     } catch (e) {
       await showError(`Could not save the workspace: ${e instanceof Error ? e.message : String(e)}`);
       return false;

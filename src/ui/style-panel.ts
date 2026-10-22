@@ -123,6 +123,9 @@ export class StylePanel {
   /** Tie captions to the structure nearest each (Tie to Structure). */
   tie: ((captionIds: number[]) => void) | null = null;
 
+  /** Open a chart's data and settings (Edit chart…). */
+  onEditChart: (id: number) => void = () => {};
+
   constructor(private section: HTMLElement, private body: HTMLElement, private doc: Doc, private sel: () => Selection, private changed: () => void) {}
 
   /** Redraw the panel for the current selection, keeping the focus on the same control. */
@@ -506,9 +509,11 @@ export class StylePanel {
     const p = pics[0];
     const set = (label: string, patch: (x: Shape) => Partial<Shape>) => this.edit(label, () => { for (const x of pics) this.doc.updateShape(x.id, patch(x)); });
     const box = (x: Shape) => ({ x1: Math.min(x.x1, x.x2), y1: Math.min(x.y1, x.y2), w: Math.abs(x.x2 - x.x1), h: Math.abs(x.y2 - x.y1) });
-    this.heading(pics.length > 1 ? `${pics.length} pictures` : 'Picture');
+    const charts = pics.every((x) => x.chart);
+    this.heading(charts ? (pics.length > 1 ? `${pics.length} charts` : 'Chart') : pics.length > 1 ? `${pics.length} pictures` : 'Picture');
     // vector pictures (SVG, Windows metafiles) have no pixels to count
-    if (pics.length === 1 && p.video && p.px) this.note(`MP4 video, ${p.px.w} × ${p.px.h} pixels. It plays in the slide show and in PowerPoint.`);
+    if (charts) this.note('A chart with its own data. Double-click it to change the data, the kind of chart and its look; resizing it lays it out again.');
+    else if (pics.length === 1 && p.video && p.px) this.note(`MP4 video, ${p.px.w} × ${p.px.h} pixels. It plays in the slide show and in PowerPoint.`);
     else if (pics.length === 1 && p.px) this.note(/^data:image\/(svg|x-emf)/.test(p.src ?? '') ? pictureType(p.src) : `${pictureType(p.src)}, ${p.px.w} × ${p.px.h} pixels`);
     // sizes change from the top left corner, as in PowerPoint's size boxes
     const size = (w: number | null, h: number | null) => set('Resize picture', (x) => {
@@ -522,6 +527,18 @@ export class StylePanel {
     this.number('Width (pt)', round(b.w, 10), 1, 1, 20000, (v) => size(v, null));
     this.number('Height (pt)', round(b.h, 10), 1, 1, 20000, (v) => size(null, v));
     this.check('Keep proportions', this.keepProportions, (v) => { this.keepProportions = v; });
+    if (charts) {
+      this.pictureLook(pics);
+      if (pics.length === 1) {
+        const buttons = document.createElement('div');
+        buttons.className = 'style-buttons';
+        const btn = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Edit chart…', title: 'Its data, the kind of chart, titles, axes, colours and fitted lines' });
+        btn.addEventListener('click', () => this.onEditChart(p.id));
+        buttons.append(btn);
+        this.body.appendChild(buttons);
+      }
+      return;
+    }
     const c = p.crop ?? { l: 0, t: 0, r: 0, b: 0 };
     const sides: [keyof typeof c, string][] = [['l', 'Crop left (%)'], ['t', 'Crop top (%)'], ['r', 'Crop right (%)'], ['b', 'Crop bottom (%)']];
     for (const [k, label] of sides) {

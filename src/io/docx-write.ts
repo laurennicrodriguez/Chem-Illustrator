@@ -28,8 +28,10 @@ import { PAD_X, PAD_Y, cellAlign, isCovered, spanOf } from '../table';
 import { connectorSpPr, geoSpPr, xfrm } from './pptx-write';
 import { geoDef } from '../design/geo';
 import { shapeOrder } from '../objects';
+import { addChart, C_NS } from './office-chart';
+import type { ChartBox } from '../sheet/chart-box';
 import {
-  BIB_MARK, CITE_FIELD, DOCX_CT, W14_NS, W15_NS, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, MC_NS, M_NS, PIC_NS, TABLE_NAME, W_NS, WORD_HIGHLIGHTS, WP_NS, WPS_NS, WPG_NS, twips, toWordDate, type DocxModel,
+  BIB_MARK, CHART_NAME, CITE_FIELD, DOCX_CT, W14_NS, W15_NS, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, MC_NS, M_NS, PIC_NS, TABLE_NAME, W_NS, WORD_HIGHLIGHTS, WP_NS, WPS_NS, WPG_NS, twips, toWordDate, type DocxModel,
 } from './docx';
 
 export interface DocxDeps {
@@ -493,7 +495,20 @@ class DocxWriter {
 
   // ---------------------------------------------------------------- figures and pictures
 
+  /** A chart: Word's own chart (with its data as a workbook inside, for Edit Data), kept here too in our part. */
+  private chartNo = 0;
+  private async chart(main: string, id: number, o: Extract<DocObject, { kind: 'picture' }>, box: ChartBox, rPr: string): Promise<string> {
+    const size = shownSize({ w: o.w, h: o.h }, o.scale ?? 1, this.textW);
+    const rid = await addChart(this.pkg, main, 'word', ++this.chartNo, box, size.w, size.h);
+    (this.model.charts ??= {})[id] = box;
+    const n = this.docPr++;
+    return `<w:r>${rPr ? `<w:rPr>${rPr}</w:rPr>` : ''}<w:drawing>` + this.placed(o, emu(size.w), emu(size.h),
+      `<wp:docPr id="${n}" name="${CHART_NAME} ${id}"/><wp:cNvGraphicFramePr/>` +
+      `<a:graphic><a:graphicData uri="${C_NS}"><c:chart xmlns:c="${C_NS}" r:id="${rid}"/></a:graphicData></a:graphic>`) + '</w:drawing></w:r>';
+  }
+
   private async picture(main: string, id: number, o: DocObject, rPr: string): Promise<string> {
+    if (o.kind === 'picture' && o.chart) return this.chart(main, id, o, o.chart, rPr);
     const t = this.t;
     let blip: string, svgId: string | null = null, size: { w: number; h: number }, name: string, smiles: string | null = null;
     // a diagram in the document's own text: Word gets its shapes as a group (the picture for older Words)

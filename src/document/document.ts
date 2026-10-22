@@ -18,6 +18,7 @@ import * as rt from '../richtext';
 import { cleanPara, fitParas, paraCount, paraRange } from '../text/paragraphs';
 import { citationTexts, type CiteStyle, type Reference } from './references';
 import type { CiteFormat } from './cite-styles';
+import type { ChartBox } from '../sheet/chart-box';
 
 /** The character that stands for a figure, table or field in the text (Unicode's object replacement character). */
 export const OBJECT_CHAR = '￼';
@@ -156,8 +157,11 @@ export function floatOf(o: DocObject | undefined): Float | undefined {
 export type DocObject =
   /** A structure, scheme or table: a drawing, edited with the drawing tools. `scale` 1 is the drawing's own size. */
   | { kind: 'drawing'; contents: Contents; scale?: number; look?: FigureLook; float?: Float }
-  /** A picture: its own size is w × h points (`px` its pixels); `scale` 1 is that size. */
-  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float }
+  /**
+   * A picture: its own size is w × h points (`px` its pixels); `scale` 1 is that size. A chart
+   * (Insert > Chart) is a picture with its chart and data: drawn from them, saved as Word's chart.
+   */
+  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float; chart?: ChartBox }
   /**
    * A text box: text of its own (typed into in place), `w` wide; it grows to fit its text, and is
    * at least `h` tall when that is set. Always placed on the page. `fill` is its background.

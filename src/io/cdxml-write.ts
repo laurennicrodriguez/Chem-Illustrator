@@ -20,7 +20,7 @@ import { runsForChemDraw, TEXT_TAG } from '../text/chemdraw-text';
 import { ATTACH_TAG, IGNORE_TAG, attachTag } from '../editor/attached';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { fromDataUrl } from '../render/images';
-import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, INSIDE_TAG, GROUP_TAG, GEO_TAG, MORPH_TAG, PIN_TAG, CURVE_ARROW_TAG, TURN_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG, HIGHLIGHT_LOOK_TAG, SPOKES_TAG } from './cdxml';
+import { CHART_TAG, OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, INSIDE_TAG, GROUP_TAG, GEO_TAG, MORPH_TAG, PIN_TAG, CURVE_ARROW_TAG, TURN_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG, HIGHLIGHT_LOOK_TAG, SPOKES_TAG } from './cdxml';
 import { frameTag } from '../editor/frames';
 import { geoDef, moveSteps, outlineParts, textArea, type GeoStep } from '../design/geo';
 import { FADE, tint } from '../colours';
@@ -163,6 +163,7 @@ class CdxmlWriter {
     this.writeRingCircles();
     this.writeRepeatGroups();
     this.writeSteps();
+    this.writeGroups();
     if (src) this.cleanUp();
 
     // the file name stored inside; an untouched file is not rewritten just for a rename
@@ -1424,6 +1425,8 @@ class CdxmlWriter {
         // not a picture this program made; nothing to write
       }
     } else png = ['PNG', 'JPEG', 'GIF', 'BMP', 'EnhancedMetafile', 'WindowsMetafile'].some((k) => e.hasAttribute(k));
+    for (const c of kids(e)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === CHART_TAG) e.removeChild(c);
+    if (s.chart) e.appendChild(this.el('objecttag', { TagType: 'String', Name: CHART_TAG, Value: JSON.stringify(s.chart), Visible: 'no' }));
     if (this.opts.own) {
       if (s.src && !png) this.set(e, OWN_PICTURE, s.src);
       const c = s.crop;
@@ -1657,6 +1660,62 @@ class CdxmlWriter {
   // ------------------------------------------------------------------ tidy references
 
   /** Drop references to objects that no longer exist (reaction steps, charge symbols, empty groups). */
+  /**
+   * Groups (Format > Group) as ChemDraw's group elements on the page: each group's structures,
+   * captions, arrows and shapes inside one group element. A file's own group is kept while it
+   * holds just its members; things taken out of a group go back onto the page.
+   */
+  private writeGroups(): void {
+    const doc = this.doc;
+    const byId = new Map<string, Element>();
+    for (const e of descendants(this.root)) { const id = e.getAttribute('id'); if (id && !byId.has(id)) byId.set(id, e); }
+    const elementOf = (kind: Kind, id: number): Element | null => {
+      if (kind === 'a') return this.fragOfAtom.get(id) ?? null;
+      const names = kind === 'c' ? ['t'] : kind === 'r' ? ['arrow', 'graphic'] : ['graphic', 'embeddedobject', 'table', 'group'];
+      return this.source(kind, id, names) ?? (kind === 'r' ? this.findArrow(id) : null) ?? byId.get(String(id)) ?? null;
+    };
+    const plain = (g: Element | null): g is Element => !!g && g.nodeName === 'group'
+      && !kids(g).some((k) => k.nodeName === 'table' || (k.nodeName === 'objecttag' && k.getAttribute('Name') === GEO_TAG));
+    // the element that sits on the page (or in a group) for a thing: a structure's fragment, a symbol's too
+    const topOf = (e: Element): Element => {
+      let t = e;
+      while (t.parentElement && t.parentElement !== this.page && !plain(t.parentElement)) t = t.parentElement;
+      return t;
+    };
+    const wanted = new Map<Element, number | undefined>();
+    const note = (kind: Kind, id: number, grp: number | undefined) => {
+      const e = elementOf(kind, id);
+      if (!e) return;
+      const t = topOf(e);
+      if (!wanted.has(t) || grp !== undefined) wanted.set(t, grp);
+    };
+    for (const a of doc.atoms.values()) note('a', a.id, a.grp);
+    for (const c of doc.captions.values()) note('c', c.id, c.grp);
+    for (const r of doc.arrows.values()) note('r', r.id, r.grp);
+    for (const s of doc.shapes.values()) note('s', s.id, s.grp);
+    const members = new Map<number, Element[]>();
+    for (const [e, g] of wanted) {
+      if (g === undefined) {
+        // out of any group it was in
+        if (plain(e.parentElement)) { this.page.appendChild(e); this.changed = true; }
+        continue;
+      }
+      let list = members.get(g);
+      if (!list) members.set(g, (list = []));
+      list.push(e);
+    }
+    for (const list of members.values()) {
+      const parent = list[0].parentElement;
+      const kept = plain(parent) && list.every((e) => e.parentElement === parent)
+        && kids(parent).filter((k) => k.nodeName !== 'objecttag').every((k) => list.includes(k));
+      if (kept) continue;
+      const g = this.el('group', { id: this.id() });
+      list[0].parentNode!.insertBefore(g, list[0]);
+      for (const e of list) g.appendChild(e);
+      this.changed = true;
+    }
+  }
+
   private cleanUp(): void {
     if (!this.changed) return;
     const all = descendants(this.root);
@@ -1748,8 +1807,9 @@ function shift(e: Element, dx: number, dy: number): void {
 
 /** Are two entities equal, ignoring the listed fields? */
 function sameExcept(a: object, b: object, skip: string[]): boolean {
-  const ka = Object.keys(a).filter((k) => !skip.includes(k) && (a as any)[k] !== undefined);
-  const kb = Object.keys(b).filter((k) => !skip.includes(k) && (b as any)[k] !== undefined);
+  // (which group a thing is in is written by writeGroups, as the file's group elements)
+  const ka = Object.keys(a).filter((k) => k !== 'grp' && !skip.includes(k) && (a as any)[k] !== undefined);
+  const kb = Object.keys(b).filter((k) => k !== 'grp' && !skip.includes(k) && (b as any)[k] !== undefined);
   if (ka.length !== kb.length) return false;
   for (const k of ka) if (!deepEqual((a as any)[k], (b as any)[k])) return false;
   return true;

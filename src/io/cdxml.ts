@@ -23,6 +23,7 @@ import { emfToSvg } from '../render/emf-read';
 import { TABLE_TAG, TABLE_PART_TAG, applyTableTag, gridOf, linesFromBorders, parseTableTag, type ReadCell } from './cdxml-table';
 import { layoutTable, NOTE_SCALE } from '../table';
 import { arialWidth } from '../text-metrics';
+import { freshBox, type ChartBox } from '../sheet/chart-box';
 
 export interface ReadStats {
   atoms: number;
@@ -705,6 +706,28 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     }
   };
 
+  /**
+   * Plain group elements (not a design shape's or a table's) become groups here: everything
+   * inside the outermost one gets its number.
+   */
+  const readGroups = () => {
+    const plain = (g: Element) => g.nodeName === 'group'
+      && !kids(g).some((k) => k.nodeName === 'table' || (k.nodeName === 'objecttag' && (k.getAttribute('Name') === GEO_TAG)));
+    const numbers = new Map<Element, number>();
+    const maps: Partial<Record<Kind, Map<number, { grp?: number }>>> = { a: doc.atoms, c: doc.captions, r: doc.arrows, s: doc.shapes };
+    for (const [key, o] of ord) {
+      const m = maps[key[0] as Kind];
+      if (!m) continue;
+      let outer: Element | null = null;
+      for (let p = all[o].parentElement; p && p !== root; p = p.parentElement) if (p !== all[o] && plain(p)) outer = p;
+      if (!outer) continue;
+      let n = numbers.get(outer);
+      if (n === undefined) numbers.set(outer, (n = numbers.size + 1));
+      const e = m.get(Number(key.slice(1)));
+      if (e) e.grp = n;
+    }
+  };
+
   const walk = (el: Element) => {
     for (const ch of kids(el)) {
       switch (ch.nodeName) {
@@ -747,8 +770,14 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
           const bb = pts(ch.getAttribute('BoundingBox'));
           if (bb.length === 4) {
             const pic = pictureOf(ch);
+            let chart: ChartBox | undefined;
+            try {
+              const tag = kids(ch).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === CHART_TAG)?.getAttribute('Value');
+              const got = tag ? JSON.parse(tag) as ChartBox : undefined;
+              if (got?.chart && Array.isArray(got.cells)) chart = freshBox(got);
+            } catch { chart = undefined; }
             const sh = pic
-              ? doc.addShape({ id: idFor(ch), kind: 'picture', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], src: pic.src, px: pic.px, ...(pic.crop ? { crop: pic.crop } : {}) })
+              ? doc.addShape({ id: idFor(ch), kind: 'picture', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], src: pic.src, px: pic.px, ...(pic.crop ? { crop: pic.crop } : {}), ...(chart ? { chart } : {}) })
               // only pictures this program can't show: mark where they sit, and keep them as they are
               : doc.addShape({ id: idFor(ch), kind: 'rect', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], dashed: true, color: '#9aa4b2', picture: true });
             from('s', sh.id, ch);
@@ -793,6 +822,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     pinSymbols(doc);
     fillFrameMembers(doc);
     fillAttachments(doc);
+    readGroups();
   });
   doc.reserveIds(maxId);
   const orig = new Map<string, Entity>();
@@ -1002,6 +1032,8 @@ export const PIN_TAG = 'Chem Illustrator pin';
 export const CURVE_ARROW_TAG = 'Chem Illustrator arrow';
 /** The group's box when saved here (ChemDraw rewrites BoundingBox when the group is moved). */
 export const GEO_BOX_ATTR = 'ChemIllustratorBox';
+/** A chart (Insert > Chart on slides): the chart and its data, on the picture standing for it. */
+export const CHART_TAG = 'Chem Illustrator chart';
 export const OWN_PICTURE = 'ChemIllustratorPicture';
 export const OWN_CROP = 'ChemIllustratorCrop';
 

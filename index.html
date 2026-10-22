@@ -102,7 +102,31 @@
     <button role="menuitem" data-cmd="dark-colours" title="Choose the dark page's colours (Graphite, Slate, Warm dark) or make your own">Dark Page Colours…</button>
     <button role="menuitemcheckbox" aria-checked="true" data-cmd="group-tips" title="Rest the mouse on an abbreviation such as OTBS, Boc or CO2Me to see the group written out, with its name and formula"><span>Group Tooltips</span></button>
     <button role="menuitemcheckbox" aria-checked="true" data-cmd="scroll-bars" title="Scroll bars along the bottom and right of the drawing, showing where you are"><span>Scroll Bars</span></button>
+    <div class="submenu">
+    <button role="menuitem" class="has-sub" aria-haspopup="menu" aria-expanded="false">Text Formatting Bar</button>
+    <div class="menu sub" role="menu" hidden>
+    <button role="menuitemradio" aria-checked="true" data-cmd="text-bar-docked" title="Font, size, bold, italic, sub- and superscript, colour and alignment along the top of the drawing while you type text, clear of what is drawn"><span>Along the Top</span></button>
+    <button role="menuitemradio" aria-checked="false" data-cmd="text-bar-floating" title="The bar floats just above the text being typed"><span>Floating by the Text</span></button>
+    <button role="menuitemradio" aria-checked="false" data-cmd="text-bar-hidden" title="No bar; the keys still work (Ctrl+B bold, Ctrl+I italic, Ctrl+= subscript…)"><span>Hidden</span></button>
+    </div>
+    </div>
     <button role="menuitemcheckbox" aria-checked="false" data-cmd="split-view" title="A drawing beside the document, sheet or slides, so you can draw and write without switching tabs"><span>Split View: Drawing Beside</span></button>
+    <div class="submenu" data-modes="document">
+    <button role="menuitem" class="has-sub" aria-haspopup="menu" aria-expanded="false">Document Views</button>
+    <div class="menu sub" role="menu" hidden>
+    <button role="menuitemradio" aria-checked="false" data-cmd="view-read"><span>Read Mode</span></button>
+    <button role="menuitemradio" aria-checked="true" data-cmd="view-print"><span>Print Layout</span></button>
+    <button role="menuitemradio" aria-checked="false" data-cmd="view-web"><span>Web Layout</span></button>
+    <button role="menuitemradio" aria-checked="false" data-cmd="view-outline"><span>Outline</span></button>
+    <button role="menuitemradio" aria-checked="false" data-cmd="view-draft"><span>Draft</span></button>
+    <hr />
+    <button role="menuitemcheckbox" aria-checked="false" data-cmd="view-sideways"><span>Pages Side to Side</span></button>
+    <button role="menuitemcheckbox" aria-checked="false" data-cmd="view-multiple"><span>Multiple Pages</span></button>
+    <button role="menuitem" data-cmd="view-one-page">One Page</button>
+    </div>
+    </div>
+    <button data-modes="document" role="menuitemcheckbox" aria-checked="false" data-cmd="view-split" title="Two panes on the document, one above the other, each scrolled on its own"><span>Split Window</span></button>
+    <button data-modes="document" role="menuitem" data-cmd="doc-new-window" title="The document in another tab too, with its own view and place">New Window</button>
     <button data-modes="sheet" role="menuitem" data-cmd="freeze-header">Freeze Header Row</button>
     <button data-modes="slides" role="menuitemcheckbox" aria-checked="false" data-cmd="animation-pane"><span>Animation Pane</span></button>
     <button data-modes="slides" role="menuitemcheckbox" aria-checked="false" data-cmd="show-comments"><span>Show Comments</span></button>
@@ -141,6 +165,7 @@
     <button data-modes="drawing slides design" role="menuitem" data-cmd="crop" title="Cut the edges off the selected picture">Crop Picture</button>
     <button data-modes="drawing slides design" role="menuitem" data-cmd="text-box">Text Box</button>
     <button data-modes="drawing slides design document" role="menuitem" data-cmd="insert-table" title="A table in the ACS style; or paste cells from Excel or a sheet">Table…</button>
+    <button data-modes="drawing slides design document" role="menuitem" data-cmd="insert-chart" title="A chart with its own data (type or paste it in a grid), saved as a Word or PowerPoint chart">Chart…</button>
     <button data-modes="slides design document" role="menuitem" data-cmd="insert-shapes" title="Basic shapes, block arrows, flowchart shapes, callouts and lab glassware">Shapes…</button>
     <button data-modes="slides design document" role="menuitem" data-cmd="insert-icons" title="About 7,000 icons, lab and science ones first: glassware, molecules, hazard and safety signs">Icons…</button>
     <button data-modes="drawing slides design document" role="menuitem" data-cmd="insert-diagram" title="Lists, processes, cycles, hierarchies, Venn diagrams, matrices and pyramids drawn from lines of text, like PowerPoint's SmartArt">Diagram…</button>
@@ -196,6 +221,12 @@
     </div>
     </div>
     <button data-modes="drawing slides design" role="menuitem" data-cmd="scale">Scale…</button>
+    <button data-modes="drawing slides design" role="menuitem" data-cmd="group" title="Put the selected structures, text, arrows and shapes together, so they select and move as one">Group</button>
+    <button data-modes="drawing slides design" role="menuitem" data-cmd="ungroup" title="Take the selected groups apart">Ungroup</button>
+    <button data-modes="drawing slides design" role="menuitem" data-cmd="link-text" title="Link the selected text to the selected structure (or the nearest), so it moves with it">Link Text to Structure</button>
+    <button data-modes="drawing slides design" role="menuitem" data-cmd="unlink-text" title="Leave the selected text where it is, no longer following its structure">Unlink Text</button>
+    <button data-modes="drawing slides design" role="menuitem" data-cmd="shape-front" title="Put the selected shapes in front of everything else">Bring to Front</button>
+    <button data-modes="drawing slides design" role="menuitem" data-cmd="shape-back" title="Put the selected shapes behind everything else">Send to Back</button>
     <button data-modes="drawing slides design" role="menuitem" data-cmd="bring-front">Bring Bond to Front</button>
     <button data-modes="drawing slides design" role="menuitem" data-cmd="send-back">Send Bond to Back</button>
     <hr />
@@ -630,11 +661,13 @@
 
   <div id="doc-ribbon" class="ribbon doc-ribbon doc-only" role="toolbar" aria-label="Document" hidden>
     <div class="rb-tabs" role="tablist">
+      <button role="tab" data-doc-tab="outlining" aria-selected="false" class="rb-context" hidden title="Shown in Outline view">Outlining</button>
       <button role="tab" data-doc-tab="home" aria-selected="true">Home</button>
       <button role="tab" data-doc-tab="insert" aria-selected="false">Insert</button>
       <button role="tab" data-doc-tab="layout" aria-selected="false">Layout</button>
       <button role="tab" data-doc-tab="references" aria-selected="false">References</button>
       <button role="tab" data-doc-tab="review" aria-selected="false">Review</button>
+      <button role="tab" data-doc-tab="view" aria-selected="false">View</button>
       <button role="tab" data-doc-tab="table" aria-selected="false" class="rb-context" hidden title="Shown while you are in a table">Table</button>
     </div>
     <div class="rb-panel" data-doc-panel="home">
@@ -739,6 +772,7 @@
         <div class="rb-row">
           <button class="rb-big" data-doc="insert-table" title="An ACS-style table"><span class="rb-icon">▦</span>Table</button>
           <button class="rb-big" data-doc="insert-picture" title="A picture from a file (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
+          <button class="rb-big" data-doc="insert-chart" title="A chart with its own data, as in Word: type or paste the numbers, pick the kind of chart. Double-click it to change it"><span class="rb-icon">▥</span>Chart</button>
           <button class="rb-big" data-doc="insert-text-box" title="A box of text on the page, with the page's text wrapping round it. Drag its edge to move it"><span class="rb-icon">▭</span>Text Box</button>
           <button class="rb-big" data-doc="insert-shapes" aria-haspopup="true" title="Basic shapes, block arrows, flowchart shapes, callouts and lab glassware: the one you pick goes in the text at the caret. Double-click it to change it with the drawing tools"><span class="rb-icon">◇</span>Shapes ▾</button>
           <button class="rb-big" data-doc="insert-icons" aria-haspopup="true" title="About 7,000 icons, lab and science ones first (glassware, molecules, hazard signs): the one you pick goes in the text at the caret. Find one by name"><span class="rb-icon">⚗</span>Icons ▾</button>
@@ -922,6 +956,86 @@
         <div class="rb-label">Comments</div>
       </div>
     </div>
+    <div class="rb-panel" data-doc-panel="view" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="view-read" aria-pressed="false" title="Read Mode: the pages two at a time, filling the window, to read and turn (arrow keys, Page Down or the wheel). Esc to go back"><span class="rb-icon">📖</span>Read Mode</button>
+          <button class="rb-big" data-doc="view-print" aria-pressed="true" title="Print Layout: the pages as they print"><span class="rb-icon">▯</span>Print Layout</button>
+          <button class="rb-big" data-doc="view-web" aria-pressed="false" title="Web Layout: the text wrapped to the window, with no pages, as a web page would show it"><span class="rb-icon">🌐</span>Web Layout</button>
+          <div class="rb-col">
+            <button data-doc="view-outline" aria-pressed="false" title="Outline: the headings indented by level with the text under each, to fold away, show down to a level, and move or promote as blocks">☰ Outline</button>
+            <button data-doc="view-draft" aria-pressed="false" title="Draft (Ctrl+Alt+N): the text alone on one long page, at its printed width, page breaks shown as dotted lines">≡ Draft</button>
+          </div>
+        </div>
+        <div class="rb-label">Views</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <button data-doc="view-vertical" aria-pressed="true" title="Pages one under another, scrolled up and down">↕ Vertical</button>
+            <button data-doc="view-sideways" aria-pressed="false" title="Side to Side: the pages in a row, two at a time, scrolled across (the wheel turns them)">↔ Side to Side</button>
+          </div>
+        </div>
+        <div class="rb-label">Page Movement</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="zoom-actual" title="Zoom to 100%"><span class="rb-icon">1:1</span>100%</button>
+          <div class="rb-col">
+            <button data-doc="view-one-page" aria-pressed="false" title="One Page: a whole page in the window">▯ One Page</button>
+            <button data-doc="view-multiple" aria-pressed="false" title="Multiple Pages: two pages side by side in each row">▯▯ Multiple Pages</button>
+            <button data-doc="zoom-fit" title="Page Width: the page as wide as the window">⇔ Page Width</button>
+          </div>
+        </div>
+        <div class="rb-label">Zoom</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="doc-new-window" title="New Window: the document in another tab too (Report.docx:2), with its own view and place. Typing in either shows in both; Save in either saves the one file"><span class="rb-icon">⧉</span>New Window</button>
+          <button class="rb-big" data-doc="view-split" aria-pressed="false" title="Split (Ctrl+Alt+S): two panes on the document, one above the other, each scrolled and zoomed on its own (drag the bar between them)"><span class="rb-icon">⬓</span>Split</button>
+        </div>
+        <div class="rb-label">Window</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-doc-panel="outlining" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <div class="rb-pair">
+              <button class="rb-sq" data-doc="outline-heading1" title="Promote to Heading 1">«</button>
+              <button class="rb-sq" data-doc="outline-promote" title="Promote (Alt+Shift+←): a level up; body text becomes a heading">←</button>
+              <select id="doc-outline-level" aria-label="Outline level" title="The outline level of the paragraph">
+                <option value="1">Level 1</option><option value="2">Level 2</option><option value="3">Level 3</option><option value="0">Body Text</option>
+              </select>
+              <button class="rb-sq" data-doc="outline-demote" title="Demote (Alt+Shift+→): a level down">→</button>
+              <button class="rb-sq" data-doc="outline-body" title="Demote to Body Text">»</button>
+            </div>
+            <div class="rb-pair">
+              <button class="rb-sq" data-doc="outline-up" title="Move Up (Alt+Shift+↑): the paragraph, or the heading with everything folded under it, before the one above">▲</button>
+              <button class="rb-sq" data-doc="outline-down" title="Move Down (Alt+Shift+↓)">▼</button>
+              <button class="rb-sq" data-doc="outline-expand" title="Expand (Alt+Shift++): show what is folded under the heading, a level at a time">+</button>
+              <button class="rb-sq" data-doc="outline-collapse" title="Collapse (Alt+Shift+−): fold away what is under the heading, a level at a time">−</button>
+            </div>
+          </div>
+          <div class="rb-col">
+            <label class="rb-field">Show Level
+              <select id="doc-outline-show" aria-label="Show level" title="Show the headings down to this level (Alt+Shift+1 to 3), or everything (Alt+Shift+A)">
+                <option value="0">All Levels</option><option value="1">Level 1</option><option value="2">Level 2</option><option value="3">Level 3</option>
+              </select>
+            </label>
+            <label class="rb-check"><input type="checkbox" id="doc-outline-format" checked /> Show Text Formatting</label>
+            <label class="rb-check"><input type="checkbox" id="doc-outline-first" /> Show First Line Only</label>
+          </div>
+        </div>
+        <div class="rb-label">Outline Tools</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="view-print" title="Close Outline View: back to Print Layout"><span class="rb-icon">✕</span>Close Outline View</button>
+        </div>
+        <div class="rb-label">Close</div>
+      </div>
+    </div>
     <div class="rb-panel" data-doc-panel="table" hidden>
       <div class="rb-group">
         <div class="rb-row">
@@ -1095,6 +1209,7 @@
           <button class="rb-big" data-cmd="insert-picture" title="Put a picture on the slide (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
           <button class="rb-big" data-cmd="text-box" title="Click on the slide to type, or drag to make a text box that wraps"><span class="rb-icon">T</span>Text Box</button>
           <button class="rb-big" data-cmd="insert-table" title="Put a table on the slide (or paste cells from Excel or a sheet)"><span class="rb-icon">▦</span>Table</button>
+          <button class="rb-big" data-cmd="insert-chart" title="A chart with its own data, as in PowerPoint: type or paste the numbers, pick the kind of chart. Double-click it to change it"><span class="rb-icon">▥</span>Chart</button>
           <button class="rb-big" data-cmd="slide-shapes" aria-haspopup="true" title="Basic shapes, block arrows, flowchart shapes, callouts and lab glassware: pick one, then click or drag on the slide"><span class="rb-icon">◇</span>Shapes ▾</button>
           <button class="rb-big" data-cmd="slide-icons" aria-haspopup="true" title="About 7,000 icons, lab and science ones first (glassware, molecules, hazard signs): pick one, then click or drag on the slide"><span class="rb-icon">⚗</span>Icons ▾</button>
           <button class="rb-big" data-cmd="insert-diagram" title="Lists, processes, cycles, hierarchies, Venn diagrams, matrices and pyramids drawn from lines of text, like PowerPoint's SmartArt. Double-click one to type into it"><span class="rb-icon">⧉</span>Diagram</button>
@@ -1272,6 +1387,7 @@
         <button class="rb-big" data-cmd="text-box" title="Click on the page to type, or drag to make a text box that wraps"><span class="rb-icon">T</span>Text Box</button>
         <button class="rb-big" data-cmd="insert-picture" title="Put a picture on the page (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
         <button class="rb-big" data-cmd="insert-table" title="Put a table on the page (or paste cells from Excel or a sheet)"><span class="rb-icon">▦</span>Table</button>
+        <button class="rb-big" data-cmd="insert-chart" title="A chart with its own data: type or paste the numbers, pick the kind of chart. Double-click it to change it"><span class="rb-icon">▥</span>Chart</button>
         <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
       </div>
       <div class="rb-label">Insert</div>
@@ -1346,10 +1462,22 @@
       <div id="sheet-host"></div>
     </div>
     <div id="doc-pane" class="doc-only" hidden>
+      <div id="doc-readbar" hidden>
+        <span class="doc-read-title">Read Mode</span>
+        <span class="grow"></span>
+        <button type="button" data-doc="read-prev" title="The pages before (←, Page Up)">◀</button>
+        <span id="doc-read-pages"></span>
+        <button type="button" data-doc="read-next" title="The pages after (→, Page Down, Space)">▶</button>
+        <span class="grow"></span>
+        <button type="button" data-doc="view-print" title="Back to Print Layout to edit (Esc)">Edit Document</button>
+      </div>
       <div id="doc-host"></div>
       <div id="doc-statusbar">
         <span id="doc-status"></span>
         <span class="grow"></span>
+        <button type="button" class="doc-viewbtn" data-doc="view-read" aria-pressed="false" title="Read Mode">📖</button>
+        <button type="button" class="doc-viewbtn" data-doc="view-print" aria-pressed="true" title="Print Layout">▯</button>
+        <button type="button" class="doc-viewbtn" data-doc="view-web" aria-pressed="false" title="Web Layout">🌐</button>
         <button type="button" data-doc="zoom-out" title="Zoom out">−</button>
         <span id="doc-zoom">100%</span>
         <button type="button" data-doc="zoom-in" title="Zoom in">+</button>

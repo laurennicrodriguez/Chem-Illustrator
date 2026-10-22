@@ -53,6 +53,8 @@ export interface Settings {
   splitWidth: number;
   /** Scroll bars along the drawing's bottom and right (View > Scroll Bars). */
   scrollBars: boolean;
+  /** Where the text formatting bar goes while typing text (View > Text Formatting Bar). */
+  textBar: 'docked' | 'floating' | 'hidden';
   /** Resting the mouse on an abbreviation shows the group written out (View > Group Tooltips). */
   groupTips: boolean;
   /** The reference style new documents use (References > Manage References > Style options > Use for new documents). */
@@ -69,6 +71,12 @@ export interface Settings {
   circledCharges: boolean;
   /** An atom or group typed with the Text tool beside a bond end becomes that atom. */
   textToAtom: boolean;
+  /** A click on something grouped selects the whole group, or just that thing. */
+  groupClick: 'group' | 'item';
+  /** Selecting part of a group outlines the rest of it. */
+  groupOutline: boolean;
+  /** Where Format > Link Text to Structure puts the text: where it is, or a side of the structure. */
+  linkSide: 'keep' | 'below' | 'above' | 'left' | 'right';
   /** Ask before a command with nothing selected changes every structure on the page (Edit > Preferences). */
   askWholeDrawing: boolean;
   /** Your own colour rows, in every colour menu and every mode (Edit > Colour Palettes). */
@@ -110,8 +118,8 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false, showRoles: true,
   chemTyping: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
-  modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true, groupTips: true,
-  citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', circledCharges: false, textToAtom: true, slideTemplate: null, askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(),
+  modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true, textBar: 'docked', groupTips: true,
+  citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', circledCharges: false, textToAtom: true, groupClick: 'group', groupOutline: true, linkSide: 'keep', slideTemplate: null, askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(),
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
   guides: { drawing: false, slides: true, design: true },
   docPins: [],
@@ -131,7 +139,9 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (!raw || typeof raw !== 'object') return s;
   const r = raw as Record<string, unknown>;
   if (r.hotkeys && typeof r.hotkeys === 'object' && !Array.isArray(r.hotkeys)) s.hotkeys = r.hotkeys as KeyOverrides;
-  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'spellCheck', 'scrollBars', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'textToAtom', 'updateCheck', 'pubchemNames'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
+  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'spellCheck', 'scrollBars', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'textToAtom', 'groupOutline', 'updateCheck', 'pubchemNames'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
+  if (typeof r.textBar === 'string' && ['docked', 'floating', 'hidden'].includes(r.textBar)) s.textBar = r.textBar as Settings['textBar'];
+  if (typeof r.linkSide === 'string' && ['keep', 'below', 'above', 'left', 'right'].includes(r.linkSide)) s.linkSide = r.linkSide as Settings['linkSide'];
   if (Array.isArray(r.replacements)) {
     s.replacements = r.replacements.filter((x): x is [string, string] => Array.isArray(x) && typeof x[0] === 'string' && typeof x[1] === 'string' && x[0] !== '').map(([a, b]) => [a, b]);
   }
@@ -156,6 +166,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   }
   if (Array.isArray(r.docPins)) s.docPins = ['para', 'style', 'page', 'hf'].filter((k) => (r.docPins as unknown[]).includes(k));
   if (r.methylStyle === 'Me' || r.methylStyle === 'CH3') s.methylStyle = r.methylStyle;
+  if (r.groupClick === 'group' || r.groupClick === 'item') s.groupClick = r.groupClick;
   if (r.axialStyle === 'RaSa' || r.axialStyle === 'PM') s.axialStyle = r.axialStyle;
   if (typeof r.slideTemplate === 'string' || r.slideTemplate === null) s.slideTemplate = r.slideTemplate as string | null;
   s.highlightLooks = parseLooks(r.highlightLooks);

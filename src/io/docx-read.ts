@@ -30,13 +30,16 @@ import { layoutTable } from '../table';
 import { cfbStreams, isCfb } from './cfb';
 import { isCdx } from './cdx';
 import { cmtIds, cmtString, type CommentNote, type CommentThread } from '../document/comments';
-import { BIB_MARK, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, W14_NS, W15_NS, W16CID_NS, W16CEX_NS, fromWordDate, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
+import { BIB_MARK, CHART_NAME, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, W14_NS, W15_NS, W16CID_NS, W16CEX_NS, fromWordDate, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
 import { cleanRef } from '../document/references';
 import { retypedDiagram } from '../design/diagrams';
 import { revText } from '../document/revisions';
 import { mathText, ommlToTex } from '../document/math';
 import { CITE_PRESETS, cleanOptions } from '../document/cite-styles';
 import { listIndent, tableText } from './docx-write';
+import { readChart } from './office-chart';
+import { freshBox, sameBoxData, sizedBox } from '../sheet/chart-box';
+import { chartBoxPng } from '../render/chart-box-paint';
 
 export interface DocxReadDeps {
   /** A ChemDraw drawing (CDX data) as a drawing in the document's style; null when it can't be read. */
@@ -62,7 +65,8 @@ const WARN = {
   links: 'Links were kept as plain text.',
   notes: 'Footnotes and endnotes were left out.',
   equations: 'Equations in table cells were kept as plain text.',
-  shapes: 'Charts, SmartArt and drawn shapes were left out.',
+  shapes: 'SmartArt and drawn shapes were left out.',
+  chartParts: 'Some charts mix chart types (a line over columns, a second axis): they show as one type.',
   sections: 'This file has several sections: the last one\'s page size, margins, header and footer are used for the whole document.',
   vmerge: 'Table cells merged down a column were split (merging across a row is kept).',
   nested: 'A table inside a table cell was kept as text.',
@@ -998,6 +1002,20 @@ class DocxReader {
       const { runs, paras } = this.boxText(content);
       const o: DocObject = { kind: 'textbox', runs, w: round(shown.w), float, ...(paras.some((q) => Object.keys(q).length) ? { paras } : {}), ...(fill ? { fill } : {}), ...(look ? { look } : {}) };
       this.emitObject(ctx, o, r);
+      return;
+    }
+    const chartEl = kid(data, 'chart');
+    if (!pic && chartEl) {
+      // a chart: Word's own (its numbers come from what Word cached), or ours when it charts the same numbers
+      const path = this.relTarget(rAttr(chartEl, 'id'));
+      const got = path ? readChart(this.pkg, path, shown.w, shown.h) : null;
+      if (!got) { this.warn('shapes'); return; }
+      const mine = new RegExp(`^${CHART_NAME} (\\d+)$`).exec(name);
+      const kept = mine ? this.model?.charts?.[Number(mine[1])] : undefined;
+      const chosen = sizedBox(kept && sameBoxData(kept, got.box) ? freshBox(kept) : got.box, shown.w, shown.h);
+      if (chosen === got.box && got.partial) this.warn('chartParts');
+      const float = box.localName === 'anchor' ? this.floatOf(box, null, shown.w) : null;
+      this.emitObject(ctx, { kind: 'picture', src: chartBoxPng(chosen, shown.w, shown.h), w: round(shown.w), h: round(shown.h), px: { w: chosen.chart.w, h: chosen.chart.h }, chart: chosen, ...(float ? { float } : {}) }, r);
       return;
     }
     const group = kid(data, 'wgp');
