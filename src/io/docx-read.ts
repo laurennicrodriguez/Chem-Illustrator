@@ -32,6 +32,7 @@ import { isCdx } from './cdx';
 import { cmtIds, cmtString, type CommentNote, type CommentThread } from '../document/comments';
 import { BIB_MARK, CHART_NAME, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, W14_NS, W15_NS, W16CID_NS, W16CEX_NS, fromWordDate, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
 import { cleanRef } from '../document/references';
+import { retypedDiagram } from '../design/diagrams';
 import { revText } from '../document/revisions';
 import { mathText, ommlToTex } from '../document/math';
 import { CITE_PRESETS, cleanOptions } from '../document/cite-styles';
@@ -459,6 +460,8 @@ class DocxReader {
     // Word 2010's text boxes (wps) are read from the choice itself; their fallback is an older shape
     const choice = kid(el, 'Choice');
     if (choice && /(^|\s)wps(\s|$)/.test(choice.getAttribute('Requires') ?? '') && choice.getElementsByTagNameNS('*', 'txbx').length) return choice;
+    // one of our diagrams as a group of shapes (Word puts an older shape in place of our picture when it saves)
+    if (choice && /(^|\s)wpg(\s|$)/.test(choice.getAttribute('Requires') ?? '') && Array.from(choice.getElementsByTagNameNS('*', 'docPr')).some((d) => new RegExp(`^${DRAWING_NAME} \\d+$`).test(d.getAttribute('name') ?? ''))) return choice;
     return kid(el, 'Fallback') ?? choice;
   }
 
@@ -1015,18 +1018,22 @@ class DocxReader {
       this.emitObject(ctx, { kind: 'picture', src: chartBoxPng(chosen, shown.w, shown.h), w: round(shown.w), h: round(shown.h), px: { w: chosen.chart.w, h: chosen.chart.h }, chart: chosen, ...(float ? { float } : {}) }, r);
       return;
     }
-    if (!pic) { this.warn('shapes'); return; }
-    const float = box.localName === 'anchor' ? this.floatOf(box, readLook(kid(pic, 'spPr')), shown.w) : null;
-    // one of our structures: its drawing from our part
+    const group = kid(data, 'wgp');
+    if (!pic && !group) { this.warn('shapes'); return; }
+    const float = box.localName === 'anchor' ? this.floatOf(box, pic ? readLook(kid(pic, 'spPr')) : null, shown.w) : null;
+    // one of our structures (or diagrams): its drawing from our part
     const ours = new RegExp(`^${DRAWING_NAME} (\\d+)$`).exec(name);
     const m = ours ? this.model?.drawings?.[Number(ours[1])] : undefined;
-    const look = readLook(kid(pic, 'spPr'));
+    const look = pic ? readLook(kid(pic, 'spPr')) : null;
     if (m?.contents) {
       const natural = shownSize({ w: m.w, h: m.h }, 1, this.textW);
       const scale = Math.abs(natural.w - shown.w) < 0.75 || m.w <= 0 ? undefined : round(shown.w / m.w, 1e4);
-      this.emitObject(ctx, { kind: 'drawing', contents: structuredClone(m.contents), scale, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r);
+      // a diagram's shapes may have been typed into in Word: their words go back into its text
+      const contents = group ? retypedDiagram(structuredClone(m.contents), groupTexts(group)) : structuredClone(m.contents);
+      this.emitObject(ctx, { kind: 'drawing', contents, scale, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r);
       return;
     }
+    if (!pic) { this.warn('shapes'); return; }
     const blip = kid(pic, 'blipFill', 'blip');
     if (kid(kid(pic, 'blipFill'), 'srcRect')?.attributes.length) this.warn('crop');
     const svg = blip ? Array.from(blip.getElementsByTagNameNS('*', 'svgBlip'))[0] : undefined;
@@ -1598,4 +1605,17 @@ export function readLook(spPr: Element | null): FigureLook | null {
   const sh = kid(spPr, 'effectLst', 'outerShdw');
   if (sh) look.shadow = fromEmu(sh.getAttribute('blurRad') ?? '0') >= 1.5 ? 'soft' : 'hard';
   return look.frame || look.shadow ? look : null;
+}
+
+/** The words in each named shape of a Word group (its paragraphs joined by line breaks), by name. */
+function groupTexts(group: Element): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const sp of Array.from(group.getElementsByTagNameNS('*', 'wsp'))) {
+    const name = kid(sp, 'cNvPr')?.getAttribute('name');
+    const content = kid(sp, 'txbx', 'txbxContent');
+    if (!name || !content) continue;
+    const paras = kids(content, 'p').map((p) => Array.from(p.getElementsByTagNameNS('*', 't')).map((t) => t.textContent ?? '').join('').replace(/^•\s*/, ''));
+    out.set(name, paras.join('\n'));
+  }
+  return out;
 }

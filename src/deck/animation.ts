@@ -135,6 +135,7 @@ export function slideParts(doc: Doc): Part[] {
     ...p.pictures.map((s): Part => ({ kind: 'picture', sel: sel({ shapes: new Set([s.id]) }) })),
     ...p.shapes.map((s): Part => ({ kind: 'shape', sel: sel({ shapes: new Set([s.id]) }) })),
     ...p.connectors.map((r): Part => ({ kind: 'connector', sel: sel({ arrows: new Set([r.id]) }) })),
+    ...p.diagrams.map((g): Part => ({ kind: 'shape', sel: sel({ shapes: new Set([g.frame.id, ...g.shapes.map((x) => x.id)]), arrows: new Set(g.connectors.map((x) => x.id)) }) })),
     ...p.tables.map((s): Part => ({ kind: 'table', sel: sel({ shapes: new Set([s.id]) }) })),
     ...p.drawings.flatMap((s): Part[] => [...highlightParts(doc, s), { kind: 'drawing', sel: s }]),
     ...p.texts.map((c): Part => ({ kind: 'text', sel: sel({ captions: new Set([c.id]) }) })),

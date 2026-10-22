@@ -25,15 +25,18 @@ import { toOmml } from '../document/math';
 import { documentMeasure } from '../text/font-measure';
 import { arialWidth } from '../text-metrics';
 import { PAD_X, PAD_Y, cellAlign, isCovered, spanOf } from '../table';
+import { connectorSpPr, geoSpPr, xfrm } from './pptx-write';
+import { geoDef } from '../design/geo';
+import { shapeOrder } from '../objects';
 import { addChart, C_NS } from './office-chart';
 import type { ChartBox } from '../sheet/chart-box';
 import {
-  BIB_MARK, CHART_NAME, CITE_FIELD, DOCX_CT, W14_NS, W15_NS, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, MC_NS, M_NS, PIC_NS, TABLE_NAME, W_NS, WORD_HIGHLIGHTS, WP_NS, WPS_NS, twips, toWordDate, type DocxModel,
+  BIB_MARK, CHART_NAME, CITE_FIELD, DOCX_CT, W14_NS, W15_NS, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, MC_NS, M_NS, PIC_NS, TABLE_NAME, W_NS, WORD_HIGHLIGHTS, WP_NS, WPS_NS, WPG_NS, twips, toWordDate, type DocxModel,
 } from './docx';
 
 export interface DocxDeps {
   /** A drawing's picture for Word: PNG bytes, an SVG Word shows instead when it can, and its own size in points. */
-  picture(contents: Contents, style: DocStyle): Promise<{ png: Uint8Array; svg?: string; w: number; h: number } | null>;
+  picture(contents: Contents, style: DocStyle): Promise<{ png: Uint8Array; svg?: string; w: number; h: number; x?: number; y?: number } | null>;
   /** A PNG of an SVG picture, for Word versions that can't show SVG (w × h pixels). */
   svgToPng?(svg: string, w: number, h: number): Promise<Uint8Array>;
   /** A drawing's structures as SMILES, for the picture's alt text (null when there are none, or no chemistry engine). */
@@ -111,7 +114,7 @@ class DocxWriter {
     const main = 'word/document.xml';
     const body = await this.body(main);
     const sect = this.section(main);
-    pkg.add(main, `${HEAD}<w:document xmlns:w="${W_NS}" xmlns:r="${NS.r}" xmlns:wp="${WP_NS}" xmlns:a="${NS.a}" xmlns:pic="${PIC_NS}" xmlns:wps="${WPS_NS}" xmlns:mc="${MC_NS}" xmlns:m="${M_NS}"><w:body>${body}${sect}</w:body></w:document>`, DOCX_CT.document);
+    pkg.add(main, `${HEAD}<w:document xmlns:w="${W_NS}" xmlns:r="${NS.r}" xmlns:wp="${WP_NS}" xmlns:a="${NS.a}" xmlns:pic="${PIC_NS}" xmlns:wps="${WPS_NS}" xmlns:wpg="${WPG_NS}" xmlns:mc="${MC_NS}" xmlns:m="${M_NS}"><w:body>${body}${sect}</w:body></w:document>`, DOCX_CT.document);
     pkg.relate(main, DOCX_REL.styles, 'styles.xml');
     pkg.add('word/styles.xml', this.styles(), DOCX_CT.styles);
     if (this.cmts.size) this.commentParts(main);
@@ -508,9 +511,18 @@ class DocxWriter {
     if (o.kind === 'picture' && o.chart) return this.chart(main, id, o, o.chart, rPr);
     const t = this.t;
     let blip: string, svgId: string | null = null, size: { w: number; h: number }, name: string, smiles: string | null = null;
+    // a diagram in the document's own text: Word gets its shapes as a group (the picture for older Words)
+    let group: ((docPr: string) => string) | null = null;
     if (o.kind === 'drawing') {
       const pic = await this.deps.picture(o.contents, t.drawingStyle);
       if (!pic) return '';
+      if (main === 'word/document.xml' && pic.x !== undefined && pic.y !== undefined) {
+        const kids = diagramShapesXml(o.contents, t.drawingStyle);
+        const at = { x: pic.x, y: pic.y, w: pic.w, h: pic.h };
+        if (kids) group = (docPr) => `${docPr}<wp:cNvGraphicFramePr/><a:graphic><a:graphicData uri="${WPG_NS}"><wpg:wgp><wpg:cNvGrpSpPr/>` +
+          `<wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${emu(size.w)}" cy="${emu(size.h)}"/><a:chOff x="${emu(at.x)}" y="${emu(at.y)}"/><a:chExt cx="${emu(at.w)}" cy="${emu(at.h)}"/></a:xfrm></wpg:grpSpPr>` +
+          `${kids}</wpg:wgp></a:graphicData></a:graphic>`;
+      }
       this.model.drawings[id] = { contents: o.contents, w: pic.w, h: pic.h };
       blip = this.media(main, pic.png, 'png');
       if (pic.svg) svgId = this.media(main, new TextEncoder().encode(pic.svg), 'svg');
@@ -542,11 +554,15 @@ class DocxWriter {
     const ext = svgId ? `<a:extLst><a:ext uri="${SVG_EXT}"><asvg:svgBlip xmlns:asvg="${NS_SVG}" r:embed="${svgId}"/></a:ext></a:extLst>` : '';
     const descr = o.kind === 'drawing' ? ` descr="${xml(structureAltText(smiles))}"` : '';
     const look = lookOf(o);
-    return `<w:r>${rPr ? `<w:rPr>${rPr}</w:rPr>` : ''}<w:drawing>` + this.placed(o, cx, cy,
-      `<wp:docPr id="${n}" name="${xml(name)}"${descr}/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>` +
+    const docPr = `<wp:docPr id="${n}" name="${xml(name)}"${descr}/>`;
+    const picture = `<w:drawing>` + this.placed(o, cx, cy,
+      `${docPr}<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>` +
       `<a:graphic><a:graphicData uri="${PIC_NS}"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="${xml(name)}"/><pic:cNvPicPr/></pic:nvPicPr>` +
       `<pic:blipFill><a:blip r:embed="${blip}">${ext}</a:blip><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
-      `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${lookXml(look)}</pic:spPr></pic:pic></a:graphicData></a:graphic>`) + '</w:drawing></w:r>';
+      `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${lookXml(look)}</pic:spPr></pic:pic></a:graphicData></a:graphic>`) + '</w:drawing>';
+    const r = rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
+    if (group) return `<w:r>${r}<mc:AlternateContent><mc:Choice Requires="wpg"><w:drawing>${this.placed(o, cx, cy, group(docPr))}</w:drawing></mc:Choice><mc:Fallback>${picture}</mc:Fallback></mc:AlternateContent></w:r>`;
+    return `<w:r>${r}${picture}</w:r>`;
   }
 
   private mediaCount = 0;
@@ -900,3 +916,45 @@ function styleXml(s: NamedStyle, ids: string[]): string {
   return `${head}<w:pPr>${pPr.join('')}</w:pPr><w:rPr>${rPr}</w:rPr></w:style>`;
 }
 
+/**
+ * A drawing that is just a diagram (and nothing else) as Word shapes for a group: each shape with
+ * its text, and the connectors, in the drawing's own points. Null for any other drawing.
+ */
+export function diagramShapesXml(c: Contents, style: DocStyle): string | null {
+  if (c.atoms.length || c.captions.length) return null;
+  const frame = c.shapes.find((s) => s.diagram && s.frame);
+  if (!frame || c.shapes.filter((s) => s.diagram).length !== 1) return null;
+  const members = new Set(frame.frame!.shapes), links = new Set(frame.frame!.arrows);
+  if (c.shapes.some((s) => s !== frame && (!members.has(s.id) || s.kind !== 'geo')) || c.arrows.some((a) => !links.has(a.id))) return null;
+  const font = style.captionFont || 'Arial';
+  const out: string[] = [];
+  let k = 1;
+  for (const s of shapeOrder(c.shapes.filter((x) => x !== frame))) {
+    const g = geoSpPr(s, style.lineWidth);
+    const def = geoDef(s.geo);
+    const ins = def.prst ? 3.6 : 0;
+    const anchor = s.textValign === 'top' ? 't' : s.textValign === 'bottom' ? 'b' : 'ctr';
+    const body = s.text?.runs.some((r) => r.text) ? `<wps:txbx><w:txbxContent>${shapeParagraphs(s.text.runs, s.text.paras, s.textAlign ?? 'center', font, style.captionSize)}</w:txbxContent></wps:txbx>` : '';
+    out.push(`<wps:wsp><wps:cNvPr id="${k++}" name="${xml(s.name ?? def.name)}"/><wps:cNvSpPr/><wps:spPr>${xfrm(g.box)}${g.geom}${g.fill}${g.ln}${g.shadow}</wps:spPr>${body}` +
+      `<wps:bodyPr rot="0" vert="horz" wrap="square" lIns="${emu(ins)}" tIns="${emu(ins)}" rIns="${emu(ins)}" bIns="${emu(ins)}" anchor="${anchor}" anchorCtr="0"><a:noAutofit/></wps:bodyPr></wps:wsp>`);
+  }
+  for (const r of c.arrows) {
+    const g = connectorSpPr(r, style.lineWidth);
+    out.push(`<wps:wsp><wps:cNvPr id="${k++}" name="Connector ${k - 1}"/>${g.curved ? '<wps:cNvSpPr/>' : '<wps:cNvCnPr/>'}<wps:spPr>${g.frame}${g.geom}${g.ln}</wps:spPr><wps:bodyPr/></wps:wsp>`);
+  }
+  return out.join('');
+}
+
+/** A shape's text as Word paragraphs (bullets written out, as Word's lists need numbering of their own). */
+function shapeParagraphs(runs: TextRun[], paras: ParaStyle[] | undefined, align: Justify, font: string, size: number): string {
+  const byPara = splitParagraphs(runs);
+  const ps = fitParas(paras, byPara.length);
+  return byPara.map((rs, i) => {
+    const p = ps[i] ?? {};
+    const jc = JC[p.align ?? align];
+    const lvl = p.level ?? 0;
+    const ind = p.list ? `<w:ind w:left="${twips(12 + 12 * lvl)}" w:hanging="${twips(9)}"/>` : '';
+    const bullet = p.list ? tableRun({ text: '• ', size: rs[0]?.size, color: rs[0]?.color }, font, size) : '';
+    return `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>${ind}<w:jc w:val="${jc}"/></w:pPr>${bullet}${rs.filter((r) => r.text).map((r) => tableRun(r, font, size)).join('')}</w:p>`;
+  }).join('') || '<w:p/>';
+}

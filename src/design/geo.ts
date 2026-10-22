@@ -352,10 +352,41 @@ function fitSteps(steps: GeoStep[], w: number, h: number): GeoStep[] {
   });
 }
 
+// ---------------------------------------------------------------- pyramid layers (diagrams)
+
+const SLICE = 'slice:';
+
+/** A pyramid's layer: a trapezium cut in from each side by `a` of its width (at its narrow end: the top when a > 0, the bottom when a < 0). */
+export function sliceId(a: number): string {
+  return SLICE + (Math.round(a * 10000) / 10000);
+}
+
+export const isSliceId = (id: string | undefined): id is string => !!id && id.startsWith(SLICE);
+
+/** The library shape for a layer of a pyramid. */
+export function sliceDef(id: string): GeoDef {
+  const v = Number(id.slice(SLICE.length));
+  const a = Math.max(0, Math.min(0.5, Math.abs(isFinite(v) ? v : 0)));
+  const up = !(v < 0);
+  // the text where the layer is widest enough: lower down in a narrow top layer
+  // (a pointed layer, the top of a pyramid, has its words in its lower half, a little past its sloping sides)
+  const t = a > 0.45 ? 0.5 : a > 0.3 ? 0.4 : 0.08;
+  const side = a > 0.45 ? 0.2 : a * (1 - t) + 0.03;
+  return {
+    id, name: 'Pyramid layer', group: 'Basic shapes', size: [120, 40],
+    draw: (w, h) => ({
+      body: up
+        ? [['M', a * w, 0], ['L', (1 - a) * w, 0], ['L', w, h], ['L', 0, h], ['Z']]
+        : [['M', 0, 0], ['L', w, 0], ['L', (1 - a) * w, h], ['L', a * w, h], ['Z']],
+    }),
+    text: up ? [side, t, 1 - side, 0.94] : [side, 0.06, 1 - side, 1 - t],
+  };
+}
+
 export const GEO_BY_ID = new Map(GEOS.map((g) => [g.id, g]));
 
 /** The shape with this id (an icon for "icon:…"), or the rectangle for one not known (from a newer version). */
-export const geoDef = (id: string | undefined): GeoDef => (isIconId(id) ? iconDef(id) : GEO_BY_ID.get(id ?? '')) ?? GEO_BY_ID.get('rect')!;
+export const geoDef = (id: string | undefined): GeoDef => (isIconId(id) ? iconDef(id) : isSliceId(id) ? sliceDef(id) : GEO_BY_ID.get(id ?? '')) ?? GEO_BY_ID.get('rect')!;
 
 /** The box of an outline's points (control points included: a little generous on curves). */
 export function stepsBox(steps: GeoStep[]): Rect {

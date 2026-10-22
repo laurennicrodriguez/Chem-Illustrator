@@ -72,6 +72,35 @@ All the drawing tools and hotkeys work on a design page, so you can draw structu
 
 Insert a PNG or JPEG (a logo, say), select it, and click **Remove white…** in the **Style** panel. You can remove only the white joined to the edges, or all white, and set how near to white counts. Undo puts the white back.
 
+## Diagrams
+
+**Insert** ▸ **Diagram…** (a **Diagram** button on the Design, Slides and Document ribbons) draws a diagram from lines of text, as PowerPoint's SmartArt does. Type one item per line; press <kbd>Tab</kbd> to move a line a level down (under the line above it) and <kbd>Shift+Tab</kbd> to move it back up. The picture on the right shows how it will look as you type.
+
+There are 19 layouts in seven kinds:
+
+| Kind | Layouts |
+|---|---|
+| List | Block list, vertical bullet list, horizontal bullet list, icon list |
+| Process | Basic process, chevron process, vertical process, staircase, timeline, equation (A + B → C) |
+| Cycle | Basic cycle (circles joined by curved arrows), radial |
+| Hierarchy | Hierarchy (top down) and horizontal hierarchy (left to right) |
+| Relationship | Venn, target |
+| Matrix | Matrix (four quarters, with an item in the middle if you indent four under it) |
+| Pyramid | Pyramid, funnel |
+
+Lines under an item show as bullets in its shape (or under it, in the list and chevron layouts). Formulas get their subscripts as you type them (CO2, ArB(OH)2), and `_` and `^` make other sub- and superscripts. In the icon list each item gets an icon that matches its words; put an icon's name in square brackets in front to choose it yourself, for example `[flask-round-bottom] Synthesis`.
+
+Below the text, choose the colours (the accent colour, shades of it, colourful, light, outline only, black and white for journals, or greys), the accent colour itself, rounded corners and a shadow. The text is made as big as fits, the same size in every shape; type a size to fix it.
+
+Once it is placed:
+
+- Double-click a shape to type in it. The diagram's text changes with it.
+- Double-click away from the words (or right-click ▸ **Edit Diagram…**, or the **Style** panel) to change the text, layout or colours. In a document, double-click the diagram; **Edit Drawing** opens the drawing tools on it.
+- Drag a corner to resize it: it is drawn again to fill the new box.
+- Right-click ▸ **Convert Diagram to Shapes** makes it ordinary shapes and connectors, to change one by one.
+
+PowerPoint and Word get a diagram as one group of shapes, so it can be moved, resized and retyped there. Words changed in PowerPoint or Word come back into the diagram's text when the file is opened here again.
+
 ## Connectors
 
 **Connector** (a straight line) and **Elbow** (square bends) are in the ribbon's **Connect** group. Drag from one shape's blue dot to another's. When you move either shape, the connector follows. Drag a connector's end away from a dot to unstick it.

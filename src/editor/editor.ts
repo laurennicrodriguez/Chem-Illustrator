@@ -43,6 +43,7 @@ import { applyArrange, planArrange, readingOrder, type ArrangeOptions } from '..
 import { buildCycle, type CycleLook, type CycleSpec } from '../chem/cycles';
 import { refitTableFigures, tableContents } from './table-figs';
 import { energyFrameOf, plotFromBox, putEnergy, refitEnergy, type EnergyData } from '../design/energy';
+import { diagramFrameOf, heldLines, putDiagram, refitDiagrams, ungroupDiagram, type DiagramData } from '../design/diagrams';
 import { attachWhereItIs, defaultGap, placeAttached, refitAttached } from './attached';
 import { frameAround, frameBox, frameMembers, refitFrames, defaultPad, thingsInside } from './frames';
 import { Align, Measure, POINTS, Snapshot, type TurnText, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, withFrameContents, rotation, mirrorX, mirrorY } from './arrange';
@@ -297,6 +298,8 @@ export class Editor {
   onProperties: () => void = () => {};
   /** A double-click on an energy diagram: open its numbers (the frame's id). */
   onEnergy: (id: number) => void = () => {};
+  /** A double-click on a diagram away from its words: open its text and look (the frame's id). */
+  onDiagram: (id: number) => void = () => {};
   /** A chart (on a slide or drawing) was double-clicked: open its data and settings. */
   onChart: (id: number) => void = () => {};
   private drag: Drag | null = null;
@@ -365,8 +368,8 @@ export class Editor {
     window.addEventListener('keyup', ctrlKey);
     // frames that follow what they surround are refitted as each change finishes
     doc.beforeCommit = (before) => {
-      let frames = false, rings = false, tied = false, energy = false, tables = false;
-      for (const s of this.doc.shapes.values()) { if (s.frame?.fit) frames = true; if (s.kind === 'ring') rings = true; if (s.energy) energy = true; if (s.kind === 'table') tables = true; }
+      let frames = false, rings = false, tied = false, energy = false, tables = false, diagrams = false;
+      for (const s of this.doc.shapes.values()) { if (s.frame?.fit) frames = true; if (s.kind === 'ring') rings = true; if (s.energy) energy = true; if (s.kind === 'table') tables = true; if (s.diagram) diagrams = true; }
       for (const c of this.doc.captions.values()) if (c.attach) { tied = true; break; }
       // ring fills first, then labels beside their structures: a frame round a structure takes in both
       if (rings) refitRingFills(this.doc, before);
@@ -375,6 +378,8 @@ export class Editor {
       if (tied) refitAttached(this.doc, before, this.measure());
       // an energy diagram resized by hand is drawn again to fill its frame, before frames refit
       if (energy) refitEnergy(this.doc, before, this.measure());
+      // a diagram resized by hand is drawn again in its new box; words typed into its shapes go into its text
+      if (diagrams) refitDiagrams(this.doc, before, this.measure());
       if (frames) refitFrames(this.doc, before, this.measure());
       // mechanism arrows the change left running into something find their own way round again
       if (this.options.rerouteArrows) this.rerouteArrows(before);
@@ -888,6 +893,15 @@ export class Editor {
     // any part of an energy diagram (but a structure put on it) opens its numbers
     const diagram = h && h.kind !== 'atom' && h.kind !== 'bond' && (h.kind === 'caption' || h.kind === 'arrow' || h.kind === 'shape') ? energyFrameOf(this.doc, h.kind, h.id) : null;
     if (diagram !== null) { this.selectOnly({ kind: 'shape', id: diagram }); this.onEnergy(diagram); return; }
+    // a SmartArt-style diagram: its words are typed into in place, as in PowerPoint; anywhere else opens its text and look
+    const smart = h && (h.kind === 'arrow' || h.kind === 'shape') ? diagramFrameOf(this.doc, h.kind, h.id) : null;
+    if (smart !== null) {
+      const part = h!.kind === 'shape' && h!.id !== smart ? this.doc.shapes.get(h!.id) : undefined;
+      if (part?.kind === 'geo' && heldLines(part)) { this.sel = emptySel(); this.sel.shapes.add(part.id); this.editGeoText(part.id, p); return; }
+      this.selectOnly({ kind: 'shape', id: smart });
+      this.onDiagram(smart);
+      return;
+    }
     if (this.tool.kind === 'select' && h && (h.kind === 'atom' || h.kind === 'bond')) {
       const atom = h.kind === 'atom' ? h.id : this.doc.bonds.get(h.id)!.a1;
       this.selectFragment(atom, e.shiftKey);
@@ -2017,7 +2031,7 @@ export class Editor {
    */
   private groupFirst(h: NonNullable<Hit>): NonNullable<Hit> {
     if (h.kind !== 'atom' && h.kind !== 'bond' && h.kind !== 'caption' && h.kind !== 'arrow' && h.kind !== 'shape') return h;
-    const g = energyFrameOf(this.doc, h.kind, h.id);
+    const g = energyFrameOf(this.doc, h.kind, h.id) ?? (h.kind === 'shape' || h.kind === 'arrow' ? diagramFrameOf(this.doc, h.kind, h.id) : null);
     return g !== null && g !== (h.kind === 'shape' ? h.id : null) && !this.sel.shapes.has(g) ? { kind: 'shape', id: g } : h;
   }
 
@@ -2028,6 +2042,45 @@ export class Editor {
       for (const id of set) { const g = energyFrameOf(this.doc, k, id); if (g !== null) return g; }
     }
     return null;
+  }
+
+  /** The SmartArt-style diagram the selection is in (its frame), if any. */
+  selectedDiagram(): number | null {
+    for (const id of this.sel.shapes) { const g = diagramFrameOf(this.doc, 'shape', id); if (g !== null) return g; }
+    for (const id of this.sel.arrows) { const g = diagramFrameOf(this.doc, 'arrow', id); if (g !== null) return g; }
+    return null;
+  }
+
+  /** Insert ▸ Diagram: draw one with its middle at `at` (or draw diagram `id` again with new text or look), and select it. */
+  putDiagramAt(d: DiagramData, at: Vec, id?: number, page?: { w: number; h: number }): void {
+    const m = this.fullMeasure();
+    let frame = id;
+    this.doc.edit(id === undefined ? 'Diagram' : 'Change Diagram', () => {
+      const s = id !== undefined ? this.doc.shapes.get(id) : undefined;
+      const corner = s ? { x: Math.min(s.x1, s.x2), y: Math.min(s.y1, s.y2) } : { x: at.x - d.w / 2, y: at.y - d.h / 2 };
+      frame = putDiagram(this.doc, m, d, corner, id);
+      if (id === undefined) {
+        this.sel = emptySel();
+        this.sel.shapes.add(frame);
+        this.moveClear(page);
+      }
+    });
+    if (frame !== undefined) this.selectOnly({ kind: 'shape', id: frame });
+    this.changed();
+  }
+
+  /** Convert to Shapes: the selected diagram becomes plain shapes and connectors (selected). */
+  ungroupSelectedDiagram(frame?: number): boolean {
+    const id = frame ?? this.selectedDiagram();
+    if (id === null) return false;
+    const arrows = [...(this.doc.shapes.get(id)?.frame?.arrows ?? [])];
+    let ids: number[] = [];
+    this.doc.edit('Convert to Shapes', () => { ids = ungroupDiagram(this.doc, id); });
+    this.sel = emptySel();
+    for (const x of ids) this.sel.shapes.add(x);
+    for (const x of arrows) if (this.doc.arrows.has(x)) this.sel.arrows.add(x);
+    this.changed();
+    return true;
   }
 
   /** Insert ▸ Energy Diagram: draw one with its middle at `at` (or draw diagram `id` again with new numbers), and select it. */

@@ -16,6 +16,8 @@ export const WP_NS = 'http://schemas.openxmlformats.org/drawingml/2006/wordproce
 export const PIC_NS = 'http://schemas.openxmlformats.org/drawingml/2006/picture';
 /** Word 2010's shapes (text boxes), and the markup that lets older programs skip them. */
 export const WPS_NS = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape';
+/** Word 2010's groups of shapes. */
+export const WPG_NS = 'http://schemas.microsoft.com/office/word/2010/wordprocessingGroup';
 export const MC_NS = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
 /** Office Math: Word's equations. */
 export const M_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/math';
