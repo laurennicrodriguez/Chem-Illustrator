@@ -14,6 +14,7 @@ import { Renderer, measureText, forgetTextWidths } from './render/renderer';
 import { Editor, TOOLS, type HighlightToggle, type Selection } from './editor/editor';
 import { BUILT_IN_LOOKS, type HighlightLookPreset } from './ui/highlight-looks';
 import { selectionBox, POINTS, type Align } from './editor/arrange';
+import { selectedGroups } from './editor/groups';
 import { readCdxml, ReadStats } from './io/cdxml';
 import { ChemClient } from './chem/client';
 import type { FragmentResult } from './worker/chem-worker';
@@ -2769,7 +2770,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
+  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
   'help', 'about', 'user-guide', 'send-feedback', 'report-problem', 'check-updates']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
@@ -2940,6 +2941,9 @@ const COMMANDS: Record<string, () => unknown> = {
   'dev-tools': () => { showDevTools(!devTools); storeSettings(); },
   'show-stereo': () => previewStereo(!renderer.previewStereo),
   'scroll-bars': () => { showScrollBars(!scrollbars.shown); storeSettings(); },
+  'text-bar-docked': () => { placeTextBar('docked'); storeSettings(); },
+  'text-bar-floating': () => { placeTextBar('floating'); storeSettings(); },
+  'text-bar-hidden': () => { placeTextBar('hidden'); storeSettings(); },
   'group-tips': () => { showGroupTips(!labelTips.enabled); storeSettings(); },
   'dark-page': () => { showDark(!dark.on); storeSettings(); },
   'alignment-guides': () => {
@@ -3061,6 +3065,10 @@ const COMMANDS: Record<string, () => unknown> = {
   'add-id-label': () => void addTiedText('label'),
   'lock-structures': () => toggleStructureLock(),
   'add-caption': () => void addTiedText('caption'),
+  'link-text': () => linkText() || flash('Select the text to link (and the structure to link it to; else it goes to the nearest).'),
+  'unlink-text': () => unlinkText() || flash('Select linked text, or a structure with text linked to it.'),
+  group: () => editor.group() || flash('Select two or more things to group: structures, text, arrows or shapes.'),
+  ungroup: () => editor.ungroup() || flash('Select a group to take apart.'),
   'bring-front': () => editor.setBondLayer(true) || flash('Select the bond to bring to the front (where bonds cross, the one behind has a gap).'),
   'send-back': () => editor.setBondLayer(false) || flash('Select the bond to send to the back (where bonds cross, the one behind has a gap).'),
   'save-template': () => void saveTemplate(),
@@ -3711,6 +3719,8 @@ function chooseMethylStyle(style: MethylStyle): void {
 
 /** Ask before a command with nothing selected changes every structure on the page (Edit > Preferences). */
 let askWholeDrawing = true;
+/** Where linked text goes (Edit > Preferences). */
+let linkSide: Settings['linkSide'] = 'keep';
 
 /**
  * Show Terminal Methyls: on the selection, or with nothing selected on every structure, after
@@ -3851,6 +3861,9 @@ async function openPreferences(): Promise<void> {
     { name: 'axial', label: 'Axial chirality written as', value: axialStyle.helicity ? 'PM' : 'RaSa', options: [{ value: 'RaSa', label: 'Ra / Sa' }, { value: 'PM', label: 'P / M (helicity)' }] },
     { name: 'charges', label: 'Charges from the + and − keys', value: editor.options.circledCharges ? 'circled' : 'plain', options: [{ value: 'plain', label: 'Plain sign (N+)' }, { value: 'circled', label: 'In a circle (⊕, ⊖)' }] },
     { name: 'textAtom', label: 'An atom or group typed with the Text tool beside a bond end (Br, OMe) becomes that atom', type: 'checkbox', value: String(editor.options.textToAtom) },
+    { name: 'groupClick', label: 'Clicking something in a group selects', value: editor.options.groupClick, options: [{ value: 'group', label: 'The whole group' }, { value: 'item', label: 'Just that thing' }] },
+    { name: 'groupOutline', label: 'Outline the rest of a group when part of it is selected', type: 'checkbox', value: String(editor.options.groupOutline) },
+    { name: 'linkSide', label: 'Text linked to a structure goes', value: linkSide, options: [{ value: 'keep', label: 'Where it is' }, { value: 'below', label: 'Below' }, { value: 'above', label: 'Above' }, { value: 'left', label: 'Left' }, { value: 'right', label: 'Right' }] },
     { name: 'ask', label: 'Ask before changing every structure on the page when nothing is selected', type: 'checkbox', value: String(askWholeDrawing) },
     ...(canUpdate ? [{ name: 'updates', label: 'Check for a newer version when the app starts', type: 'checkbox' as const, value: String(updateCheck) }] : []),
     { name: 'pubchem', label: 'Look up names the name reader can\'t read on PubChem (sends the name typed to PubChem, a free NIH database)', type: 'checkbox', value: String(pubchemNames) },
@@ -3867,6 +3880,9 @@ async function openPreferences(): Promise<void> {
   }
   editor.options.circledCharges = r.charges === 'circled';
   editor.options.textToAtom = r.textAtom === 'true';
+  editor.options.groupClick = r.groupClick === 'item' ? 'item' : 'group';
+  editor.options.groupOutline = r.groupOutline === 'true';
+  linkSide = (['below', 'above', 'left', 'right'].includes(r.linkSide) ? r.linkSide : 'keep') as Settings['linkSide'];
   showHelicity(r.axial === 'PM');
   if (r.methyl !== editor.options.methylStyle) chooseMethylStyle(r.methyl as MethylStyle);
   else storeSettings();
@@ -3888,6 +3904,7 @@ function storeSettings(): void {
     devTools,
     showRoles: editor.showRoles,
     scrollBars: scrollbars.shown,
+    textBar: CaptionEditor.barPlace,
     groupTips: labelTips.enabled,
     chemTyping: typingPrefs.chemistry,
     spellCheck: typingPrefs.spelling,
@@ -3903,6 +3920,9 @@ function storeSettings(): void {
     axialStyle: axialStyle.helicity ? 'PM' : 'RaSa',
     circledCharges: editor.options.circledCharges,
     textToAtom: editor.options.textToAtom,
+    groupClick: editor.options.groupClick,
+    groupOutline: editor.options.groupOutline,
+    linkSide,
     slideTemplate,
     askWholeDrawing,
     palettes: getPalettes(),
@@ -4023,6 +4043,7 @@ void loadSettings().then((s) => {
   $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(s.showRoles));
   showDevTools(s.devTools);
   showScrollBars(s.scrollBars);
+  placeTextBar(s.textBar);
   showGroupTips(s.groupTips);
   modeColours = s.modeColours;
   applyModeColours(ws.active.mode, modeColours);
@@ -4038,6 +4059,9 @@ void loadSettings().then((s) => {
   showHelicity(s.axialStyle === 'PM');
   editor.options.circledCharges = s.circledCharges;
   editor.options.textToAtom = s.textToAtom;
+  editor.options.groupClick = s.groupClick;
+  editor.options.groupOutline = s.groupOutline;
+  linkSide = s.linkSide;
   slideTemplate = s.slideTemplate;
   askWholeDrawing = s.askWholeDrawing;
   updateCheck = s.updateCheck;
@@ -4817,21 +4841,47 @@ const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, ()
 stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
 stylePanel.tie = (ids) => tieCaptions(ids);
 
-/** Tie captions to the structure nearest each, where they sit now (Style panel). */
-function tieCaptions(ids: number[]): void {
+/**
+ * Tie captions (text boxes) to a structure: `to` (a selected structure's atoms), or else the one
+ * nearest each. They stay where they are, or go to the side chosen in Edit > Preferences.
+ */
+function tieCaptions(ids: number[], to: Set<number> | null = null): void {
   const m = editor.measure();
   let n = 0;
-  doc.edit('Tie caption to structure', () => {
+  doc.edit('Link text to structure', () => {
     for (const id of ids) {
       const c = doc.captions.get(id);
       if (!c) continue;
-      const f = nearestStructure(doc, m.captionBox(c), m);
-      const a = f && attachWhereItIs(doc, c, f, m, 'caption');
-      if (a) { doc.updateCaption(id, { attach: a }); n++; }
+      const f = to ?? nearestStructure(doc, m.captionBox(c), m);
+      if (!f?.size) continue;
+      const side = linkSide === 'keep' ? undefined : linkSide;
+      const a = side ? { atoms: [...f], side, gap: defaultGap(doc), shift: 0, role: 'caption' as const } : attachWhereItIs(doc, c, f, m, 'caption');
+      if (!a) continue;
+      doc.updateCaption(id, { attach: a, ...(side ? { justify: side === 'right' ? 'left' as const : side === 'left' ? 'right' as const : 'center' as const } : {}) });
+      n++;
     }
   });
   editor.changed();
-  flash(n ? 'Tied: the caption now follows its structure.' : 'There is no structure to tie it to.');
+  flash(n ? `Linked: the text now moves with its structure. Selecting either one shows the link.` : 'There is no structure to link it to.');
+}
+
+/** Format > Link Text to Structure: the selected text to the selected structure (or the nearest). */
+function linkText(): boolean {
+  const caps = [...editor.sel.captions].filter((id) => doc.captions.has(id));
+  if (!caps.length) return false;
+  const first = [...editor.sel.atoms].find((id) => doc.atoms.has(id));
+  tieCaptions(caps, first === undefined ? null : doc.fragmentOf(first));
+  return true;
+}
+
+/** Format > Unlink Text: the selected text (or the text tied to the selected structures) stays put. */
+function unlinkText(): boolean {
+  const ids = new Set([...editor.sel.captions].filter((id) => doc.captions.get(id)?.attach));
+  for (const c of doc.captions.values()) if (c.attach?.atoms.some((a) => editor.sel.atoms.has(a))) ids.add(c.id);
+  if (!ids.size) return false;
+  doc.edit('Unlink text', () => { for (const id of ids) doc.updateCaption(id, { attach: undefined }); });
+  editor.changed();
+  return true;
 }
 // ---------------------------------------------------------------- right-click menu on the drawing
 
@@ -4936,6 +4986,10 @@ function drawingMenu(): MenuItem[] {
     ...(atoms ? [{ label: 'Label the Structure', items: [{ cmd: 'add-id-label' }, { cmd: 'add-caption' }, { cmd: 'attach-descriptors' }, null, { cmd: 'number-compounds' }] }] : []),
     { cmd: 'scale' },
     ...(atoms || shapes.some((x) => x.kind === 'ring') ? [{ label: 'Highlight and Fill', items: [{ cmd: 'highlight' }, { cmd: 'remove-highlight' }, { cmd: 'highlight-look' }, { cmd: 'select-highlight' }, null, { cmd: 'smooth-highlight' }, { cmd: 'centre-highlight' }, { cmd: 'soft-highlight' }, { cmd: 'outline-highlight' }, { cmd: 'shadow-highlight' }, { cmd: 'glow-highlight' }, { cmd: 'save-highlight-look' }, null, { cmd: 'fill-rings' }, { cmd: 'ring-shadow' }] }] : []),
+    ...(s.captions.size ? [{ cmd: 'link-text' }] : []),
+    ...([...s.captions].some((id) => doc.captions.get(id)?.attach) ? [{ cmd: 'unlink-text' }] : []),
+    ...(selectedGroups(doc, s).size ? [{ cmd: 'ungroup' }] : []),
+    ...(s.atoms.size + s.captions.size + s.arrows.size + s.shapes.size > 1 ? [{ cmd: 'group' }] : []),
     { label: 'Align', items: arrange },
     { label: 'Rotate or Flip', items: turn },
     ...(order.length ? [{ label: 'Order', items: order }] : []),
@@ -5427,6 +5481,12 @@ const scrollbars = new Scrollbars(host, renderer, () => {
   const d = ws.active.deck;
   return d ? { x1: 0, y1: 0, x2: d.size.w, y2: d.size.h } : doc.bounds();
 }, () => editor.requestScene());
+
+/** View > Text Formatting Bar: along the top of the drawing, floating by the text, or hidden. */
+function placeTextBar(where: Settings['textBar']): void {
+  CaptionEditor.barPlace = where;
+  for (const w of ['docked', 'floating', 'hidden']) $(`[data-cmd="text-bar-${w}"]`)?.setAttribute('aria-checked', String(w === where));
+}
 
 function showScrollBars(on: boolean): void {
   scrollbars.shown = on;

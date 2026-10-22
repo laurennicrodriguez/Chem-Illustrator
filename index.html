@@ -102,6 +102,14 @@
     <button role="menuitem" data-cmd="dark-colours" title="Choose the dark page's colours (Graphite, Slate, Warm dark) or make your own">Dark Page Colours…</button>
     <button role="menuitemcheckbox" aria-checked="true" data-cmd="group-tips" title="Rest the mouse on an abbreviation such as OTBS, Boc or CO2Me to see the group written out, with its name and formula"><span>Group Tooltips</span></button>
     <button role="menuitemcheckbox" aria-checked="true" data-cmd="scroll-bars" title="Scroll bars along the bottom and right of the drawing, showing where you are"><span>Scroll Bars</span></button>
+    <div class="submenu">
+    <button role="menuitem" class="has-sub" aria-haspopup="menu" aria-expanded="false">Text Formatting Bar</button>
+    <div class="menu sub" role="menu" hidden>
+    <button role="menuitemradio" aria-checked="true" data-cmd="text-bar-docked" title="Font, size, bold, italic, sub- and superscript, colour and alignment along the top of the drawing while you type text, clear of what is drawn"><span>Along the Top</span></button>
+    <button role="menuitemradio" aria-checked="false" data-cmd="text-bar-floating" title="The bar floats just above the text being typed"><span>Floating by the Text</span></button>
+    <button role="menuitemradio" aria-checked="false" data-cmd="text-bar-hidden" title="No bar; the keys still work (Ctrl+B bold, Ctrl+I italic, Ctrl+= subscript…)"><span>Hidden</span></button>
+    </div>
+    </div>
     <button role="menuitemcheckbox" aria-checked="false" data-cmd="split-view" title="A drawing beside the document, sheet or slides, so you can draw and write without switching tabs"><span>Split View: Drawing Beside</span></button>
     <button data-modes="sheet" role="menuitem" data-cmd="freeze-header">Freeze Header Row</button>
     <button data-modes="slides" role="menuitemcheckbox" aria-checked="false" data-cmd="animation-pane"><span>Animation Pane</span></button>
@@ -193,6 +201,12 @@
     </div>
     </div>
     <button data-modes="drawing slides design" role="menuitem" data-cmd="scale">Scale…</button>
+    <button data-modes="drawing slides design" role="menuitem" data-cmd="group" title="Put the selected structures, text, arrows and shapes together, so they select and move as one">Group</button>
+    <button data-modes="drawing slides design" role="menuitem" data-cmd="ungroup" title="Take the selected groups apart">Ungroup</button>
+    <button data-modes="drawing slides design" role="menuitem" data-cmd="link-text" title="Link the selected text to the selected structure (or the nearest), so it moves with it">Link Text to Structure</button>
+    <button data-modes="drawing slides design" role="menuitem" data-cmd="unlink-text" title="Leave the selected text where it is, no longer following its structure">Unlink Text</button>
+    <button data-modes="drawing slides design" role="menuitem" data-cmd="shape-front" title="Put the selected shapes in front of everything else">Bring to Front</button>
+    <button data-modes="drawing slides design" role="menuitem" data-cmd="shape-back" title="Put the selected shapes behind everything else">Send to Back</button>
     <button data-modes="drawing slides design" role="menuitem" data-cmd="bring-front">Bring Bond to Front</button>
     <button data-modes="drawing slides design" role="menuitem" data-cmd="send-back">Send Bond to Back</button>
     <hr />

@@ -122,7 +122,7 @@ Pick the text tool (`t` over empty space) and:
 
 Double-click a caption to edit it again. Press Esc to finish.
 
-While you type, a bar above the text has bold, italic and underline, subscript and superscript, **formula style**, font, size and colour, alignment, bullets and numbering, indents, line and paragraph spacing, and a set of Greek letters and symbols (**αΩ**).
+While you type, a bar along the top of the drawing has bold, italic and underline, subscript and superscript, **formula style**, font, size and colour, alignment, bullets and numbering, indents, line and paragraph spacing, and a set of Greek letters and symbols (**αΩ**). It sits along the top so it never covers what you have drawn; **View ▸ Text Formatting Bar** can float it just above the text instead, or hide it (the keys below still work).
 
 Useful keys while typing:
 
@@ -141,6 +141,10 @@ As you type, common chemistry is tidied for you: CH2Cl2 gets its subscripts, `0 
 
 You can paste formatted text from Word into a text box; bold, italic, subscripts, colours and lists come across.
 
+### Linking text to a structure
+
+Select a caption and a structure and choose **Format ▸ Link Text to Structure** (also on the right-click menu). The text then moves, turns and copies with its structure. With only text selected, it links to the nearest structure. While either one is selected, a dotted grey line shows the link. **Format ▸ Unlink Text** lets it go again. **Edit ▸ Preferences** chooses where linked text goes: where it already is, or below, above, left or right of the structure.
+
 ### Turning text
 
 Select a caption or text box on its own with the select tool, and a round handle appears above it. Drag the handle to turn the text; hold Shift or Alt to turn in 15° steps. When you turn a structure that has captions with it, the captions move round with the structure but stay upright. Labels attached to a structure (ID labels, descriptors) also stay upright.
@@ -154,7 +158,7 @@ Select something and:
 - use the arrow keys to nudge it 1 pt, or Shift+arrow for 10 pt;
 - press Alt+← or Alt+→ to turn it 1°, Alt+↑ or Alt+↓ for 15°.
 
-The **Object** menu has:
+The **Format** menu has:
 
 - **Align Left Edges**, **Align Centres Across**, **Align Right Edges**, **Align Top Edges**, **Align Middles Down**, **Align Bottom Edges**;
 - **Space Evenly Across** and **Space Evenly Down** (three or more things);
@@ -162,9 +166,13 @@ The **Object** menu has:
 - **Rotate 90° Clockwise**, **Rotate 90° Anticlockwise**, **Rotate 180°** and **Rotate…** (Ctrl+R, any angle);
 - **Scale…** (Ctrl+K): by a percentage, or to a bond length in points;
 - **Join** (Ctrl+J): joins two selected atoms, or two selected bonds, into one;
+- **Group** (Ctrl+G) and **Ungroup** (Ctrl+Shift+G): grouped structures, text, arrows and shapes select and move as one. Clicking any part selects the whole group, and a grey dashed box shows it; **Edit ▸ Preferences** can make a click pick just the one thing instead. Groups are kept in CDXML files, so ChemDraw opens them as groups too;
+- **Bring to Front** and **Send to Back** for shapes and pictures;
 - **Bring Bond to Front** and **Send Bond to Back**: where two bonds cross, the one behind gets a small gap.
 
 **View ▸ Alignment Guides** makes things you move snap into line with other structures, text, arrows, shapes and the page edges, with pink guide lines. It starts off in drawings. Hold Alt while dragging to move freely.
+
+Undo (Ctrl+Z) and Redo (Ctrl+Y) select what they changed, so you can see what came back and move it straight away.
 
 To start a reaction quickly, select a structure and press Ctrl+→ (or Ctrl+←, Ctrl+↑, Ctrl+↓): you get a reaction arrow and a copy of the structure to edit into the product.
 

@@ -12,6 +12,7 @@
 // page's clipboard gets a PNG (and the drawing in a web format where the browser takes one),
 // and the drawing itself is kept in memory: pasting that same picture back here gives the drawing.
 
+import { freshGroups } from '../editor/groups';
 import { pastedTable, tableHtml, tableTsv, type PastedRows } from './table-clip';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { Doc, TextRun, applyBase, type TableData } from '../model';
@@ -228,6 +229,8 @@ export function insertDrawing(doc: Doc, src: Doc, center: Vec, label = 'Paste'):
       if (rest.poly) rest.poly = rest.poly.map((p) => ({ x: p.x + dx, y: p.y + dy }));
       sel.shapes.add(doc.addShape({ ...rest, x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy }).id);
     }
+    // a pasted group is a new group, not part of the one it was copied from
+    freshGroups(doc, sel);
   });
   return sel;
 }
