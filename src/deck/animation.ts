@@ -1,9 +1,11 @@
 // Slide transitions and animations, as in PowerPoint but only the calm, basic ones:
 // transitions Fade, Push, Wipe, Cover and Morph; animations Appear, Fade, Wipe and Fly In (and the
-// same four going out), and the emphasis effects Pulse, Grow/Shrink, Spin, Transparency and
-// Colour Change, which act on something already showing and leave it changed. Each has its own
-// speed (how long it takes) and delay, and an animation starts on a click, with the one before
-// it, or after the one before it.
+// same four going out), the emphasis effects Pulse, Grow/Shrink, Spin, Transparency and Colour
+// Change, which act on something already showing and leave it changed, and motion paths, which
+// move it along a line, arc or path of your own and leave it there. Each has its own speed (how
+// long it takes) and delay, and an animation starts on a click, with the one before it, or after
+// the one before it, or (a trigger) when something on the slide is clicked in the show. Text can
+// come in one paragraph at a time.
 //
 // What moves is one of the parts a slide is saved to PowerPoint as (see splitSlide): a title or
 // text box, a picture, a shape, a table, or a structure or scheme with everything round it. So an
@@ -69,7 +71,7 @@ export const DEFAULT_TRANSITION_DUR = 0.7;
 
 // ---------------------------------------------------------------- animations
 
-export type Effect = 'appear' | 'fade' | 'wipe' | 'fly' | Emphasis;
+export type Effect = 'appear' | 'fade' | 'wipe' | 'fly' | Emphasis | 'path';
 /** Effects that change something already showing (PowerPoint's Emphasis effects). */
 export type Emphasis = 'pulse' | 'grow' | 'spin' | 'transparency' | 'colour';
 export type Side = 'left' | 'right' | 'top' | 'bottom';
@@ -87,6 +89,8 @@ export const EFFECTS: { id: Effect; name: string; sides: boolean; emph?: boolean
 ];
 
 export const isEmphasis = (e: Effect): e is Emphasis => e === 'pulse' || e === 'grow' || e === 'spin' || e === 'transparency' || e === 'colour';
+/** Effects that act on something already showing and leave it showing: emphasis and motion paths. */
+export const keepsShowing = (e: Effect): boolean => isEmphasis(e) || e === 'path';
 
 /** What an emphasis effect does when its settings aren't given: half as big again, a whole turn, half see-through, red. */
 export const EMPH_DEFAULTS = { scale: 1.5, turn: 360, opacity: 0.5, color: '#e53935' };
@@ -102,7 +106,16 @@ export const SIDES: { id: Side; name: string }[] = [
  * What an animation moves: any object of the part (a structure is named by one of its atoms). A
  * highlight is named by one of its atoms (or, with `bond`, one of its bonds when it has no atoms).
  */
-export interface AnimTarget { kind: 'caption' | 'shape' | 'atom' | 'arrow' | 'highlight'; id: number; bond?: boolean }
+export interface AnimTarget {
+  kind: 'caption' | 'shape' | 'atom' | 'arrow' | 'highlight';
+  id: number;
+  bond?: boolean;
+  /** One paragraph of a text box (counted from 0), for text that comes in a paragraph at a time. */
+  para?: number;
+}
+
+/** A name for a target, the same for the same object (triggers are kept by it). */
+export const targetKey = (t: AnimTarget): string => `${t.kind} ${t.bond ? 'b' : ''}${t.id}`;
 
 export interface Anim {
   target: AnimTarget;
@@ -125,12 +138,26 @@ export interface Anim {
   opacity?: number;
   /** Colour Change: the colour it ends (a shape's fill, text's colour, a structure's lines and labels). */
   color?: string;
+  /**
+   * A motion path: where it goes, as PowerPoint writes paths (M, L and C, then E), in fractions of
+   * the slide's width and height from where it is; and which of the ready-made paths it is.
+   */
+  path?: string;
+  pathKind?: PathKind;
+  /**
+   * A trigger: it plays when this object is clicked in the slide show, not in the slide's own
+   * order (each click on it plays its next click's worth).
+   */
+  trigger?: AnimTarget;
+  /** Text: each paragraph comes in (or goes, or is emphasised) on its own, one after another. */
+  byPara?: boolean;
 }
 
 export const DEFAULT_ANIM_DUR = 0.5;
 
 /** A new animation on a target: on a click, half a second, as PowerPoint starts one. */
 export function newAnim(target: AnimTarget, effect: Effect, exit = false): Anim {
+  if (effect === 'path') return { target, effect, start: 'click', dur: 2, delay: 0, pathKind: 'down', path: presetPath('down', { w: 960, h: 540 }) };
   if (isEmphasis(effect)) {
     // PowerPoint's own lengths: a quick pulse, two seconds for the rest
     const extra = effect === 'grow' ? { scale: EMPH_DEFAULTS.scale } : effect === 'spin' ? { turn: EMPH_DEFAULTS.turn } : effect === 'transparency' ? { opacity: EMPH_DEFAULTS.opacity } : effect === 'colour' ? { color: EMPH_DEFAULTS.color } : {};
@@ -140,10 +167,146 @@ export function newAnim(target: AnimTarget, effect: Effect, exit = false): Anim 
 }
 
 export function animName(a: Anim): string {
+  if (a.effect === 'path') return `${PATHS.find((p) => p.id === a.pathKind)?.name ?? 'Custom Path'} (motion path)`;
   const e = EFFECTS.find((x) => x.id === a.effect)!.name;
   if (isEmphasis(a.effect)) return e;
   if (a.exit) return a.effect === 'appear' ? 'Disappear' : a.effect === 'fly' ? 'Fly Out' : `${e} Out`;
   return a.effect === 'fly' ? 'Fly In' : e;
+}
+
+// ---------------------------------------------------------------- motion paths
+
+export type PathKind = 'down' | 'up' | 'left' | 'right' | 'arc' | 'turn' | 'circle' | 'square' | 'loop' | 'wave' | 'custom';
+
+/** The ready-made motion paths, as PowerPoint's gallery has them (Lines, Arcs, Turns, Shapes, Loops). */
+export const PATHS: { id: PathKind; name: string; tip: string }[] = [
+  { id: 'down', name: 'Line Down', tip: 'straight down' },
+  { id: 'up', name: 'Line Up', tip: 'straight up' },
+  { id: 'left', name: 'Line Left', tip: 'straight to the left' },
+  { id: 'right', name: 'Line Right', tip: 'straight to the right' },
+  { id: 'arc', name: 'Arc', tip: 'in an arc, down and back up to the right' },
+  { id: 'turn', name: 'Turn', tip: 'to the right, then round a corner and down' },
+  { id: 'circle', name: 'Circle', tip: 'round in a circle, back to where it started' },
+  { id: 'square', name: 'Square', tip: 'round a square, back to where it started' },
+  { id: 'loop', name: 'Loop', tip: 'to the right with a loop in the middle' },
+  { id: 'wave', name: 'Wave', tip: 'to the right in a wave' },
+  { id: 'custom', name: 'Custom Path', tip: 'along a path you click out on the slide (double-click to finish)' },
+];
+
+const f4 = (v: number) => String(+v.toFixed(5));
+
+/** A path through points in slide points, from the first, as PowerPoint writes it (fractions of the slide). */
+export function pathThrough(pts: { x: number; y: number }[], size: { w: number; h: number }): string {
+  if (pts.length < 2) return 'M 0 0 E';
+  const o = pts[0];
+  return `M 0 0 ${pts.slice(1).map((p) => `L ${f4((p.x - o.x) / size.w)} ${f4((p.y - o.y) / size.h)}`).join(' ')} E`;
+}
+
+/** A ready-made path for a slide of this size (lines a quarter of the slide; circles round). */
+export function presetPath(kind: PathKind, size: { w: number; h: number }): string {
+  const W = size.w, H = size.h;
+  const r = 0.12 * Math.min(W, H), L = 0.25 * Math.min(W, H) * 1.4;
+  const X = (v: number) => f4(v / W), Y = (v: number) => f4(v / H);
+  const k = 0.5523 * r;
+  switch (kind) {
+    case 'down': return `M 0 0 L 0 ${Y(L)} E`;
+    case 'up': return `M 0 0 L 0 ${Y(-L)} E`;
+    case 'left': return `M 0 0 L ${X(-L)} 0 E`;
+    case 'right': return `M 0 0 L ${X(L)} 0 E`;
+    case 'arc': return `M 0 0 C 0 ${Y(0.9 * L)} ${X(L)} ${Y(0.9 * L)} ${X(L)} 0 E`;
+    case 'turn': return `M 0 0 L ${X(0.6 * L)} 0 C ${X(0.85 * L)} 0 ${X(L)} ${Y(0.15 * L)} ${X(L)} ${Y(0.4 * L)} L ${X(L)} ${Y(L)} E`;
+    case 'circle':
+      // round from the top of a circle whose top is where it starts
+      return `M 0 0 C ${X(k)} 0 ${X(r)} ${Y(r - k)} ${X(r)} ${Y(r)} C ${X(r)} ${Y(r + k)} ${X(k)} ${Y(2 * r)} 0 ${Y(2 * r)} ` +
+        `C ${X(-k)} ${Y(2 * r)} ${X(-r)} ${Y(r + k)} ${X(-r)} ${Y(r)} C ${X(-r)} ${Y(r - k)} ${X(-k)} 0 0 0 Z E`;
+    case 'square': return `M 0 0 L ${X(2 * r)} 0 L ${X(2 * r)} ${Y(2 * r)} L 0 ${Y(2 * r)} L 0 0 Z E`;
+    case 'loop':
+      return `M 0 0 C ${X(0.5 * L)} 0 ${X(0.75 * L)} ${Y(-0.4 * L)} ${X(0.5 * L)} ${Y(-0.45 * L)} C ${X(0.25 * L)} ${Y(-0.4 * L)} ${X(0.5 * L)} 0 ${X(L)} 0 E`;
+    case 'wave': {
+      const q = L / 4, a = 0.12 * L;
+      return `M 0 0 C ${X(q / 2)} ${Y(-a)} ${X(q * 1.5)} ${Y(-a)} ${X(2 * q)} 0 C ${X(q * 2.5)} ${Y(a)} ${X(q * 3.5)} ${Y(a)} ${X(4 * q)} 0 E`;
+    }
+    default: return `M 0 0 L ${X(L)} ${Y(L / 2)} E`;
+  }
+}
+
+/** A path's points, as fractions of the slide: its corners, and points along its curves. */
+export function pathPoints(path: string): { x: number; y: number }[] {
+  const tok = path.replace(/([MLCZEmlcze])/g, ' $1 ').trim().split(/[\s,]+/).filter(Boolean);
+  const out: { x: number; y: number }[] = [];
+  let cur = { x: 0, y: 0 }, start = { x: 0, y: 0 }, cmd = '', i = 0;
+  const num = () => Number(tok[i++]);
+  while (i < tok.length) {
+    if (/^[MLCZEmlcze]$/.test(tok[i])) cmd = tok[i++];
+    const rel = cmd === cmd.toLowerCase();
+    const at = (x: number, y: number) => (rel ? { x: cur.x + x, y: cur.y + y } : { x, y });
+    const c = cmd.toUpperCase();
+    if (c === 'E') break;
+    if (c === 'Z') { cur = start; out.push({ ...cur }); continue; }
+    if (c === 'M' || c === 'L') {
+      const x = num(), y = num();
+      if (!Number.isFinite(x) || !Number.isFinite(y)) break;
+      cur = at(x, y);
+      if (c === 'M') start = cur;
+      out.push({ ...cur });
+      if (c === 'M') cmd = rel ? 'l' : 'L';
+    } else if (c === 'C') {
+      const p1 = at(num(), num()), p2 = at(num(), num()), p3 = at(num(), num());
+      if (![p1, p2, p3].every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))) break;
+      const p0 = cur;
+      for (let k = 1; k <= 16; k++) {
+        const t = k / 16, u = 1 - t;
+        out.push({
+          x: u * u * u * p0.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * p3.x,
+          y: u * u * u * p0.y + 3 * u * u * t * p1.y + 3 * u * t * t * p2.y + t * t * t * p3.y,
+        });
+      }
+      cur = p3;
+    } else i++;
+  }
+  if (!out.length) out.push({ x: 0, y: 0 });
+  return out;
+}
+
+/** Where along its path something is, `p` of the way (by distance), as fractions of a slide of this size. */
+export function pathAt(path: string, p: number, size: { w: number; h: number }): { x: number; y: number } {
+  const pts = pathPoints(path);
+  if (pts.length < 2) return pts[0];
+  const d = [0];
+  for (let k = 1; k < pts.length; k++) d.push(d[k - 1] + Math.hypot((pts[k].x - pts[k - 1].x) * size.w, (pts[k].y - pts[k - 1].y) * size.h));
+  const want = Math.max(0, Math.min(1, p)) * d[d.length - 1];
+  for (let k = 1; k < pts.length; k++) {
+    if (d[k] < want && k < pts.length - 1) continue;
+    const seg = d[k] - d[k - 1], t = seg > 0 ? (want - d[k - 1]) / seg : 1;
+    return { x: pts[k - 1].x + (pts[k].x - pts[k - 1].x) * t, y: pts[k - 1].y + (pts[k].y - pts[k - 1].y) * t };
+  }
+  return pts[pts.length - 1];
+}
+
+/** The same path run backwards, from where it ended (PowerPoint's Reverse Path Direction). */
+export function reversePath(path: string): string {
+  const pts = pathPoints(path);
+  const end = pts[pts.length - 1];
+  return `M 0 0 ${pts.slice(0, -1).reverse().map((p) => `L ${f4(p.x - end.x)} ${f4(p.y - end.y)}`).join(' ')} E`;
+}
+
+// ---------------------------------------------------------------- paragraphs
+
+/**
+ * The animations with each one that plays text a paragraph at a time made into one for each
+ * paragraph that has text (`paras` gives the paragraphs' text for a text box), each starting
+ * as the first does: on its own click, with the one before, or after it.
+ */
+export function expandParas(anims: Anim[], paras: (captionId: number) => string[] | null): Anim[] {
+  if (!anims.some((a) => a.byPara)) return anims;
+  return anims.flatMap((a) => {
+    if (!a.byPara || a.target.kind !== 'caption') return [a];
+    const texts = paras(a.target.id);
+    if (!texts) return [a];
+    const full = texts.map((t, k) => (t.trim() ? k : -1)).filter((k) => k >= 0);
+    if (!full.length) return [a];
+    return full.map((k, j) => ({ ...a, target: { ...a.target, para: k }, byPara: undefined, ...(j ? { delay: 0 } : {}) }));
+  });
 }
 
 // ---------------------------------------------------------------- what moves
@@ -153,6 +316,8 @@ export interface Part {
   kind: 'text' | 'picture' | 'shape' | 'table' | 'connector' | 'drawing' | 'highlight';
   /** A highlight: its highlighted atoms and bonds (its structure is a part of its own). */
   sel: Selection;
+  /** One paragraph of a text box (playing text a paragraph at a time). */
+  para?: number;
 }
 
 const sel = (p: Partial<Selection>): Selection => ({ atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set(), ...p });
@@ -208,13 +373,30 @@ export function highlightParts(doc: Doc, within: Selection): Part[] {
 export function partHolds(part: Part, t: AnimTarget): boolean {
   const s = part.sel;
   if ((t.kind === 'highlight') !== (part.kind === 'highlight')) return false;
+  if (part.para !== undefined) return t.kind === 'caption' && t.para === part.para && s.captions.has(t.id);
   if (t.kind === 'highlight') return t.bond ? s.bonds.has(t.id) : s.atoms.has(t.id);
   return t.kind === 'atom' ? s.atoms.has(t.id) : t.kind === 'caption' ? s.captions.has(t.id) : t.kind === 'shape' ? s.shapes.has(t.id) : s.arrows.has(t.id);
 }
 
 /** The part an animation moves (none when its object has been deleted). */
 export function partOf(parts: Part[], t: AnimTarget): Part | undefined {
+  if (t.para !== undefined) return parts.find((p) => partHolds(p, t)) ?? parts.find((p) => p.para === undefined && partHolds(p, { ...t, para: undefined }));
   return parts.find((p) => partHolds(p, t));
+}
+
+/**
+ * The parts with each text box played a paragraph at a time (an animation of one of its
+ * paragraphs) split into one part for each of its paragraphs.
+ */
+export function splitParas(parts: Part[], anims: Anim[], paraCount: (captionId: number) => number): Part[] {
+  const split = new Set(anims.filter((a) => a.target.kind === 'caption' && a.target.para !== undefined).map((a) => a.target.id));
+  if (!split.size) return parts;
+  return parts.flatMap((p) => {
+    if (p.kind !== 'text' || p.para !== undefined) return [p];
+    const id = Math.min(...p.sel.captions);
+    if (!split.has(id)) return [p];
+    return Array.from({ length: Math.max(1, paraCount(id)) }, (_, k): Part => ({ kind: 'text', sel: p.sel, para: k }));
+  });
 }
 
 /** The structure a highlight is on. */
@@ -289,6 +471,22 @@ export interface Timed { anim: Anim; index: number; start: number; end: number; 
  */
 export interface Step { items: Timed[]; length: number; auto: boolean }
 
+/** The animations that play in the slide's own order (not set off by a trigger). */
+export const mainAnims = (anims: Anim[]): Anim[] => anims.filter((a) => !a.trigger);
+
+/** The slide's triggered animations, by what sets them off, each in its order. */
+export function triggerSeqs(anims: Anim[]): Map<string, { trigger: AnimTarget; anims: Anim[] }> {
+  const out = new Map<string, { trigger: AnimTarget; anims: Anim[] }>();
+  for (const a of anims) {
+    if (!a.trigger) continue;
+    const k = targetKey(a.trigger);
+    const g = out.get(k) ?? { trigger: a.trigger, anims: [] };
+    g.anims.push(a);
+    out.set(k, g);
+  }
+  return out;
+}
+
 export function buildSteps(anims: Anim[]): Step[] {
   const steps: Step[] = [];
   let cur: Step | null = null;
@@ -325,13 +523,20 @@ export interface PartState { visible: boolean; running?: { anim: Anim; p: number
  * how solid it is (0 to 1), and a colour it is changing to (`mix` of the way; `was` the colour it
  * had changed to before, if any).
  */
-export interface Emph { scale: number; rot: number; alpha: number; color?: string; mix: number; was?: string }
+export interface Emph { scale: number; rot: number; alpha: number; color?: string; mix: number; was?: string; dx?: number; dy?: number }
 
 export const NO_EMPH: Emph = { scale: 1, rot: 0, alpha: 1, mix: 0 };
 
+/** How far a part has moved along its motion paths, in points (on a slide of this size). */
+export const moved = (e: Emph | undefined, size: { w: number; h: number }): { x: number; y: number } => ({ x: (e?.dx ?? 0) * size.w, y: (e?.dy ?? 0) * size.h });
+
 /** An emphasis effect `p` of the way through (1: finished, as it stays), from what came before. */
-export function emphAt(held: Emph, a: Anim, p: number): Emph {
+export function emphAt(held: Emph, a: Anim, p: number, size: { w: number; h: number } = { w: 960, h: 540 }): Emph {
   switch (a.effect) {
+    case 'path': {
+      const at = pathAt(a.path ?? 'M 0 0 E', p, size);
+      return { ...held, dx: (held.dx ?? 0) + at.x, dy: (held.dy ?? 0) + at.y };
+    }
     case 'pulse': return { ...held, scale: held.scale * (1 + 0.1 * Math.sin(Math.PI * p)) };
     case 'grow': return { ...held, scale: held.scale * (1 + ((a.scale ?? EMPH_DEFAULTS.scale) - 1) * p) };
     case 'spin': return { ...held, rot: held.rot + (a.turn ?? EMPH_DEFAULTS.turn) * p };
@@ -344,13 +549,18 @@ export function emphAt(held: Emph, a: Anim, p: number): Emph {
   }
 }
 
-export function partStates(parts: Part[], anims: Anim[], done: number, t: number): Map<Part, PartState> {
-  const steps = buildSteps(anims);
+/**
+ * `fired`: how far each triggered sequence has played (by its trigger's key): whole clicks done,
+ * and seconds into the next (t < 0: not started). `size` is the slide's, for motion paths.
+ */
+export function partStates(parts: Part[], anims: Anim[], done: number, t: number, fired?: Map<string, { done: number; t: number }>, size?: { w: number; h: number }): Map<Part, PartState> {
+  const main = mainAnims(anims);
+  const steps = buildSteps(main);
   const out = new Map<Part, PartState>();
-  // before anything plays, parts that first come in are hidden (emphasis leaves them showing)
+  // before anything plays, parts that first come in are hidden (emphasis and paths leave them showing)
   const firstOf = new Map<Part, Anim>();
-  for (const a of anims) {
-    if (isEmphasis(a.effect)) continue;
+  for (const a of [...main, ...anims.filter((x) => x.trigger)]) {
+    if (keepsShowing(a.effect)) continue;
     const p = partOf(parts, a.target);
     if (p && !firstOf.has(p)) firstOf.set(p, a);
   }
@@ -359,10 +569,10 @@ export function partStates(parts: Part[], anims: Anim[], done: number, t: number
   const apply = (it: Timed, at: number) => {
     const p = partOf(parts, it.anim.target);
     if (!p || at < it.start) return;
-    if (isEmphasis(it.anim.effect)) {
+    if (keepsShowing(it.anim.effect)) {
       const held = emph.get(p) ?? NO_EMPH;
       const prog = at >= it.end ? 1 : Math.max(0, Math.min(1, (at - it.start) / Math.max(1e-6, it.end - it.start)));
-      emph.set(p, emphAt(held, it.anim, prog));
+      emph.set(p, emphAt(held, it.anim, prog, size));
       return;
     }
     if (at >= it.end && !(it.end === it.start && at === it.start && it.anim.effect !== 'appear')) {
@@ -372,17 +582,24 @@ export function partStates(parts: Part[], anims: Anim[], done: number, t: number
       out.set(p, { visible: true, running: { anim: it.anim, p: Math.max(0, Math.min(1, (at - it.start) / span)) } });
     }
   };
-  steps.forEach((st, k) => {
-    if (k < done) for (const it of st.items) apply(it, Infinity);
-    else if (k === done && t >= 0) for (const it of [...st.items].sort((a, b) => a.start - b.start)) apply(it, t);
+  const play = (list: Step[], n: number, tt: number) => list.forEach((st, k) => {
+    if (k < n) for (const it of st.items) apply(it, Infinity);
+    else if (k === n && tt >= 0) for (const it of [...st.items].sort((a, b) => a.start - b.start)) apply(it, tt);
   });
+  play(steps, done, t);
+  if (fired?.size) {
+    for (const [key, g] of triggerSeqs(anims)) {
+      const f = fired.get(key);
+      if (f) play(buildSteps(g.anims.map((a, k) => (k ? a : { ...a, start: 'click' }))), f.done, f.t);
+    }
+  }
   for (const [p, e] of emph) out.set(p, { ...(out.get(p) ?? { visible: true }), emph: e });
   return out;
 }
 
 /** Number of clicks the slide's animations need (an automatic first group needs none). */
 export function clickCount(anims: Anim[]): number {
-  return buildSteps(anims).filter((s) => !s.auto).length;
+  return buildSteps(mainAnims(anims)).filter((s) => !s.auto).length;
 }
 
 // ---------------------------------------------------------------- PowerPoint: transitions
@@ -438,7 +655,7 @@ export function readTransition(sld: Element, warn: (s: string) => void): Transit
 
 // ---------------------------------------------------------------- PowerPoint: animations
 
-const PRESET: Record<Effect, number> = { appear: 1, fly: 2, fade: 10, wipe: 22, pulse: 26, grow: 6, spin: 8, transparency: 9, colour: 1 };
+const PRESET: Record<Effect, number> = { appear: 1, fly: 2, fade: 10, wipe: 22, pulse: 26, grow: 6, spin: 8, transparency: 9, colour: 1, path: 0 };
 /** Colour Change on text is PowerPoint's Font Color (on anything else, its Fill Color). */
 const PRESET_FONT_COLOR = 3;
 const SUBTYPE: Record<Side, number> = { top: 1, right: 2, bottom: 4, left: 8 };
@@ -452,22 +669,27 @@ const WIPE_FILTER: Record<Side, string> = { bottom: 'wipe(up)', left: 'wipe(righ
  * `spidsOf` gives the PowerPoint shapes each animation moves (a table can be three: its title,
  * the table and its footnotes); animations of objects that weren't saved are left out.
  */
-export function timingXml(anims: Anim[], spidsOf: (a: Anim) => number[], media: MediaTiming[] = []): string {
-  const live = anims.filter((a) => spidsOf(a).length);
+export function timingXml(anims: Anim[], spidsOf: (a: Anim) => number[], media: MediaTiming[] = [], spidOfTarget: (t: AnimTarget) => number | undefined = () => undefined): string {
+  // a trigger that wasn't saved (deleted) leaves its animations out
+  const live = anims.filter((a) => spidsOf(a).length && (!a.trigger || spidOfTarget(a.trigger) !== undefined));
   if (!live.length && !media.length) return '';
   let id = 3;
   const ms = (s: number) => Math.max(0, Math.round(s * 1000));
-  const steps = buildSteps(live);
-  const target = (spid: number) => `<p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl>`;
+  const steps = buildSteps(mainAnims(live));
+  const target = (spid: number, para?: number) => `<p:tgtEl><p:spTgt spid="${spid}"${para === undefined ? '/>' : `><p:txEl><p:pRg st="${para}" end="${para}"/></p:txEl></p:spTgt>`}</p:tgtEl>`;
+  // the animation being written: its paragraph, when it plays one
+  let para: number | undefined;
   const visibility = (spid: number, val: 'visible' | 'hidden', at: number) =>
-    `<p:set><p:cBhvr><p:cTn id="${id++}" dur="1" fill="hold"><p:stCondLst><p:cond delay="${at}"/></p:stCondLst></p:cTn>${target(spid)}` +
+    `<p:set><p:cBhvr><p:cTn id="${id++}" dur="1" fill="hold"><p:stCondLst><p:cond delay="${at}"/></p:stCondLst></p:cTn>${target(spid, para)}` +
     `<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="${val}"/></p:to></p:set>`;
   const bhvr = (spid: number, d: number, attr?: string, extra = '') =>
-    `<p:cBhvr${extra}><p:cTn id="${id++}" dur="${d}" fill="hold"/>${target(spid)}${attr ? `<p:attrNameLst><p:attrName>${attr}</p:attrName></p:attrNameLst>` : ''}</p:cBhvr>`;
+    `<p:cBhvr${extra}><p:cTn id="${id++}" dur="${d}" fill="hold"/>${target(spid, para)}${attr ? `<p:attrNameLst><p:attrName>${attr}</p:attrName></p:attrNameLst>` : ''}</p:cBhvr>`;
   const emphasis = (a: Anim, spid: number): string => {
     const d = Math.max(1, ms(a.dur));
     switch (a.effect) {
-      case 'pulse': return `<p:animScale><p:cBhvr><p:cTn id="${id++}" dur="${Math.max(1, Math.round(d / 2))}" autoRev="1" fill="hold"/>${target(spid)}</p:cBhvr><p:by x="110000" y="110000"/></p:animScale>`;
+      case 'pulse': return `<p:animScale><p:cBhvr><p:cTn id="${id++}" dur="${Math.max(1, Math.round(d / 2))}" autoRev="1" fill="hold"/>${target(spid, para)}</p:cBhvr><p:by x="110000" y="110000"/></p:animScale>`;
+      case 'path': return `<p:animMotion origin="layout" path="${(a.path ?? 'M 0 0 E').replace(/"/g, '')}" pathEditMode="relative" ptsTypes="">` +
+        `<p:cBhvr><p:cTn id="${id++}" dur="${d}" fill="hold"/>${target(spid, para)}<p:attrNameLst><p:attrName>ppt_x</p:attrName><p:attrName>ppt_y</p:attrName></p:attrNameLst></p:cBhvr></p:animMotion>`;
       case 'grow': {
         const k = Math.round((a.scale ?? EMPH_DEFAULTS.scale) * 100000);
         return `<p:animScale>${bhvr(spid, d)}<p:by x="${k}" y="${k}"/></p:animScale>`;
@@ -489,21 +711,22 @@ export function timingXml(anims: Anim[], spidsOf: (a: Anim) => number[], media: 
     }
   };
   const behaviours = (a: Anim, spid: number): string => {
-    if (isEmphasis(a.effect)) return emphasis(a, spid);
+    para = a.target.para;
+    if (keepsShowing(a.effect)) return emphasis(a, spid);
     const d = ms(a.dur);
     const out = !!a.exit;
     const parts: string[] = [];
     if (!out) parts.push(visibility(spid, 'visible', 0));
     if (a.effect === 'fade' || a.effect === 'wipe') {
       const filter = a.effect === 'fade' ? 'fade' : WIPE_FILTER[a.from ?? 'bottom'];
-      parts.push(`<p:animEffect transition="${out ? 'out' : 'in'}" filter="${filter}"><p:cBhvr><p:cTn id="${id++}" dur="${d}"/>${target(spid)}</p:cBhvr></p:animEffect>`);
+      parts.push(`<p:animEffect transition="${out ? 'out' : 'in'}" filter="${filter}"><p:cBhvr><p:cTn id="${id++}" dur="${d}"/>${target(spid, para)}</p:cBhvr></p:animEffect>`);
     } else if (a.effect === 'fly') {
       const side = a.from ?? 'bottom';
       const away = side === 'left' ? ['0-#ppt_w/2', '#ppt_y'] : side === 'right' ? ['1+#ppt_w/2', '#ppt_y'] : side === 'top' ? ['#ppt_x', '0-#ppt_h/2'] : ['#ppt_x', '1+#ppt_h/2'];
       const home = ['#ppt_x', '#ppt_y'];
       const [from, to] = out ? [home, away] : [away, home];
       ['ppt_x', 'ppt_y'].forEach((attr, k) => {
-        parts.push(`<p:anim calcmode="lin" valueType="num"><p:cBhvr additive="base"><p:cTn id="${id++}" dur="${d}" fill="hold"/>${target(spid)}` +
+        parts.push(`<p:anim calcmode="lin" valueType="num"><p:cBhvr additive="base"><p:cTn id="${id++}" dur="${d}" fill="hold"/>${target(spid, para)}` +
           `<p:attrNameLst><p:attrName>${attr}</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst>` +
           `<p:tav tm="0"><p:val><p:strVal val="${from[k]}"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="${to[k]}"/></p:val></p:tav></p:tavLst></p:anim>`);
       });
@@ -511,10 +734,11 @@ export function timingXml(anims: Anim[], spidsOf: (a: Anim) => number[], media: 
     if (out) parts.push(visibility(spid, 'hidden', a.effect === 'appear' ? 0 : Math.max(0, d - 1)));
     return parts.join('');
   };
-  const clicks = steps.map((st) => {
+  /** A sequence's clicks: each holding groups that start one after another (in a trigger's sequence the first starts at once). */
+  const clicksXml = (list: Step[], interactive = false) => list.map((st, n) => {
     const groups = new Map<number, Timed[]>();
     for (const it of st.items) groups.set(it.group, [...(groups.get(it.group) ?? []), it]);
-    const cond = st.auto ? `<p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond>` : '<p:cond delay="indefinite"/>';
+    const cond = st.auto ? `<p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond>` : interactive && !n ? '<p:cond delay="0"/>' : '<p:cond delay="indefinite"/>';
     const inner = [...groups.values()].map((items) => {
       const g0 = Math.min(...items.map((it) => it.start - it.anim.delay));
       const effects = items.map((it, j) => {
@@ -523,13 +747,22 @@ export function timingXml(anims: Anim[], spidsOf: (a: Anim) => number[], media: 
         const sub = (a.effect === 'wipe' || a.effect === 'fly') ? SUBTYPE[a.from ?? 'bottom'] : 0;
         // more shapes than one: the others move with the first
         const preset = a.effect === 'colour' && a.target.kind === 'caption' ? PRESET_FONT_COLOR : PRESET[a.effect];
-        const cls = isEmphasis(a.effect) ? 'emph' : a.exit ? 'exit' : 'entr';
+        const cls = a.effect === 'path' ? 'path' : isEmphasis(a.effect) ? 'emph' : a.exit ? 'exit' : 'entr';
         return spidsOf(a).map((spid, k) => `<p:par><p:cTn id="${id++}" presetID="${preset}" presetClass="${cls}" presetSubtype="${sub}" fill="hold" grpId="0" nodeType="${k ? 'withEffect' : first}">` +
           `<p:stCondLst><p:cond delay="${ms(it.start - g0)}"/></p:stCondLst><p:childTnLst>${behaviours(a, spid)}</p:childTnLst></p:cTn></p:par>`).join('');
       }).join('');
       return `<p:par><p:cTn id="${id++}" fill="hold"><p:stCondLst><p:cond delay="${ms(g0)}"/></p:stCondLst><p:childTnLst>${effects}</p:childTnLst></p:cTn></p:par>`;
     }).join('');
     return `<p:par><p:cTn id="${id++}" fill="hold"><p:stCondLst>${cond}</p:stCondLst><p:childTnLst>${inner}</p:childTnLst></p:cTn></p:par>`;
+  }).join('');
+  const clicks = clicksXml(steps);
+  // triggers: a sequence of their own each, set off by a click on the object
+  const triggered = [...triggerSeqs(live).values()].map((g) => {
+    const spid = spidOfTarget(g.trigger)!;
+    const list = buildSteps(g.anims.map((a, k) => (k ? a : { ...a, start: 'click' as const })));
+    return `<p:seq concurrent="1" nextAc="seek"><p:cTn id="${id++}" restart="whenNotActive" fill="hold" evtFilter="cancelBubble" nodeType="interactiveSeq">` +
+      `<p:stCondLst><p:cond evt="onClick" delay="0">${target(spid)}</p:cond></p:stCondLst><p:endSync evt="end" delay="0"><p:rtn val="all"/></p:endSync>` +
+      `<p:childTnLst>${clicksXml(list, true)}</p:childTnLst></p:cTn><p:nextCondLst><p:cond evt="onClick" delay="0">${target(spid)}</p:cond></p:nextCondLst></p:seq>`;
   }).join('');
   // videos and sounds that start by themselves: played as the slide comes in, before its animations
   const auto = media.filter((m) => m.media.start !== 'click');
@@ -561,8 +794,9 @@ export function timingXml(anims: Anim[], spidsOf: (a: Anim) => number[], media: 
     return v.audio ? `<p:audio>${node}</p:audio>` : `<p:video${v.full ? ' fullScrn="1"' : ''}>${node}</p:video>`;
   }).join('');
   const spids = [...new Set(live.flatMap((a) => spidsOf(a)))];
+  const byPara = new Set(live.filter((a) => a.target.para !== undefined).flatMap((a) => spidsOf(a)));
   const xml = `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>` +
-    `${mainSeq}${clicked}${nodes}</p:childTnLst></p:cTn></p:par></p:tnLst>${spids.length ? `<p:bldLst>${spids.map((s) => `<p:bldP spid="${s}" grpId="0"/>`).join('')}</p:bldLst>` : ''}</p:timing>`;
+    `${mainSeq}${triggered}${clicked}${nodes}</p:childTnLst></p:cTn></p:par></p:tnLst>${spids.length ? `<p:bldLst>${spids.map((s) => `<p:bldP spid="${s}" grpId="0"${byPara.has(s) ? ' build="p"' : ''}/>`).join('')}</p:bldLst>` : ''}</p:timing>`;
   // number the timing nodes in the order they are written, as PowerPoint does
   let n = 0;
   return xml.replace(/<p:cTn id="\d+"/g, () => `<p:cTn id="${++n}"`);
@@ -570,8 +804,10 @@ export function timingXml(anims: Anim[], spidsOf: (a: Anim) => number[], media: 
 
 /**
  * A slide's animations from PowerPoint's timing tree. `targetOfSpid` gives the object made from
- * each PowerPoint shape. Effects other than Appear, Fade, Wipe and Fly come in as Fade, and
- * animations of single paragraphs move the whole text box.
+ * each PowerPoint shape. Effects other than Appear, Fade, Wipe, Fly, the emphasis effects and
+ * motion paths come in as Fade. Text played a paragraph at a time comes in so; an animation of
+ * only some of a text box's paragraphs moves the whole text box. Sequences set off by a click on
+ * an object come in as triggers.
  */
 export function readTiming(sld: Element, targetOfSpid: (spid: number) => AnimTarget | null, warn: (s: string) => void): Anim[] {
   const P = 'http://schemas.openxmlformats.org/presentationml/2006/main';
@@ -583,52 +819,74 @@ export function readTiming(sld: Element, targetOfSpid: (spid: number) => AnimTar
   };
   const timing = kidsOf(sld, 'timing')[0];
   if (!timing) return [];
-  const main = Array.from(timing.getElementsByTagNameNS(P, 'cTn')).find((c) => c.getAttribute('nodeType') === 'mainSeq');
-  if (!main) return [];
+  const seqs = Array.from(timing.getElementsByTagNameNS(P, 'cTn')).filter((c) => c.getAttribute('nodeType') === 'mainSeq' || c.getAttribute('nodeType') === 'interactiveSeq');
+  if (!seqs.length) return [];
   const out: Anim[] = [];
   const delayOf = (cTn: Element | null) => {
     const v = kid(cTn, 'stCondLst', 'cond')?.getAttribute('delay');
     return v && v !== 'indefinite' ? Number(v) / 1000 : 0;
   };
-  for (const click of kidsOf(kid(main, 'childTnLst'), 'par')) {
-    const clickTn = kid(click, 'cTn');
-    for (const group of kidsOf(kid(clickTn, 'childTnLst'), 'par')) {
-      const groupTn = kid(group, 'cTn');
-      for (const eff of kidsOf(kid(groupTn, 'childTnLst'), 'par')) {
-        const tn = kid(eff, 'cTn');
-        if (!tn) continue;
-        const cls = tn.getAttribute('presetClass');
-        if (cls === 'path') { warn('Motion-path animations were left out.'); continue; }
-        if (cls !== 'entr' && cls !== 'exit' && cls !== 'emph') continue; // media calls and the like
-        const spTgt = tn.getElementsByTagNameNS(P, 'spTgt')[0];
-        const spid = Number(spTgt?.getAttribute('spid'));
-        const target = Number.isFinite(spid) ? targetOfSpid(spid) : null;
-        if (!target) continue;
-        if (spTgt && spTgt.children.length) warn('Animations of single paragraphs now move the whole text box.');
-        const preset = Number(tn.getAttribute('presetID'));
-        const node = tn.getAttribute('nodeType');
-        if (cls === 'emph') {
-          const e = readEmphasis(tn, preset, warn);
-          const durs = Array.from(tn.getElementsByTagNameNS(P, 'cTn')).map((c) => Number(c.getAttribute('dur')) * (c.getAttribute('autoRev') === '1' ? 2 : 1)).filter((d) => Number.isFinite(d) && d > 1);
-          const prev = out[out.length - 1];
-          if (prev && node === 'withEffect' && prev.target.kind === target.kind && prev.target.id === target.id && prev.effect === e.effect) continue;
-          out.push({ target, ...e, start: node === 'withEffect' ? 'with' : node === 'afterEffect' ? 'after' : 'click', dur: (durs[0] ?? 2000) / 1000, delay: delayOf(tn) });
-          continue;
+  // the paragraphs of each text box played one at a time, as PowerPoint lists them
+  const paraBuilt = new Set(Array.from(timing.getElementsByTagNameNS(P, 'bldP')).filter((b) => b.getAttribute('build') === 'p').map((b) => Number(b.getAttribute('spid'))));
+  for (const seq of seqs) {
+    let trigger: AnimTarget | undefined;
+    if (seq.getAttribute('nodeType') === 'interactiveSeq') {
+      const spid = Number(kid(seq, 'stCondLst', 'cond')?.getElementsByTagNameNS(P, 'spTgt')[0]?.getAttribute('spid'));
+      const t = Number.isFinite(spid) ? targetOfSpid(spid) : null;
+      if (!t) continue;
+      trigger = t;
+    }
+    const start = out.length;
+    for (const click of kidsOf(kid(seq, 'childTnLst'), 'par')) {
+      const clickTn = kid(click, 'cTn');
+      for (const group of kidsOf(kid(clickTn, 'childTnLst'), 'par')) {
+        const groupTn = kid(group, 'cTn');
+        for (const eff of kidsOf(kid(groupTn, 'childTnLst'), 'par')) {
+          const tn = kid(eff, 'cTn');
+          if (!tn) continue;
+          const cls = tn.getAttribute('presetClass');
+          if (cls !== 'entr' && cls !== 'exit' && cls !== 'emph' && cls !== 'path') continue; // media calls and the like
+          const spTgt = tn.getElementsByTagNameNS(P, 'spTgt')[0];
+          const spid = Number(spTgt?.getAttribute('spid'));
+          const target = Number.isFinite(spid) ? targetOfSpid(spid) : null;
+          if (!target) continue;
+          const pRg = spTgt?.getElementsByTagNameNS(P, 'pRg')[0];
+          const para = pRg && target.kind === 'caption' && paraBuilt.has(spid) ? Number(pRg.getAttribute('st')) : undefined;
+          if (spTgt && spTgt.children.length && para === undefined) warn('Animations of only some paragraphs of a text box now move the whole text box.');
+          const preset = Number(tn.getAttribute('presetID'));
+          const node = tn.getAttribute('nodeType');
+          const startOf: Anim['start'] = node === 'withEffect' ? 'with' : node === 'afterEffect' ? 'after' : 'click';
+          const prev = out.length > start ? out[out.length - 1] : undefined;
+          // the next paragraph of text played a paragraph at a time: part of the one before
+          if (para !== undefined && prev?.byPara && prev.target.kind === 'caption' && prev.target.id === target.id && prev.start === startOf) continue;
+          const extra: Partial<Anim> = { ...(para !== undefined ? { byPara: true } : {}), ...(trigger ? { trigger: { ...trigger } } : {}) };
+          if (cls === 'path') {
+            const motion = tn.getElementsByTagNameNS(P, 'animMotion')[0];
+            const durs = Array.from(tn.getElementsByTagNameNS(P, 'cTn')).map((c) => Number(c.getAttribute('dur'))).filter((d) => Number.isFinite(d) && d > 1);
+            if (prev && node === 'withEffect' && prev.effect === 'path' && prev.target.kind === target.kind && prev.target.id === target.id) continue;
+            out.push({ target, effect: 'path', path: motion?.getAttribute('path') ?? 'M 0 0 E', pathKind: 'custom', start: startOf, dur: (durs[0] ?? 2000) / 1000, delay: delayOf(tn), ...extra });
+            continue;
+          }
+          if (cls === 'emph') {
+            const e = readEmphasis(tn, preset, warn);
+            const durs = Array.from(tn.getElementsByTagNameNS(P, 'cTn')).map((c) => Number(c.getAttribute('dur')) * (c.getAttribute('autoRev') === '1' ? 2 : 1)).filter((d) => Number.isFinite(d) && d > 1);
+            if (prev && node === 'withEffect' && prev.target.kind === target.kind && prev.target.id === target.id && prev.effect === e.effect) continue;
+            out.push({ target, ...e, start: startOf, dur: (durs[0] ?? 2000) / 1000, delay: delayOf(tn), ...extra });
+            continue;
+          }
+          const effect: Effect = preset === 1 ? 'appear' : preset === 2 ? 'fly' : preset === 22 ? 'wipe' : preset === 10 ? 'fade' : 'fade';
+          if (![1, 2, 10, 22].includes(preset)) warn('Animations other than Appear, Fade, Wipe and Fly came in as Fade.');
+          // how long: the first behaviour that takes time
+          const durs = Array.from(tn.getElementsByTagNameNS(P, 'cTn')).slice(1).map((c) => Number(c.getAttribute('dur'))).filter((d) => Number.isFinite(d) && d > 1);
+          const sub = Number(tn.getAttribute('presetSubtype'));
+          const same = prev && startOf === 'with' && prev.target.kind === target.kind && prev.target.id === target.id && prev.effect === effect && !!prev.exit === (cls === 'exit');
+          if (same) continue; // the same object moving in two PowerPoint shapes (a table and its title)
+          out.push({
+            target, effect, ...(cls === 'exit' ? { exit: true } : {}),
+            ...(effect === 'wipe' || effect === 'fly' ? { from: SUBTYPE_SIDE[sub] ?? 'bottom' } : {}),
+            start: startOf, dur: effect === 'appear' ? 0 : (durs[0] ?? 500) / 1000, delay: delayOf(tn), ...extra,
+          });
         }
-        const effect: Effect = preset === 1 ? 'appear' : preset === 2 ? 'fly' : preset === 22 ? 'wipe' : preset === 10 ? 'fade' : 'fade';
-        if (![1, 2, 10, 22].includes(preset)) warn('Animations other than Appear, Fade, Wipe and Fly came in as Fade.');
-        const start: Anim['start'] = node === 'withEffect' ? 'with' : node === 'afterEffect' ? 'after' : 'click';
-        // how long: the first behaviour that takes time
-        const durs = Array.from(tn.getElementsByTagNameNS(P, 'cTn')).slice(1).map((c) => Number(c.getAttribute('dur'))).filter((d) => Number.isFinite(d) && d > 1);
-        const sub = Number(tn.getAttribute('presetSubtype'));
-        const prev = out[out.length - 1];
-        const same = prev && start === 'with' && prev.target.kind === target.kind && prev.target.id === target.id && prev.effect === effect && !!prev.exit === (cls === 'exit');
-        if (same) continue; // the same object moving in two PowerPoint shapes (a table and its title)
-        out.push({
-          target, effect, ...(cls === 'exit' ? { exit: true } : {}),
-          ...(effect === 'wipe' || effect === 'fly' ? { from: SUBTYPE_SIDE[sub] ?? 'bottom' } : {}),
-          start, dur: effect === 'appear' ? 0 : (durs[0] ?? 500) / 1000, delay: delayOf(tn),
-        });
       }
     }
   }

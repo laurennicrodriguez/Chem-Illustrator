@@ -8,6 +8,8 @@
 // on a slide is undone on that slide (the deck goes back to it), and adding, deleting or
 // moving slides, or changing the master, are undone too.
 
+import type { SlideView } from './guides';
+import type { HandoutSetup, NotesPageSetup } from './notes-pages';
 import { copyPinned, type PinnedComment } from '../document/comments';
 import { Doc, Caption, Placeholder, TextBase, ParaStyle, Contents, applyBase } from '../model';
 import { DocStyle, ACS_1996 } from '../style';
@@ -17,6 +19,20 @@ import { ASCENT } from '../text/layout';
 import { slideIdLinks } from '../links';
 import type { Transition, Anim } from './animation';
 import { backgroundColour, copyBackground, isPlain, sameBackground, solid, type Background } from './background';
+import type { ShowSetup, CustomShow } from './show-setup';
+
+/**
+ * Settings of the deck as a whole that aren't part of its look: how the slide show runs (Set Up
+ * Show) and its custom shows.
+ */
+export interface DeckSettings {
+  show?: ShowSetup;
+  customShows?: CustomShow[];
+  /** The drawing guides and grid (View > Guides, Grid and Guides). */
+  view?: SlideView;
+}
+
+export const copySettings = (s: DeckSettings): DeckSettings => structuredClone(s);
 
 export interface SlideSize { w: number; h: number }
 /** PowerPoint's two standard sizes, in points: widescreen 13.33 × 7.5 in, and 10 × 7.5 in. */
@@ -103,6 +119,19 @@ export interface Master {
   /** Numbers on Title Slide layouts too (PowerPoint leaves them off there). */
   numberTitleSlides: boolean;
   footer: string;
+  /** The date and time on every slide (Insert > Header & Footer): shown, and in which form; fixed text in place of today's date when set. */
+  dateOn?: boolean;
+  dateFormat?: DateFormat;
+  dateFixed?: string;
+  /** The footer and date are left off Title Slide layouts too (Don't show on title slide). */
+  footerOffTitle?: boolean;
+  /** The footer is kept but not shown (Header & Footer with Footer unticked). */
+  footerOff?: boolean;
+  /** Notes pages and handouts: their header, footer, date and page numbers (Header & Footer > Notes and Handouts). */
+  notesHF?: NotesHF;
+  /** Notes Master: notes pages' way up, slide picture and type; Handout Master: slides to a page and more. */
+  notesPage?: NotesPageSetup;
+  handout?: HandoutSetup;
   /** Size and colour of the slide numbers and footer. */
   footerSize: number;
   footerColor: string;
@@ -247,11 +276,12 @@ export function textStyles(m: Master, layout?: LayoutId): Record<Placeholder, Te
 }
 
 /** Where the slide number, footer and logo go on every slide (in points), as on screen and in saved files. */
-export function decorFrames(size: SlideSize, m: Master): { number: Rect; footer: Rect; logo: Rect | null } {
+export function decorFrames(size: SlideSize, m: Master): { number: Rect; footer: Rect; date: Rect; logo: Rect | null } {
   const mx = 0.05 * size.w, h = Math.max(m.footerSize * 1.6, 0.05 * size.h);
   const y1 = size.h - 0.035 * size.h - h;
   const number = { x1: size.w - mx - 0.18 * size.w, y1, x2: size.w - mx, y2: y1 + h };
   const footer = { x1: 0.3 * size.w, y1, x2: 0.7 * size.w, y2: y1 + h };
+  const date = { x1: mx, y1, x2: mx + 0.22 * size.w, y2: y1 + h };
   let logo: Rect | null = null;
   if (m.logo) {
     const w = m.logoWidth, lh = (w * m.logo.px.h) / Math.max(1, m.logo.px.w);
@@ -260,12 +290,83 @@ export function decorFrames(size: SlideSize, m: Master): { number: Rect; footer:
     const top = m.logoCorner.startsWith('top') ? pad : size.h - pad - lh;
     logo = { x1, y1: top, x2: x1 + w, y2: top + lh };
   }
-  return { number, footer, logo };
+  return { number, footer, date, logo };
 }
 
-/** Does this slide show its number? */
-export function showsNumber(m: Master, layout: LayoutId): boolean {
-  return m.slideNumbers && (!titleLook(m, layout) || m.numberTitleSlides);
+/** Does this slide show its number? (`hf`: the slide's own say, from Header & Footer > Apply.) */
+export function showsNumber(m: Master, layout: LayoutId, hf?: SlideHF): boolean {
+  return hf?.number ?? (m.slideNumbers && (!titleLook(m, layout) || m.numberTitleSlides));
+}
+
+/** Does this slide show the footer? */
+export function showsFooter(m: Master, layout: LayoutId, hf?: SlideHF): boolean {
+  return !!m.footer.trim() && (hf?.footer ?? (!m.footerOff && !(m.footerOffTitle && titleLook(m, layout))));
+}
+
+/** Does this slide show the date? */
+export function showsDate(m: Master, layout: LayoutId, hf?: SlideHF): boolean {
+  return hf?.date ?? (!!m.dateOn && !(m.footerOffTitle && titleLook(m, layout)));
+}
+
+/**
+ * Header & Footer > Apply (not Apply to All): which of the slide number, footer and date this
+ * slide shows, in place of what the master says (each left out: as the master says).
+ */
+export interface SlideHF { number?: boolean; footer?: boolean; date?: boolean }
+
+/** Notes pages' and handouts' header, footer, date (today's, or fixed text) and page numbers. */
+export interface NotesHF { header: string; footer: string; date: boolean; dateFormat?: DateFormat; dateFixed?: string; pageNumbers: boolean }
+
+export const defaultNotesHF = (): NotesHF => ({ header: '', footer: '', date: false, pageNumbers: true });
+
+/** The ways of writing the date and time that PowerPoint's date fields have (datetime1 to datetime13). */
+export type DateFormat = 'datetime1' | 'datetime2' | 'datetime3' | 'datetime4' | 'datetime5' | 'datetime6' | 'datetime7' | 'datetime8' | 'datetime9' | 'datetime10' | 'datetime11' | 'datetime12' | 'datetime13';
+
+export const DATE_FORMATS: { id: DateFormat; name: string }[] = [
+  { id: 'datetime1', name: '10/22/2026' },
+  { id: 'datetime2', name: 'Thursday, October 22, 2026' },
+  { id: 'datetime3', name: '22 October 2026' },
+  { id: 'datetime4', name: 'October 22, 2026' },
+  { id: 'datetime5', name: '22-Oct-26' },
+  { id: 'datetime6', name: 'October 26' },
+  { id: 'datetime7', name: 'Oct-26' },
+  { id: 'datetime8', name: '10/22/2026 3:45 PM' },
+  { id: 'datetime9', name: '10/22/2026 3:45:12 PM' },
+  { id: 'datetime10', name: '15:45' },
+  { id: 'datetime11', name: '15:45:12' },
+  { id: 'datetime12', name: '3:45 PM' },
+  { id: 'datetime13', name: '3:45:12 PM' },
+];
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** A date and time written in one of PowerPoint's forms (as its date fields show it, in English). */
+export function formatDate(d: Date, f: DateFormat = 'datetime1'): string {
+  const M = d.getMonth(), D = d.getDate(), Y = d.getFullYear(), yy = String(Y % 100).padStart(2, '0');
+  const H = d.getHours(), mm = String(d.getMinutes()).padStart(2, '0'), ss = String(d.getSeconds()).padStart(2, '0');
+  const h12 = `${H % 12 || 12}`, ap = H < 12 ? 'AM' : 'PM';
+  const mdy = `${M + 1}/${D}/${Y}`;
+  switch (f) {
+    case 'datetime2': return `${DAYS[d.getDay()]}, ${MONTHS[M]} ${D}, ${Y}`;
+    case 'datetime3': return `${D} ${MONTHS[M]} ${Y}`;
+    case 'datetime4': return `${MONTHS[M]} ${D}, ${Y}`;
+    case 'datetime5': return `${D}-${MONTHS[M].slice(0, 3)}-${yy}`;
+    case 'datetime6': return `${MONTHS[M]} ${yy}`;
+    case 'datetime7': return `${MONTHS[M].slice(0, 3)}-${yy}`;
+    case 'datetime8': return `${mdy} ${h12}:${mm} ${ap}`;
+    case 'datetime9': return `${mdy} ${h12}:${mm}:${ss} ${ap}`;
+    case 'datetime10': return `${H}:${mm}`;
+    case 'datetime11': return `${H}:${mm}:${ss}`;
+    case 'datetime12': return `${h12}:${mm} ${ap}`;
+    case 'datetime13': return `${h12}:${mm}:${ss} ${ap}`;
+    default: return mdy;
+  }
+}
+
+/** The date a slide shows: the fixed text, else today's in the master's form. */
+export function dateText(m: Pick<Master, 'dateFixed' | 'dateFormat'>, now = new Date()): string {
+  return m.dateFixed?.trim() ? m.dateFixed : formatDate(now, m.dateFormat);
 }
 
 /** A box on a slide that a layout fills with a placeholder. */
@@ -390,6 +491,8 @@ export interface Slide {
   hidden?: boolean;
   /** The section it is in (Deck.sections), when the deck has sections. */
   section?: number;
+  /** Its own say on the slide number, footer and date (Header & Footer > Apply). */
+  hf?: SlideHF;
 }
 
 /**
@@ -406,14 +509,15 @@ export interface SectionCount { name: string; count: number }
 export type SizeFit = 'centre' | 'fit' | 'max';
 
 /** A slide's transition, animations, comments, own background and whether it is hidden, copied (for duplicates and the undo history). */
-export interface Motion { transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean; hidden?: boolean }
+export interface Motion { transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean; hidden?: boolean; hf?: SlideHF }
 const copyMotion = (m: Motion): Motion => ({
   ...(m.transition ? { transition: { ...m.transition } } : {}),
-  ...(m.anims?.length ? { anims: m.anims.map((a) => ({ ...a, target: { ...a.target } })) } : {}),
+  ...(m.anims?.length ? { anims: m.anims.map((a) => ({ ...a, target: { ...a.target }, ...(a.trigger ? { trigger: { ...a.trigger } } : {}) })) } : {}),
   ...(m.comments?.length ? { comments: copyPinned(m.comments) } : {}),
   ...(m.background ? { background: copyBackground(m.background) } : {}),
   ...(m.hideGraphics ? { hideGraphics: true } : {}),
   ...(m.hidden ? { hidden: true } : {}),
+  ...(m.hf && Object.keys(m.hf).length ? { hf: { ...m.hf } } : {}),
 });
 
 /** A slide copied out of a deck (Copy, or Reuse Slides): its layout, drawing, notes and the rest. */
@@ -469,6 +573,8 @@ export class Deck {
   sections: Section[] = [];
   /** Sections folded in the slide list and Slide Sorter (on screen only). */
   folded = new Set<number>();
+  /** Set Up Show, custom shows and the rest of the deck's own settings. */
+  settings: DeckSettings = {};
   /** The slide being edited; its drawing is in `host`. */
   index = -1;
   /** Called whenever the deck changes in a way the slide list or title bar should show. */
@@ -495,9 +601,9 @@ export class Deck {
   get current(): Slide | null { return this.slides[this.index] ?? null; }
 
   /** What slide i's page needs to be drawn: its size, master, layout, number and background. */
-  page(i = this.index): { size: SlideSize; master: Master; layout: LayoutId; index: number; own?: Background; hideGraphics?: boolean } {
+  page(i = this.index): { size: SlideSize; master: Master; layout: LayoutId; index: number; own?: Background; hideGraphics?: boolean; hf?: SlideHF } {
     const s = this.slides[i];
-    return { size: this.size, master: this.master, layout: s?.layout ?? 'blank', index: i, own: s?.background, hideGraphics: s?.hideGraphics };
+    return { size: this.size, master: this.master, layout: s?.layout ?? 'blank', index: i, own: s?.background, hideGraphics: s?.hideGraphics, hf: s?.hf };
   }
 
   /** Restyle every slide's drawing after the master or backgrounds change. */
@@ -555,10 +661,13 @@ export class Deck {
   }
 
   /** Start with these slides (a new deck or one read from a file), editing the first. Clears the history. */
-  load(slides: Slide[], size: SlideSize, master: Master, sections?: SectionCount[]): void {
+  load(slides: Slide[], size: SlideSize, master: Master, sections?: SectionCount[], settings: DeckSettings = {}): void {
     this.detach();
     this.size = { ...size };
     this.master = master;
+    // custom shows read from a file name their slides by their places: now by their ids
+    this.settings = copySettings(settings);
+    if (this.settings.customShows) for (const c of this.settings.customShows) c.slides = c.slides.map((k) => slides[k]?.id).filter((x): x is number => x !== undefined);
     this.slides = slides;
     this.sections = [];
     this.folded.clear();
@@ -1312,6 +1421,39 @@ export class Deck {
     return { slides, master };
   }
 
+  /**
+   * Header & Footer: the master's slide number, footer and date settings (Apply to All: no slide
+   * keeps its own say), or (`indices`, Apply) the master's text and form of date with only those
+   * slides showing what is ticked. One undo step.
+   */
+  setHeaderFooter(m: Master, show: { number: boolean; footer: boolean; date: boolean }, indices?: number[]): void {
+    const beforeMaster = this.master;
+    const slides = this.slides.slice();
+    const before = slides.map((s) => (s.hf ? { ...s.hf } : undefined));
+    const picked = indices ? new Set(indices.map((i) => this.slides[i]).filter(Boolean)) : null;
+    const after = slides.map((s, k) => (picked ? (picked.has(s) ? { ...show } : before[k]) : undefined));
+    const master: Master = picked ? m : { ...m, slideNumbers: show.number, dateOn: show.date, footerOff: show.footer ? undefined : true };
+    if (!master.footerOff) delete master.footerOff;
+    const put = (mm: Master, hfs: (SlideHF | undefined)[]) => {
+      this.master = mm;
+      slides.forEach((s, k) => { if (hfs[k]) s.hf = { ...hfs[k] }; else delete s.hf; });
+      this.looks++;
+      this.restyleAll();
+      this.onSwitch();
+    };
+    put(master, after);
+    this.record(picked ? 'Header and footer' : 'Header and footer on every slide', () => put(beforeMaster, before), () => put(master, after));
+  }
+
+  /** Change the deck's own settings (Set Up Show, custom shows). One undo step. */
+  setSettings(next: DeckSettings, label = 'Set up show'): void {
+    const before = copySettings(this.settings), after = copySettings(next);
+    if (JSON.stringify(before) === JSON.stringify(after)) return;
+    const put = (v: DeckSettings) => { this.settings = copySettings(v); this.onChange(); };
+    put(after);
+    this.record(label, () => put(before), () => put(after));
+  }
+
   /** Change a slide's speaker notes. */
   setNotes(text: string, i = this.index): void {
     const s = this.slides[i];
@@ -1332,6 +1474,23 @@ export class Deck {
     };
     const after = slides.map(() => (t && (t.kind !== 'none' || t.advanceAfter) ? { ...t } : undefined));
     if (JSON.stringify(before) === JSON.stringify(after)) return;
+    put(after);
+    this.record(label, () => put(before), () => put(after), slides.length === 1 ? slides[0] : undefined);
+  }
+
+  /**
+   * Rehearse Timings: each slide in `times` (by its place) goes on by itself after that many
+   * seconds, keeping its transition. One undo step.
+   */
+  setTimings(times: Map<number, number>, label = 'Rehearse timings'): void {
+    const slides = [...times.keys()].map((i) => this.slides[i]).filter(Boolean);
+    if (!slides.length) return;
+    const before = slides.map((s) => (s.transition ? { ...s.transition } : undefined));
+    const after = [...times.entries()].filter(([i]) => this.slides[i]).map(([i, t]): Transition => ({ ...(this.slides[i].transition ?? { kind: 'none', dur: 0.7 }), advanceAfter: Math.max(0, +t.toFixed(1)) }));
+    const put = (vals: (Transition | undefined)[]) => {
+      slides.forEach((s, k) => { if (vals[k]) s.transition = { ...vals[k]! }; else delete s.transition; });
+      this.onMotion();
+    };
     put(after);
     this.record(label, () => put(before), () => put(after), slides.length === 1 ? slides[0] : undefined);
   }

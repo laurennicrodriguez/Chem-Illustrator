@@ -3,6 +3,7 @@
 // %APPDATA%\io.github.nathanohare.chemillustrator); in a browser, the browser's storage for
 // this page. Drawings never go here.
 
+import { parseQuickParts, type QuickPart } from './document/quick-parts';
 import type { UpdateChannel } from './updates';
 import { parseLooks, type HighlightLookPreset } from './ui/highlight-looks';
 import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -124,6 +125,11 @@ export interface Settings {
   docRuler: boolean;
   /** Sheet mode's formula bar shown (View > Formula Bar). */
   sheetFormulaBar: boolean;
+  /** Slides' View > Ruler and Gridlines, and how the rulers measure. */
+  slideRuler: boolean;
+  slideGrid: boolean;
+  rulerUnits: 'in' | 'cm';
+  rulerFrom: 'centre' | 'corner';
   /** Look for a newer version when the desktop app starts (Edit > Settings). */
   updateCheck: boolean;
   /** Stable (versions tried on a real computer first) or Latest (every build) (Edit > Settings > Online). */
@@ -144,6 +150,8 @@ export interface Settings {
   recentSymbols: string[];
   /** Your own saved highlight looks (Chemistry > Highlight and Fill > Save Highlight Look). */
   highlightLooks: HighlightLookPreset[];
+  /** Saved pieces of text for documents (Insert > Quick Parts). */
+  quickParts: QuickPart[];
   /** Spacing in schemes and the text above and below arrows (Chemistry > Reactions and Schemes > Scheme Settings). */
   scheme: SchemePrefs;
   /** AutoSave, recovery copies, Version History and shared folders (File > AutoSave and Recovery Options). */
@@ -160,7 +168,11 @@ export const DEFAULT_SETTINGS: Settings = {
   docPins: [],
   docRuler: false,
   sheetFormulaBar: true,
-  updateCheck: true, updateChannel: 'latest', pubchemNames: true, fileTypesOffered: false, wordObjectsOffered: false, reviewName: '', skipVersion: null, recentFiles: [], recentSymbols: [], highlightLooks: [],
+  updateCheck: true, updateChannel: 'latest', pubchemNames: true, fileTypesOffered: false, wordObjectsOffered: false, reviewName: '', skipVersion: null, recentFiles: [], recentSymbols: [], highlightLooks: [], quickParts: [],
+  slideRuler: false,
+  slideGrid: false,
+  rulerUnits: typeof navigator !== 'undefined' && /^[a-z]{2,3}-(US|LR|MM)\b/i.test(navigator.language) ? 'in' : 'cm',
+  rulerFrom: 'centre',
   scheme: DEFAULT_SCHEME_PREFS,
   keep: DEFAULT_KEEP,
 };
@@ -169,7 +181,7 @@ const STORAGE_KEY = 'chem-illustrator.settings';
 
 /** Read settings saved as text, keeping only what makes sense. */
 export function parseSettings(text: string | null | undefined): Settings {
-  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), myStyles: [], modeStyles: {}, darkPalettes: [], guides: { ...DEFAULT_SETTINGS.guides }, docPins: [], recentFiles: [], recentSymbols: [], highlightLooks: [], scheme: { ...DEFAULT_SCHEME_PREFS }, keep: { ...DEFAULT_KEEP } };
+  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), myStyles: [], modeStyles: {}, darkPalettes: [], guides: { ...DEFAULT_SETTINGS.guides }, docPins: [], recentFiles: [], recentSymbols: [], highlightLooks: [], quickParts: [], scheme: { ...DEFAULT_SCHEME_PREFS }, keep: { ...DEFAULT_KEEP } };
   if (!text) return s;
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { return s; }
@@ -193,6 +205,7 @@ export function parseSettings(text: string | null | undefined): Settings {
     for (const [k, v] of Object.entries(r.nicknames as Record<string, unknown>)) if (k.trim() && typeof v === 'string' && v.trim()) s.nicknames[k.trim()] = v.trim();
   }
   if (typeof r.reviewName === 'string') s.reviewName = r.reviewName.trim().slice(0, 80);
+  s.quickParts = parseQuickParts(r.quickParts);
   s.templates = parseOwnTemplates(r.templates);
   if (typeof r.splitWidth === 'number' && isFinite(r.splitWidth)) s.splitWidth = Math.min(0.8, Math.max(0.2, r.splitWidth));
   if (typeof r.citeStyle === 'string' && r.citeStyle in CITE_PRESETS) s.citeStyle = r.citeStyle;
@@ -209,6 +222,10 @@ export function parseSettings(text: string | null | undefined): Settings {
   }
   if (typeof r.docRuler === 'boolean') s.docRuler = r.docRuler;
   if (typeof r.sheetFormulaBar === 'boolean') s.sheetFormulaBar = r.sheetFormulaBar;
+  if (typeof r.slideRuler === 'boolean') s.slideRuler = r.slideRuler;
+  if (typeof r.slideGrid === 'boolean') s.slideGrid = r.slideGrid;
+  if (r.rulerUnits === 'in' || r.rulerUnits === 'cm') s.rulerUnits = r.rulerUnits;
+  if (r.rulerFrom === 'centre' || r.rulerFrom === 'corner') s.rulerFrom = r.rulerFrom;
   if (Array.isArray(r.docPins)) s.docPins = ['para', 'style', 'page', 'hf'].filter((k) => (r.docPins as unknown[]).includes(k));
   if (r.methylStyle === 'Me' || r.methylStyle === 'CH3') s.methylStyle = r.methylStyle;
   if (r.groupClick === 'group' || r.groupClick === 'item') s.groupClick = r.groupClick;

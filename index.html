@@ -194,12 +194,31 @@
     <button data-modes="slides" role="menuitemcheckbox" aria-checked="false" data-cmd="animation-pane"><span>Animation Pane</span></button>
     <button data-modes="slides" role="menuitemcheckbox" aria-checked="false" data-cmd="show-comments"><span>Show Comments</span></button>
     <div class="submenu" data-modes="slides">
+    <button role="menuitem" class="has-sub" aria-haspopup="menu" aria-expanded="false">Slide Views</button>
+    <div class="menu sub" role="menu" hidden>
+    <button role="menuitem" data-cmd="view-outline" title="Every slide's title and bullet points as one outline to type in">Outline View</button>
+    <button role="menuitem" data-cmd="view-notes-page" title="Each slide on a page with its notes under it">Notes Page</button>
+    <button role="menuitem" data-cmd="notes-master" title="How notes pages look and print">Notes Master…</button>
+    <button role="menuitem" data-cmd="handout-master" title="How handouts print">Handout Master…</button>
+    <hr />
+    <button role="menuitem" data-cmd="view-slide-ruler" title="Rulers along the top and left of the slide">Ruler</button>
+    <button role="menuitem" data-cmd="view-gridlines" title="Gridlines over the slide, on screen only">Gridlines</button>
+    <button role="menuitem" data-cmd="view-guides" title="Drawing guides to line things up by">Guides</button>
+    <button role="menuitem" data-cmd="grid-settings" title="Snap to grid, spacing, guides and the rulers' units">Grid and Guides…</button>
+    </div>
+    </div>
+    <div class="submenu" data-modes="slides">
     <button role="menuitem" class="has-sub" aria-haspopup="menu" aria-expanded="false">Slide Show</button>
     <div class="menu sub" role="menu" hidden>
     <button role="menuitem" data-cmd="present">Present from Beginning</button>
     <button role="menuitem" data-cmd="present-current">Present from This Slide</button>
     <button role="menuitem" data-cmd="presenter-view" title="Slides full screen on the projector; your notes, the next slide and a timer on your own screen">Presenter View</button>
     <button role="menuitem" data-cmd="preview-slide">Preview Slide</button>
+    <button role="menuitem" data-cmd="reading-view" title="The slide show in this window, with Back and Next below">Reading View</button>
+    <button role="menuitem" data-cmd="custom-shows" title="Named lists of the deck's slides, played as shows of their own">Custom Shows…</button>
+    <button role="menuitem" data-cmd="set-up-show" title="How the show runs, which slides it plays, looping, narration, animations and timings">Set Up Show…</button>
+    <button role="menuitem" data-cmd="rehearse-timings" title="Play the show timing each slide, and keep the times">Rehearse Timings</button>
+    <button role="menuitem" data-cmd="record-show" title="Play the show recording narration and timing each slide">Record…</button>
     </div>
     </div>
     <hr />
@@ -263,6 +282,7 @@
     <button data-modes="slides" role="menuitem" data-cmd="action-settings" title="What a click on the selected shape or action button does in the slide show">Action…</button>
     <button data-modes="slides" role="menuitem" data-cmd="insert-video" title="A video from a file that plays in the slide show and in PowerPoint">Video…</button>
     <button data-modes="slides" role="menuitem" data-cmd="insert-audio" title="A sound from a file that plays in the slide show and in PowerPoint">Audio…</button>
+    <button data-modes="slides" role="menuitem" data-cmd="header-footer" title="The date, slide number and footer on the slides, and the header and footer of notes pages and handouts">Header &amp; Footer…</button>
     <button data-modes="slides design document" role="menuitem" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha), shown as maths; a Word or PowerPoint equation in .docx and .pptx files">Equation…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-toc" title="The headings (Heading 1, 2, 3) with their page numbers; it updates by itself">Table of Contents…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-tof" title="The Figure, Scheme, Table or Chart captions with their page numbers; it updates by itself">Table of Figures…</button>
@@ -871,6 +891,13 @@
       </div>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-doc="quick-parts" aria-haspopup="true" title="Quick Parts: text you saved to use again (Save Selection to Quick Part Gallery), the document's properties (title, author…) and fields"><span class="rb-icon">⧉</span>Quick Parts ▾</button>
+          <button class="rb-big" data-doc="insert-date" title="Date and Time: today's date or the time, in a format you pick, as text or a field that keeps itself up to date"><span class="rb-icon">📅</span>Date &amp; Time</button>
+        </div>
+        <div class="rb-label">Text</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-sh="insert-dashboard" title="A new sheet of tiles (charts, headline numbers, tables, slicers, structure galleries) built from the tables in this workbook"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2.5" y="3" width="7" height="6" rx="1"/><rect x="11.5" y="3" width="6" height="3.5" rx="1"/><rect x="11.5" y="8.5" width="6" height="8.5" rx="1"/><rect x="2.5" y="11" width="7" height="6" rx="1"/></svg></span>Dashboard</button>
         </div>
         <div class="rb-label">Dashboards</div>
@@ -1279,6 +1306,9 @@
               <button class="rb-sq" data-doc="doc-align-right" aria-pressed="false" title="Align right">Right</button>
               <button class="rb-sq" data-doc="doc-justify" aria-pressed="false" title="Justify (both edges straight)">Justify</button>
               <button class="rb-sq" data-doc="para-tabs" title="Tabs: the tab stops of the paragraphs picked (left, centre, right or decimal, with dot leaders), typed in; or click the ruler (View > Ruler)">Tabs…</button>
+              <button class="rb-sq" data-doc="para-sort" title="Sort: put the selected paragraphs (or the rows of the table the caret is in) in order, by text, number or date">A↓Z</button>
+              <label class="rb-sq rb-colour" title="Shading: a background colour behind the selected paragraphs (Borders and Shading takes it off)"><span>▧</span><input id="doc-shading" type="color" value="#d9e2f3" aria-label="Paragraph shading" /></label>
+              <button class="rb-sq rb-drop" data-doc="para-borders" aria-haspopup="true" title="Borders: lines above, below or round the selected paragraphs; Borders and Shading for the line and the shading">▦ ▾</button>
             </div>
           </div>
         </div>
@@ -1304,6 +1334,10 @@
             <button data-doc="find" title="Find words in the document">Find</button>
             <button data-doc="replace" title="Replace words, or change how they look (make every CH2Cl2 a formula)">Replace</button>
           </div>
+          <div class="rb-col">
+            <button data-doc="doc-go-to" title="Go To (Ctrl+G): a page, section, line, bookmark, comment, note, table, figure, equation or heading">Go To</button>
+            <button data-doc="doc-select" aria-haspopup="true" title="Select: everything, the objects, or text with the same formatting as here">Select ▾</button>
+          </div>
         </div>
         <div class="rb-label">Editing</div>
       </div>
@@ -1311,6 +1345,8 @@
     <div class="rb-panel" data-doc-panel="insert" hidden>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-doc="cover-page" aria-haspopup="true" title="Cover Page: a first page with the document's title, subtitle, author, institution and date, in one of several looks"><span class="rb-icon">▤</span>Cover Page ▾</button>
+          <button class="rb-big" data-doc="blank-page" title="Blank Page: an empty page at the caret"><span class="rb-icon">▯</span>Blank Page</button>
           <button class="rb-big" data-doc="page-break" title="Start a new page here"><span class="rb-icon">⤓</span>Page Break</button>
         </div>
         <div class="rb-label">Pages</div>
@@ -1430,6 +1466,12 @@
               <option value="suppress">Suppress for Current Paragraph</option>
               <option value="options">Line Numbering Options…</option>
             </select></label>
+            <label class="rb-field" title="Hyphenation: break words at the ends of lines where English allows (whole document), or keep this paragraph unbroken">Hyphenation <select id="doc-hyphen" data-doc-prefix="hyphen">
+              <option value="none">None</option>
+              <option value="auto">Automatic</option>
+              <option value="para">Don't Hyphenate This Paragraph</option>
+              <option value="options">Hyphenation Options…</option>
+            </select></label>
           </div>
         </div>
         <div class="rb-label">Page Setup</div>
@@ -1543,6 +1585,16 @@
       </div>
     </div>
     <div class="rb-panel" data-doc-panel="review" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="spelling-grammar" title="Spelling &amp; Grammar (F7): go through the misspelled words, grammar slips and chemistry formatting slips one by one"><span class="rb-icon">ABC✓</span>Spelling &amp; Grammar</button>
+          <div class="rb-col">
+            <button data-doc="thesaurus" title="Thesaurus (Shift+F7): words with the same meaning as the word at the caret, to put in its place (looked up online)">Thesaurus</button>
+            <button data-doc="word-count" title="Word Count (Ctrl+Shift+G): pages, words, characters, paragraphs and lines, of the document or the selection">Word Count</button>
+          </div>
+        </div>
+        <div class="rb-label">Proofing</div>
+      </div>
       <div class="rb-group">
         <div class="rb-row">
           <button class="rb-big" data-cmd="check-accessibility" title="Check Accessibility: missing alt text, low-contrast text, headings that skip a level, tables without header rows. Click an item to go to it"><span class="rb-icon">♿</span>Check Accessibility</button>
@@ -1934,6 +1986,17 @@
       </div>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-cmd="shape-styles" aria-haspopup="dialog" title="Shape Styles: a ready-made fill, outline and effects for the selected shapes, in the deck's colours, from an outline to a raised, shadowed fill"><span class="rb-icon">◩</span>Shape Styles ▾</button>
+          <div class="rb-col">
+            <button data-cmd="shape-effects" aria-haspopup="menu" title="Shape Effects: a shadow, reflection, glow, soft edges or a bevel for the selected shapes. Saved as PowerPoint's own">Shape Effects ▾</button>
+            <button data-cmd="shape-picture-fill" title="Shape Fill > Picture: fill the selected shapes with a picture from a file, stretched to each">Picture Fill…</button>
+            <button data-cmd="slide-shapes" title="Basic shapes, block arrows, flowchart shapes, callouts and lab glassware">Shapes ▾</button>
+          </div>
+        </div>
+        <div class="rb-label">Drawing</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-cmd="selection-pane" aria-pressed="false" title="Selection Pane (Alt+F10): every text box, structure, picture and shape on the slide, front to back. Pick, hide, rename or reorder them there"><span class="rb-icon">☰</span>Selection Pane</button>
           <div class="rb-col">
             <button data-cmd="rotate-cw" title="Turn the selection 90° clockwise">Rotate Right 90°</button>
@@ -1972,6 +2035,11 @@
           <button class="rb-big" data-cmd="slide-icons" aria-haspopup="true" title="About 7,000 icons, lab and science ones first (glassware, molecules, hazard signs): pick one, then click or drag on the slide"><span class="rb-icon">⚗</span>Icons ▾</button>
           <button class="rb-big" data-cmd="insert-diagram" title="Lists, processes, cycles, hierarchies, Venn diagrams, matrices and pyramids drawn from lines of text, like PowerPoint's SmartArt. Double-click one to type into it"><span class="rb-icon">⧉</span>Diagram</button>
           <button class="rb-big" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha) and shown as maths, or one of the usual ones (Arrhenius, Eyring…). Double-click it to change it. Saved as a PowerPoint equation (Alt+=)"><span class="rb-icon">π</span>Equation</button>
+          <button class="rb-big" data-cmd="header-footer" title="Header &amp; Footer: the date (today's, kept up to date, or fixed), slide number and footer on the slides picked or every slide; and the header and footer of notes pages and handouts. Saved as PowerPoint's own"><span class="rb-icon">▭</span>Header &amp; Footer</button>
+          <div class="rb-col">
+            <button data-cmd="insert-date-time" title="Date &amp; Time: the date on the slides, today's in the form you pick or fixed text (in Header &amp; Footer)">📅 Date &amp; Time</button>
+            <button data-cmd="insert-slide-number" title="Slide Number: the slides' numbers at the bottom right (in Header &amp; Footer)"># Slide Number</button>
+          </div>
           <button class="rb-big" data-cmd="insert-symbol" title="Symbol: Greek letters, arrows, maths and chemistry signs, accented letters, typed into the text being edited (or a new text box). Find one by name or code; the ones you used lately come first"><span class="rb-icon">Ω</span>Symbol</button>
           <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
           <button class="rb-big" data-cmd="picture-format" title="Picture Format for the selected picture: brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions. Saved as PowerPoint's own picture settings"><span class="rb-icon">◐</span>Picture Format</button>
@@ -2037,12 +2105,20 @@
           <button class="rb-big" data-cmd="present" title="Show the slides full screen from the first"><span class="rb-icon">▶</span>From Beginning</button>
           <button class="rb-big" data-cmd="present-current" title="Show the slides full screen from this one"><span class="rb-icon">▷</span>From This Slide</button>
           <button class="rb-big" data-cmd="presenter-view" title="Slides full screen on the projector; your notes, the next slide and a timer on your own screen"><span class="rb-icon">▣</span>Presenter View</button>
+          <button class="rb-big" data-cmd="custom-show-menu" aria-haspopup="true" title="Custom Slide Show: play one of the deck's custom shows (named lists of its slides, in any order), or make and change them"><span class="rb-icon">☷</span>Custom Slide Show ▾</button>
         </div>
-        <div class="rb-label">Present</div>
+        <div class="rb-label">Start Slide Show</div>
       </div>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-cmd="set-up-show" title="Set Up Show: full screen with a speaker, in a window for one person, or at a kiosk going round by itself; which slides; loop; narration, animations and timings. Saved with the PowerPoint file"><span class="rb-icon">⚙</span>Set Up Slide Show</button>
           <button class="rb-big" data-cmd="hide-slide" aria-pressed="false" title="The slide show skips the slides picked; they stay in the deck and in the PowerPoint file. Again to show them"><span class="rb-icon">⊘</span>Hide Slide</button>
+          <button class="rb-big" data-cmd="rehearse-timings" title="Rehearse Timings: play the show with a clock for each slide and the whole talk; at the end keep the times, so the show can go on by itself"><span class="rb-icon">⏱</span>Rehearse Timings</button>
+          <button class="rb-big" data-cmd="record-show" title="Record: play the show recording your narration from the microphone, slide by slide, and timing each slide; at the end keep them (narration goes on each slide as a sound that plays as it comes in, PowerPoint too)"><span class="rb-icon">●</span>Record</button>
+          <div class="rb-col">
+            <label class="rb-field check" title="Play the narration recorded with Record (off: Show without narration)"><input type="checkbox" data-cmd="play-narrations" checked /> Play Narrations</label>
+            <label class="rb-field check" title="Each slide goes on by itself after its time (off: only clicks go on)"><input type="checkbox" data-cmd="use-timings" checked /> Use Timings</label>
+          </div>
         </div>
         <div class="rb-label">Set Up</div>
       </div>
@@ -2052,14 +2128,36 @@
         <div class="rb-row">
           <button class="rb-big" data-cmd="view-normal" aria-pressed="true" title="The slide list beside the slide you are working on"><span class="rb-icon">▭</span>Normal</button>
           <button class="rb-big" data-cmd="view-sorter" aria-pressed="false" title="Every slide in rows of larger pictures, by section: drag to reorder, double-click one to open it"><span class="rb-icon">▦</span>Slide Sorter</button>
+          <button class="rb-big" data-cmd="view-outline" aria-pressed="false" title="Outline View: every slide's title and bullet points as one outline beside the slide, to type in. Tab and Shift+Tab move a line in and out; a line moved all the way out becomes a new slide"><span class="rb-icon">☰</span>Outline View</button>
+          <button class="rb-big" data-cmd="view-notes-page" aria-pressed="false" title="Notes Page: each slide on a page with its speaker notes under it, as they print, to read and type in"><span class="rb-icon">▤</span>Notes Page</button>
+          <button class="rb-big" data-cmd="reading-view" title="Reading View: the slide show in this window, from this slide, with Back and Next below (Esc to come back)"><span class="rb-icon">▢</span>Reading View</button>
         </div>
         <div class="rb-label">Presentation Views</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-field check" title="Rulers along the top and left of the slide, from its middle (Grid Settings changes the units). Drag out of a ruler for a guide"><input type="checkbox" data-cmd="view-slide-ruler" /> Ruler</label>
+            <label class="rb-field check" title="Gridlines over the slide, on screen only (Grid Settings sets the spacing and snapping)"><input type="checkbox" data-cmd="view-gridlines" /> Gridlines</label>
+            <label class="rb-field check" title="Drawing guides: lines to line things up by. Drag one to move it, Ctrl+drag to copy, off the slide to take it away. Saved with the file"><input type="checkbox" data-cmd="view-guides" /> Guides</label>
+          </div>
+          <div class="rb-col">
+            <button data-cmd="grid-settings" title="Grid and Guides: snap to the grid and its spacing, show the gridlines, guides and smart guides, add guides, the rulers' units">Grid Settings…</button>
+            <button data-cmd="add-vertical-guide" title="A guide down the middle of the slide, to drag where you want it">Add Vertical Guide</button>
+            <button data-cmd="add-horizontal-guide" title="A guide across the middle of the slide, to drag where you want it">Add Horizontal Guide</button>
+          </div>
+        </div>
+        <div class="rb-label">Show</div>
       </div>
       <div class="rb-group">
         <div class="rb-row">
           <button class="rb-big" data-cmd="slide-master" title="Fonts, colours, background, logo, slide numbers, footer and structure size for every slide"><span class="rb-icon">▤</span>Slide Master</button>
           <button class="rb-big" data-cmd="edit-layouts" title="The deck's layouts: move and size their placeholders, add layouts of your own, rename them"><span class="rb-icon">▥</span>Edit Layouts</button>
           <button class="rb-big" data-cmd="slide-templates" title="Ready-made looks and your own themes: make, change or delete themes"><span class="rb-icon">◧</span>Themes</button>
+          <div class="rb-col">
+            <button data-cmd="notes-master" title="Notes Master: how notes pages look and print: the page's way up, the slide picture's size, the notes' font and size, the header, footer, date and page number">Notes Master…</button>
+            <button data-cmd="handout-master" title="Handout Master: how handouts print: slides to a page, the page's way up, frames round the slides, the header, footer, date and page number">Handout Master…</button>
+          </div>
         </div>
         <div class="rb-label">Master Views</div>
       </div>
@@ -2154,9 +2252,22 @@
       <div class="rb-group">
         <div class="rb-row">
           <div class="rb-col">
+            <label class="rb-field" title="Motion path: the selected objects move along a line, an arc, a turn, a shape or a path you click out on the slide, and stay where it ends. The path shows on the slide while this tab is open: green where it starts, red where it ends">Path <select id="an-path"><option value="">Pick a path…</option></select></label>
+            <button data-an="reverse-path" title="Reverse Path Direction: the selected motion path runs the other way, from where it ended back to the start">⇄ Reverse Path</button>
+          </div>
+        </div>
+        <div class="rb-label">Motion Paths</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
             <label class="rb-field" title="Wipe and Fly: the side it comes in from (or goes out to)">Effect <select id="an-from"></select></label>
             <label class="rb-field" id="an-amount-box" style="display: none">Amount <input id="an-amount" type="number" step="5" style="width: 60px" /> <span id="an-amount-unit"></span></label>
             <label class="rb-field" id="an-colour-box" style="display: none" title="Colour Change: the colour it changes to">Colour <input id="an-colour" type="color" /></label>
+            <label class="rb-field" title="Text: comes in (or goes, or is emphasised) as one object, or one paragraph at a time (each starting as the first does: on its own click, with or after the one before)">Sequence <select id="an-seq">
+              <option value="one">As One Object</option>
+              <option value="para">By Paragraph</option>
+            </select></label>
             <button data-an="remove" title="Take the selected animation off">Remove</button>
           </div>
         </div>
@@ -2165,6 +2276,10 @@
       <div class="rb-group">
         <div class="rb-row">
           <button class="rb-big" data-an="pane" aria-pressed="false" title="List this slide's animations in the right-hand panel"><span class="rb-icon" data-icon="pane"></span>Animation Pane</button>
+          <button class="rb-big" data-an="painter" aria-pressed="false" title="Animation Painter: copy the selected object's animations, then click another object to give it the same ones. Double-click to keep painting until you press Esc or click this again"><span class="rb-icon" data-icon="painter"></span>Animation Painter</button>
+          <div class="rb-col">
+            <label class="rb-field" title="Trigger: the selected animations play in the slide's own order of clicks, or when an object on the slide is clicked in the show (a button, a picture, a label…)">Trigger <select id="an-trigger"><option value="">On Click Sequence</option></select></label>
+          </div>
         </div>
         <div class="rb-label">Advanced Animation</div>
       </div>
@@ -2239,6 +2354,16 @@
         <button class="rb-big" data-cmd="picture-format" title="Picture Format for the selected picture: brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions. Saved as PowerPoint's own picture settings"><span class="rb-icon">◐</span>Picture Format</button>
       </div>
       <div class="rb-label">Insert</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-row">
+        <button class="rb-big" data-cmd="shape-styles" aria-haspopup="dialog" title="Shape Styles: a ready-made fill, outline and effects for the selected shapes"><span class="rb-icon">◩</span>Shape Styles ▾</button>
+        <div class="rb-col">
+          <button data-cmd="shape-effects" aria-haspopup="menu" title="Shape Effects: a shadow, reflection, glow, soft edges or a bevel for the selected shapes">Shape Effects ▾</button>
+          <button data-cmd="shape-picture-fill" title="Fill the selected shapes with a picture from a file, stretched to each">Picture Fill…</button>
+        </div>
+      </div>
+      <div class="rb-label">Shape Styles</div>
     </div>
     <div class="rb-group">
       <div class="rb-row">

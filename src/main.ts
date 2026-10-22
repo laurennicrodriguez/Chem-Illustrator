@@ -2,6 +2,8 @@
 // toolbar, the drawing area (with the slide list and notes in Slides mode, or the grid in Sheet
 // mode), and the panels on the right.
 
+import { fieldEnv } from './document/fields';
+import type { QuickPart } from './document/quick-parts';
 import { SLIDE_TABLE_STYLES, DEFAULT_SLIDE_TABLE_STYLE } from './deck/table-styles';
 import { commandIcon } from './ui/command-icons';
 import './app.css';
@@ -65,7 +67,12 @@ import { SlideTextRibbon } from './ui/slide-text-ribbon';
 import { CaptionEditor } from './ui/caption-editor';
 import { LayersPanel } from './ui/layers-panel';
 import { Scrollbars } from './ui/scrollbars';
-import { Presenter } from './ui/present';
+import { Presenter, type ShowOptions } from './ui/present';
+import { editHeaderFooter } from './ui/header-footer-dialog';
+import { setUpShow, editCustomShows } from './ui/show-setup-dialog';
+import { defaultShow, showOrder } from './deck/show-setup';
+import { recordingToWav, NARRATION_NAME } from './deck/narration';
+import { clockText } from './deck/show-link';
 import { PresenterView } from './ui/presenter-view';
 import { editMaster } from './ui/master-dialog';
 import { editDrawingStyle } from './ui/style-dialog';
@@ -85,6 +92,12 @@ import { SLIDE_TEMPLATES, applyTemplate, type SlideTemplate } from './deck/templ
 import { editLayouts } from './ui/layout-editor';
 import { pickSlideSize } from './ui/slide-size-dialog';import { pickTemplate } from './ui/template-gallery';
 import { showContextMenu, topMenuEntry, type MenuItem } from './ui/context-menu';
+import { defaultHandout, handoutLayout, handoutPageSvg, notesPageSize, notesPageSvg, type HandoutSetup } from './deck/notes-pages';
+import { OutlineView } from './ui/outline-view';
+import { NotesPageView, editHandoutMaster, editNotesMaster } from './ui/notes-page-view';
+import { GuideTip, SlideRulers, drawGuides, gridAndGuides } from './ui/slide-guides';
+import { defaultView, guideNear, rulerText, snapMove, type RulerPrefs, type SlideView } from './deck/guides';
+import { effectPatch, effectsMenu, showStyleGallery, styleColours, stylePatch } from './ui/shape-styles';
 import { CommandSearch, uniqueCommands, type CommandItem } from './ui/command-search';
 import { fillTemplate, templateSize } from './design/templates';
 import { askCycle } from './ui/cycle-dialog';
@@ -102,7 +115,7 @@ import { chartBoxPng } from './render/chart-box-paint';
 import { itemsToSvg } from './render/svg';
 import { itemsToEmf, type EmfBox } from './render/emf';
 import type { Item } from './render/vector';
-import { PAPERS, defaultPaper, orient, placeIn, inside, handoutCells, noteLines, placeSvg, pageSvg } from './print-layout';
+import { PAPERS, defaultPaper, orient, placeIn, inside, placeSvg, pageSvg } from './print-layout';
 import { printPages } from './ui/print';
 import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc, webpToPng } from './render/images';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, ringDir } from './chem/chemgeom';
@@ -455,6 +468,11 @@ const shapeMenu = new ShapeMenu();
 let layers: LayersPanel | null = null;
 let animUi: AnimationUI | null = null;
 let slideCmts: SlideComments | null = null;
+/** View > Ruler and Gridlines (kept in the settings); the rulers' units and where they count from. */
+const slideLook = { ruler: false, grid: false };
+const rulerPrefs: RulerPrefs = { units: 'in', from: 'centre' };
+/** A guide being dragged: which, and the guides as they are while it moves. */
+let guideDrag: { which: { axis: 'x' | 'y'; i: number }; view: SlideView } | null = null;
 /** View > Alignment Guides: moved things snap into line with other things and the page, on or off for each kind of tab. */
 const guidesOn: Record<'drawing' | 'slides' | 'design', boolean> = { drawing: false, slides: true, design: true };
 const guideMode = (): keyof typeof guidesOn | null => {
@@ -1849,9 +1867,12 @@ function enterTab(tab: Tab, opened: boolean): void {
     sorterEl.hidden = true;
     sorterList.show(null);
   }
+  if (outlineView.shown) outlineView.show(false);
+  if (notesView.shown) { notesView.show(false); $('#notes-pane').classList.remove('np-hidden'); }
   showSheetParts();
   editor.paused = sheet || words;
   sheetMode.show(sheet ? tab : null);
+  if (words) fieldEnv.fileName = ws.mainOf(tab).name;
   docMode.show(words ? tab : null);
   renderer.screen = !!deck;
   renderer.page = deck ? slidePage : drawingPage;
@@ -1869,7 +1890,7 @@ function enterTab(tab: Tab, opened: boolean): void {
     if (design) showDesignState();
     notesBox.value = deck.current?.notes ?? '';
     showSlideState();
-  } else slideList.show(null);
+  } else { slideList.show(null); showRulers(); }
   animUi?.update();
   slideCmts?.slideChanged();
   layoutSplit();
@@ -1899,6 +1920,11 @@ const slidePage = {
     if (!d?.current) return;
     drawSlidePage(ctx, d.page(), SURROUND);
     if (ws.active.mode === 'design' && designGrid.on) drawGrid(ctx, d.size, designGrid.step);
+    if (ws.active.mode === 'slides') {
+      const v = d.settings.view;
+      if (slideLook.grid) drawGrid(ctx, d.size, v?.grid ?? defaultView(d.size).grid);
+      if (v?.showGuides) drawGuides(ctx, v, d.size, renderer.view.scale, guideDrag?.which);
+    }
     if (ws.active.mode === 'slides') animUi?.drawMarkers(ctx, renderer.view.scale);
     // (the comment markers are over the drawing, and follow it as it moves)
     if (ws.active.mode === 'slides') slideCmts?.place();
@@ -1920,11 +1946,14 @@ function deckChanged(deck: Deck): void {
     indexSeen = deck.index;
     slideList.rebuild();
     if (sorterOn) sorterList.rebuild();
+    outlineView.rebuild();
+    notesView.rebuild();
   } else if (deck.index !== indexSeen) {
     // going to another slide moves the highlight; no picture needs drawing again
     indexSeen = deck.index;
     slideList.switched();
     if (sorterOn) sorterList.switched();
+    outlineView.mark(deck.index);
   } else {
     slideList.refresh();
     if (sorterOn) sorterList.refresh();
@@ -1979,6 +2008,7 @@ function showLayoutMenus(deck: Deck): void {
 /** The layout and size boxes and the Format menu show the slide being edited. */
 function showSlideState(): void {
   const deck = deckNow();
+  showRulers();
   if (!deck?.current) return;
   showLayoutMenus(deck);
   layoutSel.value = deck.current.layout;
@@ -1991,13 +2021,17 @@ function showSlideState(): void {
   sizeSel.value = named;
   for (const b of document.querySelectorAll<HTMLElement>('[data-cmd^="layout-"]')) b.setAttribute('aria-checked', String(b.dataset.cmd === `layout-${deck.current.layout}`));
   for (const b of document.querySelectorAll<HTMLElement>('[data-cmd="view-normal"], [data-cmd="view-sorter"]')) {
-    const on = (b.dataset.cmd === 'view-sorter') === sorterOn;
+    const on = b.dataset.cmd === 'view-sorter' ? slideViewNow() === 'sorter' : slideViewNow() === 'normal';
     b.setAttribute(b.getAttribute('role') === 'menuitemradio' ? 'aria-checked' : 'aria-pressed', String(on));
   }
   $('[data-cmd="size-wide"]')?.setAttribute('aria-checked', String(named === 'wide'));
   $('[data-cmd="size-standard"]')?.setAttribute('aria-checked', String(named === 'standard'));
   const hidden = String(!!deck.current.hidden);
   for (const b of document.querySelectorAll('[data-cmd="hide-slide"]')) b.setAttribute(b.getAttribute('role') === 'menuitemcheckbox' ? 'aria-checked' : 'aria-pressed', hidden);
+  // Set Up Show's two the ribbon shows as ticks
+  const show = deck.settings.show;
+  for (const b of document.querySelectorAll<HTMLInputElement>('[data-cmd="use-timings"]')) b.checked = !show?.manual;
+  for (const b of document.querySelectorAll<HTMLInputElement>('[data-cmd="play-narrations"]')) b.checked = !show?.noNarration;
 }
 
 // ---------------------------------------------------------------- transitions and animations (Slides mode)
@@ -2014,6 +2048,8 @@ animUi = new AnimationUI($('#ribbon'), $('#anim-section'), {
   finishTyping,
   flash,
   repaint: () => { renderer.repaintAll(); editor.requestScene(); },
+  host: () => $('#canvas-host'),
+  view: () => renderer.view,
 });
 
 slideCmts = new SlideComments($('#cmt-section'), $('#canvas-host'), {
@@ -2064,6 +2100,148 @@ function showDesignState(): void {
   if (!d) return;
   $('#dz-size').textContent = sizeLabel(d.size);
   if (/^#[0-9a-f]{6}$/i.test(d.master.background)) dzBg.value = d.master.background;
+}
+
+// ---------------------------------------------------------------- Slides' rulers, gridlines and guides
+
+const guideTip = new GuideTip(host);
+const rulers = new SlideRulers(host, {
+  view: () => renderer.view,
+  size: () => deckNow()?.size ?? null,
+  prefs: () => rulerPrefs,
+  selection: () => (editor.hasSelection() ? editor.selBox() : null),
+  newGuide: (axis, e) => {
+    const d = deckNow();
+    if (!d) return;
+    const view = slideViewOf(d);
+    // a new guide, shown, dragged from the ruler
+    const next = { ...view, showGuides: true, guides: { x: [...view.guides.x], y: [...view.guides.y] } };
+    next.guides[axis].push(axis === 'x' ? -1e6 : -1e6);
+    startGuideDrag(d, next, { axis, i: next.guides[axis].length - 1 }, e, 'Add guide', view);
+  },
+});
+
+/** The deck's guides and grid (PowerPoint's first ones when it has none). */
+function slideViewOf(d: Deck): SlideView {
+  return d.settings.view ?? defaultView(d.size);
+}
+
+
+/** Drag a guide (or a copy of it): its place shown by the pointer; let go off the slide to take it away. One undo step. */
+function startGuideDrag(d: Deck, view: SlideView, which: { axis: 'x' | 'y'; i: number }, e: PointerEvent, label: string, before = slideViewOf(d)): void {
+  finishTyping();
+  guideDrag = { which, view };
+  const el = renderer.overlay;
+  el.style.cursor = which.axis === 'x' ? 'col-resize' : 'row-resize';
+  const hostBox = host.getBoundingClientRect();
+  const move = (ev: PointerEvent) => {
+    const p = { x: (ev.clientX - hostBox.left - renderer.view.ox) / renderer.view.scale, y: (ev.clientY - hostBox.top - renderer.view.oy) / renderer.view.scale };
+    let v = which.axis === 'x' ? p.x : p.y;
+    // to a sixteenth of an inch (or a millimetre), Alt: anywhere
+    if (!ev.altKey) { const step = rulerPrefs.units === 'in' ? 4.5 : 72 / 25.4; const zero = rulerPrefs.from === 'centre' ? (which.axis === 'x' ? d.size.w : d.size.h) / 2 : 0; v = zero + Math.round((v - zero) / step) * step; }
+    view.guides[which.axis][which.i] = v;
+    const off = v < 0 || v > (which.axis === 'x' ? d.size.w : d.size.h);
+    guideTip.show(off ? 'Let go to take the guide away' : rulerText(v, d.size, which.axis, rulerPrefs), ev.clientX - hostBox.left, ev.clientY - hostBox.top);
+    renderer.repaintAll();
+    editor.requestScene();
+  };
+  const up = () => {
+    removeEventListener('pointermove', move, true);
+    removeEventListener('pointerup', up, true);
+    el.style.cursor = '';
+    guideTip.hide();
+    guideDrag = null;
+    const v = view.guides[which.axis][which.i];
+    const off = v < 0 || v > (which.axis === 'x' ? d.size.w : d.size.h);
+    if (off) view.guides[which.axis].splice(which.i, 1);
+    d.settings.view = before;
+    d.setSettings({ ...d.settings, view }, off ? 'Remove guide' : label);
+    renderer.repaintAll();
+    editor.requestScene();
+  };
+  addEventListener('pointermove', move, true);
+  addEventListener('pointerup', up, true);
+  move(e);
+}
+
+// on the slide, a guide is picked up where nothing else is: a drag moves it, Ctrl+drag copies it
+renderer.overlay.addEventListener('pointerdown', (e) => {
+  const d = deckNow();
+  if (e.button !== 0 || !d || ws.active.mode !== 'slides' || sorterOn || !d.settings.view?.showGuides || editor.toolName !== 'select') return;
+  const { p, taken } = editor.pointAt(e);
+  if (taken) return;
+  const view = d.settings.view;
+  const near = guideNear(view, p, 4 / renderer.view.scale);
+  if (!near) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const next: SlideView = { ...view, guides: { x: [...view.guides.x], y: [...view.guides.y] } };
+  let which = near;
+  if (e.ctrlKey || e.metaKey) { next.guides[near.axis].push(next.guides[near.axis][near.i]); which = { axis: near.axis, i: next.guides[near.axis].length - 1 }; }
+  startGuideDrag(d, next, which, e, e.ctrlKey || e.metaKey ? 'Copy guide' : 'Move guide');
+}, true);
+// over a guide, the pointer says it can be dragged
+renderer.overlay.addEventListener('pointermove', (e) => {
+  const d = deckNow();
+  if (guideDrag || e.buttons || !d || ws.active.mode !== 'slides' || !d.settings.view?.showGuides || editor.toolName !== 'select') return;
+  const { p, taken } = editor.pointAt(e);
+  const near = taken ? null : guideNear(d.settings.view, p, 4 / renderer.view.scale);
+  if (near) renderer.overlay.style.cursor = near.axis === 'x' ? 'col-resize' : 'row-resize';
+});
+
+editor.moveSnap = (box, raw, tol) => {
+  const d = deckNow();
+  return d && ws.active.mode === 'slides' ? snapMove(box, raw, d.settings.view ?? null, tol) : raw;
+};
+
+/** The rulers show in Normal view of slides when View > Ruler is ticked. */
+function showRulers(): void {
+  rulers.show(slideLook.ruler && ws.active.mode === 'slides' && !sorterOn && !!deckNow());
+  for (const b of document.querySelectorAll<HTMLInputElement>('[data-cmd="view-slide-ruler"]')) b.checked = slideLook.ruler;
+  for (const b of document.querySelectorAll<HTMLInputElement>('[data-cmd="view-gridlines"]')) b.checked = slideLook.grid;
+  const g = !!deckNow()?.settings.view?.showGuides;
+  for (const b of document.querySelectorAll<HTMLInputElement>('[data-cmd="view-guides"]')) b.checked = g;
+}
+
+/** View > Guides on or off (saved with the file, as PowerPoint does). */
+function toggleGuides(): void {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  const v = slideViewOf(d);
+  d.setSettings({ ...d.settings, view: { ...v, guides: { x: [...v.guides.x], y: [...v.guides.y] }, showGuides: !v.showGuides } }, v.showGuides ? 'Hide guides' : 'Show guides');
+  showRulers();
+  renderer.repaintAll();
+  editor.requestScene();
+}
+
+/** View > Grid Settings: snapping, the grid, the guides, the rulers' units. */
+async function gridSettings(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  const got = await gridAndGuides(slideViewOf(d), { grid: slideLook.grid, smart: guidesOn.slides }, rulerPrefs, d.size);
+  if (!got) return;
+  slideLook.grid = got.grid;
+  guidesOn.slides = got.smart;
+  Object.assign(rulerPrefs, got.prefs);
+  d.setSettings({ ...d.settings, view: got.view }, 'Grid and guides');
+  showGuides();
+  showRulers();
+  storeSettings();
+  renderer.repaintAll();
+  editor.requestScene();
+}
+
+/** Add a guide down (or across) the middle of the slide, shown. */
+function addGuide(axis: 'x' | 'y'): void {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  const v = slideViewOf(d);
+  const next = { ...v, showGuides: true, guides: { x: [...v.guides.x], y: [...v.guides.y] } };
+  next.guides[axis].push((axis === 'x' ? d.size.w : d.size.h) / 2);
+  d.setSettings({ ...d.settings, view: next }, 'Add guide');
+  showRulers();
+  renderer.repaintAll();
+  editor.requestScene();
 }
 
 /** Light lines across the page to line things up by (on screen only). */
@@ -2167,6 +2345,58 @@ function setSorter(on: boolean): void {
   editor.paused = on;
   resize();
   showSlideState();
+}
+
+// View > Outline View: the outline in place of the slide list; View > Notes Page: the notes pages over the slide
+const outlineView = new OutlineView($('#slide-list').parentElement!, {
+  deck: () => (ws.active.mode === 'slides' ? deckNow() : null),
+  go: (i) => goSlide(i),
+  focusSlide: () => overlay.focus(),
+});
+const notesView = new NotesPageView(host, {
+  deck: () => (ws.active.mode === 'slides' ? deckNow() : null),
+  open: (i) => { setSlideView('normal'); goSlide(i); },
+});
+
+/** Which of Normal, Outline, Slide Sorter and Notes Page shows. */
+function slideViewNow(): 'normal' | 'outline' | 'sorter' | 'notes' {
+  return sorterOn ? 'sorter' : notesView.shown ? 'notes' : outlineView.shown ? 'outline' : 'normal';
+}
+
+/** Change the slides' view (Normal, Outline, Slide Sorter or Notes Page). */
+function setSlideView(v: 'normal' | 'outline' | 'sorter' | 'notes'): void {
+  const d = deckNow();
+  if (v !== 'normal' && (!d || ws.active.mode !== 'slides')) { flash('That view is for slides: use File > New Slides, or open a PowerPoint file.'); return; }
+  finishTyping();
+  if (v !== 'sorter' && sorterOn) setSorter(false);
+  if (v !== 'notes' && notesView.shown) { notesView.show(false); $('#notes-pane').classList.remove('np-hidden'); editor.paused = false; }
+  if (v !== 'outline' && outlineView.shown) { outlineView.show(false); $('#slide-list').hidden = ws.active.mode !== 'slides'; if (d) slideList.show(d); }
+  if (v === 'sorter') setSorter(true);
+  if (v === 'outline' && !outlineView.shown) { $('#slide-list').hidden = true; outlineView.show(true); }
+  if (v === 'notes' && !notesView.shown) {
+    $('#notes-pane').classList.add('np-hidden');
+    editor.paused = true;
+    notesView.show(true);
+    notesView.reveal(d!.index);
+  }
+  resize();
+  showSlideState();
+  for (const b of document.querySelectorAll<HTMLElement>('[data-cmd="view-outline"], [data-cmd="view-notes-page"]')) {
+    const on = b.dataset.cmd === 'view-outline' ? outlineView.shown : notesView.shown;
+    if (b.getAttribute('role') !== 'menuitem') b.setAttribute('aria-pressed', String(on));
+  }
+  if (v === 'normal') overlay.focus();
+}
+
+/** View > Notes Master and Handout Master: their settings, as one step of the history. */
+async function editPageMaster(which: 'notes' | 'handout'): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') { flash('Notes pages and handouts are for slides.'); return; }
+  finishTyping();
+  const next = which === 'notes' ? await editNotesMaster(d.master) : await editHandoutMaster(d.master);
+  if (!next || deckNow() !== d) return;
+  d.setMaster(next);
+  if (notesView.shown) notesView.rebuild();
 }
 
 /** The slides picked in the list showing: Slide Sorter's, or the slide list's. */
@@ -3064,15 +3294,110 @@ async function customSlideSize(): Promise<void> {
   if (got && deckNow() === d) setSlideSize(got.size, got.fit);
 }
 
-function present(fromHere: boolean, notes = false): void {
+function present(fromHere: boolean, notes = false, how: { custom?: number; windowed?: boolean; rehearse?: boolean; record?: boolean } = {}): void {
   const d = deckNow();
   if (!d) { flash('Present shows slides: use File > New Slides, or open a PowerPoint file.'); return; }
   if (presenter.running || presenterView.running) return;
   finishTyping();
+  // Set Up Show: the slides it plays, how it goes on, and the rest
+  const setup = d.settings.show ?? defaultShow();
+  const order = showOrder(d.slides, setup, d.settings.customShows ?? [], how.custom ?? setup.custom);
+  if (order && !order.length) { flash('The show has no slides to play: every slide it names is hidden or gone (Slide Show > Set Up Show).'); return; }
+  const kiosk = setup.type === 'kiosk' && !how.rehearse && !how.windowed;
+  if (kiosk && !d.slides.some((s) => s.transition?.advanceAfter)) flash('At a kiosk the show goes on only by the slides\' times: give them times with Rehearse Timings (or Transitions > After). Esc ends the show.', 9000);
+  const opts: ShowOptions = {
+    order, noAnimation: setup.noAnimation, noNarration: setup.noNarration, manual: setup.manual, loop: setup.loop, kiosk,
+    windowed: how.windowed || (setup.type === 'window' && !notes && !how.rehearse), rehearse: how.rehearse, record: how.record,
+  };
   editor.paused = true;
   refreshZooms(d);
   // from the start: the first slide that isn't hidden; from here: this slide even when hidden, as in PowerPoint
-  void (notes ? presenterView : presenter).start(d, fromHere ? d.index : d.firstShown());
+  const from = fromHere ? d.index : order ? order[0] : d.firstShown();
+  void (notes ? presenterView.start(d, from, opts) : presenter.start(d, from, opts));
+}
+
+/** Rehearse Timings and Record, kept: each slide's time, and its narration as a sound on it. */
+presenter.onRehearsed = (r) => {
+  const d = deckNow();
+  if (!d) return;
+  void (async () => {
+    if (r.recordings.size) {
+      const sounds = new Map<number, { src: string; seconds: number }>();
+      for (const [i, blob] of r.recordings) {
+        try {
+          const w = await recordingToWav(blob);
+          if (w.seconds > 0.2) sounds.set(i, { src: dataUrl(w.bytes, 'audio/wav'), seconds: w.seconds });
+        } catch { /* a recording this computer can't read is left out */ }
+      }
+      const ix = [...sounds.keys()].filter((i) => i >= 0 && i < d.slides.length);
+      if (ix.length) {
+        const poster = speakerPng(), s = 24;
+        d.editSlides('Record narration', ix, (sd, i) => {
+          // a new recording takes the place of the slide's old one
+          for (const sh of [...sd.shapes.values()]) if (sh.video?.narration) sd.removeShape(sh.id);
+          const n = sounds.get(i)!;
+          sd.addShape({
+            kind: 'picture', x1: d.size.w - s - 12, y1: d.size.h - s - 12, x2: d.size.w - 12, y2: d.size.h - 12, px: { w: 128, h: 128 }, src: poster, name: NARRATION_NAME,
+            video: { src: n.src, audio: true, start: 'auto', once: true, hide: true, narration: true, length: +n.seconds.toFixed(3) },
+          });
+        });
+      } else flash('Nothing was recorded (the microphone gave no sound).');
+    }
+    d.setTimings(r.times, r.recordings.size ? 'Record slide show timings' : 'Rehearse timings');
+    flash(`Kept: the show takes ${clockText(r.total)}${r.recordings.size ? ', with narration on the slides' : ''}. Set Up Show > Advance slides can turn the times off.`, 8000);
+  })();
+};
+
+/** Insert > Header & Footer (Date & Time, Slide Number): the slides', notes pages' and handouts' header and footer. */
+async function headerFooter(tab: 'slide' | 'notes' = 'slide'): Promise<void> {
+  const d = deckNow();
+  if (!d?.current || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const ix = pickedSlides();
+  const got = await editHeaderFooter(d.master, d.current, ix.length, tab);
+  if (!got || deckNow() !== d) return;
+  d.setHeaderFooter(got.master, got.show, got.scope === 'picked' ? ix : undefined);
+}
+
+/** Slide Show > Set Up Show. */
+async function setUpShowCmd(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const got = await setUpShow(d.settings.show, d.settings.customShows ?? [], d.slides.length);
+  if (got && deckNow() === d) d.setSettings({ ...d.settings, show: got }, 'Set up show');
+  showSlideState();
+}
+
+/** Custom Slide Show > Custom Shows: make and change them (and play one). */
+async function customShowsCmd(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const names = d.slides.map((s, i) => {
+    const t = [...d.docOf(i).captions.values()].find((c) => c.ph === 'title');
+    const words = t ? t.runs.map((r) => r.text).join('').replace(/\s+/g, ' ').trim() : '';
+    return { id: s.id, name: `${i + 1}. ${words || 'Slide ' + (i + 1)}${s.hidden ? ' (hidden)' : ''}` };
+  });
+  const got = await editCustomShows(d.settings.customShows ?? [], names);
+  if (!got || deckNow() !== d) return;
+  const show = d.settings.show && d.settings.show.custom !== undefined && !got.shows.some((c) => c.id === d.settings.show!.custom) ? { ...d.settings.show, custom: undefined } : d.settings.show;
+  if (show && show.custom === undefined) delete show.custom;
+  d.setSettings({ ...d.settings, customShows: got.shows, ...(show ? { show } : {}) }, 'Custom shows');
+  if (got.play !== undefined) present(false, false, { custom: got.play });
+}
+
+/** Custom Slide Show: the deck's custom shows to play, and Custom Shows… */
+function customShowMenu(anchor: HTMLElement): void {
+  const d = deckNow();
+  if (!d) return;
+  const r = anchor.getBoundingClientRect();
+  const shows = d.settings.customShows ?? [];
+  showContextMenu(r.left, r.bottom, [
+    ...shows.map((c) => ({ cmd: `custom-show:${c.id}`, label: c.name })),
+    ...(shows.length ? [null] : []),
+    { cmd: 'custom-shows', label: 'Custom Shows…' },
+  ], { run: (cmd) => (cmd.startsWith('custom-show:') ? present(false, false, { custom: Number(cmd.slice(12)) }) : void command(cmd)), key: commandKey });
 }
 
 /** Ink drawn in the slide show, kept: shapes on its slides, as one step to undo. */
@@ -3186,34 +3511,36 @@ async function printNow(): Promise<void> {
   if (deck) {
     const slide = (i: number) => itemsToSvg(recordSlide(deck.page(i), deck.docOf(i)), { x1: 0, y1: 0, x2: deck.size.w, y2: deck.size.h });
     if (tab.mode === 'design') { printPages({ pages: [slide(deck.index)], w: deck.size.w, h: deck.size.h }); return; }
+    const m = deck.master;
     const v = await ask('Print', [
       { name: 'handout', label: 'Layout', value: printChoices.handout, options: [
-        { value: '1', label: 'Full page slides' }, { value: '2', label: 'Handouts: 2 slides a page' }, { value: '3', label: 'Handouts: 3 slides a page, with lines for notes' },
+        { value: '1', label: 'Full page slides' }, { value: 'notes', label: 'Notes Pages (as the Notes Master sets them)' },
+        { value: 'master', label: `Handouts as the Handout Master sets them (${(m.handout ?? defaultHandout()).perPage} a page)` },
+        { value: '2', label: 'Handouts: 2 slides a page' }, { value: '3', label: 'Handouts: 3 slides a page, with lines for notes' },
         { value: '4', label: 'Handouts: 4 slides a page' }, { value: '6', label: 'Handouts: 6 slides a page' }, { value: '9', label: 'Handouts: 9 slides a page' },
       ] },
       { name: 'paper', label: 'Paper (handouts)', value: printChoices.paper, options: PAPER_OPTIONS },
       { name: 'frame', label: 'Frame the slides (handouts)', value: printChoices.frame, type: 'checkbox' },
-    ], { ok: 'Print…', note: 'Full page slides print at the slide\'s own shape; the next window fits them to the paper. Copies and which pages are chosen there too.' });
+    ], { ok: 'Print…', note: 'Full page slides print at the slide\'s own shape, notes pages at 7.5 × 10 in; the next window fits them to the paper. Handouts and notes pages carry the header and footer from Insert > Header & Footer > Notes and Handouts. Copies and which pages are chosen in the next window.' });
     if (!v) return;
     Object.assign(printChoices, v);
-    const n = Number(v.handout);
-    if (n === 1) { printPages({ pages: deck.slides.map((_, i) => slide(i)), w: deck.size.w, h: deck.size.h }); return; }
-    const page = orient(PAPERS[v.paper] ?? PAPERS.letter, 'portrait');
-    const cells = handoutCells(page, n);
-    const pages: string[] = [];
-    for (let first = 0; first < deck.slides.length; first += n) {
-      const parts: string[] = [];
-      cells.forEach((cell, k) => {
-        const i = first + k;
-        if (i >= deck.slides.length) return;
-        const at = placeIn(deck.size.w, deck.size.h, cell, 'fit');
-        parts.push(placeSvg(slide(i), at));
-        if (v.frame === 'true') parts.push(`<rect x="${at.x}" y="${at.y}" width="${at.w}" height="${at.h}" fill="none" stroke="#888" stroke-width="0.5"/>`);
-        if (n === 3) for (const l of noteLines({ ...cell, h: at.h, y: at.y }, page)) parts.push(`<line x1="${l.x1}" x2="${l.x2}" y1="${l.y}" y2="${l.y}" stroke="#bbb" stroke-width="0.5"/>`);
-      });
-      pages.push(pageSvg(page.w, page.h, parts));
+    if (v.handout === '1') { printPages({ pages: deck.slides.map((_, i) => slide(i)), w: deck.size.w, h: deck.size.h }); return; }
+    if (v.handout === 'notes') {
+      const size = notesPageSize(m.notesPage);
+      const pages = deck.slides.map((s, i) => notesPageSvg(m, deck.size, slide(i), s.notes, i + 1, (t, k) => measureText(t, k, m.notesPage?.font || m.bodyFont || 'Arial'), placeSvg));
+      printPages({ pages, w: size.w, h: size.h });
+      return;
     }
-    printPages({ pages, w: page.w, h: page.h });
+    const setup: HandoutSetup = v.handout === 'master' ? { ...(m.handout ?? defaultHandout()) } : { ...(m.handout ?? defaultHandout()), perPage: Number(v.handout) as HandoutSetup['perPage'] };
+    setup.frame = v.frame === 'true';
+    const paper = PAPERS[v.paper] ?? PAPERS.letter;
+    const pages: string[] = [];
+    for (let first = 0, page = 1; first < deck.slides.length; first += setup.perPage, page++) {
+      const svgs = deck.slides.slice(first, first + setup.perPage).map((_, k) => slide(first + k));
+      pages.push(handoutPageSvg(m, deck.size, setup, svgs, page, placeSvg, paper));
+    }
+    const L = handoutLayout(deck.size, setup, paper);
+    printPages({ pages, w: L.page.w, h: L.page.h });
     return;
   }
   const pic = recordPicture(doc, 4);
@@ -3651,6 +3978,9 @@ function docActive(): boolean {
 }
 
 /** The style structures in the document showing are drawn in. */
+/** Insert > Quick Parts: saved pieces of text (kept with the settings). */
+let docQuickParts: QuickPart[] = [];
+
 const docStyle = (): DocStyle => ws.active.document?.t.drawingStyle ?? ACS_1996;
 
 const docMode = new DocumentMode({
@@ -3671,6 +4001,8 @@ const docMode = new DocumentMode({
   pickReferenceFile: () => pickReferenceFile(),
   preferredChanged: () => storeSettings(),
   reviewNameChanged: () => storeSettings(),
+  quickParts: () => docQuickParts,
+  setQuickParts: (list) => { docQuickParts = list; storeSettings(); },
   openDocuments: () => {
     const seen = new Set<unknown>();
     return ws.tabs.filter((t) => t.mode === 'document' && t.document && !seen.has(t.document) && seen.add(t.document)).map((t) => ({ name: ws.label(t), t: t.document!.t }));
@@ -3970,6 +4302,7 @@ function command(name: string): boolean {
     flash('A design is one page: use Page Size and Background on the Design ribbon. For several pages, use File > New Slides.');
     return true;
   }
+  if (name.startsWith('shape-fx:')) { void shapeEffect(name); return true; }
   if (name.startsWith('add-ligand:')) {
     if (editor.addLigand(name.slice('add-ligand:'.length))) return true;
     flash('Select one metal first, then add the ligand to it.');
@@ -3984,6 +4317,92 @@ function command(name: string): boolean {
   return !!run && run() !== false;
 }
 
+/** Where the last right-click menu on the page opened (a gallery picked from it opens there). */
+let rightClickAt = { left: 0, bottom: 0 };
+
+/** The design shapes picked (the ones Shape Styles and Shape Effects change). */
+function pickedGeo(): Shape[] {
+  return [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => x?.kind === 'geo' && !x.diagram);
+}
+
+/** Where a ribbon button's drop-down goes: under the button showing, or under the tabs. */
+function dropAnchor(cmd: string): HTMLElement {
+  const b = [...document.querySelectorAll<HTMLElement>(`[data-cmd="${cmd}"]`)].find((x) => x.offsetParent);
+  return b ?? document.querySelector<HTMLElement>('#ribbon .rb-tabs')!;
+}
+
+/** Shape Styles: the gallery of ready-made looks for the shapes picked, in the deck's colours. */
+function shapeStyles(at?: { left: number; bottom: number }): void {
+  if (!pickedGeo().length) { flash('Select a shape first (Insert > Shapes).'); return; }
+  const m = deckNow()?.master;
+  const colours = styleColours(m?.textColor ?? '#333333', m?.accent ?? '#2f6fb0', m?.accent2 ?? '#c0504d');
+  showStyleGallery(at ?? dropAnchor('shape-styles'), colours, (look, c) => {
+    const shapes = pickedGeo();
+    finishTyping();
+    const { textColor, ...patch } = stylePatch(look, c);
+    doc.edit('Shape style', () => {
+      for (const s of shapes) {
+        const text = s.text && { ...s.text, runs: s.text.runs.map((r) => ({ ...r, color: textColor })) };
+        doc.updateShape(s.id, { ...patch, ...(text ? { text } : {}) });
+      }
+    });
+    editor.changed();
+  });
+}
+
+/** Shape Effects: shadow, reflection, glow, soft edges and bevel, from a menu under the button (or at the pointer). */
+function shapeEffects(at?: { x: number; y: number }): void {
+  if (!pickedGeo().length) { flash('Select a shape first (Insert > Shapes).'); return; }
+  const r = dropAnchor('shape-effects').getBoundingClientRect();
+  showContextMenu(at?.x ?? r.left, at?.y ?? r.bottom, effectsMenu(), { run: (cmd) => void command(cmd), key: () => undefined });
+}
+
+/** One of the Shape Effects menu's choices, for every shape picked. */
+async function shapeEffect(cmd: string): Promise<boolean> {
+  const shapes = pickedGeo();
+  if (!shapes.length) { flash('Select a shape first (Insert > Shapes).'); return false; }
+  finishTyping();
+  if (cmd === 'shape-fx:glow:options') {
+    const g = shapes[0].glow ?? { color: shapes[0].fillColor ?? shapes[0].color ?? '#ffc000', size: 8, transparency: 0.4 };
+    const v = await ask('Glow', [
+      { name: 'color', label: 'Colour', value: g.color, type: 'color' },
+      { name: 'size', label: 'Size (pt)', value: String(g.size), type: 'number' },
+      { name: 'clear', label: 'Transparency (%)', value: String(Math.round(g.transparency * 100)), type: 'number' },
+    ], { ok: 'Apply' });
+    if (!v) return false;
+    const size = Math.max(0, Math.min(150, Number(v.size) || 0));
+    const glow = size > 0 ? { color: v.color, size, transparency: Math.max(0, Math.min(1, (Number(v.clear) || 0) / 100)) } : undefined;
+    doc.edit('Glow', () => { for (const s of shapes) doc.updateShape(s.id, { glow }); });
+    editor.changed();
+    return true;
+  }
+  const label = { shadow: 'Shadow', reflection: 'Reflection', glow: 'Glow', soft: 'Soft edges', bevel: 'Bevel' }[cmd.split(':')[1]] ?? 'Shape effect';
+  doc.edit(label, () => { for (const s of shapes) { const p = effectPatch(cmd, s); if (p) doc.updateShape(s.id, p); } });
+  editor.changed();
+  return true;
+}
+
+/** Shape Fill > Picture: a picture from a file fills the shapes picked, stretched to each. */
+async function shapePictureFill(): Promise<void> {
+  const shapes = pickedGeo();
+  if (!shapes.length) { flash('Select a shape first (Insert > Shapes).'); return; }
+  const p = await pickPicture();
+  if (!p) return;
+  if (!/^image\/(png|jpeg|gif)$/.test(p.mime)) { flash('A shape can be filled with a PNG, JPEG or GIF picture.'); return; }
+  finishTyping();
+  const picFill = { src: dataUrl(p.bytes, p.mime), px: imageSize(p.bytes, p.mime) ?? { w: 100, h: 100 } };
+  doc.edit('Picture fill', () => { for (const s of shapes) doc.updateShape(s.id, { picFill, filled: true }); });
+  editor.changed();
+}
+
+/** Shape Fill > No Picture: back to the shapes' own fill colour. */
+function shapeNoPictureFill(): void {
+  const shapes = pickedGeo().filter((s) => s.picFill);
+  if (!shapes.length) { flash('None of the shapes picked has a picture fill.'); return; }
+  doc.edit('Picture fill', () => { for (const s of shapes) doc.updateShape(s.id, { picFill: undefined }); });
+  editor.changed();
+}
+
 /** Picture Style (right-click on a picture): a ready-made frame, corners and shadow for the pictures picked. */
 function setPictureStyle(look: PictureLook | undefined): boolean {
   const pics = [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => x?.kind === 'picture');
@@ -3995,7 +4414,8 @@ function setPictureStyle(look: PictureLook | undefined): boolean {
 /** Slide commands that don't apply to a design's single page. */
 const SLIDE_ONLY = new Set(['compare-slides', 'section-menu', 'new-slide', 'duplicate-slide', 'delete-slide', 'cut-slides', 'copy-slides', 'paste-slides', 'paste-slides-keep', 'hide-slide', 'reuse-slides', 'size-wide', 'size-standard', 'size-custom', 'slide-master', 'slide-templates',
   'edit-layouts', 'view-sorter', 'add-section', 'rename-section', 'remove-section', 'remove-section-slides', 'remove-all-sections', 'section-up', 'section-down', 'collapse-sections', 'expand-sections',
-  'slide-transitions', 'slide-animations', 'animation-pane', 'preview-slide', 'remove-animation', 'insert-slide-zoom', 'insert-summary-zoom', 'action-settings', 'insert-video', 'insert-audio']);
+  'slide-transitions', 'slide-animations', 'animation-pane', 'preview-slide', 'remove-animation', 'insert-slide-zoom', 'insert-summary-zoom', 'action-settings', 'insert-video', 'insert-audio',
+  'reading-view', 'rehearse-timings', 'record-show', 'set-up-show', 'custom-shows', 'custom-show-menu', 'use-timings', 'play-narrations', 'header-footer', 'insert-date-time', 'insert-slide-number', 'view-slide-ruler', 'view-gridlines', 'view-guides', 'grid-settings', 'add-vertical-guide', 'add-horizontal-guide', 'view-outline', 'view-notes-page', 'notes-master', 'handout-master']);
 
 /** The animation commands: an effect for the selected objects (the right-click menu's Animation). */
 const ANIM_COMMANDS: { cmd: string; label: string }[] = [false, true].flatMap((exit) => EFFECTS.filter((e) => !(exit && e.emph)).map((e) => ({
@@ -4011,10 +4431,19 @@ const COMMANDS: Record<string, () => unknown> = {
   'design-size': () => designSize(),
   'connector-tool': () => { finishTyping(); editor.setTool('connector'); },
   'connector-elbow-tool': () => { finishTyping(); editor.setTool('connector-elbow'); },
+  'shape-styles': () => shapeStyles(),
+  'view-slide-ruler': () => { slideLook.ruler = !slideLook.ruler; showRulers(); storeSettings(); },
+  'view-gridlines': () => { slideLook.grid = !slideLook.grid; showRulers(); storeSettings(); renderer.repaintAll(); editor.requestScene(); },
+  'view-guides': () => toggleGuides(),
+  'grid-settings': () => void gridSettings(),
+  'add-vertical-guide': () => addGuide('x'),
+  'add-horizontal-guide': () => addGuide('y'),
+  'shape-styles-here': () => shapeStyles(rightClickAt),
+  'shape-effects': () => shapeEffects(),
+  'shape-picture-fill': () => void shapePictureFill(),
+  'shape-no-picture-fill': () => shapeNoPictureFill(),
   'slide-shapes': () => {
-    const b = document.querySelector<HTMLElement>('#ribbon [data-cmd="slide-shapes"]:not([hidden])');
-    const anchor = b && b.offsetParent ? b : document.querySelector<HTMLElement>('#ribbon .rb-tabs')!;
-    shapeMenu.show(anchor, 'Click a shape, then click or drag on the slide. Type in it once placed.', (id) => { finishTyping(); editor.setTool(`geo:${id}`); });
+    shapeMenu.show(dropAnchor('slide-shapes'), 'Click a shape, then click or drag on the slide. Type in it once placed.', (id) => { finishTyping(); editor.setTool(`geo:${id}`); });
   },
   'slide-icons': () => {
     const b = document.querySelector<HTMLElement>('#ribbon [data-cmd="slide-icons"]:not([hidden])');
@@ -4097,8 +4526,12 @@ const COMMANDS: Record<string, () => unknown> = {
     const items: MenuItem[] = d?.sections.length ? [{ cmd: 'add-section' }, null, ...sectionItems()] : [{ cmd: 'add-section' }];
     showContextMenu(r ? r.left : 200, r ? r.bottom + 2 : 120, items, { run: (cmd) => void command(cmd), key: commandKey });
   },
-  'view-normal': () => setSorter(false),
-  'view-sorter': () => setSorter(true),
+  'view-normal': () => setSlideView('normal'),
+  'view-outline': () => setSlideView(outlineView.shown ? 'normal' : 'outline'),
+  'view-notes-page': () => setSlideView(notesView.shown ? 'normal' : 'notes'),
+  'notes-master': () => void editPageMaster('notes'),
+  'handout-master': () => void editPageMaster('handout'),
+  'view-sorter': () => setSlideView('sorter'),
   ...Object.fromEntries(['add-section', 'rename-section', 'remove-section', 'remove-section-slides', 'remove-all-sections', 'section-up', 'section-down', 'collapse-sections', 'expand-sections'].map((c) => [c, () => sectionCommand(c)])),
   'slide-master': () => slideMaster(),
   'format-background': () => backgroundDialog(),
@@ -4120,6 +4553,32 @@ const COMMANDS: Record<string, () => unknown> = {
   present: () => present(false),
   'present-current': () => present(true),
   'presenter-view': () => present(false, true),
+  'reading-view': () => present(true, false, { windowed: true }),
+  'rehearse-timings': () => present(false, false, { rehearse: true }),
+  'record-show': () => present(false, false, { rehearse: true, record: true }),
+  'set-up-show': () => void setUpShowCmd(),
+  'custom-shows': () => void customShowsCmd(),
+  'custom-show-menu': () => {
+    const b = document.querySelector<HTMLElement>('#ribbon [data-cmd="custom-show-menu"]');
+    customShowMenu(b && b.offsetParent ? b : document.querySelector<HTMLElement>('#ribbon .rb-tabs')!);
+  },
+  'use-timings': () => {
+    const d = deckNow();
+    if (!d) return;
+    const s = d.settings.show ?? defaultShow();
+    d.setSettings({ ...d.settings, show: { ...s, manual: s.manual ? undefined : true } }, s.manual ? 'Use timings' : 'Advance manually');
+    showSlideState();
+  },
+  'play-narrations': () => {
+    const d = deckNow();
+    if (!d) return;
+    const s = d.settings.show ?? defaultShow();
+    d.setSettings({ ...d.settings, show: { ...s, noNarration: s.noNarration ? undefined : true } }, s.noNarration ? 'Play narrations' : 'Show without narration');
+    showSlideState();
+  },
+  'header-footer': () => void headerFooter(),
+  'insert-date-time': () => void headerFooter(),
+  'insert-slide-number': () => void headerFooter(),
   cut: () => cut(),
   copy: () => copy(),
   paste: () => paste(),
@@ -5326,6 +5785,10 @@ function storeSettings(): void {
     docPins: [...docBoxPrefs.pinned],
     docRuler: docRulerPrefs.shown,
     sheetFormulaBar: formulaBarPrefs.shown,
+    slideRuler: slideLook.ruler,
+    slideGrid: slideLook.grid,
+    rulerUnits: rulerPrefs.units,
+    rulerFrom: rulerPrefs.from,
     updateCheck,
     updateChannel,
     pubchemNames,
@@ -5338,6 +5801,7 @@ function storeSettings(): void {
     scheme: { ...schemePrefs },
     keep: keepPrefs,
     highlightLooks: ownLooks,
+    quickParts: docQuickParts,
   };
   saveSettings(s, (msg) => flash(msg, 10000));
 }
@@ -5473,6 +5937,7 @@ void loadSettings().then((s) => {
   fileTypesOffered = s.fileTypesOffered;
   wordObjectsOffered = s.wordObjectsOffered;
   setReviewAuthor(s.reviewName);
+  docQuickParts = s.quickParts;
   skipVersion = s.skipVersion;
   recentFiles = s.recentFiles;
   recentSymbols = s.recentSymbols;
@@ -5492,6 +5957,10 @@ void loadSettings().then((s) => {
   docRulerPrefs.shown = !!s.docRuler;
   formulaBarPrefs.shown = s.sheetFormulaBar !== false;
   sheetMode.showFormulaBar();
+  slideLook.ruler = !!s.slideRuler;
+  slideLook.grid = !!s.slideGrid;
+  rulerPrefs.units = s.rulerUnits;
+  rulerPrefs.from = s.rulerFrom;
   docMode.showRuler();
   docMode.boxesChanged();
   showGuides();
@@ -6450,6 +6919,11 @@ function drawingMenu(): MenuItem[] {
     ...(order.length ? [{ label: 'Order', items: order }] : []),
     ...(shapes.some((x) => x.chart) ? [{ cmd: 'edit-chart', label: 'Edit Chart…' }] : []),
     ...((shapes.length === 1 && shapes[0].kind === 'picture') || (atoms && !shapes.length) ? [{ cmd: 'alt-text', label: 'Alt Text…' }] : []),
+    ...(shapes.some((x) => x.kind === 'geo' && !x.diagram) ? [
+      { cmd: 'shape-styles-here', label: 'Shape Style…' },
+      { label: 'Shape Effects', items: effectsMenu() },
+      { label: 'Shape Fill', items: [{ cmd: 'shape-picture-fill', label: 'Picture…' }, { cmd: 'shape-no-picture-fill', label: 'No Picture' }] },
+    ] : []),
     ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }, { cmd: 'picture-format' }, { label: 'Picture Style', items: PICTURE_STYLES.map((p) => ({ cmd: `picture-style-${p.id}`, label: p.name })) }] : []),
     ...(ws.active.mode === 'slides' ? [{ label: 'Animation', items: [
       ...ANIM_COMMANDS.slice(0, EFFECTS.length), null, ...ANIM_COMMANDS.slice(EFFECTS.length), null,
@@ -6552,6 +7026,7 @@ editor.onContextMenu = (e) => {
   finishTyping();
   const h = editor.contextPick(e);
   contextBond = h?.kind === 'bond' ? h.id : null;
+  rightClickAt = { left: e.clientX, bottom: e.clientY };
   showContextMenu(e.clientX, e.clientY, drawingMenu(), { run: (cmd) => void command(cmd), key: commandKey });
 };
 
@@ -7073,6 +7548,7 @@ stylePanel.tables = {
 };
 
 let stereoSeen = -1;
+let outlineSeen = -1;
 // scroll bars over the drawing: they cover what is drawn (or the slide), and the part on screen
 const scrollbars = new Scrollbars(host, renderer, () => {
   const d = ws.active.deck;
@@ -7205,6 +7681,9 @@ zoomPick.addEventListener('change', () => {
 
 editor.onFrame = () => {
   showZoom();
+  rulers.update();
+  // what is typed on the slide shows in the outline
+  if (outlineView.shown && doc.version !== outlineSeen) { outlineSeen = doc.version; outlineView.rebuild(); }
   layers?.refresh();
   scrollbars.update(doc.version);
   updatePanels();
@@ -7259,6 +7738,11 @@ function sampleMolecule(): void {
 for (const id of ['#ribbon', '#design-ribbon']) {
   $(id).addEventListener('click', (e) => {
     const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-cmd]')?.dataset.cmd;
+    if (cmd) command(cmd);
+  });
+  // (ticks in the ribbon too)
+  $(id).addEventListener('change', (e) => {
+    const cmd = (e.target as HTMLElement).closest<HTMLInputElement>('input[type="checkbox"][data-cmd]')?.dataset.cmd;
     if (cmd) command(cmd);
   });
 }

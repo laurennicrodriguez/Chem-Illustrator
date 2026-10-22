@@ -17,6 +17,7 @@ import { DEFAULT_MARGINS, hasLines, resolveTable, strokeOf, type TableStyleDef }
 import { docMeasure } from './doc-file';
 import { drawMath } from './math';
 import { fxSrc, hasFx, traceShape } from '../render/picture-fx';
+import { drawParaBorders, drawParaShading } from './para-borders';
 
 /** One piece of a header or footer line: its text, where it goes, and its font. */
 export interface HfPart { where: 'header' | 'footer'; align: 'left' | 'center' | 'right'; text: string; font: string; size: number; w: number }
@@ -138,6 +139,7 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
     drawPageLook(c, t, p);
     drawHeaderFooter(c, t, p);
     drawLineNumbers(c, lay, p.index);
+    drawParaShading(c, lay.frames, p.index);
     // figures behind the text first
     // tables go under the figures in their cells
     // (a table in a cell after the table holding it)
@@ -145,7 +147,7 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
     const mine = lay.objects.filter((o) => o.page === p.index).sort((a, b) => depth(a.id) - depth(b.id));
     const order = [...mine.filter((o) => o.wrap === 'behind'), null, ...mine.filter((o) => o.wrap !== 'behind')];
     for (const o of order) {
-      if (!o) { drawLayout(c, lay.text, 0, 0, p.first, p.end); drawNoteRules(c, lay, p.index); continue; }
+      if (!o) { drawLayout(c, lay.text, 0, 0, p.first, p.end); drawNoteRules(c, lay, p.index); drawParaBorders(c, lay.frames, p.index); continue; }
       const obj = t.objects[o.id];
       if (obj?.kind === 'note') {
         const n = lay.notes.get(o.id);

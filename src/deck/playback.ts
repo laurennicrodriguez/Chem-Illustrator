@@ -18,7 +18,10 @@ import { selectionBox, POINTS } from '../editor/arrange';
 import type { Rect } from '../geom';
 import type { Selection } from '../editor/editor';
 import { plainText } from '../richtext';
-import { buildSteps, partStates, slideParts, partOf, hostOf, type Anim, type Part, type Step, type Transition, type Side } from './animation';
+import {
+  buildSteps, partStates, slideParts, partOf, hostOf, mainAnims, triggerSeqs, splitParas, expandParas, moved,
+  type Anim, type Part, type Step, type Transition, type Side,
+} from './animation';
 
 const ease = (p: number) => 1 - (1 - p) ** 3;
 
@@ -54,6 +57,30 @@ export function highlightDoc(doc: Doc, h: Selection): Doc {
 const inPart = (part: Part, kind: 'atom' | 'caption' | 'arrow' | 'shape', id: number) =>
   part.kind !== 'highlight' && (kind === 'atom' ? part.sel.atoms : kind === 'caption' ? part.sel.captions : kind === 'arrow' ? part.sel.arrows : part.sel.shapes).has(id);
 
+/** Each paragraph's text in a text box, for playing it a paragraph at a time (none for a turned text box, which plays whole). */
+export function captionParas(doc: Doc, id: number): string[] | null {
+  const c = doc.captions.get(id);
+  return c && !c.rot ? plainText(c.runs).split('\n') : null;
+}
+
+/** The band of the slide (points) each paragraph of a text box takes, top to bottom. */
+function paraBands(doc: Doc, id: number): Rect[] {
+  const c = doc.captions.get(id);
+  if (!c) return [];
+  const base = c.ph ? doc.textStyles?.[c.ph] : captionBase(doc.style);
+  const lay = layoutText(base ? { ...c, runs: applyBase(c.runs, base) } : c, base?.size ?? doc.style.captionSize, (t, s, family, style) => measureText(t, s, family, style));
+  const box = selectionBox(doc, { atoms: new Set(), bonds: new Set(), captions: new Set([id]), arrows: new Set(), shapes: new Set() }, POINTS);
+  const n = plainText(c.runs).split('\n').length;
+  const out: Rect[] = [];
+  for (let k = 0; k < n; k++) {
+    const lines = lay.lines.filter((l) => l.para === k);
+    if (!lines.length) { out.push({ x1: 0, y1: 0, x2: 0, y2: 0 }); continue; }
+    const y1 = c.y + Math.min(...lines.map((l) => l.y - l.ascent)), y2 = c.y + Math.max(...lines.map((l) => l.y + l.descent));
+    out.push({ x1: box?.x1 ?? c.x, y1, x2: box?.x2 ?? c.x + (c.wrap ?? 0), y2 });
+  }
+  return out;
+}
+
 /** A video or sound on the slide in the show: its picture's place on the canvas, in CSS pixels. */
 export interface MediaSpot { id: number; media: Media; x: number; y: number; w: number; h: number }
 
@@ -74,12 +101,19 @@ export class SlideFrames {
       this.hiddenMedia = hidden;
       doc = this.doc = subDoc(doc, (kind, id) => !(kind === 'shape' && ids.has(id)));
     }
-    const live = anims.length ? (() => {
-      this.parts = slideParts(doc);
-      return anims.filter((a) => partOf(this.parts, a.target));
+    // text played a paragraph at a time: an animation for each paragraph, and a part for each
+    const all = expandParas(anims, (id) => captionParas(doc, id));
+    const live = all.length ? (() => {
+      const parts = slideParts(doc);
+      this.parts = splitParas(parts, all, (id) => captionParas(doc, id)?.length ?? 1);
+      return all.filter((a) => partOf(this.parts, a.target) && (!a.trigger || partOf(parts, a.trigger)));
     })() : [];
     this.anims = live;
-    this.steps = buildSteps(live);
+    this.steps = buildSteps(mainAnims(live));
+    for (const [key, g] of triggerSeqs(live)) {
+      const part = partOf(slideParts(doc), g.trigger);
+      if (part) this.triggers.set(key, { part, steps: buildSteps(g.anims.map((a, k) => (k ? a : { ...a, start: 'click' as const }))) });
+    }
     const moving = new Set(live.map((a) => partOf(this.parts, a.target)!));
     // a highlight that moves on its own is drawn under its structure, so the structure comes
     // off the page too (drawn over the highlight, without it)
@@ -92,10 +126,36 @@ export class SlideFrames {
       for (const id of p.sel.atoms) strip.atoms.add(id);
       for (const id of p.sel.bonds) strip.bonds.add(id);
     }
+    // a text box played a paragraph at a time: all its paragraphs come off the page
+    for (const p of this.parts) if (p.para !== undefined) lifted.add(p);
     const out = [...lifted];
     const still = lifted.size ? subDoc(doc, (kind, id) => !out.some((p) => inPart(p, kind, id)), strip) : doc;
     this.at = paintSlide(this.base, w, h, dpr, page, still, fill);
+    const textCanvas = new Map<number, HTMLCanvasElement>();
     for (const part of this.parts.filter((p) => lifted.has(p))) {
+      if (part.para !== undefined) {
+        // one picture of the whole text box, shown a paragraph's band at a time
+        const id = Math.min(...part.sel.captions);
+        let canvas = textCanvas.get(id);
+        if (!canvas) {
+          canvas = document.createElement('canvas');
+          paintSlide(canvas, w, h, dpr, page, subDoc(doc, (kind, x) => kind === 'caption' && x === id), null, false);
+          textCanvas.set(id, canvas);
+        }
+        const band = paraBands(doc, id)[part.para] ?? { x1: 0, y1: 0, x2: 0, y2: 0 };
+        const pad = 2;
+        const box = { x1: band.x1 - 8, y1: band.y1 - pad, x2: band.x2 + 8, y2: band.y2 + pad };
+        // the paragraph's band cut out, so it can move on its own
+        const one = document.createElement('canvas');
+        one.width = canvas.width;
+        one.height = canvas.height;
+        const { x: ox, y: oy, k: ok } = this.at;
+        const sx = Math.max(0, Math.floor((ox + box.x1 * ok) * dpr)), sy = Math.max(0, Math.floor((oy + box.y1 * ok) * dpr));
+        const sw = Math.min(canvas.width - sx, Math.ceil((box.x2 - box.x1) * ok * dpr)), sh = Math.min(canvas.height - sy, Math.ceil((box.y2 - box.y1) * ok * dpr));
+        if (sw > 0 && sh > 0) one.getContext('2d')?.drawImage(canvas, sx, sy, sw, sh, sx, sy, sw, sh);
+        this.layers.push({ part, canvas: one, box });
+        continue;
+      }
       const canvas = document.createElement('canvas');
       const one = part.kind === 'highlight' ? highlightDoc(doc, part.sel) : subDoc(doc, (kind, id) => inPart(part, kind, id), strip);
       paintSlide(canvas, w, h, dpr, page, one, null, false);
@@ -104,6 +164,21 @@ export class SlideFrames {
       const pad = part.kind === 'highlight' ? doc.style.bondLength : 8;
       this.layers.push({ part, canvas, box: { x1: b.x1 - pad, y1: b.y1 - pad, x2: b.x2 + pad, y2: b.y2 + pad } });
     }
+  }
+
+  /** The slide's triggers: the part a click sets each sequence off on, and the sequence's clicks. */
+  readonly triggers = new Map<string, { part: Part; steps: Step[] }>();
+
+  /** The trigger at a point on the canvas (CSS pixels): its key, when it has clicks still to play (`fired` says how many have). */
+  triggerAt(px: number, py: number, fired: Map<string, { done: number }>): string | null {
+    const { x, y, k } = this.at;
+    const p = { x: (px - x) / k, y: (py - y) / k };
+    for (const [key, t] of this.triggers) {
+      if ((fired.get(key)?.done ?? 0) >= t.steps.length) continue;
+      const b = selectionBox(this.doc, t.part.sel, POINTS);
+      if (b && p.x >= b.x1 - 2 && p.x <= b.x2 + 2 && p.y >= b.y1 - 2 && p.y <= b.y2 + 2) return key;
+    }
+    return null;
   }
 
   /**
@@ -171,12 +246,15 @@ export class SlideFrames {
     return null;
   }
 
-  /** Draw the slide with `done` steps played and `t` seconds into the next (t < 0: not started). */
-  draw(ctx: CanvasRenderingContext2D, done: number, t = -1): void {
+  /**
+   * Draw the slide with `done` steps played and `t` seconds into the next (t < 0: not started),
+   * and its triggers' sequences as far as `fired` says.
+   */
+  draw(ctx: CanvasRenderingContext2D, done: number, t = -1, fired?: Map<string, { done: number; t: number }>): void {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(this.base, 0, 0);
     if (!this.layers.length) return;
-    const states = partStates(this.parts, this.anims, done, t);
+    const states = partStates(this.parts, this.anims, done, t, fired, this.page.size);
     const { x, y, k } = this.at, s = this.dpr * k, size = this.page.size;
     const px = (v: number, o: number) => (o + v * k) * this.dpr;
     ctx.save();
@@ -189,6 +267,11 @@ export class SlideFrames {
       const run = st.running;
       const e = st.emph;
       ctx.save();
+      if (e && (e.dx || e.dy)) {
+        // along its motion paths so far
+        const m = moved(e, size);
+        ctx.translate(m.x * s, m.y * s);
+      }
       if (e) {
         // grown, turned and see-through about the middle of the part
         const cx = px((L.box.x1 + L.box.x2) / 2, x), cy = px((L.box.y1 + L.box.y2) / 2, y);
@@ -495,7 +578,17 @@ export class Player {
   /** Steps of the slide's animations played so far. */
   done = 0;
   private frames: SlideFrames | null = null;
-  private moving: { kind: 'transition'; from: HTMLCanvasElement | null; to?: HTMLCanvasElement; t: Transition; t0: number; morph?: MorphFrames | null; was?: number; zoom?: { rect: Rect; out: boolean } } | { kind: 'step'; t0: number } | null = null;
+  private moving: { kind: 'transition'; from: HTMLCanvasElement | null; to?: HTMLCanvasElement; t: Transition; t0: number; morph?: MorphFrames | null; was?: number; zoom?: { rect: Rect; out: boolean } } | { kind: 'step'; t0: number } | { kind: 'trigger'; key: string; t0: number } | null = null;
+  /** Clicks played so far of each of the slide's triggers (by the trigger's key). */
+  private fired = new Map<string, { done: number }>();
+  /** The slides the show plays, in order (a custom show, or a range of slides); every slide not hidden when null. */
+  order: number[] | null = null;
+  /** Show without animation (Set Up Show): every slide comes in with everything on it. */
+  noAnimation = false;
+  /** Go on by itself after each slide's time (Set Up Show: Using timings); off, only clicks go on. */
+  useTimings = true;
+  /** Recorded narrations are left silent (Set Up Show: Show without narration). */
+  noNarration = false;
   private raf = 0;
   private loops = 0;
   private timer = 0;
@@ -552,6 +645,7 @@ export class Player {
     this.wasDone = this.done;
     this.i = i;
     this.frames = null;
+    this.fired = new Map();
     this.done = out ? this.current.stepCount : 0;
     this.timeUp = false;
     const d = this.dpr;
@@ -601,7 +695,7 @@ export class Player {
    */
   private videos(on: boolean): void {
     const host = this.canvas.parentElement;
-    const spots = on && host ? [...this.current.videoSpots(this.done), ...this.current.hiddenSpots] : [];
+    const spots = on && host ? [...this.current.videoSpots(this.done), ...this.current.hiddenSpots].filter((x) => !(this.noNarration && x.media.narration)) : [];
     const keep = new Set(spots.map((s) => s.id));
     for (const [id, v] of this.vids) {
       if (keep.has(id)) continue;
@@ -725,7 +819,50 @@ export class Player {
   private framesFor(i: number): SlideFrames {
     const s = this.deck.slides[i];
     const page: SlidePage = this.deck.page(i);
-    return new SlideFrames(page, this.deck.docOf(i), s.anims ?? [], this.w, this.h, this.dpr, this.fill);
+    return new SlideFrames(page, this.deck.docOf(i), this.noAnimation ? [] : s.anims ?? [], this.w, this.h, this.dpr, this.fill);
+  }
+
+  /** The slide the show plays after slide i (in its order), or -1 at the end. */
+  after(i: number): number {
+    if (!this.order) return this.deck.shownAfter(i);
+    const k = this.order.indexOf(i);
+    return k >= 0 ? this.order[k + 1] ?? -1 : this.order.find((j) => j > i) ?? -1;
+  }
+
+  /** The slide the show played before slide i, or -1 at the start. */
+  before(i: number): number {
+    if (!this.order) return this.deck.shownBefore(i);
+    const k = this.order.indexOf(i);
+    return k > 0 ? this.order[k - 1] : k === 0 ? -1 : [...this.order].reverse().find((j) => j < i) ?? -1;
+  }
+
+  /** The first slide of the show. */
+  get first(): number { return this.order ? this.order[0] ?? 0 : this.deck.firstShown(); }
+  /** The last slide of the show. */
+  get last(): number { return this.order ? this.order[this.order.length - 1] ?? 0 : Math.max(0, this.deck.shownBefore(this.deck.slides.length)); }
+
+  /** Whether a click at a point (CSS pixels) would set off a trigger. */
+  triggerAt(px: number, py: number): boolean {
+    return !this.moving && !!this.current.triggerAt(px, py, this.fired);
+  }
+
+  /** Play the next click of the trigger at a point (CSS pixels): false when there is none there. */
+  fireTrigger(px: number, py: number): boolean {
+    if (this.moving) return false;
+    const key = this.current.triggerAt(px, py, this.fired);
+    if (!key) return false;
+    this.moving = { kind: 'trigger', key, t0: performance.now() };
+    this.loop();
+    return true;
+  }
+
+  /** How far each trigger's sequence has played at a time (for drawing). */
+  private firedAt(now: number): Map<string, { done: number; t: number }> {
+    const out = new Map<string, { done: number; t: number }>();
+    for (const [k, f] of this.fired) out.set(k, { done: f.done, t: -1 });
+    const m = this.moving;
+    if (m?.kind === 'trigger') out.set(m.key, { done: this.fired.get(m.key)?.done ?? 0, t: (now - m.t0) / 1000 });
+    return out;
   }
 
   private get current(): SlideFrames {
@@ -748,6 +885,7 @@ export class Player {
     this.wasDone = this.done;
     this.i = i;
     this.frames = null;
+    this.fired = new Map();
     this.done = how.atEnd ? this.current.stepCount : 0;
     this.timeUp = false;
     if (from && t) this.moving = { kind: 'transition', from, t, t0: performance.now(), ...(t.kind === 'morph' && was !== undefined ? { was, morph: null } : {}) };
@@ -761,7 +899,7 @@ export class Player {
   private arrived(): void {
     const st = this.current.steps[this.done];
     if (st?.auto && this.done === 0) this.moving = { kind: 'step', t0: performance.now() };
-    const adv = this.deck.slides[this.i].transition?.advanceAfter;
+    const adv = this.useTimings ? this.deck.slides[this.i].transition?.advanceAfter : undefined;
     if (adv) {
       const i = this.i;
       this.timer = window.setTimeout(() => { if (this.i === i) { this.timeUp = true; this.idle(); } }, adv * 1000);
@@ -787,8 +925,8 @@ export class Player {
     if (this.moving) { this.finish(); return; }
     if (this.done < this.current.stepCount) { this.playStep(); return; }
     if (this.beforeNextSlide()) return;
-    // hidden slides (Hide Slide) are skipped
-    const j = this.deck.shownAfter(this.i);
+    // hidden slides (Hide Slide) are skipped, and slides not in the show's order
+    const j = this.after(this.i);
     if (j >= 0) this.show(j, { transition: true });
     else this.onPastEnd();
   }
@@ -802,7 +940,7 @@ export class Player {
       this.onChange();
       return;
     }
-    const j = this.deck.shownBefore(this.i);
+    const j = this.before(this.i);
     if (j >= 0) this.show(j, { atEnd: true });
   }
 
@@ -810,6 +948,7 @@ export class Player {
     const m = this.moving;
     this.moving = null;
     if (m?.kind === 'step') this.done = Math.min(this.current.stepCount, this.done + 1);
+    else if (m?.kind === 'trigger') this.fired.set(m.key, { done: (this.fired.get(m.key)?.done ?? 0) + 1 });
     // the slide is in: its automatic animations still play
     else if (m?.kind === 'transition') this.arrived();
     if (this.moving) { this.loop(); return; }
@@ -842,7 +981,7 @@ export class Player {
         m.to = document.createElement('canvas');
         m.to.width = this.canvas.width;
         m.to.height = this.canvas.height;
-        this.current.draw(m.to.getContext('2d')!, this.done);
+        this.current.draw(m.to.getContext('2d')!, this.done, -1, this.firedAt(now));
       }
       if (m.morph === null && m.was !== undefined) m.morph = this.morphFrom(m.was);
       if (m.zoom) drawZoom(ctx, m.from!, m.to, m.zoom.rect, p, m.zoom.out, this.canvas.width, this.canvas.height);
@@ -857,22 +996,37 @@ export class Player {
       }
       return;
     }
+    if (m?.kind === 'trigger') {
+      const f = this.fired.get(m.key)?.done ?? 0;
+      const st = this.current.triggers.get(m.key)?.steps[f];
+      if (!st || (now - m.t0) / 1000 >= st.length) {
+        this.moving = null;
+        this.fired.set(m.key, { done: f + 1 });
+        this.current.draw(ctx, this.done, -1, this.firedAt(now));
+        this.videos(true);
+        this.onChange();
+        this.idle();
+        return;
+      }
+      this.current.draw(ctx, this.done, -1, this.firedAt(now));
+      return;
+    }
     if (m?.kind === 'step') {
       const st = this.current.steps[this.done];
       const t = (now - m.t0) / 1000;
       if (!st || t >= st.length) {
         this.moving = null;
         this.done = Math.min(this.current.stepCount, this.done + 1);
-        this.current.draw(ctx, this.done);
+        this.current.draw(ctx, this.done, -1, this.firedAt(now));
         this.videos(true);
         this.onChange();
         this.idle();
         return;
       }
-      this.current.draw(ctx, this.done, t);
+      this.current.draw(ctx, this.done, t, this.firedAt(now));
       return;
     }
-    this.current.draw(ctx, this.done);
+    this.current.draw(ctx, this.done, -1, this.firedAt(now));
     this.videos(true);
   }
 }
