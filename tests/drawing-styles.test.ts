@@ -34,6 +34,21 @@ describe('built-in styles', () => {
     }
   });
 
+  it('take Thieme\'s values from its instructions, and scale Wiley\'s and Elsevier\'s to 7 pt text', () => {
+    const t = presetNamed('Thieme (Synthesis, Synlett)')!.style;
+    expect(t.bondLength).toBeCloseTo(0.357 * 28.3465, 1);
+    expect(t.boldWidth).toBeCloseTo(0.049 * 28.3465, 2);
+    expect(t.labelSize).toBe(6);
+    for (const name of ['Wiley (Angewandte, Chemistry Europe)', 'Elsevier (Tetrahedron and others)']) {
+      const st = presetNamed(name)!.style;
+      expect(st.labelSize).toBe(7);
+      expect(st.bondLength).toBeCloseTo(14.4 * 0.7, 2);
+      // Wiley asks for lines of at least 0.2 pt
+      expect(st.lineWidth).toBeGreaterThanOrEqual(0.2);
+      expect(st.labelFont).toBe('Arial');
+    }
+  });
+
   it('take the RSC values from its guideline (cm to points)', () => {
     expect(RSC.bondLength).toBeCloseTo(0.43 * 28.3465, 1);
     expect(RSC.lineWidth).toBeCloseTo(0.016 * 28.3465, 2);

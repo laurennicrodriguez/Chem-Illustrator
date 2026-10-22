@@ -283,13 +283,19 @@ Rest the mouse on an abbreviation or condensed label (OTBS, NHBoc, CO2Me, CH2OH)
 
 **File ▸ Drawing Style…** sets how structures are drawn in the tab showing: bond length, line, bold and margin widths, hash spacing, double bond spacing, chain angle, and the fonts and sizes of atom labels and captions.
 
-- **Start from** picks a built-in style: **ACS Document 1996** (every ACS journal), **RSC**, **Nature journals**, or **Slides (ACS 1996 × 2)**. The line under it says where the numbers come from.
+- **Start from** picks a built-in style: **ACS Document 1996** (every ACS journal), **RSC**, **Nature journals**, **Thieme (Synthesis, Synlett)**, **Wiley (Angewandte, Chemistry Europe)**, **Elsevier (Tetrahedron and others)**, or **Slides (ACS 1996 × 2)**. The line under it says where the numbers come from. Wiley and Elsevier publish only the text size and font, so their bonds are ACS 1996 scaled to 7 pt text; the note under the style says so.
 - Every number can be typed over. With **Change widths and font sizes with it** ticked, changing the bond length scales the rest in proportion.
 - **Save as My Style** keeps your settings under a name, in every mode. **Delete** removes one of your own.
 - When there are structures already, choose **Redraw the structures already there in the new style** or **Keep their look; only new structures use it**.
 - Tick **Use this style for new drawings** to make every new drawing start in it.
 
 Press **Apply**. One Undo puts everything back.
+
+## The page
+
+A drawing sits on a page, a sheet of paper whose edge shows as a thin line. **View ▸ Page Edge** hides or shows it.
+
+**File ▸ Page Setup…** picks the paper: Letter, A4, Legal, A3, Tabloid, your own size in inches, or no page (an endless drawing). The page drawn on is half an inch in from each edge of the paper. Choose **Portrait** or **Landscape**, and what happens when the drawing goes past the edge: **Add pages** adds more sheets (shown with dashed edges), and **Keep it on the page when saving** moves things back inside it when you save. Tick **Use this for new drawings** to make it the default. The page size is saved in the .cdxml file, so ChemDraw opens it on the same paper.
 
 ## Dark page
 

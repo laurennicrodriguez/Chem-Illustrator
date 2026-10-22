@@ -9,7 +9,7 @@ import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
 import { Toolboxes, lockIcon, sideFolded, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
-import { Doc, Atom, Caption, Shape, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle } from './model';
+import { Doc, Atom, Caption, Shape, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle, PAPER, keepOnPage } from './model';
 import { Renderer, measureText, forgetTextWidths } from './render/renderer';
 import { Editor, TOOLS, type HighlightToggle, type Selection } from './editor/editor';
 import { BUILT_IN_LOOKS, type HighlightLookPreset } from './ui/highlight-looks';
@@ -38,7 +38,9 @@ import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, r
 import { cdxToCdxml } from './io/cdx';
 import { writeCdxml } from './io/cdxml-write';
 import { WORKSPACE } from './io/workspace-file';
-import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, PICTURE_EXTENSIONS } from './io/files';
+import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PICTURE_EXTENSIONS, type FileType } from './io/files';
+import { writeTiff } from './render/tiff';
+import { itemsToEps } from './render/eps';
 import { Workspace, Tab } from './workspace';
 import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize, slideBackground } from './deck/deck';
 import { solid } from './deck/background';
@@ -80,6 +82,8 @@ import { editChart, chartPoints } from './ui/chart-editor';
 import { newChartBox, sizedBox } from './sheet/chart-box';
 import { chartBoxPng } from './render/chart-box-paint';
 import { itemsToSvg } from './render/svg';
+import { itemsToEmf, type EmfBox } from './render/emf';
+import type { Item } from './render/vector';
 import { PAPERS, defaultPaper, orient, placeIn, inside, handoutCells, noteLines, placeSvg, pageSvg } from './print-layout';
 import { printPages } from './ui/print';
 import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc, webpToPng } from './render/images';
@@ -87,7 +91,7 @@ import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, ringDir } from './c
 import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
 import { StylePanel, tidyStyle } from './ui/style-panel';
 import { installCombos } from './ui/combo';
-import { installFontList, registerBundledFonts, bundledFaces } from './fonts';
+import { installFontList, registerBundledFonts, bundledFaces, pdfFonts } from './fonts';
 import { applyRibbonIcons } from './ui/ribbon-icons';
 import { TEMPLATES, Template, templateById, ownTemplates, setOwnTemplates, templateFromAtoms } from './chem/templates';
 import { centreEnd } from './chem/hapto';
@@ -1355,6 +1359,7 @@ const ws: Workspace = new Workspace(doc, {
     write: (d) => writeDocx(d, docFiles),
   },
   newStyle: (mode) => { const n = modeStyles[mode]; return n ? styleNamed(n, ownStyles) ?? null : null; },
+  newPage: () => (defaultPage ? { ...defaultPage } : null),
   newMaster: (m) => { const t = SLIDE_TEMPLATES.find((x) => x.id === slideTemplate); return t && t.id !== 'plain' ? applyTemplate(m, t) : null; },
   beforeWrite: (tab, ref, name, how) => keeper.beforeWrite(tab, ref, name, how),
   saved: (tab, data, how, was) => keeper.saved(tab, data, how, was),
@@ -1444,7 +1449,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   sheetMode.show(sheet ? tab : null);
   docMode.show(words ? tab : null);
   renderer.screen = !!deck;
-  renderer.page = deck ? slidePage : null;
+  renderer.page = deck ? slidePage : drawingPage;
   editor.slideKeys = slides;
   editor.cropping = null;
   editor.lastEdited = null;
@@ -2195,7 +2200,7 @@ async function exportPdf(): Promise<void> {
   const target = await saveFileDialog(withExtension(tab.name, PDF.extension), PDF).catch(async (e) => { await showError(String(e)); return null; });
   if (!target) return;
   try {
-    const bytes = await writePdf(pages, { title: tab.name.replace(/\.[^.]+$/, ''), image: pdfImage });
+    const bytes = await writePdf(pages, { title: tab.name.replace(/\.[^.]+$/, ''), image: pdfImage, fonts: pdfFonts });
     await writeFile(target.ref, target.name, bytes, PDF);
   } catch (e) {
     await showError(`Could not save ${target.name}: ${e instanceof Error ? e.message : String(e)}`);
@@ -2289,8 +2294,8 @@ async function printNow(): Promise<void> {
 }
 
 /**
- * File > Export Picture: the page (a design or the current slide) or the drawing as a PNG at
- * the resolution picked, or as an SVG, on its background colour or see-through.
+ * File > Export Picture: the page (a design or the current slide) or the drawing as a PNG or
+ * TIFF at the resolution picked, or as an SVG, EMF or EPS, on its background colour or see-through.
  */
 async function exportPicture(): Promise<void> {
   const tab = ws.active, deck = tab.deck;
@@ -2298,9 +2303,12 @@ async function exportPicture(): Promise<void> {
   const v = await ask('Export Picture', [
     { name: 'format', label: 'Format', value: 'png', options: [
       { value: 'png', label: 'PNG (a picture of dots: journals, Word, web)' },
+      { value: 'tiff', label: 'TIFF (a picture of dots, LZW-compressed: what many journals ask for)' },
       { value: 'svg', label: 'SVG (shapes that stay sharp: Illustrator, Inkscape, web)' },
+      { value: 'emf', label: 'EMF (shapes that stay sharp: Word, PowerPoint on Windows)' },
+      { value: 'eps', label: 'EPS (shapes that stay sharp: older journal systems, Illustrator)' },
     ] },
-    { name: 'dpi', label: 'Resolution (PNG)', value: '300', type: 'number', unit: 'dpi' },
+    { name: 'dpi', label: 'Resolution (PNG, TIFF)', value: '300', type: 'number', unit: 'dpi' },
     { name: 'bg', label: 'Background', value: deck ? 'page' : 'clear', options: [
       { value: deck ? 'page' : 'white', label: deck ? 'The page colour' : 'White' },
       { value: 'clear', label: 'See-through' },
@@ -2311,13 +2319,15 @@ async function exportPicture(): Promise<void> {
   const clear = v.bg === 'clear';
   const CLEAR = 'rgba(0,0,0,0)';
   let w: number, h: number;
+  let items: () => { items: Item[]; box: EmfBox };
   let svg: () => string;
   let png: (k: number) => HTMLCanvasElement;
   if (deck) {
     const i = deck.index;
     const page = clear ? { ...deck.page(i), own: solid(CLEAR) } : deck.page(i);
     ({ w, h } = deck.size);
-    svg = () => itemsToSvg(recordSlide(page, deck.docOf(i)).filter((it) => !(it.kind === 'path' && it.fill === CLEAR)), { x1: 0, y1: 0, x2: w, y2: h });
+    items = () => ({ items: recordSlide(page, deck.docOf(i)).filter((it) => !(it.kind === 'path' && it.fill === CLEAR)), box: { x1: 0, y1: 0, x2: w, y2: h } });
+    svg = () => { const p = items(); return itemsToSvg(p.items, p.box); };
     png = (k) => {
       const c = document.createElement('canvas');
       paintSlide(c, w, h, k, page, deck.docOf(i));
@@ -2329,6 +2339,7 @@ async function exportPicture(): Promise<void> {
     const b = pic.box;
     w = b.x2 - b.x1; h = b.y2 - b.y1;
     const back = clear ? [] : [{ kind: 'path' as const, segs: [{ k: 'M' as const, x: b.x1, y: b.y1 }, { k: 'L' as const, x: b.x2, y: b.y1 }, { k: 'L' as const, x: b.x2, y: b.y2 }, { k: 'L' as const, x: b.x1, y: b.y2 }, { k: 'Z' as const }], fill: '#ffffff' }];
+    items = () => ({ items: [...back, ...pic.items], box: b });
     svg = () => itemsToSvg([...back, ...pic.items], b);
     png = (k) => {
       const { canvas } = pictureCanvas(doc, pic, k * 72);
@@ -2342,19 +2353,26 @@ async function exportPicture(): Promise<void> {
       return c;
     };
   }
-  const type = v.format === 'svg' ? SVG : PICTURE;
+  const type = ({ svg: SVG, tiff: TIFF, emf: EMF, eps: EPS } as Record<string, FileType>)[v.format] ?? PICTURE;
   const target = await saveFileDialog(withExtension(tab.name, type.extension), type).catch(async (e) => { await showError(String(e)); return null; });
   if (!target) return;
   let note = '';
   try {
     if (type === SVG) await writeFile(target.ref, target.name, svg(), SVG);
+    else if (type === EMF) { const p = items(); await writeFile(target.ref, target.name, itemsToEmf(p.items, p.box), EMF); }
+    else if (type === EPS) { const p = items(); await writeFile(target.ref, target.name, await itemsToEps(p.items, p.box, pdfImage, tab.name.replace(/\.[^.]+$/, '')), EPS); }
     else {
       const k = bitmapScale(w, h, dpi, EXPORT_MAX_SIDE, EXPORT_MAX_PIXELS);
       const c = png(k);
       const got = Math.round((c.width / w) * 72);
       if (got < dpi - 1) note = ` at ${got} dpi (the most for a page this big)`;
-      const bytes = new Uint8Array(await (await canvasPng(c)).arrayBuffer());
-      await writeFile(target.ref, target.name, pngWithDpi(bytes, (c.width / w) * 72), PICTURE);
+      if (type === TIFF) {
+        const px = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+        await writeFile(target.ref, target.name, writeTiff(px, c.width, c.height, (c.width / w) * 72, clear), TIFF);
+      } else {
+        const bytes = new Uint8Array(await (await canvasPng(c)).arrayBuffer());
+        await writeFile(target.ref, target.name, pngWithDpi(bytes, (c.width / w) * 72), PICTURE);
+      }
       note = `, ${c.width} × ${c.height} pixels` + note;
     }
   } catch (e) {
@@ -2837,7 +2855,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
+  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'page-edge', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
   'help', 'about', 'user-guide', 'send-feedback', 'report-problem', 'check-updates']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
@@ -3019,6 +3037,8 @@ const COMMANDS: Record<string, () => unknown> = {
   'dev-tools': () => { showDevTools(!devTools); storeSettings(); },
   'show-stereo': () => previewStereo(!renderer.previewStereo),
   'scroll-bars': () => { showScrollBars(!scrollbars.shown); storeSettings(); },
+  'page-edge': () => { showPageEdge(!pageEdge); storeSettings(); },
+  'page-setup': () => void pageSetup(),
   'text-bar-docked': () => { placeTextBar('docked'); storeSettings(); },
   'text-bar-floating': () => { placeTextBar('floating'); storeSettings(); },
   'text-bar-hidden': () => { placeTextBar('hidden'); storeSettings(); },
@@ -3985,6 +4005,9 @@ function storeSettings(): void {
     showRoles: editor.showRoles,
     scrollBars: scrollbars.shown,
     textBar: CaptionEditor.barPlace,
+    page: defaultPage,
+    pageEdge,
+    welcomed,
     groupTips: labelTips.enabled,
     chemTyping: typingPrefs.chemistry,
     spellCheck: typingPrefs.spelling,
@@ -4124,6 +4147,11 @@ void loadSettings().then((s) => {
   $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(s.showRoles));
   showDevTools(s.devTools);
   showScrollBars(s.scrollBars);
+  defaultPage = s.page;
+  showPageEdge(s.pageEdge);
+  welcomed = s.welcomed;
+  // the drawing open at start (empty and never saved) takes the default page
+  if (!doc.page && !doc.source && !doc.atoms.size && !deckNow()) doc.page = defaultPage && { ...defaultPage };
   placeTextBar(s.textBar);
   showGroupTips(s.groupTips);
   modeColours = s.modeColours;
@@ -4179,6 +4207,8 @@ void loadSettings().then((s) => {
   tickMethylStyle();
   settingsLoaded = true;
   void keeper.start();
+  // (a moment after starting, once a file opened with the app has had time to load)
+  setTimeout(showWelcome, 800);
   // a few seconds after starting, so the check doesn't slow down opening the window
   if (canUpdate && updateCheck) setTimeout(() => void updates.quietCheck(), 4000);
   refreshKeys();
@@ -5573,6 +5603,95 @@ const scrollbars = new Scrollbars(host, renderer, () => {
   return d ? { x1: 0, y1: 0, x2: d.size.w, y2: d.size.h } : doc.bounds();
 }, () => editor.requestScene());
 
+// ---------------------------------------------------------------- the page in drawings
+
+/** The page new drawings start on (File > Page Setup's default). */
+let defaultPage: Settings['page'] = { name: 'letter', w: 540, h: 720, grow: true };
+/** View > Page Edge. */
+let pageEdge = true;
+
+/** The page's edge in a drawing: the first sheet as a line, and sheets the drawing has spread onto dashed. */
+const drawingPage = {
+  draw(ctx: CanvasRenderingContext2D): void {
+    const p = doc.page;
+    if (!p || !pageEdge) return;
+    const b = doc.bounds();
+    const wp = p.grow && b ? Math.max(1, Math.ceil((b.x2 + 1) / p.w)) : 1, hp = p.grow && b ? Math.max(1, Math.ceil((b.y2 + 1) / p.h)) : 1;
+    ctx.save();
+    const px = 1 / Math.max(1e-6, renderer.view.scale);
+    ctx.lineWidth = px;
+    ctx.strokeStyle = dark.on ? 'rgba(255, 255, 255, 0.28)' : 'rgba(90, 100, 120, 0.45)';
+    for (let i = 0; i < wp; i++) for (let j = 0; j < hp; j++) {
+      ctx.setLineDash(i || j ? [6 * px, 4 * px] : []);
+      ctx.strokeRect(i * p.w, j * p.h, p.w, p.h);
+    }
+    ctx.restore();
+  },
+};
+
+// ---------------------------------------------------------------- the welcome card
+
+/** The welcome card has been closed for good. */
+let welcomed = false;
+const welcomeCard = $('#welcome');
+/** Show the welcome card on a first, empty drawing; it goes when closed or when drawing starts. */
+function showWelcome(): void {
+  if (welcomed || doc.atoms.size || doc.captions.size || doc.shapes.size || deckNow() || ws.active.mode !== 'drawing') return;
+  welcomeCard.hidden = false;
+  const seen = doc.version;
+  const off = () => {
+    if (welcomeCard.hidden) return;
+    welcomeCard.hidden = true;
+    welcomed = true;
+    storeSettings();
+  };
+  $('#welcome-close').addEventListener('click', () => { off(); $('#overlay').focus({ preventScroll: true }); }, { once: true });
+  welcomeCard.querySelector('[data-cmd="user-guide"]')?.addEventListener('click', (e) => { e.preventDefault(); off(); command('user-guide'); }, { once: true });
+  // drawing anything puts it away
+  const watch = () => { if (welcomeCard.hidden) return; if (doc.version !== seen) off(); else requestAnimationFrame(watch); };
+  requestAnimationFrame(watch);
+}
+
+// (the drawing open at start shows its page too)
+if (!renderer.page && !deckNow()) { renderer.page = drawingPage; renderer.repaintAll(); }
+
+function showPageEdge(on: boolean): void {
+  pageEdge = on;
+  $('[data-cmd="page-edge"]')?.setAttribute('aria-checked', String(on));
+  renderer.repaintAll();
+  editor.requestScene();
+}
+
+/** File > Page Setup…: the drawing's paper size and way up, whether it adds pages, and the default for new drawings. */
+async function pageSetup(): Promise<void> {
+  const p = doc.page;
+  const land = !!p && p.w > p.h;
+  const paper = p ? PAPER.find((x) => (Math.abs(x.w - p.w) < 1 && Math.abs(x.h - p.h) < 1) || (Math.abs(x.w - p.h) < 1 && Math.abs(x.h - p.w) < 1)) : undefined;
+  const got = await ask('Page Setup', [
+    { name: 'paper', label: 'Paper', value: !p ? 'none' : paper?.name ?? 'custom', options: [...PAPER.map((x) => ({ value: x.name, label: x.label })), { value: 'custom', label: 'Your own size' }, { value: 'none', label: 'No page (an endless drawing)' }] },
+    { name: 'way', label: 'Way up', value: land ? 'landscape' : 'portrait', options: [{ value: 'portrait', label: 'Portrait' }, { value: 'landscape', label: 'Landscape' }] },
+    { name: 'w', label: 'Your own size: width (in)', value: String(Math.round(((p?.w ?? 540) + 72) / 72 * 100) / 100), type: 'number' },
+    { name: 'h', label: 'Your own size: height (in)', value: String(Math.round(((p?.h ?? 720) + 72) / 72 * 100) / 100), type: 'number' },
+    { name: 'grow', label: 'When the drawing goes past the page', value: !p || p.grow ? 'grow' : 'keep', options: [{ value: 'grow', label: 'Add pages (as ChemDraw does)' }, { value: 'keep', label: 'Keep it on the page when saving' }] },
+    { name: 'dflt', label: 'Use this for new drawings', type: 'checkbox', value: 'false' },
+  ], { ok: 'OK', note: 'Sizes are the paper; the page drawn on is half an inch in from each edge, as in ChemDraw. View ▸ Page Edge shows or hides the edge.' });
+  if (!got) return;
+  let next: Settings['page'] = null;
+  if (got.paper !== 'none') {
+    const pp = PAPER.find((x) => x.name === got.paper);
+    let w = pp ? pp.w : Math.max(1, Number(got.w) || 8.5) * 72 - 72, h = pp ? pp.h : Math.max(1, Number(got.h) || 11) * 72 - 72;
+    if ((got.way === 'landscape') !== (w > h)) [w, h] = [h, w];
+    next = { w: Math.max(72, w), h: Math.max(72, h), grow: got.grow !== 'keep', ...(pp ? { name: pp.name } : {}) };
+  }
+  doc.page = next;
+  ws.noteChange();
+  if (got.dflt === 'true') { defaultPage = next && { ...next }; storeSettings(); }
+  if (next && !next.grow && !keepOnPage(doc)) flash('The drawing is bigger than the page, so it can\'t all be kept on it. Choose a bigger page, or add pages.', 7000);
+  editor.changed();
+  renderer.repaintAll();
+  editor.requestScene();
+}
+
 /** View > Text Formatting Bar: along the top of the drawing, floating by the text, or hidden. */
 function placeTextBar(where: Settings['textBar']): void {
   CaptionEditor.barPlace = where;
@@ -5585,7 +5704,31 @@ function showScrollBars(on: boolean): void {
   scrollbars.update(doc.version);
 }
 
+/** The status bar's zoom box: what the zoom is now, as a percentage of actual size. */
+const zoomPick = $<HTMLSelectElement>('#zoom-pick');
+let zoomShown = -1;
+function showZoom(): void {
+  const pct = Math.round((renderer.view.scale / (96 / 72)) * 100);
+  if (pct === zoomShown) return;
+  zoomShown = pct;
+  const own = zoomPick.querySelector<HTMLOptionElement>('option[value="now"]')!;
+  const listed = [...zoomPick.options].find((o) => o.value === String(pct));
+  own.hidden = !!listed;
+  own.textContent = `${pct}%`;
+  zoomPick.value = listed ? listed.value : 'now';
+}
+zoomPick.addEventListener('change', () => {
+  const v = zoomPick.value;
+  if (v === 'fit') command('zoom-fit');
+  else if (v === 'actual') command('zoom-actual');
+  else if (/^\d+$/.test(v)) editor.zoomTo((Number(v) / 100) * (96 / 72));
+  zoomShown = -1;
+  showZoom();
+  $('#overlay').focus({ preventScroll: true });
+});
+
 editor.onFrame = () => {
+  showZoom();
   layers?.refresh();
   scrollbars.update(doc.version);
   updatePanels();

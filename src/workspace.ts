@@ -4,7 +4,7 @@
 // tool works the same everywhere; the other tabs wait in documents of their own (Doc.swap).
 // New, Open, Save, Save As, Close and the unsaved-changes questions go through here.
 
-import { Doc } from './model';
+import { Doc, keepOnPage, type PageSetup } from './model';
 import { Deck, type SlideSize, type Master } from './deck/deck';
 import { Workbook } from './sheet/workbook';
 import { DocFile } from './document/doc-file';
@@ -90,6 +90,8 @@ export interface WorkspaceHooks {
   };
   /** The drawing style a new tab of this kind starts with, when you have chosen one (File > Drawing Style). */
   newStyle?(mode: Mode): DocStyle | null;
+  /** The page a new drawing starts with (File > Page Setup's default). */
+  newPage?(): PageSetup | null;
   /** A file or workspace was opened from or saved to this path (File > Recent). */
   remember?(path: string): void;
   /** The master new slide decks start with (your template), or null for the plain one. */
@@ -314,6 +316,7 @@ export class Workspace {
     const t = this.makeTab('drawing', this.untitled('drawing'));
     const st = this.hooks.newStyle?.('drawing');
     if (st) t.stash.style = { ...st };
+    t.stash.page = this.hooks.newPage?.() ?? null;
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
     t.seen = this.host.version;
@@ -336,6 +339,7 @@ export class Workspace {
     const t = this.makeTab('drawing', this.untitled('drawing'));
     const st = this.hooks.newStyle?.('drawing');
     if (st) t.stash.style = { ...st };
+    t.stash.page = this.hooks.newPage?.() ?? null;
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.hooks.changed();
     return t;
@@ -656,6 +660,7 @@ export class Workspace {
       tab.document!.printLayout();
       return { data: await this.hooks.documents.write(tab.document!.t, name), type: DOCX, note: '' };
     }
+    keepOnPage(this.docOf(tab));
     const text = writeCdxml(this.docOf(tab), { name, textMeasure: this.hooks.measure });
     return ext === 'cdx' ? { data: cdxmlToCdx(text), type: CDX, note: '' } : { data: text, type: CDXML, note: '' };
   }

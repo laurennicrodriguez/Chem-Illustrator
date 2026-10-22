@@ -7,7 +7,7 @@ import { ATTACH_TAG, IGNORE_TAG, attachFromTag, fillAttachments } from '../edito
 import { highlightStyleFromTag } from '../render/highlight';
 import { attachRingFills } from '../chem/ring-fill';
 import { lipDirection } from '../chem/polymer';
-import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, MorphStep, CHIRAL_FLAGS, PARTIAL, type Pin } from '../model';
+import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, MorphStep, CHIRAL_FLAGS, PARTIAL, PAPER, type Pin } from '../model';
 import { TEXT_TAG, parseTextTag, runsFromChemDraw } from '../text/chemdraw-text';
 import { DocStyle } from '../style';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
@@ -109,6 +109,17 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   };
   const bg = root.getAttribute('bgcolor');
   if (bg !== null && colors[Number(bg)]) doc.background = colors[Number(bg)];
+  // the page: one sheet's drawing area (the page's box over how many sheets it spans)
+  const pg = all.find((e) => e.nodeName === 'page');
+  const pb = pg?.getAttribute('BoundingBox')?.trim().split(/\s+/).map(Number);
+  if (pb && pb.length === 4 && pb.every(isFinite)) {
+    const wp = Math.max(1, Number(pg!.getAttribute('WidthPages')) || 1), hp = Math.max(1, Number(pg!.getAttribute('HeightPages')) || 1);
+    const w = (pb[2] - pb[0]) / wp, h = (pb[3] - pb[1]) / hp;
+    if (w > 10 && h > 10) {
+      const paper = PAPER.find((p) => (Math.abs(p.w - w) < 2 && Math.abs(p.h - h) < 2) || (Math.abs(p.w - h) < 2 && Math.abs(p.h - w) < 2));
+      doc.page = { w, h, grow: true, ...(paper ? { name: paper.name } : {}) };
+    }
+  }
 
   const fonts = new Map<string, string>();
   const ft = all.find((e) => e.nodeName === 'fonttable');

@@ -171,10 +171,12 @@ class CdxmlWriter {
       this.root.setAttribute('Name', this.opts.name);
       this.changed = true;
     }
-    if (src && !this.changed) return src.text;
     const b = doc.bounds();
+    // a page set here (File > Page Setup), or grown to hold the drawing, is written to the file's page
+    if (src && doc.page && this.pageNeeds(b)) this.changed = true;
+    if (src && !this.changed) return src.text;
     if (b) this.root.setAttribute('BoundingBox', box(b));
-    if (!src) this.sizePage(b);
+    if (!src || doc.page) this.sizePage(b);
     // characters XML 1.0 can't hold (from text pasted out of Word or a PDF) would make the file
     // unreadable: Word's line break (U+000B) becomes a line break, and the rest are dropped
     const out = new XMLSerializer().serializeToString(this.root).replace(/\u000B/g, '\n').replace(/[\u0000-\u0008\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '');
@@ -228,12 +230,28 @@ class CdxmlWriter {
     this.changed = true;
   }
 
-  /** Grow a new document's page to hold the drawing (ChemDraw's US Letter page is 540 × 720 pt). */
-  private sizePage(b: Rect | null): void {
-    const W = 540, H = 720;
+  /** The page's attributes for the drawing's page (ChemDraw's US Letter page is 540 × 720 pt), grown to hold the drawing. */
+  private pageAttrs(b: Rect | null): Record<string, string> {
+    const W = this.doc.page?.w ?? 540, H = this.doc.page?.h ?? 720;
     const wp = Math.max(1, Math.ceil(((b?.x2 ?? 0) + 36) / W)), hp = Math.max(1, Math.ceil(((b?.y2 ?? 0) + 36) / H));
-    this.page.setAttribute('id', this.id());
-    for (const [k, v] of Object.entries({ BoundingBox: `0 0 ${f2(W * wp)} ${f2(H * hp)}`, HeaderPosition: '36', FooterPosition: '36', PrintTrimMarks: 'yes', HeightPages: String(hp), WidthPages: String(wp) })) this.page.setAttribute(k, v);
+    return { BoundingBox: `0 0 ${f2(W * wp)} ${f2(H * hp)}`, HeaderPosition: '36', FooterPosition: '36', PrintTrimMarks: 'yes', HeightPages: String(hp), WidthPages: String(wp) };
+  }
+
+  /** Whether the file's page differs from the drawing's: another paper size, or the drawing has gone past it. */
+  private pageNeeds(b: Rect | null): boolean {
+    const p = this.doc.page;
+    if (!p) return false;
+    const bb = (this.page.getAttribute('BoundingBox') ?? '').trim().split(/\s+/).map(Number);
+    if (bb.length !== 4 || !bb.every(isFinite)) return true;
+    const wp = Math.max(1, Number(this.page.getAttribute('WidthPages')) || 1), hp = Math.max(1, Number(this.page.getAttribute('HeightPages')) || 1);
+    if (Math.abs((bb[2] - bb[0]) / wp - p.w) > 0.5 || Math.abs((bb[3] - bb[1]) / hp - p.h) > 0.5) return true;
+    return !!b && (b.x2 > bb[2] || b.y2 > bb[3]);
+  }
+
+  /** Size the page to the drawing's page, grown to hold the drawing. */
+  private sizePage(b: Rect | null): void {
+    if (!this.page.getAttribute('id')) this.page.setAttribute('id', this.id());
+    for (const [k, v] of Object.entries(this.pageAttrs(b))) this.page.setAttribute(k, v);
   }
 
   // ------------------------------------------------------------------ small helpers
