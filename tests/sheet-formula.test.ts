@@ -227,3 +227,14 @@ describe('typed values', () => {
     expect(vals.sort(compareValues)).toEqual([1, 3, 'A', 'b', true]);
   });
 });
+
+describe('text in a single named cell', () => {
+  it('is left out of sums and averages, as in a range', () => {
+    const cells = { A1: 1, A2: 2, A4: 'apple' };
+    expect(calc('=SUM(A4)', cells)).toBe(0);
+    expect(calc('=SUM(A1,A4,A2)', cells)).toBe(3);
+    expect(calc('=AVERAGE(A4,A1)', cells)).toBe(1);
+    expect(calc('=MAX(A4,A1)', cells)).toBe(1);
+    expect(calc('=SUM(A1,"3")', cells)).toBe(4); // typed text is still read as a number
+  });
+});

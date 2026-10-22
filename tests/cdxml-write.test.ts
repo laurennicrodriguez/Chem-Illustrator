@@ -460,3 +460,13 @@ describe('the drawing style’s fonts', () => {
     expect([...back.captions.values()][0].runs[0].font).toBeUndefined();
   });
 });
+
+describe('a bond order changed in an opened file', () => {
+  it('writes the hydrogens of the atoms at its ends afresh, not the old label', () => {
+    const doc = open();
+    doc.edit('double', () => doc.updateBond(15, { order: 2 }));
+    const out = writeCdxml(doc);
+    expect(attr(out, 'n', '13', 'NumHydrogens')).not.toBe('1');
+    expect(readCdxml(out).doc.atoms.get(13)?.label ?? null).not.toBe('OH');
+  });
+});
