@@ -10,9 +10,9 @@ import type { DocStyle } from '../style';
 import { drawLayout } from '../text/draw';
 import { BOX_PAD, SHADOWS, lookOf, styleOf, type DocText, type HeaderFooter, type NumberPlace } from './document';
 import type { DocLayout, PageBox, TableBox } from './doc-layout';
-import { ACS_LINE, CELL_PAD, GRID_LINE } from './doc-layout';
-import type { TableData } from '../model';
+import type { BorderLine, TableData } from '../model';
 import { coveringCell, spanOf } from '../table';
+import { DEFAULT_MARGINS, hasLines, resolveTable, strokeOf, type TableStyleDef } from './table-styles';
 import { docMeasure } from './doc-file';
 import { drawMath } from './math';
 import { fxSrc, hasFx, traceShape } from '../render/picture-fx';
@@ -121,7 +121,7 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
       }
       if (obj?.kind === 'table') {
         const tb = lay.tables.get(o.id);
-        if (tb) drawDocTable(c, obj.table, tb, p.index, null);
+        if (tb) drawDocTable(c, obj.table, tb, p.index, null, t.tableStyles);
       } else if (obj?.kind === 'textbox') {
         if (obj.fill) { c.fillStyle = obj.fill; c.fillRect(o.x, o.y, o.w, o.h); }
         const bl = lay.boxes.get(o.id);
@@ -168,18 +168,20 @@ export function placeItems(pic: Picture, at: { x: number; y: number; w: number; 
 
 /**
  * Draw the rows of a table that are on one page: cell shading, cell text, then the lines.
- * `faint` (the screen only) is the colour for the gridlines of a table drawn with no lines, so
- * its cells can be seen while typing; leave it null to draw none (print).
+ * `faint` (the screen only) is the colour for gridlines where no line is drawn, so the cells
+ * can be seen while typing (always, or only in a table with no lines at all); leave it null to
+ * draw none (print). `kept` is the document's own table styles.
  */
-export function drawDocTable(ctx: CanvasRenderingContext2D, t: TableData, tb: TableBox, page: number, faint: { color: string; px: number } | null): void {
+export function drawDocTable(ctx: CanvasRenderingContext2D, t: TableData, tb: TableBox, page: number, faint: { color: string; px: number; always?: boolean } | null, kept?: Record<string, TableStyleDef>): void {
   const n = t.cols.length;
   const rows = tb.rows.map((at, r) => ({ ...at, r })).filter((at) => at.page === page);
   if (!rows.length) return;
+  const res = resolveTable(t, kept);
   // shading under everything (a merged cell's in each row it covers)
   for (const { r, x, y } of rows) {
     for (let c = 0; c < n; c++) {
       const o = coveringCell(t, r, c);
-      const fill = t.rows[o.r]?.[o.c]?.fill;
+      const fill = res.fill[o.r]?.[o.c];
       if (!fill || o.c !== c) continue;
       ctx.fillStyle = fill;
       ctx.fillRect(x + tb.xs[c], y, tb.xs[c + spanOf(t, o.r, o.c)] - tb.xs[c], tb.hs[r]);
@@ -187,57 +189,82 @@ export function drawDocTable(ctx: CanvasRenderingContext2D, t: TableData, tb: Ta
   }
   for (const { r, x, y } of rows) {
     tb.cells[r]?.forEach((cl, c) => {
-      if (cl) drawLayout(ctx, cl, x + tb.xs[c] + CELL_PAD.x, y + CELL_PAD.y + tb.drop[r][c] - cl.box.y1);
+      const m = tb.pads[r]?.[c] ?? DEFAULT_MARGINS;
+      if (cl) drawLayout(ctx, cl, x + tb.xs[c] + m.left, y + m.top + tb.drop[r][c] - cl.box.y1);
     });
   }
-  const lines: [number, number, number, number, number][] = [];
-  const W = tb.xs[n];
-  const head = Math.max(0, Math.min(t.head, t.rows.length));
-  const last = t.rows.length - 1;
-  const grid = t.lines === 'grid' || (t.lines === 'none' && faint);
-  const same = (a: { r: number; c: number }, b: { r: number; c: number }) => a.r === b.r && a.c === b.c;
-  // a line across the table at a row's top or bottom, broken where a merged cell carries on over it
-  const across = (r: number, x: number, y: number, lw: number, bottom: boolean) => {
-    let from: number | null = null;
-    for (let c = 0; c <= n; c++) {
-      const open = c < n && !(bottom ? r + 1 <= last && same(coveringCell(t, r, c), coveringCell(t, r + 1, c)) : r > 0 && same(coveringCell(t, r, c), coveringCell(t, r - 1, c)));
-      if (open && from === null) from = c;
-      if (!open && from !== null) { lines.push([x + tb.xs[from], y, x + tb.xs[c], y, lw]); from = null; }
+  const lines: { x1: number; y1: number; x2: number; y2: number; e: BorderLine | null }[] = [];
+  const showFaint = !!faint && (faint.always || !hasLines(res));
+  const add = (x1: number, y1: number, x2: number, y2: number, e: BorderLine | null) => {
+    if (!e && !showFaint) return;
+    // joined to the line before when it carries straight on in the same look
+    const last = lines[lines.length - 1];
+    if (last && last.x2 === x1 && last.y2 === y1 && (last.y1 === last.y2) === (y1 === y2) && sameLine(last.e, e)) {
+      last.x2 = x2; last.y2 = y2;
+      return;
     }
+    lines.push({ x1, y1, x2, y2, e });
   };
-  for (const { r, x, y } of rows) {
+  const same = (a: { r: number; c: number }, b: { r: number; c: number }) => a.r === b.r && a.c === b.c;
+  // inside a merged cell: no line, not even a faint one
+  const insideH = (r: number, c: number) => r > 0 && r < t.rows.length && same(coveringCell(t, r - 1, c), coveringCell(t, r, c));
+  rows.forEach(({ r, x, y }, i) => {
     const h = tb.hs[r];
-    if (grid) {
-      const lw = t.lines === 'grid' ? GRID_LINE : 0;
-      across(r, x, y, lw, false);
-      across(r, x, y + h, lw, true);
-      for (let c = 0; c <= n; c++) {
-        if (c > 0 && c < n && same(coveringCell(t, r, c), coveringCell(t, r, c - 1))) continue;
-        lines.push([x + tb.xs[c], y, x + tb.xs[c], y + h, lw]);
-      }
-    } else if (t.lines === 'acs') {
-      // the top of the table (and of each page it carries on to), under the headings, and under the last row
-      if (r === 0 || r === rows[0].r) lines.push([x, y, x + W, y, ACS_LINE]);
-      if (head > 0 && r === head - 1 && r < last) lines.push([x, y + h, x + W, y + h, GRID_LINE]);
-      if (r === last) lines.push([x, y + h, x + W, y + h, ACS_LINE]);
+    // the top of each row; on a page the table carries on to, the table's own top line where the row has none
+    for (let c = 0; c < n; c++) {
+      let e = res.h[r][c];
+      if (i === 0 && r > 0 && !e) e = res.h[0][c];
+      if (!e && insideH(r, c)) continue;
+      add(x + tb.xs[c], y, x + tb.xs[c + 1], y, e);
     }
-  }
+    // the bottom: the next row draws its top, unless it is on another page (or this is the last)
+    const next = rows[i + 1];
+    if (!next || next.r !== r + 1) {
+      const last = r === t.rows.length - 1;
+      for (let c = 0; c < n; c++) {
+        let e = res.h[r + 1][c];
+        if (!last && !e) e = res.h[t.rows.length][c];
+        if (!e && insideH(r + 1, c)) continue;
+        add(x + tb.xs[c], y + h, x + tb.xs[c + 1], y + h, e);
+      }
+    }
+    for (let c = 0; c <= n; c++) {
+      const e = res.v[r][c];
+      if (c > 0 && c < n && same(coveringCell(t, r, c - 1), coveringCell(t, r, c))) continue;
+      add(x + tb.xs[c], y, x + tb.xs[c], y + h, e);
+    }
+  });
   ctx.save();
   ctx.lineCap = 'butt';
-  for (const [x1, y1, x2, y2, lw] of lines) {
-    if (lw === 0 && faint) {
+  for (const { x1, y1, x2, y2, e } of lines) {
+    if (!e) {
+      if (!faint) continue;
       ctx.strokeStyle = faint.color;
       ctx.lineWidth = faint.px;
       ctx.setLineDash([2 * faint.px, 2 * faint.px]);
-    } else {
-      ctx.strokeStyle = '#000';
-      ctx.lineWidth = lw;
-      ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      continue;
     }
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
+    const s = strokeOf(e);
+    ctx.strokeStyle = e.color || '#000';
+    ctx.setLineDash(s.dash);
+    if (s.double) {
+      // two lines, as far apart as each is wide, centred on the edge
+      ctx.lineWidth = s.w;
+      const d = s.w;
+      const across = y1 === y2;
+      for (const k of [-d, d]) {
+        ctx.beginPath();
+        ctx.moveTo(x1 + (across ? 0 : k), y1 + (across ? k : 0));
+        ctx.lineTo(x2 + (across ? 0 : k), y2 + (across ? k : 0));
+        ctx.stroke();
+      }
+    } else {
+      ctx.lineWidth = s.w;
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
   }
   ctx.restore();
 }
+
+const sameLine = (a: BorderLine | null, b: BorderLine | null) => (!a && !b) || (!!a && !!b && a.style === b.style && a.w === b.w && a.color === b.color);

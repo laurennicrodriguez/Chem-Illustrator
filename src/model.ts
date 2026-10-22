@@ -835,6 +835,36 @@ export interface TableCell {
   valign?: 'center' | 'bottom';
   /** Drawings: room kept at the top of the cell for a structure dropped into it (its width and height, in points). */
   fig?: { w: number; h: number };
+  /** Documents: the cell's own borders (Word's cell borders), over the table style's. */
+  borders?: CellBorders;
+  /** Documents: the cell's own margins, in place of the table's (left out sides keep the table's). */
+  pad?: Partial<CellMargins>;
+}
+
+/** A border line in a document's table: Word's line kinds, its width in points and its colour. 'none' takes a line away. */
+export interface BorderLine {
+  style: 'none' | 'single' | 'double' | 'dotted' | 'dashed';
+  w: number;
+  color: string;
+}
+
+export type BorderSide = 'top' | 'bottom' | 'left' | 'right';
+export type CellBorders = Partial<Record<BorderSide, BorderLine>>;
+
+/** Room inside a cell round its text, in points (Word's cell margins). */
+export interface CellMargins { top: number; bottom: number; left: number; right: number }
+
+/** Which parts of a table its style picks out (Word's Table Style Options). */
+export interface TableLook {
+  /** The heading rows (on unless turned off). */
+  header?: boolean;
+  /** The last row, as a total row. */
+  total?: boolean;
+  /** Every other row shaded (on unless turned off). */
+  bandRows?: boolean;
+  firstCol?: boolean;
+  lastCol?: boolean;
+  bandCols?: boolean;
 }
 
 /**
@@ -857,6 +887,12 @@ export interface TableData {
   /** The title above the table ("Table 1. Optimization of…") and the footnotes below it. */
   title?: TextRun[];
   notes?: TextRun[];
+  /** Documents: the table style (Word's, by its style id), in place of `lines`; see document/table-styles. */
+  style?: string;
+  /** Documents: which parts the style picks out. */
+  look?: TableLook;
+  /** Documents: the margins of every cell (Word's default cell margins), when not the standard ones. */
+  pad?: CellMargins;
 }
 
 /** A drawing's page: the drawing area of one sheet of paper (inside its margins), in points. */

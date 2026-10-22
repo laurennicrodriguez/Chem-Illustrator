@@ -12,9 +12,11 @@
 // Footnotes and endnotes come in as notes
 // typed into here, and a table of figures (a TOC field for captions) as one worked out here.
 
-import type { Contents, Justify, ParaStyle, PictureFx, TableCell, TableData, TextRun } from '../model';
+import type { CellBorders, Contents, Justify, ParaStyle, PictureFx, TableCell, TableData, TextRun } from '../model';
 import { tidyFx } from '../render/picture-fx';
 import { readPictureFx } from './picture-xml';
+import { DEFAULT_MARGINS, builtInStyle, type TableStyleDef } from '../document/table-styles';
+import { keepDirectBorders, readBorders, readLook as readTableLook, readMargins, readTableStyle, sameStyle, styleIsRich } from './docx-table-styles';
 import { ACS_1996, type DocStyle } from '../style';
 import * as rt from '../richtext';
 import { PackageReader, REL, kid, kids, rAttr, fromEmu } from './ooxml';
@@ -30,7 +32,7 @@ import {
   type BreakKind, type DocObject, type DocText, type FigureLook, type Float, type HeaderFooter, type LineNumbers, type NamedStyle, type NoteFormat, type NoteFormats, type NumberPlace, type PageNumFormat, type PageSetup, type SectionBreak,
 } from '../document/document';
 import { shownSize } from '../document/doc-layout';
-import { layoutTable } from '../table';
+import { coveringCell, layoutTable } from '../table';
 import { cfbStreams, isCfb } from './cfb';
 import { isCdx } from './cdx';
 import { cmtIds, cmtString, type CommentNote, type CommentThread } from '../document/comments';
@@ -1495,6 +1497,30 @@ class DocxReader {
 
   /** Inside a table cell being read (a table in it becomes a drawn table). */
   private inCell = false;
+  /** Word table styles the tables use that aren't built in here (or that Word changed), by id. */
+  private tableStyles: Record<string, TableStyleDef> = {};
+
+  /**
+   * A Word table style the text's tables can be drawn in: one of ours by its id (unless the
+   * file's differs), the file's own kept with the document, or null for a style that only
+   * draws lines round cells (the table's lines then stand for it, as before).
+   */
+  private tableStyleOf(id: string): string | null {
+    const chain: Element[] = [];
+    const seen = new Set<string>();
+    let name = id;
+    for (let st = this.wstyles.get(`table:${id}`); st && !seen.has(st.id); st = st.basedOn ? this.wstyles.get(`table:${st.basedOn}`) : undefined) {
+      seen.add(st.id);
+      if (st.id === id) name = st.name || id;
+      chain.unshift(st.el);
+    }
+    const ours = builtInStyle(id);
+    if (!chain.length) return ours && styleIsRich(ours) ? id : null;
+    const def = readTableStyle(id, name, chain, this.a.bind(this), this.on.bind(this));
+    if (!styleIsRich(def)) return null;
+    if (!(ours && sameStyle(ours, def))) this.tableStyles[id] = def;
+    return id;
+  }
 
   /** A Word table as a table in the text: its cells read as text is (structures and pictures kept). */
   private textTable(tbl: Element): void {
@@ -1525,6 +1551,8 @@ class DocxReader {
           if (fill && /^[0-9a-f]{6}$/i.test(fill) && fill.toLowerCase() !== 'ffffff') cell.fill = `#${fill.toLowerCase()}`;
           const va = this.a(kid(tcPr, 'vAlign'));
           if (va === 'center' || va === 'bottom') cell.valign = va;
+          const mar = readMargins(kid(tcPr, 'tcMar'), this.a.bind(this));
+          if (vm !== 'continue' && Object.keys(mar).length) cell.pad = mar;
           row.push({ cell, span, borders: kid(tcPr, 'tcBorders'), vm });
         }
         grid.push(row);
@@ -1539,11 +1567,20 @@ class DocxReader {
     const table: TableData = { cols, rows: [], head: 0, lines: 'none' };
     // the cell each grid column's merge down started at (while it carries on)
     const open = new Map<number, TableCell>();
+    // each cell's own lines, where it sits in the table (a merged cell's from each of its rows)
+    const own: (CellBorders | undefined)[][] = [];
     for (const row of grid) {
       const out: TableCell[] = [];
+      const lines: (CellBorders | undefined)[] = [];
+      own.push(lines);
       for (const c of row) {
         if (out.length >= cols.length) break;
         const at = out.length;
+        if (c.borders) {
+          const bs = readBorders(c.borders, this.a.bind(this));
+          const cb: CellBorders = { ...(bs.top ? { top: bs.top } : {}), ...(bs.bottom ? { bottom: bs.bottom } : {}), ...(bs.left ? { left: bs.left } : {}), ...(bs.right ? { right: bs.right } : {}) };
+          if (Object.keys(cb).length) lines[at] = cb;
+        }
         const top = c.vm === 'continue' ? open.get(at) : undefined;
         if (top) top.rowSpan = (top.rowSpan ?? 1) + 1;
         else for (let k = 0; k < c.span; k++) open.delete(at + k);
@@ -1566,6 +1603,8 @@ class DocxReader {
       if (cb.get('top') || cb.get('bottom')) cellH = true;
       if (cb.get('bottom') && ri < grid.length - 1 && underRow < 0) underRow = ri;
     }));
+    // the table's own lines say which (the cells' lines only when it has none; they are kept as the cells' own below)
+    if (b.size) cellV = cellH = false;
     table.lines = b.get('insideV') || cellV ? 'grid' : b.get('top') || b.get('bottom') || b.get('insideH') || cellH ? 'acs' : 'none';
     table.head = head || (table.lines === 'acs' && underRow >= 0 && underRow < 3 ? underRow + 1 : 0);
     // each column lines up the way most of its cells do
@@ -1575,6 +1614,33 @@ class DocxReader {
       return [...count.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] ?? 'left';
     });
     table.rows.forEach((row) => row.forEach((c, ci) => { if (c.align === table.align![ci] || (!c.runs.length && c.align)) delete c.align; }));
+    // a Word table style that shades or picks out parts: drawn in it here too
+    const styleId = style ? this.tableStyleOf(style) : null;
+    if (styleId) {
+      table.style = styleId;
+      const look = readTableLook(kid(tblPr, 'tblLook'), this.a.bind(this));
+      if (look) table.look = look;
+      if ((look?.header ?? true) && !table.head) table.head = 1;
+    }
+    // the cell margins, when not the standard ones
+    const mar = readMargins(kid(tblPr, 'tblCellMar'), this.a.bind(this));
+    if (Object.keys(mar).length) {
+      const pad = { ...DEFAULT_MARGINS, ...mar };
+      if (Object.entries(pad).some(([k, v]) => Math.abs(v - DEFAULT_MARGINS[k as keyof typeof DEFAULT_MARGINS]) > 0.01)) table.pad = pad;
+    }
+    // a cell merged down: its bottom line is the last row's
+    for (let r = 0; r < table.rows.length; r++) {
+      for (let c = 0; c < cols.length; c++) {
+        const o = coveringCell(table, r, c);
+        if (o.r === r || o.c !== c) continue;
+        const b = own[r]?.[c]?.bottom;
+        if (b) own[o.r][c] = { ...own[o.r][c], bottom: b };
+        if (own[r]) own[r][c] = undefined;
+      }
+    }
+    // lines Word draws that the style (or the lines chosen) here doesn't: kept as the cells' own
+    const direct = styleId ? {} : readBorders(kid(tblPr, 'tblBorders'), this.a.bind(this));
+    Object.assign(table, keepDirectBorders(table, direct, own, this.tableStyles));
     const jc = JUSTIFY[this.a(kid(tblPr, 'jc')) ?? 'left'] ?? 'left';
     const normal = merge<RProps>(this.docDefaults.r, this.chain('paragraph', this.defaultPara).r);
     const ctx: Ctx = { base: normal, pieces: [{ runs: [], pageBreak: false, soft: false }], cell: false };
@@ -1864,6 +1930,7 @@ class DocxReader {
       ...(this.numFormatOf(sect) !== 'decimal' ? { numFormat: this.numFormatOf(sect) } : {}),
       ...(this.lineNumbersOf(sect) ? { lineNumbers: this.lineNumbersOf(sect) } : {}),
       ...(Object.keys(this.noteFormats).length ? { notes: this.noteFormats } : {}),
+      ...(Object.keys(this.tableStyles).length ? { tableStyles: this.tableStyles } : {}),
       ...(this.liveRefs.length || Array.isArray(m?.references) ? { references: this.liveRefs } : {}),
       ...(typeof m?.citeStyle === 'string' && m.citeStyle in CITE_PRESETS ? { citeStyle: m.citeStyle } : zoteroStyle ? { citeStyle: zoteroStyle } : {}),
       ...(manager ? { citeManager: manager } : {}),

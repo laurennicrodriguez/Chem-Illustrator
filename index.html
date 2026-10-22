@@ -1111,6 +1111,7 @@
       <div class="rb-group">
         <div class="rb-row">
           <button class="rb-big" data-doc="insert-table" title="An ACS-style table"><span class="rb-icon">▦</span>Table</button>
+          <button class="rb-big" data-doc="text-to-table" title="Convert Text to Table: the paragraphs selected become a table, each one a row, cut into cells at tabs, commas or another character"><span class="rb-icon">⇶</span>Text to Table</button>
           <button class="rb-big" data-doc="insert-picture" title="A picture from a file (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
           <button class="rb-big" data-doc="picture-format" title="Picture Format for the picture picked: brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions. Saved as Word's own picture settings"><span class="rb-icon">◐</span>Picture Format</button>
           <button class="rb-big" data-doc="insert-chart" title="A chart with its own data, as in Word: type or paste the numbers, pick the kind of chart. Double-click it to change it"><span class="rb-icon">▥</span>Chart</button>
@@ -1376,6 +1377,12 @@
         </div>
         <div class="rb-label">Window</div>
       </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="nav-pane" aria-pressed="false" title="Navigation Pane: the headings beside the pages, to go to and to drag into another order, and a search that lists every place found"><span class="rb-icon">☷</span>Navigation Pane</button>
+        </div>
+        <div class="rb-label">Show</div>
+      </div>
     </div>
     <div class="rb-panel" data-doc-panel="outlining" hidden>
       <div class="rb-group">
@@ -1419,6 +1426,37 @@
     <div class="rb-panel" data-doc-panel="table" hidden>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-doc="table-styles" aria-haspopup="true" title="Table Styles: lines, shading and bold headings as one look, as Word's (Plain, Grid and List tables in the Office colours). Kept as Word's own styles in .docx"><span class="rb-icon">▦</span>Styles ▾</button>
+          <div class="rb-col">
+            <label class="rb-check" title="The heading rows look different (and repeat on each page)"><input type="checkbox" data-tbl-look="header" /> Header Row</label>
+            <label class="rb-check" title="The last row looks different, as a total"><input type="checkbox" data-tbl-look="total" /> Total Row</label>
+            <label class="rb-check" title="Every other row shaded"><input type="checkbox" data-tbl-look="bandRows" /> Banded Rows</label>
+          </div>
+          <div class="rb-col">
+            <label class="rb-check" title="The first column looks different"><input type="checkbox" data-tbl-look="firstCol" /> First Column</label>
+            <label class="rb-check" title="The last column looks different"><input type="checkbox" data-tbl-look="lastCol" /> Last Column</label>
+            <label class="rb-check" title="Every other column shaded"><input type="checkbox" data-tbl-look="bandCols" /> Banded Columns</label>
+          </div>
+        </div>
+        <div class="rb-label">Table Styles</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-field" title="The kind of line the Borders menu and the Border Painter draw">Line <select id="doc-pen-style"></select></label>
+            <label class="rb-field" title="How thick the line is, in points">Weight <select id="doc-pen-width"></select></label>
+            <label class="rb-field" title="The line's colour">Pen <input id="doc-pen-colour" type="color" value="#000000" /><span id="doc-pen-swatch" class="pen-swatch"></span></label>
+          </div>
+          <div class="rb-col">
+            <button data-doc="table-borders" aria-haspopup="true" title="Borders: put the line on the edges of the cells chosen (drag across cells to choose several; the whole table when it is picked)">Borders ▾</button>
+            <button data-doc="table-painter" aria-pressed="false" title="Border Painter: click the edges of cells to give them the line chosen; drag along several. Esc stops">✎ Border Painter</button>
+            <button data-doc="table-gridlines" aria-pressed="false" title="View Gridlines: faint dotted lines on every edge with no border, to see the cells (they don't print)">┼ View Gridlines</button>
+          </div>
+        </div>
+        <div class="rb-label">Borders</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <div class="rb-col">
             <button data-doc="table-row-above" title="A new row above this one">Insert Above</button>
             <button data-doc="table-row-below" title="A new row below this one (Tab in the last cell does this too)">Insert Below</button>
@@ -1445,8 +1483,13 @@
             <button data-doc="table-nest" title="Put a table inside this cell (a nested table, kept as one in Word)">Table in Cell</button>
           </div>
           <div class="rb-col">
+            <button data-doc="table-merge-cells" title="Merge Cells: join the cells chosen (drag across them) into one">Merge Cells</button>
+            <button data-doc="table-split-table" title="Split Table: a new table from this row down, with a paragraph between">Split Table</button>
+          </div>
+          <div class="rb-col">
             <button data-doc="table-select" title="Pick the whole table, to copy, cut or delete it">Select Table</button>
             <button data-doc="table-delete" title="Delete the whole table">Delete Table</button>
+            <button data-doc="table-to-text" title="Convert to Text: the rows become paragraphs, the cells joined by tabs, commas or another character">Convert to Text</button>
           </div>
         </div>
         <div class="rb-label">Merge and Table</div>
@@ -1492,6 +1535,7 @@
           <div class="rb-col">
             <button data-doc="table-fill-width" title="Stretch the table to the width of the text">Fit to Page</button>
             <button data-doc="table-even" title="Every column the same width">Even Columns</button>
+            <button data-doc="table-margins" title="Cell Margins: room between each cell's edge and its text, for the whole table or this cell">Cell Margins…</button>
           </div>
         </div>
         <div class="rb-label">Cell Size</div>
