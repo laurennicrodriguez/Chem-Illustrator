@@ -126,6 +126,7 @@ import { canUpdate, appVersion, portableInfo } from './updates';
 import { computerName } from './feedback';
 import { GuideWindow, guideSpot } from './ui/guide-window';
 import { SettingsWindow } from './ui/settings-window';
+import { fileTypesPage, FILE_TYPES } from './ui/file-types-page';
 import { watchRibbons, fitRibbons } from './ui/ribbon-fit';
 import { FeedbackDialog } from './ui/feedback-dialog';
 import { addRecent, removeRecent, recentLabel } from './recent';
@@ -4326,6 +4327,35 @@ const feedback = new FeedbackDialog({
   }),
 });
 
+// ---------------------------------------------------------------- opening files from outside
+
+const platform = !isTauri() ? 'web' as const : /Windows/.test(navigator.userAgent) ? 'windows' as const : isMac ? 'mac' as const : 'linux' as const;
+const fileTypesHost = {
+  platform,
+  get: () => invoke<string[]>('file_types_get'),
+  set: (types: string[]) => invoke<void>('file_types_set', { types }),
+  openDefaults: () => invoke<void>('file_types_defaults'),
+  flash: (msg: string) => flash(msg, 7000),
+};
+let fileTypesOffered = false;
+
+/** The files the desktop app was opened with (double-clicked, or Open with), and any opened while it runs. */
+async function openOutsideFiles(): Promise<void> {
+  if (!isTauri()) return;
+  const { listen } = await import('@tauri-apps/api/event');
+  // listening first, so no file is missed between asking and listening
+  await listen<string[]>('open-files', (e) => { for (const p of e.payload) void openRecent(p); });
+  for (const p of await invoke<string[]>('launch_files').catch(() => [])) await openRecent(p);
+  // the first time the Windows app starts, it joins the chemistry files' "Open with" lists
+  // (never the default: Settings ▸ File Types explains how); a portable copy leaves the computer alone
+  if (platform === 'windows' && !fileTypesOffered && !(await portableInfo())) {
+    fileTypesOffered = true;
+    const now = await fileTypesHost.get().catch(() => [] as string[]);
+    await fileTypesHost.set([...new Set([...now, ...FILE_TYPES.filter((t) => t.chemistry).map((t) => t.ext)])]).catch(() => {});
+    storeSettings();
+  }
+}
+
 /** Settings ▸ Drawing: how structures are written and drawn, set once rather than per structure. */
 async function drawingPreferences(): Promise<void> {
   const r = await ask('Drawing', [
@@ -4444,6 +4474,7 @@ function storeSettings(): void {
     docPins: [...docBoxPrefs.pinned],
     updateCheck,
     pubchemNames,
+    fileTypesOffered,
     reviewName: reviewAuthor(),
     skipVersion,
     recentFiles,
@@ -4580,6 +4611,7 @@ void loadSettings().then((s) => {
   askWholeDrawing = s.askWholeDrawing;
   updateCheck = s.updateCheck;
   pubchemNames = s.pubchemNames;
+  fileTypesOffered = s.fileTypesOffered;
   setReviewAuthor(s.reviewName);
   skipVersion = s.skipVersion;
   recentFiles = s.recentFiles;
@@ -4611,6 +4643,7 @@ void loadSettings().then((s) => {
   tickMethylStyle();
   settingsLoaded = true;
   void keeper.start();
+  void openOutsideFiles();
   // (a moment after starting, once a file opened with the app has had time to load)
   setTimeout(showWelcome, 800);
   // a few seconds after starting, so the check doesn't slow down opening the window
@@ -6050,6 +6083,7 @@ const settingsWindow = new SettingsWindow([
   { id: 'schemes', title: 'Schemes', words: 'scheme arrow gap plus text size reagents conditions boxes', open: schemeSettings },
   { id: 'autosave', title: 'AutoSave and Recovery', words: 'autosave recovery versions backup copies shared folders onedrive', open: () => keeper.optionsCommand() },
   { id: 'online', title: 'Online', words: 'pubchem internet names lookup updates check version privacy', open: onlinePreferences },
+  { id: 'files', title: 'File Types', words: 'open with default app explorer finder associations cdxml cdx mol sdf docx pptx xlsx double-click', open: () => fileTypesPage(fileTypesHost) },
 ]);
 $('#btn-search').addEventListener('click', () => commandSearch.open());
 placeSidePanel();
