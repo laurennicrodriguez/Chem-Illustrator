@@ -11,7 +11,7 @@
 import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
 import type { DocStyle } from '../style';
 import * as rt from '../richtext';
-import { Package, REL, NS, xml, hex6, emu, MediaFiles } from './ooxml';
+import { Package, REL, NS, xml, hex6, emu, MediaFiles, structureAltText } from './ooxml';
 import { facesToEmbed, newGuid, obfuscate, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
@@ -34,6 +34,8 @@ export interface DocxDeps {
   picture(contents: Contents, style: DocStyle): Promise<{ png: Uint8Array; svg?: string; w: number; h: number } | null>;
   /** A PNG of an SVG picture, for Word versions that can't show SVG (w × h pixels). */
   svgToPng?(svg: string, w: number, h: number): Promise<Uint8Array>;
+  /** A drawing's structures as SMILES, for the picture's alt text (null when there are none, or no chemistry engine). */
+  smiles?(contents: Contents, style: DocStyle): Promise<string | null>;
   /** The free fonts that come with the app, to put inside the file when the document uses them. */
   fonts?: FontSource;
   /** Each paragraph's page number as laid out here, for the contents (without it Word works them out when the file opens). */
@@ -490,7 +492,7 @@ class DocxWriter {
 
   private async picture(main: string, id: number, o: DocObject, rPr: string): Promise<string> {
     const t = this.t;
-    let blip: string, svgId: string | null = null, size: { w: number; h: number }, name: string;
+    let blip: string, svgId: string | null = null, size: { w: number; h: number }, name: string, smiles: string | null = null;
     if (o.kind === 'drawing') {
       const pic = await this.deps.picture(o.contents, t.drawingStyle);
       if (!pic) return '';
@@ -499,6 +501,7 @@ class DocxWriter {
       if (pic.svg) svgId = this.media(main, new TextEncoder().encode(pic.svg), 'svg');
       size = shownSize({ w: pic.w, h: pic.h }, o.scale ?? 1, this.textW);
       name = `${DRAWING_NAME} ${id}`;
+      smiles = await this.deps.smiles?.(o.contents, t.drawingStyle).catch(() => null) ?? null;
     } else if (o.kind === 'picture') {
       let mime: string, bytes: Uint8Array;
       try {
@@ -522,7 +525,7 @@ class DocxWriter {
     const cx = emu(size.w), cy = emu(size.h);
     const n = this.docPr++;
     const ext = svgId ? `<a:extLst><a:ext uri="${SVG_EXT}"><asvg:svgBlip xmlns:asvg="${NS_SVG}" r:embed="${svgId}"/></a:ext></a:extLst>` : '';
-    const descr = o.kind === 'drawing' ? ' descr="Chemical structure or scheme"' : '';
+    const descr = o.kind === 'drawing' ? ` descr="${xml(structureAltText(smiles))}"` : '';
     const look = lookOf(o);
     return `<w:r>${rPr ? `<w:rPr>${rPr}</w:rPr>` : ''}<w:drawing>` + this.placed(o, cx, cy,
       `<wp:docPr id="${n}" name="${xml(name)}"${descr}/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>` +
@@ -881,3 +884,4 @@ function styleXml(s: NamedStyle, ids: string[]): string {
     `<w:color w:val="${s.color ? hex6(s.color) : 'auto'}"/><w:sz w:val="${half(s.size)}"/><w:szCs w:val="${half(s.size)}"/>`;
   return `${head}<w:pPr>${pPr.join('')}</w:pPr><w:rPr>${rPr}</w:rPr></w:style>`;
 }
+

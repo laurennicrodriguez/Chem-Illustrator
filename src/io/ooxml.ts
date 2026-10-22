@@ -279,3 +279,11 @@ export function zipHas(bytes: Uint8Array, entry: string): boolean {
   }
   return false;
 }
+
+/**
+ * Alt text for a picture of structures: their SMILES, so screen readers, search and other
+ * programs can get the chemistry back.
+ */
+export function structureAltText(smiles: string | null): string {
+  return smiles ? `Chemical structure (SMILES): ${smiles}` : 'Chemical structure or scheme';
+}

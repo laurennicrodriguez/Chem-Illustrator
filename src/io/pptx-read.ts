@@ -17,6 +17,7 @@ import { linesFromBorders, type Borders } from './cdxml-table';
 import { turnAbout, normDegrees, type Vec, type Rect } from '../geom';
 import { PackageReader, NS, REL, kids, kid, rAttr, fromEmu } from './ooxml';
 import { readCdxml } from './cdxml';
+import { drawingInEmf } from '../render/emf';
 import { dataUrl, imageSize } from '../render/images';
 import { layoutText, ASCENT } from '../text/layout';
 import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle, slideBackground } from '../deck/deck';
@@ -593,6 +594,21 @@ class Reader {
     return { src: dataUrl(bytes, mime), px: imageSize(bytes, mime) ?? { w: 100, h: 100 }, crop: crop && (crop.l || crop.t || crop.r || crop.b) ? crop : null, mime };
   }
 
+  /** The drawing inside a picture (a metafile) copied from Chem Illustrator, with the area it covered. */
+  private emfDrawing(from: string, pic: Element): { cdxml: string; box: string } | null {
+    const target = this.r.rels(from).get(rAttr(kid(pic, 'blipFill', 'blip'), 'embed') ?? '')?.target;
+    if (!target || !/\.emf$/i.test(target)) return null;
+    const bytes = this.r.bytes(target);
+    const cdxml = bytes ? drawingInEmf(bytes) : null;
+    if (!cdxml) return null;
+    try {
+      const b = readCdxml(cdxml).doc.bounds();
+      return b ? { cdxml, box: [b.x1, b.y1, b.x2, b.y2].join(' ') } : null;
+    } catch {
+      return null;
+    }
+  }
+
   private pictureEl(s: Part, el: Element, t: Xf, doc: Doc): void {
     const box = boxOf(kid(el, 'spPr', 'xfrm'), t);
     if (!box) return;
@@ -608,6 +624,9 @@ class Reader {
       } catch { /* not ours after all: read it as a picture */ }
     }
     if (tags[TAG.cdxml] && this.drawing(tags[TAG.cdxml], tags[TAG.box], box, doc)) return;
+    // a picture pasted into PowerPoint from Chem Illustrator: the drawing rides inside it
+    const inside = this.emfDrawing(s.path, el);
+    if (inside && this.drawing(inside.cdxml, inside.box, box, doc)) return;
     const img = this.image(s.path, el);
     if (!img) return;
     const look = this.pictureLook(kid(el, 'spPr'));

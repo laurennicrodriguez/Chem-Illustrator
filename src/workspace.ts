@@ -113,6 +113,16 @@ const NO_AUTOSAVE = new Set(['csv', 'tsv', 'txt', 'sdf', 'sd']);
 /** What each kind of tab saves as (the first is the default). */
 const SAVE_TYPES: Record<Mode, FileType[]> = { drawing: [CDXML, CDX], slides: [PPTX], design: [PPTX], sheet: [XLSX, CSV, SDF], document: [DOCX] };
 
+/** Tabs already told, this session, how their structures look in Office (said once, not on every save). */
+const officeNoted = new WeakSet<Tab>();
+
+/** What the structures in a Word or PowerPoint file are outside the app, said the first time a tab is saved. */
+function officeNote(tab: Tab, program: 'Word' | 'PowerPoint'): string {
+  if (officeNoted.has(tab)) return '';
+  officeNoted.add(tab);
+  return `. In ${program} the structures are pictures (their SMILES are in the alt text); open the file here to edit them, or copy them from here into ChemDraw`;
+}
+
 export class Workspace {
   tabs: Tab[] = [];
   active!: Tab;
@@ -573,6 +583,13 @@ export class Workspace {
     return ext === 'cdx' ? { data: cdxmlToCdx(text), type: CDX, note: '' } : { data: text, type: CDXML, note: '' };
   }
 
+  /** Said once per tab after a Word or PowerPoint save that holds structures. */
+  private officeNoteFor(tab: Tab): string {
+    if (tab.deck && tab.mode !== 'design' && tab.deck.slides.some((_, i) => tab.deck!.docOf(i).atoms.size)) return officeNote(tab, 'PowerPoint');
+    if (tab.mode === 'document' && Object.values(tab.document!.t.objects).some((o) => o.kind === 'drawing')) return officeNote(tab, 'Word');
+    return '';
+  }
+
   async saveAs(tab: Tab = this.active): Promise<boolean> {
     const types = SAVE_TYPES[tab.mode];
     const ext = extensionOf(tab.name);
@@ -596,6 +613,7 @@ export class Workspace {
       if (go === 'save-as') return this.saveAs(tab);
       enc = await this.encode(tab, name);
       await writeFile(ref, name, enc.data, enc.type);
+      if (!auto) enc.note += this.officeNoteFor(tab);
       // later saves of a ChemDraw file rewrite only what changed since this one (unless it changed while being written)
       if (enc.type === CDXML && (!live || this.host.version === version)) adoptSaved(this.docOf(tab), enc.data as string);
     } catch (e) {

@@ -1204,12 +1204,14 @@ const docFiles: DocxDeps = {
   },
   svgToPng,
   fonts: bundledFaces,
+  smiles: (contents, style) => drawingSmiles(structureDoc(contents, style)),
 };
 
 /** Opening Word files: ChemDraw objects in them become structures, kept at the size they had. */
 const docRead: DocxReadDeps = {
-  chemdraw: (cdx, style) => {
-    const d = readCdxml(cdxToCdxml(cdx)).doc;
+  chemdraw: (cdx, style) => docRead.cdxml!(cdxToCdxml(cdx), style),
+  cdxml: (text, style) => {
+    const d = readCdxml(text).doc;
     fitPasted(d, style);
     return d.contents();
   },
@@ -1281,7 +1283,15 @@ function pptxOptions(): PptxOptions {
     },
     svgToPng,
     fonts: bundledFaces,
+    smiles: drawingSmiles,
   };
+}
+
+/** The structures in a drawing as SMILES (for alt text), or null when there are none or the chemistry engine isn't ready. */
+async function drawingSmiles(d: Doc): Promise<string | null> {
+  if (!chem.ready || !d.atoms.size) return null;
+  const { molblock, unknownLabels } = toMolfile(d, d.atoms.keys());
+  return unknownLabels.length ? null : chem.molToSmiles(molblock);
 }
 
 /** The slide deck showing (in Slides mode), or null for a drawing. */
