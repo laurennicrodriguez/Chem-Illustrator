@@ -21,7 +21,7 @@ import { readCdxml } from './cdxml';
 import { drawingInEmf } from '../render/emf';
 import { dataUrl, imageSize } from '../render/images';
 import { layoutText, ASCENT } from '../text/layout';
-import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle, slideBackground, slideColours } from '../deck/deck';
+import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle, slideBackground, slideColours, hasLayout, newLayoutId, deckLayouts, type LayoutDef, type PlaceholderBox, type SectionCount } from '../deck/deck';
 import { backgroundColour, isPlain, sameBackground, type Background } from '../deck/background';
 import { readFill, readOneFill, type FillContext } from './pptx-background';
 import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure, NS_A14, NS_M } from './pptx-write';
@@ -50,6 +50,8 @@ export interface PptxRead {
   warnings: string[];
   /** Saved from Design mode (opens there again). */
   design: boolean;
+  /** The deck's sections, in order (none when the file has none). */
+  sections?: SectionCount[];
 }
 
 const EXT_MIME: Record<string, string> = Object.fromEntries(Object.entries(MIME_EXT).map(([m, e]) => [e, m]));
@@ -281,7 +283,10 @@ class Reader {
     this.slidePaths = slidePaths;
     const slides = slidePaths.map((p) => this.slide(p));
     placeSlideLinks(slides, this.slideIds);
-    return { size: this.size, master: this.masterOut, slides, warnings: [...this.warnings], design: this.design };
+    // the slides' ids in the file (as PowerPoint's sections name them)
+    const sldIds = kids(kid(root, 'sldIdLst'), 'sldId').filter((x) => { const t = rels.get(rAttr(x, 'id') ?? '')?.target; return !!t && this.r.has(t); }).map((x) => x.getAttribute('id') ?? '');
+    const sections = readSections(root, sldIds);
+    return { size: this.size, master: this.masterOut, slides, warnings: [...this.warnings], design: this.design, ...(sections ? { sections } : {}) };
   }
 
   private readTheme(): void {
@@ -458,7 +463,7 @@ class Reader {
     const anims = targets ? readTiming(root, (spid) => targets.get(spid) ?? null, warn) : [];
     this.spidTargets = null;
     const comments = this.comments(path);
-    const lay: LayoutId = ['title', 'title-content', 'two-content', 'title-only', 'blank'].includes(id) ? id : 'title-content';
+    const lay: LayoutId = hasLayout(this.masterOut, id) ? id : 'title-content';
     // the background PowerPoint shows (the slide's, else its layout's, else the master's): the slide's own when ours would differ
     const shown = this.background(s) ?? (layout ? this.background(layout) : null) ?? slideBackground(this.masterOut, lay);
     const background = sameBackground(shown, slideBackground(this.masterOut, lay)) ? undefined : shown;
@@ -495,9 +500,48 @@ class Reader {
     }
   }
 
+  /** PowerPoint's custom layouts read so far (by their part), as layouts of the deck's master. */
+  private ownLayouts = new Map<string, LayoutId>();
+
+  /**
+   * One of PowerPoint's custom layouts as a layout of the master: its name and its title and text
+   * placeholders where it puts them (or where the master does). Null when it has none.
+   */
+  private customLayout(layout: Part): LayoutId | null {
+    const got = this.ownLayouts.get(layout.path);
+    if (got !== undefined) return got;
+    const boxes: PlaceholderBox[] = [];
+    for (const sp of kids(layout.tree, 'sp')) {
+      const ph = phOf(sp);
+      if (!ph || SKIP_PH.has(ph.type) || !(isTitle(ph.type) || ph.type === 'subTitle' || ph.type === 'body' || ph.type === 'obj')) continue;
+      const own = kid(sp, 'spPr', 'xfrm');
+      const xf = own ?? this.inherited(null, ph).map((e) => kid(e, 'spPr', 'xfrm')).find((x) => x) ?? null;
+      const b = boxOf(xf, IDENTITY);
+      if (!b) continue;
+      const kind = phKind(ph.type);
+      if (kind === 'title' && boxes.some((x) => x.ph === 'title')) continue;
+      const algn = kid(sp, 'txBody', 'lstStyle', 'lvl1pPr')?.getAttribute('algn') ?? kid(sp, 'txBody', 'p', 'pPr')?.getAttribute('algn');
+      const r = (v: number) => +v.toFixed(4);
+      boxes.push({ ph: kind, x: r(b.x1 / this.size.w), y: r(b.y1 / this.size.h), w: r((b.x2 - b.x1) / this.size.w), h: r((b.y2 - b.y1) / this.size.h), justify: algn === 'ctr' ? 'center' : algn === 'r' ? 'right' : 'left' });
+    }
+    if (!boxes.length && !kids(layout.tree, 'sp').length) { this.ownLayouts.set(layout.path, 'blank'); return 'blank'; }
+    if (!boxes.length) return null;
+    const m = this.masterOut;
+    const list = [...deckLayouts(m), ...(m.layouts ?? [])];
+    const def: LayoutDef = { id: newLayoutId(list), name: kid(layout.doc.documentElement, 'cSld')?.getAttribute('name') || 'Custom Layout', boxes };
+    m.layouts = [...(m.layouts ?? []), def];
+    this.ownLayouts.set(layout.path, def.id);
+    return def.id;
+  }
+
   /** Our layout for PowerPoint's, by its type or else by the text boxes on the slide. */
   private layoutId(layout: Part | null, doc: Doc): LayoutId {
     const t = layout?.doc.documentElement.getAttribute('type') ?? '';
+    // PowerPoint's own custom layouts become layouts of the master, with their names and placeholders
+    if (layout && (t === 'cust' || t === '') && !this.ourMaster) {
+      const own = this.customLayout(layout);
+      if (own) return own;
+    }
     const known: Record<string, LayoutId> = {
       title: 'title', secHead: 'title', obj: 'title-content', tx: 'title-content', txAndObj: 'two-content', objAndTx: 'two-content',
       twoObj: 'two-content', twoTxTwoObj: 'two-content', twoColTx: 'two-content', titleOnly: 'title-only', blank: 'blank',
@@ -1489,4 +1533,17 @@ function turned(c: Omit<Caption, 'id'> | null, box: Rect & { rot: number }): Omi
   if (!c || !rot) return c;
   const a = turnAbout(c, { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 }, rot);
   return { ...c, x: a.x, y: a.y, rot };
+}
+
+/** PowerPoint 2010's sections (p14:sectionLst in presentation.xml), as runs of slides in order. */
+function readSections(root: Element, sldIds: string[]): SectionCount[] | undefined {
+  const lst = Array.from(root.getElementsByTagNameNS('*', 'sectionLst'))[0];
+  if (!lst) return undefined;
+  const at = new Map(sldIds.map((id, i) => [id, i]));
+  const out: SectionCount[] = [];
+  for (const sec of kids(lst, 'section')) {
+    const ids = kids(kid(sec, 'sldIdLst'), 'sldId').map((x) => at.get(x.getAttribute('id') ?? '')).filter((i): i is number => i !== undefined);
+    out.push({ name: sec.getAttribute('name') ?? 'Untitled Section', count: ids.length });
+  }
+  return out.length ? out : undefined;
 }
