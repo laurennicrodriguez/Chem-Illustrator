@@ -238,6 +238,7 @@ const HELP: Record<string, Entry> = {
   ISNUMBER: [I, 'TRUE for a number.', 'value: the value'],
   ISTEXT: [I, 'TRUE for text.', 'value: the value'],
   ISERROR: [I, 'TRUE for any error.', 'value: the value'],
+  FIELDVALUE: [I, 'A field of a compound cell\'s card (Data > Data Types > Compound), such as its molecular weight, CAS number or density.', 'value: a compound cell, or a block of them', 'field_name: the field, such as "Molecular weight", "CAS" or "Density"'],
   ISNA: [I, 'TRUE for #N/A.', 'value: the value'],
   NA: [I, 'The error #N/A (nothing here), which charts skip.'],
 };

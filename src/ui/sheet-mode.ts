@@ -34,6 +34,8 @@ import { pasteSpecial, goToSpecial, type PasteSpecialOptions, type SpecialKind }
 import { SheetFormulas } from './sheet-formulas-ui';
 import { SheetAnalysis } from './sheet-analysis-ui';
 import { SheetPivots } from './sheet-pivot-ui';
+import { SheetQueries } from './sheet-query-ui';
+import { SheetCompounds } from './sheet-compound-ui';
 import { CATEGORIES, type Category } from '../sheet/fn-help';
 import { askLink, followLink, type LinkPlace } from './links-ui';
 import { LINK_COLOUR, cellLink, cellOfLink, describeLink } from '../links';
@@ -132,6 +134,10 @@ export class SheetMode {
   readonly formulas: SheetFormulas;
   readonly analysis: SheetAnalysis;
   readonly pivots: SheetPivots;
+  /** Data > Get Data: queries and the Query Editor. */
+  readonly queries: SheetQueries;
+  /** Data > Data Types > Compound. */
+  readonly compounds: SheetCompounds;
   /** Fonts, orientation, indents, cell styles and themes. */
   readonly look: SheetLook;
   /** Group, Ungroup, Subtotal and the outline's buttons. */
@@ -247,6 +253,8 @@ export class SheetMode {
       flash: (m, ms) => this.host.flash(m, ms),
     });
     this.pivots = new SheetPivots({ view: this.view, flash: (m, ms) => this.host.flash(m, ms) });
+    this.queries = new SheetQueries({ view: this.view, flash: (m, ms) => this.host.flash(m, ms) });
+    this.compounds = new SheetCompounds({ view: this.view, flash: (m, ms) => this.host.flash(m, ms), edit: (label, fn) => this.edit(label, fn) });
     const basic = { view: this.view, edit: (label: string, fn: (s: Sheet) => void) => this.edit(label, fn), flash: (m: string, ms?: number) => this.host.flash(m, ms) };
     this.look = new SheetLook(basic);
     this.outline = new SheetOutline({ ...basic, edit: (label, fn, after) => this.edit(label, fn, after), table: () => (this.view.sheet ? this.tableAt() : null) });
@@ -563,6 +571,9 @@ export class SheetMode {
       case 'fill-menu': this.fillMenu(b.left, b.bottom + 2); return;
       case 'paste-menu': this.pasteMenu(b.left, b.bottom + 2); return;
       case 'what-if': this.analysis.whatIfMenu(b.left, b.bottom + 2); return;
+      case 'get-data': this.queries.getDataMenu(b.left, b.bottom + 2); return;
+      case 'data-types': this.compounds.menu(b.left, b.bottom + 2); return;
+      case 'insert-data': this.compounds.insertMenu(b.left, b.bottom + 2); return;
       case 'orientation': this.look.orientationMenu(b.left, b.bottom + 2); return;
       case 'cell-styles': this.look.cellStylesMenu(b.left, b.bottom + 2); return;
       case 'themes': this.look.themesMenu(b.left, b.bottom + 2); return;
@@ -750,7 +761,15 @@ export class SheetMode {
       case 'insert-pivot-chart': this.pivots.pivotChart(); break;
       case 'pivot-fields': this.pivots.fieldsWindow(); break;
       case 'pivot-refresh': this.pivots.refresh(); break;
-      case 'refresh-all': this.pivots.refreshAll(); break;
+      case 'refresh-all': void this.refreshAll(); break;
+      case 'from-text': void this.queries.fromText(); break;
+      case 'from-json': void this.queries.fromJson(); break;
+      case 'from-web': void this.queries.fromWeb(); break;
+      case 'from-workbook': void this.queries.fromWorkbook(); break;
+      case 'queries-pane': this.queries.queriesPane(); break;
+      case 'compound': void this.compounds.convert(true); break;
+      case 'compound-refresh': void this.compounds.refreshCards(); break;
+      case 'compound-text': this.compounds.toText(); break;
       case 'pivot-source': this.pivots.changeSource(); break;
       case 'pivot-clear': this.pivots.clear(); break;
       case 'pivot-select': this.pivots.selectReport(); break;
@@ -759,6 +778,19 @@ export class SheetMode {
       default: return false;
     }
     return true;
+  }
+
+  /** Refresh All: every query reads its source again, then every PivotTable (which may read a query's table). */
+  async refreshAll(): Promise<void> {
+    const wb = this.book;
+    if (!wb) return;
+    if (!wb.queries.length) { this.pivots.refreshAll(); return; }
+    this.host.flash(`Refreshing ${wb.queries.length} quer${wb.queries.length > 1 ? 'ies' : 'y'}…`, 60000);
+    const problems = await this.queries.refreshQueries();
+    const piv = this.pivots.refreshAll(true);
+    problems.push(...piv.problems);
+    const done = [`${wb.queries.length} quer${wb.queries.length > 1 ? 'ies' : 'y'}`, ...(piv.count ? [`${piv.count} PivotTable${piv.count > 1 ? 's' : ''}`] : [])].join(' and ');
+    this.host.flash(problems.length ? problems.join(' ') : `Refreshed ${done}.`, problems.length ? 9000 : 3000);
   }
 
   /** Alt Text… for the chart or picture picked. */
@@ -2020,6 +2052,15 @@ export class SheetMode {
       // in a PivotTable, its own commands first, as Excel's menu has them
       const pivot = this.pivots.contextItems(x, y);
       if (pivot) items.push(...pivot, null);
+      const q = this.queries.here();
+      if (q) items.push(['Refresh', () => void this.queries.refresh(q).then((p) => this.host.flash(p ?? `Refreshed ${q.name}.`, p ? 8000 : 2500))], ['Edit Query…', () => this.queries.editor(q, null, false)], null);
+      if (s.cell(v.sel.active.r, v.sel.active.c)?.compound) {
+        items.push(['Data Type ▸', () => popupMenu(x, y, [
+          ['Insert Data ▸', () => this.compounds.insertMenu(x, y)],
+          ['Refresh', () => void this.compounds.refreshCards()],
+          ['Convert to Text', () => this.compounds.toText()],
+        ])], null);
+      }
       items.push(['Insert…', () => this.insertCells()], ['Delete…', () => this.deleteCells()], ['Clear contents', () => v.clearSelection()]);
       // notes and comments, as Excel's right-click menu has them
       const note = s.noteAt(v.sel.active.r, v.sel.active.c);
@@ -2328,6 +2369,14 @@ export class SheetMode {
       return b;
     };
     const rowOfButtons = (...bs: HTMLElement[]) => { const d = document.createElement('div'); d.className = 'cp-buttons'; d.append(...bs); return d; };
+    if (cell?.compound) parts.push(...this.compounds.card(cell.compound, r, c));
+    const loadedBy = this.queries.here();
+    if (loadedBy) {
+      parts.push(para(`Loaded by the query ${loadedBy.name}.`, 'cp-note'), rowOfButtons(
+        button('Refresh', () => void this.queries.refresh(loadedBy).then((p) => this.host.flash(p ?? `Refreshed ${loadedBy.name}.`, p ? 8000 : 2500)), 'Read its source again and run its steps'),
+        button('Edit Query…', () => this.queries.editor(loadedBy, null, false), 'Open the Query Editor on it'),
+      ));
+    }
     if (cell?.structure) {
       parts.push(para('A drawn structure.'), rowOfButtons(
         button('Change…', () => this.drawStructure(r, c), 'Open the drawing tools on it (or double-click the cell)'),

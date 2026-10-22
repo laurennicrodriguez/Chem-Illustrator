@@ -24,10 +24,12 @@ export const ERR = {
   calc: (detail = 'The calculation gives nothing to show') => new CellError('#CALC!', detail),
   /** Still being worked out (structure properties come from the chemistry engine a moment later). */
   busy: () => new CellError('#BUSY!', 'Being worked out'),
+  /** A field asked of something that isn't a data type (a compound), or that its card doesn't have. */
+  field: (detail = 'No such field') => new CellError('#FIELD!', detail),
 };
 
 /** The error codes Excel itself knows (others are saved as #VALUE!). */
-export const EXCEL_ERRORS = ['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#SPILL!', '#CALC!'];
+export const EXCEL_ERRORS = ['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#SPILL!', '#CALC!', '#FIELD!'];
 
 export type Value = number | string | boolean | null | CellError;
 

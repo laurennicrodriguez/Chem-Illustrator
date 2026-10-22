@@ -198,12 +198,15 @@ export class SheetPivots {
     void this.apply(s, pt, 'Refresh PivotTable');
   }
 
-  /** Refresh All: every PivotTable in the workbook, as one step. */
-  refreshAll(): void {
+  /** Refresh All: every PivotTable in the workbook, as one step. With `quiet`, what happened is returned rather than shown. */
+  refreshAll(quiet = false): { count: number; problems: string[] } {
     const wb = this.view.wb;
-    if (!wb) return;
+    if (!wb) return { count: 0, problems: [] };
     const all = wb.sheets.flatMap((s) => s.pivots.map((pt) => ({ s, pt })));
-    if (!all.length) { this.host.flash('There are no PivotTables in this workbook to refresh (data tables recalculate by themselves).'); return; }
+    if (!all.length) {
+      if (!quiet) this.host.flash('There are no PivotTables or queries in this workbook to refresh (data tables recalculate by themselves).');
+      return { count: 0, problems: [] };
+    }
     const problems: string[] = [];
     this.view.commitEdit();
     wb.edit('Refresh All', () => {
@@ -216,7 +219,8 @@ export class SheetPivots {
       }
     }, this.view.place());
     this.view.refresh();
-    this.host.flash(problems.length ? problems.join(' ') : `Refreshed ${all.length} PivotTable${all.length > 1 ? 's' : ''}.`, problems.length ? 8000 : 2500);
+    if (!quiet) this.host.flash(problems.length ? problems.join(' ') : `Refreshed ${all.length} PivotTable${all.length > 1 ? 's' : ''}.`, problems.length ? 8000 : 2500);
+    return { count: all.length, problems };
   }
 
   // ---------------------------------------------------------------- the Fields window

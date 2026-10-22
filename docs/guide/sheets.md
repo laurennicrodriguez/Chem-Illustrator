@@ -174,6 +174,27 @@ Notes and comments move with their cells when you sort, insert or delete rows, a
 
 A cell with a list shows a drop-down button beside it while selected; click it or press **Alt+Down** to pick. In any cell, **Pick From Drop-down List…** on the right-click menu (or Alt+Down) lists the entries already above and below it in its column. **Circle Invalid** rings the cells that break their rules in red (pasted values and formulas aren't checked as they go in, as in Excel). The rules are saved as Excel's own, so the drop-downs and alerts work in Excel too.
 
+## Get Data and the Query Editor
+
+**Data** tab ▸ **Get Data** reads data from outside the workbook into a table, as Excel's Power Query does (without its M language):
+
+- **From Text/CSV…**: a CSV, TSV or other text file, split at commas, tabs, semicolons, vertical bars, spaces or another character you give.
+- **From JSON…**: a JSON file. Records (a list of objects) become rows; nested objects become columns of their own (`bp.value`, `bp.unit`). When the file has several lists, pick which in the editor.
+- **From Web…**: a web page's tables (the **Navigator** previews each one), or a CSV or JSON file at a web address. Only the address is sent. In a browser only sites that allow it can be read; the desktop app reads any page.
+- **From Workbook…**: a table or sheet of another Excel (.xlsx, .xlsm, .xls) or OpenDocument (.ods) workbook.
+
+The **Query Editor** then shows a preview of the data. Click a column's header to pick it (Ctrl or Shift for more), then a button adds a step: **Use First Row as Headers**, **Remove Columns**, **Keep Only**, **Rename…**, **Data Type** (text, decimal or whole number, percentage, date, true/false), **Filter…**, **Split Column…** (at each, the left-most or the right-most delimiter), **Replace Values…**, **Trim**, **Sort**, **Remove Duplicates**, **Remove Blank Rows**, **Remove Top Rows…**, **Unpivot Columns** and **Unpivot Other Columns** (columns such as Run 1, Run 2, Run 3 become rows of Attribute and Value). New files start with their headers found and each column's type worked out.
+
+**Applied Steps** lists the steps in order: click one to see the data after it (new steps go in after it), or **×** to take it away. A value that can't take a column's type shows as **Error** and loads as a blank cell. **Change Source…** points the query at another file (one that moved, or the next batch of results) with the same steps.
+
+**Close & Load** puts the results on a new sheet as a table named after the query; **Close & Load To…** puts them at a cell you choose, or nowhere (**Only Create Connection**). **Refresh All** (or **Refresh** on the right-click menu of the table) reads the source again and runs the same steps, growing or shrinking the table; it asks before covering other cells. **Queries & Connections** lists the workbook's queries, with **Edit**, **Refresh**, **Go to** and **Delete**. Queries are saved in the .xlsx file: Excel shows the tables, and the queries come back when the file is opened here again. (In a browser, a query's file is asked for again after the file is reopened.)
+
+### The Compound data type
+
+Type names (aspirin, DMAP, THF, Pd(PPh3)4), or draw structures, down a column, pick them and choose **Data** tab ▸ **Compound**. Each is looked up on PubChem and becomes a compound cell, marked with a small ring, carrying a card of its properties: IUPAC name, formula, molecular weight, exact mass, CAS number, CID, SMILES, InChI and InChIKey, XLogP, TPSA, hydrogen-bond donors and acceptors, rotatable bonds, and (unless you choose **Data Types** ▸ **Compound, without measured properties**) its melting and boiling points, density and GHS hazards. Only the name or SMILES is sent.
+
+Click a compound to see its card in the side panel. **+** beside a field, or **Insert Data**, adds a column of that field beside the compounds, as formulas such as `=FIELDVALUE(A2,"Molecular weight")` (FIELDVALUE takes a field's name in several forms: `"MW"`, `"CAS"`, `"Density"`). **Refresh Compound Data** looks the cards up again; **Convert to Text** keeps the names without their cards. Typing over a compound makes it plain text again. In a saved .xlsx file Excel sees the names and the values of the FIELDVALUE columns; the cards come back when it is opened here.
+
 ## Analysis: PivotTables, What-If and the Analysis ToolPak
 
 The **Data** tab has Excel's analysis tools. Their windows float at the right of the sheet without blocking it, so you can click or drag over cells to fill the box that last had the cursor (cells on another sheet carry the sheet's name). Drag a window by its title.
