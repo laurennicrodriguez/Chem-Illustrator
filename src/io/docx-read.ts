@@ -8,7 +8,8 @@
 // numbers; ChemDraw objects in them become structures that can be edited here. What has no
 // place here yet is noted in warnings (shown to the person, never refused). Citations and the
 // bibliography saved here come back live (the references are in our own part); those of
-// other reference managers keep the text Word showed.
+// other reference managers keep the text Word showed. Footnotes and endnotes come in as notes
+// typed into here, and a table of figures (a TOC field for captions) as one worked out here.
 
 import type { Contents, Justify, ParaStyle, TableCell, TableData, TextRun } from '../model';
 import { ACS_1996, type DocStyle } from '../style';
@@ -23,7 +24,7 @@ import { documentMeasure } from '../text/font-measure';
 import {
   OBJECT_CHAR, defaultHeaderFooter, defaultPage, defaultStyles,
   COL_GAP, FLOAT_GAP, columnsOf, lookExtent, usedObjects,
-  type DocObject, type DocText, type FigureLook, type Float, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
+  type DocObject, type DocText, type FigureLook, type Float, type HeaderFooter, type NamedStyle, type NoteFormat, type NoteFormats, type NumberPlace, type PageSetup,
 } from '../document/document';
 import { shownSize } from '../document/doc-layout';
 import { layoutTable } from '../table';
@@ -63,7 +64,7 @@ const EXT_MIME: Record<string, string> = { wmf: 'image/x-wmf', emf: 'image/x-emf
 
 const WARN = {
   links: 'Links were kept as plain text.',
-  notes: 'Footnotes and endnotes were left out.',
+  notes: 'Footnotes and endnotes inside table cells were left out.',
   equations: 'Equations in table cells were kept as plain text.',
   shapes: 'SmartArt and drawn shapes were left out.',
   chartParts: 'Some charts mix chart types (a line over columns, a second axis): they show as one type.',
@@ -149,6 +150,10 @@ class DocxReader {
   /** A table's notes, written after it as a paragraph, to leave out when the table comes from our own part. */
   private pendingNotes: string | null = null;
   private measure: Measure = documentMeasure((t, size, _f, style) => arialWidth(t, size, /bold/.test(style)));
+  /** How the footnotes and endnotes are numbered, where not Word's own way. */
+  private noteFormats: NoteFormats = {};
+  /** The notes in footnotes.xml and endnotes.xml, by Word's id (read when first needed). */
+  private noteEls: Partial<Record<'foot' | 'end', Map<string, Element>>> = {};
 
   constructor(bytes: Uint8Array, private deps: DocxReadDeps) {
     this.pkg = new PackageReader(bytes);
@@ -436,6 +441,59 @@ class DocxReader {
       if (gap !== undefined && Math.abs(gap - COL_GAP) > 0.5) this.page.colGap = gap;
     }
     this.textW = columnsOf(this.page, Math.max(36, this.page.w - this.page.left - this.page.right)).w;
+    // the notes' numbering: the section's, else the document's (settings.xml)
+    const sp = this.pkg.relOfType(this.main, DOCX_REL.settings);
+    const settings = sp ? this.pkg.xml(sp)?.documentElement ?? null : null;
+    const FORMATS = ['decimal', 'lowerRoman', 'upperRoman', 'lowerLetter', 'upperLetter', 'chicago'];
+    for (const [tag, key, def] of [['footnotePr', 'foot', 'decimal'], ['endnotePr', 'end', 'lowerRoman']] as const) {
+      const v = this.a(kid(kid(sect, tag), 'numFmt')) ?? this.a(kid(kid(settings, tag), 'numFmt'));
+      if (v && v !== def && FORMATS.includes(v)) this.noteFormats[key] = v as NoteFormat;
+    }
+  }
+
+  /** A footnote (or endnote) of the file by Word's id. */
+  private noteEl(end: boolean, id: string | null): Element | null {
+    const k = end ? 'end' : 'foot';
+    let m = this.noteEls[k];
+    if (!m) {
+      m = new Map();
+      const path = this.pkg.relOfType(this.main, end ? DOCX_REL.endnotes : DOCX_REL.footnotes);
+      const root = path ? this.pkg.xml(path)?.documentElement : null;
+      for (const n of root ? kids(root, end ? 'endnote' : 'footnote') : []) {
+        const t = this.a(n, 'type');
+        if (!t || t === 'normal') m.set(this.a(n, 'id') ?? '', n);
+      }
+      this.noteEls[k] = m;
+    }
+    return id === null ? null : m.get(id) ?? null;
+  }
+
+  /**
+   * A footnote's or endnote's number in the text: a note here, with the note's text (read as a
+   * text box's is, its paragraphs in their own look), less Word's number mark and the space after it.
+   */
+  private noteRef(el: Element, r: RProps, ctx: Ctx, end: boolean): void {
+    if (this.swallowing()) return;
+    if (ctx.cell) { this.warn('notes'); return; }
+    const note = this.noteEl(end, this.a(el, 'id'));
+    if (!note) return;
+    // the note is read apart from the paragraph it is in (its own fields and comments)
+    const fields = this.fields, cmt = this.cmtOpen, math = this.displayMath;
+    this.fields = [];
+    this.cmtOpen = new Set();
+    const got = this.boxText(note);
+    this.fields = fields;
+    this.cmtOpen = cmt;
+    this.displayMath = math;
+    // text only (citations, captions and pictures in notes keep no place here)
+    const runs = got.runs.filter((x) => x.obj === undefined).map(({ cmt: _c, ...x }) => x);
+    while (runs.length && /^[ \t]/.test(runs[0].text)) {
+      const text = runs[0].text.replace(/^[ \t]+/, '');
+      if (text) { runs[0] = { ...runs[0], text }; break; }
+      if (runs.length === 1) { runs[0] = { ...runs[0], text: '' }; break; }
+      runs.shift();
+    }
+    this.emitObject(ctx, { kind: 'note', ...(end ? { end: true } : {}), runs: rt.normalizeRuns(runs), paras: got.paras }, { ...r, pos: 'sup' }, true);
   }
 
   // ---------------------------------------------------------------- the text
@@ -837,7 +895,7 @@ class DocxReader {
         case 'drawing': if (!this.swallowing()) this.drawing(c, r, ctx); break;
         case 'pict': if (!this.swallowing()) this.vml(c, r, ctx, null); break;
         case 'object': if (!this.swallowing()) this.vml(c, r, ctx, c); break;
-        case 'footnoteReference': case 'endnoteReference': this.warn('notes'); break;
+        case 'footnoteReference': case 'endnoteReference': this.noteRef(c, r, ctx, c.localName === 'endnoteReference'); break;
         case 'commentReference': this.cmtPoint(c, ctx); break;
         case 'AlternateContent': {
           const alt = this.alternate(c);
@@ -917,6 +975,13 @@ class DocxReader {
     }
     // a table of contents: ours again, its lines (Word's last update) left out, as they are worked out here
     const toc = /^TOC\b(.*)$/i.exec(ins);
+    // a table of figures: the captions of one label (\c "Figure"), or those in the Caption style
+    const fig = toc ? /\\c\s+"?([^"\\]+?)"?\s*(\\|$)/i.exec(toc[1]) ?? (/\\t\s+"?caption\b/i.test(toc[1]) ? ['', ''] : null) : null;
+    if (toc && fig && !ctx.cell) {
+      const id = this.emitObject(ctx, { kind: 'tof', name: fig[1].trim() }, f.props);
+      if (id !== null) { f.swallow = true; f.toc = true; }
+      return;
+    }
     if (toc && !ctx.cell) {
       const depth = /\\o\s*"?\s*\d+\s*-\s*(\d+)/i.exec(toc[1]);
       const id = this.emitObject(ctx, { kind: 'toc', levels: Math.max(1, Math.min(3, depth ? Number(depth[1]) : 3)) }, f.props);
@@ -1126,7 +1191,7 @@ class DocxReader {
     // a table from Word (or one typed into here) is a table in the text; an ACS table drawn here
     // comes back as its drawing, and a table inside a cell as a drawn table
     const cap0 = new RegExp(`^${TABLE_NAME} (\\d+)$`).exec(this.a(kid(tblPr, 'tblCaption')) ?? '');
-    if (!(cap0 && this.model?.tables?.[Number(cap0[1])]) && !this.inCell) { this.textTable(tbl); return; }
+    if (!(cap0 && this.model?.tables?.[Number(cap0[1])])) { this.textTable(tbl); return; }
     const rows = kids(tbl, 'tr');
     let cols = kids(kid(tbl, 'tblGrid'), 'gridCol').map((g) => this.tw(g, 'w') ?? 0);
     // the cells, each with how many grid columns it spans
@@ -1240,7 +1305,7 @@ class DocxReader {
     const tblPr = kid(tbl, 'tblPr');
     const rows = kids(tbl, 'tr');
     let cols = kids(kid(tbl, 'tblGrid'), 'gridCol').map((g) => this.tw(g, 'w') ?? 0);
-    type Cell = { cell: TableCell; span: number; borders: Element | null };
+    type Cell = { cell: TableCell; span: number; borders: Element | null; vm: 'restart' | 'continue' | null };
     const grid: Cell[][] = [];
     let head = 0, counting = true;
     const was = this.inCell;
@@ -1252,19 +1317,19 @@ class DocxReader {
         else counting = false;
         const row: Cell[] = [];
         const before = Number(this.a(kid(trPr, 'gridBefore')) ?? 0);
-        for (let i = 0; i < before; i++) row.push({ cell: { runs: [] }, span: 1, borders: null });
+        for (let i = 0; i < before; i++) row.push({ cell: { runs: [] }, span: 1, borders: null, vm: null });
         for (const tc of this.cellsOf(tr)) {
           const tcPr = kid(tc, 'tcPr');
           const span = Math.max(1, Number(this.a(kid(tcPr, 'gridSpan')) ?? 1));
-          const vm = kid(tcPr, 'vMerge');
-          const vmerge = !!vm && this.a(vm) !== 'restart';
-          if (vmerge) this.warn('vmerge');
-          const cell: TableCell = vmerge ? { runs: [] } : this.textCell(tc);
+          // merged down a column: the first cell starts it, the ones under it carry it on
+          const vmEl = kid(tcPr, 'vMerge');
+          const vm = !vmEl ? null : this.a(vmEl) === 'restart' ? 'restart' : 'continue';
+          const cell: TableCell = vm === 'continue' ? { runs: [] } : this.textCell(tc);
           const fill = this.a(kid(tcPr, 'shd'), 'fill');
           if (fill && /^[0-9a-f]{6}$/i.test(fill) && fill.toLowerCase() !== 'ffffff') cell.fill = `#${fill.toLowerCase()}`;
           const va = this.a(kid(tcPr, 'vAlign'));
           if (va === 'center' || va === 'bottom') cell.valign = va;
-          row.push({ cell, span, borders: kid(tcPr, 'tcBorders') });
+          row.push({ cell, span, borders: kid(tcPr, 'tcBorders'), vm });
         }
         grid.push(row);
       }
@@ -1276,13 +1341,23 @@ class DocxReader {
     }
     cols = cols.map((w) => round(Math.max(6, w)));
     const table: TableData = { cols, rows: [], head: 0, lines: 'none' };
+    // the cell each grid column's merge down started at (while it carries on)
+    const open = new Map<number, TableCell>();
     for (const row of grid) {
       const out: TableCell[] = [];
       for (const c of row) {
         if (out.length >= cols.length) break;
-        out.push(c.span > 1 ? { ...c.cell, span: Math.min(c.span, cols.length - out.length) } : c.cell);
+        const at = out.length;
+        const top = c.vm === 'continue' ? open.get(at) : undefined;
+        if (top) top.rowSpan = (top.rowSpan ?? 1) + 1;
+        else for (let k = 0; k < c.span; k++) open.delete(at + k);
+        const cell = top ? { runs: [] } : c.span > 1 ? { ...c.cell, span: Math.min(c.span, cols.length - at) } : c.cell;
+        out.push(cell);
+        if (c.vm === 'restart') open.set(at, cell);
         for (let k = 1; k < c.span && out.length < cols.length; k++) out.push({ runs: [] });
       }
+      // a column the row has no cell in ends any merge in it
+      for (const k of [...open.keys()]) if (k >= out.length) open.delete(k);
       while (out.length < cols.length) out.push({ runs: [] });
       table.rows.push(out);
     }
@@ -1324,12 +1399,18 @@ class DocxReader {
     const kept = runs.filter((r) => {
       const o = r.obj !== undefined ? this.objects[r.obj] : undefined;
       if (!o) return true;
-      if (o.kind === 'textbox' || o.kind === 'table' || o.kind === 'bib') { this.warn('cellBoxes'); return false; }
+      if (o.kind === 'textbox' || o.kind === 'bib') { this.warn('cellBoxes'); return false; }
       if ((o.kind === 'drawing' || o.kind === 'picture') && o.float) { const { float: _, ...rest } = o; this.objects[r.obj!] = rest as DocObject; }
       return true;
     });
-    const clean = rt.normalizeRuns(kept.length ? kept : runs.filter((r) => r.obj === undefined));
-    const cell: TableCell = { runs: clean.filter((r) => r.text) };
+    let clean = rt.normalizeRuns(kept.length ? kept : runs.filter((r) => r.obj === undefined)).filter((r) => r.text);
+    // the empty paragraph Word ends a cell with after a table in it (written again on saving)
+    const end = clean[clean.length - 1], before = clean[clean.length - 2];
+    if (end && before && end.text === '\n' && before.obj !== undefined && this.objects[before.obj]?.kind === 'table') {
+      clean = clean.slice(0, -1);
+      paras.pop();
+    }
+    const cell: TableCell = { runs: clean };
     // the first paragraph's alignment is the cell's; others keep their own when it differs
     const align = paras[0]?.align ?? 'left';
     const ps = paras.map((p) => { const q = { ...p }; if ((q.align ?? 'left') === align) delete q.align; else q.align ??= 'left'; return q; });
@@ -1570,6 +1651,7 @@ class DocxReader {
       objects,
       drawingStyle: this.drawingStyle,
       ...(this.trackOn() ? { track: true } : {}),
+      ...(Object.keys(this.noteFormats).length ? { notes: this.noteFormats } : {}),
       ...(Array.isArray(m?.references) ? { references: m.references.map((r) => cleanRef(r)) } : {}),
       ...(typeof m?.citeStyle === 'string' && m.citeStyle in CITE_PRESETS ? { citeStyle: m.citeStyle } : {}),
       ...(m?.citeOptions && Object.keys(cleanOptions(m.citeOptions)).length ? { citeOptions: cleanOptions(m.citeOptions) } : {}),

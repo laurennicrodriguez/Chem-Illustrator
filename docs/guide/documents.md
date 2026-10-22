@@ -82,13 +82,21 @@ The first three go straight into the text with the caret in the first cell. Type
 While you are in a table, the **Table** tab offers:
 
 - **Insert Above**, **Below**, **Left**, **Right**; **Delete Row**, **Delete Column**, **Delete Table**;
-- **Merge Right**, **Split Cell**, **Select Table**;
+- **Merge Right**, **Merge Down**, **Split Cell**, **Table in Cell**, **Select Table**;
 - **Lines** (grid, ACS rules or none) and **Heading rows**;
 - **Shading** and **No Shading**;
 - alignment **Across** (Left, Centre, Right, for the column) and **Down** (Top, Middle, Bottom, for the cell);
 - **Column width**, **Fit to Contents**, **Fit to Page** and **Even Columns**.
 
 The same commands are on the right-click menu. Esc picks the whole table, and Delete then removes it.
+
+### Merged cells and tables in cells
+
+**Merge Right** joins a cell with the one beside it; **Merge Down** joins it with the one below, so one cell runs down a column (a catalyst used for several entries, say). Merge again to take in more cells. Cells only merge when they line up: a cell two columns wide merges down into another cell two columns wide. The text of the cell taken in goes after the first cell's as a new paragraph. **Split Cell** puts a merged cell back into single cells, its text staying in the first. Inserting or deleting a row inside a merged cell makes it longer or shorter, and Tab and the arrow keys skip the cells it covers.
+
+**Table in Cell** (or **Insert** ▸ **Table** while you are typing in a cell) puts a table inside the cell, as wide as the cell, for conditions or results that need their own small grid. Click into its cells to type in them; the arrow keys take you out of it, back into the cell holding it. Its own Table tab commands (rows, merging, lines) work as for any table.
+
+Word files keep both: merged cells are saved and opened as Word's merged cells, and a table in a cell as Word's nested table.
 
 ### Structures in table cells
 
@@ -158,9 +166,22 @@ Give your headings **Heading 1**, **2** or **3**, put the caret where the conten
 
 The contents keep themselves up to date: page numbers change as text moves, and renamed headings change as you type. There is no Update button. Double-click the contents to change the number of levels. With S1, S2 page numbering, the contents use the same numbers.
 
+## Table of figures
+
+**References** tab ▸ **Table of Figures** (also **Insert ▸ Table of Figures…**) lists the captions made with Insert Caption, each with its page number after a line of dots. Choose Figure, Scheme, Table or Chart captions, or all of them. Like the contents, it keeps itself up to date; double-click it to list other captions. In Word it is Word's own table of figures.
+
+## Footnotes and endnotes
+
+- **References** tab ▸ **Insert Footnote** (Ctrl+Alt+F) puts the next number in the text and the caret in the note at the foot of the page. Type the note, then press **Escape** to go back to the text.
+- **Insert Endnote** (Ctrl+Alt+D) does the same with a note after the end of the text.
+- Click a note to change it; double-click a number in the text to go to its note. Delete a note by deleting its number.
+- **Note Options…** chooses how footnotes and endnotes are numbered (1, 2, 3; i, ii, iii; a, b, c; *, †, ‡) and turns all footnotes into endnotes or back. Right-click a number to convert just that one.
+- A line and its footnote stay on the same page. In Draft, Web Layout and Outline the footnotes show after the text.
+- Word files keep them as Word's own footnotes and endnotes, both ways.
+
 ## Tracked changes
 
-1. **Review** tab ▸ **Track Changes** (Ctrl+Shift+E). The first time, it asks for the name to put on your changes; change it later with **Your Name…** or in **Edit ▸ Preferences…**.
+1. **Review** tab ▸ **Track Changes** (Ctrl+Shift+E). The first time, it asks for the name to put on your changes; change it later with **Your Name…** or in **Edit ▸ Settings…**.
 2. Text you type is underlined in your colour; text you delete stays, struck through.
 3. **◀ Previous** and **Next ▶** step through the changes; the bar at the bottom says who made each one and when.
 4. **Accept** or **Reject** decides the change at the caret (or every change in a selection) and moves to the next. **Accept All** and **Reject All** do the whole document. Right-click a change for Accept and Reject too.
@@ -220,7 +241,7 @@ Saving, printing and PDFs always use the pages of Print Layout, whatever view is
 
 ## Saving as Word and PDF
 
-- **Save** (Ctrl+S) writes a Word file (.docx). In Word, styles are Word's own, lists are Word lists, and captions, cross-references, compound numbers, page numbers and the table of contents are Word fields. Tracked changes and equations are Word's own too, so they keep working there.
+- **Save** (Ctrl+S) writes a Word file (.docx). In Word, styles are Word's own, lists are Word lists, and captions, cross-references, compound numbers, page numbers, the table of contents and the table of figures are Word fields, and footnotes and endnotes are Word's own. Tracked changes and equations are Word's own too, so they keep working there.
 - Structures show as pictures in Word. Open the file here again and they are editable drawings, even after Word has saved it.
 - The free fonts that come with the app are saved inside the file when you use them.
 - Opening a Word file made in Word brings in its text, styles, lists, tables, pictures, captions and cross-references. ChemDraw drawings embedded in it become editable structures. Anything left out is listed in a note.

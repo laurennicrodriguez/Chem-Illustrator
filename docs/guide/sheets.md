@@ -50,7 +50,14 @@ Any calculated value can be typed over, for example with a measured mass. The ce
 
 Type `=` to start a formula. References with `$`, references to other sheets and **Σ AutoSum** (Alt+=) work as in Excel.
 
-Common functions include `SUM`, `AVERAGE`, `MIN`, `MAX`, `MEDIAN`, `STDEV`, `COUNT`, `COUNTA`, `ROUND`, `IF`, `IFERROR`, `AND`, `OR`, `CONCATENATE`, `LN`, `LOG10`, `EXP`, `SQRT`, and the line-fit functions `SLOPE`, `INTERCEPT`, `RSQ`, `STEYX` and `FORECAST`. Not every Excel function is available; one that isn't shows an error in its cell.
+Common functions include `SUM`, `AVERAGE`, `MIN`, `MAX`, `MEDIAN`, `STDEV`, `COUNT`, `COUNTA`, `ROUND`, `IF`, `IFERROR`, `AND`, `OR`, `CONCATENATE`, `LN`, `LOG10`, `EXP`, `SQRT`, and the line-fit functions `SLOPE`, `INTERCEPT`, `RSQ`, `STEYX` and `FORECAST`. These Excel functions work too, with the same results as Excel:
+
+- **Looking things up:** `VLOOKUP`, `HLOOKUP`, `XLOOKUP`, `INDEX`, `MATCH`, `XMATCH`, `CHOOSE`, `OFFSET`, `INDIRECT`, `ROWS`, `COLUMNS`.
+- **Conditions:** `SUMIF`, `SUMIFS`, `COUNTIF`, `COUNTIFS`, `AVERAGEIF`, `AVERAGEIFS`, `MAXIFS`, `MINIFS`, `IFS`, `SWITCH`, `IFNA`. Conditions are written as in Excel: `">5"`, `"<>done"`, `"Pd*"` (`*` and `?` are wildcards; `~*` is a real star).
+- **Text:** `LEFT`, `RIGHT`, `MID`, `FIND`, `SEARCH`, `SUBSTITUTE`, `REPLACE`, `TEXT`, `VALUE`, `CONCAT`, `TEXTJOIN`, `TEXTSPLIT`.
+- **Statistics:** `STDEV.S`, `STDEV.P`, `VAR.S`, `VAR.P` (and the older `VAR`, `VARP`, `STDEVP`), `T.TEST`, `T.INV`, `T.INV.2T`, `T.DIST` (with `.2T` and `.RT`), `CONFIDENCE.NORM`, `CONFIDENCE.T`, `NORM.DIST`, `NORM.INV`, `NORM.S.DIST`, `NORM.S.INV`, `LINEST`, `LOGEST`, `PERCENTILE` (`.INC`, `.EXC`), `QUARTILE` (`.INC`, `.EXC`), `RANK` (`.EQ`, `.AVG`), `LARGE`, `SMALL`.
+
+Functions that give a block of results (`LINEST`, `LOGEST`, `TEXTSPLIT`, and `INDEX` or `XLOOKUP` returning a whole row) show their first result in the cell; pick out another with `INDEX`, for example `=INDEX(LINEST(B2:B9,A2:A9),1,2)` for the intercept. Not every Excel function is available; one that isn't shows an error in its cell.
 
 ### Chemistry functions
 
@@ -93,6 +100,26 @@ Click in your data and choose **Home** tab ▸ **Format as Table** (or **Insert*
 - **Filter** (Ctrl+Shift+L) puts buttons in the header row. Each one sorts, picks values to show, or keeps rows that match a condition such as "less than 500" or "containing Br".
 - **By Substructure** opens the drawing tools: draw the part to look for, and only rows whose structure contains it stay.
 - **Freeze Header** keeps the header rows in view as you scroll.
+
+## Notes and comments
+
+The **Review** tab has both kinds Excel has:
+
+- **New Note** (Shift+F2) puts a yellow sticky note on the cell, with your name. A red triangle marks the cell, and the note shows when you point at it. **Show/Hide Note** keeps it on screen; **Show All Notes** (also in the View menu) shows every note on the sheet.
+- **New Comment** (Ctrl+Alt+M) starts a conversation on the cell, marked with a purple triangle. Point at the cell to see it, then **Reply**, **Resolve**, **Edit** or **Delete**, as for comments in documents and slides. **Convert to Comments** turns a sheet's notes into comments.
+- **Previous** and **Next** go through them all; **Delete** removes the ones in the selected cells. Right-click a cell for the same commands.
+
+Notes and comments move with their cells when you sort, insert or delete rows, and cut and paste. They are saved as Excel's own notes and threaded comments, so Excel shows them too.
+
+## Data validation
+
+**Home** tab ▸ **Validation…** (or **Format ▸ Data Validation…**) sets what may be typed in the selected cells, as Excel's Data Validation does:
+
+- **Settings:** allow a whole number, a decimal, a date or time, a text length (each between limits, or greater than, less than…), a **List**, or a **Custom** formula. A limit can be a number or a formula such as `=B1` or `=TODAY()`. A list is items separated by commas (`Pd(OAc)2, PdCl2, Pd(PPh3)4`) or a reference to cells that hold them (`=$H$2:$H$20`, or on another sheet, `=Reagents!$A$2:$A$40`).
+- **Input Message:** a title and message shown beside the cell while it is selected.
+- **Error Alert:** what happens when something else is typed. **Stop** asks you to type again, **Warning** asks whether to keep it, and **Information** says so and keeps it.
+
+A cell with a list shows a drop-down button beside it while selected; click it or press **Alt+Down** to pick. In any cell, **Pick From Drop-down List…** on the right-click menu (or Alt+Down) lists the entries already above and below it in its column. **Circle Invalid** rings the cells that break their rules in red (pasted values and formulas aren't checked as they go in, as in Excel). The rules are saved as Excel's own, so the drop-downs and alerts work in Excel too.
 
 ## Charts
 
@@ -156,7 +183,7 @@ Each new tile asks which table or block of cells to read. For a gallery, the str
 
 ## Saving and sharing
 
-- **Save** (Ctrl+S) writes an Excel workbook (.xlsx). In Excel, structures are pictures with their SMILES in the cell, properties are plain numbers, and charts, trendlines, conditional formatting and tables are Excel's own. Stick spectra show as sticks in Excel too.
+- **Save** (Ctrl+S) writes an Excel workbook (.xlsx). In Excel, structures are pictures with their SMILES in the cell, properties are plain numbers, and charts, trendlines, conditional formatting, tables, notes, comments and data validation are Excel's own. Stick spectra show as sticks in Excel too.
 - Excel has no dashboards, so it gets a plain version: each chart tile becomes a real Excel chart showing what the tile shows, and numbers, tables and text become cells.
 - Excel has no `ISOMZ`, `ISOABUND` or other chemistry functions, so the saved file keeps their values.
 - Open the .xlsx here again and the structures, chemistry formulas and full dashboard come back, even after Excel has saved the file.

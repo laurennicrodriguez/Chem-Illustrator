@@ -20,7 +20,7 @@ export interface Revision {
   date: string;
 }
 
-/** The name put on changes made here (Edit > Preferences, or asked the first time tracking is turned on). */
+/** The name put on changes made here (Edit > Settings, or asked the first time tracking is turned on). */
 let author = '';
 export const reviewAuthor = (): string => author;
 export function setReviewAuthor(name: string): void {

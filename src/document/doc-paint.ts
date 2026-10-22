@@ -12,7 +12,7 @@ import { BOX_PAD, SHADOWS, lookOf, styleOf, type DocText, type NumberPlace } fro
 import type { DocLayout, PageBox, TableBox } from './doc-layout';
 import { ACS_LINE, CELL_PAD, GRID_LINE } from './doc-layout';
 import type { TableData } from '../model';
-import { isCovered, spanOf } from '../table';
+import { coveringCell, spanOf } from '../table';
 import { docMeasure } from './doc-file';
 import { drawMath } from './math';
 
@@ -53,6 +53,12 @@ export function drawHeaderFooter(ctx: CanvasRenderingContext2D, t: DocText, p: P
   }
 }
 
+/** The short lines above a page's footnotes and above the endnotes (half a point, as Word's). */
+export function drawNoteRules(ctx: CanvasRenderingContext2D, lay: DocLayout, page: number): void {
+  ctx.fillStyle = '#000';
+  for (const r of lay.noteRules) if (r.page === page) ctx.fillRect(r.x, r.y - 0.25, r.w, 0.5);
+}
+
 /** A page for a PDF: its size, and what is drawn on it with the page's top left corner at `origin`. */
 export interface PrintPage { w: number; h: number; items: Item[]; origin: { x: number; y: number } }
 
@@ -70,11 +76,18 @@ export function recordPages(t: DocText, lay: DocLayout, drawing: (c: Contents, s
     drawHeaderFooter(c, t, p, lay);
     // figures behind the text first
     // tables go under the figures in their cells
-    const mine = lay.objects.filter((o) => o.page === p.index).sort((a, b) => Number(t.objects[b.id]?.kind === 'table') - Number(t.objects[a.id]?.kind === 'table'));
+    // (a table in a cell after the table holding it)
+    const depth = (id: number) => (t.objects[id]?.kind === 'table' ? lay.tables.get(id)?.depth ?? 0 : 1e9);
+    const mine = lay.objects.filter((o) => o.page === p.index).sort((a, b) => depth(a.id) - depth(b.id));
     const order = [...mine.filter((o) => o.wrap === 'behind'), null, ...mine.filter((o) => o.wrap !== 'behind')];
     for (const o of order) {
-      if (!o) { drawLayout(c, lay.text, 0, 0, p.first, p.end); continue; }
+      if (!o) { drawLayout(c, lay.text, 0, 0, p.first, p.end); drawNoteRules(c, lay, p.index); continue; }
       const obj = t.objects[o.id];
+      if (obj?.kind === 'note') {
+        const n = lay.notes.get(o.id);
+        if (n) drawLayout(c, n.lay, 0, 0);
+        continue;
+      }
       const look = lookOf(obj);
       if (look?.shadow) {
         // a PDF has no blur: the shadow is a grey box, lighter when soft
@@ -139,13 +152,14 @@ export function drawDocTable(ctx: CanvasRenderingContext2D, t: TableData, tb: Ta
   const n = t.cols.length;
   const rows = tb.rows.map((at, r) => ({ ...at, r })).filter((at) => at.page === page);
   if (!rows.length) return;
-  // shading under everything
+  // shading under everything (a merged cell's in each row it covers)
   for (const { r, x, y } of rows) {
     for (let c = 0; c < n; c++) {
-      const fill = t.rows[r]?.[c]?.fill;
-      if (!fill || isCovered(t, r, c)) continue;
+      const o = coveringCell(t, r, c);
+      const fill = t.rows[o.r]?.[o.c]?.fill;
+      if (!fill || o.c !== c) continue;
       ctx.fillStyle = fill;
-      ctx.fillRect(x + tb.xs[c], y, tb.xs[c + spanOf(t, r, c)] - tb.xs[c], tb.hs[r]);
+      ctx.fillRect(x + tb.xs[c], y, tb.xs[c + spanOf(t, o.r, o.c)] - tb.xs[c], tb.hs[r]);
     }
   }
   for (const { r, x, y } of rows) {
@@ -158,13 +172,24 @@ export function drawDocTable(ctx: CanvasRenderingContext2D, t: TableData, tb: Ta
   const head = Math.max(0, Math.min(t.head, t.rows.length));
   const last = t.rows.length - 1;
   const grid = t.lines === 'grid' || (t.lines === 'none' && faint);
+  const same = (a: { r: number; c: number }, b: { r: number; c: number }) => a.r === b.r && a.c === b.c;
+  // a line across the table at a row's top or bottom, broken where a merged cell carries on over it
+  const across = (r: number, x: number, y: number, lw: number, bottom: boolean) => {
+    let from: number | null = null;
+    for (let c = 0; c <= n; c++) {
+      const open = c < n && !(bottom ? r + 1 <= last && same(coveringCell(t, r, c), coveringCell(t, r + 1, c)) : r > 0 && same(coveringCell(t, r, c), coveringCell(t, r - 1, c)));
+      if (open && from === null) from = c;
+      if (!open && from !== null) { lines.push([x + tb.xs[from], y, x + tb.xs[c], y, lw]); from = null; }
+    }
+  };
   for (const { r, x, y } of rows) {
     const h = tb.hs[r];
     if (grid) {
       const lw = t.lines === 'grid' ? GRID_LINE : 0;
-      lines.push([x, y, x + W, y, lw], [x, y + h, x + W, y + h, lw]);
+      across(r, x, y, lw, false);
+      across(r, x, y + h, lw, true);
       for (let c = 0; c <= n; c++) {
-        if (c > 0 && c < n && isCovered(t, r, c)) continue;
+        if (c > 0 && c < n && same(coveringCell(t, r, c), coveringCell(t, r, c - 1))) continue;
         lines.push([x + tb.xs[c], y, x + tb.xs[c], y + h, lw]);
       }
     } else if (t.lines === 'acs') {

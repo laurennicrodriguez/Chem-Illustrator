@@ -435,8 +435,29 @@ describe('opening files made by Word', () => {
     // tracked changes stay tracked (see revisions.test.ts)
     expect(documentPlainText(doc)).toBe('link addedgone');
     expect(doc.runs.filter((r) => r.rev).map((r) => r.rev!.split('|')[0])).toEqual(['ins', 'del']);
-    expect(warnings).toEqual(expect.arrayContaining(['Links were kept as plain text.', 'Footnotes and endnotes were left out.']));
+    expect(warnings).toEqual(expect.arrayContaining(['Links were kept as plain text.']));
     expect(warnings.join(' ')).not.toMatch(/Tracked/);
+  });
+
+  it('reads Word\'s footnotes and endnotes as notes, without Word\'s number mark', async () => {
+    const ref = (tag: string, id: number) => `<w:r><w:rPr><w:rStyle w:val="Funotenzeichen"/></w:rPr><w:${tag}Reference w:id="${id}"/></w:r>`;
+    const notes = (tag: string, text: string) => `<?xml version="1.0"?><w:${tag}s ${W}><w:${tag} w:type="separator" w:id="0"><w:p><w:r><w:separator/></w:r></w:p></w:${tag}>` +
+      `<w:${tag} w:type="continuationSeparator" w:id="1"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:${tag}>` +
+      `<w:${tag} w:id="2"><w:p><w:pPr><w:pStyle w:val="Funotentext"/></w:pPr><w:r><w:rPr><w:rStyle w:val="Funotenzeichen"/></w:rPr><w:${tag}Ref/></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r><w:r><w:t>${text}</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve"> in situ</w:t></w:r><w:r><w:t>.</w:t></w:r></w:p></w:${tag}>` +
+      `</w:${tag}s>`;
+    const styles = `${WORD_STYLES}<w:style w:type="paragraph" w:styleId="Funotentext"><w:name w:val="footnote text"/><w:basedOn w:val="Standard"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:sz w:val="20"/></w:rPr></w:style>` +
+      '<w:style w:type="character" w:styleId="Funotenzeichen"><w:name w:val="footnote reference"/><w:rPr><w:vertAlign w:val="superscript"/></w:rPr></w:style>';
+    const { doc, warnings } = await readDocx(wordFile(`<w:p><w:r><w:t>Made</w:t></w:r>${ref('footnote', 2)}<w:r><w:t xml:space="preserve"> and kept</w:t></w:r>${ref('endnote', 2)}<w:r><w:t>.</w:t></w:r></w:p>`, {
+      styles, rels: [['rIdF', 'footnotes', 'footnotes.xml'], ['rIdE', 'endnotes', 'endnotes.xml']],
+      extra: { 'word/footnotes.xml': notes('footnote', 'Generated'), 'word/endnotes.xml': notes('endnote', 'Stored cold') },
+    }));
+    expect(warnings.join(' ')).not.toMatch(/note/i);
+    const all = Object.values(doc.objects).filter((o) => o.kind === 'note');
+    expect(all.map((o) => o.kind === 'note' && [!!o.end, o.runs.map((r) => r.text).join('')])).toEqual([[false, 'Generated in situ.'], [true, 'Stored cold in situ.']]);
+    const first = all[0].kind === 'note' ? all[0].runs : [];
+    expect(first.find((r) => r.text.includes('in situ'))?.italic).toBe(true);
+    expect(first[0].size).toBe(10);
+    expect(documentPlainText(doc)).toBe('Made1 and kepti.');
   });
 
   it('says so when a file is not a Word document', async () => {

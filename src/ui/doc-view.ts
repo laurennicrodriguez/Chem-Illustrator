@@ -9,7 +9,7 @@ import { SHEET_MARGIN, breaksIn, continuous, outlineMarks, type DocViewKind } fr
 import type { LaidLine } from '../text/layout';
 import type { DocFile } from '../document/doc-file';
 import { figures } from '../document/doc-file';
-import { drawDocTable, drawHeaderFooter } from '../document/doc-paint';
+import { drawDocTable, drawHeaderFooter, drawNoteRules } from '../document/doc-paint';
 import { BOX_PAD, SHADOWS, lookOf, type DocText } from '../document/document';
 import { drawLayout } from '../text/draw';
 import { drawMath } from '../document/math';
@@ -397,11 +397,14 @@ export class DocView {
       // figures behind the text first, then the text, then the rest
       for (const o of lay.objects) if (o.page === p.index && o.wrap === 'behind') this.object(ctx, t, o, lay);
       drawLayout(ctx, lay.text, 0, 0, p.first, p.end);
+      drawNoteRules(ctx, lay, p.index);
       // tables, then the figures (some of them in table cells)
-      for (const o of lay.objects) {
+      // (a table in a cell after the table holding it)
+      const tabs = lay.objects.filter((o) => o.page === p.index && t.objects[o.id]?.kind === 'table').sort((a, b) => (lay.tables.get(a.id)?.depth ?? 0) - (lay.tables.get(b.id)?.depth ?? 0));
+      for (const o of tabs) {
         const obj = t.objects[o.id];
-        const tb = obj?.kind === 'table' ? lay.tables.get(o.id) : undefined;
-        if (o.page === p.index && obj?.kind === 'table' && tb) drawDocTable(ctx, obj.table, tb, p.index, { color: '#9fb4d8', px: 1 / k });
+        const tb = lay.tables.get(o.id);
+        if (obj?.kind === 'table' && tb) drawDocTable(ctx, obj.table, tb, p.index, { color: '#9fb4d8', px: 1 / k });
       }
       for (const o of lay.objects) if (o.page === p.index && o.wrap !== 'behind' && t.objects[o.id]?.kind !== 'table') this.object(ctx, t, o, lay);
       const px = 1 / k;
@@ -573,6 +576,11 @@ export class DocView {
       ctx.fillStyle = '#fff';
       ctx.fillRect(o.x, o.y, o.w, o.h);
       ctx.restore();
+    }
+    if (obj.kind === 'note') {
+      const n = lay.notes.get(o.id);
+      if (n) drawLayout(ctx, n.lay, 0, 0);
+      return;
     }
     if (obj.kind === 'textbox') {
       if (obj.fill) {

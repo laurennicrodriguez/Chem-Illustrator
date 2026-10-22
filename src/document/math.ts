@@ -582,6 +582,23 @@ export function drawMath(ctx: CanvasRenderingContext2D, b: MathBox, x: number, y
   ctx.restore();
 }
 
+/** A laid-out equation as an SVG picture, `color` throughout (for exports, and programs that can't lay out equations). */
+export function mathSvg(b: MathBox, family: string, color = '#000'): string {
+  const w = Math.max(1, b.w), h = Math.max(1, b.ascent + b.descent), y0 = b.ascent;
+  const n = (v: number) => +v.toFixed(2);
+  const out: string[] = [];
+  for (const it of b.items) {
+    if (it.k === 'text') {
+      out.push(`<text x="${n(it.x)}" y="${n(y0 + it.y)}" font-size="${n(it.size)}"${it.italic ? ' font-style="italic"' : ''}>${esc(it.s)}</text>`);
+      continue;
+    }
+    const d = it.d.map((c) => (c[0] === 'Z' ? 'Z' : c[0] === 'Q' ? `Q${n(c[1])} ${n(y0 + c[2])} ${n(c[3])} ${n(y0 + c[4])}` : `${c[0]}${n(c[1])} ${n(y0 + c[2])}`)).join('');
+    out.push(it.fill ? `<path d="${d}" fill="${color}"/>` : `<path d="${d}" fill="none" stroke="${color}" stroke-width="${n(it.width)}" stroke-linecap="round" stroke-linejoin="round"/>`);
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${n(w)}" height="${n(h)}" viewBox="0 0 ${n(w)} ${n(h)}">` +
+    `<g font-family="${esc(family)}" fill="${color}">${out.join('')}</g></svg>`;
+}
+
 // ---------------------------------------------------------------- Word's equations (OMML)
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -592,12 +609,23 @@ function ommlRun(s: string, style: 'it' | 'up' | 'op' | 'text'): string {
   // an operator sign kept plain ({-} as a bond) is normal text too, so Word puts no space round it
   const plainSign = style === 'up' && OP_CHARS.has(s.replace('−', '-'));
   const pr = style === 'text' || plainSign ? '<m:rPr><m:nor/></m:rPr>' : style === 'up' && /\p{L}/u.test(s) ? '<m:rPr><m:sty m:val="p"/></m:rPr>' : '';
-  return `<m:r>${pr}<m:t xml:space="preserve">${esc(s)}</m:t></m:r>`;
+  return `<m:r>${pr}${runLook}<m:t xml:space="preserve">${esc(s)}</m:t></m:r>`;
 }
 
-/** An equation as Word's Office Math (the inside of m:oMath). */
-export function toOmml(src: string): string {
-  return omml(parseMath(src));
+/** The look of every run (PowerPoint's a:rPr: size, colour, font), while an equation is written for a slide. */
+let runLook = '';
+
+/**
+ * An equation as Word's Office Math (the inside of m:oMath). `look` goes in every run after its
+ * maths settings: PowerPoint keeps each run's size, colour and font there (a:rPr).
+ */
+export function toOmml(src: string, look = ''): string {
+  runLook = look;
+  try {
+    return omml(parseMath(src));
+  } finally {
+    runLook = '';
+  }
 }
 
 function omml(n: MathNode): string {

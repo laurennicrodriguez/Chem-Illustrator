@@ -53,35 +53,72 @@ export function cellAlign(t: TableData, r: number, c: number): Justify {
   return t.rows[r]?.[c]?.align ?? t.align?.[c] ?? (c === 0 ? 'left' : 'center');
 }
 
+/**
+ * Which cell shows at each place of the table: itself, or the cell covering it (one spanning
+ * columns to its left in its row, or, in documents, one merged down from a row above). Worked
+ * out once for each table (a table is never changed in place).
+ */
+function owners(t: TableData): { r: number; c: number }[][] {
+  const got = OWNERS.get(t.rows);
+  const n = t.cols.length;
+  if (got && got.n === n) return got.grid;
+  const grid: { r: number; c: number }[][] = t.rows.map(() => Array.from({ length: n }, () => null as unknown as { r: number; c: number }));
+  t.rows.forEach((row, r) => {
+    for (let c = 0; c < n;) {
+      if (grid[r][c]) { c++; continue; }
+      // a cell spans to its right up to the last column, or up to a place merged down into
+      let s = Math.max(1, Math.min(Math.floor(row[c]?.span ?? 1), n - c));
+      for (let k = 1; k < s; k++) if (grid[r][c + k]) { s = k; break; }
+      const down = Math.max(1, Math.min(Math.floor(row[c]?.rowSpan ?? 1), t.rows.length - r));
+      const me = { r, c };
+      for (let rr = r; rr < r + down; rr++) {
+        for (let k = 0; k < s; k++) {
+          if (rr > r && grid[rr][c + k]) continue;
+          grid[rr][c + k] = me;
+        }
+      }
+      c += s;
+    }
+  });
+  OWNERS.set(t.rows, { n, grid });
+  return grid;
+}
+const OWNERS = new WeakMap<TableCell[][], { n: number; grid: { r: number; c: number }[][] }>();
+
 /** For each column of a row, the column of the cell that shows there (a spanning cell covers the ones to its right). */
 export function rowOwners(t: TableData, r: number): number[] {
-  const n = t.cols.length;
-  const out: number[] = [];
-  for (let c = 0; c < n;) {
-    const s = Math.max(1, Math.min(Math.floor(t.rows[r]?.[c]?.span ?? 1), n - c));
-    for (let k = 0; k < s; k++) out.push(c);
-    c += s;
-  }
-  return out;
+  return owners(t)[r]?.map((o) => o.c) ?? [];
 }
 
 /** How many columns a cell covers (never past the last column; 1 for a covered cell). */
 export function spanOf(t: TableData, r: number, c: number): number {
-  const o = rowOwners(t, r);
-  if (o[c] !== c) return 1;
+  const g = owners(t)[r];
+  const me = g?.[c];
+  if (!me || me.r !== r || me.c !== c) return 1;
   let k = c + 1;
-  while (k < o.length && o[k] === c) k++;
+  while (k < g.length && g[k] === me) k++;
   return k - c;
+}
+
+/** How many rows a cell covers, merged down into the rows under it (documents; 1 for a covered cell). */
+export function rowSpanOf(t: TableData, r: number, c: number): number {
+  const g = owners(t);
+  const me = g[r]?.[c];
+  if (!me || me.r !== r || me.c !== c) return 1;
+  let k = r + 1;
+  while (k < g.length && g[k][c] === me) k++;
+  return k - r;
 }
 
 /** The cell that shows at a place: itself, or the spanning cell that covers it. */
 export function coveringCell(t: TableData, r: number, c: number): { r: number; c: number } {
-  return { r, c: rowOwners(t, r)[c] ?? c };
+  return owners(t)[r]?.[c] ?? { r, c };
 }
 
-/** Is this cell hidden under a spanning cell to its left? */
+/** Is this cell hidden under a spanning cell (to its left, or merged down from above)? */
 export function isCovered(t: TableData, r: number, c: number): boolean {
-  return (rowOwners(t, r)[c] ?? c) !== c;
+  const o = coveringCell(t, r, c);
+  return o.r !== r || o.c !== c;
 }
 
 export function layoutTable(t: TableData, defaultSize: number, measure: Measure): TableLayout {
@@ -290,14 +327,32 @@ export function setPart(t: TableData, part: TablePart, text: { runs: TextRun[]; 
 
 export function insertRow(t: TableData, at: number): TableData {
   const rows = [...t.rows];
-  rows.splice(at, 0, t.cols.map(emptyCell));
+  const row = t.cols.map(emptyCell);
+  // a row put in among the rows a merged cell covers is covered by it too
+  if (at > 0 && at < t.rows.length) {
+    for (let c = 0; c < t.cols.length; c++) {
+      const o = coveringCell(t, at, c);
+      if (o.r < at && o.c === c) rows[o.r] = rows[o.r].map((x, k) => (k === c ? { ...x, rowSpan: rowSpanOf(t, o.r, c) + 1 } : x));
+    }
+  }
+  rows.splice(at, 0, row);
   // a row put in among the headings is a heading too
   return { ...t, rows, head: at < t.head ? t.head + 1 : t.head };
 }
 
 export function deleteRow(t: TableData, r: number): TableData {
   if (t.rows.length <= 1) return t;
-  const rows = t.rows.filter((_, k) => k !== r);
+  const rows = [...t.rows];
+  for (let c = 0; c < t.cols.length; c++) {
+    const o = coveringCell(t, r, c);
+    if (o.c !== c) continue;
+    const down = rowSpanOf(t, o.r, c);
+    if (down < 2) continue;
+    // a merged cell loses the row; one merged down from the row deleted moves to the next row, with its text
+    if (o.r < r) rows[o.r] = rows[o.r].map((x, k) => (k === c ? tidySpan({ ...x, rowSpan: down - 1 }) : x));
+    else if (rows[r + 1]) rows[r + 1] = rows[r + 1].map((x, k) => (k === c ? tidySpan({ ...t.rows[r][c], rowSpan: down - 1 }) : x));
+  }
+  rows.splice(r, 1);
   return { ...t, rows, head: r < t.head ? t.head - 1 : t.head };
 }
 
@@ -331,16 +386,17 @@ export function deleteColumn(t: TableData, c: number): TableData {
     const gone = out[c];
     if (gone?.span && gone.span > 1 && out[c + 1]) out[c + 1] = { ...gone, span: gone.span - 1 > 1 ? gone.span - 1 : undefined };
     out.splice(c, 1);
-    return out.map((cell) => (cell.span === undefined ? cell : tidySpan(cell)));
+    return out.map((cell) => (cell.span === undefined && cell.rowSpan === undefined ? cell : tidySpan(cell)));
   });
   const align = t.align?.filter((_, k) => k !== c);
   return { ...t, cols: t.cols.filter((_, k) => k !== c), rows, align };
 }
 
 function tidySpan(cell: TableCell): TableCell {
-  if (cell.span && cell.span > 1) return cell;
-  const { span: _, ...rest } = cell;
-  return rest;
+  let out = cell;
+  if (out.span !== undefined && !(out.span > 1)) { const { span: _, ...rest } = out; out = rest; }
+  if (out.rowSpan !== undefined && !(out.rowSpan > 1)) { const { rowSpan: _, ...rest } = out; out = rest; }
+  return out;
 }
 
 /** Join a cell with the next ones to its right (or split it again with span 1). */
@@ -348,6 +404,59 @@ export function setSpan(t: TableData, r: number, c: number, span: number): Table
   const s = Math.max(1, Math.min(Math.floor(span), t.cols.length - c));
   const rows = t.rows.map((row, k) => k !== r ? row : row.map((cell, j) => j === c ? tidySpan({ ...cell, span: s }) : cell));
   return { ...t, rows };
+}
+
+/** Merge a cell down into the rows under it (documents), or split it again with 1. */
+export function setRowSpan(t: TableData, r: number, c: number, down: number): TableData {
+  const s = Math.max(1, Math.min(Math.floor(down), t.rows.length - r));
+  const rows = t.rows.map((row, k) => k !== r ? row : row.map((cell, j) => j === c ? tidySpan({ ...cell, rowSpan: s }) : cell));
+  return { ...t, rows };
+}
+
+/** Split a merged cell back into single cells (across and down), its text staying in the first. */
+export function splitCell(t: TableData, r: number, c: number): TableData {
+  return setRowSpan(setSpan(t, r, c, 1), r, c, 1);
+}
+
+/** Can a cell be merged with the one to its right, or the one below (the two lining up)? */
+export function canMerge(t: TableData, r: number, c: number, dir: 'right' | 'down'): boolean {
+  if (isCovered(t, r, c)) return false;
+  const span = spanOf(t, r, c), down = rowSpanOf(t, r, c);
+  if (dir === 'right') {
+    const k = c + span;
+    return k < t.cols.length && !isCovered(t, r, k) && rowSpanOf(t, r, k) === down;
+  }
+  const k = r + down;
+  return k < t.rows.length && !isCovered(t, k, c) && spanOf(t, k, c) === span;
+}
+
+/** Join a cell with the one below it (documents): its text goes after the first's, as a new paragraph. */
+export function mergeDown(t: TableData, r: number, c: number): TableData {
+  if (!canMerge(t, r, c, 'down')) return t;
+  const down = rowSpanOf(t, r, c);
+  const k = r + down;
+  const cell = t.rows[r][c], next = t.rows[k][c];
+  const has = (x: TableCell) => x.runs.some((y) => y.text);
+  let runs = cell.runs, paras = cell.paras;
+  if (has(next)) {
+    if (!has(cell)) { runs = next.runs; paras = next.paras; }
+    else {
+      runs = [...cell.runs, { ...cell.runs[cell.runs.length - 1], obj: undefined, text: '\n' }, ...next.runs];
+      if (cell.paras || next.paras) {
+        const n1 = cell.runs.reduce((a, x) => a + (x.text.match(/\n/g)?.length ?? 0), 0) + 1;
+        const n2 = next.runs.reduce((a, x) => a + (x.text.match(/\n/g)?.length ?? 0), 0) + 1;
+        paras = [...Array.from({ length: n1 }, (_, i) => cell.paras?.[i] ?? {}), ...Array.from({ length: n2 }, (_, i) => next.paras?.[i] ?? {})];
+      }
+    }
+  }
+  const joined = setRowSpan(t, r, c, down + rowSpanOf(t, k, c));
+  return {
+    ...joined,
+    rows: joined.rows.map((row, rr) => row.map((x, cc) => {
+      if (rr === r && cc === c) { const out: TableCell = { ...x, runs }; if (paras) out.paras = paras; else delete out.paras; return out; }
+      return rr === k && cc === c ? { runs: [] } : x;
+    })),
+  };
 }
 
 export function setColumnWidth(t: TableData, c: number, w: number): TableData {
@@ -387,6 +496,7 @@ export function nextCell(t: TableData, r: number, c: number, back = false): { r:
 
 /** Join a cell with the one to its right (its text added after a space). */
 export function mergeRight(t: TableData, r: number, c: number): TableData {
+  if (!canMerge(t, r, c, 'right')) return t;
   const span = spanOf(t, r, c);
   const next = t.rows[r]?.[c + span];
   if (!next) return t;

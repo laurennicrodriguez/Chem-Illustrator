@@ -67,11 +67,11 @@ export interface Settings {
   citeStyle: string;
   /** That style's details changed. */
   citeOptions: Partial<CiteFormat>;
-  /** Show Terminal Methyls writes them as CH3 or as Me (Edit > Preferences). */
+  /** Show Terminal Methyls writes them as CH3 or as Me (Edit > Settings). */
   methylStyle: 'CH3' | 'Me';
   /** The template new slide decks start with (Design > Templates), or null for the plain look. */
   slideTemplate: string | null;
-  /** Axial chirality written as Ra/Sa or as helicity P/M (Edit > Preferences). */
+  /** Axial chirality written as Ra/Sa or as helicity P/M (Edit > Settings). */
   axialStyle: 'RaSa' | 'PM';
   /** The + and − keys put charges in circles (⊕, ⊖) rather than plain signs. */
   circledCharges: boolean;
@@ -87,7 +87,7 @@ export interface Settings {
   superscriptR: boolean;
   /** Where Format > Link Text to Structure puts the text: where it is, or a side of the structure. */
   linkSide: 'keep' | 'below' | 'above' | 'left' | 'right';
-  /** Ask before a command with nothing selected changes every structure on the page (Edit > Preferences). */
+  /** Ask before a command with nothing selected changes every structure on the page (Edit > Settings). */
   askWholeDrawing: boolean;
   /** Your own colour rows, in every colour menu and every mode (Edit > Colour Palettes). */
   palettes: Palette[];
@@ -107,11 +107,13 @@ export interface Settings {
   guides: { drawing: boolean; slides: boolean; design: boolean };
   /** Document settings boxes pinned in the panel on the right ('para', 'style', 'page', 'hf'). */
   docPins: string[];
-  /** Look for a newer version when the desktop app starts (Edit > Preferences). */
+  /** Look for a newer version when the desktop app starts (Edit > Settings). */
   updateCheck: boolean;
-  /** Names the name reader can't read are looked up on PubChem (Edit > Preferences). */
+  /** Names the name reader can't read are looked up on PubChem (Edit > Settings). */
   pubchemNames: boolean;
-  /** The name put on tracked changes in documents (Review > Your Name, Edit > Preferences). */
+  /** The Windows app has offered to open the chemistry file types (once, at its first start). */
+  fileTypesOffered: boolean;
+  /** The name put on tracked changes in documents (Review > Your Name, Edit > Settings). */
   reviewName: string;
   /** A version the user chose Skip This Version for, so starting the app doesn't offer it again. */
   skipVersion: string | null;
@@ -133,7 +135,7 @@ export const DEFAULT_SETTINGS: Settings = {
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
   guides: { drawing: false, slides: true, design: true },
   docPins: [],
-  updateCheck: true, pubchemNames: true, reviewName: '', skipVersion: null, recentFiles: [], highlightLooks: [],
+  updateCheck: true, pubchemNames: true, fileTypesOffered: false, reviewName: '', skipVersion: null, recentFiles: [], highlightLooks: [],
   scheme: DEFAULT_SCHEME_PREFS,
   keep: DEFAULT_KEEP,
 };
@@ -149,7 +151,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (!raw || typeof raw !== 'object') return s;
   const r = raw as Record<string, unknown>;
   if (r.hotkeys && typeof r.hotkeys === 'object' && !Array.isArray(r.hotkeys)) s.hotkeys = r.hotkeys as KeyOverrides;
-  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'spellCheck', 'scrollBars', 'pageEdge', 'welcomed', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'textToAtom', 'groupOutline', 'rerouteArrows', 'superscriptR', 'updateCheck', 'pubchemNames'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
+  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'spellCheck', 'scrollBars', 'pageEdge', 'welcomed', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'textToAtom', 'groupOutline', 'rerouteArrows', 'superscriptR', 'updateCheck', 'pubchemNames', 'fileTypesOffered'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
   if (r.page === null) s.page = null;
   else if (r.page && typeof r.page === 'object') {
     const p = r.page as Record<string, unknown>;
