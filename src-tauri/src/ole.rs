@@ -77,6 +77,17 @@ pub fn ole_close(id: u32) -> Result<(), String> {
     }
 }
 
+/// A new, empty folder for the file of an object embedded in a document, to open in its own
+/// program (Insert > Object): a folder of its own in the system's temporary folder, so the
+/// file keeps its name.
+#[tauri::command]
+pub fn ole_object_folder() -> Result<String, String> {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let dir = std::env::temp_dir().join("Chem Illustrator objects").join(format!("{stamp:x}"));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not make a folder for the object: {e}"))?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
 /// Whether the object type is registered (Windows); always false elsewhere.
 #[tauri::command]
 pub fn ole_registered() -> bool {
