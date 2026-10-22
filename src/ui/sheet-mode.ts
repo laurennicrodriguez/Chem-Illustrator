@@ -701,7 +701,8 @@ export class SheetMode {
       case 'chart-save': void this.charts.savePicture(); break;
       case 'chart-delete': this.charts.deleteChart(); break;
       case 'copy': if (this.charts.chart) void this.charts.copyPicture(); else if (v.selectedObject) this.host.flash('Use Duplicate on the right-click menu to copy a picture or shape.'); else void this.copy(); break;
-      case 'cut': void this.copy(true); break;
+      // a chart or picture isn't cut (a paste can't bring it back): cells under it aren't either
+      case 'cut': if (this.charts.chart || v.selectedObject) this.host.flash('Cut works on cells. Use Copy for a picture of this, or Delete to remove it.'); else void this.copy(true); break;
       case 'paste': void this.paste(null); break;
       case 'clear-contents': v.clearSelection(); break;
       case 'clear-all': this.edit('Clear', (s) => s.clear(v.sel.range, 'all')); break;

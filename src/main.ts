@@ -17,7 +17,7 @@ import { ToolboxEditor } from './ui/toolbox-editor';
 import { RibbonEditor } from './ui/ribbon-editor';
 import { readRibbons, applyRibbon, type RibbonInfo, type RibbonsPrefs } from './ui/ribbon-custom';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
-import { Doc, Atom, Caption, Shape, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle, type ShapeMath, PAPER, keepOnPage } from './model';
+import { Doc, Atom, Caption, Shape, type TextRun, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle, type ShapeMath, PAPER, keepOnPage } from './model';
 import { Renderer, measureText, forgetTextWidths } from './render/renderer';
 import { Editor, TOOLS, type HighlightToggle, type Selection } from './editor/editor';
 import { BUILT_IN_LOOKS, type HighlightLookPreset } from './ui/highlight-looks';
@@ -42,7 +42,7 @@ import { toMolfile, addMolfile } from './chem/molfile';
 import { bestFit, fitMove, fitMatters } from './chem/orient';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, fitPasted, typicalBondLength, Pasted,
+import { copyDrawing, copyImage, forgetCopy, looksLikeChemistry, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, fitPasted, typicalBondLength, Pasted,
   nativeFirst, writeNativeFormats, looksLikeCdxml, cfHtml, fromCfHtml, CELLS_FORMAT, OWN_FORMAT, CDX_FORMAT, setWordObjects, embeddedPicture, packFormats } from './io/clipboard';
 import { cdxToCdxml } from './io/cdx';
 import { writeCdxml } from './io/cdxml-write';
@@ -140,6 +140,7 @@ import { idText, labelClashes, parseIdStart, type IdStyle } from './chem/compoun
 import { schemeItems, isReactionArrow } from './chem/reaction';
 import { labelsOf, schemePrefs, setSchemePrefs, SPACING, type SchemePrefs } from './chem/scheme-layout';
 import { plainText, savableChar } from './richtext';
+import { htmlToRich } from './text/html';
 import { LiveStereo } from './chem/live-stereo';
 import { setStereoShown, shownDescriptor, axialStyle } from './chem/stereo';
 import { keymap, registerToolNames, displayChord, actionName, chordOf, parseAction, KeyContext, KeyOverrides } from './editor/keymap';
@@ -631,7 +632,7 @@ async function pasteFrom(read: () => Pasted | Promise<Pasted>): Promise<void> {
     }
     editor.sel = insertDrawing(doc, got.doc, pasteCentre());
     editor.changed();
-  } else if (got.kind === 'text') await pasteChemistry(got.text);
+  } else if (got.kind === 'text') await pasteText(got.text, got.html);
   else if (got.kind === 'picture') placePicture(got.bytes, got.mime, null);
   else if (got.kind === 'table') pasteTable(got.rows);
   else flash('There is nothing to paste.');
@@ -696,13 +697,13 @@ function pasteCentre(): { x: number; y: number } {
   return a ? { x: (a.x1 + a.x2) / 2, y: (a.y1 + a.y2) / 2 } : renderer.toDoc(renderer.width / 2, renderer.height / 2);
 }
 
-/** Paste a SMILES string or a molfile as a structure. */
-async function pasteChemistry(text: string): Promise<void> {
-  if (!chem.ready) { flash('The chemistry engine is still loading.'); return; }
+/** Paste a SMILES string or a molfile as a structure. With `quiet`, text that isn't one is left (false) without a message. */
+async function pasteChemistry(text: string, quiet = false): Promise<boolean> {
+  if (!chem.ready) { flash('The chemistry engine is still loading.'); return true; }
   const c = pasteCentre();
   let mb: string | null = text.includes('M  END') ? text : null;
   if (!mb && !/\s/.test(text)) mb = await chem.smilesToMol(text);
-  if (!mb) { flash('Paste a SMILES string or a molfile.'); return; }
+  if (!mb) { if (!quiet) flash('Paste a SMILES string or a molfile.'); return false; }
   try {
     let ids: number[] = [];
     doc.edit('Paste', () => { ids = addMolfile(doc, mb!, c.x, c.y); });
@@ -710,6 +711,37 @@ async function pasteChemistry(text: string): Promise<void> {
   } catch (err) {
     flash(String(err));
   }
+  return true;
+}
+
+/**
+ * Pasted text on a drawing, slide or design: a SMILES string or a molfile becomes a structure;
+ * other text (a Document's, Word's, a web page's) a text box in the middle, with its bold,
+ * italics, sub- and superscripts and colours from the HTML that came with it.
+ */
+async function pasteText(text: string, html?: string): Promise<void> {
+  if (looksLikeChemistry(text) && await pasteChemistry(text, true)) return;
+  const rich = html ? htmlToRich(html) : null;
+  // (the drawing's caption font and size, as typed text gets)
+  const runs = (rich?.runs ?? [{ text } as TextRun]).map(({ size: _s, font: _f, obj: _o, ...r }: TextRun) => r).filter((r) => r.text);
+  if (!runs.length) { flash('There is nothing to paste.'); return; }
+  const paras = rich && rich.paras.length > 1 ? rich.paras : undefined;
+  finishTyping();
+  renderer.useStyle(doc);
+  const c = pasteCentre();
+  // long text wraps: to the slide's content area, or about 25 bond lengths on a drawing
+  const area = slideContentArea();
+  const most = area ? area.x2 - area.x1 : doc.style.bondLength * 25;
+  const frame = (wrap?: number) => renderer.captionFrame({ id: -1, x: 0, y: 0, runs, justify: 'left', ...(paras ? { paras } : {}), ...(wrap ? { wrap } : {}) } as Caption);
+  let b = frame();
+  const wrap = b.x2 - b.x1 > most ? most : undefined;
+  if (wrap) b = frame(wrap);
+  let id = 0;
+  doc.edit('Paste text', () => {
+    id = doc.addCaption({ x: c.x - (b.x1 + b.x2) / 2, y: c.y - (b.y1 + b.y2) / 2, runs, justify: 'left', ...(paras ? { paras } : {}), ...(wrap ? { wrap } : {}) }).id;
+  });
+  editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set([id]), arrows: new Set(), shapes: new Set() };
+  editor.changed();
 }
 
 /** Insert ▸ Catalytic Cycle…: a ready-made cycle to edit, or the selected structures put round one. */
@@ -3827,6 +3859,7 @@ async function textToStructure(text: string, style: DocStyle): Promise<{ content
  * and Word keep bold, colours and borders) and tab-separated text.
  */
 async function writeCells(own: string, text: string, html: string): Promise<void> {
+  forgetCopy();
   if (nativeClipboard) {
     const enc = new TextEncoder();
     await writeNativeFormats([[CELLS_FORMAT, enc.encode(own)], ['HTML Format', cfHtml(html)], ['CF_UNICODETEXT', enc.encode(text)]]);
@@ -3980,8 +4013,9 @@ window.addEventListener('keydown', (e) => {
 /** Menu commands that work differently while a sheet shows. */
 const SHEET_COMMANDS: Record<string, () => unknown> = {
   'sheet-new-window': () => { sheetMode.view.commitEdit(); ws.newWindow(); },
-  cut: () => sheetMode.copy(true),
-  copy: () => sheetMode.copy(),
+  // (through the sheet's own command, which copies a selected chart rather than the cells under it)
+  cut: () => sheetMode.run('cut'),
+  copy: () => sheetMode.run('copy'),
   paste: () => sheetMode.paste(null),
   'select-all': () => sheetMode.selectAll(),
   'copy-smiles': async () => {
@@ -4042,6 +4076,8 @@ const docMode = new DocumentMode({
   editDrawing: (contents, title, done) => editCellStructure(contents, title, done, docStyle()),
   editDiagram: (contents) => documentDiagram(contents),
   copyDrawing: async (contents, style) => (await copyDrawing(structureDoc(contents, style), null)).replace(/^Copied the whole drawing/, 'Copied the structure'),
+  copiedOther: () => forgetCopy(),
+  copyPicture: (src) => copyImage(src),
   readPaste: (e) => readDocPaste(e),
   toStructure: (text, style) => textToStructure(text, style),
   pickPicture: () => pickPicture(),

@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { Doc } from '../src/model';
 import type { Selection } from '../src/editor/editor';
-import { extractDrawing, insertDrawing, packFormats, unpackFormats, isEmpty } from '../src/io/clipboard';
+import { extractDrawing, insertDrawing, packFormats, unpackFormats, isEmpty, copyDrawing, forgetCopy, readPasteEvent } from '../src/io/clipboard';
 import { rgbaToDib } from '../src/render/picture';
 import { readCdxml } from '../src/io/cdxml';
 import { writeCdxml } from '../src/io/cdxml-write';
@@ -188,5 +188,25 @@ describe('pasting things that point at atoms', () => {
     const tied = [...made.captions].map((id) => doc.captions.get(id)!).find((c) => c.attach);
     expect(tied).toBeTruthy();
     expect(tied!.attach!.atoms.every((a) => made.atoms.has(a))).toBe(true);
+  });
+});
+
+describe('the last drawing copied, for a paste that finds nothing else', () => {
+  const emptyPaste = () => ({ clipboardData: { getData: () => '', files: [] } }) as unknown as ClipboardEvent;
+  it('is forgotten once something else is copied (cells, a document\'s text, a picture)', async () => {
+    // (jsdom has no canvas: a stand-in that measures text and draws nothing; the picture then
+    // fails to go on the clipboard, which comes after the drawing is kept)
+    const proto = HTMLCanvasElement.prototype as unknown as { getContext: unknown };
+    const real = proto.getContext;
+    const ctx: unknown = new Proxy({}, { get: (_, k) => (k === 'measureText' ? (t: string) => ({ width: t.length * 5, actualBoundingBoxAscent: 7, actualBoundingBoxDescent: 2 }) : () => ctx), set: () => true });
+    proto.getContext = () => ctx;
+    try {
+      await copyDrawing(sample().doc, null).catch(() => '');
+    } finally {
+      proto.getContext = real;
+    }
+    expect((await readPasteEvent(emptyPaste())).kind).toBe('drawing');
+    forgetCopy();
+    expect((await readPasteEvent(emptyPaste())).kind).toBe('nothing');
   });
 });
