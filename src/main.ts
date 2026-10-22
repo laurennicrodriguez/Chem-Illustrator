@@ -1527,6 +1527,8 @@ function enterTab(tab: Tab, opened: boolean): void {
   else if (ws.pane || slideSplit) fitSplitDrawing();
   else editor.fit();
   renderer.repaintAll();
+  // (fit leaves an empty drawing alone, so ask for the scene here: else the last tab's drawing stays on screen)
+  editor.requestScene();
   editor.clearSelection();
   editor.frame(true);
   refreshKeys();
