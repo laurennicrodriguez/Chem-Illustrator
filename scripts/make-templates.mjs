@@ -30,9 +30,6 @@ const LIST = [
   ['rings', 'azulene', 'Azulene', 'c1ccc2cccc2cc1'],
   ['rings', 'decalin', 'Decalin', 'C1CCC2CCCCC2C1'],
   ['rings', 'steroid', 'Steroid skeleton', 'C1CCC2C(C1)CCC1C2CCC2CCCC12'],
-  ['rings', 'norbornane', 'Norbornane', 'C1CC2CCC1C2', 'asis'],
-  ['rings', 'bicyclooctane', 'Bicyclo[2.2.2]octane', 'C1CC2CCC1CC2', 'asis'],
-  ['rings', 'adamantane', 'Adamantane', 'C1C2CC3CC1CC(C2)C3', 'asis'],
 
   ['heterocycles', 'pyridine', 'Pyridine', 'c1ccncc1'],
   ['heterocycles', 'pyrimidine', 'Pyrimidine', 'c1cncnc1'],

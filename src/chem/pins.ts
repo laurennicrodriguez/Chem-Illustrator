@@ -11,6 +11,9 @@ import { add, dist, dot, len, mul, perp, sub } from '../geom';
 
 /** How far (in bond lengths) from what it is stuck to a pinned point may be moved by hand and stay stuck. */
 const REACH = 0.9;
+/** A charge sign may sit further off its atom (in the middle of its ring, as on tropylium). */
+const CHARGE_REACH = 1.6;
+const CHARGES = new Set(['CirclePlus', 'CircleMinus', 'Plus', 'Minus']);
 const EPS = 1e-3;
 
 interface Frame { o: Vec; u: Vec; v: Vec; s: number; hand: number }
@@ -79,12 +82,12 @@ const pinAtoms = (pin: Pin) => (pin.on === 'atom' ? pin.ref.slice(0, 1) : pin.re
 type Outcome = { pin: Pin | undefined; at?: Vec; flipped?: boolean };
 
 /** What becomes of a pin whose point is now at `now`: kept, moved with its atoms, held anew, or dropped. */
-function settle(doc: Doc, pin: Pin, now: Vec): Outcome {
+function settle(doc: Doc, pin: Pin, now: Vec, reach = REACH): Outcome {
   const L = doc.style.bondLength;
   const centre = pinCentre(doc, pin);
   if (!centre) return { pin: undefined };
   // moved by hand: still on what it was stuck to, it holds there; taken away, it comes loose
-  if (dist(now, pin.was) > EPS) return { pin: dist(now, centre) <= REACH * L ? makePin(doc, pin.on, pinAtoms(pin), now) ?? undefined : undefined };
+  if (dist(now, pin.was) > EPS) return { pin: dist(now, centre) <= reach * L ? makePin(doc, pin.on, pinAtoms(pin), now) ?? undefined : undefined };
   const f = frameOf(doc, pin.ref);
   // an atom that framed it is gone (but not the ones it is on): framed afresh where it is
   if (!f) return { pin: makePin(doc, pin.on, pinAtoms(pin), now) ?? undefined };
@@ -105,7 +108,7 @@ export function mirrorBend(r: Arrow): Partial<Arrow> {
 }
 
 /** Symbols that sit on an atom and go with it. */
-const ON_ATOM = new Set(['LonePair', 'Electron', 'CirclePlus', 'CircleMinus']);
+const ON_ATOM = new Set(['LonePair', 'Electron', 'CirclePlus', 'CircleMinus', 'Plus', 'Minus']);
 
 /** A lone pair, radical dot or circled charge, pinned to the atom it sits on (the nearest, within most of a bond length). */
 export function pinSymbol(doc: Doc, s: Shape): Pin | undefined {
@@ -158,7 +161,7 @@ export function followPins(doc: Doc, before?: ReadonlyMap<string, Entity | null>
   for (const s of doc.shapes.values()) {
     if (!s.pin) continue;
     const c = { x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 };
-    const o = settle(doc, s.pin, c);
+    const o = settle(doc, s.pin, c, CHARGES.has(s.symbol ?? '') ? CHARGE_REACH : REACH);
     if (o.pin === s.pin) continue;
     const patch: Partial<Shape> = { pin: o.pin };
     if (o.at) {

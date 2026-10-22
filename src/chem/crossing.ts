@@ -65,3 +65,60 @@ export function crossingGapsCached(doc: Doc, b: Bond, half: number): [number, nu
   if (!gaps) c.map.set(key, (gaps = crossingGaps(doc, b, half)));
   return gaps;
 }
+
+/**
+ * Put the bonds at these atoms in front of or behind the bonds they cross by where they lie in
+ * 3-D: of two bonds that cross, the one nearer the reader at the crossing is in front (and the
+ * other gets the gaps). Only bonds whose atoms both have a depth (drawn in perspective) take
+ * part; their layers are renumbered among the layers they had. Call inside an edit.
+ */
+export function layerByDepth(doc: Doc, atomIds: Iterable<number>): void {
+  const deep = (b: Bond) => doc.atoms.get(b.a1)?.depth !== undefined && doc.atoms.get(b.a2)?.depth !== undefined;
+  const near = new Map<number, Bond>();
+  for (const id of atomIds) for (const bid of doc.adj.get(id) ?? []) {
+    const b = doc.bonds.get(bid);
+    if (b && deep(b)) near.set(b.id, b);
+  }
+  // behind → the bonds in front of it
+  const inFront = new Map<number, Set<number>>();
+  const all = new Map<number, Bond>();
+  const depthAt = (b: Bond, t: number) => { const d1 = doc.atoms.get(b.a1)!.depth!, d2 = doc.atoms.get(b.a2)!.depth!; return d1 + (d2 - d1) * t; };
+  for (const b of near.values()) {
+    const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
+    for (const o of crossingBonds(doc, b)) {
+      if (!deep(o)) continue;
+      const c = crossAt(p, q, doc.atoms.get(o.a1)!, doc.atoms.get(o.a2)!);
+      if (!c) continue;
+      const db = depthAt(b, c.t), dOther = depthAt(o, c.u);
+      if (Math.abs(db - dOther) < 1e-6) continue;
+      const [back, front] = db < dOther ? [b, o] : [o, b];
+      if (!inFront.has(back.id)) inFront.set(back.id, new Set());
+      inFront.get(back.id)!.add(front.id);
+      all.set(b.id, b);
+      all.set(o.id, o);
+    }
+  }
+  if (!all.size) return;
+  // back to front (a bond only after everything behind it); a cycle, which a drawing that is no
+  // true projection can have, is broken by the layers the bonds had
+  const behind = new Map<number, number>([...all.keys()].map((id) => [id, 0]));
+  for (const fronts of inFront.values()) for (const f of fronts) behind.set(f, behind.get(f)! + 1);
+  const layers = [...all.values()].map(bondLayer).sort((a, b) => a - b);
+  const left = new Set(all.keys());
+  const order: number[] = [];
+  while (left.size) {
+    const ready = [...left].filter((id) => behind.get(id) === 0);
+    const pool = ready.length ? ready : [...left];
+    const next = pool.reduce((a, b) => (bondLayer(all.get(a)!) <= bondLayer(all.get(b)!) ? a : b));
+    left.delete(next);
+    order.push(next);
+    for (const f of inFront.get(next) ?? []) if (left.has(f)) behind.set(f, behind.get(f)! - 1);
+  }
+  // the same layers, handed out again in this order (kept distinct, so no two tie)
+  let last = -Infinity;
+  order.forEach((id, i) => {
+    const z = Math.max(layers[i], last + 1);
+    last = z;
+    if (bondLayer(all.get(id)!) !== z) doc.updateBond(id, { z });
+  });
+}

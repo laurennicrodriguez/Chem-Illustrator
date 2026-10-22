@@ -7,6 +7,8 @@ import { Doc } from '../src/model';
 import { writeCdxml } from '../src/io/cdxml-write';
 import { readCdxml } from '../src/io/cdxml';
 import { bondLayer, crossingBonds, crossingGaps } from '../src/chem/crossing';
+import { templateById, placeTemplate, freePlacement } from '../src/chem/templates';
+import { fusions3d } from '../src/chem/fuse3d';
 
 /** Two bonds crossing in an X, and a third bond off to the side. */
 function cross(doc: Doc) {
@@ -58,5 +60,54 @@ describe('crossing bonds', () => {
     expect(Math.sign(c.x - a.x)).toBe(Math.sign(c.y - a.y));
     // saving the file again as read leaves it untouched
     expect(writeCdxml(back)).toBe(text);
+  });
+});
+
+describe('crossings in drawings seen in perspective', () => {
+  /** For every crossing pair, whether the bond nearer the reader where they cross is the one in front. */
+  const depthAt = (doc: Doc, id: number, at: { x: number; y: number }) => {
+    const b = doc.bonds.get(id)!, p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
+    const t = Math.hypot(at.x - p.x, at.y - p.y) / Math.hypot(q.x - p.x, q.y - p.y);
+    return p.depth! + (q.depth! - p.depth!) * t;
+  };
+  const meet = (doc: Doc, b: { a1: number; a2: number }, o: { a1: number; a2: number }) => {
+    const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!, r = doc.atoms.get(o.a1)!, s = doc.atoms.get(o.a2)!;
+    const d1 = { x: q.x - p.x, y: q.y - p.y }, d2 = { x: s.x - r.x, y: s.y - r.y };
+    const t = ((r.x - p.x) * d2.y - (r.y - p.y) * d2.x) / (d1.x * d2.y - d1.y * d2.x);
+    return { x: p.x + d1.x * t, y: p.y + d1.y * t };
+  };
+  const checkAll = (doc: Doc) => {
+    let pairs = 0;
+    for (const b of doc.bonds.values()) for (const o of crossingBonds(doc, b)) {
+      if (o.id < b.id) continue;
+      const m = meet(doc, b, o);
+      const bFront = depthAt(doc, b.id, m) > depthAt(doc, o.id, m);
+      expect(bondLayer(b) > bondLayer(o), `bonds ${b.id} and ${o.id}`).toBe(bFront);
+      pairs++;
+    }
+    return pairs;
+  };
+
+  for (const id of ['chair-ae', 'boat-ae', 'cubane', 'adamantane-3d', 'bicyclo221', 'envelope-ae']) {
+    it(`${id}: the bond behind gets the gap`, () => {
+      const doc = new Doc();
+      doc.edit('t', () => placeTemplate(doc, templateById(id)!, freePlacement({ x: 0, y: 0 }, 14.4)));
+      for (const a of doc.atoms.values()) expect(a.depth).toBeDefined();
+      if (id === 'chair-ae' || id === 'cubane') expect(checkAll(doc)).toBeGreaterThan(0);
+      else checkAll(doc);
+    });
+  }
+
+  it('a chair fused onto a chair with all its bonds crosses them the right way', () => {
+    for (let k = 0; k < 3; k++) {
+      const doc = new Doc();
+      let ids: number[] = [];
+      doc.edit('t', () => { ids = placeTemplate(doc, templateById('chair-ae')!, freePlacement({ x: 0, y: 0 }, 14.4)); });
+      const ring = new Set(ids.slice(0, 6));
+      const b = [...doc.bonds.values()].find((x) => ring.has(x.a1) && ring.has(x.a2))!;
+      const f = fusions3d(doc, templateById('chair')!, b.id)![k];
+      doc.edit('f', () => placeTemplate(doc, templateById('chair')!, { origin: { x: 0, y: 0 }, scale: f.len, angle: 0, mirror: false, pts: f.pts }, { existing: f.existing, move: f.move, depth: f.depth, atomDepth: f.atomDepth, noMerge: true }));
+      checkAll(doc);
+    }
   });
 });
