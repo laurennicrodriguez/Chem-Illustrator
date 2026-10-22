@@ -67,11 +67,11 @@ export interface Settings {
   citeStyle: string;
   /** That style's details changed. */
   citeOptions: Partial<CiteFormat>;
-  /** Show Terminal Methyls writes them as CH3 or as Me (Edit > Preferences). */
+  /** Show Terminal Methyls writes them as CH3 or as Me (Edit > Settings). */
   methylStyle: 'CH3' | 'Me';
   /** The template new slide decks start with (Design > Templates), or null for the plain look. */
   slideTemplate: string | null;
-  /** Axial chirality written as Ra/Sa or as helicity P/M (Edit > Preferences). */
+  /** Axial chirality written as Ra/Sa or as helicity P/M (Edit > Settings). */
   axialStyle: 'RaSa' | 'PM';
   /** The + and − keys put charges in circles (⊕, ⊖) rather than plain signs. */
   circledCharges: boolean;
@@ -87,7 +87,7 @@ export interface Settings {
   superscriptR: boolean;
   /** Where Format > Link Text to Structure puts the text: where it is, or a side of the structure. */
   linkSide: 'keep' | 'below' | 'above' | 'left' | 'right';
-  /** Ask before a command with nothing selected changes every structure on the page (Edit > Preferences). */
+  /** Ask before a command with nothing selected changes every structure on the page (Edit > Settings). */
   askWholeDrawing: boolean;
   /** Your own colour rows, in every colour menu and every mode (Edit > Colour Palettes). */
   palettes: Palette[];
@@ -107,11 +107,11 @@ export interface Settings {
   guides: { drawing: boolean; slides: boolean; design: boolean };
   /** Document settings boxes pinned in the panel on the right ('para', 'style', 'page', 'hf'). */
   docPins: string[];
-  /** Look for a newer version when the desktop app starts (Edit > Preferences). */
+  /** Look for a newer version when the desktop app starts (Edit > Settings). */
   updateCheck: boolean;
-  /** Names the name reader can't read are looked up on PubChem (Edit > Preferences). */
+  /** Names the name reader can't read are looked up on PubChem (Edit > Settings). */
   pubchemNames: boolean;
-  /** The name put on tracked changes in documents (Review > Your Name, Edit > Preferences). */
+  /** The name put on tracked changes in documents (Review > Your Name, Edit > Settings). */
   reviewName: string;
   /** A version the user chose Skip This Version for, so starting the app doesn't offer it again. */
   skipVersion: string | null;

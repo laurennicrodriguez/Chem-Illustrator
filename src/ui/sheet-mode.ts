@@ -26,6 +26,9 @@ import { askProperties, PropertyChoice } from './property-dialog';
 import { ask } from './ask';
 import { SheetFormatting } from './sheet-format-ui';
 import { SheetCharts } from './sheet-chart-ui';
+import { SheetNotes } from './sheet-notes-ui';
+import { SheetValidation } from './sheet-validation-ui';
+import { describeValidation, KIND_NAMES } from '../sheet/validation';
 import type { ChartKind } from '../sheet/chart';
 import { DashboardUi } from './dashboard-ui';
 import { TILE_NAMES } from '../sheet/dashboard';
@@ -61,6 +64,8 @@ export interface SheetModeHost {
   copyStructure(contents: Contents, style: DocStyle): Promise<string>;
   /** Read the clipboard for a paste (from the paste event in a browser). */
   readCells(e: ClipboardEvent | null): Promise<ClipboardCells>;
+  /** Ask for the name put on notes and comments (true when one was given). */
+  askName(): Promise<boolean>;
 }
 
 const OWN_KIND = 'chem-illustrator-cells';
@@ -86,6 +91,10 @@ export class SheetMode {
   readonly charts: SheetCharts;
   /** Dashboard sheets: adding tiles, their menus and settings. */
   readonly dashUi: DashboardUi;
+  /** Notes and comments on cells. */
+  readonly notes: SheetNotes;
+  /** Data validation: the window, drop-downs and alerts. */
+  readonly validation: SheetValidation;
   /** The chart the panel and Chart tab showed last (the tab opens when a chart is first picked). */
   private chartShown: number | null = null;
   /** The dashboard sheet the ribbon was last set up for. */
@@ -118,6 +127,10 @@ export class SheetMode {
       filterMenu: (col, at) => this.filterMenu(col, at),
       flash: (m, ms) => this.host.flash(m, ms),
       typing: (text) => this.typing(text),
+      hoverNote: (cell, box) => this.notes.hover(cell, box),
+      drawn: () => this.notes.layout(),
+      dropDown: (r, c, at) => this.validation.dropDown(r, c, at),
+      invalid: (rule, text) => this.validation.alert(rule, text),
     });
     chem.onAnswers = () => {
       const wb = this.book;
@@ -132,6 +145,17 @@ export class SheetMode {
       flash: (m, ms) => this.host.flash(m, ms),
     });
     this.charts = new SheetCharts({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+    });
+    this.notes = new SheetNotes({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+      askName: () => this.host.askName(),
+    });
+    this.validation = new SheetValidation({
       view: this.view,
       edit: (label, fn) => this.edit(label, fn),
       flash: (m, ms) => this.host.flash(m, ms),
@@ -492,6 +516,17 @@ export class SheetMode {
       case 'clear-contents': v.clearSelection(); break;
       case 'clear-all': this.edit('Clear', (s) => s.clear(v.sel.range, 'all')); break;
       case 'clear-formats': this.edit('Clear formats', (s) => s.clear(v.sel.range, 'formats')); break;
+      case 'new-note': void this.notes.newNote(); break;
+      case 'new-comment': void this.notes.newComment(); break;
+      case 'edit-note': this.notes.edit(); break;
+      case 'delete-note': case 'delete-comment': this.notes.remove(); break;
+      case 'show-note': this.notes.toggleShown(); break;
+      case 'show-all-notes': this.notes.toggleShowAll(); this.showRibbonState(); break;
+      case 'convert-notes': this.notes.convertNotes(); break;
+      case 'prev-comment': case 'next-comment': this.notes.step(name === 'next-comment'); break;
+      case 'data-validation': this.validation.dialog(); break;
+      case 'circle-invalid': this.validation.toggleCircles(); this.showRibbonState(); break;
+      case 'pick-from-list': v.openDropDown(); break;
       default: return false;
     }
     return true;
@@ -1435,6 +1470,13 @@ export class SheetMode {
 
   // ---------------------------------------------------------------- undo
 
+  /** The name of the step Undo (or Redo) would take back: null with none, '' when it has no name. */
+  history(redo = false): string | null {
+    const wb = this.book;
+    if (!wb || !(redo ? wb.canRedo() : wb.canUndo())) return null;
+    return redo ? wb.redoLabel : wb.undoLabel;
+  }
+
   undo(): void {
     const wb = this.book;
     if (!wb) return;
@@ -1491,6 +1533,13 @@ export class SheetMode {
       if (s.colDefs.has(R.c1)) items.push(['Change the column\'s formula…', () => void this.editColumnFormula(R.c1)], ['Stop calculating this column (keep the values)', () => this.freezeColumn(R.c1)]);
     } else {
       items.push(['Insert…', () => this.insertCells()], ['Delete…', () => this.deleteCells()], ['Clear contents', () => v.clearSelection()]);
+      // notes and comments, as Excel's right-click menu has them
+      const note = s.noteAt(v.sel.active.r, v.sel.active.c);
+      items.push(null);
+      if (!note) items.push(['New Comment', () => void this.notes.newComment()], ['New Note', () => void this.notes.newNote()]);
+      else if (note.kind === 'comment') items.push(['Show Comment', () => this.notes.edit()], ['Delete Comment', () => this.notes.remove()]);
+      else items.push(['Edit Note', () => this.notes.edit()], ['Delete Note', () => this.notes.remove()], [note.shown ? 'Hide Note' : 'Show Note', () => this.notes.toggleShown()]);
+      items.push(['Pick From Drop-down List…', () => v.openDropDown()]);
     }
     items.push(null,
       ['Sort smallest to largest', () => void this.sort(false)],
@@ -1504,6 +1553,7 @@ export class SheetMode {
       ['Reset to calculated', () => this.resetCalculated(), overrides],
       null,
       ['Conditional Formatting ▸', () => this.formatting.conditionalMenu(x, y)],
+      ['Data Validation…', () => this.validation.dialog()],
     );
     const table = this.tableHere();
     if (table) {
@@ -1625,6 +1675,16 @@ export class SheetMode {
     press('filter', !!s.filter);
     press('freeze-header', s.frozen.rows > 0);
     press('merge-cells', !!s.mergeAt(r, c));
+    press('show-all-notes', this.notes.showAll);
+    press('circle-invalid', this.view.circleInvalid);
+    const note = s.noteAt(r, c);
+    press('show-note', !!note?.shown);
+    for (const [name, on] of [['edit-note', note?.kind === 'note'], ['show-note', note?.kind === 'note'], ['delete-note', !!note]] as const) {
+      const b = this.ribbon.querySelector<HTMLButtonElement>(`[data-sh="${name}"]`);
+      if (b) b.disabled = !on;
+    }
+    for (const m of document.querySelectorAll('[role="menuitemcheckbox"][data-cmd="show-all-notes"]')) m.setAttribute('aria-checked', String(this.notes.showAll));
+    for (const m of document.querySelectorAll('[role="menuitemcheckbox"][data-cmd="circle-invalid"]')) m.setAttribute('aria-checked', String(this.view.circleInvalid));
     const fmt = this.ribbon.querySelector<HTMLSelectElement>('#sh-numfmt')!;
     const code = st.numFmt ?? 'General';
     let opt = [...fmt.options].find((o) => o.value === code);
@@ -1741,6 +1801,17 @@ export class SheetMode {
       parts.push(para(`${e.code === '#BUSY!' ? 'Being worked out…' : `${e.code}: ${problem ?? e.detail}`}`, e.code === '#BUSY!' ? 'muted' : 'cp-error'));
     } else if (v !== undefined && v !== null && (cell?.input?.startsWith('=') || def)) {
       parts.push(para(`Value: ${plainText(v)}`, 'cp-value'));
+    }
+    // a note or comment, and a data validation rule: a line each, only where there is one
+    const note = s.noteAt(r, c);
+    if (note) {
+      const replies = note.replies?.length ? ` (${note.replies.length} ${note.replies.length === 1 ? 'reply' : 'replies'})` : '';
+      const line = para(`${note.kind === 'comment' ? 'Comment' : 'Note'}${note.author ? ` by ${note.author}` : ''}${replies}${note.done ? ', resolved' : ''}: ${note.text}`, 'cp-note-line');
+      parts.push(line, rowOfButtons(button(note.kind === 'comment' ? 'Open' : 'Edit', () => this.notes.edit(), 'Show its card beside the cell'), button('Delete', () => this.notes.remove())));
+    }
+    const rule = s.validationAt(r, c);
+    if (rule) {
+      parts.push(para(`${KIND_NAMES[rule.kind]} rule: takes ${describeValidation(rule)}.`, 'muted small'), rowOfButtons(button('Data Validation…', () => this.validation.dialog())));
     }
     // the number format: always editable here (Ctrl+1)
     const st = s.styleAt(r, c);

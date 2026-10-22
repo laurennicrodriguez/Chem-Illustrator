@@ -26,7 +26,7 @@ import { cmtIds, initials, placedComments, type CommentThread } from '../documen
 import { toOmml } from '../document/math';
 import { documentMeasure } from '../text/font-measure';
 import { arialWidth } from '../text-metrics';
-import { PAD_X, PAD_Y, cellAlign, isCovered, spanOf } from '../table';
+import { PAD_X, PAD_Y, cellAlign, coveringCell, isCovered, rowSpanOf, spanOf } from '../table';
 import { connectorSpPr, geoSpPr, xfrm } from './pptx-write';
 import { geoDef } from '../design/geo';
 import { shapeOrder } from '../objects';
@@ -731,23 +731,43 @@ class DocxWriter {
       const cells: string[] = [];
       const lastHead = tab.head > 0 && r === tab.head - 1 && r < tab.rows.length - 1;
       for (let c = 0; c < tab.cols.length; c++) {
-        if (isCovered(tab, r, c)) continue;
-        const span = spanOf(tab, r, c);
+        const own = coveringCell(tab, r, c);
+        // a cell under one merged down from above: Word's continuing cell, as wide as the merged one
+        const under = own.r < r;
+        if (own.c !== c || (!under && isCovered(tab, r, c))) continue;
+        const span = spanOf(tab, own.r, own.c);
         const w = tab.cols.slice(c, c + span).reduce((a, b) => a + b, 0);
-        const cell = row[c] ?? { runs: [] };
+        const cell = tab.rows[own.r]?.[own.c] ?? row[c] ?? { runs: [] };
         const tcPr = [`<w:tcW w:w="${twips(w)}" w:type="dxa"/>`];
         if (span > 1) tcPr.push(`<w:gridSpan w:val="${span}"/>`);
+        if (under) tcPr.push('<w:vMerge/>');
+        else if (rowSpanOf(tab, r, c) > 1) tcPr.push('<w:vMerge w:val="restart"/>');
         if (tab.lines === 'acs' && lastHead) tcPr.push(`<w:tcBorders><w:bottom ${grid}/></w:tcBorders>`);
         if (cell.fill) tcPr.push(`<w:shd w:val="clear" w:color="auto" w:fill="${hex6(cell.fill)}"/>`);
         if (cell.valign) tcPr.push(`<w:vAlign w:val="${cell.valign}"/>`);
-        // the cell's paragraphs, set as the text is, lined up as the cell is
+        if (under) { cells.push(`<w:tc><w:tcPr>${tcPr.join('')}</w:tcPr><w:p/></w:tc>`); continue; }
+        // the cell's paragraphs, set as the text is, lined up as the cell is; a table in the cell as Word's table in it
         const n = paraCount(rt.plainText(cell.runs));
         const ps = fitParas(cell.paras, n);
         const ca = docCellAlign(tab, r, c);
         const parts = splitParagraphs(cell.runs);
         const paras: string[] = [];
-        for (let i = 0; i < n; i++) paras.push(await this.paragraph(main, { ...ps[i], align: ps[i]?.align ?? ca }, parts[i] ?? [], 0));
-        cells.push(`<w:tc><w:tcPr>${tcPr.join('')}</w:tcPr>${paras.join('') || '<w:p/>'}</w:tc>`);
+        let lastTable = false;
+        for (let i = 0; i < n; i++) {
+          const pr = parts[i] ?? [];
+          const inner = pr.length === 1 && pr[0].obj !== undefined && pr[0].text === OBJECT_CHAR ? this.t.objects[pr[0].obj] : undefined;
+          if (inner?.kind === 'table') {
+            if (lastTable) paras.push('<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p>');
+            paras.push(await this.docTable(main, inner.table, ps[i]?.align ?? ca));
+            lastTable = true;
+            continue;
+          }
+          lastTable = false;
+          paras.push(await this.paragraph(main, { ...ps[i], align: ps[i]?.align ?? ca }, pr, 0));
+        }
+        // (Word's cells end with a paragraph, after any table in them)
+        if (lastTable || !paras.length) paras.push('<w:p/>');
+        cells.push(`<w:tc><w:tcPr>${tcPr.join('')}</w:tcPr>${paras.join('')}</w:tc>`);
       }
       rows.push(`<w:tr>${r < tab.head ? '<w:trPr><w:tblHeader/></w:trPr>' : ''}${cells.join('')}</w:tr>`);
     }

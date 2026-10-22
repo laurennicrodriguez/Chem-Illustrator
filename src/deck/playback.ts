@@ -359,11 +359,13 @@ export class Player {
     this.loop();
   }
 
-  /** A click: finish what is moving, else play the next animations, else go on to the next slide. */
+  /** A click: finish what is moving, else play the next animations, else go on to the next slide that isn't hidden. */
   next(): void {
     if (this.moving) { this.finish(); return; }
     if (this.done < this.current.stepCount) { this.playStep(); return; }
-    if (this.i < this.deck.slides.length - 1) this.show(this.i + 1, { transition: true });
+    // hidden slides (Hide Slide) are skipped
+    const j = this.deck.shownAfter(this.i);
+    if (j >= 0) this.show(j, { transition: true });
     else this.onPastEnd();
   }
 
@@ -376,7 +378,8 @@ export class Player {
       this.onChange();
       return;
     }
-    if (this.i > 0) this.show(this.i - 1, { atEnd: true });
+    const j = this.deck.shownBefore(this.i);
+    if (j >= 0) this.show(j, { atEnd: true });
   }
 
   private finish(): void {

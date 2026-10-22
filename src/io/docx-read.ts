@@ -1189,7 +1189,7 @@ class DocxReader {
     // a table from Word (or one typed into here) is a table in the text; an ACS table drawn here
     // comes back as its drawing, and a table inside a cell as a drawn table
     const cap0 = new RegExp(`^${TABLE_NAME} (\\d+)$`).exec(this.a(kid(tblPr, 'tblCaption')) ?? '');
-    if (!(cap0 && this.model?.tables?.[Number(cap0[1])]) && !this.inCell) { this.textTable(tbl); return; }
+    if (!(cap0 && this.model?.tables?.[Number(cap0[1])])) { this.textTable(tbl); return; }
     const rows = kids(tbl, 'tr');
     let cols = kids(kid(tbl, 'tblGrid'), 'gridCol').map((g) => this.tw(g, 'w') ?? 0);
     // the cells, each with how many grid columns it spans
@@ -1303,7 +1303,7 @@ class DocxReader {
     const tblPr = kid(tbl, 'tblPr');
     const rows = kids(tbl, 'tr');
     let cols = kids(kid(tbl, 'tblGrid'), 'gridCol').map((g) => this.tw(g, 'w') ?? 0);
-    type Cell = { cell: TableCell; span: number; borders: Element | null };
+    type Cell = { cell: TableCell; span: number; borders: Element | null; vm: 'restart' | 'continue' | null };
     const grid: Cell[][] = [];
     let head = 0, counting = true;
     const was = this.inCell;
@@ -1315,19 +1315,19 @@ class DocxReader {
         else counting = false;
         const row: Cell[] = [];
         const before = Number(this.a(kid(trPr, 'gridBefore')) ?? 0);
-        for (let i = 0; i < before; i++) row.push({ cell: { runs: [] }, span: 1, borders: null });
+        for (let i = 0; i < before; i++) row.push({ cell: { runs: [] }, span: 1, borders: null, vm: null });
         for (const tc of this.cellsOf(tr)) {
           const tcPr = kid(tc, 'tcPr');
           const span = Math.max(1, Number(this.a(kid(tcPr, 'gridSpan')) ?? 1));
-          const vm = kid(tcPr, 'vMerge');
-          const vmerge = !!vm && this.a(vm) !== 'restart';
-          if (vmerge) this.warn('vmerge');
-          const cell: TableCell = vmerge ? { runs: [] } : this.textCell(tc);
+          // merged down a column: the first cell starts it, the ones under it carry it on
+          const vmEl = kid(tcPr, 'vMerge');
+          const vm = !vmEl ? null : this.a(vmEl) === 'restart' ? 'restart' : 'continue';
+          const cell: TableCell = vm === 'continue' ? { runs: [] } : this.textCell(tc);
           const fill = this.a(kid(tcPr, 'shd'), 'fill');
           if (fill && /^[0-9a-f]{6}$/i.test(fill) && fill.toLowerCase() !== 'ffffff') cell.fill = `#${fill.toLowerCase()}`;
           const va = this.a(kid(tcPr, 'vAlign'));
           if (va === 'center' || va === 'bottom') cell.valign = va;
-          row.push({ cell, span, borders: kid(tcPr, 'tcBorders') });
+          row.push({ cell, span, borders: kid(tcPr, 'tcBorders'), vm });
         }
         grid.push(row);
       }
@@ -1339,13 +1339,23 @@ class DocxReader {
     }
     cols = cols.map((w) => round(Math.max(6, w)));
     const table: TableData = { cols, rows: [], head: 0, lines: 'none' };
+    // the cell each grid column's merge down started at (while it carries on)
+    const open = new Map<number, TableCell>();
     for (const row of grid) {
       const out: TableCell[] = [];
       for (const c of row) {
         if (out.length >= cols.length) break;
-        out.push(c.span > 1 ? { ...c.cell, span: Math.min(c.span, cols.length - out.length) } : c.cell);
+        const at = out.length;
+        const top = c.vm === 'continue' ? open.get(at) : undefined;
+        if (top) top.rowSpan = (top.rowSpan ?? 1) + 1;
+        else for (let k = 0; k < c.span; k++) open.delete(at + k);
+        const cell = top ? { runs: [] } : c.span > 1 ? { ...c.cell, span: Math.min(c.span, cols.length - at) } : c.cell;
+        out.push(cell);
+        if (c.vm === 'restart') open.set(at, cell);
         for (let k = 1; k < c.span && out.length < cols.length; k++) out.push({ runs: [] });
       }
+      // a column the row has no cell in ends any merge in it
+      for (const k of [...open.keys()]) if (k >= out.length) open.delete(k);
       while (out.length < cols.length) out.push({ runs: [] });
       table.rows.push(out);
     }
@@ -1387,12 +1397,18 @@ class DocxReader {
     const kept = runs.filter((r) => {
       const o = r.obj !== undefined ? this.objects[r.obj] : undefined;
       if (!o) return true;
-      if (o.kind === 'textbox' || o.kind === 'table' || o.kind === 'bib') { this.warn('cellBoxes'); return false; }
+      if (o.kind === 'textbox' || o.kind === 'bib') { this.warn('cellBoxes'); return false; }
       if ((o.kind === 'drawing' || o.kind === 'picture') && o.float) { const { float: _, ...rest } = o; this.objects[r.obj!] = rest as DocObject; }
       return true;
     });
-    const clean = rt.normalizeRuns(kept.length ? kept : runs.filter((r) => r.obj === undefined));
-    const cell: TableCell = { runs: clean.filter((r) => r.text) };
+    let clean = rt.normalizeRuns(kept.length ? kept : runs.filter((r) => r.obj === undefined)).filter((r) => r.text);
+    // the empty paragraph Word ends a cell with after a table in it (written again on saving)
+    const end = clean[clean.length - 1], before = clean[clean.length - 2];
+    if (end && before && end.text === '\n' && before.obj !== undefined && this.objects[before.obj]?.kind === 'table') {
+      clean = clean.slice(0, -1);
+      paras.pop();
+    }
+    const cell: TableCell = { runs: clean };
     // the first paragraph's alignment is the cell's; others keep their own when it differs
     const align = paras[0]?.align ?? 'left';
     const ps = paras.map((p) => { const q = { ...p }; if ((q.align ?? 'left') === align) delete q.align; else q.align ??= 'left'; return q; });

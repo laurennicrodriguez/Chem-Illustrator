@@ -1,6 +1,8 @@
 // The slide list down the left of Slides mode, as in PowerPoint: a small picture of each
 // slide. Click to edit a slide, Ctrl+click or Shift+click to pick several, drag to reorder,
-// and Delete, Ctrl+D or Enter in the list to delete, duplicate or add slides.
+// and Delete, Ctrl+D or Enter in the list to delete, duplicate or add slides. Ctrl+C, Ctrl+X
+// and Ctrl+V copy, cut and paste whole slides (into this deck or another), and right-click
+// opens the slide commands. Hidden slides (Hide Slide) are greyed, their numbers struck through.
 
 import type { Deck } from '../deck/deck';
 import { paintSlide } from '../deck/slide-view';
@@ -12,6 +14,12 @@ export interface SlideListHooks {
   remove(indices: number[]): void;
   duplicate(indices: number[]): void;
   add(): void;
+  /** Ctrl+C, Ctrl+X and Ctrl+V on whole slides. */
+  copy(indices: number[]): void;
+  cut(indices: number[]): void;
+  paste(): void;
+  /** Right-click in the list (on a slide, or below the slides). */
+  menu(x: number, y: number): void;
 }
 
 const THUMB_W = 168;
@@ -44,6 +52,15 @@ export class SlideList {
     add.addEventListener('click', () => hooks.add());
     el.replaceChildren(this.list, add);
     this.list.addEventListener('keydown', (e) => this.onKey(e));
+    this.list.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      // a right-click on a slide that isn't picked picks it alone, as a click would
+      const item = (e.target as HTMLElement).closest<HTMLElement>('.sl-item');
+      const i = item ? Number(item.dataset.i) : -1;
+      if (i >= 0 && !this.picked.has(i)) this.onClick(new MouseEvent('click'), i);
+      this.list.focus();
+      hooks.menu(e.clientX, e.clientY);
+    });
     this.list.addEventListener('dragover', (e) => this.onDragOver(e));
     this.list.addEventListener('drop', (e) => this.onDrop(e));
     this.list.addEventListener('dragleave', (e) => {
@@ -68,13 +85,14 @@ export class SlideList {
     if (!this.picked.has(deck.index)) this.picked = new Set([deck.index]);
     this.items = deck.slides.map((s, i) => {
       const item = document.createElement('div');
-      item.className = 'sl-item';
+      item.className = s.hidden ? 'sl-item is-hidden' : 'sl-item';
       item.draggable = true;
       item.setAttribute('role', 'option');
       item.dataset.i = String(i);
       const num = document.createElement('span');
       num.className = 'sl-num';
       num.textContent = String(i + 1);
+      if (s.hidden) num.title = 'Hidden: the slide show skips it (Hide Slide to show it again)';
       const canvas = document.createElement('canvas');
       canvas.className = 'sl-thumb';
       const h = Math.round((THUMB_W * deck.size.h) / deck.size.w);
@@ -186,6 +204,13 @@ export class SlideList {
     else if (e.key === 'End') go(deck.slides.length - 1);
     else if (e.key === 'Delete' || e.key === 'Backspace') this.hooks.remove(this.pickedList());
     else if (ctrl && e.key.toLowerCase() === 'd') this.hooks.duplicate(this.pickedList());
+    else if (ctrl && e.key.toLowerCase() === 'c') this.hooks.copy(this.pickedList());
+    else if (ctrl && e.key.toLowerCase() === 'x') this.hooks.cut(this.pickedList());
+    else if (ctrl && e.key.toLowerCase() === 'v') this.hooks.paste();
+    else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+      const r = (this.items[deck.index] ?? this.list).getBoundingClientRect();
+      this.hooks.menu(r.left + 24, r.top + 24);
+    }
     else if (e.key === 'Enter') this.hooks.add();
     else if (ctrl && e.key.toLowerCase() === 'a') { this.picked = new Set(deck.slides.map((_, i) => i)); this.mark(); }
     else return;

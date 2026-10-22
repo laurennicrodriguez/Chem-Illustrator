@@ -1,6 +1,6 @@
 # Getting started
 
-This page covers installing Chem Illustrator, finding your way round the window, opening your first ChemDraw file, saving, and the Preferences window.
+This page covers installing Chem Illustrator, finding your way round the window, opening your first ChemDraw file, saving, and the Settings window.
 
 Chem Illustrator is free. It draws structures the way ChemDraw does (the same hotkeys, the same ACS Document 1996 look) and opens and saves ChemDraw's `.cdxml` and `.cdx` files. Next to drawings it also has slides, sheets, documents and designs, each in its own tab.
 
@@ -65,7 +65,7 @@ A few seconds after it starts, the desktop app checks whether a newer version ha
 - **Later**: closes the message for now.
 - **Skip This Version**: stops asking about this one version.
 
-Each update is checked against the project's signing key before it installs, so only genuine releases are accepted. You can look for an update at any time with **File ▸ Check for Updates…**, and turn the automatic check off in **Edit ▸ Preferences**.
+Each update is checked against the project's signing key before it installs, so only genuine releases are accepted. You can look for an update at any time with **File ▸ Check for Updates…**, and turn the automatic check off in **Edit ▸ Settings ▸ Online**.
 
 ## A tour of the window
 
@@ -77,11 +77,11 @@ Along the top are the menus: **File**, **Edit**, **View** and **Insert**, then t
 
 To the right of the menus are:
 
-- **Undo**, **Redo** and **Fit** (fit the whole drawing in the window);
+- **Undo**, **Redo** and **Fit** (fit the whole drawing in the window). Undo and Redo are greyed out when there is nothing to take back, and resting the mouse on one names the step it would undo (**Undo Add Ring**); the Edit menu names it too;
 - **Locked**, which locks or unlocks all the toolboxes at once so they can be moved (each toolbox also has its own padlock; see [Drawing](drawing.md#toolboxes-and-my-toolbox));
 - the **eye button**, which turns the dark page on and off;
 - the **Search** box;
-- **Help**, which lists the hotkeys and gives short notes on each part of the program.
+- **Help**, with this **User Guide** built in (it works without an internet connection), the hotkeys, and short notes on each part of the program. **F1** opens the guide at the part about the tool or kind of tab in use: with the ring tool, for example, it opens at Rings.
 
 The menus show each command's key beside it, so they are a good way to learn the shortcuts.
 
@@ -89,15 +89,15 @@ The menus show each command's key beside it, so they are a good way to learn the
 
 Each open file has a tab under the menu bar, with its own icon and colour for its kind (blue for drawings, orange for slides, green for sheets, dark blue for documents, purple for designs). Ctrl+Tab and Ctrl+Shift+Tab move between tabs, and Ctrl+W closes one.
 
-At the end of the tabs are buttons to start something new:
+New files are called **Drawing 1**, **Slides 1**, **Sheet 1** and so on, until they are saved with a name of their own. When there are more tabs than fit, **‹** and **›** scroll them (as does the mouse wheel over the tabs), and **▾** lists every open file to pick one. **+** at the end starts something new:
 
-| Button | Opens | Like |
+| Choice | Opens | Like |
 |---|---|---|
-| **+ Drawing** | A new drawing | ChemDraw |
-| **+ Slides** | A new slide deck | PowerPoint |
-| **+ Sheet** | A new spreadsheet, with chemistry functions | Excel |
-| **+ Document** | A new document with pages, styles and references | Word |
-| **+ Design** | A TOC graphic, graphical abstract, poster or flowchart | a graphics program |
+| **Drawing** | A new drawing (Ctrl+N) | ChemDraw |
+| **Slides** | A new slide deck | PowerPoint |
+| **Sheet** | A new spreadsheet, with chemistry functions | Excel |
+| **Document** | A new document with pages, styles and references | Word |
+| **Design** | A TOC graphic, graphical abstract, poster or flowchart | a graphics program |
 
 The same commands are in the **File** menu (**New Drawing**, **New Slides**, **New Sheet**, **New Document**, **New Design…**). To change the tab colours, use **View ▸ Mode Colours…**.
 
@@ -113,7 +113,11 @@ The panel on the right changes with what you are doing. In a drawing it has:
 - **Warnings**: possible problems in the structures, such as a carbon with five bonds (see [Drawing](drawing.md#warnings)).
 - **Analysis**: formula, masses and more for the selected structure (see [Drawing](drawing.md#the-analysis-panel)).
 
-The **›** arrow at the top of the panel folds it away to give the drawing more room (also **View ▸ Fold Side Panel**). Each kind of tab remembers this on its own, so you can keep the panel folded in sheets and open in drawings.
+The **›** arrow at the top of the panel folds it away to give the drawing more room (also **View ▸ Fold Side Panel**). Each kind of tab remembers this on its own, so you can keep the panel folded in sheets and open in drawings. In a window narrower than about 1,200 pixels the panel folds by itself so the drawing keeps its room, and opens again when the window is widened; **›** still opens it while the window is narrow.
+
+### A small window
+
+When the window is too narrow for a ribbon (in documents, slides, sheets and designs), its groups at the right end first show their buttons as icons only (rest the mouse on one to see its name), then fold into one button each, named after the group, that drops the group's buttons down. A slide or design page that was fitted to the window is fitted again when the window changes size.
 
 ### The hint line at the bottom
 
@@ -159,19 +163,21 @@ Other ways to get a drawing out:
 
 Slides, sheets, documents and designs save in their own formats; see their pages. To save every open tab together, see **File ▸ Save Workspace** in [Files and sharing](files-and-sharing.md).
 
-## Edit ▸ Preferences
+## Edit ▸ Settings
 
-**Edit ▸ Preferences…** holds a few choices that apply everywhere:
+**Edit ▸ Settings…** (Ctrl+,) holds every setting in one window, with a list of pages on the left and a **Find a setting** box at the top. The menu items for a single page (**Hotkeys…**, **Typing and Spelling…**, **Colour Palettes…**, **Mode Colours…**, **Dark Page Colours…**, **Drawing Style…**, **Scheme Settings…**, **AutoSave and Recovery Options…**) open the Settings window at that page. Each page has its own **Save** (or **Apply**) and **Cancel**; a line of help sits under each setting that needs one.
 
-| Setting | What it does |
+| Page | What it holds |
 |---|---|
-| **Terminal methyls written as** | Me or CH3, for **Chemistry ▸ Labels and Numbers ▸ Show Terminal Methyls**. Methyls already written out in the selection change too. |
-| **Axial chirality written as** | Ra / Sa, or P / M (helicity). Ra is the same as M, and Sa as P. |
-| **Charges from the + and − keys** | A plain sign (N+) or a circled one (⊕, ⊖). Charges already drawn keep their look. |
-| **Ask before changing every structure on the page when nothing is selected** | Some commands, such as Show Terminal Methyls, act on the whole page when nothing is selected. With this ticked, they ask first. |
-| **Check for a newer version when the app starts** | The automatic update check (desktop app only). |
-| **Look up names the name reader can't read on PubChem** | Lets **Name to Structure** send a name it can't read itself (DMAP, Hünig's base) to PubChem. Untick it to keep everything on your computer. |
-| **Your name on tracked changes in documents** | The name shown on your edits when tracking changes. |
+| **General** | What a click on a grouped thing selects, outlining the rest of a group, where linked text goes, asking before a command changes every structure on the page, and your name on tracked changes in documents. |
+| **Drawing** | Terminal methyls as Me or CH3; axial chirality as Ra / Sa or P / M (Ra is the same as M, and Sa as P); charges from the + and − keys plain (N+) or circled (⊕, ⊖); text typed beside a bond end becoming an atom; raised R-group numbers; mechanism arrows finding their own way round. |
+| **Drawing Style** | Bond length, line widths, fonts and journal styles (see [Drawing](drawing.md#drawing-styles)). |
+| **Hotkeys** | Every key, to change, import or export (see [Keyboard and mouse](keyboard-and-mouse.md)). |
+| **Text and Spelling** | Chemistry typing (subscripts in formulas), spelling, your dictionary and replacements. |
+| **Colour Palettes**, **Mode Colours**, **Dark Page** | Your rows of colours, the colour of each kind of tab, and the dark page's colours. |
+| **Schemes** | Gaps round arrows and + signs, text size above and below arrows, and the + boxes on new arrows. |
+| **AutoSave and Recovery** | AutoSave, how often unsaved work is copied for recovery, and how many versions are kept. |
+| **Online** | Looking up names on PubChem (sends the name typed to PubChem; untick it to keep everything on your computer) and the update check (desktop app only). |
 
 Your preferences, hotkeys, own templates, nicknames, palettes and toolbox layout are kept in a small settings file, `settings.json`. **Edit ▸ Hotkeys…** shows where it is on your computer.
 

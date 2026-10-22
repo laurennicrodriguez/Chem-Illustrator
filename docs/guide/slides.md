@@ -28,7 +28,22 @@ The list down the left shows every slide.
 | Pick several | Ctrl+click or Shift+click |
 | Delete the picked slides | Delete, or **Home** tab ▸ **Delete** |
 | Duplicate the picked slides | Ctrl+D, or **Home** tab ▸ **Duplicate** |
+| Copy, cut or paste whole slides | Ctrl+C, Ctrl+X, Ctrl+V in the list, or **Edit ▸ Copy Slides** / **Paste Slides** |
+| Hide a slide from the show | **Home** tab ▸ **Hide**, **Slide Show** tab ▸ **Hide Slide**, or right-click ▸ **Hide Slide** |
+| See every slide command | Right-click in the list |
 | Go to the next or previous slide | Page Down / Page Up |
+
+### Copying slides between decks
+
+Pick slides in one deck's list and press Ctrl+C, then click in the list of another deck (or the same one) and press Ctrl+V: the copies go in after the slide picked. They take the look of the deck they go into, as PowerPoint's *Use Destination Theme* does. When that changes how they look, a **Keep source formatting** button appears for a few seconds to paste them again with their own background, fonts and colours; **Edit ▸ Paste Slides (Keep Source Formatting)** (or right-click ▸ **Paste (Keep Source Formatting)**) does that straight away. Structures drawn in another drawing style are redrawn in this deck's, or keep their look when you keep the source formatting. Slides from a deck of another size stay centred, with their titles and text boxes moved to this deck's places.
+
+### Reusing slides from another file
+
+**Home** tab ▸ **Reuse…** (or **Insert ▸ Reuse Slides…**) opens a PowerPoint file and shows its slides. Click the ones you want (Shift+click picks a run of them), tick **Keep source formatting** if they should keep their own look, and choose **Insert Slide** or **Insert All**. Double-click a slide to put just that one in.
+
+### Hidden slides
+
+**Hide Slide** keeps a slide in the deck but leaves it out of the slide show: its picture in the list is greyed and its number struck through. The show skips it going forwards and back, and starting from the beginning starts at the first slide that isn't hidden. **From This Slide** on a hidden slide still shows it, and typing its number then Enter jumps to it, as in PowerPoint. Hidden slides stay hidden in the PowerPoint file. Click **Hide Slide** again to show it.
 
 ## The slide master
 
@@ -117,6 +132,10 @@ Select a picture, then use the **Style** panel: **Frame style**, frame line and 
 **Insert** tab ▸ **Chart** (or **Insert ▸ Chart…**) opens the chart window, as PowerPoint's Insert Chart does. The chart keeps its own data, shown in a grid under the chart: type over the sample numbers, or paste a block from Excel or a sheet. Rows and columns typed next to the data join the chart; **Chart All the Data** charts the whole table again. The buttons along the top change the kind of chart (scatter, line, column, bar, area, pie), and the panel on the right has every setting Sheet mode's charts have: titles, axes, log scales, colours, markers, error bars and fitted lines with their equation and R².
 
 Double-click a chart (or right-click ▸ **Edit Chart…**) to change it. Dragging its corners lays it out again at the new size rather than stretching it. Charts are saved in PowerPoint files as PowerPoint charts with their data inside, so **Edit Data** works in PowerPoint, and charts made in PowerPoint open here as charts.
+
+## Equations
+
+**Insert** tab ▸ **Equation** (Alt+=, or **Insert ▸ Equation…**) opens the equation window Document mode uses: type LaTeX (`x^2`, `k_{obs}`, `\frac{a}{b}`, `\alpha`) or start from an equation chemists use often (Arrhenius, Eyring, rate laws, Henderson–Hasselbalch). The equation goes in the middle of the slide in the master's body font, size and text colour. Drag a corner to make it larger or smaller, double-click it to change it, and set its colour in the **Style** panel. PowerPoint files keep it as a PowerPoint equation, which PowerPoint can edit; equations made in PowerPoint open here as equations too.
 
 ## Transitions
 

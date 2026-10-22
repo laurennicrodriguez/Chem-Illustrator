@@ -399,10 +399,12 @@ export class DocView {
       drawLayout(ctx, lay.text, 0, 0, p.first, p.end);
       drawNoteRules(ctx, lay, p.index);
       // tables, then the figures (some of them in table cells)
-      for (const o of lay.objects) {
+      // (a table in a cell after the table holding it)
+      const tabs = lay.objects.filter((o) => o.page === p.index && t.objects[o.id]?.kind === 'table').sort((a, b) => (lay.tables.get(a.id)?.depth ?? 0) - (lay.tables.get(b.id)?.depth ?? 0));
+      for (const o of tabs) {
         const obj = t.objects[o.id];
-        const tb = obj?.kind === 'table' ? lay.tables.get(o.id) : undefined;
-        if (o.page === p.index && obj?.kind === 'table' && tb) drawDocTable(ctx, obj.table, tb, p.index, { color: '#9fb4d8', px: 1 / k });
+        const tb = lay.tables.get(o.id);
+        if (obj?.kind === 'table' && tb) drawDocTable(ctx, obj.table, tb, p.index, { color: '#9fb4d8', px: 1 / k });
       }
       for (const o of lay.objects) if (o.page === p.index && o.wrap !== 'behind' && t.objects[o.id]?.kind !== 'table') this.object(ctx, t, o, lay);
       const px = 1 / k;

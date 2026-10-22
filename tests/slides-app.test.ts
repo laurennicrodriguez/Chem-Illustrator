@@ -179,9 +179,9 @@ const titles = (doc: Doc) => [...doc.captions.values()].map((c) => c.runs.map((r
 describe('tabs for open files', () => {
   it('starts with an empty drawing, which new slides replace', () => {
     const { ws } = workspace();
-    expect(ws.tabs.map((t) => t.name)).toEqual(['Untitled.cdxml']);
+    expect(ws.tabs.map((t) => t.name)).toEqual(['Drawing 1.cdxml']);
     ws.newSlides();
-    expect(ws.tabs.map((t) => [t.mode, t.name])).toEqual([['slides', 'Untitled.pptx']]);
+    expect(ws.tabs.map((t) => [t.mode, t.name])).toEqual([['slides', 'Slides 1.pptx']]);
   });
   it('keeps each tab’s drawing while another shows', () => {
     const { host, ws } = workspace();
@@ -243,7 +243,7 @@ describe('tabs for open files', () => {
     expect(await ws.close()).toBe(true);
     expect(ws.tabs.length).toBe(1);
     expect(await ws.close()).toBe(true);
-    expect(ws.tabs.map((t) => [t.mode, t.name])).toEqual([['drawing', 'Untitled.cdxml']]);
+    expect(ws.tabs.map((t) => [t.mode, t.name])).toEqual([['drawing', 'Drawing 1.cdxml']]);
   });
   it('names new tabs so they can be told apart', () => {
     const { host, ws } = workspace();
@@ -255,7 +255,7 @@ describe('tabs for open files', () => {
     ws.newSlides();
     // a new deck that hasn't been touched yet stays when another is made
     ws.newSlides();
-    expect(ws.tabs.map((t) => t.name).sort()).toEqual(['Untitled 2.cdxml', 'Untitled 2.pptx', 'Untitled.cdxml', 'Untitled.pptx']);
+    expect(ws.tabs.map((t) => t.name).sort()).toEqual(['Drawing 1.cdxml', 'Drawing 2.cdxml', 'Slides 1.pptx', 'Slides 2.pptx']);
   });
 });
 

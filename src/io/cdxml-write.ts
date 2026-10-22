@@ -20,7 +20,7 @@ import { runsForChemDraw, TEXT_TAG } from '../text/chemdraw-text';
 import { ATTACH_TAG, IGNORE_TAG, attachTag } from '../editor/attached';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { fromDataUrl } from '../render/images';
-import { CHART_TAG, OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, INSIDE_TAG, GROUP_TAG, GEO_TAG, MORPH_TAG, PIN_TAG, CURVE_ARROW_TAG, TURN_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG, HIGHLIGHT_LOOK_TAG, SPOKES_TAG } from './cdxml';
+import { CHART_TAG, MATH_TAG, OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, INSIDE_TAG, GROUP_TAG, GEO_TAG, MORPH_TAG, PIN_TAG, CURVE_ARROW_TAG, TURN_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG, HIGHLIGHT_LOOK_TAG, SPOKES_TAG } from './cdxml';
 import { frameTag } from '../editor/frames';
 import { geoDef, moveSteps, outlineParts, textArea, type GeoStep } from '../design/geo';
 import { FADE, tint } from '../colours';
@@ -1445,8 +1445,9 @@ class CdxmlWriter {
         // not a picture this program made; nothing to write
       }
     } else png = ['PNG', 'JPEG', 'GIF', 'BMP', 'EnhancedMetafile', 'WindowsMetafile'].some((k) => e.hasAttribute(k));
-    for (const c of kids(e)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === CHART_TAG) e.removeChild(c);
+    for (const c of kids(e)) if (c.nodeName === 'objecttag' && (c.getAttribute('Name') === CHART_TAG || c.getAttribute('Name') === MATH_TAG)) e.removeChild(c);
     if (s.chart) e.appendChild(this.el('objecttag', { TagType: 'String', Name: CHART_TAG, Value: JSON.stringify(s.chart), Visible: 'no' }));
+    if (s.math) e.appendChild(this.el('objecttag', { TagType: 'String', Name: MATH_TAG, Value: JSON.stringify(s.math), Visible: 'no' }));
     if (this.opts.own) {
       if (s.src && !png) this.set(e, OWN_PICTURE, s.src);
       const c = s.crop;
