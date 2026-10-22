@@ -706,6 +706,28 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     }
   };
 
+  /**
+   * Plain group elements (not a design shape's or a table's) become groups here: everything
+   * inside the outermost one gets its number.
+   */
+  const readGroups = () => {
+    const plain = (g: Element) => g.nodeName === 'group'
+      && !kids(g).some((k) => k.nodeName === 'table' || (k.nodeName === 'objecttag' && (k.getAttribute('Name') === GEO_TAG)));
+    const numbers = new Map<Element, number>();
+    const maps: Partial<Record<Kind, Map<number, { grp?: number }>>> = { a: doc.atoms, c: doc.captions, r: doc.arrows, s: doc.shapes };
+    for (const [key, o] of ord) {
+      const m = maps[key[0] as Kind];
+      if (!m) continue;
+      let outer: Element | null = null;
+      for (let p = all[o].parentElement; p && p !== root; p = p.parentElement) if (p !== all[o] && plain(p)) outer = p;
+      if (!outer) continue;
+      let n = numbers.get(outer);
+      if (n === undefined) numbers.set(outer, (n = numbers.size + 1));
+      const e = m.get(Number(key.slice(1)));
+      if (e) e.grp = n;
+    }
+  };
+
   const walk = (el: Element) => {
     for (const ch of kids(el)) {
       switch (ch.nodeName) {
@@ -800,6 +822,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     pinSymbols(doc);
     fillFrameMembers(doc);
     fillAttachments(doc);
+    readGroups();
   });
   doc.reserveIds(maxId);
   const orig = new Map<string, Entity>();

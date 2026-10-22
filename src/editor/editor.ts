@@ -33,6 +33,7 @@ import { schemePrefs } from '../chem/scheme-layout';
 import { fillRings, refitRingFills, ringFillsOn } from '../chem/ring-fill';
 import { setMethylStyle, toggleChainEndLabels, toggleExplicitHydrogens, type MethylStyle } from '../chem/hydrogens';
 import { selectedGroup } from '../chem/group-smiles';
+import { groupMembers, groupSelection, selectedGroups, ungroupSelection, withGroups } from './groups';
 import { circleRing, circleRings, kekulize } from '../chem/aromatic';
 import { bondLayer, crossingBonds } from '../chem/crossing';
 import { nextNumber as nextCompound, planNumbers, type NumberOptions } from '../chem/compound-numbers';
@@ -278,6 +279,10 @@ export class Editor {
     circledCharges: false,
     /** An atom or group typed with the Text tool beside a bond end (Br, OMe) becomes that atom (Edit > Preferences). */
     textToAtom: true,
+    /** A click on something in a group selects the whole group, or just that thing (Edit > Preferences). */
+    groupClick: 'group' as 'group' | 'item',
+    /** Selecting part of a group outlines the whole group (Edit > Preferences). */
+    groupOutline: true,
   };
   /** Tell the person something in the status bar. */
   say: (msg: string) => void = () => {};
@@ -652,7 +657,10 @@ export class Editor {
           // dragging an unselected atom or object moves just that (a copy takes its whole structure)
           this.sel = emptySel();
           if (d.ctrl && (d.hit.kind === 'atom' || d.hit.kind === 'bond')) this.selectFragment(d.hit.kind === 'atom' ? d.hit.id : this.doc.bonds.get(d.hit.id)!.a1, false);
-          else this.addToSel(this.groupFirst(d.hit));
+          else {
+            this.addToSel(this.groupFirst(d.hit));
+            if (this.options.groupClick === 'group') this.sel = withGroups(this.doc, this.sel);
+          }
         }
         // Ctrl+drag: a copy goes with the pointer and the original stays where it was
         if (d.ctrl) {
@@ -941,6 +949,8 @@ export class Editor {
         const pick = h && this.groupFirst(h);
         if (!adding) this.sel = emptySel();
         if (pick) this.toggleSel(pick);
+        // a click on something grouped picks its whole group (unless set to pick the one thing)
+        if (pick && this.options.groupClick === 'group' && this.isSelected(pick)) this.sel = withGroups(this.doc, this.sel);
         if (h?.kind === 'shape') this.noteTablePart(h.id, p);
         if (this.cropping !== null && !this.sel.shapes.has(this.cropping)) this.cropping = null;
         this.onChange();
@@ -3049,11 +3059,52 @@ export class Editor {
   }
 
   undo(): void {
-    if (this.doc.undo()) this.afterUndo();
+    if (this.doc.undo()) { this.selectApplied(); this.afterUndo(); }
   }
 
   redo(): void {
-    if (this.doc.redo()) this.afterUndo();
+    if (this.doc.redo()) { this.selectApplied(); this.afterUndo(); }
+  }
+
+  /**
+   * After Ctrl+Z or Ctrl+Y, select what the step changed that is still there: whole structures
+   * for changed atoms and bonds, and the captions, arrows and shapes themselves. Nothing left
+   * (an undone drawing) keeps the selection as it was.
+   */
+  /** Format > Group: the selection becomes one group. False with fewer than two things. */
+  group(): boolean {
+    let grp: number | null = null;
+    this.doc.edit('Group', () => { grp = groupSelection(this.doc, this.sel); });
+    if (grp === null) return false;
+    this.sel = withGroups(this.doc, this.sel);
+    this.changed();
+    return true;
+  }
+
+  /** Format > Ungroup: the groups the selection is in come apart (it stays selected). */
+  ungroup(): boolean {
+    let done = false;
+    this.doc.edit('Ungroup', () => { done = ungroupSelection(this.doc, this.sel); });
+    if (done) this.changed();
+    return done;
+  }
+
+  private selectApplied(): void {
+    const doc = this.doc, sel = emptySel();
+    for (const key of doc.lastApplied) {
+      const id = Number(key.slice(1));
+      switch (key[0]) {
+        case 'a': if (doc.atoms.has(id)) for (const x of doc.fragmentOf(id)) sel.atoms.add(x); break;
+        case 'b': { const b = doc.bonds.get(id); if (b) for (const x of doc.fragmentOf(b.a1)) sel.atoms.add(x); break; }
+        case 'c': if (doc.captions.has(id)) sel.captions.add(id); break;
+        case 'r': if (doc.arrows.has(id)) sel.arrows.add(id); break;
+        case 's': if (doc.shapes.has(id)) sel.shapes.add(id); break;
+      }
+    }
+    doc.lastApplied = [];
+    if (!sel.atoms.size && !sel.captions.size && !sel.arrows.size && !sel.shapes.size) return;
+    for (const b of doc.bonds.values()) if (sel.atoms.has(b.a1) && sel.atoms.has(b.a2)) sel.bonds.add(b.id);
+    this.sel = sel;
   }
 
   /** After an undo or redo (here or in a slide deck's history): forget things that have gone. */
@@ -4085,6 +4136,41 @@ export class Editor {
         ctx.fill();
         ctx.stroke();
       }
+    }
+    // the groups the selection is in, each outlined in grey so the rest of the group shows
+    if (this.options.groupOutline && !this.drag?.moved) {
+      ctx.save();
+      ctx.lineWidth = px;
+      ctx.strokeStyle = 'rgba(110, 110, 110, 0.85)';
+      ctx.setLineDash([5 * px, 3 * px]);
+      for (const g of selectedGroups(this.doc, this.sel)) {
+        const b = selectionBox(this.doc, groupMembers(this.doc, g), this.measure());
+        if (b) ctx.strokeRect(b.x1 - 5 * px, b.y1 - 5 * px, b.x2 - b.x1 + 10 * px, b.y2 - b.y1 + 10 * px);
+      }
+      ctx.restore();
+    }
+    // text linked to a structure: a dashed line from the text to it while either is selected
+    if (!this.drag?.moved && (this.sel.captions.size || this.sel.atoms.size)) {
+      ctx.save();
+      ctx.lineWidth = px;
+      ctx.strokeStyle = 'rgba(110, 110, 110, 0.85)';
+      ctx.setLineDash([2 * px, 3 * px]);
+      const m = this.measure();
+      for (const c of this.doc.captions.values()) {
+        const at = c.attach?.atoms.filter((id) => this.doc.atoms.has(id));
+        if (!at?.length || !(this.sel.captions.has(c.id) || at.some((id) => this.sel.atoms.has(id)))) continue;
+        const s = selectionBox(this.doc, { ...emptySel(), atoms: new Set(at) }, m);
+        if (!s) continue;
+        const t = m.captionBox(c);
+        const tc = { x: (t.x1 + t.x2) / 2, y: (t.y1 + t.y2) / 2 };
+        // from the text's middle to the nearest point of the structure's box
+        const to = { x: Math.max(s.x1, Math.min(s.x2, tc.x)), y: Math.max(s.y1, Math.min(s.y2, tc.y)) };
+        ctx.beginPath();
+        ctx.moveTo(tc.x, tc.y);
+        ctx.lineTo(to.x, to.y);
+        ctx.stroke();
+      }
+      ctx.restore();
     }
     // the selection's box and the handle that turns it
     const rh = this.drag && this.drag.mode !== 'rotate' ? null : this.rotateHandle();

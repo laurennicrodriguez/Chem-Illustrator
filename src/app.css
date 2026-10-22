@@ -365,6 +365,8 @@ body.slides-mode #canvas-host, body.design-mode #canvas-host { background: var(-
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
   font: 12px var(--ui-font);
 }
+.caption-bar.docked { top: 0; left: 0; right: 0; max-width: none; border-width: 0 0 1px; border-radius: 0; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08); }
+.caption-bar[hidden] { display: none; }
 .cb-group { display: inline-flex; align-items: center; gap: 2px; }
 .cb-group + .cb-group { padding-left: 6px; border-left: 1px solid var(--line); }
 .cb-btn { min-width: 26px; height: 24px; padding: 0 5px; border-color: transparent; background: transparent; font: 13px var(--ui-font); line-height: 1; }
