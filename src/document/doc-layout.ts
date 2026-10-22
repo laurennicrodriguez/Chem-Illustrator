@@ -15,10 +15,11 @@ import { withStack, layoutText, type Glyphs, type InlineBox, type LaidLine, type
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
 import { isCovered, rowSpanOf, spanOf } from '../table';
 import * as rt from '../richtext';
-import { nestedTables, BOX_PAD, FLOAT_GAP, LINE_NUMBER_GAP, OBJECT_CHAR, columnsOf, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, styleOf, type DocText, type HeaderFooter, type NamedStyle, type PageSetup, type WrapKind } from './document';
+import { nestedTables, BOX_PAD, FLOAT_GAP, LINE_NUMBER_GAP, OBJECT_CHAR, columnsOf, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, styleOf, FORM_SHADE, type DocObject, type DocText, type HeaderFooter, type NamedStyle, type PageSetup, type WrapKind } from './document';
 import { pageNumText, samePaper, sectionOfParas, sectionsOf } from './sections';
 import { bibliography, type BibEntry } from './references';
 import { emptyTof, tocEntries, tocLines, tofEntries, type TocEntry } from './toc';
+import { EMPTY_INDEX, emptyToa, indexItems, listLines, toaItems, type ListItem } from './index-toa';
 import { authorColours, hasChanges, markedRuns } from './revisions';
 import { layoutMath, type MathBox } from './math';
 import { needsPages } from './fields';
@@ -386,14 +387,16 @@ export class DocLayouter {
    * (only the contents change, so it settles at once, and the rest comes from the cache).
    */
   layout(t: DocText, only?: ShownParas): DocLayout {
-    const hasToc = Object.values(t.objects).some((o) => o.kind === 'toc' || o.kind === 'tof');
+    const hasToc = Object.values(t.objects).some((o) => o.kind === 'toc' || o.kind === 'tof' || o.kind === 'index' || o.kind === 'toa');
+    // an index or table of authorities lists the pages of the paragraphs marked for it
+    const marked = Object.values(t.objects).some((o) => o.kind === 'index' || o.kind === 'toa') ? t.paras.flatMap((ps, p) => (ps?.xe || ps?.ta ? [p] : [])) : [];
     // fields that show page numbers (a bookmark's page, the page, the number of pages) settle the same way
     const paged = Object.values(t.objects).some((o) => o.kind === 'field' && needsPages(o));
     let lay = this.layoutOnce(t, only);
     for (let pass = 0; (hasToc || paged) && pass < 3; pass++) {
       const now = lay.paraTops.map((pt) => lay.pages[pt.page]?.number ?? '');
       const heads = Object.values(t.objects).flatMap((o) => (o.kind === 'toc' ? tocEntries(t, o.levels) : o.kind === 'tof' ? tofEntries(t, o.name, lay.fields) : []));
-      const settled = heads.every((e) => this.tocPages[e.para] === now[e.para]) && (!paged || (now.every((x, i) => this.tocPages[i] === x) && this.pageCount === lay.pages.length));
+      const settled = heads.every((e) => this.tocPages[e.para] === now[e.para]) && marked.every((p) => this.tocPages[p] === now[p]) && (!paged || (now.every((x, i) => this.tocPages[i] === x) && this.pageCount === lay.pages.length));
       if (settled) break;
       this.tocPages = now;
       this.pageCount = lay.pages.length;
@@ -497,12 +500,23 @@ export class DocLayouter {
     for (const o of Object.values(t.objects)) if (o.kind === 'tof' && !tofs.has(o.name)) tofs.set(o.name, tofEntries(t, o.name, fields));
     const pageOf = (p: number) => this.tocPages[p] ?? '';
     const listKey = (m: Map<unknown, TocEntry[]>) => [...m].map(([k, es]) => [k, es.map((e) => [e.level, e.text, pageOf(e.para)])]);
-    const tocKey = tocs.size || tofs.size ? JSON.stringify([listKey(tocs), listKey(tofs)]) : 0;
-    const isBib = (r: { obj?: number }) => r.obj !== undefined && ['bib', 'toc', 'tof'].includes(t.objects[r.obj]?.kind);
+    // the indexes' and tables of authorities' lines, each kind asked for worked out once
+    const lists = new Map<string, ListItem[]>();
+    const listOf = (o: Extract<DocObject, { kind: 'index' | 'toa' }>): ListItem[] => {
+      const k = o.kind === 'index' ? `i${o.letters ? 1 : 0}` : `a${o.cat}${o.passim ? 'p' : ''}`;
+      let got = lists.get(k);
+      if (!got) { got = o.kind === 'index' ? indexItems(t, pageOf, o.letters) : toaItems(t, o.cat, pageOf, o.passim); lists.set(k, got); }
+      return got;
+    };
+    for (const o of Object.values(t.objects)) if (o.kind === 'index' || o.kind === 'toa') listOf(o);
+    const tocKey = tocs.size || tofs.size || lists.size ? JSON.stringify([listKey(tocs), listKey(tofs), [...lists]]) : 0;
+    const isBib = (r: { obj?: number }) => r.obj !== undefined && ['bib', 'toc', 'tof', 'index', 'toa'].includes(t.objects[r.obj]?.kind);
     const blockLines = (id: number, st: NamedStyle, ps: ParaStyle, wrap: number): LaidLine[] | null => {
       const o = t.objects[id];
       if (o?.kind === 'toc') return tocLines(tocs.get(o.levels) ?? [], pageOf, st, ps.line, wrap, this.deps.measure);
       if (o?.kind === 'tof') return tocLines(tofs.get(o.name) ?? [], pageOf, st, ps.line, wrap, this.deps.measure, emptyTof(o.name), false);
+      if (o?.kind === 'index') return listLines(listOf(o), st, ps.line, wrap, this.deps.measure, EMPTY_INDEX, !!o.right);
+      if (o?.kind === 'toa') return listLines(listOf(o), st, ps.line, wrap, this.deps.measure, emptyToa(o.cat), true);
       if (o?.kind !== 'bib') return null;
       const bf = bibFrame(entries, st, ps, this.deps.measure);
       return layoutText({
@@ -565,7 +579,11 @@ export class DocLayouter {
       // runs without a font or size of their own take their paragraph style's
       // tracked changes: inserted text underlined, deleted text struck through, in each author's colour
       const shownRuns = colours ? markedRuns(runs, colours) : runs;
-      const resolved = shownRuns.map((r) => (r.font && r.size ? r : { ...r, font: r.font ?? st.font, size: r.size ?? st.size }));
+      const resolved = shownRuns.map((r) => {
+        // form fields are shaded, as Word shows them
+        if (r.obj !== undefined && !r.highlight && t.objects[r.obj]?.kind === 'form') r = { ...r, highlight: FORM_SHADE };
+        return r.font && r.size ? r : { ...r, font: r.font ?? st.font, size: r.size ?? st.size };
+      });
       const objs = runs.filter((r) => r.obj !== undefined).map((r) => {
         const f = fields.get(r.obj!);
         const s = sizes.get(r.obj!);

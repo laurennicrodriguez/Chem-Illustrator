@@ -11,6 +11,7 @@ import { geoDef, geoShapeStyle } from '../design/geo';
 import type { DocStyle } from '../style';
 import type { Tab } from '../workspace';
 import type { Measure } from '../text/layout';
+import { askAltText } from './accessibility-pane';
 import { keymap, chordOf, parseAction, type KeyContext } from '../editor/keymap';
 import * as rt from '../richtext';
 import type { Move, TextEditing } from '../text/editing';
@@ -46,6 +47,8 @@ import { citeSuper, formatOf, type Reference } from '../document/references';
 import { dataUrl, imageSize } from '../render/images';
 import { editChart, chartPoints } from './chart-editor';
 import { pictureFormat } from './picture-dialog';
+import { embedFile, fileInside, objectKind, withFile } from '../io/ole-object';
+import { showsContents, type ObjectPicture } from '../render/object-picture';
 import { newChartBox, sizedBox } from '../sheet/chart-box';
 import { chartBoxPng } from '../render/chart-box-paint';
 import type { DocFile } from '../document/doc-file';
@@ -65,6 +68,7 @@ import { popupMenu } from './sheet-view';
 import type { BorderChoice } from '../document/para-borders';
 import type { QuickPart } from '../document/quick-parts';
 import { GO_TO_KINDS, goToOffset, similarRanges, type GoToKind } from '../document/goto';
+import { DocIndexUI } from './doc-index-ui';
 import { lookOfTable } from '../document/table-styles';
 import type { BorderLine, BorderSide, TableLook } from '../model';
 import { BREAK_NAMES, changeSection, newBreak, pageNumText, sectionAt, sectionsOf, type Section, type SectionPatch } from '../document/sections';
@@ -73,7 +77,7 @@ import {
   floatOf, lookExtent, lookOf, cellHolding, innerObjects,
   WATERMARKS, applyCharStyle, charStylesOf, clearCharStyle, clearFormatting, defaultPageBorder, defaultWatermark, deleteStyle, modifyCharStyle, newCharStyle, newParaStyle, withStyle,
   type CharStyle, type PageBorder, type Watermark,
-  type BreakKind, type DocObject, type DocText, type FigureLook, type Float, type LineNumbers, type NoteFormat, type NumberPlace, type PageNumFormat, type PageSetup, type WrapKind,
+  type BreakKind, type DocObject, type DocText, type Embedded, type FigureLook, type Float, type LineNumbers, type NoteFormat, type NumberPlace, type PageNumFormat, type PageSetup, type WrapKind,
 } from '../document/document';
 
 export interface DocModeHost {
@@ -96,6 +100,17 @@ export interface DocModeHost {
   toStructure(text: string, style: DocStyle): Promise<{ contents: Contents; notes: string[] } | { error: string }>;
   /** Choose a picture file. */
   pickPicture(): Promise<{ bytes: Uint8Array; mime: string; name: string } | null>;
+  /** Choose any file, to put in as an object (Insert > Object). */
+  pickObjectFile?(): Promise<{ name: string; bytes: Uint8Array } | null>;
+  /** The picture a file put in as an object shows: its contents where they can be shown, else its icon. */
+  objectPicture?(name: string, bytes: Uint8Array, icon: boolean): Promise<ObjectPicture>;
+  /**
+   * Open an object's file in its own program (the desktop app; a browser saves it instead).
+   * `changed` gets the file each time it is saved there. Resolves to a message when it can't.
+   */
+  openObjectFile?(file: { name: string; bytes: Uint8Array }, changed: (bytes: Uint8Array) => void): Promise<string | null>;
+  /** Another program's object copied to the clipboard (Excel cells, for one), with its picture (the Windows app). */
+  clipboardObject?(): Promise<{ embed: Embedded; picture: { bytes: Uint8Array; mime: string } | null } | null>;
   /** An empty ACS-style table as a drawing. */
   newTable(rows: number, cols: number, style: DocStyle): Contents;
   /** Choose a BibTeX or RIS file and read its text (References > Manage References > Import). */
@@ -133,7 +148,7 @@ const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigat
 const BOX_COMMANDS = /^(format-painter$|insert-symbol$|doc-(align-|justify|bold|italic|underline|sub|sup|formula|highlight|bullets|numbering|indent|outdent)|line-|font-|select-all$|undo$|redo$|zoom-|copy$|cut$|paste$|box-|find$|replace$|wrap-)/;
 
 /** Commands that, in a table cell, work there too (others leave the cell first). */
-const CELL_COMMANDS = /^(table-|tbl-|insert-table$|insert-structure$|structure-from-name-doc$|name-to-structure$|insert-picture$|edit-figure$|compound-number$|cross-reference$|insert-citation$)/;
+const CELL_COMMANDS = /^(table-|tbl-|insert-table$|insert-structure$|structure-from-name-doc$|name-to-structure$|insert-picture$|insert-object$|paste-object$|edit-figure$|compound-number$|cross-reference$|insert-citation$)/;
 
 /** A new table's look: Word's grid, the ACS rules in the text, or the ACS table drawn as a figure. */
 export const TABLE_KINDS: [string, string][] = [
@@ -213,6 +228,8 @@ export class DocumentMode {
   private cellAnchor: { id: number; r: number; c: number } | null = null;
   /** Table Design: styles, borders, margins, and text to table. */
   readonly tables: DocTablesUI;
+  /** Restrict Editing, form fields, the index and the table of authorities. */
+  private indexes: DocIndexUI;
   /** View > Navigation Pane. */
   readonly nav: DocNav;
   /** Insert > Cover Page, Blank Page, Quick Parts, Date and Time, and cross-references. */
@@ -297,6 +314,12 @@ export class DocumentMode {
       modify: (kind, id) => void this.modifyStyle(kind, id),
       remove: (kind, id) => this.removeStyle(kind, id),
       focus: () => this.focus(),
+    });
+    this.indexes = new DocIndexUI({
+      file: () => this.file,
+      flash: (msg, ms) => this.host.flash(msg, ms),
+      focus: () => this.focus(),
+      insertObject: (o, kind) => this.insertObject(o, kind),
     });
     this.tables = new DocTablesUI({
       file: () => this.file,
@@ -688,6 +711,59 @@ export class DocumentMode {
     this.changed('selection');
   }
 
+  /** Go to a paragraph of the document's text (an accessibility issue in it). */
+  revealPara(p: number): void {
+    this.goToPara(p);
+  }
+
+  /** Pick a structure, picture, chart or table (an accessibility issue about it), in the text or in a table cell. */
+  goToObject(id: number): boolean {
+    const f = this.file;
+    if (!f) return false;
+    const offsetIn = (runs: TextRun[]) => {
+      let at = 0;
+      for (const r of runs) { if (r.obj === id) return at; at += r.text.length; }
+      return -1;
+    };
+    const cell = cellHolding(f.t, id);
+    if (cell) {
+      const tb = f.t.objects[cell.id];
+      const runs = tb?.kind === 'table' ? tb.table.rows[cell.r]?.[cell.c]?.runs ?? [] : [];
+      const at = offsetIn(runs);
+      if (at < 0 || !this.startCell(cell.id, cell.r, cell.c, 'start')) return false;
+      f.box?.ed.select(at, at + 1);
+    } else {
+      const at = offsetIn(f.ed.t.runs);
+      if (at < 0) return false;
+      this.stopBox();
+      f.ed.select(at, at + 1);
+      const c = f.ed.caret();
+      this.view.revealTop({ x1: c.x, y1: c.y1, x2: c.x, y2: c.y2 });
+    }
+    this.focus();
+    this.changed('selection');
+    return true;
+  }
+
+  /** Alt Text… for the structure, picture or chart picked (or `id`). True when it was changed. */
+  async altText(id = this.pickedObject()): Promise<boolean> {
+    const f = this.file;
+    const o = id !== null ? f?.t.objects[id] : undefined;
+    if (!f || id === null || !o || (o.kind !== 'drawing' && o.kind !== 'picture')) {
+      this.host.flash('Click a structure, picture or chart first, then Alt Text.');
+      return false;
+    }
+    const what = o.kind === 'drawing' ? 'structure or scheme' : o.chart ? 'chart' : 'picture';
+    const note = o.kind === 'drawing' ? 'Screen readers read this out in place of the drawing, and Word keeps it as the picture\'s alt text. Left empty, the drawing is described by its SMILES.' : undefined;
+    const got = await askAltText(what, o.alt, note);
+    const cur = this.file?.t.objects[id];
+    if (got === null || !cur || (cur.kind !== 'drawing' && cur.kind !== 'picture') || this.file !== f) return false;
+    const next = { ...cur, alt: got || undefined } as DocObject;
+    if (!got) delete (next as { alt?: string }).alt;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, 'Alt text');
+    return true;
+  }
+
   /** Go to a place the Navigation pane's search found (in the text, or in a table cell). */
   private goToHit(hit: { cell?: { id: number; r: number; c: number }; start: number; end: number }): void {
     const f = this.file;
@@ -821,6 +897,7 @@ export class DocumentMode {
       return;
     }
     f.listener = (kind) => this.changed(kind);
+    f.onRefused = () => this.indexes.refused(f);
     // chemistry as it's typed: CH2Cl2 becomes a formula, -> an arrow… (Edit > Typing and Spelling)
     f.ed.onTyped = (typed) => afterTyping(f.ed, typed);
     const st = tab!.sheetState as DocPlace | null;
@@ -977,7 +1054,7 @@ export class DocumentMode {
     }
     const ed = f.ed;
     const picked = this.pickedObject();
-    const framed = this.pickedField('bib')?.id ?? this.pickedField('toc')?.id ?? this.pickedField('tof')?.id ?? this.pickedTable();
+    const framed = this.pickedField('bib')?.id ?? this.pickedField('toc')?.id ?? this.pickedField('tof')?.id ?? this.pickedField('index')?.id ?? this.pickedField('toa')?.id ?? this.pickedTable();
     const showCaret = this.caretOn && (ed.collapsed || ed.composing !== null) && document.activeElement === this.ta;
     const c = showCaret ? ed.caret() : null;
     const squiggles: Overlay['squiggles'] = [];
@@ -1084,7 +1161,7 @@ export class DocumentMode {
   }
 
   /** A citation or bibliography picked on its own (a selection of just its character). */
-  private pickedField<K extends 'cite' | 'bib' | 'toc' | 'tof' | 'note'>(kind: K): { id: number; o: Extract<DocObject, { kind: K }> } | null {
+  private pickedField<K extends 'cite' | 'bib' | 'toc' | 'tof' | 'index' | 'toa' | 'note'>(kind: K): { id: number; o: Extract<DocObject, { kind: K }> } | null {
     const f = this.file;
     if (!f || f.ed.end - f.ed.start !== 1) return null;
     const id = rt.sliceRuns(f.ed.t.runs, f.ed.start, f.ed.end)[0]?.obj;
@@ -1213,6 +1290,7 @@ export class DocumentMode {
     cmd('Cut', 'cut');
     cmd('Copy', 'copy');
     cmd('Paste', 'paste');
+    if (this.host.clipboardObject) cmd('Paste as Object', 'paste-object', 'Cells copied in Excel (or another program\'s object) kept whole: double-click to change them in their program');
     cmd('Format Painter', 'format-painter', 'Copy the look of the text here (or of the selection) to the text you click or drag over next');
     menu.appendChild(document.createElement('hr'));
     // a footnote's number, or typing in a note: to the other end, or the other kind
@@ -1240,7 +1318,12 @@ export class DocumentMode {
       if (this.file?.t.objects[picked]?.kind === 'drawing') cmd('Edit Drawing', 'edit-figure');
       const po = this.file?.t.objects[picked];
       if (po?.kind === 'picture' && po.chart) cmd('Edit Chart…', 'edit-chart');
-      if (po?.kind === 'picture' && !po.chart) cmd('Picture Format…', 'picture-format', 'Brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions');
+      if (po?.kind === 'picture' && po.embed) {
+        cmd('Open Object', 'open-object', `Open the ${objectKind(po.embed)} in its own program; save it there to change it here`);
+        item(po.embed.icon ? 'Show Contents' : 'Display as Icon', () => void this.embeddedIcon(picked, !po.embed?.icon), po.embed.icon ? 'Show what the object holds instead of its icon' : 'Show an icon with the file\'s name instead of what it holds');
+      }
+      if (po?.kind === 'picture' && !po.chart && !po.embed) cmd('Picture Format…', 'picture-format', 'Brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions');
+      if (po?.kind === 'drawing' || po?.kind === 'picture') cmd('Alt Text…', 'alt-text', 'What it shows, for people who can\'t see it (screen readers); kept as its alt text in Word');
       cmd('Insert Caption…', 'insert-caption');
       const look = this.lookOf(picked);
       item(look?.frame ? 'Remove Frame' : 'Add Frame', () => this.setLook(picked, { frame: look?.frame ? undefined : 0.75, frameColor: undefined }), 'A thin black line round it (Format in the panel sets its width and colour)');
@@ -1439,6 +1522,12 @@ export class DocumentMode {
       });
     }
     if (e.key === 'PageDown' || e.key === 'PageUp') return run(() => this.pageMove(e.key === 'PageDown' ? 1 : -1, shift));
+    // a document protected for filling in forms: Tab goes from field to field, Space or Enter fills one in
+    if (this.file?.t.protect?.edit === 'forms' && !ctrl && !e.altKey) {
+      if (e.key === 'Tab' && this.indexes.nextField(shift)) return run(() => {});
+      const form = this.indexes.pickedForm();
+      if (form !== null && (e.key === ' ' || e.key === 'Enter' || e.key === 'F2')) return run(() => void this.indexes.fill(form));
+    }
     if (!ctrl && !e.altKey) {
       switch (e.key) {
         case 'Enter': return run(() => this.enter(shift));
@@ -1645,7 +1734,7 @@ export class DocumentMode {
     }
     const b = f.box?.cell ? f.box : null;
     // into a table cell: no text boxes, bibliographies or notes inside it (a table goes in as a table in the cell)
-    const runs = remap(own.runs).filter((r) => !b || r.obj === undefined || !['textbox', 'bib', 'toc', 'tof', 'note'].includes(objects[r.obj]?.kind));
+    const runs = remap(own.runs).filter((r) => !b || r.obj === undefined || !['textbox', 'bib', 'toc', 'tof', 'index', 'toa', 'note'].includes(objects[r.obj]?.kind));
     // references cited by pasted citations join the list (unless it has them)
     const have = new Set((f.t.references ?? []).map((r) => r.id));
     const adding = (own.references ?? []).filter((r) => !have.has(r.id));
@@ -2162,6 +2251,8 @@ export class DocumentMode {
       if (id !== null && f.t.objects[id]?.kind === 'bib') { e.preventDefault(); void this.manageReferences(); return; }
       if (id !== null && f.t.objects[id]?.kind === 'toc') { e.preventDefault(); void this.tocOptions(id); return; }
       if (id !== null && f.t.objects[id]?.kind === 'tof') { e.preventDefault(); void this.tofOptions(id); return; }
+      if (id !== null && f.t.objects[id]?.kind === 'index') { e.preventDefault(); void this.indexes.indexOptions(id); return; }
+      if (id !== null && f.t.objects[id]?.kind === 'toa') { e.preventDefault(); void this.indexes.toaOptions(id); return; }
       if (id !== null && f.t.objects[id]?.kind === 'math') { e.preventDefault(); void this.editEquation(id); return; }
       if (f.box?.cell && id !== null && id !== f.box.id && f.t.objects[id]?.kind === 'drawing') { e.preventDefault(); this.editFigure(id); return; }
       if (f.box) { e.preventDefault(); return; }
@@ -2172,6 +2263,12 @@ export class DocumentMode {
       const o = offsetAt(f.layout().text, p.x, p.y);
       for (const at of [o, o - 1]) {
         const obj = at >= 0 ? rt.sliceRuns(f.t.runs, at, at + 1)[0]?.obj : undefined;
+        if (obj !== undefined && f.t.objects[obj]?.kind === 'form') {
+          e.preventDefault();
+          f.ed.select(at, at + 1);
+          void this.indexes.formOptions(obj);
+          return;
+        }
         if (obj !== undefined && f.t.objects[obj]?.kind === 'cite') {
           e.preventDefault();
           f.ed.select(at, at + 1);
@@ -2263,6 +2360,17 @@ export class DocumentMode {
       this.dragging = { kind: 'text' };
       s.setPointerCapture(e.pointerId);
       return;
+    }
+    // a document protected for filling in forms: a click on a form field fills it in
+    if (f.t.protect?.edit === 'forms' && !f.box && !e.shiftKey) {
+      const o = offsetAt(f.layout().text, p.x, p.y);
+      for (const at of [o, o - 1]) {
+        const obj = at >= 0 ? rt.sliceRuns(f.t.runs, at, at + 1)[0]?.obj : undefined;
+        if (obj === undefined || f.t.objects[obj]?.kind !== 'form') continue;
+        f.ed.select(at, at + 1);
+        void this.indexes.fill(obj);
+        return;
+      }
     }
     // the picked figure's corner handle resizes it (one in a table cell too)
     const picked = this.pickedObject();
@@ -2467,7 +2575,7 @@ export class DocumentMode {
   insertObject(o: DocObject, kind = 'Insert', look: Partial<rt.RunStyle> = {}): number {
     const f = this.file!;
     const b = f.box?.cell ? f.box : null;
-    if (b && (o.kind === 'table' || o.kind === 'textbox' || o.kind === 'bib' || o.kind === 'toc' || o.kind === 'tof')) this.stopBox();
+    if (b && (o.kind === 'table' || o.kind === 'textbox' || o.kind === 'bib' || o.kind === 'toc' || o.kind === 'tof' || o.kind === 'index' || o.kind === 'toa')) this.stopBox();
     else if (b) {
       // into the table cell typed into: the object joins the document, its character the cell's text
       const id = nextObjectId(f.t);
@@ -2530,6 +2638,7 @@ export class DocumentMode {
     const f = this.file;
     const o = f?.t.objects[id];
     if (o?.kind === 'picture' && o.chart) { void this.editChart(id); return; }
+    if (o?.kind === 'picture' && o.embed) { void this.openEmbedded(id); return; }
     if (!f || !o || o.kind !== 'drawing') return;
     // a diagram opens its text and look (Edit Drawing still opens the drawing tools on it)
     if (!tools && this.host.editDiagram && o.contents.shapes.some((s) => s.diagram)) {
@@ -2682,6 +2791,7 @@ export class DocumentMode {
     if (!o) return;
     const cur = floatOf(o);
     if (wrap === 'inline') { if (cur) this.setFloat(id, null); return; }
+    if (o.kind === 'picture' && o.embed) { this.host.flash('Embedded objects stay in line with the text, as Word keeps them.'); return; }
     if (cur) { this.setFloat(id, { ...cur, wrap }); return; }
     // from its line: keep it where it is, measured from the top of its paragraph and the left margin
     const lay = f.layout();
@@ -2867,6 +2977,9 @@ export class DocumentMode {
       case 'insert-structure': this.drawNew(); break;
       case 'structure-from-name-doc': case 'name-to-structure': void this.fromName(); break;
       case 'insert-picture': void this.insertPicture(); break;
+      case 'insert-object': void this.insertEmbedded(); break;
+      case 'paste-object': void this.pasteObject(); break;
+      case 'open-object': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || !o.embed) { this.host.flash('Click an embedded object first (or double-click it).'); break; } void this.openEmbedded(id); break; }
       case 'insert-text-box': this.insertTextBox(); break;
       case 'wrap-inline': case 'wrap-square': case 'wrap-topBottom': case 'wrap-behind': case 'wrap-front': {
         const id = this.pickedObject() ?? f.box?.id ?? null;
@@ -2877,7 +2990,8 @@ export class DocumentMode {
       case 'insert-table': void this.insertTable(); break;
       case 'insert-chart': void this.insertChart(); break;
       case 'edit-chart': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || !o.chart) { this.host.flash('Click a chart first (or double-click it).'); break; } void this.editChart(id); break; }
-      case 'picture-format': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || o.chart) { this.host.flash('Click a picture first.'); break; } void this.formatPicture(id); break; }
+      case 'picture-format': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || o.chart || o.embed) { this.host.flash(o?.kind === 'picture' && o.embed ? 'An embedded object shows its program\'s picture: change it by opening the object.' : 'Click a picture first.'); break; } void this.formatPicture(id); break; }
+      case 'alt-text': void this.altText(); break;
       case 'insert-caption': void this.insertCaption(); break;
       case 'cross-reference': void this.crossReference(); break;
       case 'compound-number': void this.compoundNumber(); break;
@@ -2885,6 +2999,14 @@ export class DocumentMode {
       case 'insert-bibliography': this.insertBibliography(); break;
       case 'insert-toc': void this.insertToc(); break;
       case 'insert-tof': void this.insertTof(); break;
+      case 'mark-entry': void this.indexes.markEntry(); break;
+      case 'insert-index': void this.indexes.insertIndex(); break;
+      case 'mark-citation': void this.indexes.markCitation(); break;
+      case 'insert-toa': void this.indexes.insertToa(); break;
+      case 'restrict-editing': void this.indexes.restrictEditing(); break;
+      case 'insert-form-text': void this.indexes.insertFormField('text'); break;
+      case 'insert-form-check': void this.indexes.insertFormField('check'); break;
+      case 'insert-form-drop': void this.indexes.insertFormField('drop'); break;
       case 'insert-footnote': this.insertNote(false); break;
       case 'insert-endnote': this.insertNote(true); break;
       case 'note-options': void this.noteOptions(); break;
@@ -3164,6 +3286,105 @@ export class DocumentMode {
     this.backToCell(spot);
     // pictures come in at 96 pixels to the inch, as in Word
     this.dropPicture(pic.bytes, pic.mime);
+  }
+
+  /**
+   * Insert > Object: another program's file kept whole in the document, shown as its contents
+   * (a workbook's cells, a PDF's first page, a picture) or as an icon. Double-clicking it opens
+   * the file in its program, and saving it there changes it here; Word does the same with it.
+   */
+  private async insertEmbedded(): Promise<void> {
+    const f = this.file!;
+    if (!this.host.pickObjectFile || !this.host.objectPicture) { this.host.flash('Objects can only be put in from the app.'); return; }
+    const spot = this.cellSpot();
+    const file = await this.host.pickObjectFile();
+    this.focus();
+    if (!file || this.file !== f) return;
+    const shows = showsContents(file.name);
+    const got = await ask('Insert Object', [{ name: 'icon', label: 'Display as icon', type: 'checkbox', value: String(!shows) }], {
+      ok: 'Insert',
+      note: `${file.name} goes in the document whole, shown as ${shows ? 'what it holds' : 'an icon'}. Double-click it to open it in its own program (the Windows app): what you save there comes back here. Word opens it the same way.`,
+    });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const icon = got.icon === 'true';
+    const pic = await this.host.objectPicture(file.name, file.bytes, icon);
+    if (this.file !== f) return;
+    this.backToCell(spot);
+    this.insertObject({ kind: 'picture', src: pic.src, w: pic.w, h: pic.h, ...(pic.px ? { px: pic.px } : {}), embed: embedFile(file.name, file.bytes, icon) }, 'Insert object');
+    this.focus();
+  }
+
+  /** Paste as Object: another program's object on the clipboard (cells copied in Excel), kept whole as Word's Paste Special keeps it. */
+  private async pasteObject(): Promise<void> {
+    const f = this.file!;
+    if (!this.host.clipboardObject) { this.host.flash('Pasting objects from other programs needs the Windows app.'); return; }
+    const spot = this.cellSpot();
+    const got = await this.host.clipboardObject();
+    if (this.file !== f) return;
+    if (!got) { this.host.flash('There is no object on the clipboard: copy cells in Excel (or an object in another program) first.'); return; }
+    this.backToCell(spot);
+    let pic: ObjectPicture | null = null;
+    if (got.picture) {
+      const px = imageSize(got.picture.bytes, got.picture.mime);
+      if (px) pic = { src: dataUrl(got.picture.bytes, got.picture.mime), w: px.w * 0.75, h: px.h * 0.75, ...(got.picture.mime === 'image/x-emf' || got.picture.mime === 'image/svg+xml' ? {} : { px }) };
+    }
+    if (!pic) {
+      const inside = fileInside(got.embed);
+      pic = this.host.objectPicture && inside ? await this.host.objectPicture(inside.name, inside.bytes, false) : null;
+    }
+    if (!pic || this.file !== f) { this.host.flash('The object came with no picture to show.'); return; }
+    this.insertObject({ kind: 'picture', src: pic.src, w: pic.w, h: pic.h, ...(pic.px ? { px: pic.px } : {}), embed: got.embed }, 'Paste object');
+    this.focus();
+  }
+
+  /**
+   * Open an embedded object's file in its program. Each time it is saved there the object takes
+   * the new file and, unless it shows as an icon, a new picture of it.
+   */
+  private async openEmbedded(id: number): Promise<void> {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'picture' || !o.embed) return;
+    const file = fileInside(o.embed);
+    if (!file) { this.host.flash(`This ${objectKind(o.embed)} can't be opened here; it is kept as it is, and Word opens it.`, 8000); return; }
+    if (!this.host.openObjectFile) { this.host.flash('Objects open in their programs from the app.'); return; }
+    const err = await this.host.openObjectFile(file, (bytes) => void this.objectSaved(f, id, file.name, bytes));
+    if (err) this.host.flash(err, 8000);
+  }
+
+  /** An embedded object's file was saved in its program: take it back, with a new picture. */
+  private async objectSaved(f: DocFile, id: number, name: string, bytes: Uint8Array): Promise<void> {
+    const cur = f.t.objects[id];
+    if (cur?.kind !== 'picture' || !cur.embed) return;
+    const embed = withFile(cur.embed, { name, bytes });
+    if (!embed) { this.host.flash(`The changes to ${name} can't be put back in this kind of object.`); return; }
+    const pic = this.host.objectPicture && !embed.icon ? await this.host.objectPicture(name, bytes, !!embed.icon) : null;
+    const now = f.t.objects[id];
+    if (now?.kind !== 'picture' || !now.embed) return;
+    const next: DocObject = pic ? { ...now, embed, src: pic.src, w: pic.w, h: pic.h, px: pic.px, scale: undefined } : { ...now, embed };
+    if (!pic || !pic.px) delete (next as { px?: unknown }).px;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, 'Edit object');
+    this.host.flash(`${name} was saved: the document has its changes.`);
+  }
+
+  /** Show an embedded object as its icon, or as what it holds. */
+  private async embeddedIcon(id: number, icon: boolean): Promise<void> {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'picture' || !o.embed || !this.host.objectPicture) return;
+    const inside = fileInside(o.embed);
+    const name = inside?.name ?? o.embed.name ?? `${objectKind(o.embed)}.${o.embed.ext}`;
+    if (!icon && !inside) { this.host.flash(`What this ${objectKind(o.embed)} holds can't be shown here.`); return; }
+    const pic = await this.host.objectPicture(name, inside?.bytes ?? new Uint8Array(0), icon);
+    const cur = f.t.objects[id];
+    if (cur?.kind !== 'picture' || !cur.embed) return;
+    const embed = { ...cur.embed };
+    if (icon) embed.icon = true; else delete embed.icon;
+    const next: DocObject = { ...cur, embed, src: pic.src, w: pic.w, h: pic.h, scale: undefined };
+    if (pic.px) next.px = pic.px; else delete next.px;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, icon ? 'Display as icon' : 'Show contents');
+    this.focus();
   }
 
   private async insertTable(nest = false): Promise<void> {
@@ -4177,6 +4398,7 @@ export class DocumentMode {
     pick('#doc-linenums', sec.lines?.restart ?? 'none');
     pick('#doc-hyphen', f.t.hyphen?.auto ? 'auto' : 'none');
     press('track-changes', !!f.t.track);
+    press('restrict-editing', !!f.t.protect);
     press('show-comments', this.comments.shown);
     const fig = this.pickedObject() ?? f.box?.id ?? null;
     const wrapSel = this.ribbon.querySelector<HTMLSelectElement>('#doc-wrap');

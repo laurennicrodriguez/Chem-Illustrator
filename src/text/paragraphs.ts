@@ -5,7 +5,7 @@
 
 import type { ParaStyle, TextRun } from '../model';
 
-const KEYS = ['list', 'level', 'cont', 'align', 'spaceBefore', 'spaceAfter', 'indent', 'style', 'pageBreak', 'colBreak', 'firstLine', 'line', 'keepNext', 'indentRight', 'linePt', 'lineRule', 'section', 'noLineNumbers', 'noHyphen', 'marks', 'tabs', 'scheme', 'bullet', 'border', 'shade'] as const;
+const KEYS = ['list', 'level', 'cont', 'align', 'spaceBefore', 'spaceAfter', 'indent', 'style', 'pageBreak', 'colBreak', 'firstLine', 'line', 'keepNext', 'indentRight', 'linePt', 'lineRule', 'section', 'noLineNumbers', 'noHyphen', 'marks', 'tabs', 'scheme', 'bullet', 'border', 'shade', 'xe', 'ta'] as const;
 
 /** A paragraph style with nothing unset or zero, so two styles compare simply. */
 export function cleanPara(p: ParaStyle | undefined): ParaStyle {
@@ -81,7 +81,9 @@ export function editParas(paras: ParaStyle[], text: string, start: number, end: 
   const all = fitParas(paras, paraCount(text));
   const a = paraAt(text, start), b = paraAt(text, end);
   const breaks = paraCount(inserted) - 1;
-  const base = all[a];
+  let base = all[a];
+  // index entries and citations marked in the paragraph joined on keep their place (those of paragraphs deleted whole go with them)
+  if (b > a && (all[b]?.xe || all[b]?.ta)) base = cleanPara({ ...base, xe: [...(base.xe ?? []), ...(all[b].xe ?? [])], ta: [...(base.ta ?? []), ...(all[b].ta ?? [])] });
   const carry = (): ParaStyle => {
     const p = { ...base };
     delete p.cont;
@@ -89,8 +91,10 @@ export function editParas(paras: ParaStyle[], text: string, start: number, end: 
     delete p.pageBreak;
     delete p.colBreak;
     delete p.section;
-    // and so does a bookmark
+    // and so do bookmarks, index entries and marked citations
     delete p.marks;
+    delete p.xe;
+    delete p.ta;
     return cleanPara(p);
   };
   const mid: ParaStyle[] = [base];

@@ -58,6 +58,10 @@ Pick slides in one deck's list and press Ctrl+C, then click in the list of anoth
 
 **Home** tab ▸ **Reuse…** (or **Insert ▸ Reuse Slides…**) opens a PowerPoint file and shows its slides. Click the ones you want (Shift+click picks a run of them), tick **Keep source formatting** if they should keep their own look, and choose **Insert Slide** or **Insert All**. Double-click a slide to put just that one in.
 
+### Comparing two versions of a deck
+
+**Review** tab ▸ **Compare…** picks another version of the deck you are on (an open deck, or **A PowerPoint file…**), such as a copy a co-worker edited. Slides are matched by their titles, then by their place, and each difference is listed: slides inserted or deleted in the other version, and slides that changed, with what changed (title, text, formatting, structures, pictures, charts, tables, shapes, arrows, layout, things moved, speaker notes). Each item shows this deck's slide beside the other version's. **Accept** takes the other version's slide into this deck; **Reject** leaves this deck as it is. **Accept All** and **Reject All** do every item left, and **End Review** closes the list. Each Accept is one step to undo.
+
 ### Hidden slides
 
 **Hide Slide** keeps a slide in the deck but leaves it out of the slide show: its picture in the list is greyed and its number struck through. The show skips it going forwards and back, and starting from the beginning starts at the first slide that isn't hidden. **From This Slide** on a hidden slide still shows it, and typing its number then Enter jumps to it, as in PowerPoint. Hidden slides stay hidden in the PowerPoint file. Click **Hide Slide** again to show it.

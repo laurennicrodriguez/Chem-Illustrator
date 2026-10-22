@@ -44,7 +44,7 @@ import { writeCdxml } from './io/cdxml-write';
 import { WORKSPACE, folderOf } from './io/workspace-file';
 import { askLink, followLink, setLinkHost, type LinkPlace } from './ui/links-ui';
 import { SHOW_JUMPS, cellOfLink, linkSpans, normalizeLink, removeLink, setLink, slideOfLink } from './links';
-import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, setEmbeddedWriter, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, DOCX, PICTURE_EXTENSIONS, type FileType } from './io/files';
+import { openFileDialog, openBytesDialog, openAnyBytesDialog, stampOf, readRef, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, setEmbeddedWriter, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, DOCX, PICTURE_EXTENSIONS, type FileType } from './io/files';
 import { readPptx } from './io/pptx-read';
 import { pickReuseSlides } from './ui/reuse-slides';
 import { writeTiff } from './render/tiff';
@@ -135,7 +135,7 @@ import { typingPrefs, setTypingPrefs, onTypingPrefs } from './text/typing';
 import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
 import { UpdateUI } from './ui/update-ui';
-import { canUpdate, appVersion, portableInfo } from './updates';
+import { canUpdate, appVersion, portableInfo, STAGE, STAGE_NOTE, UPDATE_CHANNELS, type UpdateChannel } from './updates';
 import { computerName } from './feedback';
 import { GuideWindow, guideSpot } from './ui/guide-window';
 import { SettingsWindow } from './ui/settings-window';
@@ -152,6 +152,7 @@ import { SheetMode, ClipboardCells } from './ui/sheet-mode';
 import { DocumentMode, DocPaste } from './ui/doc-mode';
 import { docBoxPrefs, parseDocPins } from './ui/doc-panel';
 import { docRulerPrefs } from './ui/ruler';
+import { formulaBarPrefs } from './ui/sheet-views-ui';
 import { setScreenMeasure, figures } from './document/doc-file';
 import { readDocx, writeDocx, type DocxDeps, type DocxReadDeps } from './io/docx';
 import { FIGURE_MARGIN } from './document/figures';
@@ -165,9 +166,15 @@ import { LabelTooltip } from './ui/label-tooltip';
 import { starAtoms } from './chem/label-tip';
 import { structurePlace } from './sheet/layout';
 import { readSheetFile, writeSheetFile, SheetFileDeps } from './io/sheet-files';
+import { fromEmbedSource, type Embedded } from './io/ole-object';
+import { objectPicture, type ObjectPicture } from './render/object-picture';
 import { ACS_1996, DocStyle } from './style';
 import { emptyTable, tableFromCells } from './table';
 import type { TableData } from './model';
+import { checkDrawing, checkDocument, checkWorkbook, repeatedTitles, structureAlt, setStructureAlt, type Issue, type IssuePlace } from './accessibility';
+import { AccessibilityPane, askAltText } from './ui/accessibility-pane';
+import { SlideComparePane } from './ui/slide-compare';
+import { pickFileTemplate } from './ui/file-templates';
 import type { PastedRows } from './io/table-clip';
 import { Keeper } from './keep/keeper';
 import { DEFAULT_KEEP, type KeepPrefs } from './keep/prefs';
@@ -513,7 +520,7 @@ async function dropFiles(files: File[], at: { x: number; y: number }): Promise<v
   const inside = at.x >= r.left && at.x <= r.right && at.y >= r.top && at.y <= r.bottom;
   for (const f of files) {
     const bytes = new Uint8Array(await f.arrayBuffer());
-    const mime = /\.(cdxml|cdx|pptx|xlsx|docx|csv|tsv|txt|sdf?)$/i.test(f.name) ? null : pictureMime(f.name, bytes);
+    const mime = /\.(cdxml|cdx|pptx|xlsx|xlsm|xls|ods|docx|csv|tsv|txt|sdf?)$/i.test(f.name) ? null : pictureMime(f.name, bytes);
     if (mime && sheetActive()) flash('Pictures can\'t go in a cell yet. Drop sheet files (.xlsx, .csv, .sdf) to open them.');
     else if (mime && docActive()) docMode.dropPicture(bytes, mime);
     else if (mime) placePicture(bytes, mime, inside ? renderer.toDoc(at.x - r.left, at.y - r.top) : null);
@@ -992,7 +999,7 @@ setLinkHost({
   },
   async openHere(path) {
     // drawings, documents, slides, sheets and workspaces open in a tab here
-    if (!/\.(cdxml|cdx|docx|pptx|xlsx|csv|tsv|sdf|sd)$/i.test(path) && !path.toLowerCase().endsWith(`.${WORKSPACE.extension}`)) return false;
+    if (!/\.(cdxml|cdx|docx|pptx|xlsx|xlsm|xls|ods|csv|tsv|sdf|sd)$/i.test(path) && !path.toLowerCase().endsWith(`.${WORKSPACE.extension}`)) return false;
     if (!isTauri()) return false;
     await openRecent(path);
     return true;
@@ -2604,6 +2611,7 @@ tabAdd.addEventListener('click', () => {
   showContextMenu(x, y, [
     { cmd: 'new', label: 'Drawing' }, { cmd: 'new-slides', label: 'Slides' }, { cmd: 'new-sheet', label: 'Sheet' },
     { cmd: 'new-document', label: 'Document' }, { cmd: 'new-design', label: 'Design (TOC graphic, abstract, poster, figure)' },
+    { cmd: 'new-from-template', label: 'Document or Sheet from Template…' },
   ], { run: (cmd) => void command(cmd), key: commandKey });
 });
 tabsEl.replaceChildren(tabLeft, tabStrip, tabRight, tabList, tabAdd);
@@ -2687,6 +2695,76 @@ async function pickPicture(): Promise<{ bytes: Uint8Array; mime: string; name: s
   const mime = pictureMime(f.name, f.bytes);
   if (!mime) { flash(`${f.name} isn't a picture this can show.`); return null; }
   return { bytes: f.bytes, mime, name: f.name };
+}
+
+// ---------------------------------------------------------------- embedded objects (Insert > Object)
+
+/** Ask for a file of any kind, to put in a document as an object. */
+async function pickObjectFile(): Promise<{ name: string; bytes: Uint8Array } | null> {
+  try {
+    return await openAnyBytesDialog();
+  } catch (e) {
+    await showError('Could not open the file: ' + String(e));
+    return null;
+  }
+}
+
+/** The picture an object shows: a workbook's cells, a PDF's first page, a picture, or an icon. */
+function objectPictureOf(name: string, bytes: Uint8Array, icon: boolean): Promise<ObjectPicture> {
+  return objectPicture(name, bytes, icon, {
+    readBook: async (b) => (await readSheetFile(b, name, sheetFiles)).book,
+    pdfPage: (b) => import('./render/pdf-page').then((m) => m.pdfFirstPage(b)),
+  });
+}
+
+/**
+ * Open an object's file in its own program: written to a folder of its own in the temporary
+ * folder and opened as a double-click in Explorer would. While it is open (up to a working day)
+ * the file is checked every couple of seconds, and each save there is handed to `changed` once
+ * the file has stopped changing. In a browser the file is downloaded instead.
+ */
+async function openObjectFile(file: { name: string; bytes: Uint8Array }, changed: (bytes: Uint8Array) => void): Promise<string | null> {
+  const ext = /\.([^.\\/]+)$/.exec(file.name)?.[1] ?? 'bin';
+  if (!isTauri()) {
+    await writeFile({ kind: 'none' }, file.name, file.bytes, { description: file.name, extension: ext, mime: 'application/octet-stream' });
+    return `${file.name} was downloaded: in a browser it can't open in its program or bring changes back here (the desktop app does both).`;
+  }
+  let path: string;
+  try {
+    const dir = await invoke<string>('ole_object_folder');
+    path = `${dir}${/Windows/i.test(navigator.userAgent) ? '\\' : '/'}${file.name.replace(/[\\/:*?"<>|]/g, '_')}`;
+    await writeFile({ kind: 'path', path }, file.name, file.bytes, { description: file.name, extension: ext, mime: 'application/octet-stream' });
+    const { openPath } = await import('@tauri-apps/plugin-opener');
+    await openPath(path);
+  } catch (e) {
+    return `Could not open ${file.name}: ${String(e)}`;
+  }
+  const stamp = async () => { const s = await stampOf({ kind: 'path', path }); return s ? `${s.modified}:${s.size}` : ''; };
+  let seen = await stamp(), pending = '';
+  const until = Date.now() + 10 * 3600e3;
+  const timer = window.setInterval(() => {
+    if (Date.now() > until) { window.clearInterval(timer); return; }
+    void stamp().then(async (now) => {
+      if (!now || now === seen) { pending = ''; return; }
+      // wait for one more look at the same stamp: the program may still be writing
+      if (now !== pending) { pending = now; return; }
+      const bytes = await readRef({ kind: 'path', path });
+      if (!bytes?.length) return;
+      seen = now;
+      pending = '';
+      changed(bytes);
+    });
+  }, 1500);
+  return null;
+}
+
+/** Another program's object on the Windows clipboard (Excel's cells, for one), with the picture it came with. */
+async function clipboardObject(): Promise<{ embed: Embedded; picture: { bytes: Uint8Array; mime: string } | null } | null> {
+  const got = await nativeFirst(['Embedded Object']).catch(() => null);
+  const embed = got ? fromEmbedSource(got[1]) : null;
+  if (!embed) return null;
+  const pic = await nativeFirst(['PNG', 'CF_ENHMETAFILE']).catch(() => null);
+  return { embed, picture: pic ? { bytes: pic[1], mime: pic[0] === 'PNG' ? 'image/png' : 'image/x-emf' } : null };
 }
 
 /** Ask for a BibTeX or RIS file of references, and read its text. */
@@ -3526,6 +3604,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work differently while a sheet shows. */
 const SHEET_COMMANDS: Record<string, () => unknown> = {
+  'sheet-new-window': () => { sheetMode.view.commitEdit(); ws.newWindow(); },
   cut: () => sheetMode.copy(true),
   copy: () => sheetMode.copy(),
   paste: () => sheetMode.paste(null),
@@ -3591,6 +3670,10 @@ const docMode = new DocumentMode({
   readPaste: (e) => readDocPaste(e),
   toStructure: (text, style) => textToStructure(text, style),
   pickPicture: () => pickPicture(),
+  pickObjectFile: () => pickObjectFile(),
+  objectPicture: (name, bytes, icon) => objectPictureOf(name, bytes, icon),
+  openObjectFile: (file, changed) => openObjectFile(file, changed),
+  clipboardObject: nativeClipboard ? () => clipboardObject() : undefined,
   pickReferenceFile: () => pickReferenceFile(),
   preferredChanged: () => storeSettings(),
   reviewNameChanged: () => storeSettings(),
@@ -3618,6 +3701,7 @@ const docMode = new DocumentMode({
 });
 docBoxPrefs.changed = () => storeSettings();
 docRulerPrefs.changed = () => storeSettings();
+formulaBarPrefs.changed = () => storeSettings();
 // documents measure fonts they have no published widths for on the screen
 setScreenMeasure(measureText);
 void document.fonts?.ready.then(() => docMode.fontsChanged());
@@ -3746,9 +3830,135 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+const ANY_TAB = new Set(['new-from-template', 'check-accessibility', 'format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'page-edge', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
   'help', 'about', 'user-guide', 'help-here', 'send-feedback', 'report-problem', 'check-updates']);
+
+// ---------------------------------------------------------------- accessibility (Review > Check Accessibility, Alt Text…)
+
+/** What makes the file showing hard to use with a screen reader or to read. */
+function accessibilityIssues(): Issue[] {
+  if (sheetActive()) return ws.active.book ? checkWorkbook(ws.active.book) : [];
+  if (docActive()) { const t = docMode.file?.t; return t ? checkDocument(t) : []; }
+  const deck = deckNow();
+  if (deck && ws.active.mode === 'slides') {
+    const out: Issue[] = [];
+    const titles: (string | null)[] = [];
+    deck.slides.forEach((_, i) => {
+      const d = deck.docOf(i);
+      out.push(...checkDrawing(d, { slide: i, slideTitle: true, ...(d === doc ? { captionBox: (c: Caption) => renderer.captionBox(c) } : {}) }));
+      const t = [...d.captions.values()].find((c) => c.ph === 'title');
+      titles.push(t ? t.runs.map((r) => r.text).join('') : null);
+    });
+    return [...out, ...repeatedTitles(titles)];
+  }
+  return checkDrawing(doc, { captionBox: (c) => renderer.captionBox(c) });
+}
+
+/** Go to what an accessibility issue is about, and select it. */
+function goToIssue(p: IssuePlace): void {
+  if (sheetActive()) { sheetMode.goToIssue(p); return; }
+  if (docActive()) {
+    if (p.kind === 'doc-object') docMode.goToObject(p.id);
+    else if (p.kind === 'doc-para') docMode.revealPara(p.para);
+    return;
+  }
+  if (p.kind !== 'drawing') return;
+  const deck = deckNow();
+  if (deck && p.slide !== undefined) deck.go(p.slide);
+  // brought into view (zoomed in to it), then picked whole
+  if (p.atoms?.length) editor.reveal('atom', p.atoms[0]);
+  else if (p.captions?.length) editor.reveal('caption', p.captions[0]);
+  editor.selectThese({ atoms: new Set(p.atoms ?? []), bonds: new Set(), captions: new Set(p.captions ?? []), arrows: new Set(), shapes: new Set(p.shapes ?? []) });
+}
+
+/** Alt Text… in a drawing, on a slide or in a design: for the picture or chart picked, or else the structure picked. */
+async function drawingAltText(): Promise<boolean> {
+  const pics = [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => x?.kind === 'picture');
+  if (pics.length === 1) {
+    const p = pics[0];
+    const got = await askAltText(p.chart ? 'chart' : p.math ? 'equation' : p.video ? (p.video.audio ? 'sound' : 'video') : 'picture', p.alt);
+    if (got === null || !doc.shapes.has(p.id)) return false;
+    doc.edit('Alt text', () => doc.updateShape(p.id, { alt: got || undefined }));
+    return true;
+  }
+  const atom = [...editor.sel.atoms].find((id) => doc.atoms.has(id));
+  if (pics.length === 0 && atom !== undefined) {
+    const frag = [...doc.fragmentOf(atom)].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a);
+    const got = await askAltText('structure', structureAlt(frag), 'Screen readers read this out in place of the structure, and PowerPoint and Word keep it as the picture\'s alt text. Left empty, the structure is described by its SMILES.');
+    if (got === null || !doc.atoms.has(atom)) return false;
+    setStructureAlt(doc, atom, got);
+    return true;
+  }
+  flash(pics.length > 1 ? 'Select one picture at a time for Alt Text.' : 'Click a picture, chart or structure first, then Alt Text.');
+  return false;
+}
+
+const accessibility = new AccessibilityPane({
+  check: accessibilityIssues,
+  goTo: goToIssue,
+  fixAlt: async (p) => {
+    if (sheetActive()) return sheetMode.altText();
+    if (docActive()) return p.kind === 'doc-object' ? docMode.altText(p.id) : false;
+    return drawingAltText();
+  },
+});
+
+const slideCompare = new SlideComparePane({
+  deck: () => (ws.active.mode === 'slides' ? deckNow() : null),
+  flash: (m, ms) => flash(m, ms),
+  changed: () => { const d = deckNow(); if (d) deckChanged(d); },
+});
+
+/** File > New from Template: a document or sheet started from one of our templates. */
+async function newFromTemplate(): Promise<void> {
+  finishTyping();
+  const got = await pickFileTemplate(sheetActive() ? 'sheet' : 'document');
+  if (!got) return;
+  if (got.kind === 'sheet') {
+    ws.newSheet(got.template?.make());
+  } else ws.newDocument(got.template?.make());
+  if (got.template) flash(`New ${got.template.name.toLowerCase()}: type over the text in [brackets].`);
+}
+
+/** Review > Compare (slides): another version of this deck, from an open tab or a PowerPoint file, to review slide by slide. */
+async function compareSlides(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const others = ws.tabs.filter((t) => t !== ws.active && t.mode === 'slides' && t.deck);
+  let pick = 'file';
+  if (others.length) {
+    const got = await ask('Compare Presentations', [{
+      name: 'with', label: 'Compare with', value: 'file',
+      options: [{ value: 'file', label: 'A PowerPoint file…' }, ...others.map((t, i) => ({ value: String(i), label: t.name }))],
+    }], { ok: 'Compare', note: 'Each slide that differs in the other version is listed, to accept into this deck or reject.' });
+    if (!got) return;
+    pick = got.with;
+  }
+  const theirs = new Deck(new Doc());
+  let name: string;
+  if (pick === 'file') {
+    const f = await openBytesDialog('PowerPoint presentations', [PPTX]).catch(async (e) => { await showError(String(e)); return null; });
+    if (!f) return;
+    try {
+      const got = readPptx(f.bytes);
+      theirs.load(got.slides.map((s) => theirs.makeSlide(s.layout, s.contents, s.notes, s, got.master)), got.size, got.master);
+    } catch (e) {
+      flash(`Could not read ${f.name}: ${e instanceof Error ? e.message : String(e)}`, 8000);
+      return;
+    }
+    name = f.name;
+  } else {
+    const t = others[Number(pick)];
+    const src = t.deck!.copySlides(t.deck!.slides.map((_, i) => i));
+    theirs.load(src.slides.map((s) => theirs.makeSlide(s.layout, s.contents, s.notes, s.motion, src.master)), src.size, src.master);
+    name = t.name;
+  }
+  if (deckNow() !== d) return;
+  const n = slideCompare.start(d, theirs, name, document.querySelector<HTMLElement>('[data-cmd="compare-slides"]:not([hidden])'));
+  flash(n ? `${n} change${n === 1 ? '' : 's'} from ${name} to review.` : `${name} has the same slides as this deck.`);
+}
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
@@ -3791,7 +4001,7 @@ function setPictureStyle(look: PictureLook | undefined): boolean {
 }
 
 /** Slide commands that don't apply to a design's single page. */
-const SLIDE_ONLY = new Set(['section-menu', 'new-slide', 'duplicate-slide', 'delete-slide', 'cut-slides', 'copy-slides', 'paste-slides', 'paste-slides-keep', 'hide-slide', 'reuse-slides', 'size-wide', 'size-standard', 'size-custom', 'slide-master', 'slide-templates',
+const SLIDE_ONLY = new Set(['compare-slides', 'section-menu', 'new-slide', 'duplicate-slide', 'delete-slide', 'cut-slides', 'copy-slides', 'paste-slides', 'paste-slides-keep', 'hide-slide', 'reuse-slides', 'size-wide', 'size-standard', 'size-custom', 'slide-master', 'slide-templates',
   'edit-layouts', 'view-sorter', 'add-section', 'rename-section', 'remove-section', 'remove-section-slides', 'remove-all-sections', 'section-up', 'section-down', 'collapse-sections', 'expand-sections',
   'slide-transitions', 'slide-animations', 'animation-pane', 'preview-slide', 'remove-animation', 'insert-slide-zoom', 'insert-summary-zoom', 'action-settings', 'insert-video', 'insert-audio']);
 
@@ -3802,6 +4012,8 @@ const ANIM_COMMANDS: { cmd: string; label: string }[] = [false, true].flatMap((e
 
 const COMMANDS: Record<string, () => unknown> = {
   new: () => { finishTyping(); ws.newDrawing(); },
+  'check-accessibility': () => { finishTyping(); if (accessibility.open) accessibility.refresh(); else accessibility.show(document.querySelector<HTMLElement>('[data-cmd="check-accessibility"]:not([hidden])')); },
+  'alt-text': () => { finishTyping(); void drawingAltText(); },
   'new-slides': () => { finishTyping(); ws.newSlides(); },
   'new-design': () => newDesign(),
   'design-size': () => designSize(),
@@ -3828,6 +4040,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'shape-backward': () => editor.setShapeLayer('backward') || flash('Select the shapes to send backward.'),
   'new-sheet': () => { finishTyping(); ws.newSheet(); },
   'new-document': () => { finishTyping(); ws.newDocument(); },
+  'new-from-template': () => { void newFromTemplate(); },
   open: () => ws.open(),
   save: () => { finishTyping(); return ws.save(focusTab()); },
   'save-as': () => { finishTyping(); return ws.saveAs(focusTab()); },
@@ -3872,6 +4085,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'hide-slide': () => hideSlides(),
   'selection-pane': () => { selectionPane = !selectionPane; showLayers(); },
   'reuse-slides': () => reuseSlides(),
+  'compare-slides': () => compareSlides(),
   'insert-equation': () => insertEquation(),
   'insert-link': () => insertLink(),
   'remove-link': () => removeLinks(),
@@ -3999,7 +4213,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'send-feedback': () => feedback.open(),
   about: () => void appVersion().then((v) => ask('About Chem Illustrator', [], {
     noCancel: true,
-    note: `Version ${v === 'web' ? 'for the browser' : v}. Free software under the GNU General Public License, version 3: `
+    note: `${STAGE_NOTE} Version ${v === 'web' ? 'for the browser' : v} (${STAGE.toLowerCase()}). Free software under the GNU General Public License, version 3: `
       + 'see the licence and the source on GitHub (github.com/nathanohare/Chem-Illustrator). ChemDraw is a trademark of Revvity Signals; '
       + 'Chem Illustrator is not made by or affiliated with Revvity Signals.',
   })),
@@ -4871,16 +5085,18 @@ async function openWorkspace(): Promise<void> {
 
 // Newer versions of the desktop app (File > Check for Updates…, Edit > Settings)
 let updateCheck = true;
+let updateChannel: UpdateChannel = 'latest';
 let skipVersion: string | null = null;
 const updates = new UpdateUI({
   unsaved: () => ws.tabs.filter((t) => t.dirty).map((t) => t.name),
   skipped: () => skipVersion,
   skip: (v) => { skipVersion = v; storeSettings(); },
+  channel: () => updateChannel,
 });
 for (const el of document.querySelectorAll<HTMLElement>('.desktop-only')) el.hidden = !canUpdate;
 let versionText = canUpdate ? '' : 'Web version';
 void Promise.all([appVersion(), portableInfo()]).then(([v, portable]) => {
-  versionText = canUpdate ? `Version ${v}${portable ? ' (portable)' : ''}` : 'Web version';
+  versionText = canUpdate ? `Version ${v} ${STAGE.toLowerCase()}${portable ? ' (portable)' : ''}` : `Web version (${STAGE.toLowerCase()})`;
   if (portable && !portable.writable) flash(`This portable copy can’t write to its “Chem Illustrator Data” folder (a locked or read-only drive), so settings are kept on this computer instead.`, 8000);
   const el = document.querySelector('#app-version');
   if (el) el.textContent = versionText;
@@ -5044,7 +5260,9 @@ async function onlinePreferences(): Promise<void> {
     { name: 'pubchem', label: 'Look up names the name reader can\'t read on PubChem', type: 'checkbox', value: String(pubchemNames),
       help: 'Sends the name typed to PubChem, a free NIH database. Names the program can read itself never leave this computer.' },
     ...(canUpdate ? [{ name: 'updates', label: 'Check for a newer version when the app starts', type: 'checkbox' as const, value: String(updateCheck),
-      help: 'Asks GitHub for the latest release number; nothing about you or your files is sent.' }] : []),
+      help: 'Asks GitHub for the latest release number; nothing about you or your files is sent.' },
+    { name: 'channel', label: 'Updates', options: UPDATE_CHANNELS, value: updateChannel,
+      help: 'Stable versions have been tried out on a real computer before they are offered, so they change less often and have fewer surprises. Latest gets every new feature and fix the day it is made.' }] : []),
   ], { ok: 'Save' });
   if (!r) return;
   pubchemNames = r.pubchem === 'true';
@@ -5052,6 +5270,8 @@ async function onlinePreferences(): Promise<void> {
     // turning the check back on also forgets a skipped version
     if (r.updates === 'true' && !updateCheck) skipVersion = null;
     updateCheck = r.updates === 'true';
+    // the other channel's versions are new to you: forget a skipped one
+    if ((r.channel === 'stable' || r.channel === 'latest') && r.channel !== updateChannel) { updateChannel = r.channel; skipVersion = null; }
   }
   storeSettings();
 }
@@ -5113,7 +5333,9 @@ function storeSettings(): void {
     guides: { ...guidesOn },
     docPins: [...docBoxPrefs.pinned],
     docRuler: docRulerPrefs.shown,
+    sheetFormulaBar: formulaBarPrefs.shown,
     updateCheck,
+    updateChannel,
     pubchemNames,
     fileTypesOffered,
     wordObjectsOffered,
@@ -5255,6 +5477,7 @@ void loadSettings().then((s) => {
   slideThemes = s.slideThemes;
   askWholeDrawing = s.askWholeDrawing;
   updateCheck = s.updateCheck;
+  updateChannel = s.updateChannel;
   pubchemNames = s.pubchemNames;
   fileTypesOffered = s.fileTypesOffered;
   wordObjectsOffered = s.wordObjectsOffered;
@@ -5277,6 +5500,8 @@ void loadSettings().then((s) => {
   Object.assign(guidesOn, s.guides);
   docBoxPrefs.pinned = parseDocPins(s.docPins);
   docRulerPrefs.shown = !!s.docRuler;
+  formulaBarPrefs.shown = s.sheetFormulaBar !== false;
+  sheetMode.showFormulaBar();
   docMode.showRuler();
   docMode.boxesChanged();
   showGuides();
@@ -6234,6 +6459,7 @@ function drawingMenu(): MenuItem[] {
     { label: 'Rotate or Flip', items: turn },
     ...(order.length ? [{ label: 'Order', items: order }] : []),
     ...(shapes.some((x) => x.chart) ? [{ cmd: 'edit-chart', label: 'Edit Chart…' }] : []),
+    ...((shapes.length === 1 && shapes[0].kind === 'picture') || (atoms && !shapes.length) ? [{ cmd: 'alt-text', label: 'Alt Text…' }] : []),
     ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }, { cmd: 'picture-format' }, { label: 'Picture Style', items: PICTURE_STYLES.map((p) => ({ cmd: `picture-style-${p.id}`, label: p.name })) }] : []),
     ...(ws.active.mode === 'slides' ? [{ label: 'Animation', items: [
       ...ANIM_COMMANDS.slice(0, EFFECTS.length), null, ...ANIM_COMMANDS.slice(EFFECTS.length), null,
@@ -6830,7 +7056,7 @@ const settingsWindow = new SettingsWindow([
   { id: 'dark', title: 'Dark Page', words: 'dark mode night paper ink graphite slate appearance colours', open: darkColours },
   { id: 'schemes', title: 'Schemes', words: 'scheme arrow gap plus text size reagents conditions boxes', open: schemeSettings },
   { id: 'autosave', title: 'AutoSave and Recovery', words: 'autosave recovery versions backup copies shared folders onedrive', open: () => keeper.optionsCommand() },
-  { id: 'online', title: 'Online', words: 'pubchem internet names lookup updates check version privacy', open: onlinePreferences },
+  { id: 'online', title: 'Online', words: 'pubchem internet names lookup updates check version privacy stable latest channel beta', open: onlinePreferences },
   { id: 'files', title: 'File Types', words: 'open with default app explorer finder associations cdxml cdx mol sdf docx pptx xlsx double-click', open: () => fileTypesPage(fileTypesHost) },
 ]);
 $('#btn-search').addEventListener('click', () => commandSearch.open());
@@ -7046,6 +7272,9 @@ for (const id of ['#ribbon', '#design-ribbon']) {
     if (cmd) command(cmd);
   });
 }
+// the Beta mark beside the program's name says what beta means here
+$('#stage-badge').addEventListener('click', () => command('about'));
+
 renderTabs();
 updateTitle();
 

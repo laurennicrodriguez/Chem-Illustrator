@@ -16,6 +16,7 @@
         <button role="menuitem" data-cmd="new-design">New Design…</button>
         <button role="menuitem" data-cmd="new-sheet">New Sheet</button>
         <button role="menuitem" data-cmd="new-document">New Document</button>
+        <button role="menuitem" data-cmd="new-from-template" title="A new document or sheet from a ready-made template: lab report, supporting information, thesis chapter, reaction table, reagent sheet">New from Template…</button>
         <button role="menuitem" data-cmd="open">Open…</button>
         <div id="recent-files" class="recent-files" hidden></div>
         <button role="menuitem" data-cmd="save">Save</button>
@@ -35,6 +36,8 @@
         <button role="menuitem" data-modes="drawing slides design document" data-cmd="export-pdf">Export PDF…</button>
         <button role="menuitem" data-modes="drawing slides design" data-cmd="export-picture">Export Picture…</button>
         <button role="menuitem" data-modes="drawing slides design" data-cmd="export-mol">Export Molfile…</button>
+        <hr />
+        <button role="menuitem" data-cmd="check-accessibility" title="Look for what makes this file hard to use with a screen reader or to read: missing alt text, low-contrast text, slides without titles, headings that skip a level, things read out of order">Check Accessibility</button>
         <hr />
         <button role="menuitem" data-cmd="print" title="Print the drawing, slides (or handouts), document or sheet">Print…</button>
         <button data-modes="sheet" role="menuitem" data-cmd="print-preview" title="Every page of the sheet as it will print">Print Preview</button>
@@ -114,6 +117,7 @@
     <button data-modes="sheet" role="menuitem" data-cmd="go-to">Go To…</button>
     <button data-modes="sheet" role="menuitem" data-cmd="go-to-special">Go To Special…</button>
     <button data-modes="sheet" role="menuitem" data-cmd="paste-special">Paste Special…</button>
+    <button data-modes="document" role="menuitem" data-cmd="paste-object" title="Cells copied in Excel, or another program's object, kept whole as Word's Paste Special keeps them: double-click to change them in their program (Windows app)">Paste as Object</button>
     <hr />
     <button role="menuitem" data-cmd="command-search" title="Find any command by typing part of its name">Search Commands…</button>
     <button role="menuitem" data-cmd="hotkeys">Hotkeys…</button>
@@ -210,8 +214,10 @@
     <button data-modes="document" role="menuitem" data-cmd="insert-structure" title="Draw a structure or scheme to put in the text at the caret">Structure</button>
     <button data-modes="sheet" role="menuitem" data-cmd="draw-structure">Structure in Cell</button>
     <button data-modes="drawing slides design document" role="menuitem" data-cmd="insert-picture">Picture…</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-object" title="Another program's file kept whole in the document (an Excel workbook, a PDF, anything): shown as its cells, first page or an icon; double-click it to open it in its program">Object…</button>
     <button data-modes="drawing slides design" role="menuitem" data-cmd="crop" title="Cut the edges off the selected picture">Crop Picture</button>
     <button data-modes="drawing slides design document" role="menuitem" data-cmd="picture-format" title="Brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions">Picture Format…</button>
+    <button role="menuitem" data-cmd="alt-text" title="Alt text for the picture, chart or structure picked: what it shows, for people who can't see it (screen readers). Kept as its alt text in Word, PowerPoint and Excel">Alt Text…</button>
     <button data-modes="drawing slides design" role="menuitem" data-cmd="text-box">Text Box</button>
     <button data-modes="drawing slides design document" role="menuitem" data-cmd="insert-table" title="A table in the ACS style; or paste cells from Excel or a sheet">Table…</button>
     <button data-modes="drawing slides design document" role="menuitem" data-cmd="insert-chart" title="A chart with its own data (type or paste it in a grid), saved as a Word or PowerPoint chart">Chart…</button>
@@ -249,6 +255,13 @@
     <button data-modes="slides design document" role="menuitem" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha), shown as maths; a Word or PowerPoint equation in .docx and .pptx files">Equation…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-toc" title="The headings (Heading 1, 2, 3) with their page numbers; it updates by itself">Table of Contents…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-tof" title="The Figure, Scheme, Table or Chart captions with their page numbers; it updates by itself">Table of Figures…</button>
+    <button data-modes="document" role="menuitem" data-cmd="mark-entry" title="Mark the selected word or phrase as an index entry (Alt+Shift+X)">Mark Index Entry…</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-index" title="The entries marked, A to Z, with their page numbers; it updates by itself">Index…</button>
+    <button data-modes="document" role="menuitem" data-cmd="mark-citation" title="Mark the selected authority for the table of authorities (Alt+Shift+I)">Mark Citation…</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-toa" title="The authorities marked, by category, with their pages; it updates by itself">Table of Authorities…</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-form-text" title="A text form field to fill in">Text Form Field…</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-form-check" title="A check box form field">Check Box Form Field…</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-form-drop" title="A drop-down form field">Drop-Down Form Field…</button>
     <button role="menuitem" data-cmd="insert-symbol" title="Greek letters, arrows, maths and chemistry signs, accented letters: find one by name (degree, angstrom) or code, with the ones you used lately first">Symbol…</button>
     <button role="menuitem" data-cmd="insert-link" title="Link the selected text to a web page, a DOI, a file or a place in this file (Ctrl+K while typing). Ctrl+click a link to follow it">Link…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-bookmark" title="Name the paragraph the caret is in, so links can go to it (Ctrl+Shift+F5)">Bookmark…</button>
@@ -505,6 +518,7 @@
       </div>
     </div>
     <h1 class="app-name">Chem Illustrator</h1>
+    <button id="stage-badge" type="button" class="stage-badge" title="Chem Illustrator is still being built: new features arrive often and some things may not work yet. Click for more.">Beta</button>
   </header>
 
   <div id="tabs" role="tablist" aria-label="Open files"></div>
@@ -522,6 +536,7 @@
       <button role="tab" data-sh-tab="table" aria-selected="false" class="rb-context" hidden>Table Design</button>
       <button role="tab" data-sh-tab="chart" aria-selected="false" class="rb-context" hidden>Chart</button>
       <button role="tab" data-sh-tab="pivot" aria-selected="false" class="rb-context" hidden>PivotTable</button>
+      <button role="tab" data-sh-tab="sparkline" aria-selected="false" class="rb-context" hidden>Sparkline</button>
     </div>
     <div class="rb-panel" data-sh-panel="home">
       <div class="rb-group">
@@ -540,6 +555,7 @@
         <div class="rb-row">
           <div class="rb-col">
             <div class="rb-pair">
+              <input id="sh-font" class="rb-text rb-font" list="ci-fonts" spellcheck="false" aria-label="Font" title="Font of the selected cells (type any installed font). Cells with no font of their own are in the theme's body font" />
               <select id="sh-size" title="Font size" aria-label="Font size">
                 <option>8</option><option>9</option><option>10</option><option>11</option><option>12</option><option>14</option><option>16</option><option>18</option><option>20</option><option>24</option>
               </select>
@@ -564,12 +580,15 @@
               <button data-sh="valign-middle" title="Middle">Middle</button>
               <button data-sh="valign-bottom" title="Bottom">Bottom</button>
               <button data-sh="wrap" aria-pressed="false" title="Wrap text onto more lines">Wrap</button>
+              <button data-sh="orientation" title="Orientation: turn the text up, down or at an angle, or stack its letters (for narrow column headings)"><span aria-hidden="true">ab↗</span> ▾</button>
             </div>
             <div class="rb-pair">
               <button data-sh="align-left" aria-pressed="false" title="Align left">Left</button>
               <button data-sh="align-center" aria-pressed="false" title="Centre">Centre</button>
               <button data-sh="align-right" aria-pressed="false" title="Align right">Right</button>
               <button data-sh="merge-cells" aria-pressed="false" title="Merge the selected cells into one and centre (again to split them)">Merge</button>
+              <button class="rb-sq" data-sh="indent-less" title="Decrease Indent: move the text back towards the cell's edge">⇤</button>
+              <button class="rb-sq" data-sh="indent-more" title="Increase Indent: move the text in from the cell's edge">⇥</button>
             </div>
           </div>
         </div>
@@ -606,6 +625,7 @@
             <button data-sh="conditional-formatting" title="Colour scales, data bars, icons and highlight rules that change a cell's look by its value">Conditional Formatting ▾</button>
             <button data-sh="format-as-table" title="Format the table with a header row and banded rows, in one of Excel's table looks">Format as Table ▾</button>
             <button data-sh="manage-rules" title="See, reorder and change the conditional formatting rules">Manage Rules…</button>
+            <button data-sh="cell-styles" title="Cell Styles: Good, Bad and Neutral; Title, Headings and Total; Input, Output, Calculation, Note; Accent colours from the theme; number styles. Saved as Excel's own styles">Cell Styles ▾</button>
           </div>
         </div>
         <div class="rb-label">Styles</div>
@@ -715,8 +735,44 @@
         </div>
         <div class="rb-label">Analyze</div>
       </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <button data-sh="group-menu" title="Group (Shift+Alt+Right): put the selected rows or columns in a group that folds away; or Auto Outline from the totals formulas">Group ▾</button>
+            <button data-sh="ungroup-menu" title="Ungroup (Shift+Alt+Left): take the selected rows or columns a level out; or Clear Outline">Ungroup ▾</button>
+            <button data-sh="subtotal" title="Subtotal: a total row under each change in a column (each catalyst, each solvent), worked out with SUBTOTAL, with a grand total, grouped so the details fold away">Subtotal…</button>
+          </div>
+          <div class="rb-col">
+            <button data-sh="show-detail" title="Show Detail: open the folded group at the selection">Show Detail</button>
+            <button data-sh="hide-detail" title="Hide Detail: fold away the group at the selection">Hide Detail</button>
+            <button data-sh="outline-settings" title="Outline settings: summary rows below or above their details, summary columns right or left">Settings…</button>
+          </div>
+        </div>
+        <div class="rb-label">Outline</div>
+      </div>
     </div>
     <div class="rb-panel" data-sh-panel="view" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="view-normal" aria-pressed="true" title="Normal: the grid of cells"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3" width="15" height="14" rx="1"/><path d="M2.5 7.5h15M2.5 12h15M7.5 3v14M12.5 3v14" stroke-opacity="0.6"/></svg></span>Normal</button>
+          <button class="rb-big" data-sh="view-break-preview" aria-pressed="false" title="Page Break Preview: what prints, page by page, with the breaks as blue lines you can drag; what doesn't print is grey"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3" width="15" height="14" rx="1" stroke-opacity="0.5"/><path d="M10 3v14M2.5 10h15" stroke-dasharray="2 1.5"/></svg></span>Page Break Preview</button>
+          <button class="rb-big" data-sh="view-page-layout" aria-pressed="false" title="Page Layout: the cells on sheets of paper, with margins, headers and footers, as they will print (double-click a header to change it)"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="2.5" width="9" height="12" rx="0.5"/><rect x="8" y="5.5" width="9" height="12" rx="0.5" fill="var(--rb-bg, #fff)"/></svg></span>Page Layout</button>
+          <div class="rb-col">
+            <button data-sh="custom-views" title="Custom Views: save how you are looking at the workbook (sheet, hidden rows and columns, filter, print settings) under a name, and go back to it">Custom Views…</button>
+          </div>
+        </div>
+        <div class="rb-label">Workbook Views</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <button data-sh="view-gridlines" aria-pressed="true" title="Gridlines: show the lines between cells">Gridlines</button>
+            <button data-sh="view-headings" aria-pressed="true" title="Headings: show the row numbers and column letters">Headings</button>
+            <button data-sh="view-formula-bar" aria-pressed="true" title="Formula Bar: show the box above the grid with the cell's name and contents">Formula Bar</button>
+          </div>
+        </div>
+        <div class="rb-label">Show</div>
+      </div>
       <div class="rb-group">
         <div class="rb-row">
           <button class="rb-big" data-sh="freeze-panes-menu" title="Freeze Panes: keep rows and columns in view while scrolling (above and left of the active cell), or the top row, or the first column"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2.5" y="3" width="15" height="14" rx="1"/><path d="M2.5 7.5h15M7 3v14" stroke-width="2.2"/></svg></span>Freeze Panes ▾</button>
@@ -725,6 +781,7 @@
             <button data-sh="freeze-header" aria-pressed="false" title="Keep the table's header row in view while scrolling">Freeze Header</button>
             <button data-sh="show-all-notes" aria-pressed="false" title="Show every note on the sheet beside its cell">Show All Notes</button>
           </div>
+          <button class="rb-big" data-sh="sheet-new-window" title="New Window: the workbook in another tab too (Book1.xlsx:2), with its own sheet, selection and place. Typing in either shows in both; Save in either saves the one file"><span class="rb-icon">⧉</span>New Window</button>
         </div>
         <div class="rb-label">Window</div>
       </div>
@@ -769,6 +826,14 @@
       </div>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-sh="spark-line" title="Line sparklines: a little line chart in a cell for each row (or column) of numbers, such as conversion over time. Saved as Excel's own sparklines"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="5" width="15" height="10" rx="1" stroke-opacity="0.5"/><path d="M4.5 12.5l3-4 3 2 2.5-4 2.5 3"/></svg></span>Line</button>
+          <button class="rb-big" data-sh="spark-column" title="Column sparklines: little bars in a cell for each row (or column) of numbers"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="5" width="15" height="10" rx="1" stroke-opacity="0.5"/><path d="M5.5 13v-3M8.5 13V8M11.5 13v-4M14.5 13V7"/></svg></span>Column</button>
+          <button class="rb-big" data-sh="spark-winloss" title="Win/Loss sparklines: up for positive, down for negative (a reaction that worked or didn't, a yield above or below target)"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="5" width="15" height="10" rx="1" stroke-opacity="0.5"/><path d="M5.5 10V7.5M8.5 10v2.5M11.5 10V7.5M14.5 10V7.5" stroke-width="2"/></svg></span>Win/Loss</button>
+        </div>
+        <div class="rb-label">Sparklines</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-sh="insert-pivot-chart" title="PivotChart: a chart of a PivotTable that follows it when its fields change or it is refreshed (makes the PivotTable too when the active cell isn't in one)"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 2v15h15" stroke-opacity="0.6"/><path d="M6 16v-6M10 16V6M14 16v-4" stroke-width="2.6"/><path d="M13 3.5h4v4" stroke-width="1.3"/></svg></span>PivotChart</button>
         </div>
         <div class="rb-label">PivotCharts</div>
@@ -794,6 +859,16 @@
       </div>
     </div>
     <div class="rb-panel" data-sh-panel="page" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="themes" title="Themes: the workbook's colours and fonts together. Cells with no font of their own take the theme's body font; the colour menus, Accent and Heading cell styles take its colours. Saved as the workbook's Office theme"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3" width="15" height="14" rx="1.5"/><path d="M2.5 7h15"/><rect x="5" y="9.5" width="3" height="5" fill="currentColor" stroke="none" opacity="0.6"/><rect x="8.5" y="9.5" width="3" height="5" fill="currentColor" stroke="none" opacity="0.4"/><rect x="12" y="9.5" width="3" height="5" fill="currentColor" stroke="none" opacity="0.2"/></svg></span>Themes</button>
+          <div class="rb-col">
+            <button data-sh="theme-colours" title="Theme Colours: only the colours of another theme">Colours ▾</button>
+            <button data-sh="theme-fonts" title="Theme Fonts: only the headings and body fonts of another theme">Fonts ▾</button>
+          </div>
+        </div>
+        <div class="rb-label">Themes</div>
+      </div>
       <div class="rb-group">
         <div class="rb-row">
           <button class="rb-big" data-sh="page-margins" title="Margins: Normal, Wide, Narrow, or your own"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="2.5" width="12" height="15"/><path d="M4 5.5h12M4 14.5h12M7 2.5v15M13 2.5v15" stroke-dasharray="1.5 1.5"/></svg></span>Margins ▾</button>
@@ -824,6 +899,10 @@
           <div class="rb-col">
             <button data-sh="print-gridlines" aria-pressed="false" title="Print the gridlines between cells">Print Gridlines</button>
             <button data-sh="print-headings" aria-pressed="false" title="Print the row numbers and column letters">Print Headings</button>
+          </div>
+          <div class="rb-col">
+            <button data-sh="view-gridlines" aria-pressed="true" title="View Gridlines: show the lines between cells on the screen">View Gridlines</button>
+            <button data-sh="view-headings" aria-pressed="true" title="View Headings: show the row numbers and column letters on the screen">View Headings</button>
             <button data-sh="show-page-breaks" aria-pressed="false" title="Show where pages end on the grid: dashed lines for Excel's own breaks, solid ones for breaks put in by hand">Page Breaks</button>
           </div>
         </div>
@@ -871,6 +950,13 @@
       </div>
     </div>
     <div class="rb-panel" data-sh-panel="review" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="check-accessibility" title="Check Accessibility: missing alt text, low-contrast text, merged cells, sheets without names. Click an item to go to it"><span class="rb-icon">♿</span>Check Accessibility</button>
+          <button class="rb-big" data-cmd="alt-text" title="Alt Text: what the picture, chart or structure picked shows, for people who can't see it (screen readers)"><span class="rb-icon">🏷</span>Alt Text…</button>
+        </div>
+        <div class="rb-label">Accessibility</div>
+      </div>
       <div class="rb-group">
         <div class="rb-row">
           <button class="rb-big" data-sh="new-comment" title="New Comment (Ctrl+Alt+M): a conversation on the cell with your name and the time, which others can reply to and resolve"><span class="rb-icon">💬</span>New Comment</button>
@@ -995,6 +1081,59 @@
           </div>
         </div>
         <div class="rb-label">Tools</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-sh-panel="sparkline" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="spark-edit" title="Edit Data: the cells the sparklines chart and where they are"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="5" width="15" height="10" rx="1" stroke-opacity="0.5"/><path d="M4.5 12.5l3-4 3 2 2.5-4 2.5 3"/></svg></span>Edit Data</button>
+        </div>
+        <div class="rb-label">Sparkline</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <button data-sh="spark-type-line" aria-pressed="false" title="Show the group as lines">Line</button>
+            <button data-sh="spark-type-column" aria-pressed="false" title="Show the group as columns">Column</button>
+            <button data-sh="spark-type-winloss" aria-pressed="false" title="Show the group as win/loss bars">Win/Loss</button>
+          </div>
+        </div>
+        <div class="rb-label">Type</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-check"><input type="checkbox" data-spark-opt="high" /> High Point</label>
+            <label class="rb-check"><input type="checkbox" data-spark-opt="low" /> Low Point</label>
+            <label class="rb-check"><input type="checkbox" data-spark-opt="negative" /> Negative Points</label>
+          </div>
+          <div class="rb-col">
+            <label class="rb-check"><input type="checkbox" data-spark-opt="first" /> First Point</label>
+            <label class="rb-check"><input type="checkbox" data-spark-opt="last" /> Last Point</label>
+            <label class="rb-check"><input type="checkbox" data-spark-opt="markers" /> Markers</label>
+          </div>
+        </div>
+        <div class="rb-label">Show</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <button data-sh="spark-style" title="Ready-made colours for the sparklines and their marked points">Style ▾</button>
+            <button data-sh="spark-colour" title="Sparkline Colour, and line width">Sparkline Colour ▾</button>
+            <button data-sh="spark-marker-colour" title="Colours of the marked points: negative, markers, high, low, first, last">Marker Colour ▾</button>
+          </div>
+        </div>
+        <div class="rb-label">Style</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <button data-sh="spark-axis" title="Axis: the lowest and highest values each sparkline shows (each its own, the same for the group, or a number), the zero line, right to left">Axis ▾</button>
+            <button data-sh="spark-empty" title="Hidden and Empty Cells: show empty cells as gaps, zero, or join the line across them; show hidden rows' values">Empty Cells ▾</button>
+            <button data-sh="spark-clear" title="Clear: take away the selected sparklines (or the whole group)">Clear ▾</button>
+          </div>
+        </div>
+        <div class="rb-label">Group</div>
       </div>
     </div>
     <div class="rb-panel" data-sh-panel="chart" hidden>
@@ -1182,6 +1321,7 @@
           <button class="rb-big" data-doc="insert-picture" title="A picture from a file (or paste or drop one)"><span class="rb-icon">▣</span>Picture</button>
           <button class="rb-big" data-doc="picture-format" title="Picture Format for the picture picked: brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions. Saved as Word's own picture settings"><span class="rb-icon">◐</span>Picture Format</button>
           <button class="rb-big" data-doc="insert-chart" title="A chart with its own data, as in Word: type or paste the numbers, pick the kind of chart. Double-click it to change it"><span class="rb-icon">▥</span>Chart</button>
+          <button class="rb-big" data-doc="insert-object" title="Object: another program's file kept whole in the document, as in Word (an Excel workbook, a PDF, anything). It shows its cells, first page or an icon; double-click it to open it in its program, and what you save there comes back here. Paste as Object (Edit menu) does the same with cells copied in Excel"><span class="rb-icon">⧈</span>Object</button>
           <button class="rb-big" data-doc="insert-text-box" title="A box of text on the page, with the page's text wrapping round it. Drag its edge to move it"><span class="rb-icon">▭</span>Text Box</button>
           <button class="rb-big" data-doc="insert-shapes" aria-haspopup="true" title="Basic shapes, block arrows, flowchart shapes, callouts and lab glassware: the one you pick goes in the text at the caret. Double-click it to change it with the drawing tools"><span class="rb-icon">◇</span>Shapes ▾</button>
           <button class="rb-big" data-doc="insert-icons" aria-haspopup="true" title="About 7,000 icons, lab and science ones first (glassware, molecules, hazard signs): the one you pick goes in the text at the caret. Find one by name"><span class="rb-icon">⚗</span>Icons ▾</button>
@@ -1372,6 +1512,20 @@
       </div>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-doc="mark-entry" title="Mark Entry (Alt+Shift+X): the selected word or phrase as an index entry (or a subentry), here or wherever it comes up (Mark All)"><span class="rb-icon">✓≡</span>Mark Entry</button>
+          <button class="rb-big" data-doc="insert-index" title="Insert Index: the entries marked, A to Z, with their page numbers, in columns. It updates by itself; double-click it to change its columns and look"><span class="rb-icon">A–Z</span>Insert Index</button>
+        </div>
+        <div class="rb-label">Index</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="mark-citation" title="Mark Citation (Alt+Shift+I): the selected case, statute, rule or other authority for the table of authorities, with its long and short forms and its category"><span class="rb-icon">§✓</span>Mark Citation</button>
+          <button class="rb-big" data-doc="insert-toa" title="Insert Table of Authorities: the citations marked, by category, each with the pages it is cited on (or passim). It updates by itself; double-click it to change it"><span class="rb-icon">§≡</span>Table of Authorities</button>
+        </div>
+        <div class="rb-label">Table of Authorities</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-doc="compound-number" title="A bold compound number: a new compound gets the next number, and mentions of it follow when numbers change"><span class="rb-icon"><b>1</b></span>Compound Number</button>
         </div>
         <div class="rb-label">Compounds</div>
@@ -1395,6 +1549,13 @@
           </div>
         </div>
         <div class="rb-label">Proofing</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="check-accessibility" title="Check Accessibility: missing alt text, low-contrast text, headings that skip a level, tables without header rows. Click an item to go to it"><span class="rb-icon">♿</span>Check Accessibility</button>
+          <button class="rb-big" data-cmd="alt-text" title="Alt Text: what the picture, chart or structure picked shows, for people who can't see it (screen readers)"><span class="rb-icon">🏷</span>Alt Text…</button>
+        </div>
+        <div class="rb-label">Accessibility</div>
       </div>
       <div class="rb-group">
         <div class="rb-row">
@@ -1440,6 +1601,17 @@
           <button class="rb-big" data-doc="show-comments" aria-pressed="true" title="Show the comments beside the page, or hide them"><span class="rb-icon">☰</span>Show Comments</button>
         </div>
         <div class="rb-label">Comments</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-doc="restrict-editing" aria-pressed="false" title="Restrict Editing: let the document be read but changed only by adding comments, only with changes tracked, only by filling in its form fields, or not at all, with a password if wanted (kept as Word keeps it). Click again to stop the protection"><span class="rb-icon">🔒</span>Restrict Editing</button>
+          <div class="rb-col">
+            <button data-doc="insert-form-text" title="A text form field: a shaded box to type an entry into, also when the document is protected for filling in forms (Word's legacy form field)">▭ Text Field</button>
+            <button data-doc="insert-form-check" title="A check box form field, ticked or not with a click">☐ Check Box</button>
+            <button data-doc="insert-form-drop" title="A drop-down form field: one of a list of items">▾ Drop-Down</button>
+          </div>
+        </div>
+        <div class="rb-label">Protect</div>
       </div>
     </div>
     <div class="rb-panel" data-doc-panel="view" hidden>
@@ -1909,6 +2081,19 @@
       </div>
     </div>
     <div class="rb-panel" data-sl-panel="review" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="check-accessibility" title="Check Accessibility: missing alt text, low-contrast text, slides without titles, reading order. Click an item to go to it"><span class="rb-icon">♿</span>Check Accessibility</button>
+          <button class="rb-big" data-cmd="alt-text" title="Alt Text: what the picture, chart or structure picked shows, for people who can't see it (screen readers)"><span class="rb-icon">🏷</span>Alt Text…</button>
+        </div>
+        <div class="rb-label">Accessibility</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="compare-slides" title="Compare Presentations: pick another version of this deck (a reviewer's copy, say). Each slide that differs is listed, with what changed, to accept into this deck or reject"><span class="rb-icon">⇆</span>Compare…</button>
+        </div>
+        <div class="rb-label">Compare</div>
+      </div>
       <div class="rb-group">
         <div class="rb-row">
           <button class="rb-big" data-cmd="new-comment" title="New Comment (Ctrl+Alt+M): a note pinned to the slide beside what is selected, with your name and the time"><span class="rb-icon">💬</span>New Comment</button>

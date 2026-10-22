@@ -131,20 +131,70 @@ fn portable_info() -> serde_json::Value {
     }
 }
 
+/// The Stable channel's list of installers: a copy of the latest.json of a build that has been
+/// tried on a real computer, put on the "stable" release by the Mark Stable workflow
+/// (.github/workflows/stable.yml). The Latest channel reads the endpoint in tauri.conf.json.
+const STABLE_FEED: &str = "https://github.com/nathanohare/Chem-Illustrator/releases/download/stable/stable.json";
+
+/// An updater that reads the chosen channel ("stable" or "latest").
+fn updater_for(app: &tauri::AppHandle, channel: &str, target: Option<&str>) -> Result<tauri_plugin_updater::Updater, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let mut b = app.updater_builder();
+    if channel == "stable" {
+        let url = tauri::Url::parse(STABLE_FEED).map_err(|e| e.to_string())?;
+        b = b.endpoints(vec![url]).map_err(|e| e.to_string())?;
+    }
+    if let Some(t) = target {
+        b = b.target(t);
+    }
+    b.build().map_err(|e| e.to_string())
+}
+
+/// A newer version found by update_check, in the shape the updater's own JavaScript (Update)
+/// takes, so downloading and installing it goes through the updater as before.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateFound {
+    rid: tauri::ResourceId,
+    current_version: String,
+    version: String,
+    date: Option<String>,
+    body: Option<String>,
+    raw_json: serde_json::Value,
+}
+
+/// Help > Check for Updates, and the check when the app starts: ask the chosen channel for a
+/// newer version. Nothing when this is the newest.
+#[tauri::command]
+async fn update_check(webview: tauri::Webview, channel: String, target: Option<String>) -> Result<Option<UpdateFound>, String> {
+    use tauri::Manager;
+    let Some(update) = updater_for(webview.app_handle(), &channel, target.as_deref())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(None);
+    };
+    let date = update.raw_json.get("pub_date").and_then(|d| d.as_str()).map(str::to_owned);
+    Ok(Some(UpdateFound {
+        current_version: update.current_version.clone(),
+        version: update.version.clone(),
+        date,
+        body: update.body.clone(),
+        raw_json: update.raw_json.clone(),
+        rid: webview.resources_table().add(update),
+    }))
+}
+
 /// Help > Check for Updates in a portable copy on Windows: download the newer portable app,
 /// check its signature, put it in place of this one and start it. Reports how far the download
 /// has got (0 to 1, or -1 when the size isn't known).
 #[tauri::command]
-async fn portable_install_update(app: tauri::AppHandle, on_progress: tauri::ipc::Channel<f64>) -> Result<(), String> {
-    use tauri_plugin_updater::UpdaterExt;
+async fn portable_install_update(app: tauri::AppHandle, channel: Option<String>, on_progress: tauri::ipc::Channel<f64>) -> Result<(), String> {
     if !cfg!(windows) || portable::get().is_none() {
         return Err("Only portable copies on Windows update themselves in place.".into());
     }
-    let update = app
-        .updater_builder()
-        .target(portable::UPDATE_TARGET)
-        .build()
-        .map_err(|e| e.to_string())?
+    let update = updater_for(&app, channel.as_deref().unwrap_or("latest"), Some(portable::UPDATE_TARGET))?
         .check()
         .await
         .map_err(|e| e.to_string())?
@@ -250,6 +300,7 @@ pub fn run() {
             settings_read,
             settings_write,
             portable_info,
+            update_check,
             portable_install_update,
             keep::keep_folder,
             keep::keep_put,
@@ -272,7 +323,8 @@ pub fn run() {
             ole::ole_save,
             ole::ole_close,
             ole::ole_registered,
-            ole::ole_register
+            ole::ole_register,
+            ole::ole_object_folder
         ])
         .build(tauri::generate_context!())
         .expect("error while running Chem Illustrator")

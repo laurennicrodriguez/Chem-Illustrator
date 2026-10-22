@@ -2,7 +2,7 @@
 // starts, which shows a small notice in the corner if there is one, and File > Check for Updates…,
 // which always says what it found. Installing asks first when some tabs aren't saved.
 
-import { appVersion, findRelease, shortNotes, worthOffering, type Release } from '../updates';
+import { appVersion, findRelease, shortNotes, worthOffering, type Release, type UpdateChannel } from '../updates';
 import { ask } from './ask';
 
 export interface UpdateHost {
@@ -11,6 +11,8 @@ export interface UpdateHost {
   /** The version the user chose not to hear about again, if any. */
   skipped(): string | null;
   skip(version: string | null): void;
+  /** Stable or Latest (Edit > Settings > Online). */
+  channel(): UpdateChannel;
 }
 
 export class UpdateUI {
@@ -22,22 +24,27 @@ export class UpdateUI {
   /** The check when the app starts: says nothing unless there is a version worth offering. */
   async quietCheck(): Promise<void> {
     let r: Release | null = null;
-    try { r = await findRelease(); } catch { return; } // offline, or GitHub unreachable: try again next time
+    try { r = await findRelease(this.host.channel()); } catch { return; } // offline, or GitHub unreachable: try again next time
     if (r && worthOffering(r.version, this.host.skipped())) this.offer(r);
   }
 
   /** File > Check for Updates…: always says what it found. */
   async check(): Promise<void> {
     const mine = await appVersion();
+    const stable = this.host.channel() === 'stable';
+    const where = 'Edit ▸ Settings ▸ Online chooses between Stable and Latest updates.';
     let r: Release | null;
     try {
-      r = await findRelease();
+      r = await findRelease(this.host.channel());
     } catch (e) {
-      await ask('Check for Updates', [], { ok: 'OK', noCancel: true, note: `Couldn’t reach GitHub to check for a newer version (${String(e)}). You have version ${mine}.` });
+      const why = stable ? 'Couldn’t find the stable version on GitHub (none may have been marked yet, or GitHub can’t be reached)' : 'Couldn’t reach GitHub to check for a newer version';
+      await ask('Check for Updates', [], { ok: 'OK', noCancel: true, note: `${why} (${String(e)}). You have version ${mine}. ${where}` });
       return;
     }
     if (!r) {
-      await ask('Check for Updates', [], { ok: 'OK', noCancel: true, note: `You have the newest version (${mine}).` });
+      // on Stable, a version newer than the stable one (from Latest) is kept until Stable passes it
+      const note = stable ? `You have the newest stable version, or a newer one (${mine}).` : `You have the newest version (${mine}).`;
+      await ask('Check for Updates', [], { ok: 'OK', noCancel: true, note: `${note} ${where}` });
       return;
     }
     this.offer(r);
@@ -49,7 +56,7 @@ export class UpdateUI {
     box.className = 'update-box';
     box.setAttribute('role', 'status');
     const h = document.createElement('strong');
-    h.textContent = `Chem Illustrator ${r.version} is ready`;
+    h.textContent = `Chem Illustrator ${r.version}${this.host.channel() === 'stable' ? ' (stable)' : ''} is ready`;
     const p = document.createElement('p');
     p.className = 'muted';
     p.textContent = r.notes ? shortNotes(r.notes) : 'A newer version is available.';

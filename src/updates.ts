@@ -2,6 +2,10 @@
 // file (latest.json) naming its version and installer. The app reads that file, and if the version
 // is newer it offers to download the installer, check its signature against the public key built
 // into the app (tauri.conf.json), install it and restart. Nothing is installed without asking.
+//
+// Two channels: Latest is every build of main, as soon as it is made. Stable is a build that has
+// been tried on a real computer first: the Mark Stable workflow (.github/workflows/stable.yml)
+// copies that build's latest.json to stable.json on the "stable" release, which Stable reads.
 
 import { isTauri } from '@tauri-apps/api/core';
 
@@ -13,6 +17,18 @@ export interface Release {
   /** Download, check and install; reports how far the download has got (0 to 1, or null if unknown). */
   install(progress: (done: number | null) => void): Promise<void>;
 }
+
+/** Which builds to be offered (Edit > Settings > Online). */
+export type UpdateChannel = 'stable' | 'latest';
+export const UPDATE_CHANNELS: { value: UpdateChannel; label: string }[] = [
+  { value: 'latest', label: 'Latest: every new version, as soon as it is built' },
+  { value: 'stable', label: 'Stable: only versions that have been tested on a real computer' },
+];
+
+/** How far along the program is, shown beside its name and version. */
+export const STAGE = 'Beta';
+export const STAGE_NOTE = 'Chem Illustrator is in beta: it is still being built, new features arrive often, and some things may not work as they should yet. '
+  + 'Save your work often, and please report anything that goes wrong with Help ▸ Report a Problem.';
 
 /** Updates only exist for the desktop app; the web version is always the newest. */
 export const canUpdate = isTauri();
@@ -47,13 +63,17 @@ export async function appVersion(): Promise<string> {
   return getVersion();
 }
 
-/** Ask GitHub for a newer version. Null when this is the newest; throws when GitHub can't be reached. */
-export async function findRelease(): Promise<Release | null> {
+/** Ask GitHub for a newer version on a channel. Null when this is the newest; throws when GitHub can't be reached. */
+export async function findRelease(channel: UpdateChannel = 'latest'): Promise<Release | null> {
   if (!canUpdate) return null;
-  const { check } = await import('@tauri-apps/plugin-updater');
+  const { invoke } = await import('@tauri-apps/api/core');
+  const { Update } = await import('@tauri-apps/plugin-updater');
   const inPlace = (await portableInfo())?.updatesInPlace ?? false;
-  const u = await check(inPlace ? { target: PORTABLE_TARGET } : undefined);
-  if (!u) return null;
+  // the app's own check (src-tauri/src/lib.rs), which can read either channel; the updater's
+  // JavaScript then downloads and installs what it found
+  const found = await invoke<ConstructorParameters<typeof Update>[0] | null>('update_check', { channel, target: inPlace ? PORTABLE_TARGET : null });
+  if (!found) return null;
+  const u = new Update(found);
   return {
     version: u.version,
     notes: (u.body ?? '').trim(),
@@ -61,10 +81,10 @@ export async function findRelease(): Promise<Release | null> {
     async install(progress) {
       if (inPlace) {
         // the shell downloads the new app, checks it, swaps it for this one and starts it
-        const { invoke, Channel } = await import('@tauri-apps/api/core');
+        const { Channel } = await import('@tauri-apps/api/core');
         const onProgress = new Channel<number>();
         onProgress.onmessage = (done) => progress(done < 0 ? null : done);
-        await invoke('portable_install_update', { onProgress });
+        await invoke('portable_install_update', { channel, onProgress });
         return;
       }
       let total = 0, got = 0;

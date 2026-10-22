@@ -29,6 +29,9 @@ export const CDXML: FileType = { description: 'ChemDraw XML drawing', extension:
 export const CDX: FileType = { description: 'ChemDraw drawing', extension: 'cdx', mime: 'chemical/x-cdx' };
 export const PPTX: FileType = { description: 'PowerPoint presentation', extension: 'pptx', mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
 export const XLSX: FileType = { description: 'Excel workbook', extension: 'xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+export const XLSM: FileType = { description: 'Excel macro-enabled workbook', extension: 'xlsm', mime: 'application/vnd.ms-excel.sheet.macroEnabled.12' };
+/** Spreadsheets that open as sheets but save as .xlsx: old Excel workbooks and OpenDocument spreadsheets. */
+export const SHEET_OPEN_ONLY = ['xls', 'ods'];
 export const CSV: FileType = { description: 'CSV (comma-separated values)', extension: 'csv', mime: 'text/csv' };
 export const DOCX: FileType = { description: 'Word document', extension: 'docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
 export const SDF: FileType = { description: 'SD file (structures with data)', extension: 'sdf', mime: 'chemical/x-mdl-sdfile' };
@@ -115,6 +118,27 @@ export async function openFileDialog(types: FileType[]): Promise<{ name: string;
   }
   const file = await uploadBox(types);
   return file ? { name: file.name, text: await file.text(), ref: { kind: 'none' } } : null;
+}
+
+/** Ask for a file of any kind and read its bytes (Insert > Object). Null when the user cancels. */
+export async function openAnyBytesDialog(): Promise<{ name: string; bytes: Uint8Array } | null> {
+  if (desktop) {
+    const path = await pickPath(/Windows/i.test(navigator.userAgent) ? [{ name: 'All files', extensions: ['*'] }] : []);
+    if (!path) return null;
+    return { name: baseName(path), bytes: new Uint8Array(await invoke<ArrayBuffer>('read_binary_file', { path })) };
+  }
+  if (pw.showOpenFilePicker) {
+    try {
+      const [handle] = await pw.showOpenFilePicker({});
+      const file = await handle.getFile();
+      return { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) };
+    } catch (e) {
+      if (isAbort(e)) return null;
+      throw e;
+    }
+  }
+  const file = await uploadBox([]);
+  return file ? { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) } : null;
 }
 
 /** The extension of a file name, in lower case ("" if none). */

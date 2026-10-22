@@ -12,6 +12,7 @@
 
 import type { TableStyleDef } from './table-styles';
 import type { CommentThread } from './comments';
+import type { Protection } from './protect';
 import type { Contents, Justify, ParaStyle, PictureFx, TableData, TextRun } from '../model';
 import type { RichText } from '../text/editing';
 import type { Measure } from '../text/layout';
@@ -277,16 +278,37 @@ export function floatOf(o: DocObject | undefined): Float | undefined {
 }
 
 /** Something that sits in the text in place of one character. */
+/**
+ * Another program's file kept whole in the document, shown as its picture (Insert > Object, or
+ * an object in a Word file): double-clicking it opens the file in its program.
+ */
+export interface Embedded {
+  /** The program's name for the kind of object, as Word records it (Excel.Sheet.12, Package). */
+  prog: string;
+  /** Kept as Word keeps it: an OLE compound file, or an Office file as a part of its own. */
+  part: 'ole' | 'package';
+  /** The part's extension in a Word file (bin, xlsx, docx, pptx). */
+  ext: string;
+  /** The part's bytes, as a data URL. */
+  data: string;
+  /** The name of the file it was made from, when known. */
+  name?: string;
+  /** Shown as an icon with its name, rather than its contents. */
+  icon?: boolean;
+}
+
 export type DocObject =
   /** A structure, scheme or table: a drawing, edited with the drawing tools. `scale` 1 is the drawing's own size. */
-  | { kind: 'drawing'; contents: Contents; scale?: number; look?: FigureLook; float?: Float }
+  | { kind: 'drawing'; contents: Contents; scale?: number; look?: FigureLook; float?: Float; alt?: string }
   /**
    * A picture: its own size is w × h points (`px` its pixels); `scale` 1 is that size. A chart
    * (Insert > Chart) is a picture with its chart and data: drawn from them, saved as Word's chart.
    * `crop` cuts parts off (fractions of the whole image from each side; w × h is the part left),
-   * and `fx` is its Picture Format settings (corrections, colour, background, shape).
+   * and `fx` is its Picture Format settings (corrections, colour, background, shape). An
+   * embedded object (Insert > Object) is a picture with another program's file in `embed`. `alt` is
+   * its alt text (a structure without it is described by its SMILES).
    */
-  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float; chart?: ChartBox; crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx }
+  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float; chart?: ChartBox; crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx; embed?: Embedded; alt?: string }
   /**
    * A text box: text of its own (typed into in place), `w` wide; it grows to fit its text, and is
    * at least `h` tall when that is set. Always placed on the page. `fill` is its background.
@@ -321,7 +343,29 @@ export type DocObject =
   /** An equation, typed as LaTeX and shown laid out as maths (see math.ts); a Word equation in .docx files. */
   | { kind: 'math'; tex: string }
   /** A field: the date, a document property, the file's name, a page number, a bookmark's text or page (see fields.ts). */
-  | FieldObj;
+  | FieldObj
+  /**
+   * An index (References > Insert Index): the entries marked with Mark Entry, A to Z, each with
+   * its page numbers (a block of its own, like the contents). `cols` is how many columns it is
+   * set in (its own section's), `right` puts the page numbers at the right after dots, and
+   * `letters` puts a letter over each part (A, B, C).
+   */
+  | { kind: 'index'; cols?: number; right?: boolean; letters?: boolean }
+  /**
+   * A table of authorities (References > Insert Table of Authorities): the citations marked with
+   * Mark Citation in one category (Cases, Statutes…; 0 for every category, each under its
+   * heading), with their pages after dots, or "passim" for those on five pages or more.
+   */
+  | { kind: 'toa'; cat: number; passim?: boolean }
+  /**
+   * A form field (Word's legacy form fields): a box to type into, a check box or a drop-down
+   * list, filled in by whoever has the document, also when it is protected for filling in forms
+   * (Review > Restrict Editing). `name` is its name in Word (Text1, Check1, Dropdown1).
+   */
+  | { kind: 'form'; type: FormType; name?: string; value?: string; checked?: boolean; items?: string[]; help?: string };
+
+/** A form field's kind: a text box, a check box or a drop-down list. */
+export type FormType = 'text' | 'check' | 'drop';
 
 export interface DocText extends RichText {
   styles: Record<string, NamedStyle>;
@@ -365,6 +409,8 @@ export interface DocText extends RichText {
   props?: DocProps;
   /** Layout > Hyphenation: words broken at the ends of lines (settings.xml's autoHyphenation and its options). */
   hyphen?: DocHyphenation;
+  /** Review > Restrict Editing: what can still be changed, and the password that stops it (see protect.ts). */
+  protect?: Protection;
 }
 
 /** How footnotes or endnotes are numbered, by Word's names: 1, 2, 3; i, ii, iii; a, b, c; *, †, ‡ (chicago). */
@@ -885,6 +931,7 @@ export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<D
       shown.set(id, o.end ? noteLabel(++end, t.notes?.end ?? END_FORMAT) : noteLabel(++foot, t.notes?.foot ?? FOOT_FORMAT));
       continue;
     }
+    if (o?.kind === 'form') { shown.set(id, formShown(o)); continue; }
     if (o?.kind !== 'seq') continue;
     const n = (counts.get(o.name) ?? 0) + 1;
     counts.set(o.name, n);
@@ -928,6 +975,19 @@ export function objectParas(t: Pick<DocText, 'runs' | 'objects'>): Map<number, n
   }
   return out;
 }
+
+/** What a form field shows: its entry (five wide spaces when empty, as in Word), its box ticked or not, its item chosen. */
+export function formShown(o: Extract<DocObject, { kind: 'form' }>): string {
+  if (o.type === 'check') return o.checked ? '\u2612' : '\u2610';
+  if (o.type === 'drop') return o.value || o.items?.[0] || EMPTY_FORM;
+  return o.value || EMPTY_FORM;
+}
+
+/** How form fields are shaded (Word's grey). */
+export const FORM_SHADE = '#d9d9d9';
+
+/** An empty text field's look in Word: five en spaces, shaded. */
+export const EMPTY_FORM = '\u2002'.repeat(5);
 
 /** The object whose character is at an offset. */
 function objectAtChar(runs: TextRun[], offset: number): number | undefined {
