@@ -151,7 +151,8 @@ import { computerName } from './feedback';
 import { GuideWindow, guideSpot } from './ui/guide-window';
 import { SettingsWindow } from './ui/settings-window';
 import { fileTypesPage, FILE_TYPES } from './ui/file-types-page';
-import { watchRibbons, fitRibbons } from './ui/ribbon-fit';
+import { watchRibbons, fitRibbons, setRibbonCollapsed, ribbonCollapsed } from './ui/ribbon-fit';
+import { placeTitleBar, titleBarPlace } from './ui/title-bar';
 import { FeedbackDialog } from './ui/feedback-dialog';
 import { addRecent, removeRecent, recentLabel } from './recent';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
@@ -2076,6 +2077,30 @@ layers = new LayersPanel($('#layers-section'), {
 });
 layers.onClose = () => { selectionPane = false; showLayers(); };
 const lib = (designLib = new DesignLibrary($('#design-lib'), (id) => { finishTyping(); editor.setTool(`geo:${id}`); }));
+// Design mode's shapes and icons fold away to a thin strip (remembered on this computer)
+{
+  const el = $('#design-lib');
+  const fold = document.createElement('button');
+  fold.type = 'button';
+  fold.className = 'dl-fold';
+  const KEY = 'chem-illustrator.design-lib-folded';
+  const show = (folded: boolean) => {
+    el.classList.toggle('folded', folded);
+    fold.textContent = folded ? '›' : '‹';
+    fold.title = folded ? 'Open the shapes and icons' : 'Fold the shapes and icons away, for more room for the page';
+    fold.setAttribute('aria-label', fold.title);
+    fold.setAttribute('aria-expanded', String(!folded));
+  };
+  let folded = false;
+  try { folded = localStorage.getItem(KEY) === '1'; } catch { /* no storage: start open */ }
+  show(folded);
+  fold.addEventListener('click', () => {
+    folded = !el.classList.contains('folded');
+    show(folded);
+    try { localStorage.setItem(KEY, folded ? '1' : '0'); } catch { /* not remembered */ }
+  });
+  el.querySelector('.dl-tabs')?.append(fold);
+}
 const designGrid = { on: false, step: 18 };
 const dzBg = $<HTMLInputElement>('#dz-bg');
 const dzGrid = $<HTMLInputElement>('#dz-grid');
@@ -3722,10 +3747,10 @@ const sheetStyle = (): DocStyle => ws.active.book?.drawingStyle ?? ACS_1996;
 function showSheetParts(): void {
   const sheet = ws.active.mode === 'sheet';
   const words = ws.active.mode === 'document';
-  for (const el of document.querySelectorAll<HTMLElement>('.sheet-only, .no-sheet, .doc-only, .no-doc, .draw-only')) {
+  for (const el of document.querySelectorAll<HTMLElement>('.sheet-only, .no-sheet, .doc-only, .no-doc')) {
     const c = el.classList;
     el.hidden = (c.contains('sheet-only') && !sheet) || (c.contains('no-sheet') && sheet) || (c.contains('doc-only') && !words)
-      || (c.contains('no-doc') && words) || (c.contains('draw-only') && (sheet || words) && !drawingOnTop());
+      || (c.contains('no-doc') && words);
   }
   tickMenuModes();
 }
@@ -4155,7 +4180,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['new-from-template', 'check-accessibility', 'format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'page-edge', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
+  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'title-bar-in-menu', 'collapse-ribbon', 'page-edge', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
   'help', 'about', 'user-guide', 'help-here', 'send-feedback', 'report-problem', 'check-updates']);
 
 // ---------------------------------------------------------------- accessibility (Review > Check Accessibility, Alt Text…)
@@ -4631,6 +4656,8 @@ const COMMANDS: Record<string, () => unknown> = {
   'dev-tools': () => { showDevTools(!devTools); storeSettings(); },
   'show-stereo': () => previewStereo(!renderer.previewStereo),
   'scroll-bars': () => { showScrollBars(!scrollbars.shown); storeSettings(); },
+  'collapse-ribbon': () => { setRibbonCollapsed(!ribbonCollapsed()); storeSettings(); },
+  'title-bar-in-menu': () => { void placeTitleBar(titleBarPlace() === 'app' ? 'system' : 'app'); storeSettings(); },
   'page-edge': () => { showPageEdge(!pageEdge); storeSettings(); },
   'page-setup': () => void pageSetup(),
   'text-bar-docked': () => { placeTextBar('docked'); storeSettings(); },
@@ -5743,6 +5770,8 @@ function storeSettings(): void {
     devTools,
     showRoles: editor.showRoles,
     scrollBars: scrollbars.shown,
+    titleBar: titleBarPlace(),
+    ribbonCollapsed: ribbonCollapsed(),
     textBar: CaptionEditor.barPlace,
     page: defaultPage,
     pageEdge,
@@ -5902,6 +5931,8 @@ void loadSettings().then((s) => {
   $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(s.showRoles));
   showDevTools(s.devTools);
   showScrollBars(s.scrollBars);
+  void placeTitleBar(s.titleBar);
+  setRibbonCollapsed(s.ribbonCollapsed);
   defaultPage = s.page;
   showPageEdge(s.pageEdge);
   welcomed = s.welcomed;
@@ -7509,7 +7540,7 @@ function commandItems(): CommandItem[] {
 }
 const commandSearch = new CommandSearch(commandItems);
 const guide = new GuideWindow(openWebPage);
-watchRibbons();
+watchRibbons(() => storeSettings());
 const settingsWindow = new SettingsWindow([
   { id: 'general', title: 'General', words: 'groups selecting click outline linked text above below ask whole page tracked changes reviewer name', open: generalPreferences },
   { id: 'drawing', title: 'Drawing', words: 'methyl me ch3 axial chirality ra sa helicity charges circled text tool atom r groups superscript mechanism arrows reroute', open: drawingPreferences },
