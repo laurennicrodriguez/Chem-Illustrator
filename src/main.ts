@@ -119,7 +119,8 @@ import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
 import { UpdateUI } from './ui/update-ui';
 import { canUpdate, appVersion, portableInfo } from './updates';
-import { GUIDE_URL, computerName } from './feedback';
+import { computerName } from './feedback';
+import { GuideWindow, guideSpot } from './ui/guide-window';
 import { FeedbackDialog } from './ui/feedback-dialog';
 import { addRecent, removeRecent, recentLabel } from './recent';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
@@ -1854,6 +1855,7 @@ function undo(): void {
   if (!d) { editor.undo(); return; }
   finishTyping();
   if (d.undo()) editor.afterUndo();
+  refreshHistory();
 }
 
 function redo(): void {
@@ -1863,7 +1865,44 @@ function redo(): void {
   if (!d) { editor.redo(); return; }
   finishTyping();
   if (d.redo()) editor.afterUndo();
+  refreshHistory();
 }
+
+/** The name of the step Undo (or Redo) would take back in the tab in front: null with nothing to take back, '' when it has no name. */
+function historyStep(redo: boolean): string | null {
+  if (sheetActive()) return sheetMode.history(redo);
+  if (docActive()) return docMode.canUndo(redo) ? '' : null;
+  const h = deckNow() ?? doc;
+  if (!(redo ? h.canRedo() : h.canUndo())) return null;
+  return redo ? h.redoLabel : h.undoLabel;
+}
+
+/**
+ * Undo and Redo greyed out with nothing to take back, and named after the step they would
+ * (Undo Add Ring), on the toolbar and in the Edit menu. Checked after each click and key press.
+ */
+let historyQueued = false;
+function refreshHistory(): void {
+  if (historyQueued) return;
+  historyQueued = true;
+  requestAnimationFrame(() => {
+    historyQueued = false;
+    for (const [cmd, verb] of [['undo', 'Undo'], ['redo', 'Redo']] as const) {
+      const step = historyStep(cmd === 'redo');
+      const name = step ? `${verb} ${step}` : verb;
+      const k = commandKey(cmd);
+      const btn = $<HTMLButtonElement>(`#btn-${cmd}`);
+      btn.disabled = step === null;
+      btn.title = step === null ? `Nothing to ${verb.toLowerCase()}` : k ? `${name} (${k})` : name;
+      for (const item of document.querySelectorAll<HTMLButtonElement>(`header .menu [data-cmd="${cmd}"]`)) {
+        item.disabled = step === null;
+        const label = item.firstChild;
+        if (label?.nodeType === Node.TEXT_NODE) label.textContent = name;
+      }
+    }
+  });
+}
+for (const ev of ['pointerup', 'keyup'] as const) document.addEventListener(ev, refreshHistory, true);
 
 // ---------------------------------------------------------------- the tab strip
 
@@ -1879,6 +1918,7 @@ const TAB_ICONS: Record<Tab['mode'], [string, string]> = {
 };
 
 function renderTabs(): void {
+  refreshHistory();
   const items = ws.tabs.map((t) => {
     const el = document.createElement('div');
     el.className = `tab tab-${t.mode}${t === ws.active ? ' active' : ''}${t.dirty ? ' dirty' : ''}`;
@@ -1921,17 +1961,55 @@ function renderTabs(): void {
     el.append(icon, name, close);
     return el;
   });
-  const add = (label: string, title: string, cmd: string) => {
-    const b = document.createElement('button');
-    b.className = 'tab-new';
-    b.type = 'button';
-    b.textContent = label;
-    b.title = title;
-    b.addEventListener('click', () => command(cmd));
-    return b;
-  };
-  tabsEl.replaceChildren(...items, add('+ Drawing', 'New drawing', 'new'), add('+ Slides', 'New slides', 'new-slides'), add('+ Sheet', 'New sheet', 'new-sheet'), add('+ Document', 'New document', 'new-document'), add('+ Design', 'New design: a TOC graphic, graphical abstract, poster, flowchart or figure', 'new-design'));
-  tabsEl.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  tabStrip.replaceChildren(...items);
+  tabStrip.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  showTabArrows();
+}
+
+// The tab strip scrolls when the tabs don't fit; arrows at its ends, a list of every open file,
+// and one + button for a new file of any kind stay pinned at the right.
+const tabStrip = document.createElement('div');
+tabStrip.className = 'tab-strip';
+const tabButton = (cls: string, text: string, title: string) => {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = `tab-ctl ${cls}`;
+  b.textContent = text;
+  b.title = title;
+  b.setAttribute('aria-label', title);
+  return b;
+};
+const tabLeft = tabButton('tab-left', '‹', 'Scroll the tabs left');
+const tabRight = tabButton('tab-right', '›', 'Scroll the tabs right');
+const tabList = tabButton('tab-list', '▾', 'List of open files');
+const tabAdd = tabButton('tab-add', '+', 'New file: drawing, slides, sheet, document or design');
+tabLeft.addEventListener('click', () => tabStrip.scrollBy({ left: -tabStrip.clientWidth * 0.7, behavior: 'smooth' }));
+tabRight.addEventListener('click', () => tabStrip.scrollBy({ left: tabStrip.clientWidth * 0.7, behavior: 'smooth' }));
+tabStrip.addEventListener('scroll', () => showTabArrows(), { passive: true });
+tabStrip.addEventListener('wheel', (e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) { tabStrip.scrollLeft += e.deltaY; e.preventDefault(); } }, { passive: false });
+new ResizeObserver(() => showTabArrows()).observe(tabStrip);
+const menuAt = (b: HTMLElement) => { const r = b.getBoundingClientRect(); return [Math.max(4, r.right - 220), r.bottom + 2] as const; };
+tabList.addEventListener('click', () => {
+  const [x, y] = menuAt(tabList);
+  showContextMenu(x, y, ws.tabs.map((t) => ({ cmd: `tab-show:${t.id}`, label: `${t === ws.active ? '✓ ' : ''}${ws.label(t)}${t.dirty ? ' •' : ''}` })), {
+    run: (cmd) => { const t = ws.tabs.find((x) => `tab-show:${x.id}` === cmd); if (t) ws.activate(t); },
+    key: () => undefined,
+  });
+});
+tabAdd.addEventListener('click', () => {
+  const [x, y] = menuAt(tabAdd);
+  showContextMenu(x, y, [
+    { cmd: 'new', label: 'Drawing' }, { cmd: 'new-slides', label: 'Slides' }, { cmd: 'new-sheet', label: 'Sheet' },
+    { cmd: 'new-document', label: 'Document' }, { cmd: 'new-design', label: 'Design (TOC graphic, abstract, poster, figure)' },
+  ], { run: (cmd) => void command(cmd), key: commandKey });
+});
+tabsEl.replaceChildren(tabLeft, tabStrip, tabRight, tabList, tabAdd);
+
+function showTabArrows(): void {
+  const over = tabStrip.scrollWidth > tabStrip.clientWidth + 1;
+  tabLeft.hidden = tabRight.hidden = !over;
+  tabLeft.disabled = tabStrip.scrollLeft <= 0;
+  tabRight.disabled = tabStrip.scrollLeft + tabStrip.clientWidth >= tabStrip.scrollWidth - 1;
 }
 
 // Tabs are dragged along the strip to put them in another order (as in browsers).
@@ -1940,7 +2018,7 @@ function dragTab(e: PointerEvent, el: HTMLElement, t: Tab): void {
   if (e.button !== 0 || (e.target as HTMLElement).closest('.tab-close')) return;
   tabDragged = false;
   const startX = e.clientX;
-  const tabs = [...tabsEl.querySelectorAll<HTMLElement>('.tab')];
+  const tabs = [...tabStrip.querySelectorAll<HTMLElement>('.tab')];
   const from = tabs.indexOf(el);
   let to = from;
   const move = (ev: PointerEvent) => {
@@ -2965,7 +3043,7 @@ window.addEventListener('keydown', (e) => {
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'page-edge', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
-  'help', 'about', 'user-guide', 'send-feedback', 'report-problem', 'check-updates']);
+  'help', 'about', 'user-guide', 'help-here', 'send-feedback', 'report-problem', 'check-updates']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
@@ -3176,7 +3254,8 @@ const COMMANDS: Record<string, () => unknown> = {
   preferences: () => void openPreferences(),
   'check-updates': () => void updates.check(),
   help: () => openHelp(),
-  'user-guide': () => openWebPage(GUIDE_URL),
+  'user-guide': () => void guide.open(),
+  'help-here': () => { const at = guideSpot(menuMode(), editor.tool.kind); void guide.open(at.page, at.anchor); },
   'send-feedback': () => feedback.open(),
   about: () => void appVersion().then((v) => ask('About Chem Illustrator', [], {
     noCancel: true,
@@ -3366,6 +3445,7 @@ function showMenu(m: Menu | null, focus = true): void {
     x.btn.setAttribute('aria-expanded', String(x === m));
   }
   if (!m) return;
+  refreshHistory();
   m.list.style.setProperty('--menu-top', `${m.btn.getBoundingClientRect().bottom}px`);
   if (focus) menuItems(m.list)[0]?.focus();
 }
@@ -4214,8 +4294,7 @@ function refreshKeys(): void {
   const sk = commandKey('command-search');
   $('#btn-search kbd').textContent = sk ?? '';
   $('#btn-search').title = sk ? `Search for a command by name (${sk})` : 'Search for a command by name';
-  tip('#btn-undo', 'Undo', 'undo');
-  tip('#btn-redo', 'Redo', 'redo');
+  refreshHistory();
   tip('#btn-fit', 'Fit drawing to window', 'zoom-fit');
   toolbar.refreshTitles();
 }
@@ -5724,6 +5803,7 @@ function commandItems(): CommandItem[] {
   return uniqueCommands(out);
 }
 const commandSearch = new CommandSearch(commandItems);
+const guide = new GuideWindow(openWebPage);
 $('#btn-search').addEventListener('click', () => commandSearch.open());
 placeSidePanel();
 // your palettes show in the Colours toolbox as soon as they change
