@@ -27,6 +27,9 @@ import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure } from './pptx-write';
 import { GEOS } from '../design/geo';
 import { gluePoint } from '../objects';
 import { readTransition, readTiming, type Transition, type Anim, type AnimTarget } from '../deck/animation';
+import { readChart } from './office-chart';
+import { freshBox, sameBoxData, sizedBox, type ChartBox } from '../sheet/chart-box';
+import { chartBoxPng } from '../render/chart-box-paint';
 
 /** PowerPoint's shapes that are shapes in the library, by PowerPoint's name. */
 const GEO_BY_PRST = new Map(GEOS.filter((g) => g.prst).map((g) => [g.prst!, g.id]));
@@ -545,7 +548,7 @@ class Reader {
     const data = kid(el, 'graphic', 'graphicData');
     const uri = data?.getAttribute('uri') ?? '';
     if (/table$/.test(uri)) { this.table(s, el, t); return; }
-    if (/chart/.test(uri)) { this.warnings.add('Charts are not brought in.'); return; }
+    if (/chart/.test(uri)) { this.chart(s, el, data!, t, doc); return; }
     // an object from another program: PowerPoint keeps a picture of it, which comes in as a picture
     const find = (e: Element | null): Element | null => {
       if (!e) return null;
@@ -564,6 +567,25 @@ class Reader {
     if (!img || !box) return;
     if (/ChemDraw/i.test(ole?.getAttribute('progId') ?? '')) this.warnings.add('ChemDraw objects came in as pictures.');
     doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}) });
+  }
+
+  /** A chart: PowerPoint's own (its numbers from what PowerPoint cached), or ours when it charts the same numbers. */
+  private chart(s: Part, el: Element, data: Element, t: Xf, doc: Doc): void {
+    const box = boxOf(kid(el, 'xfrm'), t);
+    const ref = kid(data, 'chart');
+    const path = ref ? this.r.rels(s.path).get(rAttr(ref, 'id') ?? '')?.target : undefined;
+    if (!box || !path) return;
+    const w = box.x2 - box.x1, h = box.y2 - box.y1;
+    const got = readChart(this.r, path, w, h);
+    if (!got) { this.warnings.add('Some charts could not be read and were left out.'); return; }
+    let kept: ChartBox | null = null;
+    try {
+      const tag = this.tagsOf(s.path, kid(el, 'nvGraphicFramePr', 'nvPr'))[TAG.chart];
+      kept = tag ? JSON.parse(tag) as ChartBox : null;
+    } catch { kept = null; }
+    const chosen = sizedBox(kept?.chart && Array.isArray(kept.cells) && sameBoxData(kept, got.box) ? freshBox(kept) : got.box, w, h);
+    if (chosen === got.box && got.partial) this.warnings.add('Some charts mix chart types (a line over columns, a second axis): they show as one type.');
+    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: chartBoxPng(chosen, w, h), px: { w: chosen.chart.w, h: chosen.chart.h }, chart: chosen });
   }
 
   /** A picture's image (as a data URL), its size in pixels and its cropping. */

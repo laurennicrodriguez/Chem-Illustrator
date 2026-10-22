@@ -110,6 +110,12 @@ Select a picture, then use the **Style** panel: **Frame style**, frame line and 
 
 **Insert** tab ▸ **Table** (or **Insert ▸ Table…**) puts an ACS-style table on the slide. Double-click a cell to type; Tab moves to the next cell. The **Style** panel adds and removes rows and columns, sets heading rows, lines, column widths, a title and footnotes. Cells copied from Excel, Word or a sheet paste as a new table.
 
+## Charts
+
+**Insert** tab ▸ **Chart** (or **Insert ▸ Chart…**) opens the chart window, as PowerPoint's Insert Chart does. The chart keeps its own data, shown in a grid under the chart: type over the sample numbers, or paste a block from Excel or a sheet. Rows and columns typed next to the data join the chart; **Chart All the Data** charts the whole table again. The buttons along the top change the kind of chart (scatter, line, column, bar, area, pie), and the panel on the right has every setting Sheet mode's charts have: titles, axes, log scales, colours, markers, error bars and fitted lines with their equation and R².
+
+Double-click a chart (or right-click ▸ **Edit Chart…**) to change it. Dragging its corners lays it out again at the new size rather than stretching it. Charts are saved in PowerPoint files as PowerPoint charts with their data inside, so **Edit Data** works in PowerPoint, and charts made in PowerPoint open here as charts.
+
 ## Transitions
 
 Open the **Transitions** tab.

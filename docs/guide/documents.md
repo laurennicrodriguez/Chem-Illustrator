@@ -97,6 +97,10 @@ For a substrate-scope or screening table, put the caret in a cell and use **Inse
 - Set the other cells in the row to **Middle** so their text sits level with the structure.
 - **Fit to Contents** widens the columns so structures show at full size.
 
+## Charts
+
+**Insert** ▸ **Chart** puts a chart in the text at the caret, as Word's Insert Chart does. The chart window shows the chart's own data in a grid: type over the sample numbers or paste from Excel or a sheet, pick the kind of chart along the top, and change titles, axes, colours, error bars and fitted lines in the panel on the right. Double-click the chart to change it again. Charts sit in the text like pictures (wrap, frame, captions), and are saved in Word files as Word charts with their data inside, so **Edit Data** works in Word. Charts made in Word open here as charts.
+
 ## Captions and cross-references
 
 On the **References** tab:

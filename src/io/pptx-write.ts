@@ -36,6 +36,8 @@ import {
 } from '../deck/deck';
 import { sameBackground, type Background } from '../deck/background';
 import { bgXml, type BlipIds } from './pptx-background';
+import { addChart, C_NS } from './office-chart';
+import type { ChartBox } from '../sheet/chart-box';
 
 /** Tag names (PowerPoint keeps tags when it saves). */
 export const TAG = {
@@ -57,6 +59,8 @@ export const TAG = {
    * bond middles) was, and the structure picture's box tag, so it finds its highlight again.
    */
   highlight: 'CHEMILLUSTRATOR_HIGHLIGHT',
+  /** A chart: the chart and its data as made here. */
+  chart: 'CHEMILLUSTRATOR_CHART',
 };
 
 /** Where a highlight is, for finding it again: one of its atoms, else the middle of one of its bonds. */
@@ -592,6 +596,7 @@ class Writer {
     for (const p of parts.pictures) {
       mark({ shapes: new Set([p.id]) }, id);
       const box = { x1: Math.min(p.x1, p.x2), y1: Math.min(p.y1, p.y2), x2: Math.max(p.x1, p.x2), y2: Math.max(p.y1, p.y2) };
+      if (p.chart) { out.push(await this.chart(path, p.chart, box, id++)); continue; }
       const v = p.video ? this.video(path, p.video.src, p.src!, box, id) : '';
       if (v) { videos.push({ spid: id, once: !!p.video!.once }); out.push(v); id++; continue; }
       out.push(await this.picture(path, p.src!, box, `Picture ${id - 1}`, id++, p.crop ?? null, p.look));
@@ -663,6 +668,21 @@ class Writer {
     const bg = s.background ? await this.background(path, s.background) : '';
     return `${HEAD}<p:sld ${XMLNS}${s.hideGraphics ? ' showMasterSp="0"' : ''}><p:cSld>${bg}<p:spTree>${GROUP}${out.join('')}</p:spTree><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:cSld>` +
       `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(s.transition)}${timingXml(s.anims ?? [], (a) => spids.get(`${a.target.kind} ${a.target.bond ? 'b' : ''}${a.target.id}`) ?? []) || videoTimingXml(videos)}</p:sld>`;
+  }
+
+  /**
+   * A chart: PowerPoint's own chart, with its data as a workbook inside (for Edit Data); a tag
+   * keeps it as made here, used when PowerPoint's copy charts the same numbers.
+   */
+  private charts = 0;
+  private async chart(path: string, box0: ChartBox, box: Rect, id: number): Promise<string> {
+    const w = box.x2 - box.x1, h = box.y2 - box.y1;
+    const rid = await addChart(this.pkg, path, 'ppt', ++this.charts, box0, w, h);
+    const tags = this.addTags(path, { [TAG.chart]: JSON.stringify(box0) });
+    return `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="Chart ${id - 1}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>` +
+      `<p:nvPr><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:nvPr></p:nvGraphicFramePr>` +
+      `<p:xfrm><a:off x="${emu(box.x1)}" y="${emu(box.y1)}"/><a:ext cx="${emu(w)}" cy="${emu(h)}"/></p:xfrm>` +
+      `<a:graphic><a:graphicData uri="${C_NS}"><c:chart xmlns:c="${C_NS}" r:id="${rid}"/></a:graphicData></a:graphic></p:graphicFrame>`;
   }
 
   /**

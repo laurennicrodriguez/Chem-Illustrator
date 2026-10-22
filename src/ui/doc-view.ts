@@ -13,6 +13,7 @@ import { drawLayout } from '../text/draw';
 import { drawMath } from '../document/math';
 import { selectionRects } from '../text/layout';
 import { imageFor, onImageReady } from '../render/images';
+import { paintChartBox } from '../render/chart-box-paint';
 
 /** Grey space round the pages, in pixels. */
 const PAD_X = 24;
@@ -366,6 +367,9 @@ export class DocView {
     if (obj.kind === 'drawing') {
       const bmp = figures.bitmap(obj.contents, t.drawingStyle, (o.w / Math.max(1, figures.size(obj.contents, t.drawingStyle).w)) * this.zoom * this.dpr, true);
       if (bmp) ctx.drawImage(bmp, o.x, o.y, o.w, o.h);
+    } else if (obj.kind === 'picture' && obj.chart) {
+      // a chart is drawn from its data, sharp at any zoom
+      paintChartBox(ctx, obj.chart, o.x, o.y, o.w, o.h);
     } else if (obj.kind === 'picture') {
       // pictures (EMF spectra from MestReNova too) are decoded once, shared with the drawings
       const img = imageFor(obj.src);

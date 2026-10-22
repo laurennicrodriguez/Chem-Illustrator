@@ -55,6 +55,8 @@ export class SheetCharts {
   private get sheet(): Sheet { return this.view.sheet!; }
   /** A chart kept somewhere other than on a sheet (a dashboard tile), while it is the one being changed. */
   target: { get(): Chart | null; set(c: Chart, label: string): void; remove(): void } | null = null;
+  /** The chart keeps its own data (a chart in a document or on a slide): no sheet-only settings. */
+  ownData = false;
 
   get chart(): Chart | null { return this.target ? this.target.get() : this.view.selectedChart; }
 
@@ -373,7 +375,7 @@ export class SheetCharts {
     const out: HTMLElement[] = [];
     const head = (t: string) => Object.assign(document.createElement('h4'), { textContent: t, className: 'cp-head' });
     const note = (t: string, cls = 'muted small') => Object.assign(document.createElement('p'), { textContent: t, className: cls });
-    out.push(note('Drag the chart to move it and its corners to resize it. Everything here can be changed; a blank box means automatic.'));
+    out.push(note(this.ownData ? 'Everything here can be changed; a blank box means automatic. Series take ranges of the data, such as B2:B5.' : 'Drag the chart to move it and its corners to resize it. Everything here can be changed; a blank box means automatic.'));
 
     out.push(head('Chart'));
     out.push(row('Type', select(KINDS.map((k) => [k, CHART_NAMES[k]]), c.kind, (v) => this.setKind(v as ChartKind))));
@@ -383,11 +385,11 @@ export class SheetCharts {
     if (c.kind === 'column' || c.kind === 'bar' || c.kind === 'area') out.push(row('Stacked', check(!!c.stacked, (v) => this.patch((x) => clean({ ...x, stacked: v || undefined }), 'Stacked'))));
     out.push(row('Font', text(c.font ?? '', (v) => this.patch((x) => clean({ ...x, font: v || undefined }), 'Chart font'), 'Arial')));
     out.push(row('Font size', numberBox(c.fontSize, (v) => this.patch((x) => clean({ ...x, fontSize: v }), 'Chart font size'), '12', 'px')));
-    out.push(row('Size', numberBox(c.w, (v) => v && this.patch((x) => ({ ...x, w: Math.max(80, v) }), 'Resize chart'), '', '×'), numberBox(c.h, (v) => v && this.patch((x) => ({ ...x, h: Math.max(80, v) }), 'Resize chart'), '', 'px')));
+    if (!this.ownData) out.push(row('Size', numberBox(c.w, (v) => v && this.patch((x) => ({ ...x, w: Math.max(80, v) }), 'Resize chart'), '', '×'), numberBox(c.h, (v) => v && this.patch((x) => ({ ...x, h: Math.max(80, v) }), 'Resize chart'), '', 'px')));
     out.push(row('Background', colour(c.background && c.background !== 'none' ? c.background : '#ffffff', (v) => this.patch((x) => ({ ...x, background: v === '#ffffff' ? undefined : v }), 'Chart background')),
       check(c.background === 'none', (v) => this.patch((x) => clean({ ...x, background: v ? 'none' : undefined }), 'Chart background'), 'See-through')));
     out.push(row('Border', check(c.border !== false, (v) => this.patch((x) => clean({ ...x, border: v ? undefined : false }), 'Chart border'))));
-    out.push(row('Hidden rows', check(!!c.showHidden, (v) => this.patch((x) => clean({ ...x, showHidden: v || undefined }), 'Chart hidden rows'), 'Chart them too (off: a filtered table charts what shows)')));
+    if (!this.ownData) out.push(row('Hidden rows', check(!!c.showHidden, (v) => this.patch((x) => clean({ ...x, showHidden: v || undefined }), 'Chart hidden rows'), 'Chart them too (off: a filtered table charts what shows)')));
 
     if (c.kind !== 'pie') {
       const axis = (p: 'x' | 'y', name: string) => {
