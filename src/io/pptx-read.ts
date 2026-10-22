@@ -26,7 +26,7 @@ import { layoutText, ASCENT } from '../text/layout';
 import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle, slideBackground, slideColours } from '../deck/deck';
 import { backgroundColour, isPlain, sameBackground, type Background } from '../deck/background';
 import { readFill, readOneFill, type FillContext } from './pptx-background';
-import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure, NS_A14, NS_M } from './pptx-write';
+import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure, NS_A14, NS_M, swapBox } from './pptx-write';
 import { ommlToTex, toOmml } from '../document/math';
 import { shapeMathPicture, shapeMathSize } from '../deck/equation';
 import { GEOS } from '../design/geo';
@@ -919,7 +919,12 @@ class Reader {
       if (!hasText) return;
     }
     const tags = this.tagsOf(s.path, kid(sp, 'nvSpPr', 'nvPr'));
-    const c = this.ourText(tags[TAG.text], sp, box) ?? turned(this.text(sp, box, ph, from), box);
+    // text running down or up: read as text in the box the other way round, turned a quarter more
+    const vert = kid(sp, 'txBody', 'bodyPr')?.getAttribute('vert');
+    const quarter = vert === 'vert' || vert === 'eaVert' ? 90 : vert === 'vert270' ? -90 : 0;
+    const tbox = quarter ? { ...box, ...swapBox(box), rot: box.rot + quarter } : box;
+    let c = this.ourText(tags[TAG.text], sp, tbox) ?? turned(this.text(sp, tbox, ph, from), tbox);
+    if (c && quarter) c = { ...c, dir: quarter > 0 ? 'vert' : 'vert270' };
     // a table's title or footnotes, saved here as a text box beside it
     const part = (() => {
       try { return tags[TAG.tablePart] ? JSON.parse(tags[TAG.tablePart]) as { key: string; part: 'title' | 'notes' } : null; } catch { return null; }
@@ -1233,14 +1238,14 @@ class Reader {
       if (rot) c.rot = rot; else delete c.rot;
       const nw = box.x2 - box.x1, nh = box.y2 - box.y1;
       if (c.wrap !== undefined && Math.abs(nw - w) > 0.5) c.wrap = nw;
-      if (c.ph && Math.abs(nh - h) > 0.5) c.boxH = nh;
+      if ((c.ph || c.fit) && Math.abs(nh - h) > 0.5) c.boxH = nh;
     } else if (saved.at?.length === 4) {
       const [x, y, w, h] = saved.at;
       c.x += box.x1 - x;
       c.y += box.y1 - y;
       const nw = box.x2 - box.x1, nh = box.y2 - box.y1;
       if (c.wrap !== undefined && Math.abs(nw - w) > 0.5) c.wrap = nw;
-      if (c.ph && Math.abs(nh - h) > 0.5) c.boxH = nh;
+      if ((c.ph || c.fit) && Math.abs(nh - h) > 0.5) c.boxH = nh;
     }
     return c;
   }
@@ -1329,7 +1334,10 @@ class Reader {
     else chain.push(this.defaultText, kid(txStyles, 'otherStyle'));
     const bodyPrs = [kid(body, 'bodyPr'), ...from.map((e) => kid(e, 'txBody', 'bodyPr'))];
     const bp = (k: string) => bodyPrs.map((b) => b?.getAttribute(k) ?? null).find((v) => v !== null) ?? null;
-    const scale = Number(kid(bodyPrs[0], 'normAutofit')?.getAttribute('fontScale') ?? 100000) / 100000;
+    // a text box that shrinks its text to fit keeps its own sizes (it is shrunk here as there);
+    // a placeholder's text comes in at the size PowerPoint shrank it to
+    const shrinks = !ph && !!kid(bodyPrs[0], 'normAutofit');
+    const scale = shrinks ? 1 : Number(kid(bodyPrs[0], 'normAutofit')?.getAttribute('fontScale') ?? 100000) / 100000;
     const kind = ph ? phKind(ph.type) : null;
     const base = kind ? textStyles(this.masterOut, this.curLayout)[kind] : undefined;
 
@@ -1363,7 +1371,7 @@ class Reader {
         const pct = kid(ls, 'spcPct')?.getAttribute('val'), fixed = kid(ls, 'spcPts')?.getAttribute('val');
         if (fixed) lineHeight = Number(fixed) / 100;
         else if (pct && Number(pct) !== 100000) lineSpacing = Number(pct) / 100000;
-        const red = Number(kid(bodyPrs[0], 'normAutofit')?.getAttribute('lnSpcReduction') ?? 0) / 100000;
+        const red = shrinks ? 0 : Number(kid(bodyPrs[0], 'normAutofit')?.getAttribute('lnSpcReduction') ?? 0) / 100000;
         if (red) lineSpacing = (lineSpacing ?? 1) * (1 - red);
       }
       const marL = fromEmu(inherit(pPr, chain, lvl, (e) => e.getAttribute('marL')));
@@ -1395,6 +1403,10 @@ class Reader {
         if (get('i') === '1' || get('i') === 'true') r.italic = true;
         const u = get('u');
         if (u && u !== 'none') r.underline = true;
+        const strike = get('strike');
+        if (strike && strike !== 'noStrike') r.strike = true;
+        const spc = Number(get('spc') ?? 0);
+        if (spc) r.spacing = spc / 100;
         const bl = Number(get('baseline') ?? 0);
         if (bl < 0) r.sub = true;
         else if (bl > 0) r.sup = true;
@@ -1436,6 +1448,17 @@ class Reader {
     else {
       const natural = layoutText(full, sizeFor, arialMeasure).boxWidth;
       if (justify !== 'left' || natural > w) c.wrap = Math.max(w, natural);
+    }
+    const numCol = Number(bp('numCol') ?? 1);
+    if (numCol > 1 && c.wrap !== undefined) {
+      c.cols = Math.min(16, Math.round(numCol));
+      const gap = fromEmu(bp('spcCol') ?? 0);
+      if (gap > 0) c.colGap = +gap.toFixed(2);
+    }
+    if (!kind) {
+      if (shrinks) c.fit = 'shrink';
+      else if (kid(bodyPrs[0], 'noAutofit')) c.fit = 'fixed';
+      if (c.fit) c.boxH = Math.max(1, box.y2 - box.y1 - tI - bI);
     }
     if (kind) {
       c.ph = kind;

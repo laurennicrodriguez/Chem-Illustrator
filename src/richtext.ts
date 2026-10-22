@@ -8,9 +8,9 @@ import type { TextRun } from './model';
 const LINK_COLOUR = '#0563c1';
 
 export type RunStyle = Omit<TextRun, 'text'>;
-export type Toggle = 'bold' | 'italic' | 'underline' | 'sub' | 'sup' | 'formula';
+export type Toggle = 'bold' | 'italic' | 'underline' | 'sub' | 'sup' | 'formula' | 'strike';
 
-const KEYS = ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'size', 'font', 'color', 'highlight', 'obj', 'strike', 'rev', 'cmt', 'link'] as const;
+const KEYS = ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'size', 'font', 'color', 'highlight', 'obj', 'strike', 'rev', 'cmt', 'link', 'spacing'] as const;
 /** Subscript, superscript and formula style change where characters sit, so only one applies. */
 const POSITION: Toggle[] = ['sub', 'sup', 'formula'];
 
@@ -145,6 +145,49 @@ export function togglePatch(current: RunStyle, key: Toggle, base: RunStyle = {})
 
 export function toggleStyle(runs: TextRun[], start: number, end: number, key: Toggle, base: RunStyle = {}): TextRun[] {
   return applyStyle(runs, start, end, togglePatch(commonStyle(runs, start, end), key, base));
+}
+
+/** Change Case's choices, as Office names them: Sentence case., lowercase, UPPERCASE, Capitalize Each Word, tOGGLE cASE. */
+export type CaseMode = 'sentence' | 'lower' | 'upper' | 'title' | 'toggle';
+
+/**
+ * Change Case on the text between two offsets, keeping each character's style. A letter whose
+ * other case is more than one character (ß in capitals) stays as it is, so offsets don't move.
+ */
+export function changeCase(runs: TextRun[], start: number, end: number, mode: CaseMode): TextRun[] {
+  const text = plainText(runs);
+  const one = (ch: string, up: boolean) => { const c = up ? ch.toUpperCase() : ch.toLowerCase(); return c.length === ch.length ? c : ch; };
+  const letter = (ch: string | undefined) => !!ch && /\p{L}/u.test(ch);
+  const out: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (i < start || i >= end) { out.push(ch); continue; }
+    switch (mode) {
+      case 'lower': out.push(one(ch, false)); break;
+      case 'upper': out.push(one(ch, true)); break;
+      case 'toggle': out.push(ch === ch.toUpperCase() ? one(ch, false) : one(ch, true)); break;
+      case 'title': out.push(one(ch, !letter(text[i - 1]) && !/['’]/.test(text[i - 1] ?? ''))); break;
+      case 'sentence': {
+        // the first letter after the start of the text or a line, or after . ! ? and a space
+        let k = i - 1;
+        while (k >= 0 && !letter(text[k]) && !/[.!?\n]/.test(text[k])) k--;
+        const first = letter(ch) && (k < 0 || text[k] === '\n' || (/[.!?]/.test(text[k]) && /\s/.test(text[k + 1] ?? '')));
+        out.push(one(ch, first));
+        break;
+      }
+    }
+  }
+  const changed = out.join('');
+  let at = 0;
+  return runs.map((r) => { const t = changed.slice(at, at + r.text.length); at += r.text.length; return { ...r, text: t }; });
+}
+
+/** The character formatting Clear Formatting takes off (links, comments and tracked changes stay). */
+export const CLEARED: (keyof RunStyle)[] = ['bold', 'italic', 'underline', 'sub', 'sup', 'formula', 'size', 'font', 'color', 'highlight', 'strike', 'spacing'];
+
+/** Clear Formatting: the text between two offsets back to plain text in the text's own font and size. */
+export function clearFormatting(runs: TextRun[], start: number, end: number): TextRun[] {
+  return applyStyle(runs, start, end, Object.fromEntries(CLEARED.map((k) => [k, undefined])));
 }
 
 /** A style from ChemDraw's face bits. */

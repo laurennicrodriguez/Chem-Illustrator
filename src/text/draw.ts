@@ -30,7 +30,10 @@ function drawGlyphs(ctx: CanvasRenderingContext2D, lay: TextLayout, l: LaidLine,
   ctx.fillStyle = g.color ?? '#000';
   const y = oy + l.y + g.dy;
   if (g.shown !== undefined) ctx.fillText(g.shown, ox + g.x, y);
-  else if (g.spread) {
+  else if (g.spacing) {
+    // spaced out (or condensed): each character where the spacing puts it
+    for (let k = 0; k < g.text.length; k++) if (g.text[k] !== ' ') ctx.fillText(g.text[k], ox + g.x + pieceX(lay, g, k), y);
+  } else if (g.spread) {
     // justified: each word goes where the stretched spaces put it
     let k = 0;
     for (const word of g.text.split(' ')) {

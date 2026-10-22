@@ -1909,6 +1909,9 @@ export class Renderer {
     if (c.ph && c.boxH) {
       const f = placeholderRect(c, this.baseOf(c));
       r = { x1: Math.min(r.x1, f.x1), y1: Math.min(r.y1, f.y1), x2: Math.max(r.x2, f.x2), y2: Math.max(r.y2, f.y2) };
+    } else if (c.fit && c.boxH) {
+      // a text box that doesn't grow with its text keeps its height
+      r = { ...r, y2: Math.max(r.y2, r.y1 + c.boxH) };
     }
     this.capBoxes.set(c, r);
     return r;

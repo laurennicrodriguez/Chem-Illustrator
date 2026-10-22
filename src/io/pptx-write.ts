@@ -322,6 +322,8 @@ function runXml(r: TextRun, explicit: { size: number; font: string } | null, hli
     if (r.bold !== undefined) attrs.push(`b="${r.bold ? 1 : 0}"`);
     if (r.italic !== undefined) attrs.push(`i="${r.italic ? 1 : 0}"`);
     if (r.underline) attrs.push('u="sng"');
+    if (r.strike) attrs.push('strike="sngStrike"');
+    if (r.spacing) attrs.push(`spc="${Math.round(r.spacing * 100)}"`);
     if (p.pos === 'sub') attrs.push('baseline="-25000"');
     else if (p.pos === 'sup') attrs.push('baseline="30000"');
     attrs.push('dirty="0"');
@@ -333,6 +335,12 @@ function runXml(r: TextRun, explicit: { size: number; font: string } | null, hli
 }
 
 const NUMBER_TYPES = ['arabicPeriod', 'alphaLcPeriod', 'romanLcPeriod'];
+
+/** A box turned a quarter about its middle: as wide as it was high. */
+export function swapBox(b: Rect): Rect {
+  const mx = (b.x1 + b.x2) / 2, my = (b.y1 + b.y2) / 2, hw = (b.y2 - b.y1) / 2, hh = (b.x2 - b.x1) / 2;
+  return { x1: mx - hw, y1: my - hh, x2: mx + hw, y2: my + hh };
+}
 
 /** A caption's paragraphs as PowerPoint paragraphs. */
 export function paragraphsXml(c: Caption, explicit: { size: number; font: string } | null, defaultSize: number, measure: Measure, hlink?: LinkXml): string {
@@ -896,7 +904,8 @@ class Writer {
     // the box: the placeholder's own, or around the text, moved so PowerPoint's first baseline is ours
     const top = c.y - PPT_ASCENT * firstSize;
     const width = c.wrap ?? lay.boxWidth;
-    const height = c.ph && c.boxH ? Math.max(c.boxH, lay.box.y2 - lay.box.y1) : (lay.box.y2 - (lay.lines[0]?.y ?? 0)) + PPT_ASCENT * firstSize + 0.1 * firstSize;
+    const grown = (lay.box.y2 - (lay.lines[0]?.y ?? 0)) + PPT_ASCENT * firstSize + 0.1 * firstSize;
+    const height = c.ph && c.boxH ? Math.max(c.boxH, lay.box.y2 - lay.box.y1) : c.fit && c.boxH ? Math.max(c.boxH, c.fit === 'shrink' ? 0 : grown) : grown;
     let box = { x1: c.x, y1: top, x2: c.x + Math.max(width, 1), y2: top + height };
     // where the text starts in its box; turned text: the box moved so that PowerPoint, turning it
     // about its middle, puts the text where it is here (turned about where it starts)
@@ -909,8 +918,14 @@ class Writer {
     const explicit = c.ph ? null : { size: doc.style.captionSize, font: doc.style.captionFont || 'Arial' };
     const body = isEmptyText(c) && c.ph ? `<a:p><a:endParaRPr ${lang} dirty="0"/></a:p>` : paragraphsXml(c, explicit, base?.size ?? doc.style.captionSize, this.measure, this.hlink);
     const wrap = c.wrap !== undefined || c.ph ? 'square' : 'none';
-    const fit = c.ph ? '<a:noAutofit/>' : '<a:spAutoFit/>';
-    const bodyPr = `<a:bodyPr wrap="${wrap}" lIns="0" tIns="0" rIns="0" bIns="0" rtlCol="0" anchor="t">${fit}</a:bodyPr>`;
+    // AutoFit: shrink text on overflow (at the size it is shrunk to here), a box that keeps its
+    // size, or one that grows with its text
+    const fit = c.ph || c.fit === 'fixed' ? '<a:noAutofit/>'
+      : c.fit === 'shrink' ? `<a:normAutofit${lay.fontScale && lay.fontScale < 1 ? ` fontScale="${Math.round(lay.fontScale * 100000)}"` : ''}/>`
+      : '<a:spAutoFit/>';
+    const cols = c.cols && c.cols > 1 && c.wrap !== undefined ? ` numCol="${Math.round(c.cols)}"${c.colGap ? ` spcCol="${emu(c.colGap)}"` : ''}` : '';
+    const vert = c.dir ? ` vert="${c.dir}"` : '';
+    const bodyPr = `<a:bodyPr wrap="${wrap}"${vert} lIns="0" tIns="0" rIns="0" bIns="0"${cols} rtlCol="0" anchor="t">${fit}</a:bodyPr>`;
     // the caption's exact settings, used when it comes back unchanged from PowerPoint
     const plain = c.runs.map((r) => r.text).join('');
     const at = [box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1].map((v) => +v.toFixed(2));
@@ -929,8 +944,12 @@ class Writer {
       ? `<p:nvSpPr><p:cNvPr id="${id}"${nameAttrs(name, c.hidden)}/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr>${ph}<p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvSpPr>`
       : `<p:nvSpPr><p:cNvPr id="${id}"${nameAttrs(name, c.hidden)}/><p:cNvSpPr txBox="1"/><p:nvPr><p:custDataLst><p:tags r:id="${tag}"/></p:custDataLst></p:nvPr></p:nvSpPr>`;
     const geom = ph ? '' : '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/>';
-    const rot = c.rot ? ` rot="${Math.round((((c.rot % 360) + 360) % 360) * 60000)}"` : '';
-    return `<p:sp>${nvSp}<p:spPr>${xfrm(box, rot)}${geom}</p:spPr><p:txBody>${bodyPr}<a:lstStyle/>${body}</p:txBody></p:sp>`;
+    // text running down or up: PowerPoint's box is the other way round, turned a quarter less,
+    // with the text turned in it
+    const quarter = c.dir === 'vert' ? 90 : c.dir === 'vert270' ? -90 : 0;
+    const shape = quarter ? swapBox(box) : box;
+    const rot = rotAttr((c.rot ?? 0) - quarter);
+    return `<p:sp>${nvSp}<p:spPr>${xfrm(shape, rot)}${geom}</p:spPr><p:txBody>${bodyPr}<a:lstStyle/>${body}</p:txBody></p:sp>`;
   }
 
   /**

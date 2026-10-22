@@ -58,6 +58,13 @@ export interface TextFrame {
    * to get past them. The tops are worked out as the lines are filled, from single spacing.
    */
   narrow?: (top: number, height: number) => Narrow | null;
+  /** Columns in a text box (with `wrap` its whole width), and the room between them in points. */
+  cols?: number;
+  colGap?: number;
+  /** A text box of fixed height (from the top of its first line): columns fill to it, and shrink-to-fit fits the text in it. */
+  boxH?: number;
+  /** AutoFit: 'shrink' makes the text smaller until it fits in boxH; otherwise it doesn't change size. */
+  fit?: 'shrink' | 'fixed';
 }
 
 /** Room a line gives up to a figure beside it, or how far it moves down past one. */
@@ -87,6 +94,8 @@ export interface Glyphs {
   strike?: boolean;
   /** Background colour behind the piece (a highlighter). */
   highlight?: string;
+  /** Character spacing: points added after each character. */
+  spacing?: number;
   /** Extra width each space gets in a justified line. */
   spread?: number;
   /** A figure, table or field (documents): its id. Its one character isn't drawn. */
@@ -141,6 +150,8 @@ export interface TextLayout {
   /** Number of characters in the text, line breaks included. */
   length: number;
   measure: Measure;
+  /** Shrunk to fit its box: the share of its size the text is drawn at. */
+  fontScale?: number;
 }
 
 const NO_CUT: Narrow = { left: 0, right: 0 };
@@ -153,6 +164,8 @@ export const SINGLE = 1.15;
 
 interface Seg {
   text: string; start: number; size: number; base: number; dy: number; family: string; style: string; color?: string; underline?: boolean; strike?: boolean; highlight?: string;
+  /** Character spacing: points added after each character. */
+  spacing?: number;
   /** A figure, table or field (documents): its id, and once laid out its width, what it shows and its height. */
   obj?: number; w?: number; shown?: string; objAscent?: number; objDescent?: number;
 }
@@ -179,6 +192,7 @@ function segments(runs: TextRun[], defaultSize: number, n: number): { segs: Seg[
       }
       continue;
     }
+    const from = { p, k: segs[p]?.length ?? 0 };
     const parts = r.formula && !r.sub && !r.sup ? formulaParts(r.text) : [{ text: r.text, pos: r.sub ? 'sub' : r.sup ? 'sup' : 'base' }];
     for (const part of parts) {
       const small = part.pos !== 'base';
@@ -196,6 +210,8 @@ function segments(runs: TextRun[], defaultSize: number, n: number): { segs: Seg[
         off += t.length;
       });
     }
+    // character spacing goes on every piece the run made
+    if (r.spacing) for (let q = from.p; q <= Math.min(p, n - 1); q++) for (const sg of segs[q].slice(q === from.p ? from.k : 0)) sg.spacing = r.spacing;
   }
   return { segs, sizes };
 }
@@ -221,6 +237,68 @@ function breakPoints(text: string, around: ReadonlySet<number> = new Set()): num
 interface Word { start: number; end: number; body: number; spaces: number }
 
 export function layoutText(f: TextFrame, defaultSize: number, measure: Measure): TextLayout {
+  if (f.fit === 'shrink' && f.boxH && f.boxH > 0) return shrunk(f, defaultSize, measure);
+  if (f.cols && f.cols > 1 && f.wrap !== undefined) return inColumns(f, defaultSize, measure);
+  return layoutPlain(f, defaultSize, measure);
+}
+
+/** Height of a layout from the top of its first line to the bottom of its last. */
+const heightOf = (lay: TextLayout) => lay.box.y2 - lay.box.y1;
+
+/**
+ * Shrink text on overflow: the largest size, in steps of PowerPoint's fontScale, at which the
+ * text fits its box's height.
+ */
+function shrunk(f: TextFrame, defaultSize: number, measure: Measure): TextLayout {
+  const plain = { ...f, fit: undefined };
+  const full = layoutText(plain, defaultSize, measure);
+  if (heightOf(full) <= f.boxH! + 0.01) return full;
+  const at = (k: number) => layoutText({
+    ...plain,
+    runs: f.runs.map((r) => ({ ...r, size: (r.size ?? defaultSize) * k })),
+    lineHeight: f.lineHeight !== undefined ? f.lineHeight * k : undefined,
+  }, defaultSize * k, measure);
+  let lo = 0.25, hi = 1;
+  for (let i = 0; i < 12; i++) {
+    const mid = (lo + hi) / 2;
+    if (heightOf(at(mid)) <= f.boxH!) lo = mid; else hi = mid;
+  }
+  const k = Math.floor(lo * 40) / 40;
+  return { ...at(k), fontScale: k };
+}
+
+/**
+ * Text in columns: laid out to a column's width, then its lines shared between the columns,
+ * filling each to the box's height (or evenly, in a box that grows with its text).
+ */
+function inColumns(f: TextFrame, defaultSize: number, measure: Measure): TextLayout {
+  const n = Math.max(2, Math.min(16, Math.round(f.cols!)));
+  const gap = Math.max(0, f.colGap ?? 0);
+  const w = Math.max(1, (f.wrap! - gap * (n - 1)) / n);
+  const lay = layoutPlain({ ...f, cols: undefined, wrap: w }, defaultSize, measure);
+  const ls = lay.lines;
+  const top0 = ls[0].y - (ls[0].above ?? ls[0].ascent);
+  const per = Math.ceil(ls.length / n);
+  let col = 0, colTop = top0, inCol = 0;
+  let y2 = -Infinity;
+  for (const l of ls) {
+    const bottom = l.y + (l.below ?? l.descent);
+    const full = f.boxH ? inCol > 0 && bottom - colTop > f.boxH + 0.01 : inCol >= per;
+    if (full && col < n - 1) { col++; colTop = l.y - (l.above ?? l.ascent); inCol = 0; }
+    const dx = col * (w + gap), dy = top0 - colTop;
+    l.y += dy;
+    l.x += dx;
+    l.left += dx;
+    for (const g of l.pieces) g.x += dx;
+    if (l.marker) l.marker = { ...l.marker, x: l.marker.x + dx };
+    l.band = [dx, dx + w];
+    inCol++;
+    y2 = Math.max(y2, l.y + (l.below ?? l.descent));
+  }
+  return { ...lay, boxWidth: f.wrap!, box: { x1: 0, y1: top0, x2: f.wrap!, y2 } };
+}
+
+function layoutPlain(f: TextFrame, defaultSize: number, measure: Measure): TextLayout {
   const text = f.runs.map((r) => r.text).join('');
   const n = paraCount(text);
   const paras = fitParas(f.paras, n);
@@ -274,7 +352,7 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
       }
     }
     const segWidth = (s: Seg, a: number, b: number): number =>
-      s.obj !== undefined ? (b > a ? s.w ?? 0 : 0) : measure(s.text.slice(a, b), s.size, s.family, s.style);
+      s.obj !== undefined ? (b > a ? s.w ?? 0 : 0) : measure(s.text.slice(a, b), s.size, s.family, s.style) + (s.spacing ? s.spacing * (b - a) : 0);
 
     // the width of part of the paragraph (offsets within it), piece by piece
     const widthOf = (a: number, b: number): number => {
@@ -352,6 +430,7 @@ export function layoutText(f: TextFrame, defaultSize: number, measure: Measure):
         const g: Glyphs = { text: t, start: paraStart + a, x, w, dy: s.dy, size: s.size, family: s.family, style: s.style, color: s.color, underline: s.underline };
         if (s.highlight) g.highlight = s.highlight;
         if (s.strike) g.strike = true;
+        if (s.spacing) g.spacing = s.spacing;
         if (s.obj !== undefined) {
           g.obj = s.obj;
           if (s.shown !== undefined) g.shown = s.shown;
@@ -459,6 +538,7 @@ export function pieceX(lay: TextLayout, g: Glyphs, k: number): number {
   if (k >= g.text.length) return g.w;
   const t = g.text.slice(0, k);
   let w = lay.measure(t, g.size, g.family, g.style);
+  if (g.spacing) w += g.spacing * k;
   if (g.spread) for (const ch of t) if (ch === ' ') w += g.spread;
   return w;
 }

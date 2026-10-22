@@ -215,6 +215,8 @@ export interface TextRun {
   cmt?: string;
   /** Where the text links to: a web page, a DOI, an e-mail address, a file or a place in the file (see links.ts). */
   link?: string;
+  /** Character spacing: points added after each character (less than 0 is condensed), as PowerPoint's Character Spacing. */
+  spacing?: number;
 }
 
 /**
@@ -342,6 +344,16 @@ export interface Caption {
   name?: string;
   /** Hidden (Selection Pane): not drawn, printed or picked, but kept and saved. */
   hidden?: boolean;
+  /** Columns in a text box (it needs a width, `wrap`), and the room between them in points. */
+  cols?: number;
+  colGap?: number;
+  /**
+   * AutoFit (slides): left out, the box grows with its text; 'shrink' makes the text smaller to
+   * fit a box of height boxH; 'fixed' keeps the box at boxH and lets the text run past it.
+   */
+  fit?: 'shrink' | 'fixed';
+  /** Text direction: the text runs down (rotated 90°) or up (270°). Its turn is in `rot`; this says it is the text's direction, for PowerPoint. */
+  dir?: 'vert' | 'vert270';
 }
 
 /**

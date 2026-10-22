@@ -21,7 +21,13 @@ import { tidyStyle } from '../render/highlight';
 import { ASCENT } from '../text/layout';
 import { cellAlign, insertRow, nextCell, partAt, partRuns, setColumnWidth, setPart, spanOf, NOTE_SCALE, type TablePart } from '../table';
 import { slideCellLook, styledRuns, unstyledRuns } from '../deck/table-styles';
-import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG, exitParam, lockAxis, turnAbout, turnedCorners } from '../geom';
+import { Vec, Rect, add, sub, mul, norm, dist, dot, distToSegment, rectContains, angleOf, fromAngle, snapAngle, perp, DEG, exitParam, lockAxis, turnAbout, turnedCorners, normDegrees } from '../geom';
+
+/** A change to a text box's settings from the ribbon (see Editor.setTextBox). */
+export type TextBoxChange =
+  | { kind: 'dir'; dir: 'vert' | 'vert270' | undefined }
+  | { kind: 'cols'; cols: number; gap?: number }
+  | { kind: 'fit'; fit: 'grow' | 'shrink' | 'fixed' };
 import {
   sproutDir, sprout, bondTo, bondLength, atomAt, freeRing, fusedRing, fuseSide, ringOnAtom, ringDir,
   placeRing, chainPoints, chainFrom, MERGE_FRACTION,
@@ -3710,6 +3716,8 @@ export class Editor {
   }
 
   private captionEd: CaptionEditor | null = null;
+  /** The caption being typed in (null for a new one). */
+  private captionEdId: number | null = null;
   /** The text being typed, if any. */
   get typingCaption(): CaptionEditor | null { return this.captionEd?.isOpen ? this.captionEd : null; }
 
@@ -3761,6 +3769,56 @@ export class Editor {
     this.requestScene();
     this.changed();
     return true;
+  }
+
+  /**
+   * The text box settings on the ribbon (Text Direction, Columns, AutoFit) for each picked text
+   * box, or the one being typed in (finished first). False when no text box is picked.
+   */
+  setTextBox(change: TextBoxChange): boolean {
+    const typing = this.captionEd ? this.captionEdId : null;
+    if (this.captionEd) this.closeCaption();
+    const doc = this.doc;
+    const ids = typing !== null ? [typing] : [...this.sel.captions];
+    const caps = ids.map((id) => doc.captions.get(id)).filter((c): c is Caption => !!c);
+    if (!caps.length) return false;
+    doc.edit(change.kind === 'dir' ? 'Text direction' : change.kind === 'cols' ? 'Columns' : 'AutoFit', () => {
+      for (const c of caps) {
+        const frame = this.r.captionFrame(c);
+        doc.dirtyRects.push(this.r.captionBox(c));
+        if (change.kind === 'dir') {
+          // the box turns a quarter about its middle for each step, so it stays where it was
+          const q = (d?: Caption['dir']) => (d === 'vert' ? 90 : d === 'vert270' ? -90 : 0);
+          const by = q(change.dir) - q(c.dir);
+          if (!by) continue;
+          const box = this.r.captionBox(c);
+          const mid = { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 };
+          const at = turnAbout(c, mid, by);
+          const rot = normDegrees((c.rot ?? 0) + by);
+          doc.updateCaption(c.id, { x: at.x, y: at.y, rot: rot || undefined, dir: change.dir });
+        } else if (change.kind === 'cols') {
+          const n = Math.max(1, Math.min(16, Math.round(change.cols)));
+          if (n === 1) { doc.updateCaption(c.id, { cols: undefined, colGap: undefined }); continue; }
+          doc.updateCaption(c.id, { cols: n, colGap: change.gap ?? c.colGap ?? 18, wrap: c.wrap ?? Math.max(36, frame.x2 - frame.x1) });
+        } else if (!c.ph) {
+          // AutoFit: a box that grows with its text, or one that keeps the height it has now
+          if (change.fit === 'grow') doc.updateCaption(c.id, { fit: undefined, boxH: undefined });
+          else doc.updateCaption(c.id, { fit: change.fit, boxH: c.boxH ?? frame.y2 - frame.y1, wrap: c.wrap ?? Math.max(36, frame.x2 - frame.x1) });
+        }
+      }
+    });
+    if (typing === null) this.requestOverlay();
+    this.requestScene();
+    this.changed();
+    return true;
+  }
+
+  /** The text box settings of the first picked text box (or the one being typed in). */
+  textBoxLook(): { dir: 'horz' | 'vert' | 'vert270'; cols: number; fit: 'grow' | 'shrink' | 'fixed'; ph: boolean } | null {
+    const id = this.captionEd ? this.captionEdId : [...this.sel.captions][0];
+    const c = id !== null && id !== undefined ? this.doc.captions.get(id) : undefined;
+    if (!c) return null;
+    return { dir: c.dir ?? 'horz', cols: c.cols ?? 1, fit: c.fit ?? 'grow', ph: !!c.ph };
   }
 
   /** How the text the ribbon's Font and Paragraph buttons would change looks now (for showing which are on). */
@@ -3982,7 +4040,7 @@ export class Editor {
       redraw: () => this.requestOverlay(),
     };
     const initial = c
-      ? { runs: applyBase(c.runs, base), paras: c.paras, justify: c.justify, wrap: c.wrap, width: c.width, lineHeight: c.lineHeight, lineSpacing: c.lineSpacing }
+      ? { runs: applyBase(c.runs, base), paras: c.paras, justify: c.justify, wrap: c.wrap, width: c.width, lineHeight: c.lineHeight, lineSpacing: c.lineSpacing, cols: c.cols, colGap: c.colGap, boxH: c.boxH, fit: c.fit }
       : { runs: [], justify: opts?.justify ?? 'left' as const, wrap };
     const ed = new CaptionEditor(host, at, initial, defaults, (res) => {
       if (this.captionEd === ed) this.captionEd = null;
@@ -4011,6 +4069,7 @@ export class Editor {
       this.changed();
     }, c?.rot ?? 0);
     this.captionEd = ed;
+    this.captionEdId = id;
     if (click) {
       const q = c?.rot ? turnAbout(click, at, -c.rot) : click;
       ed.ed.setCaret(ed.ed.offsetAt(q.x - at.x, q.y - at.y));

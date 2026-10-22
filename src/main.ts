@@ -6517,6 +6517,8 @@ const slideText = new SlideTextRibbon($('#ribbon'), {
   look: () => editor.textLook(),
   refocus: () => editor.refocusText(),
   nothing: () => flash('Click into some text, or pick a text box or a shape with text, first.'),
+  box: (c) => editor.setTextBox(c),
+  boxLook: () => editor.textBoxLook(),
 });
 CaptionEditor.onState = () => { if (ws.active.mode === 'slides') slideText.refresh(); };
 editor.onChange = () => { if (ws.active.mode === 'slides') slideText.refresh(); animUi?.selectionChanged(); updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); void refreshDescriptors(); scheduleLabelCheck(); };

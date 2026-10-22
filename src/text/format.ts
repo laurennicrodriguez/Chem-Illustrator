@@ -14,7 +14,9 @@ export type TextFormat =
   | { kind: 'align'; j: Justify }
   | { kind: 'list'; list: 'bullet' | 'number' }
   | { kind: 'indent'; by: 1 | -1 }
-  | { kind: 'line'; v: number };
+  | { kind: 'line'; v: number }
+  | { kind: 'case'; mode: rt.CaseMode }
+  | { kind: 'clear' };
 
 /** PowerPoint's steps for Increase and Decrease Font Size. */
 export const FONT_STEPS = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 44, 48, 54, 60, 66, 72, 80, 88, 96];
@@ -36,6 +38,8 @@ export function applyFormat(ed: TextEditing, f: TextFormat): void {
     case 'list': ed.list(f.list); break;
     case 'indent': ed.indent(f.by); break;
     case 'line': ed.lineSpacing(f.v); break;
+    case 'case': ed.changeCase(f.mode); break;
+    case 'clear': ed.clearFormatting(); break;
   }
 }
 
