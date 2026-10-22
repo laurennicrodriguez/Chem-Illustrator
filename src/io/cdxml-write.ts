@@ -22,7 +22,7 @@ import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../ch
 import { fromDataUrl } from '../render/images';
 import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, INSIDE_TAG, GROUP_TAG, GEO_TAG, MORPH_TAG, PIN_TAG, CURVE_ARROW_TAG, TURN_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG, HIGHLIGHT_LOOK_TAG, SPOKES_TAG } from './cdxml';
 import { frameTag } from '../editor/frames';
-import { geoDef, moveSteps, textArea, type GeoStep } from '../design/geo';
+import { geoDef, moveSteps, outlineParts, textArea, type GeoStep } from '../design/geo';
 import { FADE, tint } from '../colours';
 import { fillInk, mix, ringShadowSize, shadowLook } from '../render/fills';
 import { shapeShadow } from '../render/highlight-fx';
@@ -1242,7 +1242,10 @@ class CdxmlWriter {
     }
     if (s.filled) {
       const fc = fillInk(s);
-      curves(out.body, 'fill', s.fill === 'faded' ? tint(fc, FADE) : fc);
+      const ink = s.fill === 'faded' ? tint(fc, FADE) : fc;
+      // an icon's holes (each part is filled on its own in ChemDraw) are painted over in white
+      if (def.icon && s.kind === 'geo') for (const p of outlineParts(out.body)) curves(p.steps, 'fill', p.depth % 2 ? '#ffffff' : ink);
+      else curves(out.body, 'fill', ink);
     }
     if (width > 0) {
       curves(out.body, 'line', s.color ?? '#000000');

@@ -7,6 +7,9 @@ test-results/
 public/RDKit_minimal.js
 public/RDKit_minimal.wasm
 
+# Made from @mdi/svg by scripts/build-icons.mjs
+src/design/icons/mdi.json
+
 # Never commit drawings or reference documents; keep them outside the repo
 *.cdxml
 *.cdx

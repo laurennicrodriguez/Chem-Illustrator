@@ -7,6 +7,7 @@
 
 import type { Rect, Vec } from '../geom';
 import type { Shape } from '../model';
+import { iconDef, isIconId } from './icons';
 
 export type GeoStep =
   | ['M', number, number]
@@ -14,7 +15,7 @@ export type GeoStep =
   | ['C', number, number, number, number, number, number]
   | ['Z'];
 
-export type GeoGroup = 'Basic shapes' | 'Block arrows' | 'Flowchart' | 'Callouts' | 'Lab equipment';
+export type GeoGroup = 'Basic shapes' | 'Block arrows' | 'Flowchart' | 'Callouts' | 'Lab equipment' | 'Icons';
 
 export const GEO_GROUPS: GeoGroup[] = ['Basic shapes', 'Block arrows', 'Flowchart', 'Callouts', 'Lab equipment'];
 
@@ -35,6 +36,8 @@ export interface GeoDef {
   size: [number, number];
   /** Drawn as an outline with no fill unless one is chosen (glassware). */
   outline?: boolean;
+  /** An icon (design/icons.ts): filled in one colour with no outline unless one is chosen. */
+  icon?: boolean;
   /** Words to find it by in the library's search box. */
   keywords?: string;
   draw(w: number, h: number): GeoOutline;
@@ -351,8 +354,8 @@ function fitSteps(steps: GeoStep[], w: number, h: number): GeoStep[] {
 
 export const GEO_BY_ID = new Map(GEOS.map((g) => [g.id, g]));
 
-/** The shape with this id, or the rectangle for one not known (from a newer version). */
-export const geoDef = (id: string | undefined): GeoDef => GEO_BY_ID.get(id ?? '') ?? GEO_BY_ID.get('rect')!;
+/** The shape with this id (an icon for "icon:…"), or the rectangle for one not known (from a newer version). */
+export const geoDef = (id: string | undefined): GeoDef => (isIconId(id) ? iconDef(id) : GEO_BY_ID.get(id ?? '')) ?? GEO_BY_ID.get('rect')!;
 
 /** The box of an outline's points (control points included: a little generous on curves). */
 export function stepsBox(steps: GeoStep[]): Rect {
@@ -398,6 +401,29 @@ export function insideOutline(polys: Vec[][], p: Vec): boolean {
     }
   }
   return inside;
+}
+
+/**
+ * An outline's separate parts (each from a move to the next), outermost first, with how many
+ * other parts each lies inside: an even count is filled, an odd one is a hole (even-odd). For
+ * formats that fill each part on its own (ChemDraw curves), holes are painted over in white.
+ * Each part comes back closed.
+ */
+export function outlineParts(steps: GeoStep[]): { steps: GeoStep[]; depth: number }[] {
+  const parts: GeoStep[][] = [];
+  for (const s of steps) {
+    if (s[0] === 'M' || !parts.length) parts.push([]);
+    parts[parts.length - 1].push(s);
+  }
+  // filled parts are closed
+  for (const p of parts) if (p[p.length - 1][0] !== 'Z') p.push(['Z']);
+  const polys = parts.map((p) => flatten(p, 6)[0] ?? []);
+  const depth = polys.map((poly, i) => {
+    if (!poly.length) return 0;
+    // (the parts don't cross, so any point of this one will do)
+    return polys.filter((o, j) => j !== i && o.length > 2 && insideOutline([o], poly[0])).length;
+  });
+  return parts.map((p, i) => ({ steps: p, depth: depth[i] })).sort((a, b) => a.depth - b.depth);
 }
 
 /** How far p is from the outline's lines. */
@@ -451,8 +477,10 @@ export const CLIP_ART_LINE = 1.75, SHAPE_LINE = 1;
 
 /** How a new shape from the library looks (null for a shape that isn't in it). */
 export function geoShapeStyle(id: string, look: Partial<Shape> = {}): Partial<Shape> | null {
-  const def = GEO_BY_ID.get(id);
+  const def = isIconId(id) ? iconDef(id) : GEO_BY_ID.get(id);
   if (!def) return null;
+  // icons in the outline colour of new shapes (or black), with no outline
+  if (def.icon) return { kind: 'geo', geo: id, filled: true, color: look.color ?? '#000000', lineWidth: 0 };
   // lines in proportion to the shape: clip art (glassware…) at 1.75 pt, as it is drawn about 60 pt
   // across; other shapes at PowerPoint's 1 pt. Change it in the Style panel.
   const base: Partial<Shape> = def.outline ? { color: '#000000', lineWidth: CLIP_ART_LINE } : { filled: true, fillColor: '#dae3f3', color: '#2f5597', lineWidth: SHAPE_LINE, ...look };

@@ -54,6 +54,12 @@ Type in the search box at the top to find one (try "flask" or "decision"). **Sha
 
 To place a shape, click it and then click or drag on the page, or drag it straight from the library onto the page. Double-click a shape to type inside it; the chemistry typing helpers work there, so CH2Cl2 gets its subscripts. The **Style** panel on the right sets fill, outline, line width, transparency and where the text sits.
 
+## Icons
+
+The library's **Icons** tab (or **Icons** on the ribbon, or **Insert ▸ Icons…**) has about 7,000 icons. The list under the search box picks a group; **Lab and science** comes first, with glassware, molecules and atoms, lab equipment, hazard and safety signs (biohazard, radioactive, toxic, flammable, electrical, warning) and medical icons. Typing in the search box looks through all the icons, by name and by other words for them (try "hazard", "rbf" or "pipette"); choose a group from the list first to search only that group.
+
+An icon goes on the page like a shape (click it, then click or drag; or drag it onto the page) at one inch square. It is filled in one colour with no outline: change the colour, add an outline, a gradient or a shadow in the **Style** panel, and drag its corners to size it. Icons save to PowerPoint as shapes PowerPoint can recolour and resize, and come back here as the same icon. They are the Material Design Icons by Pictogrammers (Apache License 2.0); company and product logos are left out.
+
 The ribbon's **Insert** group also adds a **Text Box**, a **Picture** or a **Table**, and **Crop** trims a picture.
 
 The **Chemistry** group adds a **Catalytic Cycle** or an **Energy Diagram** (the same as **Chemistry ▸ Reactions and Schemes**: see [Drawing](drawing.md#reactions-and-schemes)). A new one goes beside what is already on the page.
