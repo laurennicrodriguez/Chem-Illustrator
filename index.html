@@ -1919,8 +1919,7 @@
     <div class="rb-tabs" role="tablist">
       <button role="tab" data-sl-tab="home" aria-selected="true">Home</button>
       <button role="tab" data-sl-tab="insert" aria-selected="false">Insert</button>
-      <button role="tab" data-sl-tab="design" aria-selected="false">Design</button>
-      <button role="tab" data-sl-tab="transitions" aria-selected="false">Transitions</button>
+      <button role="tab" data-sl-tab="transitions" aria-selected="false" title="The slides' look (themes, slide size, background) and the transitions between them">Design &amp; Transitions</button>
       <button role="tab" data-sl-tab="animations" aria-selected="false">Animations</button>
       <button role="tab" data-sl-tab="show" aria-selected="false">Slide Show</button>
       <button role="tab" data-sl-tab="review" aria-selected="false">Review</button>
@@ -2110,35 +2109,6 @@
         <div class="rb-label">Media</div>
       </div>
     </div>
-    <div class="rb-panel" data-sl-panel="design" hidden>
-      <div class="rb-group">
-        <div class="rb-row">
-          <div class="rb-col">
-            <label class="rb-field">Size <select id="rb-size">
-              <option value="wide">Widescreen (16:9)</option>
-              <option value="standard">Standard (4:3)</option>
-              <option value="pick">Custom Slide Size…</option>
-            </select></label>
-            <div class="rb-pair">
-              <button data-cmd="slide-templates" title="Ready-made looks for the whole deck: fonts, colours, background and shapes">Templates…</button>
-              <button data-cmd="slide-master" title="Fonts, colours, background, logo, slide numbers, footer and structure size for every slide">Slide Master…</button>
-              <button data-cmd="drawing-style" title="How structures are drawn on every slide: a journal's style or your own">Drawing Style…</button>
-            </div>
-            <div class="rb-pair">
-              <button data-cmd="edit-layouts" title="The deck's layouts: move and size their placeholders, add layouts of your own, rename them">Edit Layouts…</button>
-              <button data-cmd="size-custom" title="Any slide size, with what is on the slides scaled to fit or kept as it is">Custom Size…</button>
-            </div>
-          </div>
-        </div>
-        <div class="rb-label">Design</div>
-      </div>
-      <div class="rb-group">
-        <div class="rb-row">
-          <button class="rb-big" data-cmd="format-background" title="The background of this slide, the slides picked, or every slide: a colour, gradient, picture or pattern, see-through as you like"><span class="rb-icon">▨</span>Format Background</button>
-        </div>
-        <div class="rb-label">Customize</div>
-      </div>
-    </div>
     <div class="rb-panel" data-sl-panel="show" hidden>
       <div class="rb-group">
         <div class="rb-row">
@@ -2243,6 +2213,33 @@
       </div>
     </div>
     <div class="rb-panel" data-sl-panel="transitions" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <div class="rb-col">
+            <label class="rb-field">Size <select id="rb-size">
+              <option value="wide">Widescreen (16:9)</option>
+              <option value="standard">Standard (4:3)</option>
+              <option value="pick">Custom Slide Size…</option>
+            </select></label>
+            <div class="rb-pair">
+              <button data-cmd="slide-templates" title="Ready-made looks for the whole deck: fonts, colours, background and shapes">Templates…</button>
+              <button data-cmd="slide-master" title="Fonts, colours, background, logo, slide numbers, footer and structure size for every slide">Slide Master…</button>
+              <button data-cmd="drawing-style" title="How structures are drawn on every slide: a journal's style or your own">Drawing Style…</button>
+            </div>
+            <div class="rb-pair">
+              <button data-cmd="edit-layouts" title="The deck's layouts: move and size their placeholders, add layouts of your own, rename them">Edit Layouts…</button>
+              <button data-cmd="size-custom" title="Any slide size, with what is on the slides scaled to fit or kept as it is">Custom Size…</button>
+            </div>
+          </div>
+        </div>
+        <div class="rb-label">Design</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="format-background" title="The background of this slide, the slides picked, or every slide: a colour, gradient, picture or pattern, see-through as you like"><span class="rb-icon">▨</span>Format Background</button>
+        </div>
+        <div class="rb-label">Customize</div>
+      </div>
       <div class="rb-group">
         <div class="rb-row">
           <button class="rb-big" data-tr="preview" title="Play this slide's transition and animations"><span class="rb-icon" data-icon="preview"></span>Preview</button>

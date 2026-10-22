@@ -8,14 +8,14 @@ This page covers Slides mode: building a deck, the slide master and templates, c
 
 Click **+ Slides** at the end of the tab strip, or choose **File ▸ New Slides**. While a deck is showing, Ctrl+N starts another one. Each open file has its own tab: Ctrl+Tab moves between tabs and Ctrl+W closes one.
 
-The Slides ribbon has PowerPoint's tabs: **Home** (slides, sections, font, paragraph), **Insert** (pictures, text boxes, tables, shapes), **Design** (size, templates, slide master, layouts, drawing style, format background), **Transitions**, **Animations**, **Slide Show**, **Review** and **View** (Normal, Slide Sorter, Slide Master, Edit Layouts, Themes). The **Slide** menu at the top holds the same commands.
+The Slides ribbon has PowerPoint's tabs: **Home** (slides, sections, font, paragraph), **Insert** (pictures, text boxes, tables, shapes), **Design & Transitions** (size, templates, slide master, layouts, drawing style, format background, and the transitions between slides), **Animations**, **Slide Show**, **Review** and **View** (Normal, Slide Sorter, Slide Master, Edit Layouts, Themes). The **Slide** menu at the top holds the same commands.
 
 ## Slides and layouts
 
 - **New slide:** Ctrl+M, **Home** tab ▸ **New Slide**, or **+ New slide** under the slide list. The new slide goes after the current one.
 - **Layout:** pick one from **Layout** on the **Home** tab or **Format ▸ Slide Layout**: Title Slide, Title and Content, Two Content, Title Only, Blank, or a layout of your own (see [Layouts](#layouts)).
 - **Text:** click "Click to add title" (or any placeholder) and type. Lists and the chemistry typing helpers work as in any text box, so CH2Cl2 gets its subscripts.
-- **Slide size:** **Design** tab ▸ **Size**, or **Format ▸ Slide Size ▸ Widescreen (16:9)** / **Standard (4:3)** / **Custom Slide Size…** (see [Slide size](#slide-size)).
+- **Slide size:** **Design & Transitions** tab ▸ **Size**, or **Format ▸ Slide Size ▸ Widescreen (16:9)** / **Standard (4:3)** / **Custom Slide Size…** (see [Slide size](#slide-size)).
 - **Speaker notes:** type them in the box under the slide. A slide with notes shows a small mark in the slide list.
 
 ### The slide list
@@ -68,7 +68,7 @@ Pick slides in one deck's list and press Ctrl+C, then click in the list of anoth
 
 ## The slide master
 
-**Design** tab ▸ **Slide Master…** (or **Format ▸ Slide Master…**) sets the look of every slide at once:
+**Design & Transitions** tab ▸ **Slide Master…** (or **Format ▸ Slide Master…**) sets the look of every slide at once:
 
 - **Background:** colour, the template's shapes and its accent colours.
 - **Title slides:** their own background and text colours, if you want them different.
@@ -81,7 +81,7 @@ Click **Apply to all slides**. Text you formatted by hand keeps its own formatti
 
 ### Layouts
 
-**View** tab ▸ **Edit Layouts** (or **Design** tab ▸ **Edit Layouts…**, or **Format ▸ Slide Layout ▸ Edit Layouts…**) shows the deck's layouts, as PowerPoint's Slide Master view does. Pick one on the left to see it on the slide.
+**View** tab ▸ **Edit Layouts** (or **Design & Transitions** tab ▸ **Edit Layouts…**, or **Format ▸ Slide Layout ▸ Edit Layouts…**) shows the deck's layouts, as PowerPoint's Slide Master view does. Pick one on the left to see it on the slide.
 
 - **Move or size a placeholder:** drag it, or drag one of its corners. The arrow keys nudge the one picked (Shift for bigger steps); X, Y, W and H set its place and size in per cent of the slide.
 - **Add a placeholder:** **+ Title**, **+ Text** or **+ Subtitle**. A layout has one title. **Delete Placeholder** (or Delete) takes the one picked off.
@@ -93,7 +93,7 @@ Click **Apply**: slides with a changed layout move their placeholders to its pla
 
 ## Slide backgrounds
 
-**Design** tab ▸ **Format Background** (or **Format ▸ Format Background…**, or right-click an empty part of the slide) gives the slide a background of its own:
+**Design & Transitions** tab ▸ **Format Background** (or **Format ▸ Format Background…**, or right-click an empty part of the slide) gives the slide a background of its own:
 
 - **Solid colour**, as see-through as you like (see-through backgrounds show white behind them).
 - **Gradient:** linear, radial or rectangular, in any direction or angle, with as many colour stops as you want, each with its own place and transparency. **Preset** offers ten ready-made ones to start from.
@@ -108,7 +108,7 @@ Backgrounds are saved as PowerPoint's own, so PowerPoint (and LibreOffice) shows
 
 ## Design templates
 
-**Design** tab ▸ **Templates…** (or **Format ▸ Slide Templates…**) offers 21 ready-made looks in three groups: **Light**, **Dark title slide** and **Bright**. Picking one changes the fonts, colours, background and the shapes behind every slide. Your text, structures and pictures stay where they are, and Undo puts the old look back.
+**Design & Transitions** tab ▸ **Templates…** (or **Format ▸ Slide Templates…**) offers 21 ready-made looks in three groups: **Light**, **Dark title slide** and **Bright**. Picking one changes the fonts, colours, background and the shapes behind every slide. Your text, structures and pictures stay where they are, and Undo puts the old look back.
 
 Tick **Also start new slide decks with the template I pick** to make it the starting look for new decks. You can change any part of a template afterwards with **Slide Master…**.
 
@@ -120,7 +120,7 @@ Your themes appear under **Your themes** at the top of the window, ready to pick
 
 ## Slide size
 
-**Design** tab ▸ **Size** ▸ **Custom Slide Size…** (or **Format ▸ Slide Size ▸ Custom Slide Size…**) sets any size: pick one of the usual ones (Widescreen, Standard, 16:10, Letter, A4, A3, B4, 35 mm slides, Overhead, Banner, posters) or type the width and height in inches or centimetres, from 1 to 56 inches, and turn it to portrait. Choose how what is on the slides fits the new size:
+**Design & Transitions** tab ▸ **Size** ▸ **Custom Slide Size…** (or **Format ▸ Slide Size ▸ Custom Slide Size…**) sets any size: pick one of the usual ones (Widescreen, Standard, 16:10, Letter, A4, A3, B4, 35 mm slides, Overhead, Banner, posters) or type the width and height in inches or centimetres, from 1 to 56 inches, and turn it to portrait. Choose how what is on the slides fits the new size:
 
 - **Ensure Fit** makes everything as big as fits on the new slide.
 - **Maximize** makes it as big as the slide allows, which can run off the edges.
@@ -154,7 +154,7 @@ The small bar that appears above text while you type has the same buttons, plus 
 Every drawing tool in the toolbox works on a slide: draw structures, use the ChemDraw-style hotkeys, add reaction arrows, run Clean Up, and see R/S labels and warnings as you would in a drawing. You can also:
 
 - copy a scheme from a drawing tab (or from ChemDraw, in the Windows app) and paste it onto a slide, or the other way round. It lands in the middle of the space below the title, and a scheme too wide or tall for that space is made smaller to fit;
-- choose how structures look on every slide with **Design** tab ▸ **Drawing Style…** (a journal's style, or your own). New decks start in **Slides (ACS 1996 × 2)**, the ACS style at twice the size so structures read from the back of a room. To start new decks in another style, pick it in **Drawing Style…** and tick **Use this style for new slide decks**;
+- choose how structures look on every slide with **Design & Transitions** tab ▸ **Drawing Style…** (a journal's style, or your own). New decks start in **Slides (ACS 1996 × 2)**, the ACS style at twice the size so structures read from the back of a room. To start new decks in another style, pick it in **Drawing Style…** and tick **Use this style for new slide decks**;
 - click **Home** tab ▸ **Lock Structures** so clicks pass through structures, which makes text and pictures near them easier to pick. Click it again to edit structures.
 
 To put a drawing beside your slides while you work, see Split View in [Files and sharing](files-and-sharing.md).
@@ -201,7 +201,7 @@ Double-click a chart (or right-click ▸ **Edit Chart…**) to change it. Draggi
 
 ## Transitions
 
-Open the **Transitions** tab.
+Open the **Design & Transitions** tab.
 
 1. Pick **Fade**, **Push**, **Wipe** or **Cover**.
 2. **Effect** sets the direction.
