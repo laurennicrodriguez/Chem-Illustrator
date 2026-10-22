@@ -58,6 +58,11 @@
       "deb": {
         "section": "science"
       }
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "./windows/hooks.nsh"
+      }
     }
   },
   "plugins": {

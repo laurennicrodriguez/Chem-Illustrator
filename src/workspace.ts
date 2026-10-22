@@ -41,6 +41,8 @@ export interface Tab {
   document: DocFile | null;
   /** Zoom and scroll, kept while another tab shows. */
   view: View | null;
+  /** The view was a slide or page fitted to the window: fit it again on coming back (the window may have changed size). */
+  fitted?: boolean;
   /** Sheets and documents: the selection and scroll, kept while another tab shows. */
   sheetState: unknown;
   dirty: boolean;
@@ -127,6 +129,12 @@ function officeNote(tab: Tab, program: 'Word' | 'PowerPoint'): string {
   return `. In ${program} the structures are pictures (their SMILES are in the alt text); open the file here to edit them, or copy them from here into ChemDraw`;
 }
 
+/** What a new, unsaved file of each kind is called ("Drawing 1"). */
+export const MODE_NAMES: Record<Mode, string> = { drawing: 'Drawing', slides: 'Slides', sheet: 'Sheet', document: 'Document', design: 'Design' };
+
+/** Is this the name a new tab was given (not a file's own)? */
+export const isNewName = (name: string): boolean => /^(Drawing|Slides|Sheet|Document|Design) \d+\.[a-z]+$/.test(name) || /^Untitled/.test(name);
+
 export class Workspace {
   tabs: Tab[] = [];
   active!: Tab;
@@ -153,12 +161,12 @@ export class Workspace {
       stamp: null, autoSave: null, changes: 0, savedAt: 0, savedHow: null };
   }
 
-  /** "Untitled", "Untitled 2"… with the right extension, not already used by an open tab. */
-  private untitled(mode: Mode): string {
+  /** "Drawing 1", "Slides 2", "Design 1"… with the right extension, not already used by an open tab. */
+  private untitled(mode: Mode, going?: Tab): string {
     const ext = SAVE_TYPES[mode][0].extension;
     for (let n = 1; ; n++) {
-      const name = `${n === 1 ? 'Untitled' : `Untitled ${n}`}.${ext}`;
-      if (!this.tabs.some((t) => t.name === name)) return name;
+      const name = `${MODE_NAMES[mode]} ${n}.${ext}`;
+      if (!this.tabs.some((t) => t !== going && t.name === name)) return name;
     }
   }
 
@@ -449,7 +457,7 @@ export class Workspace {
   /** The tab showing, when it is new and untouched (an opened file takes its place). */
   private spare(): Tab | null {
     const t = this.active;
-    if (t.dirty || t.ref.kind !== 'none' || !/^Untitled/.test(t.name)) return null;
+    if (t.dirty || t.ref.kind !== 'none' || !isNewName(t.name)) return null;
     if (t.mode === 'drawing') return this.host.atoms.size || this.host.captions.size || this.host.arrows.size || this.host.shapes.size ? null : t;
     if (t.mode === 'sheet') return t.book!.edits === 0 ? t : null;
     if (t.mode === 'document') return t.document!.edits === 0 ? t : null;
@@ -572,7 +580,7 @@ export class Workspace {
       if (next) this.activate(next);
       else {
         // the last tab: a fresh drawing takes its place
-        const t = this.makeTab('drawing', 'Untitled.cdxml');
+        const t = this.makeTab('drawing', this.untitled('drawing', tab));
         this.tabs.push(t);
         this.activate(t, true);
       }
@@ -616,13 +624,16 @@ export class Workspace {
 
   /** Whether Save writes straight back to the tab's file. */
   savesInPlace(tab: Tab): boolean {
+    // a drawing from Word goes back into Word
+    if (tab.ref.kind === 'embedded') return tab.mode === 'drawing';
     const ext = extensionOf(tab.name);
     return canSaveInPlace(tab.ref) && SAVE_TYPES[tab.mode].some((t) => t.extension === ext);
   }
 
   /** Whether AutoSave can keep this tab saved: it has a file it saves to without losing anything. */
   canAutoSave(tab: Tab): boolean {
-    return this.savesInPlace(tab) && !NO_AUTOSAVE.has(extensionOf(tab.name));
+    // a drawing from Word is put back when the person says (each save rewrites the Word document's copy)
+    return this.savesInPlace(tab) && tab.ref.kind !== 'embedded' && !NO_AUTOSAVE.has(extensionOf(tab.name));
   }
 
   /** Changes whenever the tab's contents change (for AutoSave and recovery copies). */
@@ -644,7 +655,7 @@ export class Workspace {
       const deck = tab.deck;
       const bytes = await writePptx({
         size: deck.size, master: deck.master, design: tab.mode === 'design',
-        slides: deck.slides.map((s, i) => ({ layout: s.layout, doc: deck.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims, comments: s.comments, background: s.background, hideGraphics: s.hideGraphics })),
+        slides: deck.slides.map((s, i) => ({ layout: s.layout, doc: deck.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims, comments: s.comments, background: s.background, hideGraphics: s.hideGraphics, hidden: s.hidden })),
       }, { ...this.hooks.pptx, title: name.replace(/\.[^.]+$/, '') });
       return { data: bytes, type: PPTX, note: '' };
     }
@@ -725,7 +736,7 @@ export class Workspace {
     this.hooks.saved?.(tab, typeof enc.data === 'string' ? new TextEncoder().encode(enc.data) : enc.data, how, was);
     if (ref.kind === 'path' && !this.quiet) this.hooks.remember?.(ref.path);
     this.hooks.changed();
-    if (!auto) this.hooks.flash((ref.kind === 'none' ? `Downloaded ${name}` : `Saved ${name}`) + enc.note, enc.note ? 8000 : 3500);
+    if (!auto) this.hooks.flash((ref.kind === 'none' ? `Downloaded ${name}` : ref.kind === 'embedded' ? `Put the drawing back in ${ref.doc || ref.app}` : `Saved ${name}`) + enc.note, enc.note ? 8000 : 3500);
     return true;
   }
 

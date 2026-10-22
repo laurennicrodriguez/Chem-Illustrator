@@ -13,13 +13,15 @@ import { ACS_1996 } from '../style';
 import { Chart, mapChartRefs } from './chart';
 import { Dashboard, mapDashboardRefs } from './dashboard';
 import { type RefToken, Node, parseFormula, shiftFormula, shiftTree, adjustFormula, renameSheetInFormula, formulaRefs, SheetChange, normalizeFormula, FormulaSyntaxError, moveRefs } from './formula';
-import { evaluate, EvalHost } from './evaluate';
+import { evaluate, EvalHost, VOLATILE_FUNCTIONS } from './evaluate';
 import { CellError, ERR, Value, readTyped, compareValues, isError } from './values';
 import { MolProps } from './properties';
 import { formatValue } from './numfmt';
 import { MAX_COLS, MAX_ROWS, Range, colOf, keyOf, normRange, rowOf, inRange, rangesOverlap } from './refs';
 import { CondFormat, CellLook, workOutLooks } from './conditional';
 import { TableDef, tableCellLook } from './table-styles';
+import { CellNote, copyNote } from './notes';
+import { Validation, ValidationHost, validationAt } from './validation';
 
 export type BorderStyle = 'thin' | 'medium' | 'thick' | 'double' | 'dashed' | 'dotted';
 export interface Border { style: BorderStyle; color?: string }
@@ -108,6 +110,8 @@ export interface CellBlock {
   origin: { row: number; col: number } | null;
   /** What the formulas showed when copied, as typed text (for Paste Values). */
   shown?: (string | undefined)[][];
+  /** Notes and comments on the cells (pasted with everything else, as in Excel). */
+  notes?: (CellNote | undefined)[][];
 }
 
 /** A worked-out value as text that types back in as the same value. */
@@ -168,8 +172,8 @@ function patchStyleWith(s: CellStyle | undefined, patch: Partial<CellStyle>): Ce
 
 // ---------------------------------------------------------------- history
 
-type MapField = 'cells' | 'colWidths' | 'rowHeights' | 'colDefs' | 'colStyles' | 'hiddenRows' | 'hiddenCols';
-type ValueField = 'merges' | 'filter' | 'frozen' | 'name' | 'condFormats' | 'tables' | 'charts' | 'dashboard';
+type MapField = 'cells' | 'colWidths' | 'rowHeights' | 'colDefs' | 'colStyles' | 'hiddenRows' | 'hiddenCols' | 'notes';
+type ValueField = 'merges' | 'filter' | 'frozen' | 'name' | 'condFormats' | 'tables' | 'charts' | 'dashboard' | 'validations';
 
 interface Change {
   sheet: Sheet | null; // null: the workbook's list of sheets
@@ -218,6 +222,10 @@ export class Sheet {
   charts: Chart[] = [];
   /** A dashboard sheet's tiles (null: an ordinary sheet of cells). */
   dashboard: Dashboard | null = null;
+  /** Notes and comments, by cell. */
+  notes = new Map<number, CellNote>();
+  /** Data validation rules (what may be typed in some cells, and drop-down lists). */
+  validations: Validation[] = [];
   private looks: { gen: number; rules: CondFormat[]; map: Map<number, CellLook> } | null = null;
   /** Goes up each time the values are worked out again (all of them, or only those an edit changed). */
   valuesGen = 0;
@@ -287,6 +295,16 @@ export class Sheet {
       this.looks = { gen: this.valuesGen, rules: this.condFormats, map: workOutLooks(this.condFormats, host, Math.max(this.lastRow, this.lastDataRow), this.lastCol) };
     }
     return this.looks.map.get(keyOf(row, col));
+  }
+
+  /** The note or comment on a cell. */
+  noteAt(row: number, col: number): CellNote | undefined {
+    return this.notes.get(keyOf(row, col));
+  }
+
+  /** The data validation rule on a cell. */
+  validationAt(row: number, col: number): Validation | undefined {
+    return this.validations.length ? validationAt(this.validations, row, col) : undefined;
   }
 
   /** The table a cell is in, if any. */
@@ -516,6 +534,15 @@ export class Sheet {
     this.assign('dashboard', d);
   }
 
+  /** Put a note or comment on a cell (undefined takes it off). */
+  setNote(row: number, col: number, note: CellNote | undefined): void {
+    this.put('notes', this.notes, keyOf(row, col), note);
+  }
+
+  setValidations(list: Validation[]): void {
+    this.assign('validations', list);
+  }
+
   setFrozen(rows: number, cols: number): void {
     this.assign('frozen', { rows: Math.max(0, rows), cols: Math.max(0, cols) });
   }
@@ -528,8 +555,13 @@ export class Sheet {
     this.wb.rewriteAllFormulas((f) => renameSheetInFormula(f, old, name));
   }
 
-  /** Empty cells: their contents, their formatting, or both. Nothing outside the cells in use is visited. */
-  clear(r: Range, what: 'contents' | 'formats' | 'all' = 'contents'): void {
+  /**
+   * Empty cells: their contents, their formatting, both (with their notes, as Excel's Clear All),
+   * or only their notes and comments. Nothing outside the cells in use is visited.
+   */
+  clear(r: Range, what: 'contents' | 'formats' | 'all' | 'notes' = 'contents'): void {
+    if (what === 'all' || what === 'notes') for (const k of [...this.notes.keys()]) if (inRange(r, rowOf(k), colOf(k))) this.put('notes', this.notes, k, undefined);
+    if (what === 'notes') return;
     if (what !== 'contents' && r.r1 === 0 && r.r2 >= MAX_ROWS - 1) for (let c = r.c1; c <= Math.min(r.c2, this.lastCol); c++) this.setColStyle(c, undefined);
     for (const k of this.keysIn(r)) {
       const c = this.cells.get(k)!;
@@ -559,6 +591,8 @@ export class Sheet {
         else if (input?.startsWith('=') && block.origin) input = shiftFormula(input, row - (block.origin.row + i), col - (block.origin.col + j));
         const style = what === 'values' ? old?.style : src?.style;
         this.setCell(row, col, { input, structure: src?.structure, style });
+        const note = block.notes?.[i]?.[j];
+        if (what === 'all' && note) this.setNote(row, col, copyNote(note));
       }
     }
     return target;
@@ -583,8 +617,10 @@ export class Sheet {
   copy(r: Range): CellBlock {
     const cells: (Cell | undefined)[][] = [];
     const shown: (string | undefined)[][] = [];
+    const notes: (CellNote | undefined)[][] = [];
     let formulas = false;
     for (let row = r.r1; row <= r.r2; row++) {
+      if (this.notes.size) notes.push(Array.from({ length: r.c2 - r.c1 + 1 }, (_, j) => this.noteAt(row, r.c1 + j)));
       const line: (Cell | undefined)[] = [];
       const seen: (string | undefined)[] = [];
       for (let col = r.c1; col <= r.c2; col++) {
@@ -597,7 +633,8 @@ export class Sheet {
       cells.push(line);
       shown.push(seen);
     }
-    return { rows: r.r2 - r.r1 + 1, cols: r.c2 - r.c1 + 1, cells, origin: { row: r.r1, col: r.c1 }, ...(formulas ? { shown } : {}) };
+    const noted = notes.some((line) => line.some(Boolean));
+    return { rows: r.r2 - r.r1 + 1, cols: r.c2 - r.c1 + 1, cells, origin: { row: r.r1, col: r.c1 }, ...(formulas ? { shown } : {}), ...(noted ? { notes } : {}) };
   }
 
   /** The used part of a range (null when it holds nothing). */
@@ -680,6 +717,15 @@ export class Sheet {
       const nk = moved(k);
       if (nk !== null && nk !== k && (axis === 'row' ? rowOf(nk) : colOf(nk)) < (axis === 'row' ? MAX_ROWS : MAX_COLS)) this.put('cells', this.cells, nk, c);
     }
+    // notes go with their cells (and with them when they are deleted)
+    if (this.notes.size) {
+      const oldNotes = [...this.notes];
+      for (const [k] of oldNotes) if (moved(k) !== k) this.put('notes', this.notes, k, undefined);
+      for (const [k, n] of oldNotes) {
+        const nk = moved(k);
+        if (nk !== null && nk !== k && (axis === 'row' ? rowOf(nk) : colOf(nk)) < (axis === 'row' ? MAX_ROWS : MAX_COLS)) this.put('notes', this.notes, nk, n);
+      }
+    }
     const shiftMap = <V>(field: MapField, map: Map<number, V>, onAxis: boolean) => {
       if (!onAxis) return;
       const entries = [...map];
@@ -723,6 +769,10 @@ export class Sheet {
     if (this.tables.length) {
       const ts = this.tables.map((t) => ({ ...t, range: moveRange(t.range)! })).filter((t) => t.range);
       if (JSON.stringify(ts) !== JSON.stringify(this.tables)) this.setTables(ts);
+    }
+    if (this.validations.length) {
+      const vs = this.validations.map((v) => ({ ...v, ranges: v.ranges.map(moveRange).filter((r): r is Range => !!r) })).filter((v) => v.ranges.length);
+      if (JSON.stringify(vs) !== JSON.stringify(this.validations)) this.setValidations(vs);
     }
     // charts sit where their corner cell goes (at the edge of a deleted block when it goes)
     if (this.charts.length) {
@@ -796,18 +846,21 @@ export class Sheet {
     if (keyed.every((x, i) => x.row === rows[i])) return;
     const blocks = keyed.map(({ row }) => {
       const line: (Cell | undefined)[] = [];
-      for (let col = r.c1; col <= r.c2; col++) line.push(this.cell(row, col));
-      return { row, line };
+      const notes: (CellNote | undefined)[] = [];
+      for (let col = r.c1; col <= r.c2; col++) { line.push(this.cell(row, col)); notes.push(this.noteAt(row, col)); }
+      return { row, line, notes };
     });
     // rows hidden by a filter (or by hand) stay hidden as they move
     const hidden = keyed.map(({ row }) => this.hiddenRows.has(row));
-    blocks.forEach(({ row: from, line }, i) => {
+    blocks.forEach(({ row: from, line, notes }, i) => {
       const to = r.r1 + i;
       if (hidden[i] !== this.hiddenRows.has(to)) this.setRowHidden(to, hidden[i]);
       line.forEach((c, j) => {
         const col = r.c1 + j;
         const input = c?.input?.startsWith('=') ? shiftFormula(c.input, to - from, 0) : c?.input;
         this.setCell(to, col, c ? { ...c, input } : undefined);
+        // notes move with their rows, as in Excel
+        this.setNote(to, col, notes[j]);
       });
     });
   }
@@ -896,9 +949,14 @@ export class Sheet {
 const READER_COLS = 1 << 15;
 
 /** Changes that leave every value as it was. */
-const NO_VALUES = new Set<string>(['colWidths', 'rowHeights', 'colStyles', 'hiddenRows', 'hiddenCols', 'merges', 'filter', 'frozen', 'condFormats', 'tables', 'charts', 'dashboard']);
+const NO_VALUES = new Set<string>(['colWidths', 'rowHeights', 'colStyles', 'hiddenRows', 'hiddenCols', 'merges', 'filter', 'frozen', 'condFormats', 'tables', 'charts', 'dashboard', 'notes', 'validations']);
 
 const isFormulaText = (t: string | undefined): boolean => !!t && t.startsWith('=') && t.length > 1;
+
+/** A formula using INDIRECT or OFFSET, whose cells can't be known from its text. */
+const VOLATILE = new RegExp(`\\b(?:${VOLATILE_FUNCTIONS.join('|')})\\s*\\(`, 'i');
+/** How many times formulas using INDIRECT or OFFSET are worked out again, to catch up with the cells they turned out to read. */
+const VOLATILE_PASSES = 4;
 
 /** The formulas of a workbook and the order they are worked out in, as the last full recalculation found them. */
 interface Graph {
@@ -910,6 +968,10 @@ interface Graph {
   readers: Map<number, number[]>;
   /** Formulas in a loop, or reading one: they stay #CIRC! until the formulas change. */
   loop: boolean[];
+  /** The formulas in the order they were worked out (each after those it reads). */
+  order: number[];
+  /** Formulas using INDIRECT or OFFSET. */
+  volatile: number[];
   bounds: { lastRow: number; lastCol: number; lastData: number }[];
 }
 
@@ -1041,7 +1103,7 @@ export class Workbook {
       return;
     }
     const s = c.sheet!;
-    if (c.field === 'merges' || c.field === 'filter' || c.field === 'frozen' || c.field === 'name' || c.field === 'condFormats' || c.field === 'tables' || c.field === 'charts' || c.field === 'dashboard') {
+    if (c.field === 'merges' || c.field === 'filter' || c.field === 'frozen' || c.field === 'name' || c.field === 'condFormats' || c.field === 'tables' || c.field === 'charts' || c.field === 'dashboard' || c.field === 'validations') {
       (s as unknown as Record<string, unknown>)[c.field] = v;
       return;
     }
@@ -1109,6 +1171,15 @@ export class Workbook {
       if (s.dashboard) {
         const d = mapDashboardRefs(s.dashboard, (f) => fn(f, s.name));
         if (JSON.stringify(d) !== JSON.stringify(s.dashboard)) s.setDashboard(d);
+      }
+      // data validation limits and lists that are formulas or references
+      if (s.validations.some((v) => v.value1?.startsWith('=') || v.value2?.startsWith('='))) {
+        const f = (t: string | undefined) => (t?.startsWith('=') && t.length > 1 ? fn(t, s.name) : t);
+        const vs = s.validations.map((v) => {
+          const value1 = f(v.value1), value2 = f(v.value2);
+          return value1 === v.value1 && value2 === v.value2 ? v : { ...v, value1, value2 };
+        });
+        if (vs.some((v, i) => v !== s.validations[i])) s.setValidations(vs);
       }
     }
   }
@@ -1272,10 +1343,45 @@ export class Workbook {
     if (queue.length < nodes.length) {
       for (let i = 0; i < nodes.length; i++) if (!done[i]) nodes[i].s.values.set(nodes[i].key, ERR.circ());
     }
+    const volatile: number[] = [];
+    nodes.forEach((n, i) => { if (done[i] && VOLATILE.test(n.text)) volatile.push(i); });
     this.graph = {
-      sheets: [...this.sheets], nodes, dependents, readers, loop: done.map((x) => !x),
+      sheets: [...this.sheets], nodes, dependents, readers, loop: done.map((x) => !x), order: queue, volatile,
       bounds: this.sheets.map((s) => ({ lastRow: s.lastRow, lastCol: s.lastCol, lastData: s.lastDataRow })),
     };
+    this.settleVolatile(this.graph);
+  }
+
+  /**
+   * INDIRECT and OFFSET read cells their formula's text doesn't name, so they may have been
+   * worked out before those cells were. Work them out again, with the formulas that read them, in
+   * the same order, until nothing changes.
+   */
+  private settleVolatile(g: Graph): void {
+    if (!g.volatile.length) return;
+    const pos = new Map<number, number>();
+    g.order.forEach((i, k) => pos.set(i, k));
+    const todo = new Set<number>();
+    const stack = [...g.volatile];
+    while (stack.length) {
+      const i = stack.pop()!;
+      if (todo.has(i) || g.loop[i]) continue;
+      todo.add(i);
+      for (const j of g.dependents[i]) if (!todo.has(j)) stack.push(j);
+    }
+    const list = [...todo].sort((a, b) => pos.get(a)! - pos.get(b)!);
+    for (let pass = 0; pass < VOLATILE_PASSES; pass++) {
+      let changed = false;
+      for (const i of list) {
+        const n = g.nodes[i];
+        const before = n.s.values.get(n.key);
+        this.evaluateNode(n);
+        const after = n.s.values.get(n.key);
+        if (!(before === after || (isError(before) && isError(after) && before.code === after.code))) changed = true;
+      }
+      if (!changed) break;
+    }
+    for (const i of list) g.nodes[i].s.valuesGen++;
   }
 
   /**
@@ -1321,6 +1427,8 @@ export class Workbook {
       const r = rowOf(t.key);
       for (let j = 0; j < list.length; j += 3) if (list[j] <= r && r <= list[j + 1]) start.add(list[j + 2]);
     }
+    // formulas using INDIRECT or OFFSET might read any cell
+    for (const i of g.volatile) start.add(i);
     // and those that read those, and so on
     const todo = new Set<number>();
     const stack = [...start];
@@ -1351,6 +1459,7 @@ export class Workbook {
     if (worked < todo.size) for (const i of todo) if (indeg.get(i)) g.nodes[i].s.values.set(g.nodes[i].key, ERR.circ());
     for (const s of new Set(typed.map((t) => t.s))) s.valuesGen++;
     for (const i of todo) g.nodes[i].s.valuesGen++;
+    this.settleVolatile(g);
     return true;
   }
 
@@ -1363,6 +1472,14 @@ export class Workbook {
     } catch (e) {
       return ERR.value(`This formula could not be worked out (${(e as Error).message})`);
     }
+  }
+
+  /** What data validation needs to work out its limits and lists on a sheet. */
+  validationHost(s: Sheet): ValidationHost {
+    return {
+      formulaAt: (f, home, row, col) => this.formulaAt(s, f, home, row, col),
+      sheetNamed: (name) => this.sheetNamed(name),
+    };
   }
 
   private evaluateNode(n: { s: Sheet; key: number; text: string }): void {

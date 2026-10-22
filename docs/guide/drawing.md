@@ -93,7 +93,7 @@ To make your own template, select a structure and click the first button on the 
 - **Homolysis**: select one or more bonds and choose **Chemistry ▸ Mechanism Arrows ▸ Homolysis Arrows** (or right-click the bond) for the two fishhooks that split each bond, one to each atom, on the open side.
 - **Moving an arrow's end:** drag the end of a curved arrow onto a lone pair, atom or bond and it snaps there, keeping the side it bends to. Hold Alt to put the end anywhere.
 - **Clean Up Arrow** (**Chemistry ▸ Mechanism Arrows ▸ Clean Up Arrow**, or right-click a curved arrow): redraws the selected curved arrows from the lone pair, bond or atom their tail is on to what their head points at, starting and ending at a sensible angle and clear of the structure. S-shaped arrows stay S-shaped. Undo puts them back. It has no key to start with; give it one in **Edit ▸ Hotkeys…**. Right-click a curved arrow for the **Mechanism Arrow** menu with all of these.
-- Curved arrows find their own way: a new arrow keeps clear of atoms, labels, bonds and other arrows, and never puts its head on another arrow's head or under a label. When you move or change a structure so that an arrow stuck to it would run into something, the arrow finds a clear way round again. An arrow you have bent by hand (by its middle handle, which shows a bend pointer) keeps its bend; Clean Up Arrow lets it find its own way again. **Edit ▸ Preferences** turns the re-routing off.
+- Curved arrows find their own way: a new arrow keeps clear of atoms, labels, bonds and other arrows, and never puts its head on another arrow's head or under a label. When you move or change a structure so that an arrow stuck to it would run into something, the arrow finds a clear way round again. An arrow you have bent by hand (by its middle handle, which shows a bend pointer) keeps its bend; Clean Up Arrow lets it find its own way again. **Edit ▸ Settings** turns the re-routing off.
 - **Files:** S-shaped arrows are saved in .cdxml and .cdx as ChemDraw curves with arrowheads, so ChemDraw shows them. What an arrow is stuck to is saved too, for Chem Illustrator; ChemDraw ignores it.
 - **Mechanism symbols**: lone pair, radical dot, circled plus and minus, δ+ and δ−, and ‡ (click where it goes). Click an atom and the symbol goes in the most open space round it. To put a lone pair (or radical dot or circled charge) somewhere else, press on the atom and drag: the symbol goes round the atom after the pointer, and lands where you let go. Hold Alt (or Shift) while dragging to turn it in 15° steps, as when turning a structure. A radical dot makes the atom a radical (one H fewer); a circled charge sets the atom's charge.
 - **Charges by labels** sit raised after the label (N⁺). A bond that runs under the sign stops short of it, as in ChemDraw; if that would leave almost nothing of a short bond, the charge moves to a free spot round the label instead.
@@ -128,7 +128,7 @@ Double-click a caption to edit it again. Press Esc to finish.
 The label box opens right on the atom: its first letter sits where the atom is, in the label font, and the box grows as you type. Counts drop and charges rise as you type them (CH₂CO₂Me, NH₃⁺), just as the label will show. Press Enter or click away to finish.
 
 - To raise or lower other characters, select them in the box and press **Ctrl+Shift+=** (raise) or **Ctrl+=** (lower). Press it again to put them back. The marks are saved in the .cdxml file, so ChemDraw shows them too.
-- A label that is just R and a number (R1, R12) shows the number raised: R¹, R¹². Longer labels such as OR1 or CO2R1 keep their numbers lowered, and labels from files keep the look they were saved with. **Edit ▸ Preferences** turns raised R numbers off.
+- A label that is just R and a number (R1, R12) shows the number raised: R¹, R¹². Longer labels such as OR1 or CO2R1 keep their numbers lowered, and labels from files keep the look they were saved with. **Edit ▸ Settings** turns raised R numbers off.
 
 While you type, a bar along the top of the drawing has bold, italic and underline, subscript and superscript, **formula style**, font, size and colour, alignment, bullets and numbering, indents, line and paragraph spacing, and a set of Greek letters and symbols (**αΩ**). It sits along the top so it never covers what you have drawn; **View ▸ Text Formatting Bar** can float it just above the text instead, or hide it (the keys below still work).
 
@@ -145,13 +145,13 @@ Useful keys while typing:
 
 Formula style writes CH3CO2H with its numbers lowered and raises a + at the end of a word (NH4+). To raise a minus charge or a charge with a number (Fe3+), select it and use superscript, as in ChemDraw.
 
-As you type, common chemistry is tidied for you: CH2Cl2 gets its subscripts, `0 oC` becomes 0 °C, `1H NMR` gets its superscript. Press Ctrl+Z straight away to undo just that change. Misspelt words get a red underline and formatting slips (a hyphen in a range, a number run into its unit) a blue one; right-click for suggestions. **Edit ▸ Typing and Spelling…** turns these helpers off, adds your own replacements (`rxn` → reaction) and edits your dictionary.
+As you type, common chemistry is tidied for you: CH2Cl2 gets its subscripts, `0 oC` becomes 0 °C, `1H NMR` gets its superscript, and the letters of a stereodescriptor go italic as the name goes on ((*S*)-proline, (2*E*,4*Z*)-). Compound numbers can go bold as you type them, (**4**) or compound **4a**: tick that in **Edit ▸ Typing and Spelling…** (it is off at first, so list items such as (1) stay plain). Press Ctrl+Z straight away to undo just that change. Misspelt words get a red underline and formatting slips (a hyphen in a range, a number run into its unit) a blue one; right-click for suggestions. **Edit ▸ Typing and Spelling…** turns these helpers off, adds your own replacements (`rxn` → reaction) and edits your dictionary.
 
 You can paste formatted text from Word into a text box; bold, italic, subscripts, colours and lists come across.
 
 ### Linking text to a structure
 
-Select a caption and a structure and choose **Format ▸ Link Text to Structure** (also on the right-click menu). The text then moves, turns and copies with its structure. With only text selected, it links to the nearest structure. While either one is selected, a dotted grey line shows the link. **Format ▸ Unlink Text** lets it go again. **Edit ▸ Preferences** chooses where linked text goes: where it already is, or below, above, left or right of the structure.
+Select a caption and a structure and choose **Format ▸ Link Text to Structure** (also on the right-click menu). The text then moves, turns and copies with its structure. With only text selected, it links to the nearest structure. While either one is selected, a dotted grey line shows the link. **Format ▸ Unlink Text** lets it go again. **Edit ▸ Settings** chooses where linked text goes: where it already is, or below, above, left or right of the structure.
 
 ### Turning text
 
@@ -175,7 +175,7 @@ The **Format** menu has:
 - **Rotate 90° Clockwise**, **Rotate 90° Anticlockwise**, **Rotate 180°** and **Rotate…** (Ctrl+R, any angle);
 - **Scale…** (Ctrl+K): by a percentage, or to a bond length in points;
 - **Join** (Ctrl+J): joins two selected atoms, or two selected bonds, into one;
-- **Group** (Ctrl+G) and **Ungroup** (Ctrl+Shift+G): grouped structures, text, arrows and shapes select and move as one. Clicking any part selects the whole group, and a grey dashed box shows it; **Edit ▸ Preferences** can make a click pick just the one thing instead. Groups are kept in CDXML files, so ChemDraw opens them as groups too;
+- **Group** (Ctrl+G) and **Ungroup** (Ctrl+Shift+G): grouped structures, text, arrows and shapes select and move as one. Clicking any part selects the whole group, and a grey dashed box shows it; **Edit ▸ Settings** can make a click pick just the one thing instead. Groups are kept in CDXML files, so ChemDraw opens them as groups too;
 - **Bring to Front** and **Send to Back** for shapes and pictures;
 - **Bring Bond to Front** and **Send Bond to Back**: where two bonds cross, the one behind gets a small gap.
 
@@ -193,14 +193,14 @@ To start a reaction quickly, select a structure and press Ctrl+→ (or Ctrl+←,
 - **Check Structure (next warning)**: goes to the next problem; see [Warnings](#warnings).
 - **Aromatic Rings: Circle or Double Bonds** (Alt+K): switches selected rings (or all) between a circle and alternating double bonds.
 - **H Atoms: Hide or Draw**: hides hydrogens that add nothing (not ones on wedges, charged ones, or ones on N or O); with nothing to hide, it draws the selected atoms' hydrogens.
-- **Show Terminal Methyls (or Hide)**: writes chain ends out as CH3 or Me, or takes them away again. Choose Me or CH3 in **Edit ▸ Preferences**. With one structure selected, the Style panel's **Terminal methyls** box sets it for that structure.
+- **Show Terminal Methyls (or Hide)**: writes chain ends out as CH3 or Me, or takes them away again. Choose Me or CH3 in **Edit ▸ Settings**. With one structure selected, the Style panel's **Terminal methyls** box sets it for that structure.
 
 ### Labels and groups
 
 - **Contract Label…**: turns a selected group into one label (such as PMP) that keeps its chemistry. ChemDraw opens it as a contracted label.
 - **Expand Label**: the other way round: the selected labels drawn out as atoms and bonds (ligands on a metal from their templates). See [Metal complexes](#metal-complexes).
 - **Define Nickname…**: select a group that hangs off a structure by one bond and give it a name. Typing that name as a label anywhere then counts as the full group for formula and mass. **Delete Nickname…** removes one.
-- **Name to Structure…** (Ctrl+Shift+N): type a systematic, CAS-style or common name and the structure is drawn. Select a caption holding a name first to turn the caption into the structure. Names are read on your computer, so this works offline; names it can't read (DMAP, DIPEA) can be looked up on PubChem if you allow it in **Edit ▸ Preferences**. When a name can't be read, the window says so, underlines the part the name reader stopped at, and keeps the reader's own explanation under **Details**.
+- **Name to Structure…** (Ctrl+Shift+N): type a systematic, CAS-style or common name and the structure is drawn. Select a caption holding a name first to turn the caption into the structure. Names are read on your computer, so this works offline; names it can't read (DMAP, DIPEA) can be looked up on PubChem if you allow it in **Edit ▸ Settings**. When a name can't be read, the window says so, underlines the part the name reader stopped at, and keeps the reader's own explanation under **Details**.
 
 ### Frames, highlights and fills
 
@@ -231,7 +231,7 @@ R/S and E/Z are worked out for every structure as you draw.
 - **View ▸ Show R/S Preview** shows every label in red, on screen only.
 - **Chemistry ▸ Stereo ▸ Show Stereo Labels (R/S, E/Z)** adds them to the selected structures (or all) as part of the drawing; they update themselves after edits. Select a stereocentre to hide its label or type your own, such as (R*).
 - Plain bold bonds count as wedges and plain hashed bonds as hashed wedges, as in ChemDraw. Where R or S would depend on what an R or Ar group is, no label is given.
-- **Axial chirality** (biaryls, allenes, alkylidenecycloalkanes) is labelled Ra or Sa by IUPAC rule P-93.5.1. Draw the groups on one end of the axis with a wedge and a hash (or one wedge) to show which way round it is. Without that, or when one end has two of the same group, no label is shown. **Edit ▸ Preferences** writes them as P/M instead (Ra = M, Sa = P).
+- **Axial chirality** (biaryls, allenes, alkylidenecycloalkanes) is labelled Ra or Sa by IUPAC rule P-93.5.1. Draw the groups on one end of the axis with a wedge and a hash (or one wedge) to show which way round it is. Without that, or when one end has two of the same group, no label is shown. **Edit ▸ Settings** writes them as P/M instead (Ra = M, Sa = P).
 - **Stereo Group (abs, &, or)…**: marks selected stereocentres as abs (known as drawn), &1 (a mixture of both forms) or or1 (one form, not known which).
 - **Chiral Flag (Abs, Rel, Rac)…**: puts the boxed flag under the selected structure, or removes it.
 

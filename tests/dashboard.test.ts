@@ -184,7 +184,8 @@ describe('saving to Excel', () => {
     expect(strFromU8(f['xl/charts/chart1.xml'])).toContain('<c:barChart>');
     const strings = strFromU8(f['xl/sharedStrings.xml']);
     expect(strings).toContain('Mean yield');
-        expect(strings).toContain('Showing Catalyst: Pd(OAc)2');
+    // formulas in text show as chemistry in Excel too (the 2 as a subscript run)
+    expect(strings).toContain('<t>Showing Catalyst: Pd(OAc)</t></r><r><rPr><vertAlign val="subscript"/></rPr><t>2</t>');
     expect(strings).toContain('Screen of 14 Oct');
     const sheet2 = strFromU8(f['xl/worksheets/sheet2.xml']);
     // the headline number spans its tile in Excel (no ####)

@@ -92,6 +92,45 @@ export interface HeaderFooter {
   onFirst: boolean;
 }
 
+/** How a section starts: on a new page (Next Page), on the same page (Continuous), or on the next even or odd page. */
+export type BreakKind = 'nextPage' | 'continuous' | 'evenPage' | 'oddPage';
+
+/** How page numbers are written, by Word's names: 1, 2, 3; i, ii, iii; I, II, III; a, b, c; A, B, C. */
+export type PageNumFormat = 'decimal' | 'lowerRoman' | 'upperRoman' | 'lowerLetter' | 'upperLetter';
+
+/** Line numbers in the margin beside the text (Layout > Line Numbers), as in Word. */
+export interface LineNumbers {
+  /** The first number. */
+  start: number;
+  /** Show every nth number (1: every line; 5: 5, 10, 15…). Every line is still counted. */
+  countBy: number;
+  /** From the text to the numbers, in points (Word's Auto, a quarter inch, when left out). */
+  distance?: number;
+  /** Count from the start again on each page, in each section, or never. */
+  restart: 'page' | 'section' | 'continuous';
+}
+
+/** Word's Auto distance from the text to the line numbers (a quarter inch). */
+export const LINE_NUMBER_GAP = 18;
+
+/**
+ * A section break: the paragraph holding it starts a new section, with its own page setup,
+ * header and footer, page numbering and line numbers (the first section's are the document's).
+ */
+export interface SectionBreak {
+  kind: BreakKind;
+  /** Its paper, margins and columns (the section before's when left out). */
+  page?: PageSetup;
+  /** Its own header and footer; left out, the section before's (Word's Link to Previous). */
+  hf?: HeaderFooter;
+  /** Page numbers start again here, from this; left out, they carry on from the section before. */
+  restart?: number;
+  /** How its page numbers are written (1, 2, 3 when left out). */
+  format?: PageNumFormat;
+  /** Its line numbers (none when left out). */
+  lines?: LineNumbers;
+}
+
 /** A figure's or picture's frame and shadow (Word's Picture Format). */
 export interface FigureLook {
   /** A line round it, this many points wide, in `frameColor` (black when not set). */
@@ -183,6 +222,16 @@ export type DocObject =
   | { kind: 'bib' }
   /** A table of contents: the headings down to `levels` (1 to 3) deep with their page numbers (a block of its own). */
   | { kind: 'toc'; levels: number }
+  /**
+   * A table of figures: the captions of one label (Figure, Scheme, Table, Chart), or of all of
+   * them when `name` is '', with their page numbers (a block of its own, like the contents).
+   */
+  | { kind: 'tof'; name: string }
+  /**
+   * A footnote (or, with `end`, an endnote): its number in the text, and its own text, typed into
+   * in place at the bottom of the page (or at the end of the document), as in Word.
+   */
+  | { kind: 'note'; end?: boolean; runs: TextRun[]; paras?: ParaStyle[] }
   /** An equation, typed as LaTeX and shown laid out as maths (see math.ts); a Word equation in .docx files. */
   | { kind: 'math'; tex: string };
 
@@ -203,6 +252,51 @@ export interface DocText extends RichText {
   track?: boolean;
   /** Comments (Review > New Comment), by id; the text they are on carries the id (see comments.ts). */
   comments?: Record<number, CommentThread>;
+  /** How footnotes and endnotes are numbered (1, 2, 3 and i, ii, iii unless chosen). */
+  notes?: NoteFormats;
+  /** How the first section's page numbers are written (1, 2, 3 unless chosen; later sections have their own). */
+  numFormat?: PageNumFormat;
+  /** The first section's line numbers (none unless chosen). */
+  lineNumbers?: LineNumbers;
+}
+
+/** How footnotes or endnotes are numbered, by Word's names: 1, 2, 3; i, ii, iii; a, b, c; *, †, ‡ (chicago). */
+export type NoteFormat = 'decimal' | 'lowerRoman' | 'upperRoman' | 'lowerLetter' | 'upperLetter' | 'chicago';
+
+export interface NoteFormats { foot?: NoteFormat; end?: NoteFormat }
+
+/** Word's own numbering: footnotes 1, 2, 3 and endnotes i, ii, iii. */
+export const FOOT_FORMAT: NoteFormat = 'decimal';
+export const END_FORMAT: NoteFormat = 'lowerRoman';
+
+const ROMAN: [number, string][] = [[1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i']];
+const CHICAGO = ['*', '†', '‡', '§'];
+
+/** The `n`th note's mark (from 1) in a numbering format: 3, iii, c, ‡ (then **, ††… as Word goes on). */
+export function noteLabel(n: number, fmt: NoteFormat): string {
+  n = Math.max(1, Math.floor(n));
+  switch (fmt) {
+    case 'lowerRoman': case 'upperRoman': {
+      let out = '', v = n;
+      for (const [k, s] of ROMAN) while (v >= k) { out += s; v -= k; }
+      return fmt === 'upperRoman' ? out.toUpperCase() : out;
+    }
+    case 'lowerLetter': case 'upperLetter': {
+      // a, b … z, then aa, bb … (Word's way)
+      const ch = String.fromCharCode(97 + ((n - 1) % 26)).repeat(Math.floor((n - 1) / 26) + 1);
+      return fmt === 'upperLetter' ? ch.toUpperCase() : ch;
+    }
+    case 'chicago': return CHICAGO[(n - 1) % 4].repeat(Math.floor((n - 1) / 4) + 1);
+    default: return String(n);
+  }
+}
+
+/** The style of footnote and endnote text: the document's Footnote Text style, or Normal a point smaller, single spaced, with no space round paragraphs. */
+export function noteStyle(t: Pick<DocText, 'styles'>): NamedStyle {
+  const own = t.styles.FootnoteText;
+  if (own) return own;
+  const N = styleOf(t, undefined);
+  return { ...N, id: 'FootnoteText', name: 'Footnote Text', size: Math.max(6, N.size - 1), align: 'left', spaceBefore: 0, spaceAfter: 0, line: 1, indent: 0, firstLine: 0, keepNext: false, next: undefined, outline: undefined };
 }
 
 // ---------------------------------------------------------------- defaults
@@ -270,7 +364,7 @@ export function runStyleOf(s: NamedStyle): rt.RunStyle {
 /** A paragraph in a style: the style's spacing, indents and alignment, keeping its list, level and page break. */
 export function paraFromStyle(s: NamedStyle, keep: ParaStyle): ParaStyle {
   return cleanPara({
-    list: keep.list, level: keep.level, cont: keep.cont, pageBreak: keep.pageBreak, colBreak: keep.colBreak,
+    list: keep.list, level: keep.level, cont: keep.cont, pageBreak: keep.pageBreak, colBreak: keep.colBreak, section: keep.section, noLineNumbers: keep.noLineNumbers,
     style: s.id === 'Normal' ? undefined : s.id,
     align: s.align === 'left' ? undefined : s.align,
     spaceBefore: s.spaceBefore, spaceAfter: s.spaceAfter,
@@ -382,10 +476,43 @@ export function innerObjects(o: DocObject | undefined): number[] {
 export function flatRuns(t: Pick<DocText, 'runs' | 'objects'>): TextRun[] {
   if (!Object.values(t.objects).some((o) => o.kind === 'table')) return t.runs;
   const out: TextRun[] = [];
-  for (const r of t.runs) {
-    out.push(r);
-    const o = r.obj !== undefined ? t.objects[r.obj] : undefined;
-    if (o?.kind === 'table') for (const row of o.table.rows) for (const c of row) out.push(...c.runs);
+  const seen = new Set<number>();
+  const add = (runs: TextRun[]) => {
+    for (const r of runs) {
+      out.push(r);
+      const o = r.obj !== undefined ? t.objects[r.obj] : undefined;
+      // a table's cells (and those of any table inside them)
+      if (o?.kind === 'table' && !seen.has(r.obj!)) { seen.add(r.obj!); for (const row of o.table.rows) for (const c of row) add(c.runs); }
+    }
+  };
+  add(t.runs);
+  return out;
+}
+
+/**
+ * The tables inside table cells, the innermost first (each laid out before the cell holding
+ * it), with how deep each one is (1 for a table in a cell of a table in the text).
+ */
+export function nestedTables(t: Pick<DocText, 'objects'>): { id: number; depth: number; parent: number }[] {
+  const out: { id: number; depth: number; parent: number }[] = [];
+  const seen = new Set<number>();
+  const held = new Set<number>();
+  for (const o of Object.values(t.objects)) {
+    if (o.kind === 'table') for (const row of o.table.rows) for (const c of row) for (const r of c.runs) if (r.obj !== undefined && t.objects[r.obj]?.kind === 'table') held.add(r.obj);
+  }
+  const visit = (id: number, depth: number) => {
+    const o = t.objects[id];
+    if (o?.kind !== 'table') return;
+    for (const row of o.table.rows) for (const c of row) for (const r of c.runs) {
+      if (r.obj === undefined || t.objects[r.obj]?.kind !== 'table' || seen.has(r.obj)) continue;
+      seen.add(r.obj);
+      visit(r.obj, depth + 1);
+      out.push({ id: r.obj, depth: depth + 1, parent: id });
+    }
+  };
+  for (const [k, o] of Object.entries(t.objects)) {
+    const id = Number(k);
+    if (o.kind === 'table' && !held.has(id)) { seen.add(id); visit(id, 0); }
   }
   return out;
 }
@@ -445,14 +572,20 @@ export const COMPOUND = 'Compound';
  * A reference to a compound shows just its number. A citation shows the numbers of the
  * references it cites (in the order references are first cited).
  */
-export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions'>>): Map<number, string> {
+export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions' | 'notes'>>): Map<number, string> {
   const shown = new Map<number, string>();
   const counts = new Map<string, number>();
   // numbers inside tables count in their place too
   t = { ...t, runs: flatRuns(t) };
   const order = objectsInText(t.runs);
+  let foot = 0, end = 0;
   for (const id of order) {
     const o = t.objects[id];
+    // footnotes and endnotes are numbered apart, each in its own format
+    if (o?.kind === 'note') {
+      shown.set(id, o.end ? noteLabel(++end, t.notes?.end ?? END_FORMAT) : noteLabel(++foot, t.notes?.foot ?? FOOT_FORMAT));
+      continue;
+    }
     if (o?.kind !== 'seq') continue;
     const n = (counts.get(o.name) ?? 0) + 1;
     counts.set(o.name, n);
@@ -526,7 +659,7 @@ export function paragraphAt(t: Pick<RichText, 'runs'>, offset: number): { index:
 }
 
 /** Text of a document without objects (for word counts, searching and plain copies). */
-export function documentPlainText(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions'>>): string {
+export function documentPlainText(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions' | 'notes'>>): string {
   const shown = fieldTexts(t);
   let out = '';
   for (const r of t.runs) {

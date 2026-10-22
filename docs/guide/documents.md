@@ -82,13 +82,21 @@ The first three go straight into the text with the caret in the first cell. Type
 While you are in a table, the **Table** tab offers:
 
 - **Insert Above**, **Below**, **Left**, **Right**; **Delete Row**, **Delete Column**, **Delete Table**;
-- **Merge Right**, **Split Cell**, **Select Table**;
+- **Merge Right**, **Merge Down**, **Split Cell**, **Table in Cell**, **Select Table**;
 - **Lines** (grid, ACS rules or none) and **Heading rows**;
 - **Shading** and **No Shading**;
 - alignment **Across** (Left, Centre, Right, for the column) and **Down** (Top, Middle, Bottom, for the cell);
 - **Column width**, **Fit to Contents**, **Fit to Page** and **Even Columns**.
 
 The same commands are on the right-click menu. Esc picks the whole table, and Delete then removes it.
+
+### Merged cells and tables in cells
+
+**Merge Right** joins a cell with the one beside it; **Merge Down** joins it with the one below, so one cell runs down a column (a catalyst used for several entries, say). Merge again to take in more cells. Cells only merge when they line up: a cell two columns wide merges down into another cell two columns wide. The text of the cell taken in goes after the first cell's as a new paragraph. **Split Cell** puts a merged cell back into single cells, its text staying in the first. Inserting or deleting a row inside a merged cell makes it longer or shorter, and Tab and the arrow keys skip the cells it covers.
+
+**Table in Cell** (or **Insert** ▸ **Table** while you are typing in a cell) puts a table inside the cell, as wide as the cell, for conditions or results that need their own small grid. Click into its cells to type in them; the arrow keys take you out of it, back into the cell holding it. Its own Table tab commands (rows, merging, lines) work as for any table.
+
+Word files keep both: merged cells are saved and opened as Word's merged cells, and a table in a cell as Word's nested table.
 
 ### Structures in table cells
 
@@ -106,14 +114,14 @@ For a substrate-scope or screening table, put the caret in a cell and use **Inse
 
 On the **References** tab:
 
-- **Insert Caption** adds a numbered caption: Figure, Scheme, Table, Chart or Equation. Choose **S** under "Before the number" for Supporting Information numbering (Scheme S1).
+- **Insert Caption** adds a numbered caption: Figure, Scheme, Table, Chart or Equation. Choose **S** under "Before the number" for Supporting Information numbering (Scheme S1). **Position** puts it above or below the selected item; left as it is, schemes and tables get their caption above and figures below, as journals set them.
 - **Cross-reference** puts "Scheme S1" in the text.
 
 Add, delete or move captions and every number and reference follows.
 
 ## Compound numbers
 
-**References** tab ▸ **Compound Number** puts a bold compound number in the text. Choose **A new compound** for the next number, or pick one already numbered to mention it again. Numbers follow the order compounds are first mentioned, so adding one earlier in the text renumbers the rest. Type a letter after a number for a series (2a, 2b).
+**References** tab ▸ **Compound Number** (Alt+Shift+N) puts a bold compound number in the text. Choose **A new compound** for the next number, or pick one already numbered to mention it again. Numbers follow the order compounds are first mentioned, so adding one earlier in the text renumbers the rest. Type a letter after a number for a series (2a, 2b).
 
 ## References and bibliography
 
@@ -147,10 +155,23 @@ Journal requirements change, so check the result against a recent issue of your 
 On the **Layout** tab:
 
 - **Margins**, **Paper** (Letter, A4 or your own size), **Orientation**.
-- **Page Break** (Ctrl+Enter).
-- **Columns**: One, Two, Three or Four; **More Columns…** sets the gap. **Column Break** (Ctrl+Shift+Enter) starts the next column.
-- **Page numbers**: top or bottom, left, centre or right. **S1, S2… numbering** numbers the pages as Supporting Information is numbered.
+- **Breaks**: **Page** (Ctrl+Enter), **Column** (Ctrl+Shift+Enter) and the section breaks (below).
+- **Columns**: One, Two, Three or Four; **More Columns…** sets the gap.
+- **Page numbers**: top or bottom, left, centre or right. **S1, S2… numbering** numbers the pages as Supporting Information is numbered. **Number Format…** writes them 1, 2, 3 or i, ii, iii (or I, II; a, b; A, B) and sets where the numbering starts.
 - **Header…** and **Footer…** set the text at the top and bottom of every page. The ⬊ in the corner of the group sets where they sit, the first page number and whether the first page is numbered.
+- **Line Numbers**: numbers down the left margin, as journals ask for in manuscripts under review: **Continuous**, **Restart Each Page** or **Restart Each Section**. **Suppress for Current Paragraph** leaves the selected paragraphs out (a title, say). **Line Numbering Options…** sets the first number, shows only every 5th (or any nth) number, and sets how far they sit from the text.
+
+### Sections
+
+A section break starts a new section, which can have its own paper size, orientation, margins, columns, header and footer, page numbering and line numbers. Choose one from **Layout** ▸ **Breaks** (or **Insert ▸ Section Break**):
+
+- **Next Page**: the new section starts on a new page. Use it for a landscape page with a wide table, or to number the front matter i, ii, iii and the text 1, 2, 3.
+- **Continuous**: the new section starts on the same page. Use it for a title and abstract across the page with two columns of text under them. Columns before a continuous break are evened up, as in Word.
+- **Even Page** and **Odd Page**: the new section starts on the next even or odd page (a blank page is left when needed), as chapters of a thesis do.
+
+The margins, paper, orientation, columns, page numbers and line numbers on the ribbon and in the ⬊ settings are for the section the caret is in (the status bar says which). In the Page Setup settings, **Apply to: Whole document** changes every section at once. A new section's header and footer are **Same as previous section** (Word's Link to Previous) until you type a header or footer of its own or untick it; its page numbers carry on from the section before unless you untick **Continue from previous section** and give a first page number.
+
+To remove a section break, put the caret at the start of the paragraph after it and press **Backspace** (the text joins the section before). **Draft** view shows section breaks as double dotted lines, labelled with their kind. Sections, their headers and footers, page numbering and line numbers are saved in Word files as Word's own and open again here as they were.
 
 ## Table of contents
 
@@ -158,9 +179,22 @@ Give your headings **Heading 1**, **2** or **3**, put the caret where the conten
 
 The contents keep themselves up to date: page numbers change as text moves, and renamed headings change as you type. There is no Update button. Double-click the contents to change the number of levels. With S1, S2 page numbering, the contents use the same numbers.
 
+## Table of figures
+
+**References** tab ▸ **Table of Figures** (also **Insert ▸ Table of Figures…**) lists the captions made with Insert Caption, each with its page number after a line of dots. Choose Figure, Scheme, Table or Chart captions, or all of them. Like the contents, it keeps itself up to date; double-click it to list other captions. In Word it is Word's own table of figures.
+
+## Footnotes and endnotes
+
+- **References** tab ▸ **Insert Footnote** (Ctrl+Alt+F) puts the next number in the text and the caret in the note at the foot of the page. Type the note, then press **Escape** to go back to the text.
+- **Insert Endnote** (Ctrl+Alt+D) does the same with a note after the end of the text.
+- Click a note to change it; double-click a number in the text to go to its note. Delete a note by deleting its number.
+- **Note Options…** chooses how footnotes and endnotes are numbered (1, 2, 3; i, ii, iii; a, b, c; *, †, ‡) and turns all footnotes into endnotes or back. Right-click a number to convert just that one.
+- A line and its footnote stay on the same page. In Draft, Web Layout and Outline the footnotes show after the text.
+- Word files keep them as Word's own footnotes and endnotes, both ways.
+
 ## Tracked changes
 
-1. **Review** tab ▸ **Track Changes** (Ctrl+Shift+E). The first time, it asks for the name to put on your changes; change it later with **Your Name…** or in **Edit ▸ Preferences…**.
+1. **Review** tab ▸ **Track Changes** (Ctrl+Shift+E). The first time, it asks for the name to put on your changes; change it later with **Your Name…** or in **Edit ▸ Settings…**.
 2. Text you type is underlined in your colour; text you delete stays, struck through.
 3. **◀ Previous** and **Next ▶** step through the changes; the bar at the bottom says who made each one and when.
 4. **Accept** or **Reject** decides the change at the caret (or every change in a selection) and moves to the next. **Accept All** and **Reject All** do the whole document. Right-click a change for Accept and Reject too.
@@ -220,7 +254,7 @@ Saving, printing and PDFs always use the pages of Print Layout, whatever view is
 
 ## Saving as Word and PDF
 
-- **Save** (Ctrl+S) writes a Word file (.docx). In Word, styles are Word's own, lists are Word lists, and captions, cross-references, compound numbers, page numbers and the table of contents are Word fields. Tracked changes and equations are Word's own too, so they keep working there.
+- **Save** (Ctrl+S) writes a Word file (.docx). In Word, styles are Word's own, lists are Word lists, and captions, cross-references, compound numbers, page numbers, the table of contents and the table of figures are Word fields, and footnotes and endnotes are Word's own. Tracked changes and equations are Word's own too, so they keep working there.
 - Structures show as pictures in Word. Open the file here again and they are editable drawings, even after Word has saved it.
 - The free fonts that come with the app are saved inside the file when you use them.
 - Opening a Word file made in Word brings in its text, styles, lists, tables, pictures, captions and cross-references. ChemDraw drawings embedded in it become editable structures. Anything left out is listed in a note.

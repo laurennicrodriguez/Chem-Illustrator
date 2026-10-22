@@ -44,13 +44,20 @@ Any calculated value can be typed over, for example with a measured mass. The ce
 
 ### Reagent tables
 
-**Home** tab ▸ **Reagent Table** (or **Insert ▸ New Reagent Table**) adds a worksheet set up for a reaction. Type the limiting reagent's mmol, then for each reagent draw its structure (or type its SMILES) and its equivalents. MW, mmol and mass (mg) work themselves out; type a density (g/mL) or a concentration (M) and the volume (µL) appears. Any number can be typed over, for example the MW of a salt or hydrate, and the rest of the row follows.
+**Home** tab ▸ **Reagent Table** (or **Insert ▸ New Reagent Table**) adds a worksheet set up for a reaction. Type the limiting reagent's mmol, then for each reagent draw its structure (or type its SMILES or name into the **Structure** column, and it is drawn there) and its equivalents. MW, mmol and mass (mg) work themselves out; type a density (g/mL) or a concentration (M) and the volume (µL) appears. Any number can be typed over, for example the MW of a salt or hydrate, and the rest of the row follows.
 
 ## Formulas
 
 Type `=` to start a formula. References with `$`, references to other sheets and **Σ AutoSum** (Alt+=) work as in Excel.
 
-Common functions include `SUM`, `AVERAGE`, `MIN`, `MAX`, `MEDIAN`, `STDEV`, `COUNT`, `COUNTA`, `ROUND`, `IF`, `IFERROR`, `AND`, `OR`, `CONCATENATE`, `LN`, `LOG10`, `EXP`, `SQRT`, and the line-fit functions `SLOPE`, `INTERCEPT`, `RSQ`, `STEYX` and `FORECAST`. Not every Excel function is available; one that isn't shows an error in its cell.
+Common functions include `SUM`, `AVERAGE`, `MIN`, `MAX`, `MEDIAN`, `STDEV`, `COUNT`, `COUNTA`, `ROUND`, `IF`, `IFERROR`, `AND`, `OR`, `CONCATENATE`, `LN`, `LOG10`, `EXP`, `SQRT`, and the line-fit functions `SLOPE`, `INTERCEPT`, `RSQ`, `STEYX` and `FORECAST`. These Excel functions work too, with the same results as Excel:
+
+- **Looking things up:** `VLOOKUP`, `HLOOKUP`, `XLOOKUP`, `INDEX`, `MATCH`, `XMATCH`, `CHOOSE`, `OFFSET`, `INDIRECT`, `ROWS`, `COLUMNS`.
+- **Conditions:** `SUMIF`, `SUMIFS`, `COUNTIF`, `COUNTIFS`, `AVERAGEIF`, `AVERAGEIFS`, `MAXIFS`, `MINIFS`, `IFS`, `SWITCH`, `IFNA`. Conditions are written as in Excel: `">5"`, `"<>done"`, `"Pd*"` (`*` and `?` are wildcards; `~*` is a real star).
+- **Text:** `LEFT`, `RIGHT`, `MID`, `FIND`, `SEARCH`, `SUBSTITUTE`, `REPLACE`, `TEXT`, `VALUE`, `CONCAT`, `TEXTJOIN`, `TEXTSPLIT`.
+- **Statistics:** `STDEV.S`, `STDEV.P`, `VAR.S`, `VAR.P` (and the older `VAR`, `VARP`, `STDEVP`), `T.TEST`, `T.INV`, `T.INV.2T`, `T.DIST` (with `.2T` and `.RT`), `CONFIDENCE.NORM`, `CONFIDENCE.T`, `NORM.DIST`, `NORM.INV`, `NORM.S.DIST`, `NORM.S.INV`, `LINEST`, `LOGEST`, `PERCENTILE` (`.INC`, `.EXC`), `QUARTILE` (`.INC`, `.EXC`), `RANK` (`.EQ`, `.AVG`), `LARGE`, `SMALL`.
+
+Functions that give a block of results (`LINEST`, `LOGEST`, `TEXTSPLIT`, and `INDEX` or `XLOOKUP` returning a whole row) show their first result in the cell; pick out another with `INDEX`, for example `=INDEX(LINEST(B2:B9,A2:A9),1,2)` for the intercept. Not every Excel function is available; one that isn't shows an error in its cell.
 
 ### Chemistry functions
 
@@ -76,7 +83,7 @@ You can combine them as usual: `=1000*D2/MW(B2)` turns mg into mmol.
 ## Formatting
 
 - **Home** tab: font size, bold, italic, underline, borders, fill and text colour, alignment, **Wrap**, **Merge**, and the number format with **+.0** and **−.0** for decimal places. **Other…** in the number format list takes your own Excel-style format, such as `0.00 "mg"`.
-- **C₉H₈** sets formulas with proper subscripts.
+- **C₉H₈** sets formulas with proper subscripts. Formulas typed into text cells (Pd(PPh3)4, CH2Cl2) show this way on their own; click **C₉H₈** on such a cell to show it as typed.
 - **Units:** the number format list has a **Units** group for reaction conditions: temperature (°C), catalyst loading (mol%), equivalents, concentration (M), density (g/mL), amount (mmol), mass (mg), volume (mL and µL), time (h and min), pressure (atm) and % ee. The cell keeps the plain number, so it still sorts and works in formulas. Typing "-78 °C" or "5 mol%" into a cell sets the unit for you.
 
 ### Conditional formatting
@@ -94,6 +101,26 @@ Click in your data and choose **Home** tab ▸ **Format as Table** (or **Insert*
 - **By Substructure** opens the drawing tools: draw the part to look for, and only rows whose structure contains it stay.
 - **Freeze Header** keeps the header rows in view as you scroll.
 
+## Notes and comments
+
+The **Review** tab has both kinds Excel has:
+
+- **New Note** (Shift+F2) puts a yellow sticky note on the cell, with your name. A red triangle marks the cell, and the note shows when you point at it. **Show/Hide Note** keeps it on screen; **Show All Notes** (also in the View menu) shows every note on the sheet.
+- **New Comment** (Ctrl+Alt+M) starts a conversation on the cell, marked with a purple triangle. Point at the cell to see it, then **Reply**, **Resolve**, **Edit** or **Delete**, as for comments in documents and slides. **Convert to Comments** turns a sheet's notes into comments.
+- **Previous** and **Next** go through them all; **Delete** removes the ones in the selected cells. Right-click a cell for the same commands.
+
+Notes and comments move with their cells when you sort, insert or delete rows, and cut and paste. They are saved as Excel's own notes and threaded comments, so Excel shows them too.
+
+## Data validation
+
+**Home** tab ▸ **Validation…** (or **Format ▸ Data Validation…**) sets what may be typed in the selected cells, as Excel's Data Validation does:
+
+- **Settings:** allow a whole number, a decimal, a date or time, a text length (each between limits, or greater than, less than…), a **List**, or a **Custom** formula. A limit can be a number or a formula such as `=B1` or `=TODAY()`. A list is items separated by commas (`Pd(OAc)2, PdCl2, Pd(PPh3)4`) or a reference to cells that hold them (`=$H$2:$H$20`, or on another sheet, `=Reagents!$A$2:$A$40`).
+- **Input Message:** a title and message shown beside the cell while it is selected.
+- **Error Alert:** what happens when something else is typed. **Stop** asks you to type again, **Warning** asks whether to keep it, and **Information** says so and keeps it.
+
+A cell with a list shows a drop-down button beside it while selected; click it or press **Alt+Down** to pick. In any cell, **Pick From Drop-down List…** on the right-click menu (or Alt+Down) lists the entries already above and below it in its column. **Circle Invalid** rings the cells that break their rules in red (pasted values and formulas aren't checked as they go in, as in Excel). The rules are saved as Excel's own, so the drop-downs and alerts work in Excel too.
+
 ## Charts
 
 Select a block of cells and choose **Insert** tab ▸ **Scatter**, **Line**, **Column**, **Bar**, **Area** or **Pie**. Click a chart to open the **Chart** tab; double-click it, or click **All Settings**, for every setting in the panel on the right.
@@ -105,6 +132,16 @@ Select a block of cells and choose **Insert** tab ▸ **Scatter**, **Line**, **C
 - **Copy as Picture** to paste the chart into Word, PowerPoint or a document or slide here; **Save as Picture…** for a PNG or SVG; **Delete Chart**.
 
 ### Stick spectra
+
+The Insert tab also has **Combo**, **Histogram**, **Box**, **Bubble** and **Radar**:
+
+- **Combo** draws columns and lines together. The first series is columns and the rest are lines on a second axis on the right (yield beside turnover number, say). In the panel, each series has **Drawn as** and **Second axis**, and the second axis has its own title, limits and number format.
+- **Histogram** counts the numbers of one column in bins of equal width. Set **Bin width** or the number of bins in the panel, plus an **Overflow** and **Underflow** bin if you want the tails lumped together. Left on automatic, the width follows Scott's rule, as Excel's does.
+- **Box** (box and whisker) shows the median, quartiles and spread of repeat runs. Put a label in the first column (the catalyst, say) and each different label gets its own box. Whiskers reach the furthest points within 1.5 × the box's height, and points beyond that are drawn as outliers. In the panel you can show or hide the mean (×), a line joining the means, the outliers and all the other points, and choose exclusive or inclusive quartiles (QUARTILE.EXC, Excel's default, or QUARTILE.INC).
+- **Bubble** takes x, y and then a column of bubble sizes. Each bubble's area goes with its number.
+- **Radar** draws one spoke for each row label and one shape for each column of numbers. Tick **Filled** in the panel for filled shapes.
+
+All five are saved as Excel's own chart types. Histograms and box charts use the newer chart format of Excel 2016 and later, so older versions of Excel show a note in their place.
 
 In the chart panel, each series of a scatter chart has **Sticks** (peaks drawn up or down from zero, as in a mass spectrum) and **Show x (m/z)** to label each peak with its value. You can use these for any spectrum you put in a sheet.
 
@@ -146,7 +183,7 @@ Each new tile asks which table or block of cells to read. For a gallery, the str
 
 ## Saving and sharing
 
-- **Save** (Ctrl+S) writes an Excel workbook (.xlsx). In Excel, structures are pictures with their SMILES in the cell, properties are plain numbers, and charts, trendlines, conditional formatting and tables are Excel's own. Stick spectra show as sticks in Excel too.
+- **Save** (Ctrl+S) writes an Excel workbook (.xlsx). In Excel, structures are pictures with their SMILES in the cell, properties are plain numbers, and charts, trendlines, conditional formatting, tables, notes, comments and data validation are Excel's own. Stick spectra show as sticks in Excel too.
 - Excel has no dashboards, so it gets a plain version: each chart tile becomes a real Excel chart showing what the tile shows, and numbers, tables and text become cells.
 - Excel has no `ISOMZ`, `ISOABUND` or other chemistry functions, so the saved file keeps their values.
 - Open the .xlsx here again and the structures, chemistry formulas and full dashboard come back, even after Excel has saved the file.

@@ -5,11 +5,11 @@
 import type { Measure, TextFrame } from '../text/layout';
 import { TextEditing, type ChangeKind } from '../text/editing';
 import { documentMeasure } from '../text/font-measure';
-import { CELL_PAD, DocLayouter, movedLayout, pageNumber, type DocLayout } from './doc-layout';
+import { CELL_PAD, DocLayouter, movedLayout, type DocLayout } from './doc-layout';
 import { reviewAuthor, revisionDate } from './revisions';
 import { setPart } from '../table';
 import { FigurePictures } from './figures';
-import { BOX_PAD, newDocument, runStyleOf, styleOf, type DocText } from './document';
+import { BOX_PAD, newDocument, noteStyle, runStyleOf, styleOf, type DocText } from './document';
 import { fitParas, paraCount, storedParas } from '../text/paragraphs';
 import { PRINT_VIEW, continuous, hiddenParas, outlineLevel, screenText, type ScreenView } from './doc-views';
 import * as rt from '../richtext';
@@ -78,6 +78,7 @@ export class DocFile {
    */
   editBox(id: number): TextEditing | null {
     const o = this.t.objects[id];
+    if (o?.kind === 'note') return this.editNote(id);
     if (o?.kind !== 'textbox') return null;
     if (this.box?.id === id) return this.box.ed;
     const N = styleOf(this.t, {});
@@ -97,6 +98,41 @@ export class DocFile {
         const cur = this.t.objects[id];
         if (cur?.kind === 'textbox') {
           this.ed.update({ ...this.t, objects: { ...this.t.objects, [id]: { ...cur, runs: ed.t.runs, paras: storedParas(ed.t.paras) } } } as DocText, box.recorded ? null : 'Edit text box');
+          box.recorded = true;
+        }
+        ed.relayout();
+      }
+      this.listener(kind);
+    };
+    this.box = box;
+    return ed;
+  }
+
+  /**
+   * Start typing into a footnote or endnote, as editBox does for a text box: its text laid out
+   * where the note is (at the foot of its page, or after the text), every change going back into it.
+   */
+  editNote(id: number): TextEditing | null {
+    const o = this.t.objects[id];
+    if (o?.kind !== 'note') return null;
+    if (this.box?.id === id) return this.box.ed;
+    const st = noteStyle(this.t);
+    const ed = new TextEditing({ runs: o.runs, paras: o.paras ?? [], justify: 'left', wrap: 100 }, runStyleOf(st), docMeasure, st.size);
+    ed.anchor = ed.focus = ed.text.length;
+    ed.layoutWith = (frame) => {
+      const lay = this.layout();
+      const at = lay.notes.get(id);
+      const nl = this.layouter.noteText(this.t, frame.runs, frame.paras, lay.fields.get(id) ?? '', at?.w ?? lay.textW);
+      return at ? movedLayout(nl, at.x, at.y - nl.box.y1) : nl;
+    };
+    // tracked like the document's own text
+    ed.track = this.ed.track;
+    const box = { id, ed, recorded: false };
+    ed.onChange = (kind) => {
+      if (kind === 'text') {
+        const cur = this.t.objects[id];
+        if (cur?.kind === 'note') {
+          this.ed.update({ ...this.t, objects: { ...this.t.objects, [id]: { ...cur, runs: ed.t.runs, paras: storedParas(ed.t.paras) } } } as DocText, box.recorded ? null : cur.end ? 'Edit endnote' : 'Edit footnote');
           box.recorded = true;
         }
         ed.relayout();
@@ -193,7 +229,7 @@ export class DocFile {
     if (this.printer.memo?.t !== t) {
       const lay = this.printer.layouter.layout(t);
       this.printer.memo = { t, lay };
-      paragraphPages.set(t, lay.paraTops.map((pt) => pageNumber(t.hf, pt.page)));
+      paragraphPages.set(t, lay.paraTops.map((pt) => lay.pages[pt.page]?.number ?? ''));
     }
     return this.printer.memo.lay;
   }
@@ -205,7 +241,7 @@ export class DocFile {
       let lay: DocLayout;
       if (!continuous(v.kind)) {
         lay = this.layouter.layout(t);
-        paragraphPages.set(t, lay.paraTops.map((pt) => pageNumber(t.hf, pt.page)));
+        paragraphPages.set(t, lay.paraTops.map((pt) => lay.pages[pt.page]?.number ?? ''));
       } else if (v.kind === 'outline' && v.outline) {
         const hidden = hiddenParas(t, v.outline);
         let firstLine: Set<number> | undefined;
@@ -213,8 +249,8 @@ export class DocFile {
           firstLine = new Set();
           fitParas(t.paras, paraCount(rt.plainText(t.runs))).forEach((ps, p) => { if (!outlineLevel(t, ps)) firstLine!.add(p); });
         }
-        lay = this.layouter.layout(screenText(t, v), { hidden, firstLine });
-      } else lay = this.layouter.layout(screenText(t, v));
+        lay = this.layouter.layout(screenText(t, v), { hidden, firstLine, notesAtEnd: true });
+      } else lay = this.layouter.layout(screenText(t, v), { notesAtEnd: true });
       this.memo = { frame, view: v, lay };
     }
     return this.memo.lay;

@@ -3,7 +3,10 @@
 // self-test used by the automatic Windows build.
 
 mod clipboard;
+mod file_types;
 mod keep;
+mod ole;
+mod open_dialog;
 mod portable;
 
 use std::path::PathBuf;
@@ -206,6 +209,11 @@ mod tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // a file opened (double-clicked) while the app is running goes to this window, not a second app
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            file_types::open_files(app, file_types::files_in(args, Some(std::path::Path::new(&cwd))));
+        }))
+        .manage(file_types::Waiting::default())
         .plugin(tauri_plugin_dialog::init())
         // Help > Check for Updates: fetches the newest release from GitHub, checks its signature
         // against the public key in tauri.conf.json, installs it and restarts the app
@@ -214,6 +222,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             portable::tidy();
+            // the files the app was opened with (double-clicked, or "Open with")
+            file_types::open_files(app.handle(), file_types::files_in(std::env::args(), None));
+            file_types::refresh();
+            // Word and PowerPoint reach the app here to edit drawings embedded in their documents
+            ole::start(app.handle());
             // A self-test that never reports (the page failed to load) still ends.
             if let Some(path) = selftest_path() {
                 let handle = app.handle().clone();
@@ -249,8 +262,26 @@ pub fn run() {
             keep::remove_lock_file,
             clipboard::clipboard_write,
             clipboard::clipboard_read,
-            clipboard::clipboard_formats
+            clipboard::clipboard_formats,
+            open_dialog::open_shared_dialog,
+            file_types::launch_files,
+            file_types::file_types_get,
+            file_types::file_types_set,
+            file_types::file_types_defaults,
+            ole::ole_pending,
+            ole::ole_save,
+            ole::ole_close,
+            ole::ole_registered,
+            ole::ole_register
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Chem Illustrator");
+        .build(tauri::generate_context!())
+        .expect("error while running Chem Illustrator")
+        .run(|_app, _event| {
+            // macOS hands over files opened from Finder as an event, not on the command line
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = _event {
+                let files = urls.into_iter().filter_map(|u| u.to_file_path().ok()).map(|p| p.to_string_lossy().into_owned()).collect();
+                file_types::open_files(_app, files);
+            }
+        });
 }

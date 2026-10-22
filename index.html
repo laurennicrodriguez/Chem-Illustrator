@@ -61,6 +61,10 @@
     <button role="menuitem" data-cmd="select-all">Select All</button>
     <button hidden role="menuitem" data-cmd="clipboard-formats">Show Clipboard Formats</button>
     <button data-modes="slides" role="menuitem" data-cmd="delete-slide">Delete Slide</button>
+    <button data-modes="slides" role="menuitem" data-cmd="cut-slides" title="Cut the slides picked in the slide list, to paste into this deck or another">Cut Slides</button>
+    <button data-modes="slides" role="menuitem" data-cmd="copy-slides" title="Copy the slides picked in the slide list, to paste into this deck or another (Ctrl+C in the slide list)">Copy Slides</button>
+    <button data-modes="slides" role="menuitem" data-cmd="paste-slides" title="Paste the slides copied, after the slide picked, in this deck's look (Ctrl+V in the slide list)">Paste Slides</button>
+    <button data-modes="slides" role="menuitem" data-cmd="paste-slides-keep" title="Paste the slides copied, each keeping its own background, fonts and colours">Paste Slides (Keep Source Formatting)</button>
     <button data-modes="sheet" role="menuitem" data-cmd="delete-cells">Delete Rows or Columns</button>
     <div class="submenu" data-modes="sheet">
     <button role="menuitem" class="has-sub" aria-haspopup="menu" aria-expanded="false">Fill</button>
@@ -86,7 +90,7 @@
     <button role="menuitem" data-cmd="hotkeys">Hotkeys…</button>
     <button role="menuitem" data-cmd="typing-spelling" title="Chemistry formatting as you type, replacements, spelling check and your dictionary">Typing and Spelling…</button>
     <button role="menuitem" data-cmd="edit-palettes" title="Your own rows of colours, in every colour menu and every mode">Colour Palettes…</button>
-    <button role="menuitem" data-cmd="preferences" title="Terminal methyls as Me or CH3, and whether to ask before changing every structure on the page">Preferences…</button>
+    <button role="menuitem" data-cmd="preferences" title="Every setting in one window: drawing, drawing style, hotkeys, text and spelling, colours, schemes, AutoSave, online lookups">Settings…</button>
     </div>
     </div>
     <div class="menu-wrap">
@@ -130,6 +134,7 @@
     <button data-modes="document" role="menuitemcheckbox" aria-checked="false" data-cmd="view-split" title="Two panes on the document, one above the other, each scrolled on its own"><span>Split Window</span></button>
     <button data-modes="document" role="menuitem" data-cmd="doc-new-window" title="The document in another tab too, with its own view and place">New Window</button>
     <button data-modes="sheet" role="menuitem" data-cmd="freeze-header">Freeze Header Row</button>
+    <button data-modes="sheet" role="menuitemcheckbox" aria-checked="false" data-cmd="show-all-notes"><span>Show All Notes</span></button>
     <button data-modes="slides" role="menuitemcheckbox" aria-checked="false" data-cmd="animation-pane"><span>Animation Pane</span></button>
     <button data-modes="slides" role="menuitemcheckbox" aria-checked="false" data-cmd="show-comments"><span>Show Comments</span></button>
     <div class="submenu" data-modes="slides">
@@ -174,7 +179,9 @@
     <hr />
     <button data-modes="slides" role="menuitem" data-cmd="new-slide">New Slide</button>
     <button data-modes="slides" role="menuitem" data-cmd="duplicate-slide">Duplicate Slide</button>
-    <button data-modes="slides" role="menuitem" data-cmd="new-comment">New Comment</button>
+    <button data-modes="slides" role="menuitem" data-cmd="reuse-slides" title="Slides from another PowerPoint file: see them all, pick the ones you want">Reuse Slides…</button>
+    <button data-modes="slides sheet" role="menuitem" data-cmd="new-comment">New Comment</button>
+    <button data-modes="sheet" role="menuitem" data-cmd="new-note">New Note</button>
     <button data-modes="sheet" role="menuitem" data-cmd="property-column">Insert Property Columns…</button>
     <button data-modes="sheet" role="menuitem" data-cmd="isotope-pattern">Isotope Pattern…</button>
     <button data-modes="sheet" role="menuitem" data-cmd="reagent-table">New Reagent Table</button>
@@ -188,9 +195,14 @@
     <button data-modes="document" role="menuitem" data-cmd="compound-number" title="A bold compound number that renumbers itself">Compound Number…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-citation" title="Cite references: superscript numbers in order of first citation">Citation…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-bibliography" title="The references cited, numbered, in the journal style">Bibliography</button>
-    <button data-modes="document" role="menuitem" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha), shown as maths; a Word equation in .docx files">Equation…</button>
+    <button data-modes="slides design document" role="menuitem" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha), shown as maths; a Word or PowerPoint equation in .docx and .pptx files">Equation…</button>
     <button data-modes="document" role="menuitem" data-cmd="insert-toc" title="The headings (Heading 1, 2, 3) with their page numbers; it updates by itself">Table of Contents…</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-tof" title="The Figure, Scheme, Table or Chart captions with their page numbers; it updates by itself">Table of Figures…</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-footnote" title="A footnote at the foot of the page (Ctrl+Alt+F)">Footnote</button>
+    <button data-modes="document" role="menuitem" data-cmd="insert-endnote" title="An endnote after the text (Ctrl+Alt+D)">Endnote</button>
     <button data-modes="document" role="menuitem" data-cmd="page-break">Page Break</button>
+    <button data-modes="document" role="menuitem" data-cmd="breaks-nextPage" title="A new section on a new page: it can have its own paper, margins, columns, header and footer, page numbers and line numbers">Section Break (Next Page)</button>
+    <button data-modes="document" role="menuitem" data-cmd="breaks-continuous" title="A new section on the same page (one column of title and abstract, then two columns of text)">Section Break (Continuous)</button>
     </div>
     </div>
     <div class="menu-wrap">
@@ -254,10 +266,13 @@
     <button data-modes="slides" role="menuitem" data-cmd="slide-templates">Slide Templates…</button>
     <button data-modes="slides" role="menuitem" data-cmd="slide-master">Slide Master…</button>
     <button data-modes="slides" role="menuitem" data-cmd="format-background" title="This slide's background (or every slide's): a colour, gradient, picture or pattern">Format Background…</button>
+    <button data-modes="slides" role="menuitemcheckbox" aria-checked="false" data-cmd="hide-slide" title="The slide show skips the slides picked; they stay in the deck and in the PowerPoint file. Again to show them"><span>Hide Slide</span></button>
     <button data-modes="slides" role="menuitem" data-cmd="slide-transitions">Transitions…</button>
     <button data-modes="slides" role="menuitem" data-cmd="slide-animations">Animations…</button>
     <button data-modes="sheet" role="menuitem" data-cmd="new-rule">New Conditional Formatting Rule…</button>
     <button data-modes="sheet" role="menuitem" data-cmd="manage-rules">Manage Conditional Formatting…</button>
+    <button data-modes="sheet" role="menuitem" data-cmd="data-validation">Data Validation…</button>
+    <button data-modes="sheet" role="menuitemcheckbox" aria-checked="false" data-cmd="circle-invalid"><span>Circle Invalid Data</span></button>
     <button data-modes="sheet" role="menuitem" data-cmd="insert-table">Format as Table</button>
     </div>
     </div>
@@ -399,7 +414,8 @@
       <button id="btn-help" aria-haspopup="menu" aria-expanded="false" aria-controls="help-menu" title="Hotkeys, the user guide, and sending feedback" aria-keyshortcuts="Alt+H"><span class="mn">H</span>elp</button>
       <div id="help-menu" class="menu right" role="menu" hidden>
         <button role="menuitem" data-cmd="help" title="The most used hotkeys and tips, with a button to change any key">Hotkeys and Tips</button>
-        <button role="menuitem" data-cmd="user-guide" title="The user guide, on the project's GitHub page">User Guide</button>
+        <button role="menuitem" data-cmd="user-guide" title="How to use the program (built in: works without a connection)">User Guide</button>
+        <button role="menuitem" data-cmd="help-here" title="The part of the User Guide about the tool or mode in use">Help on This Tool or Mode</button>
         <hr />
         <button role="menuitem" data-cmd="send-feedback" title="A comment, an idea for a new feature, or a question: sent as a GitHub issue, or copied to send another way">Send Feedback…</button>
         <button role="menuitem" data-cmd="report-problem" title="Something not working as it should">Report a Problem…</button>
@@ -417,6 +433,7 @@
       <button role="tab" data-sh-tab="home" aria-selected="true">Home</button>
       <button role="tab" data-sh-tab="dashboard" aria-selected="false" hidden>Dashboard</button>
       <button role="tab" data-sh-tab="insert" aria-selected="false">Insert</button>
+      <button role="tab" data-sh-tab="review" aria-selected="false">Review</button>
       <button role="tab" data-sh-tab="table" aria-selected="false" class="rb-context" hidden>Table Design</button>
       <button role="tab" data-sh-tab="chart" aria-selected="false" class="rb-context" hidden>Chart</button>
     </div>
@@ -537,6 +554,10 @@
             <button data-sh="freeze-header" aria-pressed="false" title="Keep the header row in view while scrolling">Freeze Header</button>
             <button data-sh="autosum" title="Add up the numbers above">Σ AutoSum</button>
           </div>
+          <div class="rb-col">
+            <button data-sh="data-validation" title="Data Validation: what may be typed in the selected cells (numbers within limits, dates, a drop-down list), a message shown when one is selected, and the alert for anything else">Validation…</button>
+            <button data-sh="circle-invalid" aria-pressed="false" title="Circle Invalid Data: red rings round the cells that break their rules (again to clear them)">Circle Invalid</button>
+          </div>
         </div>
         <div class="rb-label">Data</div>
       </div>
@@ -556,6 +577,11 @@
           <button class="rb-big" data-sh="chart-bar" title="Sideways bars (long labels read easily)"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 2v15h15" stroke-opacity="0.6"/><path d="M3.5 6h9M3.5 10h12M3.5 14h6" stroke-width="2.6"/></svg></span>Bar</button>
           <button class="rb-big" data-sh="chart-area" title="Lines filled down to the axis"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 2v15h15" stroke-opacity="0.6"/><path d="M3.5 16.5V12l4-4 4 3 6-6v11.5z" fill="currentColor" fill-opacity="0.35"/></svg></span>Area</button>
           <button class="rb-big" data-sh="chart-pie" title="Shares of a whole (first column of numbers)"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 10V3M10 10l6 4" /></svg></span>Pie</button>
+          <button class="rb-big" data-sh="chart-combo" title="Columns and lines together, the lines on a second axis on the right (yield and turnover number, conversion and temperature)"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 2v15h15" stroke-opacity="0.6"/><path d="M6 16v-5M10 16V8M14 16v-4" stroke-width="2.6" stroke-opacity="0.55"/><path d="M4 7l4 2 4-5 5 3"/></svg></span>Combo</button>
+          <button class="rb-big" data-sh="chart-histogram" title="How the numbers of one column spread out: counts in bins of equal width"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 2v15h15" stroke-opacity="0.6"/><path d="M4.5 16.5v-4h3v4M7.5 16.5v-9h3v9M10.5 16.5v-11h3v11M13.5 16.5v-6h3v6" fill="currentColor" fill-opacity="0.35"/></svg></span>Histogram</button>
+          <button class="rb-big" data-sh="chart-box" title="Box and whisker: the median, quartiles and spread of repeat runs, one box for each label in the first column"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 2v15h15" stroke-opacity="0.6"/><path d="M8 3.5v3M8 13v2.5M6.5 3.5h3M6.5 15.5h3M14 6v2M14 13v2M13 6h2M13 15h2"/><rect x="6" y="6.5" width="4" height="6.5"/><path d="M6 10h4"/><rect x="12" y="8" width="4" height="5"/><path d="M12 11h4"/></svg></span>Box</button>
+          <button class="rb-big" data-sh="chart-bubble" title="Points sized by a third column: x, y, then the bubble sizes"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 2v15h15" stroke-opacity="0.6"/><circle cx="7" cy="12" r="1.8"/><circle cx="11.5" cy="8.5" r="3"/><circle cx="15.5" cy="4.5" r="1.4"/></svg></span>Bubble</button>
+          <button class="rb-big" data-sh="chart-radar" title="Radar: one spoke for each row label, each column a shape round them (comparing ligands or conditions on several measures)"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M10 2.5l7 5-2.7 8.5H5.7L3 7.5z" stroke-opacity="0.6"/><path d="M10 5l4.5 3.3-2 5.2H7.6L6 8.5z" fill="currentColor" fill-opacity="0.35"/></svg></span>Radar</button>
         </div>
         <div class="rb-label">Charts (of the selected cells)</div>
       </div>
@@ -564,6 +590,35 @@
           <button class="rb-big" data-sh="insert-dashboard" title="A new sheet of tiles (charts, headline numbers, tables, slicers, structure galleries) built from the tables in this workbook"><span class="rb-icon"><svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2.5" y="3" width="7" height="6" rx="1"/><rect x="11.5" y="3" width="6" height="3.5" rx="1"/><rect x="11.5" y="8.5" width="6" height="8.5" rx="1"/><rect x="2.5" y="11" width="7" height="6" rx="1"/></svg></span>Dashboard</button>
         </div>
         <div class="rb-label">Dashboards</div>
+      </div>
+    </div>
+    <div class="rb-panel" data-sh-panel="review" hidden>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="new-comment" title="New Comment (Ctrl+Alt+M): a conversation on the cell with your name and the time, which others can reply to and resolve"><span class="rb-icon">💬</span>New Comment</button>
+          <div class="rb-col">
+            <button data-sh="prev-comment" title="Go to the note or comment before this cell">◀ Previous</button>
+            <button data-sh="next-comment" title="Go to the next note or comment">Next ▶</button>
+          </div>
+          <div class="rb-col">
+            <button data-sh="delete-note" title="Delete the notes and comments in the selected cells">Delete</button>
+          </div>
+        </div>
+        <div class="rb-label">Comments</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-sh="new-note" title="New Note (Shift+F2): a yellow sticky note on the cell, shown when you point at it"><span class="rb-icon">🗒</span>New Note</button>
+          <div class="rb-col">
+            <button data-sh="edit-note" title="Change the note on the cell">Edit Note</button>
+            <button data-sh="show-note" aria-pressed="false" title="Show the cell's note all the time, or only when you point at the cell">Show/Hide Note</button>
+          </div>
+          <div class="rb-col">
+            <button data-sh="show-all-notes" aria-pressed="false" title="Show every note on the sheet beside its cell">Show All Notes</button>
+            <button data-sh="convert-notes" title="Turn every note on this sheet into a comment that can be replied to">Convert to Comments</button>
+          </div>
+        </div>
+        <div class="rb-label">Notes</div>
       </div>
     </div>
     <div class="rb-panel" data-sh-panel="dashboard" hidden>
@@ -832,8 +887,23 @@
             </select></label>
           </div>
           <div class="rb-col">
-            <button data-doc="page-break" title="Start a new page here (Ctrl+Enter)">Page Break</button>
-            <button data-doc="col-break" title="Start the next column here (Ctrl+Shift+Enter)">Column Break</button>
+            <label class="rb-field" title="Page and column breaks, and section breaks: a new section can have its own paper, margins, columns, header and footer, page numbering and line numbers">Breaks <select id="doc-breaks" data-doc-prefix="breaks">
+              <option value="" hidden>Insert…</option>
+              <option value="page">Page (Ctrl+Enter)</option>
+              <option value="column">Column (Ctrl+Shift+Enter)</option>
+              <option value="nextPage">Section: Next Page</option>
+              <option value="continuous">Section: Continuous</option>
+              <option value="evenPage">Section: Even Page</option>
+              <option value="oddPage">Section: Odd Page</option>
+            </select></label>
+            <label class="rb-field" title="Numbers down the margin beside each line of text (for manuscripts under review), in this section">Line Numbers <select id="doc-linenums" data-doc-prefix="linenums">
+              <option value="none">None</option>
+              <option value="continuous">Continuous</option>
+              <option value="page">Restart Each Page</option>
+              <option value="section">Restart Each Section</option>
+              <option value="suppress">Suppress for Current Paragraph</option>
+              <option value="options">Line Numbering Options…</option>
+            </select></label>
           </div>
         </div>
         <div class="rb-label">Page Setup</div>
@@ -870,8 +940,9 @@
             <button data-doc="numbers-s" aria-pressed="false" title="Number pages S1, S2… as Supporting Information is">S1, S2… numbering</button>
           </div>
           <div class="rb-col">
-            <button data-doc="header-edit" title="Text at the top of every page (left, centre, right)">Header…</button>
-            <button data-doc="footer-edit" title="Text at the bottom of every page (left, centre, right)">Footer…</button>
+            <button data-doc="header-edit" title="Text at the top of every page in this section (left, centre, right)">Header…</button>
+            <button data-doc="footer-edit" title="Text at the bottom of every page in this section (left, centre, right)">Footer…</button>
+            <button data-doc="page-number-format" title="Page numbers as 1, 2, 3 or i, ii, iii, and where this section's numbering starts">Number Format…</button>
           </div>
         </div>
         <div class="rb-label">Header and Footer</div>
@@ -902,7 +973,16 @@
       </div>
       <div class="rb-group">
         <div class="rb-row">
+          <button class="rb-big" data-doc="insert-footnote" title="Insert Footnote (Ctrl+Alt+F): a number in the text and its note at the foot of the page, typed into there. Escape goes back to the text; deleting the number deletes the note"><span class="rb-icon">AB<sup>1</sup></span>Insert Footnote</button>
+          <button class="rb-big" data-doc="insert-endnote" title="Insert Endnote (Ctrl+Alt+D): a number in the text and its note after the end of the text"><span class="rb-icon"><sup>i</sup>≡</span>Insert Endnote</button>
+          <button class="rb-big" data-doc="note-options" title="How footnotes and endnotes are numbered (1, 2, 3; i, ii, iii; a, b, c; *, †, ‡), and turning footnotes into endnotes or back"><span class="rb-icon">⚙</span>Note Options…</button>
+        </div>
+        <div class="rb-label">Footnotes</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
           <button class="rb-big" data-doc="insert-caption" title="A numbered caption: Figure 1, Scheme 2, Table S1…"><span class="rb-icon">¶</span>Insert Caption</button>
+          <button class="rb-big" data-doc="insert-tof" title="Insert Table of Figures: the Figure, Scheme, Table or Chart captions (or all of them) with their page numbers. It updates by itself; double-click it to choose the captions listed"><span class="rb-icon">▤</span>Table of Figures</button>
           <button class="rb-big" data-doc="cross-reference" title="&quot;Figure 2&quot; in the text: it follows the caption's number when captions are added or moved"><span class="rb-icon">↪</span>Cross-reference</button>
         </div>
         <div class="rb-label">Captions</div>
@@ -1064,7 +1144,11 @@
         <div class="rb-row">
           <div class="rb-col">
             <button data-doc="table-merge" title="Join this cell with the one to its right">Merge Right</button>
-            <button data-doc="table-split" title="Split a merged cell back into its columns">Split Cell</button>
+            <button data-doc="table-merge-down" title="Join this cell with the one below it (a cell down a column, as Word's vertical merge)">Merge Down</button>
+          </div>
+          <div class="rb-col">
+            <button data-doc="table-split" title="Split a merged cell back into single cells (across and down)">Split Cell</button>
+            <button data-doc="table-nest" title="Put a table inside this cell (a nested table, kept as one in Word)">Table in Cell</button>
           </div>
           <div class="rb-col">
             <button data-doc="table-select" title="Pick the whole table, to copy, cut or delete it">Select Table</button>
@@ -1147,6 +1231,10 @@
               <button data-cmd="duplicate-slide" title="Copy the picked slides">Duplicate</button>
               <button data-cmd="delete-slide" title="Delete the picked slides">Delete</button>
             </div>
+            <div class="rb-pair">
+              <button data-cmd="reuse-slides" title="Slides from another PowerPoint file: see them all, pick the ones you want">Reuse…</button>
+              <button data-cmd="hide-slide" aria-pressed="false" title="The slide show skips the slides picked; they stay in the deck and in the PowerPoint file. Again to show them">Hide</button>
+            </div>
           </div>
         </div>
         <div class="rb-label">Slides</div>
@@ -1219,6 +1307,7 @@
           <button class="rb-big" data-cmd="slide-shapes" aria-haspopup="true" title="Basic shapes, block arrows, flowchart shapes, callouts and lab glassware: pick one, then click or drag on the slide"><span class="rb-icon">◇</span>Shapes ▾</button>
           <button class="rb-big" data-cmd="slide-icons" aria-haspopup="true" title="About 7,000 icons, lab and science ones first (glassware, molecules, hazard signs): pick one, then click or drag on the slide"><span class="rb-icon">⚗</span>Icons ▾</button>
           <button class="rb-big" data-cmd="insert-diagram" title="Lists, processes, cycles, hierarchies, Venn diagrams, matrices and pyramids drawn from lines of text, like PowerPoint's SmartArt. Double-click one to type into it"><span class="rb-icon">⧉</span>Diagram</button>
+          <button class="rb-big" data-cmd="insert-equation" title="An equation typed as LaTeX (x^2, \frac{a}{b}, \alpha) and shown as maths, or one of the usual ones (Arrhenius, Eyring…). Double-click it to change it. Saved as a PowerPoint equation (Alt+=)"><span class="rb-icon">π</span>Equation</button>
           <button class="rb-big" data-cmd="crop" title="Cut the edges off the selected picture"><span class="rb-icon">⌗</span>Crop</button>
         </div>
         <div class="rb-label">Pictures, Text and Shapes</div>
@@ -1256,6 +1345,12 @@
           <button class="rb-big" data-cmd="presenter-view" title="Slides full screen on the projector; your notes, the next slide and a timer on your own screen"><span class="rb-icon">▣</span>Presenter View</button>
         </div>
         <div class="rb-label">Present</div>
+      </div>
+      <div class="rb-group">
+        <div class="rb-row">
+          <button class="rb-big" data-cmd="hide-slide" aria-pressed="false" title="The slide show skips the slides picked; they stay in the deck and in the PowerPoint file. Again to show them"><span class="rb-icon">⊘</span>Hide Slide</button>
+        </div>
+        <div class="rb-label">Set Up</div>
       </div>
     </div>
     <div class="rb-panel" data-sl-panel="review" hidden>
@@ -1610,7 +1705,7 @@
         <ul>
           <li>Red boxes mark atoms with too many or too few bonds, labels that can't be read, and atoms sitting on top of others. Point at one to see why; the Warnings panel lists them all, with Ignore. Chemistry &gt; Check Structure goes to the next one. They are never printed, saved or copied</li>
           <li>Rest the mouse on an abbreviation or condensed label (OTBS, NHBoc, CO2Me) to see the group written out, with its name and formula. View &gt; Group Tooltips turns this off.</li>
-          <li>Axial chirality (biaryls, allenes, alkylidenecycloalkanes) gets Ra or Sa by IUPAC P-93.5.1: draw the groups on one end of the axis with a wedge and a hash (or one wedge) to show which way round it is. Edit &gt; Preferences writes them as P/M instead.</li>
+          <li>Axial chirality (biaryls, allenes, alkylidenecycloalkanes) gets Ra or Sa by IUPAC P-93.5.1: draw the groups on one end of the axis with a wedge and a hash (or one wedge) to show which way round it is. Edit &gt; Settings writes them as P/M instead.</li>
           <li>R/S and E/Z are worked out for every structure as you draw. Chemistry &gt; Show Stereo Labels adds them to the selected structures (or all) as part of the drawing; they update by themselves after edits. Select a stereocentre to hide its label or type your own (for example (R*)). View &gt; Show R/S Preview shows every label in red on screen</li>
           <li>As in ChemDraw, plain bold bonds count as wedges and plain hashed or dashed bonds as hashed wedges. Where R or S would depend on what an R or Ar group is, no label is given</li>
         </ul>

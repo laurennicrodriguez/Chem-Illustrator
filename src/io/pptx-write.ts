@@ -37,7 +37,12 @@ import {
 import { sameBackground, type Background } from '../deck/background';
 import { bgXml, type BlipIds } from './pptx-background';
 import { addChart, C_NS } from './office-chart';
+import { CX_NS, CX1_NS } from './xlsx-chart';
+import { isChartEx } from '../sheet/chart';
+const MC_NS = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
 import type { ChartBox } from '../sheet/chart-box';
+import { toOmml, mathText } from '../document/math';
+import { shapeMathPicture, shapeMathScale } from '../deck/equation';
 
 /** Tag names (PowerPoint keeps tags when it saves). */
 export const TAG = {
@@ -63,6 +68,8 @@ export const TAG = {
   diagram: 'CHEMILLUSTRATOR_DIAGRAM',
   /** A chart: the chart and its data as made here. */
   chart: 'CHEMILLUSTRATOR_CHART',
+  /** An equation: its LaTeX, size, colour and font as made here, used when PowerPoint has not changed it. */
+  math: 'CHEMILLUSTRATOR_MATH',
 };
 
 /** Where a highlight is, for finding it again: one of its atoms, else the middle of one of its bonds. */
@@ -95,7 +102,7 @@ export interface PptxOptions {
 export interface DeckData {
   size: SlideSize;
   master: Master;
-  slides: { layout: LayoutId; doc: Doc; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean }[];
+  slides: { layout: LayoutId; doc: Doc; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean; hidden?: boolean }[];
   /** A design (Design mode): marked so it opens in Design mode again. */
   design?: boolean;
 }
@@ -112,6 +119,10 @@ const NS_SVG = 'http://schemas.microsoft.com/office/drawing/2016/SVG/main';
 const REL_MEDIA = 'http://schemas.microsoft.com/office/2007/relationships/media';
 const REL_VIDEO = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/video';
 const NS_P14 = 'http://schemas.microsoft.com/office/powerpoint/2010/main';
+/** Markup compatibility (a newer form with a fallback), Office 2010's drawing additions (equations in text), and Office Math. */
+export const NS_MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
+export const NS_A14 = 'http://schemas.microsoft.com/office/drawing/2010/main';
+export const NS_M = 'http://schemas.openxmlformats.org/officeDocument/2006/math';
 
 /**
  * A slide's videos starting by themselves when the slide comes in (PowerPoint's "Start:
@@ -620,7 +631,8 @@ class Writer {
     for (const p of parts.pictures) {
       mark({ shapes: new Set([p.id]) }, id);
       const box = { x1: Math.min(p.x1, p.x2), y1: Math.min(p.y1, p.y2), x2: Math.max(p.x1, p.x2), y2: Math.max(p.y1, p.y2) };
-      if (p.chart) { out.push(await this.chart(path, p.chart, box, id++)); continue; }
+      if (p.chart) { out.push(await this.chart(path, p.chart, box, id++, p.src)); continue; }
+      if (p.math) { out.push(await this.equation(path, p, box, id++)); continue; }
       const v = p.video ? this.video(path, p.video.src, p.src!, box, id) : '';
       if (v) { videos.push({ spid: id, once: !!p.video!.once }); out.push(v); id++; continue; }
       out.push(await this.picture(path, p.src!, box, `Picture ${id - 1}`, id++, p.crop ?? null, p.look));
@@ -702,7 +714,7 @@ class Writer {
     if (m.footer.trim()) out.push(footerShape(id++, 'Footer', '<p:ph type="ftr" sz="quarter" idx="11"/>', d.footer, m, m.footer, true));
     const tags = this.addTags(path, { [TAG.layout]: s.layout });
     const bg = s.background ? await this.background(path, s.background) : '';
-    return `${HEAD}<p:sld ${XMLNS}${s.hideGraphics ? ' showMasterSp="0"' : ''}><p:cSld>${bg}<p:spTree>${GROUP}${out.join('')}</p:spTree><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:cSld>` +
+    return `${HEAD}<p:sld ${XMLNS}${s.hideGraphics ? ' showMasterSp="0"' : ''}${s.hidden ? ' show="0"' : ''}><p:cSld>${bg}<p:spTree>${GROUP}${out.join('')}</p:spTree><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:cSld>` +
       `<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>${transitionXml(s.transition)}${timingXml(s.anims ?? [], (a) => spids.get(`${a.target.kind} ${a.target.bond ? 'b' : ''}${a.target.id}`) ?? []) || videoTimingXml(videos)}</p:sld>`;
   }
 
@@ -711,14 +723,49 @@ class Writer {
    * keeps it as made here, used when PowerPoint's copy charts the same numbers.
    */
   private charts = 0;
-  private async chart(path: string, box0: ChartBox, box: Rect, id: number): Promise<string> {
+  private async chart(path: string, box0: ChartBox, box: Rect, id: number, src?: string): Promise<string> {
     const w = box.x2 - box.x1, h = box.y2 - box.y1;
     const rid = await addChart(this.pkg, path, 'ppt', ++this.charts, box0, w, h);
     const tags = this.addTags(path, { [TAG.chart]: JSON.stringify(box0) });
-    return `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="Chart ${id - 1}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>` +
+    const ex = isChartEx(box0.chart.kind);
+    const uri = ex ? CX_NS : C_NS, tag = ex ? 'cx' : 'c';
+    const frame = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="Chart ${id - 1}"/><p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>` +
       `<p:nvPr><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:nvPr></p:nvGraphicFramePr>` +
       `<p:xfrm><a:off x="${emu(box.x1)}" y="${emu(box.y1)}"/><a:ext cx="${emu(w)}" cy="${emu(h)}"/></p:xfrm>` +
-      `<a:graphic><a:graphicData uri="${C_NS}"><c:chart xmlns:c="${C_NS}" r:id="${rid}"/></a:graphicData></a:graphic></p:graphicFrame>`;
+      `<a:graphic><a:graphicData uri="${uri}"><${tag}:chart xmlns:${tag}="${uri}" r:id="${rid}"/></a:graphicData></a:graphic></p:graphicFrame>`;
+    if (!ex) return frame;
+    // PowerPoint 2016's newer chart, with a picture of it for older programs
+    const pic = src ? await this.picture(path, src, box, `Chart ${id - 1}`, id, null) : '';
+    return `<mc:AlternateContent xmlns:mc="${MC_NS}"><mc:Choice xmlns:cx1="${CX1_NS}" Requires="cx1">${frame}</mc:Choice><mc:Fallback>${pic}</mc:Fallback></mc:AlternateContent>`;
+  }
+
+  /**
+   * An equation: PowerPoint's own (Office Math in a text box, the way PowerPoint saves one), at
+   * the size it shows here, with a picture of it for programs that don't know equations. A tag
+   * keeps the LaTeX as typed here.
+   */
+  private async equation(path: string, s: Shape, box: Rect, id: number): Promise<string> {
+    const m = s.math!;
+    const w = box.x2 - box.x1, h = box.y2 - box.y1;
+    const size = m.size * shapeMathScale(m, w, h, this.measure);
+    const sz = Math.max(100, Math.round(size * 100));
+    const look = `<a:rPr ${lang} sz="${sz}" dirty="0"><a:solidFill><a:srgbClr val="${hex6(m.color)}"/></a:solidFill><a:latin typeface="Cambria Math" panose="02040503050406030204" pitchFamily="18" charset="0"/></a:rPr>`;
+    const tags = this.addTags(path, { [TAG.math]: JSON.stringify(m) });
+    const name = `Equation ${id - 1}`;
+    const choice = `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr txBox="1"/><p:nvPr><p:custDataLst><p:tags r:id="${tags}"/></p:custDataLst></p:nvPr></p:nvSpPr>` +
+      `<p:spPr>${xfrm(box)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>` +
+      `<p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" rtlCol="0" anchor="ctr"><a:noAutofit/></a:bodyPr><a:lstStyle/>` +
+      `<a:p><a:pPr algn="ctr"/><a14:m><m:oMathPara xmlns:m="${NS_M}"><m:oMathParaPr><m:jc m:val="centerGroup"/></m:oMathParaPr><m:oMath>${toOmml(m.tex, look)}</m:oMath></m:oMathPara></a14:m>` +
+      `<a:endParaRPr ${lang} sz="${sz}" dirty="0"/></a:p></p:txBody></p:sp>`;
+    // programs without equations show its picture (300 dots per inch)
+    let fallback = '';
+    try {
+      const svg = new TextDecoder().decode(fromDataUrl(shapeMathPicture(m, this.measure)).bytes);
+      const k = 300 / 72;
+      const png = await this.opts.svgToPng(svg, Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k)));
+      fallback = picXml(id, name, this.addMedia(path, png, 'png'), null, box, null, null, undefined, mathText(m.tex));
+    } catch { /* PowerPoint shows the equation itself */ }
+    return `<mc:AlternateContent xmlns:mc="${NS_MC}"><mc:Choice xmlns:a14="${NS_A14}" Requires="a14">${choice}</mc:Choice><mc:Fallback>${fallback}</mc:Fallback></mc:AlternateContent>`;
   }
 
   /**

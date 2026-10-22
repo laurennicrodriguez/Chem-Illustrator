@@ -7,6 +7,8 @@
 // Citations are ADDIN fields (as reference managers write them) whose result is the numbers
 // in superscript, which Word shows and leaves alone; the bibliography is ordinary paragraphs
 // inside a hidden bookmark. Our own part keeps the references, so they come back here live.
+// Footnotes and endnotes are Word's own (footnotes.xml and endnotes.xml), and a table of figures
+// is Word's TOC field for a caption label (\c "Figure").
 
 import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
 import type { DocStyle } from '../style';
@@ -15,20 +17,23 @@ import { Package, REL, NS, xml, hex6, emu, MediaFiles, structureAltText } from '
 import { facesToEmbed, newGuid, obfuscate, type FontSource } from './font-embed';
 import { fromDataUrl } from '../render/images';
 import { fitParas, listMarkers, paraCount, splitParagraphs } from '../text/paragraphs';
-import { BOX_PAD, COL_GAP, COMPOUND, FLOAT_GAP, columnsOf, OBJECT_CHAR, SHADOWS, fieldTexts, floatOf, lookExtent, lookOf, pruneObjects, styleOf, runStyleOf, type DocObject, type DocText, type FigureLook, type NamedStyle, type PageSetup } from '../document/document';
+import { BOX_PAD, COL_GAP, COMPOUND, END_FORMAT, FLOAT_GAP, FOOT_FORMAT, columnsOf, OBJECT_CHAR, SHADOWS, fieldTexts, floatOf, lookExtent, lookOf, noteStyle, objectsInText, pruneObjects, styleOf, runStyleOf, type DocObject, type DocText, type FigureLook, type HeaderFooter, type NamedStyle, type PageSetup } from '../document/document';
 import { ACS_LINE, CELL_PAD, GRID_LINE, bibHang, docCellAlign, shownSize } from '../document/doc-layout';
+import { sectionsOf, type Section } from '../document/sections';
 import { bibliography, piecesText } from '../document/references';
-import { TOC_INDENT, tocEntries } from '../document/toc';
+import { TOC_INDENT, tocEntries, tofEntries } from '../document/toc';
 import { parseRev } from '../document/revisions';
 import { cmtIds, initials, placedComments, type CommentThread } from '../document/comments';
 import { toOmml } from '../document/math';
 import { documentMeasure } from '../text/font-measure';
 import { arialWidth } from '../text-metrics';
-import { PAD_X, PAD_Y, cellAlign, isCovered, spanOf } from '../table';
+import { PAD_X, PAD_Y, cellAlign, coveringCell, isCovered, rowSpanOf, spanOf } from '../table';
 import { connectorSpPr, geoSpPr, xfrm } from './pptx-write';
 import { geoDef } from '../design/geo';
 import { shapeOrder } from '../objects';
 import { addChart, C_NS } from './office-chart';
+import { CX_NS, CX1_NS } from './xlsx-chart';
+import { isChartEx } from '../sheet/chart';
 import type { ChartBox } from '../sheet/chart-box';
 import {
   BIB_MARK, CHART_NAME, CITE_FIELD, DOCX_CT, W14_NS, W15_NS, DOCX_REL, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, MC_NS, M_NS, PIC_NS, TABLE_NAME, W_NS, WORD_HIGHLIGHTS, WP_NS, WPS_NS, WPG_NS, twips, toWordDate, type DocxModel,
@@ -84,9 +89,16 @@ class DocxWriter {
   /** How much of each comment's text is still to be written (its range closes when none is left). */
   private cmtLeft = new Map<number, number>();
   private cmtOpen = new Set<number>();
+  /** Word's ids of the footnotes and endnotes, by our object id (each kind from 1, in order). */
+  private noteIds = new Map<number, number>();
 
   constructor(private t: DocText, private deps: DocxDeps, private pages?: string[]) {
     this.shown = fieldTexts(t);
+    let foot = 0, end = 0;
+    for (const id of objectsInText(t.runs)) {
+      const o = t.objects[id];
+      if (o?.kind === 'note' && !this.noteIds.has(id)) this.noteIds.set(id, o.end ? ++end : ++foot);
+    }
     for (const o of Object.values(t.objects)) {
       if (o.kind === 'ref' && t.objects[o.target]?.kind === 'seq') this.bookmarks.set(o.target, `_Ref${100000000 + o.target}`);
     }
@@ -113,16 +125,18 @@ class DocxWriter {
     for (const [ext, type] of Object.entries(EXT_TYPE)) pkg.defaultType(ext, type);
     const main = 'word/document.xml';
     const body = await this.body(main);
-    const sect = this.section(main);
+    const secs = sectionsOf(this.t);
+    const sect = this.section(main, secs[secs.length - 1]);
     pkg.add(main, `${HEAD}<w:document xmlns:w="${W_NS}" xmlns:r="${NS.r}" xmlns:wp="${WP_NS}" xmlns:a="${NS.a}" xmlns:pic="${PIC_NS}" xmlns:wps="${WPS_NS}" xmlns:wpg="${WPG_NS}" xmlns:mc="${MC_NS}" xmlns:m="${M_NS}"><w:body>${body}${sect}</w:body></w:document>`, DOCX_CT.document);
     pkg.relate(main, DOCX_REL.styles, 'styles.xml');
     pkg.add('word/styles.xml', this.styles(), DOCX_CT.styles);
     if (this.cmts.size) this.commentParts(main);
+    const notes = this.noteParts(main);
     pkg.relate(main, DOCX_REL.numbering, 'numbering.xml');
     pkg.add('word/numbering.xml', this.numbering(), DOCX_CT.numbering);
     pkg.relate(main, DOCX_REL.settings, 'settings.xml');
     const settings = (embed: boolean) => `${HEAD}<w:settings xmlns:w="${W_NS}"><w:zoom w:percent="100"/>${embed ? '<w:embedTrueTypeFonts/><w:saveSubsetFonts/>' : ''}${this.t.track ? '<w:trackRevisions/>' : ''}<w:defaultTabStop w:val="720"/>` +
-      `<w:characterSpacingControl w:val="doNotCompress"/>` +
+      `<w:characterSpacingControl w:val="doNotCompress"/>${notes}` +
       `<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`;
     pkg.add('word/settings.xml', settings(false), DOCX_CT.settings);
     // our own part: each structure's drawing, and each table as made here
@@ -177,15 +191,25 @@ class DocxWriter {
     const out: string[] = [];
     let lastWasTable = false;
     let listNum = 0;
+    // each section but the last ends with its section properties in its last paragraph (Word's way)
+    const secs = sectionsOf({ ...t, paras });
+    const endsSection = new Map<number, Section>();
+    for (const s of secs.slice(0, -1)) endsSection.set(s.end - 1, s);
     for (let p = 0; p < n; p++) {
       const runs = runsOf[p] ?? [];
       const ps = paras[p];
+      const ending = endsSection.get(p);
+      const sectXml = ending ? this.section(main, ending) : '';
+      // a section ending with a table, contents or bibliography: an empty paragraph after it holds the section's properties
+      const before = out.length;
+      const close = () => { if (sectXml && out.length > before) out.push(`<w:p><w:pPr>${sectXml}</w:pPr></w:p>`); if (sectXml) lastWasTable = false; };
       // a paragraph holding just a table: Word's own table
       const only = runs.length === 1 && runs[0].obj !== undefined && runs[0].text === OBJECT_CHAR ? t.objects[runs[0].obj] : undefined;
       if (only?.kind === 'table') {
         if (lastWasTable) out.push('<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p>');
         out.push(await this.docTable(main, only.table, ps.align ?? styleOf(t, ps).align));
         lastWasTable = true;
+        close();
         continue;
       }
       const table = only?.kind === 'drawing' ? soleTable(only.contents) : null;
@@ -193,12 +217,13 @@ class DocxWriter {
         if (lastWasTable) out.push('<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p>');
         out.push(this.table(runs[0].obj!, table, ps.align ?? styleOf(t, ps).align));
         lastWasTable = true;
+        close();
         continue;
       }
       // numbered lists: a new Word list where our numbers start again
       if (ps.list === 'number' && !ps.cont && markers[p] === '1.' && (ps.level ?? 0) === 0) listNum = ++this.numberedLists + 1;
       // a bibliography: its entries as paragraphs of their own, with any text round it in paragraphs before and after
-      const isBib = (r: TextRun) => r.obj !== undefined && (t.objects[r.obj]?.kind === 'bib' || t.objects[r.obj]?.kind === 'toc');
+      const isBib = (r: TextRun) => r.obj !== undefined && ['bib', 'toc', 'tof'].includes(t.objects[r.obj]?.kind ?? '');
       if (runs.some(isBib)) {
         let part: TextRun[] = [];
         for (const r of runs) {
@@ -206,10 +231,11 @@ class DocxWriter {
           if (part.some((x) => x.text)) out.push(await this.paragraph(main, ps, part, listNum));
           part = [];
           const o = t.objects[r.obj!];
-          out.push(o?.kind === 'toc' ? this.contents(o.levels, ps) : this.bibliography(r.obj!, ps));
+          out.push(o?.kind === 'toc' ? this.contents(o.levels, ps) : o?.kind === 'tof' ? this.figureList(o.name, ps) : this.bibliography(r.obj!, ps));
         }
         if (part.some((x) => x.text)) out.push(await this.paragraph(main, ps, part, listNum));
-      } else out.push(await this.paragraph(main, ps, runs, listNum, p));
+        close();
+      } else out.push(await this.paragraph(main, ps, runs, listNum, p, sectXml));
       lastWasTable = false;
     }
     // comments still open (on a table, say) close in a paragraph of their own
@@ -300,7 +326,7 @@ class DocxWriter {
     this.pkg.add('word/commentsExtended.xml', `${HEAD}<w15:commentsEx xmlns:w15="${W15_NS}" xmlns:mc="${MC_NS}">${ex.join('')}</w15:commentsEx>`, DOCX_CT.commentsExtended);
   }
 
-  private async paragraph(main: string, ps: ParaStyle, runs: TextRun[], listNum: number, index = -1): Promise<string> {
+  private async paragraph(main: string, ps: ParaStyle, runs: TextRun[], listNum: number, index = -1, sectXml = ''): Promise<string> {
     const t = this.t;
     const st = styleOf(t, ps);
     const pPr: string[] = [];
@@ -314,6 +340,7 @@ class DocxWriter {
       const id = ps.list === 'bullet' ? 1 : Math.max(2, listNum);
       pPr.push(`<w:numPr><w:ilvl w:val="${Math.max(0, Math.min(8, ps.level ?? 0))}"/><w:numId w:val="${id}"/></w:numPr>`);
     }
+    if (ps.noLineNumbers) pPr.push('<w:suppressLineNumbers/>');
     const sp: string[] = [];
     const before = ps.spaceBefore ?? 0, after = ps.spaceAfter ?? 0, line = ps.line ?? 1;
     if (before !== st.spaceBefore) sp.push(`w:before="${twips(before)}"`);
@@ -336,6 +363,8 @@ class DocxWriter {
     // the paragraph mark itself inserted or deleted while tracking
     const mr = parseRev(index >= 0 ? this.markRev[index] : undefined);
     if (mr) pPr.push(`<w:rPr><w:${mr.kind} ${this.revAttrs(this.markRev[index]!)}/></w:rPr>`);
+    // the section ending with this paragraph
+    if (sectXml) pPr.push(sectXml);
 
     // a caption that references point to: a bookmark round its label and number; a compound
     // number's bookmark is round just the number
@@ -419,6 +448,68 @@ class DocxWriter {
     return paras.join('');
   }
 
+  /**
+   * A table of figures as Word's TOC field for the captions of one label (\c "Scheme"), or, for
+   * every caption, for the paragraphs in the Caption style; its lines as written here, each
+   * caption with its page number after a line of dots, in Word's "table of figures" style.
+   */
+  private figureList(name: string, ps: ParaStyle): string {
+    const t = this.t;
+    const entries = tofEntries(t, name, this.shown);
+    const pages = this.pages;
+    const textW = Math.max(36, t.page.w - t.page.left - t.page.right);
+    const dirty = pages ? '' : ' w:dirty="true"';
+    const instr = name ? ` TOC \\h \\z \\c "${xml(name)}" ` : ' TOC \\h \\z \\t "Caption,1" ';
+    const begin = `<w:r><w:fldChar w:fldCharType="begin"${dirty}/></w:r><w:r><w:instrText xml:space="preserve">${instr}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>`;
+    const end = '<w:r><w:fldChar w:fldCharType="end"/></w:r>';
+    const line = ps.line && ps.line !== 1 ? ` w:line="${Math.round(240 * ps.line)}" w:lineRule="auto"` : '';
+    const paras = entries.map((e, i) => {
+      const pPr = `<w:pPr><w:pStyle w:val="TableofFigures"/><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="${twips(textW)}"/></w:tabs><w:spacing w:before="0" w:after="0"${line}/></w:pPr>`;
+      return `<w:p>${pPr}${i === 0 ? begin : ''}${run('', e.text)}${run('', `\t${pages?.[e.para] ?? ''}`)}${i === entries.length - 1 ? end : ''}</w:p>`;
+    });
+    if (!paras.length) paras.push(`<w:p>${begin}${end}</w:p>`);
+    return paras.join('');
+  }
+
+  /**
+   * Word's footnotes and endnotes parts: the lines Word draws above the notes (its separators),
+   * then each note's paragraphs in the Footnote Text (or Endnote Text) style, its number first.
+   * Gives the settings that name the separators (empty when there are no notes).
+   */
+  private noteParts(main: string): string {
+    const t = this.t;
+    const st = noteStyle(t);
+    let settings = '';
+    for (const end of [false, true]) {
+      const tag = end ? 'endnote' : 'footnote';
+      const mine = [...this.noteIds].filter(([id]) => { const o = t.objects[id]; return o?.kind === 'note' && !!o.end === end; });
+      if (!mine.length) continue;
+      const style = end ? 'EndnoteText' : 'FootnoteText', ref = end ? 'EndnoteReference' : 'FootnoteReference';
+      const sepPara = (kind: string) => `<w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:r><w:${kind}/></w:r></w:p>`;
+      const out = [`<w:${tag} w:type="separator" w:id="-1">${sepPara('separator')}</w:${tag}>`, `<w:${tag} w:type="continuationSeparator" w:id="0">${sepPara('continuationSeparator')}</w:${tag}>`];
+      for (const [id, n] of mine) {
+        const o = t.objects[id];
+        if (o?.kind !== 'note') continue;
+        const runsOf = splitParagraphs(o.runs);
+        const paras = fitParas(o.paras, paraCount(rt.plainText(o.runs)));
+        const ps = paras.map((p, i) => {
+          const pPr: string[] = [`<w:pStyle w:val="${style}"/>`];
+          const align = p.align ?? 'left';
+          if (align !== st.align) pPr.push(`<w:jc w:val="${JC[align]}"/>`);
+          const mark = i === 0 ? `<w:r><w:rPr><w:rStyle w:val="${ref}"/></w:rPr><w:${tag}Ref/></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r>` : '';
+          const body = (runsOf[i] ?? []).filter((r) => r.obj === undefined).map((r) => this.tracked(r.rev, this.textRuns(r, st))).join('');
+          return `<w:p><w:pPr>${pPr.join('')}</w:pPr>${mark}${body}</w:p>`;
+        });
+        out.push(`<w:${tag} w:id="${n}">${ps.join('')}</w:${tag}>`);
+      }
+      const name = `${tag}s.xml`;
+      this.pkg.relate(main, end ? DOCX_REL.endnotes : DOCX_REL.footnotes, name);
+      this.pkg.add(`word/${name}`, `${HEAD}<w:${tag}s xmlns:w="${W_NS}">${out.join('')}</w:${tag}s>`, end ? DOCX_CT.endnotes : DOCX_CT.footnotes);
+      settings += `<w:${tag}Pr><w:${tag} w:id="-1"/><w:${tag} w:id="0"/></w:${tag}Pr>`;
+    }
+    return settings;
+  }
+
   /** Runs of text, a formula's parts each with its own position. */
   private textRuns(r: TextRun, st: NamedStyle): string {
     if (!r.text) return '';
@@ -444,7 +535,13 @@ class DocxWriter {
     }
     // a citation: its numbers, which Word shows as they are (an ADDIN field is never worked out again by Word)
     if (o.kind === 'cite') return field(rPr, ` ${CITE_FIELD} ${o.refs.map(xml).join(' ')} `, shown);
-    if (o.kind === 'bib' || o.kind === 'toc' || o.kind === 'math') return '';
+    // a footnote's or endnote's number: Word's own reference to it (Word numbers it)
+    if (o.kind === 'note') {
+      const n = this.noteIds.get(id);
+      const tag = o.end ? 'endnote' : 'footnote';
+      return n === undefined ? '' : `<w:r><w:rPr><w:rStyle w:val="${o.end ? 'EndnoteReference' : 'FootnoteReference'}"/>${runProps({ ...r, sup: undefined }, st, {})}</w:rPr><w:${tag}Reference w:id="${n}"/></w:r>`;
+    }
+    if (o.kind === 'bib' || o.kind === 'toc' || o.kind === 'tof' || o.kind === 'math') return '';
     if (o.kind === 'textbox') return this.textBox(main, id, o, rPr);
     return this.picture(main, id, o, rPr);
   }
@@ -502,9 +599,30 @@ class DocxWriter {
     const rid = await addChart(this.pkg, main, 'word', ++this.chartNo, box, size.w, size.h);
     (this.model.charts ??= {})[id] = box;
     const n = this.docPr++;
-    return `<w:r>${rPr ? `<w:rPr>${rPr}</w:rPr>` : ''}<w:drawing>` + this.placed(o, emu(size.w), emu(size.h),
+    const ex = isChartEx(box.chart.kind);
+    const uri = ex ? CX_NS : C_NS;
+    const tag = ex ? 'cx' : 'c';
+    const chart = '<w:drawing>' + this.placed(o, emu(size.w), emu(size.h),
       `<wp:docPr id="${n}" name="${CHART_NAME} ${id}"/><wp:cNvGraphicFramePr/>` +
-      `<a:graphic><a:graphicData uri="${C_NS}"><c:chart xmlns:c="${C_NS}" r:id="${rid}"/></a:graphicData></a:graphic>`) + '</w:drawing></w:r>';
+      `<a:graphic><a:graphicData uri="${uri}"><${tag}:chart xmlns:${tag}="${uri}" r:id="${rid}"/></a:graphicData></a:graphic>`) + '</w:drawing>';
+    const r = rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
+    if (!ex) return `<w:r>${r}${chart}</w:r>`;
+    // Word 2016's newer chart, with a picture of it for older programs
+    let fallback = '';
+    try {
+      const { mime, bytes } = fromDataUrl(o.src);
+      const ext = MIME_EXT[mime];
+      if (ext && ext !== 'svg') {
+        const blip = this.media(main, bytes, ext);
+        const cx = emu(size.w), cy = emu(size.h), m = this.docPr++;
+        fallback = '<w:drawing>' + this.placed(o, cx, cy,
+          `<wp:docPr id="${m}" name="${CHART_NAME} ${id}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>` +
+          `<a:graphic><a:graphicData uri="${PIC_NS}"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="Chart"/><pic:cNvPicPr/></pic:nvPicPr>` +
+          `<pic:blipFill><a:blip r:embed="${blip}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
+          `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic>`) + '</w:drawing>';
+      }
+    } catch { /* no picture: older programs show nothing */ }
+    return `<w:r>${r}<mc:AlternateContent><mc:Choice xmlns:cx1="${CX1_NS}" Requires="cx1">${chart}</mc:Choice><mc:Fallback>${fallback}</mc:Fallback></mc:AlternateContent></w:r>`;
   }
 
   private async picture(main: string, id: number, o: DocObject, rPr: string): Promise<string> {
@@ -653,23 +771,43 @@ class DocxWriter {
       const cells: string[] = [];
       const lastHead = tab.head > 0 && r === tab.head - 1 && r < tab.rows.length - 1;
       for (let c = 0; c < tab.cols.length; c++) {
-        if (isCovered(tab, r, c)) continue;
-        const span = spanOf(tab, r, c);
+        const own = coveringCell(tab, r, c);
+        // a cell under one merged down from above: Word's continuing cell, as wide as the merged one
+        const under = own.r < r;
+        if (own.c !== c || (!under && isCovered(tab, r, c))) continue;
+        const span = spanOf(tab, own.r, own.c);
         const w = tab.cols.slice(c, c + span).reduce((a, b) => a + b, 0);
-        const cell = row[c] ?? { runs: [] };
+        const cell = tab.rows[own.r]?.[own.c] ?? row[c] ?? { runs: [] };
         const tcPr = [`<w:tcW w:w="${twips(w)}" w:type="dxa"/>`];
         if (span > 1) tcPr.push(`<w:gridSpan w:val="${span}"/>`);
+        if (under) tcPr.push('<w:vMerge/>');
+        else if (rowSpanOf(tab, r, c) > 1) tcPr.push('<w:vMerge w:val="restart"/>');
         if (tab.lines === 'acs' && lastHead) tcPr.push(`<w:tcBorders><w:bottom ${grid}/></w:tcBorders>`);
         if (cell.fill) tcPr.push(`<w:shd w:val="clear" w:color="auto" w:fill="${hex6(cell.fill)}"/>`);
         if (cell.valign) tcPr.push(`<w:vAlign w:val="${cell.valign}"/>`);
-        // the cell's paragraphs, set as the text is, lined up as the cell is
+        if (under) { cells.push(`<w:tc><w:tcPr>${tcPr.join('')}</w:tcPr><w:p/></w:tc>`); continue; }
+        // the cell's paragraphs, set as the text is, lined up as the cell is; a table in the cell as Word's table in it
         const n = paraCount(rt.plainText(cell.runs));
         const ps = fitParas(cell.paras, n);
         const ca = docCellAlign(tab, r, c);
         const parts = splitParagraphs(cell.runs);
         const paras: string[] = [];
-        for (let i = 0; i < n; i++) paras.push(await this.paragraph(main, { ...ps[i], align: ps[i]?.align ?? ca }, parts[i] ?? [], 0));
-        cells.push(`<w:tc><w:tcPr>${tcPr.join('')}</w:tcPr>${paras.join('') || '<w:p/>'}</w:tc>`);
+        let lastTable = false;
+        for (let i = 0; i < n; i++) {
+          const pr = parts[i] ?? [];
+          const inner = pr.length === 1 && pr[0].obj !== undefined && pr[0].text === OBJECT_CHAR ? this.t.objects[pr[0].obj] : undefined;
+          if (inner?.kind === 'table') {
+            if (lastTable) paras.push('<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p>');
+            paras.push(await this.docTable(main, inner.table, ps[i]?.align ?? ca));
+            lastTable = true;
+            continue;
+          }
+          lastTable = false;
+          paras.push(await this.paragraph(main, { ...ps[i], align: ps[i]?.align ?? ca }, pr, 0));
+        }
+        // (Word's cells end with a paragraph, after any table in them)
+        if (lastTable || !paras.length) paras.push('<w:p/>');
+        cells.push(`<w:tc><w:tcPr>${tcPr.join('')}</w:tcPr>${paras.join('')}</w:tc>`);
       }
       rows.push(`<w:tr>${r < tab.head ? '<w:trPr><w:tblHeader/></w:trPr>' : ''}${cells.join('')}</w:tr>`);
     }
@@ -678,15 +816,25 @@ class DocxWriter {
 
   // ---------------------------------------------------------------- page, header and footer
 
-  private section(main: string): string {
+  /** Header and footer parts written so far (each section with its own gets its own). */
+  private hfParts = { header: 0, footer: 0 };
+
+  /**
+   * A section's properties: how it starts, its paper, margins, columns, page numbering and line
+   * numbers, and its own header and footer (a section linked to the one before has none, and
+   * Word shows the one before's).
+   */
+  private section(main: string, sec: Section): string {
     const t = this.t;
-    const pg = t.page;
-    const hf = t.hf;
+    const pg = sec.page;
+    const hf = sec.hf;
+    const fullW = Math.max(36, pg.w - pg.left - pg.right);
     const refs: string[] = [];
     const add = (kind: 'header' | 'footer', type: 'default' | 'first', numbered: boolean) => {
-      const xmlText = this.headerFooter(kind, numbered);
+      if (sec.linked) return;
+      const xmlText = this.headerFooter(kind, numbered, hf, fullW);
       if (!xmlText) return;
-      const name = `${kind}${type === 'first' ? '2' : '1'}.xml`;
+      const name = `${kind}${++this.hfParts[kind]}.xml`;
       this.pkg.add(`word/${name}`, xmlText, kind === 'header' ? DOCX_CT.header : DOCX_CT.footer);
       const rid = this.pkg.relate(main, kind === 'header' ? DOCX_REL.header : DOCX_REL.footer, name);
       refs.push(`<w:${kind}Reference w:type="${type}" r:id="${rid}"/>`);
@@ -699,15 +847,24 @@ class DocxWriter {
     // header references come before footer references
     refs.sort((a, b) => Number(b.startsWith('<w:header')) - Number(a.startsWith('<w:header')));
     const land = pg.w > pg.h;
+    // the notes' numbering, where it isn't Word's own (1, 2, 3 and i, ii, iii)
+    const fmt = (tag: string, v: string | undefined, def: string) => (v && v !== def ? `<w:${tag}Pr><w:numFmt w:val="${v}"/></w:${tag}Pr>` : '');
+    refs.push(fmt('footnote', t.notes?.foot, FOOT_FORMAT), fmt('endnote', t.notes?.end, END_FORMAT));
+    // how it starts (the first section starts the document)
+    if (sec.index > 0 && sec.kind !== 'nextPage') refs.push(`<w:type w:val="${sec.kind}"/>`);
+    // Word counts line numbers' start from 0 (start="4" numbers from 5)
+    const L = sec.lines;
+    const lines = L ? `<w:lnNumType w:countBy="${Math.max(1, Math.round(L.countBy))}"${L.start !== 1 ? ` w:start="${Math.max(0, Math.round(L.start) - 1)}"` : ''}${L.distance !== undefined ? ` w:distance="${twips(L.distance)}"` : ''} w:restart="${L.restart === 'page' ? 'newPage' : L.restart === 'section' ? 'newSection' : 'continuous'}"/>` : '';
+    const numFmt = sec.format !== 'decimal' ? ` w:fmt="${sec.format}"` : '';
+    const start = sec.restart !== undefined ? ` w:start="${Math.round(sec.restart)}"` : '';
     return `<w:sectPr>${refs.join('')}<w:pgSz w:w="${twips(pg.w)}" w:h="${twips(pg.h)}"${land ? ' w:orient="landscape"' : ''}/>` +
       `<w:pgMar w:top="${twips(pg.top)}" w:right="${twips(pg.right)}" w:bottom="${twips(pg.bottom)}" w:left="${twips(pg.left)}" w:header="${twips(pg.header)}" w:footer="${twips(pg.footer)}" w:gutter="0"/>` +
-      `<w:pgNumType w:start="${Math.round(hf.start)}"/>${colsXml(pg)}${titlePg ? '<w:titlePg/>' : ''}<w:docGrid w:linePitch="360"/></w:sectPr>`;
+      `${lines}${numFmt || start ? `<w:pgNumType${numFmt}${start}/>` : ''}${colsXml(pg)}${titlePg ? '<w:titlePg/>' : ''}<w:docGrid w:linePitch="360"/></w:sectPr>`;
   }
 
   /** A header or footer part: its left, centre and right text on one line (with tab stops), and the page number. Null when empty. */
-  private headerFooter(kind: 'header' | 'footer', numbered: boolean): string | null {
+  private headerFooter(kind: 'header' | 'footer', numbered: boolean, hf: HeaderFooter, fullW: number): string | null {
     const t = this.t;
-    const hf = t.hf;
     const zones = hf[kind];
     const place = hf.numbers === 'none' || !numbered ? null : hf.numbers;
     const at = place && place.startsWith(kind) ? ['left', 'center', 'right'].indexOf(place.split('-')[1]) : -1;
@@ -723,12 +880,12 @@ class DocxWriter {
       if (i === at) {
         const lead = (text ? ' ' : '') + hf.prefix;
         if (lead) parts.push(run(rPr, lead));
-        parts.push(field(rPr, ' PAGE \\* CHARFORMAT ', String(hf.start)));
+        parts.push(field(rPr, ' PAGE \\* CHARFORMAT ', String(hf.start ?? 1)));
       }
     }
     // drop the tabs after the last zone with something in it
     while (parts.length && parts[parts.length - 1].includes('<w:tab/>')) parts.pop();
-    const pPr = `<w:pPr><w:tabs><w:tab w:val="center" w:pos="${twips(this.fullW / 2)}"/><w:tab w:val="right" w:pos="${twips(this.fullW)}"/></w:tabs>` +
+    const pPr = `<w:pPr><w:tabs><w:tab w:val="center" w:pos="${twips(fullW / 2)}"/><w:tab w:val="right" w:pos="${twips(fullW)}"/></w:tabs>` +
       `<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/><w:ind w:left="0" w:firstLine="0"/><w:jc w:val="left"/></w:pPr>`;
     return `${HEAD}<w:${kind === 'header' ? 'hdr' : 'ftr'} xmlns:w="${W_NS}" xmlns:r="${NS.r}"><w:p>${pPr}${parts.join('')}</w:p></w:${kind === 'header' ? 'hdr' : 'ftr'}>`;
   }
@@ -749,6 +906,21 @@ class DocxWriter {
     // the contents' lines (Word's own "toc 1" to "toc 3", which Update Field uses)
     if (Object.values(t.objects).some((o) => o.kind === 'toc')) {
       for (let n = 1; n <= 3; n++) out.push(`<w:style w:type="paragraph" w:styleId="TOC${n}"><w:name w:val="toc ${n}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="39"/><w:unhideWhenUsed/><w:pPr><w:spacing w:after="0"/><w:ind w:left="${twips((n - 1) * TOC_INDENT)}"/><w:jc w:val="left"/></w:pPr></w:style>`);
+    }
+    // the table of figures' lines (Word's own "table of figures")
+    if (Object.values(t.objects).some((o) => o.kind === 'tof')) {
+      out.push(`<w:style w:type="paragraph" w:styleId="TableofFigures"><w:name w:val="table of figures"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="99"/><w:unhideWhenUsed/><w:pPr><w:spacing w:after="0"/><w:jc w:val="left"/></w:pPr></w:style>`);
+    }
+    // footnotes and endnotes: Word's own styles for their text and their numbers
+    if (Object.values(t.objects).some((o) => o.kind === 'note')) {
+      const ns = noteStyle(t);
+      for (const [sid, nm] of [['FootnoteText', 'footnote text'], ['EndnoteText', 'endnote text']]) {
+        if (t.styles[sid]) continue;
+        out.push(styleXml({ ...ns, id: sid, name: nm }, ids).replace(' w:customStyle="1"', ''));
+      }
+      for (const [sid, nm] of [['FootnoteReference', 'footnote reference'], ['EndnoteReference', 'endnote reference']]) {
+        out.push(`<w:style w:type="character" w:styleId="${sid}"><w:name w:val="${nm}"/><w:basedOn w:val="DefaultParagraphFont"/><w:uiPriority w:val="99"/><w:semiHidden/><w:unhideWhenUsed/><w:rPr><w:vertAlign w:val="superscript"/></w:rPr></w:style>`);
+      }
     }
     out.push(`<w:style w:type="character" w:default="1" w:styleId="DefaultParagraphFont"><w:name w:val="Default Paragraph Font"/><w:uiPriority w:val="1"/><w:semiHidden/><w:unhideWhenUsed/></w:style>`);
     // formulas look like any other text in Word: the style only marks them, so they stay formulas when opened here

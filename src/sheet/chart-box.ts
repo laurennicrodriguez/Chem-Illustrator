@@ -5,7 +5,7 @@
 // PowerPoint files as their own charts, with the workbook embedded for their Edit Data.
 
 import { Workbook, type Sheet } from './workbook';
-import { Chart, ChartKind, SeriesData, chartData, chartFromRange, newChartId, mapChartRefs } from './chart';
+import { Chart, ChartKind, SeriesData, chartData, chartFromRange, newChartId, mapChartRefs, isXY } from './chart';
 import { MAX_COLS } from './refs';
 import { renameSheetInFormula } from './formula';
 
@@ -69,6 +69,34 @@ export function sampleCells(kind: ChartKind): string[][] {
     ];
   }
   if (kind === 'pie') return [['Product', 'Yield'], ['Major', '72'], ['Minor', '18'], ['Recovered', '10']];
+  if (kind === 'histogram') {
+    return [['Yield (%)'], ...['62', '71', '68', '75', '80', '66', '73', '78', '84', '70', '77', '69', '74', '81', '72', '65', '79', '76', '88', '58'].map((v) => [v])];
+  }
+  if (kind === 'box') {
+    const runs: [string, string[]][] = [['Pd(OAc)₂', ['78', '81', '74', '80', '76', '62']], ['Pd₂(dba)₃', ['85', '88', '83', '86', '90', '84']], ['PdCl₂', ['41', '45', '38', '50', '43', '44']]];
+    return [['Catalyst', 'Yield (%)'], ...runs.flatMap(([cat, ys]) => ys.map((y) => [cat, y]))];
+  }
+  if (kind === 'bubble') {
+    return [
+      ['Temperature (°C)', 'Yield (%)', 'Scale (mmol)'],
+      ['25', '42', '0.5'], ['40', '61', '1'], ['60', '78', '2'], ['80', '85', '5'], ['100', '71', '10'],
+    ];
+  }
+  if (kind === 'combo') {
+    return [
+      ['Catalyst', 'Yield (%)', 'TON'],
+      ['Pd(OAc)₂', '78', '780'],
+      ['Pd₂(dba)₃', '85', '1700'],
+      ['Pd(PPh₃)₄', '62', '620'],
+      ['PdCl₂', '41', '410'],
+    ];
+  }
+  if (kind === 'radar') {
+    return [
+      ['Property', 'Ligand A', 'Ligand B'],
+      ['Yield', '8', '6'], ['ee', '9', '5'], ['Rate', '5', '9'], ['Stability', '7', '8'], ['Cost', '4', '7'],
+    ];
+  }
   return [
     ['Catalyst', 'Yield (%)', 'ee (%)'],
     ['Pd(OAc)₂', '78', '64'],
@@ -88,7 +116,9 @@ export function newChartBox(kind: ChartKind, w = 360, h = 216): ChartBox {
   chart.at = { row: 0, col: 0, dx: 0, dy: 0 };
   chart.w = Math.round(w * PX_PER_PT);
   chart.h = Math.round(h * PX_PER_PT);
-  if (kind !== 'pie' && kind !== 'scatter' && !chart.y.title) chart.y = { ...chart.y, title: '%' };
+  if (kind === 'histogram') chart.y = { ...chart.y, title: 'Count' };
+  else if (kind === 'combo') { chart.y = { ...chart.y, title: 'Yield (%)' }; chart.y2 = { title: 'TON' }; }
+  else if (kind !== 'pie' && !isXY(kind) && kind !== 'radar' && !chart.y.title) chart.y = { ...chart.y, title: '%' };
   return { chart, cells };
 }
 
@@ -145,6 +175,6 @@ export function sameBoxData(a: ChartBox, b: ChartBox): boolean {
   const da = boxData(a), db = boxData(b);
   if (da.length !== db.length) return false;
   const same = (x: number[], y: number[]) => x.length === y.length && x.every((v, i) => (Number.isNaN(v) && Number.isNaN(y[i])) || Math.abs(v - y[i]) <= 1e-9 * Math.max(1, Math.abs(v)));
-  return da.every((s, i) => same(s.ys, db[i].ys) && (a.chart.kind !== 'scatter' || same(s.xs, db[i].xs)) && s.cats.join('\u0001') === db[i].cats.join('\u0001'));
+  return da.every((s, i) => same(s.ys, db[i].ys) && (!isXY(a.chart.kind) || same(s.xs, db[i].xs)) && same(s.sizes ?? [], db[i].sizes ?? []) && s.cats.join('\u0001') === db[i].cats.join('\u0001'));
 }
 

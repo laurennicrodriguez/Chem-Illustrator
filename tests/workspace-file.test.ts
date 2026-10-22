@@ -79,25 +79,25 @@ describe('saving and opening a workspace', () => {
   it('saves new tabs and copies into the folder, and opens them all again in order', async () => {
     disk.clear();
     disk.set('/home/n/other/Scheme.cdxml', drawingBytes());
-    disk.set('/home/n/ws/Untitled.cdxml', new Uint8Array([1])); // already there: not written over
+    disk.set('/home/n/ws/Drawing 1.cdxml', new Uint8Array([1])); // already there: not written over
     const { host, ws } = workspace();
     host.edit('Atom', () => host.addAtom(10, 10, 7));
     ws.noteChange();
     expect(await ws.openBytes(disk.get('/home/n/other/Scheme.cdxml')!, 'Scheme.cdxml', { kind: 'path', path: '/home/n/other/Scheme.cdxml' })).toBe(true);
-    expect(ws.tabs.map((t) => t.name)).toEqual(['Untitled.cdxml', 'Scheme.cdxml']);
+    expect(ws.tabs.map((t) => t.name)).toEqual(['Drawing 1.cdxml', 'Scheme.cdxml']);
 
     expect(await ws.saveWorkspace('/home/n/ws/Project.ciworkspace', { copyIn: true, saveChanges: true })).toBe(true);
-    expect(disk.get('/home/n/ws/Untitled.cdxml')).toEqual(new Uint8Array([1]));
-    expect(disk.has('/home/n/ws/Untitled (2).cdxml')).toBe(true);
+    expect(disk.get('/home/n/ws/Drawing 1.cdxml')).toEqual(new Uint8Array([1]));
+    expect(disk.has('/home/n/ws/Drawing 1 (2).cdxml')).toBe(true);
     expect(disk.has('/home/n/ws/Scheme.cdxml')).toBe(true);
     const list = parseWorkspace(new TextDecoder().decode(disk.get('/home/n/ws/Project.ciworkspace')));
-    expect(list.tabs.map((t) => t.file)).toEqual(['Untitled (2).cdxml', 'Scheme.cdxml']);
+    expect(list.tabs.map((t) => t.file)).toEqual(['Drawing 1 (2).cdxml', 'Scheme.cdxml']);
     expect(list.active).toBe(1);
     expect(ws.tabs.every((t) => !t.dirty && t.ref.kind === 'path')).toBe(true);
 
     const again = workspace();
     await again.ws.openWorkspace(new TextDecoder().decode(disk.get('/home/n/ws/Project.ciworkspace')), '/home/n/ws/Project.ciworkspace');
-    expect(again.ws.tabs.map((t) => t.name)).toEqual(['Untitled (2).cdxml', 'Scheme.cdxml']);
+    expect(again.ws.tabs.map((t) => t.name)).toEqual(['Drawing 1 (2).cdxml', 'Scheme.cdxml']);
     expect(again.ws.active.name).toBe('Scheme.cdxml');
     expect(again.ws.workspacePath).toBe('/home/n/ws/Project.ciworkspace');
   });

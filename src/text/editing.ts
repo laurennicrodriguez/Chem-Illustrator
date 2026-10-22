@@ -280,6 +280,8 @@ export class TextEditing {
     const p = paraAt(text, at);
     if (paraRange(text, p).start === at) {
       const ps = this.t.paras[p] ?? {};
+      // (a section break first: the text joins the section before)
+      if (ps.section) { this.setParas(p, p, { section: undefined }, 'break'); return; }
       if (ps.pageBreak || ps.colBreak) { this.setParas(p, p, { pageBreak: undefined, colBreak: undefined }, 'break'); return; }
       if (ps.list) { this.setParas(p, p, { list: undefined, level: undefined, cont: undefined }, 'list'); return; }
       if (ps.firstLine && ps.firstLine > 0) { this.setParas(p, p, { firstLine: undefined }, 'indent'); return; }
@@ -537,6 +539,7 @@ export class TextEditing {
       const patch: Partial<rt.RunStyle> = {};
       if (e.pos) Object.assign(patch, { sub: e.pos === 'sub' || undefined, sup: e.pos === 'sup' || undefined, formula: undefined });
       if (e.italic !== undefined) patch.italic = e.italic || undefined;
+      if (e.bold !== undefined) patch.bold = e.bold || undefined;
       if (Object.keys(patch).length) runs = rt.applyStyle(runs, e.start, e.end, patch);
     }
     let anchor = this.anchor, focus = this.focus;

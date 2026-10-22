@@ -1,9 +1,10 @@
 // Excel workbooks (.xlsx), following the published Office Open XML standard (ECMA-376, part 1,
 // SpreadsheetML). Excel gets everything it can show for itself: values, its own formulas, number
 // formats, fonts, fills, borders, alignment, merged cells, column widths and row heights, frozen
-// header rows and the filter. Structures go in as pictures over their cells, with the SMILES in
-// the cell (in the formula bar, for formulas and copying; the cell's format hides it, since Excel
-// sizes columns a little differently on each screen and would show it at the picture's edge);
+// header rows, the filter, notes and comments, and data validation. Structures go in as pictures
+// over their cells, with the SMILES in the cell (in the formula bar, for formulas and copying; the
+// cell's format hides it, since Excel sizes columns a little differently on each screen and would
+// show it at the picture's edge);
 // property columns and formulas that use chemistry (MW, HRMS…) go in as their values,
 // since Excel can't work those out.
 //
@@ -17,22 +18,24 @@ import { Package, PackageReader, xml, hex6, REL, kids, kid, rAttr } from './ooxm
 import { Workbook, Sheet, Structure, CellStyle, ColumnDef, Filter, Condition, CompareOp, Border, BorderStyle, Side, makeStructure } from '../sheet/workbook';
 import { keyOf, rowOf, colOf, colName, cellName, parseRange, quoteSheet, Range, MAX_COLS, rangesOverlap } from '../sheet/refs';
 import { normalizeFormula, shiftFormula } from '../sheet/formula';
+import { FUNCTION_NAMES } from '../sheet/evaluate';
 import { readTyped, isError, CellError, Value, EXCEL_ERRORS } from '../sheet/values';
 import { PROPERTIES } from '../sheet/properties';
 import { ISOTOPE_FUNCTIONS } from '../sheet/isotopes';
-import { chemPieces } from '../sheet/cell-text';
+import { chemPieces, showsChem } from '../sheet/cell-text';
 import { DEFAULT_COL_W, DEFAULT_ROW_H, MAX_AUTO_ROW, structureHeight } from '../sheet/layout';
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
 import { applyTint } from '../colours';
-import { chartXml, chartAnchorXml, readChartXml, CT_CHART, REL_CHART, C_NS } from './xlsx-chart';
-import { Chart, chartData, seenChartId, newChartId, sameChartData } from '../sheet/chart';
+import { chartXml, chartAnchorXml, readChartXml, CT_CHART, REL_CHART, C_NS, CX_NS, CT_CHARTEX, REL_CHARTEX } from './xlsx-chart';
+import { Chart, chartData, seenChartId, newChartId, sameChartData, isChartEx } from '../sheet/chart';
 import { dashboardStandIn } from './xlsx-dashboard';
 import { Dashboard, seenTileId } from '../sheet/dashboard';
 import { condFormatsXml, dxfXml, tableXml, readDxfs, readCondFormats, readTable, sameRules } from './xlsx-format';
 import type { CondFormat, CfLook } from '../sheet/conditional';
 import { seenCondFormatId } from '../sheet/conditional';
 import { TableDef, tableColumnNames, seenTableId } from '../sheet/table-styles';
+import { Persons, notesParts, readNotes, shownNotes, validationsXml, readValidations, NOTES_CT, NOTES_REL } from './xlsx-notes';
 export { applyTint };
 
 /** Pictures of structures for Excel (the app draws them; tests use stand-ins). */
@@ -115,7 +118,7 @@ const XLFN = new Set(['AGGREGATE', 'BETA.DIST', 'BETA.INV', 'BINOM.DIST', 'BINOM
   'GAMMA.INV', 'GAMMALN.PRECISE', 'GAUSS', 'IFNA', 'IFS', 'ISOWEEKNUM', 'LET', 'LOGNORM.DIST', 'LOGNORM.INV', 'MAXIFS', 'MINIFS',
   'MODE.MULT', 'MODE.SNGL', 'NORM.DIST', 'NORM.INV', 'NORM.S.DIST', 'NORM.S.INV', 'PERCENTILE.EXC', 'PERCENTILE.INC',
   'PERCENTRANK.EXC', 'PERCENTRANK.INC', 'POISSON.DIST', 'QUARTILE.EXC', 'QUARTILE.INC', 'RANK.AVG', 'RANK.EQ', 'SEQUENCE',
-  'STDEV.P', 'STDEV.S', 'SWITCH', 'T.DIST', 'T.DIST.2T', 'T.DIST.RT', 'T.INV', 'T.INV.2T', 'T.TEST', 'TEXTJOIN', 'UNIQUE',
+  'STDEV.P', 'STDEV.S', 'SWITCH', 'T.DIST', 'T.DIST.2T', 'T.DIST.RT', 'T.INV', 'T.INV.2T', 'T.TEST', 'TEXTJOIN', 'TEXTSPLIT', 'UNIQUE',
   'VAR.P', 'VAR.S', 'WEIBULL.DIST', 'XLOOKUP', 'XMATCH', 'XOR', 'Z.TEST']);
 const XLWS = new Set(['FILTER', 'SORT', 'SORTBY']);
 
@@ -125,6 +128,15 @@ export function excelFunctionNames(f: string): string {
     const up = name.toUpperCase();
     return XLWS.has(up) ? `${before}_xlfn._xlws.${name}` : XLFN.has(up) ? `${before}_xlfn.${name}` : m;
   }))).join('');
+}
+
+const KNOWN = new Set(FUNCTION_NAMES);
+
+/** Does a formula from Excel use something this program can't work out (a newer function it lacks, or a table reference)? */
+function usesUnknownFunction(text: string): boolean {
+  if (/\[/.test(text.replace(/"(?:[^"]|"")*"/g, ''))) return true;
+  for (const m of text.matchAll(/_xlfn\.(?:_xlws\.)?([A-Za-z0-9.]+)\(/g)) if (!KNOWN.has(m[1].toUpperCase())) return true;
+  return false;
 }
 
 /** Does a formula use a chemistry function (which Excel can't work out)? */
@@ -310,7 +322,8 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
   const model: Model = { app: 'Chem Illustrator', version: 1, drawingStyle: book.drawingStyle, sheets: [] };
   const sheetEntries: string[] = [];
   const filterNames: string[] = [];
-  let imageNo = 0, drawingNo = 0, tableNo = 0, chartNo = 0;
+  let imageNo = 0, drawingNo = 0, tableNo = 0, chartNo = 0, notesNo = 0;
+  const persons = new Persons();
   pkg.defaultType('png', 'image/png');
 
   for (let si = 0; si < book.sheets.length; si++) {
@@ -374,7 +387,7 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
         const style = s.styleAt(r, c);
         const ref = cellName(r, c);
         const own = cell?.style;
-        const chem = !!style?.chem;
+        const chem = showsChem(style?.chem, v);
         let formula: string | null = null;
         let wrote: Wrote = null;
         // what only this program reads, kept for the cell
@@ -511,9 +524,11 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
     // charts: Excel's own chart parts, anchored at their corner cell
     for (const ch of s.charts) {
       chartNo++;
-      const cpath = `xl/charts/chart${chartNo}.xml`;
-      pkg.add(cpath, HEAD + chartXml(ch, standIn?.data.get(ch.id) ?? chartData(book, s, ch)), CT_CHART);
-      const rid = pkg.relate(drawingPath, REL_CHART, `../charts/chart${chartNo}.xml`);
+      // histograms and box charts go in Excel 2016's newer chart part
+      const ex = isChartEx(ch.kind);
+      const cname = `${ex ? 'chartEx' : 'chart'}${chartNo}.xml`;
+      pkg.add(`xl/charts/${cname}`, HEAD + chartXml(ch, standIn?.data.get(ch.id) ?? chartData(book, s, ch)), ex ? CT_CHARTEX : CT_CHART);
+      const rid = pkg.relate(drawingPath, ex ? REL_CHARTEX : REL_CHART, `../charts/${cname}`);
       const x = cols.start(ch.at.col) + ch.at.dx, y = rows.start(ch.at.row) + ch.at.dy;
       const end = cols.at(x + ch.w, ch.at.col), endR = rows.at(y + ch.h, ch.at.row);
       anchors.push(chartAnchorXml(ch, { col: end.i, colOff: end.off, row: endR.i, rowOff: endR.off }, anchors.length + 2, rid));
@@ -527,13 +542,29 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
       const rid = pkg.relate(sheetRels, RELS.drawing, `../drawings/drawing${drawingNo}.xml`);
       drawingXml = `<drawing r:id="${rid}"/>`;
     }
+    // notes and comments (a dashboard's stand-in has none)
+    const notes = standIn ? null : notesParts(s, si + 1, persons);
+    if (notes) {
+      notesNo++;
+      pkg.add(`xl/comments${notesNo}.xml`, HEAD + notes.comments, NOTES_CT.comments);
+      pkg.relate(sheetRels, NOTES_REL.comments, `../comments${notesNo}.xml`);
+      if (notes.threaded) {
+        pkg.add(`xl/threadedComments/threadedComment${notesNo}.xml`, HEAD + notes.threaded, NOTES_CT.threaded);
+        pkg.relate(sheetRels, NOTES_REL.threaded, `../threadedComments/threadedComment${notesNo}.xml`);
+      }
+      pkg.defaultType('vml', NOTES_CT.vml);
+      pkg.add(`xl/drawings/vmlDrawing${notesNo}.vml`, notes.vml);
+      const vid = pkg.relate(sheetRels, NOTES_REL.vml, `../drawings/vmlDrawing${notesNo}.vml`);
+      drawingXml += `<legacyDrawing r:id="${vid}"/>`;
+    }
+    const dvXml = standIn ? '' : validationsXml(s.validations, excelFunctionNames);
     pkg.add(path,
       `${HEAD}<worksheet xmlns="${MAIN}" xmlns:r="${RNS}">` +
       `${s.filter && !filterTable ? '<sheetPr filterMode="1"/>' : ''}<dimension ref="${used}"/>` +
       `<sheetViews><sheetView${si === book.active ? ' tabSelected="1"' : ''} workbookViewId="0">${pane}</sheetView></sheetViews>` +
       `<sheetFormatPr defaultRowHeight="15"/>` +
       (colXml.length ? `<cols>${colXml.join('')}</cols>` : '') +
-      `<sheetData>${rowXml.join('')}</sheetData>${filterXml}${merges}${cfXml}` +
+      `<sheetData>${rowXml.join('')}</sheetData>${filterXml}${merges}${cfXml}${dvXml}` +
       `<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>${drawingXml}${tableParts}</worksheet>`,
       CT.sheet);
     const rid = pkg.relate('xl/workbook.xml', RELS.worksheet, `worksheets/sheet${si + 1}.xml`);
@@ -545,6 +576,10 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures): Promise<Uin
   pkg.add('xl/styles.xml', styles.toXml(), CT.styles);
   pkg.relate('xl/workbook.xml', RELS.sharedStrings, 'sharedStrings.xml');
   pkg.add('xl/sharedStrings.xml', strings.toXml(), CT.strings);
+  if (persons.size) {
+    pkg.relate('xl/workbook.xml', NOTES_REL.persons, 'persons/person.xml');
+    pkg.add('xl/persons/person.xml', HEAD + persons.toXml(), NOTES_CT.persons);
+  }
 
   // our own part: what Excel can't hold
   pkg.relate('xl/workbook.xml', RELS.customXml, '../customXml/item1.xml');
@@ -754,6 +789,8 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
   const xfs = readStyles(stylesDoc, theme);
   const colourOf = (el: Element | null) => readColour(el, theme);
   const dxfs = readDxfs(stylesDoc, colourOf);
+  const personsPath = relTarget(NOTES_REL.persons);
+  const personsDoc = personsPath ? pkg.xml(personsPath) : null;
   const ssPath = relTarget(RELS.sharedStrings);
   const shared = ssPath ? kids(pkg.xml(ssPath)?.documentElement, 'si').map(stringItem) : [];
 
@@ -867,7 +904,7 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
               }
             }
             if (text) {
-              if (/_xlfn\.|_xlws\.|\[/.test(text)) unknownFormulas++;
+              if (usesUnknownFunction(text)) unknownFormulas++;
               input = normalizeFormula('=' + text.replace(/_xlfn\.|_xlws\./g, ''));
             }
           }
@@ -965,14 +1002,16 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
           const name = kid(pic, 'nvPicPr', 'cNvPr')?.getAttribute('name') ?? '';
           if (!(ms && name.startsWith('Structure '))) foreignPictures++;
         }
-        foreignPictures += dr.getElementsByTagNameNS(XDR, 'sp').length;
+        // (the note Excel puts in place of a newer chart, for older programs, is not a shape of its own)
+        foreignPictures += Array.from(dr.getElementsByTagNameNS(XDR, 'sp')).filter((e) => e.parentElement?.localName !== 'Fallback').length;
         // charts: Excel's, or ours (our own copy where the data it charts is unchanged)
         const charts: Chart[] = [];
         const colPx = (c: number) => (s.hiddenCols.has(c) ? 0 : s.colWidths.get(c) ?? DEFAULT_COL_W);
         const rowPx = (r: number) => (s.hiddenRows.has(r) ? 0 : s.rowHeights.get(r) ?? DEFAULT_ROW_H);
         for (const gf of Array.from(dr.getElementsByTagNameNS(XDR, 'graphicFrame'))) {
-          const anchor = gf.parentElement;
-          const cref = gf.getElementsByTagNameNS(C_NS, 'chart')[0];
+          let anchor = gf.parentElement;
+          while (anchor && !/Anchor$/.test(anchor.localName)) anchor = anchor.parentElement;
+          const cref = gf.getElementsByTagNameNS(C_NS, 'chart')[0] ?? gf.getElementsByTagNameNS(CX_NS, 'chart')[0];
           const target = cref ? pkg.rels(drawingPath!).get(rAttr(cref, 'id') ?? '')?.target : undefined;
           const cdoc = target ? pkg.xml(target) : null;
           const from = kid(anchor, 'from'), to = kid(anchor, 'to');
@@ -1006,9 +1045,17 @@ export async function readXlsx(bytes: Uint8Array, _deps?: Partial<XlsxPictures>)
         for (const t of ms.dashboard.tiles) { seenTileId(t.id); if (t.kind === 'chart') seenTileId(t.chart.id); }
         s.setDashboard(ms.dashboard);
       }
-      for (const [tag, what] of [['dataValidations', 'data validation lists'], ['hyperlinks', 'links'], ['legacyDrawing', 'comments']] as const) {
-        if (kid(ws, tag)) notKept.add(what);
+      // notes and comments, and data validation
+      const sheetRelList = [...pkg.rels(path!).values()];
+      const relOf = (type: string) => sheetRelList.find((r) => r.type === type)?.target;
+      const commentsPath = relOf(NOTES_REL.comments), vmlPath = relOf(NOTES_REL.vml), threadedPath = relOf(NOTES_REL.threaded);
+      if (commentsPath || threadedPath) {
+        const notes = readNotes(commentsPath ? pkg.xml(commentsPath) : null, shownNotes(vmlPath ? pkg.text(vmlPath) : null), threadedPath ? pkg.xml(threadedPath) : null, personsDoc);
+        for (const [k, n] of notes) s.setNote(rowOf(k), colOf(k), n);
       }
+      const dv = readValidations(ws);
+      if (dv.length) s.setValidations(dv);
+      if (kid(ws, 'hyperlinks')) notKept.add('links');
     });
   });
   // a filter goes back as it was: the rows it hid are hidden already

@@ -41,3 +41,23 @@ export function chemPieces(text: string): Piece[] {
   }
   return out;
 }
+
+const seen = new Map<string, boolean>();
+
+/**
+ * Is a cell shown as chemistry: when its look says so (the C₉H₈ button), or, left unset, when
+ * it holds text with a formula in it (Pd(PPh3)4, 1H NMR), as a caption would show it. A cell
+ * the button turned off (false), and numbers, stay plain.
+ */
+export function showsChem(chem: boolean | undefined, v: unknown): boolean {
+  if (chem !== undefined) return chem;
+  if (typeof v !== 'string' || !/[A-Za-z]/.test(v)) return false;
+  let got = seen.get(v);
+  if (got === undefined) {
+    got = chemPieces(v).some((p) => p.pos !== 'base');
+    if (seen.size > 5000) seen.clear();
+    seen.set(v, got);
+  }
+  return got;
+}
+

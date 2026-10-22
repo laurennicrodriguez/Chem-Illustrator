@@ -9,8 +9,9 @@ import { SHEET_MARGIN, breaksIn, continuous, outlineMarks, type DocViewKind } fr
 import type { LaidLine } from '../text/layout';
 import type { DocFile } from '../document/doc-file';
 import { figures } from '../document/doc-file';
-import { drawDocTable, drawHeaderFooter } from '../document/doc-paint';
+import { drawDocTable, drawHeaderFooter, drawLineNumbers, drawNoteRules } from '../document/doc-paint';
 import { BOX_PAD, SHADOWS, lookOf, type DocText } from '../document/document';
+import { BREAK_NAMES } from '../document/sections';
 import { drawLayout } from '../text/draw';
 import { drawMath } from '../document/math';
 import { selectionRects } from '../text/layout';
@@ -378,7 +379,7 @@ export class DocView {
     if (!endless) for (const p of visible) { at(p); this.paper(ctx, p, lay); }
     for (const p of visible) {
       at(p);
-      if (!endless) drawHeaderFooter(ctx, t, p, lay);
+      if (!endless) { drawHeaderFooter(ctx, t, p); drawLineNumbers(ctx, lay, p.index, '#555'); }
       // the found text and the selection, under the text
       const from = lay.text.lines[p.first]?.start ?? 0;
       const to = p.end > p.first ? lay.text.lines[p.end - 1].end : from;
@@ -397,11 +398,14 @@ export class DocView {
       // figures behind the text first, then the text, then the rest
       for (const o of lay.objects) if (o.page === p.index && o.wrap === 'behind') this.object(ctx, t, o, lay);
       drawLayout(ctx, lay.text, 0, 0, p.first, p.end);
+      drawNoteRules(ctx, lay, p.index);
       // tables, then the figures (some of them in table cells)
-      for (const o of lay.objects) {
+      // (a table in a cell after the table holding it)
+      const tabs = lay.objects.filter((o) => o.page === p.index && t.objects[o.id]?.kind === 'table').sort((a, b) => (lay.tables.get(a.id)?.depth ?? 0) - (lay.tables.get(b.id)?.depth ?? 0));
+      for (const o of tabs) {
         const obj = t.objects[o.id];
-        const tb = obj?.kind === 'table' ? lay.tables.get(o.id) : undefined;
-        if (o.page === p.index && obj?.kind === 'table' && tb) drawDocTable(ctx, obj.table, tb, p.index, { color: '#9fb4d8', px: 1 / k });
+        const tb = lay.tables.get(o.id);
+        if (obj?.kind === 'table' && tb) drawDocTable(ctx, obj.table, tb, p.index, { color: '#9fb4d8', px: 1 / k });
       }
       for (const o of lay.objects) if (o.page === p.index && o.wrap !== 'behind' && t.objects[o.id]?.kind !== 'table') this.object(ctx, t, o, lay);
       const px = 1 / k;
@@ -473,9 +477,12 @@ export class DocView {
       ctx.beginPath();
       ctx.moveTo(SHEET_MARGIN, y);
       ctx.lineTo(lay.pageW - SHEET_MARGIN, y);
+      // a section break is a double dotted line, as in Word
+      const section = b.kind !== 'page' && b.kind !== 'column';
+      if (section) { ctx.moveTo(SHEET_MARGIN, y + 2.5 / k); ctx.lineTo(lay.pageW - SHEET_MARGIN, y + 2.5 / k); }
       ctx.stroke();
       ctx.setLineDash([]);
-      const label = b.kind === 'page' ? 'Page Break' : 'Column Break';
+      const label = b.kind === 'page' ? 'Page Break' : b.kind === 'column' ? 'Column Break' : `Section Break (${BREAK_NAMES[b.kind]})`;
       ctx.font = `${9 / Math.max(k / ACTUAL, 0.6)}px Arial, sans-serif`;
       const w = ctx.measureText(label).width + 8 / k;
       ctx.fillStyle = '#fff';
@@ -542,10 +549,10 @@ export class DocView {
     ctx.shadowBlur = 4 * this.dpr;
     ctx.shadowOffsetY = 1 * this.dpr;
     ctx.fillStyle = '#fff';
-    ctx.fillRect(0, p.top, lay.pageW, lay.pageH);
+    ctx.fillRect(p.x, p.top, p.w, p.h);
     ctx.restore();
-    const t = this.file!.t;
-    const x1 = t.page.left, x2 = lay.pageW - t.page.right, y1 = p.top + t.page.top, y2 = p.top + lay.pageH - t.page.bottom;
+    const pg = p.setup;
+    const x1 = p.x + pg.left, x2 = p.x + p.w - pg.right, y1 = p.top + pg.top, y2 = p.top + p.h - pg.bottom;
     const m = 12;
     ctx.strokeStyle = '#c4c8cf';
     ctx.lineWidth = 0.8 / k;
@@ -573,6 +580,11 @@ export class DocView {
       ctx.fillStyle = '#fff';
       ctx.fillRect(o.x, o.y, o.w, o.h);
       ctx.restore();
+    }
+    if (obj.kind === 'note') {
+      const n = lay.notes.get(o.id);
+      if (n) drawLayout(ctx, n.lay, 0, 0);
+      return;
     }
     if (obj.kind === 'textbox') {
       if (obj.fill) {

@@ -3,9 +3,14 @@
 // pass through, and so on). The chemistry functions (MW, FORMULA, HRMS…) ask the sheet for the
 // properties of a structure cell, or of SMILES text.
 
-import type { Node, RefToken } from './formula';
-import { cellName, type Range } from './refs';
+import { tokenize, type Node, type RefToken } from './formula';
+import { MAX_COLS, MAX_ROWS, cellName, type Range } from './refs';
 import { CellError, ERR, Value, compareValues, isError, toBool, toNumber, toText } from './values';
+import { Arg, FnDef, Fn, isBlock, numbers, scalar } from './args';
+import { CRITERIA_FUNCTIONS } from './fn-criteria';
+import { LOOKUP_FUNCTIONS, chooseIndex } from './fn-lookup';
+import { TEXT_FUNCTIONS } from './fn-text';
+import { STATS_FUNCTIONS } from './fn-stats';
 import { MolProps, PROPERTIES, propertyValue } from './properties';
 import { ISOTOPE_FUNCTIONS, isotopeValue, readsAsFormula, type IsotopeSource } from './isotopes';
 
@@ -31,24 +36,11 @@ export interface EvalHost {
   identities?(sheet: string | undefined, r: Range): (string | CellError | null)[][];
 }
 
-/** A block of cells given to a function (SUM(A1:A9)). */
-interface Block { block: Value[][] }
-type Arg = Value | Block;
-const isBlock = (a: Arg): a is Block => typeof a === 'object' && a !== null && 'block' in a;
-
 /** Work out a formula's tree. */
 export function evaluate(n: Node, host: EvalHost): Value {
   const v = scalar(evalNode(n, host));
   if (typeof v === 'number') return Number.isFinite(v) ? (v === 0 ? 0 : v) : ERR.num();
   return v;
-}
-
-/** A block used where one value is wanted: a single cell gives its value, a larger block #VALUE!. */
-function scalar(a: Arg): Value {
-  if (!isBlock(a)) return a;
-  const b = a.block;
-  if (b.length === 1 && b[0].length === 1) return b[0][0];
-  return ERR.value('A block of cells where one value was wanted');
 }
 
 function refRange(r: RefToken): Range {
@@ -68,7 +60,8 @@ function evalNode(n: Node, host: EvalHost): Arg {
       if (r.broken) return ERR.ref();
       if (r.sheet !== undefined && !host.hasSheet(r.sheet)) return ERR.ref(`There is no sheet called "${r.sheet}"`);
       if (r.kind === 'cell') return host.value(r.sheet, r.a.row, r.a.col);
-      return { block: host.block(r.sheet, refRange(r)) };
+      const range = refRange(r);
+      return { block: host.block(r.sheet, range), h: range.r2 - range.r1 + 1, w: range.c2 - range.c1 + 1 };
     }
     case 'neg': {
       const x = toNumber(scalar(evalNode(n.x, host)));
@@ -119,33 +112,6 @@ function binary(op: string, a: Value, b: Value): Value {
 }
 
 // ---------------------------------------------------------------- functions
-
-type Fn = (args: Arg[], host: EvalHost) => Value;
-
-interface FnDef {
-  min: number;
-  max: number;
-  fn: Fn;
-}
-
-/** The numbers among the arguments, as SUM sees them: in blocks only numbers count; typed arguments are read as numbers. */
-function numbers(args: Arg[], skipErrors = false): number[] | CellError {
-  const out: number[] = [];
-  for (const a of args) {
-    if (isBlock(a)) {
-      for (const row of a.block) for (const v of row) {
-        if (typeof v === 'number') out.push(v);
-        else if (isError(v) && !skipErrors) return v;
-      }
-    } else {
-      if (a === null) continue;
-      const x = toNumber(a);
-      if (isError(x)) { if (!skipErrors) return x; continue; }
-      out.push(x);
-    }
-  }
-  return out;
-}
 
 const agg = (f: (xs: number[]) => Value): Fn => (args) => {
   const xs = numbers(args);
@@ -236,14 +202,7 @@ const FUNCTIONS: Record<string, FnDef> = {
   MIN: { min: 1, max: 255, fn: agg((xs) => (xs.length ? xs.reduce((a, b) => (b < a ? b : a)) : 0)) },
   MAX: { min: 1, max: 255, fn: agg((xs) => (xs.length ? xs.reduce((a, b) => (b > a ? b : a)) : 0)) },
   MEDIAN: { min: 1, max: 255, fn: agg(median) },
-  STDEV: {
-    min: 1, max: 255,
-    fn: agg((xs) => {
-      if (xs.length < 2) return ERR.div0();
-      const m = xs.reduce((s, x) => s + x, 0) / xs.length;
-      return Math.sqrt(xs.reduce((s, x) => s + (x - m) ** 2, 0) / (xs.length - 1));
-    }),
-  },
+  STDEV: STATS_FUNCTIONS['STDEV.S'],
   COUNT: {
     min: 1, max: 255,
     fn: (args) => {
@@ -276,14 +235,14 @@ const FUNCTIONS: Record<string, FnDef> = {
       return n;
     },
   },
-  // Excel's SUBTOTAL (as a table's totals row writes it): 1 average, 2 count, 3 count filled, 4 max, 5 min, 6 product, 7 standard deviation, 9 sum (101… the same)
+  // Excel's SUBTOTAL (as a table's totals row writes it): 1 average, 2 count, 3 count filled, 4 max, 5 min, 6 product, 7 and 8 standard deviation, 9 sum, 10 and 11 variance (101… the same)
   SUBTOTAL: {
     min: 2, max: 255,
     fn: (args, host) => {
       const k = toNumber(scalar(args[0]));
       if (isError(k)) return k;
-      const name = ({ 1: 'AVERAGE', 2: 'COUNT', 3: 'COUNTA', 4: 'MAX', 5: 'MIN', 6: 'PRODUCT', 7: 'STDEV', 9: 'SUM' } as Record<number, string>)[Math.trunc(k) % 100];
-      return name ? FUNCTIONS[name].fn(args.slice(1), host) : ERR.value('SUBTOTAL works out 1 to 7 and 9 (101 to 107 and 109)');
+      const name = ({ 1: 'AVERAGE', 2: 'COUNT', 3: 'COUNTA', 4: 'MAX', 5: 'MIN', 6: 'PRODUCT', 7: 'STDEV', 8: 'STDEVP', 9: 'SUM', 10: 'VAR', 11: 'VARP' } as Record<number, string>)[Math.trunc(k) % 100];
+      return name ? scalar(FUNCTIONS[name].fn(args.slice(1), host)) : ERR.value('SUBTOTAL works out 1 to 11 (101 to 111)');
     },
   },
   ROUND: { min: 1, max: 2, fn: roundFn('near') },
@@ -361,27 +320,150 @@ const FUNCTIONS: Record<string, FnDef> = {
   ISNUMBER: { min: 1, max: 1, fn: is((v) => typeof v === 'number') },
   ISTEXT: { min: 1, max: 1, fn: is((v) => typeof v === 'string') },
   ISERROR: { min: 1, max: 1, fn: is((v) => isError(v)) },
+  ISNA: { min: 1, max: 1, fn: is((v) => isError(v) && v.code === '#N/A') },
+  NA: { min: 0, max: 0, fn: () => ERR.na() },
+  ...CRITERIA_FUNCTIONS,
+  ...LOOKUP_FUNCTIONS,
+  ...TEXT_FUNCTIONS,
+  ...STATS_FUNCTIONS,
 };
 
-/** Functions that only work out the arguments they need. */
-const LAZY = new Set(['IF', 'IFERROR']);
-
-/** Every function name, for the formula bar's suggestions. */
-export const FUNCTION_NAMES = [...Object.keys(FUNCTIONS), ...LAZY, ...Object.keys(PROPERTIES), ...Object.keys(ISOTOPE_FUNCTIONS)].sort();
-
-function call(name: string, argNodes: Node[], host: EvalHost): Arg {
-  if (name === 'IF') {
+/** Functions that only work out the arguments they need, or need a reference rather than the values in it. */
+const LAZY: Record<string, (argNodes: Node[], host: EvalHost) => Arg> = {
+  IF: (argNodes, host) => {
     if (argNodes.length < 2 || argNodes.length > 3) return ERR.value('IF needs 2 or 3 arguments: IF(test, if true, if false)');
     const c = toBool(scalar(evalNode(argNodes[0], host)));
     if (isError(c)) return c;
     if (c) return evalNode(argNodes[1], host);
     return argNodes.length > 2 ? evalNode(argNodes[2], host) : false;
-  }
-  if (name === 'IFERROR') {
+  },
+  IFERROR: (argNodes, host) => {
     if (argNodes.length !== 2) return ERR.value('IFERROR needs 2 arguments');
     const v = scalar(evalNode(argNodes[0], host));
     return isError(v) && v.code !== '#BUSY!' ? evalNode(argNodes[1], host) : v;
+  },
+  IFNA: (argNodes, host) => {
+    if (argNodes.length !== 2) return ERR.value('IFNA needs 2 arguments');
+    const v = scalar(evalNode(argNodes[0], host));
+    return isError(v) && v.code === '#N/A' ? evalNode(argNodes[1], host) : v;
+  },
+  // IFS(test1, value1, test2, value2, …): the value of the first test that is TRUE
+  IFS: (argNodes, host) => {
+    if (argNodes.length < 2 || argNodes.length % 2) return ERR.value('IFS needs pairs: IFS(test1, value1, test2, value2, …)');
+    for (let i = 0; i < argNodes.length; i += 2) {
+      const c = toBool(scalar(evalNode(argNodes[i], host)));
+      if (isError(c)) return c;
+      if (c) return evalNode(argNodes[i + 1], host);
+    }
+    return ERR.na('None of the tests is TRUE');
+  },
+  // SWITCH(value, match1, result1, …, [otherwise])
+  SWITCH: (argNodes, host) => {
+    if (argNodes.length < 3) return ERR.value('SWITCH needs a value, then pairs of match and result: SWITCH(A1, 1, "one", 2, "two", "other")');
+    const v = scalar(evalNode(argNodes[0], host));
+    if (isError(v)) return v;
+    let i = 1;
+    for (; i + 1 < argNodes.length; i += 2) {
+      const m = scalar(evalNode(argNodes[i], host));
+      if (isError(m)) return m;
+      if (typeof m === typeof v && compareValues(m, v) === 0) return evalNode(argNodes[i + 1], host);
+    }
+    return i < argNodes.length ? evalNode(argNodes[i], host) : ERR.na('No match, and no value for otherwise');
+  },
+  CHOOSE: (argNodes, host) => {
+    if (argNodes.length < 2) return ERR.value('CHOOSE needs a number and the values to pick from');
+    const i = chooseIndex(scalar(evalNode(argNodes[0], host)), argNodes.length - 1);
+    return isError(i) ? i : evalNode(argNodes[i], host);
+  },
+  OFFSET: (argNodes, host) => {
+    const r = offsetRef(argNodes, host);
+    return isError(r) ? r : evalNode({ t: 'ref', v: r }, host);
+  },
+  INDIRECT: (argNodes, host) => {
+    const r = indirectRef(argNodes, host);
+    return isError(r) ? r : evalNode({ t: 'ref', v: r }, host);
+  },
+};
+
+/** Functions whose cells can't be known from the formula's text, so they are worked out after the others. */
+export const VOLATILE_FUNCTIONS = ['OFFSET', 'INDIRECT'];
+
+/** Every function name, for the formula bar's suggestions. */
+export const FUNCTION_NAMES = [...Object.keys(FUNCTIONS), ...Object.keys(LAZY), ...Object.keys(PROPERTIES), ...Object.keys(ISOTOPE_FUNCTIONS)].sort();
+
+/** A reference worked out in a formula: as written, or made by INDIRECT or OFFSET. */
+function refOf(n: Node, host: EvalHost): RefToken | CellError {
+  if (n.t === 'ref') return n.v.broken ? ERR.ref() : n.v;
+  if (n.t === 'fn' && n.name === 'INDIRECT') return indirectRef(n.args, host);
+  if (n.t === 'fn' && n.name === 'OFFSET') return offsetRef(n.args, host);
+  if (n.t === 'err') return new CellError(n.v);
+  return ERR.value('A cell reference is needed here');
+}
+
+/** A reference to the block r1:c1 to r2:c2 of a sheet; #REF! when it runs off the sheet. */
+function blockRef(sheet: string | undefined, r1: number, c1: number, r2: number, c2: number): RefToken | CellError {
+  if (r1 < 0 || c1 < 0 || r2 >= MAX_ROWS || c2 >= MAX_COLS || r2 < r1 || c2 < c1) return ERR.ref('The reference runs off the sheet');
+  const a = { row: r1, col: c1, absRow: true, absCol: true };
+  if (r1 === r2 && c1 === c2) return { sheet, kind: 'cell', a };
+  return { sheet, kind: 'range', a, b: { row: r2, col: c2, absRow: true, absCol: true } };
+}
+
+/** OFFSET(reference, rows, columns, [height], [width]): the block moved, and sized. */
+function offsetRef(argNodes: Node[], host: EvalHost): RefToken | CellError {
+  if (argNodes.length < 3 || argNodes.length > 5) return ERR.value('OFFSET needs a reference, rows and columns, then optionally height and width');
+  const base = refOf(argNodes[0], host);
+  if (isError(base)) return base;
+  const r = refRange(base);
+  const num = (i: number, dflt: number): number | CellError => {
+    if (i >= argNodes.length) return dflt;
+    const v = scalar(evalNode(argNodes[i], host));
+    return v === '' ? dflt : toNumber(v);
+  };
+  const dr = num(1, 0), dc = num(2, 0), h = num(3, r.r2 - r.r1 + 1), w = num(4, r.c2 - r.c1 + 1);
+  for (const x of [dr, dc, h, w]) if (isError(x)) return x;
+  const [DR, DC, H, W] = [dr, dc, h, w].map((x) => Math.trunc(x as number));
+  if (H < 1 || W < 1) return ERR.ref('Height and width must be 1 or more');
+  return blockRef(base.sheet, r.r1 + DR, r.c1 + DC, r.r1 + DR + H - 1, r.c1 + DC + W - 1);
+}
+
+/** INDIRECT("B2"), INDIRECT("Sheet2!A1:C5"), or with FALSE as the second argument "R2C3" (R1C1 style, rows and columns from 1). */
+function indirectRef(argNodes: Node[], host: EvalHost): RefToken | CellError {
+  if (argNodes.length < 1 || argNodes.length > 2) return ERR.value('INDIRECT needs the reference as text, and optionally FALSE for R1C1 style');
+  const t = scalar(evalNode(argNodes[0], host));
+  if (isError(t)) return t;
+  if (typeof t !== 'string' || !t.trim()) return ERR.ref('INDIRECT needs a reference written as text');
+  let a1: boolean | CellError = true;
+  if (argNodes.length > 1) {
+    const v = scalar(evalNode(argNodes[1], host));
+    a1 = v === '' || v === null ? false : toBool(v);
+    if (isError(a1)) return a1;
   }
+  const text = t.trim();
+  const bad = () => ERR.ref(`"${text}" is not a reference`);
+  if (a1) {
+    let toks;
+    try { toks = tokenize(text).filter((x) => x.t !== 'ws'); } catch { return bad(); }
+    if (toks.length !== 1 || toks[0].t !== 'ref') return bad();
+    const ref = toks[0].v;
+    // a single address written with a sheet but checked here, so a missing sheet is #REF!
+    if (ref.sheet !== undefined && !host.hasSheet(ref.sheet)) return ERR.ref(`There is no sheet called "${ref.sheet}"`);
+    return ref;
+  }
+  const bang = text.lastIndexOf('!');
+  let sheet: string | undefined;
+  if (bang >= 0) {
+    sheet = text.slice(0, bang).replace(/^'(.*)'$/, '$1').replace(/''/g, "'");
+    if (!host.hasSheet(sheet)) return ERR.ref(`There is no sheet called "${sheet}"`);
+  }
+  const m = /^R(\d+)C(\d+)(?::R(\d+)C(\d+))?$/i.exec(text.slice(bang + 1));
+  if (!m) return bad();
+  const r1 = Number(m[1]) - 1, c1 = Number(m[2]) - 1, r2 = m[3] ? Number(m[3]) - 1 : r1, c2 = m[4] ? Number(m[4]) - 1 : c1;
+  return blockRef(sheet, Math.min(r1, r2), Math.min(c1, c2), Math.max(r1, r2), Math.max(c1, c2));
+}
+
+function call(name: string, argNodes: Node[], host: EvalHost): Arg {
+  const lazy = LAZY[name];
+  if (lazy) return lazy(argNodes, host);
   if (name === 'DUPLICATE') return duplicate(argNodes, host);
   if (ISOTOPE_FUNCTIONS[name]) return isotope(name, argNodes, host);
   const prop = PROPERTIES[name];

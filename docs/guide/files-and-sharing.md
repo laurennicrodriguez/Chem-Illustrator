@@ -39,6 +39,14 @@ Open files with **File ▸ Open…** (Ctrl+O), or drop them onto the window. Pic
   - **PNG** and **TIFF** are pictures made of dots. Type the dpi (300 for colour, 600 to 1200 for line art). TIFF files are LZW-compressed, the kind many journals ask for.
   - **SVG**, **EMF** and **EPS** keep shapes and text sharp at any size. SVG suits Illustrator, Inkscape and web pages; EMF suits Word and PowerPoint on Windows; EPS suits older journal systems. EPS uses the standard PostScript fonts (Helvetica, Times, Courier and Symbol), and has no see-through colours, so those are mixed with white.
 
+### Opening files from Explorer or Finder (desktop app)
+
+Double-click a file, or right-click it and choose **Open with ▸ Chem Illustrator**, and it opens in a new tab. A file opened while the program is already running goes to the open window rather than starting a second copy.
+
+- **Windows**: the first time it starts, Chem Illustrator adds itself to the **Open with** list of .cdxml, .cdx, .mol and .sdf files, for you only. **Edit ▸ Settings ▸ File Types** chooses which kinds of file it is offered for, including .docx, .pptx and .xlsx. It never makes itself the program that opens a file on a double-click: Windows keeps that choice for you. **Choose Defaults in Windows Settings…** on that page opens Windows' Default apps page, where you can pick Chem Illustrator for each kind of file. A portable copy leaves the computer's file types alone until you tick them yourself. Uninstalling takes it off the lists again.
+- **macOS**: right-click a file and choose **Open With ▸ Chem Illustrator**. To open a kind of file here every time, select one in Finder, choose **File ▸ Get Info**, pick Chem Illustrator under **Open with** and click **Change All**.
+- **Linux**: Chem Illustrator is in your file manager's **Open With** list for these files; your desktop's Default Applications settings choose the default.
+
 ## Copy and paste
 
 **Edit ▸ Copy** (Ctrl+C) copies the selection, or the whole drawing when nothing is selected.
@@ -47,10 +55,19 @@ Open files with **File ▸ Open…** (Ctrl+O), or drop them onto the window. Pic
 |---|---|
 | Chem Illustrator | Everything, fully editable |
 | ChemDraw (Windows app) | Editable structures, through the CDX format |
-| Word or PowerPoint (Windows app) | A sharp picture (EMF) that stays crisp when enlarged |
+| Word, PowerPoint or Excel (Windows app) | A Chem Illustrator drawing object: a sharp picture you can double-click to edit here (see below) |
 | Other programs, or from the browser version or on macOS and Linux | A high-resolution picture |
 
 In the Windows app, **Paste** (Ctrl+V) takes drawings copied in ChemDraw as editable structures, and spectra copied in MestReNova as sharp lines and text. **Edit ▸ Show Clipboard Formats** lists what is on the clipboard, which helps when a paste doesn't come out as expected.
+
+### Editing drawings inside Word, PowerPoint and Excel (Windows)
+
+A drawing copied here and pasted into Word, PowerPoint or Excel is a Chem Illustrator object, as ChemDraw's drawings are. Double-click it (or right-click ▸ **Chem Illustrator Object ▸ Edit**) and it opens here in a tab of its own, named after the document. Change it, press **Save** (Ctrl+S) and the drawing in the document changes too; close the tab when you're done. Word's **Insert ▸ Object ▸ Chem Illustrator Drawing** starts a new one.
+
+- The document keeps a picture of the drawing, so it looks right on computers without Chem Illustrator, in PDFs and when printed. Only editing needs the app.
+- Copying the object out of Word and pasting it here gives the drawing back, editable.
+- AutoSave doesn't save these tabs: Word gets the drawing when you press Save. If you close the Word document first, the drawing stays here as an unsaved drawing.
+- The installed app sets this up the first time it starts, for you only (no administrator needed). **Edit ▸ Settings ▸ File Types** turns it off, and then drawings paste as pictures (which still hold the drawing, so copying one back here keeps it editable). A portable copy leaves it off unless you tick it there. Uninstalling removes it.
 
 Tables travel too:
 

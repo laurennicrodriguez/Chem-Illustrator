@@ -8,6 +8,7 @@ import { paletteRows } from './palette-ui';
 import { SheetView, popupMenu, selectionName } from './sheet-view';
 import { Workbook, Sheet, Structure, CellStyle, CellBlock, Cell, Condition, CompareOp, makeStructure, growToMerges } from '../sheet/workbook';
 import { Range, MAX_ROWS, MAX_COLS, colName, colIndex, cellName, parseRange, keyOf, rowOf, colOf, inRange } from '../sheet/refs';
+import { showsChem } from '../sheet/cell-text';
 import { fillReagentTable } from '../sheet/reagents';
 import { shiftFormula } from '../sheet/formula';
 import { PROPERTIES, MolProps, propertyValue } from '../sheet/properties';
@@ -26,6 +27,10 @@ import { askProperties, PropertyChoice } from './property-dialog';
 import { ask } from './ask';
 import { SheetFormatting } from './sheet-format-ui';
 import { SheetCharts } from './sheet-chart-ui';
+import { DASH_CHART_KINDS } from './dashboard-ui';
+import { SheetNotes } from './sheet-notes-ui';
+import { SheetValidation } from './sheet-validation-ui';
+import { describeValidation, KIND_NAMES } from '../sheet/validation';
 import type { ChartKind } from '../sheet/chart';
 import { DashboardUi } from './dashboard-ui';
 import { TILE_NAMES } from '../sheet/dashboard';
@@ -61,6 +66,8 @@ export interface SheetModeHost {
   copyStructure(contents: Contents, style: DocStyle): Promise<string>;
   /** Read the clipboard for a paste (from the paste event in a browser). */
   readCells(e: ClipboardEvent | null): Promise<ClipboardCells>;
+  /** Ask for the name put on notes and comments (true when one was given). */
+  askName(): Promise<boolean>;
 }
 
 const OWN_KIND = 'chem-illustrator-cells';
@@ -86,6 +93,10 @@ export class SheetMode {
   readonly charts: SheetCharts;
   /** Dashboard sheets: adding tiles, their menus and settings. */
   readonly dashUi: DashboardUi;
+  /** Notes and comments on cells. */
+  readonly notes: SheetNotes;
+  /** Data validation: the window, drop-downs and alerts. */
+  readonly validation: SheetValidation;
   /** The chart the panel and Chart tab showed last (the tab opens when a chart is first picked). */
   private chartShown: number | null = null;
   /** The dashboard sheet the ribbon was last set up for. */
@@ -118,6 +129,11 @@ export class SheetMode {
       filterMenu: (col, at) => this.filterMenu(col, at),
       flash: (m, ms) => this.host.flash(m, ms),
       typing: (text) => this.typing(text),
+      hoverNote: (cell, box) => this.notes.hover(cell, box),
+      drawn: () => this.notes.layout(),
+      dropDown: (r, c, at) => this.validation.dropDown(r, c, at),
+      invalid: (rule, text) => this.validation.alert(rule, text),
+      typed: (r, c, text) => void this.typedStructure(r, c, text),
     });
     chem.onAnswers = () => {
       const wb = this.book;
@@ -132,6 +148,17 @@ export class SheetMode {
       flash: (m, ms) => this.host.flash(m, ms),
     });
     this.charts = new SheetCharts({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+    });
+    this.notes = new SheetNotes({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+      askName: () => this.host.askName(),
+    });
+    this.validation = new SheetValidation({
       view: this.view,
       edit: (label, fn) => this.edit(label, fn),
       flash: (m, ms) => this.host.flash(m, ms),
@@ -431,7 +458,8 @@ export class SheetMode {
         break;
       }
       case 'wrap': this.style('Wrap text', { wrap: !a.wrap || undefined }); break;
-      case 'format-chem': this.style('Formula style', { chem: !a.chem || undefined }); break;
+      // on (as text is anyway, where it has formulas) or off for these cells
+      case 'format-chem': this.style('Formula style', { chem: this.chemShown() ? false : true }); break;
       case 'merge-cells': this.mergeCells(); break;
       case 'format-general': this.style('Number format', { numFmt: undefined }); break;
       case 'format-number': this.style('Number format', { numFmt: FORMATS.number }); break;
@@ -466,8 +494,11 @@ export class SheetMode {
       case 'table-convert': { const t = this.tableHere(); if (t) this.formatting.convertToRange(t); break; }
       case 'table-colours-reset': { const t = this.tableHere(); if (t) this.formatting.setTable(t, { custom: undefined }, 'Table colours'); break; }
       case 'chart-scatter': case 'chart-line': case 'chart-column': case 'chart-bar': case 'chart-area': case 'chart-pie':
-        if (v.sheet.dashboard) void this.dashUi.addTile('chart', name.slice(6) as ChartKind);
-        else this.charts.insert(name.slice(6) as ChartKind);
+      case 'chart-combo': case 'chart-histogram': case 'chart-box': case 'chart-bubble': case 'chart-radar':
+        if (v.sheet.dashboard) {
+          if (DASH_CHART_KINDS.includes(name.slice(6) as ChartKind)) void this.dashUi.addTile('chart', name.slice(6) as ChartKind);
+          else this.host.flash('Dashboard tiles take scatter, line, column, bar, area and pie charts: make this one on a sheet.', 5000);
+        } else this.charts.insert(name.slice(6) as ChartKind);
         break;
       case 'dash-add-chart': void this.dashUi.addTile('chart'); break;
       case 'dash-add-kpi': void this.dashUi.addTile('kpi'); break;
@@ -492,6 +523,17 @@ export class SheetMode {
       case 'clear-contents': v.clearSelection(); break;
       case 'clear-all': this.edit('Clear', (s) => s.clear(v.sel.range, 'all')); break;
       case 'clear-formats': this.edit('Clear formats', (s) => s.clear(v.sel.range, 'formats')); break;
+      case 'new-note': void this.notes.newNote(); break;
+      case 'new-comment': void this.notes.newComment(); break;
+      case 'edit-note': this.notes.edit(); break;
+      case 'delete-note': case 'delete-comment': this.notes.remove(); break;
+      case 'show-note': this.notes.toggleShown(); break;
+      case 'show-all-notes': this.notes.toggleShowAll(); this.showRibbonState(); break;
+      case 'convert-notes': this.notes.convertNotes(); break;
+      case 'prev-comment': case 'next-comment': this.notes.step(name === 'next-comment'); break;
+      case 'data-validation': this.validation.dialog(); break;
+      case 'circle-invalid': this.validation.toggleCircles(); this.showRibbonState(); break;
+      case 'pick-from-list': v.openDropDown(); break;
       default: return false;
     }
     return true;
@@ -1017,6 +1059,24 @@ export class SheetMode {
     if (res.notes.length) this.host.flash('Note from the name reader: ' + res.notes.join(' '), 9000);
   }
 
+  /**
+   * A SMILES or name typed into a column headed "Structure" (a reagent table's) is drawn there,
+   * in place of the text. Text that can't be read stays as it was typed.
+   */
+  private async typedStructure(r: number, c: number, text: string): Promise<void> {
+    const s = this.view.sheet, wb = this.book;
+    if (!s || !wb || r === 0 || /\s/.test(text) && !/[a-z]{3}/i.test(text)) return;
+    const head = s.values.get(keyOf(0, c));
+    if (typeof head !== 'string' || !/^structures?$/i.test(head.trim())) return;
+    const res = await this.host.toStructure(text, wb.drawingStyle);
+    // still the same text in the same cell (nothing typed over it meanwhile)
+    if ('error' in res || this.book !== wb || s.values.get(keyOf(r, c)) !== text || s.cell(r, c)?.structure) return;
+    // not through edit(): that would end typing begun in the next cell meanwhile
+    wb.edit('Structure from typing', () => s.setStructure(r, c, res.contents), this.view.place());
+    this.view.refresh();
+    this.host.changed();
+  }
+
   /** Edit > Paste SMILES: a SMILES string, molfile or name drawn as a structure in the active cell. */
   async structureFromText(text: string): Promise<void> {
     const v = this.view;
@@ -1210,6 +1270,14 @@ export class SheetMode {
     }, v.place());
     v.goSheet(wb.sheets.indexOf(s));
     this.host.flash('Reagent table: type the limiting reagent\'s mmol in E2, then each reagent\'s structure (draw it, or type SMILES) and equiv. MW, mmol, mass and volume work themselves out; type over any of them to replace it.', 10000);
+  }
+
+  /** Is the active cell shown as chemistry (by its look, or because its text has a formula)? */
+  private chemShown(): boolean {
+    const s = this.view.sheet;
+    if (!s) return false;
+    const { r, c } = this.view.sel.active;
+    return showsChem(s.styleAt(r, c)?.chem, s.values.get(keyOf(r, c)));
   }
 
   /** Put back the calculated values where they were typed over. */
@@ -1435,6 +1503,13 @@ export class SheetMode {
 
   // ---------------------------------------------------------------- undo
 
+  /** The name of the step Undo (or Redo) would take back: null with none, '' when it has no name. */
+  history(redo = false): string | null {
+    const wb = this.book;
+    if (!wb || !(redo ? wb.canRedo() : wb.canUndo())) return null;
+    return redo ? wb.redoLabel : wb.undoLabel;
+  }
+
   undo(): void {
     const wb = this.book;
     if (!wb) return;
@@ -1491,6 +1566,13 @@ export class SheetMode {
       if (s.colDefs.has(R.c1)) items.push(['Change the column\'s formula…', () => void this.editColumnFormula(R.c1)], ['Stop calculating this column (keep the values)', () => this.freezeColumn(R.c1)]);
     } else {
       items.push(['Insert…', () => this.insertCells()], ['Delete…', () => this.deleteCells()], ['Clear contents', () => v.clearSelection()]);
+      // notes and comments, as Excel's right-click menu has them
+      const note = s.noteAt(v.sel.active.r, v.sel.active.c);
+      items.push(null);
+      if (!note) items.push(['New Comment', () => void this.notes.newComment()], ['New Note', () => void this.notes.newNote()]);
+      else if (note.kind === 'comment') items.push(['Show Comment', () => this.notes.edit()], ['Delete Comment', () => this.notes.remove()]);
+      else items.push(['Edit Note', () => this.notes.edit()], ['Delete Note', () => this.notes.remove()], [note.shown ? 'Hide Note' : 'Show Note', () => this.notes.toggleShown()]);
+      items.push(['Pick From Drop-down List…', () => v.openDropDown()]);
     }
     items.push(null,
       ['Sort smallest to largest', () => void this.sort(false)],
@@ -1504,6 +1586,7 @@ export class SheetMode {
       ['Reset to calculated', () => this.resetCalculated(), overrides],
       null,
       ['Conditional Formatting ▸', () => this.formatting.conditionalMenu(x, y)],
+      ['Data Validation…', () => this.validation.dialog()],
     );
     const table = this.tableHere();
     if (table) {
@@ -1621,10 +1704,20 @@ export class SheetMode {
     press('align-center', st.align === 'center');
     press('align-right', st.align === 'right');
     press('wrap', !!st.wrap);
-    press('format-chem', !!st.chem);
+    press('format-chem', this.chemShown());
     press('filter', !!s.filter);
     press('freeze-header', s.frozen.rows > 0);
     press('merge-cells', !!s.mergeAt(r, c));
+    press('show-all-notes', this.notes.showAll);
+    press('circle-invalid', this.view.circleInvalid);
+    const note = s.noteAt(r, c);
+    press('show-note', !!note?.shown);
+    for (const [name, on] of [['edit-note', note?.kind === 'note'], ['show-note', note?.kind === 'note'], ['delete-note', !!note]] as const) {
+      const b = this.ribbon.querySelector<HTMLButtonElement>(`[data-sh="${name}"]`);
+      if (b) b.disabled = !on;
+    }
+    for (const m of document.querySelectorAll('[role="menuitemcheckbox"][data-cmd="show-all-notes"]')) m.setAttribute('aria-checked', String(this.notes.showAll));
+    for (const m of document.querySelectorAll('[role="menuitemcheckbox"][data-cmd="circle-invalid"]')) m.setAttribute('aria-checked', String(this.view.circleInvalid));
     const fmt = this.ribbon.querySelector<HTMLSelectElement>('#sh-numfmt')!;
     const code = st.numFmt ?? 'General';
     let opt = [...fmt.options].find((o) => o.value === code);
@@ -1741,6 +1834,17 @@ export class SheetMode {
       parts.push(para(`${e.code === '#BUSY!' ? 'Being worked out…' : `${e.code}: ${problem ?? e.detail}`}`, e.code === '#BUSY!' ? 'muted' : 'cp-error'));
     } else if (v !== undefined && v !== null && (cell?.input?.startsWith('=') || def)) {
       parts.push(para(`Value: ${plainText(v)}`, 'cp-value'));
+    }
+    // a note or comment, and a data validation rule: a line each, only where there is one
+    const note = s.noteAt(r, c);
+    if (note) {
+      const replies = note.replies?.length ? ` (${note.replies.length} ${note.replies.length === 1 ? 'reply' : 'replies'})` : '';
+      const line = para(`${note.kind === 'comment' ? 'Comment' : 'Note'}${note.author ? ` by ${note.author}` : ''}${replies}${note.done ? ', resolved' : ''}: ${note.text}`, 'cp-note-line');
+      parts.push(line, rowOfButtons(button(note.kind === 'comment' ? 'Open' : 'Edit', () => this.notes.edit(), 'Show its card beside the cell'), button('Delete', () => this.notes.remove())));
+    }
+    const rule = s.validationAt(r, c);
+    if (rule) {
+      parts.push(para(`${KIND_NAMES[rule.kind]} rule: takes ${describeValidation(rule)}.`, 'muted small'), rowOfButtons(button('Data Validation…', () => this.validation.dialog())));
     }
     // the number format: always editable here (Ctrl+1)
     const st = s.styleAt(r, c);

@@ -2,6 +2,7 @@
 // spatial index for fast hit-testing. Every change goes through a transaction so it can
 // be undone as one step.
 
+import type { SectionBreak } from './document/document';
 import { Vec, Rect } from './geom';
 import { DocStyle, ACS_1996 } from './style';
 import { arrowPoints, gluePoint } from './objects';
@@ -295,6 +296,13 @@ export interface ParaStyle {
   /** Documents: line spacing in points instead of a multiple: exactly this, or at least this. */
   linePt?: number;
   lineRule?: 'exact' | 'atLeast';
+  /**
+   * Documents: a new section starts with this paragraph (a section break before it), with how
+   * it starts and its own page setup, header and footer, page numbering and line numbers.
+   */
+  section?: SectionBreak;
+  /** Documents: this paragraph's lines get no line numbers (Word's Suppress Line Numbers). */
+  noLineNumbers?: boolean;
 }
 
 export interface Caption {
@@ -654,6 +662,12 @@ export interface Shape {
    */
   chart?: ChartBox;
   /**
+   * A picture that is an equation (Insert > Equation on slides and designs): its LaTeX, laid out
+   * live to fit the picture's box; `size` is its text size at its own size, in points. `src` is a
+   * copy of it as an SVG for exports and for programs that can't lay out equations.
+   */
+  math?: ShapeMath;
+  /**
    * A frame round other things (Chemistry > Labels and Numbers > Add Frame): what it surrounds (whole structures for
    * the atoms), the gap it keeps round them in points, and whether it follows them (grows,
    * shrinks and moves as they change). Moving or resizing the frame by hand stops it following.
@@ -664,6 +678,9 @@ export interface Shape {
   /** A SmartArt-style diagram's text and look, kept on the invisible frame round its shapes (design/diagrams.ts). */
   diagram?: DiagramData;
 }
+
+/** An equation on a slide or design: LaTeX, its text size in points, colour and font. */
+export interface ShapeMath { tex: string; size: number; color?: string; font?: string }
 
 /**
  * A picture's frame, corners and shadow. The line is drawn centred on the picture's edge, as
@@ -713,6 +730,8 @@ export interface TableCell {
   align?: Justify;
   /** Number of columns the cell spans (the cells it covers are left empty). */
   span?: number;
+  /** Documents: number of rows the cell is merged down over (the cells it covers below are left empty). */
+  rowSpan?: number;
   /** Documents: the cell's background colour (Word's shading). */
   fill?: string;
   /** Documents: where the text sits up and down in a cell taller than it (top when left out). */
@@ -1012,6 +1031,9 @@ export class Doc {
 
   canUndo(): boolean { return this.undoStack.length > 0; }
   canRedo(): boolean { return this.redoStack.length > 0; }
+  /** The name of the step Undo (or Redo) would take back, such as "Add Ring" ('' with none). */
+  get undoLabel(): string { return this.undoStack[this.undoStack.length - 1]?.label ?? ''; }
+  get redoLabel(): string { return this.redoStack[this.redoStack.length - 1]?.label ?? ''; }
 
   undo(): boolean {
     // not while a step is still being made (a drag): it would be undone half-way and lost

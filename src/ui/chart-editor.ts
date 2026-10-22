@@ -14,7 +14,7 @@ import { chartBoxData } from '../render/chart-box-paint';
 import type { Range } from '../sheet/refs';
 
 const KINDS = Object.keys(CHART_NAMES) as ChartKind[];
-const KIND_ICONS: Record<ChartKind, string> = { scatter: '⁘', line: '⟋', column: '▥', bar: '☰', area: '◭', pie: '◔' };
+const KIND_ICONS: Record<ChartKind, string> = { scatter: '⁘', line: '⟋', column: '▥', bar: '☰', area: '◭', pie: '◔', combo: '◧', histogram: '▇', box: '⊟', bubble: '◯', radar: '✳' };
 
 /** What the window gave back: the chart changed, the chart to be deleted, or nothing (Cancel). */
 export type ChartEdit = ChartBox | 'delete' | null;
@@ -29,7 +29,7 @@ function rechart(c: Chart, s: Sheet, r: Range): Chart {
   const fresh = chartFromRange(s, r, c.kind);
   return {
     ...c,
-    series: fresh.series.map((f, i) => ({ ...(c.series[i] ?? {}), name: f.name, x: f.x, y: f.y })),
+    series: fresh.series.map((f, i) => ({ ...(c.series[i] ?? {}), name: f.name, x: f.x, y: f.y, ...(f.size ? { size: f.size } : {}) })),
     legend: c.legend === 'none' && fresh.series.length > 1 && c.series.length <= 1 ? 'right' : c.legend,
   };
 }
@@ -106,7 +106,12 @@ export function editChart(start: ChartBox, isNew: boolean, flash: (msg: string, 
       b.dataset.kind = k;
       b.setAttribute('role', 'radio');
       b.innerHTML = `<span class="ce-kind-icon">${KIND_ICONS[k]}</span>${CHART_NAMES[k].replace(/ \(x–y\)/, '')}`;
-      b.addEventListener('click', () => charts.setKind(k));
+      b.addEventListener('click', () => {
+        const was = whole;
+        charts.setKind(k);
+        // a chart of all the data takes it as the new kind takes a table (a bubble chart's columns in pairs, a histogram's one column)
+        if (was) { chart = rechart(chart, sheet, usedBlock(sheet)); whole = chartsWhole(chart, sheet); refresh(); }
+      });
       kinds.append(b);
     }
 

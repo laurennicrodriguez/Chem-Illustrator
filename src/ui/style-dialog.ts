@@ -2,6 +2,7 @@
 // as your own, make it the style new tabs of this kind start with, and say what happens to the
 // structures already drawn (redrawn in the new style, or left as they look now).
 
+import { showDialog } from './dialog-host';
 import type { DocStyle } from '../style';
 import { FONT_GROUPS } from '../fonts';
 import { STYLE_PRESETS, presetNamed, sameLook, scaleStyle, type RestyleHow } from '../drawing-styles';
@@ -241,7 +242,7 @@ export function editDrawingStyle(o: StyleDialogOptions): Promise<StyleChoice | n
     cancel.addEventListener('click', () => done(null));
     d.addEventListener('close', () => done(null));
     document.body.append(d);
-    d.showModal();
+    showDialog(d);
     pick.focus();
   });
 }

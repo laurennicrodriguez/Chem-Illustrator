@@ -37,6 +37,10 @@ export interface Settings {
   showRoles: boolean;
   /** Format chemistry as words are finished (CH2Cl2, 1H NMR, DMSO-d6). Edit > Typing and Spelling. */
   chemTyping: boolean;
+  /** Stereodescriptors in front of a name in italics as it is typed: (S)-proline. Edit > Typing and Spelling. */
+  stereoItalic: boolean;
+  /** Compound numbers in bold as they are typed: (4), compound 4a. Edit > Typing and Spelling. */
+  boldNumbers: boolean;
   /** Underline misspelled words (red) and chemistry formatting slips (blue) while typing. */
   spellCheck: boolean;
   /** Replacements made as you type: [typed, replaced by] (oC → °C). */
@@ -67,11 +71,11 @@ export interface Settings {
   citeStyle: string;
   /** That style's details changed. */
   citeOptions: Partial<CiteFormat>;
-  /** Show Terminal Methyls writes them as CH3 or as Me (Edit > Preferences). */
+  /** Show Terminal Methyls writes them as CH3 or as Me (Edit > Settings). */
   methylStyle: 'CH3' | 'Me';
   /** The template new slide decks start with (Design > Templates), or null for the plain look. */
   slideTemplate: string | null;
-  /** Axial chirality written as Ra/Sa or as helicity P/M (Edit > Preferences). */
+  /** Axial chirality written as Ra/Sa or as helicity P/M (Edit > Settings). */
   axialStyle: 'RaSa' | 'PM';
   /** The + and − keys put charges in circles (⊕, ⊖) rather than plain signs. */
   circledCharges: boolean;
@@ -87,7 +91,7 @@ export interface Settings {
   superscriptR: boolean;
   /** Where Format > Link Text to Structure puts the text: where it is, or a side of the structure. */
   linkSide: 'keep' | 'below' | 'above' | 'left' | 'right';
-  /** Ask before a command with nothing selected changes every structure on the page (Edit > Preferences). */
+  /** Ask before a command with nothing selected changes every structure on the page (Edit > Settings). */
   askWholeDrawing: boolean;
   /** Your own colour rows, in every colour menu and every mode (Edit > Colour Palettes). */
   palettes: Palette[];
@@ -107,11 +111,15 @@ export interface Settings {
   guides: { drawing: boolean; slides: boolean; design: boolean };
   /** Document settings boxes pinned in the panel on the right ('para', 'style', 'page', 'hf'). */
   docPins: string[];
-  /** Look for a newer version when the desktop app starts (Edit > Preferences). */
+  /** Look for a newer version when the desktop app starts (Edit > Settings). */
   updateCheck: boolean;
-  /** Names the name reader can't read are looked up on PubChem (Edit > Preferences). */
+  /** Names the name reader can't read are looked up on PubChem (Edit > Settings). */
   pubchemNames: boolean;
-  /** The name put on tracked changes in documents (Review > Your Name, Edit > Preferences). */
+  /** The Windows app has offered to open the chemistry file types (once, at its first start). */
+  fileTypesOffered: boolean;
+  /** The Windows app has registered its drawings as objects Word can send back to edit (once, at its first start). */
+  wordObjectsOffered: boolean;
+  /** The name put on tracked changes in documents (Review > Your Name, Edit > Settings). */
   reviewName: string;
   /** A version the user chose Skip This Version for, so starting the app doesn't offer it again. */
   skipVersion: string | null;
@@ -127,13 +135,13 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false, showRoles: true,
-  chemTyping: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
+  chemTyping: true, stereoItalic: true, boldNumbers: false, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
   modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true, page: { name: 'letter', w: 540, h: 720, grow: true }, pageEdge: true, welcomed: false, textBar: 'docked', groupTips: true,
   citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', circledCharges: false, textToAtom: true, groupClick: 'group', groupOutline: true, rerouteArrows: true, superscriptR: true, linkSide: 'keep', slideTemplate: null, askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(),
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
   guides: { drawing: false, slides: true, design: true },
   docPins: [],
-  updateCheck: true, pubchemNames: true, reviewName: '', skipVersion: null, recentFiles: [], highlightLooks: [],
+  updateCheck: true, pubchemNames: true, fileTypesOffered: false, wordObjectsOffered: false, reviewName: '', skipVersion: null, recentFiles: [], highlightLooks: [],
   scheme: DEFAULT_SCHEME_PREFS,
   keep: DEFAULT_KEEP,
 };
@@ -149,7 +157,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (!raw || typeof raw !== 'object') return s;
   const r = raw as Record<string, unknown>;
   if (r.hotkeys && typeof r.hotkeys === 'object' && !Array.isArray(r.hotkeys)) s.hotkeys = r.hotkeys as KeyOverrides;
-  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'spellCheck', 'scrollBars', 'pageEdge', 'welcomed', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'textToAtom', 'groupOutline', 'rerouteArrows', 'superscriptR', 'updateCheck', 'pubchemNames'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
+  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'stereoItalic', 'boldNumbers', 'spellCheck', 'scrollBars', 'pageEdge', 'welcomed', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'textToAtom', 'groupOutline', 'rerouteArrows', 'superscriptR', 'updateCheck', 'pubchemNames', 'fileTypesOffered', 'wordObjectsOffered'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
   if (r.page === null) s.page = null;
   else if (r.page && typeof r.page === 'object') {
     const p = r.page as Record<string, unknown>;

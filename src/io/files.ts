@@ -9,7 +9,15 @@ import type { FileStamp } from '../keep/recovery';
 export type FileRef =
   | { kind: 'path'; path: string }
   | { kind: 'handle'; handle: FileHandle }
+  /** A drawing embedded in a Word, PowerPoint or Excel document, being edited here (Windows). */
+  | { kind: 'embedded'; id: number; app: string; doc: string }
   | { kind: 'none' };
+
+/** Puts a saved drawing back in the document it is embedded in (set by the app on Windows). */
+let embeddedWriter: ((ref: Extract<FileRef, { kind: 'embedded' }>, cdxml: string) => Promise<void>) | null = null;
+export function setEmbeddedWriter(w: typeof embeddedWriter): void {
+  embeddedWriter = w;
+}
 
 export interface FileType {
   description: string;
@@ -56,6 +64,23 @@ const pw = window as PickerWindow;
 
 const desktop = isTauri();
 
+/**
+ * The desktop app's Open dialog. On Windows it is our own, share-aware one: the system's
+ * plain one refuses a file that Word or PowerPoint has open ("This file is in use") before
+ * the app can open it and say where else it is open.
+ */
+async function pickPath(filters: { name: string; extensions: string[] }[]): Promise<string | null> {
+  if (/Windows/i.test(navigator.userAgent)) {
+    return invoke<string | null>('open_shared_dialog', {
+      names: filters.map((f) => f.name),
+      patterns: filters.map((f) => f.extensions.map((e) => '*.' + e).join(';')),
+    });
+  }
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const path = await open({ multiple: false, directory: false, filters });
+  return typeof path === 'string' ? path : null;
+}
+
 /** File name without folders. */
 export function baseName(path: string): string {
   return path.split(/[\\/]/).pop() || path;
@@ -73,9 +98,8 @@ function isAbort(e: unknown): boolean {
 /** Ask for a file and read it. Null when the user cancels. */
 export async function openFileDialog(types: FileType[]): Promise<{ name: string; text: string; ref: FileRef } | null> {
   if (desktop) {
-    const { open } = await import('@tauri-apps/plugin-dialog');
-    const path = await open({ multiple: false, directory: false, filters: types.map((t) => ({ name: t.description, extensions: [t.extension] })) });
-    if (typeof path !== 'string') return null;
+    const path = await pickPath(types.map((t) => ({ name: t.description, extensions: [t.extension] })));
+    if (!path) return null;
     const text = await invoke<string>('read_text_file', { path });
     return { name: baseName(path), text, ref: { kind: 'path', path } };
   }
@@ -106,10 +130,8 @@ export function extensionOf(name: string): string {
 export async function openBytesDialog(label: string, types: FileType[], extra: string[] = []): Promise<{ name: string; bytes: Uint8Array; ref: FileRef } | null> {
   const exts = [...new Set([...types.map((t) => t.extension), ...extra])];
   if (desktop) {
-    const { open } = await import('@tauri-apps/plugin-dialog');
-    const filters = [{ name: label, extensions: exts }, ...types.map((t) => ({ name: t.description, extensions: [t.extension] }))];
-    const path = await open({ multiple: false, directory: false, filters });
-    if (typeof path !== 'string') return null;
+    const path = await pickPath([{ name: label, extensions: exts }, ...types.map((t) => ({ name: t.description, extensions: [t.extension] }))]);
+    if (!path) return null;
     const buf = await invoke<ArrayBuffer>('read_binary_file', { path });
     return { name: baseName(path), bytes: new Uint8Array(buf), ref: { kind: 'path', path } };
   }
@@ -171,6 +193,9 @@ export async function writeFile(ref: FileRef, name: string, data: string | Uint8
   if (ref.kind === 'path') {
     if (typeof data === 'string') await invoke('write_text_file', { path: ref.path, contents: data });
     else await invoke('write_binary_file', data, { headers: { path: encodeURIComponent(ref.path) } });
+  } else if (ref.kind === 'embedded') {
+    if (!embeddedWriter) throw new Error('drawings in other programs can only be edited in the Windows app');
+    await embeddedWriter(ref, typeof data === 'string' ? data : new TextDecoder().decode(data));
   } else if (ref.kind === 'handle') {
     const w = await ref.handle.createWritable();
     await w.write(data);
