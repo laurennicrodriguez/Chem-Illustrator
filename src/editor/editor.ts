@@ -2984,6 +2984,8 @@ export class Editor {
     // in the middle of a drag (its step still open), commands wait: Undo or a tab switch now
     // would act on a half-made change
     if (this.drag?.moved && chord !== 'Escape' && !/^(Shift|Control|Alt|Meta)$/.test(e.key)) { e.preventDefault(); return; }
+    // Tab moves on through the window's buttons unless the drawing has the keys (or the mouse)
+    if (/^(Shift\+)?Tab$/.test(chord) && !this.pointerInside && target !== this.r.overlay) return;
     // on a focused button or menu, Enter, Space and Tab do their usual jobs (unless the mouse
     // is over the drawing: then they are drawing keys, as in ChemDraw)
     if (!this.pointerInside && target && target !== document.body && target !== this.r.overlay && /^(Shift\+)?(Enter|Space|Tab)$/.test(chord)) return;

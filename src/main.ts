@@ -1711,6 +1711,19 @@ function renderTabs(): void {
     el.className = `tab tab-${t.mode}${t === ws.active ? ' active' : ''}${t.dirty ? ' dirty' : ''}`;
     el.setAttribute('role', 'tab');
     el.setAttribute('aria-selected', String(t === ws.active));
+    // the keys reach the tab showing; the arrow keys go along to the others
+    el.tabIndex = t === ws.active ? 0 : -1;
+    el.addEventListener('keydown', (e) => {
+      if (e.target !== el) return;
+      const i = ws.tabs.indexOf(t);
+      const to = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? ws.tabs.length - 1 : null;
+      if (to !== null) {
+        e.preventDefault();
+        const n = ws.tabs[(to + ws.tabs.length) % ws.tabs.length];
+        if (n !== ws.active) ws.activate(n);
+        $('#tabs').querySelector<HTMLElement>('[aria-selected="true"]')?.focus();
+      } else if (e.key === 'Delete') { e.preventDefault(); void ws.close(t); }
+    });
     el.title = (t.ref.kind === 'path' ? t.ref.path : t.name) + (t.dirty ? ' (not saved)' : '')
       + (t.savedAt ? `\n${t.savedHow === 'autosaved' ? 'AutoSaved' : 'Saved'} ${new Date(t.savedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}` : '')
       + (keeper.autoSaveWanted(t) && ws.canAutoSave(t) ? ' (AutoSave on)' : '');
@@ -2756,7 +2769,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'print',
+  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
   'help', 'about', 'user-guide', 'send-feedback', 'report-problem', 'check-updates']);
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
@@ -2960,6 +2973,8 @@ const COMMANDS: Record<string, () => unknown> = {
   })),
   'report-problem': () => feedback.open('problem'),
   'command-search': () => commandSearch.open(),
+  'next-region': () => cycleRegion(1),
+  'prev-region': () => cycleRegion(-1),
   'toolbox-main': () => toolboxes.toggle('main'),
   'toolbox-structure': () => toolboxes.toggle('structure'),
   'toolbox-arrange': () => toolboxes.toggle('arrange'),
@@ -3173,6 +3188,114 @@ for (const m of menus) {
   });
 }
 addEventListener('resize', () => { if (openMenu) showMenu(null); });
+
+// ---------------------------------------------------------------- the keyboard round the window
+
+// F10, or Alt pressed and let go on its own, goes to the menu bar (and back); there the arrow
+// keys move along it and Down opens a menu. Alt with a menu's underlined letter opens that menu,
+// as in Office. Ctrl+F6 moves on round the window's parts (the keys can be changed).
+const MNEMONICS = new Map<string, Menu>();
+for (const m of menus) {
+  const letter = m.btn.getAttribute('aria-keyshortcuts')?.match(/^Alt\+(\w)$/)?.[1];
+  if (letter) MNEMONICS.set(letter.toUpperCase(), m);
+  m.btn.addEventListener('keydown', (e) => {
+    const j = menus.indexOf(m);
+    const go = (k: number) => { e.preventDefault(); const n = menus[(k + menus.length) % menus.length]; if (openMenu) showMenu(n); else n.btn.focus(); };
+    if (e.key === 'ArrowRight') go(j + 1);
+    else if (e.key === 'ArrowLeft') go(j - 1);
+    else if (e.key === 'ArrowDown') { e.preventDefault(); showMenu(m); }
+    else if (e.key === 'Home') go(0);
+    else if (e.key === 'End') go(menus.length - 1);
+    else if (e.key === 'Escape' && !openMenu) { e.preventDefault(); leaveMenuBar(); }
+  });
+}
+/** Where the keys were before going to the menu bar, to go back to. */
+let beforeMenus: HTMLElement | null = null;
+function enterMenuBar(): void {
+  const a = document.activeElement as HTMLElement | null;
+  if (!a?.closest('header')) beforeMenus = a;
+  menus[0].btn.focus();
+}
+function leaveMenuBar(): void {
+  showMenu(null);
+  document.body.classList.remove('show-mnemonics');
+  if (beforeMenus?.isConnected && beforeMenus !== document.body) beforeMenus.focus();
+  else focusWork();
+  beforeMenus = null;
+}
+const inMenuBar = () => !!(document.activeElement as HTMLElement | null)?.closest('header > .menu-wrap');
+
+/** The keys to the drawing, sheet or document showing. */
+function focusWork(): void {
+  if (sheetActive()) sheetMode.focus();
+  else if (docActive()) docMode.focus();
+  else $('#overlay').focus();
+}
+
+/**
+ * The parts of the window that Ctrl+F6 goes round, in order: each finds what takes the keys in
+ * it (null when that part isn't showing).
+ */
+const REGIONS: { inside: string; first: () => HTMLElement | null }[] = [
+  { inside: 'header', first: () => menus[0].btn },
+  { inside: '#tabs', first: () => $('#tabs').querySelector<HTMLElement>('[aria-selected="true"]') ?? $('#tabs').querySelector<HTMLElement>('[role="tab"], button') },
+  { inside: '.ribbon', first: () => [...document.querySelectorAll<HTMLElement>('.ribbon')].find(onScreenEl)?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"], button:not([disabled])') ?? null },
+  { inside: '#tools', first: () => onScreenEl($('#tools')) ? $('#tools').querySelector<HTMLElement>('button.tool.active') ?? $('#tools').querySelector<HTMLElement>('button.tool') : null },
+  { inside: '#work', first: () => { focusWork(); return document.activeElement as HTMLElement; } },
+  { inside: '#side-content', first: () => onScreenEl($('#side-content')) ? [...$('#side-content').querySelectorAll<HTMLElement>('button:not([disabled]), input, select, [tabindex="0"]')].find(onScreenEl) ?? null : null },
+];
+function onScreenEl(el: Element): boolean { return el.getClientRects().length > 0; }
+
+/** Move the keys to the next (or previous) part of the window. */
+function cycleRegion(step: 1 | -1): void {
+  showMenu(null);
+  const a = document.activeElement as HTMLElement | null;
+  let at = a ? REGIONS.findIndex((r) => a.closest(r.inside)) : -1;
+  if (at < 0) at = step > 0 ? -1 : REGIONS.length;
+  for (let k = 1; k <= REGIONS.length; k++) {
+    const r = REGIONS[(at + step * k + REGIONS.length * 2) % REGIONS.length];
+    const el = r.first();
+    if (!el || !onScreenEl(el)) continue;
+    if (document.activeElement !== el) el.focus();
+    if (document.activeElement === el || el.contains(document.activeElement)) return;
+  }
+}
+
+let altAlone = false;
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Alt') { altAlone = !e.repeat && !e.ctrlKey && !e.metaKey && !e.shiftKey; if (altAlone) document.body.classList.add('show-mnemonics'); return; }
+  altAlone = false;
+  // Ctrl+F6 works from anywhere, a text box too
+  const chord = chordOf(e);
+  const step = chord && !(e.target as HTMLElement | null)?.closest?.('dialog')
+    ? keymap.keysFor('command', 'command next-region').includes(chord) ? 1 : keymap.keysFor('command', 'command prev-region').includes(chord) ? -1 : 0 : 0;
+  if (step) { e.preventDefault(); e.stopImmediatePropagation(); cycleRegion(step); return; }
+  if (isTyping(e.target) || (e.target as HTMLElement | null)?.closest?.('dialog')) return;
+  if (e.key === 'F10' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+    e.preventDefault();
+    if (inMenuBar() || openMenu) leaveMenuBar();
+    else { document.body.classList.add('show-mnemonics'); enterMenuBar(); }
+    return;
+  }
+  // Alt and a menu's letter (by the key's place, so it works whatever the keyboard writes)
+  if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && /^Key[A-Z]$/.test(e.code)) {
+    const m = MNEMONICS.get(e.code.slice(3));
+    if (m) { e.preventDefault(); e.stopImmediatePropagation(); if (!inMenuBar()) beforeMenus = document.activeElement as HTMLElement | null; showMenu(m); }
+  }
+}, true);
+window.addEventListener('keyup', (e) => {
+  if (e.key !== 'Alt') return;
+  const alone = altAlone;
+  altAlone = false;
+  if (!alone) { if (!inMenuBar()) document.body.classList.remove('show-mnemonics'); return; }
+  if (isTyping(e.target) || (e.target as HTMLElement | null)?.closest?.('dialog')) { document.body.classList.remove('show-mnemonics'); return; }
+  e.preventDefault();
+  if (inMenuBar() || openMenu) leaveMenuBar();
+  else enterMenuBar();
+});
+window.addEventListener('pointerdown', () => { altAlone = false; }, true);
+window.addEventListener('blur', () => { altAlone = false; document.body.classList.remove('show-mnemonics'); });
+document.addEventListener('focusin', () => { if (!inMenuBar() && !openMenu) document.body.classList.remove('show-mnemonics'); });
 
 /** The mode the menus serve: drawing a structure for a cell or a document counts as Drawing. */
 function menuMode(): string { return drawingOnTop() ? 'drawing' : ws.active.mode; }
@@ -4294,6 +4417,18 @@ function scheduleAnalysis(force = false): void {
   analysisTimer = window.setTimeout(() => runAnalysis(force), 30);
 }
 
+let saidSelection = '';
+/** Tell screen readers what is selected: "Selected C6H5Br, 7 atoms". */
+function saySelection(results: FragmentResult[]): void {
+  const n = editor.sel.atoms.size;
+  const key = n ? [...editor.sel.atoms].sort((a, b) => a - b).join(',') + ':' + doc.version : '';
+  if (key === saidSelection) return;
+  saidSelection = key;
+  if (!n) return;
+  const formulas = results.filter((r) => !r.error && r.formula).map((r) => r.formula);
+  $('#sr-say').textContent = `Selected ${formulas.length ? formulas.join(', ') + ', ' : ''}${n} atom${n === 1 ? '' : 's'}`;
+}
+
 async function runAnalysis(force: boolean): Promise<void> {
   if (!chem.ready) return;
   // Analyse the selected structures, or else the one last drawn on.
@@ -4350,6 +4485,7 @@ async function runAnalysis(force: boolean): Promise<void> {
   }
   if (seq !== analysisSeq) return;
   lastAnalysis = { results, frags };
+  saySelection(results);
   panel.innerHTML = results.map((r, i) => polymers[i] ? polymerHtml(r, polymers[i]!) : analysisHtml(r, i, adductSel.value, { stereo: r.error ? '' : stereoSummary(frags[i]), unknown: exports[i].unknownLabels, electrons: electronsHtml(countElectrons(doc, frags[i].values().next().value!)), pubchem: r.error || !r.smiles ? '' : pubchemHtml(pubchemStates.get(r.smiles) ?? { kind: 'idle' }, i) })).join('');
   updatePanels();
 }
