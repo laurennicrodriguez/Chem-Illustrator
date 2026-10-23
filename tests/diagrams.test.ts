@@ -17,11 +17,12 @@ import { writePptx, type PptxOptions } from '../src/io/pptx-write';
 import { readPptx } from '../src/io/pptx-read';
 import { writeDocx, readDocx, type DocxDeps } from '../src/io/docx';
 import { newDocument, objectRun, runStyleOf } from '../src/document/document';
-import { geoDef, sliceId } from '../src/design/geo';
+import { geoDef, sectorBox, sectorId, sliceId } from '../src/design/geo';
 import {
-  DIAGRAM_COLOURS, DIAGRAM_LAYOUTS, diagramFrameOf, diagramParts, heldLines, newDiagram, parseOutline, putDiagram, refitDiagrams,
+  DIAGRAM_COLOURS, DIAGRAM_LAYOUTS, diagramContents, diagramFrameOf, diagramParts, heldLines, newDiagram, parseOutline, putDiagram, refitDiagramFigures, refitDiagrams,
   setItemText, textFromShapes, ungroupDiagram, cleanDiagram, inkOn, type DiagramData,
 } from '../src/design/diagrams';
+import { selectionBox } from '../src/editor/arrange';
 
 function put(d: DiagramData) {
   const doc = new Doc();
@@ -103,6 +104,123 @@ describe('layouts', () => {
     expect(down[2]).toEqual(['L', 75, 20]);
     const { shapes } = diagramParts(newDiagram('pyramid', 'a\nb\nc'));
     expect(shapes[0].geo).toBe(sliceId(0.5));
+  });
+
+  it('draws ring pieces to fill their own box, round the right way', () => {
+    // the top half of a ring: as wide as the ring, half as high
+    const b = sectorBox(Math.PI, 2 * Math.PI, 0.5);
+    expect([b.x1, b.y1, b.x2, b.y2].map((v) => Math.round(v * 1000) / 1000)).toEqual([-1, -1, 1, 0]);
+    const body = geoDef(sectorId(180, 360, 0.5)).draw(200, 100).body;
+    const pts = body.flatMap((s) => (s[0] === 'Z' ? [] : s[0] === 'C' ? [[s[5], s[6]]] : [[s[1], s[2]]]));
+    for (const [x, y] of pts) { expect(x).toBeGreaterThanOrEqual(-1e-6); expect(x).toBeLessThanOrEqual(200 + 1e-6); expect(y).toBeGreaterThanOrEqual(-1e-6); expect(y).toBeLessThanOrEqual(100 + 1e-6); }
+    expect(pts[0][0]).toBeCloseTo(0, 6);
+    expect(Math.max(...pts.map((p) => p[1]))).toBeCloseTo(100, 6);
+  });
+
+  it('takes any number of items in the new layouts', () => {
+    for (const layout of ['arch', 'arrow-circles', 'honeycomb', 'ring']) {
+      for (const n of [1, 2, 5, 9]) {
+        const text = Array.from({ length: n }, (_, i) => `Item ${i + 1}`).join('\n');
+        const { shapes } = diagramParts(newDiagram(layout, text));
+        const items = shapes.filter((s) => /^Item \d+$/.test(s.name ?? ''));
+        expect(items.length, `${layout} ${n}`).toBe(n);
+      }
+    }
+    // a bending process: a half turn of band round each circle, over one and under the next
+    const { shapes } = diagramParts(newDiagram('arch', 'A\nB\nC'));
+    expect(shapes.filter((s) => s.geo?.startsWith('sector:')).map((s) => s.geo)).toEqual([sectorId(180, 360, 0.6 / 0.76), sectorId(0, 180, 0.6 / 0.76), sectorId(180, 360, 0.6 / 0.76)]);
+    // a ring with a middle when the others are indented under the first
+    const ring = diagramParts(newDiagram('ring', 'Catalyst\n\tA\n\tB\n\tC')).shapes;
+    expect(ring.filter((s) => s.geo?.startsWith('sector:')).length).toBe(3);
+    expect(ring.filter((s) => s.geo === 'ellipse').length).toBe(1);
+  });
+
+  it('an item of just [] has no words, and keeps its place in the text', () => {
+    const items = parseOutline('A\n[]\nC');
+    expect(items.map((x) => x.text)).toEqual(['A', '', 'C']);
+    const { shapes } = diagramParts(newDiagram('arch', 'A\n[]\nC'));
+    const blank = shapes.find((s) => s.name === 'Item 2')!;
+    expect(blank.text).toBeUndefined();
+  });
+
+  it('grows to give each item the room its structure needs, with the words underneath', () => {
+    const d = newDiagram('process', 'A\nB\nC');
+    const plain = diagramParts(d).shapes;
+    const roomy = diagramParts({ ...d, figs: { 2: { w: 300, h: 200 } } }).shapes;
+    const w = (ss: typeof plain) => Math.max(...ss.map((s) => s.x2)) - Math.min(...ss.map((s) => s.x1));
+    expect(w(roomy)).toBeGreaterThan(w(plain) * 2);
+    const b = roomy.find((s) => s.name === 'Item 2')!;
+    expect(b.x2 - b.x1).toBeGreaterThan(300);
+    expect(b.textValign).toBe('bottom');
+  });
+});
+
+describe('structures in a diagram', () => {
+  /** A diagram in a drawing with the refits an editor runs, and a two-atom structure at `at`. */
+  function withStructure(layout: string, text: string, at: (s: Shape) => { x: number; y: number }, L = 80) {
+    const { doc, frame } = put(newDiagram(layout, text));
+    doc.beforeCommit = (b) => { refitDiagrams(doc, b, POINTS); refitDiagramFigures(doc, b, POINTS); };
+    const item = doc.shapes.get(doc.shapes.get(frame)!.frame!.shapes.find((id) => doc.shapes.get(id)!.name === 'Item 2')!)!;
+    const p = at(item);
+    let a = 0;
+    doc.edit('Draw', () => { a = doc.addAtom(p.x - L / 2, p.y, 6).id; const b = doc.addAtom(p.x + L / 2, p.y, 6).id; doc.addBond(a, b, 1); });
+    return { doc, frame, a };
+  }
+  const mid = (s: Shape) => ({ x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 });
+
+  it('keeps room for a structure dropped in an item, grows to fit it, and centres it there', () => {
+    const { doc, frame, a } = withStructure('arch', 'A\nB\nC', mid, 200);
+    const f = doc.shapes.get(frame)!;
+    expect(f.diagram!.figs?.['2']).toBeDefined();
+    expect(f.diagram!.figs!['2'].w).toBeGreaterThan(200);
+    const item = doc.shapes.get(f.frame!.shapes.find((id) => doc.shapes.get(id)!.name === 'Item 2')!)!;
+    const b = selectionBox(doc, { atoms: doc.fragmentOf(a), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set() }, POINTS)!;
+    // inside its circle
+    expect(b.x1).toBeGreaterThan(item.x1);
+    expect(b.x2).toBeLessThan(item.x2);
+    expect((b.x1 + b.x2) / 2).toBeCloseTo((item.x1 + item.x2) / 2, 0);
+    // the structure belongs to the diagram, so it moves with it
+    expect(f.frame!.atoms.length).toBe(1);
+    expect(diagramContents(doc, f).sort()).toEqual([...doc.fragmentOf(a)].sort());
+  });
+
+  it('lets the structure go when it is dragged out', () => {
+    const { doc, frame, a } = withStructure('process', 'A\nB\nC', mid, 40);
+    expect(doc.shapes.get(frame)!.diagram!.figs).toBeDefined();
+    doc.edit('Drag', () => doc.moveAtoms(doc.fragmentOf(a), 0, 2000));
+    const f = doc.shapes.get(frame)!;
+    expect(f.diagram!.figs).toBeUndefined();
+    expect(f.frame!.atoms.length).toBe(0);
+  });
+
+  it('keeps its structure in place when the text or look changes', () => {
+    const { doc, frame, a } = withStructure('honeycomb', 'A\nB\nC', mid, 40);
+    const f = doc.shapes.get(frame)!;
+    doc.edit('Change', () => putDiagram(doc, POINTS, { ...f.diagram!, colours: 'light', accent: '#584a81' }, { x: f.x1, y: f.y1 }, frame));
+    const g = doc.shapes.get(frame)!;
+    expect(g.diagram!.figs?.['2']).toBeDefined();
+    const item = doc.shapes.get(g.frame!.shapes.find((id) => doc.shapes.get(id)!.name === 'Item 2')!)!;
+    const at = doc.atoms.get(a)!;
+    expect(at.x).toBeGreaterThan(item.x1);
+    expect(at.x).toBeLessThan(item.x2);
+  });
+
+  it('keeps its room through PowerPoint, and the structure stays an editable structure', async () => {
+    const { doc } = withStructure('ring', 'A\nB\nC\nD', mid, 60);
+    // structures go to PowerPoint as pictures holding the drawing
+    const opts: PptxOptions = { async picture(d) { return { png: PNG, svg: '<svg xmlns="http://www.w3.org/2000/svg"/>', box: d.bounds()! }; }, async svgToPng() { return PNG; } };
+    const back = readPptx(await writeDeck(doc, opts)).slides[0].contents;
+    const f = back.shapes.find((x) => x.diagram)!;
+    expect(f.diagram!.figs?.['2']).toBeDefined();
+    expect(back.atoms.length).toBe(2);
+    expect(back.bonds.length).toBe(1);
+    const d = new Doc();
+    d.restoreContents(back);
+    expect(diagramContents(d, d.shapes.get(f.id)!).length).toBe(2);
+  });
+
+  it('reads only sensible rooms from a file', () => {
+    expect(cleanDiagram({ layout: 'arch', text: 'a', figs: { 1: { w: 50, h: 40 }, x: { w: 1, h: 1 }, 2: { w: -3, h: 4 } } })?.figs).toEqual({ 1: { w: 50, h: 40 } });
   });
 });
 
@@ -209,11 +327,11 @@ describe('PowerPoint', () => {
   });
 });
 
-async function writeDeck(doc: Doc): Promise<Uint8Array> {
+async function writeDeck(doc: Doc, opts = pptxOpts): Promise<Uint8Array> {
   const { Deck } = await import('../src/deck/deck');
   const host = new Doc();
   const deck = Deck.blank(host);
-  return writePptx({ size: deck.size, master: deck.master, slides: [{ layout: 'blank', doc, notes: '' }] }, pptxOpts);
+  return writePptx({ size: deck.size, master: deck.master, slides: [{ layout: 'blank', doc, notes: '' }] }, opts);
 }
 
 describe('Word', () => {

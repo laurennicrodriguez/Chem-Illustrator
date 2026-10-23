@@ -53,7 +53,7 @@ import { applyArrange, planArrange, readingOrder, type ArrangeOptions } from '..
 import { buildCycle, type CycleLook, type CycleSpec } from '../chem/cycles';
 import { refitTableFigures, tableContents } from './table-figs';
 import { energyFrameOf, plotFromBox, putEnergy, refitEnergy, type EnergyData } from '../design/energy';
-import { diagramFrameOf, heldLines, putDiagram, refitDiagrams, ungroupDiagram, type DiagramData } from '../design/diagrams';
+import { diagramContents, diagramFrameOf, heldLines, putDiagram, refitDiagramFigures, refitDiagrams, ungroupDiagram, type DiagramData } from '../design/diagrams';
 import { attachWhereItIs, defaultGap, placeAttached, refitAttached } from './attached';
 import { frameAround, frameBox, frameMembers, refitFrames, defaultPad, thingsInside } from './frames';
 import { Align, Measure, POINTS, Snapshot, type TurnText, units, alignOffsets, distributeOffsets, moveUnit, selectionBox, snapshot, transform, withFrameContents, rotation, mirrorX, mirrorY } from './arrange';
@@ -419,6 +419,8 @@ export class Editor {
       if (energy) refitEnergy(this.doc, before, this.measure());
       // a diagram resized by hand is drawn again in its new box; words typed into its shapes go into its text
       if (diagrams) refitDiagrams(this.doc, before, this.measure());
+      // structures in a diagram's items: room kept for them (the diagram growing to fit), and centred there
+      if (diagrams) refitDiagramFigures(this.doc, before, this.measure());
       if (frames) refitFrames(this.doc, before, this.measure());
       // mechanism arrows the change left running into something find their own way round again
       if (this.options.rerouteArrows) this.rerouteArrows(before);
@@ -2764,6 +2766,8 @@ export class Editor {
       // a table takes the structures in its cells along
       const sh = doc.shapes.get(id);
       if (sh?.kind === 'table') for (const a of tableContents(doc, sh, (t) => this.r.tableLayout(t))) sel.atoms.add(a);
+      // and a diagram the structures in its items (found by where they are, as after opening a file)
+      if (sh?.diagram) for (const a of diagramContents(doc, sh)) sel.atoms.add(a);
       const f = doc.shapes.get(id)?.frame;
       if (!f?.fit) continue;
       const m = frameMembers(doc, f);

@@ -4,9 +4,14 @@
 // connectors, inside an invisible frame that keeps the text and the look; changing either draws
 // it again. PowerPoint and Word files get the shapes as one group, so they can be moved, resized
 // and retyped there as well.
+//
+// A structure dropped so its middle is in an item's shape belongs to that item, as a structure in
+// a table's cell does: the item keeps room for it (its words go underneath), the whole diagram
+// grows so every item's structure fits, and the structure is centred in its room. It stays an
+// ordinary structure, edited with the drawing tools, and moves with the diagram.
 
 import { Doc, type Arrow, type Contents, type Entity, type Frame, type ParaStyle, type Shape, type TextRun } from '../model';
-import { POINTS } from '../editor/arrange';
+import { POINTS, selectionBox, type Selection } from '../editor/arrange';
 import type { Rect, Vec } from '../geom';
 import type { Measure } from '../editor/arrange';
 import type { Measure as TextMeasure } from '../text/layout';
@@ -15,8 +20,9 @@ import { chemRuns } from '../text/chemtext';
 import { arialWidth } from '../text-metrics';
 import { tint } from '../colours';
 import { frameBox } from '../editor/frames';
+import { followPins, hasPins } from '../chem/pins';
 import { gluePoint, shapeBox } from '../objects';
-import { geoDef, sliceId, textArea } from './geo';
+import { geoDef, HEX_CELL, sectorBox, sectorId, sliceId, textArea } from './geo';
 import { findIcons, isIconId, ICON_PREFIX } from './icons';
 
 // ---------------------------------------------------------------- the data
@@ -40,6 +46,8 @@ export interface DiagramData {
   /** The box it is drawn in, in points. */
   w: number;
   h: number;
+  /** Room kept for the structure in an item: the item's line (from 1) → the structure's size in points. */
+  figs?: Record<string, { w: number; h: number }>;
 }
 
 export type DiagramCategory = 'List' | 'Process' | 'Cycle' | 'Hierarchy' | 'Relationship' | 'Matrix' | 'Pyramid';
@@ -63,14 +71,18 @@ export const DIAGRAM_LAYOUTS: DiagramLayout[] = [
   { id: 'blocks', name: 'Block list', category: 'List', blurb: 'Boxes in rows, one for each item; lines below an item are listed in its box.', sample: 'Synthesis\nCharacterisation\nKinetics\nComputation\nApplications', size: [480, 260] },
   { id: 'vertical-list', name: 'Vertical bullet list', category: 'List', blurb: 'A bar for each item with the lines below it as bullets underneath.', sample: 'Aims\n\tMake the ligand in three steps\n\tScreen the catalysts\nResults\n\tFive new complexes\n\tUp to 96% ee', size: [480, 300] },
   { id: 'horizontal-list', name: 'Horizontal bullet list', category: 'List', blurb: 'A heading for each item with its lines as bullets in a column below.', sample: 'NMR\n\t¹H and ¹³C\n\tNOESY\nMass spec\n\tHRMS (ESI)\nX-ray\n\tSingle crystal', size: [480, 280] },
+  { id: 'honeycomb', name: 'Honeycomb', category: 'List', blurb: 'Hexagons fitted together, one for each item; lines below an item are listed in its hexagon.', sample: 'Bench-stable salts\nBroad scope\nC2 and C6 selective\nScope is limited\nMade in situ\nEWG removal', size: [480, 340] },
   { id: 'icon-list', name: 'Icon list', category: 'List', blurb: 'An icon over each item, picked to match its words. Put an icon\'s name in square brackets in front to choose it: [flask] Synthesis.', sample: '[flask-round-bottom] Synthesis\n[microscope] Analysis\n[chart-line] Data\n[file-document] Paper', size: [480, 240] },
   { id: 'process', name: 'Basic process', category: 'Process', blurb: 'Boxes joined by arrows, left to right.', sample: STEPS, size: [560, 180] },
   { id: 'chevrons', name: 'Chevron process', category: 'Process', blurb: 'Chevrons pointing on; lines below an item are listed under its chevron.', sample: 'Design\n\tRetrosynthesis\nMake\n\tSix steps\nTest\n\tBioassay', size: [560, 200] },
   { id: 'vertical-process', name: 'Vertical process', category: 'Process', blurb: 'Boxes joined by arrows, top to bottom.', sample: 'Quench\nExtract\nDry\nConcentrate', size: [280, 380] },
   { id: 'steps', name: 'Staircase', category: 'Process', blurb: 'Steps rising from left to right.', sample: 'Hit\nLead\nCandidate\nDrug', size: [480, 300] },
+  { id: 'arch', name: 'Bending process', category: 'Process', blurb: 'Circles along a band that bends over one and under the next; lines below an item are its caption, on the open side. A line of just [] is a circle with no words, for a structure.', sample: 'Metal\n\tIridium and rhodium\nLigands\n\tPhosphines\nAdditives\nSolvent\n\tEthers', size: [600, 260] },
+  { id: 'arrow-circles', name: 'Circles on an arrow', category: 'Process', blurb: 'Circles along a broad arrow; lines below an item are its caption, above and below in turn.', sample: 'Step 1\n\tMost reactive\nStep 2\n\tLess reactive\nStep 3\n\tLeast reactive', size: [560, 240] },
   { id: 'timeline', name: 'Timeline', category: 'Process', blurb: 'Points along a line, labelled above and below in turn.', sample: '1828\n\tWöhler: urea\n1856\n\tPerkin: mauveine\n1912\n\tGrignard\n1990\n\tCorey', size: [560, 240] },
   { id: 'equation', name: 'Equation', category: 'Process', blurb: 'Items joined by plus signs, with an arrow to the last.', sample: 'Aryl halide\nBoronic acid\nBiaryl', size: [520, 160] },
   { id: 'cycle', name: 'Basic cycle', category: 'Cycle', blurb: 'Circles round a loop, joined by curved arrows.', sample: 'Oxidative addition\nTransmetalation\nReductive elimination', size: [380, 380] },
+  { id: 'ring', name: 'Segmented ring', category: 'Cycle', blurb: 'A ring cut into a segment for each item. Indent the others under a first item to put it in the middle.', sample: 'Electrochemical\nPhotoredox\nZincke type\nChan–Lam coupling', size: [380, 380] },
   { id: 'radial', name: 'Radial', category: 'Cycle', blurb: 'The first item in the middle, the others round it. Indent the outer ones under the first to make it clear.', sample: 'Catalyst\n\tLigand\n\tMetal\n\tBase\n\tSolvent', size: [400, 400] },
   { id: 'org', name: 'Hierarchy', category: 'Hierarchy', blurb: 'A tree from the top down (an organisation chart). Indent an item under the one it comes from.', sample: 'PI\n\tPostdoc\n\t\tGrad student\n\t\tGrad student\n\tLab manager\n\t\tUndergraduate', size: [520, 320] },
   { id: 'tree-h', name: 'Horizontal hierarchy', category: 'Hierarchy', blurb: 'A tree from left to right.', sample: 'Hydrocarbons\n\tAliphatic\n\t\tAlkanes\n\t\tAlkenes\n\tAromatic\n\t\tBenzenoid\n\t\tHeteroaromatic', size: [520, 320] },
@@ -119,6 +131,8 @@ function lineParts(line: string): { level: number; text: string; icon?: string }
   let icon: string | undefined;
   const m = ICON.exec(text);
   if (m) { icon = ICON_PREFIX + m[1].toLowerCase(); text = text.slice(m[0].length); }
+  // [] on its own: an item with no words (room for a structure only)
+  if (text === '[]') text = '';
   return { level: Math.floor(level + 1e-9), text, ...(icon ? { icon } : {}) };
 }
 
@@ -161,8 +175,8 @@ export const shownText = (t: string): string => chemRuns(t).map((r) => r.text).j
 
 // ---------------------------------------------------------------- layouts
 
-/** What a role is drawn as: the main shapes, boxes of lines under them, text only, small marks (arrows, plus signs, dots) and icons. */
-type Role = 'item' | 'sub' | 'label' | 'deco' | 'icon';
+/** What a role is drawn as: the main shapes, boxes of lines under them, text only, small marks (arrows, plus signs, dots), icons, and a solid band (a bending process's). */
+type Role = 'item' | 'sub' | 'label' | 'deco' | 'icon' | 'band';
 
 /** A shape of a diagram as laid out, before it is coloured: its box from the diagram's top left. */
 export interface PartShape {
@@ -182,6 +196,8 @@ export interface PartShape {
   group?: string;
   /** Only this much of the text area's width is used for fitting (Venn circles, clear of the overlaps). */
   fitW?: number;
+  /** The size of the structure put in it (DiagramData.figs): it takes the top of the text area, the words go underneath. */
+  fig?: { w: number; h: number };
 }
 
 /** A line or arrow of a diagram, from the diagram's top left; `from`/`to` stick it to shapes (index, side). */
@@ -217,7 +233,21 @@ function grid(n: number, w: number, h: number, g: number, aspect = 1.6): { c: nu
 const leaves = (it: DiagramItem): number => (it.kids.length ? it.kids.reduce((a, k) => a + leaves(k), 0) : 1);
 const depth = (it: DiagramItem): number => 1 + Math.max(0, ...it.kids.map(depth));
 
+/** The layout's shapes, with the room each item keeps for its structure. */
 function lay(d: DiagramData): DiagramLaid {
+  const laid = layOut(d);
+  if (d.figs) for (const [n, p] of itemShapes(laid)) { const f = d.figs[String(n)]; if (f) p.fig = f; }
+  return laid;
+}
+
+/** The shape showing each item's words (where a structure for the item goes), by the item's line. */
+function itemShapes(laid: DiagramLaid): Map<number, PartShape> {
+  const out = new Map<number, PartShape>();
+  for (const p of laid.shapes) if (p.head && (p.role === 'item' || p.role === 'label') && !out.has(p.head.n)) out.set(p.head.n, p);
+  return out;
+}
+
+function layOut(d: DiagramData): DiagramLaid {
   const items = parseOutline(d.text);
   const w = Math.max(20, d.w), h = Math.max(20, d.h);
   const g = Math.max(3, 0.03 * Math.min(w, h));
@@ -266,6 +296,28 @@ function lay(d: DiagramData): DiagramLaid {
         const x = i * (bw + g);
         shapes.push({ geo: box, box: R(x, 0, bw, hh), role: 'item', head: it, tone: i });
         if (any) shapes.push({ geo: 'rect', box: R(x + 0.04 * bw, hh, 0.92 * bw, h - hh), role: 'sub', lines: kidsOf(it), tone: i, align: 'left', valign: 'top' });
+      });
+      return out(n);
+    }
+    case 'honeycomb': {
+      // flat-topped hexagons fitted together in columns, every other column half a cell down;
+      // as many columns as make the cells biggest. A cell of radius r is 2r wide and √3 r high
+      const r3 = Math.sqrt(3);
+      // rows high, and half a cell more when a lower column has a cell in the last row
+      const high = (c: number) => { const rows = Math.ceil(n / c); return rows + (c > 1 && n - (rows - 1) * c >= 2 ? 0.5 : 0); };
+      let best = { c: 1, r: 0 };
+      for (let c = 1; c <= n; c++) {
+        const r = Math.min(w / (1.5 * c + 0.5), h / (r3 * high(c)));
+        if (r > best.r + 1e-9) best = { c, r };
+      }
+      const { c, r } = best;
+      const gw = r * (1.5 * c + 0.5), gh = r3 * r * high(c);
+      const x0 = (w - gw) / 2, y0 = (h - gh) / 2;
+      const q = Math.max(0.5 * r, r - g / 2);
+      items.forEach((it, i) => {
+        const col = i % c, row = Math.floor(i / c);
+        const cx = x0 + r + 1.5 * r * col, cy = y0 + r3 * r * (row + 0.5 + (col % 2 ? 0.5 : 0));
+        shapes.push({ geo: HEX_CELL, box: R(cx - q, cy - (r3 / 2) * q, 2 * q, r3 * q), role: 'item', head: it, lines: kidsOf(it), tone: i });
       });
       return out(n);
     }
@@ -337,6 +389,46 @@ function lay(d: DiagramData): DiagramLaid {
       });
       return out(n);
     }
+    case 'arch': {
+      // circles in a row, each half wrapped by a band that bends over one and under the next, the
+      // half turns meeting end to end; in circle diameters, the band runs from ri to ro round each middle
+      const any = items.some((it) => it.kids.length);
+      const ri = 0.6, ro = 0.76, s = ri + ro;
+      const cap = any ? 1 : 0;
+      const span = (n - 1) * s + 2 * ro;
+      const u = Math.min(w / span, h / (2 * ro + 2 * cap));
+      const x0 = (w - span * u) / 2 + ro * u, cy = h / 2;
+      items.forEach((it, i) => {
+        const cx = x0 + i * s * u;
+        const over = i % 2 === 0;
+        shapes.push({ geo: sectorId(over ? 180 : 0, over ? 360 : 180, ri / ro), box: R(cx - ro * u, over ? cy - ro * u : cy, 2 * ro * u, ro * u), role: 'band', tone: 0 });
+        shapes.push({ geo: 'ellipse', box: R(cx - u / 2, cy - u / 2, u, u), role: 'item', head: it, tone: i });
+        if (!any) return;
+        // the caption on the open side, past the ends of the bands either side
+        const lw = Math.min(2 * s * u - g, 2 * Math.min(cx, w - cx));
+        const ch = Math.max(1, cap * u - g / 2);
+        shapes.push({ geo: 'rect', box: R(cx - lw / 2, over ? cy + ro * u + g / 2 : cy - ro * u - g / 2 - ch, lw, ch), role: 'label', lines: kidsOf(it), tone: i, valign: over ? 'top' : 'bottom' });
+      });
+      return out(n);
+    }
+    case 'arrow-circles': {
+      // circles along a broad arrow, room for its head after the last; captions above and below in turn
+      const any = items.some((it) => it.kids.length);
+      const step = w / (n + 0.35);
+      const D = Math.min(0.8 * step, any ? h / 2.6 : h / 1.05);
+      const cy = h / 2;
+      shapes.push({ geo: 'rightArrow', box: R(0, cy - 0.45 * D, w, 0.9 * D), role: 'deco', tone: 0 });
+      items.forEach((it, i) => {
+        const cx = (i + 0.5) * step;
+        shapes.push({ geo: 'ellipse', box: R(cx - D / 2, cy - D / 2, D, D), role: 'item', head: it, tone: i });
+        if (!any) return;
+        const lw = Math.min(2 * step - g, 2 * Math.min(cx, w - cx));
+        const above = i % 2 === 0;
+        const ch = cy - D / 2 - g;
+        shapes.push({ geo: 'rect', box: R(cx - lw / 2, above ? 0 : cy + D / 2 + g, lw, ch), role: 'label', lines: kidsOf(it), tone: i, valign: above ? 'bottom' : 'top' });
+      });
+      return out(n);
+    }
     case 'timeline': {
       const y = h / 2;
       const step = w / n;
@@ -399,6 +491,29 @@ function lay(d: DiagramData): DiagramLaid {
         }
       }
       return out(n);
+    }
+    case 'ring': {
+      // a ring cut into a segment for each item, the first centred at twelve o'clock (so the segments
+      // at the top and bottom run across, with room for words); the first in the middle when the others are indented under it
+      const { hub, outer } = items.length === 1 && items[0].kids.length ? hubAndOuter(items) : { hub: null as DiagramItem | null, outer: items };
+      const m = outer.length;
+      const S = Math.min(w, h) / 2;
+      const c = { x: w / 2, y: h / 2 };
+      const k = hub ? 0.5 : 0.45;
+      const gap = m > 1 ? Math.min(0.2, (2 * g) / (S * (1 + k))) : 0;
+      const deg = (a: number) => (a * 180) / Math.PI;
+      outer.forEach((it, i) => {
+        const start = -Math.PI / 2 - Math.PI / m;
+        const a0 = start + (i * 2 * Math.PI) / m + gap / 2;
+        const a1 = m > 1 ? start + ((i + 1) * 2 * Math.PI) / m - gap / 2 : a0 + (359.9 * Math.PI) / 180;
+        const b = sectorBox(a0, a1, k);
+        shapes.push({ geo: sectorId(deg(a0), deg(a1), k), box: R(c.x + S * b.x1, c.y + S * b.y1, S * (b.x2 - b.x1), S * (b.y2 - b.y1)), role: 'item', head: it, lines: kidsOf(it), tone: i });
+      });
+      if (hub) {
+        const rc = Math.max(1, k * S - g);
+        shapes.push({ geo: 'ellipse', box: R(c.x - rc, c.y - rc, 2 * rc, 2 * rc), role: 'item', head: hub, tone: m, group: 'hub' });
+      }
+      return out(m + (hub ? 1 : 0));
     }
     case 'radial': {
       const { hub, outer } = hubAndOuter(items);
@@ -576,7 +691,10 @@ function looks(d: DiagramData, p: PartShape, c: string, f: number): { fill: stri
       return { fill: tint(c, 0.85), line: tint(c, 0.5), lw: 0.75, ink: '#000000' };
     case 'label': return { fill: null, line: null, lw: 0, ink: '#000000' };
     case 'icon': return { fill: c, line: null, lw: 0, ink: '#000000' };
+    case 'band': return { fill: c, line: null, lw: 0, ink: '#000000' };
     case 'deco':
+      // the broad arrow under circles: pale, so the circles stand out on it
+      if (d.layout === 'arrow-circles') return { fill: d.colours === 'mono' ? '#d9d9d9' : tint(c, 0.7), line: null, lw: 0, ink: '#000000' };
       if (d.layout === 'target') {
         // rings from the accent's palest at the outside to darker in the middle
         if (solid) return { fill: d.colours === 'colourful' ? tint(c, 0.35) : tint(c, 0.75 - 0.5 * f), line: '#ffffff', lw: 1, ink: '#000000' };
@@ -598,7 +716,7 @@ function textOf(p: PartShape, size: number, ink: string, head: number | null): {
     if (runs.length) runs.push({ text: '\n', size: s, color: ink });
     for (const r of chemRuns(t)) runs.push({ ...r, size: s, color: ink, ...(bold ? { bold: true } : {}) });
   };
-  if (p.head) { put(p.head.text, head ?? size, lines.length > 0); paras.push({}); }
+  if (p.head?.text) { put(p.head.text, head ?? size, lines.length > 0); paras.push({}); }
   const base = Math.min(...lines.map((x) => x.depth));
   for (const it of lines) {
     put(it.text, size, false);
@@ -610,12 +728,28 @@ function textOf(p: PartShape, size: number, ink: string, head: number | null): {
   return { runs, paras: paras.some((x) => Object.keys(x).length) ? paras : [] };
 }
 
-/** Whether a shape's text fits its text area at `size`. */
+/** Where a shape's words go: its library shape's text area (a box of text only, all but a small margin). */
+function textBox(p: PartShape): Rect {
+  return p.geo === 'rect' && p.role !== 'item' ? { x1: p.box.x1 + 2, y1: p.box.y1 + 2, x2: p.box.x2 - 2, y2: p.box.y2 - 2 } : textArea(geoDef(p.geo), p.box.x1, p.box.y1, p.box.x2, p.box.y2);
+}
+
+/** How much of an item's text area its structure takes when it has words too (they go underneath). */
+const FIG_SHARE = 0.7;
+
+const hasWords = (p: PartShape) => !!p.head?.text || !!p.lines?.length;
+
+/** Where the structure in a shape goes: the top of its text area when it has words too, else all of it. */
+function figRoom(p: PartShape): Rect {
+  const a = textBox(p);
+  return hasWords(p) ? { ...a, y2: a.y1 + (a.y2 - a.y1) * FIG_SHARE } : a;
+}
+
+/** Whether a shape's text fits its text area at `size` (below its structure, when it has one). */
 function fits(p: PartShape, size: number, head: number | null): boolean {
   const t = textOf(p, size, '#000000', head);
   if (!t) return true;
-  const def = geoDef(p.geo);
-  const a = p.geo === 'rect' && p.role !== 'item' ? { x1: p.box.x1 + 2, y1: p.box.y1 + 2, x2: p.box.x2 - 2, y2: p.box.y2 - 2 } : textArea(def, p.box.x1, p.box.y1, p.box.x2, p.box.y2);
+  const a = textBox(p);
+  if (p.fig) a.y1 += (a.y2 - a.y1) * FIG_SHARE;
   const aw = (a.x2 - a.x1) * 0.94 * (p.fitW ?? 1), ah = (a.y2 - a.y1) * 0.96;
   if (aw <= 2 || ah <= 2) return false;
   const lay = layoutText({ runs: t.runs, paras: t.paras.length ? t.paras : undefined, justify: p.align ?? 'center', wrap: aw }, size, textMeasure);
@@ -678,8 +812,26 @@ function sizes(d: DiagramData, laid: DiagramLaid): Map<PartShape, { size: number
 
 // ---------------------------------------------------------------- drawing it
 
+/** The diagram made big enough for the structures in it: grown, keeping its shape, until every item's room holds its structure. */
+function grown(d: DiagramData): DiagramData {
+  if (!d.figs || !Object.keys(d.figs).length) return d;
+  for (let tries = 0; tries < 8; tries++) {
+    let k = 1;
+    for (const p of lay(d).shapes) {
+      if (!p.fig) continue;
+      const r = figRoom(p);
+      k = Math.max(k, p.fig.w / Math.max(1, r.x2 - r.x1), p.fig.h / Math.max(1, r.y2 - r.y1));
+    }
+    if (k <= 1.001) break;
+    // a little over, as the gaps between shapes don't grow with them
+    d = { ...d, w: d.w * k * 1.02, h: d.h * k * 1.02 };
+  }
+  return d;
+}
+
 /** The layout's shapes and lines, coloured, with text sized to fit, from the diagram's top left (tests and previews). */
 export function diagramParts(d: DiagramData): { shapes: Omit<Shape, 'id'>[]; lines: (Omit<Arrow, 'id'> & { fromIndex?: number; toIndex?: number })[] } {
+  d = grown(d);
   const laid = lay(d);
   const sz = sizes(d, laid);
   const shapes: Omit<Shape, 'id'>[] = laid.shapes.map((p) => {
@@ -697,7 +849,7 @@ export function diagramParts(d: DiagramData): { shapes: Omit<Shape, 'id'>[]; lin
       ...(d.shadow && (p.role === 'item' || p.role === 'icon') ? { shadow: true } : {}),
       ...(text ? { text: text.paras.length ? text : { runs: text.runs } } : {}),
       ...(p.align && p.align !== 'center' ? { textAlign: p.align } : {}),
-      ...(p.valign && p.valign !== 'middle' ? { textValign: p.valign } : {}),
+      ...(p.fig && hasWords(p) ? { textValign: 'bottom' as const } : p.valign && p.valign !== 'middle' ? { textValign: p.valign } : {}),
       // which lines of the text it shows, so text changed in it (or in PowerPoint) goes back into the diagram's text
       ...(held.length ? { name: held.length === 1 ? `Item ${held[0]}` : `Items ${held[0]}-${held[held.length - 1]}` } : {}),
     };
@@ -745,7 +897,8 @@ export function putDiagram(doc: Doc, m: Measure, d: DiagramData, at: Vec, id?: n
     return doc.addArrow(a).id;
   });
   const frame: Frame = { atoms: kept.atoms, captions: [], arrows, shapes: [...made, ...kept.shapes], padX: 0, padY: 0, fit: true };
-  const b = frameBox(doc, frame, m) ?? { x1: at.x, y1: at.y, x2: at.x + d.w, y2: at.y + d.h };
+  // round its shapes: its structures are placed in them afterwards (refitDiagramFigures)
+  const b = frameBox(doc, { ...frame, atoms: [] }, m) ?? { x1: at.x, y1: at.y, x2: at.x + d.w, y2: at.y + d.h };
   const r = (v: number) => Math.round(v * 100) / 100;
   const diagram: DiagramData = { ...d, w: r(b.x2 - b.x1), h: r(b.y2 - b.y1) };
   if (old) { doc.updateShape(old.id, { ...b, frame, diagram }); return old.id; }
@@ -825,6 +978,122 @@ export function refitDiagrams(doc: Doc, before: ReadonlyMap<string, Entity | nul
   }
 }
 
+// ---------------------------------------------------------------- structures in the items
+
+const atomsOnly = (atoms: Set<number>): Selection => ({ atoms, bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set() });
+const topLeft = (s: Shape): Vec => ({ x: Math.min(s.x1, s.x2), y: Math.min(s.y1, s.y2) });
+
+/** The middle of a structure's atoms (what decides which item it is in). */
+function atomsMiddle(doc: Doc, f: Set<number>): Vec {
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+  for (const id of f) { const a = doc.atoms.get(id); if (!a) continue; x1 = Math.min(x1, a.x); y1 = Math.min(y1, a.y); x2 = Math.max(x2, a.x); y2 = Math.max(y2, a.y); }
+  return { x: (x1 + x2) / 2, y: (y1 + y2) / 2 };
+}
+
+/**
+ * Each item's shape as drawn (`get` finds a shape, as it is now or was) and the room in it for a
+ * structure, by the item's line. Read from the drawn shapes, so it holds for a diagram opened
+ * from a file as well.
+ */
+function itemRooms(s: Shape, get: (id: number) => Shape | null | undefined): Map<number, { box: Rect; room: Rect }> {
+  const parts = itemShapes(lay(s.diagram!));
+  const out = new Map<number, { box: Rect; room: Rect }>();
+  for (const id of s.frame?.shapes ?? []) {
+    const sh = get(id);
+    const n = sh && heldLines(sh)?.[0];
+    const p = n !== undefined && n !== null ? parts.get(n) : undefined;
+    if (!sh || !p || out.has(n!)) continue;
+    const box = shapeBox(sh);
+    out.set(n!, { box, room: figRoom({ ...p, box }) });
+  }
+  return out;
+}
+
+/** The structures whose middles lie in a diagram's items, as item → atoms (the first found in each; where items' boxes overlap, the nearest). */
+function inItems(doc: Doc, rooms: Map<number, { box: Rect; room: Rect }>, frags: Set<number>[], pick: (f: Set<number>) => boolean): Map<number, Set<number>> {
+  const out = new Map<number, Set<number>>();
+  for (const f of frags) {
+    if (!pick(f)) continue;
+    const c = atomsMiddle(doc, f);
+    let best: number | null = null, near = Infinity;
+    for (const [n, { box, room }] of rooms) {
+      if (c.x < box.x1 || c.x > box.x2 || c.y < box.y1 || c.y > box.y2) continue;
+      const dist = Math.hypot(c.x - (room.x1 + room.x2) / 2, c.y - (room.y1 + room.y2) / 2);
+      if (dist < near) { near = dist; best = n; }
+    }
+    if (best !== null && !out.has(best)) out.set(best, f);
+  }
+  return out;
+}
+
+/** The structures sitting in a diagram's items now (to move with it). */
+export function diagramContents(doc: Doc, s: Shape): number[] {
+  if (!s.diagram || !s.frame) return [];
+  const out: number[] = [];
+  for (const f of inItems(doc, itemRooms(s, (id) => doc.shapes.get(id)), doc.fragments(), () => true).values()) out.push(...f);
+  return out;
+}
+
+const sameFigs = (a: DiagramData['figs'], b: Record<string, { w: number; h: number }>): boolean => {
+  const ka = Object.keys(a ?? {}), kb = Object.keys(b);
+  return ka.length === kb.length && kb.every((k) => a?.[k] && Math.abs(a[k].w - b[k].w) < 0.5 && Math.abs(a[k].h - b[k].h) < 0.5);
+};
+
+/**
+ * After a change: each diagram's structures held in their items. The room each item keeps is
+ * updated (the diagram drawn again, bigger if a structure needs it), and each structure is
+ * centred in its room. A structure that moved is placed by where it is now; one that stayed put,
+ * by where the diagram's shapes were. Call inside the edit.
+ */
+export function refitDiagramFigures(doc: Doc, before: ReadonlyMap<string, Entity | null>, m: Measure): void {
+  const diagrams = [...doc.shapes.values()].filter((s) => s.diagram && s.frame);
+  if (!diagrams.length) return;
+  let atomsChanged = false;
+  for (const k of before.keys()) if (k[0] === 'a') { atomsChanged = true; break; }
+  const pad = 0.15 * doc.style.bondLength;
+  const r2 = (v: number) => Math.round(v * 100) / 100;
+  let frags: Set<number>[] | null = null;
+  let moved = false;
+  for (const s of diagrams) {
+    const was = before.get('s' + s.id) as Shape | null | undefined;
+    if (!atomsChanged && !was && !s.diagram!.figs) continue;
+    frags ??= doc.fragments();
+    const movedNow = (f: Set<number>) => [...f].some((id) => before.has('a' + id));
+    const old = was?.diagram && was.frame ? was : s;
+    const wasShape = (id: number) => (before.has('s' + id) ? before.get('s' + id) as Shape | null : doc.shapes.get(id));
+    const held = new Map([
+      ...inItems(doc, itemRooms(old, wasShape), frags, (f) => !movedNow(f)),
+      ...inItems(doc, itemRooms(s, (id) => doc.shapes.get(id)), frags, movedNow),
+    ]);
+    // the room each item needs now, and the diagram drawn again when that changed
+    const figs: Record<string, { w: number; h: number }> = {};
+    for (const [n, f] of held) {
+      const b = selectionBox(doc, atomsOnly(f), m);
+      if (b) figs[String(n)] = { w: r2(b.x2 - b.x1 + 2 * pad), h: r2(b.y2 - b.y1 + 2 * pad) };
+    }
+    if (!sameFigs(s.diagram!.figs, figs)) {
+      const { figs: _, ...rest } = s.diagram!;
+      putDiagram(doc, m, Object.keys(figs).length ? { ...rest, figs } : rest, topLeft(s), s.id);
+    }
+    // the structures belong to it (they move with it), each centred in its room
+    const now = doc.shapes.get(s.id)!;
+    const atoms = [...held.values()].map((f) => f.values().next().value!).sort((a, b) => a - b);
+    const had = [...now.frame!.atoms].sort((a, b) => a - b);
+    if (atoms.length !== had.length || atoms.some((a, i) => a !== had[i])) doc.updateShape(s.id, { frame: { ...now.frame!, atoms } });
+    const rooms = itemRooms(now, (id) => doc.shapes.get(id));
+    for (const [n, f] of held) {
+      const room = rooms.get(n)?.room;
+      const b = room && selectionBox(doc, atomsOnly(f), m);
+      if (!room || !b) continue;
+      const dx = (room.x1 + room.x2) / 2 - (b.x1 + b.x2) / 2, dy = (room.y1 + room.y2) / 2 - (b.y1 + b.y2) / 2;
+      if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) continue;
+      doc.moveAtoms(f, dx, dy);
+      moved = true;
+    }
+  }
+  if (moved && hasPins(doc)) followPins(doc);
+}
+
 /** A drawing in a document as a Doc of its own (to redraw a diagram in it). */
 function docOf(c: Contents): Doc {
   const d = new Doc();
@@ -880,7 +1149,21 @@ export function cleanDiagram(v: unknown): DiagramData | null {
     shadow: !!o.shadow,
     ...(typeof o.size === 'number' && isFinite(o.size) && o.size > 0 ? { size: o.size } : {}),
     w: num(o.w, 400), h: num(o.h, 300),
+    ...cleanFigs(o.figs),
   };
+}
+
+/** Rooms kept for structures, read from a file: item lines with sensible sizes only. */
+function cleanFigs(v: unknown): Pick<DiagramData, 'figs'> {
+  if (!v || typeof v !== 'object') return {};
+  const figs: Record<string, { w: number; h: number }> = {};
+  for (const [k, f] of Object.entries(v as Record<string, unknown>)) {
+    const x = f as { w?: unknown; h?: unknown } | null;
+    if (!/^\d+$/.test(k) || !x || typeof x.w !== 'number' || typeof x.h !== 'number') continue;
+    if (!(x.w > 0 && x.h > 0 && x.w < 1e5 && x.h < 1e5)) continue;
+    figs[k] = { w: x.w, h: x.h };
+  }
+  return Object.keys(figs).length ? { figs } : {};
 }
 
 export { isIconId };
