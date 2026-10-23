@@ -325,6 +325,7 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
 body.slides-mode #canvas-host, body.design-mode #canvas-host { background: var(--surround); }
 #canvas-host.drop { outline: 3px dashed var(--accent); outline-offset: -6px; }
 #canvas-host canvas { position: absolute; left: 0; top: 0; display: block; }
+#canvas-host canvas[hidden] { display: none; }
 .tab { transition: transform 0.12s ease; }
 .tab.tab-dragging { transition: none; position: relative; z-index: 2; opacity: 0.92; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); cursor: grabbing; }
 @media (prefers-reduced-motion: reduce) { .tab { transition: none; } }
