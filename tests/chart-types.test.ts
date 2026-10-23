@@ -176,6 +176,13 @@ describe('in Excel files', () => {
     const gh = readChartXml(parse(hx), hist.at, hist.w, hist.h, 3)!;
     expect(gh.chart).toMatchObject({ kind: 'histogram', bins: { width: 5, overflow: 85 } });
     expect(sameChartData(gh.chart, hist)).toBe(true);
+    // axis titles have no place attributes (Office won't open a chart whose axis title has them); the chart's title does
+    const titled = { ...hist, title: 'Yields', x: { ...hist.x, title: 'Yield (%)' }, y: { ...hist.y, title: 'Count' } };
+    const tx = chartXml(titled, boxData({ ...hb, chart: titled }));
+    expect(tx).toContain('<cx:chart><cx:title pos="t" align="ctr" overlay="0">');
+    expect(tx).toMatch(/<cx:axis id="0"><cx:catScaling gapWidth="0"\/><cx:title><cx:tx>.*Yield \(%\)/);
+    expect(tx).toMatch(/<cx:axis id="1"><cx:valScaling\/><cx:title><cx:tx>.*Count/);
+    expect(readChartXml(parse(tx), titled.at, titled.w, titled.h, 3)!.chart).toMatchObject({ title: 'Yields', x: { title: 'Yield (%)' }, y: { title: 'Count' } });
 
     const bb = newChartBox('box');
     const box = { ...bb.chart, boxes: { points: true, quartiles: 'inclusive' as const } };

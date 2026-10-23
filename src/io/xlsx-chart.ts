@@ -278,11 +278,13 @@ export function chartExXml(c: Chart, data: SeriesData[]): string {
     const uid = `{${(c.id >>> 0).toString(16).padStart(8, '0')}-0000-4000-8000-${i.toString(16).padStart(12, '0')}}`;
     return `<cx:series layoutId="${hist ? 'clusteredColumn' : 'boxWhisker'}" uniqueId="${uid}" formatIdx="${i}">${name}${sp}${labels}<cx:dataId val="${i}"/><cx:layoutPr>${layout}</cx:layoutPr></cx:series>`;
   }).join('');
+  // the chart's title has a place; an axis title has none ([MS-ODRAWXML] CT_AxisTitle), and Office won't open one that does
   const title = (t: string | undefined, size: number) => (t ? `<cx:title pos="t" align="ctr" overlay="0">${richEx(t, size)}</cx:title>` : '');
+  const axisTitle = (t: string | undefined) => (t ? `<cx:title>${richEx(t, 10)}</cx:title>` : '');
   const gridEx = (on: boolean) => (on ? `<cx:majorGridlines><cx:spPr><a:ln w="9525">${fill('#d9d9d9')}</a:ln></cx:spPr></cx:majorGridlines>` : '');
   const numFmt = (a: ChartAxis) => (a.numFmt ? `<cx:numFmt formatCode="${xml(a.numFmt)}" sourceLinked="0"/>` : '');
-  const axes = `<cx:axis id="0"><cx:catScaling${hist ? ' gapWidth="0"' : ' gapWidth="1"'}/>${title(c.x.title, 10)}${gridEx(!!c.x.grid)}<cx:tickLabels/></cx:axis>` +
-    `<cx:axis id="1"><cx:valScaling${exAttrs({ max: exNum(c.y.max), min: exNum(c.y.min), majorUnit: exNum(c.y.step) })}/>${title(c.y.title, 10)}${gridEx(c.y.grid !== false)}<cx:tickLabels/>${numFmt(c.y)}</cx:axis>`;
+  const axes = `<cx:axis id="0"><cx:catScaling${hist ? ' gapWidth="0"' : ' gapWidth="1"'}/>${axisTitle(c.x.title)}${gridEx(!!c.x.grid)}<cx:tickLabels/></cx:axis>` +
+    `<cx:axis id="1"><cx:valScaling${exAttrs({ max: exNum(c.y.max), min: exNum(c.y.min), majorUnit: exNum(c.y.step) })}/>${axisTitle(c.y.title)}${gridEx(c.y.grid !== false)}<cx:tickLabels/>${numFmt(c.y)}</cx:axis>`;
   const legend = c.legend === 'none' ? '' : `<cx:legend pos="${c.legend === 'right' ? 'r' : c.legend === 'top' ? 't' : 'b'}" align="ctr" overlay="0"/>`;
   const bg = c.background === 'none' ? '<a:noFill/>' : fill(c.background ?? '#ffffff');
   const border = c.border === false ? '<a:ln><a:noFill/></a:ln>' : `<a:ln w="9525">${fill('#d9d9d9')}</a:ln>`;
