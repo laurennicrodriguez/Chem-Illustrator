@@ -200,6 +200,8 @@ import { Keeper } from './keep/keeper';
 import { DEFAULT_KEEP, type KeepPrefs } from './keep/prefs';
 import { Brush, paintObjects, pickObjectLook, type ObjectLook, type TextLook } from './format-painter';
 import { SymbolWindow } from './ui/symbol-window';
+import { Navigator, EdgeArrows, paintGrid, paintTint, type Target } from './ui/orientation';
+import { type OrientPrefs, DEFAULT_ORIENT } from './orientation-prefs';
 import { addRecent as addRecentSymbol } from './text/symbols';
 import type { CellBlock } from './sheet/workbook';
 
@@ -250,6 +252,8 @@ const MODE_STYLE_DEFAULTS: Partial<Record<StyleMode, string>> = { slides: 'Slide
 const modeStyleFor = (mode: StyleMode): string | undefined => modeStyles[mode] ?? MODE_STYLE_DEFAULTS[mode];
 /** View > Dark Page: on or off, which palette, and your own palettes. */
 const dark = { on: false, palette: 'Graphite', own: [] as DarkPalette[] };
+/** Finding your way round drawings (Settings ▸ Navigation): navigator, edge arrows, dot grid, outside tint, Fit and Go to Selection buttons. */
+let orientPrefs: OrientPrefs = { ...DEFAULT_ORIENT };
 /** Beside slides: the deck whose drawing is being worked on (the drawing's tab shows; the slide is a picture). */
 let slideSplit: Tab | null = null;
 /** Beside a document or sheet: the drawing has the keys and menus (it was clicked last). */
@@ -1928,7 +1932,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   if (words) fieldEnv.fileName = ws.mainOf(tab).name;
   docMode.show(words ? tab : null);
   renderer.screen = !!deck;
-  renderer.page = deck ? slidePage : null;
+  renderer.page = deck ? slidePage : drawingBackdrop;
   editor.slideKeys = slides;
   editor.cropping = null;
   editor.lastEdited = null;
@@ -4243,7 +4247,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['new-from-template', 'check-accessibility', 'format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'export-settings', 'import-settings', 'customize-ribbon', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'reset-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'title-bar-in-menu', 'collapse-ribbon', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
+  'drawing-style', 'navigation-settings', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'title-bar-in-menu', 'collapse-ribbon', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
   'help', 'about', 'user-guide', 'help-here', 'send-feedback', 'report-problem', 'check-updates']);
 
 // ---------------------------------------------------------------- accessibility (Review > Check Accessibility, Alt Text…)
@@ -4741,6 +4745,12 @@ const COMMANDS: Record<string, () => unknown> = {
   'zoom-in': () => editor.zoomBy(1.25),
   'zoom-out': () => editor.zoomBy(0.8),
   'zoom-fit': () => editor.fit(),
+  'zoom-selection': () => { if (!editor.goToSelection()) flash('Select something first, then Go to Selection brings it into view.'); },
+  navigator: () => setOrient({ ...orientPrefs, navigator: !orientPrefs.navigator }),
+  'edge-arrows': () => setOrient({ ...orientPrefs, edgeArrows: !orientPrefs.edgeArrows }),
+  'dot-grid': () => setOrient({ ...orientPrefs, dotGrid: !orientPrefs.dotGrid }),
+  'outside-tint': () => setOrient({ ...orientPrefs, tint: !orientPrefs.tint }),
+  'navigation-settings': () => settingsWindow.open('navigation'),
   // 100%: a point on the page is a point on the screen (96 pixels to the inch)
   'zoom-actual': () => editor.zoomTo(96 / 72),
   hotkeys: () => settingsWindow.open('hotkeys'),
@@ -5886,6 +5896,7 @@ function currentSettings(): Settings {
     darkPalette: dark.palette,
     darkPalettes: dark.own,
     guides: { ...guidesOn },
+    orient: { ...orientPrefs },
     docPins: [...docBoxPrefs.pinned],
     docRuler: docRulerPrefs.shown,
     sheetFormulaBar: formulaBarPrefs.shown,
@@ -6046,6 +6057,7 @@ function applySettings(s: Settings): void {
   $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(s.showRoles));
   showDevTools(s.devTools);
   showScrollBars(s.scrollBars);
+  setOrient(s.orient, false);
   void placeTitleBar(s.titleBar);
   setRibbonCollapsed(s.ribbonCollapsed);
   defaultPage = s.page;
@@ -7007,7 +7019,7 @@ function drawingMenu(): MenuItem[] {
   const atoms = s.atoms.size > 0;
   const shapes = [...s.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => !!x);
   const design = ws.active.mode === 'design';
-  const view: MenuItem = { label: 'View', items: [{ cmd: 'zoom-in' }, { cmd: 'zoom-out' }, { cmd: 'zoom-fit' }, { cmd: 'zoom-actual' }, null, { cmd: 'show-stereo' }, { cmd: 'group-tips' }, { cmd: 'scroll-bars' }, { cmd: 'alignment-guides' }, null, { cmd: 'dark-page' }, { cmd: 'dark-colours' }] };
+  const view: MenuItem = { label: 'View', items: [{ cmd: 'zoom-in' }, { cmd: 'zoom-out' }, { cmd: 'zoom-fit' }, { cmd: 'zoom-selection' }, { cmd: 'zoom-actual' }, null, { cmd: 'show-stereo' }, { cmd: 'group-tips' }, { cmd: 'scroll-bars' }, { cmd: 'alignment-guides' }, null, { cmd: 'dark-page' }, { cmd: 'dark-colours' }] };
   if (!any) {
     return [
       { cmd: 'paste' }, { cmd: 'paste-smiles' }, { cmd: 'select-all' }, null,
@@ -7885,6 +7897,7 @@ const settingsWindow = new SettingsWindow([
   { id: 'typing', title: 'Text and Spelling', words: 'typing spelling dictionary autocorrect replacements chemistry formulas subscripts', open: () => typingDialog.open() },
   { id: 'palettes', title: 'Colour Palettes', words: 'colours colors palette rows', open: () => editPalettes() },
   { id: 'mode-colours', title: 'Mode Colours', words: 'tab colours accent window drawing slides sheet document design appearance', open: () => modeDialog.open() },
+  { id: 'navigation', title: 'Navigation', words: 'navigator minimap map overview edge arrows off screen lost find dot grid dots tint outside fit go to selection orientation zoom', open: navigationSettings },
   { id: 'dark', title: 'Dark Page', words: 'dark mode night paper ink graphite slate appearance colours', open: darkColours },
   { id: 'schemes', title: 'Schemes', words: 'scheme arrow gap plus text size reagents conditions boxes', open: schemeSettings },
   { id: 'autosave', title: 'AutoSave and Recovery', words: 'autosave recovery versions backup copies shared folders onedrive', open: () => keeper.optionsCommand() },
@@ -7922,6 +7935,105 @@ const scrollbars = new Scrollbars(host, renderer, () => {
   const d = ws.active.deck;
   return d ? { x1: 0, y1: 0, x2: d.size.w, y2: d.size.h } : doc.bounds();
 }, () => editor.requestScene());
+
+// ---------------------------------------------------------------- finding your way round (Settings ▸ Navigation)
+
+
+/** Drawings: the dot grid, painted behind everything (on screen only; never saved, printed or copied). */
+const drawingBackdrop = {
+  draw(ctx: CanvasRenderingContext2D): void { paintGrid(ctx, orientPrefs, renderer.dpr, dark.on); },
+};
+if (!renderer.page && !deckNow()) renderer.page = drawingBackdrop;
+
+/** Is an endless drawing showing in the window (not a slide, design, sheet or document)? */
+const drawingShown = () => !deckNow() && !editor.paused;
+
+/** What the edge arrows point to: each structure, and (when set) text, arrows and shapes. Worked out again when the drawing changes, not while dragging. */
+let targetsCache: { version: number; to: OrientPrefs['arrowsTo']; list: Target[] } | null = null;
+function arrowTargets(): Target[] {
+  if (targetsCache && (targetsCache.version === doc.version || editor.dragging) && targetsCache.to === orientPrefs.arrowsTo) return targetsCache.list;
+  const list: Target[] = [];
+  const box = (pts: { x: number; y: number }[]) => {
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for (const p of pts) { if (p.x < x1) x1 = p.x; if (p.y < y1) y1 = p.y; if (p.x > x2) x2 = p.x; if (p.y > y2) y2 = p.y; }
+    return { x1, y1, x2, y2 };
+  };
+  for (const f of doc.fragments()) list.push({ what: 'structure', box: box([...f].map((id) => doc.atoms.get(id)!)) });
+  if (orientPrefs.arrowsTo === 'everything') {
+    for (const c of doc.captions.values()) list.push({ what: 'text', box: { x1: c.x, y1: c.y - 10, x2: c.x + (c.width ?? 40), y2: c.y + 4 } });
+    for (const r of doc.arrows.values()) list.push({ what: 'arrow', box: box([r.tail, r.head]) });
+    for (const sh of doc.shapes.values()) list.push({ what: 'shape', box: { x1: Math.min(sh.x1, sh.x2), y1: Math.min(sh.y1, sh.y2), x2: Math.max(sh.x1, sh.x2), y2: Math.max(sh.y1, sh.y2) } });
+  }
+  targetsCache = { version: doc.version, to: orientPrefs.arrowsTo, list };
+  return list;
+}
+
+const navMap = new Navigator(host, renderer, () => orientPrefs, {
+  content: () => doc.bounds(),
+  version: () => doc.version,
+  paint: (ctx) => drawDrawing(ctx, doc),
+  background: () => doc.background,
+  moved: () => editor.requestScene(),
+  fit: () => command('zoom-fit'),
+  busy: () => editor.dragging,
+});
+const edgeArrows = new EdgeArrows(host, renderer, () => editor.requestScene());
+editor.underlay = (ctx) => { if (drawingShown()) paintTint(ctx, orientPrefs, renderer, doc.bounds(), doc.style.labelSize * 1.5 + doc.style.bondLength); };
+
+/** Each frame: the navigator and the edge arrows follow the view and the drawing. */
+function updateOrientation(): void {
+  const on = drawingShown();
+  navMap.update(on);
+  edgeArrows.update(on && orientPrefs.edgeArrows ? arrowTargets() : null, doc.version, navMap.box());
+}
+
+/** Use these navigation settings: tick the View menu, show or hide the buttons, and repaint (the grid is in the drawing's tiles). */
+function setOrient(next: OrientPrefs, store = true): void {
+  const gridChanged = next.dotGrid !== orientPrefs.dotGrid || next.gridSpacing !== orientPrefs.gridSpacing || next.gridStrength !== orientPrefs.gridStrength;
+  orientPrefs = { ...next };
+  targetsCache = null;
+  for (const [cmd, on] of [['navigator', orientPrefs.navigator], ['edge-arrows', orientPrefs.edgeArrows], ['dot-grid', orientPrefs.dotGrid], ['outside-tint', orientPrefs.tint]] as const) {
+    for (const el of document.querySelectorAll(`[data-cmd="${cmd}"][role="menuitemcheckbox"]`)) el.setAttribute('aria-checked', String(on));
+  }
+  $('#go-buttons').hidden = !orientPrefs.goButtons;
+  if (gridChanged) renderer.repaintAll();
+  editor.requestScene();
+  if (store) storeSettings();
+}
+
+/** Settings ▸ Navigation. */
+async function navigationSettings(): Promise<void> {
+  const o = orientPrefs;
+  const strength = [{ value: 'faint', label: 'Faint' }, { value: 'light', label: 'Light' }, { value: 'strong', label: 'Stronger' }];
+  const r = await ask('Navigation', [
+    { name: 'navigator', label: 'Navigator: a small map of the whole drawing in a corner (click or drag in it to move there; double-click to fit)', type: 'checkbox', value: String(o.navigator) },
+    { name: 'navCorner', label: 'Navigator corner', value: o.navCorner, options: [{ value: 'br', label: 'Bottom right' }, { value: 'bl', label: 'Bottom left' }, { value: 'tr', label: 'Top right' }, { value: 'tl', label: 'Top left' }] },
+    { name: 'navSize', label: 'Navigator size', value: o.navSize, options: [{ value: 'small', label: 'Small' }, { value: 'medium', label: 'Medium' }, { value: 'large', label: 'Large' }] },
+    { name: 'navHideAll', label: 'Hide the navigator while the whole drawing is on screen', type: 'checkbox', value: String(o.navHideAll) },
+    { name: 'edgeArrows', label: 'Edge arrows: point to things scrolled out of sight (click one to go there)', type: 'checkbox', value: String(o.edgeArrows) },
+    { name: 'arrowsTo', label: 'Edge arrows point to', value: o.arrowsTo, options: [{ value: 'structures', label: 'Structures' }, { value: 'everything', label: 'Structures, text, arrows and shapes' }] },
+    { name: 'dotGrid', label: 'Dot grid behind the drawing', type: 'checkbox', value: String(o.dotGrid),
+      help: 'On screen only: files, printing, copying and exports have no grid. The dots spread out as you zoom out.' },
+    { name: 'gridSpacing', label: 'Dot spacing', value: o.gridSpacing, options: [{ value: 'fine', label: 'Fine (¼ inch)' }, { value: 'normal', label: 'Normal (½ inch)' }, { value: 'wide', label: 'Wide (1 inch)' }] },
+    { name: 'gridStrength', label: 'Dots', value: o.gridStrength, options: strength },
+    { name: 'tint', label: 'Tint the empty space beyond everything drawn', type: 'checkbox', value: String(o.tint),
+      help: 'On screen only. Shows at a glance which way the drawing is when nothing of it is in the window.' },
+    { name: 'tintStrength', label: 'Tint', value: o.tintStrength, options: strength },
+    { name: 'goButtons', label: 'Fit and Go to Selection buttons in the status bar', type: 'checkbox', value: String(o.goButtons),
+      help: 'F6 fits the drawing and Shift+F6 goes to the selection, with or without the buttons (Edit ▸ Hotkeys changes the keys).' },
+  ], { ok: 'Save' });
+  if (!r) return;
+  setOrient({
+    navigator: r.navigator === 'true', navCorner: r.navCorner as OrientPrefs['navCorner'], navSize: r.navSize as OrientPrefs['navSize'], navHideAll: r.navHideAll === 'true',
+    edgeArrows: r.edgeArrows === 'true', arrowsTo: r.arrowsTo === 'everything' ? 'everything' : 'structures',
+    dotGrid: r.dotGrid === 'true', gridSpacing: r.gridSpacing as OrientPrefs['gridSpacing'], gridStrength: r.gridStrength as OrientPrefs['gridStrength'],
+    tint: r.tint === 'true', tintStrength: r.tintStrength as OrientPrefs['tintStrength'],
+    goButtons: r.goButtons === 'true',
+  });
+}
+
+$('#go-fit').addEventListener('click', () => { command('zoom-fit'); $('#overlay').focus({ preventScroll: true }); });
+$('#go-sel').addEventListener('click', () => { command('zoom-selection'); $('#overlay').focus({ preventScroll: true }); });
 
 // ---------------------------------------------------------------- the page in drawings
 
@@ -8023,6 +8135,7 @@ editor.onFrame = () => {
   if (outlineView.shown && doc.version !== outlineSeen) { outlineSeen = doc.version; outlineView.rebuild(); }
   layers?.refresh();
   scrollbars.update(doc.version);
+  updateOrientation();
   updatePanels();
   // while dragging, the warnings list and R/S labels wait for the drop (they changed every frame)
   if (editor.dragging) { warnTip.hidden = true; return; }
