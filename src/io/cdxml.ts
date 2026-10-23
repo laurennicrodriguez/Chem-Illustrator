@@ -68,11 +68,12 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     if (v > maxId) maxId = v;
   }
   const ord = new Map<string, number>();
-  /** Which entity each element became (kind + id), for the references in reaction steps. */
-  const refOf = new Map<Element, string>();
+  /** Which entity each element became (kind + id), for the references in reaction steps (worked out when first needed, once the file is read). */
+  let refMap: Map<Element, string> | null = null;
+  const refOf = () => (refMap ??= new Map([...ord].map(([key, o]) => [all[o], key])));
   const morphTags: [number, string][] = [];
   const pinTags: [number, string][] = [];
-  const from = (kind: Kind, id: number, el: Element) => { ord.set(kind + id, ordOf.get(el)!); refOf.set(el, kind + id); };
+  const from = (kind: Kind, id: number, el: Element) => { ord.set(kind + id, ordOf.get(el)!); };
   const stats: ReadStats = { atoms: 0, bonds: 0, captions: 0, arrows: 0, shapes: 0, skipped: {}, parseMs: t1 - t0, buildMs: 0 };
   const skip = (what: string) => { stats.skipped[what] = (stats.skipped[what] ?? 0) + 1; };
 
@@ -710,7 +711,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       for (const k of kids(g)) {
         if (k.nodeName !== 'bracketattachment') continue;
         const e = byXmlId.get(k.getAttribute('GraphicID') ?? '');
-        const ref = e ? refOf.get(e) : undefined;
+        const ref = e ? refOf().get(e) : undefined;
         const sh = ref && ref[0] === 's' ? doc.shapes.get(Number(ref.slice(1))) : undefined;
         if (e && sh?.kind === 'bracket') brackets.push({ e, sh });
       }
@@ -824,8 +825,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   doc.bulk(() => {
     walk(root);
     readSteps(all, refOf, doc);
-    readMorphTags(morphTags, refOf, doc);
-    readPinTags(pinTags, refOf, doc);
+    if (morphTags.length) readMorphTags(morphTags, refOf(), doc);
+    if (pinTags.length) readPinTags(pinTags, refOf(), doc);
     readRepeats();
     for (const c of pendingCircles) if (!ringOfCircle(doc, c)) c.oval();
     // Element labels like "OH", "H2N" or "N" become automatic labels (so they re-justify
@@ -854,9 +855,11 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   });
   doc.reserveIds(maxId);
   const orig = new Map<string, Entity>();
-  const keep = (kind: Kind, m: Map<number, Entity>) => { for (const e of m.values()) if (ord.has(kind + e.id)) orig.set(kind + e.id, structuredClone(e)); };
+  // (a shallow copy, as an undo step keeps: edits replace an entity's parts rather than change them)
+  const loaded = new WeakSet<Entity>();
+  const keep = (kind: Kind, m: Map<number, Entity>) => { for (const e of m.values()) { const key = kind + e.id; if (ord.has(key)) { orig.set(key, { ...e }); loaded.add(e); } } };
   keep('a', doc.atoms); keep('b', doc.bonds); keep('c', doc.captions); keep('r', doc.arrows); keep('s', doc.shapes);
-  doc.source = { text, ord, orig, maxId };
+  doc.source = { text, ord, orig, maxId, xml, loaded };
   doc.allDirty = true;
   stats.buildMs = performance.now() - t1;
   return { doc, stats };
@@ -940,7 +943,9 @@ const STEP_ROLES: [string, keyof StepRoles][] = [
  * structures (fragments), captions, groups of them, and the arrow (or the older copy of it that
  * ChemDraw keeps for old versions).
  */
-function readSteps(all: Element[], refOf: Map<Element, string>, doc: Doc): void {
+function readSteps(all: Element[], refs: () => Map<Element, string>, doc: Doc): void {
+  if (!all.some((el) => el.nodeName === 'step')) return;
+  const refOf = refs();
   const byId = new Map<string, Element>();
   for (const el of all) { const id = el.getAttribute('id'); if (id && !byId.has(id)) byId.set(id, el); }
   const refsOf = (el: Element | undefined, out: string[]) => {

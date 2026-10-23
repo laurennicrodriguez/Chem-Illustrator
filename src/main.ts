@@ -6843,7 +6843,8 @@ registerBundledFonts(() => {
 });
 // the icon library loads on its own once the window is up; then anything with icons in it is drawn again
 whenIconsLoaded(() => {
-  doc.allDirty = true;
+  // (only a drawing with shapes can hold icons: a big structure opened at start-up isn't drawn twice)
+  if (doc.shapes.size) doc.allDirty = true;
   editor.changed();
   docMode.fontsChanged();
 });
