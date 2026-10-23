@@ -10,7 +10,7 @@ It is free and open source (GPL v3), and runs on Windows, macOS and Linux.
 
 ### [▶ Try it in your browser](https://nathanohare.github.io/Chem-Illustrator/) · [Download the desktop app](https://github.com/nathanohare/Chem-Illustrator/releases/latest)
 
-Nothing to install or sign in to: the browser version opens straight away and keeps your work on your computer. The desktop app adds what a browser can't do: editing drawings inside Word and PowerPoint, AutoSave to your own folders, and automatic updates.
+Nothing to install: the browser version opens straight away. The desktop app adds what a browser can't do: editing drawings inside Word and PowerPoint, AutoSave to your own folders, and automatic updates.
 
 **[User guide](docs/README.md)** · **[Send feedback](docs/guide/feedback.md)**
 
