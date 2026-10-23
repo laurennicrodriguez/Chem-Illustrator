@@ -1086,6 +1086,13 @@ export interface CdxmlSource {
   orig: Map<string, Entity>;
   /** Highest object id used anywhere in the file. */
   maxId: number;
+  /** The file's text as read, untouched: each save starts from a copy, which is quicker than reading the text again. */
+  xml?: XMLDocument;
+  /**
+   * The entities exactly as read (the same objects). An edit replaces an entity rather than
+   * changing it, so one still here is unchanged, and saving can pass it by without comparing.
+   */
+  loaded?: WeakSet<Entity>;
 }
 
 /**
@@ -1111,6 +1118,8 @@ interface UndoEntry {
   label: string;
   before: Map<string, Entity | null>;
   after: Map<string, Entity | null>;
+  /** A bulk change (see Doc.bulk), which keeps no undo step. */
+  bulk?: boolean;
 }
 
 const CELL = 12; // spatial grid cell size in points
@@ -1177,8 +1186,15 @@ export class Doc {
   /** Longest bond drawn so far (used to know how far around a point to look). */
   /** Set when the longest bond may have got shorter (an atom moved, a bond went): worked out again when next asked. */
   private bondLenStale = false;
+  /**
+   * Set when the longest bond may have got shorter during the edit going on. Too long a value
+   * only widens searches a little, so a drag doesn't rescan every bond on every move: the
+   * rescan waits until the edit is done.
+   */
+  private bondLenShrunk = false;
   /** The longest bond (for how far around a point to look for bonds that reach it). */
   get maxBondLength(): number {
+    if (this.bondLenShrunk && !this.tx) { this.bondLenShrunk = false; this.bondLenStale = true; }
     if (this.bondLenStale) {
       this.bondLenStale = false;
       this.maxBondLen = 0;
@@ -1351,6 +1367,8 @@ export class Doc {
 
   private touch(kind: Kind, id: number): void {
     if (!this.tx) throw new Error('Document changes must happen inside an edit');
+    // a bulk change is never undone: nothing to remember (a big file opens faster)
+    if (this.tx.bulk) { this.version++; return; }
     const key = kind + id;
     if (!this.tx.before.has(key)) this.tx.before.set(key, this.snapshot(key));
     this.version++;
@@ -1431,10 +1449,10 @@ export class Doc {
       this.noteAtom(id);
       const was = this.atoms.get(id);
       // a moved or removed atom shortens the longest bond only if one of its bonds was that long
-      if (was && !this.bondLenStale && (!e || (e as Atom).x !== was.x || (e as Atom).y !== was.y)) {
+      if (was && !this.bondLenStale && !this.bondLenShrunk && (!e || (e as Atom).x !== was.x || (e as Atom).y !== was.y)) {
         for (const bid of this.adj.get(id) ?? []) {
           const bd = this.bonds.get(bid), other = bd && this.atoms.get(bd.a1 === id ? bd.a2 : bd.a1);
-          if (other && Math.hypot(other.x - was.x, other.y - was.y) >= this.maxBondLen - 1e-6) { this.bondLenStale = true; break; }
+          if (other && Math.hypot(other.x - was.x, other.y - was.y) >= this.maxBondLen - 1e-6) { this.bondLenShrunk = true; break; }
         }
       }
       if (was?.multi) this.unlinkCentre(was);
@@ -1452,7 +1470,7 @@ export class Doc {
       this.dirtyBonds.add(id);
       const old = this.bonds.get(id);
       if (old) {
-        this.bondLenStale = true;
+        this.bondLenShrunk = true;
         this.detach(old.a1, id);
         this.detach(old.a2, id);
         this.dirtyAtoms.add(old.a1);
@@ -1765,7 +1783,7 @@ export class Doc {
     this.source = other.source;
     this.nextId = Math.max(this.nextId, other.nextId);
     this.atoms.clear(); this.bonds.clear(); this.captions.clear(); this.arrows.clear(); this.shapes.clear();
-    this.adj.clear(); this.centresOf.clear(); this.grid.clear(); this.atomCell.clear(); this.maxBondLen = 0; this.bondLenStale = false;
+    this.adj.clear(); this.centresOf.clear(); this.grid.clear(); this.atomCell.clear(); this.maxBondLen = 0; this.bondLenStale = false; this.bondLenShrunk = false;
     for (const a of other.atoms.values()) this.rawSet('a', a.id, take(a));
     for (const b of other.bonds.values()) this.rawSet('b', b.id, take(b));
     for (const c of other.captions.values()) this.rawSet('c', c.id, take(c));
@@ -1787,7 +1805,7 @@ export class Doc {
   swap(other: Doc): void {
     if (this.tx || other.tx) throw new Error('Cannot swap documents in the middle of an edit');
     const fields = ['style', 'background', 'page', 'source', 'textStyles', 'atoms', 'bonds', 'captions', 'arrows', 'shapes', 'adj', 'centresOf',
-      'grid', 'atomCell', 'maxBondLen', 'bondLenStale', 'undoStack', 'redoStack'] as const;
+      'grid', 'atomCell', 'maxBondLen', 'bondLenStale', 'bondLenShrunk', 'undoStack', 'redoStack'] as const;
     const a = this as unknown as Record<string, unknown>, b = other as unknown as Record<string, unknown>;
     for (const f of fields) { const t = a[f]; a[f] = b[f]; b[f] = t; }
     // ids stay unique across both, so things moved between them never clash
@@ -1829,6 +1847,7 @@ export class Doc {
     const outer = this.tx;
     this.tx = null;
     this.begin('bulk');
+    this.tx!.bulk = true;
     try {
       fn();
     } finally {
@@ -1958,6 +1977,16 @@ export class Doc {
   }
 
   bounds(): Rect | null {
+    // (asked for by every tile of a repaint, for the page; the same until the drawing changes)
+    if (this.boundsMemo?.version === this.version) return this.boundsMemo.box && { ...this.boundsMemo.box };
+    const box = this.measureBounds();
+    this.boundsMemo = { version: this.version, box };
+    return box && { ...box };
+  }
+
+  private boundsMemo: { version: number; box: Rect | null } | null = null;
+
+  private measureBounds(): Rect | null {
     let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
     const grow = (x: number, y: number) => { if (x < x1) x1 = x; if (y < y1) y1 = y; if (x > x2) x2 = x; if (y > y2) y2 = y; };
     for (const a of this.atoms.values()) grow(a.x, a.y);

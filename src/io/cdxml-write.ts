@@ -29,7 +29,7 @@ import { shapeShadow } from '../render/highlight-fx';
 import { parseColor } from '../render/vector';
 import { layoutTable, cellAlign, isCovered, spanOf, NOTE_SCALE } from '../table';
 import { TABLE_TAG, TABLE_PART_TAG, tableBorders, type TableTag } from './cdxml-table';
-import { bondLayer, crossingBonds } from '../chem/crossing';
+import { bondLayer, crossingBondsCached } from '../chem/crossing';
 import { repeatGroups, repeatCount, repeatLabelPlace } from '../chem/polymer';
 import { ellipseAxes, isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
 
@@ -126,6 +126,8 @@ class CdxmlWriter {
   private bondEls = new Map<number, Element>();
   /** Neighbours of each atom as read from the file. */
   private origNeighbors = new Map<number, Set<number>>();
+  /** Atoms found unchanged since the file was read (see untouched). */
+  private untouchedAtoms = new Map<number, boolean>();
   private changed = false;
   /** Older copies of arrows that ChemDraw keeps for old versions, by the arrow they belong to. */
   private legacy: Map<string, Element[]> | null = null;
@@ -187,10 +189,11 @@ class CdxmlWriter {
   // ------------------------------------------------------------------ document set-up
 
   private openSource(): void {
-    const text = this.doc.source!.text;
+    const src = this.doc.source!, text = src.text;
     const start = text.search(/<CDXML[\s>]/);
     this.prolog = start > 0 ? text.slice(0, start) : NEW_PROLOG;
-    this.x = new DOMParser().parseFromString(text.replace(/<!DOCTYPE[^>]*>/i, ''), 'application/xml');
+    src.xml ??= new DOMParser().parseFromString(text.replace(/<!DOCTYPE[^>]*>/i, ''), 'application/xml');
+    this.x = src.xml.cloneNode(true) as XMLDocument;
     this.root = this.x.documentElement;
     this.all = descendants(this.root);
     this.page = this.child(this.root, 'page') ?? this.root.appendChild(this.el('page', { id: this.id() }));
@@ -413,6 +416,24 @@ class CdxmlWriter {
     return false;
   }
 
+  /**
+   * An atom that is as it was read, with the same bonds to the same atoms, none of them changed
+   * either: its element needs nothing (most of a big drawing, when saved after a small edit).
+   */
+  private untouched(a: Atom): boolean {
+    let u = this.untouchedAtoms.get(a.id);
+    if (u !== undefined) return u;
+    const loaded = this.doc.source?.loaded;
+    const adj = this.doc.adj.get(a.id) ?? [];
+    u = !!loaded?.has(a) && adj.length === (this.origNeighbors.get(a.id)?.size ?? 0);
+    for (let i = 0; u && i < adj.length; i++) {
+      const b = this.doc.bonds.get(adj[i])!;
+      u = loaded!.has(b) && loaded!.has(this.doc.atoms.get(b.a1 === a.id ? b.a2 : b.a1)!);
+    }
+    this.untouchedAtoms.set(a.id, u);
+    return u;
+  }
+
   private connectivityChanged(a: Atom): boolean {
     const was = this.origNeighbors.get(a.id) ?? new Set<number>();
     const now = this.doc.neighbors(a.id);
@@ -442,6 +463,10 @@ class CdxmlWriter {
       target.insertBefore(e, this.child(target, 'b'));
       wrote = true;
     }
+    if (this.untouched(a) && !a.showStereo && !a.stereoLabel) {
+      if (wrote) this.changed = true;
+      return wrote;
+    }
     const conn = this.connectivityChanged(a);
     const others = !sameExcept(a, o, ['x', 'y']);
     if (!others && !conn && !this.neighborsMovedApart(a)) {
@@ -470,6 +495,10 @@ class CdxmlWriter {
     this.bondEls.set(b.id, e);
     let wrote = false;
     if (e.parentElement !== target) { target.appendChild(e); wrote = true; }
+    if (this.doc.source?.loaded?.has(b) && !b.showStereo && !b.stereoLabel && this.untouched(this.doc.atoms.get(b.a1)!) && this.untouched(this.doc.atoms.get(b.a2)!)) {
+      if (wrote) this.changed = true;
+      return wrote;
+    }
     if (!sameExcept(b, o, [])) {
       this.patchBond(e, b);
       wrote = true;
@@ -825,7 +854,7 @@ class CdxmlWriter {
   private writeCrossings(): void {
     const partners = new Map<number, Bond[]>();
     for (const b of this.doc.bonds.values()) {
-      const cs = crossingBonds(this.doc, b);
+      const cs = crossingBondsCached(this.doc, b);
       if (cs.length) partners.set(b.id, cs);
     }
     const want = (b: Bond) => (partners.get(b.id) ?? []).map((o) => this.bondEls.get(o.id)?.getAttribute('id') ?? '').filter(Boolean).sort().join(' ');
@@ -1588,7 +1617,7 @@ class CdxmlWriter {
   private writeSteps(): void {
     const doc = this.doc, src = doc.source;
     const stepOf = new Map<Element, Element>();
-    if (src) {
+    if (src && this.all.some((e) => e.nodeName === 'step')) {
       const byId = new Map<string, Element>();
       for (const e of this.all) { const id = e.getAttribute('id'); if (id && !byId.has(id)) byId.set(id, e); }
       for (const st of this.all) {
@@ -1722,12 +1751,19 @@ class CdxmlWriter {
    */
   private writeGroups(): void {
     const doc = this.doc;
-    const byId = new Map<string, Element>();
-    for (const e of descendants(this.root)) { const id = e.getAttribute('id'); if (id && !byId.has(id)) byId.set(id, e); }
+    // (every element by its id, only when something isn't found where it was read)
+    let byId: Map<string, Element> | null = null;
+    const ided = () => {
+      if (!byId) {
+        byId = new Map();
+        for (const e of descendants(this.root)) { const id = e.getAttribute('id'); if (id && !byId.has(id)) byId.set(id, e); }
+      }
+      return byId;
+    };
     const elementOf = (kind: Kind, id: number): Element | null => {
       if (kind === 'a') return this.fragOfAtom.get(id) ?? null;
       const names = kind === 'c' ? ['t'] : kind === 'r' ? ['arrow', 'graphic'] : ['graphic', 'embeddedobject', 'table', 'group'];
-      return this.source(kind, id, names) ?? (kind === 'r' ? this.findArrow(id) : null) ?? byId.get(String(id)) ?? null;
+      return this.source(kind, id, names) ?? (kind === 'r' ? this.findArrow(id) : null) ?? ided().get(String(id)) ?? null;
     };
     const plain = (g: Element | null): g is Element => !!g && g.nodeName === 'group'
       && !kids(g).some((k) => k.nodeName === 'table' || (k.nodeName === 'objecttag' && k.getAttribute('Name') === GEO_TAG));
@@ -1775,8 +1811,9 @@ class CdxmlWriter {
     if (!this.changed) return;
     const all = descendants(this.root);
     const named = (name: string) => all.filter((e) => e.nodeName === name);
+    const refs = named('step').length + named('represent').length + named('crossingbond').length;
     const ids = new Set<string>();
-    for (const e of all) { const id = e.getAttribute('id'); if (id) ids.add(id); }
+    if (refs) for (const e of all) { const id = e.getAttribute('id'); if (id) ids.add(id); }
     for (const st of named('step')) {
       for (const at of Array.from(st.attributes)) {
         if (!at.name.startsWith('ReactionStep')) continue;
