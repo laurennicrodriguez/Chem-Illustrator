@@ -372,15 +372,19 @@ The **View** menu can show more toolboxes besides the drawing tools:
 
 ### Customize Toolboxes
 
-**View ▸ Customize Toolboxes…** (or right-click a toolbox ▸ **Customize This Toolbox…**) changes what is in any toolbox, much as you rearrange apps on a phone's home screen. On the left is every drawing tool, fly-out palette and menu command, each with its icon, with a search box. On the right, pick a toolbox from the list: its buttons show as icons that jiggle while you work on them.
+**View ▸ Customize Toolboxes…** (or right-click a toolbox ▸ **Customize This Toolbox…**) changes what is in any toolbox, much as you rearrange apps on a phone's home screen. On the left is every drawing tool, fly-out palette and menu command, each with its icon, with a search box. On the right, pick a toolbox from the list: it shows cell by cell, laid out just as it is on screen, its icons jiggling while you work on them.
 
-- **Rearrange**: drag an icon to a new place; the others slide aside to make room. With the keyboard, Ctrl+arrow keys move the icon that has the focus.
-- **Add**: drag a tool or command in from the left and drop it where you want it, or click its **+** to put it at the end. A **Divider** puts a line between groups.
-- **Take out**: drag an icon out of the toolbox, click its **×**, or press Delete.
-- **Fly-outs**: a palette (the buttons with a small corner arrow, such as Arrows or Brackets) shows as a folder of its first tools. Click it to open it and rearrange, add or take out its tools the same way; drop a tool on a folder to put it inside.
+- **Grid size**: each toolbox is a grid of so many columns by so many rows. Type the numbers next to **Grid**, or pick one of the **Presets** (a tall strip of two columns, a square, a wide strip, one row and so on). A bigger grid keeps every button where it is; a smaller one asks first if it would leave no room for some, and names them.
+- **Empty cells** are fine: leave gaps to keep groups of tools apart. Click the small mark at the left of a row to put a thin line above it, as between the groups of the Drawing Tools.
+- **Rearrange**: drag an icon to another cell. Dropped on an empty cell it moves there; dropped on another icon, the two swap. With the keyboard, the arrow keys move between cells, and Ctrl+arrow keys move the icon with them.
+- **Add**: drag a tool or command in from the left and drop it on the cell you want (an icon already there moves along to the next empty cell), or click its **+** to put it in the first empty cell. When the grid is full, **+** adds a row.
+- **Take out**: drag an icon out of the grid, click its **×**, or press Delete. Its cell is left empty.
+- **If there isn't room**: when the window is too short for a toolbox docked down a side (or too narrow for one along the top or bottom), it can **Scroll**, or **Wrap into more columns**: the rows that don't fit go beside the others (below them, along the top or bottom), breaking between groups where it can. The Drawing Tools wrap unless you choose otherwise; the others scroll.
+- **Along the top or bottom**, a tall grid turns on its side (the Drawing Tools become two rows), and a wide one turns upright down a side.
+- **Fly-outs**: a palette (the buttons with a small corner arrow, such as Arrows or Brackets) has a grid of its own. Click it to lay out its tools the same way, as the fly-out opens; drop a tool on the middle of a palette to put it inside.
 - **Your own toolboxes**: **New** makes one (it floats over the drawing; dock it like any other). Type a **Name** to rename any toolbox, untick **Shown** to hide it, use ↑ and ↓ to move it up or down the View menu (and its place in a dock), and **Delete** to delete it. The Drawing Tools and the side panel can't be deleted. **Restore Deleted Toolboxes** brings back the app's own toolboxes and names.
 - A tool or command can be in as many toolboxes as you like.
-- Every change shows at once in the toolbox itself. **Undo** (or Ctrl+Z) takes changes back one at a time, and **Reset This Toolbox** puts a toolbox back as it came.
+- Every change shows at once in the toolbox itself. **Undo** (or Ctrl+Z) takes changes back one at a time, and **Reset This Toolbox** puts a toolbox back as it came, grid and all. The grids are kept with your settings, so **Edit ▸ Export Settings** takes them to another computer.
 - Untick **Jiggle icons** to keep them still. They never jiggle when Windows is set to show fewer animations (Settings ▸ Accessibility ▸ Visual effects ▸ Animation effects off), or the same setting on a Mac.
 
 The Templates, Colours and side panel toolboxes are laid out by the app; they can be renamed, hidden, moved in the list and (except the side panel) deleted.
