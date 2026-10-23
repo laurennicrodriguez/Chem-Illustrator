@@ -38,9 +38,7 @@ Cyclopropane to cyclooctane, benzene and cyclopentadiene.
 Ready-made structures in palettes on the tool bar, plus **My templates**:
 
 - **Ring systems**, **Heterocycles**, **Amino acids** and **Sugars** (pyranoses and furanoses flat and as ⁴C₁ chairs).
-- **Conformers**: cyclohexane chair (both ring flips), boat, twist-boat, half-chair and cyclohexanone; the cyclopentane envelope and half-chair, cyclopentene, puckered cyclobutane; the cycloheptane twist-chair, cyclooctane boat-chair and crown, and the cyclooctatetraene tub. The "with its bonds" versions show every axial and equatorial bond.
-- **Fused and caged rings in 3-D**: trans- and cis-decalin and hydrindane, diquinane, hydroazulene, perhydrophenanthrene and perhydroanthracene, the 5α and 5β steroid skeletons, adamantane, twistane and cubane.
-- **Bicyclic rings**: first the scaffolds chemists draw most, as they are usually drawn: norbornane, bicyclo[2.2.2]octane, camphor, bornane, pinane, tropane, quinuclidine and DABCO, then the saturated bioisosteres (bicyclo[1.1.1]pentanes, bicyclo[2.1.1]hexanes, 2-oxa- and 2-azabicyclo[2.1.1]hexanes, bicyclo[2.2.2]octanes, 3-oxa- and 3-azabicyclo[3.1.1]heptanes, spiro[3.3]heptanes and their aza and oxa versions), bare and with two substituents at their exit vectors; then bicyclo[1.1.0]butane up to bicyclo[4.4.1]undecane. All drawn in 3-D.
+- **Conformers and fused rings in 3-D**: the cyclohexane chair (both ring flips, bare and with every axial and equatorial bond) and boat; trans- and cis-decalin, trans-hydrindane, cis-hydrindane, perhydrophenanthrene and perhydroanthracene, the 5α and 5β steroid skeletons, adamantane and cubane.
 - **Crossing bonds in 3-D drawings**: in anything placed from these palettes (and rings fused onto them), the bond that is further back gets the small white gap where a nearer bond crosses it.
 - **Projections and stereocentres**: Newman, sawhorse and Fischer projections; tetrahedral centres drawn several ways; trigonal bipyramidal, octahedral, square pyramidal and square planar centres; zig-zag chains with wedges.
 - **Large rings**: 9- to 20-membered rings, as polygons and folded.

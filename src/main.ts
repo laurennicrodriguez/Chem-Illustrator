@@ -358,10 +358,16 @@ const OWN_PALETTE: PaletteDef = {
 };
 
 // Template palettes, one per kind of structure
+// 3-D templates kept off the palettes until they are redrawn; Fuse a Ring Here still uses some of them.
+const OFF_PALETTE = new Set([
+  'boat-ae', 'twist-boat', 'half-chair', 'half-chair-ae', 'cyclohexanone', 'envelope', 'envelope-ae', 'c5-twist', 'cyclopentene',
+  'cyclobutane', 'cyclobutane-ae', 'cyclopropane-ae', 'c7-twist-chair', 'c8-boat-chair', 'c8-crown', 'cot-tub',
+  'cis-bicyclooctane', 'perhydroazulene', 'twistane',
+]);
 const templatePalette = (group: Template['group'] | Template['group'][], palette: string, title: string, columns: number, iconSize?: number): PaletteDef => ({
   palette,
   title,
-  items: TEMPLATES.filter((t) => (Array.isArray(group) ? group.includes(t.group) : t.group === group)).map((t) => ({ name: `tpl-${t.id}`, title: t.name })),
+  items: TEMPLATES.filter((t) => (Array.isArray(group) ? group.includes(t.group) : t.group === group) && !OFF_PALETTE.has(t.id)).map((t) => ({ name: `tpl-${t.id}`, title: t.name })),
   columns,
   large: true,
   iconSize,
@@ -412,9 +418,7 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     templatePalette('heterocycles', 'tpl-heterocycles', 'Heterocycles', 7),
     templatePalette('amino', 'tpl-amino', 'Amino acids', 5, 64),
     templatePalette('sugars', 'tpl-sugars', 'Sugars', 4, 64),
-    templatePalette('conformers', 'tpl-conformers', 'Conformers', 5, 64),
-    templatePalette('fused', 'tpl-fused', 'Fused and caged rings in 3-D', 4, 64),
-    templatePalette('bicyclics', 'tpl-bicyclics', 'Bicyclic rings', 5, 56),
+    templatePalette(['conformers', 'fused'], 'tpl-conformers', 'Conformers and fused rings in 3-D', 5, 64),
     templatePalette(['projections', 'stereo'], 'tpl-projections', 'Projections and stereocentres', 6, 56),
     templatePalette('cycloalkanes', 'tpl-cycloalkanes', 'Large rings', 6, 56),
     templatePalette('aromatics', 'tpl-aromatics', 'Aromatics', 6, 56),
