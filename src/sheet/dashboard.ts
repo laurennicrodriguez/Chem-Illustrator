@@ -1,14 +1,15 @@
 // Dashboards: a sheet of tiles (charts, headline numbers, tables, slicers, galleries of
 // structures, notes) laid out on a grid and fed by the workbook's tables. Clicking values in a
-// slicer filters every tile fed by the same table, as PowerBI's slicers do; the cells themselves
-// are never changed.
+// slicer filters every tile fed by the same table, as PowerBI's slicers do, and so does clicking a
+// bar, a slice or a Sankey node or band of a chart (the chart itself shows what was picked); the
+// cells themselves are never changed.
 
 import type { Sheet, Workbook } from './workbook';
 import type { Range } from './refs';
 import { inRange } from './refs';
 import type { Value } from './values';
 import { isError } from './values';
-import { Chart, SeriesData, readRef, refText, mapChartRefs } from './chart';
+import { Chart, ChartPick, SeriesData, readRef, refText, mapChartRefs, sankeyOfColumns, toLabel } from './chart';
 import { adjustFormula, renameSheetInFormula, SheetChange } from './formula';
 
 /** Where a tile's rows come from: a table by name (it grows with the table), or a block of cells with a header row. */
@@ -37,6 +38,8 @@ export interface ChartTile extends TileBase {
   chart: Chart;
   /** Rows with the same label are combined into one bar or point (an average, a total…); unset: one per row. */
   group?: Aggregate;
+  /** What a click on the chart picked: rows that don't match are left out of the other tiles, as a slicer leaves them out. */
+  pick?: ChartPick;
 }
 export interface KpiTile extends TileBase {
   kind: 'kpi';
@@ -179,6 +182,53 @@ export function slicerMask(wb: Workbook, d: Dashboard): Map<Sheet, Set<number>> 
   return out;
 }
 
+/**
+ * The rows the charts' picks leave out (all but chart `except`, which shows its own pick as a
+ * highlight; `only` takes that one chart's alone): a row is left out when its label at a picked
+ * level isn't the one picked. A level's labels are the cells its series reads them from.
+ */
+export function pickMask(wb: Workbook, d: Dashboard, except?: number, only?: number): Map<Sheet, Set<number>> {
+  const out = new Map<Sheet, Set<number>>();
+  for (const t of d.tiles) {
+    if (t.kind !== 'chart' || !t.pick?.length || t.id === except || (only !== undefined && t.id !== only)) continue;
+    for (const p of t.pick) {
+      const s = t.chart.series[p.level] ?? t.chart.series[0];
+      const got = s?.x ? readRef(wb, s.x, wb.sheet) : null;
+      if (!got) continue;
+      let set = out.get(got.sheet);
+      if (!set) out.set(got.sheet, (set = new Set()));
+      for (let r = got.range.r1; r <= Math.min(got.range.r2, Math.max(got.sheet.lastRow, got.range.r1)); r++) {
+        if (toLabel(got.sheet.value(r, got.range.c1)) !== p.value) set.add(r);
+      }
+    }
+  }
+  return out;
+}
+
+/** Two sets of rows left out, together. */
+export function joinMasks(...masks: Map<Sheet, Set<number>>[]): Map<Sheet, Set<number>> {
+  const out = new Map<Sheet, Set<number>>();
+  for (const m of masks) for (const [s, rows] of m) { const set = out.get(s) ?? new Set<number>(); for (const r of rows) set.add(r); out.set(s, set); }
+  return out;
+}
+
+/** The rows a tile leaves out: the slicers', and every chart's pick but its own. */
+export const filterMask = (wb: Workbook, d: Dashboard, tile?: number): Map<Sheet, Set<number>> => joinMasks(slicerMask(wb, d), pickMask(wb, d, tile));
+
+/** Does any slicer or chart pick filter the dashboard? */
+export const filtered = (d: Dashboard): boolean => d.tiles.some((t) => (t.kind === 'slicer' && !!t.selected?.length) || (t.kind === 'chart' && !!t.pick?.length));
+
+/** The dashboard with every slicer and chart pick cleared. */
+export const unfiltered = (d: Dashboard): Dashboard => ({
+  ...d,
+  tiles: d.tiles.map((t): Tile => (t.kind === 'slicer' && t.selected ? { ...t, selected: undefined } : t.kind === 'chart' && t.pick ? { ...t, pick: undefined } : t)),
+});
+
+/** A picked part described for people ("Ring: Aromatic → Size: 6-membered"). */
+export function pickText(t: ChartTile, names: string[]): string {
+  return (t.pick ?? []).map((p) => (names[p.level] ? `${names[p.level]}: ${p.value}` : p.value)).join(' → ');
+}
+
 /** The rows of a source a tile shows, with the slicers applied. */
 export function shownRows(res: Resolved, mask: Map<Sheet, Set<number>>): number[] {
   const m = mask.get(res.sheet);
@@ -273,6 +323,13 @@ export function chartOfColumns(res: Resolved, kind: Chart['kind'], x: string | u
     ...(series.length === 1 && kind !== 'scatter' ? { title: ys[0] } : {}),
     at: { row: 0, col: 0, dx: 0, dy: 0 }, w: 480, h: 290,
   };
+}
+
+/** A Sankey chart of a source: its level columns left to right, and a column of amounts (unset: each row counts once). */
+export function sankeyOfSource(res: Resolved, levels: string[], value: string | undefined, id: number): Chart {
+  const first = res.range.r1 + 1, last = Math.max(first, res.rows[res.rows.length - 1] ?? first);
+  const cols = levels.map((n) => columnOf(res, n)).filter((c): c is number => c !== null);
+  return { ...sankeyOfColumns(res.sheet.name, res.range.r1, first, last, cols, columnOf(res, value)), id, w: 480, h: 290 };
 }
 
 // ---------------------------------------------------------------- keeping references right

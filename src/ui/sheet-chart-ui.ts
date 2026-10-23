@@ -432,7 +432,9 @@ export class SheetCharts {
     out.push(row('Border', check(c.border !== false, (v) => this.patch((x) => clean({ ...x, border: v ? undefined : false }), 'Chart border'))));
     if (!this.ownData) out.push(row('Hidden rows', check(!!c.showHidden, (v) => this.patch((x) => clean({ ...x, showHidden: v || undefined }), 'Chart hidden rows'), 'Chart them too (off: a filtered table charts what shows)')));
 
-    if (c.kind !== 'pie') {
+    // a Sankey chart has no axes, and its series are its levels
+    const sankey = c.kind === 'sankey';
+    if (c.kind !== 'pie' && !sankey) {
       const axis = (p: 'x' | 'y' | 'y2', name: string) => {
         const a = c[p] ?? {};
         const set = (q: Partial<ChartAxis>, label = 'Axis') => this.patch((x) => ({ ...x, [p]: clean({ ...x[p], ...q }) }), label);
@@ -456,10 +458,11 @@ export class SheetCharts {
     const data = chartData(this.view.wb!, this.sheet, c);
     const fits = chartFits(c, data);
     c.series.forEach((s, i) => {
-      out.push(head(`Series ${i + 1}: ${data[i]?.name ?? ''}`));
+      out.push(head(`${sankey ? 'Level' : 'Series'} ${i + 1}: ${data[i]?.name ?? ''}`));
       out.push(row('Name', text(s.name ?? '', (v) => this.patchSeries(i, { name: v || undefined }, 'Series name'), `Series ${i + 1}`)));
-      out.push(row('Values', text(s.y, (v) => v && this.patchSeries(i, { y: this.asRef(v)! }, 'Series values'), '', true)));
-      if ((c.kind !== 'pie' || i === 0) && c.kind !== 'histogram') out.push(row(isXY(c.kind) ? 'X values' : 'Labels', text(s.x ?? '', (v) => this.patchSeries(i, { x: this.asRef(v) }, 'Series x values'), c.kind === 'box' ? 'one box' : '1, 2, 3…', true)));
+      out.push(row(sankey ? 'Amounts' : 'Values', text(s.y, (v) => v && this.patchSeries(i, { y: this.asRef(v)! }, 'Series values'), '', true)));
+      if ((c.kind !== 'pie' || i === 0) && c.kind !== 'histogram') out.push(row(isXY(c.kind) ? 'X values' : sankey ? 'Categories' : 'Labels', text(s.x ?? '', (v) => this.patchSeries(i, { x: this.asRef(v) }, 'Series x values'), c.kind === 'box' ? 'one box' : '1, 2, 3…', true)));
+      if (sankey) { if (c.series.length > 1) out.push(row('', button('Remove this level', () => this.patch((x) => ({ ...x, series: x.series.filter((_, j) => j !== i) }), 'Remove level')))); return; }
       if (c.kind === 'bubble') out.push(row('Sizes', text(s.size ?? '', (v) => this.patchSeries(i, { size: this.asRef(v) }, 'Bubble sizes'), 'all the same', true)));
       if (c.kind === 'combo') {
         out.push(row('Drawn as', select([['column', 'Columns'], ['line', 'A line']], comboAs(s, i), (v) => this.patchSeries(i, { as: v === (i === 0 ? 'column' : 'line') ? undefined : v as 'column' | 'line' }, 'Series drawn as')),

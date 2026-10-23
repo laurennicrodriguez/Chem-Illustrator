@@ -1756,6 +1756,7 @@ dialog.cf-manage { width: min(92vw, 640px); }
 .dash-head:empty { padding: 0; }
 .dash-body { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
 .dash-tile-chart .dash-body { overflow: hidden; }
+.dash-tile-chart canvas.dash-pickable { cursor: pointer; }
 .dash-size { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; background: linear-gradient(135deg, transparent 55%, #9aa3b5 55%, #9aa3b5 62%, transparent 62%, transparent 75%, #9aa3b5 75%, #9aa3b5 82%, transparent 82%); opacity: 0; }
 .dash-tile:hover .dash-size, .dash-tile.picked .dash-size { opacity: 1; }
 .dash-kpi { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; padding: 0 10px; font-size: 34px; font-weight: 600; font-variant-numeric: tabular-nums; color: #1d2330; white-space: nowrap; }
