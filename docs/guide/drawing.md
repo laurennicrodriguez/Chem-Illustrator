@@ -185,7 +185,7 @@ The **Format** menu has:
 - **Bring to Front** and **Send to Back** for shapes and pictures;
 - **Bring Bond to Front** and **Send Bond to Back**: where two bonds cross, the one behind gets a small gap.
 
-**View ▸ Alignment Guides** makes things you move snap into line with other structures, text, arrows, shapes and the page edges, with pink guide lines. Structures line up by their atoms and bonds, not the edges of their labels. A guide only shows to something with nothing in between, and only the closest match each way. It starts off in drawings. Hold Alt while dragging to move freely.
+**View ▸ Alignment Guides** makes things you move snap into line with other structures, text, arrows and shapes, with pink guide lines. Structures line up by their atoms and bonds, not the edges of their labels. A guide only shows to something with nothing in between, and only the closest match each way. It starts off in drawings. Hold Alt while dragging to move freely.
 
 Undo (Ctrl+Z) and Redo (Ctrl+Y) select what they changed, so you can see what came back and move it straight away.
 
@@ -309,9 +309,9 @@ Press **Apply**. One Undo puts everything back.
 
 ## The page
 
-A drawing sits on a page, a sheet of paper whose edge shows as a thin line. **View ▸ Page Edge** hides or shows it.
+A drawing is endless: scroll as far as you like in any direction. It still has a page size, which is saved with the file but not drawn on screen.
 
-**File ▸ Page Setup…** picks the paper: Letter, A4, Legal, A3, Tabloid, your own size in inches, or no page (an endless drawing). The page drawn on is half an inch in from each edge of the paper. Choose **Portrait** or **Landscape**, and what happens when the drawing goes past the edge: **Add pages** adds more sheets (shown with dashed edges), and **Keep it on the page when saving** moves things back inside it when you save. Tick **Use this for new drawings** to make it the default. The page size is saved in the .cdxml file, so ChemDraw opens it on the same paper.
+**File ▸ Page Setup…** picks the paper: Letter, A4, Legal, A3, Tabloid, your own size in inches, or no page (an endless drawing). The page drawn on is half an inch in from each edge of the paper. Choose **Portrait** or **Landscape**, and what happens when the drawing goes past the edge: **Add pages** adds more sheets, and **Keep it on the page when saving** moves things back inside it when you save. Tick **Use this for new drawings** to make it the default. The page size is saved in the .cdxml file, so ChemDraw opens it on the same paper.
 
 ## Dark page
 

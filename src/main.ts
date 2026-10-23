@@ -1928,7 +1928,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   if (words) fieldEnv.fileName = ws.mainOf(tab).name;
   docMode.show(words ? tab : null);
   renderer.screen = !!deck;
-  renderer.page = deck ? slidePage : drawingPage;
+  renderer.page = deck ? slidePage : null;
   editor.slideKeys = slides;
   editor.cropping = null;
   editor.lastEdited = null;
@@ -4243,7 +4243,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['new-from-template', 'check-accessibility', 'format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'export-settings', 'import-settings', 'customize-ribbon', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'reset-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'title-bar-in-menu', 'collapse-ribbon', 'page-edge', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
+  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'title-bar-in-menu', 'collapse-ribbon', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
   'help', 'about', 'user-guide', 'help-here', 'send-feedback', 'report-problem', 'check-updates']);
 
 // ---------------------------------------------------------------- accessibility (Review > Check Accessibility, Alt Text…)
@@ -4723,7 +4723,6 @@ const COMMANDS: Record<string, () => unknown> = {
   'scroll-bars': () => { showScrollBars(!scrollbars.shown); storeSettings(); },
   'collapse-ribbon': () => { setRibbonCollapsed(!ribbonCollapsed()); storeSettings(); },
   'title-bar-in-menu': () => { void placeTitleBar(titleBarPlace() === 'app' ? 'system' : 'app'); storeSettings(); },
-  'page-edge': () => { showPageEdge(!pageEdge); storeSettings(); },
   'page-setup': () => void pageSetup(),
   'text-bar-docked': () => { placeTextBar('docked'); storeSettings(); },
   'text-bar-floating': () => { placeTextBar('floating'); storeSettings(); },
@@ -5850,7 +5849,6 @@ function currentSettings(): Settings {
     ribbonCollapsed: ribbonCollapsed(),
     textBar: CaptionEditor.barPlace,
     page: defaultPage,
-    pageEdge,
     welcomed,
     groupTips: labelTips.enabled,
     chemTyping: typingPrefs.chemistry,
@@ -6051,7 +6049,6 @@ function applySettings(s: Settings): void {
   void placeTitleBar(s.titleBar);
   setRibbonCollapsed(s.ribbonCollapsed);
   defaultPage = s.page;
-  showPageEdge(s.pageEdge);
   welcomed = s.welcomed;
   // the drawing open at start (empty and never saved) takes the default page
   if (!doc.page && !doc.source && !doc.atoms.size && !deckNow()) doc.page = defaultPage && { ...defaultPage };
@@ -7930,27 +7927,6 @@ const scrollbars = new Scrollbars(host, renderer, () => {
 
 /** The page new drawings start on (File > Page Setup's default). */
 let defaultPage: Settings['page'] = { name: 'letter', w: 540, h: 720, grow: true };
-/** View > Page Edge. */
-let pageEdge = true;
-
-/** The page's edge in a drawing: the first sheet as a line, and sheets the drawing has spread onto dashed. */
-const drawingPage = {
-  draw(ctx: CanvasRenderingContext2D): void {
-    const p = doc.page;
-    if (!p || !pageEdge) return;
-    const b = doc.bounds();
-    const wp = p.grow && b ? Math.max(1, Math.ceil((b.x2 + 1) / p.w)) : 1, hp = p.grow && b ? Math.max(1, Math.ceil((b.y2 + 1) / p.h)) : 1;
-    ctx.save();
-    const px = 1 / Math.max(1e-6, renderer.view.scale);
-    ctx.lineWidth = px;
-    ctx.strokeStyle = dark.on ? 'rgba(255, 255, 255, 0.28)' : 'rgba(90, 100, 120, 0.45)';
-    for (let i = 0; i < wp; i++) for (let j = 0; j < hp; j++) {
-      ctx.setLineDash(i || j ? [6 * px, 4 * px] : []);
-      ctx.strokeRect(i * p.w, j * p.h, p.w, p.h);
-    }
-    ctx.restore();
-  },
-};
 
 // ---------------------------------------------------------------- the welcome card
 
@@ -7975,16 +7951,6 @@ function showWelcome(): void {
   requestAnimationFrame(watch);
 }
 
-// (the drawing open at start shows its page too)
-if (!renderer.page && !deckNow()) { renderer.page = drawingPage; renderer.repaintAll(); }
-
-function showPageEdge(on: boolean): void {
-  pageEdge = on;
-  $('[data-cmd="page-edge"]')?.setAttribute('aria-checked', String(on));
-  renderer.repaintAll();
-  editor.requestScene();
-}
-
 /** File > Page Setup…: the drawing's paper size and way up, whether it adds pages, and the default for new drawings. */
 async function pageSetup(): Promise<void> {
   const p = doc.page;
@@ -7997,7 +7963,7 @@ async function pageSetup(): Promise<void> {
     { name: 'h', label: 'Your own size: height (in)', value: String(Math.round(((p?.h ?? 720) + 72) / 72 * 100) / 100), type: 'number' },
     { name: 'grow', label: 'When the drawing goes past the page', value: !p || p.grow ? 'grow' : 'keep', options: [{ value: 'grow', label: 'Add pages (as ChemDraw does)' }, { value: 'keep', label: 'Keep it on the page when saving' }] },
     { name: 'dflt', label: 'Use this for new drawings', type: 'checkbox', value: 'false' },
-  ], { ok: 'OK', note: 'Sizes are the paper; the page drawn on is half an inch in from each edge, as in ChemDraw. View ▸ Page Edge shows or hides the edge.' });
+  ], { ok: 'OK', note: 'Sizes are the paper; the page drawn on is half an inch in from each edge, as in ChemDraw. The page isn\'t drawn on screen (the drawing stays endless); it is saved with the file for ChemDraw.' });
   if (!got) return;
   let next: Settings['page'] = null;
   if (got.paper !== 'none') {

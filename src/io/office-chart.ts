@@ -4,7 +4,7 @@
 // puts the numbers it cached back into cells.
 
 import { Package, PackageReader, kids } from './ooxml';
-import { chartXml, readChartXml, CT_CHART, REL_CHART, CT_CHARTEX, REL_CHARTEX, CX_NS } from './xlsx-chart';
+import { chartXml, readChartXml, CT_CHART, REL_CHART, CT_CHARTEX, REL_CHARTEX, CX_NS, addChartExStyle } from './xlsx-chart';
 import { writeXlsx, type XlsxPictures } from './xlsx';
 import { ChartBox, boxBook, boxData, boxFromCaches, PX_PER_PT } from '../sheet/chart-box';
 import { newChartId, isChartEx } from '../sheet/chart';
@@ -43,6 +43,7 @@ export async function addChart(pkg: Package, from: string, dir: string, n: numbe
     ? chartXml(sized, boxData(box)).replace('<cx:chartData>', `<cx:chartData><cx:externalData r:id="${rid}" cx:autoUpdate="0"/>`)
     : chartXml(sized, boxData(box)).replace(/<\/c:chartSpace>$/, `<c:externalData r:id="${rid}"><c:autoUpdate val="0"/></c:externalData></c:chartSpace>`);
   pkg.add(path, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${body}`, ex ? CT_CHARTEX : CT_CHART);
+  if (ex) addChartExStyle(pkg, path, n);
   return pkg.relate(from, ex ? REL_CHARTEX : REL_CHART, relative(from, path));
 }
 

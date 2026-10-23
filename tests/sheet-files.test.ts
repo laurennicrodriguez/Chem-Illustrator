@@ -155,6 +155,13 @@ describe('telling an Excel file from other zips', () => {
     expect(zipHas(pptx, 'xl/workbook.xml')).toBe(false);
     expect(zipHas(pptx, 'ppt/presentation.xml')).toBe(true);
   });
+
+  it('ignores a workbook stored inside a Word file (the one beside a chart)', () => {
+    const inner = zipSync({ '[Content_Types].xml': strToU8('<Types/>'), 'xl/workbook.xml': strToU8('<workbook/>') }, { level: 0 });
+    const docx = zipSync({ '[Content_Types].xml': strToU8('<Types/>'), 'word/document.xml': strToU8('<d/>'), 'word/embeddings/Microsoft_Excel_Worksheet.xlsx': [inner, { level: 0 }] });
+    expect(zipHas(docx, 'xl/workbook.xml')).toBe(false);
+    expect(zipHas(docx, 'word/document.xml')).toBe(true);
+  });
 });
 
 describe('HTML on the Windows clipboard', () => {
