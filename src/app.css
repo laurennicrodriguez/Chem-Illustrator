@@ -352,6 +352,22 @@ body.slides-mode #canvas-host, body.design-mode #canvas-host { background: var(-
 .scrollbar-h .scroll-thumb { top: 2px; bottom: 2px; left: 0; }
 .scrollbar-v .scroll-thumb { left: 2px; right: 2px; top: 0; }
 .scroll-thumb:hover, .scroll-thumb.dragging { background: rgba(70, 80, 100, 0.6); }
+/* Settings > Navigation: the navigator map and the arrows at the edge (ui/orientation.ts) */
+.navigator { position: absolute; left: 0; top: 0; z-index: 5; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: #fff; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.14); cursor: crosshair; opacity: 0.94; touch-action: none; }
+.navigator:hover { opacity: 1; }
+.navigator[hidden] { display: none; }
+#canvas-host .navigator canvas { position: static; display: block; }
+.edge-arrows { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+.edge-arrow { position: absolute; left: 0; top: 0; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--accent); pointer-events: auto; cursor: pointer; opacity: 0.7; }
+.edge-arrow:hover { opacity: 1; background: var(--accent-soft); }
+.edge-arrow[hidden] { display: none; }
+.edge-arrow svg { width: 22px; height: 22px; display: block; fill: currentColor; stroke: #fff; stroke-width: 1.2; paint-order: stroke; }
+.edge-count { position: absolute; right: -8px; top: -7px; min-width: 14px; padding: 0 3px; border-radius: 7px; background: var(--accent); color: #fff; font: 600 9px/14px var(--ui-font); text-align: center; }
+.edge-count[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .edge-arrow { transition: none; } }
+.go-buttons { display: inline-flex; gap: 4px; }
+.go-buttons[hidden] { display: none; }
+.go-buttons button { font: 12px var(--ui-font); color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 0 6px; line-height: 18px; }
 #overlay { cursor: crosshair; touch-action: none; }
 .label-input {
   position: absolute;
@@ -1771,7 +1787,7 @@ dialog.cf-manage { width: min(92vw, 640px); }
 #formula-bar[hidden] { display: none; }
 
 /* View > Dark Page: the page canvases only, on screen (see dark-page.ts) */
-.dark-page #scene, .dark-page #overlay, .dark-page .doc-canvas, .dark-page .sh-canvas, .dark-page #main-snap canvas, .dark-page #split-snap { filter: url(#dark-page-filter); }
+.dark-page #scene, .dark-page #overlay, .dark-page .navigator canvas, .dark-page .doc-canvas, .dark-page .sh-canvas, .dark-page #main-snap canvas, .dark-page #split-snap { filter: url(#dark-page-filter); }
 .dark-page #canvas-host { background: var(--dark-paper, #1e1e1e); }
 #btn-dark { display: inline-flex; align-items: center; justify-content: center; padding: 0 7px; }
 #btn-dark svg { width: 18px; height: 18px; }

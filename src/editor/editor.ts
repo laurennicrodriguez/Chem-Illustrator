@@ -348,6 +348,8 @@ export class Editor {
   private pendingContext: MouseEvent | null = null;
   private rightDragged = false;
   onFrame: () => void = () => {};
+  /** Drawn on the overlay before the marks, in points (the tint outside the drawing). */
+  underlay: ((ctx: CanvasRenderingContext2D) => void) | null = null;
   onToolChange: (name: string) => void = () => {};
   /** The fragmentation tool drew a line from p to q across these bonds (the app works out the masses). */
   onFragment: (p: Vec, q: Vec, bonds: number[]) => void = () => {};
@@ -1094,7 +1096,27 @@ export class Editor {
     const raw = this.fitArea ? this.fitArea() : this.doc.bounds();
     if (!raw) return;
     // room for atom labels, which reach past the atoms themselves (H3N, Re)
-    const m = this.fitArea ? 0 : this.doc.style.labelSize * 1.5;
+    this.fitTo(raw, this.fitArea ? 0 : this.doc.style.labelSize * 1.5);
+  }
+
+  /**
+   * View > Go to Selection: bring what is selected into the middle of the window, at the zoom
+   * it is at; zoomed out to fit when it is too big to see whole. False with nothing selected.
+   */
+  goToSelection(): boolean {
+    const raw = this.hasSelection() ? this.selBox() : null;
+    if (!raw) return false;
+    const m = this.doc.style.labelSize * 1.5;
+    const s = this.r.view.scale;
+    if ((raw.x2 - raw.x1 + 2 * m) * s > 0.92 * this.r.width || (raw.y2 - raw.y1 + 2 * m) * s > 0.92 * this.r.height) { this.fitTo(raw, m); return true; }
+    this.r.view.ox = this.r.width / 2 - ((raw.x1 + raw.x2) / 2) * s;
+    this.r.view.oy = this.r.height / 2 - ((raw.y1 + raw.y2) / 2) * s;
+    this.requestScene();
+    return true;
+  }
+
+  /** Zoom and scroll so a box (in points, with a margin round it) fits the window. */
+  fitTo(raw: Rect, m: number): void {
     const b = { x1: raw.x1 - m, y1: raw.y1 - m, x2: raw.x2 + m, y2: raw.y2 + m };
     const w = this.r.width, h = this.r.height;
     const bw = Math.max(20, b.x2 - b.x1), bh = Math.max(20, b.y2 - b.y1);
@@ -4630,6 +4652,7 @@ export class Editor {
   private drawOverlay(): void {
     this.captionEd?.place();
     const ctx = this.r.clearOverlay();
+    this.underlay?.(ctx);
     const doc = this.doc;
     const scale = this.r.view.scale;
     const px = 1 / scale;

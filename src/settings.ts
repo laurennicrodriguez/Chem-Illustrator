@@ -3,6 +3,7 @@
 // %APPDATA%\io.github.nathanohare.chemillustrator); in a browser, the browser's storage for
 // this page. Drawings never go here.
 
+import { type OrientPrefs, DEFAULT_ORIENT, parseOrient } from './orientation-prefs';
 import { parseQuickParts, type QuickPart } from './document/quick-parts';
 import { parseDesign, type DocDesign } from './document/themes';
 import type { UpdateChannel } from './updates';
@@ -75,8 +76,6 @@ export interface Settings {
   page: { name?: string; w: number; h: number; grow: boolean } | null;
   /** The welcome card has been closed (it shows once, on a first empty drawing). */
   welcomed: boolean;
-  /** Show the page's edge in drawings (View > Page Edge). */
-  pageEdge: boolean;
   /** Where the text formatting bar goes while typing text (View > Text Formatting Bar). */
   textBar: 'docked' | 'floating' | 'hidden';
   /** Resting the mouse on an abbreviation shows the group written out (View > Group Tooltips). */
@@ -127,6 +126,8 @@ export interface Settings {
   darkPalettes: DarkPalette[];
   /** Alignment guides on or off in each kind of tab (View > Alignment Guides). */
   guides: { drawing: boolean; slides: boolean; design: boolean };
+  /** Finding your way round drawings: navigator, edge arrows, dot grid, outside tint, Fit and Go to Selection buttons (Settings ▸ Navigation). */
+  orient: OrientPrefs;
   /** Document settings boxes pinned in the panel on the right ('para', 'style', 'page', 'hf'). */
   docPins: string[];
   /** Document mode's ruler shown (View > Ruler). */
@@ -171,10 +172,11 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false, showRoles: true,
   chemTyping: true, stereoItalic: true, boldNumbers: false, autoLinks: true, linkCtrlClick: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
-  modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true, ribbonCollapsed: false, titleBar: typeof navigator !== 'undefined' && /Mac/.test(navigator.platform || navigator.userAgent) ? 'system' : 'app', page: { name: 'letter', w: 540, h: 720, grow: true }, pageEdge: true, welcomed: false, textBar: 'docked', groupTips: true,
+  modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true, ribbonCollapsed: false, titleBar: typeof navigator !== 'undefined' && /Mac/.test(navigator.platform || navigator.userAgent) ? 'system' : 'app', page: { name: 'letter', w: 540, h: 720, grow: true }, welcomed: false, textBar: 'docked', groupTips: true,
   citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', circledCharges: false, textToAtom: true, groupClick: 'group', groupOutline: true, rerouteArrows: true, superscriptR: true, linkSide: 'keep', slideTemplate: null, slideThemes: [], askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(), ribbons: {},
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
   guides: { drawing: false, slides: true, design: true },
+  orient: { ...DEFAULT_ORIENT },
   docPins: [],
   docRuler: false,
   sheetFormulaBar: true,
@@ -191,14 +193,15 @@ const STORAGE_KEY = 'chem-illustrator.settings';
 
 /** Read settings saved as text, keeping only what makes sense. */
 export function parseSettings(text: string | null | undefined): Settings {
-  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), ribbons: {}, myStyles: [], modeStyles: {}, darkPalettes: [], guides: { ...DEFAULT_SETTINGS.guides }, docPins: [], recentFiles: [], recentSymbols: [], highlightLooks: [], quickParts: [], scheme: { ...DEFAULT_SCHEME_PREFS }, keep: { ...DEFAULT_KEEP } };
+  const s: Settings = { ...DEFAULT_SETTINGS, hotkeys: {}, replacements: DEFAULT_SETTINGS.replacements.map(([a, b]) => [a, b]), dictionary: [], modeColours: { ...DEFAULT_MODE_COLOURS }, nicknames: {}, templates: [], palettes: [], toolboxes: defaultToolboxes(), ribbons: {}, myStyles: [], modeStyles: {}, darkPalettes: [], guides: { ...DEFAULT_SETTINGS.guides }, orient: { ...DEFAULT_ORIENT }, docPins: [], recentFiles: [], recentSymbols: [], highlightLooks: [], quickParts: [], scheme: { ...DEFAULT_SCHEME_PREFS }, keep: { ...DEFAULT_KEEP } };
   if (!text) return s;
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { return s; }
   if (!raw || typeof raw !== 'object') return s;
   const r = raw as Record<string, unknown>;
   if (r.hotkeys && typeof r.hotkeys === 'object' && !Array.isArray(r.hotkeys)) s.hotkeys = r.hotkeys as KeyOverrides;
-  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'stereoItalic', 'boldNumbers', 'autoLinks', 'linkCtrlClick', 'spellCheck', 'scrollBars', 'ribbonCollapsed', 'pageEdge', 'welcomed', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'textToAtom', 'groupOutline', 'rerouteArrows', 'superscriptR', 'updateCheck', 'pubchemNames', 'fileTypesOffered', 'wordObjectsOffered'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
+  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'stereoItalic', 'boldNumbers', 'autoLinks', 'linkCtrlClick', 'spellCheck', 'scrollBars', 'ribbonCollapsed', 'welcomed', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'textToAtom', 'groupOutline', 'rerouteArrows', 'superscriptR', 'updateCheck', 'pubchemNames', 'fileTypesOffered', 'wordObjectsOffered'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
+  s.orient = parseOrient(r.orient);
   if (r.page === null) s.page = null;
   else if (r.page && typeof r.page === 'object') {
     const p = r.page as Record<string, unknown>;

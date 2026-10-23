@@ -28,6 +28,18 @@ const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0
 const PNG_URL = `data:image/png;base64,${btoa(String.fromCharCode(...PNG))}`;
 const pictures: XlsxPictures = { box: () => ({ w: 60, h: 40 }), picture: async () => null };
 
+/** Office asks to repair (Word won't open) a chartEx without its style and colour parts beside it. */
+function expectChartExStyle(f: Record<string, Uint8Array>, dir: string, n: number): void {
+  const types = strFromU8(f['[Content_Types].xml']);
+  const rels = strFromU8(f[`${dir}/_rels/chartEx${n}.xml.rels`]);
+  expect(strFromU8(f[`${dir}/style${n}.xml`])).toMatch(/^<\?xml[^>]*>\n<cs:chartStyle [^>]*><cs:axisTitle><cs:lnRef idx="0"\/>.*<cs:wall>.*<\/cs:chartStyle>$/s);
+  expect(strFromU8(f[`${dir}/colors${n}.xml`])).toContain('<cs:colorStyle ');
+  expect(types).toContain(`PartName="/${dir}/style${n}.xml" ContentType="application/vnd.ms-office.chartstyle+xml"`);
+  expect(types).toContain(`PartName="/${dir}/colors${n}.xml" ContentType="application/vnd.ms-office.chartcolorstyle+xml"`);
+  expect(rels).toContain(`Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="style${n}.xml"`);
+  expect(rels).toContain(`Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="colors${n}.xml"`);
+}
+
 function sheetOf(rows: (string | number)[][]): Workbook {
   const wb = new Workbook();
   wb.edit('fill', () => rows.forEach((row, i) => row.forEach((v, j) => wb.sheet.setInput(i, j, String(v)))));
@@ -164,6 +176,13 @@ describe('in Excel files', () => {
     const gh = readChartXml(parse(hx), hist.at, hist.w, hist.h, 3)!;
     expect(gh.chart).toMatchObject({ kind: 'histogram', bins: { width: 5, overflow: 85 } });
     expect(sameChartData(gh.chart, hist)).toBe(true);
+    // axis titles have no place attributes (Office won't open a chart whose axis title has them); the chart's title does
+    const titled = { ...hist, title: 'Yields', x: { ...hist.x, title: 'Yield (%)' }, y: { ...hist.y, title: 'Count' } };
+    const tx = chartXml(titled, boxData({ ...hb, chart: titled }));
+    expect(tx).toContain('<cx:chart><cx:title pos="t" align="ctr" overlay="0">');
+    expect(tx).toMatch(/<cx:axis id="0"><cx:catScaling gapWidth="0"\/><cx:title><cx:tx>.*Yield \(%\)/);
+    expect(tx).toMatch(/<cx:axis id="1"><cx:valScaling\/><cx:title><cx:tx>.*Count/);
+    expect(readChartXml(parse(tx), titled.at, titled.w, titled.h, 3)!.chart).toMatchObject({ title: 'Yields', x: { title: 'Yield (%)' }, y: { title: 'Count' } });
 
     const bb = newChartBox('box');
     const box = { ...bb.chart, boxes: { points: true, quartiles: 'inclusive' as const } };
@@ -184,6 +203,7 @@ describe('in Excel files', () => {
     expect(f['xl/charts/chartEx1.xml']).toBeTruthy();
     expect(strFromU8(f['[Content_Types].xml'])).toContain('PartName="/xl/charts/chartEx1.xml" ContentType="application/vnd.ms-office.chartex+xml"');
     expect(strFromU8(f['xl/drawings/_rels/drawing1.xml.rels'])).toContain('http://schemas.microsoft.com/office/2014/relationships/chartEx');
+    expectChartExStyle(f, 'xl/charts', 1);
     const drawing = strFromU8(f['xl/drawings/drawing1.xml']);
     expect(drawing).toMatch(/<mc:AlternateContent [^>]*><mc:Choice xmlns:cx1="[^"]+" Requires="cx1"><xdr:graphicFrame/);
     expect(drawing).toContain('<mc:Fallback><xdr:sp');
@@ -217,6 +237,7 @@ describe('in Word and PowerPoint files', () => {
     const ex = strFromU8(f['word/charts/chartEx1.xml']);
     expect(ex).toMatch(/<cx:chartData><cx:externalData r:id="rId1" cx:autoUpdate="0"\/>/);
     expect(f['word/embeddings/Microsoft_Excel_Worksheet1.xlsx']).toBeTruthy();
+    expectChartExStyle(f, 'word/charts', 1);
     // without our own copy: the chart comes from Word's part and the numbers it cached
     delete f['customXml/item1.xml'];
     const back = (await readDocx(zipSync(f))).doc;
@@ -237,6 +258,7 @@ describe('in Word and PowerPoint files', () => {
     expect(slide).toMatch(/<mc:AlternateContent [^>]*><mc:Choice xmlns:cx1="[^"]+" Requires="cx1"><p:graphicFrame>/);
     expect(slide).toMatch(/<mc:Fallback><p:pic>/);
     expect(strFromU8(f['ppt/charts/chartEx1.xml'])).toContain('layoutId="boxWhisker"');
+    expectChartExStyle(f, 'ppt/charts', 1);
     const shape = readPptx(bytes).slides[0].contents.shapes.find((s) => s.chart);
     expect(shape?.chart?.chart.kind).toBe('box');
     expect(shape?.chart?.cells).toEqual(box.cells);

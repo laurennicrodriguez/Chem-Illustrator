@@ -30,7 +30,7 @@ import { DEFAULT_COL_W, DEFAULT_ROW_H, MAX_AUTO_ROW, structureHeight } from '../
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
 import { applyTint } from '../colours';
-import { chartXml, chartAnchorXml, readChartXml, CT_CHART, REL_CHART, C_NS, CX_NS, CT_CHARTEX, REL_CHARTEX } from './xlsx-chart';
+import { chartXml, chartAnchorXml, readChartXml, CT_CHART, REL_CHART, C_NS, CX_NS, CT_CHARTEX, REL_CHARTEX, addChartExStyle } from './xlsx-chart';
 import { Chart, chartData, seenChartId, newChartId, sameChartData, isChartEx } from '../sheet/chart';
 import { dashboardStandIn } from './xlsx-dashboard';
 import { Dashboard, seenTileId } from '../sheet/dashboard';
@@ -660,6 +660,7 @@ export async function writeXlsx(book: Workbook, deps: XlsxPictures, opts: { macr
       const ex = isChartEx(ch.kind);
       const cname = `${ex ? 'chartEx' : 'chart'}${chartNo}.xml`;
       pkg.add(`xl/charts/${cname}`, HEAD + chartXml(ch, standIn?.data.get(ch.id) ?? chartData(book, s, ch)), ex ? CT_CHARTEX : CT_CHART);
+      if (ex) addChartExStyle(pkg, `xl/charts/${cname}`, chartNo);
       const rid = pkg.relate(drawingPath, ex ? REL_CHARTEX : REL_CHART, `../charts/${cname}`);
       const x = cols.start(ch.at.col) + ch.at.dx, y = rows.start(ch.at.row) + ch.at.dy;
       const end = cols.at(x + ch.w, ch.at.col), endR = rows.at(y + ch.h, ch.at.row);
