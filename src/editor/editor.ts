@@ -905,12 +905,11 @@ export class Editor {
       case 'eraser':
       case 'element':
       case 'mark':
+      case 'pen':
         return 'none';
       case 'bond':
       case 'chain':
       case 'ring':
-      case 'pen':
-        return 'none';
       case 'arrow':
       case 'shape':
       case 'bracket':
