@@ -8,7 +8,11 @@ It is free and open source (GPL v3), and runs on Windows, macOS and Linux.
 
 > **Beta.** Chem Illustrator is under active development: new features arrive every few days and some things may not work as they should yet. Save often, and please [report anything that goes wrong](docs/guide/feedback.md). If you would rather update less often, choose **Stable** updates in **Edit ▸ Settings ▸ Online**: those versions are tried out on a real computer before they are offered.
 
-**[Download the latest version](https://github.com/nathanohare/Chem-Illustrator/releases/latest)** · **[User guide](docs/README.md)** · **[Send feedback](docs/guide/feedback.md)**
+### [▶ Try it in your browser](https://nathanohare.github.io/Chem-Illustrator/) · [Download the desktop app](https://github.com/nathanohare/Chem-Illustrator/releases/latest)
+
+Nothing to install or sign in to: the browser version opens straight away and keeps your work on your computer. The desktop app adds what a browser can't do: editing drawings inside Word and PowerPoint, AutoSave to your own folders, and automatic updates.
+
+**[User guide](docs/README.md)** · **[Send feedback](docs/guide/feedback.md)**
 
 ![A two-step reaction scheme in Drawing mode, with the Analysis panel showing the product's formula and masses](docs/images/drawing.png)
 
@@ -129,6 +133,10 @@ The **[user guide](docs/README.md)** covers each mode, every hotkey, and the fil
 ## Feedback
 
 Ideas, problems and questions are welcome. In the program, use **Help ▸ Send Feedback**: it fills in a new [issue](https://github.com/nathanohare/Chem-Illustrator/issues) on this page for you, or copies the text to send another way. See [Feedback, problems and ideas](docs/guide/feedback.md).
+
+## Try it
+
+**[▶ Try Chem Illustrator in your browser](https://nathanohare.github.io/Chem-Illustrator/)**, or **[download the desktop app](https://github.com/nathanohare/Chem-Illustrator/releases/latest)** for Windows, macOS or Linux.
 
 ## For developers
 
