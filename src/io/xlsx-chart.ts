@@ -3,7 +3,7 @@
 // axes and legend, and reading charts made in Excel back in. Each series keeps its cell
 // references and a copy of its numbers (for programs that don't work them out).
 
-import { xml, hex6, kid, kids } from './ooxml';
+import { xml, hex6, kid, kids, type Package } from './ooxml';
 import type { Chart, ChartAxis, ChartKind, Series, SeriesData, SeriesFit, ErrorBars, MarkerShape, Bins, BoxOptions } from '../sheet/chart';
 import { seenChartId, isChartEx, comboAs, onSecondAxis } from '../sheet/chart';
 import type { FitKind } from '../sheet/fit';
@@ -20,6 +20,44 @@ export const CX_NS = 'http://schemas.microsoft.com/office/drawing/2014/chartex';
 export const CX1_NS = 'http://schemas.microsoft.com/office/drawing/2015/9/8/chartex';
 export const CT_CHARTEX = 'application/vnd.ms-office.chartex+xml';
 export const REL_CHARTEX = 'http://schemas.microsoft.com/office/2014/relationships/chartEx';
+const CS_NS = 'http://schemas.microsoft.com/office/drawing/2012/chartStyle';
+const CT_CHART_STYLE = 'application/vnd.ms-office.chartstyle+xml';
+const CT_CHART_COLORS = 'application/vnd.ms-office.chartcolorstyle+xml';
+const REL_CHART_STYLE = 'http://schemas.microsoft.com/office/2011/relationships/chartStyle';
+const REL_CHART_COLORS = 'http://schemas.microsoft.com/office/2011/relationships/chartColorStyle';
+
+/** The parts of a chart's look ([MS-ODRAWXML] 2.3.4.2), each with every entry the schema asks for, in its order. */
+const STYLE_ENTRIES = ['axisTitle', 'categoryAxis', 'chartArea', 'dataLabel', 'dataPoint', 'dataPoint3D', 'dataPointLine', 'dataPointMarker',
+  'dataPointWireframe', 'dataTable', 'downBar', 'dropLine', 'errorBar', 'floor', 'gridlineMajor', 'gridlineMinor', 'hiLoLine', 'leaderLine',
+  'legend', 'plotArea', 'plotArea3D', 'seriesAxis', 'seriesLine', 'title', 'trendline', 'trendlineLabel', 'upBar', 'valueAxis', 'wall'];
+
+/** A plain chart style part: the chart's own formatting says how it looks, so every entry only points at the theme. */
+function chartStyleXml(): string {
+  const entry = (tag: string) => `<cs:${tag}><cs:lnRef idx="0"/><cs:fillRef idx="0"/><cs:effectRef idx="0"/><cs:fontRef idx="minor"><a:schemeClr val="tx1"/></cs:fontRef></cs:${tag}>`;
+  return `<cs:chartStyle xmlns:cs="${CS_NS}" xmlns:a="${A_NS}" id="201">${STYLE_ENTRIES.map(entry).join('')}</cs:chartStyle>`;
+}
+
+/** A chart colour part: the theme's six accents in turn, then lighter and darker turns of them. */
+function chartColorsXml(): string {
+  const accents = [1, 2, 3, 4, 5, 6].map((i) => `<a:schemeClr val="accent${i}"/>`).join('');
+  const turns = [[], [60000], [80000, 20000], [80000], [60000, 40000], [50000]]
+    .map(([mod, off]) => `<cs:variation>${mod ? `<a:lumMod val="${mod}"/>` : ''}${off ? `<a:lumOff val="${off}"/>` : ''}</cs:variation>`).join('');
+  return `<cs:colorStyle xmlns:cs="${CS_NS}" xmlns:a="${A_NS}" meth="cycle" id="10">${accents}${turns}</cs:colorStyle>`;
+}
+
+/**
+ * Give a newer chart part (chartEx) its style and colour parts, beside it as style`n`.xml and
+ * colors`n`.xml. Office writes them with every chartEx and asks to repair a file whose chartEx
+ * has none (Word won't open it at all).
+ */
+export function addChartExStyle(pkg: Package, chartPath: string, n: number): void {
+  const dir = chartPath.split('/').slice(0, -1).join('/');
+  const head = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+  pkg.add(`${dir}/style${n}.xml`, head + chartStyleXml(), CT_CHART_STYLE);
+  pkg.add(`${dir}/colors${n}.xml`, head + chartColorsXml(), CT_CHART_COLORS);
+  pkg.relate(chartPath, REL_CHART_STYLE, `style${n}.xml`);
+  pkg.relate(chartPath, REL_CHART_COLORS, `colors${n}.xml`);
+}
 
 // ---------------------------------------------------------------- writing
 
