@@ -19,7 +19,17 @@ export class StructurePictures {
 
   constructor(private style: () => DocStyle) {}
 
+  /** The style the pictures were made in: when it changes (a new style, or one undone), they are made again. */
+  private madeIn: DocStyle | null = null;
+
+  private fresh(): void {
+    if (this.madeIn === this.style()) return;
+    this.clear();
+    this.madeIn = this.style();
+  }
+
   private record(s: Structure): { doc: Doc; pic: Picture | null } {
+    this.fresh();
     let r = this.recorded.get(s.id);
     if (!r) {
       const doc = structureDoc(s.contents, this.style());
@@ -38,6 +48,7 @@ export class StructurePictures {
 
   /** The picture as a bitmap at `scale` pixels per point (or a little more). Null when it isn't made yet, unless `make`. */
   bitmap(s: Structure, scale: number, make: boolean): HTMLCanvasElement | null {
+    this.fresh();
     const step = Math.pow(STEP, Math.ceil(Math.log(Math.max(0.05, scale)) / Math.log(STEP)));
     const key = `${s.id}@${step.toFixed(3)}`;
     const got = this.bitmaps.get(key);

@@ -5,6 +5,7 @@
 
 import { showContextMenu, topMenuEntry, type MenuItem } from './context-menu';
 import { commandIcon } from './command-icons';
+import { listToGrid, parseGrid, type Grid } from './toolbox-grid';
 
 export type Dock = 'left' | 'right' | 'top' | 'bottom' | 'float';
 export const DOCKS: Dock[] = ['left', 'right', 'top', 'bottom', 'float'];
@@ -41,7 +42,15 @@ export interface ToolboxState {
   flyouts?: Record<string, string[]>;
   /** The icons jiggle while a toolbox is customized (never when the system asks for less motion). */
   jiggle?: boolean;
+  /** Each toolbox's buttons on a grid of cells, where set in Customize Toolboxes (it then outranks `items`). */
+  grids?: Record<string, Grid>;
+  /** Each fly-out palette's tools on a grid, where set (it then outranks `flyouts`). */
+  flyGrids?: Record<string, Grid>;
+  /** What a toolbox does when the window is too short for it: scroll, or wrap into more columns. Unset: see `overflowOf`. */
+  overflow?: Record<string, Overflow>;
 }
+
+export type Overflow = 'scroll' | 'wrap';
 
 /** A toolbox of your own. */
 export interface OwnBox { id: string; title: string }
@@ -106,6 +115,19 @@ export function defaultToolboxes(): ToolboxState {
   // the side panel (Style, Warnings, Analysis) is always shown, docked at the right to start with
   places.details = { shown: true, dock: 'right', x: 900, y: 90 };
   return { locked: true, places, custom: ['cmd:clean-up', 'cmd:add-frame', 'cmd:fill-rings', 'cmd:highlight', 'cmd:chain-ends'], sideCollapsed: false };
+}
+
+/**
+ * Every toolbox back where it starts (View > Reset Toolboxes): shown or hidden, docked or floating,
+ * open, and locked as they come. What is in them, their names and your own toolboxes are kept.
+ */
+export function withLayoutReset(st: ToolboxState): ToolboxState {
+  const d = defaultToolboxes();
+  const places = d.places;
+  (st.own ?? []).forEach((b, i) => { places[b.id] = { shown: true, dock: 'float', x: 160 + i * 24, y: 120 + i * 64 }; });
+  for (const id of st.removed ?? []) places[id] = { ...places[id], shown: false };
+  const { sideByMode: _, ...rest } = st;
+  return { ...rest, locked: d.locked, places, sideCollapsed: d.sideCollapsed };
 }
 
 /** Toolbox settings read from the settings file, keeping only what makes sense. */
@@ -177,6 +199,21 @@ export function parseToolboxes(raw: unknown): ToolboxState {
     if (Object.keys(by).length) s.flyouts = by;
   }
   if (r.jiggle === false) s.jiggle = false;
+  const grids = (v: unknown, valid: (k: string) => boolean, ok: (id: string) => boolean): Record<string, Grid> | undefined => {
+    if (!v || typeof v !== 'object') return undefined;
+    const by: Record<string, Grid> = {};
+    for (const [id, g] of Object.entries(v as Record<string, unknown>)) { const p = ok(id) ? parseGrid(g, valid) : null; if (p) by[id] = p; }
+    return Object.keys(by).length ? by : undefined;
+  };
+  const boxGrids = grids(r.grids, (k) => ITEM.test(k), (id) => known(id) && isEditable(id));
+  if (boxGrids) s.grids = boxGrids;
+  const flyGrids = grids(r.flyGrids, (k) => /^[^\s"'<>`]{1,80}$/.test(k), (id) => /^[\w-]{1,40}$/.test(id));
+  if (flyGrids) s.flyGrids = flyGrids;
+  if (r.overflow && typeof r.overflow === 'object') {
+    const by: Record<string, Overflow> = {};
+    for (const [id, v] of Object.entries(r.overflow as Record<string, unknown>)) if (known(id) && (v === 'scroll' || v === 'wrap')) by[id] = v;
+    if (Object.keys(by).length) s.overflow = by;
+  }
   // a toolbox of your own goes where the settings say, or floats
   for (const b of s.own ?? []) {
     const p = (r.places as Record<string, Record<string, unknown>> | undefined)?.[b.id];
@@ -209,17 +246,22 @@ export function withItems(st: ToolboxState, id: string, items: string[]): Toolbo
 
 /** A toolbox's buttons back as they come. */
 export function withItemsReset(st: ToolboxState, id: string, given: readonly string[] = []): ToolboxState {
-  if (id === 'custom') return { ...st, custom: [...given] };
+  const grids = { ...st.grids };
+  delete grids[id];
+  if (id === 'custom') return { ...st, custom: [...given], grids };
   const items = { ...st.items };
   delete items[id];
-  return { ...st, items };
+  return { ...st, items, grids };
 }
 
 /** A fly-out palette's tools changed, or back as they come (null). */
 export function withFlyout(st: ToolboxState, palette: string, tools: string[] | null): ToolboxState {
   const flyouts = { ...st.flyouts };
+  const flyGrids = { ...st.flyGrids };
+  // (a list of tools sets the grid aside: it is laid out again from the list)
+  delete flyGrids[palette];
   if (tools) flyouts[palette] = tools; else delete flyouts[palette];
-  return { ...st, flyouts };
+  return { ...st, flyouts, flyGrids };
 }
 
 /** Every toolbox there is now (the app's, less deleted ones, then your own), in the order they are listed. */
@@ -264,7 +306,9 @@ export function withoutBox(st: ToolboxState, id: string): ToolboxState {
     delete places[id];
     const items = { ...st.items };
     delete items[id];
-    return { ...st, own: st.own?.filter((b) => b.id !== id), places, items, ...(order ? { order } : {}) };
+    const grids = { ...st.grids };
+    delete grids[id];
+    return { ...st, own: st.own?.filter((b) => b.id !== id), places, items, grids, ...(order ? { order } : {}) };
   }
   return { ...st, removed: [...new Set([...(st.removed ?? []), id])], places: { ...st.places, [id]: { ...st.places[id], shown: false } } };
 }
@@ -384,11 +428,14 @@ export class Toolboxes {
       const vertical = place.dock === 'left' || place.dock === 'right';
       f.classList.toggle('vertical', vertical);
       f.classList.toggle('floating', place.dock === 'float');
-      f.classList.toggle('collapsed', this.hooks.folded?.(def.id) ?? !!place.collapsed);
+      const folded = this.hooks.folded?.(def.id) ?? !!place.collapsed;
+      f.classList.toggle('collapsed', folded);
       const locked = boxLocked(st, def.id);
       f.classList.toggle('locked', locked);
       const fold = f.querySelector<HTMLElement>('.tb-fold');
-      if (fold) { fold.textContent = place.collapsed ? '▸' : '▾'; fold.title = place.collapsed ? `Open ${def.title} out` : `Fold ${def.title} up to its title`; }
+      if (fold) { fold.textContent = folded ? '▸' : '▾'; fold.title = folded ? `Open ${def.title} out` : `Fold ${def.title} up to its title`; }
+      const tab = f.querySelector<HTMLElement>('.tb-tab');
+      if (tab) { tab.title = `Fold ${def.title} up to its title`; tab.setAttribute('aria-label', tab.title); }
       const lock = f.querySelector<HTMLElement>('.tb-lock');
       if (lock) { lock.innerHTML = lockIcon(locked, 14); lock.title = locked ? `Lock this toolbox's place (locked). Click to unlock it, then drag it by its title. The drawing itself is never locked.` : `Lock this toolbox's place (unlocked: drag it by its title). Click to lock it where it is.`; lock.setAttribute('aria-pressed', String(locked)); }
       f.dataset.dock = place.dock;
@@ -455,6 +502,11 @@ export class Toolboxes {
     if (p) this.place(id, { collapsed: (collapsed ?? !p.collapsed) || undefined });
   }
 
+  /** Every toolbox back where it starts (View > Reset Toolboxes). */
+  reset(): void {
+    this.change(withLayoutReset(this.hooks.get()));
+  }
+
   /** Fold the side panel to a strip at the right, or open it again, in one mode. */
   setSideCollapsed(mode: string, collapsed: boolean): void {
     this.change(withSideFolded(this.hooks.get(), mode, collapsed));
@@ -501,9 +553,15 @@ export class Toolboxes {
     lock.className = 'tb-lock';
     lock.addEventListener('click', () => this.setBoxLocked(def.id, !boxLocked(this.hooks.get(), def.id)));
     head.append(grip, name, lock, fold, close);
+    // a locked docked box hides its title bar, so this slim arrow folds it instead (folded, the title shows again to open it)
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = 'tb-tab';
+    tab.textContent = '▴';
+    tab.addEventListener('click', () => this.fold(def.id, true));
     const body = document.createElement('div');
     body.className = 'tb-body';
-    f.append(head, body);
+    f.append(head, tab, body);
     head.addEventListener('pointerdown', (e) => { if (e.button === 0 && !(e.target as Element).closest('button')) this.drag(def.id, f, e); });
     // right-click the title, or the box round its buttons (a locked docked box has no title showing)
     f.addEventListener('contextmenu', (e) => {
@@ -663,4 +721,47 @@ export function slotAt(boxes: readonly Box[], x: number, y: number): number {
     if (y <= r.bottom && x < (r.left + r.right) / 2) return i;
   }
   return boxes.length;
+}
+
+// ---------------------------------------------------------------- grids of buttons (Customize Toolboxes)
+
+/** How wide a toolbox's grid is when made from a list (the drawing tools: two columns, as on the bar). */
+const LIST_COLS: Record<string, number> = { main: 2 };
+
+/** A toolbox's buttons on their grid: as set, or laid out from its list (`given`: what it comes with). */
+export function boxGrid(st: ToolboxState, id: string, given: readonly string[] = []): Grid {
+  const g = st.grids?.[id];
+  if (g) return g;
+  const list = boxItems(st, id, given);
+  // a new toolbox of your own starts as an empty 4 × 3
+  if (!list.length) return { cols: 4, rows: 3, cells: Array(12).fill(null) };
+  return listToGrid(list, LIST_COLS[id]);
+}
+
+/** A toolbox's grid changed. */
+export function withGrid(st: ToolboxState, id: string, g: Grid): ToolboxState {
+  return { ...st, grids: { ...st.grids, [id]: g } };
+}
+
+/** A fly-out's tools on their grid: as set, or laid out from its list (`tools`) in `cols` columns. */
+export function flyGrid(st: ToolboxState, palette: string, tools: readonly string[], cols = 3): Grid {
+  return st.flyGrids?.[palette] ?? listToGrid(tools, Math.max(1, Math.min(cols, tools.length || 1)));
+}
+
+/** A fly-out's grid changed, or back as it comes (null). */
+export function withFlyGrid(st: ToolboxState, palette: string, g: Grid | null): ToolboxState {
+  const flyGrids = { ...st.flyGrids };
+  const flyouts = { ...st.flyouts };
+  delete flyouts[palette];
+  if (g) flyGrids[palette] = g; else delete flyGrids[palette];
+  return { ...st, flyGrids, flyouts };
+}
+
+/** What a toolbox does when the window is too short: as set, else the drawing tools wrap (as they always have) and the rest scroll. */
+export function overflowOf(st: ToolboxState, id: string): Overflow {
+  return st.overflow?.[id] ?? (id === 'main' ? 'wrap' : 'scroll');
+}
+
+export function withOverflow(st: ToolboxState, id: string, o: Overflow): ToolboxState {
+  return { ...st, overflow: { ...st.overflow, [id]: o } };
 }

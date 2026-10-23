@@ -63,6 +63,8 @@ export interface Query {
   table: string | null;
   /** When it was last read (ISO time). */
   refreshed?: string;
+  /** The columns it last loaded into its table: the table's other columns were added by hand, and a refresh keeps them. */
+  loaded?: string[];
 }
 
 let nextQueryId = 1;

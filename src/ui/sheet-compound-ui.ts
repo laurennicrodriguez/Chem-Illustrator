@@ -16,6 +16,8 @@ export interface CompoundUiHost {
   readonly view: SheetView;
   flash(msg: string, ms?: number): void;
   edit(label: string, fn: (s: Sheet) => void): void;
+  /** A change to the given sheet, showing or not; false when its workbook was closed meanwhile. */
+  editSheet(s: Sheet, label: string, fn: (s: Sheet) => void): boolean;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] => {
@@ -112,7 +114,8 @@ export class SheetCompounds {
       this.host.flash(`PubChem doesn't know ${missed.length === 1 ? missed[0] : `any of these: ${missed.slice(0, 4).join(', ')}${missed.length > 4 ? '…' : ''}`}.`, 8000);
       return;
     }
-    this.host.edit(onlyCards ? 'Refresh compound data' : 'Compound data type', (sh) => {
+    // into the sheet looked up from, even when another tab or sheet shows by now
+    const wrote = this.host.editSheet(s, onlyCards ? 'Refresh compound data' : 'Compound data type', (sh) => {
       for (const f of found) {
         const cell = sh.cell(f.r, f.c);
         // skip a cell changed while the look-ups ran
@@ -120,6 +123,7 @@ export class SheetCompounds {
         sh.setCompound(f.r, f.c, f.card);
       }
     });
+    if (!wrote) return;
     const header = missed.length === 1 && list[0].shown === missed[0];
     this.host.flash(`${onlyCards ? 'Refreshed' : 'Made'} ${found.length} compound${found.length > 1 ? 's' : ''}.${missed.length && !header ? ` PubChem doesn't know: ${missed.slice(0, 4).join(', ')}${missed.length > 4 ? '…' : ''}` : ''} Their cards are in the side panel; Insert Data adds a column of a property.`, missed.length && !header ? 9000 : 5000);
   }

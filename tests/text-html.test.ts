@@ -58,3 +58,14 @@ describe('pasting HTML from other programs', () => {
     expect(htmlToRich('<p>a<br>b<br></p>')?.runs.map((r) => r.text).join('')).toBe('a\nb');
   });
 });
+
+describe('pasting table cells as text', () => {
+  it('puts a tab between the cells of a row and a paragraph per row', () => {
+    const got = htmlToRich('<table>\n<tr>\n  <th>Name</th>\n  <th>Yield</th>\n</tr>\n<tr><td> Phenol</td><td><b>95</b></td></tr></table>');
+    expect(got?.runs.map((r) => r.text).join('')).toBe('Name\tYield\nPhenol\t95');
+  });
+  it('keeps a row on one line when its cells hold paragraphs (as Word writes them), and empty cells their tab', () => {
+    const got = htmlToRich('<table><tr><td><p>a</p></td><td></td><td><p>c</p></td></tr><tr><td><p>d</p></td><td><p>e</p></td><td><p>f</p></td></tr></table>');
+    expect(got?.runs.map((r) => r.text).join('')).toBe('a\t\tc\nd\te\tf');
+  });
+});

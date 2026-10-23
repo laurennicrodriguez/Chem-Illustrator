@@ -79,8 +79,10 @@ export interface SheetModeHost {
   key(e: KeyboardEvent): boolean;
   /** A ribbon command the sheet doesn't run itself (Format Painter, Insert Symbol: the same in every mode). */
   command?(name: string): boolean;
-  /** The workbook changed (for the unsaved mark on the tab). */
-  changed(): void;
+  /** The workbook changed (for the unsaved mark on the tab): the one showing, or `book` when given. */
+  changed(book?: Workbook): void;
+  /** Whether the workbook is still open in a tab (for work that finishes after an await). */
+  isOpen(book: Workbook): boolean;
   /** A name or SMILES as a drawing in this style. */
   toStructure(text: string, style: DocStyle): Promise<{ contents: Contents; notes: string[] } | { error: string }>;
   /** Put cells on the clipboard: our own copy, tab-separated text and an HTML table. */
@@ -254,7 +256,7 @@ export class SheetMode {
     });
     this.pivots = new SheetPivots({ view: this.view, flash: (m, ms) => this.host.flash(m, ms) });
     this.queries = new SheetQueries({ view: this.view, flash: (m, ms) => this.host.flash(m, ms) });
-    this.compounds = new SheetCompounds({ view: this.view, flash: (m, ms) => this.host.flash(m, ms), edit: (label, fn) => this.edit(label, fn) });
+    this.compounds = new SheetCompounds({ view: this.view, flash: (m, ms) => this.host.flash(m, ms), edit: (label, fn) => this.edit(label, fn), editSheet: (s, label, fn) => this.editSheet(s, label, fn) });
     const basic = { view: this.view, edit: (label: string, fn: (s: Sheet) => void) => this.edit(label, fn), flash: (m: string, ms?: number) => this.host.flash(m, ms) };
     this.look = new SheetLook(basic);
     this.outline = new SheetOutline({ ...basic, edit: (label, fn, after) => this.edit(label, fn, after), table: () => (this.view.sheet ? this.tableAt() : null) });
@@ -699,7 +701,8 @@ export class SheetMode {
       case 'chart-save': void this.charts.savePicture(); break;
       case 'chart-delete': this.charts.deleteChart(); break;
       case 'copy': if (this.charts.chart) void this.charts.copyPicture(); else if (v.selectedObject) this.host.flash('Use Duplicate on the right-click menu to copy a picture or shape.'); else void this.copy(); break;
-      case 'cut': void this.copy(true); break;
+      // a chart or picture isn't cut (a paste can't bring it back): cells under it aren't either
+      case 'cut': if (this.charts.chart || v.selectedObject) this.host.flash('Cut works on cells. Use Copy for a picture of this, or Delete to remove it.'); else void this.copy(true); break;
       case 'paste': void this.paste(null); break;
       case 'clear-contents': v.clearSelection(); break;
       case 'clear-all': this.edit('Clear', (s) => s.clear(v.sel.range, 'all')); break;
@@ -912,6 +915,20 @@ export class SheetMode {
     wb.edit(label, () => fn(s), this.view.place(), after ? () => ({ sheet: s, sel: after() }) : undefined);
     this.view.refresh();
     this.schedulePanel();
+  }
+
+  /**
+   * One undoable change to a given sheet, for work that awaited (names read, look-ups): the sheet
+   * may no longer be the one showing, and is then changed where it is. False when its workbook
+   * was closed or the sheet deleted meanwhile.
+   */
+  private editSheet(s: Sheet, label: string, fn: (s: Sheet) => void, sel?: Range): boolean {
+    const wb = s.wb;
+    if (!this.host.isOpen(wb) || !wb.sheets.includes(s)) return false;
+    if (wb === this.book && s === this.view.sheet) { this.edit(label, fn); return true; }
+    wb.edit(label, () => fn(s), sel ? { sheet: s, sel } : undefined);
+    if (wb === this.book) { this.view.refresh(); this.schedulePanel(); } else this.host.changed(wb);
+    return true;
   }
 
   /** Format Painter: the formats of the cells selected (null with no sheet). */
@@ -1456,14 +1473,16 @@ export class SheetMode {
       }
       if (!got.length) { this.host.flash(`None of these could be read as names or SMILES: ${missed.slice(0, 4).join(', ')}${missed.length > 4 ? '…' : ''}`, 9000); return; }
       const col = R.c1 + 1;
-      this.edit('Structures from names', (sh) => {
+      // into the sheet the names were read from, even when another tab or sheet shows by now
+      const wrote = this.editSheet(s, 'Structures from names', (sh) => {
         sh.insertCols(col, 1);
         for (const g of got) sh.setStructure(g.r, col, g.contents);
         sh.setColWidth(col, 150);
         const head = R.r1 > 0 && !texts.some((t) => t.r === R.r1 - 1) ? R.r1 - 1 : -1;
         const above = head >= 0 ? sh.values.get(keyOf(head, R.c1)) : undefined;
         if (head >= 0 && typeof above === 'string' && !sh.cell(head, col)) sh.setInput(head, col, 'Structure');
-      });
+      }, R);
+      if (!wrote) return;
       this.host.flash(`Drew ${got.length} structure${got.length > 1 ? 's' : ''} in column ${colName(col)}.${missed.length ? ` Not read: ${missed.slice(0, 4).join(', ')}${missed.length > 4 ? '…' : ''}` : ''}`, missed.length ? 9000 : 4000);
       return;
     }
@@ -1475,7 +1494,7 @@ export class SheetMode {
     if (!text) return;
     const res = await this.host.toStructure(text, style);
     if ('error' in res) { this.host.flash(res.error, 9000); return; }
-    this.edit('Structure from name', (sh) => sh.setStructure(r, c, res.contents));
+    if (!this.editSheet(s, 'Structure from name', (sh) => sh.setStructure(r, c, res.contents), { r1: r, c1: c, r2: r, c2: c })) return;
     if (res.notes.length) this.host.flash('Note from the name reader: ' + res.notes.join(' '), 9000);
   }
 

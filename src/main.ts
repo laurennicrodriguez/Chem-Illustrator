@@ -12,12 +12,13 @@ import './app.css';
 import type { MethylStyle } from './chem/hydrogens';
 import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
-import { Toolboxes, lockIcon, sideFolded, commandButton, defaultToolboxes, menuCommands, boxIds, boxItems, boxTitle, isEditable, isOwnBox, type Pickable, type ToolboxDef, type ToolboxState } from './ui/toolboxes';
+import { Toolboxes, lockIcon, sideFolded, commandButton, defaultToolboxes, menuCommands, boxIds, boxGrid, boxTitle, flyGrid, isEditable, isOwnBox, overflowOf, type Pickable, type ToolboxDef, type ToolboxState } from './ui/toolboxes';
+import { gridItems, inBlock, shownGrid, wrapped, type Grid, type Shown } from './ui/toolbox-grid';
 import { ToolboxEditor } from './ui/toolbox-editor';
 import { RibbonEditor } from './ui/ribbon-editor';
 import { readRibbons, applyRibbon, type RibbonInfo, type RibbonsPrefs } from './ui/ribbon-custom';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
-import { Doc, Atom, Caption, Shape, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle, type ShapeMath, PAPER, keepOnPage } from './model';
+import { Doc, Atom, Caption, Shape, type TextRun, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle, type ShapeMath, PAPER, keepOnPage } from './model';
 import { Renderer, measureText, forgetTextWidths } from './render/renderer';
 import { Editor, TOOLS, type HighlightToggle, type Selection } from './editor/editor';
 import { BUILT_IN_LOOKS, type HighlightLookPreset } from './ui/highlight-looks';
@@ -42,7 +43,7 @@ import { toMolfile, addMolfile } from './chem/molfile';
 import { bestFit, fitMove, fitMatters } from './chem/orient';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, fitPasted, typicalBondLength, Pasted,
+import { copyDrawing, copyImage, forgetCopy, looksLikeChemistry, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, fitPasted, typicalBondLength, Pasted,
   nativeFirst, writeNativeFormats, looksLikeCdxml, cfHtml, fromCfHtml, CELLS_FORMAT, OWN_FORMAT, CDX_FORMAT, setWordObjects, embeddedPicture, packFormats } from './io/clipboard';
 import { cdxToCdxml } from './io/cdx';
 import { writeCdxml } from './io/cdxml-write';
@@ -140,6 +141,7 @@ import { idText, labelClashes, parseIdStart, type IdStyle } from './chem/compoun
 import { schemeItems, isReactionArrow } from './chem/reaction';
 import { labelsOf, schemePrefs, setSchemePrefs, SPACING, type SchemePrefs } from './chem/scheme-layout';
 import { plainText, savableChar } from './richtext';
+import { htmlToRich } from './text/html';
 import { LiveStereo } from './chem/live-stereo';
 import { setStereoShown, shownDescriptor, axialStyle } from './chem/stereo';
 import { keymap, registerToolNames, displayChord, actionName, chordOf, parseAction, KeyContext, KeyOverrides } from './editor/keymap';
@@ -631,7 +633,7 @@ async function pasteFrom(read: () => Pasted | Promise<Pasted>): Promise<void> {
     }
     editor.sel = insertDrawing(doc, got.doc, pasteCentre());
     editor.changed();
-  } else if (got.kind === 'text') await pasteChemistry(got.text);
+  } else if (got.kind === 'text') await pasteText(got.text, got.html);
   else if (got.kind === 'picture') placePicture(got.bytes, got.mime, null);
   else if (got.kind === 'table') pasteTable(got.rows);
   else flash('There is nothing to paste.');
@@ -696,13 +698,13 @@ function pasteCentre(): { x: number; y: number } {
   return a ? { x: (a.x1 + a.x2) / 2, y: (a.y1 + a.y2) / 2 } : renderer.toDoc(renderer.width / 2, renderer.height / 2);
 }
 
-/** Paste a SMILES string or a molfile as a structure. */
-async function pasteChemistry(text: string): Promise<void> {
-  if (!chem.ready) { flash('The chemistry engine is still loading.'); return; }
+/** Paste a SMILES string or a molfile as a structure. With `quiet`, text that isn't one is left (false) without a message. */
+async function pasteChemistry(text: string, quiet = false): Promise<boolean> {
+  if (!chem.ready) { flash('The chemistry engine is still loading.'); return true; }
   const c = pasteCentre();
   let mb: string | null = text.includes('M  END') ? text : null;
   if (!mb && !/\s/.test(text)) mb = await chem.smilesToMol(text);
-  if (!mb) { flash('Paste a SMILES string or a molfile.'); return; }
+  if (!mb) { if (!quiet) flash('Paste a SMILES string or a molfile.'); return false; }
   try {
     let ids: number[] = [];
     doc.edit('Paste', () => { ids = addMolfile(doc, mb!, c.x, c.y); });
@@ -710,6 +712,37 @@ async function pasteChemistry(text: string): Promise<void> {
   } catch (err) {
     flash(String(err));
   }
+  return true;
+}
+
+/**
+ * Pasted text on a drawing, slide or design: a SMILES string or a molfile becomes a structure;
+ * other text (a Document's, Word's, a web page's) a text box in the middle, with its bold,
+ * italics, sub- and superscripts and colours from the HTML that came with it.
+ */
+async function pasteText(text: string, html?: string): Promise<void> {
+  if (looksLikeChemistry(text) && await pasteChemistry(text, true)) return;
+  const rich = html ? htmlToRich(html) : null;
+  // (the drawing's caption font and size, as typed text gets)
+  const runs = (rich?.runs ?? [{ text } as TextRun]).map(({ size: _s, font: _f, obj: _o, ...r }: TextRun) => r).filter((r) => r.text);
+  if (!runs.length) { flash('There is nothing to paste.'); return; }
+  const paras = rich && rich.paras.length > 1 ? rich.paras : undefined;
+  finishTyping();
+  renderer.useStyle(doc);
+  const c = pasteCentre();
+  // long text wraps: to the slide's content area, or about 25 bond lengths on a drawing
+  const area = slideContentArea();
+  const most = area ? area.x2 - area.x1 : doc.style.bondLength * 25;
+  const frame = (wrap?: number) => renderer.captionFrame({ id: -1, x: 0, y: 0, runs, justify: 'left', ...(paras ? { paras } : {}), ...(wrap ? { wrap } : {}) } as Caption);
+  let b = frame();
+  const wrap = b.x2 - b.x1 > most ? most : undefined;
+  if (wrap) b = frame(wrap);
+  let id = 0;
+  doc.edit('Paste text', () => {
+    id = doc.addCaption({ x: c.x - (b.x1 + b.x2) / 2, y: c.y - (b.y1 + b.y2) / 2, runs, justify: 'left', ...(paras ? { paras } : {}), ...(wrap ? { wrap } : {}) }).id;
+  });
+  editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set([id]), arrows: new Set(), shapes: new Set() };
+  editor.changed();
 }
 
 /** Insert ▸ Catalytic Cycle…: a ready-made cycle to edit, or the selected structures put round one. */
@@ -1765,6 +1798,8 @@ const ws: Workspace = new Workspace(doc, {
     if (tab.deck) { tab.deck.onChange = () => {}; tab.deck.onSwitch = () => {}; tab.deck.onMotion = () => {}; }
   },
   enter: (tab, opened) => enterTab(tab, opened),
+  // every way of closing a tab (×, middle-click, Delete, Ctrl+W) finishes a figure or cell structure first
+  closing: () => finishTyping(),
   changed: () => { renderTabs(); updateTitle(); layoutSplit(); tickAutoSave(); },
   flash,
   pptx: pptxOptions(),
@@ -3201,7 +3236,7 @@ async function drawingStyleDialog(): Promise<void> {
   const current = deck ? deck.master.drawing : book ? book.drawingStyle : file ? file.t.drawingStyle : doc.style;
   const hasStructures = deck ? deck.slides.some((_, i) => deck.docOf(i).atoms.size > 0)
     : file ? Object.values(file.t.objects).some((o) => o.kind === 'drawing' && o.contents.atoms.length > 0)
-    : book ? false : doc.atoms.size > 0 || doc.captions.size > 0;
+    : book ? book.sheets.some((s) => [...s.cells.values()].some((c) => !!c.structure)) : doc.atoms.size > 0 || doc.captions.size > 0;
   const got = await editDrawingStyle({
     current, own: ownStyles, kindPlural: STYLE_KINDS[mode].plural, where: STYLE_KINDS[mode].where,
     isDefault: modeStyleFor(mode) === current.name, hasStructures,
@@ -3222,8 +3257,7 @@ async function drawingStyleDialog(): Promise<void> {
   const next = got.style;
   if (deck) deck.setDrawingStyle(next, got.how);
   else if (book) {
-    book.drawingStyle = { ...next };
-    book.edits++;
+    book.setDrawingStyle(next, (c, old) => restyleContents(c, old, next, got.how));
     sheetMode.styleChanged();
   } else if (file) {
     const t = file.t, old = t.drawingStyle;
@@ -3744,7 +3778,8 @@ const sheetMode = new SheetMode({
   editStructure: (contents, title, done) => editCellStructure(contents, title, done),
   key: (e) => sheetKey(e),
   command: (name) => command(name),
-  changed: () => ws.noteChange(),
+  changed: (book) => ws.noteChange(book && ws.tabs.find((t) => t.book === book)),
+  isOpen: (book) => ws.tabs.some((t) => t.book === book),
   toStructure: (text, style) => textToStructure(text, style),
   writeCells: (own, text, html) => writeCells(own, text, html),
   copyStructure: async (contents, style) => (await copyDrawing(structureDoc(contents, style), null)).replace(/^Copied the whole drawing/, 'Copied the structure'),
@@ -3824,6 +3859,7 @@ async function textToStructure(text: string, style: DocStyle): Promise<{ content
  * and Word keep bold, colours and borders) and tab-separated text.
  */
 async function writeCells(own: string, text: string, html: string): Promise<void> {
+  forgetCopy();
   if (nativeClipboard) {
     const enc = new TextEncoder();
     await writeNativeFormats([[CELLS_FORMAT, enc.encode(own)], ['HTML Format', cfHtml(html)], ['CF_UNICODETEXT', enc.encode(text)]]);
@@ -3873,7 +3909,7 @@ function activeStructureDoc(): Doc | null {
 // Drawing a structure for a cell: the drawing area floats over the sheet, with Done and Cancel.
 // The cell's drawing is swapped into the editor's document while it's drawn (the sheet's tab
 // leaves that document empty), so every drawing tool, key and check works on it as usual.
-let cellEdit: { done: (c: Contents | null) => void; saved: Doc } | null = null;
+let cellEdit: { done: (c: Contents | null) => void; saved: Doc; view: typeof renderer.view } | null = null;
 
 function editCellStructure(contents: Contents | null, title: string, done: (c: Contents | null) => void, style: DocStyle = sheetStyle()): void {
   finishCellStructure(true);
@@ -3881,7 +3917,9 @@ function editCellStructure(contents: Contents | null, title: string, done: (c: C
   const drawing = structureDoc(contents ?? blank, style);
   editor.clearSelection();
   doc.swap(drawing);
-  cellEdit = { done, saved: drawing };
+  // the drawing beside (split view) waits in `drawing`, its zoom kept for after
+  cellEdit = { done, saved: drawing, view: { ...renderer.view } };
+  ws.aside = ws.pane ? drawing : null;
   document.body.classList.add('floating-drawing');
   layoutSplit();
   $('#structure-title').textContent = title;
@@ -3923,6 +3961,10 @@ function finishCellStructure(keep: boolean): void {
   editor.lastEdited = null;
   editor.cropping = null;
   doc.swap(e.saved);
+  ws.aside = null;
+  // the drawing beside is back as it was: not changed, at its own zoom
+  if (ws.pane) ws.pane.seen = doc.version;
+  renderer.view = e.view;
   document.body.classList.remove('floating-drawing');
   $('#structure-bar').hidden = true;
   const sheet = ws.active.mode === 'sheet';
@@ -3971,8 +4013,9 @@ window.addEventListener('keydown', (e) => {
 /** Menu commands that work differently while a sheet shows. */
 const SHEET_COMMANDS: Record<string, () => unknown> = {
   'sheet-new-window': () => { sheetMode.view.commitEdit(); ws.newWindow(); },
-  cut: () => sheetMode.copy(true),
-  copy: () => sheetMode.copy(),
+  // (through the sheet's own command, which copies a selected chart rather than the cells under it)
+  cut: () => sheetMode.run('cut'),
+  copy: () => sheetMode.run('copy'),
   paste: () => sheetMode.paste(null),
   'select-all': () => sheetMode.selectAll(),
   'copy-smiles': async () => {
@@ -4033,6 +4076,8 @@ const docMode = new DocumentMode({
   editDrawing: (contents, title, done) => editCellStructure(contents, title, done, docStyle()),
   editDiagram: (contents) => documentDiagram(contents),
   copyDrawing: async (contents, style) => (await copyDrawing(structureDoc(contents, style), null)).replace(/^Copied the whole drawing/, 'Copied the structure'),
+  copiedOther: () => forgetCopy(),
+  copyPicture: (src) => copyImage(src),
   readPaste: (e) => readDocPaste(e),
   toStructure: (text, style) => textToStructure(text, style),
   pickPicture: () => pickPicture(),
@@ -4197,7 +4242,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['new-from-template', 'check-accessibility', 'format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'export-settings', 'import-settings', 'customize-ribbon', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+const ANY_TAB = new Set(['new-from-template', 'check-accessibility', 'format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'export-settings', 'import-settings', 'customize-ribbon', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'reset-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
   'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'title-bar-in-menu', 'collapse-ribbon', 'page-edge', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
   'help', 'about', 'user-guide', 'help-here', 'send-feedback', 'report-problem', 'check-updates']);
 
@@ -4732,6 +4777,7 @@ const COMMANDS: Record<string, () => unknown> = {
   'customize-ribbon': () => ribbonEditor.open(RIBBON_OF_MODE[ws.active.mode]),
   'export-settings': () => void exportSettings(),
   'import-settings': () => void importSettingsFile(),
+  'reset-toolboxes': () => { toolboxes.reset(); flash('Toolboxes reset: Drawing Tools docked at the left, the others hidden, all open and locked.', 6000); },
   'lock-toolboxes': () => { toolboxes.setLocked(!toolboxState.locked); flash(toolboxState.locked ? 'Toolboxes locked.' : 'Toolboxes unlocked: drag one by its title to an edge of the drawing to dock it, or anywhere else to float.', 6000); },
   'add-frame': () => editor.addFrame() || flash('Select what to frame: structures, text, arrows or shapes.'),
   'fill-rings': () => flash(editor.fillRings(), 6000),
@@ -5149,7 +5195,9 @@ function layoutSplit(): void {
   const opts = ws.tabs.filter((t) => t.mode === 'drawing').map((t) => new Option(t.name.replace(/\.(cdxml|cdx)$/i, ''), String(t.id), false, t === st.drawing));
   opts.push(new Option('New drawing', 'new'));
   splitPick.replaceChildren(...opts);
-  $('#split-insert').textContent = st.main.mode === 'document' ? 'Insert into Document' : st.main.mode === 'sheet' ? 'Insert into Cell' : 'Insert into Slide';
+  $('#split-insert').textContent = st.main.mode === 'document' ? 'Insert into Document' : st.main.mode === 'sheet' ? 'Insert into Cell' : st.main.mode === 'design' ? 'Insert into Design' : 'Insert into Slide';
+  // while a figure's or cell's structure is drawn, Done puts that in; the drawing beside waits
+  $<HTMLButtonElement>('#split-insert').disabled = !!cellEdit;
   if (live) $('#split-empty').hidden = true;
   else drawSplitSnap(st.drawing);
 }
@@ -5220,7 +5268,7 @@ function setSplitSide(drawing: boolean): void {
 /** Beside slides: work on the drawing (true; the slide becomes a picture) or on the slide. */
 function focusSlideDrawing(on: boolean): void {
   const st = splitState();
-  if (!st || st.main.mode !== 'slides') return;
+  if (!st || !st.main.deck) return;
   if (on === (ws.active === st.drawing)) return;
   if (on) {
     // the slide as it looks now, kept as a picture on its side
@@ -5243,7 +5291,7 @@ function toggleSplit(): void {
   if (splitState()) { closeSplit(); return; }
   const t = ws.active;
   if (t.mode === 'drawing') {
-    flash('Split view puts a drawing beside a document, sheet or slides: show one of those (or start one with the + tabs) and choose View > Split View there.', 8000);
+    flash('Split view puts a drawing beside a document, sheet, slides or design: show one of those (or start one with the + tabs) and choose View > Split View there.', 8000);
     return;
   }
   finishTyping();
@@ -5255,7 +5303,7 @@ function toggleSplit(): void {
   if (ws.pane) paneEntered(true);
   else layoutSplit();
   mainResized();
-  flash(`${drawing.name} is beside the ${t.mode === 'document' ? 'document' : t.mode === 'sheet' ? 'sheet' : 'slides'}. Click a side to work on it; the bar above the drawing picks another drawing and puts structures in.`, 7000);
+  flash(`${drawing.name} is beside the ${t.mode === 'document' ? 'document' : t.mode === 'sheet' ? 'sheet' : t.mode === 'design' ? 'design' : 'slides'}. Click a side to work on it; the bar above the drawing picks another drawing and puts structures in.`, 7000);
 }
 
 function closeSplit(): void {
@@ -5315,7 +5363,7 @@ splitPick.addEventListener('change', () => {
 /** The bar's Insert: the selected structures (or the whole drawing) into the document, cell or slide. */
 $('#split-insert').addEventListener('click', () => {
   const st = splitState();
-  if (!st) return;
+  if (!st || cellEdit) return;
   editor.closeCaption();
   const live = !!ws.pane || ws.active === st.drawing;
   const part = extractDrawing(ws.docOf(st.drawing), live && editor.hasSelection() ? editor.sel : null);
@@ -6843,7 +6891,8 @@ registerBundledFonts(() => {
 });
 // the icon library loads on its own once the window is up; then anything with icons in it is drawn again
 whenIconsLoaded(() => {
-  doc.allDirty = true;
+  // (only a drawing with shapes can hold icons: a big structure opened at start-up isn't drawn twice)
+  if (doc.shapes.size) doc.allDirty = true;
   editor.changed();
   docMode.fontsChanged();
 });
@@ -7300,7 +7349,6 @@ function toolButton(name: string): HTMLButtonElement | null {
 }
 
 const runFromToolbox = (cmd: string) => { finishTyping(); command(cmd); };
-const sep = () => { const d = document.createElement('div'); d.className = 'tb-sep'; return d; };
 
 /** What the Colours toolbox's swatches do: colour the lines and text, highlight, or fill. */
 let colourMode: 'line' | 'highlight' | 'fill' = 'line';
@@ -7351,47 +7399,65 @@ const SHORT_LABEL: Record<string, string> = {
   'shadow-highlight': 'Shadow', 'glow-highlight': 'Glow', 'save-highlight-look': 'Save look…',
 };
 
-/** A fly-out palette with the tools Customize Toolboxes gave it (null when it has none). */
+/** The tools a fly-out palette comes with. */
+const givenTools = (name: string): string[] => PALETTES.get(name)?.items.filter((t) => ALL_TOOLS.has(t.name)).map((t) => t.name) ?? [];
+
+/** A fly-out's tools on their grid, as Customize Toolboxes has them. */
+function paletteGrid(name: string): Grid {
+  return flyGrid(toolboxState, name, toolboxState.flyouts?.[name] ?? givenTools(name), PALETTES.get(name)?.columns ?? 3);
+}
+
+/** A fly-out palette with the tools Customize Toolboxes gave it, on their grid (null when it has none). */
 function paletteNow(name: string): PaletteDef | null {
   const base = PALETTES.get(name);
   if (!base) return null;
-  const own = toolboxState.flyouts?.[name];
   // (My templates holds what you save, so its tools aren't chosen)
-  if (!own || name === 'tpl-own') return base.items.length ? base : null;
-  const items = own.map((n) => base.items.find((i) => i.name === n) ?? (ALL_TOOLS.has(n) ? { name: n, title: ALL_TOOLS.get(n)!.title } : null)).filter((x): x is { name: string; title: string } => !!x);
-  return items.length ? { ...base, items } : null;
+  if ((!toolboxState.flyouts?.[name] && !toolboxState.flyGrids?.[name]) || name === 'tpl-own') return base.items.length ? base : null;
+  const g = paletteGrid(name);
+  const tool = (n: string) => base.items.find((i) => i.name === n) ?? (ALL_TOOLS.has(n) ? { name: n, title: ALL_TOOLS.get(n)!.title } : null);
+  const cells = g.cells.map((n) => (n && tool(n) ? n : null));
+  const items = cells.filter((n): n is string => !!n).map((n) => tool(n)!);
+  return items.length ? { ...base, items, cells, columns: g.cols } : null;
 }
 
-/** A toolbox's buttons, as Customize Toolboxes has them: tools, palettes, commands, dividers and the highlight looks. */
+/** How each toolbox's grid shows now, and what it does when the window is too short for it. */
+const SHOWN = new WeakMap<HTMLElement, { s: Shown; wrap: boolean; across: boolean }>();
+
+/**
+ * A toolbox's buttons, as Customize Toolboxes has them: tools, palettes, commands and the
+ * highlight looks, each in its cell of the toolbox's grid (empty cells kept, so groups stay apart).
+ */
 function buildBox(body: HTMLElement, id: string, vertical: boolean): void {
-  const items = boxItems(toolboxState, id, BOX_ITEMS[id]);
-  if (id === 'main') {
-    // the tool bar, in groups between the dividers
-    const groups: (ToolbarItem | HTMLElement)[][] = [[]];
-    for (const k of items) {
-      if (k === 'sep') { groups.push([]); continue; }
-      const name = k.slice(k.indexOf(':') + 1);
-      const g = groups[groups.length - 1];
-      if (k.startsWith('tool:')) { const t = ALL_TOOLS.get(name); if (t) g.push({ name, title: t.title }); }
-      else if (k.startsWith('pal:')) { const p = paletteNow(name); if (p) g.push(p); }
-      else if (k.startsWith('cmd:')) g.push(commandButton(name, runFromToolbox, SHORT_LABEL[name]));
-      else if (k === 'w:looks') g.push(looksList(true));
-    }
-    toolbar.fill(groups);
-    body.append(toolsNav);
-    return;
-  }
-  for (const k of items) {
+  const g = boxGrid(toolboxState, id, BOX_ITEMS[id]);
+  const dock = toolboxState.places[id]?.dock ?? 'float';
+  const s = shownGrid(g, dock);
+  const cells = document.createElement('div');
+  cells.className = 'tb-cells';
+  cells.style.gridTemplateColumns = `repeat(${s.cols}, minmax(34px, auto))`;
+  const make = (k: string): HTMLElement | null => {
     const name = k.slice(k.indexOf(':') + 1);
-    let b: HTMLElement | null = null;
-    if (k === 'sep') b = sep();
-    else if (k.startsWith('tool:')) b = toolButton(name);
-    else if (k.startsWith('pal:')) { const p = paletteNow(name); b = p && toolbar.paletteButton(p); }
-    else if (k.startsWith('cmd:')) b = commandButton(name, runFromToolbox, SHORT_LABEL[name]);
-    else if (k === 'w:looks') b = looksList(vertical);
-    if (b) body.append(b);
-  }
-  if (!items.length) {
+    // the drawing tools' buttons are the tool bar's own (it shows the one in use, and each palette's last pick)
+    if (k.startsWith('tool:')) { const t = ALL_TOOLS.get(name); return id === 'main' ? (t ? toolbar.toolButton({ name, title: t.title }) : null) : toolButton(name); }
+    if (k.startsWith('pal:')) { const p = paletteNow(name); return p && toolbar.paletteButton(p); }
+    if (k.startsWith('cmd:')) return commandButton(name, runFromToolbox, SHORT_LABEL[name]);
+    if (k === 'w:looks') return looksList(vertical);
+    return null;
+  };
+  const fillCells = () => {
+    g.cells.forEach((k, i) => {
+      const b = (k && make(k)) || Object.assign(document.createElement('span'), { className: 'tb-gap' });
+      b.classList.add('tb-cell');
+      b.dataset.cell = String(i);
+      if (k === 'w:looks') b.classList.add('tb-wide');
+      cells.append(b);
+    });
+  };
+  const wrap = overflowOf(toolboxState, id) === 'wrap';
+  SHOWN.set(cells, { s, wrap, across: dock === 'top' || dock === 'bottom' });
+  if (id === 'main') { toolbar.fill((root) => { fillCells(); root.append(cells); }); body.append(toolsNav); }
+  else { fillCells(); body.append(cells); }
+  layCells(cells);
+  if (id !== 'main' && !gridItems(g).length) {
     const edit = commandButton('customize-toolbox', () => openCustomToolbox(id), 'Choose what goes here…');
     edit.title = 'Customize Toolboxes: drag tools and commands into this one';
     body.append(edit);
@@ -7485,13 +7551,71 @@ const toolboxes = new Toolboxes(toolboxDefs, {
 });
 
 /**
- * In a dock down a side, the drawing tools take three columns when two would run past the
- * window's foot, and the dock fades at its foot while there is more below to scroll to.
+ * Put a toolbox's buttons in their cells on screen: as the grid has them, or wrapped when only
+ * `fit` rows (columns, along the top or bottom) have room. Thin lines go between the rows that have them.
+ */
+function layCells(cells: HTMLElement, fit?: number): void {
+  const info = SHOWN.get(cells);
+  if (!info) return;
+  const { s, across } = info;
+  const full = across ? s.cols : s.rows;
+  const { at, starts } = wrapped(s, Math.min(full, fit ?? full), across);
+  const blocks = starts.length;
+  // the longest block sets how many rows (columns, along the top or bottom) there are
+  const len = Math.max(...starts.map((st, b) => (starts[b + 1] ?? full) - st));
+  cells.style.gridTemplateColumns = `repeat(${across ? len : s.cols * blocks}, minmax(34px, auto))`;
+  cells.style.gridTemplateRows = `repeat(${across ? s.rows * blocks : len}, minmax(32px, auto))`;
+  cells.querySelectorAll('.tb-line').forEach((l) => l.remove());
+  // a line where a block starts is not needed: the blocks stand apart
+  const lineRows = new Set(across ? s.lineRows : s.lineRows.filter((r) => !starts.includes(r)));
+  const lineCols = new Set(across ? s.lineCols.filter((c) => !starts.includes(c)) : s.lineCols);
+  for (const el of cells.querySelectorAll<HTMLElement>(':scope > .tb-cell')) {
+    const i = Number(el.dataset.cell);
+    const p = at[i], o = s.at[i];
+    el.style.gridRow = String(p.r + 1);
+    const room = across ? len - p.c : s.cols - (p.c % s.cols);
+    el.style.gridColumn = el.classList.contains('tb-wide') ? `${p.c + 1} / span ${Math.max(1, room)}` : String(p.c + 1);
+    el.classList.toggle('tb-after-line', lineRows.has(o.r));
+    el.classList.toggle('tb-after-vline', lineCols.has(o.c));
+    el.classList.toggle('tb-block', p.start);
+  }
+  // the lines themselves, across each block of the grid (or down it, turned on its side)
+  const line = (r: number, c: number, span: number, down: boolean) => {
+    const l = document.createElement('div');
+    l.className = 'tb-line' + (down ? ' down' : '');
+    l.style.gridRow = down ? `${r + 1} / span ${span}` : String(r + 1);
+    l.style.gridColumn = down ? String(c + 1) : `${c + 1} / span ${span}`;
+    cells.append(l);
+  };
+  const size = (b: number) => (starts[b + 1] ?? full) - starts[b];
+  for (let b = 0; b < blocks; b++) {
+    if (!across) {
+      for (const r of lineRows) { const k = inBlock(starts, r); if (k.b === b) line(k.i, b * s.cols, s.cols, false); }
+      for (const c of lineCols) line(0, b * s.cols + c, size(b), true);
+    } else {
+      for (const r of lineRows) line(b * s.rows + r, 0, size(b), false);
+      for (const c of lineCols) { const k = inBlock(starts, c); if (k.b === b) line(b * s.rows, k.i, s.rows, true); }
+    }
+  }
+}
+
+/**
+ * A toolbox set to wrap, with too little room for its grid, takes fewer rows and puts the rest in
+ * more columns beside them (or, along the top or bottom, fewer columns and more rows). One set to
+ * scroll scrolls. A dock down a side fades at its foot while there is more below to scroll to.
  */
 function fitTools(): void {
-  const dock = toolsNav.closest<HTMLElement>('.dock-v');
-  toolsNav.classList.remove('cols-3');
-  if (dock && dock.scrollHeight > dock.clientHeight + 1) toolsNav.classList.add('cols-3');
+  const all = [...document.querySelectorAll<HTMLElement>('.toolbox .tb-cells')].filter((c) => SHOWN.has(c));
+  for (const c of all) layCells(c);
+  for (const c of all) {
+    const { s, wrap, across } = SHOWN.get(c)!;
+    const box = c.closest<HTMLElement>('.toolbox');
+    if (!wrap || !box || box.classList.contains('collapsed')) continue;
+    const dock = box.parentElement!;
+    const floating = box.classList.contains('floating');
+    const over = () => (floating ? box.scrollHeight > box.clientHeight + 1 : across ? c.scrollWidth > dock.clientWidth - 16 : dock.scrollHeight > dock.clientHeight + 1);
+    for (let f = (across ? s.cols : s.rows) - 1; f >= 1 && over(); f--) layCells(c, f);
+  }
   fadeDocks();
 }
 function fadeDocks(): void {
@@ -7608,7 +7732,7 @@ function toolboxCatalogue(): { name: string; items: Pickable[] }[] {
   const groups: { name: string; items: Pickable[] }[] = [
     { name: 'Drawing tools', items: loose },
     { name: 'Fly-out palettes', items: [...PALETTES.keys()].map((p) => d(`pal:${p}`)) },
-    { name: 'Dividers and lists', items: [d('sep'), d('w:looks')] },
+    { name: 'Lists', items: [d('w:looks')] },
   ];
   for (const p of PALETTES.values()) if (p.palette !== 'tpl-own' || p.items.length > 1) groups.push({ name: p.title, items: p.items.filter((t) => ALL_TOOLS.has(t.name)).map((t) => d(`tool:${t.name}`)) });
   for (const g of menuCommands()) if (g.items.length) groups.push({ name: `${g.menu} menu`, items: g.items.filter((c) => !c.cmd.startsWith('toolbox-')).map((c) => ({ key: `cmd:${c.cmd}`, label: c.label, icon: commandIcon(c.cmd) })) });
@@ -7622,8 +7746,8 @@ const toolboxEditor = new ToolboxEditor({
   describe: describeItem,
   title: (id) => BOX_TITLES[id] ?? 'My Toolbox',
   given: (id) => BOX_ITEMS[id] ?? [],
-  palette: (name) => { const p = PALETTES.get(name); return p && name !== 'tpl-own' ? { title: p.title, given: p.items.map((t) => t.name) } : null; },
-  flyout: (name) => toolboxState.flyouts?.[name] ?? PALETTES.get(name)?.items.filter((t) => ALL_TOOLS.has(t.name)).map((t) => t.name) ?? [],
+  palette: (name) => { const p = PALETTES.get(name); return p && name !== 'tpl-own' ? { title: p.title } : null; },
+  flyGrid: paletteGrid,
   newPlace: () => { const w = $('#work').getBoundingClientRect(); return { x: Math.round(Math.max(w.left + 8, w.right - 300)), y: Math.round(w.top + 40) }; },
 });
 

@@ -2,7 +2,7 @@
 // behind it gets a small gap either side, as in ChemDraw. Which is in front is the bond's layer:
 // its own number when it has been brought forward or sent back, else the order it was drawn in.
 
-import type { Bond, Doc } from '../model';
+import type { AtomWatch, Bond, Doc } from '../model';
 import type { Vec } from '../geom';
 
 /** Drawing order of a bond: higher is in front. */
@@ -25,9 +25,19 @@ export function crossingBonds(doc: Doc, b: Bond): Bond[] {
   const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
   const mid = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
   const out: Bond[] = [];
-  for (const o of doc.bondsNear(mid, Math.hypot(q.x - p.x, q.y - p.y) / 2)) {
-    if (o.id === b.id || o.a1 === b.a1 || o.a1 === b.a2 || o.a2 === b.a1 || o.a2 === b.a2) continue;
-    if (crossAt(p, q, doc.atoms.get(o.a1)!, doc.atoms.get(o.a2)!)) out.push(o);
+  // the bonds doc.bondsNear finds, without its lists (this runs for every bond on a first paint)
+  const reach = Math.min(doc.maxBondLength, 200) / 2 + Math.hypot(q.x - p.x, q.y - p.y) / 2, r2 = reach * reach;
+  const x1 = Math.min(p.x, q.x), x2 = Math.max(p.x, q.x), y1 = Math.min(p.y, q.y), y2 = Math.max(p.y, q.y);
+  for (const a of doc.atomsNear(mid, reach)) {
+    for (const bid of doc.adj.get(a.id) ?? []) {
+      const o = doc.bonds.get(bid)!;
+      if (o.id === b.id || o.a1 === b.a1 || o.a1 === b.a2 || o.a2 === b.a1 || o.a2 === b.a2) continue;
+      const r = doc.atoms.get(o.a1)!, s = doc.atoms.get(o.a2)!;
+      // each bond once: through its first atom, or its second when the first is out of reach
+      if (r !== a && (r.x - mid.x) ** 2 + (r.y - mid.y) ** 2 <= r2) continue;
+      if (Math.max(r.x, s.x) < x1 || Math.min(r.x, s.x) > x2 || Math.max(r.y, s.y) < y1 || Math.min(r.y, s.y) > y2) continue;
+      if (crossAt(p, q, r, s)) out.push(o);
+    }
   }
   return out;
 }
@@ -36,13 +46,13 @@ export function crossingBonds(doc: Doc, b: Bond): Bond[] {
  * Stretches of a bond to leave out where bonds in front of it cross: fractions along it, from
  * a1 to a2. `half` is how far the gap reaches either side of the bond in front.
  */
-export function crossingGaps(doc: Doc, b: Bond, half: number): [number, number][] {
+export function crossingGaps(doc: Doc, b: Bond, half: number, crossing = crossingBonds(doc, b)): [number, number][] {
   const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
   const l = Math.hypot(q.x - p.x, q.y - p.y);
   if (l < 1e-6) return [];
   const out: [number, number][] = [];
   const me = bondLayer(b);
-  for (const o of crossingBonds(doc, b)) {
+  for (const o of crossing) {
     if (bondLayer(o) <= me) continue;
     const c = crossAt(p, q, doc.atoms.get(o.a1)!, doc.atoms.get(o.a2)!);
     if (!c) continue;
@@ -53,17 +63,69 @@ export function crossingGaps(doc: Doc, b: Bond, half: number): [number, number][
   return out.sort((a, b) => a[0] - b[0]);
 }
 
-/** Gaps already worked out, for each drawing as it was (a repaint asks for every bond in every tile). */
-const gapCache = new WeakMap<Doc, { version: number; map: Map<string, [number, number][]> }>();
+/**
+ * Crossings and gaps already worked out, kept across edits (a repaint asks for every bond in every tile, and a
+ * drag repaints on every move). An edit drops only the entries it could change: those of bonds
+ * at or near the atoms it touched, and those that looked at a bond of one of those atoms.
+ */
+interface GapCache {
+  watch: AtomWatch;
+  /** Each bond's crossing bonds (ids), and its gaps for the last gap size asked for. */
+  bonds: Map<number, { crossing: number[]; half?: number; gaps?: [number, number][] }>;
+  /** Atom → bonds whose entry depends on a bond at that atom (one crossing them). */
+  users: Map<number, Set<number>>;
+}
+const gapCache = new WeakMap<Doc, GapCache>();
 
-/** crossingGaps, kept until the drawing changes. */
-export function crossingGapsCached(doc: Doc, b: Bond, half: number): [number, number][] {
+function freshCache(doc: Doc): GapCache {
   let c = gapCache.get(doc);
-  if (!c || c.version !== doc.version) gapCache.set(doc, (c = { version: doc.version, map: new Map() }));
-  const key = `${b.id}|${half}`;
-  let gaps = c.map.get(key);
-  if (!gaps) c.map.set(key, (gaps = crossingGaps(doc, b, half)));
-  return gaps;
+  if (!c) gapCache.set(doc, (c = { watch: doc.watchAtoms(), bonds: new Map(), users: new Map() }));
+  const w = c.watch;
+  if (w.all) {
+    w.all = false;
+    w.ids.clear();
+    c.bonds.clear();
+    c.users.clear();
+  } else if (w.ids.size) {
+    const reach = Math.min(doc.maxBondLength, 200);
+    for (const id of w.ids) {
+      for (const bid of doc.adj.get(id) ?? []) c.bonds.delete(bid);
+      for (const bid of c.users.get(id) ?? []) c.bonds.delete(bid);
+      c.users.delete(id);
+      // bonds that a bond at this atom may now cross
+      const a = doc.atoms.get(id);
+      if (a) for (const o of doc.bondsNear(a, reach)) c.bonds.delete(o.id);
+    }
+    w.ids.clear();
+  }
+  return c;
+}
+
+function entryOf(doc: Doc, b: Bond): { crossing: number[]; half?: number; gaps?: [number, number][] } {
+  const c = freshCache(doc);
+  let e = c.bonds.get(b.id);
+  if (e) return e;
+  const crossing = crossingBonds(doc, b);
+  c.bonds.set(b.id, (e = { crossing: crossing.map((o) => o.id) }));
+  // (the bond's own atoms are found through their bonds when they change)
+  const use = (atom: number) => { let s = c.users.get(atom); if (!s) c.users.set(atom, (s = new Set())); s.add(b.id); };
+  for (const o of crossing) { use(o.a1); use(o.a2); }
+  return e;
+}
+
+/** crossingBonds, kept until the drawing changes near the bond. */
+export function crossingBondsCached(doc: Doc, b: Bond): Bond[] {
+  return entryOf(doc, b).crossing.map((id) => doc.bonds.get(id)!);
+}
+
+/** crossingGaps, kept until the drawing changes near the bond. */
+export function crossingGapsCached(doc: Doc, b: Bond, half: number): [number, number][] {
+  const e = entryOf(doc, b);
+  if (e.half !== half || !e.gaps) {
+    e.half = half;
+    e.gaps = e.crossing.length ? crossingGaps(doc, b, half, e.crossing.map((id) => doc.bonds.get(id)!)) : [];
+  }
+  return e.gaps;
 }
 
 /**

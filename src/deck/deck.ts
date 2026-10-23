@@ -771,7 +771,10 @@ export class Deck {
   get redoLabel(): string { return this.labelOf(this.redoList[this.redoList.length - 1], true); }
   private labelOf(e: HistoryEntry | undefined, redo: boolean): string {
     if (!e) return '';
-    return e.kind === 'deck' ? e.label : redo ? e.slide.doc.redoLabel : e.slide.doc.undoLabel;
+    if (e.kind === 'deck') return e.label;
+    // the slide being edited has its history in `host` (its own doc is swapped out)
+    const d = e.slide === this.current && this.attached ? this.host : e.slide.doc;
+    return redo ? d.redoLabel : d.undoLabel;
   }
 
   /** Undo the last change, going to the slide it was on. */
@@ -1183,8 +1186,25 @@ export class Deck {
       this.restyleAll();
       this.onSwitch();
     };
-    apply(m);
-    this.record('Change slide master', () => apply(before), () => apply(m));
+    if (sameStyle(before.drawing, m.drawing)) {
+      apply(m);
+      this.record('Change slide master', () => apply(before), () => apply(m));
+      return;
+    }
+    // a new drawing style (Structures: bond length, fonts) redraws the structures already on the
+    // slides in it, as File > Drawing Style does, in the same step
+    const use = (x: Master) => {
+      this.master = x;
+      this.restyleAll();
+    };
+    const all = this.slides.map((_, i) => i);
+    this.contentEdit('Change slide master', all, () => {
+      for (const i of all) {
+        const d = this.docOf(i);
+        d.bulk(() => applyStyle(d, m.drawing, 'restyle'));
+      }
+      use(m);
+    }, () => use(before), () => use(m));
   }
 
   /**

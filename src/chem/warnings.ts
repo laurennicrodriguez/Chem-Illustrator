@@ -266,16 +266,16 @@ export class StructureChecks {
     if (onAtom) list.push(ON_ATOM);
     // a bond running through this atom
     const r = TOO_CLOSE_BOND * L;
-    const reach = Math.min(doc.maxBondLength / 2, 2 * L) + r;
-    const seen = new Set<number>();
+    const reach = Math.min(doc.maxBondLength / 2, 2 * L) + r, reach2 = reach * reach;
     let onBond = false;
     for (const n of doc.atomsNear(a, reach)) {
       for (const bid of doc.adj.get(n.id) ?? []) {
-        if (seen.has(bid)) continue;
-        seen.add(bid);
         const b = doc.bonds.get(bid)!;
         if (b.a1 === a.id || b.a2 === a.id) continue;
         const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
+        // each bond once: through its first atom, or its second when the first is out of reach
+        if (p !== n && (p.x - a.x) ** 2 + (p.y - a.y) ** 2 <= reach2) continue;
+        if (Math.max(p.x, q.x) < a.x - r || Math.min(p.x, q.x) > a.x + r || Math.max(p.y, q.y) < a.y - r || Math.min(p.y, q.y) > a.y + r) continue;
         // a bond to a ring's middle runs over the ring as it is meant to
         if (p.multi || q.multi) continue;
         const { d, t } = segDist(a, p, q);

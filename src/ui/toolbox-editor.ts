@@ -1,16 +1,19 @@
 // Customize Toolboxes (View > Toolboxes): every tool and command down the left, with its icon,
-// and the toolbox picked at the right laid out as it is, its icons jiggling as on a phone's home
-// screen being rearranged. Drag icons about to reorder them, drag tools and commands in from the
-// left, and drag them out (or click their ✕) to take them away; the others slide aside to make
-// room. A fly-out palette opens like a folder to rearrange its tools, and a tool dropped on one
-// goes inside. Toolboxes are made, renamed, deleted and put in order here too. Every change
-// shows at once in the toolbox itself, and Undo takes changes back one at a time.
+// and the toolbox picked at the right laid out on its grid, cell by cell, as it shows on screen,
+// its icons jiggling as on a phone's home screen being rearranged. The grid's size is chosen
+// (typed, or from a few presets); cells can be left empty to keep groups apart, and a thin line
+// put between two rows. Drag icons from cell to cell (two swap), drag tools and commands in from
+// the left, and drag them out (or click their ✕) to take them away. A fly-out palette opens like
+// a folder to lay out its own grid of tools, and a tool dropped on one goes inside. Toolboxes are
+// made, renamed, deleted and put in order here too. Every change shows at once in the toolbox
+// itself, and Undo takes changes back one at a time.
 
 import {
-  boxIds, boxItems, boxTitle, inserted, isEditable, isOwnBox, KEEP, moved, withBoxesRestored, withBoxMoved,
-  withFlyout, withItems, withItemsReset, withNewBox, withoutBox, withTitle, type Pickable, type ToolboxState,
+  boxGrid, boxIds, boxTitle, isEditable, isOwnBox, KEEP, overflowOf, withBoxesRestored, withBoxMoved, withFlyGrid,
+  withGrid, withItemsReset, withNewBox, withoutBox, withOverflow, withTitle, type Overflow, type Pickable, type ToolboxState,
 } from './toolboxes';
-import { dragTile, inside } from './tile-drag';
+import { added, cutOff, emptied, GRID_PRESETS, gridItems, MAX_COLS, MAX_ROWS, placed, resized, withLine, type Grid } from './toolbox-grid';
+import { inside } from './tile-drag';
 
 export interface ToolboxEditorHooks {
   get(): ToolboxState;
@@ -24,14 +27,13 @@ export interface ToolboxEditorHooks {
   title(id: string): string;
   /** What is in one of the app's toolboxes as it comes. */
   given(id: string): readonly string[];
-  /** A fly-out palette: its name, and its tools as they come; null when its tools can't be changed. */
-  palette(name: string): { title: string; given: readonly string[] } | null;
-  /** The tools a fly-out holds now. */
-  flyout(name: string): string[];
+  /** A fly-out palette's name; null when its tools can't be changed. */
+  palette(name: string): { title: string } | null;
+  /** A fly-out's tools on their grid now (tool names). */
+  flyGrid(name: string): Grid;
   /** Where a new toolbox of your own floats. */
   newPlace(): { x: number; y: number };
 }
-
 
 export class ToolboxEditor {
   private d: HTMLDialogElement | null = null;
@@ -46,7 +48,8 @@ export class ToolboxEditor {
   /** The list on the left, read once each time the window opens. */
   private cat: { name: string; items: Pickable[] }[] = [];
   private els!: {
-    list: HTMLElement; grid: HTMLElement; pick: HTMLSelectElement; name: HTMLInputElement; shown: HTMLInputElement;
+    list: HTMLElement; board: HTMLElement; size: HTMLElement; cols: HTMLInputElement; rows: HTMLInputElement; preset: HTMLSelectElement;
+    overflow: HTMLSelectElement; fit: HTMLElement; pick: HTMLSelectElement; name: HTMLInputElement; shown: HTMLInputElement;
     del: HTMLButtonElement; up: HTMLButtonElement; down: HTMLButtonElement; crumb: HTMLElement; note: HTMLElement;
     say: HTMLElement; undo: HTMLButtonElement; reset: HTMLButtonElement; restore: HTMLButtonElement; jiggle: HTMLInputElement;
   };
@@ -82,7 +85,7 @@ export class ToolboxEditor {
       <div class="tbe-cols">
         <div class="tbe-all">
           <input type="search" placeholder="Find a tool or command" aria-label="Find a tool or command" />
-          <div class="tbe-list" role="listbox" aria-label="Tools and commands: drag one into the toolbox, or press Enter to add it at the end"></div>
+          <div class="tbe-list" role="listbox" aria-label="Tools and commands: drag one into a cell of the toolbox, or press Enter to put it in the first empty cell"></div>
         </div>
         <div class="tbe-side">
           <div class="tbe-pick">
@@ -97,7 +100,22 @@ export class ToolboxEditor {
             <label class="check"><input type="checkbox" data-act="shown" /> Shown</label>
           </div>
           <div class="tbe-crumb" hidden></div>
-          <div class="tbe-grid" role="list"></div>
+          <div class="tbe-size">
+            <label title="Columns across the grid">Grid <input type="number" data-act="cols" min="1" max="${MAX_COLS}" aria-label="Columns" /></label>
+            <span aria-hidden="true">×</span>
+            <input type="number" data-act="rows" min="1" max="${MAX_ROWS}" aria-label="Rows" title="Rows down the grid" />
+            <select data-act="preset" aria-label="Grid size presets">
+              <option value="">Presets…</option>
+              ${GRID_PRESETS.map((p) => `<option value="${p.cols}x${p.rows}">${p.label}</option>`).join('')}
+            </select>
+            <label class="tbe-fit" title="When the window is too short (or narrow) for the whole grid">If there isn't room
+              <select data-act="overflow">
+                <option value="scroll">Scroll</option>
+                <option value="wrap">Wrap into more columns</option>
+              </select>
+            </label>
+          </div>
+          <div class="tbe-board" role="grid"></div>
           <p class="tbe-note muted" hidden></p>
           <p class="tbe-say muted" aria-live="polite"></p>
         </div>
@@ -112,10 +130,11 @@ export class ToolboxEditor {
       </div>`;
     const q = <T extends HTMLElement>(sel: string) => d.querySelector<T>(sel)!;
     this.els = {
-      list: q('.tbe-list'), grid: q('.tbe-grid'), pick: q('.tbe-pick select'), name: q('.tbe-name input[type=text]'),
-      shown: q('[data-act=shown]'), del: q('[data-act=delete]'), up: q('[data-act=up]'), down: q('[data-act=down]'),
-      crumb: q('.tbe-crumb'), note: q('.tbe-note'), say: q('.tbe-say'), undo: q('[data-act=undo]'), reset: q('[data-act=reset]'),
-      restore: q('[data-act=restore]'), jiggle: q('[data-act=jiggle]'),
+      list: q('.tbe-list'), board: q('.tbe-board'), size: q('.tbe-size'), cols: q('[data-act=cols]'), rows: q('[data-act=rows]'),
+      preset: q('[data-act=preset]'), overflow: q('[data-act=overflow]'), fit: q('.tbe-fit'), pick: q('.tbe-pick select'),
+      name: q('.tbe-name input[type=text]'), shown: q('[data-act=shown]'), del: q('[data-act=delete]'), up: q('[data-act=up]'),
+      down: q('[data-act=down]'), crumb: q('.tbe-crumb'), note: q('.tbe-note'), say: q('.tbe-say'), undo: q('[data-act=undo]'),
+      reset: q('[data-act=reset]'), restore: q('[data-act=restore]'), jiggle: q('[data-act=jiggle]'),
     };
     const search = q<HTMLInputElement>('input[type=search]');
     search.addEventListener('input', () => { this.filter = search.value; this.drawList(); });
@@ -123,7 +142,7 @@ export class ToolboxEditor {
     d.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') return;
       e.stopPropagation();
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !(e.target as Element).matches('input[type=text], input[type=search]')) { e.preventDefault(); this.takeBack(); }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !(e.target as Element).matches('input[type=text], input[type=search], input[type=number]')) { e.preventDefault(); this.takeBack(); }
     });
     d.addEventListener('close', () => { this.folder = null; });
     this.els.pick.addEventListener('change', () => { this.box = this.els.pick.value; this.folder = null; this.draw(); this.say(''); });
@@ -137,6 +156,14 @@ export class ToolboxEditor {
     this.els.reset.addEventListener('click', () => this.reset());
     this.els.restore.addEventListener('click', () => { this.change(withBoxesRestored, false); this.say('The toolboxes that come with the app are back in View > Toolboxes, with their own names.'); });
     this.els.jiggle.addEventListener('change', () => this.change((s) => ({ ...s, jiggle: this.els.jiggle.checked ? undefined : false }), false));
+    this.els.cols.addEventListener('change', () => this.resize(Number(this.els.cols.value), this.grid().rows));
+    this.els.rows.addEventListener('change', () => this.resize(this.grid().cols, Number(this.els.rows.value)));
+    this.els.preset.addEventListener('change', () => {
+      const [c, r] = this.els.preset.value.split('x').map(Number);
+      this.els.preset.value = '';
+      if (c && r) this.resize(c, r);
+    });
+    this.els.overflow.addEventListener('change', () => this.change((s) => withOverflow(s, this.box, this.els.overflow.value as Overflow), false));
     q('[data-act=done]').addEventListener('click', () => d.close());
     document.body.append(d);
     this.d = d;
@@ -180,7 +207,7 @@ export class ToolboxEditor {
     this.box = made.id;
     this.folder = null;
     this.draw();
-    this.say('A new toolbox, floating over the drawing: name it, then drag tools and commands into it from the left.');
+    this.say('A new toolbox, floating over the drawing: name it, pick its grid size, then drag tools and commands into its cells from the left.');
     this.els.name.focus();
     this.els.name.select();
   }
@@ -199,27 +226,59 @@ export class ToolboxEditor {
   private reset(): void {
     if (this.folder) {
       const name = this.folder;
-      this.change((s) => withFlyout(s, name, null));
-      this.say('The fly-out has its own tools again.');
+      this.change((s) => withFlyGrid(s, name, null));
+      this.say('The fly-out has its own tools again, laid out as they come.');
       return;
     }
     const st = this.hooks.get();
-    if (isOwnBox(this.box)) this.change((s) => withItems(s, this.box, []));
+    if (isOwnBox(this.box)) { const g = this.grid(); this.setGrid({ cols: g.cols, rows: g.rows, cells: g.cells.map(() => null) }); }
     else this.change((s) => withItemsReset(s, this.box, this.hooks.given(this.box)));
-    this.say(isOwnBox(this.box) ? 'Emptied the toolbox.' : `${boxTitle(st, this.box, this.hooks.title(this.box))} has what it comes with again.`);
+    this.say(isOwnBox(this.box) ? 'Emptied the toolbox (its grid keeps its size).' : `${boxTitle(st, this.box, this.hooks.title(this.box))} has what it comes with again, laid out as it comes.`);
   }
 
-  /** What the grid shows now: the toolbox's buttons, or the open fly-out's tools (as "tool:" keys). */
+  // ------------------------------------------------------------ the grid being changed
+
+  /** The grid showing now: the toolbox's, or the open fly-out's (its cells tool names). */
+  private grid(): Grid {
+    if (this.folder) return this.hooks.flyGrid(this.folder);
+    return boxGrid(this.hooks.get(), this.box, this.hooks.given(this.box));
+  }
+
+  /** A cell's button as a key ("tool:…" in a fly-out). */
+  private keyOf(cell: string): string {
+    return this.folder ? `tool:${cell}` : cell;
+  }
+
+  /** What goes in a cell for a key (a fly-out's cells hold tool names). */
+  private cellOf(key: string): string {
+    return this.folder ? key.slice(5) : key;
+  }
+
+  /** The keys in the grid now. */
   private keys(): string[] {
-    if (this.folder) return this.hooks.flyout(this.folder).map((t) => `tool:${t}`);
-    return boxItems(this.hooks.get(), this.box, this.hooks.given(this.box));
+    return gridItems(this.grid()).map((c) => this.keyOf(c));
   }
 
-  /** The grid's buttons changed. */
-  private setKeys(keys: string[]): void {
+  private setGrid(g: Grid): void {
     const folder = this.folder;
-    if (folder) this.change((s) => withFlyout(s, folder, keys.filter((k) => k.startsWith('tool:')).map((k) => k.slice(5))));
-    else this.change((s) => withItems(s, this.box, keys));
+    if (folder) this.change((s) => withFlyGrid(s, folder, g));
+    else this.change((s) => withGrid(s, this.box, g));
+  }
+
+  /** A new size for the grid: the buttons stay in their cells, and it asks first before any are cut off. */
+  private resize(cols: number, rows: number): void {
+    const g = this.grid();
+    cols = Math.max(1, Math.min(MAX_COLS, Math.round(cols) || g.cols));
+    rows = Math.max(1, Math.min(MAX_ROWS, Math.round(rows) || g.rows));
+    if (cols === g.cols && rows === g.rows) { this.draw(); return; }
+    const lost = cutOff(g, cols, rows);
+    if (lost.length) {
+      const names = lost.map((k) => this.hooks.describe(this.keyOf(k)).label);
+      const list = names.length > 6 ? `${names.slice(0, 6).join(', ')} and ${names.length - 6} more` : names.join(', ');
+      if (!window.confirm(`A ${cols} × ${rows} grid leaves no room for ${lost.length === 1 ? 'this button' : `these ${lost.length} buttons`}: ${list}.\n\nMake it ${cols} × ${rows} anyway, taking ${lost.length === 1 ? 'it' : 'them'} out? (Undo brings ${lost.length === 1 ? 'it' : 'them'} back.)`)) { this.draw(); return; }
+    }
+    this.setGrid(resized(g, cols, rows));
+    this.say(`The grid is ${cols} × ${rows} now${lost.length ? `; took out ${lost.length}` : ''}.`);
   }
 
   private draw(): void {
@@ -249,7 +308,7 @@ export class ToolboxEditor {
     reset.textContent = this.folder ? 'Reset This Fly-out' : isOwnBox(this.box) ? 'Empty This Toolbox' : 'Reset This Toolbox';
     this.d!.classList.toggle('still', st.jiggle === false);
     this.drawCrumb();
-    this.drawGrid();
+    this.drawBoard();
     this.drawList();
   }
 
@@ -264,17 +323,17 @@ export class ToolboxEditor {
     back.title = 'Back to the toolbox';
     back.addEventListener('click', () => { this.folder = null; this.draw(); });
     const t = document.createElement('span');
-    t.textContent = `${this.hooks.palette(this.folder)?.title ?? ''} fly-out: drag its tools about, in from the left, or out to take them away`;
+    t.textContent = `${this.hooks.palette(this.folder)?.title ?? ''} fly-out, as it opens: drag its tools from cell to cell, in from the left, or out to take them away`;
     crumb.append(back, t);
   }
 
-  // ------------------------------------------------------------ the toolbox, as icons
+  // ------------------------------------------------------------ the toolbox, cell by cell
 
-  private drawGrid(): void {
-    const { grid, note } = this.els;
-    grid.replaceChildren();
+  private drawBoard(): void {
+    const { board, note, size, cols, rows, overflow, fit } = this.els;
+    board.replaceChildren();
     const editable = isEditable(this.box);
-    grid.hidden = !editable;
+    board.hidden = size.hidden = !editable;
     note.hidden = editable;
     if (!editable) {
       note.textContent = this.box === 'details'
@@ -282,95 +341,121 @@ export class ToolboxEditor {
         : 'The app lays this toolbox out itself. You can rename it, show or hide it, move it in the list, or delete it. To choose your own buttons, make a New toolbox.';
       return;
     }
-    const keys = this.keys();
-    keys.forEach((k, i) => grid.append(this.tile(k, i)));
-    if (!keys.length) {
-      const empty = document.createElement('p');
-      empty.className = 'tbe-empty muted';
-      empty.textContent = this.folder ? 'Nothing in this fly-out: it won’t show. Drag tools in from the left.' : 'Empty: drag tools and commands in from the left.';
-      grid.append(empty);
+    const g = this.grid();
+    cols.value = String(g.cols);
+    rows.value = String(g.rows);
+    fit.hidden = !!this.folder;
+    overflow.value = overflowOf(this.hooks.get(), this.box);
+    // a gutter down the left for the lines between rows (not in a fly-out), then the cells
+    const gutter = !this.folder;
+    board.classList.toggle('lines', gutter);
+    board.style.gridTemplateColumns = `${gutter ? '14px ' : ''}repeat(${g.cols}, minmax(38px, auto))`;
+    const lines = new Set(g.lines ?? []);
+    for (let r = 0; r < g.rows; r++) {
+      if (gutter) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'tbe-rule' + (lines.has(r) ? ' on' : '');
+        b.disabled = r === 0;
+        if (r) {
+          b.title = lines.has(r) ? 'Take away the line above this row' : 'Put a thin line above this row, to set a group apart';
+          b.setAttribute('aria-label', b.title);
+          b.setAttribute('aria-pressed', String(lines.has(r)));
+          b.addEventListener('click', () => this.setGrid(withLine(this.grid(), r, !lines.has(r))));
+        } else b.setAttribute('aria-hidden', 'true');
+        board.append(b);
+      }
+      for (let c = 0; c < g.cols; c++) board.append(this.cell(g, r * g.cols + c, lines.has(r)));
     }
+    if (!gridItems(g).length) this.say(this.folder ? 'Nothing in this fly-out: it won’t show. Drag tools in from the left.' : 'Empty: drag tools and commands into its cells from the left.');
   }
 
-  private tile(key: string, i: number): HTMLElement {
-    const it = this.hooks.describe(key);
-    const t = document.createElement('div');
-    t.className = 'tbe-tile';
-    t.dataset.key = key;
-    t.dataset.i = String(i);
-    t.tabIndex = 0;
-    t.setAttribute('role', 'listitem');
-    t.title = `${it.label}. Drag to move; drag out, ✕ or Delete to take out${key.startsWith('pal:') ? '; click to open its tools' : ''}. Ctrl+arrow keys move it.`;
-    t.setAttribute('aria-label', it.label);
-    const wig = document.createElement('div');
-    wig.className = 'tbe-wig';
-    // a different start in the jiggle for each, as on the phone
-    wig.style.animationDelay = `${-((i * 37) % 23) / 100}s`;
-    const ic = document.createElement('div');
-    ic.className = 'tbe-ic';
-    if (key === 'sep') { t.classList.add('sep'); ic.innerHTML = '<span class="tbe-bar"></span>'; }
-    else if (key.startsWith('pal:')) { t.classList.add('folder'); ic.append(this.folderIcon(key.slice(4))); }
-    else if (it.icon) ic.innerHTML = it.icon;
-    else { ic.classList.add('word'); ic.textContent = initials(it.label); }
-    const name = document.createElement('div');
-    name.className = 'tbe-name-tag';
-    name.textContent = key === 'sep' ? 'Divider' : it.label;
-    const x = document.createElement('button');
-    x.type = 'button';
-    x.className = 'tbe-x';
-    x.textContent = '×';
-    x.title = `Take ${it.label} out`;
-    x.setAttribute('aria-label', x.title);
-    x.tabIndex = -1;
-    x.addEventListener('pointerdown', (e) => e.stopPropagation());
-    x.addEventListener('click', () => this.remove(i));
-    wig.append(ic, name);
-    t.append(wig, x);
-    t.addEventListener('pointerdown', (e) => this.press(e, key, i, t));
-    t.addEventListener('keydown', (e) => this.tileKey(e, key, i));
-    return t;
+  private cell(g: Grid, i: number, lineAbove: boolean): HTMLElement {
+    const k = g.cells[i];
+    const cell = document.createElement('div');
+    cell.className = 'tbe-cell' + (k ? '' : ' empty') + (lineAbove ? ' line-above' : '');
+    cell.dataset.i = String(i);
+    cell.setAttribute('role', 'gridcell');
+    cell.tabIndex = i === 0 ? 0 : -1;
+    const r = Math.floor(i / g.cols) + 1, c = (i % g.cols) + 1;
+    if (!k) {
+      cell.title = `Empty cell (row ${r}, column ${c}): drag a tool or command here`;
+      cell.setAttribute('aria-label', `Empty, row ${r}, column ${c}`);
+    } else {
+      const key = this.keyOf(k);
+      const it = this.hooks.describe(key);
+      cell.title = `${it.label}. Drag to another cell (two swap), or out to take it away${key.startsWith('pal:') ? '; click to lay out its tools' : ''}. Ctrl+arrow keys move it, Delete takes it out.`;
+      cell.setAttribute('aria-label', `${it.label}, row ${r}, column ${c}`);
+      const t = document.createElement('div');
+      t.className = 'tbe-tile' + (key.startsWith('pal:') ? ' folder' : '');
+      t.dataset.key = key;
+      const wig = document.createElement('div');
+      wig.className = 'tbe-wig';
+      // a different start in the jiggle for each, as on the phone
+      wig.style.animationDelay = `${-((i * 37) % 23) / 100}s`;
+      wig.append(this.icon(key));
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'tbe-x';
+      x.textContent = '×';
+      x.title = `Take ${it.label} out`;
+      x.setAttribute('aria-label', x.title);
+      x.tabIndex = -1;
+      x.addEventListener('pointerdown', (e) => e.stopPropagation());
+      x.addEventListener('click', () => this.remove(i));
+      t.append(wig, x);
+      cell.append(t);
+      cell.addEventListener('pointerdown', (e) => this.press(e, key, i, cell));
+    }
+    cell.addEventListener('keydown', (e) => this.cellKey(e, i));
+    return cell;
   }
 
-  /** A fly-out's icon: its first four tools, small, as a phone shows a folder. */
+  /** A fly-out's icon: its tool in the first cell, with the corner mark the toolbox shows. */
   private folderIcon(palette: string): HTMLElement {
     const box = document.createElement('div');
-    box.className = 'tbe-folder';
-    for (const tool of this.hooks.flyout(palette).slice(0, 4)) {
-      const m = document.createElement('span');
-      m.innerHTML = this.hooks.describe(`tool:${tool}`).icon ?? '';
-      box.append(m);
-    }
+    box.className = 'tbe-fly';
+    const first = gridItems(this.hooks.flyGrid(palette))[0];
+    box.innerHTML = (first && this.hooks.describe(`tool:${first}`).icon) ?? '';
+    const mark = document.createElement('span');
+    mark.className = 'tbe-fly-mark';
+    box.append(mark);
     return box;
   }
 
   private remove(i: number): void {
-    const keys = this.keys();
-    const label = this.hooks.describe(keys[i]).label;
-    this.setKeys(keys.filter((_, j) => j !== i));
-    this.say(`Took ${label} out.`);
-    this.focusTile(Math.min(i, this.keys().length - 1));
+    const g = this.grid();
+    const k = g.cells[i];
+    if (!k) return;
+    this.setGrid(emptied(g, i));
+    this.say(`Took ${this.hooks.describe(this.keyOf(k)).label} out.`);
+    this.focusCell(i);
   }
 
-  private focusTile(i: number): void {
-    this.els.grid.querySelector<HTMLElement>(`.tbe-tile[data-i="${i}"]`)?.focus();
+  private focusCell(i: number): void {
+    const cells = this.els.board.querySelectorAll<HTMLElement>('.tbe-cell');
+    cells.forEach((c) => { c.tabIndex = -1; });
+    const c = this.els.board.querySelector<HTMLElement>(`.tbe-cell[data-i="${i}"]`);
+    if (c) { c.tabIndex = 0; c.focus(); }
   }
 
-  private tileKey(e: KeyboardEvent, key: string, i: number): void {
-    const n = this.keys().length;
-    const step = e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : 0;
-    if (step && (e.ctrlKey || e.altKey || e.metaKey)) {
+  private cellKey(e: KeyboardEvent, i: number): void {
+    const g = this.grid();
+    const r = Math.floor(i / g.cols), c = i % g.cols;
+    const dr = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0, dc = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
+    if (dr || dc) {
       e.preventDefault();
-      const j = Math.max(0, Math.min(n - 1, i + step));
-      if (j !== i) { this.setKeys(moved(this.keys(), i, j)); this.focusTile(j); }
-    } else if (step) {
-      e.preventDefault();
-      this.focusTile(Math.max(0, Math.min(n - 1, i + step)));
+      const nr = Math.max(0, Math.min(g.rows - 1, r + dr)), nc = Math.max(0, Math.min(g.cols - 1, c + dc));
+      const j = nr * g.cols + nc;
+      const k = g.cells[i];
+      if (j !== i && k && (e.ctrlKey || e.altKey || e.metaKey)) { const n = placed(g, k, j); if (n) this.setGrid(n); }
+      this.focusCell(j);
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
       this.remove(i);
-    } else if ((e.key === 'Enter' || e.key === ' ') && key.startsWith('pal:')) {
+    } else if ((e.key === 'Enter' || e.key === ' ') && g.cells[i]?.startsWith('pal:') && !this.folder) {
       e.preventDefault();
-      this.openFolder(key.slice(4));
+      this.openFolder(g.cells[i]!.slice(4));
     }
   }
 
@@ -379,7 +464,7 @@ export class ToolboxEditor {
     if (!this.hooks.palette(palette)) { this.say('This fly-out’s tools come from your own templates (save one with Chemistry > Nicknames and Templates > Save as Template).'); return; }
     this.folder = palette;
     this.draw();
-    this.focusTile(0);
+    this.focusCell(0);
   }
 
   // ------------------------------------------------------------ the list down the left
@@ -401,7 +486,7 @@ export class ToolboxEditor {
       head.addEventListener('click', () => { if (this.shut.has(g.name)) this.shut.delete(g.name); else this.shut.add(g.name); this.drawList(); });
       list.append(head);
       if (shut) continue;
-      for (const it of items) list.append(this.row(it, inBox.has(it.key) && it.key !== 'sep'));
+      for (const it of items) list.append(this.row(it, inBox.has(it.key)));
     }
   }
 
@@ -412,11 +497,10 @@ export class ToolboxEditor {
     r.tabIndex = 0;
     r.setAttribute('role', 'option');
     r.setAttribute('aria-selected', String(there));
-    r.title = there ? `${it.label}: in this ${this.folder ? 'fly-out' : 'toolbox'} (drag to move it there)` : `Drag ${it.label} into the ${this.folder ? 'fly-out' : 'toolbox'}, or click + to put it at the end`;
+    r.title = there ? `${it.label}: in this ${this.folder ? 'fly-out' : 'toolbox'} (drag to move it to another cell)` : `Drag ${it.label} into a cell of the ${this.folder ? 'fly-out' : 'toolbox'}, or click + to put it in the first empty cell`;
     const ic = document.createElement('span');
     ic.className = 'tbe-row-ic';
-    if (it.key === 'sep') ic.innerHTML = '<span class="tbe-bar"></span>';
-    else if (it.icon) ic.innerHTML = it.icon;
+    if (it.icon) ic.innerHTML = it.icon;
     else { ic.classList.add('word'); ic.textContent = initials(it.label); }
     const name = document.createElement('span');
     name.className = 'tbe-row-name';
@@ -425,84 +509,131 @@ export class ToolboxEditor {
     add.type = 'button';
     add.className = 'tbe-add';
     add.textContent = there ? '✓' : '+';
-    add.title = there ? 'Already there' : 'Put it at the end';
+    add.title = there ? 'Already there' : 'Put it in the first empty cell (a row is added when the grid is full)';
     add.setAttribute('aria-label', `${add.title}: ${it.label}`);
     add.tabIndex = -1;
     add.disabled = there || !isEditable(this.box);
     add.addEventListener('pointerdown', (e) => e.stopPropagation());
-    add.addEventListener('click', () => this.addAt(it.key, this.keys().length));
+    add.addEventListener('click', () => this.addFirst(it.key));
     r.append(ic, name, add);
     r.addEventListener('pointerdown', (e) => this.press(e, it.key, null, r));
-    r.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !there) { e.preventDefault(); this.addAt(it.key, this.keys().length); } });
+    r.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !there) { e.preventDefault(); this.addFirst(it.key); } });
     return r;
   }
 
-  /** Put a button in the grid at a place (one already there moves). */
-  private addAt(key: string, at: number): void {
-    if (!isEditable(this.box)) { this.say('Pick or make a toolbox you can put buttons in (New makes one).'); return; }
-    if (this.folder && !key.startsWith('tool:')) { this.say('A fly-out holds drawing tools only.'); return; }
-    if (this.folder && this.keys().includes(key)) return;
-    this.setKeys(inserted(this.keys(), key, at));
+  /** Whether a key can go in the grid showing (say why not). */
+  private fits(key: string): boolean {
+    if (!isEditable(this.box)) { this.say('Pick or make a toolbox you can put buttons in (New makes one).'); return false; }
+    if (this.folder && !key.startsWith('tool:')) { this.say('A fly-out holds drawing tools only.'); return false; }
+    return true;
+  }
+
+  /** Put a button in the first empty cell (a row added when the grid is full). */
+  private addFirst(key: string): void {
+    if (!this.fits(key)) return;
+    const g = this.grid();
+    const n = added(g, this.cellOf(key));
+    if (n === g) return;
+    this.setGrid(n);
+    this.say(`Put ${this.hooks.describe(key).label} in${n.rows > g.rows ? ', in a new row at the foot' : ''}.`);
+  }
+
+  /** Put a button in a cell: one in the grid moves (two swap); one from the list pushes what is there along to the next empty cell. */
+  private putAt(key: string, at: number): void {
+    if (!this.fits(key)) return;
+    const n = placed(this.grid(), this.cellOf(key), at);
+    if (!n) { this.say('No empty cell for what is there to move to: make the grid bigger first.'); this.draw(); return; }
+    this.setGrid(n);
     this.say(`Put ${this.hooks.describe(key).label} in.`);
   }
 
   // ------------------------------------------------------------ dragging
 
   /**
-   * Press on an icon in the grid (`from` its place) or a row of the list (`from` null): after a
-   * small move it lifts and follows the pointer, and the grid makes room where it would go.
-   * Let go over the grid to put it there, over a fly-out to put a tool inside, or outside the
+   * Press on a button in the grid (`from` its cell) or a row of the list (`from` null): after a
+   * small move it lifts and follows the pointer, and the cell it would go to lights up. Let go
+   * over a cell to put it there, over a fly-out's middle to put a tool inside, or away from the
    * grid to take it out. A press that doesn't move is a click (it opens a fly-out).
    */
   private press(e: PointerEvent, key: string, from: number | null, el: HTMLElement): void {
-    dragTile(e, {
-      grid: this.els.grid, layer: this.d!, from, el,
-      ghost: () => this.icon(key),
-      stand: () => this.tile(key, -1),
-      canStart: () => {
-        if (isEditable(this.box)) return true;
-        this.say('Pick or make a toolbox you can put buttons in (New makes one).');
-        return false;
-      },
+    if (e.button !== 0) return;
+    const { board } = this.els;
+    const d = this.d!;
+    const x0 = e.clientX, y0 = e.clientY;
+    let ghost: HTMLElement | null = null;
+    let over: HTMLElement | null = null;
+    let into = false, out = false;
+    const light = (on: boolean) => { over?.classList.toggle(into ? 'drop-in' : 'drop-at', on); };
+    const move = (m: PointerEvent) => {
+      if (!ghost) {
+        if (Math.hypot(m.clientX - x0, m.clientY - y0) < 5) return;
+        if (!this.fits(key)) { done(); return; }
+        ghost = document.createElement('div');
+        ghost.className = 'tbe-ghost';
+        ghost.append(this.icon(key));
+        d.append(ghost);
+        d.classList.add('dragging');
+        if (from !== null) el.classList.add('hole');
+      }
+      m.preventDefault();
+      ghost.style.left = `${m.clientX}px`;
+      ghost.style.top = `${m.clientY}px`;
+      light(false);
+      const b = board.getBoundingClientRect();
+      out = !(m.clientX > b.left - 16 && m.clientX < b.right + 16 && m.clientY > b.top - 16 && m.clientY < b.bottom + 16);
+      const hit = out ? null : (document.elementFromPoint(m.clientX, m.clientY) as Element | null)?.closest<HTMLElement>('.tbe-cell') ?? null;
+      over = hit && board.contains(hit) ? hit : null;
       // over a fly-out's middle, a tool goes inside it
-      into: (tiles, x, y) => (!this.folder && key.startsWith('tool:') ? tiles.find((t) => t.dataset.key!.startsWith('pal:') && inside(t, x, y, 0.22)) ?? null : null),
-      // (the grid keeps still over a fly-out, so a tool can reach its middle)
-      hold: (tiles, x, y) => !this.folder && key.startsWith('tool:') && tiles.some((t) => t.dataset.key!.startsWith('pal:') && inside(t, x, y)),
-      // a click on a fly-out opens it like a folder
-      click: () => { if (from !== null && key.startsWith('pal:')) this.openFolder(key.slice(4)); },
-      drop: (where) => {
-        const keys = this.keys();
-        if (where.kind === 'into') {
-          const palette = where.el.dataset.key!.slice(4);
-          const tools = this.hooks.flyout(palette);
-          const tool = key.slice(5);
-          if (tools.includes(tool)) { this.say(`${this.hooks.describe(key).label} is in that fly-out already.`); this.draw(); return; }
-          const pal = this.hooks.palette(palette);
-          if (!pal) { this.say('That fly-out holds your own templates only.'); this.draw(); return; }
-          this.change((s) => {
-            let n = withFlyout(s, palette, [...tools, tool]);
-            // dragged from the toolbox, it leaves it
-            if (from !== null) n = withItems(n, this.box, keys.filter((_, j) => j !== from));
-            return n;
-          });
-          this.say(`Put ${this.hooks.describe(key).label} in the ${pal.title} fly-out.`);
-        } else if (where.kind === 'at') {
-          if (from === null) this.addAt(key, where.at);
-          else if (where.at !== from) this.setKeys(moved(keys, from, where.at));
-          else this.draw();
-        } else if (from !== null) this.remove(from);
-        else this.draw();
-      },
-    });
+      const k = over ? this.grid().cells[Number(over.dataset.i)] : null;
+      into = !!over && !this.folder && key.startsWith('tool:') && !!k?.startsWith('pal:') && inside(over, m.clientX, m.clientY, 0.22);
+      light(true);
+      ghost.classList.toggle('removing', out && from !== null);
+    };
+    const done = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      d.classList.remove('dragging');
+      el.classList.remove('hole');
+      light(false);
+      ghost?.remove();
+    };
+    const up = () => {
+      const was = ghost;
+      done();
+      if (!was) { if (from !== null && key.startsWith('pal:')) this.openFolder(key.slice(4)); return; }
+      if (out) { if (from !== null) this.remove(from); return; }
+      if (!over) return;
+      const at = Number(over.dataset.i);
+      if (into) this.dropInto(key, from, this.grid().cells[at]!.slice(4));
+      else if (at !== from) this.putAt(key, at);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
   }
 
-  /** A button's picture, as the grid shows it. */
+  /** A tool dropped on a fly-out goes inside it (in its first empty cell), leaving the toolbox when it came from there. */
+  private dropInto(key: string, from: number | null, palette: string): void {
+    const pal = this.hooks.palette(palette);
+    if (!pal) { this.say('That fly-out holds your own templates only.'); return; }
+    const fg = this.hooks.flyGrid(palette);
+    const tool = key.slice(5);
+    if (fg.cells.includes(tool)) { this.say(`${this.hooks.describe(key).label} is in that fly-out already.`); return; }
+    this.change((s) => {
+      let n = withFlyGrid(s, palette, added(fg, tool));
+      if (from !== null) n = withGrid(n, this.box, emptied(this.grid(), from));
+      return n;
+    });
+    this.say(`Put ${this.hooks.describe(key).label} in the ${pal.title} fly-out.`);
+  }
+
+  /** A button's picture, as the toolbox shows it. */
   private icon(key: string): HTMLElement {
     const it = this.hooks.describe(key);
     const ic = document.createElement('div');
     ic.className = 'tbe-ic';
-    if (key === 'sep') ic.innerHTML = '<span class="tbe-bar"></span>';
-    else if (key.startsWith('pal:')) ic.append(this.folderIcon(key.slice(4)));
+    if (key.startsWith('pal:')) ic.append(this.folderIcon(key.slice(4)));
     else if (it.icon) ic.innerHTML = it.icon;
     else { ic.classList.add('word'); ic.textContent = initials(it.label); }
     return ic;

@@ -421,7 +421,8 @@ export class Renderer {
     if (scale !== this.tileScale || dpr !== this.tileDpr || doc.background !== this.tileBg) {
       if (this.tiles.size && dpr === this.tileDpr && doc.background === this.tileBg) {
         // keep the old tiles as stretched placeholders while new ones are painted
-        if (!this.stale || this.tiles.size >= this.stale.tiles.size / 2) this.stale = { tiles: this.tiles, scale: this.tileScale };
+        // (not tiles waiting to have an edit painted in: they show the drawing as it was)
+        if (!this.stale || this.tiles.size >= this.stale.tiles.size / 2) this.stale = { tiles: new Map([...this.tiles].filter(([, t]) => !t.patch)), scale: this.tileScale };
       } else this.stale = null;
       this.tiles = new Map();
       this.tileScale = scale;
@@ -457,6 +458,7 @@ export class Renderer {
     for (let ty = ty0; ty <= ty1; ty++) {
       for (let tx = tx0; tx <= tx1; tx++) {
         const t = this.tiles.get(tx + ',' + ty);
+        if (t?.patch) this.patchTile(doc, t);
         if (t) ctx.drawImage(t.canvas, tx * T + ox, ty * T + oy, T, T);
       }
     }
@@ -472,12 +474,7 @@ export class Renderer {
     const canvas = this.freeCanvases.pop() ?? (typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(px, px) : Object.assign(document.createElement('canvas'), { width: px, height: px }));
     if (canvas.width !== px) { canvas.width = px; canvas.height = px; }
     const ctx = canvas.getContext('2d', { alpha: false }) as CanvasRenderingContext2D;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    // a canvas used before keeps its settings: start each tile as a new canvas would
-    ctx.lineJoin = 'miter';
-    ctx.lineCap = 'butt';
-    ctx.setLineDash([]);
-    ctx.globalAlpha = 1;
+    this.startTile(ctx);
     ctx.fillStyle = doc.background;
     ctx.fillRect(0, 0, px, px);
     ctx.setTransform(dpr * scale, 0, 0, dpr * scale, -tx * T * dpr, -ty * T * dpr);
@@ -485,7 +482,48 @@ export class Renderer {
     const pad = this.pad(doc);
     this.page?.draw(ctx);
     this.drawContent(ctx, doc, { x1: x1 - pad, y1: y1 - pad, x2: x1 + T / scale + pad, y2: y1 + T / scale + pad });
-    return { canvas, tx, ty };
+    return { canvas, tx, ty, patch: null };
+  }
+
+  /** A canvas used before keeps its settings: start each paint as a new canvas would. */
+  private startTile(ctx: CanvasRenderingContext2D): void {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.lineJoin = 'miter';
+    ctx.lineCap = 'butt';
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  }
+
+  /**
+   * Paint again only the part of a tile an edit touched (a small structure dragged in a big
+   * drawing, where a tile holds thousands of atoms): cleared, then everything that reaches into
+   * it drawn again, in the usual order, so it comes out as a whole repaint would.
+   */
+  private patchTile(doc: Doc, t: Tile): void {
+    const r = t.patch!;
+    t.patch = null;
+    const T = TILE, dpr = this.dpr, scale = this.tileScale;
+    const px = Math.round(T * dpr);
+    // the area in the tile's pixels, out to whole pixels
+    const k = scale * dpr;
+    const ix0 = Math.max(0, Math.floor(r.x1 * k - t.tx * T * dpr)), iy0 = Math.max(0, Math.floor(r.y1 * k - t.ty * T * dpr));
+    const ix1 = Math.min(px, Math.ceil(r.x2 * k - t.tx * T * dpr)), iy1 = Math.min(px, Math.ceil(r.y2 * k - t.ty * T * dpr));
+    if (ix1 <= ix0 || iy1 <= iy0) return;
+    const ctx = t.canvas.getContext('2d', { alpha: false }) as CanvasRenderingContext2D;
+    ctx.save();
+    this.startTile(ctx);
+    ctx.beginPath();
+    ctx.rect(ix0, iy0, ix1 - ix0, iy1 - iy0);
+    ctx.clip();
+    ctx.fillStyle = doc.background;
+    ctx.fillRect(ix0, iy0, ix1 - ix0, iy1 - iy0);
+    ctx.setTransform(k, 0, 0, k, -t.tx * T * dpr, -t.ty * T * dpr);
+    const pad = this.pad(doc);
+    const x1 = (t.tx * T + ix0 / dpr) / scale, y1 = (t.ty * T + iy0 / dpr) / scale;
+    const x2 = (t.tx * T + ix1 / dpr) / scale, y2 = (t.ty * T + iy1 / dpr) / scale;
+    this.page?.draw(ctx);
+    this.drawContent(ctx, doc, { x1: x1 - pad, y1: y1 - pad, x2: x2 + pad, y2: y2 + pad });
+    ctx.restore();
   }
 
   /** How far outside a tile an object can sit and still reach into it. */
@@ -499,16 +537,27 @@ export class Renderer {
     if (!this.tiles.size) return;
     const T = TILE, s = this.tileScale;
     const pad = this.pad(doc);
+    // what each tile needs painted again, in drawing units
+    const hit = new Map<Tile, Rect>();
     for (const r of rects) {
-      const tx0 = Math.floor(((r.x1 - pad) * s) / T), tx1 = Math.floor(((r.x2 + pad) * s) / T);
-      const ty0 = Math.floor(((r.y1 - pad) * s) / T), ty1 = Math.floor(((r.y2 + pad) * s) / T);
+      const x1 = r.x1 - pad, y1 = r.y1 - pad, x2 = r.x2 + pad, y2 = r.y2 + pad;
+      const tx0 = Math.floor((x1 * s) / T), tx1 = Math.floor((x2 * s) / T);
+      const ty0 = Math.floor((y1 * s) / T), ty1 = Math.floor((y2 * s) / T);
       for (let ty = ty0; ty <= ty1; ty++) {
         for (let tx = tx0; tx <= tx1; tx++) {
-          const key = tx + ',' + ty;
-          const t = this.tiles.get(key);
-          if (t) { this.freeCanvases.push(t.canvas); this.tiles.delete(key); }
+          const t = this.tiles.get(tx + ',' + ty);
+          if (!t) continue;
+          const u = hit.get(t) ?? t.patch;
+          hit.set(t, u ? { x1: Math.min(u.x1, x1), y1: Math.min(u.y1, y1), x2: Math.max(u.x2, x2), y2: Math.max(u.y2, y2) } : { x1, y1, x2, y2 });
         }
       }
+    }
+    const side = T / s;
+    for (const [t, u] of hit) {
+      // most of the tile: paint it whole; a small part: paint just that when it is next shown
+      const w = Math.min(u.x2, (t.tx + 1) * side) - Math.max(u.x1, t.tx * side), h = Math.min(u.y2, (t.ty + 1) * side) - Math.max(u.y1, t.ty * side);
+      if (w * h > 0.4 * side * side) { this.freeCanvases.push(t.canvas); this.tiles.delete(t.tx + ',' + t.ty); }
+      else t.patch = u;
     }
   }
 
@@ -2055,7 +2104,13 @@ const TILE_BYTES = 160 * 1024 * 1024;
 /** Most hashes or waves drawn on one bond (a hash spacing near 0 would otherwise draw for ever). */
 const MAX_HASHES = 400;
 
-interface Tile { canvas: OffscreenCanvas | HTMLCanvasElement; tx: number; ty: number }
+interface Tile {
+  canvas: OffscreenCanvas | HTMLCanvasElement;
+  tx: number;
+  ty: number;
+  /** Part changed since it was painted (drawing units), painted again before it is next shown. */
+  patch: Rect | null;
+}
 
 /** One colour and look of highlight: its atoms and bonds (with where each atom's highlight runs, when centred on double bonds). */
 /** A highlight's effects as worked out: its pieces as drawn, what it draws, and (made when first needed) its joined areas and plain-area paints. */
