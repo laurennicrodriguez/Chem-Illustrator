@@ -227,7 +227,7 @@ const VALUE_FIELDS = new Set<string>(['merges', 'filter', 'frozen', 'split', 'na
 
 interface Change {
   sheet: Sheet | null; // null: the workbook's list of sheets, its names, theme or custom views
-  field: MapField | ValueField | 'sheets' | 'names' | 'theme' | 'customViews' | 'queries';
+  field: MapField | ValueField | 'sheets' | 'names' | 'theme' | 'customViews' | 'queries' | 'drawingStyle';
   key: number;
   before: unknown;
   after: unknown;
@@ -1148,7 +1148,7 @@ const READER_COLS = 1 << 15;
 
 /** Changes that leave every value as it was. */
 const NO_VALUES = new Set<string>(['colWidths', 'rowHeights', 'colStyles', 'hiddenRows', 'hiddenCols', 'merges', 'filter', 'frozen', 'split', 'condFormats', 'tables', 'charts', 'dashboard', 'notes', 'validations', 'objects', 'pageSetup', 'pivots',
-  'rowLevels', 'colLevels', 'sparklines', 'viewOpts', 'outline', 'theme', 'customViews', 'queries']);
+  'rowLevels', 'colLevels', 'sparklines', 'viewOpts', 'outline', 'theme', 'customViews', 'queries', 'drawingStyle']);
 
 const isFormulaText = (t: string | undefined): boolean => !!t && t.startsWith('=') && t.length > 1;
 
@@ -1347,6 +1347,7 @@ export class Workbook {
       return;
     }
     if (c.field === 'theme') { this.theme = v as WorkbookTheme | null; return; }
+    if (c.field === 'drawingStyle') { this.drawingStyle = v as DocStyle; return; }
     if (c.field === 'customViews') { this.customViews = v as CustomView[]; return; }
     if (c.field === 'queries') { this.queries = v as Query[]; return; }
     const s = c.sheet!;
@@ -1380,6 +1381,23 @@ export class Workbook {
     if (before === t) return;
     this.theme = t;
     this.record({ sheet: null, field: 'theme', key: 0, before, after: t });
+  }
+
+  /**
+   * File > Drawing Style: draw structures in `next`, every structure cell redrawn by `restyle`
+   * (from the old style to the new), as one step Undo takes back.
+   */
+  setDrawingStyle(next: DocStyle, restyle: (c: Contents, old: DocStyle) => Contents): void {
+    const old = this.drawingStyle;
+    this.edit(`Drawing style: ${next.name}`, () => {
+      for (const sh of this.sheets) {
+        for (const [k, c] of [...sh.cells]) {
+          if (c.structure) sh.setCell(rowOf(k), colOf(k), { ...c, structure: makeStructure(restyle(c.structure.contents, old)) });
+        }
+      }
+      this.drawingStyle = { ...next };
+      this.record({ sheet: null, field: 'drawingStyle', key: 0, before: old, after: this.drawingStyle });
+    });
   }
 
   setCustomViews(list: CustomView[]): void {

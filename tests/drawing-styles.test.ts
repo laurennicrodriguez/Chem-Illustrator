@@ -156,3 +156,26 @@ describe('stored drawings (document figures)', () => {
     expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeCloseTo(RSC.bondLength, 6);
   });
 });
+
+describe('a workbook\'s structure cells', () => {
+  it('all take a new style together, and one undo puts the style and the structures back', async () => {
+    const { Workbook } = await import('../src/sheet/workbook');
+    const wb = new Workbook();
+    const c = sample().contents();
+    wb.edit('Insert', () => { wb.sheet.setStructure(0, 0, c); wb.sheet.setStructure(1, 0, c); });
+    const before = [wb.sheet.cell(0, 0)!.structure!, wb.sheet.cell(1, 0)!.structure!];
+    wb.setDrawingStyle(RSC, (x, old) => restyleContents(x, old, RSC, 'restyle'));
+    expect(wb.drawingStyle.name).toBe(RSC.name);
+    for (const r of [0, 1]) {
+      const d = new Doc();
+      d.restoreContents(wb.sheet.cell(r, 0)!.structure!.contents);
+      expect(bondLen(d)).toBeCloseTo(RSC.bondLength, 3);
+    }
+    expect(wb.undoLabel).toBe(`Drawing style: ${RSC.name}`);
+    wb.undo();
+    expect(wb.drawingStyle.name).toBe(ACS_1996.name);
+    expect([wb.sheet.cell(0, 0)!.structure, wb.sheet.cell(1, 0)!.structure]).toEqual(before);
+    // the next undo is the insertion, not the style
+    expect(wb.undoLabel).toBe('Insert');
+  });
+});

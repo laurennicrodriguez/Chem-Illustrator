@@ -3235,7 +3235,7 @@ async function drawingStyleDialog(): Promise<void> {
   const current = deck ? deck.master.drawing : book ? book.drawingStyle : file ? file.t.drawingStyle : doc.style;
   const hasStructures = deck ? deck.slides.some((_, i) => deck.docOf(i).atoms.size > 0)
     : file ? Object.values(file.t.objects).some((o) => o.kind === 'drawing' && o.contents.atoms.length > 0)
-    : book ? false : doc.atoms.size > 0 || doc.captions.size > 0;
+    : book ? book.sheets.some((s) => [...s.cells.values()].some((c) => !!c.structure)) : doc.atoms.size > 0 || doc.captions.size > 0;
   const got = await editDrawingStyle({
     current, own: ownStyles, kindPlural: STYLE_KINDS[mode].plural, where: STYLE_KINDS[mode].where,
     isDefault: modeStyleFor(mode) === current.name, hasStructures,
@@ -3256,8 +3256,7 @@ async function drawingStyleDialog(): Promise<void> {
   const next = got.style;
   if (deck) deck.setDrawingStyle(next, got.how);
   else if (book) {
-    book.drawingStyle = { ...next };
-    book.edits++;
+    book.setDrawingStyle(next, (c, old) => restyleContents(c, old, next, got.how));
     sheetMode.styleChanged();
   } else if (file) {
     const t = file.t, old = t.drawingStyle;
