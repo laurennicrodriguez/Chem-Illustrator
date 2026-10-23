@@ -19,6 +19,7 @@ import type { TextLook } from '../format-painter';
 import { BRUSH } from '../editor/cursors';
 import { offsetAt, caretPos, selectionRects } from '../text/layout';
 import { htmlToRich, richToHtml, richToPlain } from '../text/html';
+import { pastedTable, tableHtml, tableTsv } from '../io/table-clip';
 import { afterTyping, typingPrefs, setTypingPrefs } from '../text/typing';
 import { findIssues, type CharLook, type Issue } from '../text/chemtext';
 import { loadSpeller, type Speller } from '../text/spelling';
@@ -54,7 +55,7 @@ import { chartBoxPng } from '../render/chart-box-paint';
 import type { DocFile } from '../document/doc-file';
 import type { TableData } from '../model';
 import {
-  canMerge, coveringCell, deleteColumn, deleteRow, emptyTable, insertColumn, insertRow, isCovered, mergeDown, mergeRight, nextCell, rowSpanOf, setColumnAlign, setColumnWidth, setPart, splitCell, spanOf,
+  canMerge, coveringCell, deleteColumn, deleteRow, emptyTable, insertColumn, tableFromCells, insertRow, isCovered, mergeDown, mergeRight, nextCell, rowSpanOf, setColumnAlign, setColumnWidth, setPart, splitCell, spanOf,
 } from '../table';
 import { cellMargins, paintEdge, type CellBlock } from '../document/table-styles';
 import { blockOf, canMergeBlock, mergeBlock } from '../document/table-convert';
@@ -99,6 +100,10 @@ export interface DocModeHost {
   editDiagram?(contents: Contents | null): Promise<Contents | null>;
   /** Put a drawing on the clipboard, for ChemDraw and Word. */
   copyDrawing(contents: Contents, style: DocStyle): Promise<string>;
+  /** Something other than a drawing was copied (so a paste elsewhere doesn't fall back on an old drawing). */
+  copiedOther?(): void;
+  /** Put a picture (its image's URL) on the clipboard as a picture, for other programs and modes. */
+  copyPicture?(src: string): Promise<string>;
   /** What a paste brings: a drawing (from ChemDraw or a drawing here), a picture, or text. */
   readPaste(e: ClipboardEvent | null): Promise<DocPaste>;
   /** A name or SMILES as a drawing. */
@@ -253,6 +258,8 @@ export class DocumentMode {
   private finder: DocFind;
   /** The last copy made here: pasting the same text back brings its figures and fields too (and the references its citations cite). */
   private clip: (OwnCopy & { text: string }) | null = null;
+  /** The pixel size of a picture copied here on its own (it goes out as a PNG): pasted back, it is the copy above. */
+  private clipPicture: { w: number; h: number } | null = null;
   private refs: ReferencesDialog;
   /** Review > New Comment: comments beside the page. */
   readonly comments: DocComments;
@@ -1689,13 +1696,19 @@ export class DocumentMode {
         return;
       }
     }
+    // (anything else copied here: the last drawing copied isn't what a paste elsewhere should find)
+    this.host.copiedOther?.();
+    this.clipPicture = null;
     const sel = ed.selected();
     const shown = fieldTexts(f.t);
+    // a table on its own goes as cells (tab-separated and an HTML table), for a sheet, a slide, Excel and Word
+    const lone = sel.runs.length === 1 && sel.runs[0].obj !== undefined ? f.t.objects[sel.runs[0].obj] : undefined;
+    const table = lone?.kind === 'table' ? { ...lone.table, rows: lone.table.rows.map((row) => row.map((c) => ({ ...c, runs: c.runs.filter((r) => r.obj === undefined) }))) } : null;
     // fields show their text in other programs; figures are left out of plain text
     const plainRuns = sel.runs.map((r) => (r.obj !== undefined ? { ...r, obj: undefined, text: shown.get(r.obj) ?? '' } : r));
-    const plain = richToPlain({ runs: plainRuns, paras: sel.paras });
+    const plain = table ? tableTsv(table) : richToPlain({ runs: plainRuns, paras: sel.paras });
     e.clipboardData.setData('text/plain', plain);
-    e.clipboardData.setData('text/html', richToHtml({ runs: plainRuns, paras: sel.paras }, { defaultSize: 11 }));
+    e.clipboardData.setData('text/html', table ? tableHtml(table) : richToHtml({ runs: plainRuns, paras: sel.paras }, { defaultSize: 11 }));
     const objects: Record<number, DocObject> = {};
     // with the structures in any table's cells
     const add = (id: number) => {
@@ -1712,6 +1725,12 @@ export class DocumentMode {
     const runs = sel.runs.map((r) => { if (!r.cmt) return r; const { cmt: _, ...rest } = r; return rest; });
     this.clip = { text: plain, runs, paras: sel.paras, objects, references };
     try { e.clipboardData.setData('application/x-' + OWN_KIND, JSON.stringify({ runs, paras: sel.paras, objects, references })); } catch { /* not every browser allows own types */ }
+    // a picture on its own also goes as a PNG, for other programs and the other modes (which takes
+    // the clipboard over: pasted back here, it is known by its size and comes back as copied)
+    if (lone?.kind === 'picture' && this.host.copyPicture) {
+      const px = lone.px ?? null;
+      void this.host.copyPicture(lone.src).then((m) => { this.clipPicture = px; this.host.flash(m); }, (err) => this.host.flash('Could not copy the picture: ' + String(err)));
+    }
     if (cut) ed.replaceSelection([], undefined, 'cut');
   }
 
@@ -1742,9 +1761,29 @@ export class DocumentMode {
     if (own && !plain) { this.pasteOwn(own); return; }
     const got = await this.host.readPaste(e);
     const ed = f.textEd;
-    if (got.drawing) { this.insertObject({ kind: 'drawing', contents: got.drawing }, 'Paste structure'); return; }
-    if (got.picture && !got.text && !got.html && !html) { this.dropPicture(got.picture.bytes, got.picture.mime); return; }
+    // the picture copied here last (copied as a PNG): the copy, with its crop, look and chart
+    const cp = this.clipPicture, gp = got.picture;
+    const gs = gp && cp && !plain && this.clip ? imageSize(gp.bytes, gp.mime) : null;
+    if (gs && gs.w === cp!.w && gs.h === cp!.h) { this.pasteOwn(this.clip!); this.caretAfterPaste(); return; }
+    if (got.drawing) {
+      // a pasted figure leaves the caret after it (as pasted text does), so typing doesn't replace it
+      this.insertObject({ kind: 'drawing', contents: got.drawing }, 'Paste structure');
+      this.caretAfterPaste();
+      return;
+    }
+    if (got.picture && !got.text && !got.html && !html) { this.dropPicture(got.picture.bytes, got.picture.mime); this.caretAfterPaste(); return; }
     const h = plain ? '' : html || got.html || '';
+    // cells (from a sheet, a slide's table, Excel or Word) become a table in the text
+    const cells = plain || f.box ? null : h ? (onlyTable(h) ? pastedTable(h, null) : null) : tsvTable(text0 || got.text || '');
+    if (cells) {
+      const N = styleOf(f.t, {});
+      const t0 = tableFromCells(cells, this.host.measure, N.size, { head: 0 });
+      // as wide as its text needs, up to the width of the text
+      const room = f.layout().textW, wide = t0.cols.reduce((a, b) => a + b, 0);
+      const k = wide > room ? room / wide : 1;
+      this.insertTableObject({ ...t0, cols: t0.cols.map((w) => Math.floor(w * k * 100) / 100), lines: 'grid', head: 0, align: Array(t0.cols.length).fill('left') }, 'Paste table', false);
+      return;
+    }
     const rich = h ? htmlToRich(h) : null;
     if (rich) {
       // pasted text takes the font and size of the text it goes into, unless it brings its own
@@ -1757,6 +1796,14 @@ export class DocumentMode {
     }
     const text = text0 || got.text || '';
     if (text) ed.pastePlain(text);
+  }
+
+  /** After a pasted figure (insertObject picks it): the caret goes after it, in the cell or the text. */
+  private caretAfterPaste(): void {
+    const f = this.file;
+    if (!f) return;
+    const ed = f.box?.cell ? f.box.ed : f.ed;
+    ed.setCaret(ed.end, false);
   }
 
   /** Paste text copied in a document here, with new ids for its figures and fields. */
@@ -2650,7 +2697,8 @@ export class DocumentMode {
       const text = ed.text;
       const p = paraAt(text, at);
       const r = paraRange(text, p);
-      if (r.end - r.start === 1) ed.setParas(p, p, { align: 'center', firstLine: undefined }, 'align');
+      // (part of the insert's undo step, so one Undo takes the figure out)
+      if (r.end - r.start === 1) ed.setParas(p, p, { align: 'center', firstLine: undefined }, null);
       ed.select(at, at + 1);
     }
     return id;
@@ -3566,11 +3614,11 @@ export class DocumentMode {
   }
 
   /** Put a table in the text as a paragraph of its own (after the caret's paragraph text), and type into its first cell. */
-  private insertTableObject(table: TableData): void {
+  private insertTableObject(table: TableData, kind = 'Insert table', type = true): void {
     const f = this.file!;
     const ed = f.ed;
     const id = nextObjectId(f.t);
-    ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'table', table } } } as DocText, 'Insert table');
+    ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'table', table } } } as DocText, kind);
     const text = ed.text;
     const p = paraAt(text, ed.start);
     const r = paraRange(text, p);
@@ -3587,7 +3635,9 @@ export class DocumentMode {
     // a table's paragraph has no spacing or indent of its own (as in Word)
     const tp = paraAt(ed.text, objectOffsets(f.t.runs).get(id)!);
     ed.setParas(tp, tp, { spaceBefore: 0, spaceAfter: 0, firstLine: 0, indent: undefined, list: undefined }, null);
-    this.startCell(id, 0, 0, 'start');
+    // (a pasted table leaves the caret in the paragraph after it)
+    if (type) this.startCell(id, 0, 0, 'start');
+    else ed.setCaret(Math.min(ed.text.length, objectOffsets(f.t.runs).get(id)! + 2), false);
   }
 
   /**
@@ -4633,6 +4683,23 @@ export class DocumentMode {
 
 /** Our own copy of document text: its runs, paragraphs, figures and fields, and the references its citations cite. */
 interface OwnCopy { runs: TextRun[]; paras: ParaStyle[]; objects: Record<number, DocObject>; references?: Reference[] }
+
+/** Is this pasted HTML a table and nothing more (cells copied), rather than text with a table in it? */
+export function onlyTable(html: string): boolean {
+  if (!/<table[\s>]/i.test(html)) return false;
+  const body = new DOMParser().parseFromString(html, 'text/html').body;
+  if (!body.querySelector('table')) return false;
+  for (const t of [...body.querySelectorAll('table')]) t.remove();
+  return !(body.textContent ?? '').trim();
+}
+
+/** Tab-separated text with the same number of cells on every line (cells copied, with no HTML), as rows; else null. */
+export function tsvTable(text: string): ReturnType<typeof pastedTable> {
+  const lines = text.replace(/\r\n?/g, '\n').replace(/\n+$/, '').split('\n');
+  const tabs = (l: string) => l.split('\t').length - 1;
+  if (!tabs(lines[0]) || lines.some((l) => tabs(l) !== tabs(lines[0]))) return null;
+  return pastedTable(null, text);
+}
 
 /** How each character of some runs looks (its position, formula style worked out, and italics). */
 function runLooks(runs: TextRun[]): CharLook[] {

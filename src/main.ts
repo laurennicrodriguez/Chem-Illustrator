@@ -17,7 +17,7 @@ import { ToolboxEditor } from './ui/toolbox-editor';
 import { RibbonEditor } from './ui/ribbon-editor';
 import { readRibbons, applyRibbon, type RibbonInfo, type RibbonsPrefs } from './ui/ribbon-custom';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
-import { Doc, Atom, Caption, Shape, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle, type ShapeMath, PAPER, keepOnPage } from './model';
+import { Doc, Atom, Caption, Shape, type TextRun, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle, type ShapeMath, PAPER, keepOnPage } from './model';
 import { Renderer, measureText, forgetTextWidths } from './render/renderer';
 import { Editor, TOOLS, type HighlightToggle, type Selection } from './editor/editor';
 import { BUILT_IN_LOOKS, type HighlightLookPreset } from './ui/highlight-looks';
@@ -42,7 +42,7 @@ import { toMolfile, addMolfile } from './chem/molfile';
 import { bestFit, fitMove, fitMatters } from './chem/orient';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, fitPasted, typicalBondLength, Pasted,
+import { copyDrawing, copyImage, forgetCopy, looksLikeChemistry, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, fitPasted, typicalBondLength, Pasted,
   nativeFirst, writeNativeFormats, looksLikeCdxml, cfHtml, fromCfHtml, CELLS_FORMAT, OWN_FORMAT, CDX_FORMAT, setWordObjects, embeddedPicture, packFormats } from './io/clipboard';
 import { cdxToCdxml } from './io/cdx';
 import { writeCdxml } from './io/cdxml-write';
@@ -140,6 +140,7 @@ import { idText, labelClashes, parseIdStart, type IdStyle } from './chem/compoun
 import { schemeItems, isReactionArrow } from './chem/reaction';
 import { labelsOf, schemePrefs, setSchemePrefs, SPACING, type SchemePrefs } from './chem/scheme-layout';
 import { plainText, savableChar } from './richtext';
+import { htmlToRich } from './text/html';
 import { LiveStereo } from './chem/live-stereo';
 import { setStereoShown, shownDescriptor, axialStyle } from './chem/stereo';
 import { keymap, registerToolNames, displayChord, actionName, chordOf, parseAction, KeyContext, KeyOverrides } from './editor/keymap';
@@ -631,7 +632,7 @@ async function pasteFrom(read: () => Pasted | Promise<Pasted>): Promise<void> {
     }
     editor.sel = insertDrawing(doc, got.doc, pasteCentre());
     editor.changed();
-  } else if (got.kind === 'text') await pasteChemistry(got.text);
+  } else if (got.kind === 'text') await pasteText(got.text, got.html);
   else if (got.kind === 'picture') placePicture(got.bytes, got.mime, null);
   else if (got.kind === 'table') pasteTable(got.rows);
   else flash('There is nothing to paste.');
@@ -696,13 +697,13 @@ function pasteCentre(): { x: number; y: number } {
   return a ? { x: (a.x1 + a.x2) / 2, y: (a.y1 + a.y2) / 2 } : renderer.toDoc(renderer.width / 2, renderer.height / 2);
 }
 
-/** Paste a SMILES string or a molfile as a structure. */
-async function pasteChemistry(text: string): Promise<void> {
-  if (!chem.ready) { flash('The chemistry engine is still loading.'); return; }
+/** Paste a SMILES string or a molfile as a structure. With `quiet`, text that isn't one is left (false) without a message. */
+async function pasteChemistry(text: string, quiet = false): Promise<boolean> {
+  if (!chem.ready) { flash('The chemistry engine is still loading.'); return true; }
   const c = pasteCentre();
   let mb: string | null = text.includes('M  END') ? text : null;
   if (!mb && !/\s/.test(text)) mb = await chem.smilesToMol(text);
-  if (!mb) { flash('Paste a SMILES string or a molfile.'); return; }
+  if (!mb) { if (!quiet) flash('Paste a SMILES string or a molfile.'); return false; }
   try {
     let ids: number[] = [];
     doc.edit('Paste', () => { ids = addMolfile(doc, mb!, c.x, c.y); });
@@ -710,6 +711,37 @@ async function pasteChemistry(text: string): Promise<void> {
   } catch (err) {
     flash(String(err));
   }
+  return true;
+}
+
+/**
+ * Pasted text on a drawing, slide or design: a SMILES string or a molfile becomes a structure;
+ * other text (a Document's, Word's, a web page's) a text box in the middle, with its bold,
+ * italics, sub- and superscripts and colours from the HTML that came with it.
+ */
+async function pasteText(text: string, html?: string): Promise<void> {
+  if (looksLikeChemistry(text) && await pasteChemistry(text, true)) return;
+  const rich = html ? htmlToRich(html) : null;
+  // (the drawing's caption font and size, as typed text gets)
+  const runs = (rich?.runs ?? [{ text } as TextRun]).map(({ size: _s, font: _f, obj: _o, ...r }: TextRun) => r).filter((r) => r.text);
+  if (!runs.length) { flash('There is nothing to paste.'); return; }
+  const paras = rich && rich.paras.length > 1 ? rich.paras : undefined;
+  finishTyping();
+  renderer.useStyle(doc);
+  const c = pasteCentre();
+  // long text wraps: to the slide's content area, or about 25 bond lengths on a drawing
+  const area = slideContentArea();
+  const most = area ? area.x2 - area.x1 : doc.style.bondLength * 25;
+  const frame = (wrap?: number) => renderer.captionFrame({ id: -1, x: 0, y: 0, runs, justify: 'left', ...(paras ? { paras } : {}), ...(wrap ? { wrap } : {}) } as Caption);
+  let b = frame();
+  const wrap = b.x2 - b.x1 > most ? most : undefined;
+  if (wrap) b = frame(wrap);
+  let id = 0;
+  doc.edit('Paste text', () => {
+    id = doc.addCaption({ x: c.x - (b.x1 + b.x2) / 2, y: c.y - (b.y1 + b.y2) / 2, runs, justify: 'left', ...(paras ? { paras } : {}), ...(wrap ? { wrap } : {}) }).id;
+  });
+  editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set([id]), arrows: new Set(), shapes: new Set() };
+  editor.changed();
 }
 
 /** Insert ▸ Catalytic Cycle…: a ready-made cycle to edit, or the selected structures put round one. */
@@ -1765,6 +1797,8 @@ const ws: Workspace = new Workspace(doc, {
     if (tab.deck) { tab.deck.onChange = () => {}; tab.deck.onSwitch = () => {}; tab.deck.onMotion = () => {}; }
   },
   enter: (tab, opened) => enterTab(tab, opened),
+  // every way of closing a tab (×, middle-click, Delete, Ctrl+W) finishes a figure or cell structure first
+  closing: () => finishTyping(),
   changed: () => { renderTabs(); updateTitle(); layoutSplit(); tickAutoSave(); },
   flash,
   pptx: pptxOptions(),
@@ -3744,7 +3778,8 @@ const sheetMode = new SheetMode({
   editStructure: (contents, title, done) => editCellStructure(contents, title, done),
   key: (e) => sheetKey(e),
   command: (name) => command(name),
-  changed: () => ws.noteChange(),
+  changed: (book) => ws.noteChange(book && ws.tabs.find((t) => t.book === book)),
+  isOpen: (book) => ws.tabs.some((t) => t.book === book),
   toStructure: (text, style) => textToStructure(text, style),
   writeCells: (own, text, html) => writeCells(own, text, html),
   copyStructure: async (contents, style) => (await copyDrawing(structureDoc(contents, style), null)).replace(/^Copied the whole drawing/, 'Copied the structure'),
@@ -3824,6 +3859,7 @@ async function textToStructure(text: string, style: DocStyle): Promise<{ content
  * and Word keep bold, colours and borders) and tab-separated text.
  */
 async function writeCells(own: string, text: string, html: string): Promise<void> {
+  forgetCopy();
   if (nativeClipboard) {
     const enc = new TextEncoder();
     await writeNativeFormats([[CELLS_FORMAT, enc.encode(own)], ['HTML Format', cfHtml(html)], ['CF_UNICODETEXT', enc.encode(text)]]);
@@ -3873,7 +3909,7 @@ function activeStructureDoc(): Doc | null {
 // Drawing a structure for a cell: the drawing area floats over the sheet, with Done and Cancel.
 // The cell's drawing is swapped into the editor's document while it's drawn (the sheet's tab
 // leaves that document empty), so every drawing tool, key and check works on it as usual.
-let cellEdit: { done: (c: Contents | null) => void; saved: Doc } | null = null;
+let cellEdit: { done: (c: Contents | null) => void; saved: Doc; view: typeof renderer.view } | null = null;
 
 function editCellStructure(contents: Contents | null, title: string, done: (c: Contents | null) => void, style: DocStyle = sheetStyle()): void {
   finishCellStructure(true);
@@ -3881,7 +3917,9 @@ function editCellStructure(contents: Contents | null, title: string, done: (c: C
   const drawing = structureDoc(contents ?? blank, style);
   editor.clearSelection();
   doc.swap(drawing);
-  cellEdit = { done, saved: drawing };
+  // the drawing beside (split view) waits in `drawing`, its zoom kept for after
+  cellEdit = { done, saved: drawing, view: { ...renderer.view } };
+  ws.aside = ws.pane ? drawing : null;
   document.body.classList.add('floating-drawing');
   layoutSplit();
   $('#structure-title').textContent = title;
@@ -3923,6 +3961,10 @@ function finishCellStructure(keep: boolean): void {
   editor.lastEdited = null;
   editor.cropping = null;
   doc.swap(e.saved);
+  ws.aside = null;
+  // the drawing beside is back as it was: not changed, at its own zoom
+  if (ws.pane) ws.pane.seen = doc.version;
+  renderer.view = e.view;
   document.body.classList.remove('floating-drawing');
   $('#structure-bar').hidden = true;
   const sheet = ws.active.mode === 'sheet';
@@ -3971,8 +4013,9 @@ window.addEventListener('keydown', (e) => {
 /** Menu commands that work differently while a sheet shows. */
 const SHEET_COMMANDS: Record<string, () => unknown> = {
   'sheet-new-window': () => { sheetMode.view.commitEdit(); ws.newWindow(); },
-  cut: () => sheetMode.copy(true),
-  copy: () => sheetMode.copy(),
+  // (through the sheet's own command, which copies a selected chart rather than the cells under it)
+  cut: () => sheetMode.run('cut'),
+  copy: () => sheetMode.run('copy'),
   paste: () => sheetMode.paste(null),
   'select-all': () => sheetMode.selectAll(),
   'copy-smiles': async () => {
@@ -4033,6 +4076,8 @@ const docMode = new DocumentMode({
   editDrawing: (contents, title, done) => editCellStructure(contents, title, done, docStyle()),
   editDiagram: (contents) => documentDiagram(contents),
   copyDrawing: async (contents, style) => (await copyDrawing(structureDoc(contents, style), null)).replace(/^Copied the whole drawing/, 'Copied the structure'),
+  copiedOther: () => forgetCopy(),
+  copyPicture: (src) => copyImage(src),
   readPaste: (e) => readDocPaste(e),
   toStructure: (text, style) => textToStructure(text, style),
   pickPicture: () => pickPicture(),
@@ -5149,7 +5194,9 @@ function layoutSplit(): void {
   const opts = ws.tabs.filter((t) => t.mode === 'drawing').map((t) => new Option(t.name.replace(/\.(cdxml|cdx)$/i, ''), String(t.id), false, t === st.drawing));
   opts.push(new Option('New drawing', 'new'));
   splitPick.replaceChildren(...opts);
-  $('#split-insert').textContent = st.main.mode === 'document' ? 'Insert into Document' : st.main.mode === 'sheet' ? 'Insert into Cell' : 'Insert into Slide';
+  $('#split-insert').textContent = st.main.mode === 'document' ? 'Insert into Document' : st.main.mode === 'sheet' ? 'Insert into Cell' : st.main.mode === 'design' ? 'Insert into Design' : 'Insert into Slide';
+  // while a figure's or cell's structure is drawn, Done puts that in; the drawing beside waits
+  $<HTMLButtonElement>('#split-insert').disabled = !!cellEdit;
   if (live) $('#split-empty').hidden = true;
   else drawSplitSnap(st.drawing);
 }
@@ -5220,7 +5267,7 @@ function setSplitSide(drawing: boolean): void {
 /** Beside slides: work on the drawing (true; the slide becomes a picture) or on the slide. */
 function focusSlideDrawing(on: boolean): void {
   const st = splitState();
-  if (!st || st.main.mode !== 'slides') return;
+  if (!st || !st.main.deck) return;
   if (on === (ws.active === st.drawing)) return;
   if (on) {
     // the slide as it looks now, kept as a picture on its side
@@ -5243,7 +5290,7 @@ function toggleSplit(): void {
   if (splitState()) { closeSplit(); return; }
   const t = ws.active;
   if (t.mode === 'drawing') {
-    flash('Split view puts a drawing beside a document, sheet or slides: show one of those (or start one with the + tabs) and choose View > Split View there.', 8000);
+    flash('Split view puts a drawing beside a document, sheet, slides or design: show one of those (or start one with the + tabs) and choose View > Split View there.', 8000);
     return;
   }
   finishTyping();
@@ -5255,7 +5302,7 @@ function toggleSplit(): void {
   if (ws.pane) paneEntered(true);
   else layoutSplit();
   mainResized();
-  flash(`${drawing.name} is beside the ${t.mode === 'document' ? 'document' : t.mode === 'sheet' ? 'sheet' : 'slides'}. Click a side to work on it; the bar above the drawing picks another drawing and puts structures in.`, 7000);
+  flash(`${drawing.name} is beside the ${t.mode === 'document' ? 'document' : t.mode === 'sheet' ? 'sheet' : t.mode === 'design' ? 'design' : 'slides'}. Click a side to work on it; the bar above the drawing picks another drawing and puts structures in.`, 7000);
 }
 
 function closeSplit(): void {
@@ -5315,7 +5362,7 @@ splitPick.addEventListener('change', () => {
 /** The bar's Insert: the selected structures (or the whole drawing) into the document, cell or slide. */
 $('#split-insert').addEventListener('click', () => {
   const st = splitState();
-  if (!st) return;
+  if (!st || cellEdit) return;
   editor.closeCaption();
   const live = !!ws.pane || ws.active === st.drawing;
   const part = extractDrawing(ws.docOf(st.drawing), live && editor.hasSelection() ? editor.sel : null);

@@ -113,6 +113,8 @@ export interface WorkspaceHooks {
   autoSaveFailed?(tab: Tab, message: string): void;
   /** A file was opened from disk into this tab. */
   opened?(tab: Tab): void;
+  /** A tab is about to close (before asking to save it): finish any typing or structure being drawn. */
+  closing?(tab: Tab): void;
   /** A tab was closed. */
   dropped?(tab: Tab): void;
 }
@@ -147,6 +149,11 @@ export class Workspace {
    * while the document or sheet shows (they don't use it), so both can be worked on side by side.
    */
   pane: Tab | null = null;
+  /**
+   * While a structure for a cell or figure is drawn in the app's document: the split-view drawing
+   * it took the place of (saved, AutoSaved and kept for recovery from here, untouched by the edit).
+   */
+  aside: Doc | null = null;
   /** The workspace file last saved or opened, so File > Save Workspace saves there again. */
   workspacePath: string | null = null;
   /** While a workspace saves or opens: its files don't each go on the recent list (the workspace does). */
@@ -233,8 +240,8 @@ export class Workspace {
   }
 
   /** Call after anything changes, to keep the unsaved marks right. */
-  noteChange(): void {
-    const t = this.active;
+  noteChange(tab?: Tab): void {
+    const t = tab ?? this.active;
     let dirty = t.dirty;
     if (t.deck) dirty = t.deck.edits !== t.savedEdits;
     else if (t.mode === 'sheet') dirty = t.book!.edits !== this.mainOf(t).savedEdits;
@@ -255,7 +262,8 @@ export class Workspace {
       this.hooks.changed();
     }
     const p = this.pane;
-    if (p && this.host.version !== p.seen) {
+    // a cell's or figure's structure is being drawn in its place: that isn't a change to the drawing
+    if (p && !this.aside && this.host.version !== p.seen) {
       p.seen = this.host.version;
       p.changes++;
       if (!p.dirty) { p.dirty = true; this.hooks.changed(); }
@@ -574,6 +582,12 @@ export class Workspace {
     if (old && this.tabs.includes(old)) {
       t.autoSave = old.autoSave;
       for (const o of this.tabs) if (o.partner === old) o.partner = t;
+      // the other windows of the document show the new copy (and save to its file)
+      for (const w of this.tabs) {
+        if (w.windowOf !== old) continue;
+        Object.assign(w, { windowOf: t, document: t.document, book: t.book, stamp: t.stamp, sheetState: null });
+      }
+      this.syncWindows(t);
       this.tabs.splice(this.tabs.indexOf(t), 1);
       this.tabs.splice(this.tabs.indexOf(old), 0, t);
       this.drop(old);
@@ -587,6 +601,7 @@ export class Workspace {
 
   /** Close a tab, offering to save changes first. False when the user chose to keep it open. */
   async close(tab: Tab = this.active): Promise<boolean> {
+    this.hooks.closing?.(tab);
     // another window of a document: closing it closes nothing else (the document stays open in its other tabs)
     if (tab.windowOf) { this.drop(tab); return true; }
     if (this.handOver(tab)) { this.drop(tab); return true; }
@@ -613,6 +628,10 @@ export class Workspace {
       else {
         // the last tab: a fresh drawing takes its place
         const t = this.makeTab('drawing', this.untitled('drawing', tab));
+        // with the style and page a new drawing starts with
+        const st = this.hooks.newStyle?.('drawing');
+        if (st) t.stash.style = { ...st };
+        t.stash.page = this.hooks.newPage?.() ?? null;
         this.tabs.push(t);
         this.activate(t, true);
       }
@@ -643,6 +662,7 @@ export class Workspace {
 
   /** The tab's drawing (its document wherever it is). */
   docOf(tab: Tab): Doc {
+    if (tab === this.pane && this.aside) return this.aside;
     return tab === this.active || tab === this.pane ? this.host : tab.stash;
   }
 
@@ -730,7 +750,7 @@ export class Workspace {
     const auto = how === 'autosaved';
     // what the tab holds now: changes made while the file is being written stay unsaved
     const edits = tab.deck?.edits ?? tab.book?.edits ?? tab.document?.edits ?? 0;
-    const live = tab === this.active || tab === this.pane;
+    const live = tab === this.active || (tab === this.pane && !this.aside);
     const version = this.host.version;
     const was = tab.ref;
     let enc;

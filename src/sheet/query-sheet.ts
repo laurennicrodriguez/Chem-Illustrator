@@ -1,6 +1,8 @@
 // A query's results in a sheet, as Excel's Close & Load puts them: a table (Format as Table)
 // named after the query, the header row holding the column names. Refresh writes the new results
 // over the old, growing or shrinking the table, and keeps the formatting of the cells it covers.
+// Columns added to the table by hand (a column of structures drawn from its SMILES) are kept, as
+// Excel keeps them: they stay beside the query column they followed.
 
 import type { Sheet, Workbook } from './workbook';
 import { valueInput } from './workbook';
@@ -35,9 +37,42 @@ export function tableNames(wb: Workbook): string[] {
   return [...wb.sheets.flatMap((s) => s.tables.map((t) => t.name)), ...wb.names.map((n) => n.name)];
 }
 
-/** The cells a result takes from its top left cell: a header row, then a row for each record. */
-export function resultRange(at: { row: number; col: number }, t: QTable): Range {
-  return { r1: at.row, c1: at.col, r2: at.row + Math.max(1, t.rows.length), c2: at.col + Math.max(1, t.cols.length) - 1 };
+/** The cells a result takes from its top left cell: a header row, then a row for each record (and `added` columns kept beside them). */
+export function resultRange(at: { row: number; col: number }, t: QTable, added = 0): Range {
+  return { r1: at.row, c1: at.col, r2: at.row + Math.max(1, t.rows.length), c2: at.col + Math.max(1, t.cols.length) - 1 + added };
+}
+
+const headKey = (v: unknown): string => (typeof v === 'string' || typeof v === 'number' ? String(v).trim().toLowerCase() : '');
+
+/**
+ * The columns of a query's table that were added by hand, which a refresh keeps: those whose
+ * header isn't one of the query's columns (the ones it loaded last, and the new results'). For a
+ * query that doesn't know what it loaded (from an older file), only columns holding structures or
+ * formulas, which a query never loads. Each comes with the header of the query column it follows
+ * that is still in the results ('' for the start of the table).
+ */
+export function addedColumns(s: Sheet, own: TableDef, t: QTable, q: Query): { col: number; after: string }[] {
+  const O = own.range;
+  const fresh = new Set(t.cols.map(headKey));
+  const loaded = q.loaded ? new Set(q.loaded.map(headKey)) : null;
+  const out: { col: number; after: string }[] = [];
+  let after = '';
+  for (let c = O.c1; c <= O.c2; c++) {
+    const h = headKey(s.value(O.r1, c));
+    if (fresh.has(h) && h) { after = h; continue; }
+    if (loaded ? loaded.has(h) && h : !madeByHand(s, O, c)) continue;
+    out.push({ col: c, after });
+  }
+  return out;
+}
+
+/** Whether a table column holds something a query never loads: a structure or a formula. */
+function madeByHand(s: Sheet, O: Range, c: number): boolean {
+  for (let r = O.r1 + 1; r <= Math.min(O.r2, s.lastRow); r++) {
+    const cell = s.cell(r, c);
+    if (cell?.structure || cell?.input?.startsWith('=')) return true;
+  }
+  return false;
 }
 
 /** Why a result can't go there (another table, a PivotTable or merged cells in the way), or null. */
@@ -67,12 +102,32 @@ export function wouldCover(s: Sheet, R: Range, own: TableDef | null): boolean {
 
 /**
  * Write a query's results (inside an edit): over the table it loaded into before (`own`), or as
- * a new table with its top left cell at `at`. Returns the table, and how many values were errors
- * (left blank, as Power Query loads them).
+ * a new table with its top left cell at `at`. Returns the table, the query's columns (for the
+ * query's `loaded`), and how many values were errors (left blank, as Power Query loads them).
  */
-export function writeResult(s: Sheet, at: { row: number; col: number }, t: QTable, own: TableDef | null, q: Query): { table: TableDef; errors: number } {
-  const R = resultRange(at, t);
+export function writeResult(s: Sheet, at: { row: number; col: number }, t: QTable, own: TableDef | null, q: Query): { table: TableDef; cols: string[]; errors: number } {
+  const added = own ? addedColumns(s, own, t, q) : [];
+  const R = resultRange(at, t, added.length);
   let errors = 0;
+  const cols = t.cols.length ? t.cols : ['Column1'];
+  // where each column goes: the query's in order, each added one after the query column it followed
+  const place: number[] = []; // the sheet column of query column j
+  const moves: { from: number; to: number }[] = [];
+  let next = R.c1;
+  const addAfter = (h: string) => { for (const a of added) if (a.after === h) moves.push({ from: a.col, to: next++ }); };
+  addAfter('');
+  const seen = new Set<string>();
+  cols.forEach((name) => {
+    place.push(next++);
+    const h = headKey(name);
+    if (h && !seen.has(h)) { seen.add(h); addAfter(h); }
+  });
+  // the added columns' cells (as many rows as the new table has), and their widths
+  const kept = moves.map((m) => ({
+    ...m,
+    block: s.copy({ r1: own!.range.r1, c1: m.from, r2: Math.min(own!.range.r2, R.r2), c2: m.from }),
+    width: s.colWidths.get(m.from),
+  }));
   // what the old table covered and the new one doesn't is emptied
   if (own) {
     const O = own.range;
@@ -80,13 +135,17 @@ export function writeResult(s: Sheet, at: { row: number; col: number }, t: QTabl
     if (O.c2 > R.c2) s.clear({ r1: O.r1, c1: R.c2 + 1, r2: Math.min(O.r2, R.r2), c2: O.c2 }, 'all');
     s.clear({ r1: O.r1, c1: O.c1, r2: Math.min(O.r2, R.r2), c2: Math.min(O.c2, R.c2) }, 'contents');
   }
-  const cols = t.cols.length ? t.cols : ['Column1'];
-  cols.forEach((name, j) => s.setInput(R.r1, R.c1 + j, valueInput(name)));
+  for (const k of kept) {
+    if (k.from !== k.to) s.clear({ r1: R.r1, c1: k.to, r2: R.r2, c2: k.to }, 'all');
+    s.paste({ row: R.r1, col: k.to }, { ...k.block, origin: null });
+    if (k.from !== k.to && k.width !== undefined) s.setColWidth(k.to, k.width);
+  }
+  cols.forEach((name, j) => s.setInput(R.r1, place[j], valueInput(name)));
   t.rows.forEach((row, i) => {
     for (let j = 0; j < cols.length; j++) {
       let v: Value = row[j] ?? null;
       if (isError(v)) { errors++; v = null; }
-      const r = R.r1 + 1 + i, c = R.c1 + j;
+      const r = R.r1 + 1 + i, c = place[j];
       if (v === null) { if (s.cell(r, c)?.input || s.cell(r, c)?.structure) s.setInput(r, c, ''); continue; }
       s.setInput(r, c, valueInput(v));
     }
@@ -95,7 +154,7 @@ export function writeResult(s: Sheet, at: { row: number; col: number }, t: QTabl
   t.types.forEach((k, j) => {
     if (k !== 'date' && k !== 'percent') return;
     if (!t.rows.length) return;
-    s.patchStyle({ r1: R.r1 + 1, c1: R.c1 + j, r2: R.r2, c2: R.c1 + j }, { numFmt: k === 'date' ? DATE_FORMAT : PERCENT_FORMAT });
+    s.patchStyle({ r1: R.r1 + 1, c1: place[j], r2: R.r2, c2: place[j] }, { numFmt: k === 'date' ? DATE_FORMAT : PERCENT_FORMAT });
   });
   let table: TableDef;
   if (own) {
@@ -108,7 +167,7 @@ export function writeResult(s: Sheet, at: { row: number; col: number }, t: QTabl
     s.setTables([...s.tables, table]);
     if (!s.filter) s.setFilter({ range: R, conditions: {} });
   }
-  return { table, errors };
+  return { table, cols: t.cols, errors };
 }
 
 /** Column widths for a new load: wide enough for the header and the first rows' text, within reason. */
