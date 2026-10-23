@@ -78,13 +78,13 @@ Insert a PNG or JPEG (a logo, say), select it, and click **Remove white…** in 
 
 **Insert** ▸ **Diagram…** (a **Diagram** button on the Design, Slides and Document ribbons) draws a diagram from lines of text, as PowerPoint's SmartArt does. Type one item per line; press <kbd>Tab</kbd> to move a line a level down (under the line above it) and <kbd>Shift+Tab</kbd> to move it back up. The picture on the right shows how it will look as you type.
 
-There are 19 layouts in seven kinds:
+There are 23 layouts in seven kinds:
 
 | Kind | Layouts |
 |---|---|
-| List | Block list, vertical bullet list, horizontal bullet list, icon list |
-| Process | Basic process, chevron process, vertical process, staircase, timeline, equation (A + B → C) |
-| Cycle | Basic cycle (circles joined by curved arrows), radial |
+| List | Block list, vertical bullet list, horizontal bullet list, honeycomb (hexagons fitted together), icon list |
+| Process | Basic process, chevron process, vertical process, staircase, bending process (circles along a band that bends over one and under the next), circles on an arrow, timeline, equation (A + B → C) |
+| Cycle | Basic cycle (circles joined by curved arrows), segmented ring, radial |
 | Hierarchy | Hierarchy (top down) and horizontal hierarchy (left to right) |
 | Relationship | Venn, target |
 | Matrix | Matrix (four quarters, with an item in the middle if you indent four under it) |
@@ -92,7 +92,19 @@ There are 19 layouts in seven kinds:
 
 Lines under an item show as bullets in its shape (or under it, in the list and chevron layouts). Formulas get their subscripts as you type them (CO2, ArB(OH)2), and `_` and `^` make other sub- and superscripts. In the icon list each item gets an icon that matches its words; put an icon's name in square brackets in front to choose it yourself, for example `[flask-round-bottom] Synthesis`.
 
-Below the text, choose the colours (the accent colour, shades of it, colourful, light, outline only, black and white for journals, or greys), the accent colour itself, rounded corners and a shadow. The text is made as big as fits, the same size in every shape; type a size to fix it.
+Each layout takes as many items as you type. In the bending process and circles on an arrow, the lines under an item are its caption, outside its circle. A line of just `[]` is an item with no words, a place for a structure.
+
+Below the text, choose the colours (the accent colour, shades of it, colourful, light, outline only, black and white for journals, or greys), the accent colour itself (from the drawing's colours, your palettes, or **More colours…** for any colour), rounded corners and a shadow. The text is made as big as fits, the same size in every shape; type a size to fix it.
+
+### Structures in a diagram
+
+Draw or drop a structure so its middle is in an item's shape, and it belongs to that item:
+
+- The item keeps room for it, with the item's words underneath, and the whole diagram grows, keeping its shape, until every item's structure fits.
+- The structure is centred in its item, and moves with the diagram. It stays an ordinary structure: edit it with the drawing tools and hotkeys, and the diagram makes room as it grows.
+- Drag it out of the diagram and the item lets it go.
+
+A diagram resized smaller than its structures need is drawn again just big enough to hold them. The room is saved with the diagram, so it opens the same way in a PowerPoint file.
 
 Once it is placed:
 

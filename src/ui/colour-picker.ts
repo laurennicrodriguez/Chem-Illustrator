@@ -87,7 +87,8 @@ function openPalette(btn: HTMLElement, doc: Doc, value: string | undefined, on: 
   more.append(document.createTextNode('More colours…'), inp);
 
   pop.append(autoBtn, grid, paletteRows(value, pick, closePalette), more);
-  document.body.append(pop);
+  // in a window (a modal dialog) the menu goes inside it, or it would sit behind it out of reach
+  (btn.closest('dialog') ?? document.body).append(pop);
   const r = btn.getBoundingClientRect();
   const w = pop.offsetWidth;
   pop.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w))}px`;
