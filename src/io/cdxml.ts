@@ -677,9 +677,11 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
           // the dot, then a point further out that only sets its size
           add({ ...base, kind: 'symbol', symbol: sym, x1: bb[0], y1: bb[1], x2: bb[0], y2: bb[1] });
         } else {
-          // circled charges: the box is the symbol's width, sitting on the baseline y
-          const d = Math.abs(bb[0] - bb[2]) || 4;
-          const cx = (bb[0] + bb[2]) / 2, cy = bb[1] - d / 2;
+          // charge signs: ChemDraw stores the sign's centre, then a point its width away; this program's
+          // older files stored its width along the bottom edge instead
+          const ours = bb[1] === bb[3] && bb[0] > bb[2] && root.getAttribute('CreationProgram') === 'Chem Illustrator';
+          const d = Math.hypot(bb[2] - bb[0], bb[3] - bb[1]) || 6;
+          const cx = ours ? (bb[0] + bb[2]) / 2 : bb[0], cy = ours ? bb[1] - d / 2 : bb[1];
           add({ ...base, kind: 'symbol', symbol: sym, x1: cx - d / 2, y1: cy - d / 2, x2: cx + d / 2, y2: cy + d / 2 });
         }
         return;

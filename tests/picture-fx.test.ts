@@ -204,7 +204,8 @@ describe('PowerPoint files', () => {
     expect(slide).toContain('<a:grayscl/>');
     expect(slide).toContain('<a:alphaModFix amt="80000"/>');
     expect(slide).toContain('<a:prstGeom prst="ellipse">');
-    expect(slide).toContain('a14:sharpenSoften amount="50000"');
+    // PowerPoint refuses a PNG as the blip's layer, so the original is kept beside the picture
+    expect(slide).not.toContain('a14:imgProps');
     const back = readPptx(bytes);
     const pic = back.slides[1].contents.shapes.find((s) => s.kind === 'picture')!;
     expect(pic.fx).toEqual(fx);

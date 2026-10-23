@@ -5,11 +5,42 @@
 
 #[cfg(windows)]
 mod win {
-    use windows::core::{HSTRING, PCWSTR};
+    use windows::core::{implement, Ref, HSTRING, PCWSTR};
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
     use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
-    use windows::Win32::UI::Shell::{FileOpenDialog, IFileOpenDialog, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST, FOS_SHAREAWARE, SIGDN_FILESYSPATH};
+    use windows::Win32::UI::Shell::{
+        FileOpenDialog, IFileDialog, IFileDialogEvents, IFileDialogEvents_Impl, IFileOpenDialog, IShellItem, FDE_OVERWRITE_RESPONSE, FDE_SHAREVIOLATION_RESPONSE, FDESVR_ACCEPT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST, FOS_SHAREAWARE, SIGDN_FILESYSPATH,
+    };
+
+    /// With FOS_SHAREAWARE the dialog hands a sharing violation to its event sink; without one it
+    /// answers "Not implemented" for a file open in Word. Accepting lets the file through.
+    #[implement(IFileDialogEvents)]
+    struct Sink;
+
+    impl IFileDialogEvents_Impl for Sink_Impl {
+        fn OnFileOk(&self, _d: Ref<IFileDialog>) -> windows::core::Result<()> {
+            Ok(())
+        }
+        fn OnFolderChanging(&self, _d: Ref<IFileDialog>, _f: Ref<IShellItem>) -> windows::core::Result<()> {
+            Ok(())
+        }
+        fn OnFolderChange(&self, _d: Ref<IFileDialog>) -> windows::core::Result<()> {
+            Ok(())
+        }
+        fn OnSelectionChange(&self, _d: Ref<IFileDialog>) -> windows::core::Result<()> {
+            Ok(())
+        }
+        fn OnShareViolation(&self, _d: Ref<IFileDialog>, _i: Ref<IShellItem>) -> windows::core::Result<FDE_SHAREVIOLATION_RESPONSE> {
+            Ok(FDESVR_ACCEPT)
+        }
+        fn OnTypeChange(&self, _d: Ref<IFileDialog>) -> windows::core::Result<()> {
+            Ok(())
+        }
+        fn OnOverwrite(&self, _d: Ref<IFileDialog>, _i: Ref<IShellItem>) -> windows::core::Result<FDE_OVERWRITE_RESPONSE> {
+            Ok(windows::Win32::UI::Shell::FDEOR_DEFAULT)
+        }
+    }
 
     /// The file picked, or None when the dialog was cancelled.
     pub fn pick(owner: HWND, names: &[String], patterns: &[String]) -> Result<Option<String>, String> {
@@ -30,8 +61,12 @@ mod win {
             if !specs.is_empty() {
                 d.SetFileTypes(&specs).map_err(err)?;
             }
+            let sink: IFileDialogEvents = Sink.into();
+            let cookie = d.Advise(&sink).map_err(err)?;
             // Show fails when the dialog is cancelled
-            if d.Show(Some(owner)).is_err() {
+            let shown = d.Show(Some(owner));
+            let _ = d.Unadvise(cookie);
+            if shown.is_err() {
                 return Ok(None);
             }
             let item = d.GetResult().map_err(err)?;
