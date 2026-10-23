@@ -307,6 +307,18 @@ Rest the mouse on an abbreviation or condensed label (OTBS, NHBoc, CO2Me, CH2OH)
 
 Press **Apply**. One Undo puts everything back.
 
+## Finding your way round
+
+On a big white drawing it is easy to lose your place, especially zoomed in. These help, and each can be switched off in **Settings ▸ Navigation** (or from the **View** menu):
+
+- **Navigator** (on to start with): a small map of the whole drawing in a corner, with a blue box for the part in the window. Click or drag in it to move there; double-click it to fit the whole drawing. Choose its corner and size, or hide it while the whole drawing is on screen.
+- **Edge arrows** (on to start with): arrows at the edge of the window point to structures scrolled out of sight, with a count where several lie the same way. Click one to glide to the nearest. They can point to text, arrows and shapes too.
+- **Dot grid** (off to start with): faint dots behind the drawing, so you can see it move even with nothing in the window. Fine, normal or wide spacing; the dots spread out as you zoom out.
+- **Tint outside the drawing** (off to start with): the empty space beyond everything drawn turns faintly grey, so you can tell at a glance which way the drawing is.
+- **Fit** and **Go to Selection**: **F6** fits the whole drawing in the window, and **Shift+F6** brings what is selected into the middle (zoomed out if it is too big). Both are also buttons in the status bar, beside the zoom box.
+
+None of these is saved, printed, copied or exported.
+
 ## The page
 
 A drawing is endless: scroll as far as you like in any direction. It still has a page size, which is saved with the file but not drawn on screen.
