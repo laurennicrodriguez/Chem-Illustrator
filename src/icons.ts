@@ -89,6 +89,8 @@ export const ICONS: Record<string, string> = {
   'arrow-fishhook': svg('<path d="M4 17A8 8 0 0 1 20 16"/><path d="M20 19.5l2.9-5.6H20z" fill="currentColor" stroke="none"/>'),
   'arrow-s': svg('<path d="M3 16C4.5 6 10.5 6 12 12S19.6 19 20 10.6"/><path d="M20 5l2.9 5.6h-5.8z" fill="currentColor" stroke="none"/>'),
   'arrow-s-fishhook': svg('<path d="M3 16C4.5 6 10.5 6 12 12S19.6 19 20 10.6"/><path d="M20 5l2.9 5.6H20z" fill="currentColor" stroke="none"/>'),
+  'arrow-pen': svg('<path d="M4.5 17C5.5 7 13 5 17 12"/><rect x="2.5" y="16" width="4" height="4" fill="currentColor" stroke="none"/><path d="M18.5 14.6l.9-4-4.8 2.8z" fill="currentColor" stroke="none"/>'),
+  'arrow-pen-fishhook': svg('<path d="M4.5 17C5.5 7 13 5 17 12"/><rect x="2.5" y="16" width="4" height="4" fill="currentColor" stroke="none"/><path d="M18.5 14.6L14.6 13.4 17 12z" fill="currentColor" stroke="none"/>'),
   'shape-rect': svg('<rect x="4" y="6" width="16" height="12"/>'),
   'shape-rect-rounded': svg('<rect x="4" y="6" width="16" height="12" rx="3.5"/>'),
   'shape-rect-shadow': svg('<rect x="3.5" y="5" width="15" height="12"/><path d="M20 7.2v11.8H6" stroke-width="2.4" opacity="0.45" stroke-linecap="butt"/>'),
