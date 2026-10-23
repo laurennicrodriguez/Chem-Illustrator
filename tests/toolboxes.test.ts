@@ -1,7 +1,7 @@
 // Toolboxes (View > Toolboxes): where each one goes when dropped, and reading their settings.
 
 import { describe, expect, it } from 'vitest';
-import { defaultToolboxes, dropTarget, parseToolboxes, boxLocked, withAllLocked, withBoxLocked, sideFolded, withSideFolded, freeSpot, boxItems, withItems, withItemsReset, withNewBox, withTitle, withBoxMoved, withoutBox, withBoxesRestored, boxIds, boxTitle, moved, inserted, withFlyout, slotAt } from '../src/ui/toolboxes';
+import { defaultToolboxes, dropTarget, parseToolboxes, boxLocked, withAllLocked, withBoxLocked, sideFolded, withSideFolded, freeSpot, boxItems, withItems, withItemsReset, withNewBox, withTitle, withBoxMoved, withoutBox, withBoxesRestored, boxIds, boxTitle, moved, inserted, withFlyout, slotAt, withLayoutReset } from '../src/ui/toolboxes';
 
 describe('toolboxes', () => {
   const work = { left: 100, top: 100, right: 900, bottom: 700 };
@@ -164,5 +164,21 @@ describe('Customize Toolboxes', () => {
     expect(slotAt(boxes, 60, 70)).toBe(4);
     expect(slotAt(boxes, 140, 70)).toBe(5);
     expect(slotAt(boxes, 10, 300)).toBe(5);
+  });
+});
+
+describe('Reset Toolboxes', () => {
+  it('puts every toolbox back where it starts, keeping what is in them', () => {
+    let st = parseToolboxes({ locked: false, sideByMode: { drawing: true }, places: { main: { shown: true, dock: 'top', x: 5, y: 5, collapsed: true, locked: true }, structure: { shown: true, dock: 'float', x: 1, y: 1 } }, custom: ['cmd:clean-up'], own: [{ id: 'own-a', title: 'Mine' }], removed: ['colours'] });
+    st = withLayoutReset(st);
+    const d = defaultToolboxes();
+    expect(st.places.main).toEqual(d.places.main);
+    expect(st.places.structure.shown).toBe(false);
+    expect(st.places.colours.shown).toBe(false);
+    expect(st.places['own-a']).toMatchObject({ shown: true, dock: 'float' });
+    expect(st.locked).toBe(true);
+    expect(st.sideByMode).toBeUndefined();
+    expect(st.custom).toEqual(['cmd:clean-up']);
+    expect(st.own).toEqual([{ id: 'own-a', title: 'Mine' }]);
   });
 });

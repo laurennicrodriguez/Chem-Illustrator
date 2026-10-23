@@ -108,6 +108,19 @@ export function defaultToolboxes(): ToolboxState {
   return { locked: true, places, custom: ['cmd:clean-up', 'cmd:add-frame', 'cmd:fill-rings', 'cmd:highlight', 'cmd:chain-ends'], sideCollapsed: false };
 }
 
+/**
+ * Every toolbox back where it starts (View > Reset Toolboxes): shown or hidden, docked or floating,
+ * open, and locked as they come. What is in them, their names and your own toolboxes are kept.
+ */
+export function withLayoutReset(st: ToolboxState): ToolboxState {
+  const d = defaultToolboxes();
+  const places = d.places;
+  (st.own ?? []).forEach((b, i) => { places[b.id] = { shown: true, dock: 'float', x: 160 + i * 24, y: 120 + i * 64 }; });
+  for (const id of st.removed ?? []) places[id] = { ...places[id], shown: false };
+  const { sideByMode: _, ...rest } = st;
+  return { ...rest, locked: d.locked, places, sideCollapsed: d.sideCollapsed };
+}
+
 /** Toolbox settings read from the settings file, keeping only what makes sense. */
 export function parseToolboxes(raw: unknown): ToolboxState {
   const s = defaultToolboxes();
@@ -384,11 +397,14 @@ export class Toolboxes {
       const vertical = place.dock === 'left' || place.dock === 'right';
       f.classList.toggle('vertical', vertical);
       f.classList.toggle('floating', place.dock === 'float');
-      f.classList.toggle('collapsed', this.hooks.folded?.(def.id) ?? !!place.collapsed);
+      const folded = this.hooks.folded?.(def.id) ?? !!place.collapsed;
+      f.classList.toggle('collapsed', folded);
       const locked = boxLocked(st, def.id);
       f.classList.toggle('locked', locked);
       const fold = f.querySelector<HTMLElement>('.tb-fold');
-      if (fold) { fold.textContent = place.collapsed ? '▸' : '▾'; fold.title = place.collapsed ? `Open ${def.title} out` : `Fold ${def.title} up to its title`; }
+      if (fold) { fold.textContent = folded ? '▸' : '▾'; fold.title = folded ? `Open ${def.title} out` : `Fold ${def.title} up to its title`; }
+      const tab = f.querySelector<HTMLElement>('.tb-tab');
+      if (tab) { tab.title = `Fold ${def.title} up to its title`; tab.setAttribute('aria-label', tab.title); }
       const lock = f.querySelector<HTMLElement>('.tb-lock');
       if (lock) { lock.innerHTML = lockIcon(locked, 14); lock.title = locked ? `Lock this toolbox's place (locked). Click to unlock it, then drag it by its title. The drawing itself is never locked.` : `Lock this toolbox's place (unlocked: drag it by its title). Click to lock it where it is.`; lock.setAttribute('aria-pressed', String(locked)); }
       f.dataset.dock = place.dock;
@@ -455,6 +471,11 @@ export class Toolboxes {
     if (p) this.place(id, { collapsed: (collapsed ?? !p.collapsed) || undefined });
   }
 
+  /** Every toolbox back where it starts (View > Reset Toolboxes). */
+  reset(): void {
+    this.change(withLayoutReset(this.hooks.get()));
+  }
+
   /** Fold the side panel to a strip at the right, or open it again, in one mode. */
   setSideCollapsed(mode: string, collapsed: boolean): void {
     this.change(withSideFolded(this.hooks.get(), mode, collapsed));
@@ -501,9 +522,15 @@ export class Toolboxes {
     lock.className = 'tb-lock';
     lock.addEventListener('click', () => this.setBoxLocked(def.id, !boxLocked(this.hooks.get(), def.id)));
     head.append(grip, name, lock, fold, close);
+    // a locked docked box hides its title bar, so this slim arrow folds it instead (folded, the title shows again to open it)
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = 'tb-tab';
+    tab.textContent = '▴';
+    tab.addEventListener('click', () => this.fold(def.id, true));
     const body = document.createElement('div');
     body.className = 'tb-body';
-    f.append(head, body);
+    f.append(head, tab, body);
     head.addEventListener('pointerdown', (e) => { if (e.button === 0 && !(e.target as Element).closest('button')) this.drag(def.id, f, e); });
     // right-click the title, or the box round its buttons (a locked docked box has no title showing)
     f.addEventListener('contextmenu', (e) => {
