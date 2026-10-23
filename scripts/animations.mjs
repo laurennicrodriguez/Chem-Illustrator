@@ -2,10 +2,11 @@
 // Start the program first (npm run dev), then: node scripts/animations.mjs [address] [name …]
 // Needs Playwright with Chromium (as scripts/screenshots.mjs does) and ffmpeg. Give names
 // (smart-arrows, frames, catalytic-cycle, id-labels, spelling, name-to-structure, dark-mode,
-// metal-complex, mechanism, reaction-animation) to
+// metal-complex, mechanism, navigation, slide-highlights, reagent-table,
+// reaction-animation) to
 // record only those.
 
-import { open, pointer, glide, look, addSmiles, record, canvasBox, screenOf, helperSpot, tool, drag, keys, newestAtom, atomAt, wordSpot, select, paletteTool, paletteItem } from './shot-lib.mjs';
+import { open, pointer, glide, look, addSmiles, record, canvasBox, screenOf, helperSpot, tool, drag, keys, newestAtom, atomAt, wordSpot, select, paletteTool, paletteItem, inputBadge, drawScheme, fitOnSlide } from './shot-lib.mjs';
 
 const args = process.argv.slice(2);
 const url = args[0]?.startsWith('http') ? args.shift() : 'http://localhost:5173/';
@@ -141,7 +142,7 @@ if (want('catalytic-cycle')) {
   const c = await canvasBox(page);
   await page.mouse.move(c.x + c.width * 0.5, c.y + c.height * 0.9);
   await record(page, 'catalytic-cycle', async () => {
-    await menu(page, 'scheme', 'arrange-scheme');
+    await menu(page, 'chemistry', 'arrange-scheme');
     await page.waitForTimeout(500);
     // the window to one side, so the scheme shows as each layout is tried
     await page.evaluate(() => { const d = document.querySelector('dialog.arrange-dialog'); d.style.margin = '0'; d.style.left = 'auto'; d.style.right = '12px'; d.style.top = '70px'; });
@@ -269,7 +270,7 @@ if (want('name-to-structure')) {
   const c = await canvasBox(page);
   await page.mouse.move(c.x + c.width * 0.5, c.y + c.height * 0.7);
   await record(page, 'name-to-structure', async () => {
-    await menu(page, 'structure', 'name-to-structure');
+    await menu(page, 'insert', 'name-to-structure');
     await page.waitForTimeout(500);
     await page.keyboard.type('(2S)-2-[4-(2-methylpropyl)phenyl]propanoic acid', { delay: 45 });
     await page.waitForTimeout(400);
@@ -292,7 +293,6 @@ if (want('name-to-structure')) {
 // ---------------------------------------------------------------- the dark page and its colours
 if (want('dark-mode')) {
   const { browser, page } = await open(url, { width: 1180, height: 760 });
-  const { drawScheme } = await import('./shot-lib.mjs');
   await drawScheme(page);
   await pointer(page);
   const c = await canvasBox(page);
@@ -431,6 +431,157 @@ if (want('mechanism')) {
     await glide(page, c.x + c.width * 0.4, c.y + c.height * 0.9, 15);
     await page.mouse.click(c.x + c.width * 0.4, c.y + c.height * 0.9);
   }, { clip: { x: 0, y: 0, width: 1180, height: 960 }, width: 1000, hold: 2500 });
+  await browser.close();
+}
+
+// ---------------------------------------------------------------- getting round a big drawing: right/middle-drag pans, Ctrl+wheel zooms at the pointer, Shift+wheel scrolls sideways
+if (want('navigation')) {
+  const { readFileSync } = await import('node:fs');
+  const { browser, page } = await open(url, { width: 1180, height: 820, navigator: true });
+  const text = readFileSync(new URL('../tests/morph/siccanin sequence.cdxml', import.meta.url), 'utf8');
+  await page.evaluate((t) => window.__app.openText(t, 'siccanin sequence.cdxml'), text);
+  await page.waitForTimeout(800);
+  await page.evaluate(() => { window.__app.command('fold-side'); window.__app.renderer.showWarnings = false; });
+  await page.waitForTimeout(300);
+  const c = await canvasBox(page);
+  // start zoomed in on the left end of the route
+  const at = (fx, fy) => ({ x: c.x + c.width * fx, y: c.y + c.height * fy });
+  await page.mouse.move(at(0.2, 0.45).x, at(0.2, 0.45).y);
+  await page.keyboard.down('Control');
+  for (let i = 0; i < 4; i++) { await page.mouse.wheel(0, -120); await page.waitForTimeout(60); }
+  await page.keyboard.up('Control');
+  await pointer(page);
+  await page.mouse.move(at(0.5, 0.5).x, at(0.5, 0.5).y);
+  // let the "Opened …" note fade first
+  await page.waitForTimeout(5000);
+  const pan = async (button, from, to) => {
+    await glide(page, from.x, from.y, 12);
+    await page.mouse.down({ button });
+    await page.mouse.move(to.x, to.y, { steps: 45 });
+    await page.mouse.up({ button });
+  };
+  const wheel = async (key, dx, dy, n) => {
+    await page.keyboard.down(key);
+    for (let i = 0; i < n; i++) { await page.mouse.wheel(dx, dy); await page.waitForTimeout(110); }
+    await page.keyboard.up(key);
+  };
+  await record(page, 'navigation', async () => {
+    await inputBadge(page, { button: 'right', text: 'pan' });
+    await page.waitForTimeout(600);
+    await pan('right', at(0.75, 0.5), at(0.3, 0.42));
+    await page.waitForTimeout(700);
+    await inputBadge(page, { button: 'middle', text: 'pan' });
+    await page.waitForTimeout(600);
+    await pan('middle', at(0.7, 0.35), at(0.35, 0.6));
+    await page.waitForTimeout(700);
+    await inputBadge(page, { keys: ['Ctrl'], button: 'wheel', text: 'zoom in and out where the pointer is' });
+    await glide(page, at(0.62, 0.5).x, at(0.62, 0.5).y, 15);
+    await page.waitForTimeout(400);
+    await wheel('Control', 0, 120, 5);
+    await page.waitForTimeout(500);
+    await glide(page, at(0.3, 0.45).x, at(0.3, 0.45).y, 15);
+    await wheel('Control', 0, -120, 5);
+    await page.waitForTimeout(700);
+    await inputBadge(page, { keys: ['Shift'], button: 'wheel', text: 'scroll sideways' });
+    await page.waitForTimeout(500);
+    await wheel('Shift', 0, 120, 8);
+    await page.waitForTimeout(400);
+    await wheel('Shift', 0, -120, 8);
+    await page.waitForTimeout(600);
+    await inputBadge(page, null);
+  }, { clip: { x: 0, y: 0, width: 1180, height: 820 }, width: 820, hold: 1500 });
+  await browser.close();
+}
+
+// ---------------------------------------------------------------- Slides: highlights that come in one click at a time
+if (want('slide-highlights')) {
+  const { browser, page } = await open(url, { width: 1280, height: 720 });
+  await page.evaluate(async () => {
+    const a = window.__app; a.ws.newSlides();
+    const t = await import('/src/deck/templates.ts');
+    const d = a.ws.active.deck; d.setMaster(t.applyTemplate(d.master, t.SLIDE_TEMPLATES.find((x) => x.id === 'harbor')));
+    a.command('new-slide');
+  });
+  await page.waitForTimeout(600);
+  await page.evaluate(() => {
+    const a = window.__app, doc = a.doc;
+    const ph = [...doc.captions.values()].filter((c) => c.ph);
+    doc.edit('Text', () => { doc.updateCaption(ph[0].id, { runs: [{ text: 'What each step changes' }] }); for (const c of ph.slice(1)) doc.removeCaption(c.id); });
+  });
+  await page.waitForTimeout(400);
+  await drawScheme(page, { xs: [150, 420, 740], y: 330, fit: false });
+  await fitOnSlide(page, { width: 0.9, cy: 0.6 });
+  await page.evaluate(async () => {
+    const a = window.__app, doc = a.doc, e = a.editor;
+    const ids = [...doc.atoms.keys()];
+    // the C–Br of 1, the new phenyl of 2 and the new C=C of 3 (atoms in SMILES order)
+    const groups = [[[ids[5], ids[6]], '#ffd966'], [[...ids.slice(9 + 5, 9 + 12)], '#9dc3e6'], [[ids[23 + 5], ids[23 + 6]], '#a9d18e']];
+    for (const [atoms, colour] of groups) {
+      const set = new Set(atoms);
+      const bonds = new Set([...doc.bonds.values()].filter((b) => set.has(b.a1) && set.has(b.a2)).map((b) => b.id));
+      e.selectThese({ atoms: set, bonds, captions: new Set(), arrows: new Set(), shapes: new Set() });
+      e.colourSelection(colour, 'highlight');
+    }
+    e.clearSelection();
+    const an = await import('/src/deck/animation.ts');
+    const d = a.ws.active.deck;
+    d.setAnims(groups.map(([atoms]) => ({ ...an.newAnim({ kind: 'highlight', id: atoms[0] }, 'fade'), dur: 0.7 })));
+    a.command('slide-animations');
+    a.command('animation-pane');
+  });
+  await page.waitForTimeout(800);
+  await pointer(page);
+  const W = 1280, H = 720;
+  await page.mouse.move(W * 0.8, H * 0.85);
+  await record(page, 'slide-highlights', async () => {
+    await page.waitForTimeout(1800);
+    await inputBadge(page, { keys: ['F5'], text: 'start the slide show' });
+    await page.waitForTimeout(900);
+    await page.evaluate(() => window.__app.command('present-current'));
+    await page.waitForTimeout(1500);
+    for (const what of ['the bromide that couples', 'the new phenyl ring', 'the new C=C bond']) {
+      await inputBadge(page, { button: 'left', label: 'Click', text: what });
+      await page.waitForTimeout(500);
+      await page.mouse.click(W * 0.8, H * 0.85);
+      await page.waitForTimeout(1700);
+    }
+    await inputBadge(page, null);
+  }, { clip: { x: 0, y: 0, width: W, height: H }, width: 820, hold: 2000 });
+  await browser.close();
+}
+
+// ---------------------------------------------------------------- Sheet: a reagent table that works itself out
+if (want('reagent-table')) {
+  const { browser, page } = await open(url, { width: 1280, height: 640 });
+  await page.evaluate(() => { const a = window.__app; a.ws.newSheet(); });
+  await page.waitForTimeout(800);
+  await page.evaluate(() => { const a = window.__app; a.command('reagent-table'); a.command('fold-side'); });
+  await page.waitForTimeout(800);
+  await page.evaluate(() => document.querySelector('#flash')?.classList.remove('show'));
+  const k = page.keyboard;
+  const go = async (r, c) => { await k.press('Control+Home'); for (let i = 0; i < r; i++) await k.press('ArrowDown'); for (let i = 0; i < c; i++) await k.press('ArrowRight'); };
+  const put = async (r, c, text, wait = 350) => { await go(r, c); await k.type(text, { delay: 45 }); await k.press('Enter'); await page.waitForTimeout(wait); };
+  // warm the name reader up on a first table, so the recorded one doesn't wait for it
+  await put(1, 1, 'benzaldehyde', 3000);
+  await page.evaluate(() => window.__app.command('reagent-table'));
+  await page.waitForTimeout(800);
+  await page.evaluate(() => document.querySelector('#flash')?.classList.remove('show'));
+  await go(1, 0);
+  await record(page, 'reagent-table', async () => {
+    await page.waitForTimeout(600);
+    await put(1, 0, 'benzaldehyde');
+    await put(1, 1, 'benzaldehyde', 1200);
+    await put(1, 4, '5');
+    await put(1, 6, '1.044', 800);
+    await put(2, 0, 'phosphonoacetate');
+    await put(2, 1, 'CCOC(=O)CP(=O)(OCC)OCC', 1200);
+    await put(2, 3, '1.2');
+    await put(2, 6, '1.13', 800);
+    await put(3, 0, 'sodium hydride');
+    await put(3, 1, 'sodium hydride', 1200);
+    await put(3, 3, '1.3', 600);
+    await go(5, 0);
+  }, { clip: { x: 255, y: 180, width: 1000, height: 270 }, width: 900, hold: 2500 });
   await browser.close();
 }
 

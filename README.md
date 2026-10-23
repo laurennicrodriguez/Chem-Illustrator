@@ -63,6 +63,12 @@ Fill rings with a colour, a gradient, hatching or dots (patterns can be see-thro
 
 Select anything and the side panel shows its formula, exact mass, m/z for the ion you pick, elemental analysis, isotope pattern, cLogP and TPSA. R/S and E/Z come from the IUPAC 2013 rules, including axial chirality, and atoms with impossible valences get a red mark.
 
+## Energy diagrams
+
+**Chemistry ▸ Energy Diagram** draws a reaction coordinate diagram from a table of levels: compare pathways in different colours, mark the barrier, and draw structures right on the levels.
+
+![An energy diagram comparing a thermal and a BF₃-catalysed Diels–Alder pathway, with ΔG‡ marked and the diene, dienophile and product drawn on their levels (illustrative values)](docs/images/energy-diagram.png)
+
 ## Spelling and chemistry checked everywhere
 
 Text on drawings, slides and documents is spell-checked, and a second check catches chemistry formatting slips: formulas without subscripts, deuterated solvents, a number glued to its unit (5mL), a hyphen in a range (10-15), and the nucleus before "NMR". Right-click a marked word for the fix. Formulas are also formatted as you type (CH2Cl2 becomes CH₂Cl₂).
@@ -75,6 +81,18 @@ The eye button shows the page dark on screen, with your structures in light ink.
 
 ![Turning the dark page on, then switching its colours between palettes](docs/images/dark-mode.gif)
 
+The interface itself follows your system's dark setting, in every mode:
+
+| Drawing | Slides | Sheets |
+|---|---|---|
+| ![Drawing mode with a dark interface and a white page](docs/images/drawing-dark-ui.png) | ![Slides mode with a dark interface](docs/images/slides-dark-ui.png) | ![Sheet mode with a dark interface](docs/images/sheet-dark-ui.png) |
+
+## Getting round a big drawing
+
+Right-drag or middle-drag to pan, Ctrl+wheel to zoom in on the spot under the pointer, and Shift+wheel to scroll sideways. A small navigator map in the corner shows where you are in the whole drawing.
+
+![Panning a long route with the right and middle mouse buttons, zooming at the pointer with Ctrl+wheel and scrolling sideways with Shift+wheel, with the keys and buttons shown as they are pressed](docs/images/navigation.gif)
+
 ## Make it yours
 
 Every hotkey can be changed (**Edit ▸ Hotkeys**), and the hotkeys can be exported and shared. Toolboxes unlock to dock on any edge or float anywhere, and **Customize Toolboxes** rearranges any of them (or new ones of your own) by dragging icons about, as on a phone's home screen. The dark page colours, each mode's accent colour, the scheme spacing, your own templates, nicknames and drawing styles are all settings, kept in one file you can export and import on another computer.
@@ -82,6 +100,13 @@ Every hotkey can be changed (**Edit ▸ Hotkeys**), and the hotkeys can be expor
 ![Toolboxes moved to new places, the dark page in Slate colours, and the Hotkeys window open](docs/images/customize.png)
 
 ## Slides, sheets, documents and designs
+
+Each mode works like the Office program it is named after, and adds what Office can't do for a chemist.
+
+| Highlights that step in during a talk | A reagent table that works itself out |
+|---|---|
+| ![A slide show of a two-step scheme: each click fades in a highlight, first on the bromide, then on the new phenyl ring, then on the new C=C bond](docs/images/slide-highlights.gif) | ![Typing names and a SMILES into a reagent table: each structure is drawn in its cell and the MW, mmol, mass and volume fill in](docs/images/reagent-table.gif) |
+| Highlight part of a structure and animate it like any other object: it plays in the slide show and in PowerPoint. **Animate Reaction** can also put a reaction movie on a slide. | Type a name or SMILES and the structure is drawn in the cell; the MW, amounts, masses and volumes follow from the equivalents. |
 
 | Slides | Sheets |
 |---|---|
