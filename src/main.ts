@@ -12,7 +12,8 @@ import './app.css';
 import type { MethylStyle } from './chem/hydrogens';
 import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
-import { Toolboxes, lockIcon, sideFolded, commandButton, defaultToolboxes, menuCommands, boxIds, boxItems, boxTitle, isEditable, isOwnBox, type Pickable, type ToolboxDef, type ToolboxState } from './ui/toolboxes';
+import { Toolboxes, lockIcon, sideFolded, commandButton, defaultToolboxes, menuCommands, boxIds, boxGrid, boxTitle, flyGrid, isEditable, isOwnBox, overflowOf, type Pickable, type ToolboxDef, type ToolboxState } from './ui/toolboxes';
+import { gridItems, inBlock, shownGrid, wrapped, type Grid, type Shown } from './ui/toolbox-grid';
 import { ToolboxEditor } from './ui/toolbox-editor';
 import { RibbonEditor } from './ui/ribbon-editor';
 import { readRibbons, applyRibbon, type RibbonInfo, type RibbonsPrefs } from './ui/ribbon-custom';
@@ -7348,7 +7349,6 @@ function toolButton(name: string): HTMLButtonElement | null {
 }
 
 const runFromToolbox = (cmd: string) => { finishTyping(); command(cmd); };
-const sep = () => { const d = document.createElement('div'); d.className = 'tb-sep'; return d; };
 
 /** What the Colours toolbox's swatches do: colour the lines and text, highlight, or fill. */
 let colourMode: 'line' | 'highlight' | 'fill' = 'line';
@@ -7399,47 +7399,65 @@ const SHORT_LABEL: Record<string, string> = {
   'shadow-highlight': 'Shadow', 'glow-highlight': 'Glow', 'save-highlight-look': 'Save look…',
 };
 
-/** A fly-out palette with the tools Customize Toolboxes gave it (null when it has none). */
+/** The tools a fly-out palette comes with. */
+const givenTools = (name: string): string[] => PALETTES.get(name)?.items.filter((t) => ALL_TOOLS.has(t.name)).map((t) => t.name) ?? [];
+
+/** A fly-out's tools on their grid, as Customize Toolboxes has them. */
+function paletteGrid(name: string): Grid {
+  return flyGrid(toolboxState, name, toolboxState.flyouts?.[name] ?? givenTools(name), PALETTES.get(name)?.columns ?? 3);
+}
+
+/** A fly-out palette with the tools Customize Toolboxes gave it, on their grid (null when it has none). */
 function paletteNow(name: string): PaletteDef | null {
   const base = PALETTES.get(name);
   if (!base) return null;
-  const own = toolboxState.flyouts?.[name];
   // (My templates holds what you save, so its tools aren't chosen)
-  if (!own || name === 'tpl-own') return base.items.length ? base : null;
-  const items = own.map((n) => base.items.find((i) => i.name === n) ?? (ALL_TOOLS.has(n) ? { name: n, title: ALL_TOOLS.get(n)!.title } : null)).filter((x): x is { name: string; title: string } => !!x);
-  return items.length ? { ...base, items } : null;
+  if ((!toolboxState.flyouts?.[name] && !toolboxState.flyGrids?.[name]) || name === 'tpl-own') return base.items.length ? base : null;
+  const g = paletteGrid(name);
+  const tool = (n: string) => base.items.find((i) => i.name === n) ?? (ALL_TOOLS.has(n) ? { name: n, title: ALL_TOOLS.get(n)!.title } : null);
+  const cells = g.cells.map((n) => (n && tool(n) ? n : null));
+  const items = cells.filter((n): n is string => !!n).map((n) => tool(n)!);
+  return items.length ? { ...base, items, cells, columns: g.cols } : null;
 }
 
-/** A toolbox's buttons, as Customize Toolboxes has them: tools, palettes, commands, dividers and the highlight looks. */
+/** How each toolbox's grid shows now, and what it does when the window is too short for it. */
+const SHOWN = new WeakMap<HTMLElement, { s: Shown; wrap: boolean; across: boolean }>();
+
+/**
+ * A toolbox's buttons, as Customize Toolboxes has them: tools, palettes, commands and the
+ * highlight looks, each in its cell of the toolbox's grid (empty cells kept, so groups stay apart).
+ */
 function buildBox(body: HTMLElement, id: string, vertical: boolean): void {
-  const items = boxItems(toolboxState, id, BOX_ITEMS[id]);
-  if (id === 'main') {
-    // the tool bar, in groups between the dividers
-    const groups: (ToolbarItem | HTMLElement)[][] = [[]];
-    for (const k of items) {
-      if (k === 'sep') { groups.push([]); continue; }
-      const name = k.slice(k.indexOf(':') + 1);
-      const g = groups[groups.length - 1];
-      if (k.startsWith('tool:')) { const t = ALL_TOOLS.get(name); if (t) g.push({ name, title: t.title }); }
-      else if (k.startsWith('pal:')) { const p = paletteNow(name); if (p) g.push(p); }
-      else if (k.startsWith('cmd:')) g.push(commandButton(name, runFromToolbox, SHORT_LABEL[name]));
-      else if (k === 'w:looks') g.push(looksList(true));
-    }
-    toolbar.fill(groups);
-    body.append(toolsNav);
-    return;
-  }
-  for (const k of items) {
+  const g = boxGrid(toolboxState, id, BOX_ITEMS[id]);
+  const dock = toolboxState.places[id]?.dock ?? 'float';
+  const s = shownGrid(g, dock);
+  const cells = document.createElement('div');
+  cells.className = 'tb-cells';
+  cells.style.gridTemplateColumns = `repeat(${s.cols}, minmax(34px, auto))`;
+  const make = (k: string): HTMLElement | null => {
     const name = k.slice(k.indexOf(':') + 1);
-    let b: HTMLElement | null = null;
-    if (k === 'sep') b = sep();
-    else if (k.startsWith('tool:')) b = toolButton(name);
-    else if (k.startsWith('pal:')) { const p = paletteNow(name); b = p && toolbar.paletteButton(p); }
-    else if (k.startsWith('cmd:')) b = commandButton(name, runFromToolbox, SHORT_LABEL[name]);
-    else if (k === 'w:looks') b = looksList(vertical);
-    if (b) body.append(b);
-  }
-  if (!items.length) {
+    // the drawing tools' buttons are the tool bar's own (it shows the one in use, and each palette's last pick)
+    if (k.startsWith('tool:')) { const t = ALL_TOOLS.get(name); return id === 'main' ? (t ? toolbar.toolButton({ name, title: t.title }) : null) : toolButton(name); }
+    if (k.startsWith('pal:')) { const p = paletteNow(name); return p && toolbar.paletteButton(p); }
+    if (k.startsWith('cmd:')) return commandButton(name, runFromToolbox, SHORT_LABEL[name]);
+    if (k === 'w:looks') return looksList(vertical);
+    return null;
+  };
+  const fillCells = () => {
+    g.cells.forEach((k, i) => {
+      const b = (k && make(k)) || Object.assign(document.createElement('span'), { className: 'tb-gap' });
+      b.classList.add('tb-cell');
+      b.dataset.cell = String(i);
+      if (k === 'w:looks') b.classList.add('tb-wide');
+      cells.append(b);
+    });
+  };
+  const wrap = overflowOf(toolboxState, id) === 'wrap';
+  SHOWN.set(cells, { s, wrap, across: dock === 'top' || dock === 'bottom' });
+  if (id === 'main') { toolbar.fill((root) => { fillCells(); root.append(cells); }); body.append(toolsNav); }
+  else { fillCells(); body.append(cells); }
+  layCells(cells);
+  if (id !== 'main' && !gridItems(g).length) {
     const edit = commandButton('customize-toolbox', () => openCustomToolbox(id), 'Choose what goes here…');
     edit.title = 'Customize Toolboxes: drag tools and commands into this one';
     body.append(edit);
@@ -7533,13 +7551,71 @@ const toolboxes = new Toolboxes(toolboxDefs, {
 });
 
 /**
- * In a dock down a side, the drawing tools take three columns when two would run past the
- * window's foot, and the dock fades at its foot while there is more below to scroll to.
+ * Put a toolbox's buttons in their cells on screen: as the grid has them, or wrapped when only
+ * `fit` rows (columns, along the top or bottom) have room. Thin lines go between the rows that have them.
+ */
+function layCells(cells: HTMLElement, fit?: number): void {
+  const info = SHOWN.get(cells);
+  if (!info) return;
+  const { s, across } = info;
+  const full = across ? s.cols : s.rows;
+  const { at, starts } = wrapped(s, Math.min(full, fit ?? full), across);
+  const blocks = starts.length;
+  // the longest block sets how many rows (columns, along the top or bottom) there are
+  const len = Math.max(...starts.map((st, b) => (starts[b + 1] ?? full) - st));
+  cells.style.gridTemplateColumns = `repeat(${across ? len : s.cols * blocks}, minmax(34px, auto))`;
+  cells.style.gridTemplateRows = `repeat(${across ? s.rows * blocks : len}, minmax(32px, auto))`;
+  cells.querySelectorAll('.tb-line').forEach((l) => l.remove());
+  // a line where a block starts is not needed: the blocks stand apart
+  const lineRows = new Set(across ? s.lineRows : s.lineRows.filter((r) => !starts.includes(r)));
+  const lineCols = new Set(across ? s.lineCols.filter((c) => !starts.includes(c)) : s.lineCols);
+  for (const el of cells.querySelectorAll<HTMLElement>(':scope > .tb-cell')) {
+    const i = Number(el.dataset.cell);
+    const p = at[i], o = s.at[i];
+    el.style.gridRow = String(p.r + 1);
+    const room = across ? len - p.c : s.cols - (p.c % s.cols);
+    el.style.gridColumn = el.classList.contains('tb-wide') ? `${p.c + 1} / span ${Math.max(1, room)}` : String(p.c + 1);
+    el.classList.toggle('tb-after-line', lineRows.has(o.r));
+    el.classList.toggle('tb-after-vline', lineCols.has(o.c));
+    el.classList.toggle('tb-block', p.start);
+  }
+  // the lines themselves, across each block of the grid (or down it, turned on its side)
+  const line = (r: number, c: number, span: number, down: boolean) => {
+    const l = document.createElement('div');
+    l.className = 'tb-line' + (down ? ' down' : '');
+    l.style.gridRow = down ? `${r + 1} / span ${span}` : String(r + 1);
+    l.style.gridColumn = down ? String(c + 1) : `${c + 1} / span ${span}`;
+    cells.append(l);
+  };
+  const size = (b: number) => (starts[b + 1] ?? full) - starts[b];
+  for (let b = 0; b < blocks; b++) {
+    if (!across) {
+      for (const r of lineRows) { const k = inBlock(starts, r); if (k.b === b) line(k.i, b * s.cols, s.cols, false); }
+      for (const c of lineCols) line(0, b * s.cols + c, size(b), true);
+    } else {
+      for (const r of lineRows) line(b * s.rows + r, 0, size(b), false);
+      for (const c of lineCols) { const k = inBlock(starts, c); if (k.b === b) line(b * s.rows, k.i, s.rows, true); }
+    }
+  }
+}
+
+/**
+ * A toolbox set to wrap, with too little room for its grid, takes fewer rows and puts the rest in
+ * more columns beside them (or, along the top or bottom, fewer columns and more rows). One set to
+ * scroll scrolls. A dock down a side fades at its foot while there is more below to scroll to.
  */
 function fitTools(): void {
-  const dock = toolsNav.closest<HTMLElement>('.dock-v');
-  toolsNav.classList.remove('cols-3');
-  if (dock && dock.scrollHeight > dock.clientHeight + 1) toolsNav.classList.add('cols-3');
+  const all = [...document.querySelectorAll<HTMLElement>('.toolbox .tb-cells')].filter((c) => SHOWN.has(c));
+  for (const c of all) layCells(c);
+  for (const c of all) {
+    const { s, wrap, across } = SHOWN.get(c)!;
+    const box = c.closest<HTMLElement>('.toolbox');
+    if (!wrap || !box || box.classList.contains('collapsed')) continue;
+    const dock = box.parentElement!;
+    const floating = box.classList.contains('floating');
+    const over = () => (floating ? box.scrollHeight > box.clientHeight + 1 : across ? c.scrollWidth > dock.clientWidth - 16 : dock.scrollHeight > dock.clientHeight + 1);
+    for (let f = (across ? s.cols : s.rows) - 1; f >= 1 && over(); f--) layCells(c, f);
+  }
   fadeDocks();
 }
 function fadeDocks(): void {
@@ -7656,7 +7732,7 @@ function toolboxCatalogue(): { name: string; items: Pickable[] }[] {
   const groups: { name: string; items: Pickable[] }[] = [
     { name: 'Drawing tools', items: loose },
     { name: 'Fly-out palettes', items: [...PALETTES.keys()].map((p) => d(`pal:${p}`)) },
-    { name: 'Dividers and lists', items: [d('sep'), d('w:looks')] },
+    { name: 'Lists', items: [d('w:looks')] },
   ];
   for (const p of PALETTES.values()) if (p.palette !== 'tpl-own' || p.items.length > 1) groups.push({ name: p.title, items: p.items.filter((t) => ALL_TOOLS.has(t.name)).map((t) => d(`tool:${t.name}`)) });
   for (const g of menuCommands()) if (g.items.length) groups.push({ name: `${g.menu} menu`, items: g.items.filter((c) => !c.cmd.startsWith('toolbox-')).map((c) => ({ key: `cmd:${c.cmd}`, label: c.label, icon: commandIcon(c.cmd) })) });
@@ -7670,8 +7746,8 @@ const toolboxEditor = new ToolboxEditor({
   describe: describeItem,
   title: (id) => BOX_TITLES[id] ?? 'My Toolbox',
   given: (id) => BOX_ITEMS[id] ?? [],
-  palette: (name) => { const p = PALETTES.get(name); return p && name !== 'tpl-own' ? { title: p.title, given: p.items.map((t) => t.name) } : null; },
-  flyout: (name) => toolboxState.flyouts?.[name] ?? PALETTES.get(name)?.items.filter((t) => ALL_TOOLS.has(t.name)).map((t) => t.name) ?? [],
+  palette: (name) => { const p = PALETTES.get(name); return p && name !== 'tpl-own' ? { title: p.title } : null; },
+  flyGrid: paletteGrid,
   newPlace: () => { const w = $('#work').getBoundingClientRect(); return { x: Math.round(Math.max(w.left + 8, w.right - 300)), y: Math.round(w.top + 40) }; },
 });
 

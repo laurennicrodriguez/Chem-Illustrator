@@ -17,6 +17,8 @@ export interface PaletteDef {
   large?: boolean;
   /** Picture size in the open palette, in pixels, for large palettes (46 unless set). */
   iconSize?: number;
+  /** The open palette's cells, row by row, `columns` wide (null: an empty cell), as Customize Toolboxes sets them. Unset: the items packed in order. */
+  cells?: (string | null)[];
 }
 export type ToolbarItem = ToolDef | PaletteDef;
 
@@ -37,26 +39,32 @@ export class Toolbar {
    * when the key map changes. `iconFor` draws a tool moved into a palette it didn't come in.
    */
   constructor(private root: HTMLElement, groups: ToolbarItem[][], private pick: (name: string) => void, private keys: (name: string) => string = () => '', private iconFor: (name: string, size: number) => string | undefined = () => undefined) {
-    this.fill(groups);
+    this.fill((root) => {
+      for (const group of groups) {
+        const g = document.createElement('div');
+        g.className = 'tool-group';
+        for (const item of group) g.appendChild(this.button(item));
+        root.appendChild(g);
+      }
+    });
     document.addEventListener('pointerdown', (e) => {
       if (this.flyout && !this.flyout.contains(e.target as Node) && !(e.target as HTMLElement).closest?.('.palette-wrap')) this.close();
     });
     window.addEventListener('resize', () => this.close());
   }
 
-  /** Build the bar again, in groups (Customize Toolboxes). `other` makes anything that is not a tool or palette. */
-  fill(groups: (ToolbarItem | HTMLElement)[][]): void {
+  /** Build the bar again (Customize Toolboxes): `make` puts its buttons in, made with toolButton and paletteButton. */
+  fill(make: (root: HTMLElement) => void): void {
     this.close();
     this.root.replaceChildren();
-    for (const group of groups) {
-      if (!group.length) continue;
-      const g = document.createElement('div');
-      g.className = 'tool-group';
-      for (const item of group) g.appendChild(item instanceof HTMLElement ? item : 'palette' in item ? this.paletteButton(item) : this.toolButton(item));
-      this.root.appendChild(g);
-    }
+    make(this.root);
     // (the bar may be built while a toolbox is still being laid out, so nothing is forgotten here)
     if (this.active) this.mark(this.active);
+  }
+
+  /** A button for a tool or a palette. */
+  button(item: ToolbarItem): HTMLElement {
+    return 'palette' in item ? this.paletteButton(item) : this.toolButton(item);
   }
 
   /** Buttons no longer on the screen are forgotten. */
@@ -164,9 +172,21 @@ export class Toolbar {
     f.className = 'flyout';
     f.setAttribute('role', 'menu');
     f.setAttribute('aria-label', pal.def.title);
-    f.style.gridTemplateColumns = `repeat(${pal.def.columns ?? 3}, auto)`;
+    const cols = pal.def.columns ?? 3;
+    f.style.gridTemplateColumns = `repeat(${cols}, auto)`;
+    // laid out on its grid: each tool in its cell, empty cells kept
+    const cell = new Map(pal.def.cells?.map((n, i) => [n, i]).filter((x): x is [string, number] => !!x[0]));
+    if (pal.def.cells) {
+      // (an empty cell keeps its column's width and its row's height)
+      const rows = Math.ceil(pal.def.cells.length / cols);
+      const w = pal.def.large ? (pal.def.iconSize ? pal.def.iconSize + 6 : 52) : 34, h = pal.def.large ? w : 32;
+      f.style.gridTemplateColumns = `repeat(${cols}, minmax(${w}px, auto))`;
+      f.style.gridTemplateRows = `repeat(${rows}, minmax(${h}px, auto))`;
+    }
     for (const t of pal.def.items) {
       const b = document.createElement('button');
+      const at = cell.get(t.name);
+      if (at != null) { b.style.gridRow = String(Math.floor(at / cols) + 1); b.style.gridColumn = String((at % cols) + 1); }
       b.className = 'tool' + (pal.def.large ? ' large' : '') + (t.name === this.current.get(pal.def.palette) ? ' active' : '');
       b.setAttribute('role', 'menuitem');
       this.titleTool(b, t);

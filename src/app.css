@@ -248,9 +248,19 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
 .toolbox.vertical .tb-body:has(> .tb-cmd) { flex-direction: row; flex-wrap: wrap; width: 66px; align-items: flex-start; }
 .toolbox.vertical .tb-body:has(> .tb-cmd:not(.tb-icon)) { width: 150px; }
 .toolbox.vertical .tb-cmd:not(.tb-icon) { flex-basis: 100%; }
-/* the drawing tools laid out across, in a toolbox along the top or bottom */
-.toolbox[data-dock='top'] #tools, .toolbox[data-dock='bottom'] #tools { flex-direction: row; flex-wrap: wrap; }
-.toolbox[data-dock='top'] .tool-group, .toolbox[data-dock='bottom'] .tool-group { grid-template-columns: none; grid-template-rows: repeat(2, 32px); grid-auto-flow: column; }
+/* a toolbox's buttons on its grid (Customize Toolboxes): each in its cell, empty cells kept, thin lines between groups of rows */
+.tb-cells { display: grid; gap: 3px; align-items: center; justify-items: center; }
+.tb-cells > .tb-gap { width: 34px; height: 32px; }
+.tb-cells > .tb-wide { justify-self: stretch; }
+.tb-cells > .tb-after-line { margin-top: 6px; }
+.tb-cells > .tb-after-vline { margin-left: 6px; }
+.tb-cells > .tb-block { margin-left: 8px; }
+.toolbox[data-dock='top'] .tb-cells > .tb-block, .toolbox[data-dock='bottom'] .tb-cells > .tb-block { margin-left: 0; margin-top: 8px; }
+.tb-line { align-self: start; justify-self: stretch; height: 1px; margin-top: 1px; background: var(--line); pointer-events: none; }
+.tb-line.down { align-self: stretch; justify-self: start; width: 1px; height: auto; margin: 0 0 0 1px; }
+/* along the top or bottom, a toolbox set to scroll scrolls sideways */
+.dock-h .toolbox { max-width: 100%; }
+.dock-h .toolbox > .tb-body { overflow-x: auto; }
 .tb-swatches { display: grid; grid-template-columns: repeat(10, 18px); gap: 3px; }
 .toolbox.vertical .tb-swatches { grid-template-columns: repeat(4, 18px); }
 .tb-swatch { width: 18px; height: 18px; padding: 0; border: 1px solid var(--line); border-radius: 3px; }
@@ -270,11 +280,6 @@ label.check { display: inline-flex; align-items: center; gap: 4px; color: var(--
 .tb-modes button[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); }
 
 .tool-group { display: grid; grid-template-columns: repeat(2, 34px); gap: 3px; }
-/* a short window: three columns, so the tools fit without scrolling. The groups (made in pairs)
-   run on into each other, so a group of 2, 4 or 5 tools leaves no empty cells */
-.dock-v #tools.cols-3 { display: grid; grid-template-columns: repeat(3, 34px); gap: 3px; }
-.dock-v #tools.cols-3 .tool-group { display: contents; }
-.dock-v #tools.cols-3::before { grid-column: 1 / -1; }
 /* more tools below: the dock fades out at its foot */
 .dock-v.more-below { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent); }
 .tool { width: 34px; height: 32px; padding: 0; display: grid; place-items: center; border-color: transparent; background: transparent; }
@@ -1615,6 +1620,38 @@ dialog.toolbox-dialog { width: min(96vw, 900px); }
 .tbe-ghost.removing { opacity: 0.6; }
 .tbe-ghost.removing::after { content: '×'; position: absolute; top: -8px; right: -8px; width: 18px; height: 18px; border-radius: 50%; background: #d33; color: #fff; font: 600 14px/18px system-ui; text-align: center; }
 .tbe-empty { margin: auto; }
+/* the grid being changed: the toolbox's cells as they show, a little larger, empty ones dashed */
+.tbe-size { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.tbe-size[hidden], .tbe-board[hidden], .tbe-fit[hidden] { display: none; }
+.tbe-size label { display: inline-flex; gap: 4px; align-items: center; }
+.tbe-size input[type='number'] { width: 4.2em; }
+.tbe-size select { max-width: 14em; }
+.tbe-fit { margin-left: auto; }
+.tbe-board { display: grid; gap: 4px; align-content: start; justify-content: start; align-items: center; min-height: 120px; max-height: min(48vh, 440px); overflow: auto; padding: 10px 8px; border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-soft) 55%, transparent); border: 1px solid var(--line); overscroll-behavior: contain; }
+.tbe-cell { position: relative; display: grid; place-items: center; min-width: 38px; height: 38px; border-radius: 6px; outline: none; user-select: none; touch-action: none; }
+.tbe-cell:not(.empty) { cursor: grab; }
+.tbe-cell.empty { border: 1px dashed color-mix(in srgb, var(--muted) 45%, transparent); }
+.tbe-cell.line-above { margin-top: 7px; }
+.tbe-cell.line-above::before { content: ''; position: absolute; left: -3px; right: -3px; top: -6px; height: 1px; background: var(--muted); }
+.tbe-cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tbe-cell.drop-at { background: var(--accent-soft); outline: 2px solid var(--accent); outline-offset: -1px; }
+.tbe-cell.drop-in .tbe-ic { outline: 3px solid var(--accent); outline-offset: 1px; transform: scale(1.1); }
+.tbe-cell.hole .tbe-tile { opacity: 0.25; }
+.tbe-board .tbe-tile { width: auto; padding: 0; }
+.tbe-board .tbe-ic { width: 34px; height: 32px; border-radius: 6px; }
+.tbe-board .tbe-ic svg { width: 22px; height: 22px; }
+.tbe-board .tbe-x { top: -7px; left: -7px; width: 16px; height: 16px; font-size: 12px; line-height: 13px; }
+.tbe-board .tbe-ic.word { font-size: 11px; }
+.tbe-rule { width: 14px; height: 38px; padding: 0; border: 0; background: none; position: relative; cursor: pointer; }
+.tbe-rule:disabled { cursor: default; visibility: hidden; }
+.tbe-rule::after { content: ''; position: absolute; left: 3px; right: 3px; top: -3px; height: 0; border-top: 1px dashed var(--muted); opacity: 0.5; }
+.tbe-rule.on { margin-top: 7px; }
+.tbe-rule.on::after { top: -6px; border-top: 2px solid var(--accent); opacity: 1; }
+.tbe-rule:hover::after { opacity: 1; border-top-color: var(--accent); }
+.tbe-fly { position: relative; display: grid; place-items: center; width: 100%; height: 100%; }
+.tbe-fly svg { width: 22px; height: 22px; }
+.tbe-fly-mark { position: absolute; right: 1px; bottom: 1px; width: 0; height: 0; border-left: 5px solid transparent; border-bottom: 5px solid currentColor; opacity: 0.7; }
 .tbe-note[hidden] { display: none; }
 .tbe-say { min-height: 1.3em; margin: 0; font-size: 12px; }
 .tbe-foot { flex-wrap: wrap; align-items: center; }
@@ -2082,8 +2119,8 @@ body.sheet-mode:not(.floating-drawing):not(.split-view) #tools::before {
   content: 'Draw a structure: pick a tool to start one at the cursor, or to change the structure selected.';
 }
 body.sheet-mode:not(.floating-drawing):not(.split-view) #tools::before { content: 'Draw a structure: pick a tool to draw in the selected cell, or to change its structure.'; }
-body.doc-mode:not(.floating-drawing):not(.split-view) #tools .tool-group > :not(:hover):not(:focus-within),
-body.sheet-mode:not(.floating-drawing):not(.split-view) #tools .tool-group > :not(:hover):not(:focus-within) { opacity: 0.55; }
+body.doc-mode:not(.floating-drawing):not(.split-view) #tools .tb-cells > :not(:hover):not(:focus-within),
+body.sheet-mode:not(.floating-drawing):not(.split-view) #tools .tb-cells > :not(:hover):not(:focus-within) { opacity: 0.55; }
 /* Document mode: Change Case, the list libraries, Clear Formatting and More Styles */
 .ribbon select.rb-mini { width: auto; max-width: 52px; padding: 2px 1px; font-size: 11px; }
 .ribbon select.rb-mini.rb-drop { width: 15px; max-width: 15px; padding: 0; font-size: 9px; text-align: center; appearance: none; -webkit-appearance: none; border: 1px solid transparent; background: transparent; color: inherit; cursor: pointer; }
