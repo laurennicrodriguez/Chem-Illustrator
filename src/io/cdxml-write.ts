@@ -161,6 +161,7 @@ class CdxmlWriter {
     for (const r of doc.arrows.values()) this.writeArrow(r);
     for (const s of doc.shapes.values()) this.writeShape(s);
     this.writeRingCircles();
+    this.raiseSymbols();
     this.writeRepeatGroups();
     this.writeSteps();
     this.writeGroups();
@@ -949,6 +950,19 @@ class CdxmlWriter {
     for (const g of have) { g.parentNode?.removeChild(g); this.changed = true; }
   }
 
+  /** ChemDraw paints a fragment's graphics in file order, so a charge sign set inside a ring goes after the ring's circle. */
+  private raiseSymbols(): void {
+    for (const f of new Set(this.fragOfAtom.values())) {
+      const gs = kids(f).filter((g) => g.nodeName === 'graphic');
+      const last = gs.map((g) => ['Oval', 'Orbital'].includes(g.getAttribute('GraphicType') ?? '')).lastIndexOf(true);
+      const low = gs.slice(0, last).filter((g) => g.getAttribute('GraphicType') === 'Symbol');
+      if (!low.length) continue;
+      const after = gs[last].nextSibling;
+      for (const g of low) f.insertBefore(g, after);
+      this.changed = true;
+    }
+  }
+
   private buildBond(b: Bond): Element {
     const e = this.el('b', { id: b.id });
     this.patchBond(e, b);
@@ -1509,10 +1523,8 @@ class CdxmlWriter {
       case 'symbol': {
         set('GraphicType', 'Symbol');
         set('SymbolType', s.symbol ?? 'CirclePlus');
-        // circled charges are stored as their width along the bottom edge
         // a lone pair is its two dots; a radical's dot is the dot and a point 4.5 pt further out from
-        // its atom (ChemDraw sizes the dot from that distance); circled charges are stored as their
-        // width along the bottom edge
+        // its atom (ChemDraw sizes the dot from that distance)
         if (s.symbol === 'Electron') {
           const near = this.radicalOwner(s) ?? this.doc.atomsNear({ x: s.x1, y: s.y1 }, this.doc.style.bondLength)[0];
           const d = near ? Math.hypot(s.x1 - near.x, s.y1 - near.y) : 0;
@@ -1532,7 +1544,12 @@ class CdxmlWriter {
           sp.textContent = word;
           t.appendChild(sp);
           g.appendChild(t);
-        } else set('BoundingBox', s.symbol === 'LonePair' ? box(s) : `${f2(s.x2)} ${f2(s.y2)} ${f2(s.x1)} ${f2(s.y2)}`);
+        } else if (s.symbol === 'LonePair') set('BoundingBox', box(s));
+        else {
+          // a charge sign as ChemDraw stores it: the sign's centre, then a point its width below
+          const c = { x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 };
+          set('BoundingBox', `${f2(c.x)} ${f2(c.y)} ${f2(c.x)} ${f2(c.y + Math.abs(s.x2 - s.x1))}`);
+        }
         break;
       }
       case 'bracket': {

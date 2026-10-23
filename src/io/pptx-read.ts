@@ -11,7 +11,7 @@
 
 import type { PinnedComment } from '../document/comments';
 import { COMMENT_REL, readCommentAuthors, readLegacyComments, readModernComments } from './pptx-comments';
-import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureFx, type PictureLook, type Frame, type ShapeMath, type Media } from '../model';
+import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureFx, type BackgroundRemoval, type PictureLook, type Frame, type ShapeMath, type Media } from '../model';
 import { layoutTable, NOTE_SCALE } from '../table';
 import { PPT_STYLE_IDS, slideCellLook, unstyledRuns } from '../deck/table-styles';
 import { linesFromBorders, type Borders } from './cdxml-table';
@@ -903,9 +903,21 @@ class Reader {
     const blip = kid(pic, 'blipFill', 'blip');
     const got = readPictureFx(blip, kid(pic, 'spPr'));
     if (got.dropped) this.warnings.add('Some picture effects (artistic effects, saturation, colour temperature) were left off.');
-    const fx = got.fx;
+    // ours: the original kept beside the picture, named by the tag with what was worked in
+    let t: { tol?: unknown; orig?: unknown; fx?: { bg?: unknown; sharpen?: unknown } } = {};
+    try { if (tag) t = JSON.parse(tag) ?? {}; } catch { /* not ours */ }
+    let layer = got.layer;
+    let fx = got.fx;
+    if (!layer && typeof t.orig === 'string' && t.fx && typeof t.fx === 'object') {
+      const bg = t.fx.bg && typeof t.fx.bg === 'object' ? t.fx.bg as BackgroundRemoval : undefined;
+      const sharpen = typeof t.fx.sharpen === 'number' ? Math.max(-1, Math.min(1, t.fx.sharpen)) : undefined;
+      if (bg || sharpen) {
+        layer = t.orig;
+        fx = { ...fx, ...(bg ? { bg: { ...(Array.isArray(bg.keep) ? { keep: bg.keep } : {}), ...(Array.isArray(bg.drop) ? { drop: bg.drop } : {}) } } : {}), ...(sharpen ? { sharpen } : {}) };
+      }
+    }
     if (!fx) return undefined;
-    const target = got.layer ? this.r.rels(from).get(got.layer)?.target : undefined;
+    const target = layer ? this.r.rels(from).get(layer)?.target : undefined;
     const bytes = target ? this.r.bytes(target) : null;
     const mime = target ? EXT_MIME[target.split('.').pop()!.toLowerCase()] : undefined;
     if (bytes && mime && SHOWABLE.has(mime) && !img.mime.includes('svg')) {
@@ -916,12 +928,7 @@ class Reader {
       delete fx.sharpen;
       delete fx.bg;
     }
-    if (fx.bg && tag) {
-      try {
-        const t = JSON.parse(tag) as { tol?: unknown };
-        if (typeof t.tol === 'number' && t.tol > 0 && t.tol <= 1) fx.bg.tol = t.tol;
-      } catch { /* not ours */ }
-    }
+    if (fx.bg && typeof t.tol === 'number' && t.tol > 0 && t.tol <= 1) fx.bg.tol = t.tol;
     return tidyFx(fx);
   }
 

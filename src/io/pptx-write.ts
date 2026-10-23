@@ -14,7 +14,7 @@ import type { PinnedComment } from '../document/comments';
 import { COMMENT_CT, COMMENT_REL, writeSlideComments } from './pptx-comments';
 import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, applyBase, PICTURE_SHADOWS, type Pattern, type PictureFx, type PictureLook, type Media } from '../model';
 import { bakedPart, tidyFx } from '../render/picture-fx';
-import { blipEffectsXml, imgPropsXml, pictureGeomXml } from './picture-xml';
+import { blipEffectsXml, pictureGeomXml } from './picture-xml';
 import { turnAbout, type Rect } from '../geom';
 import { layoutText, ASCENT, FONT_STACK, type Measure } from '../text/layout';
 import { fitParas, listMarkers, splitParagraphs } from '../text/paragraphs';
@@ -880,7 +880,7 @@ class Writer {
       const svg = new TextDecoder().decode(fromDataUrl(shapeMathPicture(m, this.measure)).bytes);
       const k = 300 / 72;
       const png = await this.opts.svgToPng(svg, Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k)));
-      fallback = picXml(id, name, this.addMedia(path, png, 'png'), null, box, null, null, undefined, mathText(m.tex), undefined, undefined, { rot: s.rot, hidden: s.hidden });
+      fallback = picXml(id, name, this.addMedia(path, png, 'png'), null, box, null, null, undefined, mathText(m.tex), undefined, { rot: s.rot, hidden: s.hidden });
     } catch { /* PowerPoint shows the equation itself */ }
     return `<mc:AlternateContent xmlns:mc="${NS_MC}"><mc:Choice xmlns:a14="${NS_A14}" Requires="a14">${choice}</mc:Choice><mc:Fallback>${fallback}</mc:Fallback></mc:AlternateContent>`;
   }
@@ -1020,20 +1020,37 @@ class Writer {
     const fx = tidyFx(pic?.fx);
     const more: PicMore = { rot: pic?.rot, hidden: pic?.hidden };
     const descr = alt?.trim() || undefined;
-    // what Office can't show live goes in worked in, with the original as the picture's layer
+    // what Office can't show live goes in worked in. PowerPoint keeps the original as the blip's
+    // layer only as an HD Photo (.wdp) and refuses a PNG there, so the original is kept beside the
+    // picture instead (a relationship our tag names) with the settings in the tag: PowerPoint shows
+    // the worked-in picture and this program gets the original back
     let baked: Uint8Array | null = null;
     if (pic && bakedPart(fx) && this.opts.bakePicture) baked = await this.opts.bakePicture(pic).catch(() => null);
-    const tags = fx?.bg?.tol !== undefined ? this.addTags(from, { [TAG.picture]: JSON.stringify({ v: 1, tol: fx.bg.tol }) }) : null;
+    const tagFor = (orig?: string) => {
+      const t: Record<string, unknown> = {};
+      if (fx?.bg?.tol !== undefined) t.tol = fx.bg.tol;
+      if (orig) {
+        t.orig = orig;
+        t.fx = { ...(fx?.bg ? { bg: fx.bg } : {}), ...(fx?.sharpen ? { sharpen: fx.sharpen } : {}) };
+      }
+      return Object.keys(t).length ? this.addTags(from, { [TAG.picture]: JSON.stringify({ v: 1, ...t }) }) : null;
+    };
     if (ext === 'svg') {
       // PowerPoint shows the SVG; older programs the PNG beside it (300 dots per inch)
       const k = 300 / 72;
       const png = await this.opts.svgToPng(new TextDecoder().decode(bytes), Math.max(1, Math.round((box.x2 - box.x1) * k)), Math.max(1, Math.round((box.y2 - box.y1) * k)));
-      if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, descr, fx, this.addMedia(from, png, 'png'), more);
-      return picXml(id, name, this.addMedia(from, png, 'png'), this.addMedia(from, bytes, 'svg'), box, crop, tags, look, descr, fx, undefined, more);
+      if (baked) {
+        const blip = this.addMedia(from, baked, 'png');
+        return picXml(id, name, blip, null, box, crop, tagFor(this.addMedia(from, png, 'png')), look, descr, fx, more);
+      }
+      return picXml(id, name, this.addMedia(from, png, 'png'), this.addMedia(from, bytes, 'svg'), box, crop, tagFor(), look, descr, fx, more);
+    }
+    if (baked) {
+      const blip = this.addMedia(from, baked, 'png');
+      return picXml(id, name, blip, null, box, crop, tagFor(this.addMedia(from, bytes, ext)), look, descr, fx, more);
     }
     const own = this.addMedia(from, bytes, ext);
-    if (baked) return picXml(id, name, this.addMedia(from, baked, 'png'), null, box, crop, tags, look, descr, fx, own, more);
-    return picXml(id, name, own, null, box, crop, tags, look, descr, fx, undefined, more);
+    return picXml(id, name, own, null, box, crop, tagFor(), look, descr, fx, more);
   }
 
   /** A title, text placeholder or text box. */
@@ -1286,11 +1303,10 @@ interface PicMore { rot?: number; hidden?: boolean }
 
 /**
  * A picture element: PNG (or another bitmap), optionally with an SVG PowerPoint shows instead,
- * and its Picture Format settings; with `layerId`, the blip has sharpening or Remove Background
- * worked in and the layer is the original.
+ * and its Picture Format settings (sharpening and Remove Background are worked into the picture).
  */
-function picXml(id: number, name: string, blipId: string, svgId: string | null, box: Rect, crop: Shape['crop'] | null, tagsId: string | null, look?: PictureLook, descr?: string, fx?: PictureFx, layerId?: string, more: PicMore = {}): string {
-  const exts = (svgId ? `<a:ext uri="${SVG_EXT}"><asvg:svgBlip xmlns:asvg="${NS_SVG}" r:embed="${svgId}"/></a:ext>` : '') + (layerId ? imgPropsXml(fx, layerId, crop) : '');
+function picXml(id: number, name: string, blipId: string, svgId: string | null, box: Rect, crop: Shape['crop'] | null, tagsId: string | null, look?: PictureLook, descr?: string, fx?: PictureFx, more: PicMore = {}): string {
+  const exts = svgId ? `<a:ext uri="${SVG_EXT}"><asvg:svgBlip xmlns:asvg="${NS_SVG}" r:embed="${svgId}"/></a:ext>` : '';
   const ext = exts ? `<a:extLst>${exts}</a:extLst>` : '';
   const src = crop && (crop.l || crop.t || crop.r || crop.b)
     ? `<a:srcRect l="${Math.round(crop.l * 100000)}" t="${Math.round(crop.t * 100000)}" r="${Math.round(crop.r * 100000)}" b="${Math.round(crop.b * 100000)}"/>` : '';
